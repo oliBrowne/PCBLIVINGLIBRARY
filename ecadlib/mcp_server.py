@@ -1,0 +1,113 @@
+"""MCP server (stdio) so Claude or another agent can drive ecadlib with the same actions as the web UI.
+
+    python -m ecadlib.mcp_server --lib path/to/kicad/libs [--workspace ecadlib_workspace] [--offline]
+
+Claude Code:  claude mcp add ecadlib -- python -m ecadlib.mcp_server --lib /path/to/libs
+Claude Desktop (claude_desktop_config.json):
+    {"mcpServers": {"ecadlib": {"command": "python", "args": ["-m", "ecadlib.mcp_server", "--lib", "/path/to/libs"]}}}
+
+Standard library only: newline-delimited JSON-RPC 2.0 on stdin/stdout, tools capability only.
+Logs go to stderr so they never corrupt the protocol stream."""
+import argparse, contextlib, json, sys, traceback
+
+from .app import Workspace
+
+PROTOCOL = "2025-06-18"
+
+TOOLS = [
+    {"name": "workspace_info",
+     "description": "Show the workspace folder, indexed KiCad libraries, symbol/footprint counts, part sources and uploaded BOMs.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "triage_bom",
+     "description": "Triage a BOM (CSV/XLSX path) against the local library and part sources. Returns one row per line with "
+                    "status in_library / available_easyeda / easyeda_footprint_only / needs_footprint_generation / unverified.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string", "description": "path to the BOM file"}}}},
+    {"name": "preview_footprint",
+     "description": "Generate an IPC-7351B footprint from package dimensions (ecadlib package_schema.json) without saving. "
+                    "Returns Z/G/X, pad list, courtyard and any warnings. Read dimensions from the datasheet drawing; "
+                    "never invent them.",
+     "inputSchema": {"type": "object", "required": ["spec"],
+                     "properties": {"spec": {"type": "object", "description": "package spec matching package_schema.json"},
+                                    "density": {"type": "string", "enum": ["A", "B", "C"]}}}},
+    {"name": "approve_footprint",
+     "description": "Save a generated footprint into the workspace library (footprints/ecadlib.pretty). Only call after "
+                    "the user has reviewed the preview.",
+     "inputSchema": {"type": "object", "required": ["spec"],
+                     "properties": {"spec": {"type": "object"}, "density": {"type": "string", "enum": ["A", "B", "C"]}}}},
+    {"name": "export_altium_dblib",
+     "description": "Write an Altium DbLib (SQLite + XLSX + .DbLib files) for a BOM into the workspace altium/ folder.",
+     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
+    {"name": "list_example_specs",
+     "description": "Return the example package specs (useful as templates for preview_footprint).",
+     "inputSchema": {"type": "object", "properties": {}}},
+]
+
+
+def call_tool(ws, name, args):
+    with contextlib.redirect_stdout(sys.stderr):          # library code prints progress; keep stdout for JSON-RPC
+        if name == "workspace_info":
+            return ws.info()
+        if name == "triage_bom":
+            r = ws.triage(args["bom"])
+            return {k: r[k] for k in ("bom", "mapping", "counts", "reports", "rows")}
+        if name == "preview_footprint":
+            r = ws.preview_footprint(args["spec"], args.get("density"))
+            return {"name": r["name"], "report": r["report"]}
+        if name == "approve_footprint":
+            return ws.approve_footprint(args["spec"], args.get("density"))
+        if name == "export_altium_dblib":
+            return ws.export_dblib(args["bom"])
+        if name == "list_example_specs":
+            return ws.example_specs()
+    raise KeyError(f"unknown tool {name}")
+
+
+def handle(ws, msg):
+    """Return a JSON-RPC response dict, or None for notifications."""
+    mid, method, params = msg.get("id"), msg.get("method"), msg.get("params") or {}
+    if mid is None:
+        return None                                       # notifications (initialized, cancelled) need no answer
+    if method == "initialize":
+        result = {"protocolVersion": params.get("protocolVersion", PROTOCOL),
+                  "capabilities": {"tools": {}}, "serverInfo": {"name": "ecadlib", "version": "0.1.0"}}
+    elif method == "ping":
+        result = {}
+    elif method == "tools/list":
+        result = {"tools": TOOLS}
+    elif method == "tools/call":
+        try:
+            out = call_tool(ws, params.get("name"), params.get("arguments") or {})
+            result = {"content": [{"type": "text", "text": json.dumps(out, indent=1, default=str)}], "isError": False}
+        except Exception as e:
+            traceback.print_exc(file=sys.stderr)
+            result = {"content": [{"type": "text", "text": f"{type(e).__name__}: {e}"}], "isError": True}
+    else:
+        return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}}
+    return {"jsonrpc": "2.0", "id": mid, "result": result}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="ecadlib MCP server (stdio)")
+    ap.add_argument("--lib", action="append", default=[])
+    ap.add_argument("--workspace", default="ecadlib_workspace")
+    ap.add_argument("--providers")
+    ap.add_argument("--offline", action="store_true")
+    a = ap.parse_args(argv)
+    ws = Workspace(a.workspace, a.lib, a.providers.split(",") if a.providers else None, a.offline)
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            resp = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}
+        else:
+            resp = handle(ws, msg)
+        if resp is not None:
+            sys.stdout.write(json.dumps(resp) + "\n")
+            sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()
