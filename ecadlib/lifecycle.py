@@ -536,7 +536,8 @@ def a365_updates(rows, client, ws, apply=False, param="Lifecycle", note="ecadlib
         want, cid, cur = LABEL[r["status"]], r.get("component_id"), r.get("a365_value")
         rec = {"name": r["name"], "mpn": r["mpn"], "value": want, "action": "", "detail": ""}
         try:
-            if client and not cid:
+            cur_params = None
+            if client:                           # fetch the current revision: a replace must carry every parameter
                 nodes = client.gql(Q_FIND_PARAMS, {"ws": ws, "name": r["name"]})["desLibrary"]["components"] or {}
                 node = (nodes.get("nodes") or [None])[0]
                 if not node or not node.get("isManaged"):
@@ -544,16 +545,23 @@ def a365_updates(rows, client, ws, apply=False, param="Lifecycle", note="ecadlib
                     rec["detail"] = "not in workspace" if not node else "not a released (managed) component"
                     out.append(rec)
                     continue
-                cid, cur = node["id"], _node_params(node).get(param)
+                cur_params = _node_params(node)
+                cid, cur = node["id"], cur_params.get(param)
             if cur == want:
                 rec["action"] = "unchanged"
-            elif apply:
-                rec["action"], rec["detail"] = "updated", client.update_params(cid, [{"name": param, "value": want}], note)
+                out.append(rec)
+                continue
+            # replaceExisting=false *adds* a second Lifecycle parameter, so send the full merged set with true
+            params = [{"name": k, "value": v} for k, v in {**(cur_params or {}), param: want}.items()]
+            if apply:
+                rec["action"], rec["detail"] = "updated", client.update_params(cid, params, note, replace=True)
             else:
-                inp = {"componentId": cid or f"<id of {r['name']}>", "releaseNote": note, "replaceExisting": False,
-                       "parameters": [{"name": param, "value": want}]}
+                inp = {"componentId": cid or f"<id of {r['name']}>", "releaseNote": note,
+                       "replaceExisting": cur_params is not None, "parameters": params}
                 rec["action"], rec["detail"] = "dry_run", {"mutation": "desUpdateComponentRevisionParameters",
                                                            "query": M_UPDATE_PARAMS, "variables": {"input": inp}}
+                if cur_params is None:
+                    rec["note"] = "no token: current parameters unknown; --apply fetches them and replaces the full set"
         except Exception as e:                   # keep going; report per part
             rec["action"], rec["detail"] = "error", f"{type(e).__name__}: {e}"
         out.append(rec)

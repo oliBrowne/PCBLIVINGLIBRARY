@@ -238,8 +238,8 @@ class FakeDesign:
         node = self.lib.get(variables["name"])
         return {"desLibrary": {"components": {"nodes": [node] if node else []}}}
 
-    def update_params(self, cid, params, note):
-        self.updates.append((cid, params))
+    def update_params(self, cid, params, note, replace=False):
+        self.updates.append((cid, params, replace))
         return cid + "'"
 
 
@@ -248,7 +248,8 @@ def test_a365_update_with_client():
     rows = ROWS[:2] + [{"name": "Missing", "mpn": "M", "status": "nrnd", "component_id": "", "a365_value": None},
                        {"name": "Draft", "mpn": "DRAFT1", "status": "nrnd", "component_id": "", "a365_value": None}]
     out = {u["name"]: u for u in L.a365_updates(rows, c, "https://ws", apply=True)}
-    assert out["CH340C"]["action"] == "updated" and c.updates == [("c1", [{"name": "Lifecycle", "value": "Obsolete"}])]
+    assert out["CH340C"]["action"] == "updated" and c.updates == [("c1", [{"name": "Manufacturer Part Number", "value": "CH340C"},
+                                                                                       {"name": "Lifecycle", "value": "Obsolete"}], True)]
     assert out["RES-0603-10k"]["action"] == "unchanged"
     assert out["Missing"]["action"] == "skip" and "not a released" in out["Draft"]["detail"]
 
