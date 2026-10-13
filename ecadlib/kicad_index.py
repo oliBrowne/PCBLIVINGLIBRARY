@@ -10,7 +10,8 @@ LCSC_KEYS = {"lcsc", "lcsc part", "lcsc part #", "lcsc_part", "jlcpcb part #", "
 SI = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "μ": 1e-6, "m": 1e-3, "": 1.0, "r": 1.0,
       "k": 1e3, "K": 1e3, "M": 1e6, "G": 1e9}
 PKG_RE = re.compile(r"(?<![0-9])(01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)(?![0-9])|"
-                    r"(SOT-?23(?:-\d)?|SOT-?223|SOIC-?\d+|SOP-?\d+|TSSOP-?\d+|QFN-?\d+|VQFN-?\d+|LQFP-?\d+|SMA|SMB|SOD-?\d+)", re.I)
+                    r"(?<![A-Z0-9])(SOT-?23(?:-\d)?|SOT-?223|SOIC-?\d+|SOP-?\d+|TSSOP-?\d+|QFN-?\d+|VQFN-?\d+|LQFP-?\d+|SMA|SMB|SOD-?\d+)(?![A-Z0-9])", re.I)
+BODY_RE = re.compile(r"(?<![0-9.])(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:x\d+(?:\.\d+)?)?mm", re.I)
 
 
 def norm_mpn(s):
@@ -51,6 +52,11 @@ def package_of(*texts):
         if m:
             return (m.group(1) or m.group(2)).upper().replace("-", "")
     return None
+
+
+def _body(text):
+    m = BODY_RE.search(str(text or ""))
+    return tuple(sorted((float(m.group(1)), float(m.group(2))))) if m else None
 
 
 @dataclass
@@ -101,8 +107,9 @@ class KiCadIndex:
                 return k, v
         return None, None
 
-    def match(self, mpn="", lcsc="", value="", package="", footprint=""):
-        """Return (symbol, how) - by MPN, LCSC number, or (for passives) value + package."""
+    def match(self, mpn="", lcsc="", value="", package="", footprint="", ref_class=""):
+        """Return (symbol, how) - by MPN, LCSC number, or (for passives) value + package.
+        ref_class (R, C, L...) keeps a C 10u 0805 line off an L 10u 0805 symbol."""
         nm = norm_mpn(mpn)
         for s in self.symbols:
             if nm and nm in (norm_mpn(s.name), norm_mpn(s.mpn)):
@@ -115,23 +122,39 @@ class KiCadIndex:
             for s in self.symbols:
                 sv, su = parse_value(s.props.get("Value"), True)
                 if (sv is not None and abs(sv - v) <= 1e-6 * v and not (u and su and u != su)     # 0R == 0; 10uF != 10uH
-                        and package_of(s.props.get("Footprint"), s.name) == package):
+                        and package_of(s.props.get("Footprint"), s.name) == package and self._same_class(s, ref_class)):
                     return s, "value+package"
         return None, None
 
     CLASS_PREFIX = {"R": ("R_",), "C": ("C_",), "L": ("L_",), "FB": ("L_", "FB_"), "D": ("D_", "LED_"), "LED": ("LED_",)}
 
-    def find_footprint_for_package(self, package, ref_class=""):
+    def _same_class(self, s, ref_class):
+        if not ref_class:
+            return True
+        sref = re.match(r"[A-Z]+", str(s.props.get("Reference", "")).upper())
+        if sref:
+            return sref.group(0) == ref_class or (ref_class, sref.group(0)) in (("FB", "L"), ("LED", "D"), ("D", "LED"))
+        pref = self.CLASS_PREFIX.get(ref_class)
+        fp = str(s.props.get("Footprint", "")).split(":")[-1]
+        return pref is None or not fp or fp.startswith(pref)
+
+    def find_footprint_for_package(self, package, ref_class="", hint=""):
         """Best-effort: an indexed footprint whose name mentions the package (e.g. 0603, SOIC8).
         For 2-terminal passives the footprint family must match the designator class
         (an LED 0603 must not land on R_0603)."""
         if not package:
             return None
-        pref = self.CLASS_PREFIX.get(ref_class)
+        pref, hits = self.CLASS_PREFIX.get(ref_class), []
         for k in self.footprints:
             name = k.split(":")[-1]
             if package_of(name) == package and (pref is None or name.startswith(pref)):
                 if pref is None and re.match(r"(R|C|L|D|LED)_", name):
                     continue                      # don't hand a passive footprint to an IC/connector
-                return k
-        return None
+                hits.append(k)
+        bodies = {k: _body(k) for k in hits}
+        want = _body(hint)
+        if want:                                  # body size known: it must agree (QFN-32 4x4 is not 5x5)
+            hits = [k for k in hits if bodies[k] in (want, None)]
+        elif len({b for b in bodies.values() if b}) > 1:
+            return None                           # several body sizes and nothing to choose by: ambiguous
+        return hits[0] if hits else None

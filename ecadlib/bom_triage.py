@@ -15,8 +15,8 @@ from .kicad_index import KiCadIndex, package_of, parse_value
 
 FIELDS = {   # canonical field -> header synonyms (normalised: lowercase, punctuation -> space)
     "mpn": ["mpn", "manufacturer part number", "mfr part number", "mfr part", "mfg part number", "mfr pn",
-            "manufacturer part", "part number", "mfr no", "mfr", "manufacturer pn", "pn"],
-    "manufacturer": ["manufacturer", "mfr name", "mfg", "maker", "brand", "vendor", "manufacturer name"],
+            "manufacturer part", "part number", "mfr no", "manufacturer pn", "pn", "mfr part no"],
+    "manufacturer": ["manufacturer", "mfr", "mfr name", "mfg", "maker", "brand", "vendor", "manufacturer name"],
     "lcsc": ["lcsc", "lcsc part", "lcsc part number", "lcsc part no", "lcsc pn", "jlcpcb part", "jlc part", "lcsc id"],
     "qty": ["qty", "quantity", "count", "qnty", "amount", "pcs"],
     "designator": ["designator", "designators", "reference", "references", "ref", "refdes", "ref des", "parts"],
@@ -67,6 +67,8 @@ def _read_csv(p):
     """Tolerant CSV read: Altium ActiveBOM exports put title rows ('Bill of Materials;;;;;', a blank
     row) above a wider header, which pandas' sniffer chokes on. Rows may be ragged; they are padded."""
     data = Path(p).read_bytes()
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):                             # Excel "Unicode Text" is UTF-16 + tabs
+        data = data.decode("utf-16").encode("utf-8")
     if b"\x00" in data[:4096]:
         raise ValueError(f"{p}: not a text BOM (binary data); save it as CSV or XLSX")
     for enc in ("utf-8-sig", "cp1252", "latin-1"):                       # Excel 'CSV' on Windows is cp1252
@@ -111,7 +113,7 @@ def read_bom(path):
             continue
         if lines and d.get("designator") and not any(v for f, v in d.items() if f != "designator"):
             prev, q = lines[-1], re.match(r"\s*(\d+)", lines[-1].get("qty", ""))
-            if q and len(re.findall(r"[A-Za-z]+\d+", prev["designator"])) < int(q.group(1)):
+            if q and count_refs(prev["designator"]) < int(q.group(1)):
                 prev["designator"] += ", " + d["designator"]            # designator list wrapped onto the next row
                 continue
         if "dnp" in d:
@@ -145,6 +147,16 @@ def part_numbers(ln):
     return [c for c in dict.fromkeys(c.strip() for c in out) if c]
 
 
+def count_refs(s):
+    """'R1, R2, R5-R8' -> 6 (ranges like R5-R8 or R5-8 count every designator)."""
+    n = 0
+    for tok in re.split(r"[,;\s]+", s.strip()):
+        m = re.fullmatch(r"([A-Za-z]+)(\d+)(?:-(?:\1)?(\d+))?", tok)
+        if m:
+            n += int(m.group(3)) - int(m.group(2)) + 1 if m.group(3) and int(m.group(3)) >= int(m.group(2)) else 1
+    return n
+
+
 def triage(lines, index, provs, http):
     rows = []
     for i, ln in enumerate(lines, 1):
@@ -157,9 +169,10 @@ def triage(lines, index, provs, http):
             continue
         pns = part_numbers(ln)
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"), *pns)
+        cls = re.match(r"[A-Z]+", ln.get("designator", "").upper())
         sym = how = None
         for pn in pns or [""]:
-            sym, how = index.match(pn, ln.get("lcsc", ""), ln.get("value", ""), pkg)
+            sym, how = index.match(pn, ln.get("lcsc", ""), ln.get("value", ""), pkg, ref_class=cls.group(0) if cls else "")
             if sym:
                 break
         fp_key = None
@@ -167,8 +180,8 @@ def triage(lines, index, provs, http):
             fp_key, _ = index.footprint(sym.props.get("Footprint", ""))
         if not fp_key:
             fp_key, _ = index.footprint(ln.get("footprint", ""))
-        cls = re.match(r"[A-Z]+", ln.get("designator", "").upper())
-        gen_fp = None if fp_key else index.find_footprint_for_package(pkg, cls.group(0) if cls else "")
+        gen_fp = None if fp_key else index.find_footprint_for_package(
+            pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
         notes, src, errored, work, unconfigured = [], None, False, dict(ln), []
         if pns and not ln.get("mpn"):
             work["mpn"] = pns[0]                               # let providers search by the Comment/LibRef part number
