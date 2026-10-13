@@ -26,7 +26,7 @@ def test_values():
 
 
 def test_ipc_soic8():
-    spec = json.loads(Path("examples/packages/SOIC-8_3.9x4.9mm_P1.27mm.json").read_text())
+    spec = json.loads(Path("ecadlib/package_specs/SOIC-8_3.9x4.9mm_P1.27mm.json").read_text())
     _, rep = F.build(spec)
     p1 = rep["pads"][0]
     assert abs(p1["w"] - 1.95) < 0.05 and abs(p1["h"] - 0.6) < 0.05 and abs(p1["x"] + 2.475) < 0.02, p1
@@ -188,16 +188,24 @@ def test_altium_units_and_records_match_altium_bytes():
     assert len(mine) == len(ALTIUM_PAD) and diff == [103], diff     # 103 = paste-mask cache-valid flag (Altium revalidates)
 
 
+def _have(mod):
+    """pytest.importorskip for these plain-script tests: the dev extra (olefile) may not be installed."""
+    import importlib.util
+    return importlib.util.find_spec(mod) is not None
+
+
 def test_pcblib_writer_roundtrip():
+    if not _have('olefile'):
+        print('skip test_pcblib_writer_roundtrip (pip install olefile)'); return
     specs = ["SOIC-8_3.9x4.9mm_P1.27mm", "QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm"]
-    fps = [AL.footprint_from_spec(json.loads(Path(f"examples/packages/{n}.json").read_text()))[0] for n in specs]
+    fps = [AL.footprint_from_spec(json.loads(Path(f"ecadlib/package_specs/{n}.json").read_text()))[0] for n in specs]
     with tempfile.TemporaryDirectory() as d:
         AL.write_pcblib(Path(d) / "two.PcbLib", fps)
         got = {f["name"]: f for f in AL.read_pcblib(Path(d) / "two.PcbLib")}
     q = got[specs[1]]
     assert q["storage"] == specs[1][:31] and q["params"]["PATTERN"] == specs[1] and q["params"]["HEIGHT"] == "31.4961mil", q["params"]
     pads = [r for r in q["records"] if r["type"] == "pad"]
-    _, rep = F.build(json.loads(Path(f"examples/packages/{specs[1]}.json").read_text()))
+    _, rep = F.build(json.loads(Path(f"ecadlib/package_specs/{specs[1]}.json").read_text()))
     p1, r1 = pads[0], rep["pads"][0]
     assert len(pads) == 33 and (p1["x"], p1["y"], p1["w"], p1["h"]) == (AL.mm(r1["x"]), AL.mm(-r1["y"]), AL.mm(r1["w"]), AL.mm(r1["h"]))
     assert p1["shape"] == 9 and p1["corner"] == 50 and p1["paste_mode"] == 1
@@ -209,6 +217,8 @@ def test_pcblib_writer_roundtrip():
 
 
 def test_schlib_writer_roundtrip():
+    if not _have('olefile'):
+        print('skip test_schlib_writer_roundtrip (pip install olefile)'); return
     sym = AL.symbol_from_json(json.loads(Path("examples/symbols/CH340C.json").read_text()))
     with tempfile.TemporaryDirectory() as d:
         AL.write_schlib(Path(d) / "x.SchLib", [sym, AL.resistor_symbol(), AL.capacitor_symbol()])
@@ -237,7 +247,7 @@ def test_plan_ready_with_generated_models():
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "SchLib").mkdir(); (Path(d) / "PcbLib").mkdir()
         AL.main(["schlib", "examples/symbols/CH340C.json", "-o", f"{d}/SchLib"])
-        AL.main(["pcblib", "examples/packages/SOIC-16_3.9x9.9mm_P1.27mm.json", "-o", f"{d}/PcbLib"])
+        AL.main(["pcblib", "ecadlib/package_specs/SOIC-16_3.9x9.9mm_P1.27mm.json", "-o", f"{d}/PcbLib"])
         assert A.plan(lines, models=d)[0]["status"] == "ready"
         try:
             import pyaltiumlib                        # independent reader, if installed

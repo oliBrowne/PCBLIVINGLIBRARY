@@ -98,7 +98,7 @@ ecad-librarian/
 ## 1. `footprint_gen.py`: IPC-7351B footprint generator
 
 ```
-ecadlib footprint gen examples/packages/*.json -o out/footprints/ecadlib.pretty [--density A|B|C]
+ecadlib footprint gen ecadlib/package_specs/*.json -o out/footprints/ecadlib.pretty [--density A|B|C]
 ecadlib footprint compare <mine.kicad_mod> <reference path or URL>
 ecadlib check <any.kicad_mod> ...          # KLC-style rule check, works on KiCad's own footprints too
 ```
@@ -293,7 +293,7 @@ Parts without Altium model files are planned as `needs_altium_models` and skippe
 ## 5. `altium_lib.py`: Altium `.PcbLib` / `.SchLib` writer (pure Python)
 
 ```
-python3 -m ecadlib.altium_lib pcblib examples/packages/*.json -o out/altium_models/PcbLib [--density A|B|C] [--single lib.PcbLib]
+python3 -m ecadlib.altium_lib pcblib ecadlib/package_specs/*.json -o out/altium_models/PcbLib [--density A|B|C] [--single lib.PcbLib]
 python3 -m ecadlib.altium_lib schlib examples/symbols/*.json  -o out/altium_models/SchLib
 python3 -m ecadlib.altium_lib dump out/altium_models/PcbLib/SOIC-8_3.9x4.9mm_P1.27mm.PcbLib
 python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
@@ -331,7 +331,7 @@ What gets written:
 
 ```
 python3 -m pip install easyeda2kicad                       # 1.0.1, used only to read its endpoint code
-python3 -m ecadlib.footprint_gen gen examples/packages/*.json -o out/footprints/ecadlib.pretty
+python3 -m ecadlib.footprint_gen gen ecadlib/package_specs/*.json -o out/footprints/ecadlib.pretty
 for each of 6 footprints:  python3 -m ecadlib.footprint_gen compare out/footprints/ecadlib.pretty/<fp>.kicad_mod \
       https://gitlab.com/kicad/libraries/kicad-footprints/-/raw/master/<Lib>.pretty/<fp>.kicad_mod   > out/footprints/compare_vs_kicad_official.txt
 python3 -m tests.test_offline                               # 11/11 ok (incl. Altium 365 plan/push, Nexar schema, PcbLib/SchLib writer)
@@ -340,7 +340,7 @@ python3 -m ecadlib.bom_triage examples/sample_bom.csv --lib examples/kicad_lib -
         --providers digikey,mouser,nexar,snapmagic,samacsys -o out/triage_sample_bom_stub_providers_only
 python3 -m ecadlib.altium_export examples/sample_bom.csv --triage out/triage_sample_bom.csv -o out/altium
 export SOURCE_DATE_EPOCH=1791936000                         # reproducible PcbLib dates
-python3 -m ecadlib.altium_lib pcblib examples/packages/*.json -o out/altium_models/PcbLib
+python3 -m ecadlib.altium_lib pcblib ecadlib/package_specs/*.json -o out/altium_models/PcbLib
 python3 -m ecadlib.altium_lib schlib examples/symbols/*.json -o out/altium_models/SchLib
 python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv --models out/altium_models -o out/altium365/plan.json
 python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace https://example.365.altium.com --dry-run -o out/altium365/push_dry_run.json

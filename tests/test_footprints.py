@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ecadlib import altium_lib as AL, footprint_check as C, footprint_gen as F, sexpr
 
-SPECS = Path(__file__).resolve().parent.parent / "examples" / "packages"
+SPECS = Path(__file__).resolve().parent.parent / "ecadlib" / "package_specs"
 SPEC = lambda n: json.loads((SPECS / f"{n}.json").read_text())
 
 # KiCad official footprint: pad 1 (w, h, x, y) and courtyard (w, h)

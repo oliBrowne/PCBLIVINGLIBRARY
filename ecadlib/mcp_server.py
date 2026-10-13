@@ -116,7 +116,7 @@ def handle(ws, msg):
     elif method == "tools/list":
         result = {"tools": TOOLS}
     elif method == "tools/call":
-        if params.get("name") not in {t["name"] for t in TOOLS}:
+        if not isinstance(params.get("name"), str) or params["name"] not in {t["name"] for t in TOOLS}:
             return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"unknown tool: {params.get('name')}"}}
         if not isinstance(params.get("arguments") or {}, dict):
             return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": "arguments must be an object"}}
@@ -145,18 +145,30 @@ def main(argv=None):
     ap.add_argument("--offline", action="store_true")
     a = ap.parse_args(argv)
     ws = Workspace(a.workspace, a.lib, a.providers.split(",") if a.providers else None, a.offline)
-    for line in sys.stdin:
+    serve(ws, sys.stdin.buffer, sys.stdout.buffer)
+
+
+def serve(ws, inp, out):
+    """JSON-RPC over newline-delimited UTF-8 (bytes in, bytes out, whatever the OS locale is).
+    No single bad line can stop the server: it gets an error response and the next line is read."""
+    for raw in inp:
+        line = raw.decode("utf-8", errors="replace")
         if not line.strip():
             continue
         try:
             msg = json.loads(line)
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):                # bad JSON, or nested deeper than Python can parse
             resp = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}
         else:
-            resp = handle(ws, msg)
+            try:
+                resp = handle(ws, msg)
+            except Exception as e:                          # a bug or odd input in one request: report and go on
+                traceback.print_exc(file=sys.stderr)
+                mid = msg.get("id") if isinstance(msg, dict) and isinstance(msg.get("id"), (str, int)) else None
+                resp = {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": f"internal error: {type(e).__name__}"}}
         if resp is not None:
-            sys.stdout.write(json.dumps(resp) + "\n")
-            sys.stdout.flush()
+            out.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
+            out.flush()
 
 
 if __name__ == "__main__":

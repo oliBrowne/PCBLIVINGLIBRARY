@@ -10,7 +10,15 @@ _ESC = {"n": "\n", "r": "\r", "t": "\t"}
 def parse(text: str):
     """Return nested lists. Quoted strings -> str, bare atoms -> str (numbers kept as text)."""
     stack, cur = [], []
-    for m in _TOKEN.finditer(text):
+    pos, end = 0, len(text)
+    while pos < end:
+        m = _TOKEN.match(text, pos)
+        if not m:
+            if text[pos:].strip():
+                bad = text[pos:].lstrip()[:20]
+                raise ValueError(f"unterminated string or stray character near {bad!r}")
+            break
+        pos = m.end()
         if m.group(1):
             stack.append(cur)
             cur = []

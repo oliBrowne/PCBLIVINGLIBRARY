@@ -146,11 +146,12 @@
           "description": "N x N paste windows; default auto"
         },
         "number": {
+          "description": "EP pad number; default pin_count+1",
           "type": [
             "string",
             "integer"
           ],
-          "description": "EP pad number; default pin_count+1"
+          "pattern": "^[A-Za-z0-9_.+-]{1,16}$"
         }
       }
     },
@@ -222,7 +223,12 @@
         ],
         "properties": {
           "number": {
-            "type": "string"
+            "type": [
+              "string",
+              "integer"
+            ],
+            "pattern": "^[A-Za-z0-9_.+-]{1,16}$",
+            "description": "pad number: letters, digits and _ . + - only (KLC uses 1, 2, 3 ...)"
           },
           "side": {
             "enum": [
@@ -249,7 +255,9 @@
           "type": [
             "string",
             "integer"
-          ]
+          ],
+          "pattern": "^[A-Za-z0-9_.+-]{1,16}$",
+          "description": "pad number: letters, digits and _ . + - only (KLC uses 1, 2, 3 ...)"
         },
         "side": {
           "enum": [

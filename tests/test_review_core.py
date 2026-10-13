@@ -26,7 +26,7 @@ def test_dim_one_sided_limit():
 
 
 def test_ep_gap_checks_top_bottom_rows():
-    spec = json.loads(Path("examples/packages/QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm.json").read_text())
+    spec = json.loads(Path("ecadlib/package_specs/QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm.json").read_text())
     _, rep = F.build(spec)
     assert "warning" not in rep, rep.get("warning")
     spec["exposed_pad"] = {"length": {"nom": 3.0}, "width": {"nom": 4.2}}      # tall EP reaches the top/bottom rows

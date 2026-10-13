@@ -5,7 +5,7 @@
 
 Standard library only (http.server). It binds to 127.0.0.1 by default: this is a single-user
 desktop tool, not a hosted service, and provider API keys stay in the user's environment."""
-import argparse, itertools, json, mimetypes, sys, threading, traceback, webbrowser
+import argparse, ipaddress, itertools, json, mimetypes, sys, threading, traceback, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -140,16 +140,18 @@ def make_handler(ws: Workspace):
                     name = unquote(self.headers.get("X-Filename", "bom.csv"))
                     with write_lock:
                         rel = ws.save_upload(name, self._body())
-                    return self._send(200, jobs.start(self._locked(ws.triage), rel, label=rel))
+                    return self._send(200, jobs.start(self._triage, rel, label=rel))
                 if u.path == "/api/triage":
                     bom = self._bom()
-                    return self._send(200, jobs.start(self._locked(ws.triage), bom, label=bom))
+                    return self._send(200, jobs.start(self._triage, bom, label=bom))
+                if u.path == "/api/altium365/workspaces":             # read-only network call, no lock
+                    self._json()
+                    return self._send(200, ws.altium365_workspaces())
                 actions = {
                     "/api/footprint/approve": lambda b: ws.approve_footprint(b["spec"], b.get("density"), bool(b.get("overwrite"))),
                     "/api/export/dblib": lambda b: ws.export_dblib(self._bom(b)),
                     "/api/altium/models": lambda b: ws.build_altium_models(self._bom(b)),
                     "/api/altium365/plan": lambda b: ws.altium365_plan(self._bom(b)),
-                    "/api/altium365/workspaces": lambda b: ws.altium365_workspaces(),
                     "/api/altium365/push": lambda b: ws.altium365_push(self._bom(b), b.get("workspace"),
                                                                        dry_run=b.get("dry_run", True) is not False),
                 }
@@ -162,11 +164,8 @@ def make_handler(ws: Workspace):
                 return self._error(e)
 
         @staticmethod
-        def _locked(fn):
-            def run(*a, **k):
-                with write_lock:
-                    return fn(*a, **k)
-            return run
+        def _triage(bom, progress=None):
+            return ws.triage(bom, progress, lock=write_lock)       # lock only while the reports are written
 
         def _error(self, e):
             if not isinstance(e, EXPECTED):
@@ -176,16 +175,29 @@ def make_handler(ws: Workspace):
     return H
 
 
+def _loopback(host):
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="ecadlib ui", description="ecadlib local web UI")
     ap.add_argument("--lib", action="append", default=[], help="KiCad library dir to index (repeatable)")
     ap.add_argument("--workspace", default="ecadlib_workspace")
     ap.add_argument("--providers", help="comma list; default all")
     ap.add_argument("--offline", action="store_true", help="use cached provider responses only")
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default="127.0.0.1", help="loopback only (127.0.0.1, ::1, localhost)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true")
     a = ap.parse_args(argv)
+    if not _loopback(a.host):
+        sys.exit(f"refusing to serve on {a.host}: the UI has no login, so anyone who can reach it could edit the "
+                 "workspace and push to Altium 365 with your token. Keep the default 127.0.0.1; to use it from "
+                 "another machine, forward the port over SSH (ssh -L 8765:127.0.0.1:8765 host).")
     ws = Workspace(a.workspace, a.lib, a.providers.split(",") if a.providers else None, a.offline)
     try:
         srv = ThreadingHTTPServer((a.host, a.port), make_handler(ws))
