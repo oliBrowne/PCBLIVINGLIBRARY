@@ -33,10 +33,22 @@ def make_handler(ws: Workspace):
             self.end_headers()
             self.wfile.write(data)
 
+        def _host_ok(self):
+            """Refuse DNS-rebinding requests: the Host header must name this server's own loopback address."""
+            port = self.server.server_address[1]
+            names = {"127.0.0.1", "localhost", "[::1]", self.server.server_address[0]}
+            return self.headers.get("Host") in {f"{h}:{port}" for h in names}
+
+        def _bom(self):
+            """Web clients may only name BOMs inside the workspace (absolute paths would read any file on disk)."""
+            bom = self._json()["bom"]
+            ws.inside(bom)
+            return bom
+
         def _body(self):
             n = int(self.headers.get("Content-Length") or 0)
-            if n > MAX_UPLOAD:
-                raise ValueError("upload too large")
+            if n < 0 or n > MAX_UPLOAD:
+                raise ValueError("bad or too large Content-Length")
             return self.rfile.read(n)
 
         def _json(self):
@@ -45,6 +57,8 @@ def make_handler(ws: Workspace):
         def do_GET(self):
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            if not self._host_ok():
+                return self._send(403, {"error": "unexpected Host header"})
             try:
                 if u.path in ("/", "/index.html"):
                     return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
@@ -65,6 +79,8 @@ def make_handler(ws: Workspace):
 
         def do_POST(self):
             u = urlparse(self.path)
+            if not self._host_ok():
+                return self._send(403, {"error": "unexpected Host header"})
             if self.headers.get("Origin") not in (None, f"http://{self.headers.get('Host')}"):
                 return self._send(403, {"error": "cross-origin request refused"})   # stop other sites driving the API
             try:
@@ -73,7 +89,7 @@ def make_handler(ws: Workspace):
                     rel = ws.save_upload(name, self._body())
                     return self._send(200, ws.triage(rel))
                 if u.path == "/api/triage":
-                    return self._send(200, ws.triage(self._json()["bom"]))
+                    return self._send(200, ws.triage(self._bom()))
                 if u.path == "/api/footprint/preview":
                     b = self._json()
                     return self._send(200, ws.preview_footprint(b["spec"], b.get("density")))
@@ -81,7 +97,7 @@ def make_handler(ws: Workspace):
                     b = self._json()
                     return self._send(200, ws.approve_footprint(b["spec"], b.get("density")))
                 if u.path == "/api/export/dblib":
-                    return self._send(200, ws.export_dblib(self._json()["bom"]))
+                    return self._send(200, ws.export_dblib(self._bom()))
                 return self._send(404, {"error": "not found"})
             except Exception as e:
                 return self._error(e)

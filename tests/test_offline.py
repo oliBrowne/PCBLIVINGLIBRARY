@@ -76,6 +76,37 @@ def test_workspace_and_mcp():
         r = M.handle(ws, {"id": 2, "method": "tools/call", "params": {"name": "preview_footprint", "arguments": {"spec": spec}}})
         assert r["result"]["isError"] is False, r
         assert M.handle(ws, {"method": "notifications/initialized"}) is None
+        assert M.handle(ws, ["not", "an", "object"])["error"]["code"] == -32600
+        r = M.handle(ws, {"id": 3, "method": "tools/call", "params": {"name": "rm_rf", "arguments": {}}})
+        assert r["error"]["code"] == -32602, r
+        r = M.handle(ws, {"id": 4, "method": "initialize", "params": {"protocolVersion": "1999-01-01"}})
+        assert r["result"]["protocolVersion"] == M.PROTOCOL, r
+
+
+def test_ui_server_guards():
+    import http.client, threading
+    from http.server import ThreadingHTTPServer
+    from ecadlib.app import Workspace
+    from ecadlib.ui.server import make_handler
+    with tempfile.TemporaryDirectory() as d:
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Workspace(d, [], providers=["digikey"])))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        port = srv.server_address[1]
+
+        def call(method, path, body=None, headers=None):
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            c.request(method, path, body=body, headers=headers or {})
+            r = c.getresponse()
+            return r.status, r.read()
+        try:
+            assert call("GET", "/api/info")[0] == 200
+            assert call("GET", "/api/info", headers={"Host": f"evil.example:{port}"})[0] == 403   # DNS rebinding
+            assert call("POST", "/api/triage", "{}", {"Origin": "https://evil.example"})[0] == 403
+            st, body = call("POST", "/api/triage", json.dumps({"bom": str(Path("examples/sample_bom.csv").resolve())}))
+            assert st == 400 and b"outside workspace" in body, body                               # absolute path refused
+            assert call("POST", "/api/triage", "x", {"Content-Length": "-1"})[0] == 400
+        finally:
+            srv.shutdown()
 
 
 def seed(http, method, url, body, payload):

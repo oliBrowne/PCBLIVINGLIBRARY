@@ -13,6 +13,7 @@ import argparse, contextlib, json, sys, traceback
 from .app import Workspace
 
 PROTOCOL = "2025-06-18"
+SUPPORTED = (PROTOCOL, "2025-03-26", "2024-11-05")
 
 TOOLS = [
     {"name": "workspace_info",
@@ -65,17 +66,25 @@ def call_tool(ws, name, args):
 
 def handle(ws, msg):
     """Return a JSON-RPC response dict, or None for notifications."""
+    if not isinstance(msg, dict) or not isinstance(msg.get("params", {}), (dict, type(None))):
+        mid = msg.get("id") if isinstance(msg, dict) else None
+        return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32600, "message": "invalid request"}}
     mid, method, params = msg.get("id"), msg.get("method"), msg.get("params") or {}
     if mid is None:
         return None                                       # notifications (initialized, cancelled) need no answer
     if method == "initialize":
-        result = {"protocolVersion": params.get("protocolVersion", PROTOCOL),
+        asked = params.get("protocolVersion")
+        result = {"protocolVersion": asked if asked in SUPPORTED else PROTOCOL,
                   "capabilities": {"tools": {}}, "serverInfo": {"name": "ecadlib", "version": "0.1.0"}}
     elif method == "ping":
         result = {}
     elif method == "tools/list":
         result = {"tools": TOOLS}
     elif method == "tools/call":
+        if params.get("name") not in {t["name"] for t in TOOLS}:
+            return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"unknown tool: {params.get('name')}"}}
+        if not isinstance(params.get("arguments") or {}, dict):
+            return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": "arguments must be an object"}}
         try:
             out = call_tool(ws, params.get("name"), params.get("arguments") or {})
             result = {"content": [{"type": "text", "text": json.dumps(out, indent=1, default=str)}], "isError": False}
