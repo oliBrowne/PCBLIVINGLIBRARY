@@ -8,7 +8,8 @@ fab limits; each finding is (level, rule, message) with level "error" or "warnin
 
   copper    pads must not overlap; gap between pads >= 0.2 mm (solder-mask web; warning below,
             error below 0.1 mm)
-  silk      silkscreen >= 0.2 mm from any pad edge (KLC F5.1 uses 0.2 mm), silk line width 0.10-0.15 mm
+  silk      silkscreen line edge >= 0.2 mm from any pad's real (rounded) outline (KLC F5.1), or 0.1 mm on
+            tiny parts where KiCad does the same; silk line width 0.10-0.15 mm
   fab       a body outline on F.Fab, line width 0.10 mm (KLC F5.2)
   courtyard present, closed box on F.CrtYd, encloses every pad and the F.Fab body,
             line width 0.05 mm, corners on the 0.01 mm grid (KLC F5.3)
@@ -21,7 +22,7 @@ from pathlib import Path
 
 from . import sexpr
 
-MIN_WEB, HARD_WEB, SILK_CLEAR = 0.2, 0.1, 0.2
+MIN_WEB, HARD_WEB, SILK_CLEAR, SILK_CLEAR_SMALL = 0.2, 0.1, 0.2, 0.1
 EPS = 0.005
 
 
@@ -72,30 +73,38 @@ def _pad_rects(tree):
         if round(rot) % 180 == 90:
             w, h = h, w
         layers = (sexpr.first(p, "layers") or ["layers"])[1:]
-        out.append({"num": p[1], "x": x, "y": y, "w": w, "h": h, "layers": layers,
+        shape = p[3] if len(p) > 3 else "rect"
+        rr = sexpr.first(p, "roundrect_rratio")
+        r = (_f(rr[1]) * min(w, h) if shape == "roundrect" and rr else
+             min(w, h) / 2 if shape in ("circle", "oval") else 0.0)
+        out.append({"num": p[1], "x": x, "y": y, "w": w, "h": h, "r": r, "layers": layers,
                     "copper": any(l.endswith(".Cu") for l in layers), "paste": any("Paste" in l for l in layers)})
     return out
 
 
 def _rect_gap(a, b):
+    """Copper gap between two pads. A roundrect is its inner rectangle grown by a disc of radius r,
+    so the gap is the inner rectangles' distance minus both radii (exact for rounded corners)."""
     dx = abs(a["x"] - b["x"]) - (a["w"] + b["w"]) / 2
     dy = abs(a["y"] - b["y"]) - (a["h"] + b["h"]) / 2
     if dx < 0 and dy < 0:
         return max(dx, dy)                       # overlap (negative)
-    return math.hypot(max(dx, 0), max(dy, 0))
+    ra, rb = a.get("r", 0.0), b.get("r", 0.0)
+    return math.hypot(max(dx + ra + rb, 0), max(dy + ra + rb, 0)) - ra - rb
 
 
 def _seg_rect_dist(seg, r):
-    """Distance from a segment to an axis-aligned rectangle (0 if they touch), by dense sampling."""
+    """Distance from a segment to a pad's real outline (rounded corners included; 0 if they touch), by dense sampling."""
     x1, y1, x2, y2 = seg[:4]
     n = max(2, int(math.hypot(x2 - x1, y2 - y1) / 0.005) + 1)
     best = 1e9
     for i in range(n + 1):
         t = i / n
         px, py = x1 + (x2 - x1) * t, y1 + (y2 - y1) * t
-        dx = max(abs(px - r["x"]) - r["w"] / 2, 0)
-        dy = max(abs(py - r["y"]) - r["h"] / 2, 0)
-        best = min(best, math.hypot(dx, dy))
+        rad = r.get("r", 0.0)
+        dx = max(abs(px - r["x"]) - (r["w"] / 2 - rad), 0)
+        dy = max(abs(py - r["y"]) - (r["h"] / 2 - rad), 0)
+        best = min(best, max(math.hypot(dx, dy) - rad, 0))
     return best
 
 
@@ -178,8 +187,13 @@ def check(text, allow_duplicate_pads=None):
             if worst is None or d < worst[0]:
                 worst = (d, p["num"])
     if worst and worst[0] < SILK_CLEAR - 0.011:
-        add("error" if worst[0] < 0.05 else "warning", "silk",
-            f"silkscreen is {max(worst[0], 0):.3f} mm from pad {worst[1]} (KLC: >= {SILK_CLEAR} mm)")
+        # KiCad itself drops to 0.1 mm on tiny parts (0402 and below) where 0.2 mm would leave no silk at all
+        small = cu and max(p["x"] + p["w"] / 2 for p in cu) - min(p["x"] - p["w"] / 2 for p in cu) < 1.7
+        if worst[0] < SILK_CLEAR_SMALL - 0.011:
+            add("error", "silk", f"silkscreen is {max(worst[0], 0):.3f} mm from pad {worst[1]} (KLC: >= {SILK_CLEAR} mm, "
+                f"{SILK_CLEAR_SMALL} mm on tiny parts)")
+        elif not small:
+            add("warning", "silk", f"silkscreen is {worst[0]:.3f} mm from pad {worst[1]} (KLC: >= {SILK_CLEAR} mm)")
 
     # ---- fab
     fab, _ = _graphics(tree, "F.Fab")

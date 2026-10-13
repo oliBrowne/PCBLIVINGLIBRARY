@@ -1,0 +1,27 @@
+{
+  "name": "D_SMA",
+  "description": "Diode SMA (DO-214AC), pin 1 = cathode",
+  "package_type": "molded",
+  "pin_count": 2,
+  "body_length": {
+    "min": 4.8,
+    "max": 5.6
+  },
+  "body_width": {
+    "min": 2.3,
+    "max": 2.9
+  },
+  "terminal_width": {
+    "min": 1.25,
+    "max": 1.65
+  },
+  "terminal_length": {
+    "min": 0.76,
+    "max": 1.52
+  },
+  "polarized": true,
+  "density": "B",
+  "source": {
+    "datasheet": "https://www.vishay.com/docs/97292/sma-1_do-214ac.pdf"
+  }
+}

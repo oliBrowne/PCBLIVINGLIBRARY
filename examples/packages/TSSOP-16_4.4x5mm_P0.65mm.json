@@ -1,0 +1,31 @@
+{
+  "name": "TSSOP-16_4.4x5mm_P0.65mm",
+  "description": "TSSOP-16 4.4 x 5 mm, 0.65 mm pitch, JEDEC MO-153AB",
+  "package_type": "gullwing",
+  "pin_count": 16,
+  "pitch": 0.65,
+  "lead_span": {
+    "nom": 6.4,
+    "tol": 0.0
+  },
+  "body_width": {
+    "nom": 4.4,
+    "tol": 0.1
+  },
+  "body_length": {
+    "nom": 5.0,
+    "tol": 0.1
+  },
+  "terminal_width": {
+    "min": 0.17,
+    "max": 0.3
+  },
+  "terminal_length": {
+    "nom": 0.6,
+    "tol": 0.15
+  },
+  "density": "B",
+  "source": {
+    "drawing": "KiCad footprint generator size definitions (gitlab.com/kicad/libraries/kicad-footprint-generator, data/package/gullwing/lssop_tssop_vssop_wssop.yaml, JEDEC MO-153AB)"
+  }
+}

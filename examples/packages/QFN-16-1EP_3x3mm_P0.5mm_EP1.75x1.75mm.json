@@ -1,0 +1,39 @@
+{
+  "name": "QFN-16-1EP_3x3mm_P0.5mm_EP1.75x1.75mm",
+  "description": "QFN-16 3 x 3 mm, 0.5 mm pitch, 1.75 mm exposed pad",
+  "package_type": "qfn",
+  "pin_count": 16,
+  "pitch": 0.5,
+  "body_length": {
+    "nom": 3.0,
+    "tol": 0.0
+  },
+  "body_width": {
+    "nom": 3.0,
+    "tol": 0.0
+  },
+  "terminal_width": {
+    "min": 0.18,
+    "max": 0.3
+  },
+  "terminal_length": {
+    "min": 0.3,
+    "max": 0.5
+  },
+  "exposed_pad": {
+    "length": {
+      "min": 1.65,
+      "max": 1.85
+    },
+    "width": {
+      "min": 1.65,
+      "max": 1.85
+    }
+  },
+  "height_max": 0.8,
+  "density": "B",
+  "source": {
+    "datasheet": "onsemi NCN4555 package drawing",
+    "drawing": "KiCad footprint generator size definitions (gitlab.com/kicad/libraries/kicad-footprint-generator, data/package/no_lead/qfn-1x.yaml)"
+  }
+}

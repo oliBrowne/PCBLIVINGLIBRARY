@@ -4,20 +4,19 @@
   "package_type": "chip",
   "pin_count": 2,
   "body_length": {
-    "nom": 1.0,
-    "tol": 0.05
+    "min": 1.0,
+    "max": 1.1
   },
   "body_width": {
-    "nom": 0.5,
-    "tol": 0.05
+    "min": 0.48,
+    "max": 0.6
   },
   "terminal_length": {
-    "nom": 0.25,
-    "tol": 0.1
+    "min": 0.1,
+    "max": 0.3
   },
   "density": "B",
   "source": {
-    "datasheet": "Yageo RC-series general purpose chip resistor datasheet (dims typed from memory - verify)",
-    "drawing": "Fig. 'Dimensions'"
+    "drawing": "KiCad footprint generator size definitions (gitlab.com/kicad/libraries/kicad-footprint-generator, data/SMD_2terminal_chip_molded, from IPC-SM-782)"
   }
 }
