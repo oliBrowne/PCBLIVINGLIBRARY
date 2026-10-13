@@ -17,17 +17,24 @@ def norm_mpn(s):
     return re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
 
 
-def parse_value(s):
-    """'10k' / '10kΩ' / '4k7' / '100nF' / '0.1uF' / '10K 1%' -> float, else None."""
-    s = str(s or "").strip().replace("Ω", "").replace("ohm", "")
-    m = re.match(r"^(\d+)([pnuµμmkKMGR])(\d+)", s)                 # 4k7 / 4R7 notation
+_UNIT = r"((?i:ohms?|[fhω]))?(?![A-Za-z0-9])"   # optional unit, then the number must end (74HC595 is not 74)
+
+
+def parse_value(s, with_unit=False):
+    """'10k' / '10kΩ' / '4k7' / '100nF' / '0.1uF' / '10K 1%' / '0R' -> float, else None.
+    with_unit=True -> (value, unit) with unit in 'F', 'H', 'R' (ohm) or '' when not stated."""
+    s = re.sub(r"(?i)(?<=\d)meg", "M", str(s or "").strip())
+    m = re.match(r"^(\d+)([pnuµμmkKMGR])(\d+)" + _UNIT, s)          # 4k7 / 4R7 notation
     if m:
-        return float(f"{m.group(1)}.{m.group(3)}") * SI[m.group(2) if m.group(2) != "R" else "r"]
-    m = re.match(r"^(\d+(?:\.\d+)?)\s*([pnuµμmkKMGR]?)", s)
-    if not m:
-        return None
-    pre = m.group(2)
-    return float(m.group(1)) * SI.get(pre if pre not in ("R",) else "r", 1.0)
+        v, pre, u = float(f"{m.group(1)}.{m.group(3)}"), m.group(2), m.group(4)
+    else:
+        m = re.match(r"^(\d+(?:\.\d+)?)\s*([pnuµμmkKMGR]?)" + _UNIT, s)
+        if not m:
+            return (None, "") if with_unit else None
+        v, pre, u = float(m.group(1)), m.group(2), m.group(3)
+    v *= SI["r" if pre == "R" else pre]
+    u = "R" if pre == "R" or (u or "").lower()[:1] in ("o", "ω") else (u or "").upper()
+    return (v, u) if with_unit else v
 
 
 def package_of(*texts):
@@ -95,11 +102,12 @@ class KiCadIndex:
         for s in self.symbols:
             if lcsc and s.lcsc.upper() == lcsc.upper():
                 return s, "lcsc"
-        v = parse_value(value)
+        v, u = parse_value(value, True)
         if v is not None and package:
             for s in self.symbols:
-                sv = parse_value(s.props.get("Value"))
-                if sv and abs(sv - v) <= 1e-6 * v and package_of(s.props.get("Footprint"), s.name) == package:
+                sv, su = parse_value(s.props.get("Value"), True)
+                if (sv is not None and abs(sv - v) <= 1e-6 * v and not (u and su and u != su)     # 0R == 0; 10uF != 10uH
+                        and package_of(s.props.get("Footprint"), s.name) == package):
                     return s, "value+package"
         return None, None
 

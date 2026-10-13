@@ -1,0 +1,352 @@
+[
+  {
+    "name": "CAP-0402-100nF",
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/Capacitors",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "CAP-0402-100nF",
+        "componentComment": "=Value",
+        "componentDescription": "Capacitor 100nF 16V X7R 0402",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "100nF"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "Samsung Electro-Mechanics"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "CL05B104KO5NNNC"
+          },
+          {
+            "name": "Supplier 1",
+            "value": "LCSC"
+          },
+          {
+            "name": "Supplier Part Number 1",
+            "value": "C1525"
+          },
+          {
+            "name": "ComponentLink1Description",
+            "value": "LCSC"
+          },
+          {
+            "name": "ComponentLink1URL",
+            "value": "https://www.lcsc.com/product-detail/C1525.html"
+          },
+          {
+            "name": "ComponentLink2Description",
+            "value": "Datasheet"
+          },
+          {
+            "name": "ComponentLink2URL",
+            "value": "https://www.lcsc.com/datasheet/C1525.pdf"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": null,
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\Capacitor.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": null,
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\C_0402_1005Metric.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
+  },
+  {
+    "name": "TYPE-C-31-M-12",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "SM04B-SRSS-TB(LF)(SN)",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "FTSH-105-01-L-DV-K",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "X322512MSB4SI",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "KT-0603R",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "STM32F103C8T6",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "AMS1117-3.3",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "ESP32-S3-WROOM-1-N16R8",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "TPS62133RGTR",
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/ICs",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "TPS62133RGTR",
+        "componentComment": "TPS62133RGTR",
+        "componentDescription": "3-17V 3A step-down converter",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "TPS62133RGTR"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "Texas Instruments"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "TPS62133RGTR"
+          },
+          {
+            "name": "Supplier 1",
+            "value": "LCSC"
+          },
+          {
+            "name": "Supplier Part Number 1",
+            "value": "C73973"
+          },
+          {
+            "name": "ComponentLink1Description",
+            "value": "LCSC"
+          },
+          {
+            "name": "ComponentLink1URL",
+            "value": "https://www.lcsc.com/product-detail/C73973.html"
+          },
+          {
+            "name": "ComponentLink2Description",
+            "value": "Datasheet"
+          },
+          {
+            "name": "ComponentLink2URL",
+            "value": "https://www.lcsc.com/datasheet/C73973.pdf"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": null,
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\TPS62133RGTR.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": null,
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
+  },
+  {
+    "name": "CH340C",
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/ICs",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "CH340C",
+        "componentComment": "CH340C",
+        "componentDescription": "USB to UART bridge internal oscillator",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "CH340C"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "WCH"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "CH340C"
+          },
+          {
+            "name": "Supplier 1",
+            "value": "LCSC"
+          },
+          {
+            "name": "Supplier Part Number 1",
+            "value": "C84681"
+          },
+          {
+            "name": "ComponentLink1Description",
+            "value": "LCSC"
+          },
+          {
+            "name": "ComponentLink1URL",
+            "value": "https://www.lcsc.com/product-detail/C84681.html"
+          },
+          {
+            "name": "ComponentLink2Description",
+            "value": "Datasheet"
+          },
+          {
+            "name": "ComponentLink2URL",
+            "value": "https://www.lcsc.com/datasheet/C84681.pdf"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": null,
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\CH340C.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": null,
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\SOIC-16_3.9x9.9mm_P1.27mm.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
+  },
+  {
+    "name": "TPS62162DSGR",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "RES-0603-10k",
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/Resistors",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "RES-0603-10k",
+        "componentComment": "=Value",
+        "componentDescription": "Resistor 10k 1% 0603",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "10k"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "UNI-ROYAL"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "0603WAF1002T5E"
+          },
+          {
+            "name": "Supplier 1",
+            "value": "LCSC"
+          },
+          {
+            "name": "Supplier Part Number 1",
+            "value": "C25804"
+          },
+          {
+            "name": "ComponentLink1Description",
+            "value": "LCSC"
+          },
+          {
+            "name": "ComponentLink1URL",
+            "value": "https://www.lcsc.com/product-detail/C25804.html"
+          },
+          {
+            "name": "ComponentLink2Description",
+            "value": "Datasheet"
+          },
+          {
+            "name": "ComponentLink2URL",
+            "value": "https://www.lcsc.com/datasheet/C25804.pdf"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": null,
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\Resistor.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": null,
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\R_0603_1608Metric.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
+  },
+  {
+    "name": "AO3401A",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  }
+]

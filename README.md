@@ -46,11 +46,16 @@ ecad-librarian/
 │   ├── app.py                # Workspace: the shared actions behind the UI, MCP server and CLI
 │   ├── ui/                   # local web UI (python -m ecadlib.ui), one static page, stdlib server
 │   ├── mcp_server.py         # MCP server over stdio (python -m ecadlib.mcp_server)
+│   ├── altium365.py          # Altium 365 workspace: release plan + push via the Nexar Design API
+│   ├── altium_lib.py         # pure-Python .PcbLib/.SchLib writer (+ minimal reader, `dump`)
+│   ├── cfb.py                # Compound File Binary (OLE2) v3 writer used by altium_lib
+│   ├── assets/pcblib_template.json.gz   # Library header + FileVersionInfo from an Altium-saved file (see NOTICE)
 │   ├── httpcache.py          # disk cache + per-host rate limit around requests
 │   └── sexpr.py              # tiny KiCad S-expression reader (parse only)
 ├── examples/
 │   ├── sample_bom.csv        # 14 lines, LCSC numbers checked against lcsc.com (see below)
 │   ├── packages/*.json       # 9 package specs (0402/0603/0805/1206, SOIC-8/16, QFN-32, VQFN-16)
+│   ├── symbols/*.json        # symbol pin lists: CH340C, TPS62133RGTR (both UNVERIFIED), Resistor, Capacitor
 │   └── kicad_lib/ecadlib_demo.kicad_sym   # 5-symbol "local library" for the triage demo
 ├── tests/test_offline.py     # offline self-tests (header mapping, values, IPC math, provider parsing)
 └── out/
@@ -58,7 +63,9 @@ ecad-librarian/
     ├── footprints/gen_log.txt, compare_vs_kicad_official.txt
     ├── triage_sample_bom.{md,csv}                       # live run (sources blocked, see below)
     ├── triage_sample_bom_stub_providers_only.{md,csv}   # shows the needs_footprint_generation bucket
-    └── altium/{parts.sqlite, parts.xlsx, ecadlib_sqlite.DbLib, ecadlib_excel.DbLib}
+    ├── altium/{parts.sqlite, parts.xlsx, ecadlib_sqlite.DbLib, ecadlib_excel.DbLib}
+    ├── altium_models/{PcbLib/*.PcbLib (9), SchLib/*.SchLib (4)}   # written by altium_lib.py
+    └── altium365/{plan.json, push_dry_run.json}
 ```
 
 ---
@@ -207,7 +214,7 @@ This writes one table per category (Capacitors, Connectors, Crystals, Diodes, IC
 * The absolute `C:\ecadlib\altium\…` path: set it with `--win-dir`, or edit it in Altium's DbLib editor ("Connect").
 * An Access `.mdb` file is Altium's most-trodden path, but it cannot be written portably from Python, so it was skipped.
 
-### Getting footprints and symbols into Altium (research only, not built)
+### Getting footprints and symbols into Altium (options researched before section 5 was built)
 
 * **Altium's own KiCad importer** (Import Wizard): the docs list `*.kicad_mod`, `*.kicad_sym`, `*.lib`, `*.kicad_pcb`, `*.kicad_sch` and `*.kicad_pro` "up to KiCad version 8.x". This is the least-effort route. It is also why the generator emits the KiCad 7 file format rather than KiCad 9/10.
 * **Altium scripting** (DelphiScript/JScript/VBScript inside Altium, using `PCBServer.CreatePCBLibComp`, `IPCB_Pad`, …): this can build PcbLib footprints directly from the same JSON. Altium also ships an **IPC Compliant Footprint Wizard / Batch Generator** that takes package dimensions from a spreadsheet. I recall that tool from memory and did not verify it here; mapping `package_schema.json` onto its template could be the cleanest Altium-native route.
@@ -218,6 +225,76 @@ This writes one table per category (Capacitors, Connectors, Crystals, Diodes, IC
   * **`olefile`** (BSD): generic OLE2 read/write, useful as a base for a writer.
   * **AltiumSharp** (C#, github.com/issus/AltiumSharp): its README support table says SchLib and PcbLib are **Write: Yes**. The licence is stated inconsistently on the page (MIT in the README, Apache-2.0 in the sidebar).
 
+## 4. `altium365.py`: Altium 365 workspace exporter (Nexar Design API)
+
+```
+python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
+        --models <dir with SchLib/<ref>.SchLib and PcbLib/<ref>.PcbLib> -o out/altium365/plan.json
+NEXAR_TOKEN=... python3 -m ecadlib.altium365 workspaces
+NEXAR_TOKEN=... python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace <url> [--dry-run]
+```
+
+`plan` turns each unique part into one managed workspace component under `Components/<Category>`, with the same parameters as the DbLib rows (manufacturer, MPN, value, supplier, links). `push` then, for each part:
+
+1. looks the component up by name (`desLibrary.components(where: {name: {eq}})`);
+2. if it exists, updates its parameters with `desUpdateComponentRevisionParameters` (this is the "keep the library current" path);
+3. otherwise uploads the `.SchLib` and `.PcbLib` to `files.nexar.com/File/Upload` and calls `desReleaseComponent`, which releases symbol, footprint and component in one call, using the workspace's default naming schemes and lifecycles for each content type.
+
+Parts without Altium model files are planned as `needs_altium_models` and skipped on release (they still get parameter updates if they already exist in the workspace). `--dry-run` sends nothing and writes the mutation inputs it would send.
+
+**Verified** (from Nexar's support articles and the schema and code in `NexarDeveloper/nexar-release-component-demo-wpf`, last commit 2024-07-23):
+* `desReleaseComponent(input: DesReleaseComponentInput!)` takes component name, comment, description, parameters, folder, naming scheme and lifecycle ids, plus `symbolFiles` and `footprintFiles` as `{fileId, relativePath}`. The demo uploads real `.SchLib`/`.PcbLib` binaries from a `Released\` folder, so **release needs Altium-format files; KiCad files cannot go up directly**.
+* Uploads are `multipart/form-data` POSTs to `https://files.nexar.com/File/Upload` with the access token in a `token` header; the response body is the file id, valid 24 hours.
+* Design queries need a user token with `openid`, `user.access`, `design.domain` scopes (the token the Nexar portal generates has them).
+* `desUpdateComponentRevisionParameters` adds or edits parameters; `replaceExisting: true` replaces all of them. The component id changes after each update.
+* The release payload exposes only `errors`, not the new component id. Part choices (manufacturer/supplier links) and 3D models are not inputs; 3D models travel inside the `.PcbLib`.
+
+**Tested offline** (2026-10-13):
+* All five GraphQL operations and a release input built by `plan` validate against Nexar's published schema (`tests/nexar/schema.graphql`, MIT, from the demo repo). Run with `pip install graphql-core`.
+* End to end against a local mock of api.nexar.com and files.nexar.com that executes requests against that schema: `workspaces` listed the mock workspace; `push` uploaded two real Altium files (the demo repo's sample `.SchLib`/`.PcbLib`, byte counts intact), released CH340C with them, updated parameters on an existing `RES-0603-10k`, and skipped the 12 parts without models; a wrong token exits with a clear 401 message.
+
+**Not tested live** (this sandbox's proxy blocks api.nexar.com and files.nexar.com, and there is no workspace or token here):
+* Whether `componentReleaseFolder` takes a path like `Components/ICs` or only a single folder name.
+* Which Nexar or Altium 365 plan is needed for Design API write access.
+* Altium also has a newer native Altium 365 GraphQL API at `https://{workspace}/api/graphql` with its own files service. Its library mutations aren't documented publicly yet; this exporter targets Nexar.
+
+**Getting the `.SchLib`/`.PcbLib` files:** `altium_lib.py` (section 5) now writes them. With `--models out/altium_models` the plan has **4 of 14 parts `ready`** (CAP-0402-100nF, TPS62133RGTR, CH340C, RES-0603-10k) and the dry-run push releases those 4 and skips 10. Those files have not been opened in Altium Designer, so the first real release is also their first real test. The fallback is still Altium's KiCad importer on `out/footprints/ecadlib.pretty`.
+
+## 5. `altium_lib.py`: Altium `.PcbLib` / `.SchLib` writer (pure Python)
+
+```
+python3 -m ecadlib.altium_lib pcblib examples/packages/*.json -o out/altium_models/PcbLib [--density A|B|C] [--single lib.PcbLib]
+python3 -m ecadlib.altium_lib schlib examples/symbols/*.json  -o out/altium_models/SchLib
+python3 -m ecadlib.altium_lib dump out/altium_models/PcbLib/SOIC-8_3.9x4.9mm_P1.27mm.PcbLib
+python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
+        --models out/altium_models -o out/altium365/plan.json      # -> 4 ready, 10 needs_altium_models
+```
+
+No dependencies beyond the standard library. `cfb.py` writes the OLE2 container (v3, 512-byte sectors, mini stream, DIFAT for files over ~7 MB). `altium_lib.py` builds the Altium streams inside it. The record layouts are ported from **AltiumSharp** (C#, Apache-2.0; attribution in the file header and `NOTICE`). `altium-designer-mcp` (GPL-3.0) was read for notes only, and none of its code is used.
+
+What gets written:
+* **Footprints** come from the same `footprint_gen.build()` output as the `.kicad_mod` files: SMD pads with rounded-rect corner %, F.SilkS to Top Overlay, F.Fab to Mechanical 13, F.CrtYd to Mechanical 15, and the pin-1 triangle as a region. Exposed-pad paste windows become Top Paste fills, and the EP's own paste is suppressed. Units are exact: 1 mil = 10000 internal units and 1 mm = 10^8/254. One footprint per file by default (Altium 365 releases one model per file). `SOURCE_DATE_EPOCH` makes output byte-reproducible.
+* **Symbols** come from a small JSON pin list (`examples/symbols/*.json`): a rectangle-body IC with pins on the left and right with electrical types, plus generic 2-pin Resistor and Capacitor symbols. Each has a Designator and Comment, plus a footprint link to the PcbLib name.
+* `CH340C.json` and `TPS62133RGTR.json` carry `"needs_datasheet_verification": true`. **Their pinouts were written from memory and must be checked against the datasheets before anything is released.**
+
+**Verified here** (2026-10-13; `python3 -m tests.test_offline` runs 11/11, 5 of them new):
+* **Container:** `olefile` reads all 13 outputs with `raise_defects=DEFECT_INCORRECT` and logs nothing. 200 random trees and an 8 MB file that needs DIFAT read back byte-exact. 18 real Altium files from AltiumSharp's TestData and the Nexar demo were rewritten through `cfb.to_bytes`, and each came back with an identical stream tree.
+* **Records, byte for byte against real Altium-saved files** (AltiumSharp TestData): re-encoding the decoded records with this writer gives
+  * tracks 190/190, fills 5/5 and regions 4/4 identical;
+  * SMD pads: 12 identical, and 2106 that differ only at pad main-block byte 103, a paste-mask flag that real files set to 1 and this writer leaves at 0;
+  * SchLib pins: 63 identical. 106 more differ only in an empty swap-id string, and 4 that use pin symbols were skipped.
+* **Third-party reader:** `pyaltiumlib` 0.7.1 parses all 13 files. Coordinates, sizes, rounded-rect shape and corner %, paste expansion and pin names/types all match the input. One example is SOIC-8 pad 1 at (-2.4725, 1.905) mm, 1.965×0.58 mm, corner 50%. Its only warnings are "unsupported RecordID 45/46/48" (the footprint-link records), and it prints the same warnings for the real Nexar demo `.SchLib`. Footprints and symbols rendered to SVG looked right.
+* **Structure:** compared with an Altium Designer 2025-era TestData library and the 2014-era Nexar sample, the stream set is the same, apart from `PrimitiveGuids` (optional, and also absent from the Nexar sample) and `Models/` (no 3D bodies).
+* **Not run:** AltiumSharp's own reader. It needs .NET 10, and the proxy blocked the .NET download.
+
+**Assumed (not checked in Altium Designer, which was never run here):**
+* That Altium Designer and Altium 365 accept these files. Nothing was opened in Altium Designer. The `Library/Data` header is copied from an Altium-saved library rather than synthesized, because altium-designer-mcp's notes report that Altium rejects synthesized ones with "Catastrophic failure whilst loading section Library". That header still carries the source library's view settings.
+* Pad format: the 202-byte main block and the 596-byte per-layer size/shape block match the TestData files. Newer Altium versions write a longer full-stack block. The byte-103 flag above is assumed to be a cache that Altium recomputes.
+* EP paste is suppressed with a negative manual paste expansion, which is assumed to read as "no paste". KiCad draws the paste windows as rounded rectangles, and they are written here as rectangular fills.
+* `LayerKindMapping` is empty, so Mechanical 13 and 15 have no layer types and appear as plain mechanical layers. Solder mask and paste use "from rule" except on the EP.
+* SchLib: `Weight` = records + 1 and the pin flag bits were inferred from real files.
+* Not written: through-hole pads, PCB text and designators, 3D bodies, `PrimitiveGuids`, multi-part symbols and pin graphics (dots, clocks). Names over 31 characters are truncated as CFB storage names, and `SectionKeys` holds the mapping in the same way Altium does.
+
 ---
 
 ## Exact commands run (in `/mnt/project-files/ecad-librarian`)
@@ -227,11 +304,16 @@ python3 -m pip install easyeda2kicad                       # 1.0.1, used only to
 python3 -m ecadlib.footprint_gen gen examples/packages/*.json -o out/footprints/ecadlib.pretty
 for each of 6 footprints:  python3 -m ecadlib.footprint_gen compare out/footprints/ecadlib.pretty/<fp>.kicad_mod \
       https://gitlab.com/kicad/libraries/kicad-footprints/-/raw/master/<Lib>.pretty/<fp>.kicad_mod   > out/footprints/compare_vs_kicad_official.txt
-python3 -m tests.test_offline                               # 4/4 ok
+python3 -m tests.test_offline                               # 11/11 ok (incl. Altium 365 plan/push, Nexar schema, PcbLib/SchLib writer)
 python3 -m ecadlib.bom_triage examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints -o out/triage_sample_bom
 python3 -m ecadlib.bom_triage examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints \
         --providers digikey,mouser,nexar,snapmagic,samacsys -o out/triage_sample_bom_stub_providers_only
 python3 -m ecadlib.altium_export examples/sample_bom.csv --triage out/triage_sample_bom.csv -o out/altium
+export SOURCE_DATE_EPOCH=1791936000                         # reproducible PcbLib dates
+python3 -m ecadlib.altium_lib pcblib examples/packages/*.json -o out/altium_models/PcbLib
+python3 -m ecadlib.altium_lib schlib examples/symbols/*.json -o out/altium_models/SchLib
+python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv --models out/altium_models -o out/altium365/plan.json
+python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace https://example.365.altium.com --dry-run -o out/altium365/push_dry_run.json
 ```
 
 The HTTP cache (`out/http_cache/`) and `__pycache__` were deleted after the runs. They are recreated on the next run.
@@ -241,5 +323,8 @@ The HTTP cache (`out/http_cache/`) and `__pycache__` were deleted after the runs
 * Rerun triage from a network that can reach easyeda.com and jlcpcb.com, and confirm the EasyEDA JSON paths against real payloads.
 * Load the generated footprints in KiCad and run `kicad-cli fp upgrade` plus DRC.
 * Add dual-flat no-lead (DFN/SON) and QFP/SOT families.
+* Open `out/altium_models/*` in Altium Designer (and run its library validation) before the first real release. Then release one part to a test Altium 365 workspace.
+* Verify the CH340C and TPS62133RGTR pinouts against their datasheets.
+* Add through-hole pads, a designator string and 3D STEP bodies to the PcbLib writer.
 * Add an `easyeda2kicad` conversion step for the `available_easyeda` bucket.
 * Wire an LLM extraction step that outputs `package_schema.json` along with the source page and figure, keeping `unresolved` dimensions for human review.
