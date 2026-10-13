@@ -6,7 +6,7 @@ report "source unreachable" instead of crashing. Downloaded bodies are treated a
 untrusted data: they are only ever parsed as JSON/text, never executed."""
 import hashlib, json, os, re, time
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 
@@ -25,6 +25,15 @@ class Response:
         return json.loads(self.text)
 
 
+SECRET_Q = re.compile(r"(api[_-]?key|key|token|secret|password|signature|sig|client[_-]?secret|access[_-]?token)$", re.I)
+
+
+def redact(url):
+    u = urlparse(url)
+    q = [(k, "REDACTED" if SECRET_Q.search(k) else v) for k, v in parse_qsl(u.query, keep_blank_values=True)]
+    return urlunparse(u._replace(query=urlencode(q))) if q else url
+
+
 class CachedHTTP:
     def __init__(self, cache_dir="out/http_cache", min_interval=1.0, ttl_s=7 * 86400,
                  offline=False, timeout=20):
@@ -40,8 +49,9 @@ class CachedHTTP:
         return hashlib.sha256(f"{method}\n{url}\n{body or ''}".encode()).hexdigest()[:32]
 
     def request(self, method, url, body=None, headers=None, cache=True):
-        """cache=False: never read or store (credentials in the URL or body, tokens in the response)."""
-        f = self.dir / f"{self._key(method, url, body)}.json"
+        """cache=False: never read or store (credentials in the URL or body, tokens in the response).
+        Query-string secrets (apiKey=, token=...) are redacted from cache keys and stored URLs."""
+        f = self.dir / f"{self._key(method, redact(url), body)}.json"
         if cache and f.exists() and (self.offline or time.time() - f.stat().st_mtime < self.ttl):   # offline: stale beats nothing
             d = json.loads(f.read_text())
             self.log.append((method, url, d["status"], True))
@@ -64,7 +74,7 @@ class CachedHTTP:
         self.log.append((method, url, r.status_code, False))
         if cache and (200 <= r.status_code < 300 or r.status_code == 404):
             tmp = f.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"url": url, "status": r.status_code, "text": r.text}))
+            tmp.write_text(json.dumps({"url": redact(url), "status": r.status_code, "text": r.text}))
             os.replace(tmp, f)
         return Response(r.status_code, r.text, error=None if r.ok or r.status_code == 404
                         else f"HTTP {r.status_code}")

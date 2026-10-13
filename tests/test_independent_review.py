@@ -154,6 +154,18 @@ def test_p11_utf16_and_designator_ranges():
     assert T.count_refs("R1, R2, R5-R8") == 6 and T.count_refs("C1-3") == 3
 
 
+def test_p12_cache_never_stores_query_secrets():
+    from ecadlib.httpcache import CachedHTTP, redact
+    assert redact("https://api.mouser.com/api/v1/search?apiKey=abc123&x=1") == "https://api.mouser.com/api/v1/search?apiKey=REDACTED&x=1"
+    h = CachedHTTP(tempfile.mkdtemp())
+    class R:
+        status_code, text, ok = 200, "{}", True
+    h.s.request = lambda *a, **k: R()
+    h.get("https://api.example.com/p?apiKey=abc123&q=LM358")
+    stored = "".join(f.read_text() for f in h.dir.glob("*.json"))
+    assert "abc123" not in stored and "REDACTED" in stored, stored
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
