@@ -9,7 +9,7 @@ from ecadlib import mcp_server as M
 from ecadlib.app import Workspace
 from ecadlib.ui.server import make_handler
 
-SPEC = lambda n: json.loads(Path(f"examples/packages/{n}.json").read_text())
+SPEC = lambda n: json.loads(Path(f"ecadlib/package_specs/{n}.json").read_text())
 ALTIUM_DEFAULT = ('"Comment","Description","Designator","Footprint","LibRef","Quantity"\n'
                   '"10k","Resistor","R1, R2","RESC1608X55N","Res1","2"\n'
                   '"CH340C","USB UART","U1","SOIC-16","CH340C","1"\n')

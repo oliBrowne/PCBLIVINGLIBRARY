@@ -22,7 +22,7 @@ Courtyard = bounding box of (pads U body) + courtyard excess (density dependent)
 Output targets KiCad file format version 20221018 (KiCad 7) which KiCad 8/9 load
 natively and upgrade on save. (KiCad's own library is now at 20260206 / KiCad 10.)
 """
-import argparse, json, math, sys
+import argparse, json, math, re, sys
 from pathlib import Path
 
 # IPC-7351B fillet goals per density A/B/C (most/nominal/least):
@@ -114,7 +114,8 @@ def n(x):
 
 
 def q(s):
-    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    s = re.sub(r"\s+", " ", str(s)).strip()          # one line: KiCad's lexer doesn't take raw newlines in strings
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def line(x1, y1, x2, y2, layer, w):
@@ -153,6 +154,9 @@ def family(spec):
         return "chip_small" if dim(spec["body_length"])[1] < 1.55 else "chip"
     if t == "molded":
         return lt if lt in ("melf", "flat") else "molded"
+    if lt and (t in ("qfn", "qfp") or (t == "gullwing" and lt != "flat")):
+        raise ValueError(f"lead_type {lt!r} doesn't apply to a {t} package"
+                         + (" (only \"flat\" does)" if t == "gullwing" else ""))
     if t == "gullwing":
         if lt == "flat":
             return "flat"
@@ -302,6 +306,16 @@ def sanity(spec):
                         "across the leads (E), body_width the plastic (E1); are they swapped?")
         if span is not None and T and T >= span / 2:
             errs.append(f"terminal_length {T} is half the lead span or more")
+    n = spec.get("pin_count")
+    if t == "gullwing" and n and not spec.get("pin_positions") and n % 2:
+        errs.append(f"pin_count {n} is odd: a dual-row part needs an even count, or list the pads in pin_positions "
+                    "(as for SOT-23)")
+    if t in ("qfn", "qfp") and n:
+        nlr = spec.get("pins_left_right", n // 4)
+        ntb = spec.get("pins_top_bottom", (n - 2 * nlr) // 2)
+        if 2 * nlr + 2 * ntb != n:
+            errs.append(f"pin_count {n} doesn't equal 2 x {nlr} (left/right) + 2 x {ntb} (top/bottom); "
+                        "set pins_left_right / pins_top_bottom")
     if t in ("gullwing", "qfp", "qfn") and spec.get("pitch") and spec.get("pin_count") and not spec.get("pin_positions"):
         n = spec["pin_count"]
         per = n // 2 if t == "gullwing" else spec.get("pins_left_right", n // 4)
@@ -342,6 +356,10 @@ def build(spec, density=None):
     else:                                                     # qfn, qfp
         pads, (bx, by), r = _qfn(spec, fil)
     rep.update(r)
+    want = spec.get("pin_count")
+    if want and len(pads) != want:
+        raise ValueError(f"pin_count is {want} but the layout gives {len(pads)} pads "
+                         "(count every pad except an exposed pad; a tab counts)")
     short = [p for p in pads if min(p[3], p[4]) < 0.1]
     if short:
         why = "the exposed pad leaves no room for the pads" if spec.get("exposed_pad") else "the lead dimensions leave no room"
@@ -404,7 +422,11 @@ def build(spec, density=None):
     # ---- silk: body outline pushed out by SILK_FAB_OFFSET, cut back to SILK_PAD_CLEAR from every pad (KLC F5.1)
     c = SILK_PAD_CLEAR + SILK_W / 2
     sx, sy = bx + SILK_FAB_OFFSET, by + SILK_FAB_OFFSET
-    p1 = next(p for p in pads if p[0] == "1")
+    p1 = next((p for p in pads if p[0] == "1"), None)
+    if p1 is None:                                                    # e.g. A/K numbering: mark the first pad,
+        p1 = pads[0]                                                  # the checker reports the missing "1"
+        rep["warning"] = (rep.get("warning", "") + "; " if rep.get("warning") else "") + \
+            f"no pad numbered 1; KiCad numbers pins 1, 2, ... (diodes: 1 = cathode), marked pad {p1[0]} as pin 1"
     if two_term and polarized:
         # KiCad LED/diode style: a bracket that closes on the pin-1 (cathode / +) side
         yl = round(max(sy, max(abs(p[2]) + p[4] / 2 for p in pads) + c), 4)
@@ -454,10 +476,7 @@ def descr(spec, r):
 
 def validate(spec):
     schema = json.loads((Path(__file__).with_name("package_schema.json")).read_text())
-    try:
-        import jsonschema
-    except ImportError:
-        return
+    import jsonschema                                   # a runtime dependency: never skip validation silently
     jsonschema.validate(spec, schema)
 
 

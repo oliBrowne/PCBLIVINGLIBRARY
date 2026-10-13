@@ -12,7 +12,7 @@ A Workspace is one folder on the user's machine:
     <root>/http_cache/                    provider responses
 
 Each action returns plain JSON-able dicts so the UI and the MCP server can share it."""
-import json, os, re
+import contextlib, hashlib, html, json, os, re
 from pathlib import Path
 
 import pandas as pd
@@ -38,8 +38,14 @@ class Workspace:
         self.offline = offline
 
     # ------------------------------------------------------------------ paths
-    def safe_name(self, name):
-        name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(str(name)).name).strip("._") or "bom.csv"
+    def safe_name(self, name, strict=False):
+        """A plain file name. Uploads keep only their base name; footprint names (strict) with a path
+        separator are refused, so "SOIC-8/TI_D" can't quietly become "TI_D" and collide with another part."""
+        name = str(name)
+        if strict and ("/" in name or "\\" in name):
+            plain = re.sub(r"[/\\]+", "_", name)
+            raise ValueError(f"footprint name {name!r} contains a path separator; use a plain name such as {plain!r}")
+        name = re.sub(r"[^A-Za-z0-9._-]+", "_", re.split(r"[/\\]", name)[-1]).strip("._") or "bom.csv"
         return name[:120]
 
     def inside(self, path):
@@ -71,8 +77,19 @@ class Workspace:
                              "Designator, Quantity and Manufacturer Part Number, followed by at least one part")
         return lines, mapping
 
+    def _key(self, bom_path):
+        """Report name for a BOM: its stem for BOMs in uploads/, plus a short hash of the full path for any
+        other location, so /projA/BOM.csv and /projB/BOM.csv don't share (and overwrite) one triage."""
+        bom_path = Path(bom_path).resolve()
+        if bom_path.parent == self.root / "uploads":
+            return bom_path.stem
+        return f"{bom_path.stem}_{hashlib.sha1(str(bom_path).encode()).hexdigest()[:8]}"
+
+    def _triage_csv(self, bom_path):
+        return self.root / "reports" / f"triage_{self._key(bom_path)}.csv"
+
     def _triage_frame(self, bom_path):
-        tri = self.root / "reports" / f"triage_{bom_path.stem}.csv"
+        tri = self._triage_csv(bom_path)
         return pd.read_csv(tri, dtype=str).fillna("") if tri.exists() else None
 
     # ------------------------------------------------------------------ actions
@@ -85,18 +102,32 @@ class Workspace:
                                "configured": c(http).configured()} for c in P.ALL],
                 "altium365": {"token": bool(os.environ.get("NEXAR_TOKEN"))},
                 "altium_models": {k: sorted(p.stem for p in (self.models / k).glob(f"*.{k}")) for k in ("PcbLib", "SchLib")},
-                "boms": sorted(self.rel(p) for p in (self.root / "uploads").iterdir() if p.is_file())}
+                "boms": sorted(self.rel(p) for p in (self.root / "uploads").iterdir()
+                               if p.is_file() and not p.is_symlink() and self._is_inside(p))}
+
+    def _is_inside(self, p):
+        try:
+            self.inside(p)
+            return True
+        except ValueError:
+            return False
 
     def save_upload(self, filename, data: bytes):
         if not data:
             raise ValueError(f"{filename} is empty")
         p = self.root / "uploads" / self.safe_name(filename)
-        p.write_bytes(data)
+        if p.is_symlink():                            # never write through a link to somewhere else
+            p.unlink()
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
         return self.rel(p)
 
-    def triage(self, bom, progress=None):
+    def triage(self, bom, progress=None, lock=None):
         """Triage a BOM (workspace-relative or absolute path). Writes reports/triage_<stem>.{md,csv}.
-        progress(done, total, label) is called before each line, for UIs that show a progress bar."""
+        progress(done, total, label) is called before each line, for UIs that show a progress bar.
+        lock, if given, is held only while the reports are written: the lookups are network-bound and
+        must not block other workspace actions."""
         bom_path = self._bom_path(bom)
         http = CachedHTTP(self.root / "http_cache", min_interval=1.0, offline=self.offline)
         provs = [c(http) for c in P.ALL if c.name in self.provider_names]
@@ -111,8 +142,9 @@ class Workspace:
             rows.append(r)
         if progress:
             progress(len(lines), len(lines), "writing report")
-        stem = self.root / "reports" / f"triage_{bom_path.stem}"
-        counts = T.write_reports(rows, mapping, provs, http, stem, bom_path.name)
+        stem = self.root / "reports" / f"triage_{self._key(bom_path)}"
+        with lock or contextlib.nullcontext():
+            counts = T.write_reports(rows, mapping, provs, http, stem, bom_path.name)
         return {"bom": self.rel(bom_path) if self.root in bom_path.resolve().parents else str(bom_path),
                 "mapping": mapping, "rows": rows,
                 "counts": {k: int(v) for k, v in counts.items()},
@@ -135,7 +167,7 @@ class Workspace:
             where = "/".join(map(str, e.absolute_path))
             raise ValueError(f"the package spec isn't valid{' at ' + where if where else ''}: {e.message}") from e
         sexpr.parse(text)
-        name = self.safe_name(spec["name"])
+        name = self.safe_name(spec["name"], strict=True)
         return {"name": spec["name"], "report": rep, "kicad_mod": text, "svg": footprint_svg(rep),
                 "exists": (self.gen_dir / f"{name}.kicad_mod").exists()}
 
@@ -145,7 +177,7 @@ class Workspace:
         from . import altium_lib
         spec_obj = json.loads(spec) if isinstance(spec, str) else spec
         res = self.preview_footprint(spec_obj, density)
-        name = self.safe_name(res["name"])
+        name = self.safe_name(res["name"], strict=True)
         p = self.gen_dir / f"{name}.kicad_mod"
         if p.exists() and not overwrite:
             raise FileExistsError(f"{name} is already in the workspace library; approve again with overwrite to replace it")
@@ -198,7 +230,7 @@ class Workspace:
         from . import altium_export
         bom_path = self._bom_path(bom)
         self._read_bom(bom_path)                      # same friendly error as triage for unreadable files
-        tri = self.root / "reports" / f"triage_{bom_path.stem}.csv"
+        tri = self._triage_csv(bom_path)
         out = self.root / "altium"
         argv = [str(bom_path), "-o", str(out)] + (["--triage", str(tri)] if tri.exists() else [])
         altium_export.main(argv)
@@ -210,7 +242,7 @@ class Workspace:
         bom_path = self._bom_path(bom)
         lines, _ = self._read_bom(bom_path)
         items = A.plan(lines, self._triage_frame(bom_path), self.models)
-        out = self.root / "altium365" / f"plan_{bom_path.stem}.json"
+        out = self.root / "altium365" / f"plan_{self._key(bom_path)}.json"
         out.write_text(json.dumps(items, indent=2))
         ready = sum(i["status"] == "ready" for i in items)
         return {"items": items, "ready": ready, "total": len(items), "plan": self.rel(out)}
@@ -233,7 +265,7 @@ class Workspace:
         return {"dry_run": dry_run, "results": results, "report": self.rel(out)}
 
     def example_specs(self):
-        d = Path(__file__).resolve().parent.parent / "examples" / "packages"
+        d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data
         return {p.stem: json.loads(p.read_text()) for p in sorted(d.glob("*.json"))} if d.exists() else {}
 
 
@@ -247,20 +279,22 @@ def _nexar_token():
 
 def footprint_svg(rep, scale=40):
     """Top view: copper pads (pin 1 highlighted), exposed pad and courtyard. KiCad Y points down, as SVG's does."""
-    cx, cy = rep["courtyard"][0] / 2, rep["courtyard"][1] / 2
+    cx, cy = float(rep["courtyard"][0]) / 2, float(rep["courtyard"][1]) / 2
     m = 0.6
     vb = f"{-cx - m:.3f} {-cy - m:.3f} {2 * (cx + m):.3f} {2 * (cy + m):.3f}"
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{vb}" width="{2 * (cx + m) * scale:.0f}" '
            f'height="{2 * (cy + m) * scale:.0f}" class="fp">',
            f'<rect class="crtyd" x="{-cx}" y="{-cy}" width="{2 * cx}" height="{2 * cy}"/>']
     if "EP" in rep:
-        ew, eh = rep["EP"][0], rep["EP"][1]
+        ew, eh = float(rep["EP"][0]), float(rep["EP"][1])
         out.append(f'<rect class="pad ep" x="{-ew / 2}" y="{-eh / 2}" width="{ew}" height="{eh}"/>')
     for p in rep["pads"]:
         r = min(0.25, 0.25 * min(p["w"], p["h"]))
         cls = "pad p1" if p["num"] == "1" else "pad"
-        out.append(f'<rect class="{cls}" x="{p["x"] - p["w"] / 2:.4f}" y="{p["y"] - p["h"] / 2:.4f}" '
-                   f'width="{p["w"]}" height="{p["h"]}" rx="{r:.3f}"><title>pad {p["num"]}: '
-                   f'{p["w"]:.3f} x {p["h"]:.3f} mm @ ({p["x"]:.3f}, {p["y"]:.3f})</title></rect>')
+        x, y, w, h = (float(p[k]) for k in ("x", "y", "w", "h"))      # numbers only, and text escaped: the
+        num = html.escape(str(p["num"]))                              # UI inserts this SVG as HTML
+        out.append(f'<rect class="{cls}" x="{x - w / 2:.4f}" y="{y - h / 2:.4f}" '
+                   f'width="{w:.4f}" height="{h:.4f}" rx="{r:.3f}"><title>pad {num}: '
+                   f'{w:.3f} x {h:.3f} mm @ ({x:.3f}, {y:.3f})</title></rect>')
     out.append("</svg>")
     return "".join(out)
