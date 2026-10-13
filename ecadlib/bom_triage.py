@@ -67,6 +67,8 @@ def _read_csv(p):
     """Tolerant CSV read: Altium ActiveBOM exports put title rows ('Bill of Materials;;;;;', a blank
     row) above a wider header, which pandas' sniffer chokes on. Rows may be ragged; they are padded."""
     data = Path(p).read_bytes()
+    if b"\x00" in data[:4096]:
+        raise ValueError(f"{p}: not a text BOM (binary data); save it as CSV or XLSX")
     for enc in ("utf-8-sig", "cp1252", "latin-1"):                       # Excel 'CSV' on Windows is cp1252
         try:
             text = data.decode(enc)
@@ -100,6 +102,8 @@ def read_bom(path):
     df = raw.iloc[hdr_row + 1:].copy()
     df.columns = headers
     mapping = map_headers(headers)
+    if not {"designator", "mpn", "value"} & mapping.keys():
+        raise ValueError(f"{p}: no BOM header found (need a Designator, MPN or Value/Comment column)")
     lines = []
     for _, row in df.iterrows():
         d = {f: str(row[h]).strip() for f, h in mapping.items()}
@@ -123,6 +127,11 @@ def _yes(v):
     return _norm(v) not in ("", "0", "n", "no", "false", "fitted", "populate", "fit")
 
 
+GENERIC_LIBREF = re.compile(r"(res(istor)?|cap(acitor)?|ind(uctor)?|led|diode|zener|schottky|fuse|bead|ferrite|"
+                            r"xtal|crystal|header|conn(ector)?|sw(itch)?|[npm]mos|npn|pnp|[rcldq])"
+                            r"([\s_-]*(pol|semi|var|adj|smd|tvs))*[\s_-]*\d*", re.I)   # Altium generic symbols: Res1, Cap Pol1
+
+
 def part_numbers(ln):
     """MPN candidates, best first: the MPN column, then an Altium 'Comment'/value that is not a
     passive value (ICs carry their part number there, e.g. STM32F103C8T6), then the LibRef."""
@@ -130,7 +139,9 @@ def part_numbers(ln):
     v = ln.get("value", "")
     if v and parse_value(v) is None and re.search(r"[A-Za-z]", v) and re.search(r"\d", v) and " " not in v.strip():
         out.append(v)
-    out.append(ln.get("libref", ""))
+    lib = ln.get("libref", "").strip()
+    if not GENERIC_LIBREF.fullmatch(lib):
+        out.append(lib)
     return [c for c in dict.fromkeys(c.strip() for c in out) if c]
 
 
