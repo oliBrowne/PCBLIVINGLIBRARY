@@ -1,0 +1,15 @@
+Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #,LCSC Part Number,Description
+U1,1,STM32F103C8T6,LQFP-48_7x7mm_P0.5mm,STMicroelectronics,STM32F103C8T6,C8734,ARM Cortex-M3 MCU 64KB Flash
+U2,1,AMS1117-3.3,SOT-223-3_TabPin2,Advanced Monolithic Systems,AMS1117-3.3,C6186,LDO 3.3V 1A
+"R1,R2,R3,R4",4,10k,R_0603_1608Metric,UNI-ROYAL,0603WAF1002T5E,C25804,Resistor 10k 1% 0603
+"C1,C2,C3,C4,C5,C6",6,100nF,C_0402_1005Metric,Samsung Electro-Mechanics,CL05B104KO5NNNC,C1525,Capacitor 100nF 16V X7R 0402
+J1,1,USB-C,USB_C_Receptacle_16P,Korean Hroparts Elec,TYPE-C-31-M-12,C165948,USB Type-C receptacle 16-pin SMD
+U3,1,ESP32-S3-WROOM-1-N16R8,ESP32-S3-WROOM-1,Espressif,ESP32-S3-WROOM-1-N16R8,C2913202,WiFi/BLE module 16MB flash 8MB PSRAM
+U4,1,TPS62133RGTR,VQFN-16-1EP_3x3mm_P0.5mm,Texas Instruments,TPS62133RGTR,C73973,3-17V 3A step-down converter
+U5,1,CH340C,SOIC-16_3.9x9.9mm_P1.27mm,WCH,CH340C,C84681,USB to UART bridge internal oscillator
+Y1,1,12MHz,Crystal_SMD_3225-4Pin,YXC,X322512MSB4SI,C9002,Crystal 12MHz 20pF 3225
+Q1,1,AO3401A,SOT-23,Alpha & Omega Semiconductor,AO3401A,C15127,P-MOSFET -30V -4A
+D1,1,RED,LED_0603_1608Metric,Hubei KENTO Elec,KT-0603R,C2286,LED red 0603
+J2,1,Conn_01x04,JST_SH_SM04B-SRSS-TB,JST,SM04B-SRSS-TB(LF)(SN),C160404,JST SH 1.0mm 4-pin right-angle SMD
+J3,1,Conn_02x05,Samtec_FTSH-105-01-L-DV-K,Samtec,FTSH-105-01-L-DV-K,,1.27mm 2x5 SWD header (no LCSC listing)
+U6,1,TPS62162DSGR,WSON-8_2x2mm_P0.5mm,Texas Instruments,TPS62162DSGR,,3-17V 1A step-down (LCSC number intentionally omitted -> MPN search)

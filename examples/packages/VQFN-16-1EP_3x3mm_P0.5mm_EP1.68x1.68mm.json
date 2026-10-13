@@ -1,0 +1,39 @@
+{
+  "name": "VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
+  "description": "VQFN-16 3x3 mm (TI RGT, e.g. TPS62133RGTR)",
+  "package_type": "qfn",
+  "pin_count": 16,
+  "pitch": 0.5,
+  "body_length": {
+    "min": 2.9,
+    "max": 3.1
+  },
+  "body_width": {
+    "min": 2.9,
+    "max": 3.1
+  },
+  "terminal_length": {
+    "min": 0.3,
+    "max": 0.5
+  },
+  "terminal_width": {
+    "min": 0.18,
+    "max": 0.3
+  },
+  "exposed_pad": {
+    "length": {
+      "nom": 1.68
+    },
+    "width": {
+      "nom": 1.68
+    }
+  },
+  "height_max": 1.0,
+  "density": "B",
+  "source": {
+    "drawing": "TI RGT0016C (dims typed from memory - verify against the TI package drawing)"
+  },
+  "unresolved": [
+    "exposed_pad tolerance"
+  ]
+}

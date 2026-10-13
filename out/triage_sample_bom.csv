@@ -1,0 +1,15 @@
+line,designator,qty,mpn,manufacturer,lcsc,value,package,status,local_symbol,local_footprint,src,src_symbol,src_footprint,src_3d,src_mpn,notes
+1,U1,1,STM32F103C8T6,STMicroelectronics,C8734,STM32F103C8T6,LQFP48,unverified (source unreachable),,,,,,,,"easyeda: ProxyError: proxy CONNECT refused (403 Forbidden); not configured: digikey,mouser,nexar,snapmagic,samacsys"
+2,U2,1,AMS1117-3.3,Advanced Monolithic Systems,C6186,AMS1117-3.3,SOT223,unverified (source unreachable),ecadlib_demo:AMS1117-3.3 (mpn),,,,,,,"easyeda: ProxyError: proxy CONNECT refused (403 Forbidden); not configured: digikey,mouser,nexar,snapmagic,samacsys; local symbol OK but footprint 'Package_TO_SOT_SMD:SOT-223-3_TabPin2' not in indexed libs"
+3,"R1,R2,R3,R4",4,0603WAF1002T5E,UNI-ROYAL,C25804,10k,0603,in_library,ecadlib_demo:R_10k_0603 (mpn),ecadlib:R_0603_1608Metric,,,,,,
+4,"C1,C2,C3,C4,C5,C6",6,CL05B104KO5NNNC,Samsung Electro-Mechanics,C1525,100nF,0402,in_library,ecadlib_demo:C_100n_0402 (mpn),ecadlib:C_0402_1005Metric,,,,,,
+5,J1,1,TYPE-C-31-M-12,Korean Hroparts Elec,C165948,USB-C,,unverified (source unreachable),,,,,,,,"easyeda: ProxyError: proxy CONNECT refused (403 Forbidden); not configured: digikey,mouser,nexar,snapmagic,samacsys"
+6,U3,1,ESP32-S3-WROOM-1-N16R8,Espressif,C2913202,ESP32-S3-WROOM-1-N16R8,,unverified (source unreachable),,,,,,,,"easyeda: ProxyError: proxy CONNECT refused (403 Forbidden); not configured: digikey,mouser,nexar,snapmagic,samacsys"
+7,U4,1,TPS62133RGTR,Texas Instruments,C73973,TPS62133RGTR,VQFN16,in_library,ecadlib_demo:TPS62133RGTR (mpn),ecadlib:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm,,,,,,
+8,U5,1,CH340C,WCH,C84681,CH340C,SOIC16,in_library,ecadlib_demo:CH340C (mpn),ecadlib:SOIC-16_3.9x9.9mm_P1.27mm,,,,,,
+9,Y1,1,X322512MSB4SI,YXC,C9002,12MHz,,unverified (source unreachable),,,,,,,,"easyeda: ProxyError: proxy CONNECT refused (403 Forbidden); not configured: digikey,mouser,nexar,snapmagic,samacsys"
+10,Q1,1,AO3401A,Alpha & Omega Semiconductor,C15127,AO3401A,SOT23,unverified (source unreachable),,,,,,,,"easyeda: ProxyError: proxy CONNECT refused (403 Forbidden); not configured: digikey,mouser,nexar,snapmagic,samacsys"
+11,D1,1,KT-0603R,Hubei KENTO Elec,C2286,RED,0603,unverified (source unreachable),,,,,,,,"easyeda: ProxyError: proxy CONNECT refused (403 Forbidden); not configured: digikey,mouser,nexar,snapmagic,samacsys"
+12,J2,1,SM04B-SRSS-TB(LF)(SN),JST,C160404,Conn_01x04,,unverified (source unreachable),,,,,,,,"easyeda: ProxyError: proxy CONNECT refused (403 Forbidden); not configured: digikey,mouser,nexar,snapmagic,samacsys"
+13,J3,1,FTSH-105-01-L-DV-K,Samtec,,Conn_02x05,,unverified (source unreachable),,,,,,,,"jlcpcb_search: ProxyError: proxy CONNECT refused (403 Forbidden); not configured: digikey,mouser,nexar,snapmagic,samacsys"
+14,U6,1,TPS62162DSGR,Texas Instruments,,TPS62162DSGR,,unverified (source unreachable),,,,,,,,"jlcpcb_search: ProxyError: proxy CONNECT refused (403 Forbidden); not configured: digikey,mouser,nexar,snapmagic,samacsys"

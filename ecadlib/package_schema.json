@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/ecadlib/package_schema.json",
+  "title": "ECAD package mechanical dimensions (IPC-7351B land-pattern input)",
+  "description": "Contract an LLM fills from a datasheet mechanical drawing. All lengths in millimetres. Give each dimension as min/max where the drawing shows a range (preferred), or nom (+ optional tol = symmetric +/-). Never guess: if a value is not on the drawing, omit it and list it in 'unresolved'. Orientation: pin 1 top-left; X axis = across the pad rows (lead span), Y axis = along a pin row.",
+  "type": "object",
+  "required": ["name", "package_type", "body_length", "body_width", "terminal_length"],
+  "additionalProperties": false,
+  "$defs": {
+    "dim": {
+      "description": "A toleranced dimension in mm. Either {min,max} (optionally nom) or {nom, tol}.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min": {"type": "number", "minimum": 0},
+        "nom": {"type": "number", "minimum": 0},
+        "max": {"type": "number", "minimum": 0},
+        "tol": {"type": "number", "minimum": 0, "description": "symmetric +/- tolerance around nom"}
+      },
+      "anyOf": [{"required": ["min", "max"]}, {"required": ["nom"]}]
+    }
+  },
+  "properties": {
+    "name": {"type": "string", "pattern": "^[A-Za-z0-9_.+-]+$", "description": "Footprint name, KiCad style, e.g. SOIC-8_3.9x4.9mm_P1.27mm"},
+    "description": {"type": "string"},
+    "package_type": {"enum": ["chip", "gullwing", "qfn"],
+      "description": "chip = 2-terminal rectangular end-cap (R/C/L 0402..2512); gullwing = dual-row gull-wing (SOIC/SOP/TSSOP/SSOP/MSOP); qfn = quad flat no-lead (QFN/DFN-quad) with optional exposed pad"},
+    "pin_count": {"type": "integer", "minimum": 2, "description": "Signal pins, excluding exposed pad. chip: 2."},
+    "pitch": {"type": "number", "exclusiveMinimum": 0, "description": "Lead pitch e (gullwing/qfn)"},
+    "body_length": {"$ref": "#/$defs/dim", "description": "chip: overall length L (terminal end to end, = lead span). gullwing: body length D along the pin rows (Y). qfn: body size along X (D)."},
+    "body_width": {"$ref": "#/$defs/dim", "description": "chip: width W. gullwing: body width E1 (X, excluding leads). qfn: body size along Y (E)."},
+    "lead_span": {"$ref": "#/$defs/dim", "description": "gullwing only: tip-to-tip lead span E (X). For chip it equals body_length; for qfn it equals body sizes."},
+    "terminal_length": {"$ref": "#/$defs/dim", "description": "chip: end-cap band length T. gullwing: foot length L (flat contact). qfn: terminal length L."},
+    "terminal_width": {"$ref": "#/$defs/dim", "description": "gullwing/qfn: lead width b. chip: omit (uses body_width)."},
+    "height_max": {"type": "number", "description": "A max (seated height); used for 3D/descr only"},
+    "pins_left_right": {"type": "integer", "minimum": 0, "description": "qfn: pins on each of the left and right sides (default pin_count/4)"},
+    "pins_top_bottom": {"type": "integer", "minimum": 0, "description": "qfn: pins on each of the top and bottom sides (default pin_count/4)"},
+    "exposed_pad": {
+      "type": "object", "additionalProperties": false,
+      "required": ["length", "width"],
+      "properties": {
+        "length": {"$ref": "#/$defs/dim", "description": "EP size along X (D2)"},
+        "width": {"$ref": "#/$defs/dim", "description": "EP size along Y (E2)"},
+        "paste_coverage": {"type": "number", "minimum": 0.2, "maximum": 1.0, "default": 0.6},
+        "paste_grid": {"type": "integer", "minimum": 1, "maximum": 6, "description": "N x N paste windows; default auto"}
+      }
+    },
+    "density": {"enum": ["A", "B", "C"], "default": "B", "description": "IPC-7351B density level: A=most (max fillets), B=nominal, C=least"},
+    "model_3d": {"type": "string", "description": "Optional 3D model path to reference, e.g. ${KICAD8_3DMODEL_DIR}/Package_SO.3dshapes/SOIC-8_3.9x4.9mm_P1.27mm.wrl"},
+    "source": {
+      "type": "object",
+      "description": "Provenance for review: datasheet URL, page/figure, and the drawing's package code.",
+      "properties": {"datasheet": {"type": "string"}, "page": {"type": ["integer", "string"]}, "drawing": {"type": "string"}, "extracted_by": {"type": "string"}}
+    },
+    "unresolved": {"type": "array", "items": {"type": "string"}, "description": "Dimensions the extractor could not read with confidence (requires human review)"}
+  },
+  "allOf": [
+    {"if": {"properties": {"package_type": {"const": "gullwing"}}},
+     "then": {"required": ["pin_count", "pitch", "lead_span", "terminal_width"]}},
+    {"if": {"properties": {"package_type": {"const": "qfn"}}},
+     "then": {"required": ["pin_count", "pitch", "terminal_width"]}}
+  ]
+}

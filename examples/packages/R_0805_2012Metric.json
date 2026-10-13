@@ -1,0 +1,23 @@
+{
+  "name": "R_0805_2012Metric",
+  "description": "Resistor SMD 0805 (2012 Metric)",
+  "package_type": "chip",
+  "pin_count": 2,
+  "body_length": {
+    "nom": 2.0,
+    "tol": 0.1
+  },
+  "body_width": {
+    "nom": 1.25,
+    "tol": 0.1
+  },
+  "terminal_length": {
+    "nom": 0.4,
+    "tol": 0.2
+  },
+  "density": "B",
+  "source": {
+    "datasheet": "Yageo RC-series general purpose chip resistor datasheet (dims typed from memory - verify)",
+    "drawing": "Fig. 'Dimensions'"
+  }
+}
