@@ -216,7 +216,11 @@ Parts without Altium model files are planned as `needs_altium_models` and skippe
 * `desUpdateComponentRevisionParameters` adds or edits parameters; `replaceExisting: true` replaces all of them. The component id changes after each update.
 * The release payload exposes only `errors`, not the new component id. Part choices (manufacturer/supplier links) and 3D models are not inputs; 3D models travel inside the `.PcbLib`.
 
-**Not tested** (this sandbox's proxy blocks api.nexar.com and files.nexar.com, and there is no workspace or token here):
+**Tested offline** (2026-10-13):
+* All five GraphQL operations and a release input built by `plan` validate against Nexar's published schema (`tests/nexar/schema.graphql`, MIT, from the demo repo). Run with `pip install graphql-core`.
+* End to end against a local mock of api.nexar.com and files.nexar.com that executes requests against that schema: `workspaces` listed the mock workspace; `push` uploaded two real Altium files (the demo repo's sample `.SchLib`/`.PcbLib`, byte counts intact), released CH340C with them, updated parameters on an existing `RES-0603-10k`, and skipped the 12 parts without models; a wrong token exits with a clear 401 message.
+
+**Not tested live** (this sandbox's proxy blocks api.nexar.com and files.nexar.com, and there is no workspace or token here):
 * Whether `componentReleaseFolder` takes a path like `Components/ICs` or only a single folder name.
 * Which Nexar or Altium 365 plan is needed for Design API write access.
 * Altium also has a newer native Altium 365 GraphQL API at `https://{workspace}/api/graphql` with its own files service. Its library mutations aren't documented publicly yet; this exporter targets Nexar.
@@ -232,7 +236,7 @@ python3 -m pip install easyeda2kicad                       # 1.0.1, used only to
 python3 -m ecadlib.footprint_gen gen examples/packages/*.json -o out/footprints/ecadlib.pretty
 for each of 6 footprints:  python3 -m ecadlib.footprint_gen compare out/footprints/ecadlib.pretty/<fp>.kicad_mod \
       https://gitlab.com/kicad/libraries/kicad-footprints/-/raw/master/<Lib>.pretty/<fp>.kicad_mod   > out/footprints/compare_vs_kicad_official.txt
-python3 -m tests.test_offline                               # 5/5 ok (incl. Altium 365 plan/push against a fake client)
+python3 -m tests.test_offline                               # 6/6 ok (incl. Altium 365 plan/push and Nexar schema validation)
 python3 -m ecadlib.bom_triage examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints -o out/triage_sample_bom
 python3 -m ecadlib.bom_triage examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints \
         --providers digikey,mouser,nexar,snapmagic,samacsys -o out/triage_sample_bom_stub_providers_only
