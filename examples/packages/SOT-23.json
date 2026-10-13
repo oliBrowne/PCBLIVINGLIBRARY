@@ -1,0 +1,48 @@
+{
+  "name": "SOT-23",
+  "description": "SOT-23 (TO-236AB), 3 pins",
+  "package_type": "gullwing",
+  "pin_count": 3,
+  "lead_span": {
+    "min": 2.1,
+    "max": 2.64
+  },
+  "body_width": {
+    "min": 1.2,
+    "max": 1.4
+  },
+  "body_length": {
+    "min": 2.8,
+    "nom": 2.9,
+    "max": 3.04
+  },
+  "terminal_width": {
+    "min": 0.3,
+    "max": 0.5
+  },
+  "terminal_length": {
+    "min": 0.4,
+    "max": 0.6
+  },
+  "pin_positions": [
+    {
+      "number": "1",
+      "side": "L",
+      "offset": -0.95
+    },
+    {
+      "number": "2",
+      "side": "L",
+      "offset": 0.95
+    },
+    {
+      "number": "3",
+      "side": "R",
+      "offset": 0
+    }
+  ],
+  "density": "B",
+  "source": {
+    "drawing": "KiCad footprint generator size definitions (gitlab.com/kicad/libraries/kicad-footprint-generator, data/package/gullwing/sot.yaml, JEDEC TO-236AB)"
+  }
+}

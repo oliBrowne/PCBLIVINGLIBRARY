@@ -1,0 +1,43 @@
+{
+  "name": "D_SOD-123",
+  "description": "Diode SOD-123, pin 1 = cathode",
+  "package_type": "gullwing",
+  "pin_count": 2,
+  "lead_span": {
+    "min": 3.55,
+    "max": 3.85
+  },
+  "body_width": {
+    "min": 2.55,
+    "max": 2.85
+  },
+  "body_length": {
+    "min": 1.4,
+    "max": 1.8
+  },
+  "terminal_width": {
+    "min": 0.5,
+    "max": 0.7
+  },
+  "terminal_length": {
+    "min": 0.25,
+    "max": 0.4
+  },
+  "pin_positions": [
+    {
+      "number": "1",
+      "side": "L",
+      "offset": 0
+    },
+    {
+      "number": "2",
+      "side": "R",
+      "offset": 0
+    }
+  ],
+  "polarized": true,
+  "density": "B",
+  "source": {
+    "drawing": "onsemi case 425 - typical JEDEC/datasheet outline - check against your part's datasheet"
+  }
+}

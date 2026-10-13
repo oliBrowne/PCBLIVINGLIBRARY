@@ -1,0 +1,27 @@
+{
+  "name": "D_SMB",
+  "description": "Diode SMB (DO-214AA), pin 1 = cathode",
+  "package_type": "molded",
+  "pin_count": 2,
+  "body_length": {
+    "min": 5.21,
+    "max": 5.59
+  },
+  "body_width": {
+    "min": 3.3,
+    "max": 3.94
+  },
+  "terminal_width": {
+    "min": 1.96,
+    "max": 2.21
+  },
+  "terminal_length": {
+    "min": 0.76,
+    "max": 1.52
+  },
+  "polarized": true,
+  "density": "B",
+  "source": {
+    "drawing": "JEDEC DO-214AA - typical JEDEC/datasheet outline - check against your part's datasheet"
+  }
+}

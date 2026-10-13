@@ -1,0 +1,43 @@
+{
+  "name": "D_SOD-323",
+  "description": "Diode SOD-323, pin 1 = cathode",
+  "package_type": "gullwing",
+  "pin_count": 2,
+  "lead_span": {
+    "min": 2.3,
+    "max": 2.7
+  },
+  "body_width": {
+    "min": 1.6,
+    "max": 1.8
+  },
+  "body_length": {
+    "min": 1.15,
+    "max": 1.35
+  },
+  "terminal_width": {
+    "min": 0.25,
+    "max": 0.4
+  },
+  "terminal_length": {
+    "min": 0.2,
+    "max": 0.4
+  },
+  "pin_positions": [
+    {
+      "number": "1",
+      "side": "L",
+      "offset": 0
+    },
+    {
+      "number": "2",
+      "side": "R",
+      "offset": 0
+    }
+  ],
+  "polarized": true,
+  "density": "B",
+  "source": {
+    "drawing": "JEDEC SC-76 - typical JEDEC/datasheet outline - check against your part's datasheet"
+  }
+}

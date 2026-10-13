@@ -8,8 +8,7 @@
     "name",
     "package_type",
     "body_length",
-    "body_width",
-    "terminal_length"
+    "body_width"
   ],
   "additionalProperties": false,
   "$defs": {
@@ -95,6 +94,10 @@
     "terminal_length": {
       "$ref": "#/$defs/dim",
       "description": "chip: end-cap band length T. gullwing: foot length L (flat contact). qfn: terminal length L."
+    },
+    "inner_span": {
+      "$ref": "#/$defs/dim",
+      "description": "chip/molded: inner gap S between the terminals when the drawing gives it directly (LED and molded drawings often do); used instead of body_length - 2*terminal_length"
     },
     "terminal_width": {
       "$ref": "#/$defs/dim",
@@ -196,10 +199,9 @@
       "enum": [
         "flat",
         "molded",
-        "concave",
-        "convex"
+        "melf"
       ],
-      "description": "Optional IPC lead family override: flat = flat leads on gullwing-style parts (SOD-123/323); otherwise derived from package_type"
+      "description": "Optional IPC lead family override (default comes from package_type): molded = inward L / molded body (tantalum, SMA/SMB, SOD-123F; IPC-7351B Table 3-13), melf = cylindrical end caps (MELF/MiniMELF), flat = outward flat leads (IPC-7352 flat lead)"
     },
     "polarized": {
       "type": "boolean",
@@ -273,6 +275,35 @@
     "lead_span_y": {
       "$ref": "#/$defs/dim",
       "description": "qfp only: tip-to-tip span of the top/bottom rows when it differs from lead_span (rectangular QFP)"
+    },
+    "land": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pad_length",
+        "pad_width",
+        "pad_center"
+      ],
+      "description": "The manufacturer's recommended land pattern, when the datasheet gives one. It replaces the IPC-7351B pads for the signal pins (a tab or exposed pad keeps its own size). pad_center = distance from the part centre to each pad centre.",
+      "properties": {
+        "pad_length": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pad_width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pad_center": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pad_center_y": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "QFN/QFP top and bottom rows, when different from pad_center"
+        }
+      }
     }
   },
   "allOf": [
@@ -348,6 +379,20 @@
           "terminal_width"
         ]
       }
+    },
+    {
+      "anyOf": [
+        {
+          "required": [
+            "terminal_length"
+          ]
+        },
+        {
+          "required": [
+            "inner_span"
+          ]
+        }
+      ]
     }
   ]
 }

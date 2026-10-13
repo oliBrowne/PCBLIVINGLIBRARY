@@ -29,9 +29,16 @@ def test_ep_gap_checks_top_bottom_rows():
     spec = json.loads(Path("examples/packages/QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm.json").read_text())
     _, rep = F.build(spec)
     assert "warning" not in rep, rep.get("warning")
-    spec["exposed_pad"] = {"length": {"nom": 3.0}, "width": {"nom": 4.2}}      # tall EP overlaps top/bottom pads
-    _, rep = F.build(spec)
-    assert "EP to pad gap" in rep.get("warning", ""), rep.get("warning")
+    spec["exposed_pad"] = {"length": {"nom": 3.0}, "width": {"nom": 4.2}}      # tall EP reaches the top/bottom rows
+    _, rep = F.build(spec)                                                      # their heels are pulled back to 0.2 mm
+    tb = [p for p in rep["pads"] if abs(p["y"]) > abs(p["x"])]
+    assert min(abs(p["y"]) - p["h"] / 2 for p in tb) - 4.2 / 2 >= 0.2 - 1e-6 and "warning" not in rep, rep.get("warning")
+    spec["exposed_pad"] = {"length": {"nom": 3.0}, "width": {"nom": 4.8}}      # no room left for the pads at all
+    try:
+        F.build(spec)
+        raise AssertionError("expected an error")
+    except ValueError as e:
+        assert "exposed pad" in str(e), e
 
 
 def test_values_units_and_zero():
