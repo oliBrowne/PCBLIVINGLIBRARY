@@ -26,6 +26,7 @@ from pathlib import Path
 import pandas as pd
 
 from .altium_export import RESERVED, to_rows
+from .altium_lib import file_stem
 from .bom_triage import read_bom
 
 API_URL = os.environ.get("NEXAR_API_URL", "https://api.nexar.com/graphql")
@@ -44,7 +45,7 @@ Q_DEFS = """query ($ws: String!) {
 }"""
 
 Q_FIND = """query ($ws: String!, $name: String!) {
-  desLibrary(workspaceUrl: $ws) { components(first: 1, where: {name: {eq: $name}}) { nodes { id name } } }
+  desLibrary(workspaceUrl: $ws) { components(first: 1, where: {name: {eq: $name}}) { nodes { id name details { parameters { name value } } } } }
 }"""
 
 M_RELEASE = """mutation ($input: DesReleaseComponentInput!) { desReleaseComponent(input: $input) { errors { message } } }"""
@@ -85,18 +86,22 @@ class Nexar:
     def release_defs(self, ws):
         return self.gql(Q_DEFS, {"ws": ws})
 
-    def find_component(self, ws, name):
+    def find(self, ws, name):
         conn = self.gql(Q_FIND, {"ws": ws, "name": name})["desLibrary"]["components"] or {}
         nodes = conn.get("nodes") or []
-        return nodes[0]["id"] if nodes else None
+        return nodes[0] if nodes else None
+
+    def find_component(self, ws, name):
+        n = self.find(ws, name)
+        return n["id"] if n else None
 
     def release(self, inp):
         errs = self.gql(M_RELEASE, {"input": inp})["desReleaseComponent"]["errors"]
         if errs:
             raise NexarError("; ".join(e["message"] for e in errs))
 
-    def update_params(self, component_id, params, note):
-        inp = {"componentId": component_id, "releaseNote": note, "replaceExisting": False, "parameters": params}
+    def update_params(self, component_id, params, note, replace=False):
+        inp = {"componentId": component_id, "releaseNote": note, "replaceExisting": replace, "parameters": params}
         res = self.gql(M_UPDATE_PARAMS, {"input": inp})["desUpdateComponentRevisionParameters"]
         if res.get("errors"):                  # payload errors come back with HTTP 200 and no top-level `errors`
             raise NexarError("; ".join(e["message"] for e in res["errors"]))
@@ -115,13 +120,14 @@ def plan(lines, triage=None, models=None, root="Components"):
             names.add(row["Part Number"])
             sym = fp = None
             if models:
-                s, f = models / "SchLib" / f"{row['Library Ref']}.SchLib", models / "PcbLib" / f"{row['Footprint Ref']}.PcbLib"
+                s, f = models / "SchLib" / f"{file_stem(row['Library Ref'])}.SchLib", models / "PcbLib" / f"{file_stem(row['Footprint Ref'])}.PcbLib"
                 sym, fp = (str(s) if s.exists() else None), (str(f) if f.exists() else None)
-            params = [{"name": k, "value": str(v)} for k, v in row.items()
-                      if k not in RESERVED and k not in ("Part Number", "Comment") and str(v)]
+            managed = [k for k in row if k not in RESERVED and k not in ("Part Number", "Comment")]
+            params = [{"name": k, "value": str(row[k])} for k in managed if str(row[k])]
             items.append({
                 "name": row["Part Number"], "folder": f"{root}/{cat}",
                 "description": row["Description"], "comment": row["Comment"], "parameters": params,
+                "cleared": [k for k in managed if not str(row[k])],
                 "symbol": {"ref": row["Library Ref"], "file": sym},
                 "footprint": {"ref": row["Footprint Ref"], "file": fp},
                 "status": "ready" if sym and fp else "needs_altium_models",
@@ -139,11 +145,11 @@ def release_input(item, ws, defs, file_ids, models_root="Components/Models"):
         "componentDescription": item["description"], "parameters": item["parameters"],
         "componentRevisionNamingSchemeNodeId": nid("componentScheme"),
         "componentLifeCycleDefinitionNodeId": nid("componentLifeCycle"),
-        "symbolReleaseFolder": f"{models_root}/Symbols", "symbolItemName": None,
+        "symbolReleaseFolder": f"{models_root}/Symbols", "symbolItemName": item["symbol"]["ref"] or None,
         "symbolFiles": [{"fileId": i, "relativePath": f"Released\\{n}"} for n, i in sym_ids],
         "symbolRevisionNamingSchemeNodeId": nid("symbolScheme"),
         "symbolLifeCycleDefinitionNodeId": nid("symbolLifeCycle"),
-        "footprintReleaseFolder": f"{models_root}/Footprints", "footprintItemName": None,
+        "footprintReleaseFolder": f"{models_root}/Footprints", "footprintItemName": item["footprint"]["ref"] or None,
         "footprintFiles": [{"fileId": i, "relativePath": f"Released\\{n}"} for n, i in fp_ids],
         "footprintRevisionNamingSchemeNodeId": nid("footprintScheme"),
         "footprintLifeCycleDefinitionNodeId": nid("footprintLifeCycle"),
@@ -151,24 +157,43 @@ def release_input(item, ws, defs, file_ids, models_root="Components/Models"):
 
 
 # ------------------------------------------------------------------ push
+def merged_params(existing, item):
+    """Parameter list to send with replaceExisting=True, or None when the workspace already matches.
+    Starts from the current revision's parameters so ones added by hand in Altium 365 survive; plan
+    values win; fields the plan marks cleared are dropped."""
+    cur = {p["name"]: p["value"] for p in ((existing.get("details") or {}).get("parameters") or [])}
+    want = dict(cur)
+    for k in item.get("cleared", []):
+        want.pop(k, None)
+    want.update({p["name"]: p["value"] for p in item["parameters"]})
+    return None if want == cur else [{"name": k, "value": v} for k, v in want.items()]
+
+
 def push(items, client, ws, dry_run=False, note="ecadlib sync"):
     """Release new parts, update parameters of parts already in the workspace.
     dry_run: no uploads or mutations; records the requests that would be sent."""
     defs = {} if dry_run else client.release_defs(ws)
-    results = []
+    results, uploaded = [], {}                  # one upload per file per run (shared Resistor.SchLib etc.)
+    def upload(p):
+        if p not in uploaded:
+            uploaded[p] = "<fileId>" if dry_run else client.upload(p)
+        return uploaded[p]
     for it in items:
         res = {"name": it["name"], "action": "", "detail": ""}
         try:
-            existing = None if dry_run else client.find_component(ws, it["name"])
+            existing = None if dry_run else client.find(ws, it["name"])
             if existing:
-                res["action"] = "update_parameters"
-                res["detail"] = client.update_params(existing, it["parameters"], note)
+                new = merged_params(existing, it)
+                if new is None:
+                    res["action"] = "up_to_date"
+                else:                          # full replace: a merge, so parameters added in Altium 365 are kept
+                    res["action"] = "update_parameters"
+                    res["detail"] = client.update_params(existing["id"], new, note, replace=True)
             elif it["status"] != "ready":
                 res["action"], res["detail"] = "skip", "needs_altium_models (no .SchLib/.PcbLib)"
             else:
                 files = [it["symbol"]["file"]], [it["footprint"]["file"]]
-                ids = tuple([(Path(p).name, "<fileId>" if dry_run else client.upload(p)) for p in group]
-                            for group in files)
+                ids = tuple([(Path(p).name, upload(p)) for p in group] for group in files)
                 inp = release_input(it, ws, defs, ids)
                 res["action"] = "release"
                 if dry_run:
