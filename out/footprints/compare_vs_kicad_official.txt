@@ -1,0 +1,36 @@
+== R_0603_1608Metric  (ref: https://gitlab.com/kicad/libraries/kicad-footprints/-/raw/master/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod)
+ pad                 mine (x,y,w,h)                kicad (x,y,w,h)  d_pos       d_size
+   1    (-0.7925, 0.0, 0.825, 0.91)       (-0.825, 0.0, 0.8, 0.95)  (0.0325, 0.0) (0.025, -0.04)
+   2     (0.7925, 0.0, 0.825, 0.91)        (0.825, 0.0, 0.8, 0.95)  (-0.0325, 0.0) (0.025, -0.04)
+courtyard mine 2.92x1.42  kicad 2.96x1.46
+== C_0402_1005Metric  (ref: https://gitlab.com/kicad/libraries/kicad-footprints/-/raw/master/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod)
+ pad                 mine (x,y,w,h)                kicad (x,y,w,h)  d_pos       d_size
+   1    (-0.4025, 0.0, 0.465, 0.57)       (-0.48, 0.0, 0.56, 0.62)  (0.0775, 0.0) (-0.095, -0.05)
+   2     (0.4025, 0.0, 0.465, 0.57)        (0.48, 0.0, 0.56, 0.62)  (-0.0775, 0.0) (-0.095, -0.05)
+courtyard mine 1.58x0.88  kicad 1.82x0.92
+== R_0805_2012Metric  (ref: https://gitlab.com/kicad/libraries/kicad-footprints/-/raw/master/Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod)
+ pad                 mine (x,y,w,h)                kicad (x,y,w,h)  d_pos       d_size
+   1      (-0.925, 0.0, 0.96, 1.36)     (-0.9125, 0.0, 1.025, 1.4)  (-0.0125, 0.0) (-0.065, -0.04)
+   2       (0.925, 0.0, 0.96, 1.36)      (0.9125, 0.0, 1.025, 1.4)  (0.0125, 0.0) (-0.065, -0.04)
+courtyard mine 3.32x1.86  kicad 3.36x1.90
+== R_1206_3216Metric  (ref: https://gitlab.com/kicad/libraries/kicad-footprints/-/raw/master/Resistor_SMD.pretty/R_1206_3216Metric.kicad_mod)
+ pad                 mine (x,y,w,h)                kicad (x,y,w,h)  d_pos       d_size
+   1       (-1.46, 0.0, 1.09, 1.71)    (-1.4625, 0.0, 1.125, 1.75)  (0.0025, 0.0) (-0.035, -0.04)
+   2        (1.46, 0.0, 1.09, 1.71)     (1.4625, 0.0, 1.125, 1.75)  (-0.0025, 0.0) (-0.035, -0.04)
+courtyard mine 4.52x2.22  kicad 4.56x2.26
+== SOIC-8_3.9x4.9mm_P1.27mm  (ref: https://gitlab.com/kicad/libraries/kicad-footprints/-/raw/master/Package_SO.pretty/SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod)
+ pad                 mine (x,y,w,h)                kicad (x,y,w,h)  d_pos       d_size
+   1 (-2.4725, -1.905, 1.965, 0.58)    (-2.475, -1.905, 1.95, 0.6)  (0.0025, 0.0) (0.015, -0.02)
+   2 (-2.4725, -0.635, 1.965, 0.58)    (-2.475, -0.635, 1.95, 0.6)  (0.0025, 0.0) (0.015, -0.02)
+   3  (-2.4725, 0.635, 1.965, 0.58)     (-2.475, 0.635, 1.95, 0.6)  (0.0025, 0.0) (0.015, -0.02)
+   4  (-2.4725, 1.905, 1.965, 0.58)     (-2.475, 1.905, 1.95, 0.6)  (0.0025, 0.0) (0.015, -0.02)
+   8  (2.4725, -1.905, 1.965, 0.58)     (2.475, -1.905, 1.95, 0.6)  (-0.0025, 0.0) (0.015, -0.02)
+courtyard mine 7.42x5.40  kicad 7.40x5.40
+== QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm  (ref: https://gitlab.com/kicad/libraries/kicad-footprints/-/raw/master/Package_DFN_QFN.pretty/QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm.kicad_mod)
+ pad                 mine (x,y,w,h)                kicad (x,y,w,h)  d_pos       d_size
+   1  (-2.4325, -1.75, 0.845, 0.24)  (-2.4375, -1.75, 0.875, 0.25)  (0.005, 0.0) (-0.03, -0.01)
+   2  (-2.4325, -1.25, 0.845, 0.24)  (-2.4375, -1.25, 0.875, 0.25)  (0.005, 0.0) (-0.03, -0.01)
+   3  (-2.4325, -0.75, 0.845, 0.24)  (-2.4375, -0.75, 0.875, 0.25)  (0.005, 0.0) (-0.03, -0.01)
+   4  (-2.4325, -0.25, 0.845, 0.24)  (-2.4375, -0.25, 0.875, 0.25)  (0.005, 0.0) (-0.03, -0.01)
+  33         (0.0, 0.0, 3.45, 3.45)         (0.0, 0.0, 3.45, 3.45)  (0.0, 0.0) (0.0, 0.0)
+courtyard mine 6.22x6.22  kicad 6.26x6.26

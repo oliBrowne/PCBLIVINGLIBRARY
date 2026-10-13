@@ -1,0 +1,23 @@
+{
+  "name": "R_0603_1608Metric",
+  "description": "Resistor SMD 0603 (1608 Metric)",
+  "package_type": "chip",
+  "pin_count": 2,
+  "body_length": {
+    "nom": 1.6,
+    "tol": 0.1
+  },
+  "body_width": {
+    "nom": 0.8,
+    "tol": 0.1
+  },
+  "terminal_length": {
+    "nom": 0.3,
+    "tol": 0.15
+  },
+  "density": "B",
+  "source": {
+    "datasheet": "Yageo RC-series general purpose chip resistor datasheet (dims typed from memory - verify)",
+    "drawing": "Fig. 'Dimensions'"
+  }
+}

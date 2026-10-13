@@ -1,0 +1,32 @@
+{
+  "name": "SOIC-8_3.9x4.9mm_P1.27mm",
+  "description": "SOIC-8 150 mil, JEDEC MS-012AA",
+  "package_type": "gullwing",
+  "pin_count": 8,
+  "pitch": 1.27,
+  "lead_span": {
+    "min": 5.8,
+    "max": 6.2
+  },
+  "body_width": {
+    "min": 3.8,
+    "max": 4.0
+  },
+  "body_length": {
+    "min": 4.8,
+    "max": 5.0
+  },
+  "terminal_length": {
+    "min": 0.4,
+    "max": 1.27
+  },
+  "terminal_width": {
+    "min": 0.31,
+    "max": 0.51
+  },
+  "height_max": 1.75,
+  "density": "B",
+  "source": {
+    "drawing": "JEDEC MS-012 variation AA"
+  }
+}

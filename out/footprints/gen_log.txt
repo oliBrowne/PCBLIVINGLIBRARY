@@ -1,0 +1,9 @@
+C_0402_1005Metric                            chip_small    Z=1.27 G=0.34 X=0.57 pad1 0.465x0.570 @(-0.403,0.000) crtyd 1.58x0.88
+QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm        qfn           Z=5.71 G=4.02 X=0.24 pad1 0.845x0.240 @(-2.433,-1.750) crtyd 6.22x6.22
+R_0402_1005Metric                            chip_small    Z=1.27 G=0.34 X=0.57 pad1 0.465x0.570 @(-0.403,0.000) crtyd 1.58x0.88
+R_0603_1608Metric                            chip          Z=2.41 G=0.76 X=0.91 pad1 0.825x0.910 @(-0.792,0.000) crtyd 2.92x1.42
+R_0805_2012Metric                            chip          Z=2.81 G=0.89 X=1.36 pad1 0.960x1.360 @(-0.925,0.000) crtyd 3.32x1.86
+R_1206_3216Metric                            chip          Z=4.01 G=1.83 X=1.71 pad1 1.090x1.710 @(-1.460,0.000) crtyd 4.52x2.22
+SOIC-16_3.9x9.9mm_P1.27mm                    gullwing      Z=6.91 G=2.98 X=0.58 pad1 1.965x0.580 @(-2.473,-4.445) crtyd 7.42x10.40
+SOIC-8_3.9x4.9mm_P1.27mm                     gullwing      Z=6.91 G=2.98 X=0.58 pad1 1.965x0.580 @(-2.473,-1.905) crtyd 7.42x5.40
+VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm       qfn           Z=3.71 G=2.02 X=0.24 pad1 0.845x0.240 @(-1.433,-0.750) crtyd 4.22x4.22  WARN EP to pad gap 0.170 < 0.2
