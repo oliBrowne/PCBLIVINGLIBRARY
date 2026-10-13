@@ -8,28 +8,53 @@ These are small Python prototypes for an open-source tool that manages ECAD comp
 
 ## How you use it
 
-There are three ways in, and all of them call the same actions in `ecadlib/app.py`:
+Install it once from a checkout of this repository (Python 3.10 or later):
 
-1. **Local web UI** (for most people). It runs on your own machine, so your API keys and library stay local.
+```
+pip install -e .            # add [dev] for jsonschema, olefile and graphql-core (validation and extra tests)
+```
+
+That gives you a single `ecadlib` command (`python -m ecadlib` works too). There are three ways in, and all of them call the same actions in `ecadlib/app.py`:
+
+1. **Local web UI** (for most people). It runs on your own machine, so your API keys and libraries stay local.
 
    ```
-   python3 -m ecadlib.ui --lib path/to/your/kicad/libs
+   ecadlib ui --lib path/to/your/kicad/libs
    ```
 
-   A browser tab opens at `http://127.0.0.1:8765`. Drop in a BOM (CSV or XLSX) to get a triage table showing what is already in your library, what a part source can supply, and what needs a footprint. Click **Generate…** on a missing part to fill in its datasheet dimensions, preview the IPC-7351B land pattern, and approve it into the workspace library. Re-triage picks it up. **Export Altium DbLib** writes the SQLite/XLSX/.DbLib set. The Altium 365 push button stays disabled until the Nexar exporter lands.
-2. **MCP server**, so Claude or another agent can do the same work in conversation (for example, "triage this BOM and draft footprints for anything missing").
+   A browser tab opens at `http://127.0.0.1:8765`.
+   * **Check a BOM:** drop in a CSV or XLSX, whether it's an Altium BOM, an Altium ActiveBOM, a KiCad BOM or a hand-made spreadsheet. A progress bar runs while parts are looked up. You then get a table of what is already in your library, what a part source can supply, what needs a footprint, and what is DNP. You can filter it by status or by search.
+   * **Make a footprint:** click **Generate…** on a missing part. It picks a matching example package when one exists. Enter the datasheet dimensions, preview the IPC-7351B land pattern, and approve it. Approving writes a KiCad `.kicad_mod` and an Altium `.PcbLib`, and asks before replacing an existing footprint. The BOM is then re-checked automatically.
+   * **Send to Altium:** there are three options.
+     * **Export DbLib** writes the SQLite/XLSX/.DbLib set.
+     * **Build .PcbLib / .SchLib** converts the BOM's footprints and writes generic R/C symbols.
+     * **Altium 365** plans a release with a ready / needs-symbol / needs-footprint status per part. **Dry run** shows the exact requests without sending anything. **Push** is enabled only when `NEXAR_TOKEN` is set and a workspace is picked, and it asks for confirmation first.
 
-   ```
-   claude mcp add ecadlib -- python3 -m ecadlib.mcp_server --lib /path/to/libs
-   ```
-
-   Its tools are `workspace_info`, `triage_bom`, `preview_footprint`, `approve_footprint`, `export_altium_dblib` and `list_example_specs`.
    ![Triage table](docs/ui-triage.png)
    ![Footprint preview](docs/ui-footprint.png)
+   ![Send to Altium](docs/ui-altium.png)
 
-3. **CLI modules**, for scripts and CI. They are described below.
+2. **MCP server**, so Claude or another agent can do the same work in conversation (for example, "check this BOM and draft footprints for anything missing").
 
-Everything the UI and MCP server write goes to one workspace folder (default `./ecadlib_workspace`) with `uploads/`, `reports/`, `footprints/ecadlib.pretty/` (approved footprints plus their source JSON), `altium/` and `http_cache/`. Both servers use only the standard library on top of the existing requirements. The web UI binds to 127.0.0.1 and refuses cross-origin POSTs and any file path outside the workspace.
+   ```
+   claude mcp add ecadlib -- ecadlib mcp --lib /path/to/libs --workspace /path/to/workspace
+   ```
+
+   Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false) and `list_example_specs`.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib dblib`, `ecadlib altium-lib` and `ecadlib altium365`. Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+
+The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
+* `uploads/`
+* `reports/`
+* `footprints/ecadlib.pretty/`: approved footprints plus their source JSON
+* `altium_models/PcbLib|SchLib/`
+* `altium/`
+* `altium365/`
+* `http_cache/`
+
+Both servers use only the standard library on top of the package requirements. The web UI binds to 127.0.0.1. It refuses requests with an unexpected Host header (DNS rebinding), cross-origin POSTs, and any file path outside the workspace.
+
+Tests: `python3 -m tests.test_ui` covers the workspace, web server, MCP server and CLI. `python3 -m tests.test_offline` covers the core modules.
 
 Requirements: Python 3.13 with `requests`, `pandas` and `openpyxl`. `jsonschema` is optional; when it is installed, specs are validated against the schema. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
 

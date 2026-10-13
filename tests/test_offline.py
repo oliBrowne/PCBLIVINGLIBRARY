@@ -50,65 +50,6 @@ def test_providers_seeded_cache():
         assert "jlcpcb: MPN -> C999999" in r["notes"] and "not configured: digikey" in r["notes"], r
 
 
-def test_workspace_and_mcp():
-    from ecadlib.app import Workspace
-    from ecadlib import mcp_server as M
-    with tempfile.TemporaryDirectory() as d:
-        ws = Workspace(d, ["examples/kicad_lib"], providers=["digikey"])
-        rel = ws.save_upload("../my bom.csv", Path("examples/sample_bom.csv").read_bytes())
-        assert rel == "uploads/my_bom.csv", rel
-        t = ws.triage(rel)
-        assert len(t["rows"]) == 14 and sum(t["counts"].values()) == 14, t["counts"]
-        before = t["counts"].get("in_library", 0)
-        spec = json.loads(Path("examples/packages/R_0603_1608Metric.json").read_text())
-        pv = ws.preview_footprint(spec)
-        assert pv["svg"].startswith("<svg") and len(pv["report"]["pads"]) == 2
-        ws.approve_footprint(spec)
-        ws.approve_footprint(json.loads(Path("examples/packages/C_0402_1005Metric.json").read_text()))
-        assert ws.triage(rel)["counts"].get("in_library", 0) > before   # approved footprints are found on re-triage
-        try:
-            ws.inside("../../etc/passwd")
-            raise AssertionError("path escape not refused")
-        except ValueError:
-            pass
-        r = M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
-        assert "triage_bom" in [x["name"] for x in r["result"]["tools"]]
-        r = M.handle(ws, {"id": 2, "method": "tools/call", "params": {"name": "preview_footprint", "arguments": {"spec": spec}}})
-        assert r["result"]["isError"] is False, r
-        assert M.handle(ws, {"method": "notifications/initialized"}) is None
-        assert M.handle(ws, ["not", "an", "object"])["error"]["code"] == -32600
-        r = M.handle(ws, {"id": 3, "method": "tools/call", "params": {"name": "rm_rf", "arguments": {}}})
-        assert r["error"]["code"] == -32602, r
-        r = M.handle(ws, {"id": 4, "method": "initialize", "params": {"protocolVersion": "1999-01-01"}})
-        assert r["result"]["protocolVersion"] == M.PROTOCOL, r
-
-
-def test_ui_server_guards():
-    import http.client, threading
-    from http.server import ThreadingHTTPServer
-    from ecadlib.app import Workspace
-    from ecadlib.ui.server import make_handler
-    with tempfile.TemporaryDirectory() as d:
-        srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Workspace(d, [], providers=["digikey"])))
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        port = srv.server_address[1]
-
-        def call(method, path, body=None, headers=None):
-            c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-            c.request(method, path, body=body, headers=headers or {})
-            r = c.getresponse()
-            return r.status, r.read()
-        try:
-            assert call("GET", "/api/info")[0] == 200
-            assert call("GET", "/api/info", headers={"Host": f"evil.example:{port}"})[0] == 403   # DNS rebinding
-            assert call("POST", "/api/triage", "{}", {"Origin": "https://evil.example"})[0] == 403
-            st, body = call("POST", "/api/triage", json.dumps({"bom": str(Path("examples/sample_bom.csv").resolve())}))
-            assert st == 400 and b"outside workspace" in body, body                               # absolute path refused
-            assert call("POST", "/api/triage", "x", {"Content-Length": "-1"})[0] == 400
-        finally:
-            srv.shutdown()
-
-
 class FakeNexar:
     """Records calls instead of hitting api.nexar.com / files.nexar.com."""
     def __init__(self, existing):
