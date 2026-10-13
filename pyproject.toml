@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecadlib"
+version = "0.1.0"
+description = "AI-assisted living ECAD component library: BOM triage, IPC-7351B footprints, Altium and KiCad export"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = ["requests", "pandas", "openpyxl"]
+
+[project.optional-dependencies]
+dev = ["jsonschema", "olefile", "graphql-core"]
+
+[project.scripts]
+ecadlib = "ecadlib.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ecadlib*"]
+
+[tool.setuptools.package-data]
+ecadlib = ["package_schema.json", "assets/*", "ui/static/*"]
