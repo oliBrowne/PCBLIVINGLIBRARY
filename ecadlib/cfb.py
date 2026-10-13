@@ -18,14 +18,26 @@ FREESECT, ENDOFCHAIN, FATSECT, DIFSECT, NOSTREAM = 0xFFFFFFFF, 0xFFFFFFFE, 0xFFF
 STORAGE, STREAM, ROOT = 1, 2, 5
 
 
+def _units(name):
+    """UTF-16 code units of name (MS-CFB names and their ordering are defined on code units)."""
+    b = name.encode("utf-16-le")
+    return struct.unpack(f"<{len(b) // 2}H", b)
+
+
 def _key(name):
-    return (len(name.encode("utf-16-le")) // 2, name.upper())
+    # length first, then code units upper-cased one by one (simple case mapping: a unit whose
+    # str.upper() is not a single BMP unit, e.g. 'ß' -> 'SS', is left as is)
+    up = []
+    for u in _units(name):
+        c = chr(u).upper() if not 0xD800 <= u <= 0xDFFF else chr(u)
+        up.append(ord(c) if len(c) == 1 and ord(c) <= 0xFFFF else u)
+    return (len(up), tuple(up))
 
 
 class _Entry:
     def __init__(self, name, kind, data=b""):
-        if len(name) > 31 or any(c in name for c in "/\\:!"):
-            raise ValueError(f"illegal CFB name {name!r} (max 31 chars, no / \\ : !)")
+        if not name or len(_units(name)) > 31 or any(c in name for c in "/\\:!"):
+            raise ValueError(f"illegal CFB name {name!r} (1-31 UTF-16 code units, no / \\ : !)")
         self.name, self.kind, self.data = name, kind, data
         self.children = []
         self.left = self.right = self.child = NOSTREAM

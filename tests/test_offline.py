@@ -120,7 +120,9 @@ def test_cfb_writer_reads_back_cleanly():
     except ImportError:
         print("skip test_cfb_writer_reads_back_cleanly (pip install olefile)"); return
     rnd = random.Random(7)
-    log = io.StringIO(); h = logging.StreamHandler(log); logging.getLogger("olefile").addHandler(h)
+    log = io.StringIO(); h = logging.StreamHandler(log)
+    lg = logging.getLogger("olefile"); old_level = lg.level
+    lg.addHandler(h); lg.setLevel(logging.WARNING)    # olefile mutes its logger (level 51) by default
 
     def mk(depth):
         t = {}
@@ -134,7 +136,22 @@ def test_cfb_writer_reads_back_cleanly():
     def walk(t, pre=""):
         for k, v in t.items():
             yield from walk(v, pre + k + "/") if isinstance(v, dict) else [(pre + k, v)]
-    trees = [mk(0) for _ in range(40)] + [{"big": b"\x5a" * 7_500_000, "small": b"abc"}]
+    trees = [mk(0) for _ in range(40)] + [{"big": b"\x5a" * 7_500_000, "small": b"abc"},
+                                          {"\U0001F600" * 15: b"x", "\uffff": b"y", "\U00010000": b"z"}]
+    try:
+        _check_trees(olefile, trees, walk)
+    finally:
+        lg.removeHandler(h); lg.setLevel(old_level)
+    assert log.getvalue() == "", log.getvalue()
+    for bad in ({"": b""}, {"\U0001F600" * 16: b""}):
+        try:
+            cfb.to_bytes(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted illegal name {list(bad)}")
+
+
+def _check_trees(olefile, trees, walk):
     for t in trees:
         o = olefile.OleFileIO(io.BytesIO(cfb.to_bytes(t)), raise_defects=olefile.DEFECT_INCORRECT)
         assert all(o.openstream(p).read() == v for p, v in walk(t))
@@ -146,8 +163,6 @@ def test_cfb_writer_reads_back_cleanly():
                         stack.append(i); i = o.direntries[i].sid_left
                     i = stack.pop(); seq.append(cfb._key(o.direntries[i].name)); i = o.direntries[i].sid_right
                 assert seq == sorted(seq) and len(seq) == len(d.kids), d.name
-    logging.getLogger("olefile").removeHandler(h)
-    assert log.getvalue() == "", log.getvalue()
 
 
 # Bytes Altium Designer wrote (AltiumSharp TestData, Apache-2.0: QFN-24 pad "2" and a Top Overlay track)
@@ -207,6 +222,14 @@ def test_schlib_writer_roundtrip():
     # a pin record Altium wrote (AltiumSharp TestData PE42442 pin 1) re-encodes byte for byte
     real = bytes.fromhex("26000001" "020000000001000000000000000104" "3a1e00ceffd8ff00000000" "03474e44" "0131" "00" "037c267c" "00")
     assert AL.pin_rec("1", "GND", "passive", 2, -50, -40, 30) == real
+    for bad in (lambda: AL.schlib_bytes([AL.ic_symbol("Storage", [])]),
+                lambda: AL.ic_symbol("X", [{"num": "1", "name": "A", "side": "Left"}]),
+                lambda: AL.pcblib_bytes([dict(name="Library", pads=[], tracks=[], fills=[], regions=[])])):
+        try:
+            bad()
+        except ValueError:
+            continue
+        raise AssertionError("reserved name / unknown pin side accepted")
 
 
 def test_plan_ready_with_generated_models():
