@@ -16,6 +16,7 @@ COMMANDS = {
     "mcp": ("ecadlib.mcp_server", "MCP server over stdio"),
     "triage": ("ecadlib.bom_triage", "BOM triage report"),
     "footprint": ("ecadlib.footprint_gen", "IPC-7351B footprint generator"),
+    "check": ("ecadlib.footprint_check", "check .kicad_mod files against KLC/IPC rules"),
     "dblib": ("ecadlib.altium_export", "Altium DbLib export"),
     "altium-lib": ("ecadlib.altium_lib", "Altium .PcbLib/.SchLib writer"),
     "altium365": ("ecadlib.altium365", "Altium 365 release via Nexar"),

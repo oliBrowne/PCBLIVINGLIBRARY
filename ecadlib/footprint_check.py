@@ -1,0 +1,243 @@
+"""Rule checks for a KiCad SMD footprint: the things a librarian looks at before trusting one.
+
+    python -m ecadlib.footprint_check path/to/*.kicad_mod        (or: ecadlib check ...)
+
+Works on any .kicad_mod (ours or KiCad's own), so the same rules can be run on the official
+library as a baseline. Rules follow the KiCad Library Conventions (KLC F5.x/F6.x) and common
+fab limits; each finding is (level, rule, message) with level "error" or "warning".
+
+  copper    pads must not overlap; gap between pads >= 0.2 mm (solder-mask web; warning below,
+            error below 0.1 mm)
+  silk      silkscreen >= 0.2 mm from any pad edge (KLC F5.1 uses 0.2 mm), silk line width 0.10-0.15 mm
+  fab       a body outline on F.Fab, line width 0.10 mm (KLC F5.2)
+  courtyard present, closed box on F.CrtYd, encloses every pad and the F.Fab body,
+            line width 0.05 mm, corners on the 0.01 mm grid (KLC F5.3)
+  pin 1     a pad numbered "1" exists; for multi-row parts it is the top-left-most pad (KLC F6.x
+            orientation); pad numbers are unique except for deliberate duplicates (a SOT-223 tab)
+  paste     an exposed pad's paste windows cover 50-90 % of its copper
+"""
+import math, re, sys
+from pathlib import Path
+
+from . import sexpr
+
+MIN_WEB, HARD_WEB, SILK_CLEAR = 0.2, 0.1, 0.2
+EPS = 0.005
+
+
+def _f(v):
+    return float(v)
+
+
+def _graphics(tree, layer):
+    """Segments (x1, y1, x2, y2, width) on a layer, from fp_line / fp_rect / fp_poly / fp_circle bounding boxes."""
+    segs, polys = [], []
+    for kind in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc"):
+        for g in sexpr.find(tree, kind):
+            if (sexpr.first(g, "layer") or [None, None])[1] != layer:
+                continue
+            w = _f((sexpr.first(sexpr.first(g, "stroke") or [], "width") or sexpr.first(g, "width") or [None, 0])[1])
+            if kind == "fp_poly":
+                pts = [(_f(a[1]), _f(a[2])) for a in sexpr.find(sexpr.first(g, "pts") or [], "xy")]
+                filled = (sexpr.first(g, "fill") or [None, "none"])[1] in ("solid", "yes")
+                polys.append((pts, filled))
+                segs += [(*a, *b, w) for a, b in zip(pts, pts[1:] + pts[:1])]
+                continue
+            s, e = sexpr.first(g, "start"), sexpr.first(g, "end")
+            if kind == "fp_circle":
+                cx, cy = _f(s[1]), _f(s[2]); r = math.hypot(_f(e[1]) - cx, _f(e[2]) - cy)
+                segs += [(cx + r * math.cos(a), cy + r * math.sin(a), cx + r * math.cos(b), cy + r * math.sin(b), w)
+                         for a, b in ((i * math.pi / 8, (i + 1) * math.pi / 8) for i in range(16))]
+                continue
+            if kind == "fp_arc":
+                m = sexpr.first(g, "mid")
+                pts = [(_f(s[1]), _f(s[2]))] + ([(_f(m[1]), _f(m[2]))] if m else []) + [(_f(e[1]), _f(e[2]))]
+                segs += [(*a, *b, w) for a, b in zip(pts, pts[1:])]
+                continue
+            x1, y1, x2, y2 = _f(s[1]), _f(s[2]), _f(e[1]), _f(e[2])
+            if kind == "fp_rect":
+                c = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+                segs += [(*a, *b, w) for a, b in zip(c, c[1:] + c[:1])]
+            else:
+                segs.append((x1, y1, x2, y2, w))
+    return segs, polys
+
+
+def _pad_rects(tree):
+    out = []
+    for p in sexpr.find(tree, "pad"):
+        at, size = sexpr.first(p, "at"), sexpr.first(p, "size")
+        x, y, w, h = _f(at[1]), _f(at[2]), _f(size[1]), _f(size[2])
+        rot = _f(at[3]) if len(at) > 3 else 0.0
+        if round(rot) % 180 == 90:
+            w, h = h, w
+        layers = (sexpr.first(p, "layers") or ["layers"])[1:]
+        out.append({"num": p[1], "x": x, "y": y, "w": w, "h": h, "layers": layers,
+                    "copper": any(l.endswith(".Cu") for l in layers), "paste": any("Paste" in l for l in layers)})
+    return out
+
+
+def _rect_gap(a, b):
+    dx = abs(a["x"] - b["x"]) - (a["w"] + b["w"]) / 2
+    dy = abs(a["y"] - b["y"]) - (a["h"] + b["h"]) / 2
+    if dx < 0 and dy < 0:
+        return max(dx, dy)                       # overlap (negative)
+    return math.hypot(max(dx, 0), max(dy, 0))
+
+
+def _seg_rect_dist(seg, r):
+    """Distance from a segment to an axis-aligned rectangle (0 if they touch), by dense sampling."""
+    x1, y1, x2, y2 = seg[:4]
+    n = max(2, int(math.hypot(x2 - x1, y2 - y1) / 0.005) + 1)
+    best = 1e9
+    for i in range(n + 1):
+        t = i / n
+        px, py = x1 + (x2 - x1) * t, y1 + (y2 - y1) * t
+        dx = max(abs(px - r["x"]) - r["w"] / 2, 0)
+        dy = max(abs(py - r["y"]) - r["h"] / 2, 0)
+        best = min(best, math.hypot(dx, dy))
+    return best
+
+
+def _bbox(segs):
+    xs = [v for s in segs for v in (s[0], s[2])]
+    ys = [v for s in segs for v in (s[1], s[3])]
+    return (min(xs), min(ys), max(xs), max(ys)) if xs else None
+
+
+def _ranges(nums):
+    """['1','2','3','5'] -> '1-3, 5'."""
+    ints = sorted({int(n) for n in nums if str(n).isdigit()})
+    out, i = [], 0
+    while i < len(ints):
+        j = i
+        while j + 1 < len(ints) and ints[j + 1] == ints[j] + 1:
+            j += 1
+        out.append(f"{ints[i]}-{ints[j]}" if j > i else str(ints[i]))
+        i = j + 1
+    return ", ".join(out + sorted(str(n) for n in nums if not str(n).isdigit()))
+
+
+def check(text, allow_duplicate_pads=None):
+    """Return a list of (level, rule, message). Empty means every rule passed."""
+    tree = sexpr.parse(text)
+    issues = []
+    add = lambda lvl, rule, msg: issues.append((lvl, rule, msg))
+    pads = _pad_rects(tree)
+    cu = [p for p in pads if p["copper"]]
+    nums = [p["num"] for p in cu if p["num"]]
+
+    # ---- copper
+    close = {}                                       # (level, gap) -> [(a, b)]: one finding per distinct gap
+    for i, a in enumerate(cu):
+        for b in cu[i + 1:]:
+            if a["num"] and a["num"] == b["num"]:
+                continue                             # same net (e.g. SOT-223 pin 2 + tab): no web needed
+            g = _rect_gap(a, b)
+            if g < -EPS:
+                add("error", "copper", f"pads {a['num']} and {b['num']} overlap by {-g:.3f} mm")
+            elif g < MIN_WEB - EPS:
+                close.setdefault(("error" if g < HARD_WEB - EPS else "warning", round(g, 3)), []).append((a["num"], b["num"]))
+    for (lvl, g), pairs in sorted(close.items()):
+        common = set(pairs[0]).intersection(*map(set, pairs)) if len(pairs) > 1 else set()
+        if common:
+            hub = common.pop()
+            others = [x for pr in pairs for x in pr if x != hub]
+            who = f"pads {_ranges(others)} are {g:.3f} mm from pad {hub}"
+        else:
+            who = ", ".join(f"{a}-{b}" for a, b in pairs[:6]) + (" …" if len(pairs) > 6 else "")
+            who = f"pad pairs {who} are {g:.3f} mm apart"
+        add(lvl, "copper", who + (f" (< {HARD_WEB} mm)" if lvl == "error" else
+                                  f": below a {MIN_WEB} mm solder-mask web, check the fab's minimum"))
+
+    # ---- pin 1 / numbering
+    if "1" not in nums:
+        add("error", "pin1", "no pad numbered 1")
+    dup = {n for n in nums if nums.count(n) > 1} - set(allow_duplicate_pads or ())
+    for n in sorted(dup):
+        if not any(p["num"] == n and p["w"] * p["h"] > 2 * min(q["w"] * q["h"] for q in cu) for p in cu):
+            add("warning", "pin1", f"pad number {n} is used more than once")
+    sig = [p for p in cu if p["num"]]
+    if "1" in nums and len(sig) > 2:
+        p1 = next(p for p in sig if p["num"] == "1")
+        left = min(p["x"] for p in sig)
+        if p1["x"] > left + EPS or p1["y"] > min(p["y"] for p in sig if abs(p["x"] - left) < EPS) + EPS:
+            if not (abs(p1["x"]) < EPS and abs(p1["y"]) < EPS):
+                add("warning", "pin1", f"pad 1 at ({p1['x']:.3f}, {p1['y']:.3f}) is not the top-left pad")
+
+    # ---- silk
+    silk, silk_polys = _graphics(tree, "F.SilkS")
+    for s in silk:
+        if s[4] and not 0.1 - EPS <= s[4] <= 0.15 + EPS:
+            add("warning", "silk", f"silk line width {s[4]} mm (KLC: 0.10-0.15)")
+            break
+    worst = None
+    for s in silk:
+        for p in cu:
+            d = _seg_rect_dist(s, p) - s[4] / 2
+            if worst is None or d < worst[0]:
+                worst = (d, p["num"])
+    if worst and worst[0] < SILK_CLEAR - 0.011:
+        add("error" if worst[0] < 0.05 else "warning", "silk",
+            f"silkscreen is {max(worst[0], 0):.3f} mm from pad {worst[1]} (KLC: >= {SILK_CLEAR} mm)")
+
+    # ---- fab
+    fab, _ = _graphics(tree, "F.Fab")
+    if not fab:
+        add("warning", "fab", "no body outline on F.Fab")
+    elif any(abs(s[4] - 0.1) > EPS for s in fab if s[4]):
+        add("warning", "fab", "F.Fab line width is not 0.10 mm")
+
+    # ---- courtyard
+    crt, _ = _graphics(tree, "F.CrtYd")
+    if not crt:
+        add("error", "courtyard", "no courtyard on F.CrtYd")
+    else:
+        cb = _bbox(crt)
+        ext = [(p["x"] - p["w"] / 2, p["y"] - p["h"] / 2, p["x"] + p["w"] / 2, p["y"] + p["h"] / 2) for p in pads]
+        fb = _bbox(fab)
+        if fb:
+            ext.append(fb)
+        for e in ext:
+            if e[0] < cb[0] - EPS or e[1] < cb[1] - EPS or e[2] > cb[2] + EPS or e[3] > cb[3] + EPS:
+                add("error", "courtyard", "courtyard does not enclose every pad and the body outline")
+                break
+        if any(abs(s[4] - 0.05) > EPS for s in crt if s[4]):
+            add("warning", "courtyard", "courtyard line width is not 0.05 mm")
+        if any(abs(v * 100 - round(v * 100)) > 1e-3 for s in crt for v in s[:4]):
+            add("warning", "courtyard", "courtyard corners are not on the 0.01 mm grid")
+
+    # ---- exposed-pad paste
+    for p in cu:
+        others = [q for q in cu if q is not p]
+        if not others or p["w"] * p["h"] < 3 * max(q["w"] * q["h"] for q in others):
+            continue                                 # not an exposed pad
+        if not any(abs(q["x"]) < p["w"] / 2 and abs(q["y"]) < p["h"] / 2 for q in others) and p["x"] == 0 and p["y"] == 0:
+            windows = [q for q in pads if q["paste"] and not q["copper"]
+                       and abs(q["x"] - p["x"]) < p["w"] / 2 and abs(q["y"] - p["y"]) < p["h"] / 2]
+            if p["paste"] and not windows:
+                cov = 1.0
+            else:
+                cov = sum(q["w"] * q["h"] for q in windows) / (p["w"] * p["h"])
+            if not 0.5 - EPS <= cov <= 0.9 + EPS:
+                add("warning", "paste", f"exposed pad {p['num']} paste covers {cov:.0%} of its copper (typical 50-80%)")
+    return issues
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(prog="ecadlib check", description="Rule-check KiCad SMD footprints (KLC-style)")
+    ap.add_argument("files", nargs="+")
+    a = ap.parse_args(argv)
+    bad = 0
+    for f in a.files:
+        issues = check(Path(f).read_text())
+        bad += any(l == "error" for l, _, _ in issues)
+        print(f"{'OK  ' if not issues else 'WARN' if all(l == 'warning' for l, _, _ in issues) else 'FAIL'} {f}")
+        for lvl, rule, msg in issues:
+            print(f"     {lvl:<7} {rule:<9} {msg}")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

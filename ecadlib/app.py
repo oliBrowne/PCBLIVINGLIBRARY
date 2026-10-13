@@ -151,7 +151,8 @@ class Workspace:
             raise FileExistsError(f"{name} is already in the workspace library; approve again with overwrite to replace it")
         p.write_text(res["kicad_mod"])
         (self.gen_dir / f"{name}.json").write_text(json.dumps(spec_obj, indent=2))  # keep the source dimensions
-        files, warnings = [self.rel(p)], []
+        files = [self.rel(p)]
+        warnings = [f"{c['rule']}: {c['message']}" for c in res["report"].get("checks", []) if c["level"] == "error"]
         try:
             fp, _ = altium_lib.footprint_from_spec(spec_obj, density)
             files.append(self.rel(altium_lib.write_pcblib(self.models / "PcbLib" / f"{name}.PcbLib", [fp])))
