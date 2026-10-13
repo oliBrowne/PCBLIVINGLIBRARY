@@ -11,7 +11,7 @@ import pandas as pd
 
 from . import providers as P
 from .httpcache import CachedHTTP
-from .kicad_index import KiCadIndex, package_of
+from .kicad_index import KiCadIndex, package_of, parse_value
 
 FIELDS = {   # canonical field -> header synonyms (normalised: lowercase, punctuation -> space)
     "mpn": ["mpn", "manufacturer part number", "mfr part number", "mfr part", "mfg part number", "mfr pn",
@@ -23,7 +23,10 @@ FIELDS = {   # canonical field -> header synonyms (normalised: lowercase, punctu
     "value": ["value", "val", "comment"],
     "footprint": ["footprint", "package", "case", "package case", "pcb footprint"],
     "description": ["description", "desc", "notes"],
+    "libref": ["libref", "lib ref", "library ref", "library reference", "symbol"],
+    "dnp": ["dnp", "dnf", "do not populate", "do not place", "do not fit", "no stuff", "not fitted"],
 }
+DELIMS = (",", ";", "\t", "|")
 
 
 def _norm(h):
@@ -61,12 +64,28 @@ def map_headers(headers, threshold=0.72):
 
 
 def _read_csv(p):
-    for enc in ("utf-8-sig", "cp1252"):                                  # Excel 'CSV' on Windows is cp1252
+    """Tolerant CSV read: Altium ActiveBOM exports put title rows ('Bill of Materials;;;;;', a blank
+    row) above a wider header, which pandas' sniffer chokes on. Rows may be ragged; they are padded."""
+    data = Path(p).read_bytes()
+    for enc in ("utf-8-sig", "cp1252", "latin-1"):                       # Excel 'CSV' on Windows is cp1252
         try:
-            return pd.read_csv(p, header=None, dtype=str, sep=None, engine="python", encoding=enc)
+            text = data.decode(enc)
+            break
         except UnicodeDecodeError:
             continue
-    return pd.read_csv(p, header=None, dtype=str, sep=None, engine="python", encoding="latin-1")
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        raise ValueError(f"{p}: the BOM file is empty")
+
+    def score(d):                                                         # rows sharing the commonest width > 1
+        widths = [len(r) for r in csv.reader(lines[:30], delimiter=d)]
+        common = max(set(widths), key=widths.count)
+        return (widths.count(common) if common > 1 else 0, common)
+
+    delim = max(DELIMS, key=score)
+    rows = list(csv.reader(lines, delimiter=delim))
+    width = max(len(r) for r in rows)
+    return pd.DataFrame([r + [""] * (width - len(r)) for r in rows], dtype=str)
 
 
 def read_bom(path):
@@ -74,6 +93,8 @@ def read_bom(path):
     raw = (pd.read_excel(p, header=None, dtype=str) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls")
            else _read_csv(p))
     raw = raw.fillna("")
+    if raw.empty or not raw.astype(str).apply(lambda c: c.str.strip()).ne("").any().any():
+        raise ValueError(f"{p}: the BOM file is empty")
     hdr_row = max(range(min(10, len(raw))), key=lambda i: len(map_headers(list(raw.iloc[i]))))  # header may not be row 0
     headers = [str(h).strip() for h in raw.iloc[hdr_row]]
     df = raw.iloc[hdr_row + 1:].copy()
@@ -89,17 +110,47 @@ def read_bom(path):
             if q and len(re.findall(r"[A-Za-z]+\d+", prev["designator"])) < int(q.group(1)):
                 prev["designator"] += ", " + d["designator"]            # designator list wrapped onto the next row
                 continue
+        if "dnp" in d:
+            d["dnp"] = _yes(d["dnp"])
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
         lines.append(d)
     return lines, mapping
 
 
+def _yes(v):
+    """A DNP cell is set when it says anything other than blank / no / 0 / false / fitted."""
+    return _norm(v) not in ("", "0", "n", "no", "false", "fitted", "populate", "fit")
+
+
+def part_numbers(ln):
+    """MPN candidates, best first: the MPN column, then an Altium 'Comment'/value that is not a
+    passive value (ICs carry their part number there, e.g. STM32F103C8T6), then the LibRef."""
+    out = [ln.get("mpn", "")]
+    v = ln.get("value", "")
+    if v and parse_value(v) is None and re.search(r"[A-Za-z]", v) and re.search(r"\d", v) and " " not in v.strip():
+        out.append(v)
+    out.append(ln.get("libref", ""))
+    return [c for c in dict.fromkeys(c.strip() for c in out) if c]
+
+
 def triage(lines, index, provs, http):
     rows = []
     for i, ln in enumerate(lines, 1):
-        pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"), ln.get("mpn"))
-        sym, how = index.match(ln.get("mpn", ""), ln.get("lcsc", ""), ln.get("value", ""), pkg)
+        if ln.get("dnp"):
+            rows.append({"line": i, "designator": ln.get("designator", ""), "qty": ln.get("qty", ""),
+                         "mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""),
+                         "value": ln.get("value", ""), "package": "", "status": "dnp (not fitted)",
+                         "local_symbol": "", "local_footprint": "", "src": "", "src_symbol": "", "src_footprint": "",
+                         "src_3d": "", "src_mpn": "", "notes": "marked do-not-populate; not triaged"})
+            continue
+        pns = part_numbers(ln)
+        pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"), *pns)
+        sym = how = None
+        for pn in pns or [""]:
+            sym, how = index.match(pn, ln.get("lcsc", ""), ln.get("value", ""), pkg)
+            if sym:
+                break
         fp_key = None
         if sym:
             fp_key, _ = index.footprint(sym.props.get("Footprint", ""))
@@ -108,6 +159,9 @@ def triage(lines, index, provs, http):
         cls = re.match(r"[A-Z]+", ln.get("designator", "").upper())
         gen_fp = None if fp_key else index.find_footprint_for_package(pkg, cls.group(0) if cls else "")
         notes, src, errored, work, unconfigured = [], None, False, dict(ln), []
+        if pns and not ln.get("mpn"):
+            work["mpn"] = pns[0]                               # let providers search by the Comment/LibRef part number
+            notes.append(f"part number taken from {'Comment/value' if pns[0] == ln.get('value', '').strip() else 'LibRef'}: {pns[0]}")
         if ln.get("lcsc_invalid"):
             notes.append(f"ignored malformed LCSC '{ln['lcsc_invalid']}'")
         if not (sym and fp_key):
@@ -156,7 +210,7 @@ def triage(lines, index, provs, http):
             notes.append(f"generated footprint exists: {gen_fp}")
         rows.append({
             "line": i, "designator": ln.get("designator", ""), "qty": ln.get("qty", ""),
-            "mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc") or (f"{work['lcsc']} (via MPN)" if work.get("lcsc") else ""),
+            "mpn": ln.get("mpn") or work.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc") or (f"{work['lcsc']} (via MPN)" if work.get("lcsc") else ""),
             "value": ln.get("value", ""), "package": pkg or "",
             "status": status,
             "local_symbol": f"{sym.lib}:{sym.name} ({how})" if sym else "",
