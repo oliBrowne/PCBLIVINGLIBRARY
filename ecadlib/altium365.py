@@ -50,7 +50,7 @@ Q_FIND = """query ($ws: String!, $name: String!) {
 M_RELEASE = """mutation ($input: DesReleaseComponentInput!) { desReleaseComponent(input: $input) { errors { message } } }"""
 
 M_UPDATE_PARAMS = """mutation ($input: DesUpdateComponentRevisionParametersInput!) {
-  desUpdateComponentRevisionParameters(input: $input) { componentId }
+  desUpdateComponentRevisionParameters(input: $input) { componentId errors { message } }
 }"""
 
 
@@ -97,16 +97,22 @@ class Nexar:
 
     def update_params(self, component_id, params, note):
         inp = {"componentId": component_id, "releaseNote": note, "replaceExisting": False, "parameters": params}
-        return self.gql(M_UPDATE_PARAMS, {"input": inp})["desUpdateComponentRevisionParameters"]["componentId"]
+        res = self.gql(M_UPDATE_PARAMS, {"input": inp})["desUpdateComponentRevisionParameters"]
+        if res.get("errors"):                  # payload errors come back with HTTP 200 and no top-level `errors`
+            raise NexarError("; ".join(e["message"] for e in res["errors"]))
+        return res["componentId"]
 
 
 # ------------------------------------------------------------------ plan
 def plan(lines, triage=None, models=None, root="Components"):
     """One release item per unique Part Number, reusing the DbLib row builder for parameters."""
     models = Path(models) if models else None
-    items = []
+    items, names = [], set()
     for cat, df in to_rows(lines, triage).items():
         for row in df.to_dict("records"):
+            if row["Part Number"] in names:    # same MPN under two designator classes: one workspace item
+                continue
+            names.add(row["Part Number"])
             sym = fp = None
             if models:
                 s, f = models / "SchLib" / f"{row['Library Ref']}.SchLib", models / "PcbLib" / f"{row['Footprint Ref']}.PcbLib"
@@ -223,6 +229,9 @@ def main(argv=None):
     for r in results:
         print(f"  {r['action']:<18} {r['name']}")
     print(f"report -> {out}")
+    failed = sum(r["action"] == "error" for r in results)
+    if failed:
+        sys.exit(f"{failed} of {len(results)} parts failed (see {out})")
 
 
 if __name__ == "__main__":
