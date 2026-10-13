@@ -46,7 +46,9 @@ def test_ipc7351_chip_names_map_to_imperial():
 def test_comment_and_libref_used_as_part_numbers():
     lines, _ = T.read_bom(_write(ACTIVEBOM))
     assert T.part_numbers(lines[2]) == ["STM32F103C8T6", "STM32F103C8Tx"]
-    assert T.part_numbers(lines[0]) == ["RES"]                  # '10k' is a value, not a part number
+    assert T.part_numbers(lines[0]) == []                       # '10k' is a value, 'RES' a generic symbol
+    for generic in ("Res1", "Cap", "Cap Pol1", "Inductor", "LED0", "Diode", "PMOS", "R"):
+        assert T.part_numbers({"libref": generic}) == [], generic
     idx = _index(Symbol("mcu", "STM32F103C8T6", {"Value": "STM32F103C8T6"}),
                  Symbol("fet", "AO3401A", {"Value": "AO3401A"}),
                  Symbol("my", "MyLibPart-01", {}))
@@ -75,6 +77,19 @@ def test_empty_file_is_clear_error():
             assert "empty" in str(e), e
         else:
             raise AssertionError(f"no error for {text!r}")
+
+
+def test_binary_or_headerless_file_is_clear_error():
+    for data, why in ((b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + bytes(range(256)), "binary"),
+                      (b"hello,world\nfoo,bar\n", "no BOM header")):
+        f = _write("")
+        f.write_bytes(data)
+        try:
+            T.read_bom(f)
+        except ValueError as e:
+            assert why in str(e), e
+        else:
+            raise AssertionError(why)
 
 
 def test_plain_and_cp1252_csv_still_work():
