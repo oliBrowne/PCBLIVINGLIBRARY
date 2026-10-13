@@ -18,6 +18,7 @@ ecad-librarian/
 │   ├── providers.py          # Provider interface: EasyEDA, JLCPCB search, + DigiKey/Mouser/Nexar/SnapMagic/SamacSys stubs
 │   ├── kicad_index.py        # scans .kicad_sym / *.pretty for MPN / LCSC / value+package matches
 │   ├── altium_export.py      # Altium DbLib: parts.sqlite + parts.xlsx + two .DbLib files
+│   ├── altium365.py          # Altium 365 workspace: release plan + push via the Nexar Design API
 │   ├── httpcache.py          # disk cache + per-host rate limit around requests
 │   └── sexpr.py              # tiny KiCad S-expression reader (parse only)
 ├── examples/
@@ -30,7 +31,8 @@ ecad-librarian/
     ├── footprints/gen_log.txt, compare_vs_kicad_official.txt
     ├── triage_sample_bom.{md,csv}                       # live run (sources blocked, see below)
     ├── triage_sample_bom_stub_providers_only.{md,csv}   # shows the needs_footprint_generation bucket
-    └── altium/{parts.sqlite, parts.xlsx, ecadlib_sqlite.DbLib, ecadlib_excel.DbLib}
+    ├── altium/{parts.sqlite, parts.xlsx, ecadlib_sqlite.DbLib, ecadlib_excel.DbLib}
+    └── altium365/{plan.json, push_dry_run.json}
 ```
 
 ---
@@ -190,6 +192,37 @@ This writes one table per category (Capacitors, Connectors, Crystals, Diodes, IC
   * **`olefile`** (BSD): generic OLE2 read/write, useful as a base for a writer.
   * **AltiumSharp** (C#, github.com/issus/AltiumSharp): its README support table says SchLib and PcbLib are **Write: Yes**. The licence is stated inconsistently on the page (MIT in the README, Apache-2.0 in the sidebar).
 
+## 4. `altium365.py`: Altium 365 workspace exporter (Nexar Design API)
+
+```
+python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
+        --models <dir with SchLib/<ref>.SchLib and PcbLib/<ref>.PcbLib> -o out/altium365/plan.json
+NEXAR_TOKEN=... python3 -m ecadlib.altium365 workspaces
+NEXAR_TOKEN=... python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace <url> [--dry-run]
+```
+
+`plan` turns each unique part into one managed workspace component under `Components/<Category>`, with the same parameters as the DbLib rows (manufacturer, MPN, value, supplier, links). `push` then, for each part:
+
+1. looks the component up by name (`desLibrary.components(where: {name: {eq}})`);
+2. if it exists, updates its parameters with `desUpdateComponentRevisionParameters` (this is the "keep the library current" path);
+3. otherwise uploads the `.SchLib` and `.PcbLib` to `files.nexar.com/File/Upload` and calls `desReleaseComponent`, which releases symbol, footprint and component in one call, using the workspace's default naming schemes and lifecycles for each content type.
+
+Parts without Altium model files are planned as `needs_altium_models` and skipped on release (they still get parameter updates if they already exist in the workspace). `--dry-run` sends nothing and writes the mutation inputs it would send.
+
+**Verified** (from Nexar's support articles and the schema and code in `NexarDeveloper/nexar-release-component-demo-wpf`, last commit 2024-07-23):
+* `desReleaseComponent(input: DesReleaseComponentInput!)` takes component name, comment, description, parameters, folder, naming scheme and lifecycle ids, plus `symbolFiles` and `footprintFiles` as `{fileId, relativePath}`. The demo uploads real `.SchLib`/`.PcbLib` binaries from a `Released\` folder, so **release needs Altium-format files; KiCad files cannot go up directly**.
+* Uploads are `multipart/form-data` POSTs to `https://files.nexar.com/File/Upload` with the access token in a `token` header; the response body is the file id, valid 24 hours.
+* Design queries need a user token with `openid`, `user.access`, `design.domain` scopes (the token the Nexar portal generates has them).
+* `desUpdateComponentRevisionParameters` adds or edits parameters; `replaceExisting: true` replaces all of them. The component id changes after each update.
+* The release payload exposes only `errors`, not the new component id. Part choices (manufacturer/supplier links) and 3D models are not inputs; 3D models travel inside the `.PcbLib`.
+
+**Not tested** (this sandbox's proxy blocks api.nexar.com and files.nexar.com, and there is no workspace or token here):
+* Whether `componentReleaseFolder` takes a path like `Components/ICs` or only a single folder name.
+* Which Nexar or Altium 365 plan is needed for Design API write access.
+* Altium also has a newer native Altium 365 GraphQL API at `https://{workspace}/api/graphql` with its own files service. Its library mutations aren't documented publicly yet; this exporter targets Nexar.
+
+**Getting the `.SchLib`/`.PcbLib` files** is the remaining gap. Today: import `out/footprints/ecadlib.pretty` and the `.kicad_sym` files with Altium's KiCad importer and save one symbol/footprint per file. Automated options are `altium-designer-mcp` (Rust, GPL-3.0, writes both formats) or `altium-monkey` (Python, AGPL-3.0, alpha).
+
 ---
 
 ## Exact commands run (in `/mnt/project-files/ecad-librarian`)
@@ -199,11 +232,13 @@ python3 -m pip install easyeda2kicad                       # 1.0.1, used only to
 python3 -m ecadlib.footprint_gen gen examples/packages/*.json -o out/footprints/ecadlib.pretty
 for each of 6 footprints:  python3 -m ecadlib.footprint_gen compare out/footprints/ecadlib.pretty/<fp>.kicad_mod \
       https://gitlab.com/kicad/libraries/kicad-footprints/-/raw/master/<Lib>.pretty/<fp>.kicad_mod   > out/footprints/compare_vs_kicad_official.txt
-python3 -m tests.test_offline                               # 4/4 ok
+python3 -m tests.test_offline                               # 5/5 ok (incl. Altium 365 plan/push against a fake client)
 python3 -m ecadlib.bom_triage examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints -o out/triage_sample_bom
 python3 -m ecadlib.bom_triage examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints \
         --providers digikey,mouser,nexar,snapmagic,samacsys -o out/triage_sample_bom_stub_providers_only
 python3 -m ecadlib.altium_export examples/sample_bom.csv --triage out/triage_sample_bom.csv -o out/altium
+python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv -o out/altium365/plan.json
+python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace https://example.365.altium.com --dry-run -o out/altium365/push_dry_run.json
 ```
 
 The HTTP cache (`out/http_cache/`) and `__pycache__` were deleted after the runs. They are recreated on the next run.

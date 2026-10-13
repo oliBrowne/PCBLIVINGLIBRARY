@@ -7,7 +7,7 @@ easyeda2kicad 1.0.1 reads (result.dataStr.head.c_para, result.packageDetail.data
 import json, tempfile
 from pathlib import Path
 
-from ecadlib import bom_triage as T, footprint_gen as F, providers as P
+from ecadlib import altium365 as A, bom_triage as T, footprint_gen as F, providers as P
 from ecadlib.httpcache import CachedHTTP
 from ecadlib.kicad_index import KiCadIndex, parse_value
 
@@ -48,6 +48,51 @@ def test_providers_seeded_cache():
         r = rows[0]
         assert r["status"] == "available_easyeda" and r["src_3d"] == "yes" and r["lcsc"] == "C999999 (via MPN)", r
         assert "jlcpcb: MPN -> C999999" in r["notes"] and "not configured: digikey" in r["notes"], r
+
+
+class FakeNexar:
+    """Records calls instead of hitting api.nexar.com / files.nexar.com."""
+    def __init__(self, existing):
+        self.existing, self.calls = existing, []
+
+    def release_defs(self, ws):
+        return {"componentScheme": {"id": "cs"}, "symbolLifeCycle": {"id": "sl"}}
+
+    def find_component(self, ws, name):
+        return self.existing.get(name)
+
+    def upload(self, path):
+        self.calls.append(("upload", Path(path).name)); return f"id-{Path(path).name}"
+
+    def release(self, inp):
+        self.calls.append(("release", inp))
+
+    def update_params(self, cid, params, note):
+        self.calls.append(("update", cid, params)); return cid + "-r2"
+
+
+def test_altium365_plan_and_push():
+    lines = [{"designator": "U1", "mpn": "CH340C", "manufacturer": "WCH", "lcsc": "C84681", "footprint": "SOIC-16",
+              "description": "USB UART"},
+             {"designator": "R1", "mpn": "0603WAF1002T5E", "value": "10k", "footprint": "R_0603_1608Metric",
+              "description": "Resistor 10k 0603"}]
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "SchLib").mkdir(); (Path(d) / "PcbLib").mkdir()
+        (Path(d) / "SchLib" / "CH340C.SchLib").write_bytes(b"x"); (Path(d) / "PcbLib" / "SOIC-16.PcbLib").write_bytes(b"x")
+        items = A.plan(lines, models=d)
+        by = {i["name"]: i for i in items}
+        assert by["CH340C"]["status"] == "ready" and by["CH340C"]["folder"] == "Components/ICs", by["CH340C"]
+        res = next(i for i in items if i["folder"] == "Components/Resistors")
+        assert res["status"] == "needs_altium_models" and res["symbol"]["ref"] == "Resistor", res
+        assert {"name": "Supplier Part Number 1", "value": "C84681"} in by["CH340C"]["parameters"]
+        fake = FakeNexar({res["name"]: "cmp-1"})
+        out = {r["name"]: r for r in A.push(items, fake, "https://ws")}
+        assert out["CH340C"]["action"] == "release" and out[res["name"]]["action"] == "update_parameters", out
+        rel = next(c[1] for c in fake.calls if c[0] == "release")
+        assert rel["symbolFiles"] == [{"fileId": "id-CH340C.SchLib", "relativePath": "Released\\CH340C.SchLib"}], rel
+        assert rel["componentRevisionNamingSchemeNodeId"] == "cs" and rel["symbolLifeCycleDefinitionNodeId"] == "sl"
+        dry = A.push(items, None, "https://ws", dry_run=True)
+        assert {r["action"] for r in dry} == {"release", "skip"}, dry
 
 
 def seed(http, method, url, body, payload):
