@@ -37,8 +37,16 @@ def parse_value(s, with_unit=False):
     return (v, u) if with_unit else v
 
 
+IPC_CHIP_RE = re.compile(r"(?:RES|CAP|IND|LED|DIO)C(\d{4})X\d+", re.I)    # IPC-7351 chip names: RESC1608X55N
+METRIC_TO_IMPERIAL = {"0402": "01005", "0603": "0201", "1005": "0402", "1608": "0603", "2012": "0805",
+                      "3216": "1206", "3225": "1210", "4532": "1812", "5025": "2010", "6332": "2512"}
+
+
 def package_of(*texts):
     for t in texts:
+        m = IPC_CHIP_RE.search(str(t or ""))
+        if m and m.group(1) in METRIC_TO_IMPERIAL:
+            return METRIC_TO_IMPERIAL[m.group(1)]
         m = PKG_RE.search(str(t or ""))
         if m:
             return (m.group(1) or m.group(2)).upper().replace("-", "")
