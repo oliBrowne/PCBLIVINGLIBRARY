@@ -58,8 +58,9 @@ class FakeNexar:
     def release_defs(self, ws):
         return {"componentScheme": {"id": "cs"}, "symbolLifeCycle": {"id": "sl"}}
 
-    def find_component(self, ws, name):
-        return self.existing.get(name)
+    def find(self, ws, name):                 # existing: name -> id, or name -> {"id", "details": {"parameters"}}
+        e = self.existing.get(name)
+        return {"id": e, "details": {"parameters": []}} if isinstance(e, str) else e
 
     def upload(self, path):
         self.calls.append(("upload", Path(path).name)); return f"id-{Path(path).name}"
@@ -67,8 +68,12 @@ class FakeNexar:
     def release(self, inp):
         self.calls.append(("release", inp))
 
-    def update_params(self, cid, params, note):
-        self.calls.append(("update", cid, params)); return cid + "-r2"
+    def update_params(self, cid, params, note, replace=False):
+        self.calls.append(("update", cid, params, replace))
+        for e in self.existing.values():
+            if isinstance(e, dict) and e["id"] == cid:
+                e["details"]["parameters"] = list(params) if replace else e["details"]["parameters"] + list(params)
+        return cid + "-r2"
 
 
 def test_altium365_plan_and_push():
@@ -188,7 +193,21 @@ def test_altium_units_and_records_match_altium_bytes():
     assert len(mine) == len(ALTIUM_PAD) and diff == [103], diff     # 103 = paste-mask cache-valid flag (Altium revalidates)
 
 
+def _missing(mod, test):
+    """True (after reporting a skip) when an optional dev dependency isn't installed; under pytest, skips."""
+    import importlib.util
+    if importlib.util.find_spec(mod):
+        return False
+    try:
+        import pytest
+    except ImportError:
+        print(f"skip {test} (pip install {mod})"); return True
+    pytest.skip(f"{mod} not installed")
+
+
 def test_pcblib_writer_roundtrip():
+    if _missing("olefile", "test_pcblib_writer_roundtrip"):
+        return
     specs = ["SOIC-8_3.9x4.9mm_P1.27mm", "QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm"]
     fps = [AL.footprint_from_spec(json.loads(Path(f"examples/packages/{n}.json").read_text()))[0] for n in specs]
     with tempfile.TemporaryDirectory() as d:
@@ -209,6 +228,8 @@ def test_pcblib_writer_roundtrip():
 
 
 def test_schlib_writer_roundtrip():
+    if _missing("olefile", "test_schlib_writer_roundtrip"):
+        return
     sym = AL.symbol_from_json(json.loads(Path("examples/symbols/CH340C.json").read_text()))
     with tempfile.TemporaryDirectory() as d:
         AL.write_schlib(Path(d) / "x.SchLib", [sym, AL.resistor_symbol(), AL.capacitor_symbol()])

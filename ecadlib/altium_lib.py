@@ -81,8 +81,24 @@ def params(pairs):
 
 
 def clean(s):
-    """Text going into a |KEY=VALUE| block may not contain '|'."""
-    return re.sub(r"\s*\|\s*", "; ", str(s)).strip()
+    """Text going into a |KEY=VALUE| block may not contain '|' or line breaks (TOC streams are line based)."""
+    return re.sub(r"\s+", " ", re.sub(r"\s*\|\s*", "; ", str(s))).strip()
+
+
+def lib_name(s):
+    """Library entry name as Altium stores it (cp1252 in the binary records). 'Ω' becomes 'Ohm';
+    anything else cp1252 can't hold is an error rather than a silent '?' that makes the entry unreadable."""
+    s = str(s).replace("\u2126", "Ohm").replace("\u03a9", "Ohm")
+    try:
+        s.encode("cp1252")
+    except UnicodeEncodeError as e:
+        raise ValueError(f"name {s!r} has characters Altium libraries can't store ({s[e.start:e.end]!r}); rename it") from None
+    return s
+
+
+def file_stem(s):
+    """Filename for one-entry-per-file libraries: path separators and Windows-illegal characters -> '_'."""
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", lib_name(s)).rstrip(". ") or "_"
 
 
 def section_key(name):
@@ -274,6 +290,7 @@ def _template():
 
 
 def pcblib_bytes(footprints, filename="ecadlib.PcbLib"):
+    footprints = [dict(fp, name=lib_name(fp["name"])) for fp in footprints]
     names = [fp["name"] for fp in footprints]
     keys = [section_key(n) for n in names]
     _check_keys(keys, names, PCBLIB_RESERVED, "footprint")
@@ -439,6 +456,8 @@ def _sch_component(sym):
 
 
 def schlib_bytes(symbols):
+    symbols = [dict(s, name=lib_name(s["name"]), **({"footprint": lib_name(s["footprint"])} if s.get("footprint") else {}))
+               for s in symbols]
     names = [s["name"] for s in symbols]
     keys = [section_key(n) for n in names]
     _check_keys(keys, names, SCHLIB_RESERVED, "symbol")
@@ -638,7 +657,7 @@ def main(argv=None):
             fp, rep = footprint_from_spec(spec, a.density)
             fps.append(fp)
             if not a.single:
-                path = write_pcblib(out / f"{fp['name']}.PcbLib", [fp])
+                path = write_pcblib(out / f"{file_stem(fp['name'])}.PcbLib", [fp])
                 print(f"{fp['name']:<44} {len(fp['pads']):>3} pads {len(fp['tracks']):>3} tracks {len(fp['fills'])} fills "
                       f"{len(fp['regions'])} regions -> {path} ({path.stat().st_size} B)")
         if a.single:
@@ -646,7 +665,7 @@ def main(argv=None):
     else:
         for f in a.symbols:
             sym = symbol_from_json(json.loads(Path(f).read_text()))
-            path = write_schlib(out / f"{sym['name']}.SchLib", [sym])
+            path = write_schlib(out / f"{file_stem(sym['name'])}.SchLib", [sym])
             print(f"{sym['name']:<24} {sum(1 for p in sym['prims'] if p[0] == 'pin'):>3} pins -> {path}")
 
 

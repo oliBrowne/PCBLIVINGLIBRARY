@@ -42,6 +42,10 @@
         "value": "https://www.lcsc.com/datasheet/C1525.pdf"
       }
     ],
+    "cleared": [
+      "Supplier 2",
+      "Supplier Part Number 2"
+    ],
     "symbol": {
       "ref": "Capacitor",
       "file": "../altium_models/SchLib/Capacitor.SchLib"
@@ -94,6 +98,10 @@
         "name": "ComponentLink2URL",
         "value": "https://www.lcsc.com/datasheet/C165948.pdf"
       }
+    ],
+    "cleared": [
+      "Supplier 2",
+      "Supplier Part Number 2"
     ],
     "symbol": {
       "ref": "TYPE-C-31-M-12",
@@ -148,6 +156,10 @@
         "value": "https://www.lcsc.com/datasheet/C160404.pdf"
       }
     ],
+    "cleared": [
+      "Supplier 2",
+      "Supplier Part Number 2"
+    ],
     "symbol": {
       "ref": "SM04B-SRSS-TB(LF)(SN)",
       "file": null
@@ -176,6 +188,16 @@
         "name": "Manufacturer Part Number",
         "value": "FTSH-105-01-L-DV-K"
       }
+    ],
+    "cleared": [
+      "Supplier 1",
+      "Supplier Part Number 1",
+      "Supplier 2",
+      "Supplier Part Number 2",
+      "ComponentLink1Description",
+      "ComponentLink1URL",
+      "ComponentLink2Description",
+      "ComponentLink2URL"
     ],
     "symbol": {
       "ref": "FTSH-105-01-L-DV-K",
@@ -230,6 +252,10 @@
         "value": "https://www.lcsc.com/datasheet/C9002.pdf"
       }
     ],
+    "cleared": [
+      "Supplier 2",
+      "Supplier Part Number 2"
+    ],
     "symbol": {
       "ref": "X322512MSB4SI",
       "file": null
@@ -282,6 +308,10 @@
         "name": "ComponentLink2URL",
         "value": "https://www.lcsc.com/datasheet/C2286.pdf"
       }
+    ],
+    "cleared": [
+      "Supplier 2",
+      "Supplier Part Number 2"
     ],
     "symbol": {
       "ref": "KT-0603R",
@@ -336,6 +366,10 @@
         "value": "https://www.lcsc.com/datasheet/C8734.pdf"
       }
     ],
+    "cleared": [
+      "Supplier 2",
+      "Supplier Part Number 2"
+    ],
     "symbol": {
       "ref": "STM32F103C8T6",
       "file": null
@@ -388,6 +422,10 @@
         "name": "ComponentLink2URL",
         "value": "https://www.lcsc.com/datasheet/C6186.pdf"
       }
+    ],
+    "cleared": [
+      "Supplier 2",
+      "Supplier Part Number 2"
     ],
     "symbol": {
       "ref": "AMS1117-3.3",
@@ -442,6 +480,10 @@
         "value": "https://www.lcsc.com/datasheet/C2913202.pdf"
       }
     ],
+    "cleared": [
+      "Supplier 2",
+      "Supplier Part Number 2"
+    ],
     "symbol": {
       "ref": "ESP32-S3-WROOM-1-N16R8",
       "file": null
@@ -494,6 +536,10 @@
         "name": "ComponentLink2URL",
         "value": "https://www.lcsc.com/datasheet/C73973.pdf"
       }
+    ],
+    "cleared": [
+      "Supplier 2",
+      "Supplier Part Number 2"
     ],
     "symbol": {
       "ref": "TPS62133RGTR",
@@ -548,6 +594,10 @@
         "value": "https://www.lcsc.com/datasheet/C84681.pdf"
       }
     ],
+    "cleared": [
+      "Supplier 2",
+      "Supplier Part Number 2"
+    ],
     "symbol": {
       "ref": "CH340C",
       "file": "../altium_models/SchLib/CH340C.SchLib"
@@ -576,6 +626,16 @@
         "name": "Manufacturer Part Number",
         "value": "TPS62162DSGR"
       }
+    ],
+    "cleared": [
+      "Supplier 1",
+      "Supplier Part Number 1",
+      "Supplier 2",
+      "Supplier Part Number 2",
+      "ComponentLink1Description",
+      "ComponentLink1URL",
+      "ComponentLink2Description",
+      "ComponentLink2URL"
     ],
     "symbol": {
       "ref": "TPS62162DSGR",
@@ -630,6 +690,10 @@
         "value": "https://www.lcsc.com/datasheet/C25804.pdf"
       }
     ],
+    "cleared": [
+      "Supplier 2",
+      "Supplier Part Number 2"
+    ],
     "symbol": {
       "ref": "Resistor",
       "file": "../altium_models/SchLib/Resistor.SchLib"
@@ -682,6 +746,10 @@
         "name": "ComponentLink2URL",
         "value": "https://www.lcsc.com/datasheet/C15127.pdf"
       }
+    ],
+    "cleared": [
+      "Supplier 2",
+      "Supplier Part Number 2"
     ],
     "symbol": {
       "ref": "AO3401A",

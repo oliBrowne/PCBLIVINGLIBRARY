@@ -19,6 +19,7 @@ from pathlib import Path, PureWindowsPath
 
 import pandas as pd
 
+from .altium_lib import file_stem, lib_name
 from .bom_triage import read_bom
 from .kicad_index import package_of
 
@@ -55,13 +56,14 @@ def to_rows(lines, triage=None):
               else mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
         if seen.setdefault(pn, mpn) != mpn:      # same synthetic PN, different part (e.g. 100nF 16V vs 50V): keep both
             pn = f"{pn}-{mpn}".replace(" ", "")
-        lib_ref = GENERIC_SYMBOL.get(cat, mpn or pn)
+        lib_ref = lib_name(GENERIC_SYMBOL.get(cat, mpn or pn))
+        fp_ref = lib_name(fp_ref)
         out.setdefault(cat, []).append({
             "Part Number": pn,
             "Library Ref": lib_ref,
-            "Library Path": f"SchLib\\{lib_ref}.SchLib",      # altium_lib layout: one symbol per .SchLib
+            "Library Path": f"SchLib\\{file_stem(lib_ref)}.SchLib",      # altium_lib layout: one entry per file
             "Footprint Ref": fp_ref,
-            "Footprint Path": "PcbLib\\ecadlib.PcbLib",
+            "Footprint Path": f"PcbLib\\{file_stem(fp_ref)}.PcbLib" if fp_ref else "",
             "Description": ln.get("description", ""),
             "Value": value, "Comment": "=Value" if cat in GENERIC_SYMBOL else mpn,
             "Manufacturer": ln.get("manufacturer", ""), "Manufacturer Part Number": mpn,
