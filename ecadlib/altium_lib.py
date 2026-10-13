@@ -21,7 +21,7 @@ Conventions (mirroring Altium-made libraries in AltiumSharp's TestData):
   Units: 1 mil = 10000 internal units, so 1 mm = 10^8/254 units (rounded to the nearest unit,
   2.54 nm). KiCad's Y axis points down, Altium's up: y is negated on import.
 Schematic units: 1 = 10 mil (DXP); pins on a 100 mil (10 unit) grid."""
-import argparse, gzip, hashlib, json, re, struct, sys, time, uuid
+import argparse, functools, gzip, hashlib, json, re, struct, sys, time, uuid
 from fractions import Fraction
 from pathlib import Path
 
@@ -88,6 +88,19 @@ def clean(s):
 def section_key(name):
     """OLE storage name for a library entry: <=31 chars, no OLE/Windows-illegal characters."""
     return re.sub(r'[<>:"/\\|?*!\x00]', "_", name)[:31] or "_"
+
+
+PCBLIB_RESERVED = {"FILEHEADER", "SECTIONKEYS", "LIBRARY", "FILEVERSIONINFO"}
+SCHLIB_RESERVED = {"FILEHEADER", "SECTIONKEYS", "STORAGE"}
+
+
+def _check_keys(keys, names, reserved, what):
+    upper = [k.upper() for k in keys]
+    if len(set(upper)) != len(upper):
+        raise ValueError(f"{what} names collide after truncation to 31 chars: {names}")
+    bad = [n for n, k in zip(names, upper) if k in reserved]
+    if bad:
+        raise ValueError(f"{what} name(s) {bad} clash with a reserved library stream/storage name")
 
 
 def unique_id(seed):                          # Altium's 8-letter UNIQUEID, deterministic per seed
@@ -255,6 +268,7 @@ def to_mil(u):
     return s if s not in ("", "-0") else "0"
 
 
+@functools.lru_cache(maxsize=1)
 def _template():
     return json.loads(gzip.decompress((Path(__file__).with_name("assets") / "pcblib_template.json.gz").read_bytes()))
 
@@ -262,9 +276,8 @@ def _template():
 def pcblib_bytes(footprints, filename="ecadlib.PcbLib"):
     names = [fp["name"] for fp in footprints]
     keys = [section_key(n) for n in names]
-    if len({k.upper() for k in keys}) != len(keys):
-        raise ValueError(f"footprint names collide after truncation to 31 chars: {names}")
-    tpl, (date, tm) = _template(), _now()
+    _check_keys(keys, names, PCBLIB_RESERVED, "footprint")
+    tpl, (date, tm) = _template(), _now()          # cached: treat tpl as read-only
     hdr = re.sub(r"\|FILENAME=[^|]*", "|FILENAME=" + clean(filename), tpl["library_params"], count=1)
     hdr = re.sub(r"\|DATE=[^|]*", "|DATE=" + date, hdr, count=1)
     hdr = re.sub(r"\|TIME=[^|]*", "|TIME=" + tm, hdr, count=1)
@@ -327,23 +340,23 @@ def pin_rec(num, name, etype, orient, x, y, length, show=True):
 def ic_symbol(name, pins, description="", designator="U?", footprint=None, comment="*"):
     """Rectangular IC: pins = [{'num','name','type','side' in left/right/top/bottom}], listed top->bottom
     (left/right) or left->right (top/bottom). Body grows to fit pin names; all on a 100 mil grid."""
+    bad = [p.get("num") for p in pins if p.get("side", "left") not in ORIENT]
+    if bad:
+        raise ValueError(f"{name}: pins {bad} have a side other than {list(ORIENT)}")
     side = {s: [p for p in pins if p.get("side", "left") == s] for s in ORIENT}
     rows = max(len(side["left"]), len(side["right"]), 1)
     cols = max(len(side["top"]), len(side["bottom"]))
     chars = max([len(p["name"]) for p in side["left"]] or [0]) + max([len(p["name"]) for p in side["right"]] or [0])
     w = max(40, 10 * -(-(chars * 7 + 20) // 10), 10 * (cols + 1))   # ~7 units (70 mil) per 10 pt char
-    h = 10 * (rows + 1)
-    top, bot = 0, -h
-    if cols:                                  # leave room for top/bottom pin names
-        rot = max(len(p["name"]) for p in side["top"] + side["bottom"])
-        h += 10 * -(-(rot * 7 + 10) // 10) * (2 if side["top"] and side["bottom"] else 1)
-        bot = -h
+    room = lambda ps: 10 * -(-(max(len(p["name"]) for p in ps) * 7 + 10) // 10) if ps else 0
+    t_room, b_room = room(side["top"]), room(side["bottom"])          # vertical names inside the body
+    top, bot = 0, -(t_room + 10 * (rows + 1) + b_room)
     prims = [("rect", 0, top, w, bot)]
     L = 30
-    for i, p in enumerate(side["left"]):
-        prims.append(("pin", p, "left", 0, -10 * (i + 1), L))
+    for i, p in enumerate(side["left"]):                              # below the top pins' names
+        prims.append(("pin", p, "left", 0, -t_room - 10 * (i + 1), L))
     for i, p in enumerate(side["right"]):
-        prims.append(("pin", p, "right", w, -10 * (i + 1), L))
+        prims.append(("pin", p, "right", w, -t_room - 10 * (i + 1), L))
     for i, p in enumerate(side["top"]):
         prims.append(("pin", p, "top", 10 * (i + 1), top, L))
     for i, p in enumerate(side["bottom"]):
@@ -428,8 +441,7 @@ def _sch_component(sym):
 def schlib_bytes(symbols):
     names = [s["name"] for s in symbols]
     keys = [section_key(n) for n in names]
-    if len({k.upper() for k in keys}) != len(keys):
-        raise ValueError(f"symbol names collide after truncation to 31 chars: {names}")
+    _check_keys(keys, names, SCHLIB_RESERVED, "symbol")
     tree, total, lib = {}, 0, []
     for i, (s, k) in enumerate(zip(symbols, keys)):
         data, n, _ = _sch_component(s)
@@ -467,6 +479,10 @@ def _blk(d, i):
 
 def _str(b):
     return b[1:1 + b[0]].decode("cp1252") if b else ""
+
+
+def _param_stream(o, path):
+    return parse_params(_blk(o.openstream(path).read(), 0)[0].rstrip(b"\0").decode("cp1252"))
 
 
 def parse_params(text):
@@ -520,7 +536,11 @@ def parse_pcb_data(d):
 
 def read_pcblib(path):
     import olefile
-    o = olefile.OleFileIO(str(path))
+    with olefile.OleFileIO(str(path)) as o:
+        return _read_pcblib(o)
+
+
+def _read_pcblib(o):
     d = o.openstream("Library/Data").read()
     hb, i = _blk(d, 0)
     n = struct.unpack_from("<I", d, i)[0]; i += 4
@@ -535,7 +555,7 @@ def read_pcblib(path):
     out = []
     for nm in names:
         key = keymap.get(nm, section_key(nm))
-        pr = parse_params(_blk(o.openstream(f"{key}/Parameters").read(), 0)[0].rstrip(b"\0").decode("cp1252"))
+        pr = _param_stream(o, f"{key}/Parameters")
         nm2, recs = parse_pcb_data(o.openstream(f"{key}/Data").read())
         out.append({"name": nm, "storage": key, "params": pr, "records": recs,
                     "header_count": struct.unpack("<I", o.openstream(f"{key}/Header").read())[0]})
@@ -544,11 +564,15 @@ def read_pcblib(path):
 
 def read_schlib(path):
     import olefile
-    o = olefile.OleFileIO(str(path))
-    hdr = parse_params(_blk(o.openstream("FileHeader").read(), 0)[0].rstrip(b"\0").decode("cp1252"))
+    with olefile.OleFileIO(str(path)) as o:
+        return _read_schlib(o)
+
+
+def _read_schlib(o):
+    hdr = _param_stream(o, "FileHeader")
     keymap = {}
     if o.exists("SectionKeys"):
-        sk = parse_params(_blk(o.openstream("SectionKeys").read(), 0)[0].rstrip(b"\0").decode("cp1252"))
+        sk = _param_stream(o, "SectionKeys")
         keymap = {sk[f"LIBREF{i}"]: sk[f"SECTIONKEY{i}"] for i in range(int(sk["KEYCOUNT"]))}
     out = []
     for i in range(int(hdr.get("COMPCOUNT", 0))):
