@@ -1,0 +1,696 @@
+[
+  {
+    "name": "CAP-0402-100nF",
+    "folder": "Components/Capacitors",
+    "description": "Capacitor 100nF 16V X7R 0402",
+    "comment": "=Value",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "100nF"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "Samsung Electro-Mechanics"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "CL05B104KO5NNNC"
+      },
+      {
+        "name": "Supplier 1",
+        "value": "LCSC"
+      },
+      {
+        "name": "Supplier Part Number 1",
+        "value": "C1525"
+      },
+      {
+        "name": "ComponentLink1Description",
+        "value": "LCSC"
+      },
+      {
+        "name": "ComponentLink1URL",
+        "value": "https://www.lcsc.com/product-detail/C1525.html"
+      },
+      {
+        "name": "ComponentLink2Description",
+        "value": "Datasheet"
+      },
+      {
+        "name": "ComponentLink2URL",
+        "value": "https://www.lcsc.com/datasheet/C1525.pdf"
+      }
+    ],
+    "symbol": {
+      "ref": "Capacitor",
+      "file": "../altium_models/SchLib/Capacitor.SchLib"
+    },
+    "footprint": {
+      "ref": "C_0402_1005Metric",
+      "file": "../altium_models/PcbLib/C_0402_1005Metric.PcbLib"
+    },
+    "status": "ready"
+  },
+  {
+    "name": "TYPE-C-31-M-12",
+    "folder": "Components/Connectors",
+    "description": "USB Type-C receptacle 16-pin SMD",
+    "comment": "TYPE-C-31-M-12",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "USB-C"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "Korean Hroparts Elec"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "TYPE-C-31-M-12"
+      },
+      {
+        "name": "Supplier 1",
+        "value": "LCSC"
+      },
+      {
+        "name": "Supplier Part Number 1",
+        "value": "C165948"
+      },
+      {
+        "name": "ComponentLink1Description",
+        "value": "LCSC"
+      },
+      {
+        "name": "ComponentLink1URL",
+        "value": "https://www.lcsc.com/product-detail/C165948.html"
+      },
+      {
+        "name": "ComponentLink2Description",
+        "value": "Datasheet"
+      },
+      {
+        "name": "ComponentLink2URL",
+        "value": "https://www.lcsc.com/datasheet/C165948.pdf"
+      }
+    ],
+    "symbol": {
+      "ref": "TYPE-C-31-M-12",
+      "file": null
+    },
+    "footprint": {
+      "ref": "USB_C_Receptacle_16P",
+      "file": null
+    },
+    "status": "needs_altium_models"
+  },
+  {
+    "name": "SM04B-SRSS-TB(LF)(SN)",
+    "folder": "Components/Connectors",
+    "description": "JST SH 1.0mm 4-pin right-angle SMD",
+    "comment": "SM04B-SRSS-TB(LF)(SN)",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "Conn_01x04"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "JST"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "SM04B-SRSS-TB(LF)(SN)"
+      },
+      {
+        "name": "Supplier 1",
+        "value": "LCSC"
+      },
+      {
+        "name": "Supplier Part Number 1",
+        "value": "C160404"
+      },
+      {
+        "name": "ComponentLink1Description",
+        "value": "LCSC"
+      },
+      {
+        "name": "ComponentLink1URL",
+        "value": "https://www.lcsc.com/product-detail/C160404.html"
+      },
+      {
+        "name": "ComponentLink2Description",
+        "value": "Datasheet"
+      },
+      {
+        "name": "ComponentLink2URL",
+        "value": "https://www.lcsc.com/datasheet/C160404.pdf"
+      }
+    ],
+    "symbol": {
+      "ref": "SM04B-SRSS-TB(LF)(SN)",
+      "file": null
+    },
+    "footprint": {
+      "ref": "JST_SH_SM04B-SRSS-TB",
+      "file": null
+    },
+    "status": "needs_altium_models"
+  },
+  {
+    "name": "FTSH-105-01-L-DV-K",
+    "folder": "Components/Connectors",
+    "description": "1.27mm 2x5 SWD header (no LCSC listing)",
+    "comment": "FTSH-105-01-L-DV-K",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "Conn_02x05"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "Samtec"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "FTSH-105-01-L-DV-K"
+      }
+    ],
+    "symbol": {
+      "ref": "FTSH-105-01-L-DV-K",
+      "file": null
+    },
+    "footprint": {
+      "ref": "Samtec_FTSH-105-01-L-DV-K",
+      "file": null
+    },
+    "status": "needs_altium_models"
+  },
+  {
+    "name": "X322512MSB4SI",
+    "folder": "Components/Crystals",
+    "description": "Crystal 12MHz 20pF 3225",
+    "comment": "X322512MSB4SI",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "12MHz"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "YXC"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "X322512MSB4SI"
+      },
+      {
+        "name": "Supplier 1",
+        "value": "LCSC"
+      },
+      {
+        "name": "Supplier Part Number 1",
+        "value": "C9002"
+      },
+      {
+        "name": "ComponentLink1Description",
+        "value": "LCSC"
+      },
+      {
+        "name": "ComponentLink1URL",
+        "value": "https://www.lcsc.com/product-detail/C9002.html"
+      },
+      {
+        "name": "ComponentLink2Description",
+        "value": "Datasheet"
+      },
+      {
+        "name": "ComponentLink2URL",
+        "value": "https://www.lcsc.com/datasheet/C9002.pdf"
+      }
+    ],
+    "symbol": {
+      "ref": "X322512MSB4SI",
+      "file": null
+    },
+    "footprint": {
+      "ref": "Crystal_SMD_3225-4Pin",
+      "file": null
+    },
+    "status": "needs_altium_models"
+  },
+  {
+    "name": "KT-0603R",
+    "folder": "Components/Diodes",
+    "description": "LED red 0603",
+    "comment": "KT-0603R",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "RED"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "Hubei KENTO Elec"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "KT-0603R"
+      },
+      {
+        "name": "Supplier 1",
+        "value": "LCSC"
+      },
+      {
+        "name": "Supplier Part Number 1",
+        "value": "C2286"
+      },
+      {
+        "name": "ComponentLink1Description",
+        "value": "LCSC"
+      },
+      {
+        "name": "ComponentLink1URL",
+        "value": "https://www.lcsc.com/product-detail/C2286.html"
+      },
+      {
+        "name": "ComponentLink2Description",
+        "value": "Datasheet"
+      },
+      {
+        "name": "ComponentLink2URL",
+        "value": "https://www.lcsc.com/datasheet/C2286.pdf"
+      }
+    ],
+    "symbol": {
+      "ref": "KT-0603R",
+      "file": null
+    },
+    "footprint": {
+      "ref": "LED_0603_1608Metric",
+      "file": null
+    },
+    "status": "needs_altium_models"
+  },
+  {
+    "name": "STM32F103C8T6",
+    "folder": "Components/ICs",
+    "description": "ARM Cortex-M3 MCU 64KB Flash",
+    "comment": "STM32F103C8T6",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "STM32F103C8T6"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "STMicroelectronics"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "STM32F103C8T6"
+      },
+      {
+        "name": "Supplier 1",
+        "value": "LCSC"
+      },
+      {
+        "name": "Supplier Part Number 1",
+        "value": "C8734"
+      },
+      {
+        "name": "ComponentLink1Description",
+        "value": "LCSC"
+      },
+      {
+        "name": "ComponentLink1URL",
+        "value": "https://www.lcsc.com/product-detail/C8734.html"
+      },
+      {
+        "name": "ComponentLink2Description",
+        "value": "Datasheet"
+      },
+      {
+        "name": "ComponentLink2URL",
+        "value": "https://www.lcsc.com/datasheet/C8734.pdf"
+      }
+    ],
+    "symbol": {
+      "ref": "STM32F103C8T6",
+      "file": null
+    },
+    "footprint": {
+      "ref": "LQFP-48_7x7mm_P0.5mm",
+      "file": null
+    },
+    "status": "needs_altium_models"
+  },
+  {
+    "name": "AMS1117-3.3",
+    "folder": "Components/ICs",
+    "description": "LDO 3.3V 1A",
+    "comment": "AMS1117-3.3",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "AMS1117-3.3"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "Advanced Monolithic Systems"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "AMS1117-3.3"
+      },
+      {
+        "name": "Supplier 1",
+        "value": "LCSC"
+      },
+      {
+        "name": "Supplier Part Number 1",
+        "value": "C6186"
+      },
+      {
+        "name": "ComponentLink1Description",
+        "value": "LCSC"
+      },
+      {
+        "name": "ComponentLink1URL",
+        "value": "https://www.lcsc.com/product-detail/C6186.html"
+      },
+      {
+        "name": "ComponentLink2Description",
+        "value": "Datasheet"
+      },
+      {
+        "name": "ComponentLink2URL",
+        "value": "https://www.lcsc.com/datasheet/C6186.pdf"
+      }
+    ],
+    "symbol": {
+      "ref": "AMS1117-3.3",
+      "file": null
+    },
+    "footprint": {
+      "ref": "SOT-223-3_TabPin2",
+      "file": null
+    },
+    "status": "needs_altium_models"
+  },
+  {
+    "name": "ESP32-S3-WROOM-1-N16R8",
+    "folder": "Components/ICs",
+    "description": "WiFi/BLE module 16MB flash 8MB PSRAM",
+    "comment": "ESP32-S3-WROOM-1-N16R8",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "ESP32-S3-WROOM-1-N16R8"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "Espressif"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "ESP32-S3-WROOM-1-N16R8"
+      },
+      {
+        "name": "Supplier 1",
+        "value": "LCSC"
+      },
+      {
+        "name": "Supplier Part Number 1",
+        "value": "C2913202"
+      },
+      {
+        "name": "ComponentLink1Description",
+        "value": "LCSC"
+      },
+      {
+        "name": "ComponentLink1URL",
+        "value": "https://www.lcsc.com/product-detail/C2913202.html"
+      },
+      {
+        "name": "ComponentLink2Description",
+        "value": "Datasheet"
+      },
+      {
+        "name": "ComponentLink2URL",
+        "value": "https://www.lcsc.com/datasheet/C2913202.pdf"
+      }
+    ],
+    "symbol": {
+      "ref": "ESP32-S3-WROOM-1-N16R8",
+      "file": null
+    },
+    "footprint": {
+      "ref": "ESP32-S3-WROOM-1",
+      "file": null
+    },
+    "status": "needs_altium_models"
+  },
+  {
+    "name": "TPS62133RGTR",
+    "folder": "Components/ICs",
+    "description": "3-17V 3A step-down converter",
+    "comment": "TPS62133RGTR",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "TPS62133RGTR"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "Texas Instruments"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "TPS62133RGTR"
+      },
+      {
+        "name": "Supplier 1",
+        "value": "LCSC"
+      },
+      {
+        "name": "Supplier Part Number 1",
+        "value": "C73973"
+      },
+      {
+        "name": "ComponentLink1Description",
+        "value": "LCSC"
+      },
+      {
+        "name": "ComponentLink1URL",
+        "value": "https://www.lcsc.com/product-detail/C73973.html"
+      },
+      {
+        "name": "ComponentLink2Description",
+        "value": "Datasheet"
+      },
+      {
+        "name": "ComponentLink2URL",
+        "value": "https://www.lcsc.com/datasheet/C73973.pdf"
+      }
+    ],
+    "symbol": {
+      "ref": "TPS62133RGTR",
+      "file": "../altium_models/SchLib/TPS62133RGTR.SchLib"
+    },
+    "footprint": {
+      "ref": "VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
+      "file": "../altium_models/PcbLib/VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.PcbLib"
+    },
+    "status": "ready"
+  },
+  {
+    "name": "CH340C",
+    "folder": "Components/ICs",
+    "description": "USB to UART bridge internal oscillator",
+    "comment": "CH340C",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "CH340C"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "WCH"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "CH340C"
+      },
+      {
+        "name": "Supplier 1",
+        "value": "LCSC"
+      },
+      {
+        "name": "Supplier Part Number 1",
+        "value": "C84681"
+      },
+      {
+        "name": "ComponentLink1Description",
+        "value": "LCSC"
+      },
+      {
+        "name": "ComponentLink1URL",
+        "value": "https://www.lcsc.com/product-detail/C84681.html"
+      },
+      {
+        "name": "ComponentLink2Description",
+        "value": "Datasheet"
+      },
+      {
+        "name": "ComponentLink2URL",
+        "value": "https://www.lcsc.com/datasheet/C84681.pdf"
+      }
+    ],
+    "symbol": {
+      "ref": "CH340C",
+      "file": "../altium_models/SchLib/CH340C.SchLib"
+    },
+    "footprint": {
+      "ref": "SOIC-16_3.9x9.9mm_P1.27mm",
+      "file": "../altium_models/PcbLib/SOIC-16_3.9x9.9mm_P1.27mm.PcbLib"
+    },
+    "status": "ready"
+  },
+  {
+    "name": "TPS62162DSGR",
+    "folder": "Components/ICs",
+    "description": "3-17V 1A step-down (LCSC number intentionally omitted -> MPN search)",
+    "comment": "TPS62162DSGR",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "TPS62162DSGR"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "Texas Instruments"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "TPS62162DSGR"
+      }
+    ],
+    "symbol": {
+      "ref": "TPS62162DSGR",
+      "file": null
+    },
+    "footprint": {
+      "ref": "WSON-8_2x2mm_P0.5mm",
+      "file": null
+    },
+    "status": "needs_altium_models"
+  },
+  {
+    "name": "RES-0603-10k",
+    "folder": "Components/Resistors",
+    "description": "Resistor 10k 1% 0603",
+    "comment": "=Value",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "10k"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "UNI-ROYAL"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "0603WAF1002T5E"
+      },
+      {
+        "name": "Supplier 1",
+        "value": "LCSC"
+      },
+      {
+        "name": "Supplier Part Number 1",
+        "value": "C25804"
+      },
+      {
+        "name": "ComponentLink1Description",
+        "value": "LCSC"
+      },
+      {
+        "name": "ComponentLink1URL",
+        "value": "https://www.lcsc.com/product-detail/C25804.html"
+      },
+      {
+        "name": "ComponentLink2Description",
+        "value": "Datasheet"
+      },
+      {
+        "name": "ComponentLink2URL",
+        "value": "https://www.lcsc.com/datasheet/C25804.pdf"
+      }
+    ],
+    "symbol": {
+      "ref": "Resistor",
+      "file": "../altium_models/SchLib/Resistor.SchLib"
+    },
+    "footprint": {
+      "ref": "R_0603_1608Metric",
+      "file": "../altium_models/PcbLib/R_0603_1608Metric.PcbLib"
+    },
+    "status": "ready"
+  },
+  {
+    "name": "AO3401A",
+    "folder": "Components/Transistors",
+    "description": "P-MOSFET -30V -4A",
+    "comment": "AO3401A",
+    "parameters": [
+      {
+        "name": "Value",
+        "value": "AO3401A"
+      },
+      {
+        "name": "Manufacturer",
+        "value": "Alpha & Omega Semiconductor"
+      },
+      {
+        "name": "Manufacturer Part Number",
+        "value": "AO3401A"
+      },
+      {
+        "name": "Supplier 1",
+        "value": "LCSC"
+      },
+      {
+        "name": "Supplier Part Number 1",
+        "value": "C15127"
+      },
+      {
+        "name": "ComponentLink1Description",
+        "value": "LCSC"
+      },
+      {
+        "name": "ComponentLink1URL",
+        "value": "https://www.lcsc.com/product-detail/C15127.html"
+      },
+      {
+        "name": "ComponentLink2Description",
+        "value": "Datasheet"
+      },
+      {
+        "name": "ComponentLink2URL",
+        "value": "https://www.lcsc.com/datasheet/C15127.pdf"
+      }
+    ],
+    "symbol": {
+      "ref": "AO3401A",
+      "file": null
+    },
+    "footprint": {
+      "ref": "SOT-23",
+      "file": null
+    },
+    "status": "needs_altium_models"
+  }
+]

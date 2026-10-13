@@ -1,0 +1,22 @@
+ecad-librarian
+Copyright (c) 2026 oliver browne. Licensed under the MIT License (see LICENSE).
+
+This product includes material derived from AltiumSharp
+(https://github.com/issus/AltiumSharp), licensed under the Apache License,
+Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0):
+
+  * ecadlib/altium_lib.py ports the PcbLib/SchLib binary record layouts
+    (primitive common header, track, fill, region and pad records including
+    the pad main-block tail template, SchLib pin records, library/section
+    stream structure) from AltiumSharp's C# readers and writers. Modified:
+    rewritten in Python, reduced to the subset this project writes.
+  * ecadlib/assets/pcblib_template.json.gz holds the Library/Data header
+    parameters and the FileVersionInfo stream extracted from the AltiumSharp
+    TestData file "PCB - LEADLESS - QFN - PSEMI QFN-24 4x4.PcbLib"
+    (FILENAME and 2DCONFIGFULLFILENAME blanked).
+
+tests/nexar/schema.graphql is from NexarDeveloper/nexar-release-component-demo-wpf
+(MIT).
+
+No code from altium-designer-mcp (GPL-3.0) is included; it was read only
+for behavioural notes about which files Altium Designer accepts.

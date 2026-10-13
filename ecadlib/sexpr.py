@@ -4,6 +4,7 @@ Only parses; never evaluates. Safe for untrusted input (bounded by file size).""
 import re
 
 _TOKEN = re.compile(r'\s*(?:(\()|(\))|"((?:[^"\\]|\\.)*)"|([^\s()"]+))', re.S)
+_ESC = {"n": "\n", "r": "\r", "t": "\t"}
 
 
 def parse(text: str):
@@ -20,7 +21,7 @@ def parse(text: str):
             parent.append(cur)
             cur = parent
         elif m.group(3) is not None:
-            cur.append(m.group(3).replace('\\"', '"'))
+            cur.append(re.sub(r"\\(.)", lambda e: _ESC.get(e.group(1), e.group(1)), m.group(3), flags=re.S))
         else:
             cur.append(m.group(4))
     if stack:

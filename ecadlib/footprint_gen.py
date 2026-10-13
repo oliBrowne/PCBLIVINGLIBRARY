@@ -53,8 +53,8 @@ def dim(d):
         return (d, d, d)
     if "min" in d and "max" in d:
         return (d["min"], d.get("nom", (d["min"] + d["max"]) / 2), d["max"])
-    t = d.get("tol", 0.0)
-    return (d["nom"] - t, d["nom"], d["nom"] + t)
+    t = d.get("tol", 0.0)                                  # a one-sided min or max still wins over nom +- tol
+    return (d.get("min", d["nom"] - t), d["nom"], d.get("max", d["nom"] + t))
 
 
 def rup(x, g=0.01):
@@ -176,9 +176,11 @@ def build(spec, density=None):
     if ep:
         ew, eh = dim(ep["length"])[1], dim(ep["width"])[1]
         epnum = str(spec["pin_count"] + 1)
-        inner = min(abs(p[1]) - p[3] / 2 for p in pads if abs(p[1]) > abs(p[2])) if pads else 9
-        if inner - ew / 2 < MIN_PAD_GAP:
-            rep["warning"] = f"EP to pad gap {inner - ew / 2:.3f} < {MIN_PAD_GAP}"
+        lr = (lambda p: abs(p[1]) > abs(p[2])) if t == "qfn" else (lambda p: True)   # gullwing: all pads are L/R
+        gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p in pads if lr(p)]                 # left/right rows vs EP
+        gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p in pads if not lr(p)]            # qfn top/bottom rows vs EP
+        if gaps and min(gaps) < MIN_PAD_GAP:
+            rep["warning"] = f"EP to pad gap {min(gaps):.3f} < {MIN_PAD_GAP}"
         ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu", "F.Mask")))
         cov = ep.get("paste_coverage", 0.6)                           # split paste into N x N windows
         g = ep.get("paste_grid") or max(1, min(4, round(max(ew, eh) / 1.2)))
