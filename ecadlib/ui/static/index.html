@@ -396,6 +396,8 @@ async function preview() {
     if (rep.EP) items.push(["EP", `${rep.EP[0]} × ${rep.EP[1]}`]);
     $("#nums").innerHTML = items.map(([k, v]) => `<div><span class="muted">${k}</span><br>${esc(v)}</div>`).join("") +
       (rep.warning ? `<div class="s-warn" style="grid-column:1/-1">⚠ ${esc(rep.warning)}</div>` : "") +
+      (rep.checks || []).map(c => `<div class="${c.level === "error" ? "s-bad" : "s-warn"}" style="grid-column:1/-1">${c.level === "error" ? "✖" : "⚠"} ${esc(c.rule)}: ${esc(c.message)}</div>`).join("") +
+      (rep.checks && !rep.checks.length ? `<div class="s-ok" style="grid-column:1/-1">✓ Passes the copper, silkscreen, fab and courtyard checks</div>` : "") +
       (r.exists ? `<div class="s-info" style="grid-column:1/-1">A footprint called ${esc(r.name)} is already in the workspace library; approving will ask before replacing it.</div>` : "");
     $("#approve").disabled = false;
   } catch (e) { banner($("#dlgerr"), e.message); $("#approve").disabled = true; }
