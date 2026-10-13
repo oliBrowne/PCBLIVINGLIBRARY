@@ -50,6 +50,34 @@ def test_providers_seeded_cache():
         assert "jlcpcb: MPN -> C999999" in r["notes"] and "not configured: digikey" in r["notes"], r
 
 
+def test_workspace_and_mcp():
+    from ecadlib.app import Workspace
+    from ecadlib import mcp_server as M
+    with tempfile.TemporaryDirectory() as d:
+        ws = Workspace(d, ["examples/kicad_lib"], providers=["digikey"])
+        rel = ws.save_upload("../my bom.csv", Path("examples/sample_bom.csv").read_bytes())
+        assert rel == "uploads/my_bom.csv", rel
+        t = ws.triage(rel)
+        assert len(t["rows"]) == 14 and sum(t["counts"].values()) == 14, t["counts"]
+        before = t["counts"].get("in_library", 0)
+        spec = json.loads(Path("examples/packages/R_0603_1608Metric.json").read_text())
+        pv = ws.preview_footprint(spec)
+        assert pv["svg"].startswith("<svg") and len(pv["report"]["pads"]) == 2
+        ws.approve_footprint(spec)
+        ws.approve_footprint(json.loads(Path("examples/packages/C_0402_1005Metric.json").read_text()))
+        assert ws.triage(rel)["counts"].get("in_library", 0) > before   # approved footprints are found on re-triage
+        try:
+            ws.inside("../../etc/passwd")
+            raise AssertionError("path escape not refused")
+        except ValueError:
+            pass
+        r = M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        assert "triage_bom" in [x["name"] for x in r["result"]["tools"]]
+        r = M.handle(ws, {"id": 2, "method": "tools/call", "params": {"name": "preview_footprint", "arguments": {"spec": spec}}})
+        assert r["result"]["isError"] is False, r
+        assert M.handle(ws, {"method": "notifications/initialized"}) is None
+
+
 def seed(http, method, url, body, payload):
     f = http.dir / f"{http._key(method, url, body)}.json"
     f.write_text(json.dumps({"url": url, "status": 200, "text": json.dumps(payload)}))

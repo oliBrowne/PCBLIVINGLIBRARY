@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 out/http_cache/
 .venv/
+ecadlib_workspace/
