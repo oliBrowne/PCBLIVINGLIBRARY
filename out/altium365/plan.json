@@ -44,13 +44,13 @@
     ],
     "symbol": {
       "ref": "Capacitor",
-      "file": null
+      "file": "out/altium_models/SchLib/Capacitor.SchLib"
     },
     "footprint": {
       "ref": "C_0402_1005Metric",
-      "file": null
+      "file": "out/altium_models/PcbLib/C_0402_1005Metric.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "TYPE-C-31-M-12",
@@ -497,13 +497,13 @@
     ],
     "symbol": {
       "ref": "TPS62133RGTR",
-      "file": null
+      "file": "out/altium_models/SchLib/TPS62133RGTR.SchLib"
     },
     "footprint": {
       "ref": "VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
-      "file": null
+      "file": "out/altium_models/PcbLib/VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "CH340C",
@@ -550,13 +550,13 @@
     ],
     "symbol": {
       "ref": "CH340C",
-      "file": null
+      "file": "out/altium_models/SchLib/CH340C.SchLib"
     },
     "footprint": {
       "ref": "SOIC-16_3.9x9.9mm_P1.27mm",
-      "file": null
+      "file": "out/altium_models/PcbLib/SOIC-16_3.9x9.9mm_P1.27mm.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "TPS62162DSGR",
@@ -632,13 +632,13 @@
     ],
     "symbol": {
       "ref": "Resistor",
-      "file": null
+      "file": "out/altium_models/SchLib/Resistor.SchLib"
     },
     "footprint": {
       "ref": "R_0603_1608Metric",
-      "file": null
+      "file": "out/altium_models/PcbLib/R_0603_1608Metric.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "AO3401A",
