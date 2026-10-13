@@ -52,7 +52,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "Capacitor",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -62,7 +62,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "C_0402_1005Metric",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
@@ -167,7 +167,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "TPS62133RGTR",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -177,7 +177,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
@@ -242,7 +242,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "CH340C",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -252,7 +252,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "SOIC-16_3.9x9.9mm_P1.27mm",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
@@ -322,7 +322,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "Resistor",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -332,7 +332,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "R_0603_1608Metric",
         "footprintFiles": [
           {
             "fileId": "<fileId>",

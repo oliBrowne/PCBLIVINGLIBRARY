@@ -79,7 +79,7 @@ def test_push_exits_nonzero_when_a_part_fails():
     class Bad(A.Nexar):
         def __init__(self, token): pass
         def release_defs(self, ws): return {}
-        def find_component(self, ws, name): raise A.NexarError("boom")
+        def find(self, ws, name): raise A.NexarError("boom")
     real, old = A.Nexar, os.environ.get("NEXAR_TOKEN")
     A.Nexar, os.environ["NEXAR_TOKEN"] = Bad, "t"
     try:
