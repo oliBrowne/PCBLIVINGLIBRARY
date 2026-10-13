@@ -203,6 +203,10 @@ def main(argv=None):
         tri = pd.read_csv(a.triage, dtype=str).fillna("") if a.triage else None
         items = plan(lines, tri, a.models, a.root)
         out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
+        for i in items:                        # model paths relative to the plan file, so push works from any cwd
+            for k in ("symbol", "footprint"):
+                if i[k]["file"]:
+                    i[k]["file"] = os.path.relpath(i[k]["file"], out.parent.resolve())
         out.write_text(json.dumps(items, indent=2))
         ready = sum(i["status"] == "ready" for i in items)
         print(f"{len(items)} components planned, {ready} ready, {len(items) - ready} need Altium models -> {out}")
@@ -220,6 +224,10 @@ def main(argv=None):
                 print(f"{w['name']:<30} {w['url']}")
             return
         items = json.loads(Path(a.plan).read_text())
+        for i in items:
+            for k in ("symbol", "footprint"):
+                if i[k]["file"]:
+                    i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
         results = push(items, client, a.workspace, dry_run=a.dry_run)
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work
         hint = " (token rejected: check it has design.domain, user.access, openid)" if "401" in str(e) else ""

@@ -111,6 +111,18 @@ def test_update_op_matches_nexar_schema():
     assert not validate(schema, parse(A.M_UPDATE_PARAMS))
 
 
+def test_plan_paths_survive_cwd_change():
+    """plan.json stores model paths relative to itself, so push can run from any folder."""
+    import subprocess, sys
+    root = Path(__file__).resolve().parents[1]
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "sub" / "plan.json"
+        subprocess.run([sys.executable, "-m", "ecadlib.altium365", "plan", "examples/sample_bom.csv", "--models",
+                        "out/altium_models", "-o", str(out)], cwd=root, check=True, capture_output=True)
+        files = [i[k]["file"] for i in json.loads(out.read_text()) for k in ("symbol", "footprint") if i[k]["file"]]
+        assert files and all(not os.path.isabs(f) and (out.parent / f).exists() for f in files), files
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
