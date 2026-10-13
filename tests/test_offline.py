@@ -95,6 +95,23 @@ def test_altium365_plan_and_push():
         assert {r["action"] for r in dry} == {"release", "skip"}, dry
 
 
+def test_altium365_ops_match_nexar_schema():
+    """Every query/mutation, and a release input built by plan(), validates against Nexar's schema."""
+    try:
+        from graphql import build_schema, parse, validate
+        from graphql.execution.values import get_variable_values
+    except ImportError:
+        print("skip test_altium365_ops_match_nexar_schema (pip install graphql-core)"); return
+    schema = build_schema(Path("tests/nexar/schema.graphql").read_text(), assume_valid_sdl=True)
+    for op in (A.Q_WORKSPACES, A.Q_DEFS, A.Q_FIND, A.M_RELEASE, A.M_UPDATE_PARAMS):
+        assert not validate(schema, parse(op)), op
+    item = A.plan([{"designator": "U1", "mpn": "CH340C", "footprint": "SOIC-16"}])[0]
+    inp = A.release_input(item, "https://ws", {}, ([("a.SchLib", "f1")], [("b.PcbLib", "f2")]))
+    var_defs = parse(A.M_RELEASE).definitions[0].variable_definitions
+    res = get_variable_values(schema, var_defs, {"input": inp})
+    assert not isinstance(res, list), [e.message for e in res]
+
+
 def seed(http, method, url, body, payload):
     f = http.dir / f"{http._key(method, url, body)}.json"
     f.write_text(json.dumps({"url": url, "status": 200, "text": json.dumps(payload)}))

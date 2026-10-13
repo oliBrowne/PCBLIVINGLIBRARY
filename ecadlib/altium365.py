@@ -208,13 +208,16 @@ def main(argv=None):
     if not token and not (a.cmd == "push" and a.dry_run):
         sys.exit("set NEXAR_TOKEN (Nexar portal token with design.domain, user.access, openid scopes)")
     client = Nexar(token) if token else None
-    if a.cmd == "workspaces":
-        for w in client.workspaces():
-            print(f"{w['name']:<30} {w['url']}")
-        return
-
-    items = json.loads(Path(a.plan).read_text())
-    results = push(items, client, a.workspace, dry_run=a.dry_run)
+    try:
+        if a.cmd == "workspaces":
+            for w in client.workspaces():
+                print(f"{w['name']:<30} {w['url']}")
+            return
+        items = json.loads(Path(a.plan).read_text())
+        results = push(items, client, a.workspace, dry_run=a.dry_run)
+    except Exception as e:                     # auth / network / GraphQL errors before any per-part work
+        hint = " (token rejected: check it has design.domain, user.access, openid)" if "401" in str(e) else ""
+        sys.exit(f"Nexar request failed: {type(e).__name__}: {e}{hint}")
     out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=2))
     for r in results:
