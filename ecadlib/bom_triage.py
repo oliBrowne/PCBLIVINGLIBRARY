@@ -47,6 +47,8 @@ def map_headers(headers, threshold=0.72):
                 best = max(best, sc)
             if f != "lcsc" and re.search(r"\b(lcsc|jlc|jlcpcb)\b", nh):
                 best *= 0.5                                              # 'LCSC Part Number' is not the MPN
+            if f == "mpn" and re.search(r"\b(supplier|distributor|digi ?key|mouser|farnell|newark|arrow|tme|vendor)\b", nh):
+                best *= 0.5                                              # nor is a distributor's order code
             if f == "manufacturer" and re.search(r"\b(part|pn|number|no)\b", nh):
                 best *= 0.6                                              # 'Mfr Part #' is not the maker
             scores.append((best, f, h))
@@ -58,10 +60,19 @@ def map_headers(headers, threshold=0.72):
     return mapping
 
 
+def _read_csv(p):
+    for enc in ("utf-8-sig", "cp1252"):                                  # Excel 'CSV' on Windows is cp1252
+        try:
+            return pd.read_csv(p, header=None, dtype=str, sep=None, engine="python", encoding=enc)
+        except UnicodeDecodeError:
+            continue
+    return pd.read_csv(p, header=None, dtype=str, sep=None, engine="python", encoding="latin-1")
+
+
 def read_bom(path):
     p = Path(path)
     raw = (pd.read_excel(p, header=None, dtype=str) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls")
-           else pd.read_csv(p, header=None, dtype=str, sep=None, engine="python"))
+           else _read_csv(p))
     raw = raw.fillna("")
     hdr_row = max(range(min(10, len(raw))), key=lambda i: len(map_headers(list(raw.iloc[i]))))  # header may not be row 0
     headers = [str(h).strip() for h in raw.iloc[hdr_row]]
@@ -73,6 +84,11 @@ def read_bom(path):
         d = {f: str(row[h]).strip() for f, h in mapping.items()}
         if not any(d.values()):
             continue
+        if lines and d.get("designator") and not any(v for f, v in d.items() if f != "designator"):
+            prev, q = lines[-1], re.match(r"\s*(\d+)", lines[-1].get("qty", ""))
+            if q and len(re.findall(r"[A-Za-z]+\d+", prev["designator"])) < int(q.group(1)):
+                prev["designator"] += ", " + d["designator"]            # designator list wrapped onto the next row
+                continue
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
         lines.append(d)
@@ -164,7 +180,7 @@ def write_reports(rows, mapping, provs, http, out, bom):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out.with_suffix(".csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ["line", "status"])
         w.writeheader()
         w.writerows(rows)
     counts = pd.Series([r["status"] for r in rows]).value_counts()

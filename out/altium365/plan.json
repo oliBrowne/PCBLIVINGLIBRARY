@@ -44,11 +44,11 @@
     ],
     "symbol": {
       "ref": "Capacitor",
-      "file": "out/altium_models/SchLib/Capacitor.SchLib"
+      "file": "../altium_models/SchLib/Capacitor.SchLib"
     },
     "footprint": {
       "ref": "C_0402_1005Metric",
-      "file": "out/altium_models/PcbLib/C_0402_1005Metric.PcbLib"
+      "file": "../altium_models/PcbLib/C_0402_1005Metric.PcbLib"
     },
     "status": "ready"
   },
@@ -497,11 +497,11 @@
     ],
     "symbol": {
       "ref": "TPS62133RGTR",
-      "file": "out/altium_models/SchLib/TPS62133RGTR.SchLib"
+      "file": "../altium_models/SchLib/TPS62133RGTR.SchLib"
     },
     "footprint": {
       "ref": "VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
-      "file": "out/altium_models/PcbLib/VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.PcbLib"
+      "file": "../altium_models/PcbLib/VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.PcbLib"
     },
     "status": "ready"
   },
@@ -550,11 +550,11 @@
     ],
     "symbol": {
       "ref": "CH340C",
-      "file": "out/altium_models/SchLib/CH340C.SchLib"
+      "file": "../altium_models/SchLib/CH340C.SchLib"
     },
     "footprint": {
       "ref": "SOIC-16_3.9x9.9mm_P1.27mm",
-      "file": "out/altium_models/PcbLib/SOIC-16_3.9x9.9mm_P1.27mm.PcbLib"
+      "file": "../altium_models/PcbLib/SOIC-16_3.9x9.9mm_P1.27mm.PcbLib"
     },
     "status": "ready"
   },
@@ -632,11 +632,11 @@
     ],
     "symbol": {
       "ref": "Resistor",
-      "file": "out/altium_models/SchLib/Resistor.SchLib"
+      "file": "../altium_models/SchLib/Resistor.SchLib"
     },
     "footprint": {
       "ref": "R_0603_1608Metric",
-      "file": "out/altium_models/PcbLib/R_0603_1608Metric.PcbLib"
+      "file": "../altium_models/PcbLib/R_0603_1608Metric.PcbLib"
     },
     "status": "ready"
   },
