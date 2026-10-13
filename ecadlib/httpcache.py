@@ -39,9 +39,10 @@ class CachedHTTP:
     def _key(self, method, url, body):
         return hashlib.sha256(f"{method}\n{url}\n{body or ''}".encode()).hexdigest()[:32]
 
-    def request(self, method, url, body=None, headers=None):
+    def request(self, method, url, body=None, headers=None, cache=True):
+        """cache=False: never read or store (credentials in the URL or body, tokens in the response)."""
         f = self.dir / f"{self._key(method, url, body)}.json"
-        if f.exists() and (self.offline or time.time() - f.stat().st_mtime < self.ttl):   # offline: stale beats nothing
+        if cache and f.exists() and (self.offline or time.time() - f.stat().st_mtime < self.ttl):   # offline: stale beats nothing
             d = json.loads(f.read_text())
             self.log.append((method, url, d["status"], True))
             return Response(d["status"], d["text"], from_cache=True)
@@ -61,7 +62,7 @@ class CachedHTTP:
             self.log.append((method, url, msg, False))
             return Response(0, "", error=msg)
         self.log.append((method, url, r.status_code, False))
-        if 200 <= r.status_code < 300 or r.status_code == 404:
+        if cache and (200 <= r.status_code < 300 or r.status_code == 404):
             tmp = f.with_suffix(".tmp")
             tmp.write_text(json.dumps({"url": url, "status": r.status_code, "text": r.text}))
             os.replace(tmp, f)
