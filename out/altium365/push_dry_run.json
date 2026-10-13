@@ -1,0 +1,72 @@
+[
+  {
+    "name": "CAP-0402-100nF",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "TYPE-C-31-M-12",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "SM04B-SRSS-TB(LF)(SN)",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "FTSH-105-01-L-DV-K",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "X322512MSB4SI",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "KT-0603R",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "STM32F103C8T6",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "AMS1117-3.3",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "ESP32-S3-WROOM-1-N16R8",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "TPS62133RGTR",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "CH340C",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "TPS62162DSGR",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "RES-0603-10k",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  },
+  {
+    "name": "AO3401A",
+    "action": "skip",
+    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+  }
+]
