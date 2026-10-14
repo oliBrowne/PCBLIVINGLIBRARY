@@ -625,7 +625,7 @@ def import_part(spec, out, http, step=False, write=True, gen_step=True, layers=N
         rep["ok"] = True
         if write:                             # provenance for `upstream check-kicad` (never fails the part)
             from .upstream import record
-            record(out, spec, rep, http, step, gen_step)
+            record(out, spec, rep, http, step, gen_step, layers)
     except Exception as e:                    # report per part, keep going
         rep["error"] = f"{type(e).__name__}: {e}"
     return rep
