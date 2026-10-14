@@ -187,8 +187,21 @@ def item_from_node(node, ws, now, rules=None):
 
 
 # ---------------------------------------------------------------- three-way comparison
-def local_fields(it):
-    return {"parameters": {p["name"]: p["value"] for p in it.get("parameters") or []},
+def _hname(it, k, rules):
+    """The name parameter k of item it has in the workspace: a pulled item already uses the workspace's names, a
+    plan item uses ecadlib's (push renames them to the rules' house names)."""
+    return k if is_a365(it) else _param_name(k, rules)
+
+
+def _cname(k, rules):
+    """ecadlib's name for workspace parameter k (inverse of the rules' [parameters] names)."""
+    inv = {v: c for c, v in (((rules or {}).get("parameters") or {}).get("names") or {}).items()}
+    return inv.get(k, k)
+
+
+def local_fields(it, rules=None):
+    """The plan item's side of the comparison, parameter names as push would send them."""
+    return {"parameters": {_hname(it, p["name"], rules): p["value"] for p in it.get("parameters") or []},
             "comment": it.get("comment") or "", "description": it.get("description") or "", "folder": _norm(it.get("folder")),
             "symbol": (it.get("symbol") or {}).get("ref") or "", "footprint": (it.get("footprint") or {}).get("ref") or ""}
 
@@ -220,30 +233,30 @@ def three_way(base, ws, local, mirror=True, cleared=()):
             one(f, "", base[f], ws[f], local[f])
     bm = [base.get("symbols"), base.get("footprints")]
     wm = [ws["symbols"], ws["footprints"]]
-    if bm != [None, None] and bm != wm:
+    if mirror and bm != [None, None] and bm != wm:     # a linked plan item keeps its own model files
         out.append(("models", "", "workspace", bm, wm, bm))
     return out
 
 
-def _set_param(it, k, v):
+def _set_param(it, k, v, rules=None):
+    """Set workspace parameter k (workspace name) on the item, under the name the item uses for it."""
     ps = it.setdefault("parameters", [])
-    cur = next((p for p in ps if p["name"] == k), None)
+    cur = next((p for p in ps if _hname(it, p["name"], rules) == k), None)
     if v is MISSING:
         if cur:
             ps.remove(cur)
-        if k not in it.setdefault("cleared", []) and not is_a365(it):
-            it["cleared"].append(k)                    # linked item: make push drop it too
+        if not is_a365(it) and not any(_hname(it, c, rules) == k for c in it.setdefault("cleared", [])):
+            it["cleared"].append(_cname(k, rules))     # linked item: make push drop it too
     elif cur:
         cur["value"] = v
     else:
-        ps.append({"name": k, "value": v})
-        if k in (it.get("cleared") or []):
-            it["cleared"].remove(k)
+        ps.append({"name": k if is_a365(it) else _cname(k, rules), "value": v})
+        it["cleared"] = [c for c in it.get("cleared") or [] if _hname(it, c, rules) != k]
 
 
-def _take(it, field, key, w):
+def _take(it, field, key, w, rules=None):
     if field == "parameters":
-        _set_param(it, key, w)
+        _set_param(it, key, w, rules)
     elif field in ("symbol", "footprint"):
         it.setdefault(field, {})["ref"] = w
         it[field]["file"] = None                       # a different model now: fetch again
@@ -304,7 +317,8 @@ def sync(items, nodes, state=None, prefer=None, apply=False, import_new=True, fo
         snap = snapshot(node)
         new_state[node["name"]] = {**snap, "in_plan": True}
         if not link:
-            diffs = three_way({}, snap, local_fields(it), mirror=False, cleared=it.get("cleared") or ())
+            diffs = three_way({}, snap, local_fields(it, rules), mirror=False,
+                               cleared=[_hname(it, c, rules) for c in it.get("cleared") or ()])
             row(it["name"], "linked", detail="in the workspace already: push updates it instead of releasing it"
                 + (f"; {sum(d[0] == 'parameters' for d in diffs)} parameter(s) differ" if diffs else ""))
             for f, k, side, b, w, l in diffs:
@@ -325,7 +339,7 @@ def sync(items, nodes, state=None, prefer=None, apply=False, import_new=True, fo
             if apply and is_a365(it):
                 it["name"] = node["name"]
         mirror = link.get("mirror", is_a365(it))
-        diffs = three_way(base, snap, local_fields(it), mirror, it.get("cleared") or ())
+        diffs = three_way(base, snap, local_fields(it, rules), mirror, [_hname(it, c, rules) for c in it.get("cleared") or ()])
         sides = {d[2] for d in diffs}
         open_conf = []
         for f, k, side, b, w, l in diffs:
@@ -333,7 +347,7 @@ def sync(items, nodes, state=None, prefer=None, apply=False, import_new=True, fo
             if side == "workspace":
                 row(it["name"], "changed_in_workspace", label, _show(l), _show(w), _show(b), "taken from the workspace" if apply else "")
                 if apply:
-                    _take(it, f, k, w)
+                    _take(it, f, k, w, rules)
             elif side == "local":
                 why = "push sends it" if f in PUSHABLE else "not pushable: Nexar has no mutation for it, change it in Altium"
                 row(it["name"], "changed_locally", label, _show(l), _show(w), _show(b), why)
@@ -343,7 +357,7 @@ def sync(items, nodes, state=None, prefer=None, apply=False, import_new=True, fo
                         "workspace wins" + ("; plan value kept in a365.overwritten" if apply else ""))
                     if apply:
                         link.setdefault("overwritten", []).append({"field": label, "plan": l, "workspace": w, "at": now})
-                        _take(it, f, k, w)
+                        _take(it, f, k, w, rules)
                 elif prefer == "local":
                     row(it["name"], "conflict", label, _show(l), _show(w), _show(b),
                         "plan wins: push sends it" if f in PUSHABLE else "plan kept; not pushable, change it in Altium")
@@ -528,8 +542,12 @@ def save_meta(plan, items):
 def reuse_existing(items, old_items, rules=None):
     """Librarian hook: a BOM part that is already a workspace component (same name or MPN as a pulled item in the
     previous plan) is replaced by that item, so nothing is fetched for it. Pulled items the BOM does not use are
-    kept at the end of the plan. Returns (items, {name of reused item})."""
+    kept at the end of the plan; a BOM part `a365 pull` linked keeps its link. Returns (items, {name of reused item})."""
     from .kicad_index import norm_mpn
+    linked = {i["name"]: i["a365"] for i in old_items if i.get("a365") and not is_a365(i)}
+    if linked:                                 # keep the link (and its snapshot): push then refuses to overwrite
+        items = [dict(it, a365=copy.deepcopy(linked[it["name"]]))  # workspace edits made since the last pull
+                 if it["name"] in linked and not it.get("a365") else it for it in items]
     pulled = [i for i in old_items if is_a365(i)]
     if not pulled:
         return items, set()
@@ -556,10 +574,10 @@ def reuse_existing(items, old_items, rules=None):
     return out, used | {i["name"] for i in pulled}
 
 
-def _load_rules(path):
+def _load_rules(path, start="."):
     if RU is not None and hasattr(RU, "load"):
         try:
-            return RU.load(path) if path else RU.load()
+            return RU.load(path, start=start)          # found from the plan's folder, as `altium365 push` does
         except Exception as e:
             print(f"a365: rules not loaded ({type(e).__name__}: {e}); using defaults", file=sys.stderr)
     elif path:
@@ -586,7 +604,7 @@ def main(argv=None):
             p.add_argument("--prefer", choices=("workspace", "local"), default="workspace",
                            help="who wins a conflict (default: workspace)")
     a = ap.parse_args(argv)
-    rules = _load_rules(a.rules)
+    rules = _load_rules(a.rules, Path(a.plan).parent)
     ws = a.workspace or ((rules or {}).get("altium365") or {}).get("workspace")
     if not ws:
         print("a365: give --workspace URL (see `ecadlib altium365 workspaces`)", file=sys.stderr); return 2
