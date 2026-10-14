@@ -10,6 +10,7 @@
     ecadlib dblib-sync plan.json --to DIR [--svn] Altium without 365: sync a plan into a .DbLib/.SVNDbLib folder
     ecadlib librarian BOM --lib ... -o out/lib    BOM -> missing parts filled -> Altium models + plan + review
     ecadlib release-check plan.json [--allow P]   hold back plan items that fail the pre-release checks
+    ecadlib kicad-export plan.json -o DIR --name LIB   the same library as KiCad files (.kicad_sym, .pretty)
     ecadlib upstream  check-kicad|check-a365 ...  upstream change alerts (KiCad sources, Altium 365 drift)
 
 `ecadlib <command> -h` shows that command's options."""
@@ -27,6 +28,7 @@ COMMANDS = {
     "dblib-sync": ("ecadlib.altium_dblib_sync", "sync a plan into an Altium .DbLib / .SVNDbLib library folder"),
     "librarian": ("ecadlib.librarian", "BOM to library: fill missing parts, plan, release check"),
     "release-check": ("ecadlib.release_check", "pre-release checks on an altium365 plan"),
+    "kicad-export": ("ecadlib.kicad_export", "librarian plan -> KiCad .kicad_sym / .pretty / .3dshapes"),
     "upstream": ("ecadlib.upstream", "KiCad upstream changes and Altium 365 drift"),
 }
 
