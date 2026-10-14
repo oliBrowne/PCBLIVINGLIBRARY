@@ -1,0 +1,62 @@
+{
+  "name": "SOT-23-6",
+  "description": "SOT-23-6 (MO-178AB)",
+  "package_type": "gullwing",
+  "pin_count": 6,
+  "lead_span": {
+    "nom": 2.8,
+    "tol": 0.0
+  },
+  "body_width": {
+    "nom": 1.6,
+    "tol": 0.0
+  },
+  "body_length": {
+    "nom": 2.9,
+    "tol": 0.0
+  },
+  "terminal_width": {
+    "min": 0.3,
+    "max": 0.5
+  },
+  "terminal_length": {
+    "min": 0.3,
+    "max": 0.6
+  },
+  "pin_positions": [
+    {
+      "number": "1",
+      "side": "L",
+      "offset": -0.95
+    },
+    {
+      "number": "2",
+      "side": "L",
+      "offset": 0
+    },
+    {
+      "number": "3",
+      "side": "L",
+      "offset": 0.95
+    },
+    {
+      "number": "4",
+      "side": "R",
+      "offset": 0.95
+    },
+    {
+      "number": "5",
+      "side": "R",
+      "offset": 0
+    },
+    {
+      "number": "6",
+      "side": "R",
+      "offset": -0.95
+    }
+  ],
+  "density": "B",
+  "source": {
+    "drawing": "KiCad footprint generator size definitions (gitlab.com/kicad/libraries/kicad-footprint-generator, data/package/gullwing/sot.yaml, JEDEC MO-178AB)"
+  }
+}

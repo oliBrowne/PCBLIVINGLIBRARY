@@ -5,7 +5,8 @@
     ecadlib ui        --lib <kicad libs>          local web UI in your browser
     ecadlib mcp       --lib <kicad libs>          MCP server (stdio) for Claude and other agents
     ecadlib triage    BOM --lib ... -o out/x      BOM triage report (.md + .csv)
-    ecadlib footprint gen|compare ...             IPC-7351B footprint generator
+    ecadlib footprint gen|compare ...             IPC-7351B footprint generator (also BGA, pin headers, connectors, pad tables)
+    ecadlib footprint-bench [--offline]           compare generated footprints with KiCad's official ones, pad by pad
     ecadlib dblib     BOM -o out/altium           Altium DbLib (SQLite + XLSX + .DbLib)
     ecadlib altium-lib pcblib|schlib|dump ...     write/read Altium .PcbLib/.SchLib files
     ecadlib altium365 plan|workspaces|push ...    Altium 365 release via Nexar
@@ -36,6 +37,7 @@ COMMANDS = {
     "triage": ("ecadlib.bom_triage", "BOM triage report"),
     "footprint": ("ecadlib.footprint_gen", "IPC-7351B footprint generator"),
     "check": ("ecadlib.footprint_check", "check .kicad_mod files against KLC/IPC rules"),
+    "footprint-bench": ("ecadlib.footprint_bench", "compare generated footprints (BGA, connectors, ...) with KiCad's official ones"),
     "dblib": ("ecadlib.altium_export", "Altium DbLib export"),
     "altium-lib": ("ecadlib.altium_lib", "Altium .PcbLib/.SchLib writer"),
     "altium365": ("ecadlib.altium365", "Altium 365 release via Nexar"),

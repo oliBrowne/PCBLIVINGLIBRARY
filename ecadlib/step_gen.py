@@ -19,6 +19,8 @@ Families (package_schema.json `package_type`, else parsed from the footprint nam
   qfp       LQFP/TQFP/QFP: four rows of gull-wing leads
   qfn       QFN/DFN/SON: body, bottom terminals flush with the edge, exposed pad, mould between them
   TH        PinHeader_RxC_P2.54/2.00/1.27mm_Vertical, C/CP_Radial_D..mm_P..mm, R/D_Axial / D_DO-35/41/201AD
+  bga       BGA/LGA/CSP: balls on the footprint_adv grid (depopulated balls left out) under a flat body, A1 dot
+  connector connector / custom pad_table specs: box over the body, pins through the plated holes, flat SMD contacts
 Height: --height, else the spec's height_max, else the CP_EIA-xxxx-HH suffix, else HEIGHT below, else the middle
 of release_check.HEIGHTS for the family.
 
@@ -387,8 +389,72 @@ def axial(spec, H=None):
     return out
 
 
+def bga(spec, H):
+    """BGA / LGA / CSP: balls (8-sided prisms, the collapsed ball height) under a flat body, A1 dot on top.
+    Balls sit where footprint_adv puts the pads (same grid, same depopulated balls)."""
+    from .footprint_adv import bga_balls
+    Bx, By = _n(spec, "body_length"), _n(spec, "body_width")
+    e = spec["pitch"]
+    ey = spec.get("pitch_y") or e
+    rows, cols = spec["rows"], spec["cols"]
+    d = _n(spec, "ball_diameter") or 1.25 * _n(spec, "land_diameter")
+    lga = spec.get("ball_type") == "lga"
+    A1 = 0.05 if lga else min(0.8 * d, 0.5 * H)        # standoff: lands are flush, balls collapse to ~80 %
+    out = []
+    for name, i, j in bga_balls(spec):
+        x, y = (j - (cols - 1) / 2) * e, -((i - (rows - 1) / 2) * ey)
+        out.append(prism(rect(d / 2, d / 2, x, y) if lga else circle(d / 2, x, y, 8), A1, (0, 0, 0),
+                         name=f"ball {name}", color=COL["metal"]))
+    out.append(box(-Bx / 2, -By / 2, A1, Bx / 2, By / 2, H - MARK_T, "body", COL["body"]))
+    r = min(0.4, 0.06 * min(Bx, By))
+    out.append(mark_dot(-(Bx / 2 - 2 * r), By / 2 - 2 * r, r, H - MARK_T))
+    return out
+
+
+def connector(spec, H):
+    """Connector / custom part from its pad table: a box over the body outline, a pin through every plated hole
+    (3 mm below the board) and a flat contact on every SMD pad; pin 1 marked on the body top."""
+    from .footprint_adv import table_geometry
+    pads, body, _, _, _, _ = table_geometry(spec)
+    out = []
+    if body is None:
+        xs = [p["x"] + s * p["w"] / 2 for p in pads for s in (-1, 1)]
+        ys = [p["y"] + s * p["h"] / 2 for p in pads for s in (-1, 1)]
+        body = (min(xs), min(ys), max(xs), max(ys))
+    x0, y0, x1, y1 = body[0], -body[3], body[2], -body[1]          # KiCad y down -> y up
+    for p in pads:
+        if p.get("via") or p["kind"] == "np_thru_hole":
+            continue
+        x, y = p["x"], -p["y"]
+        if p["kind"] == "thru_hole":
+            a = 0.64 * min(p["drill"]) / 0.95 if min(p["drill"]) < 0.95 else 0.64
+            hx, hy = (a / 2, (max(p["drill"]) - min(p["drill"]) + a) / 2) if p["drill"][1] > p["drill"][0] else \
+                ((max(p["drill"]) - min(p["drill"]) + a) / 2, a / 2)
+            out.append(box(x - hx, y - hy, -3.0, x + hx, y + hy, min(H, 1.0), f"pin {p['num']}", COL["gold"]))
+        else:
+            w, h = (p["w"], p["h"]) if not p.get("poly") else (p["w"], p["h"])
+            out.append(box(x - 0.4 * w, y - 0.4 * h, 0, x + 0.4 * w, y + 0.4 * h, 0.1, f"pin {p['num']}", COL["metal"]))
+    out.append(box(x0, y0, 0.1, x1, y1, H - MARK_T, "body", COL["led"] if spec["package_type"] == "connector" else COL["body"]))
+    p1 = next((p for p in pads if p["num"] in ("1", "A1")), None)
+    if p1:
+        mx = min(max(p1["x"], x0 + 0.4), x1 - 0.4)
+        my = min(max(-p1["y"], y0 + 0.4), y1 - 0.4)
+        out.append(mark_dot(mx, my, 0.25, H - MARK_T))
+    return out
+
+
+def _header_any(spec, H=None):
+    """pin_header specs from package_schema: SMD headers have their origin at the centre (footprint_adv), not pin 1."""
+    out = pin_header(dict(spec, cols=spec.get("cols", 1)), H)
+    if spec.get("mount") == "smd":
+        dx, dy = -(spec.get("cols", 1) - 1) * spec["pitch"] / 2, (spec["rows"] - 1) * spec["pitch"] / 2
+        for so in out:
+            so.verts = [(x + dx, y + dy, z) for x, y, z in so.verts]
+    return out
+
+
 BUILDERS = {"chip": chip, "molded": molded, "gullwing": gullwing, "qfp": qfp, "qfn": qfn,
-            "pin_header": pin_header, "radial": radial, "axial": axial}
+            "pin_header": _header_any, "radial": radial, "axial": axial, "bga": bga, "connector": connector, "custom": connector}
 
 
 # ---------------------------------------------------------------- footprint names -> spec

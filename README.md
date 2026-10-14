@@ -64,7 +64,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `held_parts`, `part_candidates` and `choose_part` (fix a held part), `approval_status` and `approve_part` (sign-off; `user` is required, the agent must pass the person's own name), `find_duplicates` (with `merge`), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed), `sim_models` (SPICE/IBIS models; `attach` writes them) and `list_example_specs`.
-3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
 * `uploads/`
@@ -86,6 +86,8 @@ ecad-librarian/
 ├── README.md
 ├── ecadlib/
 │   ├── footprint_gen.py      # IPC-7351B generator -> .kicad_mod  (+ `compare` vs a reference footprint)
+│   ├── footprint_adv.py      # BGA/LGA/CSP, pin headers, connectors, odd shapes (pad_table from the datasheet drawing)
+│   ├── footprint_bench.py    # pad-by-pad comparison with KiCad's official footprints
 │   ├── package_schema.json   # JSON Schema: the datasheet-dimension contract an LLM fills
 │   ├── bom_triage.py         # BOM CSV/XLSX -> triage report (.md + .csv)
 │   ├── providers.py          # Provider interface: EasyEDA, JLCPCB search, + DigiKey/Mouser/Nexar/SnapMagic/SamacSys stubs
@@ -165,6 +167,58 @@ ecadlib check <any.kicad_mod> ...          # KLC-style rule check, works on KiCa
 | Diodes, tantalum | SMA, SMB, SOD-123, SOD-323, tantalum A | IPC-7351B result; KiCad draws these by hand from the maker's land, so give `land` to match it exactly |
 
 All 26 pass the rule check, as do all 27 KiCad reference footprints.
+
+### Harder footprints: BGAs, connectors and odd shapes (`footprint_adv.py`)
+
+```
+ecadlib footprint gen ecadlib/package_specs/advanced/*.json -o out/footprints/ecadlib.pretty
+ecadlib footprint-bench [--offline] [--fixture tests/fixtures/kicad_bench.json] [--save-fixture FILE]
+```
+
+* `bga` (BGA/LGA/CSP): `rows` x `cols` at `pitch` (`pitch_y`), rows lettered A, B, ... from the top without I O Q S X Z
+  (JEDEC; AA after Y), columns numbered from the left. Missing balls as `depopulated` names or ranges (`"E5:J9"`) or as a
+  `ball_map` (one string per row, `-` = no ball). Land: the datasheet's `land_diameter`, else IPC-7351B from the nominal
+  `ball_diameter` (collapsing balls −25 % from 0.55 mm, −20 % from 0.25 mm, −15 % below; non-collapsing +5 %; LGA =
+  terminal). `land_style` NSMD (mask 0.05 mm bigger) or SMD (copper 0.05 mm bigger, mask = land). Courtyard body + 1.0 mm.
+  Silk and fab mark the A1 corner.
+* `pin_header`: 1 or 2 columns, through-hole (pin 1 at the origin, square pad 1, KiCad's drill/pad per pitch) or SMD
+  (`land`, single rows alternate sides).
+* `connector` and `custom`: a `pad_table` copied from the datasheet's land-pattern drawing in the drawing's own terms:
+  `unit` (mm, mil, in), `y_axis` (up, down), `view` (top, bottom = mirrored), `origin` (center, pin1, datum +
+  `center_at`), then `pads` and `arrays` (N pads at a pitch). Pads can be SMD, plated through-hole (round or slot:
+  `drill` + `drill_h`) or NPTH; `MP`/`SH` pads are mounting/shield pads, not pins; `polygon` pads for odd shapes;
+  `paste: "grid"` splits a big pad's paste into windows; `thermal_vias`; `keepouts`; `same_net` for stacked pads (USB-C).
+  Through-hole pads with only a drill get KiCad's connector rule (drill + 1.0 mm, at most pitch − 0.8 mm across the
+  row). The footprint origin is pin 1 for through-hole parts and the centre for SMD (KiCad). Courtyard: the union of
+  pads and body, + 0.5 mm, traced as one outline.
+* **Table checks** (`check_pad_table`, errors stop the build, warnings go in the report): mils typed as mm, pin count,
+  duplicate or skipped numbers, overlapping pads, a pad off the row pitch (misread coordinate), one or two pads that
+  break an otherwise symmetric pattern, pin 1 in the middle of a row or not at 0,0 when the drawing's origin is pin 1,
+  annular ring.
+* **`footprint_check`** now also knows: ball grids (A1 top-left and marked on silk and fab, every ball on the grid,
+  land 35–65 % of the pitch, JEDEC row letters); mounting/shield pads (left out of pin-1 and numbering rules);
+  dual-row zig-zag numbering; stacked USB-C GND/VBUS pads (a warning); polygon pads (exact gaps); NPTH clearance;
+  a courtyard outline that is not a rectangle. All 20 KiCad references below pass it with no errors.
+* **3D:** `step_gen` builds BGA bodies with balls (depopulated ones left out) and connector boxes with pins and contacts.
+* **Altium:** `footprint_gen.altium_footprint(spec)` converts through-hole and custom parts with `kicad_import`'s converter
+  (a polygon pad becomes its bounding rectangle in Altium, noted).
+
+`ecadlib footprint-bench` compares every pad (centre, size, drill) and the courtyard with KiCad's official footprint
+(fetched from gitlab.com and cached; `tests/fixtures/kicad_bench.json` keeps just the numbers for offline tests). Run
+2026-10-14:
+
+| Kind | Parts | Pads within 0.01 mm | Courtyard |
+|---|---|---|---|
+| BGA | BGA-256 1.0 mm, BGA-100, BGA-324 0.8 mm (rows to V), BGA-144 (centre E5:J9 depopulated), UFBGA-132 (ring missing, ball map) | 956/956 | 5/5 |
+| Pin headers | 1x05 / 2x05 2.54 mm, 1x05 2.00 mm, 2x05 1.27 mm, three SMD headers | 55/55 | 5/7 (KiCad's SMD header courtyard also wraps the lead tails, which the spec doesn't give) |
+| Connectors | JST XH 2 and 4 pin, JST PH SMD, JST SH SMD, Molex KK 254 (table in mil), Molex PicoBlade (bottom-view drawing from pin 1), USB-C HRO TYPE-C-31-M-12 (datum origin, slots, NPTH, stacked pads) | 50/50 | 7/7 |
+| IC | SOT-23-6 | 6/6 | 1/1 |
+
+1067/1067 pads (100 %), 20/20 footprints, 18/20 courtyards, 20/20 clean in `footprint_check`. The connector and header
+specs carry the datasheet's numbers (pitch, pad sizes, hole sizes, body), which KiCad's library also follows, so these
+rows mostly test the frame handling (units, y axis, bottom view, origins), the derived pad sizes and the courtyard; the
+BGA lands are computed from the ball size (except UFBGA-132, whose land comes from the ST datasheet). Not checked: real
+PDFs through `datasheet.py` (no API key here), and the generated through-hole and BGA files opened in Altium Designer.
 
 ---|---|---|---|---|---|
 | R_0603_1608Metric | 0.825×0.91 @0.7925 | 0.80×0.95 @0.825 | +0.025 / −0.04 | −0.033 | 2.92×1.42 / 2.96×1.46 |
