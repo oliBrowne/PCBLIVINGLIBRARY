@@ -77,6 +77,19 @@ def test_known_runtime_files_present():
     assert any((PKG / "package_specs").glob("*.json"))
 
 
+
+def test_release_marks_prereleases():
+    """The `gh release create` --prerelease test in release.yml, run in bash for each PEP 440 kind of tag."""
+    import shutil, subprocess
+    line = next(l for l in (ROOT / ".github" / "workflows" / "release.yml").read_text().splitlines() if "--prerelease" in l)
+    expr = re.search(r"\$\((.*)\)", line).group(1)
+    if not shutil.which("bash"):
+        print("skip  no bash")
+        return
+    for tag, pre in (("v0.2.0", False), ("v1.0.0.post1", False), ("v0.3.0rc1", True), ("v0.3.0b2", True), ("v0.3.0.dev1", True)):
+        out = subprocess.run(["bash", "-c", f"echo $({expr})"], env={"GITHUB_REF_NAME": tag}, capture_output=True, text=True).stdout
+        assert (out.strip() == "--prerelease") == pre, (tag, out)
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_"):
