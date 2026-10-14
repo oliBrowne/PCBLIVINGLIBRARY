@@ -292,7 +292,8 @@ def test_github_pr_branch_with_gh_cli():
     assert ["add", "--", "lib/PcbLib/USB_C_16P.PcbLib", "lib/manifest.json"] in git
     commit = next(g for g in git if "commit" in g)
     assert "user.name=ecadlib-upkeep" in commit                          # no git identity configured: a bot one
-    assert ["push", "--force", "-u", "origin", "ecadlib/upkeep-2026-10-12"] in git
+    assert ["push", "--force-with-lease=refs/heads/ecadlib/upkeep-2026-10-12:", "-u", "origin", "ecadlib/upkeep-2026-10-12"] in git
+    assert not any(g[:1] == ["push"] and "--force" in g for g in git)    # never a blind force push
     gha = [(c[3], c[4].split("/", 3)[3], json.loads(i) if i else None) for c, i in run.calls if c[0] == "gh"]
     pr = next(x for x in gha if x[:2] == ("POST", "pulls"))[2]
     assert (pr["head"], pr["base"]) == ("ecadlib/upkeep-2026-10-12", "main") and "## Applied" in pr["body"]
@@ -310,6 +311,78 @@ def test_github_pr_branch_with_gh_cli():
     assert not any(c[1] == "switch" for c, _ in run.calls if c[0] == "git")
     run = FakeRunner()
     assert UK.publish(_rep(1), "pr", UK.GitHub(runner=run), run)["kind"] == "issue"   # report-only run
+
+
+def test_pr_rerun_never_overwrites_a_persons_commits():
+    """Real git against a local bare remote: a same-day re-run replaces upkeep's own branch, but refuses when a person
+    pushed a fix to it (the old blind --force push deleted that commit)."""
+    import subprocess
+    if not __import__("shutil").which("git"):
+        return
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        sh = lambda *a, cwd: subprocess.run(a, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+        remote, work, human = d / "remote.git", d / "work", d / "human"
+        sh("git", "init", "-q", "--bare", str(remote), cwd=d)
+        sh("git", "clone", "-q", str(remote), str(work), cwd=d)
+        for c in (work,):
+            sh("git", "config", "user.email", "a@b", cwd=c), sh("git", "config", "user.name", "a", cwd=c)
+        (work / "lib.txt").write_text("v1\n")
+        sh("git", "add", ".", cwd=work), sh("git", "commit", "-qm", "init", cwd=work)
+        sh("git", "push", "-q", "origin", "HEAD", cwd=work)
+
+        class GH:
+            def api(self, m, p, body=None):
+                return [] if m == "GET" else {"number": 1}
+
+            def ensure_label(self):
+                pass
+        rep, br = _rep(1, [str(work / "lib.txt")]), "ecadlib/upkeep-2026-10-12"
+        (work / "lib.txt").write_text("v2\n")
+        assert UK.publish_pr(rep, GH(), cwd=work)["branch"] == br
+        (work / "lib.txt").write_text("v3\n")
+        assert UK.publish_pr(rep, GH(), cwd=work)["branch"] == br             # upkeep's own branch: replaced
+        assert sh("git", "log", "--format=%s", br, cwd=remote).splitlines()[0].startswith("ecadlib upkeep ")
+        assert len(sh("git", "log", "--format=%s", br, cwd=remote).splitlines()) == 2
+        sh("git", "clone", "-q", "-b", br, str(remote), str(human), cwd=d)
+        sh("git", "config", "user.email", "h@b", cwd=human), sh("git", "config", "user.name", "h", cwd=human)
+        (human / "fix.txt").write_text("hand fix\n")
+        sh("git", "add", ".", cwd=human), sh("git", "commit", "-qm", "hand fix", cwd=human), sh("git", "push", "-q", cwd=human)
+        (work / "lib.txt").write_text("v4\n")
+        try:
+            UK.publish_pr(rep, GH(), cwd=work)
+            raise AssertionError("overwrote a person's commit")
+        except UK.GitHubError as e:
+            assert "hand fix" in str(e)
+        assert sh("git", "log", "-1", "--format=%s", br, cwd=remote) == "hand fix"
+
+
+def test_pr_lookup_ignores_fork_prs_with_the_same_branch_name():
+    fork = {"number": 8, "head": {"ref": "ecadlib/upkeep-2026-10-12", "repo": {"full_name": "someone/fork"}},
+            "base": {"repo": {"full_name": "me/lib"}}}
+    run = FakeRunner(prs=[fork])
+    res = UK.publish(_rep(1, ["lib/x.PcbLib"]), "pr", UK.GitHub(runner=run), run)
+    assert (res["action"], res["number"]) == ("opened", 5), res
+    assert ("PATCH", "pulls/8") not in [(c[3], c[4].split("/", 3)[3]) for c, _ in run.calls if c[0] == "gh"]
+
+
+def test_sourcing_unpriced_line_does_not_carry_a_price_across_currencies():
+    with tempfile.TemporaryDirectory() as d:
+        bom = Path(d) / "bom.csv"
+        bom.write_text(TS.BOM)
+        w, st = World(), Path(d) / "state"
+        st.mkdir()
+        from ecadlib.kicad_index import norm_mpn
+        (st / "sourcing_state.json").write_text(json.dumps({"version": 1, "updated": NOW1, "lines": {
+            norm_mpn("0603WAF1002T5E"): {"mpn": "0603WAF1002T5E", "unit": 99.0, "currency": "EUR", "distributor": "X",
+                                         "in_stock": 2, "checked": NOW1}}}))
+        for s in w.nexar["0603WAF1002T5E"]["sellers"]:
+            for o in s["offers"]:
+                o["prices"] = []
+        w.jlc["C25804"]["componentPrices"] = []
+        UK.run(bom, ["sourcing"], st, Path(d) / "r", ctx=w.ctx(), now=NOW2)
+        line = json.loads((st / "sourcing_state.json").read_text())["lines"][norm_mpn("0603WAF1002T5E")]
+        assert line["currency"] == "USD" and line["unit"] is None, line          # not 99 EUR relabelled as USD
 
 
 def test_cli_exit_codes_and_failed_github_keeps_state():
