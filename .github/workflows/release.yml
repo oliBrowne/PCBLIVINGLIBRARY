@@ -1,0 +1,89 @@
+name: release
+
+# Push a tag like v0.2.0 (matching ecadlib.__version__ and a "## [0.2.0]" CHANGELOG section)
+# to build, smoke-test, create the GitHub release and publish to PyPI.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install build twine
+      - name: Tag matches the package version and the changelog
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(python -c 'import ecadlib; print(ecadlib.__version__)')"
+          [ "$tag" = "$ver" ] || { echo "::error::tag $GITHUB_REF_NAME but ecadlib.__version__ is $ver"; exit 1; }
+          grep -q "^## \[$ver\] - " CHANGELOG.md || { echo "::error::CHANGELOG.md has no '## [$ver] - DATE' section"; exit 1; }
+      - name: Run the test suite
+        env:
+          SOURCE_DATE_EPOCH: "1791936000"
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m tests.run_all
+      - run: python -m build
+      - run: python -m twine check --strict dist/*
+      - name: Smoke-test the installed wheel and sdist
+        run: |
+          for dist in dist/*.whl dist/*.tar.gz; do
+            rm -rf /tmp/venv && python -m venv /tmp/venv
+            /tmp/venv/bin/pip install -q "$dist"
+            (cd /tmp && /tmp/venv/bin/python "$GITHUB_WORKSPACE/.github/scripts/smoke_installed.py" "$GITHUB_REF_NAME")
+          done
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" v "\\]" {on=1; next}
+            on && /^## \[/ {exit}
+            on && /^\[[^]]+\]: / {exit}
+            on {print}' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+          cat release-notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/
+            release-notes.md
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "ecadlib ${GITHUB_REF_NAME#v}" --notes-file release-notes.md \
+            $([[ "$GITHUB_REF_NAME" == *[abc]* ]] && echo --prerelease)
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ecadlib/
+    permissions:
+      id-token: write          # PyPI trusted publishing (OIDC); no API token is stored
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
