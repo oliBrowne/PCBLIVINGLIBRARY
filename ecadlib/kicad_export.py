@@ -9,6 +9,8 @@ Writes into DIR:
                      the supplier part numbers (LCSC = C1525) and the plan's other parameters
   <lib>.pretty/      one .kicad_mod per footprint, renamed to the plan's footprint name
   <lib>.3dshapes/    the STEP models the footprints point at (${KIPRJMOD}/<lib>.3dshapes/X.step)
+  <lib>.sim/         SPICE model files of parts with an attached simulation model (`ecadlib sim-models --attach`);
+                     their symbols carry Sim.Device / Sim.Library "<lib>.sim/<file>" / Sim.Name / Sim.Pins / Sim.Params
   sym-lib-table, fp-lib-table   tables with the one library each (uri ${KIPRJMOD}/...): copy DIR's contents
                      into the project folder, or paste the `lib` lines into the project's tables
   kicad_export.json  what came from where, and the checks below
@@ -516,6 +518,11 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print):
             sym = sym_kicad8(sym)
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
             set_fields(sym, plan_fields(it, lib, row["footprint"], props))
+            if it.get("sim_model"):               # attached by `ecadlib sim-models --attach`: Sim.* fields + model file
+                from .sim_models import kicad_export_fields
+                sim = kicad_export_fields(it, plan_dir, out / f"{lib}.sim", f"{lib}.sim", notes)
+                set_fields(sym, sim)
+                row["sim"] = dict(sim).get("Sim.Name") or dict(sim).get("Sim.Device")
             symbols[sname] = sym
             row["symbol"] = how
             if row["footprint"]:
