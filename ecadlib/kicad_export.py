@@ -239,18 +239,27 @@ def symbol_from_schlib(path, name, notes):
         return ["fill", ["type", "outline" if r.get("AREACOLOR") == str(AL.BLUE) else "background"]]
     units, pins, ref, value_at, ref_at, params = {}, [], "U", (0, 0), (0, 0), []
     owner = lambda r: (max(1, int(r.get("OWNERPARTID", r.get("part", 1)) or 1)), int(r.get("OWNERPARTDISPLAYMODE", r.get("mode", 0)) or 0) + 1)
+    spots = {}                                # (part, mode, x, y, orient) -> first visible pin there
     for r in recs[1:]:
         kind = r.get("RECORD")
         if kind == "2":
             d = {0: (1, 0), 1: (0, 1), 2: (-1, 0), 3: (0, -1)}[r["orient"]]
             x, y, L = r["x"] * 0.254, r["y"] * 0.254, r["length"] * 0.254
             nm = _kicad_pin_name(r["name"]) or "~"
-            pin = ["pin", ETYPE_K.get(r["etype"], "passive"), _pin_shape(r["symbols"], r["num"], notes),
+            spot = (r["part"], r["mode"], r["x"], r["y"], r["orient"])
+            lead = spots.get(spot) if not r["conglomerate"] & 0x04 else None
+            etype = ETYPE_K.get(r["etype"], "passive")
+            if lead is not None:              # stacked on a visible pin (Altium joins pins at one point): KiCad shows one,
+                etype = "passive" if lead["etype"] == 7 else etype      # the rest hidden, passive under a power pin (KLC S4.3)
+                K._note(notes, "stacked pins written as one visible pin and hidden ones at the same spot")
+            elif not r["conglomerate"] & 0x04:
+                spots[spot] = r
+            pin = ["pin", etype, _pin_shape(r["symbols"], r["num"], notes),
                    ["at", _num(x + L * d[0]), _num(y + L * d[1]), str((r["orient"] * 90 + 180) % 360)], ["length", _num(L)]]
-            if r["conglomerate"] & 0x04:
+            if r["conglomerate"] & 0x04 or lead is not None:
                 pin.append("hide")
             pin += [["name", Q(nm), _effects()], ["number", Q(r["num"]), _effects()]]
-            if r["etype"] == 7:
+            if r["etype"] == 7 and lead is None:
                 K._note(notes, "Altium power pins written as KiCad power_in")
             units.setdefault((max(1, r["part"]), r["mode"] + 1), []).append(pin)
             pins.append(r)
@@ -306,8 +315,10 @@ def symbol_from_schlib(path, name, notes):
     return sym
 
 
-def load_symbol(item, plan_dir, http, libs, name, notes):
-    """-> (KiCad symbol tree, how). Reuses KiCad / EasyEDA sources; else reads the SchLib back."""
+def load_symbol(item, plan_dir, http, libs, name, notes, rules=None):
+    """-> (KiCad symbol tree, how). Reuses KiCad / EasyEDA sources; else reads the SchLib back. An EasyEDA symbol
+    big enough for the grouped layout ([symbols] layout_pins) is read back from the SchLib, which the librarian
+    wrote with its pins grouped (ecadlib.symbol_layout), so both libraries show the same symbol."""
     src = str((item.get("source") or {}).get("symbol") or "")
     why = []
     try:
@@ -327,9 +338,18 @@ def load_symbol(item, plan_dir, http, libs, name, notes):
             res = (r.json().get("result") or {}) if r.ok else {}
             ds = res.get("dataStr") or {}
             if ds.get("shape"):
-                t = sexpr.parse(EC.symbol_to_kicad(ds, name, "", {}, notes), keep_quotes=True)
-                return K._find_symbol(t, name), f"EasyEDA {lcsc} (converted again with easyeda_convert)"
-            why.append(f"EasyEDA {lcsc}: " + ("no single-unit symbol" if r.ok else r.error or f"HTTP {r.status}"))
+                sub = []
+                t = sexpr.parse(EC.symbol_to_kicad(ds, name, "", {}, sub), keep_quotes=True)
+                ks = K._find_symbol(t, name)
+                f = item["symbol"].get("file")
+                npins = len({str(sexpr.first(p, "number")[1]) for u in sexpr.find(ks, "symbol") for p in sexpr.find(u, "pin")})
+                from . import symbol_layout as SL
+                if not (SL.wants_layout(npins, rules) and f and (plan_dir / f).exists()):
+                    notes.extend(sub)
+                    return ks, f"EasyEDA {lcsc} (converted again with easyeda_convert)"
+                why.append(f"EasyEDA {lcsc}: {npins} pins, grouped by function in the SchLib")
+            else:
+                why.append(f"EasyEDA {lcsc}: " + ("no single-unit symbol" if r.ok else r.error or f"HTTP {r.status}"))
     except (IOError, ValueError, KeyError) as e:
         why.append(f"{src}: {type(e).__name__}: {e}")
     f = item["symbol"].get("file")
@@ -524,7 +544,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
             rep["parts"].append(row)
             continue
         try:
-            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes)
+            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules)
             sym = sym_kicad8(sym)
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
             set_fields(sym, plan_fields(it, lib, row["footprint"], props, rules))

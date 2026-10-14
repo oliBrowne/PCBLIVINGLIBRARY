@@ -541,10 +541,16 @@ def pin_rec(num, name, etype, orient, x, y, length, show=True, hidden=False, par
     return block(b, flag=1)
 
 
-def ic_symbol(name, pins, description="", designator="U?", footprint=None, comment="*"):
+def ic_symbol(name, pins, description="", designator="U?", footprint=None, comment="*", layout=None, rules=None):
     """Rectangular IC: pins = [{'num','name','type','side' in left/right/top/bottom, optional 'shape'}], listed
     top->bottom (left/right) or left->right (top/bottom). 'shape' is a PIN_SHAPE name ('inverted', 'clock', ...) or
-    {slot: PIN_SYMBOL name} (see pin_symbols); '~{EN}' in a name is overlined. Body grows to fit pin names (100 mil grid)."""
+    {slot: PIN_SYMBOL name} (see pin_symbols); '~{EN}' in a name is overlined. Body grows to fit pin names (100 mil grid).
+    layout: None = pins grouped by function (ecadlib.symbol_layout, 'side' ignored) when there are at least the rules'
+    [symbols] layout_pins pins, True = always, False = never. rules: loaded rules or [symbols] overrides (None = defaults)."""
+    if layout is not False:
+        from . import symbol_layout as SL
+        if layout or SL.wants_layout(pins, rules):
+            return SL.build(name, pins, description, designator, footprint, comment, rules)
     bad = [p.get("num") for p in pins if p.get("side", "left") not in ORIENT]
     if bad:
         raise ValueError(f"{name}: pins {bad} have a side other than {list(ORIENT)}")
@@ -586,13 +592,15 @@ def capacitor_symbol(name="Capacitor", description="Capacitor (non-polarised)", 
             "prims": prims, "label_at": ((-15, 11), (-15, -18))}
 
 
-def symbol_from_json(d):
+def symbol_from_json(d, rules=None):
+    """Symbol JSON -> symbol dict. An IC's optional "layout": true/false forces the grouped layout on/off (see ic_symbol)."""
     kind = d.get("template", "ic")
     if kind == "resistor":
         return resistor_symbol(d.get("name", "Resistor"), d.get("description", "Resistor"), d.get("footprint"))
     if kind == "capacitor":
         return capacitor_symbol(d.get("name", "Capacitor"), d.get("description", "Capacitor"), d.get("footprint"))
-    return ic_symbol(d["name"], d["pins"], d.get("description", ""), d.get("designator", "U?"), d.get("footprint"))
+    return ic_symbol(d["name"], d["pins"], d.get("description", ""), d.get("designator", "U?"), d.get("footprint"),
+                     layout=d.get("layout"), rules=rules)
 
 
 def _xy(kv, pts):                             # polyline/polygon vertices: LocationCount, X1/Y1 (+ _Frac), ...
