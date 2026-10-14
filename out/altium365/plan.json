@@ -97,13 +97,13 @@
     ],
     "symbol": {
       "ref": "TYPE-C-31-M-12",
-      "file": null
+      "file": "../altium_models_kicad/SchLib/TYPE-C-31-M-12.SchLib"
     },
     "footprint": {
       "ref": "USB_C_Receptacle_16P",
-      "file": null
+      "file": "../altium_models_kicad/PcbLib/USB_C_Receptacle_16P.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "SM04B-SRSS-TB(LF)(SN)",
@@ -150,13 +150,13 @@
     ],
     "symbol": {
       "ref": "SM04B-SRSS-TB(LF)(SN)",
-      "file": null
+      "file": "../altium_models_kicad/SchLib/SM04B-SRSS-TB(LF)(SN).SchLib"
     },
     "footprint": {
       "ref": "JST_SH_SM04B-SRSS-TB",
-      "file": null
+      "file": "../altium_models_kicad/PcbLib/JST_SH_SM04B-SRSS-TB.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "FTSH-105-01-L-DV-K",
@@ -179,13 +179,13 @@
     ],
     "symbol": {
       "ref": "FTSH-105-01-L-DV-K",
-      "file": null
+      "file": "../altium_models_kicad/SchLib/FTSH-105-01-L-DV-K.SchLib"
     },
     "footprint": {
       "ref": "Samtec_FTSH-105-01-L-DV-K",
-      "file": null
+      "file": "../altium_models_kicad/PcbLib/Samtec_FTSH-105-01-L-DV-K.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "X322512MSB4SI",
@@ -232,13 +232,13 @@
     ],
     "symbol": {
       "ref": "X322512MSB4SI",
-      "file": null
+      "file": "../altium_models_kicad/SchLib/X322512MSB4SI.SchLib"
     },
     "footprint": {
       "ref": "Crystal_SMD_3225-4Pin",
-      "file": null
+      "file": "../altium_models_kicad/PcbLib/Crystal_SMD_3225-4Pin.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "KT-0603R",
@@ -285,13 +285,13 @@
     ],
     "symbol": {
       "ref": "KT-0603R",
-      "file": null
+      "file": "../altium_models_kicad/SchLib/KT-0603R.SchLib"
     },
     "footprint": {
       "ref": "LED_0603_1608Metric",
-      "file": null
+      "file": "../altium_models_kicad/PcbLib/LED_0603_1608Metric.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "STM32F103C8T6",
@@ -338,13 +338,13 @@
     ],
     "symbol": {
       "ref": "STM32F103C8T6",
-      "file": null
+      "file": "../altium_models_kicad/SchLib/STM32F103C8T6.SchLib"
     },
     "footprint": {
       "ref": "LQFP-48_7x7mm_P0.5mm",
-      "file": null
+      "file": "../altium_models_kicad/PcbLib/LQFP-48_7x7mm_P0.5mm.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "AMS1117-3.3",
@@ -391,13 +391,13 @@
     ],
     "symbol": {
       "ref": "AMS1117-3.3",
-      "file": null
+      "file": "../altium_models_kicad/SchLib/AMS1117-3.3.SchLib"
     },
     "footprint": {
       "ref": "SOT-223-3_TabPin2",
-      "file": null
+      "file": "../altium_models_kicad/PcbLib/SOT-223-3_TabPin2.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "ESP32-S3-WROOM-1-N16R8",
@@ -444,13 +444,13 @@
     ],
     "symbol": {
       "ref": "ESP32-S3-WROOM-1-N16R8",
-      "file": null
+      "file": "../altium_models_kicad/SchLib/ESP32-S3-WROOM-1-N16R8.SchLib"
     },
     "footprint": {
       "ref": "ESP32-S3-WROOM-1",
-      "file": null
+      "file": "../altium_models_kicad/PcbLib/ESP32-S3-WROOM-1.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "TPS62133RGTR",
@@ -579,13 +579,13 @@
     ],
     "symbol": {
       "ref": "TPS62162DSGR",
-      "file": null
+      "file": "../altium_models_kicad/SchLib/TPS62162DSGR.SchLib"
     },
     "footprint": {
       "ref": "WSON-8_2x2mm_P0.5mm",
-      "file": null
+      "file": "../altium_models_kicad/PcbLib/WSON-8_2x2mm_P0.5mm.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   },
   {
     "name": "RES-0603-10k",
@@ -685,12 +685,12 @@
     ],
     "symbol": {
       "ref": "AO3401A",
-      "file": null
+      "file": "../altium_models_kicad/SchLib/AO3401A.SchLib"
     },
     "footprint": {
       "ref": "SOT-23",
-      "file": null
+      "file": "../altium_models_kicad/PcbLib/SOT-23.PcbLib"
     },
-    "status": "needs_altium_models"
+    "status": "ready"
   }
 ]

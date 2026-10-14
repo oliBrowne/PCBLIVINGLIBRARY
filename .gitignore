@@ -1,4 +1,5 @@
 __pycache__/
 *.pyc
 out/http_cache/
+out/altium_models_kicad/
 .venv/

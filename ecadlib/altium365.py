@@ -5,7 +5,7 @@ per part, with its parameters and the symbol (.SchLib) and footprint (.PcbLib) f
 Then `push` releases new components and keeps parameters of existing ones up to date.
 
     python -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
-        --models out/altium365_models -o out/altium365/plan.json
+        --models out/altium_models --models out/altium_models_kicad -o out/altium365/plan.json
     python -m ecadlib.altium365 workspaces                                   # needs NEXAR_TOKEN
     python -m ecadlib.altium365 push out/altium365/plan.json --workspace URL [--dry-run]
 
@@ -15,7 +15,7 @@ Flow per part (mirrors NexarDeveloper/nexar-release-component-demo-wpf, schema a
   3. desReleaseComponent(input)                   symbol + footprint + component in one call
 Release needs real Altium binaries: one symbol per .SchLib, one footprint per .PcbLib, under
 --models/SchLib/<Library Ref>.SchLib and --models/PcbLib/<Footprint Ref>.PcbLib. Parts without
-them are planned as `needs_altium_models` (convert our KiCad output with Altium's KiCad importer).
+them are planned as `needs_altium_models` (altium_lib writes ours; kicad_import converts KiCad library parts).
 
 Auth: NEXAR_TOKEN = a user access token with scopes openid, user.access, design.domain
 (the token generated in the Nexar portal has them). Supply-only client-credential tokens
@@ -104,9 +104,16 @@ class Nexar:
 
 
 # ------------------------------------------------------------------ plan
+def find_model(models, kind, ref):
+    """First <dir>/<kind>/<ref>.<kind> over the --models dirs, in the order given."""
+    return next((str(f) for f in (Path(m) / kind / f"{ref}.{kind}" for m in models) if f.exists()), None)
+
+
 def plan(lines, triage=None, models=None, root="Components"):
-    """One release item per unique Part Number, reusing the DbLib row builder for parameters."""
-    models = Path(models) if models else None
+    """One release item per unique Part Number, reusing the DbLib row builder for parameters.
+    models: a folder or a list of folders, each with SchLib/<Library Ref>.SchLib and PcbLib/<Footprint Ref>.PcbLib;
+    symbol and footprint are looked up independently, first folder wins."""
+    models = [models] if isinstance(models, (str, Path)) else list(models or [])
     items, names = [], set()
     for cat, df in to_rows(lines, triage).items():
         for row in df.to_dict("records"):
@@ -115,8 +122,7 @@ def plan(lines, triage=None, models=None, root="Components"):
             names.add(row["Part Number"])
             sym = fp = None
             if models:
-                s, f = models / "SchLib" / f"{row['Library Ref']}.SchLib", models / "PcbLib" / f"{row['Footprint Ref']}.PcbLib"
-                sym, fp = (str(s) if s.exists() else None), (str(f) if f.exists() else None)
+                sym, fp = find_model(models, "SchLib", row["Library Ref"]), find_model(models, "PcbLib", row["Footprint Ref"])
             params = [{"name": k, "value": str(v)} for k, v in row.items()
                       if k not in RESERVED and k not in ("Part Number", "Comment") and str(v)]
             items.append({
@@ -187,7 +193,8 @@ def main(argv=None):
     p = sub.add_parser("plan", help="build a release plan from a BOM")
     p.add_argument("bom")
     p.add_argument("--triage", help="triage CSV from bom_triage")
-    p.add_argument("--models", help="folder with SchLib/<ref>.SchLib and PcbLib/<ref>.PcbLib")
+    p.add_argument("--models", action="append", default=[],
+                   help="folder with SchLib/<ref>.SchLib and PcbLib/<ref>.PcbLib; repeat to search several, first wins")
     p.add_argument("--root", default="Components", help="workspace folder to release components under")
     p.add_argument("-o", "--out", default="out/altium365/plan.json")
     sub.add_parser("workspaces", help="list workspaces visible to NEXAR_TOKEN")
