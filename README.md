@@ -24,6 +24,9 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
 
    A browser tab opens at `http://127.0.0.1:8765`.
    * **Check a BOM:** drop in a CSV or XLSX, whether it's an Altium BOM, an Altium ActiveBOM, a KiCad BOM or a hand-made spreadsheet. A progress bar runs while parts are looked up. You then get a table of what is already in your library, what a part source can supply, what needs a footprint, and what is DNP. You can filter it by status or by search.
+   * **Fill the library:** one button runs the librarian on the BOM. It finds each missing symbol and footprint (official KiCad libraries, then EasyEDA, then the datasheet reader), writes the Altium files, and runs the release check. Each part shows where its symbol and footprint came from and what still needs a person. Parts that fail the check are held back from Altium 365; **Release anyway…** overrides that after you have looked (it is recorded in the plan), and **Hold again** takes it back.
+
+     ![Fill the library](docs/ui-librarian.png)
    * **Make a footprint:** click **Generate…** on a missing part. It picks a matching example package when one exists. Enter the datasheet dimensions, preview the IPC-7351B land pattern, and approve it. Approving writes a KiCad `.kicad_mod` and an Altium `.PcbLib`, and asks before replacing an existing footprint. The BOM is then re-checked automatically.
    * **Send to Altium:** there are three options.
      * **Export DbLib** writes the SQLite/XLSX/.DbLib set.
@@ -40,7 +43,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    claude mcp add ecadlib -- ecadlib mcp --lib /path/to/libs --workspace /path/to/workspace
    ```
 
-   Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false) and `list_example_specs`.
+   Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed) and `list_example_specs`.
 3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib dblib`, `ecadlib altium-lib` and `ecadlib altium365`. Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:

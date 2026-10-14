@@ -53,6 +53,10 @@ td code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; fo
 .pill { border-radius: 6px; padding: 2px 7px; font-size: 12px; white-space: nowrap; }
 .muted { color: var(--muted); }
 .small { font-size: 12.5px; }
+.scroll { overflow-x: auto; max-width: 100%; }
+button.small { padding: 3px 8px; font-size: 12.5px; white-space: nowrap; }
+ul.why { margin: 0; padding-left: 16px; }
+#libout td.mono { word-break: normal; white-space: nowrap; }
 .banner { border-radius: 8px; padding: 9px 12px; margin: 10px 0; white-space: pre-wrap; display: flex; gap: 10px; justify-content: space-between; align-items: start; }
 .banner button { padding: 0 8px; border: none; background: transparent; color: inherit; font-size: 16px; }
 .progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 8px; }
@@ -116,6 +120,15 @@ a { color: var(--accent); }
       <tbody id="rows"></tbody>
     </table></div>
     <div class="muted small" id="shown" style="margin-top:6px"></div>
+  </section>
+
+  <section class="card" id="libcard" hidden>
+    <div class="row spread">
+      <div><h2>Fill the library</h2>
+      <p class="muted small" style="margin:2px 0 0">Finds every missing symbol and footprint (official KiCad libraries, then EasyEDA, then the datasheet), converts them to Altium files and checks each part before release. Parts that fail a check are held back from Altium 365 until you look at them.</p></div>
+      <div class="row"><button id="librun">Fill missing parts</button><button id="librerun" hidden>Redo all</button></div>
+    </div>
+    <div class="out" id="libout"></div>
   </section>
 
   <section class="card" id="export" hidden>
@@ -247,7 +260,7 @@ async function runJob(start, label) {
       if (j.total) setBusy(true, `Checking ${label}: line ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? " (" + j.label + ")" : ""}`, j.done / j.total);
       if (j.state === "done") {
         current = j.result; filter = null; $("#q").value = ""; planned = null;
-        ["#dblibout", "#modelsout", "#planout", "#dryout"].forEach(s => $(s).innerHTML = "");
+        ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true;
         $("#dry").disabled = $("#push").disabled = true; render(); break;
       }
       if (j.state === "error") throw new Error(j.error);
@@ -258,7 +271,7 @@ async function runJob(start, label) {
 
 function render() {
   const t = current;
-  $("#results").hidden = false; $("#export").hidden = false;
+  $("#results").hidden = false; $("#export").hidden = false; $("#libcard").hidden = false;
   $("#bomname").textContent = t.bom.split("/").pop();
   $("#mapping").textContent = "Columns used: " + Object.entries(t.mapping).map(([k, v]) => `${k} ← "${v}"`).join(", ");
   $("#reportmd").href = fileUrl(t.reports[0]); $("#reportcsv").href = fileUrl(t.reports[1]);
@@ -329,8 +342,9 @@ $("#plan").addEventListener("click", e => action(e.target, $("#planout"), async 
       $("#wsurl").hidden = false; $("#push").disabled = !w.workspaces.length || !planned.ready;
     } catch (err) { banner($("#planout"), "Couldn't list Altium 365 workspaces: " + err.message); }
   }
-  const why = i => !i.symbol.file && !i.footprint.file ? "needs symbol and footprint" : !i.symbol.file ? `needs symbol ${i.symbol.ref}.SchLib` : `needs footprint ${i.footprint.ref}.PcbLib`;
-  return `<strong>${planned.ready} of ${planned.total}</strong> parts ready to release. ${fileLink(planned.plan)}
+  const why = i => i.status === "held" ? "held: " + ((i.hold_reasons || [])[0] || "failed the release check") :
+    !i.symbol.file && !i.footprint.file ? "needs symbol and footprint" : !i.symbol.file ? `needs symbol ${i.symbol.ref}.SchLib` : `needs footprint ${i.footprint.ref}.PcbLib`;
+  return `<strong>${planned.ready} of ${planned.total}</strong> parts ready to release${planned.source === "librarian" ? " (from Fill the library, after its release check)" : ""}. ${fileLink(planned.plan)}
     <table style="margin-top:6px"><tbody>${planned.items.map(i => `<tr><td>${esc(i.name)}<div class="muted">${esc(i.folder)}</div></td>
     <td>${i.status === "ready" ? '<span class="pill s-ok">ready</span>' : `<span class="pill s-warn">${esc(why(i))}</span>`}</td></tr>`).join("")}</tbody></table>`;
 }));
@@ -348,6 +362,57 @@ $("#push").addEventListener("click", e => {
     return `Pushed: ${r.results.filter(x => x.action === "release").length} released, ${r.results.filter(x => x.action === "update_parameters").length} updated, ${bad.length} failed. Report: ${fileLink(r.report)}` +
       (bad.length ? `<div class="muted">${bad.map(b => esc(b.name + ": " + b.detail)).join("<br>")}</div>` : "");
   });
+});
+
+// ---- librarian
+let libbusy = false;
+async function librarian(refresh) {
+  if (libbusy || busy) return;
+  libbusy = true; $("#librun").disabled = $("#librerun").disabled = true; banner($("#libout"), "");
+  setBusy(true, "Filling the library…");
+  try {
+    const { job } = await api("/api/librarian/run", { bom: current.bom, refresh: refresh || null });
+    for (;;) {
+      await new Promise(r => setTimeout(r, 600));
+      const j = await api("/api/job?id=" + job);
+      if (j.total) setBusy(true, `Filling the library: part ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? " (" + j.label + ")" : ""}`, j.done / j.total);
+      if (j.state === "done") { showLibrarian(j.result); break; }
+      if (j.state === "error") throw new Error(j.error);
+    }
+  } catch (e) { banner($("#libout"), e.message); }
+  finally { libbusy = false; setBusy(false); $("#librun").disabled = $("#librerun").disabled = false; planned = null;
+            ["#planout", "#dryout"].forEach(s => $(s).innerHTML = ""); $("#dry").disabled = $("#push").disabled = true; }
+}
+function whyList(why) {
+  const items = (why || "").split("; ").filter(Boolean);
+  if (!items.length) return '<span class="muted">nothing</span>';
+  const li = a => a.map(t => `<li>${esc(t)}</li>`).join("");
+  return `<ul class="why">${li(items.slice(0, 3))}</ul>` +
+    (items.length > 3 ? `<details><summary class="muted">${items.length - 3} more</summary><ul class="why">${li(items.slice(3))}</ul></details>` : "");
+}
+function showLibrarian(r) {
+  $("#librerun").hidden = false;
+  const pill = x => x.status === "ready" ? `<span class="pill s-ok">${x.allowed ? "released by you" : "ready"}</span>` : '<span class="pill s-warn">held</span>';
+  const from = s => esc((s || "–").replace(/^(\w+):/, "$1 · "));
+  $("#libout").innerHTML = `<strong>${r.ready} of ${r.parts}</strong> parts ready for Altium 365, ${r.held} held, ${r.needs_person} need a look. ` +
+    r.reports.map(fileLink).join(" · ") +
+    `<div class="scroll"><table style="margin-top:6px"><thead><tr><th>Part</th><th>Status</th><th>Symbol from</th><th>Footprint from</th><th>What needs a person</th><th></th></tr></thead><tbody>` +
+    r.review.map(x => `<tr><td class="mono">${esc(x.part)}</td><td>${pill(x)}</td><td class="small">${from(x.symbol_from)}</td><td class="small">${from(x.footprint_from)}</td>
+      <td class="small">${whyList(x.why)}</td>
+      <td>${x.allowed ? `<button class="small" data-unallow="${esc(x.part)}">Hold again</button>` : x.status === "held" ? `<button class="small" data-allow="${esc(x.part)}">Release anyway…</button>` : ""}</td></tr>`).join("") +
+    "</tbody></table></div>";
+}
+$("#librun").addEventListener("click", () => librarian(null));
+$("#librerun").addEventListener("click", () => { if (confirm("Look up every part again, including the ones already finished?")) librarian(true); });
+$("#libout").addEventListener("click", async e => {
+  const a = e.target.dataset.allow, u = e.target.dataset.unallow;
+  if (!a && !u) return;
+  const row = a && [...$("#libout").querySelectorAll("tr")].find(tr => tr.querySelector(`[data-allow]`) === e.target);
+  const why = row ? row.children[4].textContent : "";
+  if (a && !confirm(`Release ${a} to Altium 365 even though it failed these checks?\n\n${why}\n\nOnly do this if you have checked the part yourself. It is recorded in the plan.`)) return;
+  e.target.disabled = true;
+  try { showLibrarian(await api("/api/release-check", { bom: current.bom, allow: a ? [a] : [], unallow: u ? [u] : [] })); }
+  catch (err) { banner($("#libout"), err.message); }
 });
 
 // ---- footprint dialog

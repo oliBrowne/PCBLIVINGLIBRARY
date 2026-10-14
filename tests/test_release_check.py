@@ -104,11 +104,11 @@ def test_footprint_minimal_on_pcblib():
         no_crt = "\n".join(l for l in overlap.splitlines() if "F.CrtYd" not in l)
         f = fails(make(d, kmod=no_crt, keep_kmod=False), d)[0]
         assert f == ["footprint: pads 1 and 2 overlap", "footprint: no courtyard (Mechanical 15)"], f
-        bad = SOIC.replace("(start -3.71 -2.7)", "(center -3.71 -2.7)").replace("fp_rect", "fp_circle", 1)   # checker crash -> fallback
+        bad = SOIC.replace("(start -3.71 -2.7)", "(center -3.71 -2.7)").replace("fp_rect", "fp_circle", 1)   # KiCad 6+ circles
         it = make(d, kmod=SOIC)
         Path(d, it["footprint"]["kicad_mod"]).write_text(bad.replace("(fp_poly (pts (xy -0.975", "(fp_circle (center 0 0) (end 1 0) (layer \"F.SilkS\")) (fp_poly (pts (xy -0.975"))
         f, w = fails(it, d)
-        assert f == [] and any(x.startswith("footprint_check failed") for x in w) and any("no .kicad_mod" in x for x in w), (f, w)
+        assert f == [] and not any(x.startswith("footprint_check failed") for x in w), (f, w)   # read, not a crash
 
 
 def test_height():
