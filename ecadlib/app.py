@@ -288,9 +288,10 @@ class Workspace:
                       self.root / "http_cache", 0.5, provs, log=note)
         return self._librarian_summary(bom_path, items, log)
 
-    def release_check(self, bom, allow=(), unallow=()):
+    def release_check(self, bom, allow=(), unallow=(), user=None):
         """Re-run the release check on the librarian's plan, optionally releasing named parts despite their
-        failures (allow) or taking that back (unallow). Never touches the network."""
+        failures (allow) or taking that back (unallow). user, when given, is recorded as the person who gave the
+        allow (approvals' no_self_approval uses it). Never touches the network."""
         from . import release_check as RC
         bom_path = self._bom_path(bom)
         out = self._librarian_dir(bom_path)
@@ -303,6 +304,11 @@ class Workspace:
         if unknown:
             raise ValueError(f"not parts of this plan: {', '.join(sorted(unknown))}")
         rows = RC.apply(items, out, list(allow), list(unallow), who="ecadlib ui/mcp")
+        user = user.strip() if isinstance(user, str) else ""
+        if allow and user:
+            from .approvals import post_check, stamp_allow
+            stamp_allow(items, list(allow), user)
+            post_check(items, out, rows)
         plan_f.write_text(json.dumps(items, indent=2))
         RC.write_report(rows, out / "release_check", plan_f)
         from . import librarian as L
@@ -315,12 +321,177 @@ class Workspace:
         rows = L.review_rows(items)
         for r, it in zip(rows, items):
             r["allowed"] = bool(it.get("allow"))
-        files = [out / f for f in ("review.md", "release_check.md", "plan.json")]
+            a = it.get("approval")
+            r["approval"] = {k: a.get(k) for k in ("required", "met", "approved_by", "missing", "stale")} if a else None
+            if it.get("duplicate_of"):
+                r["duplicate_of"] = it["duplicate_of"]
+        files = [out / f for f in ("review.md", "release_check.md", "plan.json", "dedupe.md")]
         return {"bom": self.rel(bom_path) if self._is_inside(bom_path) else str(bom_path),
                 "parts": len(items), "ready": sum(i["status"] == "ready" for i in items),
                 "held": sum(i["status"] == "held" for i in items),
+                "awaiting_approval": sum(i["status"] == "awaiting_approval" for i in items),
+                "duplicates": sum(i["status"] == "duplicate" for i in items),
                 "needs_person": sum(bool(r["needs_human"]) for r in rows), "review": rows,
                 "reports": [self.rel(f) for f in files if f.exists()], "log": log[-60:]}
+
+    # ------------------------------------------------------------------ held parts (ecadlib.resolve)
+    def _plan(self, bom):
+        """(bom_path, plan.json path, items) of the librarian plan for a BOM; the plan is always inside the workspace."""
+        bom_path = self._bom_path(bom)
+        plan_f = self.inside(self.rel(self._librarian_dir(bom_path) / "plan.json"))
+        if not plan_f.exists():
+            raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
+        return bom_path, plan_f, json.loads(plan_f.read_text())
+
+    @staticmethod
+    def _part(items, part):
+        if not isinstance(part, str) or not part.strip():
+            raise ValueError("no part given")
+        it = next((i for i in items if i["name"] == part), None)
+        if it is None:
+            raise ValueError(f"{part!r} is not a part of this plan")
+        return it
+
+    def _resolve_sources(self):
+        from . import resolve as R
+        return R.Sources(self.root / "http_cache", self.libs + [str(self.root / "footprints")], self.offline)
+
+    @staticmethod
+    def _kind(kind):
+        from . import resolve as R
+        if kind not in R.KINDS:
+            raise ValueError(f"kind must be one of {', '.join(R.KINDS)}")
+        return kind
+
+    def _bom_label(self, bom_path):
+        return self.rel(bom_path) if self._is_inside(bom_path) else str(bom_path)
+
+    def held_parts(self, bom):
+        """Held plan items: name, folder, missing halves, hold reasons and where each half came from. No network."""
+        from . import resolve as R
+        bom_path, plan_f, _ = self._plan(bom)
+        return {"bom": self._bom_label(bom_path), "plan": self.rel(plan_f), "held": R.held(plan_f)}
+
+    def part_candidates(self, bom, part, kind=None, limit=10, progress=None):
+        """Ranked symbol / footprint candidates for one plan item (default: its missing halves, else both), with the
+        item's current state. May fetch KiCad library files (through the HTTP cache; offline uses the cache only)."""
+        from . import resolve as R
+        _, plan_f, items = self._plan(bom)
+        it = self._part(items, part)
+        kinds = [self._kind(kind)] if kind else (R.missing(it) or list(R.KINDS))
+        try:
+            limit = max(1, min(50, int(limit or 10)))
+        except (TypeError, ValueError):
+            raise ValueError("limit must be a number") from None
+        src, out = self._resolve_sources(), {}
+        for n, k in enumerate(kinds):
+            if progress:
+                progress(n, len(kinds), f"{k} candidates for {part}")
+            out[k] = R.candidates(it, k, plan_f.parent, src, limit)
+        if progress:
+            progress(len(kinds), len(kinds), "done")
+        return {"part": part, "item": R.show(plan_f, part), "candidates": out}
+
+    _CID = re.compile(r"(kicad|local):[^:/\\\0]+:[^:/\\\0]+|spec:[^:/\\\0]+")
+
+    def choose_part(self, bom, part, kind, candidate_id, pin_map=None):
+        """Use a candidate (kicad:Lib:Name, local:Lib:Name or spec:Name) for one half of a plan item, convert it into
+        the librarian's models folder, then re-run the release check and rewrite the review / release-check reports.
+        pin_map {symbol pin: pad} remaps pin numbers. Returns the librarian summary plus `chosen`."""
+        from . import resolve as R
+        _, plan_f, items = self._plan(bom)
+        self._part(items, part)
+        self._kind(kind)
+        if not isinstance(candidate_id, str) or not self._CID.fullmatch(candidate_id) or \
+                any(s.strip() in ("", ".", "..") for s in candidate_id.split(":")):
+            raise ValueError(f"candidate id {candidate_id!r} must look like kicad:Lib:Name, local:Lib:Name or spec:Name")
+        if pin_map is not None and not (isinstance(pin_map, dict) and all(
+                isinstance(a, str) and isinstance(b, str) and a and b and len(a) < 40 and len(b) < 40 for a, b in pin_map.items())):
+            raise ValueError("pin_map must map symbol pin numbers to pad numbers, e.g. {\"S1\": \"SH\"}")
+        try:
+            chosen = R.choose(plan_f, part, kind, candidate_id, src=self._resolve_sources(), pin_map=pin_map or None)
+        except FileNotFoundError as e:
+            raise ValueError(str(e)) from e
+        out = self.release_check(bom)                 # the whole plan again: reports, statuses, approval snapshot
+        out["chosen"] = chosen
+        return out
+
+    # ------------------------------------------------------------------ sign-off (ecadlib.approvals)
+    def approval_status(self, bom):
+        """The sign-off policy next to the plan (none = approvals are recorded, not enforced) and one row per part."""
+        from . import approvals as AP
+        bom_path, plan_f, items = self._plan(bom)
+        base = plan_f.parent
+        policy = AP.load_policy(base)
+        pf, audit = AP.policy_file(base), base / AP.AUDIT
+        return {"bom": self._bom_label(bom_path), "policy": policy, "policy_file": self.rel(pf) if pf else None,
+                "rows": AP.status_rows(items, policy, base),
+                "awaiting_approval": sum(i.get("status") == "awaiting_approval" for i in items),
+                "audit": self.rel(audit) if audit.exists() else None}
+
+    def approve_part(self, bom, part, decision, user, role=None, comment=""):
+        """Record an approve / reject for one part as `user`. user is required: there is no login, so the caller
+        says who it is (never taken from this machine's git identity). Every decision, refused ones included, is
+        appended to approvals_audit.jsonl; the part then flips between ready and awaiting_approval."""
+        from . import approvals as AP, librarian as L
+        if decision not in ("approve", "reject"):
+            raise ValueError("decision must be approve or reject")
+        user = user.strip() if isinstance(user, str) else ""
+        if not user:
+            raise ValueError("say who you are: user is required (e.g. \"Ann Lee <ann@example.com>\")")
+        if len(user) > 200 or any(c in user for c in "\r\n\0"):
+            raise ValueError("user must be one line of at most 200 characters")
+        role = (role.strip() if isinstance(role, str) else "") or None
+        comment = comment if isinstance(comment, str) else ""
+        bom_path, plan_f, items = self._plan(bom)
+        it, base = self._part(items, part), plan_f.parent
+        policy = AP.load_policy(base)
+        entry = {"ts": AP.now(), "plan": str(plan_f), "part": part, "who": user, "role": role or "", "decision": decision,
+                 "comment": comment, "via": "ecadlib ui/mcp"}
+        try:
+            rec = AP.decide(it, decision, user, role, comment, base, policy)
+        except AP.Refused as e:
+            entry["result"] = f"refused: {e}"
+            AP.audit(base, entry)
+            raise ValueError(str(e)) from e
+        status = AP.refresh_status(it, policy, base)
+        entry.update(role=rec["role"], hash=rec["hash"], result="recorded", status=status)
+        AP.audit(base, entry)
+        plan_f.write_text(json.dumps(items, indent=2))
+        L.write_review(L.review_rows(items), base, str(bom_path))
+        out = self._librarian_summary(bom_path, items, [])
+        out["decision"] = {"part": part, "decision": decision, "who": user, "role": rec["role"], "status": status,
+                           "enforced": bool(policy)}
+        return out
+
+    # ------------------------------------------------------------------ duplicates (ecadlib.dedupe)
+    def find_duplicates(self, bom, merge=False):
+        """Duplicate parts (same MPN), footprints (same geometry) and symbols (same pinout) across the librarian plan
+        and the workspace's altium_models/ and footprints/. merge=True points duplicates at their keeper in the plan
+        (library files are never changed; plan.json.pre-dedupe keeps the old plan) and re-runs the release check."""
+        from . import dedupe as D
+        _, plan_f, _ = self._plan(bom)
+        libs = [p for p in (self.models, self.root / "footprints") if p.exists()]
+        r = D.run(plan_f, libs, do_merge=bool(merge), who="ecadlib ui/mcp")
+        keep = ("name", "origin", "mpn", "used_by", "status", "where", "files", "file")
+        short = lambda f: self.rel(f) if self._is_inside(f) else str(f)
+        groups = []
+        for g in r["groups"]:
+            members = []
+            for m in g["members"]:
+                m = {k: m[k] for k in keep if m.get(k) not in (None, "", [])}
+                if "files" in m:
+                    m["files"] = [short(f) for f in m["files"]]
+                    m.pop("file", None)
+                elif "file" in m:
+                    m["file"] = short(m["file"])
+                members.append(m)
+            groups.append({"kind": g["kind"], "key": g["key"], "keeper": g["keeper"], "members": members})
+        out = {"groups": groups, "mapping": r["mapping"], "errors": r["errors"], "merged": bool(merge),
+               "reports": [self.rel(r["report"]), self.rel(r["map"])]}
+        if merge:
+            out["summary"] = self.release_check(bom)
+        return out
 
     def altium365_workspaces(self):
         from . import altium365 as A
@@ -334,7 +505,11 @@ class Workspace:
             raise ValueError("choose an Altium 365 workspace first")
         plan = self.altium365_plan(bom)
         client = None if dry_run else A.Nexar(_nexar_token())
-        results = A.push(plan["items"], client, workspace_url or "https://<workspace>", dry_run=dry_run)
+        policy = None
+        if plan["source"] == "librarian":             # the sign-off policy as it is now, not as at the last check
+            from .approvals import load_policy
+            policy = load_policy(self.inside(plan["plan"]).parent)
+        results = A.push(plan["items"], client, workspace_url or "https://<workspace>", dry_run=dry_run, policy=policy)
         out = self.root / "altium365" / f"push_{'dry_run_' if dry_run else ''}{self._key(self._bom_path(bom))}.json"
         out.write_text(json.dumps(results, indent=2))
         return {"dry_run": dry_run, "results": results, "report": self.rel(out)}

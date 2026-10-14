@@ -30,12 +30,17 @@ main { max-width: 1280px; margin: 0 auto; padding: 18px 16px 60px; }
 .drop.over, .drop:focus-visible { border-color: var(--accent); background: var(--accent-weak); color: var(--text); outline: none; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .spread { justify-content: space-between; }
-button, select, input[type=search] { font: inherit; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; }
+button, select, input[type=search], input[type=text] { font: inherit; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; }
 button { cursor: pointer; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.danger { border-color: var(--bad); color: var(--bad); }
 button:disabled { opacity: .5; cursor: default; }
 input[type=search] { min-width: 220px; }
+label.field { display: inline-flex; gap: 6px; align-items: center; }
+.signoff { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
+.acts { display: flex; gap: 4px; flex-wrap: wrap; }
+td .sub { font-size: 11.5px; margin-top: 3px; }
+#picklist table td { font-size: 12.5px; }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 12px; }
 .chip { border-radius: 999px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; border: 1px solid transparent; }
 .chip.active { border-color: currentColor; }
@@ -128,6 +133,17 @@ a { color: var(--accent); }
       <p class="muted small" style="margin:2px 0 0">Finds every missing symbol and footprint (official KiCad libraries, then EasyEDA, then the datasheet), converts them to Altium files and checks each part before release. Parts that fail a check are held back from Altium 365 until you look at them.</p></div>
       <div class="row"><button id="librun">Fill missing parts</button><button id="librerun" hidden>Redo all</button></div>
     </div>
+    <div class="signoff" id="libtools" hidden>
+      <div class="row">
+        <label class="field small">Your name <input type="text" id="signer" placeholder="Ann Lee &lt;ann@example.com&gt;" size="28" autocomplete="name"></label>
+        <label class="field small">Role <input type="text" id="signrole" placeholder="optional, e.g. librarian" size="16"></label>
+        <button class="small" id="apprstatus">Approval status</button>
+        <button class="small" id="dedupe">Find duplicates</button>
+      </div>
+      <div class="muted small" style="margin-top:6px">There is no login: ecadlib is a local tool, so whatever name you type is recorded as given with each approval, rejection or release override (in the plan and in <span class="mono">approvals_audit.jsonl</span>). Sign-off is enforced only when an <span class="mono">approvals.json</span> sits next to the plan.</div>
+      <div class="out" id="approut"></div>
+      <div class="out" id="dedupeout"></div>
+    </div>
     <div class="out" id="libout"></div>
   </section>
 
@@ -195,6 +211,21 @@ a { color: var(--accent); }
     </div>
   </div>
 </dialog>
+<dialog id="pickdlg">
+  <div class="dlg-head">
+    <strong id="picktitle">Pick a symbol or footprint</strong>
+    <div class="row">
+      <select id="pickkind" aria-label="Which half"><option value="">missing half</option><option value="symbol">symbol</option><option value="footprint">footprint</option></select>
+      <button id="pickclose">Close</button>
+    </div>
+  </div>
+  <div style="padding:14px 16px">
+    <div id="pickinfo" class="small"></div>
+    <div id="pickbusy" class="muted small" hidden><span id="pickbusytext">Looking for candidates…</span><div class="progress"><div id="pickbar"></div></div></div>
+    <div id="pickerr"></div>
+    <div id="picklist"></div>
+  </div>
+</dialog>
 <div class="toast" id="toast" role="status"></div>
 
 <script>
@@ -260,7 +291,7 @@ async function runJob(start, label) {
       if (j.total) setBusy(true, `Checking ${label}: line ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? " (" + j.label + ")" : ""}`, j.done / j.total);
       if (j.state === "done") {
         current = j.result; filter = null; $("#q").value = ""; planned = null;
-        ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true;
+        ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#approut", "#dedupeout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
         $("#dry").disabled = $("#push").disabled = true; render(); break;
       }
       if (j.state === "error") throw new Error(j.error);
@@ -343,6 +374,8 @@ $("#plan").addEventListener("click", e => action(e.target, $("#planout"), async 
     } catch (err) { banner($("#planout"), "Couldn't list Altium 365 workspaces: " + err.message); }
   }
   const why = i => i.status === "held" ? "held: " + ((i.hold_reasons || [])[0] || "failed the release check") :
+    i.status === "awaiting_approval" ? "awaiting approval: " + (((i.approval || {}).missing || [])[0] || "not signed off") :
+    i.status === "duplicate" ? "duplicate of " + (i.duplicate_of || "?") :
     !i.symbol.file && !i.footprint.file ? "needs symbol and footprint" : !i.symbol.file ? `needs symbol ${i.symbol.ref}.SchLib` : `needs footprint ${i.footprint.ref}.PcbLib`;
   return `<strong>${planned.ready} of ${planned.total}</strong> parts ready to release${planned.source === "librarian" ? " (from Fill the library, after its release check)" : ""}. ${fileLink(planned.plan)}
     <table style="margin-top:6px"><tbody>${planned.items.map(i => `<tr><td>${esc(i.name)}<div class="muted">${esc(i.folder)}</div></td>
@@ -392,27 +425,145 @@ function whyList(why) {
 }
 function showLibrarian(r) {
   $("#librerun").hidden = false;
-  const pill = x => x.status === "ready" ? `<span class="pill s-ok">${x.allowed ? "released by you" : "ready"}</span>` : '<span class="pill s-warn">held</span>';
+  $("#libtools").hidden = false;
+  const PILL = { ready: "s-ok", held: "s-warn", awaiting_approval: "s-info", duplicate: "s-off" };
+  const pill = x => `<span class="pill ${PILL[x.status] || "s-info"}">${x.status === "ready" && x.allowed ? "released by you" : x.status === "duplicate" ? "duplicate of " + esc(x.duplicate_of || "?") : esc(x.status.replace("_", " "))}</span>` +
+    (x.status === "held" || x.status === "duplicate" ? "" : x.approval && x.approval.required ? `<div class="muted sub">${x.approval.met ? "approved by " + esc(x.approval.approved_by.join(", ")) : "needs " + esc(x.approval.missing.join("; "))}</div>`
+      : x.approval && x.approval.approved_by.length ? `<div class="muted sub">approved by ${esc(x.approval.approved_by.join(", "))}</div>` : "");
+  const acts = x => `<div class="acts">` + (x.status === "held" ? `<button class="small" data-pick="${esc(x.part)}">Pick…</button>` : "") +
+    (x.allowed ? `<button class="small" data-unallow="${esc(x.part)}">Hold again</button>` : x.status === "held" ? `<button class="small" data-allow="${esc(x.part)}">Release anyway…</button>` : "") +
+    (x.status === "ready" || x.status === "awaiting_approval" ? `<button class="small" data-approve="${esc(x.part)}">Approve</button><button class="small" data-reject="${esc(x.part)}">Reject…</button>` : "") + `</div>`;
   const from = s => esc((s || "–").replace(/^(\w+):/, "$1 · "));
-  $("#libout").innerHTML = `<strong>${r.ready} of ${r.parts}</strong> parts ready for Altium 365, ${r.held} held, ${r.needs_person} need a look. ` +
+  $("#libout").innerHTML = `<strong>${r.ready} of ${r.parts}</strong> parts ready for Altium 365, ${r.held} held` +
+    (r.awaiting_approval ? `, ${r.awaiting_approval} awaiting approval` : "") + (r.duplicates ? `, ${r.duplicates} duplicate(s)` : "") + `, ${r.needs_person} need a look. ` +
     r.reports.map(fileLink).join(" · ") +
     `<div class="scroll"><table style="margin-top:6px"><thead><tr><th>Part</th><th>Status</th><th>Symbol from</th><th>Footprint from</th><th>What needs a person</th><th></th></tr></thead><tbody>` +
     r.review.map(x => `<tr><td class="mono">${esc(x.part)}</td><td>${pill(x)}</td><td class="small">${from(x.symbol_from)}</td><td class="small">${from(x.footprint_from)}</td>
       <td class="small">${whyList(x.why)}</td>
-      <td>${x.allowed ? `<button class="small" data-unallow="${esc(x.part)}">Hold again</button>` : x.status === "held" ? `<button class="small" data-allow="${esc(x.part)}">Release anyway…</button>` : ""}</td></tr>`).join("") +
+      <td>${acts(x)}</td></tr>`).join("") +
     "</tbody></table></div>";
 }
 $("#librun").addEventListener("click", () => librarian(null));
 $("#librerun").addEventListener("click", () => { if (confirm("Look up every part again, including the ones already finished?")) librarian(true); });
 $("#libout").addEventListener("click", async e => {
-  const a = e.target.dataset.allow, u = e.target.dataset.unallow;
+  const d = e.target.dataset;
+  if (d.pick) return openPick(d.pick);
+  if (d.approve || d.reject) return decide(d.approve || d.reject, d.approve ? "approve" : "reject", e.target);
+  const a = d.allow, u = d.unallow;
   if (!a && !u) return;
-  const row = a && [...$("#libout").querySelectorAll("tr")].find(tr => tr.querySelector(`[data-allow]`) === e.target);
+  const row = a && e.target.closest("tr");
   const why = row ? row.children[4].textContent : "";
   if (a && !confirm(`Release ${a} to Altium 365 even though it failed these checks?\n\n${why}\n\nOnly do this if you have checked the part yourself. It is recorded in the plan.`)) return;
   e.target.disabled = true;
-  try { showLibrarian(await api("/api/release-check", { bom: current.bom, allow: a ? [a] : [], unallow: u ? [u] : [] })); }
+  try { showLibrarian(await api("/api/release-check", { bom: current.bom, allow: a ? [a] : [], unallow: u ? [u] : [], user: $("#signer").value.trim() || null })); }
   catch (err) { banner($("#libout"), err.message); }
+});
+
+// ---- held parts: pick a candidate
+const pickdlg = $("#pickdlg");
+let picking = null, pickbusy = false;
+function openPick(part) {
+  picking = part; $("#pickkind").value = ""; $("#picktitle").textContent = `Pick a symbol or footprint for ${part}`;
+  $("#pickinfo").innerHTML = ""; $("#picklist").innerHTML = ""; banner($("#pickerr"), "");
+  pickdlg.showModal(); loadCandidates();
+}
+async function loadCandidates() {
+  if (pickbusy || !picking) return;
+  pickbusy = true; $("#pickbusy").hidden = false; $("#pickbar").style.width = "0"; $("#picklist").innerHTML = ""; banner($("#pickerr"), "");
+  try {
+    const { job } = await api("/api/resolve/candidates", { bom: current.bom, part: picking, kind: $("#pickkind").value || null });
+    for (;;) {
+      await new Promise(r => setTimeout(r, 400));
+      const j = await api("/api/job?id=" + job);
+      if (j.total) { $("#pickbusytext").textContent = `Looking for ${j.label}…`; $("#pickbar").style.width = `${Math.round(j.done / j.total * 100)}%`; }
+      if (j.state === "done") { showCandidates(j.result); break; }
+      if (j.state === "error") throw new Error(j.error);
+    }
+  } catch (e) { banner($("#pickerr"), e.message); }
+  finally { pickbusy = false; $("#pickbusy").hidden = true; }
+}
+const pinMapText = m => Object.entries(m || {}).map(([a, b]) => `${a} → ${b}`).join(", ");
+function showCandidates(r) {
+  const it = r.item, cmp = it.pins_vs_pads;
+  $("#pickinfo").innerHTML = `<div><span class="pill s-warn">${esc(it.status)}</span> ${esc(it.description || "")} <span class="muted">(${esc(it.folder)})</span></div>` +
+    `<div class="muted" style="margin-top:4px">Symbol: ${esc(it.symbol.source || "none")}${it.symbol.pins ? ` (${it.symbol.pins.length} pins)` : ""} · Footprint: ${esc(it.footprint.source || "none")}${it.footprint.pads ? ` (${new Set(it.footprint.pads).size} pads)` : ""}` +
+    (cmp && !cmp.match ? ` · pins without pad: ${esc(cmp.pins_without_pad.join(", ") || "–")}, pads without pin: ${esc(cmp.pads_without_pin.join(", ") || "–")}` : "") + `</div>` +
+    (it.hold_reasons.length ? `<ul class="why" style="margin-top:4px">${it.hold_reasons.map(h => `<li>${esc(h)}</li>`).join("")}</ul>` : "");
+  $("#picklist").innerHTML = Object.entries(r.candidates).map(([kind, cs]) => `<h3 style="font-size:14px;margin:14px 0 4px">${kind === "symbol" ? "Symbols" : "Footprints"}</h3>` +
+    (cs.length ? `<div class="scroll"><table><thead><tr><th>Candidate</th><th>Why</th><th>${kind === "symbol" ? "Pins" : "Pads"}</th><th>Match</th><th>Suggested pin map</th><th></th></tr></thead><tbody>` +
+    cs.map((c, i) => `<tr><td class="mono">${esc(c.id)}${c.current ? ' <span class="pill s-info">current</span>' : ""}<div class="muted sub">score ${c.score}</div></td>
+      <td>${whyList(c.why.join("; "))}${c.error ? `<div class="s-bad sub">${esc(c.error)}</div>` : ""}</td>
+      <td>${c.count ?? "?"}</td>
+      <td>${c.match === true ? '<span class="pill s-ok">yes</span>' : c.match === false ? '<span class="pill s-warn">no</span>' +
+        `<div class="muted sub">${c.pins_without_pad.length ? "pins without pad: " + esc(c.pins_without_pad.join(", ")) : ""}${c.pads_without_pin.length ? " pads without pin: " + esc(c.pads_without_pin.join(", ")) : ""}</div>` : '<span class="muted">?</span>'}</td>
+      <td>${c.pin_map ? `<label class="field"><input type="checkbox" data-usemap="${kind}:${i}" checked> <span class="mono">${esc(pinMapText(c.pin_map))}</span></label>` : '<span class="muted">–</span>'}</td>
+      <td><button class="small${c.match ? " primary" : ""}" data-choose="${kind}:${i}" ${c.error ? "disabled" : ""}>Choose</button></td></tr>`).join("") +
+    `</tbody></table></div>` : `<div class="muted">No ${kind} candidates found. Try the other half, or add a library with --lib.</div>`)).join("");
+  showCandidates.last = r;
+}
+$("#pickkind").addEventListener("change", loadCandidates);
+$("#pickclose").addEventListener("click", () => pickdlg.close());
+$("#picklist").addEventListener("click", async e => {
+  const k = e.target.dataset.choose;
+  if (!k) return;
+  const [kind, i] = k.split(":"), c = showCandidates.last.candidates[kind][+i];
+  const use = $(`#picklist [data-usemap="${kind}:${i}"]`);
+  const pin_map = c.pin_map && use && use.checked ? c.pin_map : null;
+  e.target.disabled = true; banner($("#pickerr"), "");
+  try {
+    const r = await api("/api/resolve/choose", { bom: current.bom, part: picking, kind, id: c.id, pin_map });
+    showLibrarian(r); pickdlg.close();
+    toast(`${r.chosen.name}: ${kind} ← ${c.id}; now ${r.chosen.status}` + (r.chosen.hold_reasons.length ? ` (${r.chosen.hold_reasons[0]})` : ""));
+  } catch (err) { banner($("#pickerr"), err.message); e.target.disabled = false; }
+});
+
+// ---- sign-off and duplicates
+const store = { get(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } },
+                set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+$("#signer").value = store.get("ecadlib.signer"); $("#signrole").value = store.get("ecadlib.role");
+$("#signer").addEventListener("change", e => store.set("ecadlib.signer", e.target.value.trim()));
+$("#signrole").addEventListener("change", e => store.set("ecadlib.role", e.target.value.trim()));
+function signer() {
+  const who = $("#signer").value.trim();
+  if (!who) { banner($("#approut"), "Type your name first: it is recorded with your decision. There is no login, so nothing fills it in for you."); $("#signer").focus(); }
+  return who;
+}
+async function decide(part, decision, btn) {
+  const who = signer(); if (!who) return;
+  let comment = "";
+  if (decision === "reject") { comment = prompt(`What is wrong with ${part}? (required for a reject)`) || ""; if (!comment.trim()) return; }
+  btn.disabled = true;
+  try {
+    const r = await api("/api/approvals/decide", { bom: current.bom, part, decision, user: who, role: $("#signrole").value.trim() || null, comment });
+    showLibrarian(r); banner($("#approut"), "");
+    toast(`${decision === "approve" ? "Approved" : "Rejected"} ${part} as ${who}; now ${r.decision.status}` + (r.decision.enforced ? "" : " (no approvals.json: recorded, not enforced)"));
+  } catch (err) { banner($("#approut"), err.message); btn.disabled = false; }
+}
+$("#apprstatus").addEventListener("click", e => action(e.target, $("#approut"), async () => {
+  const r = await api("/api/approvals/status", { bom: current.bom });
+  return (r.policy_file ? `Policy ${fileLink(r.policy_file)}: ${r.awaiting_approval} part(s) awaiting approval.`
+    : "No approvals.json next to the plan: decisions are recorded, but Altium 365 push does not wait for them.") +
+    (r.audit ? ` Log: ${fileLink(r.audit)}` : "") +
+    `<div class="scroll"><table style="margin-top:6px"><thead><tr><th>Part</th><th>Status</th><th>Needs sign-off</th><th>Approved by</th><th>Missing</th><th>Stale</th></tr></thead><tbody>` +
+    r.rows.map(x => `<tr><td class="mono">${esc(x.name)}</td><td>${esc(x.status)}</td><td>${esc(x.needs_signoff || "–")}</td><td>${esc(x.approved_by || "–")}</td><td>${esc(x.missing || "–")}</td><td class="muted">${esc(x.stale || "")}</td></tr>`).join("") +
+    "</tbody></table></div>";
+}));
+function showDupes(r) {
+  const plan = r.mapping.filter(m => m.parts).length;
+  const who = m => `<span class="mono">${esc(m.name)}</span> <span class="muted">(${esc(m.origin)}${m.used_by ? ", used by " + esc(m.used_by.join(", ")) : ""})</span>`;
+  return (r.groups.length ? `<strong>${r.groups.length}</strong> duplicate group(s). ` : "No duplicates found. ") + r.reports.map(fileLink).join(" · ") +
+    (r.groups.length ? `<div class="scroll"><table style="margin-top:6px"><thead><tr><th>Kind</th><th>Keep</th><th>Duplicates</th></tr></thead><tbody>` +
+      r.groups.map(g => { const k = g.members.find(m => m.name === g.keeper);
+        return `<tr><td>${esc(g.kind.replace("_", " "))}${g.kind === "mpn" ? `<div class="muted sub mono">${esc(g.key)}</div>` : ""}</td><td>${k ? who(k) : '<span class="muted">same name, different content: pick by hand</span>'}</td>
+        <td>${g.members.filter(m => m.name !== g.keeper).map(who).join("<br>")}</td></tr>`; }).join("") + "</tbody></table></div>" : "") +
+    (r.errors.length ? `<div class="muted">Could not read: ${esc(r.errors.join("; "))}</div>` : "") +
+    (r.merged ? `<div>Merged: ${plan} plan reference(s) now point at their keeper; the old plan is kept as plan.json.pre-dedupe. Library files were not changed.</div>`
+      : plan ? `<div class="row" style="margin-top:6px"><button class="small danger" id="dedupemerge">Merge ${plan} plan reference(s) into the keepers…</button><span class="muted">Library files are never changed.</span></div>` : "");
+}
+$("#dedupe").addEventListener("click", e => action(e.target, $("#dedupeout"), async () => showDupes(await api("/api/dedupe", { bom: current.bom }))));
+$("#dedupeout").addEventListener("click", e => {
+  if (e.target.id !== "dedupemerge" || !confirm("Point the duplicate parts, footprints and symbols in the plan at their keepers? Duplicate parts are then skipped by the Altium 365 push, and approvals of changed parts go stale.")) return;
+  action(e.target, $("#dedupeout"), async () => { const r = await api("/api/dedupe", { bom: current.bom, merge: true }); showLibrarian(r.summary); return showDupes(r); });
 });
 
 // ---- footprint dialog
