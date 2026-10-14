@@ -17,6 +17,7 @@
     ecadlib dedupe    plan.json [--lib ...] [--merge]  duplicate parts, footprints and symbols
     ecadlib sourcing  BOM [--qty N] [--alternates] price, stock, second sources and alternates per BOM line
     ecadlib step-gen  SPEC.json|FOOTPRINT -o x.step   package-shaped 3D model (STEP); --check FILE.step validates
+    ecadlib upkeep    PLAN|BOM [--checks ...] [--apply] [--github issue|pr]   weekly checks, only what is new, one issue/PR
 
 `ecadlib <command> -h` shows that command's options."""
 import importlib, sys
@@ -40,6 +41,7 @@ COMMANDS = {
     "dedupe": ("ecadlib.dedupe", "find and merge duplicate parts, footprints and symbols"),
     "sourcing": ("ecadlib.sourcing", "price, stock, second sources and alternates for a BOM"),
     "step-gen": ("ecadlib.step_gen", "package-shaped STEP 3D models from a package spec or footprint name"),
+    "upkeep": ("ecadlib.upkeep", "weekly lifecycle / upstream / price / A365 checks; new changes as one issue or PR"),
 }
 
 

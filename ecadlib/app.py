@@ -493,6 +493,29 @@ class Workspace:
             out["summary"] = self.release_check(bom)
         return out
 
+    # ------------------------------------------------------------------ upkeep (ecadlib.upkeep)
+    def upkeep_run(self, bom, checks=None, apply=False, workspace=None):
+        """The weekly upkeep checks for a BOM (its librarian plan when there is one): lifecycle, KiCad upstream, price
+        and stock, Altium 365 drift. Reports only what changed since the last upkeep run of this BOM; checks without
+        credentials are skipped. apply=True reconverts KiCad parts whose sources changed. Never touches GitHub."""
+        from . import upkeep as UK
+        bom_path = self._bom_path(bom)
+        base = self.root / "upkeep" / self._key(bom_path)
+        plan_f = self._librarian_dir(bom_path) / "plan.json"
+        src = plan_f if plan_f.exists() else bom_path
+        manifest = next((m for m in (plan_f.parent / "models" / "manifest.json", self.models / "manifest.json")
+                         if m.is_file()), None)
+        rules = UK.load_rules(None, start=str(self.root))
+        rep = UK.run(str(src), checks or None, base / "state", base / "upkeep", manifest and str(manifest),
+                     str(bom_path) if src != bom_path else None, workspace or None, bool(apply), rules,
+                     UK.Ctx(cache=self.root / "http_cache", offline=self.offline))
+        rel = lambda p: self.rel(p) if self._is_inside(p) else str(p)
+        return {"bom": self._bom_label(bom_path), "input": rel(src), "new_changes": rep["new_changes"],
+                "exit_code": rep["exit_code"],
+                "checks": [{k: s[k] for k in ("check", "status", "reason", "changes", "resolved", "notes")} for s in rep["checks"]],
+                "applied": [rel(p) for p in rep["applied_paths"]],
+                "reports": [self.rel(base / "upkeep.md"), self.rel(base / "upkeep.json")]}
+
     def altium365_workspaces(self):
         from . import altium365 as A
         return {"workspaces": A.Nexar(_nexar_token()).workspaces()}
