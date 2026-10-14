@@ -258,3 +258,29 @@ def test_bom_columns_and_pin1():
         lines, mapping = T.read_bom(b, RU.bom_columns(RU.load({"bom": {"columns": {"mpn": "our pn"}}})))
         assert mapping["mpn"] == "Our PN" and lines[0]["mpn"] == "INT-0001" and "Part Number" not in mapping.values()
     assert RC._has_pin1({"A1", "A2"}) and not RC._has_pin1({"A1"}, ["1"])
+
+
+def test_other_tools_sections_are_accepted():
+    """[upkeep] price_jump_pct / build_qty / currency (ecadlib.upkeep) and [sim] (ecadlib.sim_models) are documented
+    there; rejecting them made every tool refuse the whole file. Defaults stay what those modules use on their own."""
+    from ecadlib import sim_models as SM, upkeep as UK
+    r = RU.load(RU.parse_text('[upkeep]\nprice_jump_pct = 15\nbuild_qty = 250\ncurrency = "EUR"\n[sim]\ncapacitor_esr = "10m"\n'))
+    assert r["upkeep"]["build_qty"] == 250 and r["upkeep"]["price_jump_pct"] == 15 and r["sim"]["capacitor_esr"] == "10m"
+    assert UK.upkeep_rules(RU.load({})) == UK.DEFAULTS                     # no file: upkeep exactly as before
+    assert {k: RU.DEFAULTS["upkeep"][k] for k in UK.DEFAULTS} == UK.DEFAULTS
+    it = {"name": "C1", "parameters": [{"name": "Value", "value": "100n"}]}
+    assert SM.builtin(it, "C", RU.load({}))[0] == SM.builtin(it, "C", None)[0]        # "" = no ESR, as without rules
+    assert "subckt" in json.dumps(SM.builtin(it, "C", r)[0])
+    bad("[upkeep]\nbuild_qty = 0", "upkeep.build_qty")
+    bad("[upkeep]\nprice_jump_pct = 'x'", "upkeep.price_jump_pct")
+    bad("[sim]\nesr = '1'", "sim.esr")
+
+
+def test_scanned_text_cannot_become_toml():
+    """Notes carry part names and headers from scanned libraries; a newline in one must not end the comment."""
+    evil = 'RES_22k\n[altium365]\nworkspace = "https://evil.example"\n#'
+    text = RU.dumps(RU.load({"naming": {"case": "upper"}}), notes={"naming.case": [f"e.g. {evil}", "x\x7fy"]},
+                    header=["# h\n[sim]"])
+    raw = RU.parse_text(text)
+    assert "altium365" not in raw and "sim" not in raw and raw["naming"]["case"] == "upper", text
+    assert RU.parse_text(f"k = {RU._val('a' + chr(127))}")["k"] == "a\x7f"

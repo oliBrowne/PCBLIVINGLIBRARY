@@ -198,3 +198,39 @@ def test_workspace_ui_and_mcp_setup():
             assert http("POST", "/api/rules/save", {"text": "a"}, {"Origin": "https://evil.example"})[0] == 403
         finally:
             srv.shutdown()
+
+
+def test_workspace_follows_the_rules_file_its_tools_find():
+    """`ecadlib init` writes ./ecadlib.toml; `ecadlib ui` started there must not show "no rules" and plan by the
+    defaults while the DbLib export (which searches from its folder up and the current folder) uses the file."""
+    import os, sqlite3
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "ecadlib.toml").write_text('[parameters.names]\n"Manufacturer Part Number" = "MPN"\n')
+        os.chdir(d)
+        try:
+            ws = Workspace("ecadlib_workspace", [str(Path(cwd) / "examples" / "kicad_lib")], providers=["digikey"], offline=True)
+            rel = ws.save_upload("bom.csv", (Path(cwd) / "examples" / "sample_bom.csv").read_bytes())
+            assert ws.rules()["parameters"]["names"] == {"Manufacturer Part Number": "MPN"}
+            assert ws.info()["rules"].endswith("ecadlib.toml") and ws.rules_info()["exists"]
+            quiet(ws.export_dblib, rel)
+            con = sqlite3.connect(ws.root / "altium" / "parts.sqlite")
+            t = con.execute("select name from sqlite_master").fetchone()[0]
+            assert "MPN" in [c[1] for c in con.execute(f'pragma table_info("{t}")')]
+            con.close()
+            r = ws.save_rules("[footprint]\ndensity = 'L'\n")                 # saving still writes the workspace's own
+            assert r["saved"] and r["path"] == "ecadlib.toml" and ws.rules()["parameters"]["names"] == {}
+            assert Path(d, "ecadlib.toml").read_text().startswith("[parameters.names]")
+        finally:
+            os.chdir(cwd)
+
+
+def test_propose_given_one_path_string():
+    """An agent passing paths as one string must scan that folder, not '/', 'h', 'o', ... (a scan of the root)."""
+    with tempfile.TemporaryDirectory() as d:
+        paths, _ = RF.style_altium_classic(Path(d) / "house")
+        ws = Workspace(Path(d) / "ws", [], providers=["digikey"])
+        call = lambda args: M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                          "params": {"name": "propose_rules", "arguments": args}})
+        out = json.loads(call({"paths": str(paths[0])})["result"]["content"][0]["text"])
+        assert out["paths"] == [str(paths[0])] and out["settings"] and not any("not found" in w for w in out["warnings"])
