@@ -223,8 +223,9 @@ def save_manifest(path, man):
     os.replace(tmp, p)
 
 
-def record(out, spec, rep, http, step=False, gen_step=True):
-    """Add/replace the manifest entries for a part kicad_import just wrote. Never raises: a failure is a note."""
+def record(out, spec, rep, http, step=False, gen_step=True, layers=None):
+    """Add/replace the manifest entries for a part kicad_import just wrote. Never raises: a failure is a note.
+    layers: the rules' PcbLib layers the part was written with, so a reconversion keeps them."""
     try:
         mpath, now = Path(out) / "manifest.json", datetime.now(timezone.utc).isoformat(timespec="seconds")
         man = load_manifest(mpath)
@@ -237,6 +238,7 @@ def record(out, spec, rep, http, step=False, gen_step=True):
                 "kind": kind, "kicad_ref": ref, "mpn": spec.get("mpn", ""),
                 "output": os.path.relpath(f, Path(out)), "output_sha256": hashlib.sha256(f.read_bytes()).hexdigest(),
                 "converter": converter_version(), "converted_at": now, "step": bool(step), "gen_step": bool(gen_step),
+                "layers": layers,
                 "spec": {k: v for k, v in spec.items() if v is not None},
                 "sources": [source_record(*s, http) for s in srcs(ref, http)]}
         save_manifest(mpath, man)
@@ -351,6 +353,15 @@ class Pinned:
         return Response(200, self.pins[url]) if url in self.pins else self.http.get(url, **kw)
 
 
+def _rules_layers(out):
+    """Layers of the rules found from `out` (as `kicad_import -o out` uses), for entries recorded without them."""
+    from .rules import layers, load
+    try:
+        return layers(load(None, start=out))
+    except Exception:
+        return None
+
+
 def reconvert(entries, out, http):
     """Re-run kicad_import for the specs behind `entries` (one conversion per spec); record() refreshes the manifest."""
     done = {}
@@ -362,7 +373,8 @@ def reconvert(entries, out, http):
         if k in done:
             continue
         if spec.get("footprint"):
-            rep = K.import_part(spec, out, http, e.get("step", False), gen_step=e.get("gen_step", False))
+            rep = K.import_part(spec, out, http, e.get("step", False), gen_step=e.get("gen_step", False),
+                                layers=e["layers"] if "layers" in e else _rules_layers(out))
         else:                                  # symbol-only conversion (kicad_import symbol ...)
             rep = {"notes": [], "ok": False}
             try:

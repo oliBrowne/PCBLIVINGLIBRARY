@@ -622,10 +622,10 @@ def generate(src, height=None, name=None):
             raise ValueError(f"{src}: no package spec and the footprint name is not a known package family")
     try:
         solids, info = build(spec, height)
+        info["name"] = name or spec["name"]
+        text = write_step(solids, info["name"])                      # zero-size dimensions fail here (zero-length edge)
     except (KeyError, TypeError, IndexError, ZeroDivisionError) as e:     # incomplete spec: no model, not a crash
         raise ValueError(f"{spec.get('name', src)}: spec incomplete for a 3D model ({type(e).__name__}: {e})")
-    info["name"] = name or spec["name"]
-    text = write_step(solids, info["name"])
     rep = check(text)
     if rep["errors"]:
         raise ValueError(f"{info['name']}: generated STEP failed its own check: {rep['errors'][:3]}")
