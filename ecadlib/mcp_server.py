@@ -185,6 +185,27 @@ TOOLS = [
                     "changed there since the last pull, changed locally, conflicts (both), deleted. Needs NEXAR_TOKEN.",
      "inputSchema": {"type": "object", "required": ["workspace"],
                      "properties": {"workspace": {"type": "string"}, "bom": {"type": "string"}}}},
+    {"name": "propose_rules",
+     "description": "Set up the library rules (ecadlib.toml: naming, required parameters, folders, layers, footprint density, "
+                    "BOM columns) with minimal effort: scan the user's existing libraries (Altium .SchLib/.PcbLib/.DbLib "
+                    "folders, parts tables, KiCad libraries, BOMs, an Altium 365 component list JSON) and propose each "
+                    "setting with evidence and a confidence. Writes nothing. Show the user the proposal and ask the "
+                    "`questions` (ambiguous settings) in plain words; pass their answers back as choices {key: value} to "
+                    "get the final toml. paths default to the workspace's --lib folders and uploaded BOMs.",
+     "inputSchema": {"type": "object",
+                     "properties": {"paths": {"type": "array", "items": {"type": "string"},
+                                              "description": "folders or files to scan"},
+                                    "a365": {"type": "array", "items": {"type": "string"},
+                                             "description": "Altium 365 component list JSON or check-a365 --state file"},
+                                    "choices": {"type": "object", "description": "answers: setting key -> value"},
+                                    "full": {"type": "boolean", "description": "include every evidence line (default: short)"}}}},
+    {"name": "save_rules",
+     "description": "Write the workspace's ecadlib.toml (the `toml` from propose_rules, possibly edited with the user). Only "
+                    "after the user has agreed to the proposal. If a different file exists nothing is written and the diff "
+                    "comes back (needs_confirm): show it and call again with overwrite true only when the user says to "
+                    "replace it (the old file is kept as ecadlib.toml.bak).",
+     "inputSchema": {"type": "object", "required": ["toml"],
+                     "properties": {"toml": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}}},
     {"name": "list_example_specs",
      "description": "Return the example package specs (useful as templates for preview_footprint).",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -260,6 +281,15 @@ def call_tool(ws, name, args):
             return ws.where_used(args["projects"], args.get("part") or None, args.get("plan") or None)
         if name == "list_example_specs":
             return ws.example_specs()
+        if name == "propose_rules":
+            r = ws.propose_rules(args.get("paths") or None, args.get("a365") or None, args.get("choices") or None)
+            if not args.get("full"):
+                for st in r["settings"]:
+                    st["evidence"] = st["evidence"][:3]
+                r.pop("rules", None)
+            return r
+        if name == "save_rules":
+            return ws.save_rules(args["toml"], args.get("overwrite") is True)
     raise KeyError(f"unknown tool {name}")
 
 

@@ -406,9 +406,12 @@ def _folder(p):
     return "/".join(x for x in (p or "").replace("\\", "/").split("/") if x).lower()
 
 
-def check_a365(items, nodes, folders=None, state=None):
-    """plan items vs workspace nodes -> (rows, new state). state: {name: {revision, symbols, footprints}} from last run."""
+def check_a365(items, nodes, folders=None, state=None, rules=None):
+    """plan items vs workspace nodes -> (rows, new state). state: {name: {revision, symbols, footprints}} from last run.
+    rules: the plan's parameters are compared under the rules' house names, as push sends them."""
     from .altium365 import merged_params
+    from .rules import house_item
+    items = [house_item(i, rules) for i in items]
     by = {}
     for n in nodes:
         by.setdefault(n["name"], n)
@@ -495,6 +498,7 @@ def main(argv=None):
     a3.add_argument("--folder", action="append", help="workspace folder to look for unplanned components (default: the plan's)")
     a3.add_argument("--state", help="JSON snapshot of revisions/GUIDs; compared, then rewritten")
     a3.add_argument("-o", "--out", default="out/upstream_a365", help="report path stem (.md and .csv)")
+    a3.add_argument("--rules", help="library rules file: house parameter names (default: ecadlib.toml found from the plan)")
     a = ap.parse_args(argv)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -532,7 +536,9 @@ def main(argv=None):
         from .altium365 import Nexar
         items = json.loads(Path(a.plan).read_text())
         state = json.loads(Path(a.state).read_text()) if a.state and Path(a.state).exists() else None
-        rows, new_state = check_a365(items, workspace_components(Nexar(token), a.workspace), a.folder, state)
+        from .rules import load
+        rules = load(a.rules, start=Path(a.plan).parent)
+        rows, new_state = check_a365(items, workspace_components(Nexar(token), a.workspace), a.folder, state, rules)
     except Exception as e:
         print(f"check-a365: {type(e).__name__}: {e}", file=sys.stderr); return 2
     if a.state:
