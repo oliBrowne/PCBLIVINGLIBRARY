@@ -1,0 +1,31 @@
+{
+  "name": "LQFP-48_7x7mm_P0.5mm",
+  "description": "LQFP-48 7 x 7 mm, 0.5 mm pitch, JEDEC MS-026BBC",
+  "package_type": "qfp",
+  "pin_count": 48,
+  "pitch": 0.5,
+  "lead_span": {
+    "nom": 9.0,
+    "tol": 0.0
+  },
+  "body_length": {
+    "nom": 7.0,
+    "tol": 0.0
+  },
+  "body_width": {
+    "nom": 7.0,
+    "tol": 0.0
+  },
+  "terminal_width": {
+    "min": 0.17,
+    "max": 0.27
+  },
+  "terminal_length": {
+    "min": 0.45,
+    "max": 0.75
+  },
+  "density": "B",
+  "source": {
+    "drawing": "KiCad footprint generator size definitions (gitlab.com/kicad/libraries/kicad-footprint-generator, data/package/gullwing/qfp_lqfp_tqfp_vqfp_wqfp.yaml, JEDEC MS-026BBC)"
+  }
+}

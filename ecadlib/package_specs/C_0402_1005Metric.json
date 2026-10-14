@@ -1,6 +1,6 @@
 {
-  "name": "R_0402_1005Metric",
-  "description": "Resistor SMD 0402 (1005 Metric)",
+  "name": "C_0402_1005Metric",
+  "description": "Capacitor SMD 0402 (1005 Metric)",
   "package_type": "chip",
   "pin_count": 2,
   "body_length": {
@@ -17,7 +17,6 @@
   },
   "density": "B",
   "source": {
-    "datasheet": "Yageo RC-series general purpose chip resistor datasheet (dims typed from memory - verify)",
-    "drawing": "Fig. 'Dimensions'"
+    "drawing": "typical JEDEC/datasheet outline - check against your part's datasheet"
   }
 }

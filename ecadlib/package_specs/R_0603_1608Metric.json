@@ -1,0 +1,22 @@
+{
+  "name": "R_0603_1608Metric",
+  "description": "Resistor SMD 0603 (1608 Metric)",
+  "package_type": "chip",
+  "pin_count": 2,
+  "body_length": {
+    "min": 1.5,
+    "max": 1.7
+  },
+  "body_width": {
+    "min": 0.7,
+    "max": 0.95
+  },
+  "terminal_length": {
+    "min": 0.15,
+    "max": 0.4
+  },
+  "density": "B",
+  "source": {
+    "drawing": "KiCad footprint generator size definitions (gitlab.com/kicad/libraries/kicad-footprint-generator, data/SMD_2terminal_chip_molded, from IPC-SM-782)"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "MSOP-8_3x3mm_P0.65mm",
+  "description": "MSOP-8 3 x 3 mm, 0.65 mm pitch, JEDEC MO-187AA",
+  "package_type": "gullwing",
+  "pin_count": 8,
+  "pitch": 0.65,
+  "lead_span": {
+    "min": 4.75,
+    "max": 5.05
+  },
+  "body_width": {
+    "min": 2.9,
+    "max": 3.1
+  },
+  "body_length": {
+    "min": 2.9,
+    "max": 3.1
+  },
+  "terminal_width": {
+    "min": 0.22,
+    "max": 0.4
+  },
+  "terminal_length": {
+    "min": 0.4,
+    "max": 0.8
+  },
+  "density": "B",
+  "source": {
+    "drawing": "JEDEC MO-187AA - typical JEDEC/datasheet outline - check against your part's datasheet"
+  }
+}

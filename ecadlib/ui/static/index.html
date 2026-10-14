@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ecadlib</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #fff; --text: #1b1f24; --muted: #5d6673; --line: #dde1e6;
+  --accent: #2357d9; --accent-weak: #e7eefc;
+  --ok: #1d7a46; --ok-bg: #e3f4ea; --warn: #9a5b00; --warn-bg: #fdf1dc; --bad: #b3261e; --bad-bg: #fbe6e4;
+  --info: #3d4aa8; --info-bg: #e9ebfb; --off: #5d6673; --off-bg: #eceef1;
+  --copper: #c8743a; --p1: #d9382b; --crtyd: #8a96a3;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #14171b; --panel: #1c2026; --text: #e6e9ed; --muted: #9aa3ad; --line: #2e343c;
+    --accent: #7ea2ff; --accent-weak: #22304f; --ok: #6fd39a; --ok-bg: #173325; --warn: #f0b660; --warn-bg: #3a2c12;
+    --bad: #ff8a80; --bad-bg: #3d1d1b; --info: #a9b3ff; --info-bg: #262a4a; --off: #9aa3ad; --off-bg: #262b32;
+    --copper: #e0955c; --p1: #ff6b5e; --crtyd: #6b7682; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+header { display: flex; align-items: baseline; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; }
+header .meta { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+main { max-width: 1280px; margin: 0 auto; padding: 18px 16px 60px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.card h2 { font-size: 15px; margin: 0 0 4px; }
+.drop { border: 2px dashed var(--line); border-radius: 10px; padding: 26px; text-align: center; color: var(--muted); cursor: pointer; }
+.drop.over, .drop:focus-visible { border-color: var(--accent); background: var(--accent-weak); color: var(--text); outline: none; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.spread { justify-content: space-between; }
+button, select, input[type=search] { font: inherit; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; }
+button { cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { border-color: var(--bad); color: var(--bad); }
+button:disabled { opacity: .5; cursor: default; }
+input[type=search] { min-width: 220px; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 12px; }
+.chip { border-radius: 999px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; border: 1px solid transparent; }
+.chip.active { border-color: currentColor; }
+.s-ok { background: var(--ok-bg); color: var(--ok); }
+.s-warn { background: var(--warn-bg); color: var(--warn); }
+.s-bad { background: var(--bad-bg); color: var(--bad); }
+.s-info { background: var(--info-bg); color: var(--info); }
+.s-off { background: var(--off-bg); color: var(--off); }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+td.notes { color: var(--muted); max-width: 340px; }
+td code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.pill { border-radius: 6px; padding: 2px 7px; font-size: 12px; white-space: nowrap; }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+.banner { border-radius: 8px; padding: 9px 12px; margin: 10px 0; white-space: pre-wrap; display: flex; gap: 10px; justify-content: space-between; align-items: start; }
+.banner button { padding: 0 8px; border: none; background: transparent; color: inherit; font-size: 16px; }
+.progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+.progress > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.box { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.box h3 { font-size: 14px; margin: 0 0 4px; }
+.box p { margin: 4px 0 10px; }
+.out { margin-top: 8px; font-size: 12.5px; overflow-wrap: anywhere; }
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 0; width: min(1000px, 96vw); }
+dialog::backdrop { background: rgba(0,0,0,.35); }
+.dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); gap: 10px; flex-wrap: wrap; }
+.dlg-body { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; }
+@media (max-width: 760px) { .dlg-body { grid-template-columns: 1fr; } input[type=search] { min-width: 0; width: 100%; } }
+textarea { width: 100%; min-height: 330px; font: 12px/1.4 ui-monospace, Menlo, monospace; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.preview { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; text-align: center; min-height: 220px; }
+.preview svg { max-width: 100%; height: auto; max-height: 340px; }
+svg.fp .pad { fill: var(--copper); }
+svg.fp .pad.p1 { fill: var(--p1); }
+svg.fp .pad.ep { fill: var(--copper); opacity: .7; }
+svg.fp .crtyd { fill: none; stroke: var(--crtyd); stroke-width: .05; stroke-dasharray: .15 .1; }
+.nums { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; margin-top: 10px; font-size: 12.5px; text-align: left; }
+.nums div { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px; }
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; display: none; max-width: 90vw; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ecadlib</h1>
+  <span class="meta" id="meta">loading…</span>
+</header>
+<main>
+  <section class="card">
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a BOM file">
+      <strong>Drop a BOM here</strong> (CSV or XLSX), or click to choose a file.
+      <div class="muted small" style="margin-top:6px">Altium, KiCad and spreadsheet BOMs work. Columns such as Designator, Comment, MPN, Manufacturer, LCSC, Value and Footprint are matched automatically.</div>
+      <input type="file" id="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls" hidden>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="muted">Or re-check one already in the workspace:</span>
+      <select id="boms"></select>
+      <button id="rerun">Check again</button>
+    </div>
+    <div id="busy" hidden>
+      <div class="muted small" id="busytext" style="margin-top:10px"></div>
+      <div class="progress"><div id="bar"></div></div>
+    </div>
+    <div id="error"></div>
+  </section>
+
+  <section class="card" id="results" hidden>
+    <div class="row spread">
+      <div><h2 id="bomname"></h2><div class="muted small" id="mapping"></div></div>
+      <div class="row small"><a id="reportmd" href="#">report.md</a> <a id="reportcsv" href="#">report.csv</a></div>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="row" style="margin-bottom:8px"><input type="search" id="q" placeholder="Filter by ref, MPN, package…" aria-label="Filter lines"></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>#</th><th>Ref</th><th>MPN</th><th>Package</th><th>Status</th><th>Local symbol / footprint</th><th>Source sym / fp / 3D</th><th>Notes</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+    <div class="muted small" id="shown" style="margin-top:6px"></div>
+  </section>
+
+  <section class="card" id="export" hidden>
+    <h2>Send to Altium</h2>
+    <div class="grid3" style="margin-top:10px">
+      <div class="box">
+        <h3>Database library (DbLib)</h3>
+        <p class="muted small">Writes parts.sqlite, parts.xlsx and two .DbLib files for this BOM. Open a .DbLib in Altium Designer; the SQLite one needs the SQLite3 ODBC driver, the Excel one needs the Access database engine.</p>
+        <button id="dblib">Export DbLib</button>
+        <div class="out" id="dblibout"></div>
+      </div>
+      <div class="box">
+        <h3>Altium library files</h3>
+        <p class="muted small">Converts this BOM's footprints from your KiCad libraries to .PcbLib and writes generic Resistor and Capacitor .SchLib symbols. Footprints you approve here get a .PcbLib automatically.</p>
+        <button id="models">Build .PcbLib / .SchLib</button>
+        <div class="out" id="modelsout"></div>
+      </div>
+      <div class="box">
+        <h3>Altium 365 workspace</h3>
+        <p class="muted small" id="a365hint">Plans one managed component per part. A part is ready once its .SchLib and .PcbLib exist.</p>
+        <div class="row">
+          <button id="plan">Plan release</button>
+          <select id="wsurl" hidden></select>
+          <button id="dry" disabled>Dry run</button>
+          <button id="push" class="danger" disabled>Push</button>
+        </div>
+        <div class="out" id="planout"></div>
+        <div class="out" id="dryout"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="row spread">
+      <div><h2>Footprint generator</h2>
+      <p class="muted small" style="margin:2px 0 0">IPC-7351B land patterns from datasheet dimensions. You preview each one; it is only saved (KiCad .kicad_mod and Altium .PcbLib) when you approve it.</p></div>
+      <button id="newfp">New footprint…</button>
+    </div>
+  </section>
+</main>
+
+<dialog id="dlg">
+  <div class="dlg-head">
+    <strong id="dlgtitle">Generate footprint</strong>
+    <div class="row">
+      <select id="example" aria-label="Example package"><option value="">Start from an example…</option></select>
+      <select id="density" aria-label="Density"><option value="">density (from spec)</option><option value="A">A (most)</option><option value="B">B (nominal)</option><option value="C">C (least)</option></select>
+      <button id="close">Close</button>
+    </div>
+  </div>
+  <div class="dlg-body">
+    <div>
+      <div class="muted small" style="margin-bottom:6px">Package dimensions in mm, min/max from the datasheet drawing (<span class="mono">package_schema.json</span>)</div>
+      <textarea id="spec" spellcheck="false" aria-label="Package dimensions JSON"></textarea>
+    </div>
+    <div>
+      <div class="preview" id="preview"></div>
+      <div class="nums" id="nums"></div>
+      <div id="dlgerr"></div>
+      <div class="row" style="margin-top:12px; justify-content:flex-end">
+        <button id="previewbtn">Preview</button>
+        <button id="approve" class="primary" disabled>Approve and add to library</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const STATUS = {
+  "in_library": ["In library", "s-ok"],
+  "in_library (generated footprint)": ["In library (generated fp)", "s-ok"],
+  "available_easyeda": ["Available (EasyEDA)", "s-info"],
+  "easyeda_footprint_only": ["Footprint only (EasyEDA)", "s-warn"],
+  "needs_footprint_generation": ["Needs footprint", "s-bad"],
+  "unverified (source unreachable)": ["Unverified (source unreachable)", "s-warn"],
+  "dnp (not fitted)": ["DNP", "s-off"],
+};
+const GENERATE = new Set(["needs_footprint_generation", "unverified (source unreachable)", "easyeda_footprint_only"]);
+let current = null, filter = null, specs = {}, info = null, busy = false;
+
+async function api(path, body, raw) {
+  const opt = body === undefined ? {} : { method: "POST", body: raw ? body : JSON.stringify(body),
+    headers: raw ? { "X-Filename": encodeURIComponent(raw) } : { "Content-Type": "application/json" } };
+  let r;
+  try { r = await fetch(path, opt); } catch (e) { throw new Error("ecadlib isn't responding. Is it still running in your terminal?"); }
+  const j = await r.json().catch(() => ({ error: r.statusText }));
+  if (!r.ok) { const e = new Error(j.error || r.statusText); e.status = r.status; throw e; }
+  return j;
+}
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fileUrl = p => "/api/file?path=" + encodeURIComponent(p);
+const fileLink = p => `<a href="${fileUrl(p)}">${esc(p.split("/").pop())}</a>`;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", 3200); }
+function banner(el, msg, cls = "s-bad") {
+  el.innerHTML = msg ? `<div class="banner ${cls}"><span>${esc(msg)}</span><button aria-label="Dismiss">×</button></div>` : "";
+  if (msg) el.querySelector("button").onclick = () => el.innerHTML = "";
+}
+const showErr = e => banner($("#error"), e ? String(e.message || e) : "");
+
+async function loadInfo() {
+  info = await api("/api/info");
+  const prov = info.providers.filter(p => p.enabled).map(p => p.name + (p.configured ? "" : " (no key)")).join(", ");
+  $("#meta").textContent = `workspace ${info.workspace} · ${info.symbols} symbols, ${info.footprints} footprints indexed` +
+    (info.offline ? " · offline" : "") + ` · sources: ${prov}`;
+  const sel = $("#boms"), keep = sel.value;
+  sel.innerHTML = info.boms.map(b => `<option>${esc(b)}</option>`).join("") || "<option value=''>(none yet)</option>";
+  if (info.boms.includes(keep)) sel.value = keep;
+  $("#a365hint").textContent = info.altium365.token
+    ? "Plans one managed component per part. A part is ready once its .SchLib and .PcbLib exist. Dry run shows the requests without sending anything."
+    : "Plans one managed component per part (ready once its .SchLib and .PcbLib exist). To push, restart ecadlib with NEXAR_TOKEN set; Dry run works without it.";
+}
+
+function setBusy(on, text = "", frac = null) {
+  busy = on; $("#busy").hidden = !on; $("#busytext").textContent = text;
+  $("#bar").style.width = frac == null ? "0" : `${Math.round(frac * 100)}%`;
+  ["#rerun", "#file"].forEach(s => $(s).disabled = on);
+}
+
+async function runJob(start, label) {
+  if (busy) return;
+  showErr(); setBusy(true, `Checking ${label}…`);
+  try {
+    const { job } = await start;
+    for (;;) {
+      await new Promise(r => setTimeout(r, 400));
+      const j = await api("/api/job?id=" + job);
+      if (j.total) setBusy(true, `Checking ${label}: line ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? " (" + j.label + ")" : ""}`, j.done / j.total);
+      if (j.state === "done") {
+        current = j.result; filter = null; $("#q").value = ""; planned = null;
+        ["#dblibout", "#modelsout", "#planout", "#dryout"].forEach(s => $(s).innerHTML = "");
+        $("#dry").disabled = $("#push").disabled = true; render(); break;
+      }
+      if (j.state === "error") throw new Error(j.error);
+    }
+  } catch (e) { showErr(e); }
+  finally { setBusy(false); loadInfo().then(() => { if (current) $("#boms").value = current.bom; }).catch(() => {}); }
+}
+
+function render() {
+  const t = current;
+  $("#results").hidden = false; $("#export").hidden = false;
+  $("#bomname").textContent = t.bom.split("/").pop();
+  $("#mapping").textContent = "Columns used: " + Object.entries(t.mapping).map(([k, v]) => `${k} ← "${v}"`).join(", ");
+  $("#reportmd").href = fileUrl(t.reports[0]); $("#reportcsv").href = fileUrl(t.reports[1]);
+  $("#chips").innerHTML = Object.entries(t.counts).map(([k, v]) => {
+    const [lab, cls] = STATUS[k] || [k, "s-info"];
+    return `<span class="chip ${cls} ${filter === k ? "active" : ""}" data-s="${esc(k)}" role="button" tabindex="0">${esc(lab)}: ${v}</span>`;
+  }).join("");
+  const q = $("#q").value.trim().toLowerCase();
+  const rows = t.rows.filter(r => (!filter || r.status === filter) &&
+    (!q || [r.designator, r.mpn, r.manufacturer, r.value, r.package, r.lcsc].join(" ").toLowerCase().includes(q)));
+  $("#rows").innerHTML = rows.map(r => {
+    const [lab, cls] = STATUS[r.status] || [r.status, "s-info"];
+    const src = [r.src_symbol, r.src_footprint, r.src_3d].map(x => x || "–").join(" / ");
+    const act = GENERATE.has(r.status) ? `<button data-gen="${r.line}">Generate…</button>` : "";
+    return `<tr><td>${r.line}</td><td>${esc(r.designator)}</td><td><code>${esc(r.mpn) || "–"}</code><div class="muted">${esc(r.manufacturer)}</div></td>
+      <td>${esc(r.package)}<div class="muted">${esc(r.value)}</div></td><td><span class="pill ${cls}">${esc(lab)}</span></td>
+      <td><div>${esc(r.local_symbol) || "<span class=muted>–</span>"}</div><div class="muted mono">${esc(r.local_footprint)}</div></td>
+      <td>${r.src ? esc(r.src) + ": " : ""}${src}</td><td class="notes">${esc(r.notes)}</td><td>${act}</td></tr>`;
+  }).join("") || `<tr><td colspan="9" class="muted">No lines match.</td></tr>`;
+  $("#shown").textContent = rows.length === t.rows.length ? `${t.rows.length} lines` : `${rows.length} of ${t.rows.length} lines shown`;
+}
+
+const chipToggle = e => { const s = e.target.dataset.s; if (!s) return; filter = filter === s ? null : s; render(); };
+$("#chips").addEventListener("click", chipToggle);
+$("#chips").addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); chipToggle(e); } });
+$("#q").addEventListener("input", () => current && render());
+$("#rows").addEventListener("click", e => { const n = e.target.dataset.gen; if (n) openGen(current.rows.find(r => r.line == n)); });
+
+const drop = $("#drop");
+drop.addEventListener("click", () => !busy && $("#file").click());
+drop.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && !busy) { e.preventDefault(); $("#file").click(); } });
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); });
+$("#file").addEventListener("change", e => { if (e.target.files[0]) upload(e.target.files[0]); e.target.value = ""; });
+async function upload(f) {
+  if (busy) return;
+  if (f.size > 20 * 1024 * 1024) return showErr("That file is over 20 MB, which is too big for a BOM.");
+  runJob(api("/api/upload", await f.arrayBuffer(), f.name), f.name);
+}
+$("#rerun").addEventListener("click", () => { const b = $("#boms").value; if (b) runJob(api("/api/triage", { bom: b }), b); });
+
+// ---- Altium
+async function action(btn, out, fn) {
+  btn.disabled = true; const old = btn.textContent; btn.textContent = old + "…";
+  try { out.innerHTML = await fn(); } catch (e) { banner(out, e.message); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+$("#dblib").addEventListener("click", e => action(e.target, $("#dblibout"), async () => {
+  const r = await api("/api/export/dblib", { bom: current.bom });
+  return "Written: " + r.files.map(fileLink).join(" · ");
+}));
+$("#models").addEventListener("click", e => action(e.target, $("#modelsout"), async () => {
+  const r = await api("/api/altium/models", { bom: current.bom });
+  await loadInfo();
+  return `${r.footprints.length} footprint(s) as .PcbLib${r.footprints.length ? ": " + esc(r.footprints.join(", ")) : ""}. Symbols: ${esc(r.symbols.join(", ") || "none")}.` +
+    (r.skipped.length ? `<div class="muted">Not converted: ${esc(r.skipped.join("; "))}</div>` : "") +
+    `<div class="muted">Files are in <span class="mono">${esc(info.workspace)}/altium_models</span>.</div>`;
+}));
+let planned = null;
+$("#plan").addEventListener("click", e => action(e.target, $("#planout"), async () => {
+  planned = await api("/api/altium365/plan", { bom: current.bom });
+  $("#dry").disabled = false;
+  if (info.altium365.token) {
+    try {
+      const w = await api("/api/altium365/workspaces", {});
+      $("#wsurl").innerHTML = w.workspaces.map(x => `<option value="${esc(x.url)}">${esc(x.name)}</option>`).join("");
+      $("#wsurl").hidden = false; $("#push").disabled = !w.workspaces.length || !planned.ready;
+    } catch (err) { banner($("#planout"), "Couldn't list Altium 365 workspaces: " + err.message); }
+  }
+  const why = i => !i.symbol.file && !i.footprint.file ? "needs symbol and footprint" : !i.symbol.file ? `needs symbol ${i.symbol.ref}.SchLib` : `needs footprint ${i.footprint.ref}.PcbLib`;
+  return `<strong>${planned.ready} of ${planned.total}</strong> parts ready to release. ${fileLink(planned.plan)}
+    <table style="margin-top:6px"><tbody>${planned.items.map(i => `<tr><td>${esc(i.name)}<div class="muted">${esc(i.folder)}</div></td>
+    <td>${i.status === "ready" ? '<span class="pill s-ok">ready</span>' : `<span class="pill s-warn">${esc(why(i))}</span>`}</td></tr>`).join("")}</tbody></table>`;
+}));
+$("#dry").addEventListener("click", e => action(e.target, $("#dryout"), async () => {
+  const r = await api("/api/altium365/push", { bom: current.bom, workspace: $("#wsurl").value || "", dry_run: true });
+  const n = a => r.results.filter(x => x.action === a).length;
+  return `Dry run, nothing sent: ${n("release")} would be released, ${n("skip")} skipped. Requests: ${fileLink(r.report)}`;
+}));
+$("#push").addEventListener("click", e => {
+  const ws = $("#wsurl").selectedOptions[0];
+  if (!ws || !confirm(`Release ${planned.ready} part(s) into the Altium 365 workspace "${ws.textContent}"? This creates real components there and updates parameters of parts that already exist.`)) return;
+  action(e.target, $("#dryout"), async () => {
+    const r = await api("/api/altium365/push", { bom: current.bom, workspace: ws.value, dry_run: false });
+    const bad = r.results.filter(x => x.action === "error");
+    return `Pushed: ${r.results.filter(x => x.action === "release").length} released, ${r.results.filter(x => x.action === "update_parameters").length} updated, ${bad.length} failed. Report: ${fileLink(r.report)}` +
+      (bad.length ? `<div class="muted">${bad.map(b => esc(b.name + ": " + b.detail)).join("<br>")}</div>` : "");
+  });
+});
+
+// ---- footprint dialog
+const dlg = $("#dlg");
+async function loadSpecs() {
+  specs = await api("/api/specs");
+  $("#example").innerHTML = '<option value="">Start from an example…</option>' + Object.keys(specs).map(k => `<option>${esc(k)}</option>`).join("");
+}
+const norm = s => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+function guessSpec(row) {
+  const pkg = norm(row && row.package);
+  if (!pkg) return null;
+  const hits = Object.keys(specs).filter(k => norm(k).includes(pkg));
+  const cls = (row.designator.match(/^[A-Z]/i) || [""])[0].toUpperCase();
+  return hits.find(k => k.toUpperCase().startsWith(cls + "_")) || hits.find(k => !/^[RCL]_/.test(k)) || null;
+}
+const placeholder = '<span class="muted small">No example matches this package, so these values are placeholders. Replace them with the dimensions from the datasheet drawing, then Preview.</span>';
+function openGen(row) {
+  $("#dlgtitle").textContent = row ? `Generate footprint for ${row.designator} (${row.mpn || row.value})` : "Generate footprint";
+  const g = guessSpec(row);
+  const tmpl = g ? specs[g] : { name: row ? (row.package || row.mpn || "MyPackage") : "MyPackage", description: row ? `${row.manufacturer} ${row.mpn}`.trim() : "",
+    package_type: "gullwing", pin_count: 8, pitch: 1.27, lead_span: { min: 5.8, max: 6.2 }, body_width: { min: 3.8, max: 4.0 },
+    body_length: { min: 4.8, max: 5.0 }, terminal_length: { min: 0.4, max: 1.27 }, terminal_width: { min: 0.31, max: 0.51 },
+    density: "B", source: { datasheet: "" } };
+  $("#spec").value = JSON.stringify(tmpl, null, 2); $("#example").value = g || "";
+  $("#preview").innerHTML = g ? "" : placeholder; $("#nums").innerHTML = ""; banner($("#dlgerr"), "");
+  $("#approve").disabled = true; dlg.showModal(); if (g) preview();
+}
+$("#newfp").addEventListener("click", () => openGen(null));
+$("#close").addEventListener("click", () => dlg.close());
+$("#example").addEventListener("change", e => { if (specs[e.target.value]) { $("#spec").value = JSON.stringify(specs[e.target.value], null, 2); preview(); } });
+$("#density").addEventListener("change", preview);
+$("#spec").addEventListener("input", () => { $("#approve").disabled = true; });
+$("#previewbtn").addEventListener("click", preview);
+function readSpec() {
+  try { return JSON.parse($("#spec").value); } catch (e) { throw new Error("The dimensions aren't valid JSON: " + e.message); }
+}
+async function preview() {
+  banner($("#dlgerr"), "");
+  try {
+    const r = await api("/api/footprint/preview", { spec: readSpec(), density: $("#density").value || null });
+    $("#preview").innerHTML = r.svg;
+    const rep = r.report, f = x => typeof x === "number" ? x.toFixed(2) : x;
+    const items = [["IPC family", rep.ipc_family], ["density", rep.density], ["Z", f(rep.Z)], ["G", f(rep.G)], ["X", f(rep.X)],
+      ["pads", rep.pads.length], ["courtyard", rep.courtyard.map(f).join(" × ")], ["pad 1", `${f(rep.pads[0].w)} × ${f(rep.pads[0].h)}`]];
+    if (rep.EP) items.push(["EP", `${rep.EP[0]} × ${rep.EP[1]}`]);
+    $("#nums").innerHTML = items.map(([k, v]) => `<div><span class="muted">${k}</span><br>${esc(v)}</div>`).join("") +
+      (rep.warning ? `<div class="s-warn" style="grid-column:1/-1">⚠ ${esc(rep.warning)}</div>` : "") +
+      (rep.checks || []).map(c => `<div class="${c.level === "error" ? "s-bad" : "s-warn"}" style="grid-column:1/-1">${c.level === "error" ? "✖" : "⚠"} ${esc(c.rule)}: ${esc(c.message)}</div>`).join("") +
+      (rep.checks && !rep.checks.length ? `<div class="s-ok" style="grid-column:1/-1">✓ Passes the copper, silkscreen, fab and courtyard checks</div>` : "") +
+      (r.exists ? `<div class="s-info" style="grid-column:1/-1">A footprint called ${esc(r.name)} is already in the workspace library; approving will ask before replacing it.</div>` : "");
+    $("#approve").disabled = false;
+  } catch (e) { banner($("#dlgerr"), e.message); $("#approve").disabled = true; }
+}
+async function approve(overwrite) {
+  const r = await api("/api/footprint/approve", { spec: readSpec(), density: $("#density").value || null, overwrite });
+  dlg.close(); toast(`Saved ${r.name}: ${r.files.map(f => f.split(".").pop()).join(" + ")}` + (r.warnings.length ? ` (${r.warnings.join("; ")})` : ""));
+  loadInfo();
+  if (current) runJob(api("/api/triage", { bom: current.bom }), current.bom);
+}
+$("#approve").addEventListener("click", async () => {
+  try { await approve(false); }
+  catch (e) {
+    if (e.status === 409 && confirm(e.message.replace("; approve again with overwrite to replace it", ".") + "\n\nReplace it?")) {
+      try { await approve(true); } catch (e2) { banner($("#dlgerr"), e2.message); }
+    } else if (e.status !== 409) banner($("#dlgerr"), e.message);
+  }
+});
+
+loadInfo().catch(showErr); loadSpecs().catch(showErr);
+</script>
+</body>
+</html>

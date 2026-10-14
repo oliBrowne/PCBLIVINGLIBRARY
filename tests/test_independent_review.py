@@ -19,7 +19,7 @@ def _index(syms=(), fps=()):
 
 
 def test_p1_non_cp1252_names():
-    fp = AL.footprint_from_spec(json.loads(Path("examples/packages/R_0603_1608Metric.json").read_text()))[0]
+    fp = AL.footprint_from_spec(json.loads(Path("ecadlib/package_specs/R_0603_1608Metric.json").read_text()))[0]
     fp["name"] = "R_1kΩ_0603"
     sym = dict(AL.resistor_symbol(), name="Ω-sensor", footprint="R_1kΩ_0603")
     with tempfile.TemporaryDirectory() as d:
