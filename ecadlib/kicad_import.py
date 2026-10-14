@@ -595,15 +595,16 @@ def pin_pad_check(sym, fp):
     return sorted(pins - pads), sorted(pads - pins)
 
 
-def import_part(spec, out, http, step=False, write=True, gen_step=True):
+def import_part(spec, out, http, step=False, write=True, gen_step=True, layers=None):
     """spec: {footprint, symbol, mpn?, footprint_as?, symbol_as?, height_mm?, pin_map?, note?} -> report dict.
-    gen_step: a step_gen model instead of an extruded box when there is no KiCad STEP to embed."""
+    gen_step: a step_gen model instead of an extruded box when there is no KiCad STEP to embed.
+    layers: the library rules' layers (rules.layers()); None = ecadlib's."""
     rep = {"mpn": spec.get("mpn", ""), "footprint": spec["footprint"], "symbol": spec.get("symbol"), "notes": [], "ok": False}
     try:
         text, src = load_footprint(spec["footprint"], http)
         fp, t = convert_footprint(text, spec.get("footprint_as"), src, rep["notes"])
         add_body(fp, t, http, spec.get("height_mm"), step, rep["notes"], gen_step=gen_step)
-        rep["pcblib"] = str(AL.write_pcblib(Path(out) / "PcbLib" / f"{AL.file_stem(fp['name'])}.PcbLib", [fp])) if write else None
+        rep["pcblib"] = str(AL.write_pcblib(Path(out) / "PcbLib" / f"{AL.file_stem(fp['name'])}.PcbLib", [fp], layers)) if write else None
         rep["pads"] = len(fp["pads"])
         if spec.get("symbol"):
             chain, ssrc = load_symbol(spec["symbol"], http)
@@ -639,6 +640,7 @@ def main(argv=None):
         p.add_argument("--step", dest=pre + "step", action="store_true", help="embed the KiCad STEP model instead of an extruded body", **d)
         p.add_argument("--box", dest=pre + "box", action="store_true",
                        help="extruded box instead of a generated (step_gen) STEP model when no KiCad STEP is embedded", **d)
+        p.add_argument("--rules", dest=pre + "rules", help="library rules file: layers (default: ecadlib.toml found from -o)", **d)
     ap = argparse.ArgumentParser(description="Convert KiCad library footprints/symbols to Altium PcbLib/SchLib")
     opts(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -652,7 +654,7 @@ def main(argv=None):
     for p in (b, f, s):
         opts(p, "sub_")
     a = ap.parse_args(argv)
-    for k in ("out", "cache", "offline", "step", "box"):
+    for k in ("out", "cache", "offline", "step", "box", "rules"):
         if hasattr(a, "sub_" + k):
             setattr(a, k, getattr(a, "sub_" + k))
     http = CachedHTTP(a.cache, offline=a.offline, timeout=60)
@@ -669,7 +671,9 @@ def main(argv=None):
         return
     specs = json.loads(Path(a.parts).read_text()) if a.cmd == "batch" else [{"footprint": a.ref, "footprint_as": a.as_, "height_mm": a.height}]
     (out / "PcbLib").mkdir(parents=True, exist_ok=True); (out / "SchLib").mkdir(parents=True, exist_ok=True)
-    reps = [import_part(sp, out, http, a.step, gen_step=not a.box) for sp in specs]
+    from . import rules as RU
+    lay = RU.layers(RU.load(getattr(a, "rules", None), start=out))
+    reps = [import_part(sp, out, http, a.step, gen_step=not a.box, layers=lay) for sp in specs]
     for r in reps:
         print(f"{'ok  ' if r['ok'] else 'FAIL'} {r['mpn'] or r['footprint']:<26} {r.get('pads', '-'):>3} pads {r.get('pins', '-'):>3} pins  "
               f"{Path(r.get('pcblib') or '-').name} {Path(r.get('schlib') or '-').name}")

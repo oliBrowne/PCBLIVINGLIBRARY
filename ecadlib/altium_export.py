@@ -34,13 +34,18 @@ CATEGORY = {"R": "Resistors", "C": "Capacitors", "L": "Inductors", "D": "Diodes"
 GENERIC_SYMBOL = {"Resistors": "Resistor", "Capacitors": "Capacitor", "Inductors": "Inductor"}
 
 
-def to_rows(lines, triage=None):
+def to_rows(lines, triage=None, rules=None):
+    """{category: DataFrame of DbLib rows}. rules (ecadlib.rules): part names, footprint names, value style and
+    supplier columns; None keeps ecadlib's own. df.attrs["kicad_fp"] maps a part to its footprint's original name
+    when the rules renamed it."""
+    from . import rules as RU
+    custom = rules is not None and not RU.is_default(rules, "naming")
     tri = {}
     if triage is not None:
         for _, t in triage.iterrows():
             if str(t["mpn"]):                  # an empty MPN would hand one row's footprint to every MPN-less line
                 tri[str(t["mpn"])] = t
-    out, seen = {}, {}
+    out, seen, renamed = {}, {}, {}
     for ln in lines:
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
         cat = CATEGORY.get(prefix.group(0) if prefix else "U", "Misc")
@@ -52,12 +57,20 @@ def to_rows(lines, triage=None):
         fp_ref = fp.split(":")[-1]
         pkg = package_of(fp, ln.get("description")) or ""
         value = ln.get("value", "")
-        pn = (f"{cat[:3].upper()}-{pkg}-{value}" if cat in GENERIC_SYMBOL and value
-              else mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
+        if custom:
+            f = RU.line_fields(ln, cat, pkg, rules, prefix.group(0) if prefix else "U")
+            pn = (RU.component_name(f, rules) or ln.get("designator", "").split(",")[0]).replace(" ", "")
+        else:
+            pn = (f"{cat[:3].upper()}-{pkg}-{value}" if cat in GENERIC_SYMBOL and value
+                  else mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
         if seen.setdefault(pn, mpn) != mpn:      # same synthetic PN, different part (e.g. 100nF 16V vs 50V): keep both
             pn = f"{pn}-{mpn}".replace(" ", "")
-        lib_ref = lib_name(GENERIC_SYMBOL.get(cat, mpn or pn))
-        fp_ref = lib_name(fp_ref)
+        lib_ref = lib_name(GENERIC_SYMBOL.get(cat) or (custom and mpn and RU.symbol_name(f, rules)) or mpn or pn)
+        kicad_fp = fp_ref = lib_name(fp_ref)
+        if custom:
+            fp_ref = lib_name(RU.footprint_name(fp_ref, rules, prefix.group(0) if prefix else None))
+            if fp_ref != kicad_fp:
+                renamed[pn] = kicad_fp
         out.setdefault(cat, []).append({
             "Part Number": pn,
             "Library Ref": lib_ref,
@@ -74,7 +87,18 @@ def to_rows(lines, triage=None):
             "ComponentLink2Description": "Datasheet" if lcsc else "",
             "ComponentLink2URL": f"https://www.lcsc.com/datasheet/{lcsc}.pdf" if lcsc else "",
         })
-    return {k: pd.DataFrame(v, columns=COLUMNS).drop_duplicates("Part Number") for k, v in sorted(out.items())}
+    cols = columns(rules)
+    res = {k: pd.DataFrame(v, columns=cols).fillna("").drop_duplicates("Part Number") for k, v in sorted(out.items())}
+    for df in res.values():
+        df.attrs["kicad_fp"] = renamed
+    return res
+
+
+def columns(rules=None):
+    """COLUMNS with the rules' number of supplier slots (2 = COLUMNS as is)."""
+    n = (rules or {}).get("parameters", {}).get("supplier_slots", 2)
+    sup = [c for i in range(1, n + 1) for c in (f"Supplier {i}", f"Supplier Part Number {i}")]
+    return COLUMNS[:10] + sup + COLUMNS[14:] if n != 2 else list(COLUMNS)
 
 
 def sqlite_connection(db_path):
@@ -135,27 +159,31 @@ def main(argv=None):
     ap.add_argument("-o", "--out", default="out/altium")
     ap.add_argument("--triage", help="triage CSV from bom_triage (to pick up resolved local footprints)")
     ap.add_argument("--win-dir", default=r"C:\ecadlib\altium", help="Windows folder the DB will live in (for the connection string)")
+    ap.add_argument("--rules", help="library rules file (default: ecadlib.toml in the output folder, the current folder or a parent)")
     a = ap.parse_args(argv)
 
-    lines, _ = read_bom(a.bom)
+    from . import rules as RU
+    rules = RU.load(a.rules, start=a.out)
+    lines, _ = read_bom(a.bom, RU.bom_columns(rules))
     tri = pd.read_csv(a.triage, dtype=str).fillna("") if a.triage else None
-    tables = to_rows(lines, tri)
+    tables = to_rows(lines, tri, rules)
+    tables = {k: df.rename(columns=lambda c: RU.house_row({c: 0}, rules).popitem()[0]) for k, df in tables.items()}
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
 
     db = out / "parts.sqlite"
     db.unlink(missing_ok=True)
     with closing(sqlite3.connect(db)) as con, con:      # `with con` alone commits but never closes
         for name, df in tables.items():
-            cols = ", ".join(f'"{c}" TEXT' + (" PRIMARY KEY" if c == "Part Number" else "") for c in COLUMNS)
+            cols = ", ".join(f'"{c}" TEXT' + (" PRIMARY KEY" if c == "Part Number" else "") for c in df.columns)
             con.execute(f'CREATE TABLE "{name}" ({cols})')
-            con.executemany(f'INSERT INTO "{name}" VALUES ({",".join("?" * len(COLUMNS))})', df.values.tolist())
+            con.executemany(f'INSERT INTO "{name}" VALUES ({",".join("?" * len(df.columns))})', df.values.tolist())
     with pd.ExcelWriter(out / "parts.xlsx") as w:
         for name, df in tables.items():
             df.to_excel(w, sheet_name=name, index=False)
 
     win = PureWindowsPath(a.win_dir)
     sqlite_cs, excel_cs = sqlite_connection(win / "parts.sqlite"), excel_connection(win / "parts.xlsx")
-    names = list(tables)
+    names = {k: list(df.columns) for k, df in tables.items()}
     (out / "ecadlib_sqlite.DbLib").write_text(dblib_text(sqlite_cs, names, '"', '"'), newline="")
     (out / "ecadlib_excel.DbLib").write_text(dblib_text(excel_cs, names, "[", "]", excel=True), newline="")
     for n_, df in tables.items():

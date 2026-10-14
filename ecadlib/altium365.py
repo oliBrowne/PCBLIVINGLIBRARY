@@ -128,13 +128,16 @@ def find_model(models, kind, ref):
     return next((str(f) for f in (Path(m) / kind / f"{file_stem(ref)}.{kind}" for m in models) if f.exists()), None)
 
 
-def plan(lines, triage=None, models=None, root="Components"):
+def plan(lines, triage=None, models=None, root=None, rules=None):
     """One release item per unique Part Number, reusing the DbLib row builder for parameters.
     models: a folder or a list of folders, each with SchLib/<Library Ref>.SchLib and PcbLib/<Footprint Ref>.PcbLib;
-    symbol and footprint are looked up independently, first folder wins."""
+    symbol and footprint are looked up independently, first folder wins. rules (ecadlib.rules, loaded): part and
+    footprint names, folders and default parameters; None keeps ecadlib's own. root overrides the rules' folder root."""
+    from . import rules as RU
     models = [models] if isinstance(models, (str, Path)) else list(models or [])
     items, names = [], set()
-    for cat, df in to_rows(lines, triage).items():
+    defaults = RU.default_params(rules)
+    for cat, df in to_rows(lines, triage, rules).items():
         for row in df.to_dict("records"):
             if row["Part Number"] in names:    # same MPN under two designator classes: one workspace item
                 continue
@@ -144,14 +147,20 @@ def plan(lines, triage=None, models=None, root="Components"):
                 sym, fp = find_model(models, "SchLib", row["Library Ref"]), find_model(models, "PcbLib", row["Footprint Ref"])
             managed = [k for k in row if k not in RESERVED and k not in ("Part Number", "Comment")]
             params = [{"name": k, "value": str(row[k])} for k in managed if str(row[k])]
+            have = {p["name"] for p in params}
+            params += [{"name": k, "value": v} for k, v in defaults if k not in have and v]
             items.append({
-                "name": row["Part Number"], "folder": f"{root}/{cat}",
+                "name": row["Part Number"],
+                "folder": RU.folder_for(cat, rules, root) if rules is not None else f"{root or 'Components'}/{cat}",
                 "description": row["Description"], "comment": row["Comment"], "parameters": params,
                 "cleared": [k for k in managed if not str(row[k])],
                 "symbol": {"ref": row["Library Ref"], "file": sym},
                 "footprint": {"ref": row["Footprint Ref"], "file": fp},
                 "status": "ready" if sym and fp else "needs_altium_models",
             })
+            kfp = df.attrs.get("kicad_fp", {}).get(row["Part Number"])
+            if kfp:                            # renamed by the rules: keep the library name for lookups and checks
+                items[-1]["footprint"]["kicad"] = kfp
     return items
 
 
@@ -230,11 +239,14 @@ def push_existing(it, client, ws, dry_run=False, note="ecadlib sync"):
     return {"action": "update_parameters", "detail": cid, "a365_updated": True}
 
 
-def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None):
+def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rules=None):
     """Release new parts, update parameters of parts already in the workspace.
     dry_run: no uploads or mutations; records the requests that would be sent.
-    policy: the plan's approval policy (approvals.load_policy); None uses the one release_check stored per item."""
+    policy: the plan's approval policy (approvals.load_policy); None uses the one release_check stored per item.
+    rules: parameter names go to the workspace in the rules' house names ([parameters] names)."""
     from .approvals import push_block
+    from .rules import house_item
+    items = [house_item(i, rules) for i in items]
     defs = {} if dry_run else client.release_defs(ws)
     results, uploaded = [], {}                  # one upload per file per run (shared Resistor.SchLib etc.)
     def upload(p):
@@ -297,20 +309,24 @@ def main(argv=None):
     p.add_argument("--triage", help="triage CSV from bom_triage")
     p.add_argument("--models", action="append", default=[],
                    help="folder with SchLib/<ref>.SchLib and PcbLib/<ref>.PcbLib; repeat to search several, first wins")
-    p.add_argument("--root", default="Components", help="workspace folder to release components under")
+    p.add_argument("--root", help="workspace folder to release components under (default: the rules' [folders] root, Components)")
     p.add_argument("-o", "--out", default="out/altium365/plan.json")
+    p.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the output folder or here)")
     sub.add_parser("workspaces", help="list workspaces visible to NEXAR_TOKEN")
     u = sub.add_parser("push", help="release / update parts from a plan")
     u.add_argument("plan")
     u.add_argument("--workspace", required=True, help="workspace URL from `workspaces`")
     u.add_argument("--dry-run", action="store_true", help="no network; write the requests that would be sent")
     u.add_argument("-o", "--out", default="out/altium365/push_report.json")
+    u.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan's folder or here)")
     a = ap.parse_args(argv)
+    from . import rules as RU
 
     if a.cmd == "plan":
-        lines, _ = read_bom(a.bom)
+        rules = RU.load(a.rules, start=Path(a.out).parent)
+        lines, _ = read_bom(a.bom, RU.bom_columns(rules))
         tri = pd.read_csv(a.triage, dtype=str).fillna("") if a.triage else None
-        items = plan(lines, tri, a.models, a.root)
+        items = plan(lines, tri, a.models, a.root, rules)
         out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
         for i in items:                        # model paths relative to the plan file, so push works from any cwd
             for k in ("symbol", "footprint"):
@@ -338,7 +354,8 @@ def main(argv=None):
                 if i[k]["file"]:
                     i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
         from .approvals import load_policy
-        results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent))
+        results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent),
+                       rules=RU.load(a.rules, start=Path(a.plan).parent))
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work
         hint = " (token rejected: check it has design.domain, user.access, openid)" if "401" in str(e) else ""
         sys.exit(f"Nexar request failed: {type(e).__name__}: {e}{hint}")

@@ -76,10 +76,13 @@ def policy_file(base):
 
 
 def load_policy(base):
-    """The policy next to the plan, with defaults filled in, or None when there is none."""
+    """The policy next to the plan, with defaults filled in, or None when there is none. Without an approvals file the
+    [release] approvals table of the library rules (ecadlib.toml in the plan's folder or a parent) is used."""
     f = policy_file(base)
     if not f:
-        return None
+        from . import rules as RU
+        raw = RU.load(None, start=base)["release"]["approvals"]
+        return normalize_policy(dict(raw), "ecadlib.toml [release.approvals]") if raw else None
     if f.suffix == ".toml":
         import tomllib
         raw = tomllib.loads(f.read_text())

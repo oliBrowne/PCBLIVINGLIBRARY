@@ -1,5 +1,7 @@
 """One command for everything:  ecadlib <command> [options]   (or: python -m ecadlib <command>)
 
+    ecadlib init      [--from DIR ...] [--yes]    scan your libraries, write ecadlib.toml (naming, parameters, layers, density)
+    ecadlib rules     check|show                  validate the rules file / print the defaults
     ecadlib ui        --lib <kicad libs>          local web UI in your browser
     ecadlib mcp       --lib <kicad libs>          MCP server (stdio) for Claude and other agents
     ecadlib triage    BOM --lib ... -o out/x      BOM triage report (.md + .csv)
@@ -27,6 +29,8 @@
 import importlib, sys
 
 COMMANDS = {
+    "init": ("ecadlib.rules_infer", "scan existing libraries and write ecadlib.toml"),
+    "rules": ("ecadlib.rules", "check or show the library rules"),
     "ui": ("ecadlib.ui.server", "local web UI"),
     "mcp": ("ecadlib.mcp_server", "MCP server over stdio"),
     "triage": ("ecadlib.bom_triage", "BOM triage report"),

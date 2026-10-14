@@ -6,6 +6,15 @@ These are small Python prototypes for an open-source tool that manages ECAD comp
 2. A deterministic generator turns that JSON into an IPC-7351B land pattern.
 3. A triage step works out which BOM lines already exist locally, which can be pulled from a public source, and which need a generated footprint.
 
+## Quick start
+
+```
+ecadlib init --from path/to/your/libraries      # reads SchLib/PcbLib/DbLib/KiCad/BOMs, writes ecadlib.toml
+ecadlib librarian my_bom.csv                     # or: ecadlib ui  -- every tool now follows ecadlib.toml
+```
+
+`init` works out your naming, parameters, folders, layers and density from the libraries you already have, and asks only where the evidence is split (`--yes` takes the best guess). See section 18.
+
 ## How you use it
 
 Install it with pip (Python 3.10 or later):
@@ -55,7 +64,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `held_parts`, `part_candidates` and `choose_part` (fix a held part), `approval_status` and `approve_part` (sign-off; `user` is required, the agent must pass the person's own name), `find_duplicates` (with `merge`), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed), `sim_models` (SPICE/IBIS models; `attach` writes them) and `list_example_specs`.
-3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
 * `uploads/`
@@ -617,6 +626,27 @@ python3 -m tests.test_sim_models
 **Altium 365.** `DesReleaseComponentInput` takes symbol and footprint files only; the schema has a `SIMULATION_MODEL` content kind but no way to release one with a component, so model files are not pushed. The SIM link travels inside the released `.SchLib`; `altium365 push` notes this per part. MCP tool: `sim_models` (with `attach`); Workspace: `Workspace.sim_models(bom, attach, models)`, which also searches the workspace's `sim_models/` folder.
 
 **Not verified.** AltiumSharp confirms the record types (45 implementation, 46 map-definer list, 47 map definer with `DesIntf`/`DesImpCount`/`DesImp{i}`, 48 parameters) and that `ModelType` can be `SIM` or `SI`, but none of its Altium-saved test files has a SIM or SI link. The datafile kind (`SIM`), the pin-map owner (the RECORD=46) and the `.ckt`/`.mdl`-beside-the-library lookup are assumptions, and Altium's own SIM parameters (kind, sub-kind, SPICE prefix, netlist template) are not written. Open one attached library in Altium Designer and run a simulation before relying on it. In KiCad, an IBIS device is one pin plus a driver model, so IBIS files are copied but no `Sim.*` fields are set. `Sim.Type` is left out for `.model` devices; the assumption is that KiCad takes the type from the library file (KiCad's own BJT example sets `Sim.Type GUMMELPOON` as well).
+
+## 18. `rules.py` and `ecadlib init`: one file for your library conventions
+
+`ecadlib.toml` holds your naming conventions, required parameters, folder map, layer mapping, footprint density, source order, BOM column names and approval policy. Every tool reads it: the librarian, `altium_export`, `altium365`, `altium_dblib_sync`, `kicad_import`, `altium_lib pcblib`, `footprint_gen gen`, `release_check`, `upstream check-a365`, `kicad_export`, the web UI and the MCP server. Each CLI takes `--rules PATH`. Without it, the tool looks for `ecadlib.toml` in the input's folder and its parents, then in the current folder and its parents (a Workspace uses its own `ecadlib.toml`). Without any file, the outputs are byte-for-byte what they were before (a test checks this).
+
+**Making the file (minimal setup).** `ecadlib init --from DIR [--from DIR ...] [--a365 parts.json] [--yes]` scans:
+
+* `.SchLib`/`.PcbLib`: component and footprint naming patterns, parameter names and how often each is used, which mechanical layers carry the courtyard, assembly and 3D body, and the density (from IPC name suffixes, or from chip pad toe-to-toe compared with IPC-7351 A/B/C);
+* `.DbLib` and its data (`.xlsx`/`.csv`/`.sqlite`; for `.mdb` only the field map is read);
+* an Altium 365 part list (an `altium365` state file, or JSON in the `a365_sync` shape `{name, folder, parameters, symbol, footprint}`): folders and parameters;
+* KiCad `.kicad_sym`/`.pretty`, and BOM/parts spreadsheets (column names).
+
+Names are pattern-mined per category (`RES_{package}_{value}_{tolerance}`, `R{package}_{value}`, `{mpn}` ...) with value style (`4K7`, `4.7k`, `4.7kΩ`) detected. The written file says, for every setting, where it came from and how confident the guess is. `init` asks a question only where the evidence is split (the best pattern under 60% with a runner-up at 20% or more); `--yes` takes the best guess. If `ecadlib.toml` already exists, `init` shows a diff, writes the proposal to `ecadlib.toml.proposed` and changes nothing unless you confirm or pass `--force` (the old file is kept as `.bak`).
+
+The UI has a **Library rules** card (type the folders to scan, review the proposals with their evidence, edit the TOML, save; replacing an existing file asks first and shows the diff). The MCP server has `propose_rules` and `save_rules`.
+
+`ecadlib rules check [PATH]` validates a file (errors name the bad key and suggest the nearest valid one); `ecadlib rules show` prints the effective rules.
+
+Plans keep ecadlib's own parameter names internally; your house names (`[parameters.names]`) are applied at the outputs: the Altium 365 push, DbLib export and sync, KiCad export, and the A365 drift check.
+
+**Accuracy and limits.** On synthetic libraries in four house styles (classic Altium SchLib/PcbLib, glued names in a DbLib, MPN-named Altium 365 list, KiCad), inference gets 34 of 34 settings right, and parts planned with the inferred file come out named like the existing ones. Not checked: no real customer library has been scanned and nothing written was opened in Altium; IPC-7351 names from the generator are approximate; name case (upper/lower) is not inferred; `.mdb` DbLib data is not read. Because the current folder's `ecadlib.toml` is used when the input folder has none, a stray file there will change output; pass `--rules` to be explicit.
 
 ## Releases
 
