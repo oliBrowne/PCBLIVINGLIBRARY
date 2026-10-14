@@ -20,7 +20,8 @@ Everything is converted through kicad_import into <out>/models/{SchLib,PcbLib} (
 <out>/models/KiCad for footprint_check). Outputs: <out>/plan.json (each item records `source`, `librarian.tried`
 and the release-check result), <out>/review.{md,csv}, <out>/release_check.{md,csv}, <out>/triage.{md,csv}.
 Resumable: <out>/librarian_state.json remembers finished parts; a re-run skips them unless --refresh (all, or the
-named parts) or their BOM line changed. --allow PART is recorded in plan.json and survives re-runs."""
+named parts) or their BOM line changed. --allow PART is recorded in plan.json and survives re-runs, and so does a
+symbol or footprint chosen with `ecadlib resolve` (held parts: see ecadlib/resolve.py)."""
 import argparse, csv, json, os, re, sys, time
 from pathlib import Path
 
@@ -218,11 +219,15 @@ class Run:
         self.put_sym(st, sym, source, notes)
 
     # ---- per part
-    def resolve(self, item, ln, row):
+    def resolve(self, item, ln, row, keep=None):
+        """keep: halves a person chose with `ecadlib resolve` ({kind: state record}); they are not re-fetched."""
         par = _par(item)
         mpn = par.get("Manufacturer Part Number", "")
         st = {"name": item["name"], "symbol": None, "footprint": None, "tried": [], "review": [], "verify": [],
               "found": {}, "hint_fp": ""}
+        for k, rec in (keep or {}).items():
+            st[k] = rec
+            st["tried"].append(f"resolve: {k} {rec['source']} chosen by user (kept)")
         if (row.get("status") or "").startswith("dnp"):
             st["tried"].append("DNP line: not fetched")
             return st
@@ -242,14 +247,14 @@ class Run:
 
     def local(self, st, row, kind, fp_name, sym_name):
         ls, lf = (row.get("local_symbol") or "").split(" ")[0], (row.get("local_footprint") or "").split(" ")[0]
-        if ls and not kind:
+        if ls and not kind and not st["symbol"]:
             lib, name = ls.split(":", 1)
             f = next((p for r in self.libs for p in Path(r).rglob(f"{lib}.kicad_sym")), None)
             if f:
                 chain, _ = K.load_symbol(f"{f}:{name}", None)
                 st["hint_fp"] = K._props(chain).get("Footprint", "")
                 self.put_kicad_sym(st, chain, sym_name, fp_name, f"local:{ls}")
-        if lf and lf in self.index.footprints:
+        if lf and lf in self.index.footprints and not st["footprint"]:
             text = Path(self.index.footprints[lf]["path"]).read_text()
             spec = SPECS / f"{lf.split(':')[-1]}.json"
             hm = json.loads(spec.read_text()).get("height_max") if spec.exists() else None
@@ -484,7 +489,9 @@ def run(bom, libs=(), out="out/librarian", sources=SOURCES, refresh=None, refres
         else:
             todo.append((it, ln, row, fpr))
     for it, ln, row, fpr in todo:
-        st = r.resolve(it, ln, row)
+        old_st = state.get(it["name"]) or {}
+        keep = {k: old_st[k] for k in ("symbol", "footprint") if (old_st.get(k) or {}).get("chosen") and (out / old_st[k]["file"]).exists()}
+        st = r.resolve(it, ln, row, keep)
         st["key"], st["skipped"] = fpr, False
         state[it["name"]] = st
     for it in items:
