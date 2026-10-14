@@ -9,6 +9,7 @@ A Workspace is one folder on the user's machine:
     <root>/reports/                       triage .md/.csv
     <root>/altium/                        DbLib export
     <root>/altium365/                     release plan + push reports
+    <root>/librarian/<bom>/               librarian output: models, plan.json, review and release-check reports
     <root>/http_cache/                    provider responses
 
 Each action returns plain JSON-able dicts so the UI and the MCP server can share it."""
@@ -237,30 +238,104 @@ class Workspace:
         return {"files": [self.rel(p) for p in sorted(out.iterdir()) if p.is_file()]}
 
     def altium365_plan(self, bom):
-        """One workspace component per part, marked ready when its .SchLib and .PcbLib are in altium_models/."""
+        """One workspace component per part. When the librarian has run for this BOM its plan is used, with the
+        release check's ready / held verdicts; otherwise a part is ready when its .SchLib and .PcbLib are in
+        altium_models/."""
         from . import altium365 as A
         bom_path = self._bom_path(bom)
         lines, _ = self._read_bom(bom_path)
-        items = A.plan(lines, self._triage_frame(bom_path), self.models)
-        out = self.root / "altium365" / f"plan_{self._key(bom_path)}.json"
-        out.write_text(json.dumps(items, indent=2))
+        lib_plan = self._librarian_dir(bom_path) / "plan.json"
+        if lib_plan.exists():
+            items = json.loads(lib_plan.read_text())
+            for it in items:                          # librarian paths are relative to its output folder
+                for k in ("symbol", "footprint"):
+                    f = it[k].get("file")
+                    if f and not Path(f).is_absolute():
+                        it[k]["file"] = str(lib_plan.parent / f)
+            src, out = "librarian", lib_plan
+        else:
+            items = A.plan(lines, self._triage_frame(bom_path), self.models)
+            out = self.root / "altium365" / f"plan_{self._key(bom_path)}.json"
+            out.write_text(json.dumps(items, indent=2))
+            src = "triage"
         ready = sum(i["status"] == "ready" for i in items)
-        return {"items": items, "ready": ready, "total": len(items), "plan": self.rel(out)}
+        return {"items": items, "ready": ready, "total": len(items), "plan": self.rel(out), "source": src}
+
+    # ------------------------------------------------------------------ librarian
+    def _librarian_dir(self, bom_path):
+        return self.root / "librarian" / self._key(bom_path)
+
+    def librarian_run(self, bom, sources=None, allow=(), refresh=None, progress=None):
+        """BOM -> library in one go (ecadlib.librarian): triage, fill every missing symbol and footprint from
+        the KiCad libraries, EasyEDA or the datasheet, write Altium models and the plan, run the release check.
+        refresh: None resumes (finished parts are skipped), [] redoes everything, [names] redoes those."""
+        from . import librarian as L
+        bom_path = self._bom_path(bom)
+        lines, _ = self._read_bom(bom_path)               # same friendly error as triage for unreadable files
+        out = self._librarian_dir(bom_path)
+        log, n = [], [0]
+
+        def note(msg):
+            log.append(str(msg).strip())
+            n[0] += 1
+            if progress:
+                progress(min(n[0], len(lines)), len(lines), str(msg).strip()[:80])
+        if progress:
+            progress(0, len(lines), "looking up parts")
+        provs = ",".join(p for p in ("jlcpcb_search", "easyeda") if p in self.provider_names)
+        items = L.run(str(bom_path), self.libs + [str(self.root / "footprints")], out,
+                      list(sources) if sources else L.SOURCES, refresh, False, list(allow), self.offline,
+                      self.root / "http_cache", 0.5, provs, log=note)
+        return self._librarian_summary(bom_path, items, log)
+
+    def release_check(self, bom, allow=(), unallow=()):
+        """Re-run the release check on the librarian's plan, optionally releasing named parts despite their
+        failures (allow) or taking that back (unallow). Never touches the network."""
+        from . import release_check as RC
+        bom_path = self._bom_path(bom)
+        out = self._librarian_dir(bom_path)
+        plan_f = out / "plan.json"
+        if not plan_f.exists():
+            raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
+        items = json.loads(plan_f.read_text())
+        unknown = set(allow) | set(unallow)
+        unknown -= {i["name"] for i in items}
+        if unknown:
+            raise ValueError(f"not parts of this plan: {', '.join(sorted(unknown))}")
+        rows = RC.apply(items, out, list(allow), list(unallow), who="ecadlib ui/mcp")
+        plan_f.write_text(json.dumps(items, indent=2))
+        RC.write_report(rows, out / "release_check", plan_f)
+        from . import librarian as L
+        L.write_review(L.review_rows(items), out, str(bom_path))
+        return self._librarian_summary(bom_path, items, [])
+
+    def _librarian_summary(self, bom_path, items, log):
+        from . import librarian as L
+        out = self._librarian_dir(bom_path)
+        rows = L.review_rows(items)
+        for r, it in zip(rows, items):
+            r["allowed"] = bool(it.get("allow"))
+        files = [out / f for f in ("review.md", "release_check.md", "plan.json")]
+        return {"bom": self.rel(bom_path) if self._is_inside(bom_path) else str(bom_path),
+                "parts": len(items), "ready": sum(i["status"] == "ready" for i in items),
+                "held": sum(i["status"] == "held" for i in items),
+                "needs_person": sum(bool(r["needs_human"]) for r in rows), "review": rows,
+                "reports": [self.rel(f) for f in files if f.exists()], "log": log[-60:]}
 
     def altium365_workspaces(self):
         from . import altium365 as A
         return {"workspaces": A.Nexar(_nexar_token()).workspaces()}
 
     def altium365_push(self, bom, workspace_url, dry_run=True):
-        """Release ready parts and update parameters of existing ones. dry_run (the default) sends nothing
-        and returns the requests that would be made."""
+        """Release ready parts and update parameters of existing ones; parts the release check held are left
+        alone. dry_run (the default) sends nothing and returns the requests that would be made."""
         from . import altium365 as A
         if not workspace_url and not dry_run:
             raise ValueError("choose an Altium 365 workspace first")
         plan = self.altium365_plan(bom)
         client = None if dry_run else A.Nexar(_nexar_token())
         results = A.push(plan["items"], client, workspace_url or "https://<workspace>", dry_run=dry_run)
-        out = self.root / "altium365" / f"push_{'dry_run_' if dry_run else ''}{Path(plan['plan']).stem[5:]}.json"
+        out = self.root / "altium365" / f"push_{'dry_run_' if dry_run else ''}{self._key(self._bom_path(bom))}.json"
         out.write_text(json.dumps(results, indent=2))
         return {"dry_run": dry_run, "results": results, "report": self.rel(out)}
 

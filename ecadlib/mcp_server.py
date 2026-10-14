@@ -47,6 +47,26 @@ TOOLS = [
     {"name": "export_altium_dblib",
      "description": "Write an Altium DbLib (SQLite + XLSX + .DbLib files) for a BOM into the workspace altium/ folder.",
      "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
+    {"name": "librarian_run",
+     "description": "BOM to library in one go: triage the BOM, fill every missing symbol and footprint (official KiCad "
+                    "libraries, then EasyEDA, then the datasheet reader), write the Altium .SchLib/.PcbLib models and "
+                    "the release plan, and run the release check. Slow (minutes for a big BOM); finished parts are "
+                    "skipped on a re-run unless refresh is set. Returns ready/held counts and a review row per part "
+                    "saying what still needs a person.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"},
+                                    "sources": {"type": "array", "items": {"type": "string", "enum": ["kicad", "easyeda", "datasheet"]},
+                                                "description": "sources to try, in order (default all three)"},
+                                    "refresh": {"description": "true = redo every part; or a list of part names to redo",
+                                                "anyOf": [{"type": "boolean"}, {"type": "array", "items": {"type": "string"}}]}}}},
+    {"name": "release_check",
+     "description": "Re-run the release check on the librarian's plan for a BOM. allow releases the named parts despite "
+                    "their current failures (only when the user has looked and agreed; it is recorded in the plan); "
+                    "unallow takes that back. Held parts are never pushed to Altium 365.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"},
+                                    "allow": {"type": "array", "items": {"type": "string"}},
+                                    "unallow": {"type": "array", "items": {"type": "string"}}}}},
     {"name": "build_altium_models",
      "description": "Write the Altium .PcbLib files for a BOM's footprints that are in the KiCad libraries, plus generic "
                     "Resistor/Capacitor .SchLib symbols, into the workspace altium_models/ folder.",
@@ -84,6 +104,15 @@ def call_tool(ws, name, args):
             return {"name": r["name"], "report": r["report"]}
         if name == "approve_footprint":
             return ws.approve_footprint(args["spec"], args.get("density"), bool(args.get("overwrite")))
+        if name == "librarian_run":
+            ref = args.get("refresh")
+            r = ws.librarian_run(args["bom"], args.get("sources"), (), [] if ref is True else (ref or None))
+            r.pop("log", None)
+            return r
+        if name == "release_check":
+            r = ws.release_check(args["bom"], args.get("allow") or [], args.get("unallow") or [])
+            r.pop("log", None)
+            return r
         if name == "build_altium_models":
             return ws.build_altium_models(args["bom"])
         if name == "altium365_plan":

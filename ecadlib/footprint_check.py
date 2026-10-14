@@ -13,7 +13,7 @@ fab limits; each finding is (level, rule, message) with level "error" or "warnin
   fab       a body outline on F.Fab, line width 0.10 mm (KLC F5.2)
   courtyard present, a closed outline on F.CrtYd, encloses every pad and the F.Fab body,
             line width 0.05 mm, corners on the 0.01 mm grid (KLC F5.3)
-  pin 1     a pad numbered "1" exists; for multi-row parts it is the top-left-most pad (KLC F6.x
+  pin 1     a pad numbered "1" (or "A1" for BGAs and lettered connector rows) exists; for multi-row parts it is the top-left-most pad (KLC F6.x
             orientation) and the numbers run counter-clockwise from it; pad numbers are unique except for deliberate duplicates (a SOT-223 tab)
   paste     an exposed pad's paste windows cover 50-90 % of its copper
 """
@@ -46,6 +46,7 @@ def _graphics(tree, layer):
                 continue
             s, e = sexpr.first(g, "start"), sexpr.first(g, "end")
             if kind == "fp_circle":
+                s = sexpr.first(g, "center") or s          # KiCad 6+ writes (center ...), KiCad 5 (start ...)
                 cx, cy = _f(s[1]), _f(s[2]); r = math.hypot(_f(e[1]) - cx, _f(e[2]) - cy)
                 segs += [(cx + r * math.cos(a), cy + r * math.sin(a), cx + r * math.cos(b), cy + r * math.sin(b), w)
                          for a, b in ((i * math.pi / 8, (i + 1) * math.pi / 8) for i in range(16))]
@@ -186,7 +187,8 @@ def check(text, allow_duplicate_pads=None):
                                   f": below a {MIN_WEB} mm solder-mask web, check the fab's minimum"))
 
     # ---- pin 1 / numbering
-    if "1" not in nums:
+    pin1 = "1" if "1" in nums else "A1" if "A1" in nums else None    # A1: BGA balls, USB-C and other lettered rows
+    if pin1 is None:
         add("error", "pin1", "no pad numbered 1")
     dup = {n for n in nums if nums.count(n) > 1} - set(allow_duplicate_pads or ())
     for n in sorted(dup):
