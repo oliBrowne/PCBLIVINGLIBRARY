@@ -14,6 +14,21 @@ Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0):
     parameters and the FileVersionInfo stream extracted from the AltiumSharp
     TestData file "PCB - LEADLESS - QFN - PSEMI QFN-24 4x4.PcbLib"
     (FILENAME and 2DCONFIGFULLFILENAME blanked).
+  * ecadlib/altium_lib.py also ports the through-hole pad hole fields, the arc
+    record, the ComponentBody record and parameter order, the Library/Models
+    storage and the 3D model checksum (PcbLibWriter.cs, PcbModel.cs).
+  * tests/test_kicad_import.py embeds three records from AltiumSharp TestData
+    (PAD_TH_SLOT, ARCS_TEST and BODY_3D .PcbLib files) as byte references.
+
+tests/fixtures/kicad/USB_C_Receptacle_HRO_TYPE-C-31-M-12.kicad_mod and
+tests/fixtures/kicad/Regulator_Linear_AMS1117.kicad_sym (symbols AP1117-15 and
+AMS1117-3.3 combined into one library file) are from the KiCad libraries
+(https://gitlab.com/kicad/libraries, kicad-footprints and kicad-symbols),
+Copyright the KiCad Library contributors, licensed CC-BY-SA 4.0 with the KiCad
+libraries' design-use exception (https://www.kicad.org/libraries/license/).
+Footprints, symbols and 3D models converted from those libraries by
+ecadlib/kicad_import.py are written to out/altium_models_kicad/, which is not
+committed.
 
 tests/nexar/schema.graphql is from NexarDeveloper/nexar-release-component-demo-wpf
 (MIT).

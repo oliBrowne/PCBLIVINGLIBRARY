@@ -1,0 +1,18 @@
+[
+  {"mpn": "TYPE-C-31-M-12", "symbol": "Connector:USB_C_Receptacle_USB2.0_16P",
+   "footprint": "Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12", "footprint_as": "USB_C_Receptacle_16P"},
+  {"mpn": "SM04B-SRSS-TB(LF)(SN)", "symbol": "Connector_Generic_MountingPin:Conn_01x04_MountingPin",
+   "footprint": "Connector_JST:JST_SH_SM04B-SRSS-TB_1x04-1MP_P1.00mm_Horizontal", "footprint_as": "JST_SH_SM04B-SRSS-TB"},
+  {"mpn": "FTSH-105-01-L-DV-K", "symbol": "Connector_Generic:Conn_02x05_Odd_Even",
+   "footprint": "Connector_PinHeader_1.27mm:PinHeader_2x05_P1.27mm_Vertical_SMD", "footprint_as": "Samtec_FTSH-105-01-L-DV-K",
+   "note": "KiCad has no FTSH-105 footprint: generic 2x05 1.27 mm SMD header used; check pads against the Samtec drawing"},
+  {"mpn": "X322512MSB4SI", "symbol": "Device:Crystal_GND24",
+   "footprint": "Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm", "footprint_as": "Crystal_SMD_3225-4Pin"},
+  {"mpn": "KT-0603R", "symbol": "Device:LED", "footprint": "LED_SMD:LED_0603_1608Metric"},
+  {"mpn": "STM32F103C8T6", "symbol": "MCU_ST_STM32F1:STM32F103C8Tx", "footprint": "Package_QFP:LQFP-48_7x7mm_P0.5mm"},
+  {"mpn": "AMS1117-3.3", "symbol": "Regulator_Linear:AMS1117-3.3", "footprint": "Package_TO_SOT_SMD:SOT-223-3_TabPin2"},
+  {"mpn": "ESP32-S3-WROOM-1-N16R8", "symbol": "RF_Module:ESP32-S3-WROOM-1", "footprint": "RF_Module:ESP32-S3-WROOM-1"},
+  {"mpn": "TPS62162DSGR", "symbol": "Regulator_Switching:TPS62162DSG",
+   "footprint": "Package_SON:Texas_DSG0008A_WSON-8-1EP_2x2mm_P0.5mm_EP0.9x1.6mm", "footprint_as": "WSON-8_2x2mm_P0.5mm"},
+  {"mpn": "AO3401A", "symbol": "Transistor_FET:AO3401A", "footprint": "Package_TO_SOT_SMD:SOT-23"}
+]
