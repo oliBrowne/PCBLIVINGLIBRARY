@@ -29,7 +29,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import (altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
-               footprint_gen as F, kicad_import as K, providers as P, release_check as RC, sexpr)
+               footprint_gen as F, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
@@ -136,7 +136,7 @@ class KiCadLibrary:
 
 # ---------------------------------------------------------------- helpers
 def passive_kind(item):
-    cat, fp = item["folder"].split("/")[-1], item["footprint"]["ref"] or ""
+    cat, fp = item["folder"].split("/")[-1], item["footprint"].get("kicad") or item["footprint"]["ref"] or ""
     if cat == "Resistors":
         return "R"
     if cat == "Capacitors":
@@ -167,8 +167,10 @@ def _line_for(item, lines, rows):
 
 
 class Run:
-    def __init__(self, out, http, index, libs, sources, api_key=None, kicad_cache=None, refresh_index=False, gen_step=True):
+    def __init__(self, out, http, index, libs, sources, api_key=None, kicad_cache=None, refresh_index=False, gen_step=True,
+                 rules=None):
         self.out, self.http, self.index, self.libs, self.sources = Path(out), http, index, libs, sources
+        self.rules = rules or RU.DEFAULTS
         self.models = self.out / "models"
         for d in ("PcbLib", "SchLib", "KiCad"):
             (self.models / d).mkdir(parents=True, exist_ok=True)
@@ -199,7 +201,7 @@ class Run:
             notes.append(f"no 3D body: {e}")
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
         kmod.write_text(text)
-        AL.write_pcblib(pcb, [fp])
+        AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"]}
         self.written[str(pcb)] = st["footprint"]
 
@@ -270,7 +272,7 @@ class Run:
         sym_ref = how = fp_ref = fp_how = None
         if kind:
             sym_ref, how = PASSIVE[kind][0], "generic passive symbol"
-            pkg = package_of(fp_name, item.get("description"))
+            pkg = package_of(item["footprint"].get("kicad") or fp_name, item.get("description"))
             if PASSIVE[kind][1] and pkg in IMP2MET:
                 fp_ref, fp_how = lib.footprint(PASSIVE[kind][1].format(pkg, IMP2MET[pkg])), f"by package {pkg}"
         elif not st["symbol"]:
@@ -374,7 +376,7 @@ class Run:
         D.write(res, self.out / "datasheet")
         got = []
         if not st["footprint"]:
-            text, _ = F.build(res["spec"])
+            text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
             h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
             got.append("footprint")
@@ -456,24 +458,29 @@ def write_review(rows, out, bom):
     (out / "review.md").write_text("\n".join(md) + "\n")
 
 
-def run(bom, libs=(), out="out/librarian", sources=SOURCES, refresh=None, refresh_index=False, allow=(), offline=False,
-        cache="out/http_cache", rate=0.5, providers="jlcpcb_search,easyeda", http=None, api_key=None, log=print, gen_step=True):
-    """Whole pipeline; returns the plan items. refresh: None = resume, [] = redo all, [names] = redo those."""
+def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_index=False, allow=(), offline=False,
+        cache="out/http_cache", rate=0.5, providers="jlcpcb_search,easyeda", http=None, api_key=None, log=print, gen_step=True,
+        rules=None):
+    """Whole pipeline; returns the plan items. refresh: None = resume, [] = redo all, [names] = redo those.
+    rules: library rules (a loaded dict or a path); None uses the ecadlib.toml found from `out` (defaults when none).
+    sources: None = the rules' [sources] order."""
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
+    rules = RU.resolve(rules, out)
+    sources = list(sources) if sources is not None else list(rules["sources"]["order"])
     http = http or CachedHTTP(cache, min_interval=rate, offline=offline, timeout=60)
     bad = set(sources) - set(SOURCES)
     if bad:
         raise ValueError(f"unknown sources {sorted(bad)}; use {','.join(SOURCES)}")
-    lines, mapping = T.read_bom(bom)
+    lines, mapping = T.read_bom(bom, RU.bom_columns(rules))
     index = KiCadIndex(libs)
     provs = [c(http) for c in P.ALL if c.name in providers.split(",")]
     rows = T.triage(lines, index, provs, http)
     T.write_reports(rows, mapping, provs, http, out / "triage", bom)
-    items = A365.plan(lines, pd.DataFrame(rows, dtype=str).fillna("") if rows else None)
+    items = A365.plan(lines, pd.DataFrame(rows, dtype=str).fillna("") if rows else None, rules=rules)
     state_f, plan_f = out / "librarian_state.json", out / "plan.json"
     state = json.loads(state_f.read_text()) if state_f.exists() else {}
     old = {i["name"]: i for i in json.loads(plan_f.read_text())} if plan_f.exists() else {}
-    r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step)
+    r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step, rules)
     todo = []
     for it in items:
         ln, row = _line_for(it, lines, rows)
@@ -504,7 +511,7 @@ def run(bom, libs=(), out="out/librarian", sources=SOURCES, refresh=None, refres
     for n in set(allow) - set(state):
         log(f"  --allow {n}: not a part in this plan (names are the plan's Part Numbers)")
     state_f.write_text(json.dumps(state, indent=2))
-    checks = RC.apply(items, out, allow)
+    checks = RC.apply(items, out, allow, rules=rules)
     plan_f.write_text(json.dumps(items, indent=2))
     RC.write_report(checks, out / "release_check", plan_f)
     write_review(review_rows(items), out, bom)
@@ -516,7 +523,7 @@ def main(argv=None):
     ap.add_argument("bom")
     ap.add_argument("--lib", action="append", default=[], help="local KiCad library dir (repeatable)")
     ap.add_argument("-o", "--out", default="out/librarian")
-    ap.add_argument("--sources", default=",".join(SOURCES), help="order of sources to try (default %(default)s)")
+    ap.add_argument("--sources", help="order of sources to try (default: the rules' [sources] order, else " + ",".join(SOURCES) + ")")
     ap.add_argument("--refresh", nargs="*", metavar="PART", help="redo finished parts: all, or the named ones")
     ap.add_argument("--refresh-index", action="store_true", help="rebuild the KiCad library name index")
     ap.add_argument("--allow", action="append", default=[], metavar="PART", help="release PART despite its release-check failures")
@@ -525,9 +532,10 @@ def main(argv=None):
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--rate", type=float, default=0.5, help="min seconds between requests per host")
     ap.add_argument("--box", action="store_true", help="extruded 3D box instead of a generated STEP when there is no KiCad model")
+    ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from -o or here; see `ecadlib init`)")
     a = ap.parse_args(argv)
-    items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s], a.refresh, a.refresh_index, a.allow,
-                a.offline, a.cache, a.rate, a.providers, gen_step=not a.box)
+    items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh, a.refresh_index,
+                a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=RU.load(a.rules, start=a.out))
     held = sum(i["status"] != "ready" for i in items)
     print(f"{len(items)} parts: {len(items) - held} ready, {held} held -> {Path(a.out) / 'plan.json'}; review {Path(a.out) / 'review.md'}")
     return 2 if held else 0

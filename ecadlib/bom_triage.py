@@ -93,7 +93,18 @@ def _read_csv(p):
     return pd.DataFrame([r + [""] * (width - len(r)) for r in rows], dtype=str)
 
 
-def read_bom(path):
+def apply_columns(mapping, headers, columns):
+    """Rules' [bom] columns (field -> your header) win over the fuzzy guess; headers not in this BOM are ignored."""
+    for f, want in (columns or {}).items():
+        h = next((h for h in headers if _norm(h) == _norm(want)), None)
+        if h is not None:
+            mapping = {k: v for k, v in mapping.items() if v != h}
+            mapping[f] = h
+    return mapping
+
+
+def read_bom(path, columns=None):
+    """columns: the rules' [bom] columns ({field: header}), applied over the fuzzy header match."""
     p = Path(path)
     raw = (pd.read_excel(p, header=None, dtype=str) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls")
            else _read_csv(p))
@@ -104,7 +115,7 @@ def read_bom(path):
     headers = [str(h).strip() for h in raw.iloc[hdr_row]]
     df = raw.iloc[hdr_row + 1:].copy()
     df.columns = headers
-    mapping = map_headers(headers)
+    mapping = apply_columns(map_headers(headers), headers, columns)
     if not {"designator", "mpn", "value"} & mapping.keys():
         raise ValueError(f"{p}: no BOM header found (need a Designator, MPN or Value/Comment column)")
     lines = []
@@ -293,12 +304,14 @@ def main(argv=None):
     ap.add_argument("--offline", action="store_true", help="use HTTP cache only")
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--rate", type=float, default=1.0, help="min seconds between requests per host")
+    ap.add_argument("--rules", help="library rules file; its [bom] columns name your BOM headers (default: ecadlib.toml found from here)")
     a = ap.parse_args(argv)
 
+    from . import rules as RU
     http = CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline)
     want = a.providers.split(",")
     provs = [c(http) for c in P.ALL if c.name in want]
-    lines, mapping = read_bom(a.bom)
+    lines, mapping = read_bom(a.bom, RU.bom_columns(RU.load(a.rules, start=Path(a.out).parent)))
     index = KiCadIndex(a.lib)
     print(f"BOM lines: {len(lines)}  header map: {mapping}")
     print(f"local index: {len(index.symbols)} symbols, {len(index.footprints)} footprints")

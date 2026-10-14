@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import bom_triage as T, footprint_gen as F, providers as P, sexpr
+from . import bom_triage as T, footprint_gen as F, providers as P, rules as RU, sexpr
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex
 
@@ -69,7 +69,7 @@ class Workspace:
         if bom_path.suffix.lower() not in (".xlsx", ".xlsm", ".xls") and b"\0" in bom_path.read_bytes()[:4096]:
             raise ValueError(f"{bom_path.name} looks like a binary file, not a CSV; export the BOM as CSV or XLSX")
         try:
-            lines, mapping = T.read_bom(bom_path)
+            lines, mapping = T.read_bom(bom_path, RU.bom_columns(self.rules()))
         except Exception as e:                        # pandas/csv/zip errors -> one message a person can act on
             raise ValueError(f"couldn't read {bom_path.name} as a BOM table ({type(e).__name__}: {e}). "
                              "Save it as CSV or XLSX with a header row.") from e
@@ -102,6 +102,7 @@ class Workspace:
                 "providers": [{"name": c.name, "auth": c.auth, "enabled": c.name in self.provider_names,
                                "configured": c(http).configured()} for c in P.ALL],
                 "altium365": {"token": bool(os.environ.get("NEXAR_TOKEN"))},
+                "rules": self.rel(self.rules_file()) if self.rules_file().is_file() else None,
                 "altium_models": {k: sorted(p.stem for p in (self.models / k).glob(f"*.{k}")) for k in ("PcbLib", "SchLib")},
                 "boms": sorted(self.rel(p) for p in (self.root / "uploads").iterdir()
                                if p.is_file() and not p.is_symlink() and self._is_inside(p))}
@@ -159,7 +160,7 @@ class Workspace:
             raise ValueError("the package spec needs at least a \"name\"")
         try:
             F.validate(spec)
-            text, rep = F.build(spec, density)
+            text, rep = F.build(spec, RU.density_for(spec, self.rules(), density))
         except KeyError as e:                         # no jsonschema installed: the generator finds the gap itself
             raise ValueError(f"the package spec is missing {e.args[0]!r}") from e
         except Exception as e:
@@ -187,8 +188,9 @@ class Workspace:
         files = [self.rel(p)]
         warnings = [f"{c['rule']}: {c['message']}" for c in res["report"].get("checks", []) if c["level"] == "error"]
         try:
-            fp, _ = altium_lib.footprint_from_spec(spec_obj, density)
-            files.append(self.rel(altium_lib.write_pcblib(self.models / "PcbLib" / f"{name}.PcbLib", [fp])))
+            rules = self.rules()
+            fp, _ = altium_lib.footprint_from_spec(spec_obj, RU.density_for(spec_obj, rules, density))
+            files.append(self.rel(altium_lib.write_pcblib(self.models / "PcbLib" / f"{name}.PcbLib", [fp], RU.layers(rules))))
         except Exception as e:
             warnings.append(f"Altium .PcbLib not written: {type(e).__name__}: {e}")
         return {"name": name, "path": files[0], "files": files, "warnings": warnings, "report": res["report"]}
@@ -203,7 +205,7 @@ class Workspace:
         if tri is None:
             self.triage(bom)
             tri = self._triage_frame(bom_path)
-        index, done, skipped = self._index(), [], []
+        index, done, skipped, layers = self._index(), [], [], RU.layers(self.rules())
         for key in dict.fromkeys(k.split(" ")[0] for k in tri["local_footprint"] if k):
             ref = key.split(":")[-1]
             out = self.models / "PcbLib" / f"{ref}.PcbLib"
@@ -215,7 +217,7 @@ class Workspace:
                 skipped.append(f"{ref}: not found in indexed libraries")
                 continue
             try:
-                altium_lib.write_pcblib(out, [altium_lib.footprint_from_kicad(Path(hit["path"]).read_text())])
+                altium_lib.write_pcblib(out, [altium_lib.footprint_from_kicad(Path(hit["path"]).read_text())], layers)
                 done.append(ref)
             except Exception as e:
                 skipped.append(f"{ref}: {e}")
@@ -234,6 +236,7 @@ class Workspace:
         tri = self._triage_csv(bom_path)
         out = self.root / "altium"
         argv = [str(bom_path), "-o", str(out)] + (["--triage", str(tri)] if tri.exists() else [])
+        argv += ["--rules", str(self.rules_file())] if self.rules_file().is_file() else []
         altium_export.main(argv)
         return {"files": [self.rel(p) for p in sorted(out.iterdir()) if p.is_file()]}
 
@@ -254,7 +257,7 @@ class Workspace:
                         it[k]["file"] = str(lib_plan.parent / f)
             src, out = "librarian", lib_plan
         else:
-            items = A.plan(lines, self._triage_frame(bom_path), self.models)
+            items = A.plan(lines, self._triage_frame(bom_path), self.models, rules=self.rules())
             out = self.root / "altium365" / f"plan_{self._key(bom_path)}.json"
             out.write_text(json.dumps(items, indent=2))
             src = "triage"
@@ -284,8 +287,8 @@ class Workspace:
             progress(0, len(lines), "looking up parts")
         provs = ",".join(p for p in ("jlcpcb_search", "easyeda") if p in self.provider_names)
         items = L.run(str(bom_path), self.libs + [str(self.root / "footprints")], out,
-                      list(sources) if sources else L.SOURCES, refresh, False, list(allow), self.offline,
-                      self.root / "http_cache", 0.5, provs, log=note)
+                      list(sources) if sources else None, refresh, False, list(allow), self.offline,
+                      self.root / "http_cache", 0.5, provs, log=note, rules=self.rules())
         return self._librarian_summary(bom_path, items, log)
 
     def release_check(self, bom, allow=(), unallow=(), user=None):
@@ -303,7 +306,7 @@ class Workspace:
         unknown -= {i["name"] for i in items}
         if unknown:
             raise ValueError(f"not parts of this plan: {', '.join(sorted(unknown))}")
-        rows = RC.apply(items, out, list(allow), list(unallow), who="ecadlib ui/mcp")
+        rows = RC.apply(items, out, list(allow), list(unallow), who="ecadlib ui/mcp", rules=self.rules())
         user = user.strip() if isinstance(user, str) else ""
         if allow and user:
             from .approvals import post_check, stamp_allow
@@ -509,10 +512,59 @@ class Workspace:
         if plan["source"] == "librarian":             # the sign-off policy as it is now, not as at the last check
             from .approvals import load_policy
             policy = load_policy(self.inside(plan["plan"]).parent)
-        results = A.push(plan["items"], client, workspace_url or "https://<workspace>", dry_run=dry_run, policy=policy)
+        results = A.push(plan["items"], client, workspace_url or "https://<workspace>", dry_run=dry_run, policy=policy,
+                         rules=self.rules())
         out = self.root / "altium365" / f"push_{'dry_run_' if dry_run else ''}{self._key(self._bom_path(bom))}.json"
         out.write_text(json.dumps(results, indent=2))
         return {"dry_run": dry_run, "results": results, "report": self.rel(out)}
+
+    # ------------------------------------------------------------------ library rules (ecadlib.rules / rules_infer)
+    def rules_file(self):
+        """<workspace>/ecadlib.toml (or ecadlib_rules.json when only that exists)."""
+        return next((self.root / n for n in RU.FILES if (self.root / n).is_file()), self.root / RU.FILES[0])
+
+    def rules(self):
+        """The workspace's rules merged over the defaults (no file: ecadlib's own behaviour)."""
+        f = self.rules_file()
+        return RU.load(f) if f.is_file() else RU.load({})
+
+    def rules_info(self):
+        f = self.rules_file()
+        return {"file": self.rel(f), "exists": f.is_file(), "text": f.read_text(encoding="utf-8") if f.is_file() else "",
+                "rules": RU.effective(self.rules()), "defaults": RU.DEFAULTS}
+
+    def _rules_sources(self):
+        """What a scan looks at when the person names nothing: the --lib folders, uploaded BOMs and Altium 365 state."""
+        out = list(self.libs) + [str(self.root / "uploads")]
+        out += [str(p) for p in sorted(self.root.glob("**/a365_state.json")) if self._is_inside(p)]
+        return out
+
+    def propose_rules(self, paths=None, a365=None, choices=None, progress=None):
+        """Scan existing libraries (Altium .SchLib/.PcbLib/.DbLib, parts tables, KiCad libraries, BOMs, Altium 365
+        component lists) and propose rules with evidence and a confidence per setting. Nothing is written; the
+        proposal's `toml` goes to save_rules. paths default to the workspace's --lib folders and uploaded BOMs.
+        choices {setting key: value} answer the proposal's questions. A diff is included when a file exists."""
+        from . import rules_infer as I
+        paths = [str(p).strip() for p in (paths or []) if str(p).strip()] or self._rules_sources()
+        if progress:
+            progress(0, 1, "scanning " + ", ".join(Path(p).name for p in paths)[:80])
+        out = I.propose(paths, [str(x) for x in (a365 or [])], choices, existing=self.rules_file())
+        out["paths"], out["file"] = paths, self.rel(self.rules_file())
+        if progress:
+            progress(1, 1, "done")
+        return out
+
+    def save_rules(self, text, overwrite=False):
+        """Validate and write <workspace>/ecadlib.toml. An existing different file is only replaced with overwrite=True
+        (kept as ecadlib.toml.bak); otherwise the diff comes back with needs_confirm, for the person to look at."""
+        from . import rules_infer as I
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("no rules text given")
+        res = I.save(text, self.rules_file(), bool(overwrite))
+        res["path"] = self.rel(self.rules_file())
+        if res.get("backup"):
+            res["backup"] = self.rel(res["backup"])
+        return res
 
     def example_specs(self):
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data

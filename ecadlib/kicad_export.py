@@ -149,8 +149,9 @@ def flatten(chain, name):
     return ["symbol", Q(name)] + flags + [props[k] for k in order] + units
 
 
-def plan_fields(item, lib, fp_name, props):
-    """Plan parameters -> ordered [(property, value)]: the five KiCad fields first, then the rest."""
+def plan_fields(item, lib, fp_name, props, rules=None):
+    """Plan parameters -> ordered [(property, value)]: the five KiCad fields first, then the rest; other fields in the
+    rules' house names ([parameters] names; MPN follows the name given for Manufacturer Part Number)."""
     par = {p["name"]: str(p["value"]) for p in item.get("parameters", []) if str(p.get("value", "")).strip()}
     used = {"Value", "Manufacturer", "Manufacturer Part Number", "ComponentLink2URL", "ComponentLink2Description", "Datasheet"}
     out = [("Reference", props.get("Reference", "U")), ("Value", par.get("Value") or item["name"]),
@@ -168,6 +169,10 @@ def plan_fields(item, lib, fp_name, props):
             out.append((f"{par.get(f'ComponentLink{m.group(1)}Description') or 'Link' + m.group(1)} URL", par[k]))
             used |= {k, f"ComponentLink{m.group(1)}Description"}
     out += [(k, v) for k, v in sorted(par.items()) if k not in used and not re.fullmatch(r"(Supplier( Part Number)? \d+|ComponentLink\d+\w+)", k)]
+    names = ((rules or {}).get("parameters") or {}).get("names") or {}
+    if names:
+        std = ("Reference", "Value", "Footprint", "Datasheet", "Description")
+        out = [(k if k in std else names.get("Manufacturer Part Number", k) if k == "MPN" else names.get(k, k), v) for k, v in out]
     seen, res = set(), []
     for k, v in out:
         if k not in seen and (v or k in ("Reference", "Value", "Footprint", "Datasheet", "Description")):
@@ -440,10 +445,13 @@ def _pins(sym):
 
 
 # ---------------------------------------------------------------- driver
-def export(plan, out, name, include_held=False, libs=(), http=None, log=print):
-    """Write the KiCad library for plan.json into `out`; returns the report dict (also kicad_export.json)."""
+def export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None):
+    """Write the KiCad library for plan.json into `out`; returns the report dict (also kicad_export.json).
+    rules: library rules (dict or path); None = the ecadlib.toml found from the plan's folder, if any."""
     plan, out = Path(plan), Path(out)
     plan_dir, lib = plan.parent, kname(name)
+    from .rules import resolve
+    rules = resolve(rules, plan_dir)
     items = sorted(json.loads(plan.read_text()), key=lambda i: kname(i["name"]))
     pretty, shapes = out / f"{lib}.pretty", out / f"{lib}.3dshapes"
     out.mkdir(parents=True, exist_ok=True)
@@ -515,7 +523,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print):
             sym, how = load_symbol(it, plan_dir, http, libs, sname, notes)
             sym = sym_kicad8(sym)
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
-            set_fields(sym, plan_fields(it, lib, row["footprint"], props))
+            set_fields(sym, plan_fields(it, lib, row["footprint"], props, rules))
             symbols[sname] = sym
             row["symbol"] = how
             if row["footprint"]:
@@ -559,8 +567,9 @@ def main(argv=None):
     ap.add_argument("--include-held", action="store_true", help="also export parts the release check held")
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
+    ap.add_argument("--rules", help="library rules file: house parameter names (default: ecadlib.toml found from the plan)")
     a = ap.parse_args(argv)
-    rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60))
+    rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60), rules=a.rules)
     for r in rep["parts"]:
         print(f"  {r['symbol_name']:<28} fp={r['footprint'] or '-':<40} sym={r['symbol'] or 'FAILED'}")
         for n in r["notes"]:
