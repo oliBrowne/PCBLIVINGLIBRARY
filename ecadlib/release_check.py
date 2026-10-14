@@ -15,7 +15,8 @@ Rules, per plan item:
   verify    the item carries `verify` notes (e.g. a datasheet-reader footprint): a person has to look first
 Failing items get status `held` and `hold_reasons`; others `ready`. `--allow PART` records an override in the
 item (`allow.failures` = the failures it covers); an allowed item is `ready` while its failures stay within
-that list. altium365 push releases only `ready` items. Exit code 0 when nothing is held, 2 otherwise."""
+that list. altium365 push releases only `ready` items. Items `ecadlib a365 pull` brought in from the workspace
+(status `existing`) are already released there and are not checked. Exit code 0 when nothing is held, 2 otherwise."""
 import argparse, csv, datetime, re, sys
 from pathlib import Path
 
@@ -212,6 +213,12 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow"):
     """Run check_item on every item, set status ready / held, record --allow overrides. Returns report rows."""
     rows, today = [], datetime.date.today().isoformat()
     for it in items:
+        if it.get("a365") and it.get("status") in ("existing", "deleted_in_workspace"):
+            # pulled from Altium 365 (ecadlib a365 pull): already released there, nothing to release or hold back
+            it["hold_reasons"], it["release_check"] = [], {"result": it["status"], "failures": [], "warnings": []}
+            rows.append({"name": it["name"], "status": it["status"], "result": it["status"], "symbol_source": "a365",
+                         "footprint_source": "a365", "height_mm": "", "failures": "", "warnings": "", "allowed": ""})
+            continue
         fails, warns, info = check_item(it, base)
         msgs = [f"{r}: {m}" for r, m in fails]
         if it["name"] in unallow:

@@ -128,6 +128,21 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"}, "workspace": {"type": "string", "description": "workspace URL"},
                                     "dry_run": {"type": "boolean", "default": True}}}},
+    {"name": "a365_pull",
+     "description": "Import the components already in an Altium 365 workspace into the plan (status existing, with "
+                    "revision and model GUIDs), refresh ones pulled before and download their .SchLib/.PcbLib. With bom, "
+                    "into that BOM's librarian plan (the librarian then reuses them instead of fetching); without, into "
+                    "altium365/workspace_plan.json. Changes local files only; conflicts are reported. Needs NEXAR_TOKEN.",
+     "inputSchema": {"type": "object", "required": ["workspace"],
+                     "properties": {"workspace": {"type": "string", "description": "workspace URL"},
+                                    "bom": {"type": "string"},
+                                    "folders": {"type": "array", "items": {"type": "string"},
+                                                "description": "import only components under these workspace folders"}}}},
+    {"name": "a365_status",
+     "description": "Compare the plan with the Altium 365 workspace without changing anything: new in the workspace, "
+                    "changed there since the last pull, changed locally, conflicts (both), deleted. Needs NEXAR_TOKEN.",
+     "inputSchema": {"type": "object", "required": ["workspace"],
+                     "properties": {"workspace": {"type": "string"}, "bom": {"type": "string"}}}},
     {"name": "list_example_specs",
      "description": "Return the example package specs (useful as templates for preview_footprint).",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -187,6 +202,10 @@ def call_tool(ws, name, args):
             return r
         if name == "altium365_push":
             return ws.altium365_push(args["bom"], args.get("workspace"), dry_run=args.get("dry_run", True) is not False)
+        if name == "a365_pull":
+            return ws.a365_pull(args["workspace"], args.get("bom"), args.get("folders"))
+        if name == "a365_status":
+            return ws.a365_status(args["workspace"], args.get("bom"))
         if name == "export_altium_dblib":
             return ws.export_dblib(args["bom"])
         if name == "list_example_specs":

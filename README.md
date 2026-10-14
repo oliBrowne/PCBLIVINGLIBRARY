@@ -86,6 +86,7 @@ ecad-librarian/
 │   ├── ui/                   # local web UI (python -m ecadlib.ui), one static page, stdlib server
 │   ├── mcp_server.py         # MCP server over stdio (python -m ecadlib.mcp_server)
 │   ├── altium365.py          # Altium 365 workspace: release plan + push via the Nexar Design API
+│   ├── a365_sync.py          # two-way Altium 365 sync: pull workspace components into the plan, status, reconcile
 │   ├── altium_dblib_sync.py  # Altium without 365: the same plan -> .DbLib / .SVNDbLib library folder
 │   ├── altium_lib.py         # pure-Python .PcbLib/.SchLib writer (+ minimal reader, `dump`)
 │   ├── kicad_export.py       # librarian plan -> .kicad_sym + .pretty + .3dshapes + lib tables
@@ -306,6 +307,26 @@ Parts without Altium model files are planned as `needs_altium_models` and skippe
 * Altium also has a newer native Altium 365 GraphQL API at `https://{workspace}/api/graphql` with its own files service. Its library mutations aren't documented publicly yet; this exporter targets Nexar.
 
 **Getting the `.SchLib`/`.PcbLib` files:** `altium_lib.py` (section 5) now writes them. With `--models out/altium_models` the plan has **4 of 14 parts `ready`** (CAP-0402-100nF, TPS62133RGTR, CH340C, RES-0603-10k) and the dry-run push releases those 4 and skips 10. Those files have not been opened in Altium Designer, so the first real release is also their first real test. The fallback is still Altium's KiCad importer on `out/footprints/ecadlib.pretty`.
+
+### Two-way sync: `a365_sync.py` (manage the library you already have)
+
+```
+NEXAR_TOKEN=... ecadlib a365 pull      out/librarian/<bom>/plan.json --workspace <url> [--folder Components] [--no-models]
+NEXAR_TOKEN=... ecadlib a365 status    PLAN --workspace <url>            # read-only; exit 1 when anything differs
+NEXAR_TOKEN=... ecadlib a365 reconcile PLAN --workspace <url> [--prefer workspace|local]
+```
+
+`pull` lists every component in the workspace (`desLibrary.components`, paged) with its folder, comment, description, parameters, revision id, lifecycle state and the names and GUIDs of its symbols and footprints. Components the plan lacks are added with status `existing` and `source.component = "a365"`. Their `.SchLib`/`.PcbLib` are downloaded from each symbol's and footprint's `dataDownloadUrl` into `<plan dir>/a365_models/` and read back with `altium_lib`'s readers. A raw OLE file and a zip that holds one are both accepted; anything else is recorded in `a365.model_errors`. Every item keeps the snapshot it was pulled from (`a365.base`, plus revision, id and GUIDs). `<plan dir>/a365_state.json` holds the same data for all components, in the format `upstream check-a365 --state` and `dedupe` already read.
+
+On the next `pull`, `status` or `reconcile`, each field is compared three ways (base, workspace, plan): parameters one at a time, then comment, description, folder, symbol and footprint names, and model GUIDs. Each component comes out as `in_sync`, `changed_in_workspace` (someone edited it in Altium), `changed_locally`, `merged` (both sides changed different fields; both are kept), `conflict` (both sides changed the same field), `deleted_in_workspace`, `deleted_locally`, `new_in_workspace`, `new_local` or `linked` (a BOM part whose name is already in the workspace). `pull` brings in workspace edits, keeps local ones and leaves conflicts alone. `reconcile` also settles conflicts: by default the workspace wins and the plan's value is kept in `a365.overwritten`; with `--prefer local` the plan's value wins and the next push sends it. Report: `<plan dir>/a365_sync.md` and `.csv`. A backup of the previous plan goes to `plan.json.pre-a365`.
+
+**Push.** An item with an `a365` block is updated, never released again. It is found by name, then by its node id. Its parameters go up with `replaceExisting: true`, merged over the workspace's current set, and parameters removed locally are cleared. If the workspace revision moved since the pull and the parameters there differ from the snapshot, push skips the item and says to run `reconcile`, so an edit made in Altium is never overwritten without notice. After an update the item's revision is written back to the plan. Nexar has no mutation for comment, description, folder or models, so local changes to those are reported as `not pushable`. Pushing new parts works as before.
+
+**Elsewhere.** Pulled items pass `release-check` unchanged, because they are already released. `dedupe` treats them as library entries: they rank as keepers and are never rewritten. If a BOM part matches a pulled item by name or MPN, the `librarian` reuses that item and fetches nothing for it; pulled items the BOM does not use stay in the plan. The shared Workspace class (`app.py`) has `a365_pull` and `a365_status` methods, and the MCP server exposes them as tools. The web UI has no buttons for them yet. With a BOM, these read and write that BOM's librarian plan; without one, `altium365/workspace_plan.json`. If an `ecadlib.toml` rules file is present, its house name for the MPN parameter and its folder map are used (`--rules`).
+
+**Schema fields used** (validated against `tests/nexar/schema.graphql` with graphql-core): `DesComponent{id name comment description isManaged createdAt modifiedAt folder{path} revision{id details{lifeCycleState{name} createdAt modifiedAt}} details{parameters{name value} symbols{name guid dataDownloadUrl folder{path}} footprints{...}}}`, `components(first, after){totalCount pageInfo{hasNextPage endCursor}}`, and `desComponentById`. The schema has no component GUID and no revision label or number. It has only `revision.id`, which, like the component id, changes with each revision, so drift is detected from content plus revision id. Model GUIDs come from the symbols and footprints.
+
+**Not tested live.** api.nexar.com is blocked from this sandbox. Everything above runs against a stateful mock (`tests/test_a365_sync.py`) that validates every query against the schema. Still unknown: what `dataDownloadUrl` actually returns (a raw `.SchLib`/`.PcbLib`, a zip, or something else), and whether it needs the bearer token (the client tries without it first, then with it). Also unknown: whether `details` is too slow at 50 components per page on a large workspace (`PAGE` in the module).
 
 ### Altium without 365: `altium_dblib_sync.py` (`.DbLib` / `.SVNDbLib`)
 
