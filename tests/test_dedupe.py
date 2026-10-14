@@ -202,6 +202,34 @@ def test_a365_state_and_cli():
         assert _quiet(cli.main, ["dedupe", str(p1)]) == 0
 
 
+def test_merge_survives_librarian_rerun():
+    """A footprint merged onto its keeper stays merged when the librarian runs again (was: reverted, merged_from lost)."""
+    from tests import test_librarian as TL
+    with tempfile.TemporaryDirectory() as d:
+        TL.run(d, sources=["kicad"])
+        out = Path(d) / "out"
+        r = DD.run(out / "plan.json", do_merge=True, log=lambda *a: None)
+        assert any(m["parts"] == "LED-RED-0603" and m["to"] == "R_0603_1608Metric" for m in r["mapping"]), r["mapping"]
+        items, _ = TL.run(d, sources=["kicad"])
+        led = items["LED-RED-0603"]
+        assert led["footprint"]["ref"] == "R_0603_1608Metric" and led["footprint"]["file"] == "models/PcbLib/R_0603_1608Metric.PcbLib", led["footprint"]
+        assert led["merged_from"]["footprint"]["ref"] == "LED_0603_1608Metric"
+        assert items["RES-0603-10k"]["footprint"]["ref"] == "R_0603_1608Metric" and not items["RES-0603-10k"].get("merged_from")
+
+
+def test_house_courtyard_layer_hashes_like_kicad_mod():
+    """With ecadlib.toml putting the courtyard on another layer, a PcbLib and its .kicad_mod still hash alike
+    (was: no courtyard read from the PcbLib -> false 'same name, different geometry' conflicts)."""
+    from tests import test_librarian as TL
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "out").mkdir()
+        Path(d, "out", "ecadlib.toml").write_text('[layers]\ncourtyard = "Mechanical11"\n')
+        TL.run(d, sources=["kicad"])
+        out = Path(d) / "out"
+        r = DD.run(out / "plan.json", libs=[out / "models" / "KiCad"], log=lambda *a: None)
+        assert not [g for g in r["groups"] if g["kind"].endswith("_conflict")], [(g["kind"], g["key"]) for g in r["groups"]]
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_dedupe"]))

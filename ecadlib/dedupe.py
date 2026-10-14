@@ -91,12 +91,16 @@ def _box(xs, ys):
     return [round(_q(v, 0.05), 2) for v in (min(xs), min(ys), max(xs), max(ys))] if xs else None
 
 
-def fp_geometry_pcblib(fp):
+def fp_geometry_pcblib(fp, courtyard=AL.MECH15):
+    """courtyard: the layer id the library rules draw courtyards on; Mechanical 15 (ecadlib's own) when nothing is there."""
     pads = [_pad_tuple(r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), AL.to_mm(r["w"]), AL.to_mm(r["h"]), r["rot"], r["hole"] > 0)
             for r in fp["records"] if r["type"] == "pad"]
     xs, ys = [], []
+    shapes = ("track", "arc", "region", "fill")
+    if not any(r["layer"] == courtyard for r in fp["records"] if r["type"] in shapes):
+        courtyard = AL.MECH15
     for r in fp["records"]:
-        if r["layer"] != AL.MECH15:
+        if r["layer"] != courtyard:
             continue
         if r["type"] == "track":
             xs += [AL.to_mm(r["x1"]), AL.to_mm(r["x2"])]; ys += [AL.to_mm(r["y1"]), AL.to_mm(r["y2"])]
@@ -173,7 +177,7 @@ class Collector:
             g = self._read(f, lambda p: fp_geometry_kicad(Path(p).read_text()))
             return [(ref or f.stem, fp_hash(g))] if g else []
         fps = self._read(f, AL.read_pcblib) or []
-        return [(fp["name"], fp_hash(fp_geometry_pcblib(fp))) for fp in fps if not ref or fp["name"] == ref or len(fps) == 1]
+        return [(fp["name"], fp_hash(fp_geometry_pcblib(fp, self.cfg.get("courtyard", AL.MECH15)))) for fp in fps if not ref or fp["name"] == ref or len(fps) == 1]
 
     def _sym_from_file(self, f, ref=None):
         r = self._read(Path(f), AL.read_schlib)
@@ -487,6 +491,8 @@ def run(plan, libs=(), a365=None, config=None, keep=(), do_merge=False, kinds=("
     plan = Path(plan)
     base = plan.parent
     cfg = load_config(config, base)
+    from . import rules as RU                 # house rules may draw the courtyard on another mechanical layer
+    cfg["courtyard"] = RU.layer_id(RU.load(None, start=base)["layers"]["courtyard"])
     items = json.loads(plan.read_text())
     col = Collector(cfg, log)
     col.add_plan(items, base)
