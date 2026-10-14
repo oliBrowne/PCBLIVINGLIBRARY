@@ -298,6 +298,7 @@ python3 -m ecadlib.altium_lib schlib examples/symbols/*.json  -o out/altium_mode
 python3 -m ecadlib.altium_lib dump out/altium_models/PcbLib/SOIC-8_3.9x4.9mm_P1.27mm.PcbLib
 python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
         --models out/altium_models -o out/altium365/plan.json      # -> 4 ready, 10 needs_altium_models
+                                                                     #    add --models out/altium_models_kicad (section 6) -> 14 ready
 ```
 
 No dependencies beyond the standard library. `cfb.py` writes the OLE2 container (v3, 512-byte sectors, mini stream, DIFAT for files over ~7 MB). `altium_lib.py` builds the Altium streams inside it. The record layouts are ported from **AltiumSharp** (C#, Apache-2.0; attribution in the file header and `NOTICE`). `altium-designer-mcp` (GPL-3.0) was read for notes only, and none of its code is used.
@@ -323,7 +324,44 @@ What gets written:
 * EP paste is suppressed with a negative manual paste expansion, which is assumed to read as "no paste". KiCad draws the paste windows as rounded rectangles, and they are written here as rectangular fills.
 * `LayerKindMapping` is empty, so Mechanical 13 and 15 have no layer types and appear as plain mechanical layers. Solder mask and paste use "from rule" except on the EP.
 * SchLib: `Weight` = records + 1 and the pin flag bits were inferred from real files.
-* Not written: through-hole pads, PCB text and designators, 3D bodies, `PrimitiveGuids`, multi-part symbols and pin graphics (dots, clocks). Names over 31 characters are truncated as CFB storage names, and `SectionKeys` holds the mapping in the same way Altium does.
+* Not written by the generator path: through-hole pads, PCB text and designators, 3D bodies (the KiCad import in section 6 adds through-hole pads, arcs, keep-outs and 3D bodies), `PrimitiveGuids` and pin graphics (dots, clocks). Names over 31 characters are truncated as CFB storage names, and `SectionKeys` holds the mapping in the same way Altium does.
+
+## 6. `kicad_import.py`: KiCad library parts to Altium
+
+```
+python3 -m ecadlib.kicad_import batch examples/kicad_import_parts.json -o out/altium_models_kicad [--step]
+python3 -m ecadlib.kicad_import footprint Package_TO_SOT_SMD:SOT-23 [--as NAME] [--height MM] [--step] -o out/altium_models_kicad
+python3 -m ecadlib.kicad_import symbol Transistor_FET:AO3401A [--as NAME] [--footprint SOT-23] [--param K=V] -o out/altium_models_kicad
+    (local inputs work too: X.kicad_mod, Lib.kicad_sym:Name, Name.kicad_sym; --offline uses only out/http_cache)
+python3 -m tests.test_kicad_import
+```
+
+Fetches official footprints, symbols (KiCad 7-9, including `.kicad_symdir` and `extends`) and STEP models from gitlab.com/kicad/libraries and writes one `.PcbLib`/`.SchLib` per part. It handles through-hole pads (round and slotted, plated and NPTH), rect/roundrect/oval/circle pads (custom and trapezoid pads become their bounding rectangle, with a note), arcs and circles, keep-out zones, and hidden or stacked power pins. Every part gets a 3D body: an extruded body over the fab outline by default, with the height taken from the KiCad STEP model, else a per-package table, else `--height`; `--step` embeds the STEP model instead. `examples/kicad_import_parts.json` maps the 10 sample parts that had no models; with it the plan goes from 4 to 14 ready. Outputs are not committed because the KiCad libraries are CC-BY-SA 4.0 (with a design-use exception).
+
+Checked here: through-hole pads, arcs, 3D bodies, keep-out regions and embedded STEP models re-encode byte for byte against Altium-saved files from AltiumSharp's TestData (except for colour, opacity and thermal-relief settings this writer doesn't set). All outputs read back with pyaltiumlib, `altium_lib dump` and olefile in strict mode, and every symbol pin has a pad with the same number. **Not checked in Altium:** slot orientation, through-hole paste, the extruded-body checksum, and stacked hidden pins. FTSH-105 uses KiCad's generic 1.27 mm 2x05 SMD header as a stand-in, so compare it with the Samtec drawing.
+
+## 7. `datasheet.py`: datasheet reader (step 1 of the design)
+
+```
+ANTHROPIC_API_KEY=... python3 -m ecadlib.datasheet <datasheet.pdf | https://...pdf> --part <MPN> \
+        [--package "<hint, e.g. RGT VQFN-16>"] [--pages 30-33] [--model claude-opus-5-5] [--fetch] -o out/datasheet
+python3 -m ecadlib.datasheet <pdf> --part <MPN> --from-response out/datasheet/<MPN>.response.json -o out/datasheet  # re-check offline
+python3 -m tests.test_datasheet
+```
+
+Claude reads the package drawing and pin table and returns every dimension as printed (min/nom/max plus unit), with the PDF page and figure it came from, through a structured-output schema derived from `package_schema.json`. The tool converts inches and mils to mm, then runs schema validation, `footprint_gen.validate`/`build`, sanity rules (pin count vs pin table, pitch x pins vs body, min <= nom <= max, unit plausibility) and symbol checks (unique pins, 1..N plus EP). Anything that fails goes in `needs_review`; nothing is corrected. Outputs: the package spec, the symbol JSON, a provenance sidecar, a review checklist (.md) and the raw response. The PDF is treated as untrusted data. Exit code 0 when clean, 2 when something needs review, 1 on error. **No live API call has been made yet** (no key in the sandbox); the tests mock the Messages API.
+
+## 8. `lifecycle.py`: lifecycle watcher (keep the library current)
+
+```
+python3 -m ecadlib.lifecycle examples/sample_bom.csv out/altium/parts.sqlite out/altium365/plan.json \
+        [--a365 https://<ws>.365.altium.com] [--providers nexar,digikey,mouser,jlcpcb_search] \
+        [--state out/lifecycle_state.json] [-o out/lifecycle_report] [--strict] [--offline]
+python3 -m ecadlib.lifecycle out/altium365/plan.json --update-a365 --workspace <url> [--apply]
+python3 -m tests.test_lifecycle
+```
+
+Reads parts from BOMs, the DbLib `parts.sqlite`, a `plan.json` or (with `--a365`) the released components of a workspace, and checks them against Nexar Supply (Octopart), DigiKey v4, Mouser and JLC stock. Statuses are normalised to `active < nrnd < ltb < obsolete` or `unknown`; a part takes the worst status and the highest stock its sources report. Each run is compared with the `--state` snapshot and written to `.md` and `.csv`. Exit codes: 0 nothing got worse, 1 a part got worse, 2 bad input, 3 no source answered (missing secrets or blocked network). `--update-a365` writes a `Lifecycle` parameter to released components (dry run unless `--apply`; it sends the full parameter set with `replaceExisting: true` so nothing is duplicated). `examples/lifecycle-watch.yml` is a sample weekly GitHub Actions job. Credentials: `NEXAR_CLIENT_ID`/`NEXAR_CLIENT_SECRET` (lifecycle needs a Nexar plan with Tech Specs), `DIGIKEY_CLIENT_ID`/`DIGIKEY_CLIENT_SECRET`, `MOUSER_API_KEY`, `NEXAR_TOKEN` for workspace access. Secrets are never written to the HTTP cache. **Not tested live:** every vendor host is blocked from this sandbox; the parsers are tested against the documented response shapes.
 
 ---
 
@@ -354,7 +392,7 @@ The HTTP cache (`out/http_cache/`) and `__pycache__` were deleted after the runs
 * Load the generated footprints in KiCad and run `kicad-cli fp upgrade` plus DRC.
 * Add dual-flat no-lead (DFN/SON) and QFP/SOT families.
 * Open `out/altium_models/*` in Altium Designer (and run its library validation) before the first real release. Then release one part to a test Altium 365 workspace.
-* Verify the CH340C and TPS62133RGTR pinouts against their datasheets.
-* Add through-hole pads, a designator string and 3D STEP bodies to the PcbLib writer.
+* Verify the CH340C and TPS62133RGTR pinouts against their datasheets (both match KiCad's official symbols by pin number).
+* Run the datasheet reader with a real API key on a known part (TPS62133RGTR) and compare with the hand-written spec.
+* Run the lifecycle watcher with real Nexar/DigiKey/Mouser credentials and confirm the response shapes.
 * Add an `easyeda2kicad` conversion step for the `available_easyeda` bucket.
-* Wire an LLM extraction step that outputs `package_schema.json` along with the source page and figure, keeping `unresolved` dimensions for human review.
