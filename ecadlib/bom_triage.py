@@ -103,13 +103,15 @@ def apply_columns(mapping, headers, columns):
     return mapping
 
 
-def read_bom(path, columns=None):
-    """columns: the rules' [bom] columns ({field: header}), applied over the fuzzy header match."""
+def read_bom(path, columns=None, rules=None):
+    """columns: the rules' [bom] columns ({field: header}), applied over the fuzzy header match. rules: for an Altium
+    project, the house parameter names to read the MPN / manufacturer from (default: ecadlib.toml found from the project)."""
     p = Path(path)
     if p.suffix.lower() in (".prjpcb", ".schdoc", ".bomdoc"):     # Altium project: BOM straight from the schematics
         import os
+        from . import rules as RU
         from .altium_project import bom_lines
-        return bom_lines(p, variant=os.environ.get("ECADLIB_VARIANT") or None)
+        return bom_lines(p, variant=os.environ.get("ECADLIB_VARIANT") or None, rules=RU.resolve(rules, p.parent))
     raw = (pd.read_excel(p, header=None, dtype=str) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls")
            else _read_csv(p))
     raw = raw.fillna("")
@@ -315,7 +317,8 @@ def main(argv=None):
     http = CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline)
     want = a.providers.split(",")
     provs = [c(http) for c in P.ALL if c.name in want]
-    lines, mapping = read_bom(a.bom, RU.bom_columns(RU.load(a.rules, start=Path(a.out).parent)))
+    rules = RU.load(a.rules, start=Path(a.out).parent)
+    lines, mapping = read_bom(a.bom, RU.bom_columns(rules), rules)
     index = KiCadIndex(a.lib)
     print(f"BOM lines: {len(lines)}  header map: {mapping}")
     print(f"local index: {len(index.symbols)} symbols, {len(index.footprints)} footprints")

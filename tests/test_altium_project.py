@@ -379,6 +379,18 @@ def test_real_altium_schdocs():
         assert res["projects"][0]["name"] == "Real" and len(res["projects"]) == 1   # sheets belong to the project
 
 
+
+def test_read_bom_hook_uses_house_mpn_name():
+    """ecadlib.toml [parameters.names] next to the project: the house MPN parameter is read through read_bom."""
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        (d / "ecadlib.toml").write_text('[parameters.names]\n"Manufacturer Part Number" = "Mfr P/N"\n')
+        s = write_schdoc(d / "A.SchDoc", [comp("U1", "LDO", "UAAAAAAA", [("Mfr P/N", "TPS7A0233PDBVR"), ("Manufacturer", "TI")],
+                                               ["SOT-23-5"], lib="x.SchLib")])
+        (ln,), _ = _quiet(T.read_bom, s)[0]
+        assert ln["mpn"] == "TPS7A0233PDBVR", ln
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_altium_project"]))

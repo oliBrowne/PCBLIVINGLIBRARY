@@ -263,6 +263,48 @@ def test_cli_dry_run_and_registration():
         assert rep["dry_run"] and len(rep["results"]) == 4
 
 
+
+def test_blank_header_column_keeps_hand_columns_aligned():
+    """A blank header cell between columns must not shift the hand-added columns right of it onto the wrong data."""
+    import openpyxl
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t); _models(d)
+        plan = _plan(d, _base_items())
+        S.sync(plan, d / "lib")
+        x = d / "lib/ecadlib.xlsx"
+        wb = openpyxl.load_workbook(x); ws = wb["Resistors"]
+        n = ws.max_column
+        ws.cell(1, n + 2, "Stock"); ws.cell(2, n + 2, "500")          # column n+1 left without a header
+        ws.append(["HAND-1"] + [""] * n + ["42"])
+        wb.save(x)
+        S.sync(plan, d / "lib")
+        rows = {r["Part Number"]: r for r in S.read_tables(x)["Resistors"][1]}
+        assert rows["RES-0603-10k"]["Stock"] == "500" and rows["HAND-1"]["Stock"] == "42", rows
+
+
+def test_shared_model_failing_readback_fails_every_item_using_it():
+    """Two items sharing a symbol whose file does not hold the ref: both are errors, no row points at a missing file."""
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t); _models(d)
+        a = _base_items()[0]
+        b = copy.deepcopy(a); b["name"] = "RES-0603-22k"
+        (d / "models/SchLib/Resistor.SchLib").write_bytes((d / "models/SchLib/Capacitor.SchLib").read_bytes())
+        for dry in (True, False):
+            out = S.sync(_plan(d, [a, b]), d / "lib", dry_run=dry)
+            assert _actions(out) == {"RES-0603-10k": "error", "RES-0603-22k": "error"}, out
+        assert not (d / "lib/SchLib/Resistor.SchLib").exists() and not (d / "lib/ecadlib.xlsx").exists()
+
+
+def test_csv_resaved_in_cp1252_does_not_crash():
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t); _models(d)
+        plan = _plan(d, _base_items())
+        S.sync(plan, d / "lib")
+        (d / "lib/ecadlib.csv").write_bytes("Table,Part Number\nR\xe9sistors,X\n".encode("cp1252"))
+        out = S.sync(plan, d / "lib")
+        assert "ecadlib.csv" in out["written"]
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_dblib_sync"]))

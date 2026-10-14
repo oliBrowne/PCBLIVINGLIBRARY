@@ -164,7 +164,7 @@ def main(argv=None):
 
     from . import rules as RU
     rules = RU.load(a.rules, start=a.out)
-    lines, _ = read_bom(a.bom, RU.bom_columns(rules))
+    lines, _ = read_bom(a.bom, RU.bom_columns(rules), rules)
     tri = pd.read_csv(a.triage, dtype=str).fillna("") if a.triage else None
     tables = to_rows(lines, tri, rules)
     tables = {k: df.rename(columns=lambda c: RU.house_row({c: 0}, rules).popitem()[0]) for k, df in tables.items()}
