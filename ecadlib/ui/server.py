@@ -53,6 +53,14 @@ def _msg(e):
     return (m if isinstance(e, (ValueError, FileExistsError)) else f"{type(e).__name__}: {m}")[:600]
 
 
+def _names(v):
+    if v is None:
+        return []
+    if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+        raise ValueError("allow / unallow must be a list of part names")
+    return v
+
+
 def make_handler(ws: Workspace):
     jobs = Jobs()
     write_lock = threading.Lock()                          # one writer at a time in the workspace
@@ -144,6 +152,11 @@ def make_handler(ws: Workspace):
                 if u.path == "/api/triage":
                     bom = self._bom()
                     return self._send(200, jobs.start(self._triage, bom, label=bom))
+                if u.path == "/api/librarian/run":                    # long, network-bound: a background job
+                    b = self._json()
+                    bom = self._bom(b)
+                    refresh = [] if b.get("refresh") is True else (b.get("refresh") or None)
+                    return self._send(200, jobs.start(self._librarian, bom, b.get("sources"), refresh, label=bom))
                 if u.path == "/api/altium365/workspaces":             # read-only network call, no lock
                     self._json()
                     return self._send(200, ws.altium365_workspaces())
@@ -152,6 +165,7 @@ def make_handler(ws: Workspace):
                     "/api/export/dblib": lambda b: ws.export_dblib(self._bom(b)),
                     "/api/altium/models": lambda b: ws.build_altium_models(self._bom(b)),
                     "/api/altium365/plan": lambda b: ws.altium365_plan(self._bom(b)),
+                    "/api/release-check": lambda b: ws.release_check(self._bom(b), _names(b.get("allow")), _names(b.get("unallow"))),
                     "/api/altium365/push": lambda b: ws.altium365_push(self._bom(b), b.get("workspace"),
                                                                        dry_run=b.get("dry_run", True) is not False),
                 }
@@ -162,6 +176,10 @@ def make_handler(ws: Workspace):
                 return self._send(404, {"error": "not found"})
             except Exception as e:
                 return self._error(e)
+
+        @staticmethod
+        def _librarian(bom, sources, refresh, progress=None):
+            return ws.librarian_run(bom, sources, (), refresh, progress)
 
         @staticmethod
         def _triage(bom, progress=None):
