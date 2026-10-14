@@ -64,15 +64,17 @@ def load_footprint(ref, http):
     return text, f"KiCad {ref}"
 
 
-def load_symbol(ref, http):
-    """'Lib:Name', 'path/Lib.kicad_sym:Name' or 'path/Name.kicad_sym' -> [symbol, parent, ...] (extends chain), label."""
+def load_symbol(ref, http, keep_quotes=False):
+    """'Lib:Name', 'path/Lib.kicad_sym:Name' or 'path/Name.kicad_sym' -> [symbol, parent, ...] (extends chain), label.
+    keep_quotes: parse with sexpr's Q strings so the symbols can be written back (kicad_export)."""
+    parse = lambda text: sexpr.parse(text, keep_quotes)
     m = re.match(r"(.+\.kicad_sym)(?::(.+))?$", ref)
     if m:                                     # local file; parents from the same file or sibling files (symdir)
         path = Path(m.group(1))
         def get(name):
             for f in (path, path.with_name(f"{name}.kicad_sym")):
                 if f.exists():
-                    s = _find_symbol(sexpr.parse(f.read_text()), name)
+                    s = _find_symbol(parse(f.read_text()), name)
                     if s:
                         return s
             raise FileNotFoundError(f"symbol {name} not in {path}")
@@ -87,7 +89,7 @@ def load_symbol(ref, http):
                 if "lib" not in cache:
                     cache["lib"] = fetch(http, "kicad-symbols", f"{lib}.kicad_sym")
                 text = cache["lib"]
-            s = _find_symbol(sexpr.parse(text), name) if text else None
+            s = _find_symbol(parse(text), name) if text else None
             if not s:
                 raise FileNotFoundError(f"KiCad symbol {lib}:{name} not found")
             return s
