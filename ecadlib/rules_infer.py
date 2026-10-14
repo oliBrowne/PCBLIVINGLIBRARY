@@ -89,6 +89,7 @@ class Library:
     """Everything the scanners found, in one shape."""
     def __init__(self):
         self.components, self.footprints, self.boms, self.files, self.warnings = [], [], [], Counter(), []
+        self.sym_pins = []                        # per SchLib symbol: (name, [(x, y, length) of each pin], DXP units)
 
     def add_component(self, name, origin, params=None, category=None, folder="", symbol="", footprint="", designator="",
                       description=""):
@@ -170,6 +171,9 @@ def scan_schlib(lib, f):
                 fp = r.get("MODELNAME", "")
         lib.add_component(s["name"], f"SchLib {f.name}", params, None, f.stem if category_of(f.stem) else "", s["name"], fp,
                           desig, desc)
+        pins = [(r["x"], r["y"], r["length"]) for r in recs if r.get("RECORD") == "2" and not r.get("mode")]
+        if pins:
+            lib.sym_pins.append((s["name"], pins))
 
 
 def _bbox(pts):
@@ -906,6 +910,34 @@ def infer_density(lib):
     return [mk("footprint.density", best, n / total, ev + [f"{n} of {total} votes for {best}"], _origins_fp(lib.footprints), alts, ask)]
 
 
+def infer_symbols(lib):
+    """[symbols] pin_length and grid from the IC symbols in scanned SchLibs (8+ pins; passives say little), when they
+    differ from ecadlib's (300 mil pins, 100 mil grid)."""
+    syms = [(n, ps) for n, ps in lib.sym_pins if len(ps) >= 8]
+    if not syms:
+        return []
+    from math import gcd
+    lengths, grids = Counter(), Counter()
+    for _, ps in syms:
+        lengths.update(L * 10 for _, _, L in ps if L > 0)
+        g = 0
+        for x, y, _ in ps:
+            g = gcd(gcd(g, x), y)
+        grids[100 if g and g % 10 == 0 else 50 if g and g % 5 == 0 else 0] += 1
+    out = []
+    if lengths:
+        L, n = lengths.most_common(1)[0]
+        total = sum(lengths.values())
+        g = 50 if grids.most_common(1)[0][0] == 50 else 100
+        if L % 50 == 0 and L % g == 0 and L != RU.DEFAULTS["symbols"]["pin_length"]:     # only what differs from ecadlib's
+            out.append(mk("symbols.pin_length", L, n / total, [f"{n} of {total} pins are {L} mil long"] + [n_ for n_, _ in syms[:2]],
+                          f"{len(syms)} SchLib symbols"))
+    g, n = grids.most_common(1)[0]
+    if g and g != RU.DEFAULTS["symbols"]["grid"]:
+        out.append(mk("symbols.grid", g, n / len(syms), [f"pins of {n} of {len(syms)} symbols sit on a {g} mil grid"], f"{len(syms)} SchLib symbols"))
+    return out
+
+
 def infer_bom(lib):
     from . import bom_triage as T
     cols, ev = {}, []
@@ -923,7 +955,7 @@ def infer_bom(lib):
 # ------------------------------------------------------------------ proposal
 def infer(lib):
     settings = []
-    for fn in (infer_naming, infer_parameters, infer_folders, infer_layers, infer_density, infer_bom):
+    for fn in (infer_naming, infer_parameters, infer_folders, infer_layers, infer_density, infer_bom, infer_symbols):
         try:
             settings += fn(lib)
         except Exception as e:                     # one analysis failing must not lose the others

@@ -20,6 +20,7 @@ a minor release may change command-line options and file formats.
 - Live datasheet reader (`ecadlib datasheet batch|estimate PLAN|BOM`, `librarian --datasheet-batch`, MCP `datasheet_batch`/`datasheet_estimate`): a whole BOM's missing symbols and footprints from datasheets in one Message Batch, with datasheet download and PDF checks, page selection, retries and backoff, a request log without the key, a cost estimate and cap, a result cache, and a self-check. All results are held as `verify`.
 - Team server (`ecadlib ui --team`, `ecadlib team add-user|set-role|reset-password|remove|list`): sign-in with scrypt-hashed passwords, viewer/librarian/approver/admin roles enforced per route, CSRF tokens, lockout, built-in TLS (`--cert/--key`) or `--allow-http` behind a proxy, optional trusted SSO proxy header, approvals signed as the signed-in user, per-user jobs, `team_audit.jsonl`, and a users page. Local mode is unchanged.
 - Simulation models (`ecadlib sim-models`): built-in R/C/L SPICE models, vendor SPICE/IBIS models found and parsed, pin maps checked, attached as Altium SIM/SI links and KiCad `Sim.*` fields.
+- Tidy big-chip symbols (`ecadlib symbol`, `ecadlib/symbol_layout.py`): pins grouped by function (power top, ground bottom, control/debug left, ports right), ports in order, same-name power pins stacked, optional multi-part split, SVG preview; used for datasheet and EasyEDA symbols of 40+ pins, `[symbols]` rules section.
 
 ## [0.2.0] - 2026-10-14
 

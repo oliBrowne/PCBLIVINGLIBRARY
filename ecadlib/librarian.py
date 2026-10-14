@@ -35,6 +35,7 @@ import pandas as pd
 from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
                footprint_gen as F, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .httpcache import CachedHTTP
+from . import symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
 TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository/tree?ref=master&recursive=true&per_page=100&page={page}"
@@ -219,9 +220,15 @@ class Run:
         st["symbol"] = {"source": source, "file": self.rel(path), "notes": list(notes), "by": st["name"]}
         self.written[str(path)] = st["symbol"]
 
-    def put_kicad_sym(self, st, chain, name, fp_name, source, extra=()):
+    def put_kicad_sym(self, st, chain, name, fp_name, source, extra=(), layout=False):
+        """layout: re-lay big symbols out with pins grouped by function (EasyEDA symbols; KiCad library symbols are
+        curated and kept as drawn)."""
         notes = []
         sym = K.convert_symbol(chain, name, fp_name, list(extra), None, notes)
+        npins = len({pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin"})
+        if layout and SL.wants_layout(npins, self.rules) and sym.get("parts", 1) == 1:
+            sym = SL.relayout(sym, self.rules)
+            notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else ""))
         self.put_sym(st, sym, source, notes)
 
     # ---- per part
@@ -357,7 +364,7 @@ class Run:
                 notes = []
                 text = EC.symbol_to_kicad(ds, sym_name, fp_name, {"MPN": mpn, "LCSC": lcsc, "Manufacturer": res.manufacturer}, notes)
                 chain = [K._find_symbol(sexpr.parse(text), sym_name)]
-                self.put_kicad_sym(st, chain, sym_name, fp_name, f"easyeda:{lcsc}", [("MPN", mpn)] if mpn else [])
+                self.put_kicad_sym(st, chain, sym_name, fp_name, f"easyeda:{lcsc}", [("MPN", mpn)] if mpn else [], layout=True)
                 st["symbol"]["notes"] = notes + st["symbol"]["notes"]
                 got.append("symbol")
         st["tried"].append(f"easyeda {lcsc}: " + (", ".join(got) or "nothing needed"))
@@ -413,7 +420,9 @@ class Run:
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
             got.append("footprint")
         if not st["symbol"]:
-            self.put_sym(st, AL.symbol_from_json(dict(res["symbol"], name=sym_name, footprint=fp_name)), f"datasheet:{url}")
+            self.put_sym(st, AL.symbol_from_json(dict(res["symbol"], name=sym_name, footprint=fp_name), self.rules), f"datasheet:{url}",
+                         [f"{len(res['symbol']['pins'])} pins grouped by function (ecadlib.symbol_layout)"]
+                         if SL.wants_layout(res["symbol"]["pins"], self.rules) else ())
             got.append("symbol")
         st["tried"].append(f"datasheet reader ({where}{', ' + how if how else ''}): {', '.join(got) or 'nothing needed'}; "
                            f"{len(res['needs_review'])} review items")
