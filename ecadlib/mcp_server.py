@@ -141,6 +141,23 @@ TOOLS = [
                                                "description": "checks to run (default: all, or [upkeep] checks in ecadlib.toml)"},
                                     "apply": {"type": "boolean", "default": False},
                                     "workspace": {"type": "string", "description": "Altium 365 workspace URL for the a365 check"}}}},
+    {"name": "project_bom",
+     "description": "Read the BOM straight from an Altium project (.PrjPcb, or a single .SchDoc): components from every "
+                    "schematic grouped by MPN / Design Item ID with designators and quantities, footprints, Altium 365 "
+                    "GUIDs, ActiveBOM choices and per-variant quantities. variant applies one project variant (DNP / "
+                    "alternate parts). Writes a CSV that triage_bom and librarian_run accept (the project path works too).",
+     "inputSchema": {"type": "object", "required": ["project"],
+                     "properties": {"project": {"type": "string", "description": "path to the .PrjPcb or .SchDoc"},
+                                    "variant": {"type": "string"}}}},
+    {"name": "where_used",
+     "description": "Scan folders of Altium projects and report where each part is used (project, designators, quantity, "
+                    "revision, variants where it is not fitted), with flags: parts missing from the library, library parts "
+                    "used nowhere, duplicates in use, old Altium 365 revisions, NRND/obsolete parts. Read-only.",
+     "inputSchema": {"type": "object", "required": ["projects"],
+                     "properties": {"projects": {"type": "array", "items": {"type": "string"},
+                                                 "description": "folders (searched recursively) or project files"},
+                                    "part": {"type": "string", "description": "only this part (MPN, item id, LibRef or GUID)"},
+                                    "plan": {"type": "string", "description": "librarian plan.json to compare against"}}}},
     {"name": "list_example_specs",
      "description": "Return the example package specs (useful as templates for preview_footprint).",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -204,6 +221,10 @@ def call_tool(ws, name, args):
             return ws.export_dblib(args["bom"])
         if name == "upkeep_run":
             return ws.upkeep_run(args["bom"], args.get("checks") or None, args.get("apply") is True, args.get("workspace"))
+        if name == "project_bom":
+            return ws.project_bom(args["project"], args.get("variant") or None)
+        if name == "where_used":
+            return ws.where_used(args["projects"], args.get("part") or None, args.get("plan") or None)
         if name == "list_example_specs":
             return ws.example_specs()
     raise KeyError(f"unknown tool {name}")

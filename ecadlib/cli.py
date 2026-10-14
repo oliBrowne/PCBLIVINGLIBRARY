@@ -16,6 +16,8 @@
     ecadlib approve   plan.json approve|reject|status [--part P]   sign-off before altium365 push
     ecadlib dedupe    plan.json [--lib ...] [--merge]  duplicate parts, footprints and symbols
     ecadlib sourcing  BOM [--qty N] [--alternates] price, stock, second sources and alternates per BOM line
+    ecadlib project   BOARD.PrjPcb [-o bom.csv] [--variant V]   BOM straight from an Altium project (.PrjPcb/.SchDoc)
+    ecadlib where-used --projects DIR... [--part X] [--plan plan.json]   which projects use which library part
     ecadlib step-gen  SPEC.json|FOOTPRINT -o x.step   package-shaped 3D model (STEP); --check FILE.step validates
     ecadlib upkeep    PLAN|BOM [--checks ...] [--apply] [--github issue|pr]   weekly checks, only what is new, one issue/PR
 
@@ -42,6 +44,8 @@ COMMANDS = {
     "sourcing": ("ecadlib.sourcing", "price, stock, second sources and alternates for a BOM"),
     "step-gen": ("ecadlib.step_gen", "package-shaped STEP 3D models from a package spec or footprint name"),
     "upkeep": ("ecadlib.upkeep", "weekly lifecycle / upstream / price / A365 checks; new changes as one issue or PR"),
+    "project": ("ecadlib.altium_project", "BOM straight from an Altium project (.PrjPcb / .SchDoc / ActiveBOM)"),
+    "where-used": ("ecadlib.altium_project:where_used_main", "which projects use which library part, and flags"),
 }
 
 
@@ -59,7 +63,8 @@ def main(argv=None):
         print(f"ecadlib: unknown command {argv[0]!r}. Commands: {', '.join(COMMANDS)}", file=sys.stderr)
         return 2
     sys.argv = [f"ecadlib {argv[0]}"] + argv[1:]           # so argparse usage lines show the right command
-    return importlib.import_module(cmd[0]).main(argv[1:])
+    mod, _, fn = cmd[0].partition(":")
+    return getattr(importlib.import_module(mod), fn or "main")(argv[1:])
 
 
 if __name__ == "__main__":
