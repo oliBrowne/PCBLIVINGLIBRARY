@@ -249,8 +249,15 @@ ecadlib footprint-bench [--offline] [--fixture tests/fixtures/kicad_bench.json] 
   dual-row zig-zag numbering; stacked USB-C GND/VBUS pads (a warning); polygon pads (exact gaps); NPTH clearance;
   a courtyard outline that is not a rectangle. All 20 KiCad references below pass it with no errors.
 * **3D:** `step_gen` builds BGA bodies with balls (depopulated ones left out) and connector boxes with pins and contacts.
-* **Altium:** `footprint_gen.altium_footprint(spec)` converts through-hole and custom parts with `kicad_import`'s converter
-  (a polygon pad becomes its bounding rectangle in Altium, noted).
+* **Altium:** approval (`Workspace.approve_footprint`, the UI and MCP) writes the `.PcbLib` for every family through
+  `altium_lib.footprint_from_spec`: SMD pads as before, through-hole pads with their drills (round, square, slots;
+  `kicad_import`'s converter), NPTH holes, mounting/shield pads, KiCad mask margins as manual mask expansion (BGA NSMD),
+  tented thermal vias, paste windows on Top Paste, keep-outs, and a polygon pad as a small anchor pad plus regions with
+  the exact outline on Top Layer and Top Solder (and Top Paste when it has paste). Altium gives primitives that touch a
+  pad the pad's net on the board. `tests/test_altium_tht.py` approves all 20 advanced specs and reads each `.PcbLib`
+  back (altium_lib's reader and pyaltiumlib): 1069 pads, 49 plated through-hole, 3 NPTH, 5 slots, 14 paste windows and
+  the polygon pad match the `.kicad_mod`. Not checked: none of them has been opened in Altium Designer. The footprint
+  preview fits its view to the pads, holes, body and courtyard, so connectors with pin 1 at 0,0 are drawn whole.
 
 `ecadlib footprint-bench` compares every pad (centre, size, drill) and the courtyard with KiCad's official footprint
 (fetched from gitlab.com and cached; `tests/fixtures/kicad_bench.json` keeps just the numbers for offline tests). Run
@@ -505,7 +512,7 @@ python3 -m ecadlib.kicad_import symbol Transistor_FET:AO3401A [--as NAME] [--foo
 python3 -m tests.test_kicad_import
 ```
 
-Fetches official footprints, symbols (KiCad 7-9, including `.kicad_symdir` and `extends`) and STEP models from gitlab.com/kicad/libraries and writes one `.PcbLib`/`.SchLib` per part. It handles through-hole pads (round and slotted, plated and NPTH), rect/roundrect/oval/circle pads (custom and trapezoid pads become their bounding rectangle, with a note), arcs and circles, keep-out zones, and hidden or stacked power pins. Every part gets a 3D body: an extruded body over the fab outline by default, with the height taken from the KiCad STEP model, else a per-package table, else `--height`; `--step` embeds the STEP model instead. Without a KiCad model, a generated STEP is embedded instead of the box (section 14; `--box` keeps the box). `examples/kicad_import_parts.json` maps the 10 sample parts that had no models; with it the plan goes from 4 to 14 ready. Outputs are not committed because the KiCad libraries are CC-BY-SA 4.0 (with a design-use exception).
+Fetches official footprints, symbols (KiCad 7-9, including `.kicad_symdir` and `extends`) and STEP models from gitlab.com/kicad/libraries and writes one `.PcbLib`/`.SchLib` per part. It handles through-hole pads (round and slotted, plated and NPTH), rect/roundrect/oval/circle pads (custom pads become an anchor pad plus copper, mask and paste regions with their outline, or their bounding rectangle when they use arcs or curves; trapezoids become rectangles; per-pad mask margins and tented pads carry over), arcs and circles, keep-out zones, and hidden or stacked power pins. Every part gets a 3D body: an extruded body over the fab outline by default, with the height taken from the KiCad STEP model, else a per-package table, else `--height`; `--step` embeds the STEP model instead. Without a KiCad model, a generated STEP is embedded instead of the box (section 14; `--box` keeps the box). `examples/kicad_import_parts.json` maps the 10 sample parts that had no models; with it the plan goes from 4 to 14 ready. Outputs are not committed because the KiCad libraries are CC-BY-SA 4.0 (with a design-use exception).
 
 Reference and Value text become `.Designator` and `.Comment`; pin shapes map onto Altium pin symbols, `~{X}` names onto overlines, and De Morgan body styles onto Altium display mode 1. Multi-unit symbols become multi-part.
 

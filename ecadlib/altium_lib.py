@@ -36,10 +36,11 @@ from . import cfb, sexpr
 
 # ---------------------------------------------------------------- units & low-level encoders
 TOP, MID1, BOTTOM, TOP_OVERLAY, BOTTOM_OVERLAY, TOP_PASTE, TOP_SOLDER, MECH13, MECH15, MULTI = 1, 2, 32, 33, 34, 35, 37, 69, 71, 74
+BOTTOM_PASTE, BOTTOM_SOLDER = 36, 38
 KEEPOUT = 56
 KICAD_LAYER = {"F.SilkS": TOP_OVERLAY, "F.Fab": MECH13, "F.CrtYd": MECH15}
 LAYER_NAME = {TOP: "TOP", BOTTOM: "BOTTOM", TOP_OVERLAY: "TOPOVERLAY", BOTTOM_OVERLAY: "BOTTOMOVERLAY", TOP_PASTE: "TOPPASTE",
-              TOP_SOLDER: "TOPSOLDER", MECH13: "MECHANICAL13", MECH15: "MECHANICAL15", KEEPOUT: "KEEPOUT"}
+              BOTTOM_PASTE: "BOTTOMPASTE", TOP_SOLDER: "TOPSOLDER", BOTTOM_SOLDER: "BOTTOMSOLDER", MECH13: "MECHANICAL13", MECH15: "MECHANICAL15", KEEPOUT: "KEEPOUT"}
 SHAPE = {"round": 1, "circle": 1, "oval": 1, "rect": 2, "octagonal": 3, "roundrect": 9}
 HOLE = {"round": 0, "square": 1, "slot": 2}
 FLAGS = 0x0C                                  # bit3 "saved" (always set) | bit2 unlocked
@@ -268,7 +269,7 @@ assert len(PAD_TAIL) == 141
 
 def pad_rec(p, guid_a, guid_b):
     """p: designator, x, y, w, h (internal units), shape ('rect'|'roundrect'|'round'), corner (%),
-    layer, paste (None = from rule, else manual expansion in internal units).
+    layer, paste / mask (None = from rule, else manual expansion in internal units).
     Through-hole: layer MULTI, hole (diameter / slot width), hole_shape ('round'|'square'|'slot'),
     slot (slot length), hole_rot (degrees), plated (default True)."""
     shape = SHAPE[p["shape"]]
@@ -283,6 +284,8 @@ def pad_rec(p, guid_a, guid_b):
     put(62, "<B", 0)                           # pad stack mode: simple
     if p.get("paste") is not None:             # manual paste-mask expansion
         put(86, "<i", p["paste"]); put(101, "<B", 2)
+    if p.get("mask") is not None:              # manual solder-mask expansion (KiCad's Altium importer / pyaltiumlib layout)
+        put(90, "<i", p["mask"]); put(102, "<B", 2)
     put(114, "<I", v7_layer(p.get("layer", TOP)))
     put(185, "<B", 1 if p.get("layer") == MULTI else 3)    # reserved marker: 3 on SMD, 1 on multi-layer pads (TestData)
     t[126 - 61:142 - 61], t[142 - 61:158 - 61] = guid_a.bytes_le, guid_b.bytes_le
@@ -300,8 +303,12 @@ def pad_rec(p, guid_a, guid_b):
 
 
 # ---------------------------------------------------------------- footprints: model & converters
-def footprint_from_kicad(text, height_mm=0.0, description=None):
-    """Convert a .kicad_mod (as written by footprint_gen) into the writer's footprint dict (mm, y up)."""
+def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
+    """Convert a .kicad_mod (as written by footprint_gen) into the writer's footprint dict (mm, y up).
+    SMD pads are converted here; through-hole and NPTH pads (round, square, slots), custom (polygon) pads and keep-out
+    zones go through kicad_import's converter. notes: list that collects what could not be carried over exactly."""
+    from . import kicad_import as K
+    notes = [] if notes is None else notes
     t = sexpr.parse(text)
     fp = {"name": t[1], "description": clean(description if description is not None else (sexpr.first(t, "descr") or ["", ""])[1]),
           "height_mm": height_mm, "pads": [], "tracks": [], "fills": [], "regions": [], "texts": texts_from_kicad(t)}
@@ -310,8 +317,8 @@ def footprint_from_kicad(text, height_mm=0.0, description=None):
         x, y, w, h = float(at[1]), -float(at[2]), float(size[1]), float(size[2])
         rot = float(at[3]) if len(at) > 3 else 0.0
         layers = (sexpr.first(p, "layers") or ["layers"])[1:]
-        if p[2] != "smd":
-            raise ValueError(f"{fp['name']}: only SMD pads are supported (pad {p[1]} is {p[2]})")
+        if p[2] != "smd" or p[3] == "custom":
+            K._pad(fp, p, notes); continue
         if "F.Cu" not in layers:              # paste-only aperture (EP window) -> Top Paste fill
             if layers != ["F.Paste"] or rot:
                 raise ValueError(f"{fp['name']}: unsupported non-copper pad on {layers}")
@@ -320,6 +327,8 @@ def footprint_from_kicad(text, height_mm=0.0, description=None):
         pad = {"designator": p[1], "x": x, "y": y, "w": w, "h": h, "rot": rot, "shape": p[3],
                "corner": float(rr[1]) * 200 if rr else 0,          # KiCad r/min(w,h) -> Altium r/(min(w,h)/2) %
                "paste": None if "F.Paste" in layers else "none"}
+        if sexpr.first(p, "solder_mask_margin"):                   # e.g. BGA NSMD: mask opening = land + margin
+            pad["mask"] = float(sexpr.first(p, "solder_mask_margin")[1])
         if p[3] not in SHAPE:
             raise ValueError(f"{fp['name']}: pad shape {p[3]} not supported")
         fp["pads"].append(pad)
@@ -340,6 +349,8 @@ def footprint_from_kicad(text, height_mm=0.0, description=None):
             else:
                 segs = zip(pts, pts[1:] + pts[:1]) if kind != "fp_line" else [pts]
                 fp["tracks"] += [(a[0], a[1], b[0], b[1], w, layer) for a, b in segs]
+    if sexpr.find(t, "zone"):
+        K._zones(fp, t, notes)
     return fp
 
 
@@ -349,7 +360,10 @@ def footprint_from_spec(spec, density=None):
     from . import footprint_gen as F
     txt, rep = F.build(spec, density)
     d = f"{spec.get('description', spec['name'])}; IPC-7351B {rep['ipc_family']} density {rep['density']}; generated by ecadlib"
-    fp = footprint_from_kicad(txt, F.dim(spec.get("height_max", 0))[2] if spec.get("height_max") else 0.0, d)
+    notes = []
+    fp = footprint_from_kicad(txt, F.dim(spec.get("height_max", 0))[2] if spec.get("height_max") else 0.0, d, notes)
+    if notes:
+        rep = dict(rep, altium_notes=notes)
     return fp, rep
 
 
@@ -371,6 +385,10 @@ def _pcb_component(fp, models=None):
             q["paste"] = -max(q["w"], q["h"]) // 2 - mm(0.01)
         elif isinstance(p.get("paste"), float):    # manual expansion in mm
             q["paste"] = mm(p["paste"])
+        if p.get("mask") == "none":          # tented: a manual expansion of -max(w,h)/2 closes the mask opening
+            q["mask"] = -max(q["w"], q["h"]) // 2 - mm(0.01)
+        elif p.get("mask") is not None:      # manual expansion in mm
+            q["mask"] = mm(p["mask"])
         data += pad_rec(q, guid(f"{name}/pad{i}"), gb); n += 1
     for x1, y1, x2, y2, w, layer in fp["tracks"]:
         data += track_rec(mm(x1), mm(y1), mm(x2), mm(y2), mm(w), layer); n += 1

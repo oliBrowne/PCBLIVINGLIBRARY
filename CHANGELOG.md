@@ -23,6 +23,10 @@ a minor release may change command-line options and file formats.
 - Simulation models (`ecadlib sim-models`): built-in R/C/L SPICE models, vendor SPICE/IBIS models found and parsed, pin maps checked, attached as Altium SIM/SI links and KiCad `Sim.*` fields.
 - Tidy big-chip symbols (`ecadlib symbol`, `ecadlib/symbol_layout.py`): pins grouped by function (power top, ground bottom, control/debug left, ports right), ports in order, same-name power pins stacked, optional multi-part split, SVG preview; used for datasheet and EasyEDA symbols of 40+ pins, `[symbols]` rules section.
 
+### Fixed
+
+- Footprint approval now writes the Altium `.PcbLib` for through-hole parts (pin headers, connectors, custom), with drills, slots, NPTH holes and polygon pads as anchor pad + copper/mask/paste regions instead of a bounding rectangle; BGA NSMD pads get their mask expansion. SMD output is unchanged. The footprint preview fits its view to the actual pads, holes and courtyard, so through-hole connectors are no longer drawn off-centre.
+
 ## [0.2.0] - 2026-10-14
 
 ### Added
