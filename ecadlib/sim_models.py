@@ -443,8 +443,8 @@ def builtin(item, kind, rules=None):
         if kind == "L":
             body += [f"L1 1 n1 {spice_num(v)}", f"R1 n1 2 {spice_num(dcr)}"]
         else:
-            nodes = ["1"] + [f"n{i}" for i in range(1, (esr is not None) + (esl is not None) + 1)] + ["2"]
             parts = [("C", spice_num(v))] + ([("R", spice_num(esr))] if esr else []) + ([("L", spice_num(esl))] if esl else [])
+            nodes = ["1"] + [f"n{i}" for i in range(1, len(parts))] + ["2"]     # one node between each pair: ends on 2
             body += [f"{e}1 {nodes[i]} {nodes[i + 1]} {val}" for i, (e, val) in enumerate(parts)]
         body += [".ends", ""]
         m.update({"name": name, "model_type": "subckt", "pins": ["1", "2"], "text": "\n".join(body),
@@ -902,12 +902,14 @@ def run(plan, models=(), attach=False, http=None, offline=False, cache="out/http
         if f:
             users.setdefault(f, []).append(it["name"])
     links = {}                                     # SchLib file -> [link]
+    written = {}                                   # models/Sim file name -> text written by this run
     for it in items:
         old = it.get("sim_model") or {}
-        it["verify"] = [v for v in it.get("verify", []) if not v.startswith("sim model")]
-        if old.get("pinned"):                       # a person chose this model: keep it
+        if old.get("pinned"):                       # a person chose this model: keep it (and its verify hold)
             rep["parts"].append({"part": it["name"], "status": "kept (pinned)", **{k: old.get(k) for k in ("name", "source", "file")}})
             continue
+        if attach:                                  # only an attach rewrites the links the hold is about
+            it["verify"] = [v for v in it.get("verify", []) if not v.startswith("sim model")]
         sym_pins = symbol_pins(it, plan_dir)
         try:
             rec = find_one(it, plan_dir, folder, nt, rules, sym_pins)
@@ -924,6 +926,10 @@ def run(plan, models=(), attach=False, http=None, offline=False, cache="out/http
             fn = _safe(rec.get("file_name") or f"{rec['name']}.lib")
             if rec["source"] == "builtin":
                 fn = f"{_safe(rec['name'])}.lib"
+            if written.get(fn, text) != text:         # another part's different model has this file name
+                stem, suf = os.path.splitext(fn)
+                fn = f"{stem}-{hashlib.sha256(text.encode()).hexdigest()[:8]}{suf}"
+            written[fn] = text
             (sim_dir / fn).write_text(text)
             rec["file"] = os.path.relpath(sim_dir / fn, plan_dir)
             rec["file_name"] = fn
@@ -950,7 +956,10 @@ def run(plan, models=(), attach=False, http=None, offline=False, cache="out/http
                 rec["attached"]["kicad"] = True
             if rec["pin_map"]["status"] == "verify" and rec["attached"]:
                 it["verify"].append(f"sim model {rec['name']}: pin map not verified ({rec['pin_map']['method']})")
-        it["sim_model"] = rec
+        if attach or not old.get("attached"):
+            it["sim_model"] = rec
+        else:                                      # report-only run: the attached model (and its hold) stays in the plan
+            rec["notes"].append("report only: the plan keeps the attached model; run with --attach to replace it")
         rep["parts"].append({"part": it["name"], "kind": rec.get("kind"), "found": rec.get("found"), "source": rec.get("source"),
                              "format": rec.get("format"), "name": rec.get("name"), "file": rec.get("file"),
                              "pins": (rec.get("pin_map") or {}).get("status"), "pin_method": (rec.get("pin_map") or {}).get("method"),
