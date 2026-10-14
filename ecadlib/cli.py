@@ -11,6 +11,7 @@
     ecadlib altium365 plan|workspaces|push ...    Altium 365 release via Nexar
     ecadlib dblib-sync plan.json --to DIR [--svn] Altium without 365: sync a plan into a .DbLib/.SVNDbLib folder
     ecadlib librarian BOM --lib ... -o out/lib    BOM -> missing parts filled -> Altium models + plan + review
+    ecadlib datasheet PDF --part MPN | batch PLAN|BOM | estimate PLAN|BOM   Claude reads datasheets -> symbols + footprints
     ecadlib release-check plan.json [--allow P]   hold back plan items that fail the pre-release checks
     ecadlib kicad-export plan.json -o DIR --name LIB   the same library as KiCad files (.kicad_sym, .pretty)
     ecadlib resolve   plan.json [--part P] list|show|choose ...   fix held parts: ranked candidates, pick one
@@ -41,6 +42,7 @@ COMMANDS = {
     "altium365": ("ecadlib.altium365", "Altium 365 release via Nexar"),
     "dblib-sync": ("ecadlib.altium_dblib_sync", "sync a plan into an Altium .DbLib / .SVNDbLib library folder"),
     "librarian": ("ecadlib.librarian", "BOM to library: fill missing parts, plan, release check"),
+    "datasheet": ("ecadlib.datasheet", "Claude datasheet reader: one PDF, or a whole plan/BOM as one Message Batch"),
     "release-check": ("ecadlib.release_check", "pre-release checks on an altium365 plan"),
     "kicad-export": ("ecadlib.kicad_export", "librarian plan -> KiCad .kicad_sym / .pretty / .3dshapes"),
     "resolve": ("ecadlib.resolve", "fix held parts: candidates for a missing symbol/footprint, choose one"),

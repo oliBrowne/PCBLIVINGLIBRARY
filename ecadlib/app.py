@@ -564,6 +564,50 @@ class Workspace:
         return {"attach": rep["attach"], "parts": rep["parts"], "hosts": rep["hosts"], "altium365": rep["altium365"],
                 "errors": rep.get("errors", []), "reports": [self.rel(plan_f.parent / "sim_models.md"), self.rel(plan_f.parent / "sim_models.json")]}
 
+    def _datasheet_reader(self, out, batch=True, wait=False, estimate=False, yes=False):
+        from . import datasheet as D
+        return D.Reader(out, self.root / "http_cache", rules=self.rules(), batch=batch, wait=wait, estimate=estimate, yes=yes,
+                        http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None)
+
+    def datasheet_batch(self, bom, sync=False, wait=False, parts=None, yes=False):
+        """Read the datasheet of every part of the librarian plan that still has no symbol or footprint, as one
+        Message Batch (sync=True: one Messages call per part), build them, mark them `verify` and re-run the release
+        check. wait=False submits and returns; call again to collect (the batch id is kept, nothing is paid twice).
+        With no plan yet, the librarian runs first with the batch as its datasheet step."""
+        from . import datasheet as D, librarian as L
+        bom_path = self._bom_path(bom)
+        out = self._librarian_dir(bom_path)
+        rd = self._datasheet_reader(out, batch=not sync, wait=wait, yes=yes)
+        if not rd.key:
+            raise ValueError(f"{D.settings(self.rules())['api_key_env']} is not set: the datasheet reader needs a Claude API key "
+                             "(datasheet_estimate works without one)")
+        log = []
+        rd.say = lambda m: log.append(str(m).strip())
+        if (out / "plan.json").exists():
+            items = D.fill_plan(out / "plan.json", rd, self.rules(), log=log.append, parts=set(parts or []) or None)
+        else:
+            self._read_bom(bom_path)
+            provs = ",".join(p for p in ("jlcpcb_search", "easyeda") if p in self.provider_names)
+            items = L.run(str(bom_path), self.libs + [str(self.root / "footprints")], out, None, None, False, [], self.offline,
+                          self.root / "http_cache", 0.5, provs, http=rd.http, log=log.append, rules=self.rules(), reader=rd)
+        state = rd._state()
+        r = self._librarian_summary(bom_path, items, log)
+        r["batches"] = [{k: b.get(k) for k in ("id", "status", "counts", "collected", "errors")} for b in state["batches"]][-5:]
+        r["pending"] = sum(1 for b in state["batches"] if not b.get("collected"))
+        return r
+
+    def datasheet_estimate(self, bom):
+        """Tokens and cost of reading the datasheets the librarian plan still needs, before anything is sent (exact
+        input counts with an API key, rough without). Downloads the datasheets (cached) to count their pages."""
+        from . import datasheet as D
+        bom_path = self._bom_path(bom)
+        out = self._librarian_dir(bom_path)
+        plan_f = out / "plan.json"
+        if not plan_f.exists():
+            raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
+        est = D.estimate_plan(plan_f, self._datasheet_reader(out, estimate=True))
+        return dict(est, key_set=est["exact_input"])
+
     def altium365_workspaces(self):
         from . import altium365 as A
         return {"workspaces": A.Nexar(_nexar_token()).workspaces()}

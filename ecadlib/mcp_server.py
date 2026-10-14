@@ -125,6 +125,22 @@ TOOLS = [
                      "properties": {"bom": {"type": "string"}, "attach": {"type": "boolean", "default": False},
                                     "models": {"type": "array", "items": {"type": "string"},
                                                "description": "workspace-relative folders of model files"}}}},
+    {"name": "datasheet_estimate",
+     "description": "Before reading datasheets with Claude: how many parts of the librarian plan still need a symbol or "
+                    "footprint and have a datasheet link, and the token count and cost (USD, batch price) of reading them. "
+                    "Exact input counts when the API key is set, rough otherwise. Sends nothing to the model.",
+     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
+    {"name": "datasheet_batch",
+     "description": "Fill a whole BOM from datasheets in one go: every part of the librarian plan that still has no symbol "
+                    "or footprint is read by Claude from its datasheet (BOM link, LCSC link, KiCad/EasyEDA link) as one "
+                    "Message Batch (half price), built into .SchLib/.PcbLib, marked verify (held until a person checks "
+                    "it) and the release check re-run. Costs money: call datasheet_estimate first and only run it when "
+                    "the user agrees. wait=false (default) submits and returns at once; call again later to collect "
+                    "(the batch id is kept). sync=true uses one Messages call per part instead of a batch.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "sync": {"type": "boolean", "default": False},
+                                    "wait": {"type": "boolean", "default": False},
+                                    "parts": {"type": "array", "items": {"type": "string"}, "description": "only these parts"}}}},
     {"name": "build_altium_models",
      "description": "Write the Altium .PcbLib files for a BOM's footprints that are in the KiCad libraries, plus generic "
                     "Resistor/Capacitor .SchLib symbols, into the workspace altium_models/ folder.",
@@ -259,6 +275,12 @@ def call_tool(ws, name, args):
             return r
         if name == "sim_models":
             return ws.sim_models(args["bom"], args.get("attach") is True, args.get("models") or None)
+        if name == "datasheet_estimate":
+            return ws.datasheet_estimate(args["bom"])
+        if name == "datasheet_batch":
+            r = ws.datasheet_batch(args["bom"], args.get("sync") is True, args.get("wait") is True, args.get("parts") or None)
+            r["log"] = r["log"][-20:]
+            return r
         if name == "build_altium_models":
             return ws.build_altium_models(args["bom"])
         if name == "altium365_plan":
