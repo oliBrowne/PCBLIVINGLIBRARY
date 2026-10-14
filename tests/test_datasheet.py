@@ -51,6 +51,16 @@ INCH = {
     "symbol_description": "Synthetic SOIC-8 part", "notes": [], "embedded_instructions": []}
 
 
+def _complete(ext):
+    """Strict structured outputs return every property; fill ones the schema gained since this fixture was written."""
+    for k in D.output_schema()["properties"]["package"]["properties"]:
+        ext["package"].setdefault(k, None)
+    return ext
+
+
+_complete(GOOD); _complete(INCH)
+
+
 def message(ext, stop="end_turn", model="claude-opus-5-5"):
     return {"id": "msg_01XyZtest", "type": "message", "role": "assistant", "model": model,
             "content": [{"type": "thinking", "thinking": "", "signature": "EqQBCkYIBxgCKkA="},
@@ -235,11 +245,22 @@ def test_schema_and_build_failures_are_reported_not_fixed():
 
 
 def test_footprint_gen_warning_reported():
-    def big_ep(e):
-        for d in ("length", "width"):
-            e["package"]["exposed_pad"][d]["nom"] = 1.68
-    rev = _review(big_ep)
+    real = F.build
+    with mock.patch.object(F, "build", lambda spec, *a, **k: (real(spec, *a, **k)[0], {"warning": "EP to pad gap 0.170 < 0.2"})):
+        rev = _review(lambda e: None)
     assert rev == ["footprint_gen: EP to pad gap 0.170 < 0.2"], rev
+
+
+def test_new_schema_fields_pass_through():
+    def sot223(e):
+        e["package"].update(lead_type="flat", polarized=None,
+                            tab={"number": "4", "side": "R", "offset": None, "width": 3.0, "length": None})
+    ext = copy.deepcopy(GOOD); sot223(ext); res = run(ext)
+    assert res["spec"]["lead_type"] == "flat" and "polarized" not in res["spec"], res["spec"]
+    assert res["spec"]["tab"] == {"number": "4", "side": "R", "width": 3.0}
+    assert any(r.startswith("tab: values were asked for in mm") for r in res["needs_review"]), res["needs_review"]
+    o = D.output_schema()["properties"]["package"]["properties"]
+    assert o["tab"]["anyOf"][0]["required"] == list(o["tab"]["anyOf"][0]["properties"])   # strict-mode shape
 
 
 def test_embedded_instructions_flagged():
