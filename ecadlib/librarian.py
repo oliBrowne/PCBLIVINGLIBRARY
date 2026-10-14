@@ -489,8 +489,9 @@ def run(bom, libs=(), out="out/librarian", sources=SOURCES, refresh=None, refres
         state[it["name"]] = st
     for it in items:
         apply_state(it, state[it["name"]], _line_for(it, lines, rows)[0])
-        if old.get(it["name"], {}).get("allow"):
-            it["allow"] = old[it["name"]]["allow"]
+        for k in ("allow", "approvals", "duplicate_of"):     # decisions people made survive re-runs
+            if old.get(it["name"], {}).get(k):
+                it[k] = old[it["name"]][k]
         log(f"  {'skip ' if state[it['name']].get('skipped') else 'done ' if _done(state[it['name']], out) else 'open '}"
             f"{it['name']:<28} sym={it['source']['symbol'] or '-'}  fp={it['source']['footprint'] or '-'}")
     state = {k: v for k, v in state.items() if k in {i["name"] for i in items}}

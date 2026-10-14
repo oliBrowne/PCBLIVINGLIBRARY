@@ -235,6 +235,8 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow"):
                      "symbol_source": (it.get("source") or {}).get("symbol") or "", "footprint_source": (it.get("source") or {}).get("footprint") or "",
                      "height_mm": f"{info['height']:.2f}" if info.get("height") else "", "failures": "; ".join(msgs),
                      "warnings": "; ".join(warns), "allowed": "yes" if it.get("allow") else ""})
+    from .approvals import post_check          # sign-off policy (approvals.json next to the plan) and dedupe status
+    post_check(items, base, rows)
     return rows
 
 
@@ -264,6 +266,7 @@ def main(argv=None):
     ap.add_argument("--allow", action="append", default=[], help="part name to release despite its current failures (repeatable)")
     ap.add_argument("--unallow", action="append", default=[], help="remove an earlier --allow")
     ap.add_argument("-o", "--out", help="report stem (.md and .csv); default <plan dir>/release_check")
+    ap.add_argument("--user", help="who gives the --allow (default: git config user.name/email); see approvals")
     a = ap.parse_args(argv)
     plan = Path(a.plan)
     items = json.loads(plan.read_text())
@@ -271,12 +274,18 @@ def main(argv=None):
     if unknown:
         sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")
     rows = apply(items, plan.parent, a.allow, a.unallow)
+    if a.allow:                                # record the person, so approvals can refuse self-approval
+        from .approvals import identity, post_check, stamp_allow
+        stamp_allow(items, a.allow, identity(a.user, cwd=plan.parent))
+        post_check(items, plan.parent, rows)
     plan.write_text(json.dumps(items, indent=2))
     stem = write_report(rows, a.out or plan.parent / "release_check", plan)
     for r in rows:
         print(f"  {r['result']:<8} {r['name']:<28} {r['failures'][:110]}")
     held = sum(r["status"] == "held" for r in rows)
-    print(f"{len(rows) - held} ready, {held} held -> {plan}; report {stem.with_suffix('.md')}")
+    other = {s: sum(r["status"] == s for r in rows) for s in ("awaiting_approval", "duplicate")}   # approvals / dedupe
+    print(f"{sum(r['status'] == 'ready' for r in rows)} ready, {held} held"
+          + "".join(f", {n} {s.replace('_', ' ')}" for s, n in other.items() if n) + f" -> {plan}; report {stem.with_suffix('.md')}")
     return 2 if held else 0
 
 
