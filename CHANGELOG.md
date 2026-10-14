@@ -7,6 +7,8 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-14
+
 ### Added
 
 - Web UI: a **Past triages** list that any signed-in user (viewer and up), and local mode, can open read-only (`GET /api/triage/history`, `/api/triage/result`, MCP `triage_history`). Each upload is now stored in its own folder, `uploads/<time>-<random>/<name>`, so BOMs with the same file name no longer overwrite each other, or each other's reports.
@@ -85,6 +87,7 @@ a minor release may change command-line options and file formats.
 - Initial prototypes: IPC-7351B footprint generator driven by `package_schema.json`, BOM triage
   against local KiCad libraries and public part sources, and Altium Database Library (DbLib) export.
 
-[Unreleased]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases/tag/v0.1.0
