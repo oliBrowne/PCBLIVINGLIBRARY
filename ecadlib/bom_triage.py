@@ -95,6 +95,10 @@ def _read_csv(p):
 
 def read_bom(path):
     p = Path(path)
+    if p.suffix.lower() in (".prjpcb", ".schdoc", ".bomdoc"):     # Altium project: BOM straight from the schematics
+        import os
+        from .altium_project import bom_lines
+        return bom_lines(p, variant=os.environ.get("ECADLIB_VARIANT") or None)
     raw = (pd.read_excel(p, header=None, dtype=str) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls")
            else _read_csv(p))
     raw = raw.fillna("")

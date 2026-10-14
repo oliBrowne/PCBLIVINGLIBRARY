@@ -66,7 +66,7 @@ class Workspace:
         return KiCadIndex(self.libs + [str(self.root / "footprints")])
 
     def _read_bom(self, bom_path):
-        if bom_path.suffix.lower() not in (".xlsx", ".xlsm", ".xls") and b"\0" in bom_path.read_bytes()[:4096]:
+        if bom_path.suffix.lower() not in (".xlsx", ".xlsm", ".xls", ".schdoc", ".prjpcb", ".bomdoc") and b"\0" in bom_path.read_bytes()[:4096]:
             raise ValueError(f"{bom_path.name} looks like a binary file, not a CSV; export the BOM as CSV or XLSX")
         try:
             lines, mapping = T.read_bom(bom_path)
@@ -492,6 +492,36 @@ class Workspace:
         if merge:
             out["summary"] = self.release_check(bom)
         return out
+
+    # ------------------------------------------------------------------ Altium projects (ecadlib.altium_project)
+    def project_bom(self, project, variant=None):
+        """BOM straight from an Altium .PrjPcb / .SchDoc (with variants and ActiveBOM choices); writes
+        reports/project_<name>.csv, which triage/librarian also accept, as does the project file itself."""
+        from . import altium_project as AP
+        p = self._bom_path(project)
+        prj = AP.load_project(p)
+        groups = AP.bom_groups(prj, variant)
+        variants = [v["name"] for v in prj["variants"]]
+        out = AP.write_bom_csv(groups, self.root / "reports" / f"project_{self._key(p)}{'_' + self.safe_name(variant) if variant else ''}.csv", variants)
+        keep = ("designator", "qty", "mpn", "manufacturer", "value", "footprint", "description", "libref", "design_item_id",
+                "dnp", "alternates", "variant_notes", "variants", "lifecycle", "item_guid", "revision_guid")
+        return {"project": prj["name"], "variant": variant, "variants": variants, "sheets": [Path(s).name for s in prj["sheets"]],
+                "components": len(prj["components"]), "lines": [{k: g[k] for k in keep} for g in groups],
+                "warnings": prj["warnings"], "csv": self.rel(out)}
+
+    def where_used(self, projects, part=None, plan=None):
+        """Which projects use which part. projects: folders or project files. The library compared against is the
+        given librarian plan (or every librarian plan in the workspace) plus altium_models/."""
+        from . import altium_project as AP
+        dirs = [self._bom_path(d) for d in ([projects] if isinstance(projects, str) else projects)]
+        plans = [self._bom_path(plan)] if plan else sorted((self.root / "librarian").glob("*/plan.json"))
+        libs = [str(self.models)] if self.models.exists() else []
+        res = AP.where_used(dirs, part, plans[0] if plans else None, libs)
+        files = AP.write_where_used(res, self.root / "reports" / "where_used")
+        rows = AP.where_used_rows(res)
+        return {"projects": res["projects"], "flags": res["flags"], "rows": rows, "warnings": res["warnings"],
+                "library": [self.rel(p) if self._is_inside(p) else str(p) for p in plans[:1]] + [self.rel(l) for l in libs],
+                "reports": [self.rel(f) for f in files.values()]}
 
     def altium365_workspaces(self):
         from . import altium365 as A
