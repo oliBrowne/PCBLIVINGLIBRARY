@@ -207,10 +207,13 @@ def test_run_attach_altium_and_kicad():
         assert "Sim.Device" not in syms["DSPART1"] if "DSPART1" in syms else True
         notes = next(p for p in r["parts"] if p["part"] == "TPS1234DSGR")["notes"]
         assert any("pin map to verify" in n for n in notes), notes
-        # without --attach nothing is written into the libraries, KiCad gets no Sim fields
+        # without --attach nothing is written into the libraries; the model attached above stays in the plan, so the
+        # KiCad export keeps matching the .SchLib's SIM link (it used to drop the Sim fields while Altium kept the link)
+        before = (out / items["EEPART1"]["symbol"]["file"]).read_bytes()
         rep3 = S.run(plan, [VENDOR], attach=False, http=TL.FakeHTTP(), log=lambda *a: None)
         items = {i["name"]: i for i in json.loads(plan.read_text())}
-        assert not items["EEPART1"]["sim_model"]["attached"] and not S.kicad_export_fields(items["EEPART1"], out, kx / "x", "x", [])
+        assert (out / items["EEPART1"]["symbol"]["file"]).read_bytes() == before
+        assert items["EEPART1"]["sim_model"]["attached"] and S.kicad_export_fields(items["EEPART1"], out, kx / "x", "x", [])
         md = (out / "sim_models.md").read_text()
         assert "EEPART1" in md and "Altium 365" in md
 
@@ -390,6 +393,51 @@ def test_workspace_sim_models():
         except ValueError:
             pass
 
+
+
+# ---------------------------------------------------------------- review regressions
+def test_builtin_zero_esr_with_esl_reaches_node_2():
+    item = {"name": "C1", "parameters": [{"name": "Value", "value": "100n"}, {"name": "ESR", "value": "0"}, {"name": "ESL", "value": "1n"}]}
+    m, _ = S.builtin(item, "C")
+    assert "L1 n1 2 1n" in m["text"], m["text"]                      # was 'L1 n1 n2': port 2 left floating
+
+
+def test_sim_rules_section_is_accepted():
+    from ecadlib import rules as RU
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "ecadlib_rules.json"
+        f.write_text(json.dumps({"sim": {"capacitor_esr": "10m"}}))
+        rules = RU.load(str(f))                                       # was RulesError: [sim] is not a known section
+        item = {"name": "C2", "parameters": [{"name": "Value", "value": "100n"}]}
+        m, _ = S.builtin(item, "C", rules)
+        assert m["model_type"] == "subckt" and "R1 n1 2 10m" in m["text"], m
+        assert S.builtin(item, "C", RU.load(None, start=d + "/none"))[0]["model_type"] in ("ideal", "subckt")
+
+
+def test_same_model_file_name_for_two_parts_not_overwritten():
+    with tempfile.TemporaryDirectory() as m:
+        for sub, src in (("a", "EEPART1.lib"), ("b", "led_red.mod")):
+            (Path(m) / sub).mkdir()
+            (Path(m) / sub / "model.lib").write_text((VENDOR / src).read_text())
+        with tempfile.TemporaryDirectory() as d:
+            plan, items, _ = _plan(d, models=(m,))
+            files = set()
+            for n in ("EEPART1", "LED-RED-0603"):
+                sm = items[n]["sim_model"]
+                assert sm["name"] in (plan.parent / sm["file"]).read_text(), (n, sm["file"])
+                files.add(sm["file"])
+            assert len(files) == 2, files
+
+
+def test_report_only_rerun_keeps_attached_model_and_hold():
+    with tempfile.TemporaryDirectory() as d:
+        plan, items, rep = _plan(d)
+        held = [v for v in items["TPS1234DSGR"]["verify"] if v.startswith("sim model")]
+        assert held and items["TPS1234DSGR"]["sim_model"]["attached"]
+        S.run(plan, [str(VENDOR)], attach=False, http=rep["_http"], log=lambda *a: None)
+        it = {i["name"]: i for i in json.loads(plan.read_text())}["TPS1234DSGR"]
+        assert [v for v in it["verify"] if v.startswith("sim model")] == held, it["verify"]
+        assert it["sim_model"]["attached"], it["sim_model"]           # KiCad export still writes its Sim.* fields
 
 if __name__ == "__main__":
     import sys

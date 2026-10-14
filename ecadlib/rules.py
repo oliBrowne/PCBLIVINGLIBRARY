@@ -60,6 +60,7 @@ DEFAULTS = {
     "release": {"approvals": {}},              # same keys as approvals.json; used when there is no approvals.json
     "altium365": {"workspace": ""},
     "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "sourcing", "a365"]},
+    "sim": {"capacitor_esr": "", "capacitor_esl": "", "inductor_dcr": ""},   # sim-models parasitics ("10m", "1n"); "" = none
 }
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals")}
@@ -556,6 +557,7 @@ HELP = {
     "sources": "Where missing symbols and footprints are looked for, in order",
     "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header)",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
+    "sim": "Parasitics for the built-in passive simulation models (sim-models), e.g. capacitor_esr = \"10m\"",
 }
 
 
