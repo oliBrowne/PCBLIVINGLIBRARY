@@ -82,8 +82,9 @@ def read_tables(xlsx):
             rows = [["" if v is None else str(v) for v in r] for r in ws.iter_rows(values_only=True)]
             if not rows:
                 continue
-            hdr = [h for h in rows[0] if h]
-            out[ws.title] = (hdr, [dict(zip(hdr, r)) for r in rows[1:] if any(r)])
+            cols = [(i, h) for i, h in enumerate(rows[0]) if h]       # by position: a blank header column must not
+            hdr = [h for _, h in cols]                                  # shift the hand columns right of it
+            out[ws.title] = (hdr, [{h: r[i] if i < len(r) else "" for i, h in cols} for r in rows[1:] if any(r)])
     finally:
         wb.close()
     return out
@@ -270,7 +271,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     old = read_tables(xlsx)
     tables = {t: (list(h), [dict(r) for r in rows]) for t, (h, rows) in old.items()}
     where = {r.get("Part Number"): t for t, (_, rows) in tables.items() for r in rows}
-    results, written, removed, copied = [], [], [], {}
+    results, written, removed, copied, failed = [], [], [], {}, {}
 
     def find(pn, t):
         rows = tables.get(t, ([], []))[1]
@@ -300,6 +301,8 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
             if rel in copied:
                 if copied[rel] != data:
                     problems.append(f"{rel}: another plan item already wrote different content this run")
+                elif rel in failed:                         # same bad file as an earlier item: same error
+                    problems.append(failed[rel])
                 elif rel in written:
                     notes.append(f"{rel} updated")
                 continue
@@ -315,6 +318,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                 if err:
                     tmp.unlink()
                     problems.append(err)
+                    failed[rel] = err
                     notes.pop()
                     continue
                 os.replace(tmp, dst)
@@ -322,6 +326,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                 err = _readback(src, d, ref)
                 if err:
                     problems.append(err)
+                    failed[rel] = err
                     continue
             written.append(rel)
         if problems:
@@ -415,7 +420,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
         put(xlsx.name, writer=lambda: write_xlsx(xlsx, tables))
     if tables:
         ct = csv_text(tables)
-        if not csvf.exists() or csvf.read_bytes().decode("utf-8") != ct:
+        if not csvf.exists() or csvf.read_bytes().decode("utf-8", "replace") != ct:
             put(csvf.name, ct)
 
     url = svn_url or (svn_info(to, runner, which) if mode == "svndblib" else None)
