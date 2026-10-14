@@ -146,9 +146,9 @@ def specs_from_text(text, kind=None):
     """Specs from a description such as '100nF ±10% 16V X7R 0402' or 'RES SMD 10K OHM 1% 1/10W 0603'."""
     t, out = str(text or ""), {}
     if kind == "C":
-        m = re.search(r"(?<![\w.])(\d+(?:\.\d+)?)\s*([pnuµμm]?)F\b", t)
+        m = re.search(r"(?<![\w.])(\d+(?:\.\d+)?)\s*([pnuµμmPNU]?)F\b", t)       # DigiKey writes 0.1UF, 1000PF
     elif kind == "L":
-        m = re.search(r"(?<![\w.])(\d+(?:\.\d+)?)\s*([nuµμm]?)H\b", t)
+        m = re.search(r"(?<![\w.])(\d+(?:\.\d+)?)\s*([nuµμmNU]?)H\b", t)
     elif kind == "R":
         m = (re.search(r"(?<![\w.])(\d+(?:\.\d+)?)\s*([kKM]?)\s*(?:Ω|(?i:ohms?)\b)", t)
              or re.search(r"(?<![\w.])(\d+)([kKMR])(\d+)\b", t))
@@ -156,7 +156,7 @@ def specs_from_text(text, kind=None):
         m = None
     if m:
         out["value"] = (float(f"{m.group(1)}.{m.group(3)}") * _SI[m.group(2)] if m.re.groups == 3
-                        else float(m.group(1)) * _SI[m.group(2)])
+                        else float(m.group(1)) * _SI[m.group(2) if kind == "R" else m.group(2).lower()])
         out["unit"] = KIND_UNIT[kind]
     if (v := pct(t)) is not None:
         out["tolerance"] = v
