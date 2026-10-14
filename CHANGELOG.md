@@ -17,6 +17,7 @@ a minor release may change command-line options and file formats.
 - Approvals and dedupe: sign off parts before release and merge duplicate library entries.
 - Weekly upkeep (`ecadlib upkeep`): lifecycle, KiCad upstream, price/stock and Altium 365 drift in one run,
   only new changes reported, one rolling GitHub issue or a PR with applied KiCad reconversions; `examples/upkeep.yml`.
+- Simulation models (`ecadlib sim-models`): built-in R/C/L SPICE models, vendor SPICE/IBIS models found and parsed, pin maps checked, attached as Altium SIM/SI links and KiCad `Sim.*` fields.
 
 ## [0.2.0] - 2026-10-14
 
