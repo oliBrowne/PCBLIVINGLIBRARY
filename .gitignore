@@ -7,3 +7,6 @@ ecadlib_workspace/
 build/
 *.egg-info/
 out/librarian/
+
+# stray package downloads
+*.whl
