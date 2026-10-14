@@ -62,10 +62,12 @@ DEFAULTS = {
     "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "sourcing", "a365"],   # ecadlib.upkeep
                "price_jump_pct": 20.0, "build_qty": 1, "currency": "USD"},
     "sim": {"capacitor_esr": "", "capacitor_esl": "", "inductor_dcr": ""},   # ecadlib.sim_models ("" = none)
+    "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)
+                  "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40},
 }
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals")}
-INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000)}
+INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000), ("datasheet", "auto_pages"): (0, 600)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
 
@@ -226,6 +228,13 @@ def validate(raw, where="ecadlib.toml"):
     for f in (raw.get("bom") or {}).get("columns", {}):
         if f not in BOM_FIELDS:
             _err(where, f"bom.columns.{f}", f"is not a BOM field; fields are {', '.join(BOM_FIELDS)}")
+    ds = raw.get("datasheet") or {}
+    if "effort" in ds and ds["effort"] not in ("low", "medium", "high", "xhigh", "max"):
+        _err(where, "datasheet.effort", f"= {ds['effort']!r}: must be low, medium, high, xhigh or max")
+    if "api_key_env" in ds and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ds["api_key_env"]):
+        _err(where, "datasheet.api_key_env", "must be the NAME of an environment variable (never the key itself)")
+    if "model" in ds and not re.fullmatch(r"[a-z0-9][a-z0-9.\-]*", ds["model"]):
+        _err(where, "datasheet.model", f"= {ds['model']!r}: must be a model id such as claude-opus-5-5")
     if (raw.get("release") or {}).get("approvals"):
         from .approvals import normalize_policy
         try:
@@ -573,6 +582,10 @@ HELP = {
     "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header)",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
     "sim": "Parasitics for the built-in passive simulation models (sim-models), e.g. capacitor_esr = \"10m\"",
+    "datasheet": "Claude datasheet reader (ecadlib datasheet / librarian): model, effort, which environment variable holds the "
+                 "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",
+    "datasheet.api_key_env": "name of the environment variable with the API key; the key itself never goes in this file",
+    "datasheet.max_cost_usd": "refuse a run whose estimated worst-case cost is higher (0 = no cap; --yes overrides)",
 }
 
 

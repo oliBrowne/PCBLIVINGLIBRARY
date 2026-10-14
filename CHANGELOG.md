@@ -17,6 +17,7 @@ a minor release may change command-line options and file formats.
 - Approvals and dedupe: sign off parts before release and merge duplicate library entries.
 - Weekly upkeep (`ecadlib upkeep`): lifecycle, KiCad upstream, price/stock and Altium 365 drift in one run,
   only new changes reported, one rolling GitHub issue or a PR with applied KiCad reconversions; `examples/upkeep.yml`.
+- Live datasheet reader (`ecadlib datasheet batch|estimate PLAN|BOM`, `librarian --datasheet-batch`, MCP `datasheet_batch`/`datasheet_estimate`): a whole BOM's missing symbols and footprints from datasheets in one Message Batch, with datasheet download and PDF checks, page selection, retries and backoff, a request log without the key, a cost estimate and cap, a result cache, and a self-check. All results are held as `verify`.
 - Simulation models (`ecadlib sim-models`): built-in R/C/L SPICE models, vendor SPICE/IBIS models found and parsed, pin maps checked, attached as Altium SIM/SI links and KiCad `Sim.*` fields.
 
 ## [0.2.0] - 2026-10-14

@@ -14,8 +14,10 @@ anything still missing, the sources are tried in --sources order, each filling o
              Footprint property, a footprint named after the MPN, or the shortest name starting with the BOM footprint.
              R/C/L/LED use Device:R/C/C_Polarized/L/LED and <Family>_SMD:<X>_<imperial>_<metric>Metric by package.
   easyeda    LCSC number (BOM, or found by MPN in triage) -> EasyEDA component JSON -> easyeda_convert -> KiCad text
-  datasheet  datasheet URL (BOM column, KiCad symbol, EasyEDA/LCSC link) + ANTHROPIC_API_KEY -> ecadlib.datasheet;
-             the result is marked `verify` so release_check holds it until a person has looked (or --allow)
+  datasheet  datasheet URL (BOM column, KiCad symbol, EasyEDA/LCSC link, LCSC pattern) + ANTHROPIC_API_KEY ->
+             ecadlib.datasheet; the result is marked `verify` so release_check holds it until a person has looked (or
+             --allow). --datasheet-batch sends every part that reaches this source as one Message Batch (half price)
+             after the other sources ran, then builds them; results are cached, so re-runs are free
 Footprints without a KiCad STEP model get a package-shaped STEP from step_gen embedded (--box: extruded box).
 Everything is converted through kicad_import into <out>/models/{SchLib,PcbLib} (plus the .kicad_mod in
 <out>/models/KiCad for footprint_check). Outputs: <out>/plan.json (each item records `source`, `librarian.tried`
@@ -170,7 +172,7 @@ def _line_for(item, lines, rows):
 
 class Run:
     def __init__(self, out, http, index, libs, sources, api_key=None, kicad_cache=None, refresh_index=False, gen_step=True,
-                 rules=None):
+                 rules=None, reader=None):
         self.out, self.http, self.index, self.libs, self.sources = Path(out), http, index, libs, sources
         self.rules = rules or RU.DEFAULTS
         self.models = self.out / "models"
@@ -178,6 +180,7 @@ class Run:
             (self.models / d).mkdir(parents=True, exist_ok=True)
         self.api_key, self.written, self.gen_step = api_key, {}, gen_step
         self._kicad, self._kicad_args = None, (kicad_cache, refresh_index)
+        self.reader, self.waiting = reader, []          # datasheet reader; parts waiting for its batch
 
     def kicad(self):
         if self._kicad is None:
@@ -361,21 +364,48 @@ class Run:
         st["review"].append(f"EasyEDA {lcsc} conversion: check pads and pins against the datasheet (native converter, format assumed)")
 
     def src_datasheet(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
-        par = _par(item)
-        urls = [(ln.get("datasheet", ""), "BOM"), st["found"].get("datasheet", ("", "")), (par.get("ComponentLink2URL", ""), "LCSC datasheet link")]
-        url, where = next(((u, w) for u, w in urls if str(u).startswith("http")), (None, None))
-        if not url:
+        urls = D.datasheet_urls(item, ln, row, st["found"])
+        if not urls:
             st["tried"].append("datasheet: no datasheet URL known")
             return
-        key = self.api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not key:
-            st["tried"].append(f"needs datasheet reader (no API key): {url} ({where})")
+        if self.reader is None:
+            self.reader = D.Reader(self.out, Path(self._kicad_args[0] or self.out / "cache").parent, self.api_key, self.rules, self.http)
+        rd = self.reader
+        if not rd.key and not rd.estimate_only:
+            st["tried"].append(f"needs datasheet reader (no API key): {urls[0][0]} ({urls[0][1]})")
             return
-        source, offset, hint = D.load_source(url)
-        headers, body = D.build_request(source, mpn or item["name"], fp_name, hint)
-        ext, msg = D.call(headers, body, key)
-        res = D.process(ext, mpn or item["name"], url, D.MODEL, offset, msg)
-        D.write(res, self.out / "datasheet")
+        job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"])
+        res = rd.cached(job)
+        if res is None and rd.deferred:
+            rd.submit(job)
+            self.waiting.append((st, job, fp_name, sym_name))
+            st["tried"].append(f"datasheet: queued for the batch ({job['url']}, {job['where']})")
+            return
+        self.put_datasheet(st, res or rd.read_now(job), job, fp_name, sym_name, "cached" if res else "")
+
+    def flush_datasheets(self, log=print):
+        """Send the parts queued for the datasheet batch and build what came back."""
+        if not self.waiting:
+            return
+        try:
+            done = self.reader.flush()
+        except D.DatasheetError as e:
+            done = {job["key"]: e for _, job, _, _ in self.waiting}
+        for st, job, fp_name, sym_name in self.waiting:
+            r = done.get(job["key"])
+            if isinstance(r, dict):
+                try:
+                    self.put_datasheet(st, r, job, fp_name, sym_name, r["sidecar"].get("via") or "batch")
+                except Exception as e:
+                    st["tried"].append(f"datasheet: failed ({type(e).__name__}: {e})")
+            elif isinstance(r, Exception):
+                st["tried"].append(f"datasheet reader: failed ({r})")
+            else:
+                st["tried"].append(f"datasheet: {r or 'not sent'}" + ("; run again to collect" if str(r).startswith("pending") else ""))
+        self.waiting = []
+
+    def put_datasheet(self, st, res, job, fp_name, sym_name, how=""):
+        url, where = job["url"], job["where"]
         got = []
         if not st["footprint"]:
             text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
@@ -385,7 +415,9 @@ class Run:
         if not st["symbol"]:
             self.put_sym(st, AL.symbol_from_json(dict(res["symbol"], name=sym_name, footprint=fp_name)), f"datasheet:{url}")
             got.append("symbol")
-        st["tried"].append(f"datasheet reader ({where}): {', '.join(got)}; {len(res['needs_review'])} review items")
+        st["tried"].append(f"datasheet reader ({where}{', ' + how if how else ''}): {', '.join(got) or 'nothing needed'}; "
+                           f"{len(res['needs_review'])} review items")
+        st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
         st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url}; see datasheet/*.review.md"
                             + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
 
@@ -468,8 +500,9 @@ def write_review(rows, out, bom):
 
 def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_index=False, allow=(), offline=False,
         cache="out/http_cache", rate=0.5, providers="jlcpcb_search,easyeda", http=None, api_key=None, log=print, gen_step=True,
-        rules=None, user=None):
-    """Whole pipeline; returns the plan items. refresh: None = resume, [] = redo all, [names] = redo those.
+        rules=None, user=None, datasheet_batch=False, reader=None):
+    """Whole pipeline; returns the plan items. datasheet_batch: parts that reach the datasheet source are read as one
+    Message Batch after every other source ran (reader: a ready datasheet.Reader, e.g. for --no-wait / --estimate). refresh: None = resume, [] = redo all, [names] = redo those.
     rules: library rules (a loaded dict or a path); None uses the ecadlib.toml found from `out` (defaults when none).
     sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity())."""
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
@@ -489,7 +522,10 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     state = json.loads(state_f.read_text()) if state_f.exists() else {}
     old = {i["name"]: i for i in json.loads(plan_f.read_text())} if plan_f.exists() else {}
     items, in_ws = A365S.reuse_existing(items, list(old.values()), rules)  # parts `ecadlib a365 pull` found in the workspace
-    r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step, rules)
+    if reader is None and "datasheet" in sources:
+        reader = D.Reader(out, cache, api_key, rules, http, batch=datasheet_batch, log=log)
+    r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step, rules,
+            reader)
     todo = []
     for it in items:
         if it["name"] in in_ws:
@@ -516,6 +552,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         st = r.resolve(it, ln, row, keeps[it["name"]])
         st["key"], st["skipped"] = fpr, False
         state[it["name"]] = st
+    r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
     for it in items:
         if it["name"] in in_ws:
             log(f"  a365  {it['name']:<28} in the Altium 365 workspace: reused, not fetched")
@@ -563,9 +600,18 @@ def main(argv=None):
     ap.add_argument("--box", action="store_true", help="extruded 3D box instead of a generated STEP when there is no KiCad model")
     ap.add_argument("--user", help="who gives the --allow (default: $ECADLIB_USER, then git config user.name/email)")
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from -o or here; see `ecadlib init`)")
+    ap.add_argument("--datasheet-batch", action="store_true",
+                    help="read every datasheet still needed as one Message Batch (half price; waits for it, see --datasheet-no-wait)")
+    ap.add_argument("--datasheet-no-wait", action="store_true", help="submit the batch and finish; re-run to collect it")
     a = ap.parse_args(argv)
+    rules = RU.load(a.rules, start=a.out)
+    reader = None
+    if a.datasheet_batch:
+        reader = D.Reader(a.out, a.cache, None, rules, CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline, timeout=60),
+                          batch=True, wait=not a.datasheet_no_wait)
     items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh, a.refresh_index,
-                a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=RU.load(a.rules, start=a.out), user=a.user)
+                a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=rules, user=a.user,
+                http=reader.http if reader else None, reader=reader)
     held = sum(i["status"] != "ready" for i in items)
     print(f"{len(items)} parts: {len(items) - held} ready, {held} held -> {Path(a.out) / 'plan.json'}; review {Path(a.out) / 'review.md'}")
     return 2 if held else 0
