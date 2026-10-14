@@ -175,9 +175,11 @@ def merged_params(existing, item):
     return None if want == cur else [{"name": k, "value": v} for k, v in want.items()]
 
 
-def push(items, client, ws, dry_run=False, note="ecadlib sync"):
+def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None):
     """Release new parts, update parameters of parts already in the workspace.
-    dry_run: no uploads or mutations; records the requests that would be sent."""
+    dry_run: no uploads or mutations; records the requests that would be sent.
+    policy: the plan's approval policy (approvals.load_policy); None uses the one release_check stored per item."""
+    from .approvals import push_block
     defs = {} if dry_run else client.release_defs(ws)
     results, uploaded = [], {}                  # one upload per file per run (shared Resistor.SchLib etc.)
     def upload(p):
@@ -188,6 +190,11 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync"):
         res = {"name": it["name"], "action": "", "detail": ""}
         if it.get("status") == "held":         # release_check held it back: no release, no parameter update
             res["action"], res["detail"] = "skip", "held: " + "; ".join(it.get("hold_reasons") or ["release check"])
+            results.append(res)
+            continue
+        block = push_block(it, policy)         # sign-off policy not met, or a dedupe duplicate
+        if block:
+            res["action"], res["detail"] = "skip", block
             results.append(res)
             continue
         try:
@@ -264,7 +271,8 @@ def main(argv=None):
             for k in ("symbol", "footprint"):
                 if i[k]["file"]:
                     i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
-        results = push(items, client, a.workspace, dry_run=a.dry_run)
+        from .approvals import load_policy
+        results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent))
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work
         hint = " (token rejected: check it has design.domain, user.access, openid)" if "401" in str(e) else ""
         sys.exit(f"Nexar request failed: {type(e).__name__}: {e}{hint}")
