@@ -35,7 +35,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ecadlib ui --lib path/to/your/kicad/libs
    ```
 
-   A browser tab opens at `http://127.0.0.1:8765`.
+   A browser tab opens at `http://127.0.0.1:8765`. To share one server with the whole team, with sign-in and roles, see **Team server** below.
    * **Check a BOM:** drop in a CSV or XLSX, whether it's an Altium BOM, an Altium ActiveBOM, a KiCad BOM or a hand-made spreadsheet. A progress bar runs while parts are looked up. You then get a table of what is already in your library, what a part source can supply, what needs a footprint, and what is DNP. You can filter it by status or by search.
    * **Fill the library:** one button runs the librarian on the BOM. It finds each missing symbol and footprint (official KiCad libraries, then EasyEDA, then the datasheet reader), writes the Altium files, and runs the release check. Each part shows where its symbol and footprint came from and what still needs a person. Parts that fail the check are held back from Altium 365; **Release anyway…** overrides that after you have looked (it is recorded in the plan), and **Hold again** takes it back.
 
@@ -76,6 +76,55 @@ The UI and MCP server write everything to one workspace folder (default `./ecadl
 * `http_cache/`
 
 Both servers use only the standard library on top of the package requirements. The web UI binds to 127.0.0.1. It refuses requests with an unexpected Host header (DNS rebinding), cross-origin POSTs, and any file path outside the workspace.
+
+### Team server (`ecadlib ui --team`)
+
+Run the web UI on one machine for the whole team, with sign-in. Local mode (no `--team`) is unchanged.
+
+```
+ecadlib team --workspace /srv/ecadlib add-user ada --role admin --name "Ada Lovelace" --email ada@example.com
+ecadlib team --workspace /srv/ecadlib add-user lin --role librarian --name "Lin Chen" --email lin@example.com
+ecadlib ui --team --workspace /srv/ecadlib --lib /srv/kicad-libs --host 0.0.0.0 --port 8765 --cert cert.pem --key key.pem
+```
+
+![Sign in](docs/ui-team-signin.png)
+
+* **Users** live in `team_users.json` in the workspace. Passwords are stored as `hashlib.scrypt` hashes, each with its own salt, and the file is written with mode 0600. The first admin can only be created on the command line. After that, admins manage users on the **Users** page or with `ecadlib team add-user|set-role|reset-password|remove|list`. Changes take effect at once, even on a running server. A password reset or removal signs that user out everywhere.
+* **Roles.** Each role can do everything the roles before it can.
+
+  | Role | Can |
+  | --- | --- |
+  | viewer | read everything and download reports |
+  | librarian | upload BOMs, triage, librarian, resolve, footprints, exports, release-check overrides, Altium 365 dry run |
+  | approver | approve or reject parts, push to Altium 365 for real |
+  | admin | manage users, save library rules, scan server folders for rules |
+
+  Every route has a minimum role (`ROUTES` in `ecadlib/ui/server.py`). A route missing from that table answers 404 in team mode, and a test fails if any `/api/...` path in the server is missing from it. The page hides buttons the user's role cannot use, but the server is what enforces the roles.
+* **Sign-off** in team mode records the signed-in user (`Name <email>`) and drops any typed name, so the UI hides the name box. The approval role is the user's team role, or one of the roles in their `--sign-as` list (for example `hardware`), so `approvals.json` `roles` and `users` work as before. `no_self_approval` still applies: whoever pressed **Release anyway** cannot approve that part.
+* **Sessions** use a random token in an `HttpOnly; SameSite=Strict` cookie (`Secure` over HTTPS). A session ends after 12 h, or after 2 h without use, and on **Sign out**. Every POST needs the session's CSRF token in `X-CSRF-Token`. The Origin and Host checks stay on as well. The Host must be an IP address, `localhost`, this machine's name or an `--allowed-host`. After 5 failed sign-ins for one user name in 15 minutes, that name is locked for 15 minutes, and unknown names lock the same way. One address gets 30 failures in that window. Admins can **Unlock** a user. Sessions and lockouts are kept in memory, so a restart signs everyone out.
+* **Audit.** Every POST in team mode, including refused ones and sign-ins, is appended to `team_audit.jsonl` with time, user, client address, route, result and the main fields (never passwords). Admins see it under **Users → Audit log**. Approvals are also logged to `approvals_audit.jsonl` as before, with `via: ecadlib ui (team, signed in)`. `/api/file` never serves `team_users.json`, `team.json` or `team_audit.jsonl`.
+* **Several users at once.** All writes in the workspace are serialised by one lock. Each background job belongs to the user who started it, and only that user and admins can see it. While the librarian runs on a BOM, a second librarian run or another write to that BOM is refused with 409 until it finishes. Two people uploading BOMs with the same file name still overwrite each other, as in local mode.
+* **HTTPS.** Pass `--cert`/`--key` to serve TLS 1.2+ with Python's `ssl`. Without a certificate, team mode refuses to listen on any non-loopback address unless you add `--allow-http`, and then it prints a loud warning. The usual setup is a reverse proxy on the same machine, with ecadlib bound to loopback:
+
+  ```
+  # Caddyfile (automatic HTTPS)
+  ecadlib.example.com {
+      reverse_proxy 127.0.0.1:8765
+  }
+  # nginx
+  server { listen 443 ssl; server_name ecadlib.example.com;  # ssl_certificate ... ;
+    client_max_body_size 25m;
+    location / { proxy_pass http://127.0.0.1:8765; proxy_set_header Host $host;
+                 proxy_set_header X-Forwarded-For $remote_addr; proxy_set_header X-Forwarded-Proto https; } }
+  ```
+  Start it with `ecadlib ui --team --host 127.0.0.1 --allowed-host ecadlib.example.com --trusted-proxy 127.0.0.1`. The proxy must pass the original `Host` through: Caddy does this by default, and nginx needs the `proxy_set_header Host $host` line above. `--trusted-proxy` makes ecadlib use the proxy's `X-Forwarded-For` (for logs and lockout) and `X-Forwarded-Proto` (for `Secure` cookies). If the proxy does not send `X-Forwarded-Proto`, set `"secure_cookies": true` in `team.json`.
+* **SSO through the proxy (optional).** If the reverse proxy signs people in (oauth2-proxy, Authelia, Cloudflare Access and the like) and sets a user header, start ecadlib with `--trusted-proxy <proxy IP>` and, if needed, `--proxy-user-header X-Forwarded-User`. The header is believed only on connections from that IP. Its value is matched against user names and e-mails in `team_users.json`, so add such users with `--no-password`. The proxy must overwrite the header on every request, never pass it on from the client. Anyone who can open a connection from the proxy's IP can claim any user, so only trust a proxy on the same host or a locked-down network.
+* **Settings file.** `team.json` in the workspace is optional and holds `allowed_hosts`, `trusted_proxies`, `proxy_user_header`, `session_hours`, `idle_minutes`, `max_failures`, `lockout_minutes`, `max_failures_per_ip` and `secure_cookies`. Command-line flags add to it.
+* **The MCP server stays local.** `ecadlib mcp` talks over stdio to the agent that started it on the same machine. It has no network listener and no sign-in. For a team, run agents against their own checkout or workspace, or let them use the web server's HTTP API with a session like a browser would.
+
+![Users page](docs/ui-team-admin.png)
+
+Tests: `python3 -m tests.test_team` runs a real HTTP(S) server on a free port. It covers sign-in and sign-out, lockout, CSRF, Origin and Host checks, every route against every role, approvals taking identity from the session, path containment, per-user jobs, the SSO header, the admin API and TLS with a self-signed certificate made by `openssl` (skipped when `openssl` is missing).
 
 Tests: `python3 -m tests.test_ui` covers the workspace, web server, MCP server and CLI. `python3 -m tests.test_offline` covers the core modules. `python3 -m tests.test_footprints` checks generated footprints by part type against KiCad's library and the KLC rules.
 

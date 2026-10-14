@@ -2,7 +2,8 @@
 
     ecadlib init      [--from DIR ...] [--yes]    scan your libraries, write ecadlib.toml (naming, parameters, layers, density)
     ecadlib rules     check|show                  validate the rules file / print the defaults
-    ecadlib ui        --lib <kicad libs>          local web UI in your browser
+    ecadlib ui        --lib <kicad libs>          local web UI in your browser (--team: shared server with sign-in)
+    ecadlib team      add-user|set-role|reset-password|remove|list   users and roles for `ecadlib ui --team`
     ecadlib mcp       --lib <kicad libs>          MCP server (stdio) for Claude and other agents
     ecadlib triage    BOM --lib ... -o out/x      BOM triage report (.md + .csv)
     ecadlib footprint gen|compare ...             IPC-7351B footprint generator
@@ -33,6 +34,7 @@ COMMANDS = {
     "init": ("ecadlib.rules_infer", "scan existing libraries and write ecadlib.toml"),
     "rules": ("ecadlib.rules", "check or show the library rules"),
     "ui": ("ecadlib.ui.server", "local web UI"),
+    "team": ("ecadlib.team", "users and roles for the team web server (ecadlib ui --team)"),
     "mcp": ("ecadlib.mcp_server", "MCP server over stdio"),
     "triage": ("ecadlib.bom_triage", "BOM triage report"),
     "footprint": ("ecadlib.footprint_gen", "IPC-7351B footprint generator"),
