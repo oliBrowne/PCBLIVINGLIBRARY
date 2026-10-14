@@ -36,6 +36,7 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.danger { border-color: var(--bad); color: var(--bad); }
 button:disabled { opacity: .5; cursor: default; }
 input[type=search] { min-width: 220px; }
+#boms { max-width: 100%; }
 label.field { display: inline-flex; gap: 6px; align-items: center; }
 .signoff { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
 .acts { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -177,7 +178,7 @@ header .user[hidden], label.field[hidden], span[hidden] { display: none; }
       <div class="muted small" style="margin-top:6px">Altium, KiCad and spreadsheet BOMs work. Columns such as Designator, Comment, MPN, Manufacturer, LCSC, Value and Footprint are matched automatically.</div>
       <input type="file" id="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls" hidden>
     </div>
-    <div class="row" style="margin-top:10px">
+    <div class="row" style="margin-top:10px" data-role="librarian">
       <span class="muted">Or re-check one already in the workspace:</span>
       <select id="boms"></select>
       <button id="rerun" data-role="librarian">Check again</button>
@@ -187,11 +188,23 @@ header .user[hidden], label.field[hidden], span[hidden] { display: none; }
       <div class="progress"><div id="bar"></div></div>
     </div>
     <div id="error"></div>
+    <div id="history">
+      <div class="row spread" style="margin-top:14px">
+        <h2 style="margin:0">Past triages</h2>
+        <div class="row"><input type="search" id="histq" placeholder="Filter by BOM or person…" aria-label="Filter past triages"><button class="small" id="histreload">Refresh</button></div>
+      </div>
+      <div class="muted small" id="histnote" style="margin:2px 0 6px">Every finished triage in this workspace. Opening one shows its saved result; nothing is looked up again.</div>
+      <div class="tablewrap" id="histwrap"><table>
+        <thead><tr><th>BOM</th><th>Finished (UTC)</th><th>By</th><th>Lines</th><th>Status</th><th></th></tr></thead>
+        <tbody id="histrows"></tbody>
+      </table></div>
+      <div id="histerr"></div>
+    </div>
   </section>
 
   <section class="card" id="results" hidden>
     <div class="row spread">
-      <div><h2 id="bomname"></h2><div class="muted small" id="mapping"></div></div>
+      <div><h2 id="bomname"></h2><div class="muted small" id="saved" hidden></div><div class="muted small" id="mapping"></div></div>
       <div class="row small"><a id="reportmd" href="#">report.md</a> <a id="reportcsv" href="#">report.csv</a></div>
     </div>
     <div class="chips" id="chips"></div>
@@ -354,13 +367,20 @@ function banner(el, msg, cls = "s-bad") {
 }
 const showErr = e => banner($("#error"), e ? String(e.message || e) : "");
 
+// uploads/<YYYYMMDD-HHMMSS>-<rand>/<name> -> "name (uploaded YYYY-MM-DD HH:MM:SS UTC, #rand)"; other paths as they are
+const UPLOAD = /^uploads\/(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)-([0-9a-f]+)\/(.+)$/;
+function uploadNote(b) {
+  const m = UPLOAD.exec(b || "");
+  return m ? `uploaded ${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]} UTC, #${m[7]}` : b;
+}
+const bomLabel = b => UPLOAD.test(b || "") ? `${UPLOAD.exec(b)[8]} (${uploadNote(b)})` : b;
 async function loadInfo() {
   info = await api("/api/info");
   const prov = info.providers.filter(p => p.enabled).map(p => p.name + (p.configured ? "" : " (no key)")).join(", ");
   $("#meta").textContent = `workspace ${info.workspace} · ${info.symbols} symbols, ${info.footprints} footprints indexed` +
     (info.offline ? " · offline" : "") + ` · sources: ${prov}`;
   const sel = $("#boms"), keep = sel.value;
-  sel.innerHTML = info.boms.map(b => `<option>${esc(b)}</option>`).join("") || "<option value=''>(none yet)</option>";
+  sel.innerHTML = info.boms.map(b => `<option value="${esc(b)}">${esc(bomLabel(b))}</option>`).join("") || "<option value=''>(none yet)</option>";
   if (info.boms.includes(keep)) sel.value = keep;
   $("#a365hint").textContent = info.altium365.token
     ? "Plans one managed component per part. A part is ready once its .SchLib and .PcbLib exist. Dry run shows the requests without sending anything."
@@ -382,21 +402,27 @@ async function runJob(start, label) {
       await new Promise(r => setTimeout(r, 400));
       const j = await api("/api/job?id=" + job);
       if (j.total) setBusy(true, `Checking ${label}: line ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? " (" + j.label + ")" : ""}`, j.done / j.total);
-      if (j.state === "done") {
-        current = j.result; filter = null; $("#q").value = ""; planned = null;
-        ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#approut", "#dedupeout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
-        $("#dry").disabled = $("#push").disabled = true; render(); break;
-      }
+      if (j.state === "done") { showResult(j.result); loadHistory().catch(() => {}); break; }
       if (j.state === "error") throw new Error(j.error);
     }
   } catch (e) { showErr(e); }
-  finally { setBusy(false); loadInfo().then(() => { if (current) $("#boms").value = current.bom; }).catch(() => {}); }
+  finally { setBusy(false); loadInfo().then(() => { if (current && current.bom) $("#boms").value = current.bom; }).catch(() => {}); }
+}
+
+function showResult(t) {
+  current = t; filter = null; $("#q").value = ""; planned = null;
+  ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#approut", "#dedupeout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
+  $("#dry").disabled = $("#push").disabled = true; render();
 }
 
 function render() {
   const t = current;
-  $("#results").hidden = false; $("#export").hidden = false; $("#libcard").hidden = false;
-  $("#bomname").textContent = t.bom.split("/").pop();
+  $("#results").hidden = false;
+  $("#export").hidden = $("#libcard").hidden = !t.bom;      // an old triage whose BOM isn't known: read-only view
+  $("#bomname").textContent = t.name || (t.bom || "").split("/").pop();
+  $("#saved").hidden = !t.finished;
+  $("#saved").textContent = t.finished ? `Triage finished ${t.finished.replace("T", " ").replace("+00:00", " UTC")}` + (t.user ? ` by ${t.user}` : "") +
+    (t.bom ? ` · ${bomLabel(t.bom)}` : "") : "";
   $("#mapping").textContent = "Columns used: " + Object.entries(t.mapping).map(([k, v]) => `${k} ← "${v}"`).join(", ");
   $("#reportmd").href = fileUrl(t.reports[0]); $("#reportcsv").href = fileUrl(t.reports[1]);
   $("#chips").innerHTML = Object.entries(t.counts).map(([k, v]) => {
@@ -437,6 +463,34 @@ async function upload(f) {
   runJob(api("/api/upload", await f.arrayBuffer(), f.name), f.name);
 }
 $("#rerun").addEventListener("click", () => { const b = $("#boms").value; if (b) runJob(api("/api/triage", { bom: b }), b); });
+
+// ---- past triages (any signed-in user: finished results are library data; running jobs stay private)
+let history = [];
+async function loadHistory() {
+  history = (await api("/api/triage/history")).triages; renderHistory();
+}
+function renderHistory() {
+  const q = $("#histq").value.trim().toLowerCase();
+  const rows = history.filter(h => !q || [h.name, h.bom, h.user].join(" ").toLowerCase().includes(q));
+  $("#histwrap").hidden = !history.length;
+  $("#histnote").textContent = history.length ? "Every finished triage in this workspace. Opening one shows its saved result; nothing is looked up again."
+    : "No triages yet." + (can("librarian") ? " Drop a BOM above to run the first one." : " A librarian runs them; they show up here.");
+  $("#histrows").innerHTML = rows.map(h => {
+    const todo = Object.entries(h.counts || {}).filter(([k]) => !k.startsWith("in_library") && !k.startsWith("dnp")).reduce((a, [, v]) => a + v, 0);
+    return `<tr><td>${esc(h.name)}<div class="muted sub">${esc(h.bom ? uploadNote(h.bom) : "BOM not recorded")}${h.bom && !h.bom_exists ? " (file gone)" : ""}</div></td>
+      <td class="mono small">${esc((h.finished || "").replace("T", " ").replace("+00:00", ""))}</td><td>${esc(h.user || "–")}</td><td>${esc(h.lines)}</td>
+      <td>${todo ? `<span class="pill s-warn">${todo} need work</span>` : '<span class="pill s-ok">all in library</span>'}</td>
+      <td><button class="small" data-open="${esc(h.id)}">Open</button></td></tr>`;
+  }).join("") || `<tr><td colspan="6" class="muted">No triages match.</td></tr>`;
+}
+$("#histq").addEventListener("input", renderHistory);
+$("#histreload").addEventListener("click", () => loadHistory().catch(e => banner($("#histerr"), e.message)));
+$("#histrows").addEventListener("click", async e => {
+  const id = e.target.dataset.open; if (!id || busy) return;
+  banner($("#histerr"), "");
+  try { showResult(await api("/api/triage/result?id=" + encodeURIComponent(id))); if (current.bom && info && info.boms.includes(current.bom)) $("#boms").value = current.bom; $("#results").scrollIntoView({ behavior: "smooth" }); }
+  catch (err) { banner($("#histerr"), err.message); }
+});
 
 // ---- Altium
 async function action(btn, out, fn) {
@@ -718,7 +772,7 @@ async function approve(overwrite) {
   const r = await api("/api/footprint/approve", { spec: readSpec(), density: $("#density").value || null, overwrite });
   dlg.close(); toast(`Saved ${r.name}: ${r.files.map(f => f.split(".").pop()).join(" + ")}` + (r.warnings.length ? ` (${r.warnings.join("; ")})` : ""));
   loadInfo();
-  if (current) runJob(api("/api/triage", { bom: current.bom }), current.bom);
+  if (current && current.bom) runJob(api("/api/triage", { bom: current.bom }), current.bom);
 }
 $("#approve").addEventListener("click", async () => {
   try { await approve(false); }
@@ -886,7 +940,7 @@ $("#auditbtn").addEventListener("click", e => action(e.target, $("#auditout"), a
 function startApp() {
   $("#signin").hidden = true; $("#app").hidden = false;
   applyRoles();
-  loadInfo().catch(showErr); loadSpecs().catch(showErr); loadRules().catch(showErr);
+  loadInfo().catch(showErr); loadSpecs().catch(showErr); loadRules().catch(showErr); loadHistory().catch(e => banner($("#histerr"), e.message));
 }
 (async () => {
   try { session = await api("/api/session"); } catch (e) { session = { team: false }; }

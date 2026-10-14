@@ -9,6 +9,7 @@ a minor release may change command-line options and file formats.
 
 ### Added
 
+- Web UI: a **Past triages** list that any signed-in user (viewer and up), and local mode, can open read-only (`GET /api/triage/history`, `/api/triage/result`, MCP `triage_history`). Each upload is now stored in its own folder, `uploads/<time>-<random>/<name>`, so BOMs with the same file name no longer overwrite each other, or each other's reports.
 - Resolve held parts: work through the release check's held items and record how each was fixed.
 - KiCad export: write the library's symbols, footprints and 3D models as KiCad libraries.
 - Altium DbLib/SVNDbLib sync: keep a database library in step with the living library.

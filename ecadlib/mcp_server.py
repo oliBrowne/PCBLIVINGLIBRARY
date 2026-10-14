@@ -30,6 +30,11 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string", "description": "path to the BOM file"},
                                     "summary_only": {"type": "boolean"}}}},
+    {"name": "triage_history",
+     "description": "Past triages in this workspace (read-only, nothing is looked up again): without id, the list "
+                    "newest first with BOM, when, who ran it and status counts; with an id from that list, that "
+                    "triage's full result (one row per line with its status) and report files.",
+     "inputSchema": {"type": "object", "properties": {"id": {"type": "string", "description": "triage id from the list"}}}},
     {"name": "preview_footprint",
      "description": "Generate an IPC-7351B footprint from package dimensions (ecadlib package_schema.json) without saving. "
                     "Returns Z/G/X, pad list, courtyard and any warnings. Read dimensions from the datasheet drawing; "
@@ -251,6 +256,8 @@ def call_tool(ws, name, args):
                 return {"bom": r["bom"], "counts": r["counts"], "reports": r["reports"],
                         "needs_work": [{k: x[k] for k in ("line", "designator", "mpn", "package", "status", "notes")} for x in todo]}
             return {k: r[k] for k in ("bom", "mapping", "counts", "reports", "rows")}
+        if name == "triage_history":
+            return ws.triage_result(args["id"]) if args.get("id") else ws.triage_history()
         if name == "preview_footprint":
             r = ws.preview_footprint(args["spec"], args.get("density"))
             return {"name": r["name"], "report": r["report"]}

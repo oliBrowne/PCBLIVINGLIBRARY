@@ -33,6 +33,7 @@ ROUTES = {
     ("POST", "/api/logout"): "viewer", ("POST", "/api/account/password"): "viewer",
     ("GET", "/api/info"): "viewer", ("GET", "/api/specs"): "viewer", ("GET", "/api/rules"): "viewer",
     ("GET", "/api/job"): "viewer", ("GET", "/api/file"): "viewer",
+    ("GET", "/api/triage/history"): "viewer", ("GET", "/api/triage/result"): "viewer",   # finished results: library data
     ("POST", "/api/footprint/preview"): "viewer", ("POST", "/api/approvals/status"): "viewer",
     ("POST", "/api/resolve/held"): "viewer",
     ("POST", "/api/upload"): "librarian", ("POST", "/api/triage"): "librarian",
@@ -323,7 +324,14 @@ def make_handler(ws: Workspace, team=None):
                     return self._send(200, ws.example_specs())
                 if u.path == "/api/rules":
                     return self._send(200, ws.rules_info())
-                if u.path == "/api/job":
+                if u.path == "/api/triage/history":            # every finished triage, whoever ran it
+                    return self._send(200, ws.triage_history())
+                if u.path == "/api/triage/result":
+                    try:
+                        return self._send(200, ws.triage_result(q.get("id", "")))
+                    except KeyError as e:
+                        return self._send(404, {"error": _msg(e)})
+                if u.path == "/api/job":                        # a running job (its live log): owner or admin only
                     job = jobs.get(q.get("id", ""), self.user if team else None)
                     return self._send(200, job) if job else self._send(404, {"error": "no such job"})
                 if u.path == "/api/file":                       # download anything inside the workspace
@@ -363,10 +371,10 @@ def make_handler(ws: Workspace, team=None):
                 self._fields = {"file": name[:200]}
                 with write_lock:
                     rel = ws.save_upload(name, self._body())
-                return self._send(200, jobs.start(self._triage, rel, label=rel, owner=self._owner()))
+                return self._send(200, jobs.start(self._triage, rel, self._owner(), label=rel, owner=self._owner()))
             if u.path == "/api/triage":
                 bom = self._bom()
-                return self._send(200, jobs.start(self._triage, bom, label=bom, owner=self._owner()))
+                return self._send(200, jobs.start(self._triage, bom, self._owner(), label=bom, owner=self._owner()))
             if u.path == "/api/librarian/run":                    # long, network-bound: a background job
                 b = self._json()
                 bom = self._bom(b)
@@ -512,8 +520,8 @@ def make_handler(ws: Workspace, team=None):
             return ws.propose_rules(paths, a365, choices, progress)
 
         @staticmethod
-        def _triage(bom, progress=None):
-            return ws.triage(bom, progress, lock=write_lock)       # lock only while the reports are written
+        def _triage(bom, user, progress=None):
+            return ws.triage(bom, progress, lock=write_lock, user=user)   # lock only while the reports are written
 
         def _error(self, e):
             if isinstance(e, Refused):
