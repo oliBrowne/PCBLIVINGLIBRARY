@@ -44,6 +44,18 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["spec"],
                      "properties": {"spec": {"type": "object"}, "density": {"type": "string", "enum": ["A", "B", "C"]},
                                     "overwrite": {"type": "boolean"}}}},
+    {"name": "preview_symbol",
+     "description": "Lay out an IC symbol with pins grouped by function (power top, ground bottom, reset/clock/debug left, "
+                    "ports and peripherals right; same-name power pins stacked; multi-part above the rules' split_pins). "
+                    "Pins come from the datasheet pin table; never invent them. Returns the grouping, parts, problems "
+                    "and an SVG. save writes an Altium .SchLib into the workspace (ask before overwrite).",
+     "inputSchema": {"type": "object", "required": ["pins"],
+                     "properties": {"pins": {"type": "array", "items": {"type": "object", "required": ["num", "name"],
+                                             "properties": {"num": {"type": "string"}, "name": {"type": "string"},
+                                                            "type": {"type": "string"}, "group": {"type": "string"}}}},
+                                    "name": {"type": "string"}, "split": {"type": "integer", "description": "multi-part above this many pins (0 = never)"},
+                                    "stack": {"type": "string", "enum": ["stack", "hide", "none"]},
+                                    "save": {"type": "boolean"}, "overwrite": {"type": "boolean"}}}},
     {"name": "export_altium_dblib",
      "description": "Write an Altium DbLib (SQLite + XLSX + .DbLib files) for a BOM into the workspace altium/ folder.",
      "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
@@ -226,6 +238,9 @@ def call_tool(ws, name, args):
         if name == "preview_footprint":
             r = ws.preview_footprint(args["spec"], args.get("density"))
             return {"name": r["name"], "report": r["report"]}
+        if name == "preview_symbol":
+            return ws.preview_symbol(args["pins"], args.get("name") or "PART", args.get("split"), args.get("stack"),
+                                     args.get("save") is True, args.get("overwrite") is True)
         if name == "approve_footprint":
             return ws.approve_footprint(args["spec"], args.get("density"), bool(args.get("overwrite")))
         if name == "librarian_run":
