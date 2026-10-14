@@ -575,6 +575,9 @@ def import_part(spec, out, http, step=False, write=True):
         if spec.get("note"):
             rep["notes"].append(spec["note"])
         rep["ok"] = True
+        if write:                             # provenance for `upstream check-kicad` (never fails the part)
+            from .upstream import record
+            record(out, spec, rep, http, step)
     except Exception as e:                    # report per part, keep going
         rep["error"] = f"{type(e).__name__}: {e}"
     return rep
@@ -611,6 +614,8 @@ def main(argv=None):
         sym = convert_symbol(chain, a.as_, a.footprint, [tuple(kv.split("=", 1)) for kv in a.param], None, notes)
         (out / "SchLib").mkdir(parents=True, exist_ok=True)
         path = AL.write_schlib(out / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib", [sym])
+        from .upstream import record
+        record(out, {"symbol": a.ref, "symbol_as": a.as_, "symbol_footprint": a.footprint, "params": a.param}, {"schlib": str(path), "notes": notes}, http)
         print(f"{sym['name']}: {sum(pr[0] == 'pin' for pr in sym['prims'])} pins -> {path}" + "".join(f"\n   {n}" for n in notes))
         return
     specs = json.loads(Path(a.parts).read_text()) if a.cmd == "batch" else [{"footprint": a.ref, "footprint_as": a.as_, "height_mm": a.height}]
