@@ -300,19 +300,19 @@ def test_role_enforcement_per_route():
 
 def test_viewer_is_read_only_and_live_push_needs_approver():
     with server() as (ws, team, port):
-        ws.save_upload("b.csv", Path("examples/sample_bom.csv").read_bytes())
+        b = ws.save_upload("b.csv", Path("examples/sample_bom.csv").read_bytes())
         v, lib, apr = Client(port), Client(port), Client(port)
         v.login("vic"), lib.login("lib"), apr.login("apr")
-        writes = [("/api/upload", b"a,b\n1,2\n"), ("/api/triage", {"bom": "uploads/b.csv"}),
-                  ("/api/export/dblib", {"bom": "uploads/b.csv"}), ("/api/rules/save", {"text": "x"}),
-                  ("/api/approvals/decide", {"bom": "uploads/b.csv", "part": "X", "decision": "approve"}),
+        writes = [("/api/upload", b"a,b\n1,2\n"), ("/api/triage", {"bom": b}),
+                  ("/api/export/dblib", {"bom": b}), ("/api/rules/save", {"text": "x"}),
+                  ("/api/approvals/decide", {"bom": b, "part": "X", "decision": "approve"}),
                   ("/api/team/users", {"action": "add", "username": "eve", "role": "admin", "password": "eve-password-1"})]
         for path, body in writes:
             assert v.call("POST", path, body)[0] == 403, path
-        assert TM.UserStore(ws.root).get("eve") is None and not (ws.root / "uploads" / "bom.csv").exists()
-        st, e = lib.call("POST", "/api/altium365/push", {"bom": "uploads/b.csv", "workspace": "https://w", "dry_run": False})
+        assert TM.UserStore(ws.root).get("eve") is None and ws.info()["boms"] == [b]
+        st, e = lib.call("POST", "/api/altium365/push", {"bom": b, "workspace": "https://w", "dry_run": False})
         assert st == 403 and "approver" in e["error"], e
-        st, e = apr.call("POST", "/api/altium365/push", {"bom": "uploads/b.csv", "workspace": "https://w", "dry_run": False})
+        st, e = apr.call("POST", "/api/altium365/push", {"bom": b, "workspace": "https://w", "dry_run": False})
         assert st != 403, e                                                    # allowed; fails later on NEXAR_TOKEN / plan
 
 
@@ -372,10 +372,10 @@ def test_path_containment_and_team_files_hidden():
 
 def test_jobs_are_per_user_and_librarian_is_exclusive():
     with server() as (ws, team, port):
-        ws.save_upload("b.csv", Path("examples/sample_bom.csv").read_bytes())
+        b = ws.save_upload("b.csv", Path("examples/sample_bom.csv").read_bytes())
         lib, apr, ada = Client(port), Client(port), Client(port)
         lib.login("lib"), apr.login("apr"), ada.login("ada")
-        st, j = lib.call("POST", "/api/triage", {"bom": "uploads/b.csv"})
+        st, j = lib.call("POST", "/api/triage", {"bom": b})
         assert st == 200, j
         assert apr.call("GET", f"/api/job?id={j['job']}")[0] == 404             # someone else's job
         assert ada.call("GET", f"/api/job?id={j['job']}")[0] == 200             # admins see all
@@ -383,15 +383,15 @@ def test_jobs_are_per_user_and_librarian_is_exclusive():
         assert res["state"] == "done" and res["owner"] == "lib", res
         gate = threading.Event()
         with mock.patch.object(ws, "librarian_run", lambda *a, **k: (gate.wait(10), {"done": True})[1]):
-            st, j = lib.call("POST", "/api/librarian/run", {"bom": "uploads/b.csv"})
+            st, j = lib.call("POST", "/api/librarian/run", {"bom": b})
             assert st == 200, j
-            st, e = apr.call("POST", "/api/librarian/run", {"bom": "uploads/b.csv"})
+            st, e = apr.call("POST", "/api/librarian/run", {"bom": b})
             assert st == 409 and "started by lib" in e["error"], e
-            st, e = apr.call("POST", "/api/release-check", {"bom": "uploads/b.csv"})
+            st, e = apr.call("POST", "/api/release-check", {"bom": b})
             assert st == 409 and "still running" in e["error"], e
             gate.set()
             assert wait_job(lib, j["job"])["state"] == "done"
-        st, e = apr.call("POST", "/api/release-check", {"bom": "uploads/b.csv"})
+        st, e = apr.call("POST", "/api/release-check", {"bom": b})
         assert st == 400 and "no librarian plan" in e["error"], e               # no longer blocked
 
 

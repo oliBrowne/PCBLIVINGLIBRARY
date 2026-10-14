@@ -428,8 +428,8 @@ def test_workspace_and_mcp_tool():
     assert "upkeep_run" in {t["name"] for t in M.TOOLS}
     with tempfile.TemporaryDirectory() as d:
         ws = Workspace(Path(d) / "ws", offline=True)
-        bom = ws.save_upload("bom.csv", TS.BOM.encode())
-        bom = bom["path"] if isinstance(bom, dict) else bom
+        (ws.root / "uploads" / "bom.csv").write_text(TS.BOM)        # flat upload: upkeep/bom
+        bom = "uploads/bom.csv"
         r = M.call_tool(ws, "upkeep_run", {"bom": bom, "checks": ["upstream", "a365"]})
         assert [c["status"] for c in r["checks"]] == ["skipped", "skipped"] and r["exit_code"] == 0, r
         assert r["reports"] == ["upkeep/bom/upkeep.md", "upkeep/bom/upkeep.json"] and r["input"] == "uploads/bom.csv"

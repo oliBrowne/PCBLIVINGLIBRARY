@@ -192,7 +192,7 @@ def test_u9_upload_symlink_not_followed():
         (ws.root / "uploads" / "dangling.csv").symlink_to(Path(outside) / "nothing.csv")
         assert "uploads/bom.csv" not in ws.info()["boms"]           # info() still works with links present
         rel = ws.save_upload("bom.csv", b"Designator,Value\nR1,10k\n")
-        assert target.read_text() == "keep me" and rel == "uploads/bom.csv"
+        assert target.read_text() == "keep me" and rel.startswith("uploads/") and rel.endswith("/bom.csv"), rel
         assert not (ws.root / rel).is_symlink()
 
 
@@ -242,7 +242,9 @@ def test_u13_reports_keyed_by_bom_location():
         assert a["reports"] != b["reports"], (a["reports"], b["reports"])
         assert ws._triage_frame(ws.inside("projA/BOM.csv"))["designator"].tolist() == ["R1"]
         up = ws.save_upload("BOM.csv", b"Designator,Value\nC1,1u\n")
-        assert ws.triage(up)["reports"][0] == "reports/triage_BOM.md"   # uploads keep the plain name
+        assert ws.triage(up)["reports"][0] == f"reports/triage_BOM_{up.split('/')[1]}.md"   # name + upload folder
+        (ws.root / "uploads" / "Old.csv").write_text("Designator,Value\nC1,1u\n")               # flat upload (older workspace)
+        assert ws.triage("uploads/Old.csv")["reports"][0] == "reports/triage_Old.md"
 
 
 def test_u14_no_pad_one_and_markers():

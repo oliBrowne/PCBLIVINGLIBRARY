@@ -2,18 +2,18 @@
 
 A Workspace is one folder on the user's machine:
 
-    <root>/uploads/                       BOMs dropped into the UI
+    <root>/uploads/<stamp>-<rand>/<name>  BOMs dropped into the UI, one folder per upload (never overwritten)
     <root>/footprints/ecadlib.pretty/     footprints the user approved (indexed like any other library)
     <root>/altium_models/PcbLib|SchLib/   Altium binaries: approved footprints, converted library footprints,
                                           generic R/C symbols (what an Altium 365 release uploads)
-    <root>/reports/                       triage .md/.csv
+    <root>/reports/                       triage .md/.csv, plus .json (the full result, for triage_history)
     <root>/altium/                        DbLib export
     <root>/altium365/                     release plan + push reports
     <root>/librarian/<bom>/               librarian output: models, plan.json, review and release-check reports
     <root>/http_cache/                    provider responses
 
 Each action returns plain JSON-able dicts so the UI and the MCP server can share it."""
-import contextlib, hashlib, html, json, os, re
+import contextlib, datetime, hashlib, html, json, os, re, secrets
 from pathlib import Path
 
 import pandas as pd
@@ -79,11 +79,14 @@ class Workspace:
         return lines, mapping
 
     def _key(self, bom_path):
-        """Report name for a BOM: its stem for BOMs in uploads/, plus a short hash of the full path for any
-        other location, so /projA/BOM.csv and /projB/BOM.csv don't share (and overwrite) one triage."""
+        """Report name for a BOM: its stem for BOMs in uploads/ (plus the upload's folder name for
+        uploads/<stamp>-<rand>/<name>), plus a short hash of the full path for any other location, so
+        /projA/BOM.csv and /projB/BOM.csv (or two uploads called BOM.csv) don't share (and overwrite) one triage."""
         bom_path = Path(bom_path).resolve()
         if bom_path.parent == self.root / "uploads":
             return bom_path.stem
+        if bom_path.parent.parent == self.root / "uploads":
+            return f"{bom_path.stem}_{bom_path.parent.name}"
         return f"{bom_path.stem}_{hashlib.sha1(str(bom_path).encode()).hexdigest()[:8]}"
 
     def _triage_csv(self, bom_path):
@@ -104,8 +107,16 @@ class Workspace:
                 "altium365": {"token": bool(os.environ.get("NEXAR_TOKEN"))},
                 "rules": (lambda f: self._label(f) if f else None)(self.rules_in_use()),
                 "altium_models": {k: sorted(p.stem for p in (self.models / k).glob(f"*.{k}")) for k in ("PcbLib", "SchLib")},
-                "boms": sorted(self.rel(p) for p in (self.root / "uploads").iterdir()
-                               if p.is_file() and not p.is_symlink() and self._is_inside(p))}
+                "boms": self._uploaded_boms()}
+
+    def _uploaded_boms(self):
+        """uploads/<name> (older workspaces) and uploads/<stamp>-<rand>/<name>, newest upload folder first.
+        Links are skipped, so nothing outside the workspace is listed."""
+        up = self.root / "uploads"
+        flat = sorted(p for p in up.iterdir() if p.is_file() and not p.is_symlink())
+        nested = [f for d in sorted((d for d in up.iterdir() if d.is_dir() and not d.is_symlink()), reverse=True)
+                  for f in sorted(d.iterdir()) if f.is_file() and not f.is_symlink()]
+        return [self.rel(p) for p in nested + flat if self._is_inside(p)]
 
     def _is_inside(self, p):
         try:
@@ -115,18 +126,31 @@ class Workspace:
             return False
 
     def save_upload(self, filename, data: bytes):
+        """Store an uploaded BOM as uploads/<UTC stamp>-<random>/<plain file name> and return that path. Every
+        upload gets its own new folder, so two people uploading BOM.csv never overwrite each other (nor each
+        other's triage reports, which are keyed by the folder too). The file keeps its (sanitised) name."""
         if not data:
             raise ValueError(f"{filename} is empty")
-        p = self.root / "uploads" / self.safe_name(filename)
-        if p.is_symlink():                            # never write through a link to somewhere else
-            p.unlink()
-        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        name = self.safe_name(filename)
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+        for _ in range(20):
+            d = self.root / "uploads" / f"{stamp}-{secrets.token_hex(3)}"
+            try:
+                d.mkdir()                             # atomic: a folder another upload made is never reused
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise FileExistsError("couldn't make a new upload folder; try again")
+        p = d / name
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
         with os.fdopen(fd, "wb") as f:
             f.write(data)
         return self.rel(p)
 
-    def triage(self, bom, progress=None, lock=None):
-        """Triage a BOM (workspace-relative or absolute path). Writes reports/triage_<stem>.{md,csv}.
+    def triage(self, bom, progress=None, lock=None, user=None):
+        """Triage a BOM (workspace-relative or absolute path). Writes reports/triage_<stem>.{md,csv,json}; the
+        .json is the whole result plus when and by whom (user), which triage_history lists and opens again.
         progress(done, total, label) is called before each line, for UIs that show a progress bar.
         lock, if given, is held only while the reports are written: the lookups are network-bound and
         must not block other workspace actions."""
@@ -147,10 +171,73 @@ class Workspace:
         stem = self.root / "reports" / f"triage_{self._key(bom_path)}"
         with lock or contextlib.nullcontext():
             counts = T.write_reports(rows, mapping, provs, http, stem, bom_path.name)
-        return {"bom": self.rel(bom_path) if self.root in bom_path.resolve().parents else str(bom_path),
-                "mapping": mapping, "rows": rows,
-                "counts": {k: int(v) for k, v in counts.items()},
-                "reports": [self.rel(stem.with_suffix(".md")), self.rel(stem.with_suffix(".csv"))]}
+            out = {"bom": self.rel(bom_path) if self.root in bom_path.resolve().parents else str(bom_path),
+                   "mapping": mapping, "rows": rows,
+                   "counts": {k: int(v) for k, v in counts.items()},
+                   "reports": [self.rel(stem.with_suffix(".md")), self.rel(stem.with_suffix(".csv"))]}
+            meta = {"id": self._key(bom_path), "name": bom_path.name, "finished": _now(), "user": user or None}
+            tmp = stem.with_name(stem.name + f".{os.getpid()}.{secrets.token_hex(3)}.tmp")
+            tmp.write_text(json.dumps({**meta, **out}, default=str))
+            os.replace(tmp, stem.with_suffix(".json"))
+        return {**out, **meta}
+
+    # ------------------------------------------------------------------ past triages (read-only)
+    def _triage_files(self):
+        """{id: (json or None, csv or None)} of every triage report in reports/ (id = the BOM's report key)."""
+        out = {}
+        for f in (self.root / "reports").glob("triage_*"):
+            if f.suffix in (".json", ".csv") and f.is_file() and not f.is_symlink() and self._is_inside(f):
+                j, c = out.get(f.stem[len("triage_"):], (None, None))
+                out[f.stem[len("triage_"):]] = (f, c) if f.suffix == ".json" else (j, f)
+        return out
+
+    def triage_history(self, limit=200):
+        """Finished triages in this workspace, newest first: id, BOM, file name, when, who ran it (team mode),
+        status counts and report links. Older triages that only left a .csv are listed too (no BOM / user)."""
+        items = []
+        for tid, (j, c) in self._triage_files().items():
+            try:
+                if j:
+                    d = json.loads(j.read_text())
+                    it = {k: d.get(k) for k in ("bom", "name", "finished", "user", "counts")}
+                    it["lines"] = len(d.get("rows") or [])
+                    it["reports"] = d.get("reports") or []
+                elif c:
+                    rows = pd.read_csv(c, dtype=str).fillna("")
+                    st = rows["status"].value_counts() if "status" in rows else {}
+                    it = {"bom": None, "name": tid, "user": None, "lines": len(rows),
+                          "counts": {k: int(v) for k, v in dict(st).items()},
+                          "finished": _now(c.stat().st_mtime),
+                          "reports": [self.rel(x) for x in (c.with_suffix(".md"), c) if x.exists()]}
+                else:
+                    continue
+            except (ValueError, OSError, KeyError, pd.errors.ParserError, pd.errors.EmptyDataError):
+                continue                                  # a damaged report must not hide the others
+            it["id"], mtime = tid, max(x.stat().st_mtime_ns for x in (j, c) if x)
+            it["bom_exists"] = bool(it["bom"]) and self._is_inside(it["bom"]) and self.inside(it["bom"]).is_file()
+            items.append((it.get("finished") or "", mtime, it))
+        items.sort(key=lambda x: x[:2], reverse=True)                # same second: the file written last first
+        return {"triages": [x[2] for x in items[:limit]], "total": len(items)}
+
+    def triage_result(self, tid):
+        """One finished triage by its id (from triage_history), in the shape triage() returns. Read-only: the id
+        is only matched against the reports that exist, never turned into a path."""
+        f = self._triage_files().get(str(tid or ""))
+        if not f:
+            raise KeyError(f"no triage {tid!r} in this workspace")
+        j, c = f
+        if j:
+            d = json.loads(j.read_text())
+            d["id"] = tid
+            return d
+        rows = pd.read_csv(c, dtype=str).fillna("").to_dict("records")
+        for r in rows:
+            with contextlib.suppress(ValueError, KeyError):
+                r["line"] = int(r["line"])
+        st = pd.Series([r.get("status", "") for r in rows]).value_counts() if rows else {}
+        return {"id": tid, "bom": None, "name": tid, "user": None, "finished": _now(c.stat().st_mtime), "mapping": {},
+                "rows": rows, "counts": {k: int(v) for k, v in dict(st).items()},
+                "reports": [self.rel(x) for x in (c.with_suffix(".md"), c) if x.exists()]}
 
     def preview_footprint(self, spec, density=None):
         """Run the IPC-7351B generator without saving. Returns numbers, pads and an SVG drawing."""
@@ -751,6 +838,11 @@ class Workspace:
     def example_specs(self):
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data
         return {p.stem: json.loads(p.read_text()) for p in sorted(d.glob("*.json"))} if d.exists() else {}
+
+
+def _now(ts=None):
+    t = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc) if ts else datetime.datetime.now(datetime.timezone.utc)
+    return t.replace(microsecond=0).isoformat()
 
 
 def _nexar_token():
