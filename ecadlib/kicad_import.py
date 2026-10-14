@@ -581,11 +581,14 @@ def import_part(spec, out, http, step=False, write=True):
 
 
 def main(argv=None):
+    def opts(p, pre=""):                                     # accepted before or after the subcommand
+        d = dict(default=argparse.SUPPRESS) if pre else {}
+        p.add_argument("-o", "--out", dest=pre + "out", **(d or {"default": "out/altium_models_kicad"}))
+        p.add_argument("--cache", dest=pre + "cache", **(d or {"default": "out/http_cache"}))
+        p.add_argument("--offline", dest=pre + "offline", action="store_true", help="only use the HTTP cache", **d)
+        p.add_argument("--step", dest=pre + "step", action="store_true", help="embed the KiCad STEP model instead of an extruded body", **d)
     ap = argparse.ArgumentParser(description="Convert KiCad library footprints/symbols to Altium PcbLib/SchLib")
-    ap.add_argument("-o", "--out", default="out/altium_models_kicad")
-    ap.add_argument("--cache", default="out/http_cache")
-    ap.add_argument("--offline", action="store_true", help="only use the HTTP cache")
-    ap.add_argument("--step", action="store_true", help="embed the KiCad STEP model instead of an extruded body")
+    opts(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("batch", help="convert the parts listed in a JSON file")
     b.add_argument("parts")
@@ -594,7 +597,12 @@ def main(argv=None):
     s = sub.add_parser("symbol", help="one symbol: Lib:Name or path.kicad_sym[:Name]")
     s.add_argument("ref"); s.add_argument("--as", dest="as_"); s.add_argument("--footprint", help="PcbLib footprint name to link")
     s.add_argument("--param", action="append", default=[], help="extra parameter K=V")
+    for p in (b, f, s):
+        opts(p, "sub_")
     a = ap.parse_args(argv)
+    for k in ("out", "cache", "offline", "step"):
+        if hasattr(a, "sub_" + k):
+            setattr(a, k, getattr(a, "sub_" + k))
     http = CachedHTTP(a.cache, offline=a.offline, timeout=60)
     out = Path(a.out)
     if a.cmd == "symbol":

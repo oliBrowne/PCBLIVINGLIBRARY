@@ -127,7 +127,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "TYPE-C-31-M-12",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -137,7 +137,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "USB_C_Receptacle_16P",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
@@ -202,7 +202,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "SM04B-SRSS-TB(LF)(SN)",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -212,7 +212,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "JST_SH_SM04B-SRSS-TB",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
@@ -253,7 +253,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "FTSH-105-01-L-DV-K",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -263,7 +263,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "Samtec_FTSH-105-01-L-DV-K",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
@@ -328,7 +328,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "X322512MSB4SI",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -338,7 +338,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "Crystal_SMD_3225-4Pin",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
@@ -403,7 +403,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "KT-0603R",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -413,7 +413,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "LED_0603_1608Metric",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
@@ -478,7 +478,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "STM32F103C8T6",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -488,7 +488,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "LQFP-48_7x7mm_P0.5mm",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
@@ -553,7 +553,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "AMS1117-3.3",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -563,7 +563,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "SOT-223-3_TabPin2",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
@@ -628,7 +628,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "ESP32-S3-WROOM-1-N16R8",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -638,7 +638,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "ESP32-S3-WROOM-1",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
@@ -829,7 +829,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "TPS62162DSGR",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -839,7 +839,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "WSON-8_2x2mm_P0.5mm",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
@@ -979,7 +979,7 @@
         "componentRevisionNamingSchemeNodeId": null,
         "componentLifeCycleDefinitionNodeId": null,
         "symbolReleaseFolder": "Components/Models/Symbols",
-        "symbolItemName": null,
+        "symbolItemName": "AO3401A",
         "symbolFiles": [
           {
             "fileId": "<fileId>",
@@ -989,7 +989,7 @@
         "symbolRevisionNamingSchemeNodeId": null,
         "symbolLifeCycleDefinitionNodeId": null,
         "footprintReleaseFolder": "Components/Models/Footprints",
-        "footprintItemName": null,
+        "footprintItemName": "SOT-23",
         "footprintFiles": [
           {
             "fileId": "<fileId>",
