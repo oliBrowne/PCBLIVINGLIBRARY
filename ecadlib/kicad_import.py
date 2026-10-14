@@ -1,7 +1,7 @@
 """Official KiCad library footprints and symbols -> Altium .PcbLib / .SchLib (with 3D bodies).
 
-    python3 -m ecadlib.kicad_import batch examples/kicad_import_parts.json -o out/altium_models_kicad [--step]
-    python3 -m ecadlib.kicad_import footprint Package_TO_SOT_SMD:SOT-23 [--as NAME] [--height MM] [--step] -o DIR
+    python3 -m ecadlib.kicad_import batch examples/kicad_import_parts.json -o out/altium_models_kicad [--step] [--box]
+    python3 -m ecadlib.kicad_import footprint Package_TO_SOT_SMD:SOT-23 [--as NAME] [--height MM] [--step] [--box] -o DIR
     python3 -m ecadlib.kicad_import symbol Transistor_FET:AO3401A [--as NAME] [--footprint REF] [--param K=V] -o DIR
 
 A <Lib>:<Name> reference is fetched from gitlab.com/kicad/libraries (kicad-footprints, kicad-symbols with
@@ -17,6 +17,8 @@ Not converted (listed in the notes): user text, zones, per-pad mask margins, dri
 3D: an extruded ComponentBody on Mechanical 13 over the fab outline (else the courtyard), its height from the
 KiCad STEP model (max z after the model transform), else DEFAULT_HEIGHT, else --height. --step embeds the STEP
 model itself (Library/Models, AltiumSharp layout and checksum) when the KiCad model has no offset or rotation.
+Where no KiCad STEP is embedded and there is no KiCad model (or --step could not embed it), a package-shaped
+STEP from step_gen is embedded instead of the box when the package family is known; --box keeps the box.
 Symbols: pins (number, name, type, orientation, length, hidden, overbar names), rectangles, polylines, circles,
 arcs, text, pin shapes (inverted, clock, active-low ...) as Altium pin symbols, multi-unit symbols as Altium
 multi-part, De Morgan body styles as Altium display modes, `extends` chains; Value/Footprint/Datasheet/Description/MPN
@@ -376,8 +378,11 @@ def step_extent(text, mi):
     return tuple(min(p[i] for p in pts) for i in range(3)) + tuple(max(p[i] for p in pts) for i in range(3))
 
 
-def add_body(fp, t, http=None, height=None, step=False, notes=None):
-    """Extruded body over the fab outline (else courtyard, else pads), or the embedded STEP model with step=True."""
+def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=False, spec=None, height_src=None):
+    """3D body: the KiCad STEP model embedded (step=True, model without offset/rotation/scale), else with
+    gen_step=True a package-shaped STEP from step_gen (spec dict, else package_specs / the footprint name) when
+    there is no KiCad STEP to embed, else an extruded body over the fab outline (else courtyard, else pads).
+    height_src: the caller's height is part-specific and beats the default table (label for the notes)."""
     notes = [] if notes is None else notes
     mi, text, src = model_info(t), None, None
     if mi and http is not None and model_url_path(mi["path"]):
@@ -387,14 +392,33 @@ def add_body(fp, t, http=None, height=None, step=False, notes=None):
     ext = step_extent(text, mi) if text else None
     if ext:
         h, src = round(ext[5], 3), "KiCad STEP model"
+    elif height and height_src:
+        h, src = height, height_src
     else:
         h = next((v for rx, v in DEFAULT_HEIGHT if re.search(rx, t[1])), None)
         src = "default table" if h else None
         if h is None and height:
             h, src = height, "caller"
+    embeddable = bool(ext) and mi["rotate"] == [0, 0, 0] and mi["offset"] == [0, 0, 0] and mi["scale"] == [1, 1, 1]
+    if gen_step and not (step and embeddable) and (not ext or step):
+        from . import step_gen
+        try:
+            generic = src == "default table"            # step_gen's per-family table is more specific (R vs C 0603)
+            data, info = step_gen.generate(spec or t[1], None if generic else h, name=fp["name"])
+        except ValueError as e:
+            notes.append(f"3D: no generated STEP ({e})")
+        else:
+            x0, y0, _, x1, y1, z1 = info["bbox"]
+            h, src = round(z1, 4), "step_gen table" if generic or not src else src     # through-hole: the pin tops
+            fp["bodies"].append({"pts": [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "height": h,
+                                 "step": {"name": f"{AL.file_stem(fp['name'])}.step", "data": data.encode("ascii"), "rot": (0.0, 0.0, 0.0)}})
+            notes.append(f"3D: generated STEP ({info['family']} model from {'the package spec' if spec else 'package_specs / the footprint name'}"
+                         f"), height {h} mm ({src})" + ("; KiCad STEP has an offset/rotation/scale" if ext else ""))
+            fp["height_mm"] = h
+            return fp
     if not h:
         raise ValueError(f"{t[1]}: no 3D height (no KiCad model, no DEFAULT_HEIGHT entry); pass --height")
-    if step and ext and mi["rotate"] == [0, 0, 0] and mi["offset"] == [0, 0, 0] and mi["scale"] == [1, 1, 1]:
+    if step and embeddable:
         x0, y0, _, x1, y1, _ = ext
         fp["bodies"].append({"pts": [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "height": h,
                              "step": {"name": Path(model_url_path(mi["path"])).name, "data": text.encode("utf-8"), "rot": (0.0, 0.0, 0.0)}})
@@ -569,13 +593,14 @@ def pin_pad_check(sym, fp):
     return sorted(pins - pads), sorted(pads - pins)
 
 
-def import_part(spec, out, http, step=False, write=True):
-    """spec: {footprint, symbol, mpn?, footprint_as?, symbol_as?, height_mm?, pin_map?, note?} -> report dict."""
+def import_part(spec, out, http, step=False, write=True, gen_step=True):
+    """spec: {footprint, symbol, mpn?, footprint_as?, symbol_as?, height_mm?, pin_map?, note?} -> report dict.
+    gen_step: a step_gen model instead of an extruded box when there is no KiCad STEP to embed."""
     rep = {"mpn": spec.get("mpn", ""), "footprint": spec["footprint"], "symbol": spec.get("symbol"), "notes": [], "ok": False}
     try:
         text, src = load_footprint(spec["footprint"], http)
         fp, t = convert_footprint(text, spec.get("footprint_as"), src, rep["notes"])
-        add_body(fp, t, http, spec.get("height_mm"), step, rep["notes"])
+        add_body(fp, t, http, spec.get("height_mm"), step, rep["notes"], gen_step=gen_step)
         rep["pcblib"] = str(AL.write_pcblib(Path(out) / "PcbLib" / f"{AL.file_stem(fp['name'])}.PcbLib", [fp])) if write else None
         rep["pads"] = len(fp["pads"])
         if spec.get("symbol"):
@@ -597,7 +622,7 @@ def import_part(spec, out, http, step=False, write=True):
         rep["ok"] = True
         if write:                             # provenance for `upstream check-kicad` (never fails the part)
             from .upstream import record
-            record(out, spec, rep, http, step)
+            record(out, spec, rep, http, step, gen_step)
     except Exception as e:                    # report per part, keep going
         rep["error"] = f"{type(e).__name__}: {e}"
     return rep
@@ -610,6 +635,8 @@ def main(argv=None):
         p.add_argument("--cache", dest=pre + "cache", **(d or {"default": "out/http_cache"}))
         p.add_argument("--offline", dest=pre + "offline", action="store_true", help="only use the HTTP cache", **d)
         p.add_argument("--step", dest=pre + "step", action="store_true", help="embed the KiCad STEP model instead of an extruded body", **d)
+        p.add_argument("--box", dest=pre + "box", action="store_true",
+                       help="extruded box instead of a generated (step_gen) STEP model when no KiCad STEP is embedded", **d)
     ap = argparse.ArgumentParser(description="Convert KiCad library footprints/symbols to Altium PcbLib/SchLib")
     opts(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -623,7 +650,7 @@ def main(argv=None):
     for p in (b, f, s):
         opts(p, "sub_")
     a = ap.parse_args(argv)
-    for k in ("out", "cache", "offline", "step"):
+    for k in ("out", "cache", "offline", "step", "box"):
         if hasattr(a, "sub_" + k):
             setattr(a, k, getattr(a, "sub_" + k))
     http = CachedHTTP(a.cache, offline=a.offline, timeout=60)
@@ -640,7 +667,7 @@ def main(argv=None):
         return
     specs = json.loads(Path(a.parts).read_text()) if a.cmd == "batch" else [{"footprint": a.ref, "footprint_as": a.as_, "height_mm": a.height}]
     (out / "PcbLib").mkdir(parents=True, exist_ok=True); (out / "SchLib").mkdir(parents=True, exist_ok=True)
-    reps = [import_part(sp, out, http, a.step) for sp in specs]
+    reps = [import_part(sp, out, http, a.step, gen_step=not a.box) for sp in specs]
     for r in reps:
         print(f"{'ok  ' if r['ok'] else 'FAIL'} {r['mpn'] or r['footprint']:<26} {r.get('pads', '-'):>3} pads {r.get('pins', '-'):>3} pins  "
               f"{Path(r.get('pcblib') or '-').name} {Path(r.get('schlib') or '-').name}")

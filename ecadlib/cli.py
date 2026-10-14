@@ -10,6 +10,7 @@
     ecadlib librarian BOM --lib ... -o out/lib    BOM -> missing parts filled -> Altium models + plan + review
     ecadlib release-check plan.json [--allow P]   hold back plan items that fail the pre-release checks
     ecadlib upstream  check-kicad|check-a365 ...  upstream change alerts (KiCad sources, Altium 365 drift)
+    ecadlib step-gen  SPEC.json|FOOTPRINT -o x.step   package-shaped 3D model (STEP); --check FILE.step validates
 
 `ecadlib <command> -h` shows that command's options."""
 import importlib, sys
@@ -26,6 +27,7 @@ COMMANDS = {
     "librarian": ("ecadlib.librarian", "BOM to library: fill missing parts, plan, release check"),
     "release-check": ("ecadlib.release_check", "pre-release checks on an altium365 plan"),
     "upstream": ("ecadlib.upstream", "KiCad upstream changes and Altium 365 drift"),
+    "step-gen": ("ecadlib.step_gen", "package-shaped STEP 3D models from a package spec or footprint name"),
 }
 
 

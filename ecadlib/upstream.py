@@ -223,7 +223,7 @@ def save_manifest(path, man):
     os.replace(tmp, p)
 
 
-def record(out, spec, rep, http, step=False):
+def record(out, spec, rep, http, step=False, gen_step=True):
     """Add/replace the manifest entries for a part kicad_import just wrote. Never raises: a failure is a note."""
     try:
         mpath, now = Path(out) / "manifest.json", datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -236,7 +236,7 @@ def record(out, spec, rep, http, step=False):
             man["entries"][f"{kind}:{f.stem}"] = {
                 "kind": kind, "kicad_ref": ref, "mpn": spec.get("mpn", ""),
                 "output": os.path.relpath(f, Path(out)), "output_sha256": hashlib.sha256(f.read_bytes()).hexdigest(),
-                "converter": converter_version(), "converted_at": now, "step": bool(step),
+                "converter": converter_version(), "converted_at": now, "step": bool(step), "gen_step": bool(gen_step),
                 "spec": {k: v for k, v in spec.items() if v is not None},
                 "sources": [source_record(*s, http) for s in srcs(ref, http)]}
         save_manifest(mpath, man)
@@ -362,7 +362,7 @@ def reconvert(entries, out, http):
         if k in done:
             continue
         if spec.get("footprint"):
-            rep = K.import_part(spec, out, http, e.get("step", False))
+            rep = K.import_part(spec, out, http, e.get("step", False), gen_step=e.get("gen_step", False))
         else:                                  # symbol-only conversion (kicad_import symbol ...)
             rep = {"notes": [], "ok": False}
             try:
