@@ -151,7 +151,8 @@ def test_footprint_candidates_rank_by_pitch_and_pads():
         c = {c["id"]: c for c in R.candidates(it, "footprint", plan.parent, src)}["kicad:Connector_PinHeader_1.27mm:PinHeader_2x04_P1.27mm_Vertical"]
         assert c["match"] is False and c["pins_without_pad"] == ["9", "10"], c
         r = R.choose(plan, "FTSH-105-TEST", "footprint", good, src=src)
-        assert r["hold_reasons"] == ["height: no 3D height (no 3D body and no HEIGHT)"], r       # the fixture has no 3D model
+        assert r["status"] == "ready" and r["hold_reasons"] == [], r                           # no KiCad 3D model: step_gen made one
+        assert any("generated STEP" in n for n in r["notes"]), r
         it = next(i for i in json.loads(plan.read_text()) if i["name"] == "FTSH-105-TEST")
         assert it["footprint"]["file"] == "models/PcbLib/Samtec_FTSH-105-TEST.PcbLib" and (plan.parent / it["footprint"]["kicad_mod"]).exists()
         assert it["source"]["footprint"] == good and it["release_check"]["failures"] == r["hold_reasons"]
