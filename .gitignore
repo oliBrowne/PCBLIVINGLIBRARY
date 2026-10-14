@@ -3,3 +3,6 @@ __pycache__/
 out/http_cache/
 out/altium_models_kicad/
 .venv/
+ecadlib_workspace/
+build/
+*.egg-info/

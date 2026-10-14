@@ -6,6 +6,56 @@ These are small Python prototypes for an open-source tool that manages ECAD comp
 2. A deterministic generator turns that JSON into an IPC-7351B land pattern.
 3. A triage step works out which BOM lines already exist locally, which can be pulled from a public source, and which need a generated footprint.
 
+## How you use it
+
+Install it once from a checkout of this repository (Python 3.10 or later):
+
+```
+pip install -e .            # add [dev] for jsonschema, olefile and graphql-core (validation and extra tests)
+```
+
+That gives you a single `ecadlib` command (`python -m ecadlib` works too). There are three ways in, and all of them call the same actions in `ecadlib/app.py`:
+
+1. **Local web UI** (for most people). It runs on your own machine, so your API keys and libraries stay local.
+
+   ```
+   ecadlib ui --lib path/to/your/kicad/libs
+   ```
+
+   A browser tab opens at `http://127.0.0.1:8765`.
+   * **Check a BOM:** drop in a CSV or XLSX, whether it's an Altium BOM, an Altium ActiveBOM, a KiCad BOM or a hand-made spreadsheet. A progress bar runs while parts are looked up. You then get a table of what is already in your library, what a part source can supply, what needs a footprint, and what is DNP. You can filter it by status or by search.
+   * **Make a footprint:** click **Generate…** on a missing part. It picks a matching example package when one exists. Enter the datasheet dimensions, preview the IPC-7351B land pattern, and approve it. Approving writes a KiCad `.kicad_mod` and an Altium `.PcbLib`, and asks before replacing an existing footprint. The BOM is then re-checked automatically.
+   * **Send to Altium:** there are three options.
+     * **Export DbLib** writes the SQLite/XLSX/.DbLib set.
+     * **Build .PcbLib / .SchLib** converts the BOM's footprints and writes generic R/C symbols.
+     * **Altium 365** plans a release with a ready / needs-symbol / needs-footprint status per part. **Dry run** shows the exact requests without sending anything. **Push** is enabled only when `NEXAR_TOKEN` is set and a workspace is picked, and it asks for confirmation first.
+
+   ![Triage table](docs/ui-triage.png)
+   ![Footprint preview](docs/ui-footprint.png)
+   ![Send to Altium](docs/ui-altium.png)
+
+2. **MCP server**, so Claude or another agent can do the same work in conversation (for example, "check this BOM and draft footprints for anything missing").
+
+   ```
+   claude mcp add ecadlib -- ecadlib mcp --lib /path/to/libs --workspace /path/to/workspace
+   ```
+
+   Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false) and `list_example_specs`.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib dblib`, `ecadlib altium-lib` and `ecadlib altium365`. Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+
+The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
+* `uploads/`
+* `reports/`
+* `footprints/ecadlib.pretty/`: approved footprints plus their source JSON
+* `altium_models/PcbLib|SchLib/`
+* `altium/`
+* `altium365/`
+* `http_cache/`
+
+Both servers use only the standard library on top of the package requirements. The web UI binds to 127.0.0.1. It refuses requests with an unexpected Host header (DNS rebinding), cross-origin POSTs, and any file path outside the workspace.
+
+Tests: `python3 -m tests.test_ui` covers the workspace, web server, MCP server and CLI. `python3 -m tests.test_offline` covers the core modules. `python3 -m tests.test_footprints` checks generated footprints by part type against KiCad's library and the KLC rules.
+
 Requirements: Python 3.13 with `requests`, `pandas` and `openpyxl`. `jsonschema` is optional; when it is installed, specs are validated against the schema. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
 
 ```
@@ -18,6 +68,9 @@ ecad-librarian/
 │   ├── providers.py          # Provider interface: EasyEDA, JLCPCB search, + DigiKey/Mouser/Nexar/SnapMagic/SamacSys stubs
 │   ├── kicad_index.py        # scans .kicad_sym / *.pretty for MPN / LCSC / value+package matches
 │   ├── altium_export.py      # Altium DbLib: parts.sqlite + parts.xlsx + two .DbLib files
+│   ├── app.py                # Workspace: the shared actions behind the UI, MCP server and CLI
+│   ├── ui/                   # local web UI (python -m ecadlib.ui), one static page, stdlib server
+│   ├── mcp_server.py         # MCP server over stdio (python -m ecadlib.mcp_server)
 │   ├── altium365.py          # Altium 365 workspace: release plan + push via the Nexar Design API
 │   ├── altium_lib.py         # pure-Python .PcbLib/.SchLib writer (+ minimal reader, `dump`)
 │   ├── cfb.py                # Compound File Binary (OLE2) v3 writer used by altium_lib
@@ -45,41 +98,46 @@ ecad-librarian/
 ## 1. `footprint_gen.py`: IPC-7351B footprint generator
 
 ```
-python3 -m ecadlib.footprint_gen gen examples/packages/*.json -o out/footprints/ecadlib.pretty [--density A|B|C]
-python3 -m ecadlib.footprint_gen compare <mine.kicad_mod> <reference path or URL>
+ecadlib footprint gen ecadlib/package_specs/*.json -o out/footprints/ecadlib.pretty [--density A|B|C]
+ecadlib footprint compare <mine.kicad_mod> <reference path or URL>
+ecadlib check <any.kicad_mod> ...          # KLC-style rule check, works on KiCad's own footprints too
 ```
 
-* **Package types:**
-  * `chip`: 2-terminal R/C/L. IPC uses table 3-5 for 0603 and larger, and table 3-6 for parts smaller than 0603.
-  * `gullwing`: dual-row SOIC/SOP/TSSOP. Fine-pitch side fillets apply at a pitch of 0.625 mm or less.
-  * `qfn`: 4-sided, with an optional exposed pad. Its paste is split into an N×N window grid, and the coverage is a parameter.
-* **Equations:** they are implemented in `ipc_land()`, and the module docstring shows them:
-  `Z = Lmin + 2Jt + √(CL²+F²+P²)`, `G = Smax − 2Jh − √(CS²+F²+P²)`, `X = Wmin + 2Js + √(CW²+F²+P²)`.
-  * S uses the IPC RMS tolerance.
-  * F = 0.05 and P = 0.025.
-  * Z and X are rounded up to 0.01 mm, and G is rounded down.
-  * The toe, heel, side and courtyard-excess values come from the per-density `FILLETS` table.
-  * Pad width is clamped to `pitch − 0.2 mm` to leave a solder-mask web.
-* **Output:**
-  * Layers:
-    * F.Fab: body outline, with a pin-1 chamfer on ICs, plus `${REFERENCE}`.
-    * F.SilkS: kept 0.2 mm clear of pads, with a KiCad-style filled pin-1 triangle.
-    * F.CrtYd: the union of pads and body plus the courtyard excess.
-  * Text: `REF**` and the value.
-  * Pads are roundrect (25% corner ratio, capped at 0.25 mm).
-  * The `descr` field carries Z, G and X plus the source.
-  * The format is `version 20221018` (KiCad 7). KiCad 8 and 9 load it, and Altium's KiCad importer accepts files "up to KiCad 8.x".
-* **Sanity checks:**
-  * Each output is re-parsed to confirm the S-expression is balanced.
-  * The QFN generator warns when the gap from a pad to the exposed pad is under 0.2 mm. It does so for the VQFN-16, where the gap is 0.17 mm.
-* **Not verified:** none of the generated files has been opened in KiCad, because there is no KiCad or kicad-cli in this sandbox. Running `kicad-cli fp upgrade` or opening the files in the footprint editor is the next step.
+* **Package types** (`package_type`, with `lead_type` to pick a different IPC lead family):
+  * `chip`: 2-terminal R/C/L/LED. IPC table 3-5 for 0603 and up, table 3-6 below 0603. `inner_span` takes the gap directly when the drawing gives it (LEDs).
+  * `molded`: inward-L / molded body: tantalum, SMA/SMB/SMC, SOD-123F (table 3-13). `lead_type: "melf"` for MELF.
+  * `gullwing`: SOIC/SOP/TSSOP/MSOP, plus SOT-23/SOD-123 via `pin_positions` and SOT-223/DPAK via `tab`.
+  * `qfp`: 4-sided gull-wing. `qfn`: QFN/DFN/SON with an optional exposed pad (`pins_top_bottom: 0` for DFN).
+  * `polarized: true` adds KiCad's pin-1 silk bracket and fab chamfer (LED/diode: pin 1 = cathode; tantalum: pin 1 = +).
+  * `land`: the maker's recommended land pattern, when the datasheet has one. It replaces the IPC pads.
+* **Numbers** follow what KiCad builds its own library with (fillet tables from KiCad's `ipc_7351b.yaml`; see [docs/footprint-rules.md](docs/footprint-rules.md)):
+  `Z = Lmin + 2Jt + √(CL²+F²+P²)`, `G = Smax − 2Jh − √(CS²+F²+P²)`, `X = Wmin + 2Js + √(CW²+F²+P²)`,
+  RMS tolerance for S, F = 0.10, P = 0.05, rounded to 0.05 mm (0.02 for chips under 0603).
+  Opposite gull-wing rows stay ≥ 0.4 mm apart, and pad heels are pulled back to keep 0.2 mm from an exposed pad.
+* **Output** (KLC F5/F6): silk 0.12 cut back 0.2 mm from the real rounded pad outline (0.1 mm on tiny parts),
+  fab 0.10 with a pin-1 chamfer, courtyard 0.05 on the 0.01 mm grid with 0.25 mm excess (0.15 under 0603),
+  roundrect pads, exposed-pad paste split into windows at 65 %. Format `version 20221018` (KiCad 7+; Altium imports it).
+* **Checks:** every generated footprint is run through `footprint_check` (copper gaps, silk clearance, fab,
+  courtyard, pin 1, paste). Spec mistakes, such as lead span and body width swapped, mils instead of mm,
+  or more pins than fit, are refused with a plain-language reason.
 
-### Pad-size deltas vs KiCad official library (live fetch from gitlab.com, `master`)
+### Compared with KiCad's official footprints
 
-All values are in mm. Each delta is mine minus KiCad. My inputs are typical datasheet or JEDEC dimensions; they are not the generator YAML KiCad used, which is why the chip parts differ slightly.
+`tests/test_footprints.py` generates 26 example parts and compares pad 1 and the courtyard with KiCad's library:
 
-| Footprint | mine pad (w×h @x) | KiCad pad | Δ size | Δ x | courtyard mine / KiCad |
-|---|---|---|---|---|---|
+| Kind | Parts | Result |
+|---|---|---|
+| Resistors | R_0402, R_0603, R_0805, R_1206 | identical pads, courtyard and silk |
+| Capacitors | C_0805 | identical; C_0402 within 0.03 mm (typical body sizes, not KiCad's) |
+| LEDs | LED_0603, LED_0805 | identical, including the cathode bracket |
+| Inductor | L_0805 | within 0.3 mm (KiCad uses a different body size for inductors) |
+| ICs | SOT-23, SOT-23-5, SOIC-8, SOIC-16, TSSOP-16, LQFP-48, QFN-16, QFN-32 | identical |
+| ICs (typical inputs) | MSOP-8, DFN-8, SOT-223 | within 0.15 / 0.3 / 0.6 mm |
+| Diodes, tantalum | SMA, SMB, SOD-123, SOD-323, tantalum A | IPC-7351B result; KiCad draws these by hand from the maker's land, so give `land` to match it exactly |
+
+All 26 pass the rule check, as do all 27 KiCad reference footprints.
+
+---|---|---|---|---|---|
 | R_0603_1608Metric | 0.825×0.91 @0.7925 | 0.80×0.95 @0.825 | +0.025 / −0.04 | −0.033 | 2.92×1.42 / 2.96×1.46 |
 | C_0402_1005Metric | 0.465×0.57 @0.4025 | 0.56×0.62 @0.48 | −0.095 / −0.05 | −0.078 | 1.58×0.88 / 1.82×0.92 |
 | R_0805_2012Metric | 0.96×1.36 @0.925 | 1.025×1.40 @0.9125 | −0.065 / −0.04 | +0.013 | 3.32×1.86 / 3.36×1.90 |
@@ -235,7 +293,7 @@ Parts without Altium model files are planned as `needs_altium_models` and skippe
 ## 5. `altium_lib.py`: Altium `.PcbLib` / `.SchLib` writer (pure Python)
 
 ```
-python3 -m ecadlib.altium_lib pcblib examples/packages/*.json -o out/altium_models/PcbLib [--density A|B|C] [--single lib.PcbLib]
+python3 -m ecadlib.altium_lib pcblib ecadlib/package_specs/*.json -o out/altium_models/PcbLib [--density A|B|C] [--single lib.PcbLib]
 python3 -m ecadlib.altium_lib schlib examples/symbols/*.json  -o out/altium_models/SchLib
 python3 -m ecadlib.altium_lib dump out/altium_models/PcbLib/SOIC-8_3.9x4.9mm_P1.27mm.PcbLib
 python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
@@ -273,7 +331,7 @@ What gets written:
 
 ```
 python3 -m pip install easyeda2kicad                       # 1.0.1, used only to read its endpoint code
-python3 -m ecadlib.footprint_gen gen examples/packages/*.json -o out/footprints/ecadlib.pretty
+python3 -m ecadlib.footprint_gen gen ecadlib/package_specs/*.json -o out/footprints/ecadlib.pretty
 for each of 6 footprints:  python3 -m ecadlib.footprint_gen compare out/footprints/ecadlib.pretty/<fp>.kicad_mod \
       https://gitlab.com/kicad/libraries/kicad-footprints/-/raw/master/<Lib>.pretty/<fp>.kicad_mod   > out/footprints/compare_vs_kicad_official.txt
 python3 -m tests.test_offline                               # 11/11 ok (incl. Altium 365 plan/push, Nexar schema, PcbLib/SchLib writer)
@@ -282,7 +340,7 @@ python3 -m ecadlib.bom_triage examples/sample_bom.csv --lib examples/kicad_lib -
         --providers digikey,mouser,nexar,snapmagic,samacsys -o out/triage_sample_bom_stub_providers_only
 python3 -m ecadlib.altium_export examples/sample_bom.csv --triage out/triage_sample_bom.csv -o out/altium
 export SOURCE_DATE_EPOCH=1791936000                         # reproducible PcbLib dates
-python3 -m ecadlib.altium_lib pcblib examples/packages/*.json -o out/altium_models/PcbLib
+python3 -m ecadlib.altium_lib pcblib ecadlib/package_specs/*.json -o out/altium_models/PcbLib
 python3 -m ecadlib.altium_lib schlib examples/symbols/*.json -o out/altium_models/SchLib
 python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv --models out/altium_models -o out/altium365/plan.json
 python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace https://example.365.altium.com --dry-run -o out/altium365/push_dry_run.json

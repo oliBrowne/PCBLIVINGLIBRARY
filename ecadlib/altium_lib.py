@@ -1,6 +1,6 @@
 """Altium .PcbLib (footprints) and .SchLib (symbols) writer, pure Python (+ a minimal reader for checks).
 
-    python3 -m ecadlib.altium_lib pcblib examples/packages/*.json -o out/altium_models/PcbLib
+    python3 -m ecadlib.altium_lib pcblib ecadlib/package_specs/*.json -o out/altium_models/PcbLib
     python3 -m ecadlib.altium_lib schlib examples/symbols/*.json -o out/altium_models/SchLib
     python3 -m ecadlib.altium_lib dump out/altium_models/PcbLib/SOIC-8_3.9x4.9mm_P1.27mm.PcbLib
 
