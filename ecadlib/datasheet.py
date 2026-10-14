@@ -33,10 +33,16 @@ MAX_PDF = 24 * 2 ** 20                                # 32 MB request limit afte
 TO_MM = {"mm": 1.0, "in": 25.4, "mil": 0.0254}
 SCHEMA = json.loads(Path(F.__file__).with_name("package_schema.json").read_text())
 DIMS = [k for k, v in SCHEMA["properties"].items() if v.get("$ref") == "#/$defs/dim"]
-NUM_DIMS = ["pitch", "height_max"]                    # plain numbers in the schema, still read as printed
+NUM_DIMS = [k for k, v in SCHEMA["properties"].items() if v.get("type") == "number"]   # plain numbers (pitch, height_max,
+                                                      # pitch_y, ...): still read as printed with a unit, nom (height: max) kept
 SKIP = {"density", "model_3d", "source"}              # set by us, never by the model
 PASS = ("lead_type", "polarized")                     # copied through as given
 MM_OBJS = ("pin_positions", "tab", "land")            # numbers the model must give in mm: copied, always flagged for review
+# Any other schema key (a family added later: rows, cols, ball_map, pad_table, mount, ...) is copied as given; objects
+# and arrays holding numbers are flagged for review like MM_OBJS. Keys each family must have, beyond its body:
+NEED = {"chip": [], "gullwing": ["pitch", "lead_span", "terminal_width"], "qfn": ["pitch", "terminal_width"],
+        "bga": ["pitch", "rows", "cols", "ball_diameter|land_diameter"], "connector": ["pad_table"], "custom": ["pad_table"]}
+NO_BODY = ("pin_header", "connector", "custom")       # families whose body size is optional in package_schema.json
 MAX_TOKENS = 16000                                    # non-streaming request; thinking counts toward it
 MAX_PAGES = 600                                       # PDF page limit per request (1M-context models)
 GRID_PIN = re.compile(r"[A-HJ-NPR-Z]{1,2}\d{1,2}")      # BGA/LGA ball names (A1 .. AY32; no I, O, Q)
@@ -472,11 +478,14 @@ def to_spec(pkg, part, datasheet, model, offset, review):
     for k in ("pin_count", "pins_left_right", "pins_top_bottom"):
         if pkg.get(k) is not None:
             spec[k] = pkg[k]
-    p = to_mm("pitch", pkg.get("pitch"), offset, prov, review)
-    if p and "nom" in p:
-        spec["pitch"] = p["nom"]
-    elif p:
-        review.append("pitch: no nominal value printed")
+    for k in NUM_DIMS:
+        if k == "height_max":
+            continue
+        p = to_mm(k, pkg.get(k), offset, prov, review)
+        if p and "nom" in p:
+            spec[k] = p["nom"]
+        elif p:
+            review.append(f"{k}: no nominal value printed")
     for k in DIMS:
         v = to_mm(k, pkg.get(k), offset, prov, review)
         if v:
@@ -496,14 +505,23 @@ def to_spec(pkg, part, datasheet, model, offset, review):
         if pkg.get(k) is not None:
             spec[k] = _drop_nulls(pkg[k])
             review.append(f"{k}: values were asked for in mm with no per-value unit or page; check them against the drawing")
+    numeric = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) if not isinstance(v, (dict, list)) else \
+        any(numeric(x) for x in (v.values() if isinstance(v, dict) else v))
+    for k in SCHEMA["properties"]:
+        if k in spec or k in SKIP or k in DIMS or k in NUM_DIMS or k in ("unresolved", "exposed_pad") or pkg.get(k) is None:
+            continue
+        spec[k] = _drop_nulls(pkg[k])
+        if isinstance(pkg[k], (dict, list)) and numeric(pkg[k]):
+            review.append(f"{k}: copied as the model gave it; check every value against the drawing")
     pages = [v["page"] for k, v in prov.items()]
     spec["source"] = {"datasheet": datasheet, "drawing": pkg["drawing"], "extracted_by": f"ecadlib.datasheet ({model})"}
     if pages:
         spec["source"]["page"] = max(set(pages), key=pages.count)
-    need = {"chip": [], "gullwing": ["pitch", "lead_span", "terminal_width"], "qfn": ["pitch", "terminal_width"]}
-    for k in ["body_length", "body_width", "terminal_length"] + need.get(spec["package_type"], []):
-        if k not in spec and k not in unres:
-            unres.append(k)
+    t = spec["package_type"]
+    base = ([] if t in NO_BODY else ["body_length", "body_width"]) + (["terminal_length"] if t in LINEAR_TYPES else [])
+    for k in base + NEED.get(t, []):
+        if not any(x in spec or x in unres for x in k.split("|")):
+            unres.append(k.replace("|", " or "))
     if unres:
         spec["unresolved"] = sorted(set(unres))
     return spec, prov
@@ -702,6 +720,14 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None):
     sanity(spec, review)
     check_pins(spec, ext, review)
     info = self_check(spec, ext, review)
+    if spec.get("pad_table"):
+        try:
+            from . import footprint_adv as FA                 # pad-table checks (added with the new families)
+            review += [f"pad_table: {m}" for m in FA.check_pad_table(spec) or []]
+        except ImportError:
+            pass
+        except Exception as e:
+            review.append(f"footprint_adv.check_pad_table failed: {e!r}")
     if ok:
         try:
             txt, rep = F.build(spec)
