@@ -7,6 +7,8 @@
     ecadlib dblib     BOM -o out/altium           Altium DbLib (SQLite + XLSX + .DbLib)
     ecadlib altium-lib pcblib|schlib|dump ...     write/read Altium .PcbLib/.SchLib files
     ecadlib altium365 plan|workspaces|push ...    Altium 365 release via Nexar
+    ecadlib librarian BOM --lib ... -o out/lib    BOM -> missing parts filled -> Altium models + plan + review
+    ecadlib release-check plan.json [--allow P]   hold back plan items that fail the pre-release checks
 
 `ecadlib <command> -h` shows that command's options."""
 import importlib, sys
@@ -20,6 +22,8 @@ COMMANDS = {
     "dblib": ("ecadlib.altium_export", "Altium DbLib export"),
     "altium-lib": ("ecadlib.altium_lib", "Altium .PcbLib/.SchLib writer"),
     "altium365": ("ecadlib.altium365", "Altium 365 release via Nexar"),
+    "librarian": ("ecadlib.librarian", "BOM to library: fill missing parts, plan, release check"),
+    "release-check": ("ecadlib.release_check", "pre-release checks on an altium365 plan"),
 }
 
 

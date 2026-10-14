@@ -186,6 +186,10 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync"):
         return uploaded[p]
     for it in items:
         res = {"name": it["name"], "action": "", "detail": ""}
+        if it.get("status") == "held":         # release_check held it back: no release, no parameter update
+            res["action"], res["detail"] = "skip", "held: " + "; ".join(it.get("hold_reasons") or ["release check"])
+            results.append(res)
+            continue
         try:
             existing = None if dry_run else client.find(ws, it["name"])
             if existing:

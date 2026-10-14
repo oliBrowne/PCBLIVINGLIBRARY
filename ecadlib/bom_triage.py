@@ -25,6 +25,7 @@ FIELDS = {   # canonical field -> header synonyms (normalised: lowercase, punctu
     "description": ["description", "desc", "notes"],
     "libref": ["libref", "lib ref", "library ref", "library reference", "symbol"],
     "dnp": ["dnp", "dnf", "do not populate", "do not place", "do not fit", "no stuff", "not fitted"],
+    "datasheet": ["datasheet", "data sheet", "datasheet url", "datasheet link"],
 }
 DELIMS = (",", ";", "\t", "|")
 

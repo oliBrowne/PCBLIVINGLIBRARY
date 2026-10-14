@@ -6,3 +6,4 @@ out/altium_models_kicad/
 ecadlib_workspace/
 build/
 *.egg-info/
+out/librarian/
