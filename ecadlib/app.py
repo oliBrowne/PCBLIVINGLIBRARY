@@ -173,6 +173,31 @@ class Workspace:
         return {"name": spec["name"], "report": rep, "kicad_mod": text, "svg": footprint_svg(rep),
                 "exists": (self.gen_dir / f"{name}.kicad_mod").exists()}
 
+    def preview_symbol(self, pins, name="PART", split=None, stack=None, save=False, overwrite=False):
+        """IC symbol with pins grouped by function (ecadlib.symbol_layout) under the workspace rules' [symbols].
+        pins: [{num, name, type?, group?}] or a CSV/JSON path. Returns groups, parts, problems and an SVG; save=True
+        also writes <workspace>/altium_models/SchLib/<name>.SchLib (refused if it exists unless overwrite)."""
+        from . import altium_lib, symbol_layout as SL
+        if isinstance(pins, str):
+            p = self._bom_path(pins)
+            name_, pins, _ = SL.load_pins(p)
+            name = name if name != "PART" else name_
+        sec = dict(self.rules()["symbols"])
+        sec.update({k: v for k, v in (("split_pins", split), ("stack_power", stack)) if v is not None})
+        sym = SL.build(name, pins, rules={"symbols": sec})
+        groups = {}
+        for q in SL.arrange_pins(pins, {"symbols": sec}):
+            groups.setdefault(f"{chr(64 + q['unit'])}:{q['side']}:{q['group']}", []).append(q["num"])
+        out = {"name": name, "pins": len(pins), "parts": sym.get("parts", 1), "groups": groups,
+               "problems": SL.check(sym, sec["grid"]), "svg": SL.svg(sym)}
+        if save:
+            f = self.models / "SchLib" / f"{altium_lib.file_stem(self.safe_name(name, strict=True))}.SchLib"
+            if f.exists() and not overwrite:
+                raise FileExistsError(f"{f.name} is already in the workspace; save again with overwrite to replace it")
+            f.parent.mkdir(parents=True, exist_ok=True)
+            out["file"] = self.rel(altium_lib.write_schlib(f, [sym]))
+        return out
+
     def approve_footprint(self, spec, density=None, overwrite=False):
         """Save the generated footprint into the workspace library (KiCad .kicad_mod + Altium .PcbLib),
         where triage and the Altium 365 plan will find it. Refuses to replace an existing one unless overwrite."""

@@ -64,10 +64,23 @@ DEFAULTS = {
     "sim": {"capacitor_esr": "", "capacitor_esl": "", "inductor_dcr": ""},   # ecadlib.sim_models ("" = none)
     "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)
                   "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40},
+    "symbols": {                               # ecadlib.symbol_layout: grouped pins for big IC symbols
+        "layout_pins": 40,                     # parts with at least this many pins get grouped (0 = never)
+        "split_pins": 0,                       # parts with more pins than this become multi-part (0 = never)
+        "unit_pins": 48,                       # most pins in one signal part when split
+        "stack_power": "stack",                # stack | hide | none (same-name power pins)
+        "pin_length": 300,                     # mil
+        "grid": 100,                           # mil (pin pitch, body edges)
+        "order": ["power", "analog", "power_out", "reset", "clock", "debug", "usb", "adc", "other_in", "uart", "i2c", "spi",
+                  "can", "eth", "ports", "other_out", "nc", "ground", "ep"],
+        "sides": {},                           # group -> left | right | top | bottom (overrides)
+    },
 }
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
-            ("bom", "columns"), ("release", "approvals")}
-INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000), ("datasheet", "auto_pages"): (0, 600)}
+            ("bom", "columns"), ("release", "approvals"), ("symbols", "sides")}
+INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
+             ("symbols", "layout_pins"): (0, 100_000), ("symbols", "split_pins"): (0, 100_000), ("symbols", "unit_pins"): (8, 10_000),
+             ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
 
@@ -241,7 +254,27 @@ def validate(raw, where="ecadlib.toml"):
             normalize_policy(dict(raw["release"]["approvals"]), f"{where}: release.approvals")
         except (ValueError, TypeError) as e:
             raise RulesError(str(e)) from None
+    _check_symbols(where, raw.get("symbols") or {})
     return raw
+
+
+def _check_symbols(where, sy):
+    from .symbol_layout import GROUPS, STACKS
+    if "stack_power" in sy and sy["stack_power"] not in STACKS:
+        _err(where, "symbols.stack_power", f"= {sy['stack_power']!r}: must be one of {', '.join(STACKS)}")
+    grid = sy.get("grid", DEFAULTS["symbols"]["grid"])
+    if "grid" in sy and grid not in (50, 100):
+        _err(where, "symbols.grid", f"= {grid!r}: must be 50 or 100 (mil)")
+    if sy.get("pin_length", DEFAULTS["symbols"]["pin_length"]) % grid:
+        _err(where, "symbols.pin_length", f"= {sy.get('pin_length')!r}: must be a multiple of the grid ({grid} mil) so pin ends are on it")
+    for g in sy.get("order", []):
+        if g not in GROUPS:
+            _err(where, "symbols.order", f"has {g!r}: groups are {', '.join(GROUPS)}")
+    for g, side in (sy.get("sides") or {}).items():
+        if g not in GROUPS:
+            _err(where, f"symbols.sides.{g}", f"is not a group; groups are {', '.join(GROUPS)}")
+        if side not in ("left", "right", "top", "bottom"):
+            _err(where, f"symbols.sides.{g}", f"= {side!r}: must be left, right, top or bottom")
 
 
 def _check_template(where, key, t, fields):
@@ -586,6 +619,11 @@ HELP = {
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",
     "datasheet.api_key_env": "name of the environment variable with the API key; the key itself never goes in this file",
     "datasheet.max_cost_usd": "refuse a run whose estimated worst-case cost is higher (0 = no cap; --yes overrides)",
+    "symbols": "Big IC symbols: pins grouped by function (power top, ground bottom, inputs left, ports right); see `ecadlib symbol -h`",
+    "symbols.layout_pins": "parts with at least this many pins get the grouped layout; smaller parts keep the plain one (0 = never)",
+    "symbols.split_pins": "more pins than this: a multi-part symbol (power part + signal parts); 0 = one part always",
+    "symbols.stack_power": "stack (one pin shown, the rest on top of it) | hide (the rest hidden, tied by name) | none",
+    "symbols.order": "group order on each side; groups: power analog power_out ground ep reset clock debug usb adc other_in uart i2c spi can eth ports other_out nc",
 }
 
 
