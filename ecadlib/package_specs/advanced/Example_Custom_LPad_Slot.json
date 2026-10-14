@@ -1,0 +1,24 @@
+{
+  "name": "Example_Custom_LPad_Slot",
+  "description": "Odd-shape example: L-shaped thermal pad with split paste and vias, a signal pad in its notch, a plated slot, a locating hole and a via keep-out",
+  "package_type": "custom",
+  "pin_count": 3,
+  "pad_table": {
+    "unit": "mm",
+    "y_axis": "up",
+    "origin": "center",
+    "footprint_origin": "center",
+    "pads": [
+      {"number": "1", "polygon": [{"x": -3, "y": 2.5}, {"x": 1, "y": 2.5}, {"x": 1, "y": 0.5}, {"x": -1, "y": 0.5}, {"x": -1, "y": -2.5}, {"x": -3, "y": -2.5}],
+       "role": "thermal", "paste": "grid", "paste_coverage": 0.6, "thermal_vias": {"drill": 0.3, "diameter": 0.6, "nx": 2, "ny": 2, "pitch": 1.2},
+       "label": "tab, L-shaped"},
+      {"number": "2", "x": 0.5, "y": -1.5, "w": 1.0, "h": 1.2, "label": "signal pad in the notch"},
+      {"number": "3", "x": 3.5, "y": 0, "w": 1.6, "h": 2.6, "type": "tht", "drill": 0.8, "drill_h": 1.8, "label": "plated slot"},
+      {"x": -4.6, "y": 0, "type": "npth", "drill": 1.0, "label": "locating peg"}
+    ],
+    "body": {"x1": -3.8, "y1": 3, "x2": 3, "y2": -3},
+    "keepouts": [{"x1": 1.6, "y1": 2.8, "x2": 2.8, "y2": 1.2, "layers": ["F.Cu"], "rules": ["vias", "tracks"]}]
+  },
+  "height_max": 2.0,
+  "source": {"drawing": "hand-made example of the custom pad_table (no datasheet)"}
+}

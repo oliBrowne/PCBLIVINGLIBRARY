@@ -1,6 +1,8 @@
-"""Parametric IPC-7351B-style SMD footprint generator -> KiCad .kicad_mod (S-expression).
+"""Parametric IPC-7351B-style footprint generator -> KiCad .kicad_mod (S-expression).
 
-Supported package_type: chip (2-terminal R/C/L), gullwing (dual-row SOIC/SOP/TSSOP), qfn (+EP).
+Supported package_type: chip (2-terminal R/C/L), molded, gullwing (dual-row SOIC/SOP/TSSOP/SOT), qfp, qfn (+EP);
+and, in footprint_adv.py: bga (BGA/LGA/CSP), pin_header, connector and custom (explicit pad table from the
+datasheet drawing: polygon pads, slots, mounting pads, keep-outs).
 Input: JSON matching package_schema.json (the contract an LLM fills from a datasheet drawing).
 
 IPC-7351B land-pattern equations (all mm; implemented in ipc_land()):
@@ -339,8 +341,14 @@ def sanity(spec):
     return errs
 
 
+ADVANCED = ("bga", "pin_header", "connector", "custom")
+
+
 def build(spec, density=None):
     """Return (kicad_mod_text, report_dict)."""
+    if spec["package_type"] in ADVANCED:
+        from . import footprint_adv
+        return footprint_adv.build(spec, density)
     problems = sanity(spec)
     if problems:
         raise ValueError("the package numbers don't add up: " + "; ".join(problems))
@@ -461,6 +469,23 @@ def build(spec, density=None):
     return text_out, rep
 
 
+def altium_footprint(spec, density=None):
+    """Altium footprint dict (altium_lib's writer model) for any spec: altium_lib.footprint_from_spec for SMD-only
+    parts, else kicad_import's converter on the generated .kicad_mod (through-hole pads, slots, NPTH holes, keep-outs;
+    a polygon pad becomes its bounding rectangle, noted in the returned notes). Returns (footprint, notes)."""
+    from . import altium_lib as AL, kicad_import as K
+    try:
+        return AL.footprint_from_spec(spec, density)[0], []
+    except ValueError as e:
+        if "only SMD" not in str(e) and "not supported" not in str(e):
+            raise
+    txt, _ = build(spec, density)
+    notes = []
+    fp, _ = K.convert_footprint(txt, notes=notes)
+    fp["height_mm"] = dim(spec["height_max"])[2] if spec.get("height_max") else 0.0
+    return fp, notes
+
+
 def pin1_triangle(x, y):
     """Filled silk triangle pointing down at (x, y) - the KiCad-library pin-1 convention."""
     return poly([(x, y), (x - 0.24, y - 0.33), (x + 0.24, y - 0.33)], "F.SilkS", SILK_W, fill="solid")
@@ -520,10 +545,12 @@ def main(argv=None):
             sexpr.parse(txt)                                          # sanity: balanced S-expression
             (outdir / f"{spec['name']}.kicad_mod").write_text(txt)
             p1 = rep["pads"][0]
-            print(f"{spec['name']:<44} {rep['ipc_family']:<13} Z={rep['Z']:.2f} G={rep['G']:.2f} X={rep['X']:.2f} "
+            zgx = f"Z={rep['Z']:.2f} G={rep['G']:.2f} X={rep['X']:.2f}" if "G" in rep else f"{len(rep['pads'])} pads"
+            print(f"{spec['name']:<44} {rep['ipc_family']:<13} {zgx} "
                   f"pad1 {p1['w']:.3f}x{p1['h']:.3f} @({p1['x']:.3f},{p1['y']:.3f}) "
                   f"crtyd {rep['courtyard'][0]:.2f}x{rep['courtyard'][1]:.2f}"
-                  + (f"  WARN {rep['warning']}" if "warning" in rep else ""))
+                  + (f"  WARN {rep['warning']}" if "warning" in rep else "")
+                  + "".join(f"\n    {c['level']}: {c['message']}" for c in rep.get("table_checks", []) if c["level"] != "info"))
     else:
         if a.ref.startswith("http"):
             from .httpcache import CachedHTTP

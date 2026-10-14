@@ -2,13 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.org/ecadlib/package_schema.json",
   "title": "ECAD package mechanical dimensions (IPC-7351B land-pattern input)",
-  "description": "Contract an LLM fills from a datasheet mechanical drawing. All lengths in millimetres. Give each dimension as min/max where the drawing shows a range (preferred), or nom (+ optional tol = symmetric +/-). Never guess: if a value is not on the drawing, omit it and list it in 'unresolved'. Orientation: pin 1 top-left; X axis = across the pad rows (lead span), Y axis = along a pin row.",
+  "description": "Contract an LLM fills from a datasheet mechanical drawing. All lengths in millimetres. Give each dimension as min/max where the drawing shows a range (preferred), or nom (+ optional tol = symmetric +/-). Never guess: if a value is not on the drawing, omit it and list it in 'unresolved'. Orientation: pin 1 top-left; X axis = across the pad rows (lead span), Y axis = along a pin row. Ball grids (bga), pin headers, connectors and odd shapes (custom) use the fields marked for them; connector and custom parts are given as a pad_table copied from the datasheet's recommended land pattern / PCB layout drawing.",
   "type": "object",
   "required": [
     "name",
-    "package_type",
-    "body_length",
-    "body_width"
+    "package_type"
   ],
   "additionalProperties": false,
   "$defs": {
@@ -65,27 +63,31 @@
         "molded",
         "gullwing",
         "qfp",
-        "qfn"
+        "qfn",
+        "bga",
+        "pin_header",
+        "connector",
+        "custom"
       ],
-      "description": "chip = 2-terminal rectangular end-cap (R/C/L/LED 0201..2512); molded = 2-terminal molded body with terminals bent under it (tantalum caps, SMA/SMB/SMC diodes, power inductors); gullwing = leads out of the body sides (SOIC/SOP/TSSOP/MSOP/SOT-23/SOT-223/SOD-123, use pin_positions for uneven layouts); qfp = gull-wing leads on four sides (QFP/LQFP/TQFP), lead_span is the tip-to-tip span; qfn = quad/dual flat no-lead (QFN/DFN/SON) with optional exposed pad"
+      "description": "chip = 2-terminal rectangular end-cap (R/C/L/LED 0201..2512); molded = 2-terminal molded body with terminals bent under it (tantalum caps, SMA/SMB/SMC diodes, power inductors); gullwing = leads out of the body sides (SOIC/SOP/TSSOP/MSOP/SOT-23/SOT-223/SOD-123, use pin_positions for uneven layouts); qfp = gull-wing leads on four sides (QFP/LQFP/TQFP), lead_span is the tip-to-tip span; qfn = quad/dual flat no-lead (QFN/DFN/SON) with optional exposed pad; bga = BGA/LGA/CSP/WLCSP ball or land grid (rows x cols, pitch, ball_diameter, depopulated balls or ball_map); pin_header = 1- or 2-column pin header/socket strip (cols, rows, pitch; mount tht or smd); connector = any connector given as a pad_table from the datasheet's recommended PCB layout (signal pads, mounting pads MP, shield tabs SH, holes, slots); custom = anything else (odd shapes: polygon pads, slots, big pads with split paste / thermal vias) as a pad_table"
     },
     "pin_count": {
       "type": "integer",
       "minimum": 2,
-      "description": "Signal pins, excluding exposed pad. chip: 2."
+      "description": "Signal pins, excluding exposed pad. chip: 2. bga: populated balls. pin_header: cols x rows. connector/custom: distinct numbered pins, not counting mounting pads (MP), shield tabs (SH) or holes."
     },
     "pitch": {
       "type": "number",
       "exclusiveMinimum": 0,
-      "description": "Lead pitch e (gullwing/qfn)"
+      "description": "Lead pitch e (gullwing/qfn/qfp); bga: ball pitch along a row (column to column); pin_header: pin pitch; connector: signal pin pitch (used to size through-hole pads and to check the table)"
     },
     "body_length": {
       "$ref": "#/$defs/dim",
-      "description": "chip: overall length L (terminal end to end, = lead span). gullwing: body length D along the pin rows (Y). qfn: body size along X (D)."
+      "description": "chip: overall length L (terminal end to end, = lead span). gullwing: body length D along the pin rows (Y). qfn: body size along X (D). bga/connector/custom/pin_header: body size along X (left-right in the top view)."
     },
     "body_width": {
       "$ref": "#/$defs/dim",
-      "description": "chip: width W. gullwing: body width E1 (X, excluding leads). qfn: body size along Y (E)."
+      "description": "chip: width W. gullwing: body width E1 (X, excluding leads). qfn: body size along Y (E). bga/connector/custom/pin_header: body size along Y."
     },
     "lead_span": {
       "$ref": "#/$defs/dim",
@@ -163,6 +165,713 @@
       ],
       "default": "B",
       "description": "IPC-7351B density level: A=most (max fillets), B=nominal, C=least"
+    },
+    "rows": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "bga: number of ball rows (lettered A, B, C ... from the top; JEDEC skips I O Q S X Z). pin_header: pins in each column (along Y)."
+    },
+    "cols": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "bga: number of ball columns (numbered 1, 2, 3 ... from the left). pin_header: 1 or 2 columns of pins."
+    },
+    "pitch_y": {
+      "type": "number",
+      "description": "bga: row-to-row pitch when it differs from pitch",
+      "exclusiveMinimum": 0
+    },
+    "ball_diameter": {
+      "$ref": "#/$defs/dim",
+      "description": "bga: ball diameter b (LGA: land/terminal diameter) as printed; the land is derived from the nominal size (IPC-7351B)"
+    },
+    "land_diameter": {
+      "$ref": "#/$defs/dim",
+      "description": "bga: the datasheet's recommended PCB land (pad) diameter, when given; it replaces the IPC-7351B land. pin_header: through-hole pad diameter."
+    },
+    "ball_type": {
+      "enum": [
+        "collapsing",
+        "non_collapsing",
+        "lga"
+      ],
+      "default": "collapsing",
+      "description": "bga: collapsing (eutectic / SAC solder balls, most BGAs: land smaller than the ball), non_collapsing (high-melt or copper-core balls: land slightly larger), lga (flat lands, no balls)"
+    },
+    "land_style": {
+      "enum": [
+        "NSMD",
+        "SMD"
+      ],
+      "default": "NSMD",
+      "description": "bga: NSMD = non-solder-mask-defined (copper = land, mask opening larger; the usual choice), SMD = solder-mask-defined (copper larger, mask opening = land)"
+    },
+    "depopulated": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z]{1,2}[0-9]{1,3}(:[A-Za-z]{1,2}[0-9]{1,3})?$"
+      },
+      "description": "bga: balls that are missing, by name (\"E5\") or as a rectangle of balls \"E5:H8\" (inclusive). Use this or ball_map."
+    },
+    "ball_map": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[-.oOxX#*0-9 ]+$"
+      },
+      "description": "bga: the ball map, one string per row from row A down, one character per column from 1 (spaces ignored): any of O X # * 1 = ball, '-' or '.' or '0' = no ball."
+    },
+    "row_letters": {
+      "enum": [
+        "jedec",
+        "all"
+      ],
+      "default": "jedec",
+      "description": "bga: jedec = skip I O Q S X Z (JEP95, AA after Y); all = every letter (some older parts)"
+    },
+    "mount": {
+      "enum": [
+        "tht",
+        "smd"
+      ],
+      "default": "tht",
+      "description": "pin_header: through-hole (pin 1 at the footprint origin, KiCad style) or SMD"
+    },
+    "pin1_side": {
+      "enum": [
+        "left",
+        "right"
+      ],
+      "default": "left",
+      "description": "pin_header, single-row SMD: side of pin 1's pad (the pads alternate sides)"
+    },
+    "drill": {
+      "$ref": "#/$defs/dim",
+      "description": "pin_header: finished hole diameter (default from the pitch: 2.54 -> 1.0, 2.0 -> 0.8, 1.27 -> 0.65)"
+    },
+    "same_net": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "minItems": 2
+      },
+      "description": "connector/custom: groups of pad numbers that are the same net and may overlap or touch (USB-C A1/B12 GND, A4/B9 VBUS)"
+    },
+    "courtyard_excess": {
+      "type": "number",
+      "description": "Courtyard clearance around pads and body in mm, overriding the default (bga 1.0, connectors 0.5, custom 0.25 at density B)",
+      "minimum": 0
+    },
+    "pad_table": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit",
+        "y_axis"
+      ],
+      "description": "connector/custom: the land pattern copied from the datasheet's dimension drawing, in the drawing's own unit and frame (no arithmetic: positions as dimensioned from the drawing's origin). One entry per pad, or arrays for evenly spaced rows.",
+      "properties": {
+        "unit": {
+          "enum": [
+            "mm",
+            "mil",
+            "in"
+          ],
+          "description": "unit of every number in the table"
+        },
+        "y_axis": {
+          "enum": [
+            "up",
+            "down"
+          ],
+          "description": "up: +Y points to the top of the drawing (usual for drawings); down: +Y points down (KiCad)"
+        },
+        "view": {
+          "enum": [
+            "top",
+            "bottom"
+          ],
+          "default": "top",
+          "description": "the drawing's view: recommended land patterns are top views; bottom views (seen from the pins) are mirrored left-right"
+        },
+        "origin": {
+          "enum": [
+            "center",
+            "pin1",
+            "datum"
+          ],
+          "description": "what the drawing's 0,0 is: the package centre, pin 1, or another datum (give center_at)"
+        },
+        "center_at": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "x",
+            "y"
+          ],
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
+          },
+          "description": "the package centre in the table's coordinates, when the origin is not the centre (default: the middle of all pads)"
+        },
+        "footprint_origin": {
+          "enum": [
+            "center",
+            "pin1"
+          ],
+          "description": "origin of the generated footprint: default pin1 for through-hole parts, center for SMD (KiCad conventions)"
+        },
+        "default_pad": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "number": {
+              "type": [
+                "string",
+                "integer"
+              ],
+              "pattern": "^[A-Za-z0-9_.+-]{0,16}$",
+              "description": "pad number as on the drawing / pin table (1, 2 ... or A1, B12 ...); mounting pads MP, shield tabs SH, holes \"\""
+            },
+            "x": {
+              "type": "number",
+              "description": "pad centre X, in the table's unit and frame"
+            },
+            "y": {
+              "type": "number",
+              "description": "pad centre Y, in the table's unit and frame"
+            },
+            "w": {
+              "type": "number",
+              "description": "pad size along X (before rotation)",
+              "exclusiveMinimum": 0
+            },
+            "h": {
+              "type": "number",
+              "description": "pad size along Y (before rotation)",
+              "exclusiveMinimum": 0
+            },
+            "d": {
+              "type": "number",
+              "description": "round pad diameter (instead of w/h)",
+              "exclusiveMinimum": 0
+            },
+            "shape": {
+              "enum": [
+                "rect",
+                "roundrect",
+                "circle",
+                "oval"
+              ],
+              "description": "default roundrect for SMD, oval for through-hole, circle when d is given; use polygon points for odd shapes"
+            },
+            "type": {
+              "enum": [
+                "smd",
+                "tht",
+                "npth"
+              ],
+              "description": "smd (default), tht = plated through-hole (needs drill), npth = non-plated hole (locating peg)"
+            },
+            "drill": {
+              "type": "number",
+              "description": "hole diameter; for a slot, its width",
+              "exclusiveMinimum": 0
+            },
+            "drill_h": {
+              "type": "number",
+              "description": "slot: hole length along Y (the drill becomes an oval slot drill x drill_h); swap with drill for a slot along X",
+              "exclusiveMinimum": 0
+            },
+            "rotation": {
+              "type": "number",
+              "description": "pad rotation in degrees, counter-clockwise as drawn"
+            },
+            "role": {
+              "enum": [
+                "pin",
+                "mount",
+                "shield",
+                "thermal",
+                "npth"
+              ],
+              "description": "default: pin for numbered pads, mount for MP/MH, shield for SH/S1, npth for holes; mount/shield/npth are not counted as pins"
+            },
+            "polygon": {
+              "type": "array",
+              "minItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "x",
+                  "y"
+                ],
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  }
+                }
+              },
+              "description": "odd-shaped pad: its outline corners in the table's frame (absolute, not relative to x/y)"
+            },
+            "paste": {
+              "enum": [
+                "full",
+                "none",
+                "grid"
+              ],
+              "description": "solder paste: full (default for SMD), none, or grid = split into windows (big thermal pads)"
+            },
+            "paste_coverage": {
+              "type": "number",
+              "description": "grid paste: fraction of the copper covered (default 0.65)",
+              "minimum": 0.2,
+              "maximum": 1.0
+            },
+            "paste_grid": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8
+              },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "grid paste: [columns, rows] of windows (default about 1.2 mm windows)"
+            },
+            "thermal_vias": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "drill"
+              ],
+              "properties": {
+                "drill": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "diameter": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "nx": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "ny": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "pitch": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "description": "vias inside a big pad (mm): drill, via diameter (default drill + 0.3), nx x ny grid, pitch (default spread over the pad)"
+            },
+            "mask_margin": {
+              "type": "number",
+              "description": "solder mask expansion (negative = mask-defined pad)"
+            },
+            "paste_margin": {
+              "type": "number",
+              "description": "solder paste expansion (negative = smaller than the copper)"
+            },
+            "label": {
+              "type": "string",
+              "description": "the drawing's callout for this pad, for review"
+            }
+          },
+          "description": "values every pad and array takes unless it gives its own"
+        },
+        "pads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "number": {
+                "type": [
+                  "string",
+                  "integer"
+                ],
+                "pattern": "^[A-Za-z0-9_.+-]{0,16}$",
+                "description": "pad number as on the drawing / pin table (1, 2 ... or A1, B12 ...); mounting pads MP, shield tabs SH, holes \"\""
+              },
+              "x": {
+                "type": "number",
+                "description": "pad centre X, in the table's unit and frame"
+              },
+              "y": {
+                "type": "number",
+                "description": "pad centre Y, in the table's unit and frame"
+              },
+              "w": {
+                "type": "number",
+                "description": "pad size along X (before rotation)",
+                "exclusiveMinimum": 0
+              },
+              "h": {
+                "type": "number",
+                "description": "pad size along Y (before rotation)",
+                "exclusiveMinimum": 0
+              },
+              "d": {
+                "type": "number",
+                "description": "round pad diameter (instead of w/h)",
+                "exclusiveMinimum": 0
+              },
+              "shape": {
+                "enum": [
+                  "rect",
+                  "roundrect",
+                  "circle",
+                  "oval"
+                ],
+                "description": "default roundrect for SMD, oval for through-hole, circle when d is given; use polygon points for odd shapes"
+              },
+              "type": {
+                "enum": [
+                  "smd",
+                  "tht",
+                  "npth"
+                ],
+                "description": "smd (default), tht = plated through-hole (needs drill), npth = non-plated hole (locating peg)"
+              },
+              "drill": {
+                "type": "number",
+                "description": "hole diameter; for a slot, its width",
+                "exclusiveMinimum": 0
+              },
+              "drill_h": {
+                "type": "number",
+                "description": "slot: hole length along Y (the drill becomes an oval slot drill x drill_h); swap with drill for a slot along X",
+                "exclusiveMinimum": 0
+              },
+              "rotation": {
+                "type": "number",
+                "description": "pad rotation in degrees, counter-clockwise as drawn"
+              },
+              "role": {
+                "enum": [
+                  "pin",
+                  "mount",
+                  "shield",
+                  "thermal",
+                  "npth"
+                ],
+                "description": "default: pin for numbered pads, mount for MP/MH, shield for SH/S1, npth for holes; mount/shield/npth are not counted as pins"
+              },
+              "polygon": {
+                "type": "array",
+                "minItems": 3,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "x",
+                    "y"
+                  ],
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "description": "odd-shaped pad: its outline corners in the table's frame (absolute, not relative to x/y)"
+              },
+              "paste": {
+                "enum": [
+                  "full",
+                  "none",
+                  "grid"
+                ],
+                "description": "solder paste: full (default for SMD), none, or grid = split into windows (big thermal pads)"
+              },
+              "paste_coverage": {
+                "type": "number",
+                "description": "grid paste: fraction of the copper covered (default 0.65)",
+                "minimum": 0.2,
+                "maximum": 1.0
+              },
+              "paste_grid": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 8
+                },
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "grid paste: [columns, rows] of windows (default about 1.2 mm windows)"
+              },
+              "thermal_vias": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "drill"
+                ],
+                "properties": {
+                  "drill": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "diameter": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "nx": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "ny": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "pitch": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "description": "vias inside a big pad (mm): drill, via diameter (default drill + 0.3), nx x ny grid, pitch (default spread over the pad)"
+              },
+              "mask_margin": {
+                "type": "number",
+                "description": "solder mask expansion (negative = mask-defined pad)"
+              },
+              "paste_margin": {
+                "type": "number",
+                "description": "solder paste expansion (negative = smaller than the copper)"
+              },
+              "label": {
+                "type": "string",
+                "description": "the drawing's callout for this pad, for review"
+              }
+            }
+          }
+        },
+        "arrays": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "count",
+              "x",
+              "y"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "number of pads in the row"
+              },
+              "x": {
+                "type": "number",
+                "description": "first pad centre X"
+              },
+              "y": {
+                "type": "number",
+                "description": "first pad centre Y"
+              },
+              "dx": {
+                "type": "number",
+                "description": "step to the next pad along X (the pitch, negative to go left)"
+              },
+              "dy": {
+                "type": "number",
+                "description": "step along Y"
+              },
+              "first_number": {
+                "type": "integer",
+                "description": "number of the first pad (default 1)"
+              },
+              "number_step": {
+                "type": "integer",
+                "description": "numbering step (default 1; 2 for one row of a dual-row connector: 1, 3, 5 ...)"
+              },
+              "prefix": {
+                "type": "string",
+                "pattern": "^[A-Za-z]{0,3}$",
+                "description": "letters before the number (A for USB-C A1..A12)"
+              },
+              "w": {
+                "type": "number",
+                "description": "pad size along X (before rotation)",
+                "exclusiveMinimum": 0
+              },
+              "h": {
+                "type": "number",
+                "description": "pad size along Y (before rotation)",
+                "exclusiveMinimum": 0
+              },
+              "d": {
+                "type": "number",
+                "description": "round pad diameter (instead of w/h)",
+                "exclusiveMinimum": 0
+              },
+              "shape": {
+                "enum": [
+                  "rect",
+                  "roundrect",
+                  "circle",
+                  "oval"
+                ],
+                "description": "default roundrect for SMD, oval for through-hole, circle when d is given; use polygon points for odd shapes"
+              },
+              "type": {
+                "enum": [
+                  "smd",
+                  "tht",
+                  "npth"
+                ],
+                "description": "smd (default), tht = plated through-hole (needs drill), npth = non-plated hole (locating peg)"
+              },
+              "drill": {
+                "type": "number",
+                "description": "hole diameter; for a slot, its width",
+                "exclusiveMinimum": 0
+              },
+              "drill_h": {
+                "type": "number",
+                "description": "slot: hole length along Y (the drill becomes an oval slot drill x drill_h); swap with drill for a slot along X",
+                "exclusiveMinimum": 0
+              },
+              "rotation": {
+                "type": "number",
+                "description": "pad rotation in degrees, counter-clockwise as drawn"
+              },
+              "role": {
+                "enum": [
+                  "pin",
+                  "mount",
+                  "shield",
+                  "thermal",
+                  "npth"
+                ],
+                "description": "default: pin for numbered pads, mount for MP/MH, shield for SH/S1, npth for holes; mount/shield/npth are not counted as pins"
+              },
+              "paste": {
+                "enum": [
+                  "full",
+                  "none",
+                  "grid"
+                ],
+                "description": "solder paste: full (default for SMD), none, or grid = split into windows (big thermal pads)"
+              },
+              "label": {
+                "type": "string",
+                "description": "the drawing's callout for this pad, for review"
+              }
+            }
+          },
+          "description": "evenly spaced rows of equal pads, as drawings dimension them (N x pitch)"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "x1",
+            "y1",
+            "x2",
+            "y2"
+          ],
+          "properties": {
+            "x1": {
+              "type": "number"
+            },
+            "y1": {
+              "type": "number"
+            },
+            "x2": {
+              "type": "number"
+            },
+            "y2": {
+              "type": "number"
+            }
+          },
+          "description": "the component body outline (top view), in the table's unit and frame"
+        },
+        "keepouts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "x1": {
+                "type": "number"
+              },
+              "y1": {
+                "type": "number"
+              },
+              "x2": {
+                "type": "number"
+              },
+              "y2": {
+                "type": "number"
+              },
+              "polygon": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "x",
+                    "y"
+                  ],
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              "layers": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "F.Cu",
+                    "B.Cu",
+                    "*.Cu"
+                  ]
+                }
+              },
+              "rules": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "tracks",
+                    "vias",
+                    "pads",
+                    "copperpour",
+                    "footprints"
+                  ]
+                }
+              }
+            }
+          },
+          "description": "keep-out areas from the drawing (no copper / no vias / no tracks under the part), rectangle or polygon"
+        }
+      }
     },
     "model_3d": {
       "type": "string",
@@ -389,18 +1098,115 @@
       }
     },
     {
-      "anyOf": [
-        {
-          "required": [
-            "terminal_length"
-          ]
-        },
-        {
-          "required": [
-            "inner_span"
-          ]
+      "if": {
+        "properties": {
+          "package_type": {
+            "enum": [
+              "chip",
+              "molded",
+              "gullwing",
+              "qfp",
+              "qfn"
+            ]
+          }
         }
-      ]
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": [
+              "terminal_length"
+            ]
+          },
+          {
+            "required": [
+              "inner_span"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_type": {
+            "enum": [
+              "chip",
+              "molded",
+              "gullwing",
+              "qfp",
+              "qfn",
+              "bga"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "body_length",
+          "body_width"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_type": {
+            "const": "bga"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "rows",
+          "cols",
+          "pitch"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "ball_diameter"
+            ]
+          },
+          {
+            "required": [
+              "land_diameter"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_type": {
+            "const": "pin_header"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "rows",
+          "pitch"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_type": {
+            "enum": [
+              "connector",
+              "custom"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "pad_table"
+        ]
+      }
     }
   ]
 }

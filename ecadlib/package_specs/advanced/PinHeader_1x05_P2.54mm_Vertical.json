@@ -1,0 +1,12 @@
+{
+  "name": "PinHeader_1x05_P2.54mm_Vertical",
+  "description": "pin header, 1x05, 2.54 mm pitch",
+  "package_type": "pin_header",
+  "pin_count": 5,
+  "cols": 1,
+  "rows": 5,
+  "pitch": 2.54,
+  "source": {
+    "drawing": "generic pin header (KiCad Connector_PinHeader tables); cross-checked with KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints)"
+  }
+}
