@@ -77,27 +77,55 @@ def to_rows(lines, triage=None):
     return {k: pd.DataFrame(v, columns=COLUMNS).drop_duplicates("Part Number") for k, v in sorted(out.items())}
 
 
-def dblib_text(conn_str, tables, left_quote="[", right_quote="]", excel=False):
-    """INI layout copied from real-world .DbLib files (see README 'verified')."""
-    L = ["[OutputDatabaseLinkFile]", "Version=1.1", "[DatabaseLinks]", f"ConnectionString={conn_str}",
-         "AddMode=3", "RemoveMode=1", "UpdateMode=2", "ViewMode=0",
-         f"LeftQuote={left_quote}", f"RightQuote={right_quote}", "QuoteTableNames=1", "UseTableSchemaName=0",
-         "DefaultColumnType=VARCHAR(255)", "LibraryDatabaseType=", "LibraryDatabasePath=", "DatabasePathRelative=0",
-         "TopPanelCollapsed=0", "LibrarySearchPath=", "OrcadMultiValueDelimiter=,", "SearchSubDirectories=0",
-         "SchemaName=", f"LastFocusedTable={tables[0] + ('$' if excel else '')}"]
+def sqlite_connection(db_path):
+    return ('Provider=MSDASQL.1;Persist Security Info=False;'
+            f'Extended Properties="DRIVER=SQLite3 ODBC Driver;Database={db_path};LongNames=0;Timeout=1000;NoTXN=0;SyncPragma=NORMAL;StepAPI=0;"')
+
+
+def excel_connection(xlsx_path):
+    return (f'Provider=Microsoft.ACE.OLEDB.12.0;Data Source={xlsx_path};'
+            'Extended Properties="Excel 12.0 Xml;HDR=YES;IMEX=1";Persist Security Info=False')
+
+
+def dblib_links(conn_str, last_table, left_quote="[", right_quote="]", db_type="", db_path="", relative=False,
+                search_path="", extra=()):
+    """[OutputDatabaseLinkFile] + [DatabaseLinks] lines. db_type/db_path/relative are what Altium's DbLib editor
+    writes for its Access/Excel fast connection (LibraryDatabaseType=Microsoft Excel, LibraryDatabasePath=x.xls,
+    DatabasePathRelative=1); extra = (key, value) pairs appended to [DatabaseLinks] (SVNRepositoryURL ...)."""
+    return (["[OutputDatabaseLinkFile]", "Version=1.1", "[DatabaseLinks]", f"ConnectionString={conn_str}",
+             "AddMode=3", "RemoveMode=1", "UpdateMode=2", "ViewMode=0",
+             f"LeftQuote={left_quote}", f"RightQuote={right_quote}", "QuoteTableNames=1", "UseTableSchemaName=0",
+             "DefaultColumnType=VARCHAR(255)", f"LibraryDatabaseType={db_type}", f"LibraryDatabasePath={db_path}",
+             f"DatabasePathRelative={int(relative)}", "TopPanelCollapsed=0", f"LibrarySearchPath={search_path}",
+             "OrcadMultiValueDelimiter=,", "SearchSubDirectories=0", "SchemaName=", f"LastFocusedTable={last_table}"]
+            + [f"{k}={v}" for k, v in extra])
+
+
+def table_section(i, table):
+    return [f"[Table{i}]", "SchemaName=", f"TableName={table}", "Enabled=True", "UserWhere=0", "UserWhereText="]
+
+
+def fieldmap_section(i, table, column, key="Part Number"):
+    ftype = 0 if column == key else 1                                   # observed: key column FieldType=0
+    pname = f"[{column}]" if column in RESERVED else column
+    return [f"[FieldMap{i}]",
+            f"Options=FieldName={table}.{column}|TableNameOnly={table}|FieldNameOnly={column}|FieldType={ftype}|"
+            f"ParameterName={pname}|VisibleOnAdd=False|AddMode=0|RemoveMode=0|UpdateMode=0"]
+
+
+def dblib_text(conn_str, tables, left_quote="[", right_quote="]", excel=False, columns=COLUMNS, **links):
+    """INI layout copied from real-world .DbLib files (see README 'verified'). tables: table names, or
+    {table: columns}; excel adds the '$' Altium's Excel provider puts after sheet names."""
+    cols = tables if isinstance(tables, dict) else {t: columns for t in tables}
+    names = [t + ("$" if excel else "") for t in cols]
+    L = dblib_links(conn_str, names[0], left_quote, right_quote, **links)
+    for i, tn in enumerate(names, 1):
+        L += table_section(i, tn)
     fm = 0
-    for i, t in enumerate(tables, 1):
-        tn = t + ("$" if excel else "")
-        L += [f"[Table{i}]", "SchemaName=", f"TableName={tn}", "Enabled=True", "UserWhere=0", "UserWhereText="]
-    for t in tables:
-        tn = t + ("$" if excel else "")
-        for c in COLUMNS:
+    for tn, cs in zip(names, cols.values()):
+        for c in cs:
             fm += 1
-            ftype = 0 if c == "Part Number" else 1                      # observed: key column FieldType=0
-            pname = f"[{c}]" if c in RESERVED else c
-            L += [f"[FieldMap{fm}]",
-                  f"Options=FieldName={tn}.{c}|TableNameOnly={tn}|FieldNameOnly={c}|FieldType={ftype}|"
-                  f"ParameterName={pname}|VisibleOnAdd=False|AddMode=0|RemoveMode=0|UpdateMode=0"]
+            L += fieldmap_section(fm, tn, c)
     return "\r\n".join(L) + "\r\n"
 
 
@@ -126,10 +154,7 @@ def main(argv=None):
             df.to_excel(w, sheet_name=name, index=False)
 
     win = PureWindowsPath(a.win_dir)
-    sqlite_cs = ('Provider=MSDASQL.1;Persist Security Info=False;'
-                 f'Extended Properties="DRIVER=SQLite3 ODBC Driver;Database={win / "parts.sqlite"};LongNames=0;Timeout=1000;NoTXN=0;SyncPragma=NORMAL;StepAPI=0;"')
-    excel_cs = (f'Provider=Microsoft.ACE.OLEDB.12.0;Data Source={win / "parts.xlsx"};'
-                'Extended Properties="Excel 12.0 Xml;HDR=YES;IMEX=1";Persist Security Info=False')
+    sqlite_cs, excel_cs = sqlite_connection(win / "parts.sqlite"), excel_connection(win / "parts.xlsx")
     names = list(tables)
     (out / "ecadlib_sqlite.DbLib").write_text(dblib_text(sqlite_cs, names, '"', '"'), newline="")
     (out / "ecadlib_excel.DbLib").write_text(dblib_text(excel_cs, names, "[", "]", excel=True), newline="")
