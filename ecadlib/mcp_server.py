@@ -62,11 +62,57 @@ TOOLS = [
     {"name": "release_check",
      "description": "Re-run the release check on the librarian's plan for a BOM. allow releases the named parts despite "
                     "their current failures (only when the user has looked and agreed; it is recorded in the plan); "
-                    "unallow takes that back. Held parts are never pushed to Altium 365.",
+                    "unallow takes that back. user names the person giving the allow (recorded for sign-off). Held "
+                    "parts are never pushed to Altium 365.",
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"},
+                                    "user": {"type": "string"},
                                     "allow": {"type": "array", "items": {"type": "string"}},
                                     "unallow": {"type": "array", "items": {"type": "string"}}}}},
+    {"name": "held_parts",
+     "description": "List the parts the release check held in the librarian's plan for a BOM: what is missing (symbol, "
+                    "footprint) and why each is held. Use part_candidates / choose_part to fix one.",
+     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
+    {"name": "part_candidates",
+     "description": "Ranked symbol or footprint candidates for one plan part (official KiCad library, the indexed local "
+                    "libraries, ecadlib package specs). Each has an id, why it ranked, its pin/pad count, whether its "
+                    "pins match the part's other half, and a suggested pin_map for a near miss. kind defaults to the "
+                    "missing half (both when nothing is missing). May fetch KiCad library files.",
+     "inputSchema": {"type": "object", "required": ["bom", "part"],
+                     "properties": {"bom": {"type": "string"}, "part": {"type": "string"},
+                                    "kind": {"type": "string", "enum": ["symbol", "footprint"]},
+                                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}}}},
+    {"name": "choose_part",
+     "description": "Use a candidate from part_candidates (kicad:Lib:Name, local:Lib:Name or spec:Name) for one half of "
+                    "a plan part: converts it to Altium files, records the choice in the plan (a librarian re-run keeps "
+                    "it) and re-runs the release check. pin_map maps symbol pin numbers to pad numbers. Show the user "
+                    "the candidates and let them pick; do not choose on a guess.",
+     "inputSchema": {"type": "object", "required": ["bom", "part", "kind", "candidate_id"],
+                     "properties": {"bom": {"type": "string"}, "part": {"type": "string"},
+                                    "kind": {"type": "string", "enum": ["symbol", "footprint"]},
+                                    "candidate_id": {"type": "string"},
+                                    "pin_map": {"type": "object", "additionalProperties": {"type": "string"}}}}},
+    {"name": "approval_status",
+     "description": "Sign-off state of the librarian's plan for a BOM: the approvals policy (approvals.json next to the "
+                    "plan; none = approvals are recorded but not enforced) and, per part, who approved and what is "
+                    "still missing. Parts awaiting approval are not pushed to Altium 365.",
+     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
+    {"name": "approve_part",
+     "description": "Record a person's approve or reject decision for one plan part (reject needs a comment). user is the "
+                    "person deciding, e.g. \"Ann Lee <ann@example.com>\": ask the user who they are and pass their own "
+                    "answer; never approve on your own behalf or invent a name. Logged in approvals_audit.jsonl.",
+     "inputSchema": {"type": "object", "required": ["bom", "part", "decision", "user"],
+                     "properties": {"bom": {"type": "string"}, "part": {"type": "string"},
+                                    "decision": {"type": "string", "enum": ["approve", "reject"]},
+                                    "user": {"type": "string"}, "role": {"type": "string"},
+                                    "comment": {"type": "string"}}}},
+    {"name": "find_duplicates",
+     "description": "Find duplicate parts (same MPN once packaging suffixes are stripped), footprints (same pad "
+                    "geometry) and symbols (same pinout) across the librarian's plan and the workspace's altium_models/ "
+                    "and footprints/. Each group has a recommended keeper. merge=true rewrites the plan to the keepers "
+                    "(duplicates are then skipped by push; library files are never changed): only when the user asks.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "merge": {"type": "boolean", "default": False}}}},
     {"name": "build_altium_models",
      "description": "Write the Altium .PcbLib files for a BOM's footprints that are in the KiCad libraries, plus generic "
                     "Resistor/Capacitor .SchLib symbols, into the workspace altium_models/ folder.",
@@ -110,8 +156,28 @@ def call_tool(ws, name, args):
             r.pop("log", None)
             return r
         if name == "release_check":
-            r = ws.release_check(args["bom"], args.get("allow") or [], args.get("unallow") or [])
+            r = ws.release_check(args["bom"], args.get("allow") or [], args.get("unallow") or [], args.get("user"))
             r.pop("log", None)
+            return r
+        if name == "held_parts":
+            return ws.held_parts(args["bom"])
+        if name == "part_candidates":
+            return ws.part_candidates(args["bom"], args["part"], args.get("kind"), args.get("limit") or 10)
+        if name == "choose_part":
+            r = ws.choose_part(args["bom"], args["part"], args["kind"], args["candidate_id"], args.get("pin_map") or None)
+            r.pop("log", None)
+            return r
+        if name == "approval_status":
+            return ws.approval_status(args["bom"])
+        if name == "approve_part":
+            r = ws.approve_part(args["bom"], args["part"], args["decision"], args["user"], args.get("role"),
+                                args.get("comment") or "")
+            r.pop("log", None)
+            return r
+        if name == "find_duplicates":
+            r = ws.find_duplicates(args["bom"], args.get("merge") is True)
+            if "summary" in r:
+                r["summary"].pop("log", None)
             return r
         if name == "build_altium_models":
             return ws.build_altium_models(args["bom"])
