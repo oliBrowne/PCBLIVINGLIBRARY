@@ -16,6 +16,7 @@
     ecadlib approve   plan.json approve|reject|status [--part P]   sign-off before altium365 push
     ecadlib dedupe    plan.json [--lib ...] [--merge]  duplicate parts, footprints and symbols
     ecadlib sourcing  BOM [--qty N] [--alternates] price, stock, second sources and alternates per BOM line
+    ecadlib step-gen  SPEC.json|FOOTPRINT -o x.step   package-shaped 3D model (STEP); --check FILE.step validates
 
 `ecadlib <command> -h` shows that command's options."""
 import importlib, sys
@@ -38,6 +39,7 @@ COMMANDS = {
     "approve": ("ecadlib.approvals", "approve / reject plan items before release"),
     "dedupe": ("ecadlib.dedupe", "find and merge duplicate parts, footprints and symbols"),
     "sourcing": ("ecadlib.sourcing", "price, stock, second sources and alternates for a BOM"),
+    "step-gen": ("ecadlib.step_gen", "package-shaped STEP 3D models from a package spec or footprint name"),
 }
 
 

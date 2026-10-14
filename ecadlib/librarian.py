@@ -2,7 +2,7 @@
 models and the altium365 plan, run the release check, and stop with a review list.
 
     python3 -m ecadlib.librarian examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints -o out/librarian \
-        [--sources kicad,easyeda,datasheet] [--allow PART] [--refresh [PART ...]] [--refresh-index] [--offline]
+        [--sources kicad,easyeda,datasheet] [--allow PART] [--box] [--refresh [PART ...]] [--refresh-index] [--offline]
 
 Per plan item (one per unique part), parts the triage found in a --lib library are converted from there; for
 anything still missing, the sources are tried in --sources order, each filling only what is still missing:
@@ -16,6 +16,7 @@ anything still missing, the sources are tried in --sources order, each filling o
   easyeda    LCSC number (BOM, or found by MPN in triage) -> EasyEDA component JSON -> easyeda_convert -> KiCad text
   datasheet  datasheet URL (BOM column, KiCad symbol, EasyEDA/LCSC link) + ANTHROPIC_API_KEY -> ecadlib.datasheet;
              the result is marked `verify` so release_check holds it until a person has looked (or --allow)
+Footprints without a KiCad STEP model get a package-shaped STEP from step_gen embedded (--box: extruded box).
 Everything is converted through kicad_import into <out>/models/{SchLib,PcbLib} (plus the .kicad_mod in
 <out>/models/KiCad for footprint_check). Outputs: <out>/plan.json (each item records `source`, `librarian.tried`
 and the release-check result), <out>/review.{md,csv}, <out>/release_check.{md,csv}, <out>/triage.{md,csv}.
@@ -166,12 +167,12 @@ def _line_for(item, lines, rows):
 
 
 class Run:
-    def __init__(self, out, http, index, libs, sources, api_key=None, kicad_cache=None, refresh_index=False):
+    def __init__(self, out, http, index, libs, sources, api_key=None, kicad_cache=None, refresh_index=False, gen_step=True):
         self.out, self.http, self.index, self.libs, self.sources = Path(out), http, index, libs, sources
         self.models = self.out / "models"
         for d in ("PcbLib", "SchLib", "KiCad"):
             (self.models / d).mkdir(parents=True, exist_ok=True)
-        self.api_key, self.written = api_key, {}
+        self.api_key, self.written, self.gen_step = api_key, {}, gen_step
         self._kicad, self._kicad_args = None, (kicad_cache, refresh_index)
 
     def kicad(self):
@@ -183,7 +184,7 @@ class Run:
         return os.path.relpath(p, self.out)
 
     # ---- writers: everything goes through kicad_import's converters
-    def put_fp(self, st, text, name, source, http=None, height=None, height_src=""):
+    def put_fp(self, st, text, name, source, http=None, height=None, height_src="", spec=None):
         stem = AL.file_stem(name)
         pcb = self.models / "PcbLib" / f"{stem}.PcbLib"
         if str(pcb) in self.written:
@@ -192,10 +193,8 @@ class Run:
         notes = []
         fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes)
         try:
-            K.add_body(fp, t, http, height, False, notes)
-            if height and notes[-1].endswith("(default table)"):     # a part-specific height beats the table
-                fp["bodies"][-1]["height"] = fp["height_mm"] = height
-                notes[-1] = re.sub(r"height .* mm \(default table\)", f"height {height} mm ({height_src})", notes[-1])
+            K.add_body(fp, t, http, height, False, notes, gen_step=self.gen_step, spec=spec,      # a part-specific
+                       height_src=(height_src or "caller") if height else None)                      # height beats the table
         except ValueError as e:
             notes.append(f"no 3D body: {e}")
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
@@ -377,7 +376,7 @@ class Run:
         if not st["footprint"]:
             text, _ = F.build(res["spec"])
             h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
-            self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max")
+            self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
             got.append("footprint")
         if not st["symbol"]:
             self.put_sym(st, AL.symbol_from_json(dict(res["symbol"], name=sym_name, footprint=fp_name)), f"datasheet:{url}")
@@ -458,7 +457,7 @@ def write_review(rows, out, bom):
 
 
 def run(bom, libs=(), out="out/librarian", sources=SOURCES, refresh=None, refresh_index=False, allow=(), offline=False,
-        cache="out/http_cache", rate=0.5, providers="jlcpcb_search,easyeda", http=None, api_key=None, log=print):
+        cache="out/http_cache", rate=0.5, providers="jlcpcb_search,easyeda", http=None, api_key=None, log=print, gen_step=True):
     """Whole pipeline; returns the plan items. refresh: None = resume, [] = redo all, [names] = redo those."""
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     http = http or CachedHTTP(cache, min_interval=rate, offline=offline, timeout=60)
@@ -474,7 +473,7 @@ def run(bom, libs=(), out="out/librarian", sources=SOURCES, refresh=None, refres
     state_f, plan_f = out / "librarian_state.json", out / "plan.json"
     state = json.loads(state_f.read_text()) if state_f.exists() else {}
     old = {i["name"]: i for i in json.loads(plan_f.read_text())} if plan_f.exists() else {}
-    r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index)
+    r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step)
     todo = []
     for it in items:
         ln, row = _line_for(it, lines, rows)
@@ -525,9 +524,10 @@ def main(argv=None):
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--rate", type=float, default=0.5, help="min seconds between requests per host")
+    ap.add_argument("--box", action="store_true", help="extruded 3D box instead of a generated STEP when there is no KiCad model")
     a = ap.parse_args(argv)
     items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s], a.refresh, a.refresh_index, a.allow,
-                a.offline, a.cache, a.rate, a.providers)
+                a.offline, a.cache, a.rate, a.providers, gen_step=not a.box)
     held = sum(i["status"] != "ready" for i in items)
     print(f"{len(items)} parts: {len(items) - held} ready, {held} held -> {Path(a.out) / 'plan.json'}; review {Path(a.out) / 'review.md'}")
     return 2 if held else 0
