@@ -327,6 +327,32 @@ def test_self_check_flags_disagreements():
     assert review == [], review
 
 
+def test_new_families_flow_through_to_spec():
+    """package_schema.json gains families in parallel (bga, pin_header, connector, custom): every new key reaches the
+    spec, plain numbers are read as printed and converted, number-holding objects are flagged, NEED is per family."""
+    sch = copy.deepcopy(D.SCHEMA)
+    sch["properties"]["package_type"]["enum"] += ["bga", "connector"]
+    for k, v in (("rows", {"type": "integer"}), ("cols", {"type": "integer"}), ("row_letters", {"type": "array", "items": {"type": "string"}}),
+                 ("pitch_y", {"type": "number", "description": "row pitch"}), ("mount", {"enum": ["smd", "tht"]}),
+                 ("pad_table", {"type": "object", "description": "pads"})):
+        sch["properties"][k] = v
+    nums = D.NUM_DIMS + ["pitch_y"]
+    with mock.patch.object(D, "SCHEMA", sch), mock.patch.object(D, "NUM_DIMS", nums):
+        assert "pitch_y" in D.output_schema()["properties"]["package"]["properties"]
+        pkg = {"name": "BGA-64_8x8mm_P0.8mm", "description": "", "package_type": "bga", "unresolved": [], "drawing": "ZAW",
+               "pitch": TD.dim("e", None, 0.8, None), "pitch_y": TD.dim("e1", None, 31.5, None, "mil"), "rows": 8, "cols": 8,
+               "row_letters": list("ABCDEFGH"), "mount": "smd", "pad_table": {"unit": "mm", "pads": [{"num": "A1", "x": 0, "y": 0}]},
+               "body_length": TD.dim("D", 7.9, 8.0, 8.1), "body_width": TD.dim("E", 7.9, 8.0, 8.1)}
+        review = []
+        spec, prov = D.to_spec(pkg, "P", "u", "m", 0, review)
+        assert spec["rows"] == 8 and spec["row_letters"][0] == "A" and spec["mount"] == "smd" and spec["pad_table"]["unit"] == "mm"
+        assert abs(spec["pitch_y"] - 0.8001) < 1e-3 and prov["pitch_y"]["converted"].startswith("mil")
+        assert any(r.startswith("pad_table: copied") for r in review) and not any(r.startswith(("rows", "mount")) for r in review), review
+        assert spec["unresolved"] == ["ball_diameter or land_diameter"], spec.get("unresolved")
+        spec, _ = D.to_spec(dict(pkg, package_type="connector", body_length=None, body_width=None, pad_table=None), "P", "u", "m", 0, [])
+        assert spec["unresolved"] == ["pad_table"], spec["unresolved"]          # no body needed, pad_table is
+
+
 # ---------------------------------------------------------------- cache + estimate
 def test_result_cache_makes_reruns_free():
     api = FakeAPI()
