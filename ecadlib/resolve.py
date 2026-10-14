@@ -23,7 +23,7 @@ choose(plan, part, kind, id, src=..., pin_map=...)."""
 import argparse, fnmatch, json, math, os, re, sys
 from pathlib import Path
 
-from . import altium_lib as AL, footprint_gen as F, kicad_import as K, librarian as L, release_check as RC, sexpr
+from . import altium_lib as AL, footprint_gen as F, kicad_import as K, librarian as L, release_check as RC, rules as RU, sexpr
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex, _body, norm_mpn, package_of
 
@@ -161,9 +161,10 @@ def item_pads(item, base):
 
 
 # ---------------------------------------------------------------- loading a candidate
-def load(cid, kind, src):
+def load(cid, kind, src, rules=None):
     """Candidate id -> (KiCad text or symbol chain, extra) without writing anything.
-    symbol: (chain, None); footprint: (kicad_mod text, height_mm or None)."""
+    symbol: (chain, None); footprint: (kicad_mod text, height_mm or None). rules: the library rules (IPC density
+    for spec: candidates); None = ecadlib's own."""
     origin, _, ref = cid.partition(":")
     if kind == "symbol":
         if origin == "kicad":
@@ -187,7 +188,7 @@ def load(cid, kind, src):
             return Path(hit["path"]).read_text(), (F.dim(hm)[2] if hm else None)
         if origin == "spec":
             spec = json.loads((src.specs / f"{ref}.json").read_text())
-            return F.build(spec)[0], (F.dim(spec["height_max"])[2] if spec.get("height_max") else None)
+            return F.build(spec, RU.density_for(spec, rules or RU.DEFAULTS))[0], (F.dim(spec["height_max"])[2] if spec.get("height_max") else None)
     raise ValueError(f"unknown {kind} candidate id {cid!r} (use kicad:Lib:Name, local:Lib:Name or spec:Name)")
 
 
@@ -383,9 +384,10 @@ def show(plan, part):
 
 def _write(item, kind, cid, src, base, pin_map=None):
     """Convert candidate `cid` into <base>/models like the librarian; returns the librarian-style half record."""
-    r = L.Run(base, src.http, None, src.libs, [])
+    rules = RU.load(None, start=base)              # the house rules (layers, density), as the librarian uses them
+    r = L.Run(base, src.http, None, src.libs, [], rules=rules)
     st = {"name": item["name"], "symbol": None, "footprint": None}
-    got, height = load(cid, kind, src)
+    got, height = load(cid, kind, src, rules)
     if kind == "footprint":
         r.put_fp(st, got, item["footprint"]["ref"], cid, src.http if cid.startswith("kicad:") else None, height, "package spec")
     else:
