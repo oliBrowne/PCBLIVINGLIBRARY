@@ -499,6 +499,8 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
                         (shapes / fn).write_text(data)
                         rep["models"][fn] = f"kicad-packages3D/{src3d}"
                         rep["kicad_content"] = True
+                    elif (shapes / fn).is_file():     # put there by hand or by an earlier export: keep it
+                        rep["models"][fn] = f"{lib}.3dshapes/{fn} (existing file kept)"
                     else:
                         rep["models"][fn] = None
                         fnotes.append(f"STEP {fn} not available offline: put it in {lib}.3dshapes/")
