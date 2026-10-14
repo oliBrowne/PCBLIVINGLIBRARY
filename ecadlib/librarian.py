@@ -488,7 +488,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     state_f, plan_f = out / "librarian_state.json", out / "plan.json"
     state = json.loads(state_f.read_text()) if state_f.exists() else {}
     old = {i["name"]: i for i in json.loads(plan_f.read_text())} if plan_f.exists() else {}
-    items, in_ws = A365S.reuse_existing(items, list(old.values()))     # parts `ecadlib a365 pull` found in the workspace
+    items, in_ws = A365S.reuse_existing(items, list(old.values()), rules)  # parts `ecadlib a365 pull` found in the workspace
     r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step, rules)
     todo = []
     for it in items:
