@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 dependencies = ["requests", "pandas", "openpyxl", "jsonschema"]
 
 [project.optional-dependencies]
-dev = ["olefile", "graphql-core"]
+dev = ["olefile", "graphql-core", "pyaltiumlib", "pypdf"]
 
 [project.scripts]
 ecadlib = "ecadlib.cli:main"
