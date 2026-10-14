@@ -70,7 +70,7 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --title "ecadlib ${GITHUB_REF_NAME#v}" --notes-file release-notes.md \
-            $([[ "$GITHUB_REF_NAME" == *[abc]* ]] && echo --prerelease)
+            $([[ "$GITHUB_REF_NAME" == *[abc]* || "$GITHUB_REF_NAME" == *dev* ]] && echo --prerelease)
 
   pypi:
     needs: build
