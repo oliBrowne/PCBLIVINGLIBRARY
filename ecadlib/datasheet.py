@@ -25,6 +25,8 @@ SCHEMA = json.loads(Path(F.__file__).with_name("package_schema.json").read_text(
 DIMS = [k for k, v in SCHEMA["properties"].items() if v.get("$ref") == "#/$defs/dim"]
 NUM_DIMS = ["pitch", "height_max"]                    # plain numbers in the schema, still read as printed
 SKIP = {"density", "model_3d", "source"}              # set by us, never by the model
+PASS = ("lead_type", "polarized")                     # copied through as given
+MM_OBJS = ("pin_positions", "tab", "land")            # numbers the model must give in mm: copied, always flagged for review
 
 
 class DatasheetError(Exception):
@@ -52,8 +54,19 @@ RAW_DIM = _obj({"label": {"type": "string", "description": "the drawing's symbol
 
 
 def _strip(s):
-    """Schema keywords structured outputs does not take (checked locally against package_schema.json instead)."""
-    return {k: v for k, v in s.items() if k not in ("pattern", "minimum", "maximum", "default", "exclusiveMinimum")}
+    """Schema keywords structured outputs does not take (checked locally against package_schema.json instead).
+    Recursive; nested objects get every property required, optional ones nullable (strict-mode shape)."""
+    if isinstance(s, list):
+        return [_strip(x) for x in s]
+    if not isinstance(s, dict):
+        return s
+    out = {k: _strip(v) for k, v in s.items()
+           if k not in ("pattern", "minimum", "maximum", "default", "exclusiveMinimum", "minItems", "maxItems")}
+    if out.get("type") == "object" and "properties" in out:
+        req = set(s.get("required", []))
+        out["properties"] = {k: v if k in req else _null(v) for k, v in out["properties"].items()}
+        out["required"], out["additionalProperties"] = list(out["properties"]), False
+    return out
 
 
 def output_schema():
@@ -67,10 +80,10 @@ def output_schema():
             ep = v["properties"]
             props[k] = _null(_obj({d: _null(dict(RAW_DIM, description=ep[d]["description"])) for d in ("length", "width")},
                                   "Exposed/thermal pad; null if the package has none"))
-        elif v.get("type") == "integer":
-            props[k] = _null(_strip(v))
-        else:
+        elif k in SCHEMA.get("required", []):
             props[k] = _strip(v)
+        else:
+            props[k] = _null(_strip(v))
     props["drawing"] = {"type": "string", "description": "package drawing code, e.g. RGT0016C or MS-012AC"}
     pin = _obj({"num": {"type": "string", "description": "pin number; exposed pad = pin_count + 1"},
                 "name": {"type": "string"}, "type": {"enum": sorted(AL.ETYPE)}, "side": {"enum": list(AL.ORIENT)},
@@ -244,6 +257,12 @@ def to_mm(key, raw, offset, prov, review):
     return vals or None
 
 
+def _drop_nulls(v):
+    if isinstance(v, dict):
+        return {k: _drop_nulls(x) for k, x in v.items() if x is not None}
+    return [_drop_nulls(x) for x in v] if isinstance(v, list) else v
+
+
 def to_spec(pkg, part, datasheet, model, offset, review):
     spec, prov, unres = {"name": pkg["name"], "description": pkg["description"] or f"{part} package",
                          "package_type": pkg["package_type"]}, {}, list(pkg["unresolved"])
@@ -267,6 +286,13 @@ def to_spec(pkg, part, datasheet, model, offset, review):
     if pkg.get("exposed_pad"):
         ep = {d: to_mm(f"exposed_pad.{d}", pkg["exposed_pad"][d], offset, prov, review) for d in ("length", "width")}
         spec["exposed_pad"] = {d: v for d, v in ep.items() if v}
+    for k in PASS:
+        if pkg.get(k) is not None:
+            spec[k] = pkg[k]
+    for k in MM_OBJS:
+        if pkg.get(k) is not None:
+            spec[k] = _drop_nulls(pkg[k])
+            review.append(f"{k}: values were asked for in mm with no per-value unit or page; check them against the drawing")
     pages = [v["page"] for k, v in prov.items()]
     spec["source"] = {"datasheet": datasheet, "drawing": pkg["drawing"], "extracted_by": f"ecadlib.datasheet ({model})"}
     if pages:
