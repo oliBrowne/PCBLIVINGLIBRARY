@@ -1,0 +1,30 @@
+# Bring your own certificate: ecadlib serves HTTPS itself (--cert/--key), no Caddy.
+#   docker compose -f docker-compose.yml -f docker-compose.own-cert.yml up -d
+# (`python3 -m ecadlib team setup --own-cert DIR` puts this pair in COMPOSE_FILE in .env, so plain `docker compose` works.)
+# DIR holds cert.pem (full chain) and key.pem; the container runs as uid 10001, so: chown 10001 DIR/key.pem.
+services:
+  caddy:
+    profiles: ["proxy"]        # not started in this mode
+  ecadlib:
+    command:
+      - ui
+      - --team
+      - --workspace
+      - /data/workspace
+      - --lib
+      - /data/libs
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8765"
+      - --no-browser
+      - --cert
+      - /certs/cert.pem
+      - --key
+      - /certs/key.pem
+      - --allowed-host
+      - ${ECADLIB_DOMAIN:?run "python3 -m ecadlib team setup" or set ECADLIB_DOMAIN in .env}
+    ports:
+      - "${ECADLIB_HTTPS_PORT:-443}:8765"
+    volumes:
+      - ${ECADLIB_CERT_DIR:-./certs}:/certs:ro

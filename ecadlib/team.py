@@ -5,6 +5,7 @@
     ecadlib team reset-password bob [--password-stdin]
     ecadlib team remove bob
     ecadlib team list
+    ecadlib team setup [--domain D] [--admin NAME]    Docker Compose + Caddy (HTTPS), first admin, start (team_setup.py)
     (all take --workspace DIR, default ecadlib_workspace; then: ecadlib ui --team --host 0.0.0.0 --cert c.pem --key k.pem)
 
 Files in the workspace (never served by /api/file):
@@ -405,7 +406,12 @@ def _read_password(a, prompt="password"):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="ecadlib team", description="manage web UI team users (ecadlib ui --team)")
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["setup"]:                         # Docker Compose + Caddy for the whole team (team_setup.py)
+        from . import team_setup
+        return team_setup.main(argv[1:])
+    ap = argparse.ArgumentParser(prog="ecadlib team", description="manage web UI team users (ecadlib ui --team)",
+                                 epilog="ecadlib team setup -h: run the team server with Docker and HTTPS in one command")
     ap.add_argument("--workspace", default="ecadlib_workspace")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("add-user", help="add a user (the first one must be an admin)")

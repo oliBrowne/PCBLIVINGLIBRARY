@@ -35,7 +35,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ecadlib ui --lib path/to/your/kicad/libs
    ```
 
-   A browser tab opens at `http://127.0.0.1:8765`. To share one server with the whole team, with sign-in and roles, see **Team server** below.
+   A browser tab opens at `http://127.0.0.1:8765`. To share one server with the whole team, with sign-in and roles, see **Team server** below; `python3 -m ecadlib team setup` runs it with Docker and HTTPS in one command (**Run it for your team**).
    * **Check a BOM:** drop in a CSV or XLSX, whether it's an Altium BOM, an Altium ActiveBOM, a KiCad BOM or a hand-made spreadsheet. A progress bar runs while parts are looked up. You then get a table of what is already in your library, what a part source can supply, what needs a footprint, and what is DNP. You can filter it by status or by search.
    * **Fill the library:** one button runs the librarian on the BOM. It finds each missing symbol and footprint (official KiCad libraries, then EasyEDA, then the datasheet reader), writes the Altium files, and runs the release check. Each part shows where its symbol and footprint came from and what still needs a person. Parts that fail the check are held back from Altium 365; **Release anyway…** overrides that after you have looked (it is recorded in the plan), and **Hold again** takes it back.
 
@@ -125,6 +125,55 @@ ecadlib ui --team --workspace /srv/ecadlib --lib /srv/kicad-libs --host 0.0.0.0 
 ![Users page](docs/ui-team-admin.png)
 
 Tests: `python3 -m tests.test_team` runs a real HTTP(S) server on a free port. It covers sign-in and sign-out, lockout, CSRF, Origin and Host checks, every route against every role, approvals taking identity from the session, path containment, per-user jobs, the SSO header, the admin API and TLS with a self-signed certificate made by `openssl` (skipped when `openssl` is missing).
+
+### Run it for your team (Docker, one command)
+
+On a machine with Docker (with the compose plugin) and Python 3.10+, from this checkout:
+
+```
+python3 -m ecadlib team setup          # or: scripts/team-setup.sh   (no pip install needed)
+```
+
+It asks for the address people will use and the first admin's user name, name, e-mail and password (typed without echo). Everything can be given as flags for scripts: `--domain`, `--admin`, `--name`, `--email`, `--password-stdin` (one line on stdin), `--http-port`, `--https-port`; `-h` lists them. It then:
+
+* writes `.env` next to `docker-compose.yml` (mode 0600). It holds the domain, the TLS mode and the ports. It holds no password and no API keys.
+* builds the image from this checkout (`Dockerfile`: `python:3.13-slim`, runs as uid 10001, health check, no secrets in the image). With `--image ghcr.io/olibrowne/pcblivinglibrary:X.Y.Z` it pulls a published image instead.
+* creates the first admin in the `ecadlib-data` volume. The password goes to `ecadlib team add-user --password-stdin` on a pipe. It is never written to a file, put on a command line or printed. If an admin already exists, the setup asks for nothing.
+* starts **ecadlib + Caddy** with `docker compose up -d --wait` and prints the URL.
+
+How HTTPS is set up depends on the address:
+
+| Address | TLS |
+| --- | --- |
+| a public name (`ecadlib.example.com`) | Let's Encrypt, through Caddy. The name must resolve to the machine, and ports 80 and 443 must be reachable. The ACME e-mail defaults to the admin's. |
+| an IP address, a one-word name or `.lan`/`.local`/`.internal`/`.home.arpa` | Caddy's own CA (`--tls internal`). Browsers warn until they trust it. Export the CA with `docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ecadlib-ca.crt` and install it on each computer. |
+| your own certificate | `--own-cert DIR` with `DIR/cert.pem` (full chain) and `DIR/key.pem`. ecadlib serves TLS itself with `--cert/--key` and there is no Caddy (`docker-compose.own-cert.yml`). The container runs as uid 10001, so `chown 10001 DIR/key.pem`. |
+
+Running the setup again is safe. `.env` keeps its values unless a flag changes them, an existing admin is left alone, and compose only recreates what changed. To switch modes, run it again with the new `--tls`, `--own-cert` or `--domain`.
+
+**How the proxy is trusted.** ecadlib publishes no port of its own. It listens on plain HTTP (`--allow-http`) on the private `ecadlib-net` network only. Caddy has a fixed address there (`ECADLIB_PROXY_IP`, default 172.30.87.2). Other containers get addresses from a separate range, so they can never take Caddy's address. ecadlib is started with `--trusted-proxy` set to exactly that address and `--allowed-host` set to your domain. So it believes `X-Forwarded-For` and `X-Forwarded-Proto` (`Secure` cookies) from Caddy and from nothing else. Caddy drops any `X-Forwarded-User` header a client sends (the SSO header from the section above). If that subnet clashes with one of yours, set `ECADLIB_SUBNET`, `ECADLIB_IP_RANGE` and `ECADLIB_PROXY_IP` together in `.env`. Docker's port forwarding can hide client addresses behind the network gateway, depending on the host. When it does, the audit log shows the gateway's address, and the 30-failures-per-address lockout counts everyone together. The per-user lockout is not affected.
+
+**API keys and libraries.** Put `NEXAR_TOKEN=...`, `ANTHROPIC_API_KEY=...` and similar keys in `api-keys.env` next to `docker-compose.yml` (`chmod 600`; it is git-ignored and never copied into the image), then run `docker compose up -d`. KiCad libraries for `--lib` go in `/data/libs`: `docker compose cp ./kicad-libs/. ecadlib:/data/libs/`, then `docker compose restart ecadlib`.
+
+**Users.** After the first admin, manage users on the **Users** page, or with `docker compose run --rm ecadlib team --workspace /data/workspace add-user|reset-password|set-role|list ...`.
+
+**Back up `/data`.** Everything (users and password hashes, plans, reports, footprints, audit log, libraries) is in the `ecadlib-data` volume. Keep the backup private, because it contains the password hashes:
+
+```
+docker compose run --rm --no-deps -T --entrypoint tar ecadlib czf - -C /data . > ecadlib-data-$(date +%F).tgz
+# restore:
+docker compose stop ecadlib
+docker compose run --rm --no-deps -T --entrypoint tar ecadlib xzf - -C /data < ecadlib-data-YYYY-MM-DD.tgz
+docker compose start ecadlib
+```
+
+Caddy's certificates and its local CA are in the `caddy-data` volume. Back it up the same way (`--entrypoint tar caddy ... -C /data`) if you don't want browsers to have to trust a new local CA after a rebuild.
+
+**Upgrade.** Take a backup, then `git pull` and run `python3 -m ecadlib team setup` again: it rebuilds the image and recreates the containers, and the volumes stay. With a published image, run `python3 -m ecadlib team setup --image ghcr.io/olibrowne/pcblivinglibrary:NEW`. Sessions are kept in memory, so an upgrade signs everyone out.
+
+**Images.** `.github/workflows/docker.yml` builds the image and runs this whole stack on every pull request. The CI check runs `team setup`, runs it again, then signs in over HTTPS with curl through Caddy. A `v*` tag also publishes `ghcr.io/<owner>/<repo>:X.Y.Z` and `:X.Y` for amd64 and arm64. Nothing is published from branches or pull requests.
+
+Tests: `python3 -m tests.test_team_setup` runs the setup end to end against a stand-in `docker` command. It checks `.env` creation and mode, the admin in the "volume", that a second run changes nothing and asks nothing, that the password is on no command line and in no file, the TLS mode choice, and the proxy-trust wiring in the compose and Caddy files.
 
 Tests: `python3 -m tests.test_ui` covers the workspace, web server, MCP server and CLI. `python3 -m tests.test_offline` covers the core modules. `python3 -m tests.test_footprints` checks generated footprints by part type against KiCad's library and the KLC rules.
 

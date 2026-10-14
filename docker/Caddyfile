@@ -1,0 +1,24 @@
+# Caddy in front of the ecadlib team server (docker-compose.yml). Values come from .env:
+#   ECADLIB_DOMAIN  site name or IP address
+#   ECADLIB_TLS     an e-mail address (Let's Encrypt / ZeroSSL via ACME) or "internal" (Caddy's own CA)
+#   ECADLIB_HTTPS_PORT  HTTPS port (published 1:1 by docker-compose.yml; HTTP stays on 80 inside)
+{
+	admin off
+}
+
+{$ECADLIB_DOMAIN}:{$ECADLIB_HTTPS_PORT:443} {
+	tls {$ECADLIB_TLS}
+	encode gzip
+
+	reverse_proxy ecadlib:8765 {
+		# ecadlib believes the proxy user header (SSO) from Caddy's address (--trusted-proxy). Without an SSO
+		# layer in front, nobody may set it: drop any copy a client sends.
+		header_up -X-Forwarded-User
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+		-Server
+	}
+}
