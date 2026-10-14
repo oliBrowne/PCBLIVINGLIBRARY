@@ -562,9 +562,42 @@ class Workspace:
             from .approvals import load_policy
             policy = load_policy(self.inside(plan["plan"]).parent)
         results = A.push(plan["items"], client, workspace_url or "https://<workspace>", dry_run=dry_run, policy=policy)
+        if any(r.get("a365_updated") for r in results):
+            from .a365_sync import save_meta          # new revisions of pulled parts, so the next push is not a conflict
+            save_meta(self.inside(plan["plan"]), plan["items"])
         out = self.root / "altium365" / f"push_{'dry_run_' if dry_run else ''}{self._key(self._bom_path(bom))}.json"
         out.write_text(json.dumps(results, indent=2))
         return {"dry_run": dry_run, "results": results, "report": self.rel(out)}
+
+    # ------------------------------------------------------------------ two-way sync (ecadlib.a365_sync)
+    def _a365_plan(self, bom=None):
+        """The plan a pull writes into: the librarian plan of a BOM (so the librarian reuses workspace parts), or
+        altium365/workspace_plan.json for the whole workspace library."""
+        if bom:
+            f = self._librarian_dir(self._bom_path(bom)) / "plan.json"
+            f.parent.mkdir(parents=True, exist_ok=True)
+            return self.inside(self.rel(f))
+        return self.root / "altium365" / "workspace_plan.json"
+
+    def _a365_run(self, mode, workspace_url, bom=None, folders=None, client=None):
+        from . import a365_sync as S, altium365 as A
+        if not workspace_url:
+            raise ValueError("choose an Altium 365 workspace first")
+        r = S.run(mode, self._a365_plan(bom), client or A.Nexar(_nexar_token()), workspace_url,
+                  folders=folders or None, log=lambda *_: None)
+        return {"mode": mode, "summary": r["summary"], "conflicts": r["conflicts"], "unresolved": r["unresolved"],
+                "rows": [x for x in r["rows"] if x["status"] != "in_sync"], "components": len(r["components"]),
+                "plan": self.rel(r["plan"]), "state": self.rel(r["state"]) if mode != "status" else None,
+                "report": self.rel(r["report"])}
+
+    def a365_pull(self, workspace_url, bom=None, folders=None, client=None):
+        """Import the workspace's components into a plan (status `existing`), refresh ones pulled before, download
+        their .SchLib/.PcbLib. Changes local files only; conflicts are reported, not settled."""
+        return self._a365_run("pull", workspace_url, bom, folders, client)
+
+    def a365_status(self, workspace_url, bom=None, client=None):
+        """Read-only comparison of the plan with the workspace (new, changed on either side, conflicts, deleted)."""
+        return self._a365_run("status", workspace_url, bom, None, client)
 
     def example_specs(self):
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data
