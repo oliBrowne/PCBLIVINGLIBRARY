@@ -12,12 +12,15 @@ Output: <out>/PcbLib/<name>.PcbLib and <out>/SchLib/<name>.SchLib, the layout `a
 Footprints: SMD, plated and non-plated through-hole pads (round and slotted drills), rect / roundrect / oval /
 circle pads, trapezoid and custom pads approximated by their bounding rectangle, pad rotation, fp_line / fp_rect /
 fp_poly / fp_circle / fp_arc on silkscreen, fab (Mechanical 13), courtyard (Mechanical 15), F.Cu, F.Mask, F.Paste.
-Not converted (listed in the notes): text, zones, per-pad mask margins, drill offsets, pin-graphic styles.
+Reference / Value text become .Designator (Top Overlay) / .Comment (Mechanical 13).
+Not converted (listed in the notes): user text, zones, per-pad mask margins, drill offsets.
 3D: an extruded ComponentBody on Mechanical 13 over the fab outline (else the courtyard), its height from the
 KiCad STEP model (max z after the model transform), else DEFAULT_HEIGHT, else --height. --step embeds the STEP
 model itself (Library/Models, AltiumSharp layout and checksum) when the KiCad model has no offset or rotation.
-Symbols: pins (number, name, type, orientation, length, hidden), rectangles, polylines, circles, arcs, text,
-multi-unit symbols as Altium multi-part, `extends` chains; Value/Footprint/Datasheet/Description/MPN as parameters.
+Symbols: pins (number, name, type, orientation, length, hidden, overbar names), rectangles, polylines, circles,
+arcs, text, pin shapes (inverted, clock, active-low ...) as Altium pin symbols, multi-unit symbols as Altium
+multi-part, De Morgan body styles as Altium display modes, `extends` chains; Value/Footprint/Datasheet/Description/MPN
+as parameters.
 
 KiCad's libraries are CC-BY-SA 4.0 with a design-use exception: converted files are not committed (.gitignore)."""
 import argparse, json, math, re, sys
@@ -198,7 +201,7 @@ def convert_footprint(text, name=None, source="", notes=None):
     t = sexpr.parse(text)
     descr = (sexpr.first(t, "descr") or ["", ""])[1]
     fp = {"name": name or t[1], "description": AL.clean("; ".join(x for x in (descr, f"from {source} (CC-BY-SA 4.0)" if source else "") if x)),
-          "height_mm": 0.0, "pads": [], "tracks": [], "fills": [], "regions": [], "arcs": [], "bodies": []}
+          "height_mm": 0.0, "pads": [], "tracks": [], "fills": [], "regions": [], "arcs": [], "bodies": [], "texts": []}
     for p in sexpr.find(t, "pad"):
         _pad(fp, p, notes)
     skipped = {}
@@ -219,10 +222,13 @@ def convert_footprint(text, name=None, source="", notes=None):
             notes.append("zone without keep-out rules not converted"); continue
         fp["regions"].append((_pts(sexpr.first(sexpr.first(z, "polygon"), "pts")), AL.KEEPOUT, 31))
         notes.append("keep-out zone -> Keep-Out layer region (KiCad rules: " + ", ".join(f"{k} {v}" for k, v in rules.items()) + ")")
+    fp["texts"] = AL.texts_from_kicad(t)
+    if fp["texts"]:
+        notes.append("Reference -> .Designator (Top Overlay), Value -> .Comment (Mechanical 13)")
     for k in ("fp_text", "fp_text_box", "dimension", "image"):
-        n = len(list(sexpr.find(t, k)))
+        n = len([g for g in sexpr.find(t, k) if k != "fp_text" or g[1] not in AL.KTEXT])
         if n:
-            notes.append(f"{n} {k} not converted")
+            notes.append(f"{n} {'user ' if k == 'fp_text' else ''}{k} not converted")
     return fp, t
 
 
@@ -422,8 +428,10 @@ def _lw(w):
     return 1 if w <= 0.3 else 2 if w <= 0.6 else 3
 
 
-def _pin_text(s):                             # KiCad '~{RESET}' overbar -> Altium 'R\E\S\E\T\'
-    return "" if s == "~" else re.sub(r"~\{([^}]*)\}", lambda m: "".join(c + "\\" for c in m.group(1)), s)
+def _pin_text(s):                             # KiCad '~{RESET}' (KiCad 6: '~RESET~') overbar -> Altium 'R\E\S\E\T\'
+    if "~{" not in s and s != "~":
+        s = re.sub(r"~([^~]*)~?", lambda m: "~{" + m.group(1) + "}" if m.group(1) else "~", s)
+    return AL.overline(s)
 
 
 def _props(chain):
@@ -435,7 +443,8 @@ def _props(chain):
 
 
 def convert_symbol(chain, name=None, footprint=None, extra=(), pin_map=None, notes=None):
-    """[symbol, parent, ...] -> altium_lib symbol dict. Units become Altium parts; De Morgan bodies are dropped."""
+    """[symbol, parent, ...] -> altium_lib symbol dict. Units become Altium parts, De Morgan body styles
+    (`_U_2` sub-symbols) Altium display modes; unit 0 / style 0 items go into every part / mode."""
     notes = [] if notes is None else notes
     base, props = chain[-1], _props(chain)
     hide_names = _hidden(sexpr.first(base, "pin_names") or [])
@@ -443,27 +452,31 @@ def convert_symbol(chain, name=None, footprint=None, extra=(), pin_map=None, not
     units = {}
     for sub in sexpr.find(base, "symbol"):
         u, style = (int(v) for v in sub[1].rsplit("_", 2)[1:])
-        if style > 1:
-            _note(notes, f"unit {u} body style {style} (De Morgan) dropped"); continue
-        units.setdefault(u, []).extend(sub[2:])
-    n = max([u for u in units if u > 0] or [1])
-    prims, parts, pins_at = [], [], {}
-    pin_nodes = [(u, it) for u, items in units.items() for it in items if isinstance(it, list) and it[0] == "pin"]
-    for u, it in pin_nodes:
-        if not _hidden(it):
-            at = sexpr.first(it, "at"); pins_at.setdefault((u, at[1], at[2]), True)
-    for u in sorted(units):
-        for it in units[u]:
+        style = int((sexpr.first(sub, "body_style") or [0, style])[1])
+        units.setdefault((u, style), []).extend(sub[2:])
+    n = max([u for u, _ in units if u > 0] or [1])
+    nm = max([st for _, st in units if st > 0] or [1])
+    prims, parts, modes, pins_at = [], [], [], {}
+    for (u, st), items in units.items():
+        for it in items:
+            if isinstance(it, list) and it[0] == "pin" and not _hidden(it):
+                at = sexpr.first(it, "at"); pins_at.setdefault((u, st, at[1], at[2]), True)
+    for u, st in sorted(units):
+        for it in units[(u, st)]:
             if not isinstance(it, list):
                 continue
             for part in (range(1, n + 1) if u == 0 else [u]):
-                pr = _sym_prim(it, hide_names, hide_nums, pins_at, u, pin_map or {}, notes)
-                if pr:
-                    prims.append(pr); parts.append(part)
+                for mode in (range(nm) if st == 0 else [st - 1]):
+                    pr = _sym_prim(it, hide_names, hide_nums, pins_at, (u, st), pin_map or {}, notes)
+                    if pr:
+                        prims.append(pr); parts.append(part); modes.append(mode)
     if n > 1:
         notes.append(f"{n} units written as {n} Altium parts")
-    xs = [v for pr in prims if pr[0] != "pin" for v in _prim_xs(pr)[0]] + [pr[3] for pr in prims if pr[0] == "pin"]
-    ys = [v for pr in prims if pr[0] != "pin" for v in _prim_xs(pr)[1]] + [pr[4] for pr in prims if pr[0] == "pin"]
+    if nm > 1:
+        notes.append(f"De Morgan body style written as Altium display mode 1 ({nm} display modes)")
+    norm = [pr for pr, m in zip(prims, modes) if not m]                 # labels placed from the normal view
+    xs = [v for pr in norm if pr[0] != "pin" for v in _prim_xs(pr)[0]] + [pr[3] for pr in norm if pr[0] == "pin"]
+    ys = [v for pr in norm if pr[0] != "pin" for v in _prim_xs(pr)[1]] + [pr[4] for pr in norm if pr[0] == "pin"]
     left, top, bot = min(xs or [0]), max(ys or [0]), min(ys or [0])
     ref = props.get("Reference", "U")
     keep = [("KiCad Footprint" if k == "Footprint" else k, props.get(k, "")) for k in ("Value", "Footprint", "Datasheet", "Description", "MPN")]
@@ -471,7 +484,7 @@ def convert_symbol(chain, name=None, footprint=None, extra=(), pin_map=None, not
     params = list({k: (k, v) for k, v in params}.values())         # extra overrides
     return {"name": name or chain[0][1], "description": props.get("Description", ""), "designator": ref if ref.endswith("?") else ref + "?",
             "comment": "*", "footprint": footprint or (props.get("Footprint", "").split(":")[-1] or None), "prims": prims,
-            "prim_parts": parts, "parts": n, "params": params, "label_at": ((left, top + 3), (left, bot - 8))}
+            "prim_parts": parts, "parts": n, "prim_modes": modes, "modes": nm, "params": params, "label_at": ((left, top + 3), (left, bot - 8))}
 
 
 def _prim_xs(pr):
@@ -522,7 +535,14 @@ def _sym_prim(it, hide_names, hide_nums, pins_at, unit, pin_map, notes):
         num = (sexpr.first(it, "number") or ["", ""])[1]
         name = _pin_text((sexpr.first(it, "name") or ["", ""])[1])
         hidden, p = _hidden(it), {"num": pin_map.get(num, num), "name": name, "type": KTYPE.get(etype, "passive")}
-        if hidden and (unit, at[1], at[2]) in pins_at:      # stacked on a visible pin: keep visible (Altium joins pins at one point)
+        shape = it[2] if isinstance(it[2], str) else "line"
+        if shape not in AL.PIN_SHAPE:
+            _note(notes, f"pin {num}: pin shape {shape} not converted")
+        elif shape != "line":
+            p["shape"] = shape
+            if shape == "edge_clock_high":
+                _note(notes, f"pin {num}: falling-edge clock written as clock + active-low input")
+        if hidden and (*unit, at[1], at[2]) in pins_at:      # stacked on a visible pin: keep visible (Altium joins pins at one point)
             p.update(show_name=False, show_num=False)
         elif hidden:
             p["hidden"] = True
@@ -536,7 +556,7 @@ def _sym_prim(it, hide_names, hide_nums, pins_at, unit, pin_map, notes):
         if a not in SIDE:
             raise ValueError(f"pin {num}: angle {a} not a multiple of 90")
         return ("pin", p, SIDE[(a + 180) % 360], gx, gy, round(_u(length)))
-    if k not in ("property", "text_box"):
+    if k not in ("property", "text_box", "body_style", "unit"):
         _note(notes, f"symbol item {k} not converted")
     return None
 
