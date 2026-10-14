@@ -256,7 +256,7 @@ def check_sourcing(src, state_dir, ctx, cfg, now):
             if pu and cu is not None and prev.get("currency", cur_ccy) == cur_ccy and cu > pu * (1 + pct / 100):
                 sec["changes"].append(_change("price jump", cur["mpn"], price(prev), price(cur),
                                               f"+{(cu / pu - 1) * 100:.0f}% (threshold {pct:g}%) at {r['need']} pcs"))
-        if cur["unit"] is None and prev:                     # an unpriced answer keeps the last known price
+        if cur["unit"] is None and prev and prev.get("currency", cur_ccy) == cur_ccy:   # unpriced: keep the last price
             cur.update(unit=prev.get("unit"), distributor=prev.get("distributor"))
         lines[key] = cur
     if unconf:
@@ -554,15 +554,27 @@ def publish_pr(rep, gh, runner=None, base=None, cwd=None):
     branch = f"ecadlib/upkeep-{rep['date'][:10]}"
     ident = [] if git("config", "user.email", ok=(0, 1)) else ["-c", "user.name=ecadlib-upkeep",
                                                                  "-c", "user.email=ecadlib-upkeep@users.noreply.github.com"]
+    # a same-day re-run replaces the branch: only ever overwrite what upkeep itself pushed there, never a person's
+    # commits (a fix pushed to the PR), and only if the remote is still where we looked (lease)
+    remote = git("ls-remote", "origin", f"refs/heads/{branch}")
+    remote_sha = remote.split()[0] if remote else ""
+    if remote_sha:
+        git("fetch", "--no-tags", "origin", f"refs/heads/{branch}")
+        theirs = [s for s in git("log", "--no-merges", "--format=%s", remote_sha, "--not", "HEAD").splitlines()
+                  if s.strip() and not s.startswith("ecadlib upkeep ")]
+        if theirs:
+            raise GitHubError(f"origin/{branch} has commits not made by upkeep ({theirs[0][:80]!r}): not overwriting "
+                              "them; merge or close that PR and delete the branch")
     git("switch", "-C", branch)
     try:
         git("add", "--", *paths)
         git(*ident, "commit", "-m", f"ecadlib upkeep {rep['date'][:10]}: reconvert KiCad parts changed upstream")
-        git("push", "--force", "-u", "origin", branch)
+        git("push", f"--force-with-lease=refs/heads/{branch}:{remote_sha}", "-u", "origin", branch)
     finally:
         git("switch", base, ok=(0, 1, 128))
     title, body = _title(rep), _body(rep)
-    prs = [p for p in gh.api("GET", "pulls?state=open&per_page=100") or [] if (p.get("head") or {}).get("ref") == branch]
+    prs = [p for p in gh.api("GET", "pulls?state=open&per_page=100") or [] if (p.get("head") or {}).get("ref") == branch
+           and ((p["head"].get("repo") or {}).get("full_name") or "") == (((p.get("base") or {}).get("repo") or {}).get("full_name") or "")]
     if prs:
         gh.api("PATCH", f"pulls/{prs[0]['number']}", {"title": title, "body": body})
         return {"kind": "pr", "action": "updated", "number": prs[0]["number"], "url": prs[0].get("html_url"), "branch": branch}
