@@ -9,6 +9,7 @@ Rules, per plan item:
   footprint footprint_check on the item's .kicad_mod: every error fails. Parts taken from the official KiCad
             library are held only for overlapping pads, a missing courtyard and a missing pin 1 (their other
             findings are reported as warnings). Without a .kicad_mod the same three are checked on the PcbLib.
+            Overlapping pads whose symbol pins share a name (USB-C A1/B12 = GND) are stacked on purpose: a warning.
   height    a 3D height is present and inside the plausible range for the package family (HEIGHTS)
   fields    Manufacturer, Manufacturer Part Number, a datasheet link and Description are filled in
   verify    the item carries `verify` notes (e.g. a datasheet-reader footprint): a person has to look first
@@ -75,21 +76,35 @@ def _pad_rects(pads):
     return out
 
 
-def _pcblib_minimal(fp):
+OVERLAP = re.compile(r"pads (\S+) and (\S+) overlap")
+
+
+def _same_net(msg, pin_names):
+    """True when an overlap message names two pads whose symbol pins share a name (e.g. USB-C A1/B12 = GND):
+    such pads are stacked on purpose and are connected anyway."""
+    m = OVERLAP.search(msg)
+    if not m:
+        return False
+    a, b = (pin_names.get(n, "").strip() for n in m.groups())
+    return bool(a) and a == b and a not in ("~", m.group(1), m.group(2))
+
+
+def _pcblib_minimal(fp, pin_names=None):
     """Overlap, courtyard and pin 1 from the PcbLib records (used when there is no .kicad_mod)."""
-    fails, pads = [], [r for r in fp["records"] if r["type"] == "pad"]
+    fails, warns, pads = [], [], [r for r in fp["records"] if r["type"] == "pad"]
     rects = _pad_rects([p for p in pads if p["hole"] == 0 or p["plated"]])
     for i, a in enumerate(rects):
         for b in rects[i + 1:]:
             if a[0] and a[0] == b[0] or a[5] or b[5]:
                 continue
             if abs(a[1] - b[1]) < (a[3] + b[3]) / 2 - 0.005 and abs(a[2] - b[2]) < (a[4] + b[4]) / 2 - 0.005:
-                fails.append(f"pads {a[0]} and {b[0]} overlap")
+                msg = f"pads {a[0]} and {b[0]} overlap"
+                (warns if _same_net(msg, pin_names or {}) else fails).append(msg)
     if not any(r["layer"] == AL.MECH15 for r in fp["records"] if r["type"] in ("track", "arc", "region")):
         fails.append("no courtyard (Mechanical 15)")
     if not _has_pin1({p["designator"] for p in pads}):
         fails.append("no pin 1 pad")
-    return fails
+    return fails, warns
 
 
 def _has_pin1(nums):
@@ -102,6 +117,7 @@ def check_item(item, base="."):
     add = lambda rule, msg: fails.append((rule, msg))
     sym_f, fp_f = _path(base, item["symbol"].get("file")), _path(base, item["footprint"].get("file"))
     syms = fps = None
+    pin_names = {}
     for kind, f, reader in (("symbol", sym_f, AL.read_schlib), ("footprint", fp_f, AL.read_pcblib)):
         if not f:
             add("files", f"no {kind} model (.{'SchLib' if kind == 'symbol' else 'PcbLib'})")
@@ -122,6 +138,7 @@ def check_item(item, base="."):
     # ---- pins vs pads
     if syms and fps:
         pins = {r["num"] for s in syms for r in s["records"] if r.get("RECORD") == "2"}
+        pin_names = {r["num"]: r.get("name", "") for s in syms for r in s["records"] if r.get("RECORD") == "2"}
         pads = [r for r in fps[0]["records"] if r["type"] == "pad"]
         if not pins:
             add("pins", "symbol has no pins")
@@ -150,12 +167,17 @@ def check_item(item, base="."):
         for lvl, rule, msg in issues:
             if rule == "pin1" and msg == "no pad numbered 1" and _has_pin1(nums):
                 continue                       # A1 counts as pin 1 (connectors, BGAs)
+            if rule == "copper" and "overlap" in msg and _same_net(msg, pin_names):
+                warns.append(f"{lvl} {rule}: {msg} (same pin name '{pin_names[OVERLAP.search(msg).group(1)]}': stacked on purpose)")
+                continue
             hard = lvl == "error" and (not kicad_lib or (rule == "copper" and "overlap" in msg) or
                                        (rule == "courtyard" and msg.startswith("no courtyard")) or (rule == "pin1" and "no pad" in msg))
             (add("footprint", f"{rule}: {msg}") if hard else warns.append(f"{lvl} {rule}: {msg}"))
     if not kmod and fps:
-        for m in _pcblib_minimal(fps[0]):
+        mf, mw = _pcblib_minimal(fps[0], pin_names)
+        for m in mf:
             add("footprint", m)
+        warns += [f"{m} (same pin name: stacked on purpose)" for m in mw]
         warns.append("no .kicad_mod: only overlap, courtyard and pin 1 checked (on the PcbLib)")
     # ---- 3D height
     if fps:

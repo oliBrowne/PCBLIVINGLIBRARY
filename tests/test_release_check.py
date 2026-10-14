@@ -96,6 +96,21 @@ def test_footprint_rules():
         assert f == ["footprint: courtyard: no courtyard on F.CrtYd"], f
 
 
+def test_stacked_same_net_pads():
+    """USB-C style: overlapping pads on symbol pins with the same name (GND) are a warning, not a hold."""
+    with tempfile.TemporaryDirectory() as d:
+        overlap = SOIC.replace('(pad "2" smd roundrect (at -2.4725 -0.635)', '(pad "2" smd roundrect (at -2.4725 -1.7)')
+        it = make(d, kmod=overlap, source="kicad:Package_SO:SOIC-8")
+        sym = AL.ic_symbol("PART1", [{"num": str(p), "name": "GND" if p <= 2 else f"P{p}", "type": "io", "side": "left"} for p in range(1, 9)])
+        AL.write_schlib(Path(d, it["symbol"]["file"]), [sym])
+        f, w = fails(it, d)
+        assert f == [] and any("pads 1 and 2 overlap" in x and "stacked on purpose" in x for x in w), (f, w)
+        Path(d, it["footprint"]["kicad_mod"]).unlink()                     # same rule on the PcbLib-only path
+        f, w = fails(it, d)
+        assert f == [] and any(x.startswith("pads 1 and 2 overlap") for x in w), (f, w)
+        assert fails(make(d, kmod=overlap), d)[0]                          # different pin names: still held
+
+
 def test_footprint_minimal_on_pcblib():
     with tempfile.TemporaryDirectory() as d:
         f, w = fails(make(d, keep_kmod=False), d)
