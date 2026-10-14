@@ -375,6 +375,68 @@ def test_rules_param_names_and_folders():
     assert S.component(n)["category"] == "Resistors" and S.component(n)["mpn"] == "R1"
 
 
+
+def _bom_item(params, sym_file=None, fp_file=None):
+    return {"name": "PART1", "folder": "Components/ICs", "description": "", "comment": "=Value",
+            "parameters": [{"name": k, "value": v} for k, v in params.items()], "cleared": [], "status": "ready",
+            "symbol": {"ref": "CH340C", "file": sym_file}, "footprint": {"ref": "SOIC-16", "file": fp_file}}
+
+
+def test_linked_item_compared_in_house_names_keeps_workspace_edit():
+    """A BOM item (ecadlib names) linked to a component in house names: a workspace edit is taken on pull, not
+    reported as a local change and then overwritten by push."""
+    from ecadlib import rules as RU
+    rules = RU.load({"parameters": {"names": {"Supplier 1": "Supplier"}}})
+    with tempfile.TemporaryDirectory() as d:
+        plan = Path(d) / "plan.json"
+        plan.write_text(json.dumps([_bom_item({"Supplier 1": "Digikey"})]))
+        ws = FakeA365([node("PART1", {"Supplier": "Digikey"})])
+        r = S.run("pull", plan, ws, WS, models=False, rules=rules, log=lambda *a: None)
+        assert [x["status"] for x in r["rows"]] == ["linked"], r["rows"]
+        ws.edit("PART1", params={"Supplier": "Mouser"})
+        r = S.run("pull", plan, ws, WS, models=False, rules=rules, log=lambda *a: None)
+        assert r["summary"] == {"changed_in_workspace": 1}, r["rows"]
+        it = json.loads(plan.read_text())[0]
+        assert it["parameters"] == [{"name": "Supplier 1", "value": "Mouser"}], it["parameters"]
+        assert A.push([it], ws, WS, rules=rules)[0]["action"] == "up_to_date"
+        assert ws.nodes[0]["details"]["parameters"] == [{"name": "Supplier", "value": "Mouser"}]
+        ws.edit("PART1", params={"Supplier": None}, replace=False)          # removed in the workspace
+        S.run("pull", plan, ws, WS, models=False, rules=rules, log=lambda *a: None)
+        it = json.loads(plan.read_text())[0]
+        assert it["parameters"] == [] and it["cleared"] == ["Supplier 1"], it
+
+
+def test_linked_item_keeps_its_model_files():
+    with tempfile.TemporaryDirectory() as d:
+        plan = Path(d) / "plan.json"
+        plan.write_text(json.dumps([_bom_item({"Supplier": "Digikey"}, "SchLib/CH340C.SchLib", "PcbLib/SOIC-16.PcbLib")]))
+        ws = FakeA365([node("PART1", {"Supplier": "Digikey"})])
+        S.run("pull", plan, ws, WS, models=False, log=lambda *a: None)
+        ws.edit("PART1", symbols=[{"name": "CH340C", "guid": "S9", "dataDownloadUrl": "x", "folder": {"path": "S"}}])
+        S.run("pull", plan, ws, WS, models=False, log=lambda *a: None)
+        it = json.loads(plan.read_text())[0]
+        assert it["symbol"]["file"] == "SchLib/CH340C.SchLib" and it["footprint"]["file"] == "PcbLib/SOIC-16.PcbLib", it
+
+
+def test_librarian_rerun_keeps_link_and_matches_house_mpn():
+    from ecadlib import rules as RU
+    with tempfile.TemporaryDirectory() as d:
+        plan = Path(d) / "plan.json"
+        plan.write_text(json.dumps([_bom_item({"Supplier": "Digikey"})]))
+        ws = FakeA365([node("PART1", {"Supplier": "Digikey"})])
+        S.run("pull", plan, ws, WS, models=False, log=lambda *a: None)
+        ws.edit("PART1", params={"Supplier": "Mouser"})
+        items, _ = S.reuse_existing([_bom_item({"Supplier": "Digikey"})], json.loads(plan.read_text()))
+        assert items[0]["a365"]["revision"] == "r1"
+        assert A.push(items, ws, WS)[0]["action"] == "skip"                  # not overwritten
+        assert ws.nodes[0]["details"]["parameters"] == [{"name": "Supplier", "value": "Mouser"}]
+    rules = RU.load({"parameters": {"names": {"Manufacturer Part Number": "MPN#"}}})
+    pulled = {"name": "ACME-TPS1234", "parameters": [{"name": "MPN#", "value": "TPS1234DSGR"}],
+              "source": {"component": "a365"}, "a365": {"id": "x"}}
+    bom = {"name": "TPS1234DSGR", "parameters": [{"name": "Manufacturer Part Number", "value": "TPS1234DSGR"}]}
+    assert [i["name"] for i in S.reuse_existing([bom], [pulled], rules)[0]] == ["ACME-TPS1234"]
+
+
 def test_cli_mcp_and_workspace():
     import contextlib
     from ecadlib import app as APP, mcp_server as M
