@@ -113,6 +113,18 @@ TOOLS = [
                     "(duplicates are then skipped by push; library files are never changed): only when the user asks.",
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"}, "merge": {"type": "boolean", "default": False}}}},
+    {"name": "sim_models",
+     "description": "Find SPICE / IBIS simulation models for the librarian plan's parts: built-in models for resistors, "
+                    "capacitors and inductors from their value, vendor models from the workspace's sim_models/ folder (and "
+                    "`models` folders inside the workspace), Nexar documents and vendor URL patterns. Each model is parsed "
+                    "and its pins matched to the symbol's: verified, verify (a person must check) or mismatch (never "
+                    "attached). attach=true writes the SIM links into the .SchLib files and the KiCad Sim.* fields and "
+                    "re-runs the release check: only when the user asks. Returns per part the model, source, pin status "
+                    "and manufacturer model pages to download from by hand.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "attach": {"type": "boolean", "default": False},
+                                    "models": {"type": "array", "items": {"type": "string"},
+                                               "description": "workspace-relative folders of model files"}}}},
     {"name": "build_altium_models",
      "description": "Write the Altium .PcbLib files for a BOM's footprints that are in the KiCad libraries, plus generic "
                     "Resistor/Capacitor .SchLib symbols, into the workspace altium_models/ folder.",
@@ -179,6 +191,8 @@ def call_tool(ws, name, args):
             if "summary" in r:
                 r["summary"].pop("log", None)
             return r
+        if name == "sim_models":
+            return ws.sim_models(args["bom"], args.get("attach") is True, args.get("models") or None)
         if name == "build_altium_models":
             return ws.build_altium_models(args["bom"])
         if name == "altium365_plan":

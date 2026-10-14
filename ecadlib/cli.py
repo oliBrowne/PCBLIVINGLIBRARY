@@ -17,6 +17,7 @@
     ecadlib dedupe    plan.json [--lib ...] [--merge]  duplicate parts, footprints and symbols
     ecadlib sourcing  BOM [--qty N] [--alternates] price, stock, second sources and alternates per BOM line
     ecadlib step-gen  SPEC.json|FOOTPRINT -o x.step   package-shaped 3D model (STEP); --check FILE.step validates
+    ecadlib sim-models plan.json [--models DIR] [--attach]   find, check and attach SPICE / IBIS simulation models
 
 `ecadlib <command> -h` shows that command's options."""
 import importlib, sys
@@ -40,6 +41,7 @@ COMMANDS = {
     "dedupe": ("ecadlib.dedupe", "find and merge duplicate parts, footprints and symbols"),
     "sourcing": ("ecadlib.sourcing", "price, stock, second sources and alternates for a BOM"),
     "step-gen": ("ecadlib.step_gen", "package-shaped STEP 3D models from a package spec or footprint name"),
+    "sim-models": ("ecadlib.sim_models", "find, check and attach SPICE / IBIS simulation models for a plan"),
 }
 
 

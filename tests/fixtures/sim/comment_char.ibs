@@ -1,0 +1,11 @@
+[IBIS Ver] 4.2
+[Comment Char] #_char
+# comments now start with hash | and a pipe is plain text
+[File Name] other_name.ibs
+[Component] CHIPX
+[Manufacturer] ACME
+[Pin] signal_name model_name
+A1 VDD POWER
+A2 D0 MISSINGMODEL
+[Model] OUT1
+Model_type Output

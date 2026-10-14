@@ -493,6 +493,22 @@ class Workspace:
             out["summary"] = self.release_check(bom)
         return out
 
+    def sim_models(self, bom, attach=False, models=None):
+        """Find and check SPICE / IBIS models for the librarian plan's parts (built-in passives, the workspace's
+        sim_models/ folder plus `models` folders inside the workspace, Nexar documents, vendor URL patterns).
+        attach=True writes SIM links into the .SchLib files and Sim.* fields for kicad-export, and re-runs the
+        release check (a model whose pin map is unverified holds its part as `verify`)."""
+        from . import sim_models as SM
+        _, plan_f, _ = self._plan(bom)
+        dirs = [self.inside(m) for m in (models or [])]
+        own = self.root / "sim_models"
+        if own.is_dir():
+            dirs.insert(0, own)
+        rep = SM.run(plan_f, [d for d in dirs if d.is_dir()], attach=bool(attach),
+                     http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None)
+        return {"attach": rep["attach"], "parts": rep["parts"], "hosts": rep["hosts"], "altium365": rep["altium365"],
+                "errors": rep.get("errors", []), "reports": [self.rel(plan_f.parent / "sim_models.md"), self.rel(plan_f.parent / "sim_models.json")]}
+
     def altium365_workspaces(self):
         from . import altium365 as A
         return {"workspaces": A.Nexar(_nexar_token()).workspaces()}

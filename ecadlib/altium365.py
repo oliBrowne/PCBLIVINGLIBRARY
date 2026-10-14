@@ -219,6 +219,10 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None):
                     client.release(inp)
         except Exception as e:                 # keep going; report per part
             res["action"], res["detail"] = "error", f"{type(e).__name__}: {e}"
+        sim = (it.get("sim_model") or {}).get("attached", {}).get("altium")
+        if sim and res["action"] in ("release", "update_parameters", "up_to_date"):
+            res["sim_model"] = (f"{sim['type']} link {sim['model_name']} travels inside the .SchLib; the model file "
+                                f"{sim.get('file') or '(none: built-in)'} is not uploaded (Nexar has no simulation-model input)")
         results.append(res)
     return results
 

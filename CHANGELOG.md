@@ -15,6 +15,7 @@ a minor release may change command-line options and file formats.
 - STEP generation: build simple 3D bodies for generated footprints.
 - Sourcing and alternates: look up stock and suggest drop-in alternates per BOM line.
 - Approvals and dedupe: sign off parts before release and merge duplicate library entries.
+- Simulation models (`ecadlib sim-models`): built-in R/C/L SPICE models, vendor SPICE/IBIS models found and parsed, pin maps checked, attached as Altium SIM/SI links and KiCad `Sim.*` fields.
 
 ## [0.2.0] - 2026-10-14
 
