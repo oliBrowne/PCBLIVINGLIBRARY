@@ -22,13 +22,15 @@ Everything is converted through kicad_import into <out>/models/{SchLib,PcbLib} (
 and the release-check result), <out>/review.{md,csv}, <out>/release_check.{md,csv}, <out>/triage.{md,csv}.
 Resumable: <out>/librarian_state.json remembers finished parts; a re-run skips them unless --refresh (all, or the
 named parts) or their BOM line changed. --allow PART is recorded in plan.json and survives re-runs, and so does a
-symbol or footprint chosen with `ecadlib resolve` (held parts: see ecadlib/resolve.py)."""
+symbol or footprint chosen with `ecadlib resolve` (held parts: see ecadlib/resolve.py).
+A part already in the Altium 365 workspace (an item `ecadlib a365 pull` put in <out>/plan.json, matched by name or
+MPN) is reused as it is: nothing is fetched or converted for it, and pulled items the BOM does not use stay in the plan."""
 import argparse, csv, json, os, re, sys, time
 from pathlib import Path
 
 import pandas as pd
 
-from . import (altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
+from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
                footprint_gen as F, kicad_import as K, providers as P, release_check as RC, sexpr)
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
@@ -425,6 +427,12 @@ def apply_state(item, st, ln):
 def review_rows(items):
     rows = []
     for it in items:
+        if it.get("a365") and it.get("status") in ("existing", "deleted_in_workspace"):
+            rows.append({"part": it["name"], "status": it["status"], "symbol_from": (it.get("source") or {}).get("symbol") or "",
+                         "footprint_from": (it.get("source") or {}).get("footprint") or "",
+                         "needs_human": "yes" if it["status"] != "existing" else "",
+                         "why": "deleted in the Altium 365 workspace" if it["status"] != "existing" else "", "tried": ""})
+            continue
         why = [f"no {k} found" for k in ("symbol", "footprint") if not it[k].get("file")]
         if why:
             why += it["librarian"]["tried"]
@@ -473,9 +481,12 @@ def run(bom, libs=(), out="out/librarian", sources=SOURCES, refresh=None, refres
     state_f, plan_f = out / "librarian_state.json", out / "plan.json"
     state = json.loads(state_f.read_text()) if state_f.exists() else {}
     old = {i["name"]: i for i in json.loads(plan_f.read_text())} if plan_f.exists() else {}
+    items, in_ws = A365S.reuse_existing(items, list(old.values()))     # parts `ecadlib a365 pull` found in the workspace
     r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step)
     todo = []
     for it in items:
+        if it["name"] in in_ws:
+            continue
         ln, row = _line_for(it, lines, rows)
         if not it["footprint"]["ref"]:
             it["footprint"]["ref"] = AL.lib_name(it["name"])
@@ -494,6 +505,9 @@ def run(bom, libs=(), out="out/librarian", sources=SOURCES, refresh=None, refres
         st["key"], st["skipped"] = fpr, False
         state[it["name"]] = st
     for it in items:
+        if it["name"] in in_ws:
+            log(f"  a365  {it['name']:<28} in the Altium 365 workspace: reused, not fetched")
+            continue
         apply_state(it, state[it["name"]], _line_for(it, lines, rows)[0])
         for k in ("allow", "approvals", "duplicate_of"):     # decisions people made survive re-runs
             if old.get(it["name"], {}).get(k):

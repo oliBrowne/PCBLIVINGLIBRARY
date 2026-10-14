@@ -45,8 +45,10 @@ Q_DEFS = """query ($ws: String!) {
 }"""
 
 Q_FIND = """query ($ws: String!, $name: String!) {
-  desLibrary(workspaceUrl: $ws) { components(first: 1, where: {name: {eq: $name}}) { nodes { id name details { parameters { name value } } } } }
+  desLibrary(workspaceUrl: $ws) { components(first: 1, where: {name: {eq: $name}}) { nodes { id name revision { id } details { parameters { name value } } } } }
 }"""
+
+Q_BY_ID = """query ($id: ID!) { desComponentById(id: $id) { id name revision { id } details { parameters { name value } } } }"""
 
 M_RELEASE = """mutation ($input: DesReleaseComponentInput!) { desReleaseComponent(input: $input) { errors { message } } }"""
 
@@ -90,6 +92,18 @@ class Nexar:
         conn = self.gql(Q_FIND, {"ws": ws, "name": name})["desLibrary"]["components"] or {}
         nodes = conn.get("nodes") or []
         return nodes[0] if nodes else None
+
+    def component(self, cid):
+        return self.gql(Q_BY_ID, {"id": cid})["desComponentById"]
+
+    def download(self, url):
+        """A symbol/footprint dataDownloadUrl. Tried without credentials first (pre-signed URLs reject extra auth),
+        then with the bearer token."""
+        r = self.s.get(url, timeout=120)
+        if r.status_code in (401, 403):
+            r = self.s.get(url, headers={"Authorization": f"Bearer {self.token}"}, timeout=120)
+        r.raise_for_status()
+        return r.content
 
     def find_component(self, ws, name):
         n = self.find(ws, name)
@@ -175,6 +189,47 @@ def merged_params(existing, item):
     return None if want == cur else [{"name": k, "value": v} for k, v in want.items()]
 
 
+def push_existing(it, client, ws, dry_run=False, note="ecadlib sync"):
+    """Parameter update for an item that `ecadlib a365 pull` imported or linked (item.a365 = revision, id and the
+    snapshot of the last pull). Refuses when the component was edited in the workspace since that snapshot, so a
+    person's edit there is never overwritten: run `ecadlib a365 reconcile` first. On success the item's a365 block is
+    moved to the new revision (callers write it back with a365_sync.save_meta)."""
+    a = it["a365"]
+    base = (a.get("base") or {}).get("parameters")
+    local = {p["name"] for p in it["parameters"]}
+    cleared = list(it.get("cleared") or [])
+    if a.get("mirror") and base is not None:   # a pulled item lists every parameter: one removed locally is cleared
+        cleared += [k for k in base if k not in local and k not in cleared]
+    want = {**it, "cleared": cleared}
+    if a.get("conflicts"):
+        return {"action": "skip", "detail": "conflict with workspace edits: run `ecadlib a365 reconcile` first"}
+    if dry_run:
+        node = {"details": {"parameters": [{"name": k, "value": v} for k, v in (base or {}).items()]}}
+    else:
+        node = client.find(ws, it["name"])
+        if not node and a.get("id") and hasattr(client, "component"):
+            node = client.component(a["id"])
+        if not node:
+            return {"action": "skip", "detail": "not in the workspace (deleted or renamed there): run `ecadlib a365 reconcile`"}
+        rev = (node.get("revision") or {}).get("id")
+        cur = {p["name"]: p["value"] for p in ((node.get("details") or {}).get("parameters") or [])}
+        if rev and a.get("revision") and rev != a["revision"] and base is not None and cur != base:
+            return {"action": "skip", "detail": f"edited in the workspace since the last pull (revision {a['revision']} -> {rev}): "
+                                                "run `ecadlib a365 reconcile` first; nothing sent"}
+    new = merged_params(node, want)
+    if new is None:
+        return {"action": "up_to_date", "detail": ""}
+    if dry_run:
+        return {"action": "update_parameters", "detail": {"mutation": "desUpdateComponentRevisionParameters",
+                                                          "replaceExisting": True, "parameters": new}}
+    cid = client.update_params(node["id"], new, note, replace=True)
+    after = client.find(ws, it["name"]) or (client.component(cid) if cid and hasattr(client, "component") else None) or {}
+    a["id"] = after.get("id") or cid
+    a["revision"] = (after.get("revision") or {}).get("id") or a.get("revision")
+    a.setdefault("base", {})["parameters"] = {p["name"]: p["value"] for p in new}
+    return {"action": "update_parameters", "detail": cid, "a365_updated": True}
+
+
 def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None):
     """Release new parts, update parameters of parts already in the workspace.
     dry_run: no uploads or mutations; records the requests that would be sent.
@@ -195,6 +250,13 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None):
         block = push_block(it, policy)         # sign-off policy not met, or a dedupe duplicate
         if block:
             res["action"], res["detail"] = "skip", block
+            results.append(res)
+            continue
+        if it.get("a365"):                     # pulled from / linked to the workspace: update it, never release it again
+            try:
+                res.update(push_existing(it, client, ws, dry_run, note))
+            except Exception as e:
+                res["action"], res["detail"] = "error", f"{type(e).__name__}: {e}"
             results.append(res)
             continue
         try:
@@ -276,6 +338,9 @@ def main(argv=None):
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work
         hint = " (token rejected: check it has design.domain, user.access, openid)" if "401" in str(e) else ""
         sys.exit(f"Nexar request failed: {type(e).__name__}: {e}{hint}")
+    if any(r.get("a365_updated") for r in results):
+        from .a365_sync import save_meta            # new revisions, so the next push is not mistaken for a conflict
+        save_meta(a.plan, items)
     out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=2))
     for r in results:
