@@ -1,0 +1,49 @@
+{
+  "name": "JST_SH_SM04B-SRSS-TB_1x04-1MP_P1.00mm_Horizontal",
+  "description": "JST SH series connector, SM04B-SRSS-TB, side entry, 4 pins + mounting pads, 1.00 mm pitch",
+  "package_type": "connector",
+  "pin_count": 4,
+  "pitch": 1.0,
+  "height_max": 2.95,
+  "pad_table": {
+    "unit": "mm",
+    "y_axis": "up",
+    "origin": "center",
+    "arrays": [
+      {
+        "count": 4,
+        "x": -1.5,
+        "y": 2.0,
+        "dx": 1.0,
+        "w": 0.6,
+        "h": 1.55
+      }
+    ],
+    "pads": [
+      {
+        "number": "MP",
+        "x": -2.8,
+        "y": -1.875,
+        "w": 1.2,
+        "h": 1.8
+      },
+      {
+        "number": "MP",
+        "x": 2.8,
+        "y": -1.875,
+        "w": 1.2,
+        "h": 1.8
+      }
+    ],
+    "body": {
+      "x1": -3.0,
+      "y1": 1.675,
+      "x2": 3.0,
+      "y2": -2.575
+    }
+  },
+  "source": {
+    "datasheet": "http://www.jst-mfg.com/product/pdf/eng/eSH.pdf",
+    "drawing": "recommended PCB layout; KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as the datasheet drawing gives them"
+  }
+}

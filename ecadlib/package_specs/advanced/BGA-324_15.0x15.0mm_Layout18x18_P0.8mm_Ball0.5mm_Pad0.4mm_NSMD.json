@@ -1,0 +1,26 @@
+{
+  "name": "BGA-324_15.0x15.0mm_Layout18x18_P0.8mm_Ball0.5mm_Pad0.4mm_NSMD",
+  "description": "Altera U324 BGA, 15 x 15 mm, 0.8 mm pitch",
+  "package_type": "bga",
+  "pin_count": 324,
+  "rows": 18,
+  "cols": 18,
+  "pitch": 0.8,
+  "body_length": {
+    "nom": 15.0
+  },
+  "body_width": {
+    "nom": 15.0
+  },
+  "ball_diameter": {
+    "min": 0.45,
+    "nom": 0.5,
+    "max": 0.55
+  },
+  "height_max": 1.5,
+  "density": "B",
+  "source": {
+    "datasheet": "https://www.altera.com/content/dam/altera-www/global/en_US/pdfs/literature/packaging/04r00474-02.pdf",
+    "drawing": "KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as the datasheet drawing gives them"
+  }
+}
