@@ -8,11 +8,15 @@ These are small Python prototypes for an open-source tool that manages ECAD comp
 
 ## How you use it
 
-Install it once from a checkout of this repository (Python 3.10 or later):
+Install it with pip (Python 3.10 or later):
 
 ```
-pip install -e .            # add [dev] for jsonschema, olefile and graphql-core (validation and extra tests)
+pip install ecadlib                 # once a release is on PyPI (see Releases below)
+pip install "ecadlib[pdf,altium]"   # pypdf trims datasheets to --pages; olefile reads .PcbLib/.SchLib back
+pip install -e ".[dev]"             # from a checkout: editable, plus everything the test suite uses
 ```
+
+`ecadlib --version` prints the installed version. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 That gives you a single `ecadlib` command (`python -m ecadlib` works too). There are three ways in, and all of them call the same actions in `ecadlib/app.py`:
 
@@ -59,7 +63,7 @@ Both servers use only the standard library on top of the package requirements. T
 
 Tests: `python3 -m tests.test_ui` covers the workspace, web server, MCP server and CLI. `python3 -m tests.test_offline` covers the core modules. `python3 -m tests.test_footprints` checks generated footprints by part type against KiCad's library and the KLC rules.
 
-Requirements: Python 3.13 with `requests`, `pandas` and `openpyxl`. `jsonschema` is optional; when it is installed, specs are validated against the schema. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
+Requirements: Python 3.10 or later (tested on 3.11 and 3.13) with `requests`, `pandas`, `openpyxl` and `jsonschema`, which pip installs. `pypdf` and `olefile` are optional extras. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
 
 ```
 ecad-librarian/
@@ -403,6 +407,24 @@ python3 -m tests.test_upstream
 ```
 
 Every `kicad_import` conversion records in `<out>/manifest.json` where each output came from: source URLs (footprint, STEP, symbol and its `extends` parents), sha256 and git blob id, the last GitLab commit, a pad/courtyard/pin summary, the output hash and the converter version. `check-kicad` asks the GitLab API for each source's blob id without downloading, then fetches and diffs only changed files: pads added, removed, moved or resized, courtyard changes, pins added, removed or renamed, and files deleted or renamed upstream. `--update` reconverts the changed parts. `check-a365` compares a release plan with the workspace: missing components, parameter, comment, description, folder and model-name differences (parameters added by hand in Altium 365 are not drift), and workspace components the plan doesn't list. Nexar exposes no symbol or footprint revision, so `--state` records component revisions and model GUIDs and flags changes since the last run. Exit codes: 0 no changes, 1 changes, 2 error. `examples/upstream-watch.yml` is a sample weekly job. **Tested live** against gitlab.com; `check-a365` only against a mock (Nexar is blocked here).
+
+## Releases
+
+The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:
+
+1. Bump `__version__` (for example `0.3.0`).
+2. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [0.3.0] - YYYY-MM-DD`, add a new empty `## [Unreleased]` above it, and update the compare links at the bottom.
+3. Run `python -m tests.run_all`, commit, and merge to `main`.
+4. Tag that commit and push the tag: `git tag v0.3.0 && git push origin v0.3.0`.
+
+The `release` workflow (`.github/workflows/release.yml`) then checks that the tag, `__version__` and the changelog agree, runs the tests, builds the sdist and wheel, smoke-tests both in a clean venv, creates the GitHub release with that version's changelog section as its notes, and publishes to PyPI. Every PR also builds and smoke-tests the packages (the `package` job in `tests.yml`).
+
+PyPI publishing uses [trusted publishing](https://docs.pypi.org/trusted-publishers/), so no API token is stored in the repository. The repository owner sets it up once:
+
+* On PyPI, add a trusted publisher (a "pending publisher" before the first upload, under *Your projects > Publishing*): project `ecadlib`, owner `oliBrowne`, repository `PCBLIVINGLIBRARY`, workflow `release.yml`, environment `pypi`.
+* On GitHub, create an environment named `pypi` (*Settings > Environments*). Restricting it to `v*` tags and adding a required reviewer is recommended.
+
+If the `ecadlib` name is taken on PyPI, change `name` in `pyproject.toml` and the publisher entry to match.
 
 ---
 
