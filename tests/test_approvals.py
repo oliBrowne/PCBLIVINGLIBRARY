@@ -209,6 +209,21 @@ def test_cli_status_and_all():
         assert "approval" in Path(d, "rc.csv").read_text().splitlines()[0]
 
 
+def test_librarian_allow_records_who_allowed():
+    """librarian --allow stamps the person, so they cannot then approve their own override (was: no user recorded)."""
+    from unittest import mock
+    from tests import test_librarian as TL
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "out"
+        out.mkdir()
+        (out / "approvals.json").write_text('{"required": 1}')
+        with mock.patch.dict(os.environ, {"ECADLIB_USER": ANN}):
+            items, _ = TL.run(d, sources=["kicad"], allow=["NOWHERE1"])
+            assert items["NOWHERE1"]["allow"]["user"] == ANN, items["NOWHERE1"]["allow"]
+            assert _quiet(AP.main, [str(out / "plan.json"), "approve", "--part", "NOWHERE1"]) == 2
+        assert not json.loads((out / "plan.json").read_text())[[i["name"] for i in json.loads((out / "plan.json").read_text())].index("NOWHERE1")].get("approvals")
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_approvals"]))

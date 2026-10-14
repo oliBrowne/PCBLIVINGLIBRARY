@@ -468,10 +468,10 @@ def write_review(rows, out, bom):
 
 def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_index=False, allow=(), offline=False,
         cache="out/http_cache", rate=0.5, providers="jlcpcb_search,easyeda", http=None, api_key=None, log=print, gen_step=True,
-        rules=None):
+        rules=None, user=None):
     """Whole pipeline; returns the plan items. refresh: None = resume, [] = redo all, [names] = redo those.
     rules: library rules (a loaded dict or a path); None uses the ecadlib.toml found from `out` (defaults when none).
-    sources: None = the rules' [sources] order."""
+    sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity())."""
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     rules = RU.resolve(rules, out)
     sources = list(sources) if sources is not None else list(rules["sources"]["order"])
@@ -505,10 +505,15 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
                 r.written.setdefault(str(out / st[k]["file"]), st[k])
         else:
             todo.append((it, ln, row, fpr))
+    keeps = {}
     for it, ln, row, fpr in todo:
         old_st = state.get(it["name"]) or {}
-        keep = {k: old_st[k] for k in ("symbol", "footprint") if (old_st.get(k) or {}).get("chosen") and (out / old_st[k]["file"]).exists()}
-        st = r.resolve(it, ln, row, keep)
+        keeps[it["name"]] = keep = {k: old_st[k] for k in ("symbol", "footprint")
+                                    if (old_st.get(k) or {}).get("chosen") and (out / old_st[k]["file"]).exists()}
+        for rec in keep.values():          # a chosen file another part shares is reused, never overwritten by its fetch
+            r.written.setdefault(str(out / rec["file"]), rec)
+    for it, ln, row, fpr in todo:
+        st = r.resolve(it, ln, row, keeps[it["name"]])
         st["key"], st["skipped"] = fpr, False
         state[it["name"]] = st
     for it in items:
@@ -519,6 +524,12 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         for k in ("allow", "approvals", "duplicate_of"):     # decisions people made survive re-runs
             if old.get(it["name"], {}).get(k):
                 it[k] = old[it["name"]][k]
+        prev = old.get(it["name"]) or {}
+        for k, was in (prev.get("merged_from") or {}).items():   # `ecadlib dedupe --merge` pointed this half at a keeper
+            if k in ("symbol", "footprint") and it[k].get("ref") == was.get("ref") and (prev.get(k) or {}).get("file") \
+                    and RC._path(out, prev[k]["file"]).exists():
+                it[k] = dict(prev[k])
+                it.setdefault("merged_from", {})[k] = was
         log(f"  {'skip ' if state[it['name']].get('skipped') else 'done ' if _done(state[it['name']], out) else 'open '}"
             f"{it['name']:<28} sym={it['source']['symbol'] or '-'}  fp={it['source']['footprint'] or '-'}")
     state = {k: v for k, v in state.items() if k in {i["name"] for i in items}}
@@ -526,6 +537,10 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         log(f"  --allow {n}: not a part in this plan (names are the plan's Part Numbers)")
     state_f.write_text(json.dumps(state, indent=2))
     checks = RC.apply(items, out, allow, rules=rules)
+    if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
+        from .approvals import identity, post_check, stamp_allow
+        stamp_allow(items, allow, identity(user, cwd=out))
+        post_check(items, out, checks)
     plan_f.write_text(json.dumps(items, indent=2))
     RC.write_report(checks, out / "release_check", plan_f)
     write_review(review_rows(items), out, bom)
@@ -546,10 +561,11 @@ def main(argv=None):
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--rate", type=float, default=0.5, help="min seconds between requests per host")
     ap.add_argument("--box", action="store_true", help="extruded 3D box instead of a generated STEP when there is no KiCad model")
+    ap.add_argument("--user", help="who gives the --allow (default: $ECADLIB_USER, then git config user.name/email)")
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from -o or here; see `ecadlib init`)")
     a = ap.parse_args(argv)
     items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh, a.refresh_index,
-                a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=RU.load(a.rules, start=a.out))
+                a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=RU.load(a.rules, start=a.out), user=a.user)
     held = sum(i["status"] != "ready" for i in items)
     print(f"{len(items)} parts: {len(items) - held} ready, {held} held -> {Path(a.out) / 'plan.json'}; review {Path(a.out) / 'review.md'}")
     return 2 if held else 0
