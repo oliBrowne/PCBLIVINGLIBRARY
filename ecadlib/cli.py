@@ -3,7 +3,7 @@
     ecadlib init      [--from DIR ...] [--yes]    scan your libraries, write ecadlib.toml (naming, parameters, layers, density)
     ecadlib rules     check|show                  validate the rules file / print the defaults
     ecadlib ui        --lib <kicad libs>          local web UI in your browser (--team: shared server with sign-in)
-    ecadlib team      add-user|set-role|reset-password|remove|list   users and roles for `ecadlib ui --team`
+    ecadlib team      add-user|set-role|reset-password|remove|list|setup   users and roles for `ecadlib ui --team`; setup: Docker + HTTPS
     ecadlib mcp       --lib <kicad libs>          MCP server (stdio) for Claude and other agents
     ecadlib triage    BOM --lib ... -o out/x      BOM triage report (.md + .csv)
     ecadlib footprint gen|compare ...             IPC-7351B footprint generator (also BGA, pin headers, connectors, pad tables)

@@ -1,0 +1,64 @@
+name: docker
+
+# Pull requests: build the image and run the whole stack (ecadlib + Caddy, internal CA) with `ecadlib team setup`,
+# then sign in over HTTPS with curl. Tags v*: also publish the image to ghcr.io. Nothing is pushed otherwise.
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Set up the stack the way a team would (builds the image)
+        run: |
+          printf '%s\n' "ci-only-password-$GITHUB_RUN_ID" | python3 -m ecadlib team setup --domain localhost \
+            --admin ci --name "CI Admin" --email ci@example.com --password-stdin --http-port 8080 --https-port 8443
+      - name: Run it again (must not ask for anything or change anything)
+        run: python3 -m ecadlib team setup < /dev/null
+      - name: Sign in over HTTPS through Caddy
+        run: .github/scripts/docker_smoke.sh https://localhost:8443 "ci-only-password-$GITHUB_RUN_ID" http://localhost:8080
+      - name: Logs
+        if: failure()
+        run: docker compose logs --no-color
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: stack
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
