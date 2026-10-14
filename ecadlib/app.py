@@ -433,9 +433,10 @@ class Workspace:
                 "awaiting_approval": sum(i.get("status") == "awaiting_approval" for i in items),
                 "audit": self.rel(audit) if audit.exists() else None}
 
-    def approve_part(self, bom, part, decision, user, role=None, comment=""):
-        """Record an approve / reject for one part as `user`. user is required: there is no login, so the caller
-        says who it is (never taken from this machine's git identity). Every decision, refused ones included, is
+    def approve_part(self, bom, part, decision, user, role=None, comment="", via="ecadlib ui/mcp"):
+        """Record an approve / reject for one part as `user`. user is required: locally there is no login, so the
+        caller says who it is (never taken from this machine's git identity); the team server passes the signed-in
+        user and via="ecadlib ui (team, signed in)", which the audit entry records. Every decision, refused ones included, is
         appended to approvals_audit.jsonl; the part then flips between ready and awaiting_approval."""
         from . import approvals as AP, librarian as L
         if decision not in ("approve", "reject"):
@@ -451,7 +452,7 @@ class Workspace:
         it, base = self._part(items, part), plan_f.parent
         policy = AP.load_policy(base)
         entry = {"ts": AP.now(), "plan": str(plan_f), "part": part, "who": user, "role": role or "", "decision": decision,
-                 "comment": comment, "via": "ecadlib ui/mcp"}
+                 "comment": comment, "via": via}
         try:
             rec = AP.decide(it, decision, user, role, comment, base, policy)
         except AP.Refused as e:
