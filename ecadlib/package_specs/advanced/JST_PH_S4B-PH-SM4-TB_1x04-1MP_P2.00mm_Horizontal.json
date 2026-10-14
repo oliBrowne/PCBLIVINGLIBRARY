@@ -1,0 +1,55 @@
+{
+  "name": "JST_PH_S4B-PH-SM4-TB_1x04-1MP_P2.00mm_Horizontal",
+  "description": "JST PH series connector, S4B-PH-SM4-TB, side entry, 4 pins + mounting pads, 2.00 mm pitch",
+  "package_type": "connector",
+  "pin_count": 4,
+  "pitch": 2.0,
+  "body_length": {
+    "nom": 11.9
+  },
+  "body_width": {
+    "nom": 7.6
+  },
+  "height_max": 4.8,
+  "pad_table": {
+    "unit": "mm",
+    "y_axis": "up",
+    "origin": "center",
+    "arrays": [
+      {
+        "count": 4,
+        "x": -3,
+        "y": 2.85,
+        "dx": 2,
+        "w": 1.0,
+        "h": 3.5
+      }
+    ],
+    "pads": [
+      {
+        "number": "MP",
+        "x": -5.35,
+        "y": -2.9,
+        "w": 1.5,
+        "h": 3.4
+      },
+      {
+        "number": "MP",
+        "x": 5.35,
+        "y": -2.9,
+        "w": 1.5,
+        "h": 3.4
+      }
+    ],
+    "body": {
+      "x1": -5.95,
+      "y1": 3.2,
+      "x2": 5.95,
+      "y2": -4.4
+    }
+  },
+  "source": {
+    "datasheet": "http://www.jst-mfg.com/product/pdf/eng/ePH.pdf",
+    "drawing": "recommended PCB layout; KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as the datasheet drawing gives them"
+  }
+}
