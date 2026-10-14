@@ -128,6 +128,19 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"}, "workspace": {"type": "string", "description": "workspace URL"},
                                     "dry_run": {"type": "boolean", "default": True}}}},
+    {"name": "upkeep_run",
+     "description": "Run the library upkeep checks for a BOM (its librarian plan when there is one): lifecycle (NRND/EOL, "
+                    "stock-outs), KiCad upstream source changes, price jumps and stock, Altium 365 drift. Reports only what "
+                    "is new since the last upkeep run; a check whose credentials are missing is skipped and says so. "
+                    "apply=true reconverts KiCad parts whose upstream sources changed (rewrites library files): only when "
+                    "the user asks. Never opens GitHub issues or PRs (that is the `ecadlib upkeep --github` CLI).",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"},
+                                    "checks": {"type": "array", "items": {"type": "string",
+                                               "enum": ["lifecycle", "upstream", "sourcing", "a365"]},
+                                               "description": "checks to run (default: all, or [upkeep] checks in ecadlib.toml)"},
+                                    "apply": {"type": "boolean", "default": False},
+                                    "workspace": {"type": "string", "description": "Altium 365 workspace URL for the a365 check"}}}},
     {"name": "list_example_specs",
      "description": "Return the example package specs (useful as templates for preview_footprint).",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -189,6 +202,8 @@ def call_tool(ws, name, args):
             return ws.altium365_push(args["bom"], args.get("workspace"), dry_run=args.get("dry_run", True) is not False)
         if name == "export_altium_dblib":
             return ws.export_dblib(args["bom"])
+        if name == "upkeep_run":
+            return ws.upkeep_run(args["bom"], args.get("checks") or None, args.get("apply") is True, args.get("workspace"))
         if name == "list_example_specs":
             return ws.example_specs()
     raise KeyError(f"unknown tool {name}")
