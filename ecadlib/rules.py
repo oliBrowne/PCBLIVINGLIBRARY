@@ -59,10 +59,13 @@ DEFAULTS = {
     "bom": {"columns": {}},                    # ecadlib field (mpn, manufacturer, value, ...) -> your BOM header
     "release": {"approvals": {}},              # same keys as approvals.json; used when there is no approvals.json
     "altium365": {"workspace": ""},
-    "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "sourcing", "a365"]},
+    "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "sourcing", "a365"],   # ecadlib.upkeep
+               "price_jump_pct": 20.0, "build_qty": 1, "currency": "USD"},
+    "sim": {"capacitor_esr": "", "capacitor_esl": "", "inductor_dcr": ""},   # ecadlib.sim_models ("" = none)
 }
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals")}
+INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
 
@@ -183,8 +186,15 @@ def validate(raw, where="ecadlib.toml"):
                 if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
                     _err(where, key, "must be a list of text values")
             elif isinstance(d, int) and not isinstance(d, bool):
-                if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 9:
-                    _err(where, key, "must be a whole number from 0 to 9")
+                lo, hi = INT_RANGE.get((sec, k), (0, 9))
+                if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
+                    _err(where, key, f"must be a whole number from {lo} to {hi}")
+            elif isinstance(d, float):
+                if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+                    _err(where, key, "must be a number of 0 or more")
+            elif sec == "sim":
+                if not isinstance(v, (str, int, float)) or isinstance(v, bool):
+                    _err(where, key, "must be a value such as \"10m\" (ohm / henry)")
             elif not isinstance(v, str):
                 _err(where, key, "must be text")
     n = raw.get("naming", {})
@@ -523,7 +533,13 @@ def folder_for(cat, rules, root=None):
 
 # ------------------------------------------------------------------ writing ecadlib.toml
 def _q(s):
-    return json.dumps(str(s), ensure_ascii=False)
+    return json.dumps(str(s), ensure_ascii=False).replace("\x7f", "\\u007f")   # TOML refuses a raw DEL
+
+
+def _c(s):
+    """One comment line: notes carry text from scanned libraries (part names, BOM headers), and a newline in one
+    would end the comment and put the rest into the file as TOML."""
+    return re.sub(r"[\x00-\x1f\x7f\u2028\u2029]+", " ", str(s))
 
 
 def _key(k):
@@ -564,7 +580,7 @@ def dumps(rules, notes=None, only=None, header=None):
     (others are left out, i.e. stay at their defaults); None writes every section that differs from the defaults
     plus every key that has a note."""
     notes = notes or {}
-    lines = list(header or [])
+    lines = [_c(h) for h in header or []]
     for sec, vals in rules.items():
         if sec.startswith("_") or sec not in DEFAULTS:
             continue
@@ -572,7 +588,7 @@ def dumps(rules, notes=None, only=None, header=None):
                 or (only is not None and f"{sec}.{k}" in only)]
         if not keys:
             continue
-        lines += ["", *(f"# {h}" for h in [HELP.get(sec)] if h), f"[{sec}]"]
+        lines += ["", *(f"# {_c(h)}" for h in [HELP.get(sec)] if h), f"[{sec}]"]
         tables = []
         for k in keys:
             v = vals[k]
@@ -580,15 +596,15 @@ def dumps(rules, notes=None, only=None, header=None):
                 tables.append(k)
                 continue
             for n in notes.get(f"{sec}.{k}", []) + ([f"({HELP[f'{sec}.{k}']})"] if f"{sec}.{k}" in HELP else []):
-                lines.append(f"# {n}")
+                lines.append(f"# {_c(n)}")
             lines.append(f"{_key(k)} = {_val(v)}")
         for k in tables:
             lines += ["", f"[{sec}.{_key(k)}]"]
             for n in notes.get(f"{sec}.{k}", []) + ([f"({HELP[f'{sec}.{k}']})"] if f"{sec}.{k}" in HELP else []):
-                lines.append(f"# {n}")
+                lines.append(f"# {_c(n)}")
             for kk, vv in vals[k].items():
                 for n in notes.get(f"{sec}.{k}.{kk}", []):
-                    lines.append(f"# {n}")
+                    lines.append(f"# {_c(n)}")
                 lines.append(f"{_key(kk)} = {_val(vv)}")
     return "\n".join(lines).strip("\n") + "\n"
 

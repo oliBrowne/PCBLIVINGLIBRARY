@@ -102,7 +102,7 @@ class Workspace:
                 "providers": [{"name": c.name, "auth": c.auth, "enabled": c.name in self.provider_names,
                                "configured": c(http).configured()} for c in P.ALL],
                 "altium365": {"token": bool(os.environ.get("NEXAR_TOKEN"))},
-                "rules": self.rel(self.rules_file()) if self.rules_file().is_file() else None,
+                "rules": (lambda f: self._label(f) if f else None)(self.rules_in_use()),
                 "altium_models": {k: sorted(p.stem for p in (self.models / k).glob(f"*.{k}")) for k in ("PcbLib", "SchLib")},
                 "boms": sorted(self.rel(p) for p in (self.root / "uploads").iterdir()
                                if p.is_file() and not p.is_symlink() and self._is_inside(p))}
@@ -236,7 +236,8 @@ class Workspace:
         tri = self._triage_csv(bom_path)
         out = self.root / "altium"
         argv = [str(bom_path), "-o", str(out)] + (["--triage", str(tri)] if tri.exists() else [])
-        argv += ["--rules", str(self.rules_file())] if self.rules_file().is_file() else []
+        rf = self.rules_in_use()
+        argv += ["--rules", str(rf)] if rf else []
         altium_export.main(argv)
         return {"files": [self.rel(p) for p in sorted(out.iterdir()) if p.is_file()]}
 
@@ -508,7 +509,7 @@ class Workspace:
         src = plan_f if plan_f.exists() else bom_path
         manifest = next((m for m in (plan_f.parent / "models" / "manifest.json", self.models / "manifest.json")
                          if m.is_file()), None)
-        rules = UK.load_rules(None, start=str(self.root))
+        rules = self.rules()
         rep = UK.run(str(src), checks or None, base / "state", base / "upkeep", manifest and str(manifest),
                      str(bom_path) if src != bom_path else None, workspace or None, bool(apply), rules,
                      UK.Ctx(cache=self.root / "http_cache", offline=self.offline))
@@ -554,12 +555,12 @@ class Workspace:
         release check (a model whose pin map is unverified holds its part as `verify`)."""
         from . import sim_models as SM
         _, plan_f, _ = self._plan(bom)
-        dirs = [self.inside(m) for m in (models or [])]
+        dirs = [self.inside(m) for m in ([models] if isinstance(models, str) else models or [])]
         own = self.root / "sim_models"
         if own.is_dir():
             dirs.insert(0, own)
         rep = SM.run(plan_f, [d for d in dirs if d.is_dir()], attach=bool(attach),
-                     http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None)
+                     http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), rules=self.rules(), log=lambda *a: None)
         return {"attach": rep["attach"], "parts": rep["parts"], "hosts": rep["hosts"], "altium365": rep["altium365"],
                 "errors": rep.get("errors", []), "reports": [self.rel(plan_f.parent / "sim_models.md"), self.rel(plan_f.parent / "sim_models.json")]}
 
@@ -623,14 +624,24 @@ class Workspace:
         """<workspace>/ecadlib.toml (or ecadlib_rules.json when only that exists)."""
         return next((self.root / n for n in RU.FILES if (self.root / n).is_file()), self.root / RU.FILES[0])
 
-    def rules(self):
-        """The workspace's rules merged over the defaults (no file: ecadlib's own behaviour)."""
+    def rules_in_use(self):
+        """The rules file the workspace follows: its own, else the one every ecadlib command run here finds (the
+        workspace's parents, then the current folder and its parents: `ecadlib init` writes ./ecadlib.toml). The
+        tools the workspace runs by path (DbLib export, approvals, upkeep) search the same way, so all agree. None: no file."""
         f = self.rules_file()
-        return RU.load(f) if f.is_file() else RU.load({})
+        return f if f.is_file() else RU.find(self.root)
+
+    def _label(self, p):
+        return self.rel(p) if self._is_inside(p) else str(p)
+
+    def rules(self):
+        """The rules in use (rules_in_use) merged over the defaults (no file: ecadlib's own behaviour)."""
+        f = self.rules_in_use()
+        return RU.load(f) if f else RU.load({})
 
     def rules_info(self):
-        f = self.rules_file()
-        return {"file": self.rel(f), "exists": f.is_file(), "text": f.read_text(encoding="utf-8") if f.is_file() else "",
+        f = self.rules_in_use()
+        return {"file": self._label(f or self.rules_file()), "exists": bool(f), "text": f.read_text(encoding="utf-8") if f else "",
                 "rules": RU.effective(self.rules()), "defaults": RU.DEFAULTS}
 
     def _rules_sources(self):
@@ -645,6 +656,7 @@ class Workspace:
         proposal's `toml` goes to save_rules. paths default to the workspace's --lib folders and uploaded BOMs.
         choices {setting key: value} answer the proposal's questions. A diff is included when a file exists."""
         from . import rules_infer as I
+        paths, a365 = ([x] if isinstance(x, (str, Path)) else x for x in (paths, a365))   # one path, not its letters
         paths = [str(p).strip() for p in (paths or []) if str(p).strip()] or self._rules_sources()
         if progress:
             progress(0, 1, "scanning " + ", ".join(Path(p).name for p in paths)[:80])
