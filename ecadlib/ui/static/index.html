@@ -87,6 +87,8 @@ svg.fp .crtyd { fill: none; stroke: var(--crtyd); stroke-width: .05; stroke-dash
 .nums div { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px; }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; display: none; max-width: 90vw; }
 a { color: var(--accent); }
+pre.diff { white-space: pre-wrap; max-height: 280px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: 12px/1.4 ui-monospace, Menlo, monospace; }
+#rulestoml { min-height: 240px; }
 </style>
 </head>
 <body>
@@ -95,6 +97,27 @@ a { color: var(--accent); }
   <span class="meta" id="meta">loading…</span>
 </header>
 <main>
+  <section class="card" id="setup">
+    <div class="row spread">
+      <div><h2>Library rules</h2>
+      <p class="muted small" style="margin:2px 0 0" id="rulesstate">Loading…</p></div>
+      <button id="rulesscan">Set up from my libraries…</button>
+    </div>
+    <div id="rulesform" hidden style="margin-top:10px">
+      <label class="muted small" for="rulespaths">Folders or files to scan, one per line: your Altium library folders (.SchLib / .PcbLib), a .DbLib, KiCad libraries, BOMs, an Altium 365 component list (.json). Leave empty to scan the --lib folders and uploaded BOMs. Only names, parameters and pad and layer data are read.</label>
+      <textarea id="rulespaths" style="min-height:64px" spellcheck="false" placeholder="D:\Altium\Libraries&#10;D:\Altium\house.DbLib"></textarea>
+      <div class="row" style="margin-top:8px"><button class="primary" id="rulesgo">Scan and propose</button><span class="muted small">Nothing is written until you save.</span></div>
+    </div>
+    <div id="rulesbusy" class="muted small" hidden>Scanning your libraries…<div class="progress"><div style="width:30%"></div></div></div>
+    <div id="rulesout" class="out"></div>
+    <div id="rulesfile" hidden>
+      <div class="muted small" style="margin:10px 0 4px">The proposed <span class="mono">ecadlib.toml</span>. Each value says where it came from; edit anything before saving.</div>
+      <textarea id="rulestoml" spellcheck="false" aria-label="Proposed ecadlib.toml"></textarea>
+      <div class="row" style="margin-top:8px"><button id="rulesapply" hidden>Apply my answers</button><button class="primary" id="rulessave">Save ecadlib.toml</button><button class="danger" id="rulesreplace" hidden>Replace the existing file</button></div>
+      <div id="rulesdiff"></div>
+    </div>
+  </section>
+
   <section class="card">
     <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a BOM file">
       <strong>Drop a BOM here</strong> (CSV or XLSX), or click to choose a file.
@@ -633,7 +656,69 @@ $("#approve").addEventListener("click", async () => {
   }
 });
 
-loadInfo().catch(showErr); loadSpecs().catch(showErr);
+// ---- library rules (setup)
+let rulesProp = null;
+async function loadRules() {
+  const r = await api("/api/rules");
+  $("#rulesstate").textContent = r.exists
+    ? `Using ${r.file}: new parts follow its naming, parameters, folders, layers and footprint density.`
+    : "No rules file yet, so ecadlib uses its own conventions. Scan your existing libraries and ecadlib proposes rules that make new parts match them.";
+  $("#rulesscan").textContent = r.exists ? "Re-scan…" : "Set up from my libraries…";
+}
+$("#rulesscan").addEventListener("click", () => { $("#rulesform").hidden = !$("#rulesform").hidden; });
+async function proposeRules(choices) {
+  const paths = $("#rulespaths").value.split("\n").map(x => x.trim()).filter(Boolean);
+  $("#rulesgo").disabled = $("#rulesapply").disabled = true; $("#rulesbusy").hidden = false; $("#rulesdiff").innerHTML = "";
+  try {
+    const { job } = await api("/api/rules/propose", { paths, choices: choices || {} });
+    for (;;) {
+      await new Promise(r => setTimeout(r, 400));
+      const j = await api("/api/job?id=" + job);
+      if (j.state === "done") { rulesProp = j.result; showRules(); break; }
+      if (j.state === "error") throw new Error(j.error);
+    }
+  } catch (e) { banner($("#rulesout"), e.message); }
+  finally { $("#rulesgo").disabled = $("#rulesapply").disabled = false; $("#rulesbusy").hidden = true; }
+}
+$("#rulesgo").addEventListener("click", () => proposeRules());
+function showRules() {
+  const p = rulesProp, qs = Object.fromEntries(p.questions.map(q => [q.key, q]));
+  const val = v => typeof v === "string" ? v : JSON.stringify(v);
+  const lvl = { high: "s-ok", medium: "s-warn", low: "s-bad" };
+  const scanned = Object.entries(p.scanned).map(([k, v]) => `${v} ${k}`).join(", ") || "nothing ecadlib can read";
+  const rows = p.settings.map(s => `<tr><td class="mono">${esc(s.key)}</td><td>${qs[s.key]
+      ? `<select data-key="${esc(s.key)}" aria-label="${esc(qs[s.key].text)}">${qs[s.key].choices.map(c => `<option${c === s.value ? " selected" : ""}>${esc(c)}</option>`).join("")}</select><div class="muted sub">${esc(qs[s.key].text)}</div>`
+      : `<span class="mono">${esc(val(s.value))}</span>`}</td>
+    <td><span class="pill ${lvl[s.level]}">${esc(s.level)} ${Math.round(s.confidence * 100)}%</span></td>
+    <td class="notes">${esc(s.source)}<ul class="why">${s.evidence.slice(0, 3).map(e => `<li>${esc(e)}</li>`).join("")}</ul></td></tr>`).join("");
+  $("#rulesout").innerHTML = `<div>Scanned ${esc(scanned)}: ${p.components} parts, ${p.footprints} footprints, ${p.boms} BOMs.` +
+    (p.questions.length ? ` <strong>${p.questions.length} setting(s) had split evidence</strong>: pick below, then Apply my answers.` : "") + `</div>` +
+    (p.warnings.length ? `<div class="muted small">${p.warnings.slice(0, 5).map(esc).join("<br>")}</div>` : "") +
+    (p.errors.length ? `<div class="banner s-bad">${p.errors.map(esc).join("<br>")}</div>` : "") +
+    (rows ? `<div class="tablewrap"><table style="margin-top:6px"><thead><tr><th>Setting</th><th>Proposed</th><th>Confidence</th><th>Evidence</th></tr></thead><tbody>${rows}</tbody></table></div>`
+          : `<div class="muted">Nothing to infer from these files. Add your Altium or KiCad library folders above.</div>`);
+  $("#rulestoml").value = p.toml; $("#rulesfile").hidden = !rows; $("#rulesapply").hidden = !p.questions.length; $("#rulesreplace").hidden = true;
+  $("#rulesdiff").innerHTML = p.diff ? `<div class="muted small" style="margin-top:8px">Changes against your current ${esc(p.file)}:</div><pre class="diff">${esc(p.diff)}</pre>` : "";
+}
+$("#rulesapply").addEventListener("click", () => {
+  const ch = {}; document.querySelectorAll("#rulesout select[data-key]").forEach(x => ch[x.dataset.key] = x.value); proposeRules(ch);
+});
+async function saveRules(overwrite) {
+  try {
+    const r = await api("/api/rules/save", { text: $("#rulestoml").value, overwrite });
+    if (r.needs_confirm) {
+      $("#rulesdiff").innerHTML = `<div class="banner s-warn"><span>${esc(r.path)} already exists and differs. Nothing was written. Review the changes, then replace it (the old file is kept as .bak).</span></div><pre class="diff">${esc(r.diff)}</pre>`;
+      $("#rulesreplace").hidden = false; return;
+    }
+    $("#rulesreplace").hidden = true;
+    toast(r.unchanged ? "No changes: the file already says this." : `Saved ${r.path}` + (r.backup ? ` (old file: ${r.backup})` : ""));
+    $("#rulesdiff").innerHTML = ""; await loadRules(); await loadInfo();
+  } catch (e) { banner($("#rulesdiff"), e.message); }
+}
+$("#rulessave").addEventListener("click", () => saveRules(false));
+$("#rulesreplace").addEventListener("click", () => saveRules(true));
+
+loadInfo().catch(showErr); loadSpecs().catch(showErr); loadRules().catch(showErr);
 </script>
 </body>
 </html>

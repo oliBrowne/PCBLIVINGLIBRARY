@@ -502,17 +502,20 @@ def main(argv=None):
     g.add_argument("specs", nargs="+")
     g.add_argument("-o", "--out", default="out/footprints/ecadlib.pretty")
     g.add_argument("--density", choices="ABC")
+    g.add_argument("--rules", help="library rules file: [footprint] density (default: ecadlib.toml found from here)")
     c = sub.add_parser("compare", help="compare a generated footprint's pads with a reference (path or URL)")
     c.add_argument("mine")
     c.add_argument("ref")
     a = ap.parse_args(argv)
 
     if a.cmd == "gen":
+        from . import rules as RU
         outdir = Path(a.out); outdir.mkdir(parents=True, exist_ok=True)
+        rules = RU.load(a.rules, start=outdir)
         for sp in a.specs:
             spec = json.loads(Path(sp).read_text())
             validate(spec)
-            txt, rep = build(spec, a.density)
+            txt, rep = build(spec, RU.density_for(spec, rules, a.density))
             from . import sexpr
             sexpr.parse(txt)                                          # sanity: balanced S-expression
             (outdir / f"{spec['name']}.kicad_mod").write_text(txt)
