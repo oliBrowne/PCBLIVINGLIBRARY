@@ -470,20 +470,12 @@ def build(spec, density=None):
 
 
 def altium_footprint(spec, density=None):
-    """Altium footprint dict (altium_lib's writer model) for any spec: altium_lib.footprint_from_spec for SMD-only
-    parts, else kicad_import's converter on the generated .kicad_mod (through-hole pads, slots, NPTH holes, keep-outs;
-    a polygon pad becomes its bounding rectangle, noted in the returned notes). Returns (footprint, notes)."""
-    from . import altium_lib as AL, kicad_import as K
-    try:
-        return AL.footprint_from_spec(spec, density)[0], []
-    except ValueError as e:
-        if "only SMD" not in str(e) and "not supported" not in str(e):
-            raise
-    txt, _ = build(spec, density)
-    notes = []
-    fp, _ = K.convert_footprint(txt, notes=notes)
-    fp["height_mm"] = dim(spec["height_max"])[2] if spec.get("height_max") else 0.0
-    return fp, notes
+    """Altium footprint dict (altium_lib's writer model) for any spec, from the same .kicad_mod geometry:
+    altium_lib.footprint_from_spec handles SMD, through-hole (round, square, slots), NPTH holes, polygon pads (anchor
+    pad + copper / mask / paste regions) and keep-outs. Returns (footprint, notes)."""
+    from . import altium_lib as AL
+    fp, rep = AL.footprint_from_spec(spec, density)
+    return fp, rep.get("altium_notes", [])
 
 
 def pin1_triangle(x, y):

@@ -13,7 +13,7 @@ A Workspace is one folder on the user's machine:
     <root>/http_cache/                    provider responses
 
 Each action returns plain JSON-able dicts so the UI and the MCP server can share it."""
-import contextlib, datetime, hashlib, html, json, os, re, secrets
+import contextlib, datetime, hashlib, html, json, math, os, re, secrets
 from pathlib import Path
 
 import pandas as pd
@@ -257,7 +257,7 @@ class Workspace:
             raise ValueError(f"the package spec isn't valid{' at ' + where if where else ''}: {e.message}") from e
         sexpr.parse(text)
         name = self.safe_name(spec["name"], strict=True)
-        return {"name": spec["name"], "report": rep, "kicad_mod": text, "svg": footprint_svg(rep),
+        return {"name": spec["name"], "report": rep, "kicad_mod": text, "svg": footprint_svg(rep, kicad_mod=text),
                 "exists": (self.gen_dir / f"{name}.kicad_mod").exists()}
 
     def preview_symbol(self, pins, name="PART", split=None, stack=None, save=False, overwrite=False):
@@ -853,24 +853,106 @@ def _nexar_token():
     return tok
 
 
-def footprint_svg(rep, scale=40):
-    """Top view: copper pads (pin 1 highlighted), exposed pad and courtyard. KiCad Y points down, as SVG's does."""
-    cx, cy = float(rep["courtyard"][0]) / 2, float(rep["courtyard"][1]) / 2
+def _svg_outline(g):
+    """fp_line / fp_rect / fp_poly -> list of (x, y) points (KiCad frame) and whether it is closed."""
+    if g[0] == "fp_poly":
+        return [(float(c[1]), float(c[2])) for c in sexpr.find(sexpr.first(g, "pts") or [], "xy")], True
+    (x1, y1), (x2, y2) = [(float(c[1]), float(c[2])) for c in (sexpr.first(g, "start"), sexpr.first(g, "end"))]
+    return ([(x1, y1), (x2, y2)], False) if g[0] == "fp_line" else ([(x1, y1), (x2, y1), (x2, y2), (x1, y2)], True)
+
+
+def footprint_geometry(kicad_mod):
+    """What the preview draws, from the .kicad_mod itself (KiCad frame, y down): courtyard and fab outlines, copper
+    pads (rotation, rounded corners, polygon pads) and drills. Each item carries its points for the bounds."""
+    t = sexpr.parse(kicad_mod)
+    out = {"crtyd": [], "fab": [], "pads": [], "holes": []}
+    for kind in ("fp_line", "fp_rect", "fp_poly"):
+        for g in sexpr.find(t, kind):
+            layer = (sexpr.first(g, "layer") or [None, None])[1]
+            if layer in ("F.CrtYd", "F.Fab"):
+                out["crtyd" if layer == "F.CrtYd" else "fab"].append(_svg_outline(g))
+    for p in sexpr.find(t, "pad"):
+        at, size = sexpr.first(p, "at"), sexpr.first(p, "size")
+        x, y, rot = float(at[1]), float(at[2]), float(at[3]) if len(at) > 3 else 0.0
+        w, h = float(size[1]), float(size[2])
+        layers = (sexpr.first(p, "layers") or ["layers"])[1:]
+        a = math.radians(-rot)                                         # KiCad: + is counter-clockwise on screen
+        tf = lambda u, v: (x + u * math.cos(a) - v * math.sin(a), y + u * math.sin(a) + v * math.cos(a))
+        d = sexpr.first(p, "drill")
+        if d:
+            vals = [float(v) for v in d[1:] if isinstance(v, str) and v != "oval"]
+            dw, dh = vals[0], vals[1] if len(vals) > 1 else vals[0]
+            out["holes"].append({"x": x, "y": y, "w": dw, "h": dh, "rot": rot,
+                                 "pts": [tf(sx * dw / 2, sy * dh / 2) for sx in (-1, 1) for sy in (-1, 1)]})
+        if p[2] == "np_thru_hole" or not any(l.endswith(".Cu") for l in layers):
+            continue                                                   # holes only; paste windows aren't copper
+        shape = p[3]
+        pad = {"num": str(p[1]), "x": x, "y": y, "w": w, "h": h, "rot": rot}
+        if shape == "custom":
+            polys = [[tf(float(c[1]), float(c[2])) for c in sexpr.find(sexpr.first(g, "pts") or [], "xy")]
+                     for g in (sexpr.first(p, "primitives") or [])[1:] if g[0] == "gr_poly"]
+            pad["polys"] = [q for q in polys if len(q) > 2]
+        r = {"circle": 0.5, "oval": 0.5}.get(shape, 0.0)
+        rr = sexpr.first(p, "roundrect_rratio")
+        if shape == "roundrect" and rr:
+            r = float(rr[1])
+        pad["r"] = r * min(w, h)
+        pad["pts"] = [tf(sx * w / 2, sy * h / 2) for sx in (-1, 1) for sy in (-1, 1)] + [q for poly in pad.get("polys", []) for q in poly]
+        out["pads"].append(pad)
+    return out
+
+
+def footprint_svg(rep, scale=40, kicad_mod=None):
+    """Top view: copper pads (pin 1 highlighted), drills, exposed pad, fab body and courtyard. KiCad Y points down,
+    as SVG's does. The view box fits what is drawn (through-hole connectors put pin 1, not the centre, at 0,0).
+    kicad_mod: draw from the footprint itself (rotation, polygon pads, holes); else from the report's numbers."""
+    f = lambda v: f"{float(v):.4f}".rstrip("0").rstrip(".")
+    body, pts = [], []
+    if kicad_mod:
+        geo = footprint_geometry(kicad_mod)
+        for cls in ("fab", "crtyd"):
+            for line, closed in geo[cls]:
+                pts += line
+                d = " ".join(f"{f(x)},{f(y)}" for x, y in line)
+                body.append(f'<{"polygon" if closed else "polyline"} class="{cls}" points="{d}"/>')
+        pads = geo["pads"]
+    else:
+        bb = rep.get("courtyard_bbox")
+        if not bb:
+            cx, cy = float(rep["courtyard"][0]) / 2, float(rep["courtyard"][1]) / 2
+            bb = (-cx, -cy, cx, cy)
+        bb = [float(v) for v in bb]
+        pts += [(bb[0], bb[1]), (bb[2], bb[3])]
+        body.append(f'<rect class="crtyd" x="{f(bb[0])}" y="{f(bb[1])}" width="{f(bb[2] - bb[0])}" height="{f(bb[3] - bb[1])}"/>')
+        if "EP" in rep:
+            ew, eh = float(rep["EP"][0]), float(rep["EP"][1])
+            body.append(f'<rect class="pad ep" x="{f(-ew / 2)}" y="{f(-eh / 2)}" width="{f(ew)}" height="{f(eh)}"/>')
+        pads = []
+        for p in rep["pads"]:
+            x, y, w, h = (float(p[k]) for k in ("x", "y", "w", "h"))
+            pads.append({"num": str(p["num"]), "x": x, "y": y, "w": w, "h": h, "rot": 0.0, "r": min(0.25, 0.25 * min(w, h)),
+                         "pts": [(x - w / 2, y - h / 2), (x + w / 2, y + h / 2)]})
+        geo = {"holes": []}
+    p1 = next((p["num"] for p in pads if p["num"] in ("1", "A1")), None)
+    for p in pads:
+        pts += p["pts"]
+        cls = "pad p1" if p["num"] == p1 else "pad"
+        num = html.escape(p["num"])                                    # the UI inserts this SVG as HTML
+        tip = f'<title>pad {num}: {p["w"]:.3f} x {p["h"]:.3f} mm @ ({p["x"]:.3f}, {p["y"]:.3f})</title>'
+        if p.get("polys"):
+            body.append(f'<g class="{cls}">' + "".join(
+                '<polygon points="' + " ".join(f"{f(x)},{f(y)}" for x, y in q) + '"/>' for q in p["polys"]) + tip + "</g>")
+            continue
+        rot = f' transform="rotate({f(-p["rot"])} {f(p["x"])} {f(p["y"])})"' if p["rot"] else ""
+        body.append(f'<rect class="{cls}" x="{f(p["x"] - p["w"] / 2)}" y="{f(p["y"] - p["h"] / 2)}" width="{f(p["w"])}" '
+                    f'height="{f(p["h"])}" rx="{f(p["r"])}"{rot}>{tip}</rect>')
+    for q in geo["holes"]:
+        pts += q["pts"]
+        rot = f' transform="rotate({f(-q["rot"])} {f(q["x"])} {f(q["y"])})"' if q["rot"] else ""
+        body.append(f'<rect class="hole" x="{f(q["x"] - q["w"] / 2)}" y="{f(q["y"] - q["h"] / 2)}" width="{f(q["w"])}" '
+                    f'height="{f(q["h"])}" rx="{f(min(q["w"], q["h"]) / 2)}"{rot}/>')
     m = 0.6
-    vb = f"{-cx - m:.3f} {-cy - m:.3f} {2 * (cx + m):.3f} {2 * (cy + m):.3f}"
-    out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{vb}" width="{2 * (cx + m) * scale:.0f}" '
-           f'height="{2 * (cy + m) * scale:.0f}" class="fp">',
-           f'<rect class="crtyd" x="{-cx}" y="{-cy}" width="{2 * cx}" height="{2 * cy}"/>']
-    if "EP" in rep:
-        ew, eh = float(rep["EP"][0]), float(rep["EP"][1])
-        out.append(f'<rect class="pad ep" x="{-ew / 2}" y="{-eh / 2}" width="{ew}" height="{eh}"/>')
-    for p in rep["pads"]:
-        r = min(0.25, 0.25 * min(p["w"], p["h"]))
-        cls = "pad p1" if p["num"] == "1" else "pad"
-        x, y, w, h = (float(p[k]) for k in ("x", "y", "w", "h"))      # numbers only, and text escaped: the
-        num = html.escape(str(p["num"]))                              # UI inserts this SVG as HTML
-        out.append(f'<rect class="{cls}" x="{x - w / 2:.4f}" y="{y - h / 2:.4f}" '
-                   f'width="{w:.4f}" height="{h:.4f}" rx="{r:.3f}"><title>pad {num}: '
-                   f'{w:.3f} x {h:.3f} mm @ ({x:.3f}, {y:.3f})</title></rect>')
-    out.append("</svg>")
-    return "".join(out)
+    x0, y0 = min(x for x, _ in pts) - m, min(y for _, y in pts) - m
+    vw, vh = max(x for x, _ in pts) + m - x0, max(y for _, y in pts) + m - y0
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{f(x0)} {f(y0)} {f(vw)} {f(vh)}" width="{vw * scale:.0f}" '
+            f'height="{vh * scale:.0f}" class="fp">' + "".join(body) + "</svg>")
