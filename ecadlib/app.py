@@ -603,7 +603,7 @@ class Workspace:
         if not workspace_url:
             raise ValueError("choose an Altium 365 workspace first")
         r = S.run(mode, self._a365_plan(bom), client or A.Nexar(_nexar_token()), workspace_url,
-                  folders=folders or None, log=lambda *_: None)
+                  folders=folders or None, rules=self.rules(), log=lambda *_: None)
         return {"mode": mode, "summary": r["summary"], "conflicts": r["conflicts"], "unresolved": r["unresolved"],
                 "rows": [x for x in r["rows"] if x["status"] != "in_sync"], "components": len(r["components"]),
                 "plan": self.rel(r["plan"]), "state": self.rel(r["state"]) if mode != "status" else None,
