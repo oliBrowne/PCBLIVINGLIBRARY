@@ -940,7 +940,7 @@ def render_symbol(src, out_png, part=None, rules=None, scale=3.0, title=None):
                                               f", {max(parts)} parts" if max(parts) > 1 else "")
     _text(dr, (16, 10), head, _font(22, True), BLACK)
     _text(dr, (16, 42), f"{npins} pin numbers in the whole symbol; red = pin number, black = pin name; "
-                        "stacked pins list every number (1,12,24)", _font(16), C["note"])
+                        "stacked pins list every number, e.g. 1,12,24", _font(16), C["note"])
     _text(dr, (16, 66), f"scale {_fmt(S)} px per 10 mil", _font(14), C["note"])
     if hidden:
         txt = "hidden pins (tied by name): " + "; ".join(hidden[:40]) + (" ..." if len(hidden) > 40 else "")
@@ -1280,6 +1280,19 @@ def _resolve(v, base):
     return v
 
 
+def _plan_datasheet(plan_dir, part):
+    """The datasheet link of plan item `part` in <plan_dir>/plan.json, or None."""
+    try:
+        items = json.loads((Path(plan_dir) / "plan.json").read_text()) if plan_dir and part else []
+    except (OSError, ValueError):
+        return None
+    for it in items.get("items", []) if isinstance(items, dict) else items:
+        if isinstance(it, dict) and it.get("name") == part:
+            par = {p.get("name"): p.get("value") for p in it.get("parameters", []) if isinstance(p, dict)}
+            return par.get("ComponentLink2URL") or par.get("Datasheet") or None
+    return None
+
+
 def _inputs(item, workspace=None):
     """item: a dict (keys at the top level or under "build": footprint, symbol, datasheet, pages, mpn / part / name,
     package, base) or a footprint path / part name. Plan-style {"footprint": {"kicad_mod": ...}, "symbol": {"file": ...}}
@@ -1295,6 +1308,16 @@ def _inputs(item, workspace=None):
         sym = sym.get("file")
     base = d.get("base") or (Path(workspace) if workspace else None)
     ds = d.get("datasheet")
+    b, line = item.get("build") or {}, (item.get("change") or {}).get("line") or {}
+    if fp is None and sym is None and isinstance(b.get("files"), dict):
+        # an agent_queue item: build.files are relative to the librarian plan's folder (build.plan, workspace-relative)
+        pdir = (Path(workspace) / b["plan"]).parent if workspace and b.get("plan") else None
+        at = lambda v: str(pdir / v) if v and pdir is not None and not Path(v).is_absolute() else v
+        f = b["files"]
+        fp = at(f.get("kicad_mod") or (f.get("footprint") if str(f.get("footprint") or "").endswith(".kicad_mod") else None))
+        sym = at(f.get("symbol"))
+        ds = ds or line.get("datasheet") or _plan_datasheet(pdir, b.get("part"))
+        d.setdefault("package", line.get("footprint") or None)
     if not ds:
         par = {p.get("name"): p.get("value") for p in d.get("parameters", []) if isinstance(p, dict)}
         ds = par.get("ComponentLink2URL") or par.get("Datasheet")
@@ -1427,9 +1450,10 @@ def _find_part(name, workspace):
             found["footprint"] = str(f)
     for plan in sorted(root.glob("librarian/*/plan.json")):
         try:
-            items = json.loads(plan.read_text()).get("items", [])
+            items = json.loads(plan.read_text())
         except ValueError:
             continue
+        items = items.get("items", []) if isinstance(items, dict) else items     # librarian plans are a plain list
         for it in items:
             par = {p.get("name"): p.get("value") for p in it.get("parameters", []) if isinstance(p, dict)}
             if name in (it.get("name"), par.get("Manufacturer Part Number")):

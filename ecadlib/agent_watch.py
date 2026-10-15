@@ -529,7 +529,10 @@ def _adopt(state, sid, src, new_files, meta, active):
 
 def _change(kind, key, line, was, src, when):
     ln = line if kind != "removed" else was
-    return {"key": key, "mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "kind": kind,
+    # a line without an MPN (a bare passive) is keyed "|VALUE FOOTPRINT": the Change's mpn says the same, so the key
+    # stays manufacturer|MPN (agent_queue refuses an item without an MPN); line.mpn stays empty for the builder
+    mpn = ln.get("mpn") or " ".join(x for x in (str(ln.get("value") or "").strip(), str(ln.get("footprint") or "").strip()) if x)
+    return {"key": key, "mpn": mpn, "manufacturer": ln.get("manufacturer", ""), "kind": kind,
             "source": {"type": src["type"], "ref": src["ref"], "name": src.get("name") or src["ref"]},
             "line": dict(line or {}), "was": dict(was or {}), "detected": when}
 

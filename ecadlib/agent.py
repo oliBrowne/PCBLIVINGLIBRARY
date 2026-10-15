@@ -258,6 +258,10 @@ def _find_plan_item(plan_items, item):
         p = _par(pi)
         if mpn and (p.get("Manufacturer Part Number", "").strip().upper() == mpn or pi.get("name", "").upper() == mpn):
             hits.append(pi)
+    ln = (item.get("change") or {}).get("line") or {}
+    if not hits and not ln.get("mpn") and ln.get("value"):       # a bare passive: matched by value like the librarian
+        same = [pi for pi in plan_items if not _par(pi).get("Manufacturer Part Number") and _par(pi).get("Value") == ln["value"]]
+        hits = [pi for pi in same if (pi.get("footprint") or {}).get("ref") == ln.get("footprint")] or same
     return next((h for h in hits if _par(h).get("Manufacturer", "").strip().lower() == mfr), hits[0] if hits else None)
 
 
@@ -424,6 +428,9 @@ def pr_body(batch_id, items, link, t):
             md.append("")
         elif b.get("action") == "none":
             md += [f"Nothing rebuilt: {b.get('reason', '')}", ""]
+        ds = str((ch.get("line") or {}).get("datasheet") or "")
+        if ds.startswith(("http://", "https://")):
+            md += [f"Datasheet: <{ds}>", ""]
         pics = it.get("pictures") or {}
         before, after = pics.get("before") or [], pics.get("after") or []
         if before or after:
@@ -434,7 +441,8 @@ def pr_body(batch_id, items, link, t):
             md.append("")
         if pr:
             md.append(f"**Proof:** {pr.get('verdict', '?')}" + (f" (score {pr['score']:.2f})" if isinstance(pr.get("score"), (int, float)) else "")
-                      + (f": {pr.get('reason')}" if pr.get("reason") else "") + (f" ({pr['model']})" if pr.get("model") else ""))
+                      + (f": {pr.get('reason')}" if pr.get("reason") else "")
+                      + (f" ({pr['model']})" if pr.get("model") and pr.get("verdict") != "skipped" else ""))
             if pr.get("findings"):
                 md += ["", "| Severity | What | Expected | Found | Page |", "|---|---|---|---|---|"]
                 md += [f"| {_esc(f.get('severity'))} | {_esc(f.get('what'))} | {_esc(f.get('expected'))} | {_esc(f.get('found'))} | "
@@ -682,8 +690,14 @@ def _pass(ws, rules, cfg, t, dry_run, client, now, watcher, q, prover, builder, 
         return
 
     for c in changes:
-        q.upsert({"key": c.get("key") or part_key(c.get("manufacturer"), c.get("mpn")), "mpn": c.get("mpn", ""),
-                  "manufacturer": c.get("manufacturer", ""), "origin": "watch", "change": c})
+        it = q.upsert({"key": c.get("key") or part_key(c.get("manufacturer"), c.get("mpn")), "mpn": c.get("mpn", ""),
+                       "manufacturer": c.get("manufacturer", ""), "origin": "watch", "change": c})
+        if it.get("status") == "review" and c.get("kind") in ("new", "changed"):
+            # the source changed while the part waits for review: rebuild it (its batch PR is then updated)
+            q.update(it["id"], build=dict(it.get("build") or {}, requested_at=t, request_note=f"source {c.get('kind')}"))
+            q.transition(it["id"], "building", user=AGENT, note=f"rebuild: {c.get('kind')} in a watched source")
+        elif it.get("status") == "approved" and c.get("kind") == "changed":
+            rep["notes"].append(f"{it.get('mpn')}: changed in a watched source after approval; reject and retry it to rebuild")
     for f in findings:
         q.upsert(finding_item(f, now))
 
@@ -709,6 +723,8 @@ def _pass(ws, rules, cfg, t, dry_run, client, now, watcher, q, prover, builder, 
         if not items:
             continue
         rec = publish_batch(ws, rules, bid, items, out, now, env, session, log)
+        if rec.get("pr_url") and hasattr(q, "update_batch"):   # the queue's batch record (web UI batch view) gets the PR too
+            q.update_batch(bid, pr_url=rec["pr_url"], branch=rec.get("branch"))
         for i in items:
             if rec.get("pr_url") and i.get("pr_url") != rec["pr_url"]:
                 q.update(i["id"], pr_url=rec["pr_url"])
@@ -807,6 +823,8 @@ def _build(ws, rules, cfg, t, client, q, prover, builder, libs, log, rep):
                                                          "footprint": (pi.get("footprint") or {}).get("file"),
                                                          "kicad_mod": (pi.get("footprint") or {}).get("kicad_mod")},
              "plan": (out / "plan.json").relative_to(ws).as_posix()}
+        prev = it.get("build") or {}                 # who asked for this rebuild: agent_queue refuses their approval
+        b.update({k: prev[k] for k in ("requested_by", "requested_at", "request_note") if prev.get(k)})
         if not (pi["symbol"].get("file") and pi["footprint"].get("file")):
             if any("run again to collect" in x for x in tried):
                 b["pending"] = "datasheet batch submitted; the next run collects it"
@@ -923,12 +941,14 @@ def main(argv=None):
         if a.cmd == "reject" and not a.note.strip():
             print("a reject needs -m saying what is wrong", file=sys.stderr)
             return 2
-        try:
-            it = AQ.decide(ws, a.id, a.cmd, a.user or identity(), role=a.role, note=a.note, via="ecadlib agent")
+        from .app import Workspace
+        try:                        # decide() records through Workspace.approve_part, so it needs a Workspace, not a path
+            r = AQ.decide(Workspace(ws), a.id, a.cmd, a.user or identity(cwd=ws), role=a.role, note=a.note, via="ecadlib agent")
         except (ValueError, PermissionError, KeyError) as e:
-            print(f"error: {e}", file=sys.stderr)
+            print(f"error: {e.args[0] if e.args else e}", file=sys.stderr)
             return 2
-        print(f"{a.id}: {(it or {}).get('status', a.cmd + 'd')}")
+        ap_ = r.get("approval")
+        print(f"{a.id}: {r['item']['status']}" + (f"; approvals.py: {'recorded' if ap_['recorded'] else ap_['reason']}" if ap_ else ""))
         return 0
     rep = push_approved(ws, rules, a.dry_run)
     print(json.dumps(rep, indent=2, default=str))
