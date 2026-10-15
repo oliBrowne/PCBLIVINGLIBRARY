@@ -394,6 +394,16 @@ def facts(fp, pin1_names=PIN1_NAMES):
         # right). The pitch is the spacing along the row, not the diagonal.
         along = [round(min(dx, dy), 3) for dx, dy in vec[pitch]]
         pitch = max(set(along), key=lambda v: (along.count(v), -v))
+    real = [p for p in pins if id(p) not in vias]
+    for a, b in (("x", "y"), ("y", "x")):     # one staggered row (alternating sides, wide pads): the pitch along it
+        cols = {}
+        for p in real:
+            cols.setdefault(round(p[a], 3), set()).add(round(p[b], 3))
+        if len(cols) == 2 and len(real) >= 4 and not set.intersection(*cols.values()):
+            seq = sorted((v, k) for k, vs in cols.items() for v in vs)
+            if all(s0[1] != s1[1] for s0, s1 in zip(seq, seq[1:])):
+                steps = [round(s1[0] - s0[0], 3) for s0, s1 in zip(seq, seq[1:])]
+                pitch = max(set(steps), key=lambda v: (steps.count(v), -v))
     p1 = _pin1(pads, pin1_names)
     out = {"name": fp["name"], "pads": sum((p["copper"] or p["kind"] == "np_thru_hole") and id(p) not in vias for p in pads),
            "pins": len({p["num"] for p in pins}), "paste_only": sum(not p["copper"] and p["kind"] != "np_thru_hole" for p in pads),
