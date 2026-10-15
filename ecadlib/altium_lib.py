@@ -827,9 +827,13 @@ def parse_pcb_data(d):
 
 
 def read_pcblib(path):
+    """Raises ValueError for a damaged or unknown-format file (OSError when it is not an OLE file at all)."""
     import olefile
     with olefile.OleFileIO(str(path)) as o:
-        return _read_pcblib(o)
+        try:
+            return _read_pcblib(o)
+        except (struct.error, zlib.error, IndexError, KeyError, EOFError) as e:
+            raise ValueError(f"{Path(path).name}: damaged or unsupported .PcbLib ({type(e).__name__}: {e})") from e
 
 
 def _read_pcblib(o):
@@ -861,9 +865,13 @@ def _read_pcblib(o):
 
 
 def read_schlib(path):
+    """Raises ValueError for a damaged or unknown-format file (OSError when it is not an OLE file at all)."""
     import olefile
     with olefile.OleFileIO(str(path)) as o:
-        return _read_schlib(o)
+        try:
+            return _read_schlib(o)
+        except (struct.error, zlib.error, IndexError, KeyError, EOFError) as e:
+            raise ValueError(f"{Path(path).name}: damaged or unsupported .SchLib ({type(e).__name__}: {e})") from e
 
 
 def _read_schlib(o):

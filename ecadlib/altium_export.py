@@ -13,7 +13,7 @@ Column names use Altium's reserved DbLib names ([Library Ref], [Library Path], [
 [Footprint Path], [Description]) plus parameters (Part Number = key, Value, Comment, Manufacturer,
 Manufacturer Part Number, Supplier 1/Supplier Part Number 1, ComponentLink1URL/Description).
 See README for what is verified vs assumed about the .DbLib INI keys."""
-import argparse, re, sqlite3
+import argparse, re, sqlite3, sys
 from contextlib import closing
 from pathlib import Path, PureWindowsPath
 
@@ -164,7 +164,14 @@ def main(argv=None):
 
     from . import rules as RU
     rules = RU.load(a.rules, start=a.out)
-    lines, _ = read_bom(a.bom, RU.bom_columns(rules), rules)
+    try:
+        lines, _ = read_bom(a.bom, RU.bom_columns(rules), rules)
+    except (ValueError, OSError) as e:                   # unreadable / headerless BOM: a message, not a traceback
+        print(f"cannot read BOM: {e}", file=sys.stderr)
+        return 2
+    if not lines:
+        print(f"cannot read BOM: {a.bom} has a header but no part lines", file=sys.stderr)
+        return 2
     tri = pd.read_csv(a.triage, dtype=str).fillna("") if a.triage else None
     tables = to_rows(lines, tri, rules)
     tables = {k: df.rename(columns=lambda c: RU.house_row({c: 0}, rules).popitem()[0]) for k, df in tables.items()}
@@ -177,9 +184,13 @@ def main(argv=None):
             cols = ", ".join(f'"{c}" TEXT' + (" PRIMARY KEY" if c == "Part Number" else "") for c in df.columns)
             con.execute(f'CREATE TABLE "{name}" ({cols})')
             con.executemany(f'INSERT INTO "{name}" VALUES ({",".join("?" * len(df.columns))})', df.values.tolist())
-    with pd.ExcelWriter(out / "parts.xlsx") as w:
+    with pd.ExcelWriter(out / "parts.xlsx", engine="openpyxl") as w:   # a declared dependency
         for name, df in tables.items():
             df.to_excel(w, sheet_name=name, index=False)
+            for row in w.sheets[name].iter_rows(min_row=2):    # all text: Comment "=Value" is Altium's parameter
+                for c in row:                                     # reference, not an Excel formula (#NAME?)
+                    if isinstance(c.value, str):
+                        c.data_type = "s"
 
     win = PureWindowsPath(a.win_dir)
     sqlite_cs, excel_cs = sqlite_connection(win / "parts.sqlite"), excel_connection(win / "parts.xlsx")
@@ -192,4 +203,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

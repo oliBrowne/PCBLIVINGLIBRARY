@@ -21,7 +21,7 @@ Install it with pip (Python 3.10 or later):
 
 ```
 pip install ecadlib                 # once a release is on PyPI (see Releases below)
-pip install "ecadlib[pdf,altium]"   # pypdf trims datasheets to --pages; olefile reads .PcbLib/.SchLib back
+pip install "ecadlib[pdf]"          # pypdf trims datasheets to --pages
 pip install -e ".[dev]"             # from a checkout: editable, plus everything the test suite uses
 ```
 
@@ -181,7 +181,7 @@ Tests: `python3 -m tests.test_team_setup` runs the setup end to end against a st
 
 Tests: `python3 -m tests.test_ui` covers the workspace, web server, MCP server and CLI. `python3 -m tests.test_offline` covers the core modules. `python3 -m tests.test_footprints` checks generated footprints by part type against KiCad's library and the KLC rules.
 
-Requirements: Python 3.10 or later (tested on 3.11 and 3.13) with `requests`, `pandas`, `openpyxl` and `jsonschema`, which pip installs. `pypdf` and `olefile` are optional extras. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
+Requirements: Python 3.10 or later (tested on 3.11 and 3.13) with `requests`, `pandas`, `openpyxl`, `jsonschema` and `olefile`, which pip installs. `pypdf` and `pillow` are optional extras. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
 
 ```
 ecad-librarian/
@@ -1007,6 +1007,18 @@ Settings live in `[agent.proof]`: `model`, `effort`, `api_key_env`, `max_cost_us
 estimate before anything is sent. The same check is available as `Workspace.visual_check` and as the MCP tool
 `visual_check`. Pictures and `proof.json` go to `agent/proofs/<part>/`. Drawing needs Pillow (`pip install
 'ecadlib[vision]'`).
+
+## 24. Robustness tests: real-world BOMs, fuzzers, CLI smoke
+
+```
+python3 -m tests.test_realworld_boms        # BOM exports as engineers make them, plus the error contracts
+python3 -m tests.test_fuzz [SCALE]          # deterministic fuzzers (fixed seeds, ~12 s; SCALE=15 for a long run)
+python3 -m tests.test_cli_smoke [--subprocess]   # every command: -h and a minimal offline run
+```
+
+* **BOMs:** Altium ActiveBOM CSV/XLSX (title rows, `Manufacturer Part Number 1/2`, totals), KiCad 8 (`${QUANTITY}`, `${DNP}`), JLCPCB, DigiKey and Mouser cart exports, Octopart, semicolon CSV with decimal commas in latin-1, UTF-8 with BOM, UTF-16 (Excel "Unicode Text"), hand-made Excel with merged title rows, a cover sheet, blank lines, DNP marks and `R1-R10` ranges. They were run through triage, librarian, resolve, release-check, kicad-export, dblib, dblib-sync, dedupe, sourcing, upkeep, agent-watch, `agent run --dry-run`, the web UI upload and the MCP tools.
+* **Fuzzers:** the BOM reader, `sexpr.parse`, the KiCad footprint/symbol importer, the Altium OLE readers (`.SchDoc`, `.PcbLib`), package-spec validation and build, `ecadlib.toml` loading, the web UI's JSON endpoints and the MCP tools. Each target may raise only its documented error type (listed in the file's docstring); anything else fails with the input that caused it.
+* **CLI smoke:** every registered command answers `-h`. A minimal real invocation of each one (offline, in a temporary folder with `$HOME` redirected) must exit with an expected code, print no traceback and change nothing outside its output folder. `--subprocess` runs the installed `ecadlib` script instead, for the fresh-install check: `pip wheel --no-deps .`, install the wheel into a clean venv (Python 3.11 and 3.13), and run `python -m tests.test_cli_smoke --subprocess` from outside the checkout. `test_third_party_imports_are_declared` fails when a module imports a package that is not in `[project] dependencies` (only `pillow` and `pypdf` are optional extras).
 
 ## Releases
 

@@ -200,8 +200,19 @@ def _hidden(node):                            # KiCad 7 bare `hide` atom or KiCa
 
 
 # ---------------------------------------------------------------- footprints
+MALFORMED = (IndexError, TypeError, AttributeError, KeyError, OverflowError, ZeroDivisionError)
+
+
 def convert_footprint(text, name=None, source="", notes=None):
-    """.kicad_mod text -> altium_lib footprint dict (mm, y up), no 3D body yet."""
+    """.kicad_mod text -> altium_lib footprint dict (mm, y up), no 3D body yet. Raises ValueError for a file that
+    does not parse or is missing what a footprint needs (a pad without a size, a line without an end ...)."""
+    try:
+        return _convert_footprint(text, name, source, notes)
+    except MALFORMED as e:
+        raise ValueError(f"malformed KiCad footprint {name or ''}: {type(e).__name__}: {e}".replace("  ", " ")) from e
+
+
+def _convert_footprint(text, name=None, source="", notes=None):
     notes = [] if notes is None else notes
     t = sexpr.parse(text)
     descr = (sexpr.first(t, "descr") or ["", ""])[1]
@@ -576,6 +587,14 @@ def _props(chain):
 
 
 def convert_symbol(chain, name=None, footprint=None, extra=(), pin_map=None, notes=None):
+    """See _convert_symbol. Raises ValueError for a symbol missing what it needs (a pin without (at ...), ...)."""
+    try:
+        return _convert_symbol(chain, name, footprint, extra, pin_map, notes)
+    except MALFORMED as e:
+        raise ValueError(f"malformed KiCad symbol {name or ''}: {type(e).__name__}: {e}".replace("  ", " ")) from e
+
+
+def _convert_symbol(chain, name=None, footprint=None, extra=(), pin_map=None, notes=None):
     """[symbol, parent, ...] -> altium_lib symbol dict. Units become Altium parts, De Morgan body styles
     (`_U_2` sub-symbols) Altium display modes; unit 0 / style 0 items go into every part / mode."""
     notes = [] if notes is None else notes
