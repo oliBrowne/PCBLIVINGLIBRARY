@@ -207,7 +207,7 @@ def scan_pcblib(lib, f):
                 bp = AL.parse_params(r.get("params", ""))
                 v7 = bp.get("V7_LAYER", "")
                 m = re.match(r"MECHANICAL(\d+)", v7)
-                bodies.append(56 + int(m.group(1)) if m else r["layer"])
+                bodies.append(56 + int(m.group(1)) if m and int(m.group(1)) <= 16 else r["layer"])   # 17..32: reader's id
             elif t == "text":
                 texts.append((r["text"], r["layer"]))
         lib.footprints.append({"name": fp["name"], "origin": f"PcbLib {f.name}", "kind": "altium", "pads": pads,
@@ -819,7 +819,8 @@ def infer_layers(lib):
             if l != crt and not any(t == ".Comment" for t, _ in f["texts"]):
                 votes["assembly"][l] += 1
         for l in f["bodies"]:
-            votes["body3d"][l] += 1
+            if 57 <= l <= 72:                     # the writer's (and rules') mechanical layers: 1..16
+                votes["body3d"][l] += 1
         ov = [l for l in f["graphics"] if l in (33, 34)]
         if ov:
             votes["silkscreen"][33 if 33 in ov else ov[0]] += 1
