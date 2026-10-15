@@ -22,6 +22,7 @@ from pathlib import Path
 import requests
 
 from . import altium_lib as AL, footprint_gen as F
+from .fsutil import write_text_atomic
 
 API_BASE = "https://api.anthropic.com"
 API_URL = API_BASE + "/v1/messages"
@@ -31,7 +32,7 @@ FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "clau
 FALLBACK_BETA = "server-side-fallback-2026-07-01"     # fallbacks: "default" (re-run a classifier decline)
 MAX_PDF = 24 * 2 ** 20                                # 32 MB request limit after base64
 TO_MM = {"mm": 1.0, "in": 25.4, "mil": 0.0254}
-SCHEMA = json.loads(Path(F.__file__).with_name("package_schema.json").read_text())
+SCHEMA = json.loads(Path(F.__file__).with_name("package_schema.json").read_text(encoding="utf-8"))
 DIMS = [k for k, v in SCHEMA["properties"].items() if v.get("$ref") == "#/$defs/dim"]
 NUM_DIMS = [k for k, v in SCHEMA["properties"].items() if v.get("type") == "number"]   # plain numbers (pitch, height_max,
                                                       # pitch_y, ...): still read as printed with a unit, nom (height: max) kept
@@ -222,7 +223,7 @@ class Client:
     def _log(self, rec):
         if self.log_file:
             Path(self.log_file).parent.mkdir(parents=True, exist_ok=True)
-            with open(self.log_file, "a") as f:
+            with open(self.log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, default=str) + "\n")
 
     def request(self, method, url, body=None, headers=None, raw=False, retry_on=None):
@@ -893,7 +894,7 @@ def write(res, outdir):
     part = safe(res["symbol"]["name"])
     def holds(f, kind):                               # what an existing file in the folder is (another part's output)
         try:
-            v = json.loads(f.read_text()) if f.exists() else None
+            v = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
         except (OSError, ValueError):
             return False
         return isinstance(v, dict) and (("package_type" in v) if kind == "spec" else ("pins" in v and "package_type" not in v))
@@ -906,8 +907,8 @@ def write(res, outdir):
         spec_f = d / f"{spec_stem}.package.json"      # a symbol / sidecar there is never overwritten by a spec
     paths = {"spec": spec_f, **paths}
     for k in ("spec", "symbol", "sidecar"):
-        paths[k].write_text(json.dumps(res[k], indent=2) + "\n")
-    paths["report"].write_text(report(res))
+        paths[k].write_text(json.dumps(res[k], indent=2) + "\n", encoding="utf-8")
+    paths["report"].write_text(report(res), encoding="utf-8")
     return paths
 
 
@@ -1013,7 +1014,7 @@ class PdfStore:
         pdf_f, meta_f = self.dir / f"{stem}.pdf", self.dir / f"{stem}.json"
         if pdf_f.exists() and meta_f.exists():
             data = pdf_f.read_bytes()
-            meta = json.loads(meta_f.read_text())
+            meta = json.loads(meta_f.read_text(encoding="utf-8"))
             if hashlib.sha256(data).hexdigest() == meta.get("sha256"):
                 return data, dict(meta, where=where or meta.get("where"), from_cache=True)
         if self.offline:
@@ -1033,7 +1034,7 @@ class PdfStore:
                 "fetched": datetime.datetime.now().isoformat(timespec="seconds")}
         self.dir.mkdir(parents=True, exist_ok=True)
         pdf_f.write_bytes(data)
-        meta_f.write_text(json.dumps(meta, indent=2))
+        meta_f.write_text(json.dumps(meta, indent=2), encoding="utf-8")
         return data, dict(meta, from_cache=False)
 
 
@@ -1121,12 +1122,12 @@ class ResultCache:
 
     def get(self, key):
         f = self.dir / f"{key}.json"
-        return json.loads(f.read_text()) if f.exists() else None
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
 
     def put(self, key, rec):
         self.dir.mkdir(parents=True, exist_ok=True)
         tmp = self.dir / f"{key}.tmp"
-        tmp.write_text(json.dumps(rec, indent=1))
+        tmp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
         os.replace(tmp, self.dir / f"{key}.json")
 
 
@@ -1292,11 +1293,11 @@ class Reader:
     # --- batch
     def _state(self):
         f = self.dir / "batch_state.json"
-        return json.loads(f.read_text()) if f.exists() else {"batches": []}
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"batches": []}
 
     def _save_state(self, st):
         self.dir.mkdir(parents=True, exist_ok=True)
-        (self.dir / "batch_state.json").write_text(json.dumps(st, indent=2))
+        write_text_atomic(self.dir / "batch_state.json", json.dumps(st, indent=2))
 
     def _resolve_pending_creates(self, st, client):
         """A batch create whose answer was lost (timeout, connection reset, 5xx) may have created a paid batch. Before
@@ -1478,9 +1479,9 @@ def estimate_plan(plan, reader, parts=None):
     """Cost of fill_plan before anything is sent: finds and downloads the datasheets (cached), builds the requests,
     counts. Writes nothing next to the plan."""
     plan_f = Path(plan)
-    items = json.loads(plan_f.read_text())
+    items = json.loads(plan_f.read_text(encoding="utf-8"))
     sf = plan_f.parent / "librarian_state.json"
-    state = json.loads(sf.read_text()) if sf.exists() else {}
+    state = json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}
     jobs, skipped = [], []
     for it in open_parts(plan_f, items, state, parts):
         ln, mpn = _plan_line(it)
@@ -1503,9 +1504,9 @@ def fill_plan(plan, reader, rules=None, log=print, parts=None):
     plan_f = Path(plan)
     out = plan_f.parent
     rules = RU.resolve(rules, out)
-    items = json.loads(plan_f.read_text())
+    items = json.loads(plan_f.read_text(encoding="utf-8"))
     state_f = out / "librarian_state.json"
-    state = json.loads(state_f.read_text()) if state_f.exists() else {}
+    state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.exists() else {}
     r = L.Run(out, reader.http, None, [], ["datasheet"], reader.key, rules=rules, reader=reader)
     for st in state.values():                         # files other parts own are shared, never overwritten
         for k in ("symbol", "footprint"):
@@ -1530,9 +1531,9 @@ def fill_plan(plan, reader, rules=None, log=print, parts=None):
         L.apply_state(it, st, ln)
         state[it["name"]] = st
         log(f"  {'done ' if L._done(st, out) else 'open '}{it['name']:<28} sym={it['source']['symbol'] or '-'}  fp={it['source']['footprint'] or '-'}")
-    state_f.write_text(json.dumps(state, indent=2))
+    write_text_atomic(state_f, json.dumps(state, indent=2))
     checks = RC.apply(items, out, rules=rules)
-    plan_f.write_text(json.dumps(items, indent=2))
+    write_text_atomic(plan_f, json.dumps(items, indent=2))
     RC.write_report(checks, out / "release_check", plan_f)
     L.write_review(L.review_rows(items), out, str(plan_f))
     return items
@@ -1621,7 +1622,7 @@ def main(argv=None):
     try:
         pages = parse_pages(a.pages) if a.pages else None
         if a.from_response:
-            saved = json.loads(Path(a.from_response).read_text())
+            saved = json.loads(Path(a.from_response).read_text(encoding="utf-8"))
             msg, offset = (saved["message"], saved["page_offset"]) if "message" in saved else (saved, 0)
             ext = parse_message(msg)
         else:
@@ -1660,7 +1661,7 @@ def main(argv=None):
     paths = write(res, a.out)
     if not a.from_response:
         paths["response"] = paths["symbol"].with_name(paths["symbol"].stem + ".response.json")
-        paths["response"].write_text(json.dumps({"page_offset": offset, "message": msg}, indent=2) + "\n")
+        paths["response"].write_text(json.dumps({"page_offset": offset, "message": msg}, indent=2) + "\n", encoding="utf-8")
     for k, p in paths.items():
         print(f"{k:<8} {p}")
     n = len(res["needs_review"])

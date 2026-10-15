@@ -145,7 +145,7 @@ def _remote(repo, path):
 def fp_sources(ref, http):
     """[(role, location, text, extra)] the converter read for a footprint: the .kicad_mod and its STEP model."""
     if Path(ref).suffix == ".kicad_mod":
-        loc, text = str(ref), Path(ref).read_text()
+        loc, text = str(ref), Path(ref).read_text(encoding="utf-8")
     else:
         lib, name = ref.split(":", 1)
         path = f"{lib}.pretty/{name}.kicad_mod"
@@ -167,10 +167,10 @@ def sym_sources(ref, http):
         path = Path(m.group(1))
         def get(name):
             for f in (path, path.with_name(f"{name}.kicad_sym")):
-                if f.exists() and _find_symbol(f.read_text(), name):
-                    return str(f), f.read_text()
+                if f.exists() and _find_symbol(f.read_text(encoding="utf-8"), name):
+                    return str(f), f.read_text(encoding="utf-8")
             raise FileNotFoundError(f"symbol {name} not in {path}")
-        name = m.group(2) or [s[1] for s in sexpr.find(sexpr.parse(path.read_text()), "symbol")][0]
+        name = m.group(2) or [s[1] for s in sexpr.find(sexpr.parse(path.read_text(encoding="utf-8")), "symbol")][0]
     else:
         lib, name = ref.split(":", 1)
         def get(name):
@@ -213,14 +213,14 @@ def source_record(role, loc, text, extra, http):
 
 def load_manifest(path):
     p = Path(path)
-    return json.loads(p.read_text()) if p.exists() else {"version": 1, "entries": {}}
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {"version": 1, "entries": {}}
 
 
 def save_manifest(path, man):
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(man, indent=1))
+    tmp.write_text(json.dumps(man, indent=1), encoding="utf-8")
     os.replace(tmp, p)
 
 
@@ -315,8 +315,8 @@ def check_source(src, gl, memo):
                 f = Path(src["file"])
                 if not f.exists():
                     res["status"] = "deleted"
-                elif digests(f.read_text())[0] != src["sha256"]:
-                    res.update(status="changed", text=f.read_text())
+                elif digests(f.read_text(encoding="utf-8"))[0] != src["sha256"]:
+                    res.update(status="changed", text=f.read_text(encoding="utf-8"))
         except Exception as e:
             res.update(status="error", changes=[f"{type(e).__name__}: {e}"])
         memo[key] = res
@@ -479,7 +479,7 @@ def check_a365(items, nodes, folders=None, state=None, rules=None):
 def write_report(rows, out, title, cols, meta=()):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out.with_suffix(".csv"), "w", newline="") as f:
+    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader(); w.writerows(rows)
     esc = lambda v: str(v if v is not None else "").replace("|", "\\|").replace("\n", " ")
@@ -488,7 +488,7 @@ def write_report(rows, out, title, cols, meta=()):
         md += ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)] + ["| " + " | ".join(esc(r.get(c)) for c in cols) + " |" for r in rows]
     else:
         md.append("No changes.")
-    out.with_suffix(".md").write_text("\n".join(md) + "\n")
+    out.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
 
 
 KICAD_COLS = ["entry", "kind", "kicad_ref", "role", "source", "status", "summary", "upstream_commit", "upstream_date", "update"]
@@ -517,7 +517,7 @@ def main(argv=None):
 
     if a.cmd == "check-kicad":
         try:
-            man = json.loads(Path(a.manifest).read_text())
+            man = json.loads(Path(a.manifest).read_text(encoding="utf-8"))
             rows, worst = check_kicad(man, GitLab(token=os.environ.get("GITLAB_TOKEN")))
         except Exception as e:
             print(f"check-kicad: {type(e).__name__}: {e}", file=sys.stderr); return 2
@@ -547,8 +547,8 @@ def main(argv=None):
         print("check-a365: set NEXAR_TOKEN (design.domain, user.access, openid)", file=sys.stderr); return 2
     try:
         from .altium365 import Nexar
-        items = json.loads(Path(a.plan).read_text())
-        state = json.loads(Path(a.state).read_text()) if a.state and Path(a.state).exists() else None
+        items = json.loads(Path(a.plan).read_text(encoding="utf-8"))
+        state = json.loads(Path(a.state).read_text(encoding="utf-8")) if a.state and Path(a.state).exists() else None
         from .rules import load
         rules = load(a.rules, start=Path(a.plan).parent)
         rows, new_state = check_a365(items, workspace_components(Nexar(token), a.workspace), a.folder, state, rules)
@@ -556,7 +556,7 @@ def main(argv=None):
         print(f"check-a365: {type(e).__name__}: {e}", file=sys.stderr); return 2
     if a.state:
         Path(a.state).parent.mkdir(parents=True, exist_ok=True)
-        Path(a.state).write_text(json.dumps(new_state, indent=1))
+        Path(a.state).write_text(json.dumps(new_state, indent=1), encoding="utf-8")
     write_report(rows, a.out, "Altium 365 drift", A365_COLS, [f"Plan `{a.plan}` vs `{a.workspace}`, checked {now}."])
     for r in rows:
         print(f"  {r['status']:<11} {r['name']:<28} {r['field']:<24} plan={r['plan']!r} workspace={r['workspace']!r}")

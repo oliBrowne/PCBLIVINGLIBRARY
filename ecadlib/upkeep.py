@@ -63,8 +63,8 @@ def load_rules(path=None, start="."):
     p = Path(path)
     if p.suffix == ".toml":
         import tomllib
-        return tomllib.loads(p.read_text())
-    return json.loads(p.read_text())
+        return tomllib.loads(p.read_text(encoding="utf-8"))
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def upkeep_rules(rules):
@@ -81,7 +81,7 @@ class Source:
         if not self.path.is_file():
             raise FileNotFoundError(f"input not found: {path}")
         self.kind = "plan" if self.path.suffix.lower() == ".json" else "bom"
-        self.items = json.loads(self.path.read_text()) if self.kind == "plan" else None
+        self.items = json.loads(self.path.read_text(encoding="utf-8")) if self.kind == "plan" else None
         if self.items is not None and not isinstance(self.items, list):
             raise ValueError(f"{path}: not an altium365 plan (expected a JSON list of items)")
         self.bom = Path(bom) if bom else (self.path if self.kind == "bom" else None)
@@ -144,7 +144,7 @@ def _change(kind, item, was="", now="", detail=""):
 
 def _load(path, default):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return default
 
@@ -274,7 +274,7 @@ def check_upstream(src, state_dir, ctx, cfg, now, apply=False):
         sec.update(status="skipped", reason="no KiCad provenance manifest (kicad_import writes OUT/manifest.json; "
                                             "pass --manifest)")
         return sec
-    man = json.loads(src.manifest.read_text())
+    man = json.loads(src.manifest.read_text(encoding="utf-8"))
     rows, worst = U.check_kicad(man, ctx.gitlab)
     errs = [r for r in rows if r["status"] == "error"]
     for r in errs:
@@ -414,9 +414,9 @@ def save_state(rep, state_dir):
         if s["status"] == "ok" and s.get("_state"):
             for f, data in s["_state"].items():
                 tmp = d / (f + ".tmp")
-                tmp.write_text(json.dumps(data, indent=1, sort_keys=True))
+                tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
                 os.replace(tmp, d / f)
-    (d / "upkeep_last.json").write_text(json.dumps({"date": rep["date"], "new_changes": rep["new_changes"]}, indent=1))
+    (d / "upkeep_last.json").write_text(json.dumps({"date": rep["date"], "new_changes": rep["new_changes"]}, indent=1), encoding="utf-8")
 
 
 def _esc(v):
@@ -453,9 +453,9 @@ def markdown(rep, limit=None):
 def write_report(rep, out):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.with_suffix(".md").write_text(markdown(rep))
+    out.with_suffix(".md").write_text(markdown(rep), encoding="utf-8")
     clean = {**rep, "checks": [{k: v for k, v in s.items() if not k.startswith("_")} for s in rep["checks"]]}
-    out.with_suffix(".json").write_text(json.dumps(clean, indent=2))
+    out.with_suffix(".json").write_text(json.dumps(clean, indent=2), encoding="utf-8")
 
 
 # ------------------------------------------------------------------ GitHub

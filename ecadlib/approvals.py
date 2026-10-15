@@ -28,6 +28,8 @@ Identity: --user, else $ECADLIB_USER, else `git config user.name` / `user.email`
 import argparse, datetime, fnmatch, getpass, hashlib, json, os, re, subprocess, sys
 from pathlib import Path
 
+from .fsutil import write_text_atomic
+
 POLICY_FILES = ("approvals.json", "approvals.toml")
 AUDIT = "approvals_audit.jsonl"
 DEFAULTS = {"required": 1, "roles": [], "users": {}, "no_self_approval": True, "applies_to": "all", "parts": [],
@@ -85,10 +87,10 @@ def load_policy(base):
         return normalize_policy(dict(raw), "ecadlib.toml [release.approvals]") if raw else None
     if f.suffix == ".toml":
         import tomllib
-        raw = tomllib.loads(f.read_text())
+        raw = tomllib.loads(f.read_text(encoding="utf-8"))
         raw = raw.get("approvals", raw)            # either top level or an [approvals] table
     else:
-        raw = json.loads(f.read_text() or "{}")
+        raw = json.loads(f.read_text(encoding="utf-8") or "{}")
     return normalize_policy(raw, f)
 
 
@@ -258,7 +260,7 @@ def refresh_status(item, policy, base="."):
 
 
 def audit(base, entry):
-    with open(Path(base) / AUDIT, "a") as f:
+    with open(Path(base) / AUDIT, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
@@ -310,7 +312,7 @@ def agent_workspace(plan):
 def _run(a):
     plan = Path(a.plan)
     base = plan.parent
-    items = json.loads(plan.read_text())
+    items = json.loads(plan.read_text(encoding="utf-8"))
     try:
         policy = load_policy(base)
     except (ValueError, OSError) as e:
@@ -344,7 +346,7 @@ def _run(a):
             entry.update(result=f"refused: {e}")
             print(f"  refused  {it['name']:<28} {e}")
         audit(base, entry)
-    plan.write_text(json.dumps(items, indent=2))
+    write_text_atomic(plan, json.dumps(items, indent=2))
     if not policy:
         print("no approvals.json/.toml next to the plan: recorded, but push does not require them")
     print(f"{len(sel) - refused} recorded as {who}, {refused} refused -> {plan}; log {base / AUDIT}")

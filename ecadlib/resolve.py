@@ -24,6 +24,7 @@ import argparse, fnmatch, json, math, os, re, sys
 from pathlib import Path
 
 from . import altium_lib as AL, footprint_gen as F, kicad_import as K, librarian as L, release_check as RC, rules as RU, sexpr
+from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex, _body, norm_mpn, package_of
 
@@ -154,7 +155,7 @@ def item_pads(item, base):
         return None
     km = RC._kicad_mod(item, base, f)
     if km:
-        return footprint_pads(km.read_text())
+        return footprint_pads(km.read_text(encoding="utf-8"))
     pads = [r for r in AL.read_pcblib(f)[0]["records"] if r["type"] == "pad"]
     return [(p["designator"], not p["designator"] or (p["hole"] and not p["plated"]) or bool(RC.MECH_PAD.fullmatch(p["designator"])))
             for p in pads]
@@ -184,10 +185,10 @@ def load(cid, kind, src, rules=None):
             if not hit:
                 raise FileNotFoundError(f"{cid}: not in the --lib footprints")
             spec = src.specs / f"{ref.split(':')[-1]}.json" if src.specs else None
-            hm = json.loads(spec.read_text()).get("height_max") if spec and spec.exists() else None
-            return Path(hit["path"]).read_text(), (F.dim(hm)[2] if hm else None)
+            hm = json.loads(spec.read_text(encoding="utf-8")).get("height_max") if spec and spec.exists() else None
+            return Path(hit["path"]).read_text(encoding="utf-8"), (F.dim(hm)[2] if hm else None)
         if origin == "spec":
-            spec = json.loads((src.specs / f"{ref}.json").read_text())
+            spec = json.loads((src.specs / f"{ref}.json").read_text(encoding="utf-8"))
             return F.build(spec, RU.density_for(spec, rules or RU.DEFAULTS))[0], (F.dim(spec["height_max"])[2] if spec.get("height_max") else None)
     raise ValueError(f"unknown {kind} candidate id {cid!r} (use kicad:Lib:Name, local:Lib:Name or spec:Name)")
 
@@ -349,7 +350,7 @@ def _filter_hit(filters, fp_ref):
 
 # ---------------------------------------------------------------- plan access and choosing
 def _load_plan(plan):
-    return json.loads(Path(plan).read_text())
+    return json.loads(Path(plan).read_text(encoding="utf-8"))
 
 
 def _item(items, part):
@@ -421,10 +422,12 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None):
             raise ValueError(f"--map with a footprint needs a KiCad symbol to re-convert; {part}'s symbol is from {sid or 'nowhere'}")
         done.append(("symbol", sid, pin_map))
     state_f = base / "librarian_state.json"
-    state = json.loads(state_f.read_text()) if state_f.exists() else None
-    shared = [i["name"] for i in items if i is not it and i[kind].get("file") and
-              i[kind]["file"] == os.path.relpath(base / "models" / ("SchLib" if kind == "symbol" else "PcbLib") /
-                                                 f"{AL.file_stem(it[kind]['ref'])}.{'SchLib' if kind == 'symbol' else 'PcbLib'}", base)]
+    state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.exists() else None
+    shared_with = lambda k: [i["name"] for i in items if i is not it and i[k].get("file") and
+                             i[k]["file"] == os.path.relpath(base / "models" / ("SchLib" if k == "symbol" else "PcbLib") /
+                                                             f"{AL.file_stem(it[k]['ref'])}.{'SchLib' if k == 'symbol' else 'PcbLib'}", base)]
+    shared = shared_with(kind)
+    rewritten = {n for k, _, _ in done for n in shared_with(k)}      # every part whose model file this choice overwrites
     notes = []
     for k, cid, pm in done:
         rec = _write(it, k, cid, src, base, pm)
@@ -445,10 +448,11 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None):
             state[part].setdefault("tried", []).append(msg)
     if shared:
         notes.append(f"{kind} file is shared with {', '.join(shared)}: they now use this {kind} too")
-    RC.apply([it], base)
-    plan.write_text(json.dumps(items, indent=2))
+    RC.apply([it] + [i for i in items if i["name"] in rewritten], base)   # the parts sharing the overwritten file are
+                                                                          # re-checked too: their old `ready` no longer holds
+    write_text_atomic(plan, json.dumps(items, indent=2))
     if state is not None:
-        state_f.write_text(json.dumps(state, indent=2))
+        write_text_atomic(state_f, json.dumps(state, indent=2))
     pins, pads = item_pins(it, base), item_pads(it, base)
     return {"name": part, "status": it["status"], "hold_reasons": it["hold_reasons"],
             "warnings": it["release_check"]["warnings"], "file": it[kind]["file"], "source": it["source"][kind],

@@ -22,6 +22,7 @@ from pathlib import Path
 
 from . import altium_lib as AL, footprint_check as FC
 from . import sheetsafe as SS
+from .fsutil import write_text_atomic
 
 # plausible overall height (mm) per package family: first regex (on footprint name) that matches wins
 HEIGHTS = [
@@ -166,7 +167,7 @@ def check_item(item, base=".", rules=None):
     kmod = _kicad_mod(item, base, fp_f) if fp_f else None
     if kmod:
         info["kicad_mod"] = str(kmod)
-        text = kmod.read_text()
+        text = kmod.read_text(encoding="utf-8")
         try:
             issues, nums = FC.check(text), {p["num"] for p in FC._pad_rects(FC.sexpr.parse(text))}
         except Exception as e:                 # checker crash: fall back to the PcbLib minimum below
@@ -262,7 +263,7 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
 def write_report(rows, stem, plan=""):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
-    with open(stem.with_suffix(".csv"), "w", newline="") as f:
+    with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["name", "status"])
         w.writeheader(); w.writerows(rows)
     held = [r for r in rows if r["status"] == "held"]
@@ -274,7 +275,7 @@ def write_report(rows, stem, plan=""):
     warned = [r for r in rows if r["warnings"]]
     if warned:
         md += ["", "## Warnings (not held)", ""] + [f"- **{r['name']}**: {r['warnings']}" for r in warned]
-    stem.with_suffix(".md").write_text("\n".join(md) + "\n")
+    stem.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return stem
 
 
@@ -289,7 +290,7 @@ def main(argv=None):
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan's folder or here)")
     a = ap.parse_args(argv)
     plan = Path(a.plan)
-    items = json.loads(plan.read_text())
+    items = json.loads(plan.read_text(encoding="utf-8"))
     unknown = set(a.allow + a.unallow) - {i["name"] for i in items}
     if unknown:
         sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")
@@ -298,7 +299,7 @@ def main(argv=None):
         from .approvals import identity, post_check, stamp_allow
         stamp_allow(items, a.allow, identity(a.user, cwd=plan.parent))
         post_check(items, plan.parent, rows)
-    plan.write_text(json.dumps(items, indent=2))
+    write_text_atomic(plan, json.dumps(items, indent=2))
     stem = write_report(rows, a.out or plan.parent / "release_check", plan)
     for r in rows:
         print(f"  {r['result']:<8} {r['name']:<28} {r['failures'][:110]}")

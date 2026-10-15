@@ -34,6 +34,7 @@ from pathlib import Path, PureWindowsPath
 from . import altium_lib as AL, sexpr
 from . import sheetsafe as SS
 from .kicad_index import norm_mpn
+from .fsutil import write_text_atomic
 
 DEFAULT_SUFFIXES = [
     r"#(TR)?PBF$", r"#TR$",                                   # Analog Devices / Linear Technology
@@ -48,7 +49,7 @@ MPN_COLS = ("Manufacturer Part Number", "MPN", "Mfr Part Number")
 
 def load_config(path=None, base=None):
     f = Path(path) if path else (Path(base) / "dedupe.json" if base else None)
-    raw = json.loads(f.read_text()) if f and f.exists() else {}
+    raw = json.loads(f.read_text(encoding="utf-8")) if f and f.exists() else {}
     bad = set(raw) - set(CONFIG)
     if bad:
         raise ValueError(f"{f}: unknown keys {sorted(bad)}; known: {sorted(CONFIG)}")
@@ -175,7 +176,7 @@ class Collector:
         """[(ref, hash)] for a .PcbLib (one per footprint) or .kicad_mod."""
         f = Path(f)
         if f.suffix.lower() == ".kicad_mod":
-            g = self._read(f, lambda p: fp_geometry_kicad(Path(p).read_text()))
+            g = self._read(f, lambda p: fp_geometry_kicad(Path(p).read_text(encoding="utf-8")))
             return [(ref or f.stem, fp_hash(g))] if g else []
         fps = self._read(f, AL.read_pcblib) or []
         return [(fp["name"], fp_hash(fp_geometry_pcblib(fp, self.cfg.get("courtyard", AL.MECH15)))) for fp in fps if not ref or fp["name"] == ref or len(fps) == 1]
@@ -250,7 +251,7 @@ class Collector:
 
     def add_dblib(self, f):
         """A .DbLib points at its database with a Windows path; look for that file name next to the .DbLib."""
-        text = Path(f).read_text(errors="replace")
+        text = Path(f).read_text(errors="replace", encoding="utf-8")
         m = re.search(r"(?:Data Source|Database|DBQ)=([^;\r\n]+)", text, re.I)
         if not m:
             self.errors.append(f"{f}: no database in ConnectionString"); return
@@ -288,7 +289,7 @@ class Collector:
     def add_a365(self, f):
         """check-a365 / a365 pull --state ({name: snapshot}, a365 pull's with `parameters`) or a list of workspace
         component nodes (with parameters)."""
-        data = json.loads(Path(f).read_text())
+        data = json.loads(Path(f).read_text(encoding="utf-8"))
         nodes = data if isinstance(data, list) else [{"name": k, **(v if isinstance(v, dict) else {})} for k, v in data.items()]
         for n in nodes:
             par = n["parameters"] if isinstance(n.get("parameters"), dict) else \
@@ -419,7 +420,8 @@ def remap_bom(bom, mapping, out):
     from . import bom_triage as T
     import pandas as pd
     p = Path(bom)
-    raw = (pd.read_excel(p, header=None, dtype=str) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else T._read_csv(p)).fillna("")
+    raw = (T._read_excel(p) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else T._read_csv(p)).fillna("")   # the BOM sheet,
+                                                                                  # as read_bom picks it (not a cover sheet)
     hdr = max(range(min(10, len(raw))), key=lambda i: len(T.map_headers(list(raw.iloc[i]))))
     headers = [str(h).strip() for h in raw.iloc[hdr]]
     cols = T.map_headers(headers)
@@ -457,10 +459,10 @@ def write_reports(groups, mapping, stem, plan, errors=()):
     stem.parent.mkdir(parents=True, exist_ok=True)
     rows = report_rows(groups)
     fields = ["group", "kind", "key", "member", "keeper", "origin", "where", "mpn", "used_by", "status"]
-    with open(stem.with_suffix(".csv"), "w", newline="") as f:
+    with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(rows)
     mp = stem.parent / f"{stem.name}_map.csv"
-    with open(mp, "w", newline="") as f:
+    with open(mp, "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=["kind", "from", "to", "file", "parts", "note"]); w.writeheader(); w.writerows(mapping)
     count = lambda k: sum(g["kind"] == k for g in groups)
     md = [f"# Duplicates - `{plan}`", "",
@@ -483,7 +485,7 @@ def write_reports(groups, mapping, stem, plan, errors=()):
         md += [f"| {r['kind']} | {r['from']} | {r['to']} | {r['parts'] or '-'} | {r['note'] or '-'} |" for r in mapping]
     if errors:
         md += ["", "## Could not read", ""] + [f"- {e}" for e in errors]
-    stem.with_suffix(".md").write_text("\n".join(md) + "\n")
+    stem.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return stem, mp
 
 
@@ -494,7 +496,7 @@ def run(plan, libs=(), a365=None, config=None, keep=(), do_merge=False, kinds=("
     cfg = load_config(config, base)
     from . import rules as RU                 # house rules may draw the courtyard on another mechanical layer
     cfg["courtyard"] = RU.layer_id(RU.load(None, start=base)["layers"]["courtyard"])
-    items = json.loads(plan.read_text())
+    items = json.loads(plan.read_text(encoding="utf-8"))
     col = Collector(cfg, log)
     col.add_plan(items, base)
     for lib in libs:
@@ -508,7 +510,7 @@ def run(plan, libs=(), a365=None, config=None, keep=(), do_merge=False, kinds=("
     if do_merge:
         shutil.copyfile(plan, plan.with_name(plan.name + ".pre-dedupe"))
         mapping = merge(items, groups, base, kinds, who)
-        plan.write_text(json.dumps(items, indent=2))
+        write_text_atomic(plan, json.dumps(items, indent=2))
     else:
         mapping = merge(json.loads(json.dumps(items)), groups, base, kinds, who)   # dry run on a copy: what would change
     stem, mp = write_reports(groups, mapping, out or base / "dedupe", plan, col.errors)
