@@ -19,6 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import bom_triage as T, footprint_gen as F, providers as P, rules as RU, sexpr
+from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex
 
@@ -185,7 +186,7 @@ class Workspace:
                    "reports": [self.rel(stem.with_suffix(".md")), self.rel(stem.with_suffix(".csv"))]}
             meta = {"id": self._key(bom_path), "name": bom_path.name, "finished": _now(), "user": user or None}
             tmp = stem.with_name(stem.name + f".{os.getpid()}.{secrets.token_hex(3)}.tmp")
-            tmp.write_text(json.dumps({**meta, **out}, default=str))
+            tmp.write_text(json.dumps({**meta, **out}, default=str), encoding="utf-8")
             os.replace(tmp, stem.with_suffix(".json"))
         return {**out, **meta}
 
@@ -206,7 +207,7 @@ class Workspace:
         for tid, (j, c) in self._triage_files().items():
             try:
                 if j:
-                    d = json.loads(j.read_text())
+                    d = json.loads(j.read_text(encoding="utf-8"))
                     it = {k: d.get(k) for k in ("bom", "name", "finished", "user", "counts")}
                     it["lines"] = len(d.get("rows") or [])
                     it["reports"] = d.get("reports") or []
@@ -235,7 +236,7 @@ class Workspace:
             raise KeyError(f"no triage {tid!r} in this workspace")
         j, c = f
         if j:
-            d = json.loads(j.read_text())
+            d = json.loads(j.read_text(encoding="utf-8"))
             d["id"] = tid
             return d
         rows = pd.read_csv(c, dtype=str).fillna("").to_dict("records")
@@ -303,8 +304,8 @@ class Workspace:
         p = self.gen_dir / f"{name}.kicad_mod"
         if p.exists() and not overwrite:
             raise FileExistsError(f"{name} is already in the workspace library; approve again with overwrite to replace it")
-        p.write_text(res["kicad_mod"])
-        (self.gen_dir / f"{name}.json").write_text(json.dumps(spec_obj, indent=2))  # keep the source dimensions
+        p.write_text(res["kicad_mod"], encoding="utf-8")
+        (self.gen_dir / f"{name}.json").write_text(json.dumps(spec_obj, indent=2), encoding="utf-8")  # keep the source dimensions
         files = [self.rel(p)]
         warnings = [f"{c['rule']}: {c['message']}" for c in res["report"].get("checks", []) if c["level"] == "error"]
         try:
@@ -337,7 +338,7 @@ class Workspace:
                 skipped.append(f"{ref}: not found in indexed libraries")
                 continue
             try:
-                altium_lib.write_pcblib(out, [altium_lib.footprint_from_kicad(Path(hit["path"]).read_text())], layers)
+                altium_lib.write_pcblib(out, [altium_lib.footprint_from_kicad(Path(hit["path"]).read_text(encoding="utf-8"))], layers)
                 done.append(ref)
             except Exception as e:
                 skipped.append(f"{ref}: {e}")
@@ -371,7 +372,7 @@ class Workspace:
         lines, _ = self._read_bom(bom_path)
         lib_plan = self._librarian_dir(bom_path) / "plan.json"
         if lib_plan.exists():
-            items = json.loads(lib_plan.read_text())
+            items = json.loads(lib_plan.read_text(encoding="utf-8"))
             for it in items:                          # librarian paths are relative to its output folder
                 for k in ("symbol", "footprint"):
                     f = it[k].get("file")
@@ -381,7 +382,7 @@ class Workspace:
         else:
             items = A.plan(lines, self._triage_frame(bom_path), self.models, rules=self.rules())
             out = self.root / "altium365" / f"plan_{self._key(bom_path)}.json"
-            out.write_text(json.dumps(items, indent=2))
+            out.write_text(json.dumps(items, indent=2), encoding="utf-8")
             src = "triage"
         ready = sum(i["status"] == "ready" for i in items)
         return {"items": items, "ready": ready, "total": len(items), "plan": self.rel(out), "source": src}
@@ -423,7 +424,7 @@ class Workspace:
         plan_f = out / "plan.json"
         if not plan_f.exists():
             raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
-        items = json.loads(plan_f.read_text())
+        items = json.loads(plan_f.read_text(encoding="utf-8"))
         unknown = set(allow) | set(unallow)
         unknown -= {i["name"] for i in items}
         if unknown:
@@ -434,7 +435,7 @@ class Workspace:
             from .approvals import post_check, stamp_allow
             stamp_allow(items, list(allow), user)
             post_check(items, out, rows)
-        plan_f.write_text(json.dumps(items, indent=2))
+        write_text_atomic(plan_f, json.dumps(items, indent=2))
         RC.write_report(rows, out / "release_check", plan_f)
         from . import librarian as L
         L.write_review(L.review_rows(items), out, str(bom_path))
@@ -466,7 +467,7 @@ class Workspace:
         plan_f = self.inside(self.rel(self._librarian_dir(bom_path) / "plan.json"))
         if not plan_f.exists():
             raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
-        return bom_path, plan_f, json.loads(plan_f.read_text())
+        return bom_path, plan_f, json.loads(plan_f.read_text(encoding="utf-8"))
 
     @staticmethod
     def _part(items, part):
@@ -593,7 +594,7 @@ class Workspace:
         status = AP.refresh_status(it, policy, base)
         entry.update(role=rec["role"], hash=rec["hash"], result="recorded", status=status)
         AP.audit(base, entry)
-        plan_f.write_text(json.dumps(items, indent=2))
+        write_text_atomic(plan_f, json.dumps(items, indent=2))
         L.write_review(L.review_rows(items), base, str(bom_path))
         out = self._librarian_summary(bom_path, items, [])
         out["decision"] = {"part": part, "decision": decision, "who": user, "role": rec["role"], "status": status,
@@ -799,7 +800,7 @@ class Workspace:
             from .a365_sync import save_meta          # new revisions of pulled parts, so the next push is not a conflict
             save_meta(self.inside(plan["plan"]), plan["items"])
         out = self.root / "altium365" / f"push_{'dry_run_' if dry_run else ''}{self._key(self._bom_path(bom))}.json"
-        out.write_text(json.dumps(results, indent=2))
+        out.write_text(json.dumps(results, indent=2), encoding="utf-8")
         return {"dry_run": dry_run, "results": results, "report": self.rel(out)}
 
     # ------------------------------------------------------------------ two-way sync (ecadlib.a365_sync)
@@ -930,7 +931,7 @@ class Workspace:
 
     def example_specs(self):
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data
-        return {p.stem: json.loads(p.read_text()) for p in sorted(d.glob("*.json"))} if d.exists() else {}
+        return {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(d.glob("*.json"))} if d.exists() else {}
 
 
 def _now(ts=None):

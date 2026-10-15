@@ -591,7 +591,8 @@ def money(s):
     if "," in t and "." in t:
         t = t.replace(",", "") if t.rfind(".") > t.rfind(",") else t.replace(".", "").replace(",", ".")
     elif "," in t:
-        t = t.replace(",", ".") if len(t.split(",")[-1]) != 3 else t.replace(",", "")
+        t = t.replace(",", ".") if len(t.split(",")[-1]) != 3 or re.match(r"0?,", t) else t.replace(",", "")
+        # ("0,125 €" is 0.125: a thousands separator never follows a leading 0)
     try:
         return float(t)
     except ValueError:
@@ -947,7 +948,7 @@ def rollup(rows, build_qty, currency):
 def write_plan(plan_path, rows, build_qty, currency, now=None, max_alternates=2):
     """Fill empty Supplier/Alternate parameters of an altium365 plan in place. Returns [(item name, [params set])]."""
     path = Path(plan_path)
-    items = json.loads(path.read_text())
+    items = json.loads(path.read_text(encoding="utf-8"))
     by = {}
     for r in rows:
         if r["mpn"] and "dnp" not in r["flags"]:
@@ -984,7 +985,7 @@ def write_plan(plan_path, rows, build_qty, currency, now=None, max_alternates=2)
                                          for a in r["alternates"][:5]]}
         changed.append((it["name"], sorted(sets)))
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(items, indent=2))
+    tmp.write_text(json.dumps(items, indent=2), encoding="utf-8")
     os.replace(tmp, path)
     return changed
 
@@ -1018,7 +1019,7 @@ def write_reports(rows, out, meta, provs, unconfigured, http, roll, plan_changes
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     cur = roll["currency"]
-    with open(out.with_suffix(".csv"), "w", newline="") as f:
+    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=COLS)
         w.writeheader()
         w.writerows(csv_row(r, cur) for r in rows)
@@ -1069,7 +1070,7 @@ def write_reports(rows, out, meta, provs, unconfigured, http, roll, plan_changes
     for m, u, s, cached in http.log:
         hosts.setdefault(re.sub(r"^https?://([^/]+).*", r"\1", u), []).append(("cache " if cached else "") + str(s))
     md += ["", "## HTTP (this run)", ""] + [f"- `{h}`: {len(v)} requests -> {sorted(set(v))}" for h, v in hosts.items()]
-    out.with_suffix(".md").write_text("\n".join(md) + "\n")
+    out.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
 
 
 def main(argv=None):

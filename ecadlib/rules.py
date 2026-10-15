@@ -533,10 +533,10 @@ def fmt_value(raw, cat, style):
 def fmt_number(v, cat, style):
     """A value in base units (ohm, F, H) written in a value style."""
     m, p = _mantissa(v, cat)
-    unit_letter = {"": "R"} if cat == "Resistors" else {}
+    unit_letter = {"": {"Resistors": "R", "Capacitors": "F", "Inductors": "H"}[cat]}   # 1.5 F -> 1F5 (IEC 60062), never 15
     if style in ("rkm", "rkm_lower"):
         L = unit_letter.get(p, p)
-        L = L.upper() if style == "rkm" else (L if L in ("M", "R") else L.lower())
+        L = (L if L == "m" else L.upper()) if style == "rkm" else (L if L in ("M", "R", "F", "H") else L.lower())   # milli
         if cat == "Resistors" and style == "rkm_lower" and p == "k":
             L = "k"
         ip, _, fp = _num(m).partition(".")

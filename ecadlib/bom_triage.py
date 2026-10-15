@@ -357,7 +357,7 @@ def _yn(v):
 def write_reports(rows, mapping, provs, http, out, bom):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out.with_suffix(".csv"), "w", newline="") as f:
+    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["line", "status"])   # no formulas from BOM cells
         w.writeheader()
         w.writerows(rows)
@@ -379,7 +379,7 @@ def write_reports(rows, mapping, provs, http, out, bom):
         h = re.sub(r"^https?://([^/]+).*", r"\1", u)
         hosts.setdefault(h, []).append(("cache " if cached else "") + str(st))
     md += ["", "## HTTP (this run)", ""] + [f"- `{h}`: {len(v)} requests -> {sorted(set(v))}" for h, v in hosts.items()]
-    out.with_suffix(".md").write_text("\n".join(md) + "\n")
+    out.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return counts
 
 

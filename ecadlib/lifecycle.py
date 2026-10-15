@@ -352,7 +352,8 @@ def parts_from_bom(path, columns=None):
 
 def parts_from_dblib(path):
     out = []
-    with closing(sqlite3.connect(f"file:{Path(path).resolve()}?mode=ro", uri=True)) as con:
+    from urllib.parse import quote                   # a folder named "Lib #2" or "a?b" must not end the URI path
+    with closing(sqlite3.connect(f"file:{quote(Path(path).resolve().as_posix(), safe='/:')}?mode=ro", uri=True)) as con:
         con.row_factory = sqlite3.Row
         for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
             for r in con.execute(f'SELECT * FROM "{t}"'):
@@ -363,7 +364,7 @@ def parts_from_dblib(path):
 
 def parts_from_plan(path):
     return [_from_params({p["name"]: p["value"] for p in it.get("parameters", [])}, it["name"], "plan")
-            for it in json.loads(Path(path).read_text())]
+            for it in json.loads(Path(path).read_text(encoding="utf-8"))]
 
 
 Q_LIBRARY = """query ($ws: String!, $after: String) {
@@ -482,7 +483,7 @@ def risky(cur):
 
 def load_state(path):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {"version": 1, "updated": None, "parts": {}}
 
@@ -516,7 +517,7 @@ def save_state(state, path):
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, indent=1, sort_keys=True))
+    tmp.write_text(json.dumps(state, indent=1, sort_keys=True), encoding="utf-8")
     os.replace(tmp, p)
 
 
@@ -578,7 +579,7 @@ COLS = ["change", "mpn", "manufacturer", "name", "prev_status", "status", "prev_
 def write_reports(rows, out, meta, provs, unconfigured, http, a365=None):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out.with_suffix(".csv"), "w", newline="") as f:
+    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=COLS, extrasaction="ignore")
         w.writeheader()
         w.writerows({**r, "sources": ",".join(r["sources"])} for r in rows)
@@ -609,7 +610,7 @@ def write_reports(rows, out, meta, provs, unconfigured, http, a365=None):
     for m, u, s, cached in http.log:
         hosts.setdefault(re.sub(r"^https?://([^/]+).*", r"\1", u), []).append(("cache " if cached else "") + str(s))
     md += ["", "## HTTP (this run)", ""] + [f"- `{h}`: {len(v)} requests -> {sorted(set(v))}" for h, v in hosts.items()]
-    out.with_suffix(".md").write_text("\n".join(md) + "\n")
+    out.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return counts
 
 
@@ -662,7 +663,7 @@ def main(argv=None):
     if a.update_a365:
         upd = a365_updates(rows, client, ws, apply=a.apply, param=a.param)
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(f"{a.out}_a365.json").write_text(json.dumps(upd, indent=2))
+        Path(f"{a.out}_a365.json").write_text(json.dumps(upd, indent=2), encoding="utf-8")
     meta = {"now": now, "inputs": list(a.inputs) + ([f"a365:{a.a365}"] if a.a365 else []), "state": a.state,
             "prev": state.get("updated"), "skipped": skipped, "a365_mode": "applied" if a.apply else "dry run"}
     counts = write_reports(rows, a.out, meta, provs, unconfigured, http, upd)
