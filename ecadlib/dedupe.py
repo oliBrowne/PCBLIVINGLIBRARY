@@ -19,7 +19,7 @@ read from <plan dir>/a365_state.json when present):
              resistor and capacitor would match.
 Each group gets a recommended keeper: --keep wins, then an Altium 365 component, then an existing library entry,
 then the one most plan items use, a plan item that is ready, a part from the official KiCad library, the shortest
-name. --merge rewrites the plan (a copy is saved as plan.json.pre-dedupe first): a duplicate plan item gets
+name. --merge rewrites the plan (the first copy is saved as plan.json.pre-dedupe, later ones timestamped): a duplicate plan item gets
 `duplicate_of` and status `duplicate` (altium365 push skips it, release_check keeps it), a duplicate footprint or
 symbol reference is pointed at the keeper's ref and file (`merged_from` keeps the old one). Library files, DbLib rows
 and workspace components are never changed or deleted; they are only reported. Approvals of a rewritten item go
@@ -28,12 +28,13 @@ Outputs: <out>.md, <out>.csv (one row per group member), <out>_map.csv (kind, fr
 part-number mapping for BOMs), and with --bom a copy of the BOM with its LibRef and Footprint columns remapped.
 Config (dedupe.json next to the plan, or --config): {"strip_suffixes": [regex, ...], "default_suffixes": true,
 "symbol_min_pins": 3, "keep": [names], "ignore": [names]}. Exit codes: 0 no duplicates, 1 duplicates found, 2 error."""
-import argparse, configparser, csv, datetime, hashlib, json, math, os, re, shutil, sqlite3, sys
+import argparse, configparser, contextlib, csv, datetime, hashlib, json, math, os, re, shutil, sqlite3, sys
 from pathlib import Path, PureWindowsPath
 
 from . import altium_lib as AL, sexpr
 from . import sheetsafe as SS
 from .kicad_index import norm_mpn
+from .fsutil import write_text_atomic
 
 DEFAULT_SUFFIXES = [
     r"#(TR)?PBF$", r"#TR$",                                   # Analog Devices / Linear Technology
@@ -48,7 +49,7 @@ MPN_COLS = ("Manufacturer Part Number", "MPN", "Mfr Part Number")
 
 def load_config(path=None, base=None):
     f = Path(path) if path else (Path(base) / "dedupe.json" if base else None)
-    raw = json.loads(f.read_text()) if f and f.exists() else {}
+    raw = json.loads(f.read_text(encoding="utf-8")) if f and f.exists() else {}
     bad = set(raw) - set(CONFIG)
     if bad:
         raise ValueError(f"{f}: unknown keys {sorted(bad)}; known: {sorted(CONFIG)}")
@@ -175,7 +176,7 @@ class Collector:
         """[(ref, hash)] for a .PcbLib (one per footprint) or .kicad_mod."""
         f = Path(f)
         if f.suffix.lower() == ".kicad_mod":
-            g = self._read(f, lambda p: fp_geometry_kicad(Path(p).read_text()))
+            g = self._read(f, lambda p: fp_geometry_kicad(Path(p).read_text(encoding="utf-8")))
             return [(ref or f.stem, fp_hash(g))] if g else []
         fps = self._read(f, AL.read_pcblib) or []
         return [(fp["name"], fp_hash(fp_geometry_pcblib(fp, self.cfg.get("courtyard", AL.MECH15)))) for fp in fps if not ref or fp["name"] == ref or len(fps) == 1]
@@ -250,7 +251,7 @@ class Collector:
 
     def add_dblib(self, f):
         """A .DbLib points at its database with a Windows path; look for that file name next to the .DbLib."""
-        text = Path(f).read_text(errors="replace")
+        text = Path(f).read_text(errors="replace", encoding="utf-8")
         m = re.search(r"(?:Data Source|Database|DBQ)=([^;\r\n]+)", text, re.I)
         if not m:
             self.errors.append(f"{f}: no database in ConnectionString"); return
@@ -288,7 +289,7 @@ class Collector:
     def add_a365(self, f):
         """check-a365 / a365 pull --state ({name: snapshot}, a365 pull's with `parameters`) or a list of workspace
         component nodes (with parameters)."""
-        data = json.loads(Path(f).read_text())
+        data = json.loads(Path(f).read_text(encoding="utf-8"))
         nodes = data if isinstance(data, list) else [{"name": k, **(v if isinstance(v, dict) else {})} for k, v in data.items()]
         for n in nodes:
             par = n["parameters"] if isinstance(n.get("parameters"), dict) else \
@@ -419,7 +420,8 @@ def remap_bom(bom, mapping, out):
     from . import bom_triage as T
     import pandas as pd
     p = Path(bom)
-    raw = (pd.read_excel(p, header=None, dtype=str) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else T._read_csv(p)).fillna("")
+    raw = (T._read_excel(p) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else T._read_csv(p)).fillna("")   # the BOM sheet,
+                                                                                  # as read_bom picks it (not a cover sheet)
     hdr = max(range(min(10, len(raw))), key=lambda i: len(T.map_headers(list(raw.iloc[i]))))
     headers = [str(h).strip() for h in raw.iloc[hdr]]
     cols = T.map_headers(headers)
@@ -457,10 +459,10 @@ def write_reports(groups, mapping, stem, plan, errors=()):
     stem.parent.mkdir(parents=True, exist_ok=True)
     rows = report_rows(groups)
     fields = ["group", "kind", "key", "member", "keeper", "origin", "where", "mpn", "used_by", "status"]
-    with open(stem.with_suffix(".csv"), "w", newline="") as f:
+    with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(rows)
     mp = stem.parent / f"{stem.name}_map.csv"
-    with open(mp, "w", newline="") as f:
+    with open(mp, "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=["kind", "from", "to", "file", "parts", "note"]); w.writeheader(); w.writerows(mapping)
     count = lambda k: sum(g["kind"] == k for g in groups)
     md = [f"# Duplicates - `{plan}`", "",
@@ -483,8 +485,24 @@ def write_reports(groups, mapping, stem, plan, errors=()):
         md += [f"| {r['kind']} | {r['from']} | {r['to']} | {r['parts'] or '-'} | {r['note'] or '-'} |" for r in mapping]
     if errors:
         md += ["", "## Could not read", ""] + [f"- {e}" for e in errors]
-    stem.with_suffix(".md").write_text("\n".join(md) + "\n")
+    stem.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return stem, mp
+
+
+def backup(plan):
+    """Copy the plan before --merge rewrites it. The first copy is plan.json.pre-dedupe and is never overwritten (a
+    second merge used to replace the original with the already merged plan); later ones get a UTC timestamp."""
+    plan = Path(plan)
+    first = plan.with_name(plan.name + ".pre-dedupe")
+    dst = first
+    if first.exists():
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+        dst, n = plan.with_name(f"{first.name}-{stamp}"), 1
+        while dst.exists():
+            n += 1
+            dst = plan.with_name(f"{first.name}-{stamp}-{n}")
+    shutil.copyfile(plan, dst)
+    return dst
 
 
 def run(plan, libs=(), a365=None, config=None, keep=(), do_merge=False, kinds=("mpn", "footprint", "symbol"), out=None,
@@ -494,7 +512,7 @@ def run(plan, libs=(), a365=None, config=None, keep=(), do_merge=False, kinds=("
     cfg = load_config(config, base)
     from . import rules as RU                 # house rules may draw the courtyard on another mechanical layer
     cfg["courtyard"] = RU.layer_id(RU.load(None, start=base)["layers"]["courtyard"])
-    items = json.loads(plan.read_text())
+    items = json.loads(plan.read_text(encoding="utf-8"))
     col = Collector(cfg, log)
     col.add_plan(items, base)
     for lib in libs:
@@ -506,9 +524,9 @@ def run(plan, libs=(), a365=None, config=None, keep=(), do_merge=False, kinds=("
         col.add_a365(a365)
     groups = find_groups(col, list(keep) + cfg["keep"], cfg["ignore"])
     if do_merge:
-        shutil.copyfile(plan, plan.with_name(plan.name + ".pre-dedupe"))
+        backup(plan)
         mapping = merge(items, groups, base, kinds, who)
-        plan.write_text(json.dumps(items, indent=2))
+        write_text_atomic(plan, json.dumps(items, indent=2))
     else:
         mapping = merge(json.loads(json.dumps(items)), groups, base, kinds, who)   # dry run on a copy: what would change
     stem, mp = write_reports(groups, mapping, out or base / "dedupe", plan, col.errors)
@@ -529,8 +547,10 @@ def main(argv=None):
     ap.add_argument("--bom", help="also write a copy of this BOM with LibRef / Footprint mapped to the keepers")
     ap.add_argument("-o", "--out", help="report stem (default <plan dir>/dedupe)")
     a = ap.parse_args(argv)
+    from .approvals import cli_plan_lock
     try:
-        r = run(a.plan, a.lib, a.a365, a.config, a.keep, a.merge, tuple(k for k in a.kinds.split(",") if k), a.out, a.bom)
+        with cli_plan_lock(a.plan) if a.merge else contextlib.nullcontext():   # the agent may be rewriting this plan
+            r = run(a.plan, a.lib, a.a365, a.config, a.keep, a.merge, tuple(k for k in a.kinds.split(",") if k), a.out, a.bom)
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"dedupe: {type(e).__name__}: {e}", file=sys.stderr)
         return 2

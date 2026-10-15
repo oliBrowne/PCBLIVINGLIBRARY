@@ -856,10 +856,10 @@ def _bga(spec, density):
             raise ValueError("bga needs ball_diameter (or the datasheet's land_diameter)")
         land, rule = ipc_bga_land(_dim(spec["ball_diameter"])[1], bt)
     style = spec.get("land_style", "NSMD")
-    if land >= min(e, ey) - 0.1:
-        raise ValueError(f"land {land:g} mm leaves less than 0.1 mm between pads at {min(e, ey):g} mm pitch: "
-                         "check ball_diameter / pitch (mils?)")
     cu, mask = (land, NSMD_MASK) if style == "NSMD" else (round(land + 2 * SMD_GROW, 3), -SMD_GROW)
+    if cu >= min(e, ey) - 0.1:                            # the copper, which SMD-defined lands make bigger than the land
+        raise ValueError(f"land {land:g} mm{f' (copper {cu:g} mm, SMD-defined)' if cu != land else ''} leaves less than "
+                         f"0.1 mm between pads at {min(e, ey):g} mm pitch: check ball_diameter / pitch (mils?)")
     pads = []
     for name, i, j in balls:
         p = {"num": name, "kind": "smd", "shape": "circle", "x": _r4((j - (cols - 1) / 2) * e), "y": _r4((i - (rows - 1) / 2) * ey),

@@ -25,8 +25,10 @@ release_check calls post_check() at the end: with a policy, an item that passes 
 altium365 push calls push_block(): it skips items awaiting approval, items whose approvals went stale, items changed
 since the release check, and items dedupe marked as duplicates.
 Identity: --user, else $ECADLIB_USER, else `git config user.name` / `user.email`, else the login name."""
-import argparse, datetime, fnmatch, getpass, hashlib, json, os, re, subprocess, sys
+import argparse, contextlib, datetime, fnmatch, getpass, hashlib, json, os, re, subprocess, sys
 from pathlib import Path
+
+from .fsutil import write_text_atomic
 
 POLICY_FILES = ("approvals.json", "approvals.toml")
 AUDIT = "approvals_audit.jsonl"
@@ -85,11 +87,22 @@ def load_policy(base):
         return normalize_policy(dict(raw), "ecadlib.toml [release.approvals]") if raw else None
     if f.suffix == ".toml":
         import tomllib
-        raw = tomllib.loads(f.read_text())
+        raw = tomllib.loads(f.read_text(encoding="utf-8"))
         raw = raw.get("approvals", raw)            # either top level or an [approvals] table
     else:
-        raw = json.loads(f.read_text() or "{}")
+        raw = json.loads(f.read_text(encoding="utf-8") or "{}")
     return normalize_policy(raw, f)
+
+
+def policy_source(base, policy):
+    """Where the policy in force comes from, for people: the approvals file, the rules' [release.approvals], or none."""
+    f = policy_file(base)
+    if f:
+        return str(f)
+    if policy:
+        from . import rules as RU
+        return f"{RU.find(base) or 'ecadlib.toml'} [release.approvals]"
+    return "none (approvals are recorded, not enforced)"
 
 
 def normalize_policy(raw, where="policy"):
@@ -258,7 +271,7 @@ def refresh_status(item, policy, base="."):
 
 
 def audit(base, entry):
-    with open(Path(base) / AUDIT, "a") as f:
+    with open(Path(base) / AUDIT, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
@@ -288,6 +301,7 @@ def main(argv=None):
     ap.add_argument("--user", help="who you are (default: $ECADLIB_USER, then git config user.name/email)")
     ap.add_argument("--role", help="role you sign as (see the policy's roles/users)")
     ap.add_argument("-m", "--comment", default="", help="comment (required for reject)")
+    ap.add_argument("--json", action="store_true", help="status: print the policy and one row per part as JSON")
     a = ap.parse_args(argv)
     ws = agent_workspace(a.plan) if a.action != "status" else None
     if ws is None:
@@ -307,10 +321,28 @@ def agent_workspace(plan):
     return ws if p.parent.parent.name == "librarian" and (ws / "agent").is_dir() else None
 
 
+@contextlib.contextmanager
+def cli_plan_lock(plan):
+    """For CLI commands that rewrite a plan the library agent owns (<ws>/librarian/<name>/plan.json): wait for the
+    agent's librarian to finish before reading the plan, so neither write is lost. Other plans: no lock."""
+    ws = agent_workspace(plan)
+    if ws is None:
+        yield
+        return
+    from .agent_queue import plan_lock
+    with plan_lock(ws, wait=False) as free:
+        if free:
+            yield
+            return
+    print("the library agent is rebuilding this library; waiting for it to finish ...", file=sys.stderr)
+    with plan_lock(ws, wait=True):
+        yield
+
+
 def _run(a):
     plan = Path(a.plan)
     base = plan.parent
-    items = json.loads(plan.read_text())
+    items = json.loads(plan.read_text(encoding="utf-8"))
     try:
         policy = load_policy(base)
     except (ValueError, OSError) as e:
@@ -321,7 +353,13 @@ def _run(a):
         sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")
     if a.action == "status":
         sel = [by[n] for n in a.part] if a.part else items
-        print(f"policy: {policy_file(base) or 'none (approvals are recorded, not enforced)'}")
+        if getattr(a, "json", False):              # stable shape: README "Machine-readable output (--json)"
+            pf = policy_file(base)
+            print(json.dumps({"plan": str(plan), "policy_file": str(pf) if pf else None, "enforced": bool(policy),
+                              "awaiting_approval": sum(i.get("status") == "awaiting_approval" for i in sel),
+                              "rows": status_rows(sel, policy, base)}, indent=2, default=str))
+            return 0
+        print(f"policy: {policy_source(base, policy)}")
         for r in status_rows(sel, policy, base):
             print(f"  {r['status']:<18} {r['name']:<28} " + (f"approved by {r['approved_by']}" if r["approved_by"] else "")
                   + (f"  missing: {r['missing']}" if r["missing"] else "") + (f"  stale: {r['stale']}" if r["stale"] else "")
@@ -344,9 +382,10 @@ def _run(a):
             entry.update(result=f"refused: {e}")
             print(f"  refused  {it['name']:<28} {e}")
         audit(base, entry)
-    plan.write_text(json.dumps(items, indent=2))
+    write_text_atomic(plan, json.dumps(items, indent=2))
     if not policy:
-        print("no approvals.json/.toml next to the plan: recorded, but push does not require them")
+        print("no approval policy (approvals.json/.toml next to the plan, or [release.approvals] in ecadlib.toml): "
+              "recorded, but push does not require them")
     print(f"{len(sel) - refused} recorded as {who}, {refused} refused -> {plan}; log {base / AUDIT}")
     return 2 if refused else 0
 
