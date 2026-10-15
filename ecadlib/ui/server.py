@@ -342,6 +342,16 @@ def make_handler(ws: Workspace, team=None):
         def _body(self, limit=MAX_UPLOAD):
             n = int(self.headers.get("Content-Length") or 0)
             if n < 0 or n > limit:
+                self.close_connection = True
+                if 0 < n <= MAX_UPLOAD:                     # read and drop it (in chunks, never kept), so the client
+                    try:                                    # gets the 400 instead of a reset while still sending
+                        while n > 0:
+                            got = self.rfile.read(min(n, 65536))
+                            if not got:
+                                break
+                            n -= len(got)
+                    except (OSError, ValueError):
+                        pass
                 raise ValueError("bad or too large Content-Length")
             try:
                 data = self.rfile.read(n)
