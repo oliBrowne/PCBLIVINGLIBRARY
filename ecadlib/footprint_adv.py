@@ -53,6 +53,12 @@ HEADER_TH = {2.54: (1.0, 1.7), 2.0: (0.8, 1.35), 1.27: (0.65, 1.0), 1.0: (0.5, 0
 HEADER_SMD = {2.54: (3.15, 1.0, 2.525), 2.0: (2.58, 1.0, 2.085), 1.27: (2.4, 0.74, 1.95), 1.0: (2.0, 0.5, 1.65)}
 HEADER_SMD1 = {2.54: (2.51, 1.0, 1.655), 2.0: (2.35, 0.85, 1.175), 1.27: (3.0, 0.65, 1.5), 1.0: (1.75, 0.6, 0.875)}  # 1 row
 GRID = 0.01
+# IPC-7351B land approximation for collapsing BGA balls (nominal ball -> nominal land, mm): 25 % smaller from 0.55 mm,
+# 20 % from 0.25 mm, 15 % below. Source: IPC-7351B section 14 (BGA), table "Collapsing ball land approximation", as
+# reproduced in maker app notes; not re-checked online (ipc.org and the usual mirrors are blocked here). KiCad's
+# library agrees where it names both sizes (Ball0.25 -> Pad0.2, Ball0.3 -> 0.25, Ball0.5 -> 0.4); it has no 0.17 mm ball.
+IPC_BGA_COLLAPSING = ((0.75, 0.55), (0.65, 0.50), (0.60, 0.45), (0.55, 0.40), (0.50, 0.40), (0.45, 0.35), (0.40, 0.30),
+                      (0.35, 0.30), (0.30, 0.25), (0.25, 0.20), (0.20, 0.17), (0.17, 0.15), (0.15, 0.13))
 
 
 def _F():
@@ -90,6 +96,8 @@ def ball_index(name, jedec=True, rows=200):
 def bga_balls(spec):
     """[(name, row, col)] of the populated balls, row-major from A1."""
     rows, cols = spec["rows"], spec["cols"]
+    if not all(isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 200 for v in (rows, cols)):
+        raise ValueError(f"rows / cols must be whole numbers from 1 to 200 (got {rows!r} x {cols!r})")
     jedec = spec.get("row_letters", "jedec") == "jedec"
     if spec.get("ball_map"):
         bm = spec["ball_map"]
@@ -119,8 +127,11 @@ def ipc_bga_land(ball, ball_type="collapsing"):
         d = ball * 1.05
         return round(math.floor(d / 0.01 + 0.5) * 0.01, 2), "non-collapsing ball: land 5 % larger"
     red = 0.25 if ball >= 0.55 - 1e-9 else 0.20 if ball >= 0.25 - 1e-9 else 0.15
-    g = 0.05 if ball >= 0.25 - 1e-9 else 0.01
-    d = math.floor(ball * (1 - red) / g + 0.5) * g
+    hit = next((land for b, land in IPC_BGA_COLLAPSING if abs(b - ball) < 1e-6), None)
+    if hit is not None:                                   # a ball size the IPC table lists: its land
+        return hit, f"collapsing ball {ball:g} mm: land {round(red * 100)} % smaller (IPC-7351B table)"
+    g = 0.05 if ball >= 0.25 - 1e-9 else 0.01             # between table sizes: the table's rounding (0.05 mm; 0.01 mm
+    d = (math.floor(ball * (1 - red) / g + 0.5) if g > 0.01 else math.ceil(round(ball * (1 - red) / g, 6))) * g  # up below 0.25)
     return round(d, 3), f"collapsing ball {ball:g} mm: land {round(red * 100)} % smaller"
 
 
@@ -391,6 +402,11 @@ def table_layout(spec):
         for k in ("paste_coverage", "paste_grid", "thermal_vias"):
             if p.get(k) is not None:
                 q[k] = p[k]
+        if q.get("thermal_vias"):                          # vias in mm by default (as before); unit mil / in / table
+            tv = dict(q["thermal_vias"])
+            u = tv.pop("unit", "mm")
+            g = f if u == "table" else UNIT[u]
+            q["thermal_vias"] = {k: (_r4(v * g) if k in ("drill", "diameter", "pitch", "pitch_y") else v) for k, v in tv.items()}
         pads.append(q)
     body = None
     if t.get("body"):

@@ -332,7 +332,14 @@ DFN-8 with thermal vias (custom pad tables; vias may have their own row pitch, `
 copy of the exposed pad is not compared), JST PH / XH 6 / GH, a 2x20 and a 1.00 mm header, six SMD headers built
 from the land tables alone (single-row headers now have their own table), and 15 IPC chip / SOT / SO / QFP / QFN parts.
 `tests/test_footprint_review.py` adds property tests over random BGA / header / connector specs (pad count, no
-overlaps, courtyard, symmetry, PcbLib read back = `.kicad_mod` including mask and paste margins). The connector and header
+overlaps, courtyard, symmetry, PcbLib read back = `.kicad_mod` including mask and paste margins).
+A PcbLib converted back to KiCad turns an anchor pad with its copper / mask / paste regions into a KiCad custom pad
+(`gr_poly` primitives, as KiCad's own library writes them), not net-less copper polygons. Through-hole custom pads
+carry their shape on top and bottom copper in Altium; inner layers get the anchor pad and hole (Altium regions cannot
+be "all layers"; the connection is the same, only an inner-layer trace to the outer edge of the shape would differ).
+`thermal_vias.unit` (mm default, mil, in, or `table`) takes the vias in the pad table's unit. BGA lands from the ball
+size follow the IPC-7351B collapsing-ball table (0.75 -> 0.55 ... 0.17 -> 0.15, 0.15 -> 0.13; from the standard's
+BGA section as reproduced in maker notes, not re-read online here: ipc.org is blocked). The connector and header
 specs carry the datasheet's numbers (pitch, pad sizes, hole sizes, body), which KiCad's library also follows, so these
 rows mostly test the frame handling (units, y axis, bottom view, origins), the derived pad sizes and the courtyard; the
 BGA lands are computed from the ball size (except UFBGA-132, whose land comes from the ST datasheet). Not checked: real
