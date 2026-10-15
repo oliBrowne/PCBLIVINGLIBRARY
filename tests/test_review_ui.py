@@ -171,7 +171,7 @@ def test_u7_names_and_validation():
     except jsonschema.ValidationError:
         pass
     toml = Path("pyproject.toml").read_text()
-    assert '"jsonschema"]' in toml.split("[project.optional-dependencies]")[0], "jsonschema must be a runtime dep"
+    assert '"jsonschema"' in toml.split("[project.optional-dependencies]")[0], "jsonschema must be a runtime dep"
 
 
 def test_u8_example_specs_ship_with_the_package():

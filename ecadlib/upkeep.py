@@ -76,8 +76,8 @@ def upkeep_rules(rules):
 # ------------------------------------------------------------------ inputs
 class Source:
     """The input: a plan.json (lifecycle, sourcing, a365) or a BOM (lifecycle, sourcing); plus where the manifest is."""
-    def __init__(self, path, manifest=None, bom=None):
-        self.path = Path(path)
+    def __init__(self, path, manifest=None, bom=None, columns=None):
+        self.path, self.columns = Path(path), columns   # columns: the rules' [bom] columns
         if not self.path.is_file():
             raise FileNotFoundError(f"input not found: {path}")
         self.kind = "plan" if self.path.suffix.lower() == ".json" else "bom"
@@ -98,7 +98,7 @@ class Source:
         """BOM lines for sourcing: the BOM when there is one, else one line per plan item."""
         from .bom_triage import read_bom
         if self.bom:
-            return read_bom(self.bom)[0]
+            return read_bom(self.bom, self.columns)[0]
         out = []
         for it in self.items:
             if it.get("status") == "duplicate":
@@ -159,7 +159,7 @@ def check_lifecycle(src, state_dir, ctx, cfg, now):
         if not creds:
             sec.update(status="skipped", reason=f"no lifecycle credentials: set one of {LIFECYCLE_ENV}")
             return sec
-        parts, skipped = L.merge(L.read_inputs([src.path] + ([src.bom] if src.bom and src.bom != src.path else [])))
+        parts, skipped = L.merge(L.read_inputs([src.path] + ([src.bom] if src.bom and src.bom != src.path else []), src.columns))
         if not parts:
             sec.update(status="error", reason="no parts with an MPN or LCSC number in the input")
             return sec
@@ -378,7 +378,7 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
         raise ValueError(f"unknown check(s) {', '.join(bad)}; choose from {', '.join(CHECKS)}")
     workspace = workspace or ((rules or {}).get("altium365") or {}).get("workspace") or None
     ctx, now, state_dir = ctx or Ctx(), now or _now(), Path(state_dir)
-    src = Source(input_path, manifest, bom)
+    src = Source(input_path, manifest, bom, dict(((rules or {}).get("bom") or {}).get("columns") or {}) or None)
     prev = _load(state_dir / "upkeep_last.json", {}).get("date")
     sections = []
     for name in checks:

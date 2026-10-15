@@ -1090,7 +1090,9 @@ def main(argv=None):
     if a.qty < 1:
         ap.error("--qty must be at least 1")
     try:
-        lines, _ = read_bom(a.bom)
+        from . import rules as RU
+        rules = RU.load(None, start=Path(a.bom).resolve().parent)     # its [bom] columns name your headers
+        lines, _ = read_bom(a.bom, RU.bom_columns(rules), rules)
     except Exception as e:
         print(f"cannot read BOM: {type(e).__name__}: {e}", file=sys.stderr)
         return 2

@@ -437,9 +437,10 @@ def handle(ws, msg):
             out = call_tool(ws, params.get("name"), params.get("arguments") or {})
             result = {"content": [{"type": "text", "text": json.dumps(out, indent=1, default=str)}], "isError": False}
         except Exception as e:
-            if not isinstance(e, (ValueError, FileExistsError)):
+            user_error = isinstance(e, (ValueError, KeyError, FileExistsError, FileNotFoundError, PermissionError))
+            if not user_error:                            # a bug: keep the traceback; a wrong id / path is the caller's
                 traceback.print_exc(file=sys.stderr)
-            msg = str(e) if isinstance(e, (ValueError, FileExistsError)) else f"{type(e).__name__}: {e}"
+            msg = (e.args[0] if isinstance(e, KeyError) and e.args else str(e)) if user_error else f"{type(e).__name__}: {e}"
             result = {"content": [{"type": "text", "text": msg}], "isError": True}
     else:
         return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}}
