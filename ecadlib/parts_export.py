@@ -60,7 +60,7 @@ def _signoff(items, base):
 def rows(plan, lib="ecadlib", include_held=False):
     """Plan items -> [row dict with exactly COLUMNS], sorted by Part ID. plan: path to plan.json or a list of items."""
     base = Path(plan).parent if not isinstance(plan, list) else Path(".")
-    items = json.loads(Path(plan).read_text()) if not isinstance(plan, list) else plan
+    items = json.loads(Path(plan).read_text(encoding="utf-8")) if not isinstance(plan, list) else plan
     if not isinstance(items, list):
         raise ValueError(f"{plan}: not a librarian plan (expected a list of parts)")
     keep = [it for it in items if isinstance(it, dict) and it.get("name")
@@ -113,12 +113,13 @@ def write(rs, out, fmt):
             w.writerows(_flat(r) for r in rs)
     elif fmt == "xlsx":
         from openpyxl import Workbook
-        wb = Workbook()
+        from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE      # control characters (a \x0b from a datasheet) that
+        wb = Workbook()                                            # XML can't hold: openpyxl refuses the whole file
         ws = wb.active
         ws.title = "Parts"
         ws.append(COLUMNS)
         for r in rs:
-            ws.append([SS.cell(str(_flat(r)[c])) for c in COLUMNS])
+            ws.append([SS.cell(ILLEGAL_CHARACTERS_RE.sub(" ", str(_flat(r)[c]))) for c in COLUMNS])
         for row in ws.iter_rows(min_row=2):
             for c in row:
                 c.data_type, c.number_format = "s", "@"                    # text: '0603' and '1e-7' stay as typed
