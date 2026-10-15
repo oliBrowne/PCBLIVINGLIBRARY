@@ -21,7 +21,9 @@ A scan reads every source, compares its parts (key = "manufacturer|MPN") with wh
     removed  a part no longer in the source
 Scans are idempotent (a second scan with nothing changed returns []), files whose size and time are unchanged are
 not read again (huge BOMs), and a source that fails is recorded in the state with its error while its last good parts
-are kept, so nothing is reported as removed because a file was briefly unreadable or Nexar was down. A source whose
+are kept, so nothing is reported as removed because a file was briefly unreadable or Nexar was down. The same holds
+for a file that changed while it was read, and for a file or Altium 365 project that suddenly reads as no parts at all
+(a BOM caught half-written): its last good parts are kept and the source reports the error. A source whose
 ref changed (file renamed, rules edited) takes over the old state when the content is the same (same file hash, same
 folder files, same Altium 365 project id), so a rename is not reported as every part removed and added.
 
@@ -349,6 +351,14 @@ def scan_files(src, root, old_files, rules, cfg):
                 files[ident] = dict(old, path=str(f), sig=sig)              # unchanged: not parsed again
                 continue
             parts = _project_parts(f, rules, src.get("variant")) if project else read_bom_parts(f, rules)
+            if not project:
+                st = f.stat()
+                if (st.st_size, st.st_mtime_ns) != (sig["size"], sig["mtime_ns"]):
+                    raise OSError("the file changed while it was read (being saved?): read again next scan")
+            if not parts and old.get("parts"):
+                # a BOM caught half-written (header only) or a project mid-save reads as "no parts": that is not every
+                # part removed. Kept until it has parts again; a source really emptied is removed from the rules.
+                raise ValueError(f"no parts read (it had {len(old['parts'])}): kept the last good parts")
             files[ident] = {"path": str(f), "sig": sig, "parts": parts}
         except Exception as e:
             errors.append(f"{ident or f.name}: {type(e).__name__}: {e}")
@@ -455,6 +465,8 @@ def scan_a365(src, ws, client, old, rules):
         return ((vs[0].get("bom") or {}).get("items") if vs else None) or {}
     items = _paged(client, Q_BOM, {"id": proj["id"], "variant": variant, "first": PAGE}, conn_of)
     parts = parts_from_lines([bom_item_line(i, rules) for i in items])
+    if not parts and old_f and old_f.get("parts"):
+        raise ValueError(f"{meta['name']}: Altium 365 returned no BOM items (it had {len(old_f['parts'])}): kept the last good parts")
     return {proj["id"]: {"path": proj.get("url") or "", "sig": sig, "parts": parts}}, [], meta
 
 
