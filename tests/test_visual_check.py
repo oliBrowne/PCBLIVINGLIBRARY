@@ -527,3 +527,12 @@ def test_property_every_spec_facts_render_and_bottom_side():
             if cu:
                 bpng = V.render_footprint(back, Path(d) / "b.png")
                 assert components(bpng, (V.C["back"],)) and components(bpng, (V.C["pin1"],)), spec.stem
+
+
+def test_visual_estimate_counts_the_fallback_model():
+    with setup() as d:
+        body = V.build_request([("ours", str(V.render_footprint(SOIC, d / "fp.png")))], [], [], "t", "claude-opus-5-5", "high")[1]
+        with_fb = V.estimate(body)
+        body.pop("fallbacks")
+        without = V.estimate(body)
+        assert with_fb["usd_max"] > without["usd_max"] + V.MAX_TOKENS * 25 / 1e6 - 1e-6
