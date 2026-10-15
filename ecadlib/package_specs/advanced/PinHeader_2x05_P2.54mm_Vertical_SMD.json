@@ -1,0 +1,24 @@
+{
+  "name": "PinHeader_2x05_P2.54mm_Vertical_SMD",
+  "description": "pin header, 2x05, 2.54 mm pitch",
+  "package_type": "pin_header",
+  "pin_count": 10,
+  "cols": 2,
+  "rows": 5,
+  "pitch": 2.54,
+  "mount": "smd",
+  "body_length": {
+    "nom": 7.2
+  },
+  "body_width": {
+    "nom": 12.7
+  },
+  "land": {
+    "pad_length": 3.15,
+    "pad_width": 1.0,
+    "pad_center": 2.525
+  },
+  "source": {
+    "drawing": "generic pin header (KiCad Connector_PinHeader tables); cross-checked with KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints)"
+  }
+}

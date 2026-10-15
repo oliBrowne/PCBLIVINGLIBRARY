@@ -1,0 +1,34 @@
+{
+  "name": "JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical",
+  "description": "JST XH series connector, B2B-XH-A, top entry, 2 pins, 2.50 mm pitch",
+  "package_type": "connector",
+  "pin_count": 2,
+  "pitch": 2.5,
+  "height_max": 7.0,
+  "pad_table": {
+    "unit": "mm",
+    "y_axis": "up",
+    "origin": "pin1",
+    "arrays": [
+      {
+        "count": 2,
+        "x": 0,
+        "y": 0,
+        "dx": 2.5,
+        "type": "tht",
+        "drill": 1.0,
+        "label": "2x hole d1.0"
+      }
+    ],
+    "body": {
+      "x1": -2.45,
+      "y1": 2.35,
+      "x2": 4.95,
+      "y2": -3.4
+    }
+  },
+  "source": {
+    "datasheet": "https://www.jst-mfg.com/product/pdf/eng/eXH.pdf",
+    "drawing": "recommended PCB layout; KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as the datasheet drawing gives them"
+  }
+}

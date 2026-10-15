@@ -23,7 +23,8 @@ def workspace():
     """Workspace with sample_bom uploaded and a resolve test plan as its librarian plan; resolve's HTTP is the fake."""
     with tempfile.TemporaryDirectory() as d:
         ws = Workspace(d, [], providers=["digikey"], offline=True)
-        bom = ws.save_upload("sample_bom.csv", BOM.read_bytes())
+        (ws.root / "uploads" / "sample_bom.csv").write_bytes(BOM.read_bytes())   # flat upload: librarian/sample_bom
+        bom = "uploads/sample_bom.csv"
         plan, src = make_plan(ws.root / "librarian" / "sample_bom")
         with mock.patch.object(R, "CachedHTTP", lambda *a, **k: src.http):
             yield ws, bom, plan

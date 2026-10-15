@@ -14,8 +14,10 @@ anything still missing, the sources are tried in --sources order, each filling o
              Footprint property, a footprint named after the MPN, or the shortest name starting with the BOM footprint.
              R/C/L/LED use Device:R/C/C_Polarized/L/LED and <Family>_SMD:<X>_<imperial>_<metric>Metric by package.
   easyeda    LCSC number (BOM, or found by MPN in triage) -> EasyEDA component JSON -> easyeda_convert -> KiCad text
-  datasheet  datasheet URL (BOM column, KiCad symbol, EasyEDA/LCSC link) + ANTHROPIC_API_KEY -> ecadlib.datasheet;
-             the result is marked `verify` so release_check holds it until a person has looked (or --allow)
+  datasheet  datasheet URL (BOM column, KiCad symbol, EasyEDA/LCSC link, LCSC pattern) + ANTHROPIC_API_KEY ->
+             ecadlib.datasheet; the result is marked `verify` so release_check holds it until a person has looked (or
+             --allow). --datasheet-batch sends every part that reaches this source as one Message Batch (half price)
+             after the other sources ran, then builds them; results are cached, so re-runs are free
 Footprints without a KiCad STEP model get a package-shaped STEP from step_gen embedded (--box: extruded box).
 Everything is converted through kicad_import into <out>/models/{SchLib,PcbLib} (plus the .kicad_mod in
 <out>/models/KiCad for footprint_check). Outputs: <out>/plan.json (each item records `source`, `librarian.tried`
@@ -32,7 +34,10 @@ import pandas as pd
 
 from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
                footprint_gen as F, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
+from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
+from . import sheetsafe as SS
+from . import symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
 TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository/tree?ref=master&recursive=true&per_page=100&page={page}"
@@ -55,7 +60,7 @@ class KiCadLibrary:
                 self.symbols = self._crawl("kicad-symbols", ".kicad_symdir", ".kicad_sym")
                 self.footprints = self._crawl("kicad-footprints", ".pretty", ".kicad_mod")
                 f.parent.mkdir(parents=True, exist_ok=True)
-                f.write_text(json.dumps({"built": time.strftime("%Y-%m-%d"), "symbols": self.symbols, "footprints": self.footprints}))
+                f.write_text(json.dumps({"built": time.strftime("%Y-%m-%d"), "symbols": self.symbols, "footprints": self.footprints}), encoding="utf-8")
             except IOError as e:
                 self.error = str(e)
                 if f.exists():                 # a stale index beats none
@@ -69,7 +74,7 @@ class KiCadLibrary:
         self._fpn = [(norm_mpn(n), f"{libs[0]}:{n}") for n, libs in self.footprints.items()]
 
     def _load(self, f):
-        d = json.loads(f.read_text())
+        d = json.loads(f.read_text(encoding="utf-8"))
         self.symbols, self.footprints = d["symbols"], d["footprints"]
 
     def _crawl(self, repo, dsuf, fsuf):
@@ -170,7 +175,7 @@ def _line_for(item, lines, rows):
 
 class Run:
     def __init__(self, out, http, index, libs, sources, api_key=None, kicad_cache=None, refresh_index=False, gen_step=True,
-                 rules=None):
+                 rules=None, reader=None):
         self.out, self.http, self.index, self.libs, self.sources = Path(out), http, index, libs, sources
         self.rules = rules or RU.DEFAULTS
         self.models = self.out / "models"
@@ -178,6 +183,7 @@ class Run:
             (self.models / d).mkdir(parents=True, exist_ok=True)
         self.api_key, self.written, self.gen_step = api_key, {}, gen_step
         self._kicad, self._kicad_args = None, (kicad_cache, refresh_index)
+        self.reader, self.waiting = reader, []          # datasheet reader; parts waiting for its batch
 
     def kicad(self):
         if self._kicad is None:
@@ -202,7 +208,7 @@ class Run:
         except ValueError as e:
             notes.append(f"no 3D body: {e}")
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
-        kmod.write_text(text)
+        kmod.write_text(text, encoding="utf-8")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"]}
         self.written[str(pcb)] = st["footprint"]
@@ -216,9 +222,15 @@ class Run:
         st["symbol"] = {"source": source, "file": self.rel(path), "notes": list(notes), "by": st["name"]}
         self.written[str(path)] = st["symbol"]
 
-    def put_kicad_sym(self, st, chain, name, fp_name, source, extra=()):
+    def put_kicad_sym(self, st, chain, name, fp_name, source, extra=(), layout=False):
+        """layout: re-lay big symbols out with pins grouped by function (EasyEDA symbols; KiCad library symbols are
+        curated and kept as drawn)."""
         notes = []
         sym = K.convert_symbol(chain, name, fp_name, list(extra), None, notes)
+        npins = len({pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin"})
+        if layout and SL.wants_layout(npins, self.rules) and sym.get("parts", 1) == 1:
+            sym = SL.relayout(sym, self.rules)
+            notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else ""))
         self.put_sym(st, sym, source, notes)
 
     # ---- per part
@@ -258,9 +270,9 @@ class Run:
                 st["hint_fp"] = K._props(chain).get("Footprint", "")
                 self.put_kicad_sym(st, chain, sym_name, fp_name, f"local:{ls}")
         if lf and lf in self.index.footprints and not st["footprint"]:
-            text = Path(self.index.footprints[lf]["path"]).read_text()
+            text = Path(self.index.footprints[lf]["path"]).read_text(encoding="utf-8")
             spec = SPECS / f"{lf.split(':')[-1]}.json"
-            hm = json.loads(spec.read_text()).get("height_max") if spec.exists() else None
+            hm = json.loads(spec.read_text(encoding="utf-8")).get("height_max") if spec.exists() else None
             self.put_fp(st, text, fp_name, f"local:{lf}", None, F.dim(hm)[2] if hm else None, f"package spec {spec.name}")
         if ls or lf:
             st["tried"].append(f"local library: symbol {'from ' + ls if st['symbol'] else 'not used' if ls else 'none'}, "
@@ -354,28 +366,55 @@ class Run:
                 notes = []
                 text = EC.symbol_to_kicad(ds, sym_name, fp_name, {"MPN": mpn, "LCSC": lcsc, "Manufacturer": res.manufacturer}, notes)
                 chain = [K._find_symbol(sexpr.parse(text), sym_name)]
-                self.put_kicad_sym(st, chain, sym_name, fp_name, f"easyeda:{lcsc}", [("MPN", mpn)] if mpn else [])
+                self.put_kicad_sym(st, chain, sym_name, fp_name, f"easyeda:{lcsc}", [("MPN", mpn)] if mpn else [], layout=True)
                 st["symbol"]["notes"] = notes + st["symbol"]["notes"]
                 got.append("symbol")
         st["tried"].append(f"easyeda {lcsc}: " + (", ".join(got) or "nothing needed"))
         st["review"].append(f"EasyEDA {lcsc} conversion: check pads and pins against the datasheet (native converter, format assumed)")
 
     def src_datasheet(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
-        par = _par(item)
-        urls = [(ln.get("datasheet", ""), "BOM"), st["found"].get("datasheet", ("", "")), (par.get("ComponentLink2URL", ""), "LCSC datasheet link")]
-        url, where = next(((u, w) for u, w in urls if str(u).startswith("http")), (None, None))
-        if not url:
+        urls = D.datasheet_urls(item, ln, row, st["found"])
+        if not urls:
             st["tried"].append("datasheet: no datasheet URL known")
             return
-        key = self.api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not key:
-            st["tried"].append(f"needs datasheet reader (no API key): {url} ({where})")
+        if self.reader is None:
+            self.reader = D.Reader(self.out, Path(self._kicad_args[0] or self.out / "cache").parent, self.api_key, self.rules, self.http)
+        rd = self.reader
+        if not rd.key and not rd.estimate_only:
+            st["tried"].append(f"needs datasheet reader (no API key): {urls[0][0]} ({urls[0][1]})")
             return
-        source, offset, hint = D.load_source(url)
-        headers, body = D.build_request(source, mpn or item["name"], fp_name, hint)
-        ext, msg = D.call(headers, body, key)
-        res = D.process(ext, mpn or item["name"], url, D.MODEL, offset, msg)
-        D.write(res, self.out / "datasheet")
+        job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"])
+        res = rd.cached(job)
+        if res is None and rd.deferred:
+            rd.submit(job)
+            self.waiting.append((st, job, fp_name, sym_name))
+            st["tried"].append(f"datasheet: queued for the batch ({job['url']}, {job['where']})")
+            return
+        self.put_datasheet(st, res or rd.read_now(job), job, fp_name, sym_name, "cached" if res else "")
+
+    def flush_datasheets(self, log=print):
+        """Send the parts queued for the datasheet batch and build what came back."""
+        if not self.waiting:
+            return
+        try:
+            done = self.reader.flush()
+        except D.DatasheetError as e:
+            done = {job["key"]: e for _, job, _, _ in self.waiting}
+        for st, job, fp_name, sym_name in self.waiting:
+            r = done.get(job["key"])
+            if isinstance(r, dict):
+                try:
+                    self.put_datasheet(st, r, job, fp_name, sym_name, r["sidecar"].get("via") or "batch")
+                except Exception as e:
+                    st["tried"].append(f"datasheet: failed ({type(e).__name__}: {e})")
+            elif isinstance(r, Exception):
+                st["tried"].append(f"datasheet reader: failed ({r})")
+            else:
+                st["tried"].append(f"datasheet: {r or 'not sent'}" + ("; run again to collect" if str(r).startswith("pending") else ""))
+        self.waiting = []
+
+    def put_datasheet(self, st, res, job, fp_name, sym_name, how=""):
+        url, where = job["url"], job["where"]
         got = []
         if not st["footprint"]:
             text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
@@ -383,9 +422,13 @@ class Run:
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
             got.append("footprint")
         if not st["symbol"]:
-            self.put_sym(st, AL.symbol_from_json(dict(res["symbol"], name=sym_name, footprint=fp_name)), f"datasheet:{url}")
+            self.put_sym(st, AL.symbol_from_json(dict(res["symbol"], name=sym_name, footprint=fp_name), self.rules), f"datasheet:{url}",
+                         [f"{len(res['symbol']['pins'])} pins grouped by function (ecadlib.symbol_layout)"]
+                         if SL.wants_layout(res["symbol"]["pins"], self.rules) else ())
             got.append("symbol")
-        st["tried"].append(f"datasheet reader ({where}): {', '.join(got)}; {len(res['needs_review'])} review items")
+        st["tried"].append(f"datasheet reader ({where}{', ' + how if how else ''}): {', '.join(got) or 'nothing needed'}; "
+                           f"{len(res['needs_review'])} review items")
+        st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
         st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url}; see datasheet/*.review.md"
                             + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
 
@@ -447,8 +490,8 @@ def review_rows(items):
 
 def write_review(rows, out, bom):
     out = Path(out)
-    with open(out / "review.csv", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ["part"])
+    with open(out / "review.csv", "w", newline="", encoding="utf-8") as f:
+        w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["part"])
         w.writeheader(); w.writerows(rows)
     src = lambda s: (s or "-").split(":")[0]
     counts = {}
@@ -463,13 +506,14 @@ def write_review(rows, out, bom):
     md += ["", "## Needs a person", ""]
     md += [f"- **{r['part']}** ({r['status']}): " + "; ".join(r["why"].split("; ")) for r in rows if r["needs_human"]] or ["Nothing."]
     md += ["", "## What was tried", ""] + [f"- **{r['part']}**: {r['tried'] or '-'}" for r in rows]
-    (out / "review.md").write_text("\n".join(md) + "\n")
+    (out / "review.md").write_text("\n".join(md) + "\n", encoding="utf-8")
 
 
 def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_index=False, allow=(), offline=False,
-        cache="out/http_cache", rate=0.5, providers="jlcpcb_search,easyeda", http=None, api_key=None, log=print, gen_step=True,
-        rules=None, user=None):
-    """Whole pipeline; returns the plan items. refresh: None = resume, [] = redo all, [names] = redo those.
+        cache="out/http_cache", rate=0.5, providers=None, http=None, api_key=None, log=print, gen_step=True,
+        rules=None, user=None, datasheet_batch=False, reader=None):
+    """Whole pipeline; returns the plan items. datasheet_batch: parts that reach the datasheet source are read as one
+    Message Batch after every other source ran (reader: a ready datasheet.Reader, e.g. for --no-wait / --estimate). refresh: None = resume, [] = redo all, [names] = redo those.
     rules: library rules (a loaded dict or a path); None uses the ecadlib.toml found from `out` (defaults when none).
     sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity())."""
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
@@ -481,15 +525,19 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         raise ValueError(f"unknown sources {sorted(bad)}; use {','.join(SOURCES)}")
     lines, mapping = T.read_bom(bom, RU.bom_columns(rules))
     index = KiCadIndex(libs)
-    provs = [c(http) for c in P.ALL if c.name in providers.split(",")]
+    from . import plugins as PL                      # providers: None = [providers] order, else jlcpcb_search,easyeda
+    provs = [c(http) for c in PL.select(providers, rules, default="jlcpcb_search,easyeda")]
     rows = T.triage(lines, index, provs, http)
     T.write_reports(rows, mapping, provs, http, out / "triage", bom)
     items = A365.plan(lines, pd.DataFrame(rows, dtype=str).fillna("") if rows else None, rules=rules)
     state_f, plan_f = out / "librarian_state.json", out / "plan.json"
-    state = json.loads(state_f.read_text()) if state_f.exists() else {}
-    old = {i["name"]: i for i in json.loads(plan_f.read_text())} if plan_f.exists() else {}
+    state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.exists() else {}
+    old = {i["name"]: i for i in json.loads(plan_f.read_text(encoding="utf-8"))} if plan_f.exists() else {}
     items, in_ws = A365S.reuse_existing(items, list(old.values()), rules)  # parts `ecadlib a365 pull` found in the workspace
-    r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step, rules)
+    if reader is None and "datasheet" in sources:
+        reader = D.Reader(out, cache, api_key, rules, http, batch=datasheet_batch, log=log)
+    r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step, rules,
+            reader)
     todo = []
     for it in items:
         if it["name"] in in_ws:
@@ -516,6 +564,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         st = r.resolve(it, ln, row, keeps[it["name"]])
         st["key"], st["skipped"] = fpr, False
         state[it["name"]] = st
+    r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
     for it in items:
         if it["name"] in in_ws:
             log(f"  a365  {it['name']:<28} in the Altium 365 workspace: reused, not fetched")
@@ -535,13 +584,13 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     state = {k: v for k, v in state.items() if k in {i["name"] for i in items}}
     for n in set(allow) - set(state):
         log(f"  --allow {n}: not a part in this plan (names are the plan's Part Numbers)")
-    state_f.write_text(json.dumps(state, indent=2))
+    write_text_atomic(state_f, json.dumps(state, indent=2))
     checks = RC.apply(items, out, allow, rules=rules)
     if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
         from .approvals import identity, post_check, stamp_allow
         stamp_allow(items, allow, identity(user, cwd=out))
         post_check(items, out, checks)
-    plan_f.write_text(json.dumps(items, indent=2))
+    write_text_atomic(plan_f, json.dumps(items, indent=2))
     RC.write_report(checks, out / "release_check", plan_f)
     write_review(review_rows(items), out, bom)
     return items
@@ -556,16 +605,29 @@ def main(argv=None):
     ap.add_argument("--refresh", nargs="*", metavar="PART", help="redo finished parts: all, or the named ones")
     ap.add_argument("--refresh-index", action="store_true", help="rebuild the KiCad library name index")
     ap.add_argument("--allow", action="append", default=[], metavar="PART", help="release PART despite its release-check failures")
-    ap.add_argument("--providers", default="jlcpcb_search,easyeda", help="triage providers (default %(default)s)")
+    ap.add_argument("--providers", help="triage providers in order (default: [providers] order, else jlcpcb_search,easyeda)")
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--rate", type=float, default=0.5, help="min seconds between requests per host")
     ap.add_argument("--box", action="store_true", help="extruded 3D box instead of a generated STEP when there is no KiCad model")
     ap.add_argument("--user", help="who gives the --allow (default: $ECADLIB_USER, then git config user.name/email)")
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from -o or here; see `ecadlib init`)")
+    ap.add_argument("--datasheet-batch", action="store_true",
+                    help="read every datasheet still needed as one Message Batch (half price; waits for it, see --datasheet-no-wait)")
+    ap.add_argument("--datasheet-no-wait", action="store_true", help="submit the batch and finish; re-run to collect it")
     a = ap.parse_args(argv)
-    items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh, a.refresh_index,
-                a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=RU.load(a.rules, start=a.out), user=a.user)
+    rules = RU.load(a.rules, start=a.out)
+    reader = None
+    if a.datasheet_batch:
+        reader = D.Reader(a.out, a.cache, None, rules, CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline, timeout=60),
+                          batch=True, wait=not a.datasheet_no_wait)
+    try:
+        items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh,
+                    a.refresh_index, a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=rules,
+                    user=a.user, http=reader.http if reader else None, reader=reader)
+    except ValueError as e:                              # unreadable / headerless BOM, unknown --sources
+        print(f"ecadlib librarian: {e}", file=sys.stderr)
+        return 2
     held = sum(i["status"] != "ready" for i in items)
     print(f"{len(items)} parts: {len(items) - held} ready, {held} held -> {Path(a.out) / 'plan.json'}; review {Path(a.out) / 'review.md'}")
     return 2 if held else 0

@@ -1,0 +1,116 @@
+# ecadlib team server behind Caddy (HTTPS). Set up with:  python3 -m ecadlib team setup
+# which writes .env (no secrets in it), creates the first admin in the ecadlib-data volume and runs `docker compose up -d`.
+#
+#   ECADLIB_DOMAIN   the name or IP people type: ecadlib.example.com, or 192.168.1.20 / ecadlib.lan on a LAN
+#   ECADLIB_TLS      an e-mail address: a Let's Encrypt certificate for a public domain (ports 80 and 443 must
+#                    reach this machine); or "internal": Caddy's own CA, for a LAN name or IP address
+#
+# ecadlib itself is not published on any host port. Only Caddy reaches it, from a fixed address on the
+# ecadlib-net network, and that address is the one --trusted-proxy names, so X-Forwarded-For/-Proto are believed
+# from Caddy and nobody else. Bring your own certificate instead: docker-compose.own-cert.yml.
+name: ecadlib
+
+services:
+  ecadlib:
+    image: ${ECADLIB_IMAGE:-ecadlib:local}
+    build: .
+    restart: unless-stopped
+    command:
+      - ui
+      - --team
+      - --workspace
+      - /data/workspace
+      - --lib
+      - /data/libs
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8765"
+      - --no-browser
+      - --allow-http            # plain HTTP only on ecadlib-net; Caddy terminates TLS
+      - --trusted-proxy
+      - ${ECADLIB_PROXY_IP:-172.30.87.2}
+      # the SSO user header ecadlib believes from Caddy: always the one the Caddyfile strips from clients (a
+      # proxy_user_header in team.json would otherwise be passed through from anyone: sign in as any user)
+      - --proxy-user-header
+      - ${ECADLIB_PROXY_USER_HEADER:-X-Forwarded-User}
+      - --allowed-host
+      - ${ECADLIB_DOMAIN:?run "python3 -m ecadlib team setup" or set ECADLIB_DOMAIN in .env}
+    expose: ["8765"]
+    volumes:
+      - ecadlib-data:/data
+    networks: [ecadlib-net]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    env_file:
+      # Optional API keys (NEXAR_TOKEN, ANTHROPIC_API_KEY, MOUSER_API_KEY, DIGIKEY_CLIENT_ID/_SECRET ...), one
+      # KEY=value per line. Keep the file private (chmod 600); it is never copied into the image.
+      - path: ./api-keys.env
+        required: false
+
+  # Optional library agent (`ecadlib agent serve`) on the same /data volume. Not started by default:
+  #   docker compose --profile agent up -d
+  # It stays idle until [agent] enabled = true in /data/workspace/ecadlib.toml. GITHUB_TOKEN, NEXAR_TOKEN and
+  # ANTHROPIC_API_KEY come from api-keys.env. For batch PRs point [agent] library_repo at a git checkout
+  # inside /data; without one they are written to /data/workspace/agent/batches/.
+  agent:
+    image: ${ECADLIB_IMAGE:-ecadlib:local}
+    build: .
+    profiles: [agent]
+    restart: unless-stopped
+    command: [agent, --workspace, /data/workspace, serve, --lib, /data/libs]
+    volumes:
+      - ecadlib-data:/data
+    networks: [ecadlib-net]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:                      # the status file is rewritten after every pass (and while idle/disabled)
+      test: ["CMD", "ecadlib", "agent", "--workspace", "/data/workspace", "status", "--healthy", "10800"]
+      interval: 5m
+      start_period: 1m
+    env_file:
+      - path: ./api-keys.env
+        required: false
+
+  caddy:
+    image: caddy:2.10
+    restart: unless-stopped
+    depends_on: [ecadlib]
+    ports:
+      # HTTPS on the same port inside and out, so Caddy's HTTP->HTTPS redirect keeps a non-default port.
+      - "${ECADLIB_HTTP_PORT:-80}:80"
+      - "${ECADLIB_HTTPS_PORT:-443}:${ECADLIB_HTTPS_PORT:-443}"
+      - "${ECADLIB_HTTPS_PORT:-443}:${ECADLIB_HTTPS_PORT:-443}/udp"
+    environment:
+      ECADLIB_HTTPS_PORT: ${ECADLIB_HTTPS_PORT:-443}
+      ECADLIB_DOMAIN: ${ECADLIB_DOMAIN:?run "python3 -m ecadlib team setup" or set ECADLIB_DOMAIN in .env}
+      ECADLIB_TLS: ${ECADLIB_TLS:-internal}
+      ECADLIB_PROXY_USER_HEADER: ${ECADLIB_PROXY_USER_HEADER:-X-Forwarded-User}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data              # certificates (and Caddy's internal CA)
+      - caddy-config:/config
+    networks:
+      ecadlib-net:
+        ipv4_address: ${ECADLIB_PROXY_IP:-172.30.87.2}
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+
+networks:
+  ecadlib-net:
+    ipam:
+      config:
+        # Containers get addresses from ip_range only, so Caddy's fixed address (outside it) is never taken
+        # by ecadlib or a `docker compose run` container. Change all three together if this subnet is in use.
+        - subnet: ${ECADLIB_SUBNET:-172.30.87.0/24}
+          ip_range: ${ECADLIB_IP_RANGE:-172.30.87.128/25}
+
+volumes:
+  ecadlib-data:
+  caddy-data:
+  caddy-config:

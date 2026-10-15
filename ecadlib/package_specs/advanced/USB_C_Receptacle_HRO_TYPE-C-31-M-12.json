@@ -1,0 +1,218 @@
+{
+  "name": "USB_C_Receptacle_HRO_TYPE-C-31-M-12",
+  "description": "USB Type-C receptacle for USB 2.0 and PD, http://www.krhro.com/uploads/soft/180320/1-1P320120243.pdf",
+  "package_type": "connector",
+  "pin_count": 16,
+  "pitch": 0.5,
+  "height_max": 3.31,
+  "same_net": [
+    [
+      "A1",
+      "B12"
+    ],
+    [
+      "A12",
+      "B1"
+    ],
+    [
+      "A4",
+      "B9"
+    ],
+    [
+      "A9",
+      "B4"
+    ]
+  ],
+  "pad_table": {
+    "unit": "mm",
+    "y_axis": "up",
+    "origin": "datum",
+    "center_at": {
+      "x": 0,
+      "y": -2.6
+    },
+    "footprint_origin": "center",
+    "pads": [
+      {
+        "number": "A1",
+        "x": -3.25,
+        "y": 1.445,
+        "w": 0.6,
+        "h": 1.45
+      },
+      {
+        "number": "A4",
+        "x": -2.45,
+        "y": 1.445,
+        "w": 0.6,
+        "h": 1.45
+      },
+      {
+        "number": "A5",
+        "x": -1.25,
+        "y": 1.445,
+        "w": 0.3,
+        "h": 1.45
+      },
+      {
+        "number": "A6",
+        "x": -0.25,
+        "y": 1.445,
+        "w": 0.3,
+        "h": 1.45
+      },
+      {
+        "number": "A7",
+        "x": 0.25,
+        "y": 1.445,
+        "w": 0.3,
+        "h": 1.45
+      },
+      {
+        "number": "A8",
+        "x": 1.25,
+        "y": 1.445,
+        "w": 0.3,
+        "h": 1.45
+      },
+      {
+        "number": "A9",
+        "x": 2.45,
+        "y": 1.445,
+        "w": 0.6,
+        "h": 1.45
+      },
+      {
+        "number": "A12",
+        "x": 3.25,
+        "y": 1.445,
+        "w": 0.6,
+        "h": 1.45
+      },
+      {
+        "number": "B1",
+        "x": 3.25,
+        "y": 1.445,
+        "w": 0.6,
+        "h": 1.45
+      },
+      {
+        "number": "B4",
+        "x": 2.45,
+        "y": 1.445,
+        "w": 0.6,
+        "h": 1.45
+      },
+      {
+        "number": "B5",
+        "x": 1.75,
+        "y": 1.445,
+        "w": 0.3,
+        "h": 1.45
+      },
+      {
+        "number": "B6",
+        "x": 0.75,
+        "y": 1.445,
+        "w": 0.3,
+        "h": 1.45
+      },
+      {
+        "number": "B7",
+        "x": -0.75,
+        "y": 1.445,
+        "w": 0.3,
+        "h": 1.45
+      },
+      {
+        "number": "B8",
+        "x": -1.75,
+        "y": 1.445,
+        "w": 0.3,
+        "h": 1.45
+      },
+      {
+        "number": "B9",
+        "x": -2.45,
+        "y": 1.445,
+        "w": 0.6,
+        "h": 1.45
+      },
+      {
+        "number": "B12",
+        "x": -3.25,
+        "y": 1.445,
+        "w": 0.6,
+        "h": 1.45
+      },
+      {
+        "number": "SH",
+        "x": -4.32,
+        "y": 0.53,
+        "w": 1.0,
+        "h": 2.1,
+        "type": "tht",
+        "drill": 0.6,
+        "drill_h": 1.7,
+        "label": "shield slot"
+      },
+      {
+        "number": "SH",
+        "x": -4.32,
+        "y": -3.65,
+        "w": 1.0,
+        "h": 1.6,
+        "type": "tht",
+        "drill": 0.6,
+        "drill_h": 1.2,
+        "label": "shield slot"
+      },
+      {
+        "x": -2.89,
+        "y": 0,
+        "type": "npth",
+        "drill": 0.65,
+        "label": "locating hole"
+      },
+      {
+        "number": "SH",
+        "x": 4.32,
+        "y": 0.53,
+        "w": 1.0,
+        "h": 2.1,
+        "type": "tht",
+        "drill": 0.6,
+        "drill_h": 1.7,
+        "label": "shield slot"
+      },
+      {
+        "number": "SH",
+        "x": 4.32,
+        "y": -3.65,
+        "w": 1.0,
+        "h": 1.6,
+        "type": "tht",
+        "drill": 0.6,
+        "drill_h": 1.2,
+        "label": "shield slot"
+      },
+      {
+        "x": 2.89,
+        "y": 0,
+        "type": "npth",
+        "drill": 0.65,
+        "label": "locating hole"
+      }
+    ],
+    "body": {
+      "x1": -4.47,
+      "y1": 1.05,
+      "x2": 4.47,
+      "y2": -6.25
+    }
+  },
+  "source": {
+    "datasheet": "http://www.krhro.com/uploads/soft/180320/1-1P320120243.pdf",
+    "drawing": "recommended PCB layout; KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as the datasheet drawing gives them"
+  }
+}
