@@ -127,7 +127,10 @@ def libcheck(a):
     b2 = pcbnew.LoadBoard(path)                # loads the project next to it, with its fp-lib-table
     pcbnew.WriteDRCReport(b2, str(d / "check.rpt"), pcbnew.EDA_UNITS_MILLIMETRES, True)
     agg = _violations(str(d / "check.rpt"), refs)
-    return {k: {kk: vv for kk, vv in v.items() if kk.startswith("lib_footprint")} for k, v in agg.items()}
+    out = {k: {kk: vv for kk, vv in v.items() if kk.startswith("lib_footprint")} for k, v in agg.items()}
+    blocks = [b for b in (d / "check.rpt").read_text().split("\n[")[1:] if b.startswith("lib_footprint")]
+    out["_detail"] = [b.strip()[:300] for b in blocks[:3]]     # KiCad's own words, for the test's failure message
+    return out
 
 
 def step(a):
