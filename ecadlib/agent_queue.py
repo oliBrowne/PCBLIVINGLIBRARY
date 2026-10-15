@@ -58,42 +58,67 @@ def now():
 
 
 # Manufacturer names as part keys use them: "ST", "STMicroelectronics" and "STMicroelectronics N.V." are one maker.
-MFR_ALIASES = {
-    "st": "stmicroelectronics", "stm": "stmicroelectronics", "st micro": "stmicroelectronics",
-    "st microelectronics": "stmicroelectronics", "sgs thomson": "stmicroelectronics",
-    "ti": "texas instruments", "texas instrument": "texas instruments",
-    "adi": "analog devices", "analog device": "analog devices", "linear technology": "analog devices",
-    "nxp semiconductors": "nxp", "nxp semiconductor": "nxp",
-    "on semiconductor": "onsemi", "on semi": "onsemi", "on": "onsemi",
-    "microchip technology": "microchip", "infineon technologies": "infineon",
-    "vishay intertechnology": "vishay", "vishay semiconductors": "vishay", "vishay siliconix": "vishay",
-    "vishay dale": "vishay", "vishay general semiconductor": "vishay",
-    "murata manufacturing": "murata", "murata electronics": "murata", "te": "te connectivity",
-    "rohm semiconductor": "rohm", "diodes": "diodes incorporated", "diodes inc": "diodes incorporated",
-    "maxim integrated": "maxim", "maxim integrated products": "maxim", "renesas electronics": "renesas",
-    "samsung electro mechanics": "samsung electro-mechanics", "semco": "samsung electro-mechanics",
-    "we": "wurth elektronik", "wurth": "wurth elektronik", "wuerth elektronik": "wurth elektronik",
-    "nexperia usa": "nexperia", "toshiba electronic devices and storage": "toshiba", "kemet electronics": "kemet",
-    "yageo": "yageo", "tdk electronics": "tdk", "epcos": "tdk", "panasonic electronic components": "panasonic",
-    "littelfuse": "littelfuse", "bourns": "bourns", "molex": "molex", "amphenol": "amphenol",
-}
+from .rules import MANUFACTURER_ALIASES as MFR_ALIASES      # defaults; [agent] manufacturer_aliases extends
 MFR_SUFFIXES = {"inc", "incorporated", "corp", "corporation", "co", "company", "ltd", "limited", "llc", "lp", "gmbh",
                 "ag", "sa", "nv", "bv", "plc", "kg", "kk", "oy", "ab", "spa", "srl", "pte", "pty", "sas", "se"}
 
 
-def norm_manufacturer(name):
-    """The manufacturer as a part key uses it: lower case, no accents or punctuation, no legal suffix (Inc, Ltd,
-    GmbH, N.V. ...), then MFR_ALIASES ("ST" -> "stmicroelectronics"). "" stays ""."""
+def _clean_maker(name):
+    """lower case, no accents or punctuation, no legal suffix (Inc, Ltd, GmbH, N.V., "& Co. KG" ...)."""
     import unicodedata
     s = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode().lower()
     s = re.sub(r"\b([a-z])\.(?=[a-z]\.)", r"\1", s)              # N.V. -> NV., S.p.A. -> SpA
     s = s.replace("&", " and ")
-    s = " ".join(re.sub(r"[^a-z0-9]+", " ", s).split())
-    words = s.split()
-    while len(words) > 1 and (words[-1] in MFR_SUFFIXES or words[-1] == "and"):     # "GmbH & Co. KG"
+    words = re.sub(r"[^a-z0-9]+", " ", s).split()
+    while len(words) > 1 and (words[-1] in MFR_SUFFIXES or words[-1] == "and"):
         words.pop()
-    s = " ".join(words)
-    return MFR_ALIASES.get(s, s)
+    return " ".join(words)
+
+
+def alias_table(rules=None):
+    """{cleaned alias: cleaned canonical} from [agent] manufacturer_aliases (defaults: MFR_ALIASES)."""
+    raw = ((rules or {}).get("agent") or {}).get("manufacturer_aliases")
+    raw = MFR_ALIASES if raw is None else raw
+    out = {_clean_maker(k): _clean_maker(v) for k, v in raw.items() if _clean_maker(k) and _clean_maker(v)}
+    return {k: out.get(v, v) for k, v in out.items()}                 # one level of chaining: A -> B -> C
+
+
+_ALIASES = {"table": alias_table(), "sig": None, "rules_file": None}
+
+
+def aliases_sig():
+    if _ALIASES["sig"] is None:
+        import hashlib
+        _ALIASES["sig"] = hashlib.sha256(json.dumps(sorted(_ALIASES["table"].items())).encode()).hexdigest()[:16]
+    return _ALIASES["sig"]
+
+
+def use_rules(rules):
+    """Make part keys use these rules' [agent] manufacturer_aliases (the agent, the watch and the queue call it with
+    the workspace rules; keys made under another table are migrated once, see Queue.migrate_keys)."""
+    table = alias_table(rules)
+    if table != _ALIASES["table"]:
+        _ALIASES.update(table=table, sig=None)
+
+
+def use_workspace_rules(root):
+    """use_rules() with <root>'s rules file, re-read only when that file changes; bad rules keep the current table."""
+    from . import rules as RU
+    try:
+        f = RU.find(root)
+        sig = (str(f), f.stat().st_mtime_ns) if f else None
+        if sig != _ALIASES["rules_file"]:
+            use_rules(RU.load(None, start=root))
+            _ALIASES["rules_file"] = sig
+    except (OSError, ValueError):
+        pass
+
+
+def norm_manufacturer(name):
+    """The manufacturer as a part key uses it: _clean_maker, then the alias table ("ST" -> "stmicroelectronics").
+    "" stays ""."""
+    s = _clean_maker(name)
+    return _ALIASES["table"].get(s, s)
 
 
 def part_key(manufacturer, mpn):
@@ -240,6 +265,7 @@ class Queue:
         for d in (self.items_dir, self.batches_dir):
             d.mkdir(parents=True, exist_ok=True)
         self.lock = _Lock.of(self.dir)
+        use_workspace_rules(self.workspace)            # [agent] manufacturer_aliases for part keys
 
     # -- files
     def _item_path(self, i):
@@ -382,14 +408,18 @@ class Queue:
         match one known maker). Items that become the same part are merged: the one furthest along stays open,
         the other open ones are rejected by the agent as duplicates (their history says of what)."""
         marker = self.dir / "keys.json"
+        if getattr(self.lock, "migrated", None) == (aliases_sig(), marker.exists()):
+            return 0                                            # checked in this process already
         with self.lock:
-            if marker.exists():
-                return 0
+            with contextlib.suppress(OSError, ValueError):
+                if json.loads(marker.read_text()).get("aliases") == aliases_sig():
+                    self.lock.migrated = (aliases_sig(), True)
+                    return 0                                    # done for this alias table
             t, moved = now(), 0
             items = list(self._all().values())
             for it in items:
                 m, _, n = str(it.get("key") or "").partition("|")
-                new = f"{norm_manufacturer(m or it.get('manufacturer'))}|{n}"
+                new = f"{norm_manufacturer(it.get('manufacturer') or m)}|{n}"     # the name as written, if known
                 if new != it.get("key"):
                     it = copy.deepcopy(it)
                     it["history"].append({"at": t, "from": it["status"], "to": it["status"], "user": "ecadlib-agent",
@@ -420,7 +450,8 @@ class Queue:
                 for dup in its[1:]:
                     self.transition(dup["id"], "rejected", user="ecadlib-agent",
                                     note=f"duplicate of {its[0]['id']} (same part once manufacturer names are normalised)")
-            _write(marker, {"version": 2, "migrated": t, "rekeyed": moved})
+            _write(marker, {"version": 2, "migrated": t, "rekeyed": moved, "aliases": aliases_sig()})
+            self.lock.migrated = (aliases_sig(), True)
             return moved
 
     def update(self, i, **fields):
