@@ -41,7 +41,7 @@ class CachedHTTP:
 
     def request(self, method, url, body=None, headers=None):
         f = self.dir / f"{self._key(method, url, body)}.json"
-        if f.exists() and time.time() - f.stat().st_mtime < self.ttl:
+        if f.exists() and (self.offline or time.time() - f.stat().st_mtime < self.ttl):   # offline: stale beats nothing
             d = json.loads(f.read_text())
             self.log.append((method, url, d["status"], True))
             return Response(d["status"], d["text"], from_cache=True)

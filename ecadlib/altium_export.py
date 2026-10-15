@@ -14,10 +14,12 @@ Column names use Altium's reserved DbLib names ([Library Ref], [Library Path], [
 Manufacturer Part Number, Supplier 1/Supplier Part Number 1, ComponentLink1URL/Description).
 See README for what is verified vs assumed about the .DbLib INI keys."""
 import argparse, re, sqlite3
+from contextlib import closing
 from pathlib import Path, PureWindowsPath
 
 import pandas as pd
 
+from .altium_lib import file_stem, lib_name
 from .bom_triage import read_bom
 from .kicad_index import package_of
 
@@ -26,8 +28,9 @@ COLUMNS = ["Part Number", "Library Ref", "Library Path", "Footprint Ref", "Footp
            "Supplier 1", "Supplier Part Number 1", "Supplier 2", "Supplier Part Number 2",
            "ComponentLink1Description", "ComponentLink1URL", "ComponentLink2Description", "ComponentLink2URL"]
 RESERVED = {"Library Ref", "Library Path", "Footprint Ref", "Footprint Path", "Description"}
-CATEGORY = {"R": "Resistors", "C": "Capacitors", "L": "Inductors", "D": "Diodes", "Q": "Transistors",
-            "Y": "Crystals", "J": "Connectors", "P": "Connectors", "U": "ICs"}
+CATEGORY = {"R": "Resistors", "C": "Capacitors", "L": "Inductors", "D": "Diodes", "Q": "Transistors",   # whole prefix:
+            "Y": "Crystals", "J": "Connectors", "P": "Connectors", "U": "ICs",                         # LED1 is not an L,
+            "LED": "Diodes", "IC": "ICs", "CN": "Connectors", "JP": "Connectors"}                      # CN1 not a C
 GENERIC_SYMBOL = {"Resistors": "Resistor", "Capacitors": "Capacitor", "Inductors": "Inductor"}
 
 
@@ -35,11 +38,12 @@ def to_rows(lines, triage=None):
     tri = {}
     if triage is not None:
         for _, t in triage.iterrows():
-            tri[str(t["mpn"])] = t
-    out = {}
+            if str(t["mpn"]):                  # an empty MPN would hand one row's footprint to every MPN-less line
+                tri[str(t["mpn"])] = t
+    out, seen = {}, {}
     for ln in lines:
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
-        cat = CATEGORY.get(prefix.group(0)[0] if prefix else "U", "Misc")
+        cat = CATEGORY.get(prefix.group(0) if prefix else "U", "Misc")
         mpn, lcsc = ln.get("mpn", ""), ln.get("lcsc", "")
         fp = ln.get("footprint", "")
         t = tri.get(mpn)
@@ -48,13 +52,18 @@ def to_rows(lines, triage=None):
         fp_ref = fp.split(":")[-1]
         pkg = package_of(fp, ln.get("description")) or ""
         value = ln.get("value", "")
-        pn = (f"{cat[:3].upper()}-{pkg}-{value}" if cat in GENERIC_SYMBOL else mpn).replace(" ", "")
+        pn = (f"{cat[:3].upper()}-{pkg}-{value}" if cat in GENERIC_SYMBOL and value
+              else mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
+        if seen.setdefault(pn, mpn) != mpn:      # same synthetic PN, different part (e.g. 100nF 16V vs 50V): keep both
+            pn = f"{pn}-{mpn}".replace(" ", "")
+        lib_ref = lib_name(GENERIC_SYMBOL.get(cat, mpn or pn))
+        fp_ref = lib_name(fp_ref)
         out.setdefault(cat, []).append({
             "Part Number": pn,
-            "Library Ref": GENERIC_SYMBOL.get(cat, mpn),
-            "Library Path": f"SchLib\\{cat}.SchLib",
+            "Library Ref": lib_ref,
+            "Library Path": f"SchLib\\{file_stem(lib_ref)}.SchLib",      # altium_lib layout: one entry per file
             "Footprint Ref": fp_ref,
-            "Footprint Path": "PcbLib\\ecadlib.PcbLib",
+            "Footprint Path": f"PcbLib\\{file_stem(fp_ref)}.PcbLib" if fp_ref else "",
             "Description": ln.get("description", ""),
             "Value": value, "Comment": "=Value" if cat in GENERIC_SYMBOL else mpn,
             "Manufacturer": ln.get("manufacturer", ""), "Manufacturer Part Number": mpn,
@@ -107,7 +116,7 @@ def main(argv=None):
 
     db = out / "parts.sqlite"
     db.unlink(missing_ok=True)
-    with sqlite3.connect(db) as con:
+    with closing(sqlite3.connect(db)) as con, con:      # `with con` alone commits but never closes
         for name, df in tables.items():
             cols = ", ".join(f'"{c}" TEXT' + (" PRIMARY KEY" if c == "Part Number" else "") for c in COLUMNS)
             con.execute(f'CREATE TABLE "{name}" ({cols})')
