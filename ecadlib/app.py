@@ -19,6 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import bom_triage as T, footprint_gen as F, providers as P, rules as RU, sexpr
+from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex
 
@@ -36,6 +37,7 @@ class Workspace:
         self.models = self.root / "altium_models"
         self.libs = [str(Path(l).resolve()) for l in libs]
         self.provider_names = providers or [c.name for c in P.ALL]
+        self._providers_given = bool(providers)          # else [providers] order in the rules decides (ecadlib.plugins)
         self.offline = offline
 
     # ------------------------------------------------------------------ paths
@@ -164,7 +166,7 @@ class Workspace:
         must not block other workspace actions."""
         bom_path = self._bom_path(bom)
         http = CachedHTTP(self.root / "http_cache", min_interval=1.0, offline=self.offline)
-        provs = [c(http) for c in P.ALL if c.name in self.provider_names]
+        provs = [c(http) for c in self._provider_classes()]
         lines, mapping = self._read_bom(bom_path)
         index = self._index()
         rows = []
@@ -185,7 +187,7 @@ class Workspace:
                    "reports": [self.rel(stem.with_suffix(".md")), self.rel(stem.with_suffix(".csv"))]}
             meta = {"id": self._key(bom_path), "name": bom_path.name, "finished": _now(), "user": user or None}
             tmp = stem.with_name(stem.name + f".{os.getpid()}.{secrets.token_hex(3)}.tmp")
-            tmp.write_text(json.dumps({**meta, **out}, default=str))
+            tmp.write_text(json.dumps({**meta, **out}, default=str), encoding="utf-8")
             os.replace(tmp, stem.with_suffix(".json"))
         return {**out, **meta}
 
@@ -206,7 +208,7 @@ class Workspace:
         for tid, (j, c) in self._triage_files().items():
             try:
                 if j:
-                    d = json.loads(j.read_text())
+                    d = json.loads(j.read_text(encoding="utf-8"))
                     it = {k: d.get(k) for k in ("bom", "name", "finished", "user", "counts")}
                     it["lines"] = len(d.get("rows") or [])
                     it["reports"] = d.get("reports") or []
@@ -235,7 +237,7 @@ class Workspace:
             raise KeyError(f"no triage {tid!r} in this workspace")
         j, c = f
         if j:
-            d = json.loads(j.read_text())
+            d = json.loads(j.read_text(encoding="utf-8"))
             d["id"] = tid
             return d
         rows = pd.read_csv(c, dtype=str).fillna("").to_dict("records")
@@ -303,8 +305,8 @@ class Workspace:
         p = self.gen_dir / f"{name}.kicad_mod"
         if p.exists() and not overwrite:
             raise FileExistsError(f"{name} is already in the workspace library; approve again with overwrite to replace it")
-        p.write_text(res["kicad_mod"])
-        (self.gen_dir / f"{name}.json").write_text(json.dumps(spec_obj, indent=2))  # keep the source dimensions
+        p.write_text(res["kicad_mod"], encoding="utf-8")
+        (self.gen_dir / f"{name}.json").write_text(json.dumps(spec_obj, indent=2), encoding="utf-8")  # keep the source dimensions
         files = [self.rel(p)]
         warnings = [f"{c['rule']}: {c['message']}" for c in res["report"].get("checks", []) if c["level"] == "error"]
         try:
@@ -337,7 +339,7 @@ class Workspace:
                 skipped.append(f"{ref}: not found in indexed libraries")
                 continue
             try:
-                altium_lib.write_pcblib(out, [altium_lib.footprint_from_kicad(Path(hit["path"]).read_text())], layers)
+                altium_lib.write_pcblib(out, [altium_lib.footprint_from_kicad(Path(hit["path"]).read_text(encoding="utf-8"))], layers)
                 done.append(ref)
             except Exception as e:
                 skipped.append(f"{ref}: {e}")
@@ -371,7 +373,7 @@ class Workspace:
         lines, _ = self._read_bom(bom_path)
         lib_plan = self._librarian_dir(bom_path) / "plan.json"
         if lib_plan.exists():
-            items = json.loads(lib_plan.read_text())
+            items = json.loads(lib_plan.read_text(encoding="utf-8"))
             for it in items:                          # librarian paths are relative to its output folder
                 for k in ("symbol", "footprint"):
                     f = it[k].get("file")
@@ -381,7 +383,7 @@ class Workspace:
         else:
             items = A.plan(lines, self._triage_frame(bom_path), self.models, rules=self.rules())
             out = self.root / "altium365" / f"plan_{self._key(bom_path)}.json"
-            out.write_text(json.dumps(items, indent=2))
+            out.write_text(json.dumps(items, indent=2), encoding="utf-8")
             src = "triage"
         ready = sum(i["status"] == "ready" for i in items)
         return {"items": items, "ready": ready, "total": len(items), "plan": self.rel(out), "source": src}
@@ -407,7 +409,7 @@ class Workspace:
                 progress(min(n[0], len(lines)), len(lines), str(msg).strip()[:80])
         if progress:
             progress(0, len(lines), "looking up parts")
-        provs = ",".join(p for p in ("jlcpcb_search", "easyeda") if p in self.provider_names)
+        provs = self._librarian_providers()
         items = L.run(str(bom_path), self.libs + [str(self.root / "footprints")], out,
                       list(sources) if sources else None, refresh, False, list(allow), self.offline,
                       self.root / "http_cache", 0.5, provs, log=note, rules=self.rules())
@@ -417,13 +419,17 @@ class Workspace:
         """Re-run the release check on the librarian's plan, optionally releasing named parts despite their
         failures (allow) or taking that back (unallow). user, when given, is recorded as the person who gave the
         allow (approvals' no_self_approval uses it). Never touches the network."""
+        with self._plan_lock():
+            return self._release_check(bom, allow, unallow, user)
+
+    def _release_check(self, bom, allow=(), unallow=(), user=None):
         from . import release_check as RC
         bom_path = self._bom_path(bom)
         out = self._librarian_dir(bom_path)
         plan_f = out / "plan.json"
         if not plan_f.exists():
             raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
-        items = json.loads(plan_f.read_text())
+        items = json.loads(plan_f.read_text(encoding="utf-8"))
         unknown = set(allow) | set(unallow)
         unknown -= {i["name"] for i in items}
         if unknown:
@@ -434,11 +440,21 @@ class Workspace:
             from .approvals import post_check, stamp_allow
             stamp_allow(items, list(allow), user)
             post_check(items, out, rows)
-        plan_f.write_text(json.dumps(items, indent=2))
+        write_text_atomic(plan_f, json.dumps(items, indent=2))
         RC.write_report(rows, out / "release_check", plan_f)
         from . import librarian as L
         L.write_review(L.review_rows(items), out, str(bom_path))
         return self._librarian_summary(bom_path, items, [])
+
+    @contextlib.contextmanager
+    def _plan_lock(self):
+        """<workspace>/agent/plan.lock around a plan rewrite (not re-entrant: locked methods call the unlocked _bodies): while the library agent's
+        librarian rewrites a plan, a change written now would be overwritten by its copy, so it is refused instead."""
+        from .agent_queue import plan_lock
+        with plan_lock(self.root, wait=False) as free:
+            if not free:
+                raise ValueError("the library agent is rebuilding the library right now; try again in a minute")
+            yield
 
     def _librarian_summary(self, bom_path, items, log):
         from . import librarian as L
@@ -466,7 +482,7 @@ class Workspace:
         plan_f = self.inside(self.rel(self._librarian_dir(bom_path) / "plan.json"))
         if not plan_f.exists():
             raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
-        return bom_path, plan_f, json.loads(plan_f.read_text())
+        return bom_path, plan_f, json.loads(plan_f.read_text(encoding="utf-8"))
 
     @staticmethod
     def _part(items, part):
@@ -523,6 +539,10 @@ class Workspace:
         """Use a candidate (kicad:Lib:Name, local:Lib:Name or spec:Name) for one half of a plan item, convert it into
         the librarian's models folder, then re-run the release check and rewrite the review / release-check reports.
         pin_map {symbol pin: pad} remaps pin numbers. Returns the librarian summary plus `chosen`."""
+        with self._plan_lock():
+            return self._choose_part(bom, part, kind, candidate_id, pin_map)
+
+    def _choose_part(self, bom, part, kind, candidate_id, pin_map=None):
         from . import resolve as R
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
@@ -537,7 +557,7 @@ class Workspace:
             chosen = R.choose(plan_f, part, kind, candidate_id, src=self._resolve_sources(), pin_map=pin_map or None)
         except FileNotFoundError as e:
             raise ValueError(str(e)) from e
-        out = self.release_check(bom)                 # the whole plan again: reports, statuses, approval snapshot
+        out = self._release_check(bom)    # the whole plan again (lock already held): reports, statuses, approvals
         out["chosen"] = chosen
         return out
 
@@ -593,7 +613,7 @@ class Workspace:
         status = AP.refresh_status(it, policy, base)
         entry.update(role=rec["role"], hash=rec["hash"], result="recorded", status=status)
         AP.audit(base, entry)
-        plan_f.write_text(json.dumps(items, indent=2))
+        write_text_atomic(plan_f, json.dumps(items, indent=2))
         L.write_review(L.review_rows(items), base, str(bom_path))
         out = self._librarian_summary(bom_path, items, [])
         out["decision"] = {"part": part, "decision": decision, "who": user, "role": rec["role"], "status": status,
@@ -627,6 +647,10 @@ class Workspace:
         """Duplicate parts (same MPN), footprints (same geometry) and symbols (same pinout) across the librarian plan
         and the workspace's altium_models/ and footprints/. merge=True points duplicates at their keeper in the plan
         (library files are never changed; plan.json.pre-dedupe keeps the old plan) and re-runs the release check."""
+        with self._plan_lock() if merge else contextlib.nullcontext():
+            return self._find_duplicates(bom, merge)
+
+    def _find_duplicates(self, bom, merge=False):
         from . import dedupe as D
         _, plan_f, _ = self._plan(bom)
         libs = [p for p in (self.models, self.root / "footprints") if p.exists()]
@@ -648,7 +672,7 @@ class Workspace:
         out = {"groups": groups, "mapping": r["mapping"], "errors": r["errors"], "merged": bool(merge),
                "reports": [self.rel(r["report"]), self.rel(r["map"])]}
         if merge:
-            out["summary"] = self.release_check(bom)
+            out["summary"] = self._release_check(bom)          # the plan lock is already held
         return out
 
     # ------------------------------------------------------------------ upkeep (ecadlib.upkeep)
@@ -756,7 +780,7 @@ class Workspace:
             items = D.fill_plan(out / "plan.json", rd, self.rules(), log=log.append, parts=set(parts or []) or None)
         else:
             self._read_bom(bom_path)
-            provs = ",".join(p for p in ("jlcpcb_search", "easyeda") if p in self.provider_names)
+            provs = self._librarian_providers()
             items = L.run(str(bom_path), self.libs + [str(self.root / "footprints")], out, None, None, False, [], self.offline,
                           self.root / "http_cache", 0.5, provs, http=rd.http, log=log.append, rules=self.rules(), reader=rd)
         state = rd._state()
@@ -799,7 +823,7 @@ class Workspace:
             from .a365_sync import save_meta          # new revisions of pulled parts, so the next push is not a conflict
             save_meta(self.inside(plan["plan"]), plan["items"])
         out = self.root / "altium365" / f"push_{'dry_run_' if dry_run else ''}{self._key(self._bom_path(bom))}.json"
-        out.write_text(json.dumps(results, indent=2))
+        out.write_text(json.dumps(results, indent=2), encoding="utf-8")
         return {"dry_run": dry_run, "results": results, "report": self.rel(out)}
 
     # ------------------------------------------------------------------ two-way sync (ecadlib.a365_sync)
@@ -928,9 +952,81 @@ class Workspace:
         pr["images"] = {k: [self.rel(f) for f in v] for k, v in pr["images"].items()}
         return pr
 
+    def export_parts(self, bom, fmt="csv", include_held=False, name="ecadlib"):
+        """The library's parts table (stable columns, ecadlib.parts_export) for a BOM's plan, as reports/parts_<bom>.<fmt>."""
+        from . import parts_export as PE
+        if fmt not in ("csv", "json", "xlsx"):
+            raise ValueError(f"format must be csv, json or xlsx, not {str(fmt)[:20]!r}")
+        bom_path, plan_f, _ = self._plan(bom)
+        rows = PE.rows(plan_f, name, include_held)
+        out = PE.write(rows, self.root / "reports" / f"parts_{self._key(bom_path)}.{fmt}", fmt)
+        return {"file": self.rel(out), "parts": len(rows), "columns": PE.COLUMNS}
+
+    def kicad_dblib(self, bom, name="ecadlib", driver=None, include_held=False):
+        """KiCad files (kicad-export) plus a KiCad database library (.kicad_dbl + SQLite) for a BOM's plan, in kicad/<bom>/."""
+        from . import kicad_dblib as KD
+        from .kicad_export import kname
+        bom_path, plan_f, _ = self._plan(bom)
+        out = self.root / "kicad" / self._key(bom_path)
+        rep = KD.build(plan_f, out, kname(str(name))[:60], include_held, self.rules_in_use(), driver or KD.DEFAULT_DRIVER,
+                       export=True, http=CachedHTTP(self.root / "http_cache", offline=self.offline), log=lambda *a: None)
+        return {"folder": self.rel(out), "files": [self.rel(p) for p in sorted(out.iterdir()) if p.is_file()],
+                "tables": rep["tables"], "skipped": rep["skipped"], "warnings": rep["warnings"],
+                "kicad_export": rep.get("kicad_export")}
+
     def example_specs(self):
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data
-        return {p.stem: json.loads(p.read_text()) for p in sorted(d.glob("*.json"))} if d.exists() else {}
+        return {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(d.glob("*.json"))} if d.exists() else {}
+
+    # ------------------------------------------------------------------ setup check and summary (ecadlib.doctor / ws_status)
+    def status(self):
+        """One-screen summary (read-only): parts per librarian plan, held, waiting for sign-off, last triage, last
+        upkeep, the library agent's state and queue counts. Paths are relative to the workspace."""
+        from . import ws_status
+        return ws_status.status(self.root)
+
+    def doctor(self):
+        """The `ecadlib doctor` checks for this workspace and its --lib folders: each {check, level OK/WARN/FAIL,
+        detail, hint}. API keys are reported by name only."""
+        from . import doctor
+        rf = self.rules_in_use()
+        return doctor.run(self.root, self.libs, str(rf) if rf else None)
+
+    # ------------------------------------------------------------------ plugins (ecadlib.plugins), notifications
+    def _provider_classes(self):
+        """Triage sources: --providers when given, else [providers] order, else every built-in (today's default)."""
+        from . import plugins as PL
+        return PL.select(self.provider_names if self._providers_given else None, self.rules(),
+                         default=[c.name for c in P.ALL])
+
+    def _librarian_providers(self):
+        """The librarian's sources: [providers] order when set (and no --providers), else the free built-in two."""
+        from . import plugins as PL
+        if not self._providers_given and PL.order_set(self.rules()):
+            return None
+        return ",".join(p for p in ("jlcpcb_search", "easyeda") if p in self.provider_names)
+
+    def plugins(self):
+        """Installed provider / exporter plugins, the [providers] order in use and the [notify] targets (no secrets)."""
+        from . import notify as N, plugins as PL
+        d = PL.describe()
+        r = self.rules()
+        d["order"] = [c.name for c in self._provider_classes()]
+        d["notify"] = [{"name": t["name"], "type": t["type"], "events": sorted(t["events"]), "url_env": t["url_env"],
+                        "url_set": bool(os.environ.get(t["url_env"]))} for t in N.settings(r)["targets"]]
+        return d
+
+    def plugin_export(self, name, bom):
+        """Run exporter plugin `name` on the librarian plan of a BOM; files go to <ws>/exports/<name>/<bom stem>/."""
+        from . import plugins as PL
+        bom_path = self._bom_path(bom)
+        plan = self._librarian_dir(bom_path) / "plan.json"
+        if not plan.exists():
+            raise ValueError("run the librarian on this BOM first (no plan.json)")
+        out = self.root / "exports" / self.safe_name(name) / self.safe_name(bom_path.stem)
+        files = PL.run_exporter(name, plan, out, self.rules())
+        return {"exporter": name, "out": self.rel(out),
+                "files": [self.rel(f) if self.root in Path(f).resolve().parents else str(f) for f in files]}
 
 
 def _now(ts=None):

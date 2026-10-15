@@ -29,6 +29,13 @@ body replaced (plus a short comment so watchers are notified), never duplicated.
 commits the changed library files to branch `ecadlib/upkeep-YYYY-MM-DD`, pushes it and opens (or updates) the PR; with
 nothing to commit it falls back to the issue.
 
+GitLab (--gitlab issue|pr): the same rolling issue or a merge request through GitLab REST v4 (ecadlib/forge.py); token
+from $GITLAB_TOKEN (or [agent] gitlab_token_env), project from --gitlab-project / CI_PROJECT_PATH / [agent]
+gitlab_project / the origin remote, API from --gitlab-api / CI_API_V4_URL / [agent] gitlab_api (self-hosted works).
+
+Notifications: with [notify] targets in the rules, a run that found new changes (and saved its state) posts an
+upkeep_changes event, and a lifecycle event for parts that went EOL / NRND / last time buy (ecadlib/notify.py).
+
 Rules (ecadlib.toml, optional): [upkeep] checks = [...], schedule = "weekly", price_jump_pct = 20, build_qty = 1,
 currency = "USD"; [altium365] workspace = "https://..."."""
 import argparse, hashlib, json, os, shutil, subprocess, sys
@@ -63,8 +70,8 @@ def load_rules(path=None, start="."):
     p = Path(path)
     if p.suffix == ".toml":
         import tomllib
-        return tomllib.loads(p.read_text())
-    return json.loads(p.read_text())
+        return tomllib.loads(p.read_text(encoding="utf-8"))
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def upkeep_rules(rules):
@@ -81,7 +88,7 @@ class Source:
         if not self.path.is_file():
             raise FileNotFoundError(f"input not found: {path}")
         self.kind = "plan" if self.path.suffix.lower() == ".json" else "bom"
-        self.items = json.loads(self.path.read_text()) if self.kind == "plan" else None
+        self.items = json.loads(self.path.read_text(encoding="utf-8")) if self.kind == "plan" else None
         if self.items is not None and not isinstance(self.items, list):
             raise ValueError(f"{path}: not an altium365 plan (expected a JSON list of items)")
         self.bom = Path(bom) if bom else (self.path if self.kind == "bom" else None)
@@ -144,7 +151,7 @@ def _change(kind, item, was="", now="", detail=""):
 
 def _load(path, default):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return default
 
@@ -274,7 +281,7 @@ def check_upstream(src, state_dir, ctx, cfg, now, apply=False):
         sec.update(status="skipped", reason="no KiCad provenance manifest (kicad_import writes OUT/manifest.json; "
                                             "pass --manifest)")
         return sec
-    man = json.loads(src.manifest.read_text())
+    man = json.loads(src.manifest.read_text(encoding="utf-8"))
     rows, worst = U.check_kicad(man, ctx.gitlab)
     errs = [r for r in rows if r["status"] == "error"]
     for r in errs:
@@ -414,9 +421,9 @@ def save_state(rep, state_dir):
         if s["status"] == "ok" and s.get("_state"):
             for f, data in s["_state"].items():
                 tmp = d / (f + ".tmp")
-                tmp.write_text(json.dumps(data, indent=1, sort_keys=True))
+                tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
                 os.replace(tmp, d / f)
-    (d / "upkeep_last.json").write_text(json.dumps({"date": rep["date"], "new_changes": rep["new_changes"]}, indent=1))
+    (d / "upkeep_last.json").write_text(json.dumps({"date": rep["date"], "new_changes": rep["new_changes"]}, indent=1), encoding="utf-8")
 
 
 def _esc(v):
@@ -453,9 +460,9 @@ def markdown(rep, limit=None):
 def write_report(rep, out):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.with_suffix(".md").write_text(markdown(rep))
+    out.with_suffix(".md").write_text(markdown(rep), encoding="utf-8")
     clean = {**rep, "checks": [{k: v for k, v in s.items() if not k.startswith("_")} for s in rep["checks"]]}
-    out.with_suffix(".json").write_text(json.dumps(clean, indent=2))
+    out.with_suffix(".json").write_text(json.dumps(clean, indent=2), encoding="utf-8")
 
 
 # ------------------------------------------------------------------ GitHub
@@ -524,6 +531,9 @@ def _body(rep):
 def publish_issue(rep, gh):
     """Update the open issue labelled ecadlib-upkeep (body replaced, a comment added) or open it."""
     title, body = _title(rep), _body(rep)
+    if getattr(gh, "kind", "") == "gitlab":           # forge.GitLab: the same rolling issue on GitLab
+        from .forge import upkeep_issue
+        return upkeep_issue(gh, LABEL, title, body, rep["new_changes"], rep["date"][:10])
     iss = gh.rolling_issue()
     if iss:
         gh.api("PATCH", f"issues/{iss['number']}", {"title": title, "body": body})
@@ -573,6 +583,9 @@ def publish_pr(rep, gh, runner=None, base=None, cwd=None):
     finally:
         git("switch", base, ok=(0, 1, 128))
     title, body = _title(rep), _body(rep)
+    if getattr(gh, "kind", "") == "gitlab":
+        from .forge import upkeep_mr
+        return upkeep_mr(gh, LABEL, branch, base, title, body)
     prs = [p for p in gh.api("GET", "pulls?state=open&per_page=100") or [] if (p.get("head") or {}).get("ref") == branch
            and ((p["head"].get("repo") or {}).get("full_name") or "") == (((p.get("base") or {}).get("repo") or {}).get("full_name") or "")]
     if prs:
@@ -586,7 +599,7 @@ def publish_pr(rep, gh, runner=None, base=None, cwd=None):
 
 def publish(rep, mode, gh, runner=None, base=None, cwd=None):
     if not rep["new_changes"] and not rep["applied_paths"]:
-        return {"kind": mode, "action": "none", "detail": "nothing new: GitHub not touched"}
+        return {"kind": mode, "action": "none", "detail": f"nothing new: {'GitLab' if getattr(gh, 'kind', '') == 'gitlab' else 'GitHub'} not touched"}
     if mode == "pr":
         res = publish_pr(rep, gh, runner, base, cwd)
         if res:
@@ -595,7 +608,7 @@ def publish(rep, mode, gh, runner=None, base=None, cwd=None):
 
 
 # ------------------------------------------------------------------ CLI
-def main(argv=None, ctx=None, gh=None, runner=None):
+def main(argv=None, ctx=None, gh=None, runner=None, notifier=None):
     ap = argparse.ArgumentParser(description="Weekly library upkeep: lifecycle, KiCad upstream, price/stock and "
                                              "Altium 365 drift; report what is new; one GitHub issue or PR")
     ap.add_argument("input", help="altium365 plan.json (all checks) or a BOM .csv/.xlsx (lifecycle, sourcing)")
@@ -609,6 +622,13 @@ def main(argv=None, ctx=None, gh=None, runner=None):
     ap.add_argument("--github", choices=("issue", "pr"), help="open/update one rolling issue, or a PR with applied changes")
     ap.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"), help="OWNER/NAME (default GITHUB_REPOSITORY)")
     ap.add_argument("--base", help="PR base branch (default: the current branch)")
+    ap.add_argument("--gitlab", choices=("issue", "pr"), help="the same on GitLab: one rolling issue, or a merge request "
+                    "(token from [agent] gitlab_token_env, default GITLAB_TOKEN)")
+    ap.add_argument("--gitlab-project", default=os.environ.get("CI_PROJECT_PATH"),
+                    help="group/name or id (default CI_PROJECT_PATH, else [agent] gitlab_project, else the origin remote)")
+    ap.add_argument("--gitlab-api", default=os.environ.get("CI_API_V4_URL"),
+                    help="https://host/api/v4 (default CI_API_V4_URL, else [agent] gitlab_api)")
+    ap.add_argument("--no-notify", action="store_true", help="do not send [notify] webhooks for this run")
     ap.add_argument("--rules", help="ecadlib.toml (default: searched from the input's folder)")
     ap.add_argument("--qty", type=int, help="boards per build for prices (default [upkeep] build_qty, else 1)")
     ap.add_argument("--currency", help="default [upkeep] currency, else USD")
@@ -636,6 +656,18 @@ def main(argv=None, ctx=None, gh=None, runner=None):
             print(f"    {c['kind']:<16} {str(c['item'])[:32]:<32} {str(c['was'])[:28]} -> {str(c['now'])[:28]}")
     print(f"{rep['new_changes']} new change(s) -> {Path(a.out).with_suffix('.md')} and .json")
     code = rep["exit_code"]
+    if a.gitlab:
+        try:
+            res = publish(rep, a.gitlab, gh or _gitlab_client(rules, a, runner), runner, a.base)
+            rep["gitlab"] = res
+            print(f"gitlab: {res['kind']} {res['action']}" + (f" !{res['number']}" if res.get("number") and res["kind"] == "pr"
+                  else f" #{res['number']}" if res.get("number") else "") + (f" {res['url']}" if res.get("url") else ""))
+        except Exception as e:
+            print(f"gitlab: {type(e).__name__}: {e} (state not saved: next run reports these changes again)", file=sys.stderr)
+            rep["gitlab"] = {"error": f"{type(e).__name__}: {e}"}
+            write_report(rep, a.out)
+            return 2
+        write_report(rep, a.out)
     if a.github:
         try:
             token = os.environ.get("GITHUB_TOKEN")             # REST when token and repo are known, else `gh api`
@@ -652,7 +684,30 @@ def main(argv=None, ctx=None, gh=None, runner=None):
         write_report(rep, a.out)
     if not a.no_save:
         save_state(rep, a.state)
+        if not a.no_notify and rep["new_changes"]:      # only once per change: a dry run (--no-save) repeats them
+            from . import notify as N
+            for r in N.send(rules, N.upkeep_events(rep), sender=notifier, log=lambda m: print(m, file=sys.stderr)):
+                print(f"notify: {r['target']} {r['event']} {r['result']}")
     return code
+
+
+def _gitlab_client(rules, a, runner=None):
+    """forge.GitLab for --gitlab: project from --gitlab-project / [agent] gitlab_project / the origin remote."""
+    from . import forge
+    ag = dict((rules or {}).get("agent") or {})
+    api = a.gitlab_api or ag.get("gitlab_api") or forge.GITLAB_API
+    proj = a.gitlab_project or ag.get("gitlab_project")
+    if not proj:
+        code, out, _ = (runner or default_runner)(["git", "remote", "get-url", "origin"])
+        proj = forge.project_from_remote(out.strip(), api) if code == 0 else None
+        bad = forge.wrong_api_host(api, out.strip()) if proj else None
+        if bad:
+            raise forge.GitLabError(bad + "; or pass --gitlab-api")
+    tok_env = ag.get("gitlab_token_env") or "GITLAB_TOKEN"
+    token = os.environ.get(tok_env)
+    if not token:
+        raise forge.GitLabError(f"no GitLab token: set ${tok_env} (a project or personal access token with api scope)")
+    return forge.GitLab(proj, token, api=api)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ Plans (plan.json) keep ecadlib's own parameter names ("Manufacturer Part Number"
 names from [parameters.names] are applied where data leaves ecadlib: Altium 365 push, the DbLib export and sync,
 the KiCad export and the Altium 365 drift check. Part names, folders, footprint names, required fields, default
 parameters, layers and density are applied when the plan and the models are made."""
-import argparse, copy, difflib, json, re, sys
+import argparse, copy, difflib, json, os, re, sys
 from pathlib import Path
 
 FILES = ("ecadlib.toml", "ecadlib_rules.json")
@@ -114,12 +114,19 @@ WATCH_SOURCE_KEYS = ("type", "ref", "name", "workspace", "variant", "include", "
 DEFAULTS.setdefault("agent", {})["proof"] = {"model": "", "effort": "", "api_key_env": "", "max_cost_usd": 0.0,
                                              "fail_on": ["error"], "max_pages": 6, "dpi": 200}
 SUB_RANGE = {("agent", "proof", "max_pages"): (1, 100), ("agent", "proof", "dpi"): (50, 400)}
+# GitLab merge requests instead of GitHub PRs (ecadlib.forge); "auto" picks by the origin remote
+DEFAULTS["agent"].update({"git_host": "auto", "gitlab_project": "", "gitlab_token_env": "GITLAB_TOKEN",
+                          "gitlab_api": "https://gitlab.com/api/v4"})
+# [notify]: webhooks (ecadlib.notify); [providers]: order and choice of part sources incl. plugins (ecadlib.plugins)
+DEFAULTS["notify"] = {"targets": [], "retries": 3, "timeout_s": 10, "backoff_s": 2.0}
+DEFAULTS["providers"] = {"order": []}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
              ("symbols", "layout_pins"): (0, 100_000), ("symbols", "split_pins"): (0, 100_000), ("symbols", "unit_pins"): (8, 10_000),
              ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600),
-             ("agent", "interval_minutes"): (1, 10_080), ("agent", "batch_size"): (1, 500)}
+             ("agent", "interval_minutes"): (1, 10_080), ("agent", "batch_size"): (1, 500),
+             ("notify", "retries"): (0, 10), ("notify", "timeout_s"): (1, 120)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
 
@@ -129,7 +136,13 @@ class RulesError(ValueError):
 
 # ------------------------------------------------------------------ load / merge / validate
 def find(start="."):
-    """The rules file in `start` or one of its parents, else in the current folder or its parents; None if none."""
+    """The rules file in `start` or one of its parents, else in the current folder or its parents; None if none.
+    $ECADLIB_CONFIG (a file path), when set, is used instead of the search (an explicit --rules still wins)."""
+    env = os.environ.get("ECADLIB_CONFIG", "").strip()
+    if env:
+        if not Path(env).expanduser().is_file():
+            raise RulesError(f"ECADLIB_CONFIG={env}: no such file")
+        return Path(env).expanduser().resolve()
     seen = set()
     for base in (Path(start), Path.cwd()):
         try:
@@ -227,6 +240,10 @@ def validate(raw, where="ecadlib.toml"):
             if (sec, k) == ("agent", "watch") and k in DEFAULTS[sec]:
                 _check_watch(where, v)
                 continue
+            if (sec, k) == ("notify", "targets"):
+                from .notify import check_targets
+                check_targets(where, v, _err)
+                continue
             if k not in DEFAULTS[sec]:
                 close = difflib.get_close_matches(k, DEFAULTS[sec], 1)
                 _err(where, key, f"is not a known key" + (f" (did you mean {sec}.{close[0]}?)" if close else
@@ -238,7 +255,10 @@ def validate(raw, where="ecadlib.toml"):
             elif (sec, k) in MAP_KEYS:
                 if not isinstance(v, dict):
                     _err(where, key, "must be a table of name = value")
-                if (sec, k) != ("release", "approvals") and not all(isinstance(x, (str, int, float)) for x in v.values()):
+                if (sec, k) == ("bom", "columns") and all(isinstance(x, str) or (isinstance(x, list) and x and all(
+                        isinstance(y, str) for y in x)) for x in v.values()):
+                    pass                                   # a header, or a list of headers (house aliases)
+                elif (sec, k) != ("release", "approvals") and not all(isinstance(x, (str, int, float)) for x in v.values()):
                     _err(where, key, "values must be text")
             elif isinstance(d, list):
                 if isinstance(v, str) and (sec, k) == ("footprint", "pin1"):
@@ -311,6 +331,20 @@ def validate(raw, where="ecadlib.toml"):
         _err(where, "agent.github_repo", f"= {ag['github_repo']!r}: must be owner/name")
     if "github_api" in ag and not str(ag["github_api"]).startswith("https://"):
         _err(where, "agent.github_api", "must be an https:// URL")
+    if "git_host" in ag and ag["git_host"] not in ("auto", "github", "gitlab"):
+        _err(where, "agent.git_host", f"= {ag['git_host']!r}: must be auto, github or gitlab")
+    if ag.get("gitlab_token_env") and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ag["gitlab_token_env"]):
+        _err(where, "agent.gitlab_token_env", "must be the NAME of an environment variable (never the token itself)")
+    if ag.get("gitlab_project") and not re.fullmatch(r"\d+|[\w.-]+(/[\w.-]+)+", ag["gitlab_project"]):
+        _err(where, "agent.gitlab_project", f"= {ag['gitlab_project']!r}: must be group/name (subgroups allowed) or a numeric id")
+    if "gitlab_api" in ag and not re.fullmatch(r"https://[^\s/]+(/[^\s]*)?/api/v4/?", str(ag["gitlab_api"])):
+        _err(where, "agent.gitlab_api", "must be an https:// URL ending in /api/v4 (e.g. https://gitlab.example.com/api/v4)")
+    nf = raw.get("notify") or {}
+    if "backoff_s" in nf and nf["backoff_s"] > 60:
+        _err(where, "notify.backoff_s", "must be 60 seconds or less")
+    for x in (raw.get("providers") or {}).get("order", []):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", x):
+            _err(where, "providers.order", f"has {x!r}: provider names are letters, digits, _ . -")
     return raw
 
 
@@ -533,10 +567,10 @@ def fmt_value(raw, cat, style):
 def fmt_number(v, cat, style):
     """A value in base units (ohm, F, H) written in a value style."""
     m, p = _mantissa(v, cat)
-    unit_letter = {"": "R"} if cat == "Resistors" else {}
+    unit_letter = {"": {"Resistors": "R", "Capacitors": "F", "Inductors": "H"}[cat]}   # 1.5 F -> 1F5 (IEC 60062), never 15
     if style in ("rkm", "rkm_lower"):
         L = unit_letter.get(p, p)
-        L = L.upper() if style == "rkm" else (L if L in ("M", "R") else L.lower())
+        L = (L if L == "m" else L.upper()) if style == "rkm" else (L if L in ("M", "R", "F", "H") else L.lower())   # milli
         if cat == "Resistors" and style == "rkm_lower" and p == "k":
             L = "k"
         ip, _, fp = _num(m).partition(".")
@@ -734,7 +768,7 @@ HELP = {
     "layers": "Altium layers for footprint content (Mechanical1..16, TopOverlay)",
     "footprint": "IPC-7351 density L (least) | N (nominal) | M (most); pin-1 pad names accepted",
     "sources": "Where missing symbols and footprints are looked for, in order",
-    "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header)",
+    "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header, or field = [\"header\", \"alias\"])",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
     "sim": "Parasitics for the built-in passive simulation models (sim-models), e.g. capacitor_esr = \"10m\"",
     "datasheet": "Claude datasheet reader (ecadlib datasheet / librarian): model, effort, which environment variable holds the "
@@ -759,6 +793,15 @@ HELP = {
     "agent.auto_push": "push approved parts to Altium 365 on each run (false: `ecadlib agent push`)",
     "agent.upkeep_schedule": "off | daily | weekly | monthly: how often upkeep findings are turned into queue items",
     "agent.batch_size": "most parts in one review batch (one pull request each)",
+    "agent.git_host": "auto (GitLab when origin is on a gitlab* host or the gitlab_api host, else GitHub) | github | gitlab",
+    "agent.gitlab_api": "GitLab REST v4 base URL; self-hosted: https://gitlab.example.com/api/v4",
+    "agent.gitlab_project": "group/name or numeric id (\"\" = from the origin remote)",
+    "agent.gitlab_token_env": "name of the environment variable with the GitLab token (api scope); never the token itself",
+    "notify": "Webhooks when the agent or upkeep has news: [[notify.targets]] name, type = slack|teams|json, url_env = NAME "
+              "of the env var holding the URL, events = batch_ready|part_held|upkeep_changes|lifecycle (default all), "
+              "token_env (json only); retries with backoff, never stops the agent",
+    "providers": "Part sources for triage / librarian / UI, in order, including plugins (ecadlib.providers entry points); "
+                 "[] = each command's built-in default; `ecadlib plugins list` shows what is installed",
     "symbols.order": "group order on each side; groups: power analog power_out ground ep reset clock debug usb adc other_in uart i2c spi can eth ports other_out nc",
 }
 

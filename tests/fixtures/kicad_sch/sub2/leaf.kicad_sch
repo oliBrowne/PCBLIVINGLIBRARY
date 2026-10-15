@@ -1,0 +1,109 @@
+(kicad_sch
+	(version 20230121)
+	(generator eeschema)
+	(uuid 5936c9aa-9582-520d-9e9b-a48d70db174e)
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_numbers hide)
+			(pin_names
+				(offset 0)
+			)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "R"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Value" "R"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(property "Datasheet" "~"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(symbol "R_0_1"
+				(rectangle
+					(start -1.016 -2.54)
+					(end 1.016 2.54)
+					(stroke (width 0.254) (type default))
+					(fill (type none))
+				)
+			)
+			(symbol "R_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "1"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "2"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 50 50 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid b412c293-583f-5aa2-b895-e6197452c5aa)
+		(property "Reference" "R30"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Value" "10k"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Datasheet" "~"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "MPN" "RC0603FR-0710KL"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Manufacturer" "Yageo"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(pin "1"
+			(uuid cc95feb2-197f-5934-a9e8-cd9099c77746)
+		)
+		(pin "2"
+			(uuid ab5dea59-6d3b-576e-8107-4154e324fd6d)
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29/1fbfbc63-33e6-5cfe-a95a-40b6c9eff483"
+					(reference "R30")
+					(unit 1)
+				)
+			)
+		)
+	)
+)
