@@ -140,8 +140,25 @@ def _natural(s):
 
 
 def stack_key(name):
-    """Pins whose names give the same key are one net and may be stacked: 'VDD_1', 'VDD_2', 'VDD' -> 'VDD'."""
-    return re.sub(r"[_\-]?\d+$", "", _key(name)) or _key(name)
+    """Pins whose names give the same key may be one net: 'VDD_1', 'VDD_2', 'VDD' -> 'VDD'. Only an index after a
+    separator is dropped: 'VDD1' / 'VDD2' (an isolator's two sides) and 'VDD18' / 'VDD33' are different supplies."""
+    return re.sub(r"[_\-]\d+$", "", _key(name)) or _key(name)
+
+
+def stack_keys(names):
+    """name -> stacking key for the power pins of one group. 'VDD_1'..'VDD_5' (instance numbers 1..n or 0..n-1) share
+    the key 'VDD'; 'VDD_18' + 'VDD_33' are not instance numbers and keep their own names (never stacked together)."""
+    idx = {}
+    for n in names:
+        m = re.fullmatch(r"(.+?)[_\-](\d+)", _key(n))
+        if m:
+            idx.setdefault(m.group(1), set()).add(int(m.group(2)))
+    ok = {st for st, ix in idx.items() if ix in (set(range(1, len(ix) + 1)), set(range(len(ix))))}
+    out = {}
+    for n in names:
+        m = re.fullmatch(r"(.+?)[_\-](\d+)", _key(n))
+        out[n] = m.group(1) if m and m.group(1) in ok else _key(n)
+    return out
 
 
 # ------------------------------------------------------------------ settings
@@ -183,16 +200,18 @@ def _blocks(pins, s):
             for t in items:
                 stems.setdefault(stem(t[2].get("name", "")), t[1])
             items.sort(key=lambda t: (stems[stem(t[2].get("name", ""))], _natural(_key(t[2].get("name", ""))), t[1]))
-        slots, at = [], {}
+        slots, at, keys = [], {}, []
+        sk = stack_keys([t[2].get("name", "") for t in items])
         for _, _, p in items:
-            k = stack_key(p.get("name", ""))
+            k = sk[p.get("name", "")]
             if g in POWER_GROUPS and s["stack_power"] != "none" and k in at:
                 slots[at[k]].append(p)
             else:
                 at[k] = len(slots)
                 slots.append([p])
+                keys.append(k)
         blocks.append({"group": g, "label": f"P{sub}" if sub and sub.isalpha() and len(sub) == 1 else sub or g,
-                       "side": sides[g], "slots": slots})
+                       "side": sides[g], "slots": slots, "nets": {id(sl): k for sl, k in zip(slots, keys)}})
     return blocks
 
 
@@ -304,6 +323,7 @@ def build(name, pins, description="", designator="U?", footprint=None, comment="
     tallest = (0, 0)
     for u in units:
         sd = u["sides"]
+        nets = {k: v for bl in sd.values() for b in bl for k, v in b.get("nets", {}).items()}
         left, right, top, bot = _rows(sd["left"]), _rows(sd["right"]), _rows(sd["top"]), _rows(sd["bottom"])
         names = lambda rows: max([_nlen(sl[0]) for sl in rows if sl] or [0])
         lch, rch = names(left), names(right)
@@ -334,7 +354,7 @@ def build(name, pins, description="", designator="U?", footprint=None, comment="
                 q = dict(p)
                 if j:
                     if s["stack_power"] == "hide":
-                        q.update(hidden=True, net=q.get("net") or stack_key(p.get("name", "")))
+                        q.update(hidden=True, net=q.get("net") or nets.get(id(sl)) or stack_key(p.get("name", "")))
                     else:
                         q.update(show_name=False, show_num=False)
                 prims.append(("pin", q, side, x, y, L)); parts.append(u["unit"])

@@ -1,0 +1,87 @@
+{
+  "name": "QFN-16-1EP_3x3mm_P0.5mm_EP1.75x1.75mm_ThermalVias",
+  "description": "QFN-16, 3 x 3 mm, 0.5 mm pitch, 1.75 mm exposed pad with 2 x 2 thermal vias and split paste",
+  "package_type": "custom",
+  "pin_count": 17,
+  "pitch": 0.5,
+  "height_max": 1.0,
+  "pad_table": {
+    "unit": "mm",
+    "y_axis": "down",
+    "origin": "center",
+    "arrays": [
+      {
+        "count": 4,
+        "first_number": 1,
+        "x": -1.4625,
+        "y": -0.75,
+        "dx": 0,
+        "dy": 0.5,
+        "w": 0.775,
+        "h": 0.25
+      },
+      {
+        "count": 4,
+        "first_number": 5,
+        "x": -0.75,
+        "y": 1.4625,
+        "dx": 0.5,
+        "dy": 0,
+        "w": 0.25,
+        "h": 0.775
+      },
+      {
+        "count": 4,
+        "first_number": 9,
+        "x": 1.4625,
+        "y": 0.75,
+        "dx": 0,
+        "dy": -0.5,
+        "w": 0.775,
+        "h": 0.25
+      },
+      {
+        "count": 4,
+        "first_number": 13,
+        "x": 0.75,
+        "y": -1.4625,
+        "dx": -0.5,
+        "dy": 0,
+        "w": 0.25,
+        "h": 0.775
+      }
+    ],
+    "pads": [
+      {
+        "number": 17,
+        "x": 0,
+        "y": 0,
+        "w": 1.75,
+        "h": 1.75,
+        "shape": "rect",
+        "paste": "grid",
+        "paste_grid": [
+          2,
+          2
+        ],
+        "paste_coverage": 0.75,
+        "thermal_vias": {
+          "drill": 0.2,
+          "diameter": 0.5,
+          "nx": 2,
+          "ny": 2,
+          "pitch": 1.25
+        }
+      }
+    ],
+    "body": {
+      "x1": -1.5,
+      "y1": -1.5,
+      "x2": 1.5,
+      "y2": 1.5
+    }
+  },
+  "source": {
+    "drawing": "KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; pads as its drawing gives them"
+  }
+}

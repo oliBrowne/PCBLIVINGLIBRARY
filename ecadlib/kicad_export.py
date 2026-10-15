@@ -240,15 +240,22 @@ def symbol_from_schlib(path, name, notes):
     units, pins, ref, value_at, ref_at, params = {}, [], "U", (0, 0), (0, 0), []
     owner = lambda r: (max(1, int(r.get("OWNERPARTID", r.get("part", 1)) or 1)), int(r.get("OWNERPARTDISPLAYMODE", r.get("mode", 0)) or 0) + 1)
     spots = {}                                # (part, mode, x, y, orient) -> first visible pin there
-    for r in recs[1:]:
+    hidden_net = {int(r["OWNERINDEX"]): r.get("TEXT", "") for r in recs if r.get("RECORD") == "41"
+                  and r.get("NAME") == "HiddenNetName" and str(r.get("OWNERINDEX", "")).lstrip("-").isdigit()}
+    for ri, r in enumerate(recs[1:], 1):
         kind = r.get("RECORD")
         if kind == "2":
             d = {0: (1, 0), 1: (0, 1), 2: (-1, 0), 3: (0, -1)}[r["orient"]]
             x, y, L = r["x"] * 0.254, r["y"] * 0.254, r["length"] * 0.254
             nm = _kicad_pin_name(r["name"]) or "~"
+            if r["conglomerate"] & 0x04 and hidden_net.get(ri):   # Altium ties a hidden pin to its HiddenNetName net;
+                nm = hidden_net[ri]                                # KiCad ties a hidden power pin to the net of its name
+                K._note(notes, "hidden pins named after their Altium HiddenNetName (KiCad connects them by name)")
             spot = (r["part"], r["mode"], r["x"], r["y"], r["orient"])
             lead = spots.get(spot) if not r["conglomerate"] & 0x04 else None
             etype = ETYPE_K.get(r["etype"], "passive")
+            if r["conglomerate"] & 0x04 and hidden_net.get(ri):
+                etype = "power_in"                # only hidden power inputs join a net by name in KiCad
             if lead is not None:              # stacked on a visible pin (Altium joins pins at one point): KiCad shows one,
                 etype = "passive" if lead["etype"] == 7 else etype      # the rest hidden, passive under a power pin (KLC S4.3)
                 K._note(notes, "stacked pins written as one visible pin and hidden ones at the same spot")
@@ -379,6 +386,10 @@ def footprint_from_pcblib(path, name, notes):
                 K._note(notes, f"pad {r['designator']}: octagonal pad written as rect")
             at = f"(at {pt(r['x'], r['y'])}{' ' + _num(rot) if rot else ''})"
             extra = f" (roundrect_rratio {_num((r['corner'] or 0) / 200)})" if shape == "roundrect" else ""
+            mmanual = r.get("mask_mode") == 2 and r.get("mask") is not None
+            tented = mmanual and r["mask"] <= -max(w, h) // 2        # manual expansion that closes the opening
+            if mmanual and not tented and r["mask"]:                 # e.g. NSMD BGA lands: opening = land + margin
+                extra += f" (solder_mask_margin {m(r['mask'])})"
             if r["hole"]:
                 smd = False
                 kind = "thru_hole" if r["plated"] else "np_thru_hole"
@@ -386,13 +397,13 @@ def footprint_from_pcblib(path, name, notes):
                 if r["hole_shape"] == 2 and r["slot"]:
                     a, b = (r["slot"], r["hole"]) if round(r["hole_rot"]) % 180 == 0 else (r["hole"], r["slot"])
                     drill = f"(drill oval {m(a)} {m(b)})"
-                pads.append(f'\t(pad {sexpr.quote(r["designator"])} {kind} {shape} {at} (size {m(w)} {m(h)}){extra} {drill} (layers "*.Cu" "*.Mask"))')
+                pads.append(f'\t(pad {sexpr.quote(r["designator"])} {kind} {shape} {at} (size {m(w)} {m(h)}){extra} {drill} (layers "*.Cu"{"" if tented else ' "*.Mask"'}))')
             else:
                 side = "B" if r["layer"] == AL.BOTTOM else "F"
                 manual = r["paste_mode"] == 2 and r["paste"] is not None
                 paste = not (manual and r["paste"] <= -max(w, h) // 2)
                 margin = f" (solder_paste_margin {m(r['paste'])})" if manual and paste and r["paste"] else ""
-                layers = " ".join(f'"{side}.{l}"' for l in (("Cu", "Paste", "Mask") if paste else ("Cu", "Mask")))
+                layers = " ".join(f'"{side}.{l}"' for l in ("Cu",) + (("Paste",) if paste else ()) + (() if tented else ("Mask",)))
                 pads.append(f'\t(pad {sexpr.quote(r["designator"])} smd {shape} {at} (size {m(w)} {m(h)}){extra}{margin} (layers {layers}))')
         elif t == "track" and layer:
             out.append(f'\t(fp_line (start {pt(r["x1"], r["y1"])}) (end {pt(r["x2"], r["y2"])}) {stroke(r["w"])} (layer "{layer}"))')
