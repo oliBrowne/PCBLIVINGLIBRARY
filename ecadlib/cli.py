@@ -31,6 +31,7 @@
     ecadlib agent-watch [--dry-run] [--source TYPE:REF]   library agent: new / changed / removed parts in watched projects and BOMs
     ecadlib agent     run [--dry-run]|serve|status|approve ID|reject ID|push   library agent: watch, build, prove, PR, push
     ecadlib symbol    PINS.csv|PART -o x.SchLib [--preview x.svg]   big-chip symbol with pins grouped by function
+    ecadlib visual-check PART|x.kicad_mod --datasheet DS.pdf [--pages 3,7-8]   Claude compares our drawings with the datasheet
 
 `ecadlib <command> -h` shows that command's options."""
 import importlib, sys
@@ -67,6 +68,7 @@ COMMANDS = {
     "sim-models": ("ecadlib.sim_models", "find, check and attach SPICE / IBIS simulation models for a plan"),
     "agent-watch": ("ecadlib.agent_watch", "library agent watch step: new / changed / removed parts in watched projects and BOMs"),
     "agent": ("ecadlib.agent", "library agent: watch projects, build + prove parts, batch PRs, push approved parts, upkeep"),
+    "visual-check": ("ecadlib.visual_check", "render footprint/symbol + datasheet pages; Claude checks they match"),
     "symbol": ("ecadlib.symbol_layout", "IC symbol with pins grouped by function (power, ports, debug ...), SVG preview"),
 }
 

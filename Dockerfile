@@ -14,6 +14,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN groupadd --system --gid 10001 ecadlib \
  && useradd --system --uid 10001 --gid ecadlib --no-create-home --home-dir /data --shell /usr/sbin/nologin ecadlib
 
+# git: the library agent's batch pull requests; poppler-utils (pdftoppm): datasheet pages for the visual proof.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git poppler-utils \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /src
 COPY pyproject.toml README.md LICENSE NOTICE MANIFEST.in ./
 COPY ecadlib ./ecadlib

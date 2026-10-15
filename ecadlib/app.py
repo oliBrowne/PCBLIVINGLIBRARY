@@ -878,6 +878,34 @@ class Workspace:
             res["backup"] = self.rel(res["backup"])
         return res
 
+    def visual_check(self, target, datasheet=None, pages=None, symbol=None, render_only=False, client=None):
+        """Claude visual proof (ecadlib.visual_check): render our footprint / symbol (TOP VIEW, pin 1, pitch, grid)
+        next to the datasheet pages and ask Claude whether they match. target: a part name in this workspace
+        (approved footprint, librarian plan) or a workspace path to a .kicad_mod / package spec .json. Writes the
+        pictures and proof.json under agent/proofs/<part>/. No API key -> verdict "skipped" (pictures still written)."""
+        from . import visual_check as VC
+        item = {"datasheet": datasheet, "pages": pages, "symbol": None}
+        try:
+            p = self.inside(target)
+        except ValueError:
+            p = None
+        if p is not None and p.is_file():
+            item.update(footprint=str(p), part=p.stem)
+        else:
+            found = VC._find_part(str(target), self.root)
+            if not found:
+                raise ValueError(f"{target}: not a footprint file or a part in this workspace")
+            item.update({k: v for k, v in found.items() if not item.get(k)}, part=str(target))
+        if symbol:
+            item["symbol"] = str(self.inside(symbol))
+        if datasheet and not str(datasheet).startswith("http"):
+            item["datasheet"] = str(self.inside(datasheet))
+        out = self.root / "agent" / "proofs" / self.safe_name(item["part"])
+        pr = VC.prove(item, self.root, self.rules(), client=client, out_dir=out, render_only=render_only)
+        pr["proof_file"] = self.rel(VC.write_proof(pr, out / "proof.json"))
+        pr["images"] = {k: [self.rel(f) for f in v] for k, v in pr["images"].items()}
+        return pr
+
     def example_specs(self):
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data
         return {p.stem: json.loads(p.read_text()) for p in sorted(d.glob("*.json"))} if d.exists() else {}

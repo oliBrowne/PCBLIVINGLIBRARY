@@ -64,7 +64,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `held_parts`, `part_candidates` and `choose_part` (fix a held part), `approval_status` and `approve_part` (sign-off; `user` is required, the agent must pass the person's own name), `find_duplicates` (with `merge`), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed), `sim_models` (SPICE/IBIS models; `attach` writes them) and `list_example_specs`.
-3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team` and `ecadlib agent` (the library agent, section 20). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22) and `ecadlib visual-check` (23). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
 * `uploads/`
@@ -159,7 +159,7 @@ Running the setup again is safe. `.env` keeps its values unless a flag changes t
 
 **Users.** After the first admin, manage users on the **Users** page, or with `docker compose run --rm ecadlib team --workspace /data/workspace add-user|reset-password|set-role|list ...`.
 
-**The library agent (optional).** `docker compose --profile agent up -d` also starts `ecadlib agent serve` (section 20) on the same `ecadlib-data` volume. It does nothing until `[agent] enabled = true` is in `/data/workspace/ecadlib.toml`. Until then it only keeps its status file fresh, which is what its health check reads (`ecadlib agent status --healthy 10800`). Its keys (`GITHUB_TOKEN`, `NEXAR_TOKEN`, `ANTHROPIC_API_KEY`) come from `api-keys.env`. The image has no `git`, so each review batch is written to `/data/workspace/agent/batches/<id>/` (PR text and pictures) instead of a pull request. For real PRs, run the agent where git and a checkout of your library repo exist, and set `[agent] library_repo`.
+**The library agent (optional).** `docker compose --profile agent up -d` also starts `ecadlib agent serve` (section 20) on the same `ecadlib-data` volume. It does nothing until `[agent] enabled = true` is in `/data/workspace/ecadlib.toml`. Until then it only keeps its status file fresh, which is what its health check reads (`ecadlib agent status --healthy 10800`). Its keys (`GITHUB_TOKEN`, `NEXAR_TOKEN`, `ANTHROPIC_API_KEY`) come from `api-keys.env`. The image includes `git` and `pdftoppm`. For real pull requests, clone your library repo into `/data` and set `[agent] library_repo` to it; without one, each review batch is written to `/data/workspace/agent/batches/<id>/` (PR text and pictures) instead.
 
 **Back up `/data`.** Everything (users and password hashes, plans, reports, footprints, audit log, libraries) is in the `ecadlib-data` volume. Keep the backup private, because it contains the password hashes:
 
@@ -969,6 +969,42 @@ Pictures are served only from `<workspace>/agent/` (paths are resolved, so links
 * approvers can Approve.
 
 In team mode the decision is signed as the signed-in user, typed names are ignored, and CSRF, Origin and the audit log apply as on every other write. When the item's `build` names its librarian plan (`bom` and `part`), approve and reject are also recorded through `approvals.py`, so `release-check` and `altium365 push` see them. If the policy refuses an approval, the item stays in review. Whoever started the build (`build.user` or `build.requested_by`) cannot approve it. MCP: `agent_queue_list`, `agent_queue_get`, `agent_queue_decide`. Like `approve_part`, `agent_queue_decide` needs the person's own name.
+
+## 23. `visual_check.py`: visual proof against the datasheet
+
+```bash
+ecadlib visual-check SOIC-8.kicad_mod --datasheet ds.pdf [--pages 3,7-8] [--symbol PART.SchLib] [-o out/]
+ecadlib visual-check PART --workspace W --datasheet ds.pdf        # a part already in the workspace
+ecadlib visual-check SPEC.json --datasheet ds.pdf --render-only   # pictures only, nothing sent
+```
+
+It draws our footprint and symbol as PNGs, renders the datasheet pages, and asks Claude in one Messages API call
+whether they agree. The footprint image is a stated **top view** of the copper lands. Pads are coloured by kind,
+with their numbers on them. Pin 1 is blue and has a callout. It also shows the F.Fab body, the courtyard and the
+silk, an mm grid with labelled major lines, and a scale bar. Dimension lines give the body size, the pad span and
+the pitch. BGAs get row letters and column numbers. The header lists the measured facts: pad count, pitch, where
+pin 1 is, and the direction of numbering. Every family the generator builds can be drawn, including slots, polygon
+pads with vias, stacked USB-C pads and BGA ball maps. Symbols can be drawn from symbol JSON, `.SchLib`,
+`LIB.kicad_sym:NAME` or a pin CSV, one image per part when they don't fit together. Datasheet pages are rendered
+by `pdftoppm`. Pages are picked with the datasheet reader's keyword table unless `--pages` is given.
+
+The answer comes back as JSON in a fixed schema, with one check per aspect: pitch, pad count, numbering, pin 1,
+top or bottom view, body size, pad size, pin count, pin numbers and pin names. The checking is strict:
+
+* A mismatch on pitch, pad count, numbering, pin 1, view, pin numbers or pin names is an error, so the verdict is
+  **fail**.
+* An unclear or missing check gives **doubt**. So do a refusal, `max_tokens`, malformed or off-schema output, and
+  datasheet text addressed to an AI.
+* **pass** needs a real answer in which every required check matches.
+* With no API key the verdict is **skipped**, but the pictures are still written.
+
+The call goes through the datasheet reader's `Client`, which handles the key, retries and the request log. The log
+never holds the key or the image bytes. Answers are cached by a content hash under `<workspace>/agent/proof_cache/`.
+Settings live in `[agent.proof]`: `model`, `effort`, `api_key_env`, `max_cost_usd`, `fail_on`, `max_pages` and
+`dpi`. An empty model, effort or key variable falls back to `[datasheet]`. The cap is checked against a worst-case
+estimate before anything is sent. The same check is available as `Workspace.visual_check` and as the MCP tool
+`visual_check`. Pictures and `proof.json` go to `agent/proofs/<part>/`. Drawing needs Pillow (`pip install
+'ecadlib[vision]'`).
 
 ## Releases
 
