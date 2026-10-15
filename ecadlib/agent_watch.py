@@ -667,9 +667,10 @@ def main(argv=None):
             print(f"{s['status']:8} {s['type']:15} {s['name']}: {s['parts']} parts"
                   + (f", {s.get('changes', 0)} changes" if s["status"] != "error" else f" (kept) - {s['error']}"))
         for c in rep["changes"]:
+            diff = ", ".join("%s: %r -> %r" % (f, c["was"].get(f, ""), c["line"].get(f, ""))
+                             for f in WATCH_FIELDS if c["was"].get(f, "") != c["line"].get(f, ""))
             print(f"  {c['kind']:8} {c['mpn'] or c['key']:30} {c['source']['name']}"
-                  + (f"  ({', '.join(f'{f}: {c['was'].get(f, '')!r} -> {c['line'].get(f, '')!r}' for f in WATCH_FIELDS if c['was'].get(f, '') != c['line'].get(f, ''))})"
-                     if c["kind"] == "changed" else ""))
+                  + (f"  ({diff})" if c["kind"] == "changed" else ""))
         print(f"{len(rep['changes'])} change(s)" + (" (dry run: state not saved)" if a.dry_run else f"; state {rep['state']}"))
     return 1 if rep["errors"] else 0
 

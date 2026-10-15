@@ -43,7 +43,7 @@ altium = ["olefile"]                   # read .PcbLib/.SchLib back (altium-lib d
 pdf = ["pypdf"]                        # datasheet reader: trim a PDF to --pages before sending it
 vision = ["pillow", "pypdf"]           # visual-check: draw footprints / symbols (pdftoppm renders datasheet pages)
 all = ["olefile", "pypdf", "pillow"]
-dev = ["olefile", "graphql-core", "pyaltiumlib", "pypdf"]
+dev = ["olefile", "graphql-core", "pyaltiumlib", "pypdf", "pillow"]
 
 [project.scripts]
 ecadlib = "ecadlib.cli:main"
