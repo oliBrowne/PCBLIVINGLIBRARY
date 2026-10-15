@@ -31,7 +31,8 @@ _CACHE = {}
 # names): 0.2 mm thermal-via drills, the 1.00 mm header's 0.15 mm pad gap, USB-C's stacked GND/VBUS pads, pads
 # that share a number (mounting pads, SOT-223 tab) not joined by a track, REF** over the SOT-23 pin-1 triangle.
 ALLOWED = [(r"_ThermalVias$", {"drill_out_of_range"}), (r"^PinHeader_1x10_P1\.00mm", {"clearance"}),
-           (r"^USB_C_", {"clearance", "solder_mask_bridge", "unconnected_items"}), (r"^SOT-23", {"silk_overlap"})]
+           (r"^USB_C_", {"clearance", "solder_mask_bridge", "unconnected_items",
+                         "shorting_items"}), (r"^SOT-23", {"silk_overlap"})]
 
 
 # ---------------------------------------------------------------- KiCad discovery
@@ -147,7 +148,11 @@ def test_generated_footprints_load_in_pcbnew():
                 assert {l for l in kp["layers"] if not l.startswith("In")} == want, (f.stem, kp["num"], kp["layers"], op["layers"])
             assert k["courtyard_outlines"] == 1, (f.stem, "courtyard is not one closed outline")
             cb = sexpr.courtyard_bbox(t)
-            assert max(abs(a - b) for a, b in zip(k["courtyard"], cb)) < 1e-3, (f.stem, k["courtyard"], cb)
+            if (kicad_major() or 7) < 8:
+                assert max(abs(a - b) for a, b in zip(k["courtyard"], cb)) < 1e-3, (f.stem, k["courtyard"], cb)
+            else:                                                 # KiCad 8+ counts the 0.05 mm line in the outline
+                grow = [cb[0] - k["courtyard"][0], cb[1] - k["courtyard"][1], k["courtyard"][2] - cb[2], k["courtyard"][3] - cb[3]]
+                assert all(-1e-3 < g < 0.05 + 1e-3 for g in grow), (f.stem, k["courtyard"], cb)
             mine = {}
             for node in t[1:]:
                 if isinstance(node, list) and node and node[0] in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc", "fp_text") \
@@ -214,7 +219,7 @@ def test_exported_fp_lib_table_resolves_in_a_kicad_project():
             for f in (out / "lib.pretty").glob("*.kicad_mod"):
                 f.write_text(kicad7_footprint(f.read_text()))
         got = pcbnew_job("libcheck", dir=str(out), lib="lib", fps=fps, bogus=True)
-        assert all(not got.get(f"lib:{n}") for n in fps), got        # every footprint found in the library and equal to it
+        assert all(not got.get(f"lib:{n}") for n in fps), (got, kicad_major())   # every footprint found and equal
         assert "lib_footprint_issues" in got.get("not_a_lib:X", {}) and "lib_footprint_issues" in got.get("lib:NOT_IN_LIB", {}), got
 
 
