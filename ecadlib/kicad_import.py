@@ -228,7 +228,7 @@ def _convert_footprint(text, name=None, source="", notes=None):
             if layer is None:
                 skipped[ln] = skipped.get(ln, 0) + 1
                 continue
-            _graphic(fp, kind, g, layer)
+            _graphic(fp, kind, g, layer, notes)
     if skipped:
         notes.append("graphics on unmapped layers dropped: " + ", ".join(f"{k} x{v}" for k, v in sorted(skipped.items(), key=str)))
     _zones(fp, t, notes)
@@ -429,7 +429,7 @@ def _pad_core(fp, p, notes, num, kind, shape, x, y, w, h, rot, layers):
     fp["pads"].append(pad)
 
 
-def _graphic(fp, kind, g, layer):
+def _graphic(fp, kind, g, layer, notes=None):
     w = _width(g)
     if kind == "fp_circle":
         (cx, cy), (ex, ey) = _xy(sexpr.first(g, "center")), _xy(sexpr.first(g, "end"))
@@ -442,7 +442,15 @@ def _graphic(fp, kind, g, layer):
         return
     if kind == "fp_arc":
         if sexpr.first(g, "mid"):
-            cx, cy, r, a0, a1 = _arc3(*(_xy(sexpr.first(g, k)) for k in ("start", "mid", "end")))
+            s_, m_, e_ = (_xy(sexpr.first(g, k)) for k in ("start", "mid", "end"))
+            try:
+                cx, cy, r, a0, a1 = _arc3(s_, m_, e_)
+            except ValueError:                # zero-length or straight "arc" (KiCad's own library has some): a line or nothing
+                if s_ != e_:
+                    fp["tracks"].append((*s_, *e_, w or 0.1, layer))
+                if notes is not None:
+                    _note(notes, "degenerate arc (start, mid and end in a line) written as a line or dropped")
+                return
         else:                                 # KiCad 5: (start centre) (end arc start) (angle deg, clockwise on screen)
             (cx, cy), (sx, sy) = _xy(sexpr.first(g, "start")), _xy(sexpr.first(g, "end"))
             r, a = math.hypot(sx - cx, sy - cy), math.degrees(math.atan2(sy - cy, sx - cx))
@@ -602,6 +610,8 @@ def _convert_symbol(chain, name=None, footprint=None, extra=(), pin_map=None, no
     (`_U_2` sub-symbols) Altium display modes; unit 0 / style 0 items go into every part / mode."""
     notes = [] if notes is None else notes
     base, props = chain[-1], _props(chain)
+    if not props.get("Description") and props.get("ki_description"):     # KiCad 7 keeps it in ki_description
+        props["Description"] = props["ki_description"]
     hide_names = _hidden(sexpr.first(base, "pin_names") or [])
     hide_nums = _hidden(sexpr.first(base, "pin_numbers") or [])
     units = {}
