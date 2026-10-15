@@ -581,6 +581,27 @@ class Workspace:
                            "enforced": bool(policy)}
         return out
 
+    # ------------------------------------------------------------------ library agent review queue (ecadlib.agent_queue)
+    def agent_queue_list(self, status=None, batch=None):
+        """Queue items (summaries, newest first), counts per state and batches; batch=ID adds that batch."""
+        from . import agent_queue as AQ
+        return AQ.ws_list(self.root, status, batch)
+
+    def agent_queue_get(self, item_id):
+        """One queue item in full, its showable pictures (paths inside agent/), allowed next states and its batch."""
+        from . import agent_queue as AQ
+        return AQ.ws_get(self.root, item_id)
+
+    def agent_queue_decide(self, item_id, action, user, role=None, note="", via="ecadlib ui/mcp", aliases=()):
+        """approve / reject / rebuild / retry a queue item as `user`; approve and reject also go through approvals.py."""
+        from . import agent_queue as AQ
+        return AQ.decide(self, item_id, action, user, role, note, via, aliases)
+
+    def agent_picture(self, path):
+        """Path of a picture under <workspace>/agent/ (anything else: ValueError)."""
+        from . import agent_queue as AQ
+        return AQ.picture_path(self.root, path)
+
     # ------------------------------------------------------------------ duplicates (ecadlib.dedupe)
     def find_duplicates(self, bom, merge=False):
         """Duplicate parts (same MPN), footprints (same geometry) and symbols (same pinout) across the librarian plan
