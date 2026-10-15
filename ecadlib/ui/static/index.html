@@ -975,7 +975,7 @@ $("#auditbtn").addEventListener("click", e => action(e.target, $("#auditout"), a
 // ---- review queue (library agent)
 const QSTATE = { detected: "s-info", building: "s-off", proving: "s-info", review: "s-warn", approved: "s-ok", pushed: "s-ok", failed: "s-bad", rejected: "s-bad" };
 const QVERDICT = { pass: "s-ok", doubt: "s-warn", fail: "s-bad", skipped: "s-off" };
-let qfilter = "", qopen = null;
+let qfilter = "", qopen = null, qtoken = null;
 const pill = (t, cls) => `<span class="pill ${cls || "s-off"}">${esc(t)}</span>`;
 const safeUrl = u => /^https:\/\/[^\s"'<>]+$/.test(u || "") ? u : null;
 const picUrl = p => "/api/agent/queue/picture?path=" + encodeURIComponent(p);
@@ -1010,6 +1010,7 @@ function figure(title, paths) {
   return `<figure><figcaption>${esc(title)}</figcaption>${imgs || '<div class="muted small">none</div>'}</figure>`;
 }
 function showQueueItem(r) {
+  qtoken = r.build_token || null;
   const it = r.item, ch = it.change || {}, b = it.build || {}, p = it.proof, pics = r.pictures, allowed = r.allowed;
   const line = ch.line || {}, was = ch.was || {};
   const lineKeys = [...new Set([...Object.keys(line), ...Object.keys(was)])];
@@ -1067,6 +1068,7 @@ $("#qview").addEventListener("click", async e => {
   const note = $("#qnote").value.trim();
   if (act === "reject" && !note) return banner($("#qdecerr"), "Say what is wrong in the note before rejecting.");
   const body = { id: qopen, note };
+  if (qtoken) body.expect = qtoken;
   if (!session.team) {
     body.user = ($("#qsigner") || {}).value?.trim() || "";
     if (!body.user) return banner($("#qdecerr"), "Type your name first: it is recorded with the decision.");

@@ -510,16 +510,17 @@ def make_handler(ws: Workspace, team=None):
             rebuild on a failed / rejected item is a retry."""
             i = _str(b.get("id"), "id")
             note, role = _str(b.get("note"), "note", True) or "", _str(b.get("role"), "role", True)
+            expect = _str(b.get("expect"), "expect", True)      # the build the person looked at
             if action == "rebuild" and ws.agent_queue_get(i)["item"]["status"] in ("failed", "rejected"):
                 action = "retry"
             if not team:
-                return ws.agent_queue_decide(i, action, _str(b.get("user"), "user"), role, note)
+                return ws.agent_queue_decide(i, action, _str(b.get("user"), "user"), role, note, expect=expect)
             roles = TM.sign_roles(self.user)
             role = (role or "").strip() or roles[0]
             if role not in roles:
                 raise Refused(f"you sign as {', '.join(roles)}, not {role}")
             return ws.agent_queue_decide(i, action, TM.identity(self.user), role, note, via="ecadlib ui (team, signed in)",
-                                         aliases=(self.user["username"], self.user.get("email") or ""))
+                                         aliases=(self.user["username"], self.user.get("email") or ""), expect=expect)
 
         def _push(self, b):
             dry = b.get("dry_run", True) is not False

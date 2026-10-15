@@ -592,10 +592,11 @@ class Workspace:
         from . import agent_queue as AQ
         return AQ.ws_get(self.root, item_id)
 
-    def agent_queue_decide(self, item_id, action, user, role=None, note="", via="ecadlib ui/mcp", aliases=()):
-        """approve / reject / rebuild / retry a queue item as `user`; approve and reject also go through approvals.py."""
+    def agent_queue_decide(self, item_id, action, user, role=None, note="", via="ecadlib ui/mcp", aliases=(), expect=None):
+        """approve / reject / rebuild / retry a queue item as `user`; approve and reject also go through approvals.py.
+        expect: the build_token agent_queue_get gave; the decision is refused if the item was rebuilt since."""
         from . import agent_queue as AQ
-        return AQ.decide(self, item_id, action, user, role, note, via, aliases)
+        return AQ.decide(self, item_id, action, user, role, note, via, aliases, expect=expect)
 
     def agent_picture(self, path):
         """Path of a picture under <workspace>/agent/ (anything else: ValueError)."""

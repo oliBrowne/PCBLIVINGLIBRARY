@@ -250,7 +250,7 @@ def test_full_loop_real_modules():
             rep2 = A.run_once(ws, now="2099-01-01T00:00:00Z")
             t2 = AQ.Queue(ws).get(tps["id"])
             assert rep2["built"] == [tps["id"]] and t2["status"] == "review" and t2["build"]["requested_by"] == "Apr Prover <apr@example.com>"
-            assert gh.verbs()[2:] == ["PATCH"] and gh.calls[2][1].endswith("/pulls/7") and t2["proof"].get("cached") is True
+            assert gh.verbs()[2:] == ["GET", "PATCH"] and gh.calls[3][1].endswith("/pulls/7") and t2["proof"].get("cached") is True
             assert len(api.calls) == 4                                                            # same pictures: cached answer
             st, r = apr.call("POST", "/api/agent/queue/approve", {"id": tps["id"], "note": "ok"})
             assert st == 403 and "self-approval" in r["error"], r
@@ -290,7 +290,7 @@ def test_full_loop_real_modules():
         assert r4["status"] == "review" and r4["change"]["was"]["footprint"] == "R_0603_1608Metric" and rep4["built"] == [rc_["id"]]
         assert any("rebuild: changed" in h["note"] for h in r4["history"]) and r4["build"]["built"] == "2099-01-03T00:00:00Z"
         assert [Path(p).name for p in r4["pictures"]["before"]] == ["before_footprint.png", "before_symbol.png"]
-        assert gh.verbs()[n_gh:] == ["PATCH"] and gh.calls[-1][1].endswith("/pulls/7") and len(gh.prs) == 1
+        assert gh.verbs()[n_gh:] == ["GET", "PATCH"] and gh.calls[-1][1].endswith("/pulls/7") and len(gh.prs) == 1
         assert len(AQ.Queue(ws).list()) == 4 and api.calls[4:] == ["RC0603-10K"]               # refusals are asked again
         assert "before_footprint" in gh.prs[7]["body"]
 
@@ -339,7 +339,7 @@ def test_no_key_goes_to_review_with_pictures():
         assert all((ws / p).is_file() for p in it["pictures"]["after"]) and len(it["pictures"]["after"]) == 2
         assert it["proof"]["images"]["ours"] and it["proof"]["images"]["datasheet"]
         body = gh.prs[7]["body"]
-        assert "proof skipped: ANTHROPIC_API_KEY is not set" in body and "after_footprint.png?raw=true" in body
+        assert "proof skipped: ANTHROPIC\\_API\\_KEY is not set" in body and "after_footprint.png?raw=true" in body   # part data is markdown-escaped
         assert "(claude-opus-5-5)" not in body                                                  # no model was asked
 
 
