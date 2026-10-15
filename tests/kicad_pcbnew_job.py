@@ -10,7 +10,7 @@ Jobs:
                                               board in a project that has the exported fp-lib-table; DRC library checks
   step   {"lib": dir, "board": path, "models": {name: step path}}   board with one footprint per STEP model (saved only)
 """
-import json, re, sys
+import json, re, shutil, subprocess, sys
 from pathlib import Path
 
 import pcbnew
@@ -127,9 +127,16 @@ def libcheck(a):
         refs[f"U{i + 1}"] = f"{lib}:{n}"
     _edge(board, 40 + 20 * len(items), 40)
     board.Save(path)
-    b2 = pcbnew.LoadBoard(path)                # loads the project next to it, with its fp-lib-table
-    pcbnew.WriteDRCReport(b2, str(d / "check.rpt"), pcbnew.EDA_UNITS_MILLIMETRES, True)
-    agg = _violations(str(d / "check.rpt"), refs)
+    rpt = d / "check.rpt"
+    if int(pcbnew.Version().split(".")[0]) >= 8 and shutil.which("kicad-cli"):
+        # KiCad 8's Python module doesn't resolve ${KIPRJMOD} for a board it loads, so every footprint looks missing;
+        # kicad-cli (new in 8) runs DRC the way the app does, with the project and its fp-lib-table loaded
+        subprocess.run(["kicad-cli", "pcb", "drc", "--format", "report", "--severity-all", "--units", "mm",
+                        "-o", str(rpt), path], capture_output=True, text=True, timeout=600)
+    else:
+        b2 = pcbnew.LoadBoard(path)            # loads the project next to it, with its fp-lib-table
+        pcbnew.WriteDRCReport(b2, str(rpt), pcbnew.EDA_UNITS_MILLIMETRES, True)
+    agg = _violations(str(rpt), refs)
     out = {k: {kk: vv for kk, vv in v.items() if kk.startswith("lib_footprint")} for k, v in agg.items()}
     blocks = [b for b in (d / "check.rpt").read_text().split("\n[")[1:] if b.startswith("lib_footprint")]
     out["_detail"] = [b.strip()[:300] for b in blocks[:3]]     # KiCad's own words, for the test's failure message
