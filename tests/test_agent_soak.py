@@ -79,13 +79,16 @@ class GitHubPRs:
             body = [p for p in self.prs.values() if p["head"] == head and p["state"] == "open"]
         elif method == "GET":
             body = self.prs[int(path.split("/")[1])]
+        elif method == "POST" and path.startswith("issues/"):
+            body = {"id": 1}
+            self.prs[int(path.split("/")[1])].setdefault("comments", []).append(json["body"])
         elif method == "POST":
             n = len(self.prs) + 1
             body = self.prs[n] = {"number": n, "html_url": f"https://github.com/acme/lib/pull/{n}", "head": json["head"],
                                   "state": "open", "body": json["body"]}
         else:
             body = self.prs[int(path.split("/")[1])]
-            body.update(body=json["body"])
+            body.update({k: v for k, v in json.items() if k in ("body", "state")})
         return mock.Mock(status_code=201 if method == "POST" else 200, json=lambda: body, content=b"x", text="")
 
 
@@ -112,8 +115,9 @@ def make_ws(d, git=True, **agent):
 
 
 def write_bom(ws, parts):
-    """parts: {mpn: footprint}."""
-    (ws / "boms" / "main.csv").write_text(HEAD + "".join(f"U{i},1,{m},{fp},ACME,{m}\n" for i, (m, fp) in enumerate(sorted(parts.items()))))
+    """parts: {mpn: footprint or (footprint, manufacturer)}."""
+    rows = [(m, *(v if isinstance(v, tuple) else (v, "ACME"))) for m, v in sorted(parts.items())]
+    (ws / "boms" / "main.csv").write_text(HEAD + "".join(f'U{i},1,{m},{fp},"{mf}",{m}\n' for i, (m, fp, mf) in enumerate(rows)))
 
 
 def run(ws, rules, **kw):
@@ -315,7 +319,9 @@ def test_retried_part_gets_a_new_batch_and_a_closed_pr_is_not_reused():
         gh.prs[2]["state"] = "closed"
         write_bom(ws, {"AAA1": "QFN-16"})
         run(ws, rules, github_session=gh, env={"GITHUB_TOKEN": "tok"})
-        assert [p["state"] for p in gh.prs.values()] == ["open", "closed", "open"], gh.prs
+        # PR 1 lost its only part to the retry: closed by the agent; PR 2 merged by a person; PR 3 replaces it
+        assert [p["state"] for p in gh.prs.values()] == ["closed", "closed", "open"], gh.prs
+        assert "no parts left" in gh.prs[1]["comments"][0] and "comments" not in gh.prs[2]
         assert AQ.Queue(ws).get(i)["pr_url"].endswith("/pull/3")
 
 
@@ -407,6 +413,154 @@ def test_status_reads_only_the_last_batches():
         assert [b["id"] for b in st["batches"]] == [f"b{n:03}" for n in range(10, 30)]
 
 
+def test_rejected_part_files_leave_the_batch_branch():
+    with tempfile.TemporaryDirectory() as d:
+        ws, rules = make_ws(d)
+        gh = GitHubPRs()
+        write_bom(ws, {"AAA1": "SOIC-8", "BBB2": "SOIC-8"})
+        rep = run(ws, rules, github_session=gh, env={"GITHUB_TOKEN": "tok"})
+        br = rep["batches"][0]["branch"]
+        tree = lambda: gitc(Path(d) / "remote.git", "ls-tree", "-r", "--name-only", br).split()
+        assert any("AAA1.PcbLib" in f for f in tree()) and any("AAA1" in f for f in tree())
+        a = by_mpn(ws)["AAA1"]
+        AQ.decide(Workspace(ws), a["id"], "reject", ANN, note="pin 1 wrong")
+        run(ws, rules, github_session=gh, env={"GITHUB_TOKEN": "tok"})
+        files = tree()
+        assert not [f for f in files if "AAA1" in f or f"/{a['id']}/" in f], files
+        assert any("BBB2.PcbLib" in f for f in files) and any(f"/{by_mpn(ws)['BBB2']['id']}/" in f for f in files)
+        body = gh.prs[1]["body"]
+        assert "Taken out of this PR" in body and "AAA1: rejected" in body and gh.prs[1]["state"] == "open"
+
+
+def test_every_approval_path_waits_for_the_plan_lock():
+    from ecadlib import approvals as AP
+    with tempfile.TemporaryDirectory() as d:
+        ws, rules = make_ws(d, git=False)
+        write_bom(ws, {"AAA1": "SOIC-8"})
+        run(ws, rules)
+        w, bom = Workspace(ws), "agent/library_bom.csv"
+        plan = A._librarian_out(ws, ws / "agent" / A.BOM_NAME) / "plan.json"
+        with AQ.plan_lock(ws):                                       # the agent's librarian is rewriting the plan
+            for call in (lambda: w.approve_part(bom, "AAA1", "approve", ANN),
+                         lambda: AQ.decide(w, by_mpn(ws)["AAA1"]["id"], "approve", ANN)):
+                try:
+                    call()
+                    raise AssertionError("recorded while the librarian rewrites the plan")
+                except ValueError as e:
+                    assert "rebuilding the library right now" in str(e)
+            try:
+                AP.main([str(plan), "approve", "--part", "AAA1", "--user", ANN])
+                raise AssertionError("approvals CLI ignored the lock")
+            except SystemExit as e:
+                assert "rebuilding the library" in str(e.code)
+        assert not json.loads(plan.read_text())[0].get("approvals")
+        assert w.approve_part(bom, "AAA1", "approve", ANN)["decision"]["decision"] == "approve"
+        assert AP.main([str(plan), "status"]) in (0, None)
+
+
+def test_decided_batch_pr_is_commented_and_closed():
+    with tempfile.TemporaryDirectory() as d:
+        ws, rules = make_ws(d, auto_push=True)
+        gh = GitHubPRs()
+        kw = dict(github_session=gh, env={"GITHUB_TOKEN": "tok"}, a365=object())
+        write_bom(ws, {"AAA1": "SOIC-8", "BBB2": "SOIC-8"})
+        run(ws, rules, **kw)
+        a, b = by_mpn(ws)["AAA1"], by_mpn(ws)["BBB2"]
+        AQ.decide(Workspace(ws), a["id"], "approve", ANN)
+        push = lambda pis, *x, **k: [{"action": "release", "name": p["name"]} for p in pis]
+        with mock.patch.object(altium365, "push", push):
+            run(ws, rules, **kw)
+            assert gh.prs[1]["state"] == "open"                       # BBB2 still waits for review
+            AQ.decide(Workspace(ws), b["id"], "reject", ANN, note="no")
+            run(ws, rules, **kw)
+        assert gh.prs[1]["state"] == "closed" and "AAA1: pushed" in gh.prs[1]["comments"][0], gh.prs[1]
+        assert AQ.Queue(ws).get_batch(a["batch"])["status"] == "closed"
+        n = len(gh.calls)
+        run(ws, rules, **kw)
+        assert len(gh.calls) == n                                      # closed once, never touched again
+
+
+def test_approved_but_unpushed_keeps_the_pr_open():
+    with tempfile.TemporaryDirectory() as d:
+        ws, rules = make_ws(d)                                         # auto_push off
+        gh = GitHubPRs()
+        write_bom(ws, {"AAA1": "SOIC-8"})
+        run(ws, rules, github_session=gh, env={"GITHUB_TOKEN": "tok"})
+        AQ.decide(Workspace(ws), by_mpn(ws)["AAA1"]["id"], "approve", ANN)
+        run(ws, rules, github_session=gh, env={"GITHUB_TOKEN": "tok"})
+        assert gh.prs[1]["state"] == "open"
+
+
+def test_manufacturer_spellings_and_blank_are_one_part():
+    assert AQ.part_key("ST", "x") == AQ.part_key("STMicroelectronics N.V.", "X") == W.part_key("st micro", "X") \
+        == A.part_key("STMICROELECTRONICS", "x") == "stmicroelectronics|X"
+    assert AQ.norm_manufacturer("Würth Elektronik GmbH & Co. KG") == AQ.norm_manufacturer("WE") == "wurth elektronik"
+    assert AQ.norm_manufacturer("Texas Instruments Inc.") == AQ.norm_manufacturer("TI")
+    with tempfile.TemporaryDirectory() as d:
+        ws, rules = make_ws(d, git=False)
+        (ws / "boms" / "main.csv").write_text(HEAD + "U1,1,LM1,SOIC-8,ST,LM1\nU2,1,LM1,SOIC-8,STMicroelectronics,LM1\n"
+                                              "U3,1,LM1,SOIC-8,,LM1\nU4,1,AB2,SOIC-8,,AB2\n")
+        builds = []
+        run(ws, rules, builder=lambda *a: builds.append(1) or fake_librarian(*a))
+        items = AQ.Queue(ws).list()
+        assert sorted(i["key"] for i in items) == ["stmicroelectronics|LM1", "|AB2"], [i["key"] for i in items]
+        lines = json.loads((ws / "agent" / "library_bom.json").read_text())
+        assert sorted(lines) == ["stmicroelectronics|LM1", "|AB2"] and len(builds) == 1
+        q = AQ.Queue(ws)                                              # blank first, maker learned later: re-keyed
+        q.upsert({"mpn": "AB2", "manufacturer": "Acme Inc.", "origin": "manual"})
+        assert [i["key"] for i in q.list() if i["mpn"] == "AB2"] == ["acme|AB2"]
+        q.upsert({"mpn": "AB2", "manufacturer": "", "origin": "manual"})
+        assert len([i for i in q.list() if i["mpn"] == "AB2"]) == 1
+        q.upsert({"mpn": "CC3", "manufacturer": "Acme", "origin": "manual"})   # two known makers: blank stays apart
+        q.upsert({"mpn": "CC3", "manufacturer": "Other Co", "origin": "manual"})
+        q.upsert({"mpn": "CC3", "manufacturer": "", "origin": "manual"})
+        assert sorted(i["key"] for i in q.list() if i["mpn"] == "CC3") == ["acme|CC3", "other|CC3", "|CC3"]
+
+
+def test_old_keys_in_queue_and_watch_state_are_migrated():
+    with tempfile.TemporaryDirectory() as d:
+        ws, rules = make_ws(d, git=False)
+        q = AQ.Queue(ws)
+        a = q.upsert({"mpn": "LM1", "manufacturer": "ST", "origin": "manual"})
+        b = q.upsert({"mpn": "LM1", "manufacturer": "Other", "origin": "manual"})
+        for it, key, st in ((a, "st|LM1", "review"), (b, "stmicroelectronics n.v.|LM1", "detected")):
+            raw = json.loads((q.items_dir / f"{it['id']}.json").read_text())   # as an older version wrote them
+            raw.update(key=key, status=st, manufacturer=key.split("|")[0])
+            (q.items_dir / f"{it['id']}.json").write_text(json.dumps(raw))
+        (q.dir / "keys.json").unlink()
+        assert q.migrate_keys() == 2 and q.migrate_keys() == 0
+        got = {i["id"]: (i["key"], i["status"]) for i in q.list()}
+        assert got == {a["id"]: ("stmicroelectronics|LM1", "review"), b["id"]: ("stmicroelectronics|LM1", "rejected")}, got
+        assert "duplicate of" in q.get(b["id"])["history"][-1]["note"]
+        # watch state keyed the old way: the same BOM under another spelling is no change
+        (ws / "boms" / "main.csv").write_text(HEAD + "U1,1,LM1,SOIC-8,STMicroelectronics,LM1\n")
+        W.scan(ws, rules)
+        st = json.loads(W.state_path(ws).read_text())
+        for ent in st["sources"].values():
+            for fe in ent["files"].values():
+                fe["parts"] = {"st|LM1": dict(fe["parts"]["stmicroelectronics|LM1"], manufacturer="ST")}
+        st["version"] = 1
+        W.state_path(ws).write_text(json.dumps(st))
+        assert W.scan(ws, rules) == [] and json.loads(W.state_path(ws).read_text())["version"] == 2
+
+
+def test_dry_run_writes_nothing_at_all():
+    with tempfile.TemporaryDirectory() as d:
+        ws, rules = make_ws(d, git=False, auto_push=True)
+        write_bom(ws, {"AAA1": "SOIC-8"})
+        snap = lambda: {str(p.relative_to(ws)): (p.read_bytes() if p.is_file() else None) for p in ws.rglob("*")}
+        before = snap()
+        rep = A.run_once(ws, rules, dry_run=True, do_upkeep=True, env={})
+        assert rep["would_build"] == ["acme|AAA1"] and snap() == before, sorted(set(snap()) - set(before))
+        run(ws, rules)                                                 # after a real run: still nothing written
+        write_bom(ws, {"AAA1": "QFN-16", "BBB2": "SOIC-8"})
+        before = snap()
+        A.run_once(ws, rules, dry_run=True, do_upkeep=True, env={})
+        assert snap() == before, sorted(k for k in snap() if snap()[k] != before.get(k))
+        fresh = Path(d) / "nowhere"
+        assert A.main(["--workspace", str(fresh), "run", "--dry-run"]) == 0 and not fresh.exists()
+
+
 # ------------------------------------------------------------------ soak
 KILL_POINTS = ("upsert", "transition", "builder", "prove", "publish", "commit", "watch_save", "push", "write_json")
 
@@ -423,8 +577,13 @@ def _invariants(ws, d, gh, pushes, approvals, start, msg, after_clean_run, must_
         for h in it["history"][1:]:                                   # only legal moves were ever made
             assert h["from"] == h["to"] or h["to"] in AQ.NEXT[h["from"]], (msg, it["id"], h)
     assert all(len(v) == 1 for v in open_by_key.values()), (msg, open_by_key)
-    keys = {it["key"] for it in items}
-    assert must_have <= keys, (msg, "lost", must_have - keys)
+    mpns = {it["mpn"] for it in items}
+    assert must_have <= mpns, (msg, "lost", must_have - mpns)
+    open_by_mpn = {}
+    for it in items:                                                  # spellings of one maker: one part, one item
+        if it["status"] in AQ.OPEN:
+            open_by_mpn.setdefault(it["mpn"].upper(), []).append(it["id"])
+    assert all(len(v) == 1 for v in open_by_mpn.values()), (msg, "duplicate open items for one MPN", open_by_mpn)
     if after_clean_run:                                               # nothing stranded mid-pipeline
         assert not [it["id"] for it in items if it["status"] in ("detected", "building", "proving")], \
             (msg, [(it["mpn"], it["status"], it["build"]) for it in items if it["status"] in ("detected", "building", "proving")])
@@ -436,13 +595,29 @@ def _invariants(ws, d, gh, pushes, approvals, start, msg, after_clean_run, must_
         if p["state"] == "open":
             heads[p["head"]] = heads.get(p["head"], 0) + 1
     assert all(n == 1 for n in heads.values()), (msg, "duplicate PRs", heads)
+    remote = Path(d) / "remote.git"
+    qb = {b["id"]: b for b in q.batches()}
     for b in (ws / "agent" / "batches").glob("*/batch.json"):         # one PR per open batch, the one it records
         rec = json.loads(b.read_text())
-        if rec.get("pr_number"):
-            assert gh.prs[rec["pr_number"]]["head"] == rec["branch"], (msg, rec)
+        if not rec.get("pr_number"):
+            continue
+        pr = gh.prs[rec["pr_number"]]
+        assert pr["head"] == rec["branch"], (msg, rec)
+        members = q.list(batch=rec["id"])
+        if after_clean_run and pr["state"] == "open":
+            # a PR whose parts are all decided is closed; an open PR holds no file of a rejected / failed / moved part
+            assert not all(m["status"] in ("pushed", "rejected", "failed") for m in members), (msg, "PR left open", rec["id"])
+            tree = set(gitc(remote, "ls-tree", "-r", "--name-only", rec["branch"]).split())
+            for i in [i for i in rec.get("paths", {}) if A._departed(A._get_or_none(q, i), rec["id"])]:
+                raise AssertionError((msg, "departed part still listed", rec["id"], i))
+            for m in q.list():
+                if m.get("batch") != rec["id"] or m["status"] in ("rejected", "failed"):
+                    pics = {x for x in tree if f"/{rec['id']}/{m['id']}/" in x}
+                    assert not pics, (msg, "files of a part that left the batch", m["id"], m["status"], pics)
+        if pr["state"] == "closed" and rec.get("closed"):
+            assert qb[rec["id"]]["status"] == "closed", (msg, rec["id"])
     assert gitc(ws, "rev-parse", "HEAD") == start["head"] and gitc(ws, "symbolic-ref", "HEAD") == "refs/heads/main", msg
     assert gitc(ws, "status", "--porcelain", "--untracked-files=no") == "", msg
-    remote = Path(d) / "remote.git"
     for line in gitc(remote, "for-each-ref", "--format=%(refname) %(objectname)").splitlines():
         ref, sha = line.split()
         was = start["remote"].get(ref)
@@ -457,7 +632,8 @@ def _soak(seed, runs):
         ws, rules = make_ws(d, auto_push=True, batch_size=3)
         gh, pushes, approvals = GitHubPRs(), [], {}
         start = {"head": gitc(ws, "rev-parse", "HEAD"), "remote": {}}
-        parts = {f"P{n:02}": "SOIC-8" for n in range(4)}
+        spell = ["ACME", "Acme Inc.", "ACME, Ltd.", "acme gmbh & co. kg", ""]      # one maker, many spellings
+        parts = {f"P{n:02}": ("SOIC-8", rng.choice(spell)) for n in range(4)}
         write_bom(ws, parts)
         must_have = set()
         t = 1_791_000_000                                             # 2026-10-03, then weeks of fake time
@@ -473,11 +649,15 @@ def _soak(seed, runs):
             # people and projects between runs
             r = rng.random()
             if r < 0.25 and len(parts) < 9:
-                parts[f"P{rng.randrange(100):02}"] = "SOIC-8"
+                parts[f"P{rng.randrange(100):02}"] = ("SOIC-8", rng.choice(spell))
             elif r < 0.35 and parts:
                 parts.pop(rng.choice(sorted(parts)))
             elif r < 0.5 and parts:
-                parts[rng.choice(sorted(parts))] = rng.choice(["SOIC-8", "QFN-16", "TSSOP-14"])
+                m = rng.choice(sorted(parts))
+                parts[m] = (rng.choice(["SOIC-8", "QFN-16", "TSSOP-14"]), parts[m][1])
+            elif r < 0.6 and parts:                                  # the same maker spelled another way
+                m = rng.choice(sorted(parts))
+                parts[m] = (parts[m][0], rng.choice(spell))
             transient = rng.random() < 0.08
             (ws / "boms" / "main.csv").write_text(HEAD) if transient else write_bom(ws, parts)
             q = AQ.Queue(ws)
@@ -524,7 +704,7 @@ def _soak(seed, runs):
                        mock.patch.object(W, "save_state", maybe("watch_save", W.save_state)),
                        mock.patch.object(A, "write_json", maybe("write_json", A.write_json)),
                        mock.patch.object(altium365, "push", maybe("push", fake_push))]
-            present = set() if transient else {A.part_key("ACME", m) for m in parts}
+            present = set() if transient else set(parts)
             with contextlib.ExitStack() as st:
                 for p in patches:
                     st.enter_context(p)
@@ -538,13 +718,20 @@ def _soak(seed, runs):
                     run(ws, rules, prover=Vision(rng), now=t + 60, a365=object(), github_session=gh, env={"GITHUB_TOKEN": "tok"})
                 must_have |= present
             _invariants(ws, d, gh, pushes, approvals, start, msg, not transient, must_have)
-        return {"items": len(AQ.Queue(ws).list()), "pushes": len(pushes), "prs": len(gh.prs)}
+        recs = [json.loads(b.read_text()) for b in (ws / "agent" / "batches").glob("*/batch.json")]
+        return {"items": len(AQ.Queue(ws).list()), "pushes": len(pushes), "prs": len(gh.prs),
+                "closed_by_agent": sum(bool(p.get("comments")) for p in gh.prs.values()),
+                "taken_out": sum(len(r.get("removed") or []) for r in recs)}
 
 
 def test_soak_weeks_of_runs_with_kills_and_people():
+    total = {}
     for seed in (1, 2, 3):
         res = _soak(seed, 45)
         assert res["items"] and res["prs"], res
+        for k, v in res.items():
+            total[k] = total.get(k, 0) + v
+    assert total["closed_by_agent"] and total["taken_out"], total      # the close and take-out paths ran
 
 
 if __name__ == "__main__":

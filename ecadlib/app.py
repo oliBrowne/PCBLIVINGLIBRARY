@@ -555,6 +555,16 @@ class Workspace:
                 "audit": self.rel(audit) if audit.exists() else None}
 
     def approve_part(self, bom, part, decision, user, role=None, comment="", via="ecadlib ui/mcp"):
+        """Record an approve / reject (see _approve_part). Holds <workspace>/agent/plan.lock while it rewrites the plan:
+        while the library agent's librarian rewrites a plan the decision is refused ("decide again in a minute")
+        instead of being overwritten when the librarian saves its copy."""
+        from .agent_queue import plan_lock
+        with plan_lock(self.root, wait=False) as free:
+            if not free:
+                raise ValueError("the library agent is rebuilding the library right now; decide again in a minute")
+            return self._approve_part(bom, part, decision, user, role, comment, via)
+
+    def _approve_part(self, bom, part, decision, user, role=None, comment="", via="ecadlib ui/mcp"):
         """Record an approve / reject for one part as `user`. user is required: locally there is no login, so the
         caller says who it is (never taken from this machine's git identity); the team server passes the signed-in
         user and via="ecadlib ui (team, signed in)", which the audit entry records. Every decision, refused ones included, is
