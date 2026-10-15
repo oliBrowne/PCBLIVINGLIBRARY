@@ -73,7 +73,8 @@ def _epoch(s):
 
 
 def part_key(manufacturer, mpn):
-    return f"{(manufacturer or '').strip().lower()}|{(mpn or '').strip().upper()}"
+    from .agent_queue import norm_manufacturer          # "ST" and "STMicroelectronics" are one maker
+    return f"{norm_manufacturer(manufacturer)}|{(mpn or '').strip().upper()}"
 
 
 def write_json(path, data):
@@ -119,13 +120,19 @@ def _par(item):
     return {p["name"]: p["value"] for p in item.get("parameters", [])}
 
 
-def _modules(watcher=None, queue=None, prover=None, workspace=None):
+class _NoQueue:
+    """A dry run on a workspace without a queue yet: an empty queue that makes no folders."""
+    def list(self, status=None, batch=None):
+        return []
+
+
+def _modules(watcher=None, queue=None, prover=None, workspace=None, dry_run=False):
     """The three sibling modules, imported only when the caller did not pass its own (tests pass fakes)."""
     if watcher is None:
         from . import agent_watch as watcher
     if queue is None:
         from . import agent_queue as AQ
-        queue = AQ.Queue(workspace)
+        queue = _NoQueue() if dry_run and not (Path(workspace) / "agent" / "queue" / "items").is_dir() else AQ.Queue(workspace)
     if prover is None:
         from . import visual_check as prover
     return watcher, queue, prover
@@ -137,11 +144,16 @@ def _queue(ws):
 
 
 @contextlib.contextmanager
-def run_lock(ws):
-    """One run at a time per workspace (serve, a CLI run and the web UI share it). Yields False when held."""
+def run_lock(ws, create=True):
+    """One run at a time per workspace (serve, a CLI run and the web UI share it). Yields False when held.
+    create=False (a dry run): no folder or file is made; without a lock file no run ever happened, so none runs."""
     d = Path(ws) / "agent"
-    d.mkdir(parents=True, exist_ok=True)
-    f = open(d / "run.lock", "a+")
+    if not create and not (d / "run.lock").exists():
+        yield True
+        return
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    f = open(d / "run.lock", "a+" if create else "r")
     try:
         try:
             try:
@@ -154,7 +166,8 @@ def run_lock(ws):
             got = False
         else:
             got = True
-            f.seek(0); f.truncate(); f.write(f"{os.getpid()} {stamp()}\n"); f.flush()
+            if create:
+                f.seek(0); f.truncate(); f.write(f"{os.getpid()} {stamp()}\n"); f.flush()
         yield got
     finally:
         f.close()
@@ -163,7 +176,9 @@ def run_lock(ws):
 def _librarian_out(ws, bom):
     """The same folder Workspace uses for this BOM, so the review queue's sign-off finds the agent's plan."""
     from .app import Workspace
-    return Workspace(ws)._librarian_dir(Path(bom))
+    w = Workspace.__new__(Workspace)              # no __init__: it makes the workspace folders (a dry run must not)
+    w.root = Path(ws).resolve()
+    return w._librarian_dir(Path(bom))
 
 
 # ------------------------------------------------------------------ status file
@@ -223,9 +238,10 @@ def github_slug(url):
     return f"{m.group(1)}/{m.group(2)}" if m else None
 
 
-def commit_files(repo, branch, base, files, message):
+def commit_files(repo, branch, base, files, message, remove=()):
     """Commit {repo path: local file} on top of `branch` (or `base` when the branch does not exist) WITHOUT touching
-    the working tree, the index or HEAD: a temporary index, write-tree, commit-tree, update-ref. -> (sha, changed)."""
+    the working tree, the index or HEAD: a temporary index, write-tree, commit-tree, update-ref. `remove`: repo paths
+    taken out of the tree. -> (sha, changed)."""
     parent = git(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}", ok=(0, 1)) or git(repo, "rev-parse", base)
     with tempfile.TemporaryDirectory() as td:
         env = {"GIT_INDEX_FILE": str(Path(td) / "index")}
@@ -233,6 +249,9 @@ def commit_files(repo, branch, base, files, message):
         for path, src in sorted(files.items()):
             blob = git(repo, "hash-object", "-w", "--", str(src))
             git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=env)
+        gone = sorted(set(remove) - set(files))
+        if gone:
+            git(repo, "update-index", "--force-remove", "--", *gone, env=env)
         tree = git(repo, "write-tree", env=env)
     if tree == git(repo, "rev-parse", f"{parent}^{{tree}}"):
         if not git(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}", ok=(0, 1)):
@@ -271,7 +290,8 @@ def _line_of(item, plan_items=None):
 
 def _find_plan_item(plan_items, item):
     name = (item.get("build") or {}).get("part")
-    mpn, mfr = (item.get("mpn") or "").strip().upper(), (item.get("manufacturer") or "").strip().lower()
+    from .agent_queue import norm_manufacturer
+    mpn, mfr = (item.get("mpn") or "").strip().upper(), norm_manufacturer(item.get("manufacturer"))
     hits = []
     for pi in plan_items:
         if name and pi.get("name") == name:
@@ -283,7 +303,7 @@ def _find_plan_item(plan_items, item):
     if not hits and not ln.get("mpn") and ln.get("value"):       # a bare passive: matched by value like the librarian
         same = [pi for pi in plan_items if not _par(pi).get("Manufacturer Part Number") and _par(pi).get("Value") == ln["value"]]
         hits = [pi for pi in same if (pi.get("footprint") or {}).get("ref") == ln.get("footprint")] or same
-    return next((h for h in hits if _par(h).get("Manufacturer", "").strip().lower() == mfr), hits[0] if hits else None)
+    return next((h for h in hits if norm_manufacturer(_par(h).get("Manufacturer")) == mfr), hits[0] if hits else None)
 
 
 def write_bom(ws, lines):
@@ -449,7 +469,7 @@ def _url(v):
     return quote(v, safe=":/?#[]@!$&'()*+,;=%~.-_") if re.match(r"https?://[^\s]+$", v) else None
 
 
-def pr_body(batch_id, items, link, t):
+def pr_body(batch_id, items, link, t, removed=()):
     md = [f"# Library agent batch {_md(batch_id)}", "",
           f"{len(items)} part(s) built by `ecadlib agent` ({_md(t)}). Check the pictures against the datasheet, then approve "
           "or reject each part in the web UI's **Review queue** (or `ecadlib agent approve ID`). Approved parts are pushed "
@@ -494,15 +514,26 @@ def pr_body(batch_id, items, link, t):
             doubts.insert(0, f"proof {pr['verdict']}: {pr.get('reason', '')}")
         if doubts:
             md += ["**Doubts:**", ""] + [f"- {_md(d)}" for d in dict.fromkeys(map(str, doubts))] + [""]
+    if removed:
+        md += ["## Taken out of this PR", "", "These parts were rejected, failed or moved to another batch; their files "
+               "and pictures were removed from this branch:", ""]
+        md += [f"- {_md(r.get('mpn') or r.get('id'))}: {_md(r.get('status'))}" for r in removed] + [""]
     md.append("<sub>Opened by ecadlib agent. It never force-pushes; re-runs update this PR.</sub>")
     text = "\n".join(md) + "\n"
     return text if len(text) <= BODY_MAX else text[:BODY_MAX - 80] + "\n\n(cut: the full text is in the batch folder)\n"
 
 
 # ------------------------------------------------------------------ batch PR
-def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=None, log=None):
+def _departed(it, batch_id):
+    """An item whose files must leave a batch branch: gone, rejected, failed, or now in another batch."""
+    return it is None or it.get("batch") != batch_id or it.get("status") in ("rejected", "failed")
+
+
+def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=None, log=None, lookup=None):
     """Write <ws>/agent/batches/<id>/ (PR.md, pictures, batch.json) and, with a git repo + remote + token, commit the
-    library files and pictures to ecadlib/agent-<id> and open or update its PR. -> the batch record."""
+    library files and pictures to ecadlib/agent-<id> and open or update its PR. Files of items that left the batch
+    (lookup(id) -> the item now, or None: rejected, failed, moved) are removed from the branch and the PR body says so.
+    -> the batch record."""
     ws, cfg, env = Path(ws), settings(rules), os.environ if env is None else env
     log = log or (lambda *a: None)
     t = stamp(now)
@@ -510,6 +541,13 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
     rec = read_json(bdir / "batch.json", {"id": batch_id, "branch": f"ecadlib/agent-{_safe(batch_id)}", "pr_url": None,
                                           "pr_number": None, "published": {}})
     rec.update(items=[it["id"] for it in items], updated=t)
+    by_id = {it["id"]: it for it in items}
+    lookup = lookup or by_id.get
+    rec.setdefault("paths", {})
+    departed = [i for i in rec["paths"] if i not in by_id and _departed(lookup(i), batch_id)]
+    removed = list(rec.get("removed") or []) + [
+        {"id": i, "mpn": (lookup(i) or {}).get("mpn"), "status": (lookup(i) or {}).get("status") or "gone"}
+        for i in departed]
     bdir.mkdir(parents=True, exist_ok=True)
     pic_dir = bdir / "pictures"
     for it in items:                            # pictures next to the PR text, for the folder fallback and the web UI
@@ -519,7 +557,7 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
                 (pic_dir / _safe(it["id"])).mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, pic_dir / _safe(it["id"]) / src.name)
     local_link = lambda it, p: f"pictures/{_safe(it['id'])}/{Path(p).name}"
-    (bdir / "PR.md").write_text(pr_body(batch_id, items, local_link, t))
+    (bdir / "PR.md").write_text(pr_body(batch_id, items, local_link, t, removed))
 
     repo_cfg = cfg["library_repo"]
     repo = repo_root(Path(repo_cfg) if repo_cfg else ws)
@@ -539,12 +577,21 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
             for f in b.get("files", {}).values():
                 if f and _path(out, f).is_file():
                     files[rel(_path(out, f))] = _path(out, f)
+        own = {it["id"]: set() for it in items}
+        for it in items:
+            for f in ((it.get("build") or {}).get("files") or {}).values():
+                if f and _path(out, f).is_file():
+                    own[it["id"]].add(rel(_path(out, f)))
         if (out / "plan.json").is_file():
             files[rel(out / "plan.json")] = out / "plan.json"
         for it in items:
             for p in (it.get("pictures") or {}).get("before", []) + (it.get("pictures") or {}).get("after", []):
                 if (ws / p).is_file():
-                    files[f"{cfg['pictures_path'].strip('/')}/{_safe(batch_id)}/{_safe(it['id'])}/{Path(p).name}"] = ws / p
+                    key = f"{cfg['pictures_path'].strip('/')}/{_safe(batch_id)}/{_safe(it['id'])}/{Path(p).name}"
+                    files[key] = ws / p
+                    own[it["id"]].add(key)
+        keep = set(files) | {x for i, ps in rec["paths"].items() if i not in departed for x in ps}
+        drop = {x for i in departed for x in rec["paths"][i]} - keep
         try:
             base = cfg["base_branch"] or git(repo, "symbolic-ref", "--short", "HEAD")
             remote = git(repo, "remote", "get-url", "origin", ok=(0, 2, 128))
@@ -563,8 +610,14 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
                     git(repo, "fetch", "--no-tags", "origin", f"+refs/heads/{rec['branch']}:refs/heads/{rec['branch']}")
             msg = f"ecadlib agent batch {batch_id}: {len(items)} part(s)\n\n" + "\n".join(
                 f"- {it.get('mpn') or it['key']} ({(it.get('change') or {}).get('kind') or (it.get('change') or {}).get('check') or ''})" for it in items)
-            sha, changed = commit_files(repo, rec["branch"], start, files, msg)
+            if departed:
+                msg += "\n\nTaken out: " + ", ".join(str(r["mpn"] or r["id"]) for r in removed[-len(departed):])
+            sha, changed = commit_files(repo, rec["branch"], start, files, msg, remove=drop)
             rec.update(repo=str(repo), base=base, commit=sha)
+            for i in departed:                   # committed: their files are out of the branch now
+                rec["paths"].pop(i, None)
+            rec["removed"] = removed
+            rec["paths"].update({i: sorted(ps) for i, ps in own.items()})
             if not remote:
                 reason = f"branch {rec['branch']} committed in {repo}, but the repo has no origin remote: no PR"
             elif not token:
@@ -580,7 +633,7 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
                 web = "https://github.com" if gh.API == "https://api.github.com" else re.sub(r"/api/v3$", "", gh.API)
                 link = lambda it, p: (f"{web}/{slug}/blob/{sha}/{cfg['pictures_path'].strip('/')}/{_safe(batch_id)}/"
                                       f"{_safe(it['id'])}/{Path(p).name}?raw=true")
-                body, title = pr_body(batch_id, items, link, t), f"Library agent: {len(items)} part(s) to review (batch {batch_id})"
+                body, title = pr_body(batch_id, items, link, t, removed), f"Library agent: {len(items)} part(s) to review (batch {batch_id})"
                 num = rec.get("pr_number")
                 if num:                          # merged or closed meanwhile: a closed PR is not a review; open a new one
                     cur = gh.api("GET", f"pulls/{num}")
@@ -608,6 +661,54 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
     write_json(bdir / "batch.json", rec)
     if reason:
         log(f"agent: batch {batch_id} written to {bdir} ({reason})")
+    return rec
+
+
+def _github(ws, cfg, env, session):
+    """(GitHub client, None) for the library repo's PRs, or (None, why not)."""
+    repo = repo_root(Path(cfg["library_repo"]) if cfg["library_repo"] else ws)
+    if repo is None:
+        return None, "no git repository"
+    remote = git(repo, "remote", "get-url", "origin", ok=(0, 2, 128))
+    slug = cfg["github_repo"] or github_slug(remote)
+    token = env.get(cfg["github_token_env"]) if cfg["github_token_env"] else None
+    if not (remote and slug and token):
+        return None, "no GitHub remote or token"
+    from .upkeep import GitHub
+    gh = GitHub(slug, token, session)
+    gh.API = cfg["github_api"].rstrip("/")
+    return gh, None
+
+
+def close_batch(ws, rules, batch_id, members, now=None, env=None, session=None, log=None):
+    """Every item of the batch is decided (pushed, rejected or failed) and none waits for its push: comment the
+    outcome on its PR and close it, so PRs never pile up. The branch stays (pushed parts' files are on it). -> rec."""
+    ws, cfg, env = Path(ws), settings(rules), os.environ if env is None else env
+    bdir = ws / "agent" / "batches" / _safe(batch_id)
+    rec = read_json(bdir / "batch.json", {"id": batch_id})
+    if rec.get("closed"):
+        return rec
+    lines = [f"- {_md(m.get('mpn') or m['key'])}: {_md(m['status'])}" for m in members]
+    text = ("Every part of this batch is decided, so the library agent closes this PR:\n\n" + "\n".join(lines or ["- (no parts left)"])
+            + "\n\nPushed parts are in Altium 365; their library files stay on this branch (reopen the PR to merge them).")
+    if rec.get("pr_number") and rec.get("pr_state") != "closed":
+        try:
+            gh, why = _github(ws, cfg, env, session)
+            if gh is None:
+                raise RuntimeError(f"PR left open: {why}")
+            gh.api("POST", f"issues/{rec['pr_number']}/comments", {"body": text})
+            gh.api("PATCH", f"pulls/{rec['pr_number']}", {"state": "closed"})
+            rec["pr_state"] = "closed"
+        except Exception as e:                      # not closed: tried again next pass
+            rec["close_note"] = f"{type(e).__name__}: {e}"
+            if bdir.is_dir():
+                write_json(bdir / "batch.json", rec)
+            return rec
+    rec.update(closed=stamp(now), outcome={m["id"]: m["status"] for m in members})
+    rec.pop("close_note", None)
+    bdir.mkdir(parents=True, exist_ok=True)
+    write_json(bdir / "batch.json", rec)
+    (log or (lambda *a: None))(f"agent: batch {batch_id} closed")
     return rec
 
 
@@ -732,11 +833,13 @@ def run_once(workspace, rules=None, dry_run=False, client=None, now=None, *, wat
     env = os.environ if env is None else env
     rep = {"started": t, "dry_run": dry_run, "detected": [], "built": [], "review": [], "failed": [], "waiting": [],
            "batches": [], "push": None, "upkeep": None, "notes": []}
-    with run_lock(ws) as got:
+    with run_lock(ws, create=not dry_run) as got:
         if not got:
             rep["skipped"] = "another agent run is in progress"
             return rep
-        watcher, q, prover = _modules(watcher, queue, prover, ws)
+        watcher, q, prover = _modules(watcher, queue, prover, ws, dry_run)
+        if not dry_run and hasattr(q, "migrate_keys"):
+            q.migrate_keys()                          # once: items keyed before manufacturer names were normalised
         if not dry_run:
             write_status(ws, state="running", run_started=t, dry_run=False)
         try:
@@ -778,7 +881,9 @@ def _pass(ws, rules, cfg, t, dry_run, client, now, watcher, q, prover, builder, 
         else:
             write_json(pend, {"state": wfile.read_text() if wfile.exists() else None, "at": t})
     try:
-        changes = watcher.scan(ws, rules=rules, client=client, now=None if now is None else t) or []   # t: ISO, any `now` form
+        import inspect
+        kw = {"dry_run": True} if dry_run and "dry_run" in inspect.signature(watcher.scan).parameters else {}
+        changes = watcher.scan(ws, rules=rules, client=client, now=None if now is None else t, **kw) or []   # t: ISO
     finally:
         if dry_run:
             if saved is not None:
@@ -861,11 +966,27 @@ def _pass(ws, rules, cfg, t, dry_run, client, now, watcher, q, prover, builder, 
         if any(rec.get("published", {}).get(i["id"]) != _published(i)
                for i in review if i.get("batch") == bid):
             touched[bid] = True
+    lookup = lambda i: _get_or_none(q, i)
+    open_batches = [b["id"] for b in q.batches() if b.get("status", "open") == "open"] if callable(getattr(q, "batches", None)) else \
+        sorted({i["batch"] for i in q.list() if i.get("batch")})
+    for bid in open_batches:
+        members = q.list(batch=bid)
+        rec = read_json(ws / "agent" / "batches" / _safe(bid) / "batch.json", {})
+        if members and all(m["status"] in ("pushed", "rejected", "failed") for m in members) or (not members and rec):
+            try:                                        # all decided, nothing waits for a push: close its PR
+                rec = close_batch(ws, rules, bid, members, now, env, session, log)
+                if rec.get("closed") and hasattr(q, "update_batch"):
+                    q.update_batch(bid, status="closed")
+            except (KeyError, ValueError, OSError) as e:
+                rep["notes"].append(f"batch {bid}: not closed: {type(e).__name__}: {e}")
+            touched.pop(bid, None)
+        elif any(_departed(lookup(i), bid) for i in rec.get("paths", {})):
+            touched[bid] = True                         # a rejected / failed / moved part's files leave its branch
     for bid in touched:
-        items = [i for i in q.list(batch=bid) if i["status"] == "review"]
+        items = [i for i in q.list(batch=bid) if i["status"] in ("review", "approved")]
         if not items:
             continue
-        rec = publish_batch(ws, rules, bid, items, out, now, env, session, log)
+        rec = publish_batch(ws, rules, bid, items, out, now, env, session, log, lookup=lookup)
         try:
             if rec.get("pr_url") and hasattr(q, "update_batch"):   # the queue's batch record (web UI batch view) gets the PR too
                 q.update_batch(bid, pr_url=rec["pr_url"], branch=rec.get("branch"))
@@ -883,6 +1004,13 @@ def _pass(ws, rules, cfg, t, dry_run, client, now, watcher, q, prover, builder, 
 
 
 MAX_ATTEMPTS = 3          # runs that died while building / proving one item before that item is failed
+
+
+def _get_or_none(q, i):
+    try:
+        return q.get(i)
+    except (KeyError, ValueError):
+        return None
 
 
 def _wants_build(it):
@@ -946,7 +1074,14 @@ def _read_lines(ws):
         lines = None
     if not isinstance(lines, dict):           # starting from {} would drop every part built so far from the plan
         raise RuntimeError(f"{f} is damaged; restore it (its lines are also in {BOM_NAME}) before the agent builds again")
-    return lines
+    from .agent_queue import renorm_key
+    out = {}
+    for k, ln in lines.items():                # keys from before manufacturer names were normalised
+        out.setdefault(renorm_key(k), ln)
+    for k in [k for k in out if k.startswith("|")]:   # a blank maker line once that MPN has exactly one known maker
+        if len([x for x in out if x.endswith(k) and x != k]) == 1:
+            del out[k]
+    return out
 
 
 def _build(ws, rules, cfg, t, client, q, prover, builder, libs, log, rep):
@@ -1135,7 +1270,8 @@ def main(argv=None):
     pu.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     ws = Path(a.workspace).resolve()
-    ws.mkdir(parents=True, exist_ok=True)
+    if not (a.cmd == "run" and a.dry_run):            # a dry run writes nothing, not even the workspace folder
+        ws.mkdir(parents=True, exist_ok=True)
     rules = RU.load(a.rules, start=ws)
     if a.cmd == "run":
         rep = run_once(ws, rules, dry_run=a.dry_run, do_upkeep=True if a.upkeep else None, libs=a.lib, log=print)
