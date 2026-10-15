@@ -288,6 +288,7 @@ def main(argv=None):
     ap.add_argument("--user", help="who you are (default: $ECADLIB_USER, then git config user.name/email)")
     ap.add_argument("--role", help="role you sign as (see the policy's roles/users)")
     ap.add_argument("-m", "--comment", default="", help="comment (required for reject)")
+    ap.add_argument("--json", action="store_true", help="status: print the policy and one row per part as JSON")
     a = ap.parse_args(argv)
     ws = agent_workspace(a.plan) if a.action != "status" else None
     if ws is None:
@@ -321,6 +322,12 @@ def _run(a):
         sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")
     if a.action == "status":
         sel = [by[n] for n in a.part] if a.part else items
+        if getattr(a, "json", False):              # stable shape: README "Machine-readable output (--json)"
+            pf = policy_file(base)
+            print(json.dumps({"plan": str(plan), "policy_file": str(pf) if pf else None, "enforced": bool(policy),
+                              "awaiting_approval": sum(i.get("status") == "awaiting_approval" for i in sel),
+                              "rows": status_rows(sel, policy, base)}, indent=2, default=str))
+            return 0
         print(f"policy: {policy_file(base) or 'none (approvals are recorded, not enforced)'}")
         for r in status_rows(sel, policy, base):
             print(f"  {r['status']:<18} {r['name']:<28} " + (f"approved by {r['approved_by']}" if r["approved_by"] else "")
