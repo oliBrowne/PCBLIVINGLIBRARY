@@ -28,6 +28,7 @@
     ecadlib upkeep    PLAN|BOM [--checks ...] [--apply] [--github issue|pr]   weekly checks, only what is new, one issue/PR
     ecadlib sim-models plan.json [--models DIR] [--attach]   find, check and attach SPICE / IBIS simulation models
     ecadlib agent-watch [--dry-run] [--source TYPE:REF]   library agent: new / changed / removed parts in watched projects and BOMs
+    ecadlib agent     run [--dry-run]|serve|status|approve ID|reject ID|push   library agent: watch, build, prove, PR, push
     ecadlib symbol    PINS.csv|PART -o x.SchLib [--preview x.svg]   big-chip symbol with pins grouped by function
 
 `ecadlib <command> -h` shows that command's options."""
@@ -63,6 +64,7 @@ COMMANDS = {
     "where-used": ("ecadlib.altium_project:where_used_main", "which projects use which library part, and flags"),
     "sim-models": ("ecadlib.sim_models", "find, check and attach SPICE / IBIS simulation models for a plan"),
     "agent-watch": ("ecadlib.agent_watch", "library agent watch step: new / changed / removed parts in watched projects and BOMs"),
+    "agent": ("ecadlib.agent", "library agent: watch projects, build + prove parts, batch PRs, push approved parts, upkeep"),
     "symbol": ("ecadlib.symbol_layout", "IC symbol with pins grouped by function (power, ports, debug ...), SVG preview"),
 }
 

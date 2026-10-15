@@ -632,6 +632,19 @@ class Workspace:
                 "checks": [{k: s[k] for k in ("check", "status", "reason", "changes", "resolved", "notes")} for s in rep["checks"]],
                 "applied": [rel(p) for p in rep["applied_paths"]],
                 "reports": [self.rel(base / "upkeep.md"), self.rel(base / "upkeep.json")]}
+    # ------------------------------------------------------------------ library agent (ecadlib.agent)
+    def agent_status(self):
+        """What the library agent did last (status.json), its queue counts per state and its batches/PRs."""
+        from . import agent as AG
+        return AG.status(self.root)
+
+    def agent_run(self, dry_run=True):
+        """One agent pass now: scan watched sources, build and prove new parts, batch PR, push (if [agent] auto_push).
+        dry_run (the default) reports what would happen and changes nothing."""
+        from . import agent as AG
+        rep = AG.run_once(self.root, self.rules(), dry_run=bool(dry_run), libs=self.libs)
+        return {k: v for k, v in rep.items() if k != "push"} | {"push": rep.get("push")}
+
     # ------------------------------------------------------------------ Altium projects (ecadlib.altium_project)
     def project_bom(self, project, variant=None):
         """BOM straight from an Altium .PrjPcb / .SchDoc (with variants and ActiveBOM choices); writes
