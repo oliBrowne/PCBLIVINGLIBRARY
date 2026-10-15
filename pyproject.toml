@@ -41,7 +41,8 @@ Changelog = "https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/CHANGELOG.m
 [project.optional-dependencies]
 altium = ["olefile"]                   # read .PcbLib/.SchLib back (altium-lib dump)
 pdf = ["pypdf"]                        # datasheet reader: trim a PDF to --pages before sending it
-all = ["olefile", "pypdf"]
+vision = ["pillow", "pypdf"]           # visual-check: draw footprints / symbols (pdftoppm renders datasheet pages)
+all = ["olefile", "pypdf", "pillow"]
 dev = ["olefile", "graphql-core", "pyaltiumlib", "pypdf"]
 
 [project.scripts]
