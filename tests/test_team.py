@@ -1,7 +1,7 @@
 """Team mode of the web UI (ecadlib ui --team): sign-in, sessions, CSRF, roles per route, approvals identity,
 per-user jobs, TLS, the `ecadlib team` CLI. Offline; a real HTTP(S) server on an ephemeral port.
 Run:  python3 -m tests.test_team"""
-import contextlib, http.client, io, json, os, re, shutil, ssl, stat, subprocess, sys, tempfile, threading, time
+import contextlib, http.client, io, itertools, json, os, re, shutil, ssl, stat, subprocess, sys, tempfile, threading, time
 from pathlib import Path
 from unittest import mock
 
@@ -283,7 +283,7 @@ def test_role_enforcement_per_route():
                 assert st == 401, (method, path, st, r)
             for user, role in [(u, r) for u, r, *_ in USERS if u != "ap2"]:
                 c = Client(port)
-                tok, s = team.sessions.create(user, 1)                   # fresh session per call (no scrypt)
+                tok, s = team.sessions.create(user, team.store.get(user)["gen"])   # fresh session per call (no scrypt)
                 c.cookie, c.csrf = tok, s["csrf"]
                 st, r = c.call(method, url, {} if method == "POST" else None)
                 err = r.get("error", "") if isinstance(r, dict) else ""
@@ -300,19 +300,19 @@ def test_role_enforcement_per_route():
 
 def test_viewer_is_read_only_and_live_push_needs_approver():
     with server() as (ws, team, port):
-        ws.save_upload("b.csv", Path("examples/sample_bom.csv").read_bytes())
+        b = ws.save_upload("b.csv", Path("examples/sample_bom.csv").read_bytes())
         v, lib, apr = Client(port), Client(port), Client(port)
         v.login("vic"), lib.login("lib"), apr.login("apr")
-        writes = [("/api/upload", b"a,b\n1,2\n"), ("/api/triage", {"bom": "uploads/b.csv"}),
-                  ("/api/export/dblib", {"bom": "uploads/b.csv"}), ("/api/rules/save", {"text": "x"}),
-                  ("/api/approvals/decide", {"bom": "uploads/b.csv", "part": "X", "decision": "approve"}),
+        writes = [("/api/upload", b"a,b\n1,2\n"), ("/api/triage", {"bom": b}),
+                  ("/api/export/dblib", {"bom": b}), ("/api/rules/save", {"text": "x"}),
+                  ("/api/approvals/decide", {"bom": b, "part": "X", "decision": "approve"}),
                   ("/api/team/users", {"action": "add", "username": "eve", "role": "admin", "password": "eve-password-1"})]
         for path, body in writes:
             assert v.call("POST", path, body)[0] == 403, path
-        assert TM.UserStore(ws.root).get("eve") is None and not (ws.root / "uploads" / "bom.csv").exists()
-        st, e = lib.call("POST", "/api/altium365/push", {"bom": "uploads/b.csv", "workspace": "https://w", "dry_run": False})
+        assert TM.UserStore(ws.root).get("eve") is None and ws.info()["boms"] == [b]
+        st, e = lib.call("POST", "/api/altium365/push", {"bom": b, "workspace": "https://w", "dry_run": False})
         assert st == 403 and "approver" in e["error"], e
-        st, e = apr.call("POST", "/api/altium365/push", {"bom": "uploads/b.csv", "workspace": "https://w", "dry_run": False})
+        st, e = apr.call("POST", "/api/altium365/push", {"bom": b, "workspace": "https://w", "dry_run": False})
         assert st != 403, e                                                    # allowed; fails later on NEXAR_TOKEN / plan
 
 
@@ -372,10 +372,10 @@ def test_path_containment_and_team_files_hidden():
 
 def test_jobs_are_per_user_and_librarian_is_exclusive():
     with server() as (ws, team, port):
-        ws.save_upload("b.csv", Path("examples/sample_bom.csv").read_bytes())
+        b = ws.save_upload("b.csv", Path("examples/sample_bom.csv").read_bytes())
         lib, apr, ada = Client(port), Client(port), Client(port)
         lib.login("lib"), apr.login("apr"), ada.login("ada")
-        st, j = lib.call("POST", "/api/triage", {"bom": "uploads/b.csv"})
+        st, j = lib.call("POST", "/api/triage", {"bom": b})
         assert st == 200, j
         assert apr.call("GET", f"/api/job?id={j['job']}")[0] == 404             # someone else's job
         assert ada.call("GET", f"/api/job?id={j['job']}")[0] == 200             # admins see all
@@ -383,15 +383,15 @@ def test_jobs_are_per_user_and_librarian_is_exclusive():
         assert res["state"] == "done" and res["owner"] == "lib", res
         gate = threading.Event()
         with mock.patch.object(ws, "librarian_run", lambda *a, **k: (gate.wait(10), {"done": True})[1]):
-            st, j = lib.call("POST", "/api/librarian/run", {"bom": "uploads/b.csv"})
+            st, j = lib.call("POST", "/api/librarian/run", {"bom": b})
             assert st == 200, j
-            st, e = apr.call("POST", "/api/librarian/run", {"bom": "uploads/b.csv"})
+            st, e = apr.call("POST", "/api/librarian/run", {"bom": b})
             assert st == 409 and "started by lib" in e["error"], e
-            st, e = apr.call("POST", "/api/release-check", {"bom": "uploads/b.csv"})
+            st, e = apr.call("POST", "/api/release-check", {"bom": b})
             assert st == 409 and "still running" in e["error"], e
             gate.set()
             assert wait_job(lib, j["job"])["state"] == "done"
-        st, e = apr.call("POST", "/api/release-check", {"bom": "uploads/b.csv"})
+        st, e = apr.call("POST", "/api/release-check", {"bom": b})
         assert st == 400 and "no librarian plan" in e["error"], e               # no longer blocked
 
 
@@ -523,6 +523,222 @@ def test_local_mode_unchanged():
             assert call("GET", f"/api/file?path={TM.USERS_FILE}")[0] == 404
         finally:
             srv.shutdown()
+
+
+# ------------------------------------------------------------------ security review regressions
+def test_parallel_guesses_cannot_beat_the_lockout():
+    """The lockout used to check, then hash (~50 ms), then count: N parallel guesses all passed the check, so 24
+    concurrent requests got 12 password checks against a limit of 5. Now each try is counted before the hash."""
+    with server() as (ws, team, port):
+        codes, bar = [], threading.Barrier(16)
+
+        def guess(i):
+            c = Client(port)
+            bar.wait()
+            codes.append(c.call("POST", "/api/login", {"username": "lib", "password": f"wrong-guess-{i:04d}"})[0])
+        ts = [threading.Thread(target=guess, args=(i,)) for i in range(16)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        assert codes.count(401) <= team.cfg["max_failures"] and codes.count(401) + codes.count(429) == 16, codes
+        assert Client(port).login("lib")[0] == 429                             # locked, even with the right password
+    th = TM.Throttle(max_failures=5, lockout_minutes=15, max_per_ip=3)
+    for _ in range(5):                                                          # right passwords don't use up the address
+        wait, ticket = th.attempt("ann", "10.0.0.1")
+        assert wait == 0
+        th.ok("ann", "10.0.0.1", ticket)
+    assert th.blocked("bob", "10.0.0.1") == 0
+
+
+def test_own_password_check_is_throttled():
+    """/api/account/password checked the current password with no lockout: a stolen session could guess it forever."""
+    with server() as (ws, team, port):
+        c = Client(port)
+        c.login("lib")
+        codes = [c.call("POST", "/api/account/password", {"current": f"guess-{i:04d}-x", "new": "new-password-77"})[0]
+                 for i in range(team.cfg["max_failures"] + 1)]
+        assert codes[:-1] == [403] * team.cfg["max_failures"] and codes[-1] == 429, codes
+        st, r = c.call("POST", "/api/account/password", {"current": PW["lib"], "new": "new-password-77"})
+        assert st == 429, (st, r)                                               # the right one too, until unlocked
+        assert TM.verify_password(PW["lib"], team.store.get("lib")["password"])
+
+
+def test_removed_user_session_does_not_come_back():
+    """Every user started at gen 1: remove + add again (say, to give a compromised account a fresh password) revived
+    the old, possibly stolen, session cookie."""
+    with server() as (ws, team, port):
+        thief, ada = Client(port), Client(port)
+        thief.login("apr"), ada.login("ada")
+        assert ada.call("POST", "/api/team/users", {"action": "remove", "username": "apr"})[0] == 200
+        st, r = ada.call("POST", "/api/team/users", {"action": "add", "username": "apr", "role": "approver",
+                                                     "password": "a-fresh-password-1"})
+        assert st == 200, r
+        assert thief.call("GET", "/api/info")[0] == 401
+        assert thief.call("GET", "/api/session")[1]["user"] is None
+        gens = {TM.UserStore(ws.root).add(f"u{i}", "viewer", None)["gen"] for i in range(5)}
+        assert len(gens) == 5                                                   # random start, not a counter from 1
+
+
+def test_audit_line_is_written_before_the_answer():
+    """The audit line was written after the response (the cause of the flaky
+    test_approvals_identity_from_session: the client read team_audit.jsonl before the server thread wrote it)."""
+    real = TM.audit
+
+    def slow_audit(root, entry, *a, **kw):
+        time.sleep(0.3)
+        real(root, entry, *a, **kw)
+    with server() as (ws, team, port), mock.patch.object(TM, "audit", slow_audit):
+        c = Client(port)
+        c.login("vic")
+        assert ("vic", "/api/login", 200) in [(a["user"], a["route"], a["status"]) for a in TM.read_audit(ws.root)]
+        st, _ = c.call("POST", "/api/triage", {"bom": "x.csv"})
+        assert st == 403 and ("vic", "/api/triage", 403) in [(a["user"], a["route"], a["status"]) for a in TM.read_audit(ws.root)]
+        assert Client(port).call("POST", "/api/nope", {})[0] == 404             # unknown routes are still not logged
+        assert not any(a["route"] == "/api/nope" for a in TM.read_audit(ws.root))
+
+
+def test_team_files_hidden_under_other_names():
+    """A case-insensitive disk (macOS, Windows) served TEAM_USERS.JSON, i.e. every password hash, to any viewer;
+    a hard link does the same on Linux. Team files are not readable as a BOM either."""
+    with server() as (ws, team, port):
+        c = Client(port)
+        c.login("lib")
+        users = ws.root / TM.USERS_FILE
+        os.link(users, ws.root / "TEAM_USERS.JSON")                             # what a case-insensitive disk shows
+        os.link(users, ws.root / "reports" / "copy.json")
+        (ws.root / "team_users.json.1.tmp").write_text(users.read_text())     # a writer's temp file (pid 1 in Docker)
+        (ws.root / "notes.txt").write_text("hello")
+        for path in ("TEAM_USERS.JSON", "Team_Users.Json", "reports/copy.json", "team_users.json.1.tmp", "TEAM_AUDIT.JSONL"):
+            st, r = c.call("GET", f"/api/file?path={path}")
+            assert st == 404 and b"scrypt" not in (r if isinstance(r, bytes) else b""), (path, st)
+        assert c.call("GET", "/api/file?path=notes.txt")[0] == 200
+        for path in ("team_users.json", "TEAM_USERS.JSON", "uploads/../team_audit.jsonl"):
+            st, e = c.call("POST", "/api/triage", {"bom": path})
+            assert st == 400 and "not a BOM" in e["error"], (path, st, e)
+
+
+def test_json_bodies_are_capped_before_sign_in():
+    """Anyone could make the server parse a 20 MB JSON body on /api/login (~65 MB of memory each)."""
+    with server() as (ws, team, port):
+        big = b'{"username": "x", "password": "y", "z": "' + b"a" * (S.MAX_JSON + 10) + b'"}'
+        st, e = Client(port).call("POST", "/api/login", big)
+        assert st == 400 and "too large" in e["error"], (st, e)
+        assert S.MAX_JSON < S.MAX_UPLOAD
+        c = Client(port)
+        c.login("lib")
+        st, j = c.call("POST", "/api/upload", Path("examples/sample_bom.csv").read_bytes(), {"X-Filename": "b.csv"})
+        assert st == 200, j                                                     # uploads keep their own limit
+        wait_job(c, j["job"])
+
+
+def _closed_after(port, first, trickle, limit=8.0):
+    """Send `first`, then one byte of `trickle` every 0.3 s; seconds until the server closed the connection."""
+    import socket
+    s = socket.create_connection(("127.0.0.1", port))
+    s.settimeout(0.3)
+    t0 = time.monotonic()
+    try:
+        s.sendall(first)
+        for b in itertools.cycle(trickle):
+            if time.monotonic() - t0 > limit:
+                return None
+            try:
+                s.send(bytes([b]))
+                if s.recv(4096) is not None:
+                    return time.monotonic() - t0                     # an answer or EOF: the server let go
+            except socket.timeout:
+                continue
+            except OSError:
+                return time.monotonic() - t0
+    finally:
+        s.close()
+
+
+def test_slow_clients_get_one_deadline_per_request():
+    """The 120 s timeout applied to each read: a client sending a byte now and then held its thread forever. Now the
+    headers and body must arrive within request_seconds in total."""
+    with server(overrides={"request_seconds": 1.5}) as (ws, team, port):
+        host = f"Host: 127.0.0.1:{port}\r\n".encode()
+        t = _closed_after(port, b"GET /api/session HTTP/1.1\r\n", host + b"X-Slow: " + b"a" * 100)
+        assert t is not None and t < 4, t                                       # trickled headers
+        body = b"POST /api/login HTTP/1.1\r\n" + host + b"Content-Length: 500\r\n\r\n"
+        t = _closed_after(port, body, b'{"username": "x"' + b" " * 400)
+        assert t is not None and t < 4, t                                       # trickled body
+        assert Client(port).login("vic")[0] == 200                              # normal requests unaffected
+
+
+def test_connections_per_address_are_capped():
+    import socket
+    with server(overrides={"max_connections_per_ip": 3}) as (ws, team, port):
+        idle = [socket.create_connection(("127.0.0.1", port)) for _ in range(3)]
+        time.sleep(0.3)
+        extra = socket.create_connection(("127.0.0.1", port))
+        extra.settimeout(3)
+        assert extra.recv(10) == b""                                            # closed at once, no thread
+        extra.close()
+        idle.pop().close()
+        time.sleep(0.5)
+        assert Client(port).call("GET", "/api/session")[0] == 200
+        [x.close() for x in idle]
+
+
+def test_login_burst_is_queued_not_reset():
+    """listen() backlog was 5: 60 simultaneous sign-ins (scrypt holds the GIL) got connection resets."""
+    assert S.Server.request_queue_size >= 128
+    with server(overrides={"max_failures_per_ip": 1000}) as (ws, team, port):
+        out, bar = [], threading.Barrier(60)
+
+        def go(i):
+            c = Client(port)
+            bar.wait()
+            try:
+                out.append(c.call("POST", "/api/login", {"username": f"nobody{i}", "password": "wrong-password-x"})[0])
+            except OSError as e:
+                out.append(type(e).__name__)
+        ts = [threading.Thread(target=go, args=(i,)) for i in range(60)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        assert out.count(401) == 60, sorted(map(str, out))
+
+
+def test_audit_rotates_and_reads_only_the_tail():
+    with tempfile.TemporaryDirectory() as d:
+        for i in range(60):
+            TM.audit(d, {"route": "/x", "n": i}, max_bytes=600, keep=2)
+        names = sorted(p.name for p in Path(d).iterdir())
+        assert names == [TM.AUDIT_FILE, TM.AUDIT_FILE + ".1", TM.AUDIT_FILE + ".2"], names
+        assert all(p.stat().st_size <= 600 for p in Path(d).iterdir())
+        got = [e["n"] for e in TM.read_audit(d, 1000, keep=2)]
+        assert got == sorted(got, reverse=True) and got[0] == 59 and len(got) == sum(
+            len(p.read_text().splitlines()) for p in Path(d).iterdir())                 # across the rotated files
+        assert [e["n"] for e in TM.read_audit(d, 4, keep=2)] == [59, 58, 57, 56]
+        f = Path(d, "big.jsonl")
+        f.write_text("".join(f'{{"n": {i}}}\n' for i in range(5000)))
+        assert TM._tail(f, 3, block=16) == [b'{"n": 4997}', b'{"n": 4998}', b'{"n": 4999}']
+        with mock.patch.object(TM, "AUDIT_FILE", "big.jsonl"), \
+                mock.patch.object(Path, "read_text", side_effect=AssertionError("read the whole file")):
+            assert [e["n"] for e in TM.read_audit(d, 2, keep=0)] == [4999, 4998]
+
+
+def test_unauthenticated_refusals_are_rate_limited_in_the_audit():
+    """Anyone could append audit lines without limit (one per refused POST); now per_minute per address, then a
+    count of the dropped ones on the next line."""
+    with server(overrides={"audit_refusals_per_minute": 5}) as (ws, team, port):
+        anon = Client(port)
+        for _ in range(12):
+            assert anon.call("POST", "/api/triage", {"bom": "x.csv"})[0] == 401
+        rows = [a for a in TM.read_audit(ws.root, 1000) if a["route"] == "/api/triage"]
+        assert len(rows) == 5, rows
+        vic = Client(port)
+        vic.login("vic")
+        for _ in range(8):                                                      # signed-in refusals: all logged
+            assert vic.call("POST", "/api/triage", {"bom": "x.csv"})[0] == 403
+        assert sum(a["user"] == "vic" and a["route"] == "/api/triage" for a in TM.read_audit(ws.root, 1000)) == 8
+    rl, clock = TM.RefusalLog(2), [1000.0]
+    with mock.patch.object(TM.time, "time", lambda: clock[0]):
+        assert [rl.admit("a") for _ in range(5)] == [{}, {}, None, None, None]
+        assert rl.admit("b") == {}
+        clock[0] += 61
+        assert rl.admit("a") == {"suppressed": 3} and rl.admit("a") == {}
 
 
 if __name__ == "__main__":

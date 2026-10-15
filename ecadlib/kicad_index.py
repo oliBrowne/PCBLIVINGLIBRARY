@@ -29,10 +29,10 @@ def parse_value(s, with_unit=False):
     if m:
         v, pre, u = float(f"{m.group(1)}.{m.group(3)}"), m.group(2), m.group(4)
     else:
-        m = re.match(r"^(\d+(?:\.\d+)?)\s*([pnuµμmkKMGR]?)" + _UNIT, s)
+        m = re.match(r"^(\d+(?:[.,]\d+)?)\s*([pnuµμmkKMGR]?)" + _UNIT, s)     # '4,7k' / '2,2µF': European decimals
         if not m:
             return (None, "") if with_unit else None
-        v, pre, u = float(m.group(1)), m.group(2), m.group(3)
+        v, pre, u = float(m.group(1).replace(",", ".")), m.group(2), m.group(3)
     v *= SI["r" if pre == "R" else pre]
     u = "R" if pre == "R" or (u or "").lower()[:1] in ("o", "ω") else (u or "").upper()
     return (v, u) if with_unit else v

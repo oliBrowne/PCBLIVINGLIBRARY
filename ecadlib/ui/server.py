@@ -10,17 +10,18 @@ Team mode (`--team`): one server for the whole team with sign-in (ecadlib/team.p
 team_users.json, session cookies, a CSRF token on every POST, a minimum role per route (ROUTES), approvals signed as
 the signed-in user, every write in team_audit.jsonl. A non-loopback address needs --cert/--key (built-in TLS) or an
 explicit --allow-http (behind an HTTPS reverse proxy on another host)."""
-import argparse, hmac, http.cookies, ipaddress, itertools, json, mimetypes, secrets, socket, ssl, sys, threading, \
-    traceback, webbrowser
+import argparse, contextlib, hmac, io, http.cookies, ipaddress, itertools, json, mimetypes, secrets, socket, ssl, sys, threading, \
+    os, time, traceback, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .. import team as TM
+from .. import agent_queue as AQ, team as TM
 from ..app import Workspace
 
 STATIC = Path(__file__).with_name("static")
 MAX_UPLOAD = 20 * 1024 * 1024
+MAX_JSON = 2 * 1024 * 1024                 # JSON bodies (sign-in is unauthenticated: no 20 MB parse for anyone)
 EXPECTED = (ValueError, KeyError, FileExistsError, json.JSONDecodeError, PermissionError)   # user errors: no traceback
 COOKIE = "ecadlib_session"
 
@@ -33,6 +34,7 @@ ROUTES = {
     ("POST", "/api/logout"): "viewer", ("POST", "/api/account/password"): "viewer",
     ("GET", "/api/info"): "viewer", ("GET", "/api/specs"): "viewer", ("GET", "/api/rules"): "viewer",
     ("GET", "/api/job"): "viewer", ("GET", "/api/file"): "viewer",
+    ("GET", "/api/triage/history"): "viewer", ("GET", "/api/triage/result"): "viewer",   # finished results: library data
     ("POST", "/api/footprint/preview"): "viewer", ("POST", "/api/approvals/status"): "viewer",
     ("POST", "/api/resolve/held"): "viewer",
     ("POST", "/api/upload"): "librarian", ("POST", "/api/triage"): "librarian",
@@ -43,6 +45,10 @@ ROUTES = {
     ("POST", "/api/altium365/push"): "librarian",          # dry run; a live push needs LIVE_PUSH
     ("POST", "/api/release-check"): "librarian", ("POST", "/api/dedupe"): "librarian",
     ("POST", "/api/approvals/decide"): "approver",
+    ("GET", "/api/agent/queue"): "viewer", ("GET", "/api/agent/queue/item"): "viewer",
+    ("GET", "/api/agent/queue/picture"): "viewer",             # images under <workspace>/agent/ only
+    ("POST", "/api/agent/queue/rebuild"): "librarian", ("POST", "/api/agent/queue/reject"): "librarian",
+    ("POST", "/api/agent/queue/approve"): "approver",
     ("POST", "/api/rules/propose"): "admin",               # reads any folder on the server
     ("POST", "/api/rules/save"): "admin",
     ("GET", "/api/team/users"): "admin", ("POST", "/api/team/users"): "admin", ("GET", "/api/team/audit"): "admin",
@@ -50,7 +56,7 @@ ROUTES = {
 LIVE_PUSH = "approver"
 TEAM_ONLY = {"/api/login", "/api/logout", "/api/account/password", "/api/team/users", "/api/team/audit"}
 AUDIT_KEYS = ("bom", "part", "decision", "dry_run", "workspace", "kind", "id", "merge", "overwrite", "allow", "unallow",
-              "action", "username", "role")
+              "action", "username", "role", "note")
 TEAM_HEADERS = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin",
                 "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' "
                 "'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
@@ -137,8 +143,33 @@ def _strs(v, what):
 
 
 def _team_file(ws, p):
-    """team_users.json & co. are never downloadable (password hashes, audit)."""
-    return p.parent == ws.root and p.name in TM.TEAM_FILES
+    """team_users.json & co. (password hashes, audit) are never downloadable nor readable as a BOM: also not under
+    another letter case (case-insensitive disks: macOS, Windows serve TEAM_USERS.JSON), as their temp files, or
+    through another hard link."""
+    if p.parent == ws.root and any(p.name.casefold().startswith(f.casefold()) for f in TM.TEAM_FILES):
+        return True
+    for f in TM.TEAM_FILES:
+        with contextlib.suppress(OSError):
+            if os.path.samefile(p, ws.root / f):
+                return True
+    return False
+
+
+class _DeadlineReader(io.RawIOBase):
+    """Socket reads that share one deadline for the whole request (team mode): a client trickling a byte now and
+    then would otherwise reset the per-read timeout forever and hold its thread."""
+    def __init__(self, sock, deadline):
+        self.sock, self.deadline = sock, deadline
+
+    def readable(self):
+        return True
+
+    def readinto(self, b):
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("request took too long")
+        self.sock.settimeout(left)
+        return self.sock.recv_into(b)
 
 
 def make_handler(ws: Workspace, team=None):
@@ -148,14 +179,27 @@ def make_handler(ws: Workspace, team=None):
 
     class H(BaseHTTPRequestHandler):
         server_version = "ecadlib-ui/0.1"
-        user = sess = None
+        user = sess = _audit_route = None
+        _gated = False
         if team:
             timeout = 120                                  # a stalled client can't hold a thread forever
 
         def setup(self):
             super().setup()
+            deadline = time.monotonic() + float(team.cfg["request_seconds"]) if team else None
+            if team:
+                self.connection.settimeout(min(self.timeout, team.cfg["request_seconds"]))
             if hasattr(self.request, "do_handshake"):      # TLS: handshake here, in the request's own thread
                 self.request.do_handshake()
+            if team:                                       # headers + body within request_seconds, all told
+                self.rfile.close()                         # nothing read yet; drops the makefile's socket ref
+                self.rfile = io.BufferedReader(_DeadlineReader(self.connection, deadline))
+
+        def finish(self):
+            if team:
+                with contextlib.suppress(OSError):         # the answer gets its own (per-write) timeout
+                    self.connection.settimeout(self.timeout)
+            super().finish()
 
         def log_message(self, fmt, *args):
             sys.stderr.write("ui: " + fmt % args + "\n")
@@ -163,6 +207,9 @@ def make_handler(ws: Workspace, team=None):
         def _send(self, code, body, ctype="application/json", headers=None):
             data = body if isinstance(body, bytes) else (json.dumps(body) if ctype == "application/json" else body).encode()
             self._status = code
+            if self._audit_route is not None and (self._gated or code in (401, 403)):
+                route, self._audit_route = self._audit_route, None
+                self._audit(route)                         # before the answer: logged by the time the client sees it
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
@@ -262,6 +309,7 @@ def make_handler(ws: Workspace, team=None):
                 return self._send(404, {"error": "not found"})
             self._identify()
             if role == PUBLIC:
+                self._gated = True
                 return u
             if not self.user:
                 if self.sess == "proxy":
@@ -271,12 +319,13 @@ def make_handler(ws: Workspace, team=None):
                 return self._send(403, {"error": "missing or wrong CSRF token: reload the page"})
             if TM.RANK[self.user["role"]] < TM.RANK[role]:
                 return self._send(403, {"error": f"this needs the {role} role; you are {self.user['role']}"})
+            self._gated = True
             return u
 
         def _audit(self, path):
             if team and self._status is not None:
-                TM.audit(ws.root, {"user": self.user["username"] if self.user else None, "ip": self._ip(), "route": path,
-                                   "status": self._status, **self._fields})
+                team.audit({"user": self.user["username"] if self.user else None, "ip": self._ip(), "route": path,
+                            "status": self._status, **self._fields})
 
         # ---------------------------------------------------------- request bodies
         def _bom(self, body=None, write=False):
@@ -284,19 +333,37 @@ def make_handler(ws: Workspace, team=None):
             bom = (body if body is not None else self._json()).get("bom")
             if not isinstance(bom, str) or not bom:
                 raise ValueError("no BOM given")
-            ws.inside(bom)
+            if _team_file(ws, ws.inside(bom)):
+                raise ValueError(f"{bom} is not a BOM")
             if write and jobs.running("librarian:" + bom):
                 raise FileExistsError(f"the librarian is still running on {bom}; try again when it has finished")
             return bom
 
-        def _body(self):
+        def _body(self, limit=MAX_UPLOAD):
             n = int(self.headers.get("Content-Length") or 0)
-            if n < 0 or n > MAX_UPLOAD:
+            if n < 0 or n > limit:
+                self.close_connection = True
+                if 0 < n <= MAX_UPLOAD:                     # read and drop it (in chunks, never kept), so the client
+                    try:                                    # gets the 400 instead of a reset while still sending
+                        while n > 0:
+                            got = self.rfile.read(min(n, 65536))
+                            if not got:
+                                break
+                            n -= len(got)
+                    except (OSError, ValueError):
+                        pass
                 raise ValueError("bad or too large Content-Length")
-            return self.rfile.read(n)
+            try:
+                data = self.rfile.read(n)
+            except TimeoutError:
+                self.close_connection = True
+                raise ValueError("the request took too long to arrive") from None
+            if len(data) < n:
+                raise ValueError("the request body was cut short")
+            return data
 
         def _json(self):
-            b = json.loads(self._body() or b"{}")
+            b = json.loads(self._body(MAX_JSON) or b"{}")
             if not isinstance(b, dict):
                 raise ValueError("expected a JSON object")
             self._fields = {k: b[k] for k in AUDIT_KEYS if k in b and isinstance(b[k], (str, bool, int, list))
@@ -323,7 +390,14 @@ def make_handler(ws: Workspace, team=None):
                     return self._send(200, ws.example_specs())
                 if u.path == "/api/rules":
                     return self._send(200, ws.rules_info())
-                if u.path == "/api/job":
+                if u.path == "/api/triage/history":            # every finished triage, whoever ran it
+                    return self._send(200, ws.triage_history())
+                if u.path == "/api/triage/result":
+                    try:
+                        return self._send(200, ws.triage_result(q.get("id", "")))
+                    except KeyError as e:
+                        return self._send(404, {"error": _msg(e)})
+                if u.path == "/api/job":                        # a running job (its live log): owner or admin only
                     job = jobs.get(q.get("id", ""), self.user if team else None)
                     return self._send(200, job) if job else self._send(404, {"error": "no such job"})
                 if u.path == "/api/file":                       # download anything inside the workspace
@@ -333,24 +407,38 @@ def make_handler(ws: Workspace, team=None):
                     ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
                     return self._send(200, p.read_bytes(), ctype,
                                       {"Content-Disposition": f'attachment; filename="{p.name}"'})
+                if u.path == "/api/agent/queue":
+                    return self._send(200, ws.agent_queue_list(q.get("status") or None, q.get("batch") or None))
+                if u.path == "/api/agent/queue/item":
+                    if not q.get("id"):
+                        raise ValueError("no queue item id given")
+                    try:
+                        return self._send(200, ws.agent_queue_get(q["id"]))
+                    except KeyError as e:
+                        return self._send(404, {"error": _msg(e)})
+                if u.path == "/api/agent/queue/picture":       # shown inline: images only, inside agent/ only
+                    p = ws.agent_picture(q.get("path", ""))
+                    return self._send(200, p.read_bytes(), AQ.PICTURE_TYPES[p.suffix.lower()],
+                                      {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'"}
+                                      if not team else None)
                 if team and u.path == "/api/team/users":
                     return self._send(200, self._users())
                 if team and u.path == "/api/team/audit":
-                    return self._send(200, {"entries": TM.read_audit(ws.root, 300)})
+                    return self._send(200, {"entries": TM.read_audit(ws.root, 300, int(team.cfg["audit_keep"]))})
                 return self._send(404, {"error": "not found"})
             except Exception as e:
                 return self._error(e)
 
         def do_POST(self):
+            # team mode: _send() writes the audit line (every POST that passes the gate, and 401/403 refusals)
+            self._audit_route = urlparse(self.path).path if team else None
             u = self._gate("POST")
-            if u is None:                                     # refused before the route: log 401/403 attempts
-                return self._audit(urlparse(self.path).path) if self._status in (401, 403) else None
+            if u is None:
+                return
             try:
                 return self._post(u)
             except Exception as e:
                 return self._error(e)
-            finally:
-                self._audit(u.path)
 
         def _post(self, u):
             if team and u.path in TEAM_ONLY:
@@ -363,10 +451,10 @@ def make_handler(ws: Workspace, team=None):
                 self._fields = {"file": name[:200]}
                 with write_lock:
                     rel = ws.save_upload(name, self._body())
-                return self._send(200, jobs.start(self._triage, rel, label=rel, owner=self._owner()))
+                return self._send(200, jobs.start(self._triage, rel, self._owner(), label=rel, owner=self._owner()))
             if u.path == "/api/triage":
                 bom = self._bom()
-                return self._send(200, jobs.start(self._triage, bom, label=bom, owner=self._owner()))
+                return self._send(200, jobs.start(self._triage, bom, self._owner(), label=bom, owner=self._owner()))
             if u.path == "/api/librarian/run":                    # long, network-bound: a background job
                 b = self._json()
                 bom = self._bom(b)
@@ -405,6 +493,9 @@ def make_handler(ws: Workspace, team=None):
                 "/api/dedupe": lambda b: ws.find_duplicates(self._bom(b, True), b.get("merge") is True),
                 "/api/rules/save": lambda b: ws.save_rules(_str(b.get("text"), "text"), b.get("overwrite") is True),
                 "/api/altium365/push": self._push,
+                "/api/agent/queue/approve": lambda b: self._queue(b, "approve"),
+                "/api/agent/queue/reject": lambda b: self._queue(b, "reject"),
+                "/api/agent/queue/rebuild": lambda b: self._queue(b, "rebuild"),
             }
             if u.path in actions:
                 b = self._json()
@@ -423,6 +514,23 @@ def make_handler(ws: Workspace, team=None):
                 raise Refused(f"you sign as {', '.join(roles)}, not {role}")
             return ws.approve_part(self._bom(b, True), _str(b.get("part"), "part"), b.get("decision"), TM.identity(self.user),
                                    role, comment, via="ecadlib ui (team, signed in)")
+
+        def _queue(self, b, action):
+            """Review queue decision. Team mode: identity and approval role from the session (typed names ignored);
+            rebuild on a failed / rejected item is a retry."""
+            i = _str(b.get("id"), "id")
+            note, role = _str(b.get("note"), "note", True) or "", _str(b.get("role"), "role", True)
+            expect = _str(b.get("expect"), "expect", True)      # the build the person looked at
+            if action == "rebuild" and ws.agent_queue_get(i)["item"]["status"] in ("failed", "rejected"):
+                action = "retry"
+            if not team:
+                return ws.agent_queue_decide(i, action, _str(b.get("user"), "user"), role, note, expect=expect)
+            roles = TM.sign_roles(self.user)
+            role = (role or "").strip() or roles[0]
+            if role not in roles:
+                raise Refused(f"you sign as {', '.join(roles)}, not {role}")
+            return ws.agent_queue_decide(i, action, TM.identity(self.user), role, note, via="ecadlib ui (team, signed in)",
+                                         aliases=(self.user["username"], self.user.get("email") or ""), expect=expect)
 
         def _push(self, b):
             dry = b.get("dry_run", True) is not False
@@ -454,8 +562,15 @@ def make_handler(ws: Workspace, team=None):
                     team.sessions.drop(self._cookie())
                 return self._send(200, {"ok": True}, headers={"Set-Cookie": self._set_cookie("", 0)})
             if path == "/api/account/password":
-                if self.sess == "proxy" or not TM.verify_password(b.get("current"), self.user.get("password")):
+                if self.sess == "proxy":
+                    raise PermissionError("signed in through the SSO proxy: change the password there")
+                name, ip = self.user["username"], self._ip()     # same lockout as sign-in: no unlimited guessing
+                wait, ticket = team.throttle.attempt(name, ip)
+                if wait:
+                    return self._too_many(wait)
+                if not TM.verify_password(b.get("current"), self.user.get("password")):
                     raise PermissionError("current password is wrong")
+                team.throttle.ok(name, ip, ticket)
                 team.store.reset_password(self.user["username"], b.get("new"))   # ends every other session
                 self.user = team.store.get(self.user["username"])
                 return self._new_session()
@@ -478,6 +593,10 @@ def make_handler(ws: Workspace, team=None):
                 raise ValueError("action must be add, set-role, reset-password, remove or unlock")
             return self._send(200, self._users())
 
+        def _too_many(self, wait):
+            return self._send(429, {"error": f"too many failed sign-ins: try again in {max(1, wait // 60)} minute(s), "
+                                             "or ask an admin to unlock you"}, headers={"Retry-After": str(wait)})
+
         def _new_session(self):
             tok, s = team.sessions.create(self.user["username"], int(self.user.get("gen") or 1))
             self.sess = s
@@ -486,15 +605,13 @@ def make_handler(ws: Workspace, team=None):
         def _login(self, b):
             name, pw, ip = str(b.get("username") or "").strip().lower()[:64], b.get("password"), self._ip()
             self._fields = {"username": name}
-            wait = team.throttle.blocked(name, ip)
+            wait, ticket = team.throttle.attempt(name, ip)       # counted before the check: parallel tries too
             if wait:
-                return self._send(429, {"error": f"too many failed sign-ins: try again in {max(1, wait // 60)} minute(s), "
-                                                 "or ask an admin to unlock you"}, headers={"Retry-After": str(wait)})
+                return self._too_many(wait)
             u = team.store.get(name)
             if not TM.verify_password(pw, u and u.get("password")):
-                team.throttle.fail(name, ip)
                 return self._send(401, {"error": "wrong user name or password"})
-            team.throttle.ok(name)
+            team.throttle.ok(name, ip, ticket)
             self.user = u
             return self._new_session()
 
@@ -512,8 +629,8 @@ def make_handler(ws: Workspace, team=None):
             return ws.propose_rules(paths, a365, choices, progress)
 
         @staticmethod
-        def _triage(bom, progress=None):
-            return ws.triage(bom, progress, lock=write_lock)       # lock only while the reports are written
+        def _triage(bom, user, progress=None):
+            return ws.triage(bom, progress, lock=write_lock, user=user)   # lock only while the reports are written
 
         def _error(self, e):
             if isinstance(e, Refused):
@@ -529,6 +646,39 @@ def make_handler(ws: Workspace, team=None):
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     tls = False
+    team = None
+    request_queue_size = 128                               # a burst of sign-ins must queue, not get connection resets
+
+    def __init__(self, *a, **kw):
+        self.per_ip, self.per_ip_lock = {}, threading.Lock()
+        super().__init__(*a, **kw)
+
+    def _limited(self, ip):
+        return self.team is not None and int(self.team.cfg["max_connections_per_ip"]) > 0 and \
+            ip not in self.team.cfg["trusted_proxies"]
+
+    def process_request(self, request, client_address):
+        """Team mode: at most max_connections_per_ip open connections per address (slow clients can't take every
+        thread); more are closed at once. A trusted proxy (Caddy) is exempt: it carries everyone."""
+        ip = client_address[0]
+        if self._limited(ip):
+            with self.per_ip_lock:
+                if self.per_ip.get(ip, 0) >= int(self.team.cfg["max_connections_per_ip"]):
+                    self.shutdown_request(request)
+                    return
+                self.per_ip[ip] = self.per_ip.get(ip, 0) + 1
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            ip = client_address[0]
+            if self._limited(ip):
+                with self.per_ip_lock:
+                    self.per_ip[ip] = self.per_ip.get(ip, 1) - 1
+                    if self.per_ip[ip] <= 0:
+                        del self.per_ip[ip]
 
     def handle_error(self, request, client_address):
         e = sys.exc_info()[1]
@@ -540,6 +690,7 @@ class Server(ThreadingHTTPServer):
 def make_server(ws, host="127.0.0.1", port=0, team=None, cert=None, key=None):
     """The UI server (not started). cert/key: serve HTTPS with the standard library's ssl (TLS 1.2+)."""
     srv = Server((host, port), make_handler(ws, team))
+    srv.team = team
     if cert:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
