@@ -11,6 +11,7 @@ a minor release may change command-line options and file formats.
 
 - Library agent watch step (`ecadlib agent-watch [--dry-run]`, MCP `agent_watch_scan`, `[agent.watch]` rules): new, changed and removed parts in watched BOM files, folders (including web UI uploads), Altium projects and Altium 365 projects (Nexar queries schema-checked, not yet run live), with state in `agent/watch_state.json`.
 - Library agent (`ecadlib agent run|serve|status|approve|reject|push`): watches projects, builds and proves new parts through the librarian, opens one GitHub PR per review batch with before/after pictures (or writes the batch to `agent/batches/` without a token or git), pushes approved parts to Altium 365, turns upkeep findings into queue items; `[agent]` rules (off by default) and an optional `agent` Docker Compose profile.
+- Library agent review queue (`ecadlib/agent_queue.py`, `ecadlib queue`): a durable, locked work-item store under `<workspace>/agent/queue/` with a state machine, history, batches and per-part dedupe. A **Review queue** page in the web UI shows the change, the build, the proof findings and before/after pictures, with Approve (approver role), Reject and Rebuild (librarian role); approvals are also recorded through `approvals.py`. MCP tools: `agent_queue_list`, `agent_queue_get`, `agent_queue_decide`.
 
 ## [0.3.0] - 2026-10-14
 
