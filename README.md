@@ -571,6 +571,17 @@ What gets written:
 * Not written by the generator path: through-hole pads and 3D bodies (the KiCad import in section 6 adds through-hole pads, arcs, keep-outs and 3D bodies) and `PrimitiveGuids`.
 * Text: Altium is assumed to recalculate the cached text size (exact only for `.Designator`/`.Comment`). Not checked in Altium: signal-flow arrow direction, the falling-edge clock written as clock plus active-low input, and how display modes behave when switching views. Names over 31 characters are truncated as CFB storage names, and `SectionKeys` holds the mapping in the same way Altium does.
 
+**Checked against real Altium libraries (2026-10-15, `tests/test_altium_interop.py`):** 553 Altium-saved `.PcbLib`/`.SchLib` files from the
+Celestial Altium Library (github.com/issus/altium-library; its license forbids redistribution, so none is committed) read with our reader
+and with `pyaltiumlib` 0.7.1: 3367 pads agree field for field (position, size, hole, slot, rotation, plating, mask/paste modes), every
+record count matches the files' own `Header` counts, and 3765 tracks/arcs/regions/texts agree (region vertices to 0.01 mil). The only disagreements are pyaltiumlib's
+(it swallows the record after a 3D body, so regions after a body go missing there). Byte statistics of 1139 real SMD pads show our 202-byte
+pad blocks differ only where we set manual paste/mask expansion. Real files keep the STEP checksum signed in `Library/Models` and unsigned
+in the body (as we write it), store Mechanical 17-32 as layer byte 72 plus a v7 layer id (the reader now decodes it to Altium's id 66+n;
+the writer and `[layers]` still stop at Mechanical 16), and put text cp1252 can't hold in a `|%UTF8%KEY=...||` twin before `|KEY=?`
+(read, and now written by the SchLib writer; binary pin names stay cp1252). Our files read back the same through pyaltiumlib
+(test skipped when it is not installed). Nothing here was opened in Altium Designer.
+
 ## 6. `kicad_import.py`: KiCad library parts to Altium
 
 ```

@@ -28,7 +28,7 @@ workspace snapshot as base, and push updates them (never re-releases them).
 `upstream check-a365 --state` and `dedupe` read ({name: {revision, lifecycle, symbols, footprints, parameters, ...}}).
 Report: <plan dir>/a365_sync.md and .csv (-o to change). Exit codes: 0 nothing to do, 1 differences (status) or
 unresolved conflicts (pull), 2 error. Nexar needs NEXAR_TOKEN (scopes openid, user.access, design.domain)."""
-import argparse, copy, datetime, io, json, os, sys, zipfile
+import argparse, copy, datetime, io, json, os, re, sys, zipfile
 from pathlib import Path
 
 try:
@@ -443,7 +443,11 @@ def fetch_models(item, node, base, client, log=print):
             continue
         if not m.get("dataDownloadUrl"):
             errs.append(f"{kind} {m['name']}: no dataDownloadUrl"); continue
-        f = Path(base) / "a365_models" / ext[1:] / f"{AL.file_stem(m['name'])}{ext}"
+        try:                                  # a name cp1252 can't hold (Altium 365 allows it) still gets a file name
+            stem = AL.file_stem(m["name"])
+        except ValueError:
+            stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", m["name"]).rstrip(". ") or "_"
+        f = Path(base) / "a365_models" / ext[1:] / f"{stem}{ext}"
         try:
             data = _unpack(client.download(m["dataDownloadUrl"]), ext)
             f.parent.mkdir(parents=True, exist_ok=True)
