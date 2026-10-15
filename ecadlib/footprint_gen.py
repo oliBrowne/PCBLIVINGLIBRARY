@@ -22,26 +22,40 @@ Courtyard = bounding box of (pads U body) + courtyard excess (density dependent)
 Output targets KiCad file format version 20221018 (KiCad 7) which KiCad 8/9 load
 natively and upgrade on save. (KiCad's own library is now at 20260206 / KiCad 10.)
 """
-import argparse, json, math, sys
+import argparse, json, math, re, sys
 from pathlib import Path
 
-# IPC-7351B fillet goals (toe, heel, side, courtyard excess) per density A/B/C.
+# IPC-7351B fillet goals per density A/B/C (most/nominal/least):
+#   (Jz, Jg, Js, courtyard excess, round-off)
+# Jz is the goal at the outer end of the land (sets Z), Jg at the inner end (sets G), Js at the side (sets X).
+# For most families Jz is the toe and Jg the heel; for inward-L molded parts it is the other way round.
+# Values are the ones KiCad builds its library with (kicad-footprint-generator src/kilibs/config/ipc_configs/
+# ipc_7351b.yaml and ipc7351B_2terminal.yaml); docs/footprint-rules.md lists the sources per family.
 FILLETS = {
-    # Table 3-5: rectangular/square-end chip components >= 1608 (0603)
-    "chip": {"A": (0.55, 0.00, 0.05, 0.50), "B": (0.35, 0.00, 0.00, 0.25), "C": (0.15, 0.00, -0.05, 0.10)},
-    # Table 3-6: chip components < 1608 (0402, 0201). Values per IPC-7351B as commonly
-    # reproduced; verify against the standard before production use.
-    "chip_small": {"A": (0.20, 0.00, 0.05, 0.20), "B": (0.10, 0.00, 0.00, 0.15), "C": (0.05, 0.00, 0.00, 0.10)},
-    # Table 3-2: gull-wing leads, pitch > 0.625 mm
-    "gullwing": {"A": (0.55, 0.45, 0.05, 0.50), "B": (0.35, 0.35, 0.03, 0.25), "C": (0.15, 0.25, 0.01, 0.10)},
-    # Table 3-2: gull-wing leads, pitch <= 0.625 mm (side fillet goes negative)
-    "gullwing_fine": {"A": (0.55, 0.45, 0.01, 0.50), "B": (0.35, 0.35, -0.02, 0.25), "C": (0.15, 0.25, -0.04, 0.10)},
-    # Table 3-15: QFN / bottom-only terminations (no heel fillet, negative side)
-    "qfn": {"A": (0.40, 0.00, -0.04, 0.50), "B": (0.30, 0.00, -0.04, 0.25), "C": (0.20, 0.00, -0.04, 0.10)},
+    # Table 3-5: rectangular end-cap chips >= 0603 (1608)
+    "chip": {"A": (0.55, 0.00, 0.05, 0.50, 0.05), "B": (0.35, 0.00, 0.00, 0.25, 0.05), "C": (0.15, 0.00, -0.05, 0.10, 0.05)},
+    # Table 3-6: chips < 0603 (0402, 0201) - smaller toe, 0.15 courtyard, 0.02 round-off
+    "chip_small": {"A": (0.30, 0.00, 0.05, 0.20, 0.02), "B": (0.20, 0.00, 0.00, 0.15, 0.02), "C": (0.10, 0.00, -0.05, 0.10, 0.02)},
+    # Table 3-2: gull-wing, pitch >= 0.625 mm (SOIC, SOT-23, SOT-223, TSSOP-0.65)
+    "gullwing": {"A": (0.55, 0.45, 0.05, 0.50, 0.05), "B": (0.35, 0.35, 0.03, 0.25, 0.05), "C": (0.15, 0.25, 0.01, 0.10, 0.05)},
+    # Table 3-3: gull-wing, pitch < 0.625 mm (side fillet goes negative)
+    "gullwing_fine": {"A": (0.55, 0.45, 0.01, 0.50, 0.05), "B": (0.35, 0.35, -0.02, 0.25, 0.05), "C": (0.15, 0.25, -0.04, 0.10, 0.05)},
+    # Table 3-15: QFN / DFN / SON with a toe fillet (no heel, negative side)
+    "qfn": {"A": (0.40, 0.00, -0.04, 0.50, 0.05), "B": (0.30, 0.00, -0.04, 0.25, 0.05), "C": (0.20, 0.00, -0.04, 0.10, 0.05)},
+    # Table 3-13: inward-L / molded body (tantalum, SMA/SMB/SMC, SOD-123F): big fillet at the outer
+    # (heel) end, small at the inner (toe) end under the body
+    "molded": {"A": (0.80, 0.25, 0.01, 0.50, 0.05), "B": (0.50, 0.15, -0.05, 0.25, 0.05), "C": (0.20, 0.07, -0.10, 0.10, 0.05)},
+    # IPC-7351 (2005) Table 3-7: MELF / MiniMELF cylindrical end caps (no 7351B table in KiCad)
+    "melf": {"A": (0.60, 0.20, 0.10, 0.50, 0.05), "B": (0.40, 0.10, 0.05, 0.25, 0.05), "C": (0.20, 0.02, 0.01, 0.10, 0.05)},
+    # IPC-7352 flat lead (outward flat ribbon leads)
+    "flat": {"A": (0.30, 0.00, 0.05, 0.20, 0.05), "B": (0.20, 0.00, 0.00, 0.15, 0.05), "C": (0.10, 0.00, 0.00, 0.10, 0.05)},
 }
-FAB_TOL, PLACE_TOL = 0.05, 0.025      # IPC-7351B default F and P
+FAB_TOL, PLACE_TOL = 0.10, 0.05       # F and P as KiCad's generator uses them
 MIN_PAD_GAP = 0.2                      # minimum copper gap between adjacent pads (solder-mask web)
+MIN_EP_CLEAR = 0.2                     # exposed pad to signal pad (KLC F6.3); also KiCad's minimum heel gap / 2
 SILK_W, FAB_W, CRT_W, SILK_PAD_CLEAR = 0.12, 0.10, 0.05, 0.2
+SILK_CLEAR_SMALL, SILK_MIN_LEN = 0.1, 0.2   # KiCad falls back to 0.1 clearance when 0.2 leaves no line >= 0.2 long
+SILK_FAB_OFFSET = 0.11                 # silk outline sits this far outside the fab body (KiCad generator default)
 
 
 # ---------------------------------------------------------------- dimensions & IPC math
@@ -65,18 +79,30 @@ def rdn(x, g=0.01):
     return math.floor(round(x / g, 6)) * g
 
 
-def ipc_land(L, T, W, fillet, F=FAB_TOL, P=PLACE_TOL):
-    """L,T,W = (min,nom,max) tuples. Returns dict(Z,G,X,pad_len,pad_ctr) - see module docstring."""
-    jt, jh, js, _ = fillet
-    CL, CT, CW = L[2] - L[0], T[2] - T[0], W[2] - W[0]
-    smin, smax = L[0] - 2 * T[2], L[2] - 2 * T[0]
-    cs = math.sqrt(CL ** 2 + 2 * CT ** 2)              # RMS tolerance of S
-    adj = ((smax - smin) - cs) / 2
-    smin, smax = smin + adj, smax - adj
-    Z = rup(L[0] + 2 * jt + math.sqrt(CL ** 2 + F ** 2 + P ** 2))
-    G = rdn(smax - 2 * jh - math.sqrt(cs ** 2 + F ** 2 + P ** 2))
-    X = rup(W[0] + 2 * js + math.sqrt(CW ** 2 + F ** 2 + P ** 2))
-    G = max(G, 0.0)
+def rnd(x, g):
+    """Round to the nearest multiple of g, the way KiCad's generator does (Python round)."""
+    return round(round(x / g) * g, 4)
+
+
+def ipc_land(L, T, W, fillet, F=FAB_TOL, P=PLACE_TOL, S=None, min_gap=None):
+    """L,T,W(,S) = (min,nom,max) tuples. Returns dict(Z,G,X,pad_len,pad_ctr) - see module docstring.
+    S, when the drawing gives the inner span directly, is used as is (no RMS adjustment).
+    min_gap: the heel gap G is never allowed below this (EP clearance; KiCad's gull-wing 0.4 mm floor)."""
+    jz, jg, js, _, base = fillet
+    CL, CW = L[2] - L[0], W[2] - W[0]
+    if S is not None:
+        smin, smax = S[0], S[2]
+        cs = smax - smin
+    else:
+        CT = T[2] - T[0]
+        smin, smax = L[0] - 2 * T[2], L[2] - 2 * T[0]
+        cs = math.sqrt(CL ** 2 + 2 * CT ** 2)              # RMS tolerance of S
+        adj = ((smax - smin) - cs) / 2
+        smin, smax = smin + adj, smax - adj
+    Z = rnd(L[0] + 2 * jz + math.sqrt(CL ** 2 + F ** 2 + P ** 2), base)
+    G = rnd(smax - 2 * jg - math.sqrt(cs ** 2 + F ** 2 + P ** 2), base)
+    X = rnd(W[0] + 2 * js + math.sqrt(CW ** 2 + F ** 2 + P ** 2), base)
+    G = max(G, 0.0, min_gap or 0.0)
     return {"Z": Z, "G": G, "X": X, "pad_len": round((Z - G) / 2, 4), "pad_ctr": round((Z + G) / 4, 4),
             "Smin": smin, "Smax": smax}
 
@@ -88,7 +114,8 @@ def n(x):
 
 
 def q(s):
-    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    s = re.sub(r"\s+", " ", str(s)).strip()          # one line: KiCad's lexer doesn't take raw newlines in strings
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def line(x1, y1, x2, y2, layer, w):
@@ -117,135 +144,321 @@ def pad(num, x, y, w, h, shape="roundrect", layers=("F.Cu", "F.Paste", "F.Mask")
 
 
 # ---------------------------------------------------------------- package builders
+def family(spec):
+    """IPC-7351B lead family (FILLETS key) for a spec: `lead_type` overrides the default per package_type."""
+    t = spec["package_type"]
+    lt = spec.get("lead_type")
+    if t == "chip":
+        if lt in ("molded", "melf", "flat"):
+            return lt
+        return "chip_small" if dim(spec["body_length"])[1] < 1.55 else "chip"
+    if t == "molded":
+        return lt if lt in ("melf", "flat") else "molded"
+    if lt and (t in ("qfn", "qfp") or (t == "gullwing" and lt != "flat")):
+        raise ValueError(f"lead_type {lt!r} doesn't apply to a {t} package"
+                         + (" (only \"flat\" does)" if t == "gullwing" else ""))
+    if t == "gullwing":
+        if lt == "flat":
+            return "flat"
+        pitch = spec.get("pitch") or _min_pitch(spec)
+        return "gullwing" if pitch is None or pitch >= 0.625 else "gullwing_fine"
+    if t == "qfn":
+        return "qfn"
+    if t == "qfp":
+        return "gullwing" if spec["pitch"] >= 0.625 else "gullwing_fine"
+    raise ValueError(f"unsupported package_type {t}")
+
+
+def _min_pitch(spec):
+    pos = spec.get("pin_positions") or []
+    best = None
+    for side in ("L", "R"):
+        ys = sorted(p["offset"] for p in pos if p["side"] == side)
+        for a, b in zip(ys, ys[1:]):
+            best = b - a if best is None else min(best, b - a)
+    return best
+
+
+def _two_terminal(spec, fil):
+    L = dim(spec["body_length"])
+    W = dim(spec.get("terminal_width") or spec["body_width"])
+    r = ipc_land(L, dim(spec.get("terminal_length")), W, fil, S=dim(spec.get("inner_span")))
+    pads = [("1", -r["pad_ctr"], 0, r["pad_len"], r["X"]), ("2", r["pad_ctr"], 0, r["pad_len"], r["X"])]
+    return pads, (L[1] / 2, dim(spec["body_width"])[1] / 2), {k: r[k] for k in ("Z", "G", "X")}
+
+
+def _gullwing(spec, fil):
+    T, bw, span = dim(spec["terminal_length"]), dim(spec["terminal_width"]), dim(spec["lead_span"])
+    ep = spec.get("exposed_pad")
+    min_gap = (dim(ep["length"])[1] if ep else 0) + 2 * MIN_EP_CLEAR    # KiCad: G >= EP + 0.4, so >= 0.4 without EP
+    r = ipc_land(span, T, bw, fil, min_gap=min_gap)
+    pos = spec.get("pin_positions")
+    if not pos:                                               # standard dual row: 1..n/2 down the left, then up the right
+        e, per = spec["pitch"], spec["pin_count"] // 2
+        pos = [{"number": str(i + 1), "side": "L", "offset": (i - (per - 1) / 2) * e} for i in range(per)]
+        pos += [{"number": str(per + i + 1), "side": "R", "offset": ((per - 1) / 2 - i) * e} for i in range(per)]
+    pitch = _min_pitch({"pin_positions": pos})
+    X = min(r["X"], rdn(pitch - MIN_PAD_GAP)) if pitch else r["X"]
+    pads = [(p["number"], (-1 if p["side"] == "L" else 1) * r["pad_ctr"], p["offset"], r["pad_len"], X) for p in pos]
+    rep = {"Z": r["Z"], "G": r["G"], "X": X, "X_unclamped": r["X"]}
+    tab = spec.get("tab")
+    if tab:                                                   # SOT-223 / DPAK style wide tab on one side
+        tr = ipc_land(span, dim(tab.get("length") or spec["terminal_length"]), dim(tab["width"]), fil, min_gap=min_gap)
+        sgn = -1 if tab.get("side", "R") == "L" else 1
+        pads.append((str(tab["number"]), sgn * tr["pad_ctr"], tab.get("offset", 0.0), tr["pad_len"], tr["X"]))
+        rep["tab"] = {"Z": tr["Z"], "G": tr["G"], "X": tr["X"]}
+    body_x, body_y = dim(spec["body_width"])[1] / 2, dim(spec["body_length"])[1] / 2   # E1 across, D along the rows
+    return pads, (body_x, body_y), rep
+
+
+def _qfn(spec, fil):
+    """Quad (or dual) rows: QFN/DFN toes sit at the body edge; QFP toes at the lead span."""
+    npins, e = spec["pin_count"], spec["pitch"]
+    body_x, body_y, T, bw = dim(spec["body_length"]), dim(spec["body_width"]), dim(spec["terminal_length"]), dim(spec["terminal_width"])
+    nlr = spec.get("pins_left_right", npins // 4)
+    ntb = spec.get("pins_top_bottom", (npins - 2 * nlr) // 2)
+    span_x = dim(spec["lead_span"]) if spec.get("lead_span") else body_x
+    span_y = dim(spec.get("lead_span_y") or spec["lead_span"]) if spec.get("lead_span") else body_y
+    ep = spec.get("exposed_pad")                              # heels pulled back to keep MIN_EP_CLEAR to the EP (KLC F6.3)
+    gx = dim(ep["length"])[1] + 2 * MIN_EP_CLEAR if ep else None
+    gy = dim(ep["width"])[1] + 2 * MIN_EP_CLEAR if ep else None
+    rx = ipc_land(span_x, T, bw, fil, min_gap=gx)             # left/right pads
+    ry = ipc_land(span_y, T, bw, fil, min_gap=gy)             # top/bottom pads
+    X = min(rx["X"], rdn(e - MIN_PAD_GAP))
+    pads, k = [], 1
+    for i in range(nlr):                                      # left, top->bottom
+        pads.append((str(k), -rx["pad_ctr"], (i - (nlr - 1) / 2) * e, rx["pad_len"], X)); k += 1
+    for i in range(ntb):                                      # bottom, left->right
+        pads.append((str(k), (i - (ntb - 1) / 2) * e, ry["pad_ctr"], X, ry["pad_len"])); k += 1
+    for i in range(nlr):                                      # right, bottom->top
+        pads.append((str(k), rx["pad_ctr"], ((nlr - 1) / 2 - i) * e, rx["pad_len"], X)); k += 1
+    for i in range(ntb):                                      # top, right->left
+        pads.append((str(k), ((ntb - 1) / 2 - i) * e, -ry["pad_ctr"], X, ry["pad_len"])); k += 1
+    return pads, (body_x[1] / 2, body_y[1] / 2), {"Z": rx["Z"], "G": rx["G"], "X": X, "Zy": ry["Z"], "Gy": ry["G"]}
+
+
+def corner_r(num, w, h):
+    """Corner radius of a pad as pad() draws it: roundrect 25 % of the short side, capped at 0.25; EP is a plain rect."""
+    return 0.0 if num is None else min(0.25 * min(w, h), 0.25)
+
+
+def _clip(seg, pads, c, min_len=SILK_MIN_LEN):
+    """Cut an axis-aligned silk segment wherever its centre line comes within c of a pad's real (rounded)
+    outline, as KiCad measures it. pads as (num, x, y, w, h). Pieces shorter than min_len are dropped."""
+    (x1, y1), (x2, y2) = seg
+    horiz = abs(y1 - y2) < 1e-9
+    a, b = (min(x1, x2), max(x1, x2)) if horiz else (min(y1, y2), max(y1, y2))
+    keep = [(a, b)]
+    for num, px, py, w, h in pads:
+        r = corner_r(num, w, h)
+        along, across = (px, py) if horiz else (py, px)
+        half_along, half_across = (w / 2, h / 2) if horiz else (h / 2, w / 2)
+        e = max(abs((y1 if horiz else x1) - across) - (half_across - r), 0)   # distance past the straight edge
+        if e >= r + c:
+            continue
+        half = half_along - r + math.sqrt((r + c) ** 2 - e ** 2)
+        lo, hi = along - half, along + half
+        keep = [part for s, e_ in keep for part in ((s, min(e_, lo)), (max(s, hi), e_)) if part[1] - part[0] > 1e-6]
+    keep = [(s, e) for s, e in keep if e - s >= min_len - 1e-6]
+    return [((round(s, 4), y1), (round(e, 4), y1)) if horiz else ((x1, round(s, 4)), (x1, round(e, 4))) for s, e in keep]
+
+
+def _apply_land(spec, pads):
+    """Replace the IPC-computed signal pads with the datasheet's recommended land (the tab keeps its IPC size)."""
+    land = spec["land"]
+    ll, lw, lc = land["pad_length"], land["pad_width"], land["pad_center"]
+    lcy = land.get("pad_center_y", lc)
+    n_sig = len(pads) - (1 if spec.get("tab") else 0)
+    out = []
+    for i, (num, x, y, w, h) in enumerate(pads):
+        if i >= n_sig:
+            out.append((num, x, y, w, h))
+        elif abs(x) >= abs(y) or w >= h:                      # left/right row: length runs along X
+            out.append((num, math.copysign(lc, x), y, ll, lw))
+        else:                                                 # top/bottom row (QFN/QFP)
+            out.append((num, x, math.copysign(lcy, y), lw, ll))
+    return out
+
+
+def sanity(spec):
+    """Catch the usual datasheet-reading mistakes before they turn into a plausible-looking but wrong footprint.
+    Returns a list of plain-language problems (empty when the numbers hang together)."""
+    errs, t = [], spec["package_type"]
+    nom = lambda k: dim(spec[k])[1] if spec.get(k) is not None else None
+    for k in ("body_length", "body_width", "lead_span", "terminal_length", "terminal_width", "inner_span", "pitch"):
+        v = spec.get(k)
+        lo, _, hi = dim(v) if v is not None and k != "pitch" else (v, v, v)
+        if v is None:
+            continue
+        if lo > hi:
+            errs.append(f"{k}: min {lo} is bigger than max {hi}")
+        if hi > 60:
+            errs.append(f"{k} = {hi}: that looks like mils or 0.01 mm units; the spec is in millimetres")
+    if errs:
+        return errs
+    L, W, T = nom("body_length"), nom("body_width"), nom("terminal_length")
+    if t in ("chip", "molded") and T and not spec.get("inner_span") and 2 * dim(spec["terminal_length"])[0] >= dim(spec["body_length"])[2]:
+        errs.append(f"terminal_length {T} is half the body length or more: it should be one end-cap/foot, not the whole part")
+    if t in ("gullwing", "qfp"):
+        span = nom("lead_span")
+        if span is not None and span < W + 0.1:                     # leads must stick out past the plastic
+            errs.append(f"lead_span {span} is not bigger than body_width {round(W, 3)}: lead_span is the tip-to-tip size "
+                        "across the leads (E), body_width the plastic (E1); are they swapped?")
+        if span is not None and T and T >= span / 2:
+            errs.append(f"terminal_length {T} is half the lead span or more")
+    n = spec.get("pin_count")
+    if t == "gullwing" and n and not spec.get("pin_positions") and n % 2:
+        errs.append(f"pin_count {n} is odd: a dual-row part needs an even count, or list the pads in pin_positions "
+                    "(as for SOT-23)")
+    if t in ("qfn", "qfp") and n:
+        nlr = spec.get("pins_left_right", n // 4)
+        ntb = spec.get("pins_top_bottom", (n - 2 * nlr) // 2)
+        if 2 * nlr + 2 * ntb != n:
+            errs.append(f"pin_count {n} doesn't equal 2 x {nlr} (left/right) + 2 x {ntb} (top/bottom); "
+                        "set pins_left_right / pins_top_bottom")
+    if t in ("gullwing", "qfp", "qfn") and spec.get("pitch") and spec.get("pin_count") and not spec.get("pin_positions"):
+        n = spec["pin_count"]
+        per = n // 2 if t == "gullwing" else spec.get("pins_left_right", n // 4)
+        row = (per - 1) * spec["pitch"]
+        if per > 1 and row >= (L if t == "gullwing" else max(L, W)):
+            errs.append(f"{per} pins at {spec['pitch']} mm pitch need {row:.2f} mm, more than the {L} mm body: check pitch and pin_count")
+        tw = spec.get("terminal_width")
+        if tw and dim(tw)[0] >= spec["pitch"]:
+            errs.append(f"terminal_width {dim(tw)[0]} is not smaller than the {spec['pitch']} mm pitch")
+    if t == "qfn" and T and T >= min(L, W) / 2:
+        errs.append(f"terminal_length {T} reaches the middle of the {L} x {W} body")
+    ep = spec.get("exposed_pad")
+    if ep and (dim(ep["length"])[1] >= L or dim(ep["width"])[1] >= W):
+        errs.append("the exposed pad is as big as the body: check its length/width")
+    elif ep and t == "qfn" and T:
+        tmin = dim(spec["terminal_length"])[0]
+        tb = spec.get("pins_top_bottom", 1)
+        if dim(ep["length"])[1] + 2 * tmin > dim(spec["body_length"])[2] or (
+                tb and dim(ep["width"])[1] + 2 * tmin > dim(spec["body_width"])[2]):
+            errs.append("the exposed pad would overlap the terminals: check its size against the body and terminal_length")
+    return errs
+
+
 def build(spec, density=None):
     """Return (kicad_mod_text, report_dict)."""
+    problems = sanity(spec)
+    if problems:
+        raise ValueError("the package numbers don't add up: " + "; ".join(problems))
     density = density or spec.get("density", "B")
     t = spec["package_type"]
-    body_x, body_y = dim(spec["body_length"]), dim(spec["body_width"])
-    T = dim(spec["terminal_length"])
-    pads, rep = [], {"name": spec["name"], "type": t, "density": density}
-
-    if t == "chip":
-        fam = "chip_small" if body_x[1] < 1.55 else "chip"
-        fil = FILLETS[fam][density]
-        r = ipc_land(body_x, T, body_y, fil)
-        pads = [("1", -r["pad_ctr"], 0, r["pad_len"], r["X"]), ("2", r["pad_ctr"], 0, r["pad_len"], r["X"])]
-        bx, by = body_x[1] / 2, body_y[1] / 2      # fab body = nominal L x W
-        rep.update(ipc_family=fam, **{k: r[k] for k in ("Z", "G", "X")})
-    elif t in ("gullwing", "qfn"):
-        npins, e = spec["pin_count"], spec["pitch"]
-        bw = dim(spec["terminal_width"])
-        if t == "gullwing":
-            fam = "gullwing" if e > 0.625 else "gullwing_fine"
-            fil = FILLETS[fam][density]
-            r = ipc_land(dim(spec["lead_span"]), T, bw, fil)
-            X = min(r["X"], rdn(e - MIN_PAD_GAP))
-            per = npins // 2
-            for i in range(per):                                   # left: 1..n/2 top->bottom
-                y = (i - (per - 1) / 2) * e
-                pads.append((str(i + 1), -r["pad_ctr"], y, r["pad_len"], X))
-            for i in range(per):                                   # right: bottom->top
-                y = ((per - 1) / 2 - i) * e
-                pads.append((str(per + i + 1), r["pad_ctr"], y, r["pad_len"], X))
-            bx, by = body_y[1] / 2, body_x[1] / 2                  # body_width=E1 (X), body_length=D (Y)
-            rep.update(ipc_family=fam, Z=r["Z"], G=r["G"], X=X, X_unclamped=r["X"])
-        else:
-            fam = "qfn"
-            fil = FILLETS[fam][density]
-            nlr = spec.get("pins_left_right", npins // 4)
-            ntb = spec.get("pins_top_bottom", (npins - 2 * nlr) // 2)
-            rx = ipc_land(body_x, T, bw, fil)                       # left/right pads (toe at x=+-D/2)
-            ry = ipc_land(body_y, T, bw, fil)                       # top/bottom pads
-            X = min(rx["X"], rdn(e - MIN_PAD_GAP))
-            k = 1
-            for i in range(nlr):                                    # left, top->bottom
-                pads.append((str(k), -rx["pad_ctr"], (i - (nlr - 1) / 2) * e, rx["pad_len"], X)); k += 1
-            for i in range(ntb):                                    # bottom, left->right
-                pads.append((str(k), (i - (ntb - 1) / 2) * e, ry["pad_ctr"], X, ry["pad_len"])); k += 1
-            for i in range(nlr):                                    # right, bottom->top
-                pads.append((str(k), rx["pad_ctr"], ((nlr - 1) / 2 - i) * e, rx["pad_len"], X)); k += 1
-            for i in range(ntb):                                    # top, right->left
-                pads.append((str(k), ((ntb - 1) / 2 - i) * e, -ry["pad_ctr"], X, ry["pad_len"])); k += 1
-            bx, by = body_x[1] / 2, body_y[1] / 2
-            rep.update(ipc_family=fam, Z=rx["Z"], G=rx["G"], X=X, Zy=ry["Z"], Gy=ry["G"])
-    else:
-        raise ValueError(f"unsupported package_type {t}")
+    fam = family(spec)
+    fil = FILLETS[fam][density]
+    rep = {"name": spec["name"], "type": t, "density": density, "ipc_family": fam}
+    if t in ("chip", "molded"):
+        pads, (bx, by), r = _two_terminal(spec, fil)
+    elif t == "gullwing":
+        pads, (bx, by), r = _gullwing(spec, fil)
+    else:                                                     # qfn, qfp
+        pads, (bx, by), r = _qfn(spec, fil)
+    rep.update(r)
+    want = spec.get("pin_count")
+    if want and len(pads) != want:
+        raise ValueError(f"pin_count is {want} but the layout gives {len(pads)} pads "
+                         "(count every pad except an exposed pad; a tab counts)")
+    short = [p for p in pads if min(p[3], p[4]) < 0.1]
+    if short:
+        why = "the exposed pad leaves no room for the pads" if spec.get("exposed_pad") else "the lead dimensions leave no room"
+        raise ValueError(f"{why}: pad {short[0][0]} would be {min(short[0][3], short[0][4]):.2f} mm (check the drawing)")
+    if spec.get("land"):                                      # the datasheet's recommended land pattern wins over IPC
+        pads = _apply_land(spec, pads)
+        lw, ll, lc = spec["land"]["pad_width"], spec["land"]["pad_length"], spec["land"]["pad_center"]
+        rep.update({"Z": round(2 * lc + ll, 4), "G": round(2 * lc - ll, 4), "X": lw, "land_source": "datasheet"})
+    polarized = bool(spec.get("polarized"))
+    two_term = t in ("chip", "molded") or (t == "gullwing" and len(pads) == 2)
 
     ep = spec.get("exposed_pad")
     ep_lines = []
     if ep:
         ew, eh = dim(ep["length"])[1], dim(ep["width"])[1]
-        epnum = str(spec["pin_count"] + 1)
-        lr = (lambda p: abs(p[1]) > abs(p[2])) if t == "qfn" else (lambda p: True)   # gullwing: all pads are L/R
+        epnum = str(ep.get("number") or spec["pin_count"] + 1)
+        lr = (lambda p: abs(p[1]) > abs(p[2])) if t in ("qfn", "qfp") else (lambda p: True)   # gullwing: all pads are L/R
         gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p in pads if lr(p)]                 # left/right rows vs EP
         gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p in pads if not lr(p)]            # qfn top/bottom rows vs EP
-        if gaps and min(gaps) < MIN_PAD_GAP:
+        if gaps and min(gaps) < MIN_PAD_GAP - 1e-6:
             rep["warning"] = f"EP to pad gap {min(gaps):.3f} < {MIN_PAD_GAP}"
         ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu", "F.Mask")))
-        cov = ep.get("paste_coverage", 0.6)                           # split paste into N x N windows
-        g = ep.get("paste_grid") or max(1, min(4, round(max(ew, eh) / 1.2)))
-        sw, sh = ew * math.sqrt(cov) / g, eh * math.sqrt(cov) / g
-        for i in range(g):
-            for j in range(g):
-                cx, cy = (i - (g - 1) / 2) * ew / g, (j - (g - 1) / 2) * eh / g
-                ep_lines.append(pad("", cx, cy, round(sw, 3), round(sh, 3), layers=("F.Paste",)))
-        rep["EP"] = (ew, eh, f"paste {g}x{g} @ {cov:.0%}")
+        cov = ep.get("paste_coverage", 0.65)                          # KLC F6.3: 50-80 %, 65 % recommended
+        grid = ep.get("paste_grid")                                   # split into windows of about 1.2 mm or less
+        gx = grid or max(1, min(5, math.ceil(ew / 1.2 - 1e-9)))
+        gy = grid or max(1, min(5, math.ceil(eh / 1.2 - 1e-9)))
+        sw, sh = ew * math.sqrt(cov) / gx, eh * math.sqrt(cov) / gy
+        for i in range(gx):
+            for j in range(gy):
+                cx, cy = (i - (gx - 1) / 2) * ew / gx, (j - (gy - 1) / 2) * eh / gy
+                ep_lines.append(pad("", round(cx, 4), round(cy, 4), round(sw, 3), round(sh, 3), layers=("F.Paste",)))
+        rep["EP"] = (ew, eh, f"paste {gx}x{gy} @ {cov:.0%}")
+    copper = pads + ([(None, 0, 0, dim(ep["length"])[1], dim(ep["width"])[1])] if ep else [])
 
-    # ---- courtyard: union(pads, body) + excess, rounded up to 0.01 mm
+    # ---- courtyard: union(pads, body) + excess, rounded up to the 0.01 mm grid (KLC F5.3)
     exc = fil[3]
     px = max([abs(p[1]) + p[3] / 2 for p in pads] + [bx])
     py = max([abs(p[2]) + p[4] / 2 for p in pads] + [by])
     cx, cy = rup(px + exc), rup(py + exc)
-    rep["courtyard"] = (2 * cx, 2 * cy)
+    rep["courtyard"] = (round(2 * cx, 2), round(2 * cy, 2))
 
     out = [f'(footprint {q(spec["name"])} (version 20221018) (generator "ecadlib_footprint_gen")',
            '  (layer "F.Cu")',
            f'  (descr {q(descr(spec, rep))})',
-           f'  (tags {q(spec["package_type"] + " IPC-7351B density-" + density)})',
+           f'  (tags {q(" ".join(filter(None, [t, fam, "polarized" if polarized else "", "IPC-7351B density-" + density])))})',
            '  (attr smd)',
            text("reference", "REF**", 0, -cy - 0.7, "F.SilkS"),
            text("value", spec["name"], 0, cy + 0.7, "F.Fab"),
-           text("user", "${REFERENCE}", 0, 0, "F.Fab", size=round(min(1.0, max(0.25, min(bx, by) * 0.8)), 2))]
+           text("user", "${REFERENCE}", 0, 0, "F.Fab", size=math.floor(100 * min(1.0, max(0.25, 0.5 * max(bx, by)))) / 100)]
 
-    # ---- fab: body outline, pin-1 chamfer on ICs
-    if t == "chip":
+    # ---- fab: body outline; pin-1 / polarity chamfer on everything except plain 2-terminal parts (KLC F5.2)
+    if two_term and not polarized:
         out.append(rect(-bx, -by, bx, by, "F.Fab", FAB_W))
     else:
         ch = min(1.0, 0.25 * min(2 * bx, 2 * by))
+        if two_term:                                                  # KiCad chip LED/diode marker: 0.3 .. 1.0
+            ch = max(ch, min(0.3, bx, by))
         out.append(poly([(-bx + ch, -by), (bx, -by), (bx, by), (-bx, by), (-bx, -by + ch)], "F.Fab", FAB_W))
 
-    # ---- silk: keep >= SILK_PAD_CLEAR from copper
-    so = SILK_W / 2 + 0.05                                            # silk offset outside body
-    sx, sy = bx + so, by + so
-    if t == "chip":
-        inner_x = min(abs(p[1]) - p[3] / 2 for p in pads) - SILK_PAD_CLEAR - SILK_W / 2
-        sy = max(sy, max(p[4] for p in pads) / 2 + SILK_PAD_CLEAR + SILK_W / 2) if inner_x < 0.4 else sy
-        if inner_x > 0.1:                                             # too small (0402) -> no silk
-            out += [line(-inner_x, -sy, inner_x, -sy, "F.SilkS", SILK_W), line(-inner_x, sy, inner_x, sy, "F.SilkS", SILK_W)]
-    elif t == "gullwing":
-        pad_top = max(abs(p[2]) + p[4] / 2 for p in pads)             # outermost pad edge along Y
-        sy = max(sy, pad_top + SILK_PAD_CLEAR + SILK_W / 2)           # keep silk clear of corner pads
-        for s in (-1, 1):
-            out.append(line(-sx, s * sy, sx, s * sy, "F.SilkS", SILK_W))
-        out.append(pin1_triangle(-sx - 0.54, -sy))
-    else:                                                             # qfn: corner L-marks + pin-1 triangle
-        gx = max(abs(p[1]) + p[3] / 2 for p in pads if abs(p[2]) > abs(p[1])) + SILK_PAD_CLEAR + SILK_W / 2
-        gy = max(abs(p[2]) + p[4] / 2 for p in pads if abs(p[1]) > abs(p[2])) + SILK_PAD_CLEAR + SILK_W / 2
-        for sxn in (-1, 1):
-            for syn in (-1, 1):
-                if gx < sx:
-                    out.append(line(sxn * gx, syn * sy, sxn * sx, syn * sy, "F.SilkS", SILK_W))
-                if gy < sy and not (sxn < 0 and syn < 0):
-                    out.append(line(sxn * sx, syn * gy, sxn * sx, syn * sy, "F.SilkS", SILK_W))
-        out.append(pin1_triangle(-sx, -sy))
+    # ---- silk: body outline pushed out by SILK_FAB_OFFSET, cut back to SILK_PAD_CLEAR from every pad (KLC F5.1)
+    c = SILK_PAD_CLEAR + SILK_W / 2
+    sx, sy = bx + SILK_FAB_OFFSET, by + SILK_FAB_OFFSET
+    p1 = next((p for p in pads if p[0] == "1"), None)
+    if p1 is None:                                                    # e.g. A/K numbering: mark the first pad,
+        p1 = pads[0]                                                  # the checker reports the missing "1"
+        rep["warning"] = (rep.get("warning", "") + "; " if rep.get("warning") else "") + \
+            f"no pad numbered 1; KiCad numbers pins 1, 2, ... (diodes: 1 = cathode), marked pad {p1[0]} as pin 1"
+    if two_term and polarized:
+        # KiCad LED/diode style: a bracket that closes on the pin-1 (cathode / +) side
+        yl = round(max(sy, max(abs(p[2]) + p[4] / 2 for p in pads) + c), 4)
+        xl = -round(max(sx, -(p1[1] - p1[3] / 2) + c), 4)
+        xe = max(bx, max(p[1] for p in pads))
+        out += [line(xl, -yl, xl, yl, "F.SilkS", SILK_W), line(xl, -yl, xe, -yl, "F.SilkS", SILK_W),
+                line(xl, yl, xe, yl, "F.SilkS", SILK_W)]
+    else:
+        box = [((-sx, -sy), (sx, -sy)), ((sx, -sy), (sx, sy)), ((sx, sy), (-sx, sy)), ((-sx, sy), (-sx, -sy))]
+        segs = [s for b in box for s in _clip(b, copper, c)]
+        if not segs:                                                  # tiny part (0402): KiCad's small-part clearance
+            c = SILK_CLEAR_SMALL + SILK_W / 2
+            segs = [s for b in box for s in _clip(b, copper, c)]
+        out += [line(a[0], a[1], b[0], b[1], "F.SilkS", SILK_W) for a, b in segs]
+        if not two_term:                                              # pin-1 triangle just above pad 1
+            if t == "qfn" and spec.get("pins_top_bottom", 1) != 0:
+                ax, ay = -sx, -sy
+            else:
+                ax, ay = p1[1], p1[2] - p1[4] / 2 - c
+            out.append(pin1_triangle(ax, ay))
 
     out.append(rect(-cx, -cy, cx, cy, "F.CrtYd", CRT_W))
     out += [pad(*p) for p in pads] + ep_lines
     if spec.get("model_3d"):
         out.append(f'  (model {q(spec["model_3d"])} (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))')
     out.append(")")
+    text_out = "\n".join(out) + "\n"
     rep["pads"] = [{"num": p[0], "x": p[1], "y": p[2], "w": p[3], "h": p[4]} for p in pads]
-    return "\n".join(out) + "\n", rep
+    from . import footprint_check
+    rep["checks"] = [{"level": l, "rule": r_, "message": m}
+                     for l, r_, m in footprint_check.check(text_out, allow_duplicate_pads=[str(spec["tab"]["number"])] if spec.get("tab") else None)]
+    return text_out, rep
 
 
 def pin1_triangle(x, y):
@@ -263,10 +476,7 @@ def descr(spec, r):
 
 def validate(spec):
     schema = json.loads((Path(__file__).with_name("package_schema.json")).read_text())
-    try:
-        import jsonschema
-    except ImportError:
-        return
+    import jsonschema                                   # a runtime dependency: never skip validation silently
     jsonschema.validate(spec, schema)
 
 
@@ -292,17 +502,20 @@ def main(argv=None):
     g.add_argument("specs", nargs="+")
     g.add_argument("-o", "--out", default="out/footprints/ecadlib.pretty")
     g.add_argument("--density", choices="ABC")
+    g.add_argument("--rules", help="library rules file: [footprint] density (default: ecadlib.toml found from here)")
     c = sub.add_parser("compare", help="compare a generated footprint's pads with a reference (path or URL)")
     c.add_argument("mine")
     c.add_argument("ref")
     a = ap.parse_args(argv)
 
     if a.cmd == "gen":
+        from . import rules as RU
         outdir = Path(a.out); outdir.mkdir(parents=True, exist_ok=True)
+        rules = RU.load(a.rules, start=outdir)
         for sp in a.specs:
             spec = json.loads(Path(sp).read_text())
             validate(spec)
-            txt, rep = build(spec, a.density)
+            txt, rep = build(spec, RU.density_for(spec, rules, a.density))
             from . import sexpr
             sexpr.parse(txt)                                          # sanity: balanced S-expression
             (outdir / f"{spec['name']}.kicad_mod").write_text(txt)

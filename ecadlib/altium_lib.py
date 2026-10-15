@@ -1,6 +1,6 @@
 """Altium .PcbLib (footprints) and .SchLib (symbols) writer, pure Python (+ a minimal reader for checks).
 
-    python3 -m ecadlib.altium_lib pcblib examples/packages/*.json -o out/altium_models/PcbLib
+    python3 -m ecadlib.altium_lib pcblib ecadlib/package_specs/*.json -o out/altium_models/PcbLib
     python3 -m ecadlib.altium_lib schlib examples/symbols/*.json -o out/altium_models/SchLib
     python3 -m ecadlib.altium_lib dump out/altium_models/PcbLib/SOIC-8_3.9x4.9mm_P1.27mm.PcbLib
 
@@ -15,22 +15,33 @@ record) and v7 layer ids. ecadlib/assets/pcblib_template.json.gz holds the Libra
 header and FileVersionInfo of an Altium-saved PcbLib from AltiumSharp's TestData (see NOTICE).
 Field values were cross-checked against real Altium files (README "Altium library writer").
 
+Also from AltiumSharp: through-hole pad holes (size, round/square/slot, slot length, hole rotation, plated),
+the 60-byte arc, the ComponentBody record (extruded or embedded STEP) and the Library/Models storage with
+Altium's STEP checksum, the 252-byte stroke text record (.Designator / .Comment) with its WideStrings entry,
+SchLib pin symbols (dot, clock, active-low ...) and display modes (De Morgan). Each was checked byte for byte
+against Altium-saved records (AltiumSharp TestData; display modes against an Altium 24 sample library).
+
 Conventions (mirroring Altium-made libraries in AltiumSharp's TestData):
-  Top Layer (1) SMD pads; Top Overlay (33) silkscreen; Mechanical 13 (69) fab/body outline;
+  Top Layer (1) SMD pads, Multi-Layer (74) through-hole pads; 3D bodies on Mechanical 13;
+  Top Overlay (33) silkscreen; Mechanical 13 (69) fab/body outline;
   Mechanical 15 (71) courtyard; EP paste windows as fills on Top Paste (35).
   Units: 1 mil = 10000 internal units, so 1 mm = 10^8/254 units (rounded to the nearest unit,
   2.54 nm). KiCad's Y axis points down, Altium's up: y is negated on import.
 Schematic units: 1 = 10 mil (DXP); pins on a 100 mil (10 unit) grid."""
-import argparse, functools, gzip, hashlib, json, re, struct, sys, time, uuid
+import argparse, functools, gzip, hashlib, json, math, re, struct, sys, time, uuid, zlib
 from fractions import Fraction
 from pathlib import Path
 
 from . import cfb, sexpr
 
 # ---------------------------------------------------------------- units & low-level encoders
-TOP, MID1, BOTTOM, TOP_OVERLAY, TOP_PASTE, TOP_SOLDER, MECH13, MECH15, MULTI = 1, 2, 32, 33, 35, 37, 69, 71, 74
+TOP, MID1, BOTTOM, TOP_OVERLAY, BOTTOM_OVERLAY, TOP_PASTE, TOP_SOLDER, MECH13, MECH15, MULTI = 1, 2, 32, 33, 34, 35, 37, 69, 71, 74
+KEEPOUT = 56
 KICAD_LAYER = {"F.SilkS": TOP_OVERLAY, "F.Fab": MECH13, "F.CrtYd": MECH15}
+LAYER_NAME = {TOP: "TOP", BOTTOM: "BOTTOM", TOP_OVERLAY: "TOPOVERLAY", BOTTOM_OVERLAY: "BOTTOMOVERLAY", TOP_PASTE: "TOPPASTE",
+              TOP_SOLDER: "TOPSOLDER", MECH13: "MECHANICAL13", MECH15: "MECHANICAL15", KEEPOUT: "KEEPOUT"}
 SHAPE = {"round": 1, "circle": 1, "oval": 1, "rect": 2, "octagonal": 3, "roundrect": 9}
+HOLE = {"round": 0, "square": 1, "slot": 2}
 FLAGS = 0x0C                                  # bit3 "saved" (always set) | bit2 unlocked
 
 
@@ -135,9 +146,9 @@ def _now():
 
 
 # ---------------------------------------------------------------- PCB primitive records
-def common(layer, polygon=0xFFFF):
+def common(layer, polygon=0xFFFF, flags=FLAGS):
     """13-byte header: layer, flags, net, polygon, component, reserved."""
-    return struct.pack("<BHHHHI", layer, FLAGS, 0xFFFF, polygon, 0xFFFF, 0xFFFFFFFF)
+    return struct.pack("<BHHHHI", layer, flags, 0xFFFF, polygon, 0xFFFF, 0xFFFFFFFF)
 
 
 def track_rec(x1, y1, x2, y2, w, layer):
@@ -150,13 +161,97 @@ def fill_rec(x1, y1, x2, y2, layer, rot=0.0):
     return b"\x06" + block(body)
 
 
-def region_rec(pts, layer, kind=0):
-    names = {TOP_OVERLAY: "TOPOVERLAY", TOP: "TOP", TOP_PASTE: "TOPPASTE", MECH13: "MECHANICAL13", MECH15: "MECHANICAL15"}
-    ptxt = (f"V7_LAYER={names[layer]}|NAME= |KIND={kind}|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil"
-            "|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil")
-    body = common(layer) + b"\0\0\0\0\0" + pblock(ptxt) + struct.pack("<I", len(pts))
+def region_rec(pts, layer, kind=0, keepout=None):
+    """keepout: restriction bits (31 = all objects) for a keep-out region (flags bit 9, as in TestData KEEPOUT_REGION)."""
+    ptxt = (f"V7_LAYER={LAYER_NAME[layer]}|NAME= |KIND={kind}|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil"
+            "|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil" + (f"|KEEPOUTRESTRICTIONS={keepout}" if keepout is not None else ""))
+    body = common(layer, flags=FLAGS | (0x200 if keepout is not None else 0)) + b"\0\0\0\0\0" + pblock(ptxt) + struct.pack("<I", len(pts))
     body += b"".join(struct.pack("<2d", float(x), float(y)) for x, y in pts)
     return b"\x0b" + block(body)
+
+
+def arc_rec(cx, cy, r, a0, a1, w, layer):
+    """Arc counter-clockwise from a0 to a1 (degrees); 0..360 is a full circle (AltiumSharp WriteArc)."""
+    body = common(layer) + struct.pack("<3i2di", cx, cy, r, float(a0), float(a1), w)
+    body += struct.pack("<hiBIB3s", 0, 0, 0, v7_layer(layer), 0, b"")
+    return b"\x01" + block(body)
+
+
+# Cached text extents (Default stroke font) Altium stored for these special strings at 50 mil height
+# (TestData TEXT_DESIGNATOR / TEXT_COMMENT); other strings get an estimate. Altium recomputes them.
+TEXT_BOX = {".Designator": (5098381, 766451), ".Comment": (3682173, 599838)}
+CHAR_W = 0.927                                # stroke-font advance per character / height (same records)
+ARIAL = "Arial".encode("utf-16-le").ljust(64, b"\0")
+
+
+def text_rec(text, x, y, h, sw, layer, rot=0.0, ws=0, font=1, mirror=False, box=None):
+    """Stroke-font text (record 5, AltiumSharp WriteText): 252-byte block, then the text as a string block.
+    Anchored at its bottom-left corner (justification 3, as Altium writes it); ws = WideStrings index."""
+    bw, bh = box or [round(v * h / 500000) for v in TEXT_BOX.get(text, (round(CHAR_W * 500000 * len(text)), 600000))]
+    b = common(layer) + struct.pack("<3ihd?i6x", x, y, h, font, rot, mirror, sw) + ARIAL
+    b += struct.pack("<?3i?2iBi5i4B", 0, 0, ws, 0, 0, bw, bh, 3, 0, 10500000, 2100000, 200000, 200000, 0, 0, 1, 1, 0) + ARIAL
+    b += struct.pack("<?I2B2i4x2i", 1, v7_layer(layer), 0, 0, -1 << 31, -1 << 31, x, y)
+    assert len(b) == 252
+    return b"\x05" + block(b) + sblock(text)
+
+
+KTEXT = {"reference": (".Designator", TOP_OVERLAY, 3), "value": (".Comment", MECH13, 8)}   # + nominal characters shown
+
+
+def texts_from_kicad(t):
+    """KiCad Reference / Value (fp_text or KiCad 8+ property) -> [(text, x, y, height, stroke, rot, layer)] in mm, y up:
+    .Designator on Top Overlay, .Comment on Mechanical 13. KiCad centres text on (at); Altium anchors stroke text at
+    the bottom-left, so the anchor is moved left by half the estimated width (all of it for right-justified text) of a
+    nominal designator (3 characters, "U12") or comment (8 characters) and down by half the height, rotated with the text."""
+    out = []
+    for n in list(sexpr.find(t, "fp_text")) + [p for p in sexpr.find(t, "property") if p[1] in ("Reference", "Value")]:
+        kind = n[1].lower()
+        if kind not in KTEXT or not sexpr.first(n, "at"):
+            continue
+        at, eff = sexpr.first(n, "at"), sexpr.first(n, "effects") or []
+        font, just = sexpr.first(eff, "font") or [], sexpr.first(eff, "justify") or []
+        size, th = sexpr.first(font, "size"), sexpr.first(font, "thickness")
+        h = float(size[2]) if size else 1.0
+        rot = float(at[3]) % 360 if len(at) > 3 else 0.0
+        rot = rot - 180 if 90 < rot <= 270 else rot        # KiCad keeps footprint text upright; Altium doesn't
+        txt, layer, chars = KTEXT[kind]
+        a, dx, dy = math.radians(rot), -CHAR_W * h * chars * (0 if "left" in just else 1 if "right" in just else 0.5), -h / 2
+        x, y = float(at[1]) + dx * math.cos(a) - dy * math.sin(a), -float(at[2]) + dx * math.sin(a) + dy * math.cos(a)
+        out.append((txt, round(x, 4), round(y, 4), h, float(th[1]) if th else round(0.15 * h, 3), rot, layer))
+    return out
+
+
+def body_params(layer, height, model_id, checksum, standoff=0, step=None):
+    """ComponentBody parameter text in Altium's key order (AltiumSharp BuildComponentBodyParamText).
+    step=None: extruded body from standoff to height; else (name, rotx, roty, rotz, dz) of an embedded STEP model."""
+    mil = lambda u: f"{to_mil(u)}mil"
+    kv = [("V7_LAYER", LAYER_NAME.get(layer) or f"MECHANICAL{layer - 56}"), ("NAME", " "), ("KIND", 0), ("SUBPOLYINDEX", -1), ("UNIONINDEX", 0),
+          ("ARCRESOLUTION", "0.5mil"), ("ISSHAPEBASED", "FALSE"), ("CAVITYHEIGHT", "0mil"), ("STANDOFFHEIGHT", mil(standoff)),
+          ("OVERALLHEIGHT", mil(height)), ("BODYPROJECTION", 0), ("ARCRESOLUTION", "0.5mil"), ("BODYCOLOR3D", 8421504),
+          ("BODYOPACITY3D", "1.000"), ("IDENTIFIER", ""), ("TEXTURE", ""), ("TEXTURECENTERX", "0mil"), ("TEXTURECENTERY", "0mil"),
+          ("TEXTURESIZEX", "0mil"), ("TEXTURESIZEY", "0mil"), ("TEXTUREROTATION", " 0.00000000000000E+0000"),
+          ("MODELID", model_id), ("MODEL.CHECKSUM", checksum), ("MODEL.EMBED", "TRUE" if step else "FALSE"),
+          ("MODEL.NAME", step[0] if step else ""), ("MODEL.2D.X", "0mil"), ("MODEL.2D.Y", "0mil"), ("MODEL.2D.ROTATION", "0.000")]
+    if step:
+        kv += [("MODEL.3D.ROTX", f"{step[1]:.3f}"), ("MODEL.3D.ROTY", f"{step[2]:.3f}"), ("MODEL.3D.ROTZ", f"{step[3]:.3f}"),
+               ("MODEL.3D.DZ", mil(step[4])), ("MODEL.MODELTYPE", 1), ("MODEL.MODELSOURCE", "Undefined")]
+    else:
+        kv += [("MODEL.3D.ROTX", "0.000"), ("MODEL.3D.ROTY", "0.000"), ("MODEL.3D.ROTZ", "0.000"), ("MODEL.3D.DZ", "0mil"),
+               ("MODEL.MODELTYPE", 0), ("MODEL.EXTRUDED.MINZ", mil(standoff)), ("MODEL.EXTRUDED.MAXZ", mil(height))]
+    return params(kv)[1:]                     # no leading '|'
+
+
+def body_rec(pts, ptxt, layer=MECH13):
+    """ComponentBody (record 12): common header, 5 reserved bytes, parameter block, outline as doubles."""
+    body = common(layer) + b"\0" * 5 + pblock(ptxt) + struct.pack("<I", len(pts))
+    body += b"".join(struct.pack("<2d", float(x), float(y)) for x, y in pts)
+    return b"\x0c" + block(body)
+
+
+def step_checksum(data):
+    """Altium's 3D model checksum: position-weighted byte sum (AltiumSharp PcbModel.ComputeChecksum), as signed int32."""
+    c = sum(b * (i or 1) for i, b in enumerate(data)) & 0xFFFFFFFF
+    return c - (1 << 32) if c >= 1 << 31 else c
 
 
 # Canonical pad SubRecord-5 tail, offsets 61..201 (AltiumSharp PcbLibWriter.PadExtendedTailTemplate,
@@ -173,27 +268,33 @@ assert len(PAD_TAIL) == 141
 
 def pad_rec(p, guid_a, guid_b):
     """p: designator, x, y, w, h (internal units), shape ('rect'|'roundrect'|'round'), corner (%),
-    layer, paste (None = from rule, else manual expansion in internal units)."""
+    layer, paste (None = from rule, else manual expansion in internal units).
+    Through-hole: layer MULTI, hole (diameter / slot width), hole_shape ('round'|'square'|'slot'),
+    slot (slot length), hole_rot (degrees), plated (default True)."""
     shape = SHAPE[p["shape"]]
     rr = shape == 9
     base = 1 if rr else shape                  # Altium keeps 'round' in the main block for rounded-rect pads
+    hs = HOLE[p.get("hole_shape", "round")]
     main = common(p.get("layer", TOP)) + struct.pack(
-        "<9i3Bd?", p["x"], p["y"], p["w"], p["h"], p["w"], p["h"], p["w"], p["h"], 0, base, base, base,
-        float(p.get("rot", 0.0)), True)
+        "<9i3Bd?", p["x"], p["y"], p["w"], p["h"], p["w"], p["h"], p["w"], p["h"], p.get("hole", 0), base, base, base,
+        float(p.get("rot", 0.0)), p.get("plated", True))
     t = bytearray(PAD_TAIL)
     put = lambda off, fmt, v: struct.pack_into(fmt, t, off - 61, v)
     put(62, "<B", 0)                           # pad stack mode: simple
     if p.get("paste") is not None:             # manual paste-mask expansion
         put(86, "<i", p["paste"]); put(101, "<B", 2)
     put(114, "<I", v7_layer(p.get("layer", TOP)))
-    put(185, "<B", 3)                          # reserved marker, 0x03 in Altium-saved pads
+    put(185, "<B", 1 if p.get("layer") == MULTI else 3)    # reserved marker: 3 on SMD, 1 on multi-layer pads (TestData)
     t[126 - 61:142 - 61], t[142 - 61:158 - 61] = guid_a.bytes_le, guid_b.bytes_le
     out = sblock(p["designator"]) + sblock("") + sblock("|&|0") + block(b"\0") + block(main + bytes(t))
-    if not rr:
+    if not rr and not hs:
         return b"\x02" + out + block(b"")
     ss = struct.pack("<29i", *[p["w"]] * 29) + struct.pack("<29i", *[p["h"]] * 29) + bytes([base]) * 29
-    ss += b"\0" + b"\0" + struct.pack("<id", 0, 0.0) + b"\0" * 256      # reserved, hole shape, slot, rot, offsets
-    ss += b"\x01" + bytes([9]) * 32 + bytes([max(0, min(100, int(round(p.get("corner", 50)))))]) * 32
+    ss += b"\0" + bytes([hs]) + struct.pack("<id", p.get("slot", 0), float(p.get("hole_rot", 0.0))) + b"\0" * 256
+    if rr:                                     # reserved, hole shape, slot length, hole rotation, offsets, then:
+        ss += b"\x01" + bytes([9]) * 32 + bytes([max(0, min(100, int(round(p.get("corner", 50)))))]) * 32
+    else:                                      # no rounded rect: flag 0, layer shapes 1, corners 0 (TestData slot pads)
+        ss += b"\0" + b"\x01" * 32 + b"\0" * 32
     assert len(ss) == 596
     return b"\x02" + out + block(ss)
 
@@ -203,7 +304,7 @@ def footprint_from_kicad(text, height_mm=0.0, description=None):
     """Convert a .kicad_mod (as written by footprint_gen) into the writer's footprint dict (mm, y up)."""
     t = sexpr.parse(text)
     fp = {"name": t[1], "description": clean(description if description is not None else (sexpr.first(t, "descr") or ["", ""])[1]),
-          "height_mm": height_mm, "pads": [], "tracks": [], "fills": [], "regions": []}
+          "height_mm": height_mm, "pads": [], "tracks": [], "fills": [], "regions": [], "texts": texts_from_kicad(t)}
     for p in sexpr.find(t, "pad"):
         at, size = sexpr.first(p, "at"), sexpr.first(p, "size")
         x, y, w, h = float(at[1]), -float(at[2]), float(size[1]), float(size[2])
@@ -243,7 +344,8 @@ def footprint_from_kicad(text, height_mm=0.0, description=None):
 
 
 def footprint_from_spec(spec, density=None):
-    """footprint_gen.build(spec) -> footprint dict (uses the same geometry as the .kicad_mod)."""
+    """footprint_gen.build(spec) -> footprint dict (uses the same geometry as the .kicad_mod). density: A/B/C, or
+    None for the spec's own (then B)."""
     from . import footprint_gen as F
     txt, rep = F.build(spec, density)
     d = f"{spec.get('description', spec['name'])}; IPC-7351B {rep['ipc_family']} density {rep['density']}; generated by ecadlib"
@@ -251,28 +353,55 @@ def footprint_from_spec(spec, density=None):
     return fp, rep
 
 
-def _pcb_component(fp):
-    """-> (storage dict, primitive count, pad count) for one footprint."""
+def _model_id(seed):
+    return "{" + str(guid(seed)).upper() + "}"
+
+
+def _pcb_component(fp, models=None):
+    """-> (storage dict, primitive count, pad count) for one footprint. Embedded STEP models are
+    appended to `models` as (params text, STEP bytes) for the Library/Models storage."""
     name = fp["name"]
     gb = guid(name + "/stack")
     data = bytearray(sblock(name)); n = 0
     for i, p in enumerate(fp["pads"]):
-        q = dict(p, x=mm(p["x"]), y=mm(p["y"]), w=mm(p["w"]), h=mm(p["h"]))
+        q = dict(p, x=mm(p["x"]), y=mm(p["y"]), w=mm(p["w"]), h=mm(p["h"]), hole=mm(p.get("hole", 0)), slot=mm(p.get("slot", 0)))
         if q["shape"] != "roundrect":
             q["corner"] = 0
         if p.get("paste") == "none":         # suppress paste: manual expansion of -max(w,h)/2 closes the aperture
             q["paste"] = -max(q["w"], q["h"]) // 2 - mm(0.01)
+        elif isinstance(p.get("paste"), float):    # manual expansion in mm
+            q["paste"] = mm(p["paste"])
         data += pad_rec(q, guid(f"{name}/pad{i}"), gb); n += 1
     for x1, y1, x2, y2, w, layer in fp["tracks"]:
         data += track_rec(mm(x1), mm(y1), mm(x2), mm(y2), mm(w), layer); n += 1
     for x1, y1, x2, y2, layer in fp["fills"]:
         data += fill_rec(mm(x1), mm(y1), mm(x2), mm(y2), layer); n += 1
-    for pts, layer in fp["regions"]:
-        data += region_rec([(mm(x), mm(y)) for x, y in pts], layer); n += 1
+    for pts, layer, *ko in fp["regions"]:     # optional third item: keep-out restriction bits
+        data += region_rec([(mm(x), mm(y)) for x, y in pts], layer, keepout=ko[0] if ko else None); n += 1
+    for cx, cy, r, a0, a1, w, layer in fp.get("arcs", []):
+        data += arc_rec(mm(cx), mm(cy), mm(r), a0, a1, mm(w), layer); n += 1
+    wide = []
+    for txt, x, y, h, w, rot, layer in fp.get("texts", []):
+        data += text_rec(txt, mm(x), mm(y), mm(h), mm(w), layer, rot, len(wide)); n += 1
+        wide.append((f"ENCODEDTEXT{len(wide)}", ",".join(str(ord(c)) for c in txt)))
+    for k, b in enumerate(fp.get("bodies", [])):     # last: pyaltiumlib reads a trailing block after a body
+        pts, st = [(mm(x), mm(y)) for x, y in b["pts"]], b.get("step")
+        if st:
+            ck = step_checksum(st["data"])
+            mid = _model_id(f"{name}/model/{ck}")
+            models.append((params([("EMBED", "TRUE"), ("MODELSOURCE", "Undefined"), ("ID", mid), ("ROTX", f"{st['rot'][0]:.3f}"),
+                                   ("ROTY", f"{st['rot'][1]:.3f}"), ("ROTZ", f"{st['rot'][2]:.3f}"), ("DZ", mm(st.get("dz", 0))),
+                                   ("CHECKSUM", ck), ("NAME", clean(st["name"]))])[1:], st["data"]))
+            ptxt = body_params(fp.get("body_layer", MECH13), mm(b["height"]), mid, ck & 0xFFFFFFFF, mm(b.get("standoff", 0)),
+                               (clean(st["name"]), *st["rot"], mm(st.get("dz", 0))))
+        else:                                 # extruded: Altium-made bodies carry a model id and checksum too
+            ptxt = body_params(fp.get("body_layer", MECH13), mm(b["height"]), _model_id(f"{name}/body{k}"),
+                               int.from_bytes(hashlib.sha256(f"{name}/body{k}".encode()).digest()[:4], "little"), mm(b.get("standoff", 0)))
+        data += body_rec(pts, ptxt, fp.get("body_layer", MECH13)); n += 1
     height = f"{to_mil(mm(fp.get('height_mm') or 0))}mil"
     par = params([("PATTERN", name), ("HEIGHT", height), ("DESCRIPTION", clean(fp.get("description", ""))),
                   ("ITEMGUID", ""), ("REVISIONGUID", "")])
-    st = {"Header": struct.pack("<I", n), "Parameters": pblock(par), "WideStrings": pblock(""), "Data": bytes(data)}
+    st = {"Header": struct.pack("<I", n), "Parameters": pblock(par), "WideStrings": pblock(params(wide)), "Data": bytes(data)}
     if fp["pads"]:                            # pads are written first, so PRIMITIVEINDEX = pad index
         st["UniqueIDPrimitiveInformation"] = {"Header": struct.pack("<I", len(fp["pads"])), "Data": b"".join(
             pblock(f"|PRIMITIVEINDEX={i}|PRIMITIVEOBJECTID=Pad|UNIQUEID={unique_id(f'{name}/pad{i}')}") for i in range(len(fp["pads"])))}
@@ -304,9 +433,9 @@ def pcblib_bytes(footprints, filename="ecadlib.PcbLib"):
     long = [(n, k) for n, k in zip(names, keys) if len(n) >= 31 or k != n]
     if long:                                  # binary: [u32 count] then (name, key) string blocks
         tree["SectionKeys"] = struct.pack("<I", len(long)) + b"".join(sblock(n) + sblock(k) for n, k in sorted(long, key=lambda t: t[0].upper()))
-    toc, comps = "", {}
+    toc, comps, models = "", {}, []
     for fp, key in zip(footprints, keys):
-        st, npads, h = _pcb_component(fp)
+        st, npads, h = _pcb_component(fp, models)
         comps[key] = st
         toc += f"Name={fp['name']}|Pad Count={npads}|Height={h}|Description={clean(fp.get('description', ''))}\r\n"
     hs = lambda n: struct.pack("<I", n)
@@ -319,15 +448,38 @@ def pcblib_bytes(footprints, filename="ecadlib.PcbLib"):
         "PadViaLibrary": {"Header": hs(0), "Data": pblock(
             f"|PADVIALIBRARY.LIBRARYID={{{str(guid(seed + '/pvl')).upper()}}}|PADVIALIBRARY.LIBRARYNAME=<Local>|PADVIALIBRARY.DISPLAYUNITS=1")},
         "ComponentParamsTOC": {"Header": hs(1), "Data": pblock(toc)},
-        "Models": empty(), "ModelsNoEmbed": empty(), "Textures": empty()}
+        "Models": {"Header": hs(len(models)), "Data": b"".join(pblock(t) for t, _ in models),
+                   **{str(i): zlib.compress(d, 9) for i, (_, d) in enumerate(models)}},
+        "ModelsNoEmbed": empty(), "Textures": empty()}
     tree["FileVersionInfo"] = {"Header": hs(1), "Data": pblock(tpl["file_version_info"])}
     tree.update(comps)
     return cfb.to_bytes(tree)
 
 
-def write_pcblib(path, footprints):
+def remap_layers(fp, layers):
+    """Footprint dict with ecadlib's layers moved to the library rules' ones. layers: {role: layer id} from
+    rules.layers() (courtyard, assembly, body3d, silkscreen, designator); None or {} leaves fp as it is."""
+    if not layers:
+        return fp
+    graphics = {MECH15: layers.get("courtyard", MECH15), MECH13: layers.get("assembly", MECH13),
+                TOP_OVERLAY: layers.get("silkscreen", TOP_OVERLAY)}
+    g = lambda l: graphics.get(l, l)
+    text = lambda t: (layers.get("designator", TOP_OVERLAY) if t[0] == ".Designator" and t[6] == TOP_OVERLAY else g(t[6]))
+    out = dict(fp, tracks=[(*t[:5], g(t[5])) for t in fp.get("tracks", [])],
+               fills=[(*f[:4], g(f[4])) for f in fp.get("fills", [])],
+               regions=[(r[0], g(r[1]), *r[2:]) for r in fp.get("regions", [])],
+               arcs=[(*a[:6], g(a[6])) for a in fp.get("arcs", [])],
+               texts=[(*t[:6], text(t)) for t in fp.get("texts", [])])
+    if layers.get("body3d", MECH13) != MECH13:
+        out["body_layer"] = layers["body3d"]
+    return out
+
+
+def write_pcblib(path, footprints, layers=None):
+    """layers: {role: layer id} (rules.layers(rules)) to put courtyard, assembly, 3D body and silkscreen where the
+    library keeps them; None = ecadlib's layers (Mechanical 15 / 13, Top Overlay)."""
     path = Path(path)
-    path.write_bytes(pcblib_bytes(footprints, path.name))
+    path.write_bytes(pcblib_bytes([remap_layers(fp, layers) for fp in footprints], path.name))
     return path
 
 
@@ -346,26 +498,63 @@ def _coord(pairs, name, v):                   # DXP units (10 mil); Altium omits
         pairs.append((name + "_Frac", frac))
 
 
-def pin_rec(num, name, etype, orient, x, y, length, show=True):
-    cong = orient | 0x20 | (0x18 if show else 0)       # 0x08 name, 0x10 number visible; 0x20 as Altium writes it
-    b = struct.pack("<iBhBBBBB", 2, 0, 1, 0, 0, 0, 0, 0) + bytes([0])          # ... + empty description
+# Pin IEEE symbols (Altium TIeeeSymbol ids). Altium's pin dialog offers clock on the inside edge; dot and active-low
+# input/output on the outside edge; signal-flow arrows, analog/digital in and not-logic outside; the rest inside.
+PIN_SYMBOL = {"dot": 1, "right_left_signal_flow": 2, "clock": 3, "active_low_input": 4, "analog_signal_in": 5,
+              "not_logic_connection": 6, "postponed_output": 8, "open_collector": 9, "hiz": 10, "high_current": 11, "pulse": 12,
+              "schmitt": 13, "active_low_output": 17, "open_collector_pull_up": 22, "open_emitter": 23, "open_emitter_pull_up": 24,
+              "digital_signal_in": 25, "shift_left": 30, "open_output": 32, "left_right_signal_flow": 33, "bidirectional_signal_flow": 34}
+PIN_SLOTS = ("inside_edge", "outside_edge", "inside", "outside")         # binary pin record order
+# KiCad pin shapes; falling-edge clock has no Altium symbol and becomes clock + active-low input
+PIN_SHAPE = {"line": {}, "inverted": {"outside_edge": "dot"}, "clock": {"inside_edge": "clock"},
+             "inverted_clock": {"inside_edge": "clock", "outside_edge": "dot"}, "input_low": {"outside_edge": "active_low_input"},
+             "clock_low": {"inside_edge": "clock", "outside_edge": "active_low_input"}, "output_low": {"outside_edge": "active_low_output"},
+             "edge_clock_high": {"inside_edge": "clock", "outside_edge": "active_low_input"},
+             "non_logic": {"outside": "not_logic_connection"}}
+
+
+def pin_symbols(shape):
+    """None, a PIN_SHAPE name or {slot: PIN_SYMBOL name or id} -> (inside edge, outside edge, inside, outside) ids."""
+    d = PIN_SHAPE.get(shape) if isinstance(shape, str) else shape or {}
+    if not isinstance(d, dict) or set(d) - set(PIN_SLOTS):
+        raise ValueError(f"pin shape {shape!r}: use one of {list(PIN_SHAPE)} or a dict with keys {list(PIN_SLOTS)}")
+    out = tuple(PIN_SYMBOL.get(d.get(k, 0), d.get(k, 0)) for k in PIN_SLOTS)
+    if any(v not in (0, *PIN_SYMBOL.values()) for v in out):
+        raise ValueError(f"pin shape {shape!r}: symbols are {list(PIN_SYMBOL)}")
+    return out
+
+
+def overline(s):
+    """KiCad '~{RESET}' overbar -> Altium 'R\\E\\S\\E\\T\\' (a backslash after each overlined character)."""
+    return "" if s == "~" else re.sub(r"~\{([^}]*)\}", lambda m: "".join(c + "\\" for c in m.group(1)), s)
+
+
+def pin_rec(num, name, etype, orient, x, y, length, show=True, hidden=False, part=1, show_name=None, show_num=None,
+            symbols=(0, 0, 0, 0), mode=0, desc=""):
+    """symbols: (inside edge, outside edge, inside, outside) IEEE symbol ids; mode: owner display mode (0 = normal)."""
+    sn, sd = show if show_name is None else show_name, show if show_num is None else show_num
+    cong = orient | 0x20 | (0x04 if hidden else 0) | (0x08 if sn else 0) | (0x10 if sd else 0)   # 0x04 hidden, 0x08 name, 0x10 number
+    d = enc(desc)[:255]
+    b = struct.pack("<iBhB4B", 2, 0, part, mode, *symbols) + bytes([len(d)]) + d      # owner part, display mode, symbols, description
     b += struct.pack("<BBBhhhI", 1, ETYPE[etype], cong, length, x, y, 0)
     b += b"".join(bytes([len(enc(s))]) + enc(s) for s in (name, num, "", "|&|", ""))
     return block(b, flag=1)
 
 
 def ic_symbol(name, pins, description="", designator="U?", footprint=None, comment="*"):
-    """Rectangular IC: pins = [{'num','name','type','side' in left/right/top/bottom}], listed top->bottom
-    (left/right) or left->right (top/bottom). Body grows to fit pin names; all on a 100 mil grid."""
+    """Rectangular IC: pins = [{'num','name','type','side' in left/right/top/bottom, optional 'shape'}], listed
+    top->bottom (left/right) or left->right (top/bottom). 'shape' is a PIN_SHAPE name ('inverted', 'clock', ...) or
+    {slot: PIN_SYMBOL name} (see pin_symbols); '~{EN}' in a name is overlined. Body grows to fit pin names (100 mil grid)."""
     bad = [p.get("num") for p in pins if p.get("side", "left") not in ORIENT]
     if bad:
         raise ValueError(f"{name}: pins {bad} have a side other than {list(ORIENT)}")
     side = {s: [p for p in pins if p.get("side", "left") == s] for s in ORIENT}
     rows = max(len(side["left"]), len(side["right"]), 1)
     cols = max(len(side["top"]), len(side["bottom"]))
-    chars = max([len(p["name"]) for p in side["left"]] or [0]) + max([len(p["name"]) for p in side["right"]] or [0])
+    nlen = lambda p: len(overline(p["name"]).replace("\\", ""))                # overline backslashes take no room
+    chars = max([nlen(p) for p in side["left"]] or [0]) + max([nlen(p) for p in side["right"]] or [0])
     w = max(40, 10 * -(-(chars * 7 + 20) // 10), 10 * (cols + 1))   # ~7 units (70 mil) per 10 pt char
-    room = lambda ps: 10 * -(-(max(len(p["name"]) for p in ps) * 7 + 10) // 10) if ps else 0
+    room = lambda ps: 10 * -(-(max(nlen(p) for p in ps) * 7 + 10) // 10) if ps else 0
     t_room, b_room = room(side["top"]), room(side["bottom"])          # vertical names inside the body
     top, bot = 0, -(t_room + 10 * (rows + 1) + b_room)
     prims = [("rect", 0, top, w, bot)]
@@ -406,27 +595,68 @@ def symbol_from_json(d):
     return ic_symbol(d["name"], d["pins"], d.get("description", ""), d.get("designator", "U?"), d.get("footprint"))
 
 
+def _xy(kv, pts):                             # polyline/polygon vertices: LocationCount, X1/Y1 (+ _Frac), ...
+    kv.append(("LocationCount", len(pts)))
+    for k, (x, y) in enumerate(pts, 1):
+        _coord(kv, f"X{k}", x); _coord(kv, f"Y{k}", y)
+
+
+def _fill(kv, fill):                          # 'body' = Altium symbol fill, 'line' = solid in line colour, else hollow
+    kv += [("Color", BLUE), ("AreaColor", {"body": BODY_FILL, "line": BLUE}.get(fill, 16777215))]
+    kv += [("IsSolid", "T")] if fill in ("body", "line") else []
+
+
 def _sch_component(sym):
-    """-> (Data stream, record count, pin count)."""
+    """-> (Data stream, record count, pin count). sym['parts'] (default 1) and sym['prim_parts'] (owner part
+    per primitive) describe multi-part symbols; sym['modes'] (default 1) and sym['prim_modes'] (display mode per
+    primitive, 0 = normal, 1 = first alternate/De Morgan) describe alternate views; sym['params'] = [(name, value)]
+    become hidden parameters."""
     nm, recs, idx_sheet = sym["name"], [], 0
     uid = lambda k: unique_id(f"{nm}/{k}")
-    npins = sum(1 for p in sym["prims"] if p[0] == "pin")
+    parts = sym.get("prim_parts") or [1] * len(sym["prims"])
+    modes = sym.get("prim_modes") or [0] * len(sym["prims"])
+    npins = sum(1 for p, m in zip(sym["prims"], modes) if p[0] == "pin" and not m)     # AllPinCount: normal view only (AD24)
     comp = [("RECORD", 1), ("LibReference", nm)]
     if sym.get("description"):
         comp.append(("ComponentDescription", clean(sym["description"])))
-    comp += [("PartCount", 2), ("DisplayModeCount", 1), ("IndexInSheet", -1), ("OwnerPartId", -1), ("CurrentPartId", 1),
+    comp += [("PartCount", sym.get("parts", 1) + 1), ("DisplayModeCount", sym.get("modes", 1)), ("IndexInSheet", -1), ("OwnerPartId", -1), ("CurrentPartId", 1),
              ("LibraryPath", "*"), ("SourceLibraryName", "*"), ("SheetPartFileName", "*"), ("TargetFileName", "*"),
              ("UniqueID", uid("comp")), ("AreaColor", BODY_FILL), ("Color", BLUE), ("PartIDLocked", "T"),
              ("DesignItemId", nm), ("AllPinCount", npins)]
     recs.append(pblock(params(comp)))
     for i, pr in enumerate(sym["prims"]):
-        common_ = [("IsNotAccesible", "T")] + ([("IndexInSheet", i)] if i else []) + [("OwnerPartId", 1)]
-        if pr[0] == "rect":
+        common_ = [("IsNotAccesible", "T")] + ([("IndexInSheet", i)] if i else []) + [("OwnerPartId", parts[i])]
+        common_ += [("OwnerPartDisplayMode", modes[i])] if modes[i] else []
+        if pr[0] == "rect":                   # ("rect", x1, y1, x2, y2[, line width, fill])
             kv = [("RECORD", 14)] + common_
-            for k, v in zip(("Location.X", "Location.Y", "Corner.X", "Corner.Y"), (pr[1], min(pr[2], pr[4]), pr[3], max(pr[2], pr[4]))):
+            for k, v in zip(("Location.X", "Location.Y", "Corner.X", "Corner.Y"), (min(pr[1], pr[3]), min(pr[2], pr[4]), max(pr[1], pr[3]), max(pr[2], pr[4]))):
                 _coord(kv, k, v)
-            kv += [("Color", BLUE), ("AreaColor", BODY_FILL), ("IsSolid", "T"), ("UniqueID", uid(i))]
-            recs.append(pblock(params(kv)))
+            kv += [("LineWidth", pr[5])] if len(pr) > 5 and pr[5] else []
+            _fill(kv, pr[6] if len(pr) > 6 else "body")
+            recs.append(pblock(params(kv + [("UniqueID", uid(i))])))
+        elif pr[0] in ("polyline", "polygon"):   # (kind, [(x, y)...], line width[, fill])
+            kv = [("RECORD", 6 if pr[0] == "polyline" else 7)] + common_ + [("LineWidth", pr[2])]
+            if pr[0] == "polygon":
+                _fill(kv, pr[3])
+            else:
+                kv.append(("Color", BLUE))
+            _xy(kv, pr[1])
+            recs.append(pblock(params(kv + [("UniqueID", uid(i))])))
+        elif pr[0] == "arc":                  # ("arc", cx, cy, r, start deg, end deg, line width), counter-clockwise
+            kv = [("RECORD", 12)] + common_
+            _coord(kv, "Location.X", pr[1]); _coord(kv, "Location.Y", pr[2]); _coord(kv, "Radius", pr[3])
+            kv += [("LineWidth", pr[6])] + ([("StartAngle", f"{pr[4]:.3f}")] if pr[4] else []) + [("EndAngle", f"{pr[5]:.3f}"), ("Color", BLUE)]
+            recs.append(pblock(params(kv + [("UniqueID", uid(i))])))
+        elif pr[0] == "circle":               # ("circle", cx, cy, r, line width, fill)
+            kv = [("RECORD", 8)] + common_
+            _coord(kv, "Location.X", pr[1]); _coord(kv, "Location.Y", pr[2]); _coord(kv, "Radius", pr[3]); _coord(kv, "SecondaryRadius", pr[3])
+            kv.append(("LineWidth", pr[4])); _fill(kv, pr[5])
+            recs.append(pblock(params(kv + [("UniqueID", uid(i))])))
+        elif pr[0] == "text":                 # ("text", x, y, text, orientation 0..3)
+            kv = [("RECORD", 4)] + common_
+            _coord(kv, "Location.X", pr[1]); _coord(kv, "Location.Y", pr[2])
+            kv += ([("Orientation", pr[4])] if pr[4] else []) + [("Color", BLUE), ("FontID", 1), ("Text", clean(pr[3]))]
+            recs.append(pblock(params(kv + [("UniqueID", uid(i))])))
         elif pr[0] == "line":
             kv = [("RECORD", 13)] + common_
             for k, v in zip(("Location.X", "Location.Y", "Corner.X", "Corner.Y"), pr[1:5]):
@@ -435,7 +665,12 @@ def _sch_component(sym):
             recs.append(pblock(params(kv)))
         else:
             _, p, side, x, y, length, *show = pr
-            recs.append(pin_rec(p["num"], p["name"], p.get("type", "passive"), ORIENT[side], x, y, length, show[0] if show else True))
+            recs.append(pin_rec(p["num"], overline(p["name"]), p.get("type", "passive"), ORIENT[side], x, y, length, show[0] if show else True,
+                                p.get("hidden", False), parts[i], p.get("show_name"), p.get("show_num"), pin_symbols(p.get("shape")), modes[i],
+                                clean(p.get("description", ""))))
+            if p.get("net"):                  # hidden power pin: connects to this net (Altium 'HiddenNetName')
+                recs.append(pblock(params([("RECORD", 41), ("OwnerIndex", len(recs) - 1), ("OwnerPartId", -1), ("Color", PARAM_COLOR),
+                                           ("FontID", 1), ("Text", clean(p["net"])), ("Name", "HiddenNetName")])))
     (dx, dy), (cx, cy) = sym["label_at"]
     for rec, nm_, text, (x, y) in ((34, "Designator", sym.get("designator", "U?"), (dx, dy)), (41, "Comment", sym.get("comment", "*"), (cx, cy))):
         kv = [("RECORD", rec), ("IndexInSheet", -1), ("OwnerPartId", -1)]
@@ -443,6 +678,11 @@ def _sch_component(sym):
         kv += [("Color", PARAM_COLOR), ("FontID", 1), ("Text", clean(text)), ("Name", nm_)]
         kv += [("ReadOnlyState", 1)] if rec == 34 else []
         kv += [("UniqueID", uid(nm_))]
+        recs.append(pblock(params(kv)))
+    for k, (pn, pv) in enumerate(sym.get("params", [])):
+        kv = [("RECORD", 41), ("IndexInSheet", -1), ("OwnerPartId", -1)]
+        _coord(kv, "Location.X", cx); _coord(kv, "Location.Y", cy - 10 * (k + 1))
+        kv += [("Color", PARAM_COLOR), ("FontID", 1), ("IsHidden", "T"), ("Text", clean(pv)), ("Name", clean(pn)), ("UniqueID", uid(f"param{k}"))]
         recs.append(pblock(params(kv)))
     recs.append(pblock("|RECORD=44"))
     if sym.get("footprint"):
@@ -466,7 +706,7 @@ def schlib_bytes(symbols):
         data, n, _ = _sch_component(s)
         tree[k] = {"Data": data}
         total += n
-        lib += [(f"LibRef{i}", s["name"])] + ([(f"CompDescr{i}", clean(s["description"]))] if s.get("description") else []) + [(f"PartCount{i}", 2)]
+        lib += [(f"LibRef{i}", s["name"])] + ([(f"CompDescr{i}", clean(s["description"]))] if s.get("description") else []) + [(f"PartCount{i}", s.get("parts", 1) + 1)]
     hdr = [("HEADER", "Protel for Windows - Schematic Library Editor Binary File Version 5.0"), ("Weight", total + 1),
            ("MinorVersion", 9), ("UniqueID", unique_id("|".join(names))), ("FontIdCount", 1), ("Size1", 10),
            ("FontName1", "Times New Roman"), ("UseMBCS", "T"), ("IsBOC", "T"), ("SheetStyle", 9), ("BorderOn", "T"),
@@ -531,10 +771,15 @@ def parse_pcb_data(d):
                          "hole": struct.unpack_from("<i", m, 45)[0], "shape": shape, "rot": struct.unpack_from("<d", m, 52)[0],
                          "corner": ss[564] if len(ss) >= 596 and ss[531] else None,
                          "paste_mode": m[101] if len(m) > 102 else None, "paste": struct.unpack_from("<i", m, 86)[0] if len(m) > 90 else None,
-                         "raw": blocks})
+                         "plated": bool(m[60]), "hole_shape": ss[262] if len(ss) >= 596 else 0,
+                         "slot": struct.unpack_from("<i", ss, 263)[0] if len(ss) >= 596 else 0,
+                         "hole_rot": struct.unpack_from("<d", ss, 267)[0] if len(ss) >= 596 else 0.0, "raw": blocks})
         elif t == 5:
             b1, i = _blk(d, i); b2, i = _blk(d, i)
-            recs.append({"type": "text", "layer": b1[0], "raw": [b1, b2]})
+            x, y, h = struct.unpack_from("<3i", b1, 13)
+            recs.append({"type": "text", "layer": b1[0], "text": _str(b2), "x": x, "y": y, "h": h, "font": struct.unpack_from("<h", b1, 25)[0],
+                         "rot": struct.unpack_from("<d", b1, 27)[0], "mirror": bool(b1[35]), "w": struct.unpack_from("<i", b1, 36)[0],
+                         "ws": struct.unpack_from("<i", b1, 115)[0], "box": struct.unpack_from("<2i", b1, 124), "just": b1[132], "raw": [b1, b2]})
         elif t in (1, 3, 4, 6, 11, 12):
             b, i = _blk(d, i)
             r = {"type": {1: "arc", 3: "via", 4: "track", 6: "fill", 11: "region", 12: "body"}[t], "layer": b[0], "raw": [b]}
@@ -542,7 +787,9 @@ def parse_pcb_data(d):
                 r.update(zip(("x1", "y1", "x2", "y2", "w"), struct.unpack_from("<5i", b, 13)))
             elif t == 6:
                 r.update(zip(("x1", "y1", "x2", "y2"), struct.unpack_from("<4i", b, 13)))
-            elif t == 11:
+            elif t == 1:
+                r.update(zip(("cx", "cy", "r", "a0", "a1", "w"), struct.unpack_from("<3i2di", b, 13)))
+            elif t in (11, 12):
                 pl = struct.unpack_from("<I", b, 18)[0]
                 n = struct.unpack_from("<I", b, 22 + pl)[0]
                 r["params"] = b[22:22 + pl - 1].decode("cp1252")
@@ -578,6 +825,12 @@ def _read_pcblib(o):
         nm2, recs = parse_pcb_data(o.openstream(f"{key}/Data").read())
         out.append({"name": nm, "storage": key, "params": pr, "records": recs,
                     "header_count": struct.unpack("<I", o.openstream(f"{key}/Header").read())[0]})
+    if o.exists("Library/Models/Header") and out:     # embedded STEP models: [(params, decompressed bytes)]
+        md, j, models = o.openstream("Library/Models/Data").read(), 0, []
+        while j < len(md):
+            b, j = _blk(md, j)
+            models.append((parse_params(b.rstrip(b"\0").decode("cp1252")), zlib.decompress(o.openstream(f"Library/Models/{len(models)}").read())))
+        out[0]["models"] = models
     return out
 
 
@@ -609,7 +862,8 @@ def _read_schlib(o):
                 for _ in range(5):
                     strs.append(b[k + 1:k + 1 + b[k]].decode("cp1252")); k += 1 + b[k]
                 recs.append({"RECORD": "2", "name": strs[0], "num": strs[1], "etype": etype, "orient": cong & 3,
-                             "x": x, "y": y, "length": length, "conglomerate": cong})
+                             "x": x, "y": y, "length": length, "conglomerate": cong, "part": struct.unpack_from("<h", b, 5)[0],
+                             "mode": b[7], "symbols": tuple(b[8:12])})
             else:
                 recs.append(parse_params(b.rstrip(b"\0").decode("cp1252")))
         out.append({"name": nm, "records": recs})
@@ -623,6 +877,7 @@ def main(argv=None):
     p = sub.add_parser("pcblib", help="package JSON specs -> <out>/<name>.PcbLib")
     p.add_argument("specs", nargs="+"); p.add_argument("-o", "--out", default="out/altium_models/PcbLib")
     p.add_argument("--density", choices="ABC"); p.add_argument("--single", help="write all footprints into this one file")
+    p.add_argument("--rules", help="library rules file: layers and density (default: ecadlib.toml found from here)")
     s = sub.add_parser("schlib", help="symbol JSON files -> <out>/<name>.SchLib")
     s.add_argument("symbols", nargs="+"); s.add_argument("-o", "--out", default="out/altium_models/SchLib")
     d = sub.add_parser("dump", help="print what the minimal reader sees in a .PcbLib/.SchLib")
@@ -639,29 +894,48 @@ def main(argv=None):
                         kinds[(r["type"], r["layer"])] = kinds.get((r["type"], r["layer"]), 0) + 1
                     print(f"{f}: {fp['name']} (storage {fp['storage']}) {len(pads)} pads, {dict(sorted(kinds.items()))}")
                     for r in pads:
+                        hole = (f" layer {r['layer']} hole {to_mm(r['hole']):.4f}" + (f" slot {to_mm(r['slot']):.4f} rot {r['hole_rot']:g}" if r['hole_shape'] == 2 else
+                                f" square" if r['hole_shape'] == 1 else "") + ("" if r['plated'] else " NPTH")) if r['hole'] else ""
                         print(f"   pad {r['designator']:>3} ({to_mm(r['x']):8.4f},{to_mm(r['y']):8.4f}) {to_mm(r['w']):.4f}x{to_mm(r['h']):.4f} "
-                              f"shape {r['shape']} corner {r['corner']} paste {'rule' if r['paste_mode'] == 1 else r['paste']}")
+                              f"rot {r['rot']:g} shape {r['shape']} corner {r['corner']} paste {'rule' if r['paste_mode'] == 1 else r['paste']}{hole}")
+                    for r in fp["records"]:
+                        if r["type"] == "arc":
+                            print(f"   arc layer {r['layer']} c ({to_mm(r['cx']):.4f},{to_mm(r['cy']):.4f}) r {to_mm(r['r']):.4f} {r['a0']:g}..{r['a1']:g} w {to_mm(r['w']):.4f}")
+                        elif r["type"] == "text":
+                            print(f"   text {r['text']} layer {r['layer']} at ({to_mm(r['x']):.4f},{to_mm(r['y']):.4f}) h {to_mm(r['h']):.4f} "
+                                  f"stroke {to_mm(r['w']):.4f} rot {r['rot']:g} font {r['font']}")
+                        elif r["type"] == "body":
+                            bp = parse_params(r["params"])
+                            print(f"   body {bp['V7_LAYER']} {len(r['pts'])} pts height {bp['OVERALLHEIGHT']} standoff {bp['STANDOFFHEIGHT']} "
+                                  f"model type {bp['MODEL.MODELTYPE']} {bp.get('MODEL.NAME') or ''}")
+                    for mp, d in fp.get("models", []):
+                        print(f"   model {mp['NAME']} {len(d)} B checksum {mp['CHECKSUM']} (computed {step_checksum(d)})")
             else:
                 _, syms = read_schlib(f)
                 for sy in syms:
                     pins = [r for r in sy["records"] if r["RECORD"] == "2"]
-                    print(f"{f}: {sy['name']} {len(pins)} pins: " + ", ".join(f"{r['num']}:{r['name']}" for r in pins))
+                    modes = int(sy["records"][0].get("DISPLAYMODECOUNT", 1))
+                    print(f"{f}: {sy['name']} {len(pins)} pins" + (f" in {modes} display modes" if modes > 1 else "") + ": " + ", ".join(
+                        f"{r['num']}:{r['name']}" + (f"[{','.join(map(str, r['symbols']))}]" if any(r["symbols"]) else "")
+                        + (f"@{r['mode']}" if r["mode"] else "") for r in pins))
         return
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     if a.cmd == "pcblib":
-        from . import footprint_gen as F
+        from . import footprint_gen as F, rules as RU
+        rules = RU.load(a.rules, start=out)
+        lay = RU.layers(rules)
         fps = []
         for sp in a.specs:
             spec = json.loads(Path(sp).read_text())
             F.validate(spec)
-            fp, rep = footprint_from_spec(spec, a.density)
+            fp, rep = footprint_from_spec(spec, RU.density_for(spec, rules, a.density))
             fps.append(fp)
             if not a.single:
-                path = write_pcblib(out / f"{file_stem(fp['name'])}.PcbLib", [fp])
+                path = write_pcblib(out / f"{file_stem(fp['name'])}.PcbLib", [fp], lay)
                 print(f"{fp['name']:<44} {len(fp['pads']):>3} pads {len(fp['tracks']):>3} tracks {len(fp['fills'])} fills "
                       f"{len(fp['regions'])} regions -> {path} ({path.stat().st_size} B)")
         if a.single:
-            print(f"{len(fps)} footprints -> {write_pcblib(out / a.single, fps)}")
+            print(f"{len(fps)} footprints -> {write_pcblib(out / a.single, fps, lay)}")
     else:
         for f in a.symbols:
             sym = symbol_from_json(json.loads(Path(f).read_text()))

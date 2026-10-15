@@ -1,0 +1,106 @@
+# Sample GitHub Actions workflow for upstream change alerts (ecadlib/upstream.py).
+# It lives in examples/ so it never runs in this repo: copy it to .github/workflows/ in your library repo.
+# Expects the converted KiCad parts and their manifest.json committed at $MODELS (kicad_import -o $MODELS),
+# and the release plan at $PLAN. Secrets:
+#   NEXAR_TOKEN    Nexar user token (design.domain, user.access, openid); check-a365 is skipped without it
+#   GITLAB_TOKEN   optional; raises the gitlab.com API rate limit (500 requests/min unauthenticated)
+# Exit codes of both checks: 0 no changes, 1 changes found, 2 error.
+name: upstream-watch
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"          # Mondays 05:41 UTC
+  workflow_dispatch:
+    inputs:
+      update:
+        description: "Reconvert parts whose KiCad sources changed and open a PR"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  MODELS: library/altium_models_kicad
+  PLAN: library/altium365/plan.json
+  WORKSPACE: https://example.365.altium.com      # your workspace URL
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    env:
+      HAS_NEXAR: ${{ secrets.NEXAR_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install requests pandas openpyxl "ecadlib @ git+https://github.com/oliBrowne/PCBLIVINGLIBRARY"
+
+      - name: Restore last Altium 365 snapshot
+        uses: actions/cache/restore@v4
+        with:
+          path: out/a365_state.json
+          key: a365-state-${{ github.run_id }}
+          restore-keys: a365-state-
+
+      - name: KiCad upstream
+        id: kicad
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          set +e
+          python -m ecadlib upstream check-kicad "$MODELS/manifest.json" -o out/upstream_kicad \
+              ${{ inputs.update && '--update' || '' }}
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          cat out/upstream_kicad.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Altium 365 drift
+        id: a365
+        if: env.HAS_NEXAR == 'true'
+        env:
+          NEXAR_TOKEN: ${{ secrets.NEXAR_TOKEN }}
+        run: |
+          set +e
+          python -m ecadlib upstream check-a365 "$PLAN" --workspace "$WORKSPACE" \
+              --state out/a365_state.json -o out/upstream_a365
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          cat out/upstream_a365.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save Altium 365 snapshot
+        if: always() && steps.a365.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: out/a365_state.json
+          key: a365-state-${{ github.run_id }}
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-reports
+          path: |
+            out/upstream_kicad.md
+            out/upstream_kicad.csv
+            out/upstream_a365.md
+            out/upstream_a365.csv
+          if-no-files-found: ignore
+
+      - name: Open a PR with reconverted parts
+        if: inputs.update && steps.kicad.outputs.code == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git switch -c "upstream/kicad-${{ github.run_id }}"
+          git add "$MODELS"
+          git -c user.name="upstream-watch" -c user.email="actions@users.noreply.github.com" \
+              commit -m "Reconvert KiCad parts changed upstream"
+          git push -u origin HEAD
+          gh pr create --fill --body-file out/upstream_kicad.md
+
+      - name: Fail when something changed
+        if: steps.kicad.outputs.code != '0' || (steps.a365.outputs.code != '' && steps.a365.outputs.code != '0')
+        run: |
+          echo "check-kicad exit ${{ steps.kicad.outputs.code }}, check-a365 exit ${{ steps.a365.outputs.code }} (1 = changes, 2 = error)"
+          exit 1

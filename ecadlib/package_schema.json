@@ -4,7 +4,12 @@
   "title": "ECAD package mechanical dimensions (IPC-7351B land-pattern input)",
   "description": "Contract an LLM fills from a datasheet mechanical drawing. All lengths in millimetres. Give each dimension as min/max where the drawing shows a range (preferred), or nom (+ optional tol = symmetric +/-). Never guess: if a value is not on the drawing, omit it and list it in 'unresolved'. Orientation: pin 1 top-left; X axis = across the pad rows (lead span), Y axis = along a pin row.",
   "type": "object",
-  "required": ["name", "package_type", "body_length", "body_width", "terminal_length"],
+  "required": [
+    "name",
+    "package_type",
+    "body_length",
+    "body_width"
+  ],
   "additionalProperties": false,
   "$defs": {
     "dim": {
@@ -12,52 +17,390 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "min": {"type": "number", "minimum": 0},
-        "nom": {"type": "number", "minimum": 0},
-        "max": {"type": "number", "minimum": 0},
-        "tol": {"type": "number", "minimum": 0, "description": "symmetric +/- tolerance around nom"}
+        "min": {
+          "type": "number",
+          "minimum": 0
+        },
+        "nom": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max": {
+          "type": "number",
+          "minimum": 0
+        },
+        "tol": {
+          "type": "number",
+          "minimum": 0,
+          "description": "symmetric +/- tolerance around nom"
+        }
       },
-      "anyOf": [{"required": ["min", "max"]}, {"required": ["nom"]}]
+      "anyOf": [
+        {
+          "required": [
+            "min",
+            "max"
+          ]
+        },
+        {
+          "required": [
+            "nom"
+          ]
+        }
+      ]
     }
   },
   "properties": {
-    "name": {"type": "string", "pattern": "^[A-Za-z0-9_.+-]+$", "description": "Footprint name, KiCad style, e.g. SOIC-8_3.9x4.9mm_P1.27mm"},
-    "description": {"type": "string"},
-    "package_type": {"enum": ["chip", "gullwing", "qfn"],
-      "description": "chip = 2-terminal rectangular end-cap (R/C/L 0402..2512); gullwing = dual-row gull-wing (SOIC/SOP/TSSOP/SSOP/MSOP); qfn = quad flat no-lead (QFN/DFN-quad) with optional exposed pad"},
-    "pin_count": {"type": "integer", "minimum": 2, "description": "Signal pins, excluding exposed pad. chip: 2."},
-    "pitch": {"type": "number", "exclusiveMinimum": 0, "description": "Lead pitch e (gullwing/qfn)"},
-    "body_length": {"$ref": "#/$defs/dim", "description": "chip: overall length L (terminal end to end, = lead span). gullwing: body length D along the pin rows (Y). qfn: body size along X (D)."},
-    "body_width": {"$ref": "#/$defs/dim", "description": "chip: width W. gullwing: body width E1 (X, excluding leads). qfn: body size along Y (E)."},
-    "lead_span": {"$ref": "#/$defs/dim", "description": "gullwing only: tip-to-tip lead span E (X). For chip it equals body_length; for qfn it equals body sizes."},
-    "terminal_length": {"$ref": "#/$defs/dim", "description": "chip: end-cap band length T. gullwing: foot length L (flat contact). qfn: terminal length L."},
-    "terminal_width": {"$ref": "#/$defs/dim", "description": "gullwing/qfn: lead width b. chip: omit (uses body_width)."},
-    "height_max": {"type": "number", "description": "A max (seated height); used for 3D/descr only"},
-    "pins_left_right": {"type": "integer", "minimum": 0, "description": "qfn: pins on each of the left and right sides (default pin_count/4)"},
-    "pins_top_bottom": {"type": "integer", "minimum": 0, "description": "qfn: pins on each of the top and bottom sides (default pin_count/4)"},
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.+-]+$",
+      "description": "Footprint name, KiCad style, e.g. SOIC-8_3.9x4.9mm_P1.27mm"
+    },
+    "description": {
+      "type": "string"
+    },
+    "package_type": {
+      "enum": [
+        "chip",
+        "molded",
+        "gullwing",
+        "qfp",
+        "qfn"
+      ],
+      "description": "chip = 2-terminal rectangular end-cap (R/C/L/LED 0201..2512); molded = 2-terminal molded body with terminals bent under it (tantalum caps, SMA/SMB/SMC diodes, power inductors); gullwing = leads out of the body sides (SOIC/SOP/TSSOP/MSOP/SOT-23/SOT-223/SOD-123, use pin_positions for uneven layouts); qfp = gull-wing leads on four sides (QFP/LQFP/TQFP), lead_span is the tip-to-tip span; qfn = quad/dual flat no-lead (QFN/DFN/SON) with optional exposed pad"
+    },
+    "pin_count": {
+      "type": "integer",
+      "minimum": 2,
+      "description": "Signal pins, excluding exposed pad. chip: 2."
+    },
+    "pitch": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Lead pitch e (gullwing/qfn)"
+    },
+    "body_length": {
+      "$ref": "#/$defs/dim",
+      "description": "chip: overall length L (terminal end to end, = lead span). gullwing: body length D along the pin rows (Y). qfn: body size along X (D)."
+    },
+    "body_width": {
+      "$ref": "#/$defs/dim",
+      "description": "chip: width W. gullwing: body width E1 (X, excluding leads). qfn: body size along Y (E)."
+    },
+    "lead_span": {
+      "$ref": "#/$defs/dim",
+      "description": "gullwing only: tip-to-tip lead span E (X). For chip it equals body_length; for qfn it equals body sizes."
+    },
+    "terminal_length": {
+      "$ref": "#/$defs/dim",
+      "description": "chip: end-cap band length T. gullwing: foot length L (flat contact). qfn: terminal length L."
+    },
+    "inner_span": {
+      "$ref": "#/$defs/dim",
+      "description": "chip/molded: inner gap S between the terminals when the drawing gives it directly (LED and molded drawings often do); used instead of body_length - 2*terminal_length"
+    },
+    "terminal_width": {
+      "$ref": "#/$defs/dim",
+      "description": "gullwing/qfn: lead width b. chip/molded: terminal width when narrower than the body (e.g. SMA/tantalum); omit to use body_width."
+    },
+    "height_max": {
+      "type": "number",
+      "description": "A max (seated height); used for 3D/descr only"
+    },
+    "pins_left_right": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "qfn: pins on each of the left and right sides (default pin_count/4)"
+    },
+    "pins_top_bottom": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "qfn: pins on each of the top and bottom sides (default pin_count/4)"
+    },
     "exposed_pad": {
-      "type": "object", "additionalProperties": false,
-      "required": ["length", "width"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "length",
+        "width"
+      ],
       "properties": {
-        "length": {"$ref": "#/$defs/dim", "description": "EP size along X (D2)"},
-        "width": {"$ref": "#/$defs/dim", "description": "EP size along Y (E2)"},
-        "paste_coverage": {"type": "number", "minimum": 0.2, "maximum": 1.0, "default": 0.6},
-        "paste_grid": {"type": "integer", "minimum": 1, "maximum": 6, "description": "N x N paste windows; default auto"}
+        "length": {
+          "$ref": "#/$defs/dim",
+          "description": "EP size along X (D2)"
+        },
+        "width": {
+          "$ref": "#/$defs/dim",
+          "description": "EP size along Y (E2)"
+        },
+        "paste_coverage": {
+          "type": "number",
+          "minimum": 0.2,
+          "maximum": 1.0,
+          "default": 0.6
+        },
+        "paste_grid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6,
+          "description": "N x N paste windows; default auto"
+        },
+        "number": {
+          "description": "EP pad number; default pin_count+1",
+          "type": [
+            "string",
+            "integer"
+          ],
+          "pattern": "^[A-Za-z0-9_.+-]{1,16}$"
+        }
       }
     },
-    "density": {"enum": ["A", "B", "C"], "default": "B", "description": "IPC-7351B density level: A=most (max fillets), B=nominal, C=least"},
-    "model_3d": {"type": "string", "description": "Optional 3D model path to reference, e.g. ${KICAD8_3DMODEL_DIR}/Package_SO.3dshapes/SOIC-8_3.9x4.9mm_P1.27mm.wrl"},
+    "density": {
+      "enum": [
+        "A",
+        "B",
+        "C"
+      ],
+      "default": "B",
+      "description": "IPC-7351B density level: A=most (max fillets), B=nominal, C=least"
+    },
+    "model_3d": {
+      "type": "string",
+      "description": "Optional 3D model path to reference, e.g. ${KICAD8_3DMODEL_DIR}/Package_SO.3dshapes/SOIC-8_3.9x4.9mm_P1.27mm.wrl"
+    },
     "source": {
       "type": "object",
       "description": "Provenance for review: datasheet URL, page/figure, and the drawing's package code.",
-      "properties": {"datasheet": {"type": "string"}, "page": {"type": ["integer", "string"]}, "drawing": {"type": "string"}, "extracted_by": {"type": "string"}}
+      "properties": {
+        "datasheet": {
+          "type": "string"
+        },
+        "page": {
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "drawing": {
+          "type": "string"
+        },
+        "extracted_by": {
+          "type": "string"
+        }
+      }
     },
-    "unresolved": {"type": "array", "items": {"type": "string"}, "description": "Dimensions the extractor could not read with confidence (requires human review)"}
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Dimensions the extractor could not read with confidence (requires human review)"
+    },
+    "lead_type": {
+      "enum": [
+        "flat",
+        "molded",
+        "melf"
+      ],
+      "description": "Optional IPC lead family override (default comes from package_type): molded = inward L / molded body (tantalum, SMA/SMB, SOD-123F; IPC-7351B Table 3-13), melf = cylindrical end caps (MELF/MiniMELF), flat = outward flat leads (IPC-7352 flat lead)"
+    },
+    "polarized": {
+      "type": "boolean",
+      "default": false,
+      "description": "Pin 1 is a polarity terminal (LED/diode cathode, tantalum +). Adds the KiCad-style silk bracket on the pin-1 side and a chamfered fab corner."
+    },
+    "pin_positions": {
+      "type": "array",
+      "minItems": 2,
+      "description": "gullwing: explicit pad layout when the rows are uneven (SOT-23: 1 L -0.95, 2 L +0.95, 3 R 0). offset = mm along the row from the centre, + down.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "number",
+          "side",
+          "offset"
+        ],
+        "properties": {
+          "number": {
+            "type": [
+              "string",
+              "integer"
+            ],
+            "pattern": "^[A-Za-z0-9_.+-]{1,16}$",
+            "description": "pad number: letters, digits and _ . + - only (KLC uses 1, 2, 3 ...)"
+          },
+          "side": {
+            "enum": [
+              "L",
+              "R"
+            ]
+          },
+          "offset": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "tab": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "number",
+        "width"
+      ],
+      "description": "gullwing: one wide tab lead on a side (SOT-223, DPAK). Same lead span as the pins.",
+      "properties": {
+        "number": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "pattern": "^[A-Za-z0-9_.+-]{1,16}$",
+          "description": "pad number: letters, digits and _ . + - only (KLC uses 1, 2, 3 ...)"
+        },
+        "side": {
+          "enum": [
+            "L",
+            "R"
+          ],
+          "default": "R"
+        },
+        "offset": {
+          "type": "number",
+          "default": 0
+        },
+        "width": {
+          "$ref": "#/$defs/dim",
+          "description": "tab lead width b2"
+        },
+        "length": {
+          "$ref": "#/$defs/dim",
+          "description": "tab foot length; default terminal_length"
+        }
+      }
+    },
+    "lead_span_y": {
+      "$ref": "#/$defs/dim",
+      "description": "qfp only: tip-to-tip span of the top/bottom rows when it differs from lead_span (rectangular QFP)"
+    },
+    "land": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pad_length",
+        "pad_width",
+        "pad_center"
+      ],
+      "description": "The manufacturer's recommended land pattern, when the datasheet gives one. It replaces the IPC-7351B pads for the signal pins (a tab or exposed pad keeps its own size). pad_center = distance from the part centre to each pad centre.",
+      "properties": {
+        "pad_length": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pad_width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pad_center": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pad_center_y": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "QFN/QFP top and bottom rows, when different from pad_center"
+        }
+      }
+    }
   },
   "allOf": [
-    {"if": {"properties": {"package_type": {"const": "gullwing"}}},
-     "then": {"required": ["pin_count", "pitch", "lead_span", "terminal_width"]}},
-    {"if": {"properties": {"package_type": {"const": "qfn"}}},
-     "then": {"required": ["pin_count", "pitch", "terminal_width"]}}
+    {
+      "if": {
+        "properties": {
+          "package_type": {
+            "const": "gullwing"
+          }
+        },
+        "not": {
+          "required": [
+            "pin_positions"
+          ]
+        }
+      },
+      "then": {
+        "required": [
+          "pin_count",
+          "pitch",
+          "lead_span",
+          "terminal_width"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_type": {
+            "const": "gullwing"
+          }
+        },
+        "required": [
+          "pin_positions"
+        ]
+      },
+      "then": {
+        "required": [
+          "lead_span",
+          "terminal_width"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_type": {
+            "const": "qfn"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "pin_count",
+          "pitch",
+          "terminal_width"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_type": {
+            "const": "qfp"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "pin_count",
+          "pitch",
+          "lead_span",
+          "terminal_width"
+        ]
+      }
+    },
+    {
+      "anyOf": [
+        {
+          "required": [
+            "terminal_length"
+          ]
+        },
+        {
+          "required": [
+            "inner_span"
+          ]
+        }
+      ]
+    }
   ]
 }

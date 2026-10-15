@@ -19,7 +19,7 @@ def _index(syms=(), fps=()):
 
 
 def test_p1_non_cp1252_names():
-    fp = AL.footprint_from_spec(json.loads(Path("examples/packages/R_0603_1608Metric.json").read_text()))[0]
+    fp = AL.footprint_from_spec(json.loads(Path("ecadlib/package_specs/R_0603_1608Metric.json").read_text()))[0]
     fp["name"] = "R_1kΩ_0603"
     sym = dict(AL.resistor_symbol(), name="Ω-sensor", footprint="R_1kΩ_0603")
     with tempfile.TemporaryDirectory() as d:
@@ -152,6 +152,18 @@ def test_p11_utf16_and_designator_ranges():
     lines, _ = T.read_bom(_write("", raw=b"\xff\xfe" + text.encode("utf-16-le")))
     assert [l["designator"] for l in lines] == ["R1-R4", "R9"], lines
     assert T.count_refs("R1, R2, R5-R8") == 6 and T.count_refs("C1-3") == 3
+
+
+def test_p12_cache_never_stores_query_secrets():
+    from ecadlib.httpcache import CachedHTTP, redact
+    assert redact("https://api.mouser.com/api/v1/search?apiKey=abc123&x=1") == "https://api.mouser.com/api/v1/search?apiKey=REDACTED&x=1"
+    h = CachedHTTP(tempfile.mkdtemp())
+    class R:
+        status_code, text, ok = 200, "{}", True
+    h.s.request = lambda *a, **k: R()
+    h.get("https://api.example.com/p?apiKey=abc123&q=LM358")
+    stored = "".join(f.read_text() for f in h.dir.glob("*.json"))
+    assert "abc123" not in stored and "REDACTED" in stored, stored
 
 
 if __name__ == "__main__":

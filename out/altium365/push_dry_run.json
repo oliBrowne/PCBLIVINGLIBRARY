@@ -76,43 +76,579 @@
   },
   {
     "name": "TYPE-C-31-M-12",
-    "action": "skip",
-    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/Connectors",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "TYPE-C-31-M-12",
+        "componentComment": "TYPE-C-31-M-12",
+        "componentDescription": "USB Type-C receptacle 16-pin SMD",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "USB-C"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "Korean Hroparts Elec"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "TYPE-C-31-M-12"
+          },
+          {
+            "name": "Supplier 1",
+            "value": "LCSC"
+          },
+          {
+            "name": "Supplier Part Number 1",
+            "value": "C165948"
+          },
+          {
+            "name": "ComponentLink1Description",
+            "value": "LCSC"
+          },
+          {
+            "name": "ComponentLink1URL",
+            "value": "https://www.lcsc.com/product-detail/C165948.html"
+          },
+          {
+            "name": "ComponentLink2Description",
+            "value": "Datasheet"
+          },
+          {
+            "name": "ComponentLink2URL",
+            "value": "https://www.lcsc.com/datasheet/C165948.pdf"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": "TYPE-C-31-M-12",
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\TYPE-C-31-M-12.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": "USB_C_Receptacle_16P",
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\USB_C_Receptacle_16P.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
   },
   {
     "name": "SM04B-SRSS-TB(LF)(SN)",
-    "action": "skip",
-    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/Connectors",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "SM04B-SRSS-TB(LF)(SN)",
+        "componentComment": "SM04B-SRSS-TB(LF)(SN)",
+        "componentDescription": "JST SH 1.0mm 4-pin right-angle SMD",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "Conn_01x04"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "JST"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "SM04B-SRSS-TB(LF)(SN)"
+          },
+          {
+            "name": "Supplier 1",
+            "value": "LCSC"
+          },
+          {
+            "name": "Supplier Part Number 1",
+            "value": "C160404"
+          },
+          {
+            "name": "ComponentLink1Description",
+            "value": "LCSC"
+          },
+          {
+            "name": "ComponentLink1URL",
+            "value": "https://www.lcsc.com/product-detail/C160404.html"
+          },
+          {
+            "name": "ComponentLink2Description",
+            "value": "Datasheet"
+          },
+          {
+            "name": "ComponentLink2URL",
+            "value": "https://www.lcsc.com/datasheet/C160404.pdf"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": "SM04B-SRSS-TB(LF)(SN)",
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\SM04B-SRSS-TB(LF)(SN).SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": "JST_SH_SM04B-SRSS-TB",
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\JST_SH_SM04B-SRSS-TB.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
   },
   {
     "name": "FTSH-105-01-L-DV-K",
-    "action": "skip",
-    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/Connectors",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "FTSH-105-01-L-DV-K",
+        "componentComment": "FTSH-105-01-L-DV-K",
+        "componentDescription": "1.27mm 2x5 SWD header (no LCSC listing)",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "Conn_02x05"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "Samtec"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "FTSH-105-01-L-DV-K"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": "FTSH-105-01-L-DV-K",
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\FTSH-105-01-L-DV-K.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": "Samtec_FTSH-105-01-L-DV-K",
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\Samtec_FTSH-105-01-L-DV-K.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
   },
   {
     "name": "X322512MSB4SI",
-    "action": "skip",
-    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/Crystals",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "X322512MSB4SI",
+        "componentComment": "X322512MSB4SI",
+        "componentDescription": "Crystal 12MHz 20pF 3225",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "12MHz"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "YXC"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "X322512MSB4SI"
+          },
+          {
+            "name": "Supplier 1",
+            "value": "LCSC"
+          },
+          {
+            "name": "Supplier Part Number 1",
+            "value": "C9002"
+          },
+          {
+            "name": "ComponentLink1Description",
+            "value": "LCSC"
+          },
+          {
+            "name": "ComponentLink1URL",
+            "value": "https://www.lcsc.com/product-detail/C9002.html"
+          },
+          {
+            "name": "ComponentLink2Description",
+            "value": "Datasheet"
+          },
+          {
+            "name": "ComponentLink2URL",
+            "value": "https://www.lcsc.com/datasheet/C9002.pdf"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": "X322512MSB4SI",
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\X322512MSB4SI.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": "Crystal_SMD_3225-4Pin",
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\Crystal_SMD_3225-4Pin.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
   },
   {
     "name": "KT-0603R",
-    "action": "skip",
-    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/Diodes",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "KT-0603R",
+        "componentComment": "KT-0603R",
+        "componentDescription": "LED red 0603",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "RED"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "Hubei KENTO Elec"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "KT-0603R"
+          },
+          {
+            "name": "Supplier 1",
+            "value": "LCSC"
+          },
+          {
+            "name": "Supplier Part Number 1",
+            "value": "C2286"
+          },
+          {
+            "name": "ComponentLink1Description",
+            "value": "LCSC"
+          },
+          {
+            "name": "ComponentLink1URL",
+            "value": "https://www.lcsc.com/product-detail/C2286.html"
+          },
+          {
+            "name": "ComponentLink2Description",
+            "value": "Datasheet"
+          },
+          {
+            "name": "ComponentLink2URL",
+            "value": "https://www.lcsc.com/datasheet/C2286.pdf"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": "KT-0603R",
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\KT-0603R.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": "LED_0603_1608Metric",
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\LED_0603_1608Metric.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
   },
   {
     "name": "STM32F103C8T6",
-    "action": "skip",
-    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/ICs",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "STM32F103C8T6",
+        "componentComment": "STM32F103C8T6",
+        "componentDescription": "ARM Cortex-M3 MCU 64KB Flash",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "STM32F103C8T6"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "STMicroelectronics"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "STM32F103C8T6"
+          },
+          {
+            "name": "Supplier 1",
+            "value": "LCSC"
+          },
+          {
+            "name": "Supplier Part Number 1",
+            "value": "C8734"
+          },
+          {
+            "name": "ComponentLink1Description",
+            "value": "LCSC"
+          },
+          {
+            "name": "ComponentLink1URL",
+            "value": "https://www.lcsc.com/product-detail/C8734.html"
+          },
+          {
+            "name": "ComponentLink2Description",
+            "value": "Datasheet"
+          },
+          {
+            "name": "ComponentLink2URL",
+            "value": "https://www.lcsc.com/datasheet/C8734.pdf"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": "STM32F103C8T6",
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\STM32F103C8T6.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": "LQFP-48_7x7mm_P0.5mm",
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\LQFP-48_7x7mm_P0.5mm.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
   },
   {
     "name": "AMS1117-3.3",
-    "action": "skip",
-    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/ICs",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "AMS1117-3.3",
+        "componentComment": "AMS1117-3.3",
+        "componentDescription": "LDO 3.3V 1A",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "AMS1117-3.3"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "Advanced Monolithic Systems"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "AMS1117-3.3"
+          },
+          {
+            "name": "Supplier 1",
+            "value": "LCSC"
+          },
+          {
+            "name": "Supplier Part Number 1",
+            "value": "C6186"
+          },
+          {
+            "name": "ComponentLink1Description",
+            "value": "LCSC"
+          },
+          {
+            "name": "ComponentLink1URL",
+            "value": "https://www.lcsc.com/product-detail/C6186.html"
+          },
+          {
+            "name": "ComponentLink2Description",
+            "value": "Datasheet"
+          },
+          {
+            "name": "ComponentLink2URL",
+            "value": "https://www.lcsc.com/datasheet/C6186.pdf"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": "AMS1117-3.3",
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\AMS1117-3.3.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": "SOT-223-3_TabPin2",
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\SOT-223-3_TabPin2.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
   },
   {
     "name": "ESP32-S3-WROOM-1-N16R8",
-    "action": "skip",
-    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/ICs",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "ESP32-S3-WROOM-1-N16R8",
+        "componentComment": "ESP32-S3-WROOM-1-N16R8",
+        "componentDescription": "WiFi/BLE module 16MB flash 8MB PSRAM",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "ESP32-S3-WROOM-1-N16R8"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "Espressif"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "ESP32-S3-WROOM-1-N16R8"
+          },
+          {
+            "name": "Supplier 1",
+            "value": "LCSC"
+          },
+          {
+            "name": "Supplier Part Number 1",
+            "value": "C2913202"
+          },
+          {
+            "name": "ComponentLink1Description",
+            "value": "LCSC"
+          },
+          {
+            "name": "ComponentLink1URL",
+            "value": "https://www.lcsc.com/product-detail/C2913202.html"
+          },
+          {
+            "name": "ComponentLink2Description",
+            "value": "Datasheet"
+          },
+          {
+            "name": "ComponentLink2URL",
+            "value": "https://www.lcsc.com/datasheet/C2913202.pdf"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": "ESP32-S3-WROOM-1-N16R8",
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\ESP32-S3-WROOM-1-N16R8.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": "ESP32-S3-WROOM-1",
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\ESP32-S3-WROOM-1.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
   },
   {
     "name": "TPS62133RGTR",
@@ -266,8 +802,54 @@
   },
   {
     "name": "TPS62162DSGR",
-    "action": "skip",
-    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/ICs",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "TPS62162DSGR",
+        "componentComment": "TPS62162DSGR",
+        "componentDescription": "3-17V 1A step-down (LCSC number intentionally omitted -> MPN search)",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "TPS62162DSGR"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "Texas Instruments"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "TPS62162DSGR"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": "TPS62162DSGR",
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\TPS62162DSGR.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": "WSON-8_2x2mm_P0.5mm",
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\WSON-8_2x2mm_P0.5mm.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
   },
   {
     "name": "RES-0603-10k",
@@ -346,7 +928,77 @@
   },
   {
     "name": "AO3401A",
-    "action": "skip",
-    "detail": "needs_altium_models (no .SchLib/.PcbLib)"
+    "action": "release",
+    "detail": {
+      "mutation": "desReleaseComponent",
+      "input": {
+        "workspaceUrl": "https://example.365.altium.com",
+        "componentReleaseFolder": "Components/Transistors",
+        "useExistingComponentReleaseFolder": true,
+        "componentItemName": "AO3401A",
+        "componentComment": "AO3401A",
+        "componentDescription": "P-MOSFET -30V -4A",
+        "parameters": [
+          {
+            "name": "Value",
+            "value": "AO3401A"
+          },
+          {
+            "name": "Manufacturer",
+            "value": "Alpha & Omega Semiconductor"
+          },
+          {
+            "name": "Manufacturer Part Number",
+            "value": "AO3401A"
+          },
+          {
+            "name": "Supplier 1",
+            "value": "LCSC"
+          },
+          {
+            "name": "Supplier Part Number 1",
+            "value": "C15127"
+          },
+          {
+            "name": "ComponentLink1Description",
+            "value": "LCSC"
+          },
+          {
+            "name": "ComponentLink1URL",
+            "value": "https://www.lcsc.com/product-detail/C15127.html"
+          },
+          {
+            "name": "ComponentLink2Description",
+            "value": "Datasheet"
+          },
+          {
+            "name": "ComponentLink2URL",
+            "value": "https://www.lcsc.com/datasheet/C15127.pdf"
+          }
+        ],
+        "componentRevisionNamingSchemeNodeId": null,
+        "componentLifeCycleDefinitionNodeId": null,
+        "symbolReleaseFolder": "Components/Models/Symbols",
+        "symbolItemName": "AO3401A",
+        "symbolFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\AO3401A.SchLib"
+          }
+        ],
+        "symbolRevisionNamingSchemeNodeId": null,
+        "symbolLifeCycleDefinitionNodeId": null,
+        "footprintReleaseFolder": "Components/Models/Footprints",
+        "footprintItemName": "SOT-23",
+        "footprintFiles": [
+          {
+            "fileId": "<fileId>",
+            "relativePath": "Released\\SOT-23.PcbLib"
+          }
+        ],
+        "footprintRevisionNamingSchemeNodeId": null,
+        "footprintLifeCycleDefinitionNodeId": null
+      }
+    }
   }
 ]

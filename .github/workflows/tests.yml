@@ -1,0 +1,55 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Run all tests (offline; no secrets needed)
+        env:
+          SOURCE_DATE_EPOCH: "1791936000"
+        run: python -m tests.run_all
+
+  package:
+    # Build the sdist and wheel the release workflow would publish, then install each into a
+    # clean venv and smoke-test it from outside the checkout (catches missing package data).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install build twine
+      - run: python -m build
+      - run: python -m twine check --strict dist/*
+      - name: Smoke-test the installed wheel and sdist
+        run: |
+          for dist in dist/*.whl dist/*.tar.gz; do
+            echo "::group::$dist"
+            rm -rf /tmp/venv && python -m venv /tmp/venv
+            /tmp/venv/bin/pip install -q "$dist"
+            (cd /tmp && /tmp/venv/bin/python "$GITHUB_WORKSPACE/.github/scripts/smoke_installed.py")
+            echo "::endgroup::"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

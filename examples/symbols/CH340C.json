@@ -4,6 +4,7 @@
   "designator": "U?",
   "footprint": "SOIC-16_3.9x9.9mm_P1.27mm",
   "needs_datasheet_verification": true,
+  "cross_check": "2026-10-13: pin numbers and names match KiCad's official symbol Interface_USB:CH340C (gitlab.com kicad-symbols master). The WCH/LCSC datasheet PDFs could not be fetched from the build sandbox, so this is still not checked against the datasheet.",
   "pins": [
     {"num": "16", "name": "VCC", "type": "power", "side": "left"},
     {"num": "4", "name": "V3", "type": "power", "side": "left"},
