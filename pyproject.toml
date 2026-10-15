@@ -1,24 +1,59 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ecadlib"
-version = "0.1.0"
+dynamic = ["version"]                  # single source: ecadlib/__init__.py __version__
 description = "AI-assisted living ECAD component library: BOM triage, IPC-7351B footprints, Altium and KiCad export"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "oliver browne" }]
 requires-python = ">=3.10"
 dependencies = ["requests", "pandas", "openpyxl", "jsonschema"]
+keywords = [
+    "ecad", "pcb", "eda", "footprint", "ipc-7351", "kicad", "altium", "altium-365",
+    "component-library", "bom", "datasheet", "mcp",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Manufacturing",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+
+[project.urls]
+Homepage = "https://github.com/oliBrowne/PCBLIVINGLIBRARY"
+Source = "https://github.com/oliBrowne/PCBLIVINGLIBRARY"
+Issues = "https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues"
+Changelog = "https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
+altium = ["olefile"]                   # read .PcbLib/.SchLib back (altium-lib dump)
+pdf = ["pypdf"]                        # datasheet reader: trim a PDF to --pages before sending it
+all = ["olefile", "pypdf"]
 dev = ["olefile", "graphql-core", "pyaltiumlib", "pypdf"]
 
 [project.scripts]
 ecadlib = "ecadlib.cli:main"
 
+[tool.setuptools.dynamic]
+version = { attr = "ecadlib.__version__" }
+
 [tool.setuptools.packages.find]
 include = ["ecadlib*"]
 
+# Every non-.py file the package reads at runtime. tests/test_packaging.py checks these
+# patterns against the files on disk, so a new data file without a pattern fails the tests.
 [tool.setuptools.package-data]
 ecadlib = ["package_schema.json", "package_specs/*.json", "assets/*", "ui/static/*"]

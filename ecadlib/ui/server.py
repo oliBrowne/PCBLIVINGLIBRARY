@@ -61,6 +61,24 @@ def _names(v):
     return v
 
 
+def _str(v, what, optional=False):
+    """A string field from a JSON body. No identity is ever filled in here: an approval names its user explicitly."""
+    if v is None and optional:
+        return None
+    if not isinstance(v, str) or (not optional and not v.strip()):
+        raise ValueError(f"{what} must be a non-empty string")
+    return v
+
+
+def _strs(v, what):
+    """A list of path strings from a JSON body (scan sources: any folder the person types, read for names only)."""
+    if v is None:
+        return []
+    if not isinstance(v, list) or not all(isinstance(x, str) and len(x) < 1000 and "\0" not in x for x in v):
+        raise ValueError(f"{what} must be a list of paths")
+    return [x for x in v if x.strip()]
+
+
 def make_handler(ws: Workspace):
     jobs = Jobs()
     write_lock = threading.Lock()                          # one writer at a time in the workspace
@@ -120,6 +138,8 @@ def make_handler(ws: Workspace):
                     return self._send(200, ws.info())
                 if u.path == "/api/specs":
                     return self._send(200, ws.example_specs())
+                if u.path == "/api/rules":
+                    return self._send(200, ws.rules_info())
                 if u.path == "/api/job":
                     job = jobs.get(q.get("id", ""))
                     return self._send(200, job) if job else self._send(404, {"error": "no such job"})
@@ -157,6 +177,19 @@ def make_handler(ws: Workspace):
                     bom = self._bom(b)
                     refresh = [] if b.get("refresh") is True else (b.get("refresh") or None)
                     return self._send(200, jobs.start(self._librarian, bom, b.get("sources"), refresh, label=bom))
+                if u.path == "/api/resolve/candidates":               # may fetch KiCad library files: a background job
+                    b = self._json()
+                    bom, part = self._bom(b), _str(b.get("part"), "part")
+                    ws.held_parts(bom)                                # no plan yet: answer now, not from the job
+                    return self._send(200, jobs.start(self._candidates, bom, part, b.get("kind") or None,
+                                                      b.get("limit") or 10, label=part))
+                if u.path == "/api/rules/propose":                    # reads library folders the person names: a job
+                    b = self._json()
+                    paths, a365 = _strs(b.get("paths"), "paths"), _strs(b.get("a365"), "a365")
+                    choices = b.get("choices") or {}
+                    if not isinstance(choices, dict):
+                        raise ValueError("choices must map setting keys to values")
+                    return self._send(200, jobs.start(self._propose, paths, a365, choices, label="library rules"))
                 if u.path == "/api/altium365/workspaces":             # read-only network call, no lock
                     self._json()
                     return self._send(200, ws.altium365_workspaces())
@@ -165,7 +198,17 @@ def make_handler(ws: Workspace):
                     "/api/export/dblib": lambda b: ws.export_dblib(self._bom(b)),
                     "/api/altium/models": lambda b: ws.build_altium_models(self._bom(b)),
                     "/api/altium365/plan": lambda b: ws.altium365_plan(self._bom(b)),
-                    "/api/release-check": lambda b: ws.release_check(self._bom(b), _names(b.get("allow")), _names(b.get("unallow"))),
+                    "/api/release-check": lambda b: ws.release_check(self._bom(b), _names(b.get("allow")), _names(b.get("unallow")),
+                                                                     _str(b.get("user"), "user", True)),
+                    "/api/resolve/held": lambda b: ws.held_parts(self._bom(b)),
+                    "/api/resolve/choose": lambda b: ws.choose_part(self._bom(b), _str(b.get("part"), "part"), b.get("kind"),
+                                                                    _str(b.get("id"), "id"), b.get("pin_map") or None),
+                    "/api/approvals/status": lambda b: ws.approval_status(self._bom(b)),
+                    "/api/approvals/decide": lambda b: ws.approve_part(self._bom(b), _str(b.get("part"), "part"), b.get("decision"),
+                                                                       _str(b.get("user"), "user"), _str(b.get("role"), "role", True),
+                                                                       _str(b.get("comment"), "comment", True)),
+                    "/api/dedupe": lambda b: ws.find_duplicates(self._bom(b), b.get("merge") is True),
+                    "/api/rules/save": lambda b: ws.save_rules(_str(b.get("text"), "text"), b.get("overwrite") is True),
                     "/api/altium365/push": lambda b: ws.altium365_push(self._bom(b), b.get("workspace"),
                                                                        dry_run=b.get("dry_run", True) is not False),
                 }
@@ -180,6 +223,14 @@ def make_handler(ws: Workspace):
         @staticmethod
         def _librarian(bom, sources, refresh, progress=None):
             return ws.librarian_run(bom, sources, (), refresh, progress)
+
+        @staticmethod
+        def _candidates(bom, part, kind, limit, progress=None):
+            return ws.part_candidates(bom, part, kind, limit, progress)
+
+        @staticmethod
+        def _propose(paths, a365, choices, progress=None):
+            return ws.propose_rules(paths, a365, choices, progress)
 
         @staticmethod
         def _triage(bom, progress=None):
