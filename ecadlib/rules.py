@@ -75,12 +75,23 @@ DEFAULTS = {
                   "can", "eth", "ports", "other_out", "nc", "ground", "ep"],
         "sides": {},                           # group -> left | right | top | bottom (overrides)
     },
+    "agent": {                                 # ecadlib.agent: the library agent (off unless enabled)
+        "enabled": False, "interval_minutes": 60, "libs": [],
+        "library_repo": "",                    # git repo for the batch PRs ("" = the workspace, if it is one)
+        "library_path": "library",             # folder in that repo for the library files when it is not the workspace
+        "base_branch": "",                     # "" = the repo's current branch
+        "pictures_path": "agent-pictures",
+        "github_repo": "",                     # owner/name ("" = from the origin remote)
+        "github_token_env": "GITHUB_TOKEN", "github_api": "https://api.github.com",
+        "batch_size": 20, "auto_push": False, "upkeep_schedule": "weekly", "datasheet_batch": True,
+    },
 }
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
              ("symbols", "layout_pins"): (0, 100_000), ("symbols", "split_pins"): (0, 100_000), ("symbols", "unit_pins"): (8, 10_000),
-             ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600)}
+             ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600),
+             ("agent", "interval_minutes"): (1, 10_080), ("agent", "batch_size"): (1, 500)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
 
@@ -190,7 +201,10 @@ def validate(raw, where="ecadlib.toml"):
                 _err(where, key, f"is not a known key" + (f" (did you mean {sec}.{close[0]}?)" if close else
                                                           f"; known in [{sec}]: {', '.join(DEFAULTS[sec])}"))
             d = DEFAULTS[sec][k]
-            if (sec, k) in MAP_KEYS:
+            if isinstance(d, bool):
+                if not isinstance(v, bool):
+                    _err(where, key, "must be true or false")
+            elif (sec, k) in MAP_KEYS:
                 if not isinstance(v, dict):
                     _err(where, key, "must be a table of name = value")
                 if (sec, k) != ("release", "approvals") and not all(isinstance(x, (str, int, float)) for x in v.values()):
@@ -255,6 +269,15 @@ def validate(raw, where="ecadlib.toml"):
         except (ValueError, TypeError) as e:
             raise RulesError(str(e)) from None
     _check_symbols(where, raw.get("symbols") or {})
+    ag = raw.get("agent") or {}
+    if "upkeep_schedule" in ag and ag["upkeep_schedule"] not in ("off", "daily", "weekly", "monthly"):
+        _err(where, "agent.upkeep_schedule", f"= {ag['upkeep_schedule']!r}: must be off, daily, weekly or monthly")
+    if ag.get("github_token_env") and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ag["github_token_env"]):
+        _err(where, "agent.github_token_env", "must be the NAME of an environment variable (never the token itself)")
+    if ag.get("github_repo") and not re.fullmatch(r"[\w.-]+/[\w.-]+", ag["github_repo"]):
+        _err(where, "agent.github_repo", f"= {ag['github_repo']!r}: must be owner/name")
+    if "github_api" in ag and not str(ag["github_api"]).startswith("https://"):
+        _err(where, "agent.github_api", "must be an https:// URL")
     return raw
 
 
@@ -623,6 +646,14 @@ HELP = {
     "symbols.layout_pins": "parts with at least this many pins get the grouped layout; smaller parts keep the plain one (0 = never)",
     "symbols.split_pins": "more pins than this: a multi-part symbol (power part + signal parts); 0 = one part always",
     "symbols.stack_power": "stack (one pin shown, the rest on top of it) | hide (the rest hidden, tied by name) | none",
+    "agent": "Library agent (`ecadlib agent run|serve`): watches projects/BOMs, builds and proves new parts, one GitHub PR per "
+             "batch for review, pushes approved parts to Altium 365, turns upkeep findings into work. Off unless enabled",
+    "agent.interval_minutes": "minutes between runs of `ecadlib agent serve`",
+    "agent.library_repo": "git repo the batch PRs are made in (\"\" = the workspace when it is a git repo; none: PR text in agent/batches/)",
+    "agent.github_token_env": "name of the environment variable with the GitHub token; the token itself never goes in this file",
+    "agent.auto_push": "push approved parts to Altium 365 on each run (false: `ecadlib agent push`)",
+    "agent.upkeep_schedule": "off | daily | weekly | monthly: how often upkeep findings are turned into queue items",
+    "agent.batch_size": "most parts in one review batch (one pull request each)",
     "symbols.order": "group order on each side; groups: power analog power_out ground ep reset clock debug usb adc other_in uart i2c spi can eth ports other_out nc",
 }
 

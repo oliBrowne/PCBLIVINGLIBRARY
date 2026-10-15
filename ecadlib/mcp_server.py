@@ -186,6 +186,15 @@ TOOLS = [
                                                "description": "checks to run (default: all, or [upkeep] checks in ecadlib.toml)"},
                                     "apply": {"type": "boolean", "default": False},
                                     "workspace": {"type": "string", "description": "Altium 365 workspace URL for the a365 check"}}}},
+    {"name": "agent_status",
+     "description": "The library agent's state: last run (detected, built, in review, failed), review-queue counts and "
+                    "its batch pull requests (or the batch folders when there is no GitHub token).",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "agent_run",
+     "description": "Run one pass of the library agent: scan watched projects/BOMs, build and prove new parts, open or "
+                    "update the batch PR. dry_run defaults to true (reports only). A real run (dry_run false) commits to "
+                    "the library repo and opens PRs: only when the user asked for it.",
+     "inputSchema": {"type": "object", "properties": {"dry_run": {"type": "boolean", "default": True}}}},
     {"name": "project_bom",
      "description": "Read the BOM straight from an Altium project (.PrjPcb, or a single .SchDoc): components from every "
                     "schematic grouped by MPN / Design Item ID with designators and quantities, footprints, Altium 365 "
@@ -319,6 +328,10 @@ def call_tool(ws, name, args):
             return ws.export_dblib(args["bom"])
         if name == "upkeep_run":
             return ws.upkeep_run(args["bom"], args.get("checks") or None, args.get("apply") is True, args.get("workspace"))
+        if name == "agent_status":
+            return ws.agent_status()
+        if name == "agent_run":
+            return ws.agent_run(args.get("dry_run", True) is not False)
         if name == "project_bom":
             return ws.project_bom(args["project"], args.get("variant") or None)
         if name == "where_used":

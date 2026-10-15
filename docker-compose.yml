@@ -46,6 +46,32 @@ services:
       - path: ./api-keys.env
         required: false
 
+  # Optional library agent (`ecadlib agent serve`) on the same /data volume. Not started by default:
+  #   docker compose --profile agent up -d
+  # It stays idle until [agent] enabled = true in /data/workspace/ecadlib.toml. GITHUB_TOKEN, NEXAR_TOKEN and
+  # ANTHROPIC_API_KEY come from api-keys.env. The image has no git, so batch PRs are written to
+  # /data/workspace/agent/batches/ unless you build an image with git and point [agent] library_repo at a checkout.
+  agent:
+    image: ${ECADLIB_IMAGE:-ecadlib:local}
+    build: .
+    profiles: [agent]
+    restart: unless-stopped
+    command: [agent, --workspace, /data/workspace, serve, --lib, /data/libs]
+    volumes:
+      - ecadlib-data:/data
+    networks: [ecadlib-net]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:                      # the status file is rewritten after every pass (and while idle/disabled)
+      test: ["CMD", "ecadlib", "agent", "--workspace", "/data/workspace", "status", "--healthy", "10800"]
+      interval: 5m
+      start_period: 1m
+    env_file:
+      - path: ./api-keys.env
+        required: false
+
   caddy:
     image: caddy:2.10
     restart: unless-stopped
