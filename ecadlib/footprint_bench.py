@@ -6,7 +6,8 @@
 
 BENCH lists ecadlib package specs (package_specs/ and package_specs/advanced/) and the official footprint each one is
 compared with (gitlab.com/kicad/libraries/kicad-footprints, fetched once through httpcache). Pads are matched by
-number; pads that share a number (MP, SH, NPTH holes "") are matched to the nearest one of that number. A pad passes
+number (pads only on B.Cu, the heat-spreader copy of an exposed pad under thermal vias, are left out: the
+generator does not draw them); pads that share a number (MP, SH, NPTH holes "") are matched to the nearest one of that number. A pad passes
 when its centre and its size (after rotation) are within POS_TOL / SIZE_TOL and a through-hole pad's drill matches;
 the courtyard passes when every edge of its bounding box is within CRT_TOL. Reported: pads passing, footprints whose
 pads all pass, courtyards passing, and footprint_check findings on our footprint.
@@ -44,6 +45,41 @@ BENCH = [
     ("Molex_PicoBlade_53398-0471_1x04-1MP_P1.25mm_Vertical", "Connector_Molex", "bottom-view drawing from pin 1"),
     ("USB_C_Receptacle_HRO_TYPE-C-31-M-12", "Connector_USB", "stacked pads, slots, NPTH, datum origin"),
     ("SOT-23-6", "Package_TO_SOT_SMD", "gull-wing, uneven rows"),
+    # more ball grids: double row letters, other depopulation patterns, datasheet lands, chip-scale
+    ("BGA-121_9.0x9.0mm_Layout11x11_P0.8mm_Ball0.4mm_Pad0.35mm_NSMD", "Package_BGA", "datasheet land (IPC gives 0.30)"),
+    ("BGA-169_11.0x11.0mm_Layout13x13_P0.8mm_Ball0.5mm_Pad0.4mm_NSMD", "Package_BGA", "13 rows A..N without I"),
+    ("BGA-256_11.0x11.0mm_Layout20x20_P0.5mm_Ball0.3mm_Pad0.25mm_NSMD", "Package_BGA", "20 rows A..Y, centre E5:T16 empty"),
+    ("BGA-672_27.0x27.0mm_Layout26x26_P1.0mm_Ball0.6mm_Pad0.5mm_NSMD", "Package_BGA", "rows AA..AF, corner balls (A1) missing"),
+    ("BGA-36_3.396x3.466mm_Layout6x6_P0.4mm_Ball0.25mm_Pad0.2mm_NSMD", "Package_BGA", "WLCSP, 0.4 mm pitch, oblong body"),
+    ("BGA-68_5.0x5.0mm_Layout9x9_P0.5mm_Ball0.3mm_Pad0.25mm_NSMD", "Package_BGA", "13 single balls / blocks missing"),
+    ("BGA-90_8.0x13.0mm_Layout2x3x15_P0.8mm", "Package_BGA", "2 x 3 x 15: empty middle columns"),
+    ("LFBGA-144_10x10mm_Layout12x12_P0.8mm", "Package_BGA", "12 x 12 full grid"),
+    # thermal vias in an exposed pad (custom pad table)
+    ("QFN-16-1EP_3x3mm_P0.5mm_EP1.75x1.75mm_ThermalVias", "Package_DFN_QFN", "EP with 2 x 2 vias, split paste"),
+    ("DFN-8-1EP_3x3mm_P0.5mm_EP1.65x2.38mm_ThermalVias", "Package_DFN_QFN", "EP with 2 x 3 vias, two pitches"),
+    # connectors and headers
+    ("JST_PH_B4B-PH-K_1x04_P2.00mm_Vertical", "Connector_JST", "THT pads sized from the drill"),
+    ("JST_XH_B6B-XH-A_1x06_P2.50mm_Vertical", "Connector_JST", "y-down drawing from pin 1"),
+    ("JST_GH_SM04B-GHS-TB_1x04-1MP_P1.25mm_Horizontal", "Connector_JST", "SMD + mounting pads"),
+    ("PinHeader_2x20_P2.54mm_Vertical", "Connector_PinHeader_2.54mm", "40 pins zig-zag"),
+    ("PinHeader_1x10_P1.00mm_Vertical", "Connector_PinHeader_1.00mm", "1.00 mm THT table"),
+    ("PinHeader_1x05_P2.00mm_Vertical_SMD_Pin1Left", "Connector_PinHeader_2.00mm", "single-row SMD land table"),
+    ("PinHeader_1x05_P1.27mm_Vertical_SMD_Pin1Left", "Connector_PinHeader_1.27mm", "single-row SMD land table"),
+    ("PinHeader_1x05_P1.00mm_Vertical_SMD_Pin1Left", "Connector_PinHeader_1.00mm", "single-row SMD land table"),
+    ("PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Right", "Connector_PinHeader_2.54mm", "single row, pin 1 on the right"),
+    ("PinHeader_2x05_P2.00mm_Vertical_SMD", "Connector_PinHeader_2.00mm", "SMD header land table"),
+    ("PinHeader_2x05_P1.00mm_Vertical_SMD", "Connector_PinHeader_1.00mm", "SMD header land table"),
+    # IPC-7351B parts KiCad generates from the same body dimensions
+    ("R_0402_1005Metric", "Resistor_SMD", "chip"), ("R_0603_1608Metric", "Resistor_SMD", "chip"),
+    ("R_0805_2012Metric", "Resistor_SMD", "chip"), ("R_1206_3216Metric", "Resistor_SMD", "chip"),
+    ("C_0805_2012Metric", "Capacitor_SMD", "chip"), ("LED_0603_1608Metric", "LED_SMD", "chip"),
+    ("LED_0805_2012Metric", "LED_SMD", "chip"), ("SOT-23", "Package_TO_SOT_SMD", "gull-wing"),
+    ("SOT-23-5", "Package_TO_SOT_SMD", "gull-wing, uneven rows"), ("SOIC-8_3.9x4.9mm_P1.27mm", "Package_SO", "gull-wing"),
+    ("SOIC-16_3.9x9.9mm_P1.27mm", "Package_SO", "gull-wing"), ("TSSOP-16_4.4x5mm_P0.65mm", "Package_SO", "gull-wing, fine pitch"),
+    ("LQFP-48_7x7mm_P0.5mm", "Package_QFP", "quad gull-wing"),
+    ("QFN-16-1EP_3x3mm_P0.5mm_EP1.75x1.75mm", "Package_DFN_QFN", "no-lead + EP"),
+    ("QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm", "Package_DFN_QFN", "no-lead + EP"),
+    ("VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm", "Package_DFN_QFN", "no-lead + EP"),
 ]
 
 
@@ -59,8 +95,10 @@ def numbers(text):
     t = sexpr.parse(text)
     pads = []
     for p, r in zip(sexpr.find(t, "pad"), C._pad_rects(t)):
+        if not any(l.startswith(("F.", "*.", "F&B.")) for l in r["layers"]):
+            continue                                         # B.Cu-only copy of an exposed pad (heat spreader): not compared
         d = sexpr.first(p, "drill")
-        drill = max(float(v) for v in d[1:] if v != "oval") if d else 0.0
+        drill = max(float(v) for v in d[1:] if isinstance(v, str) and v != "oval") if d else 0.0   # not (offset x y)
         pads.append([r["num"], round(r["x"], 4), round(r["y"], 4), round(r["w"], 4), round(r["h"], 4), drill])
     pads = [p for p in pads if p[0] or p[5]]                 # paste-only windows are not pads
     return {"pads": pads, "courtyard": list(sexpr.courtyard_bbox(t) or ())}

@@ -293,7 +293,9 @@ def test_auto_page_selection_and_page_map():
     # the original page numbers end up in the provenance
     ext = copy.deepcopy(TD.GOOD)
     res = D.process(ext, "TESTPART", "u", offset=pmap)
-    assert res["sidecar"]["pin_table"]["page"] == pmap[2] and res["sidecar"]["dimensions"]["body_length"]["page"] == 31
+    assert res["sidecar"]["pin_table"]["page"] == pmap[2]
+    # GOOD cites page 31 for its dimensions, but only len(pmap) pages were sent: no original page, flagged
+    assert res["sidecar"]["dimensions"]["body_length"]["page"] is None and any("cited page(s) [31" in r for r in res["needs_review"])
 
 
 # ---------------------------------------------------------------- self-check
@@ -554,3 +556,284 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+# ---------------------------------------------------------------- review rvA: cost cap on every path, damaged PDFs, pages
+def test_cost_cap_holds_on_sync_path_cumulatively_and_unknown_price():
+    api = FakeAPI(tokens=20000)
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        http = PdfHTTP({"https://a/ds.pdf": PDF})
+        rd = D.Reader(d, d, key=KEY, http=http, log=None, rules={"datasheet": {"max_cost_usd": 0.01}})
+        try:                                                    # the librarian calls read_now directly (no batch)
+            rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+            raise AssertionError("cap")
+        except D.DatasheetError as e:
+            assert "max_cost_usd" in str(e) and not api.of("/v1/messages"), e
+        one = rd.estimate([rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT")])["usd_max"]
+        rd = D.Reader(d, d, key=KEY, http=http, log=None, rules={"datasheet": {"max_cost_usd": one * 1.5}})
+        rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))      # first part fits
+        try:                                                    # the second one would take the run over the cap
+            rd.read_now(rd.job("OTHERPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+            raise AssertionError("cumulative cap")
+        except D.DatasheetError as e:
+            assert "already sent" in str(e) and len(api.of("/v1/messages")) == 1, e
+        rd = D.Reader(d, d + "/u", key=KEY, http=http, log=None, batch=True, model="claude-unpriced-9",
+                      rules={"datasheet": {"max_cost_usd": 100.0}})
+        rd.submit(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+        try:                                                    # a cap can't be held without a price: refuse
+            rd.flush()
+            raise AssertionError("unknown price")
+        except D.DatasheetError as e:
+            assert "no price known" in str(e) and not api.of("/batches"), e
+        rd = D.Reader(d, d + "/y", key=KEY, http=http, log=None, model="claude-unpriced-9", yes=True,
+                      rules={"datasheet": {"max_cost_usd": 0.01}})
+        rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))      # --yes overrides
+        assert len(api.of("/v1/messages")) == 2
+
+
+def test_cap_never_blocks_collecting_a_batch_already_paid():
+    api = FakeAPI(polls=1, tokens=20000)
+    with tempfile.TemporaryDirectory() as d:
+        items, rd, _ = run2(d, api, reader_kw={"wait": False})
+        assert len(api.of("/v1/messages/batches")) == 1
+        items, rd, _ = run2(d, api, reader_kw={"rules": {"datasheet": {"max_cost_usd": 0.01}}})   # resume under a cap
+        assert len(api.of("/v1/messages/batches")) == 1 and api.of("/results")
+        assert items["DSPART1"]["source"]["symbol"].startswith("datasheet:"), items["DSPART1"]["librarian"]["tried"]
+
+
+def test_damaged_and_encrypted_pdfs_give_clear_errors():
+    import pypdf
+    good = pdf_with([f"page {i}" for i in range(50)])
+    w = pypdf.PdfWriter(clone_from=pypdf.PdfReader(io.BytesIO(good)))
+    w.encrypt("secret")
+    buf = io.BytesIO()
+    w.write(buf)
+    enc, trunc, junk = buf.getvalue(), good[: len(good) // 2], b"%PDF-1.4\n" + b"\x00" * 4000
+    for data in (enc, trunc, junk):
+        try:
+            D.prepare(data, (2, 3))
+            raise AssertionError("no error")
+        except D.DatasheetError as e:
+            assert "can't cut the PDF to pages 2-3" in str(e), e
+        sent, off, _, note = D.prepare(data, None, auto_pages=40)       # no page cut asked for: sent whole, no crash
+        assert sent == data and off == 0, note
+    try:
+        D.prepare(enc, (1, 2))
+    except D.DatasheetError as e:
+        assert "password-protected" in str(e)
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "enc.pdf").write_bytes(enc)
+        try:
+            D.load_source(str(Path(d) / "enc.pdf"), (1, 2))
+            raise AssertionError("no error")
+        except D.DatasheetError:
+            pass
+        try:
+            D.prepare(good, (49, 52))
+            raise AssertionError("past the end")
+        except D.DatasheetError as e:
+            assert "has 50 pages" in str(e)
+
+
+def test_cited_page_outside_the_pages_sent_is_flagged():
+    ext = copy.deepcopy(TD.GOOD)                     # GOOD cites page 31 for its dimensions
+    res = D.process(ext, "TESTPART", "u", offset=[5, 9, 12])
+    assert any("cited page(s)" in r and "31" in r for r in res["needs_review"]), res["needs_review"]
+    assert res["sidecar"]["dimensions"]["body_length"]["page"] is None             # not a made-up original page
+    assert "page" not in res["spec"]["source"] or res["spec"]["source"]["page"] is not None
+    ok = copy.deepcopy(TD.GOOD)
+    for v in list(ok["package"].values()) + list((ok["package"].get("exposed_pad") or {}).values()):
+        if isinstance(v, dict) and "page" in v:
+            v["page"] = 2
+    for p in ok["pins"]:
+        p["page"] = 1
+    ok["pin_table"]["page"] = 1
+    res = D.process(ok, "TESTPART", "u", offset=[5, 9, 12])
+    assert not any("cited page(s)" in r for r in res["needs_review"])
+    assert res["sidecar"]["dimensions"]["body_length"]["page"] == 9 and res["sidecar"]["pin_table"]["page"] == 5
+
+
+def test_odd_batch_results_are_errors_not_passes():
+    lines = [{"custom_id": "DSPART1", "result": {"type": "canceled"}},
+             {"custom_id": "NOT_OURS", "result": {"type": "succeeded", "message": TD.message(TD.GOOD)}},
+             {"custom_id": "DSPART2", "result": {"type": "succeeded", "message": dict(TD.message(TD.GOOD), stop_reason="max_tokens")}}]
+    api = FakeAPI()
+    api._results = lambda bid: lines
+    with tempfile.TemporaryDirectory() as d:
+        items, rd, _ = run2(d, api)
+        assert any("batch request canceled" in t for t in items["DSPART1"]["librarian"]["tried"])
+        assert any("max_tokens" in t for t in items["DSPART2"]["librarian"]["tried"]), items["DSPART2"]["librarian"]["tried"]
+        assert items["DSPART1"]["source"]["symbol"] is None and items["DSPART2"]["source"]["symbol"] is None
+        assert not list((Path(d) / "cache" / "datasheet_results").glob("*.json"))      # nothing unusable cached
+
+
+def test_single_part_cli_holds_the_cost_cap():
+    calls = []
+    with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": KEY}), \
+            mock.patch.object(D.requests, "post", lambda url, **kw: (calls.append({"url": url}) or
+                              R(200, {"input_tokens": 20000} if url.endswith("/count_tokens") else TD.message(TD.GOOD)))):
+        f = Path(d) / "ds.pdf"
+        f.write_bytes(PDF)
+        rf = Path(d) / "ecadlib_rules.json"
+        rf.write_text(json.dumps({"datasheet": {"max_cost_usd": 0.01}}))
+        try:
+            D.main([str(f), "--part", "TESTPART", "-o", d + "/out", "--rules", str(rf)])
+            raise AssertionError("cap")
+        except SystemExit as e:
+            assert "max_cost_usd" in str(e.code), e.code
+        assert not [c for c in calls if c["url"].endswith("/v1/messages")]
+        assert D.main([str(f), "--part", "TESTPART", "-o", d + "/out", "--rules", str(rf), "--yes"]) == 0
+        assert len([c for c in calls if c["url"].endswith("/v1/messages")]) == 1
+
+
+# ---------------------------------------------------------------- review rvA, round 2
+class ListingAPI(FakeAPI):
+    """FakeAPI plus GET /v1/messages/batches?limit= (the batch listing) and a create that can lose its answer."""
+
+    def __init__(self, lose_create=0, extra=(), **kw):
+        super().__init__(**kw)
+        self.lose_create, self.extra = lose_create, list(extra)
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        r = super().post(url, headers, json, timeout)
+        if url.endswith("/v1/messages/batches") and self.lose_create:
+            self.lose_create -= 1                       # created and billed, but the answer never arrives
+            raise D.requests.ConnectionError("Read timed out")
+        return r
+
+    def get(self, url, headers=None, timeout=None):
+        if "/batches?limit=" in url:
+            self.calls.append(("GET", url, headers, None))
+            import datetime as dt
+            now = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+            data = [dict(batch_obj(bid, "in_progress", len(b["requests"])), created_at=now) for bid, b in self.batches.items()]
+            return R(200, {"data": data + self.extra, "has_more": False, "first_id": None, "last_id": None})
+        return super().get(url, headers, timeout)
+
+
+def _flush_one(d, api, **kw):
+    rd = D.Reader(d, d, key=KEY, http=PdfHTTP({"https://a/ds.pdf": PDF}), batch=True, poll=0, sleep=lambda s: None,
+                  log=None, **kw)
+    rd.submit(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+    return rd.flush()
+
+
+def test_lost_batch_create_is_adopted_never_paid_twice():
+    api = ListingAPI(lose_create=1)
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        try:
+            _flush_one(d, api)
+            raise AssertionError("lost answer")
+        except D.APIError as e:
+            assert "may have been created" in str(e)
+        st = json.loads((Path(d) / "datasheet" / "batch_state.json").read_text())
+        assert len(st["pending_creates"]) == 1 and not st["batches"] and len(api.batches) == 1
+        res = _flush_one(d, api)                                            # next run: found in the listing, collected
+        assert len(api.of("/v1/messages/batches")) == 1 and isinstance(list(res.values())[0], dict), res
+        st = json.loads((Path(d) / "datasheet" / "batch_state.json").read_text())
+        assert not st["pending_creates"] and st["batches"][0]["adopted"] and st["batches"][0]["collected"]
+
+
+def test_unconfirmed_lost_create_needs_yes():
+    with tempfile.TemporaryDirectory() as d:
+        api = ListingAPI(lose_create=1)
+        with patched(api):
+            try:
+                _flush_one(d, api)
+            except D.APIError:
+                pass
+        api2 = ListingAPI()                         # the listing shows nothing that matches (e.g. another account view)
+        with patched(api2):
+            try:
+                _flush_one(d, api2)
+                raise AssertionError("resubmitted")
+            except D.DatasheetError as e:
+                assert "--yes" in str(e) and "can't be confirmed" in str(e) and not api2.of("/v1/messages/batches"), e
+            res = _flush_one(d, api2, yes=True)
+            assert len(api2.of("/v1/messages/batches")) == 1 and isinstance(list(res.values())[0], dict)
+    with tempfile.TemporaryDirectory() as d:                             # an answer saying "not created" clears it
+        api = ListingAPI()
+        def post(url, headers=None, json=None, timeout=None):
+            if url.endswith("/batches"):
+                return R(400, {"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}})
+            return api.post(url, headers, json, timeout)
+        with patched(api), mock.patch.object(D.requests, "post", post):
+            try:
+                _flush_one(d, api)
+                raise AssertionError("400")
+            except D.APIError as e:
+                assert "HTTP 400" in str(e) and "may have been created" not in str(e)
+        st = json.loads((Path(d) / "datasheet" / "batch_state.json").read_text())
+        assert not st["pending_creates"] and not st["batches"] and not api.batches
+
+
+def test_effort_and_page_limit_follow_the_model():
+    eff = lambda m, e: D.build_request(("url", "https://x/a.pdf"), "P", model=m, effort=e)[1]["output_config"].get("effort")
+    assert eff("claude-haiku-4-5", "high") is None and eff("claude-sonnet-4-5", "max") is None
+    assert eff("claude-opus-4-6", "xhigh") == "high" and eff("claude-opus-4-5", "max") == "high"
+    assert eff("claude-opus-5-5", "xhigh") == "xhigh" and eff("claude-some-new-model", "low") == "low"
+    from ecadlib import visual_check as V
+    with tempfile.TemporaryDirectory() as d:
+        from PIL import Image
+        Image.new("RGB", (10, 10)).save(Path(d) / "a.png")
+        vb = V.build_request([("ours", Path(d) / "a.png")], [], [], "t", "claude-haiku-4-5", "high")[1]
+        assert "effort" not in vb["output_config"] and vb["output_config"]["format"]["type"] == "json_schema"
+    data = pdf_with([f"Package outline page {i}" for i in range(120)])
+    sent, pmap, _, _ = D.prepare(data, None, auto_pages=0, max_pages=D.page_limit("claude-haiku-4-5"))
+    assert isinstance(pmap, list) and len(pmap) <= 100                  # 200K-context model: 100 PDF pages
+    assert D.prepare(data, None, auto_pages=0, max_pages=D.page_limit("claude-opus-5-5"))[0] == data
+
+
+def test_no_jsonschema_installed_missing_fields_are_errors():
+    import sys
+    from ecadlib import visual_check as V
+    from tests import test_visual_check as TV
+    with mock.patch.dict(sys.modules, {"jsonschema": None}):
+        assert D.parse_message(TD.message(TD.GOOD))["pins"]
+        bad = copy.deepcopy(TD.GOOD)
+        del bad["pins"]
+        for b in (bad, dict(TD.GOOD, package=dict(TD.GOOD["package"], package_type="toroid")), [], "x"):
+            try:
+                D.parse_message(TD.message(b))
+                raise AssertionError("accepted")
+            except D.DatasheetError as e:
+                assert "output schema" in str(e)
+        req = V.REQUIRED["footprint"]
+        assert V.parse_verdict(TV.message(TV.answer()), req)[0] == "pass"
+        nost = TV.answer()
+        del nost["checks"][0]["status"]
+        for a in (nost, dict(TV.answer(), score="high"), {"verdict": "pass", "checks": []}):
+            assert V.parse_verdict(TV.message(a), req)[0] == "doubt"
+
+
+def test_write_never_lets_spec_and_symbol_overwrite_each_other():
+    with tempfile.TemporaryDirectory() as d:
+        res = D.process(copy.deepcopy(TD.GOOD), TD.GOOD["package"]["name"], "u")         # part named like its package
+        p = D.write(res, d)
+        assert p["spec"] != p["symbol"] and "package_type" in json.loads(p["spec"].read_text())
+        assert "pins" in json.loads(p["symbol"].read_text())
+        other = D.process(copy.deepcopy(TD.GOOD), "TESTPART", "u")
+        p2 = D.write(other, d)                                                           # spec file already a symbol
+        assert p2["spec"] != p["symbol"] and "pins" in json.loads(p["symbol"].read_text())
+        named = D.process(copy.deepcopy(TD.GOOD), "OTHER", "u")
+        D.write(named, d)
+        spec_part = D.process(copy.deepcopy(TD.GOOD), "X", "u")
+        spec_part["symbol"]["name"] = p2["spec"].stem                                     # a part named like a spec
+        p3 = D.write(spec_part, d)
+        assert p3["symbol"] != p2["spec"] and "package_type" in json.loads(p2["spec"].read_text())
+
+
+def test_worst_case_counts_the_fallback_model():
+    api = FakeAPI(tokens=20000)
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        http = PdfHTTP({"https://a/ds.pdf": PDF})
+        sync = D.Reader(d, d, key=KEY, http=http, log=None)
+        j = sync.job("P", [("https://a/ds.pdf", "BOM")])
+        assert j["body"]["fallbacks"] == "default"
+        e = sync.estimate([j])["rows"][0]
+        tin = e["input_tokens"]
+        own = (tin * 1.25 * 4 + D.MAX_TOKENS * 20) / 1e6
+        assert abs(e["usd_max"] - (own + (tin * 5 + D.MAX_TOKENS * 25) / 1e6)) < 1e-9, e
+        bat = D.Reader(d, d, key=KEY, http=http, log=None, batch=True)
+        e = bat.estimate([bat.job("P", [("https://a/ds.pdf", "BOM")])])["rows"][0]
+        assert abs(e["usd_max"] - (tin * 4 + D.MAX_TOKENS * 20) / 1e6 * 0.5) < 1e-9       # batches: no fallbacks

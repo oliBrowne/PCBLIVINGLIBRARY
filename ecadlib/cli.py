@@ -19,6 +19,7 @@
     ecadlib resolve   plan.json [--part P] list|show|choose ...   fix held parts: ranked candidates, pick one
     ecadlib upstream  check-kicad|check-a365 ...  upstream change alerts (KiCad sources, Altium 365 drift)
     ecadlib a365      pull|status|reconcile PLAN --workspace URL [--state F]   two-way Altium 365 sync
+    ecadlib queue     list|show|approve|reject|rebuild|retry [ID]   the library agent's review queue
     ecadlib approve   plan.json approve|reject|status [--part P]   sign-off before altium365 push
     ecadlib dedupe    plan.json [--lib ...] [--merge]  duplicate parts, footprints and symbols
     ecadlib sourcing  BOM [--qty N] [--alternates] price, stock, second sources and alternates per BOM line
@@ -27,9 +28,20 @@
     ecadlib step-gen  SPEC.json|FOOTPRINT -o x.step   package-shaped 3D model (STEP); --check FILE.step validates
     ecadlib upkeep    PLAN|BOM [--checks ...] [--apply] [--github issue|pr]   weekly checks, only what is new, one issue/PR
     ecadlib sim-models plan.json [--models DIR] [--attach]   find, check and attach SPICE / IBIS simulation models
+    ecadlib agent-watch [--dry-run] [--source TYPE:REF]   library agent: new / changed / removed parts in watched projects and BOMs
+    ecadlib agent     run [--dry-run]|serve|status|approve ID|reject ID|push   library agent: watch, build, prove, PR, push
     ecadlib symbol    PINS.csv|PART -o x.SchLib [--preview x.svg]   big-chip symbol with pins grouped by function
+    ecadlib visual-check PART|x.kicad_mod --datasheet DS.pdf [--pages 3,7-8]   Claude compares our drawings with the datasheet
+    ecadlib doctor    [--workspace W] [--lib DIR] [--json]   check Python, packages, API keys, ecadlib.toml, folders
+    ecadlib status    [--workspace W] [--json]    one-screen summary of a workspace: parts, held, sign-off, last runs
+    ecadlib completion bash|zsh|fish              shell completion script (e.g. ecadlib completion bash > ~/.ecadlib.bash)
+    ecadlib plugins   list|export NAME PLAN -o DIR   installed part-source / exporter plugins (Python entry points)
+    ecadlib notify    show|test [--event E]       [notify] webhooks (Slack, Teams, JSON): targets, send a test message
+    ecadlib kicad-dblib plan.json -o DIR --name LIB [--export]   KiCad database library (.kicad_dbl + SQLite)
+    ecadlib export-parts plan.json --format csv|json|xlsx [-o F]   parts table with stable columns (PLM / ERP)
 
-`ecadlib <command> -h` shows that command's options."""
+`ecadlib <command> -h` shows that command's options. --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
+one-line error. ECADLIB_LIB, ECADLIB_WORKSPACE and ECADLIB_CONFIG are defaults for --lib, --workspace and the rules file."""
 import importlib, sys
 
 COMMANDS = {
@@ -53,6 +65,7 @@ COMMANDS = {
     "resolve": ("ecadlib.resolve", "fix held parts: candidates for a missing symbol/footprint, choose one"),
     "upstream": ("ecadlib.upstream", "KiCad upstream changes and Altium 365 drift"),
     "a365": ("ecadlib.a365_sync", "two-way Altium 365 sync: pull workspace components into the plan, status, reconcile"),
+    "queue": ("ecadlib.agent_queue", "the library agent's review queue: list, show, approve, reject, rebuild"),
     "approve": ("ecadlib.approvals", "approve / reject plan items before release"),
     "dedupe": ("ecadlib.dedupe", "find and merge duplicate parts, footprints and symbols"),
     "sourcing": ("ecadlib.sourcing", "price, stock, second sources and alternates for a BOM"),
@@ -61,12 +74,24 @@ COMMANDS = {
     "project": ("ecadlib.altium_project", "BOM straight from an Altium project (.PrjPcb / .SchDoc / ActiveBOM)"),
     "where-used": ("ecadlib.altium_project:where_used_main", "which projects use which library part, and flags"),
     "sim-models": ("ecadlib.sim_models", "find, check and attach SPICE / IBIS simulation models for a plan"),
+    "agent-watch": ("ecadlib.agent_watch", "library agent watch step: new / changed / removed parts in watched projects and BOMs"),
+    "agent": ("ecadlib.agent", "library agent: watch projects, build + prove parts, batch PRs, push approved parts, upkeep"),
+    "visual-check": ("ecadlib.visual_check", "render footprint/symbol + datasheet pages; Claude checks they match"),
     "symbol": ("ecadlib.symbol_layout", "IC symbol with pins grouped by function (power, ports, debug ...), SVG preview"),
+    "doctor": ("ecadlib.doctor", "check the setup: Python, packages, API keys (names only), ecadlib.toml, folders"),
+    "status": ("ecadlib.ws_status", "one-screen summary of a workspace: parts, held, waiting for sign-off, last runs"),
+    "completion": ("ecadlib.completion", "shell completion script for bash, zsh or fish"),
+    "plugins": ("ecadlib.plugins", "installed part-source and exporter plugins; run an exporter on a plan"),
+    "notify": ("ecadlib.notify", "webhook notifications ([notify]): show targets, send a test message"),
+    "kicad-dblib": ("ecadlib.kicad_dblib", "KiCad database library: .kicad_dbl (ODBC) + SQLite parts table from a plan"),
+    "export-parts": ("ecadlib.parts_export", "parts table with stable columns as CSV / JSON / XLSX for PLM / ERP imports"),
 }
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
+    from .cliutil import debug_wanted, env_defaults, report
+    debug, argv = debug_wanted(argv)
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__)
         return 0
@@ -78,9 +103,28 @@ def main(argv=None):
     if not cmd:
         print(f"ecadlib: unknown command {argv[0]!r}. Commands: {', '.join(COMMANDS)}", file=sys.stderr)
         return 2
-    sys.argv = [f"ecadlib {argv[0]}"] + argv[1:]           # so argparse usage lines show the right command
+    args, notes = env_defaults(argv[0], argv[1:])            # ECADLIB_LIB / ECADLIB_WORKSPACE when the flag is not given
+    if debug and notes:
+        print(f"ecadlib {argv[0]}: " + ", ".join(notes), file=sys.stderr)
+    sys.argv = [f"ecadlib {argv[0]}"] + args                 # so argparse usage lines show the right command
     mod, _, fn = cmd[0].partition(":")
-    return getattr(importlib.import_module(mod), fn or "main")(argv[1:])
+    from .rules import RulesError
+    try:
+        return getattr(importlib.import_module(mod), fn or "main")(args)
+    except RulesError as e:                                  # a bad ecadlib.toml: say which key, no traceback
+        if debug:
+            raise
+        print(f"ecadlib {argv[0]}: {e}\n  hint: `ecadlib doctor` shows the file and line", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        if debug:
+            raise
+        print(f"ecadlib {argv[0]}: interrupted", file=sys.stderr)
+        return 130
+    except Exception as e:                                   # one line + hint; --debug / ECADLIB_DEBUG=1: the traceback
+        if debug:
+            raise
+        return report(argv[0], e, sys.stderr)
 
 
 if __name__ == "__main__":

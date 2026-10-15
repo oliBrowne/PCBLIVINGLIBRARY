@@ -4,7 +4,7 @@ Responses are stored as JSON files keyed by sha256(method, url, body). Only 2xx/
 responses are cached; network errors are returned (not raised) so callers can
 report "source unreachable" instead of crashing. Downloaded bodies are treated as
 untrusted data: they are only ever parsed as JSON/text, never executed."""
-import hashlib, json, os, re, time
+import hashlib, json, os, re, threading, time
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -59,8 +59,14 @@ class CachedHTTP:
         """cache=False: never read or store (credentials in the URL or body, tokens in the response).
         Query-string secrets (apiKey=, token=...) are redacted from cache keys and stored URLs."""
         f = self.dir / f"{self._key(method, redact(url), body, headers)}.json"
+        d = None
         if cache and f.exists() and (self.offline or time.time() - f.stat().st_mtime < self.ttl):   # offline: stale beats nothing
-            d = json.loads(f.read_text())
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                d = d if isinstance(d, dict) and isinstance(d.get("status"), int) and isinstance(d.get("text"), str) else None
+            except (OSError, ValueError):            # a damaged entry (crash, full disk) is a miss, not a crash
+                d = None
+        if d is not None:
             self.log.append((method, url, d["status"], True))
             return Response(d["status"], d["text"], from_cache=True)
         if self.offline:
@@ -80,9 +86,9 @@ class CachedHTTP:
             return Response(0, "", error=msg)
         self.log.append((method, url, r.status_code, False))
         if cache and (200 <= r.status_code < 300 or r.status_code == 404):
-            tmp = f.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"url": redact(url), "status": r.status_code, "text": r.text}))
-            os.replace(tmp, f)
+            tmp = f.with_name(f"{f.stem}.{os.getpid()}.{threading.get_ident()}.tmp")   # own temp file per writer: two
+            tmp.write_text(json.dumps({"url": redact(url), "status": r.status_code, "text": r.text}), encoding="utf-8")
+            os.replace(tmp, f)                                                       # threads fetching one URL never share one
         return Response(r.status_code, r.text, error=None if r.ok or r.status_code == 404
                         else f"HTTP {r.status_code}")
 

@@ -207,7 +207,7 @@ def scan_pcblib(lib, f):
                 bp = AL.parse_params(r.get("params", ""))
                 v7 = bp.get("V7_LAYER", "")
                 m = re.match(r"MECHANICAL(\d+)", v7)
-                bodies.append(56 + int(m.group(1)) if m else r["layer"])
+                bodies.append(56 + int(m.group(1)) if m and int(m.group(1)) <= 16 else r["layer"])   # 17..32: reader's id
             elif t == "text":
                 texts.append((r["text"], r["layer"]))
         lib.footprints.append({"name": fp["name"], "origin": f"PcbLib {f.name}", "kind": "altium", "pads": pads,
@@ -217,7 +217,7 @@ def scan_pcblib(lib, f):
 
 def scan_kicad_sym(lib, f):
     from . import sexpr
-    t = sexpr.parse(f.read_text(errors="replace"))
+    t = sexpr.parse(f.read_text(errors="replace", encoding="utf-8"))
     lib.files["kicad_sym"] += 1
     for s in sexpr.find(t, "symbol"):
         props = {p[1]: p[2] for p in sexpr.find(s, "property") if len(p) > 2}
@@ -231,7 +231,7 @@ def scan_kicad_sym(lib, f):
 
 def scan_kicad_mod(lib, f):
     from . import sexpr
-    text = f.read_text(errors="replace")
+    text = f.read_text(errors="replace", encoding="utf-8")
     t = sexpr.parse(text)
     lib.files["kicad_mod"] += 1
     pads = [(p["number"], p["x"], -p["y"], p["w"], p["h"]) for p in sexpr.pads(t) if "F.Cu" in p["layers"] or "*.Cu" in p["layers"]]
@@ -819,7 +819,8 @@ def infer_layers(lib):
             if l != crt and not any(t == ".Comment" for t, _ in f["texts"]):
                 votes["assembly"][l] += 1
         for l in f["bodies"]:
-            votes["body3d"][l] += 1
+            if 57 <= l <= 72:                     # the writer's (and rules') mechanical layers: 1..16
+                votes["body3d"][l] += 1
         ov = [l for l in f["graphics"] if l in (33, 34)]
         if ov:
             votes["silkscreen"][33 if 33 in ov else ov[0]] += 1
@@ -860,7 +861,7 @@ def _chip_z(imp, kind):
         if not f:
             _Z_CACHE[key] = None
         else:
-            spec = json.loads(f.read_text())
+            spec = json.loads(f.read_text(encoding="utf-8"))
             zs = {}
             for d in "ABC":
                 _, rep = F.build(spec, d)

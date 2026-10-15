@@ -14,7 +14,7 @@ Plans (plan.json) keep ecadlib's own parameter names ("Manufacturer Part Number"
 names from [parameters.names] are applied where data leaves ecadlib: Altium 365 push, the DbLib export and sync,
 the KiCad export and the Altium 365 drift check. Part names, folders, footprint names, required fields, default
 parameters, layers and density are applied when the plan and the models are made."""
-import argparse, copy, difflib, json, re, sys
+import argparse, copy, difflib, json, os, re, sys
 from pathlib import Path
 
 FILES = ("ecadlib.toml", "ecadlib_rules.json")
@@ -34,6 +34,26 @@ CANONICAL_PARAMS = ("Manufacturer", "Manufacturer Part Number", "Value", "Suppli
                     "Supplier 2", "Supplier Part Number 2", "ComponentLink1Description", "ComponentLink1URL",
                     "ComponentLink2Description", "ComponentLink2URL")
 KEY_COLUMNS = {"Part Number", "Library Ref", "Library Path", "Footprint Ref", "Footprint Path", "Description", "Comment"}
+
+MANUFACTURER_ALIASES = {      # [agent] manufacturer_aliases defaults: alias -> canonical maker
+    "st": "stmicroelectronics", "stm": "stmicroelectronics", "st micro": "stmicroelectronics",
+    "st microelectronics": "stmicroelectronics", "sgs thomson": "stmicroelectronics",
+    "ti": "texas instruments", "texas instrument": "texas instruments",
+    "adi": "analog devices", "analog device": "analog devices", "linear technology": "analog devices",
+    "nxp semiconductors": "nxp", "nxp semiconductor": "nxp",
+    "on semiconductor": "onsemi", "on semi": "onsemi", "on": "onsemi",
+    "microchip technology": "microchip", "infineon technologies": "infineon",
+    "vishay intertechnology": "vishay", "vishay semiconductors": "vishay", "vishay siliconix": "vishay",
+    "vishay dale": "vishay", "vishay general semiconductor": "vishay",
+    "murata manufacturing": "murata", "murata electronics": "murata", "te": "te connectivity",
+    "rohm semiconductor": "rohm", "diodes": "diodes incorporated", "diodes inc": "diodes incorporated",
+    "maxim integrated": "maxim", "maxim integrated products": "maxim", "renesas electronics": "renesas",
+    "samsung electro mechanics": "samsung electro-mechanics", "semco": "samsung electro-mechanics",
+    "we": "wurth elektronik", "wurth": "wurth elektronik", "wuerth elektronik": "wurth elektronik",
+    "nexperia usa": "nexperia", "toshiba electronic devices and storage": "toshiba", "kemet electronics": "kemet",
+    "yageo": "yageo", "tdk electronics": "tdk", "epcos": "tdk", "panasonic electronic components": "panasonic",
+    "littelfuse": "littelfuse", "bourns": "bourns", "molex": "molex", "amphenol": "amphenol",
+}
 
 DEFAULTS = {
     "naming": {
@@ -75,12 +95,38 @@ DEFAULTS = {
                   "can", "eth", "ports", "other_out", "nc", "ground", "ep"],
         "sides": {},                           # group -> left | right | top | bottom (overrides)
     },
+    "agent": {                                 # ecadlib.agent: the library agent (off unless enabled)
+        "watch": {"sources": [], "interval": 3600, "include": [], "exclude": []},
+        "enabled": False, "interval_minutes": 60, "libs": [],
+        "library_repo": "",                    # git repo for the batch PRs ("" = the workspace, if it is one)
+        "library_path": "library",             # folder in that repo for the library files when it is not the workspace
+        "base_branch": "",                     # "" = the repo's current branch
+        "pictures_path": "agent-pictures",
+        "github_repo": "",                     # owner/name ("" = from the origin remote)
+        "github_token_env": "GITHUB_TOKEN", "github_api": "https://api.github.com",
+        "batch_size": 20, "auto_push": False, "upkeep_schedule": "weekly", "datasheet_batch": True,
+        "manufacturer_aliases": dict(MANUFACTURER_ALIASES),   # part keys: "ST" = "STMicroelectronics"; add your own
+    },
 }
+WATCH_TYPES = ("bom_file", "folder", "altium_project", "a365_project")
+WATCH_SOURCE_KEYS = ("type", "ref", "name", "workspace", "variant", "include", "exclude")
+# [agent.proof]: ecadlib.visual_check (the Claude visual proof). Empty model / effort / api_key_env = use [datasheet].
+DEFAULTS.setdefault("agent", {})["proof"] = {"model": "", "effort": "", "api_key_env": "", "max_cost_usd": 0.0,
+                                             "fail_on": ["error"], "max_pages": 6, "dpi": 200}
+SUB_RANGE = {("agent", "proof", "max_pages"): (1, 100), ("agent", "proof", "dpi"): (50, 400)}
+# GitLab merge requests instead of GitHub PRs (ecadlib.forge); "auto" picks by the origin remote
+DEFAULTS["agent"].update({"git_host": "auto", "gitlab_project": "", "gitlab_token_env": "GITLAB_TOKEN",
+                          "gitlab_api": "https://gitlab.com/api/v4"})
+# [notify]: webhooks (ecadlib.notify); [providers]: order and choice of part sources incl. plugins (ecadlib.plugins)
+DEFAULTS["notify"] = {"targets": [], "retries": 3, "timeout_s": 10, "backoff_s": 2.0}
+DEFAULTS["providers"] = {"order": []}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
-            ("bom", "columns"), ("release", "approvals"), ("symbols", "sides")}
+            ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
              ("symbols", "layout_pins"): (0, 100_000), ("symbols", "split_pins"): (0, 100_000), ("symbols", "unit_pins"): (8, 10_000),
-             ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600)}
+             ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600),
+             ("agent", "interval_minutes"): (1, 10_080), ("agent", "batch_size"): (1, 500),
+             ("notify", "retries"): (0, 10), ("notify", "timeout_s"): (1, 120)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
 
@@ -90,7 +136,13 @@ class RulesError(ValueError):
 
 # ------------------------------------------------------------------ load / merge / validate
 def find(start="."):
-    """The rules file in `start` or one of its parents, else in the current folder or its parents; None if none."""
+    """The rules file in `start` or one of its parents, else in the current folder or its parents; None if none.
+    $ECADLIB_CONFIG (a file path), when set, is used instead of the search (an explicit --rules still wins)."""
+    env = os.environ.get("ECADLIB_CONFIG", "").strip()
+    if env:
+        if not Path(env).expanduser().is_file():
+            raise RulesError(f"ECADLIB_CONFIG={env}: no such file")
+        return Path(env).expanduser().resolve()
     seen = set()
     for base in (Path(start), Path.cwd()):
         try:
@@ -185,15 +237,28 @@ def validate(raw, where="ecadlib.toml"):
             _err(where, f"[{sec}]", "must be a table")
         for k, v in val.items():
             key = f"{sec}.{k}"
+            if (sec, k) == ("agent", "watch") and k in DEFAULTS[sec]:
+                _check_watch(where, v)
+                continue
+            if (sec, k) == ("notify", "targets"):
+                from .notify import check_targets
+                check_targets(where, v, _err)
+                continue
             if k not in DEFAULTS[sec]:
                 close = difflib.get_close_matches(k, DEFAULTS[sec], 1)
                 _err(where, key, f"is not a known key" + (f" (did you mean {sec}.{close[0]}?)" if close else
                                                           f"; known in [{sec}]: {', '.join(DEFAULTS[sec])}"))
             d = DEFAULTS[sec][k]
-            if (sec, k) in MAP_KEYS:
+            if isinstance(d, bool):
+                if not isinstance(v, bool):
+                    _err(where, key, "must be true or false")
+            elif (sec, k) in MAP_KEYS:
                 if not isinstance(v, dict):
                     _err(where, key, "must be a table of name = value")
-                if (sec, k) != ("release", "approvals") and not all(isinstance(x, (str, int, float)) for x in v.values()):
+                if (sec, k) == ("bom", "columns") and all(isinstance(x, str) or (isinstance(x, list) and x and all(
+                        isinstance(y, str) for y in x)) for x in v.values()):
+                    pass                                   # a header, or a list of headers (house aliases)
+                elif (sec, k) != ("release", "approvals") and not all(isinstance(x, (str, int, float)) for x in v.values()):
                     _err(where, key, "values must be text")
             elif isinstance(d, list):
                 if isinstance(v, str) and (sec, k) == ("footprint", "pin1"):
@@ -207,6 +272,8 @@ def validate(raw, where="ecadlib.toml"):
             elif isinstance(d, float):
                 if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
                     _err(where, key, "must be a number of 0 or more")
+            elif isinstance(d, dict):
+                _check_table(where, sec, k, v, d)
             elif sec == "sim":
                 if not isinstance(v, (str, int, float)) or isinstance(v, bool):
                     _err(where, key, "must be a value such as \"10m\" (ohm / henry)")
@@ -255,7 +322,96 @@ def validate(raw, where="ecadlib.toml"):
         except (ValueError, TypeError) as e:
             raise RulesError(str(e)) from None
     _check_symbols(where, raw.get("symbols") or {})
+    ag = raw.get("agent") or {}
+    if "upkeep_schedule" in ag and ag["upkeep_schedule"] not in ("off", "daily", "weekly", "monthly"):
+        _err(where, "agent.upkeep_schedule", f"= {ag['upkeep_schedule']!r}: must be off, daily, weekly or monthly")
+    if ag.get("github_token_env") and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ag["github_token_env"]):
+        _err(where, "agent.github_token_env", "must be the NAME of an environment variable (never the token itself)")
+    if ag.get("github_repo") and not re.fullmatch(r"[\w.-]+/[\w.-]+", ag["github_repo"]):
+        _err(where, "agent.github_repo", f"= {ag['github_repo']!r}: must be owner/name")
+    if "github_api" in ag and not str(ag["github_api"]).startswith("https://"):
+        _err(where, "agent.github_api", "must be an https:// URL")
+    if "git_host" in ag and ag["git_host"] not in ("auto", "github", "gitlab"):
+        _err(where, "agent.git_host", f"= {ag['git_host']!r}: must be auto, github or gitlab")
+    if ag.get("gitlab_token_env") and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ag["gitlab_token_env"]):
+        _err(where, "agent.gitlab_token_env", "must be the NAME of an environment variable (never the token itself)")
+    if ag.get("gitlab_project") and not re.fullmatch(r"\d+|[\w.-]+(/[\w.-]+)+", ag["gitlab_project"]):
+        _err(where, "agent.gitlab_project", f"= {ag['gitlab_project']!r}: must be group/name (subgroups allowed) or a numeric id")
+    if "gitlab_api" in ag and not re.fullmatch(r"https://[^\s/]+(/[^\s]*)?/api/v4/?", str(ag["gitlab_api"])):
+        _err(where, "agent.gitlab_api", "must be an https:// URL ending in /api/v4 (e.g. https://gitlab.example.com/api/v4)")
+    nf = raw.get("notify") or {}
+    if "backoff_s" in nf and nf["backoff_s"] > 60:
+        _err(where, "notify.backoff_s", "must be 60 seconds or less")
+    for x in (raw.get("providers") or {}).get("order", []):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", x):
+            _err(where, "providers.order", f"has {x!r}: provider names are letters, digits, _ . -")
     return raw
+
+
+def _check_watch(where, w):
+    """[agent.watch]: sources = [{type, ref, ...}], interval (seconds), include / exclude globs."""
+    if not isinstance(w, dict):
+        _err(where, "agent.watch", "must be a table")
+    for k, v in w.items():
+        key = f"agent.watch.{k}"
+        if k not in DEFAULTS["agent"]["watch"]:
+            _err(where, key, f"is not a known key; known in [agent.watch]: {', '.join(DEFAULTS['agent']['watch'])}")
+        if k == "interval" and (not isinstance(v, int) or isinstance(v, bool) or not 60 <= v <= 30 * 86400):
+            _err(where, key, "must be a whole number of seconds from 60 to 2592000")
+        if k in ("include", "exclude") and (not isinstance(v, list) or not all(isinstance(x, str) for x in v)):
+            _err(where, key, "must be a list of glob patterns")
+        if k == "sources":
+            if not isinstance(v, list):
+                _err(where, key, "must be a list of { type = ..., ref = ... } tables")
+            for i, s in enumerate(v):
+                sk = f"{key}[{i}]"
+                if not isinstance(s, dict):
+                    _err(where, sk, "must be a table such as { type = \"bom_file\", ref = \"boms/main.csv\" }")
+                bad = [x for x in s if x not in WATCH_SOURCE_KEYS]
+                if bad:
+                    _err(where, f"{sk}.{bad[0]}", f"is not a known key; known: {', '.join(WATCH_SOURCE_KEYS)}")
+                if s.get("type") not in WATCH_TYPES:
+                    _err(where, f"{sk}.type", f"= {s.get('type')!r}: must be one of {', '.join(WATCH_TYPES)}")
+                if not isinstance(s.get("ref"), str) or not s["ref"].strip():
+                    _err(where, f"{sk}.ref", "must be a path, folder or Altium 365 project name / id")
+                for x in ("name", "workspace", "variant"):
+                    if x in s and not isinstance(s[x], str):
+                        _err(where, f"{sk}.{x}", "must be text")
+                for x in ("include", "exclude"):
+                    if x in s and (not isinstance(s[x], list) or not all(isinstance(g, str) for g in s[x])):
+                        _err(where, f"{sk}.{x}", "must be a list of glob patterns")
+def _check_table(where, sec, k, v, d):
+    """A nested table such as [agent.proof]: known keys, each of its default's type."""
+    if not isinstance(v, dict):
+        _err(where, f"{sec}.{k}", "must be a table")
+    for kk, vv in v.items():
+        key = f"{sec}.{k}.{kk}"
+        if kk not in d:
+            _err(where, key, f"is not a known key; known in [{sec}.{k}]: {', '.join(d)}")
+        dd = d[kk]
+        if isinstance(dd, list):
+            vv = [vv] if isinstance(vv, str) else vv
+            if not isinstance(vv, list) or not all(isinstance(x, str) for x in vv):
+                _err(where, key, "must be a list of text values")
+        elif isinstance(dd, int) and not isinstance(dd, bool):
+            lo, hi = SUB_RANGE.get((sec, k, kk), (0, 1_000_000))
+            if not isinstance(vv, int) or isinstance(vv, bool) or not lo <= vv <= hi:
+                _err(where, key, f"must be a whole number from {lo} to {hi}")
+        elif isinstance(dd, float):
+            if not isinstance(vv, (int, float)) or isinstance(vv, bool) or vv < 0:
+                _err(where, key, "must be a number of 0 or more")
+        elif not isinstance(vv, str):
+            _err(where, key, "must be text")
+    if (sec, k) == ("agent", "proof"):
+        if v.get("effort") not in (None, "", "low", "medium", "high", "xhigh", "max"):
+            _err(where, "agent.proof.effort", f"= {v['effort']!r}: must be low, medium, high, xhigh or max (empty = [datasheet])")
+        if v.get("model") and not re.fullmatch(r"[a-z0-9][a-z0-9.\-]*", v["model"]):
+            _err(where, "agent.proof.model", f"= {v['model']!r}: must be a model id such as claude-opus-5-5")
+        if v.get("api_key_env") and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v["api_key_env"]):
+            _err(where, "agent.proof.api_key_env", "must be the NAME of an environment variable (never the key itself)")
+        fo = [v["fail_on"]] if isinstance(v.get("fail_on"), str) else v.get("fail_on") or []
+        if any(x not in ("error", "warning") for x in fo):
+            _err(where, "agent.proof.fail_on", f"= {v['fail_on']!r}: severities are error, warning")
 
 
 def _check_symbols(where, sy):
@@ -411,10 +567,10 @@ def fmt_value(raw, cat, style):
 def fmt_number(v, cat, style):
     """A value in base units (ohm, F, H) written in a value style."""
     m, p = _mantissa(v, cat)
-    unit_letter = {"": "R"} if cat == "Resistors" else {}
+    unit_letter = {"": {"Resistors": "R", "Capacitors": "F", "Inductors": "H"}[cat]}   # 1.5 F -> 1F5 (IEC 60062), never 15
     if style in ("rkm", "rkm_lower"):
         L = unit_letter.get(p, p)
-        L = L.upper() if style == "rkm" else (L if L in ("M", "R") else L.lower())
+        L = (L if L == "m" else L.upper()) if style == "rkm" else (L if L in ("M", "R", "F", "H") else L.lower())   # milli
         if cat == "Resistors" and style == "rkm_lower" and p == "k":
             L = "k"
         ip, _, fp = _num(m).partition(".")
@@ -612,17 +768,40 @@ HELP = {
     "layers": "Altium layers for footprint content (Mechanical1..16, TopOverlay)",
     "footprint": "IPC-7351 density L (least) | N (nominal) | M (most); pin-1 pad names accepted",
     "sources": "Where missing symbols and footprints are looked for, in order",
-    "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header)",
+    "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header, or field = [\"header\", \"alias\"])",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
     "sim": "Parasitics for the built-in passive simulation models (sim-models), e.g. capacitor_esr = \"10m\"",
     "datasheet": "Claude datasheet reader (ecadlib datasheet / librarian): model, effort, which environment variable holds the "
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",
     "datasheet.api_key_env": "name of the environment variable with the API key; the key itself never goes in this file",
     "datasheet.max_cost_usd": "refuse a run whose estimated worst-case cost is higher (0 = no cap; --yes overrides)",
+    "agent.proof": "Claude visual proof (ecadlib visual-check): model, effort, api_key_env (empty = [datasheet]), max_cost_usd per "
+                   "check (0 = no cap), fail_on (mismatch severities that fail a part), max_pages, dpi of the datasheet pages",
     "symbols": "Big IC symbols: pins grouped by function (power top, ground bottom, inputs left, ports right); see `ecadlib symbol -h`",
     "symbols.layout_pins": "parts with at least this many pins get the grouped layout; smaller parts keep the plain one (0 = never)",
     "symbols.split_pins": "more pins than this: a multi-part symbol (power part + signal parts); 0 = one part always",
     "symbols.stack_power": "stack (one pin shown, the rest on top of it) | hide (the rest hidden, tied by name) | none",
+    "agent.watch": "sources = [{ type = bom_file|folder|altium_project|a365_project, ref = path or project, name, workspace, "
+                   "variant, include, exclude }], interval = seconds between scans, include / exclude = globs for folders",
+    "agent": "Library agent (`ecadlib agent run|serve`): watches projects/BOMs, builds and proves new parts, one GitHub PR per "
+             "batch for review, pushes approved parts to Altium 365, turns upkeep findings into work. Off unless enabled",
+    "agent.interval_minutes": "minutes between runs of `ecadlib agent serve`",
+    "agent.manufacturer_aliases": "alias = canonical manufacturer names the agent treats as one maker in part keys "
+                                  "(added to the built-in table: ST = STMicroelectronics, TI, ADI, WE, ...)",
+    "agent.library_repo": "git repo the batch PRs are made in (\"\" = the workspace when it is a git repo; none: PR text in agent/batches/)",
+    "agent.github_token_env": "name of the environment variable with the GitHub token; the token itself never goes in this file",
+    "agent.auto_push": "push approved parts to Altium 365 on each run (false: `ecadlib agent push`)",
+    "agent.upkeep_schedule": "off | daily | weekly | monthly: how often upkeep findings are turned into queue items",
+    "agent.batch_size": "most parts in one review batch (one pull request each)",
+    "agent.git_host": "auto (GitLab when origin is on a gitlab* host or the gitlab_api host, else GitHub) | github | gitlab",
+    "agent.gitlab_api": "GitLab REST v4 base URL; self-hosted: https://gitlab.example.com/api/v4",
+    "agent.gitlab_project": "group/name or numeric id (\"\" = from the origin remote)",
+    "agent.gitlab_token_env": "name of the environment variable with the GitLab token (api scope); never the token itself",
+    "notify": "Webhooks when the agent or upkeep has news: [[notify.targets]] name, type = slack|teams|json, url_env = NAME "
+              "of the env var holding the URL, events = batch_ready|part_held|upkeep_changes|lifecycle (default all), "
+              "token_env (json only); retries with backoff, never stops the agent",
+    "providers": "Part sources for triage / librarian / UI, in order, including plugins (ecadlib.providers entry points); "
+                 "[] = each command's built-in default; `ecadlib plugins list` shows what is installed",
     "symbols.order": "group order on each side; groups: power analog power_out ground ep reset clock debug usb adc other_in uart i2c spi can eth ports other_out nc",
 }
 
