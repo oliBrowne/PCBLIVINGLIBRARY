@@ -941,6 +941,35 @@ same content (same file hash, same folder files, same Altium 365 project id) tak
 are read through Nexar (`desProjects`, `desProjectById` → `design.variants` → `bom.items`); the queries are checked against
 the bundled Nexar schema and tested with a fake client only: **not yet run against a live workspace**.
 
+## 22. `agent_queue.py`: the library agent's review queue
+
+```
+ecadlib queue list [--status review] [--batch ID] [--workspace DIR]
+ecadlib queue show ID
+ecadlib queue approve|reject|rebuild|retry ID [--user "Ann <ann@x.com>"] [--role R] [-m NOTE]
+python3 -m tests.test_agent_queue
+```
+
+The library agent puts every part it finds (new, changed or removed in a watched project or BOM, or an upkeep finding) into a durable queue under `<workspace>/agent/queue/`. Each item is one JSON file in `items/` and each batch one file in `batches/`. Every write goes to a temp file and then replaces the old one (`os.replace`). One lock covers the whole store: it is re-entrant across threads, and `fcntl.flock` on `.lock` makes it exclusive across processes, so the web server, `ecadlib agent serve` and the CLI can run at once. Windows uses `msvcrt.locking`, which gives up after about 10 s of contention and may not work on network drives, so keep the workspace on a local disk there. Items are keyed by part (`manufacturer|MPN`):
+* A part detected again while its item is open updates that item.
+* A failed or rejected item reopens only when the change itself is different.
+* After a push, a new change gets a new item.
+
+States: `detected -> building -> proving -> review -> approved -> pushed`. Any open state can go to `failed` or `rejected`. `failed`/`rejected -> detected` is a retry, and `review -> building` is a rebuild. Any other move raises, and every move is added to the item's `history`.
+
+**Review queue page** (web UI). It lists items by status, with filters and a batch view. An item's page shows:
+* the change that triggered it, with before/now fields;
+* the build sources and notes;
+* the proof verdict and findings;
+* the before/after pictures side by side, and our rendering next to the datasheet page.
+
+Pictures are served only from `<workspace>/agent/` (paths are resolved, so links that point elsewhere are refused) and only as PNG, JPEG, GIF or WebP. SVG is never served. Roles:
+* viewers read;
+* librarians can Reject (a note is required) and Rebuild/Retry;
+* approvers can Approve.
+
+In team mode the decision is signed as the signed-in user, typed names are ignored, and CSRF, Origin and the audit log apply as on every other write. When the item's `build` names its librarian plan (`bom` and `part`), approve and reject are also recorded through `approvals.py`, so `release-check` and `altium365 push` see them. If the policy refuses an approval, the item stays in review. Whoever started the build (`build.user` or `build.requested_by`) cannot approve it. MCP: `agent_queue_list`, `agent_queue_get`, `agent_queue_decide`. Like `approve_part`, `agent_queue_decide` needs the person's own name.
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:
