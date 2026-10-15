@@ -32,6 +32,8 @@
     ecadlib agent     run [--dry-run]|serve|status|approve ID|reject ID|push   library agent: watch, build, prove, PR, push
     ecadlib symbol    PINS.csv|PART -o x.SchLib [--preview x.svg]   big-chip symbol with pins grouped by function
     ecadlib visual-check PART|x.kicad_mod --datasheet DS.pdf [--pages 3,7-8]   Claude compares our drawings with the datasheet
+    ecadlib kicad-dblib plan.json -o DIR --name LIB [--export]   KiCad database library (.kicad_dbl + SQLite)
+    ecadlib export-parts plan.json --format csv|json|xlsx [-o F]   parts table with stable columns (PLM / ERP)
 
 `ecadlib <command> -h` shows that command's options."""
 import importlib, sys
@@ -70,6 +72,8 @@ COMMANDS = {
     "agent": ("ecadlib.agent", "library agent: watch projects, build + prove parts, batch PRs, push approved parts, upkeep"),
     "visual-check": ("ecadlib.visual_check", "render footprint/symbol + datasheet pages; Claude checks they match"),
     "symbol": ("ecadlib.symbol_layout", "IC symbol with pins grouped by function (power, ports, debug ...), SVG preview"),
+    "kicad-dblib": ("ecadlib.kicad_dblib", "KiCad database library: .kicad_dbl (ODBC) + SQLite parts table from a plan"),
+    "export-parts": ("ecadlib.parts_export", "parts table with stable columns as CSV / JSON / XLSX for PLM / ERP imports"),
 }
 
 

@@ -71,6 +71,8 @@ CASES = [
     (["where-used", "--projects", "{in}", "-o", "{out}/where"], (0, 1)),
     (["visual-check", "{out}/fp.pretty/R_0603_1608Metric.kicad_mod", "--render-only", "-o", "{out}/vc",
       "--workspace", "{out}/ws"], (0, 1, 2)),
+    (["kicad-dblib", "{out}/lib/plan.json", "-o", "{out}/kicad", "--name", "ecadlib"], (0,)),
+    (["export-parts", "{out}/lib/plan.json", "--format", "xlsx", "-o", "{out}/parts.xlsx"], (0,)),
 ]
 HELP_ONLY = {"ui", "mcp", "a365", "project"}       # need a server / network / an Altium project: -h (and mcp below)
 
