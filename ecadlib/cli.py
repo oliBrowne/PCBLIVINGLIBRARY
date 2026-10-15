@@ -35,6 +35,8 @@
     ecadlib doctor    [--workspace W] [--lib DIR] [--json]   check Python, packages, API keys, ecadlib.toml, folders
     ecadlib status    [--workspace W] [--json]    one-screen summary of a workspace: parts, held, sign-off, last runs
     ecadlib completion bash|zsh|fish              shell completion script (e.g. ecadlib completion bash > ~/.ecadlib.bash)
+    ecadlib plugins   list|export NAME PLAN -o DIR   installed part-source / exporter plugins (Python entry points)
+    ecadlib notify    show|test [--event E]       [notify] webhooks (Slack, Teams, JSON): targets, send a test message
 
 `ecadlib <command> -h` shows that command's options. --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
 one-line error. ECADLIB_LIB, ECADLIB_WORKSPACE and ECADLIB_CONFIG are defaults for --lib, --workspace and the rules file."""
@@ -77,6 +79,8 @@ COMMANDS = {
     "doctor": ("ecadlib.doctor", "check the setup: Python, packages, API keys (names only), ecadlib.toml, folders"),
     "status": ("ecadlib.ws_status", "one-screen summary of a workspace: parts, held, waiting for sign-off, last runs"),
     "completion": ("ecadlib.completion", "shell completion script for bash, zsh or fish"),
+    "plugins": ("ecadlib.plugins", "installed part-source and exporter plugins; run an exporter on a plan"),
+    "notify": ("ecadlib.notify", "webhook notifications ([notify]): show targets, send a test message"),
 }
 
 

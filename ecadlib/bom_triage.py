@@ -302,6 +302,12 @@ def triage(lines, index, provs, http):
                 except NotImplementedError as e:
                     notes.append(str(e)[:80])
                     continue
+                except Exception as e:                         # a third-party plugin (ecadlib.plugins) never stops triage
+                    if not getattr(prov, "_plugin", False):
+                        raise
+                    r = P.SourceResult(prov.name, error=f"plugin error: {type(e).__name__}: {str(e)[:120]}")
+                if not isinstance(r, P.SourceResult):
+                    r = P.SourceResult(getattr(prov, "name", "?"), error="plugin returned no SourceResult")
                 if r.error:
                     errored = True
                     notes.append(f"{prov.name}: {r.error}")
@@ -388,7 +394,8 @@ def main(argv=None):
     ap.add_argument("bom")
     ap.add_argument("--lib", action="append", default=[], help="KiCad library dir (repeatable)")
     ap.add_argument("-o", "--out", default="out/triage", help="report path stem (.md and .csv written)")
-    ap.add_argument("--providers", default="jlcpcb_search,easyeda,digikey,mouser,nexar,snapmagic,samacsys")
+    ap.add_argument("--providers", help="comma list in order (default: [providers] order in the rules, else "
+                    "jlcpcb_search,easyeda,digikey,mouser,nexar,snapmagic,samacsys); plugins: `ecadlib plugins list`")
     ap.add_argument("--offline", action="store_true", help="use HTTP cache only")
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--rate", type=float, default=1.0, help="min seconds between requests per host")
@@ -397,10 +404,14 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     from . import rules as RU
+    from . import plugins as PL
     http = CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline)
-    want = a.providers.split(",")
-    provs = [c(http) for c in P.ALL if c.name in want]
     rules = RU.load(a.rules, start=Path(a.out).parent)
+    try:
+        provs = [c(http) for c in PL.select(a.providers, rules)]
+    except ValueError as e:
+        print(f"ecadlib triage: {e}", file=sys.stderr)
+        return 2
     try:
         lines, mapping = read_bom(a.bom, RU.bom_columns(rules), rules)
     except (ValueError, OSError) as e:                   # unreadable / headerless BOM: a message, not a traceback
