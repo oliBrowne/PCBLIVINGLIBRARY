@@ -20,7 +20,7 @@ import argparse, json, re, sqlite3, sys
 from contextlib import closing
 from pathlib import Path
 
-from . import sexpr
+from . import fsutil, sexpr
 
 FIXED = ["Part ID", "Symbol", "Footprint"]
 CHOOSER = {"Value", "Description", "Manufacturer", "MPN"}             # shown as chooser columns
@@ -44,10 +44,10 @@ def part_rows(plan, lib, include_held=False, rules=None):
     from .rules import resolve
     plan = Path(plan)
     rules = resolve(rules, plan.parent)
-    items = json.loads(plan.read_text())
+    items = json.loads(plan.read_text(encoding="utf-8"))
     if not isinstance(items, list):
         raise ValueError(f"{plan}: not a librarian plan (expected a list of parts)")
-    tables, skipped, seen = {}, [], {}
+    tables, skipped, seen, spelled = {}, [], {}, {}
     for it in sorted(items, key=lambda i: str(i.get("name", ""))):
         if not isinstance(it, dict) or not it.get("name"):
             continue
@@ -65,17 +65,35 @@ def part_rows(plan, lib, include_held=False, rules=None):
         if key in seen:
             skipped.append({"part": key, "why": f"duplicate Part ID (also in table {seen[key]})"})
             continue
-        t = table_name(it)
-        seen[key] = t
-        tables.setdefault(t, []).append({"Part ID": key, "Symbol": sym, "Footprint": fp, **dict(fields)})
+        t = spelled.setdefault(table_name(it).casefold(), table_name(it))   # SQLite names ignore case: 'Resistors' and
+        seen[key] = t                                                        # 'resistors' are one table
+        row = {"Part ID": key, "Symbol": sym, "Footprint": fp}
+        low = {k.casefold() for k in row}
+        for k, v in fields:                   # 'Tolerance' and 'tolerance' would be a duplicate SQLite column: first wins
+            if k.casefold() not in low:
+                low.add(k.casefold())
+                row[k] = v
+        tables.setdefault(t, []).append(row)
     return tables, skipped
 
 
 def columns(rows):
-    cols = list(FIXED)
+    """FIXED, then every other field in first-seen order; one column per name ignoring case (SQLite's rule), so a
+    row's 'MPN' and another row's 'Mpn' share the first spelling's column."""
+    cols, low = list(FIXED), {c.casefold() for c in FIXED}
     for r in rows:
-        cols += [k for k in r if k not in cols]
+        for k in r:
+            if k.casefold() not in low:
+                low.add(k.casefold())
+                cols.append(k)
     return cols
+
+
+def _cell(r, c):
+    v = r.get(c)
+    if v in (None, ""):
+        v = next((x for k, x in r.items() if k.casefold() == c.casefold() and x not in (None, "")), "")
+    return str(v)
 
 
 def write_sqlite(path, tables):
@@ -88,8 +106,35 @@ def write_sqlite(path, tables):
             con.execute(f"CREATE TABLE {_ident(t)} (" + ", ".join(
                 f"{_ident(c)} TEXT" + (" PRIMARY KEY NOT NULL" if c == "Part ID" else "") for c in cols) + ")")
             con.executemany(f"INSERT INTO {_ident(t)} VALUES ({', '.join('?' * len(cols))})",
-                            [[str(r.get(c, "") or "") for c in cols] for r in rows])
-    tmp.replace(path)                       # KiCad may hold the old file open: replace it whole, never half-written
+                            [[_cell(r, c) for c in cols] for r in rows])
+    try:
+        fsutil.replace(tmp, path)           # replace it whole, never half-written
+    except PermissionError:                 # Windows: KiCad (ODBC) has the old database open, so it can't be renamed over
+        if not path.is_file():
+            raise
+        _copy_into(tmp, path)               # one SQLite transaction instead: KiCad sees the old or the new tables
+        tmp.unlink(missing_ok=True)
+
+
+def _copy_into(src, dst):
+    """Replace every table of the database dst by those of src, in one transaction (works while dst is open)."""
+    with closing(sqlite3.connect(dst, isolation_level=None, timeout=30)) as con:
+        con.execute("ATTACH DATABASE ? AS src", (str(src),))
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                for (t,) in con.execute("SELECT name FROM main.sqlite_master WHERE type = 'table' "
+                                        "AND name NOT LIKE 'sqlite_%'").fetchall():
+                    con.execute(f"DROP TABLE main.{_ident(t)}")
+                for t, sql in con.execute("SELECT name, sql FROM src.sqlite_master WHERE type = 'table'").fetchall():
+                    con.execute(sql)
+                    con.execute(f"INSERT INTO main.{_ident(t)} SELECT * FROM src.{_ident(t)}")
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
+        finally:
+            con.execute("DETACH DATABASE src")
 
 
 def dbl(name, db_file, tables, driver=DEFAULT_DRIVER, dsn="", description=""):
@@ -115,7 +160,7 @@ def add_lib_row(table_file, nick, uri, descr):
            f'(descr {sexpr.quote(descr)}))\n')
     p = Path(table_file)
     if p.is_file():
-        text = p.read_text()
+        text = p.read_text(encoding="utf-8")
         tree = sexpr.parse(text)
         if not tree or tree[0] != "sym_lib_table":
             raise ValueError(f"{p}: not a sym-lib-table")
@@ -128,7 +173,7 @@ def add_lib_row(table_file, nick, uri, descr):
     else:
         text = "(sym_lib_table\n\t(version 7)\n" + row + ")\n"
     sexpr.parse(text)
-    p.write_text(text)
+    p.write_text(text, encoding="utf-8")
     return text
 
 
@@ -147,7 +192,7 @@ def build(plan, out, name="ecadlib", include_held=False, rules=None, driver=DEFA
     rep["skipped"] = skipped
     exp = out / "kicad_export.json"
     if exp.is_file():                                        # only point at symbols / footprints that were written
-        xr = json.loads(exp.read_text())
+        xr = json.loads(exp.read_text(encoding="utf-8"))
         syms = {p["symbol_name"] for p in xr.get("parts", []) if p.get("symbol")}
         fps = set((xr.get("footprints") or {}))
         for t, rows in tables.items():
@@ -161,10 +206,10 @@ def build(plan, out, name="ecadlib", include_held=False, rules=None, driver=DEFA
                                "(or pass --export) so the Symbol / Footprint columns resolve")
     write_sqlite(out / rep["database"], tables)
     doc = dbl(f"{lib} (ecadlib database)", rep["database"], tables, driver, dsn, f"ecadlib parts from {Path(plan).name}")
-    (out / rep["dblib"]).write_text(json.dumps(doc, indent=2) + "\n")
+    (out / rep["dblib"]).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
     add_lib_row(out / "sym-lib-table", rep["nickname"], f"${{KIPRJMOD}}/{rep['dblib']}", "ecadlib database library")
     rep["tables"] = {t: len(r) for t, r in sorted(tables.items())}
-    (out / "kicad_dblib.json").write_text(json.dumps(rep, indent=2) + "\n")
+    (out / "kicad_dblib.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
     return rep
 
 

@@ -69,8 +69,9 @@ def group(parts, columns=None, source="KiCad"):
         groups.setdefault(key, (ln, dnp, []))[2].append(p["ref"])
     lines = []
     for ln, dnp, refs in groups.values():
+        n = len(refs) if any(r.endswith("?") for r in refs) else len(set(refs))   # 'R?' twice is two parts
         refs = sorted(dict.fromkeys(refs), key=_natkey)
-        d = {"designator": ", ".join(refs), "qty": str(len(refs))}
+        d = {"designator": ", ".join(refs), "qty": str(n)}
         d.update({k: v for k, v in ln.items() if v})
         d["dnp"] = dnp
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
@@ -151,7 +152,12 @@ def read_kicad_sch(path, columns=None):
             ref, over = instance_ref(sym, sheet_path)
             if not ref or ref.startswith("#"):                 # power symbols and flags
                 continue
-            key = (ref, sheet_path) if ref.endswith("?") else ref
+            if ref.endswith("?"):                              # unannotated: every symbol is its own part (two 'R?'
+                if str(_val(sym, "unit", "1")) != "1":         # are two resistors); only units 2.. of a multi-unit
+                    continue                                   # part are left out, they belong to its unit 1
+                key = (ref, sheet_path, _val(sym, "uuid", "") or id(sym))
+            else:
+                key = ref
             if key in seen_refs:                               # the other units of a multi-unit part
                 continue
             seen_refs.add(key)

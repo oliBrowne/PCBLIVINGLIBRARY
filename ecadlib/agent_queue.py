@@ -38,7 +38,7 @@ hold the items are read once (many upserts under one `with q.lock:` cost one fol
 approve / reject also take <workspace>/agent/plan.lock (without waiting: "decide again in a minute") while they record
 into the plan, which the agent holds while the librarian rewrites it. decide(expect=build_token(item)) refuses a
 decision on a build other than the one the person looked at."""
-import argparse, contextlib, copy, datetime, json, os, re, secrets, sys, threading
+import argparse, contextlib, copy, datetime, json, os, re, secrets, sys, threading, time
 from pathlib import Path
 
 STATES = ("detected", "building", "proving", "review", "approved", "pushed", "failed", "rejected")
@@ -228,6 +228,7 @@ def plan_lock(workspace_root, wait=True):
     d = Path(workspace_root).resolve() / "agent"
     d.mkdir(parents=True, exist_ok=True)
     f = open(d / "plan.lock", "a+b")
+    msvcrt = None
     try:
         try:
             try:
@@ -235,17 +236,38 @@ def plan_lock(workspace_root, wait=True):
                 fcntl.flock(f, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
             except ImportError:                                 # Windows
                 import msvcrt
-                f.seek(0)
-                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK if wait else msvcrt.LK_NBLCK, 1)
+                _win_lock(msvcrt, f, wait)
         except OSError:
             if wait:
                 raise
             got = False
         else:
             got = True
-        yield got
+        try:
+            yield got
+        finally:
+            if msvcrt is not None and got:                      # Windows frees a lock left on a closed file late
+                try:
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
     finally:
         f.close()
+
+
+def _win_lock(msvcrt, f, wait, poll=0.5):
+    """msvcrt's blocking LK_LOCK gives up with OSError after 10 one-second tries, but the librarian holds the plan lock
+    for minutes: wait by polling the non-blocking lock instead."""
+    while True:
+        f.seek(0)
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError:
+            if not wait:
+                raise
+        time.sleep(poll)
 
 
 def build_token(item):
