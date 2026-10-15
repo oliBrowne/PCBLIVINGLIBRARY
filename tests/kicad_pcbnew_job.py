@@ -111,6 +111,9 @@ def drc(a):
 def libcheck(a):
     d = Path(a["dir"])
     path = str(d / "check.kicad_pcb")
+    pro = d / "check.kicad_pro"                # a real project has one; without it KiCad 8 loads no project, so
+    if not pro.exists():                       # ${KIPRJMOD} isn't this folder and the table's library looks empty
+        pro.write_text(json.dumps({"meta": {"filename": pro.name, "version": 1}}))
     board = pcbnew.NewBoard(path)
     refs = {}
     items = [(a["lib"], n) for n in a["fps"]] + ([("not_a_lib", "X"), (a["lib"], "NOT_IN_LIB")] if a.get("bogus") else [])
