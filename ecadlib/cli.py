@@ -19,6 +19,7 @@
     ecadlib resolve   plan.json [--part P] list|show|choose ...   fix held parts: ranked candidates, pick one
     ecadlib upstream  check-kicad|check-a365 ...  upstream change alerts (KiCad sources, Altium 365 drift)
     ecadlib a365      pull|status|reconcile PLAN --workspace URL [--state F]   two-way Altium 365 sync
+    ecadlib queue     list|show|approve|reject|rebuild|retry [ID]   the library agent's review queue
     ecadlib approve   plan.json approve|reject|status [--part P]   sign-off before altium365 push
     ecadlib dedupe    plan.json [--lib ...] [--merge]  duplicate parts, footprints and symbols
     ecadlib sourcing  BOM [--qty N] [--alternates] price, stock, second sources and alternates per BOM line
@@ -53,6 +54,7 @@ COMMANDS = {
     "resolve": ("ecadlib.resolve", "fix held parts: candidates for a missing symbol/footprint, choose one"),
     "upstream": ("ecadlib.upstream", "KiCad upstream changes and Altium 365 drift"),
     "a365": ("ecadlib.a365_sync", "two-way Altium 365 sync: pull workspace components into the plan, status, reconcile"),
+    "queue": ("ecadlib.agent_queue", "the library agent's review queue: list, show, approve, reject, rebuild"),
     "approve": ("ecadlib.approvals", "approve / reject plan items before release"),
     "dedupe": ("ecadlib.dedupe", "find and merge duplicate parts, footprints and symbols"),
     "sourcing": ("ecadlib.sourcing", "price, stock, second sources and alternates for a BOM"),

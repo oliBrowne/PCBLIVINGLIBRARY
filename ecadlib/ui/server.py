@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .. import team as TM
+from .. import agent_queue as AQ, team as TM
 from ..app import Workspace
 
 STATIC = Path(__file__).with_name("static")
@@ -44,6 +44,10 @@ ROUTES = {
     ("POST", "/api/altium365/push"): "librarian",          # dry run; a live push needs LIVE_PUSH
     ("POST", "/api/release-check"): "librarian", ("POST", "/api/dedupe"): "librarian",
     ("POST", "/api/approvals/decide"): "approver",
+    ("GET", "/api/agent/queue"): "viewer", ("GET", "/api/agent/queue/item"): "viewer",
+    ("GET", "/api/agent/queue/picture"): "viewer",             # images under <workspace>/agent/ only
+    ("POST", "/api/agent/queue/rebuild"): "librarian", ("POST", "/api/agent/queue/reject"): "librarian",
+    ("POST", "/api/agent/queue/approve"): "approver",
     ("POST", "/api/rules/propose"): "admin",               # reads any folder on the server
     ("POST", "/api/rules/save"): "admin",
     ("GET", "/api/team/users"): "admin", ("POST", "/api/team/users"): "admin", ("GET", "/api/team/audit"): "admin",
@@ -51,7 +55,7 @@ ROUTES = {
 LIVE_PUSH = "approver"
 TEAM_ONLY = {"/api/login", "/api/logout", "/api/account/password", "/api/team/users", "/api/team/audit"}
 AUDIT_KEYS = ("bom", "part", "decision", "dry_run", "workspace", "kind", "id", "merge", "overwrite", "allow", "unallow",
-              "action", "username", "role")
+              "action", "username", "role", "note")
 TEAM_HEADERS = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin",
                 "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' "
                 "'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
@@ -341,6 +345,20 @@ def make_handler(ws: Workspace, team=None):
                     ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
                     return self._send(200, p.read_bytes(), ctype,
                                       {"Content-Disposition": f'attachment; filename="{p.name}"'})
+                if u.path == "/api/agent/queue":
+                    return self._send(200, ws.agent_queue_list(q.get("status") or None, q.get("batch") or None))
+                if u.path == "/api/agent/queue/item":
+                    if not q.get("id"):
+                        raise ValueError("no queue item id given")
+                    try:
+                        return self._send(200, ws.agent_queue_get(q["id"]))
+                    except KeyError as e:
+                        return self._send(404, {"error": _msg(e)})
+                if u.path == "/api/agent/queue/picture":       # shown inline: images only, inside agent/ only
+                    p = ws.agent_picture(q.get("path", ""))
+                    return self._send(200, p.read_bytes(), AQ.PICTURE_TYPES[p.suffix.lower()],
+                                      {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'"}
+                                      if not team else None)
                 if team and u.path == "/api/team/users":
                     return self._send(200, self._users())
                 if team and u.path == "/api/team/audit":
@@ -413,6 +431,9 @@ def make_handler(ws: Workspace, team=None):
                 "/api/dedupe": lambda b: ws.find_duplicates(self._bom(b, True), b.get("merge") is True),
                 "/api/rules/save": lambda b: ws.save_rules(_str(b.get("text"), "text"), b.get("overwrite") is True),
                 "/api/altium365/push": self._push,
+                "/api/agent/queue/approve": lambda b: self._queue(b, "approve"),
+                "/api/agent/queue/reject": lambda b: self._queue(b, "reject"),
+                "/api/agent/queue/rebuild": lambda b: self._queue(b, "rebuild"),
             }
             if u.path in actions:
                 b = self._json()
@@ -431,6 +452,22 @@ def make_handler(ws: Workspace, team=None):
                 raise Refused(f"you sign as {', '.join(roles)}, not {role}")
             return ws.approve_part(self._bom(b, True), _str(b.get("part"), "part"), b.get("decision"), TM.identity(self.user),
                                    role, comment, via="ecadlib ui (team, signed in)")
+
+        def _queue(self, b, action):
+            """Review queue decision. Team mode: identity and approval role from the session (typed names ignored);
+            rebuild on a failed / rejected item is a retry."""
+            i = _str(b.get("id"), "id")
+            note, role = _str(b.get("note"), "note", True) or "", _str(b.get("role"), "role", True)
+            if action == "rebuild" and ws.agent_queue_get(i)["item"]["status"] in ("failed", "rejected"):
+                action = "retry"
+            if not team:
+                return ws.agent_queue_decide(i, action, _str(b.get("user"), "user"), role, note)
+            roles = TM.sign_roles(self.user)
+            role = (role or "").strip() or roles[0]
+            if role not in roles:
+                raise Refused(f"you sign as {', '.join(roles)}, not {role}")
+            return ws.agent_queue_decide(i, action, TM.identity(self.user), role, note, via="ecadlib ui (team, signed in)",
+                                         aliases=(self.user["username"], self.user.get("email") or ""))
 
         def _push(self, b):
             dry = b.get("dry_run", True) is not False

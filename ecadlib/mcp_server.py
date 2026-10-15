@@ -123,6 +123,27 @@ TOOLS = [
                                     "decision": {"type": "string", "enum": ["approve", "reject"]},
                                     "user": {"type": "string"}, "role": {"type": "string"},
                                     "comment": {"type": "string"}}}},
+    {"name": "agent_queue_list",
+     "description": "The library agent's review queue: work items (parts found new/changed/removed in watched projects "
+                    "and BOMs, or upkeep findings) with status detected/building/proving/review/approved/pushed/failed/"
+                    "rejected, the proof verdict and batch; counts per status and the batches. Read-only.",
+     "inputSchema": {"type": "object", "properties": {
+         "status": {"type": "string", "enum": ["detected", "building", "proving", "review", "approved", "pushed", "failed", "rejected"]},
+         "batch": {"type": "string", "description": "batch id: only its items, plus the batch itself"}}}},
+    {"name": "agent_queue_get",
+     "description": "One review-queue item in full: the change that triggered it, build sources and notes, the visual "
+                    "proof (verdict, findings), before/after picture paths, history and the allowed next states.",
+     "inputSchema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}},
+    {"name": "agent_queue_decide",
+     "description": "Record a person's decision on a review-queue item: approve (review -> approved), reject (needs a "
+                    "note), rebuild (review -> building) or retry (failed/rejected -> detected). approve/reject are also "
+                    "recorded in the part's librarian plan through the approvals policy. user is the person deciding, "
+                    "e.g. \"Ann Lee <ann@example.com>\": ask the user and pass their own answer; never decide on your own "
+                    "behalf or invent a name. The person who started a build cannot approve it.",
+     "inputSchema": {"type": "object", "required": ["id", "decision", "user"],
+                     "properties": {"id": {"type": "string"},
+                                    "decision": {"type": "string", "enum": ["approve", "reject", "rebuild", "retry"]},
+                                    "user": {"type": "string"}, "role": {"type": "string"}, "note": {"type": "string"}}}},
     {"name": "find_duplicates",
      "description": "Find duplicate parts (same MPN once packaging suffixes are stripped), footprints (same pad "
                     "geometry) and symbols (same pinout) across the librarian's plan and the workspace's altium_models/ "
@@ -290,6 +311,13 @@ def call_tool(ws, name, args):
                                 args.get("comment") or "")
             r.pop("log", None)
             return r
+        if name == "agent_queue_list":
+            return ws.agent_queue_list(args.get("status") or None, args.get("batch") or None)
+        if name == "agent_queue_get":
+            return ws.agent_queue_get(args["id"])
+        if name == "agent_queue_decide":
+            return ws.agent_queue_decide(args["id"], args["decision"], args["user"], args.get("role"), args.get("note") or "",
+                                         via="ecadlib mcp")
         if name == "find_duplicates":
             r = ws.find_duplicates(args["bom"], args.get("merge") is True)
             if "summary" in r:
