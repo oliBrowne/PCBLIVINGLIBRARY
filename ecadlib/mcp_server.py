@@ -239,6 +239,18 @@ TOOLS = [
                     "replace it (the old file is kept as ecadlib.toml.bak).",
      "inputSchema": {"type": "object", "required": ["toml"],
                      "properties": {"toml": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}}},
+    {"name": "visual_check",
+     "description": "Visual proof of a part: renders our footprint (top view, pin 1, pitch, dimensions) and symbol next to "
+                    "the datasheet's drawing / pin-table pages and asks Claude whether they match (pitch, pad count and "
+                    "numbering, pin 1, top vs bottom view, body size, pin names/numbers). Verdict pass / doubt / fail / "
+                    "skipped (no API key) with findings and the image paths, so you can look at them too.",
+     "inputSchema": {"type": "object", "required": ["target"],
+                     "properties": {"target": {"type": "string", "description": "part name in the workspace, or a workspace path "
+                                                                                 "to a .kicad_mod / package spec .json"},
+                                    "datasheet": {"type": "string", "description": "datasheet PDF (workspace path or URL)"},
+                                    "pages": {"type": "string", "description": "datasheet pages, e.g. 3,7-8 (default: picked by text)"},
+                                    "symbol": {"type": "string", "description": "symbol file (.SchLib / symbol JSON / pin CSV)"},
+                                    "render_only": {"type": "boolean"}}}},
     {"name": "list_example_specs",
      "description": "Return the example package specs (useful as templates for preview_footprint).",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -323,6 +335,9 @@ def call_tool(ws, name, args):
             return ws.project_bom(args["project"], args.get("variant") or None)
         if name == "where_used":
             return ws.where_used(args["projects"], args.get("part") or None, args.get("plan") or None)
+        if name == "visual_check":
+            return ws.visual_check(args["target"], args.get("datasheet") or None, args.get("pages") or None,
+                                   args.get("symbol") or None, args.get("render_only") is True)
         if name == "list_example_specs":
             return ws.example_specs()
         if name == "propose_rules":

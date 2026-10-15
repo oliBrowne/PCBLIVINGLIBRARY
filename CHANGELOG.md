@@ -7,6 +7,10 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+### Added
+
+- Visual proof (`ecadlib visual-check`, `Workspace.visual_check`, MCP `visual_check`, `[agent.proof]` rules): top-view footprint and symbol PNGs (pin 1, pitch, dimensions, grid, BGA maps) next to the datasheet pages, one Claude call with a JSON-schema verdict checked strictly (pass / doubt / fail / skipped without a key), cached by content hash, with a cost cap.
+
 ## [0.3.0] - 2026-10-14
 
 ### Added

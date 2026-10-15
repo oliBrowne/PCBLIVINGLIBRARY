@@ -76,6 +76,10 @@ DEFAULTS = {
         "sides": {},                           # group -> left | right | top | bottom (overrides)
     },
 }
+# [agent.proof]: ecadlib.visual_check (the Claude visual proof). Empty model / effort / api_key_env = use [datasheet].
+DEFAULTS.setdefault("agent", {})["proof"] = {"model": "", "effort": "", "api_key_env": "", "max_cost_usd": 0.0,
+                                             "fail_on": ["error"], "max_pages": 6, "dpi": 200}
+SUB_RANGE = {("agent", "proof", "max_pages"): (1, 100), ("agent", "proof", "dpi"): (50, 400)}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
@@ -207,6 +211,8 @@ def validate(raw, where="ecadlib.toml"):
             elif isinstance(d, float):
                 if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
                     _err(where, key, "must be a number of 0 or more")
+            elif isinstance(d, dict):
+                _check_table(where, sec, k, v, d)
             elif sec == "sim":
                 if not isinstance(v, (str, int, float)) or isinstance(v, bool):
                     _err(where, key, "must be a value such as \"10m\" (ohm / henry)")
@@ -256,6 +262,40 @@ def validate(raw, where="ecadlib.toml"):
             raise RulesError(str(e)) from None
     _check_symbols(where, raw.get("symbols") or {})
     return raw
+
+
+def _check_table(where, sec, k, v, d):
+    """A nested table such as [agent.proof]: known keys, each of its default's type."""
+    if not isinstance(v, dict):
+        _err(where, f"{sec}.{k}", "must be a table")
+    for kk, vv in v.items():
+        key = f"{sec}.{k}.{kk}"
+        if kk not in d:
+            _err(where, key, f"is not a known key; known in [{sec}.{k}]: {', '.join(d)}")
+        dd = d[kk]
+        if isinstance(dd, list):
+            vv = [vv] if isinstance(vv, str) else vv
+            if not isinstance(vv, list) or not all(isinstance(x, str) for x in vv):
+                _err(where, key, "must be a list of text values")
+        elif isinstance(dd, int) and not isinstance(dd, bool):
+            lo, hi = SUB_RANGE.get((sec, k, kk), (0, 1_000_000))
+            if not isinstance(vv, int) or isinstance(vv, bool) or not lo <= vv <= hi:
+                _err(where, key, f"must be a whole number from {lo} to {hi}")
+        elif isinstance(dd, float):
+            if not isinstance(vv, (int, float)) or isinstance(vv, bool) or vv < 0:
+                _err(where, key, "must be a number of 0 or more")
+        elif not isinstance(vv, str):
+            _err(where, key, "must be text")
+    if (sec, k) == ("agent", "proof"):
+        if v.get("effort") not in (None, "", "low", "medium", "high", "xhigh", "max"):
+            _err(where, "agent.proof.effort", f"= {v['effort']!r}: must be low, medium, high, xhigh or max (empty = [datasheet])")
+        if v.get("model") and not re.fullmatch(r"[a-z0-9][a-z0-9.\-]*", v["model"]):
+            _err(where, "agent.proof.model", f"= {v['model']!r}: must be a model id such as claude-opus-5-5")
+        if v.get("api_key_env") and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v["api_key_env"]):
+            _err(where, "agent.proof.api_key_env", "must be the NAME of an environment variable (never the key itself)")
+        fo = [v["fail_on"]] if isinstance(v.get("fail_on"), str) else v.get("fail_on") or []
+        if any(x not in ("error", "warning") for x in fo):
+            _err(where, "agent.proof.fail_on", f"= {v['fail_on']!r}: severities are error, warning")
 
 
 def _check_symbols(where, sy):
@@ -619,6 +659,9 @@ HELP = {
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",
     "datasheet.api_key_env": "name of the environment variable with the API key; the key itself never goes in this file",
     "datasheet.max_cost_usd": "refuse a run whose estimated worst-case cost is higher (0 = no cap; --yes overrides)",
+    "agent": "The library agent (watch -> build -> prove -> review -> push)",
+    "agent.proof": "Claude visual proof (ecadlib visual-check): model, effort, api_key_env (empty = [datasheet]), max_cost_usd per "
+                   "check (0 = no cap), fail_on (mismatch severities that fail a part), max_pages, dpi of the datasheet pages",
     "symbols": "Big IC symbols: pins grouped by function (power top, ground bottom, inputs left, ports right); see `ecadlib symbol -h`",
     "symbols.layout_pins": "parts with at least this many pins get the grouped layout; smaller parts keep the plain one (0 = never)",
     "symbols.split_pins": "more pins than this: a multi-part symbol (power part + signal parts); 0 = one part always",

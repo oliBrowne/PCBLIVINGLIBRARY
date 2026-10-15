@@ -867,6 +867,42 @@ grid = 100              # 50 or 100 mil
 
 **Checked:** an STM32F103-style 100-pin LQFP, an ESP32-WROOM-32 module and an FT232RL USB bridge (tests/fixtures/symbols). Each was checked for grouping, order, overlapping pins and grid, read back with `read_schlib`, and parsed as KiCad. The previews were inspected by eye. **Not checked:** nothing has been opened in Altium Designer or KiCad yet. Name widths are estimated at 70 mil per character, so bodies may be a little wider than needed. Pins whose names match no rule fall back to "other" and are placed by type.
 
+## 20. `visual_check.py`: visual proof against the datasheet
+
+```bash
+ecadlib visual-check SOIC-8.kicad_mod --datasheet ds.pdf [--pages 3,7-8] [--symbol PART.SchLib] [-o out/]
+ecadlib visual-check PART --workspace W --datasheet ds.pdf        # a part already in the workspace
+ecadlib visual-check SPEC.json --datasheet ds.pdf --render-only   # pictures only, nothing sent
+```
+
+It draws our footprint and symbol as PNGs, renders the datasheet pages, and asks Claude in one Messages API call
+whether they agree. The footprint image is a stated **top view** of the copper lands. Pads are coloured by kind,
+with their numbers on them. Pin 1 is blue and has a callout. It also shows the F.Fab body, the courtyard and the
+silk, an mm grid with labelled major lines, and a scale bar. Dimension lines give the body size, the pad span and
+the pitch. BGAs get row letters and column numbers. The header lists the measured facts: pad count, pitch, where
+pin 1 is, and the direction of numbering. Every family the generator builds can be drawn, including slots, polygon
+pads with vias, stacked USB-C pads and BGA ball maps. Symbols can be drawn from symbol JSON, `.SchLib`,
+`LIB.kicad_sym:NAME` or a pin CSV, one image per part when they don't fit together. Datasheet pages are rendered
+by `pdftoppm`. Pages are picked with the datasheet reader's keyword table unless `--pages` is given.
+
+The answer comes back as JSON in a fixed schema, with one check per aspect: pitch, pad count, numbering, pin 1,
+top or bottom view, body size, pad size, pin count, pin numbers and pin names. The checking is strict:
+
+* A mismatch on pitch, pad count, numbering, pin 1, view, pin numbers or pin names is an error, so the verdict is
+  **fail**.
+* An unclear or missing check gives **doubt**. So do a refusal, `max_tokens`, malformed or off-schema output, and
+  datasheet text addressed to an AI.
+* **pass** needs a real answer in which every required check matches.
+* With no API key the verdict is **skipped**, but the pictures are still written.
+
+The call goes through the datasheet reader's `Client`, which handles the key, retries and the request log. The log
+never holds the key or the image bytes. Answers are cached by a content hash under `<workspace>/agent/proof_cache/`.
+Settings live in `[agent.proof]`: `model`, `effort`, `api_key_env`, `max_cost_usd`, `fail_on`, `max_pages` and
+`dpi`. An empty model, effort or key variable falls back to `[datasheet]`. The cap is checked against a worst-case
+estimate before anything is sent. The same check is available as `Workspace.visual_check` and as the MCP tool
+`visual_check`. Pictures and `proof.json` go to `agent/proofs/<part>/`. Drawing needs Pillow (`pip install
+'ecadlib[vision]'`).
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:
