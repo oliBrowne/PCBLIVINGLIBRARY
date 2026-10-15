@@ -336,11 +336,11 @@ def _from_params(prm, name, source, **kw):
     return _part(prm.get("Manufacturer Part Number", ""), prm.get("Manufacturer", ""), lcsc, name, source, **kw)
 
 
-def parts_from_bom(path):
+def parts_from_bom(path, columns=None):
     from .altium_export import to_rows
     from .bom_triage import part_numbers, read_bom
     lines = []
-    for ln in read_bom(path)[0]:
+    for ln in read_bom(path, columns)[0]:
         if ln.get("dnp"):
             continue
         pns = part_numbers(ln)
@@ -403,12 +403,13 @@ def parts_from_a365(client, ws, param="Lifecycle"):
         after = page.get("endCursor")
 
 
-def read_inputs(paths):
+def read_inputs(paths, columns=None):
+    """columns: the rules' [bom] columns ({field: your header}) for BOM inputs."""
     parts = []
     for p in paths:
         ext = Path(p).suffix.lower()
         parts += (parts_from_dblib(p) if ext in (".sqlite", ".db", ".sqlite3") else
-                  parts_from_plan(p) if ext == ".json" else parts_from_bom(p))
+                  parts_from_plan(p) if ext == ".json" else parts_from_bom(p, columns))
     return parts
 
 
