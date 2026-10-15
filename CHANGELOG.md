@@ -7,6 +7,10 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+### Fixed
+
+- Library agent integration (end-to-end test `tests/test_agent_e2e.py` with the real watch, queue, visual check and agent): the proof now gets the queue item's built footprint, symbol and datasheet (it always said "nothing to check"). `ecadlib agent approve|reject` no longer crashes. A rebuild keeps who asked for it, so that person cannot approve it. A BOM line without an MPN no longer stops the run. A part changed in its source while in review is rebuilt and its PR updated. The queue's batch record gets the PR link. `visual-check PART --workspace` reads librarian plans again. The batch PR links http(s) datasheets and does not name a model when no proof ran.
+
 ### Added
 
 - Library agent watch step (`ecadlib agent-watch [--dry-run]`, MCP `agent_watch_scan`, `[agent.watch]` rules): new, changed and removed parts in watched BOM files, folders (including web UI uploads), Altium projects and Altium 365 projects (Nexar queries schema-checked, not yet run live), with state in `agent/watch_state.json`.
