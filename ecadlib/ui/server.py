@@ -10,8 +10,8 @@ Team mode (`--team`): one server for the whole team with sign-in (ecadlib/team.p
 team_users.json, session cookies, a CSRF token on every POST, a minimum role per route (ROUTES), approvals signed as
 the signed-in user, every write in team_audit.jsonl. A non-loopback address needs --cert/--key (built-in TLS) or an
 explicit --allow-http (behind an HTTPS reverse proxy on another host)."""
-import argparse, contextlib, hmac, http.cookies, ipaddress, itertools, json, mimetypes, secrets, socket, ssl, sys, threading, \
-    os, traceback, webbrowser
+import argparse, contextlib, hmac, io, http.cookies, ipaddress, itertools, json, mimetypes, secrets, socket, ssl, sys, threading, \
+    os, time, traceback, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -155,6 +155,23 @@ def _team_file(ws, p):
     return False
 
 
+class _DeadlineReader(io.RawIOBase):
+    """Socket reads that share one deadline for the whole request (team mode): a client trickling a byte now and
+    then would otherwise reset the per-read timeout forever and hold its thread."""
+    def __init__(self, sock, deadline):
+        self.sock, self.deadline = sock, deadline
+
+    def readable(self):
+        return True
+
+    def readinto(self, b):
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("request took too long")
+        self.sock.settimeout(left)
+        return self.sock.recv_into(b)
+
+
 def make_handler(ws: Workspace, team=None):
     """team: a team.Team for team mode; None = local mode (unchanged single-user behaviour)."""
     jobs = Jobs()
@@ -169,8 +186,20 @@ def make_handler(ws: Workspace, team=None):
 
         def setup(self):
             super().setup()
+            deadline = time.monotonic() + float(team.cfg["request_seconds"]) if team else None
+            if team:
+                self.connection.settimeout(min(self.timeout, team.cfg["request_seconds"]))
             if hasattr(self.request, "do_handshake"):      # TLS: handshake here, in the request's own thread
                 self.request.do_handshake()
+            if team:                                       # headers + body within request_seconds, all told
+                self.rfile.close()                         # nothing read yet; drops the makefile's socket ref
+                self.rfile = io.BufferedReader(_DeadlineReader(self.connection, deadline))
+
+        def finish(self):
+            if team:
+                with contextlib.suppress(OSError):         # the answer gets its own (per-write) timeout
+                    self.connection.settimeout(self.timeout)
+            super().finish()
 
         def log_message(self, fmt, *args):
             sys.stderr.write("ui: " + fmt % args + "\n")
@@ -295,8 +324,8 @@ def make_handler(ws: Workspace, team=None):
 
         def _audit(self, path):
             if team and self._status is not None:
-                TM.audit(ws.root, {"user": self.user["username"] if self.user else None, "ip": self._ip(), "route": path,
-                                   "status": self._status, **self._fields})
+                team.audit({"user": self.user["username"] if self.user else None, "ip": self._ip(), "route": path,
+                            "status": self._status, **self._fields})
 
         # ---------------------------------------------------------- request bodies
         def _bom(self, body=None, write=False):
@@ -314,7 +343,14 @@ def make_handler(ws: Workspace, team=None):
             n = int(self.headers.get("Content-Length") or 0)
             if n < 0 or n > limit:
                 raise ValueError("bad or too large Content-Length")
-            return self.rfile.read(n)
+            try:
+                data = self.rfile.read(n)
+            except TimeoutError:
+                self.close_connection = True
+                raise ValueError("the request took too long to arrive") from None
+            if len(data) < n:
+                raise ValueError("the request body was cut short")
+            return data
 
         def _json(self):
             b = json.loads(self._body(MAX_JSON) or b"{}")
@@ -378,7 +414,7 @@ def make_handler(ws: Workspace, team=None):
                 if team and u.path == "/api/team/users":
                     return self._send(200, self._users())
                 if team and u.path == "/api/team/audit":
-                    return self._send(200, {"entries": TM.read_audit(ws.root, 300)})
+                    return self._send(200, {"entries": TM.read_audit(ws.root, 300, int(team.cfg["audit_keep"]))})
                 return self._send(404, {"error": "not found"})
             except Exception as e:
                 return self._error(e)
@@ -599,6 +635,39 @@ def make_handler(ws: Workspace, team=None):
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     tls = False
+    team = None
+    request_queue_size = 128                               # a burst of sign-ins must queue, not get connection resets
+
+    def __init__(self, *a, **kw):
+        self.per_ip, self.per_ip_lock = {}, threading.Lock()
+        super().__init__(*a, **kw)
+
+    def _limited(self, ip):
+        return self.team is not None and int(self.team.cfg["max_connections_per_ip"]) > 0 and \
+            ip not in self.team.cfg["trusted_proxies"]
+
+    def process_request(self, request, client_address):
+        """Team mode: at most max_connections_per_ip open connections per address (slow clients can't take every
+        thread); more are closed at once. A trusted proxy (Caddy) is exempt: it carries everyone."""
+        ip = client_address[0]
+        if self._limited(ip):
+            with self.per_ip_lock:
+                if self.per_ip.get(ip, 0) >= int(self.team.cfg["max_connections_per_ip"]):
+                    self.shutdown_request(request)
+                    return
+                self.per_ip[ip] = self.per_ip.get(ip, 0) + 1
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            ip = client_address[0]
+            if self._limited(ip):
+                with self.per_ip_lock:
+                    self.per_ip[ip] = self.per_ip.get(ip, 1) - 1
+                    if self.per_ip[ip] <= 0:
+                        del self.per_ip[ip]
 
     def handle_error(self, request, client_address):
         e = sys.exc_info()[1]
@@ -610,6 +679,7 @@ class Server(ThreadingHTTPServer):
 def make_server(ws, host="127.0.0.1", port=0, team=None, cert=None, key=None):
     """The UI server (not started). cert/key: serve HTTPS with the standard library's ssl (TLS 1.2+)."""
     srv = Server((host, port), make_handler(ws, team))
+    srv.team = team
     if cert:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2

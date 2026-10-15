@@ -40,6 +40,11 @@ CONFIG_DEFAULTS = {
     "lockout_minutes": 15,
     "max_failures_per_ip": 30,
     "secure_cookies": False,      # force the Secure cookie flag (behind an HTTPS proxy that does not send X-Forwarded-Proto)
+    "request_seconds": 120,       # whole request (TLS handshake, headers and body) must arrive within this
+    "max_connections_per_ip": 64, # open connections per client address (trusted proxies exempt); 0 = no limit
+    "audit_max_mb": 10,           # team_audit.jsonl is rotated to .1, .2 ... at this size
+    "audit_keep": 5,              # rotated audit files kept
+    "audit_refusals_per_minute": 20,   # unauthenticated refusals logged per address per minute; the rest are counted
 }
 
 
@@ -372,6 +377,16 @@ class Team:
         self.throttle = Throttle(self.cfg["max_failures"], self.cfg["lockout_minutes"], self.cfg["max_failures_per_ip"])
         self.secret = secrets.token_bytes(32)
         self.tls = tls
+        self.refusals = RefusalLog(self.cfg["audit_refusals_per_minute"])
+
+    def audit(self, entry):
+        """One team audit line; unauthenticated refusals are rate-limited per address (RefusalLog)."""
+        if entry.get("user") is None and entry.get("status", 0) >= 400:
+            extra = self.refusals.admit(entry.get("ip"))
+            if extra is None:
+                return
+            entry = {**entry, **extra}
+        audit(self.root, entry, int(self.cfg["audit_max_mb"] * 1024 * 1024), int(self.cfg["audit_keep"]))
 
     def has_admin(self):
         return any(u.get("role") == "admin" for u in self.store.users().values())
@@ -396,23 +411,78 @@ class Team:
 
 
 _audit_lock = threading.Lock()
+AUDIT_MAX_BYTES, AUDIT_KEEP = CONFIG_DEFAULTS["audit_max_mb"] * 1024 * 1024, CONFIG_DEFAULTS["audit_keep"]
 
 
-def audit(root, entry):
-    with _audit_lock, open(Path(root) / AUDIT_FILE, "a") as f:
-        f.write(json.dumps({"ts": now(), **entry}, sort_keys=True) + "\n")
-
-
-def read_audit(root, n=200):
+def _audit_files(root, keep):
     f = Path(root) / AUDIT_FILE
-    if not f.exists():
-        return []
-    lines = f.read_text().splitlines()[-n:]
+    return [f] + [f.with_name(f"{AUDIT_FILE}.{i}") for i in range(1, keep + 1)]
+
+
+def audit(root, entry, max_bytes=AUDIT_MAX_BYTES, keep=AUDIT_KEEP):
+    """Append one line; at max_bytes the file is rotated (team_audit.jsonl -> .1 -> .2 ..., `keep` old files)."""
+    line = json.dumps({"ts": now(), **entry}, sort_keys=True) + "\n"
+    with _audit_lock:
+        files = _audit_files(root, keep)
+        with contextlib.suppress(FileNotFoundError):
+            if keep > 0 and files[0].stat().st_size + len(line) > max_bytes:
+                for src, dst in reversed(list(zip(files, files[1:]))):
+                    if src.exists():
+                        os.replace(src, dst)
+        with open(files[0], "a") as f:
+            f.write(line)
+
+
+def _tail(path, n, block=65536):
+    """The last n lines of a file, reading backwards from the end (never the whole file)."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos, data = f.tell(), b""
+        while pos > 0 and data.count(b"\n") <= n:
+            step = min(block, pos)
+            pos -= step
+            f.seek(pos)
+            data = f.read(step) + data
+    lines = data.splitlines()
+    return lines[-n:] if pos == 0 else lines[1:][-n:]       # the first line may be cut when we stopped early
+
+
+def read_audit(root, n=200, keep=AUDIT_KEEP):
+    """The newest n entries, newest first, from team_audit.jsonl and then its rotated files."""
     out = []
-    for l in reversed(lines):
-        with contextlib.suppress(json.JSONDecodeError):
-            out.append(json.loads(l))
-    return out
+    for f in _audit_files(root, keep):
+        if len(out) >= n:
+            break
+        if not f.exists():
+            continue
+        for l in reversed(_tail(f, n - len(out))):
+            with contextlib.suppress(json.JSONDecodeError, UnicodeDecodeError):
+                out.append(json.loads(l))
+    return out[:n]
+
+
+class RefusalLog:
+    """Unauthenticated refusals (401/403/429 before sign-in) cost an anonymous client nothing, so each address gets
+    `per_minute` audit lines per minute; the rest are counted and reported as "suppressed" on its next line."""
+    def __init__(self, per_minute=20):
+        self.per_minute, self.seen, self.lock = per_minute, {}, threading.Lock()
+
+    def admit(self, ip):
+        """None: drop this line. Else a dict to merge into it ({} or {"suppressed": n})."""
+        if self.per_minute <= 0:
+            return {}
+        t = time.time()
+        with self.lock:
+            if len(self.seen) > 10000:                  # forget quiet addresses
+                self.seen = {k: v for k, v in self.seen.items() if t - v[0] < 60}
+            start, count, dropped = self.seen.get(ip, (t, 0, 0))
+            if t - start >= 60:
+                start, count = t, 0
+            if count >= self.per_minute:
+                self.seen[ip] = (start, count, dropped + 1)
+                return None
+            self.seen[ip] = (start, count + 1, 0)
+            return {"suppressed": dropped} if dropped else {}
 
 
 # ---------------------------------------------------------------- CLI
