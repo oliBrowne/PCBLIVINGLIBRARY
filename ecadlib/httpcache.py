@@ -28,6 +28,9 @@ class Response:
 SECRET_Q = re.compile(r"(api[_-]?key|key|token|secret|password|signature|sig|client[_-]?secret|access[_-]?token)$", re.I)
 
 
+VARY_H = re.compile(r"locale|currency|language", re.I)
+
+
 def redact(url):
     u = urlparse(url)
     q = [(k, "REDACTED" if SECRET_Q.search(k) else v) for k, v in parse_qsl(u.query, keep_blank_values=True)]
@@ -45,13 +48,17 @@ class CachedHTTP:
         self.s.headers["User-Agent"] = UA
         self.log = []  # (method, url, status/error, cached)
 
-    def _key(self, method, url, body):
-        return hashlib.sha256(f"{method}\n{url}\n{body or ''}".encode()).hexdigest()[:32]
+    def _key(self, method, url, body, headers=None):
+        # headers that change the answer (DigiKey's X-DIGIKEY-Locale-Currency: the same URL priced in EUR or USD) are
+        # part of the key; auth headers never are (tokens rotate, and must not decide what is cached)
+        vary = sorted((k.lower(), str(v)) for k, v in (headers or {}).items() if VARY_H.search(k))
+        extra = "".join(f"\n{k}: {v}" for k, v in vary)
+        return hashlib.sha256(f"{method}\n{url}\n{body or ''}{extra}".encode()).hexdigest()[:32]
 
     def request(self, method, url, body=None, headers=None, cache=True):
         """cache=False: never read or store (credentials in the URL or body, tokens in the response).
         Query-string secrets (apiKey=, token=...) are redacted from cache keys and stored URLs."""
-        f = self.dir / f"{self._key(method, redact(url), body)}.json"
+        f = self.dir / f"{self._key(method, redact(url), body, headers)}.json"
         if cache and f.exists() and (self.offline or time.time() - f.stat().st_mtime < self.ttl):   # offline: stale beats nothing
             d = json.loads(f.read_text())
             self.log.append((method, url, d["status"], True))

@@ -327,6 +327,27 @@ def test_check_a365_exit_codes():
                 os.environ["NEXAR_TOKEN"] = old_tok
 
 
+def test_reconvert_keeps_rules_layers():
+    """A part converted with the rules' layers (courtyard Mechanical1 ...) keeps them when check-kicad --update or
+    upkeep reconverts it."""
+    from ecadlib import rules as RU
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "out"
+        for k in ("PcbLib", "SchLib"):
+            (out / k).mkdir(parents=True)
+        lay = RU.layers(RU.load({"layers": {"courtyard": "Mechanical1", "assembly": "Mechanical2"}}))
+        http = seeded_http(d)
+        assert K.import_part(SPEC, out, http, layers=lay)["ok"]
+        f = out / "PcbLib" / "USB_C_16P.PcbLib"
+        used = lambda: {r["layer"] for r in K.AL.read_pcblib(f)[0]["records"] if r["type"] in ("track", "region", "arc")}
+        before = used()
+        assert 57 in before and K.AL.MECH15 not in before, before
+        man = json.loads((out / "manifest.json").read_text())
+        assert man["entries"]["footprint:USB_C_16P"]["layers"] == {k: v for k, v in lay.items()}
+        U.reconvert([man["entries"]["footprint:USB_C_16P"]], out, http)
+        assert used() == before, used()
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
