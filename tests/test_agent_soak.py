@@ -458,7 +458,7 @@ def test_every_approval_path_waits_for_the_plan_lock():
         assert AP.main([str(plan), "status"]) in (0, None)
 
 
-def test_decided_batch_pr_is_commented_and_closed():
+def test_decided_batch_with_a_pushed_part_stays_open_ready_to_merge():
     with tempfile.TemporaryDirectory() as d:
         ws, rules = make_ws(d, auto_push=True)
         gh = GitHubPRs()
@@ -470,14 +470,31 @@ def test_decided_batch_pr_is_commented_and_closed():
         push = lambda pis, *x, **k: [{"action": "release", "name": p["name"]} for p in pis]
         with mock.patch.object(altium365, "push", push):
             run(ws, rules, **kw)
-            assert gh.prs[1]["state"] == "open"                       # BBB2 still waits for review
+            assert gh.prs[1]["state"] == "open" and "comments" not in gh.prs[1]     # BBB2 still waits for review
             AQ.decide(Workspace(ws), b["id"], "reject", ANN, note="no")
             run(ws, rules, **kw)
-        assert gh.prs[1]["state"] == "closed" and "AAA1: pushed" in gh.prs[1]["comments"][0], gh.prs[1]
-        assert AQ.Queue(ws).get_batch(a["batch"])["status"] == "closed"
+        pr = gh.prs[1]                       # the library repo gets AAA1 only through this PR: never closed
+        assert pr["state"] == "open" and len(pr["comments"]) == 1 and pr["comments"][0].startswith("All parts decided; ready to merge")
+        files = gitc(Path(d) / "remote.git", "ls-tree", "-r", "--name-only", pr["head"]).split()
+        assert any("AAA1.PcbLib" in f for f in files) and not [f for f in files if "BBB2" in f or f"/{b['id']}/" in f], files
+        assert AQ.Queue(ws).get_batch(a["batch"])["status"] == "ready"
         n = len(gh.calls)
         run(ws, rules, **kw)
-        assert len(gh.calls) == n                                      # closed once, never touched again
+        assert len(gh.calls) == n                                      # said once, never touched again
+
+
+def test_decided_batch_with_nothing_pushed_is_closed():
+    with tempfile.TemporaryDirectory() as d:
+        ws, rules = make_ws(d)
+        gh = GitHubPRs()
+        kw = dict(github_session=gh, env={"GITHUB_TOKEN": "tok"})
+        write_bom(ws, {"AAA1": "SOIC-8", "BBB2": "SOIC-8"})
+        run(ws, rules, **kw)
+        for m in ("AAA1", "BBB2"):
+            AQ.decide(Workspace(ws), by_mpn(ws)[m]["id"], "reject", ANN, note="no")
+        run(ws, rules, **kw)
+        assert gh.prs[1]["state"] == "closed" and "none was pushed" in gh.prs[1]["comments"][0]
+        assert AQ.Queue(ws).get_batch(by_mpn(ws)["AAA1"]["batch"])["status"] == "closed"
 
 
 def test_approved_but_unpushed_keeps_the_pr_open():
@@ -544,6 +561,32 @@ def test_old_keys_in_queue_and_watch_state_are_migrated():
         assert W.scan(ws, rules) == [] and json.loads(W.state_path(ws).read_text())["version"] == 2
 
 
+def test_manufacturer_aliases_from_rules():
+    with tempfile.TemporaryDirectory() as d:
+        ws, rules = make_ws(d, git=False)
+        try:
+            (ws / "boms" / "main.csv").write_text(HEAD + "U1,1,LM1,SOIC-8,Acme East Corp.,LM1\nU2,1,LM1,SOIC-8,ACME,LM1\n")
+            run(ws, rules)
+            assert sorted(i["key"] for i in AQ.Queue(ws).list()) == ["acme east|LM1", "acme|LM1"]
+            assert AQ.norm_manufacturer("ST") == "stmicroelectronics"             # the built-in table is the default
+            raw = json.loads((ws / "ecadlib_rules.json").read_text())
+            raw["agent"]["manufacturer_aliases"] = {"Acme East": "ACME"}
+            (ws / "ecadlib_rules.json").write_text(json.dumps(raw))
+            rules2 = RU.load(raw)
+            assert rules2["agent"]["manufacturer_aliases"]["st"] == "stmicroelectronics"   # extends, not replaces
+            run(ws, rules2)                                   # keys under the new table: migrated, duplicates merged
+            items = AQ.Queue(ws).list()
+            assert {i["key"] for i in items} == {"acme|LM1"} and sorted(i["status"] for i in items) == ["rejected", "review"]
+            assert W.scan(ws, rules2) == []                    # the watch state was re-keyed too: no removed / new
+            try:
+                RU.load({"agent": {"manufacturer_aliases": {"x": ["not text"]}}})
+                raise AssertionError("bad alias table accepted")
+            except RU.RulesError:
+                pass
+        finally:
+            AQ.use_rules(None)                                 # back to the defaults for the other tests
+
+
 def test_dry_run_writes_nothing_at_all():
     with tempfile.TemporaryDirectory() as d:
         ws, rules = make_ws(d, git=False, auto_push=True)
@@ -606,7 +649,8 @@ def _invariants(ws, d, gh, pushes, approvals, start, msg, after_clean_run, must_
         members = q.list(batch=rec["id"])
         if after_clean_run and pr["state"] == "open":
             # a PR whose parts are all decided is closed; an open PR holds no file of a rejected / failed / moved part
-            assert not all(m["status"] in ("pushed", "rejected", "failed") for m in members), (msg, "PR left open", rec["id"])
+            if all(m["status"] in ("pushed", "rejected", "failed") for m in members):   # decided: open only to merge
+                assert any(m["status"] == "pushed" for m in members) and rec.get("ready"), (msg, "PR left open", rec["id"])
             tree = set(gitc(remote, "ls-tree", "-r", "--name-only", rec["branch"]).split())
             for i in [i for i in rec.get("paths", {}) if A._departed(A._get_or_none(q, i), rec["id"])]:
                 raise AssertionError((msg, "departed part still listed", rec["id"], i))
@@ -615,7 +659,9 @@ def _invariants(ws, d, gh, pushes, approvals, start, msg, after_clean_run, must_
                     pics = {x for x in tree if f"/{rec['id']}/{m['id']}/" in x}
                     assert not pics, (msg, "files of a part that left the batch", m["id"], m["status"], pics)
         if pr["state"] == "closed" and rec.get("closed"):
-            assert qb[rec["id"]]["status"] == "closed", (msg, rec["id"])
+            assert qb[rec["id"]]["status"] == "closed" or not after_clean_run, (msg, rec["id"])
+            # a PR with pushed parts is never closed by the agent: the library repo would never get them
+            assert not any(m["status"] == "pushed" for m in members), (msg, "agent closed a PR with pushed parts", rec["id"])
     assert gitc(ws, "rev-parse", "HEAD") == start["head"] and gitc(ws, "symbolic-ref", "HEAD") == "refs/heads/main", msg
     assert gitc(ws, "status", "--porcelain", "--untracked-files=no") == "", msg
     for line in gitc(remote, "for-each-ref", "--format=%(refname) %(objectname)").splitlines():
@@ -720,7 +766,8 @@ def _soak(seed, runs):
             _invariants(ws, d, gh, pushes, approvals, start, msg, not transient, must_have)
         recs = [json.loads(b.read_text()) for b in (ws / "agent" / "batches").glob("*/batch.json")]
         return {"items": len(AQ.Queue(ws).list()), "pushes": len(pushes), "prs": len(gh.prs),
-                "closed_by_agent": sum(bool(p.get("comments")) for p in gh.prs.values()),
+                "closed_by_agent": sum(p["state"] == "closed" and bool(p.get("comments")) for p in gh.prs.values()),
+                "ready_to_merge": sum(p["state"] == "open" and bool(p.get("comments")) for p in gh.prs.values()),
                 "taken_out": sum(len(r.get("removed") or []) for r in recs)}
 
 
@@ -731,7 +778,7 @@ def test_soak_weeks_of_runs_with_kills_and_people():
         assert res["items"] and res["prs"], res
         for k, v in res.items():
             total[k] = total.get(k, 0) + v
-    assert total["closed_by_agent"] and total["taken_out"], total      # the close and take-out paths ran
+    assert total["closed_by_agent"] and total["ready_to_merge"] and total["taken_out"], total      # the close and take-out paths ran
 
 
 if __name__ == "__main__":

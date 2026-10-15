@@ -35,6 +35,26 @@ CANONICAL_PARAMS = ("Manufacturer", "Manufacturer Part Number", "Value", "Suppli
                     "ComponentLink2Description", "ComponentLink2URL")
 KEY_COLUMNS = {"Part Number", "Library Ref", "Library Path", "Footprint Ref", "Footprint Path", "Description", "Comment"}
 
+MANUFACTURER_ALIASES = {      # [agent] manufacturer_aliases defaults: alias -> canonical maker
+    "st": "stmicroelectronics", "stm": "stmicroelectronics", "st micro": "stmicroelectronics",
+    "st microelectronics": "stmicroelectronics", "sgs thomson": "stmicroelectronics",
+    "ti": "texas instruments", "texas instrument": "texas instruments",
+    "adi": "analog devices", "analog device": "analog devices", "linear technology": "analog devices",
+    "nxp semiconductors": "nxp", "nxp semiconductor": "nxp",
+    "on semiconductor": "onsemi", "on semi": "onsemi", "on": "onsemi",
+    "microchip technology": "microchip", "infineon technologies": "infineon",
+    "vishay intertechnology": "vishay", "vishay semiconductors": "vishay", "vishay siliconix": "vishay",
+    "vishay dale": "vishay", "vishay general semiconductor": "vishay",
+    "murata manufacturing": "murata", "murata electronics": "murata", "te": "te connectivity",
+    "rohm semiconductor": "rohm", "diodes": "diodes incorporated", "diodes inc": "diodes incorporated",
+    "maxim integrated": "maxim", "maxim integrated products": "maxim", "renesas electronics": "renesas",
+    "samsung electro mechanics": "samsung electro-mechanics", "semco": "samsung electro-mechanics",
+    "we": "wurth elektronik", "wurth": "wurth elektronik", "wuerth elektronik": "wurth elektronik",
+    "nexperia usa": "nexperia", "toshiba electronic devices and storage": "toshiba", "kemet electronics": "kemet",
+    "yageo": "yageo", "tdk electronics": "tdk", "epcos": "tdk", "panasonic electronic components": "panasonic",
+    "littelfuse": "littelfuse", "bourns": "bourns", "molex": "molex", "amphenol": "amphenol",
+}
+
 DEFAULTS = {
     "naming": {
         "component": "{mpn}",                  # parts that are not generic passives
@@ -85,6 +105,7 @@ DEFAULTS = {
         "github_repo": "",                     # owner/name ("" = from the origin remote)
         "github_token_env": "GITHUB_TOKEN", "github_api": "https://api.github.com",
         "batch_size": 20, "auto_push": False, "upkeep_schedule": "weekly", "datasheet_batch": True,
+        "manufacturer_aliases": dict(MANUFACTURER_ALIASES),   # part keys: "ST" = "STMicroelectronics"; add your own
     },
 }
 WATCH_TYPES = ("bom_file", "folder", "altium_project", "a365_project")
@@ -94,7 +115,7 @@ DEFAULTS.setdefault("agent", {})["proof"] = {"model": "", "effort": "", "api_key
                                              "fail_on": ["error"], "max_pages": 6, "dpi": 200}
 SUB_RANGE = {("agent", "proof", "max_pages"): (1, 100), ("agent", "proof", "dpi"): (50, 400)}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
-            ("bom", "columns"), ("release", "approvals"), ("symbols", "sides")}
+            ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
              ("symbols", "layout_pins"): (0, 100_000), ("symbols", "split_pins"): (0, 100_000), ("symbols", "unit_pins"): (8, 10_000),
              ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600),
@@ -731,6 +752,8 @@ HELP = {
     "agent": "Library agent (`ecadlib agent run|serve`): watches projects/BOMs, builds and proves new parts, one GitHub PR per "
              "batch for review, pushes approved parts to Altium 365, turns upkeep findings into work. Off unless enabled",
     "agent.interval_minutes": "minutes between runs of `ecadlib agent serve`",
+    "agent.manufacturer_aliases": "alias = canonical manufacturer names the agent treats as one maker in part keys "
+                                  "(added to the built-in table: ST = STMicroelectronics, TI, ADI, WE, ...)",
     "agent.library_repo": "git repo the batch PRs are made in (\"\" = the workspace when it is a git repo; none: PR text in agent/batches/)",
     "agent.github_token_env": "name of the environment variable with the GitHub token; the token itself never goes in this file",
     "agent.auto_push": "push approved parts to Altium 365 on each run (false: `ecadlib agent push`)",
