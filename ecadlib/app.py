@@ -419,6 +419,10 @@ class Workspace:
         """Re-run the release check on the librarian's plan, optionally releasing named parts despite their
         failures (allow) or taking that back (unallow). user, when given, is recorded as the person who gave the
         allow (approvals' no_self_approval uses it). Never touches the network."""
+        with self._plan_lock():
+            return self._release_check(bom, allow, unallow, user)
+
+    def _release_check(self, bom, allow=(), unallow=(), user=None):
         from . import release_check as RC
         bom_path = self._bom_path(bom)
         out = self._librarian_dir(bom_path)
@@ -441,6 +445,16 @@ class Workspace:
         from . import librarian as L
         L.write_review(L.review_rows(items), out, str(bom_path))
         return self._librarian_summary(bom_path, items, [])
+
+    @contextlib.contextmanager
+    def _plan_lock(self):
+        """<workspace>/agent/plan.lock around a plan rewrite (not re-entrant: locked methods call the unlocked _bodies): while the library agent's
+        librarian rewrites a plan, a change written now would be overwritten by its copy, so it is refused instead."""
+        from .agent_queue import plan_lock
+        with plan_lock(self.root, wait=False) as free:
+            if not free:
+                raise ValueError("the library agent is rebuilding the library right now; try again in a minute")
+            yield
 
     def _librarian_summary(self, bom_path, items, log):
         from . import librarian as L
@@ -525,6 +539,10 @@ class Workspace:
         """Use a candidate (kicad:Lib:Name, local:Lib:Name or spec:Name) for one half of a plan item, convert it into
         the librarian's models folder, then re-run the release check and rewrite the review / release-check reports.
         pin_map {symbol pin: pad} remaps pin numbers. Returns the librarian summary plus `chosen`."""
+        with self._plan_lock():
+            return self._choose_part(bom, part, kind, candidate_id, pin_map)
+
+    def _choose_part(self, bom, part, kind, candidate_id, pin_map=None):
         from . import resolve as R
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
@@ -539,7 +557,7 @@ class Workspace:
             chosen = R.choose(plan_f, part, kind, candidate_id, src=self._resolve_sources(), pin_map=pin_map or None)
         except FileNotFoundError as e:
             raise ValueError(str(e)) from e
-        out = self.release_check(bom)                 # the whole plan again: reports, statuses, approval snapshot
+        out = self._release_check(bom)    # the whole plan again (lock already held): reports, statuses, approvals
         out["chosen"] = chosen
         return out
 
@@ -629,6 +647,10 @@ class Workspace:
         """Duplicate parts (same MPN), footprints (same geometry) and symbols (same pinout) across the librarian plan
         and the workspace's altium_models/ and footprints/. merge=True points duplicates at their keeper in the plan
         (library files are never changed; plan.json.pre-dedupe keeps the old plan) and re-runs the release check."""
+        with self._plan_lock() if merge else contextlib.nullcontext():
+            return self._find_duplicates(bom, merge)
+
+    def _find_duplicates(self, bom, merge=False):
         from . import dedupe as D
         _, plan_f, _ = self._plan(bom)
         libs = [p for p in (self.models, self.root / "footprints") if p.exists()]
@@ -650,7 +672,7 @@ class Workspace:
         out = {"groups": groups, "mapping": r["mapping"], "errors": r["errors"], "merged": bool(merge),
                "reports": [self.rel(r["report"]), self.rel(r["map"])]}
         if merge:
-            out["summary"] = self.release_check(bom)
+            out["summary"] = self._release_check(bom)          # the plan lock is already held
         return out
 
     # ------------------------------------------------------------------ upkeep (ecadlib.upkeep)

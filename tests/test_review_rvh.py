@@ -216,6 +216,117 @@ def test_lifecycle_dblib_path_with_hash_sign():
         assert [x["mpn"] for x in parts] == ["RC0603FR-0710KL"], parts
 
 
+
+# ---------------------------------------------------------------- follow-up: plan lock, dedupe backup, approve status, refs
+def _agent_ws(d):
+    ws = Path(d) / "ws"
+    (ws / "agent").mkdir(parents=True)
+    plan = ws / "librarian" / "lib" / "plan.json"
+    plan.parent.mkdir(parents=True)
+    item = {"name": "P1", "status": "held", "folder": "Components/ICs", "description": "x", "comment": "*", "parameters": [],
+            "symbol": {"ref": "P1", "file": None}, "footprint": {"ref": "P1", "file": None},
+            "source": {"symbol": None, "footprint": None}, "librarian": {"tried": [], "review": [], "notes": []}}
+    plan.write_text(json.dumps([item]), encoding="utf-8")
+    return ws, plan
+
+
+def test_cli_allow_survives_a_concurrent_agent_rebuild():
+    """The agent's librarian holds plan.lock and writes plan.json from the copy it read at the start. `release-check
+    --allow` used to write in the middle of that, and the agent's save then dropped the allow. Now the CLI waits."""
+    import time
+    from ecadlib import release_check as RC
+    from ecadlib.agent_queue import plan_lock
+    with tempfile.TemporaryDirectory() as d:
+        ws, plan = _agent_ws(d)
+        locked, cli_started = threading.Event(), threading.Event()
+
+        def agent():
+            with plan_lock(ws):
+                items = json.loads(plan.read_text(encoding="utf-8"))      # the librarian's copy
+                locked.set()
+                cli_started.wait(10)
+                time.sleep(0.5)                                            # the rebuild takes a while
+                for it in items:
+                    it["rebuilt"] = True
+                plan.write_text(json.dumps(items), encoding="utf-8")
+        t = threading.Thread(target=agent)
+        t.start()
+        locked.wait(10)
+        cli_started.set()
+        with mock.patch("builtins.print"):
+            RC.main([str(plan), "--allow", "P1", "--user", "Ann <ann@x.com>", "-o", str(Path(d) / "rc")])
+        t.join(10)
+        it = json.loads(plan.read_text(encoding="utf-8"))[0]
+        assert it.get("rebuilt") and it.get("allow", {}).get("user") == "Ann <ann@x.com>", it
+
+
+def test_workspace_plan_rewrites_take_the_plan_lock():
+    from ecadlib.agent_queue import plan_lock
+    from ecadlib.app import Workspace
+    with tempfile.TemporaryDirectory() as d:
+        ws = Workspace(Path(d) / "ws")
+        bom = ws.root / "uploads" / "b.csv"
+        bom.write_text("Designator,Value,MPN\nU1,X,P1\n", encoding="utf-8")
+        _, plan = _agent_ws(d)
+        out = ws._librarian_dir(bom)
+        out.mkdir(parents=True)
+        (out / "plan.json").write_text(plan.read_text(encoding="utf-8"), encoding="utf-8")
+        held, release = threading.Event(), threading.Event()
+
+        def other():
+            with plan_lock(ws.root):
+                held.set()
+                release.wait(10)
+        t = threading.Thread(target=other)
+        t.start()
+        held.wait(10)
+        for call in (lambda: ws.release_check("uploads/b.csv", allow=["P1"]), lambda: ws.find_duplicates("uploads/b.csv", merge=True),
+                     lambda: ws.choose_part("uploads/b.csv", "P1", "footprint", "spec:SOT-23")):
+            try:
+                call()
+                assert False, "wrote while the agent holds the plan lock"
+            except ValueError as e:
+                assert "rebuilding" in str(e), e
+        assert "allow" not in json.loads((out / "plan.json").read_text(encoding="utf-8"))[0]
+        release.set(); t.join(10)
+        r = ws.release_check("uploads/b.csv", allow=["P1"])
+        assert r["parts"] == 1 and json.loads((out / "plan.json").read_text(encoding="utf-8"))[0]["allow"]
+        r = ws.choose_part("uploads/b.csv", "P1", "footprint", "spec:SOT-23")    # holds the lock, re-checks inside it
+        assert r["chosen"]["source"] == "spec:SOT-23", r["chosen"]
+
+
+def test_dedupe_backup_keeps_the_first_original():
+    from ecadlib import dedupe as DD
+    with tempfile.TemporaryDirectory() as d:
+        plan = Path(d) / "plan.json"
+        plan.write_text("original", encoding="utf-8")
+        assert DD.backup(plan).name == "plan.json.pre-dedupe"
+        plan.write_text("merged once", encoding="utf-8")
+        second, third = DD.backup(plan), DD.backup(plan)
+        assert (Path(d) / "plan.json.pre-dedupe").read_text(encoding="utf-8") == "original"
+        assert second != third and second.name.startswith("plan.json.pre-dedupe-") and third.read_text(encoding="utf-8") == "merged once"
+
+
+def test_approve_status_names_the_rules_policy():
+    from ecadlib import approvals as AP
+    with tempfile.TemporaryDirectory() as d:
+        plan = Path(d) / "plan.json"
+        plan.write_text(json.dumps([{"name": "P1", "status": "ready", "folder": "x", "parameters": [],
+                                     "symbol": {"ref": "P1"}, "footprint": {"ref": "P1"}}]), encoding="utf-8")
+        (Path(d) / "ecadlib.toml").write_text("[release.approvals]\nrequired = 1\n", encoding="utf-8")
+        out = []
+        with mock.patch("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a)))):
+            AP.main([str(plan), "status"])
+        assert "[release.approvals]" in out[0] and "none" not in out[0], out
+        assert "missing" in out[1], out
+
+
+def test_count_refs_spaced_ranges_and_units():
+    from ecadlib.bom_triage import count_refs
+    assert count_refs("R1 - R4") == 4 and count_refs("R10 – R12") == 3 and count_refs("R1 -R4") == 4
+    assert count_refs("U1A, U1B") == 1 and count_refs("U1A, U1B, U2A") == 2
+    assert count_refs("R1, R2, R5-R8") == 6 and count_refs("R5-8") == 4 and count_refs("") == 0
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
