@@ -1,6 +1,6 @@
 """Offline tests for the front ends: Workspace actions, the web UI server, the MCP server and the CLI.
 Run:  python3 -m tests.test_ui"""
-import contextlib, http.client, io, json, os, subprocess, sys, tempfile, threading, time
+import contextlib, http.client, io, json, os, re, subprocess, sys, tempfile, threading, time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote
@@ -36,7 +36,7 @@ def test_workspace_flow():
     with tempfile.TemporaryDirectory() as d:
         ws = Workspace(d, ["examples/kicad_lib"], providers=["digikey"])
         rel = ws.save_upload("../my bom.csv", Path("examples/sample_bom.csv").read_bytes())
-        assert rel == "uploads/my_bom.csv", rel
+        assert re.fullmatch(r"uploads/\d{8}-\d{6}-[0-9a-f]{6}/my_bom\.csv", rel), rel
         seen = []
         t = quiet(ws.triage, rel, progress=lambda a, b, lab: seen.append((a, b)))
         assert len(t["rows"]) == 14 and sum(t["counts"].values()) == 14 and t["bom"] == rel, t["counts"]
@@ -135,7 +135,7 @@ def test_ui_server():
             res = wait_job(call, j["job"])
             assert res["state"] == "done" and res["done"] == res["total"] == 14, res
             bom = res["result"]["bom"]
-            assert bom == "uploads/St_ckliste_rev_B.csv", bom
+            assert bom.startswith("uploads/") and bom.endswith("/St_ckliste_rev_B.csv"), bom
             st, f = call("GET", "/api/file?path=" + quote(res["result"]["reports"][0]))
             assert st == 200 and f.startswith(b"# BOM triage")
             # a bad upload finishes as a job error, not a crash

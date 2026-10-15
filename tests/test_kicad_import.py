@@ -122,7 +122,9 @@ def test_rotated_pad_slot_custom_and_arcs():
     assert (p["1"]["rot"], p["1"]["y"], p["1"]["paste"]) == (90.0, -2.0, None)
     assert (p["2"]["rot"], p["2"]["w"], p["2"]["h"], p["2"]["hole_rot"], p["2"]["slot"]) == (0.0, 2.4, 1.2, 0.0, 1.8)   # baked 90 deg
     assert p["3"]["rot"] == 45.0 and p["3"]["corner"] == 50 and p["3"]["plated"]
-    assert (p["4"]["w"], p["4"]["h"], round(p["4"]["x"], 6), p["4"]["y"], p["4"]["shape"]) == (2.0, 0.5, 0.75, 3.0, "rect")
+    assert (p["4"]["w"], p["4"]["h"], p["4"]["x"], p["4"]["y"], p["4"]["shape"], p["4"]["mask"]) == (0.5, 0.5, 0.0, 3.0, "rect", 0.0)
+    shape = [(-0.25, 3.25), (1.75, 3.25), (1.75, 2.75), (-0.25, 2.75)]          # custom pad: anchor + its polygon
+    assert [r for r in fp["regions"] if r[1] in (AL.TOP, AL.TOP_SOLDER)] == [(shape, AL.TOP), (shape, AL.TOP_SOLDER)]
     assert p[""]["w"] == 1.2 and not p[""]["plated"]
     arcs = {round(a[2], 4): a for a in fp["arcs"]}
     cx, cy, r, a0, a1, w, layer = arcs[1.0]                         # (-1,0)->(0,1)->(1,0) in y-up is clockwise

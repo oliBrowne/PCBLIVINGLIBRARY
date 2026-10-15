@@ -1,0 +1,60 @@
+{
+  "name": "DFN-8-1EP_3x3mm_P0.5mm_EP1.65x2.38mm_ThermalVias",
+  "description": "DFN-8, 3 x 3 mm, 0.5 mm pitch, 1.65 x 2.38 mm exposed pad with 2 x 3 thermal vias (different row and column pitch)",
+  "package_type": "custom",
+  "pin_count": 9,
+  "pitch": 0.5,
+  "height_max": 1.0,
+  "pad_table": {
+    "unit": "mm",
+    "y_axis": "down",
+    "origin": "center",
+    "arrays": [
+      {
+        "count": 4,
+        "x": -1.45,
+        "y": -0.75,
+        "dy": 0.5,
+        "w": 0.85,
+        "h": 0.25
+      },
+      {
+        "count": 4,
+        "first_number": 5,
+        "x": 1.45,
+        "y": 0.75,
+        "dy": -0.5,
+        "w": 0.85,
+        "h": 0.25
+      }
+    ],
+    "pads": [
+      {
+        "number": 9,
+        "x": 0,
+        "y": 0,
+        "w": 1.65,
+        "h": 2.38,
+        "shape": "rect",
+        "paste": "grid",
+        "thermal_vias": {
+          "drill": 0.2,
+          "diameter": 0.5,
+          "nx": 2,
+          "ny": 3,
+          "pitch": 1.15,
+          "pitch_y": 0.94
+        }
+      }
+    ],
+    "body": {
+      "x1": -1.5,
+      "y1": -1.5,
+      "x2": 1.5,
+      "y2": 1.5
+    }
+  },
+  "source": {
+    "drawing": "KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; pads as its drawing gives them"
+  }
+}

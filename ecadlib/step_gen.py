@@ -426,13 +426,15 @@ def connector(spec, H):
         if p.get("via") or p["kind"] == "np_thru_hole":
             continue
         x, y = p["x"], -p["y"]
+        turn = round((p.get("rot") or 0) / 90) % 2           # pad sizes and drills are in the pad's frame
         if p["kind"] == "thru_hole":
             a = 0.64 * min(p["drill"]) / 0.95 if min(p["drill"]) < 0.95 else 0.64
             hx, hy = (a / 2, (max(p["drill"]) - min(p["drill"]) + a) / 2) if p["drill"][1] > p["drill"][0] else \
                 ((max(p["drill"]) - min(p["drill"]) + a) / 2, a / 2)
+            hx, hy = (hy, hx) if turn else (hx, hy)
             out.append(box(x - hx, y - hy, -3.0, x + hx, y + hy, min(H, 1.0), f"pin {p['num']}", COL["gold"]))
         else:
-            w, h = (p["w"], p["h"]) if not p.get("poly") else (p["w"], p["h"])
+            w, h = (p["h"], p["w"]) if turn and not p.get("poly") else (p["w"], p["h"])
             out.append(box(x - 0.4 * w, y - 0.4 * h, 0, x + 0.4 * w, y + 0.4 * h, 0.1, f"pin {p['num']}", COL["metal"]))
     out.append(box(x0, y0, 0.1, x1, y1, H - MARK_T, "body", COL["led"] if spec["package_type"] == "connector" else COL["body"]))
     p1 = next((p for p in pads if p["num"] in ("1", "A1")), None)
@@ -448,8 +450,18 @@ def _header_any(spec, H=None):
     out = pin_header(dict(spec, cols=spec.get("cols", 1)), H)
     if spec.get("mount") == "smd":
         dx, dy = -(spec.get("cols", 1) - 1) * spec["pitch"] / 2, (spec["rows"] - 1) * spec["pitch"] / 2
-        for so in out:
-            so.verts = [(x + dx, y + dy, z) for x, y, z in so.verts]
+        for so in out:                     # SMD: no holes in the board, so the posts stop at the board surface
+            so.verts = [(x + dx, y + dy, max(z, 0.0) if so.name.startswith("pin ") else z) for x, y, z in so.verts]
+        from .footprint_adv import _header
+        posts = {so.name: so for so in out if so.name.startswith("pin ")}
+        for p in _header(spec, spec.get("density", "B"))[2]:      # a foot from each post out to its land
+            so = posts.get(f"pin {p['num']}")
+            if so is None:
+                continue
+            xs, ys = [v[0] for v in so.verts], [v[1] for v in so.verts]
+            a, px, py = max(xs) - min(xs), (min(xs) + max(xs)) / 2, -p["y"]
+            end = p["x"] + (p["w"] / 2 - 0.05) * (1 if p["x"] >= px else -1)
+            out.append(box(min(px, end), py - a / 2, 0.0, max(px, end), py + a / 2, a / 2, f"foot {p['num']}", COL["gold"]))
     return out
 
 

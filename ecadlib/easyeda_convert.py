@@ -199,8 +199,11 @@ def symbol_to_kicad(data, name, footprint="", props=None, notes=None):
                 notes.append(f"pin {num}: no pin path; length 10 assumed"); a = b = (cx - 10, cy)
             far = max((a, b), key=lambda p: math.hypot(p[0] - cx, p[1] - cy))
             dx, dy = far[0] - cx, -(far[1] - cy)              # connection point -> body, KiCad y up
-            length = math.hypot(dx, dy) * U or 2.54
-            ang = round(math.degrees(math.atan2(dy, dx))) % 360 if (dx or dy) else 0
+            raw = math.degrees(math.atan2(dy, dx)) if (dx or dy) else 0.0
+            ang = round(raw / 90) % 4 * 90                     # KiCad only takes 0, 90, 180, 270: anything else and
+            if abs((raw - ang + 180) % 360 - 180) > 0.5:       # the whole library fails to load
+                notes.append(f"pin {num}: slanted pin path ({raw % 360:.0f} deg) drawn at {ang} deg")
+            length = (abs(dx) if ang in (0, 180) else abs(dy)) * U or 2.54
             x, y = P(cx, cy)
             pins.append(f'      (pin {PIN_TYPE.get(st[2], "unspecified")} line (at {x} {y} {ang}) (length {_n(length)})'
                         f' (name {_q(nm or "~")} (effects (font (size 1.27 1.27)))) (number {_q(num)} (effects (font (size 1.27 1.27)))))')

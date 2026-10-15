@@ -1,0 +1,26 @@
+{
+  "name": "BGA-256_11.0x11.0mm_Layout20x20_P0.5mm_Ball0.3mm_Pad0.25mm_NSMD",
+  "description": "BGA-256, 11 x 11 mm, 0.5 mm pitch, 20 rows A..Y without I O Q S X, centre 12 x 12 empty",
+  "package_type": "bga",
+  "pin_count": 256,
+  "rows": 20,
+  "cols": 20,
+  "pitch": 0.5,
+  "body_length": {
+    "nom": 11.0
+  },
+  "body_width": {
+    "nom": 11.0
+  },
+  "ball_diameter": {
+    "nom": 0.3
+  },
+  "depopulated": [
+    "E5:T16"
+  ],
+  "height_max": 1.2,
+  "density": "B",
+  "source": {
+    "drawing": "KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as its name and drawing give them"
+  }
+}

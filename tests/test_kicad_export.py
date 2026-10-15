@@ -211,7 +211,10 @@ def test_cli_registered_and_runs():
 
 
 def test_kicad_cli_loads_outputs():
-    """Only when kicad-cli is installed: KiCad itself must load the symbol library and every footprint."""
+    """Only when kicad-cli is installed: KiCad itself must load the symbol library and every footprint.
+    The export is KiCad 8 format: KiCad 7 refuses the symbol library as such (and footprints converted back from a
+    PcbLib), so with KiCad 7 the KiCad 7 copies from tests.test_kicad_real are loaded instead (that file checks more)."""
+    from tests import test_kicad_real as KR
     exe = shutil.which("kicad-cli")
     if not exe:
         print("      (kicad-cli not installed: skipped)")
@@ -220,7 +223,14 @@ def test_kicad_cli_loads_outputs():
         plan, _, http = _plan(d)
         out = Path(d) / "k"
         X.export(plan, out, "lib", http=http, log=lambda *a: None)
-        r = subprocess.run([exe, "sym", "upgrade", str(out / "lib.kicad_sym"), "-o", str(Path(d) / "up.kicad_sym")], capture_output=True, text=True)
+        sym = out / "lib.kicad_sym"
+        if (KR.kicad_major() or 7) < 8:
+            print(f"      (kicad-cli {KR.kicad_major()}: loading the KiCad 7 copies of the KiCad 8 export)")
+            sym = Path(d) / "k7.kicad_sym"
+            sym.write_text(KR.kicad7_symbols((out / "lib.kicad_sym").read_text()))
+            for f in (out / "lib.pretty").glob("*.kicad_mod"):
+                f.write_text(KR.kicad7_footprint(f.read_text()))
+        r = subprocess.run([exe, "sym", "upgrade", str(sym), "-o", str(Path(d) / "up.kicad_sym")], capture_output=True, text=True)
         assert r.returncode == 0, r.stdout + r.stderr
         r = subprocess.run([exe, "fp", "upgrade", str(out / "lib.pretty"), "-o", str(Path(d) / "up.pretty")], capture_output=True, text=True)
         assert r.returncode == 0, r.stdout + r.stderr

@@ -5,6 +5,7 @@
     ecadlib team reset-password bob [--password-stdin]
     ecadlib team remove bob
     ecadlib team list
+    ecadlib team setup [--domain D] [--admin NAME]    Docker Compose + Caddy (HTTPS), first admin, start (team_setup.py)
     (all take --workspace DIR, default ecadlib_workspace; then: ecadlib ui --team --host 0.0.0.0 --cert c.pem --key k.pem)
 
 Files in the workspace (never served by /api/file):
@@ -39,6 +40,11 @@ CONFIG_DEFAULTS = {
     "lockout_minutes": 15,
     "max_failures_per_ip": 30,
     "secure_cookies": False,      # force the Secure cookie flag (behind an HTTPS proxy that does not send X-Forwarded-Proto)
+    "request_seconds": 120,       # whole request (TLS handshake, headers and body) must arrive within this
+    "max_connections_per_ip": 64, # open connections per client address (trusted proxies exempt); 0 = no limit
+    "audit_max_mb": 10,           # team_audit.jsonl is rotated to .1, .2 ... at this size
+    "audit_keep": 5,              # rotated audit files kept
+    "audit_refusals_per_minute": 20,   # unauthenticated refusals logged per address per minute; the rest are counted
 }
 
 
@@ -179,7 +185,8 @@ class UserStore:
             if name in users:
                 raise FileExistsError(f"user {name} already exists")
             users[name] = {"username": name, "role": role, "name": full_name, "email": email, "password": pw,
-                           "sign_as": _sign_as(sign_as), "gen": 1, "created": now()}
+                           "sign_as": _sign_as(sign_as), "gen": secrets.randbits(48), "created": now()}
+            # gen starts random: a session of a removed user must not come back when the name is added again
             return dict(users[name])
         return self._edit(fn)
 
@@ -318,14 +325,29 @@ class Throttle:
         d[k] = [x for x in d.get(k, []) if t - x < self.window]
         return d[k]
 
+    def _wait(self, user, ip, t):
+        u, i = self._recent(self.by_user, user, t), self._recent(self.by_ip, ip, t)
+        waits = [int(u[-self.max] + self.window - t) + 1] if len(u) >= self.max else []
+        waits += [int(i[-self.max_ip] + self.window - t) + 1] if len(i) >= self.max_ip else []
+        return max(waits, default=0)
+
     def blocked(self, user, ip):
         """Seconds until this user name / address may try again, or 0."""
+        with self.lock:
+            return self._wait(user, ip, time.time())
+
+    def attempt(self, user, ip):
+        """Check and count one password try in one step: (seconds to wait, None) or (0, ticket). The try counts as a
+        failure until ok(user, ip, ticket), so parallel requests cannot all pass the check before any failure is
+        recorded (that let N concurrent guesses through instead of max_failures)."""
         t = time.time()
         with self.lock:
-            u, i = self._recent(self.by_user, user, t), self._recent(self.by_ip, ip, t)
-            waits = [int(u[-self.max] + self.window - t) + 1] if len(u) >= self.max else []
-            waits += [int(i[-self.max_ip] + self.window - t) + 1] if len(i) >= self.max_ip else []
-            return max(waits, default=0)
+            wait = self._wait(user, ip, t)
+            if wait:
+                return wait, None
+            self.by_user[user].append(t)
+            self.by_ip[ip].append(t)
+            return 0, t
 
     def fail(self, user, ip):
         t = time.time()
@@ -333,9 +355,13 @@ class Throttle:
             self._recent(self.by_user, user, t).append(t)
             self._recent(self.by_ip, ip, t).append(t)
 
-    def ok(self, user):
+    def ok(self, user, ip=None, ticket=None):
+        """A right password: forget this user's failures (and the try counted by attempt())."""
         with self.lock:
             self.by_user.pop(user, None)
+            if ticket is not None:
+                with contextlib.suppress(ValueError):
+                    self.by_ip.get(ip, []).remove(ticket)
 
     def unlock(self, user):
         self.ok(user)
@@ -351,6 +377,16 @@ class Team:
         self.throttle = Throttle(self.cfg["max_failures"], self.cfg["lockout_minutes"], self.cfg["max_failures_per_ip"])
         self.secret = secrets.token_bytes(32)
         self.tls = tls
+        self.refusals = RefusalLog(self.cfg["audit_refusals_per_minute"])
+
+    def audit(self, entry):
+        """One team audit line; unauthenticated refusals are rate-limited per address (RefusalLog)."""
+        if entry.get("user") is None and entry.get("status", 0) >= 400:
+            extra = self.refusals.admit(entry.get("ip"))
+            if extra is None:
+                return
+            entry = {**entry, **extra}
+        audit(self.root, entry, int(self.cfg["audit_max_mb"] * 1024 * 1024), int(self.cfg["audit_keep"]))
 
     def has_admin(self):
         return any(u.get("role") == "admin" for u in self.store.users().values())
@@ -375,23 +411,78 @@ class Team:
 
 
 _audit_lock = threading.Lock()
+AUDIT_MAX_BYTES, AUDIT_KEEP = CONFIG_DEFAULTS["audit_max_mb"] * 1024 * 1024, CONFIG_DEFAULTS["audit_keep"]
 
 
-def audit(root, entry):
-    with _audit_lock, open(Path(root) / AUDIT_FILE, "a") as f:
-        f.write(json.dumps({"ts": now(), **entry}, sort_keys=True) + "\n")
-
-
-def read_audit(root, n=200):
+def _audit_files(root, keep):
     f = Path(root) / AUDIT_FILE
-    if not f.exists():
-        return []
-    lines = f.read_text().splitlines()[-n:]
+    return [f] + [f.with_name(f"{AUDIT_FILE}.{i}") for i in range(1, keep + 1)]
+
+
+def audit(root, entry, max_bytes=AUDIT_MAX_BYTES, keep=AUDIT_KEEP):
+    """Append one line; at max_bytes the file is rotated (team_audit.jsonl -> .1 -> .2 ..., `keep` old files)."""
+    line = json.dumps({"ts": now(), **entry}, sort_keys=True) + "\n"
+    with _audit_lock:
+        files = _audit_files(root, keep)
+        with contextlib.suppress(FileNotFoundError):
+            if keep > 0 and files[0].stat().st_size + len(line) > max_bytes:
+                for src, dst in reversed(list(zip(files, files[1:]))):
+                    if src.exists():
+                        os.replace(src, dst)
+        with open(files[0], "a") as f:
+            f.write(line)
+
+
+def _tail(path, n, block=65536):
+    """The last n lines of a file, reading backwards from the end (never the whole file)."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos, data = f.tell(), b""
+        while pos > 0 and data.count(b"\n") <= n:
+            step = min(block, pos)
+            pos -= step
+            f.seek(pos)
+            data = f.read(step) + data
+    lines = data.splitlines()
+    return lines[-n:] if pos == 0 else lines[1:][-n:]       # the first line may be cut when we stopped early
+
+
+def read_audit(root, n=200, keep=AUDIT_KEEP):
+    """The newest n entries, newest first, from team_audit.jsonl and then its rotated files."""
     out = []
-    for l in reversed(lines):
-        with contextlib.suppress(json.JSONDecodeError):
-            out.append(json.loads(l))
-    return out
+    for f in _audit_files(root, keep):
+        if len(out) >= n:
+            break
+        if not f.exists():
+            continue
+        for l in reversed(_tail(f, n - len(out))):
+            with contextlib.suppress(json.JSONDecodeError, UnicodeDecodeError):
+                out.append(json.loads(l))
+    return out[:n]
+
+
+class RefusalLog:
+    """Unauthenticated refusals (401/403/429 before sign-in) cost an anonymous client nothing, so each address gets
+    `per_minute` audit lines per minute; the rest are counted and reported as "suppressed" on its next line."""
+    def __init__(self, per_minute=20):
+        self.per_minute, self.seen, self.lock = per_minute, {}, threading.Lock()
+
+    def admit(self, ip):
+        """None: drop this line. Else a dict to merge into it ({} or {"suppressed": n})."""
+        if self.per_minute <= 0:
+            return {}
+        t = time.time()
+        with self.lock:
+            if len(self.seen) > 10000:                  # forget quiet addresses
+                self.seen = {k: v for k, v in self.seen.items() if t - v[0] < 60}
+            start, count, dropped = self.seen.get(ip, (t, 0, 0))
+            if t - start >= 60:
+                start, count = t, 0
+            if count >= self.per_minute:
+                self.seen[ip] = (start, count, dropped + 1)
+                return None
+            self.seen[ip] = (start, count + 1, 0)
+            return {"suppressed": dropped} if dropped else {}
 
 
 # ---------------------------------------------------------------- CLI
@@ -405,7 +496,12 @@ def _read_password(a, prompt="password"):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="ecadlib team", description="manage web UI team users (ecadlib ui --team)")
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["setup"]:                         # Docker Compose + Caddy for the whole team (team_setup.py)
+        from . import team_setup
+        return team_setup.main(argv[1:])
+    ap = argparse.ArgumentParser(prog="ecadlib team", description="manage web UI team users (ecadlib ui --team)",
+                                 epilog="ecadlib team setup -h: run the team server with Docker and HTTPS in one command")
     ap.add_argument("--workspace", default="ecadlib_workspace")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("add-user", help="add a user (the first one must be an admin)")

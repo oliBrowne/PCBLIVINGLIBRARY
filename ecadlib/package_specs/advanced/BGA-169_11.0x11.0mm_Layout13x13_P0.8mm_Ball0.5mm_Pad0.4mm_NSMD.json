@@ -1,0 +1,23 @@
+{
+  "name": "BGA-169_11.0x11.0mm_Layout13x13_P0.8mm_Ball0.5mm_Pad0.4mm_NSMD",
+  "description": "BGA-169, 11 x 11 mm, 0.8 mm pitch, rows A..N without I",
+  "package_type": "bga",
+  "pin_count": 169,
+  "rows": 13,
+  "cols": 13,
+  "pitch": 0.8,
+  "body_length": {
+    "nom": 11.0
+  },
+  "body_width": {
+    "nom": 11.0
+  },
+  "ball_diameter": {
+    "nom": 0.5
+  },
+  "height_max": 1.2,
+  "density": "B",
+  "source": {
+    "drawing": "KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as its name and drawing give them"
+  }
+}

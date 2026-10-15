@@ -1,0 +1,33 @@
+{
+  "name": "JST_XH_B6B-XH-A_1x06_P2.50mm_Vertical",
+  "description": "JST XH series connector, B6B-XH-A, top entry, 6 pins, 2.50 mm pitch",
+  "package_type": "connector",
+  "pin_count": 6,
+  "pitch": 2.5,
+  "height_max": 7.0,
+  "pad_table": {
+    "unit": "mm",
+    "y_axis": "down",
+    "origin": "pin1",
+    "arrays": [
+      {
+        "count": 6,
+        "x": 0,
+        "y": 0,
+        "dx": 2.5,
+        "type": "tht",
+        "drill": 0.95
+      }
+    ],
+    "body": {
+      "x1": -2.45,
+      "y1": -2.35,
+      "x2": 14.95,
+      "y2": 3.4
+    }
+  },
+  "source": {
+    "datasheet": "https://www.jst-mfg.com/product/pdf/eng/eXH.pdf",
+    "drawing": "recommended PCB layout; KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check"
+  }
+}
