@@ -318,6 +318,22 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["name", "bom"],
                      "properties": {"name": {"type": "string", "description": "exporter name from list_plugins"},
                                     "bom": {"type": "string", "description": "the BOM the librarian ran on"}}}},
+    {"name": "export_parts",
+     "description": "Write the library's parts table for a BOM's librarian plan with stable columns (Part ID, Status, "
+                    "Category, Description, Value, Manufacturer, Manufacturer Part Number, Datasheet, suppliers, symbol / "
+                    "footprint refs and files, KiCad lib ids, release check, sign-off, ...) as CSV, JSON or XLSX for PLM / "
+                    "ERP imports. Returns the workspace path of the file.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "format": {"type": "string", "enum": ["csv", "json", "xlsx"]},
+                                    "include_held": {"type": "boolean", "default": False}}}},
+    {"name": "kicad_dblib",
+     "description": "Write the BOM's library as KiCad files (.kicad_sym, .pretty, lib tables) plus a KiCad 7+ database "
+                    "library: a .kicad_dbl (ODBC to SQLite) and the SQLite parts table, one table per category, and a "
+                    "Database row in sym-lib-table. KiCad needs an SQLite ODBC driver to open it.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "name": {"type": "string", "description": "library name"},
+                                    "driver": {"type": "string", "description": "ODBC driver name (default SQLite3 ODBC Driver)"},
+                                    "include_held": {"type": "boolean", "default": False}}}},
 ]
 
 
@@ -434,6 +450,11 @@ def call_tool(ws, name, args):
             return ws.plugins()
         if name == "plugin_export":
             return ws.plugin_export(args["name"], args["bom"])
+        if name == "export_parts":
+            return ws.export_parts(args["bom"], args.get("format") or "csv", args.get("include_held") is True)
+        if name == "kicad_dblib":
+            return ws.kicad_dblib(args["bom"], args.get("name") or "ecadlib", args.get("driver") or None,
+                                  args.get("include_held") is True)
     raise KeyError(f"unknown tool {name}")
 
 

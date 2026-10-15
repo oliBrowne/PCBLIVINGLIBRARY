@@ -1,0 +1,218 @@
+(kicad_sch
+	(version 20230121)
+	(generator eeschema)
+	(uuid 58a30d37-4122-5fe2-8914-c9580639789e)
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_numbers hide)
+			(pin_names
+				(offset 0)
+			)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "R"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Value" "R"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(property "Datasheet" "~"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(symbol "R_0_1"
+				(rectangle
+					(start -1.016 -2.54)
+					(end 1.016 2.54)
+					(stroke (width 0.254) (type default))
+					(fill (type none))
+				)
+			)
+			(symbol "R_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "1"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "2"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+			)
+		)
+		(symbol "Device:C"
+			(pin_numbers hide)
+			(pin_names
+				(offset 0)
+			)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "C"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Value" "C"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(property "Datasheet" "~"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(symbol "C_0_1"
+				(rectangle
+					(start -1.016 -2.54)
+					(end 1.016 2.54)
+					(stroke (width 0.254) (type default))
+					(fill (type none))
+				)
+			)
+			(symbol "C_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "1"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "2"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 50 50 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid b412c293-583f-5aa2-b895-e6197452c5aa)
+		(property "Reference" "R10"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Value" "4k7"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Datasheet" "~"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Mfr Part #" "RC0402FR-074K7L"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Manufacturer" "Yageo"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(pin "1"
+			(uuid cc95feb2-197f-5934-a9e8-cd9099c77746)
+		)
+		(pin "2"
+			(uuid ab5dea59-6d3b-576e-8107-4154e324fd6d)
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29/70727ac7-12f0-5af0-a48a-2fdcf01f7c93"
+					(reference "R10")
+					(unit 1)
+				)
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29/194c9cd3-8660-5c80-acd9-53b02f6ad94d"
+					(reference "R20")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 60 50 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid 8f87b5d7-c3b1-50b5-a0df-22c876f5d058)
+		(property "Reference" "C10"
+			(at 62 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Value" "1uF"
+			(at 62 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+			(at 62 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Datasheet" "~"
+			(at 62 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Mfr Part #" "GRM188R71C105KA12D"
+			(at 62 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Manufacturer" "Murata"
+			(at 62 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(pin "1"
+			(uuid a458eb07-0487-5f92-a3a9-856b2a41c981)
+		)
+		(pin "2"
+			(uuid fc1fcd6a-35c9-5246-a740-e7e632e593ea)
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29/70727ac7-12f0-5af0-a48a-2fdcf01f7c93"
+					(reference "C10")
+					(unit 1)
+				)
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29/194c9cd3-8660-5c80-acd9-53b02f6ad94d"
+					(reference "C20")
+					(unit 1)
+				)
+			)
+		)
+	)
+)

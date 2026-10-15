@@ -1121,6 +1121,29 @@ exporter. Install it with `pip install ./examples/ecadlib_example_plugin`.
 There is no read-only `/api/v1/` with token sign-in yet. The team server's API uses session cookies, and token
 sign-in would mean new code in its auth layer.
 
+## 27. Integration inputs and outputs: `bom_inputs.py`, `kicad_dblib.py`, `parts_export.py`
+
+```
+ecadlib triage board.kicad_sch --lib ... -o out/tri          # KiCad schematic, hierarchical sheets followed
+ecadlib triage board.xml ...                                 # KiCad netlist / BOM XML (or the .net S-expression netlist)
+ecadlib kicad-dblib out/lib/plan.json -o out/kicad --name mylib --export [--driver SQLite3]
+ecadlib export-parts out/lib/plan.json --format csv|json|xlsx -o parts.csv
+python3 -m tests.test_integration_io
+```
+
+* **BOM inputs** (every one gives the same lines `bom_triage`, the librarian and the agent already use):
+  * `.kicad_sch` (KiCad 6 to 9): sub-sheets are followed, and a sheet file used twice counts twice with each instance's own references (KiCad 7+ `instances` paths, KiCad 6 root `symbol_instances`). Power symbols and parts marked "exclude from BOM" are left out, "Do not populate" becomes DNP, the units of a multi-unit part count once, and identical parts are grouped (`R1, R2, R30`, quantity 3). Custom fields (`MPN`, `Mfr Part #`, `LCSC`, ...) are matched like CSV headers; when sheets use different names for the same field, each part takes the first one it has. KiCad 5 `.sch` files get a clear "save it in KiCad 6+" message.
+  * KiCad netlist / BOM exports: the XML from `kicad-cli sch export netlist --format kicadxml`, `sch export python-bom` and Eeschema's BOM generator, and the S-expression `.net`. Picked by content, so other `.xml` files are not taken for one; an XML with a DOCTYPE or ENTITY is refused.
+  * `.xlsx` without openpyxl: when openpyxl is missing, the workbook is read with `zipfile` and ElementTree (shared and inline strings, sparse cells, numbers written the same way as before). pandas is still a dependency.
+  * CSV: comma / semicolon / tab / pipe and UTF-8 (with or without BOM), cp1252, latin-1 and UTF-16 were already detected; they are now pinned by fixture files in `tests/fixtures/bom_inputs/`.
+  * `[bom] columns` may give a list of house names for a field (`mpn = ["Herst.-Nr.", "Mfr Part #"]`): the first one present in a BOM is used. The named headers also help find the header row below title rows.
+  * Altium ActiveBOM `.BomDoc` / `.PrjPcb` / `.SchDoc` were already read (section 16).
+* **Checked with real KiCad:** `tests/fixtures/kicad_sch/` is a hierarchical schematic (one sheet used twice, a nested sheet in a sub-folder, a 2-unit part, a power symbol, a DNP part and an excluded test point). KiCad 7.0.11's `kicad-cli` exported it as XML, S-expression and python-bom netlists, and all three read the same lines as our schematic reader. `test_kicad_cli_agrees_with_our_schematic_reader` repeats that whenever `kicad-cli` is installed and skips otherwise.
+* **KiCad database library** (`kicad-dblib`): `mylib.sqlite` has one table per category with `Part ID` (key), `Symbol`, `Footprint` and the fields `kicad-export` puts on each symbol (house names from `[parameters] names`). `mylib.kicad_dbl` holds the KiCad 7+ settings: `meta`, `source` (`type` odbc, `connection_string` `Driver={...};Database=${CWD}/mylib.sqlite`, or `--dsn`), `cache`, and one library per table mapping every column to a field. `sym-lib-table` gets a `mylib-db` row of type `Database`, and its other rows are kept. Symbol and footprint ids point at `mylib:<name>` from `ecadlib kicad-export --name mylib` (`--export` runs it first). Parts that are held or have no symbol are listed in `kicad_dblib.json`.
+  * Verified: the JSON keys (`source.connection_string`, `source.timeout_seconds`, `cache.max_age`, `visible_on_add`, `inherit_properties`, ...), `${CWD}` and the `Database` plugin type all appear in KiCad 7.0.11's `_eeschema.kiface`, and the SQLite tables answer the queries KiCad makes (`SELECT * FROM "table" WHERE "Part ID" = ?`).
+  * **Not verified:** KiCad has not opened the database library itself, because no SQLite ODBC driver is installed here. On Windows, install the "SQLite3 ODBC Driver" (ch-werner.de, which is the default `--driver`). On Linux, install libsqliteodbc (driver `SQLite3`). On macOS, install sqliteodbc.
+* **Parts table** (`export-parts`): one row per library part (held parts only with `--include-held`). The columns are `parts_export.COLUMNS`: Part ID, Status, Category, Folder, Description, Value, Manufacturer, Manufacturer Part Number, Datasheet, Supplier 1/2 and their part numbers, Lifecycle, Altium symbol/footprint refs and files, KiCad lib ids, 3D height, release check, hold reasons, sign-off and approvers (from the approvals policy), sources, and Other Parameters. New columns are only ever added at the end. CSV is UTF-8 with BOM, XLSX stores every cell as text, and both neutralise formula cells. JSON is `{"format": "ecadlib-parts", "version": 1, "columns": [...], "parts": [...]}` with Other Parameters as an object. Workspace: `export_parts(bom, fmt)` and `kicad_dblib(bom)`, also available as MCP tools.
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:

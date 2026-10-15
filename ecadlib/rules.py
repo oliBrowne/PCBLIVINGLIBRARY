@@ -255,7 +255,10 @@ def validate(raw, where="ecadlib.toml"):
             elif (sec, k) in MAP_KEYS:
                 if not isinstance(v, dict):
                     _err(where, key, "must be a table of name = value")
-                if (sec, k) != ("release", "approvals") and not all(isinstance(x, (str, int, float)) for x in v.values()):
+                if (sec, k) == ("bom", "columns") and all(isinstance(x, str) or (isinstance(x, list) and x and all(
+                        isinstance(y, str) for y in x)) for x in v.values()):
+                    pass                                   # a header, or a list of headers (house aliases)
+                elif (sec, k) != ("release", "approvals") and not all(isinstance(x, (str, int, float)) for x in v.values()):
                     _err(where, key, "values must be text")
             elif isinstance(d, list):
                 if isinstance(v, str) and (sec, k) == ("footprint", "pin1"):
@@ -765,7 +768,7 @@ HELP = {
     "layers": "Altium layers for footprint content (Mechanical1..16, TopOverlay)",
     "footprint": "IPC-7351 density L (least) | N (nominal) | M (most); pin-1 pad names accepted",
     "sources": "Where missing symbols and footprints are looked for, in order",
-    "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header)",
+    "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header, or field = [\"header\", \"alias\"])",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
     "sim": "Parasitics for the built-in passive simulation models (sim-models), e.g. capacitor_esr = \"10m\"",
     "datasheet": "Claude datasheet reader (ecadlib datasheet / librarian): model, effort, which environment variable holds the "

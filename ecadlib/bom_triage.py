@@ -146,9 +146,11 @@ def _read_csv(p):
 
 
 def apply_columns(mapping, headers, columns):
-    """Rules' [bom] columns (field -> your header) win over the fuzzy guess; headers not in this BOM are ignored."""
+    """Rules' [bom] columns (field -> your header, or a list of headers: the first one in this BOM is used) win over
+    the fuzzy guess; headers not in this BOM are ignored."""
     for f, want in (columns or {}).items():
-        h = next((h for h in headers if _norm(h) == _norm(want)), None)
+        wants = [want] if isinstance(want, str) else list(want)
+        h = next((h for w in wants for h in headers if _norm(h) == _norm(w)), None)
         if h is not None:
             mapping = {k: v for k, v in mapping.items() if v != h}
             mapping[f] = h
@@ -164,10 +166,14 @@ def read_bom(path, columns=None, rules=None):
         from . import rules as RU
         from .altium_project import bom_lines
         return bom_lines(p, variant=os.environ.get("ECADLIB_VARIANT") or None, rules=RU.resolve(rules, p.parent))
+    if p.suffix.lower() == ".kicad_sch" or (p.suffix.lower() in (".xml", ".net") and _BI().is_kicad_netlist(p)):
+        bi = _BI()                                                # KiCad schematic / netlist: no header guessing
+        return bi.read_kicad_sch(p, columns) if p.suffix.lower() == ".kicad_sch" else bi.read_kicad_netlist(p, columns)
     raw = (_read_excel(p) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else _read_csv(p)).fillna("")
     if raw.empty or not raw.astype(str).apply(lambda c: c.str.strip()).ne("").any().any():
         raise ValueError(f"{p}: the BOM file is empty")
-    hdr_row = max(range(min(10, len(raw))), key=lambda i: len(map_headers(list(raw.iloc[i]))))  # header may not be row 0
+    hdr_row = max(range(min(10, len(raw))), key=lambda i: len(apply_columns(map_headers(list(raw.iloc[i])),   # header
+                                                                      [str(h).strip() for h in raw.iloc[i]], columns)))  # may not be row 0
     headers = [str(h).strip() for h in raw.iloc[hdr_row]]
     df = raw.iloc[hdr_row + 1:].copy()
     df.columns = headers
@@ -196,6 +202,11 @@ def read_bom(path, columns=None, rules=None):
     return lines, mapping
 
 
+def _BI():
+    from . import bom_inputs
+    return bom_inputs
+
+
 def _header_score(raw):
     return max((len(map_headers(list(raw.iloc[i]))) for i in range(min(10, len(raw)))), default=0)
 
@@ -209,6 +220,9 @@ def _read_excel(p):
         sheets = [df.map(_xl_text) if hasattr(df, "map") else df.applymap(_xl_text)    # numbers as typed: 1e-07 F
                   for df in pd.read_excel(p, header=None, dtype=object, sheet_name=None).values()]  # -> '100n', not '1e-07'
     except ImportError as e:                                              # old binary .xls needs xlrd (not a dependency)
+        if head.startswith(b"PK"):                                        # .xlsx without openpyxl: read it ourselves
+            sheets = [pd.DataFrame(rows, dtype=object) for rows in _BI().xlsx_sheets(p).values()]
+            return max(sheets, key=_header_score) if sheets else pd.DataFrame()
         raise ValueError(f"{p}: can't read this old .xls workbook ({e}); save it as .xlsx or CSV") from e
     except Exception as e:                                                # truncated / corrupt zip, missing parts
         raise ValueError(f"{p}: not a readable Excel workbook ({type(e).__name__}: {e})") from e
