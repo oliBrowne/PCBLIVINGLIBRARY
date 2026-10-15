@@ -432,6 +432,32 @@ def test_rejected_part_files_leave_the_batch_branch():
         assert "Taken out of this PR" in body and "AAA1: rejected" in body and gh.prs[1]["state"] == "open"
 
 
+def test_pictures_of_an_earlier_build_leave_the_branch_and_are_not_forgotten():
+    # (soak seed 4 with a slower clock) a part asked to be rebuilt is removed from its BOM meanwhile: nothing is built,
+    # it is back in review without AFTER pictures. Its old pictures stayed on the branch and batch.json forgot them,
+    # so they were still in the open PR after the part was rejected.
+    with tempfile.TemporaryDirectory() as d:
+        ws, rules = make_ws(d)
+        gh, env = GitHubPRs(), {"GITHUB_TOKEN": "tok"}
+        write_bom(ws, {"AAA1": "SOIC-8", "BBB2": "SOIC-8"})
+        br = run(ws, rules, github_session=gh, env=env)["batches"][0]["branch"]
+        tree = lambda: gitc(Path(d) / "remote.git", "ls-tree", "-r", "--name-only", br).split()
+        a = by_mpn(ws)["AAA1"]
+        assert [f for f in tree() if f"/{a['id']}/after_" in f]
+        AQ.decide(Workspace(ws), a["id"], "rebuild", BOB, note="again")
+        write_bom(ws, {"BBB2": "SOIC-8"})                                # removed from the BOM before the rebuild ran
+        run(ws, rules, github_session=gh, env=env)
+        a = by_mpn(ws)["AAA1"]
+        assert a["status"] == "review" and a["build"]["action"] == "none" and not a["pictures"]["after"], a
+        assert not [f for f in tree() if f"/{a['id']}/after_" in f], tree()  # the old build's pictures left the PR
+        rec = json.loads((ws / "agent" / "batches" / a["batch"] / "batch.json").read_text())
+        assert any("AAA1.PcbLib" in x for x in rec["paths"][a["id"]]), rec["paths"]   # its library files: still its own
+        AQ.decide(Workspace(ws), a["id"], "reject", ANN, note="not needed")
+        run(ws, rules, github_session=gh, env=env)
+        assert not [f for f in tree() if f"/{a['id']}/" in f or "AAA1" in f], tree()
+        assert any(f"/{by_mpn(ws)['BBB2']['id']}/after_" in f for f in tree()) and gh.prs[1]["state"] == "open"
+
+
 def test_every_approval_path_waits_for_the_plan_lock():
     from ecadlib import approvals as AP
     with tempfile.TemporaryDirectory() as d:
