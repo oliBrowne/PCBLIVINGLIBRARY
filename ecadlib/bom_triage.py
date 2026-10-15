@@ -4,7 +4,7 @@ and what needs a footprint generated.
     python -m ecadlib.bom_triage examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints \
         -o out/triage [--offline] [--providers easyeda,jlcpcb_search,digikey,...]
 """
-import argparse, csv, difflib, re, sys
+import argparse, csv, difflib, json, re, sys
 from pathlib import Path
 
 import pandas as pd
@@ -393,6 +393,7 @@ def main(argv=None):
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--rate", type=float, default=1.0, help="min seconds between requests per host")
     ap.add_argument("--rules", help="library rules file; its [bom] columns name your BOM headers (default: ecadlib.toml found from here)")
+    ap.add_argument("--json", action="store_true", help="print the result as JSON (bom, lines, mapping, counts, rows, reports)")
     a = ap.parse_args(argv)
 
     from . import rules as RU
@@ -406,10 +407,16 @@ def main(argv=None):
         print(f"cannot read BOM: {e}", file=sys.stderr)
         return 2
     index = KiCadIndex(a.lib)
-    print(f"BOM lines: {len(lines)}  header map: {mapping}")
-    print(f"local index: {len(index.symbols)} symbols, {len(index.footprints)} footprints")
+    say = (lambda *x: None) if a.json else print
+    say(f"BOM lines: {len(lines)}  header map: {mapping}")
+    say(f"local index: {len(index.symbols)} symbols, {len(index.footprints)} footprints")
     rows = triage(lines, index, provs, http)
     counts = write_reports(rows, mapping, provs, http, a.out, a.bom)
+    if a.json:                                           # stable shape: README "Machine-readable output (--json)"
+        print(json.dumps({"bom": str(a.bom), "lines": len(rows), "mapping": mapping,
+                          "counts": {str(k): int(v) for k, v in counts.items()}, "rows": rows,
+                          "reports": [str(Path(a.out).with_suffix(x)) for x in (".md", ".csv")]}, indent=2, default=str))
+        return 0
     for r in rows:
         print(f"{r['line']:>2} {r['mpn'][:24]:<24} {r['lcsc']:<9} {r['status']:<34} {r['notes'][:90]}")
     print("\n" + counts.to_string())

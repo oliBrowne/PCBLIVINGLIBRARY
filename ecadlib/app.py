@@ -932,6 +932,20 @@ class Workspace:
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data
         return {p.stem: json.loads(p.read_text()) for p in sorted(d.glob("*.json"))} if d.exists() else {}
 
+    # ------------------------------------------------------------------ setup check and summary (ecadlib.doctor / ws_status)
+    def status(self):
+        """One-screen summary (read-only): parts per librarian plan, held, waiting for sign-off, last triage, last
+        upkeep, the library agent's state and queue counts. Paths are relative to the workspace."""
+        from . import ws_status
+        return ws_status.status(self.root)
+
+    def doctor(self):
+        """The `ecadlib doctor` checks for this workspace and its --lib folders: each {check, level OK/WARN/FAIL,
+        detail, hint}. API keys are reported by name only."""
+        from . import doctor
+        rf = self.rules_in_use()
+        return doctor.run(self.root, self.libs, str(rf) if rf else None)
+
 
 def _now(ts=None):
     t = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc) if ts else datetime.datetime.now(datetime.timezone.utc)
