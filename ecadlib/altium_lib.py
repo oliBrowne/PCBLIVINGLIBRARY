@@ -83,23 +83,21 @@ def sblock(s):                                # [u32 len][u8 len][bytes]  (Pasca
 
 
 def pblock(text, utf8=False):                 # [u32 len][cp1252 text + NUL]  (C-string parameter block)
-    """utf8: a |KEY=VALUE| whose value cp1252 can't hold also gets Altium's '|%UTF8%KEY=<utf-8>||' twin in front
-    (as Altium writes it, e.g. a 'μ' or CJK description), so the text survives instead of turning into '?'."""
+    """utf8: a |KEY=VALUE| whose value is not plain ASCII also gets Altium's '|%UTF8%KEY=<utf-8>||' twin in front, as
+    Altium writes it for every non-ASCII value ('80µA', '90°' as well as CJK): the plain cp1252 copy turns 'Ω' into '?'
+    and is read in the reader's ANSI code page, the twin is what Altium reads back."""
     if not utf8:
         return block(enc(text) + b"\0")
     out = b""
     for seg in text.split("|")[1:] if text.startswith("|") else [text]:
         k, eq, v = seg.partition("=")
-        try:
-            seg.encode("cp1252")
-        except UnicodeEncodeError:
-            if eq:
-                out += b"|%UTF8%" + k.encode("utf-8") + b"=" + v.encode("utf-8") + b"||"
+        if eq and not v.isascii():
+            out += b"|%UTF8%" + k.encode("utf-8") + b"=" + v.encode("utf-8") + b"||"
         out += (b"|" if text.startswith("|") else b"") + enc(seg)
     return block(out + b"\0")
 
 
-def schblock(text):                           # SchLib parameter block: non-cp1252 values keep a %UTF8% twin
+def schblock(text):                           # SchLib parameter block: non-ASCII values get a %UTF8% twin
     return pblock(text, utf8=True)
 
 

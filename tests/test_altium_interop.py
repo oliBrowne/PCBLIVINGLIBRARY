@@ -95,7 +95,9 @@ def test_writer_keeps_text_cp1252_cannot_hold():
         raw = olefile.OleFileIO(str(p)).openstream("R_10K/Data").read()
         assert b"|%UTF8%ComponentDescription=Resistor 10k\xce\xa9 \xc2\xb11% \xe2\x89\xa40.1W|||ComponentDescription=Resistor 10k? \xb11% ?0.1W|" in raw
     assert AL.pblock("|RECORD=1|Text=abc", utf8=True) == AL.pblock("|RECORD=1|Text=abc")
-    assert AL.pblock("|A=µ±", utf8=True) == AL.pblock("|A=µ±")       # cp1252 holds these: no twin
+    # Altium twins every non-ASCII value, cp1252-encodable ones too (Celestial library: '|%UTF8%Text=90\xc2\xb0, Right
+    # Angle|||Text=90\xb0, Right Angle'); without the twin a non-Western Windows reads 0xB0 in its own code page
+    assert AL.pblock("|A=90°|B=x", utf8=True) == AL.block(b"|%UTF8%A=90\xc2\xb0|||A=90\xb0|B=x\0")
 
 
 def test_regions_on_house_mechanical_layers():
