@@ -46,6 +46,19 @@ def host_kind(cfg, remote):
     return "github"
 
 
+def wrong_api_host(api, remote):
+    """Why the token must not go to `api` for this origin remote, or None. The one case refused: the API is the default
+    gitlab.com while origin is on another, fully qualified host (a self-hosted GitLab whose [agent] gitlab_api was not
+    set): that host's token would be sent to gitlab.com. A configured gitlab_api is the person's choice, and a dotless
+    remote host (an ssh alias such as gitlab-work) cannot be judged, so both are used as given. Callers ask only when the
+    project itself came from the remote (an explicit gitlab_project names a project on the configured API)."""
+    api_host, h = _host_of(api or GITLAB_API), _host_of(remote)
+    if api_host != "gitlab.com" or not h or "." not in h or h == "gitlab.com" or h.endswith(".gitlab.com"):
+        return None
+    return (f"origin is on {h} but [agent] gitlab_api is {GITLAB_API}: set gitlab_api = \"https://{h}/api/v4\" "
+            "(the token was not sent)")
+
+
 def project_from_remote(remote, api=GITLAB_API):
     """group/sub/project of a GitLab remote, or None. A self-hosted GitLab under a path (https://h/gitlab/api/v4)
     has that path in front of the project path in its remotes; it is taken off."""
@@ -77,6 +90,17 @@ class _Resp:
         return json.loads(self.text)
 
 
+def no_redirect_opener():
+    """urllib opener that never follows a redirect: urllib copies every request header (PRIVATE-TOKEN, Authorization)
+    to wherever a 30x points, any host. A redirect comes back as its 3xx status (an HTTPError) instead."""
+    import urllib.request
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+    return urllib.request.build_opener(_NoRedirect)
+
+
 class _UrllibSession:
     def request(self, method, url, json=None, timeout=60, headers=None):
         import json as _j, urllib.error, urllib.request
@@ -84,7 +108,7 @@ class _UrllibSession:
         req = urllib.request.Request(url, data=data, method=method, headers=dict(headers or {}, **(
             {"Content-Type": "application/json"} if data is not None else {})))
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with no_redirect_opener().open(req, timeout=timeout) as r:
                 return _Resp(r.status, r.read())
         except urllib.error.HTTPError as e:
             return _Resp(e.code, e.read() or b"")
@@ -229,5 +253,8 @@ def client(cfg, remote, env, session=None):
         token = env.get(tok_env) if tok_env else None
         if not (remote and proj and token):
             return kind, None, "no GitLab remote or token"
+        bad = None if cfg.get("gitlab_project") else wrong_api_host(cfg.get("gitlab_api") or GITLAB_API, remote)
+        if bad:
+            return kind, None, bad
         return kind, GitLab(proj, token, session, cfg.get("gitlab_api") or GITLAB_API), None
     return kind, None, None                      # GitHub: the caller builds upkeep.GitHub as before

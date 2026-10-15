@@ -29,8 +29,8 @@ Events:
     lifecycle        a part went EOL / obsolete, NRND or last time buy
 
 Sending never raises and never stops the agent: a target whose variable is unset is skipped, a failed post is retried
-with backoff inside a fixed time budget (max_seconds), and every outcome is returned (the agent puts them in its
-report as rep["notify"]). Tests pass sender=fake and sleep=fake.
+with backoff inside a fixed time budget (max_seconds; once it is used up, the remaining posts are skipped), and every
+outcome is returned (the agent puts them in its report as rep["notify"]). Tests pass sender=fake and sleep=fake.
 
     ecadlib notify test [--event batch_ready] [--target NAME]   send a test message to the configured targets
     ecadlib notify show                                         targets, events and whether their variables are set"""
@@ -194,11 +194,13 @@ def _now():
 
 # ------------------------------------------------------------------ sending
 def http_sender(url, body, headers, timeout):
-    """POST body (bytes) -> HTTP status. Network errors raise OSError."""
+    """POST body (bytes) -> HTTP status. Network errors raise OSError. Redirects are not followed (urllib would resend the
+    Authorization header to any host the 30x names, and turn the POST into a GET): a 3xx is returned as a failure."""
     import urllib.error, urllib.request
+    from .forge import no_redirect_opener
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with no_redirect_opener().open(req, timeout=timeout) as r:
             return r.status
     except urllib.error.HTTPError as e:
         return e.code
@@ -252,6 +254,10 @@ def send(rules, events, env=None, sender=None, sleep=time.sleep, log=None, clock
                 body = json.dumps(payload(t["type"], ev), ensure_ascii=False, default=str).encode()
             except Exception as e:
                 rec["result"] = f"error: payload: {type(e).__name__}: {e}"
+                continue
+            if clock() - start > max_seconds:           # slow or hanging hooks: the agent waits no longer
+                rec["result"] = f"skipped: the {max_seconds:g} s notify time budget is used up"
+                log(f"notify: {t['name']}: {rec['result']}")
                 continue
             for attempt in range(retries + 1):
                 rec["attempts"] = attempt + 1

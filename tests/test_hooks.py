@@ -334,6 +334,90 @@ def test_upkeep_cli_gitlab_flag():
         assert not (Path(d) / "s2" / "lifecycle_state.json").exists()
 
 
+def test_gitlab_token_of_a_self_hosted_remote_never_goes_to_gitlab_com():
+    """origin on gitlab.mycorp.example with gitlab_api left at the gitlab.com default: the token (for the company's
+    GitLab) used to be sent to gitlab.com. Now refused with a hint; an explicit gitlab_api / gitlab_project, gitlab.com
+    itself (and its altssh host) and dotless ssh aliases keep working."""
+    cfg = dict(RU.DEFAULTS["agent"])
+    env = {"GITLAB_TOKEN": "corp-secret"}
+    kind, gl, why = FG.client(cfg, "git@gitlab.mycorp.example:hw/lib.git", env)
+    assert kind == "gitlab" and gl is None and 'gitlab_api = "https://gitlab.mycorp.example/api/v4"' in why, why
+    assert "corp-secret" not in why
+    own = "https://gitlab.mycorp.example/api/v4"
+    assert FG.client(dict(cfg, gitlab_api=own), "git@gitlab.mycorp.example:hw/lib.git", env)[1].API == own
+    assert FG.client(dict(cfg, gitlab_project="hw/lib"), "git@gitlab.mycorp.example:hw/lib.git", env)[1] is not None
+    for ok in ("git@gitlab.com:acme/lib.git", "ssh://git@altssh.gitlab.com:443/acme/lib.git", "gitlab-work:acme/lib.git"):
+        assert FG.wrong_api_host(FG.GITLAB_API, ok) is None, ok
+    # upkeep --gitlab: the same refusal when the project comes from the remote
+    a = mock.Mock(gitlab_api=None, gitlab_project=None)
+    run = lambda cmd, **k: (0, "https://gitlab.mycorp.example/hw/lib.git\n", "")
+    with mock.patch.dict(os.environ, env, clear=True):
+        try:
+            UK._gitlab_client({}, a, run)
+            raise AssertionError("token would go to gitlab.com")
+        except FG.GitLabError as e:
+            assert "gitlab.mycorp.example" in str(e) and "--gitlab-api" in str(e)
+        assert UK._gitlab_client({}, mock.Mock(gitlab_api=own, gitlab_project=None), run).API == own
+
+
+def test_http_senders_never_follow_redirects():
+    """urllib copies PRIVATE-TOKEN / Authorization to wherever a 30x points (any host): a GitLab API or webhook that
+    redirected sent the token on. Now a redirect is an HTTP 3xx failure and the other host sees nothing."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    seen = []
+
+    class Other(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append(dict(self.headers))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"[]")
+        do_POST = do_GET
+
+        def log_message(self, *a):
+            pass
+
+    class Redirect(Other):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", f"http://localhost:{other.server_port}/steal")
+            self.end_headers()
+        do_POST = do_GET
+    other, red = HTTPServer(("127.0.0.1", 0), Other), HTTPServer(("127.0.0.1", 0), Redirect)
+    for srv in (other, red):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        gl = FG.GitLab("acme/lib", "glpat-SECRET", api=f"http://127.0.0.1:{red.server_port}/api/v4")
+        try:
+            gl.find_open_mr("b")
+            raise AssertionError("redirect followed")
+        except FG.GitLabError as e:
+            assert "HTTP 302" in str(e) and "SECRET" not in str(e)
+        st = N.http_sender(f"http://127.0.0.1:{red.server_port}/hook", b"{}",
+                           {"Authorization": "Bearer TOK-SECRET", "Content-Type": "application/json"}, 5)
+        assert st == 302 and seen == [], seen
+    finally:
+        other.shutdown()
+        red.shutdown()
+
+
+def test_notify_time_budget_skips_the_rest():
+    """Hanging webhooks: each post may take the whole timeout. Once max_seconds is used up the remaining posts are
+    skipped, so many targets x events cannot hold the agent for minutes."""
+    r = _targets({"name": "a", "type": "slack", "url_env": "H"}, {"name": "b", "type": "json", "url_env": "H"}, retries=0)
+    t = [0.0]
+
+    def slow(url, body, headers, timeout):
+        t[0] += 10
+        raise TimeoutError()
+    evs = [N.event("part_held", f"held {i}") for i in range(5)]
+    res = N.send(r, evs, env={"H": "https://hooks.example.com/x"}, sender=slow, sleep=lambda w: None,
+                 clock=lambda: t[0], max_seconds=30)
+    assert len(res) == 10 and t[0] <= 40, (t, res)
+    assert sum(x["result"].startswith("skipped: the 30 s notify time budget") for x in res) == 6, res
+
+
 # ------------------------------------------------------------------ plugins
 def _install_example(d):
     """Make the example plugin discoverable the way pip would: a *.dist-info with entry_points.txt on sys.path."""
@@ -376,11 +460,15 @@ def test_example_plugin_found_by_entry_points_and_used_in_order():
         assert [c.name for c in classes] == ["stockroom", "jlcpcb_search", "easyeda"]   # jlcpcb finds EasyEDA's key first
         assert [c.name for c in PL.select("easyeda", rules)] == ["easyeda"]            # an explicit flag wins
         assert [c.name for c in PL.select(None, RU.load({}), default="jlcpcb_search,easyeda")] == ["jlcpcb_search", "easyeda"]
-        try:
-            PL.select(None, RU.load({"providers": {"order": ["broken"]}}))
+        try:                                                        # an explicit choice of a broken plugin: an error
+            PL.select("broken", None)
             raise AssertionError("unknown provider accepted")
         except ValueError as e:
             assert "unknown provider 'broken'" in str(e) and "failed to load: ModuleNotFoundError" in str(e)
+        # in the rules' order it is skipped with a warning: a broken plugin never stops triage / librarian / UI
+        with mock.patch("sys.stderr", io.StringIO()) as err:
+            got = PL.select(None, RU.load({"providers": {"order": ["broken", "easyeda"]}}))
+        assert [c.name for c in got] == ["easyeda"] and "plugin broken skipped" in err.getvalue(), err.getvalue()
         from tests.test_librarian import FakeHTTP
         http = FakeHTTP({})
         lines = [{"designator": "U1", "mpn": "TPS1234DSGR", "manufacturer": "ACME", "value": "", "footprint": "", "lcsc": ""}]
@@ -434,6 +522,48 @@ def test_broken_plugin_provider_never_stops_triage():
         raise AssertionError("built-in error swallowed")
     except KeyError:
         pass
+
+
+class _EP:
+    def __init__(self, name, obj):
+        self.name, self.obj = name, obj
+
+    def load(self):
+        return self.obj
+
+
+def test_plugin_that_fails_to_start_never_stops_triage():
+    """A plugin whose __init__ or configured() raises (missing config file ...) used to crash triage at c(http) or in
+    the report's provider table; now its lookups become notes and it reports itself as not configured."""
+    from tests.test_librarian import FakeHTTP
+    class BadInit(P.Provider):
+        name, auth = "badinit", "a config file"
+
+        def __init__(self, http):
+            raise RuntimeError("no config file")
+
+        def lookup(self, line):
+            return P.SourceResult(self.name, found=False)
+
+    class BadConfigured(P.Provider):
+        name = "badconf"
+
+        def configured(self):
+            raise KeyError("x")
+
+        def lookup(self, line):
+            return P.SourceResult(self.name, found=False)
+    http = FakeHTTP({})
+    eps = [_EP("badinit", BadInit), _EP("badconf", BadConfigured)]
+    provs = [c(http) for c in PL.select(["badinit", "badconf"], eps=eps)]
+    lines = [{"designator": "U1", "mpn": "X1", "manufacturer": "", "value": "", "footprint": "", "lcsc": ""}]
+    rows = T.triage(lines, T.KiCadIndex([]), provs, http)
+    assert "badinit: plugin error: RuntimeError: plugin failed to start: RuntimeError: no config file" in rows[0]["notes"], rows
+    with tempfile.TemporaryDirectory() as d:
+        T.write_reports(rows, {}, provs, http, Path(d) / "t", "b.csv")
+        md = (Path(d) / "t.md").read_text()
+    assert "| badinit | no | a config file |" in md and "| badconf | no |" in md, md
+    assert not hasattr(BadInit, "_plugin") and isinstance(provs[0], BadInit)        # the plugin's own class untouched
 
 
 def test_workspace_and_mcp_plugins_and_rules_order():
