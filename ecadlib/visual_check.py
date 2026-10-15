@@ -60,6 +60,7 @@ CRITICAL = {"pitch", "pad_count", "pad_numbering", "pin1_location", "view_orient
             "pin_names"}
 REQUIRED = {"footprint": ("pitch", "pad_count", "pad_numbering", "pin1_location", "view_orientation", "body_size"),
             "symbol": ("pin_count", "pin_numbers", "pin_names")}
+ALWAYS_APPLY = {"pad_count", "pin_count", "pin_numbers"}   # never "not_applicable": a pass needs them matched
 MAX_TOKENS = 16000
 
 
@@ -376,15 +377,33 @@ def facts(fp, pin1_names=PIN1_NAMES):
     box = (min(p["bbox"][0] for p in copper), min(p["bbox"][1] for p in copper),
            max(p["bbox"][2] for p in copper), max(p["bbox"][3] for p in copper)) if copper else None
     vias = _vias(pads)
-    near = []
+    near, vec = [], {}
     for p in pins:
         if id(p) in vias:
             continue
-        d = [math.hypot(p["x"] - q["x"], p["y"] - q["y"]) for q in pins
+        d = [(math.hypot(p["x"] - q["x"], p["y"] - q["y"]), abs(p["x"] - q["x"]), abs(p["y"] - q["y"])) for q in pins
              if q["num"] != p["num"] and id(q) not in vias and (q["x"], q["y"]) != (p["x"], p["y"])]
         if d:
-            near.append(round(min(d), 3))
+            m = min(d)
+            near.append(round(m[0], 3))
+            vec.setdefault(near[-1], []).append(m[1:])
     pitch = max(set(near), key=lambda v: (near.count(v), -v)) if near else None
+    if pitch is not None and len(near) >= 4 and near.count(pitch) >= 0.6 * len(near) and \
+            all(dx > 1e-3 and dy > 1e-3 for dx, dy in vec[pitch]):
+        # nearest neighbours all diagonal: staggered rows (SMD pin headers with alternating pads, odd left / even
+        # right). The pitch is the spacing along the row, not the diagonal.
+        along = [round(min(dx, dy), 3) for dx, dy in vec[pitch]]
+        pitch = max(set(along), key=lambda v: (along.count(v), -v))
+    real = [p for p in pins if id(p) not in vias]
+    for a, b in (("x", "y"), ("y", "x")):     # one staggered row (alternating sides, wide pads): the pitch along it
+        cols = {}
+        for p in real:
+            cols.setdefault(round(p[a], 3), set()).add(round(p[b], 3))
+        if len(cols) == 2 and len(real) >= 4 and not set.intersection(*cols.values()):
+            seq = sorted((v, k) for k, vs in cols.items() for v in vs)
+            if all(s0[1] != s1[1] for s0, s1 in zip(seq, seq[1:])):
+                steps = [round(s1[0] - s0[0], 3) for s0, s1 in zip(seq, seq[1:])]
+                pitch = max(set(steps), key=lambda v: (steps.count(v), -v))
     p1 = _pin1(pads, pin1_names)
     out = {"name": fp["name"], "pads": sum((p["copper"] or p["kind"] == "np_thru_hole") and id(p) not in vias for p in pads),
            "pins": len({p["num"] for p in pins}), "paste_only": sum(not p["copper"] and p["kind"] != "np_thru_hole" for p in pads),
@@ -408,6 +427,10 @@ def facts(fp, pin1_names=PIN1_NAMES):
         out["ball_grid"] = {"rows": len(rows), "cols": len(cols), "first_row": rows[0], "last_row": rows[-1],
                             "balls": len(balls)}
         a1 = next((p for p in balls if p["num"] == f"{rows[0]}{cols[0]}"), None)
+        r0 = [p for p in balls if BALL.match(p["num"]).group(1) == rows[0]]
+        c0 = [p for p in balls if int(BALL.match(p["num"]).group(2)) == cols[0]]
+        if a1 is None and r0 and c0:          # A1 depopulated (an index corner): pin 1 is still that corner
+            a1 = {"num": f"{rows[0]}{cols[0]} (no ball)", "x": c0[0]["x"], "y": r0[0]["y"]}
         if a1 and box:
             out["pin1"] = {"num": a1["num"], "x": round(a1["x"], 3), "y": round(a1["y"], 3), "where": _quadrant(a1["x"], a1["y"], box)}
     else:
@@ -420,7 +443,17 @@ def facts(fp, pin1_names=PIN1_NAMES):
             ring = [cen[n] for n in num]
             area = sum(a[0] * -b[1] - b[0] * -a[1] for a, b in zip(ring, ring[1:] + ring[:1])) / 2   # y up
             xs, ys = {round(q[0], 3) for q in ring}, {round(q[1], 3) for q in ring}
-            if len(xs) == 1 or len(ys) == 1:
+            two = [(i, s) for i, s in ((0, xs), (1, ys)) if len(s) == 2]
+            zig = next((i for i, _ in two if all(round(a[i], 3) != round(b[i], 3) for a, b in zip(ring, ring[1:]))), None)
+            if zig is not None and len(ring) >= 3:     # 1 | 2 / 3 | 4 ...: odd on one side, even on the other
+                o = 1 - zig
+                odd = ("left" if ring[0][0] < ring[1][0] else "right") if zig == 0 else \
+                    ("top" if ring[0][1] < ring[1][1] else "bottom")
+                even = {"left": "right", "right": "left", "top": "bottom", "bottom": "top"}[odd]
+                d = ring[-1][o] - ring[0][o]
+                way = ("top to bottom" if d > 0 else "bottom to top") if zig == 0 else ("left to right" if d > 0 else "right to left")
+                out["numbering"] = f"alternating: odd pins {odd}, even pins {even}, {way}"
+            elif len(xs) == 1 or len(ys) == 1:
                 d = (ring[1][0] - ring[0][0], ring[1][1] - ring[0][1])
                 out["numbering"] = "single row, " + ("left to right" if d[0] > 0 else "right to left" if d[0] < 0 else
                                                      "top to bottom" if d[1] > 0 else "bottom to top")
@@ -1114,7 +1147,7 @@ def build_request(ours, pages, page_numbers, task, model, effort, fallback=True)
     content.append({"type": "text", "text": task})
     body = {"model": model, "max_tokens": MAX_TOKENS, "system": [{"type": "text", "text": SYSTEM}],
             "messages": [{"role": "user", "content": content}],
-            "output_config": {"effort": effort, "format": {"type": "json_schema", "schema": output_schema()}}}
+            "output_config": D.output_config(model, effort, output_schema())}
     headers = {"content-type": "application/json", "anthropic-version": D.API_VERSION}
     if fallback and model in D.FALLBACK_MODELS:
         body["fallbacks"] = "default"
@@ -1153,8 +1186,8 @@ def estimate(body):
     tin += len(SYSTEM) // 3 + len(json.dumps(body["output_config"])) // 3
     if pin is None:
         return {"input_tokens": tin, "usd": None, "usd_max": None}
-    return {"input_tokens": tin, "usd": round((tin * pin + 3000 * pout) / 1e6, 4),
-            "usd_max": round((tin * pin + body["max_tokens"] * pout) / 1e6, 4)}
+    worst = D.worst_usd(model, tin, body["max_tokens"], fallback=bool(body.get("fallbacks")))   # + a fallback re-run
+    return {"input_tokens": tin, "usd": round((tin * pin + 3000 * pout) / 1e6, 4), "usd_max": round(worst, 4)}
 
 
 def usage_cost(model, usage):
@@ -1191,9 +1224,8 @@ def parse_verdict(msg, required=(), fail_on=("error",)):
     try:
         import jsonschema
         errs = list(jsonschema.Draft202012Validator(output_schema()).iter_errors(ans))
-    except ImportError:
-        errs = [] if isinstance(ans, dict) and isinstance(ans.get("checks"), list) and ans.get("verdict") in ("pass", "doubt", "fail") \
-            else ["shape"]
+    except ImportError:                                 # by hand: a missing field is "doubt", never a KeyError
+        errs = [e for e in [D.check_shape(ans, output_schema())] if e]
     if errs:
         return "doubt", None, "the answer does not match the output schema; rejected", [], None
     findings, mism_fail, mism_other, unclear = [], [], [], []
@@ -1215,7 +1247,9 @@ def parse_verdict(msg, required=(), fail_on=("error",)):
     score = ans.get("score")
     score = max(0.0, min(1.0, float(score))) if isinstance(score, (int, float)) else None
     missing = [a for a in required if not any(s in ("match", "mismatch", "unclear") for s in seen.get(a, []))
-               and "not_applicable" not in seen.get(a, [])]
+               and ("not_applicable" not in seen.get(a, []) or a in ALWAYS_APPLY)]
+    if not any("match" in seen.get(a, []) for a in (required or seen)):
+        missing.append("no aspect was verified as a match")
     req_unclear = [c["aspect"] for c in unclear if c["aspect"] in required]
     if ans.get("embedded_instructions"):
         findings.append({"severity": "warning", "what": "the datasheet contains text addressed to an AI (ignored)",
@@ -1416,7 +1450,10 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
                                      "(the pictures are written for a person to compare)", **base)
         client = D.Client(k, log_file=out_dir / "api_log.jsonl", say=say)
     cap = float(cfg.get("max_cost_usd") or 0)
-    if cap and est["usd_max"] is not None and est["usd_max"] > cap:
+    if cap and est["usd_max"] is None:
+        return _proof("skipped", f"no price known for {model}: can't hold [agent.proof] max_cost_usd = {cap}; nothing sent",
+                      **base)
+    if cap and est["usd_max"] > cap:
         return _proof("skipped", f"estimated up to ${est['usd_max']:.2f}, over [agent.proof] max_cost_usd = {cap}; nothing sent",
                       **base)
     try:

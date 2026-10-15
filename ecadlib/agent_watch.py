@@ -21,7 +21,9 @@ A scan reads every source, compares its parts (key = "manufacturer|MPN") with wh
     removed  a part no longer in the source
 Scans are idempotent (a second scan with nothing changed returns []), files whose size and time are unchanged are
 not read again (huge BOMs), and a source that fails is recorded in the state with its error while its last good parts
-are kept, so nothing is reported as removed because a file was briefly unreadable or Nexar was down. A source whose
+are kept, so nothing is reported as removed because a file was briefly unreadable or Nexar was down. The same holds
+for a file that changed while it was read, and for a file or Altium 365 project that suddenly reads as no parts at all
+(a BOM caught half-written): its last good parts are kept and the source reports the error. A source whose
 ref changed (file renamed, rules edited) takes over the old state when the content is the same (same file hash, same
 folder files, same Altium 365 project id), so a rename is not reported as every part removed and added.
 
@@ -42,7 +44,7 @@ BOM_EXT = (".csv", ".tsv", ".xlsx", ".xlsm", ".xls")
 PROJECT_EXT = (".prjpcb",)
 UPLOAD_DIR = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")                  # app.Workspace.save_upload's folder names
 PLAN_LIBRARY_STATUS = ("ready", "existing")                         # plan items that are library parts
-STATE_VERSION = 1
+STATE_VERSION = 2                                                   # 2: normalised manufacturer keys
 PAGE = 100
 
 # ------------------------------------------------------------------ Nexar (Altium 365); UNVERIFIED LIVE, see module doc
@@ -94,7 +96,8 @@ def now_iso(now=None):
 
 
 def part_key(manufacturer, mpn):
-    return f"{str(manufacturer or '').strip().lower()}|{str(mpn or '').strip().upper()}"
+    from .agent_queue import norm_manufacturer          # "ST" and "STMicroelectronics" are one maker
+    return f"{norm_manufacturer(manufacturer)}|{str(mpn or '').strip().upper()}"
 
 
 # ------------------------------------------------------------------ BOM lines -> parts
@@ -349,6 +352,14 @@ def scan_files(src, root, old_files, rules, cfg):
                 files[ident] = dict(old, path=str(f), sig=sig)              # unchanged: not parsed again
                 continue
             parts = _project_parts(f, rules, src.get("variant")) if project else read_bom_parts(f, rules)
+            if not project:
+                st = f.stat()
+                if (st.st_size, st.st_mtime_ns) != (sig["size"], sig["mtime_ns"]):
+                    raise OSError("the file changed while it was read (being saved?): read again next scan")
+            if not parts and old.get("parts"):
+                # a BOM caught half-written (header only) or a project mid-save reads as "no parts": that is not every
+                # part removed. Kept until it has parts again; a source really emptied is removed from the rules.
+                raise ValueError(f"no parts read (it had {len(old['parts'])}): kept the last good parts")
             files[ident] = {"path": str(f), "sig": sig, "parts": parts}
         except Exception as e:
             errors.append(f"{ident or f.name}: {type(e).__name__}: {e}")
@@ -455,6 +466,8 @@ def scan_a365(src, ws, client, old, rules):
         return ((vs[0].get("bom") or {}).get("items") if vs else None) or {}
     items = _paged(client, Q_BOM, {"id": proj["id"], "variant": variant, "first": PAGE}, conn_of)
     parts = parts_from_lines([bom_item_line(i, rules) for i in items])
+    if not parts and old_f and old_f.get("parts"):
+        raise ValueError(f"{meta['name']}: Altium 365 returned no BOM items (it had {len(old_f['parts'])}): kept the last good parts")
     return {proj["id"]: {"path": proj.get("url") or "", "sig": sig, "parts": parts}}, [], meta
 
 
@@ -469,6 +482,17 @@ def load_state(root):
         return {"version": STATE_VERSION, "sources": {}}
     data = json.loads(f.read_text(encoding="utf-8"))
     data.setdefault("sources", {})
+    from .agent_queue import aliases_sig
+    if int(data.get("version") or 1) < 2 or data.get("aliases") != aliases_sig():   # keys from another name table
+        for ent in data["sources"].values():
+            for fe in (ent.get("files") or {}).values():
+                if isinstance(fe, dict) and isinstance(fe.get("parts"), dict):
+                    new = {}
+                    for k, ln in fe["parts"].items():
+                        m, _, n = str(k).partition("|")
+                        new.setdefault(part_key((ln or {}).get("manufacturer") or m, n), ln)
+                    fe["parts"] = new
+        data["version"], data["aliases"] = STATE_VERSION, aliases_sig()
     return data
 
 
@@ -481,10 +505,13 @@ def save_state(root, state):
 
 
 @contextlib.contextmanager
-def _lock(root):
+def _lock(root, create=True):
     f = Path(root) / "agent" / "watch_state.lock"
+    if not create and not f.exists():                   # a dry run makes no files; nothing ever wrote the state
+        yield
+        return
     f.parent.mkdir(parents=True, exist_ok=True)
-    with open(f, "a") as h:
+    with open(f, "a" if create else "r") as h:
         try:
             import fcntl
         except ImportError:                              # Windows: no advisory lock, single-writer use
@@ -537,8 +564,31 @@ def _change(kind, key, line, was, src, when):
             "line": dict(line or {}), "was": dict(was or {}), "detected": when}
 
 
+def _merge_blank(old, new):
+    """A line without a manufacturer is the same part as the one known maker of that MPN in this source (before or
+    now), so adding or dropping the manufacturer is not "removed" + "new". Returns (old, new) re-keyed."""
+    makers = {}
+    for k in list(old) + list(new):
+        m, _, n = k.partition("|")
+        if m:
+            makers.setdefault(n, set()).add(m)
+
+    def rekey(parts):
+        out = {}
+        for k, ln in parts.items():
+            m, _, n = k.partition("|")
+            if not m and len(makers.get(n, ())) == 1:
+                k = f"{next(iter(makers[n]))}|{n}"
+                if k in parts:
+                    continue                                 # the known-maker line is there too: one part
+            out.setdefault(k, ln)
+        return out
+    return rekey(old), rekey(new)
+
+
 def diff(old, new, src, when, library=None):
     """Change records between two {key: line} maps."""
+    old, new = _merge_blank(old, new)
     out = []
     for k, ln in new.items():
         prev = old.get(k)
@@ -569,12 +619,14 @@ def scan_report(workspace, rules=None, sources=None, client=None, now=None, dry_
     """scan() plus what happened per source: {changes, errors: [{source, error}], sources: [{id, type, ref, name,
     status, parts, error}], state}. dry_run computes the changes without writing the state."""
     root, wlibs, rules = _workspace_parts(workspace, rules)
+    from .agent_queue import use_rules
+    use_rules(rules)                                    # [agent] manufacturer_aliases for part keys
     cfg = watch_rules(rules)
     when = now_iso(now)
     srcs = [norm_source(s, root) for s in (sources if sources is not None else cfg.get("sources") or [])]
     library = Library(root, list(libs if libs is not None else wlibs), rules)
     changes, errors, summary = [], [], []
-    with _lock(root):
+    with _lock(root, create=not dry_run):
         state = load_state(root)
         active = {source_id(s) for s in srcs}
         for src in srcs:
@@ -622,7 +674,8 @@ def scan_report(workspace, rules=None, sources=None, client=None, now=None, dry_
             summary.append({"id": sid, "type": src["type"], "ref": src["ref"], "name": src.get("name"),
                             "status": "partial" if ferrs else "ok", "error": ent["error"], "parts": len(new_parts),
                             "files": len(files), "changes": len(found), **({"renamed_from": adopted} if adopted else {})})
-        state["version"], state["last_scan"] = STATE_VERSION, when
+        from .agent_queue import aliases_sig
+        state["version"], state["last_scan"], state["aliases"] = STATE_VERSION, when, aliases_sig()
         if not dry_run:
             save_state(root, state)
     return {"changes": changes, "errors": errors, "sources": summary, "dry_run": bool(dry_run),

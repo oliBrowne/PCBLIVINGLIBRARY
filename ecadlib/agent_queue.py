@@ -33,8 +33,12 @@ A person's Rebuild sets build.requested_by/requested_at/request_note and moves r
 Locking: a threading.RLock per queue folder (one process) plus an exclusive lock on .lock across processes (the web
 server, `ecadlib agent serve` and this CLI may run at once): fcntl.flock on POSIX, msvcrt.locking on Windows. On
 Windows msvcrt gives up after about 10 s of contention (raises OSError: try again) and network drives may not honour
-it; keep the workspace on a local disk there. Reads take the lock too, so nobody sees a half-applied batch."""
-import argparse, contextlib, datetime, json, os, re, secrets, sys, threading
+it; keep the workspace on a local disk there. Reads take the lock too, so nobody sees a half-applied batch. Within one
+hold the items are read once (many upserts under one `with q.lock:` cost one folder read, not one per part).
+approve / reject also take <workspace>/agent/plan.lock (without waiting: "decide again in a minute") while they record
+into the plan, which the agent holds while the librarian rewrites it. decide(expect=build_token(item)) refuses a
+decision on a build other than the one the person looked at."""
+import argparse, contextlib, copy, datetime, json, os, re, secrets, sys, threading, time
 from pathlib import Path
 
 STATES = ("detected", "building", "proving", "review", "approved", "pushed", "failed", "rejected")
@@ -53,11 +57,81 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Manufacturer names as part keys use them: "ST", "STMicroelectronics" and "STMicroelectronics N.V." are one maker.
+from .rules import MANUFACTURER_ALIASES as MFR_ALIASES      # defaults; [agent] manufacturer_aliases extends
+MFR_SUFFIXES = {"inc", "incorporated", "corp", "corporation", "co", "company", "ltd", "limited", "llc", "lp", "gmbh",
+                "ag", "sa", "nv", "bv", "plc", "kg", "kk", "oy", "ab", "spa", "srl", "pte", "pty", "sas", "se"}
+
+
+def _clean_maker(name):
+    """lower case, no accents or punctuation, no legal suffix (Inc, Ltd, GmbH, N.V., "& Co. KG" ...)."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode().lower()
+    s = re.sub(r"\b([a-z])\.(?=[a-z]\.)", r"\1", s)              # N.V. -> NV., S.p.A. -> SpA
+    s = s.replace("&", " and ")
+    words = re.sub(r"[^a-z0-9]+", " ", s).split()
+    while len(words) > 1 and (words[-1] in MFR_SUFFIXES or words[-1] == "and"):
+        words.pop()
+    return " ".join(words)
+
+
+def alias_table(rules=None):
+    """{cleaned alias: cleaned canonical} from [agent] manufacturer_aliases (defaults: MFR_ALIASES)."""
+    raw = ((rules or {}).get("agent") or {}).get("manufacturer_aliases")
+    raw = MFR_ALIASES if raw is None else raw
+    out = {_clean_maker(k): _clean_maker(v) for k, v in raw.items() if _clean_maker(k) and _clean_maker(v)}
+    return {k: out.get(v, v) for k, v in out.items()}                 # one level of chaining: A -> B -> C
+
+
+_ALIASES = {"table": alias_table(), "sig": None, "rules_file": None}
+
+
+def aliases_sig():
+    if _ALIASES["sig"] is None:
+        import hashlib
+        _ALIASES["sig"] = hashlib.sha256(json.dumps(sorted(_ALIASES["table"].items())).encode()).hexdigest()[:16]
+    return _ALIASES["sig"]
+
+
+def use_rules(rules):
+    """Make part keys use these rules' [agent] manufacturer_aliases (the agent, the watch and the queue call it with
+    the workspace rules; keys made under another table are migrated once, see Queue.migrate_keys)."""
+    table = alias_table(rules)
+    if table != _ALIASES["table"]:
+        _ALIASES.update(table=table, sig=None)
+
+
+def use_workspace_rules(root):
+    """use_rules() with <root>'s rules file, re-read only when that file changes; bad rules keep the current table."""
+    from . import rules as RU
+    try:
+        f = RU.find(root)
+        sig = (str(f), f.stat().st_mtime_ns) if f else None
+        if sig != _ALIASES["rules_file"]:
+            use_rules(RU.load(None, start=root))
+            _ALIASES["rules_file"] = sig
+    except (OSError, ValueError):
+        pass
+
+
+def norm_manufacturer(name):
+    """The manufacturer as a part key uses it: _clean_maker, then the alias table ("ST" -> "stmicroelectronics").
+    "" stays ""."""
+    s = _clean_maker(name)
+    return _ALIASES["table"].get(s, s)
+
+
 def part_key(manufacturer, mpn):
     mpn = str(mpn or "").strip().upper()
     if not mpn:
         raise ValueError("a queue item needs an MPN")
-    return f"{str(manufacturer or '').strip().lower()}|{mpn}"
+    return f"{norm_manufacturer(manufacturer)}|{mpn}"
+
+
+def renorm_key(key):
+    """An old or foreign "manufacturer|MPN" key in today's form."""
+    m, _, n = str(key or "").partition("|")
+    return f"{norm_manufacturer(m)}|{n.strip().upper()}"
 
 
 def check_id(i):
@@ -75,6 +149,7 @@ class _Lock:
     outermost holder only)."""
     def __init__(self, path):
         self.path, self.rlock, self.depth, self.fh = path, threading.RLock(), 0, None
+        self.cache = None              # {file name: item} read while the lock is held; nobody else writes meanwhile
 
     @classmethod
     def of(cls, folder):
@@ -87,6 +162,7 @@ class _Lock:
         try:
             if self.depth == 0:
                 self.fh = _os_lock(self.path)
+                self.cache = None
         except BaseException:
             self.rlock.release()
             raise
@@ -97,7 +173,7 @@ class _Lock:
         self.depth -= 1
         try:
             if self.depth == 0:
-                fh, self.fh = self.fh, None
+                fh, self.fh, self.cache = self.fh, None, None
                 _os_unlock(fh)
         finally:
             self.rlock.release()
@@ -142,6 +218,65 @@ def _write(path, data):
     os.replace(tmp, path)
 
 
+@contextlib.contextmanager
+def plan_lock(workspace_root, wait=True):
+    """<workspace>/agent/plan.lock: the agent holds it while the librarian rewrites its plan.json (minutes), and every
+    approval path (the queue, the Approvals page / approve_part, `ecadlib approve`) takes it while it records into a
+    plan, so neither overwrites the other. wait=False yields False at once when it is held. Not re-entrant: the
+    queue's decide() holds it and calls Workspace._approve_part, the unlocked body. Released by the OS if the holder
+    dies."""
+    d = Path(workspace_root).resolve() / "agent"
+    d.mkdir(parents=True, exist_ok=True)
+    f = open(d / "plan.lock", "a+b")
+    msvcrt = None
+    try:
+        try:
+            try:
+                import fcntl
+                fcntl.flock(f, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+            except ImportError:                                 # Windows
+                import msvcrt
+                _win_lock(msvcrt, f, wait)
+        except OSError:
+            if wait:
+                raise
+            got = False
+        else:
+            got = True
+        try:
+            yield got
+        finally:
+            if msvcrt is not None and got:                      # Windows frees a lock left on a closed file late
+                try:
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+    finally:
+        f.close()
+
+
+def _win_lock(msvcrt, f, wait, poll=0.5):
+    """msvcrt's blocking LK_LOCK gives up with OSError after 10 one-second tries, but the librarian holds the plan lock
+    for minutes: wait by polling the non-blocking lock instead."""
+    while True:
+        f.seek(0)
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError:
+            if not wait:
+                raise
+        time.sleep(poll)
+
+
+def build_token(item):
+    """Which build of an item a person looked at: its files' hash and build time. A decision sent with the token it
+    was made on (decide(expect=...)) is refused once the item was rebuilt."""
+    b = (item or {}).get("build") or {}
+    return f"{b.get('hash')}@{b.get('built')}"
+
+
 # ---------------------------------------------------------------- the store
 class Queue:
     def __init__(self, workspace):
@@ -152,6 +287,7 @@ class Queue:
         for d in (self.items_dir, self.batches_dir):
             d.mkdir(parents=True, exist_ok=True)
         self.lock = _Lock.of(self.dir)
+        use_workspace_rules(self.workspace)            # [agent] manufacturer_aliases for part keys
 
     # -- files
     def _item_path(self, i):
@@ -182,22 +318,37 @@ class Queue:
         bad = want - set(STATES)
         if bad:
             raise ValueError(f"status must be one of {', '.join(STATES)}")
-        out = []
         with self.lock:
+            out = [copy.deepcopy(it) for it in self._all().values()
+                   if (not want or it.get("status") in want) and (batch is None or it.get("batch") == batch)]
+        return sorted(out, key=lambda it: (it.get("created") or "", it["id"]), reverse=True)
+
+    def _all(self):
+        """{file name: item} of every readable item (call with the lock held). Read once per lock hold: a caller that
+        does many upserts under one `with q.lock:` (a scan of a huge BOM) reads the folder once, not once per part."""
+        if self.lock.cache is None:
+            cache = {}
             for f in self.items_dir.glob("*.json"):
                 try:
-                    it = json.loads(f.read_text(encoding="utf-8"))
+                    cache[f.name] = json.loads(f.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
                     continue                                    # a damaged file must not hide the rest
-                if (not want or it.get("status") in want) and (batch is None or it.get("batch") == batch):
-                    out.append(it)
-        return sorted(out, key=lambda it: (it.get("created") or "", it["id"]), reverse=True)
+            self.lock.cache = cache
+        return self.lock.cache
+
+    def _put(self, it):
+        _write(self._item_path(it["id"]), it)
+        if self.lock.cache is not None:
+            self.lock.cache[f"{it['id']}.json"] = copy.deepcopy(it)
 
     def find(self, key, open_only=False):
         """The newest item for a part key (open ones first when open_only is False), or None."""
-        items = [it for it in self.list() if it.get("key") == key]
-        live = [it for it in items if it["status"] in OPEN]
-        return (live or ([] if open_only else items) or [None])[0]
+        with self.lock:
+            items = sorted((it for it in self._all().values() if it.get("key") == key),
+                           key=lambda it: (it.get("created") or "", it["id"]), reverse=True)
+            live = [it for it in items if it.get("status") in OPEN]
+            hit = (live or ([] if open_only else items) or [None])[0]
+            return copy.deepcopy(hit)
 
     def upsert(self, fields, user=None):
         """Create or update the item for a part. fields: a watch Change ({"key","mpn","manufacturer","kind","source",
@@ -210,7 +361,7 @@ class Queue:
         mpn = fields.get("mpn") or (change or {}).get("mpn")
         mfr = fields.get("manufacturer") if "manufacturer" in fields else (change or {}).get("manufacturer")
         key = part_key(mfr, mpn)
-        if fields.get("key") and str(fields["key"]).strip().lower() != key.lower():
+        if fields.get("key") and renorm_key(fields["key"]) != key:
             raise ValueError(f"key {fields['key']!r} does not match manufacturer/MPN ({key})")
         origin = fields.get("origin") or ("watch" if is_change else "manual")
         if origin not in ORIGINS:
@@ -219,6 +370,8 @@ class Queue:
                                        if k not in FIXED + ("mpn", "manufacturer", "origin", "change")}
         t = now()
         with self.lock:
+            self.migrate_keys()
+            key = self._resolve_blank(key, mfr, t, user)
             it = self.find(key)
             if it and it["status"] != "pushed":
                 same = _strip_time(it.get("change")) == _strip_time(change)
@@ -233,7 +386,7 @@ class Queue:
                                           "note": "re-detected with a different change: retry"})
                     it["status"] = "detected"
                 it["updated"] = t
-                _write(self._item_path(it["id"]), it)
+                self._put(it)
                 return it
             i = self._new_id(self.items_dir)
             it = {"id": i, "key": key, "mpn": str(mpn).strip(), "manufacturer": str(mfr or "").strip(), "origin": origin,
@@ -242,8 +395,86 @@ class Queue:
                   "history": [{"at": t, "from": None, "to": "detected", "user": user,
                                "note": f"{(change or {}).get('kind') or 'added'} ({origin})"}]}
             it.update(extra)
-            _write(self._item_path(i), it)
+            self._put(it)
             return it
+
+    def _makers(self, mpn_part):
+        """{manufacturer key part: [items]} of the items for one MPN."""
+        out = {}
+        for it in self._all().values():
+            m, _, n = str(it.get("key") or "").partition("|")
+            if n == mpn_part:
+                out.setdefault(m, []).append(it)
+        return out
+
+    def _resolve_blank(self, key, mfr, t, user):
+        """A blank manufacturer matches the one known maker of that MPN (and an item first seen without one is
+        re-keyed once its maker is known), so "|LM358" and "ti|LM358" are one part. Two known makers: kept apart."""
+        m, _, n = key.partition("|")
+        makers = self._makers(n)
+        known = [x for x in makers if x]
+        if not m:
+            return f"{known[0]}|{n}" if len(known) == 1 else key
+        if "" in makers and set(known) <= {m}:
+            for it in makers[""]:
+                it = copy.deepcopy(it)
+                it["history"].append({"at": t, "from": it["status"], "to": it["status"], "user": user,
+                                      "note": f"key {it['key']} -> {key}: manufacturer now known"})
+                it["key"], it["updated"] = key, t
+                it["manufacturer"] = it.get("manufacturer") or str(mfr or "").strip()
+                self._put(it)
+        return key
+
+    def migrate_keys(self):
+        """Once per queue: re-key items made before manufacturer names were normalised (and blank makers that
+        match one known maker). Items that become the same part are merged: the one furthest along stays open,
+        the other open ones are rejected by the agent as duplicates (their history says of what)."""
+        marker = self.dir / "keys.json"
+        if getattr(self.lock, "migrated", None) == (aliases_sig(), marker.exists()):
+            return 0                                            # checked in this process already
+        with self.lock:
+            with contextlib.suppress(OSError, ValueError):
+                if json.loads(marker.read_text()).get("aliases") == aliases_sig():
+                    self.lock.migrated = (aliases_sig(), True)
+                    return 0                                    # done for this alias table
+            t, moved = now(), 0
+            items = list(self._all().values())
+            for it in items:
+                m, _, n = str(it.get("key") or "").partition("|")
+                new = f"{norm_manufacturer(it.get('manufacturer') or m)}|{n}"     # the name as written, if known
+                if new != it.get("key"):
+                    it = copy.deepcopy(it)
+                    it["history"].append({"at": t, "from": it["status"], "to": it["status"], "user": "ecadlib-agent",
+                                          "note": f"key {it['key']} -> {new}: manufacturer names normalised"})
+                    it["key"], it["updated"] = new, t
+                    self._put(it)
+                    moved += 1
+            for it in list(self._all().values()):                  # blank makers matching one known maker
+                m, _, n = it["key"].partition("|")
+                if not m:
+                    known = [x for x in self._makers(n) if x]
+                    if len(known) == 1:
+                        it = copy.deepcopy(it)
+                        it["history"].append({"at": t, "from": it["status"], "to": it["status"], "user": "ecadlib-agent",
+                                              "note": f"key {it['key']} -> {known[0]}|{n}: one known manufacturer"})
+                        it["key"], it["updated"] = f"{known[0]}|{n}", t
+                        self._put(it)
+                        moved += 1
+            rank = {"approved": 5, "review": 4, "proving": 3, "building": 2, "detected": 1}
+            groups = {}
+            for it in self._all().values():
+                if it["status"] in OPEN:
+                    groups.setdefault(it["key"], []).append(it)
+            for key, its in groups.items():
+                if len(its) < 2:
+                    continue
+                its.sort(key=lambda x: (rank[x["status"]], x.get("created") or "", x["id"]), reverse=True)
+                for dup in its[1:]:
+                    self.transition(dup["id"], "rejected", user="ecadlib-agent",
+                                    note=f"duplicate of {its[0]['id']} (same part once manufacturer names are normalised)")
+            _write(marker, {"version": 2, "migrated": t, "rekeyed": moved, "aliases": aliases_sig()})
+            self.lock.migrated = (aliases_sig(), True)
+            return moved
 
     def update(self, i, **fields):
         """Change data fields (build, proof, pictures, pr_url, ...). The state only changes through transition()."""
@@ -254,7 +485,7 @@ class Queue:
             it = self.get(i)
             it.update(fields)
             it["updated"] = now()
-            _write(self._item_path(i), it)
+            self._put(it)
             return it
 
     def allowed(self, i_or_item):
@@ -281,7 +512,7 @@ class Queue:
             it["history"].append({"at": t, "from": it["status"], "to": to, "user": user, "note": str(note or "")})
             it.update(fields)
             it["status"], it["updated"] = to, t
-            _write(self._item_path(i), it)
+            self._put(it)
             return it
 
     # -- batches
@@ -302,7 +533,7 @@ class Queue:
                 it["batch"], it["updated"] = b["id"], t
                 if b.get("pr_url"):
                     it["pr_url"] = b["pr_url"]
-                _write(self._item_path(it["id"]), it)
+                self._put(it)
             return b
 
     def get_batch(self, b):
@@ -415,18 +646,20 @@ def ws_get(root, i):
     if it.get("batch"):
         with contextlib.suppress(KeyError, ValueError):
             b = q.get_batch(it["batch"])
-    return {"item": it, "pictures": _pictures(root, it), "allowed": q.allowed(it), "batch": b}
+    return {"item": it, "pictures": _pictures(root, it), "allowed": q.allowed(it), "batch": b, "build_token": build_token(it)}
 
 
 ACTIONS = ("approve", "reject", "rebuild", "retry")
 
 
-def decide(ws, i, action, user, role=None, note="", via="ecadlib ui/mcp", aliases=()):
+def decide(ws, i, action, user, role=None, note="", via="ecadlib ui/mcp", aliases=(), expect=None):
     """A person's decision on a queue item: approve (review -> approved), reject (open -> rejected), rebuild
     (review -> building) or retry (failed/rejected -> detected). approve/reject are also recorded through approvals.py
     in the item's librarian plan (build.bom + build.part) so release_check and push see them; a refusal there stops an
     approve. user: who decides (required); aliases: other names of the same person (team user name), used for the
-    no-self-approval check against build.user / build.requested_by. Returns {"item", "approval"}."""
+    no-self-approval check against build.user / build.requested_by. expect: the build_token() of the build the person
+    looked at; an approve / reject is refused when the item was rebuilt since (the agent rebuilds review items whose
+    source changed). Returns {"item", "approval"}."""
     if action not in ACTIONS:
         raise ValueError(f"action must be one of {', '.join(ACTIONS)}")
     user = user.strip() if isinstance(user, str) else ""
@@ -449,6 +682,8 @@ def decide(ws, i, action, user, role=None, note="", via="ecadlib ui/mcp", aliase
             raise ValueError(f"rebuild works on items in review (use retry for failed or rejected); this one is {it['status']}")
         if to not in NEXT[it["status"]]:
             raise ValueError(f"cannot {action} an item that is {it['status']}")
+        if expect is not None and action in ("approve", "reject") and str(expect) != build_token(it):
+            raise ValueError("this item was rebuilt since you opened it: look at the new build, then decide again")
         if action == "approve":
             me = {_who_key(user)} | {_who_key(a) for a in aliases if a}
             if any(_who_key(b) in me for b in builders(it)):
@@ -457,19 +692,23 @@ def decide(ws, i, action, user, role=None, note="", via="ecadlib ui/mcp", aliase
         b = it.get("build") or {}
         if action in ("approve", "reject"):
             if b.get("bom") and b.get("part"):
-                try:
-                    r = ws.approve_part(b["bom"], b["part"], action, user, role, note, via=via + " (agent queue)")
-                    approval = {"recorded": True, **r["decision"]}
-                except ValueError as e:
-                    if action == "approve":
-                        raise ValueError(f"approvals.py refused: {e}") from e
-                    approval = {"recorded": False, "reason": str(e)}
+                with plan_lock(ws.root, wait=False) as free:
+                    if not free:          # the librarian is rewriting the plan: a decision written now would be lost
+                        raise ValueError("the library agent is rebuilding the library right now; decide again in a minute")
+                    try:
+                        rec_ = getattr(ws, "_approve_part", None) or ws.approve_part     # this lock is held here
+                        r = rec_(b["bom"], b["part"], action, user, role, note, via=via + " (agent queue)")
+                        approval = {"recorded": True, **r["decision"]}
+                    except ValueError as e:
+                        if action == "approve":
+                            raise ValueError(f"approvals.py refused: {e}") from e
+                        approval = {"recorded": False, "reason": str(e)}
             else:
                 approval = {"recorded": False, "reason": "no librarian plan for this item (build.bom / build.part): "
                                                          "decision kept in the queue only"}
         extra = {}
         if action == "approve":
-            extra["approval"] = {"by": user, "role": role or "", "at": now(), **(approval or {})}
+            extra["approval"] = {"by": user, "role": role or "", "at": now(), "build": build_token(it), **(approval or {})}
         if action == "reject":
             extra["rejection"] = {"by": user, "at": now(), "note": note, **(approval or {})}
         if action in ("rebuild", "retry"):

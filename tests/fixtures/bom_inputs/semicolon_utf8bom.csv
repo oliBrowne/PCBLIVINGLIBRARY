@@ -1,0 +1,4 @@
+﻿Designator;Comment;Footprint;Mfr Part #;Manufacturer;Quantity
+C1;"4,7µF; 10V";C_0805_2012Metric;GRM21BR61A475KA73L;Murata;1
+R1, R2;10k;R_0603_1608Metric;RC0603FR-0710KL;Yageo;2
+U1;LM358DR;SOIC-8_3.9x4.9mm_P1.27mm;LM358DR;Texas Instruments;1

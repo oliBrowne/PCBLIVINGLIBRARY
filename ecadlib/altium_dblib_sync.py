@@ -31,6 +31,7 @@ import argparse, csv, io, json, os, re, shutil, subprocess, sys
 from pathlib import Path, PureWindowsPath
 
 from . import altium_lib as AL
+from . import sheetsafe as SS
 from .altium_export import (COLUMNS, dblib_links, excel_connection, fieldmap_section, table_section)
 
 STATE = "ecadlib_sync.json"
@@ -115,7 +116,7 @@ def csv_text(tables):
     for hdr, _ in tables.values():
         cols += [c for c in hdr if c not in cols]
     buf = io.StringIO()
-    w = csv.DictWriter(buf, cols, lineterminator="\n")
+    w = SS.DictWriter(buf, cols, lineterminator="\n", param_refs=True)    # =Value stays; =HYPERLINK(...) does not
     w.writeheader()
     for name, (_, rows) in tables.items():
         for r in rows:
