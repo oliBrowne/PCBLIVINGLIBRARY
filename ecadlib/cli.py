@@ -88,7 +88,12 @@ def main(argv=None):
         return 2
     sys.argv = [f"ecadlib {argv[0]}"] + argv[1:]           # so argparse usage lines show the right command
     mod, _, fn = cmd[0].partition(":")
-    return getattr(importlib.import_module(mod), fn or "main")(argv[1:])
+    from .rules import RulesError
+    try:
+        return getattr(importlib.import_module(mod), fn or "main")(argv[1:])
+    except RulesError as e:                                  # a bad ecadlib.toml: say which key, no traceback
+        print(f"ecadlib {argv[0]}: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

@@ -66,7 +66,15 @@ class Workspace:
         return KiCadIndex(self.libs + [str(self.root / "footprints")])
 
     def _read_bom(self, bom_path):
-        if bom_path.suffix.lower() not in (".xlsx", ".xlsm", ".xls", ".schdoc", ".prjpcb", ".bomdoc") and b"\0" in bom_path.read_bytes()[:4096]:
+        try:
+            found = bom_path.is_file()
+        except OSError:                                    # name too long, ...
+            found = False
+        if not found:
+            raise ValueError(f"BOM not found: {bom_path.name[:80]} is not a file in the workspace")
+        head = bom_path.read_bytes()[:4096]                # UTF-16 with a byte-order mark: Excel "Unicode Text", fine
+        if (bom_path.suffix.lower() not in (".xlsx", ".xlsm", ".xls", ".schdoc", ".prjpcb", ".bomdoc")
+                and b"\0" in head and head[:2] not in (b"\xff\xfe", b"\xfe\xff")):
             raise ValueError(f"{bom_path.name} looks like a binary file, not a CSV; export the BOM as CSV or XLSX")
         try:
             lines, mapping = T.read_bom(bom_path, RU.bom_columns(self.rules()))
@@ -350,7 +358,8 @@ class Workspace:
         argv = [str(bom_path), "-o", str(out)] + (["--triage", str(tri)] if tri.exists() else [])
         rf = self.rules_in_use()
         argv += ["--rules", str(rf)] if rf else []
-        altium_export.main(argv)
+        if altium_export.main(argv):
+            raise ValueError(f"couldn't write the DbLib for {bom_path.name}: no part lines in it")
         return {"files": [self.rel(p) for p in sorted(out.iterdir()) if p.is_file()]}
 
     def altium365_plan(self, bom):
@@ -689,6 +698,8 @@ class Workspace:
         from . import altium_project as AP
         dirs = [self._bom_path(d) for d in ([projects] if isinstance(projects, str) else projects)]
         plans = [self._bom_path(plan)] if plan else sorted((self.root / "librarian").glob("*/plan.json"))
+        if plan and not plans[0].is_file():
+            raise ValueError(f"plan not found: {plan} is not a plan.json file")
         libs = [str(self.models)] if self.models.exists() else []
         res = AP.where_used(dirs, part, plans[0] if plans else None, libs)
         files = AP.write_where_used(res, self.root / "reports" / "where_used")

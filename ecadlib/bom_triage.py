@@ -43,7 +43,8 @@ def map_headers(headers, threshold=0.72):
             best = 0.0
             for s in syns:
                 if nh == s:
-                    sc = 1.0
+                    sc = 0.97 if f == "mpn" and s in ("part number", "pn") else 1.0   # DigiKey: 'Part Number' is
+                                                                     # its own code, 'Manufacturer Part Number' the MPN
                 elif re.search(rf"\b{re.escape(s)}\b", nh):
                     sc = 0.75 + 0.2 * len(s) / max(len(nh), 1)          # containment, longer = better
                 else:
@@ -51,6 +52,8 @@ def map_headers(headers, threshold=0.72):
                 best = max(best, sc)
             if f != "lcsc" and re.search(r"\b(lcsc|jlc|jlcpcb)\b", nh):
                 best *= 0.5                                              # 'LCSC Part Number' is not the MPN
+            if f == "lcsc" and not re.search(r"\b(lcsc|jlc|jlcpcb)", nh):
+                best *= 0.5                                              # nor is a bare 'Part Number' an LCSC code
             if f == "mpn" and re.search(r"\b(supplier|distributor|digi ?key|mouser|farnell|newark|arrow|tme|vendor)\b", nh):
                 best *= 0.5                                              # nor is a distributor's order code
             if f == "manufacturer" and re.search(r"\b(part|pn|number|no)\b", nh):
@@ -78,7 +81,7 @@ def _read_csv(p):
             break
         except UnicodeDecodeError:
             continue
-    lines = [ln for ln in text.splitlines() if ln.strip()]
+    lines = [ln for ln in text.splitlines(keepends=True) if ln.strip()]  # keepends: a quoted cell may span lines
     if not lines:
         raise ValueError(f"{p}: the BOM file is empty")
 
@@ -90,6 +93,7 @@ def _read_csv(p):
     delim = max(DELIMS, key=score)
     rows = list(csv.reader(lines, delimiter=delim))
     width = max(len(r) for r in rows)
+    rows = [[re.sub(r"\s*[\r\n]+\s*", " ", c) for c in r] for r in rows]   # 'RES 10k<newline>0603' -> one line
     return pd.DataFrame([r + [""] * (width - len(r)) for r in rows], dtype=str)
 
 
@@ -112,9 +116,7 @@ def read_bom(path, columns=None, rules=None):
         from . import rules as RU
         from .altium_project import bom_lines
         return bom_lines(p, variant=os.environ.get("ECADLIB_VARIANT") or None, rules=RU.resolve(rules, p.parent))
-    raw = (pd.read_excel(p, header=None, dtype=str) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls")
-           else _read_csv(p))
-    raw = raw.fillna("")
+    raw = (_read_excel(p) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else _read_csv(p)).fillna("")
     if raw.empty or not raw.astype(str).apply(lambda c: c.str.strip()).ne("").any().any():
         raise ValueError(f"{p}: the BOM file is empty")
     hdr_row = max(range(min(10, len(raw))), key=lambda i: len(map_headers(list(raw.iloc[i]))))  # header may not be row 0
@@ -134,12 +136,41 @@ def read_bom(path, columns=None, rules=None):
             if q and count_refs(prev["designator"]) < int(q.group(1)):
                 prev["designator"] += ", " + d["designator"]            # designator list wrapped onto the next row
                 continue
+        if _is_total(d):
+            continue                                                     # 'Total;;;12' footer, not a part
         if "dnp" in d:
             d["dnp"] = _yes(d["dnp"])
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
         lines.append(d)
     return lines, mapping
+
+
+def _header_score(raw):
+    return max((len(map_headers(list(raw.iloc[i]))) for i in range(min(10, len(raw)))), default=0)
+
+
+def _read_excel(p):
+    """The sheet that holds the BOM: workbooks often put a cover / notes sheet first."""
+    head = Path(p).read_bytes()[:8]
+    if not head.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0")):     # not a workbook: CSV / tab text named .xls(x)
+        return _read_csv(p)
+    try:
+        sheets = [df.fillna("") for df in pd.read_excel(p, header=None, dtype=str, sheet_name=None).values()]
+    except ImportError as e:                                              # old binary .xls needs xlrd (not a dependency)
+        raise ValueError(f"{p}: can't read this old .xls workbook ({e}); save it as .xlsx or CSV") from e
+    except Exception as e:                                                # truncated / corrupt zip, missing parts
+        raise ValueError(f"{p}: not a readable Excel workbook ({type(e).__name__}: {e})") from e
+    return max(sheets, key=_header_score) if sheets else pd.DataFrame()
+
+
+TOTAL = re.compile(r"(grand\s*|sub\s*)?totals?\s*:?", re.I)
+
+
+def _is_total(d):
+    """A totals footer: some cell says 'Total' and the row names no part."""
+    return (not any(d.get(f) for f in ("mpn", "lcsc", "value", "libref", "footprint", "manufacturer"))
+            and any(TOTAL.fullmatch(str(v).strip()) for v in d.values()))
 
 
 def _yes(v):
@@ -168,7 +199,7 @@ def part_numbers(ln):
 def count_refs(s):
     """'R1, R2, R5-R8' -> 6 (ranges like R5-R8 or R5-8 count every designator)."""
     n = 0
-    for tok in re.split(r"[,;\s]+", s.strip()):
+    for tok in re.split(r"[,;\s]+", re.sub(r"\s*[\u2013\u2014]\s*", "-", s.strip())):   # 'R1–R4' (en dash)
         m = re.fullmatch(r"([A-Za-z]+)(\d+)(?:-(?:\1)?(\d+))?", tok)
         if m:
             n += int(m.group(3)) - int(m.group(2)) + 1 if m.group(3) and int(m.group(3)) >= int(m.group(2)) else 1
@@ -318,7 +349,11 @@ def main(argv=None):
     want = a.providers.split(",")
     provs = [c(http) for c in P.ALL if c.name in want]
     rules = RU.load(a.rules, start=Path(a.out).parent)
-    lines, mapping = read_bom(a.bom, RU.bom_columns(rules), rules)
+    try:
+        lines, mapping = read_bom(a.bom, RU.bom_columns(rules), rules)
+    except (ValueError, OSError) as e:                   # unreadable / headerless BOM: a message, not a traceback
+        print(f"cannot read BOM: {e}", file=sys.stderr)
+        return 2
     index = KiCadIndex(a.lib)
     print(f"BOM lines: {len(lines)}  header map: {mapping}")
     print(f"local index: {len(index.symbols)} symbols, {len(index.footprints)} footprints")

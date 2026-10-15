@@ -618,9 +618,13 @@ def main(argv=None):
     if a.datasheet_batch:
         reader = D.Reader(a.out, a.cache, None, rules, CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline, timeout=60),
                           batch=True, wait=not a.datasheet_no_wait)
-    items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh, a.refresh_index,
-                a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=rules, user=a.user,
-                http=reader.http if reader else None, reader=reader)
+    try:
+        items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh,
+                    a.refresh_index, a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=rules,
+                    user=a.user, http=reader.http if reader else None, reader=reader)
+    except ValueError as e:                              # unreadable / headerless BOM, unknown --sources
+        print(f"ecadlib librarian: {e}", file=sys.stderr)
+        return 2
     held = sum(i["status"] != "ready" for i in items)
     print(f"{len(items)} parts: {len(items) - held} ready, {held} held -> {Path(a.out) / 'plan.json'}; review {Path(a.out) / 'review.md'}")
     return 2 if held else 0
