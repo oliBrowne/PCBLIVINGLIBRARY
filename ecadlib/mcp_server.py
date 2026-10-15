@@ -239,6 +239,19 @@ TOOLS = [
                     "replace it (the old file is kept as ecadlib.toml.bak).",
      "inputSchema": {"type": "object", "required": ["toml"],
                      "properties": {"toml": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}}},
+    {"name": "agent_watch_scan",
+     "description": "Library agent watch step: scan the watched projects and BOMs (rules [agent.watch] sources, or the "
+                    "sources given: bom_file / folder / altium_project / a365_project with a ref) and return the parts that "
+                    "are new (not yet in the workspace library), changed (footprint, value, datasheet or LCSC) or removed "
+                    "since the last scan, plus per-source status and errors. A source that fails keeps its last state. "
+                    "dry_run reports without saving the scan state. Altium 365 projects need NEXAR_TOKEN.",
+     "inputSchema": {"type": "object",
+                     "properties": {"sources": {"type": "array", "items": {"type": "object", "required": ["type", "ref"],
+                                    "properties": {"type": {"type": "string", "enum": ["bom_file", "folder", "altium_project",
+                                                                                        "a365_project"]},
+                                                   "ref": {"type": "string"}, "name": {"type": "string"},
+                                                   "workspace": {"type": "string"}, "variant": {"type": "string"}}}},
+                                    "dry_run": {"type": "boolean", "default": False}}}},
     {"name": "list_example_specs",
      "description": "Return the example package specs (useful as templates for preview_footprint).",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -323,6 +336,8 @@ def call_tool(ws, name, args):
             return ws.project_bom(args["project"], args.get("variant") or None)
         if name == "where_used":
             return ws.where_used(args["projects"], args.get("part") or None, args.get("plan") or None)
+        if name == "agent_watch_scan":
+            return ws.agent_watch_scan(args.get("sources") or None, args.get("dry_run") is True)
         if name == "list_example_specs":
             return ws.example_specs()
         if name == "propose_rules":

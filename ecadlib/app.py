@@ -776,6 +776,15 @@ class Workspace:
         """Read-only comparison of the plan with the workspace (new, changed on either side, conflicts, deleted)."""
         return self._a365_run("status", workspace_url, bom, None, client)
 
+    # ------------------------------------------------------------------ library agent: watch (ecadlib.agent_watch)
+    def agent_watch_scan(self, sources=None, dry_run=False, client=None):
+        """New / changed / removed parts in the watched projects and BOMs ([agent.watch] sources, or `sources`), compared
+        with the last scan (agent/watch_state.json; dry_run leaves it alone). Relative refs are workspace-relative."""
+        from . import agent_watch as AW
+        rep = AW.scan_report(self, sources=sources, client=client, dry_run=dry_run)
+        rep["state"] = self.rel(rep["state"])
+        return rep
+
     # ------------------------------------------------------------------ library rules (ecadlib.rules / rules_infer)
     def rules_file(self):
         """<workspace>/ecadlib.toml (or ecadlib_rules.json when only that exists)."""

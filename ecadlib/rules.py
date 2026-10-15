@@ -75,7 +75,12 @@ DEFAULTS = {
                   "can", "eth", "ports", "other_out", "nc", "ground", "ep"],
         "sides": {},                           # group -> left | right | top | bottom (overrides)
     },
+    "agent": {                                 # library agent; [agent.watch]: ecadlib.agent_watch (no sources = off)
+        "watch": {"sources": [], "interval": 3600, "include": [], "exclude": []},
+    },
 }
+WATCH_TYPES = ("bom_file", "folder", "altium_project", "a365_project")
+WATCH_SOURCE_KEYS = ("type", "ref", "name", "workspace", "variant", "include", "exclude")
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
@@ -185,6 +190,9 @@ def validate(raw, where="ecadlib.toml"):
             _err(where, f"[{sec}]", "must be a table")
         for k, v in val.items():
             key = f"{sec}.{k}"
+            if (sec, k) == ("agent", "watch") and k in DEFAULTS[sec]:
+                _check_watch(where, v)
+                continue
             if k not in DEFAULTS[sec]:
                 close = difflib.get_close_matches(k, DEFAULTS[sec], 1)
                 _err(where, key, f"is not a known key" + (f" (did you mean {sec}.{close[0]}?)" if close else
@@ -256,6 +264,40 @@ def validate(raw, where="ecadlib.toml"):
             raise RulesError(str(e)) from None
     _check_symbols(where, raw.get("symbols") or {})
     return raw
+
+
+def _check_watch(where, w):
+    """[agent.watch]: sources = [{type, ref, ...}], interval (seconds), include / exclude globs."""
+    if not isinstance(w, dict):
+        _err(where, "agent.watch", "must be a table")
+    for k, v in w.items():
+        key = f"agent.watch.{k}"
+        if k not in DEFAULTS["agent"]["watch"]:
+            _err(where, key, f"is not a known key; known in [agent.watch]: {', '.join(DEFAULTS['agent']['watch'])}")
+        if k == "interval" and (not isinstance(v, int) or isinstance(v, bool) or not 60 <= v <= 30 * 86400):
+            _err(where, key, "must be a whole number of seconds from 60 to 2592000")
+        if k in ("include", "exclude") and (not isinstance(v, list) or not all(isinstance(x, str) for x in v)):
+            _err(where, key, "must be a list of glob patterns")
+        if k == "sources":
+            if not isinstance(v, list):
+                _err(where, key, "must be a list of { type = ..., ref = ... } tables")
+            for i, s in enumerate(v):
+                sk = f"{key}[{i}]"
+                if not isinstance(s, dict):
+                    _err(where, sk, "must be a table such as { type = \"bom_file\", ref = \"boms/main.csv\" }")
+                bad = [x for x in s if x not in WATCH_SOURCE_KEYS]
+                if bad:
+                    _err(where, f"{sk}.{bad[0]}", f"is not a known key; known: {', '.join(WATCH_SOURCE_KEYS)}")
+                if s.get("type") not in WATCH_TYPES:
+                    _err(where, f"{sk}.type", f"= {s.get('type')!r}: must be one of {', '.join(WATCH_TYPES)}")
+                if not isinstance(s.get("ref"), str) or not s["ref"].strip():
+                    _err(where, f"{sk}.ref", "must be a path, folder or Altium 365 project name / id")
+                for x in ("name", "workspace", "variant"):
+                    if x in s and not isinstance(s[x], str):
+                        _err(where, f"{sk}.{x}", "must be text")
+                for x in ("include", "exclude"):
+                    if x in s and (not isinstance(s[x], list) or not all(isinstance(g, str) for g in s[x])):
+                        _err(where, f"{sk}.{x}", "must be a list of glob patterns")
 
 
 def _check_symbols(where, sy):
@@ -623,6 +665,9 @@ HELP = {
     "symbols.layout_pins": "parts with at least this many pins get the grouped layout; smaller parts keep the plain one (0 = never)",
     "symbols.split_pins": "more pins than this: a multi-part symbol (power part + signal parts); 0 = one part always",
     "symbols.stack_power": "stack (one pin shown, the rest on top of it) | hide (the rest hidden, tied by name) | none",
+    "agent": "Library agent. [agent.watch]: projects and BOMs to watch for new / changed / removed parts (ecadlib agent-watch)",
+    "agent.watch": "sources = [{ type = bom_file|folder|altium_project|a365_project, ref = path or project, name, workspace, "
+                   "variant, include, exclude }], interval = seconds between scans, include / exclude = globs for folders",
     "symbols.order": "group order on each side; groups: power analog power_out ground ep reset clock debug usb adc other_in uart i2c spi can eth ports other_out nc",
 }
 

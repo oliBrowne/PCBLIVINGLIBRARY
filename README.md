@@ -867,6 +867,35 @@ grid = 100              # 50 or 100 mil
 
 **Checked:** an STM32F103-style 100-pin LQFP, an ESP32-WROOM-32 module and an FT232RL USB bridge (tests/fixtures/symbols). Each was checked for grouping, order, overlapping pins and grid, read back with `read_schlib`, and parsed as KiCad. The previews were inspected by eye. **Not checked:** nothing has been opened in Altium Designer or KiCad yet. Name widths are estimated at 70 mil per character, so bodies may be a little wider than needed. Pins whose names match no rule fall back to "other" and are placed by type.
 
+## 20. `agent_watch.py`: watch projects and BOMs (library agent, step 1)
+
+`ecadlib agent-watch [--dry-run] [--source TYPE:REF] [--json]` (Workspace `agent_watch_scan`, MCP `agent_watch_scan`)
+scans the projects and BOMs you watch and reports, per part (key `manufacturer|MPN`), what is **new** (and not already in
+the workspace library: the KiCad index the triage uses, the librarian plans' ready parts, Altium 365 components pulled
+into a plan or an `a365_state.json`), **changed** (footprint, value, datasheet or LCSC number) or **removed** since the
+last scan. The agent (`ecadlib agent`) turns these into queue items. Sources go in the rules (default: none, so nothing
+is watched):
+
+```toml
+[agent.watch]
+interval = 3600                                   # seconds between scans when the agent serves
+exclude = ["old/*"]                               # globs for folder sources (include = [...] too)
+sources = [
+  { type = "folder", ref = "uploads" },           # every BOM under a folder; uploads/<time>-<random>/<name>: newest upload per name
+  { type = "bom_file", ref = "boms/main.csv" },   # CSV / TSV / XLSX, read like `ecadlib triage`
+  { type = "altium_project", ref = "boards/Main/Main.PrjPcb" },
+  { type = "a365_project", ref = "Main board", workspace = "https://acme.365.altium.com", variant = "" },
+]
+```
+
+State is `<workspace>/agent/watch_state.json` (atomic writes, a lock). A second scan with nothing changed returns
+nothing; unchanged files (size and time, else hash) are not parsed again, so a 20,000-line BOM rescans in about 0.1 s
+(first scan about 2 s). A source that fails (missing file, unreadable BOM, Nexar down, no `NEXAR_TOKEN`) is recorded with
+its error and keeps its last good parts, so nothing is reported removed because of an outage. A renamed source with the
+same content (same file hash, same folder files, same Altium 365 project id) takes over the old state. Altium 365 projects
+are read through Nexar (`desProjects`, `desProjectById` → `design.variants` → `bom.items`); the queries are checked against
+the bundled Nexar schema and tested with a fake client only: **not yet run against a live workspace**.
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:
