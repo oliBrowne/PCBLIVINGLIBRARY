@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from . import providers as P
+from . import sheetsafe as SS
 from .altium365 import M_UPDATE_PARAMS, Nexar as DesignClient
 from .httpcache import CachedHTTP
 from .kicad_index import norm_mpn
@@ -578,7 +579,7 @@ def write_reports(rows, out, meta, provs, unconfigured, http, a365=None):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out.with_suffix(".csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=COLS, extrasaction="ignore")
+        w = SS.DictWriter(f, fieldnames=COLS, extrasaction="ignore")
         w.writeheader()
         w.writerows({**r, "sources": ",".join(r["sources"])} for r in rows)
     st = lambda s: LABEL.get(s, s or "-")

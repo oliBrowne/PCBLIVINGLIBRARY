@@ -32,6 +32,7 @@ import argparse, configparser, csv, datetime, hashlib, json, math, os, re, shuti
 from pathlib import Path, PureWindowsPath
 
 from . import altium_lib as AL, sexpr
+from . import sheetsafe as SS
 from .kicad_index import norm_mpn
 
 DEFAULT_SUFFIXES = [
@@ -435,7 +436,7 @@ def remap_bom(bom, mapping, out):
                 raw.iat[i, j] = (f"{lib}:" if lib else "") + m[kind][ref]
                 n += 1
     out = Path(out)
-    raw.to_csv(out, header=False, index=False)
+    SS.frame(raw).to_csv(out, header=False, index=False)
     return out, n
 
 
@@ -457,10 +458,10 @@ def write_reports(groups, mapping, stem, plan, errors=()):
     rows = report_rows(groups)
     fields = ["group", "kind", "key", "member", "keeper", "origin", "where", "mpn", "used_by", "status"]
     with open(stem.with_suffix(".csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(rows)
+        w = SS.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(rows)
     mp = stem.parent / f"{stem.name}_map.csv"
     with open(mp, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["kind", "from", "to", "file", "parts", "note"]); w.writeheader(); w.writerows(mapping)
+        w = SS.DictWriter(f, fieldnames=["kind", "from", "to", "file", "parts", "note"]); w.writeheader(); w.writerows(mapping)
     count = lambda k: sum(g["kind"] == k for g in groups)
     md = [f"# Duplicates - `{plan}`", "",
           f"{count('mpn')} part groups (same MPN), {count('footprint')} footprint groups (same geometry), "

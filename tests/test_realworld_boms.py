@@ -1,6 +1,6 @@
 """BOMs the way engineers actually export them, through every reader, plus the error contracts the fuzzers rely on.
 Offline. Run:  python3 -m tests.test_realworld_boms"""
-import contextlib, io, json, tempfile, time
+import contextlib, io, json, re, tempfile, time
 from pathlib import Path
 
 import openpyxl
@@ -248,3 +248,94 @@ def test_dblib_xlsx_keeps_altium_parameter_references_as_text():
         cells = [c for ws in wb for row in ws.iter_rows() for c in row]
         assert not [c.coordinate for c in cells if c.data_type == "f"], "formulas in parts.xlsx"
         assert "=Value" in [c.value for c in cells]
+
+
+EVIL = ('Designator,Qty,Value,Footprint,Manufacturer,MPN,Description\n'
+        'U1,1,=1+1,SOT-23,@SUM(A1),"=HYPERLINK(""http://x"",""y"")","=cmd|\' /C calc\'!A0"\n'
+        'R1,1,-5V,R_0603_1608Metric,+ACME,RC0603FR-0710KL,-40 to 85 C\n'
+        'C1,1,100n,C_0402_1005Metric,Samsung,CL05B104KO5NNNC,"\tTAB"\n')
+
+
+def _risky_cells(folder, allow_param_refs=()):
+    import csv as _csv, re
+    from ecadlib import sheetsafe as SS
+    bad = []
+    for f in Path(folder).rglob("*.csv"):
+        with open(f, newline="", encoding="utf-8", errors="replace") as fh:
+            for row in _csv.reader(fh):
+                for c in row:
+                    if SS.cell(c, f.name in allow_param_refs) != c:
+                        bad.append((f.name, c))
+    return bad
+
+
+def test_reports_neutralise_spreadsheet_formulas():
+    """BOM cells such as =HYPERLINK(...) / @SUM / +x / -x / tab went into every report CSV as live formulas."""
+    from ecadlib import sheetsafe as SS
+    assert SS.cell("=1+1") == "'=1+1" and SS.cell("-5") == "-5" and SS.cell("-1.5e-3") == "-1.5e-3" and SS.cell("-") == "-"
+    assert SS.cell("=Value", param_refs=True) == "=Value" and SS.cell("=HYPERLINK(1)", param_refs=True).startswith("'")
+    assert SS.unquote(SS.cell("=1+1")) == "=1+1" and SS.unquote("'abc") == "'abc"
+    with tempfile.TemporaryDirectory() as d:
+        bom = _write("bom.csv", EVIL, d)
+        out = f"{d}/out"
+        runs = [["triage", str(bom), "-o", f"{out}/t", "--offline", "--cache", f"{d}/c"],
+                ["sourcing", str(bom), "-o", f"{out}/s", "--offline", "--cache", f"{d}/c"],
+                ["librarian", str(bom), "-o", f"{out}/lib", "--offline", "--cache", f"{d}/c", "--sources", "kicad"],
+                ["release-check", f"{out}/lib/plan.json", "-o", f"{out}/rc"],
+                ["dedupe", f"{out}/lib/plan.json", "-o", f"{out}/dd", "--bom", str(bom)],
+                ["dblib-sync", f"{out}/lib/plan.json", "--to", f"{out}/dbs"],
+                ["dblib", str(bom), "-o", f"{out}/dblib"],
+                ["where-used", "--projects", d, "-o", f"{out}/wu"]]
+        for argv in runs:
+            rc, text = _cli(*argv)
+            assert "Traceback" not in text, (argv, text)
+        csvs = sorted(p.name for p in Path(out).rglob("*.csv"))
+        assert len(csvs) >= 6, csvs
+        bad = _risky_cells(out, allow_param_refs={p.name for p in Path(f"{out}/dbs").glob("*.csv")})
+        assert not bad, bad
+        tri = (Path(out) / "t.csv").read_text()
+        assert "'=HYPERLINK" in tri and ",'-5V," in tri and ",'@SUM(A1)," in tri, tri
+        mapped = next(Path(out).rglob("*bom*.csv"))                    # dedupe's mapped copy of the BOM
+        lines, _ = T.read_bom(mapped)
+        assert lines[0]["mpn"].startswith("=HYPERLINK") and lines[0]["value"] == "=1+1", lines[0]   # read back unquoted
+        wb = openpyxl.load_workbook(f"{out}/dblib/parts.xlsx")
+        vals = [c for ws in wb for row in ws.iter_rows() for c in row]
+        assert not [c for c in vals if c.data_type == "f"]
+
+
+def test_excel_numbers_never_in_exponent_notation():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Designator", "Quantity", "MPN", "Value", "Footprint"])
+    ws.append(["C1", 1.0, "GRM155R71C104KA88D", 1e-7, "0402"])
+    ws.append(["C2", 2, None, 2.2e-6, "0603"])
+    ws.append(["J1", 1, 1050170001.0, None, None])
+    ws.append(["R1", 1, None, 4700, "0603"])
+    f = Path(tempfile.mkdtemp()) / "bom.xlsx"
+    wb.save(f)
+    lines, _ = T.read_bom(f)
+    assert [l.get("value") for l in lines] == ["100n", "2.2u", "", "4700"], lines
+    assert lines[0]["qty"] == "1" and lines[2]["mpn"] == "1050170001", lines
+    csvl, _ = T.read_bom(_write("bom.csv", "Designator,Value,Footprint\nC1,1e-07,0402\n"))
+    assert csvl[0]["value"] == "100n"
+    from ecadlib import altium_export as AE
+    names = [r["Part Number"] for df in AE.to_rows(lines).values() for r in df.to_dict("records")]
+    assert names and not [n for n in names if re.search(r"\de[-+]?\d", n, re.I)], names
+
+
+def test_utf16_without_bom():
+    t = "Designator\tComment\tQuantity\r\nU1\tSTM32F103C8T6\t1\r\nR1\t10k\t1\r\n"
+    for enc in ("utf-16-le", "utf-16-be"):
+        lines, _ = T.read_bom(_write("bom.csv", t.encode(enc)))
+        assert [l["value"] for l in lines] == ["STM32F103C8T6", "10k"], (enc, lines)
+    with tempfile.TemporaryDirectory() as d:
+        ws = Workspace(d, [], providers=["digikey"], offline=True)
+        rel = ws.save_upload("bom.txt", t.encode("utf-16-le"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert len(ws.triage(rel)["rows"]) == 2
+    try:                                                      # real binary data is still refused
+        T.read_bom(_write("x.csv", bytes(range(256)) * 4))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("binary accepted")

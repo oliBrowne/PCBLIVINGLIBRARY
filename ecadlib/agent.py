@@ -40,7 +40,7 @@ it and restores the watch state."""
 import argparse, contextlib, copy, csv, datetime as _dt, hashlib, json, os, re, shutil, signal, subprocess, sys, tempfile, threading, time
 from pathlib import Path
 
-from . import rules as RU
+from . import rules as RU, sheetsafe as SS
 
 AGENT = "ecadlib-agent"
 BOM_NAME = "library_bom.csv"
@@ -292,7 +292,7 @@ def write_bom(ws, lines):
     f.parent.mkdir(parents=True, exist_ok=True)
     tmp = f.with_name(f.name + ".tmp")
     with open(tmp, "w", newline="") as fh:
-        w = csv.writer(fh)
+        w = SS.writer(fh)                                # read_bom undoes the formula guard
         w.writerow([h for _, h in BOM_COLS])
         for key in sorted(lines):
             w.writerow([str(lines[key].get(k) or "") for k, _ in BOM_COLS])
