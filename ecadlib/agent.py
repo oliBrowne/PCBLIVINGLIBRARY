@@ -20,7 +20,8 @@ One pass (run_once):
            ecadlib/agent-<batch> in the library git repo with the changed library files and the pictures (under
            [agent] pictures_path), body with before/after pictures, proof findings and doubts. The commit is made with
            git plumbing (a temporary index), so the working tree and HEAD of the repo are never touched; pushes are
-           never forced, and an open batch PR is updated, never duplicated. No git repo, no remote or no token: the PR
+           never forced, and an open batch PR is updated, never duplicated. On GitLab (origin on a gitlab host, or
+           [agent] git_host = "gitlab") the same happens with merge requests (ecadlib/forge.py). No git repo, no remote or no token: the PR
            body and pictures are written to <ws>/agent/batches/<id>/ only, and the report says why.
   PUSH     approved items go to Altium 365 through altium365.push (release check and approvals still gate it), when
            [agent] auto_push is true (before BUILD, in the same pass) or with `ecadlib agent push`. Only the build a
@@ -335,7 +336,7 @@ def librarian_builder(ws, bom, out, refresh, rules, log=None, libs=(), http=None
         reader = D.Reader(out, cache, None, rules, http, batch=True, wait=False, log=log or (lambda *a: None))
     libs = [str(l) for l in libs] + [str(l) for l in cfg["libs"]] + [str(Path(ws) / "footprints")]
     return L.run(str(bom), libs, out, None, list(refresh) if refresh else None, False, [], offline, cache, 0.5,
-                 "jlcpcb_search,easyeda", http=http, log=log or (lambda *a: None), rules=rules,
+                 None, http=http, log=log or (lambda *a: None), rules=rules,
                  datasheet_batch=bool(reader), reader=reader)
 
 
@@ -595,8 +596,14 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
         try:
             base = cfg["base_branch"] or git(repo, "symbolic-ref", "--short", "HEAD")
             remote = git(repo, "remote", "get-url", "origin", ok=(0, 2, 128))
-            slug = cfg["github_repo"] or github_slug(remote)
-            token = env.get(cfg["github_token_env"]) if cfg["github_token_env"] else None
+            from . import forge
+            kind = forge.host_kind(cfg, remote)
+            if kind == "gitlab":
+                slug = cfg["gitlab_project"] or forge.project_from_remote(remote, cfg["gitlab_api"])
+                tok_env, host = cfg["gitlab_token_env"], "GitLab"
+            else:
+                slug, tok_env, host = cfg["github_repo"] or github_slug(remote), cfg["github_token_env"], "GitHub"
+            token = env.get(tok_env) if tok_env else None
             start = base
             if remote:
                 # start from the remote's base, never the local one: local commits nobody pushed (work in progress,
@@ -621,10 +628,19 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
             if not remote:
                 reason = f"branch {rec['branch']} committed in {repo}, but the repo has no origin remote: no PR"
             elif not token:
-                reason = (f"branch {rec['branch']} committed locally; no GitHub token in ${cfg['github_token_env']}: "
+                reason = (f"branch {rec['branch']} committed locally; no {host} token in ${tok_env}: "
                           "not pushed, no PR")
             elif not slug:
-                reason = "origin is not a GitHub remote and [agent] github_repo is empty: not pushed, no PR"
+                reason = (f"origin is not a {host} remote and [agent] {'gitlab_project' if kind == 'gitlab' else 'github_repo'}"
+                          " is empty: not pushed, no PR")
+            elif kind == "gitlab":
+                git(repo, "push", "origin", f"refs/heads/{rec['branch']}:refs/heads/{rec['branch']}")   # never --force
+                gl = forge.GitLab(slug, token, session, cfg["gitlab_api"])
+                link = lambda it, p: gl.raw_url(sha, f"{cfg['pictures_path'].strip('/')}/{_safe(batch_id)}/"
+                                                     f"{_safe(it['id'])}/{Path(p).name}")
+                body = pr_body(batch_id, items, link, t, removed)
+                forge.upsert_mr(gl, rec, f"Library agent: {len(items)} part(s) to review (batch {batch_id})", body, base)
+                log(f"agent: MR {rec['pr_action']} {rec['pr_url']}")
             else:
                 git(repo, "push", "origin", f"refs/heads/{rec['branch']}:refs/heads/{rec['branch']}")   # never --force
                 from .upkeep import GitHub
@@ -665,11 +681,15 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
 
 
 def _github(ws, cfg, env, session):
-    """(GitHub client, None) for the library repo's PRs, or (None, why not)."""
+    """(GitHub or GitLab client, None) for the library repo's PRs / MRs, or (None, why not)."""
     repo = repo_root(Path(cfg["library_repo"]) if cfg["library_repo"] else ws)
     if repo is None:
         return None, "no git repository"
     remote = git(repo, "remote", "get-url", "origin", ok=(0, 2, 128))
+    from . import forge
+    kind, gl, why = forge.client(cfg, remote, env, session)
+    if kind == "gitlab":
+        return gl, why
     slug = cfg["github_repo"] or github_slug(remote)
     token = env.get(cfg["github_token_env"]) if cfg["github_token_env"] else None
     if not (remote and slug and token):
@@ -702,9 +722,16 @@ def close_batch(ws, rules, batch_id, members, now=None, env=None, session=None, 
             gh, why = _github(ws, cfg, env, session)
             if gh is None:
                 raise RuntimeError(f"PR not updated: {why}")
-            gh.api("POST", f"issues/{rec['pr_number']}/comments", {"body": text})
+            gitlab = getattr(gh, "kind", "") == "gitlab"
+            if gitlab:
+                gh.comment_mr(rec["pr_number"], text)
+            else:
+                gh.api("POST", f"issues/{rec['pr_number']}/comments", {"body": text})
             if not pushed:                               # a PR holding pushed parts is never closed by the agent
-                gh.api("PATCH", f"pulls/{rec['pr_number']}", {"state": "closed"})
+                if gitlab:
+                    gh.close_mr(rec["pr_number"])
+                else:
+                    gh.api("PATCH", f"pulls/{rec['pr_number']}", {"state": "closed"})
                 rec["pr_state"] = "closed"
         except Exception as e:                      # tried again next pass
             rec["close_note"] = f"{type(e).__name__}: {e}"
@@ -829,11 +856,13 @@ def _not_as_approved(it, pi, out):
 
 # ------------------------------------------------------------------ one pass
 def run_once(workspace, rules=None, dry_run=False, client=None, now=None, *, watcher=None, queue=None, prover=None,
-             builder=None, upkeep=None, do_upkeep=None, github_session=None, a365=None, env=None, libs=(), log=None):
+             builder=None, upkeep=None, do_upkeep=None, github_session=None, a365=None, env=None, libs=(), log=None,
+             notifier=None):
     """One pass: scan -> queue -> build -> pictures -> prove -> review/failed -> batch PR -> push (auto_push) ->
     upkeep (when due). client goes to the watcher and the prover (their API clients). Returns a report dict.
     Injectable for tests: watcher/queue/prover (the sibling modules), builder(ws, bom, out, refresh, rules, log),
-    upkeep(ws, rules, now) -> findings, github_session (requests-like), a365 (Nexar-like client), env."""
+    upkeep(ws, rules, now) -> findings, github_session (requests-like), a365 (Nexar-like client), env,
+    notifier(url, body, headers, timeout) -> HTTP status (the [notify] webhook sender; notify.http_sender by default)."""
     ws = Path(workspace).resolve()
     rules = RU.resolve(rules, ws)
     from .agent_queue import use_rules
@@ -859,10 +888,22 @@ def run_once(workspace, rules=None, dry_run=False, client=None, now=None, *, wat
             if not dry_run:
                 write_status(ws, state="error", last_error=rep["error"], last_run=_summary(rep))
             raise
+        if not dry_run and (rules.get("notify") or {}).get("targets"):
+            rep["notify"] = _notify(rules, rep, q, env, log, notifier)
         rep["finished"] = stamp() if now is None else t
         if not dry_run:
             write_status(ws, state="idle", last_run=_summary(rep), enabled=cfg["enabled"])
     return rep
+
+
+def _notify(rules, rep, q, env, log, sender=None):
+    """[notify] webhooks for this pass (batch ready, parts held, upkeep findings, lifecycle). Never raises: a failed
+    post is in the report, the run goes on."""
+    try:
+        from . import notify as N
+        return N.send(rules, N.agent_events(rep, lambda i: _get_or_none(q, i)), env=env, sender=sender, log=log)
+    except Exception as e:
+        return [{"target": "-", "event": "-", "result": f"error: {type(e).__name__}: {e}"}]
 
 
 def _summary(rep):
@@ -912,7 +953,8 @@ def _pass(ws, rules, cfg, t, dry_run, client, now, watcher, q, prover, builder, 
             new = [finding_item(f, now) for f in raw if str(f.get("kind", "")).lower() not in SKIP_UPKEEP]
             findings += new
             write_json(upend, findings)            # upkeep remembers them as seen: keep them until they are queued
-            rep["upkeep"] = {"ran": t, "findings": len(new)}
+            rep["upkeep"] = {"ran": t, "findings": len(new), "items": [
+                {k: (f.get("change") or {}).get(k) for k in ("check", "kind", "item", "was", "now")} for f in new]}
             st = read_json(ws / "agent" / "agent_state.json", {})
             write_json(ws / "agent" / "agent_state.json", dict(st, last_upkeep=t))
         except Exception as e:

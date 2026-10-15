@@ -74,6 +74,9 @@ CASES = [
     (["doctor", "--workspace", "{out}/ws", "--lib", "{in}/lib"], (0, 1)),
     (["status", "--workspace", "{out}/ws"], (0,)),
     (["completion", "bash"], (0,)),
+    (["plugins", "list"], (0,)),
+    (["plugins", "export", "nosuch", "{out}/lib/plan.json", "-o", "{out}/px"], (2,)),
+    (["notify", "show", "--rules", "{in}/ecadlib.toml"], (0,)),
 ]
 HELP_ONLY = {"ui", "mcp", "a365", "project"}       # need a server / network / an Altium project: -h (and mcp below)
 

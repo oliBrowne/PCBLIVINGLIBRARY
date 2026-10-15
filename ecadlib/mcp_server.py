@@ -308,6 +308,16 @@ TOOLS = [
                     "set (names only), whether the rules file is valid (file:line of the error), the workspace is "
                     "writable and the library folders exist. Each check is OK / WARN / FAIL with a fix hint.",
      "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "list_plugins",
+     "description": "Installed part-source and exporter plugins (Python entry points ecadlib.providers / ecadlib.exporters), "
+                    "the part-source order in use ([providers] order) and the [notify] webhook targets (names of their "
+                    "environment variables and whether they are set; never the URLs).",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "plugin_export",
+     "description": "Run an exporter plugin on the librarian plan of a BOM; files go to <workspace>/exports/<name>/.",
+     "inputSchema": {"type": "object", "required": ["name", "bom"],
+                     "properties": {"name": {"type": "string", "description": "exporter name from list_plugins"},
+                                    "bom": {"type": "string", "description": "the BOM the librarian ran on"}}}},
 ]
 
 
@@ -420,6 +430,10 @@ def call_tool(ws, name, args):
             return ws.status()
         if name == "doctor":
             return ws.doctor()
+        if name == "list_plugins":
+            return ws.plugins()
+        if name == "plugin_export":
+            return ws.plugin_export(args["name"], args["bom"])
     raise KeyError(f"unknown tool {name}")
 
 
