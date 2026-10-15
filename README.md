@@ -307,8 +307,8 @@ ecadlib footprint-bench [--offline] [--fixture tests/fixtures/kicad_bench.json] 
   `kicad_import`'s converter), NPTH holes, mounting/shield pads, KiCad mask margins as manual mask expansion (BGA NSMD),
   tented thermal vias, paste windows on Top Paste, keep-outs, and a polygon pad as a small anchor pad plus regions with
   the exact outline on Top Layer and Top Solder (and Top Paste when it has paste). Altium gives primitives that touch a
-  pad the pad's net on the board. `tests/test_altium_tht.py` approves all 20 advanced specs and reads each `.PcbLib`
-  back (altium_lib's reader and pyaltiumlib): 1069 pads, 49 plated through-hole, 3 NPTH, 5 slots, 14 paste windows and
+  pad the pad's net on the board. `tests/test_altium_tht.py` approves all 41 advanced specs and reads each `.PcbLib`
+  back (altium_lib's reader and pyaltiumlib): 2767 pads, 119 plated through-hole, 3 NPTH, 5 slots, 22 paste windows and
   the polygon pad match the `.kicad_mod`. Not checked: none of them has been opened in Altium Designer. The footprint
   preview fits its view to the pads, holes, body and courtyard, so connectors with pin 1 at 0,0 are drawn whole.
 
@@ -323,7 +323,16 @@ ecadlib footprint-bench [--offline] [--fixture tests/fixtures/kicad_bench.json] 
 | Connectors | JST XH 2 and 4 pin, JST PH SMD, JST SH SMD, Molex KK 254 (table in mil), Molex PicoBlade (bottom-view drawing from pin 1), USB-C HRO TYPE-C-31-M-12 (datum origin, slots, NPTH, stacked pads) | 50/50 | 7/7 |
 | IC | SOT-23-6 | 6/6 | 1/1 |
 
-1067/1067 pads (100 %), 20/20 footprints, 18/20 courtyards, 20/20 clean in `footprint_check`. The connector and header
+1067/1067 pads (100 %), 20/20 footprints, 18/20 courtyards, 20/20 clean in `footprint_check`.
+
+Widened 2026-10-15 to 57 footprints, 2942/2942 pads within 0.01 mm, 53/57 courtyards (the four dual-row SMD headers,
+as above), 57/57 clean: eight more BGAs (rows A..N, A..Y and AA..AF, BGA-672 with A1 depopulated, a WLCSP-36 at
+0.4 mm, BGA-68 with 13 single balls missing, the 2 x 3 x 15 SDRAM grid, maker's lands where IPC differs), QFN-16 and
+DFN-8 with thermal vias (custom pad tables; vias may have their own row pitch, `thermal_vias.pitch_y`; KiCad's B.Cu
+copy of the exposed pad is not compared), JST PH / XH 6 / GH, a 2x20 and a 1.00 mm header, six SMD headers built
+from the land tables alone (single-row headers now have their own table), and 15 IPC chip / SOT / SO / QFP / QFN parts.
+`tests/test_footprint_review.py` adds property tests over random BGA / header / connector specs (pad count, no
+overlaps, courtyard, symmetry, PcbLib read back = `.kicad_mod` including mask and paste margins). The connector and header
 specs carry the datasheet's numbers (pitch, pad sizes, hole sizes, body), which KiCad's library also follows, so these
 rows mostly test the frame handling (units, y axis, bottom view, origins), the derived pad sizes and the courtyard; the
 BGA lands are computed from the ball size (except UFBGA-132, whose land comes from the ST datasheet). Not checked: real
@@ -841,7 +850,7 @@ A 100-pin MCU used to come out as one long column per side, in pin-number order.
 * **Groups.** Pins are grouped by name, and by type when the name says nothing. Power (VDD, 3V3, VBAT), analog supply (VDDA, VREF+) and power out (VCAP, 3V3OUT) go on top; ground (GND, VSS, AGND, VREF-) and the exposed pad go on the bottom. Reset/boot/enable, clock/oscillator, debug (SWD, JTAG, boot UART such as U0TXD), USB, ADC/DAC and other inputs go on the left. UART, I2C, SPI, CAN, Ethernet, ports, other outputs and NC go on the right.
 * **Names.** Alternate-function names are grouped by their first name (`PA9/USART1_TX` and `PH0-OSC_IN` are port pins). Overbars and active-low marks (`~{RESET}`, `/RESET`, `RESET#`, `RST_N`) are ignored for grouping.
 * **Ports.** Each port is its own block, sorted by number (PA0..PA15, then PB0...). Blocks are separated by one empty grid row. Whole ports move between the left and right side to keep the body roughly square. A port is split only when that saves more than 6 rows.
-* **Stacking.** Power pins that share a name (VDD_1..VDD_5) are stacked: one pin shows its name and number, and the rest sit on the same spot with name and number hidden. KiCad gets the rest as hidden passive pins (KLC S4.3). `stack_power = "hide"` makes them hidden pins tied to the net by name instead; `"none"` draws every pin.
+* **Stacking.** Power pins that share a name (VDD, or VDD_1..VDD_5 numbered 1..n) are stacked: one pin shows its name and number, and the rest sit on the same spot with name and number hidden. Names that only look alike are never stacked: VDD1 / VDD2 (an isolator's two sides), VDD18 / VDD33 and VDD_18 / VDD_33 are different supplies. KiCad gets the rest as hidden passive pins (KLC S4.3). `stack_power = "hide"` makes them hidden pins tied to the net by name instead (Altium HiddenNetName; the KiCad export names those hidden power pins after that net, since KiCad connects them by name); `"none"` draws every pin.
 * **Grid.** Everything is on the grid: body edges, pin ends and pin pitch (100 mil, which is 2.54 mm in KiCad).
 * **Multi-part.** With `split_pins` set, larger parts become multi-part symbols. Part A holds power, ground and NC; the other parts hold the signal blocks in order, at most `unit_pins` pins each.
 

@@ -1,0 +1,12 @@
+{
+  "name": "PinHeader_2x20_P2.54mm_Vertical",
+  "description": "pin header, 2x20, 2.54 mm pitch",
+  "package_type": "pin_header",
+  "pin_count": 40,
+  "cols": 2,
+  "rows": 20,
+  "pitch": 2.54,
+  "source": {
+    "drawing": "recommended PCB layout; KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check"
+  }
+}

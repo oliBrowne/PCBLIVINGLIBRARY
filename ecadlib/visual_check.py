@@ -408,6 +408,10 @@ def facts(fp, pin1_names=PIN1_NAMES):
         out["ball_grid"] = {"rows": len(rows), "cols": len(cols), "first_row": rows[0], "last_row": rows[-1],
                             "balls": len(balls)}
         a1 = next((p for p in balls if p["num"] == f"{rows[0]}{cols[0]}"), None)
+        r0 = [p for p in balls if BALL.match(p["num"]).group(1) == rows[0]]
+        c0 = [p for p in balls if int(BALL.match(p["num"]).group(2)) == cols[0]]
+        if a1 is None and r0 and c0:          # A1 depopulated (an index corner): pin 1 is still that corner
+            a1 = {"num": f"{rows[0]}{cols[0]} (no ball)", "x": c0[0]["x"], "y": r0[0]["y"]}
         if a1 and box:
             out["pin1"] = {"num": a1["num"], "x": round(a1["x"], 3), "y": round(a1["y"], 3), "where": _quadrant(a1["x"], a1["y"], box)}
     else:

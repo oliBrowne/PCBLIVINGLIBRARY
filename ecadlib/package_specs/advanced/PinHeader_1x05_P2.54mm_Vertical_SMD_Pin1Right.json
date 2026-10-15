@@ -1,0 +1,14 @@
+{
+  "name": "PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Right",
+  "description": "pin header, 1x05, 2.54 mm pitch, SMD (KiCad's land table, no land given)",
+  "package_type": "pin_header",
+  "pin_count": 5,
+  "cols": 1,
+  "rows": 5,
+  "pitch": 2.54,
+  "mount": "smd",
+  "pin1_side": "right",
+  "source": {
+    "drawing": "recommended PCB layout; KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check"
+  }
+}
