@@ -9,6 +9,7 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Datasheet reader and visual proof (review): `[datasheet] max_cost_usd` now holds on every path (the librarian's synchronous calls, the single-part CLI with new `--rules`/`--yes`, cumulatively across parts) and refuses a model with no known price; collecting an already-submitted batch is never blocked by the cap. A visual proof no longer says "pass" when the model marked every check not_applicable (pad_count / pin_count / pin_numbers must match). Staggered pin headers report their real pitch and alternating numbering. Password-protected or damaged PDFs give a clear error instead of a crash when cut to pages, and a page the model cites outside the pages sent is flagged instead of shown as an original page number.
 - Library agent integration (end-to-end test `tests/test_agent_e2e.py` with the real watch, queue, visual check and agent): the proof now gets the queue item's built footprint, symbol and datasheet (it always said "nothing to check"). `ecadlib agent approve|reject` no longer crashes. A rebuild keeps who asked for it, so that person cannot approve it. A BOM line without an MPN no longer stops the run. A part changed in its source while in review is rebuilt and its PR updated. The queue's batch record gets the PR link. `visual-check PART --workspace` reads librarian plans again. The batch PR links http(s) datasheets and does not name a model when no proof ran.
 
 ### Added
