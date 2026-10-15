@@ -700,6 +700,9 @@ def _gitlab_client(rules, a, runner=None):
     if not proj:
         code, out, _ = (runner or default_runner)(["git", "remote", "get-url", "origin"])
         proj = forge.project_from_remote(out.strip(), api) if code == 0 else None
+        bad = forge.wrong_api_host(api, out.strip()) if proj else None
+        if bad:
+            raise forge.GitLabError(bad + "; or pass --gitlab-api")
     tok_env = ag.get("gitlab_token_env") or "GITLAB_TOKEN"
     token = os.environ.get(tok_env)
     if not token:

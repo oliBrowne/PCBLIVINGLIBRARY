@@ -633,6 +633,8 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
             elif not slug:
                 reason = (f"origin is not a {host} remote and [agent] {'gitlab_project' if kind == 'gitlab' else 'github_repo'}"
                           " is empty: not pushed, no PR")
+            elif kind == "gitlab" and not cfg["gitlab_project"] and forge.wrong_api_host(cfg["gitlab_api"], remote):
+                reason = f"branch {rec['branch']} committed locally; {forge.wrong_api_host(cfg['gitlab_api'], remote)}: no MR"
             elif kind == "gitlab":
                 git(repo, "push", "origin", f"refs/heads/{rec['branch']}:refs/heads/{rec['branch']}")   # never --force
                 gl = forge.GitLab(slug, token, session, cfg["gitlab_api"])
