@@ -930,6 +930,28 @@ class Workspace:
         pr["images"] = {k: [self.rel(f) for f in v] for k, v in pr["images"].items()}
         return pr
 
+    def export_parts(self, bom, fmt="csv", include_held=False, name="ecadlib"):
+        """The library's parts table (stable columns, ecadlib.parts_export) for a BOM's plan, as reports/parts_<bom>.<fmt>."""
+        from . import parts_export as PE
+        if fmt not in ("csv", "json", "xlsx"):
+            raise ValueError(f"format must be csv, json or xlsx, not {str(fmt)[:20]!r}")
+        bom_path, plan_f, _ = self._plan(bom)
+        rows = PE.rows(plan_f, name, include_held)
+        out = PE.write(rows, self.root / "reports" / f"parts_{self._key(bom_path)}.{fmt}", fmt)
+        return {"file": self.rel(out), "parts": len(rows), "columns": PE.COLUMNS}
+
+    def kicad_dblib(self, bom, name="ecadlib", driver=None, include_held=False):
+        """KiCad files (kicad-export) plus a KiCad database library (.kicad_dbl + SQLite) for a BOM's plan, in kicad/<bom>/."""
+        from . import kicad_dblib as KD
+        from .kicad_export import kname
+        bom_path, plan_f, _ = self._plan(bom)
+        out = self.root / "kicad" / self._key(bom_path)
+        rep = KD.build(plan_f, out, kname(str(name))[:60], include_held, self.rules_in_use(), driver or KD.DEFAULT_DRIVER,
+                       export=True, http=CachedHTTP(self.root / "http_cache", offline=self.offline), log=lambda *a: None)
+        return {"folder": self.rel(out), "files": [self.rel(p) for p in sorted(out.iterdir()) if p.is_file()],
+                "tables": rep["tables"], "skipped": rep["skipped"], "warnings": rep["warnings"],
+                "kicad_export": rep.get("kicad_export")}
+
     def example_specs(self):
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data
         return {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(d.glob("*.json"))} if d.exists() else {}

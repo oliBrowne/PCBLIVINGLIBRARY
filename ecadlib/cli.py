@@ -37,6 +37,8 @@
     ecadlib completion bash|zsh|fish              shell completion script (e.g. ecadlib completion bash > ~/.ecadlib.bash)
     ecadlib plugins   list|export NAME PLAN -o DIR   installed part-source / exporter plugins (Python entry points)
     ecadlib notify    show|test [--event E]       [notify] webhooks (Slack, Teams, JSON): targets, send a test message
+    ecadlib kicad-dblib plan.json -o DIR --name LIB [--export]   KiCad database library (.kicad_dbl + SQLite)
+    ecadlib export-parts plan.json --format csv|json|xlsx [-o F]   parts table with stable columns (PLM / ERP)
 
 `ecadlib <command> -h` shows that command's options. --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
 one-line error. ECADLIB_LIB, ECADLIB_WORKSPACE and ECADLIB_CONFIG are defaults for --lib, --workspace and the rules file."""
@@ -81,6 +83,8 @@ COMMANDS = {
     "completion": ("ecadlib.completion", "shell completion script for bash, zsh or fish"),
     "plugins": ("ecadlib.plugins", "installed part-source and exporter plugins; run an exporter on a plan"),
     "notify": ("ecadlib.notify", "webhook notifications ([notify]): show targets, send a test message"),
+    "kicad-dblib": ("ecadlib.kicad_dblib", "KiCad database library: .kicad_dbl (ODBC) + SQLite parts table from a plan"),
+    "export-parts": ("ecadlib.parts_export", "parts table with stable columns as CSV / JSON / XLSX for PLM / ERP imports"),
 }
 
 
