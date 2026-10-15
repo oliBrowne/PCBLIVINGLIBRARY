@@ -14,7 +14,7 @@ Plans (plan.json) keep ecadlib's own parameter names ("Manufacturer Part Number"
 names from [parameters.names] are applied where data leaves ecadlib: Altium 365 push, the DbLib export and sync,
 the KiCad export and the Altium 365 drift check. Part names, folders, footprint names, required fields, default
 parameters, layers and density are applied when the plan and the models are made."""
-import argparse, copy, difflib, json, re, sys
+import argparse, copy, difflib, json, os, re, sys
 from pathlib import Path
 
 FILES = ("ecadlib.toml", "ecadlib_rules.json")
@@ -129,7 +129,13 @@ class RulesError(ValueError):
 
 # ------------------------------------------------------------------ load / merge / validate
 def find(start="."):
-    """The rules file in `start` or one of its parents, else in the current folder or its parents; None if none."""
+    """The rules file in `start` or one of its parents, else in the current folder or its parents; None if none.
+    $ECADLIB_CONFIG (a file path), when set, is used instead of the search (an explicit --rules still wins)."""
+    env = os.environ.get("ECADLIB_CONFIG", "").strip()
+    if env:
+        if not Path(env).expanduser().is_file():
+            raise RulesError(f"ECADLIB_CONFIG={env}: no such file")
+        return Path(env).expanduser().resolve()
     seen = set()
     for base in (Path(start), Path.cwd()):
         try:

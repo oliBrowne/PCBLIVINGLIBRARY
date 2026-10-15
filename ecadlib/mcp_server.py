@@ -298,6 +298,15 @@ TOOLS = [
                                     "render_only": {"type": "boolean"}}}},
     {"name": "list_example_specs",
      "description": "Return the example package specs (useful as templates for preview_footprint).",
+     "inputSchema": {"type": "object", "properties": {}}},    {"name": "workspace_status",
+     "description": "One-screen summary of the workspace (read-only): parts in each librarian plan with ready / held / "
+                    "waiting-for-sign-off counts, the last triage, the last upkeep run and the library agent's state and "
+                    "review-queue counts. Start here to see what needs attention.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "doctor",
+     "description": "Check the setup: Python version, packages and tools (pdftoppm, kicad-cli, git), which API keys are "
+                    "set (names only), whether the rules file is valid (file:line of the error), the workspace is "
+                    "writable and the library folders exist. Each check is OK / WARN / FAIL with a fix hint.",
      "inputSchema": {"type": "object", "properties": {}}},
 ]
 
@@ -407,6 +416,10 @@ def call_tool(ws, name, args):
             return r
         if name == "save_rules":
             return ws.save_rules(args["toml"], args.get("overwrite") is True)
+        if name == "workspace_status":
+            return ws.status()
+        if name == "doctor":
+            return ws.doctor()
     raise KeyError(f"unknown tool {name}")
 
 

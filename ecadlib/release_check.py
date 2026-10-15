@@ -288,6 +288,7 @@ def main(argv=None):
     ap.add_argument("-o", "--out", help="report stem (.md and .csv); default <plan dir>/release_check")
     ap.add_argument("--user", help="who gives the --allow (default: git config user.name/email); see approvals")
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan's folder or here)")
+    ap.add_argument("--json", action="store_true", help="print the result as JSON (plan, report, counts, rows)")
     a = ap.parse_args(argv)
     plan = Path(a.plan)
     items = json.loads(plan.read_text(encoding="utf-8"))
@@ -301,9 +302,14 @@ def main(argv=None):
         post_check(items, plan.parent, rows)
     write_text_atomic(plan, json.dumps(items, indent=2))
     stem = write_report(rows, a.out or plan.parent / "release_check", plan)
+    held = sum(r["status"] == "held" for r in rows)
+    if a.json:                                 # stable shape: README "Machine-readable output (--json)"
+        st = ("ready", "held", "awaiting_approval", "duplicate")
+        print(json.dumps({"plan": str(plan), "report": str(stem.with_suffix(".md")),
+                          "counts": {s: sum(r["status"] == s for r in rows) for s in st}, "rows": rows}, indent=2, default=str))
+        return 2 if held else 0
     for r in rows:
         print(f"  {r['result']:<8} {r['name']:<28} {r['failures'][:110]}")
-    held = sum(r["status"] == "held" for r in rows)
     other = {s: sum(r["status"] == s for r in rows) for s in ("awaiting_approval", "duplicate")}   # approvals / dedupe
     print(f"{sum(r['status'] == 'ready' for r in rows)} ready, {held} held"
           + "".join(f", {n} {s.replace('_', ' ')}" for s, n in other.items() if n) + f" -> {plan}; report {stem.with_suffix('.md')}")
