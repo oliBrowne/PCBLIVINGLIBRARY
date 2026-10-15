@@ -149,7 +149,9 @@ def check_item(item, base=".", rules=None):
             add("pins", "symbol has no pins")
         if not pads:
             add("pins", "footprint has no pads")
-        mech = {p["designator"] for p in pads if not p["designator"] or (p["hole"] and not p["plated"]) or MECH_PAD.fullmatch(p["designator"])}
+        grid = FC.mount_rx([p["designator"] for p in pads]) is FC.MOUNT_GRID     # BGA: H1, H2 .. are balls, not holes
+        mech = {p["designator"] for p in pads if not p["designator"] or (p["hole"] and not p["plated"])
+                or MECH_PAD.fullmatch(p["designator"]) and not (grid and re.fullmatch(r"H\d+", p["designator"]))}
         numbered = {p["designator"] for p in pads} - mech
         if pins - {p["designator"] for p in pads}:
             add("pins", f"symbol pins without a pad: {FC._ranges(pins - {p['designator'] for p in pads})}")

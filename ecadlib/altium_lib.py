@@ -329,6 +329,8 @@ def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
                "paste": None if "F.Paste" in layers else "none"}
         if sexpr.first(p, "solder_mask_margin"):                   # e.g. BGA NSMD: mask opening = land + margin
             pad["mask"] = float(sexpr.first(p, "solder_mask_margin")[1])
+        if "F.Paste" in layers and sexpr.first(p, "solder_paste_margin"):   # e.g. SMD-defined BGA land: paste = land
+            pad["paste"] = float(sexpr.first(p, "solder_paste_margin")[1])
         if p[3] not in SHAPE:
             raise ValueError(f"{fp['name']}: pad shape {p[3]} not supported")
         fp["pads"].append(pad)
@@ -797,6 +799,7 @@ def parse_pcb_data(d):
                          "hole": struct.unpack_from("<i", m, 45)[0], "shape": shape, "rot": struct.unpack_from("<d", m, 52)[0],
                          "corner": ss[564] if len(ss) >= 596 and ss[531] else None,
                          "paste_mode": m[101] if len(m) > 102 else None, "paste": struct.unpack_from("<i", m, 86)[0] if len(m) > 90 else None,
+                         "mask_mode": m[102] if len(m) > 102 else None, "mask": struct.unpack_from("<i", m, 90)[0] if len(m) > 94 else None,
                          "plated": bool(m[60]), "hole_shape": ss[262] if len(ss) >= 596 else 0,
                          "slot": struct.unpack_from("<i", ss, 263)[0] if len(ss) >= 596 else 0,
                          "hole_rot": struct.unpack_from("<d", ss, 267)[0] if len(ss) >= 596 else 0.0, "raw": blocks})

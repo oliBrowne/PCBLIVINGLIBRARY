@@ -50,7 +50,8 @@ SMD_GROW = 0.05                                      # SMD-defined: copper this 
 TH_RING, TH_RING_MIN, TH_PAD_GAP = 0.5, 0.15, 0.8    # KiCad connector generator: annular ring, minimum, pad-to-pad
 # KiCad pin header tables: pitch -> (drill, pad diameter) for through-hole, (pad length, width, centre) for SMD
 HEADER_TH = {2.54: (1.0, 1.7), 2.0: (0.8, 1.35), 1.27: (0.65, 1.0), 1.0: (0.5, 0.85)}
-HEADER_SMD = {2.54: (3.15, 1.0, 2.525), 2.0: (2.5, 1.0, 2.125), 1.27: (2.4, 0.74, 1.95)}
+HEADER_SMD = {2.54: (3.15, 1.0, 2.525), 2.0: (2.58, 1.0, 2.085), 1.27: (2.4, 0.74, 1.95), 1.0: (2.0, 0.5, 1.65)}
+HEADER_SMD1 = {2.54: (2.51, 1.0, 1.655), 2.0: (2.35, 0.85, 1.175), 1.27: (3.0, 0.65, 1.5), 1.0: (1.75, 0.6, 0.875)}  # 1 row
 GRID = 0.01
 
 
@@ -304,7 +305,7 @@ def _expand_table(t):
     return rows
 
 
-def _role(p):
+def _role(p, mount=MOUNT):
     if p.get("role"):
         return p["role"]
     if p.get("type") == "npth":
@@ -312,7 +313,7 @@ def _role(p):
     n = _num(p.get("number"))
     if not n:
         return "npth" if p.get("type") == "npth" else "mount"
-    if MOUNT.fullmatch(n):
+    if mount.fullmatch(n):
         return "shield" if n.upper().startswith(("SH", "S")) else "mount"
     return "pin"
 
@@ -344,12 +345,14 @@ def table_layout(spec):
                for p in raw]
         cx = (min(e[0] for e in ext) + max(e[2] for e in ext)) / 2
         cy = (min(e[1] for e in ext) + max(e[3] for e in ext)) / 2
+    from .footprint_check import mount_rx
+    mount = mount_rx([_num(p.get("number")) for p in raw])     # H1, H2 .. are balls in an LGA / BGA table
     X = lambda x: _r4(sx * (x - cx) * f)
     Y = lambda y: _r4(sy * (y - cy) * f)
     pads = []
     for p in raw:
         kind = {"smd": "smd", "tht": "thru_hole", "npth": "np_thru_hole"}[p.get("type") or ("tht" if p.get("drill") else "smd")]
-        role = _role(dict(p, type={"thru_hole": "tht", "np_thru_hole": "npth"}.get(kind, kind)))
+        role = _role(dict(p, type={"thru_hole": "tht", "np_thru_hole": "npth"}.get(kind, kind)), mount)
         q = {"num": "" if kind == "np_thru_hole" else _num(p.get("number")), "kind": kind, "role": role,
              "x": X(p["x"]), "y": Y(p["y"]), "rot": (p.get("rotation", 0) or 0) * sx, "_src": p["_src"]}
         if p.get("polygon"):
@@ -428,6 +431,8 @@ def tht_pad_size(pads, pitch=None):
                 w = lim
             elif dy > dx and lim < full:
                 h = lim
+        if round((p.get("rot") or 0) / 90) % 2:            # w / h are in the pad's own frame: KiCad turns the pad by rot
+            w, h = h, w
         p["w"], p["h"] = w, h
         p["shape"] = "circle" if abs(w - h) < 1e-9 else "oval"
     for p in pins:                                         # KiCad / KLC: pin 1 of a through-hole connector is (rounded) square
@@ -641,14 +646,14 @@ def _thermal_vias(p, tv, notes=None):
     nx, ny = tv.get("nx", 2), tv.get("ny", 2)
     pitch = tv.get("pitch")
     dx = pitch or (x2 - x1) / nx
-    dy = pitch or (y2 - y1) / ny
+    dy = tv.get("pitch_y") or pitch or (y2 - y1) / ny
     out = []
     for i in range(nx):
         for j in range(ny):
             x, y = p["x"] + (i - (nx - 1) / 2) * dx, p["y"] + (j - (ny - 1) / 2) * dy
             d = tv.get("diameter", tv["drill"] + 0.3)
             ring = [(x + d / 2 * math.cos(k * math.pi / 4), y + d / 2 * math.sin(k * math.pi / 4)) for k in range(8)]
-            if not all(_pad_dist(a, b, p) == 0 for a, b in ring + [(x, y)]):
+            if not all(_pad_dist(a, b, p) <= 1e-6 for a, b in ring + [(x, y)]):    # (a via may touch the edge)
                 skipped.append((round(x, 3), round(y, 3)))
                 continue
             out.append({"num": p["num"], "kind": "thru_hole", "shape": "circle", "x": _r4(x), "y": _r4(y), "w": d, "h": d,
@@ -892,8 +897,8 @@ def _header(spec, density):
         land = spec.get("land")
         if land:
             ll, lw, lc = land["pad_length"], land["pad_width"], land["pad_center"]
-        elif abs(key - e) < 0.01 and key in HEADER_SMD:
-            ll, lw, lc = HEADER_SMD[key]
+        elif abs(key - e) < 0.01 and key in (HEADER_SMD1 if cols == 1 else HEADER_SMD):
+            ll, lw, lc = (HEADER_SMD1 if cols == 1 else HEADER_SMD)[key]     # single-row headers have their own land
         else:
             raise ValueError(f"no default SMD land for a {e:g} mm header: give land (pad_length, pad_width, pad_center)")
         for k in range(n):
