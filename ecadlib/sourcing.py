@@ -41,6 +41,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from . import lifecycle as L, providers as P
+from . import sheetsafe as SS
 from .bom_triage import count_refs, part_numbers, read_bom
 from .httpcache import CachedHTTP
 from .kicad_index import norm_mpn, package_of, parse_value
@@ -1018,7 +1019,7 @@ def write_reports(rows, out, meta, provs, unconfigured, http, roll, plan_changes
     out.parent.mkdir(parents=True, exist_ok=True)
     cur = roll["currency"]
     with open(out.with_suffix(".csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=COLS)
+        w = SS.DictWriter(f, fieldnames=COLS)
         w.writeheader()
         w.writerows(csv_row(r, cur) for r in rows)
     money_ = lambda v: "-" if v is None or v == "" else f"{v:,.4f}".rstrip("0").rstrip(".") if isinstance(v, float) else str(v)
