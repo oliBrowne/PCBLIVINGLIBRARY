@@ -74,7 +74,7 @@ class Workspace:
             raise ValueError(f"BOM not found: {bom_path.name[:80]} is not a file in the workspace")
         head = bom_path.read_bytes()[:4096]                # UTF-16 with a byte-order mark: Excel "Unicode Text", fine
         if (bom_path.suffix.lower() not in (".xlsx", ".xlsm", ".xls", ".schdoc", ".prjpcb", ".bomdoc")
-                and b"\0" in head and head[:2] not in (b"\xff\xfe", b"\xfe\xff")):
+                and b"\0" in head and head[:2] not in (b"\xff\xfe", b"\xfe\xff") and not T.utf16_without_bom(head)):
             raise ValueError(f"{bom_path.name} looks like a binary file, not a CSV; export the BOM as CSV or XLSX")
         try:
             lines, mapping = T.read_bom(bom_path, RU.bom_columns(self.rules()))

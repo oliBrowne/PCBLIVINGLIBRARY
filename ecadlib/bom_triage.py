@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import providers as P
+from . import providers as P, sheetsafe as SS
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex, package_of, parse_value
 
@@ -67,12 +67,60 @@ def map_headers(headers, threshold=0.72):
     return mapping
 
 
+def utf16_without_bom(data):
+    """'utf-16-le' / 'utf-16-be' for UTF-16 text without a byte-order mark (mostly-ASCII text: every other byte is
+    zero), else None."""
+    head = data[:4096]
+    if len(head) < 4 or head[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return None
+    n = len(head) // 2 * 2
+    even, odd = head[0:n:2], head[1:n:2]
+    if odd.count(0) > 0.7 * len(odd) and even.count(0) < 0.1 * len(even):
+        return "utf-16-le"
+    if even.count(0) > 0.7 * len(even) and odd.count(0) < 0.1 * len(odd):
+        return "utf-16-be"
+    return None
+
+
+_SI = ((1e-12, "p"), (1e-9, "n"), (1e-6, "u"), (1e-3, "m"))
+_EXP = re.compile(r"[-+]?(\d+(\.\d*)?|\.\d+)[eE][-+]?\d+")
+
+
+def _plain_number(x):
+    """A spreadsheet number as BOM text, never in exponent notation: 1.0 -> '1', 1050170001.0 -> '1050170001',
+    0.1 -> '0.1', 1e-07 -> '100n' (a capacitor typed in farads: SI prefix, as engineers write it)."""
+    x = float(x)
+    if x != x or x in (float("inf"), float("-inf")):
+        return ""
+    if x == int(x) and abs(x) < 1e15:
+        return str(int(x))
+    if 0 < abs(x) < 1e-3:
+        for scale, pre in _SI:
+            if abs(x) < scale * 1000:
+                return f"{x / scale:.6g}{pre}"
+    return f"{x:.12f}".rstrip("0").rstrip(".")
+
+
+def _xl_text(v):
+    if v is None or (isinstance(v, float) and v != v):
+        return ""
+    if isinstance(v, bool):
+        return "TRUE" if v else "FALSE"
+    if isinstance(v, (int, float)):
+        return _plain_number(v)
+    if hasattr(v, "isoformat"):
+        return v.isoformat()[:10] if getattr(v, "hour", 0) == 0 and getattr(v, "minute", 0) == 0 else v.isoformat()
+    return str(v)
+
+
 def _read_csv(p):
     """Tolerant CSV read: Altium ActiveBOM exports put title rows ('Bill of Materials;;;;;', a blank
     row) above a wider header, which pandas' sniffer chokes on. Rows may be ragged; they are padded."""
     data = Path(p).read_bytes()
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):                             # Excel "Unicode Text" is UTF-16 + tabs
         data = data.decode("utf-16").encode("utf-8")
+    elif utf16_without_bom(data):                                         # PowerShell / some exporters: no BOM
+        data = data.decode(utf16_without_bom(data), errors="replace").encode("utf-8")
     if b"\x00" in data[:4096]:
         raise ValueError(f"{p}: not a text BOM (binary data); save it as CSV or XLSX")
     for enc in ("utf-8-sig", "cp1252", "latin-1"):                       # Excel 'CSV' on Windows is cp1252
@@ -128,7 +176,7 @@ def read_bom(path, columns=None, rules=None):
         raise ValueError(f"{p}: no BOM header found (need a Designator, MPN or Value/Comment column)")
     lines = []
     for _, row in df.iterrows():
-        d = {f: str(row[h]).strip() for f, h in mapping.items()}
+        d = {f: SS.unquote(str(row[h]).strip()) for f, h in mapping.items()}       # "'=X" from our own reports
         if not any(d.values()):
             continue
         if lines and d.get("designator") and not any(v for f, v in d.items() if f != "designator"):
@@ -136,6 +184,8 @@ def read_bom(path, columns=None, rules=None):
             if q and count_refs(prev["designator"]) < int(q.group(1)):
                 prev["designator"] += ", " + d["designator"]            # designator list wrapped onto the next row
                 continue
+        if _EXP.fullmatch(d.get("value", "")):                         # a CSV that kept Excel's 1e-07
+            d["value"] = _plain_number(d["value"])
         if _is_total(d):
             continue                                                     # 'Total;;;12' footer, not a part
         if "dnp" in d:
@@ -156,7 +206,8 @@ def _read_excel(p):
     if not head.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0")):     # not a workbook: CSV / tab text named .xls(x)
         return _read_csv(p)
     try:
-        sheets = [df.fillna("") for df in pd.read_excel(p, header=None, dtype=str, sheet_name=None).values()]
+        sheets = [df.map(_xl_text) if hasattr(df, "map") else df.applymap(_xl_text)    # numbers as typed: 1e-07 F
+                  for df in pd.read_excel(p, header=None, dtype=object, sheet_name=None).values()]  # -> '100n', not '1e-07'
     except ImportError as e:                                              # old binary .xls needs xlrd (not a dependency)
         raise ValueError(f"{p}: can't read this old .xls workbook ({e}); save it as .xlsx or CSV") from e
     except Exception as e:                                                # truncated / corrupt zip, missing parts
@@ -307,7 +358,7 @@ def write_reports(rows, mapping, provs, http, out, bom):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out.with_suffix(".csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ["line", "status"])
+        w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["line", "status"])   # no formulas from BOM cells
         w.writeheader()
         w.writerows(rows)
     counts = pd.Series([r["status"] for r in rows]).value_counts()
