@@ -57,11 +57,56 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Manufacturer names as part keys use them: "ST", "STMicroelectronics" and "STMicroelectronics N.V." are one maker.
+MFR_ALIASES = {
+    "st": "stmicroelectronics", "stm": "stmicroelectronics", "st micro": "stmicroelectronics",
+    "st microelectronics": "stmicroelectronics", "sgs thomson": "stmicroelectronics",
+    "ti": "texas instruments", "texas instrument": "texas instruments",
+    "adi": "analog devices", "analog device": "analog devices", "linear technology": "analog devices",
+    "nxp semiconductors": "nxp", "nxp semiconductor": "nxp",
+    "on semiconductor": "onsemi", "on semi": "onsemi", "on": "onsemi",
+    "microchip technology": "microchip", "infineon technologies": "infineon",
+    "vishay intertechnology": "vishay", "vishay semiconductors": "vishay", "vishay siliconix": "vishay",
+    "vishay dale": "vishay", "vishay general semiconductor": "vishay",
+    "murata manufacturing": "murata", "murata electronics": "murata", "te": "te connectivity",
+    "rohm semiconductor": "rohm", "diodes": "diodes incorporated", "diodes inc": "diodes incorporated",
+    "maxim integrated": "maxim", "maxim integrated products": "maxim", "renesas electronics": "renesas",
+    "samsung electro mechanics": "samsung electro-mechanics", "semco": "samsung electro-mechanics",
+    "we": "wurth elektronik", "wurth": "wurth elektronik", "wuerth elektronik": "wurth elektronik",
+    "nexperia usa": "nexperia", "toshiba electronic devices and storage": "toshiba", "kemet electronics": "kemet",
+    "yageo": "yageo", "tdk electronics": "tdk", "epcos": "tdk", "panasonic electronic components": "panasonic",
+    "littelfuse": "littelfuse", "bourns": "bourns", "molex": "molex", "amphenol": "amphenol",
+}
+MFR_SUFFIXES = {"inc", "incorporated", "corp", "corporation", "co", "company", "ltd", "limited", "llc", "lp", "gmbh",
+                "ag", "sa", "nv", "bv", "plc", "kg", "kk", "oy", "ab", "spa", "srl", "pte", "pty", "sas", "se"}
+
+
+def norm_manufacturer(name):
+    """The manufacturer as a part key uses it: lower case, no accents or punctuation, no legal suffix (Inc, Ltd,
+    GmbH, N.V. ...), then MFR_ALIASES ("ST" -> "stmicroelectronics"). "" stays ""."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode().lower()
+    s = re.sub(r"\b([a-z])\.(?=[a-z]\.)", r"\1", s)              # N.V. -> NV., S.p.A. -> SpA
+    s = s.replace("&", " and ")
+    s = " ".join(re.sub(r"[^a-z0-9]+", " ", s).split())
+    words = s.split()
+    while len(words) > 1 and (words[-1] in MFR_SUFFIXES or words[-1] == "and"):     # "GmbH & Co. KG"
+        words.pop()
+    s = " ".join(words)
+    return MFR_ALIASES.get(s, s)
+
+
 def part_key(manufacturer, mpn):
     mpn = str(mpn or "").strip().upper()
     if not mpn:
         raise ValueError("a queue item needs an MPN")
-    return f"{str(manufacturer or '').strip().lower()}|{mpn}"
+    return f"{norm_manufacturer(manufacturer)}|{mpn}"
+
+
+def renorm_key(key):
+    """An old or foreign "manufacturer|MPN" key in today's form."""
+    m, _, n = str(key or "").partition("|")
+    return f"{norm_manufacturer(m)}|{n.strip().upper()}"
 
 
 def check_id(i):
@@ -150,10 +195,12 @@ def _write(path, data):
 
 @contextlib.contextmanager
 def plan_lock(workspace_root, wait=True):
-    """<workspace>/agent/plan.lock: the agent holds it while the librarian rewrites its plan.json (minutes), and a
-    person's approve / reject takes it while approvals.py records into that plan, so neither overwrites the other.
-    wait=False yields False at once when it is held. Released by the OS if the holder dies."""
-    d = Path(workspace_root) / "agent"
+    """<workspace>/agent/plan.lock: the agent holds it while the librarian rewrites its plan.json (minutes), and every
+    approval path (the queue, the Approvals page / approve_part, `ecadlib approve`) takes it while it records into a
+    plan, so neither overwrites the other. wait=False yields False at once when it is held. Not re-entrant: the
+    queue's decide() holds it and calls Workspace._approve_part, the unlocked body. Released by the OS if the holder
+    dies."""
+    d = Path(workspace_root).resolve() / "agent"
     d.mkdir(parents=True, exist_ok=True)
     f = open(d / "plan.lock", "a+b")
     try:
@@ -266,7 +313,7 @@ class Queue:
         mpn = fields.get("mpn") or (change or {}).get("mpn")
         mfr = fields.get("manufacturer") if "manufacturer" in fields else (change or {}).get("manufacturer")
         key = part_key(mfr, mpn)
-        if fields.get("key") and str(fields["key"]).strip().lower() != key.lower():
+        if fields.get("key") and renorm_key(fields["key"]) != key:
             raise ValueError(f"key {fields['key']!r} does not match manufacturer/MPN ({key})")
         origin = fields.get("origin") or ("watch" if is_change else "manual")
         if origin not in ORIGINS:
@@ -275,6 +322,8 @@ class Queue:
                                        if k not in FIXED + ("mpn", "manufacturer", "origin", "change")}
         t = now()
         with self.lock:
+            self.migrate_keys()
+            key = self._resolve_blank(key, mfr, t, user)
             it = self.find(key)
             if it and it["status"] != "pushed":
                 same = _strip_time(it.get("change")) == _strip_time(change)
@@ -300,6 +349,79 @@ class Queue:
             it.update(extra)
             self._put(it)
             return it
+
+    def _makers(self, mpn_part):
+        """{manufacturer key part: [items]} of the items for one MPN."""
+        out = {}
+        for it in self._all().values():
+            m, _, n = str(it.get("key") or "").partition("|")
+            if n == mpn_part:
+                out.setdefault(m, []).append(it)
+        return out
+
+    def _resolve_blank(self, key, mfr, t, user):
+        """A blank manufacturer matches the one known maker of that MPN (and an item first seen without one is
+        re-keyed once its maker is known), so "|LM358" and "ti|LM358" are one part. Two known makers: kept apart."""
+        m, _, n = key.partition("|")
+        makers = self._makers(n)
+        known = [x for x in makers if x]
+        if not m:
+            return f"{known[0]}|{n}" if len(known) == 1 else key
+        if "" in makers and set(known) <= {m}:
+            for it in makers[""]:
+                it = copy.deepcopy(it)
+                it["history"].append({"at": t, "from": it["status"], "to": it["status"], "user": user,
+                                      "note": f"key {it['key']} -> {key}: manufacturer now known"})
+                it["key"], it["updated"] = key, t
+                it["manufacturer"] = it.get("manufacturer") or str(mfr or "").strip()
+                self._put(it)
+        return key
+
+    def migrate_keys(self):
+        """Once per queue: re-key items made before manufacturer names were normalised (and blank makers that
+        match one known maker). Items that become the same part are merged: the one furthest along stays open,
+        the other open ones are rejected by the agent as duplicates (their history says of what)."""
+        marker = self.dir / "keys.json"
+        with self.lock:
+            if marker.exists():
+                return 0
+            t, moved = now(), 0
+            items = list(self._all().values())
+            for it in items:
+                m, _, n = str(it.get("key") or "").partition("|")
+                new = f"{norm_manufacturer(m or it.get('manufacturer'))}|{n}"
+                if new != it.get("key"):
+                    it = copy.deepcopy(it)
+                    it["history"].append({"at": t, "from": it["status"], "to": it["status"], "user": "ecadlib-agent",
+                                          "note": f"key {it['key']} -> {new}: manufacturer names normalised"})
+                    it["key"], it["updated"] = new, t
+                    self._put(it)
+                    moved += 1
+            for it in list(self._all().values()):                  # blank makers matching one known maker
+                m, _, n = it["key"].partition("|")
+                if not m:
+                    known = [x for x in self._makers(n) if x]
+                    if len(known) == 1:
+                        it = copy.deepcopy(it)
+                        it["history"].append({"at": t, "from": it["status"], "to": it["status"], "user": "ecadlib-agent",
+                                              "note": f"key {it['key']} -> {known[0]}|{n}: one known manufacturer"})
+                        it["key"], it["updated"] = f"{known[0]}|{n}", t
+                        self._put(it)
+                        moved += 1
+            rank = {"approved": 5, "review": 4, "proving": 3, "building": 2, "detected": 1}
+            groups = {}
+            for it in self._all().values():
+                if it["status"] in OPEN:
+                    groups.setdefault(it["key"], []).append(it)
+            for key, its in groups.items():
+                if len(its) < 2:
+                    continue
+                its.sort(key=lambda x: (rank[x["status"]], x.get("created") or "", x["id"]), reverse=True)
+                for dup in its[1:]:
+                    self.transition(dup["id"], "rejected", user="ecadlib-agent",
+                                    note=f"duplicate of {its[0]['id']} (same part once manufacturer names are normalised)")
+            _write(marker, {"version": 2, "migrated": t, "rekeyed": moved})
+            return moved
 
     def update(self, i, **fields):
         """Change data fields (build, proof, pictures, pr_url, ...). The state only changes through transition()."""
@@ -521,7 +643,8 @@ def decide(ws, i, action, user, role=None, note="", via="ecadlib ui/mcp", aliase
                     if not free:          # the librarian is rewriting the plan: a decision written now would be lost
                         raise ValueError("the library agent is rebuilding the library right now; decide again in a minute")
                     try:
-                        r = ws.approve_part(b["bom"], b["part"], action, user, role, note, via=via + " (agent queue)")
+                        rec_ = getattr(ws, "_approve_part", None) or ws.approve_part     # this lock is held here
+                        r = rec_(b["bom"], b["part"], action, user, role, note, via=via + " (agent queue)")
                         approval = {"recorded": True, **r["decision"]}
                     except ValueError as e:
                         if action == "approve":

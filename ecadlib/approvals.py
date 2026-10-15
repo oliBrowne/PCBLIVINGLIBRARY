@@ -289,6 +289,25 @@ def main(argv=None):
     ap.add_argument("--role", help="role you sign as (see the policy's roles/users)")
     ap.add_argument("-m", "--comment", default="", help="comment (required for reject)")
     a = ap.parse_args(argv)
+    ws = agent_workspace(a.plan) if a.action != "status" else None
+    if ws is None:
+        return _run(a)
+    from .agent_queue import plan_lock                 # the library agent's librarian may be rewriting this plan
+    with plan_lock(ws, wait=False) as free:
+        if not free:
+            sys.exit("the library agent is rebuilding the library right now; decide again in a minute")
+        return _run(a)
+
+
+def agent_workspace(plan):
+    """The workspace whose library agent may rewrite this plan (<ws>/librarian/<name>/plan.json with <ws>/agent/), or
+    None."""
+    p = Path(plan).resolve()
+    ws = p.parent.parent.parent
+    return ws if p.parent.parent.name == "librarian" and (ws / "agent").is_dir() else None
+
+
+def _run(a):
     plan = Path(a.plan)
     base = plan.parent
     items = json.loads(plan.read_text())

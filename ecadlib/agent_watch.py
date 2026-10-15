@@ -44,7 +44,7 @@ BOM_EXT = (".csv", ".tsv", ".xlsx", ".xlsm", ".xls")
 PROJECT_EXT = (".prjpcb",)
 UPLOAD_DIR = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")                  # app.Workspace.save_upload's folder names
 PLAN_LIBRARY_STATUS = ("ready", "existing")                         # plan items that are library parts
-STATE_VERSION = 1
+STATE_VERSION = 2                                                   # 2: normalised manufacturer keys
 PAGE = 100
 
 # ------------------------------------------------------------------ Nexar (Altium 365); UNVERIFIED LIVE, see module doc
@@ -96,7 +96,8 @@ def now_iso(now=None):
 
 
 def part_key(manufacturer, mpn):
-    return f"{str(manufacturer or '').strip().lower()}|{str(mpn or '').strip().upper()}"
+    from .agent_queue import norm_manufacturer          # "ST" and "STMicroelectronics" are one maker
+    return f"{norm_manufacturer(manufacturer)}|{str(mpn or '').strip().upper()}"
 
 
 # ------------------------------------------------------------------ BOM lines -> parts
@@ -481,6 +482,16 @@ def load_state(root):
         return {"version": STATE_VERSION, "sources": {}}
     data = json.loads(f.read_text(encoding="utf-8"))
     data.setdefault("sources", {})
+    if int(data.get("version") or 1) < 2:               # keys made before manufacturer names were normalised
+        for ent in data["sources"].values():
+            for fe in (ent.get("files") or {}).values():
+                if isinstance(fe, dict) and isinstance(fe.get("parts"), dict):
+                    new = {}
+                    for k, ln in fe["parts"].items():
+                        m, _, n = str(k).partition("|")
+                        new.setdefault(part_key((ln or {}).get("manufacturer") or m, n), ln)
+                    fe["parts"] = new
+        data["version"] = STATE_VERSION
     return data
 
 
@@ -493,10 +504,13 @@ def save_state(root, state):
 
 
 @contextlib.contextmanager
-def _lock(root):
+def _lock(root, create=True):
     f = Path(root) / "agent" / "watch_state.lock"
+    if not create and not f.exists():                   # a dry run makes no files; nothing ever wrote the state
+        yield
+        return
     f.parent.mkdir(parents=True, exist_ok=True)
-    with open(f, "a") as h:
+    with open(f, "a" if create else "r") as h:
         try:
             import fcntl
         except ImportError:                              # Windows: no advisory lock, single-writer use
@@ -549,8 +563,31 @@ def _change(kind, key, line, was, src, when):
             "line": dict(line or {}), "was": dict(was or {}), "detected": when}
 
 
+def _merge_blank(old, new):
+    """A line without a manufacturer is the same part as the one known maker of that MPN in this source (before or
+    now), so adding or dropping the manufacturer is not "removed" + "new". Returns (old, new) re-keyed."""
+    makers = {}
+    for k in list(old) + list(new):
+        m, _, n = k.partition("|")
+        if m:
+            makers.setdefault(n, set()).add(m)
+
+    def rekey(parts):
+        out = {}
+        for k, ln in parts.items():
+            m, _, n = k.partition("|")
+            if not m and len(makers.get(n, ())) == 1:
+                k = f"{next(iter(makers[n]))}|{n}"
+                if k in parts:
+                    continue                                 # the known-maker line is there too: one part
+            out.setdefault(k, ln)
+        return out
+    return rekey(old), rekey(new)
+
+
 def diff(old, new, src, when, library=None):
     """Change records between two {key: line} maps."""
+    old, new = _merge_blank(old, new)
     out = []
     for k, ln in new.items():
         prev = old.get(k)
@@ -586,7 +623,7 @@ def scan_report(workspace, rules=None, sources=None, client=None, now=None, dry_
     srcs = [norm_source(s, root) for s in (sources if sources is not None else cfg.get("sources") or [])]
     library = Library(root, list(libs if libs is not None else wlibs), rules)
     changes, errors, summary = [], [], []
-    with _lock(root):
+    with _lock(root, create=not dry_run):
         state = load_state(root)
         active = {source_id(s) for s in srcs}
         for src in srcs:
