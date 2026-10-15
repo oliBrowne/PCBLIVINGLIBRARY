@@ -12,8 +12,9 @@
 
 	reverse_proxy ecadlib:8765 {
 		# ecadlib believes the proxy user header (SSO) from Caddy's address (--trusted-proxy). Without an SSO
-		# layer in front, nobody may set it: drop any copy a client sends.
-		header_up -X-Forwarded-User
+		# layer in front, nobody may set it: drop any copy a client sends. docker-compose.yml passes the same
+		# name to ecadlib's --proxy-user-header, so the header stripped here is the one ecadlib reads.
+		header_up -{$ECADLIB_PROXY_USER_HEADER:X-Forwarded-User}
 	}
 
 	header {

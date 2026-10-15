@@ -106,6 +106,21 @@ input[type=password], input[type=email] { font: inherit; border-radius: 7px; bor
 header .user[hidden], label.field[hidden], span[hidden] { display: none; }
 .form label { display: block; }
 .form select { display: block; width: 100%; margin-top: 4px; }
+/* review queue */
+#qrows tr.sel td { background: var(--accent-weak); }
+.qview { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
+.qview h3 { font-size: 14px; margin: 14px 0 6px; }
+.qview h3:first-child { margin-top: 0; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.pics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pics figure { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; min-height: 120px; }
+.pics figcaption { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.pics img { display: block; max-width: 100%; height: auto; margin: 0 auto 8px; background: #fff; border-radius: 4px; }
+@media (max-width: 760px) { .pics { grid-template-columns: 1fr; } }
+#qnote { min-height: 56px; }
+ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
 </style>
 </head>
 <body>
@@ -202,6 +217,23 @@ header .user[hidden], label.field[hidden], span[hidden] { display: none; }
       </table></div>
       <div id="histerr"></div>
     </div>
+  </section>
+
+  <section class="card" id="queuecard">
+    <div class="row spread">
+      <div><h2>Review queue</h2>
+      <p class="muted small" style="margin:2px 0 0">Parts the library agent found and built. Each one is checked against its datasheet. Look at the before and after pictures and the proof, then approve, reject or ask for a rebuild. An approval is also recorded in the part's plan (<span class="mono">approvals_audit.jsonl</span>), so the release check and the Altium 365 push see it.</p></div>
+      <div class="row"><select id="qbatch" aria-label="Batch"><option value="">All batches</option></select><button class="small" id="qreload">Refresh</button></div>
+    </div>
+    <div class="chips" id="qchips"></div>
+    <div id="qbatchinfo" class="small"></div>
+    <div id="qerr"></div>
+    <div class="tablewrap" id="qwrap"><table>
+      <thead><tr><th>Part</th><th>Change</th><th>Status</th><th>Proof</th><th>Batch</th><th>Updated (UTC)</th><th></th></tr></thead>
+      <tbody id="qrows"></tbody>
+    </table></div>
+    <div class="muted small" id="qempty" hidden>Nothing in the queue. The library agent adds parts here when a watched project or BOM changes.</div>
+    <div class="qview" id="qview" hidden></div>
   </section>
 
   <section class="card" id="results" hidden>
@@ -939,10 +971,121 @@ $("#auditbtn").addEventListener("click", e => action(e.target, $("#auditout"), a
       <td class="small mono">${esc(Object.entries(rest).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join(" "))}</td><td class="muted small">${esc(ip)}</td></tr>`; }).join("") +
     `</tbody></table></div>`;
 }));
+
+// ---- review queue (library agent)
+const QSTATE = { detected: "s-info", building: "s-off", proving: "s-info", review: "s-warn", approved: "s-ok", pushed: "s-ok", failed: "s-bad", rejected: "s-bad" };
+const QVERDICT = { pass: "s-ok", doubt: "s-warn", fail: "s-bad", skipped: "s-off" };
+let qfilter = "", qopen = null, qtoken = null;
+const pill = (t, cls) => `<span class="pill ${cls || "s-off"}">${esc(t)}</span>`;
+const safeUrl = u => /^https:\/\/[^\s"'<>]+$/.test(u || "") ? u : null;
+const picUrl = p => "/api/agent/queue/picture?path=" + encodeURIComponent(p);
+async function loadQueue() {
+  const b = $("#qbatch").value;
+  const r = await api("/api/agent/queue?" + new URLSearchParams({ status: qfilter, batch: b }));
+  const total = Object.values(r.counts).reduce((a, x) => a + x, 0);
+  $("#qchips").innerHTML = `<span class="chip s-off${qfilter ? "" : " active"}" data-s="">All ${total}</span>` +
+    r.states.filter(s => r.counts[s]).map(s => `<span class="chip ${QSTATE[s]}${qfilter === s ? " active" : ""}" data-s="${esc(s)}">${esc(s)} ${r.counts[s]}</span>`).join("");
+  $("#qbatch").innerHTML = `<option value="">All batches</option>` + r.batches.map(x => `<option value="${esc(x.id)}">${esc(x.id)} (${x.count}, ${esc(x.status)})</option>`).join("");
+  $("#qbatch").value = r.batches.some(x => x.id === b) ? b : "";
+  const bt = r.batch;
+  $("#qbatchinfo").innerHTML = bt ? `<div class="signoff" style="margin:0 0 10px">Batch <span class="mono">${esc(bt.id)}</span> · ${pill(bt.status || "open", "s-info")} · ${esc(bt.items.length)} item(s) · created ${esc(bt.created)}` +
+    (safeUrl(bt.pr_url) ? ` · <a href="${esc(bt.pr_url)}" target="_blank" rel="noopener noreferrer">pull request</a>` : bt.pr_url ? ` · PR ${esc(bt.pr_url)}` : " · no pull request yet") + `</div>` : "";
+  $("#qrows").innerHTML = r.items.map(it => `<tr data-id="${esc(it.id)}"${it.id === qopen ? ' class="sel"' : ""}>
+    <td><strong>${esc(it.mpn)}</strong><div class="muted sub">${esc(it.manufacturer || "–")} · ${esc(it.origin)}</div></td>
+    <td>${esc(it.kind || "–")}<div class="muted sub">${esc(it.source)}</div></td>
+    <td>${pill(it.status, QSTATE[it.status])}</td>
+    <td>${it.verdict ? pill(it.verdict, QVERDICT[it.verdict]) : '<span class="muted">–</span>'}${it.findings ? `<div class="muted sub">${esc(it.findings)} finding(s)</div>` : ""}</td>
+    <td class="mono">${esc(it.batch || "–")}</td><td class="mono small">${esc(it.updated)}</td>
+    <td><button class="small" data-open="${esc(it.id)}">Open</button></td></tr>`).join("");
+  $("#qwrap").hidden = !r.items.length; $("#qempty").hidden = !!r.items.length;
+  $("#qempty").textContent = total ? "No items match this filter." : "Nothing in the queue. The library agent adds parts here when a watched project or BOM changes.";
+}
+function kv(obj, keys) {
+  const rows = keys.filter(k => obj && obj[k] !== undefined && obj[k] !== null && obj[k] !== "" && !(Array.isArray(obj[k]) && !obj[k].length))
+    .map(k => `<dt>${esc(k)}</dt><dd>${esc(Array.isArray(obj[k]) ? obj[k].join(", ") : typeof obj[k] === "object" ? JSON.stringify(obj[k]) : obj[k])}</dd>`);
+  return rows.length ? `<dl class="kv">${rows.join("")}</dl>` : '<div class="muted small">–</div>';
+}
+function figure(title, paths) {
+  const imgs = (paths || []).map(p => p ? `<img src="${esc(picUrl(p))}" alt="${esc(title)}: ${esc(p.split("/").pop())}" loading="lazy">` : '<div class="muted small">(a picture outside the agent folder is not shown)</div>').join("");
+  return `<figure><figcaption>${esc(title)}</figcaption>${imgs || '<div class="muted small">none</div>'}</figure>`;
+}
+function showQueueItem(r) {
+  qtoken = r.build_token || null;
+  const it = r.item, ch = it.change || {}, b = it.build || {}, p = it.proof, pics = r.pictures, allowed = r.allowed;
+  const line = ch.line || {}, was = ch.was || {};
+  const lineKeys = [...new Set([...Object.keys(line), ...Object.keys(was)])];
+  const diff = lineKeys.length ? `<div class="scroll"><table><thead><tr><th>Field</th><th>Before</th><th>Now</th></tr></thead><tbody>` +
+    lineKeys.map(k => `<tr><td class="muted">${esc(k)}</td><td>${esc(was[k] ?? "")}</td><td${k in was && String(was[k] ?? "") !== String(line[k] ?? "") ? ' class="s-warn"' : ""}>${esc(line[k] ?? "")}</td></tr>`).join("") + `</tbody></table></div>` : "";
+  const findings = p && (p.findings || []).length ? `<div class="scroll"><table><thead><tr><th>Severity</th><th>What</th><th>Expected</th><th>Found</th><th>Page</th></tr></thead><tbody>` +
+    p.findings.map(f => `<tr><td>${pill(f.severity, { error: "s-bad", warning: "s-warn", info: "s-info" }[f.severity])}</td><td>${esc(f.what)}</td><td>${esc(f.expected)}</td><td>${esc(f.found)}</td><td>${esc(f.page ?? "")}</td></tr>`).join("") + `</tbody></table></div>` : "";
+  const canApprove = allowed.includes("approved") && it.status === "review" && can("approver");
+  const canReject = allowed.includes("rejected") && can("librarian");
+  const canRebuild = (it.status === "review" || it.status === "failed" || it.status === "rejected") && can("librarian");
+  const signer = session.team ? `<span class="small">Deciding as ${esc(session.user.identity)}</span>` :
+    `<label class="field small">Your name <input type="text" id="qsigner" placeholder="Ann Lee &lt;ann@example.com&gt;" size="28" value="${esc($("#signer").value)}"></label>`;
+  $("#qview").innerHTML = `
+    <div class="row spread"><div><strong>${esc(it.mpn)}</strong> <span class="muted">${esc(it.manufacturer || "")}</span> ${pill(it.status, QSTATE[it.status])}
+      <div class="muted small mono">${esc(it.id)} · key ${esc(it.key)} · ${esc(it.origin)}</div></div><button class="small" id="qclose">Close</button></div>
+    <h3>What triggered it</h3>
+    ${kv({ kind: ch.kind || ch.check, source: ch.source ? `${ch.source.type || ""} ${ch.source.name || ch.source.ref || ""}`.trim() : "", detected: ch.detected, what: ch.what || ch.summary, detail: ch.detail }, ["kind", "source", "detected", "what", "detail"])}
+    ${diff}
+    <h3>Build</h3>
+    ${kv(b, ["bom", "part", "user", "sources", "notes", "files", "requested_by", "requested_at", "request_note", "error"])}
+    <h3>Proof ${p ? pill(p.verdict, QVERDICT[p.verdict]) : ""}${p && p.score != null ? ` <span class="muted small">score ${esc(p.score)}</span>` : ""}</h3>
+    ${p ? `<div class="small">${esc(p.reason || "")}</div>${p.model ? `<div class="muted small">${esc(p.model)}${p.cost_usd != null ? ` · $${esc(p.cost_usd)}` : ""}</div>` : ""}${findings}` : '<div class="muted small">Not proved yet.</div>'}
+    <h3>Pictures</h3>
+    <div class="pics">${figure("Before", pics.before)}${figure("After", pics.after)}</div>
+    ${(pics.ours.length || pics.datasheet.length) ? `<div class="pics" style="margin-top:12px">${figure("Ours (rendered)", pics.ours)}${figure("Datasheet", pics.datasheet)}</div>` : ""}
+    ${it.approval ? `<h3>Approval</h3>${kv(it.approval, ["by", "role", "at", "recorded", "reason", "status"])}` : ""}
+    ${it.rejection ? `<h3>Rejection</h3>${kv(it.rejection, ["by", "at", "note", "recorded", "reason"])}` : ""}
+    ${r.batch ? `<h3>Batch</h3><div class="small"><span class="mono">${esc(r.batch.id)}</span> · ${esc(r.batch.status || "")}${safeUrl(it.pr_url || r.batch.pr_url) ? ` · <a href="${esc(it.pr_url || r.batch.pr_url)}" target="_blank" rel="noopener noreferrer">pull request</a>` : ""}</div>` : ""}
+    <h3>History</h3>
+    <ol class="hist">${it.history.map(h => `<li><span class="mono">${esc(h.at)}</span> ${esc(h.from || "–")} → <strong>${esc(h.to)}</strong>${h.user ? ` · ${esc(h.user)}` : ""}${h.note ? ` · <span class="muted">${esc(h.note)}</span>` : ""}</li>`).join("")}</ol>
+    ${canApprove || canReject || canRebuild ? `<h3>Decision</h3>
+    <div class="row" style="margin-bottom:6px">${signer}</div>
+    <textarea id="qnote" placeholder="Note (required to reject): what is wrong, or what you checked" aria-label="Note"></textarea>
+    <div class="row" style="margin-top:8px">
+      ${canApprove ? '<button class="primary" data-q="approve">Approve</button>' : ""}
+      ${canReject ? '<button class="danger" data-q="reject">Reject…</button>' : ""}
+      ${canRebuild ? `<button data-q="rebuild">${it.status === "review" ? "Rebuild" : "Retry"}</button>` : ""}
+    </div>` : `<div class="muted small" style="margin-top:12px">${it.status === "review" ? "You can look at this item; deciding needs the librarian (reject, rebuild) or approver (approve) role." : "No decision to make in this state."}</div>`}
+    <div id="qdecerr"></div>`;
+  $("#qview").hidden = false;
+}
+async function openQueueItem(id) {
+  qopen = id; banner($("#qerr"), "");
+  try { showQueueItem(await api("/api/agent/queue/item?id=" + encodeURIComponent(id))); }
+  catch (e) { banner($("#qerr"), e.message); }
+  document.querySelectorAll("#qrows tr").forEach(tr => tr.classList.toggle("sel", tr.dataset.id === id));
+}
+$("#qrows").addEventListener("click", e => { const id = e.target.dataset.open; if (id) openQueueItem(id).then(() => $("#qview").scrollIntoView({ behavior: "smooth", block: "nearest" })); });
+$("#qchips").addEventListener("click", e => { const c = e.target.closest(".chip"); if (!c) return; qfilter = c.dataset.s; loadQueue().catch(err => banner($("#qerr"), err.message)); });
+$("#qbatch").addEventListener("change", () => loadQueue().catch(err => banner($("#qerr"), err.message)));
+$("#qreload").addEventListener("click", () => loadQueue().catch(err => banner($("#qerr"), err.message)));
+$("#qview").addEventListener("click", async e => {
+  if (e.target.id === "qclose") { $("#qview").hidden = true; qopen = null; document.querySelectorAll("#qrows tr.sel").forEach(tr => tr.classList.remove("sel")); return; }
+  const act = e.target.dataset.q; if (!act || !qopen) return;
+  const note = $("#qnote").value.trim();
+  if (act === "reject" && !note) return banner($("#qdecerr"), "Say what is wrong in the note before rejecting.");
+  const body = { id: qopen, note };
+  if (qtoken) body.expect = qtoken;
+  if (!session.team) {
+    body.user = ($("#qsigner") || {}).value?.trim() || "";
+    if (!body.user) return banner($("#qdecerr"), "Type your name first: it is recorded with the decision.");
+    $("#signer").value = body.user;
+  }
+  e.target.disabled = true;
+  try {
+    const r = await api(`/api/agent/queue/${act}`, body);
+    toast(`${qopen}: ${r.item.status}` + (r.approval ? (r.approval.recorded ? " (recorded in the plan)" : " (queue only)") : ""));
+    await loadQueue(); showQueueItem(await api("/api/agent/queue/item?id=" + encodeURIComponent(qopen)));
+  } catch (err) { banner($("#qdecerr"), err.message); e.target.disabled = false; }
+});
 function startApp() {
   $("#signin").hidden = true; $("#app").hidden = false;
   applyRoles();
   loadInfo().catch(showErr); loadSpecs().catch(showErr); loadRules().catch(showErr); loadHistory().catch(e => banner($("#histerr"), e.message));
+  loadQueue().catch(e => banner($("#qerr"), e.message));
 }
 (async () => {
   try { session = await api("/api/session"); } catch (e) { session = { team: false }; }

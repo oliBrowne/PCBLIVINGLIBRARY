@@ -47,7 +47,7 @@ def test_every_advanced_spec_approves_into_a_pcblib_matching_the_kicad_footprint
     totals = {"pads": 0, "tht": 0, "npth": 0, "slots": 0, "windows": 0, "polygons": 0}
     with tempfile.TemporaryDirectory() as d:
         parts = _approve_all(d)
-        assert len(parts) == 20, len(parts)
+        assert len(parts) == 41, len(parts)
         for stem, (spec, kmod, lib) in parts.items():
             t = sexpr.parse(kmod)
             recs = AL.read_pcblib(lib)[0]["records"]
@@ -128,8 +128,8 @@ def test_every_advanced_spec_approves_into_a_pcblib_matching_the_kicad_footprint
             pr = [r for r in pyaltiumlib.read(str(lib)).Parts[0].Records if type(r).__name__ == "PcbPad"]
             assert [r.designator for r in pr] == [p[1] for p in copper], stem
             assert all(abs(float(r.hole_size) - ap["hole"] / 10000) < 0.01 for r, ap in zip(pr, apads)), stem
-    # 1069 pads in 20 parts: 49 plated through-hole (4 of them thermal vias), 3 NPTH, 5 slots, 14 paste windows, 1 polygon
-    assert totals == {"pads": 1069, "tht": 49, "npth": 3, "slots": 5, "windows": 14, "polygons": 1}, totals
+    # 2767 pads in 41 parts: 119 plated through-hole (14 of them thermal vias), 3 NPTH, 5 slots, 22 paste windows, 1 polygon
+    assert totals == {"pads": 2767, "tht": 119, "npth": 3, "slots": 5, "windows": 22, "polygons": 1}, totals
 
 
 def test_through_hole_header_was_refused_before_and_now_writes_a_pcblib():

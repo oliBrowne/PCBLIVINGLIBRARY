@@ -140,8 +140,25 @@ def _natural(s):
 
 
 def stack_key(name):
-    """Pins whose names give the same key are one net and may be stacked: 'VDD_1', 'VDD_2', 'VDD' -> 'VDD'."""
-    return re.sub(r"[_\-]?\d+$", "", _key(name)) or _key(name)
+    """Pins whose names give the same key may be one net: 'VDD_1', 'VDD_2', 'VDD' -> 'VDD'. Only an index after a
+    separator is dropped: 'VDD1' / 'VDD2' (an isolator's two sides) and 'VDD18' / 'VDD33' are different supplies."""
+    return re.sub(r"[_\-]\d+$", "", _key(name)) or _key(name)
+
+
+def stack_keys(names):
+    """name -> stacking key for the power pins of one group. 'VDD_1'..'VDD_5' (instance numbers 1..n or 0..n-1) share
+    the key 'VDD'; 'VDD_18' + 'VDD_33' are not instance numbers and keep their own names (never stacked together)."""
+    idx = {}
+    for n in names:
+        m = re.fullmatch(r"(.+?)[_\-](\d+)", _key(n))
+        if m:
+            idx.setdefault(m.group(1), set()).add(int(m.group(2)))
+    ok = {st for st, ix in idx.items() if ix in (set(range(1, len(ix) + 1)), set(range(len(ix))))}
+    out = {}
+    for n in names:
+        m = re.fullmatch(r"(.+?)[_\-](\d+)", _key(n))
+        out[n] = m.group(1) if m and m.group(1) in ok else _key(n)
+    return out
 
 
 # ------------------------------------------------------------------ settings
@@ -183,16 +200,18 @@ def _blocks(pins, s):
             for t in items:
                 stems.setdefault(stem(t[2].get("name", "")), t[1])
             items.sort(key=lambda t: (stems[stem(t[2].get("name", ""))], _natural(_key(t[2].get("name", ""))), t[1]))
-        slots, at = [], {}
+        slots, at, keys = [], {}, []
+        sk = stack_keys([t[2].get("name", "") for t in items])
         for _, _, p in items:
-            k = stack_key(p.get("name", ""))
+            k = sk[p.get("name", "")]
             if g in POWER_GROUPS and s["stack_power"] != "none" and k in at:
                 slots[at[k]].append(p)
             else:
                 at[k] = len(slots)
                 slots.append([p])
+                keys.append(k)
         blocks.append({"group": g, "label": f"P{sub}" if sub and sub.isalpha() and len(sub) == 1 else sub or g,
-                       "side": sides[g], "slots": slots})
+                       "side": sides[g], "slots": slots, "nets": {id(sl): k for sl, k in zip(slots, keys)}})
     return blocks
 
 
@@ -304,6 +323,7 @@ def build(name, pins, description="", designator="U?", footprint=None, comment="
     tallest = (0, 0)
     for u in units:
         sd = u["sides"]
+        nets = {k: v for bl in sd.values() for b in bl for k, v in b.get("nets", {}).items()}
         left, right, top, bot = _rows(sd["left"]), _rows(sd["right"]), _rows(sd["top"]), _rows(sd["bottom"])
         names = lambda rows: max([_nlen(sl[0]) for sl in rows if sl] or [0])
         lch, rch = names(left), names(right)
@@ -334,7 +354,7 @@ def build(name, pins, description="", designator="U?", footprint=None, comment="
                 q = dict(p)
                 if j:
                     if s["stack_power"] == "hide":
-                        q.update(hidden=True, net=q.get("net") or stack_key(p.get("name", "")))
+                        q.update(hidden=True, net=q.get("net") or nets.get(id(sl)) or stack_key(p.get("name", "")))
                     else:
                         q.update(show_name=False, show_num=False)
                 prims.append(("pin", q, side, x, y, L)); parts.append(u["unit"])
@@ -379,9 +399,9 @@ def relayout(sym, rules=None, split=None):
 # ------------------------------------------------------------------ checks
 def check(sym, grid=100):
     """Problems in a laid-out symbol: pins off the grid, two different pins at one spot (other than stacked power
-    pins with the same name), pins inside another pin's span. -> [text]."""
+    pins with the same name), a pin whose end or line lies on another pin's line, pin lines crossing. -> [text]."""
     g = grid // 10
-    probs, at = [], {}
+    probs, at, segs = [], {}, []
     parts = sym.get("prim_parts") or [1] * len(sym["prims"])
     for pr, u in zip(sym["prims"], parts):
         if pr[0] != "pin":
@@ -395,7 +415,25 @@ def check(sym, grid=100):
         if key in at and stack_key(at[key]["name"]) != stack_key(p["name"]):
             probs.append(f"pins {at[key]['num']} and {p['num']} overlap at ({x}, {y}) in part {u}")
         at.setdefault(key, p)
+        segs.append((u, p, (x, y), (ex, ey)))
+    # a pin whose end or body lies on another pin's line, or two pin lines crossing (stacked pins share one line: fine)
+    on = lambda q, a, b: min(a[0], b[0]) <= q[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= q[1] <= max(a[1], b[1]) and \
+        (b[0] - a[0]) * (q[1] - a[1]) == (b[1] - a[1]) * (q[0] - a[0])
+    for i, (u, p, a, b) in enumerate(segs):
+        for v, q, c, d in segs[i + 1:]:
+            if u != v or (a, b) == (c, d):
+                continue
+            if on(c, a, b) or on(d, a, b) or on(a, c, d) or on(b, c, d) or _cross(a, b, c, d):
+                probs.append(f"pin {q['num']} lies on or crosses pin {p['num']}'s line in part {u}")
     return probs
+
+
+def _cross(a, b, c, d):
+    """Axis-aligned segments a-b and c-d (one horizontal, one vertical) cross in their interiors."""
+    if (a[0] == b[0]) == (c[0] == d[0]):
+        return False
+    (h1, h2), (v1, v2) = ((a, b), (c, d)) if a[1] == b[1] else ((c, d), (a, b))
+    return min(h1[0], h2[0]) < v1[0] < max(h1[0], h2[0]) and min(v1[1], v2[1]) < h1[1] < max(v1[1], v2[1])
 
 
 # ------------------------------------------------------------------ SVG preview

@@ -123,6 +123,29 @@ TOOLS = [
                                     "decision": {"type": "string", "enum": ["approve", "reject"]},
                                     "user": {"type": "string"}, "role": {"type": "string"},
                                     "comment": {"type": "string"}}}},
+    {"name": "agent_queue_list",
+     "description": "The library agent's review queue: work items (parts found new/changed/removed in watched projects "
+                    "and BOMs, or upkeep findings) with status detected/building/proving/review/approved/pushed/failed/"
+                    "rejected, the proof verdict and batch; counts per status and the batches. Read-only.",
+     "inputSchema": {"type": "object", "properties": {
+         "status": {"type": "string", "enum": ["detected", "building", "proving", "review", "approved", "pushed", "failed", "rejected"]},
+         "batch": {"type": "string", "description": "batch id: only its items, plus the batch itself"}}}},
+    {"name": "agent_queue_get",
+     "description": "One review-queue item in full: the change that triggered it, build sources and notes, the visual "
+                    "proof (verdict, findings), before/after picture paths, history and the allowed next states.",
+     "inputSchema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}},
+    {"name": "agent_queue_decide",
+     "description": "Record a person's decision on a review-queue item: approve (review -> approved), reject (needs a "
+                    "note), rebuild (review -> building) or retry (failed/rejected -> detected). approve/reject are also "
+                    "recorded in the part's librarian plan through the approvals policy. user is the person deciding, "
+                    "e.g. \"Ann Lee <ann@example.com>\": ask the user and pass their own answer; never decide on your own "
+                    "behalf or invent a name. The person who started a build cannot approve it.",
+     "inputSchema": {"type": "object", "required": ["id", "decision", "user"],
+                     "properties": {"id": {"type": "string"},
+                                    "decision": {"type": "string", "enum": ["approve", "reject", "rebuild", "retry"]},
+                                    "user": {"type": "string"}, "role": {"type": "string"}, "note": {"type": "string"},
+                                    "expect": {"type": "string", "description": "build_token from agent_queue_get: the "
+                                               "decision is refused if the item was rebuilt since it was shown"}}}},
     {"name": "find_duplicates",
      "description": "Find duplicate parts (same MPN once packaging suffixes are stripped), footprints (same pad "
                     "geometry) and symbols (same pinout) across the librarian's plan and the workspace's altium_models/ "
@@ -186,6 +209,15 @@ TOOLS = [
                                                "description": "checks to run (default: all, or [upkeep] checks in ecadlib.toml)"},
                                     "apply": {"type": "boolean", "default": False},
                                     "workspace": {"type": "string", "description": "Altium 365 workspace URL for the a365 check"}}}},
+    {"name": "agent_status",
+     "description": "The library agent's state: last run (detected, built, in review, failed), review-queue counts and "
+                    "its batch pull requests (or the batch folders when there is no GitHub token).",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "agent_run",
+     "description": "Run one pass of the library agent: scan watched projects/BOMs, build and prove new parts, open or "
+                    "update the batch PR. dry_run defaults to true (reports only). A real run (dry_run false) commits to "
+                    "the library repo and opens PRs: only when the user asked for it.",
+     "inputSchema": {"type": "object", "properties": {"dry_run": {"type": "boolean", "default": True}}}},
     {"name": "project_bom",
      "description": "Read the BOM straight from an Altium project (.PrjPcb, or a single .SchDoc): components from every "
                     "schematic grouped by MPN / Design Item ID with designators and quantities, footprints, Altium 365 "
@@ -239,9 +271,69 @@ TOOLS = [
                     "replace it (the old file is kept as ecadlib.toml.bak).",
      "inputSchema": {"type": "object", "required": ["toml"],
                      "properties": {"toml": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}}},
+    {"name": "agent_watch_scan",
+     "description": "Library agent watch step: scan the watched projects and BOMs (rules [agent.watch] sources, or the "
+                    "sources given: bom_file / folder / altium_project / a365_project with a ref) and return the parts that "
+                    "are new (not yet in the workspace library), changed (footprint, value, datasheet or LCSC) or removed "
+                    "since the last scan, plus per-source status and errors. A source that fails keeps its last state. "
+                    "dry_run reports without saving the scan state. Altium 365 projects need NEXAR_TOKEN.",
+     "inputSchema": {"type": "object",
+                     "properties": {"sources": {"type": "array", "items": {"type": "object", "required": ["type", "ref"],
+                                    "properties": {"type": {"type": "string", "enum": ["bom_file", "folder", "altium_project",
+                                                                                        "a365_project"]},
+                                                   "ref": {"type": "string"}, "name": {"type": "string"},
+                                                   "workspace": {"type": "string"}, "variant": {"type": "string"}}}},
+                                    "dry_run": {"type": "boolean", "default": False}}}},
+    {"name": "visual_check",
+     "description": "Visual proof of a part: renders our footprint (top view, pin 1, pitch, dimensions) and symbol next to "
+                    "the datasheet's drawing / pin-table pages and asks Claude whether they match (pitch, pad count and "
+                    "numbering, pin 1, top vs bottom view, body size, pin names/numbers). Verdict pass / doubt / fail / "
+                    "skipped (no API key) with findings and the image paths, so you can look at them too.",
+     "inputSchema": {"type": "object", "required": ["target"],
+                     "properties": {"target": {"type": "string", "description": "part name in the workspace, or a workspace path "
+                                                                                 "to a .kicad_mod / package spec .json"},
+                                    "datasheet": {"type": "string", "description": "datasheet PDF (workspace path or URL)"},
+                                    "pages": {"type": "string", "description": "datasheet pages, e.g. 3,7-8 (default: picked by text)"},
+                                    "symbol": {"type": "string", "description": "symbol file (.SchLib / symbol JSON / pin CSV)"},
+                                    "render_only": {"type": "boolean"}}}},
     {"name": "list_example_specs",
      "description": "Return the example package specs (useful as templates for preview_footprint).",
+     "inputSchema": {"type": "object", "properties": {}}},    {"name": "workspace_status",
+     "description": "One-screen summary of the workspace (read-only): parts in each librarian plan with ready / held / "
+                    "waiting-for-sign-off counts, the last triage, the last upkeep run and the library agent's state and "
+                    "review-queue counts. Start here to see what needs attention.",
      "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "doctor",
+     "description": "Check the setup: Python version, packages and tools (pdftoppm, kicad-cli, git), which API keys are "
+                    "set (names only), whether the rules file is valid (file:line of the error), the workspace is "
+                    "writable and the library folders exist. Each check is OK / WARN / FAIL with a fix hint.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "list_plugins",
+     "description": "Installed part-source and exporter plugins (Python entry points ecadlib.providers / ecadlib.exporters), "
+                    "the part-source order in use ([providers] order) and the [notify] webhook targets (names of their "
+                    "environment variables and whether they are set; never the URLs).",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "plugin_export",
+     "description": "Run an exporter plugin on the librarian plan of a BOM; files go to <workspace>/exports/<name>/.",
+     "inputSchema": {"type": "object", "required": ["name", "bom"],
+                     "properties": {"name": {"type": "string", "description": "exporter name from list_plugins"},
+                                    "bom": {"type": "string", "description": "the BOM the librarian ran on"}}}},
+    {"name": "export_parts",
+     "description": "Write the library's parts table for a BOM's librarian plan with stable columns (Part ID, Status, "
+                    "Category, Description, Value, Manufacturer, Manufacturer Part Number, Datasheet, suppliers, symbol / "
+                    "footprint refs and files, KiCad lib ids, release check, sign-off, ...) as CSV, JSON or XLSX for PLM / "
+                    "ERP imports. Returns the workspace path of the file.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "format": {"type": "string", "enum": ["csv", "json", "xlsx"]},
+                                    "include_held": {"type": "boolean", "default": False}}}},
+    {"name": "kicad_dblib",
+     "description": "Write the BOM's library as KiCad files (.kicad_sym, .pretty, lib tables) plus a KiCad 7+ database "
+                    "library: a .kicad_dbl (ODBC to SQLite) and the SQLite parts table, one table per category, and a "
+                    "Database row in sym-lib-table. KiCad needs an SQLite ODBC driver to open it.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "name": {"type": "string", "description": "library name"},
+                                    "driver": {"type": "string", "description": "ODBC driver name (default SQLite3 ODBC Driver)"},
+                                    "include_held": {"type": "boolean", "default": False}}}},
 ]
 
 
@@ -290,6 +382,13 @@ def call_tool(ws, name, args):
                                 args.get("comment") or "")
             r.pop("log", None)
             return r
+        if name == "agent_queue_list":
+            return ws.agent_queue_list(args.get("status") or None, args.get("batch") or None)
+        if name == "agent_queue_get":
+            return ws.agent_queue_get(args["id"])
+        if name == "agent_queue_decide":
+            return ws.agent_queue_decide(args["id"], args["decision"], args["user"], args.get("role"), args.get("note") or "",
+                                         via="ecadlib mcp", expect=args.get("expect") or None)
         if name == "find_duplicates":
             r = ws.find_duplicates(args["bom"], args.get("merge") is True)
             if "summary" in r:
@@ -319,10 +418,19 @@ def call_tool(ws, name, args):
             return ws.export_dblib(args["bom"])
         if name == "upkeep_run":
             return ws.upkeep_run(args["bom"], args.get("checks") or None, args.get("apply") is True, args.get("workspace"))
+        if name == "agent_status":
+            return ws.agent_status()
+        if name == "agent_run":
+            return ws.agent_run(args.get("dry_run", True) is not False)
         if name == "project_bom":
             return ws.project_bom(args["project"], args.get("variant") or None)
         if name == "where_used":
             return ws.where_used(args["projects"], args.get("part") or None, args.get("plan") or None)
+        if name == "agent_watch_scan":
+            return ws.agent_watch_scan(args.get("sources") or None, args.get("dry_run") is True)
+        if name == "visual_check":
+            return ws.visual_check(args["target"], args.get("datasheet") or None, args.get("pages") or None,
+                                   args.get("symbol") or None, args.get("render_only") is True)
         if name == "list_example_specs":
             return ws.example_specs()
         if name == "propose_rules":
@@ -334,6 +442,19 @@ def call_tool(ws, name, args):
             return r
         if name == "save_rules":
             return ws.save_rules(args["toml"], args.get("overwrite") is True)
+        if name == "workspace_status":
+            return ws.status()
+        if name == "doctor":
+            return ws.doctor()
+        if name == "list_plugins":
+            return ws.plugins()
+        if name == "plugin_export":
+            return ws.plugin_export(args["name"], args["bom"])
+        if name == "export_parts":
+            return ws.export_parts(args["bom"], args.get("format") or "csv", args.get("include_held") is True)
+        if name == "kicad_dblib":
+            return ws.kicad_dblib(args["bom"], args.get("name") or "ecadlib", args.get("driver") or None,
+                                  args.get("include_held") is True)
     raise KeyError(f"unknown tool {name}")
 
 
@@ -366,9 +487,10 @@ def handle(ws, msg):
             out = call_tool(ws, params.get("name"), params.get("arguments") or {})
             result = {"content": [{"type": "text", "text": json.dumps(out, indent=1, default=str)}], "isError": False}
         except Exception as e:
-            if not isinstance(e, (ValueError, FileExistsError)):
+            user_error = isinstance(e, (ValueError, KeyError, FileExistsError, FileNotFoundError, PermissionError))
+            if not user_error:                            # a bug: keep the traceback; a wrong id / path is the caller's
                 traceback.print_exc(file=sys.stderr)
-            msg = str(e) if isinstance(e, (ValueError, FileExistsError)) else f"{type(e).__name__}: {e}"
+            msg = (e.args[0] if isinstance(e, KeyError) and e.args else str(e)) if user_error else f"{type(e).__name__}: {e}"
             result = {"content": [{"type": "text", "text": msg}], "isError": True}
     else:
         return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}}

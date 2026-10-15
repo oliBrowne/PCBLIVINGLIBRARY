@@ -33,6 +33,18 @@ MIN_WEB, HARD_WEB, SILK_CLEAR, SILK_CLEAR_SMALL = 0.2, 0.1, 0.2, 0.1
 EPS = 0.005
 MOUNT = re.compile(r"^((MP|MH|SH|MTG|MOUNT|MECH|NPTH|S|H)\d*)?$", re.I)   # mounting / shield pads: not pins
 BALL = re.compile(r"^([A-Z]{1,2})(\d{1,3})$")
+GRID_ROW = re.compile(r"^(?:[A-GJ-NPRTUVWY]|[A-GJ-NPRTUVWY][A-HJ-NPRTUVWY])\d{1,3}$")   # JEDEC ball names, H aside
+
+
+def mount_rx(nums):
+    """The mounting-pad pattern for a footprint with these pad numbers. 'H<n>' names a mounting hole, except in a ball
+    grid (other JEDEC row letters present), where H is a row of balls (A..G, H, J..) and those pads are pins."""
+    if sum(1 for n in nums if GRID_ROW.match(str(n))) >= 2 and any(re.fullmatch(r"H\d{1,3}", str(n)) for n in nums):
+        return MOUNT_GRID
+    return MOUNT
+
+
+MOUNT_GRID = re.compile(r"^((MP|MH|SH|MTG|MOUNT|MECH|NPTH|S)\d*)?$", re.I)
 USB_C_STACKS = ({"A1", "A12", "B1", "B12"}, {"A4", "A9", "B4", "B9"})     # GND, VBUS: stacked on purpose
 
 
@@ -237,6 +249,7 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     cu = [p for p in pads if p["copper"]]
     holes = [p for p in pads if p["hole"]]
     nums = [p["num"] for p in cu if p["num"]]
+    MOUNT = mount_rx(nums)                           # noqa: N806 (H<n> is a ball row in a grid, a mounting hole otherwise)
     groups = [set(map(str, g)) for g in same_net or []]
     numset = set(nums)
 
@@ -277,8 +290,8 @@ def check(text, allow_duplicate_pads=None, same_net=None):
 
     # ---- pin 1 / numbering (mounting and shield pads are not pins)
     pin1 = "1" if "1" in nums else "A1" if "A1" in nums else None    # A1: BGA balls, USB-C and other lettered rows
-    if pin1 is None:
-        add("error", "pin1", "no pad numbered 1")
+    if pin1 is None and not _a1_spot([p for p in cu if BALL.match(p["num"])]):
+        add("error", "pin1", "no pad numbered 1")           # (a ball grid may leave A1 out: its corner is still pin 1)
     dup = {n for n in nums if nums.count(n) > 1 and not MOUNT.fullmatch(n)} - set(allow_duplicate_pads or ())
     for n in sorted(dup):
         if not any(p["num"] == n and p["w"] * p["h"] > 2 * min(q["w"] * q["h"] for q in cu) for p in cu):
@@ -321,10 +334,26 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     row_y = {}
     for p in balls:
         row_y.setdefault(BALL.match(p["num"]).group(1), set()).add(round(p["y"], 2))
-    if len(balls) >= 4 and len(balls) >= 0.9 * len(sig) and len(row_y) >= 2 and all(len(v) == 1 for v in row_y.values()) \
-            and len(set().union(*row_y.values())) == len(row_y) \
+    if len(balls) >= 4 and len(balls) >= 0.9 * len(sig) and len(row_y) >= 2 \
             and len({round(p["x"], 2) for p in balls}) >= 2:      # a ball grid: each row letter is one row of pads
-        _bga_rules(tree, balls, add)
+        ys_of = {}
+        for p in balls:
+            ys_of.setdefault(round(p["y"], 2), set()).add(BALL.match(p["num"]).group(1))
+        one = sum(1 for v in row_y.values() if len(v) == 1) >= 0.8 * len(row_y) and \
+            sum(1 for v in ys_of.values() if len(v) == 1) >= 0.8 * len(ys_of)
+        if one:                                      # mostly one letter per row: a grid with (maybe) a misnamed ball
+            letter = lambda p: BALL.match(p["num"]).group(1)
+            cnt = {}
+            for p in balls:
+                cnt[(letter(p), round(p["y"], 2))] = cnt.get((letter(p), round(p["y"], 2)), 0) + 1
+            y_of = {L: max(row_y[L], key=lambda y: cnt[(L, y)]) for L in row_y}                 # each letter's usual row
+            l_of = {y: max(ys_of[y], key=lambda L: cnt[(L, y)]) for y in ys_of}                 # each row's usual letter
+            mixed = sorted({p["num"] for p in balls if y_of[letter(p)] != round(p["y"], 2) or l_of[round(p["y"], 2)] != letter(p)},
+                           key=lambda t: (len(t), t))
+            if mixed:
+                add("error", "bga", f"row letters and rows disagree at balls {', '.join(mixed[:8])}: a row letter on two "
+                                    "rows, or two letters on one row (misnamed balls?)")
+            _bga_rules(tree, balls, add)
 
     # ---- silk
     silk, silk_polys = _graphics(tree, "F.SilkS")
@@ -432,8 +461,21 @@ def _pitch(groups):
     return max(counts, key=lambda d: (counts[d], -d)) if counts else None
 
 
-def _bga_rules(tree, balls, add):
+def _a1_spot(balls):
+    """Where ball A1 is: the ball, or, when A1 is depopulated (some BGAs leave the index corner empty), the crossing of
+    row A and column 1 when both have balls. None when there is no row A or no column 1."""
     a1 = next((p for p in balls if p["num"] == "A1"), None)
+    if a1 is not None:
+        return a1
+    row_a = [p for p in balls if BALL.match(p["num"]).group(1) == "A"]
+    col_1 = [p for p in balls if BALL.match(p["num"]).group(2) == "1"]
+    if not row_a or not col_1:
+        return None
+    return {"num": "A1", "x": col_1[0]["x"], "y": row_a[0]["y"], "w": 0, "h": 0}
+
+
+def _bga_rules(tree, balls, add):
+    a1 = _a1_spot(balls)
     if a1 is None:
         add("error", "bga", "ball grid without a ball A1")
         return

@@ -1,0 +1,33 @@
+{
+  "name": "JST_PH_B4B-PH-K_1x04_P2.00mm_Vertical",
+  "description": "JST PH series connector, B4B-PH-K, top entry, 4 pins, 2.00 mm pitch",
+  "package_type": "connector",
+  "pin_count": 4,
+  "pitch": 2.0,
+  "height_max": 6.0,
+  "pad_table": {
+    "unit": "mm",
+    "y_axis": "down",
+    "origin": "pin1",
+    "arrays": [
+      {
+        "count": 4,
+        "x": 0,
+        "y": 0,
+        "dx": 2.0,
+        "type": "tht",
+        "drill": 0.75
+      }
+    ],
+    "body": {
+      "x1": -1.95,
+      "y1": -1.7,
+      "x2": 7.95,
+      "y2": 2.8
+    }
+  },
+  "source": {
+    "datasheet": "http://www.jst-mfg.com/product/pdf/eng/ePH.pdf",
+    "drawing": "recommended PCB layout; KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check"
+  }
+}

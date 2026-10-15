@@ -1,0 +1,26 @@
+{
+  "name": "BGA-121_9.0x9.0mm_Layout11x11_P0.8mm_Ball0.4mm_Pad0.35mm_NSMD",
+  "description": "BGA-121, 9 x 9 mm, 0.8 mm pitch, 0.4 mm balls, the maker's 0.35 mm land (IPC would give 0.30)",
+  "package_type": "bga",
+  "pin_count": 121,
+  "rows": 11,
+  "cols": 11,
+  "pitch": 0.8,
+  "body_length": {
+    "nom": 9.0
+  },
+  "body_width": {
+    "nom": 9.0
+  },
+  "ball_diameter": {
+    "nom": 0.4
+  },
+  "land_diameter": {
+    "nom": 0.35
+  },
+  "height_max": 1.2,
+  "density": "B",
+  "source": {
+    "drawing": "KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as its name and drawing give them"
+  }
+}
