@@ -208,6 +208,16 @@ def test_cli():
         assert out.read_text().startswith("ISO-10303-21;") and "AUTOMOTIVE_DESIGN" in out.read_text()
 
 
+def test_zero_size_name_is_a_value_error():
+    """A degenerate footprint name (zero-size body) must raise ValueError so kicad_import falls back to a box."""
+    for n in ("R_0000_0000Metric", "CP_Radial_D0mm_P0mm", "PinHeader_0x00_P2.54mm_Vertical"):
+        try:
+            S.generate(n)
+        except ValueError:
+            continue
+        raise AssertionError(n)
+
+
 if __name__ == "__main__":
     for k, v in list(globals().items()):
         if k.startswith("test_"):

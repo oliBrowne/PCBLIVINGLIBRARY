@@ -226,6 +226,28 @@ def test_kicad_cli_loads_outputs():
         assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_reexport_keeps_step_put_in_3dshapes():
+    """A STEP model the export could not fetch (offline) and the person put into <lib>.3dshapes/, as the note asks,
+    survives the next export."""
+    from ecadlib import release_check as RC
+    with tempfile.TemporaryDirectory() as d:
+        plan, items, http = _plan(d)
+        it = items["RES-0603-10k"]
+        km = RC._kicad_mod(it, plan.parent, RC._path(plan.parent, it["footprint"].get("file")))
+        txt = km.read_text().rstrip()
+        km.write_text(txt[:-1] + '\t(model "${KICAD8_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.wrl")\n)\n')
+        out = Path(d) / "kicad"
+        rep = X.export(plan, out, "L", http=http, log=lambda *a: None)
+        assert rep["models"] == {"R_0603_1608Metric.step": None}, rep["models"]
+        step = out / "L.3dshapes" / "R_0603_1608Metric.step"
+        step.parent.mkdir(exist_ok=True)
+        step.write_text("ISO-10303-21; hand-placed")
+        (out / "L.3dshapes" / "stale.step").write_text("x")
+        rep = X.export(plan, out, "L", http=http, log=lambda *a: None)
+        assert step.read_text() == "ISO-10303-21; hand-placed" and rep["models"]["R_0603_1608Metric.step"], rep["models"]
+        assert not (out / "L.3dshapes" / "stale.step").exists()
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -137,6 +137,39 @@ def test_numbers_and_text_specs():
     assert S.dist_key("Digi-Key Electronics") == "digikey" and S.dist_key("JLCPCB") == "lcsc" == S.dist_key("LCSC")
 
 
+def test_uppercase_unit_prefixes_in_descriptions():
+    # DigiKey ProductDescription is upper case: 'CAP CER 0.1UF 16V X7R 0402' used to yield no value at all
+    c = S.specs_from_text("CAP CER 0.1UF 16V X7R 0402", "C")
+    assert abs(c["value"] - 1e-7) < 1e-15 and c["unit"] == "F" and c["voltage"] == 16, c
+    assert abs(S.specs_from_text("CAP CER 1000PF 50V C0G 0603", "C")["value"] - 1e-9) < 1e-18
+    assert abs(S.specs_from_text("FIXED IND 10UH 1.2A 0805", "L")["value"] - 1e-5) < 1e-12
+    assert S.specs_from_text("RES 4R7 1% 0603", "R")["value"] == 4.7
+
+
+def test_cache_key_varies_with_locale_currency_header():
+    """upkeep runs lifecycle then sourcing on one CachedHTTP: DigiKey's productdetails URL is the same for both, so a
+    EUR sourcing request used to be answered from the lifecycle check's cached USD response."""
+    import tempfile
+    from ecadlib.httpcache import CachedHTTP
+    sent = []
+
+    class Sess:
+        headers = {}
+
+        def request(self, method, url, data=None, headers=None, timeout=None):
+            sent.append((headers or {}).get("X-DIGIKEY-Locale-Currency"))
+            return type("R", (), {"status_code": 200, "ok": True, "text": json.dumps({"c": sent[-1]})})()
+    with tempfile.TemporaryDirectory() as d:
+        h = CachedHTTP(d, min_interval=0)
+        h.s = Sess()
+        u = "https://api.digikey.com/products/v4/search/X/productdetails"
+        h.get(u, headers={"Authorization": "Bearer a"})
+        assert h.get(u, headers={"Authorization": "Bearer b"}).from_cache          # a new token still hits the cache
+        r = h.get(u, headers={"Authorization": "Bearer a", "X-DIGIKEY-Locale-Currency": "EUR"})
+        assert not r.from_cache and r.json() == {"c": "EUR"}, r.text
+        assert h.get(u, headers={"X-DIGIKEY-Locale-Currency": "EUR"}).from_cache
+
+
 def test_buy_moq_multiple_and_price_breaks():
     o = S.Offer("x", "D", "s", stock=1000, breaks=[(1, 0.10), (10, 0.016), (100, 0.0049)])
     assert S.buy(o, 40) == {"order_qty": 100, "unit": 0.0049, "ext": 0.49, "covers": True}     # buying up is cheaper

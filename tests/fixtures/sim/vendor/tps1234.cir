@@ -1,0 +1,8 @@
+* TPS1234 regulator macro-model - HAND-WRITTEN TEST FIXTURE
+* node order = datasheet pins 1..8
+.subckt TPS1234 1 2 3 4 5 6 7 8
+R1 1 2 1Meg
+R2 3 4 1Meg
+R3 5 6 1Meg
+R4 7 8 1Meg
+.ends

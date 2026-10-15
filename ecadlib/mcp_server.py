@@ -113,6 +113,18 @@ TOOLS = [
                     "(duplicates are then skipped by push; library files are never changed): only when the user asks.",
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"}, "merge": {"type": "boolean", "default": False}}}},
+    {"name": "sim_models",
+     "description": "Find SPICE / IBIS simulation models for the librarian plan's parts: built-in models for resistors, "
+                    "capacitors and inductors from their value, vendor models from the workspace's sim_models/ folder (and "
+                    "`models` folders inside the workspace), Nexar documents and vendor URL patterns. Each model is parsed "
+                    "and its pins matched to the symbol's: verified, verify (a person must check) or mismatch (never "
+                    "attached). attach=true writes the SIM links into the .SchLib files and the KiCad Sim.* fields and "
+                    "re-runs the release check: only when the user asks. Returns per part the model, source, pin status "
+                    "and manufacturer model pages to download from by hand.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "attach": {"type": "boolean", "default": False},
+                                    "models": {"type": "array", "items": {"type": "string"},
+                                               "description": "workspace-relative folders of model files"}}}},
     {"name": "build_altium_models",
      "description": "Write the Altium .PcbLib files for a BOM's footprints that are in the KiCad libraries, plus generic "
                     "Resistor/Capacitor .SchLib symbols, into the workspace altium_models/ folder.",
@@ -128,6 +140,72 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"}, "workspace": {"type": "string", "description": "workspace URL"},
                                     "dry_run": {"type": "boolean", "default": True}}}},
+    {"name": "upkeep_run",
+     "description": "Run the library upkeep checks for a BOM (its librarian plan when there is one): lifecycle (NRND/EOL, "
+                    "stock-outs), KiCad upstream source changes, price jumps and stock, Altium 365 drift. Reports only what "
+                    "is new since the last upkeep run; a check whose credentials are missing is skipped and says so. "
+                    "apply=true reconverts KiCad parts whose upstream sources changed (rewrites library files): only when "
+                    "the user asks. Never opens GitHub issues or PRs (that is the `ecadlib upkeep --github` CLI).",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"},
+                                    "checks": {"type": "array", "items": {"type": "string",
+                                               "enum": ["lifecycle", "upstream", "sourcing", "a365"]},
+                                               "description": "checks to run (default: all, or [upkeep] checks in ecadlib.toml)"},
+                                    "apply": {"type": "boolean", "default": False},
+                                    "workspace": {"type": "string", "description": "Altium 365 workspace URL for the a365 check"}}}},
+    {"name": "project_bom",
+     "description": "Read the BOM straight from an Altium project (.PrjPcb, or a single .SchDoc): components from every "
+                    "schematic grouped by MPN / Design Item ID with designators and quantities, footprints, Altium 365 "
+                    "GUIDs, ActiveBOM choices and per-variant quantities. variant applies one project variant (DNP / "
+                    "alternate parts). Writes a CSV that triage_bom and librarian_run accept (the project path works too).",
+     "inputSchema": {"type": "object", "required": ["project"],
+                     "properties": {"project": {"type": "string", "description": "path to the .PrjPcb or .SchDoc"},
+                                    "variant": {"type": "string"}}}},
+    {"name": "where_used",
+     "description": "Scan folders of Altium projects and report where each part is used (project, designators, quantity, "
+                    "revision, variants where it is not fitted), with flags: parts missing from the library, library parts "
+                    "used nowhere, duplicates in use, old Altium 365 revisions, NRND/obsolete parts. Read-only.",
+     "inputSchema": {"type": "object", "required": ["projects"],
+                     "properties": {"projects": {"type": "array", "items": {"type": "string"},
+                                                 "description": "folders (searched recursively) or project files"},
+                                    "part": {"type": "string", "description": "only this part (MPN, item id, LibRef or GUID)"},
+                                    "plan": {"type": "string", "description": "librarian plan.json to compare against"}}}},
+    {"name": "a365_pull",
+     "description": "Import the components already in an Altium 365 workspace into the plan (status existing, with "
+                    "revision and model GUIDs), refresh ones pulled before and download their .SchLib/.PcbLib. With bom, "
+                    "into that BOM's librarian plan (the librarian then reuses them instead of fetching); without, into "
+                    "altium365/workspace_plan.json. Changes local files only; conflicts are reported. Needs NEXAR_TOKEN.",
+     "inputSchema": {"type": "object", "required": ["workspace"],
+                     "properties": {"workspace": {"type": "string", "description": "workspace URL"},
+                                    "bom": {"type": "string"},
+                                    "folders": {"type": "array", "items": {"type": "string"},
+                                                "description": "import only components under these workspace folders"}}}},
+    {"name": "a365_status",
+     "description": "Compare the plan with the Altium 365 workspace without changing anything: new in the workspace, "
+                    "changed there since the last pull, changed locally, conflicts (both), deleted. Needs NEXAR_TOKEN.",
+     "inputSchema": {"type": "object", "required": ["workspace"],
+                     "properties": {"workspace": {"type": "string"}, "bom": {"type": "string"}}}},
+    {"name": "propose_rules",
+     "description": "Set up the library rules (ecadlib.toml: naming, required parameters, folders, layers, footprint density, "
+                    "BOM columns) with minimal effort: scan the user's existing libraries (Altium .SchLib/.PcbLib/.DbLib "
+                    "folders, parts tables, KiCad libraries, BOMs, an Altium 365 component list JSON) and propose each "
+                    "setting with evidence and a confidence. Writes nothing. Show the user the proposal and ask the "
+                    "`questions` (ambiguous settings) in plain words; pass their answers back as choices {key: value} to "
+                    "get the final toml. paths default to the workspace's --lib folders and uploaded BOMs.",
+     "inputSchema": {"type": "object",
+                     "properties": {"paths": {"type": "array", "items": {"type": "string"},
+                                              "description": "folders or files to scan"},
+                                    "a365": {"type": "array", "items": {"type": "string"},
+                                             "description": "Altium 365 component list JSON or check-a365 --state file"},
+                                    "choices": {"type": "object", "description": "answers: setting key -> value"},
+                                    "full": {"type": "boolean", "description": "include every evidence line (default: short)"}}}},
+    {"name": "save_rules",
+     "description": "Write the workspace's ecadlib.toml (the `toml` from propose_rules, possibly edited with the user). Only "
+                    "after the user has agreed to the proposal. If a different file exists nothing is written and the diff "
+                    "comes back (needs_confirm): show it and call again with overwrite true only when the user says to "
+                    "replace it (the old file is kept as ecadlib.toml.bak).",
+     "inputSchema": {"type": "object", "required": ["toml"],
+                     "properties": {"toml": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}}},
     {"name": "list_example_specs",
      "description": "Return the example package specs (useful as templates for preview_footprint).",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -179,6 +257,8 @@ def call_tool(ws, name, args):
             if "summary" in r:
                 r["summary"].pop("log", None)
             return r
+        if name == "sim_models":
+            return ws.sim_models(args["bom"], args.get("attach") is True, args.get("models") or None)
         if name == "build_altium_models":
             return ws.build_altium_models(args["bom"])
         if name == "altium365_plan":
@@ -187,10 +267,29 @@ def call_tool(ws, name, args):
             return r
         if name == "altium365_push":
             return ws.altium365_push(args["bom"], args.get("workspace"), dry_run=args.get("dry_run", True) is not False)
+        if name == "a365_pull":
+            return ws.a365_pull(args["workspace"], args.get("bom"), args.get("folders"))
+        if name == "a365_status":
+            return ws.a365_status(args["workspace"], args.get("bom"))
         if name == "export_altium_dblib":
             return ws.export_dblib(args["bom"])
+        if name == "upkeep_run":
+            return ws.upkeep_run(args["bom"], args.get("checks") or None, args.get("apply") is True, args.get("workspace"))
+        if name == "project_bom":
+            return ws.project_bom(args["project"], args.get("variant") or None)
+        if name == "where_used":
+            return ws.where_used(args["projects"], args.get("part") or None, args.get("plan") or None)
         if name == "list_example_specs":
             return ws.example_specs()
+        if name == "propose_rules":
+            r = ws.propose_rules(args.get("paths") or None, args.get("a365") or None, args.get("choices") or None)
+            if not args.get("full"):
+                for st in r["settings"]:
+                    st["evidence"] = st["evidence"][:3]
+                r.pop("rules", None)
+            return r
+        if name == "save_rules":
+            return ws.save_rules(args["toml"], args.get("overwrite") is True)
     raise KeyError(f"unknown tool {name}")
 
 
