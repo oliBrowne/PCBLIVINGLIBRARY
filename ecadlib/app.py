@@ -36,6 +36,7 @@ class Workspace:
         self.models = self.root / "altium_models"
         self.libs = [str(Path(l).resolve()) for l in libs]
         self.provider_names = providers or [c.name for c in P.ALL]
+        self._providers_given = bool(providers)          # else [providers] order in the rules decides (ecadlib.plugins)
         self.offline = offline
 
     # ------------------------------------------------------------------ paths
@@ -164,7 +165,7 @@ class Workspace:
         must not block other workspace actions."""
         bom_path = self._bom_path(bom)
         http = CachedHTTP(self.root / "http_cache", min_interval=1.0, offline=self.offline)
-        provs = [c(http) for c in P.ALL if c.name in self.provider_names]
+        provs = [c(http) for c in self._provider_classes()]
         lines, mapping = self._read_bom(bom_path)
         index = self._index()
         rows = []
@@ -407,7 +408,7 @@ class Workspace:
                 progress(min(n[0], len(lines)), len(lines), str(msg).strip()[:80])
         if progress:
             progress(0, len(lines), "looking up parts")
-        provs = ",".join(p for p in ("jlcpcb_search", "easyeda") if p in self.provider_names)
+        provs = self._librarian_providers()
         items = L.run(str(bom_path), self.libs + [str(self.root / "footprints")], out,
                       list(sources) if sources else None, refresh, False, list(allow), self.offline,
                       self.root / "http_cache", 0.5, provs, log=note, rules=self.rules())
@@ -756,7 +757,7 @@ class Workspace:
             items = D.fill_plan(out / "plan.json", rd, self.rules(), log=log.append, parts=set(parts or []) or None)
         else:
             self._read_bom(bom_path)
-            provs = ",".join(p for p in ("jlcpcb_search", "easyeda") if p in self.provider_names)
+            provs = self._librarian_providers()
             items = L.run(str(bom_path), self.libs + [str(self.root / "footprints")], out, None, None, False, [], self.offline,
                           self.root / "http_cache", 0.5, provs, http=rd.http, log=log.append, rules=self.rules(), reader=rd)
         state = rd._state()
@@ -931,6 +932,42 @@ class Workspace:
     def example_specs(self):
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data
         return {p.stem: json.loads(p.read_text()) for p in sorted(d.glob("*.json"))} if d.exists() else {}
+
+    # ------------------------------------------------------------------ plugins (ecadlib.plugins), notifications
+    def _provider_classes(self):
+        """Triage sources: --providers when given, else [providers] order, else every built-in (today's default)."""
+        from . import plugins as PL
+        return PL.select(self.provider_names if self._providers_given else None, self.rules(),
+                         default=[c.name for c in P.ALL])
+
+    def _librarian_providers(self):
+        """The librarian's sources: [providers] order when set (and no --providers), else the free built-in two."""
+        from . import plugins as PL
+        if not self._providers_given and PL.order_set(self.rules()):
+            return None
+        return ",".join(p for p in ("jlcpcb_search", "easyeda") if p in self.provider_names)
+
+    def plugins(self):
+        """Installed provider / exporter plugins, the [providers] order in use and the [notify] targets (no secrets)."""
+        from . import notify as N, plugins as PL
+        d = PL.describe()
+        r = self.rules()
+        d["order"] = [c.name for c in self._provider_classes()]
+        d["notify"] = [{"name": t["name"], "type": t["type"], "events": sorted(t["events"]), "url_env": t["url_env"],
+                        "url_set": bool(os.environ.get(t["url_env"]))} for t in N.settings(r)["targets"]]
+        return d
+
+    def plugin_export(self, name, bom):
+        """Run exporter plugin `name` on the librarian plan of a BOM; files go to <ws>/exports/<name>/<bom stem>/."""
+        from . import plugins as PL
+        bom_path = self._bom_path(bom)
+        plan = self._librarian_dir(bom_path) / "plan.json"
+        if not plan.exists():
+            raise ValueError("run the librarian on this BOM first (no plan.json)")
+        out = self.root / "exports" / self.safe_name(name) / self.safe_name(bom_path.stem)
+        files = PL.run_exporter(name, plan, out, self.rules())
+        return {"exporter": name, "out": self.rel(out),
+                "files": [self.rel(f) if self.root in Path(f).resolve().parents else str(f) for f in files]}
 
 
 def _now(ts=None):
