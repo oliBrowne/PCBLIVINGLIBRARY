@@ -293,7 +293,9 @@ def test_auto_page_selection_and_page_map():
     # the original page numbers end up in the provenance
     ext = copy.deepcopy(TD.GOOD)
     res = D.process(ext, "TESTPART", "u", offset=pmap)
-    assert res["sidecar"]["pin_table"]["page"] == pmap[2] and res["sidecar"]["dimensions"]["body_length"]["page"] == 31
+    assert res["sidecar"]["pin_table"]["page"] == pmap[2]
+    # GOOD cites page 31 for its dimensions, but only len(pmap) pages were sent: no original page, flagged
+    assert res["sidecar"]["dimensions"]["body_length"]["page"] is None and any("cited page(s) [31" in r for r in res["needs_review"])
 
 
 # ---------------------------------------------------------------- self-check
@@ -554,3 +556,131 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+# ---------------------------------------------------------------- review rvA: cost cap on every path, damaged PDFs, pages
+def test_cost_cap_holds_on_sync_path_cumulatively_and_unknown_price():
+    api = FakeAPI(tokens=20000)
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        http = PdfHTTP({"https://a/ds.pdf": PDF})
+        rd = D.Reader(d, d, key=KEY, http=http, log=None, rules={"datasheet": {"max_cost_usd": 0.01}})
+        try:                                                    # the librarian calls read_now directly (no batch)
+            rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+            raise AssertionError("cap")
+        except D.DatasheetError as e:
+            assert "max_cost_usd" in str(e) and not api.of("/v1/messages"), e
+        one = rd.estimate([rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT")])["usd_max"]
+        rd = D.Reader(d, d, key=KEY, http=http, log=None, rules={"datasheet": {"max_cost_usd": one * 1.5}})
+        rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))      # first part fits
+        try:                                                    # the second one would take the run over the cap
+            rd.read_now(rd.job("OTHERPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+            raise AssertionError("cumulative cap")
+        except D.DatasheetError as e:
+            assert "already sent" in str(e) and len(api.of("/v1/messages")) == 1, e
+        rd = D.Reader(d, d + "/u", key=KEY, http=http, log=None, batch=True, model="claude-unpriced-9",
+                      rules={"datasheet": {"max_cost_usd": 100.0}})
+        rd.submit(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+        try:                                                    # a cap can't be held without a price: refuse
+            rd.flush()
+            raise AssertionError("unknown price")
+        except D.DatasheetError as e:
+            assert "no price known" in str(e) and not api.of("/batches"), e
+        rd = D.Reader(d, d + "/y", key=KEY, http=http, log=None, model="claude-unpriced-9", yes=True,
+                      rules={"datasheet": {"max_cost_usd": 0.01}})
+        rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))      # --yes overrides
+        assert len(api.of("/v1/messages")) == 2
+
+
+def test_cap_never_blocks_collecting_a_batch_already_paid():
+    api = FakeAPI(polls=1, tokens=20000)
+    with tempfile.TemporaryDirectory() as d:
+        items, rd, _ = run2(d, api, reader_kw={"wait": False})
+        assert len(api.of("/v1/messages/batches")) == 1
+        items, rd, _ = run2(d, api, reader_kw={"rules": {"datasheet": {"max_cost_usd": 0.01}}})   # resume under a cap
+        assert len(api.of("/v1/messages/batches")) == 1 and api.of("/results")
+        assert items["DSPART1"]["source"]["symbol"].startswith("datasheet:"), items["DSPART1"]["librarian"]["tried"]
+
+
+def test_damaged_and_encrypted_pdfs_give_clear_errors():
+    import pypdf
+    good = pdf_with([f"page {i}" for i in range(50)])
+    w = pypdf.PdfWriter(clone_from=pypdf.PdfReader(io.BytesIO(good)))
+    w.encrypt("secret")
+    buf = io.BytesIO()
+    w.write(buf)
+    enc, trunc, junk = buf.getvalue(), good[: len(good) // 2], b"%PDF-1.4\n" + b"\x00" * 4000
+    for data in (enc, trunc, junk):
+        try:
+            D.prepare(data, (2, 3))
+            raise AssertionError("no error")
+        except D.DatasheetError as e:
+            assert "can't cut the PDF to pages 2-3" in str(e), e
+        sent, off, _, note = D.prepare(data, None, auto_pages=40)       # no page cut asked for: sent whole, no crash
+        assert sent == data and off == 0, note
+    try:
+        D.prepare(enc, (1, 2))
+    except D.DatasheetError as e:
+        assert "password-protected" in str(e)
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "enc.pdf").write_bytes(enc)
+        try:
+            D.load_source(str(Path(d) / "enc.pdf"), (1, 2))
+            raise AssertionError("no error")
+        except D.DatasheetError:
+            pass
+        try:
+            D.prepare(good, (49, 52))
+            raise AssertionError("past the end")
+        except D.DatasheetError as e:
+            assert "has 50 pages" in str(e)
+
+
+def test_cited_page_outside_the_pages_sent_is_flagged():
+    ext = copy.deepcopy(TD.GOOD)                     # GOOD cites page 31 for its dimensions
+    res = D.process(ext, "TESTPART", "u", offset=[5, 9, 12])
+    assert any("cited page(s)" in r and "31" in r for r in res["needs_review"]), res["needs_review"]
+    assert res["sidecar"]["dimensions"]["body_length"]["page"] is None             # not a made-up original page
+    assert "page" not in res["spec"]["source"] or res["spec"]["source"]["page"] is not None
+    ok = copy.deepcopy(TD.GOOD)
+    for v in list(ok["package"].values()) + list((ok["package"].get("exposed_pad") or {}).values()):
+        if isinstance(v, dict) and "page" in v:
+            v["page"] = 2
+    for p in ok["pins"]:
+        p["page"] = 1
+    ok["pin_table"]["page"] = 1
+    res = D.process(ok, "TESTPART", "u", offset=[5, 9, 12])
+    assert not any("cited page(s)" in r for r in res["needs_review"])
+    assert res["sidecar"]["dimensions"]["body_length"]["page"] == 9 and res["sidecar"]["pin_table"]["page"] == 5
+
+
+def test_odd_batch_results_are_errors_not_passes():
+    lines = [{"custom_id": "DSPART1", "result": {"type": "canceled"}},
+             {"custom_id": "NOT_OURS", "result": {"type": "succeeded", "message": TD.message(TD.GOOD)}},
+             {"custom_id": "DSPART2", "result": {"type": "succeeded", "message": dict(TD.message(TD.GOOD), stop_reason="max_tokens")}}]
+    api = FakeAPI()
+    api._results = lambda bid: lines
+    with tempfile.TemporaryDirectory() as d:
+        items, rd, _ = run2(d, api)
+        assert any("batch request canceled" in t for t in items["DSPART1"]["librarian"]["tried"])
+        assert any("max_tokens" in t for t in items["DSPART2"]["librarian"]["tried"]), items["DSPART2"]["librarian"]["tried"]
+        assert items["DSPART1"]["source"]["symbol"] is None and items["DSPART2"]["source"]["symbol"] is None
+        assert not list((Path(d) / "cache" / "datasheet_results").glob("*.json"))      # nothing unusable cached
+
+
+def test_single_part_cli_holds_the_cost_cap():
+    calls = []
+    with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": KEY}), \
+            mock.patch.object(D.requests, "post", lambda url, **kw: (calls.append({"url": url}) or
+                              R(200, {"input_tokens": 20000} if url.endswith("/count_tokens") else TD.message(TD.GOOD)))):
+        f = Path(d) / "ds.pdf"
+        f.write_bytes(PDF)
+        rf = Path(d) / "ecadlib_rules.json"
+        rf.write_text(json.dumps({"datasheet": {"max_cost_usd": 0.01}}))
+        try:
+            D.main([str(f), "--part", "TESTPART", "-o", d + "/out", "--rules", str(rf)])
+            raise AssertionError("cap")
+        except SystemExit as e:
+            assert "max_cost_usd" in str(e.code), e.code
+        assert not [c for c in calls if c["url"].endswith("/v1/messages")]
+        assert D.main([str(f), "--part", "TESTPART", "-o", d + "/out", "--rules", str(rf), "--yes"]) == 0
+        assert len([c for c in calls if c["url"].endswith("/v1/messages")]) == 1
