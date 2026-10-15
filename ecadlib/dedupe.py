@@ -19,7 +19,7 @@ read from <plan dir>/a365_state.json when present):
              resistor and capacitor would match.
 Each group gets a recommended keeper: --keep wins, then an Altium 365 component, then an existing library entry,
 then the one most plan items use, a plan item that is ready, a part from the official KiCad library, the shortest
-name. --merge rewrites the plan (a copy is saved as plan.json.pre-dedupe first): a duplicate plan item gets
+name. --merge rewrites the plan (the first copy is saved as plan.json.pre-dedupe, later ones timestamped): a duplicate plan item gets
 `duplicate_of` and status `duplicate` (altium365 push skips it, release_check keeps it), a duplicate footprint or
 symbol reference is pointed at the keeper's ref and file (`merged_from` keeps the old one). Library files, DbLib rows
 and workspace components are never changed or deleted; they are only reported. Approvals of a rewritten item go
@@ -28,7 +28,7 @@ Outputs: <out>.md, <out>.csv (one row per group member), <out>_map.csv (kind, fr
 part-number mapping for BOMs), and with --bom a copy of the BOM with its LibRef and Footprint columns remapped.
 Config (dedupe.json next to the plan, or --config): {"strip_suffixes": [regex, ...], "default_suffixes": true,
 "symbol_min_pins": 3, "keep": [names], "ignore": [names]}. Exit codes: 0 no duplicates, 1 duplicates found, 2 error."""
-import argparse, configparser, csv, datetime, hashlib, json, math, os, re, shutil, sqlite3, sys
+import argparse, configparser, contextlib, csv, datetime, hashlib, json, math, os, re, shutil, sqlite3, sys
 from pathlib import Path, PureWindowsPath
 
 from . import altium_lib as AL, sexpr
@@ -489,6 +489,22 @@ def write_reports(groups, mapping, stem, plan, errors=()):
     return stem, mp
 
 
+def backup(plan):
+    """Copy the plan before --merge rewrites it. The first copy is plan.json.pre-dedupe and is never overwritten (a
+    second merge used to replace the original with the already merged plan); later ones get a UTC timestamp."""
+    plan = Path(plan)
+    first = plan.with_name(plan.name + ".pre-dedupe")
+    dst = first
+    if first.exists():
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+        dst, n = plan.with_name(f"{first.name}-{stamp}"), 1
+        while dst.exists():
+            n += 1
+            dst = plan.with_name(f"{first.name}-{stamp}-{n}")
+    shutil.copyfile(plan, dst)
+    return dst
+
+
 def run(plan, libs=(), a365=None, config=None, keep=(), do_merge=False, kinds=("mpn", "footprint", "symbol"), out=None,
         bom=None, who="ecadlib dedupe", log=print):
     plan = Path(plan)
@@ -508,7 +524,7 @@ def run(plan, libs=(), a365=None, config=None, keep=(), do_merge=False, kinds=("
         col.add_a365(a365)
     groups = find_groups(col, list(keep) + cfg["keep"], cfg["ignore"])
     if do_merge:
-        shutil.copyfile(plan, plan.with_name(plan.name + ".pre-dedupe"))
+        backup(plan)
         mapping = merge(items, groups, base, kinds, who)
         write_text_atomic(plan, json.dumps(items, indent=2))
     else:
@@ -531,8 +547,10 @@ def main(argv=None):
     ap.add_argument("--bom", help="also write a copy of this BOM with LibRef / Footprint mapped to the keepers")
     ap.add_argument("-o", "--out", help="report stem (default <plan dir>/dedupe)")
     a = ap.parse_args(argv)
+    from .approvals import cli_plan_lock
     try:
-        r = run(a.plan, a.lib, a.a365, a.config, a.keep, a.merge, tuple(k for k in a.kinds.split(",") if k), a.out, a.bom)
+        with cli_plan_lock(a.plan) if a.merge else contextlib.nullcontext():   # the agent may be rewriting this plan
+            r = run(a.plan, a.lib, a.a365, a.config, a.keep, a.merge, tuple(k for k in a.kinds.split(",") if k), a.out, a.bom)
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"dedupe: {type(e).__name__}: {e}", file=sys.stderr)
         return 2

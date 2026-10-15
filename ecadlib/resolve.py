@@ -536,7 +536,9 @@ def main(argv=None):
                 if c["pin_map"]:
                     print(f"         suggest: --map {' --map '.join(f'{x}={y}' for x, y in c['pin_map'].items())}")
         return 0
-    r = choose(a.plan, a.part, a.kind, a.id, src=src(), pin_map=_pin_map(a.map))
+    from .approvals import cli_plan_lock
+    with cli_plan_lock(a.plan):                # the library agent's librarian may be rewriting this plan right now
+        r = choose(a.plan, a.part, a.kind, a.id, src=src(), pin_map=_pin_map(a.map))
     if emit:
         emit(r)
     else:

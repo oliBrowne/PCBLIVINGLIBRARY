@@ -290,17 +290,19 @@ def main(argv=None):
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan's folder or here)")
     a = ap.parse_args(argv)
     plan = Path(a.plan)
-    items = json.loads(plan.read_text(encoding="utf-8"))
-    unknown = set(a.allow + a.unallow) - {i["name"] for i in items}
-    if unknown:
-        sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")
-    rows = apply(items, plan.parent, a.allow, a.unallow, rules=a.rules)
-    if a.allow:                                # record the person, so approvals can refuse self-approval
-        from .approvals import identity, post_check, stamp_allow
-        stamp_allow(items, a.allow, identity(a.user, cwd=plan.parent))
-        post_check(items, plan.parent, rows)
-    write_text_atomic(plan, json.dumps(items, indent=2))
-    stem = write_report(rows, a.out or plan.parent / "release_check", plan)
+    from .approvals import cli_plan_lock
+    with cli_plan_lock(plan):                  # the library agent's librarian may be rewriting this plan right now
+        items = json.loads(plan.read_text(encoding="utf-8"))
+        unknown = set(a.allow + a.unallow) - {i["name"] for i in items}
+        if unknown:
+            sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")
+        rows = apply(items, plan.parent, a.allow, a.unallow, rules=a.rules)
+        if a.allow:                            # record the person, so approvals can refuse self-approval
+            from .approvals import identity, post_check, stamp_allow
+            stamp_allow(items, a.allow, identity(a.user, cwd=plan.parent))
+            post_check(items, plan.parent, rows)
+        write_text_atomic(plan, json.dumps(items, indent=2))
+        stem = write_report(rows, a.out or plan.parent / "release_check", plan)
     for r in rows:
         print(f"  {r['result']:<8} {r['name']:<28} {r['failures'][:110]}")
     held = sum(r["status"] == "held" for r in rows)
