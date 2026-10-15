@@ -217,7 +217,7 @@ def test_full_loop_pr_idempotent_then_push_after_approval():
         q.update(rid, build=dict(q.get(rid)["build"], requested_at="2026-10-15T08:00:00Z", requested_by="ann"))
         rep3 = run(ws, rules, q, w, v, github_session=gh, a365=nx, now="2026-10-15T09:00:00Z")
         assert q.get(rid)["status"] == "review" and q.get(rid)["pictures"]["before"], q.get(rid)
-        assert [c[0] for c in gh.calls[2:]] == ["PATCH"] and gh.calls[2][1].endswith("/pulls/7"), gh.calls
+        assert [c[0] for c in gh.calls[2:]] == ["GET", "PATCH"] and gh.calls[3][1].endswith("/pulls/7"), gh.calls
         assert len({i["batch"] for i in q.list(status="review")}) == 1
 
         # push only after approval
