@@ -482,7 +482,8 @@ def load_state(root):
         return {"version": STATE_VERSION, "sources": {}}
     data = json.loads(f.read_text(encoding="utf-8"))
     data.setdefault("sources", {})
-    if int(data.get("version") or 1) < 2:               # keys made before manufacturer names were normalised
+    from .agent_queue import aliases_sig
+    if int(data.get("version") or 1) < 2 or data.get("aliases") != aliases_sig():   # keys from another name table
         for ent in data["sources"].values():
             for fe in (ent.get("files") or {}).values():
                 if isinstance(fe, dict) and isinstance(fe.get("parts"), dict):
@@ -491,7 +492,7 @@ def load_state(root):
                         m, _, n = str(k).partition("|")
                         new.setdefault(part_key((ln or {}).get("manufacturer") or m, n), ln)
                     fe["parts"] = new
-        data["version"] = STATE_VERSION
+        data["version"], data["aliases"] = STATE_VERSION, aliases_sig()
     return data
 
 
@@ -618,6 +619,8 @@ def scan_report(workspace, rules=None, sources=None, client=None, now=None, dry_
     """scan() plus what happened per source: {changes, errors: [{source, error}], sources: [{id, type, ref, name,
     status, parts, error}], state}. dry_run computes the changes without writing the state."""
     root, wlibs, rules = _workspace_parts(workspace, rules)
+    from .agent_queue import use_rules
+    use_rules(rules)                                    # [agent] manufacturer_aliases for part keys
     cfg = watch_rules(rules)
     when = now_iso(now)
     srcs = [norm_source(s, root) for s in (sources if sources is not None else cfg.get("sources") or [])]
@@ -671,7 +674,8 @@ def scan_report(workspace, rules=None, sources=None, client=None, now=None, dry_
             summary.append({"id": sid, "type": src["type"], "ref": src["ref"], "name": src.get("name"),
                             "status": "partial" if ferrs else "ok", "error": ent["error"], "parts": len(new_parts),
                             "files": len(files), "changes": len(found), **({"renamed_from": adopted} if adopted else {})})
-        state["version"], state["last_scan"] = STATE_VERSION, when
+        from .agent_queue import aliases_sig
+        state["version"], state["last_scan"], state["aliases"] = STATE_VERSION, when, aliases_sig()
         if not dry_run:
             save_state(root, state)
     return {"changes": changes, "errors": errors, "sources": summary, "dry_run": bool(dry_run),
