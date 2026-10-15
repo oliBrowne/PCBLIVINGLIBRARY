@@ -591,8 +591,16 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
                     key = f"{cfg['pictures_path'].strip('/')}/{_safe(batch_id)}/{_safe(it['id'])}/{Path(p).name}"
                     files[key] = ws / p
                     own[it["id"]].add(key)
-        keep = set(files) | {x for i, ps in rec["paths"].items() if i not in departed for x in ps}
-        drop = {x for i in departed for x in rec["paths"][i]} - keep
+        # files an item had on the branch from an earlier build and no longer has (a rebuild with fewer pictures; a
+        # part removed from its BOM: nothing built, no AFTER pictures). Its old pictures (only ever on this branch)
+        # leave now; other files stay recorded as its own, so they leave with it if it departs, never forgotten
+        pics = lambda i: f"{cfg['pictures_path'].strip('/')}/{_safe(batch_id)}/{_safe(i)}/"
+        stale = {i: set(rec["paths"][i]) - own[i] for i in own if i in rec["paths"]}
+        for i, ps in stale.items():
+            own[i] |= {x for x in ps if not x.startswith(pics(i))}
+        keep = set(files) | {x for i, ps in rec["paths"].items() if i not in departed and i not in own for x in ps} \
+            | {x for ps in own.values() for x in ps}
+        drop = ({x for i in departed for x in rec["paths"][i]} | {x for ps in stale.values() for x in ps}) - keep
         try:
             base = cfg["base_branch"] or git(repo, "symbolic-ref", "--short", "HEAD")
             remote = git(repo, "remote", "get-url", "origin", ok=(0, 2, 128))
