@@ -23,13 +23,20 @@ One pass (run_once):
            never forced, and an open batch PR is updated, never duplicated. No git repo, no remote or no token: the PR
            body and pictures are written to <ws>/agent/batches/<id>/ only, and the report says why.
   PUSH     approved items go to Altium 365 through altium365.push (release check and approvals still gate it), when
-           [agent] auto_push is true or with `ecadlib agent push`. --dry-run sends nothing.
+           [agent] auto_push is true (before BUILD, in the same pass) or with `ecadlib agent push`. Only the build a
+           person approved is sent: an item whose library files changed since, or that has nothing built (a removal,
+           an upkeep finding), is not. A change seen after the approval becomes a new item once it is pushed.
+           --dry-run sends nothing.
   MAINTAIN on the [agent] upkeep schedule, upkeep.run() over every librarian plan in the workspace; new findings
            (obsolete / NRND, stock-out, price jump, KiCad upstream change, Altium 365 drift) become queue items with
            origin "upkeep". A KiCad source that changed is rebuilt; the others are findings for a person.
 
 State lives in <ws>/agent/: status.json (for the web UI), agent_state.json (last upkeep), run.lock (one run at a time),
-library_bom.json/.csv, pictures/<item>/, batches/<id>/. A dry run writes none of it and restores the watch state."""
+plan.lock (held while the librarian rewrites the plan: approve/reject wait for it), library_bom.json/.csv,
+pictures/<item>/, batches/<id>/, and watch_pending.json / upkeep_pending.json while what a scan saw is not queued yet.
+A run that dies anywhere loses nothing: the next one rescans from before it, re-proves items left in `proving` and
+rebuilds items left in `building` (an item that stopped the agent 3 times is failed instead). A dry run writes none of
+it and restores the watch state."""
 import argparse, contextlib, copy, csv, datetime as _dt, hashlib, json, os, re, shutil, signal, subprocess, sys, tempfile, threading, time
 from pathlib import Path
 
@@ -72,8 +79,22 @@ def part_key(manufacturer, mpn):
 def write_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str))
+    tmp = path.with_name(path.name + f".{os.getpid()}.{threading.get_ident()}.tmp")
+    with open(tmp, "w") as f:
+        f.write(json.dumps(data, indent=2, default=str))
+        f.flush()
+        os.fsync(f.fileno())                      # a power cut must not leave an empty file behind the rename
+    os.replace(tmp, path)
+
+
+def write_json_text(path, text):
+    """write_json for text that already is JSON (a saved copy of a state file)."""
+    path = Path(path)
+    tmp = path.with_name(path.name + f".{os.getpid()}.{threading.get_ident()}.tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
 
 
@@ -169,7 +190,7 @@ def status(workspace, queue=None):
         st["queue"] = counts
     except Exception as e:                       # queue module not installed / unreadable: status still answers
         st["queue_error"] = f"{type(e).__name__}: {e}"
-    st["batches"] = [read_json(b, {}) for b in sorted((ws / "agent" / "batches").glob("*/batch.json"))][-20:]
+    st["batches"] = [read_json(b, {}) for b in sorted((ws / "agent" / "batches").glob("*/batch.json"))[-20:]]
     return st
 
 
@@ -400,60 +421,79 @@ def upkeep_due(ws, cfg, now=None):
     period = SCHEDULES.get(cfg["upkeep_schedule"])
     if not period:
         return False
-    last = _epoch(read_json(Path(ws) / "agent" / "agent_state.json", {}).get("last_upkeep"))
-    return last is None or _epoch(stamp(now)) - last >= period
+    last, t = _epoch(read_json(Path(ws) / "agent" / "agent_state.json", {}).get("last_upkeep")), _epoch(stamp(now))
+    # last in the future: the clock was ahead when it was stamped (then corrected); waiting for it would stop upkeep
+    return last is None or t is None or t - last >= period or last > t
 
 
 # ------------------------------------------------------------------ PR body
-def _esc(v):
-    return str(v if v is not None else "").replace("|", "\\|").replace("\n", " ")
+_MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()!|~])")
+
+
+def _md(v):
+    """Untrusted text (MPNs, BOM fields, notes, model answers) as one inert line of GitHub markdown: no HTML, links,
+    images, tables breaks, @mentions or #issue references (so no "fixes #12" closing an issue on merge)."""
+    s = " ".join(str(v if v is not None else "").split())
+    s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    s = _MD_SPECIAL.sub(r"\\\1", s)
+    return s.replace("@", "@​").replace("#", "#​")
+
+
+_esc = _md
+
+
+def _url(v):
+    """A datasheet link for <...>: http(s) only, with nothing that could close the autolink."""
+    from urllib.parse import quote
+    v = str(v or "").strip()
+    return quote(v, safe=":/?#[]@!$&'()*+,;=%~.-_") if re.match(r"https?://[^\s]+$", v) else None
 
 
 def pr_body(batch_id, items, link, t):
-    md = [f"# Library agent batch {batch_id}", "",
-          f"{len(items)} part(s) built by `ecadlib agent` ({t}). Check the pictures against the datasheet, then approve "
+    md = [f"# Library agent batch {_md(batch_id)}", "",
+          f"{len(items)} part(s) built by `ecadlib agent` ({_md(t)}). Check the pictures against the datasheet, then approve "
           "or reject each part in the web UI's **Review queue** (or `ecadlib agent approve ID`). Approved parts are pushed "
           "to Altium 365 by the agent; merging this PR only keeps the library files in git.", ""]
     for it in items:
         ch, b, pr = it.get("change") or {}, it.get("build") or {}, it.get("proof") or {}
         src = ch.get("source") or {}
         what = ch.get("kind") or ch.get("check") or ""
-        md += [f"## {it.get('mpn') or it['key']}" + (f" ({it['manufacturer']})" if it.get("manufacturer") else ""), "",
-               f"Queue item `{it['id']}`, {it.get('origin', 'watch')}: **{what}**"
-               + (f" in {src.get('type')} `{src.get('name') or src.get('ref')}`" if src else "")
-               + (f": {ch.get('detail')}" if it.get("origin") == "upkeep" and ch.get("detail") else ""), ""]
+        md += [f"## {_md(it.get('mpn') or it['key'])}" + (f" ({_md(it['manufacturer'])})" if it.get("manufacturer") else ""), "",
+               f"Queue item `{_safe(it['id'])}`, {_md(it.get('origin', 'watch'))}: **{_md(what)}**"
+               + (f" in {_md(src.get('type'))} {_md(src.get('name') or src.get('ref'))}" if src else "")
+               + (f": {_md(ch.get('detail'))}" if it.get("origin") == "upkeep" and ch.get("detail") else ""), ""]
         if b.get("part"):
-            md.append(f"Plan part `{b['part']}`: release check **{b.get('status', '?')}**; symbol from "
-                      f"`{(b.get('source') or {}).get('symbol') or '-'}`, footprint from `{(b.get('source') or {}).get('footprint') or '-'}`.")
+            md.append(f"Plan part {_md(b['part'])}: release check **{_md(b.get('status', '?'))}**; symbol from "
+                      f"{_md((b.get('source') or {}).get('symbol') or '-')}, footprint from {_md((b.get('source') or {}).get('footprint') or '-')}.")
             md.append("")
         elif b.get("action") == "none":
-            md += [f"Nothing rebuilt: {b.get('reason', '')}", ""]
-        ds = str((ch.get("line") or {}).get("datasheet") or "")
-        if ds.startswith(("http://", "https://")):
+            md += [f"Nothing rebuilt: {_md(b.get('reason', ''))}", ""]
+        ds = _url((ch.get("line") or {}).get("datasheet"))
+        if ds:
             md += [f"Datasheet: <{ds}>", ""]
         pics = it.get("pictures") or {}
         before, after = pics.get("before") or [], pics.get("after") or []
         if before or after:
             md += ["| Before | After |", "|---|---|"]
             for i in range(max(len(before), len(after))):
-                cell = lambda lst: f"![{Path(lst[i]).stem}]({link(it, lst[i])})" if i < len(lst) else ("(new part)" if not lst else "")
+                cell = lambda lst: f"![{_safe(Path(lst[i]).stem)}]({link(it, lst[i])})" if i < len(lst) else ("(new part)" if not lst else "")
                 md.append(f"| {cell(before)} | {cell(after)} |")
             md.append("")
         if pr:
-            md.append(f"**Proof:** {pr.get('verdict', '?')}" + (f" (score {pr['score']:.2f})" if isinstance(pr.get("score"), (int, float)) else "")
-                      + (f": {pr.get('reason')}" if pr.get("reason") else "")
-                      + (f" ({pr['model']})" if pr.get("model") and pr.get("verdict") != "skipped" else ""))
+            md.append(f"**Proof:** {_md(pr.get('verdict', '?'))}" + (f" (score {pr['score']:.2f})" if isinstance(pr.get("score"), (int, float)) else "")
+                      + (f": {_md(pr.get('reason'))}" if pr.get("reason") else "")
+                      + (f" ({_md(pr['model'])})" if pr.get("model") and pr.get("verdict") != "skipped" else ""))
             if pr.get("findings"):
                 md += ["", "| Severity | What | Expected | Found | Page |", "|---|---|---|---|---|"]
-                md += [f"| {_esc(f.get('severity'))} | {_esc(f.get('what'))} | {_esc(f.get('expected'))} | {_esc(f.get('found'))} | "
-                       f"{_esc(f.get('page'))} |" for f in pr["findings"]]
+                md += [f"| {_md(f.get('severity'))} | {_md(f.get('what'))} | {_md(f.get('expected'))} | {_md(f.get('found'))} | "
+                       f"{_md(f.get('page'))} |" for f in pr["findings"]]
             md.append("")
         doubts = list(b.get("hold_reasons") or []) + list(b.get("verify") or []) + list(b.get("notes") or [])
         doubts += [f"proof: {f.get('what')}" for f in pr.get("findings") or [] if f.get("severity") in ("error", "warning")]
         if pr.get("verdict") in ("doubt", "skipped"):
             doubts.insert(0, f"proof {pr['verdict']}: {pr.get('reason', '')}")
         if doubts:
-            md += ["**Doubts:**", ""] + [f"- {_esc(d)}" for d in dict.fromkeys(doubts)] + [""]
+            md += ["**Doubts:**", ""] + [f"- {_md(d)}" for d in dict.fromkeys(map(str, doubts))] + [""]
     md.append("<sub>Opened by ecadlib agent. It never force-pushes; re-runs update this PR.</sub>")
     text = "\n".join(md) + "\n"
     return text if len(text) <= BODY_MAX else text[:BODY_MAX - 80] + "\n\n(cut: the full text is in the batch folder)\n"
@@ -510,13 +550,20 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
             remote = git(repo, "remote", "get-url", "origin", ok=(0, 2, 128))
             slug = cfg["github_repo"] or github_slug(remote)
             token = env.get(cfg["github_token_env"]) if cfg["github_token_env"] else None
-            if remote:                           # build on what is on the remote branch (a person may have pushed a fix)
+            start = base
+            if remote:
+                # start from the remote's base, never the local one: local commits nobody pushed (work in progress,
+                # private files) must not reach origin inside the agent's branch. FETCH_HEAD only: no ref, index or
+                # working tree of the repo changes.
+                git(repo, "fetch", "--no-tags", "origin", f"refs/heads/{base}")
+                start = git(repo, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+                # build on what is on the remote branch (a person may have pushed a fix)
                 rs = git(repo, "ls-remote", "origin", f"refs/heads/{rec['branch']}")
                 if rs:
                     git(repo, "fetch", "--no-tags", "origin", f"+refs/heads/{rec['branch']}:refs/heads/{rec['branch']}")
             msg = f"ecadlib agent batch {batch_id}: {len(items)} part(s)\n\n" + "\n".join(
                 f"- {it.get('mpn') or it['key']} ({(it.get('change') or {}).get('kind') or (it.get('change') or {}).get('check') or ''})" for it in items)
-            sha, changed = commit_files(repo, rec["branch"], base, files, msg)
+            sha, changed = commit_files(repo, rec["branch"], start, files, msg)
             rec.update(repo=str(repo), base=base, commit=sha)
             if not remote:
                 reason = f"branch {rec['branch']} committed in {repo}, but the repo has no origin remote: no PR"
@@ -535,6 +582,11 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
                                       f"{_safe(it['id'])}/{Path(p).name}?raw=true")
                 body, title = pr_body(batch_id, items, link, t), f"Library agent: {len(items)} part(s) to review (batch {batch_id})"
                 num = rec.get("pr_number")
+                if num:                          # merged or closed meanwhile: a closed PR is not a review; open a new one
+                    cur = gh.api("GET", f"pulls/{num}")
+                    if isinstance(cur, dict) and cur.get("state") == "closed":
+                        rec.setdefault("closed_prs", []).append(rec.get("pr_url"))
+                        num, rec["pr_number"], rec["pr_url"] = None, None, None
                 if not num:
                     owner = slug.split("/")[0]
                     open_ = gh.api("GET", f"pulls?state=open&head={owner}:{rec['branch']}&per_page=10") or []
@@ -587,15 +639,42 @@ def push_approved(workspace, rules=None, dry_run=False, queue=None, a365=None, e
         client = A.Nexar(tok)
     pairs = []
     for it in approved:
+        if (it.get("build") or {}).get("action") == "none":
+            # a removal or an upkeep finding: what was approved is "nothing to build", not the library files (which
+            # may never have been approved): nothing is sent; the item is closed
+            rep["results"].append({"id": it["id"], "action": "none", "detail": "nothing was built: nothing sent"})
+            if not dry_run:
+                try:
+                    q.transition(it["id"], "pushed", user=AGENT, note="nothing was built: nothing sent to Altium 365")
+                    _followup(q, it)
+                except (ValueError, KeyError) as e:
+                    rep["results"][-1]["queue"] = f"{type(e).__name__}: {e}"
+            continue
         pi = _find_plan_item(plan, it)
         if pi is None:
             rep["results"].append({"id": it["id"], "action": "skip", "detail": "not in the agent's library plan"})
+            continue
+        why = _not_as_approved(it, pi, out)
+        if why:
+            rep["results"].append({"id": it["id"], "action": "skip", "detail": why})
             continue
         pi = copy.deepcopy(pi)
         for k in ("symbol", "footprint"):
             if pi[k].get("file"):
                 pi[k]["file"] = str((out / pi[k]["file"]).resolve())
         pairs.append((it, pi))
+    if not dry_run:                              # a person may have rejected one while the plan was read
+        live = []
+        for it, pi in pairs:
+            try:
+                cur = q.get(it["id"])
+            except (KeyError, ValueError):
+                continue
+            if cur.get("status") == "approved" and _published(cur) == _published(it):
+                live.append((cur, pi))
+            else:
+                rep["results"].append({"id": it["id"], "action": "skip", "detail": f"now {cur.get('status')}: not pushed"})
+        pairs = live
     results = A.push([p for _, p in pairs], client, url or "https://<workspace>", dry_run=dry_run,
                      policy=load_policy(out), rules=rules) if pairs else []
     for (it, _), res in zip(pairs, results):
@@ -603,11 +682,41 @@ def push_approved(workspace, rules=None, dry_run=False, queue=None, a365=None, e
         rep["results"].append(res)
         if dry_run:
             continue
-        q.update(it["id"], push=dict(res, at=stamp(now)))
-        if res["action"] in ("release", "update_parameters", "up_to_date"):
-            q.transition(it["id"], "pushed", user=AGENT, note=f"Altium 365: {res['action']}")
-            rep["pushed"].append(it["id"])
+        try:
+            q.update(it["id"], push=dict(res, at=stamp(now)))
+            if res["action"] in ("release", "update_parameters", "up_to_date"):
+                q.transition(it["id"], "pushed", user=AGENT, note=f"Altium 365: {res['action']}")
+                rep["pushed"].append(it["id"])
+                _followup(q, it)
+        except (ValueError, KeyError) as e:      # changed by a person meanwhile: the push result is still in the report
+            res["queue"] = f"{type(e).__name__}: {e}"
     return rep
+
+
+def _followup(q, it):
+    """Its source changed after the approval: that change is new work (a new item, now that this one is closed)."""
+    nxt = it.get("followup")
+    if nxt:
+        q.upsert({"key": it["key"], "mpn": it.get("mpn") or nxt.get("mpn", ""), "manufacturer": it.get("manufacturer", ""),
+                  "origin": it.get("origin") or "watch", "change": nxt})
+
+
+def _not_as_approved(it, pi, out):
+    """Why an approved item must not be pushed: its library files are no longer the build that was approved (rebuilt
+    since, or the approval was given on another build). None when they are."""
+    b = it.get("build") or {}
+    ap = it.get("approval") or {}
+    if ap.get("build") and ap["build"] != _published(it):
+        return "approved on another build than the current one: review it again"
+    if b.get("hash"):
+        files = _model_files(pi, out)
+        try:
+            now_hash = _hash_files(files) if files else None
+        except OSError:
+            now_hash = None
+        if now_hash != b["hash"]:
+            return "its library files changed since the approved build: reject and retry it to review the new build"
+    return None
 
 
 # ------------------------------------------------------------------ one pass
@@ -653,11 +762,23 @@ def _summary(rep):
 
 def _pass(ws, rules, cfg, t, dry_run, client, now, watcher, q, prover, builder, upkeep, do_upkeep, session, a365, env,
           libs, log, rep):
-    # WATCH (a dry run puts the watch state back, so the next real run still sees these changes)
-    wfile = ws / "agent" / "watch_state.json"
+    # WATCH (a dry run puts the watch state back, so the next real run still sees these changes). A real run keeps
+    # the state from before the scan in watch_pending.json until every change is in the queue: a run that dies in
+    # between (killed, power cut) gets the old state back next time and sees the same changes again, never loses them.
+    wfile, pend = ws / "agent" / "watch_state.json", ws / "agent" / "watch_pending.json"
     saved = wfile.read_bytes() if dry_run and wfile.exists() else None
+    if not dry_run:
+        old = read_json(pend, None)
+        if isinstance(old, dict) and "state" in old:
+            if old["state"] is None:
+                wfile.unlink(missing_ok=True)
+            else:
+                write_json_text(wfile, old["state"])
+            rep["notes"].append("the last run stopped before queueing what it saw: scanning again from before it")
+        else:
+            write_json(pend, {"state": wfile.read_text() if wfile.exists() else None, "at": t})
     try:
-        changes = watcher.scan(ws, rules=rules, client=client, now=now) or []
+        changes = watcher.scan(ws, rules=rules, client=client, now=None if now is None else t) or []   # t: ISO, any `now` form
     finally:
         if dry_run:
             if saved is not None:
@@ -668,12 +789,16 @@ def _pass(ws, rules, cfg, t, dry_run, client, now, watcher, q, prover, builder, 
 
     # MAINTAIN: upkeep findings become queue items (on its schedule, or when asked)
     due = upkeep_due(ws, cfg, now) if do_upkeep is None else do_upkeep
-    findings = []
+    upend = ws / "agent" / "upkeep_pending.json"
+    findings = [] if dry_run else read_json(upend, [])      # findings a dead run computed but did not queue
+    findings = findings if isinstance(findings, list) else []
     if due and not dry_run:
         try:
             raw = (upkeep or upkeep_findings)(ws, rules, now)
-            findings = [f for f in raw if str(f.get("kind", "")).lower() not in SKIP_UPKEEP]
-            rep["upkeep"] = {"ran": t, "findings": len(findings)}
+            new = [finding_item(f, now) for f in raw if str(f.get("kind", "")).lower() not in SKIP_UPKEEP]
+            findings += new
+            write_json(upend, findings)            # upkeep remembers them as seen: keep them until they are queued
+            rep["upkeep"] = {"ran": t, "findings": len(new)}
             st = read_json(ws / "agent" / "agent_state.json", {})
             write_json(ws / "agent" / "agent_state.json", dict(st, last_upkeep=t))
         except Exception as e:
@@ -689,17 +814,35 @@ def _pass(ws, rules, cfg, t, dry_run, client, now, watcher, q, prover, builder, 
             rep["push"] = push_approved(ws, rules, True, q, a365, env, now)
         return
 
-    for c in changes:
-        it = q.upsert({"key": c.get("key") or part_key(c.get("manufacturer"), c.get("mpn")), "mpn": c.get("mpn", ""),
-                       "manufacturer": c.get("manufacturer", ""), "origin": "watch", "change": c})
-        if it.get("status") == "review" and c.get("kind") in ("new", "changed"):
-            # the source changed while the part waits for review: rebuild it (its batch PR is then updated)
-            q.update(it["id"], build=dict(it.get("build") or {}, requested_at=t, request_note=f"source {c.get('kind')}"))
-            q.transition(it["id"], "building", user=AGENT, note=f"rebuild: {c.get('kind')} in a watched source")
-        elif it.get("status") == "approved" and c.get("kind") == "changed":
-            rep["notes"].append(f"{it.get('mpn')}: changed in a watched source after approval; reject and retry it to rebuild")
-    for f in findings:
-        q.upsert(finding_item(f, now))
+    with getattr(q, "lock", None) or contextlib.nullcontext():     # one lock hold: the folder is read once, not per part
+        for c in changes:
+            try:
+                it = q.upsert({"key": c.get("key") or part_key(c.get("manufacturer"), c.get("mpn")), "mpn": c.get("mpn", ""),
+                               "manufacturer": c.get("manufacturer", ""), "origin": "watch", "change": c})
+                if it.get("status") == "review" and c.get("kind") in ("new", "changed"):
+                    # the source changed while the part waits for review: rebuild it (its batch PR is then updated)
+                    q.update(it["id"], build=dict(it.get("build") or {}, requested_at=t, request_note=f"source {c.get('kind')}"))
+                    q.transition(it["id"], "building", user=AGENT, note=f"rebuild: {c.get('kind')} in a watched source")
+                elif it.get("status") == "approved" and c.get("kind") == "changed":
+                    # the approved build is still what a person signed: it is pushed as it is, and this change becomes
+                    # a new item once it is (else it would be lost: the watch never reports it again)
+                    q.update(it["id"], followup=c)
+                    rep["notes"].append(f"{it.get('mpn')}: changed in a watched source after approval; rebuilt after "
+                                        "its push (or reject and retry it to rebuild now)")
+            except Exception as e:                 # one bad change must not lose the others
+                rep["notes"].append(f"{c.get('key') or c.get('mpn')}: not queued: {type(e).__name__}: {e}")
+        for f in findings:
+            try:
+                q.upsert(f)
+            except Exception as e:
+                rep["notes"].append(f"upkeep finding {f.get('key')}: not queued: {type(e).__name__}: {e}")
+    pend.unlink(missing_ok=True)
+    upend.unlink(missing_ok=True)
+
+    # PUSH (before the build: what was approved is sent before the librarian runs again, and a change that came in
+    # after an approval becomes a new item that this same run builds)
+    if cfg["auto_push"]:
+        rep["push"] = push_approved(ws, rules, False, q, a365, env, now)
 
     # BUILD
     _build(ws, rules, cfg, t, client, q, prover, builder, libs, log, rep)
@@ -723,30 +866,30 @@ def _pass(ws, rules, cfg, t, dry_run, client, now, watcher, q, prover, builder, 
         if not items:
             continue
         rec = publish_batch(ws, rules, bid, items, out, now, env, session, log)
-        if rec.get("pr_url") and hasattr(q, "update_batch"):   # the queue's batch record (web UI batch view) gets the PR too
-            q.update_batch(bid, pr_url=rec["pr_url"], branch=rec.get("branch"))
-        for i in items:
-            if rec.get("pr_url") and i.get("pr_url") != rec["pr_url"]:
-                q.update(i["id"], pr_url=rec["pr_url"])
+        try:
+            if rec.get("pr_url") and hasattr(q, "update_batch"):   # the queue's batch record (web UI batch view) gets the PR too
+                q.update_batch(bid, pr_url=rec["pr_url"], branch=rec.get("branch"))
+            for i in items:
+                if rec.get("pr_url") and i.get("pr_url") != rec["pr_url"]:
+                    q.update(i["id"], pr_url=rec["pr_url"])
+        except (KeyError, ValueError) as e:
+            rep["notes"].append(f"batch {bid}: PR link not stored: {type(e).__name__}: {e}")
         rep["batches"].append(rec)
 
-    # PUSH
-    if cfg["auto_push"]:
-        rep["push"] = push_approved(ws, rules, False, q, a365, env, now)
-    else:
+    if not cfg["auto_push"]:
         n = len(q.list(status="approved"))
         if n:
             rep["notes"].append(f"{n} approved part(s) wait for `ecadlib agent push` ([agent] auto_push is off)")
 
 
+MAX_ATTEMPTS = 3          # runs that died while building / proving one item before that item is failed
+
+
 def _wants_build(it):
-    """Items to build now: detected ones, and building ones a person asked to rebuild or that wait for a batch."""
-    b = it.get("build") or {}
-    if it["status"] == "detected":
-        return True
-    if it["status"] != "building":
-        return False
-    return bool(b.get("pending") or not b.get("built") or (b.get("requested_at") and b["requested_at"] >= b.get("built", "")))
+    """Items to build now: detected and building ones. Runs never overlap (run_lock), so an item found `building` at
+    the start of a run is one a person asked to rebuild, one waiting for a datasheet batch, or one a run died on: all
+    are (re)built. No time comparison: a clock stepped back must not strand a rebuild request."""
+    return it["status"] in ("detected", "building")
 
 
 def _rebuildable(it):
@@ -756,7 +899,62 @@ def _rebuildable(it):
     return ch.get("kind") != "removed"
 
 
+def _skipped_proof(reason):
+    return {"verdict": "skipped", "score": None, "reason": reason, "findings": [], "images": {"ours": [], "datasheet": []},
+            "model": "", "cost_usd": 0.0}
+
+
+def _prove(q, item_id, ws, rules, client, prover, rep, note=None):
+    """proving -> review / failed for one item (the PROVE step; also resumes an item a dead run left in proving)."""
+    it = q.get(item_id)
+    b = dict(it.get("build") or {})
+    b["proof_attempts"] = int(b.get("proof_attempts") or 0) + 1
+    if b["proof_attempts"] > MAX_ATTEMPTS:
+        q.update(item_id, build=b)
+        q.transition(item_id, "failed", user=AGENT, note=f"the proof stopped the agent {MAX_ATTEMPTS} times: look at it")
+        rep["failed"].append({"id": item_id, "reason": "proof interrupted repeatedly"})
+        return
+    it = q.update(item_id, build=b)
+    if b.get("action") == "none":
+        proof = _skipped_proof("nothing was built")
+    else:
+        try:
+            proof = prover.prove(it, workspace=ws, rules=rules, client=client)
+        except Exception as e:
+            proof = _skipped_proof(f"proof crashed: {type(e).__name__}: {e}")
+    q.update(item_id, proof=proof)
+    if proof.get("verdict") == "fail":
+        q.transition(item_id, "failed", user=AGENT, note=f"proof failed: {proof.get('reason', '')}")
+        rep["failed"].append({"id": item_id, "reason": f"proof failed: {proof.get('reason', '')}"})
+    else:
+        q.transition(item_id, "review", user=AGENT, note=note or f"proof {proof.get('verdict')}: {proof.get('reason', '')}"[:300])
+        rep["review"].append(item_id)
+
+
+def _changed_meanwhile(rep, it, e):
+    """A person decided on the item while the agent worked on it (reject, ...): their decision stands."""
+    rep["notes"].append(f"{it.get('mpn') or it['id']}: left as it is, changed meanwhile ({type(e).__name__}: {e})")
+
+
+def _read_lines(ws):
+    f = ws / "agent" / "library_bom.json"
+    if not f.exists():
+        return {}
+    try:
+        lines = json.loads(f.read_text())
+    except ValueError:
+        lines = None
+    if not isinstance(lines, dict):           # starting from {} would drop every part built so far from the plan
+        raise RuntimeError(f"{f} is damaged; restore it (its lines are also in {BOM_NAME}) before the agent builds again")
+    return lines
+
+
 def _build(ws, rules, cfg, t, client, q, prover, builder, libs, log, rep):
+    for it in q.list(status="proving"):           # a run died between the build and its proof: prove it now
+        try:
+            _prove(q, it["id"], ws, rules, client, prover, rep)
+        except (ValueError, KeyError) as e:
+            _changed_meanwhile(rep, it, e)
     todo = [i for i in q.list() if _wants_build(i)]
     if not todo:
         return
@@ -764,32 +962,43 @@ def _build(ws, rules, cfg, t, client, q, prover, builder, libs, log, rep):
     out = _librarian_out(ws, bom)
     plan_before = read_json(out / "plan.json", [])
     repo = repo_root(Path(cfg["library_repo"]) if cfg["library_repo"] else ws)
-    lines = read_json(ws / "agent" / "library_bom.json", {})
+    lines = _read_lines(ws)
     build_these, refresh = [], []
     for it in todo:
-        if it["status"] == "detected":
-            it = q.transition(it["id"], "building", user=AGENT, note="agent run")
-        notes = []
-        old = _find_plan_item(plan_before, it)
-        before = []
-        if old:                                      # BEFORE pictures: the current library version
-            files = _model_files(old, out)
-            with tempfile.TemporaryDirectory() as td:
-                files = {**_git_before(repo, out, old, td), **files} if len(files) < 2 else files
-                before = pictures_for(ws, prover, it["id"], files, "before", notes) if files else []
-        if not _rebuildable(it):
-            ch = it.get("change") or {}
-            why = ("removed from " + str((ch.get("source") or {}).get("name") or "a watched source") if ch.get("kind") == "removed"
-                   else f"{ch.get('check')} finding: {ch.get('kind')} ({ch.get('was')} -> {ch.get('now')})")
-            q.update(it["id"], build={"action": "none", "reason": why + "; a person decides", "built": t, "user": AGENT,
-                                      "part": old.get("name") if old else None, "hash": None,
-                                      "bom": bom.relative_to(ws).as_posix()},
-                     pictures={"before": before, "after": []})
-            q.transition(it["id"], "proving", user=AGENT, note="nothing to build")
-            q.update(it["id"], proof={"verdict": "skipped", "score": None, "reason": "nothing was built", "findings": [],
-                                      "images": {"ours": [], "datasheet": []}, "model": "", "cost_usd": 0.0})
-            q.transition(it["id"], "review", user=AGENT, note=why)
-            rep["review"].append(it["id"])
+        try:
+            if it["status"] == "detected":
+                # a new build cycle (retry / re-opened): it gets a new batch and PR, and a follow-up change is in it
+                fresh = {k: None for k in ("batch", "pr_url", "followup") if it.get(k)}
+                if fresh:
+                    q.update(it["id"], **fresh)
+                it = q.transition(it["id"], "building", user=AGENT, note="agent run")
+            bb = dict(it.get("build") or {})
+            bb["attempts"] = int(bb.get("attempts") or 0) + 1
+            if bb["attempts"] > MAX_ATTEMPTS:
+                _fail(q, it, rep, f"the build stopped the agent {MAX_ATTEMPTS} times: look at its BOM line", t, bb)
+                continue
+            it = q.update(it["id"], build=bb)
+            notes = []
+            old = _find_plan_item(plan_before, it)
+            before = []
+            if old:                                      # BEFORE pictures: the current library version
+                files = _model_files(old, out)
+                with tempfile.TemporaryDirectory() as td:
+                    files = {**_git_before(repo, out, old, td), **files} if len(files) < 2 else files
+                    before = pictures_for(ws, prover, it["id"], files, "before", notes) if files else []
+            if not _rebuildable(it):
+                ch = it.get("change") or {}
+                why = ("removed from " + str((ch.get("source") or {}).get("name") or "a watched source") if ch.get("kind") == "removed"
+                       else f"{ch.get('check')} finding: {ch.get('kind')} ({ch.get('was')} -> {ch.get('now')})")
+                q.update(it["id"], build={"action": "none", "reason": why + "; a person decides", "built": t, "user": AGENT,
+                                          "part": old.get("name") if old else None, "hash": None,
+                                          "bom": bom.relative_to(ws).as_posix()},
+                         pictures={"before": before, "after": []})
+                q.transition(it["id"], "proving", user=AGENT, note="nothing to build")
+                _prove(q, it["id"], ws, rules, client, prover, rep, note=why)
+                continue
+        except (ValueError, KeyError) as e:
+            _changed_meanwhile(rep, it, e)
             continue
         ln = _line_of(it, plan_before)
         lines[it["key"]] = {k: ln.get(k, "") for k, _ in BOM_COLS}
@@ -800,56 +1009,55 @@ def _build(ws, rules, cfg, t, client, q, prover, builder, libs, log, rep):
         return
     write_json(ws / "agent" / "library_bom.json", lines)
     write_bom(ws, lines)
+    from .agent_queue import plan_lock
     try:
-        plan = (builder or (lambda *a, **k: librarian_builder(*a, libs=libs, **k)))(ws, bom, out, refresh, rules, log)
+        with plan_lock(ws):           # a person's approve/reject waits: the librarian rewrites plan.json from its copy
+            plan = (builder or (lambda *a, **k: librarian_builder(*a, libs=libs, **k)))(ws, bom, out, refresh, rules, log)
     except Exception as e:
         for it, _, _ in build_these:
-            q.update(it["id"], build={"error": f"{type(e).__name__}: {e}", "built": t, "user": AGENT})
-            q.transition(it["id"], "failed", user=AGENT, note=f"librarian failed: {type(e).__name__}: {e}")
-            rep["failed"].append({"id": it["id"], "reason": f"librarian failed: {e}"})
+            try:
+                q.update(it["id"], build={"error": f"{type(e).__name__}: {e}", "built": t, "user": AGENT})
+                q.transition(it["id"], "failed", user=AGENT, note=f"librarian failed: {type(e).__name__}: {e}")
+                rep["failed"].append({"id": it["id"], "reason": f"librarian failed: {e}"})
+            except (ValueError, KeyError) as e2:
+                _changed_meanwhile(rep, it, e2)
         return
     from . import librarian as L
     rows = {r["part"]: r for r in L.review_rows(plan)} if plan else {}
     for it, before, notes in build_these:
-        pi = _find_plan_item(plan, it)
-        if pi is None:
-            _fail(q, it, rep, "the librarian made no plan entry for this part (check its BOM line)", t)
-            continue
-        files = _model_files(pi, out)
-        tried = (pi.get("librarian") or {}).get("tried", [])
-        b = {"part": pi["name"], "bom": bom.relative_to(ws).as_posix(), "user": AGENT, "built": t, "status": pi.get("status"),
-             "hold_reasons": pi.get("hold_reasons", []), "verify": pi.get("verify", []), "source": pi.get("source"),
-             "tried": tried, "notes": notes, "files": {"symbol": (pi.get("symbol") or {}).get("file"),
-                                                         "footprint": (pi.get("footprint") or {}).get("file"),
-                                                         "kicad_mod": (pi.get("footprint") or {}).get("kicad_mod")},
-             "plan": (out / "plan.json").relative_to(ws).as_posix()}
-        prev = it.get("build") or {}                 # who asked for this rebuild: agent_queue refuses their approval
-        b.update({k: prev[k] for k in ("requested_by", "requested_at", "request_note") if prev.get(k)})
-        if not (pi["symbol"].get("file") and pi["footprint"].get("file")):
-            if any("run again to collect" in x for x in tried):
-                b["pending"] = "datasheet batch submitted; the next run collects it"
-                q.update(it["id"], build=b)
-                rep["waiting"].append(it["id"])
-                continue
-            _fail(q, it, rep, "build incomplete: " + (rows.get(pi["name"], {}).get("why") or "no symbol or footprint"), t, b)
-            continue
-        b["hash"] = _hash_files({k: v for k, v in files.items()})
-        after = pictures_for(ws, prover, it["id"], files, "after", notes)
-        q.update(it["id"], build=b, pictures={"before": before, "after": after})
-        q.transition(it["id"], "proving", user=AGENT, note=f"built {pi['name']} ({pi.get('status')})")
-        rep["built"].append(it["id"])
         try:
-            proof = prover.prove(q.get(it["id"]), workspace=ws, rules=rules, client=client)
-        except Exception as e:
-            proof = {"verdict": "skipped", "score": None, "reason": f"proof crashed: {type(e).__name__}: {e}", "findings": [],
-                     "images": {"ours": [], "datasheet": []}, "model": "", "cost_usd": 0.0}
-        q.update(it["id"], proof=proof)
-        if proof.get("verdict") == "fail":
-            q.transition(it["id"], "failed", user=AGENT, note=f"proof failed: {proof.get('reason', '')}")
-            rep["failed"].append({"id": it["id"], "reason": f"proof failed: {proof.get('reason', '')}"})
-        else:
-            q.transition(it["id"], "review", user=AGENT, note=f"proof {proof.get('verdict')}: {proof.get('reason', '')}"[:300])
-            rep["review"].append(it["id"])
+            pi = _find_plan_item(plan, it)
+            if pi is None:
+                _fail(q, it, rep, "the librarian made no plan entry for this part (check its BOM line)", t)
+                continue
+            files = _model_files(pi, out)
+            tried = (pi.get("librarian") or {}).get("tried", [])
+            b = {"part": pi["name"], "bom": bom.relative_to(ws).as_posix(), "user": AGENT, "built": t, "status": pi.get("status"),
+                 "hold_reasons": pi.get("hold_reasons", []), "verify": pi.get("verify", []), "source": pi.get("source"),
+                 "tried": tried, "notes": notes, "files": {"symbol": (pi.get("symbol") or {}).get("file"),
+                                                             "footprint": (pi.get("footprint") or {}).get("file"),
+                                                             "kicad_mod": (pi.get("footprint") or {}).get("kicad_mod")},
+                 "plan": (out / "plan.json").relative_to(ws).as_posix()}
+            prev = q.get(it["id"]).get("build") or {}    # who asked for this rebuild: agent_queue refuses their approval
+            b.update({k: prev[k] for k in ("requested_by", "requested_at", "request_note") if prev.get(k)})
+            if not (pi["symbol"].get("file") and pi["footprint"].get("file")):
+                if any("run again to collect" in x for x in tried):
+                    b["pending"] = "datasheet batch submitted; the next run collects it"
+                    q.update(it["id"], build=b)
+                    rep["waiting"].append(it["id"])
+                    continue
+                _fail(q, it, rep, "build incomplete: " + (rows.get(pi["name"], {}).get("why") or "no symbol or footprint"), t, b)
+                continue
+            if q.get(it["id"])["status"] != "building":
+                raise ValueError(f"it is {q.get(it['id'])['status']} now")
+            b["hash"] = _hash_files({k: v for k, v in files.items()})
+            after = pictures_for(ws, prover, it["id"], files, "after", notes)
+            q.update(it["id"], build=b, pictures={"before": before, "after": after})
+            q.transition(it["id"], "proving", user=AGENT, note=f"built {pi['name']} ({pi.get('status')})")
+            rep["built"].append(it["id"])
+            _prove(q, it["id"], ws, rules, client, prover, rep)
+        except (ValueError, KeyError, OSError) as e:
+            _changed_meanwhile(rep, it, e)
 
 
 def _fail(q, it, rep, reason, t, build=None):
@@ -872,9 +1080,17 @@ def serve(workspace, interval_s=None, rules=None, stop=None, max_runs=None, run=
             signal.signal(s, lambda *_: stop.set())
     runs = 0
     write_status(ws, state="starting", serving=True)
+    wait = interval_s if interval_s is not None else 60
     while not stop.is_set():
-        r = RU.resolve(rules, ws) if rules is not None else RU.load(None, start=ws)
-        cfg = settings(r)
+        try:
+            r = RU.resolve(rules, ws) if rules is not None else RU.load(None, start=ws)
+            cfg = settings(r)
+        except Exception as e:                     # a typo saved in ecadlib.toml: say so and try again, don't stop
+            log(f"agent: rules not loaded, no run: {type(e).__name__}: {e}")
+            with contextlib.suppress(OSError):
+                write_status(ws, state="error", serving=True, last_error=f"rules: {type(e).__name__}: {e}")
+            stop.wait(sleep_s if sleep_s is not None else wait)
+            continue
         wait = interval_s if interval_s is not None else cfg["interval_minutes"] * 60
         if cfg["enabled"]:
             try:

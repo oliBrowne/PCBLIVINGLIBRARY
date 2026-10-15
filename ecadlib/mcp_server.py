@@ -143,7 +143,9 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["id", "decision", "user"],
                      "properties": {"id": {"type": "string"},
                                     "decision": {"type": "string", "enum": ["approve", "reject", "rebuild", "retry"]},
-                                    "user": {"type": "string"}, "role": {"type": "string"}, "note": {"type": "string"}}}},
+                                    "user": {"type": "string"}, "role": {"type": "string"}, "note": {"type": "string"},
+                                    "expect": {"type": "string", "description": "build_token from agent_queue_get: the "
+                                               "decision is refused if the item was rebuilt since it was shown"}}}},
     {"name": "find_duplicates",
      "description": "Find duplicate parts (same MPN once packaging suffixes are stripped), footprints (same pad "
                     "geometry) and symbols (same pinout) across the librarian's plan and the workspace's altium_models/ "
@@ -351,7 +353,7 @@ def call_tool(ws, name, args):
             return ws.agent_queue_get(args["id"])
         if name == "agent_queue_decide":
             return ws.agent_queue_decide(args["id"], args["decision"], args["user"], args.get("role"), args.get("note") or "",
-                                         via="ecadlib mcp")
+                                         via="ecadlib mcp", expect=args.get("expect") or None)
         if name == "find_duplicates":
             r = ws.find_duplicates(args["bom"], args.get("merge") is True)
             if "summary" in r:
