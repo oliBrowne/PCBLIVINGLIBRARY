@@ -1037,6 +1037,69 @@ python3 -m tests.test_cli_smoke [--subprocess]   # every command: -h and a minim
 * **Fuzzers:** the BOM reader, `sexpr.parse`, the KiCad footprint/symbol importer, the Altium OLE readers (`.SchDoc`, `.PcbLib`), package-spec validation and build, `ecadlib.toml` loading, the web UI's JSON endpoints and the MCP tools. Each target may raise only its documented error type (listed in the file's docstring); anything else fails with the input that caused it.
 * **CLI smoke:** every registered command answers `-h`. A minimal real invocation of each one (offline, in a temporary folder with `$HOME` redirected) must exit with an expected code, print no traceback and change nothing outside its output folder. `--subprocess` runs the installed `ecadlib` script instead, for the fresh-install check: `pip wheel --no-deps .`, install the wheel into a clean venv (Python 3.11 and 3.13), and run `python -m tests.test_cli_smoke --subprocess` from outside the checkout. `test_third_party_imports_are_declared` fails when a module imports a package that is not in `[project] dependencies` (only `pillow` and `pypdf` are optional extras).
 
+## 25. Connections to other tools: notifications, GitLab, plugins
+
+**Notifications** (`ecadlib/notify.py`). With `[notify]` targets in `ecadlib.toml`, the library agent posts when a review
+batch is published (`batch_ready`), when parts are held because they could not be built or failed their proof
+(`part_held`), when upkeep finds new changes (`upkeep_changes`), and when a part goes EOL, NRND or last time buy
+(`lifecycle`). `ecadlib upkeep` posts the last two after a run that saved its state. Nothing is sent without targets.
+
+```toml
+[notify]
+retries = 3          # retried on 429, 5xx and network errors: backoff_s, then 2x, 4x; 60 s budget for all retries
+[[notify.targets]]
+name = "library-channel"
+type = "slack"                      # slack (incoming webhook) | teams (Teams workflow webhook) | json (generic POST)
+url_env = "SLACK_WEBHOOK_URL"       # the NAME of the environment variable; the URL itself never goes in the file
+events = ["batch_ready", "part_held"]    # default: all four
+[[notify.targets]]
+type = "json"
+url_env = "ERP_HOOK_URL"
+token_env = "ERP_HOOK_TOKEN"        # json only: Authorization: Bearer <value>
+events = ["lifecycle"]
+```
+
+Slack gets a `text` message, Teams an Adaptive Card message, and `json` gets
+`{source, event, title, text, lines, more, url, data, time}`. A failed post goes into the agent report
+(`rep["notify"]`) and the log, and the run carries on. Error messages name the target and host, never the URL.
+`ecadlib notify show` lists the targets and whether their variables are set. `ecadlib notify test [--event E]
+[--target NAME]` sends a test message.
+
+**GitLab** (`ecadlib/forge.py`). The library agent's review batches become GitLab merge requests and `ecadlib upkeep
+--gitlab issue|pr` opens the rolling issue or a merge request. Each one follows the GitHub path step for step: it finds
+the open MR by source branch (MRs from forks are ignored), updates it in place, opens a new MR when the old one was
+merged or closed, adds outcome notes and closes with `state_event=close`. The host is chosen by `[agent] git_host = "auto"`:
+GitLab when origin is on a `gitlab*` host or on the host of `gitlab_api`, otherwise GitHub, so nothing changes for
+GitHub users. Settings: `gitlab_api` (default `https://gitlab.com/api/v4`; for a self-hosted server, e.g.
+`https://git.example.com/api/v4`, including servers under a path), `gitlab_project` (`group/sub/name` or a numeric id;
+empty = taken from the origin remote) and `gitlab_token_env` (default `GITLAB_TOKEN`, needs api scope). In GitLab CI,
+`upkeep` reads `CI_PROJECT_PATH` and `CI_API_V4_URL` by default. Checked live against gitlab.com, read-only: the merge
+request list and get, issue list and project lookup, with the field names used (`iid`, `web_url`, `state`,
+`source_project_id`, `target_project_id`). Opening, editing and closing MRs and issues is only tested against a fake
+server, because there is no token in this sandbox.
+
+**Plugins** (`ecadlib/plugins.py`). Part sources and exporters can be shipped as separate Python packages:
+
+```toml
+# the plugin's pyproject.toml
+[project.entry-points."ecadlib.providers"]
+stockroom = "ecadlib_example_plugin:StockroomCSV"      # a Provider class: name, auth, env, lookup(line) -> SourceResult
+[project.entry-points."ecadlib.exporters"]
+markdown-catalog = "ecadlib_example_plugin:markdown_catalog"   # export(items, out_dir, rules) -> [paths]
+```
+
+`[providers] order = ["stockroom", "jlcpcb_search", "easyeda"]` chooses and orders the part sources for triage, the
+librarian, the web UI / MCP workspace and the agent. `[]` keeps each command's default, and `--providers` still
+overrides it. `jlcpcb_search` is always placed before `easyeda`, because it finds the LCSC number that EasyEDA looks
+parts up by. If a plugin raises an exception, or returns something other than a `SourceResult`, the BOM line gets a
+note and triage carries on. A plugin that fails to import is listed by `ecadlib plugins list` with its error. Run an
+exporter with `ecadlib plugins export NAME plan.json -o DIR` (MCP `plugin_export`, `Workspace.plugin_export`).
+`examples/ecadlib_example_plugin/` holds a complete example: a stockroom-CSV part source and a Markdown catalog
+exporter. Install it with `pip install ./examples/ecadlib_example_plugin`.
+
+There is no read-only `/api/v1/` with token sign-in yet. The team server's API uses session cookies, and token
+sign-in would mean new code in its auth layer.
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:
