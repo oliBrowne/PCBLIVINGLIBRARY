@@ -7,6 +7,10 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+### Added
+
+- Library agent watch step (`ecadlib agent-watch [--dry-run]`, MCP `agent_watch_scan`, `[agent.watch]` rules): new, changed and removed parts in watched BOM files, folders (including web UI uploads), Altium projects and Altium 365 projects (Nexar queries schema-checked, not yet run live), with state in `agent/watch_state.json`.
+
 ## [0.3.0] - 2026-10-14
 
 ### Added
