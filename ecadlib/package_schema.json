@@ -478,9 +478,13 @@
                 "pitch": {
                   "type": "number",
                   "exclusiveMinimum": 0
+                },
+                "pitch_y": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
                 }
               },
-              "description": "vias inside a big pad (mm): drill, via diameter (default drill + 0.3), nx x ny grid, pitch (default spread over the pad)"
+              "description": "vias inside a big pad (mm): drill, via diameter (default drill + 0.3), nx x ny grid, pitch (default spread over the pad), pitch_y (rows, default pitch)"
             },
             "mask_margin": {
               "type": "number",
@@ -647,9 +651,13 @@
                   "pitch": {
                     "type": "number",
                     "exclusiveMinimum": 0
+                  },
+                  "pitch_y": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
                   }
                 },
-                "description": "vias inside a big pad (mm): drill, via diameter (default drill + 0.3), nx x ny grid, pitch (default spread over the pad)"
+                "description": "vias inside a big pad (mm): drill, via diameter (default drill + 0.3), nx x ny grid, pitch (default spread over the pad), pitch_y (rows, default pitch)"
               },
               "mask_margin": {
                 "type": "number",

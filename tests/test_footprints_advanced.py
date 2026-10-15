@@ -1,6 +1,6 @@
 """Harder footprints: BGA/LGA/CSP grids, pin headers, connectors and odd shapes from a datasheet pad table.
 
-  1. against KiCad's official footprints: every pad (centre, size, drill) and the courtyard, for 20 parts (5 BGAs,
+  1. against KiCad's official footprints: every pad (centre, size, drill) and the courtyard, for 57 parts (the first 20: 5 BGAs,
      7 pin headers, 7 JST/Molex/USB-C connectors, SOT-23-6), from the numbers-only fixture of the KiCad files
      (tests/fixtures/kicad_bench.json, made by `ecadlib footprint-bench --save-fixture`).
   2. footprint_check: the BGA rules (A1 marks, grid, land/pitch, row letters) and the connector rules (mounting
@@ -41,14 +41,17 @@ def msgs(txt, **kw):
 
 # ---------------------------------------------------------------- 1. KiCad benchmark
 def test_matches_kicad_official_footprints():
-    """Every pad of 20 footprints within 0.01 mm of KiCad's (position, size, drill); courtyards too, except the two SMD
-    pin headers whose KiCad courtyard also wraps the bent lead tails (not in our spec)."""
+    """Every pad of 57 footprints within 0.01 mm of KiCad's (position, size, drill): 13 BGAs (rows up to AF, A1
+    depopulated, datasheet lands), 17 pin headers, 10 connectors, 2 QFN/DFN with thermal vias, 15 IPC chip / SOT / SO /
+    QFP / QFN parts; courtyards too, except the four dual-row SMD pin headers whose KiCad courtyard also wraps the
+    bent lead tails (not in our spec)."""
     results, s = B.run(fixture=json.loads(FIXTURE.read_text()))
-    assert s["footprints"] == 20 and s["unavailable"] == 0, s
-    assert s["pads_ok"] == s["pads"] == 1067, s
-    assert s["footprints_all_pads_ok"] == 20 and s["check_clean"] == 20, s
+    assert s["footprints"] == 57 and s["unavailable"] == 0, s
+    assert s["pads_ok"] == s["pads"] == 2942, s
+    assert s["footprints_all_pads_ok"] == 57 and s["check_clean"] == 57, s
     crt_miss = sorted(r["name"] for r in results if not r["courtyard_ok"])
-    assert crt_miss == ["PinHeader_2x05_P1.27mm_Vertical_SMD", "PinHeader_2x05_P2.54mm_Vertical_SMD"], crt_miss
+    assert crt_miss == ["PinHeader_2x05_P1.00mm_Vertical_SMD", "PinHeader_2x05_P1.27mm_Vertical_SMD", "PinHeader_2x05_P2.00mm_Vertical_SMD",
+                        "PinHeader_2x05_P2.54mm_Vertical_SMD"], crt_miss
     for r in results:                                   # ours is never bigger than KiCad's where they differ
         if not r["courtyard_ok"]:
             assert all(abs(a) <= abs(b) + 1e-9 for a, b in zip(r["courtyard_ours"], r["courtyard_kicad"])), r
@@ -67,7 +70,7 @@ def test_bench_cli_offline_from_fixture():
         out = Path(td) / "res.json"
         rc = B.main(["--offline", "--cache", td, "--fixture", str(FIXTURE), "--json", str(out)])
         assert rc == 0, rc
-        assert json.loads(out.read_text())["summary"]["pads_ok"] == 1067
+        assert json.loads(out.read_text())["summary"]["pads_ok"] == 2942
         assert B.main(["--offline", "--cache", td]) == 1           # nothing cached, no fixture: nothing to compare
 
 
