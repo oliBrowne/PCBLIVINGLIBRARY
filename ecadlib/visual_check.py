@@ -1133,7 +1133,7 @@ def build_request(ours, pages, page_numbers, task, model, effort, fallback=True)
     content.append({"type": "text", "text": task})
     body = {"model": model, "max_tokens": MAX_TOKENS, "system": [{"type": "text", "text": SYSTEM}],
             "messages": [{"role": "user", "content": content}],
-            "output_config": {"effort": effort, "format": {"type": "json_schema", "schema": output_schema()}}}
+            "output_config": D.output_config(model, effort, output_schema())}
     headers = {"content-type": "application/json", "anthropic-version": D.API_VERSION}
     if fallback and model in D.FALLBACK_MODELS:
         body["fallbacks"] = "default"
@@ -1172,8 +1172,8 @@ def estimate(body):
     tin += len(SYSTEM) // 3 + len(json.dumps(body["output_config"])) // 3
     if pin is None:
         return {"input_tokens": tin, "usd": None, "usd_max": None}
-    return {"input_tokens": tin, "usd": round((tin * pin + 3000 * pout) / 1e6, 4),
-            "usd_max": round((tin * pin + body["max_tokens"] * pout) / 1e6, 4)}
+    worst = D.worst_usd(model, tin, body["max_tokens"], fallback=bool(body.get("fallbacks")))   # + a fallback re-run
+    return {"input_tokens": tin, "usd": round((tin * pin + 3000 * pout) / 1e6, 4), "usd_max": round(worst, 4)}
 
 
 def usage_cost(model, usage):
@@ -1210,9 +1210,8 @@ def parse_verdict(msg, required=(), fail_on=("error",)):
     try:
         import jsonschema
         errs = list(jsonschema.Draft202012Validator(output_schema()).iter_errors(ans))
-    except ImportError:
-        errs = [] if isinstance(ans, dict) and isinstance(ans.get("checks"), list) and ans.get("verdict") in ("pass", "doubt", "fail") \
-            else ["shape"]
+    except ImportError:                                 # by hand: a missing field is "doubt", never a KeyError
+        errs = [e for e in [D.check_shape(ans, output_schema())] if e]
     if errs:
         return "doubt", None, "the answer does not match the output schema; rejected", [], None
     findings, mism_fail, mism_other, unclear = [], [], [], []

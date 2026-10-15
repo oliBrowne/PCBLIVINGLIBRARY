@@ -58,6 +58,86 @@ BATCH_BYTES, BATCH_MAX = 200 * 2 ** 20, 100_000       # per batch (API limits: 2
 PAGE_TOKENS, OUT_TOKENS, URL_PAGES = 3000, 6000, 30  # rough estimate without a key: per PDF page, typical output, unknown PDF
 SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40}
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# Per-model request parameters (claude-api skill, Thinking & Effort table): effort levels a model accepts (no entry
+# for a listed model = it rejects output_config.effort: Haiku 4.5, Sonnet 4.5), and the PDF page limit of
+# 200K-context models. Models not listed (newer ones) get what they are given.
+_ALL = set(EFFORTS)
+EFFORT_LEVELS = {"claude-fable-5-1": _ALL, "claude-fable-5": _ALL, "claude-mythos-5-1": _ALL, "claude-opus-5-5": _ALL,
+                 "claude-opus-5": _ALL, "claude-opus-4-8": _ALL, "claude-opus-4-7": _ALL, "claude-sonnet-5-5": _ALL,
+                 "claude-sonnet-5": _ALL, "claude-haiku-5-5": _ALL, "claude-opus-4-6": _ALL - {"xhigh"},
+                 "claude-sonnet-4-6": _ALL - {"xhigh"}, "claude-opus-4-5": {"low", "medium", "high"},
+                 "claude-sonnet-4-5": set(), "claude-haiku-4-5": set()}
+PAGE_LIMIT = {"claude-haiku-4-5": 100, "claude-sonnet-4-5": 100, "claude-opus-4-5": 100}
+# A synchronous call with fallbacks: "default" can be re-run on another model after a decline; the worst case counts
+# that second run at the higher of the model's own price and Opus 4.x rates (the routing target is not known here).
+FALLBACK_PRICE = (5.0, 25.0)
+
+
+def output_config(model, effort, schema):
+    """output_config for this model: the effort only where the model takes it (an unsupported level steps down to the
+    nearest one it has), always the JSON-schema format."""
+    oc = {"format": {"type": "json_schema", "schema": schema}}
+    levels = EFFORT_LEVELS.get(model)
+    if effort and levels is None:
+        oc["effort"] = effort
+    elif effort and levels:
+        order = list(EFFORTS)
+        lower = [e for e in order[:order.index(effort) + 1] if e in levels] if effort in order else []
+        oc["effort"] = lower[-1] if lower else min(levels, key=order.index)
+    return oc
+
+
+def page_limit(model):
+    return PAGE_LIMIT.get(model, MAX_PAGES)
+
+
+def worst_usd(model, tin, max_out, cache_write=1.0, mult=1.0, fallback=False):
+    """Worst-case USD of one request: every output token used, plus a full re-run on a fallback model when
+    fallbacks are on. None when the model has no known price."""
+    pin, pout = PRICES.get(model, (None, None))
+    if pin is None:
+        return None
+    usd = (tin * cache_write * pin + max_out * pout) / 1e6 * mult
+    if fallback:
+        fin, fout = max(pin, FALLBACK_PRICE[0]), max(pout, FALLBACK_PRICE[1])
+        usd += (tin * fin + max_out * fout) / 1e6
+    return usd
+
+
+def check_shape(v, s, path="$"):
+    """The output schemas' subset of JSON Schema, checked by hand (used when jsonschema is not installed):
+    type, enum, anyOf, properties / required / additionalProperties, items. -> first error or None."""
+    if "anyOf" in s:
+        return None if any(check_shape(v, x, path) is None for x in s["anyOf"]) else f"{path}: matches no allowed shape"
+    if "enum" in s and v not in s["enum"]:
+        return f"{path}: {v!r} is not one of {s['enum']}"
+    t = s.get("type")
+    ok = {"object": lambda x: isinstance(x, dict), "array": lambda x: isinstance(x, list),
+          "string": lambda x: isinstance(x, str), "boolean": lambda x: isinstance(x, bool), "null": lambda x: x is None,
+          "integer": lambda x: isinstance(x, int) and not isinstance(x, bool),
+          "number": lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)}
+    types = t if isinstance(t, list) else [t] if t else []
+    if types and not any(ok[x](v) for x in types if x in ok):
+        return f"{path}: not {'/'.join(types)}"
+    if isinstance(v, dict) and "properties" in s:
+        for k in s.get("required", []):
+            if k not in v:
+                return f"{path}: {k!r} is missing"
+        if s.get("additionalProperties") is False:
+            extra = [k for k in v if k not in s["properties"]]
+            if extra:
+                return f"{path}: unexpected {extra[0]!r}"
+        for k, sub in s["properties"].items():
+            if k in v:
+                e = check_shape(v[k], sub, f"{path}.{k}")
+                if e:
+                    return e
+    if isinstance(v, list) and isinstance(s.get("items"), dict):
+        for i, x in enumerate(v):
+            e = check_shape(x, s["items"], f"{path}[{i}]")
+            if e:
+                return e
+    return None
 
 
 def settings(rules=None):
@@ -221,6 +301,11 @@ class Client:
     def batch_create(self, requests_):
         return self.request("POST", "/v1/messages/batches", {"requests": requests_}, retry_on={429, 529})
 
+    def batch_list(self, limit=100):
+        """Recent batches, newest first (GET /v1/messages/batches): one page of message_batch objects."""
+        got = self.request("GET", f"/v1/messages/batches?limit={int(limit)}")
+        return [b for b in (got.get("data") or []) if isinstance(b, dict)]
+
     def batch_get(self, batch_id):
         return self.request("GET", f"/v1/messages/batches/{batch_id}")
 
@@ -339,7 +424,7 @@ def build_request(source, part, package=None, pages=None, model=MODEL, effort="h
         system[0]["cache_control"] = {"type": "ephemeral"}                              # shared by every part of a batch
     body = {"model": model, "max_tokens": MAX_TOKENS, "system": system,
             "messages": [{"role": "user", "content": [doc, {"type": "text", "text": task_text(part, package, pages)}]}],
-            "output_config": {"effort": effort, "format": {"type": "json_schema", "schema": output_schema()}}}
+            "output_config": output_config(model, effort, output_schema())}
     headers = {"content-type": "application/json", "anthropic-version": API_VERSION}
     if fallback and model in FALLBACK_MODELS:
         body["fallbacks"] = "default"
@@ -377,11 +462,11 @@ def parse_message(msg):
         raise DatasheetError("response is not JSON; rejected")
     try:
         import jsonschema
-    except ImportError:
-        return ext
-    errs = list(jsonschema.Draft202012Validator(output_schema()).iter_errors(ext))
+        errs = [e.message for e in jsonschema.Draft202012Validator(output_schema()).iter_errors(ext)]
+    except ImportError:                               # same contract by hand: a missing field is an error, not a KeyError
+        errs = [e for e in [check_shape(ext, output_schema())] if e]
     if errs:
-        raise DatasheetError(f"response does not match the output schema; rejected: {errs[0].message[:200]}")
+        raise DatasheetError(f"response does not match the output schema; rejected: {errs[0][:200]}")
     return ext
 
 
@@ -806,8 +891,20 @@ def write(res, outdir):
     d.mkdir(parents=True, exist_ok=True)
     safe = lambda s: re.sub(r"[^A-Za-z0-9_.+-]", "_", s)
     part = safe(res["symbol"]["name"])
-    paths = {"spec": d / f"{safe(res['spec']['name']) or 'package'}.json", "symbol": d / f"{part}.json",
-             "sidecar": d / f"{part}.extraction.json", "report": d / f"{part}.review.md"}
+    def holds(f, kind):                               # what an existing file in the folder is (another part's output)
+        try:
+            v = json.loads(f.read_text()) if f.exists() else None
+        except (OSError, ValueError):
+            return False
+        return isinstance(v, dict) and (("package_type" in v) if kind == "spec" else ("pins" in v and "package_type" not in v))
+    spec_stem = safe(res["spec"]["name"]) or "package"
+    paths = {"symbol": d / f"{part}.json", "sidecar": d / f"{part}.extraction.json", "report": d / f"{part}.review.md"}
+    if holds(paths["symbol"], "spec"):                # a spec named like this part: never overwritten by a symbol
+        paths["symbol"] = d / f"{part}.symbol.json"
+    spec_f = d / f"{spec_stem}.json"
+    if spec_f in paths.values() or (spec_f.exists() and not holds(spec_f, "spec")):
+        spec_f = d / f"{spec_stem}.package.json"      # a symbol / sidecar there is never overwritten by a spec
+    paths = {"spec": spec_f, **paths}
     for k in ("spec", "symbol", "sidecar"):
         paths[k].write_text(json.dumps(res[k], indent=2) + "\n")
     paths["report"].write_text(report(res))
@@ -966,7 +1063,7 @@ def select_pages(data, budget):
     return sorted(best)
 
 
-def prepare(data, pages=None, auto_pages=40):
+def prepare(data, pages=None, auto_pages=40, max_pages=MAX_PAGES):
     """PDF bytes -> (bytes to send, page map or offset, pages hint for the prompt, note).
     pages: (a, b) chosen by a person. Otherwise a PDF over auto_pages pages (or over the size/page limits) is cut
     to the pages select_pages finds; the page map turns page numbers back into the original file's."""
@@ -978,9 +1075,9 @@ def prepare(data, pages=None, auto_pages=40):
             return data, 0, pages, "pypdf missing: whole PDF sent, pages named in the prompt"
         return cut, pages[0] - 1, None, f"pages {pages[0]}-{pages[1]} sent (chosen)"
     n = pdf_pages(data) or 0
-    over = len(data) > MAX_PDF or n > MAX_PAGES
+    over = len(data) > MAX_PDF or n > max_pages
     if over or (auto_pages and n > auto_pages):
-        keep = select_pages(data, auto_pages or MAX_PAGES)
+        keep = select_pages(data, min(auto_pages or max_pages, max_pages))
         if keep:
             try:
                 cut = trim(data, keep)
@@ -990,7 +1087,7 @@ def prepare(data, pages=None, auto_pages=40):
                 return cut, keep, None, f"{len(keep)} of {n} pages sent (picked by text: {_ranges(keep)}); pass --pages to choose"
         if over:
             raise DatasheetError(f"PDF is {len(data) >> 20} MB / {n} pages, over the request limits "
-                                 f"({MAX_PDF >> 20} MB, {MAX_PAGES} pages); pass --pages with the drawing and pin table")
+                                 f"({MAX_PDF >> 20} MB, {max_pages} pages); pass --pages with the drawing and pin table")
     return data, 0, None, f"all {n} pages sent" if n else "whole PDF sent"
 
 
@@ -1101,7 +1198,7 @@ class Reader:
             src_hash = "url" + hashlib.sha256(url.encode()).hexdigest()
         else:
             url, where = prov["url"], prov["where"]
-            sent, offset, hint, note = prepare(data, pages, self.auto_pages)
+            sent, offset, hint, note = prepare(data, pages, self.auto_pages, page_limit(self.model))
             src = ("base64", sent)
             prov = dict(prov, sent_as="base64", note=note, sent_bytes=len(sent),
                         pages_sent=offset if isinstance(offset, list) else None)
@@ -1167,7 +1264,7 @@ class Reader:
             tin += len(json.dumps(output_schema())) // 4       # the output format (not in count_tokens): rough
             cw = 1.0 if batch else CACHE_WRITE
             cost = (tin * cw * pin + OUT_TOKENS * pout) / 1e6 * mult if pin else None
-            worst = (tin * cw * pin + j["body"]["max_tokens"] * pout) / 1e6 * mult if pin else None
+            worst = worst_usd(self.model, tin, j["body"]["max_tokens"], cw, mult, fallback=bool(j["body"].get("fallbacks")))
             rows.append({"part": j["name"], "input_tokens": tin, "how": how, "output_tokens": OUT_TOKENS,
                          "max_output_tokens": j["body"]["max_tokens"], "usd": cost, "usd_max": worst, "url": j["url"]})
         tot = lambda k: round(sum(r[k] for r in rows), 2) if pin else None
@@ -1201,6 +1298,45 @@ class Reader:
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / "batch_state.json").write_text(json.dumps(st, indent=2))
 
+    def _resolve_pending_creates(self, st, client):
+        """A batch create whose answer was lost (timeout, connection reset, 5xx) may have created a paid batch. Before
+        anything is created again, list recent batches and adopt the one created then with the same number of
+        requests; if none (or more than one) matches, refuse to resubmit unless --yes."""
+        pend = list(st.get("pending_creates") or [])
+        if not pend:
+            return
+        known = {b["id"] for b in st["batches"]}
+        recent = client.batch_list(100)
+        def when(b):
+            try:
+                return datetime.datetime.fromisoformat(str(b.get("created_at")).replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                return None
+        for m in pend:
+            cands = [b for b in recent if b.get("id") not in known and when(b) is not None
+                     and m["at"] - 600 <= when(b) <= m["at"] + 7200
+                     and sum((b.get("request_counts") or {}).values()) == m["n"]]
+            if len(cands) == 1:
+                b = cands[0]
+                known.add(b["id"])
+                st["batches"].append({"id": b["id"], "created": b.get("created_at"), "model": m["model"],
+                                      "requests": m["requests"], "parts": m["parts"], "status": b.get("processing_status"),
+                                      "collected": False, "adopted": m["fingerprint"]})
+                self.say(f"  datasheet batch {b['id']}: found the batch whose create answer was lost ({m['n']} parts); "
+                         "collecting it instead of sending again")
+            elif self.yes:
+                self.say(f"  datasheet: a batch create of {m['n']} parts may have gone through and could not be "
+                         f"confirmed ({len(cands)} matching batches); --yes: sending again")
+            else:
+                self._save_state(st)
+                raise DatasheetError(
+                    f"a batch create of {m['n']} parts at {datetime.datetime.fromtimestamp(m['at']).isoformat(timespec='seconds')} "
+                    f"got no answer and may have been created (and billed); {len(cands)} recent batches match it, so it "
+                    "can't be confirmed. Check console.anthropic.com > Batches, then re-run with --yes to send again "
+                    f"(state: {self.dir / 'batch_state.json'})")
+            st["pending_creates"].remove(m)
+        self._save_state(st)
+
     def flush(self):
         """Send the submitted jobs. -> {job key: result dict | DatasheetError | 'pending <batch id>' | 'estimate'}."""
         jobs, self.pending = list(self.pending.values()), {}
@@ -1222,6 +1358,7 @@ class Reader:
         st = self._state()
         client = self.client()
         with logging_to(self.log_file, self.say):
+            self._resolve_pending_creates(st, client)   # a create that may have gone through is found, never re-sent
             open_ = {k for b in st["batches"] if not b.get("collected") for k in b["requests"].values()}
             new = [j for j in jobs if j["key"] not in open_]
             self._guard_cost(new)                     # parts already in a submitted batch are paid for: collect them
@@ -1240,7 +1377,22 @@ class Reader:
                     taken.add(cid)
                     ids[cid] = j["key"]
                     reqs.append({"custom_id": cid, "params": j["body"]})
-                b = client.batch_create(reqs)
+                mark = {"fingerprint": hashlib.sha256(json.dumps([self.model, sorted(ids.items())]).encode()).hexdigest()[:24],
+                        "at": time.time(), "n": len(reqs), "model": self.model, "requests": ids,
+                        "parts": {c: j["name"] for c, j in zip(ids, chunk)}}
+                st.setdefault("pending_creates", []).append(mark)
+                self._save_state(st)                  # written BEFORE the create: a lost answer leaves this behind
+                try:
+                    b = client.batch_create(reqs)
+                except APIError as e:
+                    if e.status is not None and (e.status < 500 or e.status == 529):   # an answer that says not created
+                        st["pending_creates"].remove(mark)
+                        self._save_state(st)
+                    else:
+                        e.args = (f"{e.args[0]} (the batch may have been created: the next run looks for it before "
+                                  "sending again)",)
+                    raise
+                st["pending_creates"].remove(mark)
                 st["batches"].append({"id": b["id"], "created": b.get("created_at"), "model": self.model,
                                       "requests": ids, "parts": {c: j["name"] for c, j in zip(ids, chunk)},
                                       "status": b.get("processing_status"), "collected": False})
@@ -1299,7 +1451,7 @@ def format_estimate(est):
     usd = lambda v: f"${v:.2f}" if v is not None else "n/a"
     lines = [f"datasheet estimate: {est['parts']} parts, {est['model']}, {est['mode']}, {est['prices']}",
              f"  input {est['input_tokens']:,} tokens ({'counted by count_tokens' if est['exact_input'] else 'rough: no API key, pages x ' + str(PAGE_TOKENS)});"
-             f" expected {usd(est['usd'])}, at most {usd(est['usd_max'])} (every answer at max_tokens)"]
+             f" expected {usd(est['usd'])}, at most {usd(est['usd_max'])} (every answer at max_tokens, plus a fallback re-run on synchronous calls)"]
     lines += [f"  {r['part']:<28} {r['input_tokens']:>9,} in  {usd(r['usd']):>8}  ({r['how']})" for r in est["rows"]]
     return "\n".join(lines)
 
