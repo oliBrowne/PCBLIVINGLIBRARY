@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from . import __version__, kicad_import as K, sexpr
+from . import sheetsafe as SS
 from .httpcache import CachedHTTP, Response
 
 RAW = re.compile(r"https://gitlab\.com/kicad/libraries/([^/]+)/-/raw/([^/]+)/(.+)$")
@@ -479,7 +480,7 @@ def write_report(rows, out, title, cols, meta=()):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out.with_suffix(".csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w = SS.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader(); w.writerows(rows)
     esc = lambda v: str(v if v is not None else "").replace("|", "\\|").replace("\n", " ")
     md = [f"# {title}", "", *meta, ""]

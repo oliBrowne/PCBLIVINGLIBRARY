@@ -35,6 +35,7 @@ import pandas as pd
 from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
                footprint_gen as F, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .httpcache import CachedHTTP
+from . import sheetsafe as SS
 from . import symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
@@ -489,7 +490,7 @@ def review_rows(items):
 def write_review(rows, out, bom):
     out = Path(out)
     with open(out / "review.csv", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ["part"])
+        w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["part"])
         w.writeheader(); w.writerows(rows)
     src = lambda s: (s or "-").split(":")[0]
     counts = {}

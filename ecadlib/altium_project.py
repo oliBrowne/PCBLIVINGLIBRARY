@@ -36,6 +36,8 @@ component's own 'Lifecycle Status' / 'Part Status' parameter)."""
 import argparse, csv, json, os, re, struct, sys
 from pathlib import Path, PureWindowsPath
 
+from . import sheetsafe as SS
+
 try:
     from . import rules as RU
 except ImportError:                                    # rules.py lands separately; plain defaults until then
@@ -563,7 +565,7 @@ def write_bom_csv(groups, out, variants=()):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
+        w = SS.writer(f)
         w.writerow([h for h, _ in CSV_COLS] + [f"Qty [{v}]" for v in variants])
         for g in groups:
             w.writerow([("DNP" if g[k] else "") if k == "dnp" else g.get(k, "") for _, k in CSV_COLS] +
@@ -799,11 +801,11 @@ def write_where_used(res, stem):
     stem.parent.mkdir(parents=True, exist_ok=True)
     rows = where_used_rows(res)
     with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=WU_COLS)
+        w = SS.DictWriter(f, fieldnames=WU_COLS)
         w.writeheader()
         w.writerows(rows)
     with open(stem.with_name(stem.name + "_flags.csv"), "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["flag", "part", "mpn", "projects", "detail"], extrasaction="ignore")
+        w = SS.DictWriter(f, fieldnames=["flag", "part", "mpn", "projects", "detail"], extrasaction="ignore")
         w.writeheader()
         w.writerows(res["flags"])
     counts = {}

@@ -21,6 +21,7 @@ import argparse, csv, datetime, re, sys
 from pathlib import Path
 
 from . import altium_lib as AL, footprint_check as FC
+from . import sheetsafe as SS
 
 # plausible overall height (mm) per package family: first regex (on footprint name) that matches wins
 HEIGHTS = [
@@ -260,7 +261,7 @@ def write_report(rows, stem, plan=""):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     with open(stem.with_suffix(".csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ["name", "status"])
+        w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["name", "status"])
         w.writeheader(); w.writerows(rows)
     held = [r for r in rows if r["status"] == "held"]
     md = [f"# Release check{f' - `{plan}`' if plan else ''}", "",
