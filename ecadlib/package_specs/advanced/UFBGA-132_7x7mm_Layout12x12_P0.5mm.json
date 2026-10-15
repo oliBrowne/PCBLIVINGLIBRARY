@@ -1,0 +1,43 @@
+{
+  "name": "UFBGA-132_7x7mm_Layout12x12_P0.5mm",
+  "description": "ST UFBGA-132, 7 x 7 mm, 0.5 mm pitch, a ring of 12 balls missing around the centre",
+  "package_type": "bga",
+  "pin_count": 132,
+  "rows": 12,
+  "cols": 12,
+  "pitch": 0.5,
+  "body_length": {
+    "nom": 7.0
+  },
+  "body_width": {
+    "nom": 7.0
+  },
+  "ball_diameter": {
+    "min": 0.23,
+    "nom": 0.28,
+    "max": 0.33
+  },
+  "land_diameter": {
+    "nom": 0.27
+  },
+  "ball_map": [
+    "OOOOOOOOOOOO",
+    "OOOOOOOOOOOO",
+    "OOOOOOOOOOOO",
+    "OOOOOOOOOOOO",
+    "OOOO----OOOO",
+    "OOOO-OO-OOOO",
+    "OOOO-OO-OOOO",
+    "OOOO----OOOO",
+    "OOOOOOOOOOOO",
+    "OOOOOOOOOOOO",
+    "OOOOOOOOOOOO",
+    "OOOOOOOOOOOO"
+  ],
+  "height_max": 0.6,
+  "density": "B",
+  "source": {
+    "datasheet": "http://www.st.com/resource/en/datasheet/stm32l152zc.pdf#page=123",
+    "drawing": "KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as the datasheet drawing gives them"
+  }
+}

@@ -13,7 +13,8 @@ BOM = Path("examples/sample_bom.csv")
 
 def ws_with_bom(d):
     ws = Workspace(d, ["examples/kicad_lib"], providers=["digikey"], offline=True)
-    return ws, ws.save_upload("sample_bom.csv", BOM.read_bytes())
+    (ws.root / "uploads" / "sample_bom.csv").write_bytes(BOM.read_bytes())    # flat (pre-folder) upload: reports keep the plain name
+    return ws, "uploads/sample_bom.csv"
 
 
 def test_checker_reads_kicad6_circles_and_a1():

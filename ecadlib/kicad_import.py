@@ -10,10 +10,11 @@ through httpcache.CachedHTTP. A local path works too: X.kicad_mod, Lib.kicad_sym
 Output: <out>/PcbLib/<name>.PcbLib and <out>/SchLib/<name>.SchLib, the layout `altium365 plan --models` reads.
 
 Footprints: SMD, plated and non-plated through-hole pads (round and slotted drills), rect / roundrect / oval /
-circle pads, trapezoid and custom pads approximated by their bounding rectangle, pad rotation, fp_line / fp_rect /
+circle pads, custom pads as an anchor pad plus copper / mask / paste regions (curved primitives: bounding
+rectangle), trapezoids as rectangles, per-pad mask margins and tented pads, pad rotation, fp_line / fp_rect /
 fp_poly / fp_circle / fp_arc on silkscreen, fab (Mechanical 13), courtyard (Mechanical 15), F.Cu, F.Mask, F.Paste.
 Reference / Value text become .Designator (Top Overlay) / .Comment (Mechanical 13).
-Not converted (listed in the notes): user text, zones, per-pad mask margins, drill offsets.
+Not converted (listed in the notes): user text, zones other than keep-outs, drill offsets.
 3D: an extruded ComponentBody on Mechanical 13 over the fab outline (else the courtyard), its height from the
 KiCad STEP model (max z after the model transform), else DEFAULT_HEIGHT, else --height. --step embeds the STEP
 model itself (Library/Models, AltiumSharp layout and checksum) when the KiCad model has no offset or rotation.
@@ -199,8 +200,19 @@ def _hidden(node):                            # KiCad 7 bare `hide` atom or KiCa
 
 
 # ---------------------------------------------------------------- footprints
+MALFORMED = (IndexError, TypeError, AttributeError, KeyError, OverflowError, ZeroDivisionError)
+
+
 def convert_footprint(text, name=None, source="", notes=None):
-    """.kicad_mod text -> altium_lib footprint dict (mm, y up), no 3D body yet."""
+    """.kicad_mod text -> altium_lib footprint dict (mm, y up), no 3D body yet. Raises ValueError for a file that
+    does not parse or is missing what a footprint needs (a pad without a size, a line without an end ...)."""
+    try:
+        return _convert_footprint(text, name, source, notes)
+    except MALFORMED as e:
+        raise ValueError(f"malformed KiCad footprint {name or ''}: {type(e).__name__}: {e}".replace("  ", " ")) from e
+
+
+def _convert_footprint(text, name=None, source="", notes=None):
     notes = [] if notes is None else notes
     t = sexpr.parse(text)
     descr = (sexpr.first(t, "descr") or ["", ""])[1]
@@ -216,16 +228,10 @@ def convert_footprint(text, name=None, source="", notes=None):
             if layer is None:
                 skipped[ln] = skipped.get(ln, 0) + 1
                 continue
-            _graphic(fp, kind, g, layer)
+            _graphic(fp, kind, g, layer, notes)
     if skipped:
         notes.append("graphics on unmapped layers dropped: " + ", ".join(f"{k} x{v}" for k, v in sorted(skipped.items(), key=str)))
-    for z in sexpr.find(t, "zone"):           # rule areas -> Altium keep-out region (all objects, all layers)
-        ko = sexpr.first(z, "keepout")
-        rules = {r[0]: r[1] for r in (ko or [])[1:] if isinstance(r, list)}
-        if not ko or "not_allowed" not in rules.values():
-            notes.append("zone without keep-out rules not converted"); continue
-        fp["regions"].append((_pts(sexpr.first(sexpr.first(z, "polygon"), "pts")), AL.KEEPOUT, 31))
-        notes.append("keep-out zone -> Keep-Out layer region (KiCad rules: " + ", ".join(f"{k} {v}" for k, v in rules.items()) + ")")
+    _zones(fp, t, notes)
     fp["texts"] = AL.texts_from_kicad(t)
     if fp["texts"]:
         notes.append("Reference -> .Designator (Top Overlay), Value -> .Comment (Mechanical 13)")
@@ -236,6 +242,99 @@ def convert_footprint(text, name=None, source="", notes=None):
     return fp, t
 
 
+def _offset(pts, d):
+    """Polygon grown by d (mm; negative shrinks), mitred corners. Fine for the small mask / paste margins of pads."""
+    if not d or len(pts) < 3:
+        return list(pts)
+    area = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1]))
+    s = 1 if area > 0 else -1                 # counter-clockwise: outward normal of edge (dx, dy) is (dy, -dx)
+    out, n = [], len(pts)
+    for i in range(n):
+        p0, p1, p2 = pts[i - 1], pts[i], pts[(i + 1) % n]
+        nrm = []
+        for a, b in ((p0, p1), (p1, p2)):
+            L = math.hypot(b[0] - a[0], b[1] - a[1]) or 1
+            nrm.append((s * (b[1] - a[1]) / L, -s * (b[0] - a[0]) / L))
+        bx, by = nrm[0][0] + nrm[1][0], nrm[0][1] + nrm[1][1]
+        k = (1 + nrm[0][0] * nrm[1][0] + nrm[0][1] * nrm[1][1]) or 1e-9
+        out.append((p1[0] + d * bx / k, p1[1] + d * by / k))
+    return out
+
+
+def _custom_shapes(p, x, y, rot):
+    """Filled primitives of a KiCad custom pad -> ([polygons], [tracks (x1, y1, x2, y2, w)]) in footprint mm, y up;
+    None when a primitive can't be drawn exactly (curves, arcs, unfilled outlines)."""
+    def tf(px, py):                           # pad frame (KiCad, y down) -> footprint, y up
+        dx, dy = _rot(px, -py, rot)
+        return x + dx, y + dy
+    polys, tracks = [], []
+    for g in (sexpr.first(p, "primitives") or [])[1:]:
+        w = _width(g)
+        filled = _filled(g) or (sexpr.first(g, "fill") is None and g[0] == "gr_poly")
+        if g[0] == "gr_line":
+            a, b = (tf(float(c[1]), float(c[2])) for c in (sexpr.first(g, "start"), sexpr.first(g, "end")))
+            tracks.append((*a, *b, w)); continue
+        if g[0] == "gr_poly" and filled and sexpr.first(g, "pts"):
+            pts = [tf(*c) for c in _pts(sexpr.first(g, "pts"), lambda c: (float(c[1]), float(c[2])))]
+        elif g[0] == "gr_rect" and filled:
+            (x1, y1), (x2, y2) = [(float(c[1]), float(c[2])) for c in (sexpr.first(g, "start"), sexpr.first(g, "end"))]
+            pts = [tf(*c) for c in ((x1, y1), (x2, y1), (x2, y2), (x1, y2))]
+        elif g[0] == "gr_circle" and filled:
+            (cx, cy), (ex, ey) = [(float(c[1]), float(c[2])) for c in (sexpr.first(g, "center"), sexpr.first(g, "end"))]
+            r = math.hypot(ex - cx, ey - cy)
+            pts = [tf(cx + r * math.cos(k * math.pi / 18), cy + r * math.sin(k * math.pi / 18)) for k in range(36)]
+        else:
+            return None
+        polys.append(_offset(pts, w / 2) if w else pts)
+        if w:                                 # stroke around the outline: exact edges, mitred corners
+            tracks += [(*a, *b, w) for a, b in zip(pts, pts[1:] + pts[:1])]
+    return polys, tracks
+
+
+def _mask_margin(p):
+    m = sexpr.first(p, "solder_mask_margin")
+    return float(m[1]) if m else None
+
+
+def _custom_regions(fp, pad, shapes, kind, layers, p, notes=None):
+    """Regions for a custom pad's shape: copper on the pad's copper layers, solder mask grown by the pad's mask margin
+    (0 when KiCad has none, as the anchor pad's manual expansion), paste by its paste margin. Altium gives primitives
+    that touch a pad in a footprint the pad's net on the board."""
+    polys, tracks = shapes
+    lay = set(layers)
+    cu = [AL.TOP, AL.BOTTOM] if kind != "smd" and lay & {"*.Cu", "F&B.Cu"} else \
+        [l for n, l in (("F.Cu", AL.TOP), ("B.Cu", AL.BOTTOM)) if n in lay]
+    mask = [l for n, l in (("F", AL.TOP_SOLDER), ("B", AL.BOTTOM_SOLDER)) if lay & {f"{n}.Mask", "*.Mask", "F&B.Mask"}]
+    paste = [l for n, l in (("F", AL.TOP_PASTE), ("B", AL.BOTTOM_PASTE)) if lay & {f"{n}.Paste", "*.Paste"}]
+    mm_, pm = _mask_margin(p) or 0.0, sexpr.first(p, "solder_paste_margin")
+    for layer in cu:
+        fp["regions"] += [(pts, layer) for pts in polys]
+        fp["tracks"] += [(*t, layer) for t in tracks]
+    for layer in mask:
+        fp["regions"] += [(_offset(pts, mm_), layer) for pts in polys]
+    for layer in paste:
+        fp["regions"] += [(_offset(pts, float(pm[1]) if pm else 0.0), layer) for pts in polys]
+    pad["mask"] = mm_ if mask else "none"
+    if notes is not None and kind != "smd" and len(cu) > 1:         # Altium regions have no "all layers" (Multi-Layer is for pads and vias only)
+        _note(notes, f"pad {pad['designator']}: through-hole custom shape on top and bottom copper; inner layers get the anchor "
+                     "pad with the hole (connected on every layer), not the full shape")
+    if tracks and (mask or paste):
+        fp["regions"] += [(_rect_pts((x1 + x2) / 2, (y1 + y2) / 2, math.hypot(x2 - x1, y2 - y1) + w, w,
+                                     math.degrees(math.atan2(y2 - y1, x2 - x1))), layer)
+                          for x1, y1, x2, y2, w in tracks for layer in mask + paste]
+
+
+def _zones(fp, t, notes):
+    """Rule areas -> Altium keep-out regions (all objects, all layers)."""
+    for z in sexpr.find(t, "zone"):
+        ko = sexpr.first(z, "keepout")
+        rules = {r[0]: r[1] for r in (ko or [])[1:] if isinstance(r, list)}
+        if not ko or "not_allowed" not in rules.values():
+            notes.append("zone without keep-out rules not converted"); continue
+        fp["regions"].append((_pts(sexpr.first(sexpr.first(z, "polygon"), "pts")), AL.KEEPOUT, 31))
+        notes.append("keep-out zone -> Keep-Out layer region (KiCad rules: " + ", ".join(f"{k} {v}" for k, v in rules.items()) + ")")
+
+
 def _pad(fp, p, notes):
     num, kind, shape = p[1], p[2], p[3]
     at, size = sexpr.first(p, "at"), sexpr.first(p, "size")
@@ -243,7 +342,16 @@ def _pad(fp, p, notes):
     rot = float(at[3]) % 360 if len(at) > 3 else 0.0
     w, h = _f(size), _f(size, 2)
     layers = (sexpr.first(p, "layers") or ["layers"])[1:]
-    if shape == "custom":                     # bounding rectangle of anchor + primitives, in the pad frame
+    custom = _custom_shapes(p, x, y, rot) if shape == "custom" else None
+    if custom:                                # anchor pad + its shape as regions on the pad's copper, mask and paste
+        anchor = (sexpr.first(sexpr.first(p, "options") or [], "anchor") or [None, "circle"])[1]
+        n0 = len(fp["pads"])
+        _pad_core(fp, p, notes, num, kind, "rect" if anchor == "rect" else "circle", x, y, w, h, rot, layers)
+        if len(fp["pads"]) > n0:
+            _custom_regions(fp, fp["pads"][-1], custom, kind, layers, p, notes)
+            _note(notes, f"pad {num}: custom shape written as a {anchor} anchor pad plus regions on its copper, mask and paste layers")
+        return
+    if shape == "custom":                     # curves / arcs: bounding rectangle of anchor + primitives, in the pad frame
         xs, ys = [-w / 2, w / 2], [-h / 2, h / 2]
         for g in (sexpr.first(p, "primitives") or [])[1:]:
             hw = _width(g) / 2
@@ -260,9 +368,13 @@ def _pad(fp, p, notes):
         w, h = max(xs) - min(xs), max(ys) - min(ys)
         dx, dy = _rot(ox, oy, rot)
         x, y, shape = x + dx, y + dy, "rect"
-        _note(notes, f"pad {num}: custom shape approximated by its bounding rectangle {w:.3f}x{h:.3f} mm")
+        _note(notes, f"pad {num}: custom shape (curved primitives) approximated by its bounding rectangle {w:.3f}x{h:.3f} mm")
     elif shape == "trapezoid":
         shape = "rect"; _note(notes, f"pad {num}: trapezoid written as rectangle")
+    _pad_core(fp, p, notes, num, kind, shape, x, y, w, h, rot, layers)
+
+
+def _pad_core(fp, p, notes, num, kind, shape, x, y, w, h, rot, layers):
     if sexpr.first(p, "chamfer_ratio") and sexpr.first(p, "chamfer"):
         _note(notes, f"pad {num}: chamfered corners written as {shape}")
     rr = sexpr.first(p, "roundrect_rratio")
@@ -285,8 +397,13 @@ def _pad(fp, p, notes):
                 pad["rot"] = 0.0
             else:
                 _note(notes, f"pad {num}: slot on a {rot:g} deg pad; hole rotation assumed relative to the pad")
-        if not {"B.Mask", "*.Mask", "F&B.Mask"} & set(layers):
-            _note(notes, f"pad {num}: mask opening only on {[l for l in layers if 'Mask' in l]} in KiCad, both sides in Altium")
+        masks = [l for l in layers if "Mask" in l]
+        if not masks:                         # tented both sides (e.g. thermal vias): close the mask opening
+            pad["mask"] = "none"
+        elif not {"B.Mask", "*.Mask", "F&B.Mask"} & set(masks) or not {"F.Mask", "*.Mask", "F&B.Mask"} & set(masks):
+            _note(notes, f"pad {num}: mask opening only on {masks} in KiCad, both sides in Altium")
+        if masks and _mask_margin(p) is not None:
+            pad["mask"] = _mask_margin(p)
         fp["pads"].append(pad)
         return
     cu = [l for l in layers if l.endswith(".Cu")]
@@ -305,10 +422,14 @@ def _pad(fp, p, notes):
     paste = "F.Paste" in layers or "B.Paste" in layers
     pm = sexpr.first(p, "solder_paste_margin")
     pad["paste"] = float(pm[1]) if paste and pm else None if paste else "none"
+    if not any("Mask" in l for l in layers):
+        pad["mask"] = "none"
+    elif _mask_margin(p) is not None:
+        pad["mask"] = _mask_margin(p)
     fp["pads"].append(pad)
 
 
-def _graphic(fp, kind, g, layer):
+def _graphic(fp, kind, g, layer, notes=None):
     w = _width(g)
     if kind == "fp_circle":
         (cx, cy), (ex, ey) = _xy(sexpr.first(g, "center")), _xy(sexpr.first(g, "end"))
@@ -321,7 +442,15 @@ def _graphic(fp, kind, g, layer):
         return
     if kind == "fp_arc":
         if sexpr.first(g, "mid"):
-            cx, cy, r, a0, a1 = _arc3(*(_xy(sexpr.first(g, k)) for k in ("start", "mid", "end")))
+            s_, m_, e_ = (_xy(sexpr.first(g, k)) for k in ("start", "mid", "end"))
+            try:
+                cx, cy, r, a0, a1 = _arc3(s_, m_, e_)
+            except ValueError:                # zero-length or straight "arc" (KiCad's own library has some): a line or nothing
+                if s_ != e_:
+                    fp["tracks"].append((*s_, *e_, w or 0.1, layer))
+                if notes is not None:
+                    _note(notes, "degenerate arc (start, mid and end in a line) written as a line or dropped")
+                return
         else:                                 # KiCad 5: (start centre) (end arc start) (angle deg, clockwise on screen)
             (cx, cy), (sx, sy) = _xy(sexpr.first(g, "start")), _xy(sexpr.first(g, "end"))
             r, a = math.hypot(sx - cx, sy - cy), math.degrees(math.atan2(sy - cy, sx - cx))
@@ -469,10 +598,20 @@ def _props(chain):
 
 
 def convert_symbol(chain, name=None, footprint=None, extra=(), pin_map=None, notes=None):
+    """See _convert_symbol. Raises ValueError for a symbol missing what it needs (a pin without (at ...), ...)."""
+    try:
+        return _convert_symbol(chain, name, footprint, extra, pin_map, notes)
+    except MALFORMED as e:
+        raise ValueError(f"malformed KiCad symbol {name or ''}: {type(e).__name__}: {e}".replace("  ", " ")) from e
+
+
+def _convert_symbol(chain, name=None, footprint=None, extra=(), pin_map=None, notes=None):
     """[symbol, parent, ...] -> altium_lib symbol dict. Units become Altium parts, De Morgan body styles
     (`_U_2` sub-symbols) Altium display modes; unit 0 / style 0 items go into every part / mode."""
     notes = [] if notes is None else notes
     base, props = chain[-1], _props(chain)
+    if not props.get("Description") and props.get("ki_description"):     # KiCad 7 keeps it in ki_description
+        props["Description"] = props["ki_description"]
     hide_names = _hidden(sexpr.first(base, "pin_names") or [])
     hide_nums = _hidden(sexpr.first(base, "pin_numbers") or [])
     units = {}

@@ -1,0 +1,4 @@
+Ref	Value	Package	MPN	Mfr	Qty
+R1–R4	4k7	0402	RC0402FR-074K7L	Yageo	4
+C3	1µF	0603	GRM188R71C105KA12D	Murata	1
+D1	Green	0603	KT-0603G	Kingbright – ©	1

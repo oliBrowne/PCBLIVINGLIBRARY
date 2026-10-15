@@ -159,7 +159,7 @@ def plan_fields(item, lib, fp_name, props, rules=None):
     out = [("Reference", props.get("Reference", "U")), ("Value", par.get("Value") or item["name"]),
            ("Footprint", f"{lib}:{fp_name}" if fp_name else ""),
            ("Datasheet", par.get("ComponentLink2URL") or par.get("Datasheet") or (props.get("Datasheet", "") if props.get("Datasheet", "") != "~" else "")),
-           ("Description", str(item.get("description") or "").strip() or props.get("Description", "")),
+           ("Description", str(item.get("description") or "").strip() or props.get("Description") or props.get("ki_description", "")),
            ("Manufacturer", par.get("Manufacturer", "")), ("MPN", par.get("Manufacturer Part Number", ""))]
     for k in sorted(par):
         m = re.fullmatch(r"Supplier (\d+)", k)
@@ -239,18 +239,34 @@ def symbol_from_schlib(path, name, notes):
         return ["fill", ["type", "outline" if r.get("AREACOLOR") == str(AL.BLUE) else "background"]]
     units, pins, ref, value_at, ref_at, params = {}, [], "U", (0, 0), (0, 0), []
     owner = lambda r: (max(1, int(r.get("OWNERPARTID", r.get("part", 1)) or 1)), int(r.get("OWNERPARTDISPLAYMODE", r.get("mode", 0)) or 0) + 1)
-    for r in recs[1:]:
+    spots = {}                                # (part, mode, x, y, orient) -> first visible pin there
+    hidden_net = {int(r["OWNERINDEX"]): r.get("TEXT", "") for r in recs if r.get("RECORD") == "41"
+                  and r.get("NAME") == "HiddenNetName" and str(r.get("OWNERINDEX", "")).lstrip("-").isdigit()}
+    for ri, r in enumerate(recs[1:], 1):
         kind = r.get("RECORD")
         if kind == "2":
             d = {0: (1, 0), 1: (0, 1), 2: (-1, 0), 3: (0, -1)}[r["orient"]]
             x, y, L = r["x"] * 0.254, r["y"] * 0.254, r["length"] * 0.254
             nm = _kicad_pin_name(r["name"]) or "~"
-            pin = ["pin", ETYPE_K.get(r["etype"], "passive"), _pin_shape(r["symbols"], r["num"], notes),
+            if r["conglomerate"] & 0x04 and hidden_net.get(ri):   # Altium ties a hidden pin to its HiddenNetName net;
+                nm = hidden_net[ri]                                # KiCad ties a hidden power pin to the net of its name
+                K._note(notes, "hidden pins named after their Altium HiddenNetName (KiCad connects them by name)")
+            spot = (r["part"], r["mode"], r["x"], r["y"], r["orient"])
+            lead = spots.get(spot) if not r["conglomerate"] & 0x04 else None
+            etype = ETYPE_K.get(r["etype"], "passive")
+            if r["conglomerate"] & 0x04 and hidden_net.get(ri):
+                etype = "power_in"                # only hidden power inputs join a net by name in KiCad
+            if lead is not None:              # stacked on a visible pin (Altium joins pins at one point): KiCad shows one,
+                etype = "passive" if lead["etype"] == 7 else etype      # the rest hidden, passive under a power pin (KLC S4.3)
+                K._note(notes, "stacked pins written as one visible pin and hidden ones at the same spot")
+            elif not r["conglomerate"] & 0x04:
+                spots[spot] = r
+            pin = ["pin", etype, _pin_shape(r["symbols"], r["num"], notes),
                    ["at", _num(x + L * d[0]), _num(y + L * d[1]), str((r["orient"] * 90 + 180) % 360)], ["length", _num(L)]]
-            if r["conglomerate"] & 0x04:
+            if r["conglomerate"] & 0x04 or lead is not None:
                 pin.append("hide")
             pin += [["name", Q(nm), _effects()], ["number", Q(r["num"]), _effects()]]
-            if r["etype"] == 7:
+            if r["etype"] == 7 and lead is None:
                 K._note(notes, "Altium power pins written as KiCad power_in")
             units.setdefault((max(1, r["part"]), r["mode"] + 1), []).append(pin)
             pins.append(r)
@@ -306,8 +322,10 @@ def symbol_from_schlib(path, name, notes):
     return sym
 
 
-def load_symbol(item, plan_dir, http, libs, name, notes):
-    """-> (KiCad symbol tree, how). Reuses KiCad / EasyEDA sources; else reads the SchLib back."""
+def load_symbol(item, plan_dir, http, libs, name, notes, rules=None):
+    """-> (KiCad symbol tree, how). Reuses KiCad / EasyEDA sources; else reads the SchLib back. An EasyEDA symbol
+    big enough for the grouped layout ([symbols] layout_pins) is read back from the SchLib, which the librarian
+    wrote with its pins grouped (ecadlib.symbol_layout), so both libraries show the same symbol."""
     src = str((item.get("source") or {}).get("symbol") or "")
     why = []
     try:
@@ -327,9 +345,18 @@ def load_symbol(item, plan_dir, http, libs, name, notes):
             res = (r.json().get("result") or {}) if r.ok else {}
             ds = res.get("dataStr") or {}
             if ds.get("shape"):
-                t = sexpr.parse(EC.symbol_to_kicad(ds, name, "", {}, notes), keep_quotes=True)
-                return K._find_symbol(t, name), f"EasyEDA {lcsc} (converted again with easyeda_convert)"
-            why.append(f"EasyEDA {lcsc}: " + ("no single-unit symbol" if r.ok else r.error or f"HTTP {r.status}"))
+                sub = []
+                t = sexpr.parse(EC.symbol_to_kicad(ds, name, "", {}, sub), keep_quotes=True)
+                ks = K._find_symbol(t, name)
+                f = item["symbol"].get("file")
+                npins = len({str(sexpr.first(p, "number")[1]) for u in sexpr.find(ks, "symbol") for p in sexpr.find(u, "pin")})
+                from . import symbol_layout as SL
+                if not (SL.wants_layout(npins, rules) and f and (plan_dir / f).exists()):
+                    notes.extend(sub)
+                    return ks, f"EasyEDA {lcsc} (converted again with easyeda_convert)"
+                why.append(f"EasyEDA {lcsc}: {npins} pins, grouped by function in the SchLib")
+            else:
+                why.append(f"EasyEDA {lcsc}: " + ("no single-unit symbol" if r.ok else r.error or f"HTTP {r.status}"))
     except (IOError, ValueError, KeyError) as e:
         why.append(f"{src}: {type(e).__name__}: {e}")
     f = item["symbol"].get("file")
@@ -343,6 +370,39 @@ LAYER_K = {AL.TOP_OVERLAY: "F.SilkS", AL.BOTTOM_OVERLAY: "B.SilkS", AL.MECH13: "
            AL.TOP: "F.Cu", AL.BOTTOM: "B.Cu", AL.TOP_PASTE: "F.Paste", AL.TOP_SOLDER: "F.Mask"}
 
 
+def _tail(shape):
+    return " " + shape.split(" ", 1)[1] if " " in shape else ""
+
+
+def _in_poly(x, y, pts):
+    inside = False
+    for (x1, y1), (x2, y2) in zip(pts, pts[1:] + pts[:1]):
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
+def _custom_pads(recs):
+    """Polygon pads as altium_lib / kicad_import write them: an anchor pad plus regions on its copper (and solder mask /
+    paste) layers around the anchor's centre. -> ({id(pad): [copper outline, ...]}, {id(region) folded into a pad})."""
+    side = {AL.TOP: ((AL.TOP,), (AL.TOP_SOLDER, AL.TOP_PASTE)), AL.BOTTOM: ((AL.BOTTOM,), (AL.BOTTOM_SOLDER, AL.BOTTOM_PASTE)),
+            AL.MULTI: ((AL.TOP, AL.BOTTOM), (AL.TOP_SOLDER, AL.TOP_PASTE, AL.BOTTOM_SOLDER, AL.BOTTOM_PASTE))}
+    regs = [r for r in recs if r["type"] == "region" and len(r.get("pts") or ()) >= 3]
+    custom, used = {}, set()
+    pads = [r for r in recs if r["type"] == "pad" and r["layer"] in side]
+    for p in sorted(pads, key=lambda r: r["layer"] == AL.MULTI):   # SMD anchors first: vias inside a pad don't own it
+        cu, other = side[p["layer"]]
+        hit = [g for g in regs if id(g) not in used and g["layer"] in cu and _in_poly(p["x"], p["y"], g["pts"])]
+        if not hit:
+            continue
+        first = [g for g in hit if g["layer"] == cu[0]] or hit      # a through-hole pad: the top outline (= the bottom one)
+        keep = [g for g in first if g["layer"] == first[0]["layer"]]
+        custom[id(p)] = [g["pts"] for g in keep]
+        used |= {id(g) for g in hit}
+        used |= {id(g) for g in regs if g["layer"] in other and _in_poly(p["x"], p["y"], g["pts"])}
+    return custom, used
+
+
 def footprint_from_pcblib(path, name, notes):
     """First footprint of a .PcbLib -> .kicad_mod text (KiCad 8), via altium_lib.read_pcblib."""
     fp = AL.read_pcblib(path)[0]
@@ -350,15 +410,31 @@ def footprint_from_pcblib(path, name, notes):
     pt = lambda x, y: f"{m(x)} {m(-y)}"
     stroke = lambda w: f'(stroke (width {m(w) if w else "0.1"}) (type solid))'
     out, pads, smd = [], [], True
+    custom, used = _custom_pads(fp["records"])
     for r in fp["records"]:
         t, layer = r["type"], LAYER_K.get(r.get("layer"))
+        if id(r) in used:
+            continue                          # copper / mask / paste outline of a polygon pad: part of that pad
         if t == "pad":
             w, h, rot = r["w"], r["h"], r["rot"] % 360
             shape = {1: "circle" if w == h else "oval", 2: "rect", 9: "roundrect"}.get(r["shape"], "rect")
+            if id(r) in custom:               # anchor pad + its regions -> a KiCad custom pad (KiCad library layout)
+                a = math.radians(rot)
+                rel = lambda x, y: (((x - r["x"]) * math.cos(a) + (y - r["y"]) * math.sin(a)),
+                                    -(-(x - r["x"]) * math.sin(a) + (y - r["y"]) * math.cos(a)))
+                prims = " ".join("(gr_poly (pts " + " ".join(f"(xy {m(u)} {m(v)})" for u, v in (rel(x, y) for x, y in poly))
+                                 + ") (width 0) (fill yes))" for poly in custom[id(r)])
+                anchor = "circle" if r["shape"] == 1 else "rect"
+                shape = f'custom (options (clearance outline) (anchor {anchor})) (primitives {prims})'
+                K._note(notes, f"pad {r['designator']}: anchor pad and its copper regions written as a KiCad custom pad")
             if r["shape"] == 3:
                 K._note(notes, f"pad {r['designator']}: octagonal pad written as rect")
             at = f"(at {pt(r['x'], r['y'])}{' ' + _num(rot) if rot else ''})"
             extra = f" (roundrect_rratio {_num((r['corner'] or 0) / 200)})" if shape == "roundrect" else ""
+            mmanual = r.get("mask_mode") == 2 and r.get("mask") is not None
+            tented = mmanual and r["mask"] <= -max(w, h) // 2        # manual expansion that closes the opening
+            if mmanual and not tented and r["mask"]:                 # e.g. NSMD BGA lands: opening = land + margin
+                extra += f" (solder_mask_margin {m(r['mask'])})"
             if r["hole"]:
                 smd = False
                 kind = "thru_hole" if r["plated"] else "np_thru_hole"
@@ -366,14 +442,16 @@ def footprint_from_pcblib(path, name, notes):
                 if r["hole_shape"] == 2 and r["slot"]:
                     a, b = (r["slot"], r["hole"]) if round(r["hole_rot"]) % 180 == 0 else (r["hole"], r["slot"])
                     drill = f"(drill oval {m(a)} {m(b)})"
-                pads.append(f'\t(pad {sexpr.quote(r["designator"])} {kind} {shape} {at} (size {m(w)} {m(h)}){extra} {drill} (layers "*.Cu" "*.Mask"))')
+                mask = "" if tented else ' "*.Mask"'
+                pads.append(f'\t(pad {sexpr.quote(r["designator"])} {kind} {shape.split()[0]} {at} (size {m(w)} {m(h)}){extra} {drill} '
+                            f'(layers "*.Cu"{mask}){_tail(shape)})')
             else:
                 side = "B" if r["layer"] == AL.BOTTOM else "F"
                 manual = r["paste_mode"] == 2 and r["paste"] is not None
                 paste = not (manual and r["paste"] <= -max(w, h) // 2)
                 margin = f" (solder_paste_margin {m(r['paste'])})" if manual and paste and r["paste"] else ""
-                layers = " ".join(f'"{side}.{l}"' for l in (("Cu", "Paste", "Mask") if paste else ("Cu", "Mask")))
-                pads.append(f'\t(pad {sexpr.quote(r["designator"])} smd {shape} {at} (size {m(w)} {m(h)}){extra}{margin} (layers {layers}))')
+                layers = " ".join(f'"{side}.{l}"' for l in ("Cu",) + (("Paste",) if paste else ()) + (() if tented else ("Mask",)))
+                pads.append(f'\t(pad {sexpr.quote(r["designator"])} smd {shape.split()[0]} {at} (size {m(w)} {m(h)}){extra}{margin} (layers {layers}){_tail(shape)})')
         elif t == "track" and layer:
             out.append(f'\t(fp_line (start {pt(r["x1"], r["y1"])}) (end {pt(r["x2"], r["y2"])}) {stroke(r["w"])} (layer "{layer}"))')
         elif t == "arc" and layer:
@@ -524,10 +602,11 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
             rep["parts"].append(row)
             continue
         try:
-            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes)
+            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules)
             sym = sym_kicad8(sym)
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
             set_fields(sym, plan_fields(it, lib, row["footprint"], props, rules))
+            sym[:] = [c for c in sym if not (isinstance(c, list) and c[:2] == ["property", "ki_description"])]   # KiCad 7 -> Description
             if it.get("sim_model"):               # attached by `ecadlib sim-models --attach`: Sim.* fields + model file
                 from .sim_models import kicad_export_fields
                 sim = kicad_export_fields(it, plan_dir, out / f"{lib}.sim", f"{lib}.sim", notes)

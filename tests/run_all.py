@@ -1,6 +1,6 @@
 """Run every tests/test_*.py module (plain functions, no pytest needed). Exit 1 if any test fails.
     python3 -m tests.run_all [name-filter]"""
-import importlib, sys, time, traceback
+import importlib, os, sys, time, traceback
 from pathlib import Path
 
 
@@ -18,7 +18,11 @@ def main(argv=None):
                 print(f"ok    {f.stem}.{name}")
             except (Exception, SystemExit):
                 failed.append(f"{f.stem}.{name}")
-                print(f"FAIL  {f.stem}.{name}\n{traceback.format_exc()}")
+                tb = traceback.format_exc()
+                print(f"FAIL  {f.stem}.{name}\n{tb}")
+                if os.environ.get("GITHUB_ACTIONS"):       # an annotation, readable without the job log
+                    msg = tb[-3000:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                    print(f"::error title=FAIL {f.stem}.{name}::{msg}")
     print(f"\n{ran - len(failed)}/{ran} passed in {time.time() - t0:.1f}s")
     if failed:
         print("failed:\n  " + "\n  ".join(failed))

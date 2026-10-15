@@ -1,0 +1,54 @@
+{
+  "name": "Molex_PicoBlade_53398-0471_1x04-1MP_P1.25mm_Vertical",
+  "description": "Molex PicoBlade series connector, 53398-0471, vertical SMD, 4 pins + mounting pads, 1.25 mm pitch",
+  "package_type": "connector",
+  "pin_count": 4,
+  "pitch": 1.25,
+  "height_max": 4.2,
+  "pad_table": {
+    "unit": "mm",
+    "y_axis": "down",
+    "view": "bottom",
+    "origin": "pin1",
+    "center_at": {
+      "x": -1.875,
+      "y": 1.25
+    },
+    "arrays": [
+      {
+        "count": 4,
+        "x": 0,
+        "y": 0,
+        "dx": -1.25,
+        "w": 0.8,
+        "h": 1.3
+      }
+    ],
+    "pads": [
+      {
+        "number": "MP",
+        "x": 2.55,
+        "y": 2.75,
+        "w": 2.1,
+        "h": 3.0
+      },
+      {
+        "number": "MP",
+        "x": -6.3,
+        "y": 2.75,
+        "w": 2.1,
+        "h": 3.0
+      }
+    ],
+    "body": {
+      "x1": 3.2,
+      "y1": 0.15,
+      "x2": -6.95,
+      "y2": 3.85
+    }
+  },
+  "source": {
+    "datasheet": "http://www.molex.com/pdm_docs/sd/533980271_sd.pdf",
+    "drawing": "recommended PCB layout; KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as the datasheet drawing gives them"
+  }
+}

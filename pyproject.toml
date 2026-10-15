@@ -11,7 +11,8 @@ license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "oliver browne" }]
 requires-python = ">=3.10"
-dependencies = ["requests", "pandas", "openpyxl", "jsonschema"]
+dependencies = ["requests", "pandas", "openpyxl", "jsonschema", "olefile"]   # olefile: the release check,
+                                       # kicad-export, dedupe and project BOMs read .SchLib/.PcbLib/.SchDoc back
 keywords = [
     "ecad", "pcb", "eda", "footprint", "ipc-7351", "kicad", "altium", "altium-365",
     "component-library", "bom", "datasheet", "mcp",
@@ -39,10 +40,11 @@ Issues = "https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues"
 Changelog = "https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-altium = ["olefile"]                   # read .PcbLib/.SchLib back (altium-lib dump)
+altium = ["olefile"]                   # kept for old install commands; olefile is now a core dependency
 pdf = ["pypdf"]                        # datasheet reader: trim a PDF to --pages before sending it
-all = ["olefile", "pypdf"]
-dev = ["olefile", "graphql-core", "pyaltiumlib", "pypdf"]
+vision = ["pillow", "pypdf"]           # visual-check: draw footprints / symbols (pdftoppm renders datasheet pages)
+all = ["olefile", "pypdf", "pillow"]
+dev = ["olefile", "graphql-core", "pyaltiumlib", "pypdf", "pillow"]
 
 [project.scripts]
 ecadlib = "ecadlib.cli:main"
@@ -56,4 +58,4 @@ include = ["ecadlib*"]
 # Every non-.py file the package reads at runtime. tests/test_packaging.py checks these
 # patterns against the files on disk, so a new data file without a pattern fails the tests.
 [tool.setuptools.package-data]
-ecadlib = ["package_schema.json", "package_specs/*.json", "assets/*", "ui/static/*"]
+ecadlib = ["package_schema.json", "package_specs/*.json", "package_specs/advanced/*.json", "assets/*", "ui/static/*"]

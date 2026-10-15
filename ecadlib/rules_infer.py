@@ -89,6 +89,7 @@ class Library:
     """Everything the scanners found, in one shape."""
     def __init__(self):
         self.components, self.footprints, self.boms, self.files, self.warnings = [], [], [], Counter(), []
+        self.sym_pins = []                        # per SchLib symbol: (name, [(x, y, length) of each pin], DXP units)
 
     def add_component(self, name, origin, params=None, category=None, folder="", symbol="", footprint="", designator="",
                       description=""):
@@ -170,6 +171,9 @@ def scan_schlib(lib, f):
                 fp = r.get("MODELNAME", "")
         lib.add_component(s["name"], f"SchLib {f.name}", params, None, f.stem if category_of(f.stem) else "", s["name"], fp,
                           desig, desc)
+        pins = [(r["x"], r["y"], r["length"]) for r in recs if r.get("RECORD") == "2" and not r.get("mode")]
+        if pins:
+            lib.sym_pins.append((s["name"], pins))
 
 
 def _bbox(pts):
@@ -203,7 +207,7 @@ def scan_pcblib(lib, f):
                 bp = AL.parse_params(r.get("params", ""))
                 v7 = bp.get("V7_LAYER", "")
                 m = re.match(r"MECHANICAL(\d+)", v7)
-                bodies.append(56 + int(m.group(1)) if m else r["layer"])
+                bodies.append(56 + int(m.group(1)) if m and int(m.group(1)) <= 16 else r["layer"])   # 17..32: reader's id
             elif t == "text":
                 texts.append((r["text"], r["layer"]))
         lib.footprints.append({"name": fp["name"], "origin": f"PcbLib {f.name}", "kind": "altium", "pads": pads,
@@ -213,7 +217,7 @@ def scan_pcblib(lib, f):
 
 def scan_kicad_sym(lib, f):
     from . import sexpr
-    t = sexpr.parse(f.read_text(errors="replace"))
+    t = sexpr.parse(f.read_text(errors="replace", encoding="utf-8"))
     lib.files["kicad_sym"] += 1
     for s in sexpr.find(t, "symbol"):
         props = {p[1]: p[2] for p in sexpr.find(s, "property") if len(p) > 2}
@@ -227,7 +231,7 @@ def scan_kicad_sym(lib, f):
 
 def scan_kicad_mod(lib, f):
     from . import sexpr
-    text = f.read_text(errors="replace")
+    text = f.read_text(errors="replace", encoding="utf-8")
     t = sexpr.parse(text)
     lib.files["kicad_mod"] += 1
     pads = [(p["number"], p["x"], -p["y"], p["w"], p["h"]) for p in sexpr.pads(t) if "F.Cu" in p["layers"] or "*.Cu" in p["layers"]]
@@ -815,7 +819,8 @@ def infer_layers(lib):
             if l != crt and not any(t == ".Comment" for t, _ in f["texts"]):
                 votes["assembly"][l] += 1
         for l in f["bodies"]:
-            votes["body3d"][l] += 1
+            if 57 <= l <= 72:                     # the writer's (and rules') mechanical layers: 1..16
+                votes["body3d"][l] += 1
         ov = [l for l in f["graphics"] if l in (33, 34)]
         if ov:
             votes["silkscreen"][33 if 33 in ov else ov[0]] += 1
@@ -856,7 +861,7 @@ def _chip_z(imp, kind):
         if not f:
             _Z_CACHE[key] = None
         else:
-            spec = json.loads(f.read_text())
+            spec = json.loads(f.read_text(encoding="utf-8"))
             zs = {}
             for d in "ABC":
                 _, rep = F.build(spec, d)
@@ -906,6 +911,34 @@ def infer_density(lib):
     return [mk("footprint.density", best, n / total, ev + [f"{n} of {total} votes for {best}"], _origins_fp(lib.footprints), alts, ask)]
 
 
+def infer_symbols(lib):
+    """[symbols] pin_length and grid from the IC symbols in scanned SchLibs (8+ pins; passives say little), when they
+    differ from ecadlib's (300 mil pins, 100 mil grid)."""
+    syms = [(n, ps) for n, ps in lib.sym_pins if len(ps) >= 8]
+    if not syms:
+        return []
+    from math import gcd
+    lengths, grids = Counter(), Counter()
+    for _, ps in syms:
+        lengths.update(L * 10 for _, _, L in ps if L > 0)
+        g = 0
+        for x, y, _ in ps:
+            g = gcd(gcd(g, x), y)
+        grids[100 if g and g % 10 == 0 else 50 if g and g % 5 == 0 else 0] += 1
+    out = []
+    if lengths:
+        L, n = lengths.most_common(1)[0]
+        total = sum(lengths.values())
+        g = 50 if grids.most_common(1)[0][0] == 50 else 100
+        if L % 50 == 0 and L % g == 0 and L != RU.DEFAULTS["symbols"]["pin_length"]:     # only what differs from ecadlib's
+            out.append(mk("symbols.pin_length", L, n / total, [f"{n} of {total} pins are {L} mil long"] + [n_ for n_, _ in syms[:2]],
+                          f"{len(syms)} SchLib symbols"))
+    g, n = grids.most_common(1)[0]
+    if g and g != RU.DEFAULTS["symbols"]["grid"]:
+        out.append(mk("symbols.grid", g, n / len(syms), [f"pins of {n} of {len(syms)} symbols sit on a {g} mil grid"], f"{len(syms)} SchLib symbols"))
+    return out
+
+
 def infer_bom(lib):
     from . import bom_triage as T
     cols, ev = {}, []
@@ -923,7 +956,7 @@ def infer_bom(lib):
 # ------------------------------------------------------------------ proposal
 def infer(lib):
     settings = []
-    for fn in (infer_naming, infer_parameters, infer_folders, infer_layers, infer_density, infer_bom):
+    for fn in (infer_naming, infer_parameters, infer_folders, infer_layers, infer_density, infer_bom, infer_symbols):
         try:
             settings += fn(lib)
         except Exception as e:                     # one analysis failing must not lose the others

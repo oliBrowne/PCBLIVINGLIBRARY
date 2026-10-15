@@ -1,0 +1,32 @@
+{
+  "name": "BGA-672_27.0x27.0mm_Layout26x26_P1.0mm_Ball0.6mm_Pad0.5mm_NSMD",
+  "description": "BGA-672, 27 x 27 mm, 1.0 mm pitch, rows A..AF (double letters after Y), four corner balls missing (A1 too)",
+  "package_type": "bga",
+  "pin_count": 672,
+  "rows": 26,
+  "cols": 26,
+  "pitch": 1.0,
+  "body_length": {
+    "nom": 27.0
+  },
+  "body_width": {
+    "nom": 27.0
+  },
+  "ball_diameter": {
+    "nom": 0.6
+  },
+  "land_diameter": {
+    "nom": 0.5
+  },
+  "depopulated": [
+    "A1",
+    "A26",
+    "AF1",
+    "AF26"
+  ],
+  "height_max": 2.5,
+  "density": "B",
+  "source": {
+    "drawing": "KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as its name and drawing give them"
+  }
+}

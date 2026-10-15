@@ -21,7 +21,7 @@ Install it with pip (Python 3.10 or later):
 
 ```
 pip install ecadlib                 # once a release is on PyPI (see Releases below)
-pip install "ecadlib[pdf,altium]"   # pypdf trims datasheets to --pages; olefile reads .PcbLib/.SchLib back
+pip install "ecadlib[pdf]"          # pypdf trims datasheets to --pages
 pip install -e ".[dev]"             # from a checkout: editable, plus everything the test suite uses
 ```
 
@@ -35,7 +35,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ecadlib ui --lib path/to/your/kicad/libs
    ```
 
-   A browser tab opens at `http://127.0.0.1:8765`.
+   A browser tab opens at `http://127.0.0.1:8765`. To share one server with the whole team, with sign-in and roles, see **Team server** below; `python3 -m ecadlib team setup` runs it with Docker and HTTPS in one command (**Run it for your team**).
    * **Check a BOM:** drop in a CSV or XLSX, whether it's an Altium BOM, an Altium ActiveBOM, a KiCad BOM or a hand-made spreadsheet. A progress bar runs while parts are looked up. You then get a table of what is already in your library, what a part source can supply, what needs a footprint, and what is DNP. You can filter it by status or by search.
    * **Fill the library:** one button runs the librarian on the BOM. It finds each missing symbol and footprint (official KiCad libraries, then EasyEDA, then the datasheet reader), writes the Altium files, and runs the release check. Each part shows where its symbol and footprint came from and what still needs a person. Parts that fail the check are held back from Altium 365; **Release anyway…** overrides that after you have looked (it is recorded in the plan), and **Hold again** takes it back.
 
@@ -64,7 +64,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `held_parts`, `part_candidates` and `choose_part` (fix a held part), `approval_status` and `approve_part` (sign-off; `user` is required, the agent must pass the person's own name), `find_duplicates` (with `merge`), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed), `sim_models` (SPICE/IBIS models; `attach` writes them) and `list_example_specs`.
-3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22) and `ecadlib visual-check` (23). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
 * `uploads/`
@@ -77,15 +77,119 @@ The UI and MCP server write everything to one workspace folder (default `./ecadl
 
 Both servers use only the standard library on top of the package requirements. The web UI binds to 127.0.0.1. It refuses requests with an unexpected Host header (DNS rebinding), cross-origin POSTs, and any file path outside the workspace.
 
+### Team server (`ecadlib ui --team`)
+
+Run the web UI on one machine for the whole team, with sign-in. Local mode (no `--team`) is unchanged.
+
+```
+ecadlib team --workspace /srv/ecadlib add-user ada --role admin --name "Ada Lovelace" --email ada@example.com
+ecadlib team --workspace /srv/ecadlib add-user lin --role librarian --name "Lin Chen" --email lin@example.com
+ecadlib ui --team --workspace /srv/ecadlib --lib /srv/kicad-libs --host 0.0.0.0 --port 8765 --cert cert.pem --key key.pem
+```
+
+![Sign in](docs/ui-team-signin.png)
+
+* **Users** live in `team_users.json` in the workspace. Passwords are stored as `hashlib.scrypt` hashes, each with its own salt, and the file is written with mode 0600. The first admin can only be created on the command line. After that, admins manage users on the **Users** page or with `ecadlib team add-user|set-role|reset-password|remove|list`. Changes take effect at once, even on a running server. A password reset or removal signs that user out everywhere.
+* **Roles.** Each role can do everything the roles before it can.
+
+  | Role | Can |
+  | --- | --- |
+  | viewer | read everything and download reports |
+  | librarian | upload BOMs, triage, librarian, resolve, footprints, exports, release-check overrides, Altium 365 dry run |
+  | approver | approve or reject parts, push to Altium 365 for real |
+  | admin | manage users, save library rules, scan server folders for rules |
+
+  Every route has a minimum role (`ROUTES` in `ecadlib/ui/server.py`). A route missing from that table answers 404 in team mode, and a test fails if any `/api/...` path in the server is missing from it. The page hides buttons the user's role cannot use, but the server is what enforces the roles.
+* **Sign-off** in team mode records the signed-in user (`Name <email>`) and drops any typed name, so the UI hides the name box. The approval role is the user's team role, or one of the roles in their `--sign-as` list (for example `hardware`), so `approvals.json` `roles` and `users` work as before. `no_self_approval` still applies: whoever pressed **Release anyway** cannot approve that part.
+* **Sessions** use a random token in an `HttpOnly; SameSite=Strict` cookie (`Secure` over HTTPS). A session ends after 12 h, or after 2 h without use, and on **Sign out**. Every POST needs the session's CSRF token in `X-CSRF-Token`. The Origin and Host checks stay on as well. The Host must be an IP address, `localhost`, this machine's name or an `--allowed-host`. After 5 failed sign-ins for one user name in 15 minutes, that name is locked for 15 minutes, and unknown names lock the same way. One address gets 30 failures in that window. Each try is counted before the password is checked, so parallel requests get no extra guesses, and checking the current password on **Change password** counts the same way. Admins can **Unlock** a user. Removing a user and adding the same name again does not bring back the old sessions. Team files (`team_users.json` and the rest) are never served or read as a BOM, under any letter case or file link. JSON request bodies are limited to 2 MB (uploads: 20 MB). A whole request (TLS handshake, headers and body) must arrive within `request_seconds` (120), and one address may hold `max_connections_per_ip` (64) connections at once; a trusted proxy is exempt. `team_audit.jsonl` is rotated at `audit_max_mb` (10) into `.1` … `.{audit_keep}` (5). Refusals before sign-in are logged at most `audit_refusals_per_minute` (20) times per address per minute; the next line counts the dropped ones (`suppressed`). Sessions and lockouts are kept in memory, so a restart signs everyone out.
+* **Audit.** Every POST in team mode, including refused ones and sign-ins, is appended to `team_audit.jsonl` with time, user, client address, route, result and the main fields (never passwords). Admins see it under **Users → Audit log**. Approvals are also logged to `approvals_audit.jsonl` as before, with `via: ecadlib ui (team, signed in)`. `/api/file` never serves `team_users.json`, `team.json` or `team_audit.jsonl`.
+* **Several users at once.** All writes in the workspace are serialised by one lock. Each background job belongs to the user who started it, and only that user and admins can see it. While the librarian runs on a BOM, a second librarian run or another write to that BOM is refused with 409 until it finishes. Every upload is stored in its own new folder, `uploads/<UTC time>-<random>/<file name>`, so two people uploading `BOM.csv` at the same moment both keep their file, and each gets its own triage report (`reports/triage_BOM_<folder>.*`) and librarian folder. The file keeps its name (reduced to letters, digits, `.`, `_` and `-`; any path in it is dropped), and the page shows it with its upload time. BOMs uploaded flat into `uploads/` by older versions still work and keep their old report names.
+* **Past triages.** Every signed-in user, viewers included, sees the **Past triages** list (also in local mode): BOM, when it finished, who ran it and how many lines need work. **Open** shows the saved result, with its per-line status and report links, without looking anything up again; re-running a triage still needs librarian. The routes are `GET /api/triage/history` and `GET /api/triage/result?id=...` (role viewer), and the MCP tool `triage_history` gives the same view. Finished results are library data for the whole team, but a job that is still running, with its live progress, stays visible only to the user who started it and to admins. Each triage now also writes `reports/triage_<name>.json` (the full result, the time and the user). Older triages that only left a `.csv` are listed too, without BOM or user. An id is only matched against the reports that exist, and is never turned into a path.
+* **HTTPS.** Pass `--cert`/`--key` to serve TLS 1.2+ with Python's `ssl`. Without a certificate, team mode refuses to listen on any non-loopback address unless you add `--allow-http`, and then it prints a loud warning. The usual setup is a reverse proxy on the same machine, with ecadlib bound to loopback:
+
+  ```
+  # Caddyfile (automatic HTTPS)
+  ecadlib.example.com {
+      reverse_proxy 127.0.0.1:8765
+  }
+  # nginx
+  server { listen 443 ssl; server_name ecadlib.example.com;  # ssl_certificate ... ;
+    client_max_body_size 25m;
+    location / { proxy_pass http://127.0.0.1:8765; proxy_set_header Host $host;
+                 proxy_set_header X-Forwarded-For $remote_addr; proxy_set_header X-Forwarded-Proto https; } }
+  ```
+  Start it with `ecadlib ui --team --host 127.0.0.1 --allowed-host ecadlib.example.com --trusted-proxy 127.0.0.1`. The proxy must pass the original `Host` through: Caddy does this by default, and nginx needs the `proxy_set_header Host $host` line above. `--trusted-proxy` makes ecadlib use the proxy's `X-Forwarded-For` (for logs and lockout) and `X-Forwarded-Proto` (for `Secure` cookies). If the proxy does not send `X-Forwarded-Proto`, set `"secure_cookies": true` in `team.json`.
+* **SSO through the proxy (optional).** If the reverse proxy signs people in (oauth2-proxy, Authelia, Cloudflare Access and the like) and sets a user header, start ecadlib with `--trusted-proxy <proxy IP>` and, if needed, `--proxy-user-header X-Forwarded-User`. The header is believed only on connections from that IP. Its value is matched against user names and e-mails in `team_users.json`, so add such users with `--no-password`. The proxy must overwrite the header on every request, never pass it on from the client. Anyone who can open a connection from the proxy's IP can claim any user, so only trust a proxy on the same host or a locked-down network.
+* **Settings file.** `team.json` in the workspace is optional and holds `allowed_hosts`, `trusted_proxies`, `proxy_user_header`, `session_hours`, `idle_minutes`, `max_failures`, `lockout_minutes`, `max_failures_per_ip`, `secure_cookies`, `request_seconds`, `max_connections_per_ip`, `audit_max_mb`, `audit_keep` and `audit_refusals_per_minute`. Command-line flags add to it.
+* **The MCP server stays local.** `ecadlib mcp` talks over stdio to the agent that started it on the same machine. It has no network listener and no sign-in. For a team, run agents against their own checkout or workspace, or let them use the web server's HTTP API with a session like a browser would.
+
+![Users page](docs/ui-team-admin.png)
+
+Tests: `python3 -m tests.test_team` runs a real HTTP(S) server on a free port. It covers sign-in and sign-out, lockout, CSRF, Origin and Host checks, every route against every role, approvals taking identity from the session, path containment, per-user jobs, the SSO header, the admin API and TLS with a self-signed certificate made by `openssl` (skipped when `openssl` is missing).
+`python3 -m tests.test_team_history` covers past triages for each role and in local mode, and uploads of the same file name from four users at once, using threads.
+
+### Run it for your team (Docker, one command)
+
+On a machine with Docker (with the compose plugin) and Python 3.10+, from this checkout:
+
+```
+python3 -m ecadlib team setup          # or: scripts/team-setup.sh   (no pip install needed)
+```
+
+It asks for the address people will use and the first admin's user name, name, e-mail and password (typed without echo). Everything can be given as flags for scripts: `--domain`, `--admin`, `--name`, `--email`, `--password-stdin` (one line on stdin), `--http-port`, `--https-port`; `-h` lists them. It then:
+
+* writes `.env` next to `docker-compose.yml` (mode 0600). It holds the domain, the TLS mode and the ports. It holds no password and no API keys.
+* builds the image from this checkout (`Dockerfile`: `python:3.13-slim`, runs as uid 10001, health check, no secrets in the image). With `--image ghcr.io/olibrowne/pcblivinglibrary:X.Y.Z` it pulls a published image instead.
+* creates the first admin in the `ecadlib-data` volume. The password goes to `ecadlib team add-user --password-stdin` on a pipe. It is never written to a file, put on a command line or printed. If an admin already exists, the setup asks for nothing.
+* starts **ecadlib + Caddy** with `docker compose up -d --wait` and prints the URL.
+
+How HTTPS is set up depends on the address:
+
+| Address | TLS |
+| --- | --- |
+| a public name (`ecadlib.example.com`) | Let's Encrypt, through Caddy. The name must resolve to the machine, and ports 80 and 443 must be reachable. The ACME e-mail defaults to the admin's. |
+| an IP address, a one-word name or `.lan`/`.local`/`.internal`/`.home.arpa` | Caddy's own CA (`--tls internal`). Browsers warn until they trust it. Export the CA with `docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ecadlib-ca.crt` and install it on each computer. |
+| your own certificate | `--own-cert DIR` with `DIR/cert.pem` (full chain) and `DIR/key.pem`. ecadlib serves TLS itself with `--cert/--key` and there is no Caddy (`docker-compose.own-cert.yml`). The container runs as uid 10001, so `chown 10001 DIR/key.pem`. |
+
+Running the setup again is safe. `.env` keeps its values unless a flag changes them, an existing admin is left alone, and compose only recreates what changed. To switch modes, run it again with the new `--tls`, `--own-cert` or `--domain`.
+
+**How the proxy is trusted.** ecadlib publishes no port of its own. It listens on plain HTTP (`--allow-http`) on the private `ecadlib-net` network only. Caddy has a fixed address there (`ECADLIB_PROXY_IP`, default 172.30.87.2). Other containers get addresses from a separate range, so they can never take Caddy's address. ecadlib is started with `--trusted-proxy` set to exactly that address and `--allowed-host` set to your domain. So it believes `X-Forwarded-For` and `X-Forwarded-Proto` (`Secure` cookies) from Caddy and from nothing else. Caddy drops any `X-Forwarded-User` header a client sends (the SSO header from the section above). ecadlib is started with `--proxy-user-header` set to that same name, which overrides `proxy_user_header` in `team.json`. To use another header name, set `ECADLIB_PROXY_USER_HEADER` in `.env`: Caddy then drops that one and ecadlib reads that one. If that subnet clashes with one of yours, set `ECADLIB_SUBNET`, `ECADLIB_IP_RANGE` and `ECADLIB_PROXY_IP` together in `.env`. Docker's port forwarding can hide client addresses behind the network gateway, depending on the host. When it does, the audit log shows the gateway's address, and the 30-failures-per-address lockout counts everyone together. The per-user lockout is not affected.
+
+**API keys and libraries.** Put `NEXAR_TOKEN=...`, `ANTHROPIC_API_KEY=...` and similar keys in `api-keys.env` next to `docker-compose.yml` (`chmod 600`; it is git-ignored and never copied into the image), then run `docker compose up -d`. KiCad libraries for `--lib` go in `/data/libs`: `docker compose cp ./kicad-libs/. ecadlib:/data/libs/`, then `docker compose restart ecadlib`.
+
+**Users.** After the first admin, manage users on the **Users** page, or with `docker compose run --rm ecadlib team --workspace /data/workspace add-user|reset-password|set-role|list ...`.
+
+**The library agent (optional).** `docker compose --profile agent up -d` also starts `ecadlib agent serve` (section 20) on the same `ecadlib-data` volume. It does nothing until `[agent] enabled = true` is in `/data/workspace/ecadlib.toml`. Until then it only keeps its status file fresh, which is what its health check reads (`ecadlib agent status --healthy 10800`). Its keys (`GITHUB_TOKEN`, `NEXAR_TOKEN`, `ANTHROPIC_API_KEY`) come from `api-keys.env`. The image includes `git` and `pdftoppm`. For real pull requests, clone your library repo into `/data` and set `[agent] library_repo` to it; without one, each review batch is written to `/data/workspace/agent/batches/<id>/` (PR text and pictures) instead.
+
+**Back up `/data`.** Everything (users and password hashes, plans, reports, footprints, audit log, libraries) is in the `ecadlib-data` volume. Keep the backup private, because it contains the password hashes:
+
+```
+docker compose run --rm --no-deps -T --entrypoint tar ecadlib czf - -C /data . > ecadlib-data-$(date +%F).tgz
+# restore:
+docker compose stop ecadlib
+docker compose run --rm --no-deps -T --entrypoint tar ecadlib xzf - -C /data < ecadlib-data-YYYY-MM-DD.tgz
+docker compose start ecadlib
+```
+
+Caddy's certificates and its local CA are in the `caddy-data` volume. Back it up the same way (`--entrypoint tar caddy ... -C /data`) if you don't want browsers to have to trust a new local CA after a rebuild.
+
+**Upgrade.** Take a backup, then `git pull` and run `python3 -m ecadlib team setup` again: it rebuilds the image and recreates the containers, and the volumes stay. With a published image, run `python3 -m ecadlib team setup --image ghcr.io/olibrowne/pcblivinglibrary:NEW`. Sessions are kept in memory, so an upgrade signs everyone out.
+
+**Images.** `.github/workflows/docker.yml` builds the image and runs this whole stack on every pull request. The CI check runs `team setup`, runs it again, then signs in over HTTPS with curl through Caddy. A `v*` tag also publishes `ghcr.io/<owner>/<repo>:X.Y.Z` and `:X.Y` for amd64 and arm64. Nothing is published from branches or pull requests.
+
+Tests: `python3 -m tests.test_team_setup` runs the setup end to end against a stand-in `docker` command. It checks `.env` creation and mode, the admin in the "volume", that a second run changes nothing and asks nothing, that the password is on no command line and in no file, the TLS mode choice, and the proxy-trust wiring in the compose and Caddy files.
+
 Tests: `python3 -m tests.test_ui` covers the workspace, web server, MCP server and CLI. `python3 -m tests.test_offline` covers the core modules. `python3 -m tests.test_footprints` checks generated footprints by part type against KiCad's library and the KLC rules.
 
-Requirements: Python 3.10 or later (tested on 3.11 and 3.13) with `requests`, `pandas`, `openpyxl` and `jsonschema`, which pip installs. `pypdf` and `olefile` are optional extras. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
+Requirements: Python 3.10 or later (tested on 3.11 and 3.13) with `requests`, `pandas`, `openpyxl`, `jsonschema` and `olefile`, which pip installs. `pypdf` and `pillow` are optional extras. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
 
 ```
 ecad-librarian/
 ├── README.md
 ├── ecadlib/
 │   ├── footprint_gen.py      # IPC-7351B generator -> .kicad_mod  (+ `compare` vs a reference footprint)
+│   ├── footprint_adv.py      # BGA/LGA/CSP, pin headers, connectors, odd shapes (pad_table from the datasheet drawing)
+│   ├── footprint_bench.py    # pad-by-pad comparison with KiCad's official footprints
 │   ├── package_schema.json   # JSON Schema: the datasheet-dimension contract an LLM fills
 │   ├── bom_triage.py         # BOM CSV/XLSX -> triage report (.md + .csv)
 │   ├── providers.py          # Provider interface: EasyEDA, JLCPCB search, + DigiKey/Mouser/Nexar/SnapMagic/SamacSys stubs
@@ -165,6 +269,81 @@ ecadlib check <any.kicad_mod> ...          # KLC-style rule check, works on KiCa
 | Diodes, tantalum | SMA, SMB, SOD-123, SOD-323, tantalum A | IPC-7351B result; KiCad draws these by hand from the maker's land, so give `land` to match it exactly |
 
 All 26 pass the rule check, as do all 27 KiCad reference footprints.
+
+### Harder footprints: BGAs, connectors and odd shapes (`footprint_adv.py`)
+
+```
+ecadlib footprint gen ecadlib/package_specs/advanced/*.json -o out/footprints/ecadlib.pretty
+ecadlib footprint-bench [--offline] [--fixture tests/fixtures/kicad_bench.json] [--save-fixture FILE]
+```
+
+* `bga` (BGA/LGA/CSP): `rows` x `cols` at `pitch` (`pitch_y`), rows lettered A, B, ... from the top without I O Q S X Z
+  (JEDEC; AA after Y), columns numbered from the left. Missing balls as `depopulated` names or ranges (`"E5:J9"`) or as a
+  `ball_map` (one string per row, `-` = no ball). Land: the datasheet's `land_diameter`, else IPC-7351B from the nominal
+  `ball_diameter` (collapsing balls −25 % from 0.55 mm, −20 % from 0.25 mm, −15 % below; non-collapsing +5 %; LGA =
+  terminal). `land_style` NSMD (mask 0.05 mm bigger) or SMD (copper 0.05 mm bigger, mask = land). Courtyard body + 1.0 mm.
+  Silk and fab mark the A1 corner.
+* `pin_header`: 1 or 2 columns, through-hole (pin 1 at the origin, square pad 1, KiCad's drill/pad per pitch) or SMD
+  (`land`, single rows alternate sides).
+* `connector` and `custom`: a `pad_table` copied from the datasheet's land-pattern drawing in the drawing's own terms:
+  `unit` (mm, mil, in), `y_axis` (up, down), `view` (top, bottom = mirrored), `origin` (center, pin1, datum +
+  `center_at`), then `pads` and `arrays` (N pads at a pitch). Pads can be SMD, plated through-hole (round or slot:
+  `drill` + `drill_h`) or NPTH; `MP`/`SH` pads are mounting/shield pads, not pins; `polygon` pads for odd shapes;
+  `paste: "grid"` splits a big pad's paste into windows; `thermal_vias`; `keepouts`; `same_net` for stacked pads (USB-C).
+  Through-hole pads with only a drill get KiCad's connector rule (drill + 1.0 mm, at most pitch − 0.8 mm across the
+  row). The footprint origin is pin 1 for through-hole parts and the centre for SMD (KiCad). Courtyard: the union of
+  pads and body, + 0.5 mm, traced as one outline.
+* **Table checks** (`check_pad_table`, errors stop the build, warnings go in the report): mils typed as mm, pin count,
+  duplicate or skipped numbers, overlapping pads, a pad off the row pitch (misread coordinate), one or two pads that
+  break an otherwise symmetric pattern, pin 1 in the middle of a row or not at 0,0 when the drawing's origin is pin 1,
+  annular ring.
+* **`footprint_check`** now also knows: ball grids (A1 top-left and marked on silk and fab, every ball on the grid,
+  land 35–65 % of the pitch, JEDEC row letters); mounting/shield pads (left out of pin-1 and numbering rules);
+  dual-row zig-zag numbering; stacked USB-C GND/VBUS pads (a warning); polygon pads (exact gaps); NPTH clearance;
+  a courtyard outline that is not a rectangle. All 20 KiCad references below pass it with no errors.
+* **3D:** `step_gen` builds BGA bodies with balls (depopulated ones left out) and connector boxes with pins and contacts.
+* **Altium:** approval (`Workspace.approve_footprint`, the UI and MCP) writes the `.PcbLib` for every family through
+  `altium_lib.footprint_from_spec`: SMD pads as before, through-hole pads with their drills (round, square, slots;
+  `kicad_import`'s converter), NPTH holes, mounting/shield pads, KiCad mask margins as manual mask expansion (BGA NSMD),
+  tented thermal vias, paste windows on Top Paste, keep-outs, and a polygon pad as a small anchor pad plus regions with
+  the exact outline on Top Layer and Top Solder (and Top Paste when it has paste). Altium gives primitives that touch a
+  pad the pad's net on the board. `tests/test_altium_tht.py` approves all 41 advanced specs and reads each `.PcbLib`
+  back (altium_lib's reader and pyaltiumlib): 2767 pads, 119 plated through-hole, 3 NPTH, 5 slots, 22 paste windows and
+  the polygon pad match the `.kicad_mod`. Not checked: none of them has been opened in Altium Designer. The footprint
+  preview fits its view to the pads, holes, body and courtyard, so connectors with pin 1 at 0,0 are drawn whole.
+
+`ecadlib footprint-bench` compares every pad (centre, size, drill) and the courtyard with KiCad's official footprint
+(fetched from gitlab.com and cached; `tests/fixtures/kicad_bench.json` keeps just the numbers for offline tests). Run
+2026-10-14:
+
+| Kind | Parts | Pads within 0.01 mm | Courtyard |
+|---|---|---|---|
+| BGA | BGA-256 1.0 mm, BGA-100, BGA-324 0.8 mm (rows to V), BGA-144 (centre E5:J9 depopulated), UFBGA-132 (ring missing, ball map) | 956/956 | 5/5 |
+| Pin headers | 1x05 / 2x05 2.54 mm, 1x05 2.00 mm, 2x05 1.27 mm, three SMD headers | 55/55 | 5/7 (KiCad's SMD header courtyard also wraps the lead tails, which the spec doesn't give) |
+| Connectors | JST XH 2 and 4 pin, JST PH SMD, JST SH SMD, Molex KK 254 (table in mil), Molex PicoBlade (bottom-view drawing from pin 1), USB-C HRO TYPE-C-31-M-12 (datum origin, slots, NPTH, stacked pads) | 50/50 | 7/7 |
+| IC | SOT-23-6 | 6/6 | 1/1 |
+
+1067/1067 pads (100 %), 20/20 footprints, 18/20 courtyards, 20/20 clean in `footprint_check`.
+
+Widened 2026-10-15 to 57 footprints, 2942/2942 pads within 0.01 mm, 53/57 courtyards (the four dual-row SMD headers,
+as above), 57/57 clean: eight more BGAs (rows A..N, A..Y and AA..AF, BGA-672 with A1 depopulated, a WLCSP-36 at
+0.4 mm, BGA-68 with 13 single balls missing, the 2 x 3 x 15 SDRAM grid, maker's lands where IPC differs), QFN-16 and
+DFN-8 with thermal vias (custom pad tables; vias may have their own row pitch, `thermal_vias.pitch_y`; KiCad's B.Cu
+copy of the exposed pad is not compared), JST PH / XH 6 / GH, a 2x20 and a 1.00 mm header, six SMD headers built
+from the land tables alone (single-row headers now have their own table), and 15 IPC chip / SOT / SO / QFP / QFN parts.
+`tests/test_footprint_review.py` adds property tests over random BGA / header / connector specs (pad count, no
+overlaps, courtyard, symmetry, PcbLib read back = `.kicad_mod` including mask and paste margins).
+A PcbLib converted back to KiCad turns an anchor pad with its copper / mask / paste regions into a KiCad custom pad
+(`gr_poly` primitives, as KiCad's own library writes them), not net-less copper polygons. Through-hole custom pads
+carry their shape on top and bottom copper in Altium; inner layers get the anchor pad and hole (Altium regions cannot
+be "all layers"; the connection is the same, only an inner-layer trace to the outer edge of the shape would differ).
+`thermal_vias.unit` (mm default, mil, in, or `table`) takes the vias in the pad table's unit. BGA lands from the ball
+size follow the IPC-7351B collapsing-ball table (0.75 -> 0.55 ... 0.17 -> 0.15, 0.15 -> 0.13; from the standard's
+BGA section as reproduced in maker notes, not re-read online here: ipc.org is blocked). The connector and header
+specs carry the datasheet's numbers (pitch, pad sizes, hole sizes, body), which KiCad's library also follows, so these
+rows mostly test the frame handling (units, y axis, bottom view, origins), the derived pad sizes and the courtyard; the
+BGA lands are computed from the ball size (except UFBGA-132, whose land comes from the ST datasheet). Not checked: real
+PDFs through `datasheet.py` (no API key here), and the generated through-hole and BGA files opened in Altium Designer.
 
 ---|---|---|---|---|---|
 | R_0603_1608Metric | 0.825×0.91 @0.7925 | 0.80×0.95 @0.825 | +0.025 / −0.04 | −0.033 | 2.92×1.42 / 2.96×1.46 |
@@ -392,6 +571,17 @@ What gets written:
 * Not written by the generator path: through-hole pads and 3D bodies (the KiCad import in section 6 adds through-hole pads, arcs, keep-outs and 3D bodies) and `PrimitiveGuids`.
 * Text: Altium is assumed to recalculate the cached text size (exact only for `.Designator`/`.Comment`). Not checked in Altium: signal-flow arrow direction, the falling-edge clock written as clock plus active-low input, and how display modes behave when switching views. Names over 31 characters are truncated as CFB storage names, and `SectionKeys` holds the mapping in the same way Altium does.
 
+**Checked against real Altium libraries (2026-10-15, `tests/test_altium_interop.py`):** 553 Altium-saved `.PcbLib`/`.SchLib` files from the
+Celestial Altium Library (github.com/issus/altium-library; its license forbids redistribution, so none is committed) read with our reader
+and with `pyaltiumlib` 0.7.1: 3367 pads agree field for field (position, size, hole, slot, rotation, plating, mask/paste modes), every
+record count matches the files' own `Header` counts, and 3765 tracks/arcs/regions/texts agree (region vertices to 0.01 mil). The only disagreements are pyaltiumlib's
+(it swallows the record after a 3D body, so regions after a body go missing there). Byte statistics of 1139 real SMD pads show our 202-byte
+pad blocks differ only where we set manual paste/mask expansion. Real files keep the STEP checksum signed in `Library/Models` and unsigned
+in the body (as we write it), store Mechanical 17-32 as layer byte 72 plus a v7 layer id (the reader now decodes it to Altium's id 66+n;
+the writer and `[layers]` still stop at Mechanical 16), and put text cp1252 can't hold in a `|%UTF8%KEY=...||` twin before `|KEY=?`
+(read, and now written by the SchLib writer; binary pin names stay cp1252). Our files read back the same through pyaltiumlib
+(test skipped when it is not installed). Nothing here was opened in Altium Designer.
+
 ## 6. `kicad_import.py`: KiCad library parts to Altium
 
 ```
@@ -402,7 +592,7 @@ python3 -m ecadlib.kicad_import symbol Transistor_FET:AO3401A [--as NAME] [--foo
 python3 -m tests.test_kicad_import
 ```
 
-Fetches official footprints, symbols (KiCad 7-9, including `.kicad_symdir` and `extends`) and STEP models from gitlab.com/kicad/libraries and writes one `.PcbLib`/`.SchLib` per part. It handles through-hole pads (round and slotted, plated and NPTH), rect/roundrect/oval/circle pads (custom and trapezoid pads become their bounding rectangle, with a note), arcs and circles, keep-out zones, and hidden or stacked power pins. Every part gets a 3D body: an extruded body over the fab outline by default, with the height taken from the KiCad STEP model, else a per-package table, else `--height`; `--step` embeds the STEP model instead. Without a KiCad model, a generated STEP is embedded instead of the box (section 14; `--box` keeps the box). `examples/kicad_import_parts.json` maps the 10 sample parts that had no models; with it the plan goes from 4 to 14 ready. Outputs are not committed because the KiCad libraries are CC-BY-SA 4.0 (with a design-use exception).
+Fetches official footprints, symbols (KiCad 7-9, including `.kicad_symdir` and `extends`) and STEP models from gitlab.com/kicad/libraries and writes one `.PcbLib`/`.SchLib` per part. It handles through-hole pads (round and slotted, plated and NPTH), rect/roundrect/oval/circle pads (custom pads become an anchor pad plus copper, mask and paste regions with their outline, or their bounding rectangle when they use arcs or curves; trapezoids become rectangles; per-pad mask margins and tented pads carry over), arcs and circles, keep-out zones, and hidden or stacked power pins. Every part gets a 3D body: an extruded body over the fab outline by default, with the height taken from the KiCad STEP model, else a per-package table, else `--height`; `--step` embeds the STEP model instead. Without a KiCad model, a generated STEP is embedded instead of the box (section 14; `--box` keeps the box). `examples/kicad_import_parts.json` maps the 10 sample parts that had no models; with it the plan goes from 4 to 14 ready. Outputs are not committed because the KiCad libraries are CC-BY-SA 4.0 (with a design-use exception).
 
 Reference and Value text become `.Designator` and `.Comment`; pin shapes map onto Altium pin symbols, `~{X}` names onto overlines, and De Morgan body styles onto Altium display mode 1. Multi-unit symbols become multi-part.
 
@@ -417,7 +607,30 @@ python3 -m ecadlib.datasheet <pdf> --part <MPN> --from-response out/datasheet/<M
 python3 -m tests.test_datasheet
 ```
 
-Claude reads the package drawing and pin table and returns every dimension as printed (min/nom/max plus unit), with the PDF page and figure it came from, through a structured-output schema derived from `package_schema.json`. The tool converts inches and mils to mm, then runs schema validation, `footprint_gen.validate`/`build`, sanity rules (pin count vs pin table, pitch x pins vs body, min <= nom <= max, unit plausibility) and symbol checks (unique pins, 1..N plus EP). Anything that fails goes in `needs_review`; nothing is corrected. Outputs: the package spec, the symbol JSON, a provenance sidecar, a review checklist (.md) and the raw response. The PDF is treated as untrusted data. Exit code 0 when clean, 2 when something needs review, 1 on error. **No live API call has been made yet** (no key in the sandbox); the tests mock the Messages API.
+Claude reads the package drawing and pin table and returns every dimension as printed (min/nom/max plus unit), with the PDF page and figure it came from, through a structured-output schema derived from `package_schema.json`. The tool converts inches and mils to mm, then runs schema validation, `footprint_gen.validate`/`build`, sanity rules (pin count vs pin table, pitch x pins vs body, min <= nom <= max, unit plausibility) and symbol checks (unique pins, 1..N plus EP). Anything that fails goes in `needs_review`; nothing is corrected. Outputs: the package spec, the symbol JSON, a provenance sidecar, a review checklist (.md) and the raw response. The PDF is treated as untrusted data. Exit code 0 when clean, 2 when something needs review, 1 on error.
+
+### A whole BOM in one batch
+
+```
+export ANTHROPIC_API_KEY=...                      # or name another variable in ecadlib.toml [datasheet] api_key_env
+ecadlib datasheet estimate out/librarian/plan.json          # tokens and $ before anything is sent
+ecadlib datasheet batch out/librarian/plan.json [--no-wait] [--no-batch] [--part P] [--yes]
+ecadlib datasheet batch examples/sample_bom.csv -o out/librarian --lib ...   # librarian + batch in one go
+ecadlib librarian BOM ... --datasheet-batch [--datasheet-no-wait]           # the same, as a librarian option
+python3 -m tests.test_datasheet_batch
+```
+
+Every plan part that still has no symbol or footprint goes to the reader. Its datasheet link comes from the BOM's datasheet column, the plan's `ComponentLink2URL`, a link a source found (KiCad symbol, EasyEDA `lcsc.url`) or LCSC's `https://www.lcsc.com/datasheet/<C-number>.pdf`, tried in that order. Each link is downloaded (stored under `<cache>/datasheets/` with its URL, SHA-256, size and page count) and must start with `%PDF`; an HTML viewer page is skipped. A link this machine cannot reach is sent as a URL document for the API to fetch, and the part is flagged. A PDF over `[datasheet] auto_pages` pages (default 40), or over the request limits, is cut to the pages whose text mentions the package outline, land pattern or pin table, plus pages 1 to 3. Page numbers in the outputs are mapped back to the original file. `--pages` chooses the pages yourself.
+
+All parts go into one Message Batch (half price), one request per part with `custom_id` = part name. The batch is polled, the JSONL results are collected, and each part is built through the librarian's writers. Every result is marked `verify`, so the release check holds it until a person has looked; LLM output is never released automatically. The release check then runs again. The batch id is kept in `<out>/datasheet/batch_state.json`, so `--no-wait` or an interrupted run collects the same batch next time instead of paying twice. A batch create is never retried after an ambiguous failure. Errored or expired requests are sent again on the next run. `--no-batch` makes one Messages call per part instead, with the server-side refusal fallback; the Batches API does not accept that parameter.
+
+* **Result cache:** answers that parsed are stored under `<cache>/datasheet_results/`, keyed by PDF SHA-256 + model + schema version (a hash of the output schema and prompt, so new `package_schema.json` families invalidate it) + part/package/pages/effort. Re-runs cost nothing. Refusals and truncated answers are not cached.
+* **Errors and retries:** 429, 5xx and 529 (overloaded) are retried with exponential backoff, honouring `retry-after`. 401, 402/billing, 403, 404 (model) and 413 (too many pages) fail at once with what to do. Every request is logged to `<out>/datasheet/api_log.jsonl` (status, request-id, usage, a body summary with PDFs as size and hash). The key is never logged.
+* **Estimate:** with a key, input tokens come from `/v1/messages/count_tokens`. Without one, the estimate is rough: pages x 3,000 tokens. Prices are $ per MTok from the claude-api model table, with the batch at half price. `[datasheet] max_cost_usd` refuses a run whose worst case (every answer at `max_tokens`) is higher, unless `--yes`.
+* **Self-check:** compares the extraction with its own footprint name (pin count, EP, pitch, body and EP size) and with family norms (standard pitches; pitch, body and pin-count ranges per `package_type`). Disagreements are listed as `self-check:` review items. A family with no norms gets the generic checks, and the sidecar says so.
+* **Workspace / MCP:** `Workspace.datasheet_estimate(bom)` and `datasheet_batch(bom, sync, wait, parts)`; MCP tools `datasheet_estimate` and `datasheet_batch`. The tool submits and returns by default; call it again to collect.
+
+**Not tested live:** no API key is available here, so no successful extraction or batch has run. With an invalid key the live API returned 401 `authentication_error` for messages, count_tokens, batch create and batch retrieve, and the client reported each one correctly. The tests use a fake HTTP layer in the documented Messages, count_tokens and Batches shapes. Datasheet hosts (LCSC and the others) are blocked from this sandbox.
 
 ## 8. `lifecycle.py`: lifecycle watcher (keep the library current)
 
@@ -443,7 +656,7 @@ python3 -m tests.test_librarian; python3 -m tests.test_release_check
 Triages the BOM, converts parts already in your `--lib` libraries, and for anything still missing tries in order:
 * **kicad**: the official KiCad libraries. A name index is built once from the GitLab tree API and cached. Symbols match the MPN by exact name, KiCad `x` wildcards, or the MPN minus an ordering suffix; the footprint comes from the symbol's Footprint property, the BOM footprint, or a footprint named after the MPN. R/C/L/LED use `Device:*` plus the footprint by package.
 * **easyeda**: by LCSC number, through a native converter (`easyeda_convert.py`).
-* **datasheet**: `ecadlib.datasheet`, when a datasheet URL is known and `ANTHROPIC_API_KEY` is set.
+* **datasheet**: `ecadlib.datasheet`, when a datasheet URL is known and `ANTHROPIC_API_KEY` is set. `--datasheet-batch` reads every part that reaches this step as one Message Batch (section 7).
 
 Outputs in `out/librarian/`: `models/`, a `plan.json` for `altium365 push` recording each part's source, `review.md/.csv` (what came from where and what needs a person), and the release-check report. Re-running skips finished parts unless `--refresh` is given.
 
@@ -500,7 +713,7 @@ Writes what the librarian built for Altium as a KiCad library: `mylib.kicad_sym`
 * **Symbols:** a part whose symbol came from KiCad (`kicad:` or a `--lib` folder) gets that KiCad symbol again, with its `extends` chain flattened and renamed; an EasyEDA symbol is converted again from the EasyEDA data; anything else (datasheet reader, or a source that can't be reached) is drawn from its `.SchLib`, read back with `altium_lib.read_schlib` (pins with type, shape and visibility, body graphics, parts as units, display modes as De Morgan styles).
 * **Footprints:** the plan's `.kicad_mod` when there is one, else the `.PcbLib` converted back. STEP files come from `kicad-packages3D` (through the HTTP cache); ecadlib-generated footprints have none, since Altium gets an extruded body.
 * **Format:** KiCad 8 (`.kicad_sym` version 20231120, footprints at most 20240108), so KiCad 8, 9 and 10 can open it. KiCad 9/10 syntax from the upstream library is written the KiCad 8 way and flags KiCad 8 doesn't know are dropped.
-* **Checks:** every file parses with `ecadlib.sexpr`, each footprint passes release_check's footprint rule at the level the release check recorded, and symbol pins are checked against footprint pads. **Not verified in KiCad itself:** `kicad-cli` isn't installed here, and `tests/test_kicad_export.py` runs it only when it is.
+* **Checks:** every file parses with `ecadlib.sexpr`, each footprint passes release_check's footprint rule at the level the release check recorded, and symbol pins are checked against footprint pads. **In KiCad itself** (7.0.11, see section 28): the `fp-lib-table` resolves in a KiCad project and its footprints match the library; KiCad 7 refuses the KiCad 8 symbol library as such, and loads it with the two KiCad 8 tokens (`exclude_from_sim`, `generator_version`) removed, every pin, graphic and field unchanged. KiCad 8, 9 and 10 were not run here. A KiCad 7 symbol's `ki_description` becomes the `Description` field.
 * **License:** KiCad library content is CC-BY-SA 4.0. An export that includes some gets a `NOTICE.txt`, and the export stays out of git (`out/kicad/` is in `.gitignore`).
 
 ## 12. `approvals.py` and `dedupe.py`: sign-off and duplicates
@@ -520,7 +733,7 @@ python3 -m tests.test_approvals; python3 -m tests.test_dedupe
 * the same footprint geometry under another name (pads and courtyard, with `.PcbLib` and `.kicad_mod` compared directly);
 * the same symbol pinout, for symbols with 3 or more pins.
 
-It also reports footprints and symbols that share a name but differ. Each group gets a recommended keeper; `--keep` overrides it. `--merge` first saves `plan.json.pre-dedupe`, then rewrites plan references to the keeper. A duplicate part gets `duplicate_of`, and push skips it. Footprint and symbol references are pointed at the keeper's file. It also writes `dedupe_map.csv` (and, with `--bom`, a remapped BOM copy). Library files, DbLib rows and workspace components are only reported, never changed or deleted.
+It also reports footprints and symbols that share a name but differ. Each group gets a recommended keeper; `--keep` overrides it. `--merge` first saves the plan as `plan.json.pre-dedupe` (kept from the first merge; later merges save `plan.json.pre-dedupe-<UTC time>`), then rewrites plan references to the keeper. A duplicate part gets `duplicate_of`, and push skips it. Footprint and symbol references are pointed at the keeper's file. It also writes `dedupe_map.csv` (and, with `--bom`, a remapped BOM copy). Library files, DbLib rows and workspace components are only reported, never changed or deleted.
 
 Live run on a copy of `out/librarian/plan.json` (2026-10-14), with `--lib out/altium_models out/altium_models_kicad out/footprints out/altium/ecadlib_sqlite.DbLib`:
 * No MPN duplicates.
@@ -545,6 +758,8 @@ For each fitted BOM line it needs BOM qty x `--qty` boards and costs every offer
 * NRND, LTB and obsolete candidates are dropped. `single_source` means nothing usable was found.
 
 `--write-plan` fills empty `Supplier 1/2` and `Supplier Part Number 1/2` parameters in an altium365 `plan.json`. It never replaces a supplier that is already set, such as the BOM's LCSC number. For passives it also fills `Alternate Manufacturer N` and `Alternate Manufacturer Part Number N` with confirmed drop-ins. Filled names are removed from the item's `cleared` list, so `altium365 push` sends them instead of deleting them. Prices and IC review candidates go in `item["sourcing"]` only, so a price change does not cause a new component revision on every push. Exit codes: 0 every line can be bought from stock, 1 some cannot, 2 bad input, 3 no source answered.
+
+Known limits: the supplier and alternate parameters `--write-plan` fills are part of the approval hash (`approvals.py`), so a part already signed off needs approving again after a write-back (and the release check run again). Price strings are parsed without knowing the locale: `1.234,50 €`, `1,234.50` and `0,125 €` (a leading 0 marks a decimal comma) are unambiguous, but `1,250 €` with exactly three digits after a single comma is read as 1250, not 1.25.
 
 Credentials are the lifecycle ones: `NEXAR_CLIENT_ID`/`NEXAR_CLIENT_SECRET` or `NEXAR_SUPPLY_TOKEN` (pricing needs a Nexar plan that includes it), `DIGIKEY_CLIENT_ID`/`DIGIKEY_CLIENT_SECRET` and `MOUSER_API_KEY`; JLCPCB needs none. Responses are cached for 12 h (`--max-age`); Mouser's `apiKey` is redacted from cache keys and files, and token requests are never cached. **Not tested live:** every vendor host is blocked from this sandbox. The Nexar queries are validated against `tests/nexar/schema.graphql`. The other shapes come from public docs and third-party clients, and each provider's `shapes` string (repeated in the report) says what is assumed.
 
@@ -647,6 +862,332 @@ The UI has a **Library rules** card (type the folders to scan, review the propos
 Plans keep ecadlib's own parameter names internally; your house names (`[parameters.names]`) are applied at the outputs: the Altium 365 push, DbLib export and sync, KiCad export, and the A365 drift check.
 
 **Accuracy and limits.** On synthetic libraries in four house styles (classic Altium SchLib/PcbLib, glued names in a DbLib, MPN-named Altium 365 list, KiCad), inference gets 34 of 34 settings right, and parts planned with the inferred file come out named like the existing ones. Not checked: no real customer library has been scanned and nothing written was opened in Altium; IPC-7351 names from the generator are approximate; name case (upper/lower) is not inferred; `.mdb` DbLib data is not read. Because the current folder's `ecadlib.toml` is used when the input folder has none, a stray file there will change output; pass `--rules` to be explicit.
+
+## 19. `symbol_layout.py`: tidy symbols for big chips
+
+A 100-pin MCU used to come out as one long column per side, in pin-number order. Now every symbol with 40 or more pins is laid out by function. The layout is used for datasheet-reader symbols, for EasyEDA symbols (the librarian re-lays them out; symbols taken from the KiCad libraries stay as drawn), for `altium_lib.ic_symbol` and `schlib`, and for the KiCad export, which reads those SchLibs back.
+
+* **Groups.** Pins are grouped by name, and by type when the name says nothing. Power (VDD, 3V3, VBAT), analog supply (VDDA, VREF+) and power out (VCAP, 3V3OUT) go on top; ground (GND, VSS, AGND, VREF-) and the exposed pad go on the bottom. Reset/boot/enable, clock/oscillator, debug (SWD, JTAG, boot UART such as U0TXD), USB, ADC/DAC and other inputs go on the left. UART, I2C, SPI, CAN, Ethernet, ports, other outputs and NC go on the right.
+* **Names.** Alternate-function names are grouped by their first name (`PA9/USART1_TX` and `PH0-OSC_IN` are port pins). Overbars and active-low marks (`~{RESET}`, `/RESET`, `RESET#`, `RST_N`) are ignored for grouping.
+* **Ports.** Each port is its own block, sorted by number (PA0..PA15, then PB0...). Blocks are separated by one empty grid row. Whole ports move between the left and right side to keep the body roughly square. A port is split only when that saves more than 6 rows.
+* **Stacking.** Power pins that share a name (VDD, or VDD_1..VDD_5 numbered 1..n) are stacked: one pin shows its name and number, and the rest sit on the same spot with name and number hidden. Names that only look alike are never stacked: VDD1 / VDD2 (an isolator's two sides), VDD18 / VDD33 and VDD_18 / VDD_33 are different supplies. KiCad gets the rest as hidden passive pins (KLC S4.3). `stack_power = "hide"` makes them hidden pins tied to the net by name instead (Altium HiddenNetName; the KiCad export names those hidden power pins after that net, since KiCad connects them by name); `"none"` draws every pin.
+* **Grid.** Everything is on the grid: body edges, pin ends and pin pitch (100 mil, which is 2.54 mm in KiCad).
+* **Multi-part.** With `split_pins` set, larger parts become multi-part symbols. Part A holds power, ground and NC; the other parts hold the signal blocks in order, at most `unit_pins` pins each.
+
+Parts below `layout_pins` pins keep the plain "side per pin" layout byte for byte. `layout=True/False` (or `"layout"` in symbol JSON) forces the grouped layout on or off.
+
+```
+ecadlib symbol pins.csv -o out/STM32F103VET6.SchLib --kicad out/STM32F103VET6.kicad_sym --preview out/stm32.svg --list
+ecadlib symbol part.SchLib -o tidy.SchLib --split 64          # re-lay out an existing symbol; also .json, LIB.kicad_sym:NAME, kicad:Lib:Name
+```
+
+The CSV needs `num` and `name` columns; `type` and `group` (to override the grouping) are optional. `--list` prints the groups, and the command exits 1 if any pin is off the grid or overlaps another. Settings live in the rules file:
+
+```toml
+[symbols]
+layout_pins = 40        # grouped layout from this many pins (0 = never)
+split_pins = 0          # multi-part above this many pins (0 = never)
+unit_pins = 48          # most pins in one signal part
+stack_power = "stack"   # stack | hide | none
+pin_length = 300        # mil, a multiple of the grid
+grid = 100              # 50 or 100 mil
+# order = [...]         # group order; sides = { debug = "right" } moves a group
+```
+
+`ecadlib init` proposes `pin_length` and `grid` when the IC symbols in your SchLibs use other values. Workspace: `preview_symbol(pins, name, split, stack, save)`; MCP tool `preview_symbol`. `datasheet.py` can call `symbol_layout.arrange_pins(pins, rules)` to show the grouping in its review.
+
+**Checked:** an STM32F103-style 100-pin LQFP, an ESP32-WROOM-32 module and an FT232RL USB bridge (tests/fixtures/symbols). Each was checked for grouping, order, overlapping pins and grid, read back with `read_schlib`, and parsed as KiCad. The previews were inspected by eye. **Not checked:** nothing has been opened in Altium Designer or KiCad yet. Name widths are estimated at 70 mil per character, so bodies may be a little wider than needed. Pins whose names match no rule fall back to "other" and are placed by type.
+
+## 20. `agent.py`: the library agent (watch, build, prove, review, push, upkeep)
+
+```
+ecadlib agent run [--dry-run] [--upkeep] [--lib DIR]      # one pass now
+ecadlib agent serve [--interval SECONDS]                  # every [agent] interval_minutes until SIGTERM / Ctrl-C
+ecadlib agent status [--healthy SECONDS]                  # last run, queue counts, batch PRs (exit 1 if stale)
+ecadlib agent approve ID [--user U] [-m NOTE]   |   ecadlib agent reject ID -m NOTE
+ecadlib agent push [--dry-run]                            # approved parts -> Altium 365 now
+python3 -m tests.test_agent
+```
+
+One pass follows the parts your projects and BOMs use and keeps the library right:
+
+1. **Watch.** `agent_watch.scan()` finds parts that are new, changed or removed in the watched sources. Each one becomes a queue item (`agent_queue`, one open item per part).
+2. **Build.** Detected items go through the librarian as one cumulative BOM, `agent/library_bom.csv`, so the agent's library is that BOM's plan under `librarian/`. Sources are tried in the usual order, and with `[agent] datasheet_batch` the datasheet reader sends one Message Batch without waiting: the next pass collects it, and those parts stay `building` until then. A part that still has no symbol or footprint goes to **failed**, with the librarian's reason.
+3. **Pictures and proof.** The `visual_check` renderers draw the part's footprint and symbol twice: *before*, from the current library version (or the library repo's git `HEAD` when the file is gone), and *after*, from the new build. `visual_check.prove()` then compares them with the datasheet. A `fail` verdict goes to **failed** with its reason. `pass`, `doubt` and `skipped` go to **review**, and the doubts are listed.
+4. **Review: one PR per batch.** Review items are grouped `batch_size` at a time. Each batch gets branch `ecadlib/agent-<batch>` in the library git repo (`[agent] library_repo`, else the workspace if it is a repo). That branch holds the changed library files (symbol, footprint, `.kicad_mod`, `plan.json`) and the pictures under `pictures_path`. The commit is built with git plumbing on a temporary index, so the repo's working tree, index and `HEAD` are never touched. The branch is pushed without `--force`. The PR is opened through GitHub REST, with the token from the variable `github_token_env` names and `owner/name` from `github_repo` or the origin remote. Its body has the before/after pictures (linked at the commit), the proof findings and the doubts (release-check holds, `verify` notes, proof warnings). When an item is rebuilt, the same PR is updated (PATCH), never duplicated. The PR text and pictures are always written to `agent/batches/<id>/` too. Without a git repo, a remote or a token, that folder is the whole result, the run report says why, and with git but no token the branch is only committed locally.
+5. **Push.** Approve or reject in the web UI's Review queue or with `ecadlib agent approve|reject`. Sign-off goes through `approvals.py`, so the release check and the push see it. Approved items go to Altium 365 through `altium365.push`, so held parts and unmet approval policies are still skipped. That happens on every pass when `auto_push = true`, otherwise with `ecadlib agent push`. `--dry-run` sends nothing.
+6. **Maintain.** On `upkeep_schedule` (default weekly), `upkeep.run` checks every librarian plan in the workspace. Its new findings become queue items with origin `upkeep`: NRND/LTB/obsolete, stock-out, price jump, KiCad source changed/renamed/deleted, Altium 365 drift. A changed KiCad source is rebuilt; the other findings go straight to review for a person. Good news (back in stock, recovered) is not queued.
+
+**Unattended for weeks.** A pass that dies anywhere (killed, power cut) loses nothing: the watch state from before the scan is kept in `agent/watch_pending.json` (upkeep findings in `upkeep_pending.json`) until every change is queued, items left in `building` or `proving` are picked up by the next pass, and an item that stopped the agent three times goes to **failed** instead of stopping it again. A person's decision during a pass stands (the agent leaves that item alone). Approve and reject wait while the librarian rewrites the plan (`agent/plan.lock`: "decide again in a minute"), so neither overwrites the other. The review page sends the build it showed (`build_token`): a part rebuilt since cannot be approved by that click. Only the approved build is pushed: a part whose library files changed since, or with nothing built (a removal, an upkeep finding), is not sent; a source change after the approval becomes a new item once the approved build is pushed. The PR body shows part data as inert text (no HTML, links, @mentions or "fixes #N"), the batch branch starts from the remote's base branch (local unpushed commits never reach `origin`), a retried part gets a new batch, and a merged or closed batch PR is replaced by a new one. A rules typo is logged by `serve`, which keeps going. A part rejected, failed or moved to another batch has its files and pictures removed from the batch branch on the next update, and the PR body lists it under "Taken out of this PR". When every part of a batch is pushed, rejected or failed: with a pushed part the agent comments "All parts decided; ready to merge" once and leaves the PR open (it is how the library repo gets those files); with nothing pushed it comments the outcome and closes the PR. Every approval path (review queue, Approvals page, `ecadlib approve`) waits for `agent/plan.lock`. Part keys normalise the manufacturer (case, punctuation, Inc/Ltd/GmbH/N.V. suffixes, aliases such as ST = STMicroelectronics, TI, ADI, WE; extend them with `[agent] manufacturer_aliases = { "Alias" = "Canonical" }`; a changed table re-keys the queue and watch state once), and a blank manufacturer joins the one known maker of that MPN, so one part is built once; older queue items and watch state are re-keyed once (duplicates become rejected "duplicate of" items). `agent run --dry-run` writes nothing at all: no lock files, queue or workspace folders. `tests/test_agent_soak.py` runs three seeds of 45 passes over weeks of fake time with random BOM edits, kills between steps, approvals, rejections, rebuilds, retries, merged PRs and clock steps, and checks after each: valid JSON state, one open item per part, no part lost, legal moves only, nothing pushed that a person did not approve on that build, one open PR per batch branch, `HEAD` and the working tree untouched, and fast-forward-only pushes.
+
+Only one pass runs at a time (`agent/run.lock`; a second one returns `skipped`). `agent/status.json` (state, heartbeat, last run) is what the web UI and `status` read. `--dry-run` reports what would be detected, built, batched and pushed. It writes nothing: it puts the watch state back so the next real pass still sees those changes. Workspace: `agent_status()`, `agent_run(dry_run=True)`; MCP tools `agent_status` and `agent_run` (dry run unless `dry_run` is false).
+
+Rules, in `ecadlib.toml`:
+
+```
+[agent]
+enabled = false            # serve idles until true; `agent run` works either way
+interval_minutes = 60
+library_repo = ""          # "" = the workspace when it is a git repo
+library_path = "library"   # where library files go in library_repo when the workspace is outside it
+base_branch = ""           # "" = the repo's current branch
+pictures_path = "agent-pictures"
+github_repo = ""           # owner/name; "" = from the origin remote
+github_token_env = "GITHUB_TOKEN"
+batch_size = 20
+auto_push = false
+upkeep_schedule = "weekly" # off | daily | weekly | monthly
+datasheet_batch = true
+libs = []                  # extra local KiCad library folders
+```
+
+**Checked:** `tests/test_agent.py` (9 tests) runs the whole loop with the real librarian on test_librarian's fake KiCad library, a real temporary git repo with a bare `origin`, and a fake GitHub REST session. The tests cover: two parts to review and one to failed with its reason; one branch and one PR whose body has pictures, findings and doubts; a second pass that changes nothing; a rebuild that PATCHes the same PR; a push that happens only after approval; a dry run that leaves every file and ref as it was; builder and proof failures; the no-git and no-token fallbacks; upkeep findings on their schedule; the run lock; `status --healthy`; and `serve` stopping cleanly. `agent_watch`, `agent_queue` and `visual_check` are fakes that follow the shared contract there. `tests/test_agent_e2e.py` then runs the loop with all four real modules together, with only the outside services faked (Anthropic, GitHub REST, Altium 365, the KiCad/EasyEDA web sources). It drives `ecadlib agent run` (CLI and `run_once`) on a workspace that watches a BOM and an uploads folder. One proof answer passes, one fails on pitch and one is a refusal (doubt). A run without a key is skipped but still goes to review with its pictures. The failed part stays out of the batch PR, and the PR links every picture at its commit. The test then uses the team-mode web UI: the queue, the item, its pictures, a rebuild, and refused self-approval and role checks. After approval it covers the release check, `agent push --dry-run` and a push. A second run with no change does nothing. A changed BOM footprint rebuilds the part and PATCHes the same PR. An upkeep finding becomes an upkeep item, and the six agent MCP tools are checked. **Not checked:** a live GitHub PR, a live Altium 365 push, and a real Claude answer.
+
+## 21. `agent_watch.py`: watch projects and BOMs (library agent, step 1)
+
+`ecadlib agent-watch [--dry-run] [--source TYPE:REF] [--json]` (Workspace `agent_watch_scan`, MCP `agent_watch_scan`)
+scans the projects and BOMs you watch and reports, per part (key `manufacturer|MPN`), what is **new** (and not already in
+the workspace library: the KiCad index the triage uses, the librarian plans' ready parts, Altium 365 components pulled
+into a plan or an `a365_state.json`), **changed** (footprint, value, datasheet or LCSC number) or **removed** since the
+last scan. The agent (`ecadlib agent`) turns these into queue items. Sources go in the rules (default: none, so nothing
+is watched):
+
+```toml
+[agent.watch]
+interval = 3600                                   # seconds between scans when the agent serves
+exclude = ["old/*"]                               # globs for folder sources (include = [...] too)
+sources = [
+  { type = "folder", ref = "uploads" },           # every BOM under a folder; uploads/<time>-<random>/<name>: newest upload per name
+  { type = "bom_file", ref = "boms/main.csv" },   # CSV / TSV / XLSX, read like `ecadlib triage`
+  { type = "altium_project", ref = "boards/Main/Main.PrjPcb" },
+  { type = "a365_project", ref = "Main board", workspace = "https://acme.365.altium.com", variant = "" },
+]
+```
+
+State is `<workspace>/agent/watch_state.json` (atomic writes, a lock). A second scan with nothing changed returns
+nothing; unchanged files (size and time, else hash) are not parsed again, so a 20,000-line BOM rescans in about 0.1 s
+(first scan about 2 s). A source that fails (missing file, unreadable BOM, Nexar down, no `NEXAR_TOKEN`) is recorded with
+its error and keeps its last good parts, so nothing is reported removed because of an outage. A renamed source with the
+same content (same file hash, same folder files, same Altium 365 project id) takes over the old state. Altium 365 projects
+are read through Nexar (`desProjects`, `desProjectById` → `design.variants` → `bom.items`); the queries are checked against
+the bundled Nexar schema and tested with a fake client only: **not yet run against a live workspace**.
+
+## 22. `agent_queue.py`: the library agent's review queue
+
+```
+ecadlib queue list [--status review] [--batch ID] [--workspace DIR]
+ecadlib queue show ID
+ecadlib queue approve|reject|rebuild|retry ID [--user "Ann <ann@x.com>"] [--role R] [-m NOTE]
+python3 -m tests.test_agent_queue
+```
+
+The library agent puts every part it finds (new, changed or removed in a watched project or BOM, or an upkeep finding) into a durable queue under `<workspace>/agent/queue/`. Each item is one JSON file in `items/` and each batch one file in `batches/`. Every write goes to a temp file and then replaces the old one (`os.replace`). One lock covers the whole store: it is re-entrant across threads, and `fcntl.flock` on `.lock` makes it exclusive across processes, so the web server, `ecadlib agent serve` and the CLI can run at once. Windows uses `msvcrt.locking`, which gives up after about 10 s of contention and may not work on network drives, so keep the workspace on a local disk there. Items are keyed by part (`manufacturer|MPN`):
+* A part detected again while its item is open updates that item.
+* A failed or rejected item reopens only when the change itself is different.
+* After a push, a new change gets a new item.
+
+States: `detected -> building -> proving -> review -> approved -> pushed`. Any open state can go to `failed` or `rejected`. `failed`/`rejected -> detected` is a retry, and `review -> building` is a rebuild. Any other move raises, and every move is added to the item's `history`.
+
+**Review queue page** (web UI). It lists items by status, with filters and a batch view. An item's page shows:
+* the change that triggered it, with before/now fields;
+* the build sources and notes;
+* the proof verdict and findings;
+* the before/after pictures side by side, and our rendering next to the datasheet page.
+
+Pictures are served only from `<workspace>/agent/` (paths are resolved, so links that point elsewhere are refused) and only as PNG, JPEG, GIF or WebP. SVG is never served. Roles:
+* viewers read;
+* librarians can Reject (a note is required) and Rebuild/Retry;
+* approvers can Approve.
+
+In team mode the decision is signed as the signed-in user, typed names are ignored, and CSRF, Origin and the audit log apply as on every other write. When the item's `build` names its librarian plan (`bom` and `part`), approve and reject are also recorded through `approvals.py`, so `release-check` and `altium365 push` see them. If the policy refuses an approval, the item stays in review. Whoever started the build (`build.user` or `build.requested_by`) cannot approve it. MCP: `agent_queue_list`, `agent_queue_get`, `agent_queue_decide`. Like `approve_part`, `agent_queue_decide` needs the person's own name.
+
+## 23. `visual_check.py`: visual proof against the datasheet
+
+```bash
+ecadlib visual-check SOIC-8.kicad_mod --datasheet ds.pdf [--pages 3,7-8] [--symbol PART.SchLib] [-o out/]
+ecadlib visual-check PART --workspace W --datasheet ds.pdf        # a part already in the workspace
+ecadlib visual-check SPEC.json --datasheet ds.pdf --render-only   # pictures only, nothing sent
+```
+
+It draws our footprint and symbol as PNGs, renders the datasheet pages, and asks Claude in one Messages API call
+whether they agree. The footprint image is a stated **top view** of the copper lands. Pads are coloured by kind,
+with their numbers on them. Pin 1 is blue and has a callout. It also shows the F.Fab body, the courtyard and the
+silk, an mm grid with labelled major lines, and a scale bar. Dimension lines give the body size, the pad span and
+the pitch. BGAs get row letters and column numbers. The header lists the measured facts: pad count, pitch, where
+pin 1 is, and the direction of numbering. Every family the generator builds can be drawn, including slots, polygon
+pads with vias, stacked USB-C pads and BGA ball maps. Symbols can be drawn from symbol JSON, `.SchLib`,
+`LIB.kicad_sym:NAME` or a pin CSV, one image per part when they don't fit together. Datasheet pages are rendered
+by `pdftoppm`. Pages are picked with the datasheet reader's keyword table unless `--pages` is given.
+
+The answer comes back as JSON in a fixed schema, with one check per aspect: pitch, pad count, numbering, pin 1,
+top or bottom view, body size, pad size, pin count, pin numbers and pin names. The checking is strict:
+
+* A mismatch on pitch, pad count, numbering, pin 1, view, pin numbers or pin names is an error, so the verdict is
+  **fail**.
+* An unclear or missing check gives **doubt**. So do a refusal, `max_tokens`, malformed or off-schema output, and
+  datasheet text addressed to an AI.
+* **pass** needs a real answer in which every required check matches.
+* With no API key the verdict is **skipped**, but the pictures are still written.
+
+The call goes through the datasheet reader's `Client`, which handles the key, retries and the request log. The log
+never holds the key or the image bytes. Answers are cached by a content hash under `<workspace>/agent/proof_cache/`.
+Settings live in `[agent.proof]`: `model`, `effort`, `api_key_env`, `max_cost_usd`, `fail_on`, `max_pages` and
+`dpi`. An empty model, effort or key variable falls back to `[datasheet]`. The cap is checked against a worst-case
+estimate before anything is sent. The same check is available as `Workspace.visual_check` and as the MCP tool
+`visual_check`. Pictures and `proof.json` go to `agent/proofs/<part>/`. Drawing needs Pillow (`pip install
+'ecadlib[vision]'`).
+
+## 24. Robustness tests: real-world BOMs, fuzzers, CLI smoke
+
+```
+python3 -m tests.test_realworld_boms        # BOM exports as engineers make them, plus the error contracts
+python3 -m tests.test_fuzz [SCALE]          # deterministic fuzzers (fixed seeds, ~12 s; SCALE=15 for a long run)
+python3 -m tests.test_cli_smoke [--subprocess]   # every command: -h and a minimal offline run
+```
+
+* **BOMs:** Altium ActiveBOM CSV/XLSX (title rows, `Manufacturer Part Number 1/2`, totals), KiCad 8 (`${QUANTITY}`, `${DNP}`), JLCPCB, DigiKey and Mouser cart exports, Octopart, semicolon CSV with decimal commas in latin-1, UTF-8 with BOM, UTF-16 (Excel "Unicode Text"), hand-made Excel with merged title rows, a cover sheet, blank lines, DNP marks and `R1-R10` ranges. They were run through triage, librarian, resolve, release-check, kicad-export, dblib, dblib-sync, dedupe, sourcing, upkeep, agent-watch, `agent run --dry-run`, the web UI upload and the MCP tools.
+* **Spreadsheet safety:** report CSVs go through `ecadlib/sheetsafe.py`. A cell that a spreadsheet would run as a formula (`= + - @`, tab, CR) gets a leading apostrophe, and `read_bom` removes it again. Numbers (`-5`, `+3.3`) are not changed. The DbLib's `.xlsx` stores every cell as text and its `.csv` keeps bare `=Name` references, so Altium's `=Value` Comment still works.
+* **Fuzzers:** the BOM reader, `sexpr.parse`, the KiCad footprint/symbol importer, the Altium OLE readers (`.SchDoc`, `.PcbLib`), package-spec validation and build, `ecadlib.toml` loading, the web UI's JSON endpoints and the MCP tools. Each target may raise only its documented error type (listed in the file's docstring); anything else fails with the input that caused it.
+* **CLI smoke:** every registered command answers `-h`. A minimal real invocation of each one (offline, in a temporary folder with `$HOME` redirected) must exit with an expected code, print no traceback and change nothing outside its output folder. `--subprocess` runs the installed `ecadlib` script instead, for the fresh-install check: `pip wheel --no-deps .`, install the wheel into a clean venv (Python 3.11 and 3.13), and run `python -m tests.test_cli_smoke --subprocess` from outside the checkout. `test_third_party_imports_are_declared` fails when a module imports a package that is not in `[project] dependencies` (only `pillow` and `pypdf` are optional extras).
+* **Files and locales:** every report, plan, state and KiCad text file is read and written as UTF-8 whatever the system locale (Windows' cp1252 used to crash on `10kΩ`). `plan.json`, `librarian_state.json` and the datasheet batch state are replaced atomically (`ecadlib/fsutil.py`: temp file, fsync, rename), so a crash or a full disk leaves the previous file instead of a truncated one; a damaged HTTP cache entry counts as a miss. `python3 -m tests.test_review_rvh` holds the regression tests.
+
+## 25. Command-line conveniences: `doctor`, `status`, `completion`, `--json`, environment defaults
+
+```
+ecadlib doctor [--workspace W] [--lib DIR] [--rules F] [--json]   is this machine ready? (exit 1 on any FAIL)
+ecadlib status [--workspace W] [--json]                           one screen about a workspace (read-only)
+ecadlib completion bash|zsh|fish                                  shell completion script
+```
+
+* **doctor** prints one line per check, each OK / WARN / FAIL with a fix: Python version (3.10 warns: no TOML), the core packages (FAIL when missing), pillow / pypdf, `pdftoppm`, `kicad-cli` and `git` (WARN), which API keys are set (variable **names** only, never values; the names follow `[datasheet] api_key_env` and `[agent] github_token_env`), the rules file in use and whether it is valid (an error names `file:line`), the workspace (exists, writable: a temporary probe file is created and removed), the `--lib` folders, `[agent] libs` / `library_repo` and the `[agent.watch]` sources. Also `Workspace.doctor()` and the MCP tool `doctor`.
+* **status** summarises a workspace without creating or changing anything: parts per librarian plan (ready, held, waiting for sign-off, duplicates), uploaded BOMs, the last triage, the last upkeep run (the workspace's and the agent's), the library agent's state and its review-queue counts, and what to run next. A damaged file is named under WARN and skipped. Exit 1 when the workspace does not exist. Also `Workspace.status()` and the MCP tool `workspace_status`.
+* **completion** builds the script from each command's own argparse parser (commands, subcommands, options, fixed choices), so it always matches the installed version: `ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib`, `source <(ecadlib completion zsh)` (uses zsh's `bashcompinit`), `ecadlib completion fish > ~/.config/fish/completions/ecadlib.fish`.
+* **Errors:** a missing file, bad JSON, an unreadable table, a missing package, no permission or a bad `ecadlib.toml` print one line and a hint (exit 2) instead of a traceback; anything else prints `internal error (...)` (exit 1). `--debug` anywhere on the line, or `ECADLIB_DEBUG=1`, shows the full traceback.
+* **Environment defaults** (a flag on the command line always wins): `ECADLIB_LIB` = `--lib` (several folders separated by `:`, `;` on Windows) for `triage`, `librarian`, `resolve`, `kicad-export`, `mcp`, `ui`, `agent-watch`, `agent run|serve` and `doctor`; `ECADLIB_WORKSPACE` = `--workspace` for `mcp`, `ui`, `team`, `queue`, `agent-watch`, `agent`, `visual-check`, `doctor` and `status` (not for `a365` / `upkeep` / `upstream`, where `--workspace` is an Altium 365 URL); `ECADLIB_CONFIG` = the rules file wherever ecadlib searches for `ecadlib.toml` (an explicit `--rules` and a workspace's own `ecadlib.toml` still come first). Without it `ecadlib.toml` is found by walking up from the working folder (unchanged).
+* **Machine-readable output (`--json`)**, one JSON object on stdout, nothing else; the keys below are stable (new keys may be added):
+  * `triage --json`: `{"bom", "lines", "mapping", "counts": {status: n}, "rows": [{"line", "designator", "qty", "mpn", "manufacturer", "lcsc", "value", "package", "status", "local_symbol", "local_footprint", "src", "src_symbol", "src_footprint", "src_3d", "src_mpn", "notes"}], "reports": [md, csv]}`
+  * `release-check --json`: `{"plan", "report", "counts": {"ready", "held", "awaiting_approval", "duplicate"}, "rows": [one per part, as release_check.csv]}`; exit 2 when a part is held, as before.
+  * `approve PLAN status --json`: `{"plan", "policy_file", "enforced", "awaiting_approval", "rows": [{"name", "status", "approved_by", "missing", "stale", ...}]}`
+  * `doctor --json`: `{"ok", "checks": [{"check", "level", "detail", "hint"}]}`; `status --json`: `{"workspace", "exists", "rules", "boms", "plans", "totals", "last_triage", "last_upkeep", "agent", "problems"}`
+  * Already there before: `agent-watch --json`, `resolve --json`, `project --json`, `init --json`, `footprint-bench --json FILE`.
+
+## 26. Connections to other tools: notifications, GitLab, plugins
+
+**Notifications** (`ecadlib/notify.py`). With `[notify]` targets in `ecadlib.toml`, the library agent posts when a review
+batch is published (`batch_ready`), when parts are held because they could not be built or failed their proof
+(`part_held`), when upkeep finds new changes (`upkeep_changes`), and when a part goes EOL, NRND or last time buy
+(`lifecycle`). `ecadlib upkeep` posts the last two after a run that saved its state. Nothing is sent without targets.
+
+```toml
+[notify]
+retries = 3          # retried on 429, 5xx and network errors: backoff_s, then 2x, 4x; 60 s budget for all retries
+[[notify.targets]]
+name = "library-channel"
+type = "slack"                      # slack (incoming webhook) | teams (Teams workflow webhook) | json (generic POST)
+url_env = "SLACK_WEBHOOK_URL"       # the NAME of the environment variable; the URL itself never goes in the file
+events = ["batch_ready", "part_held"]    # default: all four
+[[notify.targets]]
+type = "json"
+url_env = "ERP_HOOK_URL"
+token_env = "ERP_HOOK_TOKEN"        # json only: Authorization: Bearer <value>
+events = ["lifecycle"]
+```
+
+Slack gets a `text` message, Teams an Adaptive Card message, and `json` gets
+`{source, event, title, text, lines, more, url, data, time}`. A failed post goes into the agent report
+(`rep["notify"]`) and the log, and the run carries on. Error messages name the target and host, never the URL.
+`ecadlib notify show` lists the targets and whether their variables are set. `ecadlib notify test [--event E]
+[--target NAME]` sends a test message.
+
+**GitLab** (`ecadlib/forge.py`). The library agent's review batches become GitLab merge requests and `ecadlib upkeep
+--gitlab issue|pr` opens the rolling issue or a merge request. Each one follows the GitHub path step for step: it finds
+the open MR by source branch (MRs from forks are ignored), updates it in place, opens a new MR when the old one was
+merged or closed, adds outcome notes and closes with `state_event=close`. The host is chosen by `[agent] git_host = "auto"`:
+GitLab when origin is on a `gitlab*` host or on the host of `gitlab_api`, otherwise GitHub, so nothing changes for
+GitHub users. Settings: `gitlab_api` (default `https://gitlab.com/api/v4`; for a self-hosted server, e.g.
+`https://git.example.com/api/v4`, including servers under a path), `gitlab_project` (`group/sub/name` or a numeric id;
+empty = taken from the origin remote) and `gitlab_token_env` (default `GITLAB_TOKEN`, needs api scope). In GitLab CI,
+`upkeep` reads `CI_PROJECT_PATH` and `CI_API_V4_URL` by default. Checked live against gitlab.com, read-only: the merge
+request list and get, issue list and project lookup, with the field names used (`iid`, `web_url`, `state`,
+`source_project_id`, `target_project_id`). Opening, editing and closing MRs and issues is only tested against a fake
+server, because there is no token in this sandbox.
+
+**Plugins** (`ecadlib/plugins.py`). Part sources and exporters can be shipped as separate Python packages:
+
+```toml
+# the plugin's pyproject.toml
+[project.entry-points."ecadlib.providers"]
+stockroom = "ecadlib_example_plugin:StockroomCSV"      # a Provider class: name, auth, env, lookup(line) -> SourceResult
+[project.entry-points."ecadlib.exporters"]
+markdown-catalog = "ecadlib_example_plugin:markdown_catalog"   # export(items, out_dir, rules) -> [paths]
+```
+
+`[providers] order = ["stockroom", "jlcpcb_search", "easyeda"]` chooses and orders the part sources for triage, the
+librarian, the web UI / MCP workspace and the agent. `[]` keeps each command's default, and `--providers` still
+overrides it. `jlcpcb_search` is always placed before `easyeda`, because it finds the LCSC number that EasyEDA looks
+parts up by. If a plugin raises an exception, or returns something other than a `SourceResult`, the BOM line gets a
+note and triage carries on. A plugin that fails to import is listed by `ecadlib plugins list` with its error. Run an
+exporter with `ecadlib plugins export NAME plan.json -o DIR` (MCP `plugin_export`, `Workspace.plugin_export`).
+`examples/ecadlib_example_plugin/` holds a complete example: a stockroom-CSV part source and a Markdown catalog
+exporter. Install it with `pip install ./examples/ecadlib_example_plugin`.
+
+There is no read-only `/api/v1/` with token sign-in yet. The team server's API uses session cookies, and token
+sign-in would mean new code in its auth layer.
+
+## 27. Integration inputs and outputs: `bom_inputs.py`, `kicad_dblib.py`, `parts_export.py`
+
+```
+ecadlib triage board.kicad_sch --lib ... -o out/tri          # KiCad schematic, hierarchical sheets followed
+ecadlib triage board.xml ...                                 # KiCad netlist / BOM XML (or the .net S-expression netlist)
+ecadlib kicad-dblib out/lib/plan.json -o out/kicad --name mylib --export [--driver SQLite3]
+ecadlib export-parts out/lib/plan.json --format csv|json|xlsx -o parts.csv
+python3 -m tests.test_integration_io
+```
+
+* **BOM inputs** (every one gives the same lines `bom_triage`, the librarian and the agent already use):
+  * `.kicad_sch` (KiCad 6 to 9): sub-sheets are followed, and a sheet file used twice counts twice with each instance's own references (KiCad 7+ `instances` paths, KiCad 6 root `symbol_instances`). Power symbols and parts marked "exclude from BOM" are left out, "Do not populate" becomes DNP, the units of a multi-unit part count once, and identical parts are grouped (`R1, R2, R30`, quantity 3). Custom fields (`MPN`, `Mfr Part #`, `LCSC`, ...) are matched like CSV headers; when sheets use different names for the same field, each part takes the first one it has. KiCad 5 `.sch` files get a clear "save it in KiCad 6+" message.
+  * KiCad netlist / BOM exports: the XML from `kicad-cli sch export netlist --format kicadxml`, `sch export python-bom` and Eeschema's BOM generator, and the S-expression `.net`. Picked by content, so other `.xml` files are not taken for one; an XML with a DOCTYPE or ENTITY is refused.
+  * `.xlsx` without openpyxl: when openpyxl is missing, the workbook is read with `zipfile` and ElementTree (shared and inline strings, sparse cells, numbers written the same way as before). pandas is still a dependency.
+  * CSV: comma / semicolon / tab / pipe and UTF-8 (with or without BOM), cp1252, latin-1 and UTF-16 were already detected; they are now pinned by fixture files in `tests/fixtures/bom_inputs/`.
+  * `[bom] columns` may give a list of house names for a field (`mpn = ["Herst.-Nr.", "Mfr Part #"]`): the first one present in a BOM is used. The named headers also help find the header row below title rows.
+  * Altium ActiveBOM `.BomDoc` / `.PrjPcb` / `.SchDoc` were already read (section 16).
+* **Checked with real KiCad:** `tests/fixtures/kicad_sch/` is a hierarchical schematic (one sheet used twice, a nested sheet in a sub-folder, a 2-unit part, a power symbol, a DNP part and an excluded test point). KiCad 7.0.11's `kicad-cli` exported it as XML, S-expression and python-bom netlists, and all three read the same lines as our schematic reader. `test_kicad_cli_agrees_with_our_schematic_reader` repeats that whenever `kicad-cli` is installed and skips otherwise.
+* **KiCad database library** (`kicad-dblib`): `mylib.sqlite` has one table per category with `Part ID` (key), `Symbol`, `Footprint` and the fields `kicad-export` puts on each symbol (house names from `[parameters] names`). `mylib.kicad_dbl` holds the KiCad 7+ settings: `meta`, `source` (`type` odbc, `connection_string` `Driver={...};Database=${CWD}/mylib.sqlite`, or `--dsn`), `cache`, and one library per table mapping every column to a field. `sym-lib-table` gets a `mylib-db` row of type `Database`, and its other rows are kept. Symbol and footprint ids point at `mylib:<name>` from `ecadlib kicad-export --name mylib` (`--export` runs it first). Parts that are held or have no symbol are listed in `kicad_dblib.json`.
+  * Verified: the JSON keys (`source.connection_string`, `source.timeout_seconds`, `cache.max_age`, `visible_on_add`, `inherit_properties`, ...), `${CWD}` and the `Database` plugin type all appear in KiCad 7.0.11's `_eeschema.kiface`, and the SQLite tables answer the queries KiCad makes (`SELECT * FROM "table" WHERE "Part ID" = ?`).
+  * **Not verified:** KiCad has not opened the database library itself, because no SQLite ODBC driver is installed here. On Windows, install the "SQLite3 ODBC Driver" (ch-werner.de, which is the default `--driver`). On Linux, install libsqliteodbc (driver `SQLite3`). On macOS, install sqliteodbc.
+* **Parts table** (`export-parts`): one row per library part (held parts only with `--include-held`). The columns are `parts_export.COLUMNS`: Part ID, Status, Category, Folder, Description, Value, Manufacturer, Manufacturer Part Number, Datasheet, Supplier 1/2 and their part numbers, Lifecycle, Altium symbol/footprint refs and files, KiCad lib ids, 3D height, release check, hold reasons, sign-off and approvers (from the approvals policy), sources, and Other Parameters. New columns are only ever added at the end. CSV is UTF-8 with BOM, XLSX stores every cell as text, and both neutralise formula cells. JSON is `{"format": "ecadlib-parts", "version": 1, "columns": [...], "parts": [...]}` with Other Parameters as an object. Workspace: `export_parts(bom, fmt)` and `kicad_dblib(bom)`, also available as MCP tools.
+
+## 28. Real KiCad checks (`tests/test_kicad_real.py`)
+
+```
+python3 -m tests.test_kicad_real          # needs kicad-cli and KiCad's pcbnew Python module; skips cleanly without
+```
+
+Run 2026-10-15 with KiCad 7.0.11 (`kicad-cli`, `pcbnew` from `/usr/bin/python3`). The pcbnew work runs in
+`tests/kicad_pcbnew_job.py` in a subprocess (KiCad's Python is often not the one running the tests).
+
+* **Footprints:** all 68 package specs, density A and C of the 27 IPC parts and 30 random BGA / header / connector specs
+  (152 files, 6389 pads) load in pcbnew with our pad numbers, centres, sizes and layers, one closed courtyard outline
+  with our box, and the same graphics per layer; `kicad-cli fp upgrade` writes the same pads back and `fp export svg`
+  plots them all. Done by hand once more over 174 files and 120 random specs: no difference.
+* **DRC** (`pcbnew.WriteDRCReport`, one net per pad number) on a board of all 122 spec footprints: the only findings
+  are the ones KiCad 7.0.11's own footprints of the same names show on the same board (0.2 mm thermal-via drills,
+  the 1.00 mm header's 0.15 mm pad gap, USB-C's stacked pads, mounting pads with one number, REF** over the SOT-23
+  pin-1 triangle). Density C put REF** on the silk outline; fixed.
+* **Library tables:** the exported `fp-lib-table` (`version 7`, `${KIPRJMOD}`) resolves in a KiCad 7 project; DRC's
+  library check finds every footprint and reports none as different from the library (a wrong library or name is
+  reported, so the check is live). `sym-lib-table` has the same syntax; KiCad 7 has no CLI that loads it.
+* **Symbols:** see section 11; EasyEDA symbols too (a slanted EasyEDA pin made KiCad reject the whole library: pins
+  are now drawn at 0/90/180/270 with a note).
+* **kicad_import** reads pads (number, centre, size, rotation, drill, slot direction, plating) exactly as pcbnew does:
+  6304 pads of ours in the test, and by hand 71,605 pads of 2291 KiCad 7.0.11 library footprints (18 libraries) and
+  2548 KiCad 7 symbols without an error after two fixes (text `(at x y unlocked)`, zero-length arcs).
+* **PcbLib back to KiCad:** `kicad_export.footprint_from_pcblib` output for all 68 specs loads (on KiCad 7 after
+  rewriting its KiCad 8 header and Reference/Value properties) with the same copper pads, holes and pad outlines.
+* **STEP:** `step_gen` models of 10 families, put on a board, go through KiCad's OpenCascade reader
+  (`kicad-cli pcb export step`) with no read error and every solid in the output; by hand all 68 specs (3151 solids).
+* **Not checked:** KiCad 8, 9 and 10 (not installed; the optional CI job `kicad` also runs the tests on KiCad 8 from
+  the KiCad PPA, not run from here); `sym-lib-table` loaded by KiCad; STEP geometry inside KiCad beyond loading.
 
 ## Releases
 

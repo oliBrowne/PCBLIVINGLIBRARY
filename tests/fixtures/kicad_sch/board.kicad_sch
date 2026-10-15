@@ -1,0 +1,616 @@
+(kicad_sch
+	(version 20230121)
+	(generator eeschema)
+	(uuid 58c9365f-ec30-52a7-98fc-0e15b15bee29)
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_numbers hide)
+			(pin_names
+				(offset 0)
+			)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "R"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Value" "R"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(property "Datasheet" "~"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(symbol "R_0_1"
+				(rectangle
+					(start -1.016 -2.54)
+					(end 1.016 2.54)
+					(stroke (width 0.254) (type default))
+					(fill (type none))
+				)
+			)
+			(symbol "R_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "1"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "2"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+			)
+		)
+		(symbol "Device:C"
+			(pin_numbers hide)
+			(pin_names
+				(offset 0)
+			)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "C"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Value" "C"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(property "Datasheet" "~"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(symbol "C_0_1"
+				(rectangle
+					(start -1.016 -2.54)
+					(end 1.016 2.54)
+					(stroke (width 0.254) (type default))
+					(fill (type none))
+				)
+			)
+			(symbol "C_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "1"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "2"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+			)
+		)
+		(symbol "my:DUAL"
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "U"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Value" "DUAL"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(property "Datasheet" "~"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(symbol "DUAL_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "1"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "2"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+			)
+			(symbol "DUAL_2_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "3"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "4"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+			)
+		)
+		(symbol "power:GND"
+			(power)
+			(pin_names
+				(offset 0)
+			)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "#PWR"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Value" "GND"
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)))
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(effects (font (size 1.27 1.27)) hide)
+			)
+			(symbol "GND_0_1"
+				(polyline
+					(pts (xy 0 0) (xy 0 -1.27))
+					(stroke (width 0) (type default))
+					(fill (type none))
+				)
+			)
+			(symbol "GND_1_1"
+				(pin power_in line
+					(at 0 0 270)
+					(length 0)
+					hide
+					(name "GND"
+						(effects (font (size 1.27 1.27)))
+					)
+					(number "1"
+						(effects (font (size 1.27 1.27)))
+					)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 50 50 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid b412c293-583f-5aa2-b895-e6197452c5aa)
+		(property "Reference" "R1"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Value" "10k"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Datasheet" "~"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "MPN" "RC0603FR-0710KL"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Manufacturer" "Yageo"
+			(at 52 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(pin "1"
+			(uuid cc95feb2-197f-5934-a9e8-cd9099c77746)
+		)
+		(pin "2"
+			(uuid ab5dea59-6d3b-576e-8107-4154e324fd6d)
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29"
+					(reference "R1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 60 50 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid 6b3ffcdd-052d-51c3-b99d-fca3a8e9db79)
+		(property "Reference" "R2"
+			(at 62 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Value" "10k"
+			(at 62 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
+			(at 62 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Datasheet" "~"
+			(at 62 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "MPN" "RC0603FR-0710KL"
+			(at 62 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Manufacturer" "Yageo"
+			(at 62 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(pin "1"
+			(uuid 9eb0899c-d166-516b-9a3a-3ae553476749)
+		)
+		(pin "2"
+			(uuid 2fb8be0e-5939-5d13-b2ff-47c03cdbc608)
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29"
+					(reference "R2")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 70 50 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp yes)
+		(uuid 6ac33843-58c0-5c78-beaa-3a8ff244b0ec)
+		(property "Reference" "C1"
+			(at 72 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Value" "100nF"
+			(at 72 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 72 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Datasheet" "~"
+			(at 72 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 72 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Manufacturer" "Samsung"
+			(at 72 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(pin "1"
+			(uuid a09b7e5b-3c4e-5e71-b1c6-cf2cc89e9174)
+		)
+		(pin "2"
+			(uuid 9a0322f7-e627-590e-b54b-982f719bb686)
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29"
+					(reference "C1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 80 50 0)
+		(unit 1)
+		(in_bom no)
+		(on_board yes)
+		(dnp no)
+		(uuid 51c3b803-4038-5497-aeb9-26f1cba2afe6)
+		(property "Reference" "TP1"
+			(at 82 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Value" "TestPoint"
+			(at 82 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
+			(at 82 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Datasheet" "~"
+			(at 82 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(pin "1"
+			(uuid 9d300ee6-bc70-5d82-a162-81e18fac0b28)
+		)
+		(pin "2"
+			(uuid 4ab73fed-0c99-5226-ad6e-65c2d5995f0a)
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29"
+					(reference "TP1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "my:DUAL")
+		(at 90 50 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid 2e7ecc48-bee7-56f5-894d-50d0b2c1a862)
+		(property "Reference" "U1"
+			(at 92 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Value" "LM358"
+			(at 92 50 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+			(at 92 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/lm358.pdf"
+			(at 92 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "MPN" "LM358DR"
+			(at 92 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Manufacturer" "Texas Instruments"
+			(at 92 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "LCSC" "C7950"
+			(at 92 50 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(pin "1"
+			(uuid 9df20090-dd0d-504c-826f-28f492fceb36)
+		)
+		(pin "2"
+			(uuid df75e618-8cb9-5da0-9e32-92135b36cb6c)
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29"
+					(reference "U1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "my:DUAL")
+		(at 90 70 0)
+		(unit 2)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid 8e1def1d-4e34-5b38-bc12-27322d22f25d)
+		(property "Reference" "U1"
+			(at 92 70 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Value" "LM358"
+			(at 92 70 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+			(at 92 70 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/lm358.pdf"
+			(at 92 70 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "MPN" "LM358DR"
+			(at 92 70 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Manufacturer" "Texas Instruments"
+			(at 92 70 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "LCSC" "C7950"
+			(at 92 70 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(pin "3"
+			(uuid 16825862-0e12-5bb0-a730-366f23ff127b)
+		)
+		(pin "4"
+			(uuid a92af181-36d6-5093-929e-a898492addb5)
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29"
+					(reference "U1")
+					(unit 2)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 50 80 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid ddd39ccc-a729-5588-89ef-71d9408e2f0f)
+		(property "Reference" "#PWR01"
+			(at 52 80 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Value" "GND"
+			(at 52 80 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Footprint" ""
+			(at 52 80 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(property "Datasheet" ""
+			(at 52 80 0)
+			(effects (font (size 1.27 1.27)) hide)
+		)
+		(pin "1"
+			(uuid a8d80c42-8469-518f-8977-0d9e6e4dd9cf)
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29"
+					(reference "#PWR01")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(sheet
+		(at 120 40)
+		(size 20 10)
+		(fields_autoplaced)
+		(stroke (width 0.1524) (type solid))
+		(fill (color 0 0 0 0.0000))
+		(uuid 70727ac7-12f0-5af0-a48a-2fdcf01f7c93)
+		(property "Sheetname" "chan_a"
+			(at 120 39 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Sheetfile" "sub.kicad_sch"
+			(at 120 51 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29"
+					(page "2")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 120 70)
+		(size 20 10)
+		(fields_autoplaced)
+		(stroke (width 0.1524) (type solid))
+		(fill (color 0 0 0 0.0000))
+		(uuid 194c9cd3-8660-5c80-acd9-53b02f6ad94d)
+		(property "Sheetname" "chan_b"
+			(at 120 69 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Sheetfile" "sub.kicad_sch"
+			(at 120 81 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29"
+					(page "3")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 120 100)
+		(size 20 10)
+		(fields_autoplaced)
+		(stroke (width 0.1524) (type solid))
+		(fill (color 0 0 0 0.0000))
+		(uuid 1fbfbc63-33e6-5cfe-a95a-40b6c9eff483)
+		(property "Sheetname" "misc"
+			(at 120 99 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(property "Sheetfile" "sub2/leaf.kicad_sch"
+			(at 120 111 0)
+			(effects (font (size 1.27 1.27)))
+		)
+		(instances
+			(project "board"
+				(path "/58c9365f-ec30-52a7-98fc-0e15b15bee29"
+					(page "4")
+				)
+			)
+		)
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)
