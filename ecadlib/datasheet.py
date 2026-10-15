@@ -400,14 +400,22 @@ def trim(data, pages):
         import pypdf
     except ImportError:
         return None
-    rd, w = pypdf.PdfReader(io.BytesIO(data)), pypdf.PdfWriter()
+    _quiet_pypdf()
     keep = list(pages) if isinstance(pages, list) else list(range(pages[0], pages[1] + 1))
-    if max(keep) > len(rd.pages):
-        raise DatasheetError(f"--pages {keep[0]}-{keep[-1]}: the PDF has {len(rd.pages)} pages")
-    for i in keep:
-        w.add_page(rd.pages[i - 1])
-    buf = io.BytesIO()
-    w.write(buf)
+    try:
+        rd, w = pypdf.PdfReader(io.BytesIO(data)), pypdf.PdfWriter()
+        n = len(rd.pages)
+        if max(keep) > n:
+            raise DatasheetError(f"--pages {keep[0]}-{keep[-1]}: the PDF has {n} pages")
+        for i in keep:
+            w.add_page(rd.pages[i - 1])
+        buf = io.BytesIO()
+        w.write(buf)
+    except DatasheetError:
+        raise
+    except Exception as e:                            # encrypted (password), truncated or damaged PDF
+        raise DatasheetError(f"can't cut the PDF to pages {_ranges(keep)}: {type(e).__name__}: {str(e)[:160]}"
+                             + (" (password-protected PDF: save an unprotected copy)" if "decrypt" in str(e).lower() else ""))
     return buf.getvalue()
 
 
@@ -443,9 +451,18 @@ def load_source(src, pages=None, fetch=False):
 def _pg(page, offset):
     """Page in the sent PDF -> page in the original file. offset: pages dropped before it (int), or the list of
     original page numbers that were sent (auto page selection)."""
-    if isinstance(offset, list):
-        return offset[page - 1] if isinstance(page, int) and 1 <= page <= len(offset) else page
+    if isinstance(offset, list):                      # a page that was not sent maps to no original page
+        return offset[page - 1] if isinstance(page, int) and 1 <= page <= len(offset) else None
     return page + (offset or 0)
+
+
+def _cited_pages(ext):
+    """Every page number the model cited (dimensions, exposed pad, pins, pin table)."""
+    pkg, out = ext.get("package") or {}, []
+    for v in list(pkg.values()) + list((pkg.get("exposed_pad") or {}).values()):
+        if isinstance(v, dict) and "page" in v:
+            out.append(v["page"])
+    return out + [p.get("page") for p in ext.get("pins") or []] + [(ext.get("pin_table") or {}).get("page")]
 
 
 def to_mm(key, raw, offset, prov, review):
@@ -513,7 +530,7 @@ def to_spec(pkg, part, datasheet, model, offset, review):
         spec[k] = _drop_nulls(pkg[k])
         if isinstance(pkg[k], (dict, list)) and numeric(pkg[k]):
             review.append(f"{k}: copied as the model gave it; check every value against the drawing")
-    pages = [v["page"] for k, v in prov.items()]
+    pages = [v["page"] for k, v in prov.items() if v["page"] is not None]
     spec["source"] = {"datasheet": datasheet, "drawing": pkg["drawing"], "extracted_by": f"ecadlib.datasheet ({model})"}
     if pages:
         spec["source"]["page"] = max(set(pages), key=pages.count)
@@ -715,6 +732,10 @@ def self_check(spec, ext, review):
 def process(ext, part, datasheet, model=MODEL, offset=0, msg=None):
     """Extraction -> {spec, symbol, sidecar, needs_review}. Never alters a value to make a check pass."""
     review = [f"document contains instruction-like text (ignored): {q[:200]!r}" for q in ext["embedded_instructions"]]
+    if isinstance(offset, list):                      # auto page selection: page k of the sent PDF is offset[k - 1]
+        bad = sorted({p for p in _cited_pages(ext) if isinstance(p, int) and not 1 <= p <= len(offset)})
+        if bad:
+            review.append(f"the model cited page(s) {bad} of the {len(offset)} pages sent: those values have no source page")
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
     ok = schema_check(spec, review)
     sanity(spec, review)
@@ -961,7 +982,10 @@ def prepare(data, pages=None, auto_pages=40):
     if over or (auto_pages and n > auto_pages):
         keep = select_pages(data, auto_pages or MAX_PAGES)
         if keep:
-            cut = trim(data, keep)
+            try:
+                cut = trim(data, keep)
+            except DatasheetError:                    # damaged page objects: the whole PDF when it is within limits
+                cut = None
             if cut is not None and len(cut) <= MAX_PDF:
                 return cut, keep, None, f"{len(keep)} of {n} pages sent (picked by text: {_ranges(keep)}); pass --pages to choose"
         if over:
@@ -1042,7 +1066,7 @@ class Reader:
         self.dir = self.out / "datasheet"
         self.log_file = self.dir / "api_log.jsonl"
         self.say, self.sleep = log or (lambda *a: None), sleep or time.sleep
-        self._client, self.pending, self.last_estimate = client, {}, None
+        self._client, self.pending, self.last_estimate, self.committed_usd = client, {}, None, 0.0
 
     @property
     def deferred(self):
@@ -1111,8 +1135,11 @@ class Reader:
         self.results.put(job["key"], rec)
         return rec
 
-    def read_now(self, job):
-        """One synchronous Messages API call (retries/backoff/logging in Client), cached, processed."""
+    def read_now(self, job, _guarded=False):
+        """One synchronous Messages API call (retries/backoff/logging in Client), cached, processed. Held to
+        [datasheet] max_cost_usd like a batch (the librarian calls this directly for each part)."""
+        if not _guarded:
+            self._guard_cost([job])
         with logging_to(self.log_file, self.say):
             _, msg = call(job["headers"], job["body"], require_key(self.key))
         return self._result(job, self._store(job, msg, "sync"))
@@ -1151,13 +1178,19 @@ class Reader:
         return self.last_estimate
 
     def _guard_cost(self, jobs):
+        """[datasheet] max_cost_usd over everything this Reader sends (batches and synchronous calls together)."""
         cap = float(self.cfg.get("max_cost_usd") or 0)
-        if not cap or self.yes:
+        if not cap or self.yes or not jobs:
             return
         est = self.estimate(jobs)
-        if est["usd_max"] is not None and est["usd_max"] > cap:
-            raise DatasheetError(f"estimated up to ${est['usd_max']:.2f} for {est['parts']} parts, over [datasheet] "
-                                 f"max_cost_usd = {cap}; see --estimate, raise the cap or pass --yes")
+        if est["usd_max"] is None:
+            raise DatasheetError(f"no price known for {self.model}: can't hold [datasheet] max_cost_usd = {cap}; "
+                                 "pass --yes to send anyway")
+        if self.committed_usd + est["usd_max"] > cap:
+            raise DatasheetError(f"estimated up to ${est['usd_max']:.2f} for {est['parts']} parts"
+                                 + (f" (after ${self.committed_usd:.2f} already sent)" if self.committed_usd else "")
+                                 + f", over [datasheet] max_cost_usd = {cap}; see --estimate, raise the cap or pass --yes")
+        self.committed_usd += est["usd_max"]
 
     # --- batch
     def _state(self):
@@ -1177,12 +1210,12 @@ class Reader:
             est = self.estimate(jobs)
             self.say(format_estimate(est))
             return {j["key"]: "estimate only" for j in jobs}
-        self._guard_cost(jobs)
         out = {}
         if not self.batch:
+            self._guard_cost(jobs)
             for j in jobs:
                 try:
-                    out[j["key"]] = self.read_now(j)
+                    out[j["key"]] = self.read_now(j, _guarded=True)
                 except DatasheetError as e:
                     out[j["key"]] = e
             return out
@@ -1191,6 +1224,7 @@ class Reader:
         with logging_to(self.log_file, self.say):
             open_ = {k for b in st["batches"] if not b.get("collected") for k in b["requests"].values()}
             new = [j for j in jobs if j["key"] not in open_]
+            self._guard_cost(new)                     # parts already in a submitted batch are paid for: collect them
             chunks, size = [[]], 0                    # a batch holds up to 100,000 requests / 256 MB
             for j in new:
                 n = len(json.dumps(j["body"]))
@@ -1427,6 +1461,8 @@ def main(argv=None):
     ap.add_argument("--from-response", help="re-run the checks on a saved Messages API response JSON (no API call)")
     ap.add_argument("--estimate", action="store_true", help="print the token count and cost; send nothing")
     ap.add_argument("--no-cache", action="store_true", help="ask again even when this PDF/part/model was read before")
+    ap.add_argument("--rules", help="library rules file ([datasheet] max_cost_usd; default: searched from -o upwards)")
+    ap.add_argument("--yes", action="store_true", help="go ahead even when the estimate is over [datasheet] max_cost_usd")
     ap.add_argument("-o", "--out", default="out/datasheet")
     a = ap.parse_args(argv)
     cache = ResultCache(Path(a.out) / "cache")
@@ -1452,6 +1488,14 @@ def main(argv=None):
                 msg = rec["message"]
                 print(f"cached   {cache.dir / (ck + '.json')} (no API call; --no-cache to ask again)")
             else:
+                from . import rules as RU
+                try:
+                    rules = RU.load(a.rules, start=a.out)
+                except RU.RulesError as e:
+                    raise DatasheetError(str(e))
+                prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None}
+                Reader(a.out, Path(a.out) / "cache", key=key, rules=rules, model=a.model, effort=a.effort, log=None,
+                       yes=a.yes)._guard_cost([{"name": a.part, "url": a.pdf, "body": body, "prov": prov}])
                 with logging_to(Path(a.out) / "api_log.jsonl", print):
                     _, msg = call(headers, body, key)
             ext = parse_message(msg)

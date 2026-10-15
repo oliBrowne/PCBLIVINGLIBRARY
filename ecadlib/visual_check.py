@@ -60,6 +60,7 @@ CRITICAL = {"pitch", "pad_count", "pad_numbering", "pin1_location", "view_orient
             "pin_names"}
 REQUIRED = {"footprint": ("pitch", "pad_count", "pad_numbering", "pin1_location", "view_orientation", "body_size"),
             "symbol": ("pin_count", "pin_numbers", "pin_names")}
+ALWAYS_APPLY = {"pad_count", "pin_count", "pin_numbers"}   # never "not_applicable": a pass needs them matched
 MAX_TOKENS = 16000
 
 
@@ -376,15 +377,23 @@ def facts(fp, pin1_names=PIN1_NAMES):
     box = (min(p["bbox"][0] for p in copper), min(p["bbox"][1] for p in copper),
            max(p["bbox"][2] for p in copper), max(p["bbox"][3] for p in copper)) if copper else None
     vias = _vias(pads)
-    near = []
+    near, vec = [], {}
     for p in pins:
         if id(p) in vias:
             continue
-        d = [math.hypot(p["x"] - q["x"], p["y"] - q["y"]) for q in pins
+        d = [(math.hypot(p["x"] - q["x"], p["y"] - q["y"]), abs(p["x"] - q["x"]), abs(p["y"] - q["y"])) for q in pins
              if q["num"] != p["num"] and id(q) not in vias and (q["x"], q["y"]) != (p["x"], p["y"])]
         if d:
-            near.append(round(min(d), 3))
+            m = min(d)
+            near.append(round(m[0], 3))
+            vec.setdefault(near[-1], []).append(m[1:])
     pitch = max(set(near), key=lambda v: (near.count(v), -v)) if near else None
+    if pitch is not None and len(near) >= 4 and near.count(pitch) >= 0.6 * len(near) and \
+            all(dx > 1e-3 and dy > 1e-3 for dx, dy in vec[pitch]):
+        # nearest neighbours all diagonal: staggered rows (SMD pin headers with alternating pads, odd left / even
+        # right). The pitch is the spacing along the row, not the diagonal.
+        along = [round(min(dx, dy), 3) for dx, dy in vec[pitch]]
+        pitch = max(set(along), key=lambda v: (along.count(v), -v))
     p1 = _pin1(pads, pin1_names)
     out = {"name": fp["name"], "pads": sum((p["copper"] or p["kind"] == "np_thru_hole") and id(p) not in vias for p in pads),
            "pins": len({p["num"] for p in pins}), "paste_only": sum(not p["copper"] and p["kind"] != "np_thru_hole" for p in pads),
@@ -420,7 +429,17 @@ def facts(fp, pin1_names=PIN1_NAMES):
             ring = [cen[n] for n in num]
             area = sum(a[0] * -b[1] - b[0] * -a[1] for a, b in zip(ring, ring[1:] + ring[:1])) / 2   # y up
             xs, ys = {round(q[0], 3) for q in ring}, {round(q[1], 3) for q in ring}
-            if len(xs) == 1 or len(ys) == 1:
+            two = [(i, s) for i, s in ((0, xs), (1, ys)) if len(s) == 2]
+            zig = next((i for i, _ in two if all(round(a[i], 3) != round(b[i], 3) for a, b in zip(ring, ring[1:]))), None)
+            if zig is not None and len(ring) >= 3:     # 1 | 2 / 3 | 4 ...: odd on one side, even on the other
+                o = 1 - zig
+                odd = ("left" if ring[0][0] < ring[1][0] else "right") if zig == 0 else \
+                    ("top" if ring[0][1] < ring[1][1] else "bottom")
+                even = {"left": "right", "right": "left", "top": "bottom", "bottom": "top"}[odd]
+                d = ring[-1][o] - ring[0][o]
+                way = ("top to bottom" if d > 0 else "bottom to top") if zig == 0 else ("left to right" if d > 0 else "right to left")
+                out["numbering"] = f"alternating: odd pins {odd}, even pins {even}, {way}"
+            elif len(xs) == 1 or len(ys) == 1:
                 d = (ring[1][0] - ring[0][0], ring[1][1] - ring[0][1])
                 out["numbering"] = "single row, " + ("left to right" if d[0] > 0 else "right to left" if d[0] < 0 else
                                                      "top to bottom" if d[1] > 0 else "bottom to top")
@@ -1215,7 +1234,9 @@ def parse_verdict(msg, required=(), fail_on=("error",)):
     score = ans.get("score")
     score = max(0.0, min(1.0, float(score))) if isinstance(score, (int, float)) else None
     missing = [a for a in required if not any(s in ("match", "mismatch", "unclear") for s in seen.get(a, []))
-               and "not_applicable" not in seen.get(a, [])]
+               and ("not_applicable" not in seen.get(a, []) or a in ALWAYS_APPLY)]
+    if not any("match" in seen.get(a, []) for a in (required or seen)):
+        missing.append("no aspect was verified as a match")
     req_unclear = [c["aspect"] for c in unclear if c["aspect"] in required]
     if ans.get("embedded_instructions"):
         findings.append({"severity": "warning", "what": "the datasheet contains text addressed to an AI (ignored)",
@@ -1416,7 +1437,10 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
                                      "(the pictures are written for a person to compare)", **base)
         client = D.Client(k, log_file=out_dir / "api_log.jsonl", say=say)
     cap = float(cfg.get("max_cost_usd") or 0)
-    if cap and est["usd_max"] is not None and est["usd_max"] > cap:
+    if cap and est["usd_max"] is None:
+        return _proof("skipped", f"no price known for {model}: can't hold [agent.proof] max_cost_usd = {cap}; nothing sent",
+                      **base)
+    if cap and est["usd_max"] > cap:
         return _proof("skipped", f"estimated up to ${est['usd_max']:.2f}, over [agent.proof] max_cost_usd = {cap}; nothing sent",
                       **base)
     try:

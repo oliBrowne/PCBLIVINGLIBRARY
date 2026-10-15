@@ -445,3 +445,85 @@ def test_workspace_and_mcp_tool():
             assert False
         except ValueError:
             pass
+
+
+# ---------------------------------------------------------------- review rvA: harder cases
+def test_pass_needs_real_matches_not_all_not_applicable():
+    req = V.REQUIRED["footprint"] + V.REQUIRED["symbol"]
+    na = [{"aspect": a, "status": "not_applicable", "severity": "info", "expected": "", "found": "", "page": None, "note": ""}
+          for a in req]
+    v, _, reason, _, _ = V.parse_verdict(message(answer(checks=na)), req)
+    assert v == "doubt" and "pad_count" in reason and "no aspect was verified" in reason, reason
+    assert V.parse_verdict(message(answer(checks=[])), ())[0] == "doubt"                  # no evidence at all
+    one = copy.deepcopy(answer())
+    one["checks"][1]["status"] = "not_applicable"                                          # pad_count can't be n/a
+    assert V.parse_verdict(message(one), V.REQUIRED["footprint"])[0] == "doubt"
+    assert V.parse_verdict(message(answer()), V.REQUIRED["footprint"])[0] == "pass"       # a real answer still passes
+
+
+def test_odd_api_responses_never_pass():
+    req = V.REQUIRED["footprint"]
+    good = json.dumps(answer())
+    split = message(None, text=good[:40])
+    split["content"].append({"type": "text", "text": good[40:]})                           # JSON over two text blocks
+    assert V.parse_verdict(split, req)[0] == "pass"
+    fb = message(answer())
+    fb["content"].insert(0, {"type": "fallback", "from": {"model": "claude-opus-5-5"}, "to": {"model": "claude-opus-5"}})
+    assert V.parse_verdict(fb, req)[0] == "pass"                                          # fallback block ignored
+    for odd in ({"stop_reason": "end_turn", "content": None}, {"stop_reason": "end_turn"}, {"type": "error"},
+                message(None, stop="pause_turn", text=good[:30]), message(None, text=good + good),
+                message(None, text=json.dumps(dict(answer(), checks=[dict(answer()["checks"][0], aspect="made_up")]))),
+                message(None, text=json.dumps(dict(answer(), extra=1))), [], None):
+        assert V.parse_verdict(odd, req)[0] == "doubt", odd
+
+
+def test_cost_cap_with_unknown_price_sends_nothing():
+    calls = []
+    with setup() as d, mock.patch.object(D.requests, "post", fake_post(message(answer()), calls)):
+        with mock.patch.dict(D.PRICES, clear=True):                                       # a model with no price
+            pr = V.prove(item(d), d, {"agent": {"proof": {"max_cost_usd": 5.0}}}, out_dir=d / "out")
+            assert pr["verdict"] == "skipped" and "no price known" in pr["reason"] and not calls, pr["reason"]
+            ok = V.prove(item(d), d, None, out_dir=d / "o2")                              # no cap: goes ahead
+            assert ok["verdict"] == "pass" and len(calls) == 1
+
+
+def test_staggered_header_pitch_and_numbering():
+    f = V.facts(V.parse_footprint(V.footprint_text(SPECS / "advanced" / "PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Left.json")))
+    assert f["pitch"] == 2.54 and f["numbering"] == "alternating: odd pins left, even pins right, top to bottom", f
+    f = V.facts(V.parse_footprint(V.footprint_text(HDR)))
+    assert f["pitch"] == 2.54 and f["numbering"].startswith("alternating: odd pins left"), f
+    slot = V.facts(V.parse_footprint(V.footprint_text(SLOT)))                            # three unrelated pads: unchanged
+    assert slot["numbering"] == "counter-clockwise (top view)"
+
+
+def _to_back(text):
+    return text.replace('"F.Cu"', '"B.Cu"').replace("F.Cu", "B.Cu").replace("F.Paste", "B.Paste").replace("F.Mask", "B.Mask")
+
+
+def test_property_every_spec_facts_render_and_bottom_side():
+    """Over every shipped package spec: the name's _P<pitch>mm is the measured pitch, every copper pin is drawn
+    (pad-colour components >= pins), pin 1 is blue, numbering is stated for numbered multi-pin parts, a mirrored copy
+    flips pin 1, and the same footprint on the bottom side is drawn in the bottom-pad colour with a blue pin 1."""
+    with tempfile.TemporaryDirectory() as d:
+        for spec in sorted(SPECS.glob("*.json")) + sorted((SPECS / "advanced").glob("*.json")):
+            text = V.footprint_text(spec)
+            f = V.facts(V.parse_footprint(text))
+            m = re.search(r"_P(\d+(?:\.\d+)?)mm", spec.stem)
+            if m:
+                assert abs(f["pitch"] - float(m.group(1))) < 1e-6, (spec.stem, f["pitch"])
+            png = V.render_footprint(text, Path(d) / "a.png")
+            assert len(components(png)) >= f["pins"], spec.stem
+            assert components(png, (V.C["pin1"],)), spec.stem
+            if f["pins"] >= 3 and not f["ball_grid"] and all(c.isdigit() for c in f["pin1"]["num"]):
+                assert f["numbering"], spec.stem
+            mf = V.facts(V.parse_footprint(mirror_x(text)))
+            w0, w1 = f["pin1"]["where"], mf["pin1"]["where"]
+            if "left" in w0:
+                assert w1 == w0.replace("left", "right"), (spec.stem, w0, w1)
+            back = _to_back(text)
+            bf = V.facts(V.parse_footprint(back))
+            cu = [p for p in V.parse_footprint(back)["pads"] if p["copper"] and p["kind"] == "smd"]
+            assert bf["back_only"] == len(cu) and bf["pins"] == f["pins"] and bf["pitch"] == f["pitch"], spec.stem
+            if cu:
+                bpng = V.render_footprint(back, Path(d) / "b.png")
+                assert components(bpng, (V.C["back"],)) and components(bpng, (V.C["pin1"],)), spec.stem
