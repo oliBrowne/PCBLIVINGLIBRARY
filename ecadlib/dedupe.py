@@ -91,12 +91,16 @@ def _box(xs, ys):
     return [round(_q(v, 0.05), 2) for v in (min(xs), min(ys), max(xs), max(ys))] if xs else None
 
 
-def fp_geometry_pcblib(fp):
+def fp_geometry_pcblib(fp, courtyard=AL.MECH15):
+    """courtyard: the layer id the library rules draw courtyards on; Mechanical 15 (ecadlib's own) when nothing is there."""
     pads = [_pad_tuple(r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), AL.to_mm(r["w"]), AL.to_mm(r["h"]), r["rot"], r["hole"] > 0)
             for r in fp["records"] if r["type"] == "pad"]
     xs, ys = [], []
+    shapes = ("track", "arc", "region", "fill")
+    if not any(r["layer"] == courtyard for r in fp["records"] if r["type"] in shapes):
+        courtyard = AL.MECH15
     for r in fp["records"]:
-        if r["layer"] != AL.MECH15:
+        if r["layer"] != courtyard:
             continue
         if r["type"] == "track":
             xs += [AL.to_mm(r["x1"]), AL.to_mm(r["x2"])]; ys += [AL.to_mm(r["y1"]), AL.to_mm(r["y2"])]
@@ -173,7 +177,7 @@ class Collector:
             g = self._read(f, lambda p: fp_geometry_kicad(Path(p).read_text()))
             return [(ref or f.stem, fp_hash(g))] if g else []
         fps = self._read(f, AL.read_pcblib) or []
-        return [(fp["name"], fp_hash(fp_geometry_pcblib(fp))) for fp in fps if not ref or fp["name"] == ref or len(fps) == 1]
+        return [(fp["name"], fp_hash(fp_geometry_pcblib(fp, self.cfg.get("courtyard", AL.MECH15)))) for fp in fps if not ref or fp["name"] == ref or len(fps) == 1]
 
     def _sym_from_file(self, f, ref=None):
         r = self._read(Path(f), AL.read_schlib)
@@ -187,11 +191,14 @@ class Collector:
         return out
 
     def add_plan(self, items, base):
+        from .a365_sync import is_a365
         base = Path(base)
         for i, it in enumerate(items):
             par = {p["name"]: p["value"] for p in it.get("parameters") or []}
-            mpn = par.get("Manufacturer Part Number") or it["name"]
-            self.parts.append({"name": it["name"], "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "plan", "where": "plan",
+            mpn = next((par[c] for c in MPN_COLS if par.get(c)), it["name"])
+            ws = is_a365(it)                           # pulled from Altium 365 (ecadlib a365 pull): counts as library
+            self.parts.append({"name": it["name"], "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "a365" if ws else "plan",
+                               "where": "plan (Altium 365)" if ws else "plan",
                                "plan_index": i, "status": it.get("status", ""), "symbol": (it.get("symbol") or {}).get("ref") or "",
                                "footprint": (it.get("footprint") or {}).get("ref") or "", "source": it.get("source") or {}})
             for kind in ("footprint", "symbol"):
@@ -204,7 +211,7 @@ class Collector:
                 self._seen_files.add(str(f.resolve()))
                 got = self._fp_from_file(f, m.get("ref")) if kind == "footprint" else self._sym_from_file(f, m.get("ref"))
                 for g in got[:1]:
-                    self._add_model(kind, m.get("ref") or g[0], f, "plan", g[1], it["name"], it, *(g[2:]))
+                    self._add_model(kind, m.get("ref") or g[0], f, "library" if ws else "plan", g[1], it["name"], it, *(g[2:]))
 
     def _add_model(self, kind, ref, f, origin, h, used_by=None, item=None, pins=None):
         lst = self.footprints if kind == "footprint" else self.symbols
@@ -278,11 +285,13 @@ class Collector:
                                    "footprint": str(r.get("Footprint Ref") or ""), "source": {}})
 
     def add_a365(self, f):
-        """check-a365 --state ({name: snapshot}) or a list of workspace component nodes (with parameters)."""
+        """check-a365 / a365 pull --state ({name: snapshot}, a365 pull's with `parameters`) or a list of workspace
+        component nodes (with parameters)."""
         data = json.loads(Path(f).read_text())
-        nodes = data if isinstance(data, list) else [{"name": k} for k in data]
+        nodes = data if isinstance(data, list) else [{"name": k, **(v if isinstance(v, dict) else {})} for k, v in data.items()]
         for n in nodes:
-            par = {p["name"]: p["value"] for p in ((n.get("details") or {}).get("parameters") or [])}
+            par = n["parameters"] if isinstance(n.get("parameters"), dict) else \
+                {p["name"]: p["value"] for p in ((n.get("details") or {}).get("parameters") or [])}
             mpn = next((par[c] for c in MPN_COLS if par.get(c)), n["name"])
             self.parts.append({"name": n["name"], "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "a365", "where": str(f),
                                "status": "released", "symbol": "", "footprint": "", "source": {}})
@@ -368,6 +377,8 @@ def merge(items, groups, base, kinds=("mpn", "footprint", "symbol"), who="ecadli
         if g["kind"] == "mpn":
             for m in g["members"][1:]:
                 it = by.get(m["name"])                       # the plan item of that name, whatever origin ranked first
+                if it and it.get("a365") and it.get("status") == "existing":
+                    it = None                                # a workspace component: reported, never rewritten
                 mapping.append({"kind": "part", "from": m["name"], "to": keeper["name"], "file": "",
                                 "parts": m["name"] if it else "", "note": "" if it else f"{m['origin']} entry: not changed"})
                 if it and it["name"] != keeper["name"]:
@@ -480,6 +491,8 @@ def run(plan, libs=(), a365=None, config=None, keep=(), do_merge=False, kinds=("
     plan = Path(plan)
     base = plan.parent
     cfg = load_config(config, base)
+    from . import rules as RU                 # house rules may draw the courtyard on another mechanical layer
+    cfg["courtyard"] = RU.layer_id(RU.load(None, start=base)["layers"]["courtyard"])
     items = json.loads(plan.read_text())
     col = Collector(cfg, log)
     col.add_plan(items, base)

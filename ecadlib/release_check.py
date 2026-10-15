@@ -15,7 +15,8 @@ Rules, per plan item:
   verify    the item carries `verify` notes (e.g. a datasheet-reader footprint): a person has to look first
 Failing items get status `held` and `hold_reasons`; others `ready`. `--allow PART` records an override in the
 item (`allow.failures` = the failures it covers); an allowed item is `ready` while its failures stay within
-that list. altium365 push releases only `ready` items. Exit code 0 when nothing is held, 2 otherwise."""
+that list. altium365 push releases only `ready` items. Items `ecadlib a365 pull` brought in from the workspace
+(status `existing`) are already released there and are not checked. Exit code 0 when nothing is held, 2 otherwise."""
 import argparse, csv, datetime, re, sys
 from pathlib import Path
 
@@ -89,7 +90,7 @@ def _same_net(msg, pin_names):
     return bool(a) and a == b and a not in ("~", m.group(1), m.group(2))
 
 
-def _pcblib_minimal(fp, pin_names=None):
+def _pcblib_minimal(fp, pin_names=None, courtyard=AL.MECH15, pin1=None):
     """Overlap, courtyard and pin 1 from the PcbLib records (used when there is no .kicad_mod)."""
     fails, warns, pads = [], [], [r for r in fp["records"] if r["type"] == "pad"]
     rects = _pad_rects([p for p in pads if p["hole"] == 0 or p["plated"]])
@@ -100,19 +101,23 @@ def _pcblib_minimal(fp, pin_names=None):
             if abs(a[1] - b[1]) < (a[3] + b[3]) / 2 - 0.005 and abs(a[2] - b[2]) < (a[4] + b[4]) / 2 - 0.005:
                 msg = f"pads {a[0]} and {b[0]} overlap"
                 (warns if _same_net(msg, pin_names or {}) else fails).append(msg)
-    if not any(r["layer"] == AL.MECH15 for r in fp["records"] if r["type"] in ("track", "arc", "region")):
-        fails.append("no courtyard (Mechanical 15)")
-    if not _has_pin1({p["designator"] for p in pads}):
+    if not any(r["layer"] == courtyard for r in fp["records"] if r["type"] in ("track", "arc", "region")):
+        fails.append(f"no courtyard (Mechanical {courtyard - 56})")
+    if not _has_pin1({p["designator"] for p in pads}, pin1):
         fails.append("no pin 1 pad")
     return fails, warns
 
 
-def _has_pin1(nums):
-    return bool({"1", "A1"} & set(nums))
+def _has_pin1(nums, pin1=None):
+    return bool(set(pin1 or ("1", "A1")) & set(nums))
 
 
-def check_item(item, base="."):
-    """-> (failures [(rule, message)], warnings [str], info {height, ...})."""
+def check_item(item, base=".", rules=None):
+    """-> (failures [(rule, message)], warnings [str], info {height, ...}). rules (ecadlib.rules): required fields,
+    accepted pin-1 names and the courtyard layer; None = ecadlib's own."""
+    from . import rules as RU
+    rules = rules or RU.DEFAULTS
+    pin1 = rules["footprint"]["pin1"]
     fails, warns, info = [], [], {}
     add = lambda rule, msg: fails.append((rule, msg))
     sym_f, fp_f = _path(base, item["symbol"].get("file")), _path(base, item["footprint"].get("file"))
@@ -165,7 +170,7 @@ def check_item(item, base="."):
             issues, nums, kmod = [], set(), None
             warns.append(f"footprint_check failed on {info.pop('kicad_mod')} ({type(e).__name__}: {e})")
         for lvl, rule, msg in issues:
-            if rule == "pin1" and msg == "no pad numbered 1" and _has_pin1(nums):
+            if rule == "pin1" and msg == "no pad numbered 1" and _has_pin1(nums, pin1):
                 continue                       # A1 counts as pin 1 (connectors, BGAs)
             if rule == "copper" and "overlap" in msg and _same_net(msg, pin_names):
                 warns.append(f"{lvl} {rule}: {msg} (same pin name '{pin_names[OVERLAP.search(msg).group(1)]}': stacked on purpose)")
@@ -174,7 +179,7 @@ def check_item(item, base="."):
                                        (rule == "courtyard" and msg.startswith("no courtyard")) or (rule == "pin1" and "no pad" in msg))
             (add("footprint", f"{rule}: {msg}") if hard else warns.append(f"{lvl} {rule}: {msg}"))
     if not kmod and fps:
-        mf, mw = _pcblib_minimal(fps[0], pin_names)
+        mf, mw = _pcblib_minimal(fps[0], pin_names, RU.layer_id(rules["layers"]["courtyard"]), pin1)
         for m in mf:
             add("footprint", m)
         warns += [f"{m} (same pin name: stacked on purpose)" for m in mw]
@@ -186,7 +191,7 @@ def check_item(item, base="."):
         h = max(hs) if hs else _mil(fps[0]["params"].get("HEIGHT"))
         if not bodies and h:
             warns.append("height only as the footprint HEIGHT parameter; no 3D body")
-        lo, hi, fam = height_range(item["footprint"].get("ref") or fps[0]["name"])
+        lo, hi, fam = height_range(item["footprint"].get("kicad") or item["footprint"].get("ref") or fps[0]["name"])
         info["height"] = h
         if not h:
             add("height", "no 3D height (no 3D body and no HEIGHT)")
@@ -196,23 +201,34 @@ def check_item(item, base="."):
             warns.append(f"no height range for package '{item['footprint'].get('ref')}'; only checked {lo}-{hi} mm")
     # ---- fields
     par = {p["name"]: p["value"] for p in item.get("parameters", [])}
-    for k in REQUIRED:
-        if not str(par.get(k, "")).strip():
+    for k in rules["parameters"]["required"]:         # default: REQUIRED, then the datasheet link and Description
+        if k == "Datasheet":
+            if not any(str(par.get(x, "")).strip() for x in ("ComponentLink2URL", "Datasheet", RU.canonical_param("Datasheet", rules))):
+                add("fields", "no datasheet link")
+        elif k == "Description":
+            if not str(item.get("description") or "").strip():
+                add("fields", "Description is empty")
+        elif not str(par.get(RU.canonical_param(k, rules), par.get(k, ""))).strip():
             add("fields", f"{k} is empty")
-    if not any(str(par.get(k, "")).strip() for k in ("ComponentLink2URL", "Datasheet")):
-        add("fields", "no datasheet link")
-    if not str(item.get("description") or "").strip():
-        add("fields", "Description is empty")
     for v in item.get("verify") or []:
         add("verify", v)
     return fails, warns, info
 
 
-def apply(items, base=".", allow=(), unallow=(), who="--allow"):
-    """Run check_item on every item, set status ready / held, record --allow overrides. Returns report rows."""
+def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
+    """Run check_item on every item, set status ready / held, record --allow overrides. Returns report rows.
+    rules: a loaded rules dict, a path, or None to use the ecadlib.toml found from `base` (defaults when none)."""
+    from . import rules as RU
+    rules = RU.resolve(rules, base)
     rows, today = [], datetime.date.today().isoformat()
     for it in items:
-        fails, warns, info = check_item(it, base)
+        if it.get("a365") and it.get("status") in ("existing", "deleted_in_workspace"):
+            # pulled from Altium 365 (ecadlib a365 pull): already released there, nothing to release or hold back
+            it["hold_reasons"], it["release_check"] = [], {"result": it["status"], "failures": [], "warnings": []}
+            rows.append({"name": it["name"], "status": it["status"], "result": it["status"], "symbol_source": "a365",
+                         "footprint_source": "a365", "height_mm": "", "failures": "", "warnings": "", "allowed": ""})
+            continue
+        fails, warns, info = check_item(it, base, rules)
         msgs = [f"{r}: {m}" for r, m in fails]
         if it["name"] in unallow:
             it.pop("allow", None)
@@ -267,13 +283,14 @@ def main(argv=None):
     ap.add_argument("--unallow", action="append", default=[], help="remove an earlier --allow")
     ap.add_argument("-o", "--out", help="report stem (.md and .csv); default <plan dir>/release_check")
     ap.add_argument("--user", help="who gives the --allow (default: git config user.name/email); see approvals")
+    ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan's folder or here)")
     a = ap.parse_args(argv)
     plan = Path(a.plan)
     items = json.loads(plan.read_text())
     unknown = set(a.allow + a.unallow) - {i["name"] for i in items}
     if unknown:
         sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")
-    rows = apply(items, plan.parent, a.allow, a.unallow)
+    rows = apply(items, plan.parent, a.allow, a.unallow, rules=a.rules)
     if a.allow:                                # record the person, so approvals can refuse self-approval
         from .approvals import identity, post_check, stamp_allow
         stamp_allow(items, a.allow, identity(a.user, cwd=plan.parent))

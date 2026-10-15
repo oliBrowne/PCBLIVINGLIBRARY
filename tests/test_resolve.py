@@ -220,6 +220,36 @@ def test_cli():
         assert {i["name"]: i["status"] for i in json.loads(plan.read_text())}["USBC-FAKE"] == "ready"
 
 
+def test_choose_uses_house_layer_rules():
+    """choose writes the PcbLib with the ecadlib.toml layers, like the librarian (was: always Mechanical 15)."""
+    from ecadlib import altium_lib as AL
+    with tempfile.TemporaryDirectory() as d:
+        plan, src = make_plan(d)
+        (Path(d) / "ecadlib.toml").write_text('[layers]\ncourtyard = "Mechanical11"\n')
+        R.choose(plan, "FTSH-105-TEST", "footprint", "kicad:Connector_PinHeader_1.27mm:PinHeader_2x05_P1.27mm_Vertical", src=src)
+        it = next(i for i in json.loads(plan.read_text()) if i["name"] == "FTSH-105-TEST")
+        fp = AL.read_pcblib(Path(d) / it["footprint"]["file"])[0]
+        layers = {r["layer"] for r in fp["records"] if r["type"] in ("track", "arc", "region")}
+        assert 56 + 11 in layers and AL.MECH15 not in layers, layers
+
+
+def test_librarian_refresh_does_not_overwrite_a_shared_choice():
+    """A part sharing the chosen footprint's file must not re-fetch over it on `librarian --refresh`."""
+    from ecadlib import altium_lib as AL
+    bom = TL.BOM + "U5,1,OTHER1,SOIC-8_3.9x4.9mm_P1.27mm,ACME,OTHER1,,Other SOIC part,\n"
+    with tempfile.TemporaryDirectory() as d:
+        items, http = TL.run(d, bom=bom, sources=["kicad"])
+        out = Path(d) / "out"
+        assert items["OTHER1"]["footprint"]["file"] == items["TPS1234DSGR"]["footprint"]["file"]
+        r = R.choose(out / "plan.json", "TPS1234DSGR", "footprint", "kicad:LED_SMD:LED_0603_1608Metric",
+                     src=R.Sources(Path(d) / "cache", http=http))
+        pads = lambda: sorted(x["designator"] for x in AL.read_pcblib(out / r["file"])[0]["records"] if x["type"] == "pad")
+        assert pads() == ["1", "2"]
+        items, _ = TL.run(d, bom=bom, sources=["kicad"], refresh=[])
+        assert pads() == ["1", "2"], pads()
+        assert items["TPS1234DSGR"]["source"]["footprint"] == "kicad:LED_SMD:LED_0603_1608Metric"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

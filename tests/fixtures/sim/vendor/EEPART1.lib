@@ -1,0 +1,11 @@
+* EEPART1 N-channel MOSFET - HAND-WRITTEN TEST FIXTURE (not a vendor model)
+* pins: drain gate source
+.SUBCKT EEPART1 D G S PARAMS: RG=1.5
+M1 d1 g1 S S NMOD L=1u W=1u ; inline comment
+RG G g1 {RG}
+RD D d1 0.05
+D1 S D DBODY
+.MODEL NMOD NMOS (LEVEL=1 VTO=1.6 KP=2.5
++ LAMBDA=0.01)
+.MODEL DBODY D (IS=1e-12 N=1.2 RS=0.02)
+.ENDS EEPART1

@@ -55,8 +55,9 @@ def table_of(item):
     return (t or "Misc")[:31]
 
 
-def plan_row(item):
-    """The DbLib row for one plan item, columns in altium_export order, then any extra plan parameters."""
+def plan_row(item, rules=None):
+    """The DbLib row for one plan item, columns in altium_export order, then any extra plan parameters; parameter
+    columns in the rules' house names ([parameters] names)."""
     row = {c: "" for c in COLUMNS}
     row.update({"Part Number": item["name"], "Description": item.get("description", ""), "Comment": item.get("comment", "")})
     for k, d, w in KINDS:
@@ -64,7 +65,8 @@ def plan_row(item):
         row[f"{w} Ref"] = ref
         row[f"{w} Path"] = f"{d}\\{AL.file_stem(ref)}.{d}" if ref else ""
     row.update({p["name"]: str(p["value"]) for p in item.get("parameters", [])})
-    return row
+    from .rules import house_row
+    return house_row(row, rules)
 
 
 # ------------------------------------------------------------------ parts table (xlsx + csv)
@@ -80,8 +82,9 @@ def read_tables(xlsx):
             rows = [["" if v is None else str(v) for v in r] for r in ws.iter_rows(values_only=True)]
             if not rows:
                 continue
-            hdr = [h for h in rows[0] if h]
-            out[ws.title] = (hdr, [dict(zip(hdr, r)) for r in rows[1:] if any(r)])
+            cols = [(i, h) for i, h in enumerate(rows[0]) if h]       # by position: a blank header column must not
+            hdr = [h for _, h in cols]                                  # shift the hand columns right of it
+            out[ws.title] = (hdr, [{h: r[i] if i < len(r) else "" for i, h in cols} for r in rows[1:] if any(r)])
     finally:
         wb.close()
     return out
@@ -250,7 +253,7 @@ def _readback(path, kind, ref):
 
 
 def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=None, svn_url=None,
-         dry_run=False, base=None, runner=run_cmd, which=shutil.which):
+         dry_run=False, base=None, runner=run_cmd, which=shutil.which, rules=None):
     """Bring <target_dir> in line with the plan. plan: a plan.json path, or its items (model paths absolute or
     relative to `base`). Returns {"results": [...], "written": [...], "removed": [...], "dblib": path, ...};
     results are {"name", "action", "detail", "table"} with action added/updated/up_to_date/held/skipped/error,
@@ -260,13 +263,15 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     items = load_plan(plan) if isinstance(plan, (str, Path)) else plan
     base = Path(base or (Path(plan).parent if isinstance(plan, (str, Path)) else "."))
     to = Path(target_dir)
+    from .rules import param_name, resolve
+    rules = resolve(rules, base)                            # house parameter names: ecadlib.toml found from the plan
     xlsx, csvf, lib, statef = to / f"{name}.xlsx", to / f"{name}.csv", to / f"{name}{EXT[mode]}", to / STATE
     state = json.loads(statef.read_text()) if statef.exists() else {}
     managed_rows, managed_files = set(state.get("rows", [])), set(state.get("files", []))
     old = read_tables(xlsx)
     tables = {t: (list(h), [dict(r) for r in rows]) for t, (h, rows) in old.items()}
     where = {r.get("Part Number"): t for t, (_, rows) in tables.items() for r in rows}
-    results, written, removed, copied = [], [], [], {}
+    results, written, removed, copied, failed = [], [], [], {}, {}
 
     def find(pn, t):
         rows = tables.get(t, ([], []))[1]
@@ -296,6 +301,8 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
             if rel in copied:
                 if copied[rel] != data:
                     problems.append(f"{rel}: another plan item already wrote different content this run")
+                elif rel in failed:                         # same bad file as an earlier item: same error
+                    problems.append(failed[rel])
                 elif rel in written:
                     notes.append(f"{rel} updated")
                 continue
@@ -311,6 +318,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                 if err:
                     tmp.unlink()
                     problems.append(err)
+                    failed[rel] = err
                     notes.pop()
                     continue
                 os.replace(tmp, dst)
@@ -318,12 +326,13 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                 err = _readback(src, d, ref)
                 if err:
                     problems.append(err)
+                    failed[rel] = err
                     continue
             written.append(rel)
         if problems:
             res["action"], res["detail"] = "error", "; ".join(problems + notes)
             continue
-        want, t = plan_row(it), res["table"]
+        want, t = plan_row(it, rules), res["table"]
         old_t = where.get(it["name"])
         cur = find(it["name"], old_t) if old_t else None
         if cur is None:
@@ -335,7 +344,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
             managed_rows.add(it["name"])
             continue
         new = dict(cur)
-        for c in it.get("cleared", []):
+        for c in (param_name(c, rules) for c in it.get("cleared", [])):
             if c in new:
                 new[c] = ""
         new.update(want)
@@ -411,7 +420,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
         put(xlsx.name, writer=lambda: write_xlsx(xlsx, tables))
     if tables:
         ct = csv_text(tables)
-        if not csvf.exists() or csvf.read_bytes().decode("utf-8") != ct:
+        if not csvf.exists() or csvf.read_bytes().decode("utf-8", "replace") != ct:
             put(csvf.name, ct)
 
     url = svn_url or (svn_info(to, runner, which) if mode == "svndblib" else None)
@@ -461,9 +470,10 @@ def main(argv=None):
     ap.add_argument("-m", "--message", default="ecadlib dblib-sync", help="svn commit message")
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
     ap.add_argument("-o", "--out", help="write the JSON report here")
+    ap.add_argument("--rules", help="library rules file: house parameter names (default: ecadlib.toml found from the plan)")
     a = ap.parse_args(argv)
 
-    out = sync(a.plan, a.to, "svndblib" if a.svn else "dblib", a.name, a.prune, a.win_dir, a.svn_url, a.dry_run)
+    out = sync(a.plan, a.to, "svndblib" if a.svn else "dblib", a.name, a.prune, a.win_dir, a.svn_url, a.dry_run, rules=a.rules)
     for r in out["results"]:
         print(f"  {r['action']:<12} {r['table']:<12} {r['name']:<28} {r['detail']}"[:200].rstrip())
     print(("would write " if a.dry_run else "wrote ") + (", ".join(out["written"]) or "nothing") +
