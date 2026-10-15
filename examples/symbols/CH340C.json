@@ -1,0 +1,26 @@
+{
+  "name": "CH340C",
+  "description": "USB to UART bridge, internal oscillator, SOIC-16 (pinout from memory of the WCH CH340 datasheet - VERIFY against the datasheet before use)",
+  "designator": "U?",
+  "footprint": "SOIC-16_3.9x9.9mm_P1.27mm",
+  "needs_datasheet_verification": true,
+  "cross_check": "2026-10-13: pin numbers and names match KiCad's official symbol Interface_USB:CH340C (gitlab.com kicad-symbols master). The WCH/LCSC datasheet PDFs could not be fetched from the build sandbox, so this is still not checked against the datasheet.",
+  "pins": [
+    {"num": "16", "name": "VCC", "type": "power", "side": "left"},
+    {"num": "4", "name": "V3", "type": "power", "side": "left"},
+    {"num": "5", "name": "UD+", "type": "io", "side": "left"},
+    {"num": "6", "name": "UD-", "type": "io", "side": "left"},
+    {"num": "15", "name": "R232", "type": "input", "side": "left"},
+    {"num": "7", "name": "NC", "type": "passive", "side": "left"},
+    {"num": "8", "name": "NC", "type": "passive", "side": "left"},
+    {"num": "1", "name": "GND", "type": "power", "side": "left"},
+    {"num": "2", "name": "TXD", "type": "output", "side": "right"},
+    {"num": "3", "name": "RXD", "type": "input", "side": "right"},
+    {"num": "9", "name": "CTS#", "type": "input", "side": "right"},
+    {"num": "10", "name": "DSR#", "type": "input", "side": "right"},
+    {"num": "11", "name": "RI#", "type": "input", "side": "right"},
+    {"num": "12", "name": "DCD#", "type": "input", "side": "right"},
+    {"num": "13", "name": "DTR#", "type": "output", "side": "right"},
+    {"num": "14", "name": "RTS#", "type": "output", "side": "right"}
+  ]
+}

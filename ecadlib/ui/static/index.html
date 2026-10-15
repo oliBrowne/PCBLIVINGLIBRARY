@@ -1,0 +1,1096 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ecadlib</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #fff; --text: #1b1f24; --muted: #5d6673; --line: #dde1e6;
+  --accent: #2357d9; --accent-weak: #e7eefc;
+  --ok: #1d7a46; --ok-bg: #e3f4ea; --warn: #9a5b00; --warn-bg: #fdf1dc; --bad: #b3261e; --bad-bg: #fbe6e4;
+  --info: #3d4aa8; --info-bg: #e9ebfb; --off: #5d6673; --off-bg: #eceef1;
+  --copper: #c8743a; --p1: #d9382b; --crtyd: #8a96a3;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #14171b; --panel: #1c2026; --text: #e6e9ed; --muted: #9aa3ad; --line: #2e343c;
+    --accent: #7ea2ff; --accent-weak: #22304f; --ok: #6fd39a; --ok-bg: #173325; --warn: #f0b660; --warn-bg: #3a2c12;
+    --bad: #ff8a80; --bad-bg: #3d1d1b; --info: #a9b3ff; --info-bg: #262a4a; --off: #9aa3ad; --off-bg: #262b32;
+    --copper: #e0955c; --p1: #ff6b5e; --crtyd: #6b7682; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+header { display: flex; align-items: baseline; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; }
+header .meta { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+main { max-width: 1280px; margin: 0 auto; padding: 18px 16px 60px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.card h2 { font-size: 15px; margin: 0 0 4px; }
+.drop { border: 2px dashed var(--line); border-radius: 10px; padding: 26px; text-align: center; color: var(--muted); cursor: pointer; }
+.drop.over, .drop:focus-visible { border-color: var(--accent); background: var(--accent-weak); color: var(--text); outline: none; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.spread { justify-content: space-between; }
+button, select, input[type=search], input[type=text] { font: inherit; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; }
+button { cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { border-color: var(--bad); color: var(--bad); }
+button:disabled { opacity: .5; cursor: default; }
+input[type=search] { min-width: 220px; }
+#boms { max-width: 100%; }
+label.field { display: inline-flex; gap: 6px; align-items: center; }
+.signoff { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
+.acts { display: flex; gap: 4px; flex-wrap: wrap; }
+td .sub { font-size: 11.5px; margin-top: 3px; }
+#picklist table td { font-size: 12.5px; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 12px; }
+.chip { border-radius: 999px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; border: 1px solid transparent; }
+.chip.active { border-color: currentColor; }
+.s-ok { background: var(--ok-bg); color: var(--ok); }
+.s-warn { background: var(--warn-bg); color: var(--warn); }
+.s-bad { background: var(--bad-bg); color: var(--bad); }
+.s-info { background: var(--info-bg); color: var(--info); }
+.s-off { background: var(--off-bg); color: var(--off); }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+td.notes { color: var(--muted); max-width: 340px; }
+td code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.pill { border-radius: 6px; padding: 2px 7px; font-size: 12px; white-space: nowrap; }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+.scroll { overflow-x: auto; max-width: 100%; }
+button.small { padding: 3px 8px; font-size: 12.5px; white-space: nowrap; }
+ul.why { margin: 0; padding-left: 16px; }
+#libout td.mono { word-break: normal; white-space: nowrap; }
+.banner { border-radius: 8px; padding: 9px 12px; margin: 10px 0; white-space: pre-wrap; display: flex; gap: 10px; justify-content: space-between; align-items: start; }
+.banner button { padding: 0 8px; border: none; background: transparent; color: inherit; font-size: 16px; }
+.progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+.progress > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.box { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.box h3 { font-size: 14px; margin: 0 0 4px; }
+.box p { margin: 4px 0 10px; }
+.out { margin-top: 8px; font-size: 12.5px; overflow-wrap: anywhere; }
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 0; width: min(1000px, 96vw); }
+dialog::backdrop { background: rgba(0,0,0,.35); }
+.dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); gap: 10px; flex-wrap: wrap; }
+.dlg-body { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; }
+@media (max-width: 760px) { .dlg-body { grid-template-columns: 1fr; } input[type=search] { min-width: 0; width: 100%; } }
+textarea { width: 100%; min-height: 330px; font: 12px/1.4 ui-monospace, Menlo, monospace; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.preview { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; text-align: center; min-height: 220px; }
+.preview svg { max-width: 100%; height: auto; max-height: 340px; }
+svg.fp .pad { fill: var(--copper); }
+svg.fp .pad.p1 { fill: var(--p1); }
+svg.fp .pad.ep { fill: var(--copper); opacity: .7; }
+svg.fp .crtyd { fill: none; stroke: var(--crtyd); stroke-width: .05; stroke-dasharray: .15 .1; }
+svg.fp .fab { fill: none; stroke: var(--muted); stroke-width: .04; opacity: .6; }
+svg.fp .hole { fill: var(--bg); stroke: var(--muted); stroke-width: .02; }
+.nums { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; margin-top: 10px; font-size: 12.5px; text-align: left; }
+.nums div { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px; }
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; display: none; max-width: 90vw; }
+a { color: var(--accent); }
+pre.diff { white-space: pre-wrap; max-height: 280px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: 12px/1.4 ui-monospace, Menlo, monospace; }
+#rulestoml { min-height: 240px; }
+/* team mode */
+header .user { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 13px; flex-wrap: wrap; }
+header .user .who { color: var(--muted); }
+header .user button { padding: 3px 9px; font-size: 12.5px; }
+.signin { max-width: 380px; margin: 8vh auto 0; }
+.signin label { display: block; margin-top: 10px; font-size: 13px; color: var(--muted); }
+.signin input, .form input[type=password], .form input[type=text], .form input[type=email] { width: 100%; margin-top: 4px; }
+input[type=password], input[type=email] { font: inherit; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; }
+.form { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px 12px; align-items: end; margin-top: 10px; }
+.form label { font-size: 12.5px; color: var(--muted); }
+[data-role-hidden] { display: none !important; }
+header .user[hidden], label.field[hidden], span[hidden] { display: none; }
+.form label { display: block; }
+.form select { display: block; width: 100%; margin-top: 4px; }
+/* review queue */
+#qrows tr.sel td { background: var(--accent-weak); }
+.qview { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
+.qview h3 { font-size: 14px; margin: 14px 0 6px; }
+.qview h3:first-child { margin-top: 0; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.pics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pics figure { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; min-height: 120px; }
+.pics figcaption { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.pics img { display: block; max-width: 100%; height: auto; margin: 0 auto 8px; background: #fff; border-radius: 4px; }
+@media (max-width: 760px) { .pics { grid-template-columns: 1fr; } }
+#qnote { min-height: 56px; }
+ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ecadlib</h1>
+  <span class="meta" id="meta">loading…</span>
+  <div class="user" id="usermenu" hidden>
+    <span class="who" id="whoami"></span>
+    <button id="teambtn" data-role="admin">Users</button>
+    <button id="pwbtn">Change password</button>
+    <button id="logout">Sign out</button>
+  </div>
+</header>
+<section class="card signin" id="signin" hidden>
+  <h2>Sign in to ecadlib</h2>
+  <p class="muted small" style="margin:4px 0 0" id="signinhint">This is a shared team server. Ask your ecadlib admin for an account.</p>
+  <form id="signinform" autocomplete="on">
+    <label>User name <input type="text" id="login_user" name="username" autocomplete="username" required autofocus></label>
+    <label>Password <input type="password" id="login_pw" name="password" autocomplete="current-password" required></label>
+    <div class="row" style="margin-top:14px"><button class="primary" type="submit" id="signinbtn">Sign in</button></div>
+  </form>
+  <div id="signinerr"></div>
+</section>
+<main id="app">
+  <section class="card" id="teamcard" hidden>
+    <div class="row spread">
+      <div><h2>Team users</h2>
+      <p class="muted small" style="margin:2px 0 0">Viewers read everything; librarians run triage, the librarian, exports and release-check overrides; approvers also sign off parts and push to Altium 365; admins also manage users and the library rules. Changes apply at once.</p></div>
+      <div class="row"><button id="auditbtn">Audit log</button><button id="teamclose">Close</button></div>
+    </div>
+    <div class="out" id="teamerr"></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>User</th><th>Name / e-mail</th><th>Role</th><th>Signs as</th><th>Sign-in</th><th></th></tr></thead>
+      <tbody id="teamrows"></tbody>
+    </table></div>
+    <h3 style="font-size:14px;margin:16px 0 0">Add a user</h3>
+    <form class="form" id="adduser">
+      <label>User name<input type="text" name="username" required autocomplete="off"></label>
+      <label>Full name<input type="text" name="name" autocomplete="off"></label>
+      <label>E-mail<input type="email" name="email" autocomplete="off"></label>
+      <label>Role<select name="role" id="addrole"></select></label>
+      <label>Initial password (10+ characters)<input type="password" name="password" autocomplete="new-password" minlength="10" required></label>
+      <div><button class="primary" type="submit">Add user</button></div>
+    </form>
+    <div class="out" id="auditout"></div>
+  </section>
+
+  <section class="card" id="setup">
+    <div class="row spread">
+      <div><h2>Library rules</h2>
+      <p class="muted small" style="margin:2px 0 0" id="rulesstate">Loading…</p></div>
+      <button id="rulesscan" data-role="admin">Set up from my libraries…</button>
+    </div>
+    <div id="rulesform" hidden style="margin-top:10px">
+      <label class="muted small" for="rulespaths">Folders or files to scan, one per line: your Altium library folders (.SchLib / .PcbLib), a .DbLib, KiCad libraries, BOMs, an Altium 365 component list (.json). Leave empty to scan the --lib folders and uploaded BOMs. Only names, parameters and pad and layer data are read.</label>
+      <textarea id="rulespaths" style="min-height:64px" spellcheck="false" placeholder="D:\Altium\Libraries&#10;D:\Altium\house.DbLib"></textarea>
+      <div class="row" style="margin-top:8px"><button class="primary" id="rulesgo">Scan and propose</button><span class="muted small">Nothing is written until you save.</span></div>
+    </div>
+    <div id="rulesbusy" class="muted small" hidden>Scanning your libraries…<div class="progress"><div style="width:30%"></div></div></div>
+    <div id="rulesout" class="out"></div>
+    <div id="rulesfile" hidden>
+      <div class="muted small" style="margin:10px 0 4px">The proposed <span class="mono">ecadlib.toml</span>. Each value says where it came from; edit anything before saving.</div>
+      <textarea id="rulestoml" spellcheck="false" aria-label="Proposed ecadlib.toml"></textarea>
+      <div class="row" style="margin-top:8px"><button id="rulesapply" hidden>Apply my answers</button><button class="primary" id="rulessave" data-role="admin">Save ecadlib.toml</button><button class="danger" id="rulesreplace" hidden>Replace the existing file</button></div>
+      <div id="rulesdiff"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="drop" id="drop" data-role="librarian" tabindex="0" role="button" aria-label="Choose a BOM file">
+      <strong>Drop a BOM here</strong> (CSV or XLSX), or click to choose a file.
+      <div class="muted small" style="margin-top:6px">Altium, KiCad and spreadsheet BOMs work. Columns such as Designator, Comment, MPN, Manufacturer, LCSC, Value and Footprint are matched automatically.</div>
+      <input type="file" id="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls" hidden>
+    </div>
+    <div class="row" style="margin-top:10px" data-role="librarian">
+      <span class="muted">Or re-check one already in the workspace:</span>
+      <select id="boms"></select>
+      <button id="rerun" data-role="librarian">Check again</button>
+    </div>
+    <div id="busy" hidden>
+      <div class="muted small" id="busytext" style="margin-top:10px"></div>
+      <div class="progress"><div id="bar"></div></div>
+    </div>
+    <div id="error"></div>
+    <div id="history">
+      <div class="row spread" style="margin-top:14px">
+        <h2 style="margin:0">Past triages</h2>
+        <div class="row"><input type="search" id="histq" placeholder="Filter by BOM or person…" aria-label="Filter past triages"><button class="small" id="histreload">Refresh</button></div>
+      </div>
+      <div class="muted small" id="histnote" style="margin:2px 0 6px">Every finished triage in this workspace. Opening one shows its saved result; nothing is looked up again.</div>
+      <div class="tablewrap" id="histwrap"><table>
+        <thead><tr><th>BOM</th><th>Finished (UTC)</th><th>By</th><th>Lines</th><th>Status</th><th></th></tr></thead>
+        <tbody id="histrows"></tbody>
+      </table></div>
+      <div id="histerr"></div>
+    </div>
+  </section>
+
+  <section class="card" id="queuecard">
+    <div class="row spread">
+      <div><h2>Review queue</h2>
+      <p class="muted small" style="margin:2px 0 0">Parts the library agent found and built. Each one is checked against its datasheet. Look at the before and after pictures and the proof, then approve, reject or ask for a rebuild. An approval is also recorded in the part's plan (<span class="mono">approvals_audit.jsonl</span>), so the release check and the Altium 365 push see it.</p></div>
+      <div class="row"><select id="qbatch" aria-label="Batch"><option value="">All batches</option></select><button class="small" id="qreload">Refresh</button></div>
+    </div>
+    <div class="chips" id="qchips"></div>
+    <div id="qbatchinfo" class="small"></div>
+    <div id="qerr"></div>
+    <div class="tablewrap" id="qwrap"><table>
+      <thead><tr><th>Part</th><th>Change</th><th>Status</th><th>Proof</th><th>Batch</th><th>Updated (UTC)</th><th></th></tr></thead>
+      <tbody id="qrows"></tbody>
+    </table></div>
+    <div class="muted small" id="qempty" hidden>Nothing in the queue. The library agent adds parts here when a watched project or BOM changes.</div>
+    <div class="qview" id="qview" hidden></div>
+  </section>
+
+  <section class="card" id="results" hidden>
+    <div class="row spread">
+      <div><h2 id="bomname"></h2><div class="muted small" id="saved" hidden></div><div class="muted small" id="mapping"></div></div>
+      <div class="row small"><a id="reportmd" href="#">report.md</a> <a id="reportcsv" href="#">report.csv</a></div>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="row" style="margin-bottom:8px"><input type="search" id="q" placeholder="Filter by ref, MPN, package…" aria-label="Filter lines"></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>#</th><th>Ref</th><th>MPN</th><th>Package</th><th>Status</th><th>Local symbol / footprint</th><th>Source sym / fp / 3D</th><th>Notes</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+    <div class="muted small" id="shown" style="margin-top:6px"></div>
+  </section>
+
+  <section class="card" id="libcard" hidden>
+    <div class="row spread">
+      <div><h2>Fill the library</h2>
+      <p class="muted small" style="margin:2px 0 0">Finds every missing symbol and footprint (official KiCad libraries, then EasyEDA, then the datasheet), converts them to Altium files and checks each part before release. Parts that fail a check are held back from Altium 365 until you look at them.</p></div>
+      <div class="row"><button id="librun" data-role="librarian">Fill missing parts</button><button id="librerun" hidden>Redo all</button></div>
+    </div>
+    <div class="signoff" id="libtools" hidden>
+      <div class="row">
+        <label class="field small" id="signerwrap">Your name <input type="text" id="signer" placeholder="Ann Lee &lt;ann@example.com&gt;" size="28" autocomplete="name"></label>
+        <label class="field small" id="signrolewrap">Role <input type="text" id="signrole" placeholder="optional, e.g. librarian" size="16"></label>
+        <label class="field small" id="signaswrap" hidden>Sign as <select id="signas"></select></label>
+        <span class="small" id="signedas" hidden></span>
+        <button class="small" id="apprstatus">Approval status</button>
+        <button class="small" id="dedupe" data-role="librarian">Find duplicates</button>
+      </div>
+      <div class="muted small" style="margin-top:6px" id="signnote">There is no login: ecadlib is a local tool, so whatever name you type is recorded as given with each approval, rejection or release override (in the plan and in <span class="mono">approvals_audit.jsonl</span>). Sign-off is enforced only when an <span class="mono">approvals.json</span> sits next to the plan.</div>
+      <div class="out" id="approut"></div>
+      <div class="out" id="dedupeout"></div>
+    </div>
+    <div class="out" id="libout"></div>
+  </section>
+
+  <section class="card" id="export" hidden>
+    <h2>Send to Altium</h2>
+    <div class="grid3" style="margin-top:10px">
+      <div class="box">
+        <h3>Database library (DbLib)</h3>
+        <p class="muted small">Writes parts.sqlite, parts.xlsx and two .DbLib files for this BOM. Open a .DbLib in Altium Designer; the SQLite one needs the SQLite3 ODBC driver, the Excel one needs the Access database engine.</p>
+        <button id="dblib" data-role="librarian">Export DbLib</button>
+        <div class="out" id="dblibout"></div>
+      </div>
+      <div class="box">
+        <h3>Altium library files</h3>
+        <p class="muted small">Converts this BOM's footprints from your KiCad libraries to .PcbLib and writes generic Resistor and Capacitor .SchLib symbols. Footprints you approve here get a .PcbLib automatically.</p>
+        <button id="models" data-role="librarian">Build .PcbLib / .SchLib</button>
+        <div class="out" id="modelsout"></div>
+      </div>
+      <div class="box">
+        <h3>Altium 365 workspace</h3>
+        <p class="muted small" id="a365hint">Plans one managed component per part. A part is ready once its .SchLib and .PcbLib exist.</p>
+        <div class="row">
+          <button id="plan" data-role="librarian">Plan release</button>
+          <select id="wsurl" hidden></select>
+          <button id="dry" disabled data-role="librarian">Dry run</button>
+          <button id="push" class="danger" disabled data-role="approver">Push</button>
+        </div>
+        <div class="out" id="planout"></div>
+        <div class="out" id="dryout"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="row spread">
+      <div><h2>Footprint generator</h2>
+      <p class="muted small" style="margin:2px 0 0">IPC-7351B land patterns from datasheet dimensions. You preview each one; it is only saved (KiCad .kicad_mod and Altium .PcbLib) when you approve it.</p></div>
+      <button id="newfp">New footprint…</button>
+    </div>
+  </section>
+</main>
+
+<dialog id="dlg">
+  <div class="dlg-head">
+    <strong id="dlgtitle">Generate footprint</strong>
+    <div class="row">
+      <select id="example" aria-label="Example package"><option value="">Start from an example…</option></select>
+      <select id="density" aria-label="Density"><option value="">density (from spec)</option><option value="A">A (most)</option><option value="B">B (nominal)</option><option value="C">C (least)</option></select>
+      <button id="close">Close</button>
+    </div>
+  </div>
+  <div class="dlg-body">
+    <div>
+      <div class="muted small" style="margin-bottom:6px">Package dimensions in mm, min/max from the datasheet drawing (<span class="mono">package_schema.json</span>)</div>
+      <textarea id="spec" spellcheck="false" aria-label="Package dimensions JSON"></textarea>
+    </div>
+    <div>
+      <div class="preview" id="preview"></div>
+      <div class="nums" id="nums"></div>
+      <div id="dlgerr"></div>
+      <div class="row" style="margin-top:12px; justify-content:flex-end">
+        <button id="previewbtn">Preview</button>
+        <button id="approve" class="primary" disabled data-role="librarian">Approve and add to library</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+<dialog id="pickdlg">
+  <div class="dlg-head">
+    <strong id="picktitle">Pick a symbol or footprint</strong>
+    <div class="row">
+      <select id="pickkind" aria-label="Which half"><option value="">missing half</option><option value="symbol">symbol</option><option value="footprint">footprint</option></select>
+      <button id="pickclose">Close</button>
+    </div>
+  </div>
+  <div style="padding:14px 16px">
+    <div id="pickinfo" class="small"></div>
+    <div id="pickbusy" class="muted small" hidden><span id="pickbusytext">Looking for candidates…</span><div class="progress"><div id="pickbar"></div></div></div>
+    <div id="pickerr"></div>
+    <div id="picklist"></div>
+  </div>
+</dialog>
+<dialog id="pwdlg">
+  <form method="dialog" id="pwform" style="padding:16px; min-width:min(360px, 90vw)">
+    <strong id="pwtitle">Change password</strong>
+    <label class="muted small" id="pwcurwrap" style="display:block;margin-top:10px">Current password<input type="password" id="pwcur" autocomplete="current-password" style="width:100%"></label>
+    <label class="muted small" style="display:block;margin-top:10px">New password (10+ characters)<input type="password" id="pwnew" autocomplete="new-password" minlength="10" style="width:100%"></label>
+    <label class="muted small" style="display:block;margin-top:10px">New password again<input type="password" id="pwnew2" autocomplete="new-password" style="width:100%"></label>
+    <div id="pwerr"></div>
+    <div class="row" style="margin-top:12px;justify-content:flex-end"><button value="cancel" id="pwcancel" formnovalidate>Cancel</button><button class="primary" id="pwok" value="ok">Save</button></div>
+  </form>
+</dialog>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const STATUS = {
+  "in_library": ["In library", "s-ok"],
+  "in_library (generated footprint)": ["In library (generated fp)", "s-ok"],
+  "available_easyeda": ["Available (EasyEDA)", "s-info"],
+  "easyeda_footprint_only": ["Footprint only (EasyEDA)", "s-warn"],
+  "needs_footprint_generation": ["Needs footprint", "s-bad"],
+  "unverified (source unreachable)": ["Unverified (source unreachable)", "s-warn"],
+  "dnp (not fitted)": ["DNP", "s-off"],
+};
+const GENERATE = new Set(["needs_footprint_generation", "unverified (source unreachable)", "easyeda_footprint_only"]);
+let current = null, filter = null, specs = {}, info = null, busy = false;
+
+let session = { team: false };
+const RANK = { viewer: 0, librarian: 1, approver: 2, admin: 3 };
+const can = role => !session.team || (session.user && RANK[session.user.role] >= RANK[role]);
+async function api(path, body, raw) {
+  const opt = body === undefined ? { credentials: "same-origin" } : { method: "POST", credentials: "same-origin", body: raw ? body : JSON.stringify(body),
+    headers: raw ? { "X-Filename": encodeURIComponent(raw) } : { "Content-Type": "application/json" } };
+  if (body !== undefined && session.csrf) opt.headers["X-CSRF-Token"] = session.csrf;
+  let r;
+  try { r = await fetch(path, opt); } catch (e) { throw new Error(session.team ? "The ecadlib server isn't responding." : "ecadlib isn't responding. Is it still running in your terminal?"); }
+  const j = await r.json().catch(() => ({ error: r.statusText }));
+  if (r.status === 401 && session.team && path !== "/api/login") { showSignin("Your session ended. Sign in again."); }
+  if (!r.ok) { const e = new Error(j.error || r.statusText); e.status = r.status; throw e; }
+  return j;
+}
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fileUrl = p => "/api/file?path=" + encodeURIComponent(p);
+const fileLink = p => `<a href="${fileUrl(p)}">${esc(p.split("/").pop())}</a>`;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", 3200); }
+function banner(el, msg, cls = "s-bad") {
+  el.innerHTML = msg ? `<div class="banner ${cls}"><span>${esc(msg)}</span><button aria-label="Dismiss">×</button></div>` : "";
+  if (msg) el.querySelector("button").onclick = () => el.innerHTML = "";
+}
+const showErr = e => banner($("#error"), e ? String(e.message || e) : "");
+
+// uploads/<YYYYMMDD-HHMMSS>-<rand>/<name> -> "name (uploaded YYYY-MM-DD HH:MM:SS UTC, #rand)"; other paths as they are
+const UPLOAD = /^uploads\/(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)-([0-9a-f]+)\/(.+)$/;
+function uploadNote(b) {
+  const m = UPLOAD.exec(b || "");
+  return m ? `uploaded ${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]} UTC, #${m[7]}` : b;
+}
+const bomLabel = b => UPLOAD.test(b || "") ? `${UPLOAD.exec(b)[8]} (${uploadNote(b)})` : b;
+async function loadInfo() {
+  info = await api("/api/info");
+  const prov = info.providers.filter(p => p.enabled).map(p => p.name + (p.configured ? "" : " (no key)")).join(", ");
+  $("#meta").textContent = `workspace ${info.workspace} · ${info.symbols} symbols, ${info.footprints} footprints indexed` +
+    (info.offline ? " · offline" : "") + ` · sources: ${prov}`;
+  const sel = $("#boms"), keep = sel.value;
+  sel.innerHTML = info.boms.map(b => `<option value="${esc(b)}">${esc(bomLabel(b))}</option>`).join("") || "<option value=''>(none yet)</option>";
+  if (info.boms.includes(keep)) sel.value = keep;
+  $("#a365hint").textContent = info.altium365.token
+    ? "Plans one managed component per part. A part is ready once its .SchLib and .PcbLib exist. Dry run shows the requests without sending anything."
+    : "Plans one managed component per part (ready once its .SchLib and .PcbLib exist). To push, restart ecadlib with NEXAR_TOKEN set; Dry run works without it.";
+}
+
+function setBusy(on, text = "", frac = null) {
+  busy = on; $("#busy").hidden = !on; $("#busytext").textContent = text;
+  $("#bar").style.width = frac == null ? "0" : `${Math.round(frac * 100)}%`;
+  ["#rerun", "#file"].forEach(s => $(s).disabled = on);
+}
+
+async function runJob(start, label) {
+  if (busy) return;
+  showErr(); setBusy(true, `Checking ${label}…`);
+  try {
+    const { job } = await start;
+    for (;;) {
+      await new Promise(r => setTimeout(r, 400));
+      const j = await api("/api/job?id=" + job);
+      if (j.total) setBusy(true, `Checking ${label}: line ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? " (" + j.label + ")" : ""}`, j.done / j.total);
+      if (j.state === "done") { showResult(j.result); loadHistory().catch(() => {}); break; }
+      if (j.state === "error") throw new Error(j.error);
+    }
+  } catch (e) { showErr(e); }
+  finally { setBusy(false); loadInfo().then(() => { if (current && current.bom) $("#boms").value = current.bom; }).catch(() => {}); }
+}
+
+function showResult(t) {
+  current = t; filter = null; $("#q").value = ""; planned = null;
+  ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#approut", "#dedupeout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
+  $("#dry").disabled = $("#push").disabled = true; render();
+}
+
+function render() {
+  const t = current;
+  $("#results").hidden = false;
+  $("#export").hidden = $("#libcard").hidden = !t.bom;      // an old triage whose BOM isn't known: read-only view
+  $("#bomname").textContent = t.name || (t.bom || "").split("/").pop();
+  $("#saved").hidden = !t.finished;
+  $("#saved").textContent = t.finished ? `Triage finished ${t.finished.replace("T", " ").replace("+00:00", " UTC")}` + (t.user ? ` by ${t.user}` : "") +
+    (t.bom ? ` · ${bomLabel(t.bom)}` : "") : "";
+  $("#mapping").textContent = "Columns used: " + Object.entries(t.mapping).map(([k, v]) => `${k} ← "${v}"`).join(", ");
+  $("#reportmd").href = fileUrl(t.reports[0]); $("#reportcsv").href = fileUrl(t.reports[1]);
+  $("#chips").innerHTML = Object.entries(t.counts).map(([k, v]) => {
+    const [lab, cls] = STATUS[k] || [k, "s-info"];
+    return `<span class="chip ${cls} ${filter === k ? "active" : ""}" data-s="${esc(k)}" role="button" tabindex="0">${esc(lab)}: ${v}</span>`;
+  }).join("");
+  const q = $("#q").value.trim().toLowerCase();
+  const rows = t.rows.filter(r => (!filter || r.status === filter) &&
+    (!q || [r.designator, r.mpn, r.manufacturer, r.value, r.package, r.lcsc].join(" ").toLowerCase().includes(q)));
+  $("#rows").innerHTML = rows.map(r => {
+    const [lab, cls] = STATUS[r.status] || [r.status, "s-info"];
+    const src = [r.src_symbol, r.src_footprint, r.src_3d].map(x => x || "–").join(" / ");
+    const act = GENERATE.has(r.status) ? `<button data-gen="${esc(r.line)}">${can("librarian") ? "Generate…" : "Preview…"}</button>` : "";
+    return `<tr><td>${r.line}</td><td>${esc(r.designator)}</td><td><code>${esc(r.mpn) || "–"}</code><div class="muted">${esc(r.manufacturer)}</div></td>
+      <td>${esc(r.package)}<div class="muted">${esc(r.value)}</div></td><td><span class="pill ${cls}">${esc(lab)}</span></td>
+      <td><div>${esc(r.local_symbol) || "<span class=muted>–</span>"}</div><div class="muted mono">${esc(r.local_footprint)}</div></td>
+      <td>${r.src ? esc(r.src) + ": " : ""}${src}</td><td class="notes">${esc(r.notes)}</td><td>${act}</td></tr>`;
+  }).join("") || `<tr><td colspan="9" class="muted">No lines match.</td></tr>`;
+  $("#shown").textContent = rows.length === t.rows.length ? `${t.rows.length} lines` : `${rows.length} of ${t.rows.length} lines shown`;
+}
+
+const chipToggle = e => { const s = e.target.dataset.s; if (!s) return; filter = filter === s ? null : s; render(); };
+$("#chips").addEventListener("click", chipToggle);
+$("#chips").addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); chipToggle(e); } });
+$("#q").addEventListener("input", () => current && render());
+$("#rows").addEventListener("click", e => { const n = e.target.dataset.gen; if (n) openGen(current.rows.find(r => r.line == n)); });
+
+const drop = $("#drop");
+drop.addEventListener("click", () => !busy && $("#file").click());
+drop.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && !busy) { e.preventDefault(); $("#file").click(); } });
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); });
+$("#file").addEventListener("change", e => { if (e.target.files[0]) upload(e.target.files[0]); e.target.value = ""; });
+async function upload(f) {
+  if (busy) return;
+  if (f.size > 20 * 1024 * 1024) return showErr("That file is over 20 MB, which is too big for a BOM.");
+  runJob(api("/api/upload", await f.arrayBuffer(), f.name), f.name);
+}
+$("#rerun").addEventListener("click", () => { const b = $("#boms").value; if (b) runJob(api("/api/triage", { bom: b }), b); });
+
+// ---- past triages (any signed-in user: finished results are library data; running jobs stay private)
+let history = [];
+async function loadHistory() {
+  history = (await api("/api/triage/history")).triages; renderHistory();
+}
+function renderHistory() {
+  const q = $("#histq").value.trim().toLowerCase();
+  const rows = history.filter(h => !q || [h.name, h.bom, h.user].join(" ").toLowerCase().includes(q));
+  $("#histwrap").hidden = !history.length;
+  $("#histnote").textContent = history.length ? "Every finished triage in this workspace. Opening one shows its saved result; nothing is looked up again."
+    : "No triages yet." + (can("librarian") ? " Drop a BOM above to run the first one." : " A librarian runs them; they show up here.");
+  $("#histrows").innerHTML = rows.map(h => {
+    const todo = Object.entries(h.counts || {}).filter(([k]) => !k.startsWith("in_library") && !k.startsWith("dnp")).reduce((a, [, v]) => a + v, 0);
+    return `<tr><td>${esc(h.name)}<div class="muted sub">${esc(h.bom ? uploadNote(h.bom) : "BOM not recorded")}${h.bom && !h.bom_exists ? " (file gone)" : ""}</div></td>
+      <td class="mono small">${esc((h.finished || "").replace("T", " ").replace("+00:00", ""))}</td><td>${esc(h.user || "–")}</td><td>${esc(h.lines)}</td>
+      <td>${todo ? `<span class="pill s-warn">${todo} need work</span>` : '<span class="pill s-ok">all in library</span>'}</td>
+      <td><button class="small" data-open="${esc(h.id)}">Open</button></td></tr>`;
+  }).join("") || `<tr><td colspan="6" class="muted">No triages match.</td></tr>`;
+}
+$("#histq").addEventListener("input", renderHistory);
+$("#histreload").addEventListener("click", () => loadHistory().catch(e => banner($("#histerr"), e.message)));
+$("#histrows").addEventListener("click", async e => {
+  const id = e.target.dataset.open; if (!id || busy) return;
+  banner($("#histerr"), "");
+  try { showResult(await api("/api/triage/result?id=" + encodeURIComponent(id))); if (current.bom && info && info.boms.includes(current.bom)) $("#boms").value = current.bom; $("#results").scrollIntoView({ behavior: "smooth" }); }
+  catch (err) { banner($("#histerr"), err.message); }
+});
+
+// ---- Altium
+async function action(btn, out, fn) {
+  btn.disabled = true; const old = btn.textContent; btn.textContent = old + "…";
+  try { out.innerHTML = await fn(); } catch (e) { banner(out, e.message); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+$("#dblib").addEventListener("click", e => action(e.target, $("#dblibout"), async () => {
+  const r = await api("/api/export/dblib", { bom: current.bom });
+  return "Written: " + r.files.map(fileLink).join(" · ");
+}));
+$("#models").addEventListener("click", e => action(e.target, $("#modelsout"), async () => {
+  const r = await api("/api/altium/models", { bom: current.bom });
+  await loadInfo();
+  return `${r.footprints.length} footprint(s) as .PcbLib${r.footprints.length ? ": " + esc(r.footprints.join(", ")) : ""}. Symbols: ${esc(r.symbols.join(", ") || "none")}.` +
+    (r.skipped.length ? `<div class="muted">Not converted: ${esc(r.skipped.join("; "))}</div>` : "") +
+    `<div class="muted">Files are in <span class="mono">${esc(info.workspace)}/altium_models</span>.</div>`;
+}));
+let planned = null;
+$("#plan").addEventListener("click", e => action(e.target, $("#planout"), async () => {
+  planned = await api("/api/altium365/plan", { bom: current.bom });
+  $("#dry").disabled = false;
+  if (info.altium365.token) {
+    try {
+      const w = await api("/api/altium365/workspaces", {});
+      $("#wsurl").innerHTML = w.workspaces.map(x => `<option value="${esc(x.url)}">${esc(x.name)}</option>`).join("");
+      $("#wsurl").hidden = false; $("#push").disabled = !w.workspaces.length || !planned.ready;
+    } catch (err) { banner($("#planout"), "Couldn't list Altium 365 workspaces: " + err.message); }
+  }
+  const why = i => i.status === "held" ? "held: " + ((i.hold_reasons || [])[0] || "failed the release check") :
+    i.status === "awaiting_approval" ? "awaiting approval: " + (((i.approval || {}).missing || [])[0] || "not signed off") :
+    i.status === "duplicate" ? "duplicate of " + (i.duplicate_of || "?") :
+    !i.symbol.file && !i.footprint.file ? "needs symbol and footprint" : !i.symbol.file ? `needs symbol ${i.symbol.ref}.SchLib` : `needs footprint ${i.footprint.ref}.PcbLib`;
+  return `<strong>${planned.ready} of ${planned.total}</strong> parts ready to release${planned.source === "librarian" ? " (from Fill the library, after its release check)" : ""}. ${fileLink(planned.plan)}
+    <table style="margin-top:6px"><tbody>${planned.items.map(i => `<tr><td>${esc(i.name)}<div class="muted">${esc(i.folder)}</div></td>
+    <td>${i.status === "ready" ? '<span class="pill s-ok">ready</span>' : `<span class="pill s-warn">${esc(why(i))}</span>`}</td></tr>`).join("")}</tbody></table>`;
+}));
+$("#dry").addEventListener("click", e => action(e.target, $("#dryout"), async () => {
+  const r = await api("/api/altium365/push", { bom: current.bom, workspace: $("#wsurl").value || "", dry_run: true });
+  const n = a => r.results.filter(x => x.action === a).length;
+  return `Dry run, nothing sent: ${n("release")} would be released, ${n("skip")} skipped. Requests: ${fileLink(r.report)}`;
+}));
+$("#push").addEventListener("click", e => {
+  const ws = $("#wsurl").selectedOptions[0];
+  if (!ws || !confirm(`Release ${planned.ready} part(s) into the Altium 365 workspace "${ws.textContent}"? This creates real components there and updates parameters of parts that already exist.`)) return;
+  action(e.target, $("#dryout"), async () => {
+    const r = await api("/api/altium365/push", { bom: current.bom, workspace: ws.value, dry_run: false });
+    const bad = r.results.filter(x => x.action === "error");
+    return `Pushed: ${r.results.filter(x => x.action === "release").length} released, ${r.results.filter(x => x.action === "update_parameters").length} updated, ${bad.length} failed. Report: ${fileLink(r.report)}` +
+      (bad.length ? `<div class="muted">${bad.map(b => esc(b.name + ": " + b.detail)).join("<br>")}</div>` : "");
+  });
+});
+
+// ---- librarian
+let libbusy = false;
+async function librarian(refresh) {
+  if (libbusy || busy) return;
+  libbusy = true; $("#librun").disabled = $("#librerun").disabled = true; banner($("#libout"), "");
+  setBusy(true, "Filling the library…");
+  try {
+    const { job } = await api("/api/librarian/run", { bom: current.bom, refresh: refresh || null });
+    for (;;) {
+      await new Promise(r => setTimeout(r, 600));
+      const j = await api("/api/job?id=" + job);
+      if (j.total) setBusy(true, `Filling the library: part ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? " (" + j.label + ")" : ""}`, j.done / j.total);
+      if (j.state === "done") { showLibrarian(j.result); break; }
+      if (j.state === "error") throw new Error(j.error);
+    }
+  } catch (e) { banner($("#libout"), e.message); }
+  finally { libbusy = false; setBusy(false); $("#librun").disabled = $("#librerun").disabled = false; planned = null;
+            ["#planout", "#dryout"].forEach(s => $(s).innerHTML = ""); $("#dry").disabled = $("#push").disabled = true; }
+}
+function whyList(why) {
+  const items = (why || "").split("; ").filter(Boolean);
+  if (!items.length) return '<span class="muted">nothing</span>';
+  const li = a => a.map(t => `<li>${esc(t)}</li>`).join("");
+  return `<ul class="why">${li(items.slice(0, 3))}</ul>` +
+    (items.length > 3 ? `<details><summary class="muted">${items.length - 3} more</summary><ul class="why">${li(items.slice(3))}</ul></details>` : "");
+}
+function showLibrarian(r) {
+  $("#librerun").hidden = false;
+  $("#libtools").hidden = false;
+  const PILL = { ready: "s-ok", held: "s-warn", awaiting_approval: "s-info", duplicate: "s-off" };
+  const pill = x => `<span class="pill ${PILL[x.status] || "s-info"}">${x.status === "ready" && x.allowed ? "released by you" : x.status === "duplicate" ? "duplicate of " + esc(x.duplicate_of || "?") : esc(x.status.replace("_", " "))}</span>` +
+    (x.status === "held" || x.status === "duplicate" ? "" : x.approval && x.approval.required ? `<div class="muted sub">${x.approval.met ? "approved by " + esc(x.approval.approved_by.join(", ")) : "needs " + esc(x.approval.missing.join("; "))}</div>`
+      : x.approval && x.approval.approved_by.length ? `<div class="muted sub">approved by ${esc(x.approval.approved_by.join(", "))}</div>` : "");
+  const lib = can("librarian"), appr = can("approver");
+  const acts = x => `<div class="acts">` + (lib && x.status === "held" ? `<button class="small" data-pick="${esc(x.part)}">Pick…</button>` : "") +
+    (!lib ? "" : x.allowed ? `<button class="small" data-unallow="${esc(x.part)}">Hold again</button>` : x.status === "held" ? `<button class="small" data-allow="${esc(x.part)}">Release anyway…</button>` : "") +
+    (appr && (x.status === "ready" || x.status === "awaiting_approval") ? `<button class="small" data-approve="${esc(x.part)}">Approve</button><button class="small" data-reject="${esc(x.part)}">Reject…</button>` : "") + `</div>`;
+  const from = s => esc((s || "–").replace(/^(\w+):/, "$1 · "));
+  $("#libout").innerHTML = `<strong>${r.ready} of ${r.parts}</strong> parts ready for Altium 365, ${r.held} held` +
+    (r.awaiting_approval ? `, ${r.awaiting_approval} awaiting approval` : "") + (r.duplicates ? `, ${r.duplicates} duplicate(s)` : "") + `, ${r.needs_person} need a look. ` +
+    r.reports.map(fileLink).join(" · ") +
+    `<div class="scroll"><table style="margin-top:6px"><thead><tr><th>Part</th><th>Status</th><th>Symbol from</th><th>Footprint from</th><th>What needs a person</th><th></th></tr></thead><tbody>` +
+    r.review.map(x => `<tr><td class="mono">${esc(x.part)}</td><td>${pill(x)}</td><td class="small">${from(x.symbol_from)}</td><td class="small">${from(x.footprint_from)}</td>
+      <td class="small">${whyList(x.why)}</td>
+      <td>${acts(x)}</td></tr>`).join("") +
+    "</tbody></table></div>";
+}
+$("#librun").addEventListener("click", () => librarian(null));
+$("#librerun").addEventListener("click", () => { if (confirm("Look up every part again, including the ones already finished?")) librarian(true); });
+$("#libout").addEventListener("click", async e => {
+  const d = e.target.dataset;
+  if (d.pick) return openPick(d.pick);
+  if (d.approve || d.reject) return decide(d.approve || d.reject, d.approve ? "approve" : "reject", e.target);
+  const a = d.allow, u = d.unallow;
+  if (!a && !u) return;
+  const row = a && e.target.closest("tr");
+  const why = row ? row.children[4].textContent : "";
+  if (a && !confirm(`Release ${a} to Altium 365 even though it failed these checks?\n\n${why}\n\nOnly do this if you have checked the part yourself. It is recorded in the plan.`)) return;
+  e.target.disabled = true;
+  try { showLibrarian(await api("/api/release-check", { bom: current.bom, allow: a ? [a] : [], unallow: u ? [u] : [], user: session.team ? null : $("#signer").value.trim() || null })); }
+  catch (err) { banner($("#libout"), err.message); }
+});
+
+// ---- held parts: pick a candidate
+const pickdlg = $("#pickdlg");
+let picking = null, pickbusy = false;
+function openPick(part) {
+  picking = part; $("#pickkind").value = ""; $("#picktitle").textContent = `Pick a symbol or footprint for ${part}`;
+  $("#pickinfo").innerHTML = ""; $("#picklist").innerHTML = ""; banner($("#pickerr"), "");
+  pickdlg.showModal(); loadCandidates();
+}
+async function loadCandidates() {
+  if (pickbusy || !picking) return;
+  pickbusy = true; $("#pickbusy").hidden = false; $("#pickbar").style.width = "0"; $("#picklist").innerHTML = ""; banner($("#pickerr"), "");
+  try {
+    const { job } = await api("/api/resolve/candidates", { bom: current.bom, part: picking, kind: $("#pickkind").value || null });
+    for (;;) {
+      await new Promise(r => setTimeout(r, 400));
+      const j = await api("/api/job?id=" + job);
+      if (j.total) { $("#pickbusytext").textContent = `Looking for ${j.label}…`; $("#pickbar").style.width = `${Math.round(j.done / j.total * 100)}%`; }
+      if (j.state === "done") { showCandidates(j.result); break; }
+      if (j.state === "error") throw new Error(j.error);
+    }
+  } catch (e) { banner($("#pickerr"), e.message); }
+  finally { pickbusy = false; $("#pickbusy").hidden = true; }
+}
+const pinMapText = m => Object.entries(m || {}).map(([a, b]) => `${a} → ${b}`).join(", ");
+function showCandidates(r) {
+  const it = r.item, cmp = it.pins_vs_pads;
+  $("#pickinfo").innerHTML = `<div><span class="pill s-warn">${esc(it.status)}</span> ${esc(it.description || "")} <span class="muted">(${esc(it.folder)})</span></div>` +
+    `<div class="muted" style="margin-top:4px">Symbol: ${esc(it.symbol.source || "none")}${it.symbol.pins ? ` (${it.symbol.pins.length} pins)` : ""} · Footprint: ${esc(it.footprint.source || "none")}${it.footprint.pads ? ` (${new Set(it.footprint.pads).size} pads)` : ""}` +
+    (cmp && !cmp.match ? ` · pins without pad: ${esc(cmp.pins_without_pad.join(", ") || "–")}, pads without pin: ${esc(cmp.pads_without_pin.join(", ") || "–")}` : "") + `</div>` +
+    (it.hold_reasons.length ? `<ul class="why" style="margin-top:4px">${it.hold_reasons.map(h => `<li>${esc(h)}</li>`).join("")}</ul>` : "");
+  $("#picklist").innerHTML = Object.entries(r.candidates).map(([kind, cs]) => `<h3 style="font-size:14px;margin:14px 0 4px">${kind === "symbol" ? "Symbols" : "Footprints"}</h3>` +
+    (cs.length ? `<div class="scroll"><table><thead><tr><th>Candidate</th><th>Why</th><th>${kind === "symbol" ? "Pins" : "Pads"}</th><th>Match</th><th>Suggested pin map</th><th></th></tr></thead><tbody>` +
+    cs.map((c, i) => `<tr><td class="mono">${esc(c.id)}${c.current ? ' <span class="pill s-info">current</span>' : ""}<div class="muted sub">score ${c.score}</div></td>
+      <td>${whyList(c.why.join("; "))}${c.error ? `<div class="s-bad sub">${esc(c.error)}</div>` : ""}</td>
+      <td>${c.count ?? "?"}</td>
+      <td>${c.match === true ? '<span class="pill s-ok">yes</span>' : c.match === false ? '<span class="pill s-warn">no</span>' +
+        `<div class="muted sub">${c.pins_without_pad.length ? "pins without pad: " + esc(c.pins_without_pad.join(", ")) : ""}${c.pads_without_pin.length ? " pads without pin: " + esc(c.pads_without_pin.join(", ")) : ""}</div>` : '<span class="muted">?</span>'}</td>
+      <td>${c.pin_map ? `<label class="field"><input type="checkbox" data-usemap="${kind}:${i}" checked> <span class="mono">${esc(pinMapText(c.pin_map))}</span></label>` : '<span class="muted">–</span>'}</td>
+      <td><button class="small${c.match ? " primary" : ""}" data-choose="${kind}:${i}" ${c.error ? "disabled" : ""}>Choose</button></td></tr>`).join("") +
+    `</tbody></table></div>` : `<div class="muted">No ${kind} candidates found. Try the other half, or add a library with --lib.</div>`)).join("");
+  showCandidates.last = r;
+}
+$("#pickkind").addEventListener("change", loadCandidates);
+$("#pickclose").addEventListener("click", () => pickdlg.close());
+$("#picklist").addEventListener("click", async e => {
+  const k = e.target.dataset.choose;
+  if (!k) return;
+  const [kind, i] = k.split(":"), c = showCandidates.last.candidates[kind][+i];
+  const use = $(`#picklist [data-usemap="${kind}:${i}"]`);
+  const pin_map = c.pin_map && use && use.checked ? c.pin_map : null;
+  e.target.disabled = true; banner($("#pickerr"), "");
+  try {
+    const r = await api("/api/resolve/choose", { bom: current.bom, part: picking, kind, id: c.id, pin_map });
+    showLibrarian(r); pickdlg.close();
+    toast(`${r.chosen.name}: ${kind} ← ${c.id}; now ${r.chosen.status}` + (r.chosen.hold_reasons.length ? ` (${r.chosen.hold_reasons[0]})` : ""));
+  } catch (err) { banner($("#pickerr"), err.message); e.target.disabled = false; }
+});
+
+// ---- sign-off and duplicates
+const store = { get(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } },
+                set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+$("#signer").value = store.get("ecadlib.signer"); $("#signrole").value = store.get("ecadlib.role");
+$("#signer").addEventListener("change", e => store.set("ecadlib.signer", e.target.value.trim()));
+$("#signrole").addEventListener("change", e => store.set("ecadlib.role", e.target.value.trim()));
+function signer() {
+  if (session.team) return session.user.identity;
+  const who = $("#signer").value.trim();
+  if (!who) { banner($("#approut"), "Type your name first: it is recorded with your decision. There is no login, so nothing fills it in for you."); $("#signer").focus(); }
+  return who;
+}
+async function decide(part, decision, btn) {
+  const who = signer(); if (!who) return;
+  let comment = "";
+  if (decision === "reject") { comment = prompt(`What is wrong with ${part}? (required for a reject)`) || ""; if (!comment.trim()) return; }
+  btn.disabled = true;
+  try {
+    const role = session.team ? $("#signas").value || null : $("#signrole").value.trim() || null;
+    const r = await api("/api/approvals/decide", session.team ? { bom: current.bom, part, decision, role, comment } : { bom: current.bom, part, decision, user: who, role, comment });
+    showLibrarian(r); banner($("#approut"), "");
+    toast(`${decision === "approve" ? "Approved" : "Rejected"} ${part} as ${who}; now ${r.decision.status}` + (r.decision.enforced ? "" : " (no approvals.json: recorded, not enforced)"));
+  } catch (err) { banner($("#approut"), err.message); btn.disabled = false; }
+}
+$("#apprstatus").addEventListener("click", e => action(e.target, $("#approut"), async () => {
+  const r = await api("/api/approvals/status", { bom: current.bom });
+  return (r.policy_file ? `Policy ${fileLink(r.policy_file)}: ${r.awaiting_approval} part(s) awaiting approval.`
+    : "No approvals.json next to the plan: decisions are recorded, but Altium 365 push does not wait for them.") +
+    (r.audit ? ` Log: ${fileLink(r.audit)}` : "") +
+    `<div class="scroll"><table style="margin-top:6px"><thead><tr><th>Part</th><th>Status</th><th>Needs sign-off</th><th>Approved by</th><th>Missing</th><th>Stale</th></tr></thead><tbody>` +
+    r.rows.map(x => `<tr><td class="mono">${esc(x.name)}</td><td>${esc(x.status)}</td><td>${esc(x.needs_signoff || "–")}</td><td>${esc(x.approved_by || "–")}</td><td>${esc(x.missing || "–")}</td><td class="muted">${esc(x.stale || "")}</td></tr>`).join("") +
+    "</tbody></table></div>";
+}));
+function showDupes(r) {
+  const plan = r.mapping.filter(m => m.parts).length;
+  const who = m => `<span class="mono">${esc(m.name)}</span> <span class="muted">(${esc(m.origin)}${m.used_by ? ", used by " + esc(m.used_by.join(", ")) : ""})</span>`;
+  return (r.groups.length ? `<strong>${r.groups.length}</strong> duplicate group(s). ` : "No duplicates found. ") + r.reports.map(fileLink).join(" · ") +
+    (r.groups.length ? `<div class="scroll"><table style="margin-top:6px"><thead><tr><th>Kind</th><th>Keep</th><th>Duplicates</th></tr></thead><tbody>` +
+      r.groups.map(g => { const k = g.members.find(m => m.name === g.keeper);
+        return `<tr><td>${esc(g.kind.replace("_", " "))}${g.kind === "mpn" ? `<div class="muted sub mono">${esc(g.key)}</div>` : ""}</td><td>${k ? who(k) : '<span class="muted">same name, different content: pick by hand</span>'}</td>
+        <td>${g.members.filter(m => m.name !== g.keeper).map(who).join("<br>")}</td></tr>`; }).join("") + "</tbody></table></div>" : "") +
+    (r.errors.length ? `<div class="muted">Could not read: ${esc(r.errors.join("; "))}</div>` : "") +
+    (r.merged ? `<div>Merged: ${plan} plan reference(s) now point at their keeper; the old plan is kept as plan.json.pre-dedupe. Library files were not changed.</div>`
+      : plan ? `<div class="row" style="margin-top:6px"><button class="small danger" id="dedupemerge">Merge ${plan} plan reference(s) into the keepers…</button><span class="muted">Library files are never changed.</span></div>` : "");
+}
+$("#dedupe").addEventListener("click", e => action(e.target, $("#dedupeout"), async () => showDupes(await api("/api/dedupe", { bom: current.bom }))));
+$("#dedupeout").addEventListener("click", e => {
+  if (e.target.id !== "dedupemerge" || !confirm("Point the duplicate parts, footprints and symbols in the plan at their keepers? Duplicate parts are then skipped by the Altium 365 push, and approvals of changed parts go stale.")) return;
+  action(e.target, $("#dedupeout"), async () => { const r = await api("/api/dedupe", { bom: current.bom, merge: true }); showLibrarian(r.summary); return showDupes(r); });
+});
+
+// ---- footprint dialog
+const dlg = $("#dlg");
+async function loadSpecs() {
+  specs = await api("/api/specs");
+  $("#example").innerHTML = '<option value="">Start from an example…</option>' + Object.keys(specs).map(k => `<option>${esc(k)}</option>`).join("");
+}
+const norm = s => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+function guessSpec(row) {
+  const pkg = norm(row && row.package);
+  if (!pkg) return null;
+  const hits = Object.keys(specs).filter(k => norm(k).includes(pkg));
+  const cls = (row.designator.match(/^[A-Z]/i) || [""])[0].toUpperCase();
+  return hits.find(k => k.toUpperCase().startsWith(cls + "_")) || hits.find(k => !/^[RCL]_/.test(k)) || null;
+}
+const placeholder = '<span class="muted small">No example matches this package, so these values are placeholders. Replace them with the dimensions from the datasheet drawing, then Preview.</span>';
+function openGen(row) {
+  $("#dlgtitle").textContent = row ? `Generate footprint for ${row.designator} (${row.mpn || row.value})` : "Generate footprint";
+  const g = guessSpec(row);
+  const tmpl = g ? specs[g] : { name: row ? (row.package || row.mpn || "MyPackage") : "MyPackage", description: row ? `${row.manufacturer} ${row.mpn}`.trim() : "",
+    package_type: "gullwing", pin_count: 8, pitch: 1.27, lead_span: { min: 5.8, max: 6.2 }, body_width: { min: 3.8, max: 4.0 },
+    body_length: { min: 4.8, max: 5.0 }, terminal_length: { min: 0.4, max: 1.27 }, terminal_width: { min: 0.31, max: 0.51 },
+    density: "B", source: { datasheet: "" } };
+  $("#spec").value = JSON.stringify(tmpl, null, 2); $("#example").value = g || "";
+  $("#preview").innerHTML = g ? "" : placeholder; $("#nums").innerHTML = ""; banner($("#dlgerr"), "");
+  $("#approve").disabled = true; dlg.showModal(); if (g) preview();
+}
+$("#newfp").addEventListener("click", () => openGen(null));
+$("#close").addEventListener("click", () => dlg.close());
+$("#example").addEventListener("change", e => { if (specs[e.target.value]) { $("#spec").value = JSON.stringify(specs[e.target.value], null, 2); preview(); } });
+$("#density").addEventListener("change", preview);
+$("#spec").addEventListener("input", () => { $("#approve").disabled = true; });
+$("#previewbtn").addEventListener("click", preview);
+function readSpec() {
+  try { return JSON.parse($("#spec").value); } catch (e) { throw new Error("The dimensions aren't valid JSON: " + e.message); }
+}
+async function preview() {
+  banner($("#dlgerr"), "");
+  try {
+    const r = await api("/api/footprint/preview", { spec: readSpec(), density: $("#density").value || null });
+    $("#preview").innerHTML = r.svg;
+    const rep = r.report, f = x => typeof x === "number" ? x.toFixed(2) : x;
+    const items = [["IPC family", rep.ipc_family], ["density", rep.density], ["Z", f(rep.Z)], ["G", f(rep.G)], ["X", f(rep.X)],
+      ["pads", rep.pads.length], ["courtyard", rep.courtyard.map(f).join(" × ")], ["pad 1", `${f(rep.pads[0].w)} × ${f(rep.pads[0].h)}`]];
+    if (rep.EP) items.push(["EP", `${rep.EP[0]} × ${rep.EP[1]}`]);
+    $("#nums").innerHTML = items.map(([k, v]) => `<div><span class="muted">${k}</span><br>${esc(v)}</div>`).join("") +
+      (rep.warning ? `<div class="s-warn" style="grid-column:1/-1">⚠ ${esc(rep.warning)}</div>` : "") +
+      (rep.checks || []).map(c => `<div class="${c.level === "error" ? "s-bad" : "s-warn"}" style="grid-column:1/-1">${c.level === "error" ? "✖" : "⚠"} ${esc(c.rule)}: ${esc(c.message)}</div>`).join("") +
+      (rep.checks && !rep.checks.length ? `<div class="s-ok" style="grid-column:1/-1">✓ Passes the copper, silkscreen, fab and courtyard checks</div>` : "") +
+      (r.exists ? `<div class="s-info" style="grid-column:1/-1">A footprint called ${esc(r.name)} is already in the workspace library; approving will ask before replacing it.</div>` : "");
+    $("#approve").disabled = false;
+  } catch (e) { banner($("#dlgerr"), e.message); $("#approve").disabled = true; }
+}
+async function approve(overwrite) {
+  const r = await api("/api/footprint/approve", { spec: readSpec(), density: $("#density").value || null, overwrite });
+  dlg.close(); toast(`Saved ${r.name}: ${r.files.map(f => f.split(".").pop()).join(" + ")}` + (r.warnings.length ? ` (${r.warnings.join("; ")})` : ""));
+  loadInfo();
+  if (current && current.bom) runJob(api("/api/triage", { bom: current.bom }), current.bom);
+}
+$("#approve").addEventListener("click", async () => {
+  try { await approve(false); }
+  catch (e) {
+    if (e.status === 409 && confirm(e.message.replace("; approve again with overwrite to replace it", ".") + "\n\nReplace it?")) {
+      try { await approve(true); } catch (e2) { banner($("#dlgerr"), e2.message); }
+    } else if (e.status !== 409) banner($("#dlgerr"), e.message);
+  }
+});
+
+// ---- library rules (setup)
+let rulesProp = null;
+async function loadRules() {
+  const r = await api("/api/rules");
+  $("#rulesstate").textContent = r.exists
+    ? `Using ${r.file}: new parts follow its naming, parameters, folders, layers and footprint density.`
+    : "No rules file yet, so ecadlib uses its own conventions. Scan your existing libraries and ecadlib proposes rules that make new parts match them.";
+  $("#rulesscan").textContent = r.exists ? "Re-scan…" : "Set up from my libraries…";
+}
+$("#rulesscan").addEventListener("click", () => { $("#rulesform").hidden = !$("#rulesform").hidden; });
+async function proposeRules(choices) {
+  const paths = $("#rulespaths").value.split("\n").map(x => x.trim()).filter(Boolean);
+  $("#rulesgo").disabled = $("#rulesapply").disabled = true; $("#rulesbusy").hidden = false; $("#rulesdiff").innerHTML = "";
+  try {
+    const { job } = await api("/api/rules/propose", { paths, choices: choices || {} });
+    for (;;) {
+      await new Promise(r => setTimeout(r, 400));
+      const j = await api("/api/job?id=" + job);
+      if (j.state === "done") { rulesProp = j.result; showRules(); break; }
+      if (j.state === "error") throw new Error(j.error);
+    }
+  } catch (e) { banner($("#rulesout"), e.message); }
+  finally { $("#rulesgo").disabled = $("#rulesapply").disabled = false; $("#rulesbusy").hidden = true; }
+}
+$("#rulesgo").addEventListener("click", () => proposeRules());
+function showRules() {
+  const p = rulesProp, qs = Object.fromEntries(p.questions.map(q => [q.key, q]));
+  const val = v => typeof v === "string" ? v : JSON.stringify(v);
+  const lvl = { high: "s-ok", medium: "s-warn", low: "s-bad" };
+  const scanned = Object.entries(p.scanned).map(([k, v]) => `${v} ${k}`).join(", ") || "nothing ecadlib can read";
+  const rows = p.settings.map(s => `<tr><td class="mono">${esc(s.key)}</td><td>${qs[s.key]
+      ? `<select data-key="${esc(s.key)}" aria-label="${esc(qs[s.key].text)}">${qs[s.key].choices.map(c => `<option${c === s.value ? " selected" : ""}>${esc(c)}</option>`).join("")}</select><div class="muted sub">${esc(qs[s.key].text)}</div>`
+      : `<span class="mono">${esc(val(s.value))}</span>`}</td>
+    <td><span class="pill ${lvl[s.level]}">${esc(s.level)} ${Math.round(s.confidence * 100)}%</span></td>
+    <td class="notes">${esc(s.source)}<ul class="why">${s.evidence.slice(0, 3).map(e => `<li>${esc(e)}</li>`).join("")}</ul></td></tr>`).join("");
+  $("#rulesout").innerHTML = `<div>Scanned ${esc(scanned)}: ${p.components} parts, ${p.footprints} footprints, ${p.boms} BOMs.` +
+    (p.questions.length ? ` <strong>${p.questions.length} setting(s) had split evidence</strong>: pick below, then Apply my answers.` : "") + `</div>` +
+    (p.warnings.length ? `<div class="muted small">${p.warnings.slice(0, 5).map(esc).join("<br>")}</div>` : "") +
+    (p.errors.length ? `<div class="banner s-bad">${p.errors.map(esc).join("<br>")}</div>` : "") +
+    (rows ? `<div class="tablewrap"><table style="margin-top:6px"><thead><tr><th>Setting</th><th>Proposed</th><th>Confidence</th><th>Evidence</th></tr></thead><tbody>${rows}</tbody></table></div>`
+          : `<div class="muted">Nothing to infer from these files. Add your Altium or KiCad library folders above.</div>`);
+  $("#rulestoml").value = p.toml; $("#rulesfile").hidden = !rows; $("#rulesapply").hidden = !p.questions.length; $("#rulesreplace").hidden = true;
+  $("#rulesdiff").innerHTML = p.diff ? `<div class="muted small" style="margin-top:8px">Changes against your current ${esc(p.file)}:</div><pre class="diff">${esc(p.diff)}</pre>` : "";
+}
+$("#rulesapply").addEventListener("click", () => {
+  const ch = {}; document.querySelectorAll("#rulesout select[data-key]").forEach(x => ch[x.dataset.key] = x.value); proposeRules(ch);
+});
+async function saveRules(overwrite) {
+  try {
+    const r = await api("/api/rules/save", { text: $("#rulestoml").value, overwrite });
+    if (r.needs_confirm) {
+      $("#rulesdiff").innerHTML = `<div class="banner s-warn"><span>${esc(r.path)} already exists and differs. Nothing was written. Review the changes, then replace it (the old file is kept as .bak).</span></div><pre class="diff">${esc(r.diff)}</pre>`;
+      $("#rulesreplace").hidden = false; return;
+    }
+    $("#rulesreplace").hidden = true;
+    toast(r.unchanged ? "No changes: the file already says this." : `Saved ${r.path}` + (r.backup ? ` (old file: ${r.backup})` : ""));
+    $("#rulesdiff").innerHTML = ""; await loadRules(); await loadInfo();
+  } catch (e) { banner($("#rulesdiff"), e.message); }
+}
+$("#rulessave").addEventListener("click", () => saveRules(false));
+$("#rulesreplace").addEventListener("click", () => saveRules(true));
+
+// ---- team mode: sign-in, user menu, roles, users page
+function applyRoles() {
+  document.querySelectorAll("[data-role]").forEach(el => { if (can(el.dataset.role)) el.removeAttribute("data-role-hidden"); else el.setAttribute("data-role-hidden", ""); });
+  const t = session.team, u = session.user;
+  $("#usermenu").hidden = !t || !u;
+  if (!t || !u) return;
+  $("#whoami").textContent = `${u.name || u.username} · ${u.role}`;
+  $("#pwbtn").hidden = session.proxy; $("#logout").hidden = session.proxy;
+  $("#signerwrap").hidden = $("#signrolewrap").hidden = true;
+  $("#signaswrap").hidden = u.sign_as.length < 2;
+  $("#signas").innerHTML = u.sign_as.map(r => `<option>${esc(r)}</option>`).join("");
+  $("#signedas").hidden = false; $("#signedas").textContent = `Signing as ${u.identity}` + (u.sign_as.length < 2 ? ` (${u.sign_as[0]})` : "");
+  $("#signnote").textContent = "You are signed in: approvals, rejections and release overrides are recorded under your account, in the plan, in approvals_audit.jsonl and in the team audit log. You cannot approve a part you released with Release anyway. Sign-off is enforced only when an approvals.json sits next to the plan.";
+}
+function showSignin(msg) {
+  session = { team: true, user: null };
+  $("#app").hidden = true; $("#usermenu").hidden = true; $("#signin").hidden = false;
+  $("#meta").textContent = "team server";
+  banner($("#signinerr"), msg || "", "s-warn");
+  $("#login_user").focus();
+}
+$("#signinform").addEventListener("submit", async e => {
+  e.preventDefault(); $("#signinbtn").disabled = true; banner($("#signinerr"), "");
+  try {
+    session = await api("/api/login", { username: $("#login_user").value.trim(), password: $("#login_pw").value });
+    $("#login_pw").value = ""; startApp();
+  } catch (err) { banner($("#signinerr"), err.message); }
+  finally { $("#signinbtn").disabled = false; }
+});
+$("#logout").addEventListener("click", async () => { try { await api("/api/logout", {}); } catch (e) {} location.reload(); });
+// password dialog: own password (current + new) or an admin resetting someone else's (new only)
+const pwdlg = $("#pwdlg"); let pwFor = null;
+function openPw(user) {
+  pwFor = user; $("#pwtitle").textContent = user ? `New password for ${user}` : "Change your password";
+  $("#pwcurwrap").hidden = !!user; ["#pwcur", "#pwnew", "#pwnew2"].forEach(s => $(s).value = ""); banner($("#pwerr"), "");
+  pwdlg.showModal();
+}
+$("#pwbtn").addEventListener("click", () => openPw(null));
+$("#pwcancel").addEventListener("click", e => { e.preventDefault(); pwdlg.close(); });
+$("#pwform").addEventListener("submit", async e => {
+  e.preventDefault();
+  if ($("#pwnew").value !== $("#pwnew2").value) return banner($("#pwerr"), "The two new passwords differ.");
+  try {
+    if (pwFor) { showUsers(await api("/api/team/users", { action: "reset-password", username: pwFor, password: $("#pwnew").value })); toast(`Password reset for ${pwFor}; their sessions have ended.`); }
+    else { session = await api("/api/account/password", { current: $("#pwcur").value, new: $("#pwnew").value }); toast("Password changed. Your other sessions have ended."); }
+    pwdlg.close();
+  } catch (err) { banner($("#pwerr"), err.message); }
+});
+// users page (admin)
+function showUsers(r) {
+  const roles = r.roles.map(x => `<option>${esc(x)}</option>`).join("");
+  $("#addrole").innerHTML = roles;
+  $("#teamrows").innerHTML = r.users.map(u => `<tr data-user="${esc(u.username)}"><td class="mono">${esc(u.username)}${u.username === r.me ? ' <span class="pill s-info">you</span>' : ""}</td>
+    <td>${esc(u.name || "–")}<div class="muted sub">${esc(u.email || "")}</div></td>
+    <td><select data-f="role" aria-label="Role of ${esc(u.username)}">${r.roles.map(x => `<option${x === u.role ? " selected" : ""}>${esc(x)}</option>`).join("")}</select></td>
+    <td><input type="text" data-f="sign_as" size="16" value="${esc((u.sign_as || []).join(", "))}" placeholder="${esc(u.role)}" aria-label="Approval roles of ${esc(u.username)}"></td>
+    <td class="small">${u.password ? "password" : "SSO proxy only"}${r.locked.includes(u.username) ? ' <span class="pill s-bad">locked</span>' : ""}</td>
+    <td><div class="acts"><button class="small" data-act="set-role">Save</button><button class="small" data-act="reset-password">Reset password…</button>` +
+    (r.locked.includes(u.username) ? `<button class="small" data-act="unlock">Unlock</button>` : "") +
+    (u.username === r.me ? "" : `<button class="small danger" data-act="remove">Remove…</button>`) + `</div></td></tr>`).join("");
+}
+async function openTeam() {
+  $("#teamcard").hidden = false; banner($("#teamerr"), ""); $("#auditout").innerHTML = "";
+  try { showUsers(await api("/api/team/users")); } catch (e) { banner($("#teamerr"), e.message); }
+  $("#teamcard").scrollIntoView({ behavior: "smooth" });
+}
+$("#teambtn").addEventListener("click", openTeam);
+$("#teamclose").addEventListener("click", () => { $("#teamcard").hidden = true; });
+$("#teamrows").addEventListener("click", async e => {
+  const act = e.target.dataset.act; if (!act) return;
+  const tr = e.target.closest("tr"), username = tr.dataset.user;
+  if (act === "reset-password") return openPw(username);
+  if (act === "remove" && !confirm(`Remove ${username}? They are signed out at once. Their past approvals stay in the plans and logs.`)) return;
+  const body = { action: act, username };
+  if (act === "set-role") { body.role = tr.querySelector("[data-f=role]").value; body.sign_as = tr.querySelector("[data-f=sign_as]").value; }
+  try { showUsers(await api("/api/team/users", body)); banner($("#teamerr"), ""); toast(`${username}: ${act.replace("-", " ")} done`); }
+  catch (err) { banner($("#teamerr"), err.message); }
+});
+$("#adduser").addEventListener("submit", async e => {
+  e.preventDefault(); const f = new FormData(e.target), body = { action: "add" };
+  for (const [k, v] of f.entries()) body[k] = String(v).trim() ? v : "";
+  try { showUsers(await api("/api/team/users", body)); e.target.reset(); toast(`Added ${body.username}`); banner($("#teamerr"), ""); }
+  catch (err) { banner($("#teamerr"), err.message); }
+});
+$("#auditbtn").addEventListener("click", e => action(e.target, $("#auditout"), async () => {
+  const r = await api("/api/team/audit");
+  return `<div class="scroll"><table style="margin-top:10px"><thead><tr><th>When (UTC)</th><th>User</th><th>Route</th><th>Result</th><th>Details</th><th>From</th></tr></thead><tbody>` +
+    r.entries.map(x => { const { ts, user, route, status, ip, ...rest } = x;
+      return `<tr><td class="mono">${esc(ts)}</td><td>${esc(user || "–")}</td><td class="mono">${esc(route)}</td><td><span class="pill ${status < 300 ? "s-ok" : status < 500 ? "s-warn" : "s-bad"}">${esc(status)}</span></td>
+      <td class="small mono">${esc(Object.entries(rest).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join(" "))}</td><td class="muted small">${esc(ip)}</td></tr>`; }).join("") +
+    `</tbody></table></div>`;
+}));
+
+// ---- review queue (library agent)
+const QSTATE = { detected: "s-info", building: "s-off", proving: "s-info", review: "s-warn", approved: "s-ok", pushed: "s-ok", failed: "s-bad", rejected: "s-bad" };
+const QVERDICT = { pass: "s-ok", doubt: "s-warn", fail: "s-bad", skipped: "s-off" };
+let qfilter = "", qopen = null, qtoken = null;
+const pill = (t, cls) => `<span class="pill ${cls || "s-off"}">${esc(t)}</span>`;
+const safeUrl = u => /^https:\/\/[^\s"'<>]+$/.test(u || "") ? u : null;
+const picUrl = p => "/api/agent/queue/picture?path=" + encodeURIComponent(p);
+async function loadQueue() {
+  const b = $("#qbatch").value;
+  const r = await api("/api/agent/queue?" + new URLSearchParams({ status: qfilter, batch: b }));
+  const total = Object.values(r.counts).reduce((a, x) => a + x, 0);
+  $("#qchips").innerHTML = `<span class="chip s-off${qfilter ? "" : " active"}" data-s="">All ${total}</span>` +
+    r.states.filter(s => r.counts[s]).map(s => `<span class="chip ${QSTATE[s]}${qfilter === s ? " active" : ""}" data-s="${esc(s)}">${esc(s)} ${r.counts[s]}</span>`).join("");
+  $("#qbatch").innerHTML = `<option value="">All batches</option>` + r.batches.map(x => `<option value="${esc(x.id)}">${esc(x.id)} (${x.count}, ${esc(x.status)})</option>`).join("");
+  $("#qbatch").value = r.batches.some(x => x.id === b) ? b : "";
+  const bt = r.batch;
+  $("#qbatchinfo").innerHTML = bt ? `<div class="signoff" style="margin:0 0 10px">Batch <span class="mono">${esc(bt.id)}</span> · ${pill(bt.status || "open", "s-info")} · ${esc(bt.items.length)} item(s) · created ${esc(bt.created)}` +
+    (safeUrl(bt.pr_url) ? ` · <a href="${esc(bt.pr_url)}" target="_blank" rel="noopener noreferrer">pull request</a>` : bt.pr_url ? ` · PR ${esc(bt.pr_url)}` : " · no pull request yet") + `</div>` : "";
+  $("#qrows").innerHTML = r.items.map(it => `<tr data-id="${esc(it.id)}"${it.id === qopen ? ' class="sel"' : ""}>
+    <td><strong>${esc(it.mpn)}</strong><div class="muted sub">${esc(it.manufacturer || "–")} · ${esc(it.origin)}</div></td>
+    <td>${esc(it.kind || "–")}<div class="muted sub">${esc(it.source)}</div></td>
+    <td>${pill(it.status, QSTATE[it.status])}</td>
+    <td>${it.verdict ? pill(it.verdict, QVERDICT[it.verdict]) : '<span class="muted">–</span>'}${it.findings ? `<div class="muted sub">${esc(it.findings)} finding(s)</div>` : ""}</td>
+    <td class="mono">${esc(it.batch || "–")}</td><td class="mono small">${esc(it.updated)}</td>
+    <td><button class="small" data-open="${esc(it.id)}">Open</button></td></tr>`).join("");
+  $("#qwrap").hidden = !r.items.length; $("#qempty").hidden = !!r.items.length;
+  $("#qempty").textContent = total ? "No items match this filter." : "Nothing in the queue. The library agent adds parts here when a watched project or BOM changes.";
+}
+function kv(obj, keys) {
+  const rows = keys.filter(k => obj && obj[k] !== undefined && obj[k] !== null && obj[k] !== "" && !(Array.isArray(obj[k]) && !obj[k].length))
+    .map(k => `<dt>${esc(k)}</dt><dd>${esc(Array.isArray(obj[k]) ? obj[k].join(", ") : typeof obj[k] === "object" ? JSON.stringify(obj[k]) : obj[k])}</dd>`);
+  return rows.length ? `<dl class="kv">${rows.join("")}</dl>` : '<div class="muted small">–</div>';
+}
+function figure(title, paths) {
+  const imgs = (paths || []).map(p => p ? `<img src="${esc(picUrl(p))}" alt="${esc(title)}: ${esc(p.split("/").pop())}" loading="lazy">` : '<div class="muted small">(a picture outside the agent folder is not shown)</div>').join("");
+  return `<figure><figcaption>${esc(title)}</figcaption>${imgs || '<div class="muted small">none</div>'}</figure>`;
+}
+function showQueueItem(r) {
+  qtoken = r.build_token || null;
+  const it = r.item, ch = it.change || {}, b = it.build || {}, p = it.proof, pics = r.pictures, allowed = r.allowed;
+  const line = ch.line || {}, was = ch.was || {};
+  const lineKeys = [...new Set([...Object.keys(line), ...Object.keys(was)])];
+  const diff = lineKeys.length ? `<div class="scroll"><table><thead><tr><th>Field</th><th>Before</th><th>Now</th></tr></thead><tbody>` +
+    lineKeys.map(k => `<tr><td class="muted">${esc(k)}</td><td>${esc(was[k] ?? "")}</td><td${k in was && String(was[k] ?? "") !== String(line[k] ?? "") ? ' class="s-warn"' : ""}>${esc(line[k] ?? "")}</td></tr>`).join("") + `</tbody></table></div>` : "";
+  const findings = p && (p.findings || []).length ? `<div class="scroll"><table><thead><tr><th>Severity</th><th>What</th><th>Expected</th><th>Found</th><th>Page</th></tr></thead><tbody>` +
+    p.findings.map(f => `<tr><td>${pill(f.severity, { error: "s-bad", warning: "s-warn", info: "s-info" }[f.severity])}</td><td>${esc(f.what)}</td><td>${esc(f.expected)}</td><td>${esc(f.found)}</td><td>${esc(f.page ?? "")}</td></tr>`).join("") + `</tbody></table></div>` : "";
+  const canApprove = allowed.includes("approved") && it.status === "review" && can("approver");
+  const canReject = allowed.includes("rejected") && can("librarian");
+  const canRebuild = (it.status === "review" || it.status === "failed" || it.status === "rejected") && can("librarian");
+  const signer = session.team ? `<span class="small">Deciding as ${esc(session.user.identity)}</span>` :
+    `<label class="field small">Your name <input type="text" id="qsigner" placeholder="Ann Lee &lt;ann@example.com&gt;" size="28" value="${esc($("#signer").value)}"></label>`;
+  $("#qview").innerHTML = `
+    <div class="row spread"><div><strong>${esc(it.mpn)}</strong> <span class="muted">${esc(it.manufacturer || "")}</span> ${pill(it.status, QSTATE[it.status])}
+      <div class="muted small mono">${esc(it.id)} · key ${esc(it.key)} · ${esc(it.origin)}</div></div><button class="small" id="qclose">Close</button></div>
+    <h3>What triggered it</h3>
+    ${kv({ kind: ch.kind || ch.check, source: ch.source ? `${ch.source.type || ""} ${ch.source.name || ch.source.ref || ""}`.trim() : "", detected: ch.detected, what: ch.what || ch.summary, detail: ch.detail }, ["kind", "source", "detected", "what", "detail"])}
+    ${diff}
+    <h3>Build</h3>
+    ${kv(b, ["bom", "part", "user", "sources", "notes", "files", "requested_by", "requested_at", "request_note", "error"])}
+    <h3>Proof ${p ? pill(p.verdict, QVERDICT[p.verdict]) : ""}${p && p.score != null ? ` <span class="muted small">score ${esc(p.score)}</span>` : ""}</h3>
+    ${p ? `<div class="small">${esc(p.reason || "")}</div>${p.model ? `<div class="muted small">${esc(p.model)}${p.cost_usd != null ? ` · $${esc(p.cost_usd)}` : ""}</div>` : ""}${findings}` : '<div class="muted small">Not proved yet.</div>'}
+    <h3>Pictures</h3>
+    <div class="pics">${figure("Before", pics.before)}${figure("After", pics.after)}</div>
+    ${(pics.ours.length || pics.datasheet.length) ? `<div class="pics" style="margin-top:12px">${figure("Ours (rendered)", pics.ours)}${figure("Datasheet", pics.datasheet)}</div>` : ""}
+    ${it.approval ? `<h3>Approval</h3>${kv(it.approval, ["by", "role", "at", "recorded", "reason", "status"])}` : ""}
+    ${it.rejection ? `<h3>Rejection</h3>${kv(it.rejection, ["by", "at", "note", "recorded", "reason"])}` : ""}
+    ${r.batch ? `<h3>Batch</h3><div class="small"><span class="mono">${esc(r.batch.id)}</span> · ${esc(r.batch.status || "")}${safeUrl(it.pr_url || r.batch.pr_url) ? ` · <a href="${esc(it.pr_url || r.batch.pr_url)}" target="_blank" rel="noopener noreferrer">pull request</a>` : ""}</div>` : ""}
+    <h3>History</h3>
+    <ol class="hist">${it.history.map(h => `<li><span class="mono">${esc(h.at)}</span> ${esc(h.from || "–")} → <strong>${esc(h.to)}</strong>${h.user ? ` · ${esc(h.user)}` : ""}${h.note ? ` · <span class="muted">${esc(h.note)}</span>` : ""}</li>`).join("")}</ol>
+    ${canApprove || canReject || canRebuild ? `<h3>Decision</h3>
+    <div class="row" style="margin-bottom:6px">${signer}</div>
+    <textarea id="qnote" placeholder="Note (required to reject): what is wrong, or what you checked" aria-label="Note"></textarea>
+    <div class="row" style="margin-top:8px">
+      ${canApprove ? '<button class="primary" data-q="approve">Approve</button>' : ""}
+      ${canReject ? '<button class="danger" data-q="reject">Reject…</button>' : ""}
+      ${canRebuild ? `<button data-q="rebuild">${it.status === "review" ? "Rebuild" : "Retry"}</button>` : ""}
+    </div>` : `<div class="muted small" style="margin-top:12px">${it.status === "review" ? "You can look at this item; deciding needs the librarian (reject, rebuild) or approver (approve) role." : "No decision to make in this state."}</div>`}
+    <div id="qdecerr"></div>`;
+  $("#qview").hidden = false;
+}
+async function openQueueItem(id) {
+  qopen = id; banner($("#qerr"), "");
+  try { showQueueItem(await api("/api/agent/queue/item?id=" + encodeURIComponent(id))); }
+  catch (e) { banner($("#qerr"), e.message); }
+  document.querySelectorAll("#qrows tr").forEach(tr => tr.classList.toggle("sel", tr.dataset.id === id));
+}
+$("#qrows").addEventListener("click", e => { const id = e.target.dataset.open; if (id) openQueueItem(id).then(() => $("#qview").scrollIntoView({ behavior: "smooth", block: "nearest" })); });
+$("#qchips").addEventListener("click", e => { const c = e.target.closest(".chip"); if (!c) return; qfilter = c.dataset.s; loadQueue().catch(err => banner($("#qerr"), err.message)); });
+$("#qbatch").addEventListener("change", () => loadQueue().catch(err => banner($("#qerr"), err.message)));
+$("#qreload").addEventListener("click", () => loadQueue().catch(err => banner($("#qerr"), err.message)));
+$("#qview").addEventListener("click", async e => {
+  if (e.target.id === "qclose") { $("#qview").hidden = true; qopen = null; document.querySelectorAll("#qrows tr.sel").forEach(tr => tr.classList.remove("sel")); return; }
+  const act = e.target.dataset.q; if (!act || !qopen) return;
+  const note = $("#qnote").value.trim();
+  if (act === "reject" && !note) return banner($("#qdecerr"), "Say what is wrong in the note before rejecting.");
+  const body = { id: qopen, note };
+  if (qtoken) body.expect = qtoken;
+  if (!session.team) {
+    body.user = ($("#qsigner") || {}).value?.trim() || "";
+    if (!body.user) return banner($("#qdecerr"), "Type your name first: it is recorded with the decision.");
+    $("#signer").value = body.user;
+  }
+  e.target.disabled = true;
+  try {
+    const r = await api(`/api/agent/queue/${act}`, body);
+    toast(`${qopen}: ${r.item.status}` + (r.approval ? (r.approval.recorded ? " (recorded in the plan)" : " (queue only)") : ""));
+    await loadQueue(); showQueueItem(await api("/api/agent/queue/item?id=" + encodeURIComponent(qopen)));
+  } catch (err) { banner($("#qdecerr"), err.message); e.target.disabled = false; }
+});
+function startApp() {
+  $("#signin").hidden = true; $("#app").hidden = false;
+  applyRoles();
+  loadInfo().catch(showErr); loadSpecs().catch(showErr); loadRules().catch(showErr); loadHistory().catch(e => banner($("#histerr"), e.message));
+  loadQueue().catch(e => banner($("#qerr"), e.message));
+}
+(async () => {
+  try { session = await api("/api/session"); } catch (e) { session = { team: false }; }
+  if (session.team && !session.user) showSignin(); else startApp();
+})();
+</script>
+</body>
+</html>

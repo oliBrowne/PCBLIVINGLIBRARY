@@ -1,0 +1,26 @@
+{
+  "name": "BGA-100_11.0x11.0mm_Layout10x10_P1.0mm_Ball0.5mm_Pad0.4mm_NSMD",
+  "description": "Altera BGA-100, 11 x 11 mm, 1.0 mm pitch",
+  "package_type": "bga",
+  "pin_count": 100,
+  "rows": 10,
+  "cols": 10,
+  "pitch": 1.0,
+  "body_length": {
+    "nom": 11.0
+  },
+  "body_width": {
+    "nom": 11.0
+  },
+  "ball_diameter": {
+    "min": 0.4,
+    "nom": 0.5,
+    "max": 0.6
+  },
+  "height_max": 1.55,
+  "density": "B",
+  "source": {
+    "datasheet": "https://www.altera.com/content/dam/altera-www/global/en_US/pdfs/literature/packaging/04r00223-02.pdf",
+    "drawing": "KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as the datasheet drawing gives them"
+  }
+}

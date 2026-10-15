@@ -1,0 +1,22 @@
+{
+  "name": "R_1206_3216Metric",
+  "description": "Resistor SMD 1206 (3216 Metric)",
+  "package_type": "chip",
+  "pin_count": 2,
+  "body_length": {
+    "nom": 3.2,
+    "tol": 0.1
+  },
+  "body_width": {
+    "nom": 1.6,
+    "tol": 0.1
+  },
+  "terminal_length": {
+    "nom": 0.5,
+    "tol": 0.25
+  },
+  "density": "B",
+  "source": {
+    "drawing": "typical JEDEC/datasheet outline - check against your part's datasheet"
+  }
+}

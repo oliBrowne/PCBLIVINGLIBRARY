@@ -1,0 +1,23 @@
+{
+  "name": "LFBGA-144_10x10mm_Layout12x12_P0.8mm",
+  "description": "LFBGA-144, 10 x 10 mm, 0.8 mm pitch",
+  "package_type": "bga",
+  "pin_count": 144,
+  "rows": 12,
+  "cols": 12,
+  "pitch": 0.8,
+  "body_length": {
+    "nom": 10.0
+  },
+  "body_width": {
+    "nom": 10.0
+  },
+  "land_diameter": {
+    "nom": 0.4
+  },
+  "height_max": 1.4,
+  "density": "B",
+  "source": {
+    "drawing": "KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as its name and drawing give them"
+  }
+}

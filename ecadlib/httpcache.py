@@ -4,9 +4,9 @@ Responses are stored as JSON files keyed by sha256(method, url, body). Only 2xx/
 responses are cached; network errors are returned (not raised) so callers can
 report "source unreachable" instead of crashing. Downloaded bodies are treated as
 untrusted data: they are only ever parsed as JSON/text, never executed."""
-import hashlib, json, os, re, time
+import hashlib, json, os, re, threading, time
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 
@@ -25,6 +25,18 @@ class Response:
         return json.loads(self.text)
 
 
+SECRET_Q = re.compile(r"(api[_-]?key|key|token|secret|password|signature|sig|client[_-]?secret|access[_-]?token)$", re.I)
+
+
+VARY_H = re.compile(r"locale|currency|language", re.I)
+
+
+def redact(url):
+    u = urlparse(url)
+    q = [(k, "REDACTED" if SECRET_Q.search(k) else v) for k, v in parse_qsl(u.query, keep_blank_values=True)]
+    return urlunparse(u._replace(query=urlencode(q))) if q else url
+
+
 class CachedHTTP:
     def __init__(self, cache_dir="out/http_cache", min_interval=1.0, ttl_s=7 * 86400,
                  offline=False, timeout=20):
@@ -36,13 +48,25 @@ class CachedHTTP:
         self.s.headers["User-Agent"] = UA
         self.log = []  # (method, url, status/error, cached)
 
-    def _key(self, method, url, body):
-        return hashlib.sha256(f"{method}\n{url}\n{body or ''}".encode()).hexdigest()[:32]
+    def _key(self, method, url, body, headers=None):
+        # headers that change the answer (DigiKey's X-DIGIKEY-Locale-Currency: the same URL priced in EUR or USD) are
+        # part of the key; auth headers never are (tokens rotate, and must not decide what is cached)
+        vary = sorted((k.lower(), str(v)) for k, v in (headers or {}).items() if VARY_H.search(k))
+        extra = "".join(f"\n{k}: {v}" for k, v in vary)
+        return hashlib.sha256(f"{method}\n{url}\n{body or ''}{extra}".encode()).hexdigest()[:32]
 
-    def request(self, method, url, body=None, headers=None):
-        f = self.dir / f"{self._key(method, url, body)}.json"
-        if f.exists() and time.time() - f.stat().st_mtime < self.ttl:
-            d = json.loads(f.read_text())
+    def request(self, method, url, body=None, headers=None, cache=True):
+        """cache=False: never read or store (credentials in the URL or body, tokens in the response).
+        Query-string secrets (apiKey=, token=...) are redacted from cache keys and stored URLs."""
+        f = self.dir / f"{self._key(method, redact(url), body, headers)}.json"
+        d = None
+        if cache and f.exists() and (self.offline or time.time() - f.stat().st_mtime < self.ttl):   # offline: stale beats nothing
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                d = d if isinstance(d, dict) and isinstance(d.get("status"), int) and isinstance(d.get("text"), str) else None
+            except (OSError, ValueError):            # a damaged entry (crash, full disk) is a miss, not a crash
+                d = None
+        if d is not None:
             self.log.append((method, url, d["status"], True))
             return Response(d["status"], d["text"], from_cache=True)
         if self.offline:
@@ -61,10 +85,10 @@ class CachedHTTP:
             self.log.append((method, url, msg, False))
             return Response(0, "", error=msg)
         self.log.append((method, url, r.status_code, False))
-        if 200 <= r.status_code < 300 or r.status_code == 404:
-            tmp = f.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"url": url, "status": r.status_code, "text": r.text}))
-            os.replace(tmp, f)
+        if cache and (200 <= r.status_code < 300 or r.status_code == 404):
+            tmp = f.with_name(f"{f.stem}.{os.getpid()}.{threading.get_ident()}.tmp")   # own temp file per writer: two
+            tmp.write_text(json.dumps({"url": redact(url), "status": r.status_code, "text": r.text}), encoding="utf-8")
+            os.replace(tmp, f)                                                       # threads fetching one URL never share one
         return Response(r.status_code, r.text, error=None if r.ok or r.status_code == 404
                         else f"HTTP {r.status_code}")
 

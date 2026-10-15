@@ -1,0 +1,2 @@
+[bom]
+columns = { designator = "Pos", value = "Bauteilwert", footprint = "Gehaeuse", mpn = ["Herst.-Nr.", "Mfr Part #"], manufacturer = "Hersteller", qty = "Stk" }

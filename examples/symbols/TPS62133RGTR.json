@@ -1,0 +1,27 @@
+{
+  "name": "TPS62133RGTR",
+  "description": "3-17 V 3 A step-down converter, VQFN-16 3x3 + EP (pinout from memory of the TI TPS6213x datasheet - VERIFY against the datasheet before use)",
+  "designator": "U?",
+  "footprint": "VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
+  "needs_datasheet_verification": true,
+  "cross_check": "2026-10-13: pin numbers match KiCad's official symbol Regulator_Switching:TPS62133 (extends TPS62130; gitlab.com kicad-symbols master). KiCad names pins 10-12 VIN and 6/15/16/17 GND where this file uses AVIN/PVIN and AGND/PGND/EP. The TI datasheet PDF could not be fetched from the build sandbox, so names are still not checked against the datasheet.",
+  "pins": [
+    {"num": "11", "name": "PVIN", "type": "power", "side": "left"},
+    {"num": "12", "name": "PVIN", "type": "power", "side": "left"},
+    {"num": "10", "name": "AVIN", "type": "power", "side": "left"},
+    {"num": "13", "name": "EN", "type": "input", "side": "left"},
+    {"num": "9", "name": "SS/TR", "type": "input", "side": "left"},
+    {"num": "7", "name": "FSW", "type": "input", "side": "left"},
+    {"num": "8", "name": "DEF", "type": "input", "side": "left"},
+    {"num": "6", "name": "AGND", "type": "power", "side": "left"},
+    {"num": "1", "name": "SW", "type": "output", "side": "right"},
+    {"num": "2", "name": "SW", "type": "output", "side": "right"},
+    {"num": "3", "name": "SW", "type": "output", "side": "right"},
+    {"num": "14", "name": "VOS", "type": "input", "side": "right"},
+    {"num": "5", "name": "FB", "type": "input", "side": "right"},
+    {"num": "4", "name": "PG", "type": "open_collector", "side": "right"},
+    {"num": "15", "name": "PGND", "type": "power", "side": "right"},
+    {"num": "16", "name": "PGND", "type": "power", "side": "right"},
+    {"num": "17", "name": "EP", "type": "power", "side": "right"}
+  ]
+}

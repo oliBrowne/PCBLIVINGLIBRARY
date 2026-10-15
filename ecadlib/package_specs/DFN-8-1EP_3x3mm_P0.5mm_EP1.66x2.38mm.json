@@ -1,0 +1,40 @@
+{
+  "name": "DFN-8-1EP_3x3mm_P0.5mm_EP1.66x2.38mm",
+  "description": "DFN-8 3 x 3 mm, 0.5 mm pitch, 1.66 x 2.38 mm exposed pad",
+  "package_type": "qfn",
+  "pin_count": 8,
+  "pitch": 0.5,
+  "pins_left_right": 4,
+  "pins_top_bottom": 0,
+  "body_length": {
+    "nom": 3.0,
+    "tol": 0.1
+  },
+  "body_width": {
+    "nom": 3.0,
+    "tol": 0.1
+  },
+  "terminal_width": {
+    "min": 0.18,
+    "max": 0.3
+  },
+  "terminal_length": {
+    "min": 0.3,
+    "max": 0.5
+  },
+  "exposed_pad": {
+    "length": {
+      "nom": 1.66,
+      "tol": 0.0
+    },
+    "width": {
+      "nom": 2.38,
+      "tol": 0.0
+    }
+  },
+  "height_max": 0.8,
+  "density": "B",
+  "source": {
+    "drawing": "JEDEC MO-229 WEEC - typical JEDEC/datasheet outline - check against your part's datasheet"
+  }
+}

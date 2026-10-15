@@ -1,0 +1,24 @@
+{
+  "name": "BGA-36_3.396x3.466mm_Layout6x6_P0.4mm_Ball0.25mm_Pad0.2mm_NSMD",
+  "description": "WLCSP-36, 3.396 x 3.466 mm, 0.4 mm pitch, 0.25 mm balls (KiCad's chip-scale courtyard: 0.25 mm)",
+  "package_type": "bga",
+  "pin_count": 36,
+  "rows": 6,
+  "cols": 6,
+  "pitch": 0.4,
+  "body_length": {
+    "nom": 3.396
+  },
+  "body_width": {
+    "nom": 3.466
+  },
+  "ball_diameter": {
+    "nom": 0.25
+  },
+  "height_max": 0.6,
+  "density": "B",
+  "source": {
+    "drawing": "KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as its name and drawing give them"
+  },
+  "courtyard_excess": 0.25
+}

@@ -1,0 +1,22 @@
+{
+  "name": "L_0805_2012Metric",
+  "description": "Inductor SMD 0805 (2012 Metric), wire-wound/multilayer",
+  "package_type": "chip",
+  "pin_count": 2,
+  "body_length": {
+    "min": 1.8,
+    "max": 2.2
+  },
+  "body_width": {
+    "min": 1.05,
+    "max": 1.45
+  },
+  "terminal_length": {
+    "min": 0.3,
+    "max": 0.6
+  },
+  "density": "B",
+  "source": {
+    "drawing": "typical JEDEC/datasheet outline - check against your part's datasheet"
+  }
+}

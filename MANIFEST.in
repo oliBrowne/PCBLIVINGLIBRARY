@@ -1,0 +1,6 @@
+# sdist extras (the wheel ships only the ecadlib package and its package-data)
+include CHANGELOG.md
+graft tests
+graft examples
+global-exclude *.py[cod]
+prune **/__pycache__

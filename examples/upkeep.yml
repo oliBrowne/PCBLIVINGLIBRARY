@@ -1,0 +1,111 @@
+# Weekly library upkeep (ecadlib/upkeep.py): lifecycle, KiCad upstream, price/stock and Altium 365 drift in one job,
+# reporting only what is new since last week as ONE rolling GitHub issue (label `ecadlib-upkeep`), or a pull request
+# when safe fixes (KiCad reconversion) were applied.
+# It lives in examples/ so it never runs in this repo: copy it to .github/workflows/upkeep.yml in YOUR library repo
+# and point the env block below at your files.
+#
+# Secrets (Settings > Secrets and variables > Actions). Set only the ones you have: a check whose credentials are
+# missing is skipped with a line in the report, it does not fail the job.
+#   NEXAR_CLIENT_ID, NEXAR_CLIENT_SECRET     Nexar app with the Supply scope: lifecycle, stock and prices (Octopart);
+#                                            or NEXAR_SUPPLY_TOKEN, a ready supply.domain token
+#   DIGIKEY_CLIENT_ID, DIGIKEY_CLIENT_SECRET DigiKey Product Information v4 app (lifecycle, stock, prices)
+#   MOUSER_API_KEY                           Mouser Search API key (lifecycle, stock, prices)
+#   NEXAR_TOKEN                              Nexar user token (design.domain, user.access, openid) for Altium 365 drift
+#   GITLAB_TOKEN                             optional: raises the gitlab.com API rate limit for the KiCad upstream check
+# GITHUB_TOKEN is provided by Actions; the permissions block below lets it write the issue / PR. For the PR mode also
+# enable Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests". PRs opened with
+# GITHUB_TOKEN do not trigger other workflows (use a GitHub App or PAT token if your CI must run on them).
+#
+# The last run's state (what was already reported) is carried between runs in the Actions cache; delete the
+# `upkeep-state-*` caches to start from a fresh baseline. Exit codes: 0 nothing new, 1 new changes, 2 error.
+name: library-upkeep
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"          # Mondays 06:23 UTC (the default [upkeep] schedule = "weekly")
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Reconvert KiCad parts whose upstream sources changed and open a PR with the diff"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write                 # push the ecadlib/upkeep-YYYY-MM-DD branch (PR mode)
+  issues: write                   # the rolling ecadlib-upkeep issue
+  pull-requests: write
+
+concurrency:
+  group: library-upkeep
+  cancel-in-progress: false
+
+env:
+  PLAN: library/altium365/plan.json                     # altium365 plan (librarian output); a BOM works too
+  BOM: library/bom.csv                                  # quantities for the price check (optional; delete --bom below)
+  MANIFEST: library/altium_models_kicad/manifest.json   # KiCad provenance manifest written by kicad_import
+  WORKSPACE: ""                                         # https://<you>.365.altium.com, or [altium365] workspace in ecadlib.toml
+
+jobs:
+  upkeep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install "ecadlib @ git+https://github.com/oliBrowne/PCBLIVINGLIBRARY"
+
+      - name: Restore last run's state
+        uses: actions/cache/restore@v4
+        with:
+          path: out/upkeep_state
+          key: upkeep-state-${{ github.run_id }}
+          restore-keys: upkeep-state-
+
+      - name: Upkeep checks
+        id: upkeep
+        env:
+          NEXAR_CLIENT_ID: ${{ secrets.NEXAR_CLIENT_ID }}
+          NEXAR_CLIENT_SECRET: ${{ secrets.NEXAR_CLIENT_SECRET }}
+          NEXAR_SUPPLY_TOKEN: ${{ secrets.NEXAR_SUPPLY_TOKEN }}
+          DIGIKEY_CLIENT_ID: ${{ secrets.DIGIKEY_CLIENT_ID }}
+          DIGIKEY_CLIENT_SECRET: ${{ secrets.DIGIKEY_CLIENT_SECRET }}
+          MOUSER_API_KEY: ${{ secrets.MOUSER_API_KEY }}
+          NEXAR_TOKEN: ${{ secrets.NEXAR_TOKEN }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          args=(--state out/upkeep_state -o out/upkeep)
+          [ -f "$BOM" ] && args+=(--bom "$BOM")
+          [ -f "$MANIFEST" ] && args+=(--manifest "$MANIFEST")
+          [ -n "$WORKSPACE" ] && args+=(--workspace "$WORKSPACE")
+          python -m ecadlib upkeep "$PLAN" "${args[@]}" \
+              ${{ inputs.apply && '--apply --github pr' || '--github issue' }}
+          code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          cat out/upkeep.md >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: out/upkeep_state
+          key: upkeep-state-${{ github.run_id }}
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upkeep-report
+          path: |
+            out/upkeep.md
+            out/upkeep.json
+          if-no-files-found: ignore
+
+      - name: Fail on errors
+        if: steps.upkeep.outputs.code == '2'
+        run: |
+          echo "upkeep exit 2: a check or the GitHub step failed (see the report); new changes are reported again next run"
+          exit 1

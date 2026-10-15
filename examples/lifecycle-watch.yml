@@ -1,0 +1,77 @@
+# Sample GitHub Actions workflow for the lifecycle watcher (ecadlib/lifecycle.py).
+# It lives in examples/ so it never runs in this repo: copy it to .github/workflows/ in your library repo.
+# Secrets (set only the ones you have; unset sources are reported as "not configured"):
+#   NEXAR_CLIENT_ID, NEXAR_CLIENT_SECRET   Nexar app with the Supply scope (Octopart lifecycle + stock)
+#   DIGIKEY_CLIENT_ID, DIGIKEY_CLIENT_SECRET   DigiKey Product Information v4 app
+#   MOUSER_API_KEY                         Mouser Search API key
+#   NEXAR_TOKEN                            Nexar user token (design.domain, user.access, openid), only for --a365 / --update-a365
+# The snapshot (last-seen status per MPN) is carried between runs in the Actions cache.
+name: lifecycle-watch
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"          # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install requests pandas openpyxl
+
+      - name: Restore last snapshot
+        uses: actions/cache/restore@v4
+        with:
+          path: out/lifecycle_state.json
+          key: lifecycle-state-${{ github.run_id }}
+          restore-keys: lifecycle-state-
+
+      - name: Check lifecycle
+        id: watch
+        env:
+          NEXAR_CLIENT_ID: ${{ secrets.NEXAR_CLIENT_ID }}
+          NEXAR_CLIENT_SECRET: ${{ secrets.NEXAR_CLIENT_SECRET }}
+          DIGIKEY_CLIENT_ID: ${{ secrets.DIGIKEY_CLIENT_ID }}
+          DIGIKEY_CLIENT_SECRET: ${{ secrets.DIGIKEY_CLIENT_SECRET }}
+          MOUSER_API_KEY: ${{ secrets.MOUSER_API_KEY }}
+          NEXAR_TOKEN: ${{ secrets.NEXAR_TOKEN }}
+        run: |
+          set +e
+          # Point this at your own part lists; add `--a365 https://<workspace>.365.altium.com` to watch a workspace,
+          # and `--update-a365 --apply` to write the Lifecycle parameter back (dry run without --apply).
+          python -m ecadlib.lifecycle examples/sample_bom.csv \
+              --state out/lifecycle_state.json -o out/lifecycle_report --rate 1
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          cat out/lifecycle_report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save snapshot
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: out/lifecycle_state.json
+          key: lifecycle-state-${{ github.run_id }}
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-report
+          path: |
+            out/lifecycle_report.md
+            out/lifecycle_report.csv
+            out/lifecycle_report_a365.json
+            out/lifecycle_state.json
+          if-no-files-found: ignore
+
+      - name: Fail when a part got worse
+        if: steps.watch.outputs.code != '0'
+        run: |
+          echo "lifecycle watcher exit code ${{ steps.watch.outputs.code }} (1 = a part got worse, 2 = input/update error, 3 = no source answered)"
+          exit 1

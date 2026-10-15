@@ -1,15 +1,35 @@
-"""Minimal S-expression reader for KiCad files (.kicad_mod / .kicad_sym).
+"""Minimal S-expression reader/writer for KiCad files (.kicad_mod / .kicad_sym).
 
-Only parses; never evaluates. Safe for untrusted input (bounded by file size)."""
+Only parses; never evaluates. Safe for untrusted input (bounded by file size). parse(text, keep_quotes=True)
+returns quoted strings as Q (a str subclass) so dumps() can write a tree back with the same quoting."""
 import re
 
 _TOKEN = re.compile(r'\s*(?:(\()|(\))|"((?:[^"\\]|\\.)*)"|([^\s()"]+))', re.S)
+_ESC = {"n": "\n", "r": "\r", "t": "\t"}
 
 
-def parse(text: str):
-    """Return nested lists. Quoted strings -> str, bare atoms -> str (numbers kept as text)."""
+class Q(str):
+    """A string that was (or must be written) quoted."""
+    __slots__ = ()
+
+
+def quote(s):
+    """KiCad string literal: backslash, double quote and line breaks escaped."""
+    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + '"'
+
+
+def parse(text: str, keep_quotes=False):
+    """Return nested lists. Quoted strings -> str (Q with keep_quotes), bare atoms -> str (numbers kept as text)."""
     stack, cur = [], []
-    for m in _TOKEN.finditer(text):
+    pos, end = 0, len(text)
+    while pos < end:
+        m = _TOKEN.match(text, pos)
+        if not m:
+            if text[pos:].strip():
+                bad = text[pos:].lstrip()[:20]
+                raise ValueError(f"unterminated string or stray character near {bad!r}")
+            break
+        pos = m.end()
         if m.group(1):
             stack.append(cur)
             cur = []
@@ -20,12 +40,33 @@ def parse(text: str):
             parent.append(cur)
             cur = parent
         elif m.group(3) is not None:
-            cur.append(m.group(3).replace('\\"', '"'))
+            v = re.sub(r"\\(.)", lambda e: _ESC.get(e.group(1), e.group(1)), m.group(3), flags=re.S)
+            cur.append(Q(v) if keep_quotes else v)
         else:
             cur.append(m.group(4))
     if stack:
         raise ValueError("unbalanced '(' - %d unclosed" % len(stack))
     return cur[0] if len(cur) == 1 else cur
+
+
+_INLINE = {"pts", "at", "xyz", "font", "effects", "stroke", "fill", "layers", "size", "offset", "scale", "rotate", "justify"}
+
+
+def dumps(node, indent=0, width=100):
+    """Write a tree back as KiCad-style text (tab indented). Q atoms (and empty strings) are quoted, other atoms
+    written bare; a list of atoms, or a short (at ...) / (effects ...) / (pts ...) style list, stays on one line."""
+    atom = lambda a: quote(a) if isinstance(a, Q) or a == "" else str(a)
+    if not isinstance(node, list):
+        return atom(node)
+    flat = "(" + " ".join(dumps(c, 0, 10 ** 9) if isinstance(c, list) else atom(c) for c in node) + ")"
+    if all(not isinstance(c, list) for c in node) or (node and node[0] in _INLINE and len(flat) <= width):
+        return flat
+    pad = "\t" * (indent + 1)
+    head, rest = [], list(node)
+    while rest and not isinstance(rest[0], list):     # leading atoms stay on the first line
+        head.append(atom(rest.pop(0)))
+    out = [pad + (dumps(c, indent + 1, width) if isinstance(c, list) else atom(c)) for c in rest]
+    return "(" + " ".join(head) + "\n" + "\n".join(out) + "\n" + "\t" * indent + ")"
 
 
 def find(node, head):

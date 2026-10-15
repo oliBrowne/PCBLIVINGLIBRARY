@@ -1,0 +1,15 @@
+{
+  "name": "PinHeader_1x10_P1.00mm_Vertical",
+  "description": "pin header, 1x10, 1.00 mm pitch (KiCad's 0.5 / 0.85 mm drill / pad table)",
+  "package_type": "pin_header",
+  "pin_count": 10,
+  "cols": 1,
+  "rows": 10,
+  "pitch": 1.0,
+  "body_length": {
+    "nom": 1.27
+  },
+  "source": {
+    "drawing": "recommended PCB layout; KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check"
+  }
+}
