@@ -77,17 +77,44 @@ def provider_classes(eps=None):
         if name in out:
             errors.append((ep_name, f"provider name {name!r} is taken by a built-in or another plugin"))
             continue
-        if getattr(cls, "name", None) != name:
-            cls = type(cls.__name__, (cls,), {"name": name})
-        cls._plugin = True
-        out[name] = cls
+        out[name] = _guarded(cls, name)
     return out, errors
+
+
+def _guarded(cls, name):
+    """A subclass of plugin class cls whose construction and configured() never raise: a plugin that fails to start
+    (missing config file, bad key ...) answers every lookup with an error note on the line instead of stopping triage,
+    and reports itself as not configured. lookup() errors are turned into notes by bom_triage (_plugin = True)."""
+    def __init__(self, *a, **k):
+        self._plugin_error = None
+        try:
+            cls.__init__(self, *a, **k)
+        except Exception as e:
+            self._plugin_error = f"{type(e).__name__}: {str(e)[:120]}"
+            self.http = a[0] if a else k.get("http")
+
+    def lookup(self, line):
+        if self._plugin_error:
+            raise RuntimeError(f"plugin failed to start: {self._plugin_error}")
+        return cls.lookup(self, line)
+
+    def configured(self):
+        if self._plugin_error:
+            return False
+        try:
+            return bool(cls.configured(self)) if callable(getattr(cls, "configured", None)) else True
+        except Exception:
+            return False
+    return type(cls.__name__, (cls,), {"name": name, "_plugin": True, "auth": str(getattr(cls, "auth", "") or ""),
+                                       "__module__": cls.__module__, "__init__": __init__, "lookup": lookup,
+                                       "configured": configured})
 
 
 def select(names=None, rules=None, default=None, eps=None):
     """Provider classes in order. names: an explicit choice (list or comma text, e.g. --providers) wins; else the
     rules' [providers] order when not empty; else default (names; None = every built-in). Unknown names raise
-    ValueError listing what is available."""
+    ValueError listing what is available; a plugin named in [providers] order that fails to load is skipped with a
+    warning on stderr (an explicit --providers choice of it raises)."""
     if isinstance(names, str):
         names = [n.strip() for n in names.split(",") if n.strip()]
     order = ((rules or {}).get("providers") or {}).get("order") or []
@@ -95,6 +122,11 @@ def select(names=None, rules=None, default=None, eps=None):
         [n.strip() for n in default.split(",") if n.strip()] if isinstance(default, str) else
         list(default) if default is not None else [c.name for c in P.ALL])
     avail, errors = provider_classes(eps)
+    if not names and order:                             # a plugin in the rules' order that fails to load is skipped
+        broken = {n: e for n, e in errors if n in want and n not in avail}      # (with a warning): triage goes on
+        for n, e in broken.items():
+            print(f"ecadlib: [providers] order: plugin {n} skipped, it failed to load: {e}", file=sys.stderr)
+        want = [n for n in want if n not in broken]
     bad = [n for n in want if n not in avail]
     if bad:
         why = "".join(f"; plugin {n} failed to load: {e}" for n, e in errors if n in bad)
