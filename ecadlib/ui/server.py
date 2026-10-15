@@ -10,8 +10,8 @@ Team mode (`--team`): one server for the whole team with sign-in (ecadlib/team.p
 team_users.json, session cookies, a CSRF token on every POST, a minimum role per route (ROUTES), approvals signed as
 the signed-in user, every write in team_audit.jsonl. A non-loopback address needs --cert/--key (built-in TLS) or an
 explicit --allow-http (behind an HTTPS reverse proxy on another host)."""
-import argparse, hmac, http.cookies, ipaddress, itertools, json, mimetypes, secrets, socket, ssl, sys, threading, \
-    traceback, webbrowser
+import argparse, contextlib, hmac, http.cookies, ipaddress, itertools, json, mimetypes, secrets, socket, ssl, sys, threading, \
+    os, traceback, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -21,6 +21,7 @@ from ..app import Workspace
 
 STATIC = Path(__file__).with_name("static")
 MAX_UPLOAD = 20 * 1024 * 1024
+MAX_JSON = 2 * 1024 * 1024                 # JSON bodies (sign-in is unauthenticated: no 20 MB parse for anyone)
 EXPECTED = (ValueError, KeyError, FileExistsError, json.JSONDecodeError, PermissionError)   # user errors: no traceback
 COOKIE = "ecadlib_session"
 
@@ -142,8 +143,16 @@ def _strs(v, what):
 
 
 def _team_file(ws, p):
-    """team_users.json & co. are never downloadable (password hashes, audit)."""
-    return p.parent == ws.root and p.name in TM.TEAM_FILES
+    """team_users.json & co. (password hashes, audit) are never downloadable nor readable as a BOM: also not under
+    another letter case (case-insensitive disks: macOS, Windows serve TEAM_USERS.JSON), as their temp files, or
+    through another hard link."""
+    if p.parent == ws.root and any(p.name.casefold().startswith(f.casefold()) for f in TM.TEAM_FILES):
+        return True
+    for f in TM.TEAM_FILES:
+        with contextlib.suppress(OSError):
+            if os.path.samefile(p, ws.root / f):
+                return True
+    return False
 
 
 def make_handler(ws: Workspace, team=None):
@@ -153,7 +162,8 @@ def make_handler(ws: Workspace, team=None):
 
     class H(BaseHTTPRequestHandler):
         server_version = "ecadlib-ui/0.1"
-        user = sess = None
+        user = sess = _audit_route = None
+        _gated = False
         if team:
             timeout = 120                                  # a stalled client can't hold a thread forever
 
@@ -168,6 +178,9 @@ def make_handler(ws: Workspace, team=None):
         def _send(self, code, body, ctype="application/json", headers=None):
             data = body if isinstance(body, bytes) else (json.dumps(body) if ctype == "application/json" else body).encode()
             self._status = code
+            if self._audit_route is not None and (self._gated or code in (401, 403)):
+                route, self._audit_route = self._audit_route, None
+                self._audit(route)                         # before the answer: logged by the time the client sees it
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
@@ -267,6 +280,7 @@ def make_handler(ws: Workspace, team=None):
                 return self._send(404, {"error": "not found"})
             self._identify()
             if role == PUBLIC:
+                self._gated = True
                 return u
             if not self.user:
                 if self.sess == "proxy":
@@ -276,6 +290,7 @@ def make_handler(ws: Workspace, team=None):
                 return self._send(403, {"error": "missing or wrong CSRF token: reload the page"})
             if TM.RANK[self.user["role"]] < TM.RANK[role]:
                 return self._send(403, {"error": f"this needs the {role} role; you are {self.user['role']}"})
+            self._gated = True
             return u
 
         def _audit(self, path):
@@ -289,19 +304,20 @@ def make_handler(ws: Workspace, team=None):
             bom = (body if body is not None else self._json()).get("bom")
             if not isinstance(bom, str) or not bom:
                 raise ValueError("no BOM given")
-            ws.inside(bom)
+            if _team_file(ws, ws.inside(bom)):
+                raise ValueError(f"{bom} is not a BOM")
             if write and jobs.running("librarian:" + bom):
                 raise FileExistsError(f"the librarian is still running on {bom}; try again when it has finished")
             return bom
 
-        def _body(self):
+        def _body(self, limit=MAX_UPLOAD):
             n = int(self.headers.get("Content-Length") or 0)
-            if n < 0 or n > MAX_UPLOAD:
+            if n < 0 or n > limit:
                 raise ValueError("bad or too large Content-Length")
             return self.rfile.read(n)
 
         def _json(self):
-            b = json.loads(self._body() or b"{}")
+            b = json.loads(self._body(MAX_JSON) or b"{}")
             if not isinstance(b, dict):
                 raise ValueError("expected a JSON object")
             self._fields = {k: b[k] for k in AUDIT_KEYS if k in b and isinstance(b[k], (str, bool, int, list))
@@ -368,15 +384,15 @@ def make_handler(ws: Workspace, team=None):
                 return self._error(e)
 
         def do_POST(self):
+            # team mode: _send() writes the audit line (every POST that passes the gate, and 401/403 refusals)
+            self._audit_route = urlparse(self.path).path if team else None
             u = self._gate("POST")
-            if u is None:                                     # refused before the route: log 401/403 attempts
-                return self._audit(urlparse(self.path).path) if self._status in (401, 403) else None
+            if u is None:
+                return
             try:
                 return self._post(u)
             except Exception as e:
                 return self._error(e)
-            finally:
-                self._audit(u.path)
 
         def _post(self, u):
             if team and u.path in TEAM_ONLY:
@@ -499,8 +515,15 @@ def make_handler(ws: Workspace, team=None):
                     team.sessions.drop(self._cookie())
                 return self._send(200, {"ok": True}, headers={"Set-Cookie": self._set_cookie("", 0)})
             if path == "/api/account/password":
-                if self.sess == "proxy" or not TM.verify_password(b.get("current"), self.user.get("password")):
+                if self.sess == "proxy":
+                    raise PermissionError("signed in through the SSO proxy: change the password there")
+                name, ip = self.user["username"], self._ip()     # same lockout as sign-in: no unlimited guessing
+                wait, ticket = team.throttle.attempt(name, ip)
+                if wait:
+                    return self._too_many(wait)
+                if not TM.verify_password(b.get("current"), self.user.get("password")):
                     raise PermissionError("current password is wrong")
+                team.throttle.ok(name, ip, ticket)
                 team.store.reset_password(self.user["username"], b.get("new"))   # ends every other session
                 self.user = team.store.get(self.user["username"])
                 return self._new_session()
@@ -523,6 +546,10 @@ def make_handler(ws: Workspace, team=None):
                 raise ValueError("action must be add, set-role, reset-password, remove or unlock")
             return self._send(200, self._users())
 
+        def _too_many(self, wait):
+            return self._send(429, {"error": f"too many failed sign-ins: try again in {max(1, wait // 60)} minute(s), "
+                                             "or ask an admin to unlock you"}, headers={"Retry-After": str(wait)})
+
         def _new_session(self):
             tok, s = team.sessions.create(self.user["username"], int(self.user.get("gen") or 1))
             self.sess = s
@@ -531,15 +558,13 @@ def make_handler(ws: Workspace, team=None):
         def _login(self, b):
             name, pw, ip = str(b.get("username") or "").strip().lower()[:64], b.get("password"), self._ip()
             self._fields = {"username": name}
-            wait = team.throttle.blocked(name, ip)
+            wait, ticket = team.throttle.attempt(name, ip)       # counted before the check: parallel tries too
             if wait:
-                return self._send(429, {"error": f"too many failed sign-ins: try again in {max(1, wait // 60)} minute(s), "
-                                                 "or ask an admin to unlock you"}, headers={"Retry-After": str(wait)})
+                return self._too_many(wait)
             u = team.store.get(name)
             if not TM.verify_password(pw, u and u.get("password")):
-                team.throttle.fail(name, ip)
                 return self._send(401, {"error": "wrong user name or password"})
-            team.throttle.ok(name)
+            team.throttle.ok(name, ip, ticket)
             self.user = u
             return self._new_session()
 
