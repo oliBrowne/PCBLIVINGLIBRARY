@@ -29,6 +29,20 @@ def _has_flag(argv, flag):
     return False
 
 
+def _subcommand(argv):
+    """The first positional word: the subcommand. Options before it (agent's --workspace / --rules) take a value."""
+    it = iter(argv)
+    for a in it:
+        if a == "--":
+            return None
+        if a.startswith("-"):
+            if "=" not in a:
+                next(it, None)
+            continue
+        return a
+    return None
+
+
 def env_defaults(cmd, argv, environ=None):
     """argv (the command's own arguments) with --lib / --workspace added from the environment where the command takes
     them and the user did not give them. Returns (new argv, [notes]) - notes name what was added (for --debug)."""
@@ -45,7 +59,7 @@ def env_defaults(cmd, argv, environ=None):
         subs = cmds[cmd]
         if subs is None:
             argv = extra + argv                       # top-level option: before any subcommand
-        elif any(s in argv for s in subs):
+        elif _subcommand(argv) in subs:
             argv = argv + extra                       # a subcommand's option: after it
         else:
             continue

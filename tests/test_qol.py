@@ -377,3 +377,12 @@ def test_bash_completion_really_completes():
 if __name__ == "__main__":
     from tests.run_all import main
     sys.exit(main(["test_qol"]))
+
+
+def test_env_lib_only_for_the_real_subcommand():
+    from ecadlib import cliutil
+    env = {"ECADLIB_LIB": "/libs/a"}
+    assert cliutil.env_defaults("agent", ["approve", "run"], env)[0] == ["approve", "run"]     # an item named "run"
+    assert cliutil.env_defaults("agent", ["--workspace", "run", "status"], env)[0] == ["--workspace", "run", "status"]
+    assert cliutil.env_defaults("agent", ["--workspace", "W", "run"], env)[0] == ["--workspace", "W", "run", "--lib", "/libs/a"]
+    assert cliutil.env_defaults("agent", ["serve"], env)[0] == ["serve", "--lib", "/libs/a"]
