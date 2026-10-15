@@ -370,6 +370,39 @@ LAYER_K = {AL.TOP_OVERLAY: "F.SilkS", AL.BOTTOM_OVERLAY: "B.SilkS", AL.MECH13: "
            AL.TOP: "F.Cu", AL.BOTTOM: "B.Cu", AL.TOP_PASTE: "F.Paste", AL.TOP_SOLDER: "F.Mask"}
 
 
+def _tail(shape):
+    return " " + shape.split(" ", 1)[1] if " " in shape else ""
+
+
+def _in_poly(x, y, pts):
+    inside = False
+    for (x1, y1), (x2, y2) in zip(pts, pts[1:] + pts[:1]):
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
+def _custom_pads(recs):
+    """Polygon pads as altium_lib / kicad_import write them: an anchor pad plus regions on its copper (and solder mask /
+    paste) layers around the anchor's centre. -> ({id(pad): [copper outline, ...]}, {id(region) folded into a pad})."""
+    side = {AL.TOP: ((AL.TOP,), (AL.TOP_SOLDER, AL.TOP_PASTE)), AL.BOTTOM: ((AL.BOTTOM,), (AL.BOTTOM_SOLDER, AL.BOTTOM_PASTE)),
+            AL.MULTI: ((AL.TOP, AL.BOTTOM), (AL.TOP_SOLDER, AL.TOP_PASTE, AL.BOTTOM_SOLDER, AL.BOTTOM_PASTE))}
+    regs = [r for r in recs if r["type"] == "region" and len(r.get("pts") or ()) >= 3]
+    custom, used = {}, set()
+    pads = [r for r in recs if r["type"] == "pad" and r["layer"] in side]
+    for p in sorted(pads, key=lambda r: r["layer"] == AL.MULTI):   # SMD anchors first: vias inside a pad don't own it
+        cu, other = side[p["layer"]]
+        hit = [g for g in regs if id(g) not in used and g["layer"] in cu and _in_poly(p["x"], p["y"], g["pts"])]
+        if not hit:
+            continue
+        first = [g for g in hit if g["layer"] == cu[0]] or hit      # a through-hole pad: the top outline (= the bottom one)
+        keep = [g for g in first if g["layer"] == first[0]["layer"]]
+        custom[id(p)] = [g["pts"] for g in keep]
+        used |= {id(g) for g in hit}
+        used |= {id(g) for g in regs if g["layer"] in other and _in_poly(p["x"], p["y"], g["pts"])}
+    return custom, used
+
+
 def footprint_from_pcblib(path, name, notes):
     """First footprint of a .PcbLib -> .kicad_mod text (KiCad 8), via altium_lib.read_pcblib."""
     fp = AL.read_pcblib(path)[0]
@@ -377,11 +410,23 @@ def footprint_from_pcblib(path, name, notes):
     pt = lambda x, y: f"{m(x)} {m(-y)}"
     stroke = lambda w: f'(stroke (width {m(w) if w else "0.1"}) (type solid))'
     out, pads, smd = [], [], True
+    custom, used = _custom_pads(fp["records"])
     for r in fp["records"]:
         t, layer = r["type"], LAYER_K.get(r.get("layer"))
+        if id(r) in used:
+            continue                          # copper / mask / paste outline of a polygon pad: part of that pad
         if t == "pad":
             w, h, rot = r["w"], r["h"], r["rot"] % 360
             shape = {1: "circle" if w == h else "oval", 2: "rect", 9: "roundrect"}.get(r["shape"], "rect")
+            if id(r) in custom:               # anchor pad + its regions -> a KiCad custom pad (KiCad library layout)
+                a = math.radians(rot)
+                rel = lambda x, y: (((x - r["x"]) * math.cos(a) + (y - r["y"]) * math.sin(a)),
+                                    -(-(x - r["x"]) * math.sin(a) + (y - r["y"]) * math.cos(a)))
+                prims = " ".join("(gr_poly (pts " + " ".join(f"(xy {m(u)} {m(v)})" for u, v in (rel(x, y) for x, y in poly))
+                                 + ") (width 0) (fill yes))" for poly in custom[id(r)])
+                anchor = "circle" if r["shape"] == 1 else "rect"
+                shape = f'custom (options (clearance outline) (anchor {anchor})) (primitives {prims})'
+                K._note(notes, f"pad {r['designator']}: anchor pad and its copper regions written as a KiCad custom pad")
             if r["shape"] == 3:
                 K._note(notes, f"pad {r['designator']}: octagonal pad written as rect")
             at = f"(at {pt(r['x'], r['y'])}{' ' + _num(rot) if rot else ''})"
@@ -397,14 +442,15 @@ def footprint_from_pcblib(path, name, notes):
                 if r["hole_shape"] == 2 and r["slot"]:
                     a, b = (r["slot"], r["hole"]) if round(r["hole_rot"]) % 180 == 0 else (r["hole"], r["slot"])
                     drill = f"(drill oval {m(a)} {m(b)})"
-                pads.append(f'\t(pad {sexpr.quote(r["designator"])} {kind} {shape} {at} (size {m(w)} {m(h)}){extra} {drill} (layers "*.Cu"{"" if tented else ' "*.Mask"'}))')
+                pads.append(f'\t(pad {sexpr.quote(r["designator"])} {kind} {shape.split()[0]} {at} (size {m(w)} {m(h)}){extra} {drill} '
+                            f'(layers "*.Cu"{"" if tented else ' "*.Mask"'}){_tail(shape)})')
             else:
                 side = "B" if r["layer"] == AL.BOTTOM else "F"
                 manual = r["paste_mode"] == 2 and r["paste"] is not None
                 paste = not (manual and r["paste"] <= -max(w, h) // 2)
                 margin = f" (solder_paste_margin {m(r['paste'])})" if manual and paste and r["paste"] else ""
                 layers = " ".join(f'"{side}.{l}"' for l in ("Cu",) + (("Paste",) if paste else ()) + (() if tented else ("Mask",)))
-                pads.append(f'\t(pad {sexpr.quote(r["designator"])} smd {shape} {at} (size {m(w)} {m(h)}){extra}{margin} (layers {layers}))')
+                pads.append(f'\t(pad {sexpr.quote(r["designator"])} smd {shape.split()[0]} {at} (size {m(w)} {m(h)}){extra}{margin} (layers {layers}){_tail(shape)})')
         elif t == "track" and layer:
             out.append(f'\t(fp_line (start {pt(r["x1"], r["y1"])}) (end {pt(r["x2"], r["y2"])}) {stroke(r["w"])} (layer "{layer}"))')
         elif t == "arc" and layer:

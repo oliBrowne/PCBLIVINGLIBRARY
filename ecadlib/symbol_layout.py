@@ -399,9 +399,9 @@ def relayout(sym, rules=None, split=None):
 # ------------------------------------------------------------------ checks
 def check(sym, grid=100):
     """Problems in a laid-out symbol: pins off the grid, two different pins at one spot (other than stacked power
-    pins with the same name), pins inside another pin's span. -> [text]."""
+    pins with the same name), a pin whose end or line lies on another pin's line, pin lines crossing. -> [text]."""
     g = grid // 10
-    probs, at = [], {}
+    probs, at, segs = [], {}, []
     parts = sym.get("prim_parts") or [1] * len(sym["prims"])
     for pr, u in zip(sym["prims"], parts):
         if pr[0] != "pin":
@@ -415,7 +415,25 @@ def check(sym, grid=100):
         if key in at and stack_key(at[key]["name"]) != stack_key(p["name"]):
             probs.append(f"pins {at[key]['num']} and {p['num']} overlap at ({x}, {y}) in part {u}")
         at.setdefault(key, p)
+        segs.append((u, p, (x, y), (ex, ey)))
+    # a pin whose end or body lies on another pin's line, or two pin lines crossing (stacked pins share one line: fine)
+    on = lambda q, a, b: min(a[0], b[0]) <= q[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= q[1] <= max(a[1], b[1]) and \
+        (b[0] - a[0]) * (q[1] - a[1]) == (b[1] - a[1]) * (q[0] - a[0])
+    for i, (u, p, a, b) in enumerate(segs):
+        for v, q, c, d in segs[i + 1:]:
+            if u != v or (a, b) == (c, d):
+                continue
+            if on(c, a, b) or on(d, a, b) or on(a, c, d) or on(b, c, d) or _cross(a, b, c, d):
+                probs.append(f"pin {q['num']} lies on or crosses pin {p['num']}'s line in part {u}")
     return probs
+
+
+def _cross(a, b, c, d):
+    """Axis-aligned segments a-b and c-d (one horizontal, one vertical) cross in their interiors."""
+    if (a[0] == b[0]) == (c[0] == d[0]):
+        return False
+    (h1, h2), (v1, v2) = ((a, b), (c, d)) if a[1] == b[1] else ((c, d), (a, b))
+    return min(h1[0], h2[0]) < v1[0] < max(h1[0], h2[0]) and min(v1[1], v2[1]) < h1[1] < max(v1[1], v2[1])
 
 
 # ------------------------------------------------------------------ SVG preview

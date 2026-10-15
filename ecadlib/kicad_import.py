@@ -296,7 +296,7 @@ def _mask_margin(p):
     return float(m[1]) if m else None
 
 
-def _custom_regions(fp, pad, shapes, kind, layers, p):
+def _custom_regions(fp, pad, shapes, kind, layers, p, notes=None):
     """Regions for a custom pad's shape: copper on the pad's copper layers, solder mask grown by the pad's mask margin
     (0 when KiCad has none, as the anchor pad's manual expansion), paste by its paste margin. Altium gives primitives
     that touch a pad in a footprint the pad's net on the board."""
@@ -315,6 +315,9 @@ def _custom_regions(fp, pad, shapes, kind, layers, p):
     for layer in paste:
         fp["regions"] += [(_offset(pts, float(pm[1]) if pm else 0.0), layer) for pts in polys]
     pad["mask"] = mm_ if mask else "none"
+    if notes is not None and kind != "smd" and len(cu) > 1:         # Altium regions have no "all layers" (Multi-Layer is for pads and vias only)
+        _note(notes, f"pad {pad['designator']}: through-hole custom shape on top and bottom copper; inner layers get the anchor "
+                     "pad with the hole (connected on every layer), not the full shape")
     if tracks and (mask or paste):
         fp["regions"] += [(_rect_pts((x1 + x2) / 2, (y1 + y2) / 2, math.hypot(x2 - x1, y2 - y1) + w, w,
                                      math.degrees(math.atan2(y2 - y1, x2 - x1))), layer)
@@ -345,7 +348,7 @@ def _pad(fp, p, notes):
         n0 = len(fp["pads"])
         _pad_core(fp, p, notes, num, kind, "rect" if anchor == "rect" else "circle", x, y, w, h, rot, layers)
         if len(fp["pads"]) > n0:
-            _custom_regions(fp, fp["pads"][-1], custom, kind, layers, p)
+            _custom_regions(fp, fp["pads"][-1], custom, kind, layers, p, notes)
             _note(notes, f"pad {num}: custom shape written as a {anchor} anchor pad plus regions on its copper, mask and paste layers")
         return
     if shape == "custom":                     # curves / arcs: bounding rectangle of anchor + primitives, in the pad frame
