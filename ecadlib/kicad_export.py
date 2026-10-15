@@ -442,8 +442,9 @@ def footprint_from_pcblib(path, name, notes):
                 if r["hole_shape"] == 2 and r["slot"]:
                     a, b = (r["slot"], r["hole"]) if round(r["hole_rot"]) % 180 == 0 else (r["hole"], r["slot"])
                     drill = f"(drill oval {m(a)} {m(b)})"
+                mask = "" if tented else ' "*.Mask"'
                 pads.append(f'\t(pad {sexpr.quote(r["designator"])} {kind} {shape.split()[0]} {at} (size {m(w)} {m(h)}){extra} {drill} '
-                            f'(layers "*.Cu"{"" if tented else ' "*.Mask"'}){_tail(shape)})')
+                            f'(layers "*.Cu"{mask}){_tail(shape)})')
             else:
                 side = "B" if r["layer"] == AL.BOTTOM else "F"
                 manual = r["paste_mode"] == 2 and r["paste"] is not None
