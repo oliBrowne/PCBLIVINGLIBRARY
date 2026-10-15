@@ -200,8 +200,19 @@ def _hidden(node):                            # KiCad 7 bare `hide` atom or KiCa
 
 
 # ---------------------------------------------------------------- footprints
+MALFORMED = (IndexError, TypeError, AttributeError, KeyError, OverflowError, ZeroDivisionError)
+
+
 def convert_footprint(text, name=None, source="", notes=None):
-    """.kicad_mod text -> altium_lib footprint dict (mm, y up), no 3D body yet."""
+    """.kicad_mod text -> altium_lib footprint dict (mm, y up), no 3D body yet. Raises ValueError for a file that
+    does not parse or is missing what a footprint needs (a pad without a size, a line without an end ...)."""
+    try:
+        return _convert_footprint(text, name, source, notes)
+    except MALFORMED as e:
+        raise ValueError(f"malformed KiCad footprint {name or ''}: {type(e).__name__}: {e}".replace("  ", " ")) from e
+
+
+def _convert_footprint(text, name=None, source="", notes=None):
     notes = [] if notes is None else notes
     t = sexpr.parse(text)
     descr = (sexpr.first(t, "descr") or ["", ""])[1]
@@ -217,7 +228,7 @@ def convert_footprint(text, name=None, source="", notes=None):
             if layer is None:
                 skipped[ln] = skipped.get(ln, 0) + 1
                 continue
-            _graphic(fp, kind, g, layer)
+            _graphic(fp, kind, g, layer, notes)
     if skipped:
         notes.append("graphics on unmapped layers dropped: " + ", ".join(f"{k} x{v}" for k, v in sorted(skipped.items(), key=str)))
     _zones(fp, t, notes)
@@ -285,7 +296,7 @@ def _mask_margin(p):
     return float(m[1]) if m else None
 
 
-def _custom_regions(fp, pad, shapes, kind, layers, p):
+def _custom_regions(fp, pad, shapes, kind, layers, p, notes=None):
     """Regions for a custom pad's shape: copper on the pad's copper layers, solder mask grown by the pad's mask margin
     (0 when KiCad has none, as the anchor pad's manual expansion), paste by its paste margin. Altium gives primitives
     that touch a pad in a footprint the pad's net on the board."""
@@ -304,6 +315,9 @@ def _custom_regions(fp, pad, shapes, kind, layers, p):
     for layer in paste:
         fp["regions"] += [(_offset(pts, float(pm[1]) if pm else 0.0), layer) for pts in polys]
     pad["mask"] = mm_ if mask else "none"
+    if notes is not None and kind != "smd" and len(cu) > 1:         # Altium regions have no "all layers" (Multi-Layer is for pads and vias only)
+        _note(notes, f"pad {pad['designator']}: through-hole custom shape on top and bottom copper; inner layers get the anchor "
+                     "pad with the hole (connected on every layer), not the full shape")
     if tracks and (mask or paste):
         fp["regions"] += [(_rect_pts((x1 + x2) / 2, (y1 + y2) / 2, math.hypot(x2 - x1, y2 - y1) + w, w,
                                      math.degrees(math.atan2(y2 - y1, x2 - x1))), layer)
@@ -334,7 +348,7 @@ def _pad(fp, p, notes):
         n0 = len(fp["pads"])
         _pad_core(fp, p, notes, num, kind, "rect" if anchor == "rect" else "circle", x, y, w, h, rot, layers)
         if len(fp["pads"]) > n0:
-            _custom_regions(fp, fp["pads"][-1], custom, kind, layers, p)
+            _custom_regions(fp, fp["pads"][-1], custom, kind, layers, p, notes)
             _note(notes, f"pad {num}: custom shape written as a {anchor} anchor pad plus regions on its copper, mask and paste layers")
         return
     if shape == "custom":                     # curves / arcs: bounding rectangle of anchor + primitives, in the pad frame
@@ -415,7 +429,7 @@ def _pad_core(fp, p, notes, num, kind, shape, x, y, w, h, rot, layers):
     fp["pads"].append(pad)
 
 
-def _graphic(fp, kind, g, layer):
+def _graphic(fp, kind, g, layer, notes=None):
     w = _width(g)
     if kind == "fp_circle":
         (cx, cy), (ex, ey) = _xy(sexpr.first(g, "center")), _xy(sexpr.first(g, "end"))
@@ -428,7 +442,15 @@ def _graphic(fp, kind, g, layer):
         return
     if kind == "fp_arc":
         if sexpr.first(g, "mid"):
-            cx, cy, r, a0, a1 = _arc3(*(_xy(sexpr.first(g, k)) for k in ("start", "mid", "end")))
+            s_, m_, e_ = (_xy(sexpr.first(g, k)) for k in ("start", "mid", "end"))
+            try:
+                cx, cy, r, a0, a1 = _arc3(s_, m_, e_)
+            except ValueError:                # zero-length or straight "arc" (KiCad's own library has some): a line or nothing
+                if s_ != e_:
+                    fp["tracks"].append((*s_, *e_, w or 0.1, layer))
+                if notes is not None:
+                    _note(notes, "degenerate arc (start, mid and end in a line) written as a line or dropped")
+                return
         else:                                 # KiCad 5: (start centre) (end arc start) (angle deg, clockwise on screen)
             (cx, cy), (sx, sy) = _xy(sexpr.first(g, "start")), _xy(sexpr.first(g, "end"))
             r, a = math.hypot(sx - cx, sy - cy), math.degrees(math.atan2(sy - cy, sx - cx))
@@ -576,10 +598,20 @@ def _props(chain):
 
 
 def convert_symbol(chain, name=None, footprint=None, extra=(), pin_map=None, notes=None):
+    """See _convert_symbol. Raises ValueError for a symbol missing what it needs (a pin without (at ...), ...)."""
+    try:
+        return _convert_symbol(chain, name, footprint, extra, pin_map, notes)
+    except MALFORMED as e:
+        raise ValueError(f"malformed KiCad symbol {name or ''}: {type(e).__name__}: {e}".replace("  ", " ")) from e
+
+
+def _convert_symbol(chain, name=None, footprint=None, extra=(), pin_map=None, notes=None):
     """[symbol, parent, ...] -> altium_lib symbol dict. Units become Altium parts, De Morgan body styles
     (`_U_2` sub-symbols) Altium display modes; unit 0 / style 0 items go into every part / mode."""
     notes = [] if notes is None else notes
     base, props = chain[-1], _props(chain)
+    if not props.get("Description") and props.get("ki_description"):     # KiCad 7 keeps it in ki_description
+        props["Description"] = props["ki_description"]
     hide_names = _hidden(sexpr.first(base, "pin_names") or [])
     hide_nums = _hidden(sexpr.first(base, "pin_numbers") or [])
     units = {}

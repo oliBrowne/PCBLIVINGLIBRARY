@@ -34,7 +34,9 @@ import pandas as pd
 
 from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
                footprint_gen as F, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
+from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
+from . import sheetsafe as SS
 from . import symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
@@ -58,7 +60,7 @@ class KiCadLibrary:
                 self.symbols = self._crawl("kicad-symbols", ".kicad_symdir", ".kicad_sym")
                 self.footprints = self._crawl("kicad-footprints", ".pretty", ".kicad_mod")
                 f.parent.mkdir(parents=True, exist_ok=True)
-                f.write_text(json.dumps({"built": time.strftime("%Y-%m-%d"), "symbols": self.symbols, "footprints": self.footprints}))
+                f.write_text(json.dumps({"built": time.strftime("%Y-%m-%d"), "symbols": self.symbols, "footprints": self.footprints}), encoding="utf-8")
             except IOError as e:
                 self.error = str(e)
                 if f.exists():                 # a stale index beats none
@@ -72,7 +74,7 @@ class KiCadLibrary:
         self._fpn = [(norm_mpn(n), f"{libs[0]}:{n}") for n, libs in self.footprints.items()]
 
     def _load(self, f):
-        d = json.loads(f.read_text())
+        d = json.loads(f.read_text(encoding="utf-8"))
         self.symbols, self.footprints = d["symbols"], d["footprints"]
 
     def _crawl(self, repo, dsuf, fsuf):
@@ -206,7 +208,7 @@ class Run:
         except ValueError as e:
             notes.append(f"no 3D body: {e}")
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
-        kmod.write_text(text)
+        kmod.write_text(text, encoding="utf-8")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"]}
         self.written[str(pcb)] = st["footprint"]
@@ -268,9 +270,9 @@ class Run:
                 st["hint_fp"] = K._props(chain).get("Footprint", "")
                 self.put_kicad_sym(st, chain, sym_name, fp_name, f"local:{ls}")
         if lf and lf in self.index.footprints and not st["footprint"]:
-            text = Path(self.index.footprints[lf]["path"]).read_text()
+            text = Path(self.index.footprints[lf]["path"]).read_text(encoding="utf-8")
             spec = SPECS / f"{lf.split(':')[-1]}.json"
-            hm = json.loads(spec.read_text()).get("height_max") if spec.exists() else None
+            hm = json.loads(spec.read_text(encoding="utf-8")).get("height_max") if spec.exists() else None
             self.put_fp(st, text, fp_name, f"local:{lf}", None, F.dim(hm)[2] if hm else None, f"package spec {spec.name}")
         if ls or lf:
             st["tried"].append(f"local library: symbol {'from ' + ls if st['symbol'] else 'not used' if ls else 'none'}, "
@@ -488,8 +490,8 @@ def review_rows(items):
 
 def write_review(rows, out, bom):
     out = Path(out)
-    with open(out / "review.csv", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ["part"])
+    with open(out / "review.csv", "w", newline="", encoding="utf-8") as f:
+        w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["part"])
         w.writeheader(); w.writerows(rows)
     src = lambda s: (s or "-").split(":")[0]
     counts = {}
@@ -504,11 +506,11 @@ def write_review(rows, out, bom):
     md += ["", "## Needs a person", ""]
     md += [f"- **{r['part']}** ({r['status']}): " + "; ".join(r["why"].split("; ")) for r in rows if r["needs_human"]] or ["Nothing."]
     md += ["", "## What was tried", ""] + [f"- **{r['part']}**: {r['tried'] or '-'}" for r in rows]
-    (out / "review.md").write_text("\n".join(md) + "\n")
+    (out / "review.md").write_text("\n".join(md) + "\n", encoding="utf-8")
 
 
 def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_index=False, allow=(), offline=False,
-        cache="out/http_cache", rate=0.5, providers="jlcpcb_search,easyeda", http=None, api_key=None, log=print, gen_step=True,
+        cache="out/http_cache", rate=0.5, providers=None, http=None, api_key=None, log=print, gen_step=True,
         rules=None, user=None, datasheet_batch=False, reader=None):
     """Whole pipeline; returns the plan items. datasheet_batch: parts that reach the datasheet source are read as one
     Message Batch after every other source ran (reader: a ready datasheet.Reader, e.g. for --no-wait / --estimate). refresh: None = resume, [] = redo all, [names] = redo those.
@@ -523,13 +525,14 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         raise ValueError(f"unknown sources {sorted(bad)}; use {','.join(SOURCES)}")
     lines, mapping = T.read_bom(bom, RU.bom_columns(rules))
     index = KiCadIndex(libs)
-    provs = [c(http) for c in P.ALL if c.name in providers.split(",")]
+    from . import plugins as PL                      # providers: None = [providers] order, else jlcpcb_search,easyeda
+    provs = [c(http) for c in PL.select(providers, rules, default="jlcpcb_search,easyeda")]
     rows = T.triage(lines, index, provs, http)
     T.write_reports(rows, mapping, provs, http, out / "triage", bom)
     items = A365.plan(lines, pd.DataFrame(rows, dtype=str).fillna("") if rows else None, rules=rules)
     state_f, plan_f = out / "librarian_state.json", out / "plan.json"
-    state = json.loads(state_f.read_text()) if state_f.exists() else {}
-    old = {i["name"]: i for i in json.loads(plan_f.read_text())} if plan_f.exists() else {}
+    state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.exists() else {}
+    old = {i["name"]: i for i in json.loads(plan_f.read_text(encoding="utf-8"))} if plan_f.exists() else {}
     items, in_ws = A365S.reuse_existing(items, list(old.values()), rules)  # parts `ecadlib a365 pull` found in the workspace
     if reader is None and "datasheet" in sources:
         reader = D.Reader(out, cache, api_key, rules, http, batch=datasheet_batch, log=log)
@@ -581,13 +584,13 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     state = {k: v for k, v in state.items() if k in {i["name"] for i in items}}
     for n in set(allow) - set(state):
         log(f"  --allow {n}: not a part in this plan (names are the plan's Part Numbers)")
-    state_f.write_text(json.dumps(state, indent=2))
+    write_text_atomic(state_f, json.dumps(state, indent=2))
     checks = RC.apply(items, out, allow, rules=rules)
     if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
         from .approvals import identity, post_check, stamp_allow
         stamp_allow(items, allow, identity(user, cwd=out))
         post_check(items, out, checks)
-    plan_f.write_text(json.dumps(items, indent=2))
+    write_text_atomic(plan_f, json.dumps(items, indent=2))
     RC.write_report(checks, out / "release_check", plan_f)
     write_review(review_rows(items), out, bom)
     return items
@@ -602,7 +605,7 @@ def main(argv=None):
     ap.add_argument("--refresh", nargs="*", metavar="PART", help="redo finished parts: all, or the named ones")
     ap.add_argument("--refresh-index", action="store_true", help="rebuild the KiCad library name index")
     ap.add_argument("--allow", action="append", default=[], metavar="PART", help="release PART despite its release-check failures")
-    ap.add_argument("--providers", default="jlcpcb_search,easyeda", help="triage providers (default %(default)s)")
+    ap.add_argument("--providers", help="triage providers in order (default: [providers] order, else jlcpcb_search,easyeda)")
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--rate", type=float, default=0.5, help="min seconds between requests per host")
@@ -618,9 +621,13 @@ def main(argv=None):
     if a.datasheet_batch:
         reader = D.Reader(a.out, a.cache, None, rules, CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline, timeout=60),
                           batch=True, wait=not a.datasheet_no_wait)
-    items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh, a.refresh_index,
-                a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=rules, user=a.user,
-                http=reader.http if reader else None, reader=reader)
+    try:
+        items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh,
+                    a.refresh_index, a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=rules,
+                    user=a.user, http=reader.http if reader else None, reader=reader)
+    except ValueError as e:                              # unreadable / headerless BOM, unknown --sources
+        print(f"ecadlib librarian: {e}", file=sys.stderr)
+        return 2
     held = sum(i["status"] != "ready" for i in items)
     print(f"{len(items)} parts: {len(items) - held} ready, {held} held -> {Path(a.out) / 'plan.json'}; review {Path(a.out) / 'review.md'}")
     return 2 if held else 0

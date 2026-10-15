@@ -1,0 +1,49 @@
+{
+  "name": "JST_GH_SM04B-GHS-TB_1x04-1MP_P1.25mm_Horizontal",
+  "description": "JST GH series connector, SM04B-GHS-TB, side entry, 4 pins + mounting pads, 1.25 mm pitch",
+  "package_type": "connector",
+  "pin_count": 4,
+  "pitch": 1.25,
+  "height_max": 4.25,
+  "pad_table": {
+    "unit": "mm",
+    "y_axis": "down",
+    "origin": "center",
+    "arrays": [
+      {
+        "count": 4,
+        "x": -1.875,
+        "y": -1.85,
+        "dx": 1.25,
+        "w": 0.6,
+        "h": 1.7
+      }
+    ],
+    "pads": [
+      {
+        "number": "MP",
+        "x": -3.725,
+        "y": 1.35,
+        "w": 1.0,
+        "h": 2.7
+      },
+      {
+        "number": "MP",
+        "x": 3.725,
+        "y": 1.35,
+        "w": 1.0,
+        "h": 2.7
+      }
+    ],
+    "body": {
+      "x1": -4.125,
+      "y1": -1.6,
+      "x2": 4.125,
+      "y2": 2.45
+    }
+  },
+  "source": {
+    "datasheet": "http://www.jst-mfg.com/product/pdf/eng/eGH.pdf",
+    "drawing": "recommended PCB layout; KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check"
+  }
+}

@@ -143,7 +143,9 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["id", "decision", "user"],
                      "properties": {"id": {"type": "string"},
                                     "decision": {"type": "string", "enum": ["approve", "reject", "rebuild", "retry"]},
-                                    "user": {"type": "string"}, "role": {"type": "string"}, "note": {"type": "string"}}}},
+                                    "user": {"type": "string"}, "role": {"type": "string"}, "note": {"type": "string"},
+                                    "expect": {"type": "string", "description": "build_token from agent_queue_get: the "
+                                               "decision is refused if the item was rebuilt since it was shown"}}}},
     {"name": "find_duplicates",
      "description": "Find duplicate parts (same MPN once packaging suffixes are stripped), footprints (same pad "
                     "geometry) and symbols (same pinout) across the librarian's plan and the workspace's altium_models/ "
@@ -296,7 +298,42 @@ TOOLS = [
                                     "render_only": {"type": "boolean"}}}},
     {"name": "list_example_specs",
      "description": "Return the example package specs (useful as templates for preview_footprint).",
+     "inputSchema": {"type": "object", "properties": {}}},    {"name": "workspace_status",
+     "description": "One-screen summary of the workspace (read-only): parts in each librarian plan with ready / held / "
+                    "waiting-for-sign-off counts, the last triage, the last upkeep run and the library agent's state and "
+                    "review-queue counts. Start here to see what needs attention.",
      "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "doctor",
+     "description": "Check the setup: Python version, packages and tools (pdftoppm, kicad-cli, git), which API keys are "
+                    "set (names only), whether the rules file is valid (file:line of the error), the workspace is "
+                    "writable and the library folders exist. Each check is OK / WARN / FAIL with a fix hint.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "list_plugins",
+     "description": "Installed part-source and exporter plugins (Python entry points ecadlib.providers / ecadlib.exporters), "
+                    "the part-source order in use ([providers] order) and the [notify] webhook targets (names of their "
+                    "environment variables and whether they are set; never the URLs).",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "plugin_export",
+     "description": "Run an exporter plugin on the librarian plan of a BOM; files go to <workspace>/exports/<name>/.",
+     "inputSchema": {"type": "object", "required": ["name", "bom"],
+                     "properties": {"name": {"type": "string", "description": "exporter name from list_plugins"},
+                                    "bom": {"type": "string", "description": "the BOM the librarian ran on"}}}},
+    {"name": "export_parts",
+     "description": "Write the library's parts table for a BOM's librarian plan with stable columns (Part ID, Status, "
+                    "Category, Description, Value, Manufacturer, Manufacturer Part Number, Datasheet, suppliers, symbol / "
+                    "footprint refs and files, KiCad lib ids, release check, sign-off, ...) as CSV, JSON or XLSX for PLM / "
+                    "ERP imports. Returns the workspace path of the file.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "format": {"type": "string", "enum": ["csv", "json", "xlsx"]},
+                                    "include_held": {"type": "boolean", "default": False}}}},
+    {"name": "kicad_dblib",
+     "description": "Write the BOM's library as KiCad files (.kicad_sym, .pretty, lib tables) plus a KiCad 7+ database "
+                    "library: a .kicad_dbl (ODBC to SQLite) and the SQLite parts table, one table per category, and a "
+                    "Database row in sym-lib-table. KiCad needs an SQLite ODBC driver to open it.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "name": {"type": "string", "description": "library name"},
+                                    "driver": {"type": "string", "description": "ODBC driver name (default SQLite3 ODBC Driver)"},
+                                    "include_held": {"type": "boolean", "default": False}}}},
 ]
 
 
@@ -351,7 +388,7 @@ def call_tool(ws, name, args):
             return ws.agent_queue_get(args["id"])
         if name == "agent_queue_decide":
             return ws.agent_queue_decide(args["id"], args["decision"], args["user"], args.get("role"), args.get("note") or "",
-                                         via="ecadlib mcp")
+                                         via="ecadlib mcp", expect=args.get("expect") or None)
         if name == "find_duplicates":
             r = ws.find_duplicates(args["bom"], args.get("merge") is True)
             if "summary" in r:
@@ -405,6 +442,19 @@ def call_tool(ws, name, args):
             return r
         if name == "save_rules":
             return ws.save_rules(args["toml"], args.get("overwrite") is True)
+        if name == "workspace_status":
+            return ws.status()
+        if name == "doctor":
+            return ws.doctor()
+        if name == "list_plugins":
+            return ws.plugins()
+        if name == "plugin_export":
+            return ws.plugin_export(args["name"], args["bom"])
+        if name == "export_parts":
+            return ws.export_parts(args["bom"], args.get("format") or "csv", args.get("include_held") is True)
+        if name == "kicad_dblib":
+            return ws.kicad_dblib(args["bom"], args.get("name") or "ecadlib", args.get("driver") or None,
+                                  args.get("include_held") is True)
     raise KeyError(f"unknown tool {name}")
 
 
@@ -437,9 +487,10 @@ def handle(ws, msg):
             out = call_tool(ws, params.get("name"), params.get("arguments") or {})
             result = {"content": [{"type": "text", "text": json.dumps(out, indent=1, default=str)}], "isError": False}
         except Exception as e:
-            if not isinstance(e, (ValueError, FileExistsError)):
+            user_error = isinstance(e, (ValueError, KeyError, FileExistsError, FileNotFoundError, PermissionError))
+            if not user_error:                            # a bug: keep the traceback; a wrong id / path is the caller's
                 traceback.print_exc(file=sys.stderr)
-            msg = str(e) if isinstance(e, (ValueError, FileExistsError)) else f"{type(e).__name__}: {e}"
+            msg = (e.args[0] if isinstance(e, KeyError) and e.args else str(e)) if user_error else f"{type(e).__name__}: {e}"
             result = {"content": [{"type": "text", "text": msg}], "isError": True}
     else:
         return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}}

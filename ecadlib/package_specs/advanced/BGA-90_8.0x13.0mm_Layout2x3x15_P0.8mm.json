@@ -1,0 +1,26 @@
+{
+  "name": "BGA-90_8.0x13.0mm_Layout2x3x15_P0.8mm",
+  "description": "BGA-90 (x32 SDRAM), 8 x 13 mm, 0.8 mm pitch, 2 x 3 x 15 balls (columns 4..6 empty)",
+  "package_type": "bga",
+  "pin_count": 90,
+  "rows": 15,
+  "cols": 9,
+  "pitch": 0.8,
+  "body_length": {
+    "nom": 8.0
+  },
+  "body_width": {
+    "nom": 13.0
+  },
+  "land_diameter": {
+    "nom": 0.4
+  },
+  "depopulated": [
+    "A4:R6"
+  ],
+  "height_max": 1.2,
+  "density": "B",
+  "source": {
+    "drawing": "KiCad footprint library (gitlab.com/kicad/libraries/kicad-footprints) as the cross-check; dimensions as its name and drawing give them"
+  }
+}
