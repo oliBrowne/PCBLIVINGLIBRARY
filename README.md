@@ -64,7 +64,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `held_parts`, `part_candidates` and `choose_part` (fix a held part), `approval_status` and `approve_part` (sign-off; `user` is required, the agent must pass the person's own name), `find_duplicates` (with `merge`), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed), `sim_models` (SPICE/IBIS models; `attach` writes them) and `list_example_specs`.
-3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib symbol` (section 19), `ecadlib datasheet` and `ecadlib team`. Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team` and `ecadlib agent` (the library agent, section 20). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
 * `uploads/`
@@ -158,6 +158,8 @@ Running the setup again is safe. `.env` keeps its values unless a flag changes t
 **API keys and libraries.** Put `NEXAR_TOKEN=...`, `ANTHROPIC_API_KEY=...` and similar keys in `api-keys.env` next to `docker-compose.yml` (`chmod 600`; it is git-ignored and never copied into the image), then run `docker compose up -d`. KiCad libraries for `--lib` go in `/data/libs`: `docker compose cp ./kicad-libs/. ecadlib:/data/libs/`, then `docker compose restart ecadlib`.
 
 **Users.** After the first admin, manage users on the **Users** page, or with `docker compose run --rm ecadlib team --workspace /data/workspace add-user|reset-password|set-role|list ...`.
+
+**The library agent (optional).** `docker compose --profile agent up -d` also starts `ecadlib agent serve` (section 20) on the same `ecadlib-data` volume. It does nothing until `[agent] enabled = true` is in `/data/workspace/ecadlib.toml`. Until then it only keeps its status file fresh, which is what its health check reads (`ecadlib agent status --healthy 10800`). Its keys (`GITHUB_TOKEN`, `NEXAR_TOKEN`, `ANTHROPIC_API_KEY`) come from `api-keys.env`. The image has no `git`, so each review batch is written to `/data/workspace/agent/batches/<id>/` (PR text and pictures) instead of a pull request. For real PRs, run the agent where git and a checkout of your library repo exist, and set `[agent] library_repo`.
 
 **Back up `/data`.** Everything (users and password hashes, plans, reports, footprints, audit log, libraries) is in the `ecadlib-data` volume. Keep the backup private, because it contains the password hashes:
 
@@ -866,6 +868,49 @@ grid = 100              # 50 or 100 mil
 `ecadlib init` proposes `pin_length` and `grid` when the IC symbols in your SchLibs use other values. Workspace: `preview_symbol(pins, name, split, stack, save)`; MCP tool `preview_symbol`. `datasheet.py` can call `symbol_layout.arrange_pins(pins, rules)` to show the grouping in its review.
 
 **Checked:** an STM32F103-style 100-pin LQFP, an ESP32-WROOM-32 module and an FT232RL USB bridge (tests/fixtures/symbols). Each was checked for grouping, order, overlapping pins and grid, read back with `read_schlib`, and parsed as KiCad. The previews were inspected by eye. **Not checked:** nothing has been opened in Altium Designer or KiCad yet. Name widths are estimated at 70 mil per character, so bodies may be a little wider than needed. Pins whose names match no rule fall back to "other" and are placed by type.
+
+## 20. `agent.py`: the library agent (watch, build, prove, review, push, upkeep)
+
+```
+ecadlib agent run [--dry-run] [--upkeep] [--lib DIR]      # one pass now
+ecadlib agent serve [--interval SECONDS]                  # every [agent] interval_minutes until SIGTERM / Ctrl-C
+ecadlib agent status [--healthy SECONDS]                  # last run, queue counts, batch PRs (exit 1 if stale)
+ecadlib agent approve ID [--user U] [-m NOTE]   |   ecadlib agent reject ID -m NOTE
+ecadlib agent push [--dry-run]                            # approved parts -> Altium 365 now
+python3 -m tests.test_agent
+```
+
+One pass follows the parts your projects and BOMs use and keeps the library right:
+
+1. **Watch.** `agent_watch.scan()` finds parts that are new, changed or removed in the watched sources. Each one becomes a queue item (`agent_queue`, one open item per part).
+2. **Build.** Detected items go through the librarian as one cumulative BOM, `agent/library_bom.csv`, so the agent's library is that BOM's plan under `librarian/`. Sources are tried in the usual order, and with `[agent] datasheet_batch` the datasheet reader sends one Message Batch without waiting: the next pass collects it, and those parts stay `building` until then. A part that still has no symbol or footprint goes to **failed**, with the librarian's reason.
+3. **Pictures and proof.** The `visual_check` renderers draw the part's footprint and symbol twice: *before*, from the current library version (or the library repo's git `HEAD` when the file is gone), and *after*, from the new build. `visual_check.prove()` then compares them with the datasheet. A `fail` verdict goes to **failed** with its reason. `pass`, `doubt` and `skipped` go to **review**, and the doubts are listed.
+4. **Review: one PR per batch.** Review items are grouped `batch_size` at a time. Each batch gets branch `ecadlib/agent-<batch>` in the library git repo (`[agent] library_repo`, else the workspace if it is a repo). That branch holds the changed library files (symbol, footprint, `.kicad_mod`, `plan.json`) and the pictures under `pictures_path`. The commit is built with git plumbing on a temporary index, so the repo's working tree, index and `HEAD` are never touched. The branch is pushed without `--force`. The PR is opened through GitHub REST, with the token from the variable `github_token_env` names and `owner/name` from `github_repo` or the origin remote. Its body has the before/after pictures (linked at the commit), the proof findings and the doubts (release-check holds, `verify` notes, proof warnings). When an item is rebuilt, the same PR is updated (PATCH), never duplicated. The PR text and pictures are always written to `agent/batches/<id>/` too. Without a git repo, a remote or a token, that folder is the whole result, the run report says why, and with git but no token the branch is only committed locally.
+5. **Push.** Approve or reject in the web UI's Review queue or with `ecadlib agent approve|reject`. Sign-off goes through `approvals.py`, so the release check and the push see it. Approved items go to Altium 365 through `altium365.push`, so held parts and unmet approval policies are still skipped. That happens on every pass when `auto_push = true`, otherwise with `ecadlib agent push`. `--dry-run` sends nothing.
+6. **Maintain.** On `upkeep_schedule` (default weekly), `upkeep.run` checks every librarian plan in the workspace. Its new findings become queue items with origin `upkeep`: NRND/LTB/obsolete, stock-out, price jump, KiCad source changed/renamed/deleted, Altium 365 drift. A changed KiCad source is rebuilt; the other findings go straight to review for a person. Good news (back in stock, recovered) is not queued.
+
+Only one pass runs at a time (`agent/run.lock`; a second one returns `skipped`). `agent/status.json` (state, heartbeat, last run) is what the web UI and `status` read. `--dry-run` reports what would be detected, built, batched and pushed. It writes nothing: it puts the watch state back so the next real pass still sees those changes. Workspace: `agent_status()`, `agent_run(dry_run=True)`; MCP tools `agent_status` and `agent_run` (dry run unless `dry_run` is false).
+
+Rules, in `ecadlib.toml`:
+
+```
+[agent]
+enabled = false            # serve idles until true; `agent run` works either way
+interval_minutes = 60
+library_repo = ""          # "" = the workspace when it is a git repo
+library_path = "library"   # where library files go in library_repo when the workspace is outside it
+base_branch = ""           # "" = the repo's current branch
+pictures_path = "agent-pictures"
+github_repo = ""           # owner/name; "" = from the origin remote
+github_token_env = "GITHUB_TOKEN"
+batch_size = 20
+auto_push = false
+upkeep_schedule = "weekly" # off | daily | weekly | monthly
+datasheet_batch = true
+libs = []                  # extra local KiCad library folders
+```
+
+**Checked:** `tests/test_agent.py` (9 tests) runs the whole loop with the real librarian on test_librarian's fake KiCad library, a real temporary git repo with a bare `origin`, and a fake GitHub REST session. The tests cover: two parts to review and one to failed with its reason; one branch and one PR whose body has pictures, findings and doubts; a second pass that changes nothing; a rebuild that PATCHes the same PR; a push that happens only after approval; a dry run that leaves every file and ref as it was; builder and proof failures; the no-git and no-token fallbacks; upkeep findings on their schedule; the run lock; `status --healthy`; and `serve` stopping cleanly. `agent_watch`, `agent_queue` and `visual_check` are fakes that follow the shared contract. **Not checked:** the real sibling modules together with this one (they are built in parallel), a live GitHub PR, and a live Altium 365 push.
 
 ## Releases
 

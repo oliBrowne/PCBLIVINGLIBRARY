@@ -7,6 +7,8 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+- Library agent (`ecadlib agent run|serve|status|approve|reject|push`): watches projects, builds and proves new parts through the librarian, opens one GitHub PR per review batch with before/after pictures (or writes the batch to `agent/batches/` without a token or git), pushes approved parts to Altium 365, turns upkeep findings into queue items; `[agent]` rules (off by default) and an optional `agent` Docker Compose profile.
+
 ## [0.3.0] - 2026-10-14
 
 ### Added
