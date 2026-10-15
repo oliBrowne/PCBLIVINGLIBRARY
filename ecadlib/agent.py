@@ -681,34 +681,41 @@ def _github(ws, cfg, env, session):
 
 
 def close_batch(ws, rules, batch_id, members, now=None, env=None, session=None, log=None):
-    """Every item of the batch is decided (pushed, rejected or failed) and none waits for its push: comment the
-    outcome on its PR and close it, so PRs never pile up. The branch stays (pushed parts' files are on it). -> rec."""
+    """Every item of the batch is decided (pushed, rejected or failed) and none waits for its push. With a pushed part
+    the PR is how the library repo gets its files: one "all parts decided; ready to merge" comment, and it stays
+    open (rec["ready"]). With nothing pushed: an outcome comment and the PR is closed (rec["closed"]), so PRs never
+    pile up. Nothing happens twice. -> rec."""
     ws, cfg, env = Path(ws), settings(rules), os.environ if env is None else env
     bdir = ws / "agent" / "batches" / _safe(batch_id)
     rec = read_json(bdir / "batch.json", {"id": batch_id})
-    if rec.get("closed"):
+    if rec.get("closed") or rec.get("ready"):
         return rec
-    lines = [f"- {_md(m.get('mpn') or m['key'])}: {_md(m['status'])}" for m in members]
-    text = ("Every part of this batch is decided, so the library agent closes this PR:\n\n" + "\n".join(lines or ["- (no parts left)"])
-            + "\n\nPushed parts are in Altium 365; their library files stay on this branch (reopen the PR to merge them).")
+    pushed = [m for m in members if m["status"] == "pushed"]
+    lines = "\n".join([f"- {_md(m.get('mpn') or m['key'])}: {_md(m['status'])}" for m in members] or ["- (no parts left)"])
+    if pushed:
+        text = (f"All parts decided; ready to merge.\n\n{lines}\n\nThe pushed parts are in Altium 365; merging this PR "
+                "adds their library files to the library repo. Files of rejected or failed parts were taken out.")
+    else:
+        text = f"Every part of this batch is decided and none was pushed, so the library agent closes this PR:\n\n{lines}"
     if rec.get("pr_number") and rec.get("pr_state") != "closed":
         try:
             gh, why = _github(ws, cfg, env, session)
             if gh is None:
-                raise RuntimeError(f"PR left open: {why}")
+                raise RuntimeError(f"PR not updated: {why}")
             gh.api("POST", f"issues/{rec['pr_number']}/comments", {"body": text})
-            gh.api("PATCH", f"pulls/{rec['pr_number']}", {"state": "closed"})
-            rec["pr_state"] = "closed"
-        except Exception as e:                      # not closed: tried again next pass
+            if not pushed:                               # a PR holding pushed parts is never closed by the agent
+                gh.api("PATCH", f"pulls/{rec['pr_number']}", {"state": "closed"})
+                rec["pr_state"] = "closed"
+        except Exception as e:                      # tried again next pass
             rec["close_note"] = f"{type(e).__name__}: {e}"
             if bdir.is_dir():
                 write_json(bdir / "batch.json", rec)
             return rec
-    rec.update(closed=stamp(now), outcome={m["id"]: m["status"] for m in members})
+    rec.update({"ready" if pushed else "closed": stamp(now)}, outcome={m["id"]: m["status"] for m in members})
     rec.pop("close_note", None)
     bdir.mkdir(parents=True, exist_ok=True)
     write_json(bdir / "batch.json", rec)
-    (log or (lambda *a: None))(f"agent: batch {batch_id} closed")
+    (log or (lambda *a: None))(f"agent: batch {batch_id} {'ready to merge' if pushed else 'closed'}")
     return rec
 
 
@@ -829,6 +836,8 @@ def run_once(workspace, rules=None, dry_run=False, client=None, now=None, *, wat
     upkeep(ws, rules, now) -> findings, github_session (requests-like), a365 (Nexar-like client), env."""
     ws = Path(workspace).resolve()
     rules = RU.resolve(rules, ws)
+    from .agent_queue import use_rules
+    use_rules(rules)                              # [agent] manufacturer_aliases for part keys
     cfg, t, log = settings(rules), stamp(now), log or (lambda *a: None)
     env = os.environ if env is None else env
     rep = {"started": t, "dry_run": dry_run, "detected": [], "built": [], "review": [], "failed": [], "waiting": [],
@@ -973,10 +982,13 @@ def _pass(ws, rules, cfg, t, dry_run, client, now, watcher, q, prover, builder, 
         members = q.list(batch=bid)
         rec = read_json(ws / "agent" / "batches" / _safe(bid) / "batch.json", {})
         if members and all(m["status"] in ("pushed", "rejected", "failed") for m in members) or (not members and rec):
-            try:                                        # all decided, nothing waits for a push: close its PR
+            try:                                        # all decided, nothing waits for a push: close or ready
+                pushed = [m for m in members if m["status"] == "pushed"]
+                if pushed and any(_departed(lookup(i), bid) for i in rec.get("paths", {})):
+                    publish_batch(ws, rules, bid, pushed, out, now, env, session, log, lookup=lookup)  # take out first
                 rec = close_batch(ws, rules, bid, members, now, env, session, log)
-                if rec.get("closed") and hasattr(q, "update_batch"):
-                    q.update_batch(bid, status="closed")
+                if (rec.get("closed") or rec.get("ready")) and hasattr(q, "update_batch"):
+                    q.update_batch(bid, status="closed" if rec.get("closed") else "ready")
             except (KeyError, ValueError, OSError) as e:
                 rep["notes"].append(f"batch {bid}: not closed: {type(e).__name__}: {e}")
             touched.pop(bid, None)
@@ -1074,10 +1086,10 @@ def _read_lines(ws):
         lines = None
     if not isinstance(lines, dict):           # starting from {} would drop every part built so far from the plan
         raise RuntimeError(f"{f} is damaged; restore it (its lines are also in {BOM_NAME}) before the agent builds again")
-    from .agent_queue import renorm_key
     out = {}
-    for k, ln in lines.items():                # keys from before manufacturer names were normalised
-        out.setdefault(renorm_key(k), ln)
+    for k, ln in lines.items():                # keys from before manufacturer names were normalised (or another table)
+        m, _, n = k.partition("|")
+        out.setdefault(part_key((ln or {}).get("manufacturer") or m, n), ln)
     for k in [k for k in out if k.startswith("|")]:   # a blank maker line once that MPN has exactly one known maker
         if len([x for x in out if x.endswith(k) and x != k]) == 1:
             del out[k]
