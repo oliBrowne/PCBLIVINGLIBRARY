@@ -1,0 +1,58 @@
+{
+ "_fixture": "SYNTHETIC: hand-written in the shape easyeda2kicad 1.0.1 parses (EeFootprintPad/EeSymbolPin field order); not a real EasyEDA response. Footprint 10-mil units around head x/y; a made-up SOT-23-3 part.",
+ "success": true,
+ "code": 0,
+ "result": {
+  "uuid": "fixture",
+  "title": "EEPART1",
+  "description": "synthetic SOT-23 part",
+  "lcsc": {
+   "number": "C2002",
+   "url": "https://www.lcsc.com/product-detail/C2002.html"
+  },
+  "dataStr": {
+   "head": {
+    "x": 400,
+    "y": 300,
+    "c_para": {
+     "pre": "Q?",
+     "name": "EEPART1",
+     "package": "SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR",
+     "Manufacturer": "ACME",
+     "Manufacturer Part": "EEPART1"
+    }
+   },
+   "shape": [
+    "R~390~290~~~20~20~#880000~1~0~none~gge1~0",
+    "P~show~1~1~380~295~0~gge1p~0^^380~295^^M 380 295 h 10~#880000^^1~380~295~0~G~start~~~#0000FF^^1~380~295~0~1~end~~~#0000FF^^0~380~295^^0~M 0 0",
+    "P~show~2~2~380~305~0~gge2p~0^^380~305^^M 380 305 h 10~#880000^^1~380~305~0~S~start~~~#0000FF^^1~380~305~0~2~end~~~#0000FF^^0~380~305^^0~M 0 0",
+    "P~show~3~3~420~300~0~gge3p~0^^420~300^^M 420 300 h -10~#880000^^1~420~300~0~D~start~~~#0000FF^^1~420~300~0~3~end~~~#0000FF^^0~420~300^^0~M 0 0",
+    "PL~395 295 405 300 395 305~#880000~1~0~none~gge20~0",
+    "T~L~400~285~0~#0000FF~~9pt~~~~comment~EEPART1~1~start~gge21~0"
+   ]
+  },
+  "packageDetail": {
+   "title": "SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR",
+   "dataStr": {
+    "head": {
+     "x": 4000,
+     "y": 3000,
+     "c_para": {
+      "package": "SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR"
+     }
+    },
+    "shape": [
+     "PAD~RECT~3996.2598~3003.937~2.3622~3.5433~1~~1~0~~0~gge1~0~~Y~0",
+     "PAD~RECT~4003.7402~3003.937~2.3622~3.5433~1~~2~0~~0~gge2~0~~Y~0",
+     "PAD~RECT~4000.0~2996.063~2.3622~3.5433~1~~3~0~~0~gge3~0~~Y~0",
+     "TRACK~0.4724~3~~3997.0472 2999.2126 3997.0472 3000.7874~gge10~0",
+     "TRACK~0.4724~3~~4002.9528 2999.2126 4002.9528 3000.7874~gge11~0",
+     "TRACK~0.3937~13~~3997.4409 2994.2913 4002.5591 2994.2913 4002.5591 3005.7087 3997.4409 3005.7087 3997.4409 2994.2913~gge12~0",
+     "CIRCLE~3994.4882~3006.6929~0.2~0.4724~3~gge13~0",
+     "TEXT~N~3998~2992~0.6~0~0~3~~4.5~SOT-23~M 3998 2992~~gge14~0",
+     "SVGNODE~{\"gId\": \"g1\", \"nodeName\": \"g\", \"attrs\": {\"c_etype\": \"outline3D\", \"uuid\": \"0123456789abcdef\", \"title\": \"SOT-23-3\", \"z\": \"0\"}}"
+    ]
+   }
+  }
+ }
+}

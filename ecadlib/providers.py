@@ -121,12 +121,12 @@ class JLCPCBSearch(Provider):
             res.error = r.error or f"HTTP {r.status}"
             return res
         try:
+            from .kicad_index import norm_mpn
             items = (((r.json().get("data") or {}).get("componentPageInfo") or {}).get("list")) or []
-        except ValueError as e:
+            exact = [i for i in items if norm_mpn(i.get("componentModelEn")) == norm_mpn(mpn)]
+        except (ValueError, AttributeError, TypeError) as e:          # untrusted body of an unexpected shape
             res.error = f"unparseable: {e}"
             return res
-        from .kicad_index import norm_mpn
-        exact = [i for i in items if norm_mpn(i.get("componentModelEn")) == norm_mpn(mpn)]
         best = (exact or [None])[0]
         res.found = bool(best)
         if best:

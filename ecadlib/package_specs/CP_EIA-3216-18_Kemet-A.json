@@ -1,0 +1,27 @@
+{
+  "name": "CP_EIA-3216-18_Kemet-A",
+  "description": "Tantalum capacitor EIA 3216-18 (Kemet case A), pin 1 = +",
+  "package_type": "molded",
+  "pin_count": 2,
+  "body_length": {
+    "nom": 3.2,
+    "tol": 0.2
+  },
+  "body_width": {
+    "nom": 1.6,
+    "tol": 0.2
+  },
+  "terminal_width": {
+    "nom": 1.2,
+    "tol": 0.1
+  },
+  "terminal_length": {
+    "nom": 0.8,
+    "tol": 0.3
+  },
+  "polarized": true,
+  "density": "B",
+  "source": {
+    "drawing": "Kemet T491 case A - typical JEDEC/datasheet outline - check against your part's datasheet"
+  }
+}

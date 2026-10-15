@@ -1,0 +1,17 @@
+# A tiny ecadlib plugin: one part source and one exporter.   pip install ./examples/ecadlib_example_plugin
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecadlib-example-plugin"
+version = "0.1.0"
+description = "Example ecadlib plugin: a stockroom CSV part source and a Markdown catalog exporter"
+requires-python = ">=3.10"
+dependencies = ["ecadlib"]
+
+[project.entry-points."ecadlib.providers"]
+stockroom = "ecadlib_example_plugin:StockroomCSV"
+
+[project.entry-points."ecadlib.exporters"]
+markdown-catalog = "ecadlib_example_plugin:markdown_catalog"

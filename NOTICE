@@ -1,0 +1,44 @@
+ecad-librarian
+Copyright (c) 2026 oliver browne. Licensed under the MIT License (see LICENSE).
+
+This product includes material derived from AltiumSharp
+(https://github.com/issus/AltiumSharp), licensed under the Apache License,
+Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0):
+
+  * ecadlib/altium_lib.py ports the PcbLib/SchLib binary record layouts
+    (primitive common header, track, fill, region and pad records including
+    the pad main-block tail template, SchLib pin records, library/section
+    stream structure) from AltiumSharp's C# readers and writers. Modified:
+    rewritten in Python, reduced to the subset this project writes.
+  * ecadlib/assets/pcblib_template.json.gz holds the Library/Data header
+    parameters and the FileVersionInfo stream extracted from the AltiumSharp
+    TestData file "PCB - LEADLESS - QFN - PSEMI QFN-24 4x4.PcbLib"
+    (FILENAME and 2DCONFIGFULLFILENAME blanked).
+  * ecadlib/altium_lib.py also ports the through-hole pad hole fields, the arc
+    record, the ComponentBody record and parameter order, the Library/Models
+    storage and the 3D model checksum (PcbLibWriter.cs, PcbModel.cs).
+  * ecadlib/altium_lib.py also ports the PCB text record (252-byte block layout
+    and its constant fields, PcbLibWriter.cs WriteText/BuildTextExtended), the
+    WideStrings ENCODEDTEXT stream, the SchLib pin symbol and display-mode bytes
+    and the OwnerPartDisplayMode parameter order (SchLibWriter.cs).
+  * tests/test_kicad_import.py embeds three records from AltiumSharp TestData
+    (PAD_TH_SLOT, ARCS_TEST and BODY_3D .PcbLib files) as byte references.
+  * tests/test_altium_polish.py embeds three text records (TEXT_DESIGNATOR and
+    TEXT_TEST .PcbLib) and three pin records (CLOCK_PIN, INVERTED_PIN and
+    ACTIVE_LOW_PIN .SchLib) from AltiumSharp TestData as byte references.
+
+tests/fixtures/kicad/USB_C_Receptacle_HRO_TYPE-C-31-M-12.kicad_mod and
+tests/fixtures/kicad/Regulator_Linear_AMS1117.kicad_sym (symbols AP1117-15 and
+AMS1117-3.3 combined into one library file) are from the KiCad libraries
+(https://gitlab.com/kicad/libraries, kicad-footprints and kicad-symbols),
+Copyright the KiCad Library contributors, licensed CC-BY-SA 4.0 with the KiCad
+libraries' design-use exception (https://www.kicad.org/libraries/license/).
+Footprints, symbols and 3D models converted from those libraries by
+ecadlib/kicad_import.py are written to out/altium_models_kicad/, which is not
+committed.
+
+tests/nexar/schema.graphql is from NexarDeveloper/nexar-release-component-demo-wpf
+(MIT).
+
+No code from altium-designer-mcp (GPL-3.0) is included; it was read only
+for behavioural notes about which files Altium Designer accepts.

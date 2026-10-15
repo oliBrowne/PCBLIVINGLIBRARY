@@ -1,4 +1,16 @@
 __pycache__/
 *.pyc
 out/http_cache/
+out/altium_models_kicad/
 .venv/
+ecadlib_workspace/
+build/
+*.egg-info/
+out/librarian/
+out/kicad/
+
+# stray package downloads
+*.whl
+api-keys.env
+.env
+certs/
