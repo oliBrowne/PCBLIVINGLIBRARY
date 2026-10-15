@@ -159,7 +159,7 @@ def plan_fields(item, lib, fp_name, props, rules=None):
     out = [("Reference", props.get("Reference", "U")), ("Value", par.get("Value") or item["name"]),
            ("Footprint", f"{lib}:{fp_name}" if fp_name else ""),
            ("Datasheet", par.get("ComponentLink2URL") or par.get("Datasheet") or (props.get("Datasheet", "") if props.get("Datasheet", "") != "~" else "")),
-           ("Description", str(item.get("description") or "").strip() or props.get("Description", "")),
+           ("Description", str(item.get("description") or "").strip() or props.get("Description") or props.get("ki_description", "")),
            ("Manufacturer", par.get("Manufacturer", "")), ("MPN", par.get("Manufacturer Part Number", ""))]
     for k in sorted(par):
         m = re.fullmatch(r"Supplier (\d+)", k)
@@ -606,6 +606,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
             sym = sym_kicad8(sym)
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
             set_fields(sym, plan_fields(it, lib, row["footprint"], props, rules))
+            sym[:] = [c for c in sym if not (isinstance(c, list) and c[:2] == ["property", "ki_description"])]   # KiCad 7 -> Description
             if it.get("sim_model"):               # attached by `ecadlib sim-models --attach`: Sim.* fields + model file
                 from .sim_models import kicad_export_fields
                 sim = kicad_export_fields(it, plan_dir, out / f"{lib}.sim", f"{lib}.sim", notes)

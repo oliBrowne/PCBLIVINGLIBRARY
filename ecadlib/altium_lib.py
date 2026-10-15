@@ -242,7 +242,7 @@ def texts_from_kicad(t):
         font, just = sexpr.first(eff, "font") or [], sexpr.first(eff, "justify") or []
         size, th = sexpr.first(font, "size"), sexpr.first(font, "thickness")
         h = float(size[2]) if size else 1.0
-        rot = float(at[3]) % 360 if len(at) > 3 else 0.0
+        rot = float(at[3]) % 360 if len(at) > 3 and at[3] != "unlocked" else 0.0    # KiCad 6/7: (at x y [rot] unlocked)
         rot = rot - 180 if 90 < rot <= 270 else rot        # KiCad keeps footprint text upright; Altium doesn't
         txt, layer, chars = KTEXT[kind]
         a, dx, dy = math.radians(rot), -CHAR_W * h * chars * (0 if "left" in just else 1 if "right" in just else 0.5), -h / 2

@@ -30,6 +30,30 @@ jobs:
           SOURCE_DATE_EPOCH: "1791936000"
         run: python -m tests.run_all
 
+  kicad:
+    # Optional: the tests that need real KiCad (tests/test_kicad_real.py, and kicad_export's kicad-cli check). They skip
+    # in the job above. Ubuntu's kicad package is KiCad 7; the PPA row runs them on KiCad 8 (the export's own format).
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        kicad: ["ubuntu", "ppa:kicad/kicad-8.0-releases"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Install KiCad (kicad-cli, and pcbnew for the system Python)
+        run: |
+          if [ "${{ matrix.kicad }}" != "ubuntu" ]; then sudo add-apt-repository -y "${{ matrix.kicad }}"; fi
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends kicad
+          kicad-cli version && /usr/bin/python3 -c "import pcbnew; print(pcbnew.Version())"
+      - name: Run the real-KiCad tests
+        run: python -m tests.run_all test_kicad_real test_kicad_export
+
   package:
     # Build the sdist and wheel the release workflow would publish, then install each into a
     # clean venv and smoke-test it from outside the checkout (catches missing package data).
