@@ -274,6 +274,92 @@ def test_random_specs_hold_their_invariants():
                     assert m[mode] == 2 and struct.unpack_from("<i", m, off)[0] == AL.mm(float(v[1])), (spec["name"], k[1], key)
 
 
+# ---------------------------------------------------------------- follow-up: custom pads back to KiCad, pin lines, via units, IPC
+def test_polygon_pads_come_back_from_a_pcblib_as_kicad_custom_pads():
+    from ecadlib import kicad_import as K
+    src = ('(footprint "R" (version 20221018) (layer "F.Cu")\n'
+           ' (pad "1" smd custom (at 1 2 90) (size 0.5 0.5) (layers "F.Cu" "F.Paste" "F.Mask") (solder_mask_margin 0.05)'
+           ' (options (clearance outline) (anchor rect))'
+           ' (primitives (gr_poly (pts (xy -0.25 -0.25) (xy 2 -0.25) (xy 2 0.25) (xy -0.25 0.25)) (width 0) (fill yes))))\n'
+           ' (pad "2" thru_hole custom (at -3 0) (size 1 1) (drill 0.5) (layers "*.Cu" "*.Mask") (options (clearance outline) (anchor circle))'
+           ' (primitives (gr_poly (pts (xy -0.5 -0.5) (xy 1.5 -0.5) (xy 1.5 0.5) (xy -0.5 0.5)) (width 0) (fill yes)))))')
+    notes = []
+    fp, _ = K.convert_footprint(src, "R", notes=notes)
+    assert any("inner layers get the anchor" in n for n in notes), notes
+    with tempfile.TemporaryDirectory() as d:
+        AL.write_pcblib(Path(d) / "r.PcbLib", [fp])
+        back = sexpr.parse(X.footprint_from_pcblib(Path(d) / "r.PcbLib", "R", []))
+    assert not [g for g in sexpr.find(back, "fp_poly") if sexpr.first(g, "layer")[1] in ("F.Cu", "B.Cu", "F.Mask", "F.Paste")]
+    orig = sexpr.parse(src)
+    for a, b in zip(sexpr.find(orig, "pad"), sexpr.find(back, "pad")):            # same pad, primitive, anchor, layers, margin
+        assert b[3] == "custom" and sexpr.first(b, "at") == sexpr.first(a, "at") and sexpr.first(b, "layers") == sexpr.first(a, "layers")
+        assert sexpr.first(sexpr.first(b, "options"), "anchor") == sexpr.first(sexpr.first(a, "options"), "anchor")
+        pa = [[float(v) for v in xy[1:]] for xy in sexpr.find(sexpr.first(sexpr.first(sexpr.first(a, "primitives"), "gr_poly"), "pts"), "xy")]
+        pb = [[float(v) for v in xy[1:]] for xy in sexpr.find(sexpr.first(sexpr.first(sexpr.first(b, "primitives"), "gr_poly"), "pts"), "xy")]
+        assert sorted(map(tuple, pa)) == sorted(map(tuple, pb)), (pa, pb)
+        assert sexpr.first(b, "solder_mask_margin") == sexpr.first(a, "solder_mask_margin")
+    fp2, _ = F.altium_footprint(SPEC("Example_Custom_LPad_Slot"))                 # the shipped polygon-pad example too
+    with tempfile.TemporaryDirectory() as d:
+        AL.write_pcblib(Path(d) / "x.PcbLib", [fp2])
+        back2 = X.footprint_from_pcblib(Path(d) / "x.PcbLib", "x", [])
+    ref = B.numbers(F.build(SPEC("Example_Custom_LPad_Slot"))[0])
+    assert B.compare(B.numbers(back2), ref)["all_pads_ok"] and C.check(back2) == []
+
+
+def test_pin_lying_on_or_crossing_another_pin_is_reported():
+    pin = lambda n, side, x, y: ("pin", {"num": n, "name": f"P{n}"}, side, x, y, 30)
+    sym = {"prims": [("rect", 0, 0, 40, -60), pin("1", "left", 0, -10), pin("2", "left", -20, -10), pin("3", "right", 40, -20)]}
+    assert SL.check(sym) == ["pin 2 lies on or crosses pin 1's line in part 1"], SL.check(sym)
+    sym["prims"][2] = pin("2", "bottom", -10, 0)                                  # a vertical pin line through pin 1's
+    assert SL.check(sym) == ["pin 2 lies on or crosses pin 1's line in part 1"], SL.check(sym)
+    sym["prims"][2] = pin("2", "left", 0, -20)
+    assert SL.check(sym) == []
+
+
+def test_thermal_vias_in_the_tables_unit():
+    base = SPEC("QFN-16-1EP_3x3mm_P0.5mm_EP1.75x1.75mm_ThermalVias")
+    vias = lambda s: sorted((round(r["x"], 4), round(r["y"], 4), round(r["w"], 4)) for r in C._pad_rects(sexpr.parse(F.build(s)[0]))
+                            if r["kind"] == "thru_hole")
+    want = vias(base)
+    tv = {"drill": 0.2 / 0.0254, "diameter": 0.5 / 0.0254, "nx": 2, "ny": 2, "pitch": 1.25 / 0.0254, "unit": "mil"}
+    s = json.loads(json.dumps(base))
+    s["pad_table"]["pads"][0]["thermal_vias"] = tv
+    F.validate(s)
+    assert vias(s) == want and len(want) == 4, (vias(s), want)
+    t = json.loads(json.dumps(base))                                                # "table": the pad table's own unit
+    t["pad_table"]["unit"] = "mil"
+    for a in t["pad_table"]["arrays"]:
+        for k in ("x", "y", "dx", "dy", "w", "h"):
+            if k in a:
+                a[k] = round(a[k] / 0.0254, 6)
+    for k in ("w", "h"):
+        t["pad_table"]["pads"][0][k] = round(t["pad_table"]["pads"][0][k] / 0.0254, 6)
+    t["pad_table"]["body"] = {k: round(v / 0.0254, 6) for k, v in t["pad_table"]["body"].items()}
+    t["pad_table"]["pads"][0]["thermal_vias"] = dict(tv, unit="table")
+    F.validate(t)
+    assert vias(t) == want, (vias(t), want)
+
+
+def test_ipc_bga_land_table():
+    assert [A.ipc_bga_land(b)[0] for b, _ in A.IPC_BGA_COLLAPSING] == [l for _, l in A.IPC_BGA_COLLAPSING]
+    assert A.ipc_bga_land(0.17)[0] == 0.15 and A.ipc_bga_land(0.15)[0] == 0.13          # 0.17 gave 0.14 before
+
+
+def test_bga_grid_size_is_a_clear_error():
+    for cols in (1e6, 2.5, 0):                         # was a TypeError / a million-column loop (tests/test_fuzz.py seed 16)
+        try:
+            A.bga_balls({"rows": 13, "cols": cols, "pitch": 0.8})
+            raise AssertionError(cols)
+        except ValueError as e:
+            assert "rows / cols" in str(e)
+
+
+def test_staggered_single_row_header_pitch_in_the_visual_facts():
+    from ecadlib import visual_check as V
+    f = V.facts(V.parse_footprint(F.build(SPEC("PinHeader_1x05_P1.00mm_Vertical_SMD_Pin1Left"))[0]))
+    assert f["pitch"] == 1.0, f["pitch"]                # nearest pads are the same-side ones 2.0 mm apart
+
+
 if __name__ == "__main__":
     for n, fn in list(globals().items()):
         if n.startswith("test_"):
