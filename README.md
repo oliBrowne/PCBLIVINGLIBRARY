@@ -713,7 +713,7 @@ Writes what the librarian built for Altium as a KiCad library: `mylib.kicad_sym`
 * **Symbols:** a part whose symbol came from KiCad (`kicad:` or a `--lib` folder) gets that KiCad symbol again, with its `extends` chain flattened and renamed; an EasyEDA symbol is converted again from the EasyEDA data; anything else (datasheet reader, or a source that can't be reached) is drawn from its `.SchLib`, read back with `altium_lib.read_schlib` (pins with type, shape and visibility, body graphics, parts as units, display modes as De Morgan styles).
 * **Footprints:** the plan's `.kicad_mod` when there is one, else the `.PcbLib` converted back. STEP files come from `kicad-packages3D` (through the HTTP cache); ecadlib-generated footprints have none, since Altium gets an extruded body.
 * **Format:** KiCad 8 (`.kicad_sym` version 20231120, footprints at most 20240108), so KiCad 8, 9 and 10 can open it. KiCad 9/10 syntax from the upstream library is written the KiCad 8 way and flags KiCad 8 doesn't know are dropped.
-* **Checks:** every file parses with `ecadlib.sexpr`, each footprint passes release_check's footprint rule at the level the release check recorded, and symbol pins are checked against footprint pads. **Not verified in KiCad itself:** `kicad-cli` isn't installed here, and `tests/test_kicad_export.py` runs it only when it is.
+* **Checks:** every file parses with `ecadlib.sexpr`, each footprint passes release_check's footprint rule at the level the release check recorded, and symbol pins are checked against footprint pads. **In KiCad itself** (7.0.11, see section 25): the `fp-lib-table` resolves in a KiCad project and its footprints match the library; KiCad 7 refuses the KiCad 8 symbol library as such, and loads it with the two KiCad 8 tokens (`exclude_from_sim`, `generator_version`) removed, every pin, graphic and field unchanged. KiCad 8, 9 and 10 were not run here. A KiCad 7 symbol's `ki_description` becomes the `Description` field.
 * **License:** KiCad library content is CC-BY-SA 4.0. An export that includes some gets a `NOTICE.txt`, and the export stays out of git (`out/kicad/` is in `.gitignore`).
 
 ## 12. `approvals.py` and `dedupe.py`: sign-off and duplicates
@@ -1156,6 +1156,38 @@ python3 -m tests.test_integration_io
   * Verified: the JSON keys (`source.connection_string`, `source.timeout_seconds`, `cache.max_age`, `visible_on_add`, `inherit_properties`, ...), `${CWD}` and the `Database` plugin type all appear in KiCad 7.0.11's `_eeschema.kiface`, and the SQLite tables answer the queries KiCad makes (`SELECT * FROM "table" WHERE "Part ID" = ?`).
   * **Not verified:** KiCad has not opened the database library itself, because no SQLite ODBC driver is installed here. On Windows, install the "SQLite3 ODBC Driver" (ch-werner.de, which is the default `--driver`). On Linux, install libsqliteodbc (driver `SQLite3`). On macOS, install sqliteodbc.
 * **Parts table** (`export-parts`): one row per library part (held parts only with `--include-held`). The columns are `parts_export.COLUMNS`: Part ID, Status, Category, Folder, Description, Value, Manufacturer, Manufacturer Part Number, Datasheet, Supplier 1/2 and their part numbers, Lifecycle, Altium symbol/footprint refs and files, KiCad lib ids, 3D height, release check, hold reasons, sign-off and approvers (from the approvals policy), sources, and Other Parameters. New columns are only ever added at the end. CSV is UTF-8 with BOM, XLSX stores every cell as text, and both neutralise formula cells. JSON is `{"format": "ecadlib-parts", "version": 1, "columns": [...], "parts": [...]}` with Other Parameters as an object. Workspace: `export_parts(bom, fmt)` and `kicad_dblib(bom)`, also available as MCP tools.
+
+## 28. Real KiCad checks (`tests/test_kicad_real.py`)
+
+```
+python3 -m tests.test_kicad_real          # needs kicad-cli and KiCad's pcbnew Python module; skips cleanly without
+```
+
+Run 2026-10-15 with KiCad 7.0.11 (`kicad-cli`, `pcbnew` from `/usr/bin/python3`). The pcbnew work runs in
+`tests/kicad_pcbnew_job.py` in a subprocess (KiCad's Python is often not the one running the tests).
+
+* **Footprints:** all 68 package specs, density A and C of the 27 IPC parts and 30 random BGA / header / connector specs
+  (152 files, 6389 pads) load in pcbnew with our pad numbers, centres, sizes and layers, one closed courtyard outline
+  with our box, and the same graphics per layer; `kicad-cli fp upgrade` writes the same pads back and `fp export svg`
+  plots them all. Done by hand once more over 174 files and 120 random specs: no difference.
+* **DRC** (`pcbnew.WriteDRCReport`, one net per pad number) on a board of all 122 spec footprints: the only findings
+  are the ones KiCad 7.0.11's own footprints of the same names show on the same board (0.2 mm thermal-via drills,
+  the 1.00 mm header's 0.15 mm pad gap, USB-C's stacked pads, mounting pads with one number, REF** over the SOT-23
+  pin-1 triangle). Density C put REF** on the silk outline; fixed.
+* **Library tables:** the exported `fp-lib-table` (`version 7`, `${KIPRJMOD}`) resolves in a KiCad 7 project; DRC's
+  library check finds every footprint and reports none as different from the library (a wrong library or name is
+  reported, so the check is live). `sym-lib-table` has the same syntax; KiCad 7 has no CLI that loads it.
+* **Symbols:** see section 11; EasyEDA symbols too (a slanted EasyEDA pin made KiCad reject the whole library: pins
+  are now drawn at 0/90/180/270 with a note).
+* **kicad_import** reads pads (number, centre, size, rotation, drill, slot direction, plating) exactly as pcbnew does:
+  6304 pads of ours in the test, and by hand 71,605 pads of 2291 KiCad 7.0.11 library footprints (18 libraries) and
+  2548 KiCad 7 symbols without an error after two fixes (text `(at x y unlocked)`, zero-length arcs).
+* **PcbLib back to KiCad:** `kicad_export.footprint_from_pcblib` output for all 68 specs loads (on KiCad 7 after
+  rewriting its KiCad 8 header and Reference/Value properties) with the same copper pads, holes and pad outlines.
+* **STEP:** `step_gen` models of 10 families, put on a board, go through KiCad's OpenCascade reader
+  (`kicad-cli pcb export step`) with no read error and every solid in the output; by hand all 68 specs (3151 solids).
+* **Not checked:** KiCad 8, 9 and 10 (not installed; the optional CI job `kicad` also runs the tests on KiCad 8 from
+  the KiCad PPA, not run from here); `sym-lib-table` loaded by KiCad; STEP geometry inside KiCad beyond loading.
 
 ## Releases
 

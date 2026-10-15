@@ -442,6 +442,7 @@ def build(spec, density=None):
         xe = max(bx, max(p[1] for p in pads))
         out += [line(xl, -yl, xl, yl, "F.SilkS", SILK_W), line(xl, -yl, xe, -yl, "F.SilkS", SILK_W),
                 line(xl, yl, xe, yl, "F.SilkS", SILK_W)]
+        silk_y = yl
     else:
         box = [((-sx, -sy), (sx, -sy)), ((sx, -sy), (sx, sy)), ((sx, sy), (-sx, sy)), ((-sx, sy), (-sx, -sy))]
         segs = [s for b in box for s in _clip(b, copper, c)]
@@ -449,6 +450,7 @@ def build(spec, density=None):
             c = SILK_CLEAR_SMALL + SILK_W / 2
             segs = [s for b in box for s in _clip(b, copper, c)]
         out += [line(a[0], a[1], b[0], b[1], "F.SilkS", SILK_W) for a, b in segs]
+        silk_y = max((abs(v[1]) for sg in segs for v in sg), default=0.0)
         if not two_term:                                              # pin-1 triangle just above pad 1
             if t == "qfn" and spec.get("pins_top_bottom", 1) != 0:
                 ax, ay = -sx, -sy
@@ -456,6 +458,8 @@ def build(spec, density=None):
                 ax, ay = p1[1], p1[2] - p1[4] / 2 - c
             out.append(pin1_triangle(ax, ay))
 
+    if silk_y + SILK_W / 2 > cy:                                      # silk outline past the courtyard (density C):
+        out[5] = text("reference", "REF**", 0, -round(silk_y + SILK_W / 2 + 0.7, 4), "F.SilkS")  # keep REF** off it
     out.append(rect(-cx, -cy, cx, cy, "F.CrtYd", CRT_W))
     out += [pad(*p) for p in pads] + ep_lines
     if spec.get("model_3d"):
