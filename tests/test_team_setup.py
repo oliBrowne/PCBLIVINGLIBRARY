@@ -194,7 +194,15 @@ def test_docker_files_wire_the_proxy_trust_correctly():
     assert "ports:" not in ecad and "ipv4_address" not in ecad and "ip_range:" in compose
     assert "172.30.87.2" not in "172.30.87.128/25"           # Caddy's address lies outside the dynamic range
     # the SSO user header is never passed through from clients
-    assert "header_up -X-Forwarded-User" in caddy
+    assert "header_up -{$ECADLIB_PROXY_USER_HEADER:X-Forwarded-User}" in caddy
+    # ...and the header ecadlib believes is pinned to that same name on the command line, which overrides a
+    # proxy_user_header in team.json (that one used to be believed from Caddy while Caddy passed it on from anyone)
+    hdr = re.search(r"--proxy-user-header\n\s+- (\S+)", ecad).group(1)
+    assert hdr == "${ECADLIB_PROXY_USER_HEADER:-X-Forwarded-User}"
+    assert "ECADLIB_PROXY_USER_HEADER: " + hdr in compose.split("\n  caddy:")[1]
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "team.json").write_text('{"proxy_user_header": "Remote-User"}')
+        assert TM.load_config(d, {"proxy_user_header": "X-Forwarded-User"})["proxy_user_header"] == "X-Forwarded-User"
     # image: non-root, health check, no secrets, ecadlib refuses plain HTTP unless compose says otherwise
     assert re.search(r"^USER ecadlib$", df, re.M) and "HEALTHCHECK" in df and "VOLUME" in df
     assert not re.search(r"(TOKEN|KEY|PASSWORD|SECRET)\s*=", df)

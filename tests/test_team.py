@@ -283,7 +283,7 @@ def test_role_enforcement_per_route():
                 assert st == 401, (method, path, st, r)
             for user, role in [(u, r) for u, r, *_ in USERS if u != "ap2"]:
                 c = Client(port)
-                tok, s = team.sessions.create(user, 1)                   # fresh session per call (no scrypt)
+                tok, s = team.sessions.create(user, team.store.get(user)["gen"])   # fresh session per call (no scrypt)
                 c.cookie, c.csrf = tok, s["csrf"]
                 st, r = c.call(method, url, {} if method == "POST" else None)
                 err = r.get("error", "") if isinstance(r, dict) else ""
@@ -523,6 +523,111 @@ def test_local_mode_unchanged():
             assert call("GET", f"/api/file?path={TM.USERS_FILE}")[0] == 404
         finally:
             srv.shutdown()
+
+
+# ------------------------------------------------------------------ security review regressions
+def test_parallel_guesses_cannot_beat_the_lockout():
+    """The lockout used to check, then hash (~50 ms), then count: N parallel guesses all passed the check, so 24
+    concurrent requests got 12 password checks against a limit of 5. Now each try is counted before the hash."""
+    with server() as (ws, team, port):
+        codes, bar = [], threading.Barrier(16)
+
+        def guess(i):
+            c = Client(port)
+            bar.wait()
+            codes.append(c.call("POST", "/api/login", {"username": "lib", "password": f"wrong-guess-{i:04d}"})[0])
+        ts = [threading.Thread(target=guess, args=(i,)) for i in range(16)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        assert codes.count(401) <= team.cfg["max_failures"] and codes.count(401) + codes.count(429) == 16, codes
+        assert Client(port).login("lib")[0] == 429                             # locked, even with the right password
+    th = TM.Throttle(max_failures=5, lockout_minutes=15, max_per_ip=3)
+    for _ in range(5):                                                          # right passwords don't use up the address
+        wait, ticket = th.attempt("ann", "10.0.0.1")
+        assert wait == 0
+        th.ok("ann", "10.0.0.1", ticket)
+    assert th.blocked("bob", "10.0.0.1") == 0
+
+
+def test_own_password_check_is_throttled():
+    """/api/account/password checked the current password with no lockout: a stolen session could guess it forever."""
+    with server() as (ws, team, port):
+        c = Client(port)
+        c.login("lib")
+        codes = [c.call("POST", "/api/account/password", {"current": f"guess-{i:04d}-x", "new": "new-password-77"})[0]
+                 for i in range(team.cfg["max_failures"] + 1)]
+        assert codes[:-1] == [403] * team.cfg["max_failures"] and codes[-1] == 429, codes
+        st, r = c.call("POST", "/api/account/password", {"current": PW["lib"], "new": "new-password-77"})
+        assert st == 429, (st, r)                                               # the right one too, until unlocked
+        assert TM.verify_password(PW["lib"], team.store.get("lib")["password"])
+
+
+def test_removed_user_session_does_not_come_back():
+    """Every user started at gen 1: remove + add again (say, to give a compromised account a fresh password) revived
+    the old, possibly stolen, session cookie."""
+    with server() as (ws, team, port):
+        thief, ada = Client(port), Client(port)
+        thief.login("apr"), ada.login("ada")
+        assert ada.call("POST", "/api/team/users", {"action": "remove", "username": "apr"})[0] == 200
+        st, r = ada.call("POST", "/api/team/users", {"action": "add", "username": "apr", "role": "approver",
+                                                     "password": "a-fresh-password-1"})
+        assert st == 200, r
+        assert thief.call("GET", "/api/info")[0] == 401
+        assert thief.call("GET", "/api/session")[1]["user"] is None
+        gens = {TM.UserStore(ws.root).add(f"u{i}", "viewer", None)["gen"] for i in range(5)}
+        assert len(gens) == 5                                                   # random start, not a counter from 1
+
+
+def test_audit_line_is_written_before_the_answer():
+    """The audit line was written after the response (the cause of the flaky
+    test_approvals_identity_from_session: the client read team_audit.jsonl before the server thread wrote it)."""
+    real = TM.audit
+
+    def slow_audit(root, entry):
+        time.sleep(0.3)
+        real(root, entry)
+    with server() as (ws, team, port), mock.patch.object(TM, "audit", slow_audit):
+        c = Client(port)
+        c.login("vic")
+        assert ("vic", "/api/login", 200) in [(a["user"], a["route"], a["status"]) for a in TM.read_audit(ws.root)]
+        st, _ = c.call("POST", "/api/triage", {"bom": "x.csv"})
+        assert st == 403 and ("vic", "/api/triage", 403) in [(a["user"], a["route"], a["status"]) for a in TM.read_audit(ws.root)]
+        assert Client(port).call("POST", "/api/nope", {})[0] == 404             # unknown routes are still not logged
+        assert not any(a["route"] == "/api/nope" for a in TM.read_audit(ws.root))
+
+
+def test_team_files_hidden_under_other_names():
+    """A case-insensitive disk (macOS, Windows) served TEAM_USERS.JSON, i.e. every password hash, to any viewer;
+    a hard link does the same on Linux. Team files are not readable as a BOM either."""
+    with server() as (ws, team, port):
+        c = Client(port)
+        c.login("lib")
+        users = ws.root / TM.USERS_FILE
+        os.link(users, ws.root / "TEAM_USERS.JSON")                             # what a case-insensitive disk shows
+        os.link(users, ws.root / "reports" / "copy.json")
+        (ws.root / "team_users.json.1.tmp").write_text(users.read_text())     # a writer's temp file (pid 1 in Docker)
+        (ws.root / "notes.txt").write_text("hello")
+        for path in ("TEAM_USERS.JSON", "Team_Users.Json", "reports/copy.json", "team_users.json.1.tmp", "TEAM_AUDIT.JSONL"):
+            st, r = c.call("GET", f"/api/file?path={path}")
+            assert st == 404 and b"scrypt" not in (r if isinstance(r, bytes) else b""), (path, st)
+        assert c.call("GET", "/api/file?path=notes.txt")[0] == 200
+        for path in ("team_users.json", "TEAM_USERS.JSON", "uploads/../team_audit.jsonl"):
+            st, e = c.call("POST", "/api/triage", {"bom": path})
+            assert st == 400 and "not a BOM" in e["error"], (path, st, e)
+
+
+def test_json_bodies_are_capped_before_sign_in():
+    """Anyone could make the server parse a 20 MB JSON body on /api/login (~65 MB of memory each)."""
+    with server() as (ws, team, port):
+        big = b'{"username": "x", "password": "y", "z": "' + b"a" * (S.MAX_JSON + 10) + b'"}'
+        st, e = Client(port).call("POST", "/api/login", big)
+        assert st == 400 and "too large" in e["error"], (st, e)
+        assert S.MAX_JSON < S.MAX_UPLOAD
+        c = Client(port)
+        c.login("lib")
+        st, j = c.call("POST", "/api/upload", Path("examples/sample_bom.csv").read_bytes(), {"X-Filename": "b.csv"})
+        assert st == 200, j                                                     # uploads keep their own limit
+        wait_job(c, j["job"])
 
 
 if __name__ == "__main__":

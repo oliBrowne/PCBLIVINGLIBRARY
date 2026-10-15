@@ -180,7 +180,8 @@ class UserStore:
             if name in users:
                 raise FileExistsError(f"user {name} already exists")
             users[name] = {"username": name, "role": role, "name": full_name, "email": email, "password": pw,
-                           "sign_as": _sign_as(sign_as), "gen": 1, "created": now()}
+                           "sign_as": _sign_as(sign_as), "gen": secrets.randbits(48), "created": now()}
+            # gen starts random: a session of a removed user must not come back when the name is added again
             return dict(users[name])
         return self._edit(fn)
 
@@ -319,14 +320,29 @@ class Throttle:
         d[k] = [x for x in d.get(k, []) if t - x < self.window]
         return d[k]
 
+    def _wait(self, user, ip, t):
+        u, i = self._recent(self.by_user, user, t), self._recent(self.by_ip, ip, t)
+        waits = [int(u[-self.max] + self.window - t) + 1] if len(u) >= self.max else []
+        waits += [int(i[-self.max_ip] + self.window - t) + 1] if len(i) >= self.max_ip else []
+        return max(waits, default=0)
+
     def blocked(self, user, ip):
         """Seconds until this user name / address may try again, or 0."""
+        with self.lock:
+            return self._wait(user, ip, time.time())
+
+    def attempt(self, user, ip):
+        """Check and count one password try in one step: (seconds to wait, None) or (0, ticket). The try counts as a
+        failure until ok(user, ip, ticket), so parallel requests cannot all pass the check before any failure is
+        recorded (that let N concurrent guesses through instead of max_failures)."""
         t = time.time()
         with self.lock:
-            u, i = self._recent(self.by_user, user, t), self._recent(self.by_ip, ip, t)
-            waits = [int(u[-self.max] + self.window - t) + 1] if len(u) >= self.max else []
-            waits += [int(i[-self.max_ip] + self.window - t) + 1] if len(i) >= self.max_ip else []
-            return max(waits, default=0)
+            wait = self._wait(user, ip, t)
+            if wait:
+                return wait, None
+            self.by_user[user].append(t)
+            self.by_ip[ip].append(t)
+            return 0, t
 
     def fail(self, user, ip):
         t = time.time()
@@ -334,9 +350,13 @@ class Throttle:
             self._recent(self.by_user, user, t).append(t)
             self._recent(self.by_ip, ip, t).append(t)
 
-    def ok(self, user):
+    def ok(self, user, ip=None, ticket=None):
+        """A right password: forget this user's failures (and the try counted by attempt())."""
         with self.lock:
             self.by_user.pop(user, None)
+            if ticket is not None:
+                with contextlib.suppress(ValueError):
+                    self.by_ip.get(ip, []).remove(ticket)
 
     def unlock(self, user):
         self.ok(user)

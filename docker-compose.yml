@@ -30,6 +30,10 @@ services:
       - --allow-http            # plain HTTP only on ecadlib-net; Caddy terminates TLS
       - --trusted-proxy
       - ${ECADLIB_PROXY_IP:-172.30.87.2}
+      # the SSO user header ecadlib believes from Caddy: always the one the Caddyfile strips from clients (a
+      # proxy_user_header in team.json would otherwise be passed through from anyone: sign in as any user)
+      - --proxy-user-header
+      - ${ECADLIB_PROXY_USER_HEADER:-X-Forwarded-User}
       - --allowed-host
       - ${ECADLIB_DOMAIN:?run "python3 -m ecadlib team setup" or set ECADLIB_DOMAIN in .env}
     expose: ["8765"]
@@ -85,6 +89,7 @@ services:
       ECADLIB_HTTPS_PORT: ${ECADLIB_HTTPS_PORT:-443}
       ECADLIB_DOMAIN: ${ECADLIB_DOMAIN:?run "python3 -m ecadlib team setup" or set ECADLIB_DOMAIN in .env}
       ECADLIB_TLS: ${ECADLIB_TLS:-internal}
+      ECADLIB_PROXY_USER_HEADER: ${ECADLIB_PROXY_USER_HEADER:-X-Forwarded-User}
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data              # certificates (and Caddy's internal CA)
