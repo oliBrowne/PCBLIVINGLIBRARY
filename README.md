@@ -1299,6 +1299,67 @@ Checks (2026-10-16, kicad-footprints f8440fa, kicad-symbols 9280a93):
   it, parts sent to the datasheet step fall from 66 to 35 (31 complete parts with no Claude call).
 * **Not checked:** a live datasheet run (no API key); EasyEDA (blocked).
 
+## 31. Plugging into the tools: `kicad_pcm.py` and `altium_pkg.py`
+
+```
+ecadlib kicad-pcm out/librarian/plan.json --out out/pcm --name mylib [--kicad 7|8|9|10] [--prefix PCM_] [--pkg-version 1.2.0]
+ecadlib kicad-pcm out/kicad --out site/kicad --base-url https://example.com/kicad   # + repository.json / packages.json
+ecadlib kicad-pcm --plugin --out out/pcm                    # the "ecadlib: add part" PCB editor action plugin
+ecadlib altium-pkg out/librarian/plan.json --out D:/libs/mylib --name mylib   # or a folder of .SchLib/.PcbLib
+python3 -m tests.test_tool_packages
+```
+
+**KiCad.** `kicad-pcm` packages a plan (or a `kicad-export` folder) as a Plugin and Content Manager *library* package:
+a zip with `metadata.json`, `symbols/<lib>.kicad_sym`, `footprints/<lib>.pretty/` and `3dmodels/<lib>.3dshapes/`.
+In KiCad: Plugin and Content Manager > Install from File... > the zip. KiCad's PCM (read in its source,
+`kicad/pcm/pcm_task_manager.cpp`, `pcbnew`/`eeschema` lib table loaders, 7.0 and master) extracts each folder to
+`<3rd party>/<folder>/<identifier, '.' -> '_'>/` and adds every library to the global tables as `PCM_<lib>`, so the
+symbols' Footprint fields say `PCM_<lib>:<footprint>` and the footprints' models
+`${KICADn_3RD_PARTY}/3dmodels/<id>/<lib>.3dshapes/...` (n = `--kicad`; `--prefix ""` if you cleared KiCad's prefix).
+`--kicad 7` writes KiCad 7 files; the default 8 keeps the export's KiCad 8 files (KiCad 8, 9, 10). The version is
+`--pkg-version`, or kept while the content is unchanged, else today's date, so a re-run changes no file. With
+`--base-url` it also writes `repository.json` and `packages.json` (sha256, sizes) for Manage Repositories; KiCad only
+fetches repositories over http(s) (`kicad_curl_easy.cpp`), so a `file://` URL is refused.
+`--plugin` writes a PCM *plugin* package: in the PCB editor, Tools > External Plugins > "ecadlib: add part" asks for an
+MPN, adds it to `<project>/ecadlib-work/parts.csv`, runs `ecadlib librarian` and `kicad-export` into `<project>/ecadlib/`,
+adds `${KIPRJMOD}/ecadlib/...` rows to the project's tables and places the footprint.
+
+**Altium.** `altium-pkg` writes a folder that opens in Altium as is: `SchLib/`, `PcbLib/`, `<name>.LibPkg` (an
+integrated library package listing every `.SchLib`/`.PcbLib` as `SchLib\x.SchLib`; compile it to an `.IntLib`),
+`<name>_Install.PrjScr` + `.pas` (DelphiScript: `InstallDatabaseLibrary`, `BuildIntegratedLibrary`,
+`InstallFileLibraries`, `UninstallAll`, using `IntegratedLibraryManager.InstallLibrary` and working out its folder
+with `GetRunningScriptProjectName`), `ALTIUM_README.txt`, and from a plan the DbLib, workbook and CSV of
+`dblib-sync`. Workspace: `tool_packages(bom)` (MCP tool `tool_packages`) writes both into `packages/<bom>/`.
+
+**Paths.** Nothing written holds an absolute path: KiCad tables use `${KIPRJMOD}`, the `.kicad_dbl` `${CWD}`, PCM
+packages `${KICADn_3RD_PARTY}`; the LibPkg, the DbLib rows (`[Library Path]`) and the script use relative Windows
+paths, and the Excel DbLibs (`dblib-sync` and now `ecadlib dblib`) say `DatabasePathRelative=1`. The SQLite DbLib of
+`ecadlib dblib` keeps `--win-dir` (an ODBC string has no relative form).
+
+**Checked here** (2026-10-16, KiCad 7.0.11, 17 tests in `tests/test_tool_packages.py`):
+* metadata, packages.json and repository.json validate against KiCad's `pcm.v1.schema.json` (the copy KiCad 7.0.11
+  installs, identical to gitlab.com/kicad 7.0's; master only adds `category` and `runtime`) with jsonschema, and the
+  built-in checks always run; a bad identifier is caught by both. Field use matches two packages from KiCad's
+  official repository metadata (SparkFun, 4ms).
+* Installed the way the PCM does it into a throwaway 3rd-party folder and config dir (`KICAD_CONFIG_HOME`,
+  `KICAD7_3RD_PARTY`) with the global table rows the PCM adds: on a board in a project with no table of its own,
+  KiCad's DRC library check finds all 4 footprints as `PCM_lib:*`, identical to the library (control: an empty config
+  dir -> all 4 missing); `kicad-cli pcb export step` loads the SOIC-8 model through `${KICAD7_3RD_PARTY}` (11 solids;
+  control without the variable: 1, the board); `kicad-cli sym export svg` / `sym upgrade` load the installed symbol
+  library and every Footprint field names a footprint in `PCM_lib`. All 68 spec footprints converted back from
+  PcbLib and written in KiCad 7 syntax load in pcbnew. A crafted `../` entry is refused, as KiCad does.
+* The action plugin package installs, KiCad's own `pcbnew.LoadPlugins` imports it from the 3rd-party plugins folder
+  with no traceback and its `register()` reaches `register_action` with the right name and category.
+* Altium: LibPkg sections and keys copied from Altium-saved files (particle-iot/hardware-libraries, sub-folder paths as in
+  blueintegral/Level), PrjScr as in Altium-Designer-addons/scripts-libraries; every listed document exists and reads
+  back; every footprint a symbol links to is in the package's PcbLibs; every DbLib row resolves from the DbLib's folder;
+  all of this again after moving the whole output to another folder (and KiCad's library check on the moved project).
+* **Not checked:** nothing was opened in Altium Designer: not that it compiles the LibPkg, runs the script (written
+  from the documented scripting API and public scripts, never executed), or opens the relative DbLib. KiCad's PCM GUI
+  was not run (no display; the install was replayed from its source); in headless pcbnew `register_action` asserts
+  `PgmOrNull()`, so the plugin showing in the menu is unverified; KiCad 8/9/10 not run (the optional CI `kicad` job
+  now also runs these tests on KiCad 8); a sim model's `Sim.Library` through `${KICADn_3RD_PARTY}`.
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:
