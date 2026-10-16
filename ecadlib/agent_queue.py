@@ -344,10 +344,13 @@ class Queue:
             self.lock.cache[f"{it['id']}.json"] = copy.deepcopy(it)
 
     def find(self, key, open_only=False):
-        """The newest item for a part key (open ones first when open_only is False), or None."""
+        """The newest item for a part key (open ones first when open_only is False), or None. `created` is to the
+        second and ids sort at random within one, so of two items made in the same second a pushed one counts as the
+        older: a part gets a new item only once its last one was pushed (else upsert would make a new item beside a
+        failed / rejected one, and a retry of that one would leave two open)."""
         with self.lock:
             items = sorted((it for it in self._all().values() if it.get("key") == key),
-                           key=lambda it: (it.get("created") or "", it["id"]), reverse=True)
+                           key=lambda it: (it.get("created") or "", it.get("status") != "pushed", it["id"]), reverse=True)
             live = [it for it in items if it.get("status") in OPEN]
             hit = (live or ([] if open_only else items) or [None])[0]
             return copy.deepcopy(hit)
