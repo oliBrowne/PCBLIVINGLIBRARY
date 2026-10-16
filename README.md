@@ -648,7 +648,7 @@ Reads parts from BOMs, the DbLib `parts.sqlite`, a `plan.json` or (with `--a365`
 
 ```
 python3 -m ecadlib.librarian examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints -o out/librarian \
-        [--sources kicad,easyeda,datasheet] [--allow PART] [--refresh [PART ...]] [--refresh-index] [--offline]
+        [--sources kicad,easyeda,standard,datasheet] [--allow PART] [--refresh [PART ...]] [--refresh-index] [--offline]
 python3 -m ecadlib.release_check out/librarian/plan.json [--allow PART] [--unallow PART]
 python3 -m tests.test_librarian; python3 -m tests.test_release_check
 ```
@@ -656,6 +656,7 @@ python3 -m tests.test_librarian; python3 -m tests.test_release_check
 Triages the BOM, converts parts already in your `--lib` libraries, and for anything still missing tries in order:
 * **kicad**: the official KiCad libraries. A name index is built once from the GitLab tree API and cached. Symbols match the MPN by exact name, KiCad `x` wildcards, or the MPN minus an ordering suffix; the footprint comes from the symbol's Footprint property, the BOM footprint, or a footprint named after the MPN. R/C/L/LED use `Device:*` plus the footprint by package.
 * **easyeda**: by LCSC number, through a native converter (`easyeda_convert.py`).
+* **standard**: `ecadlib.stdparts` (section 29), offline: chip passives and standard packages built from checked dimensions, plus symbols for R/C/L/LED/diodes and listed transistor/LDO families. Never placed ahead of kicad; fills only a missing half.
 * **datasheet**: `ecadlib.datasheet`, when a datasheet URL is known and `ANTHROPIC_API_KEY` is set. `--datasheet-batch` reads every part that reaches this step as one Message Batch (section 7).
 
 Outputs in `out/librarian/`: `models/`, a `plan.json` for `altium365 push` recording each part's source, `review.md/.csv` (what came from where and what needs a person), and the release-check report. Re-running skips finished parts unless `--refresh` is given.
@@ -1188,6 +1189,39 @@ Run 2026-10-15 with KiCad 7.0.11 (`kicad-cli`, `pcbnew` from `/usr/bin/python3`)
   (`kicad-cli pcb export step`) with no read error and every solid in the output; by hand all 68 specs (3151 solids).
 * **Not checked:** KiCad 8, 9 and 10 (not installed; the optional CI job `kicad` also runs the tests on KiCad 8 from
   the KiCad PPA, not run from here); `sym-lib-table` loaded by KiCad; STEP geometry inside KiCad beyond loading.
+
+## 29. `stdparts.py`: standard parts without Claude
+
+```
+python3 -m ecadlib stdparts resolve "SOIC-8" | 0603 --kind R | --mpn GRM188R71H104KA93D --kind C [--kicad-mod F] [--json]
+python3 -m ecadlib stdparts list [PATTERN]
+python3 -m ecadlib stdparts bench [--kicad DIR | --fixture tests/fixtures/stdparts_kicad_numbers.json.gz]
+python3 -m ecadlib stdparts coverage BOM [BOM ...]
+python3 -m tests.test_stdparts
+```
+
+The librarian's `standard` source (default order `kicad, easyeda, standard, datasheet`) builds parts whose package is
+fully set by standard data, with no API call. Footprints come only from `package_specs/standard.json.gz`: 615 KiCad
+generic packages (510 gullwing / no-lead from the KiCad footprint generator's JEDEC size files, built with
+`footprint_gen`'s IPC-7351B equations; 74 R/C/L/D/LED/fuse chips; 31 hand-drawn ones such as SOD-123, SMA/SMB/SMC,
+MELF, SOT-223, SOT-89, DPAK/D2PAK, TO-220 vertical, TO-92 inline, stored as KiCad's recommended land as a pad table).
+It resolves an exact KiCad name, a chip size (footprint, value, description, or MPN pattern; two sizes that disagree
+give nothing), or a named package with its size (`SOIC-8`, `TSSOP-20`, `QFN-32_L5.0-W5.0-P0.50-EP3.5`). A name that
+fits more than one KiCad footprint (QFN-16, LQFP-64, SOT-23-3, bare SOT-223, SC-70), power packages and TO-220
+horizontal resolve to nothing, and the next source tries. Symbols: R, C, L, LED and diodes, and SOT-23 / TO-92 BJTs
+and MOSFETs, 1117 LDOs, 78xx/79xx/LM317 for listed MPN families (with a review note to check pins 1-3). The source is
+recorded as `standard:<Lib>:<Name>` / `standard:<symbol>`.
+
+Checks (2026-10-16, kicad-footprints f8440fa, kicad-symbols 9280a93):
+* `bench`: 615 / 615 table entries match KiCad's footprint (pads and courtyard, footprint_bench tolerances); the test
+  suite repeats it against a numbers-only fixture. Packages where our IPC build differs from KiCad's (fine-pitch
+  gullwing with KiCad's 0.15 mm pad gap, SOT-723, PowerDI-123, TO-92L, TO-220 horizontal, R_0508) are left out.
+* KiCad symbols as an MPN list (description and MPN only, Footprint property hidden): 1953 of 17050 resolve; 1925
+  (98.6%) give the same pads as the symbol's KiCad footprint; all 121 MPN-family pinouts match KiCad's pin numbers.
+* The repo's test BOMs: 47 of 66 non-empty lines get a footprint, 32 a footprint and a symbol. Librarian before/after
+  on the same 68 parts: with the KiCad library reachable, nothing changes (KiCad already has those passives); without
+  it, parts sent to the datasheet step fall from 66 to 35 (31 complete parts with no Claude call).
+* **Not checked:** a live datasheet run (no API key); EasyEDA (blocked).
 
 ## Releases
 
