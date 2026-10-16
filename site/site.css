@@ -170,7 +170,12 @@ svg.fp .focuscap .capdim { fill: none; stroke: #fff; stroke-width: 1.2; vector-e
 .layertabs { display: flex; overflow-x: auto; background: #1b1b1b; border-top: 1px solid #000; font: 11px/1 var(--sans); color: #d6d6d6; scrollbar-width: none; }
 .layertabs span { display: inline-flex; align-items: center; gap: 6px; padding: 8px 11px; white-space: nowrap; border-right: 1px solid #000; }
 .layertabs span:first-child { color: #9a9a9a; }
-.layertabs span.on { background: #2a2a2a; color: #fff; }
+.layertabs span { transition: background .4s var(--ease), color .4s var(--ease), box-shadow .4s var(--ease); }
+.layertabs span.on { background: #2a2a2a; color: #fff; box-shadow: inset 0 2px 0 #fff; }
+svg.fp :is(.pad, .silk, .silkfill, .fab, .crtyd, .padnum) { transition-property: transform, opacity, stroke, stroke-dashoffset, stroke-width; }
+svg.fp[data-solo] :is(.pad.on, .silk, .silkfill.on, .fab, .crtyd, .padnum.on) { opacity: .16; }
+svg.fp[data-solo="top"] :is(.pad.on, .padnum.on), svg.fp[data-solo="overlay"] :is(.silk, .silkfill.on), svg.fp[data-solo="mech13"] .fab, svg.fp[data-solo="mech15"] .crtyd { opacity: 1 !important; }
+svg.fp[data-solo="top"] .pad.on:not(.focus) { opacity: .45 !important; }
 .layertabs i { width: 9px; height: 9px; display: inline-block; border: 1px solid #000; }
 .pkgs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
 .pkgs button { font: 11.5px/1 var(--mono); min-height: 30px; border-radius: 999px; padding: 0 12px 0 10px; color: var(--muted); position: relative; overflow: hidden; }
