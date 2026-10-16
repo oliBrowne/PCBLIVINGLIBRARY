@@ -36,6 +36,7 @@ CASES = [
     (["rules", "check", "{in}/ecadlib.toml"], (0,)),
     (["rules", "show"], (0,)),
     (["init", "--from", "{in}/lib", "-o", "{out}/ecadlib.toml", "--yes"], (0,)),
+    (["demo", "-o", "{out}/demo"], (0,)),
     (["team", "--workspace", "{out}/teamws", "list"], (0,)),
     (["triage", "{in}/bom.csv", "--lib", "{in}/lib", "-o", "{out}/triage", "--offline", "--cache", "{out}/cache"], (0,)),
     (["footprint", "gen", "{pkg}/package_specs/R_0603_1608Metric.json", "-o", "{out}/fp.pretty"], (0,)),
