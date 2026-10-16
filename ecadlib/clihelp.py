@@ -51,6 +51,8 @@ EXAMPLES = {
     "a365": ["ecadlib a365 status ws/library/plan.json --workspace https://acme.365.altium.com"],
     "queue": ["ecadlib queue list", "ecadlib queue approve 12 --user alice"],
     "approve": ["ecadlib approve ws/library/plan.json status", "ecadlib approve ws/library/plan.json approve --part CH340C --user alice"],
+    "hub": ["ecadlib hub --workspace ws --lib ~/altium/libs", "ecadlib hub --workspace ws --lack kicad --json",
+            "ecadlib hub --workspace ws --part AO3401A"],
     "dedupe": ["ecadlib dedupe ws/library/plan.json", "ecadlib dedupe ws/library/plan.json --merge"],
     "sourcing": ["ecadlib sourcing my_bom.csv --qty 100 --alternates"],
     "step-gen": ["ecadlib step-gen SOIC-8_3.9x4.9mm_P1.27mm -o out/soic8.step", "ecadlib step-gen --check out/soic8.step"],
