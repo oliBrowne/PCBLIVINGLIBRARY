@@ -121,7 +121,7 @@ def test_history_local_mode_legacy_reports_and_links():
             assert st == 200 and [x["line"] for x in r["rows"]] == [1, 2] and r["rows"][1]["status"] == "needs_footprint_generation"
             assert call("GET", "/api/triage/result?id=evil")[0] == 404
             st, page = call("GET", "/")
-            assert b"Past triages" in page and b"/api/triage/history" in page and b"/api/triage/result" in page
+            assert b"Past BOM checks" in page and b"/api/triage/history" in page and b"/api/triage/result" in page
         finally:
             srv.shutdown()
         # MCP: the same read-only view
