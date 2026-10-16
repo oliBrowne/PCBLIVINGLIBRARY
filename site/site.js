@@ -366,17 +366,57 @@ async function log(lines) {
 const chip = (pins) => `<svg viewBox="0 0 26 22"><rect x="7" y="3" width="12" height="16" rx="1.5"/><path d="${Array.from({ length: pins }, (_, i) => `M3 ${6 + i * 3.4}H7M19 ${6 + i * 3.4}H23`).join("")}"/></svg>`;
 const row = (name, desc, pins = 2, add = false) => `<div class="row${add ? " add" : ""}">${chip(pins)}<div><b>${name}</b><span>${desc}</span></div></div>`;
 
+// what each tool's window really looks like: Altium's dark UI around a cream schematic sheet, KiCad's PCB editor on navy
+const ICONS = {
+  doc: "M4 2h6l3 3v9H4zM10 2v3h3", open: "M2 5h4l1 1h7v7H2z", save: "M3 3h9l2 2v8H3zM5 3v3h6V3M5 13V9h6v4", undo: "M5 4L2 7l3 3M2 7h8a3 3 0 010 6H8",
+  redo: "M11 4l3 3-3 3M14 7H6a3 3 0 000 6h2", zin: "M7 3a4 4 0 110 8 4 4 0 010-8zM10 10l4 4M5 7h4M7 5v4", fit: "M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4",
+  sel: "M4 2v11l3-3 2 4 2-1-2-4h4z", wire: "M2 12h5V4h7", bus: "M2 11h5V5h7M2 13h7V7h5", label: "M3 4h7l3 4-3 4H3z", chip: "M5 3h6v10H5zM3 5h2M3 8h2M3 11h2M11 5h2M11 8h2M11 11h2",
+  pwr: "M8 3v6M4 9h8M5.5 11h5M7 13h2", route: "M2 13l4-4h4l4-4", via: "M8 4a4 4 0 110 8 4 4 0 010-8zM8 6.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3", text: "M3 3h10M8 3v10",
+  drc: "M3 8l3 3 7-7", cube: "M8 2l5 3v6l-5 3-5-3V5zM3 5l5 3 5-3M8 8v6", grid: "M2 2h12v12H2zM6 2v12M10 2v12M2 6h12M2 10h12", mm: "M2 12V5M2 6l2-1 2 1v6M6 6l2-1 2 1v6", zone: "M3 3h10v10H3zM3 8l5-5M3 13L13 3M8 13l5-5",
+};
+const ico = (k) => (k === "|" ? '<b class="tsep"></b>' : `<i class="tb"><svg viewBox="0 0 16 16"><path d="${ICONS[k]}"/></svg></i>`);
+const tools = (list) => list.map(ico).join("");
+const pins = (x, y, n, dir, step = 14, nums = []) => Array.from({ length: n }, (_, i) => {
+  const yy = y + i * step, x2 = x + dir * 12;
+  return `<path class="pin" d="M${x} ${yy}H${x2}"/><text class="pinno" x="${(x + x2) / 2}" y="${yy - 1.5}" text-anchor="middle">${nums[i] ?? ""}</text>`;
+}).join("");
+const sheet = () => {
+  let g = "";
+  for (let x = 30; x < 380; x += 10) g += `M${x} 30V246`;
+  for (let y = 40; y < 246; y += 10) g += `M20 ${y}H380`;
+  const zx = [65, 155, 245, 335].map((x, i) => `<text class="zt" x="${x}" y="28.5" text-anchor="middle">${i + 1}</text>`).join("");
+  const zy = ["A", "B", "C", "D"].map((l, i) => `<text class="zt" x="17" y="${58 + i * 54}" text-anchor="middle">${l}</text>`).join("");
+  return `<rect class="sheet" x="14" y="24" width="372" height="228"/><path class="grid" d="${g}"/><rect class="zone" x="20" y="30" width="360" height="216"/>${zx}${zy}
+    <path class="zone" d="M110 24V30M200 24V30M290 24V30M14 84H20M14 138H20M14 192H20"/>
+    <g><rect class="tblk" x="272" y="216" width="108" height="30"/><path class="zone" d="M272 226H380M272 236H380M326 226V246"/>
+      <text class="zt" x="275" y="223">Title  Board.SchDoc</text><text class="zt" x="275" y="233">Size  A4</text><text class="zt" x="329" y="233">Rev  1</text><text class="zt" x="275" y="243">Sheet 1 of 1</text><text class="zt" x="329" y="243">ecadlib demo</text></g>`;
+};
+const abar = () => `<g class="abar"><rect x="150" y="4" width="100" height="15" rx="2"/>${["sel", "wire", "bus", "pwr", "label", "chip", "text"].map((k, i) => `<g transform="translate(${155 + i * 13.5} 6.5) scale(.62)"><path d="${ICONS[k]}"/></g>`).join("")}</g>`;
+const kpad = (x, y, w, h) => `<rect class="pad" x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.min(w, h) * 0.25}"/>`;
+const khole = (cx, cy) => `<circle class="thpad" cx="${cx}" cy="${cy}" r="5"/><circle class="hole" cx="${cx}" cy="${cy}" r="3"/>`;
+
 const SCENES = {
   altium: {
-    title: "Board.PrjPcb · Schematic",
+    app: "altium",
+    title: "Board.PrjPcb  ·  Altium Designer",
+    docs: `<span class="on"><i class="dic"></i>Board.SchDoc</span><span><i class="dic pcb"></i>Board.PcbDoc</span>`,
+    tools: "",
+    status: `<span>X:1250mil Y:880mil</span><span>Grid:100mil</span><span class="sp"></span><span>Panels</span>`,
     menu: ["File", "Edit", "View", "Project", "Place", "Design", "Tools", "Reports", "ecadlib", "Window", "Help"],
-    canvas: `<rect class="w" x="8" y="8" width="384" height="244" rx="2"/><path class="w" d="M262 222H392M262 222V252M330 222V252"/>
-      <g><rect class="s" x="40" y="60" width="54" height="70" rx="2"/><path class="w" d="M28 72H40M28 86H40M28 100H40M28 114H40M94 72H106M94 86H106M94 100H106M94 114H106"/><text class="t" x="40" y="54">U1</text></g>
-      <g><rect class="s" x="150" y="44" width="10" height="26" rx="1"/><text class="t" x="164" y="60">R1</text><path class="w" d="M155 44V32M155 70V86H106"/></g>
-      <g><path class="w" d="M146 150H164M146 156H164M155 150V114H106M155 156V172"/><text class="t" x="168" y="156">C1</text></g>
-      <path class="w" d="M28 72H18V200H150M150 172V200"/>
-      <g class="new" id="wfnew"><rect class="s hi" x="250" y="60" width="66" height="96" rx="2"/><path class="w hi" d="M238 74H250M238 88H250M238 102H250M238 116H250M238 130H250M238 144H250M316 74H328M316 88H328M316 102H328M316 116H328M316 130H328M316 144H328"/><text class="t" x="250" y="54">U2 · TPS62133</text><path class="w" d="M238 74H200V114H155"/></g>`,
-    panel: `<h4>Components</h4><div class="search">Search</div><div id="rows">${row("LM358DR", "Op amp, SOIC-8", 4)}${row("RC0603FR-0710KL", "10k 1% 0603")}${row("GRM155R71C104KA88D", "100n 16V 0402")}</div>`,
+    canvas: `${sheet()}
+      <g><rect class="body" x="46" y="62" width="48" height="70"/>${pins(46, 70, 4, -1, 16, [3, 2, 8, 4])}${pins(94, 70, 4, 1, 16, [1, 5, 6, 7])}
+        <text class="pinnm" x="49" y="72">+IN</text><text class="pinnm" x="49" y="88">-IN</text><text class="pinnm" x="49" y="104">V+</text><text class="pinnm" x="49" y="120">V-</text>
+        <text class="pinnm" x="91" y="72" text-anchor="end">OUT</text><text class="des" x="46" y="58">U1</text><text class="cmt" x="46" y="142">LM358DR</text></g>
+      <g><rect class="body" x="150" y="46" width="9" height="24"/><text class="des" x="163" y="56">R1</text><text class="cmt" x="163" y="64">10k</text><path class="wire" d="M154.5 46V36M154.5 70V86H106"/></g>
+      <g><path class="plate" d="M146 152H163M146 158H163"/><path class="wire" d="M154.5 152V118H106M154.5 158V176"/><text class="des" x="168" y="153">C1</text><text class="cmt" x="168" y="161">100n</text></g>
+      <path class="wire" d="M34 70H24V200H154.5M154.5 176V200"/><circle class="junc" cx="154.5" cy="200" r="1.8"/><circle class="junc" cx="154.5" cy="118" r="1.8"/>
+      <g><path class="pwr" d="M84 200V208M76 208H92M79 211H89M82 214H86"/><path class="wire" d="M84 200H24"/><text class="netl" x="96" y="212">GND</text></g>
+      <text class="netl" x="114" y="84">VOUT</text>
+      <g class="new" id="wfnew"><rect class="body" x="250" y="64" width="62" height="96"/>${pins(250, 72, 6, -1, 14, [2, 3, 5, 6, 7, 8])}${pins(312, 72, 6, 1, 14, [9, 10, 11, 12, 14, 15])}
+        <text class="pinnm" x="253" y="74">VIN</text><text class="pinnm" x="253" y="88">EN</text><text class="pinnm" x="253" y="102">PG</text><text class="pinnm" x="309" y="74" text-anchor="end">SW</text><text class="pinnm" x="309" y="88" text-anchor="end">FB</text>
+        <text class="des" x="250" y="60">U2</text><text class="cmt" x="250" y="170">TPS62133RGTR</text><path class="wire" d="M238 72H206V118H154.5"/></g>
+      ${abar()}`,
+    panel: `<h4>Components <span>≡</span></h4><div class="lib">ecadlib.DbLib <span>▾</span></div><div class="search">Search</div><div class="cols"><span>Design Item ID</span></div><div id="rows">${row("LM358DR", "Op amp, SOIC-8", 4)}${row("RC0603FR-0710KL", "10k 1% 0603")}${row("GRM155R71C104KA88D", "100n 16V 0402")}</div>`,
     steps: [
       ["Check the project's BOM", "ecadlib > Check project BOM reads the open project and marks what your library already has."],
       ["Add a part by MPN", "ecadlib > Add part from MPN asks for the part number, and the manufacturer if you know it."],
@@ -418,15 +458,22 @@ const SCENES = {
     },
   },
   kicad: {
-    title: "board.kicad_pcb · PCB Editor",
+    app: "kicad",
+    title: "board — PCB Editor",
+    docs: tools(["sel", "|", "route", "via", "zone", "|", "text", "chip", "|", "drc"]),
+    tools: tools(["doc", "open", "save", "|", "undo", "redo", "|", "zin", "fit", "|", "grid", "mm", "|", "drc", "cube"]) + '<span class="layer"><i></i>F.Cu (PgUp)</span>',
+    status: `<span>Z 2.43</span><span>X 104.1400  Y 81.2800</span><span>dx 0.0000  dy 0.0000</span><span>grid 0.2500</span><span class="sp"></span><span>mm</span>`,
     menu: ["File", "Edit", "View", "Place", "Route", "Inspect", "Tools", "Preferences", "Help"],
-    canvas: `<rect class="w" x="40" y="30" width="320" height="200" rx="10"/>
-      <circle class="w" cx="56" cy="46" r="5"/><circle class="w" cx="344" cy="46" r="5"/><circle class="w" cx="56" cy="214" r="5"/><circle class="w" cx="344" cy="214" r="5"/>
-      <g>${[0, 1, 2, 3].map((i) => `<rect class="pad" x="${86 + i * 10}" y="70" width="6" height="12" rx="1"/><rect class="pad" x="${86 + i * 10}" y="102" width="6" height="12" rx="1"/>`).join("")}<rect class="w" x="82" y="64" width="44" height="56" rx="2"/></g>
-      <g><rect class="pad" x="170" y="150" width="8" height="8" rx="1"/><rect class="pad" x="186" y="150" width="8" height="8" rx="1"/><rect class="pad" x="170" y="176" width="8" height="8" rx="1"/><rect class="pad" x="186" y="176" width="8" height="8" rx="1"/></g>
-      <path class="w hi" d="M89 114V138H174V150M119 114V128H190V150"/>
-      <g class="new" id="wfnew">${[0, 1, 2, 3].map((i) => `<rect class="pad" x="${246 + i * 13}" y="82" width="7" height="15" rx="1"/><rect class="pad" x="${246 + i * 13}" y="126" width="7" height="15" rx="1"/>`).join("")}<rect class="w hi" x="240" y="76" width="55" height="71" rx="2"/><path class="rat" d="M249 141L190 158M262 141L194 180M126 76L249 82"/></g>`,
-    panel: `<h4>Libraries</h4><div class="search">Filter</div><div id="rows">${row("Device", "KiCad built-in")}${row("Package_SO", "KiCad built-in", 4)}${row("Resistor_SMD", "KiCad built-in")}</div>`,
+    canvas: `<rect class="edge" x="40" y="30" width="320" height="200" rx="10"/>
+      ${khole(56, 46)}${khole(344, 46)}${khole(56, 214)}${khole(344, 214)}
+      <g>${[0, 1, 2, 3].map((i) => kpad(86 + i * 10, 70, 6, 12) + kpad(86 + i * 10, 102, 6, 12)).join("")}<rect class="silk" x="82" y="64" width="44" height="56" rx="1"/><circle class="silkdot" cx="80" cy="66" r="1.4"/><text class="silkt" x="82" y="60">U1</text><text class="fabt" x="104" y="94" text-anchor="middle">LM358</text></g>
+      <g>${kpad(170, 150, 8, 8)}${kpad(186, 150, 8, 8)}${kpad(170, 176, 8, 8)}${kpad(186, 176, 8, 8)}<text class="silkt" x="198" y="160">C1</text><text class="silkt" x="198" y="184">C2</text></g>
+      <path class="trk" d="M89 114V138H174V150M119 114V128H190V150"/>
+      <path class="btrk" d="M99 70V52H220V196H190V184"/><circle class="via" cx="99" cy="52" r="3.2"/><circle class="vhole" cx="99" cy="52" r="1.4"/><path class="trk" d="M99 52V70"/>
+      <g class="new" id="wfnew">${[0, 1, 2, 3].map((i) => kpad(246 + i * 13, 82, 7, 15) + kpad(246 + i * 13, 126, 7, 15)).join("")}<rect class="silk" x="240" y="76" width="55" height="71" rx="1"/><rect class="court" x="236" y="72" width="63" height="79"/><circle class="silkdot" cx="238" cy="80" r="1.4"/><text class="silkt" x="240" y="69">U3</text><text class="fabt" x="267.5" y="115" text-anchor="middle">LM358DR</text><path class="rat" d="M249 141L190 158M262 141L194 180M126 76L249 82"/></g>`,
+    panel: `<h4>Appearance</h4><div class="ptabs"><span class="on">Layers</span><span>Objects</span><span>Nets</span></div>
+      <div class="layers">${[["F.Cu", "#c83434", 1], ["B.Cu", "#4d7fc4"], ["F.Silkscreen", "#f2eda1"], ["F.Fab", "#afafaf"], ["F.Courtyard", "#ff26e2"], ["Edge.Cuts", "#d0d2cd"]].map(([n, c, on]) => `<div class="${on ? "on" : ""}"><i style="background:${c}"></i>${n}<span>◉</span></div>`).join("")}</div>
+      <h4>Footprint libraries</h4><div id="rows">${row("Package_SO", "KiCad built-in", 4)}${row("Resistor_SMD", "KiCad built-in")}</div>`,
     steps: [
       ["Install the library package", "Plugin and Content Manager > Install from File. Your library arrives as PCM_ecadlib, with 3D models."],
       ["Run ecadlib: add part", "Tools > External Plugins > ecadlib: add part, right in the PCB editor."],
@@ -468,7 +515,9 @@ function setScene(name) {
   const S = SCENES[name];
   wf.scene = name;
   $$(".wftabs [role=tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.scene === name)));
+  win.dataset.app = S.app;
   $("#wintitle").textContent = S.title;
+  $("#wftools").innerHTML = S.tools; $("#wfdocs").innerHTML = S.docs; $("#wfstatus").innerHTML = S.status;
   menubar.innerHTML = S.menu.map((m) => `<span class="${m === "ecadlib" ? "ours" : ""}">${m}</span>`).join("");
   wfcanvas.innerHTML = S.canvas;
   wfpanel.innerHTML = S.panel;

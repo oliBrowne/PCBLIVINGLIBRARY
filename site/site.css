@@ -312,6 +312,101 @@ svg.fp .dim.on, svg.fp .dimtxt.on { opacity: .85; }
 .cursor.click::after { content: none; }
 .ripple { position: absolute; z-index: 8; width: 26px; height: 26px; margin: -13px 0 0 -13px; border: 1px solid var(--text); border-radius: 50%; pointer-events: none; animation: ripple .6s var(--ease) forwards; }
 .drop { position: absolute; z-index: 6; pointer-events: none; border: 1px dashed var(--text); border-radius: 8px; padding: 6px 9px; font: 11px var(--mono); background: var(--bg); transition: left .9s var(--ease), top .9s var(--ease), opacity .4s; }
+/* the two tools as they really look: their own palettes, whatever the page theme */
+.win[data-app] { --ui: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif; font-family: var(--ui); border-radius: 8px; color: var(--text); background: var(--bg); box-shadow: 0 40px 80px -50px rgba(0,0,0,.55); }
+.win[data-app=altium] { --bg: #2b2b2b; --text: #e4e4e4; --muted: #9d9d9d; --line: #414141; --line-2: #363636; --hover: #3b5675; --hairline-edge: #b4b4b4;
+  --acc: #2f7bd1; --bar: #1d1d1d; --menu: #262626; --tool: #2f2f2f; --cv: #474747; --field: #1e1e1e; --tabs: #232323; color-scheme: dark; }
+.win[data-app=kicad] { --bg: #f3f3f3; --text: #1c1c1c; --muted: #5b5b5b; --line: #cdcdcd; --line-2: #e4e4e4; --hover: #cce4f7; --hairline-edge: #555;
+  --acc: #0067c0; --bar: #ffffff; --menu: #ffffff; --tool: #f3f3f3; --cv: #001023; --field: #ffffff; --tabs: #f3f3f3; color-scheme: light; }
+.win[data-app] .winbar { background: var(--bar); color: var(--text); font: 11.5px var(--ui); padding: 7px 0 7px 10px; gap: 10px; }
+.win[data-app] .winbar #wintitle { flex: 1; text-align: center; color: var(--muted); }
+.appmark { width: 14px; height: 14px; border-radius: 3px; flex: none; }
+.win[data-app=altium] .appmark { background: linear-gradient(135deg, #c79b4a, #8a6a2c); }
+.win[data-app=kicad] .appmark { background: linear-gradient(135deg, #3d7fd6, #1b4f9c); }
+.winctl { display: flex; align-self: stretch; margin: -7px 0; }
+.winctl i { width: 38px; display: grid; place-items: center; font-style: normal; color: var(--muted); font-size: 11px; }
+.winctl i:nth-child(1)::before { content: "\2014"; } .winctl i:nth-child(2)::before { content: "\25A1"; font-size: 13px; } .winctl i:nth-child(3)::before { content: "\2715"; }
+.win[data-app] .menubar { background: var(--menu); color: var(--text); font: 11.5px var(--ui); padding: 2px 6px; }
+.win[data-app] .menubar > span { border-radius: 3px; padding: 4px 8px; }
+.toolbar { display: flex; align-items: center; gap: 1px; padding: 3px 6px; background: var(--tool); border-bottom: 1px solid var(--line); overflow: hidden; white-space: nowrap; }
+.toolbar:empty { display: none; }
+.tb { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 3px; flex: none; }
+.tb svg { width: 14px; height: 14px; fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-linejoin: round; stroke-linecap: round; }
+.tsep { width: 1px; height: 16px; background: var(--line); margin: 0 4px; flex: none; }
+.toolbar .layer { margin-left: 8px; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text); border: 1px solid var(--line); background: var(--field); border-radius: 3px; padding: 2px 8px; }
+.toolbar .layer i { width: 9px; height: 9px; background: #c83434; }
+.win[data-app] .canvas { background: var(--cv); background-image: none; display: flex; flex-direction: column; position: relative; border-right-color: var(--line); }
+.win[data-app] .canvas svg { flex: 1; min-height: 0; }
+.win[data-app=kicad] .canvas { background-image: radial-gradient(circle, rgba(132,132,132,.55) .7px, transparent .8px); background-size: 12px 12px; padding-right: 28px; }
+.doctabs { display: flex; background: var(--tabs); font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line); flex: none; }
+.doctabs span { padding: 5px 12px; display: inline-flex; gap: 6px; align-items: center; border-right: 1px solid var(--line); }
+.doctabs span.on { background: var(--cv); color: var(--text); box-shadow: inset 0 2px 0 var(--acc); }
+.dic { width: 10px; height: 12px; border: 1px solid #d9c27a; background: #fffcf0; display: inline-block; }
+.dic.pcb { border-color: #6c8e5a; background: #24451c; }
+.win[data-app=kicad] .doctabs { position: absolute; right: 0; top: 0; bottom: 0; width: 28px; flex-direction: column; align-items: center; gap: 1px; padding-top: 4px; border: 0; border-left: 1px solid var(--line); }
+.win[data-app=kicad] .doctabs .tsep { width: 16px; height: 1px; margin: 3px 0; }
+.statusbar { display: flex; gap: 18px; padding: 4px 10px; font-size: 10.5px; color: var(--muted); background: var(--bar); border-top: 1px solid var(--line); white-space: nowrap; overflow: hidden; }
+.statusbar:empty { display: none; }
+.statusbar .sp { flex: 1; }
+.win[data-app] .panel { background: var(--bg); color: var(--text); }
+.win[data-app] .panel h4 { font: 600 11.5px/1 var(--ui); letter-spacing: 0; text-transform: none; color: var(--text); display: flex; justify-content: space-between; background: var(--tool); }
+.win[data-app] .panel .search { border-radius: 3px; background: var(--field); font-family: var(--ui); }
+.panel .lib { margin: 8px 10px 0; padding: 5px 8px; border: 1px solid var(--line); border-radius: 3px; background: var(--field); display: flex; justify-content: space-between; }
+.panel .cols { padding: 4px 10px; font-size: 10px; color: var(--muted); background: var(--tool); border-top: 1px solid var(--line); }
+.win[data-app] .row b { font-family: var(--ui); font-weight: 600; }
+.ptabs { display: flex; font-size: 11px; border-bottom: 1px solid var(--line); }
+.ptabs span { padding: 5px 9px; color: var(--muted); }
+.ptabs span.on { color: var(--text); box-shadow: inset 0 -2px 0 var(--acc); }
+.layers { padding: 4px 0; font-size: 11px; }
+.layers div { display: flex; align-items: center; gap: 7px; padding: 2.5px 10px; }
+.layers div.on { background: var(--hover); }
+.layers i { width: 14px; height: 9px; border: 1px solid rgba(0,0,0,.25); }
+.layers span { margin-left: auto; color: var(--muted); font-size: 9px; }
+.win[data-app] .menu { background: var(--menu); border-radius: 4px; font: 11.5px var(--ui); padding: 3px; }
+.win[data-app] .menu div { border-radius: 3px; padding: 6px 10px; }
+.win[data-app] .dlg { background: var(--bg); border-color: var(--line); border-radius: 6px; font-family: var(--ui); }
+.win[data-app] .dlg .dh { background: var(--bar); font: 11.5px var(--ui); color: var(--text); border-radius: 6px 6px 0 0; }
+.win[data-app] .dlg label { font: 11px var(--ui); }
+.win[data-app] .dlg .in { background: var(--field); border-radius: 3px; }
+.win[data-app] .dlg .in.focus { border-color: var(--acc); }
+.win[data-app] .dlg .btns span { border-radius: 3px; background: var(--field); }
+.win[data-app] .dlg .btns span.primary { background: var(--acc); border-color: var(--acc); color: #fff; }
+.win[data-app] .dlg .meter i { background: var(--acc); }
+.win[data-app] .dlg .log li.ok span:last-child, .win[data-app] .row.add b::after { color: #3fa66b; }
+.win[data-app] .cursor path { fill: #fff; stroke: #000; }
+.win[data-app] .ripple { border-color: var(--acc); }
+.win[data-app] .drop { border-color: var(--acc); border-radius: 3px; background: var(--bg); color: var(--text); }
+/* Altium schematic: cream sheet, navy wires, dark-red bodies on pale yellow, Times like the default font */
+#wfcanvas .sheet { fill: #fffcf4; stroke: #000; stroke-width: .6; }
+#wfcanvas .grid { stroke: #ece6d6; stroke-width: .35; fill: none; }
+#wfcanvas .zone, #wfcanvas .tblk { fill: none; stroke: #000; stroke-width: .5; }
+#wfcanvas .zt { fill: #000; font: 4.6px "Times New Roman", Times, serif; }
+#wfcanvas .body { fill: #ffffb0; stroke: #800000; stroke-width: .9; }
+#wfcanvas .pin { stroke: #000; stroke-width: .8; }
+#wfcanvas .pinno, #wfcanvas .pinnm { fill: #000; font: 4.6px "Times New Roman", Times, serif; }
+#wfcanvas .des { fill: #00008b; font: 600 6.5px "Times New Roman", Times, serif; }
+#wfcanvas .cmt { fill: #000; font: 6px "Times New Roman", Times, serif; }
+#wfcanvas .wire { fill: none; stroke: #000080; stroke-width: 1; }
+#wfcanvas .junc { fill: #000080; }
+#wfcanvas .plate, #wfcanvas .pwr { fill: none; stroke: #800000; stroke-width: 1; }
+#wfcanvas .netl { fill: #000; font: 5.5px "Times New Roman", Times, serif; }
+#wfcanvas .abar rect { fill: #2b2b2b; stroke: #5a5a5a; stroke-width: .6; opacity: .95; }
+#wfcanvas .abar path { fill: none; stroke: #d6d6d6; stroke-width: 1.3; stroke-linejoin: round; }
+/* KiCad PCB editor default colours */
+#wfcanvas .edge { fill: none; stroke: #d0d2cd; stroke-width: 1; }
+#wfcanvas .pad { fill: #c83434; }
+#wfcanvas .thpad { fill: none; stroke: #e3b72e; stroke-width: 2.6; }
+#wfcanvas .hole { fill: #8c8c8c; }
+#wfcanvas .silk { fill: none; stroke: #f2eda1; stroke-width: .9; }
+#wfcanvas .silkdot { fill: #f2eda1; }
+#wfcanvas .silkt { fill: #f2eda1; font: 6px var(--mono); }
+#wfcanvas .fabt { fill: #afafaf; font: 5px var(--mono); }
+#wfcanvas .court { fill: none; stroke: #ff26e2; stroke-width: .5; }
+#wfcanvas .trk { fill: none; stroke: #c83434; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+#wfcanvas .btrk { fill: none; stroke: #4d7fc4; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; opacity: .85; }
+#wfcanvas .via { fill: #ececec; } #wfcanvas .vhole { fill: #3a3a3a; }
+#wfcanvas .rat { fill: none; stroke: #f5ffd5; stroke-width: .7; stroke-dasharray: none; opacity: .85; }
+@media (max-width: 560px) { .win .panel { display: none; } .win[data-app] .canvas { border-right: 0; } .toolbar .layer { display: none; } }
 @keyframes pop { from { opacity: 0; transform: translate(-50%, -46%) scale(.98); } }
 .menu { animation-name: menupop; }
 @keyframes menupop { from { opacity: 0; transform: translateY(-4px); } }

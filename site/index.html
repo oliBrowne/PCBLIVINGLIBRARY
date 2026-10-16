@@ -118,12 +118,14 @@
       <div class="wfgrid">
         <ol class="wfsteps" id="wfsteps" aria-live="polite"></ol>
         <div class="win" id="win" aria-label="An animated design tool window showing the ecadlib workflow" role="img">
-          <div class="winbar mono"><span class="lights"><i></i><i></i><i></i></span><span id="wintitle">Board.PrjPcb</span></div>
-          <div class="menubar mono" id="menubar"></div>
+          <div class="winbar"><span class="appmark" id="wfapp"></span><span id="wintitle">Board.PrjPcb</span><span class="winctl" aria-hidden="true"><i></i><i></i><i></i></span></div>
+          <div class="menubar" id="menubar"></div>
+          <div class="toolbar" id="wftools" aria-hidden="true"></div>
           <div class="winbody">
-            <div class="canvas"><svg id="wfcanvas" viewBox="0 0 400 260" preserveAspectRatio="xMidYMid meet"></svg></div>
+            <div class="canvas"><div class="doctabs" id="wfdocs"></div><svg id="wfcanvas" viewBox="0 0 400 260" preserveAspectRatio="xMidYMid meet"></svg></div>
             <aside class="panel" id="wfpanel"></aside>
           </div>
+          <div class="statusbar" id="wfstatus"></div>
           <div class="dlg" id="wfdlg" hidden></div>
           <div class="drop" id="wfdrop" hidden></div>
           <svg class="cursor" id="wfcursor" viewBox="0 0 16 22" aria-hidden="true"><path d="M1 1 L1 17 L5 13 L8 20 L11 19 L8 12 L14 12 Z"/></svg>
