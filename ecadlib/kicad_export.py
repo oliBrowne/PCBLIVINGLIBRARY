@@ -382,24 +382,76 @@ def _in_poly(x, y, pts):
     return inside
 
 
+def _touches(p, pts, eps=400):
+    """A polygon overlaps or touches pad p's anchor rectangle (eps internal units, about 1 um)?"""
+    a = math.radians(p["rot"])
+    loc = [((x - p["x"]) * math.cos(a) + (y - p["y"]) * math.sin(a), -(x - p["x"]) * math.sin(a) + (y - p["y"]) * math.cos(a))
+           for x, y in pts]                   # the polygon in the pad frame
+    hw, hh = p["w"] / 2 + eps, p["h"] / 2 + eps
+    if any(abs(u) <= hw and abs(v) <= hh for u, v in loc) or any(_in_poly(u, v, loc) for u in (-hw, hw) for v in (-hh, hh)):
+        return True
+
+    def cross(a1, a2, b1, b2):
+        d = lambda o, p, q: (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0])
+        return d(a1, a2, b1) * d(a1, a2, b2) <= 0 and d(b1, b2, a1) * d(b1, b2, a2) <= 0
+    box = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+    return any(cross(e1, e2, f1, f2) for e1, e2 in zip(loc, loc[1:] + loc[:1]) for f1, f2 in zip(box, box[1:] + box[:1]))
+
+
 def _custom_pads(recs):
     """Polygon pads as altium_lib / kicad_import write them: an anchor pad plus regions on its copper (and solder mask /
-    paste) layers around the anchor's centre. -> ({id(pad): [copper outline, ...]}, {id(region) folded into a pad})."""
+    paste) layers around or touching the anchor. -> ({id(pad): [copper outline, ...]}, {id(region) folded into a pad})."""
     side = {AL.TOP: ((AL.TOP,), (AL.TOP_SOLDER, AL.TOP_PASTE)), AL.BOTTOM: ((AL.BOTTOM,), (AL.BOTTOM_SOLDER, AL.BOTTOM_PASTE)),
             AL.MULTI: ((AL.TOP, AL.BOTTOM), (AL.TOP_SOLDER, AL.TOP_PASTE, AL.BOTTOM_SOLDER, AL.BOTTOM_PASTE))}
     regs = [r for r in recs if r["type"] == "region" and len(r.get("pts") or ()) >= 3]
     custom, used = {}, set()
-    pads = [r for r in recs if r["type"] == "pad" and r["layer"] in side]
-    for p in sorted(pads, key=lambda r: r["layer"] == AL.MULTI):   # SMD anchors first: vias inside a pad don't own it
+    pads = sorted([r for r in recs if r["type"] == "pad" and r["layer"] in side], key=lambda r: r["layer"] == AL.MULTI)
+    cen = lambda g: (sum(x for x, _ in g["pts"]) / len(g["pts"]), sum(y for _, y in g["pts"]) / len(g["pts"]))
+    box = lambda g: (min(x for x, _ in g["pts"]), min(y for _, y in g["pts"]), max(x for x, _ in g["pts"]), max(y for _, y in g["pts"]))
+    covers = lambda h, g: all(a <= b + 400 for a, b in zip(box(h)[:2] + tuple(-v for v in box(h)[2:]),   # h's box holds g's
+                                                           box(g)[:2] + tuple(-v for v in box(g)[2:])))
+    opened = lambda p, g: any(h["layer"] in side[p["layer"]][1] and _in_poly(*cen(h), g["pts"]) and covers(h, g)
+                              for h in regs)              # its own mask / paste outline, over all of it
+    owner = {}
+    tests = (lambda p, g: _in_poly(p["x"], p["y"], g["pts"]),                 # a region around the pad's centre, or one
+             lambda p, g: _touches(p, g["pts"]) and opened(p, g))             # touching it with its own mask / paste
+    for test in tests:                        # SMD anchors first
+        for p in pads:                        # regions around a pad's centre first, then regions touching its anchor
+            if p["layer"] == AL.MULTI:
+                continue
+            for g in regs:
+                if id(g) not in owner and g["layer"] in side[p["layer"]][0] and test(p, g):
+                    owner[id(g)] = p
+    for test in tests:                        # then through-hole pads: vias inside an SMD pad's shape don't own it
+        for p in pads:
+            if p["layer"] != AL.MULTI:
+                continue
+            for g in regs:
+                if id(g) not in owner and g["layer"] in side[p["layer"]][0] and test(p, g):
+                    owner[id(g)] = p
+    strokes = [t for t in recs if t["type"] == "track" and t["layer"] in (AL.TOP, AL.BOTTOM)]
+    for p in pads:
         cu, other = side[p["layer"]]
-        hit = [g for g in regs if id(g) not in used and g["layer"] in cu and _in_poly(p["x"], p["y"], g["pts"])]
+        hit = [g for g in regs if owner.get(id(g)) is p]
         if not hit:
             continue
         first = [g for g in hit if g["layer"] == cu[0]] or hit      # a through-hole pad: the top outline (= the bottom one)
         keep = [g for g in first if g["layer"] == first[0]["layer"]]
         custom[id(p)] = [g["pts"] for g in keep]
         used |= {id(g) for g in hit}
-        used |= {id(g) for g in regs if g["layer"] in other and _in_poly(p["x"], p["y"], g["pts"])}
+        mid = lambda b: ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+        near = lambda u, v: abs(u[0] - v[0]) <= 1000 and abs(u[1] - v[1]) <= 1000
+        shut = lambda mode, v: mode == 2 and v is not None and v <= -max(p["w"], p["h"]) // 2    # closed by expansion
+        has = {AL.TOP_PASTE: not shut(p.get("paste_mode"), p.get("paste")), AL.BOTTOM_PASTE: not shut(p.get("paste_mode"), p.get("paste")),
+               AL.TOP_SOLDER: not shut(p.get("mask_mode"), p.get("mask")), AL.BOTTOM_SOLDER: not shut(p.get("mask_mode"), p.get("mask"))}
+        for layer in [l for l in other if has[l]]:   # its mask / paste outlines: one per copper polygon or stroke, centred on it
+            for c, poly in [(mid(box(g)), g) for g in keep] + [(((t["x1"] + t["x2"]) / 2, (t["y1"] + t["y2"]) / 2), None)
+                                                                 for t in strokes]:
+                cand = [g for g in regs if g["layer"] == layer and id(g) not in used and near(mid(box(g)), c)]
+                g = next((g for g in cand if poly is None or covers(g, poly) or layer in (AL.TOP_PASTE, AL.BOTTOM_PASTE)
+                          and covers(poly, g)), cand[0] if cand else None)      # mask grows, paste may shrink
+                if g is not None:
+                    used.add(id(g))
     return custom, used
 
 
@@ -438,10 +490,12 @@ def footprint_from_pcblib(path, name, notes):
             if r["hole"]:
                 smd = False
                 kind = "thru_hole" if r["plated"] else "np_thru_hole"
-                drill = f"(drill {m(r['hole'])})"
+                ox, oy = r.get("offset") or (0, 0)          # copper offset from the hole (pad frame, Altium y up)
+                off = f" (offset {m(ox)} {m(-oy)})" if ox or oy else ""
+                drill = f"(drill {m(r['hole'])}{off})"
                 if r["hole_shape"] == 2 and r["slot"]:
                     a, b = (r["slot"], r["hole"]) if round(r["hole_rot"]) % 180 == 0 else (r["hole"], r["slot"])
-                    drill = f"(drill oval {m(a)} {m(b)})"
+                    drill = f"(drill oval {m(a)} {m(b)}{off})"
                 mask = "" if tented else ' "*.Mask"'
                 pads.append(f'\t(pad {sexpr.quote(r["designator"])} {kind} {shape.split()[0]} {at} (size {m(w)} {m(h)}){extra} {drill} '
                             f'(layers "*.Cu"{mask}){_tail(shape)})')
@@ -510,6 +564,41 @@ def footprint_tree(text, name, lib, notes):
         mdl[1] = Q(f"${{KIPRJMOD}}/{lib}.3dshapes/{fn}")
         models.append((src, fn))
     return t, models
+
+
+def altium_model(pcblib, fpn, lib, shapes, taken, notes):
+    """The 3D model of a footprint that has no KiCad (model ...): the STEP embedded in its .PcbLib, else a STEP extruded
+    from its 3D body (outline, standoff and height), written to <lib>.3dshapes/. -> ((model ...) node, file name, how)
+    or None. Altium and KiCad then both have the part's 3D model (ecadlib.parity checks it)."""
+    from . import step_gen as SG
+    fp = AL.read_pcblib(pcblib)[0]
+    bodies = [r for r in fp["records"] if r["type"] == "body"]
+    if not bodies:
+        return None
+    bp = AL.parse_params(bodies[0]["params"])
+    mil = lambda k: RC._mil(bp.get(k)) or 0.0
+    fn = f"{fpn}.step" if f"{fpn}.step" not in taken else f"{fpn}_ecadlib.step"
+    if fp.get("models"):                      # embedded STEP (kicad_import / step_gen): the same file, unchanged
+        mp, data = fp["models"][0]
+        rot = [float(mp.get(k, 0) or 0) for k in ("ROTX", "ROTY", "ROTZ")]
+        if any(abs(v) > 1e-9 for v in rot):
+            K._note(notes, f"3D: the embedded STEP {mp.get('NAME')} is rotated in Altium; not written for KiCad")
+            return None
+        dz = AL.to_mm(int(float(mp.get("DZ", 0) or 0)))
+        how = f"embedded STEP {mp.get('NAME', '')} from the .PcbLib"
+    else:                                     # extruded body: the same prism as a STEP solid (y up, mm, as KiCad models)
+        pts = [(AL.to_mm(x), AL.to_mm(y)) for x, y in bodies[0]["pts"]]
+        lo, hi = mil("STANDOFFHEIGHT"), mil("OVERALLHEIGHT")
+        if len(pts) < 3 or hi - lo <= 0:
+            return None
+        data = SG.write_step([SG.prism(pts, hi - lo, (0, 0, lo), name="body")], fpn, "ecadlib: the Altium 3D body as a STEP").encode("ascii")
+        dz, how = 0.0, f"extruded body ({hi:.2f} mm) from the .PcbLib as a STEP"
+    shapes.mkdir(parents=True, exist_ok=True)
+    if not (shapes / fn).is_file() or (shapes / fn).read_bytes() != data:
+        (shapes / fn).write_bytes(data)
+    node = ["model", Q(f"${{KIPRJMOD}}/{lib}.3dshapes/{fn}"), ["offset", ["xyz", "0", "0", _num(dz)]],
+            ["scale", ["xyz", "1", "1", "1"]], ["rotate", ["xyz", "0", "0", "0"]]]
+    return node, fn, how
 
 
 # ---------------------------------------------------------------- checks
@@ -582,8 +671,15 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
                     else:
                         rep["models"][fn] = None
                         fnotes.append(f"STEP {fn} not available offline: put it in {lib}.3dshapes/")
-                if not models:
-                    fnotes.append("no 3D model (the Altium library has an extruded body only)")
+                pcb = RC._path(plan_dir, it["footprint"].get("file"))
+                got = altium_model(pcb, fpn, lib, shapes, rep["models"], fnotes) if not models and pcb and pcb.is_file() else None
+                if got:                       # no KiCad model: the Altium one, so both libraries have the part in 3D
+                    tree.append(got[0])
+                    body = sexpr.dumps(tree) + "\n"
+                    (pretty / f"{fpn}.kicad_mod").write_text(body)
+                    rep["models"][got[1]] = got[2]
+                elif not models:
+                    fnotes.append("no 3D model (no KiCad model and no 3D body in the .PcbLib)")
                 new = footprint_failures(it, plan_dir, pretty / f"{fpn}.kicad_mod")
                 had = [f for f in (it.get("release_check") or {}).get("failures", []) if f.startswith("footprint:")]
                 worse = [f for f in new if f not in had]

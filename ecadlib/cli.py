@@ -49,6 +49,7 @@
     ecadlib migrate   [PATH] [--check] [--dry-run]   check / upgrade workspace files to this version (backups first)
     ecadlib rebuild   LIB_DIR [--check]           rebuild a library from library.lock.json offline; report drift
     ecadlib testpack  --out DIR                   small Altium + KiCad test pack (6 parts) + CHECKLIST.md for a person to open
+    ecadlib parity    plan.json [--kicad DIR] [--altium DIR] | pair A B | survey   KiCad and Altium files of every part match
 
 `ecadlib <command> -h` shows that command's options. --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
 one-line error. ECADLIB_LIB, ECADLIB_WORKSPACE and ECADLIB_CONFIG are defaults for --lib, --workspace and the rules file."""
@@ -104,6 +105,7 @@ COMMANDS = {
     "testpack": ("ecadlib.testpack", "write a 6-part Altium + KiCad test pack with a CHECKLIST.md of what to open and what to see"),
     "migrate": ("ecadlib.migrate", "check or upgrade a workspace's files to this ecadlib's formats (backups first)"),
     "rebuild": ("ecadlib.rebuild", "rebuild a library from its library.lock.json offline; --check reports any drift"),
+    "parity": ("ecadlib.parity", "read back the KiCad and the Altium library and compare every part (pads, drills, 3D, pins, fields)"),
     "stdparts": ("ecadlib.stdparts", "standard packages and pinouts without Claude: resolve, list, bench vs KiCad, BOM coverage"),
 }
 
