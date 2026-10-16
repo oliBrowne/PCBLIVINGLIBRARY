@@ -181,6 +181,11 @@ TOOLS = [
                      "properties": {"bom": {"type": "string"}, "sync": {"type": "boolean", "default": False},
                                     "wait": {"type": "boolean", "default": False},
                                     "parts": {"type": "array", "items": {"type": "string"}, "description": "only these parts"}}}},
+    {"name": "cross_checks",
+     "description": "For a BOM's librarian plan: which parts read from a datasheet were cross-checked against a second "
+                    "source (the standard package table, or a second read of only the critical numbers) and the outcome: "
+                    "agreed, disagreed (held, with both values), unchecked or skipped. Sends nothing.",
+     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "build_altium_models",
      "description": "Write the Altium .PcbLib files for a BOM's footprints that are in the KiCad libraries, plus generic "
                     "Resistor/Capacitor .SchLib symbols, into the workspace altium_models/ folder.",
@@ -209,6 +214,16 @@ TOOLS = [
                                                "description": "checks to run (default: all, or [upkeep] checks in ecadlib.toml)"},
                                     "apply": {"type": "boolean", "default": False},
                                     "workspace": {"type": "string", "description": "Altium 365 workspace URL for the a365 check"}}}},
+    {"name": "file_formats",
+     "description": "Which workspace files (plans, librarian state, queue, agent state, caches, ecadlib.toml) are in an "
+                    "older or newer ecadlib format. migrate true upgrades the older ones in place (backups first); files "
+                    "from a newer ecadlib are never changed (upgrade ecadlib). Read-only unless migrate is true.",
+     "inputSchema": {"type": "object", "properties": {"migrate": {"type": "boolean", "default": False}}}},
+    {"name": "rebuild_check",
+     "description": "Prove a BOM's library is reproducible: rebuild it from its library.lock.json offline (HTTP cache "
+                    "and cached model answers only, never a live call) in a temporary copy and report per part and file "
+                    "identical / identical after normalising dates / drift, plus inputs that changed. Changes nothing.",
+     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "agent_status",
      "description": "The library agent's state: last run (detected, built, in review, failed), review-queue counts and "
                     "its batch pull requests (or the batch folders when there is no GitHub token).",
@@ -344,6 +359,16 @@ TOOLS = [
                                     "kicad": {"type": "integer", "enum": [7, 8, 9, 10], "default": 8,
                                               "description": "oldest KiCad version to install the zip"},
                                     "include_held": {"type": "boolean", "default": False}}}},
+    {"name": "altium_menu",
+     "description": "Write the 'ecadlib' menu for Altium Designer into the workspace's altium_menu/ folder: a DelphiScript "
+                    "project (Add part from MPN, Check this project BOM, Open review queue) that runs ecadlib on the "
+                    "Altium PC and reinstalls the library, its settings and runner, and with win_dir a ready-made menu "
+                    "file (.DXPPrf). Never run inside Altium by ecadlib's tests.",
+     "inputSchema": {"type": "object",
+                     "properties": {"win_dir": {"type": "string", "description": "Windows folder of altium_menu/ on the Altium PC"},
+                                    "name": {"type": "string", "description": "library name"},
+                                    "command": {"type": "string", "description": "how to run ecadlib there (default: find it)"},
+                                    "port": {"type": "integer", "default": 8765}}}},
 ]
 
 
@@ -412,6 +437,8 @@ def call_tool(ws, name, args):
             r = ws.datasheet_batch(args["bom"], args.get("sync") is True, args.get("wait") is True, args.get("parts") or None)
             r["log"] = r["log"][-20:]
             return r
+        if name == "cross_checks":
+            return ws.cross_checks(args["bom"])
         if name == "build_altium_models":
             return ws.build_altium_models(args["bom"])
         if name == "altium365_plan":
@@ -428,6 +455,10 @@ def call_tool(ws, name, args):
             return ws.export_dblib(args["bom"])
         if name == "upkeep_run":
             return ws.upkeep_run(args["bom"], args.get("checks") or None, args.get("apply") is True, args.get("workspace"))
+        if name == "file_formats":
+            return ws.file_formats(args.get("migrate") is True)
+        if name == "rebuild_check":
+            return ws.rebuild_check(args["bom"])
         if name == "agent_status":
             return ws.agent_status()
         if name == "agent_run":
@@ -465,6 +496,9 @@ def call_tool(ws, name, args):
         if name == "kicad_dblib":
             return ws.kicad_dblib(args["bom"], args.get("name") or "ecadlib", args.get("driver") or None,
                                   args.get("include_held") is True)
+        if name == "altium_menu":
+            return ws.altium_menu(args.get("win_dir") or None, args.get("name") or "ecadlib", args.get("command") or "",
+                                  args.get("port") or 8765)
         if name == "tool_packages":
             return ws.tool_packages(args["bom"], args.get("name") or "ecadlib", args.get("kicad") or 8,
                                     args.get("include_held") is True)

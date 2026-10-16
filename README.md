@@ -87,7 +87,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `held_parts`, `part_candidates` and `choose_part` (fix a held part), `approval_status` and `approve_part` (sign-off; `user` is required, the agent must pass the person's own name), `find_duplicates` (with `merge`), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed), `sim_models` (SPICE/IBIS models; `attach` writes them) and `list_example_specs`.
-3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib demo` (section 32), `ecadlib kicad-pcm` and `ecadlib altium-pkg` (section 31), `ecadlib ai` (section 33), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22) and `ecadlib visual-check` (23). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib demo` (section 32), `ecadlib kicad-pcm` and `ecadlib altium-pkg` (section 31), `ecadlib ai` (section 33), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22), `ecadlib visual-check` (23), `ecadlib migrate` and `ecadlib rebuild` (35). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
 * `uploads/`
@@ -1427,6 +1427,82 @@ paths, and the Excel DbLibs (`dblib-sync` and now `ecadlib dblib`) say `Database
   `PgmOrNull()`, so the plugin showing in the menu is unverified; KiCad 8/9/10 not run (the optional CI `kicad` job
   now also runs these tests on KiCad 8); a sim model's `Sim.Library` through `${KICADn_3RD_PARTY}`.
 
+### 31b. An "ecadlib" menu inside Altium: `altium_menu.py`
+
+```
+ecadlib altium-menu build --out D:/ecadlib-menu --workspace D:/ecadlib-ws --to D:/libs/ecadlib [--win-dir D:\ecadlib-menu]
+ecadlib altium-menu add-part LM358DR --manufacturer TI --workspace D:/ecadlib-ws --result-file r.ini   # what the menu runs
+ecadlib altium-menu check-bom D:/boards/x/Board.PrjPcb | fill Board.PrjPcb | queue | run-job JOBFOLDER
+python3 -m tests.test_altium_menu
+```
+
+`build` writes a DelphiScript script project (`ecadlib_menu.PrjScr` + `.pas`) with three procedures that a menu or
+toolbar button can call: **AddPartFromMPN** (input boxes for the MPN and an optional manufacturer; the part is added
+to `<workspace>/uploads/altium-menu/parts.csv`, the librarian runs on that list, and a ready part is synced into the
+library folder with `altium-pkg`/`dblib-sync`, or released to Altium 365 when the rules set `[altium365] workspace`;
+the dialog shows "ready / held + why"; the script then uninstalls/installs the DbLib and refreshes the installed
+libraries, or for A365 says to refresh the Components panel), **CheckProjectBOM** (the focused project's `.PrjPcb`
+path from `GetWorkspace.DM_FocusedProject.DM_ProjectFullPath`; ecadlib reads its BOM (`altium_project.py`), triages
+it, marks which lines the library already has (the DbLib's parts table and ready plan items), writes and opens an
+HTML report, and offers "Fill the library now?", which runs the librarian on the project) and **OpenReviewQueue**
+(opens `http://127.0.0.1:<port>/#queuecard`, starting `ecadlib ui --workspace W --no-browser` detached when nothing
+answers; refuses a port that serves another workspace or another program).
+Settings live in `ecadlib_menu.ini` next to the script (workspace, library, name, command, hidden, timeout_s, port,
+offline; relative paths start at that folder; a rebuild keeps the file). Workspace `altium_menu(win_dir)` and the MCP
+tool `altium_menu` write it into `<workspace>/altium_menu/` with `workspace=..`.
+
+**How the script runs ecadlib.** No user text goes on a command line: each click makes `jobs\<id>\` next to the
+script and writes `request.ini` with `TIniFile` (action, mpn, manufacturer, project, config). It then calls
+`RunApplication('wscript.exe //B //NoLogo "<dir>\ecadlib_run.vbs" "<dir>\ecadlib_run.cmd" "<job>"')`; the .vbs runs
+`cmd.exe /s /c ""<runner>" "<job>""` with window style 0 (no console) and the .cmd finds ecadlib (`command=` from the
+.ini via `command.txt`, else `ecadlib` on PATH, else `py -3 -m ecadlib`, else `python -m ecadlib`), runs
+`ecadlib altium-menu run-job "<job>"` and writes `exit.txt` (and `notfound.txt` when there is no ecadlib). The
+script waits for `exit.txt` (`Sleep` + `FileExists`, the pattern of Altium-Designer-addons' XIA_Utils.pas; after
+`timeout_s` it asks whether to keep waiting) and reads `result.ini` (`[result]` status, message, fix, install, offer,
+...) with `TIniFile`. `result.ini` is UTF-16 with a BOM, which Windows' profile API reads whatever the code page;
+values are one line; finished job folders older than 14 days are removed. Every failure becomes one dialog line with a fix (ecadlib missing, project not saved, no
+NEXAR_TOKEN, port taken, ...); ecadlib's output is in `jobs\<id>\log.txt`. `hidden=0` runs the .cmd in a visible
+console instead. No key is in any file: keys stay in environment variables.
+
+**Install.** Preferences > Scripting System > Global Projects > Install from file > `ecadlib_menu.PrjScr`; then
+right-click a menu or toolbar > Customize > [Scripts] and drag the three procedures onto a menu (once per editor).
+With `--win-dir` (or when built on Windows) it also writes `ecadlib_menu.DXPPrf`, a preferences file (zip of `DXP.RCS`
++ `IncludedFiles.ini`, the format of Altium-Designer-addons' Altium-saved `UI customizations/Menu_SVN`) that adds an
+"&ecadlib" menu before Window in the schematic, PCB, SchLib and PcbLib editors (`ScriptingSystem:RunScript` with
+`ProjectName=<dir>\ecadlib_menu.PrjScr|ProcName=<dir>\ecadlib_menu.pas>AddPartFromMPN`, TR0124) and lists the entries
+under [Custom]: Preferences > Load, tick only System > Customizations. The README in the folder warns that loading
+customisations may replace your own (save them first).
+
+**Altium calls used** (`ALTIUM_API` in the module; the test fails on any other identifier): from Altium's scripting
+references (TR0120 DelphiScript, TR0124 Server Process, TR0135 System, TR0136 Integrated Library, TR0140 Workspace
+Manager; the 2008 PDFs in github.com/Altium-Designer-addons/scripting-reference, page numbers in the module):
+`RunApplication`, `ShowMessage`, `ShowError`, `ConfirmNoYes`, `GetWorkspace`, `DM_FocusedProject`,
+`DM_ProjectFullPath`, `DM_ProjectFileName`, `IntegratedLibraryManager.InstallLibrary / UninstallLibrary /
+InstalledLibraryPath / AvailableLibraryCount`, `ResetParameters`, `AddStringParameter`, `RunProcess`
+(`IntegratedLibrary:RefreshInstalledLibraries`, AllLibraries=True), `TIniFile` (Create, ReadString, ReadInteger,
+WriteString), `TStringList` (Add, SaveToFile), `FileExists`, `DirectoryExists`, `MkDir`, `ExtractFilePath`, `Now`,
+`Random`, `Randomize`, `IntToStr`, `Trim`, `Pos`, `Copy`, `Length`, `UpperCase`. Not in those references but used by
+public Altium scripts: `InputBox` (BrettLMiller PolygonReFitBO.pas), `GetRunningScriptProjectName`, `Sleep`,
+`FormatDateTime`, `Application.ProcessMessages` (Altium-Designer-addons XIA_Utils, QuickSilk, AutoPlaceSilkscreen).
+
+**Checked here** (16 tests in `tests/test_altium_menu.py`, offline): the PrjScr and .ini parse as INI, every file is
+CRLF ASCII with no secrets; the .pas tokenises (a small Pascal tokenizer: comments, `''` strings, `#13#10`), every
+Begin/Try has its End, every identifier is declared in the unit or on the allow-list, each Function sets Result, the
+three entries are parameterless Procedures (the checker itself is tested on 7 broken units); the RCS follows the
+Menu_SVN grammar, every Link names a defined entry and every ProcName a procedure of the .pas; the command lines,
+parsed with CommandLineToArgvW rules and cmd's `/s /c` quote rule, give back the exact paths for folders with spaces,
+`&`, parentheses and backslashes; `run-job` on a request.ini written in cp1252 (as TIniFile does) adds a ready
+capacitor into a DbLib (UTF-16 result.ini, install= the .DbLib), holds NE555DR with the reasons, checks a two-sheet
+.PrjPcb (1 line already in the DbLib table, 5 not; HTML report opened; offer to fill; fill: 6 held, offline), routes
+to Altium 365 when the rules say so (and says to set NEXAR_TOKEN when it is missing), and the queue action really
+starts `ecadlib ui` on a free port and opens `#queuecard`.
+**Not checked:** nothing was run inside Altium Designer (none here, no Windows): not that Altium loads the script
+project, that `InputBox` / `GetRunningScriptProjectName` / `Sleep` / `Application.ProcessMessages` behave as in the
+public scripts that use them in the Altium version you have, that `RunApplication` starts `wscript.exe` with that
+command line, that the .DXPPrf imports (format copied from an Altium-saved file, never loaded), or that the DbLib
+reinstall shows new rows without restarting. `cmd.exe` and `wscript.exe` were not run; the .cmd and .vbs were checked
+as text and by re-implementing their quoting rules.
+
 ## 32. First run: `ecadlib init` setup, `ecadlib demo`, and a consistent CLI (`firstrun.py`, `clihelp.py`)
 
 ```
@@ -1613,6 +1689,103 @@ Designer (the DbLib, with its Excel file at `C:\ecadlib\testpack`), Altium 365 a
 look like; `tests/test_testpack.py` checks those geometry claims against the files, reads the Altium side back and
 loads the KiCad side in KiCad. Whether Altium Designer opens the DbLib, previews the parts and releases them is exactly
 what the checklist is for: not verified here.
+
+## 35. Updates never break a library: `migrate.py`, `library.lock.json` and `ecadlib rebuild`
+
+**Versioned files.** Everything ecadlib writes and reads back later has a schema version, one integer per kind of file
+(`ecadlib/migrate.py`, `KINDS`): `plan` (plan.json), `librarian_state` (now v2), `approvals_audit`, `agent`
+(`<workspace>/agent/`), `queue` (`agent/queue/`), `http_cache`, `rules` (ecadlib.toml), `approvals_policy`
+(approvals.json) and `lock`. Files other code iterates (a plan is a JSON list, the queue is a folder of items) keep the
+version in the folder's `ecadlib_schema.json`; files a person edits and the lock carry a top-level `schema_version`
+(absent = 1). A folder without a version is a workspace from before versioning (v1 of everything).
+
+* **Older** files are migrated: in memory when they are only read (`migrate.read`), on disk when a command writes the
+  folder anyway (the librarian, the agent, the queue), after a copy to `<folder>/.ecadlib_backup/<kind>-v<old>-<time>/`.
+  Migrations are registered in `MIGRATIONS` and are safe to run twice. The one so far, `librarian_state` v1 -> v2,
+  records each footprint's name and geometry hash (what `fp_share` would compute from its `.kicad_mod` anyway; a
+  footprint shared by name only is left unchecked so the librarian re-checks it).
+* **Newer** files are refused with one line, never misread: `librarian/board/plan.json was made by ecadlib 0.5.0 (plan
+  schema 2; this ecadlib 0.3.0 reads up to 1): upgrade ecadlib (pip install -U ecadlib)`. Checked when the web UI / MCP
+  workspace opens, by the librarian, agent, queue, HTTP cache, rules and approvals loaders. A kind only a newer ecadlib
+  knows is left alone.
+* `ecadlib migrate [PATH] [--check] [--dry-run] [--json]` lists every versioned file under PATH (ok / old / new) and
+  migrates the old ones; `--check` exits 1 when anything needs migrating or is newer and, like `--dry-run`, writes
+  nothing. `ecadlib doctor` has a "file formats" line. Workspace `file_formats(migrate=False)`, MCP tool `file_formats`.
+
+**Proved on real old workspaces.** `tests/fixtures/upgrade/*.tar.gz` (180 KB) are workspaces made by the code of four
+earlier commits (`python3 -m tests.upgrade_fixtures build OLD_CHECKOUT LABEL`, run from a `git worktree` of that commit,
+offline, from the end-to-end tests' recorded KiCad / EasyEDA inputs, through that version's own Workspace API):
+`v0.2.0` (da4e1ad), `v0.3.0` (9916ca1: + approvals, ecadlib.toml), `r5-agent` (f2eedbf: + watch state, review queue,
+agent status) and `r7-stdparts` (26ca9a5). `tests/test_upgrade.py` opens each with today's code: the librarian
+migrates the state (backup byte-identical to the original), keeps the parts the old version finished (files
+untouched) and builds the rest exactly as a fresh build would (same statuses and sources); Ann's approval from 0.3.0
+still counts (content hash unchanged); queue items from round 5 are listed, approved into the plan and retried, and the
+old watch state reports no new parts on a re-scan.
+
+**Reproducible rebuilds.** The librarian writes `<out>/library.lock.json` at the end of every run (no timestamps: a
+re-run that changes nothing leaves it byte-identical). Per part: the BOM-line fingerprint, the ecadlib version and
+rules hash it was built with, every HTTP response its sources fetched (`method`, URL with secrets redacted, sha256 of
+the text; recorded as they arrive by `rebuild.Recorder`), the `--lib` files it came from, for datasheet parts the PDF's
+sha256, model, provider and prompt/schema version (`datasheet.schema_version()`), and the sha256 of every file written
+(plus a normalised hash). Plus the BOM's path and sha256, sources, libraries, cache folder and rules file.
+
+`ecadlib rebuild LIB --check [--keep DIR] [--json]` copies the folder, deletes every model file the librarian made
+(files chosen with `ecadlib resolve` stay), runs the librarian again from the lock with `--offline` (the HTTP cache and
+the cached model answers only: a model is never called) and reports per part and file *identical*, *normalised* (same
+after blanking the `.PcbLib` header's DATE/TIME, the only wall-clock value ecadlib writes; GUIDs and unique ids are
+derived from content) or *DRIFT*, plus inputs that changed (BOM, rules, a cached response, a `--lib` file) and parts
+built by another ecadlib version. Exit 0 / 1 (drift) / 2 (no lock, BOM missing). `ecadlib rebuild LIB` rebuilds in
+place. Workspace `rebuild_check(bom)`, MCP tool `rebuild_check`. Tested: the 5-part BOM rebuilds with 0 drift; a
+cached KiCad footprint edited under the lock is reported as a changed input and a drifted `.PcbLib`; a changed BOM is
+reported; a datasheet part rebuilds from its cached answer while a fake API server records zero calls.
+## 36. Same part, same answer: cross-checks and repeatable reads (`crosscheck.py`, `llm/sampling.py`)
+
+A footprint read from a datasheet (any provider or model) is not accepted on one reading alone. Before the
+footprint is written, `ecadlib.crosscheck` compares the critical numbers with an independent second source.
+These numbers are package type, pin count, pitch, body length/width, lead span, exposed-pad size and the pin table.
+
+| Source | When | Cost |
+|---|---|---|
+| Standard table (`stdparts` / `package_specs`) | the BOM package or the read's package name resolves to a standard table and at least 2 fields can be compared | free, offline |
+| Second read | otherwise. It is a separate request with a different prompt that asks only for the critical numbers, with the same picked pages **in reverse order**, optionally on another model (`cross_check_model`) | one small request (`max_tokens` 8000), cached, logged in `cost.jsonl` (`verdict: "cross-check"`, `purpose: "cross_check"`), counted against `max_cost_usd` |
+
+```toml
+[datasheet]
+cross_check = "auto"        # "auto" (default) | "always" | "off"
+cross_check_model = ""      # "" = the model that made the first read
+```
+
+- `auto` (the default) always runs the free table check. It pays for a second read only when no table covers
+  the package and the datasheet supplies the footprint (a part whose footprint came from KiCad/EasyEDA only has its
+  symbol read). We chose this default because a wrong footprint costs a board spin, while the extra read costs a few
+  cents and runs once per PDF/part/model because it is cached.
+- `always` adds a second read even when the table agrees. `off` gives the behaviour before this change.
+- Comparison is done in code. The tolerance is `max(abs, rel x value)`: pitch 0.01 mm; body and lead span 0.10 mm
+  or 3 %; EP 0.10 mm or 5 %. Against a table, a value also agrees when the table nominal lies inside the read's
+  printed min..max. Pins are compared by count, numbers and normalised names.
+- **Agree**: the part is accepted, marked `cross_check: agreed`, and the report says which fields were checked.
+  **Disagree**: the part is **held** and nothing is written. Both values go to the review (`review.md` section "Cross-checks
+  of datasheet reads", the datasheet report and the agent PR doubts). Neither value is picked or averaged.
+  **Unchecked** (the second read refused, was over budget, or had nothing comparable): the part is accepted with a review item.
+- With `batch = true`, the first reads go in the batch and the second reads are sent synchronously afterwards.
+- The single-read CLI (`ecadlib datasheet PDF --part`) is not cross-checked; the librarian, the agent and the eval are.
+- Workspace `cross_checks(bom)` and MCP tool `cross_checks` list agreed / disagreed / unchecked parts of a librarian plan.
+  The agent queue summary carries the cross-check status.
+
+**Repeatable runs.** `[ai] temperature = "auto"` (default) sends `temperature 0` (plus a fixed `seed` on
+OpenAI-compatible endpoints) only to models known to accept it. Recent Claude models (Opus 5.x / 4.7+, Sonnet 5.x)
+and reasoning models (gpt-5, o-series, `*reasoner*`) get no sampling parameters, so **a default Claude request is
+byte-identical to before** (the golden hashes in `tests/test_llm.py` are unchanged). A provider profile can set `sampling =
+true|false`. A number forces that temperature, and `"off"` never sends one. Sampling is not part of the cache key,
+so answers already paid for are kept. Cached answers, sorted output and content-derived GUIDs make repeat runs give the same files.
+
+**Eval.** Each row records `cross_check` and a `files` fingerprint: the bytes for KiCad, and the read-back
+records for Altium, so the `.PcbLib` header date/time does not count. The summary counts agreed/disagreed parts.
+`ecadlib eval run ... --repeat 2` re-runs the set from the recorded answers and reports **Consistency**: the share
+of cases with identical files and cross-check results. `ecadlib eval consistency A B` compares two result files
+(exit 2 on any difference).
+
+Tested offline only, with fake and recorded answers (`tests/test_crosscheck.py`). No live model of any provider was run.
 
 ## Releases
 
