@@ -359,6 +359,16 @@ TOOLS = [
                                     "kicad": {"type": "integer", "enum": [7, 8, 9, 10], "default": 8,
                                               "description": "oldest KiCad version to install the zip"},
                                     "include_held": {"type": "boolean", "default": False}}}},
+    {"name": "altium_menu",
+     "description": "Write the 'ecadlib' menu for Altium Designer into the workspace's altium_menu/ folder: a DelphiScript "
+                    "project (Add part from MPN, Check this project BOM, Open review queue) that runs ecadlib on the "
+                    "Altium PC and reinstalls the library, its settings and runner, and with win_dir a ready-made menu "
+                    "file (.DXPPrf). Never run inside Altium by ecadlib's tests.",
+     "inputSchema": {"type": "object",
+                     "properties": {"win_dir": {"type": "string", "description": "Windows folder of altium_menu/ on the Altium PC"},
+                                    "name": {"type": "string", "description": "library name"},
+                                    "command": {"type": "string", "description": "how to run ecadlib there (default: find it)"},
+                                    "port": {"type": "integer", "default": 8765}}}},
 ]
 
 
@@ -486,6 +496,9 @@ def call_tool(ws, name, args):
         if name == "kicad_dblib":
             return ws.kicad_dblib(args["bom"], args.get("name") or "ecadlib", args.get("driver") or None,
                                   args.get("include_held") is True)
+        if name == "altium_menu":
+            return ws.altium_menu(args.get("win_dir") or None, args.get("name") or "ecadlib", args.get("command") or "",
+                                  args.get("port") or 8765)
         if name == "tool_packages":
             return ws.tool_packages(args["bom"], args.get("name") or "ecadlib", args.get("kicad") or 8,
                                     args.get("include_held") is True)
