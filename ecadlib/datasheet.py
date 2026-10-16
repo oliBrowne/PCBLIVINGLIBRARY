@@ -91,6 +91,15 @@ def output_config(model, effort, schema):
     return oc
 
 
+def price_of(model):
+    """(input, output) $ per MTok: PRICES for Claude, else what ecadlib.llm knows (a local endpoint is $0), else None."""
+    p = PRICES.get(model)
+    if p:
+        return p
+    from .llm import price
+    return price(model)
+
+
 def page_limit(model):
     return PAGE_LIMIT.get(model, MAX_PAGES)
 
@@ -98,7 +107,7 @@ def page_limit(model):
 def worst_usd(model, tin, max_out, cache_write=1.0, mult=1.0, fallback=False):
     """Worst-case USD of one request: every output token used, plus a full re-run on a fallback model when
     fallbacks are on. None when the model has no known price."""
-    pin, pout = PRICES.get(model, (None, None))
+    pin, pout = price_of(model) or (None, None)
     if pin is None:
         return None
     usd = (tin * cache_write * pin + max_out * pout) / 1e6 * mult
@@ -217,8 +226,10 @@ class Client:
     """The Claude API over requests: retries 408/409/429/5xx/529 and network errors with exponential backoff
     (honouring retry-after), logs every request as one JSON line without the key or the PDF bytes."""
 
-    def __init__(self, key, base=API_BASE, retries=4, backoff=2.0, max_wait=60.0, timeout=600, sleep=None, log_file=None,
+    def __init__(self, key, base=None, retries=4, backoff=2.0, max_wait=60.0, timeout=600, sleep=None, log_file=None,
                  say=None):
+        # base: ANTHROPIC_BASE_URL (as the Anthropic SDKs read it: a gateway, a proxy, a local test server), else the API
+        base = (base or os.environ.get("ANTHROPIC_BASE_URL") or API_BASE).rstrip("/")
         self.key, self.base, self.retries, self.backoff, self.max_wait, self.timeout = key, base, retries, backoff, max_wait, timeout
         self.sleep = sleep or time.sleep
         self.log_file, self.say = log_file or _LOG["file"], say or _LOG["say"]
@@ -440,7 +451,8 @@ def require_key(key=None, rules=None):
     """The API key: explicit, else the environment variable named by [datasheet] api_key_env (default
     ANTHROPIC_API_KEY), else ANTHROPIC_API_KEY. The key itself never goes in a rules file, log or cache."""
     var = settings(rules)["api_key_env"]
-    key = key or os.environ.get(var) or os.environ.get("ANTHROPIC_API_KEY")
+    ai_var = ((rules or {}).get("ai") or {}).get("api_key_env") if isinstance(rules, dict) else None
+    key = key or os.environ.get(var) or (os.environ.get(ai_var) if ai_var else None) or os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         raise DatasheetError(f"{var} is not set: export your Claude API key to read datasheets "
                              "(or use --from-response to re-check a saved response offline)")
@@ -458,6 +470,8 @@ def call(headers, body, key, timeout=600):
 
 
 def parse_message(msg):
+    if (msg.get("ecadlib") or {}).get("error"):       # the guide rails gave up on this answer (ecadlib.llm.rails)
+        raise DatasheetError(msg["ecadlib"]["error"])
     sr = msg.get("stop_reason")
     if sr == "refusal":
         raise DatasheetError(f"model declined (refusal, {(msg.get('stop_details') or {}).get('category')})")
@@ -1164,11 +1178,21 @@ class Reader:
                  poll=60.0, max_wait_s=24 * 3600, estimate=False, auto_pages=None, client=None, log=print, sleep=None, yes=False):
         self.cfg = settings(rules)
         self.out, self.cache_dir = Path(out), Path(cache_dir)
-        self.model, self.effort = model or self.cfg["model"], effort or self.cfg["effort"]
+        from . import llm as LL                       # provider / model / key / rails (ecadlib.llm)
+        self.rules = rules if isinstance(rules, dict) else None
         try:
-            self.key = require_key(key, rules)
-        except DatasheetError:
-            self.key = None
+            self.ep = LL.endpoint(self.rules, "datasheet", model)
+        except LL.AIConfigError as e:
+            raise DatasheetError(str(e))
+        self.model, self.effort = model or self.ep["ref"], effort or self.cfg["effort"]
+        if self.ep["provider"] == "anthropic":
+            try:
+                self.key = require_key(key, rules)
+            except DatasheetError:
+                self.key = None
+        else:                                         # from its env var only (`key` is a Claude key); a local
+            self.key = LL.key_for(self.ep)            # server needs none: LL.NO_KEY, never sent anywhere
+        self._info = {}
         self.http, self.batch, self.wait, self.poll, self.max_wait_s = http, batch, wait, poll, max_wait_s
         self.estimate_only, self.yes = estimate, yes
         self.auto_pages = self.cfg["auto_pages"] if auto_pages is None else auto_pages
@@ -1178,8 +1202,27 @@ class Reader:
         self.say, self.sleep = log or (lambda *a: None), sleep or time.sleep
         self._client, self.pending, self.last_estimate, self.committed_usd = client, {}, None, 0.0
         from . import ds_route as DR                  # pages and model per part, escalation, cost ledger
-        self.router, self.ledger, self.page_budget = DR.Router(self.cfg, model), DR.Ledger(self.dir), self.cfg["page_budget"]
+        self.router, self.ledger, self.page_budget = DR.Router(dict(self.cfg, model=self.model), model), DR.Ledger(self.dir), \
+            self.cfg["page_budget"]
         self._texts = {}
+        if self.batch and not all(self._plain(m) for m in self.router.ladder):
+            self.batch = False                        # Message Batches are Anthropic's, for requests sent as built
+            self.say("  datasheet: this model setup is not plain Claude (other provider or guide rails): "
+                     "one synchronous request per part instead of a Message Batch")
+
+    def info(self, ref):
+        """Endpoint, capability profile and rail plan for a model of this run (ecadlib.llm.run.info)."""
+        if ref not in self._info:
+            from .llm import run as LR, AIConfigError
+            try:
+                self._info[ref] = LR.info(ref, self.rules)
+            except AIConfigError as e:
+                raise DatasheetError(str(e))
+        return self._info[ref]
+
+    def _plain(self, ref):
+        from .llm import run as LR
+        return LR.plain(self.info(ref))
 
     @property
     def deferred(self):
@@ -1267,8 +1310,10 @@ class Reader:
             prov.update(sent_as="base64", sent_bytes=len(src[1]), pages_sent=offset if isinstance(offset, list) else None)
         headers, body = build_request(src, base["part"], base["package"], hint, model, self.effort, fallback=not self.deferred,
                                       cache_doc=not self.deferred)
+        from .llm import rails as LRL
+        sig = LRL.signature(self.info(model)["plan"])  # "" for a plain request: the cache keys of before
         key = ResultCache.key(base["src_hash"], model, base["part"], base["package"],
-                              offset if isinstance(offset, list) else [offset, hint], self.effort)
+                              offset if isinstance(offset, list) else [offset, hint], self.effort + (f"|{sig}" if sig else ""))
         route = dict(base["route"], attempts=list(base["route"]["attempts"]), rung=rung, level=level, model=model)
         return dict(base, key=key, model=model, rung=rung, level=level, offset=offset, headers=headers, body=body, prov=prov,
                     route=route, final=False)
@@ -1314,8 +1359,27 @@ class Reader:
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
         if job["prov"].get("pages_sent"):
             res["needs_review"].append(f"only some pages were sent ({job['prov']['note']}): check nothing was missed")
+        self._ai_record(job, rec, res)
         write(res, self.dir)
         return res
+
+    def _ai_record(self, job, rec, res):
+        """Provenance of the model and rails (sidecar "ai"); a guided model's answer that still fails the checks at
+        the end of its route is held (hold_on_doubt): nothing is written, the part stays open with the reason."""
+        from . import ds_route as DR
+        from .llm import run as LR
+        model = rec.get("model") or job.get("model") or self.model
+        try:
+            inf = self.info(model)
+        except DatasheetError:
+            return
+        res["sidecar"]["ai"] = LR.provenance(inf, rec.get("message"), job.get("route"), bool(job["prov"].get("pages_sent")))
+        if "hold_on_doubt" in inf["plan"]["rails"]:
+            kind, why = DR.assess(res)
+            if kind != "ok":
+                raise DatasheetError(f"held: the answer of {model} ({inf['plan']['tier']} tier) still fails datasheet's "
+                                     f"checks ({'; '.join(why[:3])[:240]}); add a stronger model to [datasheet] ladder or "
+                                     "read the datasheet yourself")
 
     def cached(self, job):
         """The cached answer for this step, when it is the one to keep (a cheaper model's rejected answer never is)."""
@@ -1376,10 +1440,9 @@ class Reader:
             if not _guarded:
                 self._guard_cost([job])
             _guarded = False
-            key = require_key(self.key)               # no key: nothing was sent, so no step is paid for or failed
             try:
                 with logging_to(self.log_file, self.say):
-                    _, msg = call(job["headers"], job["body"], key)
+                    msg = self._ask(job)
             except DatasheetError as e:               # refusal / max_tokens / not schema-shaped: an answer, with usage
                 msg = getattr(e, "api_message", None)
                 if msg is None:                       # no answer came back (API error): nothing to record
@@ -1398,6 +1461,61 @@ class Reader:
                 raise err                             # no next step to go to: the error stands, retried next run
             job = nxt
 
+    def _send_fn(self, job):
+        """send(body) -> the answer of this job's endpoint: Claude through call() (the same request and client as
+        always), anything else through ecadlib.llm.openai_compat. A parse failure still returns the paid-for answer."""
+        inf = self.info(job.get("model") or self.model)
+        ep = inf["ep"]
+        if ep["provider"] == "anthropic":
+            from . import llm as LL
+            key = require_key(self.key if self.ep["provider"] == "anthropic" else LL.key_for(ep), self.rules)
+
+            def send(body, _h=job["headers"]):
+                try:
+                    return call(_h, body, key)[1]
+                except DatasheetError as e:
+                    if getattr(e, "api_message", None) is None:
+                        raise
+                    return e.api_message
+            return send, None
+        from . import llm as LL
+        from .llm.openai_compat import OpenAICompatClient
+        k = LL.key_for(ep)
+        if not k:
+            raise DatasheetError(LL.needs_key_message(ep))
+        cl = OpenAICompatClient(ep["base_url"], k, inf["prof"], log_file=self.log_file, say=self.say, sleep=self.sleep)
+        return (lambda body: cl.messages(body, {})), cl
+
+    def _ask(self, job):
+        """One answer for this step of the part's route, with the support rails (feedback_retry) and, for a guided
+        or non-PDF model, the rails its plan names (ecadlib.llm.rails)."""
+        from .llm import run as LR
+        inf = self.info(job.get("model") or self.model)
+        send, cl = self._send_fn(job)
+        judge = lambda m: self._verdict(job, m)
+        n_att = len((job.get("route") or {}).get("attempts") or []) + 1
+        # one feedback turn, only where the route would otherwise stop on a failing answer (a stronger model or more
+        # pages come first), and only within [datasheet] max_attempts answers per part
+        allow = "rung" in job and n_att + 1 <= self.router.max_attempts and \
+            self.router.next_step(job["rung"], job["level"], len(job["levels"]), "failed", n_att) is None
+        try:
+            return LR.ask(job, inf, send, judge, cl, allow_feedback=allow)
+        except APIError:
+            raise                                     # no answer came back: nothing to record
+        except DatasheetError as e:                   # the rails gave up (steps off-format, family too hard, no text):
+            return {"type": "message", "role": "assistant", "model": job.get("model"), "stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": ""}], "usage": getattr(e, "usage", None) or {},
+                    "ecadlib": {"error": str(e)}}     # a failed answer: the route moves on (or holds the part)
+
+    def _verdict(self, job, msg):
+        """ok | incomplete | failed (with datasheet's reasons) | refused | truncated, for one answer."""
+        if (msg or {}).get("stop_reason") == "refusal":
+            return "refused", ["model declined"]
+        if (msg or {}).get("stop_reason") == "max_tokens":
+            return "truncated", ["answer hit max_tokens"]
+        kind, why, _ = self._judge(job, {"message": msg, "model": job.get("model")})
+        return kind, why
+
     def submit(self, job):
         self.pending[job["key"]] = job
 
@@ -1412,8 +1530,8 @@ class Reader:
         rows, exact, models = [], bool(self.key), {}
         for j in jobs:
             model = j.get("model") or self.model
-            pin, pout = PRICES.get(model, (None, None))
-            if self.key:
+            pin, pout = price_of(model) or (None, None)
+            if self.key and self._plain(model):
                 with logging_to(self.log_file, self.say):
                     tin = self.client().count_tokens(j["body"])
                 how = "count_tokens"
@@ -1446,14 +1564,14 @@ class Reader:
         known = all(r["usd"] is not None for r in rows)
         tot = lambda k: round(sum(r[k] for r in rows), 2) if known and all(r[k] is not None for r in rows) else None
         one = next(iter(models)) if len(models) == 1 else None
-        price = lambda m: f"{m} ${PRICES[m][0]}/${PRICES[m][1]}" if m in PRICES else f"no price known for {m}"
+        price = lambda m: f"{m} ${price_of(m)[0]}/${price_of(m)[1]}" if price_of(m) else f"no price known for {m}"
         self.last_estimate = {"model": one or self.model, "models": models, "route": self.router.route,
                               "mode": "batch (50% off)" if batch else "synchronous", "parts": len(rows),
                               "input_tokens": sum(r["input_tokens"] for r in rows), "exact_input": exact,
                               "usd": tot("usd"), "usd_max": tot("usd_max"), "usd_max_route": tot("usd_max_route"), "rows": rows,
                               "pages_sent": sum(r["pages_sent"] or r["pages_total"] or 0 for r in rows),
                               "pages_total": sum(r["pages_total"] or 0 for r in rows),
-                              "prices": (f"${PRICES[one][0]}/${PRICES[one][1]} per MTok in/out" if one in PRICES else
+                              "prices": (f"${price_of(one)[0]}/${price_of(one)[1]} per MTok in/out" if price_of(one) else
                                          f"no price known for {one}") if one else
                                         "; ".join(price(m) for m in models) + " per MTok in/out"}
         return self.last_estimate
@@ -1796,8 +1914,9 @@ def batch_main(argv, estimate=False):
     rd = Reader(out, a.cache, rules=rules, http=http, model=a.model, effort=a.effort, batch=not a.no_batch,
                 wait=not a.no_wait, poll=a.poll, estimate=estimate or a.estimate, yes=a.yes)
     if not rd.key and not rd.estimate_only:
-        print(f"error: {settings(rules)['api_key_env']} is not set (use `ecadlib datasheet estimate` to see the cost without a key)",
-              file=sys.stderr)
+        from . import llm as LL
+        why = f"{settings(rules)['api_key_env']} is not set" if rd.ep['provider'] == 'anthropic' else LL.needs_key_message(rd.ep)
+        print(f"error: {why} (use `ecadlib datasheet estimate` to see the cost without a key)", file=sys.stderr)
         return 1
     try:
         if plan_mode and rd.estimate_only:
@@ -1825,6 +1944,35 @@ def batch_main(argv, estimate=False):
     return 2 if held else 0
 
 
+def ask_once(inf, headers, body, key, part, package, datasheet, offset):
+    """One read outside a Reader (`ecadlib datasheet PDF --part ...`): the same rails as the Reader, the support
+    feedback turn included (here there is no route to escalate along, so a failing answer gets it at once)."""
+    from . import ds_route as DR
+    from .llm import run as LR
+    cl = None
+    if inf["ep"]["provider"] == "anthropic":
+        def send(b):
+            try:
+                return call(headers, b, key)[1]
+            except DatasheetError as e:
+                if getattr(e, "api_message", None) is None:
+                    raise
+                return e.api_message
+    else:
+        from .llm.openai_compat import OpenAICompatClient
+        cl = OpenAICompatClient(inf["ep"]["base_url"], key, inf["prof"])
+        send = lambda b: cl.messages(b, {})
+
+    def judge(m):
+        if m.get("stop_reason") in ("refusal", "max_tokens"):
+            return ("refused" if m["stop_reason"] == "refusal" else "truncated"), [m["stop_reason"]]
+        try:
+            return DR.assess(process(parse_message(m), part, datasheet, body["model"], offset, m))
+        except DatasheetError as e:
+            return "failed", [str(e)]
+    return LR.ask({"body": body, "part": part, "package": package}, inf, send, judge, cl)
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv and argv[0] in ("batch", "estimate"):
@@ -1839,7 +1987,7 @@ def main(argv=None):
     ap.add_argument("--part", required=True, help="manufacturer part number (symbol name)")
     ap.add_argument("--package", help="package hint, e.g. 'RGT VQFN-16' or 'SOP-16'")
     ap.add_argument("--pages", help="PDF pages with the drawing and pin table, e.g. 30-33")
-    ap.add_argument("--model", default=MODEL)
+    ap.add_argument("--model", help=f"model id (default: [ai] / [datasheet] model, {MODEL}); name:model for an [ai.endpoints] entry")
     ap.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
     ap.add_argument("--fetch", action="store_true", help="download a URL here and send it base64")
     ap.add_argument("--no-fallback", action="store_true", help="do not send fallbacks: default")
@@ -1851,18 +1999,41 @@ def main(argv=None):
     ap.add_argument("-o", "--out", default="out/datasheet")
     a = ap.parse_args(argv)
     cache = ResultCache(Path(a.out) / "cache")
+    from . import llm as LL, rules as RU
     try:
+        rules = RU.load(a.rules, start=a.out)
+    except RU.RulesError as e:
+        rules = e
+    try:
+        if not a.model:                               # [ai] model / [datasheet] model; the default stays Claude Opus 5.5
+            try:
+                a.model = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")["ref"]
+            except LL.AIConfigError as e:
+                raise DatasheetError(str(e))
         pages = parse_pages(a.pages) if a.pages else None
         if a.from_response:
             saved = json.loads(Path(a.from_response).read_text(encoding="utf-8"))
             msg, offset = (saved["message"], saved["page_offset"]) if "message" in saved else (saved, 0)
             ext = parse_message(msg)
         else:
-            key = None if a.estimate else require_key()
-            source, offset, hint = load_source(a.pdf, pages, a.fetch)
+            from .llm import run as LR
+            if isinstance(rules, Exception) and not a.estimate:
+                raise DatasheetError(str(rules))
+            inf = LR.info(a.model, rules if isinstance(rules, dict) else None)
+            if a.estimate:
+                key = None
+            elif inf["ep"]["provider"] == "anthropic":
+                key = require_key(None, rules)
+            else:
+                key = LL.key_for(inf["ep"])
+                if not key:
+                    raise DatasheetError(LL.needs_key_message(inf["ep"]))
+            source, offset, hint = load_source(a.pdf, pages, a.fetch or not LR.plain(inf))
             headers, body = build_request(source, a.part, a.package, hint, a.model, a.effort, not a.no_fallback)
             src_hash = hashlib.sha256(source[1] if source[0] == "base64" else ("url" + source[1]).encode()).hexdigest()
-            ck = ResultCache.key(src_hash, a.model, a.part, a.package, [offset, hint], a.effort)
+            from .llm import rails as LRL
+            sig = LRL.signature(inf["plan"])
+            ck = ResultCache.key(src_hash, a.model, a.part, a.package, [offset, hint], a.effort + (f"|{sig}" if sig else ""))
             if a.estimate:
                 rd = Reader(a.out, Path(a.out) / "cache", model=a.model, effort=a.effort, log=print)
                 prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None}
@@ -1873,16 +2044,11 @@ def main(argv=None):
                 msg = rec["message"]
                 print(f"cached   {cache.dir / (ck + '.json')} (no API call; --no-cache to ask again)")
             else:
-                from . import rules as RU
-                try:
-                    rules = RU.load(a.rules, start=a.out)
-                except RU.RulesError as e:
-                    raise DatasheetError(str(e))
                 prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None}
                 Reader(a.out, Path(a.out) / "cache", key=key, rules=rules, model=a.model, effort=a.effort, log=None,
                        yes=a.yes)._guard_cost([{"name": a.part, "url": a.pdf, "body": body, "prov": prov}])
                 with logging_to(Path(a.out) / "api_log.jsonl", print):
-                    _, msg = call(headers, body, key)
+                    msg = ask_once(inf, headers, body, key, a.part, a.package, a.pdf, offset)
             ext = parse_message(msg)
             if not rec:
                 cache.put(ck, {"key": ck, "part": a.part, "url": a.pdf, "model": a.model, "page_offset": offset, "via": "sync",

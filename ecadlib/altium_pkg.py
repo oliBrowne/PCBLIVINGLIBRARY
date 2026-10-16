@@ -1,0 +1,387 @@
+"""Hand the library to Altium Designer: an integrated-library package (.LibPkg) and an install script project.
+
+    ecadlib altium-pkg out/librarian/plan.json --out D:/libs/ecadlib [--name ecadlib] [--win-dir D:\\libs\\ecadlib]
+    ecadlib altium-pkg out/altium_models --out out/altium_pkg      # any folder of .SchLib / .PcbLib (+ .DbLib)
+
+Writes into --out (a plan first goes through `ecadlib dblib-sync`, so the folder also holds the DbLib and its
+parts workbook):
+  SchLib/<ref>.SchLib, PcbLib/<ref>.PcbLib   the models (copied in when they come from elsewhere)
+  <name>.LibPkg                 integrated-library package listing every .SchLib and .PcbLib by relative path
+                                (SchLib\\x.SchLib): open it in Altium and compile it into <name>.IntLib
+  <name>_Install.PrjScr + .pas  DelphiScript project: run InstallDatabaseLibrary, BuildIntegratedLibrary,
+                                InstallFileLibraries or UninstallAll from File > Run Script
+  ALTIUM_README.txt             what to click, in order
+  altium_pkg.json               what was written and the checks
+
+Every path in these files is relative to the folder (the script works out the folder from its own location with
+GetRunningScriptProjectName), and uses Windows separators, so the folder can be moved, zipped or put on a share.
+
+Checked here (no Altium): the files follow real Altium-authored ones (LibPkg: particle-iot/hardware-libraries,
+blueintegral/Level with SchLib in sub folders; PrjScr: Altium-Designer-addons/scripts-libraries QuickSilk); every
+document the LibPkg lists exists and reads back with ecadlib's reader; every footprint a symbol links to is in one
+of the package's PcbLibs (what the IntLib compiler looks for); every [Library Path] / [Footprint Path] in the DbLib's
+table resolves from the DbLib's folder. Not checked: that Altium compiles the package or runs the script (both
+written from Altium's documented scripting API and the examples above, never run)."""
+import argparse, json, os, shutil, sys
+from pathlib import Path, PurePosixPath, PureWindowsPath
+
+from . import altium_lib as AL
+
+MODEL_EXT = {".schlib": "SchLib", ".pcblib": "PcbLib"}
+COPY_EXT = {".schlib", ".pcblib", ".dblib", ".svndblib", ".xlsx", ".xls", ".csv", ".intlib"}
+
+# [Design] and [DocumentN] keys as Altium writes them in a .LibPkg (particle-iot/hardware-libraries Particle-Devices.LibPkg)
+DESIGN = ["Version=1.0", "HierarchyMode=0", "ChannelRoomNamingStyle=0", "ReleasesFolder=",
+          "ChannelDesignatorFormatString=$Component_$RoomName", "ChannelRoomLevelSeperator=_", "OpenOutputs=1",
+          "ArchiveProject=0", "TimestampOutput=0", "SeparateFolders=0", "TemplateLocationPath=", "PinSwapBy_Netlabel=1",
+          "PinSwapBy_Pin=1", "AllowPortNetNames=0", "AllowSheetEntryNetNames=1", "AppendSheetNumberToLocalNets=0",
+          "NetlistSinglePinNets=0", "DefaultConfiguration=Default - All Constraints", "UserID=0xFFFFFFFF",
+          "DefaultPcbProtel=1", "DefaultPcbPcad=0", "ReorderDocumentsOnCompile=1", "NameNetsHierarchically=0",
+          "PowerPortNamesTakePriority=0", "PushECOToAnnotationFile=1", "DItemRevisionGUID=",
+          "ReportSuppressedErrorsInMessages=0", "FSMCodingStyle=eFMSDropDownList_OneProcess",
+          "FSMEncodingStyle=eFMSDropDownList_OneHot", "OutputPath=", "LogFolderPath=", "ManagedProjectGUID=",
+          "LinkedManagedProjectGUID=", "IncludeDesignInRelease=0"]
+DOCUMENT = ["AnnotationEnabled=1", "AnnotateStartValue=1", "AnnotationIndexControlEnabled=0", "AnnotateSuffix=",
+            "AnnotateScope=All", "AnnotateOrder=-1", "DoLibraryUpdate=1", "DoDatabaseUpdate=1", "ClassGenCCAutoEnabled=1",
+            "ClassGenCCAutoRoomEnabled=1", "ClassGenNCAutoScope=None", "DItemRevisionGUID=", "GenerateClassCluster=0",
+            "DocumentUniqueId="]
+
+
+def win_rel(path, base):
+    """`path` relative to `base`, with Windows separators (SchLib\\x.SchLib)."""
+    return str(PureWindowsPath(*PurePosixPath(Path(os.path.relpath(path, base)).as_posix()).parts))
+
+
+def libpkg_text(docs):
+    """A .LibPkg (INI, CRLF) listing `docs` (relative Windows paths), SchLibs first as Altium orders them."""
+    L = ["[Design]", *DESIGN, "", "[Preferences]", "PrefsVaultGUID=", "PrefsRevisionGUID=", ""]
+    for i, d in enumerate(docs, 1):
+        L += [f"[Document{i}]", f"DocumentPath={d}", *DOCUMENT, ""]
+    return "\r\n".join(L)
+
+
+def prjscr_text(pas):
+    """Script project as Altium saves one (Altium-Designer-addons/scripts-libraries QuickSilk.PrjScr)."""
+    return "\r\n".join(["[Design]", "Version=1.0", "", "[Document1]", f"DocumentPath={pas}", ""])
+
+
+def _pas_str(s):
+    return "'" + str(s).replace("'", "''") + "'"
+
+
+def install_script(name, dblibs, libpkg, files):
+    """DelphiScript with the four procedures; every path is relative to the script project's folder."""
+    add = lambda var, xs: "\n".join(f"    {var}.Add({_pas_str(x)});" for x in xs) or f"    {{ none }}"
+    intlib = f"Project Outputs for {Path(libpkg).stem}\\{Path(libpkg).stem}.IntLib"
+    return f"""{{ Install the {name} library (written by ecadlib altium-pkg; paths are relative to this folder).
+
+  In Altium Designer: File > Open... > {name}_Install.PrjScr, then File > Run Script... and pick one:
+    InstallDatabaseLibrary   adds the database library ({', '.join(dblibs) or 'none in this folder'}) to the installed
+                             libraries; the Components panel then lists every part with its parameters
+    BuildIntegratedLibrary   opens {libpkg}, compiles it into an .IntLib and installs that
+    InstallFileLibraries     adds every .SchLib and .PcbLib of this folder (one per part)
+    UninstallAll             removes every library of this folder from the installed list
+  Re-running is safe: a library already installed is removed and added again, so Altium re-reads it.
+  The folder can be moved or copied: paths are worked out from where this script project is. }}
+
+Var
+    Report : TStringList;
+
+Function Folder : String;
+Begin
+    Result := ExtractFilePath(GetRunningScriptProjectName);
+End;
+
+Function DbLibs : TStringList;
+Begin
+    Result := TStringList.Create;
+{add("Result", dblibs)}
+End;
+
+Function ModelFiles : TStringList;
+Begin
+    Result := TStringList.Create;
+{add("Result", files)}
+End;
+
+Function IsInstalled(Path : String) : Boolean;
+Var
+    i : Integer;
+Begin
+    Result := False;
+    For i := 0 To IntegratedLibraryManager.AvailableLibraryCount - 1 Do
+        If UpperCase(IntegratedLibraryManager.InstalledLibraryPath(i)) = UpperCase(Path) Then
+            Result := True;
+End;
+
+Procedure InstallOne(Path : String);
+Begin
+    If Not FileExists(Path) Then
+    Begin
+        Report.Add('missing: ' + Path);
+        Exit;
+    End;
+    If IsInstalled(Path) Then
+        IntegratedLibraryManager.UninstallLibrary(Path);
+    IntegratedLibraryManager.InstallLibrary(Path);
+    Report.Add('installed: ' + Path);
+End;
+
+Procedure Finish(Title : String);
+Begin
+    ResetParameters;
+    RunProcess('IntegratedLibrary:RefreshInstalledLibraries');
+    ShowMessage(Title + #13#10 + #13#10 + Report.Text);
+    Report.Free;
+End;
+
+Procedure InstallDatabaseLibrary;
+Var
+    L : TStringList;
+    i : Integer;
+Begin
+    Report := TStringList.Create;
+    L := DbLibs;
+    If L.Count = 0 Then
+        Report.Add('No .DbLib in this folder: run `ecadlib altium-pkg plan.json` or `ecadlib dblib-sync` first.');
+    For i := 0 To L.Count - 1 Do
+        InstallOne(Folder + L.Strings[i]);
+    L.Free;
+    Finish('{name}: database library');
+End;
+
+Procedure InstallFileLibraries;
+Var
+    L : TStringList;
+    i : Integer;
+Begin
+    Report := TStringList.Create;
+    L := ModelFiles;
+    For i := 0 To L.Count - 1 Do
+        InstallOne(Folder + L.Strings[i]);
+    L.Free;
+    Finish('{name}: symbol and footprint libraries');
+End;
+
+Procedure BuildIntegratedLibrary;
+Var
+    WS : IWorkspace;
+    Prj : IProject;
+    IntLib : String;
+Begin
+    Report := TStringList.Create;
+    WS := GetWorkspace;
+    Prj := WS.DM_OpenProject(Folder + {_pas_str(libpkg)}, True);
+    If Prj = Nil Then
+        Report.Add('Could not open ' + Folder + {_pas_str(libpkg)})
+    Else
+    Begin
+        Prj.DM_Compile;
+        IntLib := Folder + {_pas_str(intlib)};
+        If Not FileExists(IntLib) Then
+            IntLib := Folder + {_pas_str(Path(libpkg).stem + '.IntLib')};
+        If FileExists(IntLib) Then
+            InstallOne(IntLib)
+        Else
+            Report.Add('No .IntLib after compiling: open {libpkg}, right-click it in the Projects panel > ' +
+                       'Compile Integrated Library, and read the Messages panel.');
+    End;
+    Finish('{name}: integrated library');
+End;
+
+Procedure UninstallAll;
+Var
+    i : Integer;
+    P : String;
+Begin
+    Report := TStringList.Create;
+    For i := IntegratedLibraryManager.AvailableLibraryCount - 1 DownTo 0 Do
+    Begin
+        P := IntegratedLibraryManager.InstalledLibraryPath(i);
+        If Pos(UpperCase(Folder), UpperCase(P)) = 1 Then
+        Begin
+            IntegratedLibraryManager.UninstallLibrary(P);
+            Report.Add('removed: ' + P);
+        End;
+    End;
+    Finish('{name}: uninstalled');
+End;
+""".replace("\n", "\r\n")
+
+
+def readme_text(name, libpkg, dblibs, n_sch, n_pcb):
+    return f"""{name}: Altium Designer hand-off (written by `ecadlib altium-pkg`)
+
+This folder can be moved or copied anywhere (a network share, another PC): every path in it is relative.
+
+1. Database library (parts with parameters, one row per part)
+   {'Open ' + dblibs[0] + ' in Altium and check the connection, or run InstallDatabaseLibrary (step 3).' if dblibs else 'No .DbLib here: build from a plan.json to get one.'}
+   The DbLib reads its parts table from the workbook next to it (DatabasePathRelative=1) and finds symbols and
+   footprints by the relative [Library Path] / [Footprint Path] in that table (SchLib\\x.SchLib, PcbLib\\x.PcbLib).
+   Excel connections need the Microsoft Access Database Engine (ACE) with the same bitness as Altium (64-bit).
+
+2. Integrated library ({n_sch} symbol and {n_pcb} footprint libraries)
+   File > Open... > {libpkg}, then right-click it in the Projects panel > Compile Integrated Library.
+   Altium writes "Project Outputs for {Path(libpkg).stem}\\{Path(libpkg).stem}.IntLib"; install it from the Components panel
+   (... > File-based Libraries Preferences > Install).
+
+3. Or let the script do 1 and 2: File > Open... > {name}_Install.PrjScr, then File > Run Script... and pick
+   InstallDatabaseLibrary, BuildIntegratedLibrary, InstallFileLibraries or UninstallAll.
+
+What to expect: the Components panel lists the library; placing a part shows its symbol with the footprint linked.
+None of this was opened in Altium when it was written: if a step fails, the Messages panel says why; please report it.
+""".replace("\n", "\r\n")
+
+
+# ---------------------------------------------------------------- build
+def collect(src, out):
+    """Copy library files under `src` into `out` (same relative layout) unless they are the same folder.
+    Returns the list of paths in `out`."""
+    src, out = Path(src).resolve(), Path(out).resolve()
+    files = [p for p in sorted(src.rglob("*")) if p.is_file() and p.suffix.lower() in COPY_EXT
+             and not (out != src and p.is_relative_to(out))]
+    if src == out:
+        return files
+    got = []
+    for p in files:
+        dst = out / p.relative_to(src)
+        if not dst.is_file() or dst.read_bytes() != p.read_bytes():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(p, dst)
+        got.append(dst)
+    return got
+
+
+def check_folder(out, libpkg, dblibs):
+    """Problems a user would hit in Altium that can be seen without it. Returns (problems, facts)."""
+    out = Path(out)
+    probs, facts = [], {"symbols": 0, "footprints": 0, "links": 0, "dblib_rows": 0}
+    docs = [ln.split("=", 1)[1] for ln in (out / libpkg).read_text(encoding="utf-8").splitlines() if ln.startswith("DocumentPath=")]
+    names = {"SchLib": set(), "PcbLib": set()}
+    links = []
+    for d in docs:
+        p = out / Path(*PureWindowsPath(d).parts)
+        if not p.is_file():
+            probs.append(f"{libpkg}: {d} is not in the folder")
+            continue
+        kind = MODEL_EXT.get(p.suffix.lower())
+        try:
+            if kind == "SchLib":
+                for c in AL.read_schlib(p)[1]:
+                    names["SchLib"].add(c["name"])
+                    links += [(c["name"], r.get("MODELNAME")) for r in c.get("records") or []
+                              if r.get("RECORD") == "45" and r.get("MODELTYPE") == "PCBLIB"]
+            elif kind == "PcbLib":
+                names["PcbLib"] |= {f["name"] for f in AL.read_pcblib(p)}
+        except Exception as e:
+            probs.append(f"{d} does not read back: {type(e).__name__}: {e}")
+    facts["symbols"], facts["footprints"], facts["links"] = len(names["SchLib"]), len(names["PcbLib"]), len(links)
+    for sym, fp in links:
+        if fp and fp not in names["PcbLib"]:
+            probs.append(f"symbol {sym} links footprint {fp}, which no PcbLib in the package holds")
+    for db in dblibs:
+        csvf = (out / db).with_suffix(".csv")
+        if not csvf.is_file():
+            continue
+        import csv
+        for row in csv.DictReader(csvf.open(encoding="utf-8", newline="")):
+            facts["dblib_rows"] += 1
+            for col, refc, kind in (("Library Path", "Library Ref", "SchLib"), ("Footprint Path", "Footprint Ref", "PcbLib")):
+                rel = row.get(col) or ""
+                if not rel:
+                    continue
+                if PureWindowsPath(rel).is_absolute() or rel.startswith(("\\\\", "/")):
+                    probs.append(f"{db}: {row.get('Part Number')} {col} {rel} is absolute (breaks when the folder moves)")
+                    continue
+                p = (out / db).parent / Path(*PureWindowsPath(rel).parts)
+                if not p.is_file():
+                    probs.append(f"{db}: {row.get('Part Number')} {col} {rel} does not exist")
+                    continue
+                ref = row.get(refc)
+                have = ({c["name"] for c in AL.read_schlib(p)[1]} if kind == "SchLib" else {f["name"] for f in AL.read_pcblib(p)})
+                if ref and ref not in have:
+                    probs.append(f"{db}: {row.get('Part Number')} {refc} {ref} is not in {rel}")
+        text = (out / db).read_text(encoding="utf-8")
+        if "DatabasePathRelative=1" not in text:
+            probs.append(f"{db}: the database path is absolute (DatabasePathRelative=0): breaks when the folder moves")
+    return probs, facts
+
+
+def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print):
+    """Write the Altium hand-off folder; returns the report dict (also altium_pkg.json)."""
+    src, out = Path(src), Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    rep = {"source": str(src), "folder": str(out), "name": name, "sync": None}
+    if src.is_file():
+        from . import altium_dblib_sync as DS
+        res = DS.sync(src, out, "dblib", name, win_dir=win_dir, rules=rules)
+        rep["sync"] = DS.summary(res)
+        bad = [r for r in res["results"] if r["action"] == "error"]
+        rep["sync_errors"] = [f"{r['name']}: {r['detail']}" for r in bad]
+        files = sorted(p for p in out.rglob("*") if p.is_file())
+    elif src.is_dir():
+        files = collect(src, out)
+    else:
+        raise FileNotFoundError(f"{src}: no such plan.json or folder")
+    models = sorted((p for p in files if p.suffix.lower() in MODEL_EXT and p.resolve().is_relative_to(out.resolve())),
+                    key=lambda p: (MODEL_EXT[p.suffix.lower()] != "SchLib", win_rel(p, out).lower()))
+    if not models:
+        raise ValueError(f"no .SchLib or .PcbLib under {src}: run the librarian (or `ecadlib altium-lib`) first")
+    docs = [win_rel(p, out) for p in models]
+    dblibs = sorted(win_rel(p, out) for p in files if p.suffix.lower() in (".dblib", ".svndblib")
+                    and p.resolve().is_relative_to(out.resolve()))
+    libpkg = f"{name}.LibPkg"
+    written = []
+    for fname, text in ((libpkg, libpkg_text(docs)), (f"{name}_Install.PrjScr", prjscr_text(f"{name}_Install.pas")),
+                        (f"{name}_Install.pas", install_script(name, dblibs, libpkg, docs)),
+                        ("ALTIUM_README.txt", readme_text(name, libpkg, dblibs, sum(1 for d in docs if d.lower().endswith(".schlib")),
+                                                          sum(1 for d in docs if d.lower().endswith(".pcblib"))))):
+        data = text.encode("utf-8")
+        p = out / fname
+        if not p.is_file() or p.read_bytes() != data:
+            p.write_bytes(data)
+            written.append(fname)
+    probs, facts = check_folder(out, libpkg, dblibs)
+    rep.update(libpkg=libpkg, script=f"{name}_Install.PrjScr", dblibs=dblibs, documents=docs, written=written,
+               problems=probs + rep.get("sync_errors", []), **facts)
+    (out / "altium_pkg.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
+    return rep
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        prog="ecadlib altium-pkg",
+        description="Altium hand-off folder: .LibPkg (compile to .IntLib), install script project, DbLib (from a plan)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n  ecadlib altium-pkg out/librarian/plan.json --out out/altium_pkg --name mylib\n"
+               "  ecadlib altium-pkg out/altium_models --out out/altium_pkg\n"
+               "then in Altium: open <name>_Install.PrjScr and run InstallDatabaseLibrary, or open <name>.LibPkg and compile it")
+    ap.add_argument("src", help="librarian plan.json, or a folder with .SchLib / .PcbLib files (and a .DbLib)")
+    ap.add_argument("-o", "--out", default="out/altium_pkg", help="output folder (default %(default)s)")
+    ap.add_argument("--name", default="ecadlib", help="library name (default %(default)s)")
+    ap.add_argument("--win-dir", help="with a plan: Windows folder for the DbLib's connection string (Altium rewrites it "
+                                      "from the relative workbook path anyway)")
+    ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan)")
+    ap.add_argument("--json", action="store_true", help="print the report as JSON")
+    a = ap.parse_args(argv)
+    try:
+        rep = build(a.src, a.out, a.name, a.win_dir, a.rules)
+    except (OSError, ValueError) as e:
+        print(f"ecadlib altium-pkg: {e}", file=sys.stderr)
+        return 2
+    if a.json:
+        print(json.dumps(rep, indent=2))
+        return 1 if rep["problems"] else 0
+    if rep["sync"]:
+        print(f"  dblib-sync: {rep['sync']}")
+    for p in rep["problems"]:
+        print(f"  PROBLEM {p}")
+    print(f"  {len(rep['documents'])} libraries in {rep['libpkg']} ({rep['symbols']} symbols, {rep['footprints']} footprints, "
+          f"{rep['links']} symbol-footprint links checked); DbLib: {', '.join(rep['dblibs']) or 'none'}")
+    print(f"  in Altium: open {rep['script']} and run InstallDatabaseLibrary or BuildIntegratedLibrary (see ALTIUM_README.txt)")
+    print(f"wrote {Path(a.out) / rep['libpkg']}, {rep['script']} and ALTIUM_README.txt in {a.out}")
+    return 1 if rep["problems"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

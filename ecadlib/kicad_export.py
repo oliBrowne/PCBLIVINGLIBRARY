@@ -11,8 +11,8 @@ Writes into DIR:
   <lib>.3dshapes/    the STEP models the footprints point at (${KIPRJMOD}/<lib>.3dshapes/X.step)
   <lib>.sim/         SPICE model files of parts with an attached simulation model (`ecadlib sim-models --attach`);
                      their symbols carry Sim.Device / Sim.Library "<lib>.sim/<file>" / Sim.Name / Sim.Pins / Sim.Params
-  sym-lib-table, fp-lib-table   tables with the one library each (uri ${KIPRJMOD}/...): copy DIR's contents
-                     into the project folder, or paste the `lib` lines into the project's tables
+  sym-lib-table, fp-lib-table   the library's row (uri ${KIPRJMOD}/...) added or replaced; other rows are kept, so
+                     -o can be the KiCad project folder itself (or copy DIR's contents / the `lib` lines there)
   kicad_export.json  what came from where, and the checks below
 Symbols, by the plan item's `source.symbol`:
   kicad:Lib:Name     the official KiCad symbol again (HTTP cache, then gitlab.com), `extends` chain flattened
@@ -635,9 +635,9 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
         if not rep["models"].get(old.name):
             old.unlink()
     desc = f"ecadlib export of {plan.name}"
-    for kind, table, uri in (("sym", "sym_lib_table", f"{lib}.kicad_sym"), ("fp", "fp_lib_table", f"{lib}.pretty")):
-        (out / f"{kind}-lib-table").write_text(
-            f'({table}\n\t(version 7)\n\t(lib (name {sexpr.quote(lib)})(type "KiCad")(uri "${{KIPRJMOD}}/{uri}")(options "")(descr {sexpr.quote(desc)}))\n)\n')
+    from .kicad_dblib import add_lib_row          # the row for this library; other rows (a project's own, another
+    for kind, table, uri in (("sym", "sym_lib_table", f"{lib}.kicad_sym"), ("fp", "fp_lib_table", f"{lib}.pretty")):  # export) stay
+        add_lib_row(out / f"{kind}-lib-table", lib, f"${{KIPRJMOD}}/{uri}", desc, "KiCad", table)
     if rep["kicad_content"]:
         (out / "NOTICE.txt").write_text(KICAD_NOTICE)
     rep["footprints"] = {k: fps[k] for k in sorted(fps)}
@@ -656,8 +656,13 @@ def main(argv=None):
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
     ap.add_argument("--rules", help="library rules file: house parameter names (default: ecadlib.toml found from the plan)")
+    ap.add_argument("--json", action="store_true", help="print the export report as JSON instead of the log")
     a = ap.parse_args(argv)
-    rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60), rules=a.rules)
+    rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60), rules=a.rules,
+                 log=(lambda *x, **k: None) if a.json else print)
+    if a.json:
+        print(json.dumps(rep, default=str))
+        return 1 if rep["errors"] else 0
     for r in rep["parts"]:
         print(f"  {r['symbol_name']:<28} fp={r['footprint'] or '-':<40} sym={r['symbol'] or 'FAILED'}")
         for n in r["notes"]:
@@ -671,6 +676,9 @@ def main(argv=None):
         print(f"  ERROR {e}")
     print(f"{rep['symbols']} symbols, {len(rep['footprints'])} footprints, {sum(1 for v in rep['models'].values() if v)}/{len(rep['models'])} STEP models "
           f"-> {Path(a.out) / (rep['library'] + '.kicad_sym')}; {len(rep['skipped'])} held parts skipped")
+    print(f"wrote {Path(a.out)}/: {rep['library']}.kicad_sym, {rep['library']}.pretty/, sym-lib-table, fp-lib-table "
+          f"(the tables use ${{KIPRJMOD}}: copy this folder's contents into your KiCad project folder, or add the library "
+          f"in Preferences > Manage Symbol / Footprint Libraries)")
     return 1 if rep["errors"] else 0
 
 

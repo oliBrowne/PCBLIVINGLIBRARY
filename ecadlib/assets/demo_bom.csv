@@ -1,0 +1,8 @@
+Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #,LCSC Part Number,Description
+"R1,R2,R3",3,10k,R_0603_1608Metric,UNI-ROYAL,0603WAF1002T5E,C25804,Resistor 10k 1% 0603
+"R4,R5",2,4.7k,R_0603_1608Metric,UNI-ROYAL,0603WAF4701T5E,C23162,Resistor 4.7k 1% 0603
+"C1,C2,C3",3,100nF,C_0402_1005Metric,Samsung Electro-Mechanics,CL05B104KO5NNNC,C1525,Capacitor 100nF 16V X7R 0402
+D1,1,RED,LED_0603_1608Metric,Hubei KENTO Elec,KT-0603R,C2286,LED red 0603
+Q1,1,AO3401A,SOT-23,Alpha & Omega Semiconductor,AO3401A,C15127,P-MOSFET -30V -4A SOT-23
+U1,1,AMS1117-3.3,SOT-223-3_TabPin2,Advanced Monolithic Systems,AMS1117-3.3,C6186,LDO 3.3V 1A SOT-223
+U2,1,CH340C,SOIC-16_3.9x9.9mm_P1.27mm,WCH,CH340C,C84681,USB to UART bridge (no standard symbol: held on purpose)

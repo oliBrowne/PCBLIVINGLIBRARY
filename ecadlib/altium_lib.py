@@ -465,12 +465,13 @@ def _template():
     return json.loads(gzip.decompress((Path(__file__).with_name("assets") / "pcblib_template.json.gz").read_bytes()))
 
 
-def pcblib_bytes(footprints, filename="ecadlib.PcbLib"):
+def pcblib_bytes(footprints, filename="ecadlib.PcbLib", stamp=None):
+    """stamp: (DATE, TIME) for the library header; default now (or SOURCE_DATE_EPOCH)."""
     footprints = [dict(fp, name=lib_name(fp["name"])) for fp in footprints]
     names = [fp["name"] for fp in footprints]
     keys = [section_key(n) for n in names]
     _check_keys(keys, names, PCBLIB_RESERVED, "footprint")
-    tpl, (date, tm) = _template(), _now()          # cached: treat tpl as read-only
+    tpl, (date, tm) = _template(), stamp or _now()     # cached: treat tpl as read-only
     hdr = re.sub(r"\|FILENAME=[^|]*", "|FILENAME=" + clean(filename), tpl["library_params"], count=1)
     hdr = re.sub(r"\|DATE=[^|]*", "|DATE=" + date, hdr, count=1)
     hdr = re.sub(r"\|TIME=[^|]*", "|TIME=" + tm, hdr, count=1)
@@ -525,9 +526,28 @@ def remap_layers(fp, layers):
 def write_pcblib(path, footprints, layers=None):
     """layers: {role: layer id} (rules.layers(rules)) to put courtyard, assembly, 3D body and silkscreen where the
     library keeps them; None = ecadlib's layers (Mechanical 15 / 13, Top Overlay)."""
+    from .fsutil import write_bytes_atomic
     path = Path(path)
-    path.write_bytes(pcblib_bytes([remap_layers(fp, layers) for fp in footprints], path.name))
+    fps = [remap_layers(fp, layers) for fp in footprints]
+    old = _pcblib_stamp(path)
+    if old and path.read_bytes() == pcblib_bytes(fps, path.name, old):
+        return path                    # the same library: leave the file (and the date in it) alone, so a re-run
+    write_bytes_atomic(path, pcblib_bytes(fps, path.name))    # changes nothing on disk or in git
     return path
+
+
+def _pcblib_stamp(path):
+    """(DATE, TIME) in an existing .PcbLib's library header, or None."""
+    if not Path(path).is_file():
+        return None
+    try:
+        import olefile
+        with olefile.OleFileIO(str(path)) as o:
+            hdr = o.openstream("Library/Data").read(4096)
+    except Exception:                  # not ours, damaged, not OLE: just write the new file
+        return None
+    d, t = re.search(rb"\|DATE=([^|]*)", hdr), re.search(rb"\|TIME=([^|]*)", hdr)
+    return (d.group(1).decode("latin-1"), t.group(1).decode("latin-1")) if d and t else None
 
 
 # ---------------------------------------------------------------- schematic symbols
@@ -780,8 +800,11 @@ def schlib_bytes(symbols):
 
 
 def write_schlib(path, symbols):
+    from .fsutil import write_bytes_atomic
     path = Path(path)
-    path.write_bytes(schlib_bytes(symbols))
+    data = schlib_bytes(symbols)
+    if not (path.is_file() and path.read_bytes() == data):      # unchanged: not rewritten
+        write_bytes_atomic(path, data)
     return path
 
 

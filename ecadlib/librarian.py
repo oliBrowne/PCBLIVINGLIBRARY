@@ -190,6 +190,10 @@ class Run:
 
     def kicad(self):
         if self._kicad is None:
+            f = Path(self._kicad_args[0] or "")
+            if self._kicad_args[0] and not self.http.offline and (self._kicad_args[1] or not f.exists()):
+                getattr(self, "log", print)("  building the KiCad library name index from gitlab.com (first run only, "
+                                            "can take a few minutes; cached for 30 days) ...")
             self._kicad = KiCadLibrary(self.http, *self._kicad_args)
         return self._kicad
 
@@ -589,7 +593,15 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     if "standard" in sources and "kicad" in sources and sources.index("standard") < sources.index("kicad"):
         sources.remove("standard")                     # never ahead of the KiCad library
         sources.insert(sources.index("kicad") + 1, "standard")
+    if "standard" in sources and "datasheet" in sources and sources.index("datasheet") < sources.index("standard"):
+        from .llm import run as LR                     # rail prefer_standard: a guided (smaller) model reads datasheets
+        if LR.wants(rules, "prefer_standard"):         # only for what the offline standard parts can't build
+            sources.remove("standard")
+            sources.insert(sources.index("datasheet"), "standard")
     lines, mapping = T.read_bom(bom, RU.bom_columns(rules))
+    if not lines:
+        raise ValueError(f"{bom}: the BOM has a header but no part rows")
+    log(f"  BOM: {len(lines)} lines; looking them up in your libraries and the part sources (triage) ...")
     index = KiCadIndex(libs)
     from . import plugins as PL                      # providers: None = [providers] order, else jlcpcb_search,easyeda
     provs = [c(http) for c in PL.select(providers, rules, default="jlcpcb_search,easyeda")]
@@ -626,7 +638,12 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
                                     if (old_st.get(k) or {}).get("chosen") and (out / old_st[k]["file"]).exists()}
         for rec in keep.values():          # a chosen file another part shares is reused, never overwritten by its fetch
             r.written.setdefault(str(out / rec["file"]), rec)
-    for it, ln, row, fpr in todo:
+    r.log = log
+    if todo:
+        log(f"  finding symbols and footprints for {len(todo)} part(s) (sources: {', '.join(sources)}) ...")
+    for n, (it, ln, row, fpr) in enumerate(todo, 1):
+        if len(todo) > 3:
+            log(f"  [{n}/{len(todo)}] {it['name']}")
         st = r.resolve(it, ln, row, keeps[it["name"]])
         st["key"], st["skipped"] = fpr, False
         state[it["name"]] = st
@@ -681,6 +698,7 @@ def main(argv=None):
     ap.add_argument("--datasheet-batch", action="store_true",
                     help="read every datasheet still needed as one Message Batch (half price; waits for it, see --datasheet-no-wait)")
     ap.add_argument("--datasheet-no-wait", action="store_true", help="submit the batch and finish; re-run to collect it")
+    ap.add_argument("--json", action="store_true", help='print {"plan", "review", "parts", "ready", "held", "blockers"} instead of the log')
     a = ap.parse_args(argv)
     rules = RU.load(a.rules, start=a.out)
     reader = None
@@ -690,11 +708,21 @@ def main(argv=None):
     try:
         items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh,
                     a.refresh_index, a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=rules,
-                    user=a.user, http=reader.http if reader else None, reader=reader)
+                    user=a.user, http=reader.http if reader else None, reader=reader,
+                    log=(lambda *x, **k: None) if a.json else print)
     except ValueError as e:                              # unreadable / headerless BOM, unknown --sources
-        print(f"ecadlib librarian: {e}", file=sys.stderr)
+        from .firstrun import bom_hint
+        print(f"ecadlib librarian: {e}" + bom_hint(e), file=sys.stderr)
         return 2
+    from .firstrun import blockers
     held = sum(i["status"] != "ready" for i in items)
+    why = blockers(review_rows(items), rules, a.offline)
+    if a.json:
+        print(json.dumps({"plan": str(Path(a.out) / "plan.json"), "review": str(Path(a.out) / "review.md"), "parts": len(items),
+                          "ready": len(items) - held, "held": held, "blockers": [{"message": m, "fix": f} for m, f in why]}))
+        return 2 if held else 0
+    for m, f in why:
+        print(f"  note: {m}\n        fix: {f}")
     print(f"{len(items)} parts: {len(items) - held} ready, {held} held -> {Path(a.out) / 'plan.json'}; review {Path(a.out) / 'review.md'}")
     return 2 if held else 0
 

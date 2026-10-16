@@ -29,7 +29,12 @@ def main(argv=None):
     r.add_argument("--limit", type=int, help="first N cases, families interleaved")
     r.add_argument("--family", help="only these families (comma list)")
     r.add_argument("--case", help="only these case ids or MPNs (comma list)")
-    r.add_argument("--model", help="datasheet model (default: [datasheet] model)")
+    r.add_argument("--model", help="datasheet model (default: [ai] / [datasheet] model)")
+    r.add_argument("--provider", help="anthropic | openai-compatible | openai | openrouter | gemini | ollama | lmstudio | vllm | "
+                                      "llamacpp (default: [ai] provider); compare models on the same set")
+    r.add_argument("--base-url", help="openai-compatible endpoint, e.g. http://localhost:11434/v1")
+    r.add_argument("--api-key-env", help="NAME of the env var with the key for --provider")
+    r.add_argument("--assist", choices=["auto", "off", "full"], help="guide rails (default: [ai] assist = auto, by tier)")
     r.add_argument("--sources", help="librarian sources in order (default: the rules' order without kicad)")
     r.add_argument("--providers", help="triage providers (default: the rules' order)")
     g = r.add_mutually_exclusive_group()
@@ -65,7 +70,7 @@ def main(argv=None):
         return 0
     if a.cmd == "compare":
         res = R.compare(a.a, a.b)
-        print(json.dumps({k: v for k, v in res.items() if k != "text"}, indent=1, default=str) if a.json else res.text)
+        print(json.dumps({k: v for k, v in res.items() if k != "text"}, indent=1, default=str) if a.json else res["text"])
         return 0
     tol = {}
     for t in a.tol:
@@ -74,7 +79,8 @@ def main(argv=None):
             ap.error(f"--tol {t}: unknown field {k!r}")
         tol[k] = float(v)
     rep = R.run(a.set, a.out, a.limit, a.model, a.record, a.replay, _list(a.sources), _list(a.family), _list(a.case),
-                a.offline, a.cache, rules=a.rules, providers=a.providers, tol=tol)
+                a.offline, a.cache, rules=a.rules, providers=a.providers, tol=tol, provider=a.provider,
+                base_url=a.base_url, assist=a.assist, api_key_env=a.api_key_env)
     if a.json:
         print(json.dumps(rep["summary"], indent=1))
     else:

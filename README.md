@@ -9,11 +9,29 @@ These are small Python prototypes for an open-source tool that manages ECAD comp
 ## Quick start
 
 ```
-ecadlib init --from path/to/your/libraries      # reads SchLib/PcbLib/DbLib/KiCad/BOMs, writes ecadlib.toml
-ecadlib librarian my_bom.csv                     # or: ecadlib ui  -- every tool now follows ecadlib.toml
+pip install -e .                 # from this checkout (Python 3.10+); `pip install ecadlib` once a release is on PyPI
+ecadlib demo                     # about a second, offline, no API keys: a small library in ./ecadlib-demo
+ecadlib init                     # a few questions -> ecadlib.toml, then a setup check and the next commands
+ecadlib librarian my_bom.csv -o ecadlib_workspace/librarian/my_bom   # fill every missing part; `ecadlib status` shows it
+ecadlib ui                       # or do the same in your browser
 ```
 
-`init` works out your naming, parameters, folders, layers and density from the libraries you already have, and asks only where the evidence is split (`--yes` takes the best guess). See section 18.
+* **`demo`** builds a 7-part library (0603 resistors, 0402 capacitor, LED, SOT-23 MOSFET, SOT-223 regulator, a SOIC-16
+  chip) from a BOM bundled with ecadlib, using only the built-in standard parts: Altium `.SchLib`/`.PcbLib`, the KiCad
+  `.kicad_sym` / `.pretty` / lib tables and a KiCad database library, plus the plan and review. One part (CH340C) is
+  held on purpose, so you also see what a held part looks like. `ecadlib status --workspace ecadlib-demo` and
+  `ecadlib ui --workspace ecadlib-demo` open it.
+* **`init`** asks which tool you use (Altium, KiCad or both), where your existing libraries are, which workspace folder
+  to use and which part sources to try, and lists which API keys are set (names only). `--yes` takes the defaults
+  (`--tool`, `--lib`, `--workspace`, `--sources` set them without asking). It also learns your naming, parameters,
+  folders, layers and density from the libraries it finds (`--from DIR` to scan more; section 18), then runs
+  `ecadlib doctor` and prints the next commands. Your library folders and workspace become the default `--lib` and
+  `--workspace` of every command run below that folder.
+* **The first online run** builds a name index of KiCad's official libraries from gitlab.com (a few minutes, once; it
+  is cached for 30 days). Parts that no source can supply wait for the datasheet reader, which needs
+  `ANTHROPIC_API_KEY`; without it they are held and the run says so. No network? `--offline --sources standard`.
+
+See section 32 for the first-run commands in detail.
 
 ## How you use it
 
@@ -53,6 +71,11 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
      * **Build .PcbLib / .SchLib** converts the BOM's footprints and writes generic R/C symbols.
      * **Altium 365** plans a release with a ready / needs-symbol / needs-footprint status per part. **Dry run** shows the exact requests without sending anything. **Push** is enabled only when `NEXAR_TOKEN` is set and a workspace is picked, and it asks for confirmation first.
 
+   * **Find your way:** a bar at the top links the steps in order (1. Check a BOM, 2. Fill the library, 3. Send to Altium) and the Review queue (with how many items wait), Footprints, Status and Settings (library rules). After each action a blue line says what happened and what to do next ("8 held: use Pick…"; "Next: Dry run"), with a button to the next step. Long actions show progress in their own card.
+   * **Status:** counts of BOMs, parts in library plans, ready, held, awaiting approval and review-queue items, the last BOM check, and a list of what waits for someone. **Run setup check** (admins in team mode) shows `ecadlib doctor` in the page, failures first, with how to fix each one. Routes: `GET /api/status` (viewer) and `GET /api/doctor` (admin).
+   * Errors are one plain line, with workspace paths shown relative to the workspace. A viewer in team mode is told which role they need.
+   * **Checked in a real browser:** `tests/test_ui_browser.py` drives Chromium (Playwright) through these flows at 1280 px and 390 px wide, local and team mode (68 checks: next-step lines, progress, keyboard focus, no sideways scrolling, no console errors, roles). It skips when node, Playwright or Chromium is missing. `tests/ui_fixture.py DIR [--team|--empty]` serves the same offline workspace by hand.
+
    ![Triage table](docs/ui-triage.png)
    ![Footprint preview](docs/ui-footprint.png)
    ![Send to Altium](docs/ui-altium.png)
@@ -64,7 +87,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `held_parts`, `part_candidates` and `choose_part` (fix a held part), `approval_status` and `approve_part` (sign-off; `user` is required, the agent must pass the person's own name), `find_duplicates` (with `merge`), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed), `sim_models` (SPICE/IBIS models; `attach` writes them) and `list_example_specs`.
-3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22) and `ecadlib visual-check` (23). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib demo` (section 32), `ecadlib kicad-pcm` and `ecadlib altium-pkg` (section 31), `ecadlib ai` (section 33), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22) and `ecadlib visual-check` (23). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
 * `uploads/`
@@ -104,7 +127,7 @@ ecadlib ui --team --workspace /srv/ecadlib --lib /srv/kicad-libs --host 0.0.0.0 
 * **Sessions** use a random token in an `HttpOnly; SameSite=Strict` cookie (`Secure` over HTTPS). A session ends after 12 h, or after 2 h without use, and on **Sign out**. Every POST needs the session's CSRF token in `X-CSRF-Token`. The Origin and Host checks stay on as well. The Host must be an IP address, `localhost`, this machine's name or an `--allowed-host`. After 5 failed sign-ins for one user name in 15 minutes, that name is locked for 15 minutes, and unknown names lock the same way. One address gets 30 failures in that window. Each try is counted before the password is checked, so parallel requests get no extra guesses, and checking the current password on **Change password** counts the same way. Admins can **Unlock** a user. Removing a user and adding the same name again does not bring back the old sessions. Team files (`team_users.json` and the rest) are never served or read as a BOM, under any letter case or file link. JSON request bodies are limited to 2 MB (uploads: 20 MB). A whole request (TLS handshake, headers and body) must arrive within `request_seconds` (120), and one address may hold `max_connections_per_ip` (64) connections at once; a trusted proxy is exempt. `team_audit.jsonl` is rotated at `audit_max_mb` (10) into `.1` … `.{audit_keep}` (5). Refusals before sign-in are logged at most `audit_refusals_per_minute` (20) times per address per minute; the next line counts the dropped ones (`suppressed`). Sessions and lockouts are kept in memory, so a restart signs everyone out.
 * **Audit.** Every POST in team mode, including refused ones and sign-ins, is appended to `team_audit.jsonl` with time, user, client address, route, result and the main fields (never passwords). Admins see it under **Users → Audit log**. Approvals are also logged to `approvals_audit.jsonl` as before, with `via: ecadlib ui (team, signed in)`. `/api/file` never serves `team_users.json`, `team.json` or `team_audit.jsonl`.
 * **Several users at once.** All writes in the workspace are serialised by one lock. Each background job belongs to the user who started it, and only that user and admins can see it. While the librarian runs on a BOM, a second librarian run or another write to that BOM is refused with 409 until it finishes. Every upload is stored in its own new folder, `uploads/<UTC time>-<random>/<file name>`, so two people uploading `BOM.csv` at the same moment both keep their file, and each gets its own triage report (`reports/triage_BOM_<folder>.*`) and librarian folder. The file keeps its name (reduced to letters, digits, `.`, `_` and `-`; any path in it is dropped), and the page shows it with its upload time. BOMs uploaded flat into `uploads/` by older versions still work and keep their old report names.
-* **Past triages.** Every signed-in user, viewers included, sees the **Past triages** list (also in local mode): BOM, when it finished, who ran it and how many lines need work. **Open** shows the saved result, with its per-line status and report links, without looking anything up again; re-running a triage still needs librarian. The routes are `GET /api/triage/history` and `GET /api/triage/result?id=...` (role viewer), and the MCP tool `triage_history` gives the same view. Finished results are library data for the whole team, but a job that is still running, with its live progress, stays visible only to the user who started it and to admins. Each triage now also writes `reports/triage_<name>.json` (the full result, the time and the user). Older triages that only left a `.csv` are listed too, without BOM or user. An id is only matched against the reports that exist, and is never turned into a path.
+* **Past triages.** Every signed-in user, viewers included, sees the **Past BOM checks** list (also in local mode): BOM, when it finished, who ran it and how many lines need work. **Open** shows the saved result, with its per-line status and report links, without looking anything up again; re-running a triage still needs librarian. The routes are `GET /api/triage/history` and `GET /api/triage/result?id=...` (role viewer), and the MCP tool `triage_history` gives the same view. Finished results are library data for the whole team, but a job that is still running, with its live progress, stays visible only to the user who started it and to admins. Each triage now also writes `reports/triage_<name>.json` (the full result, the time and the user). Older triages that only left a `.csv` are listed too, without BOM or user. An id is only matched against the reports that exist, and is never turned into a path.
 * **HTTPS.** Pass `--cert`/`--key` to serve TLS 1.2+ with Python's `ssl`. Without a certificate, team mode refuses to listen on any non-loopback address unless you add `--allow-http`, and then it prints a loud warning. The usual setup is a reverse proxy on the same machine, with ecadlib bound to loopback:
 
   ```
@@ -736,7 +759,7 @@ ecadlib kicad-export out/librarian/plan.json -o out/kicad --name mylib [--lib ex
 python3 -m tests.test_kicad_export
 ```
 
-Writes what the librarian built for Altium as a KiCad library: `mylib.kicad_sym` (one symbol per plan part, named after it, with Reference, Value, Footprint `mylib:<footprint>`, Datasheet, Description, Manufacturer, MPN, supplier numbers such as `LCSC` and the plan's other parameters), `mylib.pretty/` (one `.kicad_mod` per footprint, renamed to the plan's footprint name), `mylib.3dshapes/` (STEP models, referenced as `${KIPRJMOD}/mylib.3dshapes/X.step`), `sym-lib-table` / `fp-lib-table` with `${KIPRJMOD}` paths, and `kicad_export.json` (what came from where, and the checks). Copy the folder's contents into the KiCad project, or paste the two `lib` lines into its tables. Held parts are skipped unless `--include-held`; output is sorted and repeatable.
+Writes what the librarian built for Altium as a KiCad library: `mylib.kicad_sym` (one symbol per plan part, named after it, with Reference, Value, Footprint `mylib:<footprint>`, Datasheet, Description, Manufacturer, MPN, supplier numbers such as `LCSC` and the plan's other parameters), `mylib.pretty/` (one `.kicad_mod` per footprint, renamed to the plan's footprint name), `mylib.3dshapes/` (STEP models, referenced as `${KIPRJMOD}/mylib.3dshapes/X.step`), `sym-lib-table` / `fp-lib-table` with `${KIPRJMOD}` paths (the library's own row is added or replaced; other rows, such as a project's own libraries or another export, are kept, so `-o` can be the KiCad project folder), and `kicad_export.json` (what came from where, and the checks). Copy the folder's contents into the KiCad project, or paste the two `lib` lines into its tables. Held parts are skipped unless `--include-held`; output is sorted and repeatable.
 
 * **Symbols:** a part whose symbol came from KiCad (`kicad:` or a `--lib` folder) gets that KiCad symbol again, with its `extends` chain flattened and renamed; an EasyEDA symbol is converted again from the EasyEDA data; anything else (datasheet reader, or a source that can't be reached) is drawn from its `.SchLib`, read back with `altium_lib.read_schlib` (pins with type, shape and visibility, body graphics, parts as units, display modes as De Morgan styles).
 * **Footprints:** the plan's `.kicad_mod` when there is one, else the `.PcbLib` converted back. STEP files come from `kicad-packages3D` (through the HTTP cache); ecadlib-generated footprints have none, since Altium gets an extruded body.
@@ -1298,6 +1321,254 @@ Checks (2026-10-16, kicad-footprints f8440fa, kicad-symbols 9280a93):
   on the same 68 parts: with the KiCad library reachable, nothing changes (KiCad already has those passives); without
   it, parts sent to the datasheet step fall from 66 to 35 (31 complete parts with no Claude call).
 * **Not checked:** a live datasheet run (no API key); EasyEDA (blocked).
+
+## 31. Plugging into the tools: `kicad_pcm.py` and `altium_pkg.py`
+
+```
+ecadlib kicad-pcm out/librarian/plan.json --out out/pcm --name mylib [--kicad 7|8|9|10] [--prefix PCM_] [--pkg-version 1.2.0]
+ecadlib kicad-pcm out/kicad --out site/kicad --base-url https://example.com/kicad   # + repository.json / packages.json
+ecadlib kicad-pcm --plugin --out out/pcm                    # the "ecadlib: add part" PCB editor action plugin
+ecadlib altium-pkg out/librarian/plan.json --out D:/libs/mylib --name mylib   # or a folder of .SchLib/.PcbLib
+python3 -m tests.test_tool_packages
+```
+
+**KiCad.** `kicad-pcm` packages a plan (or a `kicad-export` folder) as a Plugin and Content Manager *library* package:
+a zip with `metadata.json`, `symbols/<lib>.kicad_sym`, `footprints/<lib>.pretty/` and `3dmodels/<lib>.3dshapes/`.
+In KiCad: Plugin and Content Manager > Install from File... > the zip. KiCad's PCM (read in its source,
+`kicad/pcm/pcm_task_manager.cpp`, `pcbnew`/`eeschema` lib table loaders, 7.0 and master) extracts each folder to
+`<3rd party>/<folder>/<identifier, '.' -> '_'>/` and adds every library to the global tables as `PCM_<lib>`, so the
+symbols' Footprint fields say `PCM_<lib>:<footprint>` and the footprints' models
+`${KICADn_3RD_PARTY}/3dmodels/<id>/<lib>.3dshapes/...` (n = `--kicad`; `--prefix ""` if you cleared KiCad's prefix).
+`--kicad 7` writes KiCad 7 files; the default 8 keeps the export's KiCad 8 files (KiCad 8, 9, 10). The version is
+`--pkg-version`, or kept while the content is unchanged, else today's date, so a re-run changes no file. With
+`--base-url` it also writes `repository.json` and `packages.json` (sha256, sizes) for Manage Repositories; KiCad only
+fetches repositories over http(s) (`kicad_curl_easy.cpp`), so a `file://` URL is refused.
+`--plugin` writes a PCM *plugin* package: in the PCB editor, Tools > External Plugins > "ecadlib: add part" asks for an
+MPN, adds it to `<project>/ecadlib-work/parts.csv`, runs `ecadlib librarian` and `kicad-export` into `<project>/ecadlib/`,
+adds `${KIPRJMOD}/ecadlib/...` rows to the project's tables and places the footprint.
+
+**Altium.** `altium-pkg` writes a folder that opens in Altium as is: `SchLib/`, `PcbLib/`, `<name>.LibPkg` (an
+integrated library package listing every `.SchLib`/`.PcbLib` as `SchLib\x.SchLib`; compile it to an `.IntLib`),
+`<name>_Install.PrjScr` + `.pas` (DelphiScript: `InstallDatabaseLibrary`, `BuildIntegratedLibrary`,
+`InstallFileLibraries`, `UninstallAll`, using `IntegratedLibraryManager.InstallLibrary` and working out its folder
+with `GetRunningScriptProjectName`), `ALTIUM_README.txt`, and from a plan the DbLib, workbook and CSV of
+`dblib-sync`. Workspace: `tool_packages(bom)` (MCP tool `tool_packages`) writes both into `packages/<bom>/`.
+
+**Paths.** Nothing written holds an absolute path: KiCad tables use `${KIPRJMOD}`, the `.kicad_dbl` `${CWD}`, PCM
+packages `${KICADn_3RD_PARTY}`; the LibPkg, the DbLib rows (`[Library Path]`) and the script use relative Windows
+paths, and the Excel DbLibs (`dblib-sync` and now `ecadlib dblib`) say `DatabasePathRelative=1`. The SQLite DbLib of
+`ecadlib dblib` keeps `--win-dir` (an ODBC string has no relative form).
+
+**Checked here** (2026-10-16, KiCad 7.0.11, 17 tests in `tests/test_tool_packages.py`):
+* metadata, packages.json and repository.json validate against KiCad's `pcm.v1.schema.json` (the copy KiCad 7.0.11
+  installs, identical to gitlab.com/kicad 7.0's; master only adds `category` and `runtime`) with jsonschema, and the
+  built-in checks always run; a bad identifier is caught by both. Field use matches two packages from KiCad's
+  official repository metadata (SparkFun, 4ms).
+* Installed the way the PCM does it into a throwaway 3rd-party folder and config dir (`KICAD_CONFIG_HOME`,
+  `KICAD7_3RD_PARTY`) with the global table rows the PCM adds: on a board in a project with no table of its own,
+  KiCad's DRC library check finds all 4 footprints as `PCM_lib:*`, identical to the library (control: an empty config
+  dir -> all 4 missing); `kicad-cli pcb export step` loads the SOIC-8 model through `${KICAD7_3RD_PARTY}` (11 solids;
+  control without the variable: 1, the board); `kicad-cli sym export svg` / `sym upgrade` load the installed symbol
+  library and every Footprint field names a footprint in `PCM_lib`. All 68 spec footprints converted back from
+  PcbLib and written in KiCad 7 syntax load in pcbnew. A crafted `../` entry is refused, as KiCad does.
+* The action plugin package installs, KiCad's own `pcbnew.LoadPlugins` imports it from the 3rd-party plugins folder
+  with no traceback and its `register()` reaches `register_action` with the right name and category.
+* Altium: LibPkg sections and keys copied from Altium-saved files (particle-iot/hardware-libraries, sub-folder paths as in
+  blueintegral/Level), PrjScr as in Altium-Designer-addons/scripts-libraries; every listed document exists and reads
+  back; every footprint a symbol links to is in the package's PcbLibs; every DbLib row resolves from the DbLib's folder;
+  all of this again after moving the whole output to another folder (and KiCad's library check on the moved project).
+* **Not checked:** nothing was opened in Altium Designer: not that it compiles the LibPkg, runs the script (written
+  from the documented scripting API and public scripts, never executed), or opens the relative DbLib. KiCad's PCM GUI
+  was not run (no display; the install was replayed from its source); in headless pcbnew `register_action` asserts
+  `PgmOrNull()`, so the plugin showing in the menu is unverified; KiCad 8/9/10 not run (the optional CI `kicad` job
+  now also runs these tests on KiCad 8); a sim model's `Sim.Library` through `${KICADn_3RD_PARTY}`.
+
+## 32. First run: `ecadlib init` setup, `ecadlib demo`, and a consistent CLI (`firstrun.py`, `clihelp.py`)
+
+```
+ecadlib demo [-o DIR] [--tool altium|kicad|both] [--bom BOM] [--json]     a small library, offline, no keys
+ecadlib init [--yes] [--tool T] [--lib DIR ...] [--workspace W] [--sources LIST] [--from DIR ...] [--no-doctor]
+```
+
+* **`init` setup.** Besides the conventions of section 18, `init` asks (or takes from the flags, or with `--yes` uses
+  the defaults): the tool (`both`), your library folders (none), the workspace (`ecadlib_workspace`), whether to look
+  parts up online (KiCad library on gitlab.com, EasyEDA/LCSC) and whether to use the Claude datasheet reader (default
+  yes only when its key is set). The answers go in `[setup]` (`tool`, `libs`, `workspace`; relative paths start at the
+  file's folder) and, when you changed them, `[sources] order`. Then it creates the workspace, prints which API keys are
+  set (names only), runs the doctor and prints the next two or three commands for your tool. Re-running `init` keeps
+  the answers as the new defaults.
+* **`[setup]` as defaults.** `libs` and `workspace` fill in `--lib` / `--workspace` for the same commands as
+  `ECADLIB_LIB` / `ECADLIB_WORKSPACE` (section 25), after the command line and the environment. A rules file without
+  `[setup]` changes nothing.
+* **`demo`** writes a real workspace (default `./ecadlib-demo`) with its own `ecadlib.toml` (`[sources] order =
+  ["standard"]`, so a rules file in a parent folder cannot change it), the bundled BOM in `uploads/demo/`, the librarian
+  plan and Altium models in `librarian/`, and for KiCad the `.kicad_sym`, `.pretty`, lib tables and database library in
+  `kicad/`. Re-running reuses the workspace (finished parts are skipped). Measured here: 1.0 s, 6 ready + 1 held.
+* **Help.** Every command and subcommand has a one-line description and every command's `-h` ends with examples that
+  parse (`tests/test_firstrun.py` walks the whole argparse tree and parses every example). Same names for the same
+  things: `--lib`, `--workspace`, `-o/--out`, `--json`, `--dry-run`, `--offline`. `librarian` and `kicad-export` gained
+  `--json`; `librarian` prints progress lines (BOM read, KiCad index build, `[n/N] part`) and `kicad-export` ends with a
+  line saying what was written where.
+* **Failure paths** (one line plus `hint:`, exit 2, before anything is written): a `--lib` folder that does not exist
+  (also from `ECADLIB_LIB` or `[setup]`), an output that cannot be written (`-o` under a file, or a folder you cannot
+  write to), a BOM with no recognised columns (names the columns to use and the `[bom.columns]` fix), an empty BOM or
+  one with a header and no rows. After a librarian run, held parts caused by something outside the part get a `note:` and
+  a `fix:` line: a source that could not be reached (proxy refused, timeout, HTTP 429) and the datasheet reader without
+  its API key.
+* **Not done:** `--workspace` still means an Altium 365 URL for `a365`, `upkeep` and `upstream` (renaming it would break
+  scripts); `dblib-sync` keeps `--to` for the library folder (its `-o` is the report); `--json` is not on every command.
+## 33. Bring your own model (`ecadlib/llm/`): Claude by default, any provider, guide rails that scale
+
+ecadlib is open source (MIT) and has no paid tier, account or hosted service: nothing is sent anywhere except to the
+model endpoint you configure, with the key you export, and there is no telemetry. Every AI feature (datasheet reader,
+`ds_route` ladder, visual proof, `eval`) goes through one small provider layer:
+
+* **anthropic** (the default; nothing to set): Claude through the Messages API exactly as before: PDF document blocks,
+  structured outputs, Message Batches, prompt caching, the refusal fallback. With no `[ai]` table the requests are
+  byte-for-byte the ones ecadlib sent before this layer existed (a test compares them with hashes taken from the old code).
+* **openai-compatible**: any `/v1/chat/completions` server: OpenAI, OpenRouter, Google's OpenAI-compatible Gemini
+  endpoint, and local servers (Ollama, LM Studio, vLLM, llama.cpp). Presets fill in the usual `base_url` and key
+  variable. A local server needs no key and costs $0 in the cost ledger; other unknown prices show tokens only
+  (OpenRouter's `/models` prices are picked up when `detect` is on).
+
+```toml
+# ecadlib.toml: pick ONE [ai] block (keys come from environment variables; only the variable's NAME goes here)
+
+[ai]                                   # Claude (the default: this block is the same as having none)
+provider = "anthropic"                 # export ANTHROPIC_API_KEY=...
+model = "claude-opus-5-5"
+
+[ai]                                   # OpenAI
+provider = "openai"                    # export OPENAI_API_KEY=...
+model = "gpt-5"
+
+[ai]                                   # OpenRouter (any model it serves)
+provider = "openrouter"                # export OPENROUTER_API_KEY=...
+model = "anthropic/claude-opus-5-5"    # or "openai/gpt-5", "qwen/qwen-2.5-72b-instruct", ...
+
+[ai]                                   # Ollama on this machine: free, no key, nothing leaves the machine
+provider = "ollama"                    # ollama pull qwen2.5vl:7b   (base_url defaults to http://localhost:11434/v1)
+model = "qwen2.5vl:7b"                 # OLLAMA_CONTEXT_LENGTH=16384 ollama serve: Ollama's default context is small
+
+[ai]                                   # any other OpenAI-compatible server (LM Studio, vLLM, llama.cpp, a gateway)
+provider = "openai-compatible"
+base_url = "http://localhost:8000/v1"  # plain http:// only for this machine or your own network
+api_key_env = ""                       # NAME of the variable with the key, if the server wants one
+model = "Qwen/Qwen2.5-72B-Instruct"
+
+[ai.profiles."Qwen/Qwen2.5-72B-Instruct"]   # optional: what ecadlib should assume about a model
+tier = "mid"                           # frontier | mid | small
+context = 32768
+```
+
+A cheap local model first and Claude when the checks fail (a mixed ladder; `name:model` names an endpoint):
+
+```toml
+[ai.endpoints.local]
+provider = "ollama"
+[datasheet]
+route = "ladder"
+ladder = ["local:qwen2.5vl:7b", "claude-sonnet-5-5", "claude-opus-5-5"]
+```
+
+`ecadlib ai show` prints the model, endpoint, whether its key variable is set (never the value), the capability
+profile and the rails a read runs; `--detect` asks the server about the model; `ecadlib ai rails` lists every rail;
+`ecadlib doctor` has an `ai model` line. `[datasheet]` and `[agent.proof]` may set their own `provider` /
+`base_url` / `model` / `api_key_env` / `assist` (empty = `[ai]`).
+
+**Capability profiles** (`ecadlib/llm/profiles.py`): per model, PDF input, image input, JSON-schema output, context
+window and a tier (frontier / mid / small). From a built-in table (Claude, GPT-5 / 4.1 / 4o, o3/o4, Gemini, DeepSeek;
+open-weight families by size: 7B is small, 70B is mid), then what the endpoint reports (`/models` on OpenRouter, vLLM,
+LM Studio; `/api/show` on Ollama), then `[ai.profiles."<model>"]` in ecadlib.toml, which always wins. An unknown model
+gets the conservative profile (small, text only, no schema, 4K context).
+
+**Guide rails** (`ecadlib/llm/rails.py`) come in layers, so Claude keeps all the help that checks and never the help
+that narrows:
+
+| layer | rails | who gets them |
+|---|---|---|
+| support | page picking, datasheet's checks as the gate, **one feedback retry with the checks' exact errors**, escalation along the ladder, units and geometry computed in code, provenance | every model, Claude included |
+| capability | PDF as page text (+ page pictures for vision models), schema in the prompt | only a model that lacks PDF input / JSON-schema output |
+| guidance | JSON repair (fences, commas, numbers as text, unit and pin-type synonyms), worked examples, hold on doubt, standard parts first; for small models also page cap and **split steps** (which package -> dimension table -> pin table, three tiny schemas, each checked and retried with its exact error; BGA / connector pad tables are not attempted) | `assist = "auto"`: mid and small tiers; `"off"`: none; `"full"`: all |
+
+Frontier models get today's single structured call with the PDF and nothing extra. The feedback retry is the one
+support rail Claude gains: when an answer fails datasheet's checks *where the route would otherwise stop* (top of the
+ladder, every page sent), the same request goes once more with the answer and the checks' exact errors appended
+(append-only, so the cached PDF prefix is reused), within `[datasheet] max_attempts`; the better answer is kept, and
+the prompt says never to change a printed value to pass a check. `[ai] feedback_retry = false` turns it off. A guided
+model's answer that still fails the checks at the end of its route is not written: the part is held with the reason
+(`hold_on_doubt`), and the visual proof never takes a small model's "pass" as proof. What ran is in every part's
+`<part>.extraction.json` under `"ai"` (tier, profile and its source, rails, steps with their repairs and errors,
+feedback before/after, which support rails ran).
+
+Compare models on the same test set: `ecadlib eval run --provider ollama --model qwen2.5vl:7b --record rec/qwen -o out/eval/qwen`,
+then `ecadlib eval compare out/eval/claude out/eval/qwen` (`--replay` re-scores offline; `--assist off|full` to see what the
+rails are worth).
+
+```
+python3 -m tests.test_llm
+```
+
+**Not tested live:** no model of any provider is reachable from this sandbox (no keys; api.anthropic.com and the
+OpenAI/OpenRouter/Google hosts are blocked; no local model server). The OpenAI-compatible client was run against a
+local stdlib server answering in the documented Chat Completions and `/models` shapes, and Claude against fakes in
+the Messages shapes. The built-in tiers are judgement calls, not measurements: measure with `ecadlib eval` and
+override with `[ai.profiles]`. Gemini's OpenAI-compatible endpoint is assumed not to take PDFs (sent as text);
+Ollama's `/v1` endpoint uses the server's context length, whatever `/api/show` reports.
+## 34. End-to-end tests and the test pack (`tests/test_e2e.py`, `ecadlib testpack`)
+
+```
+python3 -m tests.run_all test_e2e test_testpack    # about a minute; the KiCad checks skip without kicad-cli / pcbnew
+ecadlib testpack --out testpack                    # then open testpack/CHECKLIST.md in Altium Designer / KiCad
+```
+
+**Golden path.** `tests/test_e2e.py` runs the real `ecadlib` command in subprocesses, from an empty folder, as a user
+would: `init --yes`; `project` on an Altium `.PrjPcb` (two `.SchDoc` sheets, written by ecadlib's test helper, not by
+Altium); `librarian --offline` on a KiCad 7 hierarchical `.kicad_sch`, on that Altium BOM and on an `.xlsx`;
+`release-check --allow` after the datasheet part is reviewed; `kicad-export` (three libraries into one KiCad project
+folder), `kicad-dblib`, `export-parts`, `dblib-sync` and `altium365 push` (`--dry-run` and against a local fake Nexar).
+Sources are offline and recorded (`tests/e2e_support.py`): real KiCad library files fetched from gitlab.com on 2026-10-16
+(`tests/fixtures/e2e/kicad/`), put into the HTTP cache the way an online run leaves them; a SYNTHETIC EasyEDA payload;
+SYNTHETIC Claude answers from a local server reached through `ANTHROPIC_BASE_URL` (which the datasheet reader now
+honours, as the Anthropic SDKs do). Every other request goes to a dead proxy, so nothing reaches the internet.
+
+Each output is then loaded by its tool:
+* **KiCad** (7.0.11 here): `kicad-cli sym export svg` / `fp upgrade` / `fp export svg` on every library; pcbnew places
+  every part of the database library's SQLite table through the project's `fp-lib-table` (DRC's library check finds each
+  one, unchanged; a bogus library and a bogus name are reported, so the check is live) and DRC passes on a board of each
+  library. The export is KiCad 8 format, so on KiCad 7 a KiCad 7 copy is loaded (`e2e_support.kicad7_copy`: properties to
+  `fp_text`, `(hide yes)` to `hide`, `(fill no)` to `(fill none)`; pads untouched). The optional CI job `kicad` also runs
+  these tests on KiCad 8 (PPA), as they are.
+* **`.kicad_dbl` + SQLite** (no KiCad needed): every row's Symbol and Footprint is in the `.kicad_sym` / `.pretty`, every
+  mapped column exists, and the rows are exactly the ready parts.
+* **Altium** (file level only, nothing was opened in Altium Designer or Altium 365): every `.PcbLib` / `.SchLib` reads
+  back with pyaltiumlib and ecadlib's reader with the same names; every Library Ref / Footprint Ref in the DbLib table and
+  the parts table is in the file it names; the Altium 365 release (fake Nexar) names files uploaded in the same run, byte
+  for byte our libraries, with the part's parameters.
+* **Agent:** `ecadlib agent run` in a library git repo whose origin is a local bare repo: two new BOM parts are built,
+  proved (fake Claude), committed on `ecadlib/agent-<batch>` and pushed (the user's checkout does not move), one PR is
+  opened on a local HTTPS fake GitHub; `queue list`, `agent approve` and `agent push` release them to the fake Nexar; a
+  second run finds nothing new.
+* **MCP:** `ecadlib mcp` over stdio: initialize, tools/list, then `workspace_info`, `librarian_run`, `held_parts` and a
+  call with a missing BOM (a clear error, no traceback).
+* **Again, and after a crash:** the whole path runs a second and a third time on the same folder. The second run changes
+  only the API log, the librarian's per-run state, `review.md` (written before the `--allow`) and init's
+  `ecadlib.toml.proposed` (the rules file is kept); the third changes nothing but the log. A librarian killed with
+  SIGKILL after its first parts recovers on the next run with the same plan and library files as an uninterrupted run.
+
+Bugs these tests found, fixed (each with a test that fails without the fix): a KiCad part whose 3D model could not be
+downloaded lost its official footprint; `kicad-export` replaced the project's whole library tables; `init` crashed
+printing a numeric proposal; a re-run rewrote unchanged `.PcbLib` files with a new date, and `--allow` left `plan.json`
+in a key order the next run changed. `.PcbLib` / `.SchLib` writes are now atomic.
+
+**Test pack.** `ecadlib testpack --out DIR` builds six parts offline through the same pipeline (librarian with the
+`standard` source and the pack's own KiCad library as `--lib`, release check, `dblib-sync`, `kicad-export`,
+`kicad-dblib`, `export-parts`): 0603 resistor, SOT-23 NPN, SOIC-8 dual op amp, VQFN-16 with exposed pad, USB-C
+receptacle (stacked pads, slots, NPTH) and a 1x05 2.54 mm THT header. `CHECKLIST.md` says what to open in Altium
+Designer (the DbLib, with its Excel file at `C:\ecadlib\testpack`), Altium 365 and KiCad 8+, and what each part must
+look like; `tests/test_testpack.py` checks those geometry claims against the files, reads the Altium side back and
+loads the KiCad side in KiCad. Whether Altium Designer opens the DbLib, previews the parts and releases them is exactly
+what the checklist is for: not verified here.
 
 ## Releases
 

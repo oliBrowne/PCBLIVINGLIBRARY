@@ -81,6 +81,9 @@ class Workspace:
         try:
             lines, mapping = T.read_bom(bom_path, RU.bom_columns(self.rules()))
         except Exception as e:                        # pandas/csv/zip errors -> one message a person can act on
+            if type(e) is ValueError:                 # the reader's own words: no exception name, no server path
+                raise ValueError(f"couldn't read {bom_path.name} as a BOM: "
+                                 + str(e).replace(str(bom_path), bom_path.name).replace(f"{bom_path.name}: ", "", 1)) from e
             raise ValueError(f"couldn't read {bom_path.name} as a BOM table ({type(e).__name__}: {e}). "
                              "Save it as CSV or XLSX with a header row.") from e
         if not lines or not {"designator", "mpn", "value"} & set(mapping):
@@ -973,6 +976,23 @@ class Workspace:
         return {"folder": self.rel(out), "files": [self.rel(p) for p in sorted(out.iterdir()) if p.is_file()],
                 "tables": rep["tables"], "skipped": rep["skipped"], "warnings": rep["warnings"],
                 "kicad_export": rep.get("kicad_export")}
+
+    def tool_packages(self, bom, name="ecadlib", kicad=8, include_held=False):
+        """Packages that plug into the tools themselves, for a BOM's plan, in packages/<bom>/: a KiCad Plugin and
+        Content Manager zip (kicad_pcm) and the Altium hand-off folder (altium_pkg: .LibPkg, install script, DbLib)."""
+        from . import altium_pkg as AP, kicad_pcm as KP
+        from .kicad_export import kname
+        bom_path, plan_f, _ = self._plan(bom)
+        lib = kname(str(name))[:60]
+        out = self.root / "packages" / self._key(bom_path)
+        pcm = KP.build(plan_f, out / "kicad", lib, kicad=int(kicad), include_held=include_held,
+                       http=CachedHTTP(self.root / "http_cache", offline=self.offline), log=lambda *a: None)
+        alt = AP.build(plan_f, out / "altium", lib, rules=self.rules_in_use(), log=lambda *a: None)
+        return {"folder": self.rel(out),
+                "kicad": {"zip": self.rel(Path(pcm["zip"])), "version": pcm["version"], "nickname": pcm["nickname"],
+                          "symbols": pcm["symbols"], "footprints": pcm["footprints"], "problems": pcm["problems"]},
+                "altium": {"folder": self.rel(out / "altium"), "libpkg": alt["libpkg"], "script": alt["script"],
+                           "dblibs": alt["dblibs"], "documents": len(alt["documents"]), "problems": alt["problems"]}}
 
     def example_specs(self):
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data

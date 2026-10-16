@@ -251,14 +251,24 @@ def test_failed_check_escalates_and_stops_at_the_top():
     with tempfile.TemporaryDirectory() as d, TB.patched(api):
         rd = reader(d, {"https://a/ds.pdf": TD.PDF}, rules=LADDER)
         res = rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "R_0603_1608Metric"))
-        assert [m for m, _ in api.sent] == [HAIKU, SONNET, OPUS]                         # stops at the top
+        # stops at the top; there the route would end on a failing answer, so the top model gets one feedback turn
+        # with the checks' exact errors (ecadlib.llm support rail feedback_retry), within max_attempts
+        assert [m for m, _ in api.sent] == [HAIKU, SONNET, OPUS, OPUS]
         assert any(r.startswith("self-check:") for r in res["needs_review"]) and res["sidecar"]["model"] == OPUS
+        assert res["sidecar"]["ai"]["feedback"]["before"] == "failed" and "feedback_retry" in res["sidecar"]["ai"]["support_ran"]
+        assert len(api.calls[-1][3]["messages"]) == 3                                   # the same request + answer + errors
         rd2 = reader(d, {"https://a/ds.pdf": TD.PDF}, rules=LADDER)
         assert rd2.cached(rd2.job("TESTPART", [("https://a/ds.pdf", "BOM")], "R_0603_1608Metric")) is not None
-        assert len(api.sent) == 3                                                        # the top answer is cached
+        assert len(api.sent) == 4                                                        # the top answer is cached
     api = ModelAPI(lambda m, n: BAD)                                                     # escalate = false
     with tempfile.TemporaryDirectory() as d, TB.patched(api):
         rd = reader(d, {"https://a/ds.pdf": TD.PDF}, rules={"datasheet": {"route": "ladder", "escalate": False}})
+        rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "R_0603_1608Metric"))
+        assert api.sent == [(HAIKU, None), (HAIKU, None)]                               # + the feedback turn
+    api = ModelAPI(lambda m, n: BAD)                                                     # feedback_retry = false
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = reader(d, {"https://a/ds.pdf": TD.PDF}, rules={"datasheet": {"route": "ladder", "escalate": False},
+                                                            "ai": {"feedback_retry": False}})
         rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "R_0603_1608Metric"))
         assert api.sent == [(HAIKU, None)]
 
