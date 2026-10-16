@@ -34,6 +34,9 @@ ROUTES = {
     ("POST", "/api/logout"): "viewer", ("POST", "/api/account/password"): "viewer",
     ("GET", "/api/info"): "viewer", ("GET", "/api/specs"): "viewer", ("GET", "/api/rules"): "viewer",
     ("GET", "/api/job"): "viewer", ("GET", "/api/file"): "viewer",
+    ("POST", "/api/job/cancel"): "viewer",                 # only the job's owner (or an admin) can see it to stop it
+    ("GET", "/api/parts"): "viewer",                       # a BOM's library plan as part cards (ecadlib.partview)
+    ("POST", "/api/demo"): "librarian",                    # first visit: the bundled sample BOM, checked and filled
     ("GET", "/api/status"): "viewer",                      # workspace summary (Status card)
     ("GET", "/api/doctor"): "admin",                       # setup check: tool paths, which API key names are set
     ("GET", "/api/triage/history"): "viewer", ("GET", "/api/triage/result"): "viewer",   # finished results: library data
@@ -69,10 +72,17 @@ class Refused(Exception):
     """403 with a message (team mode: role too low for this variant of a route)."""
 
 
+class Cancelled(Exception):
+    """Raised inside a job's progress callback once someone pressed Stop (checked between lines / parts)."""
+
+
 class Jobs:
     """Long actions (triage looks parts up online, about a second per request) run in a thread; the page polls.
     Each job remembers who started it (team mode: only they and admins see it) and an optional key: a second job
-    with the same key, e.g. the librarian on one BOM, is refused while the first runs."""
+    with the same key, e.g. the librarian on one BOM, is refused while the first runs. A job keeps a short list of
+    per-part lines ({key, n, total, name, state, text}) for the live progress list, and can be stopped (cancel)."""
+    MAX_LINES = 400
+
     def __init__(self, root=None):
         self.jobs, self.ids, self.lock = {}, itertools.count(1), threading.Lock()
         self.root = root
@@ -85,22 +95,40 @@ class Jobs:
                                       + (f" (started by {busy['owner']})" if busy["owner"] else "") + "; wait for it to finish")
             jid = f"{next(self.ids)}-{secrets.token_hex(6)}"
             job = {"id": jid, "state": "running", "done": 0, "total": 0, "label": label, "result": None, "error": None,
-                   "owner": owner, "key": key}
+                   "owner": owner, "key": key, "lines": [], "cancel": False, "started": time.time()}
             self.jobs[jid] = job
             for old in [k for k in self.jobs if self.jobs[k]["state"] != "running"][:-20]:   # keep the last 20 finished
                 del self.jobs[old]
 
         def progress(done, total, lab):
+            if job["cancel"]:
+                raise Cancelled()
             job.update(done=done, total=total, label=lab)
+
+        def line(key, **kw):
+            """Add or update one line of the live list (by key, e.g. the part name)."""
+            with self.lock:
+                cur = next((x for x in job["lines"] if x["key"] == key), None)
+                if cur is None:
+                    if len(job["lines"]) >= self.MAX_LINES:
+                        return
+                    cur = {"key": key, "n": None, "total": None, "name": key, "state": "working", "text": ""}
+                    job["lines"].append(cur)
+                cur.update({k: v for k, v in kw.items() if v is not None})
+        progress.line = line
+        progress.cancelled = lambda: job["cancel"]
 
         def run():
             try:
                 job["result"] = fn(*args, progress=progress)
                 job["state"] = "done"
+            except Cancelled:
+                job["state"] = "cancelled"
             except Exception as e:
                 if not isinstance(e, EXPECTED):
                     traceback.print_exc()
                 job["error"], job["state"] = _msg(e, self.root), "error"
+            job["seconds"] = round(time.time() - job["started"], 1)
         threading.Thread(target=run, daemon=True).start()
         return {"job": jid}
 
@@ -111,7 +139,21 @@ class Jobs:
         job = self.jobs.get(jid)
         if job and user is not None and job["owner"] != user["username"] and user["role"] != "admin":
             return None                                     # team mode: other people's jobs are invisible
-        return job and {k: v for k, v in job.items() if k != "key"}
+        if not job:
+            return None
+        out = {k: v for k, v in job.items() if k not in ("key", "lines")}
+        out["lines"] = [dict(x) for x in list(job["lines"])]
+        out["elapsed"] = job.get("seconds") or round(time.time() - job["started"], 1)
+        return out
+
+    def cancel(self, jid, user=None):
+        """Ask a running job to stop at its next line or part. -> the job, or None when unknown / not yours."""
+        if self.get(jid, user) is None:
+            return None
+        job = self.jobs[jid]
+        if job["state"] == "running":
+            job["cancel"] = True
+        return self.get(jid, user)
 
 
 def _msg(e, root=None):

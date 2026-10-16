@@ -1,0 +1,270 @@
+"""The library plan of one BOM as people see it: one card per part with its status in plain words (ready, held,
+waiting for sign-off), each held reason as a sentence plus a next step, the cross-check and KiCad/Altium results with
+both values when they disagree, the datasheet link (and page when known), what reading the datasheet cost and which
+model read it, and a small footprint picture. Read-only; used by the web UI (Workspace.library_parts).
+
+Held-reason wording comes from ecadlib.messages when it is installed (the shared voice, docs/ui-voice.md); the small
+table here is the fallback so this module never depends on it."""
+import json, re
+from pathlib import Path
+
+STATUS = {"ready": "ready", "held": "held", "awaiting_approval": "waiting for sign-off", "duplicate": "duplicate",
+          "existing": "already in Altium 365", "deleted_in_workspace": "deleted in Altium 365"}
+FIELD = {"pin_count": "pin count", "pitch": "pin pitch", "body_length": "body length", "body_width": "body width",
+         "lead_span": "lead span", "ep_length": "exposed pad length", "ep_width": "exposed pad width",
+         "has_ep": "exposed pad", "package_type": "package type", "pins": "pin numbers", "pin_names": "pin names"}
+_LABEL_TO_FIELD = {"pin count": "pin_count", "pitch": "pitch", "body length": "body_length", "body width": "body_width",
+                   "lead span": "lead_span", "exposed pad length": "ep_length", "exposed pad width": "ep_width",
+                   "exposed pad": "has_ep", "package type": "package_type", "pin numbers": "pins", "pin names": "pin_names"}
+_CC = re.compile(r"^(?:(?P<against>.*): )?(?P<label>[a-z ]+?) read (?P<first>.+?), (?P<src>table|second read) (?P<second>.+)$")
+_PAR = re.compile(r"^(?P<what>.+?): KiCad (?P<kicad>.+?) / Altium (?P<altium>.+?)(?: \((?P<note>.*)\))?$")
+SVG_MAX = 60_000                                  # a footprint picture bigger than this is left out of the list
+
+
+# ------------------------------------------------------------------ held reasons in plain words
+def _fallback(raw):
+    """(code, text, fix) for one hold reason string of the release check ("rule: message")."""
+    rule, _, msg = raw.partition(": ")
+    msg = re.sub(r" \((cannot be overridden|not covered by --allow)\)$", "", msg)
+    m = re.match(r"no (symbol|footprint) model", msg)
+    if rule == "files" and m:
+        k = m.group(1)
+        return (f"no_{k}", f"No {k} was found for this part.",
+                f"Pick a {k} from the candidates" + (", or generate one from the datasheet drawing." if k == "footprint"
+                                                       else ", or draw one in your library and run Fill missing parts again."))
+    if rule == "files":
+        return ("file_unreadable", f"A library file is missing or does not read back ({msg}).",
+                "Run Fill missing parts again; if it stays, pick another candidate.")
+    if rule == "pins":
+        return ("pin_mismatch", f"The symbol pins and footprint pads do not line up: {msg}.",
+                "Pick a footprint or symbol whose pins match, or a candidate with a pin map.")
+    if rule == "footprint":
+        return ("footprint_check", f"The footprint failed a design check: {msg}.",
+                "Pick another footprint, or generate one from the datasheet drawing.")
+    if rule == "parity":
+        p = _PAR.match(msg)
+        what = p and f"{p.group('what')} (KiCad {p.group('kicad')}, Altium {p.group('altium')})" or msg
+        return ("parity_mismatch", f"The KiCad and Altium files of this part differ: {what}.",
+                "Run Fill missing parts again for this part; if it stays, pick another footprint.")
+    if rule == "height":
+        return ("height", f"The 3D model height looks wrong: {msg}.",
+                "Check the package height in the datasheet, then release anyway if it is right.")
+    if rule == "fields" and msg == "no datasheet link":
+        return ("no_datasheet", "The part has no datasheet link.",
+                "Add a datasheet URL to the BOM line, or release anyway once you have checked the part.")
+    if rule == "fields":
+        return ("field_empty", f"A part field is empty: {msg}.", "Fill it in the BOM, then run Fill missing parts again.")
+    if rule == "verify":
+        return ("verify", f"Someone needs to check this by hand: {msg}.",
+                "Check it against the datasheet, then release anyway.")
+    if rule == "approval":
+        return ("approval", f"Waiting for sign-off: {msg}.", "An approver signs it off in step 2.")
+    if raw.startswith("cross-check disagrees"):
+        return ("cross_check_disagrees", "Two reads of the datasheet disagree.", "Check the drawing and pick one, or release anyway.")
+    return ("other", raw[:1].upper() + raw[1:] + ("" if raw.endswith(".") else "."),
+            "Look at the part, then pick a candidate or release anyway.")
+
+
+def _messages():
+    try:
+        from . import messages
+    except ImportError:
+        return None
+    return messages if hasattr(messages, "held") else None
+
+
+def reason(raw, **values):
+    """One hold reason -> {code, text, fix, detail}. detail is the machine wording, kept for reports and JSON."""
+    code, text, fix = _fallback(raw)
+    m = _messages()
+    if m is not None:
+        try:
+            got = m.held(raw, **values) if not hasattr(m, "from_reason") else m.from_reason(raw, **values)
+            if isinstance(got, dict):
+                code, text, fix = got.get("code") or code, got.get("text") or text, got.get("fix") or fix
+            elif isinstance(got, (tuple, list)) and len(got) >= 2 and got[0]:
+                text, fix = got[0], got[1]
+                code = got[2] if len(got) > 2 and got[2] else code
+        except Exception:                          # a wording gap must never break the page
+            pass
+    return {"code": code, "text": text, "fix": fix, "detail": raw}
+
+
+# ------------------------------------------------------------------ cross-check, parity, datasheet, cost
+def _num(s):
+    m = re.match(r"\s*(-?\d+(?:\.\d+)?)", str(s))
+    return m and m.group(1)
+
+
+def cross_check(rec, sidecar=None):
+    """Plan item cross_check {status, summary} (+ the read's sidecar, when written) -> what the panel shows:
+    {status, label, rows: [{field, label, first, second, against, page}], summary}."""
+    if not rec:
+        return None
+    st = rec.get("status") or "unchecked"
+    label = {"agreed": "agrees with a second source", "disagreed": "two sources disagree",
+             "unchecked": "not cross-checked", "skipped": "not needed (footprint from another source)"}.get(st, st)
+    rows = []
+    full = (sidecar or {}).get("cross_check") or {}
+    dims = (sidecar or {}).get("dimensions") or {}
+    page = lambda f: (dims.get(f) or {}).get("page") if isinstance(dims.get(f), dict) else None
+    if full.get("checks"):
+        for c in full["checks"]:
+            for d in c.get("disagreed") or []:
+                rows.append({"field": d["field"], "label": FIELD.get(d["field"], d["field"]), "first": d["first"],
+                             "second": d["second"], "against": c.get("against") or c.get("source") or "",
+                             "second_is": "table" if c.get("source") == "standard table" else "second read",
+                             "page": page(d["field"])})
+    else:
+        against = ""
+        for seg in (rec.get("summary") or "").split("; "):
+            m = _CC.match(seg)
+            if not m:
+                continue
+            against = m.group("against") or against
+            f = _LABEL_TO_FIELD.get(m.group("label").strip(), m.group("label").strip())
+            rows.append({"field": f, "label": FIELD.get(f, m.group("label")), "first": m.group("first"),
+                         "second": m.group("second"), "against": against, "second_is": m.group("src"), "page": page(f)})
+    out = {"status": st, "label": label, "rows": rows, "summary": rec.get("summary") or ""}
+    if st == "disagreed" and rows:
+        r = rows[0]
+        values = {"field": r["label"], "first": r["first"], "second": r["second"], "page": r["page"]}
+        both = f"{r['first']} vs {r['second']}"
+        out["reason"] = reason("cross-check disagrees: " + out["summary"], **values)
+        out["reason"]["text"] = (f"The two datasheet reads disagree on {r['label']} ({both})." if r["second_is"] == "second read"
+                                 else f"The datasheet and the standard package table disagree on {r['label']} ({both}).") \
+            if out["reason"]["code"] == "cross_check_disagrees" else out["reason"]["text"]
+        if out["reason"]["code"] == "cross_check_disagrees":
+            out["reason"]["fix"] = (f"Check page {r['page']} of the datasheet" if r["page"] else "Check the package drawing in the datasheet") + \
+                " and pick a footprint that matches, or release anyway."
+    return out
+
+
+def parity(item):
+    """{result: match | mismatch | None, rows: [{what, kicad, altium}]} from the release check's parity rule."""
+    rc = item.get("release_check") or {}
+    res = rc.get("parity")
+    rows = []
+    for m in list(item.get("hold_reasons") or []) + [w for w in rc.get("warnings") or []]:
+        rule, _, msg = m.partition(": ")
+        if rule != "parity":
+            continue
+        p = _PAR.match(re.sub(r" \((cannot be overridden|not covered by --allow)\)$", "", msg))
+        rows.append({"what": p.group("what"), "kicad": p.group("kicad"), "altium": p.group("altium")} if p
+                    else {"what": msg, "kicad": "", "altium": ""})
+    if rows and not res:
+        res = "mismatch"
+    return {"result": res, "label": {"match": "KiCad and Altium match", "mismatch": "KiCad and Altium differ"}.get(res, "not compared"),
+            "rows": rows}
+
+
+def datasheet_url(item):
+    params = {p.get("name"): p.get("value") for p in item.get("parameters") or [] if isinstance(p, dict)}
+    for k, v in params.items():
+        m = re.fullmatch(r"ComponentLink(\d+)Description", k or "")
+        if m and str(v).strip().lower() == "datasheet":
+            u = params.get(f"ComponentLink{m.group(1)}URL")
+            if u:
+                return u
+    return params.get("Datasheet") or params.get("datasheet") or None
+
+
+def _sidecar(out, name):
+    d = Path(out) / "datasheet"
+    if not d.is_dir():
+        return None
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name)
+    for f in (d / f"{name}.extraction.json", d / f"{safe}.extraction.json"):
+        try:
+            if f.is_file() and f.resolve().parent == d.resolve():
+                v = json.loads(f.read_text(encoding="utf-8"))
+                return v if isinstance(v, dict) else None
+        except (OSError, ValueError):
+            return None
+    return None
+
+
+def costs(out):
+    """What the datasheet reads of this plan cost so far: totals and per part (from datasheet/cost.jsonl)."""
+    from . import ds_route as DR
+    recs = DR.read_ledger(Path(out) / "datasheet" / "cost.jsonl")
+    s = DR.summarize(recs)
+    return {"answers": s["answers"], "usd": round(s["usd"] + s["usd_estimated"], 4), "usd_estimated": s["usd_estimated"],
+            "models": sorted(m for m in s["by_model"] if m and m != "?"), "by_part": s["by_part"],
+            "tokens": s["input_tokens"] + s["output_tokens"]}
+
+
+def _picture(out, item):
+    """Small top-view SVG of the footprint (from its .kicad_mod), or None."""
+    km = (item.get("footprint") or {}).get("kicad_mod")
+    if not km:
+        return None
+    f = (Path(out) / km)
+    try:
+        if not f.is_file() or Path(out).resolve() not in f.resolve().parents:
+            return None
+        from .app import footprint_svg
+        svg = footprint_svg(None, 12, f.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return svg if len(svg) <= SVG_MAX else None
+
+
+def _pads(svg):
+    return len(re.findall(r'class="pad', svg or ""))
+
+
+# ------------------------------------------------------------------ the cards
+def cards(out, items, pictures=True):
+    """out: the librarian folder of a BOM (plan.json, models/, datasheet/); items: the plan. -> {parts, counts, cost}."""
+    from . import librarian as L
+    cost = costs(out)
+    review = {r["part"]: r for r in L.review_rows(items)}
+    parts = []
+    for it in items:
+        name, st = it["name"], it.get("status") or ""
+        sc = _sidecar(out, name) if it.get("cross_check") else None
+        cc = cross_check(it.get("cross_check"), sc)
+        reasons = []
+        for h in it.get("hold_reasons") or []:
+            if cc and cc.get("reason") and h.startswith("cross-check"):
+                continue
+            reasons.append(reason(h))
+        if cc and cc["status"] == "disagreed" and cc.get("reason"):
+            reasons.insert(0, cc["reason"])
+        elif st == "held" and not reasons:
+            reasons = [reason(x) for x in (review.get(name, {}).get("why") or "").split("; ") if x][:3]
+        appr = it.get("approval") or None
+        if st == "awaiting_approval" and appr:
+            for m in appr.get("missing") or []:
+                reasons.append({"code": "approval", "text": f"Waiting for sign-off: {m}.",
+                                "fix": "An approver signs it off here.", "detail": f"approval: {m}"})
+        pc = cost["by_part"].get(name) or {}
+        svg = _picture(out, it) if pictures else None
+        url = datasheet_url(it)
+        page = next((r["page"] for r in (cc or {}).get("rows", []) if r.get("page")), None) or \
+            ((sc or {}).get("pin_table") or {}).get("page")
+        parts.append({
+            "part": name, "folder": it.get("folder") or "", "description": it.get("description") or "",
+            "status": st, "status_label": STATUS.get(st, st.replace("_", " ")),
+            "allowed": bool(it.get("allow")), "duplicate_of": it.get("duplicate_of"),
+            "reasons": reasons,
+            "symbol": {"ref": (it.get("symbol") or {}).get("ref"), "found": bool((it.get("symbol") or {}).get("file")),
+                       "from": (it.get("source") or {}).get("symbol") or ""},
+            "footprint": {"ref": (it.get("footprint") or {}).get("ref"), "found": bool((it.get("footprint") or {}).get("file")),
+                          "from": (it.get("source") or {}).get("footprint") or "", "pads": _pads(svg) or None},
+            "picture": svg,
+            "cross_check": cc, "parity": parity(it),
+            "datasheet": {"url": url, "page": page} if url else None,
+            "cost": {"usd": round(pc.get("usd", 0.0), 4), "models": [m for m in pc.get("models") or [] if m],
+                     "answers": pc.get("answers", 0)} if pc else None,
+            "approval": {k: appr.get(k) for k in ("required", "met", "approved_by", "missing", "stale")} if appr else None,
+            "tried": (it.get("librarian") or {}).get("tried") or [],
+        })
+    counts = {"parts": len(parts), "ready": sum(p["status"] == "ready" for p in parts),
+              "held": sum(p["status"] == "held" for p in parts),
+              "waiting": sum(p["status"] == "awaiting_approval" for p in parts),
+              "cross_check_disagreed": sum(bool(p["cross_check"]) and p["cross_check"]["status"] == "disagreed" for p in parts),
+              "parity_mismatch": sum(p["parity"]["result"] == "mismatch" for p in parts)}
+    return {"parts": parts, "counts": counts,
+            "cost": {k: cost[k] for k in ("answers", "usd", "usd_estimated", "models", "tokens")}}

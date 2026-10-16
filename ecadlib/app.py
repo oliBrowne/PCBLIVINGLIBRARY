@@ -821,6 +821,24 @@ class Workspace:
         counts = {s: sum(p["cross_check"] == s for p in parts) for s in ("agreed", "disagreed", "unchecked", "skipped")}
         return {"parts": parts, "counts": counts, "modes": list(CC.MODES)}
 
+    def library_parts(self, bom, pictures=True):
+        """The librarian plan of a BOM as cards (ecadlib.partview): status in plain words, held reasons with a next
+        step, cross-check and KiCad/Altium results with both values, datasheet link, cost and model, a footprint
+        picture. Read-only, no network."""
+        from . import partview as PV
+        bom_path, plan_f, items = self._plan(bom)
+        return dict(PV.cards(plan_f.parent, items, pictures), bom=self._bom_label(bom_path), plan=self.rel(plan_f))
+
+    def demo_bom(self):
+        """Copy the bundled sample BOM (the one `ecadlib demo` uses) into uploads/demo/; -> its workspace path."""
+        import shutil
+        from .firstrun import DEMO_BOM
+        dest = self.root / "uploads" / "demo" / DEMO_BOM.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if not dest.exists() or dest.read_bytes() != DEMO_BOM.read_bytes():
+            shutil.copyfile(DEMO_BOM, dest)
+        return self.rel(dest)
+
     def altium365_workspaces(self):
         from . import altium365 as A
         return {"workspaces": A.Nexar(_nexar_token()).workspaces()}
