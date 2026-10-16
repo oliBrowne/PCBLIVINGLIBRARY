@@ -225,6 +225,9 @@ def _free_attrs(text):
     a = {"fam": m.group("fam").upper(), "pins": int(m.group("pins")), "w": bool(m.group("w")), "ep": True if m.group("ep") else None,
          "body": None, "pitch": None, "epsize": None}
     rest = t[m.end():] + " " + t[:m.start()]
+    v = re.match(r"-(N?\d+)(?![\d.]|\s*(?:[xX×*]|mm|mil|EP))", t[m.end():], re.I)   # SOIC-8-N7, SOIC-14-16: pins removed
+    if v:
+        a["variant"] = v.group(0)
     b = (re.search(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[xX×*]\s*(\d+(?:\.\d+)?)\s*(?:x\s*[\d.]+\s*)?(?:mm)?", rest)
          or re.search(r"(?<![A-Z])L(\d+(?:\.\d+)?)-W(\d+(?:\.\d+)?)", rest))                    # LCSC L5.0-W5.0
     if b:
@@ -310,6 +313,8 @@ def ic_package(text, defaults=True):
     a = _free_attrs(text)
     if not a:
         return None, None
+    if a.get("variant"):
+        return None, f"{a['fam']}-{a['pins']}{'W' if a['w'] else ''}{a['variant']}: a variant with pins removed, not the standard package"
     if not defaults and not a["body"]:
         return None, f"{a['fam']}-{a['pins']} in the description without a body size"
     a = _defaults(a) if defaults else dict(a, fam="SOIC" if a["fam"] == "SO" else a["fam"])
