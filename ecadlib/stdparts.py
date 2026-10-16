@@ -574,7 +574,7 @@ def symbol_text(key, mpn=""):
     if ":" in key:
         what, order = key.split(":")
         if what == "REG":
-            fixed = order != "1117" or bool(re.search(r"-?(\d\.\d|\d{2})(?![\d.])", re.sub(r"^.*?1117", "", str(mpn).upper())))
+            fixed = order != "1117" or bool(re.search(r"-?(\d\.\d|\d{2}|\d-\d)(?![\d.])", re.sub(r"^.*?1117", "", str(mpn).upper())))
             gnd = "GND" if fixed else "ADJ"
             names = {"1117": [gnd, "VO", "VI"], "78": ["VI", "GND", "VO"], "79": ["GND", "VI", "VO"], "317": ["ADJ", "VO", "VI"],
                      "78L": ["VO", "GND", "VI"]}[order]
