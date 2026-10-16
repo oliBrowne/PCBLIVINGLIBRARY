@@ -29,7 +29,7 @@ COOKIE = "ecadlib_session"
 # stays unreachable until it gets a role; tests/test_team.py checks every "/api/..." in this file is listed.
 PUBLIC = "public"
 ROUTES = {
-    ("GET", "/"): PUBLIC, ("GET", "/index.html"): PUBLIC,
+    ("GET", "/"): PUBLIC, ("GET", "/index.html"): PUBLIC, ("GET", "/hairline.js"): PUBLIC,
     ("GET", "/api/session"): PUBLIC, ("POST", "/api/login"): PUBLIC,
     ("POST", "/api/logout"): "viewer", ("POST", "/api/account/password"): "viewer",
     ("GET", "/api/info"): "viewer", ("GET", "/api/specs"): "viewer", ("GET", "/api/rules"): "viewer",
@@ -498,6 +498,8 @@ def make_handler(ws: Workspace, team=None):
             try:
                 if u.path in ("/", "/index.html"):
                     return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+                if u.path == "/hairline.js":                    # the line figures (scripts/build_ui_figures.sh)
+                    return self._send(200, (STATIC / "hairline.js").read_bytes(), "text/javascript; charset=utf-8")
                 if u.path == "/api/session":
                     return self._send(200, self._session_info())
                 if u.path == "/api/info":

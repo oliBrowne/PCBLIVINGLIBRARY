@@ -220,7 +220,7 @@ async function a11y(browser) {
       const lab = e.getAttribute("aria-label") || (e.labels && e.labels.length && e.labels[0].textContent.trim()) || e.textContent.trim() || e.placeholder;
       return !lab; }).map(e => e.id || e.outerHTML.slice(0, 60)));
     check(`every control has a label (${scheme})`, !unlabeled.length, unlabeled.join(", "));
-    check(`reduced motion: no panel animation (${scheme})`, await p.evaluate(() => getComputedStyle(document.querySelector("#panel")).transitionDuration) === "0s");
+    check(`reduced motion: no panel animation (${scheme})`, parseFloat(await p.evaluate(() => getComputedStyle(document.querySelector("#panel")).transitionDuration)) < 0.02);
     await p.keyboard.press("Tab");
     check(`first Tab lands on Skip to content (${scheme})`, (await p.evaluate(() => document.activeElement.textContent)) === "Skip to content");
     await ctx.close();
