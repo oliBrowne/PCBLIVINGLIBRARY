@@ -9,6 +9,7 @@ a minor release may change command-line options and file formats.
 
 ### Added
 
+- Datasheet cross-checks (`crosscheck.py`): every footprint read from a datasheet is checked against the standard package table or an independent second read of only the critical numbers (reversed pages, cached, costed in `cost.jsonl`). A disagreement holds the part with both values in the review. Rules `[datasheet] cross_check = "auto"|"always"|"off"` (default `auto`) and `cross_check_model`. `[ai] temperature = "auto"` sends temperature 0 and a seed only to models that accept it, so default Claude requests are unchanged. Eval `--repeat` / `consistency` metric. Workspace + MCP `cross_checks`. Offline tests only.
 - `ecadlib kicad-pcm` (`kicad_pcm.py`): the library as a KiCad Plugin and Content Manager package (zip for "Install from File...", optional `repository.json`/`packages.json` with `--base-url`), metadata checked against KiCad's PCM schema; symbols point at `PCM_<lib>`, 3D models at `${KICADn_3RD_PARTY}`; `--kicad 7` writes KiCad 7 files; `--plugin` packages a pcbnew action plugin "ecadlib: add part". `ecadlib altium-pkg` (`altium_pkg.py`): Altium hand-off folder with a `.LibPkg` (compile to IntLib), a DelphiScript install project and a relative DbLib. Workspace `tool_packages` and MCP tool of the same name. Installed and checked in real KiCad 7.0.11; not run in Altium.
 
 ### Fixed
