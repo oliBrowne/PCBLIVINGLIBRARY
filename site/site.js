@@ -144,6 +144,44 @@ function paintSpec(text, upto) {
   fspec.innerHTML = shown + (upto < text.length ? '<span class="caret"></span>' : "");
 }
 
+// what the close-up looks at, per package, measured from the generated footprint itself
+const rectOf = (p) => [p.x - p.w / 2, p.y - p.h / 2, p.x + p.w / 2, p.y + p.h / 2];
+const boxOf = (rs, m = 0) => [Math.min(...rs.map((r) => r[0])) - m, Math.min(...rs.map((r) => r[1])) - m, Math.max(...rs.map((r) => r[2])) + m, Math.max(...rs.map((r) => r[3])) + m];
+const ptRect = (x, y, r) => Math.hypot(Math.max(r[0] - x, 0, x - r[2]), Math.max(r[1] - y, 0, y - r[3]));
+function focusOf(f, pads, silk, crt) {
+  const num = (n) => pads.filter(({ p }) => p.num === String(n));
+  const ep = String(f.spec.pin_count + 1), cnt = f.spec.pin_count, pitch = f.spec.pitch;
+  if (/^QFN/.test(f.name)) {
+    const [e] = num(ep);
+    return { els: [e.el], box: boxOf([rectOf(e.p)], 0.3), label: `exposed pad ${e.p.w.toFixed(2)} × ${e.p.h.toFixed(2)} mm, pad ${ep}` + (f.spec.exposed_pad?.paste_coverage ? `, paste ${Math.round(f.spec.exposed_pad.paste_coverage * 100)}%` : "") };
+  }
+  if (/^SOT-223/.test(f.name)) {
+    const twos = num(2);
+    return { els: twos.map((q) => q.el), box: boxOf(twos.map((q) => rectOf(q.p)), 0.3), label: "the tab is pad 2 as well: one net, one number" };
+  }
+  if (/^LQFP|^QFP/.test(f.name)) {
+    const q = [...num(1), ...num(2), ...num(cnt), ...num(cnt - 1)];
+    const gap = pitch - f.ipc.X;
+    return { els: q.map((x) => x.el), box: boxOf(q.map((x) => rectOf(x.p)), 0.2), label: `${pitch.toFixed(2)} pitch, ${f.ipc.X.toFixed(2)} pads, ${gap.toFixed(2)} mm copper between` };
+  }
+  if (f.spec.package_type === "chip") {
+    const edge = Math.max(...pads.map(({ p }) => p.x + p.w / 2)), cx1 = f.courtyard[2];
+    return { els: [crt], box: [edge - 0.6, f.courtyard[1] - 0.1, cx1 + 0.15, f.courtyard[3] + 0.1], label: `courtyard ${(cx1 - edge).toFixed(2)} mm past copper, density ${f.density}` };
+  }
+  if (/^SOT-23$/.test(f.name) && silk.length) {
+    let best = { d: Infinity, pad: pads[0] };
+    f.silk.forEach(([a, b]) => { for (let k = 0; k <= 24; k++) { const x = a[0] + ((b[0] - a[0]) * k) / 24, y = a[1] + ((b[1] - a[1]) * k) / 24; pads.forEach((q) => { const d = ptRect(x, y, rectOf(q.p)); if (d < best.d) best = { d, pad: q }; }); } });
+    return { els: [...silk, best.pad.el], box: boxOf([rectOf(best.pad.p), ...f.silk.map(([a, b]) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])])], 0.15), label: `silkscreen held ${best.d.toFixed(2)} mm off copper` };
+  }
+  // gull-wing default: the land span across the body, toe to toe and heel to heel
+  const a = num(1)[0], b = pads.find(({ p }) => p !== a.p && Math.abs(p.y - a.p.y) < 1e-6 && p.x > 0) || pads[pads.length - 1];
+  const ra = rectOf(a.p), rb = rectOf(b.p), t = a.p.h * 0.35;
+  // Z across the outer toes just above the row, G across the inner heels just below it
+  const yz = ra[1] - a.p.h * 0.55, yg = ra[3] + a.p.h * 0.55;
+  const lines = `M${ra[0]} ${yz}H${rb[2]}M${ra[0]} ${yz - t}V${yz + t}M${rb[2]} ${yz - t}V${yz + t}M${ra[2]} ${yg}H${rb[0]}M${ra[2]} ${yg - t}V${yg + t}M${rb[0]} ${yg - t}V${yg + t}`;
+  return { els: [a.el, b.el], box: boxOf([ra, rb], 0.3), label: `Z ${f.ipc.Z.toFixed(2)} toe to toe, G ${f.ipc.G.toFixed(2)} heel to heel`, lines };
+}
+
 function play(i) {
   fp.token++;
   fp.timers.forEach(clearTimeout); fp.timers = [];
@@ -239,9 +277,23 @@ function play(i) {
     fstate.classList.add("done");
   });
   if (!still.matches) {
-    const zw = fp.home[2] * 0.42, zh = zw * 0.8;
-    later(typeMs + 2900, () => moveView([p1.x - zw / 2, p1.y - zh / 2, zw, zh], 1500));
-    later(typeMs + 5400, () => moveView(fp.home, 1500));
+    // each package gets its own close-up: the one thing the generator got right that you would check by hand
+    const fo = focusOf(f, pads, silk, crt);
+    const bw = fo.box[2] - fo.box[0], bh = fo.box[3] - fo.box[1];
+    const zw = Math.max(bw, bh * 1.6, fp.home[2] * 0.3) * 1.3, zh = zw * 0.8;
+    // the caption sits along the bottom, so the subject sits a little high
+    const zx = (fo.box[0] + fo.box[2]) / 2 - zw / 2, zy = (fo.box[1] + fo.box[3]) / 2 - zh * 0.42;
+    const cap = svgEl("g", { class: "focuscap" }, fsvg), fsz = zw / 30;
+    if (fo.lines) svgEl("path", { class: "capdim", d: fo.lines }, cap);
+    const capt = svgEl("text", { x: zx + zw * 0.04, y: zy + zh * 0.93, "font-size": fsz.toFixed(4) }, cap);
+    capt.textContent = fo.label;
+    later(typeMs + 2900, () => { moveView([zx, zy, zw, zh], 1500); fo.els.forEach((el) => el.classList.add("focus")); });
+    later(typeMs + 3900, () => {
+      const b = capt.getBBox(), pad = fsz * 0.45;
+      cap.insertBefore(svgEl("rect", { x: b.x - pad, y: b.y - pad * 0.6, width: b.width + pad * 2, height: b.height + pad * 1.2, rx: pad * 0.5 }), capt);
+      cap.classList.add("on");
+    });
+    later(typeMs + 5600, () => { cap.classList.remove("on"); fo.els.forEach((el) => el.classList.remove("focus")); moveView(fp.home, 1500); });
     later(CYCLE, () => { if (fp.visible) play(fp.i + 1); else fp.started = false; });
   }
 }

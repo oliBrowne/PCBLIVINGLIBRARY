@@ -154,12 +154,19 @@ svg.fp .silkfill { fill: var(--pcb-silk); opacity: 0; transition: opacity .6s va
 svg.fp .silkfill.on { opacity: 1; }
 svg.fp .pad { fill: var(--pcb-top); transform-box: fill-box; transform-origin: center; transform: scale(0); opacity: 0; transition: transform .7s var(--ease), opacity .4s var(--ease), stroke .3s; }
 svg.fp .pad.on { transform: scale(1); opacity: 1; }
-svg.fp .pad.p1.on, svg.fp .pad.hot { stroke: #fff; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+svg.fp .pad.hot, svg.fp .pad.focus.on { stroke: #fff; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 svg.fp .padnum { fill: var(--pcb-text); font-family: var(--mono); text-anchor: middle; dominant-baseline: central; opacity: 0; transition: opacity .5s var(--ease); pointer-events: none; }
 svg.fp .padnum.on { opacity: .9; }
 svg.fp .dim { stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; fill: none; opacity: 0; transition: opacity .6s var(--ease); }
 svg.fp .dimtxt { fill: #fff; font-family: var(--mono); opacity: 0; transition: opacity .6s var(--ease); }
 svg.fp .dim.on, svg.fp .dimtxt.on { opacity: .85; }
+svg.fp .draw.focus { stroke-width: calc(var(--sw) * 3); transition: stroke-width .5s var(--ease); }
+svg.fp .pad.focus.on { stroke-width: 1.8; }
+svg.fp .focuscap { opacity: 0; transition: opacity .5s var(--ease); pointer-events: none; }
+svg.fp .focuscap.on { opacity: 1; }
+svg.fp .focuscap rect { fill: #000; fill-opacity: .78; stroke: #fff; stroke-opacity: .35; stroke-width: 1; vector-effect: non-scaling-stroke; }
+svg.fp .focuscap text { fill: #fff; font-family: var(--mono); }
+svg.fp .focuscap .capdim { fill: none; stroke: #fff; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 .layertabs { display: flex; overflow-x: auto; background: #1b1b1b; border-top: 1px solid #000; font: 11px/1 var(--sans); color: #d6d6d6; scrollbar-width: none; }
 .layertabs span { display: inline-flex; align-items: center; gap: 6px; padding: 8px 11px; white-space: nowrap; border-right: 1px solid #000; }
 .layertabs span:first-child { color: #9a9a9a; }
@@ -214,6 +221,10 @@ svg.fp .dim.on, svg.fp .dimtxt.on { opacity: .85; }
 .brand.big .ring { width: 12px; height: 12px; }
 .credits p { margin: 0 0 12px; line-height: 1.6; }
 @media (max-width: 760px) { .footin { grid-template-columns: 1fr; } }
+.maker { margin-top: 36px; padding-top: 24px; border-top: 1px solid var(--line); display: grid; gap: 6px; max-width: 46ch; }
+.maker p { margin: 0; }
+.maker .who { font-size: 20px; letter-spacing: -.01em; }
+.maker .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 
 /* PCB traces behind every section, drawn in as they scroll into view */
 .traces { position: absolute; top: 0; bottom: 0; left: calc(50% - 50vw); width: 100vw; height: 100%; pointer-events: none; z-index: -1; overflow: visible; }
