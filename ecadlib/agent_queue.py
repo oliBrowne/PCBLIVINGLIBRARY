@@ -701,7 +701,7 @@ def decide(ws, i, action, user, role=None, note="", via="ecadlib ui/mcp", aliase
                         approval = {"recorded": True, **r["decision"]}
                     except ValueError as e:
                         if action == "approve":
-                            raise ValueError(f"approvals.py refused: {e}") from e
+                            raise ValueError(f"the library plan refused this approval: {e}") from e
                         approval = {"recorded": False, "reason": str(e)}
             else:
                 approval = {"recorded": False, "reason": "no librarian plan for this item (build.bom / build.part): "
