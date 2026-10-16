@@ -26,9 +26,10 @@ FINISH = {"stop": "end_turn", "length": "max_tokens", "content_filter": "refusal
 
 class OpenAICompatClient:
     def __init__(self, base_url, key=None, profile=None, retries=4, backoff=2.0, max_wait=60.0, timeout=600, sleep=None,
-                 log_file=None, say=None, post=None):
+                 log_file=None, say=None, post=None, model=None):
         from .. import datasheet as D
         self.base, self.key = base_url.rstrip("/"), key
+        self.model = model                                 # the server's model id ('qwen2.5:7b' of ref 'local:qwen2.5:7b')
         self.profile = dict(profile or {})
         self.retries, self.backoff, self.max_wait, self.timeout = retries, backoff, max_wait, timeout
         self.sleep = sleep or time.sleep
@@ -72,7 +73,7 @@ class OpenAICompatClient:
                     parts.append({"type": "file", "file": {"filename": "datasheet.pdf",
                                                            "file_data": f"data:application/pdf;base64,{src['data']}"}})
             msgs.append({"role": m["role"], "content": parts})
-        out = {"model": body["model"], "messages": msgs}
+        out = {"model": self.model or body["model"], "messages": msgs}
         mt = body.get("max_tokens")
         if mt:
             out[self.profile.get("max_tokens_param") or "max_tokens"] = mt
@@ -83,6 +84,15 @@ class OpenAICompatClient:
                                       "json_schema": {"name": "answer", "schema": fmt["schema"], "strict": True}}
         elif fmt.get("type") == "json_schema" and mode == "json_object":
             out["response_format"] = {"type": "json_object"}
+        if fmt.get("type") == "json_schema" and mode != "json_schema" and self.profile.get("json_schema"):
+            # the plan relied on a schema response format the server rejected: the schema goes in the prompt instead
+            from .rails import schema_text
+            st = schema_text(fmt["schema"])
+            if msgs and msgs[0]["role"] == "system":
+                if st.strip() not in msgs[0]["content"]:
+                    msgs[0]["content"] += st
+            else:
+                msgs.insert(0, {"role": "system", "content": st.strip()})
         for k in ("temperature", "seed"):
             if k in body:
                 out[k] = body[k]
@@ -187,7 +197,16 @@ class OpenAICompatClient:
                 self.format_fallback = "json_object" if chat["response_format"]["type"] == "json_schema" else "none"
                 return self.messages(body, headers)
             raise
-        return self.to_message(resp, body["model"])
+        msg = self.to_message(resp, body["model"])
+        if self.format_fallback and self.profile.get("json_schema") and msg["stop_reason"] == "end_turn":
+            from .rails import extract_json               # no schema-constrained output: unwrap a fenced / wrapped object
+            try:
+                val, fixes = extract_json(msg["content"][0]["text"])
+            except ValueError:
+                val, fixes = None, []
+            if fixes and isinstance(val, dict):
+                msg["content"] = [{"type": "text", "text": json.dumps(val)}]
+        return msg
 
     def count_tokens(self, body):
         raise NotImplementedError("count_tokens is an Anthropic endpoint")
