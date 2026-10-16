@@ -988,7 +988,7 @@ def write_report(rep, stem):
     where = Path(str(rep.get("plan") or "")).parent.name
     checked = lambda p: ", ".join(p["checked"]).replace("pyaltiumlib", "a second Altium reader").replace("pin -> pad", "pins to pads")
     md = [f"# KiCad and Altium match{': ' + where if where else ''}", "",
-          f"**{M.plural(c['match'], 'part')} match, {c['mismatch']} differ.**"
+          f"**{c['match']} {'part matches' if c['match'] == 1 else 'parts match'}, {c['mismatch']} differ{'s' if c['mismatch'] == 1 else ''}.**"
           + (f" {c['skipped']} not compared." if c["skipped"] else "")
           + (f" Database rows: {M.plural(c['database_errors'], 'difference')}." if rep.get("database_rows") else ""), ""]
     md += ["Parts whose KiCad and Altium files differ are held until they match.",

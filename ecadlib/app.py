@@ -462,7 +462,7 @@ class Workspace:
             yield
 
     def _librarian_summary(self, bom_path, items, log):
-        from . import librarian as L
+        from . import librarian as L, reports as RP
         out = self._librarian_dir(bom_path)
         rows = L.review_rows(items)
         for r, it in zip(rows, items):
@@ -471,7 +471,10 @@ class Workspace:
             r["approval"] = {k: a.get(k) for k in ("required", "met", "approved_by", "missing", "stale")} if a else None
             if it.get("duplicate_of"):
                 r["duplicate_of"] = it["duplicate_of"]
-        files = [out / f for f in ("review.md", "release_check.md", "plan.json", "dedupe.md")]
+            v = RP.part_view(it)                    # the shared voice: status word, reasons and checks with a next step
+            r["word"] = v["word"]
+            r["says"] = [{k: e[k] for k in ("code", "text", "fix", "note")} for e in v["reasons"] + v["checks"]]
+        files = [out / f for f in ("review.md", "review.html", "release_check.md", "plan.json", "dedupe.md")]
         return {"bom": self.rel(bom_path) if self._is_inside(bom_path) else str(bom_path),
                 "parts": len(items), "ready": sum(i["status"] == "ready" for i in items),
                 "held": sum(i["status"] == "held" for i in items),
@@ -516,7 +519,10 @@ class Workspace:
         """Held plan items: name, folder, missing halves, hold reasons and where each half came from. No network."""
         from . import resolve as R
         bom_path, plan_f, _ = self._plan(bom)
-        return {"bom": self._bom_label(bom_path), "plan": self.rel(plan_f), "held": R.held(plan_f)}
+        from . import messages as M            # each reason also as a plain sentence + next step (code kept)
+        held = [dict(h, reasons=[{k: e[k] for k in ("code", "text", "fix", "note")} for e in M.explain_all(h["hold_reasons"])])
+                for h in R.held(plan_f)]
+        return {"bom": self._bom_label(bom_path), "plan": self.rel(plan_f), "held": held}
 
     def part_candidates(self, bom, part, kind=None, limit=10, progress=None):
         """Ranked symbol / footprint candidates for one plan item (default: its missing halves, else both), with the
