@@ -1,0 +1,463 @@
+### altium/testpack.csv
+header ["Table", "Part Number", "Library Ref", "Library Path", "Footprint Ref", "Footprint Path", "Description", "Value", "Comment", "Manufacturer", "Manufacturer Part Number", "Supplier 1", "Supplier Part Number 1", "Supplier 2", "Supplier Part Number 2", "ComponentLink1Description", "ComponentLink1URL", "ComponentLink2Description", "ComponentLink2URL"]
+row ["Connectors", "61300511121", "61300511121", "SchLib\\61300511121.SchLib", "PinHeader_1x05_P2.54mm_Vertical", "PcbLib\\PinHeader_1x05_P2.54mm_Vertical.PcbLib", "Pin header 1x05 2.54mm vertical, through hole", "Conn_01x05", "61300511121", "Wurth Elektronik", "61300511121", "", "", "", "", "", "", "Datasheet", "https://www.we-online.com/components/products/datasheet/61300511121.pdf"]
+row ["Connectors", "TYPE-C-31-M-12", "TYPE-C-31-M-12", "SchLib\\TYPE-C-31-M-12.SchLib", "USB_C_Receptacle_HRO_TYPE-C-31-M-12", "PcbLib\\USB_C_Receptacle_HRO_TYPE-C-31-M-12.PcbLib", "USB 2.0 Type-C receptacle, 16 pins, SMD with THT shell pegs", "USB-C", "TYPE-C-31-M-12", "Korean Hroparts Elec", "TYPE-C-31-M-12", "", "", "", "", "", "", "Datasheet", "https://www.lcsc.com/datasheet/C165948.pdf"]
+row ["ICs", "LM358DR", "LM358DR", "SchLib\\LM358DR.SchLib", "SOIC-8_3.9x4.9mm_P1.27mm", "PcbLib\\SOIC-8_3.9x4.9mm_P1.27mm.PcbLib", "Dual operational amplifier SOIC-8", "LM358DR", "LM358DR", "Texas Instruments", "LM358DR", "", "", "", "", "", "", "Datasheet", "https://www.ti.com/lit/ds/symlink/lm358.pdf"]
+row ["ICs", "TPS62133RGTR", "TPS62133RGTR", "SchLib\\TPS62133RGTR.SchLib", "VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm", "PcbLib\\VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.PcbLib", "3-17V 3A step-down converter 3.3V VQFN-16 3x3mm with exposed pad", "TPS62133RGTR", "TPS62133RGTR", "Texas Instruments", "TPS62133RGTR", "", "", "", "", "", "", "Datasheet", "https://www.ti.com/lit/ds/symlink/tps62130.pdf"]
+row ["Resistors", "RES-0603-10k", "Resistor", "SchLib\\Resistor.SchLib", "R_0603_1608Metric", "PcbLib\\R_0603_1608Metric.PcbLib", "Resistor 10k 1% 0.1W 0603", "10k", "=Value", "Yageo", "RC0603FR-0710KL", "", "", "", "", "", "", "Datasheet", "https://www.yageo.com/upload/media/product/productsearch/datasheet/rchip/PYu-RC_Group_51_RoHS_L_12.pdf"]
+row ["Transistors", "MMBT3904LT1G", "MMBT3904LT1G", "SchLib\\MMBT3904LT1G.SchLib", "SOT-23", "PcbLib\\SOT-23.PcbLib", "NPN transistor 40V 200mA SOT-23", "MMBT3904", "MMBT3904LT1G", "onsemi", "MMBT3904LT1G", "", "", "", "", "", "", "Datasheet", "https://www.onsemi.com/pdf/datasheet/mmbt3904lt1-d.pdf"]
+### kicad/testpack.kicad_sym:61300511121
+(in_bom yes)
+(on_board yes)
+property Reference=J at=(at 0 8.89 0)
+property Value=Conn_01x05 at=(at 0 -8.89 0)
+property Footprint=testpack:PinHeader_1x05_P2.54mm_Vertical at=(at 0 0 0) hidden
+property Datasheet=https://www.we-online.com/components/products/datasheet/61300511121.pdf at=(at 0 0 0) hidden
+property Description="Pin header 1x05 2.54mm vertical, through hole" at=(at 0 0 0) hidden
+property Manufacturer="Wurth Elektronik" at=(at 0 0 0) hidden
+property MPN=61300511121 at=(at 0 0 0) hidden
+graphics rectangle unit61300511121_0_1: 1 bbox(-7.62,-7.62,7.62,7.62) #e7e96b545e
+pin 1 Pin_1 passive line unit=61300511121_1_1 at=(at -10.16 5.08 0) length=2.54
+pin 2 Pin_2 passive line unit=61300511121_1_1 at=(at -10.16 2.54 0) length=2.54
+pin 3 Pin_3 passive line unit=61300511121_1_1 at=(at -10.16 0 0) length=2.54
+pin 4 Pin_4 passive line unit=61300511121_1_1 at=(at -10.16 -2.54 0) length=2.54
+pin 5 Pin_5 passive line unit=61300511121_1_1 at=(at -10.16 -5.08 0) length=2.54
+### kicad/testpack.kicad_sym:LM358DR
+(in_bom yes)
+(on_board yes)
+property Reference=U at=(at 0 8.89 0)
+property Value=LM358DR at=(at 0 -8.89 0)
+property Footprint=testpack:SOIC-8_3.9x4.9mm_P1.27mm at=(at 0 0 0) hidden
+property Datasheet=https://www.ti.com/lit/ds/symlink/lm358.pdf at=(at 0 0 0) hidden
+property Description="Dual operational amplifier SOIC-8" at=(at 0 0 0) hidden
+property Manufacturer="Texas Instruments" at=(at 0 0 0) hidden
+property MPN=LM358DR at=(at 0 0 0) hidden
+graphics rectangle unitLM358DR_0_1: 1 bbox(-7.62,-7.62,7.62,7.62) #0eefb0f988
+pin 3 +IN_A input line unit=LM358DR_1_1 at=(at -10.16 5.08 0) length=2.54
+pin 2 -IN_A input line unit=LM358DR_1_1 at=(at -10.16 2.54 0) length=2.54
+pin 5 +IN_B input line unit=LM358DR_1_1 at=(at -10.16 0 0) length=2.54
+pin 6 -IN_B input line unit=LM358DR_1_1 at=(at -10.16 -2.54 0) length=2.54
+pin 8 V+ power_in line unit=LM358DR_1_1 at=(at -10.16 -5.08 0) length=2.54
+pin 1 OUT_A output line unit=LM358DR_1_1 at=(at 10.16 5.08 180) length=2.54
+pin 7 OUT_B output line unit=LM358DR_1_1 at=(at 10.16 2.54 180) length=2.54
+pin 4 V- power_in line unit=LM358DR_1_1 at=(at 10.16 0 180) length=2.54
+### kicad/testpack.kicad_sym:MMBT3904LT1G
+(pin_names (offset 1.016))
+(exclude_from_sim no)
+(in_bom yes)
+(on_board yes)
+property Reference=Q at=(at -2.54 3.5814 0)
+property Value=MMBT3904 at=(at -2.54 -4.8514 0)
+property Footprint=testpack:SOT-23 at=(at 0 0 0) hidden
+property Datasheet=https://www.onsemi.com/pdf/datasheet/mmbt3904lt1-d.pdf at=(at 0 0 0) hidden
+property Description="NPN transistor 40V 200mA SOT-23" at=(at 0 0 0) hidden
+property MPN=MMBT3904LT1G at=(at 0 0 0) hidden
+property Manufacturer=onsemi at=(at 0 0 0) hidden
+graphics circle unitMMBT3904LT1G_1_1: 1 bbox(1.27,0,1.27,0) #abd0d0997f
+graphics polyline unitMMBT3904LT1G_1_1: 5 bbox(-2.54,-2.54,2.54,2.54) #a504b5d0b8
+pin 1 B input line unit=MMBT3904LT1G_1_1 at=(at -5.08 0 0) length=2.54
+pin 2 E passive line unit=MMBT3904LT1G_1_1 at=(at 2.54 -5.08 90) length=2.54
+pin 3 C passive line unit=MMBT3904LT1G_1_1 at=(at 2.54 5.08 270) length=2.54
+### kicad/testpack.kicad_sym:RES-0603-10k
+(pin_names (offset 1.016) hide)
+(exclude_from_sim no)
+(in_bom yes)
+(on_board yes)
+property Reference=R at=(at -1.016 3.302 0)
+property Value=10k at=(at -1.016 -4.572 0)
+property Footprint=testpack:R_0603_1608Metric at=(at 0 0 0) hidden
+property Datasheet=https://www.yageo.com/upload/media/product/productsearch/datasheet/rchip/PYu-RC_Group_51_RoHS_L_12.pdf at=(at 0 0 0) hidden
+property Description="Resistor 10k 1% 0.1W 0603" at=(at 0 0 0) hidden
+property Manufacturer=Yageo at=(at 0 0 0) hidden
+property MPN=RC0603FR-0710KL at=(at 0 0 0) hidden
+graphics rectangle unitRES-0603-10k_1_1: 1 bbox(-1.016,-2.54,1.016,2.54) #360b21a811
+pin 1 "~" passive line unit=RES-0603-10k_1_1 at=(at 0 3.81 270) length=1.27
+pin 2 "~" passive line unit=RES-0603-10k_1_1 at=(at 0 -3.81 90) length=1.27
+### kicad/testpack.kicad_sym:TPS62133RGTR
+(in_bom yes)
+(on_board yes)
+property Reference=U at=(at 0 13.97 0)
+property Value=TPS62133RGTR at=(at 0 -13.97 0)
+property Footprint=testpack:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm at=(at 0 0 0) hidden
+property Datasheet=https://www.ti.com/lit/ds/symlink/tps62130.pdf at=(at 0 0 0) hidden
+property Description="3-17V 3A step-down converter 3.3V VQFN-16 3x3mm with exposed pad" at=(at 0 0 0) hidden
+property Manufacturer="Texas Instruments" at=(at 0 0 0) hidden
+property MPN=TPS62133RGTR at=(at 0 0 0) hidden
+graphics rectangle unitTPS62133RGTR_0_1: 1 bbox(-7.62,-12.7,7.62,12.7) #deec89bc2f
+pin 11 PVIN power_in line unit=TPS62133RGTR_1_1 at=(at -10.16 10.16 0) length=2.54
+pin 12 PVIN power_in line unit=TPS62133RGTR_1_1 at=(at -10.16 7.62 0) length=2.54
+pin 10 AVIN power_in line unit=TPS62133RGTR_1_1 at=(at -10.16 5.08 0) length=2.54
+pin 13 EN input line unit=TPS62133RGTR_1_1 at=(at -10.16 2.54 0) length=2.54
+pin 9 SS/TR input line unit=TPS62133RGTR_1_1 at=(at -10.16 0 0) length=2.54
+pin 7 FSW input line unit=TPS62133RGTR_1_1 at=(at -10.16 -2.54 0) length=2.54
+pin 8 DEF input line unit=TPS62133RGTR_1_1 at=(at -10.16 -5.08 0) length=2.54
+pin 6 AGND power_in line unit=TPS62133RGTR_1_1 at=(at -10.16 -7.62 0) length=2.54
+pin 1 SW output line unit=TPS62133RGTR_1_1 at=(at 10.16 10.16 180) length=2.54
+pin 2 SW output line unit=TPS62133RGTR_1_1 at=(at 10.16 7.62 180) length=2.54
+pin 3 SW output line unit=TPS62133RGTR_1_1 at=(at 10.16 5.08 180) length=2.54
+pin 14 VOS input line unit=TPS62133RGTR_1_1 at=(at 10.16 2.54 180) length=2.54
+pin 5 FB input line unit=TPS62133RGTR_1_1 at=(at 10.16 0 180) length=2.54
+pin 4 PG open_collector line unit=TPS62133RGTR_1_1 at=(at 10.16 -2.54 180) length=2.54
+pin 15 PGND power_in line unit=TPS62133RGTR_1_1 at=(at 10.16 -5.08 180) length=2.54
+pin 16 PGND power_in line unit=TPS62133RGTR_1_1 at=(at 10.16 -7.62 180) length=2.54
+pin 17 EP power_in line unit=TPS62133RGTR_1_1 at=(at 10.16 -10.16 180) length=2.54
+### kicad/testpack.kicad_sym:TYPE-C-31-M-12
+(in_bom yes)
+(on_board yes)
+property Reference=J at=(at 0 13.97 0)
+property Value=USB-C at=(at 0 -16.51 0)
+property Footprint=testpack:USB_C_Receptacle_HRO_TYPE-C-31-M-12 at=(at 0 0 0) hidden
+property Datasheet=https://www.lcsc.com/datasheet/C165948.pdf at=(at 0 0 0) hidden
+property Description="USB 2.0 Type-C receptacle, 16 pins, SMD with THT shell pegs" at=(at 0 0 0) hidden
+property Manufacturer="Korean Hroparts Elec" at=(at 0 0 0) hidden
+property MPN=TYPE-C-31-M-12 at=(at 0 0 0) hidden
+graphics rectangle unitTYPE-C-31-M-12_0_1: 1 bbox(-10.16,-15.24,10.16,12.7) #cb1fa32f64
+pin A4 VBUS power_in line unit=TYPE-C-31-M-12_1_1 at=(at -12.7 10.16 0) length=2.54
+pin A9 VBUS power_in line unit=TYPE-C-31-M-12_1_1 at=(at -12.7 7.62 0) length=2.54
+pin B4 VBUS power_in line unit=TYPE-C-31-M-12_1_1 at=(at -12.7 5.08 0) length=2.54
+pin B9 VBUS power_in line unit=TYPE-C-31-M-12_1_1 at=(at -12.7 2.54 0) length=2.54
+pin A5 CC1 bidirectional line unit=TYPE-C-31-M-12_1_1 at=(at -12.7 0 0) length=2.54
+pin B5 CC2 bidirectional line unit=TYPE-C-31-M-12_1_1 at=(at -12.7 -2.54 0) length=2.54
+pin A6 D+ bidirectional line unit=TYPE-C-31-M-12_1_1 at=(at -12.7 -5.08 0) length=2.54
+pin B6 D+ bidirectional line unit=TYPE-C-31-M-12_1_1 at=(at -12.7 -7.62 0) length=2.54
+pin A7 D- bidirectional line unit=TYPE-C-31-M-12_1_1 at=(at -12.7 -10.16 0) length=2.54
+pin B7 D- bidirectional line unit=TYPE-C-31-M-12_1_1 at=(at -12.7 -12.7 0) length=2.54
+pin A8 SBU1 bidirectional line unit=TYPE-C-31-M-12_1_1 at=(at 12.7 10.16 180) length=2.54
+pin B8 SBU2 bidirectional line unit=TYPE-C-31-M-12_1_1 at=(at 12.7 7.62 180) length=2.54
+pin A1 GND power_in line unit=TYPE-C-31-M-12_1_1 at=(at 12.7 5.08 180) length=2.54
+pin A12 GND power_in line unit=TYPE-C-31-M-12_1_1 at=(at 12.7 2.54 180) length=2.54
+pin B1 GND power_in line unit=TYPE-C-31-M-12_1_1 at=(at 12.7 0 180) length=2.54
+pin B12 GND power_in line unit=TYPE-C-31-M-12_1_1 at=(at 12.7 -2.54 180) length=2.54
+pin SH SHIELD passive line unit=TYPE-C-31-M-12_1_1 at=(at 12.7 -5.08 180) length=2.54
+### kicad/testpack.sqlite
+table Connectors: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN
+row Connectors: ["61300511121", "testpack:61300511121", "testpack:PinHeader_1x05_P2.54mm_Vertical", "Conn_01x05", "https://www.we-online.com/components/products/datasheet/61300511121.pdf", "Pin header 1x05 2.54mm vertical, through hole", "Wurth Elektronik", "61300511121"]
+row Connectors: ["TYPE-C-31-M-12", "testpack:TYPE-C-31-M-12", "testpack:USB_C_Receptacle_HRO_TYPE-C-31-M-12", "USB-C", "https://www.lcsc.com/datasheet/C165948.pdf", "USB 2.0 Type-C receptacle, 16 pins, SMD with THT shell pegs", "Korean Hroparts Elec", "TYPE-C-31-M-12"]
+table ICs: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN
+row ICs: ["LM358DR", "testpack:LM358DR", "testpack:SOIC-8_3.9x4.9mm_P1.27mm", "LM358DR", "https://www.ti.com/lit/ds/symlink/lm358.pdf", "Dual operational amplifier SOIC-8", "Texas Instruments", "LM358DR"]
+row ICs: ["TPS62133RGTR", "testpack:TPS62133RGTR", "testpack:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm", "TPS62133RGTR", "https://www.ti.com/lit/ds/symlink/tps62130.pdf", "3-17V 3A step-down converter 3.3V VQFN-16 3x3mm with exposed pad", "Texas Instruments", "TPS62133RGTR"]
+table Resistors: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN
+row Resistors: ["RES-0603-10k", "testpack:RES-0603-10k", "testpack:R_0603_1608Metric", "10k", "https://www.yageo.com/upload/media/product/productsearch/datasheet/rchip/PYu-RC_Group_51_RoHS_L_12.pdf", "Resistor 10k 1% 0.1W 0603", "Yageo", "RC0603FR-0710KL"]
+table Transistors: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN
+row Transistors: ["MMBT3904LT1G", "testpack:MMBT3904LT1G", "testpack:SOT-23", "MMBT3904", "https://www.onsemi.com/pdf/datasheet/mmbt3904lt1-d.pdf", "NPN transistor 40V 200mA SOT-23", "onsemi", "MMBT3904LT1G"]
+### library/models/KiCad/PinHeader_1x05_P2.54mm_Vertical.kicad_mod
+footprint PinHeader_1x05_P2.54mm_Vertical
+(version 20221018)
+(layer F.Cu)
+(descr "pin header, 1x05, 2.54 mm pitch | 1x5 pins, pitch 2.54 mm, drill 1 mm, pad 1.7 mm | generated by ecadlib (prototype - review before use)")
+(tags "pin_header pin_header_tht IPC-7351B density-B")
+(attr through_hole)
+fp_text reference REF** layer=F.SilkS at=(at 0 -2.47)
+fp_text value PinHeader_1x05_P2.54mm_Vertical layer=F.Fab at=(at 0 12.63)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 5.08)
+(pad 1 thru_hole rect (at 0 0) (size 1.7 1.7) (drill 1) (layers *.Cu *.Mask))
+(pad 2 thru_hole circle (at 0 2.54) (size 1.7 1.7) (drill 1) (layers *.Cu *.Mask))
+(pad 3 thru_hole circle (at 0 5.08) (size 1.7 1.7) (drill 1) (layers *.Cu *.Mask))
+(pad 4 thru_hole circle (at 0 7.62) (size 1.7 1.7) (drill 1) (layers *.Cu *.Mask))
+(pad 5 thru_hole circle (at 0 10.16) (size 1.7 1.7) (drill 1) (layers *.Cu *.Mask))
+graphics fp_line F.SilkS: 4 bbox(-1.38,-1.38,1.38,11.54) #435f0ef069
+graphics fp_poly F.Fab: 1 bbox(-1.27,-1.27,1.27,11.43) #ff08457aa8
+graphics fp_poly F.SilkS: 1 bbox(-1.86,-0.24,-1.53,0.24) #34edc647b4
+graphics fp_rect F.CrtYd: 1 bbox(-1.77,-1.77,1.77,11.93) #c466c13940
+### library/models/KiCad/R_0603_1608Metric.kicad_mod
+footprint R_0603_1608Metric
+(version 20221018)
+(layer F.Cu)
+(descr "R_0603_1608Metric | IPC-7351B chip density B: Z=2.45 G=0.85 X=0.95 | generated by ecadlib (prototype - review before use)")
+(tags "chip chip IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -1.43)
+fp_text value R_0603_1608Metric layer=F.Fab at=(at 0 1.43)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad 1 smd roundrect (at -0.825 0) (size 0.8 0.95) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 2 smd roundrect (at 0.825 0) (size 0.8 0.95) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+graphics fp_line F.SilkS: 2 bbox(-0.2373,-0.5225,0.2373,0.5225) #c3b550afa2
+graphics fp_rect F.CrtYd: 1 bbox(-1.48,-0.73,1.48,0.73) #db6883546f
+graphics fp_rect F.Fab: 1 bbox(-0.8,-0.4125,0.8,0.4125) #eeca90ce6b
+### library/models/KiCad/SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod
+footprint SOIC-8_3.9x4.9mm_P1.27mm
+(version 20221018)
+(layer F.Cu)
+(descr "SOIC-8_3.9x4.9mm_P1.27mm | IPC-7351B gullwing density B: Z=6.90 G=3.00 X=0.60 | generated by ecadlib (prototype - review before use)")
+(tags "gullwing gullwing IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -3.4)
+fp_text value SOIC-8_3.9x4.9mm_P1.27mm layer=F.Fab at=(at 0 3.4)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad 1 smd roundrect (at -2.475 -1.905) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 2 smd roundrect (at -2.475 -0.635) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 3 smd roundrect (at -2.475 0.635) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 4 smd roundrect (at -2.475 1.905) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 5 smd roundrect (at 2.475 1.905) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 6 smd roundrect (at 2.475 0.635) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 7 smd roundrect (at 2.475 -0.635) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 8 smd roundrect (at 2.475 -1.905) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+graphics fp_line F.SilkS: 2 bbox(-2.06,-2.56,2.06,2.56) #86a939a5f7
+graphics fp_poly F.Fab: 1 bbox(-1.95,-2.45,1.95,2.45) #71d902848b
+graphics fp_poly F.SilkS: 1 bbox(-2.715,-2.795,-2.235,-2.465) #24eb73533c
+graphics fp_rect F.CrtYd: 1 bbox(-3.7,-2.7,3.7,2.7) #f66a4f712a
+### library/models/KiCad/SOT-23.kicad_mod
+footprint SOT-23
+(version 20221018)
+(layer F.Cu)
+(descr "SOT-23 | IPC-7351B gullwing density B: Z=3.35 G=0.40 X=0.60 | generated by ecadlib (prototype - review before use)")
+(tags "gullwing gullwing IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -2.4)
+fp_text value SOT-23 layer=F.Fab at=(at 0 2.4)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad 1 smd roundrect (at -0.9375 -0.95) (size 1.475 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 2 smd roundrect (at -0.9375 0.95) (size 1.475 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 3 smd roundrect (at 0.9375 0) (size 1.475 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+graphics fp_line F.SilkS: 5 bbox(-0.76,-1.56,0.76,1.56) #efdc863107
+graphics fp_poly F.Fab: 1 bbox(-0.65,-1.45,0.65,1.45) #5c70e36e4c
+graphics fp_poly F.SilkS: 1 bbox(-1.1775,-1.84,-0.6975,-1.51) #c2f7a24a1b
+graphics fp_rect F.CrtYd: 1 bbox(-1.93,-1.7,1.93,1.7) #181a346f74
+### library/models/KiCad/USB_C_Receptacle_HRO_TYPE-C-31-M-12.kicad_mod
+footprint USB_C_Receptacle_HRO_TYPE-C-31-M-12
+(version 20221018)
+(layer F.Cu)
+(descr "USB Type-C receptacle for USB 2.0 and PD, http://www.krhro.com/uploads/soft/180320/1-1P320120243.pdf | 16 pins, 4 mounting/shield pads | src http://www.krhro.com/uploads/soft/180320/1-1P320120243.pdf | land pattern from the datasheet drawing | generated by ecadlib (prototype - review before use)")
+(tags "connector connector IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -5.97)
+fp_text value USB_C_Receptacle_HRO_TYPE-C-31-M-12 layer=F.Fab at=(at 0 4.85)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad A1 smd roundrect (at -3.25 -4.045) (size 0.6 1.45) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+pads x2 (np_thru_hole circle (size 0.65 0.65) (drill 0.65) (layers *.Cu *.Mask)) centres bbox(-2.89,-2.6,2.89,-2.6) #ed98986d44
+pads x8 (smd roundrect (size 0.3 1.45) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1.75,-4.045,1.75,-4.045) #5c7dea410b
+pads x8 (smd roundrect (size 0.6 1.45) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-3.25,-4.045,3.25,-4.045) #4885daa1dd
+pads x2 (thru_hole oval (size 1 1.6) (drill oval 0.6 1.2) (layers *.Cu *.Mask)) centres bbox(-4.32,1.05,4.32,1.05) #8b386f4c59
+pads x2 (thru_hole oval (size 1 2.1) (drill oval 0.6 1.7) (layers *.Cu *.Mask)) centres bbox(-4.32,-3.13,4.32,-3.13) #760838c7a2
+graphics fp_line F.SilkS: 5 bbox(-4.58,-1.8575,4.58,3.76) #0b88620cd1
+graphics fp_poly F.CrtYd: 1 bbox(-5.32,-5.27,5.32,4.15) #f5a5262b6a
+graphics fp_poly F.Fab: 1 bbox(-4.47,-3.65,4.47,3.65) #4b37c07ad6
+graphics fp_poly F.SilkS: 1 bbox(-3.49,-5.38,-3.01,-5.05) #c1557c9d07
+### library/models/KiCad/VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.kicad_mod
+footprint VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm
+(version 20221018)
+(layer F.Cu)
+(descr "VQFN-16 3x3 mm (TI RGT, e.g. TPS62133RGTR) | IPC-7351B qfn density B: Z=3.75 G=2.08 X=0.25 | generated by ecadlib (prototype - review before use)")
+(tags "qfn qfn IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -2.83)
+fp_text value VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm layer=F.Fab at=(at 0 2.83)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad 1 smd roundrect (at -1.4575 -0.75) (size 0.835 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+pads x1 (smd rect (size 1.68 1.68) (layers F.Cu F.Mask)) centres bbox(0,0,0,0) #6f5ea425c8
+pads x8 (smd roundrect (size 0.25 0.835) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-0.75,-1.4575,0.75,1.4575) #27a2cd6e57
+pads x4 (smd roundrect (size 0.677 0.677) (layers F.Paste) (roundrect_rratio 0.25)) centres bbox(-0.42,-0.42,0.42,0.42) #bbb7f65b11
+pads x8 (smd roundrect (size 0.835 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1.4575,-0.75,1.4575,0.75) #135ca6b72b
+graphics fp_line F.SilkS: 8 bbox(-1.61,-1.61,1.61,1.61) #73fe87bf3d
+graphics fp_poly F.Fab: 1 bbox(-1.5,-1.5,1.5,1.5) #80e322fb30
+graphics fp_poly F.SilkS: 1 bbox(-1.85,-1.94,-1.37,-1.61) #21f620d05f
+graphics fp_rect F.CrtYd: 1 bbox(-2.13,-2.13,2.13,2.13) #8f06b3bf8b
+### library/models/PcbLib/PinHeader_1x05_P2.54mm_Vertical.PcbLib:PinHeader_1x05_P2.54mm_Vertical
+params DESCRIPTION=pin header, 1x05, 2.54 mm pitch; 1x5 pins, pitch 2.54 mm, drill 1 mm, pad 1.7 mm; generated by ecadlib (prototype - review before use); from testpack:PinHeader_1x05_P2.54mm_Vertical (CC-BY-SA 4.0) HEIGHT=334.6457mil PATTERN=PinHeader_1x05_P2.54mm_Vertical
+text ".Designator" layer=33 at=(-1.3905,1.97) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-13.13) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=334.6457mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=TRUE|MODEL.NAME=PinHeader_1x05_P2.54mm_Vertical.step|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=1|MODEL.MODELSOURCE=Undefined pts=-1.27,-11.43;1.27,-11.43;1.27,1.27;-1.27,1.27
+pad 1 at=(0,0) layer=74 size=(1.7,1.7) hole=1 shape=2 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(0,-2.54) layer=74 size=(1.7,1.7) hole=1 shape=1 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 3 at=(0,-5.08) layer=74 size=(1.7,1.7) hole=1 shape=1 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 4 at=(0,-7.62) layer=74 size=(1.7,1.7) hole=1 shape=1 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 5 at=(0,-10.16) layer=74 size=(1.7,1.7) hole=1 shape=1 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+graphics region 33: 1 bbox(-1.86,-0.24,-1.53,0.24) #9603063bce
+graphics track 33: 7 bbox(-1.86,-11.54,1.38,1.38) #8b1a11dd43
+graphics track 69: 5 bbox(-1.27,-11.43,1.27,1.27) #dda2936f47
+graphics track 71: 4 bbox(-1.77,-11.93,1.77,1.77) #6a88691bf0
+model DZ=0 EMBED=TRUE ID={FF5A64A1-A035-5A8F-9D40-E629B8902937} MODELSOURCE=Undefined NAME=PinHeader_1x05_P2.54mm_Vertical.step ROTX=0.000 ROTY=0.000 ROTZ=0.000 bytes=42517 sha256=ebbf87e9903d2e96
+### library/models/PcbLib/R_0603_1608Metric.PcbLib:R_0603_1608Metric
+params DESCRIPTION=R_0603_1608Metric; IPC-7351B chip density B: Z=2.45 G=0.85 X=0.95; generated by ecadlib (prototype - review before use); from Resistor_SMD:R_0603_1608Metric (CC-BY-SA 4.0) HEIGHT=17.7165mil PATTERN=R_0603_1608Metric
+text ".Designator" layer=33 at=(-1.3905,0.93) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-1.93) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=17.7165mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=TRUE|MODEL.NAME=R_0603_1608Metric.step|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=1|MODEL.MODELSOURCE=Undefined pts=-0.8,-0.4125;0.8,-0.4125;0.8,0.4125;-0.8,0.4125
+pad 1 at=(-0.825,0) layer=1 size=(0.8,0.95) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(0.825,0) layer=1 size=(0.8,0.95) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+graphics track 33: 2 bbox(-0.2373,-0.5225,0.2373,0.5225) #cf1ff1868a
+graphics track 69: 4 bbox(-0.8,-0.4125,0.8,0.4125) #681a20c31b
+graphics track 71: 4 bbox(-1.48,-0.73,1.48,0.73) #b1147b71dc
+model DZ=0 EMBED=TRUE ID={45729AB8-166C-5611-9B9C-D393AF474AE7} MODELSOURCE=Undefined NAME=R_0603_1608Metric.step ROTX=0.000 ROTY=0.000 ROTZ=0.000 bytes=13567 sha256=f5cfddb9bcea8444
+### library/models/PcbLib/SOIC-8_3.9x4.9mm_P1.27mm.PcbLib:SOIC-8_3.9x4.9mm_P1.27mm
+params DESCRIPTION=SOIC-8_3.9x4.9mm_P1.27mm; IPC-7351B gullwing density B: Z=6.90 G=3.00 X=0.60; generated by ecadlib (prototype - review before use); from Package_SO:SOIC-8_3.9x4.9mm_P1.27mm (CC-BY-SA 4.0) HEIGHT=68.8976mil PATTERN=SOIC-8_3.9x4.9mm_P1.27mm
+text ".Designator" layer=33 at=(-1.3905,2.9) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-3.9) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=68.8976mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=TRUE|MODEL.NAME=SOIC-8_3.9x4.9mm_P1.27mm.step|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=1|MODEL.MODELSOURCE=Undefined pts=-3,-2.45;3,-2.45;3,2.45;-3,2.45
+pad 1 at=(-2.475,1.905) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(-2.475,0.635) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 3 at=(-2.475,-0.635) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 4 at=(-2.475,-1.905) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 5 at=(2.475,-1.905) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 6 at=(2.475,-0.635) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 7 at=(2.475,0.635) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 8 at=(2.475,1.905) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+graphics region 33: 1 bbox(-2.715,2.465,-2.235,2.795) #bbb1a839ee
+graphics track 33: 5 bbox(-2.715,-2.56,2.06,2.795) #75877f4355
+graphics track 69: 5 bbox(-1.95,-2.45,1.95,2.45) #b79e2071e7
+graphics track 71: 4 bbox(-3.7,-2.7,3.7,2.7) #6de3ce7f5f
+model DZ=0 EMBED=TRUE ID={F17C61CB-6EBF-535A-BD82-208A4B9BEE69} MODELSOURCE=Undefined NAME=SOIC-8_3.9x4.9mm_P1.27mm.step ROTX=0.000 ROTY=0.000 ROTZ=0.000 bytes=80061 sha256=9bc283cc8ba80eff
+### library/models/PcbLib/SOT-23.PcbLib:SOT-23
+params DESCRIPTION=SOT-23; IPC-7351B gullwing density B: Z=3.35 G=0.40 X=0.60; generated by ecadlib (prototype - review before use); from Package_TO_SOT_SMD:SOT-23 (CC-BY-SA 4.0) HEIGHT=43.3071mil PATTERN=SOT-23
+text ".Designator" layer=33 at=(-1.3905,1.9) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-2.9) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=43.3071mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=TRUE|MODEL.NAME=SOT-23.step|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=1|MODEL.MODELSOURCE=Undefined pts=-1.185,-1.45;1.185,-1.45;1.185,1.45;-1.185,1.45
+pad 1 at=(-0.9375,0.95) layer=1 size=(1.475,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(-0.9375,-0.95) layer=1 size=(1.475,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 3 at=(0.9375,0) layer=1 size=(1.475,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+graphics region 33: 1 bbox(-1.1775,1.51,-0.6975,1.84) #e535d69c0c
+graphics track 33: 8 bbox(-1.1775,-1.56,0.76,1.84) #13f290273c
+graphics track 69: 5 bbox(-0.65,-1.45,0.65,1.45) #fb65156e86
+graphics track 71: 4 bbox(-1.93,-1.7,1.93,1.7) #624f8c3e1b
+model DZ=0 EMBED=TRUE ID={052D4566-66C6-55B4-9531-857F3D4884C6} MODELSOURCE=Undefined NAME=SOT-23.step ROTX=0.000 ROTY=0.000 ROTZ=0.000 bytes=41466 sha256=8434d16479b64015
+### library/models/PcbLib/USB_C_Receptacle_HRO_TYPE-C-31-M-12.PcbLib:USB_C_Receptacle_HRO_TYPE-C-31-M-12
+params DESCRIPTION=USB Type-C receptacle for USB 2.0 and PD, http://www.krhro.com/uploads/soft/180320/1-1P320120243.pdf; 16 pins, 4 mounting/shield pads; src http://www.krhro.com/uploads/soft/180320/1-1P320120243.pdf; land pattern from the datasheet drawing; generated by ecadlib (prototype - review before use); from testpack:USB_C_Receptacle_HRO_TYPE-C-31-M-12 (CC-BY-SA 4.0) HEIGHT=129.9213mil PATTERN=USB_C_Receptacle_HRO_TYPE-C-31-M-12
+text ".Designator" layer=33 at=(-1.3905,5.47) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-5.35) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=129.9213mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=129.9213mil pts=-4.47,-3.65;4.47,-3.65;4.47,3.65;-3.47,3.65;-4.47,2.65
+pad A1 at=(-3.25,4.045) layer=1 size=(0.6,1.45) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pads x8 layer=1 size=(0.3,1.45) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.75,4.045,1.75,4.045) #fe50583a17
+pads x8 layer=1 size=(0.6,1.45) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-3.25,4.045,3.25,4.045) #7247a9b0bc
+pads x2 layer=74 size=(0.65,0.65) hole=0.65 shape=1 rot=0 corner=None plated=False paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.89,2.6,2.89,2.6) #437ca68c88
+pads x2 layer=74 size=(1,1.6) hole=0.6 shape=1 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=2 slot=1.2 hole_rot=90 centres bbox(-4.32,-1.05,4.32,-1.05) #d7742c91ad
+pads x2 layer=74 size=(1,2.1) hole=0.6 shape=1 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=2 slot=1.7 hole_rot=90 centres bbox(-4.32,3.13,4.32,3.13) #1d72670814
+graphics region 33: 1 bbox(-3.49,5.05,-3.01,5.38) #83a80b0f31
+graphics track 33: 8 bbox(-4.58,-3.76,4.58,5.38) #96e0f4000d
+graphics track 69: 5 bbox(-4.47,-3.65,4.47,3.65) #f8271ff3c3
+graphics track 71: 20 bbox(-5.32,-4.15,5.32,5.27) #bb007b2b7c
+### library/models/PcbLib/VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.PcbLib:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm
+params DESCRIPTION=VQFN-16 3x3 mm (TI RGT, e.g. TPS62133RGTR); IPC-7351B qfn density B: Z=3.75 G=2.08 X=0.25; generated by ecadlib (prototype - review before use); from testpack:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm (CC-BY-SA 4.0) HEIGHT=39.3701mil PATTERN=VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm
+text ".Designator" layer=33 at=(-1.3905,2.33) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-3.33) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=39.3701mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=TRUE|MODEL.NAME=VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.step|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=1|MODEL.MODELSOURCE=Undefined pts=-1.5,-1.5;1.5,-1.5;1.5,1.5;-1.5,1.5
+pad 1 at=(-1.4575,0.75) layer=1 size=(0.835,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pads x8 layer=1 size=(0.25,0.835) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-0.75,-1.4575,0.75,1.4575) #b3bbff1f8f
+pads x8 layer=1 size=(0.835,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.4575,-0.75,1.4575,0.75) #94f6e541ab
+pads x1 layer=1 size=(1.68,1.68) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-0.85 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #5a60363957
+graphics fill 35: 4 bbox(-0.7585,-0.7585,0.7585,0.7585) #8fb75a9917
+graphics region 33: 1 bbox(-1.85,1.61,-1.37,1.94) #efb5063eef
+graphics track 33: 11 bbox(-1.85,-1.61,1.61,1.94) #9f42ba53fa
+graphics track 69: 5 bbox(-1.5,-1.5,1.5,1.5) #460ca5617e
+graphics track 71: 4 bbox(-2.13,-2.13,2.13,2.13) #26036e738a
+model DZ=0 EMBED=TRUE ID={32F3F4C7-FA98-5664-9D8B-D949E55B0835} MODELSOURCE=Undefined NAME=VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.step ROTX=0.000 ROTY=0.000 ROTZ=0.000 bytes=145208 sha256=e671eee5a520edc3
+### library/models/SchLib/61300511121.SchLib:61300511121
+record1 ALLPINCOUNT=5 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Pin header 1x05 2.54mm vertical, through hole CURRENTPARTID=1 DESIGNITEMID=61300511121 DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=61300511121 OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin 1 "Pin_1" etype=4 orient=2 at=(-30,20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 2 "Pin_2" etype=4 orient=2 at=(-30,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 3 "Pin_3" etype=4 orient=2 at=(-30,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 4 "Pin_4" etype=4 orient=2 at=(-30,-10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 5 "Pin_5" etype=4 orient=2 at=(-30,-20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+record34 COLOR=8388608 FONTID=1 LOCATION.X=-30 LOCATION.Y=33 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=J?
+record41 COLOR=8388608 FONTID=1 LOCATION.X=-30 LOCATION.Y=-38 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-30 LOCATION.Y=-48 NAME=Value OWNERPARTID=-1 TEXT=61300511121
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-30 LOCATION.Y=-58 NAME=KiCad Footprint OWNERPARTID=-1 TEXT=testpack:PinHeader_1x05_P2.54mm_Vertical
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-30 LOCATION.Y=-68 NAME=Description OWNERPARTID=-1 TEXT=Pin header 1x05 2.54mm vertical, through hole
+record44 
+record45 DATAFILECOUNT=1 ISCURRENT=T MODELDATAFILEENTITY0=PinHeader_1x05_P2.54mm_Vertical MODELDATAFILEKIND0=PCBLib MODELNAME=PinHeader_1x05_P2.54mm_Vertical MODELTYPE=PCBLIB OWNERINDEX=12
+record46 OWNERINDEX=13
+record48 OWNERINDEX=13
+graphics record14: 1 #57c3c7f40a
+### library/models/SchLib/LM358DR.SchLib:LM358DR
+record1 ALLPINCOUNT=8 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Dual operational amplifier SOIC-8 CURRENTPARTID=1 DESIGNITEMID=LM358DR DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=LM358DR OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin 3 "+IN_A" etype=0 orient=2 at=(-30,20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 2 "-IN_A" etype=0 orient=2 at=(-30,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 5 "+IN_B" etype=0 orient=2 at=(-30,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 6 "-IN_B" etype=0 orient=2 at=(-30,-10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 8 "V+" etype=7 orient=2 at=(-30,-20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 1 "OUT_A" etype=2 orient=0 at=(30,20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 7 "OUT_B" etype=2 orient=0 at=(30,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 4 "V-" etype=7 orient=0 at=(30,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+record34 COLOR=8388608 FONTID=1 LOCATION.X=-30 LOCATION.Y=33 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=U?
+record41 COLOR=8388608 FONTID=1 LOCATION.X=-30 LOCATION.Y=-38 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-30 LOCATION.Y=-48 NAME=Value OWNERPARTID=-1 TEXT=LM358DR
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-30 LOCATION.Y=-58 NAME=KiCad Footprint OWNERPARTID=-1 TEXT=testpack:SOIC-8_3.9x4.9mm_P1.27mm
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-30 LOCATION.Y=-68 NAME=Description OWNERPARTID=-1 TEXT=Dual operational amplifier SOIC-8
+record44 
+record45 DATAFILECOUNT=1 ISCURRENT=T MODELDATAFILEENTITY0=SOIC-8_3.9x4.9mm_P1.27mm MODELDATAFILEKIND0=PCBLib MODELNAME=SOIC-8_3.9x4.9mm_P1.27mm MODELTYPE=PCBLIB OWNERINDEX=15
+record46 OWNERINDEX=16
+record48 OWNERINDEX=16
+graphics record14: 1 #57c3c7f40a
+### library/models/SchLib/MMBT3904LT1G.SchLib:MMBT3904LT1G
+record1 ALLPINCOUNT=3 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=NPN transistor, pins 1=B, 2=E, 3=C CURRENTPARTID=1 DESIGNITEMID=MMBT3904LT1G DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=MMBT3904LT1G OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin 1 "B" etype=0 orient=2 at=(-10,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 2 "E" etype=4 orient=3 at=(10,-10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=59
+pin 3 "C" etype=4 orient=1 at=(10,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=57
+record34 COLOR=8388608 FONTID=1 LOCATION.X=-10 LOCATION.Y=14 LOCATION.Y_FRAC=10000 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=Q?
+record41 COLOR=8388608 FONTID=1 LOCATION.X=-10 LOCATION.Y=-19 LOCATION.Y_FRAC=-10000 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-10 LOCATION.Y=-29 LOCATION.Y_FRAC=-10000 NAME=Value OWNERPARTID=-1 TEXT=Q_NPN_BEC
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-10 LOCATION.Y=-39 LOCATION.Y_FRAC=-10000 NAME=Description OWNERPARTID=-1 TEXT=NPN transistor, pins 1=B, 2=E, 3=C
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-10 LOCATION.Y=-49 LOCATION.Y_FRAC=-10000 NAME=MPN OWNERPARTID=-1 TEXT=MMBT3904LT1G
+record44 
+record45 DATAFILECOUNT=1 ISCURRENT=T MODELDATAFILEENTITY0=SOT-23 MODELDATAFILEKIND0=PCBLib MODELNAME=SOT-23 MODELTYPE=PCBLIB OWNERINDEX=15
+record46 OWNERINDEX=16
+record48 OWNERINDEX=16
+graphics record6: 4 #e88f15e4d9
+graphics record7: 1 #331c782b8a
+graphics record8: 1 #b7bba8885b
+### library/models/SchLib/Resistor.SchLib:Resistor
+record1 ALLPINCOUNT=2 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Resistor CURRENTPARTID=1 DESIGNITEMID=Resistor DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=Resistor OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin 1 "" etype=4 orient=1 at=(0,10) length=5 part=1 mode=0 symbols=[0, 0, 0, 0] cong=49
+pin 2 "" etype=4 orient=3 at=(0,-10) length=5 part=1 mode=0 symbols=[0, 0, 0, 0] cong=51
+record34 COLOR=8388608 FONTID=1 LOCATION.X=-4 LOCATION.Y=13 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=R?
+record41 COLOR=8388608 FONTID=1 LOCATION.X=-4 LOCATION.Y=-18 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-4 LOCATION.Y=-28 NAME=Value OWNERPARTID=-1 TEXT=R
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-4 LOCATION.Y=-38 NAME=Description OWNERPARTID=-1 TEXT=Resistor
+record44 
+graphics record14: 1 #9f6e1490e0
+### library/models/SchLib/TPS62133RGTR.SchLib:TPS62133RGTR
+record1 ALLPINCOUNT=17 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=3-17V 3A step-down converter 3.3V VQFN-16 3x3mm with exposed pad CURRENTPARTID=1 DESIGNITEMID=TPS62133RGTR DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=TPS62133RGTR OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin 11 "PVIN" etype=7 orient=2 at=(-30,40) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 12 "PVIN" etype=7 orient=2 at=(-30,30) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 10 "AVIN" etype=7 orient=2 at=(-30,20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 13 "EN" etype=0 orient=2 at=(-30,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 9 "SS/TR" etype=0 orient=2 at=(-30,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 7 "FSW" etype=0 orient=2 at=(-30,-10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 8 "DEF" etype=0 orient=2 at=(-30,-20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 6 "AGND" etype=7 orient=2 at=(-30,-30) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 1 "SW" etype=2 orient=0 at=(30,40) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 2 "SW" etype=2 orient=0 at=(30,30) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 3 "SW" etype=2 orient=0 at=(30,20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 14 "VOS" etype=0 orient=0 at=(30,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 5 "FB" etype=0 orient=0 at=(30,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 4 "PG" etype=3 orient=0 at=(30,-10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 15 "PGND" etype=7 orient=0 at=(30,-20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 16 "PGND" etype=7 orient=0 at=(30,-30) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 17 "EP" etype=7 orient=0 at=(30,-40) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+record34 COLOR=8388608 FONTID=1 LOCATION.X=-30 LOCATION.Y=53 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=U?
+record41 COLOR=8388608 FONTID=1 LOCATION.X=-30 LOCATION.Y=-58 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-30 LOCATION.Y=-68 NAME=Value OWNERPARTID=-1 TEXT=TPS62133RGTR
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-30 LOCATION.Y=-78 NAME=KiCad Footprint OWNERPARTID=-1 TEXT=testpack:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-30 LOCATION.Y=-88 NAME=Description OWNERPARTID=-1 TEXT=3-17V 3A step-down converter 3.3V VQFN-16 3x3mm with exposed pad
+record44 
+record45 DATAFILECOUNT=1 ISCURRENT=T MODELDATAFILEENTITY0=VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm MODELDATAFILEKIND0=PCBLib MODELNAME=VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm MODELTYPE=PCBLIB OWNERINDEX=24
+record46 OWNERINDEX=25
+record48 OWNERINDEX=25
+graphics record14: 1 #3ef5a430d8
+### library/models/SchLib/TYPE-C-31-M-12.SchLib:TYPE-C-31-M-12
+record1 ALLPINCOUNT=17 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=USB 2.0 Type-C receptacle, 16 pins, SMD with THT shell pegs CURRENTPARTID=1 DESIGNITEMID=TYPE-C-31-M-12 DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=TYPE-C-31-M-12 OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin A4 "VBUS" etype=7 orient=2 at=(-40,40) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin A9 "VBUS" etype=7 orient=2 at=(-40,30) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin B4 "VBUS" etype=7 orient=2 at=(-40,20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin B9 "VBUS" etype=7 orient=2 at=(-40,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin A5 "CC1" etype=1 orient=2 at=(-40,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin B5 "CC2" etype=1 orient=2 at=(-40,-10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin A6 "D+" etype=1 orient=2 at=(-40,-20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin B6 "D+" etype=1 orient=2 at=(-40,-30) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin A7 "D-" etype=1 orient=2 at=(-40,-40) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin B7 "D-" etype=1 orient=2 at=(-40,-50) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin A8 "SBU1" etype=1 orient=0 at=(40,40) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin B8 "SBU2" etype=1 orient=0 at=(40,30) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin A1 "GND" etype=7 orient=0 at=(40,20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin A12 "GND" etype=7 orient=0 at=(40,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin B1 "GND" etype=7 orient=0 at=(40,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin B12 "GND" etype=7 orient=0 at=(40,-10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin SH "SHIELD" etype=4 orient=0 at=(40,-20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+record34 COLOR=8388608 FONTID=1 LOCATION.X=-40 LOCATION.Y=53 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=J?
+record41 COLOR=8388608 FONTID=1 LOCATION.X=-40 LOCATION.Y=-68 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-40 LOCATION.Y=-78 NAME=Value OWNERPARTID=-1 TEXT=TYPE-C-31-M-12
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-40 LOCATION.Y=-88 NAME=KiCad Footprint OWNERPARTID=-1 TEXT=testpack:USB_C_Receptacle_HRO_TYPE-C-31-M-12
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-40 LOCATION.Y=-98 NAME=Description OWNERPARTID=-1 TEXT=USB 2.0 Type-C receptacle, 16 pins, SMD with THT shell pegs
+record44 
+record45 DATAFILECOUNT=1 ISCURRENT=T MODELDATAFILEENTITY0=USB_C_Receptacle_HRO_TYPE-C-31-M-12 MODELDATAFILEKIND0=PCBLib MODELNAME=USB_C_Receptacle_HRO_TYPE-C-31-M-12 MODELTYPE=PCBLIB OWNERINDEX=24
+record46 OWNERINDEX=25
+record48 OWNERINDEX=25
+graphics record14: 1 #3f16ecf9c7

@@ -30,6 +30,31 @@ jobs:
           SOURCE_DATE_EPOCH: "1791936000"
         run: python -m tests.run_all
 
+  accuracy-gate:
+    # ecadlib eval gate: the 331-case eval set offline (standard parts + the committed synthetic replay pack, no network,
+    # no keys) against ecadlib/eval/baselines/kicad-v1.json. Fails when a family's pass rate drops more than 1 % or a
+    # passing case breaks. A deliberate change: `python -m ecadlib eval gate --update` and commit the baseline diff.
+    # (The golden output snapshots run in the test job: tests/test_evalgate.py.)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Accuracy gate (offline)
+        run: python -m ecadlib eval gate -o out/eval/gate
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: eval-gate-report-${{ matrix.python }}
+          path: out/eval/gate/report.md
+
   kicad:
     # Optional: the tests that need real KiCad (tests/test_kicad_real.py, and kicad_export's kicad-cli check). They skip
     # in the job above. Ubuntu's kicad package is KiCad 7; the PPA row runs them on KiCad 8 (the export's own format).

@@ -15,7 +15,7 @@ datasheet's own estimate, which is rough without a key); wall time. Claude modes
   estimate    no key and no --replay: nothing is sent; those parts are unresolved, with estimated tokens / USD
 Outputs: <out>/report.json, <out>/report.md, <out>/lib (the librarian's output: plan.json, review.md, models).
 compare: pass rate and cost per family side by side, and the cases that flipped (pass -> fail, fail -> pass)."""
-import csv, datetime, json, re, time
+import csv, datetime, hashlib, json, re, time
 from pathlib import Path
 
 from .. import altium_lib as AL, datasheet as D, footprint_bench as FB, librarian as L, rules as RU
@@ -106,7 +106,7 @@ class EvalReader(D.Reader):
             self.key = k
         return {"input_tokens": r["input_tokens"], "output_tokens": r["output_tokens"], "usd": r["usd"], "how": r["how"]}
 
-    def job(self, part, urls, package=None, pages=None, name=None):
+    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None):
         if self.replay:
             f = self.replay / f"{_safe(part)}.json"
             if not f.exists():
@@ -115,9 +115,9 @@ class EvalReader(D.Reader):
             j = rec["job"]
             job = {"key": f"replay-{_safe(part)}", "name": name or part, "part": part, "package": package, "url": j["url"],
                    "where": j["where"], "offset": j["offset"], "headers": {}, "body": {"max_tokens": D.MAX_TOKENS},
-                   "prov": j["prov"], "recording": rec}
+                   "prov": j["prov"], "recording": rec, "fp_needed": fp_needed}
         else:
-            job = super().job(part, urls, package, pages, name)
+            job = super().job(part, urls, package, pages, name, fp_needed)
         job["estimate"] = (job.get("recording") or {}).get("estimate") or self._estimate(job)
         self.used.setdefault(part, {"estimate": job["estimate"]})
         return job
@@ -131,6 +131,29 @@ class EvalReader(D.Reader):
         if res is not None:
             self.used[job["part"]]["via"] = "cached"
         return res
+
+    def check_message(self, job, model, headers, body, key, pages_sent=None):
+        """The cross-check's second read: replayed from the recording (never sent), or live and added to it."""
+        from .. import crosscheck as CC
+        rec = job.get("recording")
+        if self.replay:
+            got = (rec or {}).get("check")
+            if not got:
+                raise CC.Unavailable("no recorded second read")
+            msg, via = got["message"], "replay"
+        else:
+            msg, via = super().check_message(job, model, headers, body, key, pages_sent)
+        from .. import ds_route as DR
+        self.used.setdefault(job["part"], {})["check"] = {"model": DR.billed_model(model, msg), "usage": msg.get("usage")}
+        if self.replay:
+            return msg, via
+        if self.record and not rec:
+            f = self.record / f"{_safe(job['part'])}.json"
+            if f.exists():
+                r = json.loads(f.read_text(encoding="utf-8"))
+                r["check"] = {"model": model, "message": msg}
+                f.write_text(json.dumps(r, indent=1, default=str), encoding="utf-8")
+        return msg, via
 
     def read_now(self, job, _guarded=False):
         if self.replay:
@@ -191,6 +214,14 @@ def _cost(case_used, model):
             cost = None if cost is None or c is None else round(cost + c, 6)
         if earlier:
             how += f" + {len(earlier)} earlier answer{'s' if len(earlier) > 1 else ''}"
+        ck = case_used.get("check") or {}
+        if ck.get("usage"):                                       # the cross-check's second read (ecadlib.crosscheck)
+            cu = ck["usage"]
+            tin += cu.get("input_tokens", 0) + cu.get("cache_creation_input_tokens", 0) + cu.get("cache_read_input_tokens", 0)
+            tout += cu.get("output_tokens", 0)
+            c = usd(ck.get("model") or model, cu)
+            cost = None if cost is None or c is None else round(cost + c, 6)
+            how += " + cross-check read"
         return tin, tout, cost, how
     return est.get("input_tokens", 0), est.get("output_tokens", 0), est.get("usd"), f"estimate ({est.get('how', '')})"
 
@@ -217,15 +248,22 @@ def summarize(rows):
             fields[k][0] += f["ok"]
             fields[k][1] += 1
     shared = [r for r in rows if r.get("footprint_shared_with")]
-    return {"overall": agg(rows), "shared_footprints": {"cases": len(shared), "failing": sum(not r["pass"] for r in shared)}, "families": {k: agg(v) for k, v in sorted(fams.items())},
+    cc = {}
+    for r in rows:
+        if r.get("cross_check"):
+            cc[r["cross_check"]] = cc.get(r["cross_check"], 0) + 1
+    return {"cross_check": dict(sorted(cc.items())),"overall": agg(rows), "shared_footprints": {"cases": len(shared), "failing": sum(not r["pass"] for r in shared)}, "families": {k: agg(v) for k, v in sorted(fams.items())},
             "by_source": {k: agg(v) for k, v in sorted(srcs.items())},
             "fields": {k: {"ok": a, "of": b} for k, (a, b) in sorted(fields.items())}}
 
 
 def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=None, replay=None, sources=None,
         families=None, ids=None, offline=False, cache="out/http_cache", http=None, api_key=None, rules=None, providers=None,
-        tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None):
-    """provider / base_url / assist / api_key_env: the [ai] settings for this run (ecadlib.llm), so models from any
+        tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None, repeat=1):
+    """repeat: run the same cases again (into <out>/repeat-2 ...) and report how many parts gave the same files
+    (summary["consistency"]): from the recorded answers when there are any (--record / --replay: the code must be
+    deterministic), else live again (the model's own consistency; this pays again).
+    provider / base_url / assist / api_key_env: the [ai] settings for this run (ecadlib.llm), so models from any
     provider can be compared on the same set: e.g. provider="ollama", model="qwen2.5:7b" against the Claude default."""
     data = load_set(set_name)
     cases = select(data["cases"], families, ids, limit)
@@ -274,7 +312,12 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         tin, tout, cost, how = _cost(reader.used.get(c["mpn"]), reader.model)
         src = ((it.get("source") or {}).get("footprint") or "none").split(":")[0]
         shared = next((n[len("shared with "):] for n in (it.get("librarian") or {}).get("notes", []) if n.startswith("shared with ")), "")
+        files = {}                                    # what this run wrote for the part (consistency between runs)
+        for kind, rel in (("kicad_mod", fp), ("pcblib", (it.get("footprint") or {}).get("file")), ("schlib", sf)):
+            if rel and (lib / rel).exists():
+                files[kind] = file_fingerprint(lib / rel)
         rows.append({"id": c["id"], "family": c["family"], "mpn": c["mpn"], "footprint": c["footprint"], "pass": sc["pass"],
+                     "files": files, "cross_check": (it.get("cross_check") or {}).get("status", ""),
                      "source": src, "symbol_source": ((it.get("source") or {}).get("symbol") or "none").split(":")[0],
                      "errors": sc["errors"], "fields": sc["fields"], "tokens_in": tin, "tokens_out": tout, "usd": cost,
                      "cost_how": how, "footprint_shared_with": shared, "api_s": (reader.used.get(c["mpn"]) or {}).get("api_s"),
@@ -286,9 +329,52 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
                     "started": datetime.datetime.fromtimestamp(t0).isoformat(timespec="seconds"),
                     "wall_s": round(wall, 1), "wall_s_per_part": round(wall / len(rows), 3)},
            "summary": summarize(rows), "cases": rows}
+    for i in range(2, max(1, int(repeat or 1)) + 1):
+        again = run(set_name, out / f"repeat-{i}", limit, model, None, replay or record, sources, families, ids, offline, cache,
+                    http, api_key, rules, providers, tol, log, provider, base_url, assist, api_key_env)
+        c = consistency(rep, again)
+        prev = rep["summary"].get("consistency")
+        if prev is None or c["same"] < prev["same"]:
+            rep["summary"]["consistency"] = dict(c, runs=i)
     (out / "report.json").write_text(json.dumps(rep, indent=1, default=str), encoding="utf-8")
     (out / "report.md").write_text(report_md(rep), encoding="utf-8")
     return rep
+
+
+def file_fingerprint(path):
+    """sha256 (16 hex) of what a library file holds: a .kicad_mod's bytes; for .PcbLib / .SchLib the records read back
+    (altium_lib), so the write time in the Altium file header does not count as a different answer."""
+    p = Path(path)
+    try:
+        if p.suffix.lower() == ".pcblib":
+            data = json.dumps(AL.read_pcblib(p), sort_keys=True, default=str).encode()
+        elif p.suffix.lower() == ".schlib":
+            data = json.dumps(AL.read_schlib(p), sort_keys=True, default=str).encode()
+        else:
+            data = p.read_bytes()
+    except (OSError, ValueError):
+        data = p.read_bytes() if p.exists() else b""
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def consistency(a, b):
+    """Two runs of the same cases (reports, dirs or report.json files) -> how many parts gave the same files:
+    {cases, same, rate, from, differ: [{id, files}]}. A part with no files in both runs counts as the same answer."""
+    A, B = (x if isinstance(x, dict) else _load_report(x) for x in (a, b))
+    cb = {r["id"]: r for r in B["cases"]}
+    differ, n = [], 0
+    for r in A["cases"]:
+        o = cb.get(r["id"])
+        if o is None:
+            continue
+        n += 1
+        fa, fb = r.get("files") or {}, o.get("files") or {}
+        bad = sorted(k for k in set(fa) | set(fb) if fa.get(k) != fb.get(k))
+        if bad or r.get("cross_check", "") != o.get("cross_check", ""):
+            differ.append({"id": r["id"], "files": bad, "cross_check": [r.get("cross_check", ""), o.get("cross_check", "")]})
+    same = n - len(differ)
+    return {"cases": n, "same": same, "rate": round(same / n, 4) if n else None, "differ": differ,
+            "from": "recorded answers" if B["meta"].get("mode") == "replay" else B["meta"].get("mode")}
 
 
 def _pct(x):
@@ -311,6 +397,12 @@ def report_md(rep):
     for k, f in s["families"].items():
         md.append(f"| {k} | {f['cases']} | {f['pass']} | {_pct(f['rate'])} | "
                   + ", ".join(f"{a} {b}" for a, b in f["sources"].items()) + f" | {_usd(f['usd_per_part'])} |")
+    co = s.get("consistency")
+    if co:
+        md += ["", f"**Consistency:** {co['same']}/{co['cases']} parts gave the same files when run again ({co['from']}, "
+               f"{co['runs']} runs)" + (": differ " + ", ".join(d["id"] for d in co["differ"][:20]) if co["differ"] else ".")]
+    if s.get("cross_check"):
+        md += ["", "Cross-checks of datasheet reads: " + ", ".join(f"{k} {v}" for k, v in s["cross_check"].items()) + "."]
     sh = s.get("shared_footprints") or {}
     if sh.get("cases"):
         md += ["", f"{sh['cases']} parts got the footprint file of another part with the same BOM footprint name "
