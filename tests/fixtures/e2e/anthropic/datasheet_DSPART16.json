@@ -1,0 +1,26 @@
+{
+ "id": "msg_e2e_datasheet_DSPART16",
+ "type": "message",
+ "role": "assistant",
+ "model": "claude-opus-5-5",
+ "content": [
+  {
+   "type": "thinking",
+   "thinking": "",
+   "signature": "EqQBCkYIBxgCKkA="
+  },
+  {
+   "type": "text",
+   "text": "{\"package\": {\"name\": \"VQFN-16-1EP_3x3mm_P0.5mm_EP1.45x1.45mm\", \"description\": \"VQFN-16 3x3 mm, 0.5 mm pitch, exposed pad\", \"package_type\": \"qfn\", \"pin_count\": 16, \"pitch\": {\"label\": \"e\", \"min\": null, \"nom\": 0.5, \"max\": null, \"unit\": \"mm\", \"page\": 31, \"figure\": \"RGT0016C VQFN package outline\"}, \"body_length\": {\"label\": \"D\", \"min\": 2.9, \"nom\": 3.0, \"max\": 3.1, \"unit\": \"mm\", \"page\": 31, \"figure\": \"RGT0016C VQFN package outline\"}, \"body_width\": {\"label\": \"E\", \"min\": 2.9, \"nom\": 3.0, \"max\": 3.1, \"unit\": \"mm\", \"page\": 31, \"figure\": \"RGT0016C VQFN package outline\"}, \"lead_span\": null, \"terminal_length\": {\"label\": \"L\", \"min\": 0.3, \"nom\": 0.4, \"max\": 0.5, \"unit\": \"mm\", \"page\": 31, \"figure\": \"RGT0016C VQFN package outline\"}, \"terminal_width\": {\"label\": \"b\", \"min\": 0.18, \"nom\": 0.25, \"max\": 0.3, \"unit\": \"mm\", \"page\": 31, \"figure\": \"RGT0016C VQFN package outline\"}, \"height_max\": {\"label\": \"A\", \"min\": 0.8, \"nom\": null, \"max\": 1.0, \"unit\": \"mm\", \"page\": 31, \"figure\": \"RGT0016C VQFN package outline\"}, \"pins_left_right\": 4, \"pins_top_bottom\": 4, \"exposed_pad\": {\"length\": {\"label\": \"D2\", \"min\": null, \"nom\": 1.45, \"max\": null, \"unit\": \"mm\", \"page\": 32, \"figure\": \"RGT0016C VQFN package outline\"}, \"width\": {\"label\": \"E2\", \"min\": null, \"nom\": 1.45, \"max\": null, \"unit\": \"mm\", \"page\": 32, \"figure\": \"RGT0016C VQFN package outline\"}}, \"unresolved\": [], \"drawing\": \"RGT0016C\", \"inner_span\": null, \"rows\": null, \"cols\": null, \"pitch_y\": null, \"ball_diameter\": null, \"land_diameter\": null, \"ball_type\": null, \"land_style\": null, \"depopulated\": null, \"ball_map\": null, \"row_letters\": null, \"mount\": null, \"pin1_side\": null, \"drill\": null, \"same_net\": null, \"courtyard_excess\": null, \"pad_table\": null, \"lead_type\": null, \"polarized\": null, \"pin_positions\": null, \"tab\": null, \"lead_span_y\": null, \"land\": null}, \"pin_table\": {\"page\": 3, \"figure\": \"Table 1. Pin Functions\", \"rows\": 16}, \"pins\": [{\"num\": \"1\", \"name\": \"SW\", \"type\": \"output\", \"side\": \"right\", \"page\": 3}, {\"num\": \"2\", \"name\": \"SW\", \"type\": \"output\", \"side\": \"right\", \"page\": 3}, {\"num\": \"3\", \"name\": \"SW\", \"type\": \"output\", \"side\": \"right\", \"page\": 3}, {\"num\": \"4\", \"name\": \"PG\", \"type\": \"open_collector\", \"side\": \"right\", \"page\": 3}, {\"num\": \"5\", \"name\": \"FB\", \"type\": \"input\", \"side\": \"left\", \"page\": 3}, {\"num\": \"6\", \"name\": \"AGND\", \"type\": \"power\", \"side\": \"left\", \"page\": 3}, {\"num\": \"7\", \"name\": \"FSW\", \"type\": \"input\", \"side\": \"left\", \"page\": 3}, {\"num\": \"8\", \"name\": \"DEF\", \"type\": \"input\", \"side\": \"left\", \"page\": 3}, {\"num\": \"9\", \"name\": \"SS/TR\", \"type\": \"input\", \"side\": \"left\", \"page\": 3}, {\"num\": \"10\", \"name\": \"AVIN\", \"type\": \"power\", \"side\": \"left\", \"page\": 3}, {\"num\": \"11\", \"name\": \"PVIN\", \"type\": \"power\", \"side\": \"left\", \"page\": 3}, {\"num\": \"12\", \"name\": \"PVIN\", \"type\": \"power\", \"side\": \"left\", \"page\": 3}, {\"num\": \"13\", \"name\": \"EN\", \"type\": \"input\", \"side\": \"left\", \"page\": 3}, {\"num\": \"14\", \"name\": \"VOS\", \"type\": \"input\", \"side\": \"left\", \"page\": 3}, {\"num\": \"15\", \"name\": \"PGND\", \"type\": \"power\", \"side\": \"left\", \"page\": 3}, {\"num\": \"16\", \"name\": \"PGND\", \"type\": \"power\", \"side\": \"left\", \"page\": 3}, {\"num\": \"17\", \"name\": \"PGND\", \"type\": \"power\", \"side\": \"right\", \"page\": 3}], \"symbol_description\": \"DSPART16 synthetic 3 A buck converter, VQFN-16 (e2e fixture)\", \"notes\": [], \"embedded_instructions\": []}"
+  }
+ ],
+ "stop_reason": "end_turn",
+ "stop_sequence": null,
+ "stop_details": null,
+ "usage": {
+  "input_tokens": 912,
+  "cache_creation_input_tokens": 48210,
+  "cache_read_input_tokens": 0,
+  "output_tokens": 2304
+ }
+}

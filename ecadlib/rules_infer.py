@@ -1087,7 +1087,7 @@ def main(argv=None, inp=input):
     if not prop["settings"]:
         print("nothing to infer: point --from at your Altium/KiCad library folders, a DbLib, an Altium 365 export or a BOM")
     for s in prop["settings"]:
-        v = s["value"] if not isinstance(s["value"], (dict, list)) else json.dumps(s["value"])
+        v = json.dumps(s["value"]) if isinstance(s["value"], (dict, list)) else str(s["value"])   # pin_length is a number
         print(f"  {s['key']:<34} {v[:60]:<60} {s['level']:<6} {s['evidence'][0][:70] if s['evidence'] else ''}")
     choices = {}
     interactive = inp is not input or sys.stdin.isatty()

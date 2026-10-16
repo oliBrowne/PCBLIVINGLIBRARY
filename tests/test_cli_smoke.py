@@ -84,6 +84,7 @@ CASES = [
     (["stdparts", "coverage", "{in}/bom.csv"], (0,)),
     (["stdparts", "resolve", "SOT-23-5", "--kicad-mod", "{out}/sot.kicad_mod"], (0,)),
     (["stdparts", "bench", "--fixture", "{tests}/fixtures/stdparts_kicad_numbers.json.gz"], (0,)),
+    (["testpack", "--out", "{out}/testpack"], (0,)),
 ]
 HELP_ONLY = {"ui", "mcp", "a365", "project"}       # need a server / network / an Altium project: -h (and mcp below)
 
