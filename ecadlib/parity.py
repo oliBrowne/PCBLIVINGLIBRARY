@@ -1084,6 +1084,31 @@ def _print(rep, out):
              f"{c['database_errors']} differences" if rep.get("database_rows") else ""), file=out)
 
 
+def print_result(rep, stem, plan, t=None):
+    """Terminal view: a row per part (KiCad and Altium match / differ, with the first difference in plain words;
+    -v: what was compared and every difference), database rows, then the summary."""
+    from . import messages as M, term as TM
+    t = t or TM.Term()
+    rows = []
+    for p in rep["parts"]:
+        errs = [d for d in p["diffs"] if d["level"] == "error"]
+        st = {"match": "ready", "mismatch": "held"}.get(p["result"], "skipped")
+        word = {"match": "match", "mismatch": "differ"}.get(p["result"], p["result"])
+        first = M.explain(errs[0]["msg"])["text"] + (f" (+{len(errs) - 1} more)" if len(errs) > 1 else "") if errs else ""
+        rows.append([t.status(st, word), p["part"], first or (t.dim(", ".join(p["checked"])) if t.verbose else p.get("why", ""))])
+        if t.verbose:
+            rows += [["", "", ("" if d["level"] == "error" else "approx: ") + M.explain(d["msg"])["text"]] for d in p["diffs"][1 if errs else 0:]]
+    t.table(rows)
+    for d in rep["database"]:
+        t.write(f"  {t.status('held', 'database')}  {M.clean(d['msg'])}")
+    c = rep["counts"]
+    head = (f"KiCad and Altium: {c['match']} match, {c['mismatch']} differ" + (f", {c['skipped']} skipped" if c["skipped"] else "")
+            + (f"; database rows {rep['database_rows']['kicad']} KiCad / {rep['database_rows']['altium']} Altium, "
+               f"{c['database_errors']} differences" if rep.get("database_rows") else ""))
+    nxt = [(f"ecadlib parity {plan} -v", "every difference, part by part")] if c["mismatch"] else []
+    t.summary(head, written=[(str(stem.with_suffix(".md")), "parity report")], next=nxt)
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["survey"]:
@@ -1153,8 +1178,7 @@ def main(argv=None):
     if a.json:
         print(json.dumps(dict(rep, report=str(stem.with_suffix(".md"))), indent=2, default=str))
     else:
-        _print(rep, sys.stdout)
-        print(f"report {stem.with_suffix('.md')}")
+        print_result(rep, stem, a.plan)
     return 0 if rep["ok"] else 1
 
 

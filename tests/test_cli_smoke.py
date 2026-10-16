@@ -58,6 +58,7 @@ CASES = [
       "--include-held"], (0,)),
     (["dblib-sync", "{out}/lib/plan.json", "--to", "{out}/dbsync", "-o", "{out}/dbsync.json"], (0,)),
     (["resolve", "{out}/lib/plan.json", "--offline", "--cache", "{out}/cache", "list"], (0,)),
+    (["review", "--workspace", "{out}/ws", "--yes", "--offline"], (0, 2)),
     (["approve", "{out}/lib/plan.json", "status"], (0,)),
     (["dedupe", "{out}/lib/plan.json", "-o", "{out}/dedupe"], (0,)),
     (["datasheet", "estimate", "{out}/lib/plan.json"], (0, 1, 2)),
