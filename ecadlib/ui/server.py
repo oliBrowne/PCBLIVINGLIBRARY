@@ -34,6 +34,8 @@ ROUTES = {
     ("POST", "/api/logout"): "viewer", ("POST", "/api/account/password"): "viewer",
     ("GET", "/api/info"): "viewer", ("GET", "/api/specs"): "viewer", ("GET", "/api/rules"): "viewer",
     ("GET", "/api/job"): "viewer", ("GET", "/api/file"): "viewer",
+    ("GET", "/api/status"): "viewer",                      # workspace summary (Status card)
+    ("GET", "/api/doctor"): "admin",                       # setup check: tool paths, which API key names are set
     ("GET", "/api/triage/history"): "viewer", ("GET", "/api/triage/result"): "viewer",   # finished results: library data
     ("POST", "/api/footprint/preview"): "viewer", ("POST", "/api/approvals/status"): "viewer",
     ("POST", "/api/resolve/held"): "viewer",
@@ -71,8 +73,9 @@ class Jobs:
     """Long actions (triage looks parts up online, about a second per request) run in a thread; the page polls.
     Each job remembers who started it (team mode: only they and admins see it) and an optional key: a second job
     with the same key, e.g. the librarian on one BOM, is refused while the first runs."""
-    def __init__(self):
+    def __init__(self, root=None):
         self.jobs, self.ids, self.lock = {}, itertools.count(1), threading.Lock()
+        self.root = root
 
     def start(self, fn, *args, label="", owner=None, key=None):
         with self.lock:
@@ -97,7 +100,7 @@ class Jobs:
             except Exception as e:
                 if not isinstance(e, EXPECTED):
                     traceback.print_exc()
-                job["error"], job["state"] = _msg(e), "error"
+                job["error"], job["state"] = _msg(e, self.root), "error"
         threading.Thread(target=run, daemon=True).start()
         return {"job": jid}
 
@@ -111,8 +114,10 @@ class Jobs:
         return job and {k: v for k, v in job.items() if k != "key"}
 
 
-def _msg(e):
+def _msg(e, root=None):
     m = (e.args[0] if isinstance(e, KeyError) and e.args else str(e)) or type(e).__name__
+    if root:                                                # workspace paths as the person sees them: relative
+        m = str(m).replace(str(root) + os.sep, "").replace(str(root), "the workspace")
     return (m if isinstance(e, (ValueError, FileExistsError, PermissionError, KeyError)) else f"{type(e).__name__}: {m}")[:600]
 
 
@@ -174,7 +179,7 @@ class _DeadlineReader(io.RawIOBase):
 
 def make_handler(ws: Workspace, team=None):
     """team: a team.Team for team mode; None = local mode (unchanged single-user behaviour)."""
-    jobs = Jobs()
+    jobs = Jobs(ws.root)
     write_lock = threading.Lock()                          # one writer at a time in the workspace
 
     class H(BaseHTTPRequestHandler):
@@ -390,6 +395,10 @@ def make_handler(ws: Workspace, team=None):
                     return self._send(200, ws.example_specs())
                 if u.path == "/api/rules":
                     return self._send(200, ws.rules_info())
+                if u.path == "/api/status":
+                    return self._send(200, ws.status())
+                if u.path == "/api/doctor":
+                    return self._send(200, ws.doctor())
                 if u.path == "/api/triage/history":            # every finished triage, whoever ran it
                     return self._send(200, ws.triage_history())
                 if u.path == "/api/triage/result":
@@ -638,7 +647,7 @@ def make_handler(ws: Workspace, team=None):
             if not isinstance(e, EXPECTED):
                 traceback.print_exc()
             code = 409 if isinstance(e, FileExistsError) else 403 if isinstance(e, PermissionError) else 400
-            return self._send(code, {"error": _msg(e)})
+            return self._send(code, {"error": _msg(e, ws.root)})
 
     return H
 

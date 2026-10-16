@@ -238,6 +238,9 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
             it.pop("allow", None)
         if it["name"] in allow:
             it["allow"] = {"by": who, "date": today, "failures": [m for m in msgs if not m.startswith(UNFIXABLE)]}
+            for k in ("hold_reasons", "release_check"):     # the key order a librarian re-run writes: no plan.json churn
+                if k in it:
+                    it[k] = it.pop(k)
         covered = set((it.get("allow") or {}).get("failures", []))
         hard = [m for m in msgs if m.startswith(UNFIXABLE)]
         open_ = [m for m in msgs if m not in covered]

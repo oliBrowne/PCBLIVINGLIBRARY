@@ -90,7 +90,7 @@ def test_split_evidence_asks_one_question():
         assert RU.load(out)["naming"]["by_category"]["Resistors"] == "{cat3}_{package}_{value}_{tolerance}"
         # interactive: the person picks the second choice
         out2 = Path(d) / "two.toml"
-        answers = iter(["2"])
+        answers = iter(["", "", "", "", "", "2"])         # Enter for the 5 setup questions, then the 2nd naming choice
         assert quiet(I.main, ["--from", str(lib), "-o", str(out2)], inp=lambda *_: next(answers)) == 0
         assert RU.load(out2)["naming"]["by_category"]["Resistors"] == "{mpn}"
         assert "you chose this value" in out2.read_text()
@@ -107,9 +107,9 @@ def test_init_never_overwrites_without_confirmation():
         assert 'density = "M"' in prop and "Supplier PN" in prop
         log = io.StringIO()
         with contextlib.redirect_stdout(log):
-            rc = I.main(["--from", str(paths[0]), "-o", str(out)], inp=lambda *_: "n")
+            rc = I.main(["--from", str(paths[0]), "-o", str(out)], inp=lambda q, *_: "n" if q.startswith("replace") else "")
         assert rc == 1 and "-density = \"L\"" in log.getvalue() and out.read_text().startswith("# mine")   # diff shown
-        assert quiet(I.main, ["--from", str(paths[0]), "-o", str(out)], inp=lambda *_: "y") == 0
+        assert quiet(I.main, ["--from", str(paths[0]), "-o", str(out)], inp=lambda q, *_: "y" if q.startswith("replace") else "") == 0
         assert RU.load(out)["footprint"]["density"] == "M" and Path(str(out) + ".bak").read_text().startswith("# mine")
         assert quiet(I.main, ["--from", str(paths[0]), "-o", str(out), "--yes"]) == 0     # same again: nothing to do
         # --force replaces without asking; --json writes nothing
@@ -234,3 +234,19 @@ def test_propose_given_one_path_string():
                                           "params": {"name": "propose_rules", "arguments": args}})
         out = json.loads(call({"paths": str(paths[0])})["result"]["content"][0]["text"])
         assert out["paths"] == [str(paths[0])] and out["settings"] and not any("not found" in w for w in out["warnings"])
+
+
+def test_init_prints_a_numeric_setting():
+    """Regression (found by tests/test_e2e.py): `ecadlib init` over a library whose IC symbols have 100 mil pins
+    proposes symbols.pin_length = 100 (a number) and crashed printing it ('int' object is not subscriptable)."""
+    from ecadlib import kicad_import as K
+    src = Path(__file__).parent / "fixtures" / "e2e" / "kicad" / "kicad-symbols" / "MCU_ST_STM32F1.kicad_symdir"
+    chain, _ = K.load_symbol(str(src / "STM32F103C8Tx.kicad_sym"), None)
+    sym = K.convert_symbol(chain, "STM32F103C8T6", "LQFP-48", [], None, [])
+    with tempfile.TemporaryDirectory() as d:
+        AL.write_schlib(Path(d) / "MCU.SchLib", [sym])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            rc = I.main(["--from", d, "--yes", "-o", str(Path(d) / "ecadlib.toml")])
+        assert rc == 0, buf.getvalue()
+        assert any(ln.split()[:2] == ["symbols.pin_length", "100"] for ln in buf.getvalue().splitlines()), buf.getvalue()

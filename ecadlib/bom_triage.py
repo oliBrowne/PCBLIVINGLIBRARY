@@ -434,10 +434,14 @@ def main(argv=None):
     except ValueError as e:
         print(f"ecadlib triage: {e}", file=sys.stderr)
         return 2
+    from .firstrun import bom_hint
     try:
         lines, mapping = read_bom(a.bom, RU.bom_columns(rules), rules)
     except (ValueError, OSError) as e:                   # unreadable / headerless BOM: a message, not a traceback
-        print(f"cannot read BOM: {e}", file=sys.stderr)
+        print(f"cannot read BOM: {e}" + bom_hint(e), file=sys.stderr)
+        return 2
+    if not lines:
+        print(f"cannot read BOM: {a.bom}: the BOM has a header but no part rows" + bom_hint("no part rows"), file=sys.stderr)
         return 2
     index = KiCadIndex(a.lib)
     say = (lambda *x: None) if a.json else print

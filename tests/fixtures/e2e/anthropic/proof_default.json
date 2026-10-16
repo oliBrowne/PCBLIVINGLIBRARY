@@ -1,0 +1,26 @@
+{
+ "id": "msg_e2e_proof_default",
+ "type": "message",
+ "role": "assistant",
+ "model": "claude-opus-5-5",
+ "content": [
+  {
+   "type": "thinking",
+   "thinking": "",
+   "signature": "EqQBCkYIBxgCKkA="
+  },
+  {
+   "type": "text",
+   "text": "{\"verdict\": \"pass\", \"score\": 0.96, \"reason\": \"pitch, pads, pin 1 and pins match the drawing\", \"drawing_used\": \"D0008A\", \"datasheet_view\": \"top\", \"checks\": [{\"aspect\": \"pitch\", \"status\": \"match\", \"severity\": \"info\", \"expected\": \"as drawn\", \"found\": \"as drawn\", \"page\": 1, \"note\": \"\"}, {\"aspect\": \"pad_count\", \"status\": \"match\", \"severity\": \"info\", \"expected\": \"as drawn\", \"found\": \"as drawn\", \"page\": 1, \"note\": \"\"}, {\"aspect\": \"pad_numbering\", \"status\": \"match\", \"severity\": \"info\", \"expected\": \"as drawn\", \"found\": \"as drawn\", \"page\": 1, \"note\": \"\"}, {\"aspect\": \"pin1_location\", \"status\": \"match\", \"severity\": \"info\", \"expected\": \"as drawn\", \"found\": \"as drawn\", \"page\": 1, \"note\": \"\"}, {\"aspect\": \"view_orientation\", \"status\": \"match\", \"severity\": \"info\", \"expected\": \"as drawn\", \"found\": \"as drawn\", \"page\": 1, \"note\": \"\"}, {\"aspect\": \"body_size\", \"status\": \"match\", \"severity\": \"info\", \"expected\": \"as drawn\", \"found\": \"as drawn\", \"page\": 1, \"note\": \"\"}, {\"aspect\": \"pad_size\", \"status\": \"match\", \"severity\": \"info\", \"expected\": \"as drawn\", \"found\": \"as drawn\", \"page\": 1, \"note\": \"\"}, {\"aspect\": \"pin_count\", \"status\": \"match\", \"severity\": \"info\", \"expected\": \"as drawn\", \"found\": \"as drawn\", \"page\": 1, \"note\": \"\"}, {\"aspect\": \"pin_numbers\", \"status\": \"match\", \"severity\": \"info\", \"expected\": \"as drawn\", \"found\": \"as drawn\", \"page\": 1, \"note\": \"\"}, {\"aspect\": \"pin_names\", \"status\": \"match\", \"severity\": \"info\", \"expected\": \"as drawn\", \"found\": \"as drawn\", \"page\": 1, \"note\": \"\"}], \"embedded_instructions\": []}"
+  }
+ ],
+ "stop_reason": "end_turn",
+ "stop_sequence": null,
+ "stop_details": null,
+ "usage": {
+  "input_tokens": 21000,
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 0,
+  "output_tokens": 900
+ }
+}
