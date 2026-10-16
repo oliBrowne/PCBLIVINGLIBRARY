@@ -85,7 +85,11 @@ DIODE_ALIASES = {
 AMBIGUOUS = {"SOT233": "KiCad's SOT-23-3 is the 1.6 mm MO-178 body; distributors use SOT-23-3 for TO-236 SOT-23",
              "SOT223": "SOT-223: tab numbered 2 (SOT-223-3_TabPin2, regulators) or 4 (KiCad's SOT-223)",
              "SOT2233": "SOT-223: tab numbered 2 or 4", "TO261": "SOT-223: tab numbered 2 or 4", "TO261AA": "SOT-223: tab numbered 2 or 4",
-             "TSOT23": "TSOT-23 without a pin count", "TO92A": "TO-92 variant", "SOT23W": "wide SOT-23"}
+             "TSOT23": "TSOT-23 without a pin count", "TO92A": "TO-92 variant", "SOT23W": "wide SOT-23",
+             **{k: "KiCad has TO-252-2 and TO-252-2_TabPin1 (tab numbered 2 or 1): the part decides"
+                for k in ("TO2522", "TO252", "TO252AA", "DPAK")},
+             **{k: "KiCad has TO-263-2 and TO-263-2_TabPin1 (tab numbered 2 or 1): the part decides"
+                for k in ("TO2632", "TO263", "TO263AB", "D2PAK")}}
 # IC families from the name: generic table entries are '<FAM>-<n>[W][-1EP]_<a>x<b>mm_P<p>mm[_EP<x>x<y>mm]'
 NAME_RE = re.compile(r"^(?P<fam>[A-Z]+)-(?P<pins>\d+)(?P<w>W)?(?:-(?P<ep>\d)EP)?_(?P<a>[\d.]+)x(?P<b>[\d.]+)mm"
                      r"_P(?P<p>[\d.]+)mm(?:_EP(?P<ea>[\d.]*\d)x(?P<eb>[\d.]*\d)mm)?(?P<rest>_.+)?$")
@@ -317,9 +321,16 @@ def ic_package(text, defaults=True):
         return None, f"{a['fam']}-{a['pins']}{'W' if a['w'] else ''}{a['variant']}: a variant with pins removed, not the standard package"
     if not defaults and not a["body"]:
         return None, f"{a['fam']}-{a['pins']} in the description without a body size"
+    label = f"{a['fam']}-{a['pins']}" + ("W" if a["w"] else "")
+    # Never a guess: a wrong footprint skips the datasheet reader. The name must give the body (SO-14 is 3.9 or 5.3 mm,
+    # SOIC-16W 10.3 or 12.8 mm long, TDFN-12 3x3 at 0.4 or 0.5 mm) and, with an exposed pad, its size. MSOP-8 is the
+    # one family name JEDEC (MO-187-AA) gives a single body.
+    if not a["body"] and not a.get("body_w") and not (a["fam"] == "MSOP" and a["pins"] == 8 and not a["ep"]):
+        return None, f"{label}: no body size in the name (several bodies share it)"
+    if (a["ep"] or a["fam"] in NO_LEAD) and not a["epsize"]:
+        return None, f"{label}: no exposed-pad size in the name; give e.g. _EP2.1x2.1mm"
     a = _defaults(a) if defaults else dict(a, fam="SOIC" if a["fam"] == "SO" else a["fam"])
     c = _candidates(a)
-    label = f"{a['fam']}-{a['pins']}" + ("W" if a["w"] else "")
     if not c and a["fam"] in NO_LEAD:                     # VQFN/WQFN/...: same land as QFN, height differs
         for fam in ("QFN", "DFN") if a["fam"] not in ("QFN", "DFN") else ():
             c = _candidates(dict(a, fam=fam))
@@ -537,6 +548,8 @@ def symbol_kind(kind, mpn, fp_name, description=""):
             return None, "chip-size D part: LED or diode is not stated (footprint is the same)"
         sub = "D_Zener" if re.search(r"zener|BZX|BZT|MMSZ|\bZD", d, re.I) else "D_TVS" if re.search(r"\bTVS\b|transient|SMAJ|SMBJ|SMCJ|P6KE|ESD", d, re.I) \
             else "D_Schottky" if re.search(r"schottky|\bBAT\d|\bSS\d|\bB5\d|\bMBR|\bSK\d|\bSB\d|1N58[1-9]", d, re.I) else "D"
+        if sub == "D_TVS":     # KiCad's D_TVS is bidirectional (A1/A2); the MPN does not reliably say which kind it is
+            return None, "TVS diode: uni- or bidirectional is not certain from the MPN; symbol left to the other sources"
         return sub, "2-pin diode, pin 1 = cathode"
     m = re.sub(r"[^A-Z0-9]", "", str(mpn or "").upper())
     for rx, pk, (what, pins) in FAMILY:
