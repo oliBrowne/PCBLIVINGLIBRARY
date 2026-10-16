@@ -90,7 +90,7 @@ def test_split_evidence_asks_one_question():
         assert RU.load(out)["naming"]["by_category"]["Resistors"] == "{cat3}_{package}_{value}_{tolerance}"
         # interactive: the person picks the second choice
         out2 = Path(d) / "two.toml"
-        answers = iter(["2"])
+        answers = iter(["", "", "", "", "", "2"])         # Enter for the 5 setup questions, then the 2nd naming choice
         assert quiet(I.main, ["--from", str(lib), "-o", str(out2)], inp=lambda *_: next(answers)) == 0
         assert RU.load(out2)["naming"]["by_category"]["Resistors"] == "{mpn}"
         assert "you chose this value" in out2.read_text()
@@ -107,9 +107,9 @@ def test_init_never_overwrites_without_confirmation():
         assert 'density = "M"' in prop and "Supplier PN" in prop
         log = io.StringIO()
         with contextlib.redirect_stdout(log):
-            rc = I.main(["--from", str(paths[0]), "-o", str(out)], inp=lambda *_: "n")
+            rc = I.main(["--from", str(paths[0]), "-o", str(out)], inp=lambda q, *_: "n" if q.startswith("replace") else "")
         assert rc == 1 and "-density = \"L\"" in log.getvalue() and out.read_text().startswith("# mine")   # diff shown
-        assert quiet(I.main, ["--from", str(paths[0]), "-o", str(out)], inp=lambda *_: "y") == 0
+        assert quiet(I.main, ["--from", str(paths[0]), "-o", str(out)], inp=lambda q, *_: "y" if q.startswith("replace") else "") == 0
         assert RU.load(out)["footprint"]["density"] == "M" and Path(str(out) + ".bak").read_text().startswith("# mine")
         assert quiet(I.main, ["--from", str(paths[0]), "-o", str(out), "--yes"]) == 0     # same again: nothing to do
         # --force replaces without asking; --json writes nothing

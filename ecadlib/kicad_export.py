@@ -656,8 +656,13 @@ def main(argv=None):
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
     ap.add_argument("--rules", help="library rules file: house parameter names (default: ecadlib.toml found from the plan)")
+    ap.add_argument("--json", action="store_true", help="print the export report as JSON instead of the log")
     a = ap.parse_args(argv)
-    rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60), rules=a.rules)
+    rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60), rules=a.rules,
+                 log=(lambda *x, **k: None) if a.json else print)
+    if a.json:
+        print(json.dumps(rep, default=str))
+        return 1 if rep["errors"] else 0
     for r in rep["parts"]:
         print(f"  {r['symbol_name']:<28} fp={r['footprint'] or '-':<40} sym={r['symbol'] or 'FAILED'}")
         for n in r["notes"]:
@@ -671,6 +676,9 @@ def main(argv=None):
         print(f"  ERROR {e}")
     print(f"{rep['symbols']} symbols, {len(rep['footprints'])} footprints, {sum(1 for v in rep['models'].values() if v)}/{len(rep['models'])} STEP models "
           f"-> {Path(a.out) / (rep['library'] + '.kicad_sym')}; {len(rep['skipped'])} held parts skipped")
+    print(f"wrote {Path(a.out)}/: {rep['library']}.kicad_sym, {rep['library']}.pretty/, sym-lib-table, fp-lib-table "
+          f"(the tables use ${{KIPRJMOD}}: copy this folder's contents into your KiCad project folder, or add the library "
+          f"in Preferences > Manage Symbol / Footprint Libraries)")
     return 1 if rep["errors"] else 0
 
 
