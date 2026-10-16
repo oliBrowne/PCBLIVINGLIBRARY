@@ -24,7 +24,7 @@ REF_CLASS = {"R": "Resistors", "C": "Capacitors", "L": "Inductors", "D": "Diodes
 CAT_REF = {"Resistors": "R", "Capacitors": "C", "Inductors": "L", "Diodes": "D", "Transistors": "Q", "Crystals": "Y",
            "Connectors": "J", "ICs": "U", "Misc": "U"}
 PASSIVES = ("Resistors", "Capacitors", "Inductors")          # the categories with a generic symbol and a synthetic name
-SOURCES = ("kicad", "easyeda", "datasheet")
+SOURCES = ("kicad", "easyeda", "standard", "datasheet")   # standard: ecadlib.stdparts (offline, before Claude)
 FIELDS = ("mpn", "manufacturer", "value", "package", "metric", "category", "cat3", "ref", "tolerance", "voltage",
           "dielectric", "power", "description")
 FP_FIELDS = ("kicad", "package", "metric", "ref", "cat3", "density", "pins")
