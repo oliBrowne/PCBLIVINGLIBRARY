@@ -43,7 +43,10 @@ def _export(with_model=True):
         (out / "lib.3dshapes").mkdir(exist_ok=True)
         (out / "lib.3dshapes" / "SOIC-8.step").write_text(SG.generate(spec)[0])
         fp = out / "lib.pretty" / "SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod"
-        t = fp.read_text().rstrip()
+        (out / "lib.3dshapes" / "SOIC-8_3.9x4.9mm_P1.27mm.step").unlink(missing_ok=True)
+        from ecadlib import sexpr                # replace the model kicad-export took from the .PcbLib by this one
+        tree = sexpr.parse(fp.read_text(), keep_quotes=True)
+        t = sexpr.dumps([c for c in tree if not (isinstance(c, list) and c[:1] == ["model"])]).rstrip()
         fp.write_text(t[:-1] + '\t(model "${KIPRJMOD}/lib.3dshapes/SOIC-8.step"\n\t\t(offset (xyz 0 0 0))\n'
                       '\t\t(scale (xyz 1 1 1))\n\t\t(rotate (xyz 0 0 0))\n\t)\n)\n')
     return plan, out, rep
@@ -250,14 +253,14 @@ def test_pcm_installed_library_resolves_in_kicad():
     (empty / ver).mkdir(parents=True)
     ctl = job(base / "b2", dict(env, KICAD_CONFIG_HOME=str(empty)))            # control: without the PCM rows ...
     assert all(ctl.get(f"PCM_lib:{n}") for _, n, _ in fps), ctl                  # ... KiCad finds none of them
-    solids = (exp / "lib.3dshapes" / "SOIC-8.step").read_text().count("MANIFOLD_SOLID_BREP(")
+    solids = sum(f.read_text().count("MANIFOLD_SOLID_BREP(") for f in (exp / "lib.3dshapes").glob("*.step"))
 
     def step(env):
         r = subprocess.run([R.kicad_cli(), "pcb", "export", "step", got["_board"], "-o", str(base / "b.step"), "-f"],
                            capture_output=True, text=True, timeout=600, env=env)
         assert r.returncode == 0, r.stdout + r.stderr
         return (base / "b.step").read_text(errors="replace").count("MANIFOLD_SOLID_BREP(")
-    assert step(env) == solids + 1                                               # the model through ${KICADn_3RD_PARTY}
+    assert step(env) == solids + 1                                               # every model through ${KICADn_3RD_PARTY}
     assert step(dict(env, **{KP.third_party_var(major): str(base / "nowhere")})) == 1     # control: board only
 
 

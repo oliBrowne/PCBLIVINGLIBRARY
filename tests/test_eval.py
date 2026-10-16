@@ -188,12 +188,15 @@ def test_record_then_replay_gives_the_same_report():
         with TB.patched(api), mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": TB.KEY}):
             rep = R.run(mini_set(d), Path(d) / "live", cache=Path(d) / "cache", http=TB.PdfHTTP(pdfs), log=lambda *a: None,
                         record=Path(d) / "rec", model="claude-sonnet-5-5")
-        assert len(api.of("/v1/messages")) == 2 and rep["meta"]["mode"] == "live, recording"
+        # 2 reads + the cross-check's second read for QFNPART (its EP1.68 package is not in the standard table;
+        # SOICPART is checked against the table for free)
+        assert len(api.of("/v1/messages")) == 3 and rep["meta"]["mode"] == "live, recording"
         assert api.of("/v1/messages")[0][3]["model"] == "claude-sonnet-5-5"
         assert sorted(p.name for p in (Path(d) / "rec").iterdir()) == ["QFNPART.json", "SOICPART.json"]
         live = {c["mpn"]: c for c in rep["cases"]}
-        assert all(c["pass"] and c["cost_how"] == "API usage" for c in live.values()), [c["errors"] for c in live.values()]
-        assert live["QFNPART"]["usd"] == R.usd("claude-opus-5-5", TD.message(TD.GOOD)["usage"])   # priced as the served model
+        assert all(c["pass"] for c in live.values()) and live["SOICPART"]["cost_how"] == "API usage", [c["errors"] for c in live.values()]
+        assert live["QFNPART"]["cost_how"] == "API usage + cross-check read"
+        assert live["QFNPART"]["usd"] == 2 * R.usd("claude-opus-5-5", TD.message(TD.GOOD)["usage"])   # priced as the served model
         rec = json.loads((Path(d) / "rec" / "QFNPART.json").read_text())
         assert rec["job"]["prov"]["sha256"] and rec["estimate"]["how"].startswith("rough")
         n = len(api.calls)
@@ -331,13 +334,15 @@ def test_eval_cost_counts_every_answer_of_the_route_and_replays_it():
         with TB.patched(api), mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": TB.KEY}):
             rep = R.run(mini_set(d), Path(d) / "live", cache=Path(d) / "cache", http=TB.PdfHTTP(pdfs), log=lambda *a: None,
                         record=Path(d) / "rec", rules=rules, sources=["datasheet"])
-        assert [m for m, _ in api.sent] == [TR.SONNET, TR.OPUS] * 2, api.sent
+        assert [m for m, _ in api.sent] == [TR.SONNET, TR.OPUS] * 2 + [TR.OPUS], api.sent   # + QFNPART's cross-check read
         u = TD.message(TD.GOOD)["usage"]
         want = R.usd(TR.SONNET, u) + R.usd(TR.OPUS, u)
         live = {c["mpn"]: c for c in rep["cases"]}
         for c in live.values():
-            assert c["pass"] and abs(c["usd"] - want) < 1e-6 and c["cost_how"] == "API usage + 1 earlier answer", c
-            assert c["tokens_out"] == 2 * 2304
+            chk = c["mpn"] == "QFNPART"                       # its cross-check read counts too
+            assert c["pass"] and abs(c["usd"] - want - (R.usd(TR.OPUS, u) if chk else 0)) < 1e-6, c
+            assert c["cost_how"] == "API usage + 1 earlier answer" + (" + cross-check read" if chk else ""), c
+            assert c["tokens_out"] == (3 if chk else 2) * 2304
         rep2 = run(d, "replayed", replay=Path(d) / "rec", sources=["datasheet"])
         assert [(c["id"], c["pass"], c["usd"], c["tokens_in"]) for c in rep2["cases"]] == \
                [(c["id"], c["pass"], c["usd"], c["tokens_in"]) for c in rep["cases"]]

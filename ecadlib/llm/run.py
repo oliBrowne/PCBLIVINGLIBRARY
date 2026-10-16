@@ -6,7 +6,7 @@
 A frontier model with PDF input and JSON-schema output on Anthropic gets job["body"] exactly as datasheet.build_request
 made it (the same bytes as before this module existed); the only support it may add is a second turn after an answer
 that fails datasheet's checks (feedback_retry), sent as the same request with the answer and the errors appended."""
-from . import endpoint, key_for, register, profiles as PR, rails as R
+from . import _ai, endpoint, key_for, register, profiles as PR, rails as R, sampling as SM
 
 _INFO = {}
 
@@ -18,7 +18,7 @@ def info(ref, rules=None, section="datasheet", key=None, get=None, post=None):
         prof = PR.resolve(ep, rules, key_for(ep, key) if ep["provider"] != "anthropic" else None, get, post)
         plan = R.plan(prof, ep["assist"], ep["feedback_retry"])
         register(ep["ref"], ep, prof)
-        _INFO[k] = {"ep": ep, "prof": prof, "plan": plan}
+        _INFO[k] = {"ep": ep, "prof": prof, "plan": plan, "sampling": SM.params(ep, prof, _ai(rules).get("temperature"))}
     return _INFO[k]
 
 
@@ -47,6 +47,10 @@ def ask(job, inf, send, judge, client=None, allow_feedback=True):
                       ("tier", "pdf", "vision", "json_schema", "context", "source", "detect") if prof.get(k) is not None},
                       "rails": list(p["rails"]), "endpoint": inf["ep"]["name"], "provider": inf["ep"]["provider"]}
     fb = allow_feedback and "feedback_retry" in p["rails"]
+    smp = inf.get("sampling") or {}
+    if smp:                                           # temperature / seed where the model takes them (llm.sampling)
+        send = (lambda b, _send=send: _send({**b, **smp}))
+        rec["sampling"] = dict(smp)
     if "split_steps" in p["rails"]:
         ext, usage, steps, ctx = R.run_steps(client, job["body"], prof, p, job["part"], job["package"], notes)
         served = next((s.get("model_served") for s in steps if s.get("model_served")), None)
@@ -79,7 +83,7 @@ def ask(job, inf, send, judge, client=None, allow_feedback=True):
         rec["notes"] = notes
     if msg.get("ecadlib", {}).get("repair"):
         rec["repair"] = msg["ecadlib"]["repair"]
-    if p["guided"] or rec.get("feedback"):
+    if p["guided"] or rec.get("feedback") or smp:
         msg = dict(msg, ecadlib=rec)
     return msg
 

@@ -77,7 +77,8 @@ DEFAULTS = {
     "footprint": {"density": "N", "pin1": ["1", "A1"]},
     "sources": {"order": list(SOURCES)},
     "bom": {"columns": {}},                    # ecadlib field (mpn, manufacturer, value, ...) -> your BOM header
-    "release": {"approvals": {}},              # same keys as approvals.json; used when there is no approvals.json
+    "release": {"approvals": {},               # same keys as approvals.json; used when there is no approvals.json
+                "parity": "hold"},             # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
     "altium365": {"workspace": ""},
     "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "sourcing", "a365"],   # ecadlib.upkeep
                "price_jump_pct": 20.0, "build_qty": 1, "currency": "USD"},
@@ -86,7 +87,9 @@ DEFAULTS = {
                   "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40,
                   # ecadlib.ds_route: pages and model per part (route = "single": `model` for every part, as before)
                   "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
-                  "escalate": True, "max_attempts": 4},
+                  "escalate": True, "max_attempts": 4,
+                  # ecadlib.crosscheck: a second source (standard table / a second read) before a footprint is accepted
+                  "cross_check": "auto", "cross_check_model": ""},
     "symbols": {                               # ecadlib.symbol_layout: grouped pins for big IC symbols
         "layout_pins": 40,                     # parts with at least this many pins get grouped (0 = never)
         "split_pins": 0,                       # parts with more pins than this become multi-part (0 = never)
@@ -210,6 +213,12 @@ def load(path=None, start="."):
         if not f:
             return dict(copy.deepcopy(DEFAULTS), _file="")
         raw, where = parse_text(f.read_text(encoding="utf-8"), f.name), str(f)
+    if isinstance(raw, dict) and "schema_version" in raw:      # ecadlib/migrate.py: a file from a newer ecadlib is refused
+        from . import migrate as MG
+        try:
+            raw = MG.check_key("rules", raw, where)
+        except MG.SchemaTooNew as e:
+            raise RulesError(str(e)) from None
     validate(raw, where)
     out = merge(DEFAULTS, {k: v for k, v in raw.items() if not k.startswith("_")})
     out["_file"] = "" if isinstance(path, dict) else where
@@ -242,7 +251,7 @@ def validate(raw, where="ecadlib.toml"):
     if not isinstance(raw, dict):
         raise RulesError(f"{where}: expected a table of sections")
     for sec, val in raw.items():
-        if sec.startswith("_"):
+        if sec.startswith("_") or sec == "schema_version":    # schema_version: the file's format (ecadlib/migrate.py)
             continue
         if sec not in DEFAULTS:
             _err(where, f"[{sec}]", f"is not a known section; known: {', '.join(DEFAULTS)}")
@@ -336,12 +345,20 @@ def validate(raw, where="ecadlib.toml"):
         if not _LL.MODEL_RE.fullmatch(str(m)):
             _err(where, "datasheet.ladder", f"has {m!r}: must be model ids such as claude-haiku-5-5 (or endpoint:model "
                                             "for an [ai.endpoints] entry), cheapest first")
+    if "cross_check" in ds and ds["cross_check"] not in ("auto", "always", "off"):
+        _err(where, "datasheet.cross_check", f"= {ds['cross_check']!r}: must be auto (standard table, else a second read), "
+                                             "always (a second read for every part) or off")
+    if ds.get("cross_check_model") and not _LL.MODEL_RE.fullmatch(str(ds["cross_check_model"])):
+        _err(where, "datasheet.cross_check_model", f"= {ds['cross_check_model']!r}: must be a model id (or endpoint:model); "
+                                                   "\"\" = the model whose answer is checked")
     if "ladder" in ds and isinstance(ds["ladder"], list) and not ds["ladder"]:
         _err(where, "datasheet.ladder", "must name at least one model")
     st = raw.get("setup") or {}
     if "tool" in st and st["tool"] not in ("altium", "kicad", "both"):
         _err(where, "setup.tool", f"= {st['tool']!r}: must be altium, kicad or both")
     _LL.validate(where, raw.get("ai"), [("datasheet", ds), ("agent.proof", (raw.get("agent") or {}).get("proof"))], _err)
+    if "parity" in (raw.get("release") or {}) and raw["release"]["parity"] not in ("hold", "warn", "off"):
+        _err(where, "release.parity", f"= {raw['release']['parity']!r}: must be hold, warn or off")
     if (raw.get("release") or {}).get("approvals"):
         from .approvals import normalize_policy
         try:
@@ -797,6 +814,7 @@ HELP = {
     "sources": "Where missing symbols and footprints are looked for, in order",
     "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header, or field = [\"header\", \"alias\"])",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
+    "release.parity": "hold | warn | off: a part whose KiCad and Altium files differ (pads, drills, courtyard, 3D, pins) is held",
     "sim": "Parasitics for the built-in passive simulation models (sim-models), e.g. capacitor_esr = \"10m\"",
     "datasheet": "Claude datasheet reader (ecadlib datasheet / librarian): model, effort, which environment variable holds the "
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",
@@ -809,6 +827,12 @@ HELP = {
     "datasheet.ladder": "models for route = \"ladder\", cheapest first",
     "datasheet.escalate": "retry with more pages / the next model when the answer is incomplete or fails the checks",
     "datasheet.max_attempts": "most answers paid for per part (first try included)",
+    "datasheet.cross_check": "auto: compare every datasheet footprint with the standard package table, or (not in the table) "
+                             "with a second read of only the critical numbers; disagreement holds the part | always: the "
+                             "second read for every datasheet part | off",
+    "datasheet.cross_check_model": "model for the second read (\"\" = the model whose answer is checked; endpoint:model works)",
+    "ai.temperature": "auto: temperature 0 (+ seed) where the model takes one; Claude 4.7+/5.x reject it and get nothing | "
+                      "off | a number 0-2",
     "agent.proof": "Claude visual proof (ecadlib visual-check): model, effort, api_key_env (empty = [datasheet]), max_cost_usd per "
                    "check (0 = no cap), fail_on (mismatch severities that fail a part), max_pages, dpi of the datasheet pages",
     "ai": "Bring your own model (ecadlib.llm): provider = anthropic (default) | openai-compatible | openai | openrouter | "

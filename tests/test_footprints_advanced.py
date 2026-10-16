@@ -239,6 +239,27 @@ def _table_spec(table, **kw):
     return dict({"name": "T", "package_type": "connector", "pin_count": 4, "pad_table": table}, **kw)
 
 
+def test_single_letter_pad_names_are_pins_not_mounting_pads():
+    """H and S name BGA/LGA ball rows, audio-jack contacts (S = sleeve) and rotary-encoder switch pins (S1, S2); they
+    used to be read as mounting (H) and shield (S) pads unless other JEDEC rows were present, so a two-row LGA of H/S
+    balls had no pins at all. Only MP / SH (KiCad's names) and the spelled-out words are not pins."""
+    lga = {"unit": "mm", "y_axis": "down", "origin": "center",
+           "pads": [{"number": f"{r}{c}", "x": (c - 1.5) * 1.0, "y": y, "d": 0.5} for r, y in (("H", -0.5), ("S", 0.5)) for c in (1, 2)]}
+    pads = A.table_layout(_table_spec(lga, package_type="custom"))[0]
+    assert {p["num"]: p["role"] for p in pads} == {"H1": "pin", "H2": "pin", "S1": "pin", "S2": "pin"}
+    assert not [c for c in A.check_pad_table(_table_spec(lga, package_type="custom")) if c["rule"] == "count"]
+    enc = {"unit": "mm", "y_axis": "down", "origin": "center", "pads": [
+        {"number": n, "x": x, "y": y, "d": 1.8, "type": "tht", "drill": 1.0} for n, x, y in
+        (("A", -2.5, 7.5), ("C", 0, 7.5), ("B", 2.5, 7.5), ("S1", -2.5, -7), ("S2", 2.5, -7))] +
+        [{"number": "MP", "x": x, "y": 0, "w": 2.0, "h": 3.0, "type": "tht", "drill": 1.5} for x in (-5.7, 5.7)] +
+        [{"number": "SH", "x": 0, "y": -9.5, "d": 2.0, "type": "tht", "drill": 1.2}]}
+    roles = {p["num"]: p["role"] for p in A.table_layout(_table_spec(enc, pin_count=5))[0]}
+    assert roles == {"A": "pin", "C": "pin", "B": "pin", "S1": "pin", "S2": "pin", "MP": "mount", "SH": "shield"}, roles
+    for n, role in (("MP", "mount"), ("MP3", "mount"), ("SH2", "shield"), ("MH1", "mount"), ("NPTH", "mount"),
+                    ("H1", "pin"), ("S", "pin"), ("H", "pin"), ("T", "pin"), ("", "mount")):
+        assert A._role({"number": n}) == role, (n, A._role({"number": n}))
+
+
 def _pads(spec):
     _, rep = build(spec)
     return sorted((p["num"], round(p["x"], 4), round(p["y"], 4), round(p["w"], 4), round(p["h"], 4)) for p in rep["pads"])

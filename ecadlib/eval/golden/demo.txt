@@ -1,0 +1,379 @@
+### kicad/demo_bom_demo/ecadlib_demo.kicad_sym:AMS1117-3.3
+(pin_names (offset 1.016))
+(exclude_from_sim no)
+(in_bom yes)
+(on_board yes)
+property Reference=U at=(at -5.08 3.302 0)
+property Value=AMS1117-3.3 at=(at -5.08 -7.112 0)
+property Footprint=ecadlib_demo:SOT-223-3_TabPin2 at=(at 0 0 0) hidden
+property Datasheet=https://www.lcsc.com/datasheet/C6186.pdf at=(at 0 0 0) hidden
+property Description="LDO 3.3V 1A SOT-223" at=(at 0 0 0) hidden
+property MPN=AMS1117-3.3 at=(at 0 0 0) hidden
+property Manufacturer="Advanced Monolithic Systems" at=(at 0 0 0) hidden
+property "LCSC URL"=https://www.lcsc.com/product-detail/C6186.html at=(at 0 0 0) hidden
+property LCSC=C6186 at=(at 0 0 0) hidden
+graphics rectangle unitAMS1117-3.3_1_1: 1 bbox(-5.08,-5.08,5.08,2.54) #8a5ebe5bd1
+pin 1 GND power_in line unit=AMS1117-3.3_1_1 at=(at 0 -7.62 90) length=2.54
+pin 2 VO power_in line unit=AMS1117-3.3_1_1 at=(at 7.62 0 180) length=2.54
+pin 3 VI power_in line unit=AMS1117-3.3_1_1 at=(at -7.62 0 0) length=2.54
+### kicad/demo_bom_demo/ecadlib_demo.kicad_sym:AO3401A
+(pin_names (offset 1.016))
+(exclude_from_sim no)
+(in_bom yes)
+(on_board yes)
+property Reference=Q at=(at -2.54 3.5814 0)
+property Value=AO3401A at=(at -2.54 -4.8514 0)
+property Footprint=ecadlib_demo:SOT-23 at=(at 0 0 0) hidden
+property Datasheet=https://www.lcsc.com/datasheet/C15127.pdf at=(at 0 0 0) hidden
+property Description="P-MOSFET -30V -4A SOT-23" at=(at 0 0 0) hidden
+property MPN=AO3401A at=(at 0 0 0) hidden
+property Manufacturer="Alpha & Omega Semiconductor" at=(at 0 0 0) hidden
+property "LCSC URL"=https://www.lcsc.com/product-detail/C15127.html at=(at 0 0 0) hidden
+property LCSC=C15127 at=(at 0 0 0) hidden
+graphics circle unitAO3401A_1_1: 1 bbox(1.27,0,1.27,0) #b21e6b72b2
+graphics polyline unitAO3401A_1_1: 9 bbox(-2.54,-2.54,2.54,2.54) #565bf8eda7
+pin 1 G input line unit=AO3401A_1_1 at=(at -5.08 0 0) length=2.54
+pin 2 S passive line unit=AO3401A_1_1 at=(at 2.54 -5.08 90) length=2.54
+pin 3 D passive line unit=AO3401A_1_1 at=(at 2.54 5.08 270) length=2.54
+### kicad/demo_bom_demo/ecadlib_demo.kicad_sym:CAP-0402-100nF
+(pin_names (offset 1.016) hide)
+(exclude_from_sim no)
+(in_bom yes)
+(on_board yes)
+property Reference=C at=(at -2.032 1.778 0)
+property Value=100nF at=(at -2.032 -3.048 0)
+property Footprint=ecadlib_demo:C_0402_1005Metric at=(at 0 0 0) hidden
+property Datasheet=https://www.lcsc.com/datasheet/C1525.pdf at=(at 0 0 0) hidden
+property Description="Capacitor 100nF 16V X7R 0402" at=(at 0 0 0) hidden
+property Manufacturer="Samsung Electro-Mechanics" at=(at 0 0 0) hidden
+property MPN=CL05B104KO5NNNC at=(at 0 0 0) hidden
+property "LCSC URL"=https://www.lcsc.com/product-detail/C1525.html at=(at 0 0 0) hidden
+property LCSC=C1525 at=(at 0 0 0) hidden
+graphics polyline unitCAP-0402-100nF_1_1: 2 bbox(-2.032,-0.762,2.032,0.762) #d6a2061611
+pin 1 "~" passive line unit=CAP-0402-100nF_1_1 at=(at 0 3.81 270) length=2.794
+pin 2 "~" passive line unit=CAP-0402-100nF_1_1 at=(at 0 -3.81 90) length=2.794
+### kicad/demo_bom_demo/ecadlib_demo.kicad_sym:KT-0603R
+(pin_names (offset 1.016) hide)
+(exclude_from_sim no)
+(in_bom yes)
+(on_board yes)
+property Reference=D at=(at -1.27 2.032 0)
+property Value=RED at=(at -1.27 -4.826 0)
+property Footprint=ecadlib_demo:LED_0603_1608Metric at=(at 0 0 0) hidden
+property Datasheet=https://www.lcsc.com/datasheet/C2286.pdf at=(at 0 0 0) hidden
+property Description="LED red 0603" at=(at 0 0 0) hidden
+property MPN=KT-0603R at=(at 0 0 0) hidden
+property Manufacturer="Hubei KENTO Elec" at=(at 0 0 0) hidden
+property "LCSC URL"=https://www.lcsc.com/product-detail/C2286.html at=(at 0 0 0) hidden
+property LCSC=C2286 at=(at 0 0 0) hidden
+graphics polyline unitKT-0603R_1_1: 9 bbox(-1.27,-2.794,2.032,1.27) #7f1f2eba92
+pin 1 K passive line unit=KT-0603R_1_1 at=(at 3.81 0 180) length=2.54
+pin 2 A passive line unit=KT-0603R_1_1 at=(at -3.81 0 0) length=2.54
+### kicad/demo_bom_demo/ecadlib_demo.kicad_sym:RES-0603-10k
+(pin_names (offset 1.016) hide)
+(exclude_from_sim no)
+(in_bom yes)
+(on_board yes)
+property Reference=R at=(at -1.016 3.302 0)
+property Value=10k at=(at -1.016 -4.572 0)
+property Footprint=ecadlib_demo:R_0603_1608Metric at=(at 0 0 0) hidden
+property Datasheet=https://www.lcsc.com/datasheet/C25804.pdf at=(at 0 0 0) hidden
+property Description="Resistor 10k 1% 0603" at=(at 0 0 0) hidden
+property Manufacturer=UNI-ROYAL at=(at 0 0 0) hidden
+property MPN=0603WAF1002T5E at=(at 0 0 0) hidden
+property "LCSC URL"=https://www.lcsc.com/product-detail/C25804.html at=(at 0 0 0) hidden
+property LCSC=C25804 at=(at 0 0 0) hidden
+graphics rectangle unitRES-0603-10k_1_1: 1 bbox(-1.016,-2.54,1.016,2.54) #360b21a811
+pin 1 "~" passive line unit=RES-0603-10k_1_1 at=(at 0 3.81 270) length=1.27
+pin 2 "~" passive line unit=RES-0603-10k_1_1 at=(at 0 -3.81 90) length=1.27
+### kicad/demo_bom_demo/ecadlib_demo.kicad_sym:RES-0603-4.7k
+(pin_names (offset 1.016) hide)
+(exclude_from_sim no)
+(in_bom yes)
+(on_board yes)
+property Reference=R at=(at -1.016 3.302 0)
+property Value=4.7k at=(at -1.016 -4.572 0)
+property Footprint=ecadlib_demo:R_0603_1608Metric at=(at 0 0 0) hidden
+property Datasheet=https://www.lcsc.com/datasheet/C23162.pdf at=(at 0 0 0) hidden
+property Description="Resistor 4.7k 1% 0603" at=(at 0 0 0) hidden
+property Manufacturer=UNI-ROYAL at=(at 0 0 0) hidden
+property MPN=0603WAF4701T5E at=(at 0 0 0) hidden
+property "LCSC URL"=https://www.lcsc.com/product-detail/C23162.html at=(at 0 0 0) hidden
+property LCSC=C23162 at=(at 0 0 0) hidden
+graphics rectangle unitRES-0603-4.7k_1_1: 1 bbox(-1.016,-2.54,1.016,2.54) #4e5a437bb0
+pin 1 "~" passive line unit=RES-0603-4.7k_1_1 at=(at 0 3.81 270) length=1.27
+pin 2 "~" passive line unit=RES-0603-4.7k_1_1 at=(at 0 -3.81 90) length=1.27
+### kicad/demo_bom_demo/ecadlib_demo.sqlite
+table Capacitors: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC
+row Capacitors: ["CAP-0402-100nF", "ecadlib_demo:CAP-0402-100nF", "ecadlib_demo:C_0402_1005Metric", "100nF", "https://www.lcsc.com/datasheet/C1525.pdf", "Capacitor 100nF 16V X7R 0402", "Samsung Electro-Mechanics", "CL05B104KO5NNNC", "https://www.lcsc.com/product-detail/C1525.html", "C1525"]
+table Diodes: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC
+row Diodes: ["KT-0603R", "ecadlib_demo:KT-0603R", "ecadlib_demo:LED_0603_1608Metric", "RED", "https://www.lcsc.com/datasheet/C2286.pdf", "LED red 0603", "Hubei KENTO Elec", "KT-0603R", "https://www.lcsc.com/product-detail/C2286.html", "C2286"]
+table ICs: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC
+row ICs: ["AMS1117-3.3", "ecadlib_demo:AMS1117-3.3", "ecadlib_demo:SOT-223-3_TabPin2", "AMS1117-3.3", "https://www.lcsc.com/datasheet/C6186.pdf", "LDO 3.3V 1A SOT-223", "Advanced Monolithic Systems", "AMS1117-3.3", "https://www.lcsc.com/product-detail/C6186.html", "C6186"]
+table Resistors: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC
+row Resistors: ["RES-0603-10k", "ecadlib_demo:RES-0603-10k", "ecadlib_demo:R_0603_1608Metric", "10k", "https://www.lcsc.com/datasheet/C25804.pdf", "Resistor 10k 1% 0603", "UNI-ROYAL", "0603WAF1002T5E", "https://www.lcsc.com/product-detail/C25804.html", "C25804"]
+row Resistors: ["RES-0603-4.7k", "ecadlib_demo:RES-0603-4.7k", "ecadlib_demo:R_0603_1608Metric", "4.7k", "https://www.lcsc.com/datasheet/C23162.pdf", "Resistor 4.7k 1% 0603", "UNI-ROYAL", "0603WAF4701T5E", "https://www.lcsc.com/product-detail/C23162.html", "C23162"]
+table Transistors: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC
+row Transistors: ["AO3401A", "ecadlib_demo:AO3401A", "ecadlib_demo:SOT-23", "AO3401A", "https://www.lcsc.com/datasheet/C15127.pdf", "P-MOSFET -30V -4A SOT-23", "Alpha & Omega Semiconductor", "AO3401A", "https://www.lcsc.com/product-detail/C15127.html", "C15127"]
+### librarian/demo_bom_demo/models/KiCad/C_0402_1005Metric.kicad_mod
+footprint C_0402_1005Metric
+(version 20221018)
+(layer F.Cu)
+(descr "C_0402_1005Metric | IPC-7351B chip_small density B: Z=1.52 G=0.40 X=0.62 | generated by ecadlib (prototype - review before use)")
+(tags "chip chip_small IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -1.16)
+fp_text value C_0402_1005Metric layer=F.Fab at=(at 0 1.16)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad 1 smd roundrect (at -0.48 0) (size 0.56 0.62) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 2 smd roundrect (at 0.48 0) (size 0.56 0.62) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+graphics fp_line F.SilkS: 2 bbox(-0.1078,-0.36,0.1078,0.36) #2a4cc4c23e
+graphics fp_rect F.CrtYd: 1 bbox(-0.91,-0.46,0.91,0.46) #91c657f7e6
+graphics fp_rect F.Fab: 1 bbox(-0.5,-0.25,0.5,0.25) #8ff4bf524c
+### librarian/demo_bom_demo/models/KiCad/LED_0603_1608Metric.kicad_mod
+footprint LED_0603_1608Metric
+(version 20221018)
+(layer F.Cu)
+(descr "LED_0603_1608Metric | IPC-7351B chip density B: Z=2.45 G=0.70 X=0.95 | generated by ecadlib (prototype - review before use)")
+(tags "chip chip polarized IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -1.495)
+fp_text value LED_0603_1608Metric layer=F.Fab at=(at 0 1.43)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad 1 smd roundrect (at -0.7875 0) (size 0.875 0.95) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 2 smd roundrect (at 0.7875 0) (size 0.875 0.95) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+graphics fp_line F.SilkS: 3 bbox(-1.485,-0.735,0.8,0.735) #d7c8fa64fd
+graphics fp_poly F.Fab: 1 bbox(-0.8,-0.4,0.8,0.4) #32f9bcd3dc
+graphics fp_rect F.CrtYd: 1 bbox(-1.48,-0.73,1.48,0.73) #db6883546f
+### librarian/demo_bom_demo/models/KiCad/R_0603_1608Metric.kicad_mod
+footprint R_0603_1608Metric
+(version 20221018)
+(layer F.Cu)
+(descr "R_0603_1608Metric | IPC-7351B chip density B: Z=2.45 G=0.85 X=0.95 | generated by ecadlib (prototype - review before use)")
+(tags "chip chip IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -1.43)
+fp_text value R_0603_1608Metric layer=F.Fab at=(at 0 1.43)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad 1 smd roundrect (at -0.825 0) (size 0.8 0.95) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 2 smd roundrect (at 0.825 0) (size 0.8 0.95) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+graphics fp_line F.SilkS: 2 bbox(-0.2373,-0.5225,0.2373,0.5225) #c3b550afa2
+graphics fp_rect F.CrtYd: 1 bbox(-1.48,-0.73,1.48,0.73) #db6883546f
+graphics fp_rect F.Fab: 1 bbox(-0.8,-0.4125,0.8,0.4125) #eeca90ce6b
+### librarian/demo_bom_demo/models/KiCad/SOIC-16_3.9x9.9mm_P1.27mm.kicad_mod
+footprint SOIC-16_3.9x9.9mm_P1.27mm
+(version 20221018)
+(layer F.Cu)
+(descr "SOIC-16_3.9x9.9mm_P1.27mm | IPC-7351B gullwing density B: Z=6.90 G=3.00 X=0.60 | generated by ecadlib (prototype - review before use)")
+(tags "gullwing gullwing IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -5.9)
+fp_text value SOIC-16_3.9x9.9mm_P1.27mm layer=F.Fab at=(at 0 5.9)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad 1 smd roundrect (at -2.475 -4.445) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 2 smd roundrect (at -2.475 -3.175) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 3 smd roundrect (at -2.475 -1.905) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 4 smd roundrect (at -2.475 -0.635) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 5 smd roundrect (at -2.475 0.635) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 6 smd roundrect (at -2.475 1.905) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 7 smd roundrect (at -2.475 3.175) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 8 smd roundrect (at -2.475 4.445) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 9 smd roundrect (at 2.475 4.445) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 10 smd roundrect (at 2.475 3.175) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 11 smd roundrect (at 2.475 1.905) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 12 smd roundrect (at 2.475 0.635) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 13 smd roundrect (at 2.475 -0.635) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 14 smd roundrect (at 2.475 -1.905) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 15 smd roundrect (at 2.475 -3.175) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 16 smd roundrect (at 2.475 -4.445) (size 1.95 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+graphics fp_line F.SilkS: 2 bbox(-2.06,-5.06,2.06,5.06) #f561f6811f
+graphics fp_poly F.Fab: 1 bbox(-1.95,-4.95,1.95,4.95) #7512be074d
+graphics fp_poly F.SilkS: 1 bbox(-2.715,-5.335,-2.235,-5.005) #ac534299e4
+graphics fp_rect F.CrtYd: 1 bbox(-3.7,-5.2,3.7,5.2) #dd1b193f96
+### librarian/demo_bom_demo/models/KiCad/SOT-223-3_TabPin2.kicad_mod
+footprint SOT-223-3_TabPin2
+(version 20221018)
+(layer F.Cu)
+(descr "SOT-223-3_TabPin2 | 3 pins | land pattern from the datasheet drawing | generated by ecadlib (prototype - review before use)")
+(tags "custom custom IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -4.3)
+fp_text value SOT-223-3_TabPin2 layer=F.Fab at=(at 0 4.3)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad 1 smd roundrect (at -3.15 -2.3) (size 2 1.5) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.1667))
+(pad 2 smd roundrect (at -3.15 0) (size 2 1.5) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.1667))
+(pad 2 smd roundrect (at 3.15 0) (size 2 3.8) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.125))
+(pad 3 smd roundrect (at -3.15 2.3) (size 2 1.5) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.1667))
+graphics fp_line F.SilkS: 8 bbox(-1.96,-3.46,1.96,3.46) #62032189d5
+graphics fp_poly F.CrtYd: 1 bbox(-4.4,-3.6,4.4,3.6) #47d6da083e
+graphics fp_poly F.Fab: 1 bbox(-1.85,-3.35,1.85,3.35) #a5e97bc010
+graphics fp_poly F.SilkS: 1 bbox(-4.76,-2.54,-4.43,-2.06) #015f2aee25
+### librarian/demo_bom_demo/models/KiCad/SOT-23.kicad_mod
+footprint SOT-23
+(version 20221018)
+(layer F.Cu)
+(descr "SOT-23 | IPC-7351B gullwing density B: Z=3.35 G=0.40 X=0.60 | generated by ecadlib (prototype - review before use)")
+(tags "gullwing gullwing IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -2.4)
+fp_text value SOT-23 layer=F.Fab at=(at 0 2.4)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad 1 smd roundrect (at -0.9375 -0.95) (size 1.475 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 2 smd roundrect (at -0.9375 0.95) (size 1.475 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 3 smd roundrect (at 0.9375 0) (size 1.475 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+graphics fp_line F.SilkS: 5 bbox(-0.76,-1.56,0.76,1.56) #efdc863107
+graphics fp_poly F.Fab: 1 bbox(-0.65,-1.45,0.65,1.45) #5c70e36e4c
+graphics fp_poly F.SilkS: 1 bbox(-1.1775,-1.84,-0.6975,-1.51) #c2f7a24a1b
+graphics fp_rect F.CrtYd: 1 bbox(-1.93,-1.7,1.93,1.7) #181a346f74
+### librarian/demo_bom_demo/models/PcbLib/C_0402_1005Metric.PcbLib:C_0402_1005Metric
+params DESCRIPTION=C_0402_1005Metric; IPC-7351B chip_small density B: Z=1.52 G=0.40 X=0.62; generated by ecadlib (prototype - review before use); from Capacitor_SMD:C_0402_1005Metric (CC-BY-SA 4.0) HEIGHT=19.685mil PATTERN=C_0402_1005Metric
+text ".Designator" layer=33 at=(-1.3905,0.66) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-1.66) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=19.685mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=TRUE|MODEL.NAME=C_0402_1005Metric.step|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=1|MODEL.MODELSOURCE=Undefined pts=-0.5,-0.25;0.5,-0.25;0.5,0.25;-0.5,0.25
+pad 1 at=(-0.48,0) layer=1 size=(0.56,0.62) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(0.48,0) layer=1 size=(0.56,0.62) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+graphics track 33: 2 bbox(-0.1078,-0.36,0.1078,0.36) #14708fcfc3
+graphics track 69: 4 bbox(-0.5,-0.25,0.5,0.25) #6e2e9518b3
+graphics track 71: 4 bbox(-0.91,-0.46,0.91,0.46) #98e373e992
+model DZ=0 EMBED=TRUE ID={B88D0656-ECF8-5A65-AC9E-130E6EB4FA02} MODELSOURCE=Undefined NAME=C_0402_1005Metric.step ROTX=0.000 ROTY=0.000 ROTZ=0.000 bytes=13422 sha256=ea270f0a1f337016
+### librarian/demo_bom_demo/models/PcbLib/LED_0603_1608Metric.PcbLib:LED_0603_1608Metric
+params DESCRIPTION=LED_0603_1608Metric; IPC-7351B chip density B: Z=2.45 G=0.70 X=0.95; generated by ecadlib (prototype - review before use); from LED_SMD:LED_0603_1608Metric (CC-BY-SA 4.0) HEIGHT=23.622mil PATTERN=LED_0603_1608Metric
+text ".Designator" layer=33 at=(-1.3905,0.995) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-1.93) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=23.622mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=TRUE|MODEL.NAME=LED_0603_1608Metric.step|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=1|MODEL.MODELSOURCE=Undefined pts=-0.8,-0.4;0.8,-0.4;0.8,0.4;-0.8,0.4
+pad 1 at=(-0.7875,0) layer=1 size=(0.875,0.95) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(0.7875,0) layer=1 size=(0.875,0.95) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+graphics track 33: 3 bbox(-1.485,-0.735,0.8,0.735) #707c183e98
+graphics track 69: 5 bbox(-0.8,-0.4,0.8,0.4) #cfa04ba926
+graphics track 71: 4 bbox(-1.48,-0.73,1.48,0.73) #b1147b71dc
+model DZ=0 EMBED=TRUE ID={5DD50ADB-32EC-50CD-B2B9-CB2D3FBD4047} MODELSOURCE=Undefined NAME=LED_0603_1608Metric.step ROTX=0.000 ROTY=0.000 ROTZ=0.000 bytes=17615 sha256=997b318753565168
+### librarian/demo_bom_demo/models/PcbLib/R_0603_1608Metric.PcbLib:R_0603_1608Metric
+params DESCRIPTION=R_0603_1608Metric; IPC-7351B chip density B: Z=2.45 G=0.85 X=0.95; generated by ecadlib (prototype - review before use); from Resistor_SMD:R_0603_1608Metric (CC-BY-SA 4.0) HEIGHT=17.7165mil PATTERN=R_0603_1608Metric
+text ".Designator" layer=33 at=(-1.3905,0.93) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-1.93) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=17.7165mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=TRUE|MODEL.NAME=R_0603_1608Metric.step|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=1|MODEL.MODELSOURCE=Undefined pts=-0.8,-0.4125;0.8,-0.4125;0.8,0.4125;-0.8,0.4125
+pad 1 at=(-0.825,0) layer=1 size=(0.8,0.95) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(0.825,0) layer=1 size=(0.8,0.95) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+graphics track 33: 2 bbox(-0.2373,-0.5225,0.2373,0.5225) #cf1ff1868a
+graphics track 69: 4 bbox(-0.8,-0.4125,0.8,0.4125) #681a20c31b
+graphics track 71: 4 bbox(-1.48,-0.73,1.48,0.73) #b1147b71dc
+model DZ=0 EMBED=TRUE ID={45729AB8-166C-5611-9B9C-D393AF474AE7} MODELSOURCE=Undefined NAME=R_0603_1608Metric.step ROTX=0.000 ROTY=0.000 ROTZ=0.000 bytes=13567 sha256=f5cfddb9bcea8444
+### librarian/demo_bom_demo/models/PcbLib/SOIC-16_3.9x9.9mm_P1.27mm.PcbLib:SOIC-16_3.9x9.9mm_P1.27mm
+params DESCRIPTION=SOIC-16_3.9x9.9mm_P1.27mm; IPC-7351B gullwing density B: Z=6.90 G=3.00 X=0.60; generated by ecadlib (prototype - review before use); from Package_SO:SOIC-16_3.9x9.9mm_P1.27mm (CC-BY-SA 4.0) HEIGHT=68.8976mil PATTERN=SOIC-16_3.9x9.9mm_P1.27mm
+text ".Designator" layer=33 at=(-1.3905,5.4) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-6.4) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=68.8976mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=TRUE|MODEL.NAME=SOIC-16_3.9x9.9mm_P1.27mm.step|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=1|MODEL.MODELSOURCE=Undefined pts=-3,-4.95;3,-4.95;3,4.95;-3,4.95
+pad 1 at=(-2.475,4.445) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(-2.475,3.175) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 3 at=(-2.475,1.905) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 4 at=(-2.475,0.635) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 5 at=(-2.475,-0.635) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 6 at=(-2.475,-1.905) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 7 at=(-2.475,-3.175) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 8 at=(-2.475,-4.445) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 9 at=(2.475,-4.445) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 10 at=(2.475,-3.175) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 11 at=(2.475,-1.905) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 12 at=(2.475,-0.635) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 13 at=(2.475,0.635) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 14 at=(2.475,1.905) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 15 at=(2.475,3.175) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 16 at=(2.475,4.445) layer=1 size=(1.95,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+graphics region 33: 1 bbox(-2.715,5.005,-2.235,5.335) #889ce0b112
+graphics track 33: 5 bbox(-2.715,-5.06,2.06,5.335) #29ce7d1c70
+graphics track 69: 5 bbox(-1.95,-4.95,1.95,4.95) #0872bbf72d
+graphics track 71: 4 bbox(-3.7,-5.2,3.7,5.2) #81da7c4ca7
+model DZ=0 EMBED=TRUE ID={98E4581D-81F4-5E24-95F8-5858C7BECD1B} MODELSOURCE=Undefined NAME=SOIC-16_3.9x9.9mm_P1.27mm.step ROTX=0.000 ROTY=0.000 ROTZ=0.000 bytes=141736 sha256=4d14348496ee7f27
+### librarian/demo_bom_demo/models/PcbLib/SOT-223-3_TabPin2.PcbLib:SOT-223-3_TabPin2
+params DESCRIPTION=SOT-223-3_TabPin2; 3 pins; land pattern from the datasheet drawing; generated by ecadlib (prototype - review before use); from Package_TO_SOT_SMD:SOT-223-3_TabPin2 (CC-BY-SA 4.0) HEIGHT=70.8661mil PATTERN=SOT-223-3_TabPin2
+text ".Designator" layer=33 at=(-1.3905,3.8) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-4.8) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=70.8661mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=TRUE|MODEL.NAME=SOT-223-3_TabPin2.step|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=1|MODEL.MODELSOURCE=Undefined pts=-3.95,-3.35;3.95,-3.35;3.95,3.35;-3.95,3.35
+pad 1 at=(-3.15,2.3) layer=1 size=(2,1.5) hole=0 shape=9 rot=0 corner=33 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(-3.15,0) layer=1 size=(2,1.5) hole=0 shape=9 rot=0 corner=33 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(3.15,0) layer=1 size=(2,3.8) hole=0 shape=9 rot=0 corner=25 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 3 at=(-3.15,-2.3) layer=1 size=(2,1.5) hole=0 shape=9 rot=0 corner=33 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+graphics region 33: 1 bbox(-4.76,2.06,-4.43,2.54) #f59dfd65d0
+graphics track 33: 11 bbox(-4.76,-3.46,1.96,3.46) #86feb269ed
+graphics track 69: 5 bbox(-1.85,-3.35,1.85,3.35) #4882e1d745
+graphics track 71: 20 bbox(-4.4,-3.6,4.4,3.6) #d66e21af0e
+model DZ=0 EMBED=TRUE ID={999E01AE-FF3D-5770-A321-5A451D5533F7} MODELSOURCE=Undefined NAME=SOT-223-3_TabPin2.step ROTX=0.000 ROTY=0.000 ROTZ=0.000 bytes=28820 sha256=fe2289843d7679e3
+### librarian/demo_bom_demo/models/PcbLib/SOT-23.PcbLib:SOT-23
+params DESCRIPTION=SOT-23; IPC-7351B gullwing density B: Z=3.35 G=0.40 X=0.60; generated by ecadlib (prototype - review before use); from Package_TO_SOT_SMD:SOT-23 (CC-BY-SA 4.0) HEIGHT=43.3071mil PATTERN=SOT-23
+text ".Designator" layer=33 at=(-1.3905,1.9) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-2.9) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=43.3071mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=TRUE|MODEL.NAME=SOT-23.step|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=1|MODEL.MODELSOURCE=Undefined pts=-1.185,-1.45;1.185,-1.45;1.185,1.45;-1.185,1.45
+pad 1 at=(-0.9375,0.95) layer=1 size=(1.475,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(-0.9375,-0.95) layer=1 size=(1.475,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 3 at=(0.9375,0) layer=1 size=(1.475,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+graphics region 33: 1 bbox(-1.1775,1.51,-0.6975,1.84) #e535d69c0c
+graphics track 33: 8 bbox(-1.1775,-1.56,0.76,1.84) #13f290273c
+graphics track 69: 5 bbox(-0.65,-1.45,0.65,1.45) #fb65156e86
+graphics track 71: 4 bbox(-1.93,-1.7,1.93,1.7) #624f8c3e1b
+model DZ=0 EMBED=TRUE ID={052D4566-66C6-55B4-9531-857F3D4884C6} MODELSOURCE=Undefined NAME=SOT-23.step ROTX=0.000 ROTY=0.000 ROTZ=0.000 bytes=41466 sha256=8434d16479b64015
+### librarian/demo_bom_demo/models/SchLib/AMS1117-3.3.SchLib:AMS1117-3.3
+record1 ALLPINCOUNT=3 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Linear regulator, pins 1=GND, 2=VO, 3=VI CURRENTPARTID=1 DESIGNITEMID=AMS1117-3.3 DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=AMS1117-3.3 OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin 1 "GND" etype=7 orient=3 at=(0,-20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=59
+pin 2 "VO" etype=7 orient=0 at=(20,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 3 "VI" etype=7 orient=2 at=(-20,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+record34 COLOR=8388608 FONTID=1 LOCATION.X=-20 LOCATION.Y=13 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=U?
+record41 COLOR=8388608 FONTID=1 LOCATION.X=-20 LOCATION.Y=-28 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-20 LOCATION.Y=-38 NAME=Value OWNERPARTID=-1 TEXT=Regulator_Linear_GND_VO_VI
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-20 LOCATION.Y=-48 NAME=Description OWNERPARTID=-1 TEXT=Linear regulator, pins 1=GND, 2=VO, 3=VI
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-20 LOCATION.Y=-58 NAME=MPN OWNERPARTID=-1 TEXT=AMS1117-3.3
+record44 
+record45 DATAFILECOUNT=1 ISCURRENT=T MODELDATAFILEENTITY0=SOT-223-3_TabPin2 MODELDATAFILEKIND0=PCBLib MODELNAME=SOT-223-3_TabPin2 MODELTYPE=PCBLIB OWNERINDEX=10
+record46 OWNERINDEX=11
+record48 OWNERINDEX=11
+graphics record14: 1 #5b3790b9a5
+### librarian/demo_bom_demo/models/SchLib/AO3401A.SchLib:AO3401A
+record1 ALLPINCOUNT=3 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=P-channel MOSFET, pins 1=G, 2=S, 3=D CURRENTPARTID=1 DESIGNITEMID=AO3401A DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=AO3401A OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin 1 "G" etype=0 orient=2 at=(-10,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 2 "S" etype=4 orient=3 at=(10,-10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=59
+pin 3 "D" etype=4 orient=1 at=(10,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=57
+record34 COLOR=8388608 FONTID=1 LOCATION.X=-10 LOCATION.Y=14 LOCATION.Y_FRAC=10000 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=Q?
+record41 COLOR=8388608 FONTID=1 LOCATION.X=-10 LOCATION.Y=-19 LOCATION.Y_FRAC=-10000 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-10 LOCATION.Y=-29 LOCATION.Y_FRAC=-10000 NAME=Value OWNERPARTID=-1 TEXT=Q_PMOS_GSD
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-10 LOCATION.Y=-39 LOCATION.Y_FRAC=-10000 NAME=Description OWNERPARTID=-1 TEXT=P-channel MOSFET, pins 1=G, 2=S, 3=D
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-10 LOCATION.Y=-49 LOCATION.Y_FRAC=-10000 NAME=MPN OWNERPARTID=-1 TEXT=AO3401A
+record44 
+record45 DATAFILECOUNT=1 ISCURRENT=T MODELDATAFILEENTITY0=SOT-23 MODELDATAFILEKIND0=PCBLib MODELNAME=SOT-23 MODELTYPE=PCBLIB OWNERINDEX=19
+record46 OWNERINDEX=20
+record48 OWNERINDEX=20
+graphics record6: 8 #b57b4fb263
+graphics record7: 1 #d9b01ca983
+graphics record8: 1 #b7bba8885b
+### librarian/demo_bom_demo/models/SchLib/Capacitor.SchLib:Capacitor
+record1 ALLPINCOUNT=2 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Unpolarized capacitor CURRENTPARTID=1 DESIGNITEMID=Capacitor DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=Capacitor OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin 1 "" etype=4 orient=1 at=(0,4) length=11 part=1 mode=0 symbols=[0, 0, 0, 0] cong=49
+pin 2 "" etype=4 orient=3 at=(0,-4) length=11 part=1 mode=0 symbols=[0, 0, 0, 0] cong=51
+record34 COLOR=8388608 FONTID=1 LOCATION.X=-8 LOCATION.Y=7 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=C?
+record41 COLOR=8388608 FONTID=1 LOCATION.X=-8 LOCATION.Y=-12 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-8 LOCATION.Y=-22 NAME=Value OWNERPARTID=-1 TEXT=C
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-8 LOCATION.Y=-32 NAME=Description OWNERPARTID=-1 TEXT=Unpolarized capacitor
+record44 
+graphics record6: 2 #fc4492e435
+### librarian/demo_bom_demo/models/SchLib/KT-0603R.SchLib:KT-0603R
+record1 ALLPINCOUNT=2 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Light emitting diode (pin 1 = cathode) CURRENTPARTID=1 DESIGNITEMID=KT-0603R DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=KT-0603R OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin 1 "K" etype=4 orient=0 at=(5,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=48
+pin 2 "A" etype=4 orient=2 at=(-5,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=50
+record34 COLOR=8388608 FONTID=1 LOCATION.X=-5 LOCATION.Y=8 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=D?
+record41 COLOR=8388608 FONTID=1 LOCATION.X=-5 LOCATION.Y=-19 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-5 LOCATION.Y=-29 NAME=Value OWNERPARTID=-1 TEXT=LED
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-5 LOCATION.Y=-39 NAME=Description OWNERPARTID=-1 TEXT=Light emitting diode (pin 1 = cathode)
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-5 LOCATION.Y=-49 NAME=MPN OWNERPARTID=-1 TEXT=KT-0603R
+record44 
+record45 DATAFILECOUNT=1 ISCURRENT=T MODELDATAFILEENTITY0=LED_0603_1608Metric MODELDATAFILEKIND0=PCBLib MODELNAME=LED_0603_1608Metric MODELTYPE=PCBLIB OWNERINDEX=17
+record46 OWNERINDEX=18
+record48 OWNERINDEX=18
+graphics record6: 9 #38a2e30048
+### librarian/demo_bom_demo/models/SchLib/Resistor.SchLib:Resistor
+record1 ALLPINCOUNT=2 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Resistor CURRENTPARTID=1 DESIGNITEMID=Resistor DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=Resistor OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin 1 "" etype=4 orient=1 at=(0,10) length=5 part=1 mode=0 symbols=[0, 0, 0, 0] cong=49
+pin 2 "" etype=4 orient=3 at=(0,-10) length=5 part=1 mode=0 symbols=[0, 0, 0, 0] cong=51
+record34 COLOR=8388608 FONTID=1 LOCATION.X=-4 LOCATION.Y=13 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=R?
+record41 COLOR=8388608 FONTID=1 LOCATION.X=-4 LOCATION.Y=-18 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-4 LOCATION.Y=-28 NAME=Value OWNERPARTID=-1 TEXT=R
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-4 LOCATION.Y=-38 NAME=Description OWNERPARTID=-1 TEXT=Resistor
+record44 
+graphics record14: 1 #9f6e1490e0

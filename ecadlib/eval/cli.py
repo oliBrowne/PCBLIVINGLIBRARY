@@ -1,11 +1,14 @@
 """ecadlib eval: measure how often the pipeline gets a part right, and what it costs.
 
     ecadlib eval run [--set kicad-v1] [--limit N] [--family F,..] [--case ID,..] [--model M] [--sources S,..]
-                     [--record DIR | --replay DIR] [--offline] [-o out/eval/run]
+                     [--record DIR | --replay DIR] [--repeat N] [--offline] [-o out/eval/run]
+    ecadlib eval consistency A B      two runs of the same cases: parts that gave the same files (and cross-check)
     ecadlib eval compare A B          two run folders (or report.json files): pass rate and cost per family, flipped cases
     ecadlib eval sets                 the test sets shipped with ecadlib (cases per family)
     ecadlib eval show [--set NAME] [--family F]   the cases of a set
     ecadlib eval build-set --symbols DIR --footprints DIR [-o FILE]   rebuild a set from KiCad library checkouts
+    ecadlib eval gate [--update]      CI accuracy gate: the whole set offline vs a committed baseline (gate.py)
+    ecadlib eval golden [--update]    golden snapshots of the KiCad / Altium files we write (golden.py)
 
 See ecadlib/eval/runner.py (run, modes), score.py (fields, tolerances) and build_set.py (where the cases come from)."""
 import argparse, json, sys
@@ -22,6 +25,9 @@ def main(argv=None):
     if argv and argv[0] == "build-set":
         from . import build_set
         return build_set.main(argv[1:])
+    if argv and argv[0] in ("gate", "golden"):
+        from . import gate, golden
+        return {"gate": gate, "golden": golden}[argv[0]].main(argv[1:])
     ap = argparse.ArgumentParser(prog="ecadlib eval", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run the pipeline on a test set and score every part")
@@ -40,6 +46,9 @@ def main(argv=None):
     g = r.add_mutually_exclusive_group()
     g.add_argument("--record", metavar="DIR", help="save every Claude answer here (live)")
     g.add_argument("--replay", metavar="DIR", help="answer from saved responses; nothing is sent")
+    r.add_argument("--repeat", type=int, default=1, metavar="N",
+                   help="run the cases N times (the repeats from the recorded answers when --record/--replay) and report "
+                        "how many parts gave the same files")
     r.add_argument("--offline", action="store_true", help="HTTP cache only")
     r.add_argument("--cache", default="out/http_cache")
     r.add_argument("--rules", help="library rules file")
@@ -50,6 +59,11 @@ def main(argv=None):
     c = sub.add_parser("compare", help="diff two reports")
     c.add_argument("a"); c.add_argument("b")
     c.add_argument("--json", action="store_true")
+    sub.add_parser("gate", help="CI accuracy gate: the whole set offline against the committed baseline (--update rewrites it)")
+    sub.add_parser("golden", help="golden snapshots of the KiCad / Altium files (--update rewrites them)")
+    k = sub.add_parser("consistency", help="did two runs of the same cases give the same files?")
+    k.add_argument("a"); k.add_argument("b")
+    k.add_argument("--json", action="store_true")
     sub.add_parser("sets", help="list the shipped test sets")
     s = sub.add_parser("show", help="list the cases of a set")
     s.add_argument("--set", default="kicad-v1"); s.add_argument("--family")
@@ -72,6 +86,17 @@ def main(argv=None):
         res = R.compare(a.a, a.b)
         print(json.dumps({k: v for k, v in res.items() if k != "text"}, indent=1, default=str) if a.json else res["text"])
         return 0
+    if a.cmd == "consistency":
+        res = R.consistency(a.a, a.b)
+        if a.json:
+            print(json.dumps(res, indent=1))
+        else:
+            print(f"{res['same']}/{res['cases']} parts gave the same files" + ("" if not res["differ"] else ":"))
+            for d in res["differ"]:
+                print(f"  {d['id']}: differ in {', '.join(d['files']) or '-'}"
+                      + (f"; cross-check {d['cross_check'][0] or '-'} vs {d['cross_check'][1] or '-'}"
+                         if d["cross_check"][0] != d["cross_check"][1] else ""))
+        return 0 if not res["differ"] else 2
     tol = {}
     for t in a.tol:
         k, _, v = t.partition("=")
@@ -80,7 +105,7 @@ def main(argv=None):
         tol[k] = float(v)
     rep = R.run(a.set, a.out, a.limit, a.model, a.record, a.replay, _list(a.sources), _list(a.family), _list(a.case),
                 a.offline, a.cache, rules=a.rules, providers=a.providers, tol=tol, provider=a.provider,
-                base_url=a.base_url, assist=a.assist, api_key_env=a.api_key_env)
+                base_url=a.base_url, assist=a.assist, api_key_env=a.api_key_env, repeat=a.repeat)
     if a.json:
         print(json.dumps(rep["summary"], indent=1))
     else:

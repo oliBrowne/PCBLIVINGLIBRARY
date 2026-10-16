@@ -317,10 +317,12 @@ def pad_rec(p, guid_a, guid_b):
     put(185, "<B", 1 if p.get("layer") == MULTI else 3)    # reserved marker: 3 on SMD, 1 on multi-layer pads (TestData)
     t[126 - 61:142 - 61], t[142 - 61:158 - 61] = guid_a.bytes_le, guid_b.bytes_le
     out = sblock(p["designator"]) + sblock("") + sblock("|&|0") + block(b"\0") + block(main + bytes(t))
-    if not rr and not hs:
+    ox, oy = p.get("offset") or (0, 0)        # copper offset from the hole centre (internal units, pad frame, y up)
+    if not rr and not hs and not (ox or oy):
         return b"\x02" + out + block(b"")
     ss = struct.pack("<29i", *[p["w"]] * 29) + struct.pack("<29i", *[p["h"]] * 29) + bytes([base]) * 29
-    ss += b"\0" + bytes([hs]) + struct.pack("<id", p.get("slot", 0), float(p.get("hole_rot", 0.0))) + b"\0" * 256
+    ss += b"\0" + bytes([hs]) + struct.pack("<id", p.get("slot", 0), float(p.get("hole_rot", 0.0)))
+    ss += struct.pack("<32i", *[ox] * 32) + struct.pack("<32i", *[oy] * 32)      # per layer: 32 X, then 32 Y
     if rr:                                     # reserved, hole shape, slot length, hole rotation, offsets, then:
         ss += b"\x01" + bytes([9]) * 32 + bytes([max(0, min(100, int(round(p.get("corner", 50)))))]) * 32
     else:                                      # no rounded rect: flag 0, layer shapes 1, corners 0 (TestData slot pads)
@@ -407,7 +409,8 @@ def _pcb_component(fp, models=None):
     gb = guid(name + "/stack")
     data = bytearray(sblock(name)); n = 0
     for i, p in enumerate(fp["pads"]):
-        q = dict(p, x=mm(p["x"]), y=mm(p["y"]), w=mm(p["w"]), h=mm(p["h"]), hole=mm(p.get("hole", 0)), slot=mm(p.get("slot", 0)))
+        q = dict(p, x=mm(p["x"]), y=mm(p["y"]), w=mm(p["w"]), h=mm(p["h"]), hole=mm(p.get("hole", 0)), slot=mm(p.get("slot", 0)),
+                 offset=tuple(mm(v) for v in p["offset"]) if p.get("offset") else None)
         if q["shape"] != "roundrect":
             q["corner"] = 0
         if p.get("paste") == "none":         # suppress paste: manual expansion of -max(w,h)/2 closes the aperture
@@ -887,7 +890,9 @@ def parse_pcb_data(d):
                          "mask_mode": m[102] if len(m) > 102 else None, "mask": struct.unpack_from("<i", m, 90)[0] if len(m) > 94 else None,
                          "plated": bool(m[60]), "hole_shape": ss[262] if len(ss) >= 596 else 0,
                          "slot": struct.unpack_from("<i", ss, 263)[0] if len(ss) >= 596 else 0,
-                         "hole_rot": struct.unpack_from("<d", ss, 267)[0] if len(ss) >= 596 else 0.0, "raw": blocks})
+                         "hole_rot": struct.unpack_from("<d", ss, 267)[0] if len(ss) >= 596 else 0.0,
+                         "offset": (struct.unpack_from("<i", ss, 275)[0], struct.unpack_from("<i", ss, 403)[0]) if len(ss) >= 596 else (0, 0),
+                         "raw": blocks})
         elif t == 5:
             b1, i = _blk(d, i); b2, i = _blk(d, i)
             x, y, h = struct.unpack_from("<3i", b1, 13)
