@@ -450,7 +450,11 @@ def require_key(key=None, rules=None):
 def call(headers, body, key, timeout=600):
     """POST /v1/messages -> (extraction dict, raw message), with retries on 429/5xx/529. Raises DatasheetError."""
     msg = Client(key, timeout=timeout).messages(body, headers)
-    return parse_message(msg), msg
+    try:
+        return parse_message(msg), msg
+    except DatasheetError as e:                       # an answer that was paid for: its usage goes with the error
+        e.api_message = msg
+        raise
 
 
 def parse_message(msg):
@@ -1284,7 +1288,8 @@ class Reader:
                 return job
             kind, why, _ = self._judge(job, rec)
             done = job["route"]["attempts"] + [{"model": job["model"], "pages": len(job["offset"]) if isinstance(job["offset"], list)
-                                                else "all", "verdict": kind, "why": why[:4], "via": rec.get("via")}]
+                                                else "all", "verdict": kind, "why": why[:4], "via": rec.get("via"),
+                                                "usage": (rec.get("message") or {}).get("usage") or rec.get("usage")}]
             nxt = self.router.next_step(job["rung"], job["level"], len(job["levels"]), kind, len(done))
             if nxt is None:
                 job["route"]["attempts"] = done
@@ -1345,7 +1350,7 @@ class Reader:
             self.ledger.add(DR.attempt_record(job["part"], job.get("name"), model, msg, via, self._pages_sent(job),
                                               job.get("n_pages"), "error", label(nx), e))
             if nx:
-                self.results.put(job["key"], dict(base, error=str(e)[:300]))
+                self.results.put(job["key"], dict(base, error=str(e)[:300], usage=(msg or {}).get("usage")))
             raise
         rec = dict(base, message=msg)
         self.results.put(job["key"], rec)
@@ -1364,22 +1369,27 @@ class Reader:
             if not _guarded:
                 self._guard_cost([job])
             _guarded = False
+            key = require_key(self.key)               # no key: nothing was sent, so no step is paid for or failed
             try:
                 with logging_to(self.log_file, self.say):
-                    _, msg = call(job["headers"], job["body"], require_key(self.key))
-                self._store(job, msg, "sync")
-            except APIError:
-                raise
-            except DatasheetError as e:                # refusal / max_tokens / not schema-shaped
-                try:
-                    self._store(job, None, "sync", error=e)
-                except DatasheetError:
-                    pass
-                if not self.results.get(job["key"]):  # no next step to go to: the error stands, retried next run
-                    raise e
+                    _, msg = call(job["headers"], job["body"], key)
+            except DatasheetError as e:               # refusal / max_tokens / not schema-shaped: an answer, with usage
+                msg = getattr(e, "api_message", None)
+                if msg is None:                       # no answer came back (API error): nothing to record
+                    raise
+            err = None
+            try:
+                self._store(job, msg, "sync")         # refusal / max_tokens / not schema-shaped: recorded with its usage
+            except DatasheetError as e:
+                if "rung" not in job:
+                    raise
+                err = e
             if "rung" not in job:
                 return self._result(job, self.results.get(job["key"]))
-            job = self._walk(job)
+            nxt = self._walk(job)
+            if err is not None and nxt["key"] == job["key"] and not nxt.get("final"):
+                raise err                             # no next step to go to: the error stands, retried next run
+            job = nxt
 
     def submit(self, job):
         self.pending[job["key"]] = job

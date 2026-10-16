@@ -155,8 +155,12 @@ def score_symbol(mine_pins, ref_pins, tol=None):
     if named:
         same = [n for n, s in named.items() if norm_name(a.get(n)) == s]
         diff = [f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in sorted(set(named) - set(same), key=_natural)]
-        out["symbol_names"] = _f(len(same) >= t["names"] * len(named), f"{len(same)}/{len(named)} pin names agree; "
-                                 + "; ".join(diff[:4]), matched=len(same), named=len(named))
+        once = Counter(named.values())
+        moved = [n for n in set(named) - set(same) if once.get(norm_name(a.get(n))) == 1]   # a name KiCad has on another pin:
+        out["symbol_names"] = _f(len(same) >= t["names"] * len(named) and not moved,       # swapped pins, not naming noise
+                                 f"{len(same)}/{len(named)} pin names agree"
+                                 + (f" ({len(moved)} on the wrong pin)" if moved else "") + "; " + "; ".join(diff[:4]),
+                                 matched=len(same), named=len(named), moved=len(moved))
     return out
 
 
