@@ -81,32 +81,55 @@ def symbol_text(text, lib, prefix, var, cid, kicad):
 
 
 def symbol_kicad7(text):
-    """KiCad 8 symbol library -> KiCad 7 (20220914): the only KiCad 8 tokens kicad_export writes are dropped."""
+    """KiCad 8 symbol library -> KiCad 7 (20220914): the only KiCad 8 tokens kicad_export writes are dropped, and the
+    Description field goes back to KiCad 7's ki_description (KiCad 7 reads a symbol's description only from that)."""
     text = re.sub(r"\(version 2023\d+\)|\(version 2024\d+\)", "(version 20220914)", text, count=1)
+    text = text.replace('(property "Description" ', '(property "ki_description" ')
     return re.sub(r"\n?[ \t]*\((?:generator_version|exclude_from_sim) [^()]*\)", "", text)
 
 
 def footprint_kicad7(text):
-    """KiCad 8 footprint (version > 20221018) -> KiCad 7: Reference / Value properties become fp_text, other
-    properties lose their position (KiCad 7 footprint properties are name/value only), generator_version goes."""
+    """KiCad 8 footprint (version > 20221018) -> KiCad 7: Reference / Value properties become fp_text (the (at ...)
+    first, as KiCad 7 requires), other properties lose their position (KiCad 7 footprint properties are name/value
+    only), generator_version goes. KiCad 8 syntax KiCad 7's parser rejects: (uuid ...) and (unlocked yes) are dropped,
+    (hide yes|no) -> hide or nothing, (fill yes|no) -> (fill solid|none), (remove_unused_layers / keep_end_layers
+    yes|no) -> the bare flag or nothing."""
     from . import sexpr
     t = sexpr.parse(text, keep_quotes=True)
     v = sexpr.first(t, "version")
     if not v or int(v[1]) <= 20221018:
         return text
     v[1] = "20221018"
+
+    def walk(node):
+        res = [node[0]]
+        for c in node[1:]:
+            if isinstance(c, list) and c:
+                if c[0] in ("uuid", "unlocked", "embedded_fonts"):
+                    continue
+                if c[0] == "hide" and node[0] in ("fp_text", "property", "model", "effects"):
+                    if len(c) < 2 or c[1] == "yes":
+                        res.append("hide")
+                    continue
+                if c[0] in ("remove_unused_layers", "keep_end_layers") and len(c) == 2:
+                    if c[1] == "yes":
+                        res.append([c[0]])
+                    continue
+                if c[0] == "fill" and node[0] != "zone" and len(c) == 2 and c[1] in ("yes", "no"):
+                    c = ["fill", "solid" if c[1] == "yes" else "none"]
+                c = walk(c)
+            res.append(c)
+        return res
+    t = walk(t)
     out = []
     for c in t:
         if isinstance(c, list) and c and c[0] == "generator_version":
             continue
         if isinstance(c, list) and c and c[0] == "property" and len(c) >= 3:
             if c[1] in ("Reference", "Value"):
-                rest = [x for x in c[3:] if not (isinstance(x, list) and x and x[0] in ("uuid", "unlocked"))]
-                hide = any(x == "hide" or (isinstance(x, list) and x[:2] == ["hide", "yes"]) for x in rest)
-                rest = [x for x in rest if not (x == "hide" or (isinstance(x, list) and x and x[0] == "hide"))]
-                c = ["fp_text", c[1].lower(), c[2]] + rest
-                if hide:
-                    c.insert(3, "hide")
+                rest = [x for x in c[3:] if x != "hide"]
+                at = [x for x in rest if isinstance(x, list) and x and x[0] == "at"]
+                c = ["fp_text", c[1].lower(), c[2]] + at + (["hide"] if "hide" in c[3:] else []) + [x for x in rest if x not in at]
             else:
                 c = ["property", c[1], c[2]]
         out.append(c)
