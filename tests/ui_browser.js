@@ -26,7 +26,7 @@ async function local(browser, width) {
   const p = await page(browser, width), w = `@${width}`;
   await p.goto(cfg.local[width]);
   await p.waitForSelector("#steps:not([hidden])");
-  check("nav shown" + w, await p.locator("#steps a").count() === 7);
+  check("nav shown" + w, await p.locator("#steps a").count() === 8);
   check("no sideways scroll on load" + w, await overflow(p) <= 0, await overflow(p));
   await step("upload" + w, async () => {
     await p.setInputFiles("#file", cfg.bom);
@@ -188,6 +188,17 @@ async function demo(browser, width) {
   check("sample builds a 7-part library" + w, await p.locator("#plist .pcard").count() === 7, await p.locator("#plist .pcard").count());
   check("welcome goes away after the sample" + w, await p.locator("#welcome").isHidden());
   check("demo: no sideways scroll" + w, await overflow(p) <= 0, await overflow(p));
+  // your library: every part once, a column per tool, and a part page
+  await p.click('#steps a[href="#hubcard"]');
+  await p.waitForFunction(() => document.querySelectorAll("#hubrows tr").length >= 7 && /AO3401A/.test(document.querySelector("#hubrows").innerText), null, { timeout: 30000 });
+  check("library: the sample parts with Altium and KiCad columns" + w, /same/.test(await text(p, "#hubrows")) && /KiCad/i.test(await text(p, "#hubhead")));
+  await p.locator("#hubrows tr").first().click();
+  await p.waitForSelector("#hubdlg[open] .copies tbody tr", { timeout: 30000 });
+  check("library: part page lists each copy" + w, await p.locator("#hubdlg .copies tbody tr").count() >= 2);
+  check("library: part page fits the screen" + w, await p.evaluate(() => { const d = document.querySelector("#hubdlg"); return d.scrollWidth <= d.clientWidth + 1; }));
+  await shot(p, `library-part-${width}`);
+  await p.keyboard.press("Escape");
+  check("library: Escape closes the part page" + w, await p.locator("#hubdlg[open]").count() === 0);
   // a BOM dropped anywhere on the page is checked
   await p.evaluate(() => {
     const dt = new DataTransfer();

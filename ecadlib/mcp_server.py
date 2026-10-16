@@ -248,6 +248,24 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["project"],
                      "properties": {"project": {"type": "string", "description": "path to the .PrjPcb or .SchDoc"},
                                     "variant": {"type": "string"}}}},
+    {"name": "library_hub",
+     "description": "The whole parts library across tools: every part once (your libraries from --lib / [hub] libraries "
+                    "plus the parts ecadlib built), with a cell per tool (altium, altium365, kicad, fusion, easyeda): "
+                    "missing, same, present, different (pads, pins or value differ from the newest copy) or behind "
+                    "(different and older by [hub] stale_days). Each row has last changed, by whom, lifecycle, where-used "
+                    "count and flags. Filter with have / lack (tools), states, flags. Read-only.",
+     "inputSchema": {"type": "object",
+                     "properties": {"q": {"type": "string", "description": "words in name, MPN, maker or description"},
+                                    "have": {"type": "array", "items": {"type": "string"}, "description": "only parts in these tools"},
+                                    "lack": {"type": "array", "items": {"type": "string"}, "description": "only parts missing from these tools"},
+                                    "states": {"type": "array", "items": {"type": "string", "enum": ["missing", "same", "present", "different", "behind"]}},
+                                    "flags": {"type": "array", "items": {"type": "string", "enum": ["different", "behind", "held", "awaiting_approval", "eol", "duplicate"]}},
+                                    "page": {"type": "integer"}, "size": {"type": "integer"}}}},
+    {"name": "library_hub_part",
+     "description": "One part of the library hub: every tool's copy (file, symbol, footprint, last changed, by whom, what "
+                    "differs and from which copy), sources, release check, sign-offs, where-used, lifecycle, history and "
+                    "the fixes on offer. key comes from library_hub rows.",
+     "inputSchema": {"type": "object", "required": ["key"], "properties": {"key": {"type": "string"}}}},
     {"name": "where_used",
      "description": "Scan folders of Altium projects and report where each part is used (project, designators, quantity, "
                     "revision, variants where it is not fitted), with flags: parts missing from the library, library parts "
@@ -482,6 +500,13 @@ def call_tool(ws, name, args):
             return ws.agent_run(args.get("dry_run", True) is not False)
         if name == "project_bom":
             return ws.project_bom(args["project"], args.get("variant") or None)
+        if name == "library_hub":
+            return ws.hub(args.get("q") or "", args.get("have") or (), args.get("lack") or (), args.get("states") or (), "",
+                          args.get("flags") or (), "name", args.get("page") or 1, args.get("size") or 100)
+        if name == "library_hub_part":
+            p = ws.hub_part(args["key"])
+            return {k: v for k, v in p.items() if k not in ("pictures", "symbol")} | {
+                "pictures": [{k: v for k, v in x.items() if k != "svg"} for x in p["pictures"]]}
         if name == "where_used":
             return ws.where_used(args["projects"], args.get("part") or None, args.get("plan") or None)
         if name == "agent_watch_scan":

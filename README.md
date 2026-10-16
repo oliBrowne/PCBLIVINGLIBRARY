@@ -109,6 +109,7 @@ Both servers use only the standard library on top of the package requirements. T
 * **Undo.** Approve and reject (in step 2 and in the review queue) show at once and are sent when the few-second Undo window closes; *Release anyway* is recorded at once and its Undo holds the part again.
 * **Keyboard.** `?` lists the shortcuts: `/` search, `j` / `k` next / previous part, `Enter` open, `Esc` close, `h` held only, `u` choose a file, `1` `2` `3` steps, `q` review queue, `s` status. Light and dark themes follow the system; `prefers-reduced-motion` turns animations off.
 * The same part cards are available as `Workspace.library_parts(bom)`, `GET /api/parts?bom=` and the MCP tool `library_parts` (`ecadlib/partview.py`).
+* **Your library** (`l`) shows your whole library across tools: every part once, with a column per tool (Altium, Altium 365, KiCad, Fusion, EasyEDA), last changed and by whom, and a part page with pictures, sources, release check, sign-off, where-used, lifecycle, history and fix buttons. See section 39.
 
 ### Team server (`ecadlib ui --team`)
 
@@ -1897,6 +1898,59 @@ names or server paths.
   KiCad/Altium field, review note or agent failure without one fails) and `tests/test_ui_voice.py` (snapshots in
   `tests/fixtures/voice/`, Markdown and HTML say the same, demo and test pack reports free of internal names and
   absolute paths). After a deliberate wording change: `UPDATE_VOICE=1 python -m tests.run_all test_ui_voice`.
+
+## 39. `hub.py`: your library across tools, in one place
+
+The **Your library** page of the web UI (also `ecadlib hub`, Workspace `hub` / `hub_part` / `hub_fix`, MCP
+`library_hub` / `library_hub_part`) lists every part once, whichever tool it is in, with one column per tool:
+Altium, Altium 365, KiCad, Fusion and EasyEDA. It reads your existing libraries as well as the parts ecadlib built, and
+it never writes to your library files (its own notes live in `<workspace>/hub/`).
+
+* **What it reads.** ecadlib's own parts from every librarian plan (the .SchLib / .PcbLib each part was built into, the
+  KiCad library `kicad-dblib` wrote for that BOM, the Altium 365 component it was pushed to or pulled from), and your
+  libraries from `--lib` plus `[hub] libraries`: .SchLib / .PcbLib, .DbLib / .SvnDbLib with their database, .kicad_sym,
+  .pretty, .kicad_dbl (SQLite), and Altium 365 component lists (`a365 pull`'s `workspace_plan.json`, check-a365
+  state files). Same readers as `ecadlib init`, dedupe and where-used.
+* **One row per part.** Copies are grouped by MPN (packaging suffixes stripped, as dedupe does), or by name when a copy
+  has no MPN. A DbLib row or a KiCad database row is a part; the symbols it points at are not counted again.
+* **Each cell** is *missing*, *same* (pads, pins and value match the newest copy that has them), *there* (nothing to
+  compare, such as an Altium 365 component without files), *different* (the detail says what: pad count, one pad's
+  size or position, a pin name, the value) or *behind* (different and last changed `[hub] stale_days`, default 14, or
+  more before the newest copy: "KiCad is 6 weeks behind Altium"). Pin names count only when both copies name the pin,
+  so KiCad's `~` and pin numbers used as names are not differences.
+* **Last changed and by whom**, per part and per tool copy: the last git commit when the library file is in a git
+  repository and has no uncommitted change (author and date); the Altium 365 revision date; else the file's own date,
+  with the person ecadlib recorded doing it through the web app (fill, pick, push, fix; the signed-in user in team
+  mode), or "not recorded".
+* **History.** Each look is compared with the previous one (`hub/state.json`): added, changed (with what changed:
+  footprint pads, symbol pins, value, revision) and removed copies go to `hub/history.jsonl`, with web-app actions.
+  A part's history adds its sign-offs and Altium 365 syncs. A library that is not read this time (another `--lib`)
+  does not count as removed.
+* **The part page**: footprint pictures of each distinct copy (Altium PCB-editor colours), a pinout sketch, every copy
+  with where it is, when and by whom it last changed and what differs, the release check with reasons and next steps,
+  sign-offs, sources and the datasheet, lifecycle (upkeep's lifecycle check or Altium 365), where-used (Altium projects
+  under `[hub] projects`) and the history.
+* **Fix buttons**: *Make the KiCad version* (ecadlib's KiCad copy missing or different: writes the KiCad library of
+  the part's BOM), *Send to Altium 365* (a dry run first), *See why it is held* / *Sign it off*, *Find duplicates*, and
+  for a part only in your libraries *Build it with ecadlib* (a one-line BOM through the librarian, so ecadlib has its
+  own checked copy to compare with yours). A copy in your own library that differs is reported, never overwritten.
+* **Filters**: search, needs a look (different or behind), held, end of life, duplicates, built by ecadlib, your
+  libraries, "in Altium but not in KiCad", sorted by name, last changed or what needs a look.
+* **Other tools.** `hub.register_tool(tool, label, exts, read, workspace_dirs=(), fix=None)` adds a reader (and
+  optionally a "make this tool's copy" fix); `read(path)` returns one dict per part with `name`, `mpn`, `pads`
+  `[(number, x, y, w, h, rot, drilled)]` in mm with y up, and `pins` `[(number, name)]`. The Fusion (Eagle .lbr) and
+  EasyEDA Pro exporters register theirs; plugins can too (entry point group `ecadlib.hub_tools`). Until a reader is
+  there the column says "no reader yet".
+* Settings in `ecadlib.toml`:
+
+  ```toml
+  [hub]
+  libraries = ["D:/Altium/Libraries", "~/kicad/my_libs"]   # read on top of --lib
+  projects = ["D:/Projects"]                                # Altium projects, for where-used
+  stale_days = 14
+  ```
+* Works the same in local and team mode: viewers can see everything, a librarian runs the fixes, and in team mode the
+  history names the signed-in user. Tests: `tests/test_hub.py`.
 
 ## Releases
 

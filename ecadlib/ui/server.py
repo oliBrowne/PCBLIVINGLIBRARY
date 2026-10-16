@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .. import agent_queue as AQ, team as TM
+from .. import agent_queue as AQ, hub as HUB, team as TM
 from ..app import Workspace
 
 STATIC = Path(__file__).with_name("static")
@@ -56,6 +56,8 @@ ROUTES = {
     ("POST", "/api/agent/queue/approve"): "approver",
     ("POST", "/api/rules/propose"): "admin",               # reads any folder on the server
     ("POST", "/api/rules/save"): "admin",
+    ("GET", "/api/hub"): "viewer", ("GET", "/api/hub/part"): "viewer",   # library hub: every part across tools
+    ("POST", "/api/hub/fix"): "librarian",
     ("GET", "/api/team/users"): "admin", ("POST", "/api/team/users"): "admin", ("GET", "/api/team/audit"): "admin",
 }
 LIVE_PUSH = "approver"
@@ -245,6 +247,24 @@ def _str(v, what, optional=False):
     if not isinstance(v, str) or (not optional and not v.strip()):
         raise ValueError(f"{what} must be a non-empty string")
     return v
+
+
+def _int(v, default):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+_LOCAL_WHO = []
+
+
+def local_who():
+    """This computer's user, as approvals records it (ECADLIB_USER, git config, login name); looked up once."""
+    if not _LOCAL_WHO:
+        from ..approvals import identity
+        _LOCAL_WHO.append(identity())
+    return _LOCAL_WHO[0]
 
 
 def _strs(v, what):
@@ -521,6 +541,16 @@ def make_handler(ws: Workspace, team=None):
                         return self._send(404, {"error": _msg(e)})
                 if u.path == "/api/parts":                      # part cards of a BOM's library plan
                     return self._send(200, ws.library_parts(self._bom({"bom": q.get("bom")}), q.get("pictures") != "0"))
+                if u.path == "/api/hub":                        # the library hub: one page of parts, filtered
+                    lst = lambda k: [x for x in (q.get(k) or "").split(",") if x]
+                    return self._send(200, ws.hub(q.get("q", ""), lst("have"), lst("lack"), lst("state"), q.get("origin", ""),
+                                                  lst("flags"), q.get("sort", "name"), _int(q.get("page"), 1),
+                                                  _int(q.get("size"), 100), q.get("rescan") == "1"))
+                if u.path == "/api/hub/part":
+                    try:
+                        return self._send(200, ws.hub_part(q.get("key", "")))
+                    except KeyError as e:
+                        return self._send(404, {"error": _msg(e)})
                 if u.path == "/api/job":                        # a running job (its live log): owner or admin only
                     job = jobs.get(q.get("id", ""), self.user if team else None)
                     return self._send(200, job) if job else self._send(404, {"error": "no such job"})
@@ -592,6 +622,8 @@ def make_handler(ws: Workspace, team=None):
                 b = self._json()
                 bom = self._bom(b)
                 refresh = [] if b.get("refresh") is True else (b.get("refresh") or None)
+                with contextlib.suppress(Exception):
+                    HUB.note_action(ws.root, u.path, dict(b, bom=bom), self._who(b))
                 return self._send(200, jobs.start(self._librarian, bom, b.get("sources"), refresh, label=bom,
                                                   owner=self._owner(), key="librarian:" + bom))
             if u.path == "/api/resolve/candidates":               # may fetch KiCad library files: a background job
@@ -608,6 +640,18 @@ def make_handler(ws: Workspace, team=None):
                     raise ValueError("choices must map setting keys to values")
                 return self._send(200, jobs.start(self._propose, paths, a365, choices, label="library rules",
                                                   owner=self._owner()))
+            if u.path == "/api/hub/fix":                          # a fix button on the library hub
+                b = self._json()
+                key, action = _str(b.get("key"), "key"), _str(b.get("action"), "action")
+                if action == "build":                             # a one-line BOM through the librarian: a job
+                    with write_lock:
+                        bom = ws.hub_build_bom(key)
+                    HUB.record(ws.root, [{"when": HUB.now(), "who": self._who(b), "what": "asked ecadlib to build it",
+                                          "kind": "action", "key": key, "bom": bom}])
+                    return self._send(200, dict(jobs.start(self._librarian, bom, None, None, label=bom, owner=self._owner(),
+                                                           key="librarian:" + bom), bom=bom))
+                with write_lock:
+                    return self._send(200, ws.hub_fix(key, action, self._who(b)))
             if u.path == "/api/altium365/workspaces":             # read-only network call, no lock
                 self._json()
                 return self._send(200, ws.altium365_workspaces())
@@ -633,8 +677,19 @@ def make_handler(ws: Workspace, team=None):
             if u.path in actions:
                 b = self._json()
                 with write_lock:
-                    return self._send(200, actions[u.path](b))
+                    res = actions[u.path](b)
+                with contextlib.suppress(Exception):             # the hub's "who changed it": never fails the action
+                    HUB.note_action(ws.root, u.path, b, self._who(b), res)
+                return self._send(200, res)
             return self._send(404, {"error": "not found"})
+
+        def _who(self, b):
+            """Who did it, for the hub's history: the signed-in user (team), else the name typed in the page or this
+            computer's user (git config / login name)."""
+            if team and self.user:
+                return TM.identity(self.user)
+            typed = b.get("user") if isinstance(b.get("user"), str) else ""
+            return typed.strip()[:120] or local_who()
 
         def _decide(self, b):
             role, comment = _str(b.get("role"), "role", True), _str(b.get("comment"), "comment", True)
