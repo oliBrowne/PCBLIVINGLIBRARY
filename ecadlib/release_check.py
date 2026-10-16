@@ -12,6 +12,8 @@ Rules, per plan item:
             Overlapping pads whose symbol pins share a name (USB-C A1/B12 = GND) are stacked on purpose: a warning.
   height    a 3D height is present and inside the plausible range for the package family (HEIGHTS)
   fields    Manufacturer, Manufacturer Part Number, a datasheet link and Description are filled in
+  parity    the .kicad_mod and the .PcbLib / .SchLib read back the same (ecadlib.parity: pads, drills, paste, courtyard,
+            3D, pin -> pad); `[release] parity = "warn"` reports instead of holding, "off" skips it
   verify    the item carries `verify` notes (e.g. a datasheet-reader footprint): a person has to look first
 Failing items get status `held` and `hold_reasons`; others `ready`. `--allow PART` records an override in the
 item (`allow.failures` = the failures it covers); an allowed item is `ready` while its failures stay within
@@ -188,6 +190,17 @@ def check_item(item, base=".", rules=None):
             add("footprint", m)
         warns += [f"{m} (same pin name: stacked on purpose)" for m in mw]
         warns.append("no .kicad_mod: only overlap, courtyard and pin 1 checked (on the PcbLib)")
+    # ---- KiCad and Altium read back the same (ecadlib.parity)
+    mode = (rules.get("release") or {}).get("parity", "hold")
+    if mode != "off" and kmod and fps:
+        from . import parity as PY
+        try:
+            diffs = PY.release_diffs(text, fps[0], syms, rules)
+        except Exception as e:                 # a parity crash must not hide the other rules
+            diffs = [{"level": "warn", "msg": f"parity check failed ({type(e).__name__}: {e})"}]
+        for d in diffs:
+            (add("parity", d["msg"]) if d["level"] == "error" and mode == "hold" else warns.append(f"parity: {d['msg']}"))
+        info["parity"] = "mismatch" if any(d["level"] == "error" for d in diffs) else "match"
     # ---- 3D height
     if fps:
         bodies = [AL.parse_params(r["params"]) for r in fps[0]["records"] if r["type"] == "body"]
@@ -253,7 +266,7 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
         it["hold_reasons"] = open_ if result == "held" else []
         if result == "held" and it.get("allow"):
             it["hold_reasons"] = [m + (" (cannot be overridden)" if m in hard else " (not covered by --allow)") for m in open_]
-        it["release_check"] = {"result": result, "failures": msgs, "warnings": warns, **{k: v for k, v in info.items() if k == "height"}}
+        it["release_check"] = {"result": result, "failures": msgs, "warnings": warns, **{k: v for k, v in info.items() if k in ("height", "parity")}}
         rows.append({"name": it["name"], "status": it["status"], "result": result,
                      "symbol_source": (it.get("source") or {}).get("symbol") or "", "footprint_source": (it.get("source") or {}).get("footprint") or "",
                      "height_mm": f"{info['height']:.2f}" if info.get("height") else "", "failures": "; ".join(msgs),

@@ -152,6 +152,9 @@ def build(out, name=NAME, log=print):
     kd = KD.build(plan, out / "kicad", name, log=quiet)
     ad = DS_.sync(plan, out / "altium", name=name, win_dir=WIN_DIR)
     PE.write(PE.rows(plan, name), out / "library" / "parts.csv", "csv")
+    from . import parity as PY                 # both libraries read back and compared, part by part and row by row
+    py = PY.check_plan(plan, out / "kicad", name, out / "altium")
+    PY.write_report(py, out / "parity")
     parts = []
     for it in items:
         parts.append({"part": it["name"], "status": it["status"], "symbol": (it.get("symbol") or {}).get("ref"),
@@ -160,7 +163,8 @@ def build(out, name=NAME, log=print):
     tables = sorted({str(i.get("folder") or "").rstrip("/").split("/")[-1] for i in items if i["status"] == "ready"})
     summary = {"name": name, "tables": tables, "parts": parts, "held": held, "kicad": {"symbols": kx.get("symbols"),
                "footprints": sorted(kx.get("footprints") or {})}, "kicad_dblib": kd.get("dblib") if isinstance(kd, dict) else None,
-               "altium": {"dblib": str(Path(ad["dblib"]).relative_to(out).as_posix()) if ad.get("dblib") else None}}
+               "altium": {"dblib": str(Path(ad["dblib"]).relative_to(out).as_posix()) if ad.get("dblib") else None},
+               "parity": {**py["counts"], "database_rows": py.get("database_rows"), "report": "parity.md"}}
     (out / "testpack.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     (out / "CHECKLIST.md").write_text(checklist(summary), encoding="utf-8")
     return summary
@@ -224,8 +228,8 @@ The KiCad files are in KiCad 8 format: KiCad 7 refuses to open them (it will say
 3. Footprint editor: library `{n}` lists the footprints; open each: pads as in the table above, courtyard on F.Courtyard,
    **Inspect > Footprint Checker**: note anything it lists. Expected for the USB-C receptacle only: its stacked pads
    (A1/B12, A4/B9, A9/B4, A12/B1) overlap and its four shell pads share the number SH, as in KiCad's own footprint.
-4. There are no 3D models in the KiCad files of this pack (the Altium footprints carry ecadlib's generated STEP bodies;
-   KiCad parts taken from KiCad's own library get KiCad's models, which this offline pack does not download).
+4. **3D viewer** (footprint editor or the board): every footprint has a 3D model from `{n}.3dshapes/`, the same one the
+   Altium footprint carries (ecadlib's generated STEP; for the USB-C receptacle its Altium extruded body as a STEP).
 5. In the schematic, place all six parts, assign footprints (already set), **Update PCB from Schematic**: nothing
    missing. In the PCB, **Inspect > Design Rules Checker** with *Test for parity between PCB and schematic*: no
    library errors ("footprint not found in library" or "doesn't match library").
@@ -236,6 +240,9 @@ The KiCad files are in KiCad 8 format: KiCad 7 refuses to open them (it will say
 
 * the release check passed for every part not listed as held above (pins match pads, footprint checks, 3D height,
   fields, files read back);
+* KiCad / Altium parity (`ecadlib parity`, report `parity.md`): {s.get('parity', {}).get('match', '?')} of {len(s['parts'])} parts
+  read back the same from the KiCad and the Altium files (pads, drills, paste, courtyard, 3D model, pins, fields), and
+  the KiCad database rows match the DbLib rows;
 * `tests/test_e2e.py` (run in ecadlib's own test suite) loads a pack like this one with KiCad 7's kicad-cli and pcbnew
   (after converting to KiCad 7 syntax), places every footprint through the library table and runs DRC, and reads every
   .PcbLib / .SchLib back with pyaltiumlib and ecadlib's own reader. That is all file-level: the real Altium checks are

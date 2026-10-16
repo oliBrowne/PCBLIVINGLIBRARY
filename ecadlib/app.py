@@ -977,6 +977,25 @@ class Workspace:
                 "tables": rep["tables"], "skipped": rep["skipped"], "warnings": rep["warnings"],
                 "kicad_export": rep.get("kicad_export")}
 
+    def parity(self, bom, kicad=False, name="ecadlib"):
+        """KiCad vs Altium parity of a BOM's library (ecadlib.parity): the plan's .kicad_mod against its .PcbLib / .SchLib,
+        or with kicad=True the KiCad export in kicad/<bom>/ (run kicad_dblib first) against the Altium files, its
+        .kicad_dbl rows included. Report in reports/parity_<bom>.md / .json. Never touches the network."""
+        from . import parity as PY
+        from .kicad_export import kname
+        bom_path, plan_f, _ = self._plan(bom)
+        kdir = None
+        if kicad:
+            kdir = self.root / "kicad" / self._key(bom_path)
+            if not (kdir / f"{kname(str(name))[:60]}.kicad_sym").is_file():
+                raise ValueError(f"no KiCad export in {self.rel(kdir)} yet: run kicad_dblib (or kicad-export) first")
+        rep = PY.check_plan(plan_f, kdir, kname(str(name))[:60] if kdir else None, rules=self.rules_in_use())
+        stem = PY.write_report(rep, self.root / "reports" / f"parity_{self._key(bom_path)}")
+        bad = [p for p in rep["parts"] if p["result"] == "mismatch"]
+        return {"mode": rep["mode"], "ok": rep["ok"], "counts": rep["counts"], "report": self.rel(stem.with_suffix(".md")),
+                "mismatches": {p["part"]: [d["msg"] for d in p["diffs"] if d["level"] == "error"][:20] for p in bad},
+                "database": [d["msg"] for d in rep["database"]][:50]}
+
     def tool_packages(self, bom, name="ecadlib", kicad=8, include_held=False):
         """Packages that plug into the tools themselves, for a BOM's plan, in packages/<bom>/: a KiCad Plugin and
         Content Manager zip (kicad_pcm) and the Altium hand-off folder (altium_pkg: .LibPkg, install script, DbLib)."""

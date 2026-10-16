@@ -330,12 +330,16 @@ def build_demo(ws, tool="both", bom=None, log=print):
     else:
         log("[3/3] Altium files are written by step 2 (.SchLib / .PcbLib)")
     lib_dir = ws._librarian_dir(dest)
+    par = ws.parity(rel, kicad=bool(kicad), name=DEMO_NAME) if tool in ("kicad", "both") else None   # both libraries agree
+    if par:
+        log(f"      KiCad / Altium parity: {par['counts']['match']} parts match, {par['counts']['mismatch']} differ ({par['report']})")
     altium = sorted(ws.rel(p) for p in (lib_dir / "models").glob("*/*") if p.suffix in (".SchLib", ".PcbLib"))
     return {"workspace": str(root), "bom": rel, "parts": res["parts"], "ready": res["ready"], "held": res["held"],
             "held_parts": [r["part"] for r in res["review"] if r["status"] != "ready"],
             "review": [r for r in res["reports"] if r.endswith("review.md")],
             "plan": ws.rel(lib_dir / "plan.json"), "altium": altium,
             "kicad": kicad and {"folder": kicad["folder"], "files": kicad["files"]},
+            "parity": par and {"ok": par["ok"], "counts": par["counts"], "report": par["report"], "mismatches": par["mismatches"]},
             "seconds": round(time.time() - t0, 1)}
 
 

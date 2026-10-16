@@ -60,6 +60,8 @@ def test_demo_builds_offline_and_reruns_without_churn():
         for f in ("ecadlib_demo.kicad_sym", "fp-lib-table", "sym-lib-table", "ecadlib_demo.kicad_dbl", "ecadlib_demo.sqlite"):
             assert (kd / f).is_file(), f
         assert len(list((kd / "ecadlib_demo.pretty").glob("*.kicad_mod"))) == 5
+        assert res["parity"]["ok"] and res["parity"]["counts"]["match"] == 6, res["parity"]    # KiCad == Altium (ecadlib.parity)
+        assert len(list((kd / "ecadlib_demo.3dshapes").glob("*.step"))) == 5                  # the Altium 3D models, for KiCad
         plan = (ws / res["plan"]).read_bytes()
         with _no_network():
             rc, out2, _ = _run(["demo", "-o", "demo"], cwd=d)           # again: same plan, nothing new

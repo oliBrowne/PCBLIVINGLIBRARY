@@ -65,6 +65,8 @@ EXAMPLES = {
     "notify": ["ecadlib notify show", "ecadlib notify test --event batch_ready"],
     "kicad-dblib": ["ecadlib kicad-dblib ws/library/plan.json -o ws/kicad --name mylib --export"],
     "export-parts": ["ecadlib export-parts ws/library/plan.json --format xlsx -o parts.xlsx"],
+    "parity": ["ecadlib parity ws/library/plan.json", "ecadlib parity ws/library/plan.json --kicad ws/kicad --altium ws/altium",
+               "ecadlib parity survey --quick"],
     "stdparts": ["ecadlib stdparts resolve \"SOIC-8\"", "ecadlib stdparts coverage my_bom.csv"],
 }
 
