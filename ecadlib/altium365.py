@@ -246,7 +246,9 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     rules: parameter names go to the workspace in the rules' house names ([parameters] names)."""
     from .approvals import push_block
     from .rules import house_item
-    items = [house_item(i, rules) for i in items]
+    from .a365_sync import is_a365
+    # a pulled item already carries the workspace's own parameter names: renaming it would rename them there
+    items = [i if is_a365(i) else house_item(i, rules) for i in items]
     defs = {} if dry_run else client.release_defs(ws)
     results, uploaded = [], {}                  # one upload per file per run (shared Resistor.SchLib etc.)
     def upload(p):
