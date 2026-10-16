@@ -620,7 +620,7 @@ ecadlib librarian BOM ... --datasheet-batch [--datasheet-no-wait]           # th
 python3 -m tests.test_datasheet_batch
 ```
 
-Every plan part that still has no symbol or footprint goes to the reader. Its datasheet link comes from the BOM's datasheet column, the plan's `ComponentLink2URL`, a link a source found (KiCad symbol, EasyEDA `lcsc.url`) or LCSC's `https://www.lcsc.com/datasheet/<C-number>.pdf`, tried in that order. Each link is downloaded (stored under `<cache>/datasheets/` with its URL, SHA-256, size and page count) and must start with `%PDF`; an HTML viewer page is skipped. A link this machine cannot reach is sent as a URL document for the API to fetch, and the part is flagged. A PDF over `[datasheet] auto_pages` pages (default 40), or over the request limits, is cut to the pages whose text mentions the package outline, land pattern or pin table, plus pages 1 to 3. Page numbers in the outputs are mapped back to the original file. `--pages` chooses the pages yourself.
+Every plan part that still has no symbol or footprint goes to the reader. Its datasheet link comes from the BOM's datasheet column, the plan's `ComponentLink2URL`, a link a source found (KiCad symbol, EasyEDA `lcsc.url`) or LCSC's `https://www.lcsc.com/datasheet/<C-number>.pdf`, tried in that order. Each link is downloaded (stored under `<cache>/datasheets/` with its URL, SHA-256, size and page count) and must start with `%PDF`; an HTML viewer page is skipped. A link this machine cannot reach is sent as a URL document for the API to fetch, and the part is flagged. Only the pages for the part's package are sent first (`[datasheet] page_budget`, see *Fewer pages* below); with `page_budget = 0`, a PDF over `[datasheet] auto_pages` pages (default 40), or over the request limits, is cut to the pages whose text mentions the package outline, land pattern or pin table, plus pages 1 to 3. Page numbers in the outputs are mapped back to the original file. `--pages` chooses the pages yourself.
 
 All parts go into one Message Batch (half price), one request per part with `custom_id` = part name. The batch is polled, the JSONL results are collected, and each part is built through the librarian's writers. Every result is marked `verify`, so the release check holds it until a person has looked; LLM output is never released automatically. The release check then runs again. The batch id is kept in `<out>/datasheet/batch_state.json`, so `--no-wait` or an interrupted run collects the same batch next time instead of paying twice. A batch create is never retried after an ambiguous failure. Errored or expired requests are sent again on the next run. `--no-batch` makes one Messages call per part instead, with the server-side refusal fallback; the Batches API does not accept that parameter.
 
@@ -631,6 +631,31 @@ All parts go into one Message Batch (half price), one request per part with `cus
 * **Workspace / MCP:** `Workspace.datasheet_estimate(bom)` and `datasheet_batch(bom, sync, wait, parts)`; MCP tools `datasheet_estimate` and `datasheet_batch`. The tool submits and returns by default; call it again to collect.
 
 **Not tested live:** no API key is available here, so no successful extraction or batch has run. With an invalid key the live API returned 401 `authentication_error` for messages, count_tokens, batch create and batch retrieve, and the client reported each one correctly. The tests use a fake HTTP layer in the documented Messages, count_tokens and Batches shapes. Datasheet hosts (LCSC and the others) are blocked from this sandbox.
+
+### Fewer pages, a model per part, and what it cost (`ds_route.py`)
+
+```
+ecadlib datasheet pages DS.pdf --part AZ1117CH-3.3TRG1 --package SOT-223-3_TabPin2   # pages + model a read would use
+python3 -m tests.test_ds_route
+```
+
+```toml
+[datasheet]
+page_budget = 6          # pages on the first try (0 = the whole PDF, as before)
+route = "single"         # single: `model` for every part | ladder: start cheap, move up when the checks fail
+ladder = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
+escalate = true          # retry with more pages / the next model when an answer is incomplete or fails
+max_attempts = 4         # most answers paid for per part
+```
+
+* **Pages:** every PDF longer than `page_budget` is cut to the pages that matter for *this* part: the package drawing and land pattern that name its package (from the footprint hint, or from the ordering-table row with its MPN, e.g. `AZ1117CH-3.3TRG1` sits under `SOT223`, `BQ771800DPJR` gives the TI drawing code `DPJ`), the pin table, the ordering information and the drawing's next page. Tables of contents, tape-and-reel and revision pages count little. When the answer is incomplete (unresolved dimensions, missing pins, a page cited outside the pages sent) the next try sends about three times as many pages, then the whole PDF. A PDF without a text layer is sent whole.
+* **Model:** with `route = "ladder"` a part starts on the rung that suits its package: two- and three-terminal parts (chip passives, SOD, SOT-23, SOT-223) on the first, SOIC/SOT-23-6/QFN/DIP up to 32 pins on the middle one, more pins, BGA/LGA/CSP, connectors and unknown packages on the top one; a datasheet over 40 pages moves a part up one rung. An answer that fails datasheet's own checks (schema, sanity, pin table, self-check) or is refused goes to the next model; the top model with every page is the last try, and its answer is kept with its review items. An explicit `--model` means one model.
+* **Cache:** every answer is cached under its PDF hash + model + pages + schema version, so a re-run replays the route without paying: a cheaper model's failed answer is cached as a failed step, never as the part's answer. In a batch, parts that need another step go into the next batch round (with `--no-wait`, the next run).
+* **Cost:** each answer's tokens and USD (from the API usage block: input, cache write 1.25x, cache read, output, half price in a batch; the Haiku 5.5 rate above 100K prompt tokens) go to `<out>/datasheet/cost.jsonl`. The librarian's `review.md` lists them per part, `ecadlib status` (and the MCP `status` tool) sums them per model, and `ecadlib datasheet estimate` prices each part on the model its route starts on, with the worst case of the further steps.
+
+**Why the default stays `route = "single"` on Claude Opus 5.5.** Page picking is on by default: it cuts what is sent without changing who reads it, and widening covers a miss. A cheaper model is a quality trade nobody has measured here yet (no API key in this sandbox), so the ladder is opt-in; run `ecadlib eval` with `--model` per rung and switch when its pass rate holds.
+
+**Measured (offline, 24 parts in 23 public datasheets from gitlab.com: STM32G0B1, TJA1051, AZ1117C, USBLC6-2, BQ25750, ATmega8, KEMET/Samsung/Yageo/TDK passives, ...):** the pages each part needs (drawing for its package, pin table, land pattern, ordering table; 56 needs, marked by hand) are on the first try for 54 of 56 with 132 pages sent, against 49 of 56 with 503 pages before (whole PDF up to 40 pages, the old picker above); the second step covers 55 of 56, and the miss is a Samsung 84-page catalogue that the whole PDF covers. Rough input (3,000 tokens a page, no key to count) falls from about 1.51 M to 0.40 M tokens; rough first-try USD for the 24 parts, synchronous: $10.61 before, $5.04 with picked pages, $2.20 with the ladder (9 parts start on Haiku 5.5, 10 on Sonnet 5.5, 5 on Opus 5.5). These are page and price estimates, not measured answers: no extraction ran live, and the page labels were made on the same datasheets the picker was tuned on.
 
 ## 8. `lifecycle.py`: lifecycle watcher (keep the library current)
 
@@ -648,7 +673,7 @@ Reads parts from BOMs, the DbLib `parts.sqlite`, a `plan.json` or (with `--a365`
 
 ```
 python3 -m ecadlib.librarian examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints -o out/librarian \
-        [--sources kicad,easyeda,datasheet] [--allow PART] [--refresh [PART ...]] [--refresh-index] [--offline]
+        [--sources kicad,easyeda,standard,datasheet] [--allow PART] [--refresh [PART ...]] [--refresh-index] [--offline]
 python3 -m ecadlib.release_check out/librarian/plan.json [--allow PART] [--unallow PART]
 python3 -m tests.test_librarian; python3 -m tests.test_release_check
 ```
@@ -656,9 +681,12 @@ python3 -m tests.test_librarian; python3 -m tests.test_release_check
 Triages the BOM, converts parts already in your `--lib` libraries, and for anything still missing tries in order:
 * **kicad**: the official KiCad libraries. A name index is built once from the GitLab tree API and cached. Symbols match the MPN by exact name, KiCad `x` wildcards, or the MPN minus an ordering suffix; the footprint comes from the symbol's Footprint property, the BOM footprint, or a footprint named after the MPN. R/C/L/LED use `Device:*` plus the footprint by package.
 * **easyeda**: by LCSC number, through a native converter (`easyeda_convert.py`).
+* **standard**: `ecadlib.stdparts` (section 30), offline: chip passives and standard packages built from checked dimensions, plus symbols for R/C/L/LED/diodes and listed transistor/LDO families. Never placed ahead of kicad; fills only a missing half.
 * **datasheet**: `ecadlib.datasheet`, when a datasheet URL is known and `ANTHROPIC_API_KEY` is set. `--datasheet-batch` reads every part that reaches this step as one Message Batch (section 7).
 
 Outputs in `out/librarian/`: `models/`, a `plan.json` for `altium365 push` recording each part's source, `review.md/.csv` (what came from where and what needs a person), and the release-check report. Re-running skips finished parts unless `--refresh` is given.
+
+**Shared footprint files (`fp_share.py`).** Two BOM lines with the same footprint name (`SOIC-14` on a 3.9 mm and a 5.3 mm part) share one `.PcbLib` only when the pads and courtyard are the same (`dedupe`'s geometry hash). Otherwise the later part gets its own name: the real package name (`SOIC-14_5.3x10.2mm_P1.27mm`; `<BOM name>_<real name>` when it does not start with the BOM name), else `<BOM name>_<part>`. That name becomes the item's `footprint.ref` (the BOM's stays in `footprint.bom_ref`), the footprint inside the `.PcbLib`, the symbol's footprint link, the Altium 365 footprint item and the KiCad export name. Re-runs never rename a file a part already has. A part an older librarian gave a shared file without comparing pads is resolved again.
 
 The release check runs at the end and works on any plan. A part is **held** (and `altium365 push` skips it) unless: every pin has a pad and every pad a pin (mechanical and mounting pads excepted); the footprint passes `footprint_check` (KiCad-library parts: pad overlap, courtyard and pin 1); a 3D height is present and plausible for the package; Manufacturer, MPN, datasheet link and Description are filled in; the files exist and read back; and no datasheet-reader output is unreviewed. `--allow PART` overrides the failures present at that moment and is recorded in the plan; missing or unreadable files cannot be overridden.
 
@@ -1188,6 +1216,88 @@ Run 2026-10-15 with KiCad 7.0.11 (`kicad-cli`, `pcbnew` from `/usr/bin/python3`)
   (`kicad-cli pcb export step`) with no read error and every solid in the output; by hand all 68 specs (3151 solids).
 * **Not checked:** KiCad 8, 9 and 10 (not installed; the optional CI job `kicad` also runs the tests on KiCad 8 from
   the KiCad PPA, not run from here); `sym-lib-table` loaded by KiCad; STEP geometry inside KiCad beyond loading.
+
+## 29. `eval`: accuracy test set and scorer (`ecadlib/eval/`)
+
+How often does the pipeline get a part right, and what does it cost? `ecadlib/eval/sets/kicad-v1.json` holds 331 real
+parts with a known answer, taken from KiCad's official libraries (kicad-symbols 9280a93, kicad-footprints f8440fa):
+chip passives 36, SOT 40, SOIC 30, TSSOP/MSOP/SSOP 30, QFN/DFN/SON 40, QFP 25, BGA/CSP 25, diodes 25, power SMD
+(DPAK, LFPAK ...) 15, THT 30, connectors 35. Each case has the MPN, manufacturer, the package a BOM would name, a
+datasheet link (315 of 331), the KiCad footprint it should match, the symbol's pin numbers and names, and `from`:
+a KiCad symbol whose name is the MPN (footprint = its Footprint property, manufacturer from the datasheet's domain), a
+connector footprint whose name carries the maker's part number (JST, Molex, Wurth), or a curated chip-passive ordering
+code (Yageo, Panasonic, Murata, Samsung, KEMET, Lite-On; size code -> KiCad chip footprint). Only numbers are kept from
+KiCad's files (pad centres, sizes, drills, courtyard box; pin names), CC-BY-SA 4.0 with the libraries exception.
+`ecadlib eval build-set --symbols DIR --footprints DIR` rebuilds it from fresh checkouts (deterministic selection).
+
+```
+ecadlib eval run [--limit 30] [--family qfn,bga] [--model M] [--sources standard,easyeda,datasheet] -o out/eval/a
+ecadlib eval run --record out/eval/rec -o out/eval/a      # live, and keep every Claude answer
+ecadlib eval run --replay out/eval/rec -o out/eval/b      # re-score later (new scorer, new builder) without paying
+ecadlib eval compare out/eval/a out/eval/b                # pass rate and $/part per family, cases that flipped
+```
+
+`run` writes one BOM of the cases and sends it through `librarian.run` (default sources: the rules' order without
+`kicad`, which is the ground truth here). Whatever source answers, its `.kicad_mod` and `.SchLib` are scored
+(`ecadlib/eval/score.py`): pad count and numbers; pad 1 (A1) position, which catches mirrored and rotated parts;
+pitch (most common nearest-neighbour spacing); every pad's centre/size/drill; courtyard box; symbol pin numbers and
+names (80 % must agree after normalising overbars and case). Positions are compared after centring both pad boxes, so a
+different origin is reported but does not fail. Tolerances (`--tol pos=0.05 size=0.10 pitch=0.01 courtyard=0.25
+pin1=0.25 drill=0.05`) are looser than `footprint-bench`'s because a datasheet's nominal dimensions differ a little
+from KiCad's. Thermal vias inside an exposed pad are ignored. The report (`report.md`, `report.json`) gives the pass
+rate overall, per family and per answering source, per-field counts, tokens and USD per part (from the message's
+usage block when live, cached or replayed; otherwise datasheet's estimate, rough without a key) and wall time. Without
+a key and without `--replay` nothing is sent: parts that need Claude are reported unresolved, with an estimate.
+
+Checked here (no API key, so no live accuracy number yet): KiCad's footprints and symbols score 331/331 against
+themselves; the scorer fails a 0.65 mm-pitch QFN built in place of a 0.5 mm one (pitch), a mirrored footprint (pin 1),
+a missing exposed pad (pad count). The whole set through the `kicad` source (KiCad libraries served from local
+clones; GitLab rate-limited the live crawl): first 295 parts resolved, 246 pass, with 29 connectors without a
+symbol by MPN and 20 parts that got another part's footprint because both BOM lines named the same package (`SOIC-14`
+for a 3.9 mm and a 5.3 mm body). Fixed (`fp_share.py`, below), and the eval BOM now gives chip passives and diodes
+their R/C/L/D designator (a `U` line is not a capacitor to any source): 331 resolved, 302 pass, the 29 connectors
+are the only failures. Shared footprints are still flagged (`footprint shared with`); they now have the same pads.
+The `standard` source alone (offline, no key): 74 of 331 resolved, all 74 with the right footprint (0 wrong), 57
+pass (the others get a footprint but no symbol by design: ICs, and TVS diodes, whose uni/bidirectional pin names the
+MPN does not settle); chip 36/36, diode 21 resolved, sot 15. It answers only what the name settles: no JEDEC default
+body any more (an earlier version gave 115 answers, 14 of them wrong, from bare `SO-14` / `SOIC-8` / `TDFN-12-1EP`). Estimate mode on the whole set: ~$0.60 per part on Opus 5.5
+synchronous, mostly because PDFs that cannot be downloaded here are guessed at 30 pages.
+
+## 30. `stdparts.py`: standard parts without Claude
+
+```
+python3 -m ecadlib stdparts resolve "SOIC-8 3.9x4.9mm" | 0603 --kind R | --mpn GRM188R71H104KA93D --kind C [--kicad-mod F] [--json]
+python3 -m ecadlib stdparts list [PATTERN]
+python3 -m ecadlib stdparts bench [--kicad DIR | --fixture tests/fixtures/stdparts_kicad_numbers.json.gz]
+python3 -m ecadlib stdparts coverage BOM [BOM ...]
+python3 -m tests.test_stdparts
+```
+
+The librarian's `standard` source (default order `kicad, easyeda, standard, datasheet`) builds parts whose package is
+fully set by standard data, with no API call. Footprints come only from `package_specs/standard.json.gz`: 615 KiCad
+generic packages (510 gullwing / no-lead from the KiCad footprint generator's JEDEC size files, built with
+`footprint_gen`'s IPC-7351B equations; 74 R/C/L/D/LED/fuse chips; 31 hand-drawn ones such as SOD-123, SMA/SMB/SMC,
+MELF, SOT-223, SOT-89, DPAK/D2PAK, TO-220 vertical, TO-92 inline, stored as KiCad's recommended land as a pad table).
+It resolves an exact KiCad name, a chip size (footprint, value, description, or MPN pattern; two sizes that disagree
+give nothing), or a named package with its body size (`SOIC-8 3.9x4.9mm`, `SO-8 150mil`, `QFN-32_L5.0-W5.0-P0.50-EP3.5`). It never
+guesses, because a wrong footprint skips the datasheet reader: a family name without a body size (`SOIC-8`, `SO-14`,
+`TSSOP-20`, `LQFP-100`; only `MSOP-8` has one JEDEC body), a no-lead or `-1EP` name without the exposed-pad size,
+`TO-252-2` / `TO-263-2` / DPAK / D2PAK without a library prefix (KiCad also has `_TabPin1`), a name that fits more
+than one KiCad footprint (SOT-23-3, bare SOT-223, SC-70), pin-removed variants (`SOIC-8-N7`), power packages and
+TO-220 horizontal resolve to nothing, and the next source tries. Symbols: R, C, L, LED and diodes (not TVS: uni- or bidirectional pin names are not certain), and SOT-23 / TO-92 BJTs
+and MOSFETs, 1117 LDOs, 78xx/79xx/LM317 for listed MPN families (with a review note to check pins 1-3). The source is
+recorded as `standard:<Lib>:<Name>` / `standard:<symbol>`.
+
+Checks (2026-10-16, kicad-footprints f8440fa, kicad-symbols 9280a93):
+* `bench`: 615 / 615 table entries match KiCad's footprint (pads and courtyard, footprint_bench tolerances); the test
+  suite repeats it against a numbers-only fixture. Packages where our IPC build differs from KiCad's (fine-pitch
+  gullwing with KiCad's 0.15 mm pad gap, SOT-723, PowerDI-123, TO-92L, TO-220 horizontal, R_0508) are left out.
+* KiCad symbols as an MPN list (description and MPN only, Footprint property hidden): 1953 of 17050 resolve; 1925
+  (98.6%) give the same pads as the symbol's KiCad footprint; all 121 MPN-family pinouts match KiCad's pin numbers.
+* The repo's test BOMs: 47 of 66 non-empty lines get a footprint, 32 a footprint and a symbol (before the no-guess rule; see section 29 for the eval set now). Librarian before/after
+  on the same 68 parts: with the KiCad library reachable, nothing changes (KiCad already has those passives); without
+  it, parts sent to the datasheet step fall from 66 to 35 (31 complete parts with no Claude call).
+* **Not checked:** a live datasheet run (no API key); EasyEDA (blocked).
 
 ## Releases
 

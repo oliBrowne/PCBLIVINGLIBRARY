@@ -2,7 +2,7 @@
 models and the altium365 plan, run the release check, and stop with a review list.
 
     python3 -m ecadlib.librarian examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints -o out/librarian \
-        [--sources kicad,easyeda,datasheet] [--allow PART] [--box] [--refresh [PART ...]] [--refresh-index] [--offline]
+        [--sources kicad,easyeda,standard,datasheet] [--allow PART] [--box] [--refresh [PART ...]] [--refresh-index] [--offline]
 
 Per plan item (one per unique part), parts the triage found in a --lib library are converted from there; for
 anything still missing, the sources are tried in --sources order, each filling only what is still missing:
@@ -14,6 +14,8 @@ anything still missing, the sources are tried in --sources order, each filling o
              Footprint property, a footprint named after the MPN, or the shortest name starting with the BOM footprint.
              R/C/L/LED use Device:R/C/C_Polarized/L/LED and <Family>_SMD:<X>_<imperial>_<metric>Metric by package.
   easyeda    LCSC number (BOM, or found by MPN in triage) -> EasyEDA component JSON -> easyeda_convert -> KiCad text
+  standard   no network, no API: chip passives and standard packages (SOT-23, SOIC-8, QFN-32 5x5 ...) built from the
+             checked package table, symbols where the pinout is standard (ecadlib/stdparts.py); always after kicad
   datasheet  datasheet URL (BOM column, KiCad symbol, EasyEDA/LCSC link, LCSC pattern) + ANTHROPIC_API_KEY ->
              ecadlib.datasheet; the result is marked `verify` so release_check holds it until a person has looked (or
              --allow). --datasheet-batch sends every part that reaches this source as one Message Batch (half price)
@@ -33,7 +35,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
-               footprint_gen as F, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
+               footprint_gen as F, fp_share as FS, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from . import sheetsafe as SS
@@ -41,7 +43,7 @@ from . import symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
 TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository/tree?ref=master&recursive=true&per_page=100&page={page}"
-SOURCES = ("kicad", "easyeda", "datasheet")
+SOURCES = ("kicad", "easyeda", "standard", "datasheet")
 IMP2MET = {v: k for k, v in METRIC_TO_IMPERIAL.items()}
 PASSIVE = {"R": ("Device:R", "Resistor_SMD:R_{}_{}Metric"), "C": ("Device:C", "Capacitor_SMD:C_{}_{}Metric"),
            "CP": ("Device:C_Polarized", None), "L": ("Device:L", "Inductor_SMD:L_{}_{}Metric"), "LED": ("Device:LED", "LED_SMD:LED_{}_{}Metric")}
@@ -182,6 +184,7 @@ class Run:
         for d in ("PcbLib", "SchLib", "KiCad"):
             (self.models / d).mkdir(parents=True, exist_ok=True)
         self.api_key, self.written, self.gen_step = api_key, {}, gen_step
+        self.syms, self.hashes = {}, {}               # SchLib path -> symbol dict; kicad_mod -> geometry hash
         self._kicad, self._kicad_args = None, (kicad_cache, refresh_index)
         self.reader, self.waiting = reader, []          # datasheet reader; parts waiting for its batch
 
@@ -195,12 +198,17 @@ class Run:
 
     # ---- writers: everything goes through kicad_import's converters
     def put_fp(self, st, text, name, source, http=None, height=None, height_src="", spec=None):
-        stem = AL.file_stem(name)
-        pcb = self.models / "PcbLib" / f"{stem}.PcbLib"
-        if str(pcb) in self.written:
-            st["footprint"] = dict(self.written[str(pcb)], notes=[f"shared with {self.written[str(pcb)]['by']}"])
+        """One file per footprint, shared only by parts whose pads are the same (ecadlib/fp_share.py)."""
+        bom_name = name
+        name, pcb, same, h = FS.pick(self.written, self.models, name, text, source, st["name"], self.out, self.hashes)
+        renamed = {"renamed_from": bom_name} if name != bom_name else {}
+        if same is not None:
+            st["footprint"] = {**{k: v for k, v in same.items() if k not in ("renamed_from", "chosen")},
+                               "notes": [f"shared with {same['by']}"], "name": name, "hash": h, **renamed}
+            self._relink(st, bom_name, name)
             return
-        notes = []
+        pcb, stem = Path(pcb), AL.file_stem(name)
+        notes = [f"named {name}: footprint {bom_name} is another part's, with other pads"] if renamed else []
         fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes)
         try:
             K.add_body(fp, t, http, height, False, notes, gen_step=self.gen_step, spec=spec,      # a part-specific
@@ -210,15 +218,32 @@ class Run:
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
         kmod.write_text(text, encoding="utf-8")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
-        st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"]}
+        st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
+                           "name": name, "hash": h, **renamed}
         self.written[str(pcb)] = st["footprint"]
+        self._relink(st, bom_name, name)
+
+    def _relink(self, st, bom_name, name):
+        """A footprint renamed after this part's symbol was written: point the symbol's footprint link at it."""
+        rec = st.get("symbol") or {}
+        path = str(self.out / rec["file"]) if rec.get("file") else ""
+        sym = self.syms.get(path)
+        if name == bom_name or rec.get("by") != st["name"] or rec.get("chosen") or not sym or sym.get("footprint") != bom_name:
+            return
+        self.syms[path] = sym = dict(sym, footprint=name)
+        AL.write_schlib(path, [sym])
+        rec.setdefault("notes", []).append(f"footprint link {name} (the BOM's {bom_name} is another footprint)")
 
     def put_sym(self, st, sym, source, notes=()):
         path = self.models / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib"
+        fr = st.get("footprint") or {}
+        if fr.get("renamed_from") and sym.get("footprint") == fr["renamed_from"]:     # footprint renamed (fp_share)
+            sym = dict(sym, footprint=fr["name"])
         if str(path) in self.written:
             st["symbol"] = dict(self.written[str(path)], notes=[f"shared with {self.written[str(path)]['by']}"])
             return
         AL.write_schlib(path, [sym])
+        self.syms[str(path)] = sym
         st["symbol"] = {"source": source, "file": self.rel(path), "notes": list(notes), "by": st["name"]}
         self.written[str(path)] = st["symbol"]
 
@@ -372,6 +397,35 @@ class Run:
         st["tried"].append(f"easyeda {lcsc}: " + (", ".join(got) or "nothing needed"))
         st["review"].append(f"EasyEDA {lcsc} conversion: check pads and pins against the datasheet (native converter, format assumed)")
 
+    def src_standard(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
+        """Standard packages and pinouts, built offline (ecadlib.stdparts); fills only what is still missing."""
+        from . import stdparts as SP
+        desc = " ".join(dict.fromkeys(str(x) for x in (item.get("description"), ln.get("description")) if x))
+        k = kind or SP.part_kind(item["folder"], item["footprint"].get("kicad") or fp_name, desc, ln.get("designator"))
+        res = SP.resolve([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value")], k, mpn, desc)
+        got = []
+        if not st["footprint"] and res["footprint"]:
+            sp = SP.spec(res["footprint"])
+            text, _ = SP.build(res["footprint"], RU.density_for(sp, self.rules))
+            h = F.dim(sp["height_max"])[2] if sp.get("height_max") else None
+            self.put_fp(st, text, fp_name, f"standard:{res['kicad_ref']}", None, h, "standard package table", sp)
+            got.append(f"footprint {res['kicad_ref']} ({res['fp_how']})")
+        fp_src = str((st["footprint"] or {}).get("source") or "")
+        same_fp = res["footprint"] and fp_src.endswith(":" + res["footprint"])
+        if not st["symbol"] and res["symbol"] and (k in ("R", "C", "CP", "L") or same_fp):
+            text, name = SP.symbol_text(res["symbol"], mpn)
+            shared = k in ("R", "C", "CP", "L")
+            self.put_kicad_sym(st, [K._find_symbol(sexpr.parse(text), name)], sym_name, None if shared else fp_name,
+                               f"standard:{name}", [] if shared or not mpn else [("MPN", mpn)])
+            got.append(f"symbol {name} ({res['sym_how']})")
+            if ":" in res["symbol"]:
+                st["review"].append(f"symbol pinout {name} from the {mpn} family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
+        elif not st["symbol"] and res["symbol"]:
+            res["sym_how"] = f"footprint came from {fp_src or 'nowhere'}, not {res['footprint']}: pin numbers not known to match"
+        why = [] if st["footprint"] else [f"footprint: {res['fp_how']}"]
+        why += [] if st["symbol"] else [f"symbol: {res['sym_how']}"]
+        st["tried"].append("standard: " + "; ".join(got + why))
+
     def src_datasheet(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
         urls = D.datasheet_urls(item, ln, row, st["found"])
         if not urls:
@@ -426,8 +480,12 @@ class Run:
                          [f"{len(res['symbol']['pins'])} pins grouped by function (ecadlib.symbol_layout)"]
                          if SL.wants_layout(res["symbol"]["pins"], self.rules) else ())
             got.append("symbol")
+        rt = res["sidecar"].get("route") or {}
+        n_ans = len(rt.get("attempts") or [])
         st["tried"].append(f"datasheet reader ({where}{', ' + how if how else ''}): {', '.join(got) or 'nothing needed'}; "
-                           f"{len(res['needs_review'])} review items")
+                           f"{len(res['needs_review'])} review items"
+                           + (f"; read by {rt['model']}" + (f" after {n_ans - 1} earlier answers (see review.md)" if n_ans > 1 else "")
+                              if rt.get("model") else ""))
         st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
         st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url}; see datasheet/*.review.md"
                             + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
@@ -449,6 +507,9 @@ def apply_state(item, st, ln):
             item[k]["file"] = st[k]["file"]
             if k == "footprint":
                 item[k]["kicad_mod"] = st[k].get("kicad_mod")
+                was = item[k].get("bom_ref") or item[k].get("ref")
+                if st[k].get("name") and st[k].get("renamed_from") == was:     # another footprint has the BOM's name
+                    item[k]["bom_ref"], item[k]["ref"] = was, st[k]["name"]
     item["source"] = {k: (st.get(k) or {}).get("source") for k in ("symbol", "footprint")}
     par, fields = _par(item), {}
     if ln.get("datasheet", "").startswith("http"):
@@ -506,6 +567,8 @@ def write_review(rows, out, bom):
     md += ["", "## Needs a person", ""]
     md += [f"- **{r['part']}** ({r['status']}): " + "; ".join(r["why"].split("; ")) for r in rows if r["needs_human"]] or ["Nothing."]
     md += ["", "## What was tried", ""] + [f"- **{r['part']}**: {r['tried'] or '-'}" for r in rows]
+    from . import ds_route
+    md += ds_route.review_lines(out)          # datasheet reads: model, pages, tokens and USD per answer
     (out / "review.md").write_text("\n".join(md) + "\n", encoding="utf-8")
 
 
@@ -523,6 +586,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     bad = set(sources) - set(SOURCES)
     if bad:
         raise ValueError(f"unknown sources {sorted(bad)}; use {','.join(SOURCES)}")
+    if "standard" in sources and "kicad" in sources and sources.index("standard") < sources.index("kicad"):
+        sources.remove("standard")                     # never ahead of the KiCad library
+        sources.insert(sources.index("kicad") + 1, "standard")
     lines, mapping = T.read_bom(bom, RU.bom_columns(rules))
     index = KiCadIndex(libs)
     from . import plugins as PL                      # providers: None = [providers] order, else jlcpcb_search,easyeda
@@ -547,7 +613,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
             it["footprint"]["ref"] = AL.lib_name(it["name"])
         fpr, st = _fingerprint(it, ln, row), state.get(it["name"])
         redo = refresh is not None and (not refresh or it["name"] in refresh)
-        if st and st.get("key") == fpr and _done(st, out) and not redo:
+        if st and st.get("key") == fpr and _done(st, out) and not redo and not FS.unchecked_share(st.get("footprint")):
             st["skipped"] = True
             for k in ("symbol", "footprint"):
                 r.written.setdefault(str(out / st[k]["file"]), st[k])

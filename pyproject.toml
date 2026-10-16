@@ -58,4 +58,4 @@ include = ["ecadlib*"]
 # Every non-.py file the package reads at runtime. tests/test_packaging.py checks these
 # patterns against the files on disk, so a new data file without a pattern fails the tests.
 [tool.setuptools.package-data]
-ecadlib = ["package_schema.json", "package_specs/*.json", "package_specs/advanced/*.json", "assets/*", "ui/static/*"]
+ecadlib = ["package_schema.json", "package_specs/*.json", "package_specs/*.json.gz", "package_specs/advanced/*.json", "assets/*", "ui/static/*", "eval/sets/*.json"]
