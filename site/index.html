@@ -46,6 +46,7 @@
         <li><span class="dot"></span>free, no paid tier</li>
         <li><span class="dot"></span>your API key, any model</li>
         <li><span class="dot"></span>runs on your machine</li>
+        <li><span class="dot"></span>about $2 a BOM, paid to your provider</li>
       </ul>
     </div>
     <figure class="plate heroplate reveal">
@@ -141,6 +142,17 @@
       <h2>Bring your own key.<br>Use any model.</h2>
       <p class="sub">There is no account, hosted service or telemetry. ecadlib talks only to the model you configure, with a key from your own environment. Claude is the default; OpenAI, OpenRouter, Gemini and local models through Ollama or LM Studio work too.</p>
       <p class="sub">Guide rails scale with the model. A small local model gets the work in small checked steps, JSON repair and worked examples. A frontier model gets one structured call and nothing that narrows it.</p>
+      <div class="bill" aria-label="What it costs to run, estimated">
+        <p class="billhead mono"><span>What it costs to run</span><span>you pay your provider · we take $0</span></p>
+        <dl>
+          <div><dt>Passives, KiCad and EasyEDA parts</dt><dd>$0</dd></div>
+          <div><dt>A part read from its datasheet</dt><dd>≈ $0.25 <small>$0.13 batched</small></dd></div>
+          <div class="big"><dt>A 50-line BOM</dt><dd>$1.50–3</dd></div>
+          <div class="big"><dt>A 500-part library, from scratch</dt><dd>$15–30</dd></div>
+          <div><dt>Keeping it up to date</dt><dd>≈ $0</dd></div>
+        </dl>
+        <p class="billfoot mono">Most parts never touch the model; it only reads datasheets for parts nobody has drawn. <code>--estimate</code> shows the cost before anything is sent, and <code>max_cost_usd</code> caps it. Estimates on Claude Opus 5.5 at October 2026 API prices; a smaller model costs less.</p>
+      </div>
     </div>
     <div class="reveal">
       <figure class="plate">
