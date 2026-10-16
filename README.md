@@ -1570,6 +1570,55 @@ look like; `tests/test_testpack.py` checks those geometry claims against the fil
 loads the KiCad side in KiCad. Whether Altium Designer opens the DbLib, previews the parts and releases them is exactly
 what the checklist is for: not verified here.
 
+## 35. Same part, same answer: cross-checks and repeatable reads (`crosscheck.py`, `llm/sampling.py`)
+
+A footprint read from a datasheet (any provider or model) is not accepted on one reading alone. Before the
+footprint is written, `ecadlib.crosscheck` compares the critical numbers with an independent second source.
+These numbers are package type, pin count, pitch, body length/width, lead span, exposed-pad size and the pin table.
+
+| Source | When | Cost |
+|---|---|---|
+| Standard table (`stdparts` / `package_specs`) | the BOM package or the read's package name resolves to a standard table and at least 2 fields can be compared | free, offline |
+| Second read | otherwise. It is a separate request with a different prompt that asks only for the critical numbers, with the same picked pages **in reverse order**, optionally on another model (`cross_check_model`) | one small request (`max_tokens` 8000), cached, logged in `cost.jsonl` (`verdict: "cross-check"`, `purpose: "cross_check"`), counted against `max_cost_usd` |
+
+```toml
+[datasheet]
+cross_check = "auto"        # "auto" (default) | "always" | "off"
+cross_check_model = ""      # "" = the model that made the first read
+```
+
+- `auto` (the default) always runs the free table check. It pays for a second read only when no table covers
+  the package and the datasheet supplies the footprint (a part whose footprint came from KiCad/EasyEDA only has its
+  symbol read). We chose this default because a wrong footprint costs a board spin, while the extra read costs a few
+  cents and runs once per PDF/part/model because it is cached.
+- `always` adds a second read even when the table agrees. `off` gives the behaviour before this change.
+- Comparison is done in code. The tolerance is `max(abs, rel x value)`: pitch 0.01 mm; body and lead span 0.10 mm
+  or 3 %; EP 0.10 mm or 5 %. Against a table, a value also agrees when the table nominal lies inside the read's
+  printed min..max. Pins are compared by count, numbers and normalised names.
+- **Agree**: the part is accepted, marked `cross_check: agreed`, and the report says which fields were checked.
+  **Disagree**: the part is **held** and nothing is written. Both values go to the review (`review.md` section "Cross-checks
+  of datasheet reads", the datasheet report and the agent PR doubts). Neither value is picked or averaged.
+  **Unchecked** (the second read refused, was over budget, or had nothing comparable): the part is accepted with a review item.
+- With `batch = true`, the first reads go in the batch and the second reads are sent synchronously afterwards.
+- The single-read CLI (`ecadlib datasheet PDF --part`) is not cross-checked; the librarian, the agent and the eval are.
+- Workspace `cross_checks(bom)` and MCP tool `cross_checks` list agreed / disagreed / unchecked parts of a librarian plan.
+  The agent queue summary carries the cross-check status.
+
+**Repeatable runs.** `[ai] temperature = "auto"` (default) sends `temperature 0` (plus a fixed `seed` on
+OpenAI-compatible endpoints) only to models known to accept it. Recent Claude models (Opus 5.x / 4.7+, Sonnet 5.x)
+and reasoning models (gpt-5, o-series, `*reasoner*`) get no sampling parameters, so **a default Claude request is
+byte-identical to before** (the golden hashes in `tests/test_llm.py` are unchanged). A provider profile can set `sampling =
+true|false`. A number forces that temperature, and `"off"` never sends one. Sampling is not part of the cache key,
+so answers already paid for are kept. Cached answers, sorted output and content-derived GUIDs make repeat runs give the same files.
+
+**Eval.** Each row records `cross_check` and a `files` fingerprint: the bytes for KiCad, and the read-back
+records for Altium, so the `.PcbLib` header date/time does not count. The summary counts agreed/disagreed parts.
+`ecadlib eval run ... --repeat 2` re-runs the set from the recorded answers and reports **Consistency**: the share
+of cases with identical files and cross-check results. `ecadlib eval consistency A B` compares two result files
+(exit 2 on any difference).
+
+Tested offline only, with fake and recorded answers (`tests/test_crosscheck.py`). No live model of any provider was run.
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:

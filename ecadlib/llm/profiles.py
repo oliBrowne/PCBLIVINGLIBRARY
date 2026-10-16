@@ -8,6 +8,7 @@ A profile is {tier, pdf, vision, json_schema, context, max_tokens_param, price_i
   context      context window in tokens (sizes how much page text is sent)
   max_tokens_param  max_tokens | max_completion_tokens (OpenAI's newer models want the second)
   price_in / price_out  $ per million tokens when known (Claude: datasheet.PRICES; a local server is $0)
+  sampling     it takes a temperature (unset: ecadlib.llm.sampling's table of models that reject one)
 
 Where it comes from, later wins: CONSERVATIVE (an unknown model: small, text only, no schema, 4K context) ->
 the built-in table below (best knowledge as of 2026-10; names matched without a vendor prefix such as
@@ -17,7 +18,7 @@ import json, re
 
 TIERS = ("frontier", "mid", "small")
 FIELDS = {"tier": str, "pdf": bool, "vision": bool, "json_schema": bool, "context": int, "max_tokens_param": str,
-          "price_in": float, "price_out": float}
+          "price_in": float, "price_out": float, "sampling": bool}
 CONSERVATIVE = {"tier": "small", "pdf": False, "vision": False, "json_schema": False, "context": 4096,
                 "max_tokens_param": "max_tokens", "price_in": None, "price_out": None}
 _C = dict(tier="frontier", pdf=True, vision=True, json_schema=True, context=1_000_000)

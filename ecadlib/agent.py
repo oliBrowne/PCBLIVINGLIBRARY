@@ -511,6 +511,9 @@ def pr_body(batch_id, items, link, t, removed=()):
                        f"{_md(f.get('page'))} |" for f in pr["findings"]]
             md.append("")
         doubts = list(b.get("hold_reasons") or []) + list(b.get("verify") or []) + list(b.get("notes") or [])
+        cc = b.get("cross_check") or {}                # ecadlib.crosscheck: datasheet read against a second source
+        if cc.get("status") in ("disagreed", "unchecked"):
+            doubts.insert(0, f"cross-check {cc['status']}: {cc.get('summary', '')}")
         doubts += [f"proof: {f.get('what')}" for f in pr.get("findings") or [] if f.get("severity") in ("error", "warning")]
         if pr.get("verdict") in ("doubt", "skipped"):
             doubts.insert(0, f"proof {pr['verdict']}: {pr.get('reason', '')}")
@@ -1234,7 +1237,7 @@ def _build(ws, rules, cfg, t, client, q, prover, builder, libs, log, rep):
             tried = (pi.get("librarian") or {}).get("tried", [])
             b = {"part": pi["name"], "bom": bom.relative_to(ws).as_posix(), "user": AGENT, "built": t, "status": pi.get("status"),
                  "hold_reasons": pi.get("hold_reasons", []), "verify": pi.get("verify", []), "source": pi.get("source"),
-                 "tried": tried, "notes": notes, "files": {"symbol": (pi.get("symbol") or {}).get("file"),
+                 "cross_check": pi.get("cross_check"), "tried": tried, "notes": notes, "files": {"symbol": (pi.get("symbol") or {}).get("file"),
                                                              "footprint": (pi.get("footprint") or {}).get("file"),
                                                              "kicad_mod": (pi.get("footprint") or {}).get("kicad_mod")},
                  "plan": (out / "plan.json").relative_to(ws).as_posix()}

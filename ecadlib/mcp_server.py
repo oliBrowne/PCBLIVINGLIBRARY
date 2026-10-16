@@ -181,6 +181,11 @@ TOOLS = [
                      "properties": {"bom": {"type": "string"}, "sync": {"type": "boolean", "default": False},
                                     "wait": {"type": "boolean", "default": False},
                                     "parts": {"type": "array", "items": {"type": "string"}, "description": "only these parts"}}}},
+    {"name": "cross_checks",
+     "description": "For a BOM's librarian plan: which parts read from a datasheet were cross-checked against a second "
+                    "source (the standard package table, or a second read of only the critical numbers) and the outcome: "
+                    "agreed, disagreed (held, with both values), unchecked or skipped. Sends nothing.",
+     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "build_altium_models",
      "description": "Write the Altium .PcbLib files for a BOM's footprints that are in the KiCad libraries, plus generic "
                     "Resistor/Capacitor .SchLib symbols, into the workspace altium_models/ folder.",
@@ -412,6 +417,8 @@ def call_tool(ws, name, args):
             r = ws.datasheet_batch(args["bom"], args.get("sync") is True, args.get("wait") is True, args.get("parts") or None)
             r["log"] = r["log"][-20:]
             return r
+        if name == "cross_checks":
+            return ws.cross_checks(args["bom"])
         if name == "build_altium_models":
             return ws.build_altium_models(args["bom"])
         if name == "altium365_plan":
