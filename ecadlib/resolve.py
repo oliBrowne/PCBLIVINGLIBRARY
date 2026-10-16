@@ -401,6 +401,8 @@ def _write(item, kind, cid, src, base, pin_map=None):
             notes.append("pin map " + ", ".join(f"{a}->{b}" for a, b in pin_map.items()))
         r.put_sym(st, sym, cid, notes)
     rec = dict(st[kind], chosen=True)
+    if kind == "footprint" and item["footprint"].get("bom_ref"):     # a name fp_share gave: re-runs keep it as the ref
+        rec["renamed_from"] = item["footprint"]["bom_ref"]
     if pin_map and kind == "symbol":
         rec["pin_map"] = dict(pin_map)
     return rec

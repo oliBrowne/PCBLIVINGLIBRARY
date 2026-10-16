@@ -58,6 +58,11 @@ def select(cases, families=None, ids=None, limit=None):
     return out[:limit] if limit else out
 
 
+# Designator class by the reference footprint's library, as a real BOM would have it: triage sorts parts by it, and
+# a chip capacitor on a U line is not a capacitor to any source. Everything else stays U.
+DESIGNATOR = {"Resistor_SMD": "R", "Capacitor_SMD": "C", "Inductor_SMD": "L", "LED_SMD": "D", "Diode_SMD": "D"}
+
+
 def write_bom(cases, path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -65,7 +70,7 @@ def write_bom(cases, path):
         w = csv.writer(f)
         w.writerow(BOM_HEAD)
         for i, c in enumerate(cases, 1):
-            w.writerow([f"U{i}", 1, c["mpn"], c["package"], c["manufacturer"], c["mpn"], c["description"], c["datasheet"]])
+            w.writerow([f"{DESIGNATOR.get(c['footprint'].split(':')[0], 'U')}{i}", 1, c["mpn"], c["package"], c["manufacturer"], c["mpn"], c["description"], c["datasheet"]])
     return path
 
 
@@ -285,7 +290,7 @@ def report_md(rep):
     sh = s.get("shared_footprints") or {}
     if sh.get("cases"):
         md += ["", f"{sh['cases']} parts got the footprint file of another part with the same BOM footprint name "
-               f"(librarian: one footprint per name); {sh['failing']} of them fail because the two land patterns differ."]
+               f"(librarian: shared only when the pads are the same); {sh['failing']} of them fail."]
     md += ["", "| Source | Cases | Pass | Rate |", "|---|---|---|---|"]
     md += [f"| {k} | {f['cases']} | {f['pass']} | {_pct(f['rate'])} |" for k, f in s["by_source"].items()]
     md += ["", "| Field | OK |", "|---|---|"] + [f"| {k} | {v['ok']}/{v['of']} |" for k, v in s["fields"].items()]
