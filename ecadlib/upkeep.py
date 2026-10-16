@@ -417,13 +417,14 @@ def save_state(rep, state_dir):
     """Write each check's new state (only checks that ran cleanly; an errored check keeps its old state)."""
     d = Path(state_dir)
     d.mkdir(parents=True, exist_ok=True)
-    for s in rep["checks"]:
-        if s["status"] == "ok" and s.get("_state"):
+    for s in rep.get("checks") or []:
+        if s.get("status") == "ok" and s.get("_state"):
             for f, data in s["_state"].items():
                 tmp = d / (f + ".tmp")
                 tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
                 os.replace(tmp, d / f)
-    (d / "upkeep_last.json").write_text(json.dumps({"date": rep["date"], "new_changes": rep["new_changes"]}, indent=1), encoding="utf-8")
+    (d / "upkeep_last.json").write_text(json.dumps({"date": rep.get("date"), "new_changes": rep.get("new_changes", 0)},
+                                                   indent=1), encoding="utf-8")
 
 
 def _esc(v):
@@ -586,7 +587,9 @@ def publish_pr(rep, gh, runner=None, base=None, cwd=None):
     if getattr(gh, "kind", "") == "gitlab":
         from .forge import upkeep_mr
         return upkeep_mr(gh, LABEL, branch, base, title, body)
-    prs = [p for p in gh.api("GET", "pulls?state=open&per_page=100") or [] if (p.get("head") or {}).get("ref") == branch
+    owner = (getattr(gh, "repo", None) or "{owner}").split("/")[0]       # by head: not just the newest 100 open PRs
+    prs = [p for p in gh.api("GET", f"pulls?state=open&head={owner}:{branch}&per_page=100") or []
+           if (p.get("head") or {}).get("ref") == branch
            and ((p["head"].get("repo") or {}).get("full_name") or "") == (((p.get("base") or {}).get("repo") or {}).get("full_name") or "")]
     if prs:
         gh.api("PATCH", f"pulls/{prs[0]['number']}", {"title": title, "body": body})
