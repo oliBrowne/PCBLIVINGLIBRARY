@@ -21,6 +21,7 @@ EXAMPLES = {
     "altium-pkg": ["ecadlib altium-pkg out/librarian/plan.json --out out/altium_pkg --name mylib",
                    "ecadlib altium-pkg out/altium_models --out out/altium_pkg"],
     "testpack": ["ecadlib testpack --out altium_kicad_testpack"],
+    "costs": ["ecadlib costs", "ecadlib costs --model gemini-3.8-flash", "ecadlib costs --all --md docs/costs.md --xlsx costs.xlsx"],
     "ai": ["ecadlib ai show", "ecadlib ai show --model qwen2.5:7b --detect", "ecadlib ai rails"],
     "rules": ["ecadlib rules check", "ecadlib rules check ecadlib.toml", "ecadlib rules show"],
     "ui": ["ecadlib ui", "ecadlib ui --lib ~/kicad/libs --workspace ws", "ecadlib ui --team --host 0.0.0.0"],
