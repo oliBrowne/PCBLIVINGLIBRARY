@@ -286,6 +286,8 @@ class Queue:
         self.items_dir, self.batches_dir = self.dir / "items", self.dir / "batches"
         for d in (self.items_dir, self.batches_dir):
             d.mkdir(parents=True, exist_ok=True)
+        from . import migrate as MG                    # a queue from a newer ecadlib is refused; ours is stamped
+        MG.open_folder(self.dir, ["queue"])
         self.lock = _Lock.of(self.dir)
         use_workspace_rules(self.workspace)            # [agent] manufacturer_aliases for part keys
 

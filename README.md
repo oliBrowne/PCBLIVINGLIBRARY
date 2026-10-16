@@ -87,7 +87,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `held_parts`, `part_candidates` and `choose_part` (fix a held part), `approval_status` and `approve_part` (sign-off; `user` is required, the agent must pass the person's own name), `find_duplicates` (with `merge`), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed), `sim_models` (SPICE/IBIS models; `attach` writes them) and `list_example_specs`.
-3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib demo` (section 32), `ecadlib kicad-pcm` and `ecadlib altium-pkg` (section 31), `ecadlib ai` (section 33), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22) and `ecadlib visual-check` (23). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib demo` (section 32), `ecadlib kicad-pcm` and `ecadlib altium-pkg` (section 31), `ecadlib ai` (section 33), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22), `ecadlib visual-check` (23), `ecadlib migrate` and `ecadlib rebuild` (35). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
 * `uploads/`
@@ -1613,6 +1613,55 @@ Designer (the DbLib, with its Excel file at `C:\ecadlib\testpack`), Altium 365 a
 look like; `tests/test_testpack.py` checks those geometry claims against the files, reads the Altium side back and
 loads the KiCad side in KiCad. Whether Altium Designer opens the DbLib, previews the parts and releases them is exactly
 what the checklist is for: not verified here.
+
+## 35. Updates never break a library: `migrate.py`, `library.lock.json` and `ecadlib rebuild`
+
+**Versioned files.** Everything ecadlib writes and reads back later has a schema version, one integer per kind of file
+(`ecadlib/migrate.py`, `KINDS`): `plan` (plan.json), `librarian_state` (now v2), `approvals_audit`, `agent`
+(`<workspace>/agent/`), `queue` (`agent/queue/`), `http_cache`, `rules` (ecadlib.toml), `approvals_policy`
+(approvals.json) and `lock`. Files other code iterates (a plan is a JSON list, the queue is a folder of items) keep the
+version in the folder's `ecadlib_schema.json`; files a person edits and the lock carry a top-level `schema_version`
+(absent = 1). A folder without a version is a workspace from before versioning (v1 of everything).
+
+* **Older** files are migrated: in memory when they are only read (`migrate.read`), on disk when a command writes the
+  folder anyway (the librarian, the agent, the queue), after a copy to `<folder>/.ecadlib_backup/<kind>-v<old>-<time>/`.
+  Migrations are registered in `MIGRATIONS` and are safe to run twice. The one so far, `librarian_state` v1 -> v2,
+  records each footprint's name and geometry hash (what `fp_share` would compute from its `.kicad_mod` anyway; a
+  footprint shared by name only is left unchecked so the librarian re-checks it).
+* **Newer** files are refused with one line, never misread: `librarian/board/plan.json was made by ecadlib 0.5.0 (plan
+  schema 2; this ecadlib 0.3.0 reads up to 1): upgrade ecadlib (pip install -U ecadlib)`. Checked when the web UI / MCP
+  workspace opens, by the librarian, agent, queue, HTTP cache, rules and approvals loaders. A kind only a newer ecadlib
+  knows is left alone.
+* `ecadlib migrate [PATH] [--check] [--dry-run] [--json]` lists every versioned file under PATH (ok / old / new) and
+  migrates the old ones; `--check` exits 1 when anything needs migrating or is newer and, like `--dry-run`, writes
+  nothing. `ecadlib doctor` has a "file formats" line. Workspace `file_formats(migrate=False)`, MCP tool `file_formats`.
+
+**Proved on real old workspaces.** `tests/fixtures/upgrade/*.tar.gz` (180 KB) are workspaces made by the code of four
+earlier commits (`python3 -m tests.upgrade_fixtures build OLD_CHECKOUT LABEL`, run from a `git worktree` of that commit,
+offline, from the end-to-end tests' recorded KiCad / EasyEDA inputs, through that version's own Workspace API):
+`v0.2.0` (da4e1ad), `v0.3.0` (9916ca1: + approvals, ecadlib.toml), `r5-agent` (f2eedbf: + watch state, review queue,
+agent status) and `r7-stdparts` (26ca9a5). `tests/test_upgrade.py` opens each with today's code: the librarian
+migrates the state (backup byte-identical to the original), keeps the parts the old version finished (files
+untouched) and builds the rest exactly as a fresh build would (same statuses and sources); Ann's approval from 0.3.0
+still counts (content hash unchanged); queue items from round 5 are listed, approved into the plan and retried, and the
+old watch state reports no new parts on a re-scan.
+
+**Reproducible rebuilds.** The librarian writes `<out>/library.lock.json` at the end of every run (no timestamps: a
+re-run that changes nothing leaves it byte-identical). Per part: the BOM-line fingerprint, the ecadlib version and
+rules hash it was built with, every HTTP response its sources fetched (`method`, URL with secrets redacted, sha256 of
+the text; recorded as they arrive by `rebuild.Recorder`), the `--lib` files it came from, for datasheet parts the PDF's
+sha256, model, provider and prompt/schema version (`datasheet.schema_version()`), and the sha256 of every file written
+(plus a normalised hash). Plus the BOM's path and sha256, sources, libraries, cache folder and rules file.
+
+`ecadlib rebuild LIB --check [--keep DIR] [--json]` copies the folder, deletes every model file the librarian made
+(files chosen with `ecadlib resolve` stay), runs the librarian again from the lock with `--offline` (the HTTP cache and
+the cached model answers only: a model is never called) and reports per part and file *identical*, *normalised* (same
+after blanking the `.PcbLib` header's DATE/TIME, the only wall-clock value ecadlib writes; GUIDs and unique ids are
+derived from content) or *DRIFT*, plus inputs that changed (BOM, rules, a cached response, a `--lib` file) and parts
+built by another ecadlib version. Exit 0 / 1 (drift) / 2 (no lock, BOM missing). `ecadlib rebuild LIB` rebuilds in
+place. Workspace `rebuild_check(bom)`, MCP tool `rebuild_check`. Tested: the 5-part BOM rebuilds with 0 drift; a
+cached KiCad footprint edited under the lock is reported as a changed input and a drifted `.PcbLib`; a changed BOM is
+reported; a datasheet part rebuilds from its cached answer while a fake API server records zero calls.
 
 ## Releases
 

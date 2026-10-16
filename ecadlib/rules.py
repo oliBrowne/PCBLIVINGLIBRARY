@@ -210,6 +210,12 @@ def load(path=None, start="."):
         if not f:
             return dict(copy.deepcopy(DEFAULTS), _file="")
         raw, where = parse_text(f.read_text(encoding="utf-8"), f.name), str(f)
+    if isinstance(raw, dict) and "schema_version" in raw:      # ecadlib/migrate.py: a file from a newer ecadlib is refused
+        from . import migrate as MG
+        try:
+            raw = MG.check_key("rules", raw, where)
+        except MG.SchemaTooNew as e:
+            raise RulesError(str(e)) from None
     validate(raw, where)
     out = merge(DEFAULTS, {k: v for k, v in raw.items() if not k.startswith("_")})
     out["_file"] = "" if isinstance(path, dict) else where
@@ -242,7 +248,7 @@ def validate(raw, where="ecadlib.toml"):
     if not isinstance(raw, dict):
         raise RulesError(f"{where}: expected a table of sections")
     for sec, val in raw.items():
-        if sec.startswith("_"):
+        if sec.startswith("_") or sec == "schema_version":    # schema_version: the file's format (ecadlib/migrate.py)
             continue
         if sec not in DEFAULTS:
             _err(where, f"[{sec}]", f"is not a known section; known: {', '.join(DEFAULTS)}")
