@@ -52,6 +52,7 @@ def record_dir(d, answers):
 
 
 def run(tmp, out, **kw):
+    kw.setdefault("sources", ["easyeda", "datasheet"])     # the datasheet path these tests are about (not `standard`)
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     with mock.patch.dict(os.environ, env, clear=True):
         return R.run(mini_set(tmp), Path(tmp) / out, cache=Path(tmp) / "cache", http=kw.pop("http", None) or TL.FakeHTTP(),
