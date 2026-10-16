@@ -426,8 +426,12 @@ class Run:
                          [f"{len(res['symbol']['pins'])} pins grouped by function (ecadlib.symbol_layout)"]
                          if SL.wants_layout(res["symbol"]["pins"], self.rules) else ())
             got.append("symbol")
+        rt = res["sidecar"].get("route") or {}
+        n_ans = len(rt.get("attempts") or [])
         st["tried"].append(f"datasheet reader ({where}{', ' + how if how else ''}): {', '.join(got) or 'nothing needed'}; "
-                           f"{len(res['needs_review'])} review items")
+                           f"{len(res['needs_review'])} review items"
+                           + (f"; read by {rt['model']}" + (f" after {n_ans - 1} earlier answers (see review.md)" if n_ans > 1 else "")
+                              if rt.get("model") else ""))
         st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
         st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url}; see datasheet/*.review.md"
                             + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
@@ -506,6 +510,8 @@ def write_review(rows, out, bom):
     md += ["", "## Needs a person", ""]
     md += [f"- **{r['part']}** ({r['status']}): " + "; ".join(r["why"].split("; ")) for r in rows if r["needs_human"]] or ["Nothing."]
     md += ["", "## What was tried", ""] + [f"- **{r['part']}**: {r['tried'] or '-'}" for r in rows]
+    from . import ds_route
+    md += ds_route.review_lines(out)          # datasheet reads: model, pages, tokens and USD per answer
     (out / "review.md").write_text("\n".join(md) + "\n", encoding="utf-8")
 
 

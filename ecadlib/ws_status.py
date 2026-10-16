@@ -8,7 +8,9 @@ and a damaged file is skipped (and named) instead of stopping the summary.
     {"workspace", "exists", "rules", "boms", "plans": [{"plan", "parts", "ready", "held", "awaiting_approval",
      "duplicates", "updated"}], "totals": {...same counts...}, "last_triage": {...} | null,
      "last_upkeep": {...} | null, "agent": {"state", "heartbeat", "last_run", "queue": {state: n}, "waiting_review"},
-     "problems": [text]}"""
+     "problems": [text]}
+plus "datasheet": {"answers", "parts", "input_tokens", "output_tokens", "usd", "usd_estimated", "escalations",
+"by_model"} once a Claude datasheet read has been paid for in the workspace."""
 import argparse, datetime, json, os, sys
 from pathlib import Path
 
@@ -87,6 +89,13 @@ def status(root):
             best = {"date": d.get("date"), "new_changes": d.get("new_changes"), "state": rel(f)}
     out["last_upkeep"] = best
 
+    from . import ds_route                     # what the Claude datasheet reads cost (<out>/datasheet/cost.jsonl files)
+    recs = [r for f in _files(root, "**/datasheet/cost.jsonl") for r in ds_route.read_ledger(f, problems)]
+    if recs:
+        d = ds_route.summarize(recs)
+        out["datasheet"] = {k: d[k] for k in ("answers", "parts", "input_tokens", "output_tokens", "usd", "usd_estimated",
+                                              "escalations")}
+        out["datasheet"]["by_model"] = d["by_model"]
     ag = out["agent"]
     sf = root / "agent" / "status.json"
     if sf.is_file():
@@ -124,6 +133,12 @@ def render(s):
                               if lt else "never"))
     lu = s["last_upkeep"]
     L.append("upkeep     " + (f"{lu['date']}, {lu['new_changes']} new change(s)" if lu else "never"))
+    ds = s.get("datasheet")
+    if ds:
+        L.append(f"datasheet  {ds['answers']} Claude answers for {ds['parts']} parts, ${ds['usd']:.2f}"
+                 + (f" (+ ${ds['usd_estimated']:.2f} estimated)" if ds.get("usd_estimated") else "")
+                 + f", {ds['input_tokens']:,} tokens in: "
+                 + ", ".join(f"{m} {v['answers']} (${v['usd']:.2f})" for m, v in sorted(ds["by_model"].items())))
     ag = s["agent"]
     q = ", ".join(f"{k} {v}" for k, v in sorted(ag["queue"].items())) or "empty"
     L.append(f"agent      {ag['state']}" + (f", last heartbeat {ag['heartbeat']}" if ag.get("heartbeat") else "")

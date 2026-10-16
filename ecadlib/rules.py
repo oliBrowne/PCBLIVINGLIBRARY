@@ -83,7 +83,10 @@ DEFAULTS = {
                "price_jump_pct": 20.0, "build_qty": 1, "currency": "USD"},
     "sim": {"capacitor_esr": "", "capacitor_esl": "", "inductor_dcr": ""},   # ecadlib.sim_models ("" = none)
     "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)
-                  "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40},
+                  "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40,
+                  # ecadlib.ds_route: pages and model per part (route = "single": `model` for every part, as before)
+                  "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
+                  "escalate": True, "max_attempts": 4},
     "symbols": {                               # ecadlib.symbol_layout: grouped pins for big IC symbols
         "layout_pins": 40,                     # parts with at least this many pins get grouped (0 = never)
         "split_pins": 0,                       # parts with more pins than this become multi-part (0 = never)
@@ -124,7 +127,8 @@ MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
              ("symbols", "layout_pins"): (0, 100_000), ("symbols", "split_pins"): (0, 100_000), ("symbols", "unit_pins"): (8, 10_000),
-             ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600),
+             ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600), ("datasheet", "page_budget"): (0, 600),
+             ("datasheet", "max_attempts"): (1, 10),
              ("agent", "interval_minutes"): (1, 10_080), ("agent", "batch_size"): (1, 500),
              ("notify", "retries"): (0, 10), ("notify", "timeout_s"): (1, 120)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
@@ -315,6 +319,13 @@ def validate(raw, where="ecadlib.toml"):
         _err(where, "datasheet.api_key_env", "must be the NAME of an environment variable (never the key itself)")
     if "model" in ds and not re.fullmatch(r"[a-z0-9][a-z0-9.\-]*", ds["model"]):
         _err(where, "datasheet.model", f"= {ds['model']!r}: must be a model id such as claude-opus-5-5")
+    if "route" in ds and ds["route"] not in ("single", "ladder"):
+        _err(where, "datasheet.route", f"= {ds['route']!r}: must be single (one model) or ladder (cheapest model that passes)")
+    for m in ds.get("ladder") or [] if isinstance(ds.get("ladder"), list) else []:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.\-]*", str(m)):
+            _err(where, "datasheet.ladder", f"has {m!r}: must be model ids such as claude-haiku-5-5, cheapest first")
+    if "ladder" in ds and isinstance(ds["ladder"], list) and not ds["ladder"]:
+        _err(where, "datasheet.ladder", "must name at least one model")
     if (raw.get("release") or {}).get("approvals"):
         from .approvals import normalize_policy
         try:
@@ -775,6 +786,13 @@ HELP = {
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",
     "datasheet.api_key_env": "name of the environment variable with the API key; the key itself never goes in this file",
     "datasheet.max_cost_usd": "refuse a run whose estimated worst-case cost is higher (0 = no cap; --yes overrides)",
+    "datasheet.page_budget": "pages sent on the first try, picked by text (drawing for this package, land pattern, pin table, "
+                             "ordering info); widened to 3x, then the whole PDF, when the answer is incomplete (0 = whole PDF)",
+    "datasheet.route": "single = `model` for every part | ladder = start on the cheapest model of `ladder` that suits the "
+                       "package (pins, family, pages) and move up when datasheet's checks fail",
+    "datasheet.ladder": "models for route = \"ladder\", cheapest first",
+    "datasheet.escalate": "retry with more pages / the next model when the answer is incomplete or fails the checks",
+    "datasheet.max_attempts": "most answers paid for per part (first try included)",
     "agent.proof": "Claude visual proof (ecadlib visual-check): model, effort, api_key_env (empty = [datasheet]), max_cost_usd per "
                    "check (0 = no cap), fail_on (mismatch severities that fail a part), max_pages, dpi of the datasheet pages",
     "symbols": "Big IC symbols: pins grouped by function (power top, ground bottom, inputs left, ports right); see `ecadlib symbol -h`",
