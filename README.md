@@ -1866,6 +1866,28 @@ are documented (a curved custom pad as its bounding rectangle, trapezoid as rect
 * **Not verified:** nothing was opened in Altium Designer; KiCad models that cannot be downloaded offline stay missing
   in an export (parity reports them as `file missing`).
 
+## 38. One voice: `messages.py`, `reports.py` and `docs/ui-voice.md`
+
+Every message and report a person reads follows [docs/ui-voice.md](docs/ui-voice.md): what happened first, then what
+to do; a part is **ready**, **held** or **waiting for sign-off**; numbers with units; errors in two lines; no internal
+names or server paths.
+
+* `ecadlib/messages.py` is the one table of held reasons: `held(code, **values) -> (text, fix)`,
+  `explain(raw_reason) -> {code, text, fix, note}` for any reason already in a plan, `error()` / `friendly_error()`,
+  `status_word()`, `counts()` ("6 ready, 2 held"), `source_word()` and `clean()`. Plans, CSVs and `--json` keep their
+  machine strings; the sentence is shown next to the code.
+* `ecadlib/reports.py` builds the library review once and renders it as `review.md` and `review.html` (the web UI's
+  colours, light and dark, readable at phone width): held parts first with each reason and its next step, then parts
+  waiting for sign-off, ready parts a person should double-check, duplicates, the ready table and the details.
+* Rewritten in the same voice: `release_check.md`, the datasheet reader's `<part>.review.md`, the parity report, the
+  eval `report.md`, the test pack's `CHECKLIST.md`, the agent's PR body and notifications, `ecadlib doctor` (outcome,
+  then what to fix, what is optional, what is fine), the Altium menu and KiCad plugin dialogs, the `init` questions and
+  MCP errors. Workspace `librarian_run` rows carry `word` and `says`, `held_parts` carries `reasons`.
+* Checked by `tests/test_messages.py` (every code has a sentence; a new release-check rule, footprint-check error,
+  KiCad/Altium field, review note or agent failure without one fails) and `tests/test_ui_voice.py` (snapshots in
+  `tests/fixtures/voice/`, Markdown and HTML say the same, demo and test pack reports free of internal names and
+  absolute paths). After a deliberate wording change: `UPDATE_VOICE=1 python -m tests.run_all test_ui_voice`.
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:

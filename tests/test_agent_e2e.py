@@ -219,7 +219,7 @@ def test_full_loop_real_modules():
                 path = f"agent-pictures/{b['id']}/{it['id']}/{name}"
                 assert f"https://github.com/acme/lib/blob/{b['commit']}/{path}?raw=true" in body, (path, body)
                 assert gitc(Path(d) / "remote.git", "cat-file", "-t", f"{b['commit']}:{path}") == "blob"
-        assert "LED-RED-0603" not in body and "**Proof:** pass (score 0.97)" in body and "proof doubt: the model declined" in body
+        assert "LED-RED-0603" not in body and "**Independent check:** pass (score 0.97)" in body and "not sure about this part: the model declined" in body
         assert gitc(ws, "rev-parse", "--abbrev-ref", "HEAD") == "main" and not gitc(ws, "status", "--porcelain", "--untracked-files=no")
         assert all(i["pr_url"] == "https://github.com/acme/lib/pull/7" for i in AQ.Queue(ws).list(status="review"))
         assert plan_status(ws)["TPS1234DSGR"] == "awaiting_approval"            # [release.approvals] holds it
@@ -273,7 +273,7 @@ def test_full_loop_real_modules():
         # the CLI approve (identity typed) goes through approvals.py too
         rc, out = cli_run("agent", "--workspace", str(ws), "approve", items["EEPART1"]["id"], "--user", "Ann Lee <ann@x.com>",
                           "--role", "approver")
-        assert rc == 0 and "approved; approvals.py: recorded" in out, out
+        assert rc == 0 and "approved; sign-off: recorded" in out, out
         assert plan_status(ws)["EEPART1"] == "ready"
 
         # 4. nothing changed: nothing new, no API call, no PR call
@@ -339,7 +339,7 @@ def test_no_key_goes_to_review_with_pictures():
         assert all((ws / p).is_file() for p in it["pictures"]["after"]) and len(it["pictures"]["after"]) == 2
         assert it["proof"]["images"]["ours"] and it["proof"]["images"]["datasheet"]
         body = gh.prs[7]["body"]
-        assert "proof skipped: ANTHROPIC\\_API\\_KEY is not set" in body and "after_footprint.png?raw=true" in body   # part data is markdown-escaped
+        assert "did not run: ANTHROPIC\\_API\\_KEY is not set" in body and "after_footprint.png?raw=true" in body   # part data is markdown-escaped
         assert "(claude-opus-5-5)" not in body                                                  # no model was asked
 
 

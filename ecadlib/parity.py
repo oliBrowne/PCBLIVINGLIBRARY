@@ -983,20 +983,38 @@ def write_report(rep, stem):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     stem.with_suffix(".json").write_text(json.dumps(rep, indent=2, default=str) + "\n", encoding="utf-8")
+    from . import messages as M
     c = rep["counts"]
-    md = [f"# KiCad / Altium parity - `{rep['plan']}`", "",
-          f"Mode: {rep['mode']}. {c['match']} match, {c['mismatch']} mismatch, {c['skipped']} skipped"
-          + (f"; database: {c['database_errors']} differences" if rep.get("database_rows") else "") + ".", "",
-          "| Part | Result | Checked | Differences |", "|---|---|---|---|"]
-    for p in rep["parts"]:
-        errs = [d["msg"] for d in p["diffs"] if d["level"] == "error"]
-        md.append(f"| {p['part']} | {p['result']} | {', '.join(p['checked']) or p.get('why', '')} | "
-                  f"{'<br>'.join(e.replace('|', '/') for e in errs) or '-'} |")
+    where = Path(str(rep.get("plan") or "")).parent.name
+    checked = lambda p: ", ".join(p["checked"]).replace("pyaltiumlib", "a second Altium reader").replace("pin -> pad", "pins to pads")
+    md = [f"# KiCad and Altium match{': ' + where if where else ''}", "",
+          f"**{c['match']} {'part matches' if c['match'] == 1 else 'parts match'}, {c['mismatch']} differ{'s' if c['mismatch'] == 1 else ''}.**"
+          + (f" {c['skipped']} not compared." if c["skipped"] else "")
+          + (f" Database rows: {M.plural(c['database_errors'], 'difference')}." if rep.get("database_rows") else ""), ""]
+    md += ["Parts whose KiCad and Altium files differ are held until they match.",
+           "**Next:** fill the library again so both are written from the same source; report it if they still differ.", ""] \
+        if c["mismatch"] else ["The KiCad and Altium files of every compared part read back the same.", ""]
+    bad = [p for p in rep["parts"] if p["result"] == "mismatch"]
+    if bad:
+        md += [f"## Differ ({len(bad)})", ""]
+        for p in bad:
+            md += [f"### {p['part']}", ""]
+            md += [f"- {e['text']}" for e in M.explain_all("parity: " + d["msg"] for d in p["diffs"] if d["level"] == "error")]
+            md.append("")
+    good = [p for p in rep["parts"] if p["result"] == "match"]
+    if good:
+        md += [f"## Match ({len(good)})", "", "| Part | Compared |", "|---|---|"]
+        md += [f"| {p['part']} | {checked(p) or '-'} |" for p in good] + [""]
+    skip = [p for p in rep["parts"] if p["result"] not in ("match", "mismatch")]
+    if skip:
+        md += [f"## Not compared ({len(skip)})", ""]
+        md += [f"- **{p['part']}**: {M.clean(p.get('why') or '-').replace('kicad-export skips it', 'not exported to KiCad')}" for p in skip] + [""]
     warns = [(p["part"], d["msg"]) for p in rep["parts"] for d in p["diffs"] if d["level"] == "warn"]
     if warns:
-        md += ["", "## Approximations (not held)", ""] + [f"- **{n}**: {m}" for n, m in warns]
+        md += ["## Approximations (not held)", ""] + [f"- **{n}**: {M.clean(m)}" for n, m in warns] + [""]
     if rep["database"]:
-        md += ["", "## Database rows", ""] + [f"- {d['msg']}" for d in rep["database"]]
+        md += ["## Database rows", ""] + [f"- {M.clean(d['msg'])}" for d in rep["database"]] + [""]
+    md += ["## Details", "", f"Compared in {rep['mode']} mode. Every number is in the machine-readable report next to this file (.json)."]
     stem.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return stem
 
