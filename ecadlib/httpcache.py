@@ -1,7 +1,7 @@
 """Tiny disk-cached, per-host rate-limited HTTP client on top of requests.
 
 Responses are stored as JSON files keyed by sha256(method, url, body). Only 2xx/404
-responses are cached; network errors are returned (not raised) so callers can
+responses are cached (not a 2xx whose JSON body is an `errors` list); network errors are returned (not raised) so callers can
 report "source unreachable" instead of crashing. Downloaded bodies are treated as
 untrusted data: they are only ever parsed as JSON/text, never executed."""
 import hashlib, json, os, re, threading, time
@@ -29,6 +29,22 @@ SECRET_Q = re.compile(r"(api[_-]?key|key|token|secret|password|signature|sig|cli
 
 
 VARY_H = re.compile(r"locale|currency|language", re.I)
+
+
+_ERRORS = re.compile(r'"[eE]rrors"\s*:\s*[\[{"]')
+
+
+def error_body(text):
+    """True for a 2xx JSON answer that is really an error: GraphQL `errors` (Nexar: bad token, quota, a field the plan
+    does not include) or Mouser's `Errors` list (bad API key, daily limit). It is not cached: the key or the quota
+    may be fixed by the next run, and a cached error would come back for the whole TTL."""
+    if not _ERRORS.search(text[:65536]):
+        return False
+    try:
+        d = json.loads(text)
+    except ValueError:
+        return False
+    return isinstance(d, dict) and bool(d.get("errors") or d.get("Errors"))
 
 
 def redact(url):
@@ -59,14 +75,18 @@ class CachedHTTP:
 
     def request(self, method, url, body=None, headers=None, cache=True):
         """cache=False: never read or store (credentials in the URL or body, tokens in the response).
-        Query-string secrets (apiKey=, token=...) are redacted from cache keys and stored URLs."""
+        Query-string secrets (apiKey=, token=...) are redacted from cache keys and stored URLs.
+        A 2xx answer whose body is an error (error_body) is neither stored nor served from an older cache entry."""
         f = self.dir / f"{self._key(method, redact(url), body, headers)}.json"
         d = None
+        bad = lambda st, text: 200 <= st < 300 and error_body(text)
         if cache and f.exists() and (self.offline or time.time() - f.stat().st_mtime < self.ttl):   # offline: stale beats nothing
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))
                 d = d if isinstance(d, dict) and isinstance(d.get("status"), int) and isinstance(d.get("text"), str) else None
             except (OSError, ValueError):            # a damaged entry (crash, full disk) is a miss, not a crash
+                d = None
+            if d is not None and bad(d["status"], d["text"]):
                 d = None
         if d is not None:
             self.log.append((method, url, d["status"], True))
@@ -87,7 +107,7 @@ class CachedHTTP:
             self.log.append((method, url, msg, False))
             return Response(0, "", error=msg)
         self.log.append((method, url, r.status_code, False))
-        if cache and (200 <= r.status_code < 300 or r.status_code == 404):
+        if cache and (200 <= r.status_code < 300 or r.status_code == 404) and not bad(r.status_code, r.text):
             tmp = f.with_name(f"{f.stem}.{os.getpid()}.{threading.get_ident()}.tmp")   # own temp file per writer: two
             tmp.write_text(json.dumps({"url": redact(url), "status": r.status_code, "text": r.text}), encoding="utf-8")
             os.replace(tmp, f)                                                       # threads fetching one URL never share one

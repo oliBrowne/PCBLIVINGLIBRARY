@@ -59,7 +59,11 @@ def load_config(path=None, base=None):
 
 
 def mpn_key(s, cfg=None):
-    """'LM1117MPX-3.3/NOPB/TR' -> 'LM1117MPX33NOPB'; '' for an empty MPN."""
+    """'LM1117MPX-3.3/NOPB/TR' -> 'LM1117MPX33NOPB'; '' for an empty MPN or a placeholder ('N/A', 'TBD'): parts whose
+    MPN cell says N/A are not one part."""
+    from .bom_triage import placeholder_mpn
+    if placeholder_mpn(s):
+        return ""
     pats = (cfg or load_config())["patterns"]
     s = str(s or "").strip().upper()
     for _ in range(4):                                       # suffixes can stack: -TR then (LF)
@@ -270,7 +274,8 @@ class Collector:
                 import pandas as pd
                 tables = {k: v.fillna("").astype(str).to_dict("records") for k, v in pd.read_excel(f, sheet_name=None, dtype=str).items()}
             else:
-                with sqlite3.connect(f"file:{f}?mode=ro", uri=True) as con:
+                from urllib.parse import quote       # a folder named "Lib #2" must not end the URI path (read nothing)
+                with contextlib.closing(sqlite3.connect(f"file:{quote(Path(f).resolve().as_posix(), safe='/:')}?mode=ro", uri=True)) as con:
                     con.row_factory = sqlite3.Row
                     for (t,) in con.execute("select name from sqlite_master where type='table'"):
                         tables[t] = [dict(r) for r in con.execute(f'select * from "{t}"')]
