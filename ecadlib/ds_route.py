@@ -332,7 +332,7 @@ def assess(res):
 # ---------------------------------------------------------------- cost
 def prices(model, prompt_tokens=0):
     from . import datasheet as D
-    p = D.PRICES.get(model)
+    p = D.price_of(model)                             # Claude's table, else ecadlib.llm (a local endpoint is $0)
     if not p:
         return None
     lp = LONG_PROMPT.get(model)
@@ -386,7 +386,7 @@ def billed_model(model, msg=None):
     on another model, billed at that model's rates) when that model has a known price, else the one requested."""
     from . import datasheet as D
     served = (msg or {}).get("model")
-    return served if served and served != model and served in D.PRICES else model
+    return served if served and served != model and D.price_of(served) else model
 
 
 def attempt_record(part, name, model, msg, via, pages_sent, pages_total, verdict, nxt=None, error=None):

@@ -122,6 +122,12 @@ DEFAULTS["agent"].update({"git_host": "auto", "gitlab_project": "", "gitlab_toke
                           "gitlab_api": "https://gitlab.com/api/v4"})
 # [notify]: webhooks (ecadlib.notify); [providers]: order and choice of part sources incl. plugins (ecadlib.plugins)
 DEFAULTS["notify"] = {"targets": [], "retries": 3, "timeout_s": 10, "backoff_s": 2.0}
+# [ai]: bring your own model (ecadlib.llm): provider, model, endpoint, key variable, guide rails. Defaults = Claude as before.
+from . import llm as _LL
+DEFAULTS["ai"] = {k: (dict(v) if isinstance(v, dict) else v) for k, v in _LL.DEFAULTS.items()}
+for _k in _LL.SECTION_KEYS:                           # [datasheet] / [agent.proof] may pick their own ("" = [ai])
+    DEFAULTS["datasheet"].setdefault(_k, "")
+    DEFAULTS["agent"]["proof"].setdefault(_k, "")
 DEFAULTS["providers"] = {"order": []}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
@@ -244,6 +250,8 @@ def validate(raw, where="ecadlib.toml"):
             if (sec, k) == ("agent", "watch") and k in DEFAULTS[sec]:
                 _check_watch(where, v)
                 continue
+            if sec == "ai" and k in DEFAULTS["ai"]:      # checked by ecadlib.llm.validate below
+                continue
             if (sec, k) == ("notify", "targets"):
                 from .notify import check_targets
                 check_targets(where, v, _err)
@@ -317,15 +325,17 @@ def validate(raw, where="ecadlib.toml"):
         _err(where, "datasheet.effort", f"= {ds['effort']!r}: must be low, medium, high, xhigh or max")
     if "api_key_env" in ds and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ds["api_key_env"]):
         _err(where, "datasheet.api_key_env", "must be the NAME of an environment variable (never the key itself)")
-    if "model" in ds and not re.fullmatch(r"[a-z0-9][a-z0-9.\-]*", ds["model"]):
-        _err(where, "datasheet.model", f"= {ds['model']!r}: must be a model id such as claude-opus-5-5")
+    if "model" in ds and not _LL.MODEL_RE.fullmatch(str(ds["model"])):
+        _err(where, "datasheet.model", f"= {ds['model']!r}: must be a model id such as claude-opus-5-5 or qwen2.5:7b")
     if "route" in ds and ds["route"] not in ("single", "ladder"):
         _err(where, "datasheet.route", f"= {ds['route']!r}: must be single (one model) or ladder (cheapest model that passes)")
     for m in ds.get("ladder") or [] if isinstance(ds.get("ladder"), list) else []:
-        if not re.fullmatch(r"[a-z0-9][a-z0-9.\-]*", str(m)):
-            _err(where, "datasheet.ladder", f"has {m!r}: must be model ids such as claude-haiku-5-5, cheapest first")
+        if not _LL.MODEL_RE.fullmatch(str(m)):
+            _err(where, "datasheet.ladder", f"has {m!r}: must be model ids such as claude-haiku-5-5 (or endpoint:model "
+                                            "for an [ai.endpoints] entry), cheapest first")
     if "ladder" in ds and isinstance(ds["ladder"], list) and not ds["ladder"]:
         _err(where, "datasheet.ladder", "must name at least one model")
+    _LL.validate(where, raw.get("ai"), [("datasheet", ds), ("agent.proof", (raw.get("agent") or {}).get("proof"))], _err)
     if (raw.get("release") or {}).get("approvals"):
         from .approvals import normalize_policy
         try:
@@ -416,7 +426,7 @@ def _check_table(where, sec, k, v, d):
     if (sec, k) == ("agent", "proof"):
         if v.get("effort") not in (None, "", "low", "medium", "high", "xhigh", "max"):
             _err(where, "agent.proof.effort", f"= {v['effort']!r}: must be low, medium, high, xhigh or max (empty = [datasheet])")
-        if v.get("model") and not re.fullmatch(r"[a-z0-9][a-z0-9.\-]*", v["model"]):
+        if v.get("model") and not _LL.MODEL_RE.fullmatch(str(v["model"])):
             _err(where, "agent.proof.model", f"= {v['model']!r}: must be a model id such as claude-opus-5-5")
         if v.get("api_key_env") and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v["api_key_env"]):
             _err(where, "agent.proof.api_key_env", "must be the NAME of an environment variable (never the key itself)")
@@ -795,6 +805,13 @@ HELP = {
     "datasheet.max_attempts": "most answers paid for per part (first try included)",
     "agent.proof": "Claude visual proof (ecadlib visual-check): model, effort, api_key_env (empty = [datasheet]), max_cost_usd per "
                    "check (0 = no cap), fail_on (mismatch severities that fail a part), max_pages, dpi of the datasheet pages",
+    "ai": "Bring your own model (ecadlib.llm): provider = anthropic (default) | openai-compatible | openai | openrouter | "
+          "gemini | ollama | lmstudio | vllm | llamacpp; model; base_url; api_key_env (the NAME of the variable, never the "
+          "key); assist = auto | off | full (guide rails by the model's tier); feedback_retry; detect; [ai.profiles.\"model\"] "
+          "tier/pdf/vision/json_schema/context overrides; [ai.endpoints.name] for a mixed ladder (name:model)",
+    "ai.assist": "auto: rails by the model's tier (frontier: none beyond support) | off: support only | full: every rail",
+    "ai.feedback_retry": "one more turn with datasheet's exact check errors before a failing answer is kept (every model)",
+    "datasheet.provider": "\"\" = [ai] provider; set it to read datasheets with another provider than the rest",
     "symbols": "Big IC symbols: pins grouped by function (power top, ground bottom, inputs left, ports right); see `ecadlib symbol -h`",
     "symbols.layout_pins": "parts with at least this many pins get the grouped layout; smaller parts keep the plain one (0 = never)",
     "symbols.split_pins": "more pins than this: a multi-part symbol (power part + signal parts); 0 = one part always",
