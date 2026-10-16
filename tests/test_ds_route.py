@@ -460,6 +460,32 @@ def test_stale_failed_step_at_the_end_of_the_route_is_not_paid_in_a_loop():
         assert len(api.sent) == n + 1, api.sent
 
 
+def test_pages_that_cannot_be_cut_fall_back_to_the_whole_pdf():
+    """pypdf reads the text but cannot write the picked pages (damaged page objects): the whole PDF is sent, as
+    prepare() does, instead of failing the part."""
+    data = pdf_lines(ldo_pages())
+    api = ModelAPI(lambda m, n: GOOD)
+
+    def broken(pdf, pages):
+        raise D.DatasheetError("damaged page objects")
+    with tempfile.TemporaryDirectory() as d, TB.patched(api), mock.patch.object(D, "trim", broken):
+        rd = reader(d, {"https://a/ldo.pdf": data})
+        j = rd.job("TESTLDO-H33TRG1", [("https://a/ldo.pdf", "BOM")], "SOT-223-3_TabPin2")
+        assert j["offset"] == 0 and n_pages(j["body"]) == 30 and "could not be cut" in j["prov"]["note"], j["prov"]
+        res = rd.read_now(j)
+        assert api.sent == [(OPUS, 30)] and res["needs_review"] == []
+
+
+def test_a_fallback_answer_is_priced_at_the_model_that_served_it():
+    u = TD.message(GOOD)["usage"]
+    msg = dict(TD.message(GOOD, model="claude-opus-4-8"))
+    rec = R.attempt_record("P", "P", OPUS, msg, "sync", 6, 30, "ok")
+    assert abs(rec["usd"] - R.usage_usd("claude-opus-4-8", u)) < 1e-9 and rec["usd"] != R.usage_usd(OPUS, u)
+    assert rec["model"] == OPUS and rec["model_served"] == "claude-opus-4-8"
+    assert R.billed_model(OPUS, dict(msg, model="claude-unknown-9")) == OPUS          # no price known: the requested one
+    assert R.billed_model(HAIKU, TD.message(GOOD, model=HAIKU)) == HAIKU
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

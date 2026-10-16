@@ -148,7 +148,7 @@ class EvalReader(D.Reader):
         u.update(usage=msg.get("usage"), model=msg.get("model") or rec.get("model") or self.model)
         # every answer the part's route paid for (cheaper / fewer-page tries first, this one last): all count in the cost
         atts = (job["recording"].get("attempts") if job.get("recording") else
-                [{"model": a.get("model"), "usage": a.get("usage")} for a in (job.get("route") or {}).get("attempts") or []])
+                [{"model": a.get("served") or a.get("model"), "usage": a.get("usage")} for a in (job.get("route") or {}).get("attempts") or []])
         u["attempts"] = atts or []
         if self.record and not job.get("recording"):
             self.record.mkdir(parents=True, exist_ok=True)
