@@ -4,19 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ecadlib</title>
+<link rel="icon" href="data:,">
 <style>
 :root {
   --bg: #f6f7f9; --panel: #fff; --text: #1b1f24; --muted: #5d6673; --line: #dde1e6;
   --accent: #2357d9; --accent-weak: #e7eefc;
   --ok: #1d7a46; --ok-bg: #e3f4ea; --warn: #9a5b00; --warn-bg: #fdf1dc; --bad: #b3261e; --bad-bg: #fbe6e4;
   --info: #3d4aa8; --info-bg: #e9ebfb; --off: #5d6673; --off-bg: #eceef1;
-  --copper: #c8743a; --p1: #d9382b; --crtyd: #8a96a3;
+  --copper: #c8743a; --p1: #d9382b; --crtyd: #8a96a3; --on-accent: #fff;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #14171b; --panel: #1c2026; --text: #e6e9ed; --muted: #9aa3ad; --line: #2e343c;
     --accent: #7ea2ff; --accent-weak: #22304f; --ok: #6fd39a; --ok-bg: #173325; --warn: #f0b660; --warn-bg: #3a2c12;
     --bad: #ff8a80; --bad-bg: #3d1d1b; --info: #a9b3ff; --info-bg: #262a4a; --off: #9aa3ad; --off-bg: #262b32;
-    --copper: #e0955c; --p1: #ff6b5e; --crtyd: #6b7682; }
+    --copper: #e0955c; --p1: #ff6b5e; --crtyd: #6b7682; --on-accent: #0b1430; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
@@ -32,7 +33,8 @@ main { max-width: 1280px; margin: 0 auto; padding: 18px 16px 60px; }
 .spread { justify-content: space-between; }
 button, select, input[type=search], input[type=text] { font: inherit; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; }
 button { cursor: pointer; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+button:focus-visible, a:focus-visible, .chip:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button.danger { border-color: var(--bad); color: var(--bad); }
 button:disabled { opacity: .5; cursor: default; }
 input[type=search] { min-width: 220px; }
@@ -92,6 +94,23 @@ svg.fp .hole { fill: var(--bg); stroke: var(--muted); stroke-width: .02; }
 a { color: var(--accent); }
 pre.diff { white-space: pre-wrap; max-height: 280px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: 12px/1.4 ui-monospace, Menlo, monospace; }
 #rulestoml { min-height: 240px; }
+/* step bar and next-step hints */
+nav.steps { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; overflow-x: auto; padding: 6px 16px; background: var(--panel); border-bottom: 1px solid var(--line); scrollbar-width: thin; }
+nav.steps a { white-space: nowrap; padding: 4px 10px; border-radius: 999px; text-decoration: none; color: var(--text); font-size: 13px; }
+nav.steps a:hover, nav.steps a.here { background: var(--accent-weak); }
+nav.steps a.off { color: var(--muted); }
+nav.steps .count { background: var(--warn-bg); color: var(--warn); border-radius: 999px; padding: 0 6px; margin-left: 4px; font-size: 12px; }
+nav.steps .count:empty { display: none; }
+main > section { scroll-margin-top: 48px; }
+.next { border-radius: 8px; padding: 9px 12px; margin: 10px 0; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.next > span { flex: 1 1 260px; }
+.next button { padding: 3px 10px; font-size: 12.5px; }
+.stepno { display: inline-block; min-width: 20px; height: 20px; line-height: 20px; text-align: center; border-radius: 50%; background: var(--accent-weak); color: var(--accent); font-size: 12px; margin-right: 6px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin: 10px 0; }
+.stats div { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.stats b { display: block; font-size: 18px; }
+.check { padding: 5px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+@media (max-width: 600px) { header { padding: 10px 16px; } .signoff input[type=text] { width: 100%; } label.field { flex-wrap: wrap; } }
 /* team mode */
 header .user { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 13px; flex-wrap: wrap; }
 header .user .who { color: var(--muted); }
@@ -103,7 +122,7 @@ input[type=password], input[type=email] { font: inherit; border-radius: 7px; bor
 .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px 12px; align-items: end; margin-top: 10px; }
 .form label { font-size: 12.5px; color: var(--muted); }
 [data-role-hidden] { display: none !important; }
-header .user[hidden], label.field[hidden], span[hidden] { display: none; }
+header .user[hidden], label.field[hidden], span[hidden], nav.steps[hidden] { display: none; }
 .form label { display: block; }
 .form select { display: block; width: 100%; margin-top: 4px; }
 /* review queue */
@@ -134,6 +153,9 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
     <button id="logout">Sign out</button>
   </div>
 </header>
+<nav class="steps" id="steps" aria-label="Sections" hidden>
+  <a href="#bomcard">1. Check a BOM</a><a href="#libcard" data-needs-bom>2. Fill the library</a><a href="#export" data-needs-bom>3. Send to Altium</a><a href="#queuecard">Review queue<span class="count" id="navq"></span></a><a href="#fpcard">Footprints</a><a href="#statuscard">Status</a><a href="#setup">Settings</a>
+</nav>
 <section class="card signin" id="signin" hidden>
   <h2>Sign in to ecadlib</h2>
   <p class="muted small" style="margin:4px 0 0" id="signinhint">This is a shared team server. Ask your ecadlib admin for an account.</p>
@@ -145,6 +167,8 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
   <div id="signinerr"></div>
 </section>
 <main id="app">
+  <div id="rolenote"></div>
+
   <section class="card" id="teamcard" hidden>
     <div class="row spread">
       <div><h2>Team users</h2>
@@ -168,28 +192,8 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
     <div class="out" id="auditout"></div>
   </section>
 
-  <section class="card" id="setup">
-    <div class="row spread">
-      <div><h2>Library rules</h2>
-      <p class="muted small" style="margin:2px 0 0" id="rulesstate">Loading…</p></div>
-      <button id="rulesscan" data-role="admin">Set up from my libraries…</button>
-    </div>
-    <div id="rulesform" hidden style="margin-top:10px">
-      <label class="muted small" for="rulespaths">Folders or files to scan, one per line: your Altium library folders (.SchLib / .PcbLib), a .DbLib, KiCad libraries, BOMs, an Altium 365 component list (.json). Leave empty to scan the --lib folders and uploaded BOMs. Only names, parameters and pad and layer data are read.</label>
-      <textarea id="rulespaths" style="min-height:64px" spellcheck="false" placeholder="D:\Altium\Libraries&#10;D:\Altium\house.DbLib"></textarea>
-      <div class="row" style="margin-top:8px"><button class="primary" id="rulesgo">Scan and propose</button><span class="muted small">Nothing is written until you save.</span></div>
-    </div>
-    <div id="rulesbusy" class="muted small" hidden>Scanning your libraries…<div class="progress"><div style="width:30%"></div></div></div>
-    <div id="rulesout" class="out"></div>
-    <div id="rulesfile" hidden>
-      <div class="muted small" style="margin:10px 0 4px">The proposed <span class="mono">ecadlib.toml</span>. Each value says where it came from; edit anything before saving.</div>
-      <textarea id="rulestoml" spellcheck="false" aria-label="Proposed ecadlib.toml"></textarea>
-      <div class="row" style="margin-top:8px"><button id="rulesapply" hidden>Apply my answers</button><button class="primary" id="rulessave" data-role="admin">Save ecadlib.toml</button><button class="danger" id="rulesreplace" hidden>Replace the existing file</button></div>
-      <div id="rulesdiff"></div>
-    </div>
-  </section>
-
-  <section class="card">
+  <section class="card" id="bomcard">
+    <h2 style="margin-bottom:8px"><span class="stepno">1</span>Check a BOM</h2>
     <div class="drop" id="drop" data-role="librarian" tabindex="0" role="button" aria-label="Choose a BOM file">
       <strong>Drop a BOM here</strong> (CSV or XLSX), or click to choose a file.
       <div class="muted small" style="margin-top:6px">Altium, KiCad and spreadsheet BOMs work. Columns such as Designator, Comment, MPN, Manufacturer, LCSC, Value and Footprint are matched automatically.</div>
@@ -207,8 +211,8 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
     <div id="error"></div>
     <div id="history">
       <div class="row spread" style="margin-top:14px">
-        <h2 style="margin:0">Past triages</h2>
-        <div class="row"><input type="search" id="histq" placeholder="Filter by BOM or person…" aria-label="Filter past triages"><button class="small" id="histreload">Refresh</button></div>
+        <h2 style="margin:0">Past BOM checks</h2>
+        <div class="row"><input type="search" id="histq" placeholder="Filter by BOM or person…" aria-label="Filter past BOM checks"><button class="small" id="histreload">Refresh</button></div>
       </div>
       <div class="muted small" id="histnote" style="margin:2px 0 6px">Every finished triage in this workspace. Opening one shows its saved result; nothing is looked up again.</div>
       <div class="tablewrap" id="histwrap"><table>
@@ -219,29 +223,13 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
     </div>
   </section>
 
-  <section class="card" id="queuecard">
-    <div class="row spread">
-      <div><h2>Review queue</h2>
-      <p class="muted small" style="margin:2px 0 0">Parts the library agent found and built. Each one is checked against its datasheet. Look at the before and after pictures and the proof, then approve, reject or ask for a rebuild. An approval is also recorded in the part's plan (<span class="mono">approvals_audit.jsonl</span>), so the release check and the Altium 365 push see it.</p></div>
-      <div class="row"><select id="qbatch" aria-label="Batch"><option value="">All batches</option></select><button class="small" id="qreload">Refresh</button></div>
-    </div>
-    <div class="chips" id="qchips"></div>
-    <div id="qbatchinfo" class="small"></div>
-    <div id="qerr"></div>
-    <div class="tablewrap" id="qwrap"><table>
-      <thead><tr><th>Part</th><th>Change</th><th>Status</th><th>Proof</th><th>Batch</th><th>Updated (UTC)</th><th></th></tr></thead>
-      <tbody id="qrows"></tbody>
-    </table></div>
-    <div class="muted small" id="qempty" hidden>Nothing in the queue. The library agent adds parts here when a watched project or BOM changes.</div>
-    <div class="qview" id="qview" hidden></div>
-  </section>
-
   <section class="card" id="results" hidden>
     <div class="row spread">
       <div><h2 id="bomname"></h2><div class="muted small" id="saved" hidden></div><div class="muted small" id="mapping"></div></div>
       <div class="row small"><a id="reportmd" href="#">report.md</a> <a id="reportcsv" href="#">report.csv</a></div>
     </div>
     <div class="chips" id="chips"></div>
+    <div id="tnext"></div>
     <div class="row" style="margin-bottom:8px"><input type="search" id="q" placeholder="Filter by ref, MPN, package…" aria-label="Filter lines"></div>
     <div class="tablewrap"><table>
       <thead><tr><th>#</th><th>Ref</th><th>MPN</th><th>Package</th><th>Status</th><th>Local symbol / footprint</th><th>Source sym / fp / 3D</th><th>Notes</th><th></th></tr></thead>
@@ -252,10 +240,11 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
 
   <section class="card" id="libcard" hidden>
     <div class="row spread">
-      <div><h2>Fill the library</h2>
+      <div><h2><span class="stepno">2</span>Fill the library</h2>
       <p class="muted small" style="margin:2px 0 0">Finds every missing symbol and footprint (official KiCad libraries, then EasyEDA, then the datasheet), converts them to Altium files and checks each part before release. Parts that fail a check are held back from Altium 365 until you look at them.</p></div>
       <div class="row"><button id="librun" data-role="librarian">Fill missing parts</button><button id="librerun" hidden>Redo all</button></div>
     </div>
+    <div id="libbusy" hidden><div class="muted small" id="libbusytext" style="margin-top:10px"></div><div class="progress"><div id="libbar"></div></div></div>
     <div class="signoff" id="libtools" hidden>
       <div class="row">
         <label class="field small" id="signerwrap">Your name <input type="text" id="signer" placeholder="Ann Lee &lt;ann@example.com&gt;" size="28" autocomplete="name"></label>
@@ -273,7 +262,8 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
   </section>
 
   <section class="card" id="export" hidden>
-    <h2>Send to Altium</h2>
+    <h2><span class="stepno">3</span>Send to Altium</h2>
+    <p class="muted small" style="margin:2px 0 0">Pick one way in: a database library (DbLib) you open in Altium Designer, plain .SchLib / .PcbLib files, or managed components in an Altium 365 workspace.</p>
     <div class="grid3" style="margin-top:10px">
       <div class="box">
         <h3>Database library (DbLib)</h3>
@@ -302,11 +292,59 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
     </div>
   </section>
 
-  <section class="card">
+  <section class="card" id="queuecard">
+    <div class="row spread">
+      <div><h2>Review queue</h2>
+      <p class="muted small" style="margin:2px 0 0">Parts the library agent found and built. Each one is checked against its datasheet. Look at the before and after pictures and the proof, then approve, reject or ask for a rebuild. An approval is also recorded in the part's plan (<span class="mono">approvals_audit.jsonl</span>), so the release check and the Altium 365 push see it.</p></div>
+      <div class="row"><select id="qbatch" aria-label="Batch"><option value="">All batches</option></select><button class="small" id="qreload">Refresh</button></div>
+    </div>
+    <div class="chips" id="qchips"></div>
+    <div id="qbatchinfo" class="small"></div>
+    <div id="qerr"></div>
+    <div class="tablewrap" id="qwrap"><table>
+      <thead><tr><th>Part</th><th>Change</th><th>Status</th><th>Proof</th><th>Batch</th><th>Updated (UTC)</th><th></th></tr></thead>
+      <tbody id="qrows"></tbody>
+    </table></div>
+    <div class="muted small" id="qempty" hidden>Nothing in the queue. The library agent adds parts here when a watched project or BOM changes.</div>
+    <div class="qview" id="qview" hidden></div>
+  </section>
+
+  <section class="card" id="fpcard">
     <div class="row spread">
       <div><h2>Footprint generator</h2>
       <p class="muted small" style="margin:2px 0 0">IPC-7351B land patterns from datasheet dimensions. You preview each one; it is only saved (KiCad .kicad_mod and Altium .PcbLib) when you approve it.</p></div>
       <button id="newfp">New footprint…</button>
+    </div>
+  </section>
+
+  <section class="card" id="statuscard">
+    <div class="row spread">
+      <div><h2>Status</h2>
+      <p class="muted small" style="margin:2px 0 0">What is in this workspace and what is waiting for someone.</p></div>
+      <div class="row"><button class="small" id="streload">Refresh</button><button class="small" id="doctorbtn" data-role="admin">Run setup check</button></div>
+    </div>
+    <div id="stout" class="out"></div>
+    <div id="doctorout" class="out"></div>
+  </section>
+
+  <section class="card" id="setup">
+    <div class="row spread">
+      <div><h2>Settings: library rules</h2>
+      <p class="muted small" style="margin:2px 0 0" id="rulesstate">Loading…</p></div>
+      <button id="rulesscan" data-role="admin">Set up from my libraries…</button>
+    </div>
+    <div id="rulesform" hidden style="margin-top:10px">
+      <label class="muted small" for="rulespaths">Folders or files to scan, one per line: your Altium library folders (.SchLib / .PcbLib), a .DbLib, KiCad libraries, BOMs, an Altium 365 component list (.json). Leave empty to scan the --lib folders and uploaded BOMs. Only names, parameters and pad and layer data are read.</label>
+      <textarea id="rulespaths" style="min-height:64px" spellcheck="false" placeholder="D:\Altium\Libraries&#10;D:\Altium\house.DbLib"></textarea>
+      <div class="row" style="margin-top:8px"><button class="primary" id="rulesgo">Scan and propose</button><span class="muted small">Nothing is written until you save.</span></div>
+    </div>
+    <div id="rulesbusy" class="muted small" hidden>Scanning your libraries…<div class="progress"><div style="width:30%"></div></div></div>
+    <div id="rulesout" class="out"></div>
+    <div id="rulesfile" hidden>
+      <div class="muted small" style="margin:10px 0 4px">The proposed <span class="mono">ecadlib.toml</span>. Each value says where it came from; edit anything before saving.</div>
+      <textarea id="rulestoml" spellcheck="false" aria-label="Proposed ecadlib.toml"></textarea>
+      <div class="row" style="margin-top:8px"><button id="rulesapply" hidden>Apply my answers</button><button class="primary" id="rulessave" data-role="admin">Save ecadlib.toml</button><button class="danger" id="rulesreplace" hidden>Replace the existing file</button></div>
+      <div id="rulesdiff"></div>
     </div>
   </section>
 </main>
@@ -372,7 +410,7 @@ const STATUS = {
   "easyeda_footprint_only": ["Footprint only (EasyEDA)", "s-warn"],
   "needs_footprint_generation": ["Needs footprint", "s-bad"],
   "unverified (source unreachable)": ["Unverified (source unreachable)", "s-warn"],
-  "dnp (not fitted)": ["DNP", "s-off"],
+  "dnp (not fitted)": ["Not fitted (DNP)", "s-off"],
 };
 const GENERATE = new Set(["needs_footprint_generation", "unverified (source unreachable)", "easyeda_footprint_only"]);
 let current = null, filter = null, specs = {}, info = null, busy = false;
@@ -400,6 +438,26 @@ function banner(el, msg, cls = "s-bad") {
   if (msg) el.querySelector("button").onclick = () => el.innerHTML = "";
 }
 const showErr = e => banner($("#error"), e ? String(e.message || e) : "");
+// "what happened, what next" line under an action; html is built here with esc() around every value
+function nextStep(el, html, go, cls = "s-info") {
+  el.innerHTML = html ? `<div class="next ${cls}" role="status"><span>${html}</span>${go ? `<button class="small" data-go="${esc(go[0])}">${esc(go[1])}</button>` : ""}</div>` : "";
+}
+function goTo(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (el.hidden) return toast("Check a BOM first (step 1), or open one under Past BOM checks.");
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
+  const f = el.querySelector("button.primary:not(:disabled), button:not(:disabled):not([data-role-hidden])");
+  if (f) f.focus({ preventScroll: true });
+}
+document.addEventListener("click", e => { const g = e.target.closest && e.target.closest("[data-go]"); if (g) { e.preventDefault(); goTo(g.dataset.go); } });
+$("#steps").addEventListener("click", e => {
+  const a = e.target.closest("a"); if (!a) return;
+  e.preventDefault(); goTo(a.getAttribute("href").slice(1));
+});
+const hasBom = () => !!(current && current.bom);
+function navState() { document.querySelectorAll("#steps [data-needs-bom]").forEach(a => { a.classList.toggle("off", !hasBom()); a.title = hasBom() ? "" : "Check a BOM first"; }); }
+const when = ts => esc(String(ts || "").replace("T", " ").replace(/(\+00:00|Z)$/, " UTC"));
 
 // uploads/<YYYYMMDD-HHMMSS>-<rand>/<name> -> "name (uploaded YYYY-MM-DD HH:MM:SS UTC, #rand)"; other paths as they are
 const UPLOAD = /^uploads\/(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)-([0-9a-f]+)\/(.+)$/;
@@ -411,11 +469,14 @@ const bomLabel = b => UPLOAD.test(b || "") ? `${UPLOAD.exec(b)[8]} (${uploadNote
 async function loadInfo() {
   info = await api("/api/info");
   const prov = info.providers.filter(p => p.enabled).map(p => p.name + (p.configured ? "" : " (no key)")).join(", ");
-  $("#meta").textContent = `workspace ${info.workspace} · ${info.symbols} symbols, ${info.footprints} footprints indexed` +
+  $("#meta").title = `workspace ${info.workspace}`;
+  $("#meta").textContent = `workspace ${info.workspace.split(/[\\/]/).pop()} · ${info.symbols} symbols, ${info.footprints} footprints indexed` +
     (info.offline ? " · offline" : "") + ` · sources: ${prov}`;
   const sel = $("#boms"), keep = sel.value;
   sel.innerHTML = info.boms.map(b => `<option value="${esc(b)}">${esc(bomLabel(b))}</option>`).join("") || "<option value=''>(none yet)</option>";
   if (info.boms.includes(keep)) sel.value = keep;
+  $("#rerun").disabled = busy || !info.boms.length; sel.disabled = !info.boms.length;
+  $("#rerun").title = info.boms.length ? "" : "No BOM in the workspace yet: drop one above";
   $("#a365hint").textContent = info.altium365.token
     ? "Plans one managed component per part. A part is ready once its .SchLib and .PcbLib exist. Dry run shows the requests without sending anything."
     : "Plans one managed component per part (ready once its .SchLib and .PcbLib exist). To push, restart ecadlib with NEXAR_TOKEN set; Dry run works without it.";
@@ -436,17 +497,17 @@ async function runJob(start, label) {
       await new Promise(r => setTimeout(r, 400));
       const j = await api("/api/job?id=" + job);
       if (j.total) setBusy(true, `Checking ${label}: line ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? " (" + j.label + ")" : ""}`, j.done / j.total);
-      if (j.state === "done") { showResult(j.result); loadHistory().catch(() => {}); break; }
+      if (j.state === "done") { showResult(j.result); loadHistory().catch(() => {}); loadStatus().catch(() => {}); $("#results").scrollIntoView({ behavior: "smooth", block: "start" }); break; }
       if (j.state === "error") throw new Error(j.error);
     }
-  } catch (e) { showErr(e); }
+  } catch (e) { showErr(e); $("#error").scrollIntoView({ behavior: "smooth", block: "center" }); }
   finally { setBusy(false); loadInfo().then(() => { if (current && current.bom) $("#boms").value = current.bom; }).catch(() => {}); }
 }
 
 function showResult(t) {
   current = t; filter = null; $("#q").value = ""; planned = null;
   ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#approut", "#dedupeout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
-  $("#dry").disabled = $("#push").disabled = true; render();
+  $("#dry").disabled = $("#push").disabled = true; disabledWhy(); render();
 }
 
 function render() {
@@ -475,6 +536,12 @@ function render() {
       <td><div>${esc(r.local_symbol) || "<span class=muted>–</span>"}</div><div class="muted mono">${esc(r.local_footprint)}</div></td>
       <td>${r.src ? esc(r.src) + ": " : ""}${src}</td><td class="notes">${esc(r.notes)}</td><td>${act}</td></tr>`;
   }).join("") || `<tr><td colspan="9" class="muted">No lines match.</td></tr>`;
+  const todo = t.rows.filter(r => !String(r.status).startsWith("in_library") && !String(r.status).startsWith("dnp")).length;
+  if (!t.bom) nextStep($("#tnext"), "This is a saved result. Its BOM file is no longer in the workspace, so upload the BOM again to work on it.", null, "s-warn");
+  else if (!todo) nextStep($("#tnext"), `All ${t.rows.length} lines are already in your library. Next: step 2 builds the Altium files and checks each part before release.`, ["libcard", "Go to step 2"]);
+  else nextStep($("#tnext"), `<b>${todo} of ${t.rows.length}</b> lines need a symbol or footprint (filter with the chips above). Next: ` +
+    (can("librarian") ? "step 2, <i>Fill missing parts</i>, looks them up and builds them." : "a librarian fills them in (step 2)."), ["libcard", "Go to step 2"]);
+  navState();
   $("#shown").textContent = rows.length === t.rows.length ? `${t.rows.length} lines` : `${rows.length} of ${t.rows.length} lines shown`;
 }
 
@@ -527,6 +594,11 @@ $("#histrows").addEventListener("click", async e => {
 });
 
 // ---- Altium
+function disabledWhy() {
+  if ($("#dry").disabled) $("#dry").title = "Click Plan release first";
+  if ($("#push").disabled) $("#push").title = !info || !info.altium365.token ? "Needs NEXAR_TOKEN: restart ecadlib with it set" : planned && !planned.ready ? "No part is ready to release" : "Click Plan release first";
+  else $("#push").title = "";
+}
 async function action(btn, out, fn) {
   btn.disabled = true; const old = btn.textContent; btn.textContent = old + "…";
   try { out.innerHTML = await fn(); } catch (e) { banner(out, e.message); }
@@ -534,38 +606,44 @@ async function action(btn, out, fn) {
 }
 $("#dblib").addEventListener("click", e => action(e.target, $("#dblibout"), async () => {
   const r = await api("/api/export/dblib", { bom: current.bom });
-  return "Written: " + r.files.map(fileLink).join(" · ");
+  return "Written: " + r.files.map(fileLink).join(" · ") +
+    `<div class="next s-info"><span>Next: copy these files next to your Altium libraries and open a .DbLib in Altium Designer. The SQLite one needs the SQLite3 ODBC driver; the Excel one needs the Access database engine.</span></div>`;
 }));
 $("#models").addEventListener("click", e => action(e.target, $("#modelsout"), async () => {
   const r = await api("/api/altium/models", { bom: current.bom });
   await loadInfo();
   return `${r.footprints.length} footprint(s) as .PcbLib${r.footprints.length ? ": " + esc(r.footprints.join(", ")) : ""}. Symbols: ${esc(r.symbols.join(", ") || "none")}.` +
     (r.skipped.length ? `<div class="muted">Not converted: ${esc(r.skipped.join("; "))}</div>` : "") +
-    `<div class="muted">Files are in <span class="mono">${esc(info.workspace)}/altium_models</span>.</div>`;
+    `<div class="muted">Files are in the <span class="mono">altium_models</span> folder of the workspace.</div>` +
+    (r.footprints.length ? "" : `<div class="next s-warn"><span>No footprint was converted: none of this BOM's footprints is in your KiCad libraries. Step 2 (Fill the library) finds and builds them.</span></div>`);
 }));
 let planned = null;
 $("#plan").addEventListener("click", e => action(e.target, $("#planout"), async () => {
   planned = await api("/api/altium365/plan", { bom: current.bom });
-  $("#dry").disabled = false;
+  $("#dry").disabled = false; $("#dry").title = "";
   if (info.altium365.token) {
     try {
       const w = await api("/api/altium365/workspaces", {});
       $("#wsurl").innerHTML = w.workspaces.map(x => `<option value="${esc(x.url)}">${esc(x.name)}</option>`).join("");
-      $("#wsurl").hidden = false; $("#push").disabled = !w.workspaces.length || !planned.ready;
+      $("#wsurl").hidden = false; $("#push").disabled = !w.workspaces.length || !planned.ready; disabledWhy();
     } catch (err) { banner($("#planout"), "Couldn't list Altium 365 workspaces: " + err.message); }
   }
   const why = i => i.status === "held" ? "held: " + ((i.hold_reasons || [])[0] || "failed the release check") :
     i.status === "awaiting_approval" ? "awaiting approval: " + (((i.approval || {}).missing || [])[0] || "not signed off") :
     i.status === "duplicate" ? "duplicate of " + (i.duplicate_of || "?") :
     !i.symbol.file && !i.footprint.file ? "needs symbol and footprint" : !i.symbol.file ? `needs symbol ${i.symbol.ref}.SchLib` : `needs footprint ${i.footprint.ref}.PcbLib`;
-  return `<strong>${planned.ready} of ${planned.total}</strong> parts ready to release${planned.source === "librarian" ? " (from Fill the library, after its release check)" : ""}. ${fileLink(planned.plan)}
+  const notReady = planned.total - planned.ready;
+  return `<strong>${planned.ready} of ${planned.total}</strong> parts ready to release${planned.source === "librarian" ? " (from Fill the library, after its release check)" : ""}. ${fileLink(planned.plan)}` +
+    `<div class="next s-info"><span>Next: <i>Dry run</i> lists what would be sent, without sending anything.${notReady ? ` The ${notReady} part(s) not ready are skipped; step 2 shows why.` : ""}</span></div>` + `
     <table style="margin-top:6px"><tbody>${planned.items.map(i => `<tr><td>${esc(i.name)}<div class="muted">${esc(i.folder)}</div></td>
     <td>${i.status === "ready" ? '<span class="pill s-ok">ready</span>' : `<span class="pill s-warn">${esc(why(i))}</span>`}</td></tr>`).join("")}</tbody></table>`;
 }));
 $("#dry").addEventListener("click", e => action(e.target, $("#dryout"), async () => {
   const r = await api("/api/altium365/push", { bom: current.bom, workspace: $("#wsurl").value || "", dry_run: true });
   const n = a => r.results.filter(x => x.action === a).length;
-  return `Dry run, nothing sent: ${n("release")} would be released, ${n("skip")} skipped. Requests: ${fileLink(r.report)}`;
+  return `Dry run, nothing sent: ${n("release")} would be released, ${n("skip")} skipped. Requests: ${fileLink(r.report)}` +
+    `<div class="next s-info"><span>${info.altium365.token ? (can("approver") ? "Next: <i>Push</i> sends them to the workspace you picked (it asks first)." : "An approver can now push them.")
+      : "Nothing can be sent yet: restart ecadlib with NEXAR_TOKEN set (README, Altium 365) to push."}</span></div>`;
 }));
 $("#push").addEventListener("click", e => {
   const ws = $("#wsurl").selectedOptions[0];
@@ -573,6 +651,7 @@ $("#push").addEventListener("click", e => {
   action(e.target, $("#dryout"), async () => {
     const r = await api("/api/altium365/push", { bom: current.bom, workspace: ws.value, dry_run: false });
     const bad = r.results.filter(x => x.action === "error");
+    loadStatus().catch(() => {});
     return `Pushed: ${r.results.filter(x => x.action === "release").length} released, ${r.results.filter(x => x.action === "update_parameters").length} updated, ${bad.length} failed. Report: ${fileLink(r.report)}` +
       (bad.length ? `<div class="muted">${bad.map(b => esc(b.name + ": " + b.detail)).join("<br>")}</div>` : "");
   });
@@ -583,19 +662,25 @@ let libbusy = false;
 async function librarian(refresh) {
   if (libbusy || busy) return;
   libbusy = true; $("#librun").disabled = $("#librerun").disabled = true; banner($("#libout"), "");
-  setBusy(true, "Filling the library…");
+  libProgress(true, "Filling the library: starting…");
   try {
     const { job } = await api("/api/librarian/run", { bom: current.bom, refresh: refresh || null });
     for (;;) {
       await new Promise(r => setTimeout(r, 600));
       const j = await api("/api/job?id=" + job);
-      if (j.total) setBusy(true, `Filling the library: part ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? " (" + j.label + ")" : ""}`, j.done / j.total);
+      if (j.total) libProgress(true, `Filling the library: part ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? " (" + j.label + ")" : ""}. Online look-ups take about a second each; you can leave this page open and look around.`, j.done / j.total);
       if (j.state === "done") { showLibrarian(j.result); break; }
       if (j.state === "error") throw new Error(j.error);
     }
   } catch (e) { banner($("#libout"), e.message); }
-  finally { libbusy = false; setBusy(false); $("#librun").disabled = $("#librerun").disabled = false; planned = null;
-            ["#planout", "#dryout"].forEach(s => $(s).innerHTML = ""); $("#dry").disabled = $("#push").disabled = true; }
+  finally { libbusy = false; libProgress(false); $("#librun").disabled = $("#librerun").disabled = false; planned = null;
+            ["#planout", "#dryout"].forEach(s => $(s).innerHTML = ""); $("#dry").disabled = $("#push").disabled = true; disabledWhy();
+            loadStatus().catch(() => {}); }
+}
+function libProgress(on, text = "", frac = null) {
+  busy = on; $("#libbusy").hidden = !on; $("#libbusytext").textContent = text;
+  $("#libbar").style.width = frac == null ? "0" : `${Math.round(frac * 100)}%`;
+  ["#rerun", "#file"].forEach(s => $(s).disabled = on);
 }
 function whyList(why) {
   const items = (why || "").split("; ").filter(Boolean);
@@ -618,12 +703,21 @@ function showLibrarian(r) {
   const from = s => esc((s || "–").replace(/^(\w+):/, "$1 · "));
   $("#libout").innerHTML = `<strong>${r.ready} of ${r.parts}</strong> parts ready for Altium 365, ${r.held} held` +
     (r.awaiting_approval ? `, ${r.awaiting_approval} awaiting approval` : "") + (r.duplicates ? `, ${r.duplicates} duplicate(s)` : "") + `, ${r.needs_person} need a look. ` +
-    r.reports.map(fileLink).join(" · ") +
+    r.reports.map(fileLink).join(" · ") + libNext(r) +
     `<div class="scroll"><table style="margin-top:6px"><thead><tr><th>Part</th><th>Status</th><th>Symbol from</th><th>Footprint from</th><th>What needs a person</th><th></th></tr></thead><tbody>` +
     r.review.map(x => `<tr><td class="mono">${esc(x.part)}</td><td>${pill(x)}</td><td class="small">${from(x.symbol_from)}</td><td class="small">${from(x.footprint_from)}</td>
       <td class="small">${whyList(x.why)}</td>
       <td>${acts(x)}</td></tr>`).join("") +
     "</tbody></table></div>";
+}
+function libNext(r) {
+  const held = r.held || 0, aw = r.awaiting_approval || 0, lib = can("librarian");
+  const parts = [];
+  if (held) parts.push(`<b>${held} held</b>: the last column says why. ` + (lib ? "Use <i>Pick…</i> to choose a symbol or footprint, or <i>Release anyway…</i> once you have checked the part yourself." : "A librarian picks a symbol or footprint for each."));
+  if (aw) parts.push(`<b>${aw} awaiting approval</b>: ` + (can("approver") ? (session.team ? "click Approve on each." : "type your name above, then click Approve on each.") : "an approver signs them off."));
+  if (r.ready) parts.push(`${parts.length ? "Meanwhile" : "Next"}: the <b>${r.ready}</b> ready part(s) can go to Altium (step 3).`);
+  else if (!parts.length) parts.push("No part is ready yet.");
+  return `<div class="next ${held || aw ? "s-warn" : "s-ok"}" role="status"><span>${parts.join("<br>")}</span>${r.ready ? '<button class="small" data-go="export">Go to step 3</button>' : ""}</div>`;
 }
 $("#librun").addEventListener("click", () => librarian(null));
 $("#librerun").addEventListener("click", () => { if (confirm("Look up every part again, including the ones already finished?")) librarian(true); });
@@ -719,7 +813,7 @@ async function decide(part, decision, btn) {
   try {
     const role = session.team ? $("#signas").value || null : $("#signrole").value.trim() || null;
     const r = await api("/api/approvals/decide", session.team ? { bom: current.bom, part, decision, role, comment } : { bom: current.bom, part, decision, user: who, role, comment });
-    showLibrarian(r); banner($("#approut"), "");
+    showLibrarian(r); banner($("#approut"), ""); loadStatus().catch(() => {});
     toast(`${decision === "approve" ? "Approved" : "Rejected"} ${part} as ${who}; now ${r.decision.status}` + (r.decision.enforced ? "" : " (no approvals.json: recorded, not enforced)"));
   } catch (err) { banner($("#approut"), err.message); btn.disabled = false; }
 }
@@ -895,7 +989,7 @@ function applyRoles() {
 }
 function showSignin(msg) {
   session = { team: true, user: null };
-  $("#app").hidden = true; $("#usermenu").hidden = true; $("#signin").hidden = false;
+  $("#app").hidden = true; $("#usermenu").hidden = true; $("#signin").hidden = false; $("#steps").hidden = true;
   $("#meta").textContent = "team server";
   banner($("#signinerr"), msg || "", "s-warn");
   $("#login_user").focus();
@@ -983,8 +1077,9 @@ async function loadQueue() {
   const b = $("#qbatch").value;
   const r = await api("/api/agent/queue?" + new URLSearchParams({ status: qfilter, batch: b }));
   const total = Object.values(r.counts).reduce((a, x) => a + x, 0);
-  $("#qchips").innerHTML = `<span class="chip s-off${qfilter ? "" : " active"}" data-s="">All ${total}</span>` +
-    r.states.filter(s => r.counts[s]).map(s => `<span class="chip ${QSTATE[s]}${qfilter === s ? " active" : ""}" data-s="${esc(s)}">${esc(s)} ${r.counts[s]}</span>`).join("");
+  $("#qchips").innerHTML = `<span class="chip s-off${qfilter ? "" : " active"}" data-s="" role="button" tabindex="0" aria-pressed="${!qfilter}">All ${total}</span>` +
+    r.states.filter(s => r.counts[s]).map(s => `<span class="chip ${QSTATE[s]}${qfilter === s ? " active" : ""}" data-s="${esc(s)}" role="button" tabindex="0" aria-pressed="${qfilter === s}">${esc(s === "review" ? "waiting for review" : s)} ${r.counts[s]}</span>`).join("");
+  if (!qfilter) $("#navq").textContent = r.counts.review || "";
   $("#qbatch").innerHTML = `<option value="">All batches</option>` + r.batches.map(x => `<option value="${esc(x.id)}">${esc(x.id)} (${x.count}, ${esc(x.status)})</option>`).join("");
   $("#qbatch").value = r.batches.some(x => x.id === b) ? b : "";
   const bt = r.batch;
@@ -1059,7 +1154,9 @@ async function openQueueItem(id) {
   document.querySelectorAll("#qrows tr").forEach(tr => tr.classList.toggle("sel", tr.dataset.id === id));
 }
 $("#qrows").addEventListener("click", e => { const id = e.target.dataset.open; if (id) openQueueItem(id).then(() => $("#qview").scrollIntoView({ behavior: "smooth", block: "nearest" })); });
-$("#qchips").addEventListener("click", e => { const c = e.target.closest(".chip"); if (!c) return; qfilter = c.dataset.s; loadQueue().catch(err => banner($("#qerr"), err.message)); });
+const qchip = e => { const c = e.target.closest(".chip"); if (!c) return; qfilter = c.dataset.s; loadQueue().then(() => { const n = $(`#qchips [data-s="${qfilter}"]`); if (n && e.type === "keydown") n.focus(); }).catch(err => banner($("#qerr"), err.message)); };
+$("#qchips").addEventListener("click", qchip);
+$("#qchips").addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); qchip(e); } });
 $("#qbatch").addEventListener("change", () => loadQueue().catch(err => banner($("#qerr"), err.message)));
 $("#qreload").addEventListener("click", () => loadQueue().catch(err => banner($("#qerr"), err.message)));
 $("#qview").addEventListener("click", async e => {
@@ -1077,13 +1174,51 @@ $("#qview").addEventListener("click", async e => {
   e.target.disabled = true;
   try {
     const r = await api(`/api/agent/queue/${act}`, body);
-    toast(`${qopen}: ${r.item.status}` + (r.approval ? (r.approval.recorded ? " (recorded in the plan)" : " (queue only)") : ""));
+    const name = r.item.mpn || qopen, st = r.item.status;
+    const what = st === "approved" ? `Approved ${name}` + (r.approval ? (r.approval.recorded ? " (also recorded in its plan)" : " (in the queue only)") : "") +
+        ". The library agent pushes it on its next pass (or run: ecadlib agent push)."
+      : st === "rejected" ? `Rejected ${name}. It stays out of the library until its source changes or someone clicks Retry.`
+      : `${name}: rebuild requested (now ${st}). The library agent rebuilds it on its next pass, then it comes back here for review.`;
     await loadQueue(); showQueueItem(await api("/api/agent/queue/item?id=" + encodeURIComponent(qopen)));
+    nextStep($("#qdecerr"), esc(what), null, st === "rejected" ? "s-warn" : "s-ok"); toast(what); loadStatus().catch(() => {});
   } catch (err) { banner($("#qdecerr"), err.message); e.target.disabled = false; }
 });
+// ---- status (workspace summary) and setup check
+async function loadStatus() {
+  const r = await api("/api/status"), t = r.totals, a = r.agent;
+  const stat = (n, lab) => `<div><b>${esc(n)}</b><span class="muted small">${esc(lab)}</span></div>`;
+  const todo = [];
+  if (!r.boms) todo.push(can("librarian") ? "No BOM yet: drop one in step 1 to start." : "No BOM yet: a librarian starts by checking one.");
+  if (t.held) todo.push(`${t.held} part(s) held: open the BOM under Past BOM checks; step 2 says why each one is held.`);
+  if (t.awaiting_approval) todo.push(`${t.awaiting_approval} part(s) await sign-off in step 2.`);
+  if (a.waiting_review) todo.push(`${a.waiting_review} item(s) wait in the Review queue.`);
+  if (!r.rules) todo.push("Optional: Settings can propose library rules from your existing libraries, so new parts match them.");
+  $("#navq").textContent = a.waiting_review || "";
+  const lt = r.last_triage;
+  $("#stout").innerHTML = `<div class="stats">${stat(r.boms, "BOMs uploaded")}${stat(t.parts, "parts in library plans")}${stat(t.ready, "ready")}${stat(t.held, "held")}` +
+    `${stat(t.awaiting_approval, "awaiting approval")}${stat(a.waiting_review, "in the review queue")}</div>` +
+    `<div class="small muted">Last BOM check: ${lt ? `${esc(lt.name || lt.report)}, ${when(lt.finished)}${lt.user ? " by " + esc(lt.user) : ""}` : "none yet"} · ` +
+    `Library agent: ${esc(a.state)} · Rules: ${r.rules ? esc(r.rules) : "ecadlib defaults"}</div>` +
+    (todo.length ? `<div class="next s-info"><span>${todo.map(esc).join("<br>")}</span></div>` : `<div class="next s-ok"><span>Nothing is waiting for anyone.</span></div>`) +
+    (r.problems.length ? `<div class="banner s-warn"><span>Could not read: ${esc(r.problems.join("; "))}</span></div>` : "");
+}
+$("#streload").addEventListener("click", () => loadStatus().catch(e => banner($("#stout"), e.message)));
+$("#doctorbtn").addEventListener("click", e => action(e.target, $("#doctorout"), async () => {
+  const r = await api("/api/doctor"), L = { OK: "s-ok", WARN: "s-warn", FAIL: "s-bad" };
+  const row = c => `<div class="check"><span class="pill ${L[c.level] || "s-info"}">${esc(c.level)}</span> <b>${esc(c.check)}</b>: ${esc(c.detail)}${c.hint ? `<div class="muted small">${esc(c.hint)}</div>` : ""}</div>`;
+  const ok = r.checks.filter(c => c.level === "OK").length, fail = r.checks.filter(c => c.level === "FAIL").length;
+  return `<div class="next ${fail ? "s-bad" : "s-ok"}"><span>${fail ? `<b>${fail} check(s) failed</b>: each row says how to fix it.` : "Setup works."} ${ok} of ${r.checks.length} checks OK. ` +
+    `Warnings are optional extras (an API key turns on one more source). Keys are shown by name only.</span></div>` +
+    r.checks.filter(c => c.level !== "OK").map(row).join("") +
+    `<details style="margin-top:6px"><summary class="muted small">${ok} OK check(s)</summary>${r.checks.filter(c => c.level === "OK").map(row).join("")}</details>`;
+}));
+function roleNote() {
+  const u = session.team && session.user;
+  nextStep($("#rolenote"), u && u.role === "viewer" ? `You are signed in as <b>${esc(u.username)}</b> with the viewer role: you can open everything, but checking BOMs, filling the library and approving parts need the librarian or approver role. Ask an ecadlib admin.` : "");
+}
 function startApp() {
-  $("#signin").hidden = true; $("#app").hidden = false;
-  applyRoles();
+  $("#signin").hidden = true; $("#app").hidden = false; $("#steps").hidden = false;
+  applyRoles(); roleNote(); navState(); loadStatus().catch(e => banner($("#stout"), e.message));
   loadInfo().catch(showErr); loadSpecs().catch(showErr); loadRules().catch(showErr); loadHistory().catch(e => banner($("#histerr"), e.message));
   loadQueue().catch(e => banner($("#qerr"), e.message));
 }
