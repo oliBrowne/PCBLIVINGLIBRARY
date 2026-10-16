@@ -33,6 +33,8 @@ class Workspace:
         for d in ("uploads", "reports", "altium", "altium365", "footprints/ecadlib.pretty",
                   "altium_models/PcbLib", "altium_models/SchLib"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
+        from . import migrate as MG                      # files from a newer ecadlib: one clear error, nothing misread
+        MG.guard_tree(self.root)
         self.gen_dir = self.root / "footprints" / "ecadlib.pretty"
         self.models = self.root / "altium_models"
         self.libs = [str(Path(l).resolve()) for l in libs]
@@ -804,6 +806,21 @@ class Workspace:
         est = D.estimate_plan(plan_f, self._datasheet_reader(out, estimate=True))
         return dict(est, key_set=est["exact_input"])
 
+    def cross_checks(self, bom):
+        """Which datasheet parts of the librarian plan were cross-checked against a second source (ecadlib.crosscheck)
+        and how: agreed, disagreed (held, both values in the review), unchecked or skipped. Sends nothing."""
+        import json
+        from . import crosscheck as CC
+        out = self._librarian_dir(self._bom_path(bom))
+        plan_f = out / "plan.json"
+        if not plan_f.exists():
+            raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
+        parts = [{"part": it["name"], "status": it.get("status"), "cross_check": it["cross_check"]["status"],
+                  "summary": it["cross_check"].get("summary", "")}
+                 for it in json.loads(plan_f.read_text(encoding="utf-8")) if it.get("cross_check")]
+        counts = {s: sum(p["cross_check"] == s for p in parts) for s in ("agreed", "disagreed", "unchecked", "skipped")}
+        return {"parts": parts, "counts": counts, "modes": list(CC.MODES)}
+
     def altium365_workspaces(self):
         from . import altium365 as A
         return {"workspaces": A.Nexar(_nexar_token()).workspaces()}
@@ -927,6 +944,27 @@ class Workspace:
             res["backup"] = self.rel(res["backup"])
         return res
 
+    def file_formats(self, migrate=False):
+        """Versioned files in this workspace (ecadlib/migrate.py): kind, version, ok / old / new. migrate=True brings
+        old ones to this version (backups in .ecadlib_backup/ next to them); files from a newer ecadlib are refused."""
+        from . import migrate as MG
+        rows = MG.migrate_tree(self.root, dry_run=not migrate, log=lambda *a: None)
+        for r in rows:
+            r["path"] = self.rel(Path(r["path"]))
+        return {"rows": rows, "old": sum(r["state"] == "old" for r in rows),
+                "newer": sum(r["state"] in ("new", "error") for r in rows), "migrated": bool(migrate)}
+
+    def rebuild_check(self, bom):
+        """Rebuild the BOM's library from its library.lock.json offline in a temporary copy (ecadlib/rebuild.py) and
+        report per part and file: identical, identical after normalising dates, or drift; and inputs that changed."""
+        from . import rebuild as RB
+        d = self._librarian_dir(self._bom_path(bom))
+        if not (d / RB.LOCK).is_file():
+            raise ValueError("no library.lock.json for this BOM yet: run the librarian (Fill missing parts) first")
+        rep = RB.check(d, log=lambda *a: None)
+        rep["lock"] = self.rel(Path(rep["lock"]))
+        return rep
+
     def visual_check(self, target, datasheet=None, pages=None, symbol=None, render_only=False, client=None):
         """Claude visual proof (ecadlib.visual_check): render our footprint / symbol (TOP VIEW, pin 1, pitch, grid)
         next to the datasheet pages and ask Claude whether they match. target: a part name in this workspace
@@ -993,6 +1031,18 @@ class Workspace:
                           "symbols": pcm["symbols"], "footprints": pcm["footprints"], "problems": pcm["problems"]},
                 "altium": {"folder": self.rel(out / "altium"), "libpkg": alt["libpkg"], "script": alt["script"],
                            "dblibs": alt["dblibs"], "documents": len(alt["documents"]), "problems": alt["problems"]}}
+
+    def altium_menu(self, win_dir=None, name="ecadlib", command="", port=8765):
+        """The "ecadlib" menu for Altium (ecadlib.altium_menu) in altium_menu/: a DelphiScript project whose entries
+        add a part from its MPN, check the focused project's BOM and open the review queue, all in this workspace
+        (settings use relative paths: workspace=.., library=..\\altium_library). win_dir: the Windows folder the
+        altium_menu folder is in on the Altium PC, for the ready-made menu file (.DXPPrf)."""
+        from . import altium_menu as AM
+        out = self.root / "altium_menu"
+        rep = AM.build(out, "..", "..\\altium_library", name, command, win_dir or None, int(port))
+        return {"folder": self.rel(out), "files": [self.rel(p) for p in sorted(out.iterdir()) if p.is_file()],
+                "written": rep["written"], "kept": rep["kept"], "menu_file": rep["menu_file"], "problems": rep["problems"],
+                "procedures": rep["procedures"]}
 
     def example_specs(self):
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data

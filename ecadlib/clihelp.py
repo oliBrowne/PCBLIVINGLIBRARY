@@ -16,6 +16,8 @@ EXAMPLES = {
     "demo": ["ecadlib demo", "ecadlib demo -o /tmp/try --tool kicad"],
     "kicad-pcm": ["ecadlib kicad-pcm out/librarian/plan.json -o out/pcm --name mylib",
                   "ecadlib kicad-pcm out/kicad -o out/pcm --kicad 7", "ecadlib kicad-pcm --plugin -o out/pcm"],
+    "altium-menu": ["ecadlib altium-menu build --out out/altium_menu --workspace D:/ecadlib-ws --win-dir D:\\ecadlib-menu",
+                    "ecadlib altium-menu add-part LM358DR --manufacturer TI --workspace D:/ecadlib-ws --result-file r.ini"],
     "altium-pkg": ["ecadlib altium-pkg out/librarian/plan.json --out out/altium_pkg --name mylib",
                    "ecadlib altium-pkg out/altium_models --out out/altium_pkg"],
     "testpack": ["ecadlib testpack --out altium_kicad_testpack"],
@@ -67,6 +69,10 @@ EXAMPLES = {
     "kicad-dblib": ["ecadlib kicad-dblib ws/library/plan.json -o ws/kicad --name mylib --export"],
     "export-parts": ["ecadlib export-parts ws/library/plan.json --format xlsx -o parts.xlsx"],
     "stdparts": ["ecadlib stdparts resolve \"SOIC-8\"", "ecadlib stdparts coverage my_bom.csv"],
+    "migrate": ["ecadlib migrate ws --check             # exit 1 when files need migrating or are from a newer ecadlib",
+                "ecadlib migrate ws --dry-run", "ecadlib migrate ws                     # backups in .ecadlib_backup/"],
+    "rebuild": ["ecadlib rebuild ws/library --check     # offline; exit 1 on drift",
+                "ecadlib rebuild ws/library --check --keep /tmp/rb --json", "ecadlib rebuild ws/library"],
 }
 
 

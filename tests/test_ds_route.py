@@ -128,7 +128,16 @@ class ModelAPI(TB.FakeAPI):
         return TB.R(200, TB.batch_obj(bid, "ended" if b["polls"] > self.polls else "in_progress", n, n if b["polls"] > self.polls else 0))
 
 
+def no_cross_check(rules):
+    """These tests are about pages, routing and rails: their fixtures name another package than the answer reads, so
+    ecadlib.crosscheck (tested in tests/test_crosscheck.py) is off unless a test turns it on."""
+    r = dict(rules or {})
+    r["datasheet"] = {"cross_check": "off", **(r.get("datasheet") or {})}
+    return r
+
+
 def reader(d, pdfs, rules=None, **kw):
+    rules = no_cross_check(rules)
     return D.Reader(Path(d) / "out", Path(d) / "cache", **{"key": KEY, "http": TB.PdfHTTP(pdfs), "log": None,
                                                          "rules": rules, "sleep": lambda s: None, "poll": 0, **kw})
 

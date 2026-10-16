@@ -42,6 +42,8 @@ class CachedHTTP:
                  offline=False, timeout=20):
         self.dir = Path(cache_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
+        from . import migrate as MG                   # a cache stamped by a newer ecadlib is refused (never misread)
+        MG.open_folder(self.dir, ["http_cache"], write=False)
         self.min_interval, self.ttl, self.offline, self.timeout = min_interval, ttl_s, offline, timeout
         self._last = {}  # host -> last request time
         self.s = requests.Session()
