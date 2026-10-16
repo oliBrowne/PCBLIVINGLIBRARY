@@ -52,7 +52,7 @@ C = {"bg": WHITE, "grid_minor": (232, 232, 232), "grid_major": (196, 196, 196), 
      "pin_line": (0, 0, 128), "pin_num": (170, 0, 0)}
 
 PROOF_DEFAULTS = {"model": "", "effort": "", "api_key_env": "", "max_cost_usd": 0.0, "fail_on": ["error"],
-                  "max_pages": 6, "dpi": 200}
+                  "max_pages": 6, "dpi": 200, "provider": "", "base_url": "", "assist": ""}  # last 3: ecadlib.llm
 FP_ASPECTS = ("pitch", "pad_count", "pad_numbering", "pin1_location", "view_orientation", "body_size", "pad_size")
 SYM_ASPECTS = ("pin_count", "pin_numbers", "pin_names")
 OTHER_ASPECTS = ("pin_types", "other")
@@ -118,6 +118,11 @@ def _settings(rules=None):
     s = dict(PROOF_DEFAULTS, **{k: v for k, v in (got or {}).items() if k in PROOF_DEFAULTS and v not in (None, "")})
     for k in ("model", "effort", "api_key_env"):
         s[k] = s[k] or ds[k]
+    try:                                              # [ai] / [agent.proof] provider and model (ecadlib.llm)
+        from . import llm as LL
+        s["model"] = LL.endpoint(rules if isinstance(rules, dict) else None, "proof", s["model"] if (got or {}).get("model") else None)["ref"]
+    except Exception:
+        pass
     s["fail_on"] = [s["fail_on"]] if isinstance(s["fail_on"], str) else list(s["fail_on"])
     return s
 
@@ -1172,7 +1177,7 @@ def task_text(part, fa=None, pins=None, package=None):
 def estimate(body):
     """Rough USD before sending: images by size, text by length; worst case = max_tokens of output."""
     model = body["model"]
-    pin, pout = D.PRICES.get(model, (None, None))
+    pin, pout = D.price_of(model) or (None, None)
     tin = 0
     for c in body["messages"][0]["content"]:
         if c["type"] == "image":
@@ -1191,7 +1196,7 @@ def estimate(body):
 
 
 def usage_cost(model, usage):
-    pin, pout = D.PRICES.get(model, (None, None))
+    pin, pout = D.price_of(model) or (None, None)
     if pin is None or not isinstance(usage, dict):
         return 0.0
     u = lambda k: float(usage.get(k) or 0)
@@ -1440,6 +1445,22 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
     if rec:
         v, score, reason, findings, _ = parse_verdict(rec["message"], required, cfg["fail_on"])
         return _proof(v, reason, score=score, findings=findings, cost=0.0, cached=True, **dict(base, model=rec.get("model") or model))
+    inf = None
+    try:
+        from .llm import run as LR
+        inf = LR.info(model, rules if isinstance(rules, dict) else None, "proof")
+    except Exception as e:
+        return _proof("skipped", f"model setup: {e}", **base)
+    if client is None and inf["ep"]["provider"] != "anthropic":
+        from . import llm as LL
+        from .llm.openai_compat import OpenAICompatClient
+        if not inf["prof"].get("vision"):
+            return _proof("skipped", f"{model} takes no images ({inf['prof']['source']}): the visual proof needs a vision "
+                                     "model; the pictures are written for a person to compare", **base)
+        k = LL.key_for(inf["ep"], key)
+        if not k:
+            return _proof("skipped", LL.needs_key_message(inf["ep"]) + "; no visual proof was run", **base)
+        client = OpenAICompatClient(inf["ep"]["base_url"], k, inf["prof"], log_file=out_dir / "api_log.jsonl", say=say)
     if client is None:
         try:
             k = key or os.environ.get(cfg["api_key_env"]) or os.environ.get("ANTHROPIC_API_KEY")
@@ -1456,12 +1477,22 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
     if cap and est["usd_max"] > cap:
         return _proof("skipped", f"estimated up to ${est['usd_max']:.2f}, over [agent.proof] max_cost_usd = {cap}; nothing sent",
                       **base)
+    plan = inf["plan"] if inf else {"rails": [], "tier": "frontier", "guided": False}
+    if inf and inf["ep"]["provider"] != "anthropic":   # rails for a non-Claude model (ecadlib.llm.rails)
+        from .llm import rails as LRL
+        if "schema_in_prompt" in plan["rails"]:
+            body = dict(body, system=[{"type": "text", "text": body["system"][0]["text"] + LRL.schema_text(output_schema())}])
+        base["rails"] = plan["rails"]
     try:
         msg = client.messages(body, headers)
     except D.DatasheetError as e:
         return _proof("skipped", f"API error, no answer: {e}", **base)
+    if inf and inf["ep"]["provider"] != "anthropic":
+        msg = LRL.repair_message(msg, output_schema(), plan)
     cost = usage_cost(msg.get("model") or model, msg.get("usage"))
     v, score, reason, findings, ans = parse_verdict(msg, required, cfg["fail_on"])
+    if v == "pass" and plan.get("tier") == "small" and "hold_on_doubt" in plan["rails"]:
+        v, reason = "doubt", f"a small model ({model}) said pass; that is not proof enough: a person checks the pictures"
     if ans is not None:                                 # only usable answers are cached; a refusal is asked again
         cache.put(ck, {"key": ck, "part": inp["part"], "model": msg.get("model") or model, "message": msg})
     return _proof(v, reason, score=score, findings=findings, cost=cost, request_id=msg.get("id"),

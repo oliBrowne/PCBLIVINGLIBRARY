@@ -145,7 +145,8 @@ class EvalReader(D.Reader):
         msg = rec["message"]
         u = self.used.setdefault(job["part"], {"estimate": job.get("estimate")})
         u.setdefault("via", rec.get("via") or "live")
-        u.update(usage=msg.get("usage"), model=msg.get("model") or rec.get("model") or self.model)
+        from .. import ds_route as DR                 # priced as the served model when its price is known
+        u.update(usage=msg.get("usage"), model=DR.billed_model(rec.get("model") or job.get("model") or self.model, msg))
         # every answer the part's route paid for (cheaper / fewer-page tries first, this one last): all count in the cost
         atts = (job["recording"].get("attempts") if job.get("recording") else
                 [{"model": a.get("served") or a.get("model"), "usage": a.get("usage")} for a in (job.get("route") or {}).get("attempts") or []])
@@ -223,7 +224,9 @@ def summarize(rows):
 
 def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=None, replay=None, sources=None,
         families=None, ids=None, offline=False, cache="out/http_cache", http=None, api_key=None, rules=None, providers=None,
-        tol=None, log=print):
+        tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None):
+    """provider / base_url / assist / api_key_env: the [ai] settings for this run (ecadlib.llm), so models from any
+    provider can be compared on the same set: e.g. provider="ollama", model="qwen2.5:7b" against the Claude default."""
     data = load_set(set_name)
     cases = select(data["cases"], families, ids, limit)
     if not cases:
@@ -232,6 +235,13 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     out.mkdir(parents=True, exist_ok=True)
     lib = out / "lib"
     rules = RU.resolve(rules, out)
+    over = {k: v for k, v in (("provider", provider), ("base_url", base_url), ("assist", assist),
+                              ("api_key_env", api_key_env)) if v}
+    if over or (model and provider):
+        rules = dict(rules, ai={**rules.get("ai", {}), **over, **({"model": model} if model else {})},
+                     datasheet={**rules.get("datasheet", {}), **({k: "" for k in ("provider", "base_url", "assist")} if over else {}),
+                                **({"api_key_env": ""} if provider and provider != "anthropic" else {})})
+        RU.validate({k: v for k, v in rules.items() if k in ("ai",)}, "eval --provider/--model")
     sources = list(sources) if sources else [s for s in rules["sources"]["order"] if s != "kicad"]
     if "kicad" in sources:
         log("  note: `kicad` is the ground truth of this set; parts it resolves are scored against themselves")
@@ -242,7 +252,9 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     reader = EvalReader(lib, cache, api_key, rules, http, model=model, record=record, replay=replay, log=lambda *a: None)
     mode = "replay" if replay else "estimate (no API key: nothing sent)" if reader.estimate_only else \
         "live, recording" if record else "live"
-    log(f"  eval {data['meta']['name']}: {len(cases)} cases, sources {','.join(sources)}, model {reader.model}, {mode}")
+    inf = reader.info(reader.model)
+    log(f"  eval {data['meta']['name']}: {len(cases)} cases, sources {','.join(sources)}, model {reader.model} "
+        f"({inf['ep']['name']}, {inf['plan']['tier']} tier, assist {inf['plan']['assist']}), {mode}")
     t0 = time.time()
     items = L.run(bom, [], lib, sources=sources, refresh=[], offline=offline, cache=cache, http=http, api_key=api_key,
                   log=lambda *a: None, gen_step=False, rules=rules, reader=reader, providers=providers)
@@ -268,7 +280,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
                      "cost_how": how, "footprint_shared_with": shared, "api_s": (reader.used.get(c["mpn"]) or {}).get("api_s"),
                      "tried": ((it.get("librarian") or {}).get("tried") or [])})
     rep = {"meta": {"set": data["meta"]["name"], "set_version": data["meta"].get("version"), "set_built": data["meta"].get("built"),
-                    "model": reader.model, "sources": sources, "mode": mode, "record": str(record or ""), "replay": str(replay or ""),
+                    "model": reader.model, "provider": inf["ep"]["name"], "tier": inf["plan"]["tier"],
+                    "rails": inf["plan"]["rails"], "sources": sources, "mode": mode, "record": str(record or ""), "replay": str(replay or ""),
                     "tolerances": dict(S.TOL, **(tol or {})), "cases": len(rows),
                     "started": datetime.datetime.fromtimestamp(t0).isoformat(timespec="seconds"),
                     "wall_s": round(wall, 1), "wall_s_per_part": round(wall / len(rows), 3)},
@@ -324,8 +337,8 @@ def compare(a, b):
     A, B = _load_report(a), _load_report(b)
     fa, fb = A["summary"]["families"], B["summary"]["families"]
     fams = {}
-    lines = [f"A: {a} ({A['meta']['model']}, {A['meta']['mode']}, {A['meta']['cases']} cases)",
-             f"B: {b} ({B['meta']['model']}, {B['meta']['mode']}, {B['meta']['cases']} cases)", "",
+    lines = [f"A: {a} ({A['meta']['model']}{' via ' + A['meta']['provider'] if A['meta'].get('provider') else ''}, {A['meta']['mode']}, {A['meta']['cases']} cases)",
+             f"B: {b} ({B['meta']['model']}{' via ' + B['meta']['provider'] if B['meta'].get('provider') else ''}, {B['meta']['mode']}, {B['meta']['cases']} cases)", "",
              f"{'family':<12} {'pass A':>9} {'pass B':>9} {'diff':>8} {'$/part A':>10} {'$/part B':>10}"]
     for k in sorted(set(fa) | set(fb)) + ["overall"]:
         x = A["summary"]["overall"] if k == "overall" else fa.get(k)
