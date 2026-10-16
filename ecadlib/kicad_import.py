@@ -261,7 +261,7 @@ def _offset(pts, d):
     return out
 
 
-def _custom_shapes(p, x, y, rot):
+def _custom_shapes(p, x, y, rot, edges=True):
     """Filled primitives of a KiCad custom pad -> ([polygons], [tracks (x1, y1, x2, y2, w)]) in footprint mm, y up;
     None when a primitive can't be drawn exactly (curves, arcs, unfilled outlines)."""
     def tf(px, py):                           # pad frame (KiCad, y down) -> footprint, y up
@@ -286,7 +286,7 @@ def _custom_shapes(p, x, y, rot):
         else:
             return None
         polys.append(_offset(pts, w / 2) if w else pts)
-        if w:                                 # stroke around the outline: exact edges, mitred corners
+        if w and edges:                       # stroke around the outline: exact edges, mitred corners
             tracks += [(*a, *b, w) for a, b in zip(pts, pts[1:] + pts[:1])]
     return polys, tracks
 
@@ -342,7 +342,19 @@ def _pad(fp, p, notes):
     rot = float(at[3]) % 360 if len(at) > 3 else 0.0
     w, h = _f(size), _f(size, 2)
     layers = (sexpr.first(p, "layers") or ["layers"])[1:]
-    custom = _custom_shapes(p, x, y, rot) if shape == "custom" else None
+    window = kind in ("smd", "connect") and not any(l.endswith(".Cu") for l in layers)
+    custom = _custom_shapes(p, x, y, rot, edges=not window) if shape == "custom" else None
+    if custom and window:
+        anchor = (sexpr.first(sexpr.first(p, "options") or [], "anchor") or [None, "circle"])[1]
+        polys, tracks = custom                # a window with a custom shape: anchor + each primitive, on each layer
+        shapes = [_round_pts(x, y, w, h, rot) if anchor != "rect" else _rect_pts(x, y, w, h, rot)] + polys + [
+            _rect_pts((x1 + x2) / 2, (y1 + y2) / 2, math.hypot(x2 - x1, y2 - y1) + tw, tw, math.degrees(math.atan2(y2 - y1, x2 - x1)))
+            for x1, y1, x2, y2, tw in tracks]
+        wl = _window_layers(layers)
+        fp["regions"] += [(pts, layer) for layer in wl for pts in shapes]
+        if not wl:
+            _note(notes, f"pad {num}: no copper, paste or mask on {layers}; dropped")
+        return
     if custom:                                # anchor pad + its shape as regions on the pad's copper, mask and paste
         anchor = (sexpr.first(sexpr.first(p, "options") or [], "anchor") or [None, "circle"])[1]
         n0 = len(fp["pads"])
@@ -374,6 +386,29 @@ def _pad(fp, p, notes):
     _pad_core(fp, p, notes, num, kind, shape, x, y, w, h, rot, layers)
 
 
+def _window_layers(layers):
+    """Paste / mask layers of a pad without copper -> Altium layers."""
+    return [l for n, l in (("F.Paste", AL.TOP_PASTE), ("F.Mask", AL.TOP_SOLDER), ("B.Paste", AL.BOTTOM_PASTE),
+                           ("B.Mask", AL.BOTTOM_SOLDER)) if n in layers or "*." + n[2:] in layers or "F&B." + n[2:] in layers]
+
+
+def _round_pts(cx, cy, w, h, deg=0.0, n=36):
+    """A circle (w == h) or stadium (oval) outline as a polygon, footprint frame (y up)."""
+    r = min(w, h) / 2
+    half = (max(w, h) - 2 * r) / 2
+    along = w >= h                           # the straight part runs along x (before rotation) when w > h
+    pts = []
+    for k in range(n):
+        a = 2 * math.pi * k / n
+        u, v = r * math.cos(a), r * math.sin(a)
+        if along:
+            u += half if u >= 0 else -half
+        else:
+            v += half if v >= 0 else -half
+        pts.append((cx + _rot(u, v, deg)[0], cy + _rot(u, v, deg)[1]))
+    return pts
+
+
 def _pad_core(fp, p, notes, num, kind, shape, x, y, w, h, rot, layers):
     if sexpr.first(p, "chamfer_ratio") and sexpr.first(p, "chamfer"):
         _note(notes, f"pad {num}: chamfered corners written as {shape}")
@@ -384,9 +419,11 @@ def _pad_core(fp, p, notes, num, kind, shape, x, y, w, h, rot, layers):
         d = sexpr.first(p, "drill")
         vals = [v for v in d[1:] if isinstance(v, str) and v != "oval"]
         dw, dh = float(vals[0]), float(vals[1] if len(vals) > 1 else vals[0])
-        if sexpr.first(d, "offset"):
-            _note(notes, f"pad {num}: drill offset ignored")
+        off = sexpr.first(d, "offset")
+        ox, oy = (float(off[1]), float(off[2])) if off else (0.0, 0.0)
         pad.update(layer=AL.MULTI, plated=kind == "thru_hole", hole=min(dw, dh))
+        if ox or oy:                          # copper shifted from the hole, in the pad frame: Altium's offset from
+            pad["offset"] = (ox, -oy)         # hole centre (y up), as KiCad's Altium importer reads it back
         if kind == "np_thru_hole":            # no copper ring on an NPTH: pad = hole
             pad.update(w=dw, h=dh, shape="round", corner=0)
         if abs(dw - dh) > 1e-9:
@@ -394,6 +431,9 @@ def _pad_core(fp, p, notes, num, kind, shape, x, y, w, h, rot, layers):
             if rot % 90 == 0:                 # bake 90-degree steps in so pad and hole rotation are both axis-aligned
                 if rot % 180:
                     pad.update(w=pad["h"], h=pad["w"], hole_rot=90.0 - pad["hole_rot"])
+                if pad.get("offset"):         # the offset turns with the pad (counter-clockwise, y up)
+                    a, (u, v) = math.radians(rot), pad["offset"]
+                    pad["offset"] = (u * math.cos(a) - v * math.sin(a), u * math.sin(a) + v * math.cos(a))
                 pad["rot"] = 0.0
             else:
                 _note(notes, f"pad {num}: slot on a {rot:g} deg pad; hole rotation assumed relative to the pad")
@@ -407,16 +447,23 @@ def _pad_core(fp, p, notes, num, kind, shape, x, y, w, h, rot, layers):
         fp["pads"].append(pad)
         return
     cu = [l for l in layers if l.endswith(".Cu")]
-    if not cu:                                # paste / mask aperture without copper
-        layer = AL.TOP_PASTE if "F.Paste" in layers else AL.TOP_SOLDER if "F.Mask" in layers else None
-        if layer is None:
+    if not cu:                                # paste / mask aperture without copper: its shape on each of its layers
+        wl = _window_layers(layers)
+        if not wl:
             _note(notes, f"pad {num}: no copper, paste or mask on {layers}; dropped"); return
-        if rot % 180 == 0 and layer == AL.TOP_PASTE:
-            fp["fills"].append((x - w / 2, y - h / 2, x + w / 2, y + h / 2, layer))
-        else:
-            fp["regions"].append((_rect_pts(x, y, w, h, rot), layer))
+        for layer in wl:
+            if shape in ("circle", "oval"):
+                fp["regions"].append((_round_pts(x, y, w, h, rot), layer))
+            elif rot % 180 == 0 and layer in (AL.TOP_PASTE, AL.BOTTOM_PASTE):
+                fp["fills"].append((x - w / 2, y - h / 2, x + w / 2, y + h / 2, layer))
+            else:
+                fp["regions"].append((_rect_pts(x, y, w, h, rot), layer))
         return
     pad["layer"] = AL.TOP if "F.Cu" in cu else AL.BOTTOM
+    off = sexpr.first(sexpr.first(p, "drill") or [], "offset")
+    if off and (float(off[1]) or float(off[2])):          # SMD shape offset: KiCad draws the copper at (at) + offset
+        dx, dy = _rot(float(off[1]), -float(off[2]), rot)
+        pad.update(x=x + dx, y=y + dy)
     if pad["layer"] == AL.BOTTOM:
         _note(notes, f"pad {num}: bottom-side SMD pad")
     paste = "F.Paste" in layers or "B.Paste" in layers

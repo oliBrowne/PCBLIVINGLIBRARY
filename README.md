@@ -1570,6 +1570,52 @@ look like; `tests/test_testpack.py` checks those geometry claims against the fil
 loads the KiCad side in KiCad. Whether Altium Designer opens the DbLib, previews the parts and releases them is exactly
 what the checklist is for: not verified here.
 
+## 35. `parity.py`: KiCad and Altium always match
+
+```
+ecadlib parity out/librarian/plan.json                                   # plan's .kicad_mod vs .PcbLib / .SchLib
+ecadlib parity out/librarian/plan.json --kicad out/kicad [--name mylib] [--altium D:/libs/ecadlib]   # the exports
+ecadlib parity pair X.kicad_mod X.PcbLib | Lib.kicad_sym:Name X.SchLib    # one pair of files
+ecadlib parity survey [--quick] [--kicad-footprints DIR]                 # every generator / standard / KiCad footprint
+python3 -m tests.run_all test_parity
+```
+
+Reads both libraries back from the files actually written (KiCad through `sexpr`, Altium through `altium_lib`'s reader
+and, when installed, `pyaltiumlib` as a second reader) and compares, per part: pad count and numbers; each pad's
+position, size, rotation, shape (round / rect / rounded rect with corner %, custom polygon outline), side (top / bottom
+SMD, plated through-hole, NPTH), drill (width, slot length, slot direction), paste and mask (on / off, manual margins);
+paste / mask windows without copper and the exposed pad's paste coverage; courtyard extent; 3D model presence; symbol
+pin count, numbers, names (`~{RST}` = `R\S\T\`) and electrical types; pins without a pad in one tool but not the
+other; MPN, Manufacturer, Value, Description and Datasheet (KiCad symbol properties vs the DbLib row with `--altium`,
+else the plan parameters); with `--kicad` and `--altium`, the `.kicad_dbl` SQLite rows vs the DbLib rows (same parts,
+same symbol / footprint, same fields). Conventions live in one place (`_a2k`, `canon_pad`): KiCad frame, mm, y down;
+Altium 1 mil = 10000 units with y up; a pad is reduced to rotation in [0, 90). Tolerances (`parity.TOL`): 0.001 mm for
+positions, sizes, drills and margins, 0.005 mm courtyard, 0.01 degrees, 1 % corner radius. Converter approximations that
+are documented (a curved custom pad as its bounding rectangle, trapezoid as rectangle, chamfers) are `approx`, not held.
+
+* **Release check / librarian / agent:** rule `parity` (plan mode) holds a part with one line per field, e.g.
+  `parity: pad 1 size/rotation: KiCad (1.95, 0.65, 0) / Altium (1.95, 0.6, 0) (w, h mm, rotation deg)`; `--allow`
+  overrides it like the other rules. `[release] parity = "hold"` (default) | `"warn"` | `"off"`.
+* **Also run by** `ecadlib testpack` (`parity.md`, export mode with both databases) and `ecadlib demo`; Workspace
+  `parity(bom, kicad=False)` and the MCP tool `parity`.
+* **Found and fixed:** `kicad-export` wrote no 3D model for any footprint without a KiCad one (every generated or
+  standard footprint), while its Altium footprint carried a STEP: the KiCad export now writes the `.PcbLib`'s embedded
+  STEP (byte for byte) or its extruded body as a STEP to `<lib>.3dshapes/` and references it. Running it over KiCad's
+  own footprint library found four converter bugs, each with a regression test in `tests/test_parity.py`: a
+  through-hole pad's drill offset was dropped (now written to the Altium hole-offset field, the layout KiCad's own
+  Altium importer reads), an SMD pad's shape offset was ignored, copper-less mask / paste apertures became a square on
+  paste only (now their round or custom shape on every layer they have), and `kicad-export` did not fold a custom
+  pad's regions that only touch the anchor (or the mask / paste of a stroked outline) back into the pad.
+* **Numbers (2026-10-16):** survey: 68 package specs (27 classic + 41 footprint_adv) through both the approval and the
+  librarian converter, 615 standard-table footprints, each also converted back by `kicad-export`: 751 compared, 0
+  mismatched. KiCad's own library (kicad-footprints f8440fa, fetched from gitlab.com, not committed), all 15468
+  footprints through the librarian and `kicad-export` (`ecadlib parity survey --kicad-footprints DIR`, 3D paths not
+  compared): 15442 match (248 of them with documented approximations), 26 still differ (open: custom pads whose
+  primitives do not touch their anchor, several pads of one number with thermal vias, exposed-pad detection).
+  Testpack (6 parts, export mode, 6 / 6 database rows) and demo (6 ready parts): all match.
+* **Not verified:** nothing was opened in Altium Designer; KiCad models that cannot be downloaded offline stay missing
+  in an export (parity reports them as `file missing`).
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:

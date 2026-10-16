@@ -9,10 +9,13 @@ a minor release may change command-line options and file formats.
 
 ### Added
 
+- `ecadlib parity` (`parity.py`): reads back the KiCad and the Altium library of every part and compares pads, drills, paste / mask, exposed pad, courtyard, 3D model, pins, pin-to-pad mapping, key fields and the `.kicad_dbl` vs DbLib rows, with explicit tolerances; the release check (librarian, agent) holds a mismatched part with a per-field diff (`[release] parity = "hold" | "warn" | "off"`); `parity survey` covers every generator and standard-table footprint; run by `testpack` and `demo`; Workspace `parity` and MCP tool.
 - `ecadlib kicad-pcm` (`kicad_pcm.py`): the library as a KiCad Plugin and Content Manager package (zip for "Install from File...", optional `repository.json`/`packages.json` with `--base-url`), metadata checked against KiCad's PCM schema; symbols point at `PCM_<lib>`, 3D models at `${KICADn_3RD_PARTY}`; `--kicad 7` writes KiCad 7 files; `--plugin` packages a pcbnew action plugin "ecadlib: add part". `ecadlib altium-pkg` (`altium_pkg.py`): Altium hand-off folder with a `.LibPkg` (compile to IntLib), a DelphiScript install project and a relative DbLib. Workspace `tool_packages` and MCP tool of the same name. Installed and checked in real KiCad 7.0.11; not run in Altium.
 
 ### Fixed
 
+- KiCad library import (librarian) and `kicad-export`, found by `parity survey` over KiCad's own footprint library: a through-hole pad's drill offset is kept (Altium hole-offset field; before, the copper sat on the hole), an SMD pad's shape offset moves its copper, copper-less mask / paste apertures keep their round or custom shape and both their layers (before: a square on paste only), and `kicad-export` folds a custom pad's regions that touch the anchor, and the mask / paste of stroked outlines, back into the pad without swallowing separate paste polygons.
+- `kicad-export`: footprints without a KiCad 3D model (all generated and standard ones) now get the Altium footprint's model (its embedded STEP, or its extruded body as a STEP) in `<lib>.3dshapes/`; before, the KiCad library had no 3D model where Altium had one.
 - `ecadlib dblib`: the Excel `.DbLib` names its workbook relative to itself (`DatabasePathRelative=1`), so the folder can move.
 - Web UI: a step bar (1. Check a BOM, 2. Fill the library, 3. Send to Altium, Review queue, Footprints, Status, Settings), a "what happened, what next" line after every action, a Status card (`GET /api/status`) and an in-page setup check (`GET /api/doctor`, admin in team mode), the librarian's progress in its own card, a note telling team viewers which role they need, and `tests/test_ui_browser.py` (Chromium via Playwright at desktop and phone width; skips without it).
 

@@ -77,7 +77,8 @@ DEFAULTS = {
     "footprint": {"density": "N", "pin1": ["1", "A1"]},
     "sources": {"order": list(SOURCES)},
     "bom": {"columns": {}},                    # ecadlib field (mpn, manufacturer, value, ...) -> your BOM header
-    "release": {"approvals": {}},              # same keys as approvals.json; used when there is no approvals.json
+    "release": {"approvals": {},               # same keys as approvals.json; used when there is no approvals.json
+                "parity": "hold"},             # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
     "altium365": {"workspace": ""},
     "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "sourcing", "a365"],   # ecadlib.upkeep
                "price_jump_pct": 20.0, "build_qty": 1, "currency": "USD"},
@@ -342,6 +343,8 @@ def validate(raw, where="ecadlib.toml"):
     if "tool" in st and st["tool"] not in ("altium", "kicad", "both"):
         _err(where, "setup.tool", f"= {st['tool']!r}: must be altium, kicad or both")
     _LL.validate(where, raw.get("ai"), [("datasheet", ds), ("agent.proof", (raw.get("agent") or {}).get("proof"))], _err)
+    if "parity" in (raw.get("release") or {}) and raw["release"]["parity"] not in ("hold", "warn", "off"):
+        _err(where, "release.parity", f"= {raw['release']['parity']!r}: must be hold, warn or off")
     if (raw.get("release") or {}).get("approvals"):
         from .approvals import normalize_policy
         try:
@@ -797,6 +800,7 @@ HELP = {
     "sources": "Where missing symbols and footprints are looked for, in order",
     "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header, or field = [\"header\", \"alias\"])",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
+    "release.parity": "hold | warn | off: a part whose KiCad and Altium files differ (pads, drills, courtyard, 3D, pins) is held",
     "sim": "Parasitics for the built-in passive simulation models (sim-models), e.g. capacitor_esr = \"10m\"",
     "datasheet": "Claude datasheet reader (ecadlib datasheet / librarian): model, effort, which environment variable holds the "
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",

@@ -90,6 +90,8 @@ CASES = [
     (["stdparts", "resolve", "SOT-23-5", "--kicad-mod", "{out}/sot.kicad_mod"], (0,)),
     (["stdparts", "bench", "--fixture", "{tests}/fixtures/stdparts_kicad_numbers.json.gz"], (0,)),
     (["testpack", "--out", "{out}/testpack"], (0,)),
+    (["parity", "{out}/lib/plan.json", "-o", "{out}/parity"], (0, 1)),
+    (["parity", "{out}/lib/plan.json", "--kicad", "{out}/kicad", "--name", "ecadlib", "-o", "{out}/parity_k"], (0, 1)),
 ]
 HELP_ONLY = {"ui", "mcp", "a365", "project"}       # need a server / network / an Altium project: -h (and mcp below)
 
@@ -193,7 +195,7 @@ def test_every_command_help_and_minimal_run():
     assert not problems, "\n\n".join(problems)
 
 
-OPTIONAL = {"PIL": "pillow", "pypdf": "pypdf"}           # extras: every use handles ImportError with a message
+OPTIONAL = {"PIL": "pillow", "pypdf": "pypdf", "pyaltiumlib": "pyaltiumlib"}   # pyaltiumlib: parity's second reader           # extras: every use handles ImportError with a message
 
 
 def test_third_party_imports_are_declared():
