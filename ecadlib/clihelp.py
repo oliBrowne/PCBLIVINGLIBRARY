@@ -16,6 +16,8 @@ EXAMPLES = {
     "demo": ["ecadlib demo", "ecadlib demo -o /tmp/try --tool kicad"],
     "kicad-pcm": ["ecadlib kicad-pcm out/librarian/plan.json -o out/pcm --name mylib",
                   "ecadlib kicad-pcm out/kicad -o out/pcm --kicad 7", "ecadlib kicad-pcm --plugin -o out/pcm"],
+    "altium-menu": ["ecadlib altium-menu build --out out/altium_menu --workspace D:/ecadlib-ws --win-dir D:\\ecadlib-menu",
+                    "ecadlib altium-menu add-part LM358DR --manufacturer TI --workspace D:/ecadlib-ws --result-file r.ini"],
     "altium-pkg": ["ecadlib altium-pkg out/librarian/plan.json --out out/altium_pkg --name mylib",
                    "ecadlib altium-pkg out/altium_models --out out/altium_pkg"],
     "testpack": ["ecadlib testpack --out altium_kicad_testpack"],
