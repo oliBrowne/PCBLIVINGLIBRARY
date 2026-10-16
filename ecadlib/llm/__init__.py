@@ -19,6 +19,7 @@ Settings (ecadlib.toml), all optional - with no [ai] table everything is exactly
     assist = "auto"               # guide rails: auto (by the model's tier) | off | full   (ecadlib.llm.rails)
     feedback_retry = true         # one retry that feeds datasheet's exact check errors back (every model, Claude too)
     detect = true                 # ask an openai-compatible server what the model can do (context, vision, price)
+    temperature = "auto"          # auto | off | 0..2: temperature 0 + seed where the model takes them (llm.sampling)
     [ai.profiles."qwen2.5:7b"]    # override what ecadlib assumes about a model (ecadlib.llm.profiles)
     tier = "small"                # frontier | mid | small
     [ai.endpoints.local]          # named endpoints for a mixed ladder: [datasheet] ladder = ["local:qwen2.5:7b",
@@ -43,7 +44,7 @@ ASSIST = ("auto", "off", "full")
 ANTHROPIC_MODEL = "claude-opus-5-5"
 ANTHROPIC_KEY = "ANTHROPIC_API_KEY"
 DEFAULTS = {"provider": "anthropic", "model": "", "base_url": "", "api_key_env": "", "assist": "auto",
-            "feedback_retry": True, "detect": True, "profiles": {}, "endpoints": {}}
+            "feedback_retry": True, "detect": True, "profiles": {}, "endpoints": {}, "temperature": "auto"}
 SECTION_KEYS = ("provider", "base_url", "assist")       # added to [datasheet] and [agent.proof] (empty = [ai])
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,199}")
 ENV_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -218,6 +219,11 @@ def validate(where, raw_ai, sections, err):
     for k, v in ai.items():
         if k not in DEFAULTS:
             err(where, f"ai.{k}", f"is not a known key; known in [ai]: {', '.join(DEFAULTS)}")
+        if k == "temperature":
+            from .sampling import check
+            if check(v):
+                err(where, "ai.temperature", check(v))
+            continue
         d = DEFAULTS[k]
         if isinstance(d, bool):
             if not isinstance(v, bool):

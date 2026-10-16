@@ -38,7 +38,7 @@ from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_tria
                footprint_gen as F, fp_share as FS, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
-from . import sheetsafe as SS
+from . import crosscheck as CC, sheetsafe as SS
 from . import symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
@@ -441,14 +441,26 @@ class Run:
         if not rd.key and not rd.estimate_only:
             st["tried"].append(f"needs datasheet reader (no API key): {urls[0][0]} ({urls[0][1]})")
             return
-        job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"])
-        res = rd.cached(job)
-        if res is None and rd.deferred:
-            rd.submit(job)
-            self.waiting.append((st, job, fp_name, sym_name))
-            st["tried"].append(f"datasheet: queued for the batch ({job['url']}, {job['where']})")
+        job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+        try:
+            res = hit = rd.cached(job)
+            if res is None and rd.deferred:
+                rd.submit(job)
+                self.waiting.append((st, job, fp_name, sym_name))
+                st["tried"].append(f"datasheet: queued for the batch ({job['url']}, {job['where']})")
+                return
+            res = res or rd.read_now(job)
+        except CC.Held as e:
+            self.cross_check_held(st, e)
             return
-        self.put_datasheet(st, res or rd.read_now(job), job, fp_name, sym_name, "cached" if res else "")
+        self.put_datasheet(st, res, job, fp_name, sym_name, "cached" if hit else "")
+
+    @staticmethod
+    def cross_check_held(st, e):
+        """A datasheet read whose cross-check disagreed: nothing is written; both values go to the review."""
+        st["cross_check"] = {"status": "disagreed", "summary": CC.summary_line(e.record)}
+        st["tried"].append("datasheet reader: held, the cross-check disagrees (see datasheet/*.review.md)")
+        st["review"].append(f"cross-check disagrees, nothing written: {CC.summary_line(e.record)}")
 
     def flush_datasheets(self, log=print):
         """Send the parts queued for the datasheet batch and build what came back."""
@@ -460,7 +472,9 @@ class Run:
             done = {job["key"]: e for _, job, _, _ in self.waiting}
         for st, job, fp_name, sym_name in self.waiting:
             r = done.get(job["key"])
-            if isinstance(r, dict):
+            if isinstance(r, CC.Held):
+                self.cross_check_held(st, r)
+            elif isinstance(r, dict):
                 try:
                     self.put_datasheet(st, r, job, fp_name, sym_name, r["sidecar"].get("via") or "batch")
                 except Exception as e:
@@ -490,6 +504,10 @@ class Run:
                            f"{len(res['needs_review'])} review items"
                            + (f"; read by {rt['model']}" + (f" after {n_ans - 1} earlier answers (see review.md)" if n_ans > 1 else "")
                               if rt.get("model") else ""))
+        cc = res.get("cross_check")
+        if cc:
+            st["cross_check"] = {"status": cc["status"], "summary": CC.summary_line(cc)}
+            st["tried"].append(f"cross-check ({cc['mode']}): {cc['status']}: {CC.summary_line(cc)}")
         st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
         st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url}; see datasheet/*.review.md"
                             + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
@@ -530,6 +548,10 @@ def apply_state(item, st, ln):
         item["description"], fields["Description"] = st["found"]["description"]
     item["field_sources"] = fields
     item["verify"] = list(st.get("verify", []))
+    if st.get("cross_check"):                     # ecadlib.crosscheck: agreed / disagreed (held) / unchecked / skipped
+        item["cross_check"] = dict(st["cross_check"])
+    else:
+        item.pop("cross_check", None)
     item["librarian"] = {"tried": st.get("tried", []), "review": st.get("review", []),
                          "notes": [n for k in ("symbol", "footprint") for n in (st.get(k) or {}).get("notes", [])]}
 
@@ -549,7 +571,8 @@ def review_rows(items):
         why += [h for h in it.get("hold_reasons", []) if not re.match(r"files: no (symbol|footprint) model", h)] + it["librarian"]["review"]
         rows.append({"part": it["name"], "status": it["status"], "symbol_from": it["source"]["symbol"] or "",
                      "footprint_from": it["source"]["footprint"] or "", "needs_human": "yes" if why else "",
-                     "why": "; ".join(dict.fromkeys(why)), "tried": "; ".join(it["librarian"]["tried"])})
+                     "why": "; ".join(dict.fromkeys(why)), "tried": "; ".join(it["librarian"]["tried"]),
+                     "cross_check": (it.get("cross_check") or {}).get("status", "")})
     return rows
 
 
@@ -571,6 +594,7 @@ def write_review(rows, out, bom):
     md += ["", "## Needs a person", ""]
     md += [f"- **{r['part']}** ({r['status']}): " + "; ".join(r["why"].split("; ")) for r in rows if r["needs_human"]] or ["Nothing."]
     md += ["", "## What was tried", ""] + [f"- **{r['part']}**: {r['tried'] or '-'}" for r in rows]
+    md += CC.review_lines(rows)              # which datasheet parts were cross-checked, agreed, or held
     from . import ds_route
     md += ds_route.review_lines(out)          # datasheet reads: model, pages, tokens and USD per answer
     (out / "review.md").write_text("\n".join(md) + "\n", encoding="utf-8")

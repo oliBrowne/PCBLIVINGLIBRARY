@@ -10,7 +10,7 @@ from unittest import mock
 
 import requests
 
-from ecadlib import datasheet as D, ds_route as DR, llm as LL, rules as RU, visual_check as V
+from ecadlib import crosscheck as CC, datasheet as D, ds_route as DR, llm as LL, rules as RU, visual_check as V
 from ecadlib.llm import openai_compat as OC, profiles as PR, rails as RL, run as LR
 from tests import test_datasheet as TD, test_datasheet_batch as TB, test_ds_route as TR
 
@@ -56,7 +56,11 @@ def _claude_calls(rules):
     pdf = TR.pdf_lines(TR.ldo_pages())
     with tempfile.TemporaryDirectory() as d, mock.patch.object(D.requests, "post", post):
         rd = D.Reader(Path(d) / "out", Path(d) / "cache", key="sk-test", rules=RU.load(rules, start=d), http=LdoHTTP(pdf), log=None)
-        rd.read_now(rd.job("TESTLDO-H33TRG1", [("https://example.com/ldo.pdf", "BOM")], "SOT-223-3_TabPin2"))
+        try:
+            rd.read_now(rd.job("TESTLDO-H33TRG1", [("https://example.com/ldo.pdf", "BOM")], "SOT-223-3_TabPin2"))
+            raise AssertionError("the VQFN-16 answer for a SOT-223 part was accepted")
+        except CC.Held as e:                          # [datasheet] cross_check = "auto": the standard SOT-223 has 3 pins;
+            assert "pin count read 16, table 3" in str(e)   # an offline check, so no request is added
     return calls
 
 
@@ -538,7 +542,8 @@ def test_eval_compares_providers_with_record_and_replay():
                      record=Path(d) / "rec", model="gpt-4o", provider="openai-compatible", base_url=srv.base)
         n = len(srv.chats())
         assert rep["meta"]["provider"] == "openai-compatible" and rep["meta"]["tier"] == "mid" and rep["meta"]["model"] == "gpt-4o"
-        assert n == 2 and all(c["source"] == "datasheet" and c["pass"] for c in rep["cases"]), [c["errors"] for c in rep["cases"]]
+        # 2 reads + QFNPART's cross-check read (its package is not in the standard table), replayed from the recording
+        assert n == 3 and all(c["source"] == "datasheet" and c["pass"] for c in rep["cases"]), [c["errors"] for c in rep["cases"]]
         assert all(c["usd"] == 0.0 for c in rep["cases"])                     # a local server costs nothing
         rep2 = ER.run(TE.mini_set(d), Path(d) / "replayed", cache=Path(d) / "cache", http=TB.PdfHTTP(pdfs), log=lambda *a: None,
                       replay=Path(d) / "rec", model="gpt-4o", provider="openai-compatible", base_url=srv.base)

@@ -35,6 +35,7 @@ class OpenAICompatClient:
         self.log_file, self.say = log_file or D._LOG["file"], say or D._LOG["say"]
         self._post = post
         self.format_fallback = None                        # set when the server rejected json_schema once
+        self.sampling = {}                                 # temperature / seed for every request (llm.sampling)
 
     # --- translation
     def to_chat(self, body):
@@ -82,8 +83,11 @@ class OpenAICompatClient:
                                       "json_schema": {"name": "answer", "schema": fmt["schema"], "strict": True}}
         elif fmt.get("type") == "json_schema" and mode == "json_object":
             out["response_format"] = {"type": "json_object"}
-        if "temperature" in body:
-            out["temperature"] = body["temperature"]
+        for k in ("temperature", "seed"):
+            if k in body:
+                out[k] = body[k]
+            elif k in (self.sampling or {}):
+                out[k] = self.sampling[k]
         return out
 
     @staticmethod
