@@ -141,13 +141,26 @@ def synth_answer(case, ref, table=None):
     return _complete(ext, D.output_schema())
 
 
+def synth_check(ext):
+    """The perfect answer to the cross-check's second read (ecadlib.crosscheck: only the critical numbers and the pins),
+    from the same drawing as the first answer: same dimensions, same pin count (a pad table's own convention), same pins."""
+    from .. import crosscheck as CC
+    p = ext["package"]
+    pkg = {k: copy.deepcopy(p.get(k)) for k in ("name", "package_type", "pin_count", "pitch", "body_length", "body_width",
+                                                 "lead_span", "exposed_pad")}
+    pkg["unresolved"] = []
+    chk = {"package": pkg, "pins": [{"num": q["num"], "name": q["name"]} for q in ext["pins"]], "embedded_instructions": []}
+    return _complete(chk, CC.output_schema())
+
+
 def make_replay(set_name="kicad-v1", out=None):
     """Every case of the set -> its synthetic answer, in one compact gzip JSON (deterministic: same input, same bytes)."""
     data = R.load_set(set_name)
     answers = {c["mpn"]: synth_answer(c, data["references"][c["footprint"]]) for c in data["cases"]}
     pack = {"meta": {"set": data["meta"]["name"], "set_version": data["meta"].get("version"), "model": MODEL,
                      "about": "SYNTHETIC answers (ecadlib/eval/gate.py synth_answer), not a model's reading",
-                     "answers": len(answers)}, "answers": dict(sorted(answers.items()))}
+                     "answers": len(answers)}, "answers": dict(sorted(answers.items())),
+            "checks": {k: synth_check(v) for k, v in sorted(answers.items())}}
     out = Path(out or replay_path(set_name))
     out.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(pack, sort_keys=True, separators=(",", ":")).encode()
@@ -161,19 +174,25 @@ def load_replay(path):
         return json.load(f)
 
 
+def _message(model, ext):
+    return {"id": "msg_synthetic", "type": "message", "role": "assistant", "model": model,
+            "content": [{"type": "text", "text": json.dumps(ext)}], "stop_reason": "end_turn", "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0}}
+
+
 def expand(pack, d):
-    """Replay pack -> one recording per part in d (the `eval run --replay` layout)."""
+    """Replay pack -> one recording per part in d (the `eval run --replay` layout), with the cross-check's second read."""
     d = Path(d)
     d.mkdir(parents=True, exist_ok=True)
+    model, checks = pack["meta"]["model"], pack.get("checks") or {}
     for part, ext in pack["answers"].items():
         url = f"https://example.invalid/{R._safe(part)}.pdf"
-        msg = {"id": "msg_synthetic", "type": "message", "role": "assistant", "model": pack["meta"]["model"],
-               "content": [{"type": "text", "text": json.dumps(ext)}], "stop_reason": "end_turn", "stop_sequence": None,
-               "usage": {"input_tokens": 0, "output_tokens": 0}}
-        (d / f"{R._safe(part)}.json").write_text(json.dumps(
-            {"part": part, "model": pack["meta"]["model"], "estimate": {"input_tokens": 0, "output_tokens": 0, "usd": 0.0, "how": "synthetic"},
-             "job": {"url": url, "where": "BOM", "offset": 0, "prov": {"url": url, "sent_as": "synthetic"}}, "message": msg}),
-            encoding="utf-8")
+        rec = {"part": part, "model": model, "estimate": {"input_tokens": 0, "output_tokens": 0, "usd": 0.0, "how": "synthetic"},
+               "job": {"url": url, "where": "BOM", "offset": 0, "prov": {"url": url, "sent_as": "synthetic"}},
+               "message": _message(model, ext)}
+        if part in checks:
+            rec["check"] = {"model": model, "message": _message(model, checks[part])}
+        (d / f"{R._safe(part)}.json").write_text(json.dumps(rec), encoding="utf-8")
     return d
 
 

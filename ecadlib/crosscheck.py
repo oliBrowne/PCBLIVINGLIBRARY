@@ -124,7 +124,12 @@ def compare(first, second, kind="read"):
     if kind == "read" and first.get("package_type") and second.get("package_type"):
         put("package_type", first["package_type"] == second["package_type"], first["package_type"], second["package_type"])
     if first.get("pin_count") is not None and second.get("pin_count") is not None:
-        put("pin_count", first["pin_count"] == second["pin_count"], first["pin_count"], second["pin_count"])
+        a, b = first["pin_count"], second["pin_count"]
+        # a pad table counts every numbered pad, a numbered exposed pad too (package_schema pin_count); everywhere else
+        # the exposed pad is not counted: a custom read of an EP package may be one more than the other side
+        ep_one_more = (first.get("package_type") == "custom" and second.get("has_ep") and a == b + 1) or \
+                      (second.get("package_type") == "custom" and first.get("has_ep") and b == a + 1)
+        put("pin_count", a == b or ep_one_more, a, b)
     else:
         rec["not_compared"].append("pin_count")
     if not custom and first.get("pin_count") is not None and second.get("pin_count") is not None:

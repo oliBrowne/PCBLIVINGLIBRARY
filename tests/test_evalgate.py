@@ -31,7 +31,7 @@ def test_replay_pack_is_committed_compact_and_reproducible():
     assert p.exists() and p.stat().st_size < 250_000, p.stat().st_size          # compact: one gzip JSON, not 331 files
     pack = G.load_replay(p)
     cases = R.load_set("kicad-v1")["cases"]
-    assert set(pack["answers"]) == {c["mpn"] for c in cases} and "SYNTHETIC" in pack["meta"]["about"]
+    assert set(pack["answers"]) == set(pack["checks"]) == {c["mpn"] for c in cases} and "SYNTHETIC" in pack["meta"]["about"]
     with tempfile.TemporaryDirectory() as d:
         again = G.make_replay("kicad-v1", Path(d) / "x.json.gz")
         assert again.read_bytes() == p.read_bytes(), "replay pack is stale: python -m ecadlib eval gate --make-replay"
@@ -39,13 +39,15 @@ def test_replay_pack_is_committed_compact_and_reproducible():
 
 def test_synthetic_answers_pass_the_readers_schema():
     """Every answer is what strict structured outputs would return; parse_message validates the schema."""
-    from ecadlib import datasheet as D
+    from ecadlib import crosscheck as CC, datasheet as D
     pack = G.load_replay(G.replay_path())
     with tempfile.TemporaryDirectory() as d:
-        G.expand({"meta": pack["meta"], "answers": dict(list(pack["answers"].items())[:40])}, d)
+        G.expand({"meta": pack["meta"], "answers": dict(list(pack["answers"].items())[:40]), "checks": pack["checks"]}, d)
         for f in sorted(Path(d).iterdir()):
             rec = json.loads(f.read_text())
             ext = D.parse_message(rec["message"])
+            crit, pins, _ = CC.parse(rec["check"]["message"])            # the second read's answer parses too
+            assert pins == [(p["num"], p["name"]) for p in ext["pins"]] and crit["pin_count"] == ext["package"]["pin_count"]
             assert ext["package"]["name"] and rec["message"]["usage"] == {"input_tokens": 0, "output_tokens": 0}
 
 
@@ -115,6 +117,21 @@ def test_gate_runs_offline_and_catches_a_wrong_answer():
         res = G.check(rep2, base, subset=True)
         assert not res["ok"] and len(res["problems"]) == 1 and res["problems"][0].startswith(f"{soic['id']}: passed in the baseline, now fails")
         assert "FAIL (1)" in res["text"]
+        # the cross-check's second read is replayed too: a pad-table part whose recorded second read names pin 1
+        # differently is held with both values (crosscheck), and the gate fails on it
+        pack = G.load_replay(G.replay_path())
+        custom = next(c for c in rep["cases"] if pack["answers"][c["mpn"]]["package"]["package_type"] == "custom"
+                      and c["source"] == "datasheet" and any(p["name"] not in ("", "~") for p in pack["checks"][c["mpn"]]["pins"]))
+        pins = pack["checks"][custom["mpn"]]["pins"]
+        k = next(i for i, p in enumerate(pins) if p["name"] not in ("", "~"))
+        pins[k]["name"] = "SOMETHING_ELSE"
+        bad.write_bytes(gzip.compress(json.dumps(pack).encode()))
+        rep3 = G.run(ids=ids, replay=bad)
+        res = G.check(rep3, base, subset=True)
+        c3 = next(c for c in rep3["cases"] if c["id"] == custom["id"])
+        assert not res["ok"] and not c3["pass"] and any("cross-check disagrees" in t for t in c3["tried"]), (res["text"], c3["tried"])
+    assert {c["cross_check"] for c in rep["cases"] if c["source"] == "datasheet"} <= {"agreed", "unchecked"}
+    assert "agreed" in {c["cross_check"] for c in rep["cases"]}
 
 
 def test_gate_refuses_every_network_request_and_ignores_keys():

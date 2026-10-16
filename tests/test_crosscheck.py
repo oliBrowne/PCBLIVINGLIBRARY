@@ -183,6 +183,18 @@ def test_standard_table_agrees_for_free_and_a_mismatch_holds():
             assert "standard:SOT-223-3_TabPin2: pin count read 16, table 3" in str(e)
 
 
+def test_pad_table_read_counts_its_numbered_exposed_pad():
+    """A pad-table (custom) read counts every numbered pad, so a WSON-12 with its exposed pad numbered 13 has
+    pin_count 13; the standard table says 12 + EP. That used to hold every such part (6 cases of the eval gate)."""
+    read = CC.critical({"name": "WSON-12-1EP_4x4mm_P0.5mm_EP2.6x3mm_ThermalVias", "package_type": "custom", "pin_count": 13})
+    rec = CC.against_table(read, "WSON-12-1EP_4x4mm_P0.5mm_EP2.6x3mm", "the read's package name")
+    assert rec["status"] == "agreed" and rec["agreed"] == ["pin_count"], rec
+    assert CC.against_table(dict(read, pin_count=14), "WSON-12-1EP_4x4mm_P0.5mm_EP2.6x3mm", "x")["status"] == "disagreed"
+    assert CC.against_table(dict(read, pin_count=12), "WSON-12-1EP_4x4mm_P0.5mm_EP2.6x3mm", "x")["status"] == "agreed"
+    noep = CC.critical({"name": "SOIC-8_3.9x4.9mm_P1.27mm", "package_type": "custom", "pin_count": 9})
+    assert CC.against_table(noep, "SOIC-8_3.9x4.9mm_P1.27mm", "x")["status"] == "disagreed"    # no EP: one more is wrong
+
+
 def test_tolerances_and_ranges():
     t = CC.critical({"pin_count": 8, "pitch": 1.27, "body_width": {"min": 3.8, "nom": 3.9, "max": 4.0}})
     r = CC.critical({"pin_count": 8, "pitch": 1.27, "body_width": {"min": 3.81, "nom": 3.91, "max": 3.99}})
