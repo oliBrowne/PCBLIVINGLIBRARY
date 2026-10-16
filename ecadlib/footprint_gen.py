@@ -149,6 +149,8 @@ def pad(num, x, y, w, h, shape="roundrect", layers=("F.Cu", "F.Paste", "F.Mask")
 def family(spec):
     """IPC-7351B lead family (FILLETS key) for a spec: `lead_type` overrides the default per package_type."""
     t = spec["package_type"]
+    if spec.get("ipc_family") in FILLETS:                     # forced (ecadlib.stdparts: KiCad's force_small_pitch_ipc_definition)
+        return spec["ipc_family"]
     lt = spec.get("lead_type")
     if t == "chip":
         if lt in ("molded", "melf", "flat"):
