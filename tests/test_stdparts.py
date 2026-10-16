@@ -45,14 +45,23 @@ def test_bench_catches_a_wrong_spec():
 
 
 def test_names_resolve_or_stay_ambiguous():
-    ok = {("SOIC-8",): "SOIC-8_3.9x4.9mm_P1.27mm", ("SO-8",): "SOIC-8_3.9x4.9mm_P1.27mm",
+    ok = {("SOIC-8 3.9x4.9mm",): "SOIC-8_3.9x4.9mm_P1.27mm", ("SO-8 150mil",): "SOIC-8_3.9x4.9mm_P1.27mm",
+          ("Package_TO_SOT_SMD:TO-252-2",): "TO-252-2",
           ("MSOP-8",): "MSOP-8_3x3mm_P0.65mm", ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",): "SOIC-8_3.9x4.9mm_P1.27mm",
           ("QFN-32_L5.0-W5.0-P0.50-EP3.5",): "QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm", ("SOT-23-5",): "SOT-23-5"}
     for texts, want in ok.items():
         r = SP.resolve(list(texts))
         assert r["footprint"] == want, (texts, r)
-    for text, kind, why in (("QFN-16", None, "ambiguous"), ("SOT-23-3", None, "ambiguous"), ("SOT-223", None, "ambiguous"),
-                            ("LQFP-64", None, "ambiguous"), ("SMA", "U", "not a diode"), ("PowerPAK SO-8", "Q", "power package"),
+    # no JEDEC default any more: a bare family name, or an EP package without the pad size, is not a footprint
+    for text, kind, why in (("SOIC-8", "U", "no body size"), ("SO-8", "U", "no body size"), ("SO-14", "U", "no body size"),
+                            ("SOIC-16W", "U", "no body size"), ("TSSOP-14", "U", "no body size"), ("LQFP-100", "U", "no body size"),
+                            ("TDFN-12-1EP", "U", "no body size"), ("TQFP-64-1EP 10x10mm", "U", "no exposed-pad size"),
+                            ("QFN-16 3x3mm P0.5mm", "U", "no exposed-pad size"), ("TO-252-2", "U", "TabPin1"),
+                            ("DPAK", "Q", "TabPin1"), ("TO-263-2", "D", "TabPin1"), ("D2PAK", "U", "TabPin1")):
+        r = SP.resolve([text], kind)
+        assert r["footprint"] is None and why in r["fp_how"], (text, r)
+    for text, kind, why in (("QFN-16", None, "no body size"), ("SOT-23-3", None, "ambiguous"), ("SOT-223", None, "ambiguous"),
+                            ("LQFP-64", None, "no body size"), ("SMA", "U", "not a diode"), ("PowerPAK SO-8", "Q", "power package"),
                             ("TO-220 horizontal", "U", "horizontal"), ("SC-70", "Q", ""), ("TSOT-23", "Q", "")):
         r = SP.resolve([text], kind)
         assert r["footprint"] is None and why in r["fp_how"], (text, r)
@@ -134,7 +143,7 @@ R2,1,1k,,Yageo,RC0402FR-071KL,,Resistor 1k,https://example.com/r.pdf
 C1,1,100n,,Murata,GRM188R71H104KA93D,,Capacitor 100nF,https://example.com/c.pdf
 Q1,1,MMBT3904,SOT-23,onsemi,MMBT3904LT1G,,NPN transistor,https://example.com/q.pdf
 U1,1,AMS1117-3.3,SOT-223,AMS,AMS1117-3.3,,LDO 3.3V,https://example.com/u.pdf
-U2,1,LM324,TSSOP-14,TI,LM324PWR,,Op amp,https://example.com/lm358.pdf
+U2,1,LM324,TSSOP-14 4.4x5mm,TI,LM324PWR,,Op amp,https://example.com/lm358.pdf
 U3,1,QFNPART,QFN-16,ACME,QFNPART,,Mystery QFN,https://example.com/qfn.pdf
 """
 
@@ -160,7 +169,7 @@ def test_librarian_standard_source():
         assert u2["source"] == {"symbol": None, "footprint": "standard:Package_SO:TSSOP-14_4.4x5mm_P0.65mm"}, u2["source"]
         assert any(t.startswith("needs datasheet reader") for t in u2["librarian"]["tried"])
         u3 = next(i for i in items.values() if "QFNPART" in json.dumps(i))
-        assert u3["source"]["footprint"] is None and any("ambiguous" in t for t in u3["librarian"]["tried"])
+        assert u3["source"]["footprint"] is None and any("no body size" in t for t in u3["librarian"]["tried"])
         out = Path(d) / "out"
         for it in (c1, q1, u1):
             assert it["status"] == "ready", (it["name"], it["hold_reasons"])
@@ -236,3 +245,11 @@ def test_pin_removed_variants_are_not_the_standard_package():
         assert name is None and "pins removed" in why, (t, name, why)
     for t, want in (("SOIC-8-150mil", "SOIC-8_3.9x4.9mm_P1.27mm"), ("LQFP-48-7x7mm", "LQFP-48_7x7mm_P0.5mm")):
         assert SP.footprint_for([t])[0] == want, t
+
+
+def test_tvs_symbol_left_to_other_sources():
+    # KiCad's D_TVS is bidirectional (A1/A2); an MPN does not say reliably which kind a TVS is (eval: SM6T100A, ESD9B3.3)
+    for mpn, desc in (("SMAJ5.0A", "TVS diode"), ("SMAJ5.0CA", "TVS diode bidirectional"), ("ESD9B3.3ST5G", "ESD protection")):
+        r = SP.resolve(["SMA"], "D", mpn, desc)
+        assert r["footprint"] == "D_SMA" and r["symbol"] is None and "TVS" in r["sym_how"], (mpn, r)
+    assert SP.resolve(["SMA"], "D", "SS14", "Schottky diode")["symbol"] == "D_Schottky"

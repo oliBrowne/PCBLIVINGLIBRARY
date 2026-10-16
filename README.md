@@ -1257,15 +1257,16 @@ symbol by MPN and 20 parts that got another part's footprint because both BOM li
 for a 3.9 mm and a 5.3 mm body). Fixed (`fp_share.py`, below), and the eval BOM now gives chip passives and diodes
 their R/C/L/D designator (a `U` line is not a capacitor to any source): 331 resolved, 302 pass, the 29 connectors
 are the only failures. Shared footprints are still flagged (`footprint shared with`); they now have the same pads.
-The `standard` source alone (offline, no key): 115 of 331 resolved, 101 with the right footprint, 57 pass (the rest
-are ICs, which get a footprint but no symbol by design); chip 36/36, diode 19/25, sot 15 resolved and right; 14
-wrong footprints, mostly bare `SO-n` / `SOIC-n` names on non-JEDEC bodies (the default 3.9 mm SOIC is taken). Estimate mode on the whole set: ~$0.60 per part on Opus 5.5
+The `standard` source alone (offline, no key): 74 of 331 resolved, all 74 with the right footprint (0 wrong), 57
+pass (the others get a footprint but no symbol by design: ICs, and TVS diodes, whose uni/bidirectional pin names the
+MPN does not settle); chip 36/36, diode 21 resolved, sot 15. It answers only what the name settles: no JEDEC default
+body any more (an earlier version gave 115 answers, 14 of them wrong, from bare `SO-14` / `SOIC-8` / `TDFN-12-1EP`). Estimate mode on the whole set: ~$0.60 per part on Opus 5.5
 synchronous, mostly because PDFs that cannot be downloaded here are guessed at 30 pages.
 
 ## 30. `stdparts.py`: standard parts without Claude
 
 ```
-python3 -m ecadlib stdparts resolve "SOIC-8" | 0603 --kind R | --mpn GRM188R71H104KA93D --kind C [--kicad-mod F] [--json]
+python3 -m ecadlib stdparts resolve "SOIC-8 3.9x4.9mm" | 0603 --kind R | --mpn GRM188R71H104KA93D --kind C [--kicad-mod F] [--json]
 python3 -m ecadlib stdparts list [PATTERN]
 python3 -m ecadlib stdparts bench [--kicad DIR | --fixture tests/fixtures/stdparts_kicad_numbers.json.gz]
 python3 -m ecadlib stdparts coverage BOM [BOM ...]
@@ -1278,9 +1279,12 @@ generic packages (510 gullwing / no-lead from the KiCad footprint generator's JE
 `footprint_gen`'s IPC-7351B equations; 74 R/C/L/D/LED/fuse chips; 31 hand-drawn ones such as SOD-123, SMA/SMB/SMC,
 MELF, SOT-223, SOT-89, DPAK/D2PAK, TO-220 vertical, TO-92 inline, stored as KiCad's recommended land as a pad table).
 It resolves an exact KiCad name, a chip size (footprint, value, description, or MPN pattern; two sizes that disagree
-give nothing), or a named package with its size (`SOIC-8`, `TSSOP-20`, `QFN-32_L5.0-W5.0-P0.50-EP3.5`). A name that
-fits more than one KiCad footprint (QFN-16, LQFP-64, SOT-23-3, bare SOT-223, SC-70), power packages and TO-220
-horizontal resolve to nothing, and the next source tries. Symbols: R, C, L, LED and diodes, and SOT-23 / TO-92 BJTs
+give nothing), or a named package with its body size (`SOIC-8 3.9x4.9mm`, `SO-8 150mil`, `QFN-32_L5.0-W5.0-P0.50-EP3.5`). It never
+guesses, because a wrong footprint skips the datasheet reader: a family name without a body size (`SOIC-8`, `SO-14`,
+`TSSOP-20`, `LQFP-100`; only `MSOP-8` has one JEDEC body), a no-lead or `-1EP` name without the exposed-pad size,
+`TO-252-2` / `TO-263-2` / DPAK / D2PAK without a library prefix (KiCad also has `_TabPin1`), a name that fits more
+than one KiCad footprint (SOT-23-3, bare SOT-223, SC-70), pin-removed variants (`SOIC-8-N7`), power packages and
+TO-220 horizontal resolve to nothing, and the next source tries. Symbols: R, C, L, LED and diodes (not TVS: uni- or bidirectional pin names are not certain), and SOT-23 / TO-92 BJTs
 and MOSFETs, 1117 LDOs, 78xx/79xx/LM317 for listed MPN families (with a review note to check pins 1-3). The source is
 recorded as `standard:<Lib>:<Name>` / `standard:<symbol>`.
 
@@ -1290,7 +1294,7 @@ Checks (2026-10-16, kicad-footprints f8440fa, kicad-symbols 9280a93):
   gullwing with KiCad's 0.15 mm pad gap, SOT-723, PowerDI-123, TO-92L, TO-220 horizontal, R_0508) are left out.
 * KiCad symbols as an MPN list (description and MPN only, Footprint property hidden): 1953 of 17050 resolve; 1925
   (98.6%) give the same pads as the symbol's KiCad footprint; all 121 MPN-family pinouts match KiCad's pin numbers.
-* The repo's test BOMs: 47 of 66 non-empty lines get a footprint, 32 a footprint and a symbol. Librarian before/after
+* The repo's test BOMs: 47 of 66 non-empty lines get a footprint, 32 a footprint and a symbol (before the no-guess rule; see section 29 for the eval set now). Librarian before/after
   on the same 68 parts: with the KiCad library reachable, nothing changes (KiCad already has those passives); without
   it, parts sent to the datasheet step fall from 66 to 35 (31 complete parts with no Claude call).
 * **Not checked:** a live datasheet run (no API key); EasyEDA (blocked).
