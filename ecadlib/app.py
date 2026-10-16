@@ -827,7 +827,8 @@ class Workspace:
         picture. Read-only, no network."""
         from . import partview as PV
         bom_path, plan_f, items = self._plan(bom)
-        return dict(PV.cards(plan_f.parent, items, pictures), bom=self._bom_label(bom_path), plan=self.rel(plan_f))
+        reports = [self.rel(f) for f in (plan_f.parent / n for n in ("review.md", "release_check.md", "plan.json")) if f.exists()]
+        return dict(PV.cards(plan_f.parent, items, pictures), bom=self._bom_label(bom_path), plan=self.rel(plan_f), reports=reports)
 
     def demo_bom(self):
         """Copy the bundled sample BOM (the one `ecadlib demo` uses) into uploads/demo/; -> its workspace path."""

@@ -10,8 +10,8 @@ Team mode (`--team`): one server for the whole team with sign-in (ecadlib/team.p
 team_users.json, session cookies, a CSRF token on every POST, a minimum role per route (ROUTES), approvals signed as
 the signed-in user, every write in team_audit.jsonl. A non-loopback address needs --cert/--key (built-in TLS) or an
 explicit --allow-http (behind an HTTPS reverse proxy on another host)."""
-import argparse, contextlib, hmac, io, http.cookies, ipaddress, itertools, json, mimetypes, secrets, socket, ssl, sys, threading, \
-    os, time, traceback, webbrowser
+import argparse, contextlib, hmac, io, http.cookies, ipaddress, itertools, json, mimetypes, re, secrets, socket, ssl, sys, \
+    threading, os, time, traceback, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -116,6 +116,7 @@ class Jobs:
                     job["lines"].append(cur)
                 cur.update({k: v for k, v in kw.items() if v is not None})
         progress.line = line
+        progress.sort = lambda: job["lines"].sort(key=lambda x: (x["n"] is not None, x["n"] or 0))
         progress.cancelled = lambda: job["cancel"]
 
         def run():
@@ -156,11 +157,77 @@ class Jobs:
         return self.get(jid, user)
 
 
+def _triage_word(status):
+    s = str(status or "")
+    return ("in your library" if s.startswith("in_library") else "not fitted" if s.startswith("dnp")
+            else "unverified" if s.startswith("unverified") else "needs work")
+
+
+def _line_lines(progress, what=None):
+    """Triage progress -> one live line per BOM line ("3/14 CL05B104KO5NNNC  checking")."""
+    def cb(done, total, label):
+        progress(done, total, label)
+        if what:
+            progress.line("__triage", state="working", text=f"{what}: line {min(done + 1, total)} of {total}")
+        elif done < total:
+            progress.line(f"line {done + 1}", n=done + 1, total=total, name=label, state="working",
+                          text=f"{done + 1}/{total} {label}  checking")
+    cb.line = progress.line
+    return cb
+
+
+_PART = re.compile(r"^\[(\d+)/(\d+)\] (.+)$")
+_DONE = re.compile(r"^(done|open|skip) +(\S.*?) +sym=(\S+) +fp=(\S+)")
+
+
+def _part_lines(progress):
+    """The librarian's log lines -> real part counts and one live line per part ("3/14 SOT-23  ready")."""
+    state = {"total": 0, "n": 0, "prev": None}
+
+    def cb(done, total, label):
+        m, d = _PART.match(label or ""), _DONE.match(label or "")
+        if m:
+            n, tot, name = int(m.group(1)), int(m.group(2)), m.group(3).strip()
+            if state["prev"]:
+                pn, pname = state["prev"]
+                progress.line(pname, state="found", text=f"{pn}/{tot} {pname}  looked up")
+            state.update(total=tot, n=n, prev=(n, name))
+            progress(n - 1, tot, name)
+            progress.line(name, n=n, total=tot, name=name, state="working", text=f"{n}/{tot} {name}  looking up")
+        elif d:
+            word = {"done": "found", "open": "still missing a symbol or footprint", "skip": "already done"}[d.group(1)]
+            progress.line(d.group(2), name=d.group(2), state="found" if d.group(1) != "open" else "missing",
+                          text=f"{d.group(2)}  {word}")
+            if state["total"]:
+                progress(state["total"], state["total"], "release check")
+        elif not state["total"]:                            # the log's own wording stays in the log
+            progress(0, 0, "finding symbols and footprints" if (label or "").startswith("finding") else "checking the BOM lines")
+        else:
+            progress(state["n"], state["total"], "checking each part before release")
+    cb.line = progress.line
+    return cb
+
+
+def _final_lines(progress, r):
+    """After the release check: every part's line says ready / held / waiting for sign-off."""
+    from .. import messages as M
+    rows = (r.get("review") if isinstance(r, dict) else None) or []
+    n = len(rows)
+    for i, x in enumerate(rows, 1):
+        word = M.status_word(x["status"])
+        progress.line(x["part"], n=i, total=n, name=x["part"], state=x["status"], text=f"{i}/{n} {x['part']}  {word}")
+    progress.sort()
+    return r
+
+
 def _msg(e, root=None):
     m = (e.args[0] if isinstance(e, KeyError) and e.args else str(e)) or type(e).__name__
     if root:                                                # workspace paths as the person sees them: relative
         m = str(m).replace(str(root) + os.sep, "").replace(str(root), "the workspace")
-    return (m if isinstance(e, (ValueError, FileExistsError, PermissionError, KeyError)) else f"{type(e).__name__}: {m}")[:600]
+    from .. import messages as M                            # absolute paths and module names never reach the page
+    m = M.clean(m)
+    return (m if isinstance(e, (ValueError, FileExistsError, PermissionError, KeyError))
+            else f"Something went wrong ({type(e).__name__}: {m}). The terminal running ecadlib ui shows the details.")[:600]
 
 
 def _names(v):
@@ -380,6 +447,8 @@ def make_handler(ws: Workspace, team=None):
             bom = (body if body is not None else self._json()).get("bom")
             if not isinstance(bom, str) or not bom:
                 raise ValueError("no BOM given")
+            if len(bom) > 1000 or any(len(x) > 200 for x in bom.replace("\\", "/").split("/")):
+                raise ValueError("that BOM name is too long; pick a BOM from the list")
             if _team_file(ws, ws.inside(bom)):
                 raise ValueError(f"{bom} is not a BOM")
             if write and jobs.running("librarian:" + bom):
@@ -448,6 +517,8 @@ def make_handler(ws: Workspace, team=None):
                         return self._send(200, ws.triage_result(q.get("id", "")))
                     except KeyError as e:
                         return self._send(404, {"error": _msg(e)})
+                if u.path == "/api/parts":                      # part cards of a BOM's library plan
+                    return self._send(200, ws.library_parts(self._bom({"bom": q.get("bom")}), q.get("pictures") != "0"))
                 if u.path == "/api/job":                        # a running job (its live log): owner or admin only
                     job = jobs.get(q.get("id", ""), self.user if team else None)
                     return self._send(200, job) if job else self._send(404, {"error": "no such job"})
@@ -497,6 +568,15 @@ def make_handler(ws: Workspace, team=None):
             if u.path == "/api/footprint/preview":                # read-only, no lock
                 b = self._json()
                 return self._send(200, ws.preview_footprint(b["spec"], b.get("density")))
+            if u.path == "/api/job/cancel":                       # Stop: the job ends at its next line or part
+                job = jobs.cancel(_str(self._json().get("id"), "id"), self.user if team else None)
+                return self._send(200, job) if job else self._send(404, {"error": "no such job"})
+            if u.path == "/api/demo":                             # first visit: the bundled sample BOM, offline
+                self._json()
+                with write_lock:
+                    rel = ws.demo_bom()
+                return self._send(200, dict(jobs.start(self._demo, rel, self._owner(), label=rel, owner=self._owner(),
+                                                       key="librarian:" + rel), bom=rel))
             if u.path == "/api/upload":
                 name = unquote(self.headers.get("X-Filename", "bom.csv"))
                 self._fields = {"file": name[:200]}
@@ -669,7 +749,15 @@ def make_handler(ws: Workspace, team=None):
         # ---------------------------------------------------------- jobs
         @staticmethod
         def _librarian(bom, sources, refresh, progress=None):
-            return ws.librarian_run(bom, sources, (), refresh, progress)
+            return _final_lines(progress, ws.librarian_run(bom, sources, (), refresh, _part_lines(progress)))
+
+        @staticmethod
+        def _demo(bom, user, progress=None):
+            """Triage, then fill the library from the built-in standard parts only (no network, no API key)."""
+            t = ws.triage(bom, _line_lines(progress, "Checking the BOM"), lock=write_lock, user=user)
+            progress.line("__triage", state="done", text=f"BOM checked: {len(t['rows'])} lines")
+            r = _final_lines(progress, ws.librarian_run(bom, ["standard"], (), None, _part_lines(progress)))
+            return dict(r, triage=t)
 
         @staticmethod
         def _candidates(bom, part, kind, limit, progress=None):
@@ -681,7 +769,11 @@ def make_handler(ws: Workspace, team=None):
 
         @staticmethod
         def _triage(bom, user, progress=None):
-            return ws.triage(bom, progress, lock=write_lock, user=user)   # lock only while the reports are written
+            t = ws.triage(bom, _line_lines(progress), lock=write_lock, user=user)   # lock only while reports are written
+            for r in t["rows"]:
+                progress.line(f"line {r['line']}", state="done", text=f"{r['line']}/{len(t['rows'])} "
+                              f"{r.get('mpn') or r.get('value') or r.get('designator') or ''}  {_triage_word(r.get('status'))}")
+            return t
 
         def _error(self, e):
             if isinstance(e, Refused):

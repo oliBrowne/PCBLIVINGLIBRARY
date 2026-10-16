@@ -100,6 +100,16 @@ The UI and MCP server write everything to one workspace folder (default `./ecadl
 
 Both servers use only the standard library on top of the package requirements. The web UI binds to 127.0.0.1. It refuses requests with an unexpected Host header (DNS rebinding), cross-origin POSTs, and any file path outside the workspace.
 
+### Using the web UI
+
+* **First visit.** An empty workspace shows a welcome card: *Try it with a sample BOM* builds the 7-part sample (the one `ecadlib demo` uses) from ecadlib's standard parts, offline and without an API key; *Run the setup check* runs `ecadlib doctor`.
+* **Drop a BOM anywhere on the page** (CSV or XLSX). Long actions (checking a BOM, filling the library, the sample) show live progress with one line per part ("3/14 SOT-23  ready") and a **Stop** button; the rest of the page keeps working. A stopped librarian run leaves the library plan as it was.
+* **Parts as cards.** Step 2 lists every part with a footprint picture and chips: ready / held / waiting for sign-off, the cross-check result, KiCad / Altium match, and what reading its datasheet cost and with which model; the header adds the totals so far. Search and status chips filter the list.
+* **Click a part** to open its side panel: why it is held in plain words with the next step (wording from `ecadlib/messages.py`), both values when the cross-check or the KiCad / Altium comparison disagrees, the datasheet (at the page in question when known), and the actions: pick a symbol or footprint, release anyway, approve or reject.
+* **Undo.** Approve and reject (in step 2 and in the review queue) show at once and are sent when the few-second Undo window closes; *Release anyway* is recorded at once and its Undo holds the part again.
+* **Keyboard.** `?` lists the shortcuts: `/` search, `j` / `k` next / previous part, `Enter` open, `Esc` close, `h` held only, `u` choose a file, `1` `2` `3` steps, `q` review queue, `s` status. Light and dark themes follow the system; `prefers-reduced-motion` turns animations off.
+* The same part cards are available as `Workspace.library_parts(bom)`, `GET /api/parts?bom=` and the MCP tool `library_parts` (`ecadlib/partview.py`).
+
 ### Team server (`ecadlib ui --team`)
 
 Run the web UI on one machine for the whole team, with sign-in. Local mode (no `--team`) is unchanged.

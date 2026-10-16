@@ -186,6 +186,11 @@ TOOLS = [
                     "source (the standard package table, or a second read of only the critical numbers) and the outcome: "
                     "agreed, disagreed (held, with both values), unchecked or skipped. Sends nothing.",
      "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
+    {"name": "library_parts",
+     "description": "A BOM's library plan part by part, in plain words: ready, held (each reason as a sentence plus the "
+                    "next step) or waiting for sign-off; the cross-check and KiCad/Altium results with both values when "
+                    "they disagree; the datasheet link and page; what the datasheet reads cost and which model. No network.",
+     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "build_altium_models",
      "description": "Write the Altium .PcbLib files for a BOM's footprints that are in the KiCad libraries, plus generic "
                     "Resistor/Capacitor .SchLib symbols, into the workspace altium_models/ folder.",
@@ -447,6 +452,8 @@ def call_tool(ws, name, args):
             return r
         if name == "cross_checks":
             return ws.cross_checks(args["bom"])
+        if name == "library_parts":
+            return ws.library_parts(args["bom"], pictures=False)
         if name == "build_altium_models":
             return ws.build_altium_models(args["bom"])
         if name == "altium365_plan":
