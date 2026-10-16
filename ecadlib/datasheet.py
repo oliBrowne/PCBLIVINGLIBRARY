@@ -226,8 +226,10 @@ class Client:
     """The Claude API over requests: retries 408/409/429/5xx/529 and network errors with exponential backoff
     (honouring retry-after), logs every request as one JSON line without the key or the PDF bytes."""
 
-    def __init__(self, key, base=API_BASE, retries=4, backoff=2.0, max_wait=60.0, timeout=600, sleep=None, log_file=None,
+    def __init__(self, key, base=None, retries=4, backoff=2.0, max_wait=60.0, timeout=600, sleep=None, log_file=None,
                  say=None):
+        # base: ANTHROPIC_BASE_URL (as the Anthropic SDKs read it: a gateway, a proxy, a local test server), else the API
+        base = (base or os.environ.get("ANTHROPIC_BASE_URL") or API_BASE).rstrip("/")
         self.key, self.base, self.retries, self.backoff, self.max_wait, self.timeout = key, base, retries, backoff, max_wait, timeout
         self.sleep = sleep or time.sleep
         self.log_file, self.say = log_file or _LOG["file"], say or _LOG["say"]

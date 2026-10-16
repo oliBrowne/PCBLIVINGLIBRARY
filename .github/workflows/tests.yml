@@ -52,7 +52,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends kicad
           kicad-cli version && /usr/bin/python3 -c "import pcbnew; print(pcbnew.Version())"
       - name: Run the real-KiCad tests
-        run: python -m tests.run_all test_kicad_real test_kicad_export test_tool_packages
+        run: python -m tests.run_all test_kicad_real test_kicad_export test_tool_packages test_e2e test_testpack
 
   package:
     # Build the sdist and wheel the release workflow would publish, then install each into a

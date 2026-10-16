@@ -154,26 +154,34 @@ def dbl(name, db_file, tables, driver=DEFAULT_DRIVER, dsn="", description=""):
             "cache": {"max_size": 256, "max_age": 10}, "libraries": libs}
 
 
-def add_lib_row(table_file, nick, uri, descr):
-    """Add (or replace) the Database row in a sym-lib-table, keeping every other row."""
-    row = (f'\t(lib (name {sexpr.quote(nick)})(type "Database")(uri {sexpr.quote(uri)})(options "")'
+def add_lib_row(table_file, nick, uri, descr, typ="Database", table="sym_lib_table"):
+    """Add (or replace, in place) one row of a sym-lib-table / fp-lib-table, keeping every other row and their order.
+    kicad-export writes its KiCad rows with this too, so a project's own libraries (or another export) stay."""
+    row = (f'\t(lib (name {sexpr.quote(nick)})(type {sexpr.quote(typ)})(uri {sexpr.quote(uri)})(options "")'
            f'(descr {sexpr.quote(descr)}))\n')
     p = Path(table_file)
     if p.is_file():
         text = p.read_text(encoding="utf-8")
         tree = sexpr.parse(text)
-        if not tree or tree[0] != "sym_lib_table":
-            raise ValueError(f"{p}: not a sym-lib-table")
-        keep = [ln for ln in text.splitlines(keepends=True)
-                if not re.match(rf'\s*\(lib \(name "?{re.escape(nick)}"?\)', ln)]
-        text = "".join(keep).rstrip()
-        if not text.endswith(")"):
-            raise ValueError(f"{p}: unexpected sym-lib-table layout; add this row by hand:\n{row}")
-        text = text[:-1].rstrip() + "\n" + row + ")\n"
+        if not tree or tree[0] != table:
+            raise ValueError(f"{p}: not a {table.replace('_', '-')}")
+        lines = text.splitlines(keepends=True)
+        mine = [i for i, ln in enumerate(lines) if re.match(rf'\s*\(lib \(name "?{re.escape(nick)}"?\)', ln)]
+        if mine:
+            lines[mine[0]] = row
+            text = "".join(ln for i, ln in enumerate(lines) if i not in mine[1:])
+        else:
+            text = "".join(lines).rstrip()
+            if not text.endswith(")"):
+                raise ValueError(f"{p}: unexpected {table.replace('_', '-')} layout; add this row by hand:\n{row}")
+            text = text[:-1].rstrip() + "\n" + row + ")\n"
     else:
-        text = "(sym_lib_table\n\t(version 7)\n" + row + ")\n"
-    sexpr.parse(text)
-    p.write_text(text, encoding="utf-8")
+        text = f"({table}\n\t(version 7)\n" + row + ")\n"
+    t = sexpr.parse(text)
+    if [sexpr.first(l, "name")[1] for l in sexpr.find(t, "lib")].count(nick) != 1:
+        raise ValueError(f"{p}: could not set the {nick} row (unexpected layout); add this row by hand:\n{row}")
+    if not p.is_file() or p.read_text(encoding="utf-8") != text:
+        p.write_text(text, encoding="utf-8")
     return text
 
 

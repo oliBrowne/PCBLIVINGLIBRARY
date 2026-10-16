@@ -517,9 +517,12 @@ def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=Fal
     notes = [] if notes is None else notes
     mi, text, src = model_info(t), None, None
     if mi and http is not None and model_url_path(mi["path"]):
-        text = fetch(http, "kicad-packages3D", model_url_path(mi["path"]))
-        if text is None:
-            notes.append(f"3D model {model_url_path(mi['path'])} not in kicad-packages3D")
+        try:
+            text = fetch(http, "kicad-packages3D", model_url_path(mi["path"]))
+            if text is None:
+                notes.append(f"3D model {model_url_path(mi['path'])} not in kicad-packages3D")
+        except IOError as e:                    # blocked host / offline cache miss: the footprint is still good; the
+            notes.append(f"3D model {model_url_path(mi['path'])} not downloaded ({e}); body made here instead")
     ext = step_extent(text, mi) if text else None
     if ext:
         h, src = round(ext[5], 3), "KiCad STEP model"
