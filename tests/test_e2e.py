@@ -56,7 +56,7 @@ def golden_path(work, fa, nx, tls, first=True):
                       ("parts", "parts.xlsx")):
         p = E.ecadlib(work, "librarian", bom, "-o", f"lib/{name}", "--offline", "--cache", "cache", env=env, check=False)
         assert p.returncode in (0, 2), (name, p.returncode, p.stdout[-3000:], p.stderr[-3000:])  # 2 = parts held
-        assert re.search(r"\d+ parts: \d+ ready, \d+ held -> ", p.stdout), p.stdout[-2000:]
+        assert re.search(r"\n\d+ parts?: (\d+ ready|\d+ held)", p.stdout) and "written:" in p.stdout, p.stdout[-2000:]
         out[f"librarian:{name}"] = p
     out["release-check"] = E.ecadlib(work, "release-check", "lib/parts/plan.json", "--allow", "DSPART16", env=env, check=False)
     for name in ("kicad_board", "altium_board", "parts"):
@@ -367,7 +367,7 @@ workspace = "{nx.workspace}"
         assert sorted(fa.kinds) == [("proof", "EEPART1"), ("proof", "LM358DR")], fa.kinds
         # the review queue, sign-off, then the push to Altium 365 (FakeNexar)
         q = E.ecadlib(ws, "queue", "--workspace", ws, "list", env=env).stdout
-        ids = re.findall(r"^\s+(\d{8}-\d{6}-[0-9a-f]{6})\s+review\b", q, re.M)
+        ids = re.findall(r"^\s+(\d{8}-\d{6}-[0-9a-f]{6})\s+waiting for review\b", q, re.M)
         assert len(ids) == 2, q
         for i in ids:
             a = E.ecadlib(ws, "agent", "--workspace", ws, "approve", i, "--user", "Alice Approver", env=env)

@@ -1141,7 +1141,7 @@ prints through one small layer, `ecadlib/term.py` (stdlib only), in the shared v
 * **`-q` / `--quiet`** (only the outcome and errors) and **`-v` / `--verbose`** (every reason with its fix, notes,
   sources) work for every command, anywhere on the line.
 * **`--json` is unchanged**, byte for byte (`tests/test_term.py`); `ecadlib agent status` now prints a short summary
-  and takes `--json` for the JSON it printed before.
+  and takes `--json` for the JSON it printed before; `ecadlib queue list` has a new `--json` (the item summaries).
 
 ```
 ecadlib review [PLAN] [--workspace W] [--part P] [--yes] [--offline] [--lib DIR] [--limit N]

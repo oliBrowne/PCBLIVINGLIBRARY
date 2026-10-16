@@ -262,7 +262,7 @@ def main(argv=None, inp=input):
     t = TM.Term()
     plans = [Path(a.plan)] if a.plan else find_plans(a.workspace)
     if not plans:
-        t.error("review", f"There is no library plan in {a.workspace} yet.",
+        t.err.error("review", f"There is no library plan in {a.workspace} yet.",
                 "Fill a library from a BOM first: ecadlib librarian BOM.csv -o <workspace>/librarian/board")
         return 2
     tty = inp is not input or (sys.stdin is not None and sys.stdin.isatty())   # tests pass their own inp

@@ -20,7 +20,7 @@ def agent_status(st, workspace, t=None):
                 f"{lr.get('pushed', 0)} released")
     q = st.get("queue") or {}
     if not t.quiet:
-        t.write("  queue      " + (M.counts(q) if q else "empty") if "queue_error" not in st
+        t.write("  queue      " + (", ".join(f"{v} {_qword(k)}" for k, v in sorted(q.items())) if q else "empty") if "queue_error" not in st
                 else f"  queue      unreadable ({M.clean(st['queue_error'])})")
         bs = st.get("batches") or []
         if bs:
@@ -36,6 +36,10 @@ def agent_status(st, workspace, t=None):
         t.table([[c, f"# {w}"] for c, w in nxt])
 
 
+def _qword(status):
+    return "waiting for review" if status == "review" else M.status_word(status)
+
+
 def queue_list(items, summary, where, t=None):
     """Queue items newest first: status, part, what kind of change, the prover's verdict, batch."""
     t = t or TM.Term()
@@ -44,14 +48,17 @@ def queue_list(items, summary, where, t=None):
     rows = []
     for it in items:
         s = summary(it)
-        rows.append([s["id"], t.status(look.get(s["status"], "info"), M.status_word(s["status"])), s["key"], s["kind"],
+        rows.append([s["id"], t.status(look.get(s["status"], "info"), _qword(s["status"])), s["key"], s["kind"],
                      s["verdict"] or "", s["batch"] or ""])
     if rows:
         t.table(rows, headers=["id", "status", "part", "change", "check", "batch"])
     counts = {}
     for it in items:
         counts[it.get("status")] = counts.get(it.get("status"), 0) + 1
-    t.summary(f"{M.plural(len(items), 'item')} in the review queue" + (f": {M.counts(counts)}" if items else ""),
+    words = {}
+    for k, v in counts.items():
+        words[_qword(k)] = words.get(_qword(k), 0) + v
+    t.summary(f"{M.plural(len(items), 'item')} in the review queue" + (": " + ", ".join(f"{v} {k}" for k, v in words.items()) if items else ""),
               next=[("ecadlib queue approve ID --user NAME", "sign off a part"), ("ecadlib queue show ID", "everything about one item")]
               if counts.get("review") else [])
     t.detail(f"  queue folder: {where}")

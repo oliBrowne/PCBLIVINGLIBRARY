@@ -243,9 +243,32 @@ def test_json_output_does_not_change_with_styling():
 
 
 def test_errors_are_one_line_and_a_fix():
-    with in_demo():
-        rc, out = run(["review", "--workspace", "nowhere"])
-    assert rc == 2
+    from ecadlib import review_cli as RV
+    err = io.StringIO()
+    with in_demo(), env(), contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        rc = RV.main(["--workspace", "nowhere"])
+    lines = err.getvalue().splitlines()
+    assert rc == 2 and len(lines) == 2, lines
+    assert lines[0] == "ecadlib review: There is no library plan in nowhere yet." and lines[1].startswith("  fix: Fill a library")
+    assert "Traceback" not in err.getvalue() and "/" not in lines[0]
+
+
+def test_queue_list_and_agent_status_in_plain_words():
+    from tests import test_qol as Q
+    with tempfile.TemporaryDirectory() as d:
+        ws = Q._ws(d)
+        for i, (st, k) in enumerate((("review", "new"), ("review", "changed"), ("pushed", "new"))):
+            (ws / f"agent/queue/items/{i}.json").write_text(json.dumps({"id": f"q{i}", "key": f"TI|LM358DR{i}", "status": st,
+                                                                          "change": {"kind": k}, "proof": {"verdict": "pass"}}))
+        rc, out = run(["queue", "--workspace", str(ws), "list"])
+        assert rc == 0 and "3 items in the review queue: 1 released, 2 waiting for review" in out or \
+            "3 items in the review queue: 2 waiting for review, 1 released" in out, out
+        assert "  q1  waiting for review  TI|LM358DR1  changed  pass" in out and "ecadlib queue approve ID" in out, out
+        js = json.loads(run(["queue", "--workspace", str(ws), "list", "--json"])[1])
+        assert [i["id"] for i in js] == ["q2", "q1", "q0"] and js[1]["status"] == "review"
+        rc, out = run(["agent", "--workspace", str(ws), "status"])
+        assert out.startswith("Library agent: idle  (last heartbeat 2026-10-06T00:00:00Z)") and "2 waiting for review" in out, out
+        assert json.loads(run(["agent", "--workspace", str(ws), "status", "--json"])[1])["state"] == "idle"
 
 
 # ------------------------------------------------------------------ ecadlib review
