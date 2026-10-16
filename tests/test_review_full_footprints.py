@@ -61,3 +61,12 @@ def test_weak_table_match_does_not_accept_a_part_alone():
     assert [c["source"] for c in rec["checks"]] == ["standard table", "second read"]
     assert rec["checks"][0]["compared"] == ["pin_count"]
     assert rec["status"] == "unchecked"
+
+
+def test_sipex_fixed_1117_is_gnd_not_adj():
+    # SPX1117M3-L-3-3 is the fixed 3.3 V part (Sipex/MaxLinear write 3.3 as 3-3): pin 1 is GND, not ADJ
+    from ecadlib.stdparts import symbol_text
+    for mpn, want in [("SPX1117M3-L-3-3/TR", "GND"), ("SPX1117M3-L-5-0/TR", "GND"), ("SPX1117M3-L/TR", "ADJ"),
+                      ("AMS1117-3.3", "GND"), ("AMS1117", "ADJ")]:
+        text, _ = symbol_text("REG:1117", mpn)
+        assert (f'"{want}"' in text) and (f'"{"ADJ" if want == "GND" else "GND"}"' not in text), (mpn, want)
