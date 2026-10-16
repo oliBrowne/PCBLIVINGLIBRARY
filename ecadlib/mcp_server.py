@@ -583,8 +583,8 @@ def serve(ws, inp, out):
                 traceback.print_exc(file=sys.stderr)
                 mid = msg.get("id") if isinstance(msg, dict) and isinstance(msg.get("id"), (str, int)) else None
                 resp = {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": f"internal error: {type(e).__name__}"}}
-        if resp is not None:
-            out.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
+        if resp is not None:                                # a lone surrogate (an undecodable file name) -> its \\u escape
+            out.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8", "backslashreplace"))
             out.flush()
 
 

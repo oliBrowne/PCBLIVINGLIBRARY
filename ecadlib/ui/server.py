@@ -10,11 +10,11 @@ Team mode (`--team`): one server for the whole team with sign-in (ecadlib/team.p
 team_users.json, session cookies, a CSRF token on every POST, a minimum role per route (ROUTES), approvals signed as
 the signed-in user, every write in team_audit.jsonl. A non-loopback address needs --cert/--key (built-in TLS) or an
 explicit --allow-http (behind an HTTPS reverse proxy on another host)."""
-import argparse, contextlib, hmac, io, http.cookies, ipaddress, itertools, json, mimetypes, secrets, socket, ssl, sys, threading, \
-    os, time, traceback, webbrowser
+import argparse, contextlib, hmac, io, http.cookies, ipaddress, itertools, json, mimetypes, re, secrets, socket, ssl, sys, \
+    threading, os, time, traceback, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .. import agent_queue as AQ, team as TM
 from ..app import Workspace
@@ -414,8 +414,10 @@ def make_handler(ws: Workspace, team=None):
                     if not p.is_file() or _team_file(ws, p):
                         return self._send(404, {"error": "not found"})
                     ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+                    plain = re.sub(r'[^\x20-\x7e]|["\\]', "_", p.name)   # headers are latin-1: UTF-8 name in filename*
                     return self._send(200, p.read_bytes(), ctype,
-                                      {"Content-Disposition": f'attachment; filename="{p.name}"'})
+                                      {"Content-Disposition": f'attachment; filename="{plain}"'
+                                                              + (f"; filename*=UTF-8''{quote(p.name, errors='replace')}" if plain != p.name else "")})
                 if u.path == "/api/agent/queue":
                     return self._send(200, ws.agent_queue_list(q.get("status") or None, q.get("batch") or None))
                 if u.path == "/api/agent/queue/item":
@@ -698,7 +700,9 @@ class Server(ThreadingHTTPServer):
 
 def make_server(ws, host="127.0.0.1", port=0, team=None, cert=None, key=None):
     """The UI server (not started). cert/key: serve HTTPS with the standard library's ssl (TLS 1.2+)."""
-    srv = Server((host, port), make_handler(ws, team))
+    host = host.strip("[]")
+    cls = type("Server6", (Server,), {"address_family": socket.AF_INET6}) if ":" in host else Server   # --host ::1 / ::
+    srv = cls((host, port), make_handler(ws, team))
     srv.team = team
     if cert:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -776,7 +780,8 @@ def main(argv=None):
         sys.exit(f"TLS certificate/key: {e}")
     except OSError as e:
         sys.exit(f"can't listen on {a.host}:{a.port} ({e.strerror}); is ecadlib already running? Try --port {a.port + 1}")
-    shown = socket.getfqdn() if a.host in ("0.0.0.0", "::") else a.host
+    shown = socket.getfqdn() if a.host.strip("[]") in ("0.0.0.0", "::") else a.host
+    shown = f"[{shown}]" if ":" in shown and not shown.startswith("[") else shown       # IPv6 literal in a URL
     url = f"{'https' if a.cert else 'http'}://{shown}:{srv.server_address[1]}/"
     print(f"ecadlib UI on {url}  (workspace {ws.root}{'; team mode' if team else ''}; Ctrl+C to stop)")
     if not a.no_browser and not team:
