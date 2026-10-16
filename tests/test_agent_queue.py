@@ -222,7 +222,7 @@ def test_approve_records_through_approvals_py():
         # a policy refusal blocks the approve and leaves the queue item in review
         (plan.parent / "approvals.json").write_text('{"required": 1, "users": {"bob@example.com": ["librarian"]}}')
         j = _review_item(ws, bom, "USBC-FAKE")
-        raises(ValueError, ws.agent_queue_decide, j, "approve", ANN, contains="approvals.py refused")
+        raises(ValueError, ws.agent_queue_decide, j, "approve", ANN, contains="the library plan refused this approval")
         assert AQ.Queue(ws.root).get(j)["status"] == "review"
         # reject is kept even when the policy refuses to record it; rebuild and retry
         r = ws.agent_queue_decide(j, "reject", ANN, None, "wrong pinout")

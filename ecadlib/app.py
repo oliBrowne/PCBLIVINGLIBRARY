@@ -81,6 +81,9 @@ class Workspace:
         try:
             lines, mapping = T.read_bom(bom_path, RU.bom_columns(self.rules()))
         except Exception as e:                        # pandas/csv/zip errors -> one message a person can act on
+            if type(e) is ValueError:                 # the reader's own words: no exception name, no server path
+                raise ValueError(f"couldn't read {bom_path.name} as a BOM: "
+                                 + str(e).replace(str(bom_path), bom_path.name).replace(f"{bom_path.name}: ", "", 1)) from e
             raise ValueError(f"couldn't read {bom_path.name} as a BOM table ({type(e).__name__}: {e}). "
                              "Save it as CSV or XLSX with a header row.") from e
         if not lines or not {"designator", "mpn", "value"} & set(mapping):
