@@ -1246,17 +1246,23 @@ class Reader:
         """The request for one step of a part's route: model = ladder[rung], pages = levels[level]."""
         model, lv = self.router.ladder[rung], base["levels"][level]
         prov = dict(base["base_prov"])
+        cut = None
+        if base["data"] is not None and isinstance(lv, list):
+            try:
+                cut = trim(base["data"], lv)
+            except DatasheetError:                    # damaged page objects: the whole PDF, as prepare() does
+                cut = None
         if base["data"] is None:
             src, offset, hint = ("url", base["url"]), 0, base["pages"]
-        elif isinstance(lv, list):
-            src, offset, hint = ("base64", trim(base["data"], lv)), lv, None
+        elif cut is not None:
+            src, offset, hint = ("base64", cut), lv, None
             why = {k: v for k, v in (base["route"]["picked"] or {}).items() if isinstance(k, int) and k in lv}
             prov.update(note=f"{len(lv)} of {base['n_pages']} pages sent (picked for this part: {_ranges(lv)}; "
                              f"{'first try' if level == 0 else 'widened'})", picked_why=why)
         else:
             sent, offset, hint, note = prepare(base["data"], base["pages"], self.auto_pages, page_limit(model))
             src = ("base64", sent)
-            prov["note"] = note
+            prov["note"] = note + (" (the picked pages could not be cut from this PDF)" if isinstance(lv, list) else "")
         if src[0] == "base64":
             prov.update(sent_as="base64", sent_bytes=len(src[1]), pages_sent=offset if isinstance(offset, list) else None)
         headers, body = build_request(src, base["part"], base["package"], hint, model, self.effort, fallback=not self.deferred,
@@ -1289,6 +1295,7 @@ class Reader:
             kind, why, _ = self._judge(job, rec)
             done = job["route"]["attempts"] + [{"model": job["model"], "pages": len(job["offset"]) if isinstance(job["offset"], list)
                                                 else "all", "verdict": kind, "why": why[:4], "via": rec.get("via"),
+                                                "served": (rec.get("message") or {}).get("model"),
                                                 "usage": (rec.get("message") or {}).get("usage") or rec.get("usage")}]
             nxt = self.router.next_step(job["rung"], job["level"], len(job["levels"]), kind, len(done))
             if nxt is None:
