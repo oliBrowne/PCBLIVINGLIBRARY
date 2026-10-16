@@ -143,7 +143,7 @@ def _picture(out, item):
 
 
 def _pads(svg):
-    return len(re.findall(r'class="pad', svg or ""))
+    return len(re.findall(r'class="pad[ "]', svg or ""))
 
 
 def _decisions(approvals):
