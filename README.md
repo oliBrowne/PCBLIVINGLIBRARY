@@ -1305,12 +1305,12 @@ land-pattern table (`pad_table`) copied from the reference pads for the rest (BG
 case's pins. So the gate measures the pipeline (reader checks, spec conversion, generators, pad tables, symbol writer,
 librarian, scorer), not a model. It fails when a family's pass rate drops more than `--tol` (default 0.01) below the
 baseline or when any case that passes in the baseline fails; new passes are listed (`--update` locks them in).
-Committed baseline: 325/331 (bga 25/25, chip 36/36, connector 33/35, diode 25/25, power 15/15, qfn 38/40, qfp 25/25,
-soic 30/30, sot 40/40, tht 28/30, tssop 30/30), 20-22 s here. The six failures: footprint_adv's pad-table checks reject
+Committed baseline: 327/331 (bga 25/25, chip 36/36, connector 33/35, diode 25/25, power 15/15, qfn 38/40, qfp 25/25,
+soic 30/30, sot 40/40, tht 30/30, tssop 30/30), 20-22 s here. The four failures: footprint_adv's pad-table checks reject
 two Neutrik jacks (no pad 1: pads `G`, `S`, `T`; overlapping pads) and two `_ThermalVias` QFNs whose copied reference
-lists the exposed pad's pieces twice at one place or over the pin pads (a reader would give the land once); and the
-set's reference courtyard for two round TO cans (`TO-18-2_Window`, `TO-46-3`) is a 2 x 2 mm box off to one side, which
-looks like an extraction problem of the set builder with arc-drawn courtyards (not investigated further). A real model's accuracy is still `eval run --record` / `--replay` with
+lists the exposed pad's pieces twice at one place or over the pin pads (a reader would give the land once). (Two TO
+cans failed before `sexpr.courtyard_bbox` counted arc-drawn courtyards; the set's three affected references were
+rebuilt.) A real model's accuracy is still `eval run --record` / `--replay` with
 a key (not run here: no key).
 
 **Golden snapshots** (`tests/test_evalgate.py`, in the test job): normalised fingerprints of the files we write for the

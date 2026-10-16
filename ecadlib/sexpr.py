@@ -2,7 +2,7 @@
 
 Only parses; never evaluates. Safe for untrusted input (bounded by file size). parse(text, keep_quotes=True)
 returns quoted strings as Q (a str subclass) so dumps() can write a tree back with the same quoting."""
-import re
+import math, re
 
 _TOKEN = re.compile(r'\s*(?:(\()|(\))|"((?:[^"\\]|\\.)*)"|([^\s()"]+))', re.S)
 _ESC = {"n": "\n", "r": "\r", "t": "\t"}
@@ -92,16 +92,58 @@ def pads(mod_tree):
     return out
 
 
+def _arc_extent(s, m, e):
+    """Points bounding a circular arc start -> mid -> end: its ends plus every axis extreme the sweep passes."""
+    (ax, ay), (bx, by), (cx, cy) = s, m, e
+    d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-12:                                # collinear: a straight segment
+        return [s, m, e]
+    ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d
+    uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d
+    r = math.hypot(ax - ux, ay - uy)
+    ang = lambda x, y: math.atan2(y - uy, x - ux) % (2 * math.pi)
+    a0, am, a1 = ang(ax, ay), ang(bx, by), ang(cx, cy)
+    ccw = (am - a0) % (2 * math.pi) < (a1 - a0) % (2 * math.pi)       # the sweep that passes through mid
+    lo, sweep = (a0, (a1 - a0) % (2 * math.pi)) if ccw else (a1, (a0 - a1) % (2 * math.pi))
+    pts = [s, e]
+    for k in range(4):
+        t = k * math.pi / 2
+        if (t - lo) % (2 * math.pi) <= sweep + 1e-12:
+            pts.append((ux + r * math.cos(t), uy + r * math.sin(t)))
+    return pts
+
+
 def courtyard_bbox(mod_tree):
+    """Bounding box of the F.CrtYd graphics: lines, rectangles, polygons, circles and arcs (their true extent)."""
     xs, ys = [], []
-    for kind in ("fp_line", "fp_rect", "fp_poly"):
+    add = lambda p: (xs.append(float(p[0])), ys.append(float(p[1])))
+    for kind in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc"):
         for g in find(mod_tree, kind):
             if (first(g, "layer") or [None, None])[1] != "F.CrtYd":
                 continue
+            pt = lambda k: (float(first(g, k)[1]), float(first(g, k)[2])) if first(g, k) else None
+            if kind == "fp_circle" and pt("center") and pt("end"):
+                (cx, cy), (ex, ey) = pt("center"), pt("end")
+                r = math.hypot(ex - cx, ey - cy)
+                add((cx - r, cy - r)); add((cx + r, cy + r))
+                continue
+            if kind == "fp_arc" and pt("start") and pt("end"):
+                if pt("mid"):
+                    for p in _arc_extent(pt("start"), pt("mid"), pt("end")):
+                        add(p)
+                    continue
+                if first(g, "angle"):                 # KiCad 5 arcs: start = centre, end = first point, angle in degrees
+                    (cx, cy), (ex, ey) = pt("start"), pt("end")
+                    a = math.radians(float(first(g, "angle")[1]))
+                    rot = lambda t: (cx + (ex - cx) * math.cos(t) - (ey - cy) * math.sin(t),
+                                     cy + (ex - cx) * math.sin(t) + (ey - cy) * math.cos(t))
+                    for p in _arc_extent((ex, ey), rot(a / 2), rot(a)):
+                        add(p)
+                    continue
             for k in ("start", "end"):
-                pt = first(g, k)
-                if pt:
-                    xs.append(float(pt[1])); ys.append(float(pt[2]))
+                p = first(g, k)
+                if p:
+                    add((p[1], p[2]))
             for xy in find(first(g, "pts") or [], "xy"):
-                xs.append(float(xy[1])); ys.append(float(xy[2]))
+                add((xy[1], xy[2]))
     return (min(xs), min(ys), max(xs), max(ys)) if xs else None

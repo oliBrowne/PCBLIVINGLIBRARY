@@ -40,7 +40,11 @@ UNIT = {"mm": 1.0, "mil": 0.0254, "in": 25.4}
 JEDEC_SKIP = set("IOQSXZ")
 LETTERS = [c for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if c not in JEDEC_SKIP]          # 20 row letters
 ALL_LETTERS = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-MOUNT = re.compile(r"^((MP|MH|SH|MTG|MOUNT|MECH|NPTH|S|H)\d*)?$", re.I)             # pads that are not pins
+# Pads that are not pins. KiCad's library names them MP (mounting) and SH (shield), holes "" (kicad-footprints f8440fa:
+# 4400+ MP / SH pads; no MH / MTG / MOUNT / MECH / NPTH, kept because datasheet tables use them). Never a bare letter:
+# H and S (and G, R, T) name BGA ball rows, audio-jack contacts (S = sleeve), rotary-encoder switch pins (S1, S2) and
+# edge-connector fingers (H), all of them pins.
+MOUNT = re.compile(r"^((MP|MH|SH|MTG|MOUNT|MECH|NPTH)\d*)?$", re.I)
 PIN_ROLES = ("pin", "thermal")                                                    # numbered pads that are pins
 BGA_EXCESS = {"A": 2.0, "B": 1.0, "C": 0.5}
 CONN_EXCESS = {"A": 0.5, "B": 0.5, "C": 0.5}                                      # KLC F5.3: connectors 0.5 mm
@@ -325,7 +329,7 @@ def _role(p, mount=MOUNT):
     if not n:
         return "npth" if p.get("type") == "npth" else "mount"
     if mount.fullmatch(n):
-        return "shield" if n.upper().startswith(("SH", "S")) else "mount"
+        return "shield" if n.upper().startswith("SH") else "mount"
     return "pin"
 
 
@@ -356,8 +360,7 @@ def table_layout(spec):
                for p in raw]
         cx = (min(e[0] for e in ext) + max(e[2] for e in ext)) / 2
         cy = (min(e[1] for e in ext) + max(e[3] for e in ext)) / 2
-    from .footprint_check import mount_rx
-    mount = mount_rx([_num(p.get("number")) for p in raw])     # H1, H2 .. are balls in an LGA / BGA table
+    mount = MOUNT                                          # H1, S2 .. are pins (balls, contacts), MP / SH are not
     X = lambda x: _r4(sx * (x - cx) * f)
     Y = lambda y: _r4(sy * (y - cy) * f)
     pads = []
