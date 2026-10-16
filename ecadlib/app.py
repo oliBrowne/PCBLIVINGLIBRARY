@@ -13,7 +13,7 @@ A Workspace is one folder on the user's machine:
     <root>/http_cache/                    provider responses
 
 Each action returns plain JSON-able dicts so the UI and the MCP server can share it."""
-import contextlib, datetime, hashlib, html, json, math, os, re, secrets
+import contextlib, datetime, hashlib, html, itertools, json, math, os, re, secrets
 from pathlib import Path
 
 import pandas as pd
@@ -1111,10 +1111,15 @@ def footprint_geometry(kicad_mod):
     return out
 
 
+_SVG_IDS = itertools.count(1)
+
+
 def footprint_svg(rep, scale=40, kicad_mod=None):
     """Top view: copper pads (pin 1 highlighted), drills, exposed pad, fab body and courtyard. KiCad Y points down,
     as SVG's does. The view box fits what is drawn (through-hole connectors put pin 1, not the centre, at 0,0).
-    kicad_mod: draw from the footprint itself (rotation, polygon pads, holes); else from the report's numbers."""
+    kicad_mod: draw from the footprint itself (rotation, polygon pads, holes); else from the report's numbers.
+    The UI colours it like Altium's PCB editor: a black board under a 0.5 / 2.5 mm grid, pad numbers on the copper,
+    and the footprint's origin as a cross. Through-hole pads (a drill at the pad) get the extra class "tht"."""
     f = lambda v: f"{float(v):.4f}".rstrip("0").rstrip(".")
     body, pts = [], []
     if kicad_mod:
@@ -1143,9 +1148,17 @@ def footprint_svg(rep, scale=40, kicad_mod=None):
                          "pts": [(x - w / 2, y - h / 2), (x + w / 2, y + h / 2)]})
         geo = {"holes": []}
     p1 = next((p["num"] for p in pads if p["num"] in ("1", "A1")), None)
+    drilled = {(round(q["x"], 3), round(q["y"], 3)) for q in geo["holes"]}
+    labels = []
     for p in pads:
         pts += p["pts"]
         cls = "pad p1" if p["num"] == p1 else "pad"
+        if (round(p["x"], 3), round(p["y"], 3)) in drilled:
+            cls += " tht"
+        size = min(p["w"], p["h"]) * 0.55
+        if size > 0:
+            labels.append(f'<text class="padnum" x="{f(p["x"])}" y="{f(p["y"])}" font-size="{f(min(size, 0.6))}">'
+                          f'{html.escape(p["num"])}</text>')
         num = html.escape(p["num"])                                    # the UI inserts this SVG as HTML
         tip = f'<title>pad {num}: {p["w"]:.3f} x {p["h"]:.3f} mm @ ({p["x"]:.3f}, {p["y"]:.3f})</title>'
         if p.get("polys"):
@@ -1163,5 +1176,13 @@ def footprint_svg(rep, scale=40, kicad_mod=None):
     m = 0.6
     x0, y0 = min(x for x, _ in pts) - m, min(y for _, y in pts) - m
     vw, vh = max(x for x, _ in pts) + m - x0, max(y for _, y in pts) + m - y0
+    gid = f"fpgrid{next(_SVG_IDS)}"
+    board = (f'<defs><pattern id="{gid}f" width="0.5" height="0.5" patternUnits="userSpaceOnUse">'
+             f'<path class="grid" d="M0.5 0V0.5H0"/></pattern>'
+             f'<pattern id="{gid}" width="2.5" height="2.5" patternUnits="userSpaceOnUse">'
+             f'<rect width="2.5" height="2.5" fill="url(#{gid}f)"/><path class="grid major" d="M2.5 0V2.5H0"/></pattern></defs>'
+             f'<rect class="board" x="{f(x0)}" y="{f(y0)}" width="{f(vw)}" height="{f(vh)}"/>'
+             f'<rect class="board-grid" x="{f(x0)}" y="{f(y0)}" width="{f(vw)}" height="{f(vh)}" fill="url(#{gid})"/>')
+    origin = '<path class="origin" d="M-0.4 0H0.4M0 -0.4V0.4"/>'
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{f(x0)} {f(y0)} {f(vw)} {f(vh)}" width="{vw * scale:.0f}" '
-            f'height="{vh * scale:.0f}" class="fp">' + "".join(body) + "</svg>")
+            f'height="{vh * scale:.0f}" class="fp">' + board + "".join(body) + "".join(labels) + origin + "</svg>")

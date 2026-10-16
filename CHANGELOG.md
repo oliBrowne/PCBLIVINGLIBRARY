@@ -11,6 +11,11 @@ a minor release may change command-line options and file formats.
 
 - `ecadlib kicad-pcm` (`kicad_pcm.py`): the library as a KiCad Plugin and Content Manager package (zip for "Install from File...", optional `repository.json`/`packages.json` with `--base-url`), metadata checked against KiCad's PCM schema; symbols point at `PCM_<lib>`, 3D models at `${KICADn_3RD_PARTY}`; `--kicad 7` writes KiCad 7 files; `--plugin` packages a pcbnew action plugin "ecadlib: add part". `ecadlib altium-pkg` (`altium_pkg.py`): Altium hand-off folder with a `.LibPkg` (compile to IntLib), a DelphiScript install project and a relative DbLib. Workspace `tool_packages` and MCP tool of the same name. Installed and checked in real KiCad 7.0.11; not run in Altium.
 
+### Changed
+
+- Web UI redesign in the Hairline style (github.com/lucasmarkes/hairline): one ground colour, 1px lines, mono labels, status shown as a toned dot on a hairline pill, and motion that eases out (cards and rows rise in, a sliding underline in the step bar, a sweeping progress line), all held still under `prefers-reduced-motion`. Animated line figures from Hairline: a chip seating on its footprint in the BOM drop zone (`scripts/hairline/seat.js`, our own), a conveyor while a BOM check or the librarian runs, and empty sieves and drawers for empty lists. The bundle is `ecadlib/ui/static/hairline.js` (25 KB, served at `/hairline.js`), rebuilt by `scripts/build_ui_figures.sh`.
+- Footprint preview looks like Altium's PCB editor: black board on a 0.5 / 2.5 mm grid, Top Layer pads in red with their numbers, through-hole pads in Multi-Layer silver, assembly outline in magenta, courtyard in green, the origin as a cross, and Altium-style layer tabs under it.
+
 ### Fixed
 
 - `ecadlib dblib`: the Excel `.DbLib` names its workbook relative to itself (`DatabasePathRelative=1`), so the folder can move.
