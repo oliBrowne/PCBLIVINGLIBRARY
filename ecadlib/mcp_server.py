@@ -349,6 +349,14 @@ TOOLS = [
                      "properties": {"bom": {"type": "string"}, "name": {"type": "string", "description": "library name"},
                                     "driver": {"type": "string", "description": "ODBC driver name (default SQLite3 ODBC Driver)"},
                                     "include_held": {"type": "boolean", "default": False}}}},
+    {"name": "parity",
+     "description": "Check that the BOM's KiCad and Altium libraries match: read both back from the files and compare "
+                    "every part's pads (position, size, shape, rotation, drill, side, paste, mask), exposed pad, courtyard, "
+                    "3D model, symbol pins (numbers, names, types), pin-to-pad mapping and key fields. kicad=true compares "
+                    "the KiCad export written by kicad_dblib (and its database rows). Returns counts and per-field diffs.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "kicad": {"type": "boolean", "default": False},
+                                    "name": {"type": "string", "description": "KiCad library name (default ecadlib)"}}}},
     {"name": "tool_packages",
      "description": "Package the BOM's library to plug into the tools: a KiCad Plugin and Content Manager zip (install "
                     "with 'Install from File...'; libraries appear as PCM_<name>) and an Altium folder with a .LibPkg "
@@ -499,6 +507,8 @@ def call_tool(ws, name, args):
         if name == "altium_menu":
             return ws.altium_menu(args.get("win_dir") or None, args.get("name") or "ecadlib", args.get("command") or "",
                                   args.get("port") or 8765)
+        if name == "parity":
+            return ws.parity(args["bom"], args.get("kicad") is True, args.get("name") or "ecadlib")
         if name == "tool_packages":
             return ws.tool_packages(args["bom"], args.get("name") or "ecadlib", args.get("kicad") or 8,
                                     args.get("include_held") is True)

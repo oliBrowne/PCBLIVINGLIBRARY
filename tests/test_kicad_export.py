@@ -248,7 +248,7 @@ def test_reexport_keeps_step_put_in_3dshapes():
         km.write_text(txt[:-1] + '\t(model "${KICAD8_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.wrl")\n)\n')
         out = Path(d) / "kicad"
         rep = X.export(plan, out, "L", http=http, log=lambda *a: None)
-        assert rep["models"] == {"R_0603_1608Metric.step": None}, rep["models"]
+        assert rep["models"]["R_0603_1608Metric.step"] is None, rep["models"]    # others: the Altium models (parity)
         step = out / "L.3dshapes" / "R_0603_1608Metric.step"
         step.parent.mkdir(exist_ok=True)
         step.write_text("ISO-10303-21; hand-placed")

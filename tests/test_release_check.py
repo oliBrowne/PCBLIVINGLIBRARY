@@ -122,8 +122,8 @@ def test_footprint_minimal_on_pcblib():
         bad = SOIC.replace("(start -3.71 -2.7)", "(center -3.71 -2.7)").replace("fp_rect", "fp_circle", 1)   # KiCad 6+ circles
         it = make(d, kmod=SOIC)
         Path(d, it["footprint"]["kicad_mod"]).write_text(bad.replace("(fp_poly (pts (xy -0.975", "(fp_circle (center 0 0) (end 1 0) (layer \"F.SilkS\")) (fp_poly (pts (xy -0.975"))
-        f, w = fails(it, d)
-        assert f == [] and not any(x.startswith("footprint_check failed") for x in w), (f, w)   # read, not a crash
+        f, w = fails(it, d)                   # the edited courtyard now differs from the PcbLib's: parity says so
+        assert [x for x in f if not x.startswith("parity: courtyard")] == [] and not any(x.startswith("footprint_check failed") for x in w), (f, w)
 
 
 def test_height():
