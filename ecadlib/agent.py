@@ -876,6 +876,8 @@ def run_once(workspace, rules=None, dry_run=False, client=None, now=None, *, wat
     notifier(url, body, headers, timeout) -> HTTP status (the [notify] webhook sender; notify.http_sender by default)."""
     ws = Path(workspace).resolve()
     rules = RU.resolve(rules, ws)
+    from . import migrate as MG                   # agent/ written by a newer ecadlib: stop here; older: stamped
+    MG.open_folder(ws / "agent", ["agent"], write=not dry_run and (ws / "agent").is_dir())
     from .agent_queue import use_rules
     use_rules(rules)                              # [agent] manufacturer_aliases for part keys
     cfg, t, log = settings(rules), stamp(now), log or (lambda *a: None)
