@@ -325,6 +325,8 @@ def main(argv=None):
     from . import rules as RU
 
     if a.cmd == "plan":
+        if Path(a.out).is_dir() or a.out.endswith(("/", "\\")):      # -o out/a365: the plan file inside that folder
+            a.out = str(Path(a.out) / "plan.json")
         rules = RU.load(a.rules, start=Path(a.out).parent)
         lines, _ = read_bom(a.bom, RU.bom_columns(rules))
         tri = pd.read_csv(a.triage, dtype=str).fillna("") if a.triage else None
@@ -341,6 +343,8 @@ def main(argv=None):
             print(f"  {i['status']:<20} {i['folder']:<24} {i['name']:<28} sym={i['symbol']['ref']} fp={i['footprint']['ref']}")
         return
 
+    if a.cmd == "push" and not Path(a.plan).is_file():
+        sys.exit(f"{a.plan}: no such plan file (write one with `ecadlib altium365 plan BOM -o {a.plan}`)")
     token = os.environ.get("NEXAR_TOKEN")
     if not token and not (a.cmd == "push" and a.dry_run):
         sys.exit("set NEXAR_TOKEN (Nexar portal token with design.domain, user.access, openid scopes)")

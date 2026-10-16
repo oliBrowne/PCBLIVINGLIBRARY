@@ -516,6 +516,11 @@ def main(argv=None):
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     if a.cmd == "check-kicad":
+        if not Path(a.manifest).is_file():
+            print(f"check-kicad: no manifest at {a.manifest}: it lists the parts `python -m ecadlib.kicad_import batch ... -o DIR` "
+                  "converted (DIR/manifest.json); give that file, e.g. `ecadlib upstream check-kicad DIR/manifest.json`",
+                  file=sys.stderr)
+            return 2
         try:
             man = json.loads(Path(a.manifest).read_text(encoding="utf-8"))
             rows, worst = check_kicad(man, GitLab(token=os.environ.get("GITLAB_TOKEN")))
