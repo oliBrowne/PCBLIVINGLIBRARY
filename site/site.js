@@ -626,16 +626,30 @@ const follow = () => {
   if (pens.size) requestAnimationFrame(follow);
 };
 function inkSvg(svg, delay = 0) {
-  const lines = $$("path:not(.dash), line, polyline, rect, circle", svg).filter((el) => !el.closest(".sig"));
-  lines.forEach((el, i) => {
-    // pathLength dashes need vector-effect off, so hold the on-screen width by hand and nothing jumps when it comes back
+  // pathLength dashes need vector-effect off, so hold the on-screen width by hand and nothing jumps when it comes back
+  const pen = (el) => {
+    if (el.hasAttribute("pathLength") || el.closest(".sig") || el.matches(".dash")) return;
     const k = el.getScreenCTM()?.a || 1, w = parseFloat(getComputedStyle(el).strokeWidth) || 1;
     el.setAttribute("pathLength", "1");
     el.style.strokeWidth = `${w / k}`;
-    el.style.animationDelay = `${delay + Math.min(i * 14, 900)}ms`;
-  });
+  };
+  const SHAPES = "path, line, polyline, rect, circle";
+  const all = () => $$(SHAPES, svg);
+  all().forEach(pen);
+  // figures rebuild their paths when the pointer or the scroll camera moves them; new paths join the same pen stroke
+  const mo = new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => {
+    if (n.nodeType !== 1) return;
+    if (n.matches(SHAPES)) pen(n);
+    $$(SHAPES, n).forEach(pen);
+  })));
+  mo.observe(svg, { childList: true, subtree: true });
+  svg.style.animationDelay = `${delay}ms`;
   svg.classList.add("inking");
-  setTimeout(() => { svg.classList.remove("inking"); lines.forEach((el) => { el.removeAttribute("pathLength"); el.style.strokeWidth = ""; el.style.animationDelay = ""; }); }, delay + INK_MS + 1000);
+  setTimeout(() => {
+    mo.disconnect();
+    svg.classList.remove("inking"); svg.style.animationDelay = "";
+    all().forEach((el) => { if (el.style.strokeWidth) { el.removeAttribute("pathLength"); el.style.strokeWidth = ""; } });
+  }, delay + INK_MS + 150);
 }
 function sidesOf(el) {
   const cs = getComputedStyle(el);

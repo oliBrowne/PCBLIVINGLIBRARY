@@ -446,9 +446,6 @@ svg.fp[data-solo="top"] .pad.on:not(.focus) { opacity: .45 !important; }
 @keyframes ripple { from { transform: scale(.3); opacity: .9; } to { transform: scale(1.4); opacity: 0; } }
 
 /* illustrate: lines ink in, then settle to their own colour */
-svg.inking :is(path, line, polyline, rect, circle) { stroke-dasharray: 1; stroke-dashoffset: 1; vector-effect: none; animation: ink 1.7s var(--ease) forwards; }
-svg.inking :is(path, rect, circle):not(.nf) { fill-opacity: 0; animation: ink 1.7s var(--ease) forwards, fillin .6s var(--ease) 1.1s forwards; }
-svg.inking ellipse, svg.inking text { opacity: 0; animation: fadein .6s var(--ease) 1.2s reverse both; animation-name: showup; }
 .undrawn, .drawing { transition: border-color .5s var(--ease), background-color .5s var(--ease), color .5s var(--ease) !important; }
 .undrawn, .drawing:not(.inked) { border-color: transparent !important; }
 .btn.primary:is(.undrawn, .drawing:not(.inked)) { background-color: transparent; color: var(--text); }
@@ -460,6 +457,13 @@ svg.inking ellipse, svg.inking text { opacity: 0; animation: fadein .6s var(--ea
 @keyframes write { from { clip-path: inset(-4px 100% -4px -4px); } to { clip-path: inset(-4px -4px -4px -4px); } }
 .reveal :is(h1, h2) { clip-path: inset(0 100% 0 0); transition: clip-path 1.2s var(--ease) .15s; }
 .reveal.in :is(h1, h2) { clip-path: inset(0 0 0 0); }
+/* one shared pen position per figure, so a figure that redraws itself mid-way (pointer, scroll camera) stays in step */
+@property --ink { syntax: "<number>"; inherits: true; initial-value: 0; }
+svg.inking { animation: inkpen 1.7s var(--ease) both; }
+svg.inking :is(path, line, polyline, rect, circle)[pathLength] { stroke-dasharray: 1; stroke-dashoffset: var(--ink); vector-effect: none; }
+svg.inking :is(path, rect, circle):not(.nf) { fill-opacity: clamp(0, calc(1.6 - var(--ink) * 2.6), 1); }
+svg.inking :is(ellipse, text) { opacity: clamp(0, calc(1.6 - var(--ink) * 2.6), 1); }
+@keyframes inkpen { from { --ink: 1; } to { --ink: 0; } }
 @keyframes ink { to { stroke-dashoffset: 0; } }
 @keyframes fillin { to { fill-opacity: 1; } }
 @keyframes showup { to { opacity: 1; } }
