@@ -206,6 +206,26 @@ def test_golden_catches_an_exporter_change():
     assert "~ changed: spec/SOT-23.PcbLib:SOT-23" in txt and "size=(1.485,0.6)" in txt, txt
 
 
+
+def test_courtyard_bbox_counts_arcs_and_circles():
+    """KiCad draws round cans' courtyards (TO-18, TO-46) with an fp_arc; the box used to come from the lines only, a
+    2 x 2 mm box off to one side, so the eval set's reference courtyard was wrong and both cases failed."""
+    from ecadlib import sexpr
+    to46 = """(footprint "TO-46-3" (layer "F.Cu")
+      (fp_line (start -1.150125 -3.593922) (end -2.323922 -2.420125) (layer "F.CrtYd"))
+      (fp_line (start -0.291775 -2.735573) (end -1.150125 -3.593922) (layer "F.CrtYd"))
+      (fp_line (start -2.323922 -2.420125) (end -1.465573 -1.561775) (layer "F.CrtYd"))
+      (fp_arc (start -0.291775 -2.735573) (mid 3.497386 2.227386) (end -1.465573 -1.561775) (layer "F.CrtYd")))"""
+    assert [round(v, 3) for v in sexpr.courtyard_bbox(sexpr.parse(to46))] == [-2.324, -3.594, 4.42, 3.15]
+    circ = '(footprint "C" (fp_circle (center 1 2) (end 4 2) (layer "F.CrtYd")) (fp_line (start 0 0) (end 9 9) (layer "F.SilkS")))'
+    assert sexpr.courtyard_bbox(sexpr.parse(circ)) == (-2.0, -1.0, 4.0, 5.0)
+    old = '(footprint "O" (fp_arc (start 0 0) (end 1 0) (angle 90) (layer "F.CrtYd")))'      # KiCad 5: centre, start, angle
+    assert [round(v, 6) for v in sexpr.courtyard_bbox(sexpr.parse(old))] == [0, 0, 1, 1]
+    ref = R.load_set("kicad-v1")["references"]
+    for k in ("Package_TO_SOT_THT:TO-46-3", "Package_TO_SOT_THT:TO-18-2_Window"):
+        assert [round(v, 2) for v in ref[k]["courtyard"]] == [-2.32, -3.59, 4.42, 3.15], ref[k]["courtyard"]
+
+
 if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_") and callable(f):

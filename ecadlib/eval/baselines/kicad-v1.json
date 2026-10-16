@@ -47,8 +47,8 @@
   },
   "tht": {
    "cases": 30,
-   "pass": 28,
-   "rate": 0.9333
+   "pass": 30,
+   "rate": 1.0
   },
   "tssop": {
    "cases": 30,
@@ -69,8 +69,8 @@
  },
  "overall": {
   "cases": 331,
-  "pass": 325,
-  "rate": 0.9819
+  "pass": 327,
+  "rate": 0.9879
  },
  "passing": [
   "bga-AD7298",
@@ -357,6 +357,7 @@
   "tht-GBU4A",
   "tht-KBU4A",
   "tht-KTY83",
+  "tht-LM134H",
   "tht-LM2596T-12",
   "tht-LM2876",
   "tht-LM399",
@@ -364,6 +365,7 @@
   "tht-LOC112S",
   "tht-LTV-814",
   "tht-MIC29752WT",
+  "tht-SFH216",
   "tht-STE40NC60",
   "tht-TOP253MN",
   "tht-TP0610L",
