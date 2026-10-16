@@ -5,7 +5,7 @@ import { TABLE } from "./intensity";
 import * as iso from "./core/iso";
 import * as motion from "./core/motion";
 import * as stage from "./core/stage";
-export { sieve, slow, loupe, dish, plug, rebuild, terminal } from "./index";
+export { sieve, drawer, loupe, dish, plug, rebuild, terminal } from "./index";
 
 const HL = { ...iso, ...motion, ...stage };
 let BOARD;
