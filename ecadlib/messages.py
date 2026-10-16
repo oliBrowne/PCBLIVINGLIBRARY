@@ -46,6 +46,25 @@ def counts(statuses, order=ORDER):
     return ", ".join(f"{n[w]} {w}" for w in keys) or "nothing yet"
 
 
+SOURCES = {"kicad": "KiCad library", "local": "your library", "easyeda": "EasyEDA", "standard": "standard parts",
+           "datasheet": "datasheet reader", "resolve": "picked by a person", "spec": "package spec",
+           "a365": "Altium 365", "generated": "footprint generator"}
+
+
+def source_word(src):
+    """"kicad:Package_TO_SOT_SMD:SOT-23" -> "KiCad library (SOT-23)"; "datasheet:https://..." -> "datasheet reader";
+    empty -> "none"."""
+    s = str(src or "").strip()
+    if not s:
+        return "none"
+    kind, _, rest = s.partition(":")
+    word = SOURCES.get(kind)
+    if not word:
+        return clean(s)
+    name = "" if kind in ("datasheet", "a365") or "://" in rest else rest.split(":")[-1]
+    return f"{word} ({name})" if name else word
+
+
 def plural(n, one, many=None):
     return f"{n} {one if n == 1 else (many or one + 's')}"
 
@@ -158,7 +177,7 @@ CODES = {
                      [r"^(?:parity: )?(?:export: )?(?P<what>.+?) (?P<field>[A-Za-z0-9 /]+): KiCad (?P<kicad>.+?) / Altium (?P<altium>.+?)(?: \(|$)",
                       r"^parity: (?P<what>.+)"]),
     # verify (rule `verify`: a person must look first)
-    "verify.datasheet_read": ("The {made} came from a model reading the datasheet; a person has to compare it first[ ({flagged})].",
+    "verify.datasheet_read": ("The {made} came from a model reading the datasheet, so a person has to check before it is released[ ({flagged})].",
                               "Compare it with the datasheet, then approve it or release anyway.",
                               [r"^(?:verify: )?datasheet reader output \((?P<made>[^)]*)\)(?:.*\((?P<flagged>\d+ items flagged)\))?"]),
     "verify.sim_pin_map": ("The simulation model {model} is attached, but its pin map is a guess ({method}).",
@@ -218,10 +237,30 @@ CODES = {
     # the library agent's independent visual proof
     "proof.doubt": ("The independent check is not sure about this part[: {reason}].",
                     "Compare the part with the datasheet before you approve it.",
-                    [r"^proof (?:doubt|skipped): ?(?P<reason>.*)"]),
+                    [r"^proof doubt: ?(?P<reason>.*)"]),
+    "proof.skipped": ("The independent check did not run[: {reason}].",
+                      "Compare the pictures with the datasheet yourself before you approve it.",
+                      [r"^proof skipped: ?(?P<reason>.*)"]),
     "proof.finding": ("The independent check found a problem: {what}.",
                       "Compare that detail with the datasheet before you approve it.",
                       [r"^proof: (?P<what>.+)"]),
+    # the library agent could not finish a part
+    "agent.proof_failed": ("The independent check found that the part does not match its datasheet[: {what}].",
+                           "Fix the part (pick another footprint or symbol), then build it again.",
+                           [r"^proof failed: ?(?P<what>.*)"]),
+    "agent.proof_interrupted": ("The independent check was interrupted several times.",
+                                "Run the agent again; if it keeps stopping, check the model connection.",
+                                [r"^proof interrupted repeatedly"]),
+    "agent.build_failed": ("Building the part failed[ ({why})].", "Check its BOM line, then build it again.",
+                           [r"^librarian failed: (?P<why>.+)"]),
+    "agent.build_stuck": ("Building this part stopped the agent several times.",
+                          "Check its BOM line (part number, footprint), then build it again.",
+                          [r"build stopped the agent"]),
+    "agent.no_entry": ("The part could not be added to the library.", "Check its BOM line (part number, footprint).",
+                       [r"made no plan entry for this part"]),
+    "agent.incomplete": ("The part was built without a symbol or a footprint[ ({why})].",
+                         "Pick the missing symbol or footprint, then build it again.",
+                         [r"^build incomplete: (?P<why>.+)"]),
     # anything else: shown as written, with a generic next step
     "other": ("{detail}", "Look at the part, then approve it or release anyway.", []),
 }
@@ -280,7 +319,7 @@ def _derive(code, v):
 
 def _crosscheck_detail(detail):
     """First disagreement of a crosscheck.summary_line: "<against>: pitch read 0.5, table 0.65; ..." -> values."""
-    m = re.search(r"(?P<field>[a-z ]+?) read (?P<first>[^,;]+), (?P<other>table|second read) (?P<second>[^;]+)", detail)
+    m = re.search(r"(?:^|: |; )(?P<field>[a-z ]+?) read (?P<first>[^,;:]+), (?P<other>table|second read) (?P<second>[^;]+)", detail)
     return {k: v.strip() for k, v in m.groupdict().items()} if m else {"field": "the numbers", "first": "?", "second": "?"}
 
 

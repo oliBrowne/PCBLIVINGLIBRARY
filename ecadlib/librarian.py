@@ -38,7 +38,7 @@ from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_tria
                footprint_gen as F, fp_share as FS, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
-from . import crosscheck as CC, sheetsafe as SS
+from . import crosscheck as CC, messages as M, sheetsafe as SS
 from . import symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
@@ -576,28 +576,32 @@ def review_rows(items):
     return rows
 
 
-def write_review(rows, out, bom):
+def write_review(rows, out, bom, items=None):
+    """review.csv (machine columns, unchanged), review.md and review.html (ecadlib.reports: outcome first, held parts
+    with a plain reason and the next step). items: the plan items (default: <out>/plan.json, written just before)."""
     out = Path(out)
     with open(out / "review.csv", "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["part"])
         w.writeheader(); w.writerows(rows)
-    src = lambda s: (s or "-").split(":")[0]
+    if items is None:
+        try:
+            items = json.loads((out / "plan.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            items = [{"name": r["part"], "status": r["status"], "source": {"symbol": r["symbol_from"], "footprint": r["footprint_from"]},
+                      "librarian": {"tried": r["tried"].split("; ") if r["tried"] else [], "review": []}} for r in rows]
+    src = lambda s: M.SOURCES.get((s or "-").split(":")[0], "none")
     counts = {}
     for r in rows:
-        counts[(src(r["symbol_from"]), src(r["footprint_from"]))] = counts.get((src(r["symbol_from"]), src(r["footprint_from"])), 0) + 1
-    md = [f"# Librarian review - `{bom}`", "",
-          f"{len(rows)} parts: {sum(r['status'] == 'ready' for r in rows)} ready for Altium 365, "
-          f"{sum(r['status'] == 'held' for r in rows)} held, {sum(bool(r['needs_human']) for r in rows)} need a person.", "",
-          "Sources (symbol / footprint): " + ", ".join(f"{a} / {b}: {n}" for (a, b), n in sorted(counts.items())), "",
-          "| Part | Status | Symbol from | Footprint from |", "|---|---|---|---|"]
-    md += [f"| {r['part']} | {r['status']} | {r['symbol_from'] or '-'} | {r['footprint_from'] or '-'} |" for r in rows]
-    md += ["", "## Needs a person", ""]
-    md += [f"- **{r['part']}** ({r['status']}): " + "; ".join(r["why"].split("; ")) for r in rows if r["needs_human"]] or ["Nothing."]
-    md += ["", "## What was tried", ""] + [f"- **{r['part']}**: {r['tried'] or '-'}" for r in rows]
-    md += CC.review_lines(rows)              # which datasheet parts were cross-checked, agreed, or held
+        k = (src(r["symbol_from"]), src(r["footprint_from"]))
+        counts[k] = counts.get(k, 0) + 1
+    from . import reports
+    details = ["### Where the parts came from", "", "| Symbol from | Footprint from | Parts |", "|---|---|---|"]
+    details += [f"| {a} | {b} | {n} |" for (a, b), n in sorted(counts.items())]
+    details += ["", "### What was tried, per part", ""] + [f"- **{r['part']}**: " + ("; ".join(reports.tried_line(t) for t in r["tried"].split("; ")) or "-") for r in rows]
+    details += CC.review_lines(rows)          # which datasheet parts were cross-checked, agreed, or held
     from . import ds_route
-    md += ds_route.review_lines(out)          # datasheet reads: model, pages, tokens and USD per answer
-    (out / "review.md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    details += ds_route.review_lines(out)     # datasheet reads: model, pages, tokens and USD per answer
+    reports.write_review_files(items, out, bom, details)
 
 
 def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_index=False, allow=(), offline=False,
@@ -707,7 +711,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     MG.write_stamp(out, ["plan", "librarian_state"])
     LK.write_lock(out, items, state, bom, libs, sources, cache, providers, gen_step, rules)
     RC.write_report(checks, out / "release_check", plan_f)
-    write_review(review_rows(items), out, bom)
+    write_review(review_rows(items), out, bom, items)
     return items
 
 

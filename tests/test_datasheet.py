@@ -148,7 +148,7 @@ def test_good_roundtrip():
     with tempfile.TemporaryDirectory() as d:
         AL.write_schlib(Path(d) / "x.SchLib", [s])
     assert "| body_length | D | 2.9 / 3.0 / 3.1 mm | 2.9 / 3.0 / 3.1 | 31 | RGT0016C VQFN package outline |" in rep
-    assert "| exposed_pad.length | D2 |" in rep and "table on page 3" in rep and "## Needs review (0)" in rep
+    assert "| exposed_pad.length | D2 |" in rep and "table on page 3" in rep and "## Check these first (0)" in rep
 
 
 def test_page_offset_when_trimmed():
