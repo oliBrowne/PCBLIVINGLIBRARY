@@ -230,7 +230,7 @@ def check_sourcing(src, state_dir, ctx, cfg, now):
     with _environ(ctx.env):
         creds = [p.name for p in provs if p.name != "jlcpcb_search" and p.configured()]
         rows, unconf = S.source_bom(src.lines(), provs, qty, cur_ccy, False)
-    fitted = [r for r in rows if "dnp" not in r["flags"]]
+    fitted = [r for r in rows if "dnp" not in r["flags"] and "merged" not in r["flags"]]   # merged: bought on another line
     if fitted and not any(r["answered"] for r in fitted):
         if not creds:
             sec.update(status="skipped", reason=f"no distributor answered and no credentials set ({LIFECYCLE_ENV})")
