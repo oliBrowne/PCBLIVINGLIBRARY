@@ -67,7 +67,7 @@ def wants_style(stream, environ=None):
 
 def _can_encode(stream, text="✓…○✗·"):
     try:
-        text.encode(getattr(stream, "encoding", None) or "ascii")
+        text.encode(getattr(stream, "encoding", None) or "utf-8")
         return True
     except (UnicodeEncodeError, LookupError):
         return False
@@ -235,7 +235,8 @@ class Term:
         """The final block: the outcome (always, even with -q), what was written where, notes (text, fix) and the
         next 1-3 commands. written: [(path, what)]; next: [(command, why)] or [command]."""
         self.write("")
-        self.write(self.bold(headline))
+        for h in (textwrap.wrap(headline, self.width) if self.width and len(headline) > self.width else [headline]):
+            self.write(self.bold(h))
         if self.quiet:
             return
         for text, fix in notes:
@@ -317,6 +318,11 @@ class Progress:
         return time.monotonic() - self.t0
 
 
+def working(what, t=None):
+    """with working("rebuilding into a temporary copy"): like waiting(), for a slow local step."""
+    return waiting(what, t, verb="working:")
+
+
 def fmt_seconds(s):
     return f"{s:.1f} s" if s < 10 else f"{int(s)} s" if s < 120 else f"{int(s // 60)} min {int(s % 60)} s"
 
@@ -330,8 +336,8 @@ class waiting:
     seconds; piped, a "still waiting on X (30 s)" line after 10 s, 30 s, 60 s and then every minute. Nested waits
     show the innermost. Quiet mode shows nothing; --json never styles. Thread-safe enough for one CLI."""
 
-    def __init__(self, what, t=None):
-        self.what, self.t = what, t
+    def __init__(self, what, t=None, verb="waiting on"):
+        self.what, self.t, self.verb = what, t, verb
 
     def __enter__(self):
         self.t = self.t or Term(sys.stderr)
@@ -354,9 +360,9 @@ class waiting:
                 continue                            # an inner wait is showing
             if self.t.styled:
                 if el >= 1.0:
-                    self.t.set_live(f"  {self.t.status('working', 'waiting on')} {self.what}  {fmt_seconds(el)}")
+                    self.t.set_live(f"  {self.t.status('working', self.verb)} {self.what}  {fmt_seconds(el)}")
             elif el >= beats[0]:
-                self.t.write(f"  still waiting on {self.what} ({fmt_seconds(el)})")
+                self.t.write(f"  still {self.verb} {self.what} ({fmt_seconds(el)})")
                 beats = beats[1:] or [beats[0] + HEARTBEAT[-1]]
 
     def __exit__(self, *exc):
@@ -368,7 +374,7 @@ class waiting:
         _WAIT.live = self.prev
         self.seconds = time.monotonic() - self.t0
         if self.seconds >= 5 and self.t.verbose:
-            self.t.write(f"  waited {fmt_seconds(self.seconds)} on {self.what}")
+            self.t.write(f"  {self.verb} {self.what}: {fmt_seconds(self.seconds)}")
         return False
 
 

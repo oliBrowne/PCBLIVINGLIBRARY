@@ -1330,6 +1330,7 @@ def main(argv=None):
     s.add_argument("--lib", action="append", default=[])
     st = sub.add_parser("status", help="last run, queue counts, batches")
     st.add_argument("--healthy", type=float, metavar="SECONDS", help="exit 1 unless the status was written within SECONDS")
+    st.add_argument("--json", action="store_true", help="print status.json + queue counts + batches as JSON")
     for name in ("approve", "reject"):
         p = sub.add_parser(name, help=f"{name} a review-queue item")
         p.add_argument("id")
@@ -1352,7 +1353,11 @@ def main(argv=None):
         return 0
     if a.cmd == "status":
         stt = status(ws)
-        print(json.dumps(stt, indent=2, default=str))
+        if a.json:
+            print(json.dumps(stt, indent=2, default=str))
+        else:
+            from .term_views import agent_status
+            agent_status(stt, a.workspace)
         if a.healthy is not None:
             hb = _epoch(stt.get("heartbeat"))
             return 0 if hb and time.time() - hb <= a.healthy else 1

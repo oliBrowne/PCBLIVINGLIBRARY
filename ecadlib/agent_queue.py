@@ -741,10 +741,8 @@ def main(argv=None):
     try:
         if a.cmd == "list":
             items = Queue(root).list(a.status, a.batch)
-            for it in items:
-                s = summary(it)
-                print(f"  {s['id']:<24} {s['status']:<9} {s['key']:<36} {s['kind']:<8} {s['verdict'] or '':<8} {s['batch'] or ''}")
-            print(f"{len(items)} item(s) in {Queue(root).dir}")
+            from .term_views import queue_list
+            queue_list(items, summary, Queue(root).dir)
         elif a.cmd == "show":
             print(json.dumps(Queue(root).get(a.id), indent=2))
         else:

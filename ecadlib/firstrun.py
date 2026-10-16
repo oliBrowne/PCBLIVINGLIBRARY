@@ -143,7 +143,9 @@ def finish_init(ans, rules_file, out=print, environ=None, run_doctor=True):
         libs = [str(_rel_to(l, rules_file)) for l in ans["libs"]]
         rep = doctor.run(str(ws), libs, str(rules_file), environ)
         out("\nChecking the setup (ecadlib doctor):")
-        out(doctor.render(rep))
+        from . import term as TM               # styled on a terminal; plain when captured (web UI, tests)
+        out(doctor.render(rep, TM.wants_style(sys.stdout), TM.term_width(sys.stdout), TM.VERBOSITY) if out is print
+            else doctor.render(rep))
     out("\nNext:")
     for c, why in next_steps(ans):
         out(f"  {c}\n      {why}")
@@ -375,20 +377,19 @@ def demo_main(argv=None):
     if a.json:
         print(json.dumps(res, indent=1))
         return 0
-    print(f"\n{res['parts']} parts: {res['ready']} ready, {res['held']} held in {res['seconds']} s"
-          + (f" (held: {', '.join(res['held_parts'])}; that is expected, see the review)" if res["held"] else ""))
-    print(f"written in {res['workspace']}/:")
-    print(f"  {res['plan']}   the library plan; review: {', '.join(res['review'])}")
+    from . import term as TM
+    t = TM.Term()
+    written = [(f"{a.out}/{res['plan']}", "the library plan"), (", ".join(f"{a.out}/{r}" for r in res["review"]), "review: what to check, part by part")]
     if res["altium"]:
-        print(f"  {len(res['altium'])} Altium files: {res['altium'][0]} ...")
+        written.append((f"{a.out}/{Path(res['altium'][0]).parent.parent}/", f"{len(res['altium'])} Altium files (.SchLib, .PcbLib)"))
     if res["kicad"]:
         kd = Path(res["workspace"]) / res["kicad"]["folder"]
-        print(f"  {res['kicad']['folder']}/   KiCad: " + ", ".join(sorted(p.name + ("/" if p.is_dir() else "") for p in kd.iterdir())))
-    steps = [(f"ecadlib status --workspace {a.out}", "one-screen summary"),
-             (f"ecadlib ui --workspace {a.out}", "look at it in the browser (held parts, sign-off, exports)"),
-             ("ecadlib init", "set up for your own libraries and BOMs")]
-    w = max(len(c) for c, _ in steps)
-    print("next:")
-    for c, why in steps:
-        print(f"  {c:<{w}}   # {why}")
+        written.append((f"{a.out}/{res['kicad']['folder']}/", "KiCad: " + ", ".join(sorted(p.name + ("/" if p.is_dir() else "")
+                                                                                   for p in kd.iterdir() if p.suffix in (".kicad_sym", ".pretty", ".kicad_dbl")))))
+    t.summary(f"{res['parts']} parts: {res['ready']} ready, {res['held']} held in {res['seconds']} s"
+              + (f" (held: {', '.join(res['held_parts'])}; that is expected, see the review)" if res["held"] else ""),
+              written=written,
+              next=[(f"ecadlib status --workspace {a.out}", "one-screen summary"),
+                    (f"ecadlib ui --workspace {a.out}", "look at it in the browser (held parts, sign-off, exports)"),
+                    ("ecadlib init", "set up for your own libraries and BOMs")])
     return 0

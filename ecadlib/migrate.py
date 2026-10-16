@@ -362,17 +362,30 @@ def main(argv=None):
     if a.json:
         print(json.dumps(rows, indent=1))
     else:
+        from . import messages as M, term as TM
+        t = TM.Term()
+        dry = a.check or a.dry_run
+        table = []
         for r in rows:
             what = {"ok": "up to date", "old": r.get("action") or f"v{r['version']} -> v{r['current']}",
                     "new": r.get("error") or f"made by ecadlib {r['made_by'] or '?'}: upgrade ecadlib",
                     "unknown": f"kind from a newer ecadlib {r['made_by']} (left alone)", "error": r.get("error", "")}[r["state"]]
-            v = f"v{r['version']}" if r["version"] is not None else ""
-            print(f"  {r['state']:<7} {r['kind']:<17} {v:<4} {os.path.relpath(r['path'], root)}  {what}")
+            st, word = {"ok": ("ready", "ok"), "old": ("signoff", "to migrate" if dry else "migrated"),
+                        "new": ("failed", "newer"), "unknown": ("skipped", "left alone"), "error": ("failed", "unreadable")}[r["state"]]
+            if r["state"] == "ok" and not t.verbose and len(rows) > 12:
+                continue                        # long trees: only what needs attention (-v lists every file)
+            table.append([t.status(st, word), os.path.relpath(r["path"], root), M.clean(what)])
+        t.table(table)
         n_old = sum(r["state"] == "old" for r in rows)
         n_bad = sum(r["state"] in ("new", "error") for r in rows)
-        verb = "would be migrated" if (a.check or a.dry_run) else "migrated"
-        print(f"{len(rows)} versioned file(s): {n_old} {verb}, {n_bad} newer or unreadable"
-              + ("; nothing written" if (a.check or a.dry_run) else ""))
+        verb = "would be migrated" if dry else "migrated"
+        nxt = []
+        if dry and n_old:
+            nxt.append((f"ecadlib migrate {a.path}", "upgrade them (backups go to .ecadlib_backup/ first)"))
+        if n_bad:
+            nxt.append(("pip install -U ecadlib", "a file was written by a newer ecadlib"))
+        t.summary(f"{M.plural(len(rows), 'versioned file')}: {n_old} {verb}, {n_bad} newer or unreadable"
+                  + ("; nothing written" if dry else ""), next=nxt)
     if any(r["state"] in ("new", "error") for r in rows):
         return 1
     return 1 if a.check and any(r["state"] == "old" for r in rows) else 0

@@ -742,6 +742,40 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     return rep
 
 
+def print_result(rep, out, plan, t=None):
+    """Terminal view of an export: a row per part (-v: with the conversion notes), skipped parts with the reason in
+    plain words, errors, then the summary (what was written, how to add it in KiCad)."""
+    from . import messages as M, term as TM
+    t = t or TM.Term()
+    rows = []
+    for r in rep["parts"]:
+        rows.append([t.status("ready" if r["symbol"] else "failed", "written" if r["symbol"] else "failed"),
+                     r["symbol_name"], r["footprint"] or "-"])
+        if t.verbose:
+            rows += [["", "", t.dim(n)] for n in r["notes"]]
+    for s in rep["skipped"]:
+        e = M.explain(str(s["why"]).removeprefix("held: "))
+        rows.append([t.status("held", "skipped"), s["part"], e["text"]])
+    t.table(rows)
+    if t.verbose:
+        for fpn, f in rep["footprints"].items():
+            for n in f["notes"]:
+                t.write(t.dim(f"  {fpn}: {n}"))
+    for e in rep["errors"]:
+        t.err.error("kicad-export", M.clean(str(e)), "run again with -v to see which part; --debug for details")
+    steps = sum(1 for v in rep["models"].values() if v)
+    lib = rep["library"]
+    head = (f"{M.plural(rep['symbols'], 'symbol')}, {M.plural(len(rep['footprints']), 'footprint')}, "
+            f"{steps}/{len(rep['models'])} 3D models written"
+            + (f"; {M.plural(len(rep['skipped']), 'held part')} left out (--include-held adds them)" if rep["skipped"] else ""))
+    t.summary(head, written=[(f"{out}/{lib}.kicad_sym", "symbols"), (f"{out}/{lib}.pretty/", "footprints"),
+                             (f"{out}/sym-lib-table, fp-lib-table", "library tables (paths use ${KIPRJMOD})")],
+              next=[(f"cp -r {out}/* <your KiCad project folder>/", "then reopen the project; or add the library in "
+                     "Preferences > Manage Symbol / Footprint Libraries"),
+                    (f"ecadlib parity {plan} --kicad {out}", "check KiCad and Altium agree, part by part")]
+              + ([(f"ecadlib review {plan}", "the held parts")] if rep["skipped"] else []))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Write a librarian plan's library as KiCad files (.kicad_sym, .pretty, .3dshapes, lib tables)")
     ap.add_argument("plan", help="librarian plan.json (model paths are relative to its folder)")
@@ -759,22 +793,7 @@ def main(argv=None):
     if a.json:
         print(json.dumps(rep, default=str))
         return 1 if rep["errors"] else 0
-    for r in rep["parts"]:
-        print(f"  {r['symbol_name']:<28} fp={r['footprint'] or '-':<40} sym={r['symbol'] or 'FAILED'}")
-        for n in r["notes"]:
-            print(f"      {n}")
-    for fpn, f in rep["footprints"].items():
-        for n in f["notes"]:
-            print(f"  {fpn}: {n}")
-    for s in rep["skipped"]:
-        print(f"  skipped {s['part']}: {s['why'][:120]}")
-    for e in rep["errors"]:
-        print(f"  ERROR {e}")
-    print(f"{rep['symbols']} symbols, {len(rep['footprints'])} footprints, {sum(1 for v in rep['models'].values() if v)}/{len(rep['models'])} STEP models "
-          f"-> {Path(a.out) / (rep['library'] + '.kicad_sym')}; {len(rep['skipped'])} held parts skipped")
-    print(f"wrote {Path(a.out)}/: {rep['library']}.kicad_sym, {rep['library']}.pretty/, sym-lib-table, fp-lib-table "
-          f"(the tables use ${{KIPRJMOD}}: copy this folder's contents into your KiCad project folder, or add the library "
-          f"in Preferences > Manage Symbol / Footprint Libraries)")
+    print_result(rep, Path(a.out), a.plan)
     return 1 if rep["errors"] else 0
 
 

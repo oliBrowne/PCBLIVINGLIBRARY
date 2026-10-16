@@ -259,16 +259,29 @@ def run(workspace="ecadlib_workspace", libs=(), rules_path=None, environ=None):
     return {"ok": not any(c["level"] == "FAIL" for c in checks), "checks": checks}
 
 
-def render(rep):
-    w = max(len(c["check"]) for c in rep["checks"])
-    lines = []
-    for c in rep["checks"]:
-        lines.append(f"{c['level']:<4}  {c['check']:<{w}}  {c['detail']}")
-        if c["hint"] and c["level"] != "OK":
-            lines.append(f"      {'':<{w}}  -> {c['hint']}")
+def render(rep, styled=False, width=None, verbosity=0):
+    """Problems first (each with its fix on the next line), then what is fine; the counts lead and end the screen.
+    styled: glyphs + colour (a terminal); -q: only the counts and the problems."""
+    import io
+    from . import term as TM
+    buf = io.StringIO()
+    t = TM.Term(buf, styled=styled, width=width, verbosity=verbosity)
     n = {lv: sum(c["level"] == lv for c in rep["checks"]) for lv in LEVELS}
-    lines.append(f"\n{n['OK']} ok, {n['WARN']} warning(s), {n['FAIL']} failure(s)")
-    return "\n".join(lines)
+    order = {"FAIL": 0, "WARN": 1, "OK": 2}
+    st = {"FAIL": "failed", "WARN": "warn", "OK": "ok"}
+    lead = ("Setup: " + (f"{n['FAIL']} problem(s) to fix, " if n["FAIL"] else "") + f"{n['WARN']} warning(s), {n['OK']} ok"
+            + ("" if n["FAIL"] else " - ready to use" if not n["WARN"] else " - usable; the warnings only switch features off"))
+    t.write(t.bold(lead))
+    rows = []
+    for c in sorted(rep["checks"], key=lambda c: order.get(c["level"], 3)):
+        if c["level"] == "OK" and t.quiet:
+            continue
+        rows.append([t.status(st.get(c["level"], "info"), c["level"]) if styled else c["level"], c["check"], c["detail"]])
+        if c["hint"] and c["level"] != "OK":
+            rows.append(["", "", f"-> {c['hint']}"])
+    t.table(rows, indent=0)
+    t.write(f"\n{n['OK']} ok, {n['WARN']} warning(s), {n['FAIL']} failure(s)")
+    return buf.getvalue().rstrip("\n")
 
 
 def main(argv=None):
@@ -279,7 +292,11 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help='print {"ok", "checks": [{"check", "level", "detail", "hint"}]}')
     a = ap.parse_args(argv)
     rep = run(a.workspace, a.lib, a.rules)
-    print(json.dumps(rep, indent=2) if a.json else render(rep))
+    if a.json:
+        print(json.dumps(rep, indent=2))
+    else:
+        from . import term as TM
+        print(render(rep, TM.wants_style(sys.stdout), TM.term_width(sys.stdout), TM.VERBOSITY))
     return 0 if rep["ok"] else 1
 
 

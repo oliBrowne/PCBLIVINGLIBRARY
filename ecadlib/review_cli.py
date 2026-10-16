@@ -31,6 +31,10 @@ def datasheet_url(item):
         m = re.fullmatch(r"ComponentLink(\d+)Description", k or "")
         if m and str(v).strip().lower() == "datasheet" and pars.get(f"ComponentLink{m.group(1)}URL"):
             return pars[f"ComponentLink{m.group(1)}URL"]
+    for k, v in sorted(pars.items()):           # a link without a description that is plainly a PDF
+        if re.fullmatch(r"ComponentLink\d+URL", k or "") and str(v).lower().split("?")[0].endswith(".pdf") \
+                and not pars.get(k.replace("URL", "Description")):
+            return v
     for k in ("Datasheet", "Datasheet URL", "datasheet"):
         if str(pars.get(k) or "").startswith(("http://", "https://")):
             return pars[k]
@@ -175,8 +179,12 @@ def review_plan(plan, a, t, inp, interactive):
             continue
         status = "held"
         while True:
+            fixed_only = all(e["code"].startswith("files.") for e in M.explain_all(item.get("hold_reasons") or []))
+            ask = CHOICES.format(n=len(numbered)) if numbered else CHOICES.split("   ", 1)[1]
+            if fixed_only:                  # a missing / broken file cannot be released anyway: do not offer it
+                ask = ask.replace("   a release anyway", "").replace("a release anyway   ", "")
             try:
-                ans = inp(f"    {CHOICES.format(n=len(numbered)) if numbered else CHOICES.split('   ', 1)[1]}\n    > ").strip().lower()
+                ans = inp(f"    {ask}\n    > ").strip().lower()
             except EOFError:
                 ans = "q"
             if ans in ("", "s", "skip", "n"):

@@ -1122,6 +1122,38 @@ ecadlib completion bash|zsh|fish                                  shell completi
   * `doctor --json`: `{"ok", "checks": [{"check", "level", "detail", "hint"}]}`; `status --json`: `{"workspace", "exists", "rules", "boms", "plans", "totals", "last_triage", "last_upkeep", "agent", "problems"}`
   * Already there before: `agent-watch --json`, `resolve --json`, `project --json`, `init --json`, `footprint-bench --json FILE`.
 
+### 25b. The terminal, human-friendly: `term.py` and `ecadlib review`
+
+Every command people run most (`demo`, `init`, `doctor`, `librarian`, `triage`, `release-check`, `review`, `status`,
+`kicad-export`, `dblib-sync`, `altium-pkg`, `parity`, `eval gate`, `migrate`, `rebuild`, `agent status`, `queue list`)
+prints through one small layer, `ecadlib/term.py` (stdlib only), in the shared voice (`docs/ui-voice.md`):
+
+* **One vocabulary:** a part is `✓ ready`, `! held` (with the reason in plain words, from `ecadlib/messages.py`) or
+  `○ waiting for sign-off`; `… working`, `✗ failed`, `- skipped`. Plain output (piped, logs) prints the word only.
+* **Colour and symbols only on a terminal**, never with `NO_COLOR`, `--json`, `TERM=dumb` or in CI logs (`CI`,
+  `GITHUB_ACTIONS`, `GITLAB_CI`, ...). `ECADLIB_COLOR=always|never` overrides.
+* **Tables fit the terminal** (`COLUMNS`, else its width; no limit when piped): the last column wraps under itself.
+* **A final summary block:** the outcome (`6 ready, 1 held`), what was written where, and the next 1-3 commands.
+* **Live progress** on a terminal: `librarian` shows one line `[3/14] SOT-23  ✓ ready` that updates in place, then a
+  row per part; piped, the plain log lines as before. A slow network source or model call says what it waits on and
+  for how long (`… waiting on the KiCad library (gitlab.com)  12 s`); piped: `still waiting on ... (30 s)` after 10 s,
+  30 s, 60 s and then every minute. Live lines go to stderr.
+* **`-q` / `--quiet`** (only the outcome and errors) and **`-v` / `--verbose`** (every reason with its fix, notes,
+  sources) work for every command, anywhere on the line.
+* **`--json` is unchanged**, byte for byte (`tests/test_term.py`); `ecadlib agent status` now prints a short summary
+  and takes `--json` for the JSON it printed before.
+
+```
+ecadlib review [PLAN] [--workspace W] [--part P] [--yes] [--offline] [--lib DIR] [--limit N]
+```
+
+`ecadlib review` goes through the held parts one at a time: the reason and the fix in plain words, the datasheet link,
+and for a missing symbol / footprint (or pins that do not match the pads) the best candidates from `resolve`. Then it
+asks: `1-N` use a candidate (converted, written into the plan, re-checked), `a` release anyway (recorded with your name,
+like `release-check --allow`; not offered when a file is missing), `d` open the datasheet (at the page a reason names),
+`s` skip, `q` quit. With `--yes`, or when not on a terminal, it never asks: it prints each part with the commands that
+fix it. Without PLAN it reviews every plan in the workspace. Exit 2 while anything is still held.
+
 ## 26. Connections to other tools: notifications, GitLab, plugins
 
 **Notifications** (`ecadlib/notify.py`). With `[notify]` targets in `ecadlib.toml`, the library agent posts when a review
