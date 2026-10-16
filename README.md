@@ -9,11 +9,29 @@ These are small Python prototypes for an open-source tool that manages ECAD comp
 ## Quick start
 
 ```
-ecadlib init --from path/to/your/libraries      # reads SchLib/PcbLib/DbLib/KiCad/BOMs, writes ecadlib.toml
-ecadlib librarian my_bom.csv                     # or: ecadlib ui  -- every tool now follows ecadlib.toml
+pip install -e .                 # from this checkout (Python 3.10+); `pip install ecadlib` once a release is on PyPI
+ecadlib demo                     # about a second, offline, no API keys: a small library in ./ecadlib-demo
+ecadlib init                     # a few questions -> ecadlib.toml, then a setup check and the next commands
+ecadlib librarian my_bom.csv -o ecadlib_workspace/librarian/my_bom   # fill every missing part; `ecadlib status` shows it
+ecadlib ui                       # or do the same in your browser
 ```
 
-`init` works out your naming, parameters, folders, layers and density from the libraries you already have, and asks only where the evidence is split (`--yes` takes the best guess). See section 18.
+* **`demo`** builds a 7-part library (0603 resistors, 0402 capacitor, LED, SOT-23 MOSFET, SOT-223 regulator, a SOIC-16
+  chip) from a BOM bundled with ecadlib, using only the built-in standard parts: Altium `.SchLib`/`.PcbLib`, the KiCad
+  `.kicad_sym` / `.pretty` / lib tables and a KiCad database library, plus the plan and review. One part (CH340C) is
+  held on purpose, so you also see what a held part looks like. `ecadlib status --workspace ecadlib-demo` and
+  `ecadlib ui --workspace ecadlib-demo` open it.
+* **`init`** asks which tool you use (Altium, KiCad or both), where your existing libraries are, which workspace folder
+  to use and which part sources to try, and lists which API keys are set (names only). `--yes` takes the defaults
+  (`--tool`, `--lib`, `--workspace`, `--sources` set them without asking). It also learns your naming, parameters,
+  folders, layers and density from the libraries it finds (`--from DIR` to scan more; section 18), then runs
+  `ecadlib doctor` and prints the next commands. Your library folders and workspace become the default `--lib` and
+  `--workspace` of every command run below that folder.
+* **The first online run** builds a name index of KiCad's official libraries from gitlab.com (a few minutes, once; it
+  is cached for 30 days). Parts that no source can supply wait for the datasheet reader, which needs
+  `ANTHROPIC_API_KEY`; without it they are held and the run says so. No network? `--offline --sources standard`.
+
+See section 31 for the first-run commands in detail.
 
 ## How you use it
 
@@ -64,7 +82,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `held_parts`, `part_candidates` and `choose_part` (fix a held part), `approval_status` and `approve_part` (sign-off; `user` is required, the agent must pass the person's own name), `find_duplicates` (with `merge`), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed), `sim_models` (SPICE/IBIS models; `attach` writes them) and `list_example_specs`.
-3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22) and `ecadlib visual-check` (23). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib demo` (section 31), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22) and `ecadlib visual-check` (23). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
 * `uploads/`
@@ -1298,6 +1316,41 @@ Checks (2026-10-16, kicad-footprints f8440fa, kicad-symbols 9280a93):
   on the same 68 parts: with the KiCad library reachable, nothing changes (KiCad already has those passives); without
   it, parts sent to the datasheet step fall from 66 to 35 (31 complete parts with no Claude call).
 * **Not checked:** a live datasheet run (no API key); EasyEDA (blocked).
+
+## 31. First run: `ecadlib init` setup, `ecadlib demo`, and a consistent CLI (`firstrun.py`, `clihelp.py`)
+
+```
+ecadlib demo [-o DIR] [--tool altium|kicad|both] [--bom BOM] [--json]     a small library, offline, no keys
+ecadlib init [--yes] [--tool T] [--lib DIR ...] [--workspace W] [--sources LIST] [--from DIR ...] [--no-doctor]
+```
+
+* **`init` setup.** Besides the conventions of section 18, `init` asks (or takes from the flags, or with `--yes` uses
+  the defaults): the tool (`both`), your library folders (none), the workspace (`ecadlib_workspace`), whether to look
+  parts up online (KiCad library on gitlab.com, EasyEDA/LCSC) and whether to use the Claude datasheet reader (default
+  yes only when its key is set). The answers go in `[setup]` (`tool`, `libs`, `workspace`; relative paths start at the
+  file's folder) and, when you changed them, `[sources] order`. Then it creates the workspace, prints which API keys are
+  set (names only), runs the doctor and prints the next two or three commands for your tool. Re-running `init` keeps
+  the answers as the new defaults.
+* **`[setup]` as defaults.** `libs` and `workspace` fill in `--lib` / `--workspace` for the same commands as
+  `ECADLIB_LIB` / `ECADLIB_WORKSPACE` (section 25), after the command line and the environment. A rules file without
+  `[setup]` changes nothing.
+* **`demo`** writes a real workspace (default `./ecadlib-demo`) with its own `ecadlib.toml` (`[sources] order =
+  ["standard"]`, so a rules file in a parent folder cannot change it), the bundled BOM in `uploads/demo/`, the librarian
+  plan and Altium models in `librarian/`, and for KiCad the `.kicad_sym`, `.pretty`, lib tables and database library in
+  `kicad/`. Re-running reuses the workspace (finished parts are skipped). Measured here: 1.0 s, 6 ready + 1 held.
+* **Help.** Every command and subcommand has a one-line description and every command's `-h` ends with examples that
+  parse (`tests/test_firstrun.py` walks the whole argparse tree and parses every example). Same names for the same
+  things: `--lib`, `--workspace`, `-o/--out`, `--json`, `--dry-run`, `--offline`. `librarian` and `kicad-export` gained
+  `--json`; `librarian` prints progress lines (BOM read, KiCad index build, `[n/N] part`) and `kicad-export` ends with a
+  line saying what was written where.
+* **Failure paths** (one line plus `hint:`, exit 2, before anything is written): a `--lib` folder that does not exist
+  (also from `ECADLIB_LIB` or `[setup]`), an output that cannot be written (`-o` under a file, or a folder you cannot
+  write to), a BOM with no recognised columns (names the columns to use and the `[bom.columns]` fix), an empty BOM or
+  one with a header and no rows. After a librarian run, held parts caused by something outside the part get a `note:` and
+  a `fix:` line: a source that could not be reached (proxy refused, timeout, HTTP 429) and the datasheet reader without
+  its API key.
+* **Not done:** `--workspace` still means an Altium 365 URL for `a365`, `upkeep` and `upstream` (renaming it would break
+  scripts); `dblib-sync` keeps `--to` for the library folder (its `-o` is the report); `--json` is not on every command.
 
 ## Releases
 

@@ -111,12 +111,17 @@ def scan(paths, a365=None):
     for p in paths or []:
         p = Path(p).expanduser()
         if p.is_dir():
+            found = []
             for f in sorted(p.rglob("*")):
-                if len(files) >= MAX_FILES:
+                if len(found) >= MAX_FILES:
                     lib.warnings.append(f"stopped after {MAX_FILES} files under {p}")
                     break
                 if f.is_file() and not any(part in SKIP_DIRS for part in f.relative_to(p).parts[:-1]):
-                    files.append((f, False))
+                    found.append(f)
+            own = _own_output_dirs(p, found)
+            for d in sorted(own):
+                lib.warnings.append(f"skipped {d}: ecadlib's own output (it would teach ecadlib its own defaults)")
+            files += [(f, False) for f in found if not any(d in f.parents for d in own)]
         elif p.is_file():
             files.append((p, True))
         else:
@@ -132,6 +137,25 @@ def scan(paths, a365=None):
         except Exception as e:                    # one unreadable file must not stop the scan
             lib.warnings.append(f"{f}: {type(e).__name__}: {e}")
     return lib
+
+
+OWN_OUTPUTS = {"librarian_state.json", "kicad_export.json", "kicad_dblib.json", "release_check.csv"}
+
+
+def _own_output_dirs(root, files):
+    """Folders under root (not root itself) that ecadlib wrote: a librarian / kicad-export output folder, or a whole
+    workspace (uploads/ next to altium_models/, e.g. `ecadlib demo`). Scanning them would learn ecadlib's own defaults
+    (and its report columns as BOM headers)."""
+    dirs = set()
+    for f in files:
+        if f.name in OWN_OUTPUTS:
+            dirs.add(f.parent)
+        for d in f.parents:
+            if d == root or root not in d.parents:
+                break
+            if (d / "uploads").is_dir() and (d / "altium_models").is_dir():
+                dirs.add(d)
+    return {d for d in dirs if d != root and not any(o in d.parents for o in dirs)}
 
 
 def scan_file(lib, f, explicit=False):
@@ -995,14 +1019,17 @@ def notes_for(settings, choices=None):
     return notes
 
 
-def propose(paths=(), a365=None, choices=None, existing=None):
+def propose(paths=(), a365=None, choices=None, existing=None, extra=None):
     """Scan, infer and render. Returns {settings, questions, rules (inferred keys), toml, scanned, warnings, diff?}.
     choices: {setting key: value} answers that replace the best guesses. existing: path of a current rules file,
-    whose explicit keys are kept unless a setting replaces them; a diff against it is included."""
+    whose explicit keys are kept unless a setting replaces them; a diff against it is included. extra: sections
+    to write as well (the `init` setup answers: [setup], [sources]); they replace the same keys of the file."""
     lib = scan(paths, a365)
     settings = infer(lib)
     choices = dict(choices or {})
     raw = to_rules(settings, choices)
+    if extra:
+        raw = RU.merge(raw, extra)
     old_text, old_raw = "", {}
     if existing and Path(existing).is_file():
         old_text = Path(existing).read_text(encoding="utf-8")
@@ -1063,48 +1090,78 @@ def _ask(q, inp=input, out=print):
     return a
 
 
-def main(argv=None, inp=input):
-    ap = argparse.ArgumentParser(prog="ecadlib init", description="scan your existing libraries and write ecadlib.toml")
+def main(argv=None, inp=input, environ=None):
+    from . import firstrun as FR
+    ap = argparse.ArgumentParser(prog="ecadlib init", description="set up ecadlib here: which tool, your library folders, "
+                                 "the workspace and part sources (asked, or --yes for the defaults), plus your naming / "
+                                 "parameter / layer conventions learned from existing libraries; writes ecadlib.toml, "
+                                 "then runs the doctor and prints what to run next")
     ap.add_argument("--from", dest="paths", action="append", default=[], metavar="PATH",
-                    help="folder or file to scan (repeatable; default: the current folder): .SchLib/.PcbLib/.DbLib, "
-                         "parts tables, .kicad_sym/.pretty, BOMs, Altium 365 JSON")
+                    help="folder or file to scan (repeatable; default: the --lib folders, else the current folder): "
+                         ".SchLib/.PcbLib/.DbLib, parts tables, .kicad_sym/.pretty, BOMs, Altium 365 JSON")
     ap.add_argument("--a365", action="append", default=[], metavar="FILE", help="Altium 365 component list (JSON) or check-a365 --state file")
     ap.add_argument("-o", "--out", default="ecadlib.toml", help="rules file to write (default %(default)s)")
-    ap.add_argument("--yes", "-y", action="store_true", help="no questions: take the best guess where the evidence is split")
+    ap.add_argument("--yes", "-y", action="store_true", help="no questions: take the defaults and the best guesses")
     ap.add_argument("--force", action="store_true", help="replace an existing rules file without asking (a .bak is kept)")
     ap.add_argument("--json", action="store_true", help="print the proposal as JSON and write nothing")
+    ap.add_argument("--tool", choices=FR.TOOLS, help="the tool you make libraries for (default: asked, else both)")
+    ap.add_argument("--lib", action="append", default=[], metavar="DIR",
+                    help="your library folder (repeatable): the default --lib of every command, and scanned for conventions")
+    ap.add_argument("--workspace", help="workspace folder for uploads, plans and outputs (default: asked, else ecadlib_workspace)")
+    ap.add_argument("--sources", help="part sources in order, comma-separated (kicad,easyeda,standard,datasheet; default: asked, else all)")
+    ap.add_argument("--no-doctor", action="store_true", help="do not run `ecadlib doctor` at the end")
     a = ap.parse_args(argv)
-    paths = a.paths or ["."]
     out = Path(a.out)
-    prop = propose(paths, a.a365, existing=out)
+    interactive = inp is not input or sys.stdin.isatty()
+    sources = [x.strip() for x in a.sources.split(",") if x.strip()] if a.sources else None
+    for x in sources or []:
+        if x not in RU.SOURCES:
+            print(f"ecadlib init: unknown source {x!r}\n  hint: sources are {', '.join(RU.SOURCES)}", file=sys.stderr)
+            return 2
+    try:
+        old_raw = RU.parse_text(out.read_text(encoding="utf-8"), out.name) if out.is_file() else {}
+    except (RU.RulesError, OSError):
+        old_raw = {}
+    ans = FR.ask_setup(old_raw, {"tool": a.tool, "libs": a.lib, "workspace": a.workspace, "sources": sources}, inp, print,
+                       interactive and not a.yes and not a.json, environ=environ)
+    base = out.resolve().parent                          # [setup] paths are relative to the rules file's folder
+    ans["libs"] = [l if Path(l).expanduser().is_absolute() or base == Path.cwd().resolve() else str(Path(l).resolve())
+                   for l in ans["libs"]]
+    if base != Path.cwd().resolve() and not Path(ans["workspace"]).is_absolute() and ans["workspace"] != (old_raw.get("setup") or {}).get("workspace"):
+        ans["workspace"] = str(Path(ans["workspace"]).resolve())
+    paths = a.paths or [str(_abs(l, base)) for l in ans["libs"] if _abs(l, base).exists()] or ["."]
+    extra = FR.setup_raw(ans)
+    prop = propose(paths, a.a365, existing=out, extra=extra)
     if a.json:
         print(json.dumps({k: v for k, v in prop.items() if k != "toml"} | {"toml": prop["toml"]}, indent=1, default=str))
         return 0
-    print(f"scanned {', '.join(paths)}: " + (", ".join(f"{v} {k}" for k, v in prop["scanned"].items()) or "nothing ecadlib can read")
+    print(f"\nscanned {', '.join(paths)}: " + (", ".join(f"{v} {k}" for k, v in prop["scanned"].items()) or "nothing ecadlib can read")
           + f"; {prop['components']} parts, {prop['footprints']} footprints, {prop['boms']} BOMs")
     for w in prop["warnings"][:10]:
         print(f"  note: {w}")
     if not prop["settings"]:
-        print("nothing to infer: point --from at your Altium/KiCad library folders, a DbLib, an Altium 365 export or a BOM")
+        print("  no conventions to learn (fine for a new library; ecadlib's defaults apply). To learn yours, point "
+              "--from at your Altium/KiCad library folders, a DbLib, an Altium 365 export or a BOM")
     for s in prop["settings"]:
         v = s["value"] if not isinstance(s["value"], (dict, list)) else json.dumps(s["value"])
         print(f"  {s['key']:<34} {v[:60]:<60} {s['level']:<6} {s['evidence'][0][:70] if s['evidence'] else ''}")
     choices = {}
-    interactive = inp is not input or sys.stdin.isatty()
     if prop["questions"] and not a.yes:
         if not interactive:
             print("(not a terminal: taking the best guesses; run with --yes to say so)")
         else:
             for q in prop["questions"]:
                 choices[q["key"]] = _ask(q, inp)
-            prop = propose(paths, a.a365, choices, existing=out)
+            prop = propose(paths, a.a365, choices, existing=out, extra=extra)
     if prop["errors"]:
         print("error: " + "; ".join(prop["errors"]), file=sys.stderr)
         return 2
+    done = lambda: FR.finish_init(ans, out, environ=environ, run_doctor=not a.no_doctor) and None
     if out.exists():
         res = save(prop["toml"], out, overwrite=False)
         if res.get("unchanged"):
             print(f"{out} already says this; nothing written")
+            done()
             return 0
         print(f"\n{out} exists; changes:\n{res['diff']}")
         ok = a.force
@@ -1117,11 +1174,18 @@ def main(argv=None, inp=input):
             return 1
         res = save(prop["toml"], out, overwrite=True)
         print(f"wrote {out} (old file kept as {res['backup']})")
+        done()
         return 0
     save(prop["toml"], out)
     print(f"\nwrote {out}. Every ecadlib command run from this folder (or below it) now follows it; "
           f"`ecadlib rules check` shows the effective rules.")
+    done()
     return 0
+
+
+def _abs(p, base):
+    p = Path(str(p)).expanduser()
+    return p if p.is_absolute() else base / p
 
 
 if __name__ == "__main__":
