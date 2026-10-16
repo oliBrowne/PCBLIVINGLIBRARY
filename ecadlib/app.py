@@ -1032,6 +1032,18 @@ class Workspace:
                 "altium": {"folder": self.rel(out / "altium"), "libpkg": alt["libpkg"], "script": alt["script"],
                            "dblibs": alt["dblibs"], "documents": len(alt["documents"]), "problems": alt["problems"]}}
 
+    def altium_menu(self, win_dir=None, name="ecadlib", command="", port=8765):
+        """The "ecadlib" menu for Altium (ecadlib.altium_menu) in altium_menu/: a DelphiScript project whose entries
+        add a part from its MPN, check the focused project's BOM and open the review queue, all in this workspace
+        (settings use relative paths: workspace=.., library=..\\altium_library). win_dir: the Windows folder the
+        altium_menu folder is in on the Altium PC, for the ready-made menu file (.DXPPrf)."""
+        from . import altium_menu as AM
+        out = self.root / "altium_menu"
+        rep = AM.build(out, "..", "..\\altium_library", name, command, win_dir or None, int(port))
+        return {"folder": self.rel(out), "files": [self.rel(p) for p in sorted(out.iterdir()) if p.is_file()],
+                "written": rep["written"], "kept": rep["kept"], "menu_file": rep["menu_file"], "problems": rep["problems"],
+                "procedures": rep["procedures"]}
+
     def example_specs(self):
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data
         return {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(d.glob("*.json"))} if d.exists() else {}
