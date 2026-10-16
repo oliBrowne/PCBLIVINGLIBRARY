@@ -2,7 +2,7 @@
 models and the altium365 plan, run the release check, and stop with a review list.
 
     python3 -m ecadlib.librarian examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints -o out/librarian \
-        [--sources kicad,easyeda,datasheet] [--allow PART] [--box] [--refresh [PART ...]] [--refresh-index] [--offline]
+        [--sources kicad,easyeda,standard,datasheet] [--allow PART] [--box] [--refresh [PART ...]] [--refresh-index] [--offline]
 
 Per plan item (one per unique part), parts the triage found in a --lib library are converted from there; for
 anything still missing, the sources are tried in --sources order, each filling only what is still missing:
@@ -14,6 +14,8 @@ anything still missing, the sources are tried in --sources order, each filling o
              Footprint property, a footprint named after the MPN, or the shortest name starting with the BOM footprint.
              R/C/L/LED use Device:R/C/C_Polarized/L/LED and <Family>_SMD:<X>_<imperial>_<metric>Metric by package.
   easyeda    LCSC number (BOM, or found by MPN in triage) -> EasyEDA component JSON -> easyeda_convert -> KiCad text
+  standard   no network, no API: chip passives and standard packages (SOT-23, SOIC-8, QFN-32 5x5 ...) built from the
+             checked package table, symbols where the pinout is standard (ecadlib/stdparts.py); always after kicad
   datasheet  datasheet URL (BOM column, KiCad symbol, EasyEDA/LCSC link, LCSC pattern) + ANTHROPIC_API_KEY ->
              ecadlib.datasheet; the result is marked `verify` so release_check holds it until a person has looked (or
              --allow). --datasheet-batch sends every part that reaches this source as one Message Batch (half price)
@@ -41,7 +43,7 @@ from . import symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
 TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository/tree?ref=master&recursive=true&per_page=100&page={page}"
-SOURCES = ("kicad", "easyeda", "datasheet")
+SOURCES = ("kicad", "easyeda", "standard", "datasheet")
 IMP2MET = {v: k for k, v in METRIC_TO_IMPERIAL.items()}
 PASSIVE = {"R": ("Device:R", "Resistor_SMD:R_{}_{}Metric"), "C": ("Device:C", "Capacitor_SMD:C_{}_{}Metric"),
            "CP": ("Device:C_Polarized", None), "L": ("Device:L", "Inductor_SMD:L_{}_{}Metric"), "LED": ("Device:LED", "LED_SMD:LED_{}_{}Metric")}
@@ -372,6 +374,35 @@ class Run:
         st["tried"].append(f"easyeda {lcsc}: " + (", ".join(got) or "nothing needed"))
         st["review"].append(f"EasyEDA {lcsc} conversion: check pads and pins against the datasheet (native converter, format assumed)")
 
+    def src_standard(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
+        """Standard packages and pinouts, built offline (ecadlib.stdparts); fills only what is still missing."""
+        from . import stdparts as SP
+        desc = " ".join(dict.fromkeys(str(x) for x in (item.get("description"), ln.get("description")) if x))
+        k = kind or SP.part_kind(item["folder"], item["footprint"].get("kicad") or fp_name, desc, ln.get("designator"))
+        res = SP.resolve([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value")], k, mpn, desc)
+        got = []
+        if not st["footprint"] and res["footprint"]:
+            sp = SP.spec(res["footprint"])
+            text, _ = SP.build(res["footprint"], RU.density_for(sp, self.rules))
+            h = F.dim(sp["height_max"])[2] if sp.get("height_max") else None
+            self.put_fp(st, text, fp_name, f"standard:{res['kicad_ref']}", None, h, "standard package table", sp)
+            got.append(f"footprint {res['kicad_ref']} ({res['fp_how']})")
+        fp_src = str((st["footprint"] or {}).get("source") or "")
+        same_fp = res["footprint"] and fp_src.endswith(":" + res["footprint"])
+        if not st["symbol"] and res["symbol"] and (k in ("R", "C", "CP", "L") or same_fp):
+            text, name = SP.symbol_text(res["symbol"], mpn)
+            shared = k in ("R", "C", "CP", "L")
+            self.put_kicad_sym(st, [K._find_symbol(sexpr.parse(text), name)], sym_name, None if shared else fp_name,
+                               f"standard:{name}", [] if shared or not mpn else [("MPN", mpn)])
+            got.append(f"symbol {name} ({res['sym_how']})")
+            if ":" in res["symbol"]:
+                st["review"].append(f"symbol pinout {name} from the {mpn} family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
+        elif not st["symbol"] and res["symbol"]:
+            res["sym_how"] = f"footprint came from {fp_src or 'nowhere'}, not {res['footprint']}: pin numbers not known to match"
+        why = [] if st["footprint"] else [f"footprint: {res['fp_how']}"]
+        why += [] if st["symbol"] else [f"symbol: {res['sym_how']}"]
+        st["tried"].append("standard: " + "; ".join(got + why))
+
     def src_datasheet(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
         urls = D.datasheet_urls(item, ln, row, st["found"])
         if not urls:
@@ -523,6 +554,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     bad = set(sources) - set(SOURCES)
     if bad:
         raise ValueError(f"unknown sources {sorted(bad)}; use {','.join(SOURCES)}")
+    if "standard" in sources and "kicad" in sources and sources.index("standard") < sources.index("kicad"):
+        sources.remove("standard")                     # never ahead of the KiCad library
+        sources.insert(sources.index("kicad") + 1, "standard")
     lines, mapping = T.read_bom(bom, RU.bom_columns(rules))
     index = KiCadIndex(libs)
     from . import plugins as PL                      # providers: None = [providers] order, else jlcpcb_search,easyeda
