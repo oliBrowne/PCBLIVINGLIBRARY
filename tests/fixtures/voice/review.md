@@ -6,7 +6,7 @@
 
 **Next:**
 
-1. Open each held part in `ecadlib ui` (Fill the library): **Pick…** a symbol or footprint, or **Release anyway** after you have looked.
+1. Go through the held parts one at a time with `ecadlib review` in a terminal, or in `ecadlib ui` (Fill the library): **Pick…** a symbol or footprint, or **Release anyway** after you have looked.
 2. Ask a reviewer to approve the parts waiting for sign-off (`ecadlib ui`, Sign-off).
 
 ## Held: fix these first (3)

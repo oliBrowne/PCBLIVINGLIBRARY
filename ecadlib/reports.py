@@ -96,7 +96,7 @@ def review_doc(items, bom=""):
         lead.append("Nothing needs a person.")
     nxt = []
     if held:
-        nxt.append("Open each held part in `ecadlib ui` (Fill the library): **Pick…** a symbol or footprint, or **Release anyway** after you have looked.")
+        nxt.append("Go through the held parts one at a time with `ecadlib review` in a terminal, or in `ecadlib ui` (Fill the library): **Pick…** a symbol or footprint, or **Release anyway** after you have looked.")
     if waiting:
         nxt.append("Ask a reviewer to approve the parts waiting for sign-off (`ecadlib ui`, Sign-off).")
     if not held and not waiting:
