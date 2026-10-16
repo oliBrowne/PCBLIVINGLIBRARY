@@ -44,6 +44,8 @@ EXAMPLES = {
                   "ecadlib datasheet estimate ws/library/plan.json"],
     "release-check": ["ecadlib release-check ws/library/plan.json", "ecadlib release-check ws/library/plan.json --allow CH340C"],
     "kicad-export": ["ecadlib kicad-export ws/library/plan.json -o ws/kicad --name mylib"],
+    "review": ["ecadlib review                                 # every held part in the workspace, one at a time",
+               "ecadlib review ws/library/plan.json --part CH340C", "ecadlib review --workspace ws --yes   # print only, never ask"],
     "resolve": ["ecadlib resolve ws/library/plan.json list", "ecadlib resolve ws/library/plan.json --part CH340C show"],
     "upstream": ["ecadlib upstream check-kicad --offline"],
     "a365": ["ecadlib a365 status ws/library/plan.json --workspace https://acme.365.altium.com"],

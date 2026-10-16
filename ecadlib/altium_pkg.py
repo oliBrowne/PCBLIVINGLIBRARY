@@ -372,14 +372,20 @@ def main(argv=None):
     if a.json:
         print(json.dumps(rep, indent=2))
         return 1 if rep["problems"] else 0
-    if rep["sync"]:
-        print(f"  dblib-sync: {rep['sync']}")
+    from . import messages as M, term as TM
+    t = TM.Term()
     for p in rep["problems"]:
-        print(f"  PROBLEM {p}")
-    print(f"  {len(rep['documents'])} libraries in {rep['libpkg']} ({rep['symbols']} symbols, {rep['footprints']} footprints, "
-          f"{rep['links']} symbol-footprint links checked); DbLib: {', '.join(rep['dblibs']) or 'none'}")
-    print(f"  in Altium: open {rep['script']} and run InstallDatabaseLibrary or BuildIntegratedLibrary (see ALTIUM_README.txt)")
-    print(f"wrote {Path(a.out) / rep['libpkg']}, {rep['script']} and ALTIUM_README.txt in {a.out}")
+        t.note(M.clean(p), "fix the part in the plan (ecadlib review), then run altium-pkg again")
+    if rep["sync"]:
+        t.detail(f"  database library: {rep['sync']}")
+    t.summary(f"{len(rep['documents'])} Altium libraries packed ({M.plural(rep['symbols'], 'symbol')}, "
+              f"{M.plural(rep['footprints'], 'footprint')}, {rep['links']} symbol-footprint links checked)"
+              + (f"; {rep['sync']}" if rep["sync"] else ""),
+              written=[(f"{Path(a.out) / rep['libpkg']}", "compile this in Altium to get an .IntLib"),
+                       (f"{Path(a.out) / rep['script']}", "or open this script project and run InstallDatabaseLibrary")]
+              + [(f"{Path(a.out) / d}", "database library") for d in rep["dblibs"]]
+              + [(f"{Path(a.out) / 'ALTIUM_README.txt'}", "the steps to take in Altium")],
+              next=[("ecadlib altium-menu build --out altium_menu", "an 'ecadlib' menu inside Altium (add part, check BOM)")])
     return 1 if rep["problems"] else 0
 
 

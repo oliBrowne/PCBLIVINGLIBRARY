@@ -1132,6 +1132,38 @@ ecadlib completion bash|zsh|fish                                  shell completi
   * `doctor --json`: `{"ok", "checks": [{"check", "level", "detail", "hint"}]}`; `status --json`: `{"workspace", "exists", "rules", "boms", "plans", "totals", "last_triage", "last_upkeep", "agent", "problems"}`
   * Already there before: `agent-watch --json`, `resolve --json`, `project --json`, `init --json`, `footprint-bench --json FILE`.
 
+### 25b. The terminal, human-friendly: `term.py` and `ecadlib review`
+
+Every command people run most (`demo`, `init`, `doctor`, `librarian`, `triage`, `release-check`, `review`, `status`,
+`kicad-export`, `dblib-sync`, `altium-pkg`, `parity`, `eval gate`, `migrate`, `rebuild`, `agent status`, `queue list`)
+prints through one small layer, `ecadlib/term.py` (stdlib only), in the shared voice (`docs/ui-voice.md`):
+
+* **One vocabulary:** a part is `✓ ready`, `! held` (with the reason in plain words, from `ecadlib/messages.py`) or
+  `○ waiting for sign-off`; `… working`, `✗ failed`, `- skipped`. Plain output (piped, logs) prints the word only.
+* **Colour and symbols only on a terminal**, never with `NO_COLOR`, `--json`, `TERM=dumb` or in CI logs (`CI`,
+  `GITHUB_ACTIONS`, `GITLAB_CI`, ...). `ECADLIB_COLOR=always|never` overrides.
+* **Tables fit the terminal** (`COLUMNS`, else its width; no limit when piped): the last column wraps under itself.
+* **A final summary block:** the outcome (`6 ready, 1 held`), what was written where, and the next 1-3 commands.
+* **Live progress** on a terminal: `librarian` shows one line `[3/14] SOT-23  ✓ ready` that updates in place, then a
+  row per part; piped, the plain log lines as before. A slow network source or model call says what it waits on and
+  for how long (`… waiting on the KiCad library (gitlab.com)  12 s`); piped: `still waiting on ... (30 s)` after 10 s,
+  30 s, 60 s and then every minute. Live lines go to stderr.
+* **`-q` / `--quiet`** (only the outcome and errors) and **`-v` / `--verbose`** (every reason with its fix, notes,
+  sources) work for every command, anywhere on the line.
+* **`--json` is unchanged**, byte for byte (`tests/test_term.py`); `ecadlib agent status` now prints a short summary
+  and takes `--json` for the JSON it printed before; `ecadlib queue list` has a new `--json` (the item summaries).
+
+```
+ecadlib review [PLAN] [--workspace W] [--part P] [--yes] [--offline] [--lib DIR] [--limit N]
+```
+
+`ecadlib review` goes through the held parts one at a time: the reason and the fix in plain words, the datasheet link,
+and for a missing symbol / footprint (or pins that do not match the pads) the best candidates from `resolve`. Then it
+asks: `1-N` use a candidate (converted, written into the plan, re-checked), `a` release anyway (recorded with your name,
+like `release-check --allow`; not offered when a file is missing), `d` open the datasheet (at the page a reason names),
+`s` skip, `q` quit. With `--yes`, or when not on a terminal, it never asks: it prints each part with the commands that
+fix it. Without PLAN it reviews every plan in the workspace. Exit 2 while anything is still held.
+
 ## 26. Connections to other tools: notifications, GitLab, plugins
 
 **Notifications** (`ecadlib/notify.py`). With `[notify]` targets in `ecadlib.toml`, the library agent posts when a review
@@ -1843,6 +1875,28 @@ are documented (a curved custom pad as its bounding rectangle, trapezoid as rect
   Testpack (6 parts, export mode, 6 / 6 database rows) and demo (6 ready parts): all match.
 * **Not verified:** nothing was opened in Altium Designer; KiCad models that cannot be downloaded offline stay missing
   in an export (parity reports them as `file missing`).
+
+## 38. One voice: `messages.py`, `reports.py` and `docs/ui-voice.md`
+
+Every message and report a person reads follows [docs/ui-voice.md](docs/ui-voice.md): what happened first, then what
+to do; a part is **ready**, **held** or **waiting for sign-off**; numbers with units; errors in two lines; no internal
+names or server paths.
+
+* `ecadlib/messages.py` is the one table of held reasons: `held(code, **values) -> (text, fix)`,
+  `explain(raw_reason) -> {code, text, fix, note}` for any reason already in a plan, `error()` / `friendly_error()`,
+  `status_word()`, `counts()` ("6 ready, 2 held"), `source_word()` and `clean()`. Plans, CSVs and `--json` keep their
+  machine strings; the sentence is shown next to the code.
+* `ecadlib/reports.py` builds the library review once and renders it as `review.md` and `review.html` (the web UI's
+  colours, light and dark, readable at phone width): held parts first with each reason and its next step, then parts
+  waiting for sign-off, ready parts a person should double-check, duplicates, the ready table and the details.
+* Rewritten in the same voice: `release_check.md`, the datasheet reader's `<part>.review.md`, the parity report, the
+  eval `report.md`, the test pack's `CHECKLIST.md`, the agent's PR body and notifications, `ecadlib doctor` (outcome,
+  then what to fix, what is optional, what is fine), the Altium menu and KiCad plugin dialogs, the `init` questions and
+  MCP errors. Workspace `librarian_run` rows carry `word` and `says`, `held_parts` carries `reasons`.
+* Checked by `tests/test_messages.py` (every code has a sentence; a new release-check rule, footprint-check error,
+  KiCad/Altium field, review note or agent failure without one fails) and `tests/test_ui_voice.py` (snapshots in
+  `tests/fixtures/voice/`, Markdown and HTML say the same, demo and test pack reports free of internal names and
+  absolute paths). After a deliberate wording change: `UPDATE_VOICE=1 python -m tests.run_all test_ui_voice`.
 
 ## Releases
 

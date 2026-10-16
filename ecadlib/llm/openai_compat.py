@@ -140,7 +140,9 @@ class OpenAICompatClient:
                    "attempt": attempt + 1, "body": self._summary(chat)}
             retry_after = None
             try:
-                r = post(url, headers=h, json=chat, timeout=self.timeout)
+                from ..term import waiting
+                with waiting(f"the model at {self.base} (model call)"):
+                    r = post(url, headers=h, json=chat, timeout=self.timeout)
             except requests.RequestException as e:
                 err = APIError(f"{self.base}: request failed: {type(e).__name__}: {str(e)[:200]}", retryable=True)
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))

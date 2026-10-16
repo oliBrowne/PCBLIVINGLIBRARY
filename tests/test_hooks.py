@@ -122,7 +122,7 @@ def test_notify_events_from_agent_and_upkeep_reports():
     evs = N.agent_events(rep, lambda i: {"mpn": "NOWHERE1"} if i == "q3" else None)
     assert [e["event"] for e in evs] == ["batch_ready", "part_held", "upkeep_changes", "lifecycle"]
     assert evs[0]["url"] == "https://gh/pr/7" and "2 part(s)" in evs[0]["title"]
-    assert evs[1]["lines"] == ["NOWHERE1: proof failed: pin 1"] and evs[3]["lines"] == ["NRND: TPS1 (active -> nrnd)"]
+    assert evs[1]["lines"] == ["NOWHERE1: The independent check found that the part does not match its datasheet: pin 1."] and evs[3]["lines"] == ["NRND: TPS1 (active -> nrnd)"]
     uev = N.upkeep_events(TUK._rep(3))
     assert [e["event"] for e in uev] == ["upkeep_changes", "lifecycle"] and len(uev[1]["lines"]) == 3
     assert N.upkeep_events(TUK._rep(0)) == []

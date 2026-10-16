@@ -38,7 +38,7 @@ from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_tria
                footprint_gen as F, fp_share as FS, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
-from . import crosscheck as CC, sheetsafe as SS
+from . import crosscheck as CC, messages as M, sheetsafe as SS
 from . import symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
@@ -576,37 +576,42 @@ def review_rows(items):
     return rows
 
 
-def write_review(rows, out, bom):
+def write_review(rows, out, bom, items=None):
+    """review.csv (machine columns, unchanged), review.md and review.html (ecadlib.reports: outcome first, held parts
+    with a plain reason and the next step). items: the plan items (default: <out>/plan.json, written just before)."""
     out = Path(out)
     with open(out / "review.csv", "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["part"])
         w.writeheader(); w.writerows(rows)
-    src = lambda s: (s or "-").split(":")[0]
+    if items is None:
+        try:
+            items = json.loads((out / "plan.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            items = [{"name": r["part"], "status": r["status"], "source": {"symbol": r["symbol_from"], "footprint": r["footprint_from"]},
+                      "librarian": {"tried": r["tried"].split("; ") if r["tried"] else [], "review": []}} for r in rows]
+    src = lambda s: M.SOURCES.get((s or "-").split(":")[0], "none")
     counts = {}
     for r in rows:
-        counts[(src(r["symbol_from"]), src(r["footprint_from"]))] = counts.get((src(r["symbol_from"]), src(r["footprint_from"])), 0) + 1
-    md = [f"# Librarian review - `{bom}`", "",
-          f"{len(rows)} parts: {sum(r['status'] == 'ready' for r in rows)} ready for Altium 365, "
-          f"{sum(r['status'] == 'held' for r in rows)} held, {sum(bool(r['needs_human']) for r in rows)} need a person.", "",
-          "Sources (symbol / footprint): " + ", ".join(f"{a} / {b}: {n}" for (a, b), n in sorted(counts.items())), "",
-          "| Part | Status | Symbol from | Footprint from |", "|---|---|---|---|"]
-    md += [f"| {r['part']} | {r['status']} | {r['symbol_from'] or '-'} | {r['footprint_from'] or '-'} |" for r in rows]
-    md += ["", "## Needs a person", ""]
-    md += [f"- **{r['part']}** ({r['status']}): " + "; ".join(r["why"].split("; ")) for r in rows if r["needs_human"]] or ["Nothing."]
-    md += ["", "## What was tried", ""] + [f"- **{r['part']}**: {r['tried'] or '-'}" for r in rows]
-    md += CC.review_lines(rows)              # which datasheet parts were cross-checked, agreed, or held
+        k = (src(r["symbol_from"]), src(r["footprint_from"]))
+        counts[k] = counts.get(k, 0) + 1
+    from . import reports
+    details = ["### Where the parts came from", "", "| Symbol from | Footprint from | Parts |", "|---|---|---|"]
+    details += [f"| {a} | {b} | {n} |" for (a, b), n in sorted(counts.items())]
+    details += ["", "### What was tried, per part", ""] + [f"- **{r['part']}**: " + ("; ".join(reports.tried_line(t) for t in r["tried"].split("; ")) or "-") for r in rows]
+    details += CC.review_lines(rows)          # which datasheet parts were cross-checked, agreed, or held
     from . import ds_route
-    md += ds_route.review_lines(out)          # datasheet reads: model, pages, tokens and USD per answer
-    (out / "review.md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    details += ds_route.review_lines(out)     # datasheet reads: model, pages, tokens and USD per answer
+    reports.write_review_files(items, out, bom, details)
 
 
 def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_index=False, allow=(), offline=False,
         cache="out/http_cache", rate=0.5, providers=None, http=None, api_key=None, log=print, gen_step=True,
-        rules=None, user=None, datasheet_batch=False, reader=None):
+        rules=None, user=None, datasheet_batch=False, reader=None, progress=None):
     """Whole pipeline; returns the plan items. datasheet_batch: parts that reach the datasheet source are read as one
     Message Batch after every other source ran (reader: a ready datasheet.Reader, e.g. for --no-wait / --estimate). refresh: None = resume, [] = redo all, [names] = redo those.
     rules: library rules (a loaded dict or a path); None uses the ecadlib.toml found from `out` (defaults when none).
-    sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity())."""
+    sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity()).
+    progress: a term.Progress-like object (start(name) / done(name, status, detail)) for the per-part line."""
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     from . import migrate as MG, rebuild as LK            # versioned files (backed up, migrated) and library.lock.json
     MG.open_folder(out, log=log)
@@ -668,11 +673,19 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     rec = LK.Recorder(http)                    # what each part fetched, for library.lock.json
     if todo:
         log(f"  finding symbols and footprints for {len(todo)} part(s) (sources: {', '.join(sources)}) ...")
+    if progress is not None:
+        progress.total = len(todo)
     for n, (it, ln, row, fpr) in enumerate(todo, 1):
-        if len(todo) > 3:
+        if progress is not None:
+            progress.start(it["name"])
+        elif len(todo) > 3:
             log(f"  [{n}/{len(todo)}] {it['name']}")
         with rec.part(it["name"]):
             st = r.resolve(it, ln, row, keeps[it["name"]])
+        if progress is not None:
+            gone = [k for k in ("symbol", "footprint") if not st.get(k)]
+            progress.done(it["name"], "held" if gone else "ready",
+                          f"no {' or '.join(gone)} yet" if gone else "symbol and footprint found")
         st["key"], st["skipped"] = fpr, False
         LK.stamp_state(st, rec.take(it["name"]), rules)
         state[it["name"]] = st
@@ -707,7 +720,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     MG.write_stamp(out, ["plan", "librarian_state"])
     LK.write_lock(out, items, state, bom, libs, sources, cache, providers, gen_step, rules)
     RC.write_report(checks, out / "release_check", plan_f)
-    write_review(review_rows(items), out, bom)
+    write_review(review_rows(items), out, bom, items)
     return items
 
 
@@ -737,11 +750,17 @@ def main(argv=None):
     if a.datasheet_batch:
         reader = D.Reader(a.out, a.cache, None, rules, CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline, timeout=60),
                           batch=True, wait=not a.datasheet_no_wait)
+    from . import messages as M, term as TM
+    t = TM.Term()
+    loud = (lambda *x, **k: None) if a.json or t.quiet else print
+    # on a terminal the per-step log is -v detail (the live progress line and the table below say it); piped, as before
+    log = loud if (t.verbose or not t.styled) else (lambda m="", *x, **k: print(m) if str(m).startswith(("  BOM:", "  finding")) else None)
+    prog = TM.Progress(t.err, 0, "parts") if t.styled and not a.json else None   # piped: the plain log lines
     try:
         items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh,
                     a.refresh_index, a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=rules,
                     user=a.user, http=reader.http if reader else None, reader=reader,
-                    log=(lambda *x, **k: None) if a.json else print)
+                    log=log, progress=prog)
     except ValueError as e:                              # unreadable / headerless BOM, unknown --sources
         from .firstrun import bom_hint
         print(f"ecadlib librarian: {e}" + bom_hint(e), file=sys.stderr)
@@ -753,10 +772,38 @@ def main(argv=None):
         print(json.dumps({"plan": str(Path(a.out) / "plan.json"), "review": str(Path(a.out) / "review.md"), "parts": len(items),
                           "ready": len(items) - held, "held": held, "blockers": [{"message": m, "fix": f} for m, f in why]}))
         return 2 if held else 0
-    for m, f in why:
-        print(f"  note: {m}\n        fix: {f}")
-    print(f"{len(items)} parts: {len(items) - held} ready, {held} held -> {Path(a.out) / 'plan.json'}; review {Path(a.out) / 'review.md'}")
+    if prog is not None:
+        prog.t.clear_live()
+    print_result(items, Path(a.out), why, t)
     return 2 if held else 0
+
+
+def print_result(items, out, why=(), t=None):
+    """The terminal ending of a librarian run: a row per part on a terminal (status, name, the reason in plain
+    words), then notes, the counts, what was written and the next commands."""
+    from . import messages as M, term as TM
+    t = t or TM.Term()
+    if t.styled or t.verbose:
+        rows = []
+        for it in items:
+            why_ = M.explain_all(it.get("hold_reasons") or []) if it.get("status") == "held" else []
+            src = it.get("source") or {}
+            rows.append([t.status(it.get("status") or "", M.status_word(it.get("status"))), it["name"],
+                         why_[0]["text"] if why_ else t.dim(f"{src.get('symbol') or '-'} / {src.get('footprint') or '-'}")])
+        t.table(rows)
+    held = [i["name"] for i in items if i.get("status") == "held"]
+    plan = out / "plan.json"
+    nxt = []
+    if held:
+        nxt.append((f"ecadlib review {plan}", "go through the held parts one by one"))
+    nxt += [(f"ecadlib kicad-export {plan} -o {out.parent.parent / 'kicad' if out.parent.name == 'librarian' else 'kicad'} --name mylib",
+             "write the KiCad library"),
+            (f"ecadlib altium-pkg {plan} --out altium_pkg", "the Altium hand-off folder (.LibPkg, DbLib)")]
+    t.summary(f"{M.plural(len(items), 'part')}: {M.counts(i.get('status') for i in items)}"
+              + (f"  (held: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''})" if held else ""),
+              written=[(str(plan), "library plan"), (str(out / "review.md"), "review: what to check, part by part"),
+                       (str(out / "models") + "/", "Altium symbol and footprint files")],
+              next=nxt, notes=[(m, f) for m, f in why])
 
 
 if __name__ == "__main__":
