@@ -60,7 +60,8 @@ BATCH_BYTES, BATCH_MAX = 200 * 2 ** 20, 100_000       # per batch (API limits: 2
 PAGE_TOKENS, OUT_TOKENS, URL_PAGES = 3000, 6000, 30  # rough estimate without a key: per PDF page, typical output, unknown PDF
 SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40,
             "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", MODEL],
-            "escalate": True, "max_attempts": 4}            # pages / model per part: ecadlib.ds_route
+            "escalate": True, "max_attempts": 4,            # pages / model per part: ecadlib.ds_route
+            "cross_check": "auto", "cross_check_model": ""}  # second source before a footprint is accepted: ecadlib.crosscheck
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # Per-model request parameters (claude-api skill, Thinking & Effort table): effort levels a model accepts (no entry
 # for a listed model = it rejects output_config.effort: Haiku 4.5, Sonnet 4.5), and the PDF page limit of
@@ -910,6 +911,8 @@ def report(res):
         out += ["", f"## How it was read ([datasheet] route = {rt.get('route')}; started on {rt['ladder'][0] if len(rt['ladder']) == 1 else rt.get('start')})", ""]
         out += [f"{i}. {a['model']}, {a['pages']} pages: {a['verdict']}" + (f" ({'; '.join(a['why'])[:300]})" if a.get("why") else "")
                 for i, a in enumerate(rt["attempts"], 1)]
+    from . import crosscheck as CC
+    out += CC.report_md(side.get("cross_check"))
     return "\n".join(out) + "\n"
 
 
@@ -1234,8 +1237,9 @@ class Reader:
         return self._client
 
     # --- jobs
-    def job(self, part, urls, package=None, pages=None, name=None):
-        """Try each (url, where) until one is a PDF. A link that cannot be downloaded here (blocked host) is sent
+    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None):
+        """fp_needed: False when the part's footprint comes from another source ([datasheet] cross_check = "auto" then
+        skips the cross-check). Try each (url, where) until one is a PDF. A link that cannot be downloaded here (blocked host) is sent
         as a URL source for the API to fetch, so a part is never stuck on this machine's network.
         The job is the first step of the part's route (ds_route): the pages picked for [datasheet] page_budget and the
         model the router starts on; answers already in the result cache are replayed, so a part whose cheap attempt
@@ -1269,7 +1273,7 @@ class Reader:
         sent0 = len(lv[0]) if isinstance(lv[0], list) else None
         rung, reason = self.router.start(package, n, sent0)
         base = {"name": name or part, "part": part, "package": package, "url": url, "where": where, "pages": pages,
-                "data": data, "src_hash": src_hash, "levels": lv, "n_pages": n, "base_prov": prov,
+                "data": data, "src_hash": src_hash, "levels": lv, "n_pages": n, "base_prov": prov, "fp_needed": fp_needed,
                 "route": {"route": self.router.route, "ladder": self.router.ladder, "start": reason, "picked": why,
                           "attempts": []}}
         first = self._at(base, rung, 0)
@@ -1360,8 +1364,54 @@ class Reader:
         if job["prov"].get("pages_sent"):
             res["needs_review"].append(f"only some pages were sent ({job['prov']['note']}): check nothing was missed")
         self._ai_record(job, rec, res)
+        from . import crosscheck as CC                # an independent second source before the footprint is accepted
+        cc = CC.run(self, job, res, rec.get("model") or job.get("model") or self.model)
+        if cc:
+            res["sidecar"]["cross_check"] = res["cross_check"] = cc
+            if cc["status"] == "unchecked":
+                res["needs_review"].append(f"cross-check: {CC.summary_line(cc)}")
         write(res, self.dir)
+        if cc and cc["status"] == "disagreed":
+            raise CC.held(cc)
         return res
+
+    def check_message(self, job, model, headers, body, key, pages_sent=None):
+        """The answer to a cross-check's second read (ecadlib.crosscheck): from the result cache, else one request
+        through the same provider layer as the first read (guided models get their capability rails and JSON repair);
+        its tokens and USD go to cost.jsonl. -> (message, via). Raises crosscheck.Unavailable."""
+        from . import crosscheck as CC, ds_route as DR
+        rec = self.results.get(key)
+        if rec and "message" in rec:
+            return rec["message"], "cached"
+        if self.estimate_only or not self.key:
+            raise CC.Unavailable("no answer: no key for the second read")
+        from .llm import rails as LRL
+        try:                                          # held to [datasheet] max_cost_usd like every other request
+            self._guard_cost([{"name": job.get("name") or job["part"], "model": model, "body": body, "url": job.get("url", ""),
+                               "prov": {"pages": pages_sent or job.get("n_pages")}}])
+        except APIError:
+            raise
+        except DatasheetError as e:
+            raise CC.Unavailable(f"not sent: {e}")
+        inf = self.info(model)
+        send, _ = self._send_fn(dict(job, model=model, headers=headers))
+        p = inf["plan"]
+        try:
+            b = LRL.adapt_body(body, inf["prof"], p) if p["guided"] else body
+            with logging_to(self.log_file, self.say):
+                msg = send(b)
+        except APIError:
+            raise                                     # no answer came back: the part is retried next run
+        except DatasheetError as e:
+            raise CC.Unavailable(str(e)[:200])
+        msg = LRL.repair_message(msg, CC.output_schema(), p)
+        r = DR.attempt_record(job["part"], job.get("name"), model, msg, "sync", pages_sent, job.get("n_pages"), "cross-check")
+        r["purpose"] = "cross_check"
+        self.ledger.add(r)
+        self.results.put(key, {"key": key, "part": job["part"], "url": job.get("url", ""), "model": model, "via": "sync",
+                               "purpose": "cross_check", "at": datetime.datetime.now().isoformat(timespec="seconds"),
+                               "message": msg})
+        return msg, "sync"
 
     def _ai_record(self, job, rec, res):
         """Provenance of the model and rails (sidecar "ai"); a guided model's answer that still fails the checks at
@@ -1484,6 +1534,7 @@ class Reader:
         if not k:
             raise DatasheetError(LL.needs_key_message(ep))
         cl = OpenAICompatClient(ep["base_url"], k, inf["prof"], log_file=self.log_file, say=self.say, sleep=self.sleep)
+        cl.sampling = inf.get("sampling") or {}      # temperature / seed where the model takes them (ecadlib.llm.sampling)
         return (lambda body: cl.messages(body, {})), cl
 
     def _ask(self, job):
@@ -1961,6 +2012,7 @@ def ask_once(inf, headers, body, key, part, package, datasheet, offset):
     else:
         from .llm.openai_compat import OpenAICompatClient
         cl = OpenAICompatClient(inf["ep"]["base_url"], key, inf["prof"])
+        cl.sampling = inf.get("sampling") or {}
         send = lambda b: cl.messages(b, {})
 
     def judge(m):

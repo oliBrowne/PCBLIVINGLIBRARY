@@ -590,6 +590,7 @@ def summary(it):
             "origin": it.get("origin"), "status": it["status"], "kind": ch.get("kind") or ch.get("check") or "",
             "source": (ch.get("source") or {}).get("name") or (ch.get("source") or {}).get("ref") or "",
             "verdict": p.get("verdict"), "score": p.get("score"), "findings": len(p.get("findings") or []),
+            "cross_check": ((it.get("build") or {}).get("cross_check") or {}).get("status", ""),
             "batch": it.get("batch"), "pr_url": it.get("pr_url"), "created": it.get("created"), "updated": it.get("updated")}
 
 

@@ -806,6 +806,21 @@ class Workspace:
         est = D.estimate_plan(plan_f, self._datasheet_reader(out, estimate=True))
         return dict(est, key_set=est["exact_input"])
 
+    def cross_checks(self, bom):
+        """Which datasheet parts of the librarian plan were cross-checked against a second source (ecadlib.crosscheck)
+        and how: agreed, disagreed (held, both values in the review), unchecked or skipped. Sends nothing."""
+        import json
+        from . import crosscheck as CC
+        out = self._librarian_dir(self._bom_path(bom))
+        plan_f = out / "plan.json"
+        if not plan_f.exists():
+            raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
+        parts = [{"part": it["name"], "status": it.get("status"), "cross_check": it["cross_check"]["status"],
+                  "summary": it["cross_check"].get("summary", "")}
+                 for it in json.loads(plan_f.read_text(encoding="utf-8")) if it.get("cross_check")]
+        counts = {s: sum(p["cross_check"] == s for p in parts) for s in ("agreed", "disagreed", "unchecked", "skipped")}
+        return {"parts": parts, "counts": counts, "modes": list(CC.MODES)}
+
     def altium365_workspaces(self):
         from . import altium365 as A
         return {"workspaces": A.Nexar(_nexar_token()).workspaces()}
