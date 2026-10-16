@@ -587,7 +587,7 @@ def part_kind(category, footprint="", description="", designator=""):
     if cat == "Resistors":
         return "R"
     if cat == "Capacitors":
-        return "CP" if fp.startswith("CP_") or re.search(r"tantal|electrolytic|polarized", d, re.I) else "C"
+        return "CP" if fp.startswith("CP_") or re.search(r"tantal|electrolytic|polarized|polymer", d, re.I) else "C"
     if cat == "Inductors":
         return "L"
     if cat == "Diodes":
@@ -597,10 +597,23 @@ def part_kind(category, footprint="", description="", designator=""):
     return {"Transistors": "Q", "ICs": "U"}.get(cat)
 
 
+# polarized capacitors (tantalum, polymer, aluminium) by MPN: their case is not a chip-capacitor land and pin 1 is +
+POLAR_CAP = re.compile(r"^(T49[1-9]|T5[2-9]\d|TAJ|TPS[A-Z]|TPM|TRJ|TCJ|TCM|TCN|TCQ|TLJ|TPC|NOJ|NOS|F9[1-8]|293D|593D|298D|"
+                       r"T8[36]|TR3|TP3|EEE|EEV|EEH|EEF|EEU|ECA|\d+TP[A-Z]|\d+SVP|\d+SEP|UWT|UWX|UUD|UUX|UCD|PCJ|PCF|PLV)")
+
+
 def resolve(texts, kind=None, mpn="", description=""):
     """What the standard source builds for one part:
-    {"footprint": table name | None, "fp_how": str, "kicad_ref": "Lib:Name", "symbol": key | None, "sym_how": str}."""
-    fk = {"CP": None, "Q": None, "U": None}.get(kind, kind)
+    {"footprint": table name | None, "fp_how": str, "kicad_ref": "Lib:Name", "symbol": key | None, "sym_how": str}.
+    A polarized capacitor (kind CP, or a C whose MPN is a tantalum / polymer / electrolytic series) gets nothing: the
+    table has no polarized case, and a chip-capacitor land would lose the + mark."""
+    if kind == "C" and POLAR_CAP.match(_norm(mpn)):
+        kind = "CP"
+    if kind == "CP":
+        return {"footprint": None, "fp_how": "polarized capacitor: its case (tantalum / polymer / electrolytic) is not in "
+                "the standard table", "kicad_ref": None, "symbol": None, "sym_how": "polarized capacitor: pin 1 = + only "
+                "with a footprint that marks it"}
+    fk = {"Q": None, "U": None}.get(kind, kind)
     name, how = footprint_for(list(texts), fk, mpn, weak=[description])
     if not name:                                          # a known MPN family settles a bare family name (SOT-223, TO-220)
         fam = next((pk for rx, pk, _ in FAMILY if re.match(rx, _norm(mpn))), ())

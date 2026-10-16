@@ -301,7 +301,11 @@ class Router:
             return None
         wider = (rung, level + 1) if level + 1 < n_levels else None
         better = (rung + 1, level) if rung + 1 < len(self.ladder) else None
-        return (wider or better) if kind == "incomplete" else (better or wider)
+        nxt = (wider or better) if kind == "incomplete" else (better or wider)
+        top = len(self.ladder) - 1
+        if nxt and attempts + 1 >= self.max_attempts and nxt[0] < top:   # the last answer allowed goes to the top model:
+            nxt = (top, n_levels - 1 if kind == "incomplete" else level)   # max_attempts never keeps a cheaper one's
+        return nxt
 
 
 INCOMPLETE = re.compile(r"no value printed|no nominal value printed|cited page\(s\)|pins missing|pin_count missing|"

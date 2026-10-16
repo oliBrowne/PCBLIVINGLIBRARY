@@ -22,8 +22,6 @@ from .. import altium_lib as AL, datasheet as D, footprint_bench as FB, libraria
 from . import score as S
 
 SETS = Path(__file__).with_name("sets")
-# Cache-read $ per MTok where it is not 0.1 x input (claude-api skill model table, cached 2026-10-06).
-CACHE_READ = {"claude-opus-5-5": 0.20, "claude-sonnet-5-5": 0.20, "claude-fable-5-1": 0.25}
 BOM_HEAD = ["Designator", "Qty", "Value", "Footprint", "Manufacturer", "Mfr. Part #", "Description", "Datasheet"]
 
 
@@ -70,13 +68,12 @@ def write_bom(cases, path):
 
 
 def usd(model, usage):
-    """USD of one message from its usage block (synchronous rates; cache writes 1.25x, reads per CACHE_READ)."""
-    pin, pout = D.PRICES.get(model, (None, None))
-    if pin is None or not usage:
+    """USD of one message from its usage block (synchronous rates): ds_route.usage_usd, which also knows the cache-read
+    prices and Claude Haiku 5.5's dearer tier above 100K prompt tokens."""
+    if not usage:
         return None
-    cr = CACHE_READ.get(model, pin * 0.1)
-    return round((usage.get("input_tokens", 0) * pin + usage.get("cache_creation_input_tokens", 0) * pin * D.CACHE_WRITE
-                  + usage.get("cache_read_input_tokens", 0) * cr + usage.get("output_tokens", 0) * pout) / 1e6, 6)
+    from .. import ds_route
+    return ds_route.usage_usd(model, usage)
 
 
 def _safe(s):
@@ -144,12 +141,16 @@ class EvalReader(D.Reader):
         u = self.used.setdefault(job["part"], {"estimate": job.get("estimate")})
         u.setdefault("via", rec.get("via") or "live")
         u.update(usage=msg.get("usage"), model=msg.get("model") or rec.get("model") or self.model)
+        # every answer the part's route paid for (cheaper / fewer-page tries first, this one last): all count in the cost
+        atts = (job["recording"].get("attempts") if job.get("recording") else
+                [{"model": a.get("model"), "usage": a.get("usage")} for a in (job.get("route") or {}).get("attempts") or []])
+        u["attempts"] = atts or []
         if self.record and not job.get("recording"):
             self.record.mkdir(parents=True, exist_ok=True)
             j = {k: job[k] for k in ("url", "where", "offset", "prov")}
             (self.record / f"{_safe(job['part'])}.json").write_text(json.dumps(
                 {"part": job["part"], "model": rec.get("model") or self.model, "recorded": datetime.datetime.now().isoformat(timespec="seconds"),
-                 "job": j, "estimate": job.get("estimate"), "message": msg}, indent=1, default=str), encoding="utf-8")
+                 "job": j, "estimate": job.get("estimate"), "message": msg, "attempts": u["attempts"]}, indent=1, default=str), encoding="utf-8")
         return super()._result(job, rec)
 
 
@@ -173,8 +174,18 @@ def _cost(case_used, model):
     u, est = case_used.get("usage"), case_used.get("estimate") or {}
     if u:
         tin = u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0)
-        return tin, u.get("output_tokens", 0), usd(case_used.get("model") or model, u), \
-            {"replay": "recorded usage (replay)", "cached": "recorded usage (cached)"}.get(case_used.get("via"), "API usage")
+        tout, cost = u.get("output_tokens", 0), usd(case_used.get("model") or model, u)
+        how = {"replay": "recorded usage (replay)", "cached": "recorded usage (cached)"}.get(case_used.get("via"), "API usage")
+        earlier = (case_used.get("attempts") or [])[:-1]          # answers before the kept one (route escalations)
+        for a in earlier:
+            au = a.get("usage") or {}
+            tin += au.get("input_tokens", 0) + au.get("cache_creation_input_tokens", 0) + au.get("cache_read_input_tokens", 0)
+            tout += au.get("output_tokens", 0)
+            c = usd(a.get("model") or model, au) if au else None
+            cost = None if cost is None or c is None else round(cost + c, 6)
+        if earlier:
+            how += f" + {len(earlier)} earlier answer{'s' if len(earlier) > 1 else ''}"
+        return tin, tout, cost, how
     return est.get("input_tokens", 0), est.get("output_tokens", 0), est.get("usd"), f"estimate ({est.get('how', '')})"
 
 
