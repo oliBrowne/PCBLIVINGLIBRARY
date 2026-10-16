@@ -1375,7 +1375,7 @@ def main(argv=None):
             print(f"error: {e.args[0] if e.args else e}", file=sys.stderr)
             return 2
         ap_ = r.get("approval")
-        print(f"{a.id}: {r['item']['status']}" + (f"; approvals.py: {'recorded' if ap_['recorded'] else ap_['reason']}" if ap_ else ""))
+        print(f"{a.id}: {r['item']['status']}" + (f"; sign-off: {'recorded' if ap_['recorded'] else ap_['reason']}" if ap_ else ""))
         return 0
     rep = push_approved(ws, rules, a.dry_run)
     print(json.dumps(rep, indent=2, default=str))

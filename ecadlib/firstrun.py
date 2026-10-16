@@ -71,20 +71,20 @@ def ask_setup(existing=None, given=None, inp=input, out=print, interactive=True,
             else:
                 out(f"    keeping {ans['tool']}")
         if "libs" not in given:
-            a = inp("  Your existing library folders (KiCad .kicad_sym/.pretty or Altium .SchLib/.PcbLib), comma-separated"
+            a = inp("  Your existing library folders (KiCad .kicad_sym/.pretty or Altium .SchLib/.PcbLib), separated by commas"
                     f" [{', '.join(ans['libs']) or 'none'}]: ").strip()
             if a:
                 ans["libs"] = [] if a.lower() == "none" else _split(a)
             for l in ans["libs"]:
                 if not Path(l).expanduser().exists():
-                    out(f"    note: {l} does not exist (yet); `ecadlib doctor` will flag it")
+                    out(f"    note: {l} does not exist yet; check the path (the setup check will flag it too)")
         if "workspace" not in given:
-            a = inp(f"  Workspace folder for uploads, plans and outputs [{ans['workspace']}]: ").strip()
+            a = inp(f"  Folder where ecadlib keeps your BOMs and the libraries it builds [{ans['workspace']}]: ").strip()
             ans["workspace"] = a or ans["workspace"]
         if ans["sources"] is None:
             online = _yes(inp("  Look missing parts up online (KiCad library on gitlab.com, EasyEDA/LCSC)? [Y/n]: "))
-            ds = _yes(inp(f"  Use the Claude datasheet reader for parts nothing else has? ({ds_env} is "
-                          f"{'set' if ds_key else 'NOT set'}) [{'Y/n' if ds_key else 'y/N'}]: "), default=ds_key)
+            ds = _yes(inp(f"  Let a model read the datasheet for parts no library has? (needs {ds_env}, which is "
+                          f"{'set' if ds_key else 'not set yet'}) [{'Y/n' if ds_key else 'y/N'}]: "), default=ds_key)
             order = [s for s in cur_sources if (online or s not in ("kicad", "easyeda")) and (ds or s != "datasheet")]
             if "standard" not in order:
                 order.append("standard")

@@ -89,10 +89,10 @@ CODES = {
     # pins (rule `pins`)
     "pins.no_pins": ("The symbol has no pins.", "Pick another symbol.", [r"^pins: symbol has no pins"]),
     "pins.no_pads": ("The footprint has no pads.", "Pick another footprint.", [r"^pins: footprint has no pads"]),
-    "pins.pin_without_pad": ("Symbol pins {pins} have no pad on the footprint.",
+    "pins.pin_without_pad": ("Symbol {pins_have} no pad on the footprint.",
                              "Pick a footprint that matches the symbol's pin numbers, or release anyway if those pins are not connected.",
                              [r"^pins: symbol pins without a pad: (?P<pins>.+)"]),
-    "pins.pad_without_pin": ("Footprint pads {pads} have no pin on the symbol.",
+    "pins.pad_without_pin": ("Footprint {pads_have} no pin on the symbol.",
                              "Pick a symbol that has those pins, or a footprint that matches; mounting pads are fine.",
                              [r"^pins: pads without a symbol pin: (?P<pads>.+)"]),
     # footprint (rule `footprint`: footprint_check findings, or the PcbLib minimum)
@@ -308,6 +308,10 @@ def _derive(code, v):
         for k in ("first", "second"):
             s = _num(v.get(k, "?"))
             v[k] = s + unit if unit and re.fullmatch(r"-?[\d.]+", s) else s
+    elif code in ("pins.pin_without_pad", "pins.pad_without_pin"):
+        k = "pins" if code == "pins.pin_without_pad" else "pads"
+        one = re.fullmatch(r"[^\s,-]+", str(v.get(k) or "?"))
+        v[k + "_have"] = f"{k[:-1] if one else k} {v.get(k) or '?'} {'has' if one else 'have'}"
     elif code == "parity.pad_missing":
         v.setdefault("side", "KiCad" if str(v.get("k")) == "present" else "Altium")
     elif code == "verify.datasheet_read":
@@ -394,14 +398,16 @@ def friendly_error(exc):
 
 # ---------------------------------------------------------------- clean text
 INTERNAL = ("plan.json", "ds_route", "stdparts", "crosscheck", "release_check", "footprint_check", "kicad_import",
-            "symbol_layout", "ecadlib.", "hold_reasons")
+            "symbol_layout", "hold_reasons")
+_MOD = r"ecadlib\.(?!toml\b)[a-z_]+\b"
 _ABS = re.compile(r"(?<![\w.:/])(?:/(?:[\w.@+-]+/)+[\w.@+-]+|[A-Za-z]:\\(?:[^\s\\]+\\)+[^\s\\]+)")
-_MODULE = re.compile(r"\s*\((?:see |via |from |by )?ecadlib\.\w+[^)]*\)|\becadlib\.\w+\b")
+_MODULE = re.compile(r"\s*\((?:see |via |from |by )?" + _MOD + r"[^)]*\)|\b" + _MOD)
 
 
 def clean(text):
     """Absolute paths -> file name; "(ecadlib.stdparts)"-style module mentions removed."""
     t = _ABS.sub(lambda m: re.split(r"[\\/]", m.group(0))[-1], str(text or ""))
+    t = re.sub(r"\s*\((?:%s)\)" % "|".join(map(re.escape, INTERNAL)), "", t)        # "(kicad_import)" notes
     return re.sub(r"\s{2,}", " ", _MODULE.sub("", t)).strip()
 
 
@@ -409,5 +415,5 @@ def leaks(text):
     """Internal names and absolute paths found in user-facing text (for tests): [str]."""
     t = str(text or "")
     out = [n for n in INTERNAL if n in t]
-    out += _ABS.findall(t)
+    out += re.findall(r"\b" + _MOD, t) + _ABS.findall(t)
     return out
