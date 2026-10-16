@@ -381,11 +381,19 @@ class Ledger:
         return rec
 
 
+def billed_model(model, msg=None):
+    """The model to price a response at: the one it says served it (a server-side fallback re-runs a declined request
+    on another model, billed at that model's rates) when that model has a known price, else the one requested."""
+    from . import datasheet as D
+    served = (msg or {}).get("model")
+    return served if served and served != model and served in D.PRICES else model
+
+
 def attempt_record(part, name, model, msg, via, pages_sent, pages_total, verdict, nxt=None, error=None):
     batch = str(via or "").startswith("batch")
     u = (msg or {}).get("usage") or {}
     if u:
-        usd, how = usage_usd(model, u, batch), "usage"
+        usd, how = usage_usd(billed_model(model, msg), u, batch), "usage"
         tin = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
         tout = int(u.get("output_tokens") or 0)
     else:
