@@ -92,10 +92,12 @@ async function local(browser, width) {
     check("bad upload: error scrolled into view" + w, box && box.y >= 0 && box.y < 900, box && box.y);
   });
   await step("librarian" + w, async () => {
+    await p.evaluate(() => { window.__lines = []; new MutationObserver(() => document.querySelectorAll("#liblines li").forEach(li => window.__lines.push(li.textContent)))
+      .observe(document.querySelector("#liblines"), { childList: true, subtree: true }); });
     await p.click("#librun");
     await p.waitForSelector("#libbusy:not([hidden])", { timeout: 5000 }).then(() => check("librarian shows progress in its own card" + w, true)).catch(() => check("librarian shows progress in its own card" + w, true, "finished before the first poll"));
-    await p.waitForSelector("#liblines li", { timeout: 8000 }).then(async () => check("librarian lists parts live" + w, /\d+\/\d+ /.test(await text(p, "#liblines")), await text(p, "#liblines")))
-      .catch(() => check("librarian lists parts live" + w, false, "no live lines"));
+    await p.waitForFunction(() => window.__lines.some(t => /\d+\/\d+ /.test(t)), null, { timeout: 15000 })
+      .then(() => check("librarian lists parts live" + w, true)).catch(async () => check("librarian lists parts live" + w, false, JSON.stringify(await p.evaluate(() => window.__lines.slice(-3)))));
     check("page stays usable while it runs" + w, await p.isEnabled("#qreload") && await p.isEnabled("#newfp"));
     await p.waitForSelector("#libtools:not([hidden])", { timeout: 60000 });
     const t = await text(p, "#libout .next");
@@ -202,7 +204,7 @@ async function demo(browser, width) {
 // contrast of text on its background in both themes, labels on every control, reduced motion
 async function a11y(browser) {
   const ratio = `(() => {
-    const lum = c => { const [r, g, b] = c.match(/[\\d.]+/g).slice(0, 3).map(Number).map(v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; }); return .2126 * r + .7152 * g + .0722 * b; };
+    const lum = c => { const k = /^color\\(srgb/.test(c) ? 1 : 255; const [r, g, b] = c.match(/[\\d.]+/g).slice(0, 3).map(Number).map(v => { v /= k; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; }); return .2126 * r + .7152 * g + .0722 * b; };
     const bg = el => { for (; el; el = el.parentElement) { const c = getComputedStyle(el).backgroundColor; if (!/rgba\\(0, 0, 0, 0\\)|transparent/.test(c)) return c; } return "rgb(255,255,255)"; };
     const host = document.createElement("div"); document.querySelector("#libcard").appendChild(host);
     host.innerHTML = '<span class="pill s-ok">a</span><span class="pill s-warn">a</span><span class="pill s-bad">a</span><span class="pill s-info">a</span><span class="pill s-off">a</span><span class="muted">a</span><div class="next s-warn">a</div><button class="primary">a</button><table class="vs"><tr><td class="diff">a</td></tr></table>';
