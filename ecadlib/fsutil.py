@@ -41,3 +41,22 @@ def write_text_atomic(path, text):
             pass
         raise
     return path
+
+
+def write_bytes_atomic(path, data):
+    """write_text_atomic for binary files (.PcbLib / .SchLib): a crash mid-write leaves the old file whole."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return path
