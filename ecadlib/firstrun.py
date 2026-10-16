@@ -305,18 +305,10 @@ def build_demo(ws, tool="both", bom=None, log=print):
     from .app import Workspace
     t0 = time.time()
     root = Path(ws.root)
-    try:
-        import tomllib  # noqa: F401
-        rules_f = root / "ecadlib.toml"
-    except ImportError:                       # Python 3.10 reads no TOML: the same rules as ecadlib_rules.json
-        rules_f = root / "ecadlib_rules.json"
-    for f in {rules_f, root / "ecadlib.toml"}:
-        if f.exists() and DEMO_HEADER not in f.read_text(encoding="utf-8")[:200]:
-            raise ValueError(f"{root} has its own {f.name}; the demo needs a folder of its own (e.g. -o ecadlib-demo)")
-    if not rules_f.exists() and rules_f.suffix == ".json":
-        rules_f.write_text(json.dumps({"_comment": DEMO_HEADER, "sources": {"order": ["standard"]},
-                                       "setup": {"tool": tool, "libs": [], "workspace": "."}}, indent=1), encoding="utf-8")
-    elif not rules_f.exists():                # the demo's own rules: standard parts only, so a stray ecadlib.toml in a
+    rules_f = root / "ecadlib.toml"
+    if rules_f.exists() and not rules_f.read_text(encoding="utf-8").startswith(DEMO_HEADER):
+        raise ValueError(f"{root} has its own ecadlib.toml; the demo needs a folder of its own (e.g. -o ecadlib-demo)")
+    if not rules_f.exists():                  # the demo's own rules: standard parts only, so a stray ecadlib.toml in a
         rules_f.write_text(                   # parent folder cannot change the result, and nothing goes on the network
             DEMO_HEADER + ": standard parts only, no network, no API keys.\n"
             "[sources]\norder = [\"standard\"]\n\n[setup]\n"
