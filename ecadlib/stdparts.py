@@ -1,7 +1,7 @@
 """Standard parts without Claude: when the package is fully set by standard data, build the footprint (and, for the
 part kinds whose pinout is standard, the symbol) offline and deterministically. The librarian's `standard` source.
 
-    ecadlib stdparts resolve "SOIC-8" | "0603" --kind R | --mpn GRM188R71H104KA93D ...   what would be built, and why
+    ecadlib stdparts resolve "SOIC-8 3.9x4.9mm" | "0603" --kind R | --mpn GRM188R71H104KA93D --kind C   what would be built, and why
     ecadlib stdparts list [PATTERN]                    the packages the table knows
     ecadlib stdparts bench [--kicad DIR] [--fixture F] every table entry against KiCad's official footprint
     ecadlib stdparts coverage BOM [BOM ...]            how many BOM lines this source resolves (no network)

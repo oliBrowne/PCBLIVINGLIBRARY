@@ -515,6 +515,22 @@ def call_tool(ws, name, args):
     raise KeyError(f"unknown tool {name}")
 
 
+def _arg_errors(tool, args):
+    """The arguments checked against the tool's inputSchema: '' when they fit, else one line per problem. A string
+    given for a list (a small model's usual slip) becomes a one-item list first, comma-split for a list of names."""
+    import jsonschema
+    for k, sch in tool["inputSchema"].get("properties", {}).items():
+        types = [sch] + list(sch.get("anyOf", []))
+        if isinstance(args.get(k), str) and any(t.get("type") == "array" for t in types) \
+                and not any(t.get("type") == "string" for t in types):
+            arr = next(t for t in types if t.get("type") == "array")
+            enum = (arr.get("items") or {}).get("enum")
+            args[k] = [x.strip() for x in args[k].split(",") if x.strip()] if enum else [args[k]]
+    v = jsonschema.Draft7Validator(tool["inputSchema"])
+    errs = sorted(v.iter_errors(args), key=lambda e: list(e.path))
+    return "; ".join(f"{'.'.join(map(str, e.path)) or '(arguments)'}: {e.message}" for e in errs[:5])
+
+
 def handle(ws, msg):
     """Return a JSON-RPC response dict, or None for notifications."""
     if not isinstance(msg, dict) or not isinstance(msg.get("params", {}), (dict, type(None))):
@@ -540,6 +556,9 @@ def handle(ws, msg):
         missing = [k for k in tool["inputSchema"].get("required", []) if k not in (params.get("arguments") or {})]
         if missing:
             return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"missing argument(s): {', '.join(missing)}"}}
+        bad = _arg_errors(tool, params.get("arguments") or {})
+        if bad:                                           # e.g. a string where a list goes (it was used letter by letter)
+            return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"invalid argument(s): {bad}"}}
         try:
             out = call_tool(ws, params.get("name"), params.get("arguments") or {})
             result = {"content": [{"type": "text", "text": json.dumps(out, indent=1, default=str)}], "isError": False}

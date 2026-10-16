@@ -566,6 +566,14 @@ def footprint_tree(text, name, lib, notes):
     return t, models
 
 
+def _local_model(src3d, fn, libs):
+    """A footprint's STEP in a local library folder (--lib): <lib>/**/<X>.3dshapes/<fn>, else None."""
+    if not src3d:
+        return None
+    d = Path(src3d).parent.name
+    return next((p for r in libs for p in sorted(Path(r).rglob(fn)) if p.parent.name == d and p.is_file()), None)
+
+
 def altium_model(pcblib, fpn, lib, shapes, taken, notes):
     """The 3D model of a footprint that has no KiCad (model ...): the STEP embedded in its .PcbLib, else a STEP extruded
     from its 3D body (outline, standoff and height), written to <lib>.3dshapes/. -> ((model ...) node, file name, how)
@@ -657,11 +665,17 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
                     if fn in rep["models"]:
                         continue
                     data = None
+                    local = _local_model(src3d, fn, libs)
                     try:
-                        data = K.fetch(http, "kicad-packages3D", src3d) if src3d and http is not None else None
+                        data = K.fetch(http, "kicad-packages3D", src3d) if not local and src3d and http is not None else None
                     except IOError as e:
                         fnotes.append(f"3D {src3d}: {e}")
-                    if data:
+                    if local:                         # the model next to the footprint's own library (${KIPRJMOD}/...)
+                        shapes.mkdir(exist_ok=True)
+                        if not (shapes / fn).is_file() or (shapes / fn).read_bytes() != local.read_bytes():
+                            (shapes / fn).write_bytes(local.read_bytes())
+                        rep["models"][fn] = str(local)
+                    elif data:
                         shapes.mkdir(exist_ok=True)
                         (shapes / fn).write_text(data, encoding="utf-8")
                         rep["models"][fn] = f"kicad-packages3D/{src3d}"
@@ -672,7 +686,22 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
                         rep["models"][fn] = None
                         fnotes.append(f"STEP {fn} not available offline: put it in {lib}.3dshapes/")
                 pcb = RC._path(plan_dir, it["footprint"].get("file"))
-                got = altium_model(pcb, fpn, lib, shapes, rep["models"], fnotes) if not models and pcb and pcb.is_file() else None
+                got = None
+                if models and not any(rep["models"].get(fn) for _, fn in models) and pcb and pcb.is_file():
+                    # no KiCad STEP to be had (e.g. a ${KIPRJMOD} path of a library not under --lib): the .PcbLib's
+                    # 3D model instead of a model path that points at nothing
+                    for _, fn in models:              # the KiCad model's own file name stays free for the real
+                        rep["models"].pop(fn, None)   # model (put there by hand, or fetched by a later online export)
+                    got = altium_model(pcb, fpn, lib, shapes, {**rep["models"], **{fn: True for _, fn in models}}, fnotes)
+                    if got:
+                        tree[:] = [x for x in tree if not (isinstance(x, list) and x and str(x[0]) == "model")]
+                        fnotes[:] = [n for n in fnotes if "not available offline" not in n]
+                        fnotes.append(f"3D: the KiCad model {', '.join(fn for _, fn in models)} is not available; {got[2]} instead")
+                    else:
+                        for _, fn in models:
+                            rep["models"][fn] = None
+                elif not models and pcb and pcb.is_file():
+                    got = altium_model(pcb, fpn, lib, shapes, rep["models"], fnotes)
                 if got:                       # no KiCad model: the Altium one, so both libraries have the part in 3D
                     tree.append(got[0])
                     body = sexpr.dumps(tree) + "\n"
