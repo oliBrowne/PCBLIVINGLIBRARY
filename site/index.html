@@ -21,6 +21,7 @@
   <nav aria-label="Sections">
     <a href="#how">How it works</a>
     <a href="#footprints">Footprints</a>
+    <a href="#workflow">Workflow</a>
     <a href="#models">Your model</a>
     <a href="#start">Start</a>
   </nav>
@@ -101,17 +102,47 @@
     <div class="pkgs mono reveal" id="fppkgs" role="tablist" aria-label="Packages"></div>
   </section>
 
-  <!-- 04 models -->
+  <!-- 04 workflow -->
+  <section id="workflow" class="block" data-traces="wf">
+    <div class="head reveal">
+      <p class="eyebrow"><span class="num">04</span>Workflow</p>
+      <h2>Right inside Altium and KiCad.</h2>
+      <p class="sub">You never leave your design tool. ecadlib adds an ecadlib menu to Altium and an action plugin to KiCad. Ask for a part, and it comes back as a library part you can place.</p>
+    </div>
+    <div class="wf reveal">
+      <div class="wftabs mono" role="tablist" aria-label="Design tool">
+        <button role="tab" id="wf-tab-altium" aria-selected="true" data-scene="altium">Altium Designer</button>
+        <button role="tab" id="wf-tab-kicad" aria-selected="false" data-scene="kicad">KiCad</button>
+        <button type="button" class="ghost wfplay" id="wfplay" aria-pressed="true">pause</button>
+      </div>
+      <div class="wfgrid">
+        <ol class="wfsteps" id="wfsteps" aria-live="polite"></ol>
+        <div class="win" id="win" aria-label="An animated design tool window showing the ecadlib workflow" role="img">
+          <div class="winbar mono"><span class="lights"><i></i><i></i><i></i></span><span id="wintitle">Board.PrjPcb</span></div>
+          <div class="menubar mono" id="menubar"></div>
+          <div class="winbody">
+            <div class="canvas"><svg id="wfcanvas" viewBox="0 0 400 260" preserveAspectRatio="xMidYMid meet"></svg></div>
+            <aside class="panel" id="wfpanel"></aside>
+          </div>
+          <div class="dlg" id="wfdlg" hidden></div>
+          <div class="drop" id="wfdrop" hidden></div>
+          <svg class="cursor" id="wfcursor" viewBox="0 0 16 22" aria-hidden="true"><path d="M1 1 L1 17 L5 13 L8 20 L11 19 L8 12 L14 12 Z"/></svg>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 05 models -->
   <section id="models" class="block split" data-traces="models">
     <div class="head reveal">
-      <p class="eyebrow"><span class="num">04</span>Your model</p>
+      <p class="eyebrow"><span class="num">05</span>Your model</p>
       <h2>Bring your own key.<br>Use any model.</h2>
       <p class="sub">There is no account, hosted service or telemetry. ecadlib talks only to the model you configure, with a key from your own environment. Claude is the default; OpenAI, OpenRouter, Gemini and local models through Ollama or LM Studio work too.</p>
       <p class="sub">Guide rails scale with the model. A small local model gets the work in small checked steps, JSON repair and worked examples. A frontier model gets one structured call and nothing that narrows it.</p>
     </div>
     <div class="reveal">
       <figure class="plate">
-        <figcaption class="tags mono"><span>fig. 4 · your key</span><span id="plugread">rest</span></figcaption>
+        <figcaption class="tags mono"><span>fig. 5 · your key</span><span id="plugread">rest</span></figcaption>
         <div class="fig" data-fig="plug" data-read="plugread"></div>
       </figure>
       <div class="code">
@@ -129,7 +160,7 @@
   <!-- 05 tools -->
   <section id="tools" class="block" data-traces="tools">
     <div class="head reveal">
-      <p class="eyebrow"><span class="num">05</span>Where it lands</p>
+      <p class="eyebrow"><span class="num">06</span>Where it lands</p>
       <h2>Altium 365 first. KiCad too.</h2>
     </div>
     <div class="grid2">
@@ -165,12 +196,12 @@
   <section id="upkeep" class="block split rev" data-traces="upkeep">
     <div class="reveal">
       <figure class="plate">
-        <figcaption class="tags mono"><span>fig. 6 · upkeep</span><span id="rebuildread">rest</span></figcaption>
+        <figcaption class="tags mono"><span>fig. 7 · upkeep</span><span id="rebuildread">rest</span></figcaption>
         <div class="fig" data-fig="rebuild" data-read="rebuildread"></div>
       </figure>
     </div>
     <div class="head reveal">
-      <p class="eyebrow"><span class="num">06</span>Living</p>
+      <p class="eyebrow"><span class="num">07</span>Living</p>
       <h2>It keeps the library current.</h2>
       <p class="sub">A weekly upkeep run checks lifecycle and stock with Nexar, DigiKey, Mouser and JLC, watches the KiCad sources your parts came from, and compares your Altium 365 workspace with the plan. It reports only what is new, in one issue or one pull request.</p>
       <ul class="lines">
@@ -184,7 +215,7 @@
   <!-- 07 start -->
   <section id="start" class="block" data-traces="start">
     <div class="head reveal">
-      <p class="eyebrow"><span class="num">07</span>Quick start</p>
+      <p class="eyebrow"><span class="num">08</span>Quick start</p>
       <h2>Two minutes, offline, no keys.</h2>
       <p class="sub">The demo builds a small library from a bundled BOM with the built-in standard parts, so you can see the whole flow before you set anything up.</p>
     </div>

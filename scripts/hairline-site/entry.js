@@ -23,3 +23,8 @@ export function turn(deg) {
   TURN.deg = deg;
   TURN.wake.forEach((wake) => wake());
 }
+
+/** Drops every board's parts in one by one, from above their pads, as a placement run would. */
+export function placeParts() {
+  TURN.intro.forEach((intro) => intro());
+}

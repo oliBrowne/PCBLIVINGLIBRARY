@@ -36,13 +36,14 @@ themeBtn.addEventListener("click", () => {
 
 /* ---------- figures ---------- */
 const heroRead = $("#heroread"), heroAz = $("#heroaz");
-H.board($("#fig-board"), { play: true, intensity: 0.55, onRead: (t) => { heroRead.textContent = t; } });
+H.board($("#fig-board"), { intensity: 0.55, onRead: (t) => { heroRead.textContent = t; } });
+if (!still.matches) H.placeParts();
 for (const el of $$("[data-fig]")) {
   const out = el.dataset.read ? $("#" + el.dataset.read) : null;
   H[el.dataset.fig](el, { play: true, onRead: out ? (t) => { out.textContent = t; } : undefined });
 }
 
-// The camera: it swings in from the side on load, then scrolling the hero turns it.
+// The camera: it swings in from the side while the board is drawn, then scrolling the hero turns it.
 let az = 45;
 const setAz = (d) => { az = d; H.turn(d); heroAz.textContent = String(Math.round(d)).padStart(2, "0"); };
 setAz(78);
@@ -299,3 +300,242 @@ $$("[data-copy]").forEach((b) => b.addEventListener("click", async () => {
   try { await navigator.clipboard.writeText(text); b.textContent = "copied"; } catch { b.textContent = "select and copy"; }
   setTimeout(() => { b.textContent = "copy"; }, 1600);
 }));
+
+/* ---------- workflow: an unseen hand works through Altium and KiCad ---------- */
+const win = $("#win"), wfsteps = $("#wfsteps"), menubar = $("#menubar"), wfpanel = $("#wfpanel"), wfcanvas = $("#wfcanvas");
+const wfdlg = $("#wfdlg"), wfdrop = $("#wfdrop"), cursor = $("#wfcursor"), wfplay = $("#wfplay");
+const wf = { scene: "altium", run: 0, fast: false, paused: false, visible: false, step: 0 };
+class Stop extends Error {}
+const wait = (ms) => new Promise((ok, no) => {
+  const run = wf.run;
+  if (wf.fast) return ok();
+  const tick = (left) => {
+    if (run !== wf.run) return no(new Stop());
+    if (wf.paused || !wf.visible) return setTimeout(() => tick(left), 200);
+    if (left <= 0) return ok();
+    setTimeout(() => tick(left - 50), 50);
+  };
+  tick(ms);
+});
+const rel = (el) => { const a = el.getBoundingClientRect(), w = win.getBoundingClientRect(); return [a.left - w.left + a.width / 2, a.top - w.top + a.height / 2]; };
+async function point(el, dx = 0, dy = 0) {
+  const [x, y] = rel(el);
+  cursor.style.left = `${x + dx}px`; cursor.style.top = `${y + dy}px`;
+  await wait(950);
+}
+async function click(el) {
+  await point(el);
+  if (!wf.fast) {
+    const r = document.createElement("span"); r.className = "ripple";
+    r.style.left = cursor.style.left; r.style.top = cursor.style.top; win.appendChild(r);
+    setTimeout(() => r.remove(), 700);
+  }
+  el.classList.add("press"); await wait(160); el.classList.remove("press");
+}
+async function type(el, text) {
+  el.classList.add("focus");
+  for (let i = 1; i <= text.length; i++) { el.textContent = text.slice(0, i); await wait(55); }
+  el.classList.remove("focus");
+}
+function openMenu(anchor, items) {
+  $$(".menu", win).forEach((m) => m.remove());
+  const m = document.createElement("div"); m.className = "menu";
+  m.innerHTML = items.map((t) => (t === "-" ? '<div class="sep"></div>' : `<div>${t}</div>`)).join("");
+  const a = anchor.getBoundingClientRect(), w = win.getBoundingClientRect();
+  m.style.left = `${Math.min(a.left - w.left, w.width - 220)}px`; m.style.top = `${a.bottom - w.top + 2}px`;
+  win.appendChild(m);
+  anchor.classList.add("hot");
+  return m;
+}
+const closeMenus = () => { $$(".menu", win).forEach((m) => m.remove()); $$(".menubar > span", win).forEach((s) => s.classList.remove("hot")); };
+function dialog(title, body) {
+  wfdlg.innerHTML = `<div class="dh"><span>${title}</span><span>×</span></div><div class="db">${body}</div>`;
+  wfdlg.hidden = false;
+  return wfdlg;
+}
+const closeDialog = () => { wfdlg.hidden = true; };
+async function log(lines) {
+  const ul = $(".log", wfdlg), meter = $(".meter i", wfdlg);
+  for (let i = 0; i < lines.length; i++) {
+    const [a, b, ok] = lines[i];
+    ul.insertAdjacentHTML("beforeend", `<li class="${ok ? "ok" : ""}"><span>${a}</span><span>${b}</span></li>`);
+    meter.style.width = `${((i + 1) / lines.length) * 100}%`;
+    await wait(650);
+  }
+}
+const chip = (pins) => `<svg viewBox="0 0 26 22"><rect x="7" y="3" width="12" height="16" rx="1.5"/><path d="${Array.from({ length: pins }, (_, i) => `M3 ${6 + i * 3.4}H7M19 ${6 + i * 3.4}H23`).join("")}"/></svg>`;
+const row = (name, desc, pins = 2, add = false) => `<div class="row${add ? " add" : ""}">${chip(pins)}<div><b>${name}</b><span>${desc}</span></div></div>`;
+
+const SCENES = {
+  altium: {
+    title: "Board.PrjPcb · Schematic",
+    menu: ["File", "Edit", "View", "Project", "Place", "Design", "Tools", "Reports", "ecadlib", "Window", "Help"],
+    canvas: `<rect class="w" x="8" y="8" width="384" height="244" rx="2"/><path class="w" d="M262 222H392M262 222V252M330 222V252"/>
+      <g><rect class="s" x="40" y="60" width="54" height="70" rx="2"/><path class="w" d="M28 72H40M28 86H40M28 100H40M28 114H40M94 72H106M94 86H106M94 100H106M94 114H106"/><text class="t" x="40" y="54">U1</text></g>
+      <g><rect class="s" x="150" y="44" width="10" height="26" rx="1"/><text class="t" x="164" y="60">R1</text><path class="w" d="M155 44V32M155 70V86H106"/></g>
+      <g><path class="w" d="M146 150H164M146 156H164M155 150V114H106M155 156V172"/><text class="t" x="168" y="156">C1</text></g>
+      <path class="w" d="M28 72H18V200H150M150 172V200"/>
+      <g class="new" id="wfnew"><rect class="s hi" x="250" y="60" width="66" height="96" rx="2"/><path class="w hi" d="M238 74H250M238 88H250M238 102H250M238 116H250M238 130H250M238 144H250M316 74H328M316 88H328M316 102H328M316 116H328M316 130H328M316 144H328"/><text class="t" x="250" y="54">U2 · TPS62133</text><path class="w" d="M238 74H200V114H155"/></g>`,
+    panel: `<h4>Components</h4><div class="search">Search</div><div id="rows">${row("LM358DR", "Op amp, SOIC-8", 4)}${row("RC0603FR-0710KL", "10k 1% 0603")}${row("GRM155R71C104KA88D", "100n 16V 0402")}</div>`,
+    steps: [
+      ["Check the project's BOM", "ecadlib > Check project BOM reads the open project and marks what your library already has."],
+      ["Add a part by MPN", "ecadlib > Add part from MPN asks for the part number, and the manufacturer if you know it."],
+      ["ecadlib finds or draws it", "Official KiCad libraries, EasyEDA, then the datasheet reader. A release check runs before anything lands."],
+      ["Place it from Components", "The part arrives in your library (a DbLib or Altium 365) with symbol, footprint and parameters."],
+    ],
+    async play(k) {
+      const ours = $$(".menubar > span", win)[8];
+      const menu = ["Add part from MPN…", "Check project BOM", "-", "Open review queue"];
+      if (k === 0) {
+        await click(ours); let m = openMenu(ours, menu); await wait(400);
+        const item = m.children[1]; item.classList.add("hot"); await click(item); closeMenus();
+        dialog("ecadlib · Check project BOM", `<div class="big">24 lines</div><ul class="log"></ul><div class="meter"><i></i></div><div class="btns"><span>Later</span><span class="primary">Fill the library now</span></div>`);
+        await log([["already in your library", "21", true], ["a source can supply", "2"], ["needs a footprint", "1"]]);
+        await click($(".btns .primary", wfdlg)); closeDialog(); m = null;
+      } else if (k === 1) {
+        await click(ours); const m = openMenu(ours, menu); await wait(400);
+        m.children[0].classList.add("hot"); await click(m.children[0]); closeMenus();
+        dialog("ecadlib · Add part from MPN", `<label>MPN<div class="in" id="in1"></div></label><label>Manufacturer (optional)<div class="in" id="in2"></div></label><div class="btns"><span>Cancel</span><span class="primary">OK</span></div>`);
+        await point($("#in1", wfdlg)); await type($("#in1", wfdlg), "TPS62133RGTR");
+        await point($("#in2", wfdlg)); await type($("#in2", wfdlg), "Texas Instruments");
+        await click($(".btns .primary", wfdlg));
+      } else if (k === 2) {
+        dialog("ecadlib · TPS62133RGTR", `<ul class="log"></ul><div class="meter"><i></i></div>`);
+        await log([["KiCad official libraries", "no match"], ["EasyEDA", "symbol, 17 pins", true], ["datasheet reader", "VQFN-16, 3 × 3 mm", true], ["IPC-7351B footprint", "17 pads", true], ["release check", "ready", true]]);
+        await wait(700); closeDialog();
+      } else {
+        $("#rows", wfpanel).insertAdjacentHTML("afterbegin", row("TPS62133RGTR", "Buck converter, VQFN-16", 6, true));
+        await wait(500);
+        const r = $(".row.add", wfpanel); await point(r);
+        const [x, y] = rel(r); wfdrop.textContent = "TPS62133RGTR"; wfdrop.hidden = false;
+        wfdrop.style.left = `${x - 60}px`; wfdrop.style.top = `${y - 10}px`;
+        await wait(60);
+        const target = $("#wfnew", wfcanvas); const [tx, ty] = rel(target);
+        wfdrop.style.left = `${tx - 50}px`; wfdrop.style.top = `${ty - 10}px`;
+        cursor.style.left = `${tx}px`; cursor.style.top = `${ty}px`; await wait(950);
+        wfdrop.hidden = true; target.classList.add("on"); await wait(2200);
+      }
+    },
+  },
+  kicad: {
+    title: "board.kicad_pcb · PCB Editor",
+    menu: ["File", "Edit", "View", "Place", "Route", "Inspect", "Tools", "Preferences", "Help"],
+    canvas: `<rect class="w" x="40" y="30" width="320" height="200" rx="10"/>
+      <circle class="w" cx="56" cy="46" r="5"/><circle class="w" cx="344" cy="46" r="5"/><circle class="w" cx="56" cy="214" r="5"/><circle class="w" cx="344" cy="214" r="5"/>
+      <g>${[0, 1, 2, 3].map((i) => `<rect class="pad" x="${86 + i * 10}" y="70" width="6" height="12" rx="1"/><rect class="pad" x="${86 + i * 10}" y="102" width="6" height="12" rx="1"/>`).join("")}<rect class="w" x="82" y="64" width="44" height="56" rx="2"/></g>
+      <g><rect class="pad" x="170" y="150" width="8" height="8" rx="1"/><rect class="pad" x="186" y="150" width="8" height="8" rx="1"/><rect class="pad" x="170" y="176" width="8" height="8" rx="1"/><rect class="pad" x="186" y="176" width="8" height="8" rx="1"/></g>
+      <path class="w hi" d="M89 114V138H174V150M119 114V128H190V150"/>
+      <g class="new" id="wfnew">${[0, 1, 2, 3].map((i) => `<rect class="pad" x="${246 + i * 13}" y="82" width="7" height="15" rx="1"/><rect class="pad" x="${246 + i * 13}" y="126" width="7" height="15" rx="1"/>`).join("")}<rect class="w hi" x="240" y="76" width="55" height="71" rx="2"/><path class="rat" d="M249 141L190 158M262 141L194 180M126 76L249 82"/></g>`,
+    panel: `<h4>Libraries</h4><div class="search">Filter</div><div id="rows">${row("Device", "KiCad built-in")}${row("Package_SO", "KiCad built-in", 4)}${row("Resistor_SMD", "KiCad built-in")}</div>`,
+    steps: [
+      ["Install the library package", "Plugin and Content Manager > Install from File. Your library arrives as PCM_ecadlib, with 3D models."],
+      ["Run ecadlib: add part", "Tools > External Plugins > ecadlib: add part, right in the PCB editor."],
+      ["Type the part number", "ecadlib runs the librarian and writes the part into the project's own library tables."],
+      ["The footprint is placed", "It drops onto the board with its ratsnest, and the symbol is ready in the schematic."],
+    ],
+    async play(k) {
+      const tools = $$(".menubar > span", win)[6];
+      if (k === 0) {
+        dialog("Plugin and Content Manager", `<ul class="log"><li><span>ecadlib library</span><span>symbols · footprints · 3D</span></li></ul><div class="btns"><span class="primary">Install from File…</span></div>`);
+        await click($(".btns .primary", wfdlg));
+        $(".log", wfdlg).insertAdjacentHTML("beforeend", `<li class="ok"><span>ecadlib-mylib.zip</span><span>installed</span></li>`);
+        await wait(900); closeDialog();
+        $("#rows", wfpanel).insertAdjacentHTML("afterbegin", row("PCM_ecadlib", "7 parts · installed", 4, true));
+        await wait(1300);
+      } else if (k === 1) {
+        await click(tools); const m = openMenu(tools, ["Update PCB from Schematic", "Footprint Editor", "-", "External Plugins ▸"]);
+        await wait(400); m.children[3].classList.add("hot"); await point(m.children[3]);
+        const sub = document.createElement("div"); sub.className = "menu";
+        const a = m.getBoundingClientRect(), w = win.getBoundingClientRect();
+        sub.style.left = `${Math.min(a.right - w.left - 8, w.width - 220)}px`; sub.style.top = `${a.bottom - w.top - 34}px`;
+        sub.innerHTML = "<div>ecadlib: add part</div>"; win.appendChild(sub); await wait(300);
+        sub.children[0].classList.add("hot"); await click(sub.children[0]); closeMenus();
+      } else if (k === 2) {
+        dialog("ecadlib: add part", `<label>MPN<div class="in" id="in1"></div></label><ul class="log"></ul><div class="meter"><i></i></div><div class="btns"><span>Cancel</span><span class="primary">Add</span></div>`);
+        await point($("#in1", wfdlg)); await type($("#in1", wfdlg), "LM358DR");
+        await click($(".btns .primary", wfdlg));
+        await log([["footprint", "Package_SO:SOIC-8", true], ["symbol", "LM358, 2 units", true], ["project tables", "${KIPRJMOD}/ecadlib", true]]);
+        await wait(600); closeDialog();
+      } else {
+        const target = $("#wfnew", wfcanvas); await point(target);
+        target.classList.add("on"); await wait(2600);
+      }
+    },
+  },
+};
+
+function setScene(name) {
+  const S = SCENES[name];
+  wf.scene = name;
+  $$(".wftabs [role=tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.scene === name)));
+  $("#wintitle").textContent = S.title;
+  menubar.innerHTML = S.menu.map((m) => `<span class="${m === "ecadlib" ? "ours" : ""}">${m}</span>`).join("");
+  wfcanvas.innerHTML = S.canvas;
+  wfpanel.innerHTML = S.panel;
+  closeMenus(); closeDialog(); wfdrop.hidden = true;
+  wfsteps.innerHTML = S.steps.map(([h, p], k) => `<li data-k="${k}"><span class="bar"></span><p class="mono n">step ${k + 1}</p><h3>${h}</h3><p>${p}</p></li>`).join("");
+}
+function markStep(k) {
+  $$("li", wfsteps).forEach((li, i) => { li.classList.toggle("on", i === k); li.classList.toggle("done", i < k); });
+}
+async function runScene(name, from = 0) {
+  const run = ++wf.run;
+  setScene(name);
+  try {
+    if (from > 0) { wf.fast = true; for (let k = 0; k < from; k++) await SCENES[name].play(k); wf.fast = false; }
+    for (let k = from; k < 4; k++) {
+      markStep(k);
+      await SCENES[name].play(k);
+      await wait(500);
+    }
+    markStep(4);
+    await wait(2500);
+    if (run === wf.run && !still.matches) runScene(name === "altium" ? "kicad" : "altium");
+  } catch (e) { wf.fast = false; if (!(e instanceof Stop)) throw e; }
+}
+async function stillScene(name) {
+  ++wf.run; setScene(name); wf.fast = true;
+  for (let k = 0; k < 4; k++) await SCENES[name].play(k);
+  wf.fast = false; closeDialog(); markStep(3);
+}
+$$(".wftabs [role=tab]").forEach((b) => b.addEventListener("click", () => (still.matches ? stillScene(b.dataset.scene) : runScene(b.dataset.scene))));
+wfsteps.addEventListener("click", (e) => { const li = e.target.closest("li"); if (li && !still.matches) runScene(wf.scene, +li.dataset.k); });
+wfplay.addEventListener("click", () => { wf.paused = !wf.paused; wfplay.textContent = wf.paused ? "play" : "pause"; wfplay.setAttribute("aria-pressed", String(!wf.paused)); });
+if (still.matches) { wfplay.hidden = true; stillScene("altium"); }
+else {
+  setScene("altium");
+  new IntersectionObserver(([e]) => {
+    wf.visible = e.isIntersecting;
+    if (wf.visible && !wf.started) { wf.started = true; runScene("altium"); }
+  }, { threshold: 0.3 }).observe(win);
+}
+
+/* ---------- illustrate: every drawing and box is inked in the first time it comes into view ---------- */
+const INK_MS = 1700;
+function inkSvg(svg) {
+  const lines = $$("path:not(.dash), line, polyline, rect, circle", svg).filter((el) => !el.closest(".sig"));
+  lines.forEach((el, i) => { el.setAttribute("pathLength", "1"); el.style.animationDelay = `${Math.min(i * 14, 900)}ms`; });
+  svg.classList.add("inking");
+  setTimeout(() => { svg.classList.remove("inking"); lines.forEach((el) => { el.removeAttribute("pathLength"); el.style.animationDelay = ""; }); }, INK_MS + 1000);
+}
+function inkBox(el) {
+  const r = el.getBoundingClientRect(), rad = parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0;
+  if (r.width < 4 || r.height < 4) return;
+  const svg = svgEl("svg", { class: "inkbox", "aria-hidden": "true", viewBox: `0 0 ${r.width} ${r.height}`, preserveAspectRatio: "none" });
+  svgEl("rect", { x: 0.5, y: 0.5, width: r.width - 1, height: r.height - 1, rx: Math.max(0, rad - 0.5), pathLength: 1 }, svg);
+  el.classList.add("inkhost");
+  el.appendChild(svg);
+  setTimeout(() => { el.classList.add("inked"); }, INK_MS - 300);
+  setTimeout(() => { svg.remove(); el.classList.remove("inkhost", "inked"); }, INK_MS + 700);
+}
+if (!still.matches) {
+  const ink = new IntersectionObserver((es) => es.forEach((e) => {
+    if (!e.isIntersecting) return;
+    ink.unobserve(e.target);
+    const t = e.target;
+    if (t.matches("[data-fig], #fig-board")) { const svg = t.querySelector(":scope > svg"); if (svg) inkSvg(svg); }
+    else if (t.id === "wfcanvas") inkSvg(t);
+    else inkBox(t);
+  }), { rootMargin: "0px 0px -10% 0px" });
+  $$("[data-fig], #fig-board, #wfcanvas, .plate, .card, .step, .fpwrap, .win, .term, .code").forEach((el) => ink.observe(el));
+}
