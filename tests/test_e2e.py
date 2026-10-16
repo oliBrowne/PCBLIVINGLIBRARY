@@ -418,7 +418,7 @@ def test_mcp_server_over_stdio():
 
 # ---------------------------------------------------------------- 3. again, and after a crash
 LOGS = re.compile(r"(^|/)datasheet/api_log\.jsonl$")          # append-only API request log (held parts are asked again)
-REFRESHED = re.compile(r"^(ecadlib\.toml\.proposed|lib/[^/]+/librarian_state\.json|lib/parts/review\.(md|csv))$")
+REFRESHED = re.compile(r"^(ecadlib\.toml\.proposed|lib/[^/]+/librarian_state\.json|lib/parts/review\.(md|csv|html))$")
 
 
 def test_second_run_changes_nothing():

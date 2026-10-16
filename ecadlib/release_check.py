@@ -276,21 +276,43 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
     return rows
 
 
+def _split(failures):
+    """A report row's "rule: msg; rule: msg" back into reasons (messages may contain "; " themselves)."""
+    return [x for x in re.split(r"; (?=(?:%s): )" % "|".join(("files", "pins", "footprint", "height", "fields", "parity", "verify")),
+                                failures or "") if x]
+
+
 def write_report(rows, stem, plan=""):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["name", "status"])
         w.writeheader(); w.writerows(rows)
+    from . import messages as M
     held = [r for r in rows if r["status"] == "held"]
-    md = [f"# Release check{f' - `{plan}`' if plan else ''}", "",
-          f"{len(rows)} parts: {len(rows) - len(held)} ready ({sum(r['result'] == 'allowed' for r in rows)} by --allow), {len(held)} held.", "",
-          "| Part | Status | Symbol from | Footprint from | Height | Failures |", "|---|---|---|---|---|---|"]
-    md += [f"| {r['name']} | {r['result']} | {r['symbol_source']} | {r['footprint_source']} | {r['height_mm']} | "
-           f"{r['failures'].replace('|', '/') or '-'} |" for r in rows]
+    allowed = sum(r["result"] == "allowed" for r in rows)
+    where = Path(str(plan)).parent.name if plan else ""
+    md = [f"# Release check{': ' + where if where else ''}", "",
+          f"**{M.plural(len(rows), 'part')}: {M.counts(r['status'] for r in rows)}.**"
+          + (f" {allowed} of the ready ones {'was' if allowed == 1 else 'were'} released anyway." if allowed else ""), "",
+          ("Held parts stay out of the library until they are fixed or released anyway." if held
+           else "Nothing is held."), ""]
+    if held:
+        md += [f"## Held ({len(held)})", ""]
+        for r in held:
+            md += [f"### {r['name']}", ""]
+            for e in M.explain_all(_split(r["failures"])):
+                md.append(f"- {e['text']}" + (f" {e['note']}" if e["note"] else "") + f"  \n  **Next:** {e['fix']}")
+            md.append("")
+    rest = [r for r in rows if r["status"] != "held"]
+    if rest:
+        md += [f"## Not held ({len(rest)})", "", "| Part | Status | Symbol from | Footprint from | Height |", "|---|---|---|---|---|"]
+        md += [f"| {r['name']} | {M.status_word('allowed' if r['result'] == 'allowed' else r['status'])} | {M.source_word(r['symbol_source'])} | "
+               f"{M.source_word(r['footprint_source'])} | {r['height_mm'] + ' mm' if r['height_mm'] else '-'} |" for r in rest]
+        md.append("")
     warned = [r for r in rows if r["warnings"]]
     if warned:
-        md += ["", "## Warnings (not held)", ""] + [f"- **{r['name']}**: {r['warnings']}" for r in warned]
+        md += ["## Warnings (not held)", ""] + [f"- **{r['name']}**: {M.clean(r['warnings'])}" for r in warned]
     stem.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return stem
 
