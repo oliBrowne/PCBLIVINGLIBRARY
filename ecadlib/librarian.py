@@ -35,7 +35,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
-               footprint_gen as F, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
+               footprint_gen as F, fp_share as FS, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from . import sheetsafe as SS
@@ -184,6 +184,7 @@ class Run:
         for d in ("PcbLib", "SchLib", "KiCad"):
             (self.models / d).mkdir(parents=True, exist_ok=True)
         self.api_key, self.written, self.gen_step = api_key, {}, gen_step
+        self.syms, self.hashes = {}, {}               # SchLib path -> symbol dict; kicad_mod -> geometry hash
         self._kicad, self._kicad_args = None, (kicad_cache, refresh_index)
         self.reader, self.waiting = reader, []          # datasheet reader; parts waiting for its batch
 
@@ -197,12 +198,17 @@ class Run:
 
     # ---- writers: everything goes through kicad_import's converters
     def put_fp(self, st, text, name, source, http=None, height=None, height_src="", spec=None):
-        stem = AL.file_stem(name)
-        pcb = self.models / "PcbLib" / f"{stem}.PcbLib"
-        if str(pcb) in self.written:
-            st["footprint"] = dict(self.written[str(pcb)], notes=[f"shared with {self.written[str(pcb)]['by']}"])
+        """One file per footprint, shared only by parts whose pads are the same (ecadlib/fp_share.py)."""
+        bom_name = name
+        name, pcb, same, h = FS.pick(self.written, self.models, name, text, source, st["name"], self.out, self.hashes)
+        renamed = {"renamed_from": bom_name} if name != bom_name else {}
+        if same is not None:
+            st["footprint"] = {**{k: v for k, v in same.items() if k not in ("renamed_from", "chosen")},
+                               "notes": [f"shared with {same['by']}"], "name": name, "hash": h, **renamed}
+            self._relink(st, bom_name, name)
             return
-        notes = []
+        pcb, stem = Path(pcb), AL.file_stem(name)
+        notes = [f"named {name}: footprint {bom_name} is another part's, with other pads"] if renamed else []
         fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes)
         try:
             K.add_body(fp, t, http, height, False, notes, gen_step=self.gen_step, spec=spec,      # a part-specific
@@ -212,15 +218,32 @@ class Run:
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
         kmod.write_text(text, encoding="utf-8")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
-        st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"]}
+        st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
+                           "name": name, "hash": h, **renamed}
         self.written[str(pcb)] = st["footprint"]
+        self._relink(st, bom_name, name)
+
+    def _relink(self, st, bom_name, name):
+        """A footprint renamed after this part's symbol was written: point the symbol's footprint link at it."""
+        rec = st.get("symbol") or {}
+        path = str(self.out / rec["file"]) if rec.get("file") else ""
+        sym = self.syms.get(path)
+        if name == bom_name or rec.get("by") != st["name"] or rec.get("chosen") or not sym or sym.get("footprint") != bom_name:
+            return
+        self.syms[path] = sym = dict(sym, footprint=name)
+        AL.write_schlib(path, [sym])
+        rec.setdefault("notes", []).append(f"footprint link {name} (the BOM's {bom_name} is another footprint)")
 
     def put_sym(self, st, sym, source, notes=()):
         path = self.models / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib"
+        fr = st.get("footprint") or {}
+        if fr.get("renamed_from") and sym.get("footprint") == fr["renamed_from"]:     # footprint renamed (fp_share)
+            sym = dict(sym, footprint=fr["name"])
         if str(path) in self.written:
             st["symbol"] = dict(self.written[str(path)], notes=[f"shared with {self.written[str(path)]['by']}"])
             return
         AL.write_schlib(path, [sym])
+        self.syms[str(path)] = sym
         st["symbol"] = {"source": source, "file": self.rel(path), "notes": list(notes), "by": st["name"]}
         self.written[str(path)] = st["symbol"]
 
@@ -484,6 +507,9 @@ def apply_state(item, st, ln):
             item[k]["file"] = st[k]["file"]
             if k == "footprint":
                 item[k]["kicad_mod"] = st[k].get("kicad_mod")
+                was = item[k].get("bom_ref") or item[k].get("ref")
+                if st[k].get("name") and st[k].get("renamed_from") == was:     # another footprint has the BOM's name
+                    item[k]["bom_ref"], item[k]["ref"] = was, st[k]["name"]
     item["source"] = {k: (st.get(k) or {}).get("source") for k in ("symbol", "footprint")}
     par, fields = _par(item), {}
     if ln.get("datasheet", "").startswith("http"):
@@ -587,7 +613,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
             it["footprint"]["ref"] = AL.lib_name(it["name"])
         fpr, st = _fingerprint(it, ln, row), state.get(it["name"])
         redo = refresh is not None and (not refresh or it["name"] in refresh)
-        if st and st.get("key") == fpr and _done(st, out) and not redo:
+        if st and st.get("key") == fpr and _done(st, out) and not redo and not FS.unchecked_share(st.get("footprint")):
             st["skipped"] = True
             for k in ("symbol", "footprint"):
                 r.written.setdefault(str(out / st[k]["file"]), st[k])

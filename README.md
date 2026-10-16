@@ -686,6 +686,8 @@ Triages the BOM, converts parts already in your `--lib` libraries, and for anyth
 
 Outputs in `out/librarian/`: `models/`, a `plan.json` for `altium365 push` recording each part's source, `review.md/.csv` (what came from where and what needs a person), and the release-check report. Re-running skips finished parts unless `--refresh` is given.
 
+**Shared footprint files (`fp_share.py`).** Two BOM lines with the same footprint name (`SOIC-14` on a 3.9 mm and a 5.3 mm part) share one `.PcbLib` only when the pads and courtyard are the same (`dedupe`'s geometry hash). Otherwise the later part gets its own name: the real package name (`SOIC-14_5.3x10.2mm_P1.27mm`; `<BOM name>_<real name>` when it does not start with the BOM name), else `<BOM name>_<part>`. That name becomes the item's `footprint.ref` (the BOM's stays in `footprint.bom_ref`), the footprint inside the `.PcbLib`, the symbol's footprint link, the Altium 365 footprint item and the KiCad export name. Re-runs never rename a file a part already has. A part an older librarian gave a shared file without comparing pads is resolved again.
+
 The release check runs at the end and works on any plan. A part is **held** (and `altium365 push` skips it) unless: every pin has a pad and every pad a pin (mechanical and mounting pads excepted); the footprint passes `footprint_check` (KiCad-library parts: pad overlap, courtyard and pin 1); a 3D height is present and plausible for the package; Manufacturer, MPN, datasheet link and Description are filled in; the files exist and read back; and no datasheet-reader output is unreviewed. `--allow PART` overrides the failures present at that moment and is recorded in the plan; missing or unreadable files cannot be overridden.
 
 Live run on the sample BOM (2026-10-14): 11 of 14 ready, 3 held. TYPE-C-31-M-12 has no symbol and KiCad's footprint has intentionally overlapping same-net pads. FTSH-105 has no footprint, LCSC number or datasheet. X322512MSB4SI has no crystal symbol chosen automatically. **Not tested live:** EasyEDA (blocked from this sandbox; the format assumptions are listed in `easyeda_convert.py`) and the datasheet step (no API key).
@@ -1250,10 +1252,14 @@ a key and without `--replay` nothing is sent: parts that need Claude are reporte
 Checked here (no API key, so no live accuracy number yet): KiCad's footprints and symbols score 331/331 against
 themselves; the scorer fails a 0.65 mm-pitch QFN built in place of a 0.5 mm one (pitch), a mirrored footprint (pin 1),
 a missing exposed pad (pad count). The whole set through the `kicad` source (KiCad libraries served from local
-clones; GitLab rate-limited the live crawl): 295 parts resolved, 246 pass; every failure is explained: 29
-connectors get no symbol by MPN, and 20 parts got another part's footprint because both BOM lines name the same
-package (`SOIC-14` for a 3.9 mm and a 5.3 mm body): the librarian keeps one footprint per BOM footprint name. The
-report flags these (`footprint shared with`). Estimate mode on the whole set: ~$0.60 per part on Opus 5.5
+clones; GitLab rate-limited the live crawl): first 295 parts resolved, 246 pass, with 29 connectors without a
+symbol by MPN and 20 parts that got another part's footprint because both BOM lines named the same package (`SOIC-14`
+for a 3.9 mm and a 5.3 mm body). Fixed (`fp_share.py`, below), and the eval BOM now gives chip passives and diodes
+their R/C/L/D designator (a `U` line is not a capacitor to any source): 331 resolved, 302 pass, the 29 connectors
+are the only failures. Shared footprints are still flagged (`footprint shared with`); they now have the same pads.
+The `standard` source alone (offline, no key): 115 of 331 resolved, 101 with the right footprint, 57 pass (the rest
+are ICs, which get a footprint but no symbol by design); chip 36/36, diode 19/25, sot 15 resolved and right; 14
+wrong footprints, mostly bare `SO-n` / `SOIC-n` names on non-JEDEC bodies (the default 3.9 mm SOIC is taken). Estimate mode on the whole set: ~$0.60 per part on Opus 5.5
 synchronous, mostly because PDFs that cannot be downloaded here are guessed at 30 pages.
 
 ## 30. `stdparts.py`: standard parts without Claude

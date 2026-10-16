@@ -278,7 +278,7 @@ def _line_of(item, plan_items=None):
         if pi:
             p = _par(pi)
             ln = {"mpn": p.get("Manufacturer Part Number", ""), "manufacturer": p.get("Manufacturer", ""),
-                  "value": p.get("Value", ""), "footprint": (pi.get("footprint") or {}).get("ref", ""),
+                  "value": p.get("Value", ""), "footprint": (pi.get("footprint") or {}).get("bom_ref") or (pi.get("footprint") or {}).get("ref", ""),
                   "description": pi.get("description", ""), "datasheet": p.get("ComponentLink2URL", ""),
                   "lcsc": p.get("Supplier Part Number 1", "") if p.get("Supplier 1", "").upper() in ("LCSC", "JLCPCB") else ""}
     ln.setdefault("mpn", item.get("mpn", ""))
@@ -303,7 +303,8 @@ def _find_plan_item(plan_items, item):
     ln = (item.get("change") or {}).get("line") or {}
     if not hits and not ln.get("mpn") and ln.get("value"):       # a bare passive: matched by value like the librarian
         same = [pi for pi in plan_items if not _par(pi).get("Manufacturer Part Number") and _par(pi).get("Value") == ln["value"]]
-        hits = [pi for pi in same if (pi.get("footprint") or {}).get("ref") == ln.get("footprint")] or same
+        hits = [pi for pi in same if ln.get("footprint") in ((pi.get("footprint") or {}).get("ref"),
+                                                             (pi.get("footprint") or {}).get("bom_ref"))] or same
     return next((h for h in hits if norm_manufacturer(_par(h).get("Manufacturer")) == mfr), hits[0] if hits else None)
 
 

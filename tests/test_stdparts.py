@@ -214,3 +214,12 @@ if __name__ == "__main__":
     import sys
     from tests import run_all
     sys.exit(run_all.main(["test_stdparts."]))
+
+
+def test_pin_removed_variants_are_not_the_standard_package():
+    # the eval set (kicad-v1) found SOIC-14-16, SOIC-16W-12 and SOIC-8-N7 resolved as the full SOIC: wrong pads
+    for t in ("SOIC-8-N7", "SOIC-14-16", "SOIC-16W-12"):
+        name, why = SP.footprint_for([t])
+        assert name is None and "pins removed" in why, (t, name, why)
+    for t, want in (("SOIC-8-150mil", "SOIC-8_3.9x4.9mm_P1.27mm"), ("LQFP-48-7x7mm", "LQFP-48_7x7mm_P0.5mm")):
+        assert SP.footprint_for([t])[0] == want, t
