@@ -79,18 +79,25 @@ def test_mcp_answer_with_an_undecodable_file_name_keeps_the_server_running():
         assert lines[0]["result"]["isError"] and "St\udcfcckliste.csv" in lines[0]["result"]["content"][0]["text"]
 
 
-def test_demo_works_without_tomllib():
+def test_demo_and_rules_work_without_tomllib():
     """Python 3.10 (requires-python >= 3.10) has no tomllib: the demo wrote ecadlib.toml and then could not read it
-    ("reading TOML needs Python 3.11+"), so `ecadlib demo` failed on every 3.10 install."""
+    ("reading TOML needs Python 3.11+"), and `ecadlib init` failed the same way. tomli is now a 3.10 dependency."""
+    try:
+        import tomli  # noqa: F401
+    except ImportError:
+        print("skip  tomli not installed")
+        return
     saved = sys.modules.get("tomllib", "absent")
     sys.modules["tomllib"] = None                          # `import tomllib` now raises ImportError, as on 3.10
     try:
+        from ecadlib import rules as RU
+        assert RU.parse_text('[sources]\norder = ["standard"]\n')["sources"]["order"] == ["standard"]
         with tempfile.TemporaryDirectory() as d:
             ws = Workspace(Path(d) / "demo", offline=True)
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 res = FR.build_demo(ws, "altium", log=lambda *a: None)
                 again = FR.build_demo(ws, "altium", log=lambda *a: None)       # re-running reuses the folder
-            assert (ws.root / "ecadlib_rules.json").is_file() and not (ws.root / "ecadlib.toml").exists()
+            assert (ws.root / "ecadlib.toml").is_file()
             assert ws.rules()["sources"]["order"] == ["standard"]
             assert res["parts"] == again["parts"] == 7 and res["ready"] == 6, res
     finally:
