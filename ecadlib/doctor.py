@@ -196,6 +196,25 @@ def check_workspace(ws):
     return _c("workspace", "OK", f"{p.resolve()}: writable")
 
 
+def check_formats(ws):
+    """Files written by another ecadlib version (ecadlib/migrate.py): older -> `ecadlib migrate`; newer -> upgrade."""
+    from . import migrate as MG
+    try:
+        rows = MG.scan(ws, max_depth=4)
+    except OSError as e:
+        return _c("file formats", "WARN", f"could not scan {ws} ({e})")
+    new = [r for r in rows if r["state"] in ("new", "error")]
+    old = [r for r in rows if r["state"] == "old"]
+    if new:
+        r = new[0]
+        return _c("file formats", "FAIL", r.get("error") or f"{r['path']}: made by ecadlib {r['made_by'] or '?'} "
+                  f"({r['kind']} schema {r['version']})", "upgrade ecadlib (pip install -U ecadlib)")
+    if old:
+        return _c("file formats", "WARN", f"{len(old)} file(s) from an older ecadlib ({', '.join(sorted({r['kind'] for r in old}))})",
+                  "they are migrated when used; `ecadlib migrate` does it now (backups in .ecadlib_backup/)")
+    return _c("file formats", "OK", f"{len(rows)} versioned file(s), all current")
+
+
 def _lib_summary(p):
     try:
         sym = sum(1 for _ in p.glob("*.kicad_sym")) + sum(1 for _ in p.glob("*/*.kicad_sym"))
@@ -234,6 +253,8 @@ def run(workspace="ecadlib_workspace", libs=(), rules_path=None, environ=None):
     checks += check_ai(rules, environ)
     checks += check_keys(rules, environ)
     checks.append(check_workspace(workspace))
+    if Path(workspace).is_dir():
+        checks.append(check_formats(workspace))
     checks += check_paths(libs, rules)
     return {"ok": not any(c["level"] == "FAIL" for c in checks), "checks": checks}
 

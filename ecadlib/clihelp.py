@@ -67,6 +67,10 @@ EXAMPLES = {
     "kicad-dblib": ["ecadlib kicad-dblib ws/library/plan.json -o ws/kicad --name mylib --export"],
     "export-parts": ["ecadlib export-parts ws/library/plan.json --format xlsx -o parts.xlsx"],
     "stdparts": ["ecadlib stdparts resolve \"SOIC-8\"", "ecadlib stdparts coverage my_bom.csv"],
+    "migrate": ["ecadlib migrate ws --check             # exit 1 when files need migrating or are from a newer ecadlib",
+                "ecadlib migrate ws --dry-run", "ecadlib migrate ws                     # backups in .ecadlib_backup/"],
+    "rebuild": ["ecadlib rebuild ws/library --check     # offline; exit 1 on drift",
+                "ecadlib rebuild ws/library --check --keep /tmp/rb --json", "ecadlib rebuild ws/library"],
 }
 
 
