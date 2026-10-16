@@ -6,6 +6,8 @@
     ecadlib eval sets                 the test sets shipped with ecadlib (cases per family)
     ecadlib eval show [--set NAME] [--family F]   the cases of a set
     ecadlib eval build-set --symbols DIR --footprints DIR [-o FILE]   rebuild a set from KiCad library checkouts
+    ecadlib eval gate [--update]      CI accuracy gate: the whole set offline vs a committed baseline (gate.py)
+    ecadlib eval golden [--update]    golden snapshots of the KiCad / Altium files we write (golden.py)
 
 See ecadlib/eval/runner.py (run, modes), score.py (fields, tolerances) and build_set.py (where the cases come from)."""
 import argparse, json, sys
@@ -22,6 +24,9 @@ def main(argv=None):
     if argv and argv[0] == "build-set":
         from . import build_set
         return build_set.main(argv[1:])
+    if argv and argv[0] in ("gate", "golden"):
+        from . import gate, golden
+        return {"gate": gate, "golden": golden}[argv[0]].main(argv[1:])
     ap = argparse.ArgumentParser(prog="ecadlib eval", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run the pipeline on a test set and score every part")
@@ -50,6 +55,8 @@ def main(argv=None):
     c = sub.add_parser("compare", help="diff two reports")
     c.add_argument("a"); c.add_argument("b")
     c.add_argument("--json", action="store_true")
+    sub.add_parser("gate", help="CI accuracy gate: the whole set offline against the committed baseline (--update rewrites it)")
+    sub.add_parser("golden", help="golden snapshots of the KiCad / Altium files (--update rewrites them)")
     sub.add_parser("sets", help="list the shipped test sets")
     s = sub.add_parser("show", help="list the cases of a set")
     s.add_argument("--set", default="kicad-v1"); s.add_argument("--family")

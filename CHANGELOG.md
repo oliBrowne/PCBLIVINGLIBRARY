@@ -9,6 +9,7 @@ a minor release may change command-line options and file formats.
 
 ### Added
 
+- `ecadlib eval gate` (`ecadlib/eval/gate.py`): CI accuracy gate (own job `accuracy-gate`): the 331-case eval set offline with standard parts and a committed synthetic replay pack (`eval/replay/kicad-v1.json.gz`), checked against `eval/baselines/kicad-v1.json` (325/331); fails when a family drops more than 1 % or a passing case breaks; about 20 s. `ecadlib eval golden` (`ecadlib/eval/golden.py`): normalised fingerprints of the KiCad and Altium files for the testpack, the demo and 96 package specs (`eval/golden/*.txt`, no uuids, GUIDs or dates), checked by `tests/test_evalgate.py`; `--update` regenerates them for one reviewed commit.
 - `ecadlib kicad-pcm` (`kicad_pcm.py`): the library as a KiCad Plugin and Content Manager package (zip for "Install from File...", optional `repository.json`/`packages.json` with `--base-url`), metadata checked against KiCad's PCM schema; symbols point at `PCM_<lib>`, 3D models at `${KICADn_3RD_PARTY}`; `--kicad 7` writes KiCad 7 files; `--plugin` packages a pcbnew action plugin "ecadlib: add part". `ecadlib altium-pkg` (`altium_pkg.py`): Altium hand-off folder with a `.LibPkg` (compile to IntLib), a DelphiScript install project and a relative DbLib. Workspace `tool_packages` and MCP tool of the same name. Installed and checked in real KiCad 7.0.11; not run in Altium.
 
 ### Fixed
