@@ -3,13 +3,12 @@ waiting for sign-off), each held reason as a sentence plus a next step, the cros
 both values when they disagree, the datasheet link (and page when known), what reading the datasheet cost and which
 model read it, and a small footprint picture. Read-only; used by the web UI (Workspace.library_parts).
 
-Held-reason wording comes from ecadlib.messages when it is installed (the shared voice, docs/ui-voice.md); the small
-table here is the fallback so this module never depends on it."""
+Held-reason wording comes from ecadlib.messages (the shared voice, docs/ui-voice.md)."""
 import json, re
 from pathlib import Path
 
-STATUS = {"ready": "ready", "held": "held", "awaiting_approval": "waiting for sign-off", "duplicate": "duplicate",
-          "existing": "already in Altium 365", "deleted_in_workspace": "deleted in Altium 365"}
+from . import messages as M
+
 FIELD = {"pin_count": "pin count", "pitch": "pin pitch", "body_length": "body length", "body_width": "body width",
          "lead_span": "lead span", "ep_length": "exposed pad length", "ep_width": "exposed pad width",
          "has_ep": "exposed pad", "package_type": "package type", "pins": "pin numbers", "pin_names": "pin names"}
@@ -22,72 +21,11 @@ SVG_MAX = 60_000                                  # a footprint picture bigger t
 
 
 # ------------------------------------------------------------------ held reasons in plain words
-def _fallback(raw):
-    """(code, text, fix) for one hold reason string of the release check ("rule: message")."""
-    rule, _, msg = raw.partition(": ")
-    msg = re.sub(r" \((cannot be overridden|not covered by --allow)\)$", "", msg)
-    m = re.match(r"no (symbol|footprint) model", msg)
-    if rule == "files" and m:
-        k = m.group(1)
-        return (f"no_{k}", f"No {k} was found for this part.",
-                f"Pick a {k} from the candidates" + (", or generate one from the datasheet drawing." if k == "footprint"
-                                                       else ", or draw one in your library and run Fill missing parts again."))
-    if rule == "files":
-        return ("file_unreadable", f"A library file is missing or does not read back ({msg}).",
-                "Run Fill missing parts again; if it stays, pick another candidate.")
-    if rule == "pins":
-        return ("pin_mismatch", f"The symbol pins and footprint pads do not line up: {msg}.",
-                "Pick a footprint or symbol whose pins match, or a candidate with a pin map.")
-    if rule == "footprint":
-        return ("footprint_check", f"The footprint failed a design check: {msg}.",
-                "Pick another footprint, or generate one from the datasheet drawing.")
-    if rule == "parity":
-        p = _PAR.match(msg)
-        what = p and f"{p.group('what')} (KiCad {p.group('kicad')}, Altium {p.group('altium')})" or msg
-        return ("parity_mismatch", f"The KiCad and Altium files of this part differ: {what}.",
-                "Run Fill missing parts again for this part; if it stays, pick another footprint.")
-    if rule == "height":
-        return ("height", f"The 3D model height looks wrong: {msg}.",
-                "Check the package height in the datasheet, then release anyway if it is right.")
-    if rule == "fields" and msg == "no datasheet link":
-        return ("no_datasheet", "The part has no datasheet link.",
-                "Add a datasheet URL to the BOM line, or release anyway once you have checked the part.")
-    if rule == "fields":
-        return ("field_empty", f"A part field is empty: {msg}.", "Fill it in the BOM, then run Fill missing parts again.")
-    if rule == "verify":
-        return ("verify", f"Someone needs to check this by hand: {msg}.",
-                "Check it against the datasheet, then release anyway.")
-    if rule == "approval":
-        return ("approval", f"Waiting for sign-off: {msg}.", "An approver signs it off in step 2.")
-    if raw.startswith("cross-check disagrees"):
-        return ("cross_check_disagrees", "Two reads of the datasheet disagree.", "Check the drawing and pick one, or release anyway.")
-    return ("other", raw[:1].upper() + raw[1:] + ("" if raw.endswith(".") else "."),
-            "Look at the part, then pick a candidate or release anyway.")
-
-
-def _messages():
-    try:
-        from . import messages
-    except ImportError:
-        return None
-    return messages if hasattr(messages, "held") else None
-
-
-def reason(raw, **values):
-    """One hold reason -> {code, text, fix, detail}. detail is the machine wording, kept for reports and JSON."""
-    code, text, fix = _fallback(raw)
-    m = _messages()
-    if m is not None:
-        try:
-            got = m.held(raw, **values) if not hasattr(m, "from_reason") else m.from_reason(raw, **values)
-            if isinstance(got, dict):
-                code, text, fix = got.get("code") or code, got.get("text") or text, got.get("fix") or fix
-            elif isinstance(got, (tuple, list)) and len(got) >= 2 and got[0]:
-                text, fix = got[0], got[1]
-                code = got[2] if len(got) > 2 and got[2] else code
-        except Exception:                          # a wording gap must never break the page
-            pass
-    return {"code": code, "text": text, "fix": fix, "detail": raw}
+def reason(raw):
+    """One hold reason -> {code, text, fix, detail} in the shared voice (ecadlib.messages); detail is the machine
+    wording, kept for reports and JSON."""
+    e = M.explain(raw)
+    return {"code": e["code"], "text": e["text"] + (f" ({e['note']})" if e.get("note") else ""), "fix": e["fix"], "detail": raw}
 
 
 # ------------------------------------------------------------------ cross-check, parity, datasheet, cost
@@ -128,15 +66,9 @@ def cross_check(rec, sidecar=None):
     out = {"status": st, "label": label, "rows": rows, "summary": rec.get("summary") or ""}
     if st == "disagreed" and rows:
         r = rows[0]
-        values = {"field": r["label"], "first": r["first"], "second": r["second"], "page": r["page"]}
-        both = f"{r['first']} vs {r['second']}"
-        out["reason"] = reason("cross-check disagrees: " + out["summary"], **values)
-        out["reason"]["text"] = (f"The two datasheet reads disagree on {r['label']} ({both})." if r["second_is"] == "second read"
-                                 else f"The datasheet and the standard package table disagree on {r['label']} ({both}).") \
-            if out["reason"]["code"] == "cross_check_disagrees" else out["reason"]["text"]
-        if out["reason"]["code"] == "cross_check_disagrees":
-            out["reason"]["fix"] = (f"Check page {r['page']} of the datasheet" if r["page"] else "Check the package drawing in the datasheet") + \
-                " and pick a footprint that matches, or release anyway."
+        text, fix = M.held("crosscheck.disagree", field=r["label"], first=r["first"], second=r["second"],
+                           other=r["second_is"], page=r["page"])
+        out["reason"] = {"code": "crosscheck.disagree", "text": text, "fix": fix, "detail": "cross-check disagrees: " + out["summary"]}
     return out
 
 
@@ -214,6 +146,19 @@ def _pads(svg):
     return len(re.findall(r'class="pad', svg or ""))
 
 
+def _decisions(approvals):
+    """Recorded decisions without an approvals.json policy: who approved last (a later reject takes it back)."""
+    last = {}
+    for a in approvals or []:
+        if isinstance(a, dict) and a.get("who"):
+            last[a.get("key") or a["who"]] = a
+    ok = [a["who"] for a in last.values() if a.get("decision") == "approve"]
+    no = [a["who"] for a in last.values() if a.get("decision") == "reject"]
+    if not ok and not no:
+        return None
+    return {"required": False, "met": None, "approved_by": ok, "rejected_by": no, "missing": [], "stale": []}
+
+
 # ------------------------------------------------------------------ the cards
 def cards(out, items, pictures=True):
     """out: the librarian folder of a BOM (plan.json, models/, datasheet/); items: the plan. -> {parts, counts, cost}."""
@@ -227,7 +172,7 @@ def cards(out, items, pictures=True):
         cc = cross_check(it.get("cross_check"), sc)
         reasons = []
         for h in it.get("hold_reasons") or []:
-            if cc and cc.get("reason") and h.startswith("cross-check"):
+            if cc and cc.get("reason") and h.startswith("cross-check"):     # said once, with both values
                 continue
             reasons.append(reason(h))
         if cc and cc["status"] == "disagreed" and cc.get("reason"):
@@ -237,8 +182,7 @@ def cards(out, items, pictures=True):
         appr = it.get("approval") or None
         if st == "awaiting_approval" and appr:
             for m in appr.get("missing") or []:
-                reasons.append({"code": "approval", "text": f"Waiting for sign-off: {m}.",
-                                "fix": "An approver signs it off here.", "detail": f"approval: {m}"})
+                reasons.append(reason(f"awaiting approval: {m}"))
         pc = cost["by_part"].get(name) or {}
         svg = _picture(out, it) if pictures else None
         url = datasheet_url(it)
@@ -246,7 +190,7 @@ def cards(out, items, pictures=True):
             ((sc or {}).get("pin_table") or {}).get("page")
         parts.append({
             "part": name, "folder": it.get("folder") or "", "description": it.get("description") or "",
-            "status": st, "status_label": STATUS.get(st, st.replace("_", " ")),
+            "status": st, "status_label": M.status_word(st),
             "allowed": bool(it.get("allow")), "duplicate_of": it.get("duplicate_of"),
             "reasons": reasons,
             "symbol": {"ref": (it.get("symbol") or {}).get("ref"), "found": bool((it.get("symbol") or {}).get("file")),
@@ -258,7 +202,8 @@ def cards(out, items, pictures=True):
             "datasheet": {"url": url, "page": page} if url else None,
             "cost": {"usd": round(pc.get("usd", 0.0), 4), "models": [m for m in pc.get("models") or [] if m],
                      "answers": pc.get("answers", 0)} if pc else None,
-            "approval": {k: appr.get(k) for k in ("required", "met", "approved_by", "missing", "stale")} if appr else None,
+            "approval": {k: appr.get(k) for k in ("required", "met", "approved_by", "missing", "stale")} if appr
+            else _decisions(it.get("approvals")),
             "tried": (it.get("librarian") or {}).get("tried") or [],
         })
     counts = {"parts": len(parts), "ready": sum(p["status"] == "ready" for p in parts),
