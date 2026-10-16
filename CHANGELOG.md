@@ -18,6 +18,7 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Cross-check: a pad-table (custom) read counts a numbered exposed pad as a pin (package_schema), the standard table does not; such reads of EP packages (WSON, LFCSP, TQFN, MSOP-EP) were held as "pin count 13 vs 12". The eval gate's replay pack now also answers the second read.
 - `sexpr.courtyard_bbox` ignored `fp_arc` / `fp_circle` courtyards: round cans (TO-18, TO-46) got a 2 x 2 mm box off to one side, also in the eval set's references (3 rebuilt; `tht-LM134H`, `tht-SFH216` now pass the gate). `footprint_adv`: pad names `H…` / `S…` were mounting / shield pads (outside a detected JEDEC grid), so audio-jack sleeve contacts, rotary-encoder switch pins S1/S2 and H/S ball rows lost their pins; only `MP`, `SH` (KiCad's names) and `MH`/`MTG`/`MOUNT`/`MECH`/`NPTH` are non-pins now.
 - `ecadlib dblib`: the Excel `.DbLib` names its workbook relative to itself (`DatabasePathRelative=1`), so the folder can move.
 - Web UI: a step bar (1. Check a BOM, 2. Fill the library, 3. Send to Altium, Review queue, Footprints, Status, Settings), a "what happened, what next" line after every action, a Status card (`GET /api/status`) and an in-page setup check (`GET /api/doctor`, admin in team mode), the librarian's progress in its own card, a note telling team viewers which role they need, and `tests/test_ui_browser.py` (Chromium via Playwright at desktop and phone width; skips without it).

@@ -1298,11 +1298,13 @@ python -m ecadlib eval golden --update [--group specs]   # deliberate change: re
 
 **Gate** (CI job `accuracy-gate`, Python 3.11 and 3.13): `eval run` on all 331 cases with sources `standard,datasheet`,
 no network (every request refused and counted) and no keys, the datasheet step answered from the committed replay pack
-`ecadlib/eval/replay/kicad-v1.json.gz` (114 KB, one gzip JSON). The pack is **synthetic**, not a model's reading: the
+`ecadlib/eval/replay/kicad-v1.json.gz` (154 KB, one gzip JSON). The pack is **synthetic**, not a model's reading: the
 answer a perfect reader would give, in the strict output schema the reader validates: printed min/nom/max dimensions
 for the 154 packages in the standard table (gullwing, no-lead, QFP, chip; the IPC generator builds the land) and the
 land-pattern table (`pad_table`) copied from the reference pads for the rest (BGA, connectors, THT, power), with the
-case's pins. So the gate measures the pipeline (reader checks, spec conversion, generators, pad tables, symbol writer,
+case's pins; and the perfect answer to the cross-check's second read (`crosscheck.py`: the same critical numbers and
+pins), so `[datasheet] cross_check = "auto"` runs as shipped (82 reads agree with the standard table, 171 pad-table reads
+compare pin count and pins only and stay "unchecked", none held). So the gate measures the pipeline (reader checks, spec conversion, generators, pad tables, symbol writer,
 librarian, scorer), not a model. It fails when a family's pass rate drops more than `--tol` (default 0.01) below the
 baseline or when any case that passes in the baseline fails; new passes are listed (`--update` locks them in).
 Committed baseline: 327/331 (bga 25/25, chip 36/36, connector 33/35, diode 25/25, power 15/15, qfn 38/40, qfp 25/25,
