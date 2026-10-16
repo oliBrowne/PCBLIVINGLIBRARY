@@ -173,13 +173,18 @@ def build(out, name=NAME, log=print):
 def checklist(s):
     n, win, tables = s["name"], WIN_DIR, ", ".join(s.get("tables") or [])
     rows = "\n".join(f"| {p['part']} | {p['footprint']} | {p['symbol']} | {p['expect']} |" for p in s["parts"])
-    held = "".join(f"\n* **{k}** was held by the release check: {'; '.join(v or [])}. It is left out of the exports; "
-                   f"tell us." for k, v in s["held"].items())
+    from . import messages as M
+    held = "".join(f"\n* **{k}** is held, so it is left out of the exports (tell us): "
+                   + " ".join(e["text"] for e in M.explain_all(v or [])) for k, v in s["held"].items())
+    sts = [p["status"] for p in s["parts"]]
+    py = s.get("parity") or {}
     return f"""# ecadlib test pack: what to open and what you should see
 
+**{M.plural(len(sts), 'part')}: {M.counts(sts)}.** KiCad and Altium match for {py.get('match', '?')} of them.
+Next: go through steps 1-3 below and report anything that does not match (a screenshot and the step number are enough).
+
 This folder was written by `ecadlib testpack` with no network and no API keys. Nothing in it has been opened in
-Altium Designer, Altium 365 or KiCad by ecadlib's own tests (see the end of this file for what was checked); please go
-through the steps below and report anything that does not match (a screenshot and the step number are enough).
+Altium Designer, Altium 365 or KiCad by ecadlib's own tests (the end of this file says what was checked).
 
 ## The six parts
 
@@ -240,7 +245,7 @@ The KiCad files are in KiCad 8 format: KiCad 7 refuses to open them (it will say
 
 * the release check passed for every part not listed as held above (pins match pads, footprint checks, 3D height,
   fields, files read back);
-* KiCad / Altium parity (`ecadlib parity`, report `parity.md`): {s.get('parity', {}).get('match', '?')} of {len(s['parts'])} parts
+* KiCad and Altium match (`ecadlib parity`, report `parity.md`): {s.get('parity', {}).get('match', '?')} of {len(s['parts'])} parts
   read back the same from the KiCad and the Altium files (pads, drills, paste, courtyard, 3D model, pins, fields), and
   the KiCad database rows match the DbLib rows;
 * `tests/test_e2e.py` (run in ecadlib's own test suite) loads a pack like this one with KiCad 7's kicad-cli and pcbnew

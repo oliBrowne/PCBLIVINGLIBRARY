@@ -630,7 +630,9 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     for it in items:
         status = it.get("status", "ready")
         if status == "held" and not include_held:
-            rep["skipped"].append({"part": it["name"], "why": "held: " + "; ".join(it.get("hold_reasons", []))})
+            from . import messages as M        # "says": the same reasons in plain words, for dialogs (KiCad plugin)
+            rep["skipped"].append({"part": it["name"], "why": "held: " + "; ".join(it.get("hold_reasons", [])),
+                                   "says": [{k: e[k] for k in ("code", "text", "fix")} for e in M.explain_all(it.get("hold_reasons"))]})
             continue
         sname, notes = kname(it["name"]), []
         row = {"part": it["name"], "symbol_name": sname, "status": status, "symbol": None, "footprint": None, "notes": notes}

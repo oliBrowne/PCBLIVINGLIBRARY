@@ -69,7 +69,8 @@ TOOLS = [
                     "libraries, then EasyEDA, then the datasheet reader), write the Altium .SchLib/.PcbLib models and "
                     "the release plan, and run the release check. Slow (minutes for a big BOM); finished parts are "
                     "skipped on a re-run unless refresh is set. Returns ready/held counts and a review row per part "
-                    "saying what still needs a person.",
+                    "saying what still needs a person: `says` holds each reason as a plain sentence (`text`) and the "
+                    "next step (`fix`); show those to the user, keep `code` for logic.",
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"},
                                     "sources": {"type": "array", "items": {"type": "string", "enum": ["kicad", "easyeda", "standard", "datasheet"]},
@@ -88,7 +89,8 @@ TOOLS = [
                                     "unallow": {"type": "array", "items": {"type": "string"}}}}},
     {"name": "held_parts",
      "description": "List the parts the release check held in the librarian's plan for a BOM: what is missing (symbol, "
-                    "footprint) and why each is held. Use part_candidates / choose_part to fix one.",
+                    "footprint) and why each is held: `reasons` has a plain sentence (`text`) and the next step (`fix`) "
+                    "per reason, to show the user as written. Use part_candidates / choose_part to fix one.",
      "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "part_candidates",
      "description": "Ranked symbol or footprint candidates for one plan part (official KiCad library, the indexed local "
@@ -547,7 +549,11 @@ def handle(ws, msg):
             user_error = isinstance(e, (ValueError, KeyError, FileExistsError, FileNotFoundError, PermissionError))
             if not user_error:                            # a bug: keep the traceback; a wrong id / path is the caller's
                 traceback.print_exc(file=sys.stderr)
-            msg = (e.args[0] if isinstance(e, KeyError) and e.args else str(e)) if user_error else f"{type(e).__name__}: {e}"
+            if user_error:
+                msg = e.args[0] if isinstance(e, KeyError) and e.args else str(e)
+            else:                                         # one line what went wrong, one line what to do (shared voice)
+                from . import messages as M
+                msg = "\n".join(M.friendly_error(e))
             result = {"content": [{"type": "text", "text": msg}], "isError": True}
     else:
         return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}}
