@@ -257,8 +257,11 @@ class Client:
             if h.get("anthropic-beta"):
                 rec["beta"] = h["anthropic-beta"]
             try:
-                r = (requests.post(url, headers=h, json=body, timeout=self.timeout) if method == "POST"
-                     else requests.get(url, headers=h, timeout=self.timeout))
+                from .term import waiting            # "waiting on Claude (model call)  12 s" on the terminal
+                with waiting("Claude (model call)" if method == "POST" and "/messages" in url and "batches" not in url
+                             else "Claude API"):
+                    r = (requests.post(url, headers=h, json=body, timeout=self.timeout) if method == "POST"
+                         else requests.get(url, headers=h, timeout=self.timeout))
             except requests.RequestException as e:
                 err = APIError(f"API request failed: {type(e).__name__}: {str(e)[:200]}", retryable=retry_on is None)
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))

@@ -295,6 +295,33 @@ def write_report(rows, stem, plan=""):
     return stem
 
 
+def print_result(rows, plan, stem, t=None):
+    """The terminal view: one row per part (status, name, the reason in plain words), then the summary."""
+    from . import messages as M, term as TM
+    t = t or TM.Term()
+    table = []
+    for r in rows:
+        st = {"pass": "ready", "allowed": "ready"}.get(r["result"], r["status"])
+        word = "released anyway" if r["result"] == "allowed" else None
+        reasons = [x for x in (r["failures"] or "").split("; ") if x] if r["status"] == "held" else []
+        why = M.explain_all(reasons)
+        first = why[0]["text"] + (f" (+{len(why) - 1} more)" if len(why) > 1 else "") if why else ""
+        table.append([t.status(st, word), r["name"], first])
+        if t.verbose:                       # -v: every reason, each with its next step
+            for k, e in enumerate(why):
+                table += ([["", "", e["text"]]] if k else []) + [["", "", f"fix: {e['fix']}"]]
+    t.table(table)
+    held = [r["name"] for r in rows if r["status"] == "held"]
+    nxt = [(f"ecadlib review {plan}", "go through the held parts one by one")] if held else []
+    if any(r["status"] == "awaiting_approval" for r in rows):
+        nxt.append((f"ecadlib approve {plan} status", "who still has to sign off"))
+    if not held:
+        nxt.append((f"ecadlib kicad-export {plan} -o kicad --name mylib", "write the KiCad library"))
+    t.summary(M.counts(r["status"] for r in rows) + (f"  (held: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''})" if held else ""),
+              written=[(str(stem.with_suffix(".md")), "release check report"), (str(plan), "library plan, statuses updated")],
+              next=nxt)
+
+
 def main(argv=None):
     import json
     ap = argparse.ArgumentParser(description="Check every plan item before it goes to Altium 365; hold back what fails")
@@ -326,11 +353,7 @@ def main(argv=None):
         print(json.dumps({"plan": str(plan), "report": str(stem.with_suffix(".md")),
                           "counts": {s: sum(r["status"] == s for r in rows) for s in st}, "rows": rows}, indent=2, default=str))
         return 2 if held else 0
-    for r in rows:
-        print(f"  {r['result']:<8} {r['name']:<28} {r['failures'][:110]}")
-    other = {s: sum(r["status"] == s for r in rows) for s in ("awaiting_approval", "duplicate")}   # approvals / dedupe
-    print(f"{sum(r['status'] == 'ready' for r in rows)} ready, {held} held"
-          + "".join(f", {n} {s.replace('_', ' ')}" for s, n in other.items() if n) + f" -> {plan}; report {stem.with_suffix('.md')}")
+    print_result(rows, plan, stem)
     return 2 if held else 0
 
 
