@@ -1,6 +1,7 @@
 """One command for everything:  ecadlib <command> [options]   (or: python -m ecadlib <command>)
 
-    ecadlib init      [--from DIR ...] [--yes]    scan your libraries, write ecadlib.toml (naming, parameters, layers, density)
+    ecadlib init      [--yes] [--tool T] [--lib DIR] [--from DIR ...]   set up: tool, libraries, workspace, sources -> ecadlib.toml, doctor
+    ecadlib demo      [-o DIR]                    a small library from a bundled BOM, offline, no keys (start here)
     ecadlib rules     check|show                  validate the rules file / print the defaults
     ecadlib ui        --lib <kicad libs>          local web UI in your browser (--team: shared server with sign-in)
     ecadlib team      add-user|set-role|reset-password|remove|list|setup   users and roles for `ecadlib ui --team`; setup: Docker + HTTPS
@@ -49,7 +50,8 @@ one-line error. ECADLIB_LIB, ECADLIB_WORKSPACE and ECADLIB_CONFIG are defaults f
 import importlib, sys
 
 COMMANDS = {
-    "init": ("ecadlib.rules_infer", "scan existing libraries and write ecadlib.toml"),
+    "init": ("ecadlib.rules_infer", "set up ecadlib: tool, library folders, workspace, sources; learn your conventions -> ecadlib.toml"),
+    "demo": ("ecadlib.firstrun:demo_main", "build a small library from a bundled sample BOM, offline, no API keys"),
     "rules": ("ecadlib.rules", "check or show the library rules"),
     "ui": ("ecadlib.ui.server", "local web UI"),
     "team": ("ecadlib.team", "users and roles for the team web server (ecadlib ui --team)"),
@@ -112,13 +114,22 @@ def main(argv=None):
         print(f"ecadlib: unknown command {argv[0]!r}. Commands: {', '.join(COMMANDS)}", file=sys.stderr)
         return 2
     args, notes = env_defaults(argv[0], argv[1:])            # ECADLIB_LIB / ECADLIB_WORKSPACE when the flag is not given
+    from . import firstrun as FR
+    args, more = FR.config_defaults(argv[0], args)          # then ecadlib.toml [setup] libs / workspace
+    notes += more
+    bad = FR.preflight(argv[0], args)                        # a --lib that does not exist, an unwritable -o
+    if bad:
+        print(f"ecadlib {argv[0]}: {bad[0]}\n  hint: {bad[1]}", file=sys.stderr)
+        return 2
     if debug and notes:
         print(f"ecadlib {argv[0]}: " + ", ".join(notes), file=sys.stderr)
     sys.argv = [f"ecadlib {argv[0]}"] + args                 # so argparse usage lines show the right command
     mod, _, fn = cmd[0].partition(":")
     from .rules import RulesError
     try:
-        return getattr(importlib.import_module(mod), fn or "main")(args)
+        from .clihelp import installed                       # descriptions + examples in every -h
+        with installed(argv[0], cmd[1]):
+            return getattr(importlib.import_module(mod), fn or "main")(args)
     except RulesError as e:                                  # a bad ecadlib.toml: say which key, no traceback
         if debug:
             raise

@@ -123,6 +123,9 @@ DEFAULTS["agent"].update({"git_host": "auto", "gitlab_project": "", "gitlab_toke
 # [notify]: webhooks (ecadlib.notify); [providers]: order and choice of part sources incl. plugins (ecadlib.plugins)
 DEFAULTS["notify"] = {"targets": [], "retries": 3, "timeout_s": 10, "backoff_s": 2.0}
 DEFAULTS["providers"] = {"order": []}
+# [setup]: written by the `ecadlib init` setup questions (ecadlib.firstrun). libs / workspace are the defaults for
+# --lib / --workspace (after the command line and ECADLIB_LIB / ECADLIB_WORKSPACE); empty = as before.
+DEFAULTS["setup"] = {"tool": "both", "libs": [], "workspace": ""}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
@@ -326,6 +329,9 @@ def validate(raw, where="ecadlib.toml"):
             _err(where, "datasheet.ladder", f"has {m!r}: must be model ids such as claude-haiku-5-5, cheapest first")
     if "ladder" in ds and isinstance(ds["ladder"], list) and not ds["ladder"]:
         _err(where, "datasheet.ladder", "must name at least one model")
+    st = raw.get("setup") or {}
+    if "tool" in st and st["tool"] not in ("altium", "kicad", "both"):
+        _err(where, "setup.tool", f"= {st['tool']!r}: must be altium, kicad or both")
     if (raw.get("release") or {}).get("approvals"):
         from .approvals import normalize_policy
         try:
@@ -820,6 +826,9 @@ HELP = {
               "token_env (json only); retries with backoff, never stops the agent",
     "providers": "Part sources for triage / librarian / UI, in order, including plugins (ecadlib.providers entry points); "
                  "[] = each command's built-in default; `ecadlib plugins list` shows what is installed",
+    "setup": "Written by `ecadlib init`: the tool you use, your library folders (the default --lib) and the workspace "
+             "(the default --workspace); relative paths start at this file's folder",
+    "setup.tool": "altium | kicad | both: which outputs `ecadlib init` and `ecadlib demo` point you at",
     "symbols.order": "group order on each side; groups: power analog power_out ground ep reset clock debug usb adc other_in uart i2c spi can eth ports other_out nc",
 }
 
