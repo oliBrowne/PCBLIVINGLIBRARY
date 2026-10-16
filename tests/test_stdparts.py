@@ -210,6 +210,19 @@ def test_coverage_counts_bom_lines():
         assert (len(cov), len(fp), len(both)) == (7, 6, 5), [(r["designator"], r["footprint"], r["symbol"]) for r in cov]
 
 
+def test_polarized_capacitors_get_nothing():
+    """A tantalum / polymer / electrolytic cap is not a chip capacitor: "1206" on a KEMET T491A (EIA 3216-18 case)
+    used to give C_1206_3216Metric (other pads, no + mark) and the unpolarized C symbol (review rvK)."""
+    for mpn in ("T491A106K016AT", "TAJA106K016RNJ", "TPSB476K010R0250", "293D106X9016A2TE3", "EEE-FK1V101P", "6TPE330MIL"):
+        r = SP.resolve(["1206"], "C", mpn)
+        assert r["footprint"] is None and r["symbol"] is None, (mpn, r)
+    r = SP.resolve(["C_1206_3216Metric"], "CP", "X1")                       # kind CP: no chip land, no C_Polarized either
+    assert r["footprint"] is None and r["symbol"] is None, r
+    assert SP.part_kind("Capacitors", "1206", "CAP POLYMER 100UF") == "CP"
+    for mpn in ("GRM188R71H104KA93D", "CL21A106KAYNNNE", "C0603C104K5RACTU", "CC0603KRX7R9BB104", "C1608X7R1H104K080AA"):
+        assert SP.resolve(["0603"] if "21" not in mpn else ["0805"], "C", mpn)["footprint"], mpn     # MLCCs still resolve
+
+
 if __name__ == "__main__":
     import sys
     from tests import run_all
