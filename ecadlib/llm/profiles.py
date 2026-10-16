@@ -27,6 +27,13 @@ _C = dict(tier="frontier", pdf=True, vision=True, json_schema=True, context=1_00
 BUILTIN = [
     (r"claude-(haiku|sonnet|opus)-4-5", dict(_C, context=200_000)),
     (r"claude-.*", _C),
+    # OpenAI's 2026 names (context and PDF input assumed as for gpt-5; correct with [ai.profiles] if wrong)
+    (r"gpt-[56](\.\d+)?-luna.*", dict(tier="small", pdf=True, vision=True, json_schema=True, context=400_000,
+                                     max_tokens_param="max_completion_tokens")),
+    (r"gpt-[56](\.\d+)?-terra.*", dict(tier="mid", pdf=True, vision=True, json_schema=True, context=400_000,
+                                      max_tokens_param="max_completion_tokens")),
+    (r"gpt-6.*|gpt-5(\.\d+)?-sol.*", dict(tier="frontier", pdf=True, vision=True, json_schema=True, context=400_000,
+                                         max_tokens_param="max_completion_tokens")),
     (r"gpt-5(\.\d+)?-nano.*", dict(tier="small", pdf=True, vision=True, json_schema=True, context=400_000,
                                    max_tokens_param="max_completion_tokens")),
     (r"gpt-5(\.\d+)?-mini.*", dict(tier="mid", pdf=True, vision=True, json_schema=True, context=400_000,
@@ -39,11 +46,27 @@ BUILTIN = [
                         max_tokens_param="max_completion_tokens")),
     (r"gpt-4\.1-nano.*|gpt-4o-mini.*", dict(tier="small", pdf=True, vision=True, json_schema=True, context=128_000)),
     (r"gpt-4\.1.*|gpt-4o.*", dict(tier="mid", pdf=True, vision=True, json_schema=True, context=128_000)),
-    (r"gemini-[\d.]+-pro.*", dict(tier="frontier", pdf=False, vision=True, json_schema=True, context=1_000_000)),
+    (r"gemini-[\d.]+-(pro|argon).*", dict(tier="frontier", pdf=False, vision=True, json_schema=True, context=1_000_000)),
     (r"gemini-[\d.]+-flash-lite.*", dict(tier="small", pdf=False, vision=True, json_schema=True, context=1_000_000)),
     (r"gemini-.*flash.*", dict(tier="mid", pdf=False, vision=True, json_schema=True, context=1_000_000)),
     (r"deepseek-(chat|reasoner|v3.*|r1)", dict(tier="mid", pdf=False, vision=False, json_schema=False, context=64_000)),
+    (r"deepseek-flash.*", dict(tier="mid", pdf=False, vision=True, json_schema=False, context=64_000)),
+    (r"deepseek-v4.*", dict(tier="mid", pdf=False, vision=False, json_schema=False, context=64_000)),
 ]
+# List prices, $ per million tokens (input, output), standard tier, prompts up to 200K, for models called directly
+# (not through OpenRouter, whose /models reports its own). Checked 2026-10-16 against benchlm.ai and promptunit.ai
+# (third-party price trackers); vendors change these, so [ai.profiles."<model>"] price_in / price_out wins.
+# Claude's prices are datasheet.PRICES. Known changes: gemini-4-argon $4/$20 from 2026-12-01, gemini-3.8-flash
+# $1.50/$7.50 from 2027-01-01; DeepSeek bills half these rates off-peak.
+PRICES = {
+    "gpt-6-astra": (10.0, 50.0), "gpt-6.1-sol": (2.0, 10.0), "gpt-6-sol": (2.0, 10.0), "gpt-6-luna": (0.10, 0.50),
+    "gpt-5.6-terra": (2.0, 12.0), "gpt-5.6-luna": (0.20, 1.20), "gpt-5.5": (5.0, 30.0), "gpt-5.4": (2.50, 15.0),
+    "gpt-5.4-mini": (0.75, 4.50), "gpt-5.4-nano": (0.20, 1.25), "gpt-5.2": (1.75, 14.0), "gpt-5.1": (1.25, 10.0),
+    "gpt-5": (1.25, 10.0), "gpt-5-mini": (0.25, 2.0), "gpt-5-nano": (0.05, 0.40),
+    "gemini-4-argon": (2.0, 10.0), "gemini-3.1-pro-preview": (2.0, 12.0), "gemini-3.8-flash": (0.75, 3.75),
+    "gemini-3.5-flash": (1.50, 9.0), "gemini-3-flash-preview": (0.50, 3.0), "gemini-3.1-flash-lite": (0.25, 1.50),
+    "gemini-2.5-pro": (1.25, 10.0), "gemini-2.5-flash": (0.30, 2.50), "gemini-2.5-flash-lite": (0.10, 0.40),
+    "deepseek-v4-pro": (1.32, 3.96), "deepseek-flash": (0.30, 1.20)}
 VISION_NAME = re.compile(r"vl\b|vl[-:]|vision|llava|pixtral|minicpm-v|gemma-?3|qwen2\.5-?vl|llama-?4|moondream|-v\b", re.I)
 LOCAL_FAMILY = re.compile(r"llama|llava|pixtral|minicpm|moondream|qwen|mistral|mixtral|gemma|phi|deepseek|granite|command-r|olmo|smollm|nemotron|yi|glm", re.I)
 SIZE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*b\b", re.I)
@@ -60,7 +83,10 @@ def builtin(model):
     m = bare(model)
     for rx, prof in BUILTIN:
         if re.fullmatch(rx, m):
-            return dict(prof), f"built-in ({rx})"
+            got = dict(prof)
+            if m in PRICES:
+                got["price_in"], got["price_out"] = PRICES[m]
+            return got, f"built-in ({rx})"
     if LOCAL_FAMILY.search(m):
         sz = SIZE.search(m.replace(":", " ").replace("-", " "))
         b = float(sz.group(1)) if sz else None

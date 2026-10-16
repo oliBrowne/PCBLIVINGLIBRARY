@@ -1550,8 +1550,12 @@ model endpoint you configure, with the key you export, and there is no telemetry
   byte-for-byte the ones ecadlib sent before this layer existed (a test compares them with hashes taken from the old code).
 * **openai-compatible**: any `/v1/chat/completions` server: OpenAI, OpenRouter, Google's OpenAI-compatible Gemini
   endpoint, and local servers (Ollama, LM Studio, vLLM, llama.cpp). Presets fill in the usual `base_url` and key
-  variable. A local server needs no key and costs $0 in the cost ledger; other unknown prices show tokens only
-  (OpenRouter's `/models` prices are picked up when `detect` is on).
+  variable. A local server needs no key and costs $0 in the cost ledger. Common OpenAI, Gemini and DeepSeek models
+  have built-in list prices; other unknown prices show tokens only (OpenRouter's `/models` prices are picked up when
+  `detect` is on).
+
+What it costs: [docs/costs.md](docs/costs.md) has an estimate per job (datasheet read, 50-line BOM, 500-part library,
+visual check) for every model above, and `ecadlib costs` prints the same for the model in your `ecadlib.toml`.
 
 ```toml
 # ecadlib.toml: pick ONE [ai] block (keys come from environment variables; only the variable's NAME goes here)
