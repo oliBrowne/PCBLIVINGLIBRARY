@@ -1286,6 +1286,50 @@ MPN does not settle); chip 36/36, diode 21 resolved, sot 15. It answers only wha
 body any more (an earlier version gave 115 answers, 14 of them wrong, from bare `SO-14` / `SOIC-8` / `TDFN-12-1EP`). Estimate mode on the whole set: ~$0.60 per part on Opus 5.5
 synchronous, mostly because PDFs that cannot be downloaded here are guessed at 30 pages.
 
+### Accuracy can't silently drop: `eval gate` and `eval golden` (`ecadlib/eval/gate.py`, `golden.py`)
+
+```
+python -m ecadlib eval gate                     # whole set, offline, vs ecadlib/eval/baselines/kicad-v1.json (exit 1 on a drop)
+python -m ecadlib eval gate --update            # deliberate change: rewrite the baseline, review the diff, commit it
+python -m ecadlib eval gate --make-replay       # rebuild the replay pack (after a set or standard-table change)
+python -m ecadlib eval golden                   # rebuild testpack / demo / package_specs outputs, compare fingerprints
+python -m ecadlib eval golden --update [--group specs]   # deliberate change: rewrite ecadlib/eval/golden/*.txt, commit
+```
+
+**Gate** (CI job `accuracy-gate`, Python 3.11 and 3.13): `eval run` on all 331 cases with sources `standard,datasheet`,
+no network (every request refused and counted) and no keys, the datasheet step answered from the committed replay pack
+`ecadlib/eval/replay/kicad-v1.json.gz` (114 KB, one gzip JSON). The pack is **synthetic**, not a model's reading: the
+answer a perfect reader would give, in the strict output schema the reader validates: printed min/nom/max dimensions
+for the 154 packages in the standard table (gullwing, no-lead, QFP, chip; the IPC generator builds the land) and the
+land-pattern table (`pad_table`) copied from the reference pads for the rest (BGA, connectors, THT, power), with the
+case's pins. So the gate measures the pipeline (reader checks, spec conversion, generators, pad tables, symbol writer,
+librarian, scorer), not a model. It fails when a family's pass rate drops more than `--tol` (default 0.01) below the
+baseline or when any case that passes in the baseline fails; new passes are listed (`--update` locks them in).
+Committed baseline: 325/331 (bga 25/25, chip 36/36, connector 33/35, diode 25/25, power 15/15, qfn 38/40, qfp 25/25,
+soic 30/30, sot 40/40, tht 28/30, tssop 30/30), 20-22 s here. The six failures: footprint_adv's pad-table checks reject
+two Neutrik jacks (no pad 1: pads `G`, `S`, `T`; overlapping pads) and two `_ThermalVias` QFNs whose copied reference
+lists the exposed pad's pieces twice at one place or over the pin pads (a reader would give the land once); and the
+set's reference courtyard for two round TO cans (`TO-18-2_Window`, `TO-46-3`) is a 2 x 2 mm box off to one side, which
+looks like an extraction problem of the set builder with arc-drawn courtyards (not investigated further). A real model's accuracy is still `eval run --record` / `--replay` with
+a key (not run here: no key).
+
+**Golden snapshots** (`tests/test_evalgate.py`, in the test job): normalised fingerprints of the files we write for the
+six testpack parts, the demo BOM and 96 package specs (all `package_specs/*.json`, `advanced/*.json` and every 20th
+standard-table entry, written the librarian's way: `convert_footprint` -> `write_pcblib`), in
+`ecadlib/eval/golden/{testpack,demo,specs}.txt` (390 KB of text). One line per thing that matters: KiCad footprint
+properties and every pad (more than 16 pads: pad 1 in full, the others grouped by shape/size/drill/layers with count,
+centre box and hash), graphics per layer as count + bounding box + hash; symbol fields and every pin; Altium pads in mm,
+every footprint / body / component parameter and every SchLib pin; DbLib and KiCad database rows. Not in it: uuids,
+generator stamps, Altium UNIQUEIDs, GUIDs, MODELID / checksum and the file header's DATE / TIME (Altium files are read
+back with `altium_lib`'s reader, so the container's timestamps never enter; a test writes the same footprint at two
+`SOURCE_DATE_EPOCH`s: different bytes, same fingerprint). A change fails with a diff such as
+`~ changed: spec/SOT-23.kicad_mod` / `-(pad 1 smd roundrect (at -0.9375 -0.95) (size 1.475 0.6) ...` / `+(... (size 1.485 0.6) ...`.
+
+**Updating** after a deliberate change (a better generator, a new exporter field): run the command with `--update`,
+read `git diff ecadlib/eval/baselines ecadlib/eval/golden`, and commit it in the same commit as the code that caused it,
+saying why in the message. Never update to make an unexplained failure go away. When the set or the standard table
+changes, `eval gate --make-replay` first (a test fails while the committed pack is stale).
+
 ## 30. `stdparts.py`: standard parts without Claude
 
 ```
