@@ -681,7 +681,7 @@ python3 -m tests.test_librarian; python3 -m tests.test_release_check
 Triages the BOM, converts parts already in your `--lib` libraries, and for anything still missing tries in order:
 * **kicad**: the official KiCad libraries. A name index is built once from the GitLab tree API and cached. Symbols match the MPN by exact name, KiCad `x` wildcards, or the MPN minus an ordering suffix; the footprint comes from the symbol's Footprint property, the BOM footprint, or a footprint named after the MPN. R/C/L/LED use `Device:*` plus the footprint by package.
 * **easyeda**: by LCSC number, through a native converter (`easyeda_convert.py`).
-* **standard**: `ecadlib.stdparts` (section 29), offline: chip passives and standard packages built from checked dimensions, plus symbols for R/C/L/LED/diodes and listed transistor/LDO families. Never placed ahead of kicad; fills only a missing half.
+* **standard**: `ecadlib.stdparts` (section 30), offline: chip passives and standard packages built from checked dimensions, plus symbols for R/C/L/LED/diodes and listed transistor/LDO families. Never placed ahead of kicad; fills only a missing half.
 * **datasheet**: `ecadlib.datasheet`, when a datasheet URL is known and `ANTHROPIC_API_KEY` is set. `--datasheet-batch` reads every part that reaches this step as one Message Batch (section 7).
 
 Outputs in `out/librarian/`: `models/`, a `plan.json` for `altium365 push` recording each part's source, `review.md/.csv` (what came from where and what needs a person), and the release-check report. Re-running skips finished parts unless `--refresh` is given.
@@ -1255,6 +1255,7 @@ connectors get no symbol by MPN, and 20 parts got another part's footprint becau
 package (`SOIC-14` for a 3.9 mm and a 5.3 mm body): the librarian keeps one footprint per BOM footprint name. The
 report flags these (`footprint shared with`). Estimate mode on the whole set: ~$0.60 per part on Opus 5.5
 synchronous, mostly because PDFs that cannot be downloaded here are guessed at 30 pages.
+
 ## 30. `stdparts.py`: standard parts without Claude
 
 ```
