@@ -307,6 +307,8 @@ def build_demo(ws, tool="both", bom=None, log=print):
     from .app import Workspace
     t0 = time.time()
     root = Path(ws.root)
+    if root.resolve() == Path(root.resolve().anchor):
+        raise ValueError(f"refusing to build the demo at the filesystem root ({root}); give a folder, e.g. -o ecadlib-demo")
     rules_f = root / "ecadlib.toml"
     if rules_f.exists() and not rules_f.read_text(encoding="utf-8").startswith(DEMO_HEADER):
         raise ValueError(f"{root} has its own ecadlib.toml; the demo needs a folder of its own (e.g. -o ecadlib-demo)")

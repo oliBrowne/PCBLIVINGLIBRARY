@@ -840,6 +840,8 @@ class Workspace:
         """Copy the bundled sample BOM (the one `ecadlib demo` uses) into uploads/demo/; -> its workspace path."""
         import shutil
         from .firstrun import DEMO_BOM
+        if self.root.resolve() == Path(self.root.resolve().anchor):
+            raise ValueError("the workspace is the filesystem root; start ecadlib ui with --workspace FOLDER")
         dest = self.root / "uploads" / "demo" / DEMO_BOM.name
         dest.parent.mkdir(parents=True, exist_ok=True)
         if not dest.exists() or dest.read_bytes() != DEMO_BOM.read_bytes():

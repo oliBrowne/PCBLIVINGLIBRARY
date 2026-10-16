@@ -211,6 +211,18 @@ def test_demo_builds_the_sample_offline():
             assert call("GET", "/api/parts?bom=" + j["bom"])[1]["counts"]["parts"] == 7
         finally:
             srv.shutdown()
+    from unittest import mock
+    from ecadlib import firstrun
+    ws = Workspace.__new__(Workspace)                     # never touches the disk: the guard comes first
+    ws.root = Path(Path.cwd().anchor)
+    for fn in (ws.demo_bom, lambda: firstrun.build_demo(ws, log=lambda *a: None)):
+        with mock.patch.object(Path, "mkdir", side_effect=AssertionError("wrote at /")), \
+                mock.patch("shutil.copyfile", side_effect=AssertionError("wrote at /")):
+            try:
+                fn()
+                raise AssertionError("demo ran at the filesystem root")
+            except ValueError as e:
+                assert "filesystem root" in str(e), e
     for path, role in ((("GET", "/api/parts")), "viewer"), ((("POST", "/api/job/cancel")), "viewer"), ((("POST", "/api/demo")), "librarian"):
         assert S.ROUTES[path] == role, path
 
@@ -263,7 +275,7 @@ def test_browser_main_flows():
     with tempfile.TemporaryDirectory() as d, _servers(d) as urls:
         cfg = {**urls, "bom": str(ROOT / "examples" / "sample_bom.csv"), "password": FX.PW, "executable": exe,
                "shots": os.environ.get("ECADLIB_UI_SHOTS")}
-        p = subprocess.run([node, str(ROOT / "tests" / "ui_browser.js"), json.dumps(cfg)], capture_output=True, text=True,
+        p = subprocess.run([node, str(ROOT / "tests" / "ui_browser.js"), json.dumps(cfg)], capture_output=True, text=True, cwd=d,
                            env={**os.environ, "NODE_PATH": mods}, timeout=900)
         assert p.returncode == 0, p.stderr[-3000:]
         checks = json.loads(p.stdout.strip().splitlines()[-1])["checks"]
