@@ -33,6 +33,8 @@ class Workspace:
         for d in ("uploads", "reports", "altium", "altium365", "footprints/ecadlib.pretty",
                   "altium_models/PcbLib", "altium_models/SchLib"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
+        from . import migrate as MG                      # files from a newer ecadlib: one clear error, nothing misread
+        MG.guard_tree(self.root)
         self.gen_dir = self.root / "footprints" / "ecadlib.pretty"
         self.models = self.root / "altium_models"
         self.libs = [str(Path(l).resolve()) for l in libs]
@@ -926,6 +928,27 @@ class Workspace:
         if res.get("backup"):
             res["backup"] = self.rel(res["backup"])
         return res
+
+    def file_formats(self, migrate=False):
+        """Versioned files in this workspace (ecadlib/migrate.py): kind, version, ok / old / new. migrate=True brings
+        old ones to this version (backups in .ecadlib_backup/ next to them); files from a newer ecadlib are refused."""
+        from . import migrate as MG
+        rows = MG.migrate_tree(self.root, dry_run=not migrate, log=lambda *a: None)
+        for r in rows:
+            r["path"] = self.rel(Path(r["path"]))
+        return {"rows": rows, "old": sum(r["state"] == "old" for r in rows),
+                "newer": sum(r["state"] in ("new", "error") for r in rows), "migrated": bool(migrate)}
+
+    def rebuild_check(self, bom):
+        """Rebuild the BOM's library from its library.lock.json offline in a temporary copy (ecadlib/rebuild.py) and
+        report per part and file: identical, identical after normalising dates, or drift; and inputs that changed."""
+        from . import rebuild as RB
+        d = self._librarian_dir(self._bom_path(bom))
+        if not (d / RB.LOCK).is_file():
+            raise ValueError("no library.lock.json for this BOM yet: run the librarian (Fill missing parts) first")
+        rep = RB.check(d, log=lambda *a: None)
+        rep["lock"] = self.rel(Path(rep["lock"]))
+        return rep
 
     def visual_check(self, target, datasheet=None, pages=None, symbol=None, render_only=False, client=None):
         """Claude visual proof (ecadlib.visual_check): render our footprint / symbol (TOP VIEW, pin 1, pitch, grid)

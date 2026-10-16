@@ -52,6 +52,8 @@ CASES = [
     (["librarian", "{in}/bom.csv", "--lib", "{in}/lib", "-o", "{out}/lib", "--offline", "--cache", "{out}/cache",
       "--sources", "kicad"], (0, 2)),
     (["release-check", "{out}/lib/plan.json", "-o", "{out}/rc"], (0, 2)),
+    (["rebuild", "{out}/lib", "--check", "--keep", "{out}/rebuild"], (0, 1)),
+    (["migrate", "{out}", "--check"], (0, 1)),
     (["kicad-export", "{out}/lib/plan.json", "-o", "{out}/kicad", "--offline", "--cache", "{out}/cache",
       "--include-held"], (0,)),
     (["dblib-sync", "{out}/lib/plan.json", "--to", "{out}/dbsync", "-o", "{out}/dbsync.json"], (0,)),

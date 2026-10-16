@@ -91,7 +91,8 @@ def load_policy(base):
         raw = raw.get("approvals", raw)            # either top level or an [approvals] table
     else:
         raw = json.loads(f.read_text(encoding="utf-8") or "{}")
-    return normalize_policy(raw, f)
+    from . import migrate as MG                    # a policy from a newer ecadlib is refused, schema_version is not a key
+    return normalize_policy(MG.check_key("approvals_policy", raw, str(f)), f)
 
 
 def policy_source(base, policy):

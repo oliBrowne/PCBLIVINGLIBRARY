@@ -9,6 +9,8 @@ a minor release may change command-line options and file formats.
 
 ### Added
 
+- Updates never break a library: every file ecadlib writes and reads back has a schema version and a migration registry (`ecadlib/migrate.py`); older files are migrated (on disk only after a backup in `.ecadlib_backup/`), files from a newer ecadlib are refused with one "made by ecadlib X.Y; upgrade ecadlib" line. `ecadlib migrate [--check] [--dry-run]`, a doctor line, Workspace `file_formats`, MCP `file_formats`. `librarian_state.json` is now v2 (footprint name + geometry hash). Proved with sample workspaces made by v0.2.0, v0.3.0 and two later commits (`tests/fixtures/upgrade/`). The librarian writes `library.lock.json` (per part: fetched inputs with hashes, datasheet PDF / model / prompt version, ecadlib version, rules hash, output hashes); `ecadlib rebuild --check` rebuilds offline and reports drift (Workspace `rebuild_check`, MCP `rebuild_check`).
+
 - `ecadlib kicad-pcm` (`kicad_pcm.py`): the library as a KiCad Plugin and Content Manager package (zip for "Install from File...", optional `repository.json`/`packages.json` with `--base-url`), metadata checked against KiCad's PCM schema; symbols point at `PCM_<lib>`, 3D models at `${KICADn_3RD_PARTY}`; `--kicad 7` writes KiCad 7 files; `--plugin` packages a pcbnew action plugin "ecadlib: add part". `ecadlib altium-pkg` (`altium_pkg.py`): Altium hand-off folder with a `.LibPkg` (compile to IntLib), a DelphiScript install project and a relative DbLib. Workspace `tool_packages` and MCP tool of the same name. Installed and checked in real KiCad 7.0.11; not run in Altium.
 
 ### Fixed

@@ -584,6 +584,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     rules: library rules (a loaded dict or a path); None uses the ecadlib.toml found from `out` (defaults when none).
     sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity())."""
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
+    from . import migrate as MG, rebuild as LK            # versioned files (backed up, migrated) and library.lock.json
+    MG.open_folder(out, log=log)
     rules = RU.resolve(rules, out)
     sources = list(sources) if sources is not None else list(rules["sources"]["order"])
     http = http or CachedHTTP(cache, min_interval=rate, offline=offline, timeout=60)
@@ -639,13 +641,16 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         for rec in keep.values():          # a chosen file another part shares is reused, never overwritten by its fetch
             r.written.setdefault(str(out / rec["file"]), rec)
     r.log = log
+    rec = LK.Recorder(http)                    # what each part fetched, for library.lock.json
     if todo:
         log(f"  finding symbols and footprints for {len(todo)} part(s) (sources: {', '.join(sources)}) ...")
     for n, (it, ln, row, fpr) in enumerate(todo, 1):
         if len(todo) > 3:
             log(f"  [{n}/{len(todo)}] {it['name']}")
-        st = r.resolve(it, ln, row, keeps[it["name"]])
+        with rec.part(it["name"]):
+            st = r.resolve(it, ln, row, keeps[it["name"]])
         st["key"], st["skipped"] = fpr, False
+        LK.stamp_state(st, rec.take(it["name"]), rules)
         state[it["name"]] = st
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
     for it in items:
@@ -674,6 +679,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         stamp_allow(items, allow, identity(user, cwd=out))
         post_check(items, out, checks)
     write_text_atomic(plan_f, json.dumps(items, indent=2))
+    rec.close()
+    MG.write_stamp(out, ["plan", "librarian_state"])
+    LK.write_lock(out, items, state, bom, libs, sources, cache, providers, gen_step, rules)
     RC.write_report(checks, out / "release_check", plan_f)
     write_review(review_rows(items), out, bom)
     return items

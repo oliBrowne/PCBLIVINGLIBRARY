@@ -209,6 +209,16 @@ TOOLS = [
                                                "description": "checks to run (default: all, or [upkeep] checks in ecadlib.toml)"},
                                     "apply": {"type": "boolean", "default": False},
                                     "workspace": {"type": "string", "description": "Altium 365 workspace URL for the a365 check"}}}},
+    {"name": "file_formats",
+     "description": "Which workspace files (plans, librarian state, queue, agent state, caches, ecadlib.toml) are in an "
+                    "older or newer ecadlib format. migrate true upgrades the older ones in place (backups first); files "
+                    "from a newer ecadlib are never changed (upgrade ecadlib). Read-only unless migrate is true.",
+     "inputSchema": {"type": "object", "properties": {"migrate": {"type": "boolean", "default": False}}}},
+    {"name": "rebuild_check",
+     "description": "Prove a BOM's library is reproducible: rebuild it from its library.lock.json offline (HTTP cache "
+                    "and cached model answers only, never a live call) in a temporary copy and report per part and file "
+                    "identical / identical after normalising dates / drift, plus inputs that changed. Changes nothing.",
+     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "agent_status",
      "description": "The library agent's state: last run (detected, built, in review, failed), review-queue counts and "
                     "its batch pull requests (or the batch folders when there is no GitHub token).",
@@ -428,6 +438,10 @@ def call_tool(ws, name, args):
             return ws.export_dblib(args["bom"])
         if name == "upkeep_run":
             return ws.upkeep_run(args["bom"], args.get("checks") or None, args.get("apply") is True, args.get("workspace"))
+        if name == "file_formats":
+            return ws.file_formats(args.get("migrate") is True)
+        if name == "rebuild_check":
+            return ws.rebuild_check(args["bom"])
         if name == "agent_status":
             return ws.agent_status()
         if name == "agent_run":
