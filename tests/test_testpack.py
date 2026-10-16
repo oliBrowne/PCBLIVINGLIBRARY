@@ -146,7 +146,8 @@ def test_kicad_loads_the_pack():
     v = KR.pcbnew_job("drc", lib=str(k / "testpack.pretty"), board=str(tmp / "drc.kicad_pcb"))
     # the USB-C shell pads share the number SH (as in KiCad's own footprint); anything else is a finding
     assert set(v) <= {"USB_C_Receptacle_HRO_TYPE-C-31-M-12"}, v               # stacked pads A1/B12 ... on 2 nets here
-    assert set(v.get("USB_C_Receptacle_HRO_TYPE-C-31-M-12", {})) <= {"clearance", "solder_mask_bridge", "unconnected_items"}, v
+    assert set(v.get("USB_C_Receptacle_HRO_TYPE-C-31-M-12", {})) <= {"clearance", "solder_mask_bridge", "unconnected_items",
+                                                                      "shorting_items"}, v   # KiCad 8+ also reports shorting_items
     print(f"      KiCad {KR.kicad_major()}: 6 symbols, 6 footprints loaded; libcheck via fp-lib-table and DRC: {v or 'clean'}")
 
 
