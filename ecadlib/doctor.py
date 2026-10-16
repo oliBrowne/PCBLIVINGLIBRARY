@@ -52,14 +52,51 @@ def key_services(rules=None):
     """[(service, [env var names], what it unlocks)] - the names come from the rules where the rules name them."""
     ds = ((rules or {}).get("datasheet") or {}).get("api_key_env") or "ANTHROPIC_API_KEY"
     gh = ((rules or {}).get("agent") or {}).get("github_token_env") or "GITHUB_TOKEN"
-    out = [("anthropic", [ds], "datasheet reader, visual-check"),
-           ("altium365", ["NEXAR_TOKEN"], "Altium 365 push / pull")]
+    out = [("anthropic", [ds], "datasheet reader, visual-check")] if _ai_provider(rules) == "anthropic" else []
+    out += [("altium365", ["NEXAR_TOKEN"], "Altium 365 push / pull")]
     try:
         from . import providers as P
         out += [(c.name, list(c.env), f"{c.name} part lookups") for c in P.ALL if c.env]
     except Exception:                                  # a missing package is reported by check_packages
         pass
     out.append(("github", [gh], "library agent PRs, upkeep issues"))
+    return out
+
+
+def _ai_provider(rules):
+    try:
+        from . import llm as LL
+        return LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")["provider"]
+    except Exception:
+        return "anthropic"
+
+
+def check_ai(rules=None, environ=None):
+    """The model every AI feature uses ([ai], ecadlib.llm): provider, model, tier and rails, and whether its key
+    variable is set (names only). Nothing is sent: the profile comes from the built-in table and ecadlib.toml."""
+    from . import llm as LL
+    from .llm import profiles as PR, rails as R
+    environ = os.environ if environ is None else environ
+    try:
+        ep = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")
+    except LL.AIConfigError as e:
+        return [_c("ai model", "FAIL", str(e), "fix [ai] in ecadlib.toml (README: Bring your own model)")]
+    prof = PR.profile(ep["model"], ep["provider"], rules)
+    plan = R.plan(prof, ep["assist"], ep["feedback_retry"])
+    guide = [k for k in plan["rails"] if R.RAILS[k][0] != "support"]
+    where = "Anthropic API" if ep["provider"] == "anthropic" else f"{ep['base_url']}" + (" (local)" if ep["local"] else "")
+    out = [_c("ai model", "OK", f"{ep['model']} via {ep['name']} ({where}); {plan['tier']} tier, rails: "
+                                f"{', '.join(guide) or 'support only'}")]
+    if ep["provider"] == "anthropic":                  # its key is the `key anthropic` line below
+        return out
+    key = LL.key_for(ep, environ=environ)
+    if key == LL.NO_KEY:
+        out.append(_c("ai key", "OK", "none needed (a server on this machine or your network)"))
+    elif key:
+        out.append(_c("ai key", "OK", f"{ep['key_env'] or 'ANTHROPIC_API_KEY'} set"))
+    else:
+        out.append(_c("ai key", "WARN", f"{ep['key_env']} not set (datasheet reader and visual-check skipped)",
+                      f"export {ep['key_env']}=... (only the name goes in ecadlib.toml, never the value)"))
     return out
 
 
@@ -194,6 +231,7 @@ def run(workspace="ecadlib_workspace", libs=(), rules_path=None, environ=None):
     checks = [check_python()] + check_packages()
     rc, rules = check_rules(rules_path, workspace if Path(workspace).is_dir() else None)
     checks.append(rc)
+    checks += check_ai(rules, environ)
     checks += check_keys(rules, environ)
     checks.append(check_workspace(workspace))
     checks += check_paths(libs, rules)

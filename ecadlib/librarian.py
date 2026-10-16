@@ -593,6 +593,11 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     if "standard" in sources and "kicad" in sources and sources.index("standard") < sources.index("kicad"):
         sources.remove("standard")                     # never ahead of the KiCad library
         sources.insert(sources.index("kicad") + 1, "standard")
+    if "standard" in sources and "datasheet" in sources and sources.index("datasheet") < sources.index("standard"):
+        from .llm import run as LR                     # rail prefer_standard: a guided (smaller) model reads datasheets
+        if LR.wants(rules, "prefer_standard"):         # only for what the offline standard parts can't build
+            sources.remove("standard")
+            sources.insert(sources.index("datasheet"), "standard")
     lines, mapping = T.read_bom(bom, RU.bom_columns(rules))
     if not lines:
         raise ValueError(f"{bom}: the BOM has a header but no part rows")
