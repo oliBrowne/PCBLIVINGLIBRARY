@@ -9,6 +9,7 @@ a minor release may change command-line options and file formats.
 
 ### Added
 
+- `ecadlib altium-menu` (`altium_menu.py`): an "ecadlib" menu inside Altium Designer, a DelphiScript script project with Add part from MPN, Check this project BOM and Open review queue; each entry runs `ecadlib altium-menu run-job` hidden through a request.ini / result.ini exchange, reinstalls the DbLib (or points at Altium 365), and an optional `.DXPPrf` adds the menu. Workspace `altium_menu` and MCP tool of the same name. The .pas is checked offline against a cited API allow-list; never run inside Altium.
 - `ecadlib kicad-pcm` (`kicad_pcm.py`): the library as a KiCad Plugin and Content Manager package (zip for "Install from File...", optional `repository.json`/`packages.json` with `--base-url`), metadata checked against KiCad's PCM schema; symbols point at `PCM_<lib>`, 3D models at `${KICADn_3RD_PARTY}`; `--kicad 7` writes KiCad 7 files; `--plugin` packages a pcbnew action plugin "ecadlib: add part". `ecadlib altium-pkg` (`altium_pkg.py`): Altium hand-off folder with a `.LibPkg` (compile to IntLib), a DelphiScript install project and a relative DbLib. Workspace `tool_packages` and MCP tool of the same name. Installed and checked in real KiCad 7.0.11; not run in Altium.
 
 ### Fixed

@@ -86,6 +86,7 @@ CASES = [
     (["export-parts", "{out}/lib/plan.json", "--format", "xlsx", "-o", "{out}/parts.xlsx"], (0,)),
     (["kicad-pcm", "{out}/kicad", "--out", "{out}/pcm"], (0,)),
     (["altium-pkg", "{out}/lib/plan.json", "--out", "{out}/altium_pkg"], (0, 1, 2)),   # 2: no ready part has models
+    (["altium-menu", "build", "--out", "{out}/altium_menu", "--win-dir", "D:\\ecadlib menu"], (0,)),
     (["stdparts", "coverage", "{in}/bom.csv"], (0,)),
     (["stdparts", "resolve", "SOT-23-5", "--kicad-mod", "{out}/sot.kicad_mod"], (0,)),
     (["stdparts", "bench", "--fixture", "{tests}/fixtures/stdparts_kicad_numbers.json.gz"], (0,)),

@@ -1383,6 +1383,82 @@ paths, and the Excel DbLibs (`dblib-sync` and now `ecadlib dblib`) say `Database
   `PgmOrNull()`, so the plugin showing in the menu is unverified; KiCad 8/9/10 not run (the optional CI `kicad` job
   now also runs these tests on KiCad 8); a sim model's `Sim.Library` through `${KICADn_3RD_PARTY}`.
 
+### 31b. An "ecadlib" menu inside Altium: `altium_menu.py`
+
+```
+ecadlib altium-menu build --out D:/ecadlib-menu --workspace D:/ecadlib-ws --to D:/libs/ecadlib [--win-dir D:\ecadlib-menu]
+ecadlib altium-menu add-part LM358DR --manufacturer TI --workspace D:/ecadlib-ws --result-file r.ini   # what the menu runs
+ecadlib altium-menu check-bom D:/boards/x/Board.PrjPcb | fill Board.PrjPcb | queue | run-job JOBFOLDER
+python3 -m tests.test_altium_menu
+```
+
+`build` writes a DelphiScript script project (`ecadlib_menu.PrjScr` + `.pas`) with three procedures that a menu or
+toolbar button can call: **AddPartFromMPN** (input boxes for the MPN and an optional manufacturer; the part is added
+to `<workspace>/uploads/altium-menu/parts.csv`, the librarian runs on that list, and a ready part is synced into the
+library folder with `altium-pkg`/`dblib-sync`, or released to Altium 365 when the rules set `[altium365] workspace`;
+the dialog shows "ready / held + why"; the script then uninstalls/installs the DbLib and refreshes the installed
+libraries, or for A365 says to refresh the Components panel), **CheckProjectBOM** (the focused project's `.PrjPcb`
+path from `GetWorkspace.DM_FocusedProject.DM_ProjectFullPath`; ecadlib reads its BOM (`altium_project.py`), triages
+it, marks which lines the library already has (the DbLib's parts table and ready plan items), writes and opens an
+HTML report, and offers "Fill the library now?", which runs the librarian on the project) and **OpenReviewQueue**
+(opens `http://127.0.0.1:<port>/#queuecard`, starting `ecadlib ui --workspace W --no-browser` detached when nothing
+answers; refuses a port that serves another workspace or another program).
+Settings live in `ecadlib_menu.ini` next to the script (workspace, library, name, command, hidden, timeout_s, port,
+offline; relative paths start at that folder; a rebuild keeps the file). Workspace `altium_menu(win_dir)` and the MCP
+tool `altium_menu` write it into `<workspace>/altium_menu/` with `workspace=..`.
+
+**How the script runs ecadlib.** No user text goes on a command line: each click makes `jobs\<id>\` next to the
+script and writes `request.ini` with `TIniFile` (action, mpn, manufacturer, project, config). It then calls
+`RunApplication('wscript.exe //B //NoLogo "<dir>\ecadlib_run.vbs" "<dir>\ecadlib_run.cmd" "<job>"')`; the .vbs runs
+`cmd.exe /s /c ""<runner>" "<job>""` with window style 0 (no console) and the .cmd finds ecadlib (`command=` from the
+.ini via `command.txt`, else `ecadlib` on PATH, else `py -3 -m ecadlib`, else `python -m ecadlib`), runs
+`ecadlib altium-menu run-job "<job>"` and writes `exit.txt` (and `notfound.txt` when there is no ecadlib). The
+script waits for `exit.txt` (`Sleep` + `FileExists`, the pattern of Altium-Designer-addons' XIA_Utils.pas; after
+`timeout_s` it asks whether to keep waiting) and reads `result.ini` (`[result]` status, message, fix, install, offer,
+...) with `TIniFile`. `result.ini` is UTF-16 with a BOM, which Windows' profile API reads whatever the code page;
+values are one line; finished job folders older than 14 days are removed. Every failure becomes one dialog line with a fix (ecadlib missing, project not saved, no
+NEXAR_TOKEN, port taken, ...); ecadlib's output is in `jobs\<id>\log.txt`. `hidden=0` runs the .cmd in a visible
+console instead. No key is in any file: keys stay in environment variables.
+
+**Install.** Preferences > Scripting System > Global Projects > Install from file > `ecadlib_menu.PrjScr`; then
+right-click a menu or toolbar > Customize > [Scripts] and drag the three procedures onto a menu (once per editor).
+With `--win-dir` (or when built on Windows) it also writes `ecadlib_menu.DXPPrf`, a preferences file (zip of `DXP.RCS`
++ `IncludedFiles.ini`, the format of Altium-Designer-addons' Altium-saved `UI customizations/Menu_SVN`) that adds an
+"&ecadlib" menu before Window in the schematic, PCB, SchLib and PcbLib editors (`ScriptingSystem:RunScript` with
+`ProjectName=<dir>\ecadlib_menu.PrjScr|ProcName=<dir>\ecadlib_menu.pas>AddPartFromMPN`, TR0124) and lists the entries
+under [Custom]: Preferences > Load, tick only System > Customizations. The README in the folder warns that loading
+customisations may replace your own (save them first).
+
+**Altium calls used** (`ALTIUM_API` in the module; the test fails on any other identifier): from Altium's scripting
+references (TR0120 DelphiScript, TR0124 Server Process, TR0135 System, TR0136 Integrated Library, TR0140 Workspace
+Manager; the 2008 PDFs in github.com/Altium-Designer-addons/scripting-reference, page numbers in the module):
+`RunApplication`, `ShowMessage`, `ShowError`, `ConfirmNoYes`, `GetWorkspace`, `DM_FocusedProject`,
+`DM_ProjectFullPath`, `DM_ProjectFileName`, `IntegratedLibraryManager.InstallLibrary / UninstallLibrary /
+InstalledLibraryPath / AvailableLibraryCount`, `ResetParameters`, `AddStringParameter`, `RunProcess`
+(`IntegratedLibrary:RefreshInstalledLibraries`, AllLibraries=True), `TIniFile` (Create, ReadString, ReadInteger,
+WriteString), `TStringList` (Add, SaveToFile), `FileExists`, `DirectoryExists`, `MkDir`, `ExtractFilePath`, `Now`,
+`Random`, `Randomize`, `IntToStr`, `Trim`, `Pos`, `Copy`, `Length`, `UpperCase`. Not in those references but used by
+public Altium scripts: `InputBox` (BrettLMiller PolygonReFitBO.pas), `GetRunningScriptProjectName`, `Sleep`,
+`FormatDateTime`, `Application.ProcessMessages` (Altium-Designer-addons XIA_Utils, QuickSilk, AutoPlaceSilkscreen).
+
+**Checked here** (16 tests in `tests/test_altium_menu.py`, offline): the PrjScr and .ini parse as INI, every file is
+CRLF ASCII with no secrets; the .pas tokenises (a small Pascal tokenizer: comments, `''` strings, `#13#10`), every
+Begin/Try has its End, every identifier is declared in the unit or on the allow-list, each Function sets Result, the
+three entries are parameterless Procedures (the checker itself is tested on 7 broken units); the RCS follows the
+Menu_SVN grammar, every Link names a defined entry and every ProcName a procedure of the .pas; the command lines,
+parsed with CommandLineToArgvW rules and cmd's `/s /c` quote rule, give back the exact paths for folders with spaces,
+`&`, parentheses and backslashes; `run-job` on a request.ini written in cp1252 (as TIniFile does) adds a ready
+capacitor into a DbLib (UTF-16 result.ini, install= the .DbLib), holds NE555DR with the reasons, checks a two-sheet
+.PrjPcb (1 line already in the DbLib table, 5 not; HTML report opened; offer to fill; fill: 6 held, offline), routes
+to Altium 365 when the rules say so (and says to set NEXAR_TOKEN when it is missing), and the queue action really
+starts `ecadlib ui` on a free port and opens `#queuecard`.
+**Not checked:** nothing was run inside Altium Designer (none here, no Windows): not that Altium loads the script
+project, that `InputBox` / `GetRunningScriptProjectName` / `Sleep` / `Application.ProcessMessages` behave as in the
+public scripts that use them in the Altium version you have, that `RunApplication` starts `wscript.exe` with that
+command line, that the .DXPPrf imports (format copied from an Altium-saved file, never loaded), or that the DbLib
+reinstall shows new rows without restarting. `cmd.exe` and `wscript.exe` were not run; the .cmd and .vbs were checked
+as text and by re-implementing their quoting rules.
+
 ## 32. First run: `ecadlib init` setup, `ecadlib demo`, and a consistent CLI (`firstrun.py`, `clihelp.py`)
 
 ```

@@ -44,6 +44,7 @@
     ecadlib stdparts resolve "SOIC-8" | coverage BOM | bench     standard packages built offline (librarian source)
     ecadlib kicad-pcm plan.json|KICAD_DIR --out DIR [--kicad 7]   KiCad Plugin and Content Manager zip (--plugin: action plugin)
     ecadlib altium-pkg plan.json|MODELS_DIR --out DIR   Altium .LibPkg (-> IntLib), install script, relative DbLib
+    ecadlib altium-menu build --out DIR [--win-dir W]   an "ecadlib" menu inside Altium (script project): add part, check BOM, queue
     ecadlib ai        show [--model M] [--detect] | rails   which model / provider / guide rails the AI features use
     ecadlib testpack  --out DIR                   small Altium + KiCad test pack (6 parts) + CHECKLIST.md for a person to open
 
@@ -96,6 +97,7 @@ COMMANDS = {
     "export-parts": ("ecadlib.parts_export", "parts table with stable columns as CSV / JSON / XLSX for PLM / ERP imports"),
     "kicad-pcm": ("ecadlib.kicad_pcm", "package the library for KiCad's Plugin and Content Manager (zip); --plugin: the add-part action plugin"),
     "altium-pkg": ("ecadlib.altium_pkg", "Altium hand-off folder: .LibPkg to compile an IntLib, install script project, relative DbLib"),
+    "altium-menu": ("ecadlib.altium_menu", "an 'ecadlib' menu inside Altium: DelphiScript project (add part from MPN, check the project BOM, review queue)"),
     "ai": ("ecadlib.llm.cli", "bring your own model: provider, model, key variable, capability profile, guide rails"),
     "testpack": ("ecadlib.testpack", "write a 6-part Altium + KiCad test pack with a CHECKLIST.md of what to open and what to see"),
     "stdparts": ("ecadlib.stdparts", "standard packages and pinouts without Claude: resolve, list, bench vs KiCad, BOM coverage"),
