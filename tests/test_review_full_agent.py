@@ -174,3 +174,13 @@ if __name__ == "__main__":
         if name.startswith("test_") and inspect.isfunction(fn):
             fn()
             print("ok", name)
+
+
+def test_throttle_zero_limits_do_not_crash_sign_in():
+    # max_failures = 0 in team.json used to raise IndexError on every sign-in (HTTP 500); it now means one try
+    from ecadlib.team import Throttle
+    t = Throttle(0, 15, 0)
+    assert t.blocked("ann", "1.2.3.4") == 0
+    wait, ticket = t.attempt("ann", "1.2.3.4")
+    assert wait == 0 and ticket is not None
+    assert t.blocked("ann", "1.2.3.4") > 0
