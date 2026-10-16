@@ -736,7 +736,7 @@ ecadlib kicad-export out/librarian/plan.json -o out/kicad --name mylib [--lib ex
 python3 -m tests.test_kicad_export
 ```
 
-Writes what the librarian built for Altium as a KiCad library: `mylib.kicad_sym` (one symbol per plan part, named after it, with Reference, Value, Footprint `mylib:<footprint>`, Datasheet, Description, Manufacturer, MPN, supplier numbers such as `LCSC` and the plan's other parameters), `mylib.pretty/` (one `.kicad_mod` per footprint, renamed to the plan's footprint name), `mylib.3dshapes/` (STEP models, referenced as `${KIPRJMOD}/mylib.3dshapes/X.step`), `sym-lib-table` / `fp-lib-table` with `${KIPRJMOD}` paths, and `kicad_export.json` (what came from where, and the checks). Copy the folder's contents into the KiCad project, or paste the two `lib` lines into its tables. Held parts are skipped unless `--include-held`; output is sorted and repeatable.
+Writes what the librarian built for Altium as a KiCad library: `mylib.kicad_sym` (one symbol per plan part, named after it, with Reference, Value, Footprint `mylib:<footprint>`, Datasheet, Description, Manufacturer, MPN, supplier numbers such as `LCSC` and the plan's other parameters), `mylib.pretty/` (one `.kicad_mod` per footprint, renamed to the plan's footprint name), `mylib.3dshapes/` (STEP models, referenced as `${KIPRJMOD}/mylib.3dshapes/X.step`), `sym-lib-table` / `fp-lib-table` with `${KIPRJMOD}` paths (the library's own row is added or replaced; other rows, such as a project's own libraries or another export, are kept, so `-o` can be the KiCad project folder), and `kicad_export.json` (what came from where, and the checks). Copy the folder's contents into the KiCad project, or paste the two `lib` lines into its tables. Held parts are skipped unless `--include-held`; output is sorted and repeatable.
 
 * **Symbols:** a part whose symbol came from KiCad (`kicad:` or a `--lib` folder) gets that KiCad symbol again, with its `extends` chain flattened and renamed; an EasyEDA symbol is converted again from the EasyEDA data; anything else (datasheet reader, or a source that can't be reached) is drawn from its `.SchLib`, read back with `altium_lib.read_schlib` (pins with type, shape and visibility, body graphics, parts as units, display modes as De Morgan styles).
 * **Footprints:** the plan's `.kicad_mod` when there is one, else the `.PcbLib` converted back. STEP files come from `kicad-packages3D` (through the HTTP cache); ecadlib-generated footprints have none, since Altium gets an extruded body.
@@ -1298,6 +1298,61 @@ Checks (2026-10-16, kicad-footprints f8440fa, kicad-symbols 9280a93):
   on the same 68 parts: with the KiCad library reachable, nothing changes (KiCad already has those passives); without
   it, parts sent to the datasheet step fall from 66 to 35 (31 complete parts with no Claude call).
 * **Not checked:** a live datasheet run (no API key); EasyEDA (blocked).
+
+## 31. End-to-end tests and the test pack (`tests/test_e2e.py`, `ecadlib testpack`)
+
+```
+python3 -m tests.run_all test_e2e test_testpack    # about a minute; the KiCad checks skip without kicad-cli / pcbnew
+ecadlib testpack --out testpack                    # then open testpack/CHECKLIST.md in Altium Designer / KiCad
+```
+
+**Golden path.** `tests/test_e2e.py` runs the real `ecadlib` command in subprocesses, from an empty folder, as a user
+would: `init --yes`; `project` on an Altium `.PrjPcb` (two `.SchDoc` sheets, written by ecadlib's test helper, not by
+Altium); `librarian --offline` on a KiCad 7 hierarchical `.kicad_sch`, on that Altium BOM and on an `.xlsx`;
+`release-check --allow` after the datasheet part is reviewed; `kicad-export` (three libraries into one KiCad project
+folder), `kicad-dblib`, `export-parts`, `dblib-sync` and `altium365 push` (`--dry-run` and against a local fake Nexar).
+Sources are offline and recorded (`tests/e2e_support.py`): real KiCad library files fetched from gitlab.com on 2026-10-16
+(`tests/fixtures/e2e/kicad/`), put into the HTTP cache the way an online run leaves them; a SYNTHETIC EasyEDA payload;
+SYNTHETIC Claude answers from a local server reached through `ANTHROPIC_BASE_URL` (which the datasheet reader now
+honours, as the Anthropic SDKs do). Every other request goes to a dead proxy, so nothing reaches the internet.
+
+Each output is then loaded by its tool:
+* **KiCad** (7.0.11 here): `kicad-cli sym export svg` / `fp upgrade` / `fp export svg` on every library; pcbnew places
+  every part of the database library's SQLite table through the project's `fp-lib-table` (DRC's library check finds each
+  one, unchanged; a bogus library and a bogus name are reported, so the check is live) and DRC passes on a board of each
+  library. The export is KiCad 8 format, so on KiCad 7 a KiCad 7 copy is loaded (`e2e_support.kicad7_copy`: properties to
+  `fp_text`, `(hide yes)` to `hide`, `(fill no)` to `(fill none)`; pads untouched). The optional CI job `kicad` also runs
+  these tests on KiCad 8 (PPA), as they are.
+* **`.kicad_dbl` + SQLite** (no KiCad needed): every row's Symbol and Footprint is in the `.kicad_sym` / `.pretty`, every
+  mapped column exists, and the rows are exactly the ready parts.
+* **Altium** (file level only, nothing was opened in Altium Designer or Altium 365): every `.PcbLib` / `.SchLib` reads
+  back with pyaltiumlib and ecadlib's reader with the same names; every Library Ref / Footprint Ref in the DbLib table and
+  the parts table is in the file it names; the Altium 365 release (fake Nexar) names files uploaded in the same run, byte
+  for byte our libraries, with the part's parameters.
+* **Agent:** `ecadlib agent run` in a library git repo whose origin is a local bare repo: two new BOM parts are built,
+  proved (fake Claude), committed on `ecadlib/agent-<batch>` and pushed (the user's checkout does not move), one PR is
+  opened on a local HTTPS fake GitHub; `queue list`, `agent approve` and `agent push` release them to the fake Nexar; a
+  second run finds nothing new.
+* **MCP:** `ecadlib mcp` over stdio: initialize, tools/list, then `workspace_info`, `librarian_run`, `held_parts` and a
+  call with a missing BOM (a clear error, no traceback).
+* **Again, and after a crash:** the whole path runs a second and a third time on the same folder. The second run changes
+  only the API log, the librarian's per-run state, `review.md` (written before the `--allow`) and init's
+  `ecadlib.toml.proposed` (the rules file is kept); the third changes nothing but the log. A librarian killed with
+  SIGKILL after its first parts recovers on the next run with the same plan and library files as an uninterrupted run.
+
+Bugs these tests found, fixed (each with a test that fails without the fix): a KiCad part whose 3D model could not be
+downloaded lost its official footprint; `kicad-export` replaced the project's whole library tables; `init` crashed
+printing a numeric proposal; a re-run rewrote unchanged `.PcbLib` files with a new date, and `--allow` left `plan.json`
+in a key order the next run changed. `.PcbLib` / `.SchLib` writes are now atomic.
+
+**Test pack.** `ecadlib testpack --out DIR` builds six parts offline through the same pipeline (librarian with the
+`standard` source and the pack's own KiCad library as `--lib`, release check, `dblib-sync`, `kicad-export`,
+`kicad-dblib`, `export-parts`): 0603 resistor, SOT-23 NPN, SOIC-8 dual op amp, VQFN-16 with exposed pad, USB-C
+receptacle (stacked pads, slots, NPTH) and a 1x05 2.54 mm THT header. `CHECKLIST.md` says what to open in Altium
+Designer (the DbLib, with its Excel file at `C:\ecadlib\testpack`), Altium 365 and KiCad 8+, and what each part must
+look like; `tests/test_testpack.py` checks those geometry claims against the files, reads the Altium side back and
+loads the KiCad side in KiCad. Whether Altium Designer opens the DbLib, previews the parts and releases them is exactly
+what the checklist is for: not verified here.
 
 ## Releases
 
