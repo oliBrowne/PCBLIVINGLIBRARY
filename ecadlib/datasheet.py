@@ -458,8 +458,9 @@ def require_key(key=None, rules=None):
     ANTHROPIC_API_KEY), else ANTHROPIC_API_KEY. The key itself never goes in a rules file, log or cache."""
     var = settings(rules)["api_key_env"]
     ai = ((rules or {}).get("ai") or {}) if isinstance(rules, dict) else {}
+    # another provider's key ([ai] provider = openai ...) is never sent to the Claude API
     ai_var = ai.get("api_key_env") if str(ai.get("provider") or "anthropic").strip().lower() == "anthropic" else None
-    if ai_var and var == SETTINGS["api_key_env"]:     # (another provider's key is never sent to the Claude API)     # [datasheet] at its default: the [ai] key variable decides
+    if ai_var and var == SETTINGS["api_key_env"]:     # [datasheet] at its default: the [ai] key variable decides
         var = ai_var
     key = key or os.environ.get(var) or (os.environ.get(ai_var) if ai_var else None) or os.environ.get("ANTHROPIC_API_KEY")
     if not key:
