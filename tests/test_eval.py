@@ -295,6 +295,54 @@ def test_numbers_ignores_a_drill_offset_without_a_hole():
     assert FB.numbers(txt)["pads"] == [["1", 0.0, 0.0, 1.0, 2.0, 0.0]]
 
 
+# ---------------------------------------------------------------- review fixes (rvK)
+def test_symbol_names_swapped_between_pins_fail():
+    """Two pins' names swapped (VIN on pin 2, VOUT on pin 1) used to pass at 8/10 names agreeing."""
+    ref = [("1", "VIN"), ("2", "VOUT")] + [(str(i), f"P{i}") for i in range(3, 11)]
+    mine = [("1", "VOUT"), ("2", "VIN")] + ref[2:]
+    r = S.score_symbol(mine, ref)
+    assert not r["symbol_names"]["ok"] and r["symbol_names"]["moved"] == 2, r
+    noise = [("1", "VIN"), ("2", "OUT")] + ref[2:]          # a different name, not another pin's: tolerated as before
+    assert S.score_symbol(noise, ref)["symbol_names"]["ok"]
+    gnd = [("1", "GND"), ("2", "GND"), ("3", "GND")]         # repeated names are never "moved"
+    assert S.score_symbol([("1", "GND"), ("2", "GND"), ("3", "VSS")], gnd)["symbol_names"].get("moved") == 0
+
+
+def test_eval_usd_has_the_haiku_long_prompt_tier():
+    """Claude Haiku 5.5 is $0.50 / $2.50 per MTok above 100K prompt tokens (claude-api skill): a whole-PDF read used to
+    be priced at $0.10 in the eval report."""
+    assert abs(R.usd("claude-haiku-5-5", {"input_tokens": 200_000, "output_tokens": 1000}) - (200_000 * 0.5 + 1000 * 2.5) / 1e6) < 1e-9
+    assert abs(R.usd("claude-haiku-5-5", {"input_tokens": 1000, "output_tokens": 1000}) - 0.6 / 1000) < 1e-9
+
+
+def test_eval_cost_counts_every_answer_of_the_route_and_replays_it():
+    """Sonnet refuses, Opus answers: both answers were paid for, so the case costs both (live and replayed)."""
+    from tests import test_ds_route as TR
+
+    class API(TR.ModelAPI):
+        def _msg(self, body):
+            ext = TD.INCH if "SOICPART" in json.dumps(body) else qfn_ext()
+            self.by_model = lambda m, n: "refusal" if m != TR.OPUS else ext
+            return super()._msg(body)
+    api = API(lambda m, n: None)
+    pdfs = {"https://example.com/soic.pdf": TD.PDF, "https://example.com/qfn.pdf": TD.PDF}
+    rules = {"datasheet": {"route": "ladder"}}
+    with tempfile.TemporaryDirectory() as d:
+        with TB.patched(api), mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": TB.KEY}):
+            rep = R.run(mini_set(d), Path(d) / "live", cache=Path(d) / "cache", http=TB.PdfHTTP(pdfs), log=lambda *a: None,
+                        record=Path(d) / "rec", rules=rules, sources=["datasheet"])
+        assert [m for m, _ in api.sent] == [TR.SONNET, TR.OPUS] * 2, api.sent
+        u = TD.message(TD.GOOD)["usage"]
+        want = R.usd(TR.SONNET, u) + R.usd(TR.OPUS, u)
+        live = {c["mpn"]: c for c in rep["cases"]}
+        for c in live.values():
+            assert c["pass"] and abs(c["usd"] - want) < 1e-6 and c["cost_how"] == "API usage + 1 earlier answer", c
+            assert c["tokens_out"] == 2 * 2304
+        rep2 = run(d, "replayed", replay=Path(d) / "rec", sources=["datasheet"])
+        assert [(c["id"], c["pass"], c["usd"], c["tokens_in"]) for c in rep2["cases"]] == \
+               [(c["id"], c["pass"], c["usd"], c["tokens_in"]) for c in rep["cases"]]
+
+
 if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_") and callable(f):

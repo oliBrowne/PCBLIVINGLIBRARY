@@ -391,6 +391,75 @@ def test_rules_validate_route_settings():
     assert D.settings(RU.load(None, start=tempfile.gettempdir()))["route"] == "single"
 
 
+# ---------------------------------------------------------------- review fixes (rvK)
+def test_max_attempts_never_ends_on_a_cheaper_model():
+    """3 page levels x 3 models with max_attempts = 4 used to end on Sonnet's incomplete answer (Opus never tried)."""
+    data = pdf_lines(ldo_pages())
+    api = ModelAPI(lambda m, n: INCOMPLETE)
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = reader(d, {"https://a/ldo.pdf": data}, rules={"datasheet": {"route": "ladder", "page_budget": 3}})
+        j = rd.job("TESTLDO-H33TRG1", [("https://a/ldo.pdf", "BOM")], "SOT-223-3_TabPin2")
+        assert len(j["levels"]) == 3
+        res = rd.read_now(j)
+        assert len(api.sent) == 4 and api.sent[-1] == (OPUS, 30), api.sent
+        assert res["sidecar"]["route"]["model"] == OPUS
+    r = R.Router({"route": "ladder", "max_attempts": 2})
+    assert r.next_step(0, 0, 3, "failed", 1) == (2, 0) and r.next_step(0, 0, 3, "incomplete", 1) == (2, 2)
+    assert r.next_step(2, 0, 3, "incomplete", 1) == (2, 1) and r.next_step(0, 0, 3, "failed", 2) is None
+
+
+def test_sync_refusal_is_costed_from_its_usage():
+    api = ModelAPI(lambda m, n: "refusal" if m == HAIKU else GOOD)
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = reader(d, {"https://a/ds.pdf": TD.PDF}, rules=LADDER)
+        res = rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "D_SOD-123"))
+        led = ledger(d)
+        assert len(led) == 2 and led[0]["how"] == "usage" and led[0]["output_tokens"] == 2304, led
+        assert abs(led[0]["usd"] - R.usage_usd(HAIKU, TD.message(GOOD)["usage"])) < 1e-9
+        assert res["sidecar"]["route"]["attempts"][0]["usage"]["output_tokens"] == 2304      # the eval sums these
+
+
+def test_no_key_is_not_a_failed_step():
+    """Without a key nothing is sent: no cost is logged and no step of the route is cached as failed."""
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    api = ModelAPI(lambda m, n: GOOD)
+    with tempfile.TemporaryDirectory() as d, TB.patched(api), mock.patch.dict(os.environ, env, clear=True):
+        rd = reader(d, {"https://a/ds.pdf": TD.PDF}, rules=LADDER, key=None)
+        try:
+            rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "R_0603_1608Metric"))
+            raise AssertionError("no key must raise")
+        except D.DatasheetError as e:
+            assert "not set" in str(e)
+        assert ledger(d) == [] and api.sent == []
+        rd = reader(d, {"https://a/ds.pdf": TD.PDF}, rules=LADDER)
+        assert rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "R_0603_1608Metric")["model"] == HAIKU
+
+
+def test_stale_failed_step_at_the_end_of_the_route_is_not_paid_in_a_loop():
+    """A refusal cached as a failed step under a longer ladder, then the ladder shortened: the step is the last one
+    now; read_now must raise after one call, not call again and again."""
+    def answer(m, n):
+        assert len(api.sent) < 10, "paid again and again"
+        return "refusal"
+    api = ModelAPI(answer)
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = reader(d, {"https://a/ds.pdf": TD.PDF}, rules={"datasheet": {"route": "ladder", "ladder": [HAIKU, OPUS]}})
+        j = rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "R_0603_1608Metric")
+        try:
+            rd.read_now(j)
+        except D.DatasheetError:
+            pass
+        n = len(api.sent)
+        rd = reader(d, {"https://a/ds.pdf": TD.PDF}, rules={"datasheet": {"route": "ladder", "ladder": [HAIKU]}})
+        j = rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "R_0603_1608Metric")
+        try:
+            rd.read_now(j)
+            raise AssertionError("must raise")
+        except D.DatasheetError as e:
+            assert "refusal" in str(e)
+        assert len(api.sent) == n + 1, api.sent
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
