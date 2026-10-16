@@ -728,6 +728,7 @@ def main(argv=None):
     p = sub.add_parser("list", help="items, newest first")
     p.add_argument("--status", choices=STATES)
     p.add_argument("--batch")
+    p.add_argument("--json", action="store_true", help="print the items' summaries as JSON (for scripts)")
     p = sub.add_parser("show", help="one item as JSON")
     p.add_argument("id")
     for a in ACTIONS:
@@ -741,6 +742,9 @@ def main(argv=None):
     try:
         if a.cmd == "list":
             items = Queue(root).list(a.status, a.batch)
+            if a.json:
+                print(json.dumps([summary(i) for i in items], indent=2, default=str))
+                return 0
             from .term_views import queue_list
             queue_list(items, summary, Queue(root).dir)
         elif a.cmd == "show":

@@ -239,7 +239,7 @@ def test_librarian_json_and_progress():
         rc, out, _ = _run(["librarian", str(bom), "-o", str(Path(d) / "o2"), "--offline", "--sources", "standard",
                            "--cache", str(Path(d) / "c")])
         assert "BOM: 1 lines" in out and "finding symbols and footprints for 1 part(s)" in out
-        assert out.strip().splitlines()[-1].startswith("1 parts: 1 ready, 0 held ->")
+        assert "\n1 part: 1 ready\n" in out and "next:" in out and "ecadlib kicad-export" in out      # the summary block
 
 
 # ------------------------------------------------------------------ the CLI tree: descriptions, examples, flag names
