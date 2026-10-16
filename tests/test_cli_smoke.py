@@ -42,6 +42,8 @@ CASES = [
     (["check", "{out}/fp.pretty/R_0603_1608Metric.kicad_mod"], (0, 1)),
     (["footprint-bench", "--offline", "--fixture", "{tests}/fixtures/kicad_bench.json", "--cache", "{out}/cache",
       "--json", "{out}/bench.json"], (0, 1)),
+    (["eval", "run", "--limit", "3", "--offline", "--cache", "{out}/cache", "-o", "{out}/eval"], (0,)),
+    (["eval", "sets"], (0,)),
     (["dblib", "{in}/bom.csv", "-o", "{out}/dblib"], (0,)),
     (["altium-lib", "pcblib", "{pkg}/package_specs/R_0603_1608Metric.json", "-o", "{out}/al"], (0,)),
     (["altium-lib", "dump", "{out}/al/R_0603_1608Metric.PcbLib"], (0,)),
