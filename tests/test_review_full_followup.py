@@ -83,7 +83,8 @@ def test_mcp_checks_arguments_against_the_schema():
         ws = Workspace(d)
         out = M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                             "params": {"name": "agent_watch_scan", "arguments": {"sources": "bom_file:x.csv"}}})
-        assert out["error"]["code"] == -32602 and "sources" in out["error"]["message"], out
+        res = out["result"]
+        assert res["isError"] and "invalid argument(s): sources" in res["content"][0]["text"], out
 
 
 def test_upstream_check_kicad_without_a_manifest_gives_a_hint():

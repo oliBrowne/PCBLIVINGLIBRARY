@@ -557,8 +557,9 @@ def handle(ws, msg):
         if missing:
             return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"missing argument(s): {', '.join(missing)}"}}
         bad = _arg_errors(tool, params.get("arguments") or {})
-        if bad:                                           # e.g. a string where a list goes (it was used letter by letter)
-            return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"invalid argument(s): {bad}"}}
+        if bad:                                           # e.g. a string where a list goes (it was used letter by letter):
+            return {"jsonrpc": "2.0", "id": mid,           # a tool error, so the model reads it and calls again
+                    "result": {"content": [{"type": "text", "text": f"invalid argument(s): {bad}"}], "isError": True}}
         try:
             out = call_tool(ws, params.get("name"), params.get("arguments") or {})
             result = {"content": [{"type": "text", "text": json.dumps(out, indent=1, default=str)}], "isError": False}
