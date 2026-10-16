@@ -621,7 +621,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     plan_dir, lib = plan.parent, kname(name)
     from .rules import resolve
     rules = resolve(rules, plan_dir)
-    items = sorted(json.loads(plan.read_text()), key=lambda i: kname(i["name"]))
+    items = sorted(json.loads(plan.read_text(encoding="utf-8")), key=lambda i: kname(i["name"]))
     pretty, shapes = out / f"{lib}.pretty", out / f"{lib}.3dshapes"
     out.mkdir(parents=True, exist_ok=True)
     pretty.mkdir(exist_ok=True)
@@ -646,13 +646,13 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
             fnotes = []
             try:
                 if kmod:
-                    text, how = kmod.read_text(), f"{kmod.relative_to(plan_dir) if kmod.is_relative_to(plan_dir) else kmod}"
+                    text, how = kmod.read_text(encoding="utf-8"), f"{kmod.relative_to(plan_dir) if kmod.is_relative_to(plan_dir) else kmod}"
                 else:
                     text, how = footprint_from_pcblib(plan_dir / it["footprint"]["file"], fpn, fnotes), f"{it['footprint']['file']} converted back"
                 tree, models = footprint_tree(text, fpn, lib, fnotes)
                 body = sexpr.dumps(tree) + "\n"
                 sexpr.parse(body)
-                (pretty / f"{fpn}.kicad_mod").write_text(body)
+                (pretty / f"{fpn}.kicad_mod").write_text(body, encoding="utf-8")
                 for src3d, fn in models:
                     if fn in rep["models"]:
                         continue
@@ -663,7 +663,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
                         fnotes.append(f"3D {src3d}: {e}")
                     if data:
                         shapes.mkdir(exist_ok=True)
-                        (shapes / fn).write_text(data)
+                        (shapes / fn).write_text(data, encoding="utf-8")
                         rep["models"][fn] = f"kicad-packages3D/{src3d}"
                         rep["kicad_content"] = True
                     elif (shapes / fn).is_file():     # put there by hand or by an earlier export: keep it
@@ -676,7 +676,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
                 if got:                       # no KiCad model: the Altium one, so both libraries have the part in 3D
                     tree.append(got[0])
                     body = sexpr.dumps(tree) + "\n"
-                    (pretty / f"{fpn}.kicad_mod").write_text(body)
+                    (pretty / f"{fpn}.kicad_mod").write_text(body, encoding="utf-8")
                     rep["models"][got[1]] = got[2]
                 elif not models:
                     fnotes.append("no 3D model (no KiCad model and no 3D body in the .PcbLib)")
@@ -711,7 +711,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
             symbols[sname] = sym
             row["symbol"] = how
             if row["footprint"]:
-                pads = {p[1] for p in sexpr.find(sexpr.parse((pretty / f"{row['footprint']}.kicad_mod").read_text()), "pad") if p[1]}
+                pads = {p[1] for p in sexpr.find(sexpr.parse((pretty / f"{row['footprint']}.kicad_mod").read_text(encoding="utf-8")), "pad") if p[1]}
                 missing = sorted(_pins(sym) - pads)
                 if missing:
                     notes.append(f"symbol pins without a pad in {row['footprint']}: {', '.join(missing)}")
@@ -723,7 +723,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     text = sexpr.dumps(tree) + "\n"
     parsed = sexpr.parse(text)
     assert [s[1] for s in sexpr.find(parsed, "symbol")] == sorted(symbols)
-    (out / f"{lib}.kicad_sym").write_text(text)
+    (out / f"{lib}.kicad_sym").write_text(text, encoding="utf-8")
     for old in pretty.glob("*.kicad_mod"):    # a re-export drops files no longer in the plan
         if old.stem not in fps:
             old.unlink()
@@ -735,10 +735,10 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     for kind, table, uri in (("sym", "sym_lib_table", f"{lib}.kicad_sym"), ("fp", "fp_lib_table", f"{lib}.pretty")):  # export) stay
         add_lib_row(out / f"{kind}-lib-table", lib, f"${{KIPRJMOD}}/{uri}", desc, "KiCad", table)
     if rep["kicad_content"]:
-        (out / "NOTICE.txt").write_text(KICAD_NOTICE)
+        (out / "NOTICE.txt").write_text(KICAD_NOTICE, encoding="utf-8")
     rep["footprints"] = {k: fps[k] for k in sorted(fps)}
     rep["symbols"] = len(symbols)
-    (out / "kicad_export.json").write_text(json.dumps(rep, indent=2) + "\n")
+    (out / "kicad_export.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
     return rep
 
 
