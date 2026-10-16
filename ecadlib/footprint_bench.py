@@ -98,7 +98,8 @@ def numbers(text):
         if not any(l.startswith(("F.", "*.", "F&B.")) for l in r["layers"]):
             continue                                         # B.Cu-only copy of an exposed pad (heat spreader): not compared
         d = sexpr.first(p, "drill")
-        drill = max(float(v) for v in d[1:] if isinstance(v, str) and v != "oval") if d else 0.0   # not (offset x y)
+        drill = max((float(v) for v in d[1:] if isinstance(v, str) and v != "oval"), default=0.0) if d else 0.0  # not (offset x y);
+                                                     # an SMD pad's (drill (offset ...)) alone is no hole
         pads.append([r["num"], round(r["x"], 4), round(r["y"], 4), round(r["w"], 4), round(r["h"], 4), drill])
     pads = [p for p in pads if p[0] or p[5]]                 # paste-only windows are not pads
     return {"pads": pads, "courtyard": list(sexpr.courtyard_bbox(t) or ())}

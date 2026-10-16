@@ -1214,6 +1214,47 @@ Run 2026-10-15 with KiCad 7.0.11 (`kicad-cli`, `pcbnew` from `/usr/bin/python3`)
 * **Not checked:** KiCad 8, 9 and 10 (not installed; the optional CI job `kicad` also runs the tests on KiCad 8 from
   the KiCad PPA, not run from here); `sym-lib-table` loaded by KiCad; STEP geometry inside KiCad beyond loading.
 
+## 29. `eval`: accuracy test set and scorer (`ecadlib/eval/`)
+
+How often does the pipeline get a part right, and what does it cost? `ecadlib/eval/sets/kicad-v1.json` holds 331 real
+parts with a known answer, taken from KiCad's official libraries (kicad-symbols 9280a93, kicad-footprints f8440fa):
+chip passives 36, SOT 40, SOIC 30, TSSOP/MSOP/SSOP 30, QFN/DFN/SON 40, QFP 25, BGA/CSP 25, diodes 25, power SMD
+(DPAK, LFPAK ...) 15, THT 30, connectors 35. Each case has the MPN, manufacturer, the package a BOM would name, a
+datasheet link (315 of 331), the KiCad footprint it should match, the symbol's pin numbers and names, and `from`:
+a KiCad symbol whose name is the MPN (footprint = its Footprint property, manufacturer from the datasheet's domain), a
+connector footprint whose name carries the maker's part number (JST, Molex, Wurth), or a curated chip-passive ordering
+code (Yageo, Panasonic, Murata, Samsung, KEMET, Lite-On; size code -> KiCad chip footprint). Only numbers are kept from
+KiCad's files (pad centres, sizes, drills, courtyard box; pin names), CC-BY-SA 4.0 with the libraries exception.
+`ecadlib eval build-set --symbols DIR --footprints DIR` rebuilds it from fresh checkouts (deterministic selection).
+
+```
+ecadlib eval run [--limit 30] [--family qfn,bga] [--model M] [--sources standard,easyeda,datasheet] -o out/eval/a
+ecadlib eval run --record out/eval/rec -o out/eval/a      # live, and keep every Claude answer
+ecadlib eval run --replay out/eval/rec -o out/eval/b      # re-score later (new scorer, new builder) without paying
+ecadlib eval compare out/eval/a out/eval/b                # pass rate and $/part per family, cases that flipped
+```
+
+`run` writes one BOM of the cases and sends it through `librarian.run` (default sources: the rules' order without
+`kicad`, which is the ground truth here). Whatever source answers, its `.kicad_mod` and `.SchLib` are scored
+(`ecadlib/eval/score.py`): pad count and numbers; pad 1 (A1) position, which catches mirrored and rotated parts;
+pitch (most common nearest-neighbour spacing); every pad's centre/size/drill; courtyard box; symbol pin numbers and
+names (80 % must agree after normalising overbars and case). Positions are compared after centring both pad boxes, so a
+different origin is reported but does not fail. Tolerances (`--tol pos=0.05 size=0.10 pitch=0.01 courtyard=0.25
+pin1=0.25 drill=0.05`) are looser than `footprint-bench`'s because a datasheet's nominal dimensions differ a little
+from KiCad's. Thermal vias inside an exposed pad are ignored. The report (`report.md`, `report.json`) gives the pass
+rate overall, per family and per answering source, per-field counts, tokens and USD per part (from the message's
+usage block when live, cached or replayed; otherwise datasheet's estimate, rough without a key) and wall time. Without
+a key and without `--replay` nothing is sent: parts that need Claude are reported unresolved, with an estimate.
+
+Checked here (no API key, so no live accuracy number yet): KiCad's footprints and symbols score 331/331 against
+themselves; the scorer fails a 0.65 mm-pitch QFN built in place of a 0.5 mm one (pitch), a mirrored footprint (pin 1),
+a missing exposed pad (pad count). The whole set through the `kicad` source (KiCad libraries served from local
+clones; GitLab rate-limited the live crawl): 295 parts resolved, 246 pass; every failure is explained: 29
+connectors get no symbol by MPN, and 20 parts got another part's footprint because both BOM lines name the same
+package (`SOIC-14` for a 3.9 mm and a 5.3 mm body): the librarian keeps one footprint per BOM footprint name. The
+report flags these (`footprint shared with`). Estimate mode on the whole set: ~$0.60 per part on Opus 5.5
+synchronous, mostly because PDFs that cannot be downloaded here are guessed at 30 pages.
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:
