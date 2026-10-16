@@ -9,6 +9,9 @@ Jobs:
   libcheck {"dir": project dir, "lib": name, "fps": [names], "bogus": true}
                                               board in a project that has the exported fp-lib-table; DRC library checks
   step   {"lib": dir, "board": path, "models": {name: step path}}   board with one footprint per STEP model (saved only)
+  pcmcheck {"dir": project dir, "fps": [[nickname, name, installed .pretty]], "bogus": true}
+                                              board in a project with NO fp-lib-table: footprints must resolve through
+                                              the global fp-lib-table (KICAD_CONFIG_HOME) a PCM install fills in
 """
 import json, re, shutil, subprocess, sys
 from pathlib import Path
@@ -143,6 +146,44 @@ def libcheck(a):
     return out
 
 
+def pcmcheck(a):
+    d = Path(a["dir"])
+    path = str(d / "check.kicad_pcb")
+    pro = d / "check.kicad_pro"
+    if not pro.exists():
+        pro.write_text(json.dumps({"meta": {"filename": pro.name, "version": 1}}))
+    board = pcbnew.NewBoard(path)
+    refs, models = {}, {}
+    items = [tuple(x) for x in a["fps"]]
+    if a.get("bogus"):
+        items += [("not_a_lib", "X", items[0][2]), (items[0][0], "NOT_IN_LIB", items[0][2])]
+    for i, (nick, n, pretty) in enumerate(items):
+        src = n if n != "NOT_IN_LIB" and nick != "not_a_lib" else items[0][1]
+        fp = pcbnew.FootprintLoad(pretty, src)
+        fp.SetFPID(pcbnew.LIB_ID(nick, n))
+        fp.SetReference(f"U{i + 1}")
+        fp.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(20 + 20 * i), pcbnew.FromMM(20)))
+        models[f"{nick}:{n}"] = [m.m_Filename for m in fp.Models()]
+        board.Add(fp)
+        refs[f"U{i + 1}"] = f"{nick}:{n}"
+    _edge(board, 40 + 20 * len(items), 40)
+    board.Save(path)
+    rpt = d / "check.rpt"
+    if int(pcbnew.Version().split(".")[0]) >= 8 and shutil.which("kicad-cli"):
+        subprocess.run(["kicad-cli", "pcb", "drc", "--format", "report", "--severity-all", "--units", "mm",
+                        "-o", str(rpt), path], capture_output=True, text=True, timeout=600)
+    else:
+        b2 = pcbnew.LoadBoard(path)
+        pcbnew.WriteDRCReport(b2, str(rpt), pcbnew.EDA_UNITS_MILLIMETRES, True)
+    agg = _violations(str(rpt), refs)
+    out = {k: {kk: vv for kk, vv in v.items() if kk.startswith("lib_footprint")} for k, v in agg.items()}
+    out["_models"] = models
+    out["_board"] = path
+    blocks = [b for b in rpt.read_text().split("\n[")[1:] if b.startswith("lib_footprint")]
+    out["_detail"] = [b.strip()[:300] for b in blocks[:3]]
+    return out
+
+
 def step(a):
     lib, path = a["lib"], a["board"]
     board = pcbnew.NewBoard(path)
@@ -162,4 +203,4 @@ def step(a):
 
 if __name__ == "__main__":
     job, args = sys.argv[1], json.loads(sys.argv[2])
-    print(json.dumps({"load": load, "drc": drc, "libcheck": libcheck, "step": step}[job](args)))
+    print(json.dumps({"load": load, "drc": drc, "libcheck": libcheck, "step": step, "pcmcheck": pcmcheck}[job](args)))

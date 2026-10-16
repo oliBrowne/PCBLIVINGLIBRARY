@@ -196,7 +196,10 @@ def main(argv=None):
     sqlite_cs, excel_cs = sqlite_connection(win / "parts.sqlite"), excel_connection(win / "parts.xlsx")
     names = {k: list(df.columns) for k, df in tables.items()}
     (out / "ecadlib_sqlite.DbLib").write_text(dblib_text(sqlite_cs, names, '"', '"'), newline="")
-    (out / "ecadlib_excel.DbLib").write_text(dblib_text(excel_cs, names, "[", "]", excel=True), newline="")
+    # the Excel one names its workbook relative to itself (DatabasePathRelative=1, as Altium's DbLib editor writes it),
+    # so the folder can move; the SQLite ODBC string has no relative form and keeps --win-dir
+    (out / "ecadlib_excel.DbLib").write_text(dblib_text(excel_cs, names, "[", "]", excel=True, db_type="Microsoft Excel",
+                                                        db_path="parts.xlsx", relative=True), newline="")
     for n_, df in tables.items():
         print(f"{n_:<12} {len(df):>2} parts  e.g. {df.iloc[0]['Part Number']} -> {df.iloc[0]['Footprint Ref']}")
     print(f"wrote {db}, {out/'parts.xlsx'}, {out/'ecadlib_sqlite.DbLib'}, {out/'ecadlib_excel.DbLib'}")

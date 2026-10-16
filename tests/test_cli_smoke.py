@@ -81,6 +81,8 @@ CASES = [
     (["notify", "show", "--rules", "{in}/ecadlib.toml"], (0,)),
     (["kicad-dblib", "{out}/lib/plan.json", "-o", "{out}/kicad", "--name", "ecadlib"], (0,)),
     (["export-parts", "{out}/lib/plan.json", "--format", "xlsx", "-o", "{out}/parts.xlsx"], (0,)),
+    (["kicad-pcm", "{out}/kicad", "--out", "{out}/pcm"], (0,)),
+    (["altium-pkg", "{out}/lib/plan.json", "--out", "{out}/altium_pkg"], (0, 1, 2)),   # 2: no ready part has models
     (["stdparts", "coverage", "{in}/bom.csv"], (0,)),
     (["stdparts", "resolve", "SOT-23-5", "--kicad-mod", "{out}/sot.kicad_mod"], (0,)),
     (["stdparts", "bench", "--fixture", "{tests}/fixtures/stdparts_kicad_numbers.json.gz"], (0,)),
@@ -199,6 +201,8 @@ def test_third_party_imports_are_declared():
     declared = {re.split(r"[<>=!~ \[]", d.strip().strip('"'))[0].lower() for d in deps.split(",") if d.strip()}
     used = {}
     for f in PKG.rglob("*.py"):
+        if "assets" in f.relative_to(PKG).parts:     # runs inside KiCad's Python (pcbnew, wx), not ecadlib's
+            continue
         for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
             names = ([a.name for a in node.names] if isinstance(node, ast.Import) else
                      [node.module] if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module else [])

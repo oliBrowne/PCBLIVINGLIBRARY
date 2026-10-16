@@ -334,6 +334,16 @@ TOOLS = [
                      "properties": {"bom": {"type": "string"}, "name": {"type": "string", "description": "library name"},
                                     "driver": {"type": "string", "description": "ODBC driver name (default SQLite3 ODBC Driver)"},
                                     "include_held": {"type": "boolean", "default": False}}}},
+    {"name": "tool_packages",
+     "description": "Package the BOM's library to plug into the tools: a KiCad Plugin and Content Manager zip (install "
+                    "with 'Install from File...'; libraries appear as PCM_<name>) and an Altium folder with a .LibPkg "
+                    "(compile to .IntLib), an install script project (.PrjScr) and a relative-path DbLib. Returns "
+                    "workspace paths and any problems found.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "name": {"type": "string", "description": "library name"},
+                                    "kicad": {"type": "integer", "enum": [7, 8, 9, 10], "default": 8,
+                                              "description": "oldest KiCad version to install the zip"},
+                                    "include_held": {"type": "boolean", "default": False}}}},
 ]
 
 
@@ -455,6 +465,9 @@ def call_tool(ws, name, args):
         if name == "kicad_dblib":
             return ws.kicad_dblib(args["bom"], args.get("name") or "ecadlib", args.get("driver") or None,
                                   args.get("include_held") is True)
+        if name == "tool_packages":
+            return ws.tool_packages(args["bom"], args.get("name") or "ecadlib", args.get("kicad") or 8,
+                                    args.get("include_held") is True)
     raise KeyError(f"unknown tool {name}")
 
 

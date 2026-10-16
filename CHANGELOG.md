@@ -7,8 +7,13 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+### Added
+
+- `ecadlib kicad-pcm` (`kicad_pcm.py`): the library as a KiCad Plugin and Content Manager package (zip for "Install from File...", optional `repository.json`/`packages.json` with `--base-url`), metadata checked against KiCad's PCM schema; symbols point at `PCM_<lib>`, 3D models at `${KICADn_3RD_PARTY}`; `--kicad 7` writes KiCad 7 files; `--plugin` packages a pcbnew action plugin "ecadlib: add part". `ecadlib altium-pkg` (`altium_pkg.py`): Altium hand-off folder with a `.LibPkg` (compile to IntLib), a DelphiScript install project and a relative DbLib. Workspace `tool_packages` and MCP tool of the same name. Installed and checked in real KiCad 7.0.11; not run in Altium.
+
 ### Fixed
 
+- `ecadlib dblib`: the Excel `.DbLib` names its workbook relative to itself (`DatabasePathRelative=1`), so the folder can move.
 - Librarian: two BOM lines with the same footprint name no longer share one footprint file unless the pads are the same (`ecadlib/fp_share.py`); a different land pattern gets its own name (the real package name, else `<name>_<part>`), carried into `footprint.ref`, the `.PcbLib`, the symbol's footprint link, `resolve`, the KiCad export and the agent. Parts an older run shared by name only are re-resolved; files parts already have keep their names. Eval over the `kicad` source: 20 wrong shared footprints -> 0. `eval run` gives chip passives and diodes R/C/L/D designators (chips were unresolved by every source). `stdparts`: pin-removed variants (`SOIC-8-N7`, `SOIC-14-16`) are no longer resolved as the full package.
 - `standard` source never guesses: an IC family name without a body size (`SOIC-8`, `SO-14`, `TSSOP-14`, `LQFP-100`; `MSOP-8` excepted, JEDEC has one), a QFN/DFN or `-1EP` name without the exposed-pad size, and `TO-252-2` / `TO-263-2` / DPAK / D2PAK without a library prefix (KiCad also has `_TabPin1`) now return nothing, so the next source (datasheet) answers; TVS diodes get the footprint only (uni- or bidirectional pin names are not certain from the MPN). Eval, `standard` alone: 115 answers with 14 wrong -> 74 answers, 0 wrong.
 
