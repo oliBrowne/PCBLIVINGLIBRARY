@@ -1,0 +1,2 @@
+
+6 ready, 1 held  (held: CH340C)

@@ -257,8 +257,11 @@ class Client:
             if h.get("anthropic-beta"):
                 rec["beta"] = h["anthropic-beta"]
             try:
-                r = (requests.post(url, headers=h, json=body, timeout=self.timeout) if method == "POST"
-                     else requests.get(url, headers=h, timeout=self.timeout))
+                from .term import waiting            # "waiting on Claude (model call)  12 s" on the terminal
+                with waiting("Claude (model call)" if method == "POST" and "/messages" in url and "batches" not in url
+                             else "Claude API"):
+                    r = (requests.post(url, headers=h, json=body, timeout=self.timeout) if method == "POST"
+                         else requests.get(url, headers=h, timeout=self.timeout))
             except requests.RequestException as e:
                 err = APIError(f"API request failed: {type(e).__name__}: {str(e)[:200]}", retryable=retry_on is None)
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))
@@ -886,14 +889,29 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None):
 
 
 def report(res):
+    """<part>.review.md: what was read and from where, what a person must check first, then the numbers to compare."""
+    from . import messages as M
     s, sym, side = res["spec"], res["symbol"], res["sidecar"]
-    out = [f"# {side['part']}: datasheet extraction review", "",
-           f"* Datasheet: {side['datasheet']}", f"* Model: {side['model']} (served by {side['model_served']})",
-           f"* Footprint spec: `{s['name']}.json`; symbol: `{sym['name']}.json`; provenance: `{sym['name']}.extraction.json`",
-           "* Page numbers are 1-based PDF page indices of the original file.", "",
-           f"## Needs review ({len(res['needs_review'])})", ""]
-    out += [f"- [ ] {r}" for r in res["needs_review"]] or ["Nothing failed the automatic checks. A person still has to compare the drawing."]
-    out += ["", "## Dimensions", "", "| field | label | printed | mm (min / nom / max) | page | figure |", "|---|---|---|---|---|---|"]
+    pins = len(sym.get("pins") or [])
+    page = (s.get("source") or {}).get("page")
+    fp = f"footprint {s['name']}" + (f" ({s['pitch']} mm pitch)" if isinstance(s.get("pitch"), (int, float)) else "")
+    cc = side.get("cross_check") or {}
+    out = [f"# {side['part']}: what the datasheet reader found", "",
+           f"**The {fp} and the symbol ({M.plural(pins, 'pin')}) were read from the datasheet"
+           + (f", drawing on page {page}" if page else "") + ".**", ""]
+    if cc.get("status") == "disagreed":
+        d = next((x for c in cc.get("checks") or [] for x in c.get("disagreed") or []), None)
+        other = next((c["source"] for c in cc.get("checks") or [] if c.get("disagreed")), "")
+        t, f = M.held("crosscheck.disagree", field=CC_LABEL(d["field"]) if d else "", first=d and d["first"],
+                      second=d and d["second"], other=other)
+        out += [f"Held: {t}", f"**Next:** {f}", ""]
+    else:
+        out += ["A person has to compare it with the datasheet before it is released; until then the part is held.", ""]
+    out += [f"## Check these first ({len(res['needs_review'])})", ""]
+    out += [f"- [ ] {M.explain(r)['text']}" for r in res["needs_review"]] or \
+        ["Nothing failed the automatic checks. Still compare the drawing with the numbers below."]
+    out += ["", "Page numbers are pages of the original PDF, counting from 1."]
+    out += ["", "## Dimensions to compare with the drawing", "", "| Dimension | Label | Printed | mm (min / nom / max) | Page | Figure |", "|---|---|---|---|---|---|"]
     for k, p in side["dimensions"].items():
         pr = " / ".join(f"{p['printed'].get(x, '-')}" for x in ("min", "nom", "max")) + f" {p['unit']}"
         mm = " / ".join(f"{p['mm'].get(x, '-')}" for x in ("min", "nom", "max"))
@@ -913,7 +931,16 @@ def report(res):
                 for i, a in enumerate(rt["attempts"], 1)]
     from . import crosscheck as CC
     out += CC.report_md(side.get("cross_check"))
+    out += ["", "## Details", "", f"* Datasheet: <{side['datasheet']}>" if str(side.get("datasheet", "")).startswith("http")
+            else f"* Datasheet: {Path(str(side.get('datasheet') or '-')).name}",
+            f"* Model: {side['model']} (served by {side['model_served']})",
+            f"* Files: footprint `{s['name']}.json`, symbol `{sym['name']}.json`, where each number came from `{sym['name']}.extraction.json`"]
     return "\n".join(out) + "\n"
+
+
+def CC_LABEL(field):
+    from . import crosscheck as CC
+    return CC.LABEL.get(field, field)
 
 
 def write(res, outdir):

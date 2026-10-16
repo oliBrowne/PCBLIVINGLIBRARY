@@ -216,7 +216,7 @@ def test_cli_and_report():
         items = {i["name"]: i for i in json.loads(plan.read_text())}
         assert items["PART2"]["status"] == "held" and items["PART1"]["status"] == "ready"
         md = (Path(d) / "release_check.md").read_text()
-        assert "1 ready (0 by --allow), 1 held" in md and "unchecked / pipe" in md, md
+        assert "**2 parts: 1 ready, 1 held.**" in md and "A person has to check this part first: unchecked | pipe." in md, md
         assert re.search(r"^name,status,result", (Path(d) / "release_check.csv").read_text())
         assert RC.main([str(plan), "--allow", "PART2", "-o", str(Path(d) / "r2")]) == 0
         assert json.loads(plan.read_text())[1]["allow"]["by"] == "--allow" and (Path(d) / "r2.md").exists()

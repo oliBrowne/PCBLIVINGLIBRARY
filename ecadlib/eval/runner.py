@@ -386,14 +386,24 @@ def _usd(x):
 
 
 def report_md(rep):
+    """Outcome first (lines 2-5 are what `ecadlib eval run` prints), then the wrong parts, then the breakdowns."""
     m, s = rep["meta"], rep["summary"]
     o = s["overall"]
+    bad = [r for r in rep["cases"] if not r["pass"]]
     md = [f"# Accuracy: {m['set']} (v{m['set_version']})", "",
-          f"Model {m['model']}, sources {', '.join(m['sources'])}, mode {m['mode']}; {m['cases']} cases in {m['wall_s']} s "
-          f"({m['wall_s_per_part']} s per part).", "",
-          f"**Pass: {o['pass']}/{o['cases']} ({_pct(o['rate'])})**; tokens {o['tokens_in']} in / {o['tokens_out']} out; "
-          f"{_usd(o['usd'])} in all, {_usd(o['usd_per_part'])} per part.", "",
-          "| Family | Cases | Pass | Rate | Answered by | USD / part |", "|---|---|---|---|---|---|"]
+          f"**Pass: {o['pass']}/{o['cases']} ({_pct(o['rate'])})**. "
+          + (f"{len(bad)} {'part was' if len(bad) == 1 else 'parts were'} wrong: see \"Wrong parts\" below." if bad else "Every part was right."), "",
+          f"Model {m['model']}, sources {', '.join(m['sources'])}, mode {m['mode']}. {m['cases']} parts in {m['wall_s']} s "
+          f"({m['wall_s_per_part']} s per part); {o['tokens_in']} tokens in / {o['tokens_out']} out; "
+          f"{_usd(o['usd'])} in all, {_usd(o['usd_per_part'])} per part.", ""]
+    if bad:
+        md += [f"## Wrong parts ({len(bad)})", ""]
+        for r in bad:
+            why = "; ".join(r["errors"][:3]) if r["source"] != "none" else "no source had it: " + "; ".join(r["tried"][-2:])
+            sh = f" [footprint shared with {r['footprint_shared_with']}]" if r.get("footprint_shared_with") else ""
+            md.append(f"- **{r['id']}** (from {r['source']}){sh}: {why}")
+        md.append("")
+    md += ["## By package family", "", "| Family | Cases | Pass | Rate | Answered by | USD / part |", "|---|---|---|---|---|---|"]
     for k, f in s["families"].items():
         md.append(f"| {k} | {f['cases']} | {f['pass']} | {_pct(f['rate'])} | "
                   + ", ".join(f"{a} {b}" for a, b in f["sources"].items()) + f" | {_usd(f['usd_per_part'])} |")
@@ -406,16 +416,10 @@ def report_md(rep):
     sh = s.get("shared_footprints") or {}
     if sh.get("cases"):
         md += ["", f"{sh['cases']} parts got the footprint file of another part with the same BOM footprint name "
-               f"(librarian: shared only when the pads are the same); {sh['failing']} of them fail."]
-    md += ["", "| Source | Cases | Pass | Rate |", "|---|---|---|---|"]
+               f"(shared only when the pads are the same); {sh['failing']} of them fail."]
+    md += ["", "## By source", "", "| Source | Cases | Pass | Rate |", "|---|---|---|---|"]
     md += [f"| {k} | {f['cases']} | {f['pass']} | {_pct(f['rate'])} |" for k, f in s["by_source"].items()]
-    md += ["", "| Field | OK |", "|---|---|"] + [f"| {k} | {v['ok']}/{v['of']} |" for k, v in s["fields"].items()]
-    md += ["", "## Failing cases", ""]
-    for r in rep["cases"]:
-        if not r["pass"]:
-            why = "; ".join(r["errors"][:3]) if r["source"] != "none" else "unresolved: " + "; ".join(r["tried"][-2:])
-            sh = f" [footprint shared with {r['footprint_shared_with']}]" if r.get("footprint_shared_with") else ""
-            md.append(f"- **{r['id']}** ({r['source']}){sh}: {why}")
+    md += ["", "## By field", "", "| Field | OK |", "|---|---|"] + [f"| {k} | {v['ok']}/{v['of']} |" for k, v in s["fields"].items()]
     return "\n".join(md) + "\n"
 
 
