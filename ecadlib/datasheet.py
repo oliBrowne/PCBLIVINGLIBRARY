@@ -2,6 +2,7 @@
 
     python3 -m ecadlib.datasheet <pdf|url> --part <MPN> [--package <hint>] [--pages a-b] [--estimate] -o <dir>
     ecadlib datasheet batch PLAN.json|BOM [--no-wait] [--no-batch] [--estimate]   (a whole BOM as one Message Batch)
+    ecadlib datasheet pages <pdf> [--part MPN] [--package NAME]     (pages and model a read would use; sends nothing)
 
 One Messages API call over HTTPS (requests; key from ANTHROPIC_API_KEY). The response format is a JSON
 schema derived from package_schema.json in which every dimension comes back exactly as printed
@@ -57,7 +58,9 @@ PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-opus-5": (5.0, 25.0), "claude-
 BATCH_DISCOUNT, CACHE_WRITE = 0.5, 1.25
 BATCH_BYTES, BATCH_MAX = 200 * 2 ** 20, 100_000       # per batch (API limits: 256 MB, 100,000 requests)
 PAGE_TOKENS, OUT_TOKENS, URL_PAGES = 3000, 6000, 30  # rough estimate without a key: per PDF page, typical output, unknown PDF
-SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40}
+SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40,
+            "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", MODEL],
+            "escalate": True, "max_attempts": 4}            # pages / model per part: ecadlib.ds_route
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # Per-model request parameters (claude-api skill, Thinking & Effort table): effort levels a model accepts (no entry
 # for a listed model = it rejects output_config.effort: Haiku 4.5, Sonnet 4.5), and the PDF page limit of
@@ -447,7 +450,11 @@ def require_key(key=None, rules=None):
 def call(headers, body, key, timeout=600):
     """POST /v1/messages -> (extraction dict, raw message), with retries on 429/5xx/529. Raises DatasheetError."""
     msg = Client(key, timeout=timeout).messages(body, headers)
-    return parse_message(msg), msg
+    try:
+        return parse_message(msg), msg
+    except DatasheetError as e:                       # an answer that was paid for: its usage goes with the error
+        e.api_message = msg
+        raise
 
 
 def parse_message(msg):
@@ -884,6 +891,11 @@ def report(res):
     out += [f"| {p['num']} | {p['name']} | {p['type']} | {p['side']} | {p['page']} |" for p in side["pins"]]
     if side["notes"]:
         out += ["", "## Model notes", ""] + [f"- {n}" for n in side["notes"]]
+    rt = side.get("route")
+    if rt and rt.get("attempts"):
+        out += ["", f"## How it was read ([datasheet] route = {rt.get('route')}; started on {rt['ladder'][0] if len(rt['ladder']) == 1 else rt.get('start')})", ""]
+        out += [f"{i}. {a['model']}, {a['pages']} pages: {a['verdict']}" + (f" ({'; '.join(a['why'])[:300]})" if a.get("why") else "")
+                for i, a in enumerate(rt["attempts"], 1)]
     return "\n".join(out) + "\n"
 
 
@@ -1165,6 +1177,9 @@ class Reader:
         self.log_file = self.dir / "api_log.jsonl"
         self.say, self.sleep = log or (lambda *a: None), sleep or time.sleep
         self._client, self.pending, self.last_estimate, self.committed_usd = client, {}, None, 0.0
+        from . import ds_route as DR                  # pages and model per part, escalation, cost ledger
+        self.router, self.ledger, self.page_budget = DR.Router(self.cfg, model), DR.Ledger(self.dir), self.cfg["page_budget"]
+        self._texts = {}
 
     @property
     def deferred(self):
@@ -1178,7 +1193,11 @@ class Reader:
     # --- jobs
     def job(self, part, urls, package=None, pages=None, name=None):
         """Try each (url, where) until one is a PDF. A link that cannot be downloaded here (blocked host) is sent
-        as a URL source for the API to fetch, so a part is never stuck on this machine's network."""
+        as a URL source for the API to fetch, so a part is never stuck on this machine's network.
+        The job is the first step of the part's route (ds_route): the pages picked for [datasheet] page_budget and the
+        model the router starts on; answers already in the result cache are replayed, so a part whose cheap attempt
+        failed before starts where it left off ('final' = the cached answer at this step is the one to use)."""
+        from . import ds_route as DR
         attempts, data, prov = [], None, None
         for url, where in urls:
             try:
@@ -1194,27 +1213,103 @@ class Reader:
             if not usable:
                 raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts))
             url, where = usable[0]
-            src, offset, hint, note = ("url", url), 0, pages, "not downloaded here; sent as a URL for the API to fetch"
-            prov = {"url": url, "where": where, "sent_as": "url", "note": note}
-            src_hash = "url" + hashlib.sha256(url.encode()).hexdigest()
+            prov = {"url": url, "where": where, "sent_as": "url", "note": "not downloaded here; sent as a URL for the API to fetch"}
+            src_hash, lv, why, n = "url" + hashlib.sha256(url.encode()).hexdigest(), [None], {}, None
         else:
-            url, where = prov["url"], prov["where"]
-            sent, offset, hint, note = prepare(data, pages, self.auto_pages, page_limit(self.model))
-            src = ("base64", sent)
-            prov = dict(prov, sent_as="base64", note=note, sent_bytes=len(sent),
-                        pages_sent=offset if isinstance(offset, list) else None)
-            src_hash = prov["sha256"]
+            url, where, src_hash, n = prov["url"], prov["where"], prov["sha256"], prov.get("pages") or pdf_pages(data)
+            lv, why = [None], {}
+            if not pages and self.page_budget and n and n > self.page_budget:
+                texts = self._page_texts(data, src_hash)
+                if texts:
+                    lv, why = DR.levels(texts, self.page_budget, part, package, n)
         prov["attempts"] = attempts
-        headers, body = build_request(src, part, package, hint, self.model, self.effort, fallback=not self.deferred,
+        sent0 = len(lv[0]) if isinstance(lv[0], list) else None
+        rung, reason = self.router.start(package, n, sent0)
+        base = {"name": name or part, "part": part, "package": package, "url": url, "where": where, "pages": pages,
+                "data": data, "src_hash": src_hash, "levels": lv, "n_pages": n, "base_prov": prov,
+                "route": {"route": self.router.route, "ladder": self.router.ladder, "start": reason, "picked": why,
+                          "attempts": []}}
+        first = self._at(base, rung, 0)
+        if len(lv) > 1 and self.results.get(first["key"]) is None:
+            whole = self._at(base, rung, len(lv) - 1)  # read whole before page picking existed: keep that answer
+            if self.results.get(whole["key"]):
+                first = whole
+        return self._walk(first)
+
+    def _page_texts(self, data, digest):
+        from . import ds_route as DR
+        if digest not in self._texts:                 # None (no pypdf, encrypted, damaged): the whole PDF, as before
+            self._texts[digest] = DR.page_texts(data)
+        return self._texts[digest]
+
+    def _at(self, base, rung, level):
+        """The request for one step of a part's route: model = ladder[rung], pages = levels[level]."""
+        model, lv = self.router.ladder[rung], base["levels"][level]
+        prov = dict(base["base_prov"])
+        cut = None
+        if base["data"] is not None and isinstance(lv, list):
+            try:
+                cut = trim(base["data"], lv)
+            except DatasheetError:                    # damaged page objects: the whole PDF, as prepare() does
+                cut = None
+        if base["data"] is None:
+            src, offset, hint = ("url", base["url"]), 0, base["pages"]
+        elif cut is not None:
+            src, offset, hint = ("base64", cut), lv, None
+            why = {k: v for k, v in (base["route"]["picked"] or {}).items() if isinstance(k, int) and k in lv}
+            prov.update(note=f"{len(lv)} of {base['n_pages']} pages sent (picked for this part: {_ranges(lv)}; "
+                             f"{'first try' if level == 0 else 'widened'})", picked_why=why)
+        else:
+            sent, offset, hint, note = prepare(base["data"], base["pages"], self.auto_pages, page_limit(model))
+            src = ("base64", sent)
+            prov["note"] = note + (" (the picked pages could not be cut from this PDF)" if isinstance(lv, list) else "")
+        if src[0] == "base64":
+            prov.update(sent_as="base64", sent_bytes=len(src[1]), pages_sent=offset if isinstance(offset, list) else None)
+        headers, body = build_request(src, base["part"], base["package"], hint, model, self.effort, fallback=not self.deferred,
                                       cache_doc=not self.deferred)
-        key = ResultCache.key(src_hash, self.model, part, package, offset if isinstance(offset, list) else [offset, hint], self.effort)
-        return {"key": key, "name": name or part, "part": part, "package": package, "url": url, "where": where,
-                "offset": offset, "headers": headers, "body": body, "prov": prov}
+        key = ResultCache.key(base["src_hash"], model, base["part"], base["package"],
+                              offset if isinstance(offset, list) else [offset, hint], self.effort)
+        route = dict(base["route"], attempts=list(base["route"]["attempts"]), rung=rung, level=level, model=model)
+        return dict(base, key=key, model=model, rung=rung, level=level, offset=offset, headers=headers, body=body, prov=prov,
+                    route=route, final=False)
+
+    def _judge(self, job, rec):
+        from . import ds_route as DR
+        if "message" not in rec:
+            return "failed", [rec.get("error") or "no answer"], None
+        try:
+            ext = parse_message(rec["message"])
+            res = process(ext, job["part"], job["url"], rec.get("model") or job["model"], job["offset"], rec["message"])
+        except DatasheetError as e:
+            return "failed", [str(e)], None
+        kind, why = DR.assess(res)
+        return kind, why, res
+
+    def _walk(self, job):
+        """Replay the cached answers of a part's route from this step: -> the step to send next, or the step whose
+        cached answer is the one to keep (final=True). Never more than [datasheet] max_attempts answers."""
+        while True:
+            rec = self.results.get(job["key"])
+            if rec is None:
+                return job
+            kind, why, _ = self._judge(job, rec)
+            done = job["route"]["attempts"] + [{"model": job["model"], "pages": len(job["offset"]) if isinstance(job["offset"], list)
+                                                else "all", "verdict": kind, "why": why[:4], "via": rec.get("via"),
+                                                "served": (rec.get("message") or {}).get("model"),
+                                                "usage": (rec.get("message") or {}).get("usage") or rec.get("usage")}]
+            nxt = self.router.next_step(job["rung"], job["level"], len(job["levels"]), kind, len(done))
+            if nxt is None:
+                job["route"]["attempts"] = done
+                job["final"] = "message" in rec
+                return job
+            job = self._at(dict(job, route=dict(job["route"], attempts=done)), *nxt)
 
     def _result(self, job, rec):
         ext = parse_message(rec["message"])
         res = process(ext, job["part"], job["url"], rec.get("model") or self.model, rec.get("page_offset", job["offset"]), rec["message"])
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
+        if job.get("route"):
+            res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k != "picked"}
         if job["prov"].get("sent_as") == "url":
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
         if job["prov"].get("pages_sent"):
@@ -1223,24 +1318,85 @@ class Reader:
         return res
 
     def cached(self, job):
+        """The cached answer for this step, when it is the one to keep (a cheaper model's rejected answer never is)."""
         rec = self.results.get(job["key"])
-        return self._result(job, rec) if rec else None
+        if not rec or "message" not in rec:
+            return None
+        if not job.get("final") and "rung" in job:
+            job = self._walk(job)
+            if not job.get("final"):
+                return None
+        return self._result(job, self.results.get(job["key"]))
 
-    def _store(self, job, msg, via):
-        parse_message(msg)                            # only usable answers are cached: a refusal is retried next run
-        rec = {"key": job["key"], "part": job["part"], "url": job["url"], "model": self.model, "page_offset": job["offset"],
-               "via": via, "at": datetime.datetime.now().isoformat(timespec="seconds"), "message": msg}
+    def _pages_sent(self, job):
+        return len(job["offset"]) if isinstance(job.get("offset"), list) else None
+
+    def _store(self, job, msg, via, error=None):
+        """Cache an answer that parsed (and record what it cost). A response that did not parse (refusal, max_tokens,
+        not schema-shaped) is cached only as a failed step when the route has a next step to go to, so the next run
+        moves on instead of paying for it again; otherwise it is retried next run, as before."""
+        from . import ds_route as DR
+        model = job.get("model") or self.model
+        base = {"key": job["key"], "part": job["part"], "url": job.get("url", ""), "model": model,
+                "page_offset": job.get("offset", 0), "via": via, "at": datetime.datetime.now().isoformat(timespec="seconds")}
+        n_att = len((job.get("route") or {}).get("attempts") or []) + 1
+        step = lambda kind: (self.router.next_step(job["rung"], job["level"], len(job["levels"]), kind, n_att)
+                             if "rung" in job else None)
+
+        def label(nx):
+            if not nx:
+                return None
+            wider = "more pages" if nx[1] != job["level"] else ""
+            return ", ".join(x for x in (self.router.ladder[nx[0]] if nx[0] != job["rung"] else "", wider) if x)
+        try:
+            if error is not None:
+                raise error
+            parse_message(msg)
+        except DatasheetError as e:
+            nx = step("failed")
+            self.ledger.add(DR.attempt_record(job["part"], job.get("name"), model, msg, via, self._pages_sent(job),
+                                              job.get("n_pages"), "error", label(nx), e))
+            if nx:
+                self.results.put(job["key"], dict(base, error=str(e)[:300], usage=(msg or {}).get("usage")))
+            raise
+        rec = dict(base, message=msg)
         self.results.put(job["key"], rec)
+        kind = self._judge(job, rec)[0] if "rung" in job else "ok"
+        self.ledger.add(DR.attempt_record(job["part"], job.get("name"), model, msg, via, self._pages_sent(job),
+                                          job.get("n_pages"), kind, label(step(kind))))
         return rec
 
     def read_now(self, job, _guarded=False):
-        """One synchronous Messages API call (retries/backoff/logging in Client), cached, processed. Held to
-        [datasheet] max_cost_usd like a batch (the librarian calls this directly for each part)."""
-        if not _guarded:
-            self._guard_cost([job])
-        with logging_to(self.log_file, self.say):
-            _, msg = call(job["headers"], job["body"], require_key(self.key))
-        return self._result(job, self._store(job, msg, "sync"))
+        """Synchronous Messages API calls (retries/backoff/logging in Client), cached, processed, along the part's
+        route: an incomplete or failing answer is followed by the next step (more pages / the next model) until one
+        passes or the route ends. Each call is held to [datasheet] max_cost_usd like a batch."""
+        while True:
+            if job.get("final"):
+                return self._result(job, self.results.get(job["key"]))
+            if not _guarded:
+                self._guard_cost([job])
+            _guarded = False
+            key = require_key(self.key)               # no key: nothing was sent, so no step is paid for or failed
+            try:
+                with logging_to(self.log_file, self.say):
+                    _, msg = call(job["headers"], job["body"], key)
+            except DatasheetError as e:               # refusal / max_tokens / not schema-shaped: an answer, with usage
+                msg = getattr(e, "api_message", None)
+                if msg is None:                       # no answer came back (API error): nothing to record
+                    raise
+            err = None
+            try:
+                self._store(job, msg, "sync")         # refusal / max_tokens / not schema-shaped: recorded with its usage
+            except DatasheetError as e:
+                if "rung" not in job:
+                    raise
+                err = e
+            if "rung" not in job:
+                return self._result(job, self.results.get(job["key"]))
+            nxt = self._walk(job)
+            if err is not None and nxt["key"] == job["key"] and not nxt.get("final"):
+                raise err                             # no next step to go to: the error stands, retried next run
+            job = nxt
 
     def submit(self, job):
         self.pending[job["key"]] = job
@@ -1249,12 +1405,14 @@ class Reader:
     def estimate(self, jobs, batch=None):
         """Token and cost estimate before anything is sent. With a key the input is counted exactly by
         /v1/messages/count_tokens (free); without one it is rough (pages x PAGE_TOKENS). Output is a typical
-        OUT_TOKENS, and max_tokens for the worst case."""
+        OUT_TOKENS, and max_tokens for the worst case. Each part is priced on the model its route starts on;
+        usd_max_route adds the worst case of every further step its route could take (more pages, the next model)."""
         batch = self.batch if batch is None else batch
-        pin, pout = PRICES.get(self.model, (None, None))
         mult = BATCH_DISCOUNT if batch else 1.0
-        rows, exact = [], bool(self.key)
+        rows, exact, models = [], bool(self.key), {}
         for j in jobs:
+            model = j.get("model") or self.model
+            pin, pout = PRICES.get(model, (None, None))
             if self.key:
                 with logging_to(self.log_file, self.say):
                     tin = self.client().count_tokens(j["body"])
@@ -1265,14 +1423,39 @@ class Reader:
             tin += len(json.dumps(output_schema())) // 4       # the output format (not in count_tokens): rough
             cw = 1.0 if batch else CACHE_WRITE
             cost = (tin * cw * pin + OUT_TOKENS * pout) / 1e6 * mult if pin else None
-            worst = worst_usd(self.model, tin, j["body"]["max_tokens"], cw, mult, fallback=bool(j["body"].get("fallbacks")))
-            rows.append({"part": j["name"], "input_tokens": tin, "how": how, "output_tokens": OUT_TOKENS,
-                         "max_output_tokens": j["body"]["max_tokens"], "usd": cost, "usd_max": worst, "url": j["url"]})
-        tot = lambda k: round(sum(r[k] for r in rows), 2) if pin else None
-        self.last_estimate = {"model": self.model, "mode": "batch (50% off)" if batch else "synchronous", "parts": len(rows),
+            worst = worst_usd(model, tin, j["body"]["max_tokens"], cw, mult, fallback=bool(j["body"].get("fallbacks")))
+            route_max = worst
+            if "rung" in j and worst is not None and self.router.escalate:
+                sent = self._pages_sent(j) or j.get("n_pages") or URL_PAGES
+                steps = []
+                for r in range(j["rung"], len(self.router.ladder)):
+                    for lv in range(j["level"], len(j["levels"])):
+                        if (r, lv) == (j["rung"], j["level"]):
+                            continue
+                        pg = len(j["levels"][lv]) if isinstance(j["levels"][lv], list) else (j.get("n_pages") or sent)
+                        steps.append(worst_usd(self.router.ladder[r], tin * pg / max(1, sent), j["body"]["max_tokens"], cw, mult,
+                                               fallback=bool(j["body"].get("fallbacks")) and self.router.ladder[r] in FALLBACK_MODELS))
+                more = max(0, self.router.max_attempts - 1)
+                route_max = None if None in steps else worst + sum(sorted(steps, reverse=True)[:more])
+            models[model] = models.get(model, 0) + 1
+            rows.append({"part": j["name"], "model": model, "pages_sent": self._pages_sent(j),
+                         "pages_total": j.get("n_pages") or j["prov"].get("pages"), "input_tokens": tin, "how": how,
+                         "output_tokens": OUT_TOKENS, "max_output_tokens": j["body"]["max_tokens"], "usd": cost,
+                         "usd_max": worst, "usd_max_route": route_max, "start": (j.get("route") or {}).get("start"),
+                         "url": j["url"]})
+        known = all(r["usd"] is not None for r in rows)
+        tot = lambda k: round(sum(r[k] for r in rows), 2) if known and all(r[k] is not None for r in rows) else None
+        one = next(iter(models)) if len(models) == 1 else None
+        price = lambda m: f"{m} ${PRICES[m][0]}/${PRICES[m][1]}" if m in PRICES else f"no price known for {m}"
+        self.last_estimate = {"model": one or self.model, "models": models, "route": self.router.route,
+                              "mode": "batch (50% off)" if batch else "synchronous", "parts": len(rows),
                               "input_tokens": sum(r["input_tokens"] for r in rows), "exact_input": exact,
-                              "usd": tot("usd"), "usd_max": tot("usd_max"), "rows": rows,
-                              "prices": f"${pin}/${pout} per MTok in/out" if pin else f"no price known for {self.model}"}
+                              "usd": tot("usd"), "usd_max": tot("usd_max"), "usd_max_route": tot("usd_max_route"), "rows": rows,
+                              "pages_sent": sum(r["pages_sent"] or r["pages_total"] or 0 for r in rows),
+                              "pages_total": sum(r["pages_total"] or 0 for r in rows),
+                              "prices": (f"${PRICES[one][0]}/${PRICES[one][1]} per MTok in/out" if one in PRICES else
+                                         f"no price known for {one}") if one else
+                                        "; ".join(price(m) for m in models) + " per MTok in/out"}
         return self.last_estimate
 
     def _guard_cost(self, jobs):
@@ -1282,7 +1465,7 @@ class Reader:
             return
         est = self.estimate(jobs)
         if est["usd_max"] is None:
-            raise DatasheetError(f"no price known for {self.model}: can't hold [datasheet] max_cost_usd = {cap}; "
+            raise DatasheetError(f"no price known for {', '.join(est['models']) or self.model}: can't hold [datasheet] max_cost_usd = {cap}; "
                                  "pass --yes to send anyway")
         if self.committed_usd + est["usd_max"] > cap:
             raise DatasheetError(f"estimated up to ${est['usd_max']:.2f} for {est['parts']} parts"
@@ -1339,7 +1522,9 @@ class Reader:
         self._save_state(st)
 
     def flush(self):
-        """Send the submitted jobs. -> {job key: result dict | DatasheetError | 'pending <batch id>' | 'estimate'}."""
+        """Send the submitted jobs. -> {job key: result dict | DatasheetError | 'pending <batch id>' | 'estimate'}.
+        A part whose answer was incomplete or failed the checks goes on along its route (more pages, the next model)
+        in another round (another batch), keyed by the job it was submitted as."""
         jobs, self.pending = list(self.pending.values()), {}
         if not jobs:
             return {}
@@ -1347,6 +1532,25 @@ class Reader:
             est = self.estimate(jobs)
             self.say(format_estimate(est))
             return {j["key"]: "estimate only" for j in jobs}
+        out, cur = {}, {j["key"]: j for j in jobs}
+        while cur:
+            got, nxt = self._flush_round(list(cur.values())), {}
+            for k0, j in cur.items():
+                r = got.get(j["key"])
+                if isinstance(r, _Advance):
+                    j2 = r.job
+                    if j2.get("final"):
+                        r = self._result(j2, self.results.get(j2["key"]))
+                    elif self.batch and not self.wait:
+                        r = f"pending: next step {j2['model']} ({self._pages_sent(j2) or 'all'} pages); run again"
+                    else:
+                        nxt[k0] = j2
+                        continue
+                out[k0] = r
+            cur = nxt
+        return out
+
+    def _flush_round(self, jobs):
         out = {}
         if not self.batch:
             self._guard_cost(jobs)
@@ -1372,11 +1576,12 @@ class Reader:
                 chunks[-1].append(j)
                 size += n
             for chunk in (c for c in chunks if c):
-                taken, reqs, ids = set(), [], {}
+                taken, reqs, ids, models = set(), [], {}, {}
                 for j in chunk:
                     cid = custom_id(j["name"], taken)
                     taken.add(cid)
                     ids[cid] = j["key"]
+                    models[cid] = j.get("model") or self.model
                     reqs.append({"custom_id": cid, "params": j["body"]})
                 mark = {"fingerprint": hashlib.sha256(json.dumps([self.model, sorted(ids.items())]).encode()).hexdigest()[:24],
                         "at": time.time(), "n": len(reqs), "model": self.model, "requests": ids,
@@ -1394,7 +1599,7 @@ class Reader:
                                   "sending again)",)
                     raise
                 st["pending_creates"].remove(mark)
-                st["batches"].append({"id": b["id"], "created": b.get("created_at"), "model": self.model,
+                st["batches"].append({"id": b["id"], "created": b.get("created_at"), "model": self.model, "models": models,
                                       "requests": ids, "parts": {c: j["name"] for c, j in zip(ids, chunk)},
                                       "status": b.get("processing_status"), "collected": False})
                 self._save_state(st)
@@ -1422,7 +1627,8 @@ class Reader:
                         continue
                     if r.get("type") == "succeeded":
                         try:
-                            self._store(job or {"key": key, "part": b["parts"].get(line["custom_id"]), "url": "", "offset": 0},
+                            self._store(job or {"key": key, "part": b["parts"].get(line["custom_id"]), "url": "", "offset": 0,
+                                                "model": (b.get("models") or {}).get(line["custom_id"]) or b.get("model")},
                                         r["message"], f"batch {b['id']}")
                         except DatasheetError as e:
                             errors[key] = f"{e}"
@@ -1435,7 +1641,14 @@ class Reader:
                 self._save_state(st)
         for j in jobs:
             rec = self.results.get(j["key"])
-            if rec:
+            if rec and "rung" in j:
+                j2 = self._walk(j)
+                if j2["key"] != j["key"] or not j2.get("final"):
+                    if j2["key"] != j["key"]:
+                        out[j["key"]] = _Advance(j2)
+                        continue
+                    rec = None                        # an error at the end of the route
+            if rec and "message" in rec:
                 try:
                     out[j["key"]] = self._result(j, rec)
                 except DatasheetError as e:
@@ -1448,12 +1661,27 @@ class Reader:
         return out
 
 
+class _Advance:
+    """A batch answer that sends its part on to the next step of its route."""
+
+    def __init__(self, job):
+        self.job = job
+
+
 def format_estimate(est):
     usd = lambda v: f"${v:.2f}" if v is not None else "n/a"
     lines = [f"datasheet estimate: {est['parts']} parts, {est['model']}, {est['mode']}, {est['prices']}",
              f"  input {est['input_tokens']:,} tokens ({'counted by count_tokens' if est['exact_input'] else 'rough: no API key, pages x ' + str(PAGE_TOKENS)});"
              f" expected {usd(est['usd'])}, at most {usd(est['usd_max'])} (every answer at max_tokens, plus a fallback re-run on synchronous calls)"]
-    lines += [f"  {r['part']:<28} {r['input_tokens']:>9,} in  {usd(r['usd']):>8}  ({r['how']})" for r in est["rows"]]
+    if len(est.get("models") or {}) > 1 or est.get("route") == "ladder":
+        lines.append(f"  routed ([datasheet] route = {est.get('route')}): "
+                     + ", ".join(f"{n} on {m}" for m, n in sorted((est.get("models") or {}).items())))
+    if est.get("pages_total"):
+        lines.append(f"  pages sent {est['pages_sent']:,} of {est['pages_total']:,} ([datasheet] page_budget picks them per part)")
+    if est.get("usd_max_route") not in (None, est.get("usd_max")):
+        lines.append(f"  if every part also took every further step of its route (more pages, next model): at most {usd(est['usd_max_route'])}")
+    lines += [f"  {r['part']:<28} {r['input_tokens']:>9,} in  {usd(r['usd']):>8}  {r.get('model') or est['model']}"
+              + (f", {r['pages_sent']}/{r['pages_total']} pages" if r.get("pages_sent") else "") + f"  ({r['how']})" for r in est["rows"]]
     return "\n".join(lines)
 
 
@@ -1601,8 +1829,12 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv and argv[0] in ("batch", "estimate"):
         return batch_main(argv[1:], estimate=argv[0] == "estimate")
+    if argv and argv[0] == "pages":                   # which pages / model a read would use (sends nothing)
+        from .ds_route import pages_main
+        return pages_main(argv[1:])
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0],
-                                 epilog="Whole BOM / plan: ecadlib datasheet batch PLAN.json|BOM  (estimate: ecadlib datasheet estimate ...)")
+                                 epilog="Whole BOM / plan: ecadlib datasheet batch PLAN.json|BOM  (estimate: ecadlib datasheet estimate ...)"
+                                        "; pages a read would send: ecadlib datasheet pages PDF --part MPN --package NAME")
     ap.add_argument("pdf", help="datasheet PDF path or https URL")
     ap.add_argument("--part", required=True, help="manufacturer part number (symbol name)")
     ap.add_argument("--package", help="package hint, e.g. 'RGT VQFN-16' or 'SOP-16'")
