@@ -499,7 +499,7 @@ const SCENES = {
         await click($(".btns .primary", wfdlg));
       } else if (k === 2) {
         dialog("ecadlib · TPS62133RGTR", `<ul class="log"></ul><div class="meter"><i></i></div>`);
-        await log([["KiCad official libraries", "no match"], ["EasyEDA", "symbol, 17 pins", true], ["datasheet reader", "VQFN-16, 3 × 3 mm", true], ["IPC-7351B footprint", "17 pads", true], ["release check", "ready", true], ["cost, your API key", "≈ $0.25"]]);
+        await log([["KiCad official libraries", "no match"], ["EasyEDA", "symbol, 17 pins", true], ["datasheet reader", "VQFN-16, 3 × 3 mm", true], ["IPC-7351B footprint", "17 pads", true], ["release check", "ready", true], ["cost, your API key", "≈ $0.27"]]);
         await wait(700); closeDialog();
       } else {
         $("#rows", wfpanel).insertAdjacentHTML("afterbegin", row("TPS62133RGTR", "Buck converter, VQFN-16", 6, true));
