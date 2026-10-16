@@ -510,32 +510,96 @@ else {
   }, { threshold: 0.3 }).observe(win);
 }
 
-/* ---------- illustrate: every drawing and box is inked in the first time it comes into view ---------- */
+/* ---------- illustrate: the first time anything comes into view it is drawn, outlines by pen and text by hand ---------- */
 const INK_MS = 1700;
-function inkSvg(svg) {
+// pen overlays sit on a fixed layer and follow their element every frame, so reveals, sticky bars and scrolling never leave them behind
+const pens = new Map();
+const follow = () => {
+  pens.forEach((svg, el) => { const r = el.getBoundingClientRect(); svg.style.transform = `translate(${r.left}px, ${r.top}px)`; });
+  if (pens.size) requestAnimationFrame(follow);
+};
+function inkSvg(svg, delay = 0) {
   const lines = $$("path:not(.dash), line, polyline, rect, circle", svg).filter((el) => !el.closest(".sig"));
-  lines.forEach((el, i) => { el.setAttribute("pathLength", "1"); el.style.animationDelay = `${Math.min(i * 14, 900)}ms`; });
+  lines.forEach((el, i) => {
+    // pathLength dashes need vector-effect off, so hold the on-screen width by hand and nothing jumps when it comes back
+    const k = el.getScreenCTM()?.a || 1, w = parseFloat(getComputedStyle(el).strokeWidth) || 1;
+    el.setAttribute("pathLength", "1");
+    el.style.strokeWidth = `${w / k}`;
+    el.style.animationDelay = `${delay + Math.min(i * 14, 900)}ms`;
+  });
   svg.classList.add("inking");
-  setTimeout(() => { svg.classList.remove("inking"); lines.forEach((el) => { el.removeAttribute("pathLength"); el.style.animationDelay = ""; }); }, INK_MS + 1000);
+  setTimeout(() => { svg.classList.remove("inking"); lines.forEach((el) => { el.removeAttribute("pathLength"); el.style.strokeWidth = ""; el.style.animationDelay = ""; }); }, delay + INK_MS + 1000);
 }
-function inkBox(el) {
-  const r = el.getBoundingClientRect(), rad = parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0;
-  if (r.width < 4 || r.height < 4) return;
-  const svg = svgEl("svg", { class: "inkbox", "aria-hidden": "true", viewBox: `0 0 ${r.width} ${r.height}`, preserveAspectRatio: "none" });
-  svgEl("rect", { x: 0.5, y: 0.5, width: r.width - 1, height: r.height - 1, rx: Math.max(0, rad - 0.5), pathLength: 1 }, svg);
-  el.classList.add("inkhost");
-  el.appendChild(svg);
-  setTimeout(() => { el.classList.add("inked"); }, INK_MS - 300);
-  setTimeout(() => { svg.remove(); el.classList.remove("inkhost", "inked"); }, INK_MS + 700);
+function sidesOf(el) {
+  const cs = getComputedStyle(el);
+  const on = (s) => parseFloat(cs[`border${s}Width`]) > 0 && cs[`border${s}Style`] !== "none" && !/rgba\(.*,\s*0\)|transparent/.test(cs[`border${s}Color`]);
+  return { t: on("Top"), r: on("Right"), b: on("Bottom"), l: on("Left"), rad: parseFloat(cs.borderTopLeftRadius) || 0, fill: cs.backgroundColor };
+}
+function inkBox(el, delay = 0) {
+  const r = el.getBoundingClientRect(), s = sidesOf(el);
+  if (r.width < 4 || r.height < 4 || !(s.t || s.r || s.b || s.l)) { el.classList.remove("undrawn"); return; }
+  const svg = svgEl("svg", { class: "inkbox", "aria-hidden": "true", width: r.width, height: r.height, viewBox: `0 0 ${r.width} ${r.height}` });
+  svg.style.transform = `translate(${r.left}px, ${r.top}px)`;
+  const W = r.width - 0.5, H = r.height - 0.5, o = 0.5;
+  const d = s.t && s.r && s.b && s.l ? null : [s.t && `M${o} ${o}H${W}`, s.r && `M${W} ${o}V${H}`, s.b && `M${o} ${H}H${W}`, s.l && `M${o} ${o}V${H}`].filter(Boolean).join("");
+  const pen = d ? svgEl("path", { d, pathLength: 1 }, svg) : svgEl("rect", { x: o, y: o, width: r.width - 1, height: r.height - 1, rx: Math.max(0, s.rad - 0.5), pathLength: 1 }, svg);
+  pen.style.animationDelay = `${delay}ms`;
+  document.body.appendChild(svg);
+  if (!pens.size) requestAnimationFrame(follow);
+  pens.set(el, svg);
+  el.classList.remove("undrawn");
+  el.classList.add("drawing");
+  // the pen settles to the border's own colour before the real border comes back, so there is no snap
+  setTimeout(() => { svg.classList.add("settle"); el.classList.add("inked"); }, delay + INK_MS - 200);
+  setTimeout(() => { svg.remove(); pens.delete(el); el.classList.remove("drawing", "inked"); }, delay + INK_MS + 800);
+}
+function write(el, delay = 0) {
+  el.style.animationDelay = `${delay}ms`;
+  el.classList.replace("unwritten", "writing");
+  setTimeout(() => { el.classList.remove("writing"); el.style.animationDelay = ""; }, delay + 1400);
 }
 if (!still.matches) {
-  const ink = new IntersectionObserver((es) => es.forEach((e) => {
+  const SKIP = "svg, script, style, .win *, .sr, h1, h2, .reveal h1 *, .reveal h2 *";
+  const boxes = new Set(), texts = new Set();
+  $$("body *").forEach((el) => {
+    if (el.closest(SKIP) || el.matches(".inkbox")) return;
+    const s = sidesOf(el);
+    if (s.t || s.r || s.b || s.l) boxes.add(el);
+  });
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let n; (n = walker.nextNode());) {
+    if (!n.nodeValue.trim()) continue;
+    let el = n.parentElement;
+    if (!el || el.closest(SKIP)) continue;
+    while (el.parentElement && getComputedStyle(el).display.startsWith("inline")) el = el.parentElement;
+    texts.add(el);
+  }
+  [...texts].forEach((el) => { for (let a = el.parentElement; a; a = a.parentElement) if (texts.has(a)) { texts.delete(el); break; } });
+  boxes.forEach((el) => el.classList.add("undrawn"));
+  texts.forEach((el) => el.classList.add("unwritten"));
+  const ink = new IntersectionObserver((es) => {
+    es.filter((e) => e.isIntersecting).map((e) => e.target)
+      .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))
+      .forEach((t, i) => {
+        ink.unobserve(t);
+        const delay = Math.min(i * 45, 1100);
+        if (t.matches("[data-fig], #fig-board")) { const svg = t.querySelector(":scope > svg"); if (svg) inkSvg(svg, delay); }
+        else if (t.id === "wfcanvas") inkSvg(t, delay);
+        if (boxes.has(t)) inkBox(t, delay);
+        if (texts.has(t)) {
+          write(t, delay + 120);
+          // boxes inside a line of text (inline code, pills) are clipped until it is written, so draw them with it
+          $$(".undrawn", t).forEach((b) => { ink.unobserve(b); inkBox(b, delay + 200); });
+        }
+      });
+  }, { rootMargin: "0px 0px -6% 0px" });
+  // the marquee draws as one strip when it arrives, not pill by pill as each slides in
+  const rail = $(".rail");
+  const inRail = (el) => rail && rail.contains(el) && el !== rail;
+  if (rail) new IntersectionObserver(([e], o) => {
     if (!e.isIntersecting) return;
-    ink.unobserve(e.target);
-    const t = e.target;
-    if (t.matches("[data-fig], #fig-board")) { const svg = t.querySelector(":scope > svg"); if (svg) inkSvg(svg); }
-    else if (t.id === "wfcanvas") inkSvg(t);
-    else inkBox(t);
-  }), { rootMargin: "0px 0px -10% 0px" });
-  $$("[data-fig], #fig-board, #wfcanvas, .plate, .card, .step, .fpwrap, .win, .term, .code").forEach((el) => ink.observe(el));
+    o.disconnect();
+    $$(".undrawn, .unwritten", rail).forEach((el, i) => { const d = Math.min(i * 60, 1200); if (el.matches(".undrawn")) inkBox(el, d); else write(el, d + 120); });
+  }).observe(rail);
+  new Set([...$$("[data-fig], #fig-board, #wfcanvas"), ...boxes, ...texts]).forEach((el) => { if (!inRail(el)) ink.observe(el); });
 }
