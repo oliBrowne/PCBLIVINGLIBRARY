@@ -10,6 +10,10 @@ These are small Python prototypes for an open-source tool that manages ECAD comp
 benchmarks and the fixes. The Fusion Electronics / EAGLE and EasyEDA Pro exports (section 11b) still work but are
 **experimental**: kept as they are, not a focus, and they may be removed.
 
+**Where it's going:** [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) says who ecadlib is for, what it must do and how
+success is measured; [ROADMAP.md](ROADMAP.md) lists what has shipped and the next milestones (v0.3.1, v0.4.0, v0.5.0)
+with their dates.
+
 ## Start here (no terminal needed)
 
 **Electronics engineer who just wants it to work?** Read [docs/START_HERE.md](docs/START_HERE.md). On Windows,
