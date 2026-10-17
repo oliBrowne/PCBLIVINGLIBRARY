@@ -35,6 +35,8 @@ PINS = "number,name,type\n1,VDD,power_in\n2,PA0,bidirectional\n3,PA1,bidirection
 CASES = [
     (["rules", "check", "{in}/ecadlib.toml"], (0,)),
     (["rules", "show"], (0,)),
+    (["style", "--profile", "{out}/house_style.json", "learn", "--from", "{in}/lib", "--direction", "names in capitals"], (0,)),
+    (["style", "--profile", "{out}/house_style.json", "show"], (0,)),
     (["init", "--from", "{in}/lib", "-o", "{out}/ecadlib.toml", "--yes"], (0,)),
     (["demo", "-o", "{out}/demo"], (0,)),
     (["team", "--workspace", "{out}/teamws", "list"], (0,)),

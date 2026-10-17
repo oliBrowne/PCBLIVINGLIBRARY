@@ -137,6 +137,11 @@ DEFAULTS["providers"] = {"order": []}
 DEFAULTS["setup"] = {"tool": "both", "libs": [], "workspace": ""}
 # [hub]: the Library page / `ecadlib hub` (ecadlib.hub). libraries are read on top of --lib; projects feed where-used.
 DEFAULTS["hub"] = {"libraries": [], "projects": [], "stale_days": 14}
+# [style]: your house style learned from your library + your written direction (ecadlib.house_style, `ecadlib style`).
+# profile: the learned file, relative to this rules file. apply: auto = new parts are adapted by code wherever a
+# profile exists; off = never. The model for `ecadlib style learn/apply --ai` may be set here ("" = [ai]).
+DEFAULTS["style"] = {"profile": "house_style.json", "apply": "auto", "model": "", "api_key_env": "",
+                     **{k: "" for k in _LL.SECTION_KEYS}}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
@@ -370,7 +375,13 @@ def validate(raw, where="ecadlib.toml"):
     st = raw.get("setup") or {}
     if "tool" in st and st["tool"] not in ("altium", "kicad", "both"):
         _err(where, "setup.tool", f"= {st['tool']!r}: must be altium, kicad or both")
-    _LL.validate(where, raw.get("ai"), [("datasheet", ds), ("agent.proof", (raw.get("agent") or {}).get("proof"))], _err)
+    _LL.validate(where, raw.get("ai"), [("datasheet", ds), ("agent.proof", (raw.get("agent") or {}).get("proof")),
+                                        ("style", raw.get("style"))], _err)
+    sty = raw.get("style") or {}
+    if "apply" in sty and sty["apply"] not in ("auto", "off"):
+        _err(where, "style.apply", f"= {sty['apply']!r}: must be auto (adapt new parts to house_style.json) or off")
+    if sty.get("profile") and not str(sty["profile"]).endswith(".json"):
+        _err(where, "style.profile", f"= {sty['profile']!r}: must be a .json file (written by `ecadlib style learn`)")
     if "parity" in (raw.get("release") or {}) and raw["release"]["parity"] not in ("hold", "warn", "off"):
         _err(where, "release.parity", f"= {raw['release']['parity']!r}: must be hold, warn or off")
     if (raw.get("release") or {}).get("approvals"):

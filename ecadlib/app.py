@@ -1036,6 +1036,95 @@ class Workspace:
             res["backup"] = self.rel(res["backup"])
         return res
 
+    # ------------------------------------------------------------------ house style (ecadlib.house_style)
+    def _style_file(self):
+        from . import house_style as HS
+        return HS.profile_path(self.rules(), self.root)
+
+    def house_style(self):
+        """The learned house style: settings, description patterns, value formats, pin notation, the person's
+        direction and the model's guide. {exists: False} before `learn_house_style`."""
+        from . import house_style as HS
+        f = self._style_file()
+        prof = HS.load(self.rules(), path=f) if f.is_file() else None
+        if not prof:
+            return {"exists": False, "file": self._label(f)}
+        return {"exists": True, "file": self._label(f), "summary": HS.summary(prof),
+                **{k: prof.get(k) for k in ("learned_at", "learned_from", "components", "categories", "settings", "descriptions",
+                                            "param_formats", "param_presence", "pins", "direction", "guide")}}
+
+    def learn_house_style(self, paths=None, direction=None, ai=False, model=None, progress=None):
+        """Learn the house style from the person's library (paths default to the --lib folders), keep their direction
+        (a line or a list of lines, added to what is there), and with ai=True have the configured model write the
+        guide and the settings the direction implies. Writes <workspace>/house_style.json; ecadlib.toml is untouched."""
+        from . import house_style as HS
+        paths = [paths] if isinstance(paths, (str, Path)) else paths
+        paths = [str(x).strip() for x in (paths or []) if str(x).strip()] or self._rules_sources()
+        direction = [direction] if isinstance(direction, str) else list(direction or [])
+        f = self._style_file()
+        old = HS.load(self.rules(), path=f) if f.is_file() else None
+        if progress:
+            progress(0, 2 if ai else 1, "scanning " + ", ".join(Path(x).name for x in paths)[:80])
+        prof = HS.learn(paths, None, direction, old)
+        prof["_file"] = str(f)
+        if ai:
+            if progress:
+                progress(1, 2, "the model is writing the guide")
+            HS.write_guide(prof, self.rules(), model)
+        HS.save(prof, f)
+        return self.house_style()
+
+    def style_direction(self, text=None, clear=False):
+        """Add a line of direction (what the person wants new parts to look like); clear=True removes the old ones."""
+        from . import house_style as HS
+        f = self._style_file()
+        prof = (HS.load(self.rules(), path=f) if f.is_file() else None) or {"schema_version": HS.SCHEMA_VERSION,
+                                                                           "direction": [], "learned_from": []}
+        if clear:
+            prof["direction"] = []
+        if text:
+            HS.add_direction(prof, text)
+        HS.save(prof, f)
+        return {"file": self._label(f), "direction": [d["text"] for d in prof.get("direction") or []]}
+
+    def check_house_style(self, bom, part=None):
+        """How far each part of a BOM's plan is from the house style: per part, the findings code can fix and the
+        ones a person has to (a missing house parameter, a name pattern)."""
+        from . import house_style as HS
+        _, _, items = self._plan(bom)
+        prof = self._style_or_raise()
+        return {it["name"]: HS.check_item(it, prof, self.rules()) for it in items if not part or it["name"] == part}
+
+    def apply_house_style(self, bom, ai=False, model=None, dry_run=True, part=None):
+        """Adapt a BOM's plan to the house style: exact fixes by code, and with ai=True rewording by the model
+        (checked: no new numbers, no identity fields). dry_run (default) shows the changes and writes nothing."""
+        from . import house_style as HS
+        prof = self._style_or_raise()
+        with self._plan_lock():
+            _, plan_f, items = self._plan(bom)
+            only = {part} if part else None
+            done = HS.adapt_items(items, prof, self.rules(), only)
+            rejected = []
+            if ai:
+                more, rejected = HS.adapt_with_model(items, prof, self.rules(), model, only=only)
+                for k, v in more.items():
+                    done.setdefault(k, []).extend(v)
+            if done and not dry_run:
+                bak = plan_f.with_name(plan_f.name + ".style.bak")
+                if not bak.exists():
+                    bak.write_text(plan_f.read_text(encoding="utf-8"), encoding="utf-8")
+                from .fsutil import write_text_atomic
+                write_text_atomic(plan_f, json.dumps(items, indent=2))
+        return {"changes": done, "rejected": rejected, "written": bool(done) and not dry_run, "plan": self.rel(plan_f)}
+
+    def _style_or_raise(self):
+        from . import house_style as HS
+        f = self._style_file()
+        prof = HS.load(self.rules(), path=f) if f.is_file() else None
+        if not prof:
+            raise ValueError("no house style yet: learn it from the library first (learn_house_style)")
+        return prof
+
     def file_formats(self, migrate=False):
         """Versioned files in this workspace (ecadlib/migrate.py): kind, version, ok / old / new. migrate=True brings
         old ones to this version (backups in .ecadlib_backup/ next to them); files from a newer ecadlib are refused."""

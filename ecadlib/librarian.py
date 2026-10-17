@@ -503,9 +503,14 @@ class Run:
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
             got.append("footprint")
         if not st["symbol"]:
-            self.put_sym(st, AL.symbol_from_json(dict(res["symbol"], name=sym_name, footprint=fp_name), self.rules), f"datasheet:{url}",
-                         [f"{len(res['symbol']['pins'])} pins grouped by function (ecadlib.symbol_layout)"]
-                         if SL.wants_layout(res["symbol"]["pins"], self.rules) else ())
+            from . import house_style as HS              # active-low pins in your library's notation ([style])
+            sym, renamed = HS.adapt_symbol(res["symbol"], HS.active(self.rules, self.out))
+            notes = [f"{len(sym['pins'])} pins grouped by function (ecadlib.symbol_layout)"] \
+                if SL.wants_layout(sym["pins"], self.rules) else []
+            if renamed:
+                notes.append("house style pin names: " + ", ".join(renamed[:6]) + (" ..." if len(renamed) > 6 else ""))
+            self.put_sym(st, AL.symbol_from_json(dict(sym, name=sym_name, footprint=fp_name), self.rules), f"datasheet:{url}",
+                         notes)
             got.append("symbol")
         rt = res["sidecar"].get("route") or {}
         n_ans = len(rt.get("attempts") or [])
@@ -719,6 +724,12 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     for n in set(allow) - set(state):
         log(f"  --allow {n}: not a part in this plan (names are the plan's Part Numbers)")
     write_text_atomic(state_f, json.dumps(state, indent=2))
+    from . import house_style as HS                 # new parts in your house style (house_style.json, [style] apply)
+    prof = HS.active(rules, out)
+    if prof:
+        styled = HS.adapt_items([it for it in items if it["name"] not in in_ws], prof, rules)
+        if styled:
+            log(f"  style {len(styled)} part(s) written in your house style (descriptions, value formats)")
     checks = RC.apply(items, out, allow, rules=rules)
     if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
         from .approvals import identity, post_check, stamp_allow
