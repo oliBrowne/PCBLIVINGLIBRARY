@@ -40,6 +40,8 @@ EXAMPLES = {
     "footprint": ["ecadlib footprint gen ecadlib/package_specs/soic8.json -o out/fp",
                   "ecadlib footprint compare out/fp/SOIC-8.kicad_mod ref/SOIC-8.kicad_mod"],
     "check": ["ecadlib check out/fp/*.kicad_mod"],
+    "fp-edit": ["ecadlib fp-edit out/lib/plan.json --part NLJ2MDXX-V show", "ecadlib fp-edit out/lib/plan.json --part NLJ2MDXX-V rename 1+=1 1-=2",
+                "ecadlib fp-edit out/lib/plan.json --part SIC431A same-net 27,28"],
     "footprint-bench": ["ecadlib footprint-bench --offline", "ecadlib footprint-bench --json bench.json"],
     "eval": ["ecadlib eval sets", "ecadlib eval run --set kicad-v1 --limit 5 --offline", "ecadlib eval compare runA.json runB.json",
              "ecadlib eval gate", "ecadlib eval golden --update"],

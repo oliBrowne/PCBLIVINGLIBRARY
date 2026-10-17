@@ -237,8 +237,9 @@ pin 1. This holds every part in the release check, KiCad library footprints incl
 
 `check_pcblib` reads the footprint back from the .PcbLib and checks the Altium side: SMD pads on Top Layer
 (Bottom Layer for bottom-side), plated through-hole pads on Multi-Layer, a courtyard on its mechanical layer, an
-assembly outline, a `.Designator` string, a 3D body or a height, a pin 1 pad, and a name Windows file names can
-carry. `ecadlib parity` makes sure the PcbLib is the .kicad_mod, pad for pad, so every rule above holds in Altium too.
+assembly outline, a `.Designator` string (and a second one on the assembly layer), a 3D body or a height, a pin 1
+pad, and a name Windows file names can carry. `ecadlib parity` makes sure the PcbLib is the .kicad_mod, pad for pad
+and down to the assembly-layer designator, so every rule above holds in Altium too.
 
 | KiCad | Altium (ecadlib default, Altium IPC wizard convention) |
 |---|---|
@@ -250,6 +251,11 @@ carry. `ecadlib parity` makes sure the PcbLib is the .kicad_mod, pad for pad, so
 | 3D model | 3D body on Mechanical 13 (embedded STEP or extruded outline) |
 | Reference | `.Designator` on Top Overlay |
 | Value | `.Comment` on Mechanical 13 |
+| `${REFERENCE}` on F.Fab | `.Designator` on Mechanical 13, centred on the body |
+
+Every footprint ecadlib writes for Altium (generated, standard or converted) gets that assembly-layer `.Designator`.
+When the KiCad footprint has no `${REFERENCE}` on F.Fab, the writer adds one at the centre of the Mechanical 13
+outline (or of the pads), half the longer body side high, 0.25-1 mm, turned 90 degrees on a tall body.
 
 The layers are set in `ecadlib.toml` `[layers]` for libraries that use other mechanical layers.
 

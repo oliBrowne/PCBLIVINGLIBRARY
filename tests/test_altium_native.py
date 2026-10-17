@@ -143,7 +143,7 @@ def test_compare_finds_a_moved_pad_and_a_renamed_pin():
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
         _lib(d)
-        assert AN.compare(d) == {"checked": 2, "problems": [], "unreadable": []}
+        assert AN.compare(d) == {"checked": 2, "problems": [], "unreadable": [], "known": []}
         fp = _soic8()
         fp["pads"][2] = dict(fp["pads"][2], x=fp["pads"][2]["x"] + 0.1)        # "Altium" saved pad 3 0.1 mm off
         (d / "PcbLib" / "SOIC8.PcbLib").write_bytes(AL.pcblib_bytes([fp], "SOIC8.PcbLib"))

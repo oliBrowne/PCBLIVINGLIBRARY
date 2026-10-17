@@ -563,8 +563,14 @@ class Run:
 
     def put_datasheet(self, st, res, job, fp_name, sym_name, how=""):
         url, where = job["url"], job["where"]
+        from . import fp_edit as FE                   # hand edits of this part's pad table (ecadlib fp-edit)
+        res, edited = FE.apply(FE.for_part(FE.load(self.out), st.get("name"), job.get("name"), job["part"]), res)
+        if edited:
+            st["tried"].extend(edited)
+            st["review"].extend(edited)
         got = []
         if not st["footprint"]:
+            st["review"].extend(pad_table_problems(res["spec"]))
             text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
             h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
@@ -592,6 +598,22 @@ class Run:
         st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
         st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url}; see datasheet/*.review.md"
                             + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
+
+
+def pad_table_problems(spec):
+    """A datasheet pad table's check errors as review lines ("datasheet pad table: ..."): why no footprint was built,
+    in words the release check and ecadlib.messages explain (with the fix: ecadlib fp-edit)."""
+    if not spec.get("pad_table"):
+        return []
+    from . import footprint_adv as FA
+    try:
+        errs = [p["message"] for p in FA.check_pad_table(spec) if p["level"] == "error"]
+    except Exception:                                 # a table the layout rejects: footprint_gen.build says why
+        return []
+    names = sorted({str(p.get("number")) for p in spec["pad_table"].get("pads") or [] if p.get("number")},
+                   key=lambda n: (len(n), n))
+    return [f"datasheet pad table: {m}" + (f" - pads named {', '.join(names[:8])}{' ...' if len(names) > 8 else ''}"
+                                           if m.startswith("no pad numbered 1") and names else "") for m in errs]
 
 
 def _fingerprint(item, ln, row):

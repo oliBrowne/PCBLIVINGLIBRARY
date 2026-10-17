@@ -30,7 +30,8 @@ def test_librarian_ne555_footprint_text_and_10pt_symbol_font():
         assert hdr["FONTNAME1"] == "Times New Roman" and hdr["SIZE1"] == "10", hdr               # Altium's default font
         # the footprint: designator on silk above the courtyard, comment on Mechanical 13 below, 1 mm / 0.15 mm
         lib = AL.read_pcblib(Path(d) / "out" / it["footprint"]["file"])[0]
-        texts = {r["text"]: r for r in lib["records"] if r["type"] == "text"}
+        texts = {r["text"]: r for r in lib["records"] if r["type"] == "text" and (r["text"], r["layer"]) != (".Designator", AL.MECH13)}
+        assert [r for r in lib["records"] if r["type"] == "text" and (r["text"], r["layer"]) == (".Designator", AL.MECH13)]   # #37
         pads = [r for r in lib["records"] if r["type"] == "pad"]
         top = max(p["y"] + p["h"] / 2 for p in pads)
         des, com = texts[".Designator"], texts[".Comment"]
@@ -70,8 +71,8 @@ def test_ne555_footprint_text_and_pin1_dot():
     assert '(fp_text user "${REFERENCE}" (at 0 0) (layer "F.Fab")' in text
     # Altium side: the reference was on silk, so .Designator is on Top Overlay; a fab-only reference goes to Mech 13
     fp, _ = K.convert_footprint(text, "SOIC8", "x", [])
-    layers = {tx[0]: tx[6] for tx in fp["texts"]}
-    assert layers == {".Designator": AL.TOP_OVERLAY, ".Comment": AL.MECH13}, layers
+    layers = sorted((tx[0], tx[6]) for tx in fp["texts"])      # + the ${REFERENCE} on Mech 13 (#37)
+    assert layers == [(".Comment", AL.MECH13), (".Designator", AL.TOP_OVERLAY), (".Designator", AL.MECH13)], layers
     fab_ref = text.replace('(fp_text reference "REF**" (at 0 -4.43) (layer "F.SilkS")', '(fp_text reference "REF**" (at 0 0) (layer "F.Fab")')
     assert fab_ref != text
     fp2, _ = K.convert_footprint(fab_ref, "SOIC8", "x", [])

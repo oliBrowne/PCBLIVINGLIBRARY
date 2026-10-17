@@ -232,6 +232,8 @@ class UserStore:
 def _sign_as(v):
     if v is None:
         return []
+    if not isinstance(v, (str, list, tuple)):          # e.g. 5 or {} from the admin page's JSON: a 400, not a 500
+        raise ValueError("sign-as: a comma list or a list of approval roles")
     v = [x.strip() for x in (v.split(",") if isinstance(v, str) else v) if isinstance(x, str) and x.strip()]
     for x in v:
         if not re.match(r"^[A-Za-z0-9 ._-]{1,40}$", x):

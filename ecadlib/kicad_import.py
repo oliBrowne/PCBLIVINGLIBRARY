@@ -263,9 +263,10 @@ def _convert_footprint(text, name=None, source="", notes=None):
     fp["texts"] = AL.texts_from_kicad(t)
     if fp["texts"]:
         des = next((t[6] for t in fp["texts"] if t[0] == ".Designator"), None)
-        notes.append(f"Reference -> .Designator ({'Top Overlay' if des == AL.TOP_OVERLAY else 'Mechanical 13'}), Value -> .Comment (Mechanical 13)")
+        notes.append(f"Reference -> .Designator ({'Top Overlay' if des == AL.TOP_OVERLAY else 'Mechanical 13'}), Value -> .Comment (Mechanical 13)"
+                     + (", ${REFERENCE} on F.Fab -> .Designator (Mechanical 13)" if any(AL._fab_ref(g) for g in sexpr.find(t, "fp_text")) else ""))
     for k in ("fp_text", "fp_text_box", "dimension", "image"):
-        n = len([g for g in sexpr.find(t, k) if k != "fp_text" or g[1] not in AL.KTEXT])
+        n = len([g for g in sexpr.find(t, k) if k != "fp_text" or g[1] not in AL.KTEXT and not AL._fab_ref(g)])
         if n:
             notes.append(f"{n} {'user ' if k == 'fp_text' else ''}{k} not converted")
     return fp, t

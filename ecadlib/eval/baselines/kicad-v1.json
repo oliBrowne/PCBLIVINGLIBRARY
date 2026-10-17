@@ -27,8 +27,8 @@
   },
   "qfn": {
    "cases": 40,
-   "pass": 38,
-   "rate": 0.95
+   "pass": 39,
+   "rate": 0.975
   },
   "qfp": {
    "cases": 25,
@@ -65,12 +65,12 @@
    "standard",
    "datasheet"
   ],
-  "updated": "2026-10-16"
+  "updated": "2026-10-17"
  },
  "overall": {
   "cases": 331,
-  "pass": 327,
-  "rate": 0.9879
+  "pass": 328,
+  "rate": 0.9909
  },
  "passing": [
   "bga-AD7298",
@@ -217,6 +217,7 @@
   "qfn-CSD17313Q2",
   "qfn-CY8C4127LQI-BL453",
   "qfn-CYPD3171-24LQXQ",
+  "qfn-DAC60504",
   "qfn-DAC8531IDRB",
   "qfn-DT1240A-08LP3810",
   "qfn-ENC424J600-ML",
