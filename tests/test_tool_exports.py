@@ -5,12 +5,13 @@ Each writer is checked by reading its own output back and comparing it with the 
 (ecadlib.parity); the footprints in fixtures/kicad/tool_export are the hard cases a survey of KiCad's whole library
 turned up. With a Python that can import pcbnew, KiCad's own importers read the files too (Eagle: KiCad 7+,
 EasyEDA Pro: KiCad 8+); those checks skip elsewhere."""
-import io, json, re, shutil, tempfile, zipfile
+import atexit, io, json, re, shutil, tempfile, zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
+from urllib.parse import quote
 
-from ecadlib import cad_model as CM, eagle_export as EG, easyeda_pro_export as EZ, kicad_export as X, rules as RU
+from ecadlib import cad_model as CM, eagle_export as EG, easyeda_pro_export as EZ, kicad_export as X, release_check as RC, rules as RU
 
 FIX = Path(__file__).parent / "fixtures" / "kicad"
 HARD = sorted((FIX / "tool_export").glob("*.kicad_mod")) + [FIX / "USB_C_Receptacle_HRO_TYPE-C-31-M-12.kicad_mod"]
@@ -26,6 +27,7 @@ def _export():
     if not _RUN:
         from tests import test_kicad_export as TX
         d = Path(tempfile.mkdtemp(prefix="ecadlib-tools-"))
+        atexit.register(shutil.rmtree, d, True)
         plan, _, http = TX._plan(d)
         krep = X.export(plan, d / "kicad", "lib", http=http, log=lambda *a: None)
         assert not krep["errors"], krep["errors"]
@@ -183,8 +185,50 @@ def test_easyeda_library_from_a_plan():
     again = EZ.export(r["plan"], r["d"] / "easyeda2", "lib", http=r["http"], log=lambda *a: None,
                       kicad_dir=r["d"] / "kicad", second_reader=False)
     assert not again["errors"]
-    with zipfile.ZipFile(out / "lib.elibz") as a, zipfile.ZipFile(r["d"] / "easyeda2" / "lib.elibz") as b:
-        assert {n: a.read(n) for n in a.namelist()} == {n: b.read(n) for n in b.namelist()}
+    assert (out / "lib.elibz").read_bytes() == (r["d"] / "easyeda2" / "lib.elibz").read_bytes()   # byte for byte
+    assert (out / "lib_easyeda.zip").read_bytes() == (r["d"] / "easyeda2" / "lib_easyeda.zip").read_bytes()
+
+
+def test_hand_off_zip_install_steps_and_stale_models():
+    """Each export leaves one zip to hand over (library, STEP models, INSTALL.md naming the model of each footprint);
+    a second export into the same folder drops the STEP files of parts no longer in the library."""
+    r = _export()
+    for tool, key, ext in (("fusion", "eagle", "lbr"), ("easyeda", "easyeda", "elibz")):
+        out, rep = r["d"] / tool, r[key]
+        assert rep["bundle"] == f"lib_{tool}.zip" and rep["install"] == "INSTALL.md"
+        with zipfile.ZipFile(out / rep["bundle"]) as z:
+            names = set(z.namelist())
+        assert {f"lib.{ext}", "INSTALL.md"} <= names
+        assert {f"lib.3dshapes/{m}" for m in rep["models"]} <= names and rep["models"]
+        text = (out / "INSTALL.md").read_text()
+        for m in rep["models"]:
+            assert f"`lib.3dshapes/{m}`" in text, (tool, m)          # every model is named against its footprint
+        assert "import" in text.lower() and "3D" in text
+    d = r["d"] / "stale"
+    shutil.copytree(r["d"] / "fusion", d)
+    (d / "lib.3dshapes" / "GONE_PART.step").write_text("old")
+    EG.export(r["plan"], d, "lib", http=r["http"], log=lambda *a: None, kicad_dir=r["d"] / "kicad", second_reader=False)
+    assert not (d / "lib.3dshapes" / "GONE_PART.step").exists()
+    with zipfile.ZipFile(d / "lib_fusion.zip") as z:
+        assert "lib.3dshapes/GONE_PART.step" not in z.namelist()
+
+
+def test_fusion_standard_attributes():
+    """Fusion's own component attributes (PACKAGE, CATEGORY_L1/L2, VENDOR/VPN) come from the plan; resistors,
+    capacitors and inductors take their value on the placed part, as in Eagle's rcl.lbr."""
+    item = {"folder": "Components/Passives/Resistors", "parameters": [{"name": "Supplier 1", "value": "LCSC"},
+                                                                       {"name": "Supplier Part Number 1", "value": "C25804"}]}
+    assert EG.fusion_attrs(item, "R_0603") == {"PACKAGE": "R_0603", "CATEGORY_L1": "Passives", "CATEGORY_L2": "Resistors",
+                                               "VENDOR": "LCSC", "VPN": "C25804"}
+    assert EG.fusion_attrs({"folder": "Connectors"}, "") == {"CATEGORY_L1": "Connectors"}
+    r = _export()
+    root = ET.parse(r["d"] / "fusion" / "lib.lbr").getroot()
+    for ds in root.iter("deviceset"):
+        attrs = {a.get("name"): a.get("value") for a in ds.iter("attribute")}
+        dev = ds.find("devices/device")
+        if dev is not None and dev.get("package"):
+            assert attrs.get("PACKAGE") and attrs.get("CATEGORY_L1"), (ds.get("name"), attrs)
+        assert (ds.get("uservalue") == "yes") == (ds.get("prefix") in EG.PASSIVE), ds.get("name")
 
 
 def test_easyeda_device_attributes():
@@ -242,6 +286,56 @@ def test_cli_rules_release_gate_and_mcp():
         assert any("pad 1 position" in str(f) for f in fails) == held, (mode, fails)
         assert held or any("eagle: pad 1 position" in w for w in warns)
         assert info.get("eagle") == "mismatch"
+
+
+# ---------------------------------------------------------------- the way people reach it: MCP, web UI, release gate
+def test_mcp_web_ui_and_release_gate_on_a_real_workspace():
+    """ecadlib mcp (a real stdio server) fills a workspace and writes both libraries; the web UI writes one and serves
+    its hand-off zip; the release check with [release] eagle / easyeda = "hold" passes the ready parts and says so."""
+    from tests import e2e_support as E, test_ui as TU
+    from ecadlib.app import Workspace
+    root = Path(tempfile.mkdtemp(prefix="ecadlib-tools-ws-"))
+    atexit.register(shutil.rmtree, root, True)
+    (root / "ws" / "uploads").mkdir(parents=True)
+    E.seed_cache(root / "ws" / "http_cache")
+    E.write_parts_xlsx(root / "ws" / "uploads" / "parts.xlsx")
+    m = E.MCPClient(root, "--workspace", "ws", "--offline")
+    try:
+        m.send("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}})
+        m.send("notifications/initialized", notify=True)
+        assert not m.call("librarian_run", bom="uploads/parts.xlsx").get("isError")
+        for tool, ext in (("eagle", ".lbr"), ("easyeda", ".elibz")):
+            res = m.send("tools/call", {"name": "tool_export", "arguments": {"bom": "uploads/parts.xlsx", "tool": tool}})["result"]
+            assert not res.get("isError"), res
+            r = json.loads(res["content"][0]["text"])
+            assert r["ok"], r["errors"]
+            assert r["file"].endswith(ext) and (root / "ws" / r["file"]).is_file() and (root / "ws" / r["bundle"]).is_file()
+            assert r["counts"] and min(r["counts"].values()) > 0, r["counts"]
+        assert m.send("tools/call", {"name": "tool_export", "arguments": {"bom": "uploads/parts.xlsx", "tool": "orcad"}})[
+            "result"].get("isError")
+    finally:
+        assert m.close() == 0
+    srv, call = TU.serve(Workspace(root / "ws", [], offline=True))
+    try:
+        st, r = call("POST", "/api/export/tool", {"bom": "uploads/parts.xlsx", "tool": "easyeda"},
+                     {"Content-Type": "application/json"})
+        assert st == 200 and r["ok"], r
+        st, data = call("GET", "/api/file?path=" + quote(r["bundle"]))
+        assert st == 200
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            assert {"ecadlib.elibz", "INSTALL.md"} <= set(z.namelist()), z.namelist()
+    finally:
+        srv.shutdown()
+    plan = root / "ws" / "librarian" / "parts" / "plan.json"
+    (root / "ws" / "ecadlib.toml").write_text('[release]\neagle = "hold"\neasyeda = "hold"\n')
+    items = [i for i in json.loads(plan.read_text()) if i.get("status") == "ready" and (i.get("footprint") or {}).get("kicad_mod")]
+    assert items
+    rules = RU.resolve(None, plan.parent)
+    assert rules["release"]["eagle"] == rules["release"]["easyeda"] == "hold"
+    for it in items:
+        fails, warns, info = RC.check_item(it, plan.parent, rules)
+        assert not [f for f in fails if f[0] in ("eagle", "easyeda")], (it["name"], fails)
+        assert info.get("eagle") == info.get("easyeda") == "match", (it["name"], info)
 
 
 # ---------------------------------------------------------------- KiCad's own importers (skip without pcbnew)

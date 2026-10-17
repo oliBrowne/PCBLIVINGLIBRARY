@@ -782,15 +782,20 @@ folder), so every tool gets the same symbols, footprints and fields.
   Manager's Import) with one package, symbol and deviceset per part: pads with size, rotation, roundness, side, paste and
   mask; KiCad mask / paste margins as the exact openings on tStop / tCream (Eagle has no per-pad margin); oval and
   rectangular through-hole pads as an Eagle pad plus the rest of the copper; slots on Milling; custom pads as the anchor
-  pad plus polygons; gates and pin-to-pad connects; MPN, manufacturer, datasheet, description and supplier numbers as
-  attributes.
+  pad plus polygons; gates and pin-to-pad connects; Fusion's standard attributes (MPN, MANUFACTURER, DATASHEET,
+  DESCRIPTION, PACKAGE, CATEGORY_L1 / L2 from the library folder, VENDOR / VPN from the first supplier) so its BOM and
+  part search fill in; resistors, capacitors, inductors and ferrite beads get a user value.
 * **EasyEDA Pro:** `mylib.elibz` (EasyEDA Pro's device library; File > Open / Import > EasyEDA Pro) with one device, symbol
   and footprint per part, written to the line format EasyEDA Pro uses (checked field by field against its own files):
   pads with solder mask and paste expansion per side, plating, the hole and the copper off the hole; custom pads as
   their outline (with exact arcs) plus copper fills; pins with type, shape and names; LCSC numbers as EasyEDA's
   Supplier / Supplier Part.
 * **3D models:** neither format holds a STEP file (Fusion and EasyEDA keep 3D models in their own cloud), so
-  `mylib.3dshapes/` holds the export's STEP files to attach there.
+  `mylib.3dshapes/` holds the export's STEP files to attach there; models no longer in the library are removed.
+* **Hand-off:** each export also writes `INSTALL.md` (the import steps for that tool, which footprint takes which STEP
+  file, and any differences found in the read-back) and `mylib_fusion.zip` / `mylib_easyeda.zip` with the library,
+  `INSTALL.md`, the licence notices and the STEP files: one file to hand to whoever uses the tool. The zip and the
+  `.elibz` are byte-identical when nothing changed.
 * **Read back pad by pad:** each library is parsed again by ecadlib's own reader and every footprint compared with its
   KiCad original (pads, drills, shapes, paste and mask per pad, exposed pad, courtyard), then the mask and paste layers
   are compared as areas, so an opening that belongs to a neighbouring pad is not reported as a fault while a missing
@@ -803,8 +808,11 @@ folder), so every tool gets the same symbols, footprints and fields.
   read-back on every part in the release check, so a footprint that would not survive the trip is held or warned about.
 * **Surveyed:** every 7th footprint of KiCad's own library (1,927) was written and read back in both formats; the
   hardest ten are kept in `tests/fixtures/kicad/tool_export/`.
-* **Also:** the web UI's "Send to Altium" step has buttons for both, `POST /api/export/tool` (librarian role), the
-  Workspace's `tool_export` and an MCP tool of the same name.
+* **Also:** the web UI's "Send to Altium" step has buttons for both and links the zip, `POST /api/export/tool`
+  (librarian role, returns `bundle` and `install`), the Workspace's `tool_export` and an MCP tool of the same name.
+  `ecadlib testpack` exports both into `fusion/` and `easyeda/`, and its `CHECKLIST.md` has a section for checking
+  each one in the real tool. `tests/test_tool_exports.py` runs the CLI, MCP, web UI and release gate on a real
+  workspace.
 
 ## 12. `approvals.py` and `dedupe.py`: sign-off and duplicates
 

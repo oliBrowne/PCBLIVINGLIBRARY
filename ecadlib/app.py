@@ -1017,7 +1017,8 @@ class Workspace:
 
     def tool_export(self, bom, tool, name="ecadlib", include_held=False):
         """The BOM's library for another tool, written natively and read back pad by pad: tool "eagle" (Autodesk Fusion
-        Electronics / EAGLE .lbr, in fusion/<bom>/) or "easyeda" (EasyEDA Pro .elibz, in easyeda/<bom>/)."""
+        Electronics / EAGLE .lbr, in fusion/<bom>/) or "easyeda" (EasyEDA Pro .elibz, in easyeda/<bom>/). "bundle" is
+        one zip to hand over (library, STEP models, INSTALL.md with the import steps and the model of each footprint)."""
         from .kicad_export import kname
         mods = {"eagle": ("eagle_export", "fusion"), "easyeda": ("easyeda_pro_export", "easyeda")}
         if tool not in mods:
@@ -1028,7 +1029,8 @@ class Workspace:
         out = self.root / mods[tool][1] / self._key(bom_path)
         rep = mod.export(plan_f, out, kname(str(name))[:60], include_held, http=CachedHTTP(self.root / "http_cache", offline=self.offline),
                          log=lambda *a: None, rules=self.rules_in_use())
-        return {"folder": self.rel(out), "file": self.rel(out / rep["file"]), "counts": rep["counts"],
+        return {"folder": self.rel(out), "file": self.rel(out / rep["file"]), "bundle": self.rel(out / rep["bundle"]),
+                "install": self.rel(out / rep["install"]), "counts": rep["counts"],
                 "ok": not rep["errors"], "errors": rep["errors"][:30], "approximations": rep["warnings"][:30],
                 "models": len(rep["models"]), "kicad_reread": rep.get("kicad_reread"),
                 "report": self.rel(out / ("eagle_export.json" if tool == "eagle" else "easyeda_export.json"))}

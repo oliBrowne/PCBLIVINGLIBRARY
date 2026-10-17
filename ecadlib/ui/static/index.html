@@ -623,7 +623,8 @@ $("#models").addEventListener("click", e => action(e.target, $("#modelsout"), as
 }));
 ["eagle", "easyeda"].forEach(tool => $("#to" + tool).addEventListener("click", e => action(e.target, $("#toolout"), async () => {
   const r = await api("/api/export/tool", { bom: current.bom, tool });
-  return `Written: ${fileLink(r.file)} (${Object.entries(r.counts).map(([k, v]) => v + " " + k).join(", ")}).` +
+  return `Written: ${fileLink(r.file)} (${Object.entries(r.counts).map(([k, v]) => v + " " + k).join(", ")}). ` +
+    `To hand over: ${fileLink(r.bundle)} (the library, ${esc(r.models)} STEP model(s) and ${fileLink(r.install)} with the import steps).` +
     (r.ok ? `<div class="muted">Read back the same as the library.</div>` : `<div class="next s-warn"><span>${esc(r.errors.length)} difference(s) on reading back: ${esc(r.errors.slice(0, 3).join("; "))}</span></div>`) +
     (r.approximations.length ? `<div class="muted">Approximated for this format: ${esc(r.approximations.slice(0, 5).join("; "))}</div>` : "");
 })));
