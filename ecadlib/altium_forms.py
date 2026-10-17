@@ -405,6 +405,8 @@ Begin
     Headline := Answer(Job, 'big');
     If Headline = '' Then
         Headline := 'Done';
+    If BuildFailed(Extra) Then
+        Headline := 'Altium could not build the library';
     EcadlibDialog.Big.Caption := Headline;
     ClearRows;
     Ini := TIniFile.Create(Job + '\result.ini');

@@ -133,6 +133,7 @@ ALTIUM_API = {
     "Strings": "TStringList.Strings, TR0120 p10",
     "Count": "TStringList.Count, TR0120 p10",
     "DeleteFile": "TR0120 p16 (File IO Routines)",
+    "RenameFile": "TR0120 File IO Routines (ecadlib_build.pas uses it too; checked in AD26 26.10)",
 }
 
 
@@ -316,8 +317,60 @@ Begin
         If Copy(R.Strings[i], 1, 6) = 'FAILED' Then
             Bad := Bad + 1;
     If Bad > 0 Then
-        Result := #13#10 + 'Altium build: ' + IntToStr(Bad) + ' of ' + IntToStr(R.Count) + ' libraries FAILED. Next: read ' + Folder + 'ecadlib_build_report.txt';
+        Result := #13#10 + 'Altium build: FAILED for ' + IntToStr(Bad) + ' of ' + IntToStr(R.Count) + ' libraries. Next: read ' + Folder + 'ecadlib_build_report.txt';
     R.Free;
+End;
+
+Function MissingLibraries(Folder : String) : String;
+{ The libraries ecadlib_build.txt lists that are not on disk after the build ('' when all are), '; ' between. }
+Var
+    R : TStringList;
+    i : Integer;
+    P : String;
+Begin
+    Result := '';
+    R := TStringList.Create;
+    R.LoadFromFile(Folder + 'ecadlib_build.txt');
+    For i := 0 To R.Count - 1 Do
+        If (Copy(R.Strings[i], 1, 7) = 'PCBLIB' + #9) Or (Copy(R.Strings[i], 1, 7) = 'SCHLIB' + #9) Then
+        Begin
+            P := Copy(R.Strings[i], 8, Length(R.Strings[i]));
+            If Pos(#9, P) > 0 Then
+                P := Copy(P, 1, Pos(#9, P) - 1);
+            If Not FileExists(Folder + P) Then
+                Result := Result + Folder + P + '; ';
+        End;
+    R.Free;
+End;
+
+Function PutBackOldLibraries(Folder : String) : Integer;
+{ After a build that Altium stopped half way (a script error ends the script, so no report is written): a library
+  ecadlib_build.txt lists that is now only NAME.ecadlib_old is renamed back, so the old file stays usable. How many. }
+Var
+    R : TStringList;
+    i : Integer;
+    P : String;
+Begin
+    Result := 0;
+    R := TStringList.Create;
+    R.LoadFromFile(Folder + 'ecadlib_build.txt');
+    For i := 0 To R.Count - 1 Do
+        If (Copy(R.Strings[i], 1, 7) = 'PCBLIB' + #9) Or (Copy(R.Strings[i], 1, 7) = 'SCHLIB' + #9) Then
+        Begin
+            P := Copy(R.Strings[i], 8, Length(R.Strings[i]));
+            If Pos(#9, P) > 0 Then
+                P := Copy(P, 1, Pos(#9, P) - 1);
+            If (Not FileExists(Folder + P)) And FileExists(Folder + P + '.ecadlib_old') Then
+                If RenameFile(Folder + P + '.ecadlib_old', Folder + P) Then
+                    Result := Result + 1;
+        End;
+    R.Free;
+End;
+
+Function BuildFailed(Extra : String) : Boolean;
+{ What BuildInAltium returned says a library was not built: nothing is installed then, and nothing says ready. }
+Begin
+    Result := Pos('Altium build: FAILED', Extra) > 0;
 End;
 
 Function BuildInAltium(Job : String) : String;
@@ -329,6 +382,7 @@ Var
     Folder : String;
     List : String;
     P : String;
+    Missing : String;
 Begin
     Result := '';
     Folder := Answer(Job, 'build');
@@ -349,7 +403,17 @@ Begin
     If FileExists(Folder + 'ecadlib_build_report.txt') Then
         DeleteFile(Folder + 'ecadlib_build_report.txt');
     BuildLibraries(Folder);
-    Result := BuildReport(Folder);
+    If FileExists(Folder + 'ecadlib_build_report.txt') Then
+        Result := BuildReport(Folder)
+    Else
+    Begin
+        Result := #13#10 + 'Altium build: FAILED, it wrote no ecadlib_build_report.txt in ' + Folder;
+        If PutBackOldLibraries(Folder) > 0 Then
+            Result := Result + ' (the build stopped part way; the previous library files were put back)';
+    End;
+    Missing := MissingLibraries(Folder);
+    If Missing <> '' Then
+        Result := Result + #13#10 + 'Altium build: FAILED, these library files are not there: ' + Missing;
 End;
 
 Function Reinstall(Job : String) : String;
@@ -360,6 +424,11 @@ Var
     P : String;
 Begin
     Result := BuildInAltium(Job);
+    If BuildFailed(Result) Then
+    Begin
+        Result := Result + #13#10 + 'Nothing was installed: the library is not ready. Next: read the report, fix it, run this again.';
+        Exit;
+    End;
     List := Answer(Job, 'install');
     While List <> '' Do
     Begin
@@ -394,7 +463,9 @@ End;
 
 Procedure ShowResult(Title : String; Job : String; Extra : String);
 Begin
-    If Answer(Job, 'status') = 'error' Then
+    If BuildFailed(Extra) Then
+        ShowError(Title + #13#10 + #13#10 + 'Altium could not build the library files.' + Extra)
+    Else If Answer(Job, 'status') = 'error' Then
         ShowError(Title + #13#10 + #13#10 + MessageText(Job, Extra))
     Else
         ShowMessage(Title + #13#10 + #13#10 + MessageText(Job, Extra));
@@ -1431,6 +1502,10 @@ def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
                    fix=f"Approve it in the review queue ({_queue_hint(cfg)}), then add it again.")
     elif st == "duplicate":
         res.update(message=f"{mpn} is already in the library as {it.get('duplicate_of') or nm}.")
+    elif not_found(ws._librarian_dir(bom) / "triage.csv", mpn, it):
+        res.update(status="error", reason="not_found", message=f"{mpn} was not found: no part source knows this part "
+                   "number, so ecadlib has no symbol, footprint or data for it.",
+                   fix="Check the part number (a typo, or a suffix missing), then add it again.")
     else:
         res.update(status="held", message=f"{mpn} is held ({nm}): " + (" ".join(w["text"] for w in whys[:3]) or "see the review."),
                    fix=(whys[0]["fix"] + " " if whys else "") + f"Open the review queue ({_queue_hint(cfg)}) "
@@ -1438,8 +1513,25 @@ def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
     res.update(rows_result(part_rows(it), {"ready": "Ready", "duplicate": "Already in your library",
                                            "awaiting_approval": "Waiting for sign-off"}.get(st, "Held")))
     if res["status"] == "error":
-        res["big"] = "Not published"
+        res["big"] = "Not found" if res.get("reason") == "not_found" else "Not published"
     return res
+
+
+def not_found(triage_csv, mpn, item):
+    """True when every part source that was asked answered "no such part" (none failed or was offline), nothing local
+    matched, and the librarian made neither a symbol nor a footprint: a bad MPN, not a part to review."""
+    if item.get("status") != "held" or any((item.get(k) or {}).get("file") for k in ("symbol", "footprint")):
+        return False
+    try:
+        rows = list(csv.DictReader(Path(triage_csv).open(encoding="utf-8-sig", newline="")))
+    except OSError:
+        return False
+    row = next((r for r in rows if (r.get("mpn") or "").strip().upper() == mpn.strip().upper()), None)
+    if not row or row.get("status") != "needs_footprint_generation":      # unreachable / offline / found somewhere
+        return False
+    if row.get("local_symbol") or row.get("local_footprint") or row.get("src_mpn") or row.get("src_description"):
+        return False
+    return bool(row.get("src")) or "jlcpcb: no exact MPN match" in (row.get("notes") or "")   # a source answered
 
 
 def _library_mpns(cfg, ws):
@@ -1641,10 +1733,18 @@ def start_ui(ws_root, port):
     return subprocess.Popen(cmd, **kw)
 
 
+def queue_anchor(ws):
+    """Where "Open review queue" lands: the menu's own parts (held ones first, each with why it is held) once a part
+    was added from the menu; they never reach the library agent's queue (#queuecard), which listed "Nothing in the
+    queue" while parts were held."""
+    from urllib.parse import quote
+    return f"#review={quote(MENU_BOM)}" if (Path(ws) / MENU_BOM).is_file() else QUEUE_ANCHOR
+
+
 def open_queue(cfg, opener=None, probe=probe_ui, launcher=start_ui, wait_s=30.0, sleep=time.sleep):
     """Open the web UI at the review queue, starting `ecadlib ui` for the workspace when nothing answers."""
     port, ws = cfg["port"], Path(cfg["workspace"])
-    url = f"http://127.0.0.1:{port}/{QUEUE_ANCHOR}"
+    url = f"http://127.0.0.1:{port}/{queue_anchor(ws)}"
     kind, served = probe(port)
     started = False
     if kind == "other":

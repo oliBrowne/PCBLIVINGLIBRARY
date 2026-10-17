@@ -1,9 +1,10 @@
 """Minor problems an overnight run in real Altium AD26 found, each reproduced offline with its cause fixed:
 
 1. DbLib part name 'IND--10uH': an inductor whose footprint names no package left an empty token between two dashes.
-2. `ecadlib project` listing a crystal as 'Y1, Y1', Qty 2: the same component counted twice (its sheet listed twice in
+2. MPNs with a space squashed in the part name: 'FC-135 32.768KA-AG0' became 'FC-13532.768KA-AG0'.
+3. `ecadlib project` listing a crystal as 'Y1, Y1', Qty 2: the same component counted twice (its sheet listed twice in
    the .PrjPcb, or a copy of it with the same UniqueId on a second sheet).
-3. dblib-sync --prune left a pruned footprint's STEP folder (PcbLib/ecadlib_3d/<stem>_<k>/) behind."""
+4. dblib-sync --prune left a pruned footprint's STEP folder (PcbLib/ecadlib_3d/<stem>_<k>/) behind."""
 import json, tempfile
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from ecadlib import altium_dblib_sync as S, altium_export as X, altium_lib as AL
 from tests import test_altium_project as TAP, test_dblib_sync as TDS
 
 
-# ---------------------------------------------------------------- 1. part names
+# ---------------------------------------------------------------- 1+2. part names
 def _names(lines, rules=None):
     return {k: list(v["Part Number"]) for k, v in X.to_rows(lines, rules=rules).items()}
 
@@ -23,7 +24,24 @@ def test_empty_package_token_drops_out_of_the_part_name():
     assert n["Resistors"] == ["RES-0603-10k"], n                # a package keeps its place
 
 
-# ---------------------------------------------------------------- 2. a designator counted twice
+def test_space_in_mpn_is_kept_as_a_separator():
+    xtal = {"designator": "Y1", "value": "32.768kHz", "mpn": "FC-135 32.768KA-AG0", "manufacturer": "Epson",
+            "footprint": "Crystal:Crystal_SMD_3215-2Pin_3.2x1.5mm"}
+    rows = X.to_rows([xtal])["Crystals"].iloc[0]
+    assert rows["Part Number"] == "FC-135_32.768KA-AG0", rows["Part Number"]        # was FC-13532.768KA-AG0
+    assert rows["Manufacturer Part Number"] == "FC-135 32.768KA-AG0"                 # the MPN itself is untouched
+    assert AL.file_stem(rows["Part Number"]) == rows["Part Number"]
+    # two parts sharing a synthetic name get the MPN appended the same way
+    a = {"designator": "C1", "value": "100nF", "mpn": "GRM 155", "footprint": "Capacitor_SMD:C_0402_1005Metric"}
+    b = dict(a, designator="C2", mpn="CL05 B104")
+    assert _names([a, b])["Capacitors"] == ["CAP-0402-100nF", "CAP-0402-100nF-CL05_B104"]
+    # house naming rules: the MPN token keeps its separator too
+    from ecadlib import rules as RU
+    r = RU.load({"naming": {"component": "{mpn}", "by_category": {"Crystals": "{mpn}"}}})
+    assert _names([xtal], r)["Crystals"] == ["FC-135_32.768KA-AG0"]
+
+
+# ---------------------------------------------------------------- 3. a designator counted twice
 def _xtal_sheet(path, uid="XTALAAAA"):
     return TAP.write_schdoc(path, [
         TAP.comp("U1", "ESP32", "MCUAAAAA", TAP.mpn("ESP32-C3", "Espressif"), ["QFN32"]),
@@ -64,7 +82,7 @@ def test_same_component_on_two_sheets_counted_once():
         assert g["FC-135 32.768KA-AG0"] == ("Y1, Y1", "2") and any("duplicate designator Y1" in x for x in w), (g, w)
 
 
-# ---------------------------------------------------------------- 3. --prune and the STEP folder
+# ---------------------------------------------------------------- 4. --prune and the STEP folder
 STEP = b"ISO-10303-21;"
 
 

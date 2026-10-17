@@ -77,7 +77,7 @@ def test_a_missing_step_file_is_found_before_the_old_library_is_deleted():
     unsaved: the library was gone from disk (and the DbLib pointed at nothing). The STEP check now runs first."""
     pas = AN.PAS
     build = pas[pas.index("Function BuildPcbLib"):pas.index("Procedure Own(")]
-    assert build.index("MissingStep(Folder)") < build.index("DeleteFile(Path)")
+    assert build.index("MissingStep(Folder)") < build.index("EbSetAside(Path)")   # the old file is moved aside, not deleted (test_review_1018_build_fail)
     assert pas.index("Function MissingStep") < pas.index("Function BuildPcbLib")      # no forward declarations
     a, b = pas.index("Var\n    EbF"), pas.index("Procedure EbSplit")
     r = AM.pas_routines(AM.pas_tokens(pas[:a] + pas[b:]))

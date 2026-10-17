@@ -43,10 +43,44 @@ IC_PACKAGE = (r"(?i)(?:SOT|SOIC|H?T?SSOP|V?SSOP|MSOP|SOP|[VWU]?QFN|[VWU]?DFN|[VW
 CHIP_SIZES = "01005|0201|0402|0603|0805|1008|1206|1210|1812|2010|2220|2512"
 
 
+# a distributor's own category name (LCSC / Mouser / JLCPCB write it inside the text: "... 0402 Multilayer Ceramic
+# Capacitors MLCC - SMD/SMT ROHS", "... N-Channel SOT-23 MOSFETs ROHS"), matched as written (title case, whole words)
+SOURCE_CATEGORY = (("Capacitors", r"Multilayer Ceramic Capacitors|Ceramic Capacitors|Aluminum Electrolytic Capacitors|"
+                                  r"Tantalum Capacitors|Film Capacitors|Polymer Capacitors"),
+                   ("Inductors", r"Power Inductors|Ferrite Beads|Inductors \(SMD\)"),
+                   ("Transistors", r"MOSFETs|Bipolar Transistors|Digital Transistors|JFETs|IGBTs"),
+                   ("Diodes", r"Light Emitting Diodes|LEDs|LED Indication - Discrete|Schottky (?:Barrier )?Diodes|Zener Diodes|Switching Diodes|"
+                              r"Rectifiers|TVS Diodes|ESD and Surge Protection \(TVS/ESD\)"),
+                   ("Crystals", r"Crystals"),
+                   ("Connectors", r"USB Connectors|Pin Headers|Female Headers|Wire To Board Connector|"
+                                  r"Board to Board Connectors|IDC Connectors|Screw Terminal Blocks"))
+# DigiKey's all-caps description codes: "CAP CER 0.1UF 16V X7R 0402", "MOSFET N-CH 30V 5.7A SOT23-3"
+DIGIKEY_CODE = (("Capacitors", r"CAP (?:CER|TANT|ALUM|FILM|POLY)"), ("Resistors", r"RES(?: SMD| THICK| THIN)? \d"),
+                ("Inductors", r"(?:FIXED )?IND \d|FERRITE BEAD"), ("Transistors", r"MOSFET [2NP]|TRANS (?:NPN|PNP|2NPN|2PNP)"),
+                ("Diodes", r"LED [A-Z]|DIODE |TVS DIODE"), ("Crystals", r"CRYSTAL \d"), ("Connectors", r"CONN "))
+PASSIVE_KINDS = ("Resistors", "Capacitors", "Inductors")
+
+
+def source_kind(descriptions=()):
+    """The table a source's own category name or DigiKey code says, else None."""
+    for d in descriptions:
+        t = re.sub(r"\s+", " ", str(d or "")).strip()
+        for cat, rx in DIGIKEY_CODE:
+            if t == t.upper() and re.match(rf"(?:{rx})", t):
+                return cat
+        for cat, rx in SOURCE_CATEGORY:
+            if re.search(rf"(?<![\w-])(?<!(?i:for) )(?<!(?i:with) )(?<!(?i:of) )(?:{rx})(?![\w-])", t):   # not "driver for MOSFETs"
+                return cat
+    return None
+
+
 def kind_of(descriptions=(), footprints=()):
-    """Resistors / Capacitors / Inductors / Crystals / Connectors from a source's category words or a chip
-    footprint, else None."""
+    """Resistors / Capacitors / Inductors / Crystals / Connectors / Transistors / Diodes from a source's category
+    words or a chip footprint, else None."""
     semi = any(re.match(IC_PACKAGE, str(f or "").rpartition(":")[2].strip()) for f in footprints)
+    got = source_kind(descriptions)
+    if got and not (semi and got in PASSIVE_KINDS):     # a MOSFET is in a SOT-23; a "capacitor" in one is not a capacitor
+        return got
     for d in descriptions if not semi else ():  # an SOT-23 / MSOP part is not filed by its words ("Precision
         parts = [p.strip() for p in re.split(r",|;| - ", re.sub(r"\([^)]*\)", "", str(d or "")))]
         for cat, rx in KIND_WORDS:
@@ -96,15 +130,17 @@ def to_rows(lines, triage=None, rules=None):
         fp_ref = fp.split(":")[-1]
         pkg = package_of(fp, ln.get("description")) or ""
         value = ln.get("value", "")
-        if custom:
+        name_mpn = re.sub(r"\s+", "_", mpn.strip())   # a space in an MPN is a separator ('FC-135 32.768KA-AG0'
+        if custom:                                    # -> FC-135_32.768KA-AG0, as kicad_export.kname), not dropped
             f = RU.line_fields(ln, cat, pkg, rules, ref)
-            pn = (RU.component_name(f, rules) or ln.get("designator", "").split(",")[0]).replace(" ", "")
+            pn = (RU.component_name({**f, "mpn": name_mpn}, rules)
+                  or ln.get("designator", "").split(",")[0]).replace(" ", "")
         else:                                         # an empty token drops out with its dash: IND-10uH, not IND--10uH
             pn = ("-".join(t for t in (cat[:3].upper(), pkg, value) if t)
                   if cat in GENERIC_SYMBOL and value and not (kind and value == mpn)
-                  else mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
+                  else name_mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
         if seen.setdefault(pn, mpn) != mpn:      # same synthetic PN, different part (e.g. 100nF 16V vs 50V): keep both
-            pn = f"{pn}-{mpn}".replace(" ", "")
+            pn = f"{pn}-{name_mpn}".replace(" ", "")
         lib_ref = lib_name(GENERIC_SYMBOL.get(cat) or (custom and mpn and RU.symbol_name(f, rules)) or mpn or pn)
         kicad_fp = fp_ref = lib_name(fp_ref)
         if custom:
