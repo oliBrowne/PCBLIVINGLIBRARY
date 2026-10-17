@@ -491,7 +491,10 @@ def check_pad_table(spec, pads=None):
     same = [set(map(str, g)) for g in spec.get("same_net") or []]
     for n in sorted({n for n in nums if nums.count(n) > 1}):
         locs = [p for p in pins if p["num"] == n]
-        if all(abs(q["x"] - locs[0]["x"]) < 1e-6 and abs(q["y"] - locs[0]["y"]) < 1e-6 for q in locs[1:]):
+        same_place = lambda q, r: all(abs(q[k] - r[k]) < 1e-6 for k in ("x", "y", "w", "h"))
+        if any(same_place(q, r) for i, q in enumerate(locs) for r in locs[i + 1:]):
+            # a copy of the same pad (place and size): a misread row. Same number, same place, another size (an
+            # exposed pad drawn twice for its thermal vias) is one net and is fine.
             add("error", "numbers", f"pad {n} is listed twice at the same place")
     if not ({"1", "A1"} & set(nums)):
         add("error", "pin1", "no pad numbered 1 (or A1)")

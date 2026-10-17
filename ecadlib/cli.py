@@ -14,6 +14,7 @@
     ecadlib sources-check [--save DIR] [--json]   check the unofficial EasyEDA / JLCPCB endpoints against the live sites
     ecadlib footprint gen|compare ...             IPC-7351B footprint generator (also BGA, pin headers, connectors, pad tables)
     ecadlib check     x.kicad_mod|DIR.pretty [--summary]   footprints against the rule book (KLC / IPC-7351)
+    ecadlib fp-edit   PLAN --part P show|rename OLD=NEW|same-net A,B|undo   fix a held part's pad table by hand
     ecadlib footprint-bench [--offline]           compare generated footprints with KiCad's official ones, pad by pad
     ecadlib eval      run|compare|sets|show ...   accuracy test set: run the pipeline on known parts, pass rate and cost
     ecadlib dblib     BOM -o out/altium           Altium DbLib (SQLite + XLSX + .DbLib)
@@ -84,6 +85,7 @@ COMMANDS = {
     "sources-check": ("ecadlib.sources_check", "check the unofficial EasyEDA / JLCPCB endpoints against the live sites"),
     "footprint": ("ecadlib.footprint_gen", "IPC-7351B footprint generator"),
     "check": ("ecadlib.footprint_rules", "check .kicad_mod files against the footprint rule book (KLC / IPC-7351)"),
+    "fp-edit": ("ecadlib.fp_edit", "edit a held part's datasheet footprint: rename pads (pad 1), join pads on one net"),
     "footprint-bench": ("ecadlib.footprint_bench", "compare generated footprints (BGA, connectors, ...) with KiCad's official ones"),
     "eval": ("ecadlib.eval.cli", "accuracy test set: run the pipeline on parts with a known answer, score, compare runs"),
     "dblib": ("ecadlib.altium_export", "Altium DbLib export"),
