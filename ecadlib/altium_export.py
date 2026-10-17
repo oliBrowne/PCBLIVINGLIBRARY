@@ -97,8 +97,9 @@ def to_rows(lines, triage=None, rules=None):
         if custom:
             f = RU.line_fields(ln, cat, pkg, rules, ref)
             pn = (RU.component_name(f, rules) or ln.get("designator", "").split(",")[0]).replace(" ", "")
-        else:
-            pn = (f"{cat[:3].upper()}-{pkg}-{value}" if cat in GENERIC_SYMBOL and value and not (kind and value == mpn)
+        else:                                         # an empty token drops out with its dash: IND-10uH, not IND--10uH
+            pn = ("-".join(t for t in (cat[:3].upper(), pkg, value) if t)
+                  if cat in GENERIC_SYMBOL and value and not (kind and value == mpn)
                   else mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
         if seen.setdefault(pn, mpn) != mpn:      # same synthetic PN, different part (e.g. 100nF 16V vs 50V): keep both
             pn = f"{pn}-{mpn}".replace(" ", "")

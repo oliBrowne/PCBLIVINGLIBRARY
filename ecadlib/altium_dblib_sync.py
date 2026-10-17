@@ -61,6 +61,14 @@ def table_of(item):
     return (t or "Misc")[:31]
 
 
+def _steps(to, rel):
+    """The STEP files (paths relative to the library folder) the recipe of library <to>/<rel> names: the
+    ecadlib_3d/<stem>_<k>/ files altium_native writes beside a PcbLib."""
+    d = rel.split("/")[0]
+    return {f"{d}/{s}" for s in AN.recipe_steps(Path(to) / rel)
+            if s.startswith("ecadlib_3d/") and ".." not in s.split("/")}
+
+
 def plan_row(item, rules=None):
     """The DbLib row for one plan item, columns in altium_export order, then any extra plan parameters; parameter
     columns in the rules' house names ([parameters] names)."""
@@ -273,7 +281,8 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     """Bring <target_dir> in line with the plan. plan: a plan.json path, or its items (model paths absolute or
     relative to `base`). Returns {"results": [...], "written": [...], "removed": [...], "dblib": path, ...};
     results are {"name", "action", "detail", "table"} with action added/updated/up_to_date/held/skipped/error,
-    and not_in_plan/removed for rows (kind "row") and model files (kind "file") the plan no longer has."""
+    and not_in_plan/removed for rows (kind "row") and model files (kind "file") the plan no longer has; a pruned
+    footprint's STEP files (ecadlib_3d/..., written by ecadlib) are results with kind "3d"."""
     if mode not in EXT:
         raise ValueError(f"mode must be one of {sorted(EXT)}")
     items = load_plan(plan) if isinstance(plan, (str, Path)) else plan
@@ -287,7 +296,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     old = read_tables(xlsx)
     tables = {t: (list(h), [dict(r) for r in rows]) for t, (h, rows) in old.items()}
     where = {r.get("Part Number"): t for t, (_, rows) in tables.items() for r in rows}
-    results, written, removed, copied, failed = [], [], [], {}, {}
+    results, written, removed, copied, failed, prune_steps = [], [], [], {}, {}, set()
 
     def find(pn, t):
         rows = tables.get(t, ([], []))[1]
@@ -327,6 +336,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
             if dst.exists() and dst.read_bytes() == data:
                 if not dry_run:
                     AN.copy_recipe(src, dst)
+                    managed_files.update(_steps(to, rel))
                 continue
             notes.append(f"{rel} {'updated' if dst.exists() else 'added'}")
             if not dry_run:
@@ -342,6 +352,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                     continue
                 os.replace(tmp, dst)
                 AN.copy_recipe(src, dst)            # what Altium rebuilds the file from (ecadlib.altium_native)
+                managed_files.update(_steps(to, rel))       # its STEP files are ecadlib's too: --prune removes them
             else:
                 err = _readback(src, d, ref)
                 if err:
@@ -417,14 +428,32 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                 res["action"] = "removed"
                 removed.append(rel)
                 managed_files.discard(rel)
+                steps = _steps(to, rel)             # read from its recipe before that is deleted
                 if not dry_run:
                     f.unlink()
                     recipe = f.with_name(f.name + AN.EXT)      # else Altium's rebuild would make a file put here later
                     if recipe.is_file():                       # from the recipe of the one pruned
                         recipe.unlink()
+                prune_steps.update(steps)
             else:
                 res["detail"] = "no row uses it; kept (--prune deletes it)"
             results.append(res)
+    # the pruned footprints' STEP folders (ecadlib_3d/<stem>_<k>/): only files this tool wrote and no kept library
+    # names; a folder is removed only once empty, so anything the user put there stays (and keeps the folder)
+    keep = {s for _, d, _ in KINDS if d == "PcbLib" and (to / d).is_dir()
+            for f in (to / d).glob(f"*.{d}") if f"{d}/{f.name}" not in removed for s in _steps(to, f"{d}/{f.name}")}
+    for rel in sorted(prune_steps - keep):
+        if rel not in managed_files:
+            continue
+        managed_files.discard(rel)
+        if (to / rel).is_file():                # not in `removed`: svn never added them (svn delete would fail)
+            results.append({"name": rel, "action": "removed", "detail": "STEP model of a pruned footprint", "table": "",
+                            "kind": "3d"})
+            if not dry_run:
+                (to / rel).unlink()
+                for folder in ((to / rel).parent, (to / rel).parent.parent):
+                    if folder.name != "PcbLib" and folder.is_dir() and not any(folder.iterdir()):
+                        folder.rmdir()
     managed_files |= set(written)
     tables = {t: v for t, v in tables.items() if v[1] or t in old}  # never create an empty sheet
 
