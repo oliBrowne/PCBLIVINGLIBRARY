@@ -6,7 +6,7 @@ import configparser, contextlib, csv, io, json, os, re, socket, subprocess, sys,
 from pathlib import Path
 from unittest import mock
 
-from ecadlib import altium_menu as AM
+from ecadlib import altium_forms as AF, altium_menu as AM
 
 ROOT = Path(__file__).parent.parent
 RULES = ('[sources]\norder = ["standard"]\n\n[parameters]\n'
@@ -111,18 +111,21 @@ def test_build_writes_well_formed_files():
     out = d / "menu dir"
     rep = AM.build(out, "D:\\ecadlib ws", None, win_dir="D:\\Altium Scripts\\ecadlib (menu)")
     assert rep["problems"] == [] and rep["menu_file"] == AM.PREFS, rep
-    assert set(rep["written"]) == {AM.PROJECT, AM.UNIT, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README, AM.PREFS}
-    for f in (AM.PROJECT, AM.UNIT, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README):
+    assert set(rep["written"]) == {AM.PROJECT, AM.UNIT, AF.DIALOG_UNIT, AF.DIALOG_FORM, AM.INI, AM.RUN_CMD, AM.RUN_VBS,
+                                   AM.README, AM.PREFS}
+    for f in (AM.PROJECT, AM.UNIT, AF.DIALOG_UNIT, AF.DIALOG_FORM, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README):
         raw = (out / f).read_bytes()
         assert b"\n" not in raw.replace(b"\r\n", b""), f"{f}: every line ends with CRLF (Windows tools)"
         raw.decode("ascii")                                       # plain ASCII: any code page reads it
         assert not re.search(rb"(?i)sk-ant|api[_-]?key\s*=|NEXAR_TOKEN\s*=|password\s*=", raw), f"{f}: no secrets"
     prj = configparser.ConfigParser()
     prj.read_string((out / AM.PROJECT).read_text())
-    assert prj.sections() == ["Design", "Document1"] and prj["Document1"]["DocumentPath"] == AM.UNIT
+    assert prj.sections() == ["Design", "Document1", "Document2"] and prj["Document1"]["DocumentPath"] == AM.UNIT
+    assert prj["Document2"]["DocumentPath"] == AF.DIALOG_UNIT and (out / AF.DIALOG_FORM).is_file()
     ini = configparser.ConfigParser(interpolation=None)
     ini.read_string((out / AM.INI).read_text())
-    assert {k for k in ini["ecadlib"]} == {"workspace", "library", "name", "command", "hidden", "timeout_s", "port", "offline"}
+    assert {k for k in ini["ecadlib"]} == {"workspace", "library", "name", "command", "hidden", "timeout_s", "port", "offline",
+                                    "dialogs"}
     assert ini["ecadlib"]["workspace"] == "D:\\ecadlib ws" and ini["ecadlib"]["hidden"] == "1"
     assert not any(";" in v for v in ini["ecadlib"].values()), "TIniFile does not strip inline comments"
     # again: nothing rewritten; the user's settings survive
@@ -196,14 +199,17 @@ def test_menu_file_follows_altiums_format():
 
 def test_pas_uses_only_documented_calls_and_is_balanced():
     text = AM.pas_text()
-    assert AM.pas_problems(text) == []
+    assert AM.pas_problems(text, known=AM.unit_names(AF.dialog_pas_text())) == []
+    assert any("OpenDialog is not declared" in p for p in AM.pas_problems(text)), "the dialog unit is what declares it"
     toks = AM.pas_tokens(text)
     routines = AM.pas_routines(toks)
     for proc, _, _ in AM.PROCS:
         assert routines[proc]["kind"] == "procedure" and not routines[proc]["params"]
     used = {t[1].lower() for r in routines.values() for t in r["body"] if t[0] == "word"}
     api = {k.lower() for k in AM.ALTIUM_API}
-    assert api <= used | {"processmessages", "application"} | {"create", "free"}, sorted(api - used)
+    dlg = {t[1].lower() for r in AM.pas_routines(AM.pas_tokens(AF.dialog_pas_text())).values() for t in r["body"]
+           if t[0] == "word"}
+    assert api <= used | dlg | {"processmessages", "application"} | {"create", "free"}, sorted(api - used - dlg)
     for name, where in AM.ALTIUM_API.items():
         assert re.search(r"TR01\d\d|used in|see ", where), f"{name}: no reference"
     # every Begin / Try has its End, counted across the whole unit
@@ -236,6 +242,59 @@ def test_pas_checker_catches_mistakes():
     # strings and comments do not count as calls; '' is a quote inside a string; #13#10 is a character code
     toks = AM.pas_tokens("{ ShellExecute } (* RunApplicationAndWait *) // CreateProcess\n'it''s' + #13#10")
     assert toks == [("str", "it's", 2), ("sym", "+", 2), ("str", "\r", 2), ("str", "\n", 2)]
+
+
+def test_dialog_form_matches_its_unit_and_the_results():
+    """The ecadlib dialog (ecadlib_dialog.pas + .dfm): every component the unit names is in the form, every handler
+    the form names is in the unit, the .dfm nests object / end, and the keys the dialog reads are ones run-job writes."""
+    files = {AM.UNIT: AM.pas_text(), AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text()}
+    assert AM.project_problems(files) == []
+    dfm = files[AF.DIALOG_FORM]
+    names = AF.dfm_names(dfm)
+    assert names[0] == "EcadlibDialog" and len(names) == len(set(names))
+    assert dfm.startswith("object EcadlibDialog: TEcadlibDialog\r\n") and dfm.rstrip().endswith("end")
+    depth = 0
+    for ln in dfm.split("\r\n"):
+        if re.match(r"^\s*object \w+: T\w+$", ln):
+            depth += 1
+        elif re.match(r"^\s*end$", ln):
+            depth -= 1
+            assert depth >= 0
+    assert depth == 0
+    assert {f"Row{i}{x}" for i in range(1, AF.ROWS + 1) for x in ("", "A", "B")} <= set(names)
+    assert "FormKind = fkModal" in dfm and "BorderStyle = bsNone" in dfm and "OnTimer = TickTimer" in dfm
+    assert "'ecadlib '#183' Check project BOM'" in dfm, "non-ASCII characters as #codes"
+    # what the checker catches in the dialog: a handler the form names but the unit lacks, a component not in the form
+    broken = dict(files, **{AF.DIALOG_UNIT: files[AF.DIALOG_UNIT].replace("Procedure TEcadlibDialog.ReportClick", "Procedure ReportGone")})
+    assert any("ReportClick" in p for p in AM.project_problems(broken))
+    broken = dict(files, **{AF.DIALOG_UNIT: files[AF.DIALOG_UNIT].replace("EcadlibDialog.Report.Visible := False;", "EcadlibDialog.Gone.Visible := False;", 1)})
+    assert any("Gone is not declared" in p for p in AM.project_problems(broken))
+    read = set(re.findall(r"Answer\(Job, '(\w+)'\)", files[AF.DIALOG_UNIT]))
+    assert read == {"status", "install", "big", "report", "warnings", "offer_fill", "fix", "offer_queue"}, read
+    assert "ReadString('progress', 'text'" in files[AF.DIALOG_UNIT] and "'row' + IntToStr(i)" in files[AF.DIALOG_UNIT]
+    # the menu entries open the dialog, unless dialogs=0 asks for Altium's plain message boxes
+    assert "OpenDialog('add', '', '')" in files[AM.UNIT] and "OpenDialog('bom', PrjPath, '')" in files[AM.UNIT]
+    assert "Setting('dialogs', '1') = '0'" in files[AM.UNIT]
+
+
+def test_progress_file_for_the_live_view():
+    d = _tmp()
+    t = [0.0]
+    pr = AM.Progress(d, every_s=0.25, clock=lambda: t[0])
+    pr.step(0, 6, "line 1 of 6: LM358DR")
+    pr.step(1, 6, "line 2 of 6: skipped (too soon)")              # within 0.25 s: not written
+    got = lambda: dict(AM.read_ini(d / "progress.ini")["progress"])
+    assert got() == {"done": "0", "total": "6", "text": "line 1 of 6: LM358DR", "rows": "0"}
+    t[0] = 1.0
+    pr(6, 6, "writing report\nnow")                                # the Workspace progress(done, total, label) form
+    assert got()["done"] == "6" and got()["text"] == "writing report now"
+    pr.row("KiCad library", "no symbol | named like X")            # rows are always written
+    pr.row("symbol", "EasyEDA", True)
+    g = got()
+    assert g["rows"] == "2" and g["row1"] == "KiCad library|no symbol / named like X|0" and g["row2"] == "symbol|EasyEDA|1"
+    assert (d / "progress.ini").read_bytes()[:2] == b"\xff\xfe" and not list(d.glob("*.tmp"))
+    AM.Progress().step(1, 2, "no job: nothing written")
+    assert AM.rows_result(["a|1|1"], "1 line") == {"big": "1 line", "rows": 1, "row1": "a|1|1"}
 
 
 def test_command_lines_survive_spaces_and_windows_separators():
@@ -365,6 +424,44 @@ def test_check_bom_report_offer_and_fill():
     # a project that is not saved / not there: one line and a fix, never a traceback
     r = AM.run_job(_job(menu, {"action": "check-bom", "project": str(d / "Unsaved.PrjPcb")}))
     assert r["status"] == "error" and "no such file" in r["message"] and r["fix"].startswith("save the project")
+
+
+def test_dialog_results_rows_and_reports():
+    """With dialog=1 (the ecadlib dialog) a BOM check opens nothing: the dialog shows the counts and opens the report
+    on request (action=open, files in the workspace only). Each result carries the big line and the rows."""
+    from tests.test_altium_project import board
+    d = _tmp()
+    menu, cfg = _setup(d)
+    prj = board(d / "Board files (rev A)")
+    opened = []
+    job = _job(menu, {"action": "check-bom", "project": str(prj), "dialog": "1"})
+    AM.run_job(job, opener=opened.append)
+    r = _result(job)
+    assert opened == [] and "Report:" in r["message"] and r["big"] == "6 lines", r
+    rows = [r[f"row{i}"] for i in range(1, int(r["rows"]) + 1)]
+    assert rows[0] == "already in your library|0|1" and all(x.count("|") == 2 for x in rows), rows
+    assert sum(int(x.split("|")[1]) for x in rows) == 6, rows          # every line counted once
+    pg = dict(AM.read_ini(job / "progress.ini")["progress"])
+    assert pg["done"] == pg["total"] == "6", pg
+    # the dialog's "Open the full report": only a report inside the workspace or the library folder
+    r2 = AM.run_job(_job(menu, {"action": "open", "path": r["report"]}), opener=opened.append)
+    assert r2["status"] == "ok" and opened == [str(Path(r["report"]).resolve())], r2
+    for bad in (str(menu / AM.INI), str(d / "elsewhere.html"), sys.executable):
+        assert AM.run_job(_job(menu, {"action": "open", "path": bad}), opener=opened.append)["status"] == "error", bad
+    assert len(opened) == 1
+    # fill: big line, ready / held rows, and the review queue offered for the held parts
+    job = _job(menu, {"action": "fill", "project": str(prj), "dialog": "1"})
+    AM.run_job(job)
+    r = _result(job)
+    assert r["big"] == "0 of 6 ready" and r["offer_queue"] == "1" and r["row1"] == "ready, in your library|0|0", r
+    assert r["row2"] == "held for a person|6|0", r
+    # one part: where ecadlib looked and what it took, then the release check
+    job = _job(menu, {"action": "add-part", "dialog": "1", **CAP})
+    AM.run_job(job)
+    r = _result(job)
+    rows = [r[f"row{i}"] for i in range(1, int(r["rows"]) + 1)]
+    assert r["big"] == "Ready" and rows[-1] == "release check|ready|1", rows
+    assert any(x.startswith("symbol|standard parts") and x.endswith("|1") for x in rows), rows
 
 
 def test_altium_365_target():

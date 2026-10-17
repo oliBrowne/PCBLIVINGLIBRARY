@@ -57,7 +57,7 @@ PROCS = [("AddPartFromMPN", "&Add part from MPN...", "Build a part from its manu
          ("OpenReviewQueue", "Open &review queue", "Open the ecadlib web UI at the review queue")]
 MENU_BOM = "uploads/altium-menu/parts.csv"
 HEADER = ["Designator", "Qty", "Value", "Footprint", "Manufacturer", "Mfr. Part #", "LCSC Part Number", "Description", "Datasheet"]
-ACTIONS = ("add-part", "check-bom", "fill", "queue")
+ACTIONS = ("add-part", "check-bom", "fill", "queue", "open")
 QUEUE_ANCHOR = "#queuecard"
 
 # Every identifier the .pas calls from Altium / DelphiScript, and where it is documented. TRxxxx = Altium's scripting
@@ -316,6 +316,12 @@ Begin
         Result := Reinstall(Job);
 End;
 
+Function PlainDialogs : Boolean;
+{ dialogs=0 in ecadlib_menu.ini: Altium's plain message boxes instead of the ecadlib dialog. }
+Begin
+    Result := Setting('dialogs', '1') = '0';
+End;
+
 Procedure AddPartFromMPN;
 Var
     MPN : String;
@@ -324,6 +330,11 @@ Var
     Problem : String;
     Title : String;
 Begin
+    If Not PlainDialogs Then
+    Begin
+        OpenDialog('add', '', '');
+        Exit;
+    End;
     MPN := Trim(InputBox('ecadlib: add part', 'Manufacturer part number:', ''));
     If MPN = '' Then
         Exit;
@@ -362,6 +373,11 @@ Begin
         Exit;
     End;
     PrjPath := Prj.DM_ProjectFullPath;
+    If Not PlainDialogs Then
+    Begin
+        OpenDialog('bom', PrjPath, '');
+        Exit;
+    End;
     Job := StartJob('check-bom');
     Ask(Job, 'project', PrjPath);
     Problem := RunJob(Job, Title);
@@ -484,6 +500,8 @@ timeout_s={int(timeout_s)}
 port={int(port)}
 ; 1 = use only cached downloads and built-in standard parts (no network)
 offline={1 if offline else 0}
+; 1 = the ecadlib dialog (dark, live progress, like Altium's own); 0 = Altium's plain message boxes
+dialogs=1
 """.replace("\n", "\r\n")
 
 
@@ -585,8 +603,9 @@ def build(out, workspace=None, library=None, name="ecadlib", command="", win_dir
         win_dir = check_win_dir(win_dir)
     if name and not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$", name):
         raise ValueError(f"--name {name!r}: letters, digits, _ . - only")
-    from .altium_pkg import prjscr_text
-    files = {PROJECT: prjscr_text(UNIT), UNIT: pas_text(), RUN_CMD: run_cmd_text(), RUN_VBS: run_vbs_text(),
+    from . import altium_forms as AF
+    files = {PROJECT: prjscr_text(UNIT, AF.DIALOG_UNIT), UNIT: pas_text(), AF.DIALOG_UNIT: AF.dialog_pas_text(),
+             AF.DIALOG_FORM: AF.dialog_dfm_text(), RUN_CMD: run_cmd_text(), RUN_VBS: run_vbs_text(),
              README: readme_text(win_dir, bool(win_dir))}
     written, kept = [], []
     for fname, text in files.items():
@@ -607,11 +626,20 @@ def build(out, workspace=None, library=None, name="ecadlib", command="", win_dir
         if not (out / PREFS).is_file() or (out / PREFS).read_bytes() != data:
             (out / PREFS).write_bytes(data)
             written.append(PREFS)
-    problems = pas_problems(files[UNIT])
+    problems = project_problems(files)
     rep = {"folder": str(out), "project": PROJECT, "procedures": [p for p, _, _ in PROCS], "written": written,
            "kept": kept, "win_dir": win_dir, "menu_file": PREFS if win_dir else None, "problems": problems}
     (out / "altium_menu.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
     return rep
+
+
+def prjscr_text(*units):
+    """Script project as Altium saves one (Altium-Designer-addons/scripts-libraries QuickSilk.PrjScr, OpenLib.PrjScr for
+    several units). A form unit's .dfm is found next to its .pas."""
+    lines = ["[Design]", "Version=1.0", ""]
+    for i, u in enumerate(units, 1):
+        lines += [f"[Document{i}]", f"DocumentPath={u}", ""]
+    return "\r\n".join(lines)
 
 
 # ------------------------------------------------------------------ a small Pascal check (also used by the tests)
@@ -619,6 +647,7 @@ PAS_KEYWORDS = {"begin", "end", "var", "const", "function", "procedure", "if", "
                 "to", "downto", "repeat", "until", "not", "and", "or", "div", "mod", "result", "exit", "break", "true",
                 "false", "nil", "try", "finally", "except", "string", "integer", "boolean", "case", "of"}
 PAS_TYPES = {"tinifile", "tstringlist", "iproject"}
+GLOBALS = " globals"                       # pas_routines' key for a unit's Var block (no routine has a space)
 
 
 def pas_tokens(text):
@@ -671,6 +700,10 @@ def pas_tokens(text):
             m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[i:])
             toks.append(("word", m.group(0), line))
             i += len(m.group(0))
+        elif c == "$" and re.match(r"\$[0-9A-Fa-f]+", text[i:]):          # $00D9772F: a hex number (TColor)
+            m = re.match(r"\$[0-9A-Fa-f]+", text[i:])
+            toks.append(("num", m.group(0), line))
+            i += len(m.group(0))
         elif c.isdigit():
             m = re.match(r"\d+(\.\d+)?", text[i:])
             toks.append(("num", m.group(0), line))
@@ -691,9 +724,23 @@ def pas_routines(toks):
     out, i = {}, 0
     low = lambda t: t[1].lower() if t[0] == "word" else None
     while i < len(toks):
-        if low(toks[i]) in ("function", "procedure"):
+        if low(toks[i]) == "var" and not out:             # unit globals, before the first routine
+            j, names = i + 1, set()
+            while low(toks[j]) not in ("function", "procedure"):
+                while toks[j][1] != ":":
+                    if toks[j][0] == "word":
+                        names.add(toks[j][1].lower())
+                    j += 1
+                while toks[j][1] != ";":
+                    j += 1
+                j += 1
+            out[GLOBALS] = {"kind": "var", "params": set(), "vars": names, "body": []}
+            i = j
+        elif low(toks[i]) in ("function", "procedure"):
             kind, name = low(toks[i]), toks[i + 1][1]
             j, params = i + 2, set()
+            if toks[j][1] == "." and toks[j + 1][0] == "word":     # Procedure TForm1.Button1Click(Sender: TObject)
+                name, j = f"{name}.{toks[j + 1][1]}", j + 2
             if toks[j][1] == "(":
                 k = j
                 while toks[k][1] != ")":
@@ -740,17 +787,19 @@ def pas_routines(toks):
     return out
 
 
-def pas_problems(text, api=None):
+def pas_problems(text, api=None, known=(), procs=None):
     """What a reader of the .pas would object to: unbalanced Begin/End, an identifier that is neither declared here
-    (routine, parameter, local variable) nor in the documented allow-list (ALTIUM_API), a Function without a Result,
-    a procedure the menu needs that is missing or takes parameters. [] = fine."""
+    (routine, unit global, parameter, local variable), nor in `known` (the other unit's routines and globals, the
+    form's components), nor in the documented allow-list (ALTIUM_API), a Function without a Result, a procedure the
+    menu needs (procs, default PROCS) that is missing or takes parameters. [] = fine."""
     api = {k.lower() for k in (api or ALTIUM_API)}
     try:
         routines = pas_routines(pas_tokens(text))
     except (ValueError, IndexError) as e:
         return [f"does not parse: {e}"]
     probs = []
-    known = {n.lower() for n in routines}
+    glob = routines.pop(GLOBALS, {"vars": set()})["vars"]
+    known = {n.lower() for n in routines} | {n.split(".")[-1].lower() for n in routines} | glob | {k.lower() for k in known}
     for name, r in routines.items():
         local = r["params"] | r["vars"]
         for idx, (kind, val, line) in enumerate(r["body"]):
@@ -762,11 +811,37 @@ def pas_problems(text, api=None):
             probs.append(f"line {line}: {name}: {val} is not declared and not in the API allow-list")
         if r["kind"] == "function" and not any(t[0] == "word" and t[1].lower() == "result" for t in r["body"]):
             probs.append(f"{name}: a Function that never sets Result")
-    for proc, _, _ in PROCS:
+    for proc, _, _ in (PROCS if procs is None else procs):
         if proc not in routines:
             probs.append(f"{proc}: missing")
         elif routines[proc]["params"] or routines[proc]["kind"] != "procedure":
             probs.append(f"{proc}: must be a Procedure without parameters (Altium's menus cannot pass any)")
+    return probs
+
+
+def unit_names(text):
+    """Routines and unit globals a .pas declares (what another unit of the script project may call)."""
+    try:
+        r = pas_routines(pas_tokens(text))
+    except (ValueError, IndexError):
+        return set()
+    return {n for n in r if n != GLOBALS and "." not in n} | set(r.get(GLOBALS, {}).get("vars", ()))
+
+
+def project_problems(files):
+    """pas_problems of both units, each knowing the other's routines; the dialog also knows its form's components
+    and the form API (altium_forms.FORM_API). Problems are prefixed with the unit's file name."""
+    from . import altium_forms as AF
+    menu, dlg = files[UNIT], files[AF.DIALOG_UNIT]
+    comps = AF.dfm_names(files[AF.DIALOG_FORM])
+    handlers = set(re.findall(r"(?m)^\s*On\w+ = (\w+)", files[AF.DIALOG_FORM]))
+    probs = [f"{UNIT}: {p}" for p in pas_problems(menu, known=unit_names(dlg))]
+    probs += [f"{AF.DIALOG_UNIT}: {p}" for p in pas_problems(dlg, {**ALTIUM_API, **AF.FORM_API},
+                                                               known=unit_names(menu) | set(comps), procs=[])]
+    form = comps[0] if comps else ""
+    methods = {n.split(".")[1] for n in pas_routines(pas_tokens(dlg)) if n.startswith(f"T{form}.")}
+    probs += [f"{AF.DIALOG_FORM}: {h} is named in the form but {AF.DIALOG_UNIT} has no T{form}.{h}"
+              for h in sorted(handlers - methods)]
     return probs
 
 
@@ -794,18 +869,65 @@ def _one_line(v):
     return re.sub(r"\s*[\r\n]+\s*", " ", str(v if v is not None else "")).strip()
 
 
-def result_text(res):
-    keys = ["status", "message", "fix"] + [k for k in res if k not in ("status", "message", "fix")]
-    return "[result]\r\n" + "".join(f"{k}={_one_line(res.get(k, ''))}\r\n" for k in keys)
+def result_text(res, section="result"):
+    first = [k for k in ("status", "message", "fix") if section == "result" or k in res]
+    keys = first + [k for k in res if k not in first]
+    return f"[{section}]\r\n" + "".join(f"{k}={_one_line(res.get(k, ''))}\r\n" for k in keys)
 
 
-def write_result(path, res):
+def write_result(path, res, section="result"):
     """result.ini as UTF-16 LE with a BOM (what TIniFile / GetPrivateProfileStringW reads whatever the code page),
     written to a temp file and moved into place, so the script never reads half a file."""
     path = Path(path)
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_bytes(b"\xff\xfe" + result_text(res).encode("utf-16-le"))
+    tmp.write_bytes(b"\xff\xfe" + result_text(res, section).encode("utf-16-le"))
     os.replace(tmp, path)
+
+
+class Progress:
+    """<job>/progress.ini while the job runs, for the dialog's live view ([progress] done, total, text, rows, row1..).
+    Rows are "label|value|ok" lines (ok = 1 shows the value in green). Written like result.ini (UTF-16, moved into
+    place); a write the script's read collides with on Windows is skipped, the next one carries the same state."""
+
+    def __init__(self, job=None, every_s=0.25, clock=time.monotonic):
+        self.path = Path(job) / "progress.ini" if job else None
+        self.done, self.total, self.text, self.rows = 0, 0, "", []
+        self.every_s, self.clock, self.last = every_s, clock, None
+
+    def step(self, done, total, text):
+        self.done, self.total, self.text = done, total, _one_line(text)[:120]
+        self.flush(force=bool(total) and done >= total)          # the last step always shows
+
+    def row(self, label, value="", ok=False):
+        self.rows.append(row_text(label, value, ok))
+        self.flush()
+
+    def __call__(self, done, total, text):            # Workspace.triage / librarian_run progress(done, total, label)
+        self.step(done, total, text)
+
+    def flush(self, force=True):
+        if self.path is None or (not force and self.last is not None and self.clock() - self.last < self.every_s):
+            return
+        self.last = self.clock()
+        res = {"done": self.done, "total": self.total, "text": self.text, "rows": len(self.rows)}
+        res.update({f"row{i}": r for i, r in enumerate(self.rows, 1)})
+        try:
+            write_result(self.path, res, section="progress")
+        except OSError:
+            pass
+
+
+def row_text(label, value="", ok=False):
+    """One dialog row: "label|value|1" (the script splits on |, so neither part may hold one)."""
+    clean = lambda v: _one_line(v).replace("|", "/")
+    return f"{clean(label)}|{clean(value)}|{1 if ok else 0}"
+
+
+def rows_result(rows, big=""):
+    """{"big", "rows", "row1".."rowN"} for result.ini: what the dialog shows when the job is done."""
+    out = {"big": big, "rows": len(rows)}
+    out.update({f"row{i}": r for i, r in enumerate(rows, 1)})
+    return out
 
 
 def load_config(ini_path):
@@ -912,17 +1034,36 @@ def _workspace(cfg):
     return Workspace(cfg["workspace"], offline=cfg.get("offline", False))
 
 
-def add_part(cfg, mpn, manufacturer="", **hints):
+def part_rows(it, limit=7):
+    """What the dialog lists for one built part: where ecadlib looked, what it took, and the release check."""
+    from . import messages as M
+    rows, src = [], it.get("source") or {}
+    for t in (it.get("librarian") or {}).get("tried", [])[:4]:
+        kind, _, rest = str(t).partition(":")
+        if rest and kind.strip() in M.SOURCES:
+            rows.append(row_text(M.SOURCES[kind.strip()], rest.strip()[:48]))
+    for k in ("symbol", "footprint"):
+        rows.append(row_text(k, M.source_word(src.get(k)) if src.get(k) else "none yet", bool(src.get(k))))
+    st = it.get("status", "")
+    rows.append(row_text("release check", M.status_word(st), st in ("ready", "duplicate")))
+    return rows[-limit:] if len(rows) > limit else rows
+
+
+def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
     """Build one part from its MPN and publish it. Returns the result dict."""
+    progress = progress or Progress()
     ws = _workspace(cfg)
     bom = add_to_parts(ws.root, mpn, manufacturer, **hints)
     rel = ws.rel(bom)
-    ws.librarian_run(rel)
+    progress.step(0, 0, f"looking up {mpn}")
+    ws.librarian_run(rel, progress=lambda d, t, text: progress.step(0, 0, text))
     _, _, items = ws._plan(rel)
     it = _item_for(items, mpn)
     if it is None:
         return {"status": "error", "message": f"ecadlib could not add {mpn} to the library.",
                 "fix": f"Check the part number. What was tried is in {ws.root / ws._librarian_dir(bom).relative_to(ws.root) / 'review.html'}"}
+    if it["status"] == "ready":
+        progress.step(0, 0, "putting it into the library")
     pub = publish(ws, rel, cfg["library"], cfg["name"]) if it["status"] == "ready" else {"install": [], "problems": []}
     st, nm = it["status"], it["name"]
     res = {"status": st, "part": nm, "mpn": mpn, "install": ";".join(pub.get("install") or []),
@@ -946,6 +1087,10 @@ def add_part(cfg, mpn, manufacturer="", **hints):
         res.update(status="held", message=f"{mpn} is held ({nm}): " + (" ".join(w["text"] for w in whys[:3]) or "see the review."),
                    fix=(whys[0]["fix"] + " " if whys else "") + "Open the review queue (ecadlib > Open review queue) "
                        "to pick a symbol or footprint, or release it anyway.")
+    res.update(rows_result(part_rows(it), {"ready": "Ready", "duplicate": "Already in your library",
+                                           "awaiting_approval": "Waiting for sign-off"}.get(st, "Held")))
+    if res["status"] == "error":
+        res["big"] = "Not published"
     return res
 
 
@@ -995,19 +1140,28 @@ not yet, {counts['dnp']} not fitted. Full lookup report: <a href="{e(md_link)}">
 """
 
 
-def check_bom(cfg, project, opener=None):
-    """BOM of an Altium project -> triage + which lines the library already has -> HTML report (opened)."""
+def check_bom(cfg, project, opener=None, progress=None):
+    """BOM of an Altium project -> triage + which lines the library already has -> HTML report (opened unless
+    opener is False: the dialog shows the counts and offers the report)."""
+    progress = progress or Progress()
     ws = _workspace(cfg)
+    progress.step(0, 0, "reading the project's BOM")
     bom, pb = _bom_of(ws, project)
-    tri = ws.triage(bom)
+    tri = ws.triage(bom, progress=lambda d, t, text: progress.step(d, t, f"line {min(d + 1, t)} of {t}: {text}"
+                                                                    if d < t else text))
     have = _library_mpns(cfg, ws)
     rows, counts = [], {"lines": 0, "in_library": 0, "missing": 0, "dnp": 0}
+    kinds = {"source": 0, "footprint": 0, "unverified": 0}
     for r in tri["rows"]:
         dnp = str(r.get("status", "")).startswith("dnp")
         inlib = bool(r.get("mpn")) and r["mpn"].strip().upper() in have
         rows.append({**r, "in_library": inlib})
         counts["lines"] += 1
         counts["dnp" if dnp else "in_library" if inlib else "missing"] += 1
+        if not dnp and not inlib:
+            st = str(r.get("status", ""))
+            kinds["footprint" if st.startswith("needs_footprint") else "unverified" if st.startswith("unverified")
+                  else "source"] += 1
     stem = Path(tri["reports"][0]).with_suffix("").name
     out = ws.root / "reports" / f"{stem}_altium.html"
     name = pb["project"] if pb else Path(project).name
@@ -1024,14 +1178,24 @@ def check_bom(cfg, project, opener=None):
     if counts["missing"]:
         res["offer"] = (f"Fill the library now? ecadlib looks up the {counts['missing']} missing part(s), builds what it "
                         "can and puts the ready ones into the library (this can take a few minutes).")
+    from . import messages as M
+    shown = [row_text("already in your library", counts["in_library"], True),
+             row_text("a source can supply", kinds["source"]) if kinds["source"] else None,
+             row_text("needs a footprint", kinds["footprint"]) if kinds["footprint"] else None,
+             row_text("could not check (source offline)", kinds["unverified"]) if kinds["unverified"] else None,
+             row_text("not fitted", counts["dnp"]) if counts["dnp"] else None]
+    res.update(rows_result([r for r in shown if r], M.plural(counts["lines"], "line")))
     return res
 
 
-def fill(cfg, project):
+def fill(cfg, project, progress=None):
     """Librarian on the project's BOM, then publish the ready parts."""
+    progress = progress or Progress()
     ws = _workspace(cfg)
     bom, pb = _bom_of(ws, project)
-    s = ws.librarian_run(bom)
+    s = ws.librarian_run(bom, progress=progress)
+    if s["ready"]:
+        progress.step(progress.total, progress.total, "putting the ready parts into the library")
     pub = publish(ws, bom, cfg["library"], cfg["name"]) if s["ready"] else {"install": [], "problems": []}
     where = ("released to Altium 365: refresh the Components panel" if pub.get("target") == "a365"
              else f"in the {cfg['name']} database library")
@@ -1046,6 +1210,13 @@ def fill(cfg, project):
         res["fix"] = pub.get("fix") or "run `ecadlib altium-pkg` / `ecadlib altium365 push` by hand to see more"
     elif s["held"] or s["awaiting_approval"]:
         res["fix"] = "Open the review queue (ecadlib > Open review queue): it says why each part is held and what to pick."
+    shown = [row_text("ready, in your library" if pub.get("target") != "a365" else "released to Altium 365", s["ready"], s["ready"] > 0)]
+    shown += [row_text(label, n) for n, label in ((s["held"], "held for a person"), (s["awaiting_approval"], "waiting for sign-off"),
+                                                   (s["duplicates"], "already in the library")) if n]
+    shown += [row_text(r["part"], (r.get("why") or "").split(";")[0][:44]) for r in s.get("review", [])
+              if r.get("status") == "held"][:3]
+    res.update(rows_result(shown, f"{s['ready']} of {s['parts']} ready"))
+    res["offer_queue"] = "1" if s["held"] or s["awaiting_approval"] else "0"
     return res
 
 
@@ -1065,6 +1236,24 @@ def _open(path_or_url, opener=None):
         return True
     except Exception:
         return False
+
+
+def open_file(cfg, path, opener=None):
+    """Open a report the dialog offers (in the browser / its default program). Only files under the workspace or the
+    library folder: a request.ini is plain text anyone can write, so it never names an arbitrary program to start."""
+    p = Path(path)
+    roots = [Path(cfg["workspace"]).resolve(), Path(cfg["library"]).resolve()]
+    try:
+        rp = p.resolve()
+    except OSError:
+        rp = p
+    if not p.is_file() or not any(rp == r or r in rp.parents for r in roots):
+        return {"status": "error", "message": f"{path}: not a report in the ecadlib workspace", "fix": "check the job's log.txt"}
+    if rp.suffix.lower() not in (".html", ".htm", ".md", ".csv", ".txt"):
+        return {"status": "error", "message": f"{rp.name}: ecadlib opens only reports (.html, .md, .csv, .txt)", "fix": ""}
+    if not _open(rp, opener):
+        return {"status": "error", "message": f"could not open {rp}", "fix": "open that file yourself"}
+    return {"status": "ok", "message": f"opened {rp.name}"}
 
 
 def probe_ui(port, host="127.0.0.1", timeout=1.5):
@@ -1126,14 +1315,17 @@ def open_queue(cfg, opener=None, probe=probe_ui, launcher=start_ui, wait_s=30.0,
             "started": "1" if started else "0"}
 
 
-def run_action(cfg, action, req, opener=None):
+def run_action(cfg, action, req, opener=None, progress=None):
     if action == "add-part":
         hints = {k: req.get(k, "") for k in ("value", "footprint", "lcsc", "description", "datasheet", "designator")}
-        return add_part(cfg, req.get("mpn", ""), req.get("manufacturer", ""), **hints)
-    if action == "check-bom":
-        return check_bom(cfg, req.get("project", ""), opener=opener)
+        return add_part(cfg, req.get("mpn", ""), req.get("manufacturer", ""), progress=progress, **hints)
+    if action == "check-bom":                  # the dialog (dialog=1) shows the counts and opens the report on request
+        return check_bom(cfg, req.get("project", ""), opener=False if req.get("dialog") == "1" else opener,
+                         progress=progress)
     if action == "fill":
-        return fill(cfg, req.get("project", ""))
+        return fill(cfg, req.get("project", ""), progress=progress)
+    if action == "open":                       # a report or review the dialog offers: only files in the workspace
+        return open_file(cfg, req.get("path", ""), opener=opener)
     if action == "queue":
         return open_queue(cfg, opener=opener)
     raise ValueError(f"unknown action {action!r} (one of {', '.join(ACTIONS)})")
@@ -1158,7 +1350,7 @@ def run_job(job, opener=None):
     try:
         req = dict(read_ini(job / "request.ini")["request"])
         cfg = load_config(req.get("config") or job.parent.parent / INI)
-        res = run_action(cfg, req.get("action", ""), req, opener=opener)
+        res = run_action(cfg, req.get("action", ""), req, opener=opener, progress=Progress(job))
     except Exception as e:                                   # every failure becomes one dialog line with a fix
         res = _error(e)
     write_result(job / "result.ini", res)
