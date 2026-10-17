@@ -269,11 +269,14 @@ def write(folder, out=None):
                 f[i] = str(prefix / f[i].replace("\\", "/")).replace("/", "\\")
             fixed.append("\t".join(f))
         text = "\n".join(fixed) + "\n"
-    (out / BUILD).write_text(text, encoding="utf-8-sig")       # BOM: TStringList.LoadFromFile reads it as UTF-8
-    (out / PROJECT).write_text(prjscr_text(), encoding="utf-8", newline="")
-    (out / UNIT).write_text(pas_text(), encoding="utf-8", newline="")
+    written = []
+    for name, data in ((BUILD, text.encode("utf-8-sig")),   # BOM: TStringList.LoadFromFile reads it as UTF-8
+                       (PROJECT, prjscr_text().encode("utf-8")), (UNIT, pas_text().encode("utf-8"))):
+        if not ((out / name).is_file() and (out / name).read_bytes() == data):   # unchanged files keep their date
+            (out / name).write_bytes(data)
+            written.append(name)
     return {"folder": str(folder), "out": str(out), "libraries": [r.as_posix() for r, _ in found],
-            "files": [BUILD, PROJECT, UNIT]}
+            "files": [BUILD, PROJECT, UNIT], "written": written}
 
 
 def prjscr_text():
