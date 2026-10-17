@@ -19,12 +19,15 @@
   /* the footprint preview is Altium's PCB editor in both themes: black board, Top Layer red, Multi-Layer silver */
   --pcb-board: #000000; --pcb-grid: #1e1e1e; --pcb-grid-major: #3a3a3a; --pcb-top: #ff0000; --pcb-multi: #c0c0c0;
   --pcb-hole: #1a1a1a; --pcb-fab: #ff00ff; --pcb-crtyd: #00d000; --pcb-text: #ffffff; --pcb-origin: #ffffff;
+  /* one colour per design tool, on the library hub's tiles, columns and tags */
+  --t-altium: #8f6410; --t-altium365: #08787a; --t-kicad: #3a52c4; --t-fusion: #b84a0c; --t-easyeda: #8433b0; --t-all: var(--text);
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #08090a; --panel: #08090a; --text: #d0d6e0; --muted: #8a8c95; --line: #29292d; --line-2: #1d1d20; --hover: #111214;
     --accent: #d0d6e0; --accent-weak: #16171a; --on-accent: #08090a;
     --ok: #5fc58c; --warn: #e2a64a; --bad: #f07a70; --info: #9aa6ff; --off: #6f7178;
-    --hairline-hi: #fafafa; --hairline-edge: #a1a1aa; --hairline-mid: #52525b; --hairline-lo: #27272a; }
+    --hairline-hi: #fafafa; --hairline-edge: #a1a1aa; --hairline-mid: #52525b; --hairline-lo: #27272a;
+    --t-altium: #e0b45c; --t-altium365: #4cc9c9; --t-kicad: #8c9dff; --t-fusion: #ff9a57; --t-easyeda: #c98af0; }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -293,15 +296,24 @@ details summary { cursor: pointer; color: var(--muted); }
 .hubtable tr { cursor: pointer; }
 .hubtable tr:focus-visible td { background: var(--hover); outline: none; }
 @media (max-width: 760px) { .hubtable td.hp, .hubtable thead th:first-child { position: sticky; left: 0; background: var(--bg); z-index: 1; min-width: 140px; box-shadow: 1px 0 0 var(--line); } }
-.hubtools { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0; margin: 14px 0 6px; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
-.hubtool { all: unset; box-sizing: border-box; display: flex; flex-direction: column; gap: 3px; padding: 12px 14px 13px; cursor: pointer; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); transition: background .3s var(--ease); animation: fadein .6s var(--ease) both; min-width: 0; }
-.hubtool:hover { background: var(--hover); }
-.hubtool:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
-.hubtool[aria-selected="true"] { background: var(--hover); box-shadow: inset 0 -2px 0 var(--text); }
-.hubtool .tn { font: 500 10.5px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--text); }
+[data-tc="altium"] { --tc: var(--t-altium); } [data-tc="altium365"] { --tc: var(--t-altium365); } [data-tc="kicad"] { --tc: var(--t-kicad); }
+[data-tc="fusion"] { --tc: var(--t-fusion); } [data-tc="easyeda"] { --tc: var(--t-easyeda); } [data-tc="all"] { --tc: var(--t-all); }
+.hubtools { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 14px 0 6px; }
+.hubtool { all: unset; box-sizing: border-box; display: flex; flex-direction: column; gap: 3px; padding: 12px 14px 13px; cursor: pointer; border: 1.5px solid var(--tc, var(--line)); border-radius: 10px; font-size: 12px; color: var(--muted); transition: background .3s var(--ease), box-shadow .3s var(--ease); animation: fadein .6s var(--ease) both; min-width: 0; }
+.hubtool:hover { background: color-mix(in srgb, var(--tc, var(--text)) 6%, transparent); }
+.hubtool:focus-visible { outline: 2px solid var(--tc, var(--text)); outline-offset: 2px; }
+.hubtool[aria-selected="true"] { background: color-mix(in srgb, var(--tc, var(--text)) 9%, transparent); box-shadow: inset 0 0 0 1.5px var(--tc, var(--text)); }
+.hubtool .tn { font: 500 10.5px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--tc, var(--text)); }
+.hubtool.off { border-style: dashed; }
+.tooltag { display: inline-block; border: 1px solid var(--tc, var(--line)); color: var(--tc, var(--text)); border-radius: 999px; padding: 0 8px; font-size: 11.5px; line-height: 18px; margin: 0 4px 3px 0; white-space: nowrap; }
+.hubtable th.tool { color: var(--tc, var(--muted)); box-shadow: inset 0 2px 0 var(--tc, transparent); }
+.hublibs .chip[data-tc] { border-color: color-mix(in srgb, var(--tc) 55%, var(--line)); }
+.hublibs .chip[data-tc].active { border-color: var(--tc); background: color-mix(in srgb, var(--tc) 9%, transparent); }
+#hubdlg .copies td:first-child { box-shadow: inset 3px 0 0 var(--tc, transparent); padding-left: 10px; }
+#hubdlg .copies td:first-child b { color: var(--tc, var(--text)); }
 .hubtool b { font: 400 26px/1.15 var(--mono); color: var(--text); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .hubtool .tw { overflow-wrap: anywhere; }
-.hubtool.off { opacity: .55; }
+.hubtool.off { opacity: .6; }
 @media (max-width: 760px) { .hubtools { grid-template-columns: repeat(2, minmax(0, 1fr)); } .hubtool { padding: 9px 11px 10px; gap: 1px; } .hubtool b { font-size: 20px; } .hubtool .tx { display: none; } }
 .hublibs { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 2px; }
 .hubstrip { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; margin: 10px 0 2px; font-size: 13px; }
@@ -1758,7 +1770,7 @@ function hubCell(c) {
 }
 function hubTiles(r) {
   const s = r.summary;
-  const tile = (id, name, body, off) => `<button class="hubtool${off ? " off" : ""}" role="tab" aria-selected="${hubtool === id}" data-hubtool="${esc(id)}">${body.replace("%N", `<span class="tn">${esc(name)}</span>`)}</button>`;
+  const tile = (id, name, body, off) => `<button class="hubtool${off ? " off" : ""}" role="tab" aria-selected="${hubtool === id}" data-hubtool="${esc(id)}" data-tc="${esc(id)}">${body.replace("%N", `<span class="tn">${esc(name)}</span>`)}</button>`;
   return r.tools.map(t => !t.reader && !t.parts
       ? tile(t.tool, t.label, `%N<b>–</b><span>Not connected yet</span>`, true)
       : tile(t.tool, t.label, `%N<b>${esc(t.parts)}</b><span class="tx">${t.parts ? `part${t.parts === 1 ? "" : "s"} in ${t.libraries.length} librar${t.libraries.length === 1 ? "y" : "ies"}` : "parts"}</span>` +
@@ -1773,8 +1785,8 @@ function renderHub() {
   // the chosen tool: its libraries, and the parts other tools have that it lacks
   let head = "";
   if (one && t) {
-    head = `<div class="hublibs" role="group" aria-label="Libraries in ${esc(t.label)}"><span class="chip${hublib ? "" : " active"}" tabindex="0" role="button" data-hublib="">All ${esc(t.label)} libraries</span>` +
-      t.libraries.map(l => `<span class="chip${hublib === l.library ? " active" : ""}" tabindex="0" role="button" data-hublib="${esc(l.library)}" title="${esc(l.library)}${l.updated ? ` · changed ${esc(String(l.updated).slice(0, 16).replace("T", " "))} by ${esc(l.updated_by || "not recorded")}` : ""}">${esc(l.library.split("/").pop())} · ${esc(l.parts)}</span>`).join("") + `</div>`;
+    head = `<div class="hublibs" role="group" aria-label="Libraries in ${esc(t.label)}"><span class="chip${hublib ? "" : " active"}" tabindex="0" role="button" data-tc="${esc(t.tool)}" data-hublib="">All ${esc(t.label)} libraries</span>` +
+      t.libraries.map(l => `<span class="chip${hublib === l.library ? " active" : ""}" tabindex="0" role="button" data-tc="${esc(t.tool)}" data-hublib="${esc(l.library)}" title="${esc(l.library)}${l.updated ? ` · changed ${esc(String(l.updated).slice(0, 16).replace("T", " "))} by ${esc(l.updated_by || "not recorded")}` : ""}">${esc(l.library.split("/").pop())} · ${esc(l.parts)}</span>`).join("") + `</div>`;
     if (t.can_copy && can("librarian"))
       head += `<div class="hubstrip"><span>${esc(t.can_copy)} part${t.can_copy === 1 ? "" : "s"} in your other tools ${t.can_copy === 1 ? "isn't" : "aren't"} in ${esc(t.label)} yet. ecadlib can convert ${t.can_copy === 1 ? "it" : "them"} into its hub library for ${esc(t.label)}.</span><button class="small primary" data-hubcopyall="${esc(t.tool)}">Copy ${t.can_copy === 1 ? "it" : "them"} to ${esc(t.label)}</button></div>`;
     else if (t.missing && !COPYABLE.includes(t.tool) && t.tool !== "altium365" && t.reader)
@@ -1813,11 +1825,11 @@ function renderHub() {
       <td><span class="mono small">${esc(String(pl.symbol || "").split(":").pop() || "–")}</span><div class="sub">${esc(String(pl.footprint || "").split(":").pop())}</div></td>
       <td>${day(c.updated)}<div class="sub">${whoShort(c.updated_by)}</div></td>
       <td title="${esc(c.note || "")}"><span class="pill ${cls}">${esc(w)}</span></td>
-      <td class="small">${others.map(x => esc(x.label)).join(", ") || '<span class="none">–</span>'}</td>
+      <td class="small">${others.map(x => `<span class="tooltag" data-tc="${esc(x.tool)}">${esc(x.label)}</span>`).join("") || '<span class="none">–</span>'}</td>
       <td>${p.used_in ? `${p.used_in} project${p.used_in > 1 ? "s" : ""}` : '<span class="none">–</span>'}</td></tr>`;
     }).join("");
   } else {
-    $("#hubhead").innerHTML = `<tr><th>Part</th>${tools.map(t => `<th class="tool">${esc(t.label)}<span>${t.reader ? `${t.parts} parts` : "no reader yet"}</span></th>`).join("")}<th>Last changed</th><th>Used in</th></tr>`;
+    $("#hubhead").innerHTML = `<tr><th>Part</th>${tools.map(t => `<th class="tool" data-tc="${esc(t.tool)}">${esc(t.label)}<span>${t.reader ? `${t.parts} parts` : "no reader yet"}</span></th>`).join("")}<th>Last changed</th><th>Used in</th></tr>`;
     $("#hubrows").innerHTML = r.rows.map(p => `<tr tabindex="0" data-hub="${esc(p.key)}">
       <td class="hp"><b class="mono">${esc(p.name)}</b>${p.mpn && p.mpn !== p.name ? `<div class="sub">${esc(p.mpn)}${p.manufacturer ? " · " + esc(p.manufacturer) : ""}</div>` : (p.manufacturer ? `<div class="sub">${esc(p.manufacturer)}</div>` : "")}
         ${p.flags.filter(f => ["held", "awaiting_approval", "eol"].includes(f)).map(f => `<span class="pill ${f === "eol" ? "s-bad" : "s-warn"}">${f === "eol" ? esc(p.lifecycle ? p.lifecycle.label : "end of life") : f === "held" ? "held" : "awaiting sign-off"}</span> `).join("")}</td>
@@ -1895,7 +1907,7 @@ function renderHubPart(p) {
   const copies = p.copies.map(c => {
     const [w, cls] = HUBSTATE[c.state] || [c.state, "s-info"];
     const why = c.state === "behind" ? `${esc(c.behind.words)} behind ${esc(({altium: "Altium", altium365: "Altium 365", kicad: "KiCad", fusion: "Fusion", easyeda: "EasyEDA"})[c.behind.tool] || c.behind.tool)}` : "";
-    return `<tr><td><b>${esc(c.tool_label)}</b><div class="sub muted">${c.origin === "ecadlib" ? "built by ecadlib" : "your library"}</div></td>
+    return `<tr><td data-tc="${esc(c.tool)}"><b>${esc(c.tool_label)}</b><div class="sub muted">${c.origin === "ecadlib" ? "built by ecadlib" : "your library"}</div></td>
       <td><span class="mono small">${esc(c.where || "")}</span>${c.file ? `<div class="sub muted mono" title="${esc(c.file)}">${esc(c.file.split("/").slice(-2).join("/"))}</div>` : ""}
         <div class="sub muted">${[c.symbol, c.footprint].filter(Boolean).map(esc).join(" · ")}${c.revision ? " · rev " + esc(c.revision) : ""}</div></td>
       <td class="mono small">${c.updated ? when(c.updated) : "–"}<div class="sub muted">${whoShort(c.updated_by)}${c.updated_how ? " · " + esc(c.updated_how) : ""}</div></td>
