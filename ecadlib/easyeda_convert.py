@@ -34,6 +34,8 @@ SILK_CLEAR, SILK_HARD = 0.2, 0.1              # KLC F5.1 silk-to-pad gap; below 
 TEXT_H, TEXT_W, TEXT_GAP = 1.0, 0.15, 0.2      # reference / value text: height, stroke, gap to courtyard / silk (mm)
 DOT_R = 0.5                                   # a silk circle this small (radius, mm) is a pin-1 dot
 FP_LAYERS = {3: "F.SilkS", 101: "F.SilkS", 13: "F.Fab", 99: "F.Fab", 100: "F.Fab"}
+# EasyEDA's library data asks anyone who reuses it to credit the source; every converted part carries this line
+CREDIT = "From the JLCEDA/EasyEDA Official Library (https://easyeda.com, https://lceda.cn)"
 PIN_TYPE = {"0": "unspecified", "1": "input", "2": "output", "3": "bidirectional", "4": "power_in"}
 
 
@@ -148,7 +150,7 @@ def footprint_to_kicad(data, name=None, notes=None):
     cx_ = round((crt[0] + crt[2]) / 2, 4)
     font = f"(effects (font (size {_n(TEXT_H)} {_n(TEXT_H)}) (thickness {_n(TEXT_W)})))"
     out = [f"(footprint {_q(name)} (version 20221018) (generator ecadlib_easyeda) (layer \"F.Cu\")",
-           f"  (descr {_q('converted from EasyEDA by ecadlib.easyeda_convert; check against the datasheet')})",
+           f"  (descr {_q(CREDIT + '; converted by ecadlib.easyeda_convert; check against the datasheet')})",
            "  (attr smd)" if all(" smd " in p for p in pads) else "  (attr through_hole)",
            f'  (fp_text reference "REF**" (at {_n(cx_)} {_n(ref_y)}) (layer "F.SilkS") {font})',
            f'  (fp_text value {_q(name)} (at {_n(cx_)} {_n(val_y)}) (layer "F.Fab") {font})']
@@ -338,7 +340,7 @@ def symbol_to_kicad(data, name, footprint="", props=None, notes=None):
     if not pins:
         raise ValueError("EasyEDA symbol has no pins")
     pr = {"Reference": (cp.get("pre") or "U?").rstrip("?") or "U", "Value": name, "Footprint": footprint,
-          "Datasheet": "~", "Description": "converted from EasyEDA by ecadlib.easyeda_convert"}
+          "Datasheet": "~", "Description": "converted from EasyEDA by ecadlib.easyeda_convert", "Credit": CREDIT}
     pr.update({k: v for k, v in (props or {}).items() if v})
     out = ["(kicad_symbol_lib (version 20231120) (generator ecadlib_easyeda)", f"  (symbol {_q(name)} (in_bom yes) (on_board yes)"]
     out += [f"    (property {_q(k)} {_q(v)} (at 0 0 0) (effects (font (size 1.27 1.27)){'' if k in ('Reference', 'Value') else ' hide'}))" for k, v in pr.items()]

@@ -2099,6 +2099,13 @@ guide: [docs/house-style.md](docs/house-style.md).
   `apply_house_style`). Tests: `tests/test_house_style.py`, which runs offline with a fake model for each tier.
 * **Not verified:** no real customer library has been scanned and no real model has been called.
 
+## Credits
+
+Parts converted from EasyEDA (the `easyeda` source, by LCSC number) come from the **JLCEDA/EasyEDA Official Library**
+([easyeda.com](https://easyeda.com), [lceda.cn](https://lceda.cn)), whose data asks anyone reusing it to credit it.
+ecadlib keeps that credit on every converted part: in the footprint's description, as a `Credit` property on the KiCad
+symbol, and as a `Library Credit` parameter on the Altium part. Leave it in place if you share or publish the library.
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:
