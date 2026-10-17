@@ -179,8 +179,11 @@ def store_key(b):
 def forget_key(b):
     name = b.get("name")
     UC.check_name(name if isinstance(name, str) else "")
+    old = UC.get_key(name)
     gone = UC.remove_key(name)
-    return {"removed": gone, "still_in_env": bool(os.environ.get(name)) and not gone}
+    if gone and old is not None and os.environ.get(name) == old:
+        os.environ.pop(name)                      # the copy store_key / apply_env put here: this server stops using it
+    return {"removed": gone, "still_in_env": bool(os.environ.get(name))}
 
 
 def check_key(b, get=None):
