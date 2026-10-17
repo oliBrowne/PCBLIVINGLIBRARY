@@ -87,7 +87,9 @@ def load(rules=None, start=".", path=None):
         prof = json.loads(f.read_text(encoding="utf-8"))
     except ValueError as e:
         raise StyleError(f"{f}: not valid JSON ({e})") from None
-    if not isinstance(prof, dict) or prof.get("schema_version", 0) > SCHEMA_VERSION:
+    if not isinstance(prof, dict):
+        raise StyleError(f"{f}: not a house style profile (a JSON object)")
+    if prof.get("schema_version", 0) > SCHEMA_VERSION:
         raise StyleError(f"{f}: written by a newer ecadlib (schema {prof.get('schema_version')}); update ecadlib")
     prof["_file"] = str(f)
     return prof
@@ -122,7 +124,7 @@ def pin_low(name):
         return n.replace("̅", ""), "overbar"
     if len(n) >= 4 and re.fullmatch(r"(?:[^\\]\\)+", n):
         return n.replace("\\", ""), "overbar"
-    for rx, st in ((r"~\{(.+)\}", "overbar"), (r"~(\w[\w+\-]*)", "overbar"), (r"(\w[\w+\-]*)#", "hash"),
+    for rx, st in ((r"~\{([^{}]+)\}", "overbar"), (r"~(\w[\w+\-]*)", "overbar"), (r"(\w[\w+\-]*)#", "hash"),
                    (r"/(\w[\w+\-]*)", "slash"), (r"n([A-Z][A-Z0-9_]+)", "n_prefix"), (r"([A-Z][A-Z0-9]*)_N", "suffix_n")):
         m = re.fullmatch(rx, n)
         if m:
@@ -135,10 +137,17 @@ def pin_render(base, style):
             "n_prefix": lambda b: "n" + b, "suffix_n": lambda b: b + "_N"}[style](base)
 
 
-def convert_pin(name, style):
-    """An active-low pin name in the house notation; any other name unchanged."""
+def _diff_leg(name, names):
+    """True for the negative leg of a differential pair (CLK_N beside CLK_P), which is not an active-low pin."""
     base, st = pin_low(name)
-    if not st or style not in PIN_STYLES:
+    return st == "suffix_n" and any(str(n or "").strip().upper() == base.upper() + "_P" for n in names)
+
+
+def convert_pin(name, style, names=()):
+    """An active-low pin name in the house notation; any other name unchanged. names: the part's other pin names
+    (CLK_N beside CLK_P is a differential pair, kept)."""
+    base, st = pin_low(name)
+    if not st or style not in PIN_STYLES or _diff_leg(name, names):
         return name
     return name if st == style and style != "overbar" else pin_render(base, style)   # one overbar spelling: ~{X}
 
@@ -146,9 +155,10 @@ def convert_pin(name, style):
 def infer_pins(names):
     seen = Counter()
     ex = defaultdict(list)
+    pos = {str(n or "").strip().upper() for n in names if str(n or "").strip().upper().endswith("_P")}
     for n in names:
         _, st = pin_low(n)
-        if st:
+        if st and not _diff_leg(n, pos):
             seen[st] += 1
             if len(ex[st]) < 3 and n not in ex[st]:
                 ex[st].append(n)
@@ -476,9 +486,9 @@ def adapt_symbol(sym, prof):
     if not st or not sym or not sym.get("pins"):
         return sym, []
     out, ren = dict(sym), []
-    pins = []
+    pins, names = [], [p.get("name", "") for p in sym["pins"]]
     for p in sym["pins"]:
-        nm = convert_pin(p.get("name", ""), st)
+        nm = convert_pin(p.get("name", ""), st, names)
         if nm != p.get("name"):
             ren.append(f"{p.get('name')} -> {nm}")
         pins.append(dict(p, name=nm))
@@ -945,7 +955,10 @@ def main(argv=None, send=None):
 def _run(a, rules, pf, send):
     old = load(rules, path=pf) if pf.is_file() else None
     if a.cmd == "learn":
-        paths = a.paths or [str(Path(l)) for l in rules["setup"]["libs"]] or (old or {}).get("learned_from") or []
+        base = Path(rules["_file"]).resolve().parent if rules.get("_file") else Path.cwd()    # [setup] libs: relative
+        paths = ([str(Path(p).expanduser().resolve()) for p in a.paths]                          # to the rules file
+                 or [str(l if l.is_absolute() else base / l) for l in (Path(str(x)).expanduser() for x in rules["setup"]["libs"])]
+                 or (old or {}).get("learned_from") or [])
         if not paths:
             raise StyleError("which library? --from DIR (your Altium / KiCad library folder, a DbLib, an Altium 365 export)")
         direction = list(a.direction)
