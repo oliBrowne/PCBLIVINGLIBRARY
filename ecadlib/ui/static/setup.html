@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ecadlib setup</title>
+<link rel="icon" href="data:,">
+<style>
+/* the same Hairline tokens as index.html: one ground colour, 1px lines, ink for what matters */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff; --text: #232327; --muted: #6f6f78; --line: #e0e0e4; --line-2: #ececef; --hover: #f6f6f7;
+  --ok: #2f8a57; --warn: #b07210; --bad: #c4392f; --info: #4b5bd6;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --ease: cubic-bezier(.32, .72, 0, 1);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #08090a; --text: #d0d6e0; --muted: #8a8c95; --line: #29292d; --line-2: #1d1d20; --hover: #111214;
+    --ok: #5fc58c; --warn: #e2a64a; --bad: #f07a70; --info: #9aa6ff; }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+header { display: flex; align-items: baseline; gap: 16px; padding: 18px 24px 6px; flex-wrap: wrap; max-width: 860px; margin: 0 auto; }
+header h1 { font: 500 15px/1 var(--mono); letter-spacing: .02em; margin: 0; }
+header .meta { color: var(--muted); font: 11.5px/1.5 var(--mono); }
+header a { margin-left: auto; color: var(--muted); font-size: 13px; }
+main { max-width: 860px; margin: 0 auto; padding: 12px 16px 80px; }
+.intro { color: var(--muted); margin: 4px 8px 18px; }
+.card { border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; margin-bottom: 16px; animation: rise .6s var(--ease) both; }
+.card h2 { font-size: 15px; font-weight: 600; margin: 0 0 2px; display: flex; gap: 10px; align-items: baseline; }
+.card h2 .n { font: 500 11px/1 var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 3px 7px; }
+.card > p.sub { color: var(--muted); margin: 0 0 14px; }
+.opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.opt { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; transition: border-color .3s var(--ease), background .3s var(--ease); }
+.opt:hover { border-color: var(--muted); }
+.opt.on { border-color: var(--text); background: var(--hover); }
+.opt input { margin-top: 3px; accent-color: var(--text); }
+.opt .t { font-weight: 550; }
+.opt .d { color: var(--muted); font-size: 12.5px; }
+label.f { display: block; margin: 14px 0 4px; font-weight: 550; font-size: 13px; }
+.hint { color: var(--muted); font-size: 12.5px; margin: 4px 0 0; }
+input[type=text], input[type=password], textarea { width: 100%; font: 13px/1.4 var(--mono); border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); padding: 8px 10px; }
+textarea { min-height: 70px; resize: vertical; }
+input:focus, textarea:focus { border-color: var(--text); outline: none; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row > input { flex: 1 1 260px; width: auto; }
+button { font: inherit; font-size: 13px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--text); padding: 7px 14px; min-height: 34px; cursor: pointer; transition: border-color .3s var(--ease), opacity .3s var(--ease); }
+button:hover:not(:disabled) { border-color: var(--text); }
+button.primary { background: var(--text); border-color: var(--text); color: var(--bg); }
+button.primary:hover:not(:disabled) { opacity: .88; }
+button:disabled { opacity: .4; cursor: default; }
+button:focus-visible, input:focus-visible, a:focus-visible { outline: 1.5px solid var(--text); outline-offset: 2px; }
+a { color: inherit; }
+.pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px 1px 8px; font-size: 12px; white-space: nowrap; }
+.pill::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--tone, var(--muted)); margin-right: 7px; vertical-align: 1px; }
+.ok { --tone: var(--ok); } .warn { --tone: var(--warn); } .bad { --tone: var(--bad); } .info { --tone: var(--info); }
+.msg { border: 1px solid var(--line); border-left: 2px solid var(--tone, var(--line)); border-radius: 8px; padding: 9px 12px; margin: 12px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.found { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; margin-bottom: 6px; }
+.found > div { border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+.found .mono, .mono { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+ol.steps { margin: 8px 0 0; padding-left: 20px; }
+ol.steps li { margin: 4px 0; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.chips button { border-radius: 999px; font-size: 12px; padding: 2px 10px; min-height: 26px; }
+.actions { margin: -4px 0 26px; padding: 0 2px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+@media (max-width: 600px) { header { padding: 14px 16px 4px; } .card { padding: 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>ecadlib setup</h1>
+  <span class="meta" id="meta"></span>
+  <a href="/">open ecadlib &rarr;</a>
+</header>
+<main>
+  <p class="intro">Four short steps. Nothing here needs a terminal, and you can come back to this page any time
+    (the Setup button in the ecadlib window, or <span class="mono">/setup</span>).</p>
+
+  <section class="card" id="c-ai">
+    <h2><span class="n">1</span>AI model</h2>
+    <p class="sub">The model reads datasheets for parts no library has. You pay the provider directly; ecadlib is free
+      and sends nothing anywhere else.</p>
+    <div class="opts" id="providers" role="radiogroup" aria-label="AI provider"></div>
+    <div id="ai-detail">
+      <label class="f" for="model">Model</label>
+      <input type="text" id="model" list="models" autocomplete="off" spellcheck="false">
+      <datalist id="models"></datalist>
+      <p class="hint" id="model-note"></p>
+      <div id="keybox">
+        <label class="f" for="key">API key <span id="keystate"></span></label>
+        <div class="row">
+          <input type="password" id="key" autocomplete="off" spellcheck="false" placeholder="paste the key here">
+          <button id="savekey">Save key</button>
+          <button id="checkkey">Check key</button>
+        </div>
+        <p class="hint">Stored only on this computer, for your account<span id="enc"></span>. Never in your library
+          or project files. <a id="keyurl" target="_blank" rel="noopener">Get a key</a></p>
+      </div>
+      <div id="aimsg"></div>
+    </div>
+  </section>
+
+  <section class="card" id="c-tools">
+    <h2><span class="n">2</span>Your tools</h2>
+    <p class="sub">What this computer has, and which tool you make libraries for.</p>
+    <div class="found" id="found"></div>
+    <div class="opts" id="tools" role="radiogroup" aria-label="Tool"></div>
+  </section>
+
+  <section class="card" id="c-folders">
+    <h2><span class="n">3</span>Folders</h2>
+    <label class="f" for="ws">Workspace: where ecadlib keeps your BOMs and the libraries it builds</label>
+    <input type="text" id="ws" spellcheck="false">
+    <p class="hint">A new folder is fine; ecadlib creates it.</p>
+    <label class="f" for="libs">Your existing library folders (optional, one per line)</label>
+    <textarea id="libs" spellcheck="false" placeholder="e.g. C:\Libraries\Altium  or  D:\kicad-libs"></textarea>
+    <p class="hint">ecadlib reuses parts from them and learns your naming. Copy a folder's path from the Explorer
+      address bar.</p>
+    <div class="chips" id="libsugg"></div>
+  </section>
+
+  <div class="actions">
+    <button class="primary" id="save">Save setup</button>
+    <span id="savemsg" class="hint"></span>
+  </div>
+
+  <section class="card" id="c-add">
+    <h2><span class="n">4</span>Add ecadlib to Altium and KiCad</h2>
+    <p class="sub">An "add part from MPN" command inside your tool. Optional: everything also works from this web page.</p>
+    <div class="row">
+      <button id="add-altium">Add to Altium</button>
+      <button id="add-kicad">Add to KiCad</button>
+    </div>
+    <div id="addmsg"></div>
+  </section>
+
+  <section class="card" id="c-more">
+    <h2><span class="n">+</span>Optional keys</h2>
+    <p class="sub">Only for the features named. Leave them empty if you do not use them.</p>
+    <div id="extrakeys"></div>
+  </section>
+
+  <section class="card" id="c-done">
+    <h2>Done?</h2>
+    <p class="sub">Open ecadlib and drop a BOM (CSV or Excel, as Altium or KiCad export it) on the first card.</p>
+    <button class="primary" onclick="location.href='/'">Open ecadlib</button>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let S = null, prov = null, tool = null;
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({error: `HTTP ${r.status}`}));
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c])); }
+function msg(el, text, tone) { $(el).innerHTML = text ? `<div class="msg ${tone || ""}">${text}</div>` : ""; }
+function pill(text, tone) { return `<span class="pill ${tone}">${esc(text)}</span>`; }
+
+function option(group, value, title, desc, on, pick) {
+  const l = document.createElement("label");
+  l.className = "opt" + (on ? " on" : "");
+  l.innerHTML = `<input type="radio" name="${group}" value="${esc(value)}" ${on ? "checked" : ""}><span><span class="t">${esc(title)}</span>` +
+                (desc ? `<br><span class="d">${esc(desc)}</span>` : "") + "</span>";
+  l.querySelector("input").addEventListener("change", () => {
+    l.parentElement.querySelectorAll(".opt").forEach((o) => o.classList.toggle("on", o === l));
+    pick(value);
+  });
+  return l;
+}
+
+function keyRow(name) { return S.keys.find((k) => k.name === name); }
+
+function showProvider(id, keepModel) {
+  prov = S.providers.find((p) => p.id === id);
+  $("ai-detail").hidden = id === "none";
+  if (id === "none") { msg("aimsg", ""); return; }
+  $("models").innerHTML = prov.models.map((m) => `<option value="${esc(m.id)}">${esc(m.note)}</option>`).join("");
+  if (!keepModel) $("model").value = prov.models[0] ? prov.models[0].id : "";
+  $("model-note").textContent = [prov.models.map((m) => `${m.id}: ${m.note}`).join("  ·  "), prov.note].filter(Boolean).join("\n");
+  $("keybox").hidden = !prov.key;
+  if (prov.key) {
+    const k = keyRow(prov.key);
+    $("keystate").innerHTML = k.stored ? pill("saved", "ok") : k.set ? pill("set in your environment", "ok") : pill("not set yet", "warn");
+    $("keyurl").href = prov.key_url;
+    $("key").value = "";
+  }
+  msg("aimsg", "");
+}
+
+function render() {
+  $("meta").textContent = `version ${S.version}`;
+  $("enc").textContent = S.platform === "win32" ? " (encrypted with your Windows account)" : "";
+  const P = $("providers"); P.innerHTML = "";
+  for (const p of S.providers) P.appendChild(option("prov", p.id, p.label, p.id === "none" ? p.note : (p.key ? "" : "no key needed"), p.id === S.ai.provider, (v) => showProvider(v)));
+  showProvider(S.ai.provider, true);
+  $("model").value = S.ai.model;
+
+  const d = S.detected, F = $("found");
+  const altium = d.altium.length ? d.altium.map((a) => `<div>${pill(a.name + (a.version ? " " + a.version : ""), "ok")}<div class="mono">${esc(a.folder)}</div></div>`).join("")
+                                 : `<div>${pill("Altium Designer not found", "info")}<div class="mono">${S.platform === "win32" ? "fine if you only use KiCad" : "Altium runs on Windows only"}</div></div>`;
+  const kicad = d.kicad.length ? d.kicad.map((k) => `<div>${pill(k.name, "ok")}<div class="mono">${esc(k.cli || k.folder)}</div></div>`).join("")
+                               : `<div>${pill("KiCad not found", "info")}<div class="mono">fine if you only use Altium</div></div>`;
+  F.innerHTML = altium + kicad;
+  const T = $("tools"); T.innerHTML = ""; tool = S.tool;
+  for (const [v, t, dd] of [["altium", "Altium Designer", "DbLib, .SchLib/.PcbLib, Altium 365"], ["kicad", "KiCad", ".kicad_sym, .pretty, 3D models"], ["both", "Both", "the same parts for both tools"]])
+    T.appendChild(option("tool", v, t, dd, v === S.tool, (x) => { tool = x; }));
+
+  $("ws").value = S.done ? S.workspace : (S.frozen ? S.default_workspace : S.workspace);
+  $("libs").value = S.libs.join("\n");
+  $("libsugg").innerHTML = d.altium_libraries.map((f) => `<button type="button" data-f="${esc(f)}">+ ${esc(f)}</button>`).join("");
+  $("libsugg").querySelectorAll("button").forEach((b) => b.onclick = () => {
+    const cur = $("libs").value.split("\n").map((x) => x.trim()).filter(Boolean);
+    if (!cur.includes(b.dataset.f)) $("libs").value = cur.concat([b.dataset.f]).join("\n");
+  });
+  $("add-kicad").disabled = !d.kicad.length;
+  $("add-kicad").title = d.kicad.length ? "" : "KiCad was not found on this computer";
+
+  $("extrakeys").innerHTML = S.keys.filter((k) => !S.providers.some((p) => p.key === k.name)).map((k) => `
+    <label class="f" for="x-${k.name}">${esc(k.label)} <span>${k.stored ? pill("saved", "ok") : k.set ? pill("set in your environment", "ok") : pill("not set", "info")}</span></label>
+    <div class="row"><input type="password" id="x-${k.name}" autocomplete="off" placeholder="${esc(k.name)}">
+      <button data-k="${k.name}" class="xsave">Save</button>${k.stored ? `<button data-k="${k.name}" class="xforget">Remove</button>` : ""}</div>
+    <p class="hint">For ${esc(k.why)}. <a href="${esc(k.url)}" target="_blank" rel="noopener">Where to get it</a></p>`).join("");
+  document.querySelectorAll(".xsave").forEach((b) => b.onclick = async () => {
+    try { await api("/api/setup/key", {name: b.dataset.k, value: $("x-" + b.dataset.k).value}); await load(); }
+    catch (e) { alert(e.message); }
+  });
+  document.querySelectorAll(".xforget").forEach((b) => b.onclick = async () => { await api("/api/setup/key/forget", {name: b.dataset.k}); await load(); });
+}
+
+async function load() { S = await api("/api/setup"); render(); }
+
+$("savekey").onclick = async () => {
+  try {
+    await api("/api/setup/key", {name: prov.key, value: $("key").value});
+    S = await api("/api/setup"); showProvider(prov.id, true);
+    $("checkkey").click();
+  } catch (e) { msg("aimsg", esc(e.message), "bad"); }
+};
+$("checkkey").onclick = async () => {
+  msg("aimsg", "checking with " + esc(prov.label) + " ...", "info");
+  try { const r = await api("/api/setup/key/check", {provider: prov.id, model: $("model").value}); msg("aimsg", esc(r.message), r.ok ? "ok" : "bad"); }
+  catch (e) { msg("aimsg", esc(e.message), "bad"); }
+};
+
+$("save").onclick = async () => {
+  const b = {provider: prov.id, model: $("model").value.trim(), tool, workspace: $("ws").value.trim(),
+             libs: $("libs").value.split("\n").map((x) => x.trim()).filter(Boolean)};
+  $("save").disabled = true; $("savemsg").textContent = b.libs.length ? "saving (reading your library folders) ..." : "saving ...";
+  try {
+    const r = await api("/api/setup", b);
+    if (r.restart && r.can_restart) {
+      $("savemsg").textContent = "saved; moving ecadlib to " + r.workspace + " ...";
+      await api("/api/setup/restart", {workspace: r.workspace});
+      for (let i = 0; i < 40; i++) {
+        await new Promise((ok) => setTimeout(ok, 500));
+        try { if ((await api("/api/setup")).workspace === r.workspace) break; } catch (e) { /* restarting */ }
+      }
+    }
+    await load();
+    $("savemsg").textContent = r.restart && !r.can_restart
+      ? `saved to ${r.toml}. Restart ecadlib with: ecadlib ui --workspace "${r.workspace}"`
+      : `saved (${r.toml}${r.learned ? `; learned ${r.learned} naming settings from your libraries` : ""}).`;
+  } catch (e) { $("savemsg").textContent = "not saved: " + e.message; }
+  $("save").disabled = false;
+};
+
+$("add-altium").onclick = async () => {
+  try {
+    const r = await api("/api/setup/altium", {});
+    msg("addmsg", `<b>Altium menu written</b> to <span class="mono">${esc(r.folder)}</span>. One step left inside Altium:<ol class="steps">` +
+                  r.steps.map((s) => `<li>${esc(s)}</li>`).join("") + "</ol>" +
+                  `<div class="row" style="margin-top:8px"><button id="copypath">Copy the script path</button></div>`, "ok");
+    $("copypath").onclick = () => navigator.clipboard.writeText(r.project).then(() => { $("copypath").textContent = "Copied"; });
+  } catch (e) { msg("addmsg", esc(e.message), "bad"); }
+};
+$("add-kicad").onclick = async () => {
+  try {
+    const r = await api("/api/setup/kicad", {});
+    msg("addmsg", `<b>Added to KiCad</b> in <span class="mono">${r.installed.map(esc).join("<br>")}</span><ol class="steps">` +
+                  r.steps.map((s) => `<li>${esc(s)}</li>`).join("") + "</ol>", "ok");
+  } catch (e) { msg("addmsg", esc(e.message), "bad"); }
+};
+
+load().catch((e) => { document.querySelector("main").insertAdjacentHTML("afterbegin", `<div class="msg bad">${esc(e.message)}</div>`); });
+</script>
+</body>
+</html>

@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .. import agent_queue as AQ, team as TM
 from ..app import Workspace
+from .. import easy_setup as ES
 
 STATIC = Path(__file__).with_name("static")
 MAX_UPLOAD = 20 * 1024 * 1024
@@ -387,6 +388,10 @@ def make_handler(ws: Workspace, team=None):
             try:
                 if u.path in ("/", "/index.html"):
                     return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+                if not team and u.path == "/setup":            # setup page: local mode only (ecadlib.easy_setup)
+                    return self._send(200, (STATIC / "setup.html").read_bytes(), "text/html; charset=utf-8")
+                if not team and u.path in ES.GET_ROUTES:
+                    return self._send(200, ES.GET_ROUTES[u.path](ws.root, q))
                 if u.path == "/api/session":
                     return self._send(200, self._session_info())
                 if u.path == "/api/info":
@@ -452,6 +457,10 @@ def make_handler(ws: Workspace, team=None):
         def _post(self, u):
             if team and u.path in TEAM_ONLY:
                 return self._team_post(u.path)
+            if not team and u.path in ES.POST_ROUTES:                # setup page (ecadlib.easy_setup)
+                b = self._json()
+                with write_lock if u.path in ES.WRITES else contextlib.nullcontext():
+                    return self._send(200, ES.POST_ROUTES[u.path](ws.root, b))
             if u.path == "/api/footprint/preview":                # read-only, no lock
                 b = self._json()
                 return self._send(200, ws.preview_footprint(b["spec"], b.get("density")))
@@ -729,6 +738,7 @@ def main(argv=None):
     ap.add_argument("--host", default="127.0.0.1", help="loopback only without --team (127.0.0.1, ::1, localhost)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--setup", action="store_true", help="open the setup page (AI model and key, Altium / KiCad, folders)")
     t = ap.add_argument_group("team mode (shared server with sign-in; users: ecadlib team add-user ...)")
     t.add_argument("--team", action="store_true", help="require sign-in; roles from team_users.json in the workspace")
     t.add_argument("--cert", help="TLS certificate (PEM) for HTTPS")
@@ -740,6 +750,8 @@ def main(argv=None):
                    help="IP of an SSO reverse proxy whose user header is believed (repeatable)")
     t.add_argument("--proxy-user-header", help="header carrying the signed-in user (default X-Forwarded-User)")
     a = ap.parse_args(argv)
+    from .. import userconfig
+    userconfig.apply_env()                                  # keys stored by the setup page (env variables win)
     if bool(a.cert) != bool(a.key):
         sys.exit("give both --cert and --key")
     for f in filter(None, (a.cert, a.key)):
@@ -779,8 +791,10 @@ def main(argv=None):
     shown = socket.getfqdn() if a.host in ("0.0.0.0", "::") else a.host
     url = f"{'https' if a.cert else 'http'}://{shown}:{srv.server_address[1]}/"
     print(f"ecadlib UI on {url}  (workspace {ws.root}{'; team mode' if team else ''}; Ctrl+C to stop)")
+    if a.setup and team:
+        print("the setup page is for a local ecadlib (keys are per person); in team mode use the command line")
     if not a.no_browser and not team:
-        webbrowser.open(url)
+        webbrowser.open(url + ("setup" if a.setup else ""))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
