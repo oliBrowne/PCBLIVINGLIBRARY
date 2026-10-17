@@ -198,8 +198,8 @@ def read_bom(path, columns=None, rules=None):
                 continue
         if _EXP.fullmatch(d.get("value", "")):                         # a CSV that kept Excel's 1e-07
             d["value"] = _plain_number(d["value"])
-        if _is_total(d):
-            continue                                                     # 'Total;;;12' footer, not a part
+        if _is_total(d) or not any(v for f, v in d.items() if f not in ("qty", "dnp")):
+            continue                                                     # 'Total;;;12' footer / a bare sum, not a part
         if "dnp" in d:
             d["dnp"] = _yes(d["dnp"])
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
@@ -235,7 +235,8 @@ def _read_excel(p):
     return max(sheets, key=_header_score) if sheets else pd.DataFrame()
 
 
-TOTAL = re.compile(r"(grand\s*|sub\s*)?totals?\s*:?", re.I)
+TOTAL = re.compile(r"(grand\s*|sub\s*)?totals?(\s+(parts?|components?|qty|quantity|count|items?|lines?|pcs))?\s*:?\s*\d*",
+                   re.I)                                                  # 'Total', 'Total parts:', 'Total Qty', 'Total: 42'
 
 
 def _is_total(d):
