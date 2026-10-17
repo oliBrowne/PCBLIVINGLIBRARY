@@ -498,10 +498,11 @@ def load_project(path, rules=None):
             if same and (prev["part_count"] > 1 or c["part_count"] > 1):
                 prev["parts_placed"] += 1
                 prev["sheets"] = sorted(set(prev["sheets"]) | {c["sheet"]})
+                prev["part_uids"].append(c["unique_id"])    # a variant may name any part's UniqueId
                 continue
             warnings.append(f"duplicate designator {c['designator']} ({prev['sheet']}: {prev['libref']}, {c['sheet']}: {c['libref']})")
             k = f"{k}@{c['sheet']}:{c['unique_id']}"
-        c = dict(c, parts_placed=1, sheets=[c["sheet"]])
+        c = dict(c, parts_placed=1, sheets=[c["sheet"]], part_uids=[c["unique_id"]])
         by_des[k] = c
         comps.append(c)
     bom_items = []
@@ -657,25 +658,27 @@ def apply_variant(comps, variant):
     for c in comps:
         c = dict(c, fitted=c["in_bom"], variant_note="")
         if variant:
-            uid = c["unique_id"].split("@")[0]               # a channel copy: <UniqueID>@<room>
-            by_uid = [v for v in variant["variations"] if v.get("UniqueId") and v["UniqueId"].rsplit("\\", 1)[-1] == uid]
+            # a channel copy's id is <UniqueID>@<room>; a multi-part component has every part's UniqueID
+            uids = {u.split("@")[0] for u in c.get("part_uids") or [c["unique_id"]]}
+            by_uid = [v for v in variant["variations"] if v.get("UniqueId") and v["UniqueId"].rsplit("\\", 1)[-1] in uids]
             hit = next((v for v in by_uid if v.get("Designator") == c["designator"]), None) or \
-                  next(iter(by_uid), None) or \
+                  next((v for v in by_uid if not c.get("channel") or not v.get("Designator")), None) or \
                   next((v for v in variant["variations"] if not v.get("UniqueId") and v.get("Designator") == c["designator"]), None)
             if hit:
                 kind = _int(hit.get("Kind"), 0)
                 if kind == 1:
                     c["fitted"], c["variant_note"] = False, "not fitted"
                 elif kind == 2:
-                    alt = next((v for k, v in hit.items() if re.search(r"designitemid|libreference|libref", k, re.I) and v), "") \
-                        or hit.get("AlternatePart", "")
+                    pick = lambda pat: next((v for k, v in hit.items() if re.search(pat, k, re.I) and v), "")
+                    # the alternate's Design Item ID, whatever order the keys come in (not its symbol's LibReference)
+                    alt = pick(r"designitemid") or pick(r"libreference|libref") or hit.get("AlternatePart", "")
                     c["variant_note"] = f"alternate part {alt}".strip()
                     if alt and not alt.startswith("="):
                         c.update(design_item_id=alt, mpn=alt if c["mpn_source"] in ("DesignItemId", "") else c["mpn"],
-                                 libref=next((v for k, v in hit.items() if re.search(r"libreference", k, re.I) and v), c["libref"]))
+                                 libref=pick(r"libreference") or c["libref"])
             params = dict(c["params"])
             for pv in variant["param_variations"]:
-                if (pv["unique_id"] and pv["unique_id"].rsplit("\\", 1)[-1] == uid and (not c.get("channel") or pv["designator"] in ("", c["designator"]))) or (not pv["unique_id"] and pv["designator"] == c["designator"]):
+                if (pv["unique_id"] and pv["unique_id"].rsplit("\\", 1)[-1] in uids and (not c.get("channel") or pv["designator"] in ("", c["designator"]))) or (not pv["unique_id"] and pv["designator"] == c["designator"]):
                     params[pv["name"]] = pv["value"]
             if params != c["params"]:
                 changed = {k for k in params if params[k] != c["params"].get(k)}

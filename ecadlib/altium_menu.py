@@ -867,10 +867,16 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
     out = Path(out)
     command = command or default_command()
     out.mkdir(parents=True, exist_ok=True)
-    if win_dir is None and os.name == "nt":
+    derived = win_dir is None and os.name == "nt"
+    if derived:
         win_dir = str(out.resolve())
     if win_dir:
-        win_dir = check_win_dir(win_dir)
+        try:
+            win_dir = check_win_dir(win_dir)
+        except ValueError:
+            if not derived:
+                raise
+            win_dir = None            # this folder (C:\\Users\\O'Brien\\...) cannot go into a menu entry: no menu file
     if name and not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$", name):
         raise ValueError(f"--name {name!r}: letters, digits, _ . - only")
     from . import altium_forms as AF, altium_native as AN
@@ -1702,7 +1708,8 @@ def run_job(job, opener=None):
     except Exception as e:                                   # every failure becomes one dialog line with a fix
         res = _error(e)
     write_result(job / "result.ini", res)
-    prune_jobs(job.parent, keep=job)
+    if job.parent.name.lower() == "jobs":                    # the script's jobs\<id>: never prune a folder chosen by hand
+        prune_jobs(job.parent, keep=job)
     return res
 
 

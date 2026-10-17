@@ -36,6 +36,7 @@ from pathlib import Path, PureWindowsPath
 from . import altium_lib as AL
 from . import altium_native as AN
 from . import sheetsafe as SS
+from .hub_copy import _read_prj as read_ini_text      # (text, encoding) of an INI Altium saved
 from .altium_export import (COLUMNS, dblib_links, excel_connection, fieldmap_section, table_section)
 
 STATE = "ecadlib_sync.json"
@@ -293,7 +294,8 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
         return next((r for r in rows if r.get("Part Number") == pn), None)
 
     for it in items:
-        res = {"name": it["name"], "action": "", "detail": "", "table": table_of(it)}
+        t0 = table_of(it)                                   # Excel sheet names ignore case: Passives = passives
+        res = {"name": it["name"], "action": "", "detail": "", "table": next((k for k in tables if k.lower() == t0.lower()), t0)}
         results.append(res)
         if it.get("status") == "held":
             res["action"], res["detail"] = "held", "; ".join(it.get("hold_reasons") or ["release check"])
@@ -417,6 +419,9 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                 managed_files.discard(rel)
                 if not dry_run:
                     f.unlink()
+                    recipe = f.with_name(f.name + AN.EXT)      # else Altium's rebuild would make a file put here later
+                    if recipe.is_file():                       # from the recipe of the one pruned
+                        recipe.unlink()
             else:
                 res["detail"] = "no row uses it; kept (--prune deletes it)"
             results.append(res)
@@ -426,13 +431,13 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     # parts table, DbLib file, state: only rewritten when their content changes
     out = {"results": results, "written": written, "removed": removed, "dblib": str(lib), "mode": mode,
            "dry_run": dry_run}
-    def put(rel, text=None, writer=None):
+    def put(rel, text=None, writer=None, data=None):
         if not dry_run:
             to.mkdir(parents=True, exist_ok=True)
             if writer:
                 writer()
             else:
-                (to / rel).write_bytes(text.encode("utf-8"))
+                (to / rel).write_bytes(data if data is not None else text.encode("utf-8"))
         written.append(rel)
     if tables and tables != old:
         put(xlsx.name, writer=lambda: write_xlsx(xlsx, tables))
@@ -451,11 +456,16 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
         override.add("ConnectionString")
     if url:
         override |= {"SVNRepositoryURL", "LibrarySearchPath"}
-    cur_text = lib.read_bytes().decode("utf-8") if lib.exists() else ""      # keep the \r\n
+    # keep the \r\n, and the encoding a DbLib saved by Altium's editor has (ANSI, or UTF-8 / UTF-16 with a BOM)
+    cur_text, db_enc = read_ini_text(lib) if lib.exists() else ("", "utf-8")
     if tables:
         text = dblib_update(cur_text, {t: h for t, (h, _) in tables.items()}, links, override)
         if text != cur_text:
-            put(lib.name, text)
+            try:
+                data = text.encode(db_enc)
+            except UnicodeEncodeError:                # a new table / column name the ANSI code page can't hold
+                data = text.encode("utf-8-sig")
+            put(lib.name, data=data)
         cur_text = text
     db = next((s for s in _sections(cur_text) if s[0] == "DatabaseLinks"), ["", []])
     url = url or _kv(db[1]).get("SVNRepositoryURL") or None      # the one already in the file

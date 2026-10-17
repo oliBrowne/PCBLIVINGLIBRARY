@@ -124,6 +124,16 @@ def lib_name(s):
     return s
 
 
+def pin_number(s, what="pin number"):
+    """A pin number / pad designator for a binary record (cp1252). One cp1252 can't hold is an error: written as '?',
+    two of them ('α', 'β') would become the same pin and the symbol-to-footprint mapping would break silently."""
+    try:
+        str(s).encode("cp1252")
+    except UnicodeEncodeError as e:
+        raise ValueError(f"{what} {s!r} has characters Altium libraries can't store ({str(s)[e.start:e.end]!r}); rename it") from None
+    return str(s)
+
+
 def file_stem(s):
     """Filename for one-entry-per-file libraries: path separators and Windows-illegal characters -> '_'."""
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", lib_name(s)).rstrip(". ") or "_"
@@ -332,7 +342,7 @@ def pad_rec(p, guid_a, guid_b):
     put(114, "<I", v7_layer(p.get("layer", TOP)))
     put(185, "<B", 1 if p.get("layer") == MULTI else 3)    # reserved marker: 3 on SMD, 1 on multi-layer pads (TestData)
     t[126 - 61:142 - 61], t[142 - 61:158 - 61] = guid_a.bytes_le, guid_b.bytes_le
-    out = sblock(p["designator"]) + sblock("") + sblock("|&|0") + block(b"\0") + block(main + bytes(t))
+    out = sblock(pin_number(p["designator"], "pad designator")) + sblock("") + sblock("|&|0") + block(b"\0") + block(main + bytes(t))
     ox, oy = p.get("offset") or (0, 0)        # copper offset from the hole centre (internal units, pad frame, y up)
     if not rr and not hs and not (ox or oy):
         return b"\x02" + out + block(b"")
@@ -625,7 +635,8 @@ def pin_rec(num, name, etype, orient, x, y, length, show=True, hidden=False, par
     d = enc(desc)[:255]
     b = struct.pack("<iBhB4B", 2, 0, part, mode, *symbols) + bytes([len(d)]) + d      # owner part, display mode, symbols, description
     b += struct.pack("<BBBhhhI", 1, ETYPE[etype], cong, length, x, y, 0)
-    b += b"".join(bytes([len(enc(s))]) + enc(s) for s in (name, num, "", "|&|", ""))
+    strs = [enc(s)[:255] for s in (name, pin_number(num), "", "|&|", "")]       # Pascal short strings
+    b += b"".join(bytes([len(e)]) + e for e in strs)
     return block(b, flag=1)
 
 

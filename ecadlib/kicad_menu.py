@@ -127,7 +127,8 @@ def run_job(job, action, project, mpn="", manufacturer="", path="", opener=None,
     except Exception as e:                                   # every failure becomes one dialog line with a fix
         res = AM._error(e)
     AM.write_result(job / "result.ini", res)
-    AM.prune_jobs(job.parent, keep=job)
+    if job.parent.name.lower() == "jobs":                    # the plugin's jobs/<id>: never prune a folder chosen by hand
+        AM.prune_jobs(job.parent, keep=job)
     (job / "exit.txt").write_text("0\n", encoding="utf-8")
     return res
 

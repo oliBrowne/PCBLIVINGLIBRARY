@@ -348,7 +348,8 @@ def check_folder(out, libpkg, dblibs):
                 have = ({c["name"] for c in AL.read_schlib(p)[1]} if kind == "SchLib" else {f["name"] for f in AL.read_pcblib(p)})
                 if ref and ref not in have:
                     probs.append(f"{db}: {row.get('Part Number')} {refc} {ref} is not in {rel}")
-        text = (out / db).read_text(encoding="utf-8")
+        from .hub_copy import _read_prj                # ANSI or UTF-8/16 with a BOM, as Altium may save it
+        text = _read_prj(out / db)[0]
         if "DatabasePathRelative=1" not in text:
             probs.append(f"{db}: the database path is absolute (DatabasePathRelative=0): breaks when the folder moves")
     return probs, facts
