@@ -451,5 +451,6 @@ def test_converted_footprint_is_named_after_its_file():
         items, _ = run(d)
         it = items["EEPART1"]
         kmod = Path(d) / "out" / it["footprint"]["kicad_mod"]
-        assert sexpr.parse(kmod.read_text())[1] == kmod.stem, kmod.read_text()[:80]
+        t = sexpr.parse(kmod.read_text())
+        assert t[1] == kmod.stem and next(x for x in sexpr.find(t, "fp_text") if x[1] == "value")[2] == kmod.stem, kmod.read_text()[:300]
         assert not any("is not its file name" in w for w in it["release_check"]["warnings"]), it["release_check"]["warnings"]

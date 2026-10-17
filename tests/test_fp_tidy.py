@@ -128,4 +128,7 @@ def test_easyeda_soic_from_the_altium_run():
     assert len([x for x in silk if x[0] == "fp_line"]) == 5          # duplicates gone, cut pieces joined, notch gap kept
     issues = {(lvl, r) for lvl, r, _ in FR.check(once)}
     assert not {("warning", "silk"), ("warning", "fab"), ("warning", "text"), ("warning", "polarity")} & issues, FR.check(once)
+    crt = next(x for x in t if isinstance(x, list) and x and x[0] == "fp_rect" and sexpr.first(x, "layer")[1] == "F.CrtYd")
+    r = float(sexpr.first(dots[0], "end")[1]) - float(c[1]) + 0.06
+    assert float(sexpr.first(crt, "start")[1]) <= float(c[1]) - r, (crt, c)                               # the dot is inside it
     assert T.tidy(once, []) == once

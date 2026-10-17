@@ -322,6 +322,22 @@ def tidy(text, notes=None):
                 outer = (min(outer[0], x - R), min(outer[1], y - R), max(outer[2], x + R), max(outer[3], y + R))
                 notes.append(f"silk: pin 1 dot added beside pad {pin1['num']} (no pin 1 mark was visible on silk)")
 
+    # courtyard around the silk too: a pin-1 dot outside the body must not stick out of the part's keep-out
+    crts = [it for it in tree if isinstance(it, list) and it and it[0] == "fp_rect" and _layer(it) == "F.CrtYd"]
+    marks = [it for it in tree if isinstance(it, list) and it and it[0] in SILK_KINDS and _layer(it) == "F.SilkS" and _pts(it)]
+    if len(crts) == 1 and marks:
+        a, b = sexpr.first(crts[0], "start"), sexpr.first(crts[0], "end")
+        x0, y0, x1, y1 = min(_num(a[1]), _num(b[1])), min(_num(a[2]), _num(b[2])), max(_num(a[1]), _num(b[1])), max(_num(a[2]), _num(b[2]))
+        sx0 = min(_bbox(_pts(it))[0] - _width(it) / 2 for it in marks)
+        sy0 = min(_bbox(_pts(it))[1] - _width(it) / 2 for it in marks)
+        sx1 = max(_bbox(_pts(it))[2] + _width(it) / 2 for it in marks)
+        sy1 = max(_bbox(_pts(it))[3] + _width(it) / 2 for it in marks)
+        n0 = (math.floor(min(x0, sx0) * 100 + 1e-6) / 100, math.floor(min(y0, sy0) * 100 + 1e-6) / 100)
+        n1 = (math.ceil(max(x1, sx1) * 100 - 1e-6) / 100, math.ceil(max(y1, sy1) * 100 - 1e-6) / 100)
+        if n0[0] < x0 - 1e-6 or n0[1] < y0 - 1e-6 or n1[0] > x1 + 1e-6 or n1[1] > y1 + 1e-6:
+            a[1:3], b[1:3] = [_fmt(n0[0]), _fmt(n0[1])], [_fmt(n1[0]), _fmt(n1[1])]
+            notes.append("courtyard grown to take in the silkscreen (the pin-1 dot sat outside it)")
+
     # polarity: chamfer the fab outline's pin-1 corner
     if fab_rect and pin1 and len(numbered) >= 3:
         x0, y0, x1, y1 = body

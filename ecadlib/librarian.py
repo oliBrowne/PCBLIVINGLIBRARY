@@ -277,6 +277,8 @@ class Run:
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
         text = re.sub(r'^(\s*\((?:footprint|module)\s+)("(?:[^"\\]|\\.)*"|[^\s()]+)',     # KiCad links a footprint by its file name,
                       lambda m: m.group(1) + '"' + stem.replace('"', '\\"') + '"', text, count=1)   # Altium by this name: one name
+        text = re.sub(r'(\((?:fp_text\s+value|property\s+"Value")\s+)("(?:[^"\\]|\\.)*"|[^\s()]+)',   # Value = the name (KLC F9.1)
+                      lambda m: m.group(1) + '"' + stem.replace('"', '\\"') + '"', text, count=1)
         kmod.write_text(text, encoding="utf-8", newline="\n")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
