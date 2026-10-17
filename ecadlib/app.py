@@ -310,7 +310,7 @@ class Workspace:
         p = self.gen_dir / f"{name}.kicad_mod"
         if p.exists() and not overwrite:
             raise FileExistsError(f"{name} is already in the workspace library; approve again with overwrite to replace it")
-        p.write_text(res["kicad_mod"], encoding="utf-8")
+        p.write_text(res["kicad_mod"], encoding="utf-8", newline="\n")
         (self.gen_dir / f"{name}.json").write_text(json.dumps(spec_obj, indent=2), encoding="utf-8")  # keep the source dimensions
         files = [self.rel(p)]
         warnings = [f"{c['rule']}: {c['message']}" for c in res["report"].get("checks", []) if c["level"] == "error"]

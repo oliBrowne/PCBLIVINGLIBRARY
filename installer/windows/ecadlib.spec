@@ -20,8 +20,9 @@ def analysis(script):
 
 
 a_app, a_cli = analysis("entry_app.py"), analysis("entry_cli.py")
-exe_app = EXE(PYZ(a_app.pure), a_app.scripts, [], exclude_binaries=True, name="ecadlib-app", console=False,
+UTF8 = [("X utf8_mode=1", None, "OPTION")]     # files and pipes are UTF-8, whatever the Windows code page
+exe_app = EXE(PYZ(a_app.pure), a_app.scripts, UTF8, exclude_binaries=True, name="ecadlib-app", console=False,
               icon=icon, upx=False)
-exe_cli = EXE(PYZ(a_cli.pure), a_cli.scripts, [], exclude_binaries=True, name="ecadlib", console=True,
+exe_cli = EXE(PYZ(a_cli.pure), a_cli.scripts, UTF8, exclude_binaries=True, name="ecadlib", console=True,
               icon=icon, upx=False)
 coll = COLLECT(exe_app, a_app.binaries, a_app.datas, exe_cli, a_cli.binaries, a_cli.datas, name="ecadlib", upx=False)
