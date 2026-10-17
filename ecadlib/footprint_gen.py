@@ -553,7 +553,7 @@ def main(argv=None):
             txt, rep = build(spec, RU.density_for(spec, rules, a.density))
             from . import sexpr
             sexpr.parse(txt)                                          # sanity: balanced S-expression
-            (outdir / f"{spec['name']}.kicad_mod").write_text(txt)
+            (outdir / f"{spec['name']}.kicad_mod").write_text(txt, encoding="utf-8", newline="\n")
             p1 = rep["pads"][0]
             zgx = f"Z={rep['Z']:.2f} G={rep['G']:.2f} X={rep['X']:.2f}" if "G" in rep else f"{len(rep['pads'])} pads"
             print(f"{spec['name']:<44} {rep['ipc_family']:<13} {zgx} "

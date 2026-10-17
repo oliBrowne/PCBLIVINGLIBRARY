@@ -36,6 +36,10 @@ def _sandbox():
     fake = t / "docker"
     fake.write_text(FAKE_DOCKER.format(python=sys.executable))
     fake.chmod(0o755)
+    if os.name == "nt":                                         # Windows runs only .exe/.cmd/...: a .cmd that calls Python
+        fake.with_suffix(".py").write_text(fake.read_text())
+        fake = fake.with_suffix(".cmd")
+        fake.write_text(f'@"{sys.executable}" "%~dp0docker.py" %*\r\n')
     env = {**os.environ, "PYTHONPATH": str(ROOT), "FAKE_DOCKER_LOG": str(t / "docker.log"),
            "FAKE_DOCKER_VOLUME": str(t / "volume")}
     return t, fake, env
@@ -133,7 +137,8 @@ def test_setup_end_to_end_with_stand_in_docker():
                "--email", "ada@example.com", "--password-stdin", stdin=PW + "\n")
     assert p.returncode == 0, p.stdout + p.stderr
     envf = t / "app" / ".env"
-    assert stat.S_IMODE(envf.stat().st_mode) == 0o600
+    if os.name != "nt":                                                      # Windows has no mode bits
+        assert stat.S_IMODE(envf.stat().st_mode) == 0o600
     vals = TS.read_env(envf)
     assert vals["ECADLIB_DOMAIN"] == "ecadlib.example.com" and vals["ECADLIB_TLS"] == "ada@example.com"   # ACME e-mail
     assert "https://ecadlib.example.com/" in p.stdout

@@ -663,7 +663,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
                 tree, models = footprint_tree(text, fpn, lib, fnotes)
                 body = sexpr.dumps(tree) + "\n"
                 sexpr.parse(body)
-                (pretty / f"{fpn}.kicad_mod").write_text(body, encoding="utf-8")
+                (pretty / f"{fpn}.kicad_mod").write_text(body, encoding="utf-8", newline="\n")
                 for src3d, fn in models:
                     if fn in rep["models"]:
                         continue
@@ -708,7 +708,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
                 if got:                       # no KiCad model: the Altium one, so both libraries have the part in 3D
                     tree.append(got[0])
                     body = sexpr.dumps(tree) + "\n"
-                    (pretty / f"{fpn}.kicad_mod").write_text(body, encoding="utf-8")
+                    (pretty / f"{fpn}.kicad_mod").write_text(body, encoding="utf-8", newline="\n")
                     rep["models"][got[1]] = got[2]
                 elif not models:
                     fnotes.append("no 3D model (no KiCad model and no 3D body in the .PcbLib)")
@@ -755,7 +755,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     text = sexpr.dumps(tree) + "\n"
     parsed = sexpr.parse(text)
     assert [s[1] for s in sexpr.find(parsed, "symbol")] == sorted(symbols)
-    (out / f"{lib}.kicad_sym").write_text(text, encoding="utf-8")
+    (out / f"{lib}.kicad_sym").write_text(text, encoding="utf-8", newline="\n")
     for old in pretty.glob("*.kicad_mod"):    # a re-export drops files no longer in the plan
         if old.stem not in fps:
             old.unlink()

@@ -26,9 +26,12 @@ def test_download_of_a_file_whose_name_is_not_latin1():
     with tempfile.TemporaryDirectory() as d:
         ws = Workspace(d)
         (ws.root / "altium_models" / "PcbLib" / "R_Ω.PcbLib").write_bytes(b"pcblib")
-        (ws.root / "reports" / 'a"b.md').write_bytes(b"report")
+        files = [("altium_models/PcbLib/R_Ω.PcbLib", b"pcblib")]
+        if os.name != "nt":                                  # Windows file names can't hold a double quote
+            (ws.root / "reports" / 'a"b.md').write_bytes(b"report")
+            files.append(('reports/a"b.md', b"report"))
         with contextlib.redirect_stderr(io.StringIO()), _served(ws) as port:
-            for rel, body in (("altium_models/PcbLib/R_Ω.PcbLib", b"pcblib"), ('reports/a"b.md', b"report")):
+            for rel, body in files:
                 c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
                 c.request("GET", "/api/file?path=" + quote(rel))
                 r = c.getresponse()

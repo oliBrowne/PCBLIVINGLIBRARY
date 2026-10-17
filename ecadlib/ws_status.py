@@ -25,7 +25,7 @@ def _json(p, problems):
     try:
         return json.loads(Path(p).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        problems.append(f"{p}: unreadable ({type(e).__name__})")
+        problems.append(f"{Path(p).as_posix()}: unreadable ({type(e).__name__})")
         return None
 
 

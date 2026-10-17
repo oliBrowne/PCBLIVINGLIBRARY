@@ -457,7 +457,7 @@ def fetch_models(item, node, base, client, log=print):
             if m["name"] not in names and len(names) != 1:
                 raise ValueError(f"{ext} holds {', '.join(names[:5]) or 'nothing'}, not {m['name']}")
             os.replace(tmp, f)
-            item[kind]["file"] = os.path.relpath(f, Path(base))
+            item[kind]["file"] = os.path.relpath(f, Path(base)).replace(os.sep, "/")
             item[kind]["entries"] = names
         except Exception as e:
             errs.append(f"{kind} {m['name']}: {type(e).__name__}: {e}")

@@ -931,7 +931,7 @@ def run(plan, models=(), attach=False, http=None, offline=False, cache="out/http
                 fn = f"{stem}-{hashlib.sha256(text.encode()).hexdigest()[:8]}{suf}"
             written[fn] = text
             (sim_dir / fn).write_text(text)
-            rec["file"] = os.path.relpath(sim_dir / fn, plan_dir)
+            rec["file"] = os.path.relpath(sim_dir / fn, plan_dir).replace(os.sep, "/")
             rec["file_name"] = fn
         if rec.get("found"):
             rec["kicad"] = kicad_fields(rec) if rec["pin_map"]["status"] != "mismatch" else {}
