@@ -89,11 +89,18 @@ def footprint_for(project_dir, mpn):
     if not os.path.isfile(rep):
         return None, "ecadlib wrote no KiCad library (see ecadlib-work/out/review.html for what was tried)"
     data = json.load(open(rep, encoding="utf-8"))
+    names = {mpn}                             # the plan names parts by the library rules (RES-0603-10k, upper case ...),
+    plan = os.path.join(project_dir, "ecadlib-work", "out", "plan.json")      # not always by the MPN typed here
+    if os.path.isfile(plan):
+        for it in json.load(open(plan, encoding="utf-8")):
+            if isinstance(it, dict) and any(p.get("name") == "Manufacturer Part Number" and str(p.get("value", "")).strip().upper()
+                                            == mpn.strip().upper() for p in it.get("parameters") or [] if isinstance(p, dict)):
+                names.add(it.get("name"))
     for p in data.get("parts", []):
-        if p.get("part") == mpn:
+        if p.get("part") in names:
             return (p["footprint"], None) if p.get("footprint") else (None, "the part has no footprint yet")
     for s in data.get("skipped", []):
-        if s.get("part") == mpn:
+        if s.get("part") in names:
             says = s.get("says") or []
             if says:
                 return None, f"it is held. {says[0]['text']}\nNext: {says[0]['fix']}"

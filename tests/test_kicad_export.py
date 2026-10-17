@@ -248,7 +248,8 @@ def test_reexport_keeps_step_put_in_3dshapes():
         km.write_text(txt[:-1] + '\t(model "${KICAD8_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.wrl")\n)\n')
         out = Path(d) / "kicad"
         rep = X.export(plan, out, "L", http=http, log=lambda *a: None)
-        assert rep["models"]["R_0603_1608Metric.step"] is None, rep["models"]    # others: the Altium models (parity)
+        # not fetchable: the .PcbLib's model under its own name, so the KiCad model's file name stays free
+        assert rep["models"].get("R_0603_1608Metric.step") is None and rep["models"]["R_0603_1608Metric_ecadlib.step"], rep["models"]
         step = out / "L.3dshapes" / "R_0603_1608Metric.step"
         step.parent.mkdir(exist_ok=True)
         step.write_text("ISO-10303-21; hand-placed")
@@ -256,6 +257,7 @@ def test_reexport_keeps_step_put_in_3dshapes():
         rep = X.export(plan, out, "L", http=http, log=lambda *a: None)
         assert step.read_text() == "ISO-10303-21; hand-placed" and rep["models"]["R_0603_1608Metric.step"], rep["models"]
         assert not (out / "L.3dshapes" / "stale.step").exists()
+        assert not (out / "L.3dshapes" / "R_0603_1608Metric_ecadlib.step").exists()     # the stand-in is gone again
 
 
 if __name__ == "__main__":

@@ -162,7 +162,8 @@ def run_lock(ws, create=True):
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except ImportError:                     # Windows
                 import msvcrt
-                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                f.seek(0)                           # msvcrt locks bytes from the file position: "a+" starts at the end,
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)   # which moves once the pid is written: always byte 0
         except OSError:
             got = False
         else:
@@ -416,15 +417,20 @@ def upkeep_findings(ws, rules, now=None, log=None):
     """Default MAINTAIN step: upkeep.run on every librarian plan in the workspace; -> list of finding dicts."""
     from . import upkeep as UK
     ws = Path(ws)
-    found = []
+    found, runs = [], []
     for plan in sorted((ws / "librarian").glob("*/plan.json")):
         base = ws / "agent" / "upkeep" / plan.parent.name
         rep = UK.run(str(plan), None, base / "state", base / "upkeep", rules=rules,
-                     ctx=UK.Ctx(cache=ws / "http_cache"), now=stamp(now))
+                     ctx=UK.Ctx(cache=ws / "http_cache"), now=stamp(now), save=False)
+        runs.append((rep, base / "state"))
         items = read_json(plan, [])
         for sec in rep["checks"]:
             for c in sec["changes"]:
                 found.append(dict(c, check=sec["check"], plan=plan.relative_to(ws).as_posix(), _items=items))
+    # the state (what upkeep remembers as reported) is saved only once every plan was checked: a later plan that fails
+    # must not leave the earlier ones' findings remembered as seen but never returned (never queued, never reported)
+    for rep, state in runs:
+        UK.save_state(rep, state)
     return found
 
 
@@ -742,10 +748,12 @@ def close_batch(ws, rules, batch_id, members, now=None, env=None, session=None, 
             if gh is None:
                 raise RuntimeError(f"PR not updated: {why}")
             gitlab = getattr(gh, "kind", "") == "gitlab"
-            if gitlab:
-                gh.comment_mr(rec["pr_number"], text)
-            else:
-                gh.api("POST", f"issues/{rec['pr_number']}/comments", {"body": text})
+            if not rec.get("commented"):                 # a close that fails after it is retried without a 2nd comment
+                if gitlab:
+                    gh.comment_mr(rec["pr_number"], text)
+                else:
+                    gh.api("POST", f"issues/{rec['pr_number']}/comments", {"body": text})
+                rec["commented"] = stamp(now)
             if not pushed:                               # a PR holding pushed parts is never closed by the agent
                 if gitlab:
                     gh.close_mr(rec["pr_number"])

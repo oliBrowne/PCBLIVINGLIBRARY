@@ -79,7 +79,7 @@ ALTIUM_API = {
     "InstallLibrary": "TR0136 p2 (IIntegratedLibraryManager.InstallLibrary)",
     "UninstallLibrary": "TR0136 p4",
     "InstalledLibraryPath": "TR0136 p4",
-    "AvailableLibraryCount": "TR0136 p3",
+    "InstalledLibraryCount": "TR0136 p19 (IIntegratedLibraryManager.InstalledLibraryCount: the Installed tab only; AvailableLibraryCount also counts project and search-path libraries, which InstalledLibraryPath cannot index)",
     "ResetParameters": "TR0120 p18 (Extension Routines); TR0135 p143",
     "AddStringParameter": "TR0135 p143",
     "RunProcess": "TR0120 p18; TR0135 p143; process IntegratedLibrary:RefreshInstalledLibraries (AllLibraries=True) in TR0124 Server Process Reference p19",
@@ -247,7 +247,7 @@ Var
     i : Integer;
 Begin
     Result := False;
-    For i := 0 To IntegratedLibraryManager.AvailableLibraryCount - 1 Do
+    For i := 0 To IntegratedLibraryManager.InstalledLibraryCount - 1 Do
         If UpperCase(IntegratedLibraryManager.InstalledLibraryPath(i)) = UpperCase(Path) Then
             Result := True;
 End;

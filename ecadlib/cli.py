@@ -42,10 +42,11 @@
     ecadlib notify    show|test [--event E]       [notify] webhooks (Slack, Teams, JSON): targets, send a test message
     ecadlib kicad-dblib plan.json -o DIR --name LIB [--export]   KiCad database library (.kicad_dbl + SQLite)
     ecadlib export-parts plan.json --format csv|json|xlsx [-o F]   parts table with stable columns (PLM / ERP)
-    ecadlib stdparts resolve "SOIC-8" | coverage BOM | bench     standard packages built offline (librarian source)
+    ecadlib stdparts resolve "SOIC-8 3.9x4.9mm" | coverage BOM | bench   standard packages built offline (librarian source)
     ecadlib kicad-pcm plan.json|KICAD_DIR --out DIR [--kicad 7]   KiCad Plugin and Content Manager zip (--plugin: action plugin)
     ecadlib altium-pkg plan.json|MODELS_DIR --out DIR   Altium .LibPkg (-> IntLib), install script, relative DbLib
     ecadlib altium-menu build --out DIR [--win-dir W]   an "ecadlib" menu inside Altium (script project): add part, check BOM, queue
+    ecadlib costs     [--model M] [--all] [--md F] [--xlsx F]   estimated AI cost per job, for your model or every model
     ecadlib ai        show [--model M] [--detect] | rails   which model / provider / guide rails the AI features use
     ecadlib migrate   [PATH] [--check] [--dry-run]   check / upgrade workspace files to this version (backups first)
     ecadlib rebuild   LIB_DIR [--check]           rebuild a library from library.lock.json offline; report drift
@@ -66,7 +67,7 @@ COMMANDS = {
     "mcp": ("ecadlib.mcp_server", "MCP server over stdio"),
     "triage": ("ecadlib.bom_triage", "BOM triage report"),
     "footprint": ("ecadlib.footprint_gen", "IPC-7351B footprint generator"),
-    "check": ("ecadlib.footprint_check", "check .kicad_mod files against KLC/IPC rules"),
+    "check": ("ecadlib.footprint_rules", "check .kicad_mod files against the footprint rule book (KLC / IPC-7351)"),
     "footprint-bench": ("ecadlib.footprint_bench", "compare generated footprints (BGA, connectors, ...) with KiCad's official ones"),
     "eval": ("ecadlib.eval.cli", "accuracy test set: run the pipeline on parts with a known answer, score, compare runs"),
     "dblib": ("ecadlib.altium_export", "Altium DbLib export"),
@@ -74,6 +75,7 @@ COMMANDS = {
     "altium365": ("ecadlib.altium365", "Altium 365 release via Nexar"),
     "dblib-sync": ("ecadlib.altium_dblib_sync", "sync a plan into an Altium .DbLib / .SVNDbLib library folder"),
     "librarian": ("ecadlib.librarian", "BOM to library: fill missing parts, plan, release check"),
+    "costs": ("ecadlib.costs", "estimated AI cost per job (datasheet read, BOM, library) for your model or every model"),
     "datasheet": ("ecadlib.datasheet", "Claude datasheet reader: one PDF, or a whole plan/BOM as one Message Batch"),
     "release-check": ("ecadlib.release_check", "pre-release checks on an altium365 plan"),
     "kicad-export": ("ecadlib.kicad_export", "librarian plan -> KiCad .kicad_sym / .pretty / .3dshapes"),
