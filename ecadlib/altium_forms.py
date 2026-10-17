@@ -42,7 +42,7 @@ FORM_API = {
     "ActiveControl": "TForm.ActiveControl", "AutoSize": "TLabel.AutoSize", "TEdit": "Forms & Components: TEdit",
     "PasteFromClipboard": "TCustomEdit.PasteFromClipboard", "CopyToClipboard": "TCustomEdit.CopyToClipboard",
     "CutToClipboard": "TCustomEdit.CutToClipboard", "Word": "OnKeyDown Key type", "TShiftState": "OnKeyDown Shift type",
-    "Key": "OnKeyDown parameter", "InSet": "DelphiScript set test (InSet(ssCtrl, Shift))", "ssCtrl": "TShiftState", "ssShift": "TShiftState",
+    "Key": "OnKeyDown parameter", "TMouseButton": "OnMouseDown / OnMouseUp Button type", "InSet": "DelphiScript set test (InSet(ssCtrl, Shift))", "ssCtrl": "TShiftState", "ssShift": "TShiftState",
 }
 
 
@@ -79,6 +79,9 @@ Var
     Shown : Integer;
     Total : Integer;
     Swing : Integer;
+    Dragging : Boolean;
+    DragX : Integer;
+    DragY : Integer;
 
 Procedure SetRow(i : Integer; Spec : String);
 { Spec is "label|value|ok" (ok = 1: the value in green); '' hides the row. }
@@ -554,6 +557,28 @@ Begin
     Fire('open', 'path', Answer(Job, 'report'));
 End;
 
+Procedure TEcadlibDialog.HeadMouseDown(Sender : TObject; Button : TMouseButton; Shift : TShiftState; X, Y : Integer);
+{ The window has no Windows title bar (bsNone): its own header moves it. }
+Begin
+    Dragging := True;
+    DragX := X;
+    DragY := Y;
+End;
+
+Procedure TEcadlibDialog.HeadMouseMove(Sender : TObject; Shift : TShiftState; X, Y : Integer);
+Begin
+    If Dragging Then
+    Begin
+        Left := Left + X - DragX;
+        Top := Top + Y - DragY;
+    End;
+End;
+
+Procedure TEcadlibDialog.HeadMouseUp(Sender : TObject; Button : TMouseButton; Shift : TShiftState; X, Y : Integer);
+Begin
+    Dragging := False;
+End;
+
 Procedure TEcadlibDialog.EcadlibDialogKeyDown(Sender : TObject; Var Key : Word; Shift : TShiftState);
 { Ctrl+V/C/X/A and Shift+Insert in the MPN and manufacturer boxes (KeyPreview: the form sees keys first). }
 Var
@@ -617,20 +642,29 @@ def _dfm_str(s):
     return (out + "'") if quoted else (out or "''")
 
 
-def _label(name, left, top, width, height, caption, ind="    ", align="", wrap=False, **font):
+DRAG = ("Cursor = crSizeAll", "OnMouseDown = HeadMouseDown", "OnMouseMove = HeadMouseMove", "OnMouseUp = HeadMouseUp")
+
+
+def _drag(ind):
+    return "".join(f"{ind}{x}\n" for x in DRAG)
+
+
+def _label(name, left, top, width, height, caption, ind="    ", align="", wrap=False, drag=False, **font):
     i2 = ind + "  "
-    extra = (f"{i2}Alignment = taRightJustify\n" if align == "r" else "") + (f"{i2}WordWrap = True\n" if wrap else "")
+    extra = (f"{i2}Alignment = taRightJustify\n" if align == "r" else "") + (f"{i2}WordWrap = True\n" if wrap else "") \
+        + (_drag(i2) if drag else "")
     return (f"{ind}object {name}: TLabel\n{i2}Left = {left}\n{i2}Top = {top}\n{i2}Width = {width}\n{i2}Height = {height}\n"
             f"{i2}AutoSize = False\n{i2}Caption = {_dfm_str(caption)}\n{_font(ind=i2, **font)}"
             f"{i2}Transparent = True\n{extra}{ind}end\n")
 
 
-def _panel(name, left, top, width, height, color, body="", caption="", ind="  ", onclick="", font=None, visible=True):
+def _panel(name, left, top, width, height, color, body="", caption="", ind="  ", onclick="", font=None, visible=True,
+           drag=False):
     i2 = ind + "  "
     return (f"{ind}object {name}: TPanel\n{i2}Left = {left}\n{i2}Top = {top}\n{i2}Width = {width}\n{i2}Height = {height}\n"
             f"{i2}BevelOuter = bvNone\n{i2}Caption = {_dfm_str(caption)}\n{i2}Color = {color}\n{i2}ParentBackground = False\n"
             + (_font(ind=i2, **font) if font else "") + (f"{i2}Cursor = crHandPoint\n{i2}OnClick = {onclick}\n" if onclick else "")
-            + ("" if visible else f"{i2}Visible = False\n") + body + f"{ind}end\n")
+            + ("" if visible else f"{i2}Visible = False\n") + (_drag(i2) if drag else "") + body + f"{ind}end\n")
 
 
 def _edit(name, left, top, width, ind="      "):
@@ -661,8 +695,8 @@ def dialog_dfm_text():
     meter = _panel("MeterTrack", 16, 300, w, 2, RULE, visible=False,
                    body=_panel("MeterFill", 0, 0, 0, 2, BLUE, ind="    "))
     button_font = {"color": "$00FFFFFF"}
-    head = _panel("Head", 0, 0, WIDTH, 34, HEAD, body=(
-        _label("HeadTitle", 14, 8, WIDTH - 60, 18, "ecadlib · Check project BOM") +
+    head = _panel("Head", 0, 0, WIDTH, 34, HEAD, drag=True, body=(
+        _label("HeadTitle", 14, 8, WIDTH - 60, 18, "ecadlib · Check project BOM", drag=True) +
         _panel("HeadClose", WIDTH - 34, 2, 30, 30, HEAD, caption="×", ind="    ", onclick="CloseClick",
                font={"color": DIM, "size": -16})))
     return f"""object EcadlibDialog: TEcadlibDialog

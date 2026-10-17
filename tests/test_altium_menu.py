@@ -729,3 +729,13 @@ def test_pas_checker_catches_a_routine_used_before_it_is_declared():
     text = "Procedure A;\nBegin\n    B;\nEnd;\n\nProcedure B;\nBegin\nEnd;\n"
     assert any("B is used before it is declared" in p for p in AM.pas_problems(text, procs=[]))
     assert not AM.pas_problems(text.replace("    B;\n", ""), procs=[])
+
+
+def test_dialog_moves_by_its_header():
+    """The dialog has no Windows title bar (bsNone): its header and title drag it around the screen."""
+    from ecadlib import altium_forms as AF
+    dfm, pas = AF.dialog_dfm_text(), AF.dialog_pas_text()
+    head = dfm[dfm.index("object Head:"):dfm.index("object HeadClose:")]
+    assert head.count("OnMouseDown = HeadMouseDown") == 2 and head.count("OnMouseMove = HeadMouseMove") == 2
+    for h in ("HeadMouseDown", "HeadMouseMove", "HeadMouseUp"):
+        assert f"Procedure TEcadlibDialog.{h}(" in pas
