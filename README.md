@@ -1851,8 +1851,7 @@ For people who are used to installers, not terminals. The guide for them is `doc
   desktop app) and `ecadlib.exe` (the command line). Inno Setup wraps them into `ecadlib-setup-<version>.exe`. It
   installs per user by default (`%LOCALAPPDATA%\Programs\ecadlib`, no administrator) and adds Start menu entries for
   **ecadlib** and **ecadlib setup**. A desktop icon and adding `ecadlib` to PATH are optional. CI installs the result
-  silently, runs it, checks the Start menu entries and PATH, and uninstalls it. The installer is not code-signed, so
-  SmartScreen warns on first run.
+  silently, runs it, checks the Start menu entries and PATH, and uninstalls it.
 * **`ecadlib start`** (`launcher.py`, what the Start menu runs) starts the web UI on 127.0.0.1:8765 and opens the
   browser. The first run opens the setup page. A small window has Open, Setup, Workspace folder and Quit, and closing
   it stops ecadlib. A second start reuses the running copy.
@@ -1876,7 +1875,8 @@ For people who are used to installers, not terminals. The guide for them is `doc
   services share one line. kicad-cli is also found in KiCad's install folder when it is not on PATH. The hints say
   `ecadlib keys set NAME` or the setup page instead of a Unix `export`.
 
-Still to do: macOS (a `.dmg` or `.pkg`) and code signing for the Windows installer.
+Code signing: the build signs the app and the installer with Azure Artifact Signing once the repository has the
+secrets and variables in `docs/code-signing.md`; until then it is unsigned. Still to do: macOS (a `.dmg` or `.pkg`).
 
 ## Releases
 

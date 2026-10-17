@@ -4,6 +4,12 @@ name: windows
 # use a terminal download. The installer is PyInstaller (installer/windows/ecadlib.spec: Python and every dependency
 # bundled, no Python install needed) wrapped by Inno Setup (installer/windows/ecadlib.iss), then installed, run and
 # uninstalled here to prove it works. release.yml calls this on a tag and attaches the installer to the release.
+#
+# Code signing (Azure Artifact Signing, formerly Trusted Signing): skipped until the repository has these set
+# (Settings > Secrets and variables > Actions; docs/code-signing.md says where each value comes from):
+#   variables  AZURE_SIGNING_ENDPOINT (e.g. https://weu.codesigning.azure.net/), AZURE_SIGNING_ACCOUNT, AZURE_SIGNING_PROFILE
+#   secrets    AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+# Then both .exe files and the installer are signed and timestamped, and the build checks the signatures.
 on:
   pull_request:
   push:
@@ -48,6 +54,21 @@ jobs:
           python installer/windows/make_icon.py build/ecadlib.ico
           pyinstaller --noconfirm installer/windows/ecadlib.spec
           Get-ChildItem dist/ecadlib -Filter *.exe
+      - name: Sign the app (Azure Artifact Signing)
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist\ecadlib
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
       - name: Smoke-test the built app
         env:
           ECADLIB_HOME: ${{ runner.temp }}\ecadlib-home
@@ -85,6 +106,30 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$ver" installer\windows\ecadlib.iss
           if ($LASTEXITCODE) { exit 1 }
           Get-ChildItem dist -Filter ecadlib-setup-*.exe | Format-Table Name, Length
+      - name: Sign the installer (Azure Artifact Signing)
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Check the signatures
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        run: |
+          $files = @(Get-ChildItem dist -Filter ecadlib-setup-*.exe) + @(Get-ChildItem dist\ecadlib -Filter *.exe)
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            "$($f.Name): $($sig.Status) $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne "Valid") { throw "$($f.Name) is not validly signed" }
+          }
       - name: Install, run and uninstall it (current user, silent)
         env:
           ECADLIB_HOME: ${{ runner.temp }}\ecadlib-home-2
