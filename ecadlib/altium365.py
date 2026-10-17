@@ -247,6 +247,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     from .approvals import push_block
     from .rules import house_item
     from .a365_sync import is_a365
+    # sign-off is checked on the item as it was approved (ecadlib's parameter names: the content hash covers them)
+    blocks = [push_block(i, policy) for i in items]
     # a pulled item already carries the workspace's own parameter names: renaming it would rename them there
     items = [i if is_a365(i) else house_item(i, rules) for i in items]
     defs = {} if dry_run else client.release_defs(ws)
@@ -255,14 +257,13 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
         if p not in uploaded:
             uploaded[p] = "<fileId>" if dry_run else client.upload(p)
         return uploaded[p]
-    for it in items:
+    for it, block in zip(items, blocks):
         res = {"name": it["name"], "action": "", "detail": ""}
         if it.get("status") == "held":         # release_check held it back: no release, no parameter update
             res["action"], res["detail"] = "skip", "held: " + "; ".join(it.get("hold_reasons") or ["release check"])
             results.append(res)
             continue
-        block = push_block(it, policy)         # sign-off policy not met, or a dedupe duplicate
-        if block:
+        if block:                              # sign-off policy not met, or a dedupe duplicate
             res["action"], res["detail"] = "skip", block
             results.append(res)
             continue
