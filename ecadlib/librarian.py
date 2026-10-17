@@ -8,9 +8,10 @@ Per plan item (one per unique part), parts the triage found in a --lib library a
 anything still missing, the sources are tried in --sources order, each filling only what is still missing:
   kicad      the official KiCad libraries on gitlab.com. A name index of kicad-symbols (KiCad 9 <Lib>.kicad_symdir/
              <Name>.kicad_sym, so derived symbols/aliases are names too) and kicad-footprints is built once from the
-             GitLab tree API and cached (<cache>/kicad_library_index.json, 30 days). Symbol by MPN: exact name, a name
-             with KiCad's `x` wildcards (STM32F103C8Tx), or the MPN minus an ordering suffix (TPS62162DSG for
-             TPS62162DSGR); generic connectors by value (Conn_01x04). Footprint: the BOM footprint name, the symbol's
+             GitLab tree API and cached (<cache>/kicad_library_index.json, 30 days; a build stopped by a timeout or
+             HTTP 429 resumes from the cached pages after a pause of 15 min / 1 h, in which runs skip gitlab.com).
+             Symbol by MPN: exact name, a name with KiCad's `x` wildcards (STM32F103C8Tx), or the MPN minus an
+             ordering suffix (TPS62162DSG for TPS62162DSGR); generic connectors by value (Conn_01x04). Footprint: the BOM footprint name, the symbol's
              Footprint property, a footprint named after the MPN, or the shortest name starting with the BOM footprint.
              R/C/L/LED use Device:R/C/C_Polarized/L/LED and <Family>_SMD:<X>_<imperial>_<metric>Metric by package.
   easyeda    LCSC number (BOM, or found by MPN in triage) -> EasyEDA component JSON -> easyeda_convert -> KiCad text
@@ -34,6 +35,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from . import __version__
 from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
                footprint_gen as F, fp_share as FS, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .fsutil import write_text_atomic
@@ -52,19 +54,41 @@ SPECS = Path(F.__file__).with_name("package_specs")
 
 # ---------------------------------------------------------------- official KiCad library name index
 class KiCadLibrary:
-    def __init__(self, http, cache_file, refresh=False, max_age=30 * 86400):
+    """Name index of the official KiCad libraries (see the module docstring). Building it reads ~400 GitLab tree pages;
+    each page is kept in the HTTP cache, so a build that stops (timeout, HTTP 429) resumes where it stopped. After a
+    failed build, <index>.retry.json holds the next attempt back for RETRY_AFTER s (RETRY_AFTER_429 after a 429) so
+    every run in between goes straight to the other sources instead of waiting on gitlab.com again."""
+    PAGE_TIMEOUT = 20                          # s per tree page (the client's own timeout is 60 s)
+    RETRY_AFTER, RETRY_AFTER_429 = 15 * 60, 60 * 60
+
+    def __init__(self, http, cache_file, refresh=False, max_age=30 * 86400, now=time.time):
         self.http, self.error, self.symbols, self.footprints = http, None, {}, {}
         f = Path(cache_file)
-        if f.exists() and not refresh and (http.offline or time.time() - f.stat().st_mtime < max_age):
+        retry = f.with_name(f.name + ".retry.json")
+        wait = self._backoff(retry, now()) if not refresh else None
+        if f.exists() and not refresh and (getattr(http, "offline", False) or now() - f.stat().st_mtime < max_age):
             self._load(f)
+        elif wait:
+            self.error = wait
+            if f.exists():                     # a stale index beats none
+                self._load(f)
         else:
             try:
                 self.symbols = self._crawl("kicad-symbols", ".kicad_symdir", ".kicad_sym")
                 self.footprints = self._crawl("kicad-footprints", ".pretty", ".kicad_mod")
                 f.parent.mkdir(parents=True, exist_ok=True)
                 f.write_text(json.dumps({"built": time.strftime("%Y-%m-%d"), "symbols": self.symbols, "footprints": self.footprints}), encoding="utf-8")
+                retry.unlink(missing_ok=True)
             except IOError as e:
                 self.error = str(e)
+                self.symbols, self.footprints = {}, {}
+                if not getattr(http, "offline", False):
+                    try:
+                        retry.parent.mkdir(parents=True, exist_ok=True)
+                        hold = self.RETRY_AFTER_429 if "HTTP 429" in self.error else self.RETRY_AFTER
+                        retry.write_text(json.dumps({"after": now() + hold, "error": self.error}), encoding="utf-8")
+                    except OSError:
+                        pass
                 if f.exists():                 # a stale index beats none
                     self._load(f)
         self._norm, self._wild, self._fpn = {}, [], []
@@ -79,10 +103,29 @@ class KiCadLibrary:
         d = json.loads(f.read_text(encoding="utf-8"))
         self.symbols, self.footprints = d["symbols"], d["footprints"]
 
+    @staticmethod
+    def _backoff(retry, t):
+        """Why the index is not fetched now (a recent failed build), or None."""
+        try:
+            d = json.loads(retry.read_text(encoding="utf-8"))
+            after = float(d["after"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if t >= after:
+            return None
+        return (f"{d.get('error') or 'the last build failed'}; not retried until "
+                f"{time.strftime('%H:%M', time.localtime(after))} (--refresh-index retries now)")
+
+    def _get(self, url):
+        try:
+            return self.http.get(url, timeout=self.PAGE_TIMEOUT)
+        except TypeError:                      # a client without a per-request timeout
+            return self.http.get(url)
+
     def _crawl(self, repo, dsuf, fsuf):
         out = {}
         for page in range(1, 2000):
-            r = self.http.get(TREE.format(repo=repo, page=page))
+            r = self._get(TREE.format(repo=repo, page=page))
             if not r.ok:
                 raise IOError(f"{repo} tree page {page}: {r.error or f'HTTP {r.status}'}")
             items = r.json()
@@ -200,9 +243,11 @@ class Run:
     def kicad(self):
         if self._kicad is None:
             f = Path(self._kicad_args[0] or "")
-            if self._kicad_args[0] and not self.http.offline and (self._kicad_args[1] or not f.exists()):
+            held = self._kicad_args[0] and KiCadLibrary._backoff(f.with_name(f.name + ".retry.json"), time.time())
+            if self._kicad_args[0] and not self.http.offline and (self._kicad_args[1] or not f.exists()) and \
+                    (self._kicad_args[1] or not held):
                 getattr(self, "log", print)("  building the KiCad library name index from gitlab.com (first run only, "
-                                            "can take a few minutes; cached for 30 days) ...")
+                                            "can take a few minutes; cached for 30 days; resumes if it stops) ...")
             self._kicad = KiCadLibrary(self.http, *self._kicad_args)
         return self._kicad
 
@@ -225,7 +270,8 @@ class Run:
         fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes)
         try:
             K.add_body(fp, t, http, height, False, notes, gen_step=self.gen_step, spec=spec,      # a part-specific
-                       height_src=(height_src or "caller") if height else None)                      # height beats the table
+                       height_src=(height_src or "caller") if height else None,                      # height beats the table
+                       kind=st.get("kind"), names=st.get("names", ()))
         except ValueError as e:
             notes.append(f"no 3D body: {e}")
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
@@ -285,6 +331,7 @@ class Run:
             st["tried"].append("DNP line: not fetched")
             return st
         kind, fp_name, sym_name = passive_kind(item), item["footprint"]["ref"], item["symbol"]["ref"]
+        st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         try:
             self.local(st, row, kind, fp_name, sym_name)
         except Exception as e:
@@ -296,6 +343,9 @@ class Run:
                 getattr(self, f"src_{s}")(st, item, ln, row, kind, mpn, fp_name, sym_name)
             except Exception as e:            # one bad source or part must not stop the run
                 st["tried"].append(f"{s}: failed ({type(e).__name__}: {e})")
+        lc = (row.get("lcsc") or "").split(" ")[0]
+        if row.get("src_description"):        # the part search's own text (JLCPCB / LCSC), after a KiCad symbol's
+            st["found"].setdefault("description", (row["src_description"], f"LCSC/JLCPCB part data {lc}".strip()))
         return st
 
     def local(self, st, row, kind, fp_name, sym_name):
@@ -388,6 +438,8 @@ class Run:
             st["found"].setdefault("datasheet", (url, f"EasyEDA {lcsc} (lcsc.url)"))
         if res.manufacturer:
             st["found"].setdefault("manufacturer", (res.manufacturer, f"EasyEDA {lcsc}"))
+        if res.extra.get("description"):
+            st["found"].setdefault("description", (res.extra["description"], f"EasyEDA {lcsc}"))
         got = []
         if not st["footprint"]:
             pkg = (result.get("packageDetail") or {})
@@ -527,6 +579,19 @@ def _fingerprint(item, ln, row):
                        ln.get("footprint"), ln.get("datasheet"), row.get("local_symbol"), row.get("local_footprint")])
 
 
+BUILD_REV = 2              # bump when a source's conversion changes what it writes (1: before the build_rev stamp)
+
+
+def _built_now(st, rules):
+    """True when this ecadlib (version and BUILD_REV) built the part with these rules. A held part built otherwise is
+    built again on the next run: it is not in the library yet, and keeping it would make the release check judge the
+    old version's models and fields (silk not cut back, no Description). Ready parts are kept as they are (updates
+    never change a library's parts behind its back; `--refresh` rebuilds them)."""
+    from .rebuild import rules_hash
+    bw = st.get("built_with") or {}
+    return bw.get("ecadlib") == __version__ and st.get("build_rev") == BUILD_REV and bw.get("rules_sha256") == rules_hash(rules)
+
+
 def _done(st, out):
     return all(st.get(k) and (Path(out) / st[k]["file"]).exists() for k in ("symbol", "footprint"))
 
@@ -589,7 +654,7 @@ def write_review(rows, out, bom, items=None):
     """review.csv (machine columns, unchanged), review.md and review.html (ecadlib.reports: outcome first, held parts
     with a plain reason and the next step). items: the plan items (default: <out>/plan.json, written just before)."""
     out = Path(out)
-    with open(out / "review.csv", "w", newline="", encoding="utf-8") as f:
+    with open(out / "review.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["part"])
         w.writeheader(); w.writerows(rows)
     if items is None:
@@ -665,7 +730,13 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
             it["footprint"]["ref"] = AL.lib_name(it["name"])
         fpr, st = _fingerprint(it, ln, row), state.get(it["name"])
         redo = refresh is not None and (not refresh or it["name"] in refresh)
-        if st and st.get("key") == fpr and _done(st, out) and not redo and not FS.unchecked_share(st.get("footprint")):
+        stale = bool(st) and (old.get(it["name"]) or {}).get("status") == "held" and not _built_now(st, rules)
+        if stale and st.get("key") == fpr and _done(st, out) and not redo:
+            bw = st.get("built_with") or {}
+            why = (f"built by ecadlib {bw['ecadlib']}" if bw.get("ecadlib") and bw["ecadlib"] != __version__ else
+                   "built with other rules" if st.get("build_rev") == BUILD_REV else "built by an older ecadlib")
+            log(f"  {it['name']}: held, {why}: built again, so its models, fields and release check are this version's")
+        if st and st.get("key") == fpr and _done(st, out) and not redo and not stale and not FS.unchecked_share(st.get("footprint")):
             st["skipped"] = True
             for k in ("symbol", "footprint"):
                 r.written.setdefault(str(out / st[k]["file"]), st[k])
@@ -697,6 +768,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
                           f"no {' or '.join(gone)} yet" if gone else "symbol and footprint found")
         st["key"], st["skipped"] = fpr, False
         LK.stamp_state(st, rec.take(it["name"]), rules)
+        st["build_rev"] = BUILD_REV
         state[it["name"]] = st
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
     for it in items:

@@ -83,7 +83,7 @@ def test_read_bom_encodings_and_wrapped_designators():
 def test_write_reports_empty_bom():
     d = Path(tempfile.mkdtemp())
     T.write_reports([], {}, [], CachedHTTP(d / "c"), d / "out", "empty.csv")
-    assert (d / "out.md").exists() and (d / "out.csv").read_text().startswith("line,status")
+    assert (d / "out.md").exists() and (d / "out.csv").read_text(encoding="utf-8-sig").startswith("line,status")
 
 
 def test_jlc_unexpected_json_shape_is_error_not_crash():

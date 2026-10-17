@@ -6,6 +6,7 @@ SchDocReader reads). When AltiumSharp's TestData is present (../ref/AltiumSharp 
 .SchDoc files are read too. Run:  python3 -m tests.test_altium_project"""
 import contextlib, csv, io, json, os, shutil, tempfile
 from pathlib import Path
+from unittest import mock
 
 from ecadlib import altium_lib as AL, altium_project as AP, bom_triage as T, cfb, cli
 
@@ -26,8 +27,9 @@ def comp(des, libref, uid, params=(), footprints=(), current=0, did="", lib="Par
             "lib": lib, "desc": desc, "kind": kind, "extra": list(extra), "comment": comment, "part": part, "pc": partcount}
 
 
-def write_schdoc(path, comps, raw_tail=b""):
-    """Altium-shaped FileHeader: header, sheet record 31, then per component RECORD=1 + its owned children."""
+def write_schdoc(path, comps, raw_tail=b"", symbols=()):
+    """Altium-shaped FileHeader: header, sheet record 31, then per component RECORD=1 + its owned children, then per
+    (sheet name, file name) a sheet symbol RECORD=15 with its RECORD=32 name and RECORD=33 file name."""
     recs = [AL.pblock("|RECORD=31|FontIdCount=1|Size1=10|FontName1=Times New Roman|SystemFont=1")]
     for c in comps:
         i = len(recs)
@@ -51,6 +53,11 @@ def write_schdoc(path, comps, raw_tail=b""):
                   ("ModelDatafileEntity0", fp), ("ModelDatafileKind0", "PCBLib")] + ([("IsCurrent", "T")] if k == c["cur"] else [])
             recs.append(AL.pblock(AL.params(kv)))
             recs += [AL.pblock(f"|RECORD=46|OwnerIndex={j}"), AL.pblock(f"|RECORD=48|OwnerIndex={j}")]
+    for name, fname in symbols:
+        i = len(recs)
+        recs.append(AL.pblock("|RECORD=15|Location.X=100|Location.Y=100|XSize=40|YSize=30|UniqueID=SYMBOLAA"))
+        recs.append(AL.pblock(AL.params([("RECORD", 32), ("OwnerIndex", i), ("Text", name)])))
+        recs.append(AL.pblock(AL.params([("RECORD", 33), ("OwnerIndex", i), ("Text", fname)])))
     data = AL.pblock(f"|HEADER={SCH_HDR}|WEIGHT={len(recs)}|MINORVERSION=9|UNIQUEID=ABCDEFGH") + b"".join(recs) + raw_tail
     Path(path).write_bytes(cfb.to_bytes({"FileHeader": data, "Storage": AL.pblock("|HEADER=Icon storage"),
                                          "Additional": AL.pblock(f"|HEADER={SCH_HDR}")}))
@@ -250,7 +257,8 @@ def test_project_cli_and_triage_cli():
         f = board(td)
         rc, out = _quiet(cli.main, ["project", str(f), "-o", str(Path(td) / "b.csv"), "--variant", "Lite"])
         assert rc == 0 and "variant Lite" in out and (Path(td) / "b.csv").exists()
-        rows = list(csv.DictReader(open(Path(td) / "b.csv")))
+        assert (Path(td) / "b.csv").read_bytes()[:3] == b"\xef\xbb\xbf"           # a BOM: Excel opens it as UTF-8 (±, µ, Ω)
+        rows = list(csv.DictReader(open(Path(td) / "b.csv", encoding="utf-8-sig")))
         assert any(r["Designator"] == "R2" and r["DNP"] == "DNP" for r in rows)
         rc, _ = _quiet(cli.main, ["project", str(Path(td) / "nothing.PrjPcb")])
         assert rc == 2
@@ -379,6 +387,80 @@ def test_real_altium_schdocs():
         assert res["projects"][0]["name"] == "Real" and len(res["projects"]) == 1   # sheets belong to the project
 
 
+
+def _channel_board(d, design=""):
+    """Top sheet: a Content Vault MCU (Comment = MPN, no MPN parameter), a 100nF cap, a sheet symbol REPEAT(CH,1,3) on
+    Chan.SchDoc and a device sheet symbol on Sensor.SchDoc; the project lists Sensor under [DeviceSheet1] as Altium's
+    managed path, and a second device sheet that is nowhere."""
+    d = Path(d)
+    d.mkdir(parents=True, exist_ok=True)
+    write_schdoc(d / "Top.SchDoc", [
+        comp("U1", "STM32F101T6U6A", "MCUAAAAA", [], ["QFN36"], comment="STM32F101T6U6A", lib="Content Vault", did="CMP-0001-00042-1"),
+        comp("C1", "Cap", "CAPCCCCC", [("Value", "100nF")], ["CAP 0402"], comment="=Value", lib="Content Vault"),
+    ], symbols=[("REPEAT(CH,1,3)", "Chan.SchDoc"), ("Sense", "Sensor.SchDoc")])
+    write_schdoc(d / "Chan.SchDoc", [
+        comp("R1", "Res", "RCHANAAA", mpn("RC0603FR-0710KL", "Yageo") + [("Value", "10k")], ["RES 0603"], comment="=Value"),
+        comp("R2", "Res", "RCHANBBB", mpn("RC0603FR-0710KL", "Yageo") + [("Value", "10k")], ["RES 0603"], comment="=Value"),
+        comp("C1", "Cap", "CCHANAAA", mpn("GRM155R71C104KA88D") + [("Value", "100nF")], ["CAP 0402"], comment="=Value"),
+    ])
+    dev = d / "altium data" / "Managed" / "Sheets" / "{5A1B}"
+    dev.mkdir(parents=True)
+    write_schdoc(dev / "Sensor.SchDoc", [comp("U9", "BME280", "SENSORAA", mpn("BME280", "Bosch"), ["LGA-8"])])
+    txt = ("[Design]\r\nVersion=1.0\r\n" + design + "\r\n[Document1]\r\nDocumentPath=Top.SchDoc\r\n\r\n"
+           "[Document2]\r\nDocumentPath=Chan.SchDoc\r\n\r\n"
+           "[DeviceSheet1]\r\nDocumentPath=Managed\\Sheets\\{5A1B}\\Sensor.SchDoc\r\n\r\n"
+           "[DeviceSheet2]\r\nDocumentPath=C:\\Users\\Public\\Documents\\Altium\\AD26\\Library\\Device Sheets\\Gone.SchDoc\r\n\r\n")
+    (d / "Ch.PrjPcb").write_text(txt, encoding="utf-8")
+    return d / "Ch.PrjPcb", d / "altium data"
+
+
+def test_device_sheets_channels_and_comment_mpn():
+    with tempfile.TemporaryDirectory() as td:
+        prj, data = _channel_board(td)
+        env = {k: v for k, v in os.environ.items() if k not in ("PUBLIC", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA")}
+        with mock.patch.dict(os.environ, dict(env, ECADLIB_DEVICE_SHEETS=str(data)), clear=True):
+            p = AP.load_project(prj)
+        assert [Path(s).name for s in p["sheets"]] == ["Top.SchDoc", "Chan.SchDoc", "Sensor.SchDoc"], p["sheets"]
+        w = " | ".join(p["warnings"])
+        assert "device sheet C:\\Users\\Public\\Documents\\Altium\\AD26\\Library\\Device Sheets\\Gone.SchDoc not found" in w, w
+        assert "NOT in this BOM" in w and "ECADLIB_DEVICE_SHEETS" in w
+        assert "Chan.SchDoc: multi-channel sheet, 3 channels (CH1, CH2, CH3): 3 components counted once per channel" in w, w
+        assert "designators like R1_CH1 ($Component_$RoomName)" in w
+        g = AP.bom_groups(p)
+        r = _g(g, "RC0603FR-0710KL")
+        assert r["qty"] == "6" and r["designator"] == "R1_CH1, R1_CH2, R1_CH3, R2_CH1, R2_CH2, R2_CH3", r
+        assert _g(g, "GRM155R71C104KA88D")["designator"] == "C1_CH1, C1_CH2, C1_CH3"
+        assert _g(g, "BME280")["designator"] == "U9"                               # the device sheet's part is in
+        mcu = _g(g, "STM32F101T6U6A")
+        assert mcu["mpn_source"] == "Comment" and mcu["designator"] == "U1", mcu
+        cap = next(x for x in g if x["designator"] == "C1")                      # 100nF is a value, not a part number
+        assert cap["mpn"] == "" and cap["value"] == "100nF"
+        assert "U1): their Comment is used as the MPN" in w, w
+        # missing device sheet, no folder known: still a warning, never a silent skip
+        with mock.patch.dict(os.environ, env, clear=True):
+            (data / "Managed" / "Sheets" / "{5A1B}" / "Sensor.SchDoc").rename(Path(td) / "elsewhere.bin")
+            p2 = AP.load_project(prj)
+        assert any("device sheet Managed\\Sheets\\{5A1B}\\Sensor.SchDoc not found" in x for x in p2["warnings"]), p2["warnings"]
+        # the project's own channel format; lines the triage gets carry the Comment note
+        prj2, _ = _channel_board(Path(td) / "two", "ChannelDesignatorFormatString=$ComponentPrefix$ComponentIndex$ChannelAlpha\r\n")
+        with mock.patch.dict(os.environ, dict(env, ECADLIB_DEVICE_SHEETS=str(Path(td) / "two" / "altium data")), clear=True):
+            lines, _ = _quiet(AP.bom_lines, prj2)[0]
+        des = {ln["designator"] for ln in lines}
+        assert "R1A, R1B, R1C, R2A, R2B, R2C" in des, des
+        u1 = next(ln for ln in lines if ln["designator"] == "U1")
+        assert u1["mpn"] == "STM32F101T6U6A" and u1.get("altium_mpn_source") == "Comment", u1
+
+
+def test_channel_designators_and_mpn_like_comments():
+    assert AP.channel_designator("$Component_$RoomName", "R1", "CH2", 2) == "R1_CH2"
+    assert AP.channel_designator("$ComponentPrefix$ComponentIndex$ChannelAlpha", "R12", "CH2", 2) == "R12B"
+    assert AP.channel_designator("$Component$ChannelIndex", "C3", "X", 27) == "C327"
+    assert AP.channel_designator("$ComponentPrefix_$ChannelAlpha$ComponentIndex", "U1", "X", 28) == "U_AB1"
+    for s in ("STM32F101T6U6A", "LM358DR", "RC0603FR-0710KL", "GRM188R71H104KA93D", "TPS62162DSGR", "BC847C"):
+        assert AP.looks_like_mpn(s), s
+    for s in ("10k", "100nF", "4k7", "1uF/16V", "0R", "2.2uH", "100nF_X7R", "Res1", "Cap Pol1", "=Value", "LED", "", "47R",
+              "10uF/25V", "1M", "100", "TestPoint", "330Ω"):
+        assert not AP.looks_like_mpn(s), s
 
 def test_read_bom_hook_uses_house_mpn_name():
     """ecadlib.toml [parameters.names] next to the project: the house MPN parameter is read through read_bom."""

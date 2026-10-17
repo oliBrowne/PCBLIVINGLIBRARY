@@ -479,7 +479,7 @@ def check_a365(items, nodes, folders=None, state=None, rules=None):
 def write_report(rows, out, title, cols, meta=()):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
+    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader(); w.writerows(rows)
     esc = lambda v: str(v if v is not None else "").replace("|", "\\|").replace("\n", " ")

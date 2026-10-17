@@ -15,10 +15,13 @@
         CheckProjectBOM    checks the focused project's BOM, opens the report, offers to fill the library
         OpenReviewQueue    opens the ecadlib web UI at the review queue (starts `ecadlib ui` when it is not running)
   ecadlib_menu.ini                  settings: workspace, library folder, command, hidden, timeout_s, port (kept when
-                                    it exists, so your edits survive a rebuild)
+                                    it exists, so your edits survive a rebuild). On Windows, command= is the Python that
+                                    ran `build` (a venv's python.exe too): "<sys.executable>" -m ecadlib, unless --command
+                                    is given; a rebuild fills an empty command= the same way and changes nothing else
   ecadlib_run.cmd + ecadlib_run.vbs how the script runs ecadlib: the .vbs starts the .cmd without a console window
                                     (WScript.Shell.Run, window style 0) and the .cmd finds ecadlib (command= in the
-                                    .ini, else `ecadlib` on PATH, else `py -3 -m ecadlib`, else `python -m ecadlib`)
+                                    .ini, else `ecadlib` on PATH, else `py -3 -m ecadlib`, else `python -m ecadlib`;
+                                    a venv install is found only through command=)
   ecadlib_menu.DXPPrf               optional: a preferences file that adds the "ecadlib" menu to the schematic, PCB,
                                     SchLib and PcbLib editors (DXP > Preferences > Load, "System > Customizations"
                                     only). Written only when the Windows folder is known (--win-dir, or running on
@@ -473,7 +476,8 @@ workspace={workspace}
 library={library}
 ; library name (the .DbLib / .LibPkg file name)
 name={name}
-; how to run ecadlib; empty = ecadlib on PATH, else py -3 -m ecadlib, else python -m ecadlib
+; how to run ecadlib. `ecadlib altium-menu build` on Windows writes the Python it ran with (a venv's too).
+; empty = ecadlib on PATH, else py -3 -m ecadlib, else python -m ecadlib (a venv install is not found that way)
 ; example: command="C:\\Program Files\\Python311\\python.exe" -m ecadlib
 command={command}
 ; 1 = no console window (wscript + ecadlib_run.vbs), 0 = run ecadlib_run.cmd in a console window
@@ -553,8 +557,21 @@ What it adds: an "ecadlib" menu (or toolbar buttons) with three entries:
   Check this project BOM   checks the focused project's BOM, opens the report, offers to fill the library
   Open review queue        opens the ecadlib web UI at the review queue in your browser
 
-Needs: ecadlib installed on this PC (pip install ecadlib; `ecadlib doctor` checks it). Settings are in {INI}
-(workspace, library folder, how to run ecadlib). Your API keys stay in environment variables; no file here holds one.
+Needs: ecadlib installed on this PC (pip install ecadlib; `ecadlib doctor --altium-menu {INI}` checks it). Settings
+are in {INI} (workspace, library folder, how to run ecadlib). Your API keys stay in environment variables; no file
+here holds one.
+
+How the menu runs ecadlib: command= in {INI}. `ecadlib altium-menu build` run on Windows writes the Python it ran
+with there ("C:\\...\\python.exe" -m ecadlib), so an install in a virtual environment (venv) works. When command=
+is empty, the runner tries `ecadlib` on PATH, then `py -3 -m ecadlib`, then `python -m ecadlib`; a venv is none of
+those, and the menu then says "ecadlib was not found". Fix: run the build again from the venv (it fills an empty
+command= and keeps your other settings), or set command= yourself.
+
+Without an AI key (ANTHROPIC_API_KEY, or the model set in ecadlib.toml [ai]), ecadlib cannot read datasheets, so
+parts no free source fully describes come back held with the reason ("fields: Description is empty", "footprint:
+..."). Held parts never go into the library: open the review queue (ecadlib > Open review queue) to see why and
+pick or fill what is missing, or set the key (Windows: setx ANTHROPIC_API_KEY "<your key>" in a terminal, then
+restart Altium so it sees the new variable) and add the part again.
 
 Install (once):
 1. Altium: DXP (AD17) or the gear icon (AD18+) > Preferences > Scripting System > Global Projects > Install from
@@ -574,10 +591,48 @@ was made: if a step fails, please report the message.
 """.replace("\n", "\r\n")
 
 
-def build(out, workspace=None, library=None, name="ecadlib", command="", win_dir=None, port=8765, hidden=True,
+def _short_path(p):
+    """Windows 8.3 short form of an existing path (ASCII even when the long one is not), else p."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.windll.kernel32.GetShortPathNameW(str(p), buf, len(buf))
+        return buf.value if 0 < n < len(buf) else p
+    except (AttributeError, OSError, ValueError):
+        return p
+
+
+def default_command(executable=None, nt=None):
+    """command= for this PC: the Python running ecadlib now (a venv's python.exe too) with -m ecadlib, the path quoted
+    for cmd.exe ("C:\\venv\\Scripts\\python.exe" -m ecadlib). '' when not on Windows (the menu runs on the Altium PC,
+    where this Python's path means nothing), or when the path cannot be written in plain ASCII or holds a quote."""
+    nt = os.name == "nt" if nt is None else nt
+    exe = str(sys.executable if executable is None else executable or "")
+    if not nt or not exe:
+        return ""
+    if not exe.isascii():                        # the .ini is read in the ANSI code page: use the 8.3 name
+        exe = _short_path(exe)
+    if not exe.isascii() or '"' in exe:
+        return ""
+    return f'"{exe}" -m ecadlib'
+
+
+def _fill_command(ini, command):
+    """Set command= in an existing ecadlib_menu.ini when it is empty (nothing else changes). True when it did."""
+    data = ini.read_bytes()
+    new = re.sub(rb"(?m)^command=[ \t]*(?=\r?$)", lambda m: b"command=" + command.encode("utf-8"), data, count=1)
+    if new == data:
+        return False
+    ini.write_bytes(new)
+    return True
+
+
+def build(out, workspace=None, library=None, name="ecadlib", command=None, win_dir=None, port=8765, hidden=True,
           timeout_s=1800, offline=False):
-    """Write the script project into `out`. Returns a report dict (also altium_menu.json)."""
+    """Write the script project into `out`. Returns a report dict (also altium_menu.json). command None or '': on
+    Windows, the Python running this (default_command()); elsewhere empty (the runner then searches PATH / py / python)."""
     out = Path(out)
+    command = command or default_command()
     out.mkdir(parents=True, exist_ok=True)
     if win_dir is None and os.name == "nt":
         win_dir = str(out.resolve())
@@ -596,8 +651,10 @@ def build(out, workspace=None, library=None, name="ecadlib", command="", win_dir
             p.write_bytes(data)
             written.append(fname)
     ini = out / INI
+    filled = False
     if ini.is_file():
         kept.append(INI)
+        filled = bool(command) and _fill_command(ini, command)     # an empty command= (older builds) gets this PC's
     else:
         ini.write_bytes(ini_text(workspace or "workspace", library or "library", name, command, hidden, timeout_s,
                                  port, offline).encode("utf-8"))
@@ -609,7 +666,8 @@ def build(out, workspace=None, library=None, name="ecadlib", command="", win_dir
             written.append(PREFS)
     problems = pas_problems(files[UNIT])
     rep = {"folder": str(out), "project": PROJECT, "procedures": [p for p, _, _ in PROCS], "written": written,
-           "kept": kept, "win_dir": win_dir, "menu_file": PREFS if win_dir else None, "problems": problems}
+           "kept": kept, "win_dir": win_dir, "menu_file": PREFS if win_dir else None, "problems": problems,
+           "command": load_command(ini), "command_filled": filled}
     (out / "altium_menu.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
     return rep
 
@@ -806,6 +864,14 @@ def write_result(path, res):
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_bytes(b"\xff\xfe" + result_text(res).encode("utf-16-le"))
     os.replace(tmp, path)
+
+
+def load_command(ini_path):
+    """command= of an ecadlib_menu.ini ('' when empty or missing)."""
+    try:
+        return (read_ini(ini_path)["ecadlib"].get("command") or "").strip()
+    except (OSError, KeyError, configparser.Error):
+        return ""
 
 
 def load_config(ini_path):
@@ -1210,7 +1276,8 @@ def main(argv=None):
     b.add_argument("--to", dest="library", metavar="DIR",
                    help="Altium library folder for ready parts, as in dblib-sync --to (default: <workspace>/altium_library)")
     b.add_argument("--name", default="ecadlib", help="library name (default %(default)s)")
-    b.add_argument("--command", default="", help="how to run ecadlib on that PC (default: find it: PATH, py -3, python)")
+    b.add_argument("--command", default="", help='how to run ecadlib on that PC (default on Windows: "<this Python>" -m '
+                                                 "ecadlib, so a venv install works; elsewhere: find it: PATH, py -3, python)")
     b.add_argument("--win-dir", help="the Windows folder --out will be in on the Altium PC (for the ready-made menu file)")
     b.add_argument("--port", type=int, default=8765, help="web UI port for Open review queue (default %(default)s)")
     b.add_argument("--console", action="store_true", help="show ecadlib's console window (hidden=0)")
@@ -1259,6 +1326,9 @@ def main(argv=None):
                 print(f"  PROBLEM {p}")
             print(f"wrote {', '.join(rep['written']) or 'nothing new'} in {a.out}" +
                   (f" (kept your {', '.join(rep['kept'])})" if rep["kept"] else ""))
+            if rep["command_filled"]:
+                print(f"  {INI}: command= was empty; set it to {rep['command']}")
+            print(f"  runs ecadlib with: {rep['command'] or 'ecadlib on PATH, else py -3 / python (set command= in ' + INI + ' for a venv)'}")
             print(f"  in Altium: Preferences > Scripting System > Global Projects > Install from file > {PROJECT}; "
                   f"then Customize to put {', '.join(rep['procedures'])} on a menu (see {README})")
             if not rep["menu_file"]:

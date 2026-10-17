@@ -54,6 +54,15 @@ def height_range(fp_name):
     return (*GENERIC_HEIGHT, None)
 
 
+def _package_height(item, fp_name):
+    """(height, label) from kicad_import.package_default_height for a standard chip size / small package, or None."""
+    from .kicad_import import package_default_height
+    cat = str(item.get("folder") or "").split("/")[-1]
+    kind = {"Resistors": "R", "Capacitors": "C"}.get(cat)
+    names = [item["footprint"].get("kicad"), item["footprint"].get("ref"), fp_name, item.get("description"), item.get("name")]
+    return package_default_height(names, kind)
+
+
 def _mil(s):
     m = re.match(r"\s*(-?[\d.]+)\s*mil", str(s or ""))
     return float(m.group(1)) * 0.0254 if m else None
@@ -242,8 +251,18 @@ def check_item(item, base=".", rules=None):
             warns.append("height only as the footprint HEIGHT parameter; no 3D body")
         lo, hi, fam = height_range(item["footprint"].get("kicad") or item["footprint"].get("ref") or fps[0]["name"])
         info["height"] = h
-        if not h:
+        default = any("package default" in n for n in (item.get("librarian") or {}).get("notes", []))
+        pd = None if h else _package_height(item, fps[0]["name"])
+        if not h and pd:
+            warns.append(f"HEIGHT from package default {pd[0]} mm ({pd[1]}), verify: the PcbLib has no 3D height (no API key "
+                         "for the datasheet, no KiCad model)")
+            info["height"] = pd[0]
+        elif not h:
             add("height", "no 3D height (no 3D body and no HEIGHT)")
+        elif default:
+            warns.append(f"3D height {h:.2f} mm is the package default, verify against the datasheet")
+            if not lo - 0.01 <= h <= hi + 0.01:
+                warns.append(f"3D height {h:.2f} mm outside {lo}-{hi} mm for {fam or 'any package'}")
         elif not lo - 0.01 <= h <= hi + 0.01:
             add("height", f"3D height {h:.2f} mm outside {lo}-{hi} mm for {fam or 'any package'}")
         elif not fam:
@@ -317,7 +336,7 @@ def _split(failures):
 def write_report(rows, stem, plan=""):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
-    with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
+    with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["name", "status"])
         w.writeheader(); w.writerows(rows)
     from . import messages as M
