@@ -165,6 +165,32 @@ def test_dblib_row_never_points_at_another_parts_symbol():
     assert any(s["part"] == "RES-0603-10k " for s in rep["skipped"]), rep["skipped"]
 
 
+# ---------------------------------------------------------------- re-export
+def test_reexport_keeps_or_reports_hand_edits():
+    plan, http = _plan()
+    out = plan.parent.parent / "k"
+    X.export(plan, out, "lib", http=http, log=_quiet)
+    files = lambda: {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in out.rglob("*") if p.is_file() and p.name != "kicad_export.json"}
+    before = files()
+    X.export(plan, out, "lib", http=http, log=_quiet)
+    assert files() == before                                          # a second run changes (and touches) nothing
+    hand = out / "lib.pretty" / "My_Hand_Footprint.kicad_mod"
+    hand.write_text('(footprint "My_Hand_Footprint" (version 20221018) (generator pcbnew) (layer "F.Cu"))\n', encoding="utf-8")
+    (out / "lib.3dshapes").mkdir(exist_ok=True)
+    step = out / "lib.3dshapes" / "hand.step"
+    step.write_text("ISO-10303-21;\n", encoding="utf-8")
+    fp = out / "lib.pretty" / "R_0603_1608Metric.kicad_mod"
+    edited = fp.read_text(encoding="utf-8").replace('(layer "F.Cu")', '(layer "F.Cu")\n\t(tags "edited by hand")', 1)
+    fp.write_text(edited, encoding="utf-8")
+    rep = X.export(plan, out, "lib", http=http, log=_quiet)
+    aside = out / "ecadlib-hand-edits"                                 # not ecadlib's: moved aside, not lost ...
+    assert (aside / "lib.pretty" / hand.name).read_bytes() and (aside / "lib.3dshapes" / step.name).read_bytes()
+    said = json.dumps(rep.get("warnings"))
+    assert "My_Hand_Footprint.kicad_mod" in said and "hand.step" in said, said      # ... and reported
+    assert "R_0603_1608Metric.kicad_mod" in said, said                 # the overwritten hand edit is reported ...
+    assert any(p.read_text(encoding="utf-8") == edited for p in out.rglob("R_0603_1608Metric.kicad_mod*") if p != fp)   # and kept
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_review_1018_kicad"]))
