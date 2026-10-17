@@ -42,9 +42,6 @@ FLEX = ("ports", "other_in", "other_out")      # may move between left and right
 STACKS = ("stack", "hide", "none")
 SPLIT_PENALTY = 6                              # rows a port split across sides must save before it is used
 CHAR = 7                                       # name width per character, DXP units (as altium_lib.ic_symbol)
-SIGNAL_OUT = ("output", "tristate", "open_collector", "open_emitter", "io", "bidir")
-TWO_SIDED_PINS = 8                             # re-laid-out parts with at most this many pins: left / right only
-NAME_GAP, NAME_HALF_H = 5, 4                   # pin name: gap from the body edge, half its height (10 pt, DXP units)
 
 _R = lambda s: re.compile(r"^(?:" + s + r")$")
 RX = [  # (group, regex on the primary name, upper case, overbar / active-low markers removed); first match wins
@@ -126,8 +123,6 @@ def classify(pin):
         if rx.match(k):
             if g == "usb" and k == "VBUS" and t in ("power", "power_in"):
                 return "power"
-            if g == "power_out" and k in ("OUT", "VO") and t in SIGNAL_OUT:    # a 555's or a comparator's OUT is a
-                return "other_out"                                             # signal, not a supply rail
             return g
     if num in ("EP", "PAD", "EPAD", "TAB"):
         return "ep"
@@ -262,32 +257,10 @@ def _chunk(block, size):
     return [dict(block, slots=block["slots"][i:i + size]) for i in range(0, len(block["slots"]), size)] if size else [block]
 
 
-def _two_sided(blocks):
-    """Small parts: every pin on the left or right, no top / bottom pins (no rotated names to make room for).
-    Left: supplies, then the left-side groups, then ground; right: power outputs, then the right-side groups.
-    Each side is one block (no gap rows), so an 8-pin IC stays compact."""
-    def merge(bl, side):
-        if not bl:
-            return []
-        nets = {k: v for b in bl for k, v in b.get("nets", {}).items()}
-        return [{"group": bl[0]["group"], "label": side, "side": side, "slots": [sl for b in bl for sl in b["slots"]], "nets": nets}]
-    left = [b for b in blocks if b["side"] == "top" and b["group"] != "power_out"] + \
-        [b for b in blocks if b["side"] == "left"] + [b for b in blocks if b["side"] == "bottom"]
-    right = [b for b in blocks if b["group"] == "power_out"] + [b for b in blocks if b["side"] == "right"]
-    if not left or not right:                 # everything on one side (e.g. all inputs): split it in two
-        one = merge(left or right, "left")[0]
-        half = (len(one["slots"]) + 1) // 2
-        left, right = [dict(one, slots=one["slots"][:half])], [dict(one, slots=one["slots"][half:], side="right", label="right")]
-    return {"left": merge(left, "left"), "right": merge(right, "right"), "top": [], "bottom": []}
-
-
-def arrange(pins, rules=None, split=None, two_sided=False):
-    """pins -> [unit {'unit': n, 'sides': {side: [block, ...]}}]. split: True/False forces multi-part on/off.
-    two_sided: all pins on the left and right (small parts, see _two_sided); no multi-part split."""
+def arrange(pins, rules=None, split=None):
+    """pins -> [unit {'unit': n, 'sides': {side: [block, ...]}}]. split: True/False forces multi-part on/off."""
     s = settings(rules)
     blocks = _blocks(pins, s)
-    if two_sided:
-        return [{"unit": 1, "sides": _two_sided(blocks)}]
     big = s["split_pins"] and len(pins) > s["split_pins"]
     if not (big if split is None else split):
         return [{"unit": 1, "sides": _balance(blocks)}]
@@ -338,15 +311,14 @@ def _nlen(p):
     return len(plain(p.get("name", "")))
 
 
-def build(name, pins, description="", designator="U?", footprint=None, comment="*", rules=None, split=None, two_sided=False):
-    """Grouped multi-block (and optionally multi-part) IC symbol, as an altium_lib symbol dict.
-    two_sided: pins on the left and right only (see _two_sided)."""
+def build(name, pins, description="", designator="U?", footprint=None, comment="*", rules=None, split=None):
+    """Grouped multi-block (and optionally multi-part) IC symbol, as an altium_lib symbol dict."""
     bad = [p.get("num") for p in pins if not str(p.get("num", "")).strip()]
     if bad:
         raise ValueError(f"{name}: {len(bad)} pins have no number")
     s = settings(rules)
     g, L = s["grid"] // 10, s["pin_length"] // 10
-    units = arrange(pins, rules, split, two_sided)
+    units = arrange(pins, rules, split)
     prims, parts = [], []
     tallest = (0, 0)
     for u in units:
@@ -407,10 +379,9 @@ def build(name, pins, description="", designator="U?", footprint=None, comment="
     return sym
 
 
-def relayout(sym, rules=None, split=None, two_sided=None):
+def relayout(sym, rules=None, split=None):
     """An altium_lib symbol dict (e.g. converted from EasyEDA) -> the grouped layout, keeping its name, labels,
-    footprint and parameters. Pins keep number, name, type, shape. Only single-part symbols are re-laid out.
-    two_sided: None = left / right only for parts with at most TWO_SIDED_PINS pins."""
+    footprint and parameters. Pins keep number, name, type, shape. Only single-part symbols are re-laid out."""
     if sym.get("parts", 1) > 1 or any(sym.get("prim_modes") or []):
         return sym
     pins, seen = [], set()
@@ -418,75 +389,14 @@ def relayout(sym, rules=None, split=None, two_sided=None):
         if pr[0] == "pin" and pr[1]["num"] not in seen:
             seen.add(pr[1]["num"])
             pins.append({k: v for k, v in pr[1].items() if k in ("num", "name", "type", "shape", "description")})
-    if two_sided is None:
-        two_sided = len(pins) <= TWO_SIDED_PINS
     new = build(sym["name"], pins, sym.get("description", ""), sym.get("designator", "U?"), sym.get("footprint"),
-                sym.get("comment", "*"), rules, split, two_sided)
+                sym.get("comment", "*"), rules, split)
     if sym.get("params"):
         new["params"] = sym["params"]
     return new
 
 
 # ------------------------------------------------------------------ checks
-def name_boxes(sym, part=1):
-    """[(pin number, (x0, y0, x1, y1))] of the visible pin names of one part, as Altium draws them (10 pt font, about
-    CHAR units a character): inside the body from the pin's body end, horizontal for left / right pins and rotated
-    90 degrees for top / bottom pins."""
-    parts = sym.get("prim_parts") or [1] * len(sym["prims"])
-    modes = sym.get("prim_modes") or [0] * len(sym["prims"])
-    out = []
-    for pr, u, m in zip(sym["prims"], parts, modes):
-        if pr[0] != "pin" or u != part or m:
-            continue
-        _, p, side, x, y, _L, *show = pr
-        shown = p.get("show_name", show[0] if show else True)
-        n = len(plain(AL.overline(p.get("name", ""))))
-        if p.get("hidden") or not shown or not n or p.get("name") in ("", "~"):
-            continue
-        ext, h = NAME_GAP + n * CHAR, NAME_HALF_H
-        box = {"left": (x + NAME_GAP, y - h, x + ext, y + h), "right": (x - ext, y - h, x - NAME_GAP, y + h),
-               "top": (x - h, y - ext, x + h, y - NAME_GAP), "bottom": (x - h, y + NAME_GAP, x + h, y + ext)}[side]
-        out.append((p["num"], box))
-    return out
-
-
-def name_clashes(sym):
-    """Pin names drawn over each other, or running out of the body: [text]. Stacked pins (same spot) are one name."""
-    probs = []
-    rects = {}
-    for pr, u in zip(sym["prims"], sym.get("prim_parts") or [1] * len(sym["prims"])):
-        if pr[0] == "rect":
-            rects.setdefault(u, []).append((min(pr[1], pr[3]), min(pr[2], pr[4]), max(pr[1], pr[3]), max(pr[2], pr[4])))
-    for u in sorted(set(sym.get("prim_parts") or [1])):
-        boxes = name_boxes(sym, u)
-        for i, (a, ba) in enumerate(boxes):
-            for b, bb in boxes[i + 1:]:
-                if ba != bb and ba[0] < bb[2] and bb[0] < ba[2] and ba[1] < bb[3] and bb[1] < ba[3]:
-                    probs.append(f"pin {a}'s name is drawn over pin {b}'s name")
-            if rects.get(u) and not any(r[0] <= ba[0] and ba[2] <= r[2] and r[1] <= ba[1] and ba[3] <= r[3] for r in rects[u]):
-                probs.append(f"pin {a}'s name runs out of the body")
-    return probs
-
-
-def needs_relayout(sym, rules=None):
-    """A converted symbol (EasyEDA) is re-laid out when it is big (rules [symbols] layout_pins), or when it is a plain
-    IC box (4+ pins, plain_box) whose pin names, drawn as Altium draws them, collide or leave the body (e.g. VCC on
-    top written over a side pin's name)."""
-    if sym.get("parts", 1) > 1 or any(sym.get("prim_modes") or []):
-        return False
-    npins = len({pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin"})
-    if wants_layout(npins, rules):
-        return True
-    return npins >= 4 and plain_box(sym) and bool(name_clashes(sym))
-
-
-def plain_box(sym):
-    """The drawing is one rectangle (plus small circles such as a pin-1 dot): an IC box a re-layout loses nothing of.
-    Symbols with other graphics (a transistor's lines and arrow, an op-amp triangle) are kept as drawn."""
-    body = [pr for pr in sym["prims"] if pr[0] not in ("pin", "text")]
-    return sum(pr[0] == "rect" for pr in body) == 1 and all(pr[0] == "rect" or (pr[0] == "circle" and pr[3] <= 5) for pr in body)
-
-
 def check(sym, grid=100):
     """Problems in a laid-out symbol: pins off the grid, two different pins at one spot (other than stacked power
     pins with the same name), a pin whose end or line lies on another pin's line, pin lines crossing. -> [text]."""

@@ -298,15 +298,14 @@ class Run:
         self.written[str(path)] = st["symbol"]
 
     def put_kicad_sym(self, st, chain, name, fp_name, source, extra=(), layout=False):
-        """layout: re-lay big symbols, and symbols whose pin names collide as drawn, out with pins grouped by function
-        (EasyEDA symbols; KiCad library symbols are curated and kept as drawn)."""
+        """layout: re-lay big symbols out with pins grouped by function (EasyEDA symbols; KiCad library symbols are
+        curated and kept as drawn)."""
         notes = []
         sym = K.convert_symbol(chain, name, fp_name, list(extra), None, notes)
         npins = len({pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin"})
-        if layout and SL.needs_relayout(sym, self.rules):
-            why = "" if SL.wants_layout(npins, self.rules) else f" (as drawn: {SL.name_clashes(sym)[0]})"
+        if layout and SL.wants_layout(npins, self.rules) and sym.get("parts", 1) == 1:
             sym = SL.relayout(sym, self.rules)
-            notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else "") + why)
+            notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else ""))
         self.put_sym(st, sym, source, notes)
 
     # ---- per part

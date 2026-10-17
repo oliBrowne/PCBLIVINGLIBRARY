@@ -1,7 +1,7 @@
 """Problems seen in real Altium AD26 (PR #27), each with its cause fixed:
 
-* NE555DR (TI, SOIC-8, LCSC C7593) sourced from EasyEDA: pin names on top / bottom pins drawn over side pins' names in
-  the SchLib; .Designator / .Comment in the middle of the PcbLib footprint; the pin-1 dot inside the body outline.
+* NE555DR (TI, SOIC-8, LCSC C7593) sourced from EasyEDA: .Designator / .Comment in the middle of the PcbLib footprint,
+  the pin-1 dot inside the body outline. (The SchLib pin-name overlap is another PR's: the symbol layout rule.)
   tests/fixtures/easyeda/C7593.json is SYNTHETIC (easyeda.com is blocked here), shaped after those screenshots.
 * Check-BOM on an Altium project: Altium vault ids (CMP-1035-02800-1) from LibRef / Comment used as the MPN.
 * JLCPCB answering 403: reported as a refusal, nothing more is sent to JLCPCB in the run, other sources still tried.
@@ -12,59 +12,22 @@ from pathlib import Path
 from unittest import mock
 
 from ecadlib import altium_lib as AL, altium_project as AP, bom_triage as T, doctor as DR, easyeda_convert as EC, \
-    footprint_check as FC, kicad_import as K, lifecycle as LC, providers as P, release_check as RC, sexpr, \
-    symbol_layout as SL
+    footprint_check as FC, kicad_import as K, lifecycle as LC, providers as P, release_check as RC, sexpr
 from ecadlib.httpcache import Response
 from tests import test_altium_project as TAP, test_librarian as TL
 
 NE555 = json.loads((Path(__file__).parent / "fixtures" / "easyeda" / "C7593.json").read_text())
-ORIENT_SIDE = {0: "right", 1: "top", 2: "left", 3: "bottom"}
 
 
-def _ne555_symbol():
-    s = EC.symbol_to_kicad(NE555["result"]["dataStr"], "NE555DR", "SOIC8", {}, [])
-    return K.convert_symbol([K._find_symbol(sexpr.parse(s), "NE555DR")], "NE555DR")
-
-
-# ---------------------------------------------------------------- 1. SchLib pin names
-def test_ne555_as_drawn_names_collide_and_relayout_fixes_it():
-    sym = _ne555_symbol()
-    clash = SL.name_clashes(sym)
-    assert any("pin 8's name is drawn over pin 1's name" in c for c in clash), clash       # VCC over GND (small body)
-    assert any("pin 7" in c and "pin 8" in c for c in clash), clash                       # DISCH under VCC
-    assert SL.needs_relayout(sym)
-    new = SL.relayout(sym)
-    assert SL.name_clashes(new) == [] and SL.check(new) == [], (SL.name_clashes(new), SL.check(new))
-    sides = {pr[1]["name"]: pr[2] for pr in new["prims"] if pr[0] == "pin"}
-    assert set(sides.values()) == {"left", "right"}, sides                               # 8 pins: two-sided
-    assert sides["VCC"] == sides["GND"] == "left" and sides["OUT"] == "right", sides       # OUT is a signal, not a rail
-    left = [pr[1]["name"] for pr in sorted((p for p in new["prims"] if p[0] == "pin" and p[2] == "left"), key=lambda p: -p[4])]
-    assert left[0] == "VCC" and left[-1] == "GND", left
-    # bigger parts keep top / bottom power pins, with the body sized for the rotated names
-    pins = [{"num": str(i), "name": n, "type": t} for i, (n, t) in enumerate(
-        [("VCC", "power"), ("GND", "power"), ("DISCHARGE", "output"), ("THRESHOLD", "input"), ("TRIGGER", "input"),
-         ("RESET", "input"), ("CONTROL", "input"), ("OUT", "output"), ("VCC2", "power")], 1)]
-    big = SL.build("X", pins)
-    assert {pr[2] for pr in big["prims"] if pr[0] == "pin"} >= {"top", "bottom"} and SL.name_clashes(big) == []
-
-
-def test_classify_out_signal_vs_rail():
-    assert SL.classify({"name": "OUT", "type": "output"}) == "other_out"
-    assert SL.classify({"name": "OUT", "type": "power_out"}) == "power_out"           # an LDO's OUT stays a rail
-    assert SL.classify({"name": "VOUT", "type": "output"}) == "power_out"
-
-
-def test_librarian_relays_out_ne555_and_writes_10pt_times():
+# ---------------------------------------------------------------- 1+2. NE555 through the librarian
+def test_librarian_ne555_footprint_text_and_10pt_symbol_font():
     bom = TL.BOM.split("\n")[0] + "\nU1,1,NE555DR,,TI,NE555DR,C7593,timer,\n"
     with tempfile.TemporaryDirectory() as d:
         items, _ = TL.run(d, TL.FakeHTTP({"C7593": NE555}), bom=bom)
         it = items["NE555DR"]
-        assert it["source"]["symbol"] == "easyeda:C7593", it["source"]
-        assert any("as drawn: pin" in n for n in it["librarian"]["notes"]), it["librarian"]["notes"]
-        hdr, syms = AL.read_schlib(Path(d) / "out" / it["symbol"]["file"])
+        assert it["source"]["footprint"] == "easyeda:C7593", it["source"]
+        hdr, _ = AL.read_schlib(Path(d) / "out" / it["symbol"]["file"])
         assert hdr["FONTNAME1"] == "Times New Roman" and hdr["SIZE1"] == "10", hdr               # Altium's default font
-        pins = [r for r in syms[0]["records"] if r.get("RECORD") == "2"]
-        assert len(pins) == 8 and {ORIENT_SIDE[r["orient"]] for r in pins} == {"left", "right"}
         # the footprint: designator on silk above the courtyard, comment on Mechanical 13 below, 1 mm / 0.15 mm
         lib = AL.read_pcblib(Path(d) / "out" / it["footprint"]["file"])[0]
         texts = {r["text"]: r for r in lib["records"] if r["type"] == "text"}
