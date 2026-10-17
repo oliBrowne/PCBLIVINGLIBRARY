@@ -29,7 +29,9 @@ class LiveHTTP:
     """No cache, no retries: one plain request per check (the providers' own headers are used)."""
     def __init__(self, timeout=30):
         import requests
+        from .httpcache import UA
         self.s, self.timeout = requests.Session(), timeout
+        self.s.headers["User-Agent"] = UA         # as ecadlib's own client: EasyEDA's CDN refuses python-requests' default
 
     def _do(self, method, url, body=None, headers=None):
         try:
@@ -58,7 +60,10 @@ def count_pads(kicad_mod):
 
 
 def count_pins(kicad_sym):
-    return len(sexpr.find(sexpr.parse(kicad_sym), "pin"))
+    """Pins at any depth: KiCad keeps them in the unit sub-symbols (NAME_1_1), not in the library or the symbol."""
+    def walk(node):
+        return sum((1 if c[0] == "pin" else 0) + walk(c) for c in node if isinstance(c, list) and c)
+    return walk(sexpr.parse(kicad_sym))
 
 
 def check_easyeda_answer(data, mpn, pads, pins):
