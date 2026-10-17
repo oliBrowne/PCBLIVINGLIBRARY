@@ -129,7 +129,8 @@ def test_easyeda_footprint_tht_slot_npth_polygon():
     assert sexpr.first(pads[0], "drill")[1] == "0.762"
     assert sexpr.first(pads[1], "drill")[1:] == ["oval", "0.762", "2.032"] and sexpr.first(pads[1], "at")[3] == "90"
     assert sexpr.first(pads[2], "size")[1:] == ["1.016", "1.016"]
-    assert any("polygon pad" in n for n in notes) and any("ARC x1" in n and "VIA x1" in n for n in notes), notes
+    assert any("polygon pad" in n for n in notes) and any("VIA x1" in n for n in notes), notes
+    assert len(list(sexpr.find(t, "fp_arc"))) == 1                       # a silk arc is converted (pin-1 notches)
     fp, _ = K.convert_footprint(EC.footprint_to_kicad(data, "THT"))
     assert [p.get("plated") for p in fp["pads"]] == [True, True, None, False, False]
 

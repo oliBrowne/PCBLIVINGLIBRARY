@@ -11,7 +11,7 @@ answers one rule of docs/footprint-rulebook.md and is noted, and nothing touches
   padshape  sharp rectangular SMD pads become rounded rectangles: radius 25 % of the short side, at most 0.25 mm
             (KLC F6.3, IPC-7351C)
   silk      silk drawn wholly inside an SMD body is removed (it is under the part)
-  pin1      a part with 3 or more pads and no silk mark near pad 1 (silk the same turned 180 degrees is no mark) gets a 0.2 mm silk dot beside pad 1, outside
+  pin1      a part with 3 or more pads and no silk mark near pad 1 (silk the same turned 180 degrees is no mark) gets a 0.3 mm silk dot beside pad 1, outside
             the body and 0.2 mm clear of copper
   polarity  a rectangular fab outline gets its pin-1 corner chamfered (1 mm or 25 % of the body, KLC F5.2)
 """
@@ -102,6 +102,70 @@ def _fab_rect(tree):
     return bb, items, rect
 
 
+SILK_KINDS = ("fp_line", "fp_circle", "fp_poly", "fp_arc", "fp_rect")
+
+
+def _width(it):
+    w = sexpr.first(sexpr.first(it, "stroke") or [], "width")
+    return _num(w[1]) if w else 0.0
+
+
+def _extent(it):
+    """Largest printed size of a drawing item: its bounding box plus the line width."""
+    bb = _bbox(_pts(it))
+    return max(bb[2] - bb[0], bb[3] - bb[1]) + _width(it)
+
+
+def _covers(o, it, tol=1e-3):
+    """True when line o lies along line it and spans all of it."""
+    (ax, ay), (bx, by) = _pts(o)
+    L = math.hypot(bx - ax, by - ay)
+    if L < tol:
+        return False
+    ux, uy = (bx - ax) / L, (by - ay) / L
+    ts = []
+    for px, py in _pts(it):
+        if abs((px - ax) * uy - (py - ay) * ux) > tol:
+            return False
+        ts.append((px - ax) * ux + (py - ay) * uy)
+    return min(ts) >= -tol and max(ts) <= L + tol
+
+
+def _clear_rows(tree, pads, items):
+    """Dual-row parts: a silk outline whose edges run between the two pad rows but closer than SILK_CLEAR to them
+    is pulled in (both edges, symmetric about the pads' centre) -> the distance moved, or 0. Copper is not touched."""
+    for ax in (1, 0):                          # y (rows above and below) first, then x
+        lo = [p for p in pads if p["kind"] == "smd"]
+        if len(lo) < 4:
+            return 0
+        c = (min(p[("x", "y")[ax]] for p in lo) + max(p[("x", "y")[ax]] for p in lo)) / 2
+        half = lambda p: (p["w"], p["h"])[ax] / 2
+        rows = {}
+        for p in lo:
+            rows.setdefault(round(p[("x", "y")[ax]] - c, 3), []).append(p)
+        if len(rows) != 2 or sorted(rows)[0] != -sorted(rows)[1] or sorted(rows)[1] <= 0:
+            continue
+        inner = min(abs(k) - max(half(p) for p in ps) for k, ps in rows.items())
+        coords = [q[ax] - c for it in items for q in _pts(it)]
+        if not coords:
+            return 0
+        edge = max(abs(v) for v in coords)
+        if not (0 < edge < inner) or not any(abs(v + edge) < 1e-3 for v in coords):
+            continue
+        w = max((_width(it) for it in items), default=0.12)
+        new = inner - SILK_CLEAR - w / 2
+        if new >= edge - 1e-3 or new < 0.3:
+            continue
+        key = ("start", "mid", "end", "center")
+        for it in items:
+            for k in key:
+                n = sexpr.first(it, k)
+                if n and abs(abs(_num(n[1 + ax]) - c) - edge) < 1e-3:
+                    n[1 + ax] = _fmt(c + math.copysign(new, _num(n[1 + ax]) - c))
+        return round(edge - new, 3)
+    return 0
+
+
 def _stroke(w):
     return ["stroke", ["width", _fmt(w)], ["type", "solid"]]
 
@@ -137,16 +201,48 @@ def tidy(text, notes=None):
     if rounded:
         notes.append(f"pads: {rounded} sharp SMD rectangle(s) given rounded corners (25 % of the short side, at most 0.25 mm; KLC F6.3)")
 
-    # silk wholly under an SMD body is hidden by the part
+    silk_items = lambda: [it for it in tree if isinstance(it, list) and it and it[0] in SILK_KINDS and _layer(it) == "F.SilkS" and _pts(it)]
+
+    # silk specks (EasyEDA's 0.06 mm "polarity" circles) are too small to print or to read as a mark
+    specks = [it for it in silk_items() if _extent(it) < 0.15]
+    for it in specks:
+        tree.remove(it)
+    if specks:
+        notes.append(f"silk: {len(specks)} speck(s) under 0.15 mm removed (too small to print)")
+
+    # silk line width to KLC's 0.10-0.15 mm
+    widths = 0
+    for it in silk_items():
+        w = sexpr.first(sexpr.first(it, "stroke") or [], "width")
+        if w and not 0.1 - 1e-6 <= _num(w[1]) <= 0.15 + 1e-6:
+            w[1] = "0.12"
+            widths += 1
+    if widths:
+        notes.append(f"silk: {widths} item(s) set to 0.12 mm line width (KLC: 0.10-0.15 mm)")
+
+    # a dot or other closed shape wholly under an SMD body is hidden by the part (its outline lines stay)
     if smd and body:
         x0, y0, x1, y1 = body
         under = lambda q: x0 + 0.05 < q[0] < x1 - 0.05 and y0 + 0.05 < q[1] < y1 - 0.05
-        gone = [it for it in tree if isinstance(it, list) and it and it[0] in ("fp_line", "fp_circle", "fp_poly", "fp_arc", "fp_rect")
-                and _layer(it) == "F.SilkS" and _pts(it) and all(under(q) for q in _pts(it))]
+        gone = [it for it in silk_items() if it[0] in ("fp_circle", "fp_poly") and _extent(it) < 1.5 and all(under(q) for q in _pts(it))]
         for it in gone:
             tree.remove(it)
         if gone:
-            notes.append(f"silk: {len(gone)} item(s) under the part body removed (hidden once the part is placed)")
+            notes.append(f"silk: {len(gone)} mark(s) under the part body removed (hidden once the part is placed)")
+
+    # silk segments another silk line already covers (EasyEDA draws some outlines twice)
+    lines = [it for it in silk_items() if it[0] == "fp_line"]
+    dup = [it for it in lines if any(o is not it and _covers(o, it) and not (_covers(it, o) and lines.index(o) > lines.index(it))
+                                     for o in lines)]
+    for it in dup:
+        tree.remove(it)
+    if dup:
+        notes.append(f"silk: {len(dup)} duplicate segment(s) removed (drawn twice)")
+
+    # silk outline edges that run along a pad row too close to it are moved in to 0.2 mm clearance
+    moved = _clear_rows(tree, pads, [it for it in silk_items() if it[0] in ("fp_line", "fp_arc")])
+    if moved:
+        notes.append(f"silk: outline moved in {moved} mm to clear the pads by {SILK_CLEAR} mm")
 
     # pin 1 mark on silk, outside the body and clear of copper
     if pin1 and len(numbered) >= 3:
@@ -159,19 +255,20 @@ def tidy(text, notes=None):
         near1 = [q for q in silk if math.hypot(q[0] - pin1["x"], q[1] - pin1["y"]) <= reach and not twin(q)   # a symmetric
                  and all(math.hypot(q[0] - pin1["x"], q[1] - pin1["y"]) < math.hypot(q[0] - o["x"], q[1] - o["y"]) for o in others)]
         if not near1:
-            r = 0.1
+            r, sw = 0.09, 0.12                   # filled: 0.3 mm across, drawn with a KLC silk width
+            R = r + sw / 2
             cx, cy = ((body[0] + body[2]) / 2, (body[1] + body[3]) / 2) if body else (0.0, 0.0)
             ox, oy = (1 if pin1["x"] > cx else -1), (1 if pin1["y"] > cy else -1)
-            d = SILK_CLEAR + r + 0.06
+            d = SILK_CLEAR + R + 0.02
             cands = [(pin1["x"] + ox * (pin1["w"] / 2 + d), pin1["y"]), (pin1["x"], pin1["y"] + oy * (pin1["h"] / 2 + d)),
                      (pin1["x"] + ox * (pin1["w"] / 2 + d), pin1["y"] + oy * (pin1["h"] / 2 + d))]
-            inbody = lambda x, y: body and body[0] - r <= x <= body[2] + r and body[1] - r <= y <= body[3] + r
-            spot = next(((x, y) for x, y in cands if not inbody(x, y) and all(_pad_gap(x, y, p) >= SILK_CLEAR + r for p in pads)), None)
+            inbody = lambda x, y: body and body[0] - R <= x <= body[2] + R and body[1] - R <= y <= body[3] + R
+            spot = next(((x, y) for x, y in cands if not inbody(x, y) and all(_pad_gap(x, y, p) >= SILK_CLEAR + R for p in pads)), None)
             if spot:
                 x, y = spot
-                tree.append(["fp_circle", ["center", _fmt(x), _fmt(y)], ["end", _fmt(x + r), _fmt(y)], _stroke(2 * r),
+                tree.append(["fp_circle", ["center", _fmt(x), _fmt(y)], ["end", _fmt(x + r), _fmt(y)], _stroke(sw),
                              ["fill", "solid"], ["layer", Q("F.SilkS")]])
-                outer = (min(outer[0], x - 2 * r), min(outer[1], y - 2 * r), max(outer[2], x + 2 * r), max(outer[3], y + 2 * r))
+                outer = (min(outer[0], x - R), min(outer[1], y - R), max(outer[2], x + R), max(outer[3], y + R))
                 notes.append(f"silk: pin 1 dot added beside pad {pin1['num']} (no pin 1 mark was visible on silk)")
 
     # polarity: chamfer the fab outline's pin-1 corner

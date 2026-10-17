@@ -86,3 +86,46 @@ def test_two_pad_parts_and_tht_left_alone():
     assert not list(sexpr.find(t, "fp_circle"))
     tht = chip.replace("smd rect", "thru_hole rect").replace("(attr smd)", "(attr through_hole)")
     assert all(p[3] == "rect" for p in sexpr.find(sexpr.parse(T.tidy(tht, [])), "pad"))
+
+
+def _soic8_easyeda_shapes():
+    """Shaped like EasyEDA's SOIC-8 (C7593, NE555DR) in Oliver's PR #29 Altium run, written out here by hand: pads
+    in rows above and below, a body region on layer 99, the silk outline drawn twice (whole edges plus segments
+    between the pads) 0.1 mm from the pads, a notch ARC, a pin-1 CIRCLE inside the outline and a 0.06 mm speck
+    on layer 101. Units are EasyEDA's 10 mil, origin 4000,3000."""
+    s = [f"PAD~OVAL~{3992.5 + 5 * i}~3010.236~2.315~7.0866~1~~{i + 1}~0~~0~p{i}~0~~Y" for i in range(4)]
+    s += [f"PAD~OVAL~{3992.5 + 5 * i}~2989.764~2.315~7.0866~1~~{8 - i}~0~~0~q{i}~0~~Y" for i in range(4)]
+    s.append("SOLIDREGION~99~~M 3990.3543 3007.6772 L 3990.3543 2992.3228 L 4009.6457 2992.3228 L 4009.6457 3007.6772 Z ~solid~b~~~~0")
+    s.append("SOLIDREGION~100~~M 3991.67 3011.81 L 3991.67 3008.52 L 3993.33 3008.52 L 3993.33 3011.81 Z ~solid~l~~~~0")
+    for y in (3005.9898, 2994.0102):
+        s.append(f"TRACK~0.5906~3~~3990.0543 {y} 4009.9457 {y}~e~0")
+        s += [f"TRACK~0.5906~3~~{a} {y} {b} {y}~s~0" for a, b in ((3991.86, 3990.0543), (3996.86, 3993.14), (4001.86, 3998.14),
+                                                                  (4006.86, 4003.14), (4009.9457, 4008.14))]
+    s += ["TRACK~0.5906~3~~3990.0543 3001.7141 3990.0543 3005.9898~v1~0", "TRACK~0.5906~3~~3990.0543 2998.2327 3990.0543 2994.0102~v2~0",
+          "TRACK~0.5906~3~~4009.9457 2994.0102 4009.9457 3005.9898~v3~0",
+          "ARC~0.5906~3~~M3990.0543,3001.7141 A1.7407,1.7407 0 1 0 3990.0543,2998.2327~~a~0",
+          "CIRCLE~3992.5~3004~0.591~1.1811~3~dot~0~~", "CIRCLE~3990.354~3011.811~0.118~0.2362~101~speck~0~~"]
+    return {"head": {"x": 4000, "y": 3000}, "shape": s}
+
+
+def test_easyeda_soic_from_the_altium_run():
+    """PR #29 in Altium: the pin-1 dot stayed inside the outline, the silk was 0.1 mm from the pads and drawn twice."""
+    notes = []
+    raw = EC.footprint_to_kicad(_soic8_easyeda_shapes(), "SOIC-8_EE", notes)
+    t = sexpr.parse(raw)
+    assert any(x for x in sexpr.find(t, "fp_arc") if sexpr.first(x, "layer")[1] == "F.SilkS")                 # notch kept
+    mid = sexpr.first(next(sexpr.find(t, "fp_arc")), "mid")
+    assert -2.2 < float(mid[1]) < -2.0, mid                                                                 # bowing into the body
+    assert len([x for x in sexpr.find(t, "fp_line") if sexpr.first(x, "layer")[1] == "F.Fab"]) == 4             # body region
+    assert any("SOLIDREGION on layer 100 x1" in n for n in notes), notes
+    once = T.tidy(raw, notes)
+    t = sexpr.parse(once)
+    silk = [x for x in t if isinstance(x, list) and x and x[0].startswith("fp_") and x[0] != "fp_text" and sexpr.first(x, "layer")[1] == "F.SilkS"]
+    dots = [x for x in silk if x[0] in ("fp_circle", "fp_poly")]
+    assert len(dots) == 1 and dots[0][0] == "fp_circle", dots                                               # inner dot + speck gone, ours added
+    c = sexpr.first(dots[0], "center")
+    assert float(c[1]) < -2.45 and float(c[2]) > 2.0, c                                                     # beside pad 1, outside the body
+    assert len([x for x in silk if x[0] == "fp_line"]) == 5                                                 # duplicates gone
+    issues = {(lvl, r) for lvl, r, _ in FR.check(once)}
+    assert not {("warning", "silk"), ("warning", "fab"), ("warning", "text"), ("warning", "polarity")} & issues, FR.check(once)
+    assert T.tidy(once, []) == once
