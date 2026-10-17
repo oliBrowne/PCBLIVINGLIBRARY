@@ -90,7 +90,7 @@ def check_packages(find_spec=importlib.util.find_spec, which=shutil.which, rules
 
 def key_services(rules=None):
     """[(service, [env var names], what it unlocks)] - the names come from the rules where the rules name them."""
-    ds = ((rules or {}).get("datasheet") or {}).get("api_key_env") or "ANTHROPIC_API_KEY"
+    ds = _ai_key_env(rules)
     gh = ((rules or {}).get("agent") or {}).get("github_token_env") or "GITHUB_TOKEN"
     out = [("anthropic", [ds], "datasheet reader and visual check")] if _ai_provider(rules) == "anthropic" else []
     out += [("altium365", ["NEXAR_TOKEN"], "Altium 365 push / pull")]
@@ -101,6 +101,19 @@ def key_services(rules=None):
         pass
     out.append(("github", [gh], "library agent PRs, upkeep issues"))
     return out
+
+
+def _ai_key_env(rules):
+    """The variable the Claude key is read from: [datasheet] api_key_env, or [ai] api_key_env when [datasheet] keeps
+    its default (as datasheet.require_key and ecadlib.llm.endpoint read it)."""
+    try:
+        from . import llm as LL
+        ep = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")
+        if ep["provider"] == "anthropic" and ep["key_env"]:
+            return ep["key_env"]
+    except Exception:
+        pass
+    return ((rules or {}).get("datasheet") or {}).get("api_key_env") or "ANTHROPIC_API_KEY"
 
 
 def _ai_provider(rules):

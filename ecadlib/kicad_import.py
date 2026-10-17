@@ -620,7 +620,7 @@ def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=Fal
         from . import step_gen
         try:
             generic = src == "default table"            # step_gen's per-family table is more specific (R vs C 0603)
-            data, info = step_gen.generate(spec or t[1], None if generic else h, name=fp["name"])
+            data, info = step_gen.generate(spec or t[1], None if generic else h, name=fp["name"], pads=fp["pads"])
         except ValueError as e:
             notes.append(f"3D: no generated STEP ({e})")
         else:

@@ -348,6 +348,28 @@ def test_menu_part_goes_to_the_table_its_source_names():
     assert got["STM32F103C8T6"] == "ICs" and got["IRS2003"] == "ICs", got
     assert X.kind_of(["Chip Resistor - Surface Mount"]) == "Resistors"
     assert X.kind_of(["Resistor Networks & Arrays", "Capacitive touch sensor"]) is None
+    # what the real run's triage held for C98220: LCSC's long text and a bare "0603" package
+    lcsc = "'-55℃~+155℃ 100mW 10kΩ 75V Thick Film Resistor ±1% ±100ppm/℃ 0603 Chip Resistor - Surface Mount ROHS"
+    assert X.kind_of(["", lcsc], ["", "", "0603"]) == "Resistors"
+    assert X.kind_of(["Gate driver IC, 600V half bridge - SOIC-8"]) is None
+    assert X.kind_of([lcsc]) is None                    # the noun alone is not enough: an LDO "stable with ceramic
+    assert X.kind_of(["LDO regulator, stable with ceramic output capacitors"], ["", "", "SOT-223"]) is None  # capacitors"
+
+
+def test_lcsc_number_footprint_is_not_a_chip_capacitor():
+    # an EasyEDA part's footprint is named by its LCSC number: easyeda:C7593 is an NE555, not "C" + a 4-digit size
+    for fp in ("easyeda:C7593", "easyeda:C6186", "LCSC:C1525", "C2002", "easyeda:C1206"):
+        assert X.kind_of([], [fp]) is None, fp
+    rows = X.to_rows([{"designator": "U1", "mpn": "NE555DR", "value": "NE555DR", "footprint": "easyeda:C7593"}])
+    assert list(rows) == ["ICs"], list(rows)
+    for fp, cat in (("C0603", "Capacitors"), ("R0402", "Resistors"), ("L1008", "Inductors"),
+                    ("Capacitor_SMD:C_0805_2012Metric", "Capacitors"), ("R_01005_0402Metric", "Resistors")):
+        assert X.kind_of([], [fp]) == cat, fp
+    # an IC package outranks the words: a digipot / matched pair / ESD array is an IC
+    assert X.kind_of(["Precision Matched Resistors"], ["SOT-23"]) is None
+    assert X.kind_of(["Programmable Resistor"], ["", "MSOP-10"]) is None
+    assert X.kind_of(["ESD Protection for Connector"], ["Package_TO_SOT_SMD:SOT-23-6"]) is None
+    assert X.kind_of(["USB Connectors"], ["SMD"]) == "Connectors"
 
 
 if __name__ == "__main__":

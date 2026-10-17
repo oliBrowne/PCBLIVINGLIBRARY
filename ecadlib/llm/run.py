@@ -48,9 +48,10 @@ def _better(k1, w1, k2, w2):
     return R.rank(k2) < R.rank(k1) or (R.rank(k2) == R.rank(k1) and len(w2) <= len(w1))
 
 
-def ask(job, inf, send, judge, client=None, allow_feedback=True):
+def ask(job, inf, send, judge, client=None, allow_feedback=True, guard=None):
     """send(body) -> answer for this endpoint (Messages shape; a parse failure is still returned as the answer).
-    judge(msg) -> (ok | incomplete | failed | refused | truncated, reasons)."""
+    judge(msg) -> (ok | incomplete | failed | refused | truncated, reasons). guard(body) raises DatasheetError when
+    the feedback turn would go over [datasheet] max_cost_usd: the first answer is then kept, nothing more is sent."""
     p, prof = inf["plan"], inf["prof"]
     schema = job["body"]["output_config"]["format"]["schema"]
     notes, rec = [], {"tier": p["tier"], "assist": p["assist"], "profile": {k: prof.get(k) for k in
@@ -69,6 +70,8 @@ def ask(job, inf, send, judge, client=None, allow_feedback=True):
         if kind == "failed" and fb:
             from ..datasheet import DatasheetError
             try:
+                if guard:
+                    guard(job["body"])
                 ext2, u2 = R.redo_step(client, job["body"], prof, p, ctx, steps, ext, why, notes)
                 msg2 = _synth(ext2, R.add_usage(usage, u2), job["body"]["model"], served)
                 kind2, why2 = judge(msg2)
@@ -82,8 +85,16 @@ def ask(job, inf, send, judge, client=None, allow_feedback=True):
         msg = R.repair_message(send(body), schema, p)
         if fb:
             kind, why = judge(msg)
-            if kind == "failed":
-                msg2 = R.repair_message(send(R.feedback_body(body, msg, why)), schema, p)
+            fbody = R.feedback_body(body, msg, why) if kind == "failed" else None
+            if fbody is not None and guard:
+                from ..datasheet import DatasheetError
+                try:
+                    guard(fbody)
+                except DatasheetError as e:           # over the cost cap: keep the first answer, send nothing more
+                    rec["feedback"] = {"errors": why[:15], "before": kind, "after": f"not sent: {e}"[:300], "kept": "first"}
+                    fbody = None
+            if fbody is not None:
+                msg2 = R.repair_message(send(fbody), schema, p)
                 kind2, why2 = judge(msg2)
                 keep = _better(kind, why, kind2, why2)
                 rec["feedback"] = {"errors": why[:15], "before": kind, "after": kind2, "kept": "retry" if keep else "first"}
@@ -109,7 +120,7 @@ def provenance(inf, msg=None, route=None, pages_picked=False):
     ran = ["checks_gate", "units_in_code", "geometry_in_code", "provenance"]
     if pages_picked:
         ran.append("page_picking")
-    if rec.get("feedback"):
+    if rec.get("feedback") and not str(rec["feedback"].get("after", "")).startswith("not sent"):
         ran.append("feedback_retry")
     if route and len(route.get("attempts") or []) > 1:
         ran.append("escalation")

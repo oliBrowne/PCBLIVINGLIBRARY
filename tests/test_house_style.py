@@ -331,6 +331,49 @@ def test_librarian_follows_the_house_style():
                 assert not styled
 
 
+def test_thin_layer_evidence_is_not_written():
+    """Regression (Altium AD26, `style learn --from <Altium's example libraries> --write-rules`): 1 of 48 footprints
+    had a .Designator (on Mechanical 5) and it was learned as layers.designator = Mechanical5 "high (100%)"; the
+    courtyard was learned onto Mechanical 5 with the 3D bodies. Every new footprint then had no silk designator and
+    the release check passed. Now: low confidence, not written (listed as a comment), courtyard never on the body
+    layer, and the release check warns about a footprint with no designator on the overlay."""
+    from ecadlib import release_check as RC
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        lib = RF.sparse_designator_library(d / "src")
+        (d / "ecadlib.toml").write_text("")
+        rc, out = quiet(H.main, ["--rules", str(d / "ecadlib.toml"), "--profile", str(d / "house_style.json"), "learn",
+                                 "--from", str(lib), "--write-rules", "--force"])
+        assert rc == 0, out
+        got = {s["key"]: s for s in H.load(path=d / "house_style.json")["settings"]}
+        assert got["layers.designator"]["level"] == "low" and got["layers.body3d"]["value"] == "Mechanical5", got
+        assert got.get("layers.courtyard", {}).get("value") != "Mechanical5", got["layers.courtyard"]
+        text = (d / "ecadlib.toml").read_text()
+        rules = RU.load(str(d / "ecadlib.toml"))
+        assert rules["layers"]["designator"] == "TopOverlay" and rules["layers"]["courtyard"] != rules["layers"]["body3d"], rules["layers"]
+        assert '#   layers.designator = "Mechanical5"' in text and "only 1 of 48" in text, text
+        # a new footprint written with these rules has its designator on silk; the release check is quiet about it
+        fp, _ = RF.footprint(RF.chip_spec("R", "0603"), "RESC1608X55N")
+        sym = AL.resistor_symbol("R10K", footprint="RESC1608X55N")
+        AL.write_schlib(d / "s.SchLib", [sym])
+        item = {"name": "R10K", "folder": "Passives/Resistors", "description": "10k 0603", "parameters": [],
+                "symbol": {"ref": "R10K", "file": "s.SchLib"}, "footprint": {"ref": "RESC1608X55N", "file": "f.PcbLib"}}
+        no_silk_ref = lambda warns: [w for w in warns if "no .Designator on Top / Bottom Overlay" in w]
+        AL.write_pcblib(d / "f.PcbLib", [fp], RU.layers(rules))
+        texts = [r for r in AL.read_pcblib(d / "f.PcbLib")[0]["records"] if r["type"] == "text"]
+        assert [r["layer"] for r in texts if r["text"] == ".Designator"] == [AL.TOP_OVERLAY], texts
+        _, warns, _ = RC.check_item(item, d, rules)
+        assert not no_silk_ref(warns), warns
+        # the old learned rules (designator on Mechanical 5): the release check now says so
+        AL.write_pcblib(d / "f.PcbLib", [fp], dict(RU.layers(rules) or {}, designator=RU.layer_id("Mechanical5")))
+        _, warns, _ = RC.check_item(item, d, rules)
+        assert any("Mechanical5" in w for w in no_silk_ref(warns)), warns
+    with tempfile.TemporaryDirectory() as td:          # every footprint agrees, but the library has silk on the overlay
+        prop = H.I.propose([RF.sparse_designator_library(td, designator_on_all=True)])
+        s = {x["key"]: x for x in prop["settings"]}["layers.designator"]
+        assert s["level"] == "low" and "designator" not in prop["rules"].get("layers", {}), s
+
+
 if __name__ == "__main__":
     for k, v in list(globals().items()):
         if k.startswith("test_"):

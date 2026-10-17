@@ -186,6 +186,26 @@ def style_kicad(d):
     return [d], expect
 
 
+def sparse_designator_library(d, n=48, designator_on_all=False):
+    """Like Altium's own example libraries (found in AD26): n footprints, the courtyard outline and the 3D bodies on the
+    same Mechanical 5, and only ONE footprint (or every one, designator_on_all) with a .Designator (on Mechanical 5)
+    and a .Comment (on Mechanical 2); the rest carry no strings. Silkscreen lines are on the Top Overlay."""
+    d = Path(d)
+    lay = {"courtyard": RU.layer_id("Mechanical5"), "body3d": RU.layer_id("Mechanical5"),
+           "assembly": RU.layer_id("Mechanical2"), "designator": RU.layer_id("Mechanical5")}
+    sizes = [chip_spec(k, s) for k in ("R", "C") for s in ("0402", "0603", "0805", "1206")]
+    fps = []
+    for i in range(n):
+        fp, _ = footprint(sizes[i % len(sizes)], f"EXAMPLE_{i:02d}")
+        if i and not designator_on_all:
+            fp["texts"] = []
+        fps.append(fp)
+    assert any(t[0] == ".Designator" for t in fps[0].get("texts", [])), "the writer's footprints carry a .Designator"
+    (d / "PcbLib").mkdir(parents=True, exist_ok=True)
+    AL.write_pcblib(d / "PcbLib" / "Examples.PcbLib", fps, lay)
+    return d
+
+
 STYLES = {"altium_classic": style_altium_classic, "glued_dblib": style_glued_dblib, "mpn_a365": style_mpn_a365, "kicad": style_kicad}
 
 

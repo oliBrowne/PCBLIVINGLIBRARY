@@ -20,7 +20,7 @@ from pathlib import Path, PureWindowsPath
 import pandas as pd
 
 from .altium_lib import file_stem, lib_name
-from .bom_triage import read_bom
+from .bom_triage import placeholder_mpn, read_bom
 from .kicad_index import package_of
 
 COLUMNS = ["Part Number", "Library Ref", "Library Path", "Footprint Ref", "Footprint Path",
@@ -38,19 +38,29 @@ GENERIC_SYMBOL = {"Resistors": "Resistor", "Capacitors": "Capacitor", "Inductors
 KIND_WORDS = (("Resistors", r"resistors?"), ("Capacitors", r"capacitors?"), ("Inductors", r"inductors?|ferrite beads?"),
               ("Crystals", r"crystals?"), ("Connectors", r"connectors?"))
 KIND_FP = {"R": "Resistors", "C": "Capacitors", "L": "Inductors"}
+IC_PACKAGE = (r"(?i)(?:SOT|SOIC|H?T?SSOP|V?SSOP|MSOP|SOP|[VWU]?QFN|[VWU]?DFN|[VWU]?SON|[LT]?QFP|F?BGA|LGA|W?LCSP|"
+              r"P?DIP|TO-|SC-?70|SOD)")
+CHIP_SIZES = "01005|0201|0402|0603|0805|1008|1206|1210|1812|2010|2220|2512"
 
 
 def kind_of(descriptions=(), footprints=()):
     """Resistors / Capacitors / Inductors / Crystals / Connectors from a source's category words or a chip
     footprint, else None."""
-    for d in descriptions:
-        head = re.split(r",|;| - ", re.sub(r"\([^)]*\)", "", str(d or "")), maxsplit=1)[0].strip()
+    semi = any(re.match(IC_PACKAGE, str(f or "").rpartition(":")[2].strip()) for f in footprints)
+    for d in descriptions if not semi else ():  # an SOT-23 / MSOP part is not filed by its words ("Precision
+        parts = [p.strip() for p in re.split(r",|;| - ", re.sub(r"\([^)]*\)", "", str(d or "")))]
         for cat, rx in KIND_WORDS:
-            if re.fullmatch(rf"(?:[\w/&-]+\s+){{0,3}}(?i:{rx})(?:\s+[A-Z]{{2,5}})?", head):
+            if re.fullmatch(rf"(?:[\w/&-]+\s+){{0,3}}(?i:{rx})(?:\s+[A-Z]{{2,5}})?", parts[0]):
+                return cat                  # Matched Resistors", "Programmable Resistor" are ICs)
+    if any(re.fullmatch(CHIP_SIZES, str(f or "").strip()) for f in footprints):
+        for cat, rx in KIND_WORDS[:3]:      # a bare chip size (LCSC's package "0603") and the noun anywhere in the
+            if any(re.search(rf"\b(?i:{rx})\b", str(d or "")) for d in descriptions):     # text: "... Chip Resistor"
                 return cat
-    for f in footprints:
-        if re.match(r"^([RCL])(?:\d{4}|_\d{4}_\d{4}Metric)(?:_|$)", str(f or "").split(":")[-1].split(" ")[0]):
-            return KIND_FP[str(f).split(":")[-1][0]]
+    for f in footprints:                    # not "easyeda:C7593": that is an LCSC part number (an NE555), not C 7593
+        lib, _, name = str(f or "").rpartition(":")
+        if lib.lower() not in ("easyeda", "lcsc") and re.match(
+                rf"^([RCL])(?:{CHIP_SIZES}|_(?:{CHIP_SIZES})_\d{{4,5}}Metric)(?:_|$)", name.split(" ")[0]):
+            return KIND_FP[name[0]]
     return None
 
 
@@ -70,6 +80,8 @@ def to_rows(lines, triage=None, rules=None):
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
         cat = CATEGORY.get(prefix.group(0) if prefix else "U", "Misc")
         mpn, lcsc = ln.get("mpn", ""), ln.get("lcsc", "")
+        if placeholder_mpn(mpn):               # 'N/A' / '-' names no part: two such lines are two parts, not one
+            mpn = ""
         fp = ln.get("footprint", "")
         t = tri.get(mpn)
         ref, kind = (prefix.group(0) if prefix else "U"), None
@@ -87,8 +99,9 @@ def to_rows(lines, triage=None, rules=None):
         if custom:
             f = RU.line_fields(ln, cat, pkg, rules, ref)
             pn = (RU.component_name(f, rules) or ln.get("designator", "").split(",")[0]).replace(" ", "")
-        else:
-            pn = (f"{cat[:3].upper()}-{pkg}-{value}" if cat in GENERIC_SYMBOL and value and not (kind and value == mpn)
+        else:                                         # an empty token drops out with its dash: IND-10uH, not IND--10uH
+            pn = ("-".join(t for t in (cat[:3].upper(), pkg, value) if t)
+                  if cat in GENERIC_SYMBOL and value and not (kind and value == mpn)
                   else mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
         if seen.setdefault(pn, mpn) != mpn:      # same synthetic PN, different part (e.g. 100nF 16V vs 50V): keep both
             pn = f"{pn}-{mpn}".replace(" ", "")

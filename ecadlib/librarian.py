@@ -219,7 +219,8 @@ def _line_for(item, lines, rows):
     want = {AL.lib_name(str(x).split(":")[-1]) for x in (fp.get("kicad"), fp.get("bom_ref"), fp.get("ref")) if x}
     best, score = ({}, {}), None
     for ln, row in zip(lines, rows):
-        if (mpn and ln.get("mpn") == mpn) or (not mpn and not ln.get("mpn") and ln.get("value", "") == val):
+        lm = "" if T.placeholder_mpn(ln.get("mpn")) else ln.get("mpn")    # 'N/A': planned without an MPN (altium_export)
+        if (mpn and lm == mpn) or (not mpn and not lm and ln.get("value", "") == val):
             fps = {AL.lib_name(str(x).split(" ")[0].split(":")[-1]) for x in (ln.get("footprint"), row.get("local_footprint")) if x}
             s = (not ln.get("dnp") and not str(row.get("status") or "").startswith("dnp"), bool(fps & want))
             if score is None or s > score:

@@ -24,6 +24,10 @@ Families (package_schema.json `package_type`, else parsed from the footprint nam
 EasyEDA / LCSC names are read too: SOIC-8_L5.0-W4.0-P1.27-LS6.0-BL (body L along the pin rows x W, pitch P, lead span
 LS; gullwing, SOT-23-3/-5, QFP), QFN-32_L5.0-W5.0-P0.50-BL-EP3.4 (qfn/dfn), R0603 / C0402 / LED0603 (imperial chips).
 Their footprints draw the pin rows along x (pin 1 bottom left), so those models are turned 90 degrees (spec rotation).
+Also SOT-23_L.. / SOT-323_L.. (no pin count: the family's standard count), SOT-223(-3)_L.. (3 leads + tab) and
+SOD-123F_L2.7-W1.6-LS3.8 (2 leads; F flat). Some EasyEDA footprints with these names are drawn turned another way, so
+when the footprint's pads are known (generate(pads=), kicad_import.add_body) the model is turned to put each lead on
+its pad (fit_rotation).
 Height: --height, else the spec's height_max, else the CP_EIA-xxxx-HH suffix, else HEIGHT below, else the middle
 of release_check.HEIGHTS for the family.
 
@@ -50,7 +54,7 @@ HEIGHT = [(r"^R_0201", 0.26), (r"^R_0402", 0.35), (r"^R_0603", 0.45), (r"^R_0805
           (r"^L_0402", 0.5), (r"^L_0603", 0.8), (r"^L_0805", 1.0), (r"^L_", 1.2), (r"^LED_0402", 0.4), (r"^LED_0603", 0.6),
           (r"^LED_0805", 0.8), (r"^LED_", 1.1), (r"^CP_EIA", 1.6), (r"^(D_)?SOD-?123", 1.17), (r"^(D_)?SOD-?323", 0.9),
           (r"^(D_)?SOD-?523", 0.6), (r"^(D_)?SM[ABC]\b", 2.3), (r"^SOT-223", 1.8), (r"^SOT-89", 1.5), (r"^SOT-?(323|363|353)", 0.95),
-          (r"^SOT-23", 1.1), (r"^(TSSOP|MSOP|VSSOP|HTSSOP|TSOP)", 1.1), (r"^SSOP", 1.75), (r"^(SOIC|[EH]?SOP|SO-)", 1.75),
+          (r"^SC-?70", 0.95), (r"^TSOT-23", 1.0), (r"^SOT-23", 1.1), (r"^(TSSOP|MSOP|VSSOP|HTSSOP|TSOP)", 1.1), (r"^SSOP", 1.75), (r"^(SOIC|[EH]?SOP|SO-)", 1.75),
           (r"(QFN|DFN|SON)", 0.8), (r"^LQFP", 1.6), (r"^TQFP", 1.2), (r"QFP", 2.0)]
 
 
@@ -511,7 +515,15 @@ IMPERIAL = {"0201": "0603", "0402": "1005", "0603": "1608", "0805": "2012", "100
             "1812": "4532", "2010": "5025", "2220": "5750", "2512": "6332"}             # EIA inch code -> metric code
 # EasyEDA / LCSC names: <family>-<pins>_L<body along the pin rows>-W<body across>-P<pitch>[-LS<lead span>][-BL|BR|TL..][-EP<w>[x<l>]]
 EASYEDA = re.compile(r"([A-Z][A-Z0-9-]*?)-(\d+)_L([\d.]+)-W([\d.]+)-P([\d.]+)(?:-LS([\d.]+))?(?:-[A-Z]{2})?(?:-EP([\d.]+)(?:[xX\-]([\d.]+))?)?")
-SOT_ODD = re.compile(r"(SOT-23|SOT-323|SOT-353|SOT-416|SOT-523|SC-59|SC-70|SC-88)$")      # 3 / 5 pins: 2+1 / 3+2 leads
+SOT_ODD = re.compile(r"T?(SOT-23|SOT-323|SOT-353|SOT-416|SOT-523|SC-59|SC-70|SC-88)$")    # 3 / 5 pins: 2+1 / 3+2 leads
+SOT_PINS = {"SOT-23": 3, "TSOT-23": 3, "SOT-323": 3, "SOT-353": 5, "SOT-363": 6, "SOT-563": 6}     # the family without a pin count
+# EasyEDA SOT-223 with 3 leads (SOT-223-3 or no count): one row of 3 leads, the tab on the other side
+EASYEDA_SOT223 = re.compile(r"SOT-223(?:-3)?_L([\d.]+)-W([\d.]+)-P([\d.]+)-LS([\d.]+)(?:-[A-Z]{2})?$")
+# EasyEDA two-lead diodes: SOD-123F_L2.7-W1.6-LS3.8-RD (L body along the leads, W across, LS lead span; F flat leads)
+EASYEDA_SOD = re.compile(r"(SOD-\d+)(F?)_L([\d.]+)-W([\d.]+)-LS([\d.]+)(?:-[A-Z]{2})?$")
+SOD_LEAD = {"SOD-123": (0.6, 0.4), "SOD-323": (0.3, 0.3)}               # lead width, foot length (D_SOD-123 / -323 specs)
+# two rows of gull-wing leads; not DIP-8 (through-hole), TO-252-2 / SOT-223 / SOT-89 (leads on one side and a tab)
+GULLWING_FAM = re.compile(r"(?:[A-Z]*SOP|[A-Z]*SOIC|SO|T?SOT-(?:23|26|323|353|363|416|523|563|666)|SC-(?:59|70|74|88))$")
 
 
 def _easyeda_spec(name, m):
@@ -537,6 +549,8 @@ def _easyeda_spec(name, m):
         return {"name": name, "package_type": "qfp", "pin_count": n, "pitch": e, "body_length": _d(W), "body_width": _d(L),
                 "lead_span": _d(LS), "lead_span_y": _d(round(LS - W + L, 3)), "terminal_width": _d(round(min(0.37, 0.45 * e), 3)),
                 "terminal_length": _d(0.6), "rotation": 90}
+    if not GULLWING_FAM.match(fam):
+        return None
     s = {"name": name, "package_type": "gullwing", "pin_count": n, "lead_span": _d(LS), "body_width": _d(W), "body_length": _d(L),
          "terminal_width": _d(round(min(0.42, 0.33 * e), 3)),
          "terminal_length": _d(round(min(0.8 if e >= 1.0 else 0.6, 0.7 * (LS - W) / 2), 2)), "rotation": 90}
@@ -550,6 +564,31 @@ def _easyeda_spec(name, m):
                              [{"number": "4", "side": "R", "offset": e}, {"number": "5", "side": "R", "offset": -e}]
     else:
         return None
+    return s
+
+
+def _easyeda_sot223(name, m):
+    """SOT-223 (TO-261AA): leads 1-3 in one row at pitch P, the tab (pin 2) opposite; turned like the other EasyEDA names."""
+    L, W, e, LS = (float(g) for g in m.groups())
+    if not (LS > W and 6.0 <= L <= 7.0 and 3.0 <= W <= 4.0 and abs(e - 2.3) < 0.05):       # not a SOT-223 outline
+        return None
+    return {"name": name, "package_type": "gullwing", "pin_count": 4, "lead_span": _d(LS), "body_width": _d(W), "body_length": _d(L),
+            "terminal_width": _d(0.75), "terminal_length": _d(round(min(1.0, 0.7 * (LS - W) / 2), 2)),
+            "pin_positions": [{"number": str(i + 1), "side": "L", "offset": (i - 1) * e} for i in range(3)],
+            "tab": {"number": "2", "side": "R", "offset": 0, "width": _d(3.0)}, "rotation": 90}
+
+
+def _easyeda_sod(name, m):
+    """SOD-123(F) / SOD-323(F): two leads along x, pin 1 (cathode) at -x like KiCad's D_SOD-123."""
+    fam, flat, L, W, LS = m.group(1), m.group(2), float(m.group(3)), float(m.group(4)), float(m.group(5))
+    if fam not in SOD_LEAD or LS <= L or W >= L:
+        return None
+    b, Lf = SOD_LEAD[fam]
+    s = {"name": name, "package_type": "gullwing", "pin_count": 2, "lead_span": _d(LS), "body_width": _d(L), "body_length": _d(W),
+         "terminal_width": _d(b), "terminal_length": _d(round(min(Lf, 0.7 * (LS - L) / 2), 2)), "polarized": True,
+         "pin_positions": [{"number": "1", "side": "L", "offset": 0}, {"number": "2", "side": "R", "offset": 0}]}
+    if flat:                                                  # SOD-123F / SOD-323F: flat leads, lower body
+        s.update(lead_type="flat", height_max={"SOD-123": 1.0, "SOD-323": 0.8}[fam])
     return s
 
 
@@ -577,6 +616,18 @@ def spec_from_name(name):
         km = f"{m.group(1)}_{m.group(2)}_{IMPERIAL[m.group(2)]}Metric"                # family height as for the KiCad name
         h = next((v for rx, v in HEIGHT if re.search(rx, km)), None)
         return dict(s, height_max=h) if h else s
+    if re.fullmatch(r"SOD-\d+", name) and (SPECS / f"D_{name}.json").exists():        # SOD-123 = KiCad's D_SOD-123
+        return dict(json.loads((SPECS / f"D_{name}.json").read_text()), name=name)
+    m = EASYEDA_SOT223.match(name)
+    if m:
+        return _easyeda_sot223(name, m)
+    m = EASYEDA_SOD.match(name)
+    if m:
+        return _easyeda_sod(name, m)
+    m = re.match(r"(T?SOT-\d+)(_L.*)$", name)                  # SOT-23_L2.9-...: the family's standard pin count
+    if m and m.group(1) in SOT_PINS:
+        m2 = EASYEDA.fullmatch(f"{m.group(1)}-{SOT_PINS[m.group(1)]}{m.group(2)}")
+        return _easyeda_spec(name, m2) if m2 else None
     m = EASYEDA.match(name)
     if m:
         return _easyeda_spec(name, m)
@@ -742,15 +793,61 @@ def build(spec, height=None):
     if not H:
         raise ValueError(f"{spec['name']}: no height (no height_max, no table entry); pass a height")
     solids = BUILDERS[t](spec, H)
-    if spec.get("rotation") == 90:                   # footprint drawn turned (EasyEDA): (x, y) -> (-y, x)
+    rot = int(spec.get("rotation") or 0) % 360       # footprint drawn turned (EasyEDA: 90): model turned counter-clockwise
+    if rot:
         for sol in solids:
-            sol.verts = [(-y + 0.0, x, z) for x, y, z in sol.verts]
+            sol.verts = [_turn(x, y, rot) + (z,) for x, y, z in sol.verts]
     return solids, {"family": t, "height": H, "height_src": src, "solids": len(solids)}
 
 
-def generate(src, height=None, name=None):
+def _turn(x, y, rot):
+    """(x, y) turned counter-clockwise by rot (0 / 90 / 180 / 270) degrees."""
+    return {0: (x, y), 90: (-y, x), 180: (-x, -y), 270: (y, -x)}[rot % 360]
+
+
+def _on_pad(cx, cy, p, slack=0.6):
+    w, h = (p["w"], p["h"]) if round(p.get("rot", 0) or 0) % 180 == 0 else (p["h"], p["w"])
+    if round(p.get("rot", 0) or 0) % 90:
+        w = h = max(p["w"], p["h"])
+    return abs(cx - p["x"]) <= w / 2 + slack and abs(cy - p["y"]) <= h / 2 + slack
+
+
+def fit_rotation(spec, pads):
+    """Rotation (0 / 90 / 180 / 270) that puts each lead of the model on the footprint pad with the same number, or None.
+    A footprint name does not fix the orientation: EasyEDA draws the same SOT-23-3_L2.9-W1.3-... with the pin rows
+    along x (C2002) or along y (C8545). The spec's own rotation is kept while its leads sit on their pads; another one
+    is returned only when all of its leads sit on their pads (and the spec's do not); None when no rotation fits."""
+    t = spec.get("package_type")
+    if t not in BUILDERS or not pads:
+        return None
+    try:
+        solids = BUILDERS[t](spec, float(spec.get("height_max") or 1.0))
+    except (KeyError, TypeError, IndexError, ZeroDivisionError, ValueError):
+        return None
+    by_num = {}
+    for p in pads:
+        if str(p.get("designator") or ""):
+            by_num.setdefault(str(p["designator"]), []).append(p)
+    leads = []
+    for sol in solids:
+        m = re.fullmatch(r"(?:pin|terminal) (\S+)", sol.name)
+        if m:
+            xs, ys = [v[0] for v in sol.verts], [v[1] for v in sol.verts]
+            leads.append((m.group(1), (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2))
+    if len(leads) < 2 or any(n not in by_num for n, _, _ in leads):
+        return None
+    def fits(rot):
+        return all(any(_on_pad(*_turn(cx, cy, rot), p) for p in by_num[n]) for n, cx, cy in leads)
+    own = int(spec.get("rotation") or 0) % 360
+    if fits(own):
+        return own
+    return next((r for r in (0, 90, 180, 270) if r != own and fits(r)), None)
+
+
+def generate(src, height=None, name=None, pads=None):
     """spec dict, spec .json path or footprint name -> (STEP text, info). Raises ValueError when the
-    footprint family is unknown."""
+    footprint family is unknown. pads: the footprint's pads (designator, x, y, w, h, rot; model coordinates, y up);
+    the model is then turned so its leads sit on them (fit_rotation), info["rotation"]."""
     if isinstance(src, dict):
         spec = src
     elif str(src).endswith(".json") and Path(src).exists():
@@ -759,6 +856,10 @@ def generate(src, height=None, name=None):
         spec = spec_from_name(str(src))
         if spec is None:
             raise ValueError(f"{src}: no package spec and the footprint name is not a known package family")
+    if pads:
+        rot = fit_rotation(spec, pads)
+        if rot is not None and rot != int(spec.get("rotation") or 0) % 360:
+            spec = dict(spec, rotation=rot)
     try:
         solids, info = build(spec, height)
         info["name"] = name or spec["name"]
@@ -768,7 +869,7 @@ def generate(src, height=None, name=None):
     rep = check(text)
     if rep["errors"]:
         raise ValueError(f"{info['name']}: generated STEP failed its own check: {rep['errors'][:3]}")
-    info.update(bbox=rep["bbox"], volume=rep["volume"], bytes=len(text))
+    info.update(bbox=rep["bbox"], volume=rep["volume"], bytes=len(text), rotation=int(spec.get("rotation") or 0) % 360)
     return text, info
 
 

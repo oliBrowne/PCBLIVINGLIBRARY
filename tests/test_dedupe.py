@@ -87,7 +87,7 @@ def _setup(d):
     fp, t = K.convert_footprint(SOIC, "COMPANY_SOIC8")
     K.add_body(fp, t, None, None)                             # with a 3D body, so the merged items still pass the release check
     AL.write_pcblib(lib / "COMPANY_SOIC8.PcbLib", [fp])
-    with sqlite3.connect(lib / "parts.sqlite") as con:
+    with contextlib.closing(sqlite3.connect(lib / "parts.sqlite")) as con, con:   # closed: Windows locks an open file
         con.execute('create table ICs ("Part Number", "Manufacturer Part Number", "Library Ref", "Footprint Ref")')
         con.execute("insert into ICs values ('ACME-0002', 'PART2-REEL7', 'PART2', 'SOIC-8')")
         con.execute("insert into ICs values ('PART1', 'PART1', 'PART1', 'SOIC-8')")    # same part as the plan item

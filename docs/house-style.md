@@ -30,6 +30,12 @@ In the web UI this is the **Settings: your house style** card. The MCP server ha
 | Active-low pin notation | an overbar (`~{RESET}` in KiCad, `R\E\S\E\T\` in Altium), `RESET#`, `/RESET`, `nRESET`, `RESET_N` | datasheet symbols use your notation |
 | Example parts | up to 8 real parts per category | the few-shot examples a model sees |
 
+Each setting from `ecadlib init` carries a confidence that counts how much of the library shows it: fewer than 3
+parts, footprints or symbols behind it, or a footprint layer seen in fewer than half of the footprints, is low.
+`--write-rules` leaves low settings out of `ecadlib.toml` (they are listed there as comments, and ecadlib's default
+stays). The courtyard is never learned onto the layer that holds the 3D bodies, and a `.Designator` on a mechanical
+layer is not proposed when the library has silkscreen on the overlay.
+
 Everything goes in `house_style.json` next to your `ecadlib.toml`. Commit it with the library so the whole team uses
 the same style. `ecadlib style show` prints what was learned.
 

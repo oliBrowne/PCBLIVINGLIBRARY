@@ -103,6 +103,9 @@ FREE_RE = re.compile(r"(?<![A-Z0-9])(?P<fam>" + "|".join(sorted(FAMILIES, key=le
 POWER_PKG = re.compile(r"Power ?PAK|PowerDI|PowerSO|PowerFLAT|LFPAK|DirectFET|PQFN|\bSO-?8FL|\bWDFN\d|TSDSON|SuperSO|TOLL|\bPDFN", re.I)
 MIL_BODY = {"150": 3.9, "208": 5.3, "209": 5.3, "300": 7.5}
 NO_GO = re.compile(r"\b(horizontal|lying|right[- ]angle|bent)\b", re.I)
+EP_WORD = re.compile(r"exposed[ _-]?pad|thermal[ _-]?pad|(?<![A-Z0-9])\d?EP(?![A-Z])|PowerPAD", re.I)
+# KiCad land variants (bigger hand-solder pads, vias in the exposed pad, other mask / pull-back): never the plain land
+LAND_VARIANT = re.compile(r"(?<![A-Za-z])(Hand[_ -]?Solder(?:ing)?|ThermalVias|PullBack|TopTented|Mask\d[\d.]*x[\d.]+mm)(?![A-Za-z])", re.I)
 
 
 # ---------------------------------------------------------------- the table
@@ -176,6 +179,13 @@ def chip_size(text):
         code = m.group(1)
         if code in IMPERIAL and not re.search(r"(?:RES|CAP|IND|LED|DIO|FUS)C$", t[:m.start()], re.I):
             found.add(code)
+    # a bare metric-only code next to an imperial one ('0603 (1005)', '0402 / 1608') must agree with it; alone it
+    # is not read (bare codes are imperial), so it can only turn a size into a conflict, never pick one
+    bare_metric = {METRIC[m.group(1)] for m in re.finditer(
+        r"(?<![0-9A-Za-z.])(\d{4,5})(?![0-9A-Za-z.])(?!\s*(?:mm|mil|V|W|K|R|nF|pF|uF|µF|Ω|ohm|%))", t, re.I)
+        if m.group(1) in METRIC and m.group(1) not in IMPERIAL}
+    if found and bare_metric - found:
+        found |= bare_metric
     return found.pop() if len(found) == 1 else ("conflict:" + "/".join(sorted(found)) if found else None)
 
 
@@ -282,6 +292,8 @@ def _candidates(a):
             continue
         if a["fam"] == "SOIC" and g["w"] != a["w"] and not a["body"]:
             continue
+        if a["w"] and not g["w"] and g["body"][0] < 4.0:   # 'SOIC-8W 3.9x4.9': W and a narrow body contradict
+            continue
         if a["body"] and not all(_close(x, y) for x, y in zip(g["body"], a["body"])):
             continue
         if a.get("body_w") and not _close(g["body"][0], a["body_w"]):
@@ -374,6 +386,8 @@ def named_package(text, diode=False, weak=False, kind=None):
             return None, f"{m.group(0).strip()}: a diode package name on a part that is not a diode"
         if name and name.startswith(("TO-220", "TO-92")) and NO_GO.search(str(text)):
             return None, f"{m.group(0).strip()}: horizontal mounting is not the standard footprint"
+        if name and EP_WORD.search(str(text)):         # 'SOT-23-5-EP': the table's package has no exposed pad
+            return None, f"{m.group(0).strip()} with an exposed pad: not the standard package (no pad under the body)"
         if name and name in packages():
             return name, f"{m.group(0).strip()} -> {name}"
     return None, None
@@ -394,7 +408,11 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
         if n:
             if NAME_RE.match(n) or not n.startswith(("R_", "C_", "L_", "LED_", "D_", "Fuse_")) or _chip_kind_ok(n, kind):
                 return n, f"KiCad name {n}"
-    if kind in CHIP_PREFIX:                               # chip passives: size from the texts, then the MPN
+    for t in texts:                                       # 'R_0603_1608Metric_Pad0.98x0.95mm_HandSolder', '..._ThermalVias':
+        v = LAND_VARIANT.search(t)                        # a land the table does not have; the plain one has other pads
+        if v:
+            return None, f"{_strip_lib(t).strip()}: the {v.group(1)} land variant is not in the standard table"
+    if kind in CHIP_PREFIX:                              # chip passives: size from the texts, then the MPN
         sizes = {}
         for t in texts + weak:
             s = chip_size(t)
@@ -639,7 +657,8 @@ def resolve(texts, kind=None, mpn="", description=""):
         fam = next((pk for rx, pk, _ in FAMILY if re.match(rx, _norm(mpn))), ())
         said = " ".join(map(str, texts)) + " " + str(description)
         hit = [p for p in fam if re.search(FAMILY_PKG[p], said, re.I)]
-        if len(hit) == 1 and not POWER_PKG.search(said) and not NO_GO.search(said):
+        if len(hit) == 1 and not POWER_PKG.search(said) and not NO_GO.search(said) and not LAND_VARIANT.search(said) \
+                and not EP_WORD.search(said):
             name, how = hit[0], f"{mpn}: its family comes in {hit[0]} (named as {re.search(FAMILY_PKG[hit[0]], said, re.I).group(0)})"
     sym, sym_how = symbol_kind(kind, mpn, name, description) if (name or kind in ("R", "C", "CP", "L", "LED")) else (None, "no standard package")
     return {"footprint": name, "fp_how": how, "kicad_ref": kicad_ref(name) if name else None, "symbol": sym, "sym_how": sym_how}

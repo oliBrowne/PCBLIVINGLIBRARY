@@ -88,7 +88,10 @@ def step_file(fp, k, body):
     """Where a body's embedded STEP model is written beside its PcbLib (relative, '/' separators): its own folder,
     so the file keeps the model's name and Altium embeds it under that name."""
     name = Path(str((body.get("step") or {}).get("name") or f"{AL.file_stem(fp['name'])}.step").replace("\\", "/")).name
-    return f"ecadlib_3d/{AL.file_stem(fp['name'])}_{k}/{_t(name)}"
+    stem = AL.file_stem(fp["name"])
+    if stem != AL.lib_name(fp["name"]):       # 'A/B' and 'A_B' would share a folder (and one STEP file): keep them apart
+        stem += "_" + hashlib.sha1(AL.lib_name(fp["name"]).encode("utf-8")).hexdigest()[:6]
+    return f"ecadlib_3d/{stem}_{k}/{_t(name)}"
 
 
 def footprint_lines(fp):
@@ -309,6 +312,16 @@ EDITED_NOTE = ("changed in Altium since ecadlib last built it: left as it is (db
 
 
 # ------------------------------------------------------------------ collecting a library folder
+def recipe_steps(lib_path):
+    """The STEP files the recipe next to a library names (ecadlib_3d/<footprint>_<n>/<model>, relative to the library's
+    folder, '/' separators); [] when it has no recipe."""
+    rp = Path(lib_path).with_name(Path(lib_path).name + EXT)
+    if not rp.is_file():
+        return []
+    return [f[4] for f in (ln.split("\t") for ln in rp.read_text(encoding="utf-8").splitlines())
+            if f[0] == "BODY" and len(f) > 4 and f[4]]
+
+
 def recipes(folder):
     """[(library path relative to folder, recipe path)] for every recipe under folder whose library exists."""
     folder = Path(folder)

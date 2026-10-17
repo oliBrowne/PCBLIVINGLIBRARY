@@ -36,6 +36,7 @@ from pathlib import Path, PureWindowsPath
 from . import altium_lib as AL
 from . import altium_native as AN
 from . import sheetsafe as SS
+from .hub_copy import _read_prj as read_ini_text      # (text, encoding) of an INI Altium saved
 from .altium_export import (COLUMNS, dblib_links, excel_connection, fieldmap_section, table_section)
 
 STATE = "ecadlib_sync.json"
@@ -58,6 +59,14 @@ def table_of(item):
     """Sheet name from the workspace folder (Components/Capacitors -> Capacitors); Excel's sheet name rules."""
     t = re.sub(r"[\[\]:*?/\\]", "_", (item.get("folder") or "Misc").rstrip("/").rsplit("/", 1)[-1]).strip("'")
     return (t or "Misc")[:31]
+
+
+def _steps(to, rel):
+    """The STEP files (paths relative to the library folder) the recipe of library <to>/<rel> names: the
+    ecadlib_3d/<stem>_<k>/ files altium_native writes beside a PcbLib."""
+    d = rel.split("/")[0]
+    return {f"{d}/{s}" for s in AN.recipe_steps(Path(to) / rel)
+            if s.startswith("ecadlib_3d/") and ".." not in s.split("/")}
 
 
 def plan_row(item, rules=None):
@@ -272,7 +281,8 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     """Bring <target_dir> in line with the plan. plan: a plan.json path, or its items (model paths absolute or
     relative to `base`). Returns {"results": [...], "written": [...], "removed": [...], "dblib": path, ...};
     results are {"name", "action", "detail", "table"} with action added/updated/up_to_date/held/skipped/error,
-    and not_in_plan/removed for rows (kind "row") and model files (kind "file") the plan no longer has.
+    and not_in_plan/removed for rows (kind "row") and model files (kind "file") the plan no longer has; a pruned
+    footprint's STEP files (ecadlib_3d/..., written by ecadlib) are results with kind "3d".
     A model file changed in Altium since ecadlib's copy was built there is left as it is (a note says so) unless
     overwrite_edits (ecadlib.altium_native, <file>.ecadstate)."""
     if mode not in EXT:
@@ -288,14 +298,15 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     old = read_tables(xlsx)
     tables = {t: (list(h), [dict(r) for r in rows]) for t, (h, rows) in old.items()}
     where = {r.get("Part Number"): t for t, (_, rows) in tables.items() for r in rows}
-    results, written, removed, copied, failed = [], [], [], {}, {}
+    results, written, removed, copied, failed, prune_steps = [], [], [], {}, {}, set()
 
     def find(pn, t):
         rows = tables.get(t, ([], []))[1]
         return next((r for r in rows if r.get("Part Number") == pn), None)
 
     for it in items:
-        res = {"name": it["name"], "action": "", "detail": "", "table": table_of(it)}
+        t0 = table_of(it)                                   # Excel sheet names ignore case: Passives = passives
+        res = {"name": it["name"], "action": "", "detail": "", "table": next((k for k in tables if k.lower() == t0.lower()), t0)}
         results.append(res)
         if it.get("status") == "held":
             res["action"], res["detail"] = "held", "; ".join(it.get("hold_reasons") or ["release check"])
@@ -327,9 +338,12 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
             if dst.exists() and dst.read_bytes() == data:
                 if not dry_run:
                     AN.copy_recipe(src, dst)
+                    managed_files.update(_steps(to, rel))
                 continue
             act = AN.replace_action(data, dst, overwrite_edits, save=not dry_run)
             if act == "keep":                               # Altium's build of these same bytes: leave it
+                if not dry_run:
+                    managed_files.update(_steps(to, rel))
                 continue
             if act == "edited":
                 notes.append(f"{rel} {AN.EDITED_NOTE}")
@@ -348,6 +362,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                     continue
                 os.replace(tmp, dst)
                 AN.copy_recipe(src, dst)            # what Altium rebuilds the file from (ecadlib.altium_native)
+                managed_files.update(_steps(to, rel))       # its STEP files are ecadlib's too: --prune removes them
             else:
                 err = _readback(src, d, ref)
                 if err:
@@ -423,24 +438,45 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                 res["action"] = "removed"
                 removed.append(rel)
                 managed_files.discard(rel)
+                steps = _steps(to, rel)             # read from its recipe before that is deleted
                 if not dry_run:
                     f.unlink()
+                    recipe = f.with_name(f.name + AN.EXT)      # else Altium's rebuild would make a file put here later
+                    if recipe.is_file():                       # from the recipe of the one pruned
+                        recipe.unlink()
+                prune_steps.update(steps)
             else:
                 res["detail"] = "no row uses it; kept (--prune deletes it)"
             results.append(res)
+    # the pruned footprints' STEP folders (ecadlib_3d/<stem>_<k>/): only files this tool wrote and no kept library
+    # names; a folder is removed only once empty, so anything the user put there stays (and keeps the folder)
+    keep = {s for _, d, _ in KINDS if d == "PcbLib" and (to / d).is_dir()
+            for f in (to / d).glob(f"*.{d}") if f"{d}/{f.name}" not in removed for s in _steps(to, f"{d}/{f.name}")}
+    for rel in sorted(prune_steps - keep):
+        if rel not in managed_files:
+            continue
+        managed_files.discard(rel)
+        if (to / rel).is_file():                # not in `removed`: svn never added them (svn delete would fail)
+            results.append({"name": rel, "action": "removed", "detail": "STEP model of a pruned footprint", "table": "",
+                            "kind": "3d"})
+            if not dry_run:
+                (to / rel).unlink()
+                for folder in ((to / rel).parent, (to / rel).parent.parent):
+                    if folder.name != "PcbLib" and folder.is_dir() and not any(folder.iterdir()):
+                        folder.rmdir()
     managed_files |= set(written)
     tables = {t: v for t, v in tables.items() if v[1] or t in old}  # never create an empty sheet
 
     # parts table, DbLib file, state: only rewritten when their content changes
     out = {"results": results, "written": written, "removed": removed, "dblib": str(lib), "mode": mode,
            "dry_run": dry_run}
-    def put(rel, text=None, writer=None):
+    def put(rel, text=None, writer=None, data=None):
         if not dry_run:
             to.mkdir(parents=True, exist_ok=True)
             if writer:
                 writer()
             else:
-                (to / rel).write_bytes(text.encode("utf-8"))
+                (to / rel).write_bytes(data if data is not None else text.encode("utf-8"))
         written.append(rel)
     if tables and tables != old:
         put(xlsx.name, writer=lambda: write_xlsx(xlsx, tables))
@@ -459,11 +495,16 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
         override.add("ConnectionString")
     if url:
         override |= {"SVNRepositoryURL", "LibrarySearchPath"}
-    cur_text = lib.read_bytes().decode("utf-8") if lib.exists() else ""      # keep the \r\n
+    # keep the \r\n, and the encoding a DbLib saved by Altium's editor has (ANSI, or UTF-8 / UTF-16 with a BOM)
+    cur_text, db_enc = read_ini_text(lib) if lib.exists() else ("", "utf-8")
     if tables:
         text = dblib_update(cur_text, {t: h for t, (h, _) in tables.items()}, links, override)
         if text != cur_text:
-            put(lib.name, text)
+            try:
+                data = text.encode(db_enc)
+            except UnicodeEncodeError:                # a new table / column name the ANSI code page can't hold
+                data = text.encode("utf-8-sig")
+            put(lib.name, data=data)
         cur_text = text
     db = next((s for s in _sections(cur_text) if s[0] == "DatabaseLinks"), ["", []])
     url = url or _kv(db[1]).get("SVNRepositoryURL") or None      # the one already in the file

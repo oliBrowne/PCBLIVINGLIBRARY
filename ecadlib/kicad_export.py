@@ -25,14 +25,17 @@ Footprints: the item's .kicad_mod (models/KiCad/...) when present, else its .Pcb
 Format: KiCad 8 (symbol library version 20231120, footprints up to 20240108), which KiCad 8, 9 and 10 open.
 Newer upstream syntax is written the KiCad 8 way: `(hide yes)` -> `hide`, KiCad 9/10-only flags (in_pos_files,
 show_name, do_not_autoplace, embedded_fonts, jumper settings, rule-area placement, rounded-rect radius, hatched
-fill) are dropped. Held items are skipped unless --include-held. Output is sorted and repeatable.
+fill) are dropped. Held items are skipped unless --include-held. Output is sorted and repeatable: a re-export
+rewrites only files whose content changes; a file edited by hand since the last export (kicad_export.json keeps the
+sha256 of what it wrote) and one it did not write that is no longer wanted are copied to ecadlib-hand-edits/ and
+listed under "warnings" before being replaced or removed.
 Checks: every written file parses with ecadlib.sexpr; each footprint goes through release_check's footprint rule
 (footprint_check) again and must not fail anything the plan's release check did not already record; symbol
 pins and footprint pads are compared. Exit code 1 when a check fails.
 
 KiCad's libraries are CC-BY-SA 4.0 (with a design-use exception): exports holding KiCad content get a NOTICE.txt
 and must not be committed here (out/kicad/ is in .gitignore)."""
-import argparse, copy, json, math, re, sys
+import argparse, copy, hashlib, json, math, re, struct, sys
 from pathlib import Path
 
 from . import altium_lib as AL, easyeda_convert as EC, footprint_check as FC, kicad_import as K, providers as P, \
@@ -115,6 +118,9 @@ def fp_kicad8(t, notes):
         for c in node[1:]:
             if isinstance(c, list) and c:
                 if c[0] in FP_DROP or (node[0] == "zone" and c[0] == "placement") or (node[0] == "footprint" and c[0] == "generator_version"):
+                    continue
+                if node[0] == "footprint" and c[0] == "point":   # KiCad 10 snap point: KiCad 7-9 refuse the whole file
+                    K._note(notes, "KiCad 10 (point ...) markers dropped")
                     continue
                 if c[0] in FP_NEWER:
                     K._note(notes, f"KiCad 9+ node ({c[0]} ...) kept: may not load in KiCad 8")
@@ -371,7 +377,8 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None):
 
 # ---------------------------------------------------------------- footprints
 LAYER_K = {AL.TOP_OVERLAY: "F.SilkS", AL.BOTTOM_OVERLAY: "B.SilkS", AL.MECH13: "F.Fab", AL.MECH15: "F.CrtYd",
-           AL.TOP: "F.Cu", AL.BOTTOM: "B.Cu", AL.TOP_PASTE: "F.Paste", AL.TOP_SOLDER: "F.Mask"}
+           AL.TOP: "F.Cu", AL.BOTTOM: "B.Cu", AL.TOP_PASTE: "F.Paste", AL.TOP_SOLDER: "F.Mask",
+           AL.BOTTOM_PASTE: "B.Paste", AL.BOTTOM_SOLDER: "B.Mask"}
 
 
 def _tail(shape):
@@ -459,6 +466,19 @@ def _custom_pads(recs):
     return custom, used
 
 
+def _not_copper(r):
+    """Why an Altium primitive is no drawing at all, or None: a keep-out (flags bit 9, on any layer) or a region that
+    is not copper (polygon / board cutout, cavity, ...). Written as fp_poly / fp_line on F.Cu they would be copper."""
+    if r["type"] in ("track", "arc", "fill", "region") and r.get("raw") and len(r["raw"][0]) >= 3 \
+            and struct.unpack_from("<H", r["raw"][0], 1)[0] & 0x200:
+        return "keep-out"
+    if r["type"] == "region":
+        p = AL.parse_params(r.get("params") or "")
+        if p.get("KIND", "0") not in ("0", "") or p.get("ISBOARDCUTOUT", "").upper() == "TRUE":
+            return f"region (kind {p.get('KIND')}{', board cutout' if p.get('ISBOARDCUTOUT', '').upper() == 'TRUE' else ''})"
+    return None
+
+
 def footprint_from_pcblib(path, name, notes, pick=None):
     """First footprint of a .PcbLib (or the one named pick) -> .kicad_mod text (KiCad 8), via altium_lib.read_pcblib."""
     fps = AL.read_pcblib(path)
@@ -467,8 +487,15 @@ def footprint_from_pcblib(path, name, notes, pick=None):
     pt = lambda x, y: f"{m(x)} {m(-y)}"
     stroke = lambda w: f'(stroke (width {m(w) if w else "0.1"}) (type solid))'
     out, pads, smd = [], [], True
-    custom, used = _custom_pads(fp["records"])
+    recs = []
     for r in fp["records"]:
+        why = _not_copper(r)
+        if why:
+            K._note(notes, f"Altium {why} {r['type']} on layer {r.get('layer')} not converted (add a KiCad rule area by hand)")
+        else:
+            recs.append(r)
+    custom, used = _custom_pads(recs)
+    for r in recs:
         t, layer = r["type"], LAYER_K.get(r.get("layer"))
         if id(r) in used:
             continue                          # copper / mask / paste outline of a polygon pad: part of that pad
@@ -522,10 +549,19 @@ def footprint_from_pcblib(path, name, notes, pick=None):
                 out.append(f'\t(fp_arc (start {p(r["a0"])}) (mid {p(r["a0"] + span / 2)}) (end {p(r["a0"] + span)}) {stroke(r["w"])} (layer "{layer}"))')
         elif t in ("fill", "region") and layer:
             pts = [(r["x1"], r["y1"]), (r["x2"], r["y1"]), (r["x2"], r["y2"]), (r["x1"], r["y2"])] if t == "fill" else r["pts"]
-            if layer == "F.Paste":            # paste window without copper: a paste-only pad, as KiCad draws them
+            frot = (struct.unpack_from("<d", r["raw"][0], 29)[0] % 360 if t == "fill" and r.get("raw") and len(r["raw"][0]) >= 37
+                    else 0.0)                 # an Altium fill turns about its centre
+            if frot:
+                cx, cy, a = (r["x1"] + r["x2"]) / 2, (r["y1"] + r["y2"]) / 2, math.radians(frot)
+                pts = [(cx + (x - cx) * math.cos(a) - (y - cy) * math.sin(a), cy + (x - cx) * math.sin(a) + (y - cy) * math.cos(a))
+                       for x, y in pts]
+            if layer in ("F.Paste", "B.Paste") and frot:
+                pads.append(f'\t(pad "" smd rect (at {pt(cx, cy)} {_num(frot)}) '
+                            f'(size {m(abs(r["x2"] - r["x1"]))} {m(abs(r["y2"] - r["y1"]))}) (layers "{layer}"))')
+            elif layer in ("F.Paste", "B.Paste"):   # paste window without copper: a paste-only pad, as KiCad draws them
                 xs, ys = [p[0] for p in pts], [p[1] for p in pts]
                 pads.append(f'\t(pad "" smd rect (at {pt((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)}) '
-                            f'(size {m(max(xs) - min(xs))} {m(max(ys) - min(ys))}) (layers "F.Paste"))')
+                            f'(size {m(max(xs) - min(xs))} {m(max(ys) - min(ys))}) (layers "{layer}"))')
                 if t == "region" and len(pts) != 4:
                     K._note(notes, "paste region written as its bounding rectangle")
             else:
@@ -615,6 +651,10 @@ def altium_model(pcblib, fpn, lib, shapes, taken, notes):
 
 
 # ---------------------------------------------------------------- checks
+def _sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
 def footprint_failures(item, plan_dir, kmod):
     """release_check's footprint rule (footprint_check plus the KiCad-library leniency) on `kmod`."""
     probe = dict(item, footprint=dict(item["footprint"], kicad_mod=str(Path(kmod).resolve())))
@@ -639,7 +679,36 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     out.mkdir(parents=True, exist_ok=True)
     pretty.mkdir(exist_ok=True)
     rep = {"plan": str(plan), "library": lib, "parts": [], "skipped": [], "footprints": {}, "models": {}, "errors": [], "kicad_content": False}
-    symbols, fps, written = {}, {}, set()
+    rep.update(warnings=[], written={})
+    report = out / "kicad_export.json"
+    try:                                      # what the last export wrote (and its sha256): edited by hand since?
+        prev = json.loads(report.read_text(encoding="utf-8")) if report.is_file() else {}
+    except ValueError:
+        prev = {}
+    prev_hash = prev.get("written") or {}
+    owned = set(prev_hash) if "written" in prev else (
+        {f"{lib}.kicad_sym"} | {f"{lib}.pretty/{k}.kicad_mod" for k in prev.get("footprints") or {}}
+        | {f"{lib}.3dshapes/{k}" for k, v in (prev.get("models") or {}).items() if v}) if prev else set()
+
+    def _hand_edited(path, rel):
+        """A file this export replaces or removes that changed since the last export: copied aside and reported."""
+        if rel in prev_hash and _sha(path) != prev_hash[rel]:
+            keep = out / "ecadlib-hand-edits" / rel
+            keep.parent.mkdir(parents=True, exist_ok=True)
+            keep.write_bytes(path.read_bytes())
+            rep["warnings"].append(f"{rel}: edited since the last export; replaced from the plan "
+                                   f"(the edited file is in {keep.relative_to(out).as_posix()})")
+
+    def put(path, text):
+        """Write `path` only when its content changes (a re-export leaves files untouched)."""
+        rel, data = path.relative_to(out).as_posix(), text.encode("utf-8")
+        cur = path.read_bytes() if path.is_file() else None
+        if cur is not None and cur != data and rel not in rep["written"]:
+            _hand_edited(path, rel)
+        if cur != data:
+            path.write_bytes(data)
+        rep["written"][rel] = hashlib.sha256(data).hexdigest()
+    symbols, fps, written, fp_refs = {}, {}, set(), {}
     for it in items:
         status = it.get("status", "ready")
         if status == "held" and not include_held:
@@ -656,6 +725,12 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
         # footprint first: the symbol's Footprint field names it
         fref = it["footprint"].get("ref")
         fpn = kname(fref) if fref and (it["footprint"].get("file") or it["footprint"].get("kicad_mod")) else None
+        if fpn and fp_refs.setdefault(fpn.casefold(), (fref, fpn, it["name"]))[0] != fref:
+            o_ref, o_fpn, o_part = fp_refs[fpn.casefold()]      # another footprint already has this file name (KiCad
+            rep["errors"].append(f"{it['name']}: footprint {fref!r} would be {lib}:{fpn}, the name of footprint "  # name;
+                                 f"{o_ref!r} ({o_part}); rename one of them")         # ignoring case: Windows / macOS)
+            notes.append(f"footprint left out: {fpn} is footprint {o_ref!r} of {o_part}")
+            fpn = ""
         if fpn and fpn not in fps:
             kmod = RC._kicad_mod(it, plan_dir, RC._path(plan_dir, it["footprint"].get("file")))
             fnotes = []
@@ -665,9 +740,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
                 else:
                     text, how = footprint_from_pcblib(plan_dir / it["footprint"]["file"], fpn, fnotes), f"{it['footprint']['file']} converted back"
                 tree, models = footprint_tree(text, fpn, lib, fnotes)
-                body = sexpr.dumps(tree) + "\n"
-                sexpr.parse(body)
-                (pretty / f"{fpn}.kicad_mod").write_text(body, encoding="utf-8", newline="\n")
+                sexpr.parse(sexpr.dumps(tree) + "\n")
                 for src3d, fn in models:
                     if fn in rep["models"]:
                         continue
@@ -684,7 +757,8 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
                         rep["models"][fn] = str(local)
                     elif data:
                         shapes.mkdir(exist_ok=True)
-                        (shapes / fn).write_text(data, encoding="utf-8")
+                        if not (shapes / fn).is_file() or (shapes / fn).read_bytes() != data.encode("utf-8"):
+                            (shapes / fn).write_text(data, encoding="utf-8", newline="")
                         rep["models"][fn] = f"kicad-packages3D/{src3d}"
                         rep["kicad_content"] = True
                     elif (shapes / fn).is_file():     # put there by hand or by an earlier export: keep it
@@ -711,11 +785,10 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
                     got = altium_model(pcb, fpn, lib, shapes, rep["models"], fnotes)
                 if got:                       # no KiCad model: the Altium one, so both libraries have the part in 3D
                     tree.append(got[0])
-                    body = sexpr.dumps(tree) + "\n"
-                    (pretty / f"{fpn}.kicad_mod").write_text(body, encoding="utf-8", newline="\n")
                     rep["models"][got[1]] = got[2]
                 elif not models:
                     fnotes.append("no 3D model (no KiCad model and no 3D body in the .PcbLib)")
+                put(pretty / f"{fpn}.kicad_mod", sexpr.dumps(tree) + "\n")
                 new = footprint_failures(it, plan_dir, pretty / f"{fpn}.kicad_mod")
                 had = [f for f in (it.get("release_check") or {}).get("failures", []) if f.startswith("footprint:")]
                 worse = [f for f in new if f not in had]
@@ -759,22 +832,37 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     text = sexpr.dumps(tree) + "\n"
     parsed = sexpr.parse(text)
     assert [s[1] for s in sexpr.find(parsed, "symbol")] == sorted(symbols)
-    (out / f"{lib}.kicad_sym").write_text(text, encoding="utf-8", newline="\n")
-    for old in pretty.glob("*.kicad_mod"):    # a re-export drops files no longer in the plan
-        if old.stem not in fps:
-            old.unlink()
-    for old in shapes.glob("*") if shapes.exists() else []:
-        if not rep["models"].get(old.name):
-            old.unlink()
+    put(out / f"{lib}.kicad_sym", text)
+    stale = [p for p in pretty.glob("*.kicad_mod") if p.stem not in fps]
+    stale += [p for p in (shapes.glob("*") if shapes.exists() else []) if p.is_file() and not rep["models"].get(p.name)]
+    for old in stale:                         # a re-export drops the files no longer in the plan; one it did not write
+        rel = old.relative_to(out).as_posix()  # (added by hand) is moved aside and reported, not lost
+        if rel not in owned:
+            keep = out / "ecadlib-hand-edits" / rel
+            keep.parent.mkdir(parents=True, exist_ok=True)
+            keep.write_bytes(old.read_bytes())
+            rep["warnings"].append(f"{rel}: not written by ecadlib and not in the plan: moved to "
+                                   f"{keep.relative_to(out).as_posix()}")
+        else:
+            _hand_edited(old, rel)
+        old.unlink()
+    for fn, how in rep["models"].items():              # a model put there by hand stays the user's file
+        if how and (shapes / fn).is_file() and (not str(how).endswith("(existing file kept)")
+                                                or f"{lib}.3dshapes/{fn}" in owned):
+            rep["written"][f"{lib}.3dshapes/{fn}"] = _sha(shapes / fn)
     desc = f"ecadlib export of {plan.name}"
     from .kicad_dblib import add_lib_row          # the row for this library; other rows (a project's own, another
     for kind, table, uri in (("sym", "sym_lib_table", f"{lib}.kicad_sym"), ("fp", "fp_lib_table", f"{lib}.pretty")):  # export) stay
         add_lib_row(out / f"{kind}-lib-table", lib, f"${{KIPRJMOD}}/{uri}", desc, "KiCad", table)
-    if rep["kicad_content"]:
+    if rep["kicad_content"] and not ((out / "NOTICE.txt").is_file()
+                                     and (out / "NOTICE.txt").read_text(encoding="utf-8") == KICAD_NOTICE):
         (out / "NOTICE.txt").write_text(KICAD_NOTICE, encoding="utf-8")
     rep["footprints"] = {k: fps[k] for k in sorted(fps)}
     rep["symbols"] = len(symbols)
-    (out / "kicad_export.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
+    rep["written"] = dict(sorted(rep["written"].items()))
+    body = json.dumps(rep, indent=2) + "\n"
+    if not report.is_file() or report.read_text(encoding="utf-8") != body:
+        report.write_text(body, encoding="utf-8")
     return rep
 
 
@@ -797,6 +885,8 @@ def print_result(rep, out, plan, t=None):
         for fpn, f in rep["footprints"].items():
             for n in f["notes"]:
                 t.write(t.dim(f"  {fpn}: {n}"))
+    for w in rep.get("warnings", []):
+        t.write(f"  note: {w}")
     for e in rep["errors"]:
         t.err.error("kicad-export", M.clean(str(e)), "run again with -v to see which part; --debug for details")
     steps = sum(1 for v in rep["models"].values() if v)

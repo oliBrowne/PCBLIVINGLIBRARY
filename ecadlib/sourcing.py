@@ -1022,8 +1022,8 @@ def write_plan(plan_path, rows, build_qty, currency, now=None, max_alternates=2)
     items = json.loads(path.read_text(encoding="utf-8"))
     by = {}
     for r in rows:
-        if r["mpn"] and "dnp" not in r["flags"] and "merged" not in r["flags"]:
-            by.setdefault(norm_mpn(r["mpn"]), r)
+        if norm_mpn(r["mpn"]) and not placeholder_mpn(r["mpn"]) and "dnp" not in r["flags"] and "merged" not in r["flags"]:
+            by.setdefault(norm_mpn(r["mpn"]), r)       # 'N/A' / '-' names no part: never matched to a plan item
     changed = []
     for it in items:
         par = {p["name"]: p["value"] for p in it.get("parameters", [])}

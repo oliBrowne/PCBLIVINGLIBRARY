@@ -120,6 +120,109 @@ def test_easyeda_footprint_names():
     assert {"SOIC-8_L5.0-W4.0-P1.27-LS6.0-BL", "SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR"} <= seen, seen
 
 
+def test_easyeda_names_that_are_not_two_gullwing_rows():
+    """LCSC's DIP-8 (through-hole), TO-252-2 (two leads and a tab on the other side) and SOT-223-4 names have the same
+    L-W-P-LS shape as an SOIC; they made an SMD gull-wing model with a lead row where the tab is. No model now.
+    TSOT-23-5 / SC-70-6 read like SOT-23-5 / SOT-363 and have a family height."""
+    for n in ("DIP-8_L9.8-W6.6-P2.54-LS7.6-BL", "TO-252-2_L6.5-W6.1-P4.58-LS9.9-BR", "TO-263-2_L10.0-W9.1-P5.08-LS15.3-BR",
+              "SOT-223-4_L6.5-W3.5-P2.30-LS7.0-BR"):
+        assert S.spec_from_name(n) is None, n
+    for n, h in (("TSOT-23-5_L2.9-W1.6-P0.95-LS2.8-BR", 1.0), ("SC-70-6_L2.0-W1.3-P0.65-LS2.1-BL", 0.95)):
+        text, info = S.generate(n)
+        _ok(text, n)
+        x0, y0, _, x1, y1, z1 = info["bbox"]
+        m = S.EASYEDA.match(n)
+        assert abs(y1 - y0 - float(m.group(6))) < 1e-6 and abs(x1 - x0 - float(m.group(3))) < 1e-6 and z1 == h, (n, info["bbox"])
+        assert sum(1 for s in S.build(S.spec_from_name(n))[0] if re.fullmatch(r"pin \d+", s.name)) == int(m.group(2))
+
+
+def _centres(solids, rx=r"(pin|terminal|tab) \S+"):
+    return {s.name: ((min(v[0] for v in s.verts) + max(v[0] for v in s.verts)) / 2, (min(v[1] for v in s.verts) + max(v[1] for v in s.verts)) / 2)
+            for s in solids if re.fullmatch(rx, s.name)}
+
+
+def test_model_turned_to_the_pads():
+    """2N7002 (LCSC C8545) has the same footprint name as C2002, SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR, but its pads are drawn
+    with the pin row along y: 1 (1.0, -0.95), 2 (1.0, 0.95), 3 (-1.0, 0). The model came out turned 90 degrees from
+    the name alone (x +-1.45, y +-1.2, leads across the pads); with the pads it is turned so each lead sits on its pad."""
+    from ecadlib import easyeda_convert as EC
+    n = "SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR"
+    pads = [{"designator": "1", "x": 1.0, "y": -0.95, "w": 0.9, "h": 0.6, "rot": 0.0},
+            {"designator": "2", "x": 1.0, "y": 0.95, "w": 0.9, "h": 0.6, "rot": 0.0},
+            {"designator": "3", "x": -1.0, "y": 0.0, "w": 0.9, "h": 0.6, "rot": 0.0}]
+    text, info = S.generate(n, pads=pads)
+    x0, y0, _, x1, y1, _ = info["bbox"]
+    assert info["rotation"] == 180 and abs(x1 - x0 - 2.4) < 1e-6 and abs(y1 - y0 - 2.9) < 1e-6, info   # body length along the pin row (y)
+    c = _centres(S.build(dict(S.spec_from_name(n), rotation=info["rotation"]))[0])
+    assert len([k for k in c if k.startswith("pin")]) == 3
+    for p in pads:
+        cx, cy = c[f"pin {p['designator']}"]
+        assert abs(cy - p["y"]) < 1e-6 and abs(cx - p["x"]) < 0.6 and cx * p["x"] > 0, (p, c)
+    assert S.generate(n)[1]["rotation"] == 90                     # no pads: the name's convention (C2002: pin rows along x)
+    # through kicad_import.add_body: C2002's real footprint, and the same turned to C8545's layout
+    pkg = json.loads((Path(__file__).parent / "fixtures/easyeda/C2002.json").read_text())["result"]["packageDetail"]
+    for turn in (False, True):
+        fp, t = K.convert_footprint(EC.footprint_to_kicad(pkg["dataStr"], n))
+        if turn:
+            for p in fp["pads"]:
+                p["x"], p["y"], p["w"], p["h"] = -p["y"], p["x"], p["h"], p["w"]
+        K.add_body(fp, t, None, None, False, [], gen_step=True)
+        x0, y0, _, x1, y1, _ = S.check(fp["bodies"][0]["step"]["data"].decode())["bbox"]
+        rows_x = len({round(p["y"], 3) for p in fp["pads"]}) == 2               # pin row axis from the pads
+        assert (x1 - x0 > y1 - y0) == rows_x and abs(min(x1 - x0, y1 - y0) - 2.4) < 1e-6, (turn, (x0, y0, x1, y1))
+    # a model that already sits on its pads keeps its rotation (every package spec with its own footprint_gen pads)
+    for f in SPEC_FILES:
+        spec = json.loads(f.read_text())
+        fp, _ = K.convert_footprint(F.build(spec)[0])
+        assert S.fit_rotation(spec, fp["pads"]) in (0, None), spec["name"]
+    assert S.fit_rotation(S.spec_from_name(n), [dict(p, designator="9") for p in pads]) is None           # no pad numbers: no guess
+
+
+def test_easyeda_names_without_pin_count_sot223_sod():
+    """LCSC names step_gen had no model for (AO3401A, AMS1117, 1N4148W): SOT-23 without a pin count is SOT-23-3, SOT-223(-3)
+    is 3 leads in one row and the tab opposite, SOD-123F is a flat-lead SOD-123, plain SOD-123 is KiCad's D_SOD-123."""
+    for fam, k in (("SOT-23", 3), ("SOT-323", 3), ("SOT-353", 5), ("SOT-363", 6), ("SOT-563", 6)):
+        n = f"{fam}_L2.0-W1.25-P0.65-LS2.1-BR"
+        s = S.spec_from_name(n)
+        assert s and s["pin_count"] == k and s["name"] == n, (n, s)
+        assert sum(1 for x in S.build(s, 1.0)[0] if re.fullmatch(r"pin \d+", x.name)) == k, n
+    n = "SOT-23_L2.9-W1.3-P1.90-LS2.4-BR"
+    assert {k: v for k, v in S.spec_from_name(n).items() if k != "name"} == \
+        {k: v for k, v in S.spec_from_name("SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR").items() if k != "name"}
+    text, info = S.generate(n)
+    _ok(text, n)
+    x0, y0, _, x1, y1, z1 = info["bbox"]
+    assert abs(x1 - x0 - 2.9) < 1e-6 and abs(y1 - y0 - 2.4) < 1e-6 and z1 == 1.1, info["bbox"]
+    assert S.spec_from_name("SOT-999_L2.0-W1.25-P0.65-LS2.1-BR") is None and S.spec_from_name("SOT-223-4_L6.5-W3.5-P2.30-LS7.0-BR") is None
+    for n, W in (("SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR", 3.4), ("SOT-223_L6.5-W3.5-P2.30-LS7.0-BR", 3.5)):
+        text, info = S.generate(n)
+        _ok(text, n)
+        x0, y0, _, x1, y1, z1 = info["bbox"]
+        assert abs(x1 - x0 - 6.5) < 1e-6 and abs(y1 - y0 - 7.0) < 1e-6 and z1 == 1.8, (n, info["bbox"])
+        c = _centres(S.build(S.spec_from_name(n))[0])
+        pins, tabs = [c[f"pin {i}"] for i in (1, 2, 3)], [v for k, v in c.items() if k.startswith("tab")]
+        assert len(c) == 4 and len(tabs) == 1 and len({round(y, 6) for _, y in pins}) == 1, c           # 3 leads in one row + tab
+        assert [round(x, 6) + 0.0 for x, _ in pins] == [-2.3, 0.0, 2.3] and pins[0][1] < 0 < tabs[0][1] and abs(tabs[0][0]) < 1e-6, c
+        body = next(s for s in S.build(S.spec_from_name(n))[0] if s.name == "body")
+        assert abs(max(v[1] for v in body.verts) - W / 2) < 1e-6
+    for n, LS, h in (("SOD-123F_L2.7-W1.6-LS3.8-RD", 3.8, 1.0), ("SOD-123", 3.7, 1.17)):
+        s = S.spec_from_name(n)
+        text, info = S.generate(n)
+        _ok(text, n)
+        x0, y0, _, x1, y1, z1 = info["bbox"]
+        assert s["pin_count"] == 2 and abs(x1 - x0 - LS) < 1e-6 and abs(y1 - y0 - 1.6) < 1e-6 and z1 == h, (n, info["bbox"])
+        c = _centres(S.build(s)[0])
+        assert sorted(c) == ["pin 1", "pin 2"] and c["pin 1"][0] < 0 < c["pin 2"][0] and abs(c["pin 1"][1]) < 1e-9, c
+    assert S.spec_from_name("SOD-123F_L2.7-W1.6-LS3.8-RD")["lead_type"] == "flat"
+    assert S.spec_from_name("SOD-999F_L2.7-W1.6-LS3.8-RD") is None and S.spec_from_name("SOD-123F_L2.7-W1.6-LS2.5-RD") is None
+    # with EasyEDA-style pads (SOT-223: leads along x at the bottom, tab pad 4 on top) the leads sit on their pads
+    pads = [{"designator": str(i + 1), "x": (i - 1) * 2.3, "y": -3.15, "w": 1.0, "h": 2.0, "rot": 0} for i in range(3)] + \
+           [{"designator": "4", "x": 0.0, "y": 3.15, "w": 3.6, "h": 2.0, "rot": 0}]
+    assert S.generate("SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR", pads=pads)[1]["rotation"] == 90
+    flipped = [dict(p, x=-p["x"], y=-p["y"]) for p in pads]
+    assert S.generate("SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR", pads=flipped)[1]["rotation"] == 270
+
+
 def _solid_boxes(solids):
     return {s.name: (min(v[0] for v in s.verts), min(v[1] for v in s.verts), max(v[0] for v in s.verts), max(v[1] for v in s.verts))
             for s in solids}

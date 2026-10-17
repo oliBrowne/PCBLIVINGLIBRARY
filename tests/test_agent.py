@@ -153,9 +153,13 @@ def make_ws(d, git=True, remote=True, **agent):
     (ws / "ecadlib_rules.json").write_text(json.dumps(rules))
     if git:
         gitc(ws, "init", "-q", "-b", "main")
+        gitc(ws, "config", "gc.auto", "0")
+        gitc(ws, "config", "maintenance.auto", "false")
         gitc(ws, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "init")
         if remote:
             gitc(d, "init", "-q", "--bare", "remote.git")
+            for k, v in (("receive.autogc", "false"), ("gc.auto", "0")):   # no detached gc still writing into
+                gitc(Path(d) / "remote.git", "config", k, v)                # remote.git while the temp dir is removed
             gitc(ws, "remote", "add", "origin", str(Path(d) / "remote.git"))
             gitc(ws, "push", "-q", "origin", "main")
     return ws, RU.load(rules)

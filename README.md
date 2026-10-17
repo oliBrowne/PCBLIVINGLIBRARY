@@ -1,10 +1,27 @@
-# ecad-librarian: "AI living library" prototypes
+# ecadlib: a librarian for your parts
 
-These are small Python prototypes for an open-source tool that manages ECAD components for KiCad and Altium. The design has three parts:
+ecadlib keeps your component library alive. Give it a BOM and it finds every symbol, footprint and 3D model you are
+missing, draws the ones nobody has from the datasheet, makes them match the rest of your library, holds anything in
+doubt for a person to sign off, and releases the rest to **Altium 365** or **KiCad**.
 
-1. An LLM reads a datasheet mechanical drawing and fills `ecadlib/package_schema.json`.
-2. A deterministic generator turns that JSON into an IPC-7351B land pattern.
-3. A triage step works out which BOM lines already exist locally, which can be pulled from a public source, and which need a generated footprint.
+* **BOM in.** Altium BOMs and ActiveBOMs, KiCad BOMs and schematics, or a hand-made CSV/XLSX. Each line comes back as
+  already in your library, available from a source, needs a footprint, or DNP.
+* **Official sources first.** Nexar, DigiKey and Mouser identify the part; symbols and footprints come from your own
+  libraries and the official KiCad libraries before anything else. EasyEDA/LCSC is an unofficial source, used after
+  those, and one setting (`[providers] unofficial = false`) turns it off.
+* **Drawn from the datasheet when nobody has it.** A datasheet reader fills a package description and a deterministic
+  IPC-7351B generator draws the land pattern. It works with Claude by default or the model you choose; you bring the
+  API key.
+* **Your house style.** `ecadlib style learn` reads your existing libraries and new parts follow the same naming,
+  descriptions, value formats and parameters.
+* **Review hold.** A release check runs on every part. Anything that fails it, or still needs a person, is held back
+  from Altium 365 until someone signs it off.
+* **Altium 365 release.** Parts go to your Altium 365 workspace, or out as `.SchLib`/`.PcbLib`, a database library
+  and KiCad libraries, from one plan.
+
+Install it with `pip install ecadlib` (v0.3.0, Python 3.10+), or on Windows run the installer from the
+[Releases page](https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases). It is free and open source under the MIT
+licence. Website: [pcblivinglibrary.vercel.app](https://pcblivinglibrary.vercel.app).
 
 **Supported tools:** Altium (Altium 365 first) and KiCad are the supported targets: they get the testing, the
 benchmarks and the fixes. The Fusion Electronics / EAGLE and EasyEDA Pro exports (section 11b) still work but are
@@ -25,7 +42,7 @@ who use the command line or work on ecadlib itself (section 38 covers how the in
 ## Quick start
 
 ```
-pip install -e .                 # from this checkout (Python 3.10+); `pip install ecadlib` once a release is on PyPI
+pip install ecadlib              # Python 3.10+ (or `pip install -e .` from this checkout)
 ecadlib demo                     # about a second, offline, no API keys: a small library in ./ecadlib-demo
 ecadlib init                     # a few questions -> ecadlib.toml, then a setup check and the next commands
 ecadlib librarian my_bom.csv -o ecadlib_workspace/librarian/my_bom   # fill every missing part; `ecadlib status` shows it
@@ -54,7 +71,7 @@ See section 32 for the first-run commands in detail.
 Install it with pip (Python 3.10 or later):
 
 ```
-pip install ecadlib                 # once a release is on PyPI (see Releases below)
+pip install ecadlib                 # from PyPI
 pip install "ecadlib[pdf]"          # pypdf trims datasheets to --pages
 pip install -e ".[dev]"             # from a checkout: editable, plus everything the test suite uses
 ```
@@ -1000,7 +1017,7 @@ python3 -m tests.test_sim_models
 * an Altium 365 part list (an `altium365` state file, or JSON in the `a365_sync` shape `{name, folder, parameters, symbol, footprint}`): folders and parameters;
 * KiCad `.kicad_sym`/`.pretty`, and BOM/parts spreadsheets (column names).
 
-Names are pattern-mined per category (`RES_{package}_{value}_{tolerance}`, `R{package}_{value}`, `{mpn}` ...) with value style (`4K7`, `4.7k`, `4.7kΩ`) detected. The written file says, for every setting, where it came from and how confident the guess is. `init` asks a question only where the evidence is split (the best pattern under 60% with a runner-up at 20% or more); `--yes` takes the best guess. If `ecadlib.toml` already exists, `init` shows a diff, writes the proposal to `ecadlib.toml.proposed` and changes nothing unless you confirm or pass `--force` (the old file is kept as `.bak`).
+Names are pattern-mined per category (`RES_{package}_{value}_{tolerance}`, `R{package}_{value}`, `{mpn}` ...) with value style (`4K7`, `4.7k`, `4.7kΩ`) detected. The written file says, for every setting, where it came from and how confident the guess is. Confidence counts how much of the library shows the convention, not only how much of the evidence agrees: a setting backed by fewer than 3 parts, footprints or symbols, or a footprint layer seen in fewer than half of the footprints (one `.Designator` in 48 footprints), is low. Low settings are not written; they are listed as comments at the top of the file, and ecadlib's default stays. The courtyard is never learned onto a layer that holds the library's 3D bodies, and a `.Designator` on a mechanical layer is not proposed when the library has silkscreen on the overlay. `init` asks a question only where the evidence is split (the best pattern under 60% with a runner-up at 20% or more); `--yes` takes the best guess. If `ecadlib.toml` already exists, `init` shows a diff, writes the proposal to `ecadlib.toml.proposed` and changes nothing unless you confirm or pass `--force` (the old file is kept as `.bak`).
 
 The UI has a **Library rules** card (type the folders to scan, review the proposals with their evidence, edit the TOML, save; replacing an existing file asks first and shows the diff). The MCP server has `propose_rules` and `save_rules`.
 
