@@ -323,9 +323,9 @@ def symbol_from_schlib(path, name, notes, pick=None):
 
 
 def load_symbol(item, plan_dir, http, libs, name, notes, rules=None):
-    """-> (KiCad symbol tree, how). Reuses KiCad / EasyEDA sources; else reads the SchLib back. An EasyEDA symbol
-    big enough for the grouped layout ([symbols] layout_pins) is read back from the SchLib, which the librarian
-    wrote with its pins grouped (ecadlib.symbol_layout), so both libraries show the same symbol."""
+    """-> (KiCad symbol tree, how). Reuses KiCad / EasyEDA sources; else reads the SchLib back. An EasyEDA IC
+    symbol (a plain box, [symbols] layout_pins) is read back from the SchLib, which the librarian wrote with its pins
+    grouped (ecadlib.symbol_layout), so both libraries show the same symbol."""
     src = str((item.get("source") or {}).get("symbol") or "")
     why = []
     try:
@@ -351,7 +351,11 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None):
                 f = item["symbol"].get("file")
                 npins = len({str(sexpr.first(p, "number")[1]) for u in sexpr.find(ks, "symbol") for p in sexpr.find(u, "pin")})
                 from . import symbol_layout as SL
-                if not (SL.wants_layout(npins, rules) and f and (plan_dir / f).exists()):
+                try:
+                    box = SL.is_box_ic(K.convert_symbol([ks], name, None, [], None, []))
+                except ValueError:
+                    box = False
+                if not (SL.wants_layout(npins, rules) and box and f and (plan_dir / f).exists()):
                     notes.extend(sub)
                     return ks, f"EasyEDA {lcsc} (converted again with easyeda_convert)"
                 why.append(f"EasyEDA {lcsc}: {npins} pins, grouped by function in the SchLib")

@@ -41,7 +41,7 @@ from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_tria
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from . import crosscheck as CC, messages as M, sheetsafe as SS
-from . import symbol_layout as SL
+from . import fp_tidy as FT, symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
 TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository/tree?ref=master&recursive=true&per_page=100&page={page}"
@@ -275,6 +275,10 @@ class Run:
         except ValueError as e:
             notes.append(f"no 3D body: {e}")
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
+        text = re.sub(r'^(\s*\((?:footprint|module)\s+)("(?:[^"\\]|\\.)*"|[^\s()]+)',     # KiCad links a footprint by its file name,
+                      lambda m: m.group(1) + '"' + stem.replace('"', '\\"') + '"', text, count=1)   # Altium by this name: one name
+        text = re.sub(r'(\((?:fp_text\s+value|property\s+"Value")\s+)("(?:[^"\\]|\\.)*"|[^\s()]+)',   # Value = the name (KLC F9.1)
+                      lambda m: m.group(1) + '"' + stem.replace('"', '\\"') + '"', text, count=1)
         kmod.write_text(text, encoding="utf-8", newline="\n")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
@@ -307,14 +311,18 @@ class Run:
         self.written[str(path)] = st["symbol"]
 
     def put_kicad_sym(self, st, chain, name, fp_name, source, extra=(), layout=False):
-        """layout: re-lay big symbols out with pins grouped by function (EasyEDA symbols; KiCad library symbols are
-        curated and kept as drawn)."""
+        """layout: re-lay plain IC symbols out by the house pin rule (EasyEDA symbols). KiCad library symbols are curated
+        and kept as drawn, unless their pin text would overlap in Altium (symbol_layout.text_problems)."""
         notes = []
         sym = K.convert_symbol(chain, name, fp_name, list(extra), None, notes)
         npins = len({pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin"})
-        if layout and SL.wants_layout(npins, self.rules) and sym.get("parts", 1) == 1:
+        clash = SL.text_problems(sym)
+        if (layout or clash) and SL.wants_layout(npins, self.rules) and SL.is_box_ic(sym):
             sym = SL.relayout(sym, self.rules)
-            notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else ""))
+            notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else "")
+                         + (f"; the drawn symbol's pin text overlapped ({clash[0]})" if clash else ""))
+        elif clash:
+            notes.append(f"pin text overlaps ({'; '.join(clash[:3])}); not a plain IC box, so kept as drawn: check it")
         self.put_sym(st, sym, source, notes)
 
     # ---- per part
@@ -438,6 +446,7 @@ class Run:
             st["found"].setdefault("datasheet", (url, f"EasyEDA {lcsc} (lcsc.url)"))
         if res.manufacturer:
             st["found"].setdefault("manufacturer", (res.manufacturer, f"EasyEDA {lcsc}"))
+        st["found"].setdefault("lcsc", (lcsc, f"EasyEDA {lcsc}" + ("" if ln.get("lcsc") else " (LCSC number found by ecadlib, not in the BOM)")))
         if res.extra.get("description"):
             st["found"].setdefault("description", (res.extra["description"], f"EasyEDA {lcsc}"))
         got = []
@@ -445,6 +454,7 @@ class Run:
             pkg = (result.get("packageDetail") or {})
             notes = []
             text = EC.footprint_to_kicad(pkg.get("dataStr") or {}, pkg.get("title") or fp_name, notes)
+            text = FT.tidy(text, notes)                       # to the rule book: silk reference, pin 1, rounded pads
             self.put_fp(st, text, fp_name, f"easyeda:{lcsc}", None)
             st["footprint"]["notes"] = notes + st["footprint"]["notes"]
             got.append(f"footprint {pkg.get('title', '')}")
@@ -622,6 +632,12 @@ def apply_state(item, st, ln):
     elif "datasheet" in st.get("found", {}):
         u, w = st["found"]["datasheet"]
         _set_par(item, "ComponentLink2Description", "Datasheet"); _set_par(item, "ComponentLink2URL", u); fields["ComponentLink2URL"] = w
+    if not par.get("Supplier Part Number 1") and "lcsc" in st.get("found", {}):     # an LCSC number the BOM did not give
+        v, w = st["found"]["lcsc"]
+        _set_par(item, "Supplier 1", "LCSC"); _set_par(item, "Supplier Part Number 1", v); fields["Supplier Part Number 1"] = w
+        if not par.get("ComponentLink1URL"):
+            _set_par(item, "ComponentLink1Description", "LCSC")
+            _set_par(item, "ComponentLink1URL", f"https://www.lcsc.com/product-detail/{v}.html"); fields["ComponentLink1URL"] = w
     if not par.get("Manufacturer") and "manufacturer" in st.get("found", {}):
         v, w = st["found"]["manufacturer"]
         _set_par(item, "Manufacturer", v); fields["Manufacturer"] = w

@@ -3,8 +3,9 @@
 The KiCad text then goes through kicad_import (convert_footprint / convert_symbol) to Altium, and footprint_check
 can read the .kicad_mod. Only what a land pattern and a pin map need is converted:
   footprint: PAD (RECT / ELLIPSE / OVAL; POLYGON as its bounding rectangle), SMD and through-hole (round or slot,
-             plated or not), HOLE (NPTH), TRACK, RECT, CIRCLE (as a 16-gon) on silk / fab layers; a courtyard is drawn around
-             pads and fab (EasyEDA has no courtyard layer); ARC, TEXT, SOLIDREGION, VIA are dropped with a note;
+             plated or not), HOLE (NPTH), TRACK, RECT, CIRCLE (as a 16-gon) and circular ARC on silk / fab layers, the body
+             region (SOLIDREGION on layer 99) as a fab outline; a courtyard is drawn around pads and fab (EasyEDA
+             has no courtyard layer); TEXT, VIA and other regions (layer-100 lead shapes) are dropped with a note;
              REF** goes on silk above the courtyard and the value on fab below it (1 mm, 0.15 mm stroke); a pin-1 dot
              inside the body is moved beside pad 1
   symbol:    pins (number, name, electrical type, position, length), rectangles, polylines, polygons, circles;
@@ -74,7 +75,7 @@ def footprint_to_kicad(data, name=None, notes=None):
     ox, oy = _f(head.get("x")), _f(head.get("y"))
     name = name or (head.get("c_para") or {}).get("package") or "EasyEDA"
     X, Y = (lambda x: (_f(x) - ox) * U), (lambda y: (_f(y) - oy) * U)
-    pads, lines, circles, dropped, extent, copper = [], [], [], {}, [], []
+    pads, lines, circles, arcs, dropped, extent, copper = [], [], [], [], {}, [], []
     for s in data.get("shape") or []:
         if not isinstance(s, str):
             continue
@@ -125,9 +126,15 @@ def footprint_to_kicad(data, name=None, notes=None):
                 lines += [(a, b, sw, layer) for a, b in zip(c, c[1:] + c[:1])]
             else:
                 circles.append((X(f[1]), Y(f[2]), _f(f[3]) * U, _f(f[4]) * U, layer))
+        elif kind == "ARC" and FP_LAYERS.get(int(_f(f[2]))) and _svg_arc(f[4]):
+            arcs.append((*_svg_arc(f[4], X, Y), _f(f[1]) * U, FP_LAYERS[int(_f(f[2]))]))
+        elif kind == "SOLIDREGION" and int(_f(f[1])) == 99 and _region(f[3]):
+            pts = [(X(x), Y(y)) for x, y in _region(f[3])]      # the part body: its outline on F.Fab
+            lines += [(a, b, 0.1, "F.Fab") for a, b in zip(pts, pts[1:] + pts[:1])]
         elif kind in ("ARC", "TEXT", "SOLIDREGION", "VIA", "SVGNODE"):
+            what = f"SOLIDREGION on layer {int(_f(f[1]))}" if kind == "SOLIDREGION" else kind
             if kind != "SVGNODE":
-                dropped[kind] = dropped.get(kind, 0) + 1
+                dropped[what] = dropped.get(what, 0) + 1
         else:
             dropped[kind] = dropped.get(kind, 0) + 1
     lines, circles = _clear_silk(lines, circles, copper, notes)
@@ -166,10 +173,41 @@ def footprint_to_kicad(data, name=None, notes=None):
     for cx, cy, r, w, layer in circles:          # as a 16-gon: footprint_check reads fp_circle's centre from (start)
         xy = " ".join(f"(xy {_n(cx + r * math.cos(k * math.pi / 8))} {_n(cy + r * math.sin(k * math.pi / 8))})" for k in range(16))
         out.append(f'  (fp_poly (pts {xy}) (stroke (width {_n(w or 0.1)}) (type solid)) (fill none) (layer "{layer}"))')
+    for a, m, b, w, layer in arcs:
+        out.append(f'  (fp_arc (start {_n(a[0])} {_n(a[1])}) (mid {_n(m[0])} {_n(m[1])}) (end {_n(b[0])} {_n(b[1])}) '
+                   f'(stroke (width {_n(w or 0.1)}) (type solid)) (layer "{layer}"))')
     out.append(f'  (fp_rect (start {_n(crt[0])} {_n(crt[1])}) '
                f'(end {_n(crt[2])} {_n(crt[3])}) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))')
     notes.append("courtyard drawn by ecadlib: pads and fab outline + 0.25 mm (EasyEDA has no courtyard layer)")
     return "\n".join(out + pads) + "\n)\n"
+
+
+def _svg_arc(path, X=lambda v: v, Y=lambda v: v):
+    """'M x1,y1 A r,r rot large sweep x2,y2' (a circular SVG arc, y down) -> (start, mid, end) through X / Y, else None."""
+    v = _nums(path)
+    if not re.match(r"\s*M[^A]*A", path or "") or len(v) != 9 or abs(v[2] - v[3]) > 1e-6 * max(1.0, abs(v[2])):
+        return None
+    (x1, y1), r, large, sweep, (x2, y2) = v[0:2], v[2], v[5], v[6], v[7:9]
+    d = math.hypot(x2 - x1, y2 - y1) / 2
+    if d < 1e-9:
+        return None
+    h = math.sqrt(max(r * r - d * d, 0.0))
+    sign = 1 if bool(large) != bool(sweep) else -1         # SVG 1.1 F.6.5, no x-axis rotation for a circle
+    cx, cy = (x1 + x2) / 2 + sign * h / d * (y1 - y2) / 2, (y1 + y2) / 2 + sign * h / d * (x2 - x1) / 2
+    a1, a2, rr = math.atan2(y1 - cy, x1 - cx), math.atan2(y2 - cy, x2 - cx), max(r, d)
+    delta = (a2 - a1) % (2 * math.pi) if sweep else -((a1 - a2) % (2 * math.pi))
+    am = a1 + delta / 2
+    mid = (cx + rr * math.cos(am), cy + rr * math.sin(am))
+    return (X(x1), Y(y1)), (X(mid[0]), Y(mid[1])), (X(x2), Y(y2))
+
+
+def _region(path):
+    """A SOLIDREGION path of straight segments 'M x y L x y ... Z' -> its points, else None (curves are not read)."""
+    if not path or re.search(r"[AaCcQqSsTtHhVv]", path):
+        return None
+    v = _nums(path)
+    pts = list(zip(v[0::2], v[1::2]))
+    return pts if len(pts) >= 3 and len(v) % 2 == 0 else None
 
 
 def _clear_silk(lines, circles, copper, notes):

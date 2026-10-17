@@ -172,10 +172,12 @@ def test_include_held_reads_datasheet_schlib_back():
         pins = _pins(sym)
         want = {str(p["num"]): p for p in TD.GOOD["pins"]}
         assert set(pins) == set(want), (pins, want)
+        from ecadlib import symbol_layout as SL                                 # the house pin rule placed every pin
+        rule = {str(q["num"]): q["side"] for q in SL.arrange_pins(TD.GOOD["pins"])}
         for num, p in want.items():                                             # name and direction survive the round trip
             assert pins[num][4] == p["name"], (num, pins[num], p)
             side = {"0": "left", "180": "right", "270": "top", "90": "bottom"}[pins[num][2][2]]
-            assert side == p.get("side", "left"), (num, pins[num], p)
+            assert side == rule[num], (num, pins[num], p)
         assert _props(sym)["Footprint"] == f"lib:{X.kname(items['DSPART1']['footprint']['ref'])}"
         nowhere = next(r for r in rep["parts"] if r["part"] == "NOWHERE1")
         assert nowhere["symbol"] is None and any("no symbol in the plan" in n for n in nowhere["notes"]), nowhere
