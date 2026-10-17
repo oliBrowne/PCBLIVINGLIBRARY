@@ -350,7 +350,7 @@ def test_progress_file_for_the_live_view():
     AM.Progress().step(1, 2, "no job: nothing written")
     # the columns do not wrap: values are cut at a word to what fits (seen clipped on a real AD 26.10 dialog)
     r = AM.row_text("KiCad library", "library index unavailable (kicad-symbols tree page 3 timed out)")
-    assert r == "KiCad library|library index unavailable...|0" and all(len(x) <= 30 for x in r.split("|"))
+    assert r == "KiCad library|library index unavailable...|0" and all(len(x) <= 28 for x in r.split("|")[1:])
     assert AM.rows_result(["a|1|1"], "1 line") == {"big": "1 line", "rows": 1, "row1": "a|1|1"}
 
 
@@ -472,12 +472,13 @@ def test_check_bom_report_offer_and_fill():
     page = Path(r["report"]).read_text(encoding="utf-8")
     assert "GRM188R71C104KA01D" in page and "LM358DR" in page and page.count("<tr>") == 7
     assert Path(r["bom"]).is_file()
-    # the user says yes: fill (offline, standard parts only: all held, nothing published, a fix that says where to look)
+    # the user says yes: fill (offline, standard parts only: the two passives are ready with a description ecadlib
+    # wrote, the rest held, and a fix that says where to look)
     job = _job(menu, {"action": "fill", "project": str(prj)})
     AM.run_job(job)
     r = _result(job)
-    assert r["status"] == "ok" and r["held"] == "6" and r["ready"] == "0" and r["install"] == "", r
-    assert r["message"] == "6 parts: 0 ready, 6 held." and "review queue" in r["fix"] and Path(r["review"]).is_file()
+    assert r["status"] == "ok" and r["held"] == "4" and r["ready"] == "2" and r["install"].endswith("ecadlib.DbLib"), r
+    assert r["message"].startswith("6 parts: 2 ready") and "review queue" in r["fix"] and Path(r["review"]).is_file()
     # a project that is not saved / not there: one line and a fix, never a traceback
     r = AM.run_job(_job(menu, {"action": "check-bom", "project": str(d / "Unsaved.PrjPcb")}))
     assert r["status"] == "error" and "no such file" in r["message"] and r["fix"].startswith("save the project")
@@ -510,8 +511,8 @@ def test_dialog_results_rows_and_reports():
     job = _job(menu, {"action": "fill", "project": str(prj), "dialog": "1"})
     AM.run_job(job)
     r = _result(job)
-    assert r["big"] == "0 of 6 ready" and r["offer_queue"] == "1" and r["row1"] == "ready, in your library|0|0", r
-    assert r["row2"] == "held for a person|6|0", r
+    assert r["big"] == "2 of 6 ready" and r["offer_queue"] == "1" and r["row1"] == "ready, in your library|2|1", r
+    assert r["row2"] == "held for a person|4|0", r
     # one part: where ecadlib looked and what it took, then the release check
     job = _job(menu, {"action": "add-part", "dialog": "1", **CAP})
     AM.run_job(job)

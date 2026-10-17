@@ -1102,15 +1102,18 @@ def clip(text, n):
     t = _one_line(text)
     if len(t) <= n:
         return t
-    cut = t[:n - 3].rsplit(" ", 1)[0] if " " in t[:n - 3] else t[:n - 3]
+    cut = t[:n - 3]
+    if t[n - 3] != " " and " " in cut:                      # a word cut in two: drop it
+        cut = cut.rsplit(" ", 1)[0]
     return cut.rstrip(" ,;:(") + "..."
 
 
 def row_text(label, value="", ok=False):
     """One dialog row: "label|value|1" (the script splits on |, so neither part may hold one). The label column fits
-    about 26 characters, the value column about 30 (altium_forms.LABEL_W, WIDTH)."""
+    about 26 characters, the value column about 28 (altium_forms.LABEL_W, WIDTH; Consolas is about 7 px a character, and
+    a longer value would lose its start, the column being right-aligned)."""
     clean = lambda v, n: clip(str(v).replace("|", "/"), n)
-    return f"{clean(label, 26)}|{clean(value, 30)}|{1 if ok else 0}"
+    return f"{clean(label, 26)}|{clean(value, 28)}|{1 if ok else 0}"
 
 
 def step_text(msg):

@@ -426,3 +426,25 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn(); print("ok", name)
+
+
+def test_missing_description_is_written_from_category_and_package():
+    """No source had a description (the KiCad index rate-limited, EasyEDA without text): ecadlib writes a plain one
+    from what the plan knows, says so in field_sources, and the release check warns instead of holding the part."""
+    from ecadlib import librarian as L, release_check as RC
+    from ecadlib import rules as RU
+    item = {"name": "LM358DR", "folder": "Components/ICs", "description": "", "footprint": {"ref": "LM358DR"}, "symbol": {},
+            "parameters": [{"name": "Manufacturer", "value": "Texas Instruments"},
+                           {"name": "Manufacturer Part Number", "value": "LM358DR"}]}
+    st = {"found": {"package": ("SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL", "EasyEDA C5423")}}
+    L.apply_state(item, st, {"mpn": "LM358DR"})
+    assert item["description"] == "IC, SOIC-8, Texas Instruments LM358DR", item
+    assert item["field_sources"]["Description"] == L.GENERATED_DESCRIPTION
+    fails, warns, _ = RC.check_item(item, ".", RU.resolve(None, "."))
+    assert not [m for r, m in fails if "Description" in m] and any("written by ecadlib" in w for w in warns), warns
+    # a source's own text always wins, and nothing is written without a part number
+    item2 = dict(item, description="", parameters=[])
+    L.apply_state(item2, {"found": {"description": ("Dual op-amp", "EasyEDA C5423")}}, {})
+    assert item2["description"] == "Dual op-amp"
+    assert L.generated_description({"folder": "Components/ICs", "parameters": []}, {}, {}) == ""
+    assert L._package_name("GCT USB4105", "USB4105-GF-A") == "" and L._package_name("CAP 0603 (1608 Metric)") == "0603"

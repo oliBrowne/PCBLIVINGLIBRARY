@@ -39,6 +39,10 @@ FORM_API = {
     "SetFocus": "TWinControl.SetFocus", "SelectAll": "TEdit.SelectAll",
     "EcadlibDialog": "the form instance a script form unit gets (named after the .dfm's object)",
     "Sender": "event handler parameter", "TObject": "event handler parameter type", "Style": "TFont.Style",
+    "ActiveControl": "TForm.ActiveControl", "AutoSize": "TLabel.AutoSize", "TEdit": "Forms & Components: TEdit",
+    "PasteFromClipboard": "TCustomEdit.PasteFromClipboard", "CopyToClipboard": "TCustomEdit.CopyToClipboard",
+    "CutToClipboard": "TCustomEdit.CutToClipboard", "Word": "OnKeyDown Key type", "TShiftState": "OnKeyDown Shift type",
+    "Key": "OnKeyDown parameter", "InSet": "DelphiScript set test (InSet(ssCtrl, Shift))", "ssCtrl": "TShiftState", "ssShift": "TShiftState",
 }
 
 
@@ -177,6 +181,8 @@ Begin
     End;
     If EcadlibDialog.Note.Visible Then
     Begin
+        EcadlibDialog.Note.AutoSize := False;          { a word-wrapped label left to size itself shrinks to a column }
+        EcadlibDialog.Note.Width := @NOTE_W@;
         EcadlibDialog.Note.Height := NoteLines(EcadlibDialog.Note.Caption) * 17;
         EcadlibDialog.Note.Top := Y + 6;
         Y := Y + EcadlibDialog.Note.Height + 10;
@@ -456,6 +462,7 @@ Begin
         Else
         Begin
             Phase := 'ask';
+            ClipboardMpn;
             EcadlibDialog.AskBox.Visible := True;
             EcadlibDialog.Big.Visible := False;
             Buttons('OK', 'Cancel', False);
@@ -517,6 +524,63 @@ Begin
     Fire('open', 'path', Answer(Job, 'report'));
 End;
 
+Procedure PasteInto(Box : TEdit);
+{ Altium takes Ctrl+V / Shift+Insert as its own paste, so the boxes paste here. }
+Begin
+    Box.PasteFromClipboard;
+End;
+
+Function LooksLikeMpn(S : String) : Boolean;
+{ One word of 3 to 40 characters with a digit in it: a part number, not a sentence or a path someone copied. }
+Var
+    i : Integer;
+Begin
+    Result := False;
+    If (Length(S) < 3) Or (Length(S) > 40) Then Exit;
+    If (Pos(' ', S) > 0) Or (Pos(#13, S) > 0) Or (Pos(#10, S) > 0) Or (Pos(#9, S) > 0) Or (Pos('\', S) > 0) Then Exit;
+    For i := 1 To Length(S) Do
+        If (S[i] >= '0') And (S[i] <= '9') Then
+            Result := True;
+End;
+
+Procedure ClipboardMpn;
+{ A part number on the clipboard goes into the MPN box, selected, so typing replaces it. }
+Begin
+    PasteInto(EcadlibDialog.EditMpn);
+    EcadlibDialog.EditMpn.Text := Trim(EcadlibDialog.EditMpn.Text);
+    If LooksLikeMpn(EcadlibDialog.EditMpn.Text) Then
+        EcadlibDialog.EditMpn.SelectAll
+    Else
+        EcadlibDialog.EditMpn.Text := '';
+End;
+
+Procedure TEcadlibDialog.EcadlibDialogKeyDown(Sender : TObject; Var Key : Word; Shift : TShiftState);
+{ Ctrl+V/C/X/A and Shift+Insert in the MPN and manufacturer boxes (KeyPreview: the form sees keys first). }
+Var
+    Box : TEdit;
+Begin
+    If ActiveControl = EditMpn Then
+        Box := EditMpn
+    Else If ActiveControl = EditMaker Then
+        Box := EditMaker
+    Else
+        Exit;
+    If InSet(ssCtrl, Shift) And (Key = 86) Then PasteInto(Box)
+    Else If InSet(ssShift, Shift) And (Key = 45) Then PasteInto(Box)
+    Else If InSet(ssCtrl, Shift) And (Key = 67) Then Box.CopyToClipboard
+    Else If InSet(ssCtrl, Shift) And (Key = 88) Then Box.CutToClipboard
+    Else If InSet(ssCtrl, Shift) And (Key = 65) Then Box.SelectAll
+    Else Exit;
+    Key := 0;
+End;
+
+Procedure TEcadlibDialog.PasteMpnClick(Sender : TObject);
+Begin
+    EditMpn.SelectAll;
+    PasteInto(EditMpn);
+    EditMpn.SetFocus;
+End;
+
 Procedure TEcadlibDialog.EcadlibDialogClose(Sender : TObject; Var CloseAction : TCloseAction);
 { A closed form's enabled timer fires again whenever this script project runs (AD 26.10): stop it. }
 Begin
@@ -575,6 +639,14 @@ def _edit(name, left, top, width, ind="      "):
             f"{i2}BorderStyle = bsSingle\n{i2}Color = {FIELD}\n{_font(ind=i2)}{i2}Text = ''\n{ind}end\n")
 
 
+def _paste_link(w, ind="      "):
+    """'Paste' at the right of the MPN label: pastes the clipboard into the MPN box (and so does Ctrl+V)."""
+    i2 = ind + "  "
+    return (f"{ind}object PasteMpn: TLabel\n{i2}Left = {w - 60}\n{i2}Top = 0\n{i2}Width = 60\n{i2}Height = 16\n"
+            f"{i2}Alignment = taRightJustify\n{i2}AutoSize = False\n{i2}Caption = 'Paste'\n{i2}Cursor = crHandPoint\n"
+            f"{_font(color=BLUE, ind=i2)}{i2}Transparent = True\n{i2}OnClick = PasteMpnClick\n{ind}end\n")
+
+
 def dialog_dfm_text():
     """The form: header with title and close mark, the MPN box, the big line, ROWS rows, status, meter, note, report
     link and two buttons. Positions are set again by Layout at run time; these are the first frame's."""
@@ -584,7 +656,7 @@ def dialog_dfm_text():
         _label(f"Row{i}B", LABEL_W, 4, w - LABEL_W, 18, "", align="r", face="Consolas") +
         _panel(f"Row{i}Rule", 0, 25, w, 1, RULE, ind="    "))) for i in range(1, ROWS + 1))
     ask = _panel("AskBox", 16, 46, w, 104, BG, visible=False, body=(
-        _label("AskMpn", 0, 0, w, 16, "MPN", color=DIM) + _edit("EditMpn", 0, 18, w) +
+        _label("AskMpn", 0, 0, w, 16, "MPN", color=DIM) + _paste_link(w) + _edit("EditMpn", 0, 18, w) +
         _label("AskMaker", 0, 52, w, 16, "Manufacturer (optional)", color=DIM) + _edit("EditMaker", 0, 70, w)))
     meter = _panel("MeterTrack", 16, 300, w, 2, RULE, visible=False,
                    body=_panel("MeterFill", 0, 0, 0, 2, BLUE, ind="    "))
@@ -605,6 +677,7 @@ def dialog_dfm_text():
   KeyPreview = True
   OldCreateOrder = False
   OnClose = EcadlibDialogClose
+  OnKeyDown = EcadlibDialogKeyDown
   Position = poMainFormCenter
   PixelsPerInch = 96
   TextHeight = 15
