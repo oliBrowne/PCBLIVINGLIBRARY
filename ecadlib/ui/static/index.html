@@ -593,7 +593,7 @@ ol.hubhist .t { font: 11.5px/1.5 var(--mono); color: var(--muted); }
       <thead><tr><th>Part</th><th>Change</th><th>Status</th><th>Proof</th><th>Batch</th><th>Updated (UTC)</th><th></th></tr></thead>
       <tbody id="qrows"></tbody>
     </table></div>
-    <div class="empty" id="qemptywrap" hidden><div class="emptyfig" data-fig="drawer" aria-hidden="true"></div><div class="muted small" id="qempty">Nothing in the queue. The library agent adds parts here when a watched project or BOM changes.</div></div>
+    <div class="empty" id="qemptywrap" hidden><div class="emptyfig" data-fig="drawer" aria-hidden="true"></div><div class="muted small" id="qempty">Nothing in the queue. The library agent adds parts here when a watched project or BOM changes. Parts held when you fill a BOM or add one from the Altium / KiCad menu are listed under step 2 (Fill the library), each with why it is held.</div></div>
     <div class="qview" id="qview" hidden></div>
   </section>
 
@@ -1677,7 +1677,7 @@ async function loadQueue() {
     <td class="mono">${esc(it.batch || "–")}</td><td class="mono small">${esc(it.updated)}</td>
     <td><button class="small" data-open="${esc(it.id)}">Open</button></td></tr>`).join("");
   $("#qwrap").hidden = !r.items.length; $("#qemptywrap").hidden = !!r.items.length;
-  $("#qempty").textContent = total ? "No items match this filter." : "Nothing in the queue. The library agent adds parts here when a watched project or BOM changes.";
+  $("#qempty").textContent = total ? "No items match this filter." : "Nothing in the queue. The library agent adds parts here when a watched project or BOM changes. Parts held when you fill a BOM or add one from the Altium / KiCad menu are listed under step 2 (Fill the library), each with why it is held.";
 }
 function kv(obj, keys) {
   const rows = keys.filter(k => obj && obj[k] !== undefined && obj[k] !== null && obj[k] !== "" && !(Array.isArray(obj[k]) && !obj[k].length))
@@ -2054,10 +2054,25 @@ function roleNote() {
   const u = session.team && session.user;
   nextStep($("#rolenote"), u && u.role === "viewer" ? `You are signed in as <b>${esc(u.username)}</b> with the viewer role: you can open everything, but checking BOMs, filling the library and approving parts need the librarian or approver role. Ask an ecadlib admin.` : "");
 }
+// #review=<BOM>: the parts the librarian built for that BOM, held ones with their reasons (the Altium / KiCad menu's
+// "Open review queue" links here for the parts added from the menu: the library agent's queue never holds them)
+async function openReview() {
+  const m = /^#review=(.+)$/.exec(location.hash || "");
+  if (!m) return;
+  const bom = decodeURIComponent(m[1]), h = history.find(x => x.bom === bom);
+  let t = null;
+  if (h) { try { t = await api("/api/triage/result?id=" + encodeURIComponent(h.id)); } catch (e) { t = null; } }
+  showResult(t || { bom, name: bom.split("/").pop(), rows: [], counts: {}, mapping: {}, reports: ["", ""], finished: null });
+  navState();
+  await loadParts();
+  pfilter = parts && parts.counts && parts.counts.held ? "held" : ""; renderParts();
+  $("#libcard").scrollIntoView({ behavior: motion() });
+}
 function startApp() {
   $("#signin").hidden = true; $("#app").hidden = false; $("#steps").hidden = false;
   applyRoles(); roleNote(); navState(); loadStatus().catch(e => banner($("#stout"), e.message));
-  loadInfo().catch(showErr); loadSpecs().catch(showErr); loadRules().catch(showErr); loadStyle().catch(showErr); loadHistory().catch(e => banner($("#histerr"), e.message));
+  loadInfo().catch(showErr); loadSpecs().catch(showErr); loadRules().catch(showErr); loadStyle().catch(showErr);
+  loadHistory().catch(e => banner($("#histerr"), e.message)).then(openReview).catch(e => banner($("#liberr"), e.message));
   loadQueue().catch(e => banner($("#qerr"), e.message)); loadHub().catch(e => banner($("#hubprob"), e.message));
 }
 // ---- keyboard shortcuts ("?" lists them); never while typing in a box or with Ctrl / Alt / Cmd held

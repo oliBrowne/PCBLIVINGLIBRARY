@@ -1473,6 +1473,10 @@ def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
                    fix=f"Approve it in the review queue ({_queue_hint(cfg)}), then add it again.")
     elif st == "duplicate":
         res.update(message=f"{mpn} is already in the library as {it.get('duplicate_of') or nm}.")
+    elif not_found(ws._librarian_dir(bom) / "triage.csv", mpn, it):
+        res.update(status="error", reason="not_found", message=f"{mpn} was not found: no part source knows this part "
+                   "number, so ecadlib has no symbol, footprint or data for it.",
+                   fix="Check the part number (a typo, or a suffix missing), then add it again.")
     else:
         res.update(status="held", message=f"{mpn} is held ({nm}): " + (" ".join(w["text"] for w in whys[:3]) or "see the review."),
                    fix=(whys[0]["fix"] + " " if whys else "") + f"Open the review queue ({_queue_hint(cfg)}) "
@@ -1480,8 +1484,25 @@ def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
     res.update(rows_result(part_rows(it), {"ready": "Ready", "duplicate": "Already in your library",
                                            "awaiting_approval": "Waiting for sign-off"}.get(st, "Held")))
     if res["status"] == "error":
-        res["big"] = "Not published"
+        res["big"] = "Not found" if res.get("reason") == "not_found" else "Not published"
     return res
+
+
+def not_found(triage_csv, mpn, item):
+    """True when every part source that was asked answered "no such part" (none failed or was offline), nothing local
+    matched, and the librarian made neither a symbol nor a footprint: a bad MPN, not a part to review."""
+    if item.get("status") != "held" or any((item.get(k) or {}).get("file") for k in ("symbol", "footprint")):
+        return False
+    try:
+        rows = list(csv.DictReader(Path(triage_csv).open(encoding="utf-8-sig", newline="")))
+    except OSError:
+        return False
+    row = next((r for r in rows if (r.get("mpn") or "").strip().upper() == mpn.strip().upper()), None)
+    if not row or row.get("status") != "needs_footprint_generation":      # unreachable / offline / found somewhere
+        return False
+    if row.get("local_symbol") or row.get("local_footprint") or row.get("src_mpn") or row.get("src_description"):
+        return False
+    return bool(row.get("src")) or "jlcpcb: no exact MPN match" in (row.get("notes") or "")   # a source answered
 
 
 def _library_mpns(cfg, ws):
@@ -1683,10 +1704,18 @@ def start_ui(ws_root, port):
     return subprocess.Popen(cmd, **kw)
 
 
+def queue_anchor(ws):
+    """Where "Open review queue" lands: the menu's own parts (held ones first, each with why it is held) once a part
+    was added from the menu; they never reach the library agent's queue (#queuecard), which listed "Nothing in the
+    queue" while parts were held."""
+    from urllib.parse import quote
+    return f"#review={quote(MENU_BOM)}" if (Path(ws) / MENU_BOM).is_file() else QUEUE_ANCHOR
+
+
 def open_queue(cfg, opener=None, probe=probe_ui, launcher=start_ui, wait_s=30.0, sleep=time.sleep):
     """Open the web UI at the review queue, starting `ecadlib ui` for the workspace when nothing answers."""
     port, ws = cfg["port"], Path(cfg["workspace"])
-    url = f"http://127.0.0.1:{port}/{QUEUE_ANCHOR}"
+    url = f"http://127.0.0.1:{port}/{queue_anchor(ws)}"
     kind, served = probe(port)
     started = False
     if kind == "other":

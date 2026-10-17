@@ -187,6 +187,37 @@ class KiCadLibrary:
 
 
 # ---------------------------------------------------------------- helpers
+SHARED_KINDS = ("R", "C", "CP", "L")       # parts whose Library Ref is the generic symbol (altium_export.GENERIC_SYMBOL)
+PART_PARAMS = {"mpn", "lcsc", "manufacturer", "manufacturer part number", "datasheet", "footprint"}
+
+
+PASSIVE_FOLDERS = ("Resistors", "Capacitors", "Inductors", "Crystals")
+ACTIVE_PIN = re.compile(r"(?i)^(VCC|VDD|V\+|OUT|OUTPUT|CLK|EN|OE|E/D|ST|STBY|TRI)\b")   # an oscillator, not a crystal
+
+
+def shared_symbol(sym):
+    """A symbol every R / C / L of the library shares: no footprint model (a 0402 link would win over each DbLib row's
+    [Footprint Ref], so a 0805 part compiled with the 0402 footprint) and none of one part's parameters."""
+    return dict(sym, footprint=None, params=[(k, v) for k, v in sym.get("params") or [] if str(k).lower() not in PART_PARAMS])
+
+
+def is_passive_part(item, ln=None):
+    """R / C / L / ferrite bead / crystal: every pin is Passive, whatever the source's symbol says (an EasyEDA pin
+    typed 1 = Input made Altium warn 'Nets containing floating input pins' on every resistor)."""
+    folder = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    ref = re.match(r"[A-Z]+", str((ln or {}).get("designator") or "").upper())
+    return folder in PASSIVE_FOLDERS or bool(ref and ref.group(0) in ("R", "C", "L", "FB", "Y"))
+
+
+def passive_pins(sym):
+    """sym with every pin Passive; unchanged when a pin looks like an oscillator's supply / output / enable."""
+    pins = [pr[1] for pr in sym.get("prims") or [] if pr[0] == "pin"]
+    if not pins or any(ACTIVE_PIN.match(str(p.get("name") or "")) for p in pins):
+        return sym
+    prims = [(pr[0], dict(pr[1], type="passive"), *pr[2:]) if pr[0] == "pin" else pr for pr in sym["prims"]]
+    return dict(sym, prims=prims)
+
+
 def passive_kind(item):
     cat, fp = item["folder"].split("/")[-1], item["footprint"].get("kicad") or item["footprint"]["ref"] or ""
     if cat == "Resistors":
@@ -300,6 +331,10 @@ class Run:
 
     def put_sym(self, st, sym, source, notes=()):
         path = self.models / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib"
+        if st.get("kind") in SHARED_KINDS:      # one Resistor / Capacitor / Inductor symbol for every value and size,
+            sym = shared_symbol(sym)            # whichever source drew it: no footprint, no one part's MPN
+        if st.get("passive"):
+            sym = passive_pins(sym)
         fr = st.get("footprint") or {}
         if fr.get("renamed_from") and sym.get("footprint") == fr["renamed_from"]:     # footprint renamed (fp_share)
             sym = dict(sym, footprint=fr["name"])
@@ -340,6 +375,7 @@ class Run:
             st["tried"].append("DNP line: not fetched")
             return st
         kind, fp_name, sym_name = passive_kind(item), item["footprint"]["ref"], item["symbol"]["ref"]
+        st["passive"] = is_passive_part(item, ln)
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         try:
             self.local(st, row, kind, fp_name, sym_name)
