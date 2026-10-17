@@ -223,6 +223,7 @@ def footprint_lines(fp, title, designator="U?"):
                     body.append(["FILL", ids(), 0, "", layer, 0, 0, [path], 0])
             continue
         x, y, a = p["x"], p["y"], p["rot"]
+        hole_a = 0.0                                  # the slot's own angle, needed once the pad angle is folded in
         hole, layer, plated = None, 1 if p["side"] == "F" else 2, 1
         mask = _expansion(p["mask"], p.get("mask_margin"))
         paste = _expansion(p.get("paste") and p["kind"] == "smd", p.get("paste_margin"))
@@ -237,11 +238,11 @@ def footprint_lines(fp, title, designator="U?"):
             shape = ["ELLIPSE", m(d), m(d)]
         elif p["shape"] == "custom":
             outline, extra = _custom_shapes(p, approx)
-            shape, a = ["POLY", outline], 0.0
+            shape, a, hole_a = ["POLY", outline], 0.0, a
         elif p["kind"] == "tht" and p["offset"] != (0.0, 0.0):    # copper off the hole: the copper outline itself
             ox, oy = CM.rot(*p["offset"], a)
             shape = ["POLY", shape_path(p["shape"], x + ox, y + oy, p["w"], p["h"], a, p["rratio"])]
-            a = 0.0
+            a, hole_a = 0.0, a
         else:
             shape = _pad_shape(p)
         for note in p.get("approx") or []:
@@ -251,8 +252,8 @@ def footprint_lines(fp, title, designator="U?"):
         top_mask, bot_mask = (mask, mask) if layer == 12 else (mask, None) if layer == 1 else (None, mask)
         top_paste, bot_paste = (paste, None) if layer == 1 else (None, paste) if layer == 2 else (NO_OPENING, NO_OPENING)
         pid = ids()
-        body.append(["PAD", pid, 0, "", layer, p["num"], m(x), m(y), round(a % 360, 4) + 0.0, hole, shape, [], 0, 0, 0,
-                     plated, 0, top_mask, bot_mask, top_paste, bot_paste, 0, None, None, None, None, []])
+        body.append(["PAD", pid, 0, "", layer, p["num"], m(x), m(y), round(a % 360, 4) + 0.0, hole, shape, [], 0, 0,
+                     round(hole_a % 360, 4) + 0.0, plated, 0, top_mask, bot_mask, top_paste, bot_paste, 0, None, None, None, None, []])
         for path in extra:
             body.append(["FILL", ids(), 0, "", 1 if layer != 2 else 2, 0, 0, [path], 0])
             if layer == 12:
