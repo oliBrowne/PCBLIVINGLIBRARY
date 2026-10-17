@@ -1,7 +1,7 @@
 """Offline tests for the command-line quality-of-life features: `ecadlib doctor`, friendly errors (--debug /
 ECADLIB_DEBUG), ECADLIB_LIB / ECADLIB_WORKSPACE / ECADLIB_CONFIG defaults, --json for triage / release-check /
 approve status, `ecadlib status` and `ecadlib completion`.  Run:  python3 -m tests.test_qol"""
-import contextlib, io, json, os, shutil, subprocess, sys, tempfile
+import contextlib, io, json, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 from unittest import mock
 
@@ -345,6 +345,11 @@ def test_workspace_and_mcp_status_and_doctor():
 
 
 # ------------------------------------------------------------------ completion
+def test_top_level_help_lists_every_command():
+    listed = set(re.findall(r"^    ecadlib ([a-z0-9-]+)", cli.__doc__, re.M))
+    assert listed == set(cli.COMMANDS), (set(cli.COMMANDS) - listed, listed - set(cli.COMMANDS))
+
+
 def test_completion_tree_and_scripts():
     t = CO.tree()
     assert set(t) == set(cli.COMMANDS)
