@@ -1262,7 +1262,7 @@ class Workspace:
         rep = AM.build(out, "..", "..\\altium_library", name, command, win_dir or None, int(port))
         return {"folder": self.rel(out), "files": [self.rel(p) for p in sorted(out.iterdir()) if p.is_file()],
                 "written": rep["written"], "kept": rep["kept"], "menu_file": rep["menu_file"], "problems": rep["problems"],
-                "procedures": rep["procedures"]}
+                "procedures": rep["procedures"], "menu_entries": rep["menu_entries"]}
 
     def example_specs(self):
         d = Path(__file__).resolve().parent / "package_specs"      # shipped as package data

@@ -30,6 +30,17 @@ def clean_text(v, limit=250):
     return v if len(v) <= limit else v[:limit - 3].rstrip() + "..."
 
 
+CJK = "\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff"
+
+
+def clean_maker(name):
+    """EasyEDA / LCSC maker names carry a Chinese alias: 'TI(德州仪器)' -> 'TI', 'YAGEO（国巨）' -> 'YAGEO'. A name
+    that is only CJK is kept as it is (there is nothing else to call the maker)."""
+    name = clean_text(name, 120)
+    short = re.sub(rf"\s*[(（][^()（）]*[{CJK}][^()（）]*[)）]\s*$", "", name).strip()
+    return short or name
+
+
 def describe(text="", category="", package=""):
     """The part description a source gives: its own description text, else '<category>, <package>' when it names a
     category (both are the distributor's words; nothing is made up). '' when it gives neither."""
@@ -112,7 +123,7 @@ def parse_easyeda(data, res):
     pshape = (pkg.get("dataStr") or {}).get("shape") or []
     res.found = True
     res.mpn = cpara.get("Manufacturer Part") or cpara.get("BOM_Manufacturer Part") or r.get("title", "")
-    res.manufacturer = cpara.get("Manufacturer") or cpara.get("BOM_Manufacturer") or ""
+    res.manufacturer = clean_maker(cpara.get("Manufacturer") or cpara.get("BOM_Manufacturer") or "")
     res.package = cpara.get("package") or pkg.get("title", "")
     res.has_symbol = bool(ds.get("shape")) or bool(r.get("subparts"))
     res.has_footprint = bool(pshape)
@@ -193,7 +204,7 @@ def parse_jlcpcb(r, mpn, res):
     res.found = bool(best)
     if best:
         res.lcsc = code
-        res.manufacturer = best.get("componentBrandEn", "")
+        res.manufacturer = clean_maker(best.get("componentBrandEn", ""))
         res.package = best.get("componentSpecificationEn", "")
         res.extra = {"stock": best.get("stockCount"), "library_type": best.get("componentLibraryType")}
         desc = describe(best.get("describe") or best.get("description"),

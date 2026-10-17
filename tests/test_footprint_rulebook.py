@@ -110,6 +110,15 @@ def test_parse_klc_names():
     assert R.parse_name("LED-APA102-2020").get("pins") is None          # 2020 is a size code, not 2020 pins
 
 
+def test_module_variant_suffix_is_not_a_pin_count():
+    # a real librarian run held ESP32-S3-WROOM-1: "the name says 1 pins, the footprint has 41 numbered pads"
+    for name in ("ESP32-S3-WROOM-1", "ESP32-S3-WROOM-1U", "ESP32-WROOM-32", "ESP32-WROVER-1"):
+        assert R.parse_name(name).get("pins") is None, name
+    text = rename(gold("QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm"), "ESP32-S3-WROOM-1")
+    assert not [i for i in run(text) if i[1] == "name" and "pins" in i[2]]
+    expect(rename(gold("QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm"), "QFN-28-1EP_5x5mm_P0.5mm"), "name")  # still checked
+
+
 def test_parse_ipc_names():
     """IPC-7351 names, as Altium's IPC Compliant Footprint Wizard writes them."""
     p = R.parse_name("RESC1608X55N")

@@ -636,7 +636,8 @@ class JLCSourcing(L.JLCLifecycle):
               "data.componentPageInfo.list[] {componentCode, componentModelEn, componentBrandEn, stockCount, "
               "componentSpecificationEn (package), describe, componentPrices[{startNumber, endNumber, productPrice}] in USD, "
               "leastNumber (MOQ, if present)}. Stock and price are JLCPCB assembly stock, written as Supplier 'LCSC' "
-              "with the C-number. No lifecycle data.")
+              "with the C-number. No lifecycle data. A line with an LCSC number the search refuses or misses is looked up "
+              "directly (EasyEDA product endpoint, result.lcsc {number, price, min, step, stock}, ASSUMED USD).")
 
     def part(self, p, alternates=False):
         res = PartInfo(self.name, mpn=p["mpn"])
@@ -645,15 +646,53 @@ class JLCSourcing(L.JLCLifecycle):
             res.error = "no MPN or LCSC number"
             return res
         items, err = self._query(lcsc or mpn)
-        if err:
+        best = None if err else (next((i for i in items if str(i.get("componentCode", "")).upper() == lcsc), None) if lcsc
+                                 else L._pick(items, p, lambda i: i.get("componentModelEn"), lambda i: i.get("componentBrandEn")))
+        if best:
+            return jlc_info(best, self.name)
+        if lcsc:                       # the search refused or missed: the C-number is asked of LCSC directly instead
+            direct = self._lcsc_direct(lcsc)
+            if direct.found:
+                return direct
+            if err and direct.error:
+                res.error = f"{err}; LCSC {lcsc} direct: {direct.error}"
+                return res
+            res.note = direct.note
+        elif err:
             res.error = err
             return res
-        best = (next((i for i in items if str(i.get("componentCode", "")).upper() == lcsc), None) if lcsc
-                else L._pick(items, p, lambda i: i.get("componentModelEn"), lambda i: i.get("componentBrandEn")))
-        if not best:
-            res.found = False
+        res.found = False
+        return res
+
+    def _lcsc_direct(self, lcsc):
+        """Price and stock for one LCSC number from the product endpoint EasyEDA serves (result.lcsc {number, price,
+        min, step, stock}, USD; the same lookup providers.EasyEDA makes), so a refused JLCPCB search hides nothing."""
+        res = PartInfo(self.name)
+        r = self.http.get(P.EasyEDA.URL.format(quote(lcsc, safe="")), headers=P.EasyEDA.HEADERS)
+        if not r.ok:
+            res.error = r.error or f"HTTP {r.status}"
             return res
-        return jlc_info(best, self.name)
+        try:
+            d = r.json()
+            src = P.parse_easyeda(d, P.SourceResult(P.EasyEDA.name, lcsc=lcsc))
+            o = (d.get("result") or {}).get("lcsc") if src.found else None
+            if not isinstance(o, dict) or str(o.get("number") or lcsc).upper() != lcsc:
+                res.found, res.note = False, f"{lcsc} not listed"
+                return res
+            url = f"https://www.lcsc.com/product-detail/{lcsc}.html"
+            info = PartInfo(self.name, True, src.mpn, src.manufacturer, src.extra.get("description", ""), url=url,
+                            note=f"LCSC {lcsc} looked up directly")
+            info.specs = {k: v for k, v in {"package": package_of(src.package)}.items() if v}
+            moq = _int(o.get("min")) or 1
+            price = o.get("price")
+            breaks = sorted((_int(q), float(v)) for q, v in price if _int(q)) if isinstance(price, list) \
+                else [(moq, float(price))] if price is not None else []
+            info.offers.append(Offer(self.name, "LCSC", lcsc, _int(o.get("stock")), moq, _int(o.get("step")) or 1,
+                                     breaks, "USD", None, "", url, True))
+            return info
+        except (ValueError, AttributeError, TypeError) as e:
+            res.error = f"unparseable response: {e}"
+            return res
 
     def _query(self, kw, size=10):
         r = self.post(kw, size)

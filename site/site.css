@@ -47,12 +47,12 @@ code { font: 13px/1 var(--mono); padding: 1px 5px; border: 1px solid var(--line)
 .brand .ring { width: 9px; height: 9px; border-radius: 50%; border: 1px solid currentColor; position: relative; }
 .brand .ring::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; border: 1px solid currentColor; opacity: 0; animation: ping 3.2s var(--ease) infinite; }
 .nav nav { display: flex; gap: 22px; margin-left: 12px; }
-.nav nav a { font: 12.5px/1 var(--mono); color: var(--muted); text-decoration: none; position: relative; padding: 6px 0; transition: color .3s var(--ease); }
+.nav nav a { white-space: nowrap; font: 12.5px/1 var(--mono); color: var(--muted); text-decoration: none; position: relative; padding: 6px 0; transition: color .3s var(--ease); }
 .nav nav a::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--text); transform: scaleX(0); transform-origin: left; transition: transform .5s var(--ease); }
 .nav nav a:hover, .nav nav a.on { color: var(--text); }
 .nav nav a:hover::after, .nav nav a.on::after { transform: scaleX(1); }
 .navend { margin-left: auto; display: flex; gap: 8px; align-items: center; }
-@media (max-width: 760px) { .nav nav { display: none; } }
+@media (max-width: 980px) { .nav nav { display: none; } }
 
 /* buttons */
 .btn, button { font: 13px/1 var(--sans); display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 14px; border-radius: 9px;
@@ -474,3 +474,4 @@ svg.inking :is(ellipse, text) { opacity: clamp(0, calc(1.6 - var(--ink) * 2.6), 
   .reveal { opacity: 1; transform: none; }
   .reveal :is(h1, h2) { clip-path: none; }
 }
+.note { font-size: 14px; margin-top: 24px; }
