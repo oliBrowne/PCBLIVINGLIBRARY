@@ -813,19 +813,25 @@ def _short_path(p):
         return p
 
 
-def default_command(executable=None, nt=None):
+def default_command(executable=None, nt=None, frozen=None):
     """command= for this PC: the Python running ecadlib now (a venv's python.exe too) with -m ecadlib, the path quoted
-    for cmd.exe ("C:\\venv\\Scripts\\python.exe" -m ecadlib). '' when not on Windows (the menu runs on the Altium PC,
-    where this Python's path means nothing), or when the path cannot be written in plain ASCII or holds a quote."""
+    for cmd.exe ("C:\\venv\\Scripts\\python.exe" -m ecadlib); in the Windows app (frozen), its ecadlib.exe, which takes
+    no -m. '' when not on Windows (the menu runs on the Altium PC, where this Python's path means nothing), or when
+    the path cannot be written in plain ASCII or holds a quote."""
     nt = os.name == "nt" if nt is None else nt
+    frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
     exe = str(sys.executable if executable is None else executable or "")
     if not nt or not exe:
         return ""
+    suffix = " -m ecadlib"
+    if frozen:                                   # ecadlib-app.exe / ecadlib.exe: no Python to give -m to
+        cli = Path(exe).with_name("ecadlib.exe")
+        exe, suffix = (str(cli) if cli.is_file() else exe), ""
     if not exe.isascii():                        # the .ini is read in the ANSI code page: use the 8.3 name
         exe = _short_path(exe)
     if not exe.isascii() or '"' in exe:
         return ""
-    return f'"{exe}" -m ecadlib'
+    return f'"{exe}"{suffix}'
 
 
 def _fill_command(ini, command):

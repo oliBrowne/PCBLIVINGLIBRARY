@@ -291,6 +291,10 @@ def collect(src, out):
         if not dst.is_file() or dst.read_bytes() != p.read_bytes():
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(p, dst)
+        if p.suffix.lower() in MODEL_EXT and not p.with_name(p.name + ".ecadbuild").is_file():
+            stale = dst.with_name(dst.name + ".ecadbuild")    # a recipe from an earlier copy: Altium would rebuild
+            if stale.is_file():                               # this library from it (altium_native)
+                stale.unlink()
         got.append(dst)
     return got
 

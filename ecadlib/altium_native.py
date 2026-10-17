@@ -85,7 +85,7 @@ def step_file(fp, k, body):
 def footprint_lines(fp):
     """Recipe lines for one footprint dict (altium_lib's model: mm, y up)."""
     mm = AL.mm
-    out = [_line("FOOTPRINT", fp["name"], AL.clean(fp.get("description", "")), mm(fp.get("height_mm") or 0))]
+    out = [_line("FOOTPRINT", AL.lib_name(fp["name"]), AL.clean(fp.get("description", "")), mm(fp.get("height_mm") or 0))]
     for p in fp.get("pads", []):
         w, h = mm(p["w"]), mm(p["h"])
         def exp(v):
@@ -193,10 +193,14 @@ def write_recipe(lib_path, kind, items):
 def copy_recipe(src_lib, dst_lib):
     """A library copied elsewhere (dblib-sync copies each part's files into the library folder) takes its recipe along:
     <dst_lib>.ecadbuild and the STEP files its BODY lines name (relative to the library's folder). The recipe's
-    library name is the copy's. -> the files written (paths). Nothing when src_lib has no recipe."""
+    library name is the copy's. -> the files written (paths). Nothing when src_lib has no recipe; then a recipe an
+    earlier copy left at dst_lib is removed (when src_lib is a library), or Altium would rebuild the new file from it."""
     src_lib, dst_lib = Path(src_lib), Path(dst_lib)
     rp = src_lib.with_name(src_lib.name + EXT)
     if not rp.is_file():
+        stale = dst_lib.with_name(dst_lib.name + EXT)
+        if src_lib.is_file() and stale.is_file():
+            stale.unlink()
         return []
     lines = rp.read_text(encoding="utf-8").splitlines()
     out, written = [], []
@@ -472,6 +476,28 @@ Begin
     End;
 End;
 
+Function MissingStep(Folder : String) : String;
+{ The first STEP file a BODY line of the current block names that is not there ('' when all are). Checked before the
+  old library is deleted, so a library Altium cannot build is left on disk as it was. }
+Var
+    k : Integer;
+Begin
+    Result := '';
+    k := EbIdx + 1;
+    While k < EbLines.Count Do
+    Begin
+        EbSplit(EbLines[k]);
+        If EbF[0] = 'END' Then Break;
+        If (EbF[0] = 'BODY') And (EbF.Count > 4) Then
+            If (EbF[4] <> '') And (Not FileExists(Folder + EbF[4])) Then
+            Begin
+                Result := 'STEP file missing: ' + Folder + EbF[4];
+                Break;
+            End;
+        Inc(k);
+    End;
+End;
+
 Procedure CloseIfOpen(Path : String);
 Var
     Doc : IServerDocument;
@@ -662,6 +688,13 @@ Var
     Count   : Integer;
 Begin
     Path := Folder + EbF[1];
+    EbErr := MissingStep(Folder);
+    If EbErr <> '' Then
+    Begin
+        SkipBlock;
+        Result := 'FAILED' + #9 + 'PCBLIB' + #9 + Path + #9 + EbErr + ' (the library file was left as it was)';
+        Exit;
+    End;
     CloseIfOpen(Path);
     If FileExists(Path) Then
         DeleteFile(Path);
