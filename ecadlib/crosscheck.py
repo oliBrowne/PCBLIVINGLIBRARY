@@ -349,8 +349,11 @@ def run(reader, job, res, model):
     strong = [c for c in checks if len(c["compared"]) >= 2]
     if mode == "always" or not strong:
         checks.append(second_read(reader, job, first, first_pins, model))
+    # a table check too weak to stand alone (one field, e.g. only the pin count of a pad-table entry) can hold a part
+    # but cannot accept it: when the second read could not be made, the part stays unchecked
     st = [c["status"] for c in checks]
-    status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in st else "unchecked"
+    ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong]
+    status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok else "unchecked"
     return {"mode": mode, "status": status, "checks": checks}
 
 

@@ -563,6 +563,22 @@ def call_tool(ws, name, args):
     raise KeyError(f"unknown tool {name}")
 
 
+def _arg_errors(tool, args):
+    """The arguments checked against the tool's inputSchema: '' when they fit, else one line per problem. A string
+    given for a list (a small model's usual slip) becomes a one-item list first, comma-split for a list of names."""
+    import jsonschema
+    for k, sch in tool["inputSchema"].get("properties", {}).items():
+        types = [sch] + list(sch.get("anyOf", []))
+        if isinstance(args.get(k), str) and any(t.get("type") == "array" for t in types) \
+                and not any(t.get("type") == "string" for t in types):
+            arr = next(t for t in types if t.get("type") == "array")
+            enum = (arr.get("items") or {}).get("enum")
+            args[k] = [x.strip() for x in args[k].split(",") if x.strip()] if enum else [args[k]]
+    v = jsonschema.Draft7Validator(tool["inputSchema"])
+    errs = sorted(v.iter_errors(args), key=lambda e: list(e.path))
+    return "; ".join(f"{'.'.join(map(str, e.path)) or '(arguments)'}: {e.message}" for e in errs[:5])
+
+
 def handle(ws, msg):
     """Return a JSON-RPC response dict, or None for notifications."""
     if not isinstance(msg, dict) or not isinstance(msg.get("params", {}), (dict, type(None))):
@@ -588,6 +604,10 @@ def handle(ws, msg):
         missing = [k for k in tool["inputSchema"].get("required", []) if k not in (params.get("arguments") or {})]
         if missing:
             return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"missing argument(s): {', '.join(missing)}"}}
+        bad = _arg_errors(tool, params.get("arguments") or {})
+        if bad:                                           # e.g. a string where a list goes (it was used letter by letter):
+            return {"jsonrpc": "2.0", "id": mid,           # a tool error, so the model reads it and calls again
+                    "result": {"content": [{"type": "text", "text": f"invalid argument(s): {bad}"}], "isError": True}}
         try:
             out = call_tool(ws, params.get("name"), params.get("arguments") or {})
             result = {"content": [{"type": "text", "text": json.dumps(out, indent=1, default=str)}], "isError": False}
@@ -635,8 +655,8 @@ def serve(ws, inp, out):
                 traceback.print_exc(file=sys.stderr)
                 mid = msg.get("id") if isinstance(msg, dict) and isinstance(msg.get("id"), (str, int)) else None
                 resp = {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": f"internal error: {type(e).__name__}"}}
-        if resp is not None:
-            out.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
+        if resp is not None:                                # a lone surrogate (an undecodable file name) -> its \\u escape
+            out.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8", "backslashreplace"))
             out.flush()
 
 

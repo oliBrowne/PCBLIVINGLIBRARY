@@ -73,12 +73,15 @@ def install_script(name, dblibs, libpkg, files):
     """DelphiScript with the four procedures; every path is relative to the script project's folder."""
     add = lambda var, xs: "\n".join(f"    {var}.Add({_pas_str(x)});" for x in xs) or f"    {{ none }}"
     intlib = f"Project Outputs for {Path(libpkg).stem}\\{Path(libpkg).stem}.IntLib"
-    return f"""{{ Install the {name} library (written by ecadlib altium-pkg; paths are relative to this folder).
+    # user-chosen names go into a { } comment (a '}' would end it) and into '...' literals (a lone ' would end those)
+    c = lambda v: str(v).replace("}", ")")
+    sname, spkg = _pas_str(name)[1:-1], _pas_str(libpkg)[1:-1]
+    return f"""{{ Install the {c(name)} library (written by ecadlib altium-pkg; paths are relative to this folder).
 
-  In Altium Designer: File > Open... > {name}_Install.PrjScr, then File > Run Script... and pick one:
-    InstallDatabaseLibrary   adds the database library ({', '.join(dblibs) or 'none in this folder'}) to the installed
+  In Altium Designer: File > Open... > {c(name)}_Install.PrjScr, then File > Run Script... and pick one:
+    InstallDatabaseLibrary   adds the database library ({c(', '.join(dblibs) or 'none in this folder')}) to the installed
                              libraries; the Components panel then lists every part with its parameters
-    BuildIntegratedLibrary   opens {libpkg}, compiles it into an .IntLib and installs that
+    BuildIntegratedLibrary   opens {c(libpkg)}, compiles it into an .IntLib and installs that
     InstallFileLibraries     adds every .SchLib and .PcbLib of this folder (one per part)
     UninstallAll             removes every library of this folder from the installed list
   Re-running is safe: a library already installed is removed and added again, so Altium re-reads it.
@@ -109,7 +112,7 @@ Var
     i : Integer;
 Begin
     Result := False;
-    For i := 0 To IntegratedLibraryManager.AvailableLibraryCount - 1 Do
+    For i := 0 To IntegratedLibraryManager.InstalledLibraryCount - 1 Do
         If UpperCase(IntegratedLibraryManager.InstalledLibraryPath(i)) = UpperCase(Path) Then
             Result := True;
 End;
@@ -147,7 +150,7 @@ Begin
     For i := 0 To L.Count - 1 Do
         InstallOne(Folder + L.Strings[i]);
     L.Free;
-    Finish('{name}: database library');
+    Finish('{sname}: database library');
 End;
 
 Procedure InstallFileLibraries;
@@ -160,7 +163,7 @@ Begin
     For i := 0 To L.Count - 1 Do
         InstallOne(Folder + L.Strings[i]);
     L.Free;
-    Finish('{name}: symbol and footprint libraries');
+    Finish('{sname}: symbol and footprint libraries');
 End;
 
 Procedure BuildIntegratedLibrary;
@@ -183,10 +186,10 @@ Begin
         If FileExists(IntLib) Then
             InstallOne(IntLib)
         Else
-            Report.Add('No .IntLib after compiling: open {libpkg}, right-click it in the Projects panel > ' +
+            Report.Add('No .IntLib after compiling: open {spkg}, right-click it in the Projects panel > ' +
                        'Compile Integrated Library, and read the Messages panel.');
     End;
-    Finish('{name}: integrated library');
+    Finish('{sname}: integrated library');
 End;
 
 Procedure UninstallAll;
@@ -195,7 +198,7 @@ Var
     P : String;
 Begin
     Report := TStringList.Create;
-    For i := IntegratedLibraryManager.AvailableLibraryCount - 1 DownTo 0 Do
+    For i := IntegratedLibraryManager.InstalledLibraryCount - 1 DownTo 0 Do
     Begin
         P := IntegratedLibraryManager.InstalledLibraryPath(i);
         If Pos(UpperCase(Folder), UpperCase(P)) = 1 Then
@@ -204,7 +207,7 @@ Begin
             Report.Add('removed: ' + P);
         End;
     End;
-    Finish('{name}: uninstalled');
+    Finish('{sname}: uninstalled');
 End;
 """.replace("\n", "\r\n")
 

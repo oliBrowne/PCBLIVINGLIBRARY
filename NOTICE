@@ -27,6 +27,8 @@ Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0):
     TEXT_TEST .PcbLib) and three pin records (CLOCK_PIN, INVERTED_PIN and
     ACTIVE_LOW_PIN .SchLib) from AltiumSharp TestData as byte references.
 
+tests/fixtures/kicad_golden/*.kicad_mod (24 footprints, kicad-footprints commit
+f8440fa61a5690b48b325c891fdb99c0038a5a59, unmodified) and
 tests/fixtures/kicad/USB_C_Receptacle_HRO_TYPE-C-31-M-12.kicad_mod and
 tests/fixtures/kicad/Regulator_Linear_AMS1117.kicad_sym (symbols AP1117-15 and
 AMS1117-3.3 combined into one library file) are from the KiCad libraries

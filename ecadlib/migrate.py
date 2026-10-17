@@ -292,9 +292,9 @@ def _key_version(f):
     f = Path(f)
     text = f.read_text(encoding="utf-8")
     if f.suffix == ".toml":
-        try:
-            import tomllib
-        except ImportError:                    # Python 3.10: a plain look at the top-level key
+        from .rules import toml_module
+        tomllib = toml_module()
+        if tomllib is None:                    # Python 3.10 without tomli: a plain look at the top-level key
             import re
             m = re.search(r"(?m)^\s*schema_version\s*=\s*(\d+)", text.split("[", 1)[0])
             return (int(m.group(1)) if m else 1), ""
