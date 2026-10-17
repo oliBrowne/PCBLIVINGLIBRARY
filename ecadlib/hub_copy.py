@@ -129,9 +129,27 @@ def import_into_project(ws, project, tool):
     return add_to_prjpcb(p, sorted((lib / "altium").glob("*.SchLib")) + sorted((lib / "altium").glob("*.PcbLib")))
 
 
+def _read_prj(prj):
+    """A .PrjPcb's text and the encoding to write it back in: Altium saves them as ANSI (cp1252), UTF-8 (with or
+    without BOM) or UTF-16; reading every one as UTF-8 would turn "Müller" into replacement characters."""
+    data = Path(prj).read_bytes()
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16"), "utf-16"
+    if data[:3] == b"\xef\xbb\xbf":
+        return data[3:].decode("utf-8", "replace"), "utf-8-sig"
+    try:
+        return data.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        pass
+    try:
+        return data.decode("cp1252"), "cp1252"
+    except UnicodeDecodeError:
+        return data.decode("latin-1"), "latin-1"      # any byte, written back unchanged
+
+
 def add_to_prjpcb(prj, libs):
     """Add library documents to an Altium project ([DocumentN] DocumentPath=...), skipping ones it lists already."""
-    text = prj.read_text(encoding="utf-8-sig", errors="replace")
+    text, enc = _read_prj(prj)
     have = {Path(m.strip()).name.upper() for m in re.findall(r"(?mi)^DocumentPath=(.*)$", text)}
     n = max([int(x) for x in re.findall(r"(?mi)^\[Document(\d+)\]", text)] or [0])
     add = [f for f in libs if f.name.upper() not in have]
@@ -157,5 +175,9 @@ def add_to_prjpcb(prj, libs):
     at = last[-1].end() if last else len(text)
     block = nl.join(secs) + nl
     text = text[:at].rstrip("\r\n") + nl + nl + block + (nl + text[at:].lstrip("\r\n") if text[at:].strip() else "")
-    prj.write_text(text, encoding="utf-8")
+    try:
+        data = text.encode(enc)
+    except UnicodeEncodeError:                   # a new path the old encoding can't hold: UTF-8 with BOM, which Altium reads
+        data = text.encode("utf-8-sig")
+    prj.write_bytes(data)
     return f"{len(add)} librar{'y' if len(add) == 1 else 'ies'} added to {prj.name} (a copy of the old file is {bak.name})"
