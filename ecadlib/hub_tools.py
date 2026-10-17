@@ -29,7 +29,7 @@ def read_lbr(path):
         pads = None
         if pk is not None:
             pads = sorted(DD._pad_tuple(p["num"], p["x"], -p["y"], p["w"], p["h"], p.get("rot") or 0.0,
-                                        p.get("side") not in ("F", "B")) for p in pk["pads"])
+                                        p.get("drill") is not None) for p in pk["pads"])
         pins = [(num, p["name"]) for p in ds["pins"].values() for num in (p["pads"] or [])]
         attrs = {k: v for k, v in (ds["attrs"] or {}).items() if v}
         out.append({"name": name, "mpn": _field(attrs, "mpn", "manufacturer part number", "manufacturer_part_number"),
@@ -54,7 +54,8 @@ def read_elibz(path):
         if fp in lib["footprints"]:
             pads = DD.fp_geometry_kicad(EE.footprint_to_kicad(lib["footprints"][fp], fp))["pads"]
         if sym in lib["symbols"]:
-            pins = [(num, p["name"]) for num, p in EE.symbol_pins(lib["symbols"][sym]).items() if num]
+            pins = [(num, p["name"][:-1] if p["name"].endswith("#") else p["name"])      # overbar: NAME# -> NAME
+                    for num, p in EE.symbol_pins(lib["symbols"][sym]).items() if num]
         out.append({"name": title, "mpn": _field(attrs, "manufacturer part", "mpn", "manufacturer part number"),
                     "symbol": sym or "", "footprint": fp or "", "prefix": str(attrs.get("Designator") or "").rstrip("?"),
                     "fields": {"Manufacturer": _field(attrs, "manufacturer"), "Description": attrs.get("_description", ""),
