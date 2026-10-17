@@ -36,6 +36,26 @@ def key_status(rules=None, environ=None):
     return out
 
 
+def reader_key(rules=None, environ=None, keys=None):
+    """-> (what the datasheet reader's model needs, ready?) for the configured [ai] / [datasheet] model: a Claude key
+    variable, another provider's key variable, or none at all (a local server such as Ollama)."""
+    from . import llm as LL
+    environ = os.environ if environ is None else environ
+    try:
+        ep = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")
+    except LL.AIConfigError as e:
+        return f"[ai] needs fixing first: {e}", False
+    if ep["provider"] == "anthropic":
+        from .doctor import _ai_key_env
+        env = _ai_key_env(rules)
+        ok = next((ok for n, ok, _ in (keys if keys is not None else key_status(rules, environ)) if n == env), False)
+        return f"needs {env}, which is {'set' if ok else 'not set yet'}", ok
+    k = LL.key_for(ep, environ=environ)
+    if k == LL.NO_KEY:
+        return f"{ep['model']} at {ep['base_url']}: no key needed", True
+    return f"needs {ep['key_env']}, which is {'set' if k else 'not set yet'}", bool(k)
+
+
 def _split(text):
     return [p.strip() for p in re.split(r"[,;]", text or "") if p.strip()]
 
@@ -57,8 +77,7 @@ def ask_setup(existing=None, given=None, inp=input, out=print, interactive=True,
            "workspace": given.get("workspace") or st.get("workspace") or "ecadlib_workspace",
            "sources": list(given["sources"]) if given.get("sources") else None}
     keys = key_status(rules, environ)
-    ds_env = ((rules or {}).get("datasheet") or {}).get("api_key_env") or "ANTHROPIC_API_KEY"
-    ds_key = next((ok for n, ok, _ in keys if n == ds_env), False)
+    ds_need, ds_key = reader_key(rules, environ, keys)
     if interactive:
         out("\nSetup (Enter keeps the value in [brackets]):")
         if "tool" not in given:
@@ -83,8 +102,8 @@ def ask_setup(existing=None, given=None, inp=input, out=print, interactive=True,
             ans["workspace"] = a or ans["workspace"]
         if ans["sources"] is None:
             online = _yes(inp("  Look missing parts up online (KiCad library on gitlab.com, EasyEDA/LCSC)? [Y/n]: "))
-            ds = _yes(inp(f"  Let a model read the datasheet for parts no library has? (needs {ds_env}, which is "
-                          f"{'set' if ds_key else 'not set yet'}) [{'Y/n' if ds_key else 'y/N'}]: "), default=ds_key)
+            ds = _yes(inp(f"  Let a model read the datasheet for parts no library has? ({ds_need}) "
+                          f"[{'Y/n' if ds_key else 'y/N'}]: "), default=ds_key)
             order = [s for s in cur_sources if (online or s not in ("kicad", "easyeda")) and (ds or s != "datasheet")]
             if "standard" not in order:
                 order.append("standard")
@@ -297,7 +316,14 @@ def blockers(rows, rules=None, offline=False):
             out.append((f"network: {src} could not be reached (or refused) for {len(parts)} part(s) ({why})",
                         "check your internet connection or proxy, or skip online lookups: --offline --sources standard"))
     if nokey:
-        env = ((rules or {}).get("datasheet") or {}).get("api_key_env") or "ANTHROPIC_API_KEY"
+        from .doctor import _ai_key_env
+        env = _ai_key_env(rules)
+        try:
+            from . import llm as LL
+            ep = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")
+            env = ep["key_env"] if ep["provider"] != "anthropic" and ep["key_env"] else env
+        except Exception:
+            pass
         out.append((f"{len(set(nokey))} part(s) need the datasheet reader, but {env} is not set",
                     f"add it on the setup page (`ecadlib setup`) or with `ecadlib keys set {env}`, or take datasheet out of "
                     "[sources] order in ecadlib.toml"))

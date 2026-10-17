@@ -1468,7 +1468,9 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
                                     model=inf["ep"]["model"])
     if client is None:
         try:
-            k = key or os.environ.get(cfg["api_key_env"]) or os.environ.get("ANTHROPIC_API_KEY")
+            from . import llm as LL               # [ai] api_key_env counts, as for the datasheet reader
+            k = key or (LL.key_for(inf["ep"]) if inf else None) or os.environ.get(cfg["api_key_env"]) \
+                or os.environ.get("ANTHROPIC_API_KEY")
         except Exception:
             k = None
         if not k:

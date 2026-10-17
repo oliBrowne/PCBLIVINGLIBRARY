@@ -97,7 +97,17 @@ ETYPE = {"bidirectional": "io", "i/o": "io", "in/out": "io", "inout": "io", "gnd
          "supply": "power", "pwr": "power", "p": "power", "i": "input", "in": "input", "o": "output", "out": "output",
          "od": "open_collector", "open drain": "open_collector", "open-drain": "open_collector",
          "opendrain": "open_collector", "n/c": "passive", "no connect": "passive", "nc": "passive", "analog": "passive"}
-_NUM = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
+# a number as text: one value, optionally with its unit and a drawing qualifier ("0.50 mm", "1.27 BSC", "0.016 in typ")
+_NUM_TEXT = re.compile(r"\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*(mm|millimet(?:er|re)s?|inch(?:es)?|in|\"|mils?|thou)?"
+                       r"\.?\s*(?:\(?(?:typ|nom|bsc|ref|max|min)\.?\)?)?\s*", re.I)
+
+
+def _num_text(v):
+    """'0.50 mm' -> (0.5, 'mm'), '1.27' -> (1.27, None); a range, two values or other words -> None (never guessed)."""
+    m = _NUM_TEXT.fullmatch(v.replace(",", ".") if v.count(",") == 1 and "." not in v else v)
+    if not m:
+        return None
+    return float(m.group(1)), UNIT.get((m.group(2) or "").lower())
 
 
 def extract_json(text):
@@ -152,8 +162,12 @@ def coerce(v, s, fixes, path="$"):
     if t == "object" and isinstance(v, dict):
         props = s.get("properties") or {}
         out = {}
+        row_unit = UNIT.get(str(v.get("unit") or "").strip().lower(), v.get("unit")) if "unit" in props else None
         for k, sub in props.items():
-            if k in v:
+            if k in v and row_unit and isinstance(v[k], str) and (_num_text(v[k]) or (0, None))[1] not in (None, row_unit):
+                out[k] = v[k]                         # '0.016 in' in a row whose unit is mm: left as text, so the
+                fixes.append(f"{path}.{k}: {v[k]!r} is not in the row's unit {row_unit!r}; not converted")  # check fails
+            elif k in v:
                 out[k] = coerce(v[k], sub, fixes, f"{path}.{k}")
             elif "anyOf" in sub and any(x.get("type") == "null" for x in sub["anyOf"]):
                 out[k] = None
@@ -174,9 +188,9 @@ def coerce(v, s, fixes, path="$"):
             return [coerce(x, s.get("items") or {}, fixes, f"{path}[{i}]") for i, x in enumerate(v)]
         return v
     if t in ("number", "integer") and isinstance(v, str):
-        m = _NUM.search(v.replace(",", "."))
+        m = _num_text(v)
         if m:
-            n = float(m.group())
+            n = m[0]
             n = int(n) if t == "integer" and n.is_integer() else n
             fixes.append(f"{path}: {v!r} -> {n}")
             return n
