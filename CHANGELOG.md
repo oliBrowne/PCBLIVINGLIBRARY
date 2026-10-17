@@ -7,6 +7,10 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+### Changed
+
+- Altium (Altium 365 first) and KiCad are the supported targets. The Fusion Electronics / EAGLE and EasyEDA Pro exports are marked experimental in the README and `ecadlib -h`: they keep working but get no new features and may be removed later.
+
 ### Added
 
 - `ecadlib eagle-export` (`eagle_export.py`) and `ecadlib easyeda-export` (`easyeda_pro_export.py`): the library as an Autodesk Fusion Electronics / EAGLE `.lbr` and an EasyEDA Pro `.elibz` (symbols, footprints, devices with their fields; STEP models beside them), built from `kicad-export`. Every footprint is read back and compared pad by pad with its KiCad original, mask and paste also as layer areas, symbols pin by pin, and through KiCad's own importers where pcbnew is found. Release-check rules `[release] eagle` / `easyeda` (`hold` / `warn` / `off`, default `warn`), web UI buttons, `POST /api/export/tool`, Workspace and MCP `tool_export`. Surveyed on 1,927 KiCad library footprints; `tests/test_tool_exports.py`. Each export writes `INSTALL.md` (import steps, STEP model per footprint, differences) and one hand-off zip; the web UI and MCP return it; Fusion parts carry Fusion's standard attributes (PACKAGE, CATEGORY_L1/L2, VENDOR/VPN) and passives a user value; `ecadlib testpack` exports both with a checklist section for each tool. Pin name / number visibility is carried and compared (resistor and capacitor pins were read as hidden).

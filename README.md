@@ -6,6 +6,10 @@ These are small Python prototypes for an open-source tool that manages ECAD comp
 2. A deterministic generator turns that JSON into an IPC-7351B land pattern.
 3. A triage step works out which BOM lines already exist locally, which can be pulled from a public source, and which need a generated footprint.
 
+**Supported tools:** Altium (Altium 365 first) and KiCad are the supported targets: they get the testing, the
+benchmarks and the fixes. The Fusion Electronics / EAGLE and EasyEDA Pro exports (section 11b) still work but are
+**experimental**: kept as they are, not a focus, and they may be removed.
+
 ## Start here (no terminal needed)
 
 **Electronics engineer who just wants it to work?** Read [docs/START_HERE.md](docs/START_HERE.md). On Windows,
@@ -95,7 +99,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `held_parts`, `part_candidates` and `choose_part` (fix a held part), `approval_status` and `approve_part` (sign-off; `user` is required, the agent must pass the person's own name), `find_duplicates` (with `merge`), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed), `sim_models` (SPICE/IBIS models; `attach` writes them) and `list_example_specs`.
-3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib eagle-export` and `ecadlib easyeda-export` (Fusion Electronics / EAGLE and EasyEDA Pro, section 11b), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib demo` (section 32), `ecadlib kicad-pcm` and `ecadlib altium-pkg` (section 31), `ecadlib ai` (section 33), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22), `ecadlib visual-check` (23), `ecadlib migrate` and `ecadlib rebuild` (35). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib eagle-export` and `ecadlib easyeda-export` (Fusion Electronics / EAGLE and EasyEDA Pro, experimental, section 11b), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib demo` (section 32), `ecadlib kicad-pcm` and `ecadlib altium-pkg` (section 31), `ecadlib ai` (section 33), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22), `ecadlib visual-check` (23), `ecadlib migrate` and `ecadlib rebuild` (35). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
 * `uploads/`
@@ -805,7 +809,10 @@ Writes what the librarian built for Altium as a KiCad library: `mylib.kicad_sym`
 * **Checks:** every file parses with `ecadlib.sexpr`, each footprint passes release_check's footprint rule at the level the release check recorded, and symbol pins are checked against footprint pads. **In KiCad itself** (7.0.11, see section 28): the `fp-lib-table` resolves in a KiCad project and its footprints match the library; KiCad 7 refuses the KiCad 8 symbol library as such, and loads it with the two KiCad 8 tokens (`exclude_from_sim`, `generator_version`) removed, every pin, graphic and field unchanged. KiCad 8, 9 and 10 were not run here. A KiCad 7 symbol's `ki_description` becomes the `Description` field.
 * **License:** KiCad library content is CC-BY-SA 4.0. An export that includes some gets a `NOTICE.txt`, and the export stays out of git (`out/kicad/` is in `.gitignore`).
 
-## 11b. `eagle_export.py` and `easyeda_pro_export.py`: Fusion Electronics / EAGLE and EasyEDA Pro
+## 11b. `eagle_export.py` and `easyeda_pro_export.py`: Fusion Electronics / EAGLE and EasyEDA Pro (experimental)
+
+> **Experimental.** ecadlib focuses on Altium and KiCad. These two exports keep working and keep their read-back
+> checks, but they get no new features and may be removed in a later release.
 
 ```
 ecadlib eagle-export out/librarian/plan.json -o out/fusion --name mylib [--kicad out/kicad] [--include-held] [--offline]
