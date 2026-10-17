@@ -210,12 +210,21 @@ def _set_par(item, k, v):
 
 
 def _line_for(item, lines, rows):
+    """The BOM line and triage row of a plan item: same MPN, else (no MPN) same value. Of several, a fitted line wins
+    over a DNP one (R5 DNP and R1 share the MPN), then the line whose footprint is the item's (10k 0603 and 10k 0402
+    are two items with one value)."""
     par = _par(item)
     mpn, val = par.get("Manufacturer Part Number", ""), par.get("Value", "")
+    fp = item.get("footprint") or {}
+    want = {AL.lib_name(str(x).split(":")[-1]) for x in (fp.get("kicad"), fp.get("bom_ref"), fp.get("ref")) if x}
+    best, score = ({}, {}), None
     for ln, row in zip(lines, rows):
         if (mpn and ln.get("mpn") == mpn) or (not mpn and not ln.get("mpn") and ln.get("value", "") == val):
-            return ln, row
-    return {}, {}
+            fps = {AL.lib_name(str(x).split(" ")[0].split(":")[-1]) for x in (ln.get("footprint"), row.get("local_footprint")) if x}
+            s = (not ln.get("dnp") and not str(row.get("status") or "").startswith("dnp"), bool(fps & want))
+            if score is None or s > score:
+                best, score = (ln, row), s
+    return best
 
 
 class Run:

@@ -81,9 +81,8 @@ ALTIUM_API = {
     "IntegratedLibraryManager": "TR0136 Integrated Library API p2",
     "InstallLibrary": "TR0136 p2 (IIntegratedLibraryManager.InstallLibrary)",
     "UninstallLibrary": "TR0136 p4",
-    "InstalledLibraryPath": "TR0136 p4 (InstalledLibraryPath(Index), Index < InstalledLibraryCount)",
-    "InstalledLibraryCount": "TR0136 p4 (the count InstalledLibraryPath indexes; AvailableLibraryCount p3 pairs with "
-                             "AvailableLibraryPath and also counts project libraries)",
+    "InstalledLibraryPath": "TR0136 p4",
+    "InstalledLibraryCount": "TR0136 p19 (IIntegratedLibraryManager.InstalledLibraryCount: the Installed tab only; AvailableLibraryCount also counts project and search-path libraries, which InstalledLibraryPath cannot index)",
     "ResetParameters": "TR0120 p18 (Extension Routines); TR0135 p143",
     "AddStringParameter": "TR0135 p143",
     "RunProcess": "TR0120 p18; TR0135 p143; process IntegratedLibrary:RefreshInstalledLibraries (AllLibraries=True) in TR0124 Server Process Reference p19",

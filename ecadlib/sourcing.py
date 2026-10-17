@@ -42,7 +42,7 @@ from urllib.parse import quote
 
 from . import lifecycle as L, providers as P
 from . import sheetsafe as SS
-from .bom_triage import count_refs, part_numbers, read_bom
+from .bom_triage import count_refs, part_numbers, placeholder_mpn, read_bom
 from .httpcache import CachedHTTP
 from .kicad_index import norm_mpn, package_of, parse_value
 
@@ -806,8 +806,9 @@ def evaluate_alternates(part, line_mpn, kind, req, cands, need, currency):
     return rows
 
 
-def source_line(i, ln, provs, build_qty, currency, alternates, low_factor, unconfigured):
-    per_board = line_qty(ln)
+def source_line(i, ln, provs, build_qty, currency, alternates, low_factor, unconfigured, merged=()):
+    """merged: [(line number, line)] of later BOM lines with the same part, bought with this one."""
+    per_board = line_qty(ln) + sum(line_qty(x) for _, x in merged)
     need = per_board * build_qty
     pns = part_numbers(ln)
     mpn = pns[0] if pns else ""
@@ -816,6 +817,9 @@ def source_line(i, ln, provs, build_qty, currency, alternates, low_factor, uncon
            "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""), "value": ln.get("value", ""),
            "kind": KIND_WORD.get(kind, "other"), "flags": [], "notes": [], "answered": False, "offers": [], "alternates": [],
            "suppliers": [], "chosen": None, "lifecycle": "unknown", "distributors_in_stock": 0, "lead_days": None}
+    if merged:
+        row["notes"].append("bought together with line " + ", ".join(
+            f"{j} ({x.get('designator', '')}, {line_qty(x)} per board)" for j, x in merged) + ": same part")
     p = {"mpn": mpn, "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", "")}
     if not (mpn or p["lcsc"]):
         row["flags"].append("no_mpn")
@@ -907,9 +911,33 @@ def source_line(i, ln, provs, build_qty, currency, alternates, low_factor, uncon
     return row
 
 
+def _buy_key(ln):
+    """Lines with this key are one part to buy: the normalised MPN, else the LCSC number ('' = never merged)."""
+    pns = part_numbers(ln)
+    mpn = pns[0] if pns else ""
+    if mpn and not placeholder_mpn(mpn) and norm_mpn(mpn):
+        return norm_mpn(mpn)
+    return f"LCSC:{str(ln['lcsc']).upper()}" if ln.get("lcsc") else ""
+
+
 def source_bom(lines, provs, build_qty=1, currency="USD", alternates=False, low_factor=3.0):
+    """One row per BOM line. Fitted lines with the same part (MPN, else LCSC number) are bought together: the first
+    carries the summed quantity (stock, MOQ and price breaks apply to the total), the later ones are `merged` rows."""
     unconfigured, rows = set(), []
+    groups = {}
     for i, ln in enumerate(lines, 1):
+        if not ln.get("dnp") and _buy_key(ln):
+            groups.setdefault(_buy_key(ln), []).append((i, ln))
+    for i, ln in enumerate(lines, 1):
+        grp = groups.get(_buy_key(ln)) if not ln.get("dnp") and _buy_key(ln) else None
+        if grp and grp[0][0] != i:
+            rows.append({"line": i, "designator": ln.get("designator", ""), "qty_per_board": line_qty(ln), "need": 0,
+                         "mpn": (part_numbers(ln) or [""])[0], "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""),
+                         "value": ln.get("value", ""), "kind": "merged", "flags": ["merged"],
+                         "notes": [f"same part as line {grp[0][0]}: bought there"], "answered": False, "offers": [],
+                         "alternates": [], "suppliers": [], "chosen": None, "lifecycle": "", "distributors_in_stock": 0,
+                         "lead_days": None})
+            continue
         if ln.get("dnp"):
             rows.append({"line": i, "designator": ln.get("designator", ""), "qty_per_board": line_qty(ln), "need": 0,
                          "mpn": (part_numbers(ln) or [""])[0], "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""),
@@ -917,12 +945,12 @@ def source_bom(lines, provs, build_qty=1, currency="USD", alternates=False, low_
                          "answered": False, "offers": [], "alternates": [], "suppliers": [], "chosen": None,
                          "lifecycle": "", "distributors_in_stock": 0, "lead_days": None})
             continue
-        rows.append(source_line(i, ln, provs, build_qty, currency, alternates, low_factor, unconfigured))
+        rows.append(source_line(i, ln, provs, build_qty, currency, alternates, low_factor, unconfigured, (grp or [])[1:]))
     return rows, sorted(unconfigured)
 
 
 def rollup(rows, build_qty, currency):
-    fitted = [r for r in rows if "dnp" not in r["flags"]]
+    fitted = [r for r in rows if "dnp" not in r["flags"] and "merged" not in r["flags"]]
     priced = [r for r in fitted if r["chosen"]]
     total = round(sum(r["chosen"]["ext"] for r in priced), 4)
     full = [r for r in priced if r["chosen"]["covers"]]
@@ -951,7 +979,7 @@ def write_plan(plan_path, rows, build_qty, currency, now=None, max_alternates=2)
     items = json.loads(path.read_text(encoding="utf-8"))
     by = {}
     for r in rows:
-        if r["mpn"] and "dnp" not in r["flags"]:
+        if r["mpn"] and "dnp" not in r["flags"] and "merged" not in r["flags"]:
             by.setdefault(norm_mpn(r["mpn"]), r)
     changed = []
     for it in items:
@@ -1122,7 +1150,7 @@ def main(argv=None):
         print(f"plan updated: {sum(bool(k) for _, k in changes)} items got new fields -> {a.write_plan}")
     if unconfigured:
         print(f"not configured: {', '.join(unconfigured)}")
-    fitted = [r for r in rows if "dnp" not in r["flags"]]
+    fitted = [r for r in rows if "dnp" not in r["flags"] and "merged" not in r["flags"]]
     if fitted and not any(r["answered"] for r in fitted):
         print("no source answered for any line (secrets missing, quota, or network blocked)", file=sys.stderr)
         return 3

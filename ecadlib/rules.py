@@ -8,7 +8,7 @@ footprint density, which every ecadlib tool follows so new parts match your exis
 Without a file nothing changes: DEFAULTS is today's behaviour exactly. The file is searched in: an explicit
 --rules PATH, then the folder the tool works in (plan / output folder) and its parents, then the current folder
 and its parents. A workspace (UI / MCP) uses <workspace>/ecadlib.toml. Python 3.10 has no tomllib: there the
-same content as JSON in ecadlib_rules.json works.
+tomli package (installed with ecadlib) reads it, or the same content as JSON in ecadlib_rules.json works.
 
 Plans (plan.json) keep ecadlib's own parameter names ("Manufacturer Part Number", "Supplier 1", ...); your house
 names from [parameters.names] are applied where data leaves ecadlib: Altium 365 push, the DbLib export and sync,
@@ -175,16 +175,28 @@ def find(start="."):
     return None
 
 
+def toml_module():
+    """tomllib (Python 3.11+), else tomli (the same API; a dependency on 3.10), else None."""
+    try:
+        import tomllib
+    except ImportError:
+        try:
+            import tomli as tomllib
+        except ImportError:
+            return None
+    return tomllib
+
+
 def parse_text(text, name="ecadlib.toml"):
     if str(name).endswith(".json"):
         try:
             return json.loads(text or "{}")
         except json.JSONDecodeError as e:
             raise RulesError(f"{name}: not valid JSON ({e})") from None
-    try:
-        import tomllib
-    except ImportError:                       # Python 3.10
-        raise RulesError(f"{name}: reading TOML needs Python 3.11+; on 3.10 put the same content as JSON in ecadlib_rules.json") from None
+    tomllib = toml_module()
+    if tomllib is None:                       # Python 3.10 without the tomli package
+        raise RulesError(f"{name}: reading TOML on Python 3.10 needs the tomli package (pip install tomli), "
+                         "or put the same content as JSON in ecadlib_rules.json") from None
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:

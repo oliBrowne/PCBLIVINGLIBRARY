@@ -34,11 +34,16 @@ def _norm(h):
     return re.sub(r"[^a-z0-9]+", " ", str(h).lower()).strip()
 
 
+def _hnorm(h):
+    """A header normalised for matching: '#' and 'P/N' mean part number ('Mfr. #' is the MPN, not the maker)."""
+    return _norm(re.sub(r"(?i)\bp\s*/\s*n\b", " pn ", str(h)).replace("#", " no "))
+
+
 def map_headers(headers, threshold=0.72):
     """Fuzzy, case-insensitive header -> field mapping. Returns {field: header}."""
     scores = []
     for h in headers:
-        nh = _norm(h)
+        nh = _hnorm(h)
         for f, syns in FIELDS.items():
             best = 0.0
             for s in syns:
@@ -180,9 +185,10 @@ def read_bom(path, columns=None, rules=None):
     mapping = apply_columns(map_headers(headers), headers, columns)
     if not {"designator", "mpn", "value"} & mapping.keys():
         raise ValueError(f"{p}: no BOM header found (need a Designator, MPN or Value/Comment column)")
+    col = {f: headers.index(h) for f, h in mapping.items()}       # by position: a BOM may repeat a header (a 2nd 'MPN')
     lines = []
     for _, row in df.iterrows():
-        d = {f: SS.unquote(str(row[h]).strip()) for f, h in mapping.items()}       # "'=X" from our own reports
+        d = {f: SS.unquote(str(row.iloc[j]).strip()) for f, j in col.items()}     # "'=X" from our own reports
         if not any(d.values()):
             continue
         if lines and d.get("designator") and not any(v for f, v in d.items() if f != "designator"):
@@ -248,6 +254,14 @@ GENERIC_LIBREF = re.compile(r"(res(istor)?|cap(acitor)?|ind(uctor)?|led|diode|ze
                             r"([\s_-]*(pol|semi|var|adj|smd|tvs))*[\s_-]*\d*", re.I)   # Altium generic symbols: Res1, Cap Pol1
 
 
+PLACEHOLDER_MPN = re.compile(r"\s*(n/?a|none|tbd|tba|tbc|dnp|dnf|n\.?c\.?|generic|any|various|not applicable|-+|\?+|x+)\s*", re.I)
+
+
+def placeholder_mpn(s):
+    """True for an MPN cell that names no part ('N/A', 'TBD', 'Generic', '-'): two such cells are not the same part."""
+    return bool(PLACEHOLDER_MPN.fullmatch(str(s or "")))
+
+
 def part_numbers(ln):
     """MPN candidates, best first: the MPN column, then an Altium 'Comment'/value that is not a
     passive value (ICs carry their part number there, e.g. STM32F103C8T6), then the LibRef. Altium vault item ids
@@ -271,6 +285,8 @@ def count_refs(s):
     for tok in re.split(r"[,;\s]+", s):
         m = re.fullmatch(r"([A-Za-z]+)(\d+)[A-Za-z]?(?:-(?:\1)?(\d+)[A-Za-z]?)?", tok)
         if not m:
+            if re.fullmatch(r"[A-Za-z]+\d+[A-Za-z0-9_.]*", tok):   # Altium channel designators (R1_CH1, R1_A): one each
+                seen.add(("", tok.upper()))
             continue
         pre, lo = m.group(1).upper(), int(m.group(2))
         hi = int(m.group(3)) if m.group(3) and int(m.group(3)) >= lo else lo

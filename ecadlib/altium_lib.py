@@ -138,13 +138,25 @@ PCBLIB_RESERVED = {"FILEHEADER", "SECTIONKEYS", "LIBRARY", "FILEVERSIONINFO"}
 SCHLIB_RESERVED = {"FILEHEADER", "SECTIONKEYS", "STORAGE"}
 
 
-def _check_keys(keys, names, reserved, what):
-    upper = [k.upper() for k in keys]
-    if len(set(upper)) != len(upper):
-        raise ValueError(f"{what} names collide after truncation to 31 chars: {names}")
-    bad = [n for n, k in zip(names, upper) if k in reserved]
+def _section_keys(names, reserved, what):
+    """Storage names for a library's entries: section_key(name), except that a name whose key an earlier entry already
+    has (two names sharing their first 31 characters, 'PinHeader_1x05_P2.54mm_Vertical' + '..._SMD_Pin1Left') gets
+    the key cut shorter and ending in '~1', '~2' ...; the SectionKeys stream maps every such name to its key."""
+    upper = [n.upper() for n in names]
+    dup = sorted({n for n, u in zip(names, upper) if upper.count(u) > 1})
+    if dup:
+        raise ValueError(f"{what} names occur more than once (names are not case-sensitive): {dup}")
+    bad = [n for n in names if section_key(n).upper() in reserved]
     if bad:
         raise ValueError(f"{what} name(s) {bad} clash with a reserved library stream/storage name")
+    keys, used = [], set()
+    for n in names:
+        k, i = section_key(n), 0
+        while k.upper() in used or k.upper() in reserved:
+            i += 1
+            k = section_key(n)[:31 - len(f"~{i}")] + f"~{i}"
+        used.add(k.upper()); keys.append(k)
+    return keys
 
 
 def unique_id(seed):                          # Altium's 8-letter UNIQUEID, deterministic per seed
@@ -476,8 +488,7 @@ def pcblib_bytes(footprints, filename="ecadlib.PcbLib", stamp=None):
     """stamp: (DATE, TIME) for the library header; default now (or SOURCE_DATE_EPOCH)."""
     footprints = [dict(fp, name=lib_name(fp["name"])) for fp in footprints]
     names = [fp["name"] for fp in footprints]
-    keys = [section_key(n) for n in names]
-    _check_keys(keys, names, PCBLIB_RESERVED, "footprint")
+    keys = _section_keys(names, PCBLIB_RESERVED, "footprint")
     tpl, (date, tm) = _template(), stamp or _now()     # cached: treat tpl as read-only
     hdr = re.sub(r"\|FILENAME=[^|]*", "|FILENAME=" + clean(filename), tpl["library_params"], count=1)
     hdr = re.sub(r"\|DATE=[^|]*", "|DATE=" + date, hdr, count=1)
@@ -781,8 +792,7 @@ def schlib_bytes(symbols):
     symbols = [dict(s, name=lib_name(s["name"]), **({"footprint": lib_name(s["footprint"])} if s.get("footprint") else {}))
                for s in symbols]
     names = [s["name"] for s in symbols]
-    keys = [section_key(n) for n in names]
-    _check_keys(keys, names, SCHLIB_RESERVED, "symbol")
+    keys = _section_keys(names, SCHLIB_RESERVED, "symbol")
     tree, total, lib = {}, 0, []
     for i, (s, k) in enumerate(zip(symbols, keys)):
         data, n, _ = _sch_component(s)

@@ -83,12 +83,12 @@ class KiCadIndex:
                 self._load_sym(f)
             for d in root.rglob("*.pretty"):
                 for m in d.glob("*.kicad_mod"):
-                    txt = m.read_text(errors="replace")
+                    txt = m.read_text(encoding="utf-8", errors="replace")
                     self.footprints[f"{d.stem}:{m.stem}"] = {"path": str(m), "has_3d": "(model " in txt}
 
     def _load_sym(self, f):
         try:
-            tree = sexpr.parse(f.read_text(errors="replace"))
+            tree = sexpr.parse(f.read_text(encoding="utf-8", errors="replace"))
         except ValueError:
             return
         for s in sexpr.find(tree, "symbol"):

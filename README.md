@@ -204,7 +204,7 @@ Tests: `python3 -m tests.test_team_setup` runs the setup end to end against a st
 
 Tests: `python3 -m tests.test_ui` covers the workspace, web server, MCP server and CLI. `python3 -m tests.test_offline` covers the core modules. `python3 -m tests.test_footprints` checks generated footprints by part type against KiCad's library and the KLC rules.
 
-Requirements: Python 3.10 or later (tested on 3.11 and 3.13) with `requests`, `pandas`, `openpyxl`, `jsonschema` and `olefile`, which pip installs. `pypdf` and `pillow` are optional extras. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
+Requirements: Python 3.10 or later (tested on 3.11 and 3.13) with `requests`, `pandas`, `openpyxl`, `jsonschema` and `olefile` (and `tomli` on Python 3.10), which pip installs. `pypdf` and `pillow` are optional extras. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
 
 ```
 ecad-librarian/
@@ -256,7 +256,8 @@ ecad-librarian/
 ```
 ecadlib footprint gen ecadlib/package_specs/*.json -o out/footprints/ecadlib.pretty [--density A|B|C]
 ecadlib footprint compare <mine.kicad_mod> <reference path or URL>
-ecadlib check <any.kicad_mod> ...          # KLC-style rule check, works on KiCad's own footprints too
+ecadlib check <any.kicad_mod or .pretty> ... # the footprint rule book, works on KiCad's own footprints too
+ecadlib check --summary Lib.pretty/         # counts per rule for a whole library
 ```
 
 * **Package types** (`package_type`, with `lead_type` to pick a different IPC lead family):
@@ -274,7 +275,10 @@ ecadlib check <any.kicad_mod> ...          # KLC-style rule check, works on KiCa
   fab 0.10 with a pin-1 chamfer, courtyard 0.05 on the 0.01 mm grid with 0.25 mm excess (0.15 under 0603),
   roundrect pads, exposed-pad paste split into windows at 65 %. Format `version 20221018` (KiCad 7+; Altium imports it).
 * **Checks:** every generated footprint is run through `footprint_check` (copper gaps, silk clearance, fab,
-  courtyard, pin 1, paste). Spec mistakes, such as lead span and body width swapped, mils instead of mm,
+  courtyard, pin 1, paste), and every footprint the release check sees through the
+  [footprint rule book](docs/footprint-rulebook.md): naming (KLC and IPC-7351 names checked against the copper),
+  part type, origin, pad layers and shapes, annular rings, thermal vias, text, 3D model, courtyard clearance,
+  polarity marks, and the pad-to-pin map (an unwired exposed pad, a reversed diode). Spec mistakes, such as lead span and body width swapped, mils instead of mm,
   or more pins than fit, are refused with a plain-language reason.
 
 ### Compared with KiCad's official footprints
@@ -1110,7 +1114,7 @@ ecadlib status [--workspace W] [--json]                           one screen abo
 ecadlib completion bash|zsh|fish                                  shell completion script
 ```
 
-* **doctor** prints one line per check, each OK / WARN / FAIL with a fix: Python version (3.10 warns: no TOML), the core packages (FAIL when missing), pillow / pypdf, `pdftoppm`, `kicad-cli` and `git` (WARN), which API keys are set (variable **names** only, never values; the names follow `[datasheet] api_key_env` and `[agent] github_token_env`), the rules file in use and whether it is valid (an error names `file:line`), the workspace (exists, writable: a temporary probe file is created and removed), the `--lib` folders, `[agent] libs` / `library_repo` and the `[agent.watch]` sources. Also `Workspace.doctor()` and the MCP tool `doctor`.
+* **doctor** prints one line per check, each OK / WARN / FAIL with a fix: Python version (3.10 warns when neither tomllib nor tomli can read TOML), the core packages (FAIL when missing), pillow / pypdf, `pdftoppm`, `kicad-cli` and `git` (WARN), which API keys are set (variable **names** only, never values; the names follow `[datasheet] api_key_env` and `[agent] github_token_env`), the rules file in use and whether it is valid (an error names `file:line`), the workspace (exists, writable: a temporary probe file is created and removed), the `--lib` folders, `[agent] libs` / `library_repo` and the `[agent.watch]` sources. Also `Workspace.doctor()` and the MCP tool `doctor`.
 * **status** summarises a workspace without creating or changing anything: parts per librarian plan (ready, held, waiting for sign-off, duplicates), uploaded BOMs, the last triage, the last upkeep run (the workspace's and the agent's), the library agent's state and its review-queue counts, and what to run next. A damaged file is named under WARN and skipped. Exit 1 when the workspace does not exist. Also `Workspace.status()` and the MCP tool `workspace_status`.
 * **completion** builds the script from each command's own argparse parser (commands, subcommands, options, fixed choices), so it always matches the installed version: `ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib`, `source <(ecadlib completion zsh)` (uses zsh's `bashcompinit`), `ecadlib completion fish > ~/.config/fish/completions/ecadlib.fish`.
 * **Errors:** a missing file, bad JSON, an unreadable table, a missing package, no permission or a bad `ecadlib.toml` print one line and a hint (exit 2) instead of a traceback; anything else prints `internal error (...)` (exit 1). `--debug` anywhere on the line, or `ECADLIB_DEBUG=1`, shows the full traceback.

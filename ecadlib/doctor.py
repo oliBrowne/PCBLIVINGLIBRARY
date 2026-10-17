@@ -39,13 +39,22 @@ def set_env_hint(name, value="...", nt=None):
     return f"export {name}={value}"
 
 
+def _toml_ok():
+    try:
+        from .rules import toml_module
+        return toml_module() is not None
+    except ImportError:
+        return False
+
+
 def check_python(v=None):
     v = tuple(v or sys.version_info[:3])
     s = ".".join(map(str, v))
     if v < (3, 10):
         return _c("python", "FAIL", f"Python {s}", "ecadlib needs Python 3.10 or newer")
-    if v < (3, 11):
-        return _c("python", "WARN", f"Python {s}", "3.10 cannot read TOML: use ecadlib_rules.json, or Python 3.11+")
+    if v < (3, 11) and not (v == tuple(sys.version_info[:3]) and _toml_ok()):     # 3.10 reads TOML with tomli
+        return _c("python", "WARN", f"Python {s}", "3.10 cannot read TOML without tomli: pip install tomli, "
+                  "use ecadlib_rules.json, or Python 3.11+")
     return _c("python", "OK", f"Python {s}")
 
 

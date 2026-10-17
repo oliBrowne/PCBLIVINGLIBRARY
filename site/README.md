@@ -24,3 +24,7 @@ python3 -m http.server -d site 8000      # then http://localhost:8000
 `.github/workflows/pages.yml` publishes this folder to GitHub Pages, but only when it is run by hand: set
 Settings > Pages > Source to "GitHub Actions", then Actions > pages > Run workflow. Any other static host works too
 (the folder is the whole site).
+
+Vercel: `vercel.json` at the repository root tells Vercel to serve `site/` as plain static files (no install, no
+build), so importing the repository at vercel.com/new needs no settings changed. Once the project is linked, every
+push to `main` updates the live page and every pull request gets its own preview link.
