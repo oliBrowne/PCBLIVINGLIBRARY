@@ -48,7 +48,7 @@ def test_upkeep_findings_survive_a_later_plan_that_fails():
         (ws / "librarian" / "a" / "plan.json").write_text(json.dumps([{"name": "X1", "parameters": []}]))
         (ws / "librarian" / "b" / "plan.json").write_text("{damaged")
 
-        def lifecycle(src, state_dir, ctx, cfg, now):            # "new since the last run" = no state saved yet
+        def lifecycle(src, state_dir, ctx, cfg, now, rules=None):            # "new since the last run" = no state saved yet
             sec = UK._section("lifecycle")
             if src.items and not (Path(state_dir) / "lifecycle_state.json").exists():
                 sec["changes"].append(UK._change("EOL", "X1", "active", "obsolete"))
