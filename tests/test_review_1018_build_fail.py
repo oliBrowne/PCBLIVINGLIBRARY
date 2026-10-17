@@ -566,6 +566,21 @@ def test_no_report_from_the_build_is_a_failure(tmp_path):
 
 
 @lite
+def test_a_build_altium_stops_part_way_puts_the_old_file_back(tmp_path):
+    """A script error in Altium ends BuildLibraries after it moved a library aside and before any report (seen in
+    AD26 with a bad number in a recipe line): the menu puts the old file back and installs nothing."""
+    lib = _library(tmp_path)
+    mgr, shown = Manager(), []
+    pas, dblib = _menu(lib, "ok", mgr, shown)
+    pcb = lib / "PcbLib" / "SOIC8.PcbLib"
+    pas.builtins["buildlibraries"] = lambda folder: os.rename(pcb, str(pcb) + ".ecadlib_old")
+    extra = pas.call("Reinstall", "job")
+    _old_files_intact(lib)
+    assert "previous library files were put back" in extra and pas.call("BuildFailed", extra), extra
+    assert mgr.calls == [], mgr.calls
+
+
+@lite
 def test_a_good_build_replaces_the_files_and_installs(tmp_path):
     lib = _library(tmp_path)
     mgr, shown = Manager(), []

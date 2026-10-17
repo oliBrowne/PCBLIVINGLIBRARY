@@ -69,6 +69,7 @@ def test_menu_parts_go_to_their_category_table():
              ("Transistors", "MOSFETs, SOT-23", "SOT-23"),                 # an IC package does not stop a MOSFET
              ("Transistors", "MOSFET N-CH 30V 5.7A SOT23-3", ""),
              ("Diodes", "Red 0603 Light Emitting Diodes (LED) ROHS", ""), ("Diodes", "LED RED CLEAR 0603 SMD", ""),
+             ("Diodes", "Red 0603 LED Indication - Discrete ROHS", ""),
              ("Crystals", "12MHz SMD3225-4P Crystals ROHS", ""), ("Crystals", "CRYSTAL 12.0000MHZ 20PF SMD", ""),
              ("Connectors", "USB 3.1 1 Type-C SMD USB Connectors ROHS", ""),
              ("Connectors", "CONN RCPT USB2.0 TYPEC 16POS SMD RA", ""), ("Resistors", "RES 10K OHM 1% 1/10W 0603", ""),

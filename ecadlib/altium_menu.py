@@ -133,6 +133,7 @@ ALTIUM_API = {
     "Strings": "TStringList.Strings, TR0120 p10",
     "Count": "TStringList.Count, TR0120 p10",
     "DeleteFile": "TR0120 p16 (File IO Routines)",
+    "RenameFile": "TR0120 File IO Routines (ecadlib_build.pas uses it too; checked in AD26 26.10)",
 }
 
 
@@ -342,6 +343,30 @@ Begin
     R.Free;
 End;
 
+Function PutBackOldLibraries(Folder : String) : Integer;
+{ After a build that Altium stopped half way (a script error ends the script, so no report is written): a library
+  ecadlib_build.txt lists that is now only NAME.ecadlib_old is renamed back, so the old file stays usable. How many. }
+Var
+    R : TStringList;
+    i : Integer;
+    P : String;
+Begin
+    Result := 0;
+    R := TStringList.Create;
+    R.LoadFromFile(Folder + 'ecadlib_build.txt');
+    For i := 0 To R.Count - 1 Do
+        If (Copy(R.Strings[i], 1, 7) = 'PCBLIB' + #9) Or (Copy(R.Strings[i], 1, 7) = 'SCHLIB' + #9) Then
+        Begin
+            P := Copy(R.Strings[i], 8, Length(R.Strings[i]));
+            If Pos(#9, P) > 0 Then
+                P := Copy(P, 1, Pos(#9, P) - 1);
+            If (Not FileExists(Folder + P)) And FileExists(Folder + P + '.ecadlib_old') Then
+                If RenameFile(Folder + P + '.ecadlib_old', Folder + P) Then
+                    Result := Result + 1;
+        End;
+    R.Free;
+End;
+
 Function BuildFailed(Extra : String) : Boolean;
 { What BuildInAltium returned says a library was not built: nothing is installed then, and nothing says ready. }
 Begin
@@ -381,7 +406,11 @@ Begin
     If FileExists(Folder + 'ecadlib_build_report.txt') Then
         Result := BuildReport(Folder)
     Else
+    Begin
         Result := #13#10 + 'Altium build: FAILED, it wrote no ecadlib_build_report.txt in ' + Folder;
+        If PutBackOldLibraries(Folder) > 0 Then
+            Result := Result + ' (the build stopped part way; the previous library files were put back)';
+    End;
     Missing := MissingLibraries(Folder);
     If Missing <> '' Then
         Result := Result + #13#10 + 'Altium build: FAILED, these library files are not there: ' + Missing;

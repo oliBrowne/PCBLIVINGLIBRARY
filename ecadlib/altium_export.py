@@ -49,7 +49,7 @@ SOURCE_CATEGORY = (("Capacitors", r"Multilayer Ceramic Capacitors|Ceramic Capaci
                                   r"Tantalum Capacitors|Film Capacitors|Polymer Capacitors"),
                    ("Inductors", r"Power Inductors|Ferrite Beads|Inductors \(SMD\)"),
                    ("Transistors", r"MOSFETs|Bipolar Transistors|Digital Transistors|JFETs|IGBTs"),
-                   ("Diodes", r"Light Emitting Diodes|LEDs|Schottky (?:Barrier )?Diodes|Zener Diodes|Switching Diodes|"
+                   ("Diodes", r"Light Emitting Diodes|LEDs|LED Indication - Discrete|Schottky (?:Barrier )?Diodes|Zener Diodes|Switching Diodes|"
                               r"Rectifiers|TVS Diodes|ESD and Surge Protection \(TVS/ESD\)"),
                    ("Crystals", r"Crystals"),
                    ("Connectors", r"USB Connectors|Pin Headers|Female Headers|Wire To Board Connector|"
