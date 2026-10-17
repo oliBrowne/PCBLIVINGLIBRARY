@@ -14,6 +14,8 @@
         AddPartFromMPN     asks for an MPN (+ optional manufacturer), builds the part, reinstalls the library
         CheckProjectBOM    checks the focused project's BOM, opens the report, offers to fill the library
         OpenReviewQueue    opens the ecadlib web UI at the review queue (starts `ecadlib ui` when it is not running)
+  ecadlib_build.pas                 Altium builds the library files itself (ecadlib.altium_native): the menu calls
+                                    its BuildLibraries before it reinstalls the library
   ecadlib_dialog.pas + .dfm         the ecadlib dialog (ecadlib.altium_forms): dark, like Altium's own, with
                                     live progress read from the job's progress.ini; dialogs=0 in the .ini turns it off
   ecadlib_menu.ini                  settings: workspace, library folder, command, hidden, timeout_s, port (kept when
@@ -39,7 +41,10 @@ How a menu entry talks to ecadlib (no stdout parsing, no quoting of user text on
      svn runs) and reads result.ini ([result] status, message, fix, install, offer_fill, offer, report, url) with
      TIniFile. result.ini is UTF-16 with a BOM, which Windows' profile API (behind TIniFile) reads in any code page.
   4. install= lists the DbLib(s) to reinstall: the script uninstalls/installs each with IntegratedLibraryManager and
-     runs IntegratedLibrary:RefreshInstalledLibraries (AllLibraries=True).
+     runs IntegratedLibrary:RefreshInstalledLibraries (AllLibraries=True). Before that, when build= names the library
+     folder (altium-pkg wrote ecadlib_build.txt there, see ecadlib.altium_native), Altium writes every .SchLib /
+     .PcbLib again with its own API (BuildLibraries in ecadlib_build.pas, part of this script project) and the dialog
+     says if any library FAILED (ecadlib_build_report.txt). native_build=0 in the .ini skips that.
 
 Where parts go: the workspace is an ordinary ecadlib workspace (`ecadlib ui --workspace` shows it); parts added from
 the menu collect in <workspace>/uploads/altium-menu/parts.csv and the librarian runs on that list (finished parts are
@@ -114,6 +119,10 @@ ALTIUM_API = {
     "Sleep": "not in the 2008 references; used in Altium-Designer-addons XIA_Utils.pas (waits for an external run's result file) and QuickSilk.pas",
     "Application": "Application.ProcessMessages: not in the 2008 references; used in Altium-Designer-addons AutoPlaceSilkscreen.pas and AssemblyTextPrep.pas",
     "ProcessMessages": "see Application",
+    "LoadFromFile": "TStringList.LoadFromFile, TR0120 p10 (as ecadlib_build.pas reads ecadlib_build.txt)",
+    "Strings": "TStringList.Strings, TR0120 p10",
+    "Count": "TStringList.Count, TR0120 p10",
+    "DeleteFile": "TR0120 p16 (File IO Routines)",
 }
 
 
@@ -257,28 +266,93 @@ Begin
             Result := True;
 End;
 
-Function Reinstall(Job : String) : String;
-{ Uninstalls and installs again every library result.ini names in install= (';' between paths), then refreshes. }
+Function FirstPath(List : String) : String;
+{ The first path of a ';' list (install=). }
+Begin
+    If Pos(';', List) = 0 Then
+        Result := List
+    Else
+        Result := Copy(List, 1, Pos(';', List) - 1);
+End;
+
+Function OtherPaths(List : String) : String;
+{ The rest of a ';' list after its first path. }
+Begin
+    If Pos(';', List) = 0 Then
+        Result := ''
+    Else
+        Result := Copy(List, Pos(';', List) + 1, Length(List));
+End;
+
+Function BuildReport(Folder : String) : String;
+{ What Altium said about building the libraries (ecadlib_build_report.txt, one OK / FAILED line each): '' when all are OK. }
 Var
-    List : String;
-    P : String;
+    R : TStringList;
     i : Integer;
+    Bad : Integer;
 Begin
     Result := '';
+    If Not FileExists(Folder + 'ecadlib_build_report.txt') Then
+    Begin
+        Result := #13#10 + 'Altium build: no report in ' + Folder + ', so the library files are the ones ecadlib wrote.';
+        Exit;
+    End;
+    R := TStringList.Create;
+    R.LoadFromFile(Folder + 'ecadlib_build_report.txt');
+    Bad := 0;
+    For i := 0 To R.Count - 1 Do
+        If Copy(R.Strings[i], 1, 6) = 'FAILED' Then
+            Bad := Bad + 1;
+    If Bad > 0 Then
+        Result := #13#10 + 'Altium build: ' + IntToStr(Bad) + ' of ' + IntToStr(R.Count) + ' libraries FAILED. Next: read ' + Folder + 'ecadlib_build_report.txt';
+    R.Free;
+End;
+
+Function BuildInAltium(Job : String) : String;
+{ build= in result.ini is the library folder ecadlib wrote ecadlib_build.txt into: Altium writes every .SchLib /
+  .PcbLib there again with its own API (BuildLibraries, ecadlib_build.pas) before the libraries are installed, so
+  the files Altium loads are ones Altium wrote. The listed libraries are uninstalled first so none is in use.
+  native_build=0 in ecadlib_menu.ini skips this. }
+Var
+    Folder : String;
+    List : String;
+    P : String;
+Begin
+    Result := '';
+    Folder := Answer(Job, 'build');
+    If (Folder = '') Or (Setting('native_build', '1') = '0') Then
+        Exit;
+    If Copy(Folder, Length(Folder), 1) <> '\' Then
+        Folder := Folder + '\';
+    If Not FileExists(Folder + 'ecadlib_build.txt') Then
+        Exit;
     List := Answer(Job, 'install');
     While List <> '' Do
     Begin
-        i := Pos(';', List);
-        If i = 0 Then
-        Begin
-            P := List;
-            List := '';
-        End
-        Else
-        Begin
-            P := Copy(List, 1, i - 1);
-            List := Copy(List, i + 1, Length(List));
-        End;
+        P := FirstPath(List);
+        List := OtherPaths(List);
+        If (P <> '') And IsInstalled(P) Then
+            IntegratedLibraryManager.UninstallLibrary(P);
+    End;
+    If FileExists(Folder + 'ecadlib_build_report.txt') Then
+        DeleteFile(Folder + 'ecadlib_build_report.txt');
+    BuildLibraries(Folder);
+    Result := BuildReport(Folder);
+End;
+
+Function Reinstall(Job : String) : String;
+{ Lets Altium build the library files (BuildInAltium), then uninstalls and installs again every library result.ini
+  names in install= (';' between paths), then refreshes. }
+Var
+    List : String;
+    P : String;
+Begin
+    Result := BuildInAltium(Job);
+    List := Answer(Job, 'install');
+    While List <> '' Do
+    Begin
+        P := FirstPath(List);
+        List := OtherPaths(List);
         If P <> '' Then
         Begin
             If FileExists(P) Then
@@ -508,6 +582,9 @@ port={int(port)}
 offline={1 if offline else 0}
 ; 1 = the ecadlib dialog (dark, live progress, like Altium's own); 0 = Altium's plain message boxes
 dialogs=1
+; 1 = Altium writes the .SchLib / .PcbLib files again with its own API before the library is installed
+; (ecadlib_build.pas); 0 = install the files ecadlib wrote as they are
+native_build=1
 """.replace("\n", "\r\n")
 
 
@@ -774,9 +851,9 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
         win_dir = check_win_dir(win_dir)
     if name and not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$", name):
         raise ValueError(f"--name {name!r}: letters, digits, _ . - only")
-    from . import altium_forms as AF
-    files = {PROJECT: prjscr_text(UNIT, AF.DIALOG_UNIT), UNIT: pas_text(),
-             AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text(),
+    from . import altium_forms as AF, altium_native as AN
+    files = {PROJECT: prjscr_text(UNIT, AF.DIALOG_UNIT, AN.UNIT), UNIT: pas_text(),
+             AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text(), AN.UNIT: AN.pas_text(),
              RUN_CMD: run_cmd_text(), RUN_VBS: run_vbs_text(), README: readme_text(win_dir, bool(win_dir))}
     written, kept = [], []
     for fname, text in files.items():
@@ -1009,9 +1086,11 @@ def project_problems(files):
     """pas_problems of every unit of the script project, each knowing the other units' routines and globals; a form
     unit also knows its .dfm's components and the form API (altium_forms.FORM_API). Every handler a .dfm
     names (OnClick = X) must be a method of its form in the unit. Problems are prefixed with the file name."""
-    from . import altium_forms as AF
+    from . import altium_forms as AF, altium_native as AN
     units = {UNIT: None, AF.DIALOG_UNIT: AF.DIALOG_FORM}
     names = {u: unit_names(files[u]) for u in units}
+    if AN.UNIT in files:                 # ecadlib_build.pas is checked by tests/test_altium_native.py; here it only
+        names[AN.UNIT] = unit_names(files[AN.UNIT])          # declares what the menu calls (BuildLibraries)
     api = {**ALTIUM_API, **AF.FORM_API}
     probs = []
     for u, form_file in units.items():
@@ -1241,7 +1320,8 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
     except ValueError as e:
         return {"target": "folder", "install": [], "problems": [str(e)], "library": str(library)}
     return {"target": "folder", "install": [str((Path(library) / d).resolve()) for d in rep["dblibs"]],
-            "problems": rep["problems"], "library": str(library)}
+            "problems": rep["problems"], "library": str(library),
+            "build": str(Path(library).resolve()) if rep.get("native_build") else ""}
 
 
 def publish_kicad(ws, bom_rel, library, name="ecadlib"):
@@ -1308,7 +1388,7 @@ def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
            else {"install": [], "problems": []})
     st, nm = it["status"], it["name"]
     res = {"status": st, "part": nm, "mpn": mpn, "install": ";".join(pub.get("install") or []),
-           "refresh": pub.get("target", ""), "review": str(ws._librarian_dir(bom) / "review.md")}
+           "build": pub.get("build") or "", "refresh": pub.get("target", ""), "review": str(ws._librarian_dir(bom) / "review.md")}
     from . import messages as M
     whys = M.explain_all(it.get("hold_reasons") or [])
     if st == "ready":
@@ -1444,8 +1524,8 @@ def fill(cfg, project, progress=None):
     msg += "".join(f", {n} {label}" for n, label in ((s["held"], "held"), (s["awaiting_approval"], "waiting for sign-off"),
                                                        (s["duplicates"], "duplicates")) if n)
     res = {"status": "ok" if not pub.get("problems") else "error", "message": msg + ".",
-           "install": ";".join(pub.get("install") or []), "refresh": pub.get("target", ""),
-           "ready": s["ready"], "held": s["held"], "review": str(ws._librarian_dir(ws._bom_path(bom)) / "review.md")}
+           "install": ";".join(pub.get("install") or []), "build": pub.get("build") or "",
+           "refresh": pub.get("target", ""), "ready": s["ready"], "held": s["held"], "review": str(ws._librarian_dir(ws._bom_path(bom)) / "review.md")}
     if pub.get("problems"):
         res["message"] += f" Not published: {pub['problems'][0]}"
         res["fix"] = pub.get("fix") or "run `ecadlib altium-pkg` / `ecadlib altium365 push` by hand to see more"

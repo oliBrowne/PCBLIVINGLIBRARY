@@ -379,7 +379,7 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
     from . import altium_native as AN
     native = bool(native and AN.recipes(out))
     if native:
-        written += AN.write(out)["files"]
+        written += AN.write(out)["written"]
     more = (AN.UNIT,) if native else ()
     for fname, text in ((libpkg, libpkg_text(docs)), (f"{name}_Install.PrjScr", prjscr_text(f"{name}_Install.pas", *more)),
                         (f"{name}_Install.pas", install_script(name, dblibs, libpkg, docs, native)),

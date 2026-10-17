@@ -395,7 +395,10 @@ Begin
     Extra := '';
     If Answer(Job, 'install') <> '' Then
     Begin
-        EcadlibDialog.Status.Caption := 'installing the library again';
+        If Answer(Job, 'build') <> '' Then
+            EcadlibDialog.Status.Caption := 'Altium is building the library files, then installing them'
+        Else
+            EcadlibDialog.Status.Caption := 'installing the library again';
         Application.ProcessMessages;
         Extra := Reinstall(Job);
     End;
@@ -442,7 +445,7 @@ Begin
         Else
             Buttons('Done', '', False);
     End;
-    If Pos('Missing:', Extra) > 0 Then
+    If (Pos('Missing:', Extra) > 0) Or (Pos('Altium build:', Extra) > 0) Then
         EcadlibDialog.Note.Caption := EcadlibDialog.Note.Caption + Extra;
     EcadlibDialog.Note.Visible := EcadlibDialog.Note.Caption <> '';
     Layout;

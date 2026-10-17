@@ -397,7 +397,10 @@ def test_altium_pkg_from_plan():
     for block in lp.split("[Document")[1:]:                                                      # same keys as Altium writes
         keys = [l.split("=", 1)[0] for l in block.split("\r\n")[1:] if "=" in l]
         assert keys == ["DocumentPath"] + [k.split("=")[0] for k in AP.DOCUMENT], keys
-    assert (out / "mylib_Install.PrjScr").read_bytes() == b"[Design]\r\nVersion=1.0\r\n\r\n[Document1]\r\nDocumentPath=mylib_Install.pas\r\n"
+    # the parts' build recipes come along from the plan, so Altium can rebuild the libraries (ecadlib_build.pas)
+    assert rep["native_build"] and (out / "ecadlib_build.txt").is_file()
+    assert (out / "mylib_Install.PrjScr").read_bytes() == (b"[Design]\r\nVersion=1.0\r\n\r\n[Document1]\r\nDocumentPath=mylib_Install.pas"
+                                                          b"\r\n\r\n[Document2]\r\nDocumentPath=ecadlib_build.pas\r\n")
     pas = (out / "mylib_Install.pas").read_text()
     for proc in ("InstallDatabaseLibrary", "BuildIntegratedLibrary", "InstallFileLibraries", "UninstallAll"):
         assert re.search(rf"^Procedure {proc};$", pas, re.M), proc

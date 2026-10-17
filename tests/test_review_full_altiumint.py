@@ -20,7 +20,8 @@ def test_menu_script_counts_installed_libraries():
     pas = M.pas_text()
     _loops_over_installed(pas)
     from ecadlib import altium_forms as AF                   # OpenDialog lives in the dialog unit
-    other = M.unit_names(AF.dialog_pas_text())
+    from ecadlib import altium_native as AN                  # BuildLibraries lives in ecadlib_build.pas
+    other = M.unit_names(AF.dialog_pas_text()) | M.unit_names(AN.pas_text())
     assert M.pas_problems(pas, known=other) == []            # InstalledLibraryCount is in the documented allow-list
 
 
