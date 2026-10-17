@@ -374,7 +374,8 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None):
 
 # ---------------------------------------------------------------- footprints
 LAYER_K = {AL.TOP_OVERLAY: "F.SilkS", AL.BOTTOM_OVERLAY: "B.SilkS", AL.MECH13: "F.Fab", AL.MECH15: "F.CrtYd",
-           AL.TOP: "F.Cu", AL.BOTTOM: "B.Cu", AL.TOP_PASTE: "F.Paste", AL.TOP_SOLDER: "F.Mask"}
+           AL.TOP: "F.Cu", AL.BOTTOM: "B.Cu", AL.TOP_PASTE: "F.Paste", AL.TOP_SOLDER: "F.Mask",
+           AL.BOTTOM_PASTE: "B.Paste", AL.BOTTOM_SOLDER: "B.Mask"}
 
 
 def _tail(shape):
@@ -551,13 +552,13 @@ def footprint_from_pcblib(path, name, notes, pick=None):
                 cx, cy, a = (r["x1"] + r["x2"]) / 2, (r["y1"] + r["y2"]) / 2, math.radians(frot)
                 pts = [(cx + (x - cx) * math.cos(a) - (y - cy) * math.sin(a), cy + (x - cx) * math.sin(a) + (y - cy) * math.cos(a))
                        for x, y in pts]
-            if layer == "F.Paste" and frot:
+            if layer in ("F.Paste", "B.Paste") and frot:
                 pads.append(f'\t(pad "" smd rect (at {pt(cx, cy)} {_num(frot)}) '
-                            f'(size {m(abs(r["x2"] - r["x1"]))} {m(abs(r["y2"] - r["y1"]))}) (layers "F.Paste"))')
-            elif layer == "F.Paste":          # paste window without copper: a paste-only pad, as KiCad draws them
+                            f'(size {m(abs(r["x2"] - r["x1"]))} {m(abs(r["y2"] - r["y1"]))}) (layers "{layer}"))')
+            elif layer in ("F.Paste", "B.Paste"):   # paste window without copper: a paste-only pad, as KiCad draws them
                 xs, ys = [p[0] for p in pts], [p[1] for p in pts]
                 pads.append(f'\t(pad "" smd rect (at {pt((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)}) '
-                            f'(size {m(max(xs) - min(xs))} {m(max(ys) - min(ys))}) (layers "F.Paste"))')
+                            f'(size {m(max(xs) - min(xs))} {m(max(ys) - min(ys))}) (layers "{layer}"))')
                 if t == "region" and len(pts) != 4:
                     K._note(notes, "paste region written as its bounding rectangle")
             else:
