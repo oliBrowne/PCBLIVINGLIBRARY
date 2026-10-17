@@ -52,6 +52,7 @@
     ecadlib kicad-pcm plan.json|KICAD_DIR --out DIR [--kicad 7]   KiCad Plugin and Content Manager zip (--plugin: action plugin)
     ecadlib altium-pkg plan.json|MODELS_DIR --out DIR   Altium .LibPkg (-> IntLib), install script, relative DbLib
     ecadlib altium-menu build --out DIR [--win-dir W]   an "ecadlib" menu inside Altium (script project): add part, check BOM, queue
+    ecadlib kicad-menu check-bom NETLIST|SCH     what the ecadlib window in KiCad runs; Generate BOM hook for the schematic
     ecadlib costs     [--model M] [--all] [--md F] [--xlsx F]   estimated AI cost per job, for your model or every model
     ecadlib ai        show [--model M] [--detect] | rails   which model / provider / guide rails the AI features use
     ecadlib migrate   [PATH] [--check] [--dry-run]   check / upgrade workspace files to this version (backups first)
@@ -121,6 +122,7 @@ COMMANDS = {
     "kicad-pcm": ("ecadlib.kicad_pcm", "package the library for KiCad's Plugin and Content Manager (zip); --plugin: the add-part action plugin"),
     "altium-pkg": ("ecadlib.altium_pkg", "Altium hand-off folder: .LibPkg to compile an IntLib, install script project, relative DbLib"),
     "altium-menu": ("ecadlib.altium_menu", "an 'ecadlib' menu inside Altium: DelphiScript project (add part from MPN, check the project BOM, review queue)"),
+    "kicad-menu": ("ecadlib.kicad_menu", "what the ecadlib window in KiCad's PCB editor runs (add part, check BOM, fill, queue)"),
     "ai": ("ecadlib.llm.cli", "bring your own model: provider, model, key variable, capability profile, guide rails"),
     "testpack": ("ecadlib.testpack", "write a 6-part Altium + KiCad test pack with a CHECKLIST.md of what to open and what to see"),
     "migrate": ("ecadlib.migrate", "check or upgrade a workspace's files to this ecadlib's formats (backups first)"),

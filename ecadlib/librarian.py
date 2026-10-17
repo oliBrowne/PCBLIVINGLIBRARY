@@ -41,7 +41,7 @@ from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_tria
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from . import crosscheck as CC, messages as M, sheetsafe as SS
-from . import symbol_layout as SL
+from . import fp_tidy as FT, symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
 TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository/tree?ref=master&recursive=true&per_page=100&page={page}"
@@ -275,6 +275,10 @@ class Run:
         except ValueError as e:
             notes.append(f"no 3D body: {e}")
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
+        text = re.sub(r'^(\s*\((?:footprint|module)\s+)("(?:[^"\\]|\\.)*"|[^\s()]+)',     # KiCad links a footprint by its file name,
+                      lambda m: m.group(1) + '"' + stem.replace('"', '\\"') + '"', text, count=1)   # Altium by this name: one name
+        text = re.sub(r'(\((?:fp_text\s+value|property\s+"Value")\s+)("(?:[^"\\]|\\.)*"|[^\s()]+)',   # Value = the name (KLC F9.1)
+                      lambda m: m.group(1) + '"' + stem.replace('"', '\\"') + '"', text, count=1)
         kmod.write_text(text, encoding="utf-8", newline="\n")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
@@ -307,14 +311,18 @@ class Run:
         self.written[str(path)] = st["symbol"]
 
     def put_kicad_sym(self, st, chain, name, fp_name, source, extra=(), layout=False):
-        """layout: re-lay big symbols out with pins grouped by function (EasyEDA symbols; KiCad library symbols are
-        curated and kept as drawn)."""
+        """layout: re-lay plain IC symbols out by the house pin rule (EasyEDA symbols). KiCad library symbols are curated
+        and kept as drawn, unless their pin text would overlap in Altium (symbol_layout.text_problems)."""
         notes = []
         sym = K.convert_symbol(chain, name, fp_name, list(extra), None, notes)
         npins = len({pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin"})
-        if layout and SL.wants_layout(npins, self.rules) and sym.get("parts", 1) == 1:
+        clash = SL.text_problems(sym)
+        if (layout or clash) and SL.wants_layout(npins, self.rules) and SL.is_box_ic(sym):
             sym = SL.relayout(sym, self.rules)
-            notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else ""))
+            notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else "")
+                         + (f"; the drawn symbol's pin text overlapped ({clash[0]})" if clash else ""))
+        elif clash:
+            notes.append(f"pin text overlaps ({'; '.join(clash[:3])}); not a plain IC box, so kept as drawn: check it")
         self.put_sym(st, sym, source, notes)
 
     # ---- per part
@@ -438,13 +446,17 @@ class Run:
             st["found"].setdefault("datasheet", (url, f"EasyEDA {lcsc} (lcsc.url)"))
         if res.manufacturer:
             st["found"].setdefault("manufacturer", (res.manufacturer, f"EasyEDA {lcsc}"))
+        st["found"].setdefault("lcsc", (lcsc, f"EasyEDA {lcsc}" + ("" if ln.get("lcsc") else " (LCSC number found by ecadlib, not in the BOM)")))
         if res.extra.get("description"):
             st["found"].setdefault("description", (res.extra["description"], f"EasyEDA {lcsc}"))
+        if res.package:
+            st["found"].setdefault("package", (res.package, f"EasyEDA {lcsc}"))
         got = []
         if not st["footprint"]:
             pkg = (result.get("packageDetail") or {})
             notes = []
             text = EC.footprint_to_kicad(pkg.get("dataStr") or {}, pkg.get("title") or fp_name, notes)
+            text = FT.tidy(text, notes)                       # to the rule book: silk reference, pin 1, rounded pads
             self.put_fp(st, text, fp_name, f"easyeda:{lcsc}", None)
             st["footprint"]["notes"] = notes + st["footprint"]["notes"]
             got.append(f"footprint {pkg.get('title', '')}")
@@ -459,6 +471,8 @@ class Run:
                 self.put_kicad_sym(st, chain, sym_name, fp_name, f"easyeda:{lcsc}", [("MPN", mpn)] if mpn else [], layout=True)
                 st["symbol"]["notes"] = notes + st["symbol"]["notes"]
                 got.append("symbol")
+        if got:
+            st["found"].setdefault("credit", (EC.CREDIT, f"EasyEDA {lcsc}"))
         st["tried"].append(f"easyeda {lcsc}: " + (", ".join(got) or "nothing needed"))
         st["review"].append(f"EasyEDA {lcsc} conversion: check pads and pins against the datasheet (native converter, format assumed)")
 
@@ -601,6 +615,40 @@ def _done(st, out):
     return all(st.get(k) and (Path(out) / st[k]["file"]).exists() for k in ("symbol", "footprint"))
 
 
+GENERATED_DESCRIPTION = "written by ecadlib from the part's category and package (check it)"
+SINGULAR = {"ICs": "IC", "Resistors": "Resistor", "Capacitors": "Capacitor", "Inductors": "Inductor", "Diodes": "Diode",
+            "Transistors": "Transistor", "Connectors": "Connector", "Crystals": "Crystal", "Oscillators": "Oscillator",
+            "Switches": "Switch", "Relays": "Relay", "Fuses": "Fuse", "LEDs": "LED", "Sensors": "Sensor"}
+
+
+def _package_name(text, mpn=""):
+    """'SOIC-8_3.9x4.9mm_P1.27mm' / 'SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL' -> 'SOIC-8', 'CAP 0603 (1608 Metric)' -> '0603';
+    '' when it names no package ecadlib knows (an MPN, a maker's series)."""
+    t = str(text or "").split(":")[-1].strip()
+    pkg = package_of(t) if t and norm_mpn(t) != norm_mpn(mpn) else None
+    if not pkg:
+        return ""
+    first = re.split(r"[_ ]", t)[0]
+    return first if first.replace("-", "").upper() == pkg.upper() else pkg
+
+
+def generated_description(item, st, ln):
+    """A plain description when no source gave one: '<category>, <package>, <manufacturer> <MPN>' from what the
+    plan already knows (nothing is guessed about what the part does). '' when there is not even a part number."""
+    par = _par(item)
+    mpn = str(par.get("Manufacturer Part Number") or ln.get("mpn") or "").strip()
+    if not mpn:
+        return ""
+    folder = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    cat = SINGULAR.get(folder, folder if folder not in ("", "Misc", "Components") else "")
+    pkg = next((p for p in (_package_name((st.get("found", {}).get("package") or ("",))[0], mpn),
+                            _package_name((st.get("footprint") or {}).get("name"), mpn),
+                            _package_name(item.get("footprint", {}).get("kicad"), mpn),
+                            _package_name(ln.get("footprint"), mpn)) if p), "")
+    who = " ".join(x for x in (str(par.get("Manufacturer") or "").strip(), mpn) if x)
+    return ", ".join(x for x in (cat, pkg, who) if x)
+
+
 def apply_state(item, st, ln):
     """Copy a part's state into its plan item: model files, sources, filled-in fields, what was tried."""
     for k in ("symbol", "footprint"):
@@ -620,11 +668,24 @@ def apply_state(item, st, ln):
     elif "datasheet" in st.get("found", {}):
         u, w = st["found"]["datasheet"]
         _set_par(item, "ComponentLink2Description", "Datasheet"); _set_par(item, "ComponentLink2URL", u); fields["ComponentLink2URL"] = w
+    if not par.get("Supplier Part Number 1") and "lcsc" in st.get("found", {}):     # an LCSC number the BOM did not give
+        v, w = st["found"]["lcsc"]
+        _set_par(item, "Supplier 1", "LCSC"); _set_par(item, "Supplier Part Number 1", v); fields["Supplier Part Number 1"] = w
+        if not par.get("ComponentLink1URL"):
+            _set_par(item, "ComponentLink1Description", "LCSC")
+            _set_par(item, "ComponentLink1URL", f"https://www.lcsc.com/product-detail/{v}.html"); fields["ComponentLink1URL"] = w
     if not par.get("Manufacturer") and "manufacturer" in st.get("found", {}):
         v, w = st["found"]["manufacturer"]
         _set_par(item, "Manufacturer", v); fields["Manufacturer"] = w
+    if "credit" in st.get("found", {}):          # EasyEDA's library data asks for this credit on every reuse
+        v, w = st["found"]["credit"]
+        _set_par(item, "Library Credit", v); fields["Library Credit"] = w
     if not str(item.get("description") or "").strip() and "description" in st.get("found", {}):
         item["description"], fields["Description"] = st["found"]["description"]
+    if not str(item.get("description") or "").strip():          # no source gave one: write a plain one to check
+        desc = generated_description(item, st, ln)
+        if desc:
+            item["description"], fields["Description"] = desc, GENERATED_DESCRIPTION
     item["field_sources"] = fields
     item["verify"] = list(st.get("verify", []))
     if st.get("cross_check"):                     # ecadlib.crosscheck: agreed / disagreed (held) / unchecked / skipped

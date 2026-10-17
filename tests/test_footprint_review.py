@@ -309,9 +309,9 @@ def test_polygon_pads_come_back_from_a_pcblib_as_kicad_custom_pads():
 def test_pin_lying_on_or_crossing_another_pin_is_reported():
     pin = lambda n, side, x, y: ("pin", {"num": n, "name": f"P{n}"}, side, x, y, 30)
     sym = {"prims": [("rect", 0, 0, 40, -60), pin("1", "left", 0, -10), pin("2", "left", -20, -10), pin("3", "right", 40, -20)]}
-    assert SL.check(sym) == ["pin 2 lies on or crosses pin 1's line in part 1"], SL.check(sym)
+    assert [m for m in SL.check(sym) if "line" in m] == ["pin 2 lies on or crosses pin 1's line in part 1"], SL.check(sym)
     sym["prims"][2] = pin("2", "bottom", -10, 0)                                  # a vertical pin line through pin 1's
-    assert SL.check(sym) == ["pin 2 lies on or crosses pin 1's line in part 1"], SL.check(sym)
+    assert [m for m in SL.check(sym) if "line" in m] == ["pin 2 lies on or crosses pin 1's line in part 1"], SL.check(sym)
     sym["prims"][2] = pin("2", "left", 0, -20)
     assert SL.check(sym) == []
 

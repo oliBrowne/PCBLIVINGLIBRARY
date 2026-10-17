@@ -3,15 +3,21 @@
     ecadlib symbol PINS.csv|PINS.json|PART.SchLib|LIB.kicad_sym:NAME|kicad:Lib:Name -o out.SchLib [--kicad out.kicad_sym]
                    [--preview out.svg] [--split N] [--stack stack|hide|none] [--rules ecadlib.toml]
 
-Each pin is put in a functional group from its name (and type when the name says nothing):
-  power, analog (VDDA, VREF+), power_out (VOUT, VCAP)  -> top
-  ground (GND, VSS, AGND, VREF-), ep (exposed pad)     -> bottom
-  reset (NRST, BOOT0, EN), clock (OSC_IN, XTAL), debug (SWDIO, TCK, U0TXD), usb, adc, other inputs -> left
-  uart, i2c, spi, can, eth, ports (PA0..PE15, GPIO12, P0.1), other outputs, nc                      -> right
+The house rule: inputs left, outputs right, power on top, ground on the bottom ([symbols] power_side = "top"), or
+the top and bottom edges left empty with the power pins at the top of the left side and the ground pins at its
+bottom (power_side = "left"). Each pin is put in a functional group from its name (and type when the name says nothing):
+  power, analog (VDDA, VREF+)                          -> top (power_side "left": top of the left side)
+  ground (GND, VSS, AGND, VREF-), ep (exposed pad)     -> bottom (power_side "left": bottom of the left side)
+  reset (NRST, BOOT0, EN), clock (OSC_IN, XTAL), debug (SWDIO, TCK, U0TXD), usb, adc, inputs (IN+, TRIG, FB, type
+  input) -> left
+  power_out (VOUT, VCAP), uart, i2c, spi, can, eth, ports (PA0..PE15, GPIO12, P0.1), outputs (OUT, Q, PG, SW, type
+  output), nc -> right
+  other (no name rule and no direction: passive, bidirectional) -> left, moved right when that keeps the symbol square
 Alternate-function names ("PA9/USART1_TX", "PH0-OSC_IN") are grouped by their first (primary) name; overbars
 ('~{RESET}', 'R\\E\\S\\E\\T\\', '/RESET', 'RESET#') are ignored for grouping. Port pins are sorted by port and
 number and each port is its own block; blocks are separated by one empty grid row. Ports (and unclassified pins)
-move between the left and right side to keep the symbol about square, whole ports first.
+and 'other' pins move between the left and right side to keep the symbol about square, whole ports first; inputs and
+outputs never move.
 
 Power pins sharing a name (VDD x5) are stacked (rules [symbols] stack_power): 'stack' puts them on one spot, one
 pin showing its name and number and the rest drawn on top of it with name and number hidden (Altium joins pins at
@@ -22,24 +28,29 @@ Above [symbols] split_pins pins the part becomes a multi-part symbol: part A hol
 other parts the signal blocks in order, at most unit_pins pins each (a port is never split across parts unless it
 alone is bigger). Everything is on the [symbols] grid (100 mil): body edges, pin ends, pin pitch.
 
-altium_lib.ic_symbol uses this for parts with at least [symbols] layout_pins pins (smaller parts keep the plain
-'side per pin' layout, byte for byte). datasheet.py can call arrange_pins() to show the grouping in its review."""
+altium_lib.ic_symbol uses this for parts with at least [symbols] layout_pins pins (default 1: every IC; above that the
+smaller parts keep the plain 'side per pin' layout). librarian re-lays out EasyEDA IC symbols the same way, and a KiCad
+library symbol whose pin text would overlap in Altium (text_problems). datasheet.py can call arrange_pins() to show the
+grouping in its review."""
 import argparse, csv, json, re, sys
 from pathlib import Path
 
 from . import altium_lib as AL
 
 GROUPS = ("power", "analog", "power_out", "ground", "ep", "reset", "clock", "debug", "usb", "adc", "other_in",
-          "uart", "i2c", "spi", "can", "eth", "ports", "other_out", "nc")
-ORDER = ["power", "analog", "power_out", "reset", "clock", "debug", "usb", "adc", "other_in", "uart", "i2c", "spi",
-         "can", "eth", "ports", "other_out", "nc", "ground", "ep"]
-SIDES = {"power": "top", "analog": "top", "power_out": "top", "ground": "bottom", "ep": "bottom",
+          "other", "uart", "i2c", "spi", "can", "eth", "ports", "other_out", "nc")
+ORDER = ["power", "analog", "reset", "clock", "debug", "usb", "adc", "other_in", "other", "power_out", "uart", "i2c",
+         "spi", "can", "eth", "ports", "other_out", "nc", "ground", "ep"]
+SIDES = {"power": "top", "analog": "top", "power_out": "right", "ground": "bottom", "ep": "bottom",
          "reset": "left", "clock": "left", "debug": "left", "usb": "left", "adc": "left", "other_in": "left",
-         "uart": "right", "i2c": "right", "spi": "right", "can": "right", "eth": "right", "ports": "right",
-         "other_out": "right", "nc": "right"}
+         "other": "left", "uart": "right", "i2c": "right", "spi": "right", "can": "right", "eth": "right",
+         "ports": "right", "other_out": "right", "nc": "right"}
 POWER_GROUPS = {"power", "analog", "power_out", "ground", "ep"}
-FLEX = ("ports", "other_in", "other_out")      # may move between left and right to balance the symbol
+FLEX = ("ports", "other")                      # may move between left and right to balance the symbol
 STACKS = ("stack", "hide", "none")
+POWER_SIDES = ("top", "left")
+DIRECTED = {"input": "other_in", "output": "other_out", "open_collector": "other_out", "open_emitter": "other_out",
+            "tristate": "other_out", "hiz": "other_out"}                  # [symbols] power_side: the house rule's two variants
 SPLIT_PENALTY = 6                              # rows a port split across sides must save before it is used
 CHAR = 7                                       # name width per character, DXP units (as altium_lib.ic_symbol)
 
@@ -67,6 +78,13 @@ RX = [  # (group, regex on the primary name, upper case, overbar / active-low ma
     ("can", _R(r"F?D?CAN[A-Z0-9_]*|TXCAN|RXCAN")),
     ("eth", _R(r"ETH[A-Z0-9_]*|R?G?MII[A-Z0-9_]*|MDIO|MDC|T[XD][PN+\-]|R[XD][PN+\-]|TXP|TXN|RXP|RXN|PHY[A-Z0-9_]*")),
     ("adc", _R(r"ADC[A-Z0-9_]*|AIN\d*|AN\d+|DAC[A-Z0-9_]*|AOUT\d*|SENSOR_?V[PN]|SENSOR[A-Z0-9_]*|VP|VN|AIN[PN]\d*")),
+    # direction from the name, for the small analog / power / logic parts whose pins have no better group
+    ("other_out", _R(r"OUT[A-Z0-9_+\-]*|[A-Z0-9]+_?OUT[A-Z0-9]*|N?Q\d*|Q_?[NB]|DIS|DISCH[A-Z]*|N?PG|N?PGOOD|P_?GOOD|PWR_?(GD|GOOD|OK)|"
+                    r"N?FLT|N?FAULT|N?FLAG|N?ALERT|N?INT\d*|N?IRQ\d*|RDY|N?READY|BUSY|DONE|STAT\d*|LED[A-Z0-9_]*|SW\d*|LX\d*|"
+                    r"BST|BOOST|PH|DRV[A-Z0-9_]*|GATE[A-Z0-9_]*|[HL]O|[HL]G|ALARM|TRIP")),
+    ("other_in", _R(r"IN\d*|IN[+\-PNAB]\d*|[+\-]IN[A-Z0-9]*|IN_?[PN]\d*|[A-Z0-9]+_IN|TRIG[A-Z]*|TRG|TR|THR[A-Z]*|CV|CONT[A-Z]*|"
+                   r"CTRL[A-Z0-9_]*|CTL|FB\d*|VFB|ADJ|SET|SENSE[A-Z0-9_+\-]*|SNS[A-Z0-9_+\-]*|CS[+\-]|SS|SS_?TR|ILIM|ISET|RT|"
+                   r"RT_?CLK|COMP|DIR|STEP|PWM[A-Z0-9_]*|[HL]I|D|J|K|S|R|C?LR|PRE|IREF|RSET|RLIM|SEL\d*|A\d?|B\d?")),
 ]
 PORT_RX = [re.compile(r"^P([A-Z])(\d{1,2})$"), re.compile(r"^P(\d{1,2})[._](\d{1,2})$"), re.compile(r"^PIO(\d)_(\d{1,2})$"),
            re.compile(r"^(GPIO|IO|GP)(\d{1,3})$"), re.compile(r"^R(\d)(\d)$")]
@@ -94,7 +112,8 @@ def primary(name):
 def _key(name):
     """Primary name for matching: upper case, active-low suffixes removed ('RESET#', 'RST_N', 'RESET_B')."""
     s = primary(name).upper()
-    s = re.sub(r"(#|\*|_N|_B|_L)$", "", s) if len(s) > 2 else s
+    if len(s) > 2 and not re.fullmatch(r".*(OUT|IN)\d*_[AB]", s):     # OUT_B / IN_B: channel B of a dual part, not active low
+        s = re.sub(r"(#|\*|_N|_B|_L)$", "", s)
     return s
 
 
@@ -123,6 +142,8 @@ def classify(pin):
         if rx.match(k):
             if g == "usb" and k == "VBUS" and t in ("power", "power_in"):
                 return "power"
+            if g in ("other_in", "other_out") and t in DIRECTED:     # a name only hints the direction: the type says it
+                return DIRECTED[t]
             return g
     if num in ("EP", "PAD", "EPAD", "TAB"):
         return "ep"
@@ -132,7 +153,7 @@ def classify(pin):
         return "power"
     if t == "power_out":
         return "power_out"
-    return "other_out" if t in ("output", "open_collector", "open_emitter", "tristate", "hiz") else "other_in"
+    return DIRECTED.get(t, "other")
 
 
 def _natural(s):
@@ -180,6 +201,24 @@ def wants_layout(pins, rules=None):
 
 
 # ------------------------------------------------------------------ arrangement
+def _by_channel(items):
+    """A dual / quad part's pins one channel at a time: 1IN-, 1IN+, 2IN-, 2IN+ (not 1IN-, 2IN-, 1IN+, 2IN+). Only
+    when two or more names differ just by a channel number that is not at the end of the name (D0..D7 / A0..A7 are
+    buses and keep their order) and every name has the same channels. items: [(_, index, pin)] sorted by stem."""
+    split = [re.fullmatch(r"(\D*)(\d+)(\D+)", _key(t[2].get("name", ""))) for t in items]
+    if len(items) < 4 or not all(split):
+        return items
+    stems = {}
+    for m in split:
+        stems.setdefault(m.group(1) + "#" + m.group(3), set()).add(int(m.group(2)))
+    chans = list(stems.values())
+    if len(stems) < 2 or len(chans[0]) < 2 or any(c != chans[0] for c in chans):
+        return items
+    order = {st: i for i, st in enumerate(stems)}
+    key = {id(t): (int(m.group(2)), order[m.group(1) + "#" + m.group(3)]) for t, m in zip(items, split)}
+    return sorted(items, key=lambda t: key[id(t)])
+
+
 def _blocks(pins, s):
     """pins -> ordered blocks {group, label, side, slots: [[lead pin, stacked...], ...]}."""
     order = {g: i for i, g in enumerate(list(s["order"]) + [g for g in ORDER if g not in s["order"]])}
@@ -200,6 +239,8 @@ def _blocks(pins, s):
             for t in items:
                 stems.setdefault(stem(t[2].get("name", "")), t[1])
             items.sort(key=lambda t: (stems[stem(t[2].get("name", ""))], _natural(_key(t[2].get("name", ""))), t[1]))
+            if g not in POWER_GROUPS:
+                items = _by_channel(items)
         slots, at, keys = [], {}, []
         sk = stack_keys([t[2].get("name", "") for t in items])
         for _, _, p in items:
@@ -234,23 +275,30 @@ def _pieces(b, step=8):
     return [dict(b, slots=b["slots"][i:i + step], piece=(id(src), i), src=src) for i in range(0, n, step)]
 
 
-def _balance(blocks):
-    """Assign flexible blocks to left/right: left = fixed left + flex[:k], right = flex[k:] + fixed right."""
+def _balance(blocks, power_side="top"):
+    """Assign flexible blocks to left/right: left = fixed left + flex[:k], right = flex[k:] + fixed right. Ties keep
+    'other' pins (no direction known) on the left with the inputs. power_side "left": the top blocks go first and the
+    bottom blocks last on the left side, and the top and bottom edges stay empty."""
+    top = [b for b in blocks if b["side"] == "top"]
+    bot = [b for b in blocks if b["side"] == "bottom"]
     fixed_l = [b for b in blocks if b["side"] == "left" and b["group"] not in FLEX]
     fixed_r = [b for b in blocks if b["side"] == "right" and b["group"] not in FLEX]
     flex = [b for b in blocks if b["group"] in FLEX and b["side"] in ("left", "right")]
+    head, tail = (top, bot) if power_side == "left" else ([], [])
     pieces = [pc for b in flex for pc in _pieces(b)]
     best = None
     for k in range(len(pieces) + 1):
-        left, right = fixed_l + pieces[:k], pieces[k:] + fixed_r
+        left, right = head + fixed_l + pieces[:k] + tail, pieces[k:] + fixed_r
         split = 0 < k < len(pieces) and pieces[k].get("piece") and pieces[k]["piece"][1] > 0
         hl, hr = _height(left), _height(right)
-        cost = (max(hl, hr) + (SPLIT_PENALTY if split else 0), abs(hl - hr), k)
+        moved = sum(1 for pc in pieces[k:] if pc["group"] == "other")
+        cost = (max(hl, hr) + (SPLIT_PENALTY if split else 0), abs(hl - hr), moved, k)
         if best is None or cost < best[0]:
             best = (cost, left, right)
     _, left, right = best
-    return {"left": left, "right": right, "top": [b for b in blocks if b["side"] == "top"],
-            "bottom": [b for b in blocks if b["side"] == "bottom"]}
+    if power_side == "left":
+        return {"left": left, "right": right, "top": [], "bottom": []}
+    return {"left": left, "right": right, "top": top, "bottom": bot}
 
 
 def _chunk(block, size):
@@ -262,9 +310,10 @@ def arrange(pins, rules=None, split=None):
     s = settings(rules)
     blocks = _blocks(pins, s)
     big = s["split_pins"] and len(pins) > s["split_pins"]
+    ps = s.get("power_side", "top")
     if not (big if split is None else split):
-        return [{"unit": 1, "sides": _balance(blocks)}]
-    pw = [b for b in blocks if b["side"] in ("top", "bottom") or b["group"] == "nc"]     # part A: power, ground, NC
+        return [{"unit": 1, "sides": _balance(blocks, ps)}]
+    pw = [b for b in blocks if b["side"] in ("top", "bottom") or b["group"] in POWER_GROUPS or b["group"] == "nc"]   # part A
     sig = [b for b in blocks if b not in pw]
     cap = max(8, s["unit_pins"])
     units, cur = [], []
@@ -275,8 +324,8 @@ def arrange(pins, rules=None, split=None):
             cur.append(c)
     if cur:
         units.append(cur)
-    out = [{"unit": 1, "sides": _balance(pw)}] if pw else []
-    return out + [{"unit": len(out) + i + 1, "sides": _balance(u)} for i, u in enumerate(units)]
+    out = [{"unit": 1, "sides": _balance(pw, ps)}] if pw else []
+    return out + [{"unit": len(out) + i + 1, "sides": _balance(u, ps)} for i, u in enumerate(units)]
 
 
 def arrange_pins(pins, rules=None, split=None):
@@ -399,7 +448,8 @@ def relayout(sym, rules=None, split=None):
 # ------------------------------------------------------------------ checks
 def check(sym, grid=100):
     """Problems in a laid-out symbol: pins off the grid, two different pins at one spot (other than stacked power
-    pins with the same name), a pin whose end or line lies on another pin's line, pin lines crossing. -> [text]."""
+    pins with the same name), a pin whose end or line lies on another pin's line, pin lines crossing, pin text that
+    overlaps (text_problems). -> [text]."""
     g = grid // 10
     probs, at, segs = [], {}, []
     parts = sym.get("prim_parts") or [1] * len(sym["prims"])
@@ -425,7 +475,94 @@ def check(sym, grid=100):
                 continue
             if on(c, a, b) or on(d, a, b) or on(a, c, d) or on(b, c, d) or _cross(a, b, c, d):
                 probs.append(f"pin {q['num']} lies on or crosses pin {p['num']}'s line in part {u}")
+    return probs + text_problems(sym)
+
+
+# pin text as Altium draws it (default 10 pt pin font), DXP units (10 mil): a little wide, so a symbol that passes looks
+# clear in Altium and KiCad. The layout itself sizes bodies with CHAR (wider still).
+TXT_W, TXT_H, TXT_GAP = 6, 8, 3
+CONNECTOR_PREFIX = ("J", "P", "CN", "CON", "X", "XS", "XP", "JP", "SW", "S", "K", "T")   # pin order is the drawing
+
+
+def _boxes(sym):
+    """[(part, what, (x0, y0, x1, y1))] for every shown pin name and number, and {part: body rect}."""
+    parts = sym.get("prim_parts") or [1] * len(sym["prims"])
+    body, out = {}, []
+    for pr, u in zip(sym["prims"], parts):
+        if pr[0] == "rect":
+            r = (min(pr[1], pr[3]), min(pr[2], pr[4]), max(pr[1], pr[3]), max(pr[2], pr[4]))
+            if u not in body or (r[2] - r[0]) * (r[3] - r[1]) > (body[u][2] - body[u][0]) * (body[u][3] - body[u][1]):
+                body[u] = r
+    pos = {}
+    for pr, u in zip(sym["prims"], parts):
+        if pr[0] == "pin":
+            pos.setdefault((u, pr[2], pr[3] if pr[2] in ("left", "right") else pr[4]), set()).add(pr[4] if pr[2] in ("left", "right") else pr[3])
+    gaps = [b - a for v in pos.values() for a, b in zip(sorted(v), sorted(v)[1:])]
+    f = min(1.0, min(gaps or [10]) / 10)          # a 50 mil pitch symbol is drawn with a font half as big
+    tw, th, tg = TXT_W * f, TXT_H * f, TXT_GAP * f
+    for pr, u in zip(sym["prims"], parts):
+        if pr[0] != "pin":
+            continue
+        _, p, side, x, y, L, *show = pr
+        if p.get("hidden"):
+            continue
+        sn = p.get("show_name", show[0] if show else True) and plain(p.get("name", "")) not in ("", "~")
+        sd = p.get("show_num", show[0] if show else True) and str(p.get("num", ""))
+        n, m, h = len(plain(p.get("name", ""))) * tw, len(str(p.get("num", ""))) * tw, th / 2
+        if side in ("left", "right"):
+            s = 1 if side == "left" else -1                       # +1: the body is to the right of the pin's end
+            if sn:
+                a = x + s * tg
+                out.append((u, f"pin {p['num']} name", (min(a, a + s * n), y - h, max(a, a + s * n), y + h)))
+            if sd:
+                mx = x - s * L / 2
+                out.append((u, f"pin {p['num']} number", (mx - m / 2, y + f, mx + m / 2, y + f + th)))
+        else:
+            s = -1 if side == "top" else 1                        # names run down from a top pin, up from a bottom one
+            if sn:
+                a = y + s * tg
+                out.append((u, f"pin {p['num']} name", (x - h, min(a, a + s * n), x + h, max(a, a + s * n))))
+            if sd:
+                my = y - s * L / 2
+                out.append((u, f"pin {p['num']} number", (x - f - th, my - m / 2, x - f, my + m / 2)))
+    return out, body
+
+
+def text_problems(sym):
+    """Pin text that would overlap in Altium: two pin names or numbers on top of each other, or a pin name running
+    out of the body (the estimate: TXT_W per character, TXT_H high). -> [text]."""
+    out, body = _boxes(sym)
+    probs = []
+    hit = lambda a, b: a[0] < b[2] - 0.5 and b[0] < a[2] - 0.5 and a[1] < b[3] - 0.5 and b[1] < a[3] - 0.5
+    for i, (u, w, a) in enumerate(out):
+        r = body.get(u)
+        if r and w.endswith("name") and (a[0] < r[0] - 0.5 or a[2] > r[2] + 0.5 or a[1] < r[1] - 0.5 or a[3] > r[3] + 0.5):
+            probs.append(f"{w} runs out of the body" + (f" in part {u}" if len(body) > 1 else ""))
+        for v, w2, b in out[i + 1:]:
+            if u == v and hit(a, b):
+                probs.append(f"{w} overlaps {w2}" + (f" in part {u}" if len(body) > 1 else ""))
     return probs
+
+
+def is_box_ic(sym):
+    """True for a plain IC symbol: designator U / IC (or 8+ pins and not a connector), one part, a rectangle body with every pin on its edge, and nothing
+    else drawn but small marks (a pin 1 dot, text). Those can be re-laid out by the house rule without losing a drawing;
+    connectors, transistors, op-amp triangles and logic gates cannot."""
+    if sym.get("parts", 1) > 1 or any(sym.get("prim_modes") or []):
+        return False
+    pre = re.sub(r"[^A-Z]", "", str(sym.get("designator", "")).upper())
+    rects = [pr for pr in sym["prims"] if pr[0] == "rect"]
+    pins = [pr for pr in sym["prims"] if pr[0] == "pin"]
+    if len(rects) != 1 or len(pins) < 3 or pre in CONNECTOR_PREFIX or (pre not in ("U", "IC") and len(pins) < 8):
+        return False
+    x0, x1 = sorted((rects[0][1], rects[0][3]))
+    y0, y1 = sorted((rects[0][2], rects[0][4]))
+    if any(pr[0] in ("line", "polyline", "polygon", "arc", "bezier") or pr[0] == "circle" and pr[3] > 10
+           for pr in sym["prims"]):
+        return False
+    edge = {"left": lambda x, y: abs(x - x0) < 1 and y0 <= y <= y1, "right": lambda x, y: abs(x - x1) < 1 and y0 <= y <= y1,
+            "top": lambda x, y: abs(y - y1) < 1 and x0 <= x <= x1, "bottom": lambda x, y: abs(y - y0) < 1 and x0 <= x <= x1}
+    return all(edge[pr[2]](pr[3], pr[4]) for pr in pins)
 
 
 def _cross(a, b, c, d):

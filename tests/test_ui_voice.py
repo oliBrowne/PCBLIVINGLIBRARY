@@ -199,21 +199,19 @@ def test_datasheet_review_leads_with_the_outcome():
 
 
 def test_kicad_plugin_shows_the_plain_reason():
-    import importlib.util, sys, types
-    sys.modules.setdefault("pcbnew", types.SimpleNamespace(ActionPlugin=object))
-    spec = importlib.util.spec_from_file_location("kplug", Path(RP.__file__).parent / "assets" / "kicad_action_plugin.py")
-    mod = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(mod)
-    except Exception:                                        # register() on the stub: the functions are defined by then
-        pass
+    """A held part in the KiCad window: the plain reason and the next step, as the Altium dialog shows them."""
+    from ecadlib import kicad_menu as KM
+    from tests.test_tool_packages import _plugin_module
+    mod, _ = _plugin_module()
     with tempfile.TemporaryDirectory() as d:
-        lib = Path(d) / mod.LIB
-        lib.mkdir()
-        says = [{"code": "files.no_footprint", "text": M.held("files.no_footprint")[0], "fix": M.held("files.no_footprint")[1]}]
-        (lib / "kicad_export.json").write_text(json.dumps({"parts": [], "skipped": [{"part": "C", "why": "held: x", "says": says}]}))
-        fp, why = mod.footprint_for(d, "C")
-    assert fp is None and why == "it is held. There is no footprint for this part yet.\nNext: " + says[0]["fix"], why
+        (Path(d) / "b.kicad_pcb").write_text("(kicad_pcb)")
+        res = KM.run_job(Path(d) / "ecadlib-work" / "jobs" / "j", "add-part", str(Path(d) / "b.kicad_pcb"), "RC0603FR-0710KL",
+                         offline=True)
+        got = mod.read_ini(str(Path(d) / "ecadlib-work" / "jobs" / "j" / "result.ini"), "result")
+    assert res["status"] == "held" and got["big"] == "Held", res
+    text, fix = M.held("files.no_symbol")
+    assert text in got["message"] and got["fix"].startswith(fix) and "the Open review queue button" in got["fix"], got
+    assert "Traceback" not in got["message"], got
 
 
 def test_menu_and_mcp_errors_are_two_plain_lines():

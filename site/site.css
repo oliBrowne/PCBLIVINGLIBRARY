@@ -149,7 +149,7 @@ svg.fp .draw { fill: none; stroke-width: var(--sw); stroke-dasharray: 1; stroke-
 svg.fp .draw.on { stroke-dashoffset: 0; }
 svg.fp .crtyd { stroke: var(--pcb-crtyd); }
 svg.fp .fab { stroke: var(--pcb-fab); }
-svg.fp .silk { stroke: var(--pcb-silk); stroke-width: calc(var(--sw) * 1.2); }
+svg.fp .silk { stroke: var(--pcb-silk); stroke-width: var(--sw-silk); }   /* plain numbers set by site.js: Safari and Firefox drop a unitless calc() here and draw 1 mm */
 svg.fp .silkfill { fill: var(--pcb-silk); opacity: 0; transition: opacity .6s var(--ease); }
 svg.fp .silkfill.on { opacity: 1; }
 svg.fp .pad { fill: var(--pcb-top); transform-box: fill-box; transform-origin: center; transform: scale(0); opacity: 0; transition: transform .7s var(--ease), opacity .4s var(--ease), stroke .3s; }
@@ -160,7 +160,7 @@ svg.fp .padnum.on { opacity: .9; }
 svg.fp .dim { stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; fill: none; opacity: 0; transition: opacity .6s var(--ease); }
 svg.fp .dimtxt { fill: #fff; font-family: var(--mono); opacity: 0; transition: opacity .6s var(--ease); }
 svg.fp .dim.on, svg.fp .dimtxt.on { opacity: .85; }
-svg.fp .draw.focus { stroke-width: calc(var(--sw) * 3); transition: stroke-width .5s var(--ease); }
+svg.fp .draw.focus { stroke-width: var(--sw-focus); transition: stroke-width .5s var(--ease); }
 svg.fp .pad.focus.on { stroke-width: 1.8; }
 svg.fp .focuscap { opacity: 0; transition: opacity .5s var(--ease); pointer-events: none; }
 svg.fp .focuscap.on { opacity: 1; }

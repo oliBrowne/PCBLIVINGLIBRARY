@@ -11,8 +11,18 @@ from . import _ai, endpoint, key_for, register, profiles as PR, rails as R, samp
 _INFO = {}
 
 
+def _rules_key(rules):
+    """The cache key for a rules table: its content. Not id(rules): a freed table's id is reused by the next one, which
+    then got the old table's plan (seen as an extra feedback turn with feedback_retry = false, Windows CI)."""
+    import json
+    try:
+        return json.dumps(rules, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return repr(rules)
+
+
 def info(ref, rules=None, section="datasheet", key=None, get=None, post=None):
-    k = (ref, section, id(rules))
+    k = (ref, section, _rules_key(rules))
     if k not in _INFO:
         ep = endpoint(rules, section, ref)
         prof = PR.resolve(ep, rules, key_for(ep, key) if ep["provider"] != "anthropic" else None, get, post)

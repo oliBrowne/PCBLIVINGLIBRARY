@@ -129,7 +129,8 @@ def test_easyeda_footprint_tht_slot_npth_polygon():
     assert sexpr.first(pads[0], "drill")[1] == "0.762"
     assert sexpr.first(pads[1], "drill")[1:] == ["oval", "0.762", "2.032"] and sexpr.first(pads[1], "at")[3] == "90"
     assert sexpr.first(pads[2], "size")[1:] == ["1.016", "1.016"]
-    assert any("polygon pad" in n for n in notes) and any("ARC x1" in n and "VIA x1" in n for n in notes), notes
+    assert any("polygon pad" in n for n in notes) and any("VIA x1" in n for n in notes), notes
+    assert len(list(sexpr.find(t, "fp_arc"))) == 1                       # a silk arc is converted (pin-1 notches)
     fp, _ = K.convert_footprint(EC.footprint_to_kicad(data, "THT"))
     assert [p.get("plated") for p in fp["pads"]] == [True, True, None, False, False]
 
@@ -426,3 +427,52 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn(); print("ok", name)
+
+
+def test_missing_description_is_written_from_category_and_package():
+    """No source had a description (the KiCad index rate-limited, EasyEDA without text): ecadlib writes a plain one
+    from what the plan knows, says so in field_sources, and the release check warns instead of holding the part."""
+    from ecadlib import librarian as L, release_check as RC
+    from ecadlib import rules as RU
+    item = {"name": "LM358DR", "folder": "Components/ICs", "description": "", "footprint": {"ref": "LM358DR"}, "symbol": {},
+            "parameters": [{"name": "Manufacturer", "value": "Texas Instruments"},
+                           {"name": "Manufacturer Part Number", "value": "LM358DR"}]}
+    st = {"found": {"package": ("SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL", "EasyEDA C5423")}}
+    L.apply_state(item, st, {"mpn": "LM358DR"})
+    assert item["description"] == "IC, SOIC-8, Texas Instruments LM358DR", item
+    assert item["field_sources"]["Description"] == L.GENERATED_DESCRIPTION
+    fails, warns, _ = RC.check_item(item, ".", RU.resolve(None, "."))
+    assert not [m for r, m in fails if "Description" in m] and any("written by ecadlib" in w for w in warns), warns
+    # a source's own text always wins, and nothing is written without a part number
+    item2 = dict(item, description="", parameters=[])
+    L.apply_state(item2, {"found": {"description": ("Dual op-amp", "EasyEDA C5423")}}, {})
+    assert item2["description"] == "Dual op-amp"
+    assert L.generated_description({"folder": "Components/ICs", "parameters": []}, {}, {}) == ""
+    assert L._package_name("GCT USB4105", "USB4105-GF-A") == "" and L._package_name("CAP 0603 (1608 Metric)") == "0603"
+
+
+def test_lcsc_number_found_by_ecadlib_fills_the_supplier():
+    """LM358DR in the PR #29 Altium run: no LCSC number in the BOM, ecadlib found C5423 and used EasyEDA, but the part
+    had no Supplier 1 / LCSC field. A number the BOM gave is kept as it is."""
+    item = {"symbol": {}, "footprint": {}, "parameters": [{"name": "Supplier 1", "value": ""}, {"name": "Supplier Part Number 1", "value": ""}]}
+    st = {"found": {"lcsc": ("C5423", "EasyEDA C5423 (LCSC number found by ecadlib, not in the BOM)")}}
+    L.apply_state(item, st, {})
+    par = {p["name"]: p["value"] for p in item["parameters"]}
+    assert par["Supplier 1"] == "LCSC" and par["Supplier Part Number 1"] == "C5423", par
+    assert par["ComponentLink1URL"] == "https://www.lcsc.com/product-detail/C5423.html"
+    assert "not in the BOM" in item["field_sources"]["Supplier Part Number 1"]
+    given = {"symbol": {}, "footprint": {}, "parameters": [{"name": "Supplier 1", "value": "LCSC"}, {"name": "Supplier Part Number 1", "value": "C7593"}]}
+    L.apply_state(given, st, {"lcsc": "C7593"})
+    assert {p["name"]: p["value"] for p in given["parameters"]}["Supplier Part Number 1"] == "C7593"
+
+
+def test_converted_footprint_is_named_after_its_file():
+    """PR #29 Altium run: NE555DR.kicad_mod held a footprint named after EasyEDA's package, so the rule book reported
+    'footprint name is not its file name' (KiCad links by file, Altium by name)."""
+    with tempfile.TemporaryDirectory() as d:
+        items, _ = run(d)
+        it = items["EEPART1"]
+        kmod = Path(d) / "out" / it["footprint"]["kicad_mod"]
+        t = sexpr.parse(kmod.read_text())
+        assert t[1] == kmod.stem and next(x for x in sexpr.find(t, "fp_text") if x[1] == "value")[2] == kmod.stem, kmod.read_text()[:300]
+        assert not any("is not its file name" in w for w in it["release_check"]["warnings"]), it["release_check"]["warnings"]

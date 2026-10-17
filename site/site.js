@@ -207,7 +207,11 @@ function play(i) {
   const vw = Math.max(w, h * 1.25), vh = vw * 0.8;
   fp.home = [-vw / 2, -vh / 2, vw, vh];
   fsvg.replaceChildren();
+  // stroke widths in mm as plain numbers: calc() on a unitless number is not a valid stroke-width in Safari or Firefox,
+  // which then draw the default width of 1 user unit (1 mm), and the silk turns into slabs over the pads
   fsvg.style.setProperty("--sw", (vw / 380).toFixed(4));
+  fsvg.style.setProperty("--sw-silk", ((vw / 380) * 1.2).toFixed(4));
+  fsvg.style.setProperty("--sw-focus", ((vw / 380) * 3).toFixed(4));
   setView(fp.home);
   const s = niceStep(vw), big = 2.4 * vw, minor = [], major = [];
   for (let k = -Math.ceil(big / s); k <= Math.ceil(big / s); k++) {

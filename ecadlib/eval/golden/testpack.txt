@@ -358,24 +358,24 @@ record48 OWNERINDEX=13
 graphics record14: 1 #57c3c7f40a
 ### library/models/SchLib/LM358DR.SchLib:LM358DR
 record1 ALLPINCOUNT=8 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Dual operational amplifier SOIC-8 CURRENTPARTID=1 DESIGNITEMID=LM358DR DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=LM358DR OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
-pin 3 "+IN_A" etype=0 orient=2 at=(-30,20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
-pin 2 "-IN_A" etype=0 orient=2 at=(-30,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
-pin 5 "+IN_B" etype=0 orient=2 at=(-30,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
-pin 6 "-IN_B" etype=0 orient=2 at=(-30,-10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
-pin 8 "V+" etype=7 orient=2 at=(-30,-20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
-pin 1 "OUT_A" etype=2 orient=0 at=(30,20) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
-pin 7 "OUT_B" etype=2 orient=0 at=(30,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
-pin 4 "V-" etype=7 orient=0 at=(30,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
-record34 COLOR=8388608 FONTID=1 LOCATION.X=-30 LOCATION.Y=33 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=U?
-record41 COLOR=8388608 FONTID=1 LOCATION.X=-30 LOCATION.Y=-38 NAME=Comment OWNERPARTID=-1 TEXT=*
-record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-30 LOCATION.Y=-48 NAME=Value OWNERPARTID=-1 TEXT=LM358DR
-record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-30 LOCATION.Y=-58 NAME=KiCad Footprint OWNERPARTID=-1 TEXT=testpack:SOIC-8_3.9x4.9mm_P1.27mm
-record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-30 LOCATION.Y=-68 NAME=Description OWNERPARTID=-1 TEXT=Dual operational amplifier SOIC-8
+pin 3 "+IN_A" etype=0 orient=2 at=(0,-40) length=30 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 2 "-IN_A" etype=0 orient=2 at=(0,-50) length=30 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 5 "+IN_B" etype=0 orient=2 at=(0,-60) length=30 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 6 "-IN_B" etype=0 orient=2 at=(0,-70) length=30 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58
+pin 1 "OUT_A" etype=2 orient=0 at=(90,-40) length=30 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 7 "OUT_B" etype=2 orient=0 at=(90,-50) length=30 part=1 mode=0 symbols=[0, 0, 0, 0] cong=56
+pin 8 "V+" etype=7 orient=1 at=(40,0) length=30 part=1 mode=0 symbols=[0, 0, 0, 0] cong=57
+pin 4 "V-" etype=7 orient=3 at=(40,-110) length=30 part=1 mode=0 symbols=[0, 0, 0, 0] cong=59
+record34 COLOR=8388608 FONTID=1 LOCATION.Y=32 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=U?
+record41 COLOR=8388608 FONTID=1 LOCATION.Y=-148 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.Y=-158 NAME=Value OWNERPARTID=-1 TEXT=LM358DR
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.Y=-168 NAME=KiCad Footprint OWNERPARTID=-1 TEXT=testpack:SOIC-8_3.9x4.9mm_P1.27mm
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.Y=-178 NAME=Description OWNERPARTID=-1 TEXT=Dual operational amplifier SOIC-8
 record44 
 record45 DATAFILECOUNT=1 ISCURRENT=T MODELDATAFILEENTITY0=SOIC-8_3.9x4.9mm_P1.27mm MODELDATAFILEKIND0=PCBLib MODELNAME=SOIC-8_3.9x4.9mm_P1.27mm MODELTYPE=PCBLIB OWNERINDEX=15
 record46 OWNERINDEX=16
 record48 OWNERINDEX=16
-graphics record14: 1 #57c3c7f40a
+graphics record14: 1 #33a17af719
 ### library/models/SchLib/MMBT3904LT1G.SchLib:MMBT3904LT1G
 record1 ALLPINCOUNT=3 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=NPN transistor, pins 1=B, 2=E, 3=C CURRENTPARTID=1 DESIGNITEMID=MMBT3904LT1G DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=MMBT3904LT1G OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
 pin 1 "B" etype=0 orient=2 at=(-10,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58

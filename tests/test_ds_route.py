@@ -510,3 +510,15 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+def test_plan_cache_follows_the_rules_not_their_id():
+    """A rules table freed and replaced by another (same id in CPython) must not reuse the old table's rail plan."""
+    from ecadlib.llm import run as LR
+    for _ in range(20):
+        r = {"datasheet": {"route": "ladder"}}
+        assert "feedback_retry" in LR.info(HAIKU, r)["plan"]["rails"]
+        del r
+        r = {"datasheet": {"route": "ladder"}, "ai": {"feedback_retry": False}}
+        assert "feedback_retry" not in LR.info(HAIKU, r)["plan"]["rails"]
+        del r

@@ -634,14 +634,14 @@ def ic_symbol(name, pins, description="", designator="U?", footprint=None, comme
     top->bottom (left/right) or left->right (top/bottom). 'shape' is a PIN_SHAPE name ('inverted', 'clock', ...) or
     {slot: PIN_SYMBOL name} (see pin_symbols); '~{EN}' in a name is overlined. Body grows to fit pin names (100 mil grid).
     layout: None = pins grouped by function (ecadlib.symbol_layout, 'side' ignored) when there are at least the rules'
-    [symbols] layout_pins pins, True = always, False = never. rules: loaded rules or [symbols] overrides (None = defaults)."""
+    [symbols] layout_pins pins (default 1: always), True = always, False = never. rules: loaded rules or [symbols] overrides (None = defaults)."""
+    bad = [p.get("num") for p in pins if p.get("side", "left") not in ORIENT]
+    if bad:
+        raise ValueError(f"{name}: pins {bad} have a side other than {list(ORIENT)}")
     if layout is not False:
         from . import symbol_layout as SL
         if layout or SL.wants_layout(pins, rules):
             return SL.build(name, pins, description, designator, footprint, comment, rules)
-    bad = [p.get("num") for p in pins if p.get("side", "left") not in ORIENT]
-    if bad:
-        raise ValueError(f"{name}: pins {bad} have a side other than {list(ORIENT)}")
     side = {s: [p for p in pins if p.get("side", "left") == s] for s in ORIENT}
     rows = max(len(side["left"]), len(side["right"]), 1)
     cols = max(len(side["top"]), len(side["bottom"]))

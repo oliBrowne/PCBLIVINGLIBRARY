@@ -297,6 +297,9 @@ TO-252 / TO-263 origins on the lead row, as KiCad's; KiCad-size courtyards on sm
 ## Where it runs
 
 * `ecadlib check` (any footprint), and `--summary` for a library.
+* `ecadlib/fp_tidy.py` fixes what it can on converted EasyEDA footprints before they are checked: `text` (reference
+  on silk, `${REFERENCE}` on fab), `padshape` (rounded rectangles), `silk` under the body, `pin1` on silk and
+  `polarity` on fab. Copper is never moved or resized.
 * The release check (`ecadlib release-check`): rule-book errors in `name`, `layers`, `attr`, `tht`, `vias`, `silktext` hold
   ecadlib's own and converted parts; KiCad library parts get them as warnings; `pinmap` holds every part.
 * `tests/test_footprint_rulebook.py`: the golden examples, one mutant per defect, ecadlib's footprints, the

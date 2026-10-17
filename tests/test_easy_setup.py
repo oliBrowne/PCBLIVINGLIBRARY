@@ -214,6 +214,7 @@ def test_add_to_kicad_copies_the_plugin_with_this_ecadlib_command():
             r = ES.install_kicad_plugin()
         p = kd / "8.0" / "scripting" / "plugins" / "ecadlib_add_part"
         assert r["installed"] == [str(p)] and (p / "__init__.py").is_file()
+        assert (p / "ecadlib.png").read_bytes().startswith(b"\x89PNG")          # the toolbar button's icon
         cmd = json.loads((p / "ecadlib_cmd.json").read_text())["command"]
         assert cmd == UC.self_command()
         from tests.test_tool_packages import _plugin_module

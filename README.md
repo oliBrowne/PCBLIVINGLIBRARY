@@ -1006,18 +1006,20 @@ Plans keep ecadlib's own parameter names internally; your house names (`[paramet
 
 **Accuracy and limits.** On synthetic libraries in four house styles (classic Altium SchLib/PcbLib, glued names in a DbLib, MPN-named Altium 365 list, KiCad), inference gets 34 of 34 settings right, and parts planned with the inferred file come out named like the existing ones. Not checked: no real customer library has been scanned and nothing written was opened in Altium; IPC-7351 names from the generator are approximate; name case (upper/lower) is not inferred; `.mdb` DbLib data is not read. Because the current folder's `ecadlib.toml` is used when the input folder has none, a stray file there will change output; pass `--rules` to be explicit.
 
-## 19. `symbol_layout.py`: tidy symbols for big chips
+## 19. `symbol_layout.py`: one pin rule for every IC symbol
 
-A 100-pin MCU used to come out as one long column per side, in pin-number order. Now every symbol with 40 or more pins is laid out by function. The layout is used for datasheet-reader symbols, for EasyEDA symbols (the librarian re-lays them out; symbols taken from the KiCad libraries stay as drawn), for `altium_lib.ic_symbol` and `schlib`, and for the KiCad export, which reads those SchLibs back.
+The house rule: **inputs left, outputs right, power on top, ground on the bottom** (`power_side = "top"`, the default). The other variant, `power_side = "left"`, leaves the top and bottom edges empty and puts the power pins at the top of the left side and the ground pins at its bottom, so no pin name is ever drawn sideways. Every IC symbol is laid out this way, from a 555 to a 100-pin MCU. The layout is used for datasheet-reader symbols, for EasyEDA IC symbols (the librarian re-lays them out), for `altium_lib.ic_symbol` and `schlib`, and for the KiCad export, which reads those SchLibs back. Symbols taken from the KiCad libraries stay as drawn unless their pin text would overlap in Altium; then they are re-laid out too, with a note. Only plain IC boxes are re-laid out (designator U / IC, one rectangle, every pin on its edge); connectors, transistors, op-amp triangles and gates keep their drawing.
 
-* **Groups.** Pins are grouped by name, and by type when the name says nothing. Power (VDD, 3V3, VBAT), analog supply (VDDA, VREF+) and power out (VCAP, 3V3OUT) go on top; ground (GND, VSS, AGND, VREF-) and the exposed pad go on the bottom. Reset/boot/enable, clock/oscillator, debug (SWD, JTAG, boot UART such as U0TXD), USB, ADC/DAC and other inputs go on the left. UART, I2C, SPI, CAN, Ethernet, ports, other outputs and NC go on the right.
+* **Overlapping text.** `symbol_layout.text_problems(sym)` estimates every shown pin name and number as Altium draws it (60 mil per character, 80 mil high, scaled down for a 50 mil pitch) and reports any two that overlap and any name running out of the body. `check` includes it, so `ecadlib symbol` exits 1 on it. The NE555DR from EasyEDA in Oliver's first Altium run is the test case: its VCC and RST names ran down into DISCH and OUT, and GND ran up into THRES and CONT.
+
+* **Groups.** Pins are grouped by name, and by type when the name says nothing. Power (VDD, 3V3, VBAT) and analog supply (VDDA, VREF+) go on top; ground (GND, VSS, AGND, VREF-) and the exposed pad go on the bottom. Reset/boot/enable, clock/oscillator, debug (SWD, JTAG, boot UART such as U0TXD), USB, ADC/DAC and inputs (IN+, TRIG, THRES, FB, SENSE, type input) go on the left. Power out (VOUT, VCAP, 3V3OUT), UART, I2C, SPI, CAN, Ethernet, ports, outputs (OUT, Q, DISCH, PGOOD, SW, type output) and NC go on the right. A pin's type beats a direction guessed from its name. Pins with no direction (passive, bidirectional) are `other`: left, moved right only to keep the body square.
 * **Names.** Alternate-function names are grouped by their first name (`PA9/USART1_TX` and `PH0-OSC_IN` are port pins). Overbars and active-low marks (`~{RESET}`, `/RESET`, `RESET#`, `RST_N`) are ignored for grouping.
 * **Ports.** Each port is its own block, sorted by number (PA0..PA15, then PB0...). Blocks are separated by one empty grid row. Whole ports move between the left and right side to keep the body roughly square. A port is split only when that saves more than 6 rows.
 * **Stacking.** Power pins that share a name (VDD, or VDD_1..VDD_5 numbered 1..n) are stacked: one pin shows its name and number, and the rest sit on the same spot with name and number hidden. Names that only look alike are never stacked: VDD1 / VDD2 (an isolator's two sides), VDD18 / VDD33 and VDD_18 / VDD_33 are different supplies. KiCad gets the rest as hidden passive pins (KLC S4.3). `stack_power = "hide"` makes them hidden pins tied to the net by name instead (Altium HiddenNetName; the KiCad export names those hidden power pins after that net, since KiCad connects them by name); `"none"` draws every pin.
 * **Grid.** Everything is on the grid: body edges, pin ends and pin pitch (100 mil, which is 2.54 mm in KiCad).
 * **Multi-part.** With `split_pins` set, larger parts become multi-part symbols. Part A holds power, ground and NC; the other parts hold the signal blocks in order, at most `unit_pins` pins each.
 
-Parts below `layout_pins` pins keep the plain "side per pin" layout byte for byte. `layout=True/False` (or `"layout"` in symbol JSON) forces the grouped layout on or off.
+With `layout_pins` set above 1, parts with fewer pins keep the plain "side per pin" layout byte for byte. `layout=True/False` (or `"layout"` in symbol JSON) forces the grouped layout on or off.
 
 ```
 ecadlib symbol pins.csv -o out/STM32F103VET6.SchLib --kicad out/STM32F103VET6.kicad_sym --preview out/stm32.svg --list
@@ -1028,7 +1030,8 @@ The CSV needs `num` and `name` columns; `type` and `group` (to override the grou
 
 ```toml
 [symbols]
-layout_pins = 40        # grouped layout from this many pins (0 = never)
+layout_pins = 1         # grouped layout from this many pins (0 = never)
+power_side = "top"      # top: power top, ground bottom | left: both on the left side
 split_pins = 0          # multi-part above this many pins (0 = never)
 unit_pins = 48          # most pins in one signal part
 stack_power = "stack"   # stack | hide | none
@@ -1497,7 +1500,7 @@ Checks (2026-10-16, kicad-footprints f8440fa, kicad-symbols 9280a93):
 ```
 ecadlib kicad-pcm out/librarian/plan.json --out out/pcm --name mylib [--kicad 7|8|9|10] [--prefix PCM_] [--pkg-version 1.2.0]
 ecadlib kicad-pcm out/kicad --out site/kicad --base-url https://example.com/kicad   # + repository.json / packages.json
-ecadlib kicad-pcm --plugin --out out/pcm                    # the "ecadlib: add part" PCB editor action plugin
+ecadlib kicad-pcm --plugin --out out/pcm                    # the ecadlib button and window for KiCad's PCB editor
 ecadlib altium-pkg out/librarian/plan.json --out D:/libs/mylib --name mylib   # or a folder of .SchLib/.PcbLib
 python3 -m tests.test_tool_packages
 ```
@@ -1513,9 +1516,18 @@ symbols' Footprint fields say `PCM_<lib>:<footprint>` and the footprints' models
 `--pkg-version`, or kept while the content is unchanged, else today's date, so a re-run changes no file. With
 `--base-url` it also writes `repository.json` and `packages.json` (sha256, sizes) for Manage Repositories; KiCad only
 fetches repositories over http(s) (`kicad_curl_easy.cpp`), so a `file://` URL is refused.
-`--plugin` writes a PCM *plugin* package: in the PCB editor, Tools > External Plugins > "ecadlib: add part" asks for an
-MPN, adds it to `<project>/ecadlib-work/parts.csv`, runs `ecadlib librarian` and `kicad-export` into `<project>/ecadlib/`,
-adds `${KIPRJMOD}/ecadlib/...` rows to the project's tables and places the footprint.
+`--plugin` writes a PCM *plugin* package: an **ecadlib** button in the PCB editor's top toolbar (and Tools > External
+Plugins > ecadlib: add part / check project BOM / open review queue) that opens the ecadlib window, the same flow as
+the ecadlib menu in Altium, drawn in the same dark colours: Add part from MPN (MPN, manufacturer optional, a live
+lookup, then the footprint placed in the middle of the board), Check project BOM (the schematic's lines: already in
+your library / a source can supply / needs a footprint, then Later or Fill the library now, and the report on
+request) and Open review queue. The window does not block KiCad. It runs `ecadlib kicad-menu run-job` in the background
+(`ecadlib/kicad_menu.py`) and reads its `progress.ini` / `result.ini`, as the Altium dialog does. Per project,
+`<project>/ecadlib-work/` is the workspace (one parts list for every part added or filled, so one plan makes the whole
+library) and `<project>/ecadlib/` the KiCad library, added to the project's tables as `${KIPRJMOD}/ecadlib/...`.
+KiCad gives plugins no menu or toolbar slot in the schematic editor; its Tools > Generate BOM can run
+`ecadlib kicad-menu check-bom "%I"` there, which checks the netlist against the library and opens the report.
+Tried in KiCad 7.0.11: toolbar button, BOM check, fill and add part with the footprint placed.
 
 **Altium.** `altium-pkg` writes a folder that opens in Altium as is: `SchLib/`, `PcbLib/`, `<name>.LibPkg` (an
 integrated library package listing every `.SchLib`/`.PcbLib` as `SchLib\x.SchLib`; compile it to an `.IntLib`),
@@ -1584,6 +1596,20 @@ channel (R1_CH1 ...); a Content Vault component without an MPN parameter uses it
 one. Workspace `altium_menu(win_dir)` and the MCP
 tool `altium_menu` write it into `<workspace>/altium_menu/` with `workspace=..`.
 
+**The ecadlib dialog.** The entries work in one dark, borderless dialog (`ecadlib_dialog.pas` + `.dfm`,
+`ecadlib/altium_forms.py`) styled like Altium's own: **Check project BOM** shows "Checking...", the line being looked
+up and a progress line, then the count ("24 lines") with a row per kind (already in your library, a source can supply,
+needs a footprint, not fitted) and **Later** / **Fill the library now**; the fill shows the librarian part by part,
+then "N of M ready" with the held parts. **Add part from MPN** asks for the MPN and manufacturer in the same dialog,
+then lists where ecadlib looked, what it took and the release check, and reinstalls the library so the part shows in
+the Components panel. A `TTimer` reads `jobs\<id>\progress.ini` (done, total, text, rows) while ecadlib runs and
+`result.ini` (`big`, `rows`, `row1`.. as `label|value|ok`) at the end, so Altium keeps painting. Only the review
+queue (for a held part) and the full BOM report (**Open the full report**, `action=open`, files in the workspace only)
+open in the browser. `dialogs=0` in the .ini brings back Altium's plain message boxes. Run in Altium Designer 26.10:
+script forms, colours, the timer and modal results work. Not used, and why: a web view (`TWebBrowser` is an
+undeclared identifier to scripts) and a panel that stays open (any open script form, a server panel or a floating
+one, keeps the script running, and Altium then runs no other script: "Another script executing now").
+
 **How the script runs ecadlib.** No user text goes on a command line: each click makes `jobs\<id>\` next to the
 script and writes `request.ini` with `TIniFile` (action, mpn, manufacturer, project, config). It then calls
 `RunApplication('wscript.exe //B //NoLogo "<dir>\ecadlib_run.vbs" "<dir>\ecadlib_run.cmd" "<job>"')`; the .vbs runs
@@ -1597,7 +1623,12 @@ values are one line; finished job folders older than 14 days are removed. Every 
 NEXAR_TOKEN, port taken, ...); ecadlib's output is in `jobs\<id>\log.txt`. `hidden=0` runs the .cmd in a visible
 console instead. No key is in any file: keys stay in environment variables.
 
-**Install.** Preferences > Scripting System > Global Projects > Install from file > `ecadlib_menu.PrjScr`; then
+**Install.** The quick way: close Altium and run `ecadlib altium-menu install-menu --out <folder>` (the setup
+page's Add to Altium does this on Windows). It merges the ecadlib commands and the four menu insertions into Altium's
+own menu file, `%APPDATA%\Altium\Altium Designer {GUID}\DXP.RCS` (backed up next to it first; other customisations
+are kept; `--remove` takes ours out), so the "ecadlib" menu sits in the top menu bar before Window. Altium must be
+closed because it writes that file when it closes. The menu entries run the script project by its path, so it need
+not be a global project. By hand: Preferences > Scripting System > Global Projects > Install from file > `ecadlib_menu.PrjScr`; then
 right-click a menu or toolbar > Customize > [Scripts] and drag the three procedures onto a menu (once per editor).
 With `--win-dir` (or when built on Windows) it also writes `ecadlib_menu.DXPPrf`, a preferences file (zip of `DXP.RCS`
 + `IncludedFiles.ini`, the format of Altium-Designer-addons' Altium-saved `UI customizations/Menu_SVN`) that adds an
@@ -2120,6 +2151,13 @@ guide: [docs/house-style.md](docs/house-style.md).
 * Also in the UI (**Settings: your house style**) and MCP (`learn_house_style`, `house_style`, `check_house_style`,
   `apply_house_style`). Tests: `tests/test_house_style.py`, which runs offline with a fake model for each tier.
 * **Not verified:** no real customer library has been scanned and no real model has been called.
+
+## Credits
+
+Parts converted from EasyEDA (the `easyeda` source, by LCSC number) come from the **JLCEDA/EasyEDA Official Library**
+([easyeda.com](https://easyeda.com), [lceda.cn](https://lceda.cn)), whose data asks anyone reusing it to credit it.
+ecadlib keeps that credit on every converted part: in the footprint's description, as a `Credit` property on the KiCad
+symbol, and as a `Library Credit` parameter on the Altium part. Leave it in place if you share or publish the library.
 
 ## Releases
 

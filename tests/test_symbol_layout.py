@@ -54,7 +54,9 @@ def test_classify_names():
              "SWDIO": "debug", "TCK": "debug", "U0TXD": "debug", "TXD0": "debug", "USBDP": "usb", "USB_D-": "usb",
              "D+": "usb", "TXD": "uart", "~{CTS}": "uart", "DTR#": "uart", "SDA": "i2c", "I2C1_SCL": "i2c", "MOSI": "spi",
              "~{CS}": "spi", "SD2": "spi", "CANH": "can", "RMII_TXD0": "eth", "MDIO": "eth", "ADC1_IN3": "adc",
-             "SENSOR_VP": "adc", "NC": "nc", "N/C": "nc", "DNC": "nc", "EP": "ep", "CBUS0": "other_in"}
+             "SENSOR_VP": "adc", "NC": "nc", "N/C": "nc", "DNC": "nc", "EP": "ep", "CBUS0": "other",
+             "TRIG": "other_in", "THRES": "other_in", "FB": "other_in", "IN+": "other_in", "DISCH": "other_out", "PGOOD": "other_out",
+             "SW": "other_out", "OUT": "power_out"}
     got = {n: c(n) for n in cases}
     assert got == cases, {n: (g, cases[n]) for n, g in got.items() if g != cases[n]}
     assert c("FOO", "output") == "other_out" and c("FOO", "power_in") == "power" and c("X", "nc") == "nc"
@@ -170,9 +172,9 @@ def test_usb_bridge():
     assert [p["name"] for p in g["usb"]] == ["USBDP", "USBDM"] and g["usb"][0]["side"] == "left"
     assert [p["name"] for p in g["uart"]] == ["TXD", "DTR#", "RTS#", "RXD", "RI#", "DSR#", "DCD#", "CTS#"]   # datasheet order kept
     assert g["uart"][0]["side"] == "right" and [p["name"] for p in g["power_out"]] == ["3V3OUT"]
-    assert [p["name"] for p in g["other_in"]] == ["CBUS0", "CBUS1", "CBUS2", "CBUS3", "CBUS4"]
+    assert [p["name"] for p in g["other"]] == ["CBUS0", "CBUS1", "CBUS2", "CBUS3", "CBUS4"]
     assert [p["name"] for p in g["ground"]] == ["GND", "GND", "GND", "AGND"] and [p["name"] for p in g["nc"]] == ["NC", "NC"]
-    sym = AL.ic_symbol("FT232RL", FTDI, layout=True)                        # 28 pins: below layout_pins, asked for
+    sym = AL.ic_symbol("FT232RL", FTDI, layout=True)
     _assert_tidy(sym)
     nc = [pr for pr in _pins(sym) if pr[1]["name"] == "NC"]
     assert len({(pr[3], pr[4]) for pr in nc}) == 2                         # NC pins are never stacked
@@ -180,13 +182,16 @@ def test_usb_bridge():
 
 def test_small_parts_unchanged_and_threshold():
     mk = lambda n: [{"num": str(i), "name": f"P{i}", "type": "io", "side": "left" if i % 2 else "right"} for i in range(1, n + 1)]
+    old = {"symbols": {"layout_pins": 40}}                                  # the old threshold still works when set
     for n in (8, 39):
-        assert AL.schlib_bytes([AL.ic_symbol("X", mk(n))]) == AL.schlib_bytes([AL.ic_symbol("X", mk(n), layout=False)])
-    assert AL.ic_symbol("X", mk(40)) != AL.ic_symbol("X", mk(40), layout=False)
+        assert AL.schlib_bytes([AL.ic_symbol("X", mk(n), rules=old)]) == AL.schlib_bytes([AL.ic_symbol("X", mk(n), layout=False)])
+    assert AL.ic_symbol("X", mk(40), rules=old) != AL.ic_symbol("X", mk(40), layout=False)
+    assert AL.ic_symbol("X", mk(8)) != AL.ic_symbol("X", mk(8), layout=False)   # default: every IC gets the house rule
     assert AL.ic_symbol("X", mk(60), rules={"layout_pins": 0}) == AL.ic_symbol("X", mk(60), layout=False)
     d = {"name": "J", "pins": FTDI, "layout": True}
     assert AL.symbol_from_json(d) == AL.ic_symbol("J", FTDI, layout=True)
-    assert SL.wants_layout(40) and not SL.wants_layout(39) and SL.wants_layout(10, {"symbols": {"layout_pins": 10}})
+    assert SL.wants_layout(1) and not SL.wants_layout(0) and SL.wants_layout(10, {"symbols": {"layout_pins": 10}})
+    assert not SL.wants_layout(39, old) and SL.wants_layout(40, old)
 
 
 def test_stack_modes_and_settings():
@@ -225,7 +230,7 @@ def test_rules_symbols_section():
         except RU.RulesError as e:
             assert msg in str(e), (bad, str(e))
     text = RU.dumps(RU.DEFAULTS, only={f"symbols.{k}" for k in RU.DEFAULTS["symbols"]})
-    assert "[symbols]" in text and "layout_pins = 40" in text and "stack_power = \"stack\"" in text
+    assert "[symbols]" in text and "layout_pins = 1" in text and 'power_side = "top"' in text and "stack_power = \"stack\"" in text
 
 
 def test_relayout_keeps_fields():
@@ -329,3 +334,105 @@ if __name__ == "__main__":
     import sys
     from tests.run_all import main
     sys.exit(main(["test_symbol_layout"]))
+
+
+NE555 = [("1", "GND"), ("2", "TRIG"), ("3", "OUT"), ("4", "RST"), ("5", "CONT"), ("6", "THRES"), ("7", "DISCH"), ("8", "VCC")]
+
+
+def _side_of(sym):
+    return {pr[1]["name"]: pr[2] for pr in _pins(sym)}
+
+
+def test_house_rule_small_ic_both_variants():
+    """Oliver's rule: inputs left, outputs right, power top, ground bottom; or top and bottom empty with power at the
+    top of the left side and ground at its bottom. An 8-pin 555 with no pin types gets it from the names alone."""
+    pins = [{"num": n, "name": m, "type": "passive"} for n, m in NE555]
+    sym = AL.ic_symbol("NE555", pins)
+    _assert_tidy(sym)
+    s = _side_of(sym)
+    assert s["VCC"] == "top" and s["GND"] == "bottom", s
+    assert {s[n] for n in ("TRIG", "THRES", "CONT", "RST")} == {"left"} and {s[n] for n in ("OUT", "DISCH")} == {"right"}, s
+    sym = AL.ic_symbol("NE555", pins, rules={"symbols": {"power_side": "left"}})
+    _assert_tidy(sym)
+    s = _side_of(sym)
+    assert set(s.values()) == {"left", "right"} and s["VCC"] == s["GND"] == "left", s
+    left = sorted((pr for pr in _pins(sym) if pr[2] == "left"), key=lambda pr: -pr[4])
+    assert left[0][1]["name"] == "VCC" and left[-1][1]["name"] == "GND"           # power top-left, ground bottom-left
+    assert RU.load({"symbols": {"power_side": "left"}})["symbols"]["power_side"] == "left"
+    try:
+        RU.load({"symbols": {"power_side": "middle"}})
+        raise AssertionError("bad power_side accepted")
+    except RU.RulesError as e:
+        assert "power_side" in str(e)
+
+
+def test_type_beats_a_direction_guess_and_regulator():
+    c = lambda n, t="passive": SL.classify({"name": n, "type": t})
+    assert c("A", "output") == "other_out" and c("OUT2", "input") == "other_in"   # the type is known: it wins
+    ldo = [{"num": "1", "name": "IN", "type": "power_in"}, {"num": "2", "name": "GND", "type": "power_in"},
+           {"num": "3", "name": "EN"}, {"num": "4", "name": "NC"}, {"num": "5", "name": "OUT", "type": "power_out"}]
+    s = _side_of(AL.ic_symbol("LDO", ldo))
+    assert s["EN"] == "left" and s["OUT"] == "right" and s["GND"] == "bottom", s
+
+
+def test_text_overlap_found_like_the_altium_ne555():
+    """The NE555DR symbol from EasyEDA in Altium (16 Oct): top pin names ran down into the side pin names and GND ran up
+    into THRES / CONT. text_problems sees it; the house layout of the same pins has none."""
+    pin = lambda n, side, x, y: ("pin", {"num": n, "name": dict(NE555)[n]}, side, x, y, 20)
+    bad = {"name": "NE555", "designator": "U?", "prims": [("rect", 0, 0, 40, -50), pin("8", "top", 15, 0), pin("4", "top", 25, 0),
+                                         pin("7", "left", 0, -15), pin("2", "left", 0, -25), pin("6", "left", 0, -35),
+                                         pin("3", "right", 40, -20), pin("5", "right", 40, -30), pin("1", "bottom", 20, -50)]}
+    probs = SL.text_problems(bad)
+    assert any("pin 8 name overlaps pin 7 name" in p for p in probs) and any("pin 1 name" in p for p in probs), probs
+    assert SL.is_box_ic(bad)
+    good = SL.relayout(bad)
+    assert SL.text_problems(good) == [] and SL.check(good) == []
+
+
+def test_only_plain_ic_boxes_are_relaid():
+    pin = lambda n, side, x, y: ("pin", {"num": n, "name": n}, side, x, y, 20)
+    box = {"designator": "U?", "prims": [("rect", 0, 0, 40, -40), pin("1", "left", 0, -10), pin("2", "left", 0, -20),
+                                         pin("3", "right", 40, -10)]}
+    assert SL.is_box_ic(box)
+    assert not SL.is_box_ic(dict(box, designator="J?"))                         # connector: pin order is the drawing
+    assert not SL.is_box_ic(dict(box, designator="Q?"))                         # a 3-pin Q is a transistor
+    assert not SL.is_box_ic(dict(box, prims=box["prims"] + [("polyline", [(5, -5), (20, -20)])]))   # a drawing inside
+    assert not SL.is_box_ic(dict(box, prims=box["prims"][:1] + [pin("1", "left", -10, -10)] + box["prims"][2:]))
+
+
+def test_easyeda_small_ic_gets_the_house_rule():
+    from tests import test_librarian as TL
+    ee = copy.deepcopy(TL.EE)
+    at = {"8": (395, 290), "4": (405, 290), "7": (380, 305), "2": (380, 315), "6": (380, 325), "3": (430, 300),
+          "5": (430, 310), "1": (400, 340)}
+    shape = ["R~390~290~~~30~50~#880000~1~0~none~gge1~0"]
+    for n, name in NE555:
+        x, y = at[n]
+        path = {380: f"M 380 {y} h 10", 430: f"M 430 {y} h -10"}.get(x) or (f"M {x} 280 v 10" if y == 290 else f"M {x} 350 v -10")
+        cx, cy = (x, 280) if y == 290 else (x, 350) if y == 340 else (x, y)
+        shape.append(f"P~show~0~{n}~{cx}~{cy}~0~gge{n}p~0^^{cx}~{cy}^^{path}~#880000^^1~{cx}~{cy}~0~{name}~start~~~#0000FF"
+                     f"^^1~{cx}~{cy}~0~{n}~end~~~#0000FF^^0~{cx}~{cy}^^0~M 0 0")
+    ds = ee["result"]["dataStr"]
+    ds["shape"] = shape
+    ds["head"]["c_para"]["pre"] = "U?"
+    ds["head"]["c_para"]["Manufacturer Part"] = ee["result"]["title"] = "NE555DRX"
+    ee["result"]["lcsc"]["number"] = "C4005"
+    bom = TL.BOM.split("\n")[0] + "\nU1,1,NE555DRX,,TI,NE555DRX,C4005,timer,\n"
+    with tempfile.TemporaryDirectory() as d:
+        items, _ = TL.run(d, TL.FakeHTTP({"C4005": ee}), bom=bom)
+        it = items["NE555DRX"]
+        assert any("8 pins grouped by function" in n for n in it["librarian"]["notes"]), it["librarian"]["notes"]
+        _, syms = AL.read_schlib(Path(d) / "out" / it["symbol"]["file"])
+        side = {r["name"]: ORIENT_SIDE[r["orient"]] for r in syms[0]["records"] if r.get("RECORD") == "2"}
+        assert side["VCC"] == "top" and side["GND"] == "bottom" and side["TRIG"] == "left" and side["OUT"] == "right", side
+
+
+def test_dual_op_amp_pins_go_one_channel_at_a_time():
+    """LM358 in Altium (PR #29 run): inputs came out 1IN-, 2IN-, 1IN+, 2IN+; per amplifier reads better. Buses keep their order."""
+    names = [("1OUT", "output"), ("1IN-", "input"), ("1IN+", "input"), ("GND", "power_in"),
+             ("2IN+", "input"), ("2IN-", "input"), ("2OUT", "output"), ("VCC", "power_in")]
+    pins = [{"name": n, "num": str(i + 1), "type": t} for i, (n, t) in enumerate(names)]
+    left = [p["name"] for p in SL.arrange_pins(pins) if p["side"] == "left"]
+    assert left == ["1IN-", "1IN+", "2IN-", "2IN+"], left
+    bus = [{"name": f"{s}{i}", "num": str(n), "type": "bidirectional"} for n, (s, i) in enumerate([(s, i) for s in "AD" for i in range(4)])]
+    assert [p["name"] for p in SL.arrange_pins(bus)][:4] == ["A0", "A1", "A2", "A3"]
