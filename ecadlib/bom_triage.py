@@ -346,6 +346,9 @@ def triage(lines, index, provs, http):
             notes.append(f"part number taken from {'Comment/value' if pns[0] == ln.get('value', '').strip() else 'LibRef'}: {pns[0]}")
         if ln.get("altium_mpn_source") == "Comment":
             notes.append("MPN taken from the schematic Comment (the component has no Manufacturer Part Number parameter)")
+        if re.fullmatch(r"\d+(\.\d+)?E\+\d+", ln.get("mpn", ""), re.I):     # Excel turned 530470610 into 5.30E+08
+            notes.append(f"MPN '{ln['mpn']}' is in Excel scientific notation: its digits were lost; "
+                         "re-export the BOM with the MPN column formatted as text")
         if ln.get("lcsc_invalid"):
             notes.append(f"ignored malformed LCSC '{ln['lcsc_invalid']}'")
         if not (sym and fp_key):

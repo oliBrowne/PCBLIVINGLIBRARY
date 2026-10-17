@@ -82,6 +82,14 @@ def test_tilde_designator_ranges():
     assert S.line_qty(lines[0]) == 4
 
 
+def test_mpn_mangled_by_excel_scientific_notation_is_flagged():
+    """A CSV saved from Excel turns a numeric MPN (Molex 530470610) into 5.30E+08: the digits are gone, and triage
+    looked it up silently."""
+    lines, _ = T.read_bom(_write("bom.csv", "Designator,MPN,Value\nJ1,5.30E+08,\nR1,RC0603FR-0710KL,10k\n"))
+    rows = T.triage(lines, T.KiCadIndex([]), [], None)
+    assert "scientific notation" in rows[0]["notes"] and "scientific" not in rows[1]["notes"], rows
+
+
 if __name__ == "__main__":
     import sys
     fails = 0
