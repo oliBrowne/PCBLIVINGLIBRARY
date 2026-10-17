@@ -397,7 +397,7 @@ def test_huge_bom_upserts_read_the_queue_once():
         q = AQ.Queue(d)
         reads = []
         real = Path.read_text
-        with mock.patch.object(Path, "read_text", lambda self, *a, **k: reads.append(1) or real(self, *a, **k)):
+        with mock.patch.object(Path, "read_text", lambda self, *a, **k: (str(self).startswith(d) and reads.append(1)) or real(self, *a, **k)):
             with q.lock:
                 for n in range(300):
                     q.upsert({"mpn": f"P{n}", "manufacturer": "acme", "origin": "watch", "change": {"kind": "new"}})

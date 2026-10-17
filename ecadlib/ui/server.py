@@ -93,6 +93,7 @@ class Jobs:
     def __init__(self, root=None):
         self.jobs, self.ids, self.lock = {}, itertools.count(1), threading.Lock()
         self.root = root
+        self.threads = []
 
     def start(self, fn, *args, label="", owner=None, key=None):
         with self.lock:
@@ -137,8 +138,16 @@ class Jobs:
                     traceback.print_exc()
                 job["error"], job["state"] = _msg(e, self.root), "error"
             job["seconds"] = round(time.time() - job["started"], 1)
-        threading.Thread(target=run, daemon=True).start()
+        th = threading.Thread(target=run, daemon=True)
+        self.threads = [t for t in self.threads if t.is_alive()] + [th]
+        th.start()
         return {"job": jid}
+
+    def wait(self, timeout=30):
+        """Wait for the running jobs' threads (tests, before their workspace folder is removed)."""
+        end = time.time() + timeout
+        for th in list(self.threads):
+            th.join(max(0, end - time.time()))
 
     def running(self, key):
         return next((j for j in list(self.jobs.values()) if j["key"] == key and j["state"] == "running"), None)
@@ -318,6 +327,7 @@ def make_handler(ws: Workspace, team=None):
 
     class H(BaseHTTPRequestHandler):
         server_version = "ecadlib-ui/0.1"
+        job_runner = jobs
         user = sess = _audit_route = None
         _gated = False
         if team:
@@ -931,7 +941,7 @@ def make_server(ws, host="127.0.0.1", port=0, team=None, cert=None, key=None):
     host = host.strip("[]")
     cls = type("Server6", (Server,), {"address_family": socket.AF_INET6}) if ":" in host else Server   # --host ::1 / ::
     srv = cls((host, port), make_handler(ws, team))
-    srv.team = team
+    srv.team, srv.jobs = team, srv.RequestHandlerClass.job_runner
     if cert:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2

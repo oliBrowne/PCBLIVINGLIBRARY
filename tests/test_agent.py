@@ -340,7 +340,10 @@ def test_serve_stops_cleanly_and_idles_when_disabled():
                                                                           run=fake_run, install_signals=False, log=lambda *a: None))
         stop.clear()
         t.start()
-        time.sleep(0.1)
+        for _ in range(100):                     # a slow runner may take a while to write the first status
+            time.sleep(0.05)
+            if json.loads((ws / "agent" / "status.json").read_text())["state"] == "disabled":
+                break
         assert json.loads((ws / "agent" / "status.json").read_text())["state"] == "disabled"
         stop.set()
         t.join(5)
