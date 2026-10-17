@@ -482,7 +482,7 @@ const SCENES = {
     steps: [
       ["Check the project's BOM", "ecadlib > Check project BOM reads the open project and marks what your library already has."],
       ["Add a part by MPN", "ecadlib > Add part from MPN asks for the part number, and the manufacturer if you know it."],
-      ["ecadlib finds or draws it", "Official KiCad libraries, EasyEDA, then the datasheet reader. A release check runs before anything lands."],
+      ["ecadlib finds or draws it", "Nexar, DigiKey and Mouser identify it; your libraries, KiCad, EasyEDA, then the datasheet reader. A release check runs before anything lands."],
       ["Place it from Components", "The part arrives in your library (a DbLib or Altium 365) with symbol, footprint and parameters."],
     ],
     async play(k) {
@@ -503,7 +503,7 @@ const SCENES = {
         await click($(".btns .primary", wfdlg));
       } else if (k === 2) {
         dialog("ecadlib · TPS62133RGTR", `<ul class="log"></ul><div class="meter"><i></i></div>`);
-        await log([["KiCad official libraries", "no match"], ["EasyEDA", "symbol, 17 pins", true], ["datasheet reader", "VQFN-16, 3 × 3 mm", true], ["IPC-7351B footprint", "17 pads", true], ["release check", "ready", true], ["cost, your API key", "≈ $0.27"]]);
+        await log([["Nexar · DigiKey · Mouser", "TI, VQFN-16, datasheet", true], ["KiCad official libraries", "no match"], ["EasyEDA, unofficial", "symbol, 17 pins", true], ["datasheet reader", "VQFN-16, 3 × 3 mm", true], ["IPC-7351B footprint", "17 pads", true], ["release check", "ready", true], ["cost, your API key", "≈ $0.27"]]);
         await wait(700); closeDialog();
       } else {
         $("#rows", wfpanel).insertAdjacentHTML("afterbegin", row("TPS62133RGTR", "Buck converter, VQFN-16", 6, true));

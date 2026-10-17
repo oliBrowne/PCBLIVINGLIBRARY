@@ -21,8 +21,10 @@
   <nav aria-label="Sections">
     <a href="#how">How it works</a>
     <a href="#footprints">Footprints</a>
+    <a href="#style">House style</a>
     <a href="#workflow">Workflow</a>
     <a href="#models">Your model</a>
+    <a href="#roadmap">Roadmap</a>
     <a href="#start">Start</a>
   </nav>
   <div class="navend">
@@ -35,11 +37,12 @@
   <!-- 01 hero -->
   <section class="hero" data-traces="hero">
     <div class="copy reveal">
-      <p class="eyebrow"><span class="tick"></span>Open source · MIT · alpha</p>
+      <p class="eyebrow"><span class="tick"></span>Open source · MIT · v0.3.0 alpha</p>
       <h1>Your component library,<br><em>kept alive.</em></h1>
-      <p class="lede">ecadlib reads your BOM, finds every symbol, footprint and 3D model you are missing, draws the ones nobody has from the datasheet, checks them, and releases them to <strong>Altium 365</strong> or <strong>KiCad</strong>.</p>
+      <p class="lede">ecadlib is a librarian for your parts. It reads your BOM, finds every symbol, footprint and 3D model you are missing, draws the ones nobody has from the datasheet, makes them look like the rest of your library, holds anything in doubt for a person, and releases the rest to <strong>Altium 365</strong> or <strong>KiCad</strong>.</p>
       <div class="ctas">
         <a class="btn primary" href="https://github.com/oliBrowne/PCBLIVINGLIBRARY"><svg class="i"><use href="#gh"/></svg>View on GitHub</a>
+        <a class="btn" href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases/latest">Windows installer</a>
         <a class="btn" href="#start">Quick start</a>
       </div>
       <ul class="facts mono">
@@ -59,8 +62,8 @@
   <!-- marquee of sources -->
   <div class="rail mono" aria-label="Where parts come from">
     <div class="railtrack">
-      <span>KiCad official libraries</span><i></i><span>EasyEDA · LCSC</span><i></i><span>your own libraries</span><i></i><span>datasheet reader</span><i></i><span>IPC-7351B generator</span><i></i><span>Nexar · Altium 365</span><i></i><span>DigiKey · Mouser · JLC lifecycle</span><i></i><span>SPICE · IBIS models</span><i></i><span>STEP bodies</span><i></i>
-      <span aria-hidden="true">KiCad official libraries</span><i></i><span aria-hidden="true">EasyEDA · LCSC</span><i></i><span aria-hidden="true">your own libraries</span><i></i><span aria-hidden="true">datasheet reader</span><i></i><span aria-hidden="true">IPC-7351B generator</span><i></i><span aria-hidden="true">Nexar · Altium 365</span><i></i><span aria-hidden="true">DigiKey · Mouser · JLC lifecycle</span><i></i><span aria-hidden="true">SPICE · IBIS models</span><i></i><span aria-hidden="true">STEP bodies</span><i></i>
+      <span>Nexar · Altium 365</span><i></i><span>DigiKey</span><i></i><span>Mouser</span><i></i><span>your own libraries</span><i></i><span>KiCad official libraries</span><i></i><span>datasheet reader</span><i></i><span>IPC-7351B generator</span><i></i><span>EasyEDA · LCSC, unofficial, can be off</span><i></i><span>SPICE · IBIS models</span><i></i><span>STEP bodies</span><i></i>
+      <span aria-hidden="true">Nexar · Altium 365</span><i></i><span aria-hidden="true">DigiKey</span><i></i><span aria-hidden="true">Mouser</span><i></i><span aria-hidden="true">your own libraries</span><i></i><span aria-hidden="true">KiCad official libraries</span><i></i><span aria-hidden="true">datasheet reader</span><i></i><span aria-hidden="true">IPC-7351B generator</span><i></i><span aria-hidden="true">EasyEDA · LCSC, unofficial, can be off</span><i></i><span aria-hidden="true">SPICE · IBIS models</span><i></i><span aria-hidden="true">STEP bodies</span><i></i>
     </div>
   </div>
 
@@ -74,9 +77,9 @@
     <div class="bus" aria-hidden="true"><span class="pulse"></span></div>
     <ol class="steps">
       <li class="step reveal"><div class="fig sm" data-fig="sieve"></div><p class="mono n">01 · check</p><h3>Read the BOM</h3><p>Altium, ActiveBOM, KiCad or a hand-made sheet. Each line is matched against your library: have it, can fetch it, must draw it, DNP.</p></li>
-      <li class="step reveal"><div class="fig sm" data-fig="drawer"></div><p class="mono n">02 · fetch</p><h3>Find what exists</h3><p>Official KiCad libraries first, then EasyEDA and your own folders, converted to Altium with pads, pins and 3D bodies.</p></li>
-      <li class="step reveal"><div class="fig sm" data-fig="terminal"></div><p class="mono n">03 · draw</p><h3>Read the datasheet</h3><p>A model reads the package drawing into numbers. Code, not the model, turns the numbers into an IPC-7351B land pattern.</p></li>
-      <li class="step reveal"><div class="fig sm" data-fig="loupe"></div><p class="mono n">04 · prove</p><h3>Check every part</h3><p>Cross-checked reads, a visual proof against the drawing, a release check. Anything in doubt is held for a person.</p></li>
+      <li class="step reveal"><div class="fig sm" data-fig="drawer"></div><p class="mono n">02 · fetch</p><h3>Find what exists</h3><p>Nexar, DigiKey and Mouser identify the part. Symbols and footprints come from your libraries and the official KiCad libraries, then EasyEDA (unofficial; one setting turns it off), converted with pads, pins and 3D bodies.</p></li>
+      <li class="step reveal"><div class="fig sm" data-fig="terminal"></div><p class="mono n">03 · draw</p><h3>Read the datasheet</h3><p>A model reads the package drawing into numbers. Code, not the model, turns the numbers into an IPC-7351B land pattern and lays out the symbol.</p></li>
+      <li class="step reveal"><div class="fig sm" data-fig="loupe"></div><p class="mono n">04 · prove</p><h3>Check every part</h3><p>Cross-checked reads, a visual proof against the drawing, your house style, a release check. Anything in doubt is held for a person to sign off.</p></li>
       <li class="step reveal"><div class="fig sm" data-fig="dish"></div><p class="mono n">05 · release</p><h3>Send it to your tool</h3><p>Altium 365 through Nexar, .SchLib / .PcbLib, a DbLib, or KiCad symbols, footprints and lib tables. Both always match.</p></li>
     </ol>
   </section>
@@ -103,12 +106,25 @@
     <div class="pkgs mono reveal" id="fppkgs" role="tablist" aria-label="Packages"></div>
   </section>
 
-  <!-- 04 workflow -->
+  <!-- 04 house style -->
+  <section id="style" class="block" data-traces="style">
+    <div class="head reveal">
+      <p class="eyebrow"><span class="num">04</span>House style</p>
+      <h2>Parts that look like yours.</h2>
+      <p class="sub">A library is more than footprints. ecadlib learns how your existing library names, describes and draws parts, and every new part follows it. Nothing reaches your tool until it passes the checks or a person signs it off.</p>
+    </div>
+    <div class="grid3">
+      <article class="card reveal"><p class="mono n">learn</p><h3>Your conventions</h3><p><code>ecadlib style learn</code> reads your Altium, Altium 365 or KiCad library offline: naming, description patterns, how values are written, active-low pin names. Add plain-words direction with <code>style direct</code>, then <code>style check</code> and <code>style apply</code> any plan. <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/docs/house-style.md">How it works</a>.</p></article>
+      <article class="card reveal"><p class="mono n">symbols</p><h3>One pin rule</h3><p>Every IC symbol, from a 555 to a 100-pin MCU: inputs on the left, outputs on the right, power on top, ground at the bottom. Prefer power and ground on the left? One setting, <code>power_side = "left"</code>.</p></article>
+      <article class="card reveal"><p class="mono n">review</p><h3>Held until it is right</h3><p>A part that fails the release check is held back from Altium 365 with the reason and the fix. Release it anyway only after you have looked, and the plan records who did.</p></article>
+    </div>
+  </section>
+  <!-- 05 workflow -->
   <section id="workflow" class="block" data-traces="wf">
     <div class="head reveal">
-      <p class="eyebrow"><span class="num">04</span>Workflow</p>
+      <p class="eyebrow"><span class="num">05</span>Workflow</p>
       <h2>Right inside Altium and KiCad.</h2>
-      <p class="sub">You never leave your design tool. ecadlib adds an ecadlib menu to Altium and an action plugin to KiCad. Ask for a part, and it comes back as a library part you can place.</p>
+      <p class="sub">You never leave your design tool. ecadlib adds an ecadlib menu to Altium and an action plugin to KiCad, each with its own native dialogs; the web page opens only for steps that need it. Ask for a part, and it comes back as a library part you can place.</p>
     </div>
     <div class="wf reveal">
       <div class="wftabs mono" role="tablist" aria-label="Design tool">
@@ -138,7 +154,7 @@
   <!-- 05 models -->
   <section id="models" class="block split" data-traces="models">
     <div class="head reveal">
-      <p class="eyebrow"><span class="num">05</span>Your model</p>
+      <p class="eyebrow"><span class="num">06</span>Your model</p>
       <h2>Bring your own key.<br>Use any model.</h2>
       <p class="sub">There is no account, hosted service or telemetry. ecadlib talks only to the model you configure, with a key from your own environment. Claude is the default; OpenAI, OpenRouter, Gemini and local models through Ollama or LM Studio work too.</p>
       <p class="sub">Guide rails scale with the model. A small local model gets the work in small checked steps, JSON repair and worked examples. A frontier model gets one structured call and nothing that narrows it.</p>
@@ -174,7 +190,7 @@
   <!-- 05 tools -->
   <section id="tools" class="block" data-traces="tools">
     <div class="head reveal">
-      <p class="eyebrow"><span class="num">06</span>Where it lands</p>
+      <p class="eyebrow"><span class="num">07</span>Where it lands</p>
       <h2>Altium 365 first. KiCad too.</h2>
     </div>
     <div class="grid2">
@@ -184,8 +200,9 @@
         <ul class="lines">
           <li>Components released to an Altium 365 workspace through Nexar, with a dry run first</li>
           <li><code>.SchLib</code> and <code>.PcbLib</code> written in pure Python, read back before release</li>
+          <li>Altium can rebuild every library itself through its own scripting API, then ecadlib compares pad by pad (8 of 8 test libraries identical on AD26; ships in v0.3.1)</li>
           <li>Database libraries (SQLite or Excel with a <code>.DbLib</code>)</li>
-          <li>A menu inside Altium: add a part by MPN, check the project's BOM</li>
+          <li>An ecadlib menu inside Altium with native dialogs: add a part by MPN, fill the library, check the project's BOM</li>
         </ul>
       </article>
       <article class="card reveal">
@@ -204,6 +221,7 @@
       <article class="card reveal"><p class="mono n">mcp</p><h3>An agent's tools</h3><p><code>ecadlib mcp</code> lets Claude or another agent check a BOM and draft footprints in conversation.</p></article>
       <article class="card reveal"><p class="mono n">cli</p><h3>Scripts and CI</h3><p>Every step is a command with <code>--json</code>, so it fits a pipeline or a weekly job.</p></article>
     </div>
+    <p class="sub reveal note">Fusion Electronics / EAGLE and EasyEDA Pro exports also exist, marked experimental: they keep working but get no new features and may be removed.</p>
   </section>
 
   <!-- 06 upkeep -->
@@ -215,7 +233,7 @@
       </figure>
     </div>
     <div class="head reveal">
-      <p class="eyebrow"><span class="num">07</span>Living</p>
+      <p class="eyebrow"><span class="num">08</span>Living</p>
       <h2>It keeps the library current.</h2>
       <p class="sub">A weekly upkeep run checks lifecycle and stock with Nexar, DigiKey, Mouser and JLC, watches the KiCad sources your parts came from, and compares your Altium 365 workspace with the plan. It reports only what is new, in one issue or one pull request.</p>
       <ul class="lines">
@@ -226,18 +244,30 @@
     </div>
   </section>
 
-  <!-- 07 start -->
+  <!-- 09 roadmap -->
+  <section id="roadmap" class="block" data-traces="roadmap">
+    <div class="head reveal">
+      <p class="eyebrow"><span class="num">09</span>Roadmap</p>
+      <h2>What comes next.</h2>
+      <p class="sub">Planned, not shipped. Each item is a GitHub issue, and each milestone has a due date. The full plan is in <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/ROADMAP.md">ROADMAP.md</a> and the <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/docs/PRODUCT_SPEC.md">product spec</a>.</p>
+    </div>
+    <div class="grid3">
+      <article class="card reveal"><p class="mono n">v0.3.1 · due 31 Oct 2026</p><h3>Altium loop closed</h3><ul class="lines"><li>Build libraries from the ecadlib menu</li><li>Designator on the fab layer</li><li>Multi-part symbols, keep-outs and bottom pads checked in AD26</li></ul></article>
+      <article class="card reveal"><p class="mono n">v0.4.0 · due 30 Nov 2026</p><h3>Proven BOM to Altium 365</h3><ul class="lines"><li>A published accuracy benchmark on 100+ real parts</li><li>Real-BOM trials with 3 to 5 Altium users</li><li>House style tried on a real company library</li></ul></article>
+      <article class="card reveal"><p class="mono n">v0.5.0 · due 15 Jan 2027</p><h3>Easy to adopt</h3><ul class="lines"><li>A signed Windows installer</li><li>The cost shown before every AI step</li><li>One page from installer to a BOM in Altium 365</li></ul></article>
+    </div>
+  </section>
+  <!-- 10 start -->
   <section id="start" class="block" data-traces="start">
     <div class="head reveal">
-      <p class="eyebrow"><span class="num">08</span>Quick start</p>
+      <p class="eyebrow"><span class="num">10</span>Quick start</p>
       <h2>Two minutes, offline, no keys.</h2>
-      <p class="sub">The demo builds a small library from a bundled BOM with the built-in standard parts, so you can see the whole flow before you set anything up.</p>
+      <p class="sub">The demo builds a small library from a bundled BOM with the built-in standard parts, so you can see the whole flow before you set anything up. On Windows and not a terminal person? Use the <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases/latest">installer</a> instead.</p>
     </div>
     <div class="term reveal">
       <div class="termbar mono"><span class="lights"><i></i><i></i><i></i></span><span>~/libraries</span><button class="ghost copy" type="button" data-copy="cmds">copy</button></div>
-<pre class="mono" id="cmds"><span class="c"># from a checkout (Python 3.10+)</span>
-git clone https://github.com/oliBrowne/PCBLIVINGLIBRARY ecadlib && cd ecadlib
-pip install -e .
+<pre class="mono" id="cmds"><span class="c"># Python 3.10+</span>
+pip install ecadlib
 ecadlib demo       <span class="c"># a 7-part library in ./ecadlib-demo, about a second</span>
 ecadlib init       <span class="c"># your tool, your libraries, your sources</span>
 ecadlib ui         <span class="c"># or do it all in your browser</span></pre>
