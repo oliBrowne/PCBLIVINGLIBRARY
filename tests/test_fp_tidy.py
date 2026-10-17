@@ -41,12 +41,16 @@ def test_soic_like_the_altium_ne555():
     assert [(p[1], sexpr.first(p, "at")[1:3], sexpr.first(p, "size")[1:3]) for p in pads] == \
         [(p[1], sexpr.first(p, "at")[1:3], sexpr.first(p, "size")[1:3]) for p in sexpr.find(sexpr.parse(before), "pad")]   # copper unchanged
     ref = next(x for x in sexpr.find(t, "fp_text") if x[1] == "reference")
-    assert sexpr.first(ref, "layer")[1] == "F.SilkS" and float(sexpr.first(ref, "at")[2]) < -2.7      # above the courtyard
+    assert sexpr.first(ref, "layer")[1] == "F.SilkS" and float(sexpr.first(ref, "at")[2]) <= -3.9     # above the courtyard,
+    #                                       far enough that the g of Altium's ".Designator" clears it (PR #29 Altium run)
+    val = next(x for x in sexpr.find(t, "fp_text") if x[1] == "value")
+    assert sexpr.first(val, "layer")[1] == "F.Fab" and float(sexpr.first(val, "at")[2]) >= 3.7      # below it, off the body
     assert any(x[1] == "user" and x[2] == "${REFERENCE}" and sexpr.first(x, "layer")[1] == "F.Fab" for x in sexpr.find(t, "fp_text"))
     circles = [c for c in sexpr.find(t, "fp_circle") if sexpr.first(c, "layer")[1] == "F.SilkS"]
     assert len(circles) == 1 and float(sexpr.first(circles[0], "center")[1]) < -3.4, circles             # dot outside, by pad 1
     fab = [x for x in sexpr.find(t, "fp_line") if sexpr.first(x, "layer")[1] == "F.Fab"]
     assert len(fab) == 5                                                                             # chamfered pin-1 corner
+    assert any("value moved below" in n for n in notes)
     assert any("under the part body removed" in n for n in notes) and any("pin 1 dot added" in n for n in notes), notes
     rules = lambda text: {(lvl, r) for lvl, r, _ in FR.check(text)}
     assert not any(lvl == "error" for lvl, _ in rules(after)), FR.check(after)

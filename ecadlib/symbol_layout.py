@@ -201,6 +201,24 @@ def wants_layout(pins, rules=None):
 
 
 # ------------------------------------------------------------------ arrangement
+def _by_channel(items):
+    """A dual / quad part's pins one channel at a time: 1IN-, 1IN+, 2IN-, 2IN+ (not 1IN-, 2IN-, 1IN+, 2IN+). Only
+    when two or more names differ just by a channel number that is not at the end of the name (D0..D7 / A0..A7 are
+    buses and keep their order) and every name has the same channels. items: [(_, index, pin)] sorted by stem."""
+    split = [re.fullmatch(r"(\D*)(\d+)(\D+)", _key(t[2].get("name", ""))) for t in items]
+    if len(items) < 4 or not all(split):
+        return items
+    stems = {}
+    for m in split:
+        stems.setdefault(m.group(1) + "#" + m.group(3), set()).add(int(m.group(2)))
+    chans = list(stems.values())
+    if len(stems) < 2 or len(chans[0]) < 2 or any(c != chans[0] for c in chans):
+        return items
+    order = {st: i for i, st in enumerate(stems)}
+    key = {id(t): (int(m.group(2)), order[m.group(1) + "#" + m.group(3)]) for t, m in zip(items, split)}
+    return sorted(items, key=lambda t: key[id(t)])
+
+
 def _blocks(pins, s):
     """pins -> ordered blocks {group, label, side, slots: [[lead pin, stacked...], ...]}."""
     order = {g: i for i, g in enumerate(list(s["order"]) + [g for g in ORDER if g not in s["order"]])}
@@ -221,6 +239,8 @@ def _blocks(pins, s):
             for t in items:
                 stems.setdefault(stem(t[2].get("name", "")), t[1])
             items.sort(key=lambda t: (stems[stem(t[2].get("name", ""))], _natural(_key(t[2].get("name", ""))), t[1]))
+            if g not in POWER_GROUPS:
+                items = _by_channel(items)
         slots, at, keys = [], {}, []
         sk = stack_keys([t[2].get("name", "") for t in items])
         for _, _, p in items:

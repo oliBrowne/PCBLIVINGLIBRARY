@@ -6,8 +6,8 @@ EasyEDA's library footprints are drawn for its own editor: the reference sits on
 Altium's .Designator lands over the part body), SMD pads are sharp rectangles, the fab outline has no pin-1 corner,
 and pin-1 dots are often drawn on silk under the part, where nobody sees them once it is placed. Each fix below
 answers one rule of docs/footprint-rulebook.md and is noted, and nothing touches the copper position or size:
-  text      the reference goes on F.SilkS (1.0 mm, 0.15 mm stroke) just above the courtyard, and a ${REFERENCE}
-            sized to the body goes on F.Fab at its centre (KLC F5.1 / F5.2)
+  text      the reference goes on F.SilkS (1.0 mm, 0.15 mm stroke) just above the courtyard, the value below it
+            (F.Fab), and a ${REFERENCE} sized to the body goes on F.Fab at its centre (KLC F5.1 / F5.2)
   padshape  sharp rectangular SMD pads become rounded rectangles: radius 25 % of the short side, at most 0.25 mm
             (KLC F6.3, IPC-7351C)
   silk      silk drawn wholly inside an SMD body is removed (it is under the part)
@@ -198,13 +198,20 @@ def tidy(text, notes=None):
     ref = next((it for it in texts if str(it[1]) in ("reference", "Reference")), None)
     if ref is not None and _layer(ref) != "F.SilkS":
         at = sexpr.first(ref, "at")
-        y = outer[1] - 0.8
+        y = outer[1] - 1.2      # Altium writes the literal ".Designator", whose g hangs below the baseline: keep it clear
         at[1:] = [_fmt((outer[0] + outer[2]) / 2), _fmt(y)]
         ref[ref.index(sexpr.first(ref, "layer"))] = ["layer", Q("F.SilkS")]
         eff = sexpr.first(ref, "effects")
         if eff is not None:
             eff[eff.index(sexpr.first(eff, "font"))] = ["font", ["size", "1", "1"], ["thickness", "0.15"]]
         notes.append("text: reference moved to the silkscreen above the part (it was on the fab layer at the centre)")
+    val = next((it for it in texts if str(it[1]) in ("value", "Value")), None)
+    vat = sexpr.first(val, "at") if val is not None else None
+    if vat and outer[0] < _num(vat[1]) < outer[2] and outer[1] < _num(vat[2]) < outer[3]:
+        vat[1:] = [_fmt((outer[0] + outer[2]) / 2), _fmt(outer[3] + 1.0)]
+        if not _layer(val):
+            val.append(["layer", Q("F.Fab")])
+        notes.append("text: value moved below the part (it sat over the body, where Altium's .Comment crossed the outline)")
     has_fab_ref = any(str(it[1]) == "user" and str(it[2]) == "${REFERENCE}" for it in texts if it[0] == "fp_text" and len(it) > 2)
     if not has_fab_ref and body:
         bw, bh = body[2] - body[0], body[3] - body[1]

@@ -425,3 +425,14 @@ def test_easyeda_small_ic_gets_the_house_rule():
         _, syms = AL.read_schlib(Path(d) / "out" / it["symbol"]["file"])
         side = {r["name"]: ORIENT_SIDE[r["orient"]] for r in syms[0]["records"] if r.get("RECORD") == "2"}
         assert side["VCC"] == "top" and side["GND"] == "bottom" and side["TRIG"] == "left" and side["OUT"] == "right", side
+
+
+def test_dual_op_amp_pins_go_one_channel_at_a_time():
+    """LM358 in Altium (PR #29 run): inputs came out 1IN-, 2IN-, 1IN+, 2IN+; per amplifier reads better. Buses keep their order."""
+    names = [("1OUT", "output"), ("1IN-", "input"), ("1IN+", "input"), ("GND", "power_in"),
+             ("2IN+", "input"), ("2IN-", "input"), ("2OUT", "output"), ("VCC", "power_in")]
+    pins = [{"name": n, "num": str(i + 1), "type": t} for i, (n, t) in enumerate(names)]
+    left = [p["name"] for p in SL.arrange_pins(pins) if p["side"] == "left"]
+    assert left == ["1IN-", "1IN+", "2IN-", "2IN+"], left
+    bus = [{"name": f"{s}{i}", "num": str(n), "type": "bidirectional"} for n, (s, i) in enumerate([(s, i) for s in "AD" for i in range(4)])]
+    assert [p["name"] for p in SL.arrange_pins(bus)][:4] == ["A0", "A1", "A2", "A3"]
