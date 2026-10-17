@@ -615,7 +615,13 @@ def main(argv=None):
 
     http = CachedHTTP(a.cache, min_interval=a.rate, ttl_s=a.max_age * 3600, offline=a.offline)
     want = a.providers.split(",")
-    provs = [c(http) for c in PROVIDERS if c.name in want]
+    from . import rules as RU
+    try:                                     # [providers] unofficial = false keeps the JLCPCB search out here too
+        rules = RU.load(None, start=Path(a.inputs[0]).resolve().parent if a.inputs else ".")
+    except RU.RulesError as e:
+        print(f"ecadlib lifecycle: {e}", file=sys.stderr)
+        return 2
+    provs = [c(http) for c in P.fence([c for c in PROVIDERS if c.name in want], rules)]
     current, unconfigured = check_parts(parts, provs)
     state, now = load_state(a.state), _now()
     rows = diff(state, current)

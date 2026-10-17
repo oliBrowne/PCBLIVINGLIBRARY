@@ -186,9 +186,13 @@ def parse_jlcpcb(r, mpn, res):
         res.error = f"unparseable: {e}"
         return res
     best = (exact or [None])[0]
+    code = str((best or {}).get("componentCode") or "").strip().upper()
+    if best and not re.fullmatch(r"C\d{1,9}", code):   # untrusted: only a real LCSC number goes on (into EasyEDA's URL)
+        res.error = f"unparseable: componentCode {code[:20]!r} is not an LCSC number"
+        return res
     res.found = bool(best)
     if best:
-        res.lcsc = best.get("componentCode", "")
+        res.lcsc = code
         res.manufacturer = best.get("componentBrandEn", "")
         res.package = best.get("componentSpecificationEn", "")
         res.extra = {"stock": best.get("stockCount"), "library_type": best.get("componentLibraryType")}
@@ -261,9 +265,13 @@ class _Official(Provider):
         if not mpn:
             res.error = "no MPN"
             return res
-        info = self._client().part({"mpn": mpn, "manufacturer": (line.get("manufacturer") or "").strip(),
-                                    "lcsc": (line.get("lcsc") or "").strip()})
-        return from_part_info(info, res)
+        try:
+            info = self._client().part({"mpn": mpn, "manufacturer": (line.get("manufacturer") or "").strip(),
+                                        "lcsc": (line.get("lcsc") or "").strip()})
+            return from_part_info(info, res)
+        except (ValueError, AttributeError, TypeError, KeyError) as e:   # an answer of an unexpected shape (a JSON
+            res.error = f"unparseable response: {type(e).__name__}: {e}"[:200]   # list, say) is this source's error,
+            return res                                                   # not a crashed triage
 
 
 class DigiKey(_Official):
@@ -337,7 +345,9 @@ class SamacSys(_Stub):
     docs = "Library Loader desktop app or supplier-embedded (Mouser/RS 'ECAD model') links."
 
 
-ALL = [JLCPCBSearch, EasyEDA, DigiKey, Mouser, Nexar, SnapMagic, SamacSys]
+# official APIs first, the unofficial EasyEDA route after them (JLCPCB search before EasyEDA: it finds the LCSC number
+# EasyEDA is keyed by). This order is also what "every built-in" means (the web UI / MCP workspace's triage default).
+ALL = [Nexar, DigiKey, Mouser, JLCPCBSearch, EasyEDA, SnapMagic, SamacSys]
 # what triage / the librarian ask when neither --providers nor [providers] order says: the official APIs first (each
 # is skipped with a "not configured" note until its key is set), then the unofficial EasyEDA route
 DEFAULT_ORDER = "nexar,digikey,mouser,jlcpcb_search,easyeda"
@@ -346,3 +356,8 @@ DEFAULT_ORDER = "nexar,digikey,mouser,jlcpcb_search,easyeda"
 def unofficial_allowed(rules):
     """[providers] unofficial (default true): false keeps every undocumented endpoint (EasyEDA, JLCPCB search) out."""
     return bool(((rules or {}).get("providers") or {}).get("unofficial", True))
+
+
+def fence(provs, rules):
+    """provs (classes or instances) without the undocumented ones when [providers] unofficial = false."""
+    return list(provs) if unofficial_allowed(rules) else [p for p in provs if getattr(p, "official", True)]
