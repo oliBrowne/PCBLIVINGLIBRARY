@@ -1196,6 +1196,26 @@ class Workspace:
                 "tables": rep["tables"], "skipped": rep["skipped"], "warnings": rep["warnings"],
                 "kicad_export": rep.get("kicad_export")}
 
+    def tool_export(self, bom, tool, name="ecadlib", include_held=False):
+        """The BOM's library for another tool, written natively and read back pad by pad: tool "eagle" (Autodesk Fusion
+        Electronics / EAGLE .lbr, in fusion/<bom>/) or "easyeda" (EasyEDA Pro .elibz, in easyeda/<bom>/). "bundle" is
+        one zip to hand over (library, STEP models, INSTALL.md with the import steps and the model of each footprint)."""
+        from .kicad_export import kname
+        mods = {"eagle": ("eagle_export", "fusion"), "easyeda": ("easyeda_pro_export", "easyeda")}
+        if tool not in mods:
+            raise ValueError(f"tool must be eagle or easyeda, not {str(tool)[:20]!r}")
+        import importlib
+        mod = importlib.import_module(f"ecadlib.{mods[tool][0]}")
+        bom_path, plan_f, _ = self._plan(bom)
+        out = self.root / mods[tool][1] / self._key(bom_path)
+        rep = mod.export(plan_f, out, kname(str(name))[:60], include_held, http=CachedHTTP(self.root / "http_cache", offline=self.offline),
+                         log=lambda *a: None, rules=self.rules_in_use())
+        return {"folder": self.rel(out), "file": self.rel(out / rep["file"]), "bundle": self.rel(out / rep["bundle"]),
+                "install": self.rel(out / rep["install"]), "counts": rep["counts"],
+                "ok": not rep["errors"], "errors": rep["errors"][:30], "approximations": rep["warnings"][:30],
+                "models": len(rep["models"]), "kicad_reread": rep.get("kicad_reread"),
+                "report": self.rel(out / ("eagle_export.json" if tool == "eagle" else "easyeda_export.json"))}
+
     def parity(self, bom, kicad=False, name="ecadlib"):
         """KiCad vs Altium parity of a BOM's library (ecadlib.parity): the plan's .kicad_mod against its .PcbLib / .SchLib,
         or with kicad=True the KiCad export in kicad/<bom>/ (run kicad_dblib first) against the Altium files, its

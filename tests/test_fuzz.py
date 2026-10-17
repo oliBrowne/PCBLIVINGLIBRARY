@@ -11,7 +11,7 @@ Documented error types:
   rules.load / parse_text             rules.RulesError (a ValueError)
   web UI JSON endpoints               an HTTP status below 500 and no traceback from the handler
   MCP tools/call                      a result (isError for bad input), no traceback for user errors"""
-import contextlib, copy, io, json, os, random, sys, tempfile, threading, time, traceback
+import contextlib, copy, io, json, os, random, sys, tempfile, time, traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -221,7 +221,6 @@ def test_fuzz_web_json_endpoints():
     from ecadlib.ui import server as SV
     from tests.test_ui import serve, wait_job
     tracebacks = []
-    before = set(threading.enumerate())
     real = SV.traceback.print_exc
     SV.traceback.print_exc = lambda *a, **k: tracebacks.append(traceback.format_exc())
     with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -256,11 +255,14 @@ def test_fuzz_web_json_endpoints():
                 st, j = call("POST", x[0], x[1])
                 if st >= 500 or tracebacks:
                     raise Found(f"{x[0]} -> {st} {str(j)[:200]}\n" + "".join(tracebacks[-1:]))
+                if isinstance(j, dict) and j.get("job"):           # a background job (the demo BOM ...) must not
+                    for _ in range(1200):                          # still be writing when the folder is removed
+                        if call("GET", f"/api/job?id={j['job']}")[1].get("state") != "running":
+                            break
+                        time.sleep(0.05)
             _fuzz("web JSON endpoints", 300, 18, make, run, ())
         finally:
             srv.shutdown()
-            for t in set(threading.enumerate()) - before:   # background jobs (a demo run) finish before the folder goes
-                t.join(120)
             SV.traceback.print_exc = real
 
 

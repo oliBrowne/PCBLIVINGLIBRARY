@@ -101,6 +101,8 @@ CASES = [
     (["testpack", "--out", "{out}/testpack"], (0,)),
     (["parity", "{out}/lib/plan.json", "-o", "{out}/parity"], (0, 1)),
     (["parity", "{out}/lib/plan.json", "--kicad", "{out}/kicad", "--name", "ecadlib", "-o", "{out}/parity_k"], (0, 1)),
+    (["eagle-export", "{out}/lib/plan.json", "-o", "{out}/fusion", "--kicad", "{out}/kicad", "--no-kicad-check"], (0, 1)),
+    (["easyeda-export", "{out}/lib/plan.json", "-o", "{out}/easyeda", "--kicad", "{out}/kicad", "--no-kicad-check"], (0, 1)),
 ]
 HELP_ONLY = {"ui", "mcp", "a365", "project", "setup", "start"}   # need a server / network / an Altium project: -h (and mcp below)
 
