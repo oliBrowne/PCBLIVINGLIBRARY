@@ -64,7 +64,7 @@ COMMANDS = {
     "mcp": ("ecadlib.mcp_server", "MCP server over stdio"),
     "triage": ("ecadlib.bom_triage", "BOM triage report"),
     "footprint": ("ecadlib.footprint_gen", "IPC-7351B footprint generator"),
-    "check": ("ecadlib.footprint_check", "check .kicad_mod files against KLC/IPC rules"),
+    "check": ("ecadlib.footprint_rules", "check .kicad_mod files against the footprint rule book (KLC / IPC-7351)"),
     "footprint-bench": ("ecadlib.footprint_bench", "compare generated footprints (BGA, connectors, ...) with KiCad's official ones"),
     "eval": ("ecadlib.eval.cli", "accuracy test set: run the pipeline on parts with a known answer, score, compare runs"),
     "dblib": ("ecadlib.altium_export", "Altium DbLib export"),

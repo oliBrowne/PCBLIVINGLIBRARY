@@ -6,7 +6,9 @@ Rules, per plan item:
   files     the .SchLib and .PcbLib exist and read back with altium_lib's reader (cannot be overridden)
   pins      every symbol pin has a pad with the same number and every pad a pin; unnumbered, NPTH and
             mounting pads (MP, MH, SH, MTG, ...) are allowed without a pin
-  footprint footprint_check on the item's .kicad_mod: every error fails. Parts taken from the official KiCad
+  footprint footprint_check and the rule book (footprint_rules, docs/footprint-rulebook.md) on the item's .kicad_mod:
+            every footprint_check error fails, and rule-book errors in FR.RELEASE_HOLDS (name, layers, type, annular
+            ring, thermal vias); a reversed diode / LED / polarized-capacitor pin map fails for every part. Parts taken from the official KiCad
             library are held only for overlapping pads, a missing courtyard and a missing pin 1 (their other
             findings are reported as warnings). Without a .kicad_mod the same three are checked on the PcbLib.
             Overlapping pads whose symbol pins share a name (USB-C A1/B12 = GND) are stacked on purpose: a warning.
@@ -22,7 +24,7 @@ that list. altium365 push releases only `ready` items. Items `ecadlib a365 pull`
 import argparse, csv, datetime, re, sys
 from pathlib import Path
 
-from . import altium_lib as AL, footprint_check as FC
+from . import altium_lib as AL, footprint_check as FC, footprint_rules as FR
 from . import sheetsafe as SS
 from .fsutil import write_text_atomic
 
@@ -184,6 +186,16 @@ def check_item(item, base=".", rules=None):
             hard = lvl == "error" and (not kicad_lib or (rule == "copper" and "overlap" in msg) or
                                        (rule == "courtyard" and msg.startswith("no courtyard")) or (rule == "pin1" and "no pad" in msg))
             (add("footprint", f"{rule}: {msg}") if hard else warns.append(f"{lvl} {rule}: {msg}"))
+        if kmod:                               # the rule book (footprint_rules): naming, layers, type, pin map ...
+            try:
+                book = FR.check(text, filename=kmod.name, symbol_pins=pin_names if syms else None, geometry=False)
+            except Exception as e:             # a rule-book crash must not hide the other rules
+                book = [("warning", "rulebook", f"footprint_rules failed ({type(e).__name__}: {e})")]
+            for lvl, rule, msg in book:
+                if rule == "connect":
+                    continue                   # the pins rule above already compares the Altium symbol and footprint
+                hard = lvl == "error" and (rule == "pinmap" or (not kicad_lib and rule in FR.RELEASE_HOLDS))
+                (add("footprint", f"{rule}: {msg}") if hard else warns.append(f"{lvl} {rule}: {msg}"))
     if not kmod and fps:
         mf, mw = _pcblib_minimal(fps[0], pin_names, RU.layer_id(rules["layers"]["courtyard"]), pin1)
         for m in mf:

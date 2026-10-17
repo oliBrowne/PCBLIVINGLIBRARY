@@ -256,7 +256,8 @@ ecad-librarian/
 ```
 ecadlib footprint gen ecadlib/package_specs/*.json -o out/footprints/ecadlib.pretty [--density A|B|C]
 ecadlib footprint compare <mine.kicad_mod> <reference path or URL>
-ecadlib check <any.kicad_mod> ...          # KLC-style rule check, works on KiCad's own footprints too
+ecadlib check <any.kicad_mod or .pretty> ... # the footprint rule book, works on KiCad's own footprints too
+ecadlib check --summary Lib.pretty/         # counts per rule for a whole library
 ```
 
 * **Package types** (`package_type`, with `lead_type` to pick a different IPC lead family):
@@ -274,7 +275,10 @@ ecadlib check <any.kicad_mod> ...          # KLC-style rule check, works on KiCa
   fab 0.10 with a pin-1 chamfer, courtyard 0.05 on the 0.01 mm grid with 0.25 mm excess (0.15 under 0603),
   roundrect pads, exposed-pad paste split into windows at 65 %. Format `version 20221018` (KiCad 7+; Altium imports it).
 * **Checks:** every generated footprint is run through `footprint_check` (copper gaps, silk clearance, fab,
-  courtyard, pin 1, paste). Spec mistakes, such as lead span and body width swapped, mils instead of mm,
+  courtyard, pin 1, paste), and every footprint the release check sees through the
+  [footprint rule book](docs/footprint-rulebook.md): naming (KLC and IPC-7351 names checked against the copper),
+  part type, origin, pad layers and shapes, annular rings, thermal vias, text, 3D model, courtyard clearance,
+  polarity marks, and the pad-to-pin map (an unwired exposed pad, a reversed diode). Spec mistakes, such as lead span and body width swapped, mils instead of mm,
   or more pins than fit, are refused with a plain-language reason.
 
 ### Compared with KiCad's official footprints
