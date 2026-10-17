@@ -7,6 +7,17 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+### Added
+
+- Altium builds the libraries itself (`ecadlib/altium_native.py`, docs/altium-native.md): every `.PcbLib` / `.SchLib` ecadlib writes gets a `.ecadbuild` recipe, and a DelphiScript (`ecadlib_build.pas`) rebuilds them inside Altium with its own object API; `ecadlib altium-native write|compare` and a *Rebuild with Altium* step in `altium-pkg` (`--no-native-build` to skip). `compare` reads Altium's result back pad by pad and pin by pin.
+- `ecadlib sources-check` and a weekly `sources-canary` workflow: checks the unofficial EasyEDA / JLCPCB endpoints against known parts.
+
+### Changed
+
+- Official part APIs first: the default provider order is Nexar, DigiKey, Mouser, then the unofficial JLCPCB search and EasyEDA. Nexar / DigiKey / Mouser answers now give the LCSC number and datasheet link. `[providers] unofficial = false` turns the unofficial endpoints off completely.
+
+- Altium (Altium 365 first) and KiCad are the supported targets. The Fusion Electronics / EAGLE and EasyEDA Pro exports are marked experimental in the README and `ecadlib -h`: they keep working but get no new features and may be removed later.
+
 ## [0.3.0] - 2026-10-17
 
 ### Added

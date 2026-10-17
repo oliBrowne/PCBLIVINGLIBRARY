@@ -74,6 +74,7 @@ def server(ws=None, overrides=None, cert=None, key=None):
         finally:
             srv.shutdown()
             srv.server_close()
+            srv.jobs.wait()                      # e.g. a demo job started by a route test still writing in the folder
 
 
 def wait_job(c, jid):

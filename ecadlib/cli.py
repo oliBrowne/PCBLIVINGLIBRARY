@@ -22,8 +22,8 @@
     ecadlib datasheet PDF --part MPN | batch PLAN|BOM | estimate PLAN|BOM   Claude reads datasheets -> symbols + footprints
     ecadlib release-check plan.json [--allow P]   hold back plan items that fail the pre-release checks
     ecadlib kicad-export plan.json -o DIR --name LIB   the same library as KiCad files (.kicad_sym, .pretty)
-    ecadlib eagle-export plan.json -o DIR --name LIB   the same library for Autodesk Fusion Electronics / EAGLE (.lbr)
-    ecadlib easyeda-export plan.json -o DIR --name LIB the same library for EasyEDA Pro (.elibz)
+    ecadlib eagle-export plan.json -o DIR --name LIB   (experimental) the library for Fusion Electronics / EAGLE (.lbr)
+    ecadlib easyeda-export plan.json -o DIR --name LIB (experimental) the library for EasyEDA Pro (.elibz)
     ecadlib resolve   plan.json [--part P] list|show|choose ...   fix held parts: ranked candidates, pick one
     ecadlib review    [plan.json] [--part P] [--yes]   go through held parts one by one: why, pick a candidate, release anyway
     ecadlib upstream  check-kicad|check-a365 ...  upstream change alerts (KiCad sources, Altium 365 drift)
@@ -77,12 +77,14 @@ COMMANDS = {
     "team": ("ecadlib.team", "users and roles for the team web server (ecadlib ui --team)"),
     "mcp": ("ecadlib.mcp_server", "MCP server over stdio"),
     "triage": ("ecadlib.bom_triage", "BOM triage report"),
+    "sources-check": ("ecadlib.sources_check", "check the unofficial EasyEDA / JLCPCB endpoints against the live sites"),
     "footprint": ("ecadlib.footprint_gen", "IPC-7351B footprint generator"),
     "check": ("ecadlib.footprint_rules", "check .kicad_mod files against the footprint rule book (KLC / IPC-7351)"),
     "footprint-bench": ("ecadlib.footprint_bench", "compare generated footprints (BGA, connectors, ...) with KiCad's official ones"),
     "eval": ("ecadlib.eval.cli", "accuracy test set: run the pipeline on parts with a known answer, score, compare runs"),
     "dblib": ("ecadlib.altium_export", "Altium DbLib export"),
     "altium-lib": ("ecadlib.altium_lib", "Altium .PcbLib/.SchLib writer"),
+    "altium-native": ("ecadlib.altium_native", "let Altium build the .PcbLib/.SchLib files with its own API; compare the result"),
     "altium365": ("ecadlib.altium365", "Altium 365 release via Nexar"),
     "dblib-sync": ("ecadlib.altium_dblib_sync", "sync a plan into an Altium .DbLib / .SVNDbLib library folder"),
     "librarian": ("ecadlib.librarian", "BOM to library: fill missing parts, plan, release check"),
@@ -90,8 +92,8 @@ COMMANDS = {
     "datasheet": ("ecadlib.datasheet", "Claude datasheet reader: one PDF, or a whole plan/BOM as one Message Batch"),
     "release-check": ("ecadlib.release_check", "pre-release checks on an altium365 plan"),
     "kicad-export": ("ecadlib.kicad_export", "librarian plan -> KiCad .kicad_sym / .pretty / .3dshapes"),
-    "eagle-export": ("ecadlib.eagle_export", "librarian plan -> Autodesk Fusion Electronics / EAGLE .lbr, read back pad by pad"),
-    "easyeda-export": ("ecadlib.easyeda_pro_export", "librarian plan -> EasyEDA Pro device library .elibz, read back pad by pad"),
+    "eagle-export": ("ecadlib.eagle_export", "(experimental) librarian plan -> Fusion Electronics / EAGLE .lbr, read back pad by pad"),
+    "easyeda-export": ("ecadlib.easyeda_pro_export", "(experimental) librarian plan -> EasyEDA Pro device library .elibz, read back pad by pad"),
     "resolve": ("ecadlib.resolve", "fix held parts: candidates for a missing symbol/footprint, choose one"),
     "review": ("ecadlib.review_cli", "go through held parts one at a time: the reason in plain words, pick a candidate, release anyway, open the datasheet"),
     "upstream": ("ecadlib.upstream", "KiCad upstream changes and Altium 365 drift"),

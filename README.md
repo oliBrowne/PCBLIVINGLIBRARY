@@ -6,6 +6,10 @@ These are small Python prototypes for an open-source tool that manages ECAD comp
 2. A deterministic generator turns that JSON into an IPC-7351B land pattern.
 3. A triage step works out which BOM lines already exist locally, which can be pulled from a public source, and which need a generated footprint.
 
+**Supported tools:** Altium (Altium 365 first) and KiCad are the supported targets: they get the testing, the
+benchmarks and the fixes. The Fusion Electronics / EAGLE and EasyEDA Pro exports (section 11b) still work but are
+**experimental**: kept as they are, not a focus, and they may be removed.
+
 ## Start here (no terminal needed)
 
 **Electronics engineer who just wants it to work?** Read [docs/START_HERE.md](docs/START_HERE.md). On Windows,
@@ -95,7 +99,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    Its tools are `workspace_info`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `held_parts`, `part_candidates` and `choose_part` (fix a held part), `approval_status` and `approve_part` (sign-off; `user` is required, the agent must pass the person's own name), `find_duplicates` (with `merge`), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed), `sim_models` (SPICE/IBIS models; `attach` writes them) and `list_example_specs`.
-3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib eagle-export` and `ecadlib easyeda-export` (Fusion Electronics / EAGLE and EasyEDA Pro, section 11b), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib demo` (section 32), `ecadlib kicad-pcm` and `ecadlib altium-pkg` (section 31), `ecadlib ai` (section 33), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22), `ecadlib visual-check` (23), `ecadlib migrate` and `ecadlib rebuild` (35). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib eagle-export` and `ecadlib easyeda-export` (Fusion Electronics / EAGLE and EasyEDA Pro, experimental, section 11b), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib demo` (section 32), `ecadlib kicad-pcm` and `ecadlib altium-pkg` (section 31), `ecadlib ai` (section 33), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22), `ecadlib visual-check` (23), `ecadlib migrate` and `ecadlib rebuild` (35). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
 * `uploads/`
@@ -426,16 +430,27 @@ python3 -m tests.test_offline
   * `unverified (source unreachable)`, which is kept separate on purpose so a network failure is never reported as "needs generation"
 * **Providers** (`providers.py`, interface `lookup(line) -> SourceResult`, raising `NotConfigured`):
 
-  | provider | auth needed | state in prototype |
-  |---|---|---|
-  | `jlcpcb_search` | none: anonymous JSON POST to `jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood/selectSmtComponentList` (taken from easyeda2kicad 1.0.1 `search_jlcpcb_components`; its docstring says "Works anonymously") | implemented; MPN → LCSC by exact normalised match |
-  | `easyeda` | none: `GET https://easyeda.com/api/products/{LCSC}/components` with `Referer: https://easyeda.com/` | implemented; parses `result.dataStr.head.c_para`, `packageDetail.dataStr.shape` and `SVGNODE~{…c_etype: outline3D}` for 3D, following easyeda2kicad's importer |
-  | `digikey` | OAuth2 client credentials (`DIGIKEY_CLIENT_ID/SECRET`), Product Information API v4 | stub |
-  | `mouser` | `MOUSER_API_KEY` (Search API) | stub |
-  | `nexar` | OAuth2 client credentials (`NEXAR_CLIENT_ID/SECRET`), GraphQL, quota-limited | stub |
-  | `snapmagic` | partner token only, with no self-serve public API | stub |
-  | `samacsys` | account plus Library Loader or partner access, with no documented public REST API | stub |
+  Default order: `nexar,digikey,mouser,jlcpcb_search,easyeda`. The official APIs come first; each is skipped with a
+  "not configured" note until its key is set. None of them hands out symbol or footprint geometry, so they identify
+  the part (maker, description, datasheet link, package, and the LCSC number when LCSC sells it) and the EasyEDA
+  route or the datasheet reader supplies the CAD data.
 
+  | provider | official? | auth needed | what it gives |
+  |---|---|---|---|
+  | `nexar` | yes (Octopart / Altium supply API) | OAuth2 client credentials (`NEXAR_CLIENT_ID/SECRET` or `NEXAR_SUPPLY_TOKEN`), GraphQL, quota-limited | MPN match, maker, description, best datasheet, LCSC number from LCSC's offer |
+  | `digikey` | yes (Product Information API v4) | OAuth2 client credentials (`DIGIKEY_CLIENT_ID/SECRET`) | MPN match, maker, description, datasheet, package |
+  | `mouser` | yes (Search API v1) | `MOUSER_API_KEY` | MPN match, maker, description, datasheet |
+  | `jlcpcb_search` | **no**: anonymous JSON POST to `jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood/selectSmtComponentList` (from easyeda2kicad 1.0.1) | none | MPN → LCSC, only when no official source found the LCSC number |
+  | `easyeda` | **no**: `GET https://easyeda.com/api/products/{LCSC}/components` with `Referer: https://easyeda.com/` | none | the symbol, footprint and 3D data (the only free source of ready CAD data) |
+  | `snapmagic` | partner token only, no self-serve public API | | stub |
+  | `samacsys` | account plus Library Loader or partner access, no documented public REST API | | stub |
+
+  * `[providers] unofficial = false` in `ecadlib.toml` keeps the two undocumented endpoints out entirely (triage, the
+    librarian's EasyEDA source, the UI). Parts then come from your libraries, the KiCad libraries, the standard
+    packages and the datasheet reader.
+  * `ecadlib sources-check` asks both unofficial endpoints about known parts (NE555DR, LM358DR, RP2040) and checks the
+    converter still gives the right pad and pin counts. `.github/workflows/sources-canary.yml` runs it every Monday and
+    keeps the raw answers as an artifact, so a change on their side shows up as a red run, not as broken user parts.
   * easyeda2kicad 1.0.1 calls `/components` with no `?version=`. The `?version=6.4.19.5` suffix comes from older releases; I kept it, and it is untested.
   * easyeda2kicad 1.0.1 also knows `pro.easyeda.com/api/components/searchByNumbers` (LCSC → v2 UUID, unauthenticated). Its other v2 endpoints are marked "requires auth" in its source.
   * I found no public, unauthenticated LCSC search endpoint. The `wmsc.lcsc.com` endpoints are undocumented and were also blocked here.
@@ -586,6 +601,10 @@ python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sa
         --models out/altium_models -o out/altium365/plan.json      # -> 4 ready, 10 needs_altium_models
                                                                      #    add --models out/altium_models_kicad (section 6) -> 14 ready
 ```
+
+**Altium can now build these files itself.** Every library written here also gets a plain-text recipe beside it
+(`<file>.ecadbuild`), and the install script lets Altium rebuild each library from it with its own scripting API
+before installing it. See [docs/altium-native.md](docs/altium-native.md) and `ecadlib altium-native`.
 
 No dependencies beyond the standard library. `cfb.py` writes the OLE2 container (v3, 512-byte sectors, mini stream, DIFAT for files over ~7 MB). `altium_lib.py` builds the Altium streams inside it. The record layouts are ported from **AltiumSharp** (C#, Apache-2.0; attribution in the file header and `NOTICE`). `altium-designer-mcp` (GPL-3.0) was read for notes only, and none of its code is used.
 
@@ -790,7 +809,10 @@ Writes what the librarian built for Altium as a KiCad library: `mylib.kicad_sym`
 * **Checks:** every file parses with `ecadlib.sexpr`, each footprint passes release_check's footprint rule at the level the release check recorded, and symbol pins are checked against footprint pads. **In KiCad itself** (7.0.11, see section 28): the `fp-lib-table` resolves in a KiCad project and its footprints match the library; KiCad 7 refuses the KiCad 8 symbol library as such, and loads it with the two KiCad 8 tokens (`exclude_from_sim`, `generator_version`) removed, every pin, graphic and field unchanged. KiCad 8, 9 and 10 were not run here. A KiCad 7 symbol's `ki_description` becomes the `Description` field.
 * **License:** KiCad library content is CC-BY-SA 4.0. An export that includes some gets a `NOTICE.txt`, and the export stays out of git (`out/kicad/` is in `.gitignore`).
 
-## 11b. `eagle_export.py` and `easyeda_pro_export.py`: Fusion Electronics / EAGLE and EasyEDA Pro
+## 11b. `eagle_export.py` and `easyeda_pro_export.py`: Fusion Electronics / EAGLE and EasyEDA Pro (experimental)
+
+> **Experimental.** ecadlib focuses on Altium and KiCad. These two exports keep working and keep their read-back
+> checks, but they get no new features and may be removed in a later release.
 
 ```
 ecadlib eagle-export out/librarian/plan.json -o out/fusion --name mylib [--kicad out/kicad] [--include-held] [--offline]

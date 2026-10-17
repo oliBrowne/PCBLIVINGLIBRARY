@@ -305,7 +305,7 @@ def triage(lines, index, provs, http):
                          "mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""),
                          "value": ln.get("value", ""), "package": "", "status": "dnp (not fitted)",
                          "local_symbol": "", "local_footprint": "", "src": "", "src_symbol": "", "src_footprint": "",
-                         "src_3d": "", "src_mpn": "", "src_description": "", "notes": "marked do-not-populate; not triaged"})
+                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_datasheet": "", "notes": "marked do-not-populate; not triaged"})
             continue
         pns = part_numbers(ln)
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"), *pns)
@@ -322,7 +322,7 @@ def triage(lines, index, provs, http):
             fp_key, _ = index.footprint(ln.get("footprint", ""))
         gen_fp = None if fp_key else index.find_footprint_for_package(
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
-        notes, src, errored, work, unconfigured, desc = [], None, False, dict(ln), [], ""
+        notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
         if pns and not ln.get("mpn"):
             work["mpn"] = pns[0]                               # let providers search by the Comment/LibRef part number
             notes.append(f"part number taken from {'Comment/value' if pns[0] == ln.get('value', '').strip() else 'LibRef'}: {pns[0]}")
@@ -356,12 +356,20 @@ def triage(lines, index, provs, http):
                 elif isinstance(prov, P.JLCPCBSearch):
                     if r.found:
                         work["lcsc"] = r.lcsc
-                        desc = desc or (r.extra or {}).get("description") or ""
+                        if not desc and (r.extra or {}).get("description"):
+                            desc, desc_from = r.extra["description"], prov.name
                     notes.append(f"jlcpcb: MPN -> {r.lcsc}" if r.found else "jlcpcb: no exact MPN match")
                 else:
-                    src = r
+                    if not (src and src.found and (not r.found or not (r.has_footprint or r.has_symbol))):
+                        src = r                                # a found part is kept over a later miss or a later
+                                                               # answer without CAD data (official APIs give none)
                     if r.found:
-                        desc = desc or (r.extra or {}).get("description") or ""
+                        if not desc and (r.extra or {}).get("description"):
+                            desc, desc_from = r.extra["description"], prov.name
+                        sheet = sheet or (r.extra or {}).get("datasheet") or ""
+                        if r.lcsc and not work.get("lcsc"):   # an official source (Nexar: LCSC's offer) found the LCSC
+                            work["lcsc"] = r.lcsc              # number, so the unofficial JLCPCB search is not needed
+                            notes.append(f"{prov.name}: MPN -> {r.lcsc}")
                     if r.found and ln.get("mpn") and r.mpn and _n(r.mpn) != _n(ln["mpn"]):
                         notes.append(f"MPN mismatch: BOM {ln['mpn']} vs {prov.name} {r.mpn}")
                     if r.found and r.has_footprint:
@@ -392,7 +400,7 @@ def triage(lines, index, provs, http):
             "local_footprint": fp_key or (f"{gen_fp} (generated, by package)" if gen_fp else ""),
             "src": src.provider if src else "", "src_symbol": _yn(src and src.has_symbol),
             "src_footprint": _yn(src and src.has_footprint), "src_3d": _yn(src and src.has_3d),
-            "src_mpn": src.mpn if src else "", "src_description": desc, "notes": "; ".join(dict.fromkeys(notes)),
+            "src_mpn": src.mpn if src else "", "src_description": desc, "src_description_from": desc_from, "src_datasheet": sheet, "notes": "; ".join(dict.fromkeys(notes)),
         })
     return rows
 
@@ -440,7 +448,7 @@ def main(argv=None):
     ap.add_argument("--lib", action="append", default=[], help="KiCad library dir (repeatable)")
     ap.add_argument("-o", "--out", default="out/triage", help="report path stem (.md and .csv written)")
     ap.add_argument("--providers", help="comma list in order (default: [providers] order in the rules, else "
-                    "jlcpcb_search,easyeda,digikey,mouser,nexar,snapmagic,samacsys); plugins: `ecadlib plugins list`")
+                    "nexar,digikey,mouser,jlcpcb_search,easyeda: the official APIs first); plugins: `ecadlib plugins list`")
     ap.add_argument("--offline", action="store_true", help="use HTTP cache only")
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--rate", type=float, default=1.0, help="min seconds between requests per host")
@@ -453,7 +461,7 @@ def main(argv=None):
     http = CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline)
     rules = RU.load(a.rules, start=Path(a.out).parent)
     try:
-        provs = [c(http) for c in PL.select(a.providers, rules)]
+        provs = [c(http) for c in PL.select(a.providers, rules, default=P.DEFAULT_ORDER)]
     except ValueError as e:
         print(f"ecadlib triage: {e}", file=sys.stderr)
         return 2

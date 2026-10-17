@@ -134,7 +134,7 @@ DEFAULTS["ai"] = {k: (dict(v) if isinstance(v, dict) else v) for k, v in _LL.DEF
 for _k in _LL.SECTION_KEYS:                           # [datasheet] / [agent.proof] may pick their own ("" = [ai])
     DEFAULTS["datasheet"].setdefault(_k, "")
     DEFAULTS["agent"]["proof"].setdefault(_k, "")
-DEFAULTS["providers"] = {"order": []}
+DEFAULTS["providers"] = {"order": [], "unofficial": True}
 # [setup]: written by the `ecadlib init` setup questions (ecadlib.firstrun). libs / workspace are the defaults for
 # --lib / --workspace (after the command line and ECADLIB_LIB / ECADLIB_WORKSPACE); empty = as before.
 DEFAULTS["setup"] = {"tool": "both", "libs": [], "workspace": ""}
@@ -901,7 +901,9 @@ HELP = {
               "of the env var holding the URL, events = batch_ready|part_held|upkeep_changes|lifecycle (default all), "
               "token_env (json only); retries with backoff, never stops the agent",
     "providers": "Part sources for triage / librarian / UI, in order, including plugins (ecadlib.providers entry points); "
-                 "[] = each command's built-in default; `ecadlib plugins list` shows what is installed",
+                 "[] = each command's built-in default (the official Nexar / DigiKey / Mouser APIs first, then EasyEDA); "
+                 "unofficial = false keeps out the undocumented EasyEDA and JLCPCB search endpoints; "
+                 "`ecadlib plugins list` shows what is installed",
     "setup": "Written by `ecadlib init`: the tool you use, your library folders (the default --lib) and the workspace "
              "(the default --workspace); relative paths start at this file's folder",
     "hub": "The Library page (ecadlib hub): libraries = extra library folders or files to show next to --lib (.SchLib, "

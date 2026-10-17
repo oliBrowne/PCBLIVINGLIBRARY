@@ -87,8 +87,6 @@ class NexarSupply(P.Nexar):
               "specs[].attribute.shortname 'lifecyclestatus' with values Production/New/NRND/EOL/Obsolete "
               "(support.nexar.com 'Supply: Lifecycle information for parts'; needs a plan with Tech Specs + Lifecycle). "
               "ASSUMED: displayValue holds that wording. The schema has no median-stock field: totalAvail is used.")
-    TOKEN_URL = os.environ.get("NEXAR_TOKEN_URL", "https://identity.nexar.com/connect/token")
-    API_URL = os.environ.get("NEXAR_API_URL", "https://api.nexar.com/graphql")
     QUERY = """query ($q: String!, $limit: Int) {
   supSearchMpn(q: $q, limit: $limit) {
     hits
@@ -96,28 +94,6 @@ class NexarSupply(P.Nexar):
       specs { attribute { shortname } displayValue value } } }
   }
 }"""
-    _token = _token_err = None
-
-    def configured(self):
-        return bool(os.environ.get("NEXAR_SUPPLY_TOKEN")) or super().configured()
-
-    def token(self):
-        if self._token or self._token_err:
-            return self._token
-        tok = os.environ.get("NEXAR_SUPPLY_TOKEN")
-        if not tok:
-            body = urlencode({"grant_type": "client_credentials", "client_id": os.environ["NEXAR_CLIENT_ID"],
-                              "client_secret": os.environ["NEXAR_CLIENT_SECRET"], "scope": "supply.domain"})
-            r = self.http.post(self.TOKEN_URL, body, cache=False,
-                               headers={"Content-Type": "application/x-www-form-urlencoded"})
-            try:
-                tok = r.json().get("access_token") if r.ok else None
-            except ValueError:
-                tok = None
-            if not tok:
-                self._token_err = f"token request failed: {r.error or f'HTTP {r.status}'}"
-        self._token = tok
-        return tok
 
     def check(self, part):
         if not self.configured():
@@ -167,22 +143,7 @@ class DigiKeyLifecycle(P.DigiKey):
               "Product.QuantityAvailable, Product.Discontinued, Product.EndOfLife. ASSUMED: response wrapper "
               "{Product: ...}, ProductStatusV4 = {Id, Status} with wording like 'Active', 'Not For New Designs', "
               "'Last Time Buy', 'Obsolete', 'Discontinued at Digi-Key'; token URL api.digikey.com/v1/oauth2/token.")
-    TOKEN_URL = "https://api.digikey.com/v1/oauth2/token"
     URL = "https://api.digikey.com/products/v4/search/{}/productdetails"
-    _token = _token_err = None
-
-    def token(self):
-        if not (self._token or self._token_err):
-            body = urlencode({"client_id": os.environ["DIGIKEY_CLIENT_ID"], "client_secret": os.environ["DIGIKEY_CLIENT_SECRET"],
-                              "grant_type": "client_credentials"})
-            r = self.http.post(self.TOKEN_URL, body, cache=False, headers={"Content-Type": "application/x-www-form-urlencoded"})
-            try:
-                self._token = r.json().get("access_token") if r.ok else None
-            except ValueError:
-                pass
-            if not self._token:
-                self._token_err = f"token request failed: {r.error or f'HTTP {r.status}'}"
-        return self._token
 
     def check(self, part):
         if not self.configured():

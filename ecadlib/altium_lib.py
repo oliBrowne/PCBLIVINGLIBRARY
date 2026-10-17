@@ -547,10 +547,13 @@ def write_pcblib(path, footprints, layers=None):
     from .fsutil import write_bytes_atomic
     path = Path(path)
     fps = [remap_layers(fp, layers) for fp in footprints]
+    from . import altium_native as AN
     old = _pcblib_stamp(path)
     if old and path.read_bytes() == pcblib_bytes(fps, path.name, old):
+        AN.write_recipe(path, "PCBLIB", fps)
         return path                    # the same library: leave the file (and the date in it) alone, so a re-run
     write_bytes_atomic(path, pcblib_bytes(fps, path.name))    # changes nothing on disk or in git
+    AN.write_recipe(path, "PCBLIB", fps)   # the same content as a recipe Altium can build from (ecadlib.altium_native)
     return path
 
 
@@ -819,9 +822,11 @@ def schlib_bytes(symbols):
 def write_schlib(path, symbols):
     from .fsutil import write_bytes_atomic
     path = Path(path)
+    from . import altium_native as AN
     data = schlib_bytes(symbols)
     if not (path.is_file() and path.read_bytes() == data):      # unchanged: not rewritten
         write_bytes_atomic(path, data)
+    AN.write_recipe(path, "SCHLIB", [dict(s, name=lib_name(s["name"])) for s in symbols])
     return path
 
 

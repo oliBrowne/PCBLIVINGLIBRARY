@@ -997,12 +997,14 @@ def lcsc_number(item=None, ln=None, row=None):
 
 
 def datasheet_urls(item=None, ln=None, row=None, found=None):
-    """Datasheet links to try, best first, each with where it came from: the BOM's datasheet column, the plan's
+    """Datasheet links to try, best first, each with where it came from: the BOM's datasheet column, the link an official
+    part API gave in triage (Nexar / DigiKey / Mouser), the plan's
     ComponentLink2URL / Datasheet, one a source found (KiCad symbol Datasheet property, EasyEDA lcsc.url), then
     LCSC's datasheet URL pattern for the part's LCSC number."""
     par = {p["name"]: p["value"] for p in (item or {}).get("parameters", [])}
     fd = (found or {}).get("datasheet") or ("", "")
-    cands = [((ln or {}).get("datasheet"), "BOM"), (fd[0], fd[1]), (par.get("ComponentLink2URL"), "LCSC datasheet link"),
+    cands = [((ln or {}).get("datasheet"), "BOM"), ((row or {}).get("src_datasheet"), f"{(row or {}).get('src') or 'part source'} datasheet link"),
+             (fd[0], fd[1]), (par.get("ComponentLink2URL"), "LCSC datasheet link"),
              (par.get("Datasheet"), "plan Datasheet")]
     lc = lcsc_number(item, ln, row)
     if lc:
