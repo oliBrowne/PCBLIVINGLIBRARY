@@ -44,9 +44,13 @@ def kind_of(descriptions=(), footprints=()):
     """Resistors / Capacitors / Inductors / Crystals / Connectors from a source's category words or a chip
     footprint, else None."""
     for d in descriptions:
-        head = re.split(r",|;| - ", re.sub(r"\([^)]*\)", "", str(d or "")), maxsplit=1)[0].strip()
+        parts = [p.strip() for p in re.split(r",|;| - ", re.sub(r"\([^)]*\)", "", str(d or "")))]
         for cat, rx in KIND_WORDS:
-            if re.fullmatch(rf"(?:[\w/&-]+\s+){{0,3}}(?i:{rx})(?:\s+[A-Z]{{2,5}})?", head):
+            if re.fullmatch(rf"(?:[\w/&-]+\s+){{0,3}}(?i:{rx})(?:\s+[A-Z]{{2,5}})?", parts[0]):
+                return cat
+    if any(re.fullmatch(r"(?:01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)", str(f or "").strip()) for f in footprints):
+        for cat, rx in KIND_WORDS[:3]:      # a bare chip size (LCSC's package "0603") and the noun anywhere in the
+            if any(re.search(rf"\b(?i:{rx})\b", str(d or "")) for d in descriptions):     # text: "... Chip Resistor"
                 return cat
     for f in footprints:
         if re.match(r"^([RCL])(?:\d{4}|_\d{4}_\d{4}Metric)(?:_|$)", str(f or "").split(":")[-1].split(" ")[0]):
