@@ -669,7 +669,9 @@ def handle(ws, msg):
             out = call_tool(ws, params.get("name"), params.get("arguments") or {})
             result = {"content": [{"type": "text", "text": json.dumps(out, indent=1, default=str)}], "isError": False}
         except Exception as e:
-            user_error = isinstance(e, (ValueError, KeyError, FileExistsError, FileNotFoundError, PermissionError))
+            from .visual_check import VisualCheckError          # e.g. Pillow not installed: the fix, not a bug report
+            user_error = isinstance(e, (ValueError, KeyError, FileExistsError, FileNotFoundError, PermissionError,
+                                        VisualCheckError))
             if not user_error:                            # a bug: keep the traceback; a wrong id / path is the caller's
                 traceback.print_exc(file=sys.stderr)
             if user_error:

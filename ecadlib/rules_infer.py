@@ -585,9 +585,34 @@ def _label(c):
     return "high" if c >= 0.8 else "medium" if c >= 0.5 else "low"
 
 
-def mk(key, value, confidence, evidence, source, alternatives=(), ask=None):
+MIN_SAMPLES = 3          # fewer parts / footprints / symbols than this behind a setting: at most "low"
+MIN_COVERAGE = 0.5       # a feature on fewer than half of the footprints scales the confidence down
+LOW_CAP = 0.45
+
+
+def support(share, n=None, have=None, population=None):
+    """Confidence of a learned value from the share of samples that agree on it (share), how many samples there were
+    (n) and, for a feature every footprint could carry, how many carry it (have) out of how many were read
+    (population). 1 of 1 agreeing is not "high" when 47 other footprints say nothing."""
+    c = share
+    if population and have is not None and have < population * MIN_COVERAGE:
+        c *= have / (population * MIN_COVERAGE)
+    if n is not None and n < MIN_SAMPLES:
+        c = min(c, LOW_CAP)
+    return c
+
+
+def mk(key, value, confidence, evidence, source, alternatives=(), ask=None, n=None, have=None, population=None):
+    """A Setting. n / have / population (see support()) scale the confidence for thin evidence."""
+    evidence = list(evidence)
+    raw, confidence = confidence, support(confidence, n, have, population)
+    if confidence < raw:
+        why = [f"too little evidence: only {n} sample(s)"] if n is not None and n < MIN_SAMPLES else []
+        if population and have is not None and have < population * MIN_COVERAGE:
+            why.append(f"seen in only {have} of {population}")
+        evidence.insert(1, "; ".join(why) or "too little evidence")
     s = Setting(key=key, value=value, confidence=round(confidence, 2), level=_label(confidence),
-                evidence=list(evidence)[:6], source=source, alternatives=list(alternatives))
+                evidence=evidence[:6], source=source, alternatives=list(alternatives))
     if ask:
         s["question"] = ask
     return s
@@ -640,7 +665,8 @@ def infer_naming(lib):
             ev.append("names look like manufacturer part numbers (no MPN parameter found to confirm)")
             conf *= 0.8
         ask = _question(f"Non-passive part names: which pattern do you use?", t, ranked, total)
-        out.append(mk("naming.component", t, conf, ev, _origins([c for k in other for c in per_cat[k][3]]), alts, ask))
+        out.append(mk("naming.component", t, conf, ev, _origins([c for k in other for c in per_cat[k][3]]), alts, ask,
+                      n=total + unmatched))
     passive_best = {}
     for cat in RU.PASSIVES:
         if cat not in per_cat:
@@ -651,7 +677,7 @@ def infer_naming(lib):
         alts = [{"value": a, "share": round(v / total, 2)} for a, v, _ in ranked[1:3]]
         ev = examples[t][:3] + [f"{votes} of {total} {cat.lower()} names fit"]
         passive_best[cat] = mk(f"naming.by_category.{cat}", t, votes / total, ev, _origins(cs), alts,
-                               _question(f"{cat} names: which pattern do you use?", t, ranked, total))
+                               _question(f"{cat} names: which pattern do you use?", t, ranked, total), n=total)
     vals = {s["value"] for s in passive_best.values()}
     if len(vals) == 1 and len(passive_best) >= 2:
         s = min(passive_best.values(), key=lambda x: x["confidence"])
@@ -676,7 +702,7 @@ def infer_naming(lib):
         if len(ranked) > 1 and ranked[1][1] == n and {best, ranked[1][0]} not in ({"rkm", "si_upper"}, {"rkm_lower", "si"}):
             ask = {"text": "Values in names: which style?", "choices": [r[0] for r in ranked[:3]], "default": best}
         out.append(mk("naming.value_style", best, n / total, [f"{n} of {total} value tokens are written {best} ({ex[best]})"],
-                      "component names", [{"value": k, "share": round(v / total, 2)} for k, v in ranked[1:3]], ask))
+                      "component names", [{"value": k, "share": round(v / total, 2)} for k, v in ranked[1:3]], ask, n=total))
     out += infer_footprint_naming(lib)
     return out
 
@@ -719,7 +745,8 @@ def infer_footprint_naming(lib):
         if chip_t:
             t, m = chip_t.most_common(1)[0]
             return [mk("naming.footprint", t, m / total * 0.9, ex["other"][:3] + [f"{m} of {total} footprint names fit (chip packages; others keep their names)"],
-                       "footprint names", [{"value": k, "share": round(v / total, 2)} for k, v in kinds.most_common() if k != "other"])]
+                       "footprint names", [{"value": k, "share": round(v / total, 2)} for k, v in kinds.most_common() if k != "other"],
+                       n=total)]
         return [mk("naming.footprint", "kicad", 0.3, ex["other"][:3] + ["footprint names follow no pattern ecadlib knows; KiCad names kept"],
                    "footprint names")]
     alts = [{"value": k, "share": round(v / total, 2)} for k, v in kinds.most_common() if k != best and k != "other"]
@@ -727,7 +754,7 @@ def infer_footprint_naming(lib):
     if len(kinds) > 1 and n / total < 0.6 and alts and alts[0]["share"] >= 0.25:
         ask = {"text": "Footprint names: KiCad style (R_0603_1608Metric) or IPC-7351 (RESC1608X55N)?", "choices": [best] + [a["value"] for a in alts], "default": best}
     return [mk("naming.footprint", best, n / total, ex[best][:3] + [f"{n} of {total} footprint names are {best} style"],
-               "footprint names", alts, ask)]
+               "footprint names", alts, ask, n=total)]
 
 
 # ------------------------------------------------------------------ parameters, folders
@@ -760,7 +787,8 @@ def infer_parameters(lib):
             ev_names.append(f"{house} = {canon} ({n} parts)")
     src = _origins(pool or fieldmaps)
     if names:
-        out.append(mk("parameters.names", names, 0.9 if pool else 0.7, ev_names, src))
+        out.append(mk("parameters.names", names, 0.9 if pool else 0.7, ev_names, src,
+                      n=None if fieldmaps else len(pool)))      # a DbLib field map is one deliberate statement
     n = len(pool)
     if n >= 3:
         req = {}
@@ -826,41 +854,62 @@ def infer_folders(lib):
     total = sum(sum(c.values()) for c in by.values())
     hits = sum(c.most_common(1)[0][1] for c in by.values())
     if root and root != RU.DEFAULTS["folders"]["root"]:
-        out.append(mk("folders.root", root, 0.8, [f"every folder starts with {root}/"], _origins(use)))
+        out.append(mk("folders.root", root, 0.8, [f"every folder starts with {root}/"], _origins(use), n=len(use)))
     if mapping:
-        out.append(mk("folders.map", mapping, hits / total, ev, _origins(use)))
+        out.append(mk("folders.map", mapping, hits / total, ev, _origins(use), n=total))
     return out
 
 
 # ------------------------------------------------------------------ layers, density
 def infer_layers(lib):
+    """layers.* from the PcbLibs. Every footprint could carry each role, so a role seen in few of them is low
+    confidence (support()). Two sanity rules: the courtyard is never a layer that holds the library's 3D bodies, and a
+    .Designator on a non-overlay layer is not proposed when the library has silkscreen on the overlay (the new
+    footprints would have no reference on silk)."""
     fps = [f for f in lib.footprints if f["kind"] == "altium" and f["pads"]]
     if not fps:
         return []
-    votes = {k: Counter() for k in ("courtyard", "assembly", "body3d", "designator", "silkscreen")}
+    roles = ("courtyard", "assembly", "body3d", "designator", "silkscreen")
+    votes = {k: Counter() for k in roles}
+    have = {k: 0 for k in roles}                  # footprints that carry the role at all
+    for f in fps:
+        for l in {l for l in f["bodies"] if 57 <= l <= 72}:   # the writer's (and rules') mechanical layers: 1..16
+            votes["body3d"][l] += 1
+        have["body3d"] += any(57 <= l <= 72 for l in f["bodies"])
+    body = votes["body3d"].most_common(1)[0][0] if votes["body3d"] else None
+    overlay_silk = 0
     for f in fps:
         px = [(x - w / 2, y - h / 2, x + w / 2, y + h / 2) for _, x, y, w, h in f["pads"]]
         pb = (min(b[0] for b in px), min(b[1] for b in px), max(b[2] for b in px), max(b[3] for b in px))
         mech = {l: b for l, b in f["graphics"].items() if b and 57 <= l <= 72}
-        enclosing = [l for l, b in mech.items() if b[0] <= pb[0] + 0.01 and b[1] <= pb[1] + 0.01 and b[2] >= pb[2] - 0.01 and b[3] >= pb[3] - 0.01]
+        enclosing = [l for l, b in mech.items() if b[0] <= pb[0] + 0.01 and b[1] <= pb[1] + 0.01
+                     and b[2] >= pb[2] - 0.01 and b[3] >= pb[3] - 0.01]
         area = lambda l: (mech[l][2] - mech[l][0]) * (mech[l][3] - mech[l][1])
-        crt = max(enclosing, key=area) if enclosing else None
+        outer = max(enclosing, key=area) if enclosing else None
+        not_crt = set(f["bodies"]) | {body}       # a layer that holds 3D bodies is never the courtyard
+        crt = max([l for l in enclosing if l not in not_crt], key=area, default=None)
         if crt:
             votes["courtyard"][crt] += 1
+            have["courtyard"] += 1
+        asm = set()
         for t, l in f["texts"]:
             if t == ".Comment" and 57 <= l <= 72:
                 votes["assembly"][l] += 1
-            if t == ".Designator":
-                votes["designator"][l] += 1
+                asm.add(l)
+        des = {l for t, l in f["texts"] if t == ".Designator"}
+        for l in des:
+            votes["designator"][l] += 1
+        have["designator"] += bool(des)
         for l in mech:
-            if l != crt and not any(t == ".Comment" for t, _ in f["texts"]):
+            if l not in (crt, outer) and not any(t == ".Comment" for t, _ in f["texts"]):
                 votes["assembly"][l] += 1
-        for l in f["bodies"]:
-            if 57 <= l <= 72:                     # the writer's (and rules') mechanical layers: 1..16
-                votes["body3d"][l] += 1
+                asm.add(l)
+        have["assembly"] += bool(asm)
         ov = [l for l in f["graphics"] if l in (33, 34)]
         if ov:
             votes["silkscreen"][33 if 33 in ov else ov[0]] += 1
+            have["silkscreen"] += 1
+        overlay_silk += bool(ov or any(l in (33, 34) for _, l in f["texts"]))
     out = []
     for role, cnt in votes.items():
         if not cnt:
@@ -873,9 +922,14 @@ def infer_layers(lib):
             ask = {"text": f"Which layer holds the {role}?", "choices": [RU.layer_name(l)] + [a["value"] for a in alts], "default": RU.layer_name(l)}
         how = {"courtyard": "the outline that encloses all pads", "assembly": "the .Comment text / body outline",
                "body3d": "3D bodies", "designator": ".Designator text", "silkscreen": "silkscreen lines"}[role]
-        out.append(mk(f"layers.{role}", RU.layer_name(l), n / total,
-                      [f"{RU.layer_name(l)} holds {how} in {n} of {total} footprints"] + [f["name"] for f in fps[:2]],
-                      _origins_fp(fps), alts, ask))
+        ev = [f"{RU.layer_name(l)} holds {how} in {n} of {total} footprints"]
+        conf = n / total
+        if role == "designator" and l not in (33, 34) and overlay_silk:
+            conf = min(conf, 0.3)
+            ev.append(f"not proposed: {overlay_silk} footprint(s) have silkscreen on the overlay, and a designator on "
+                      f"{RU.layer_name(l)} would leave new footprints with no reference on silk")
+        out.append(mk(f"layers.{role}", RU.layer_name(l), conf, ev + [f["name"] for f in fps[:2]],
+                      _origins_fp(fps), alts, ask, n=have[role], have=have[role], population=len(fps)))
     return out
 
 
@@ -909,18 +963,20 @@ def _chip_z(imp, kind):
 
 
 def infer_density(lib):
-    votes, ev = Counter(), []
+    votes, ev, voters = Counter(), [], 0
     for f in lib.footprints:
         m = RU.IPC_NAME.match(f["name"])
         if m:
             d = m.groups()[-1].upper()
             votes[d] += 2
+            voters += 1
             if len(ev) < 2:
                 ev.append(f"{f['name']}: IPC name ends in {d}")
             continue
         m = re.search(r"density[- ]?([ABC])\b", f.get("description", ""))
         if m:
             votes[{"A": "M", "B": "N", "C": "L"}[m.group(1)]] += 1
+            voters += 1
             continue
         if len(f["pads"]) == 2:
             from .kicad_index import package_of
@@ -936,6 +992,7 @@ def infer_density(lib):
             d, dz = min(((d, abs(z - zz)) for d, zz in zs.items()), key=lambda t: t[1])
             if dz <= 0.3:
                 votes[{"A": "M", "B": "N", "C": "L"}[d]] += 1
+                voters += 1
                 if len(ev) < 4:
                     ev.append(f"{f['name']}: pads {z:.2f} mm toe to toe, IPC {imp} {'MNL'['ABC'.index(d)]} = {zs[d]:.2f}")
     if not votes:
@@ -945,7 +1002,8 @@ def infer_density(lib):
     alts = [{"value": k, "share": round(v / total, 2)} for k, v in votes.most_common()[1:3]]
     ask = {"text": "IPC-7351 density for new footprints?", "choices": [best] + [a["value"] for a in alts], "default": best} \
         if alts and n / total < 0.6 else None
-    return [mk("footprint.density", best, n / total, ev + [f"{n} of {total} votes for {best}"], _origins_fp(lib.footprints), alts, ask)]
+    return [mk("footprint.density", best, n / total, ev + [f"{n} of {total} votes for {best}"], _origins_fp(lib.footprints), alts, ask,
+               n=voters)]
 
 
 def infer_symbols(lib):
@@ -969,10 +1027,11 @@ def infer_symbols(lib):
         g = 50 if grids.most_common(1)[0][0] == 50 else 100
         if L % 50 == 0 and L % g == 0 and L != RU.DEFAULTS["symbols"]["pin_length"]:     # only what differs from ecadlib's
             out.append(mk("symbols.pin_length", L, n / total, [f"{n} of {total} pins are {L} mil long"] + [n_ for n_, _ in syms[:2]],
-                          f"{len(syms)} SchLib symbols"))
+                          f"{len(syms)} SchLib symbols", n=len(syms)))
     g, n = grids.most_common(1)[0]
     if g and g != RU.DEFAULTS["symbols"]["grid"]:
-        out.append(mk("symbols.grid", g, n / len(syms), [f"pins of {n} of {len(syms)} symbols sit on a {g} mil grid"], f"{len(syms)} SchLib symbols"))
+        out.append(mk("symbols.grid", g, n / len(syms), [f"pins of {n} of {len(syms)} symbols sit on a {g} mil grid"], f"{len(syms)} SchLib symbols",
+                      n=len(syms)))
     return out
 
 
@@ -1009,13 +1068,37 @@ def _set(rules, key, value):
     d[parts[-1]] = value
 
 
+def written(s, choices=None):
+    """A setting goes into the rules file when its confidence is medium or high, or the person chose its value."""
+    return s["level"] != "low" or s["key"] in (choices or {})
+
+
 def to_rules(settings, choices=None):
-    """Settings (+ the person's choices {key: value}) -> a raw rules dict (only the inferred keys)."""
+    """Settings (+ the person's choices {key: value}) -> a raw rules dict (only the inferred keys). Low-confidence
+    settings are left out (ecadlib's default stays); propose() lists them as comments."""
     raw = {}
     for s in settings:
+        if not written(s, choices):
+            continue
         v = (choices or {}).get(s["key"], s["value"])
         _set(raw, s["key"], v)
     return raw
+
+
+def skipped_lines(settings, choices=None):
+    """Comment lines for the low-confidence settings to_rules() leaves out: what was seen, and why it is not used."""
+    out = []
+    for s in settings:
+        if written(s, choices):
+            continue
+        v = json.dumps(s["value"], ensure_ascii=False)
+        why = next((e for e in s["evidence"][1:] if e.startswith(("too little evidence", "not proposed"))),
+                   s["evidence"][-1] if s["evidence"] else "")
+        out.append(f"  {s['key']} = {v}   (confidence low, {int(s['confidence'] * 100)}%: {why})")
+    if out:
+        out.insert(0, "Not written (too little evidence in the library; ecadlib's default stays). If one is your "
+                      "convention, set it yourself:")
+    return out
 
 
 def notes_for(settings, choices=None):
@@ -1058,7 +1141,8 @@ def propose(paths=(), a365=None, choices=None, existing=None, extra=None):
     header = ["# ecadlib library rules: every ecadlib tool follows this file (see `ecadlib rules -h`).",
               "# Written by `ecadlib init` from: " + (", ".join(f"{v} {k}" for k, v in lib.kinds().items()) or "nothing found") + ".",
               "# Anything not listed keeps ecadlib's default (`ecadlib rules show` prints them all)."]
-    text = RU.dumps(full, notes_for(settings, choices), only=keys, header=header)
+    header += [f"# {h}" for h in skipped_lines(settings, choices)]
+    text = RU.dumps(full, notes_for([s for s in settings if written(s, choices)], choices), only=keys, header=header)
     out = {"settings": [dict(s) for s in settings], "questions": [dict(s["question"], key=s["key"]) for s in settings if s.get("question")],
            "rules": merged_raw, "toml": text, "scanned": lib.kinds(), "components": len(lib.components),
            "footprints": len(lib.footprints), "boms": len(lib.boms), "warnings": lib.warnings, "errors": errors}

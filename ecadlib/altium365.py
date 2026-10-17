@@ -325,7 +325,7 @@ def main(argv=None):
     from . import rules as RU
 
     if a.cmd == "plan":
-        if Path(a.out).is_dir() or a.out.endswith(("/", "\\")):      # -o out/a365: the plan file inside that folder
+        if Path(a.out).is_dir() or a.out.endswith(("/", "\\")) or not Path(a.out).suffix:   # -o out/a365: the plan file inside that folder
             a.out = str(Path(a.out) / "plan.json")
         rules = RU.load(a.rules, start=Path(a.out).parent)
         lines, _ = read_bom(a.bom, RU.bom_columns(rules))
