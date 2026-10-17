@@ -190,6 +190,36 @@ def write_recipe(lib_path, kind, items):
     return rp
 
 
+def copy_recipe(src_lib, dst_lib):
+    """A library copied elsewhere (dblib-sync copies each part's files into the library folder) takes its recipe along:
+    <dst_lib>.ecadbuild and the STEP files its BODY lines name (relative to the library's folder). The recipe's
+    library name is the copy's. -> the files written (paths). Nothing when src_lib has no recipe."""
+    src_lib, dst_lib = Path(src_lib), Path(dst_lib)
+    rp = src_lib.with_name(src_lib.name + EXT)
+    if not rp.is_file():
+        return []
+    lines = rp.read_text(encoding="utf-8").splitlines()
+    out, written = [], []
+    for ln in lines:
+        f = ln.split("\t")
+        if f[0] in ("PCBLIB", "SCHLIB") and len(f) > 1:
+            ln = _line(f[0], dst_lib.name)
+        elif f[0] == "BODY" and len(f) > 4 and f[4]:
+            src, dst = src_lib.parent / f[4], dst_lib.parent / f[4]
+            if src.is_file() and not (dst.is_file() and dst.read_bytes() == src.read_bytes()):
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(src.read_bytes())
+                written.append(dst)
+        out.append(ln)
+    text = "\n".join(out) + "\n"
+    dst = dst_lib.with_name(dst_lib.name + EXT)
+    if not (dst.is_file() and dst.read_text(encoding="utf-8") == text):
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(text, encoding="utf-8")
+        written.append(dst)
+    return written
+
+
 # ------------------------------------------------------------------ collecting a library folder
 def recipes(folder):
     """[(library path relative to folder, recipe path)] for every recipe under folder whose library exists."""

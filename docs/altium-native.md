@@ -16,6 +16,12 @@ holds `ecadlib_build.pas`, and **InstallDatabaseLibrary**, **InstallFileLibrarie
 first run **RebuildWithAltium**: Altium rebuilds every library in the folder from `ecadlib_build.txt`, then installs
 it. `--no-native-build` leaves that out.
 
+The **ecadlib menu** in Altium (`ecadlib altium-menu`) does the same on its own: after *Add part from MPN…* or
+*Fill the library*, ecadlib copies each part's recipe into the library folder with its files and writes
+`ecadlib_build.txt` there; the menu then uninstalls the database library, lets Altium build every library
+(`BuildLibraries`, from `ecadlib_build.pas` in the menu's script project), and installs it again. The dialog says when
+a library FAILED and points at `ecadlib_build_report.txt`. `native_build=0` in `ecadlib_menu.ini` turns this off.
+
 For any other folder of ecadlib libraries:
 
 ```
