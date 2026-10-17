@@ -362,7 +362,9 @@ class Scan:
 
     def __init__(self, ws, libraries, max_files=MAX_FILES):
         self.ws, self.root = ws, Path(ws.root).resolve()
-        self.libraries = [Path(p).expanduser() for p in libraries]
+        from .hub_copy import library_dir
+        self.hublib = library_dir(ws)            # parts the hub copied between tools: ecadlib's, read like a library
+        self.libraries = [Path(p).expanduser() for p in libraries] + ([self.hublib] if self.hublib.is_dir() else [])
         self.max_files = max_files
         self.copies, self.errors, self.files, self.warnings = [], [], [], []
         self.sigs = []
@@ -405,7 +407,7 @@ class Scan:
                     self.warnings.append(f"stopped after {self.max_files} files under {base}")
                     break
                 if (f.suffix.lower() in exts and f.is_file() and not any(x in SKIP_DIRS for x in f.relative_to(base).parts[:-1])
-                        and self.root not in f.resolve().parents):
+                        and (self.root not in f.resolve().parents or self.hublib in f.resolve().parents)):
                     files.append(f)
                     self.src.setdefault(str(f), str(base))
         return list(dict.fromkeys(files))
@@ -501,6 +503,9 @@ class Scan:
                                          description=pr.get("Description", "") or pr.get("ki_description", ""),
                                          symbol=f"{f.stem}:{e['name']}", footprint=fp, pins=e["pins"], prefix=e["prefix"],
                                          pads=p[1] if p else None, where=f.name, files=[x for x in (f, p and p[0]) if x]))
+        for c in self.copies:
+            if c["path"] and self.hublib in Path(c["path"]).resolve().parents:
+                c["origin"], c["where"] = "ecadlib", f"hub library ({c['where']})"
         # Altium 365 component lists
         for f in by_suf.get(".json", []):
             self.a365_file(f, "library")
@@ -944,14 +949,15 @@ def _where_used(projects):
         return {}, []
     from . import altium_project as AP
     files = AP.find_projects([Path(p).expanduser() for p in projects])
+    files += [f for d in projects for f in (sorted(Path(d).expanduser().rglob("*.kicad_sch")) if Path(d).expanduser().is_dir() else [])]
     sig = tuple((str(f), _stat(f)) for f in files)
     with _LOCK:
         if _WU.get("sig") == sig:
             return _WU["val"]
     res = AP.where_used([Path(p).expanduser() for p in projects])
-    out = {}
+    out = _kicad_where_used(projects)
     for e in res["parts"].values():
-        uses = [{"project": u["project"], "path": u["path"], "qty": u["qty"], "designators": u["designators"][:40]} for u in e["uses"]]
+        uses = [{"project": u["project"], "path": str(Path(u["path"]).resolve()), "qty": u["qty"], "designators": u["designators"][:40]} for u in e["uses"]]
         keys = ({mpn_key(e["mpn"])} if e["mpn"] else set()) | {"name:" + str(x).upper() for x in e["design_item_ids"] | e["librefs"]}
         for k in keys - {""}:
             out.setdefault(k, []).extend(uses)
@@ -959,6 +965,36 @@ def _where_used(projects):
     with _LOCK:
         _WU.update(sig=sig, val=val)
     return val
+
+
+def _kicad_where_used(projects):
+    """{mpn key or NAME: [uses]} from the schematics of KiCad projects (.kicad_pro) under the project folders."""
+    from . import sexpr
+    from .hub_copy import projects as find
+    out = {}
+    for prj in [p for p in find(projects) if p["tool"] == "kicad"]:
+        parts = {}
+        for sch in sorted(Path(prj["path"]).parent.glob("*.kicad_sch")):
+            try:
+                tree = _parsed(sch, "kicad_sch", lambda f: sexpr.parse(Path(f).read_text(encoding="utf-8", errors="replace")))
+            except Exception:                    # noqa: BLE001 - a schematic that doesn't parse is skipped
+                continue
+            for sym in [n for n in tree[1:] if isinstance(n, list) and n and n[0] == "symbol"]:
+                lib_id = (sexpr.first(sym, "lib_id") or [None, ""])[1]
+                props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property") if len(p) > 2}
+                ref = props.get("Reference", "")
+                if not lib_id or ref.startswith("#"):
+                    continue
+                mpn = _field(props, MPN_FIELDS)
+                keys = ({mpn_key(mpn)} if mpn else set()) | {"name:" + lib_id.split(":")[-1].upper()}
+                for k in keys - {""}:
+                    u = parts.setdefault(k, {"project": prj["name"], "path": prj["path"], "qty": 0, "designators": []})
+                    u["qty"] += 1
+                    if len(u["designators"]) < 40:
+                        u["designators"].append(ref)
+        for k, u in parts.items():
+            out.setdefault(k, []).append(u)
+    return out
 
 
 def _lifecycle(root):
@@ -1009,7 +1045,10 @@ def _build(ws, force):
     sc = Scan(ws, cfg["libraries"])
     sc.libraries_scan()
     sc.plans_scan()
-    sig = hashlib.sha256(json.dumps([sorted(sc.sigs), cfg, sorted(_READERS)], default=str).encode()).hexdigest()
+    wu, wu_warn = _where_used(cfg["projects"])    # cached on its own files; a changed schematic rebuilds the hub too
+    with _LOCK:
+        wu_sig = _WU.get("sig")
+    sig = hashlib.sha256(json.dumps([sorted(sc.sigs), cfg, sorted(_READERS), wu_sig], default=str).encode()).hexdigest()
     with _LOCK:
         last = _BUILT.get(str(root))
     if last and last[0] == sig and not force:
@@ -1018,7 +1057,8 @@ def _build(ws, force):
     budget = [300]
     for c in sc.copies:
         c["key"] = part_key(c["mpn"], c["name"])
-        files = [Path(f) for f in c.pop("files", None) or ([c["path"]] if c["path"] else [])]
+        files = [Path(f) for f in c.get("files") or ([c["path"]] if c["path"] else [])]
+        c["files"] = [str(f) for f in files]
         if c["updated"] is None:                  # newest file of the copy: its git commit when clean, else its date
             dated = []
             for f in files:
@@ -1032,12 +1072,11 @@ def _build(ws, force):
                 c["updated"], c["updated_by"], c["updated_how"] = max(dated, key=lambda x: x[0])
         if not c["updated_by"]:
             a = _attribute(c, actions)
-            if a:
+            if a and a.get("who"):
                 c["updated_by"], c["updated_how"] = a["who"], f"{c['updated_how'] or 'changed'}: {a['what']} in the web app"
     for c in sc.copies:
         c["src"] = sc.src.get(str(c["path"]), "workspace") if c["origin"] == "library" and c["plan"] is None else "workspace"
     _diff_state(root, sc.copies, sc._show, {"workspace", *[str(p) for p in sc.libraries]})
-    wu, wu_warn = _where_used(cfg["projects"])
     life = _lifecycle(root)
     rows = {}
     for c in sc.copies:
@@ -1059,18 +1098,31 @@ def _build(ws, force):
             flags.append("eol")
         if any(v["duplicate"] for v in cells.values()):
             flags.append("duplicate")
-        out.append({"key": k, "name": names[k], "mpn": next((c["mpn"] for c in cs if c["mpn"]), ""),
+        places = {}
+        for c in sorted(cs, key=lambda c: c["updated"] or "", reverse=True):
+            lib = sc._show(c["path"]) if c["path"] else (c["where"] or LABEL.get(c["tool"], c["tool"]))
+            places.setdefault(c["tool"], []).append({"library": lib, "origin": c["origin"], "symbol": c["symbol"],
+                                                     "footprint": c["footprint"], "updated": c["updated"],
+                                                     "updated_by": c["updated_by"]})
+        out.append({"key": k, "name": names[k], "places": places, "mpn": next((c["mpn"] for c in cs if c["mpn"]), ""),
                     "manufacturer": next((c["manufacturer"] for c in cs if c["manufacturer"]), ""),
                     "description": next((c["description"] for c in cs if c["description"]), ""),
                     "origin": "both" if len(origin) > 1 else origin.pop(), "status": plan_c["status"] if plan_c else None,
                     "cells": cells, "updated": latest["updated"], "updated_by": latest["updated_by"],
                     "updated_tool": latest["tool"], "lifecycle": lc, "used_in": len({u["path"] for u in uses}),
+                    "projects": sorted({u["path"] for u in uses}),
                     "flags": flags})
     out.sort(key=lambda r: (r["name"].upper(), r["key"]))
     tools = [{"tool": t, "label": lab, "reader": t in ("altium", "altium365", "kicad") or t in _READERS,
-              "parts": sum(t in r["cells"] for r in out),
+              "parts": sum(t in r["cells"] for r in out), "missing": sum(t not in r["cells"] for r in out),
+              **_tool_summary([p for r in out for p in r["places"].get(t, [])]),
               "different": sum(r["cells"].get(t, {}).get("state") == "different" for r in out),
               "behind": sum(r["cells"].get(t, {}).get("state") == "behind" for r in out)} for t, lab in TOOLS]
+    from .hub_copy import TARGETS, source_for
+    missing_in = {r["key"]: r["cells"] for r in out}
+    for tl in tools:                              # parts other tools have that the hub can convert into this one
+        tl["can_copy"] = sum(1 for k, cs in rows.items() if tl["tool"] in TARGETS and tl["tool"] not in missing_in[k]
+                             and source_for(cs, tl["tool"])) if tl["tool"] in TARGETS else 0
     summary = {"parts": len(out), "ecadlib": sum(r["origin"] in ("ecadlib", "both") for r in out),
                "library": sum(r["origin"] in ("library", "both") for r in out),
                "different": sum("different" in r["flags"] for r in out), "behind": sum("behind" in r["flags"] for r in out),
@@ -1079,10 +1131,41 @@ def _build(ws, force):
                "updated": max((r["updated"] for r in out if r["updated"]), default=None), "scanned": now()}
     res = {"rows": out, "tools": tools, "summary": summary, "errors": sc.errors[:50], "warnings": (sc.warnings + wu_warn)[:50],
            "libraries": [sc._show(p) for p in cfg["libraries"]], "projects": cfg["projects"], "stale_days": cfg["stale_days"],
+           "project_list": _project_list(cfg["projects"], out, rows),
            "_copies": sc.copies, "_show": sc._show}
     with _LOCK:
         _BUILT[str(root)] = (sig, res)
     return res
+
+
+def _project_list(dirs, rows, copies):
+    """The projects under [hub] projects: how many library parts each uses, how many of those its tool lacks, and how
+    many of those the hub can copy into it."""
+    from .hub_copy import projects as find, source_for
+    out = []
+    for p in find(dirs):
+        used = [r for r in rows if p["path"] in r["projects"]]
+        lack = [r for r in used if p["tool"] not in r["cells"]]
+        out.append({**p, "parts": len(used), "missing": len(lack),
+                    "can_copy": sum(1 for r in lack if source_for(copies.get(r["key"], []), p["tool"]))})
+    return sorted(out, key=lambda p: p["name"].upper())
+
+
+def _tool_summary(places):
+    """One tool's libraries (file or folder, part count, newest change and by whom) and its newest change overall."""
+    libs = {}
+    for p in places:
+        lib = libs.setdefault(p["library"], {"library": p["library"], "parts": 0, "updated": None, "updated_by": None,
+                                             "origin": p["origin"]})
+        lib["parts"] += 1
+        if p["origin"] != lib["origin"]:
+            lib["origin"] = "both"
+        if (p["updated"] or "") > (lib["updated"] or ""):
+            lib["updated"], lib["updated_by"] = p["updated"], p["updated_by"]
+    libs = sorted(libs.values(), key=lambda l: (-l["parts"], l["library"]))
+    newest = max(libs, key=lambda l: l["updated"] or "", default=None)
+    return {"libraries": libs, "updated": newest["updated"] if newest else None,
+            "updated_by": newest["updated_by"] if newest else None}
 
 
 def _matches(r, q, have, lack, states, origin, flags):
@@ -1099,13 +1182,19 @@ def _matches(r, q, have, lack, states, origin, flags):
     return not flags or any(f in r["flags"] for f in flags)
 
 
-def listing(ws, q="", have=(), lack=(), states=(), origin="", flags=(), sort="name", page=1, size=100, force=False):
+def listing(ws, q="", have=(), lack=(), states=(), origin="", flags=(), sort="name", page=1, size=100, force=False,
+            tool="", library="", project=""):
     """A page of hub rows, filtered: q (words in name / MPN / maker / description), have / lack (tools), states (cell
-    states), origin (ecadlib / library), flags (different, behind, held, awaiting_approval, eol, duplicate)."""
+    states), origin (ecadlib / library), flags (different, behind, held, awaiting_approval, eol, duplicate).
+    tool: one tool's library only (its copies, newest change in that tool first when sorted by update); library: one
+    file or folder of that tool."""
     res = build(ws, force)
-    rows = [r for r in res["rows"] if _matches(r, q, have, lack, states, origin, flags)]
+    have = (*have, tool) if tool else have
+    rows = [r for r in res["rows"] if _matches(r, q, have, lack, states, origin, flags)
+            and (not library or any(p["library"] == library for p in r["places"].get(tool, [])))
+            and (not project or project in r["projects"])]
     if sort == "updated":
-        rows.sort(key=lambda r: r["updated"] or "", reverse=True)
+        rows.sort(key=lambda r: (r["cells"][tool]["updated"] if tool else r["updated"]) or "", reverse=True)
     elif sort == "attention":
         rows.sort(key=lambda r: (-max([RANK[c["state"]] for c in r["cells"].values()] + [0]) - 2 * ("held" in r["flags"]), r["name"].upper()))
     size = max(1, min(int(size or 100), 500))
@@ -1248,9 +1337,63 @@ def fixes(row, copies):
         out.append({"action": "build", "tool": "", "label": "Build it with ecadlib",
                     "why": "ecadlib finds and checks its own copy from this MPN (it does not convert yours); the hub then "
                            "compares the two and can make the copies for the tools that lack it"})
+    from .hub_copy import TARGETS, source_for
+    offered = {f["tool"] for f in out}
+    for tool in TARGETS:
+        src = None if tool in row["cells"] or tool in offered else source_for(copies, tool)
+        if src:
+            out.append({"action": f"copy:{tool}", "tool": tool, "label": f"Copy to {LABEL[tool]}",
+                        "why": f"converts the {LABEL[src['tool']]} copy ({src['where']}) into the hub's {LABEL[tool]} "
+                               f"library; the original is left as it is"})
     if "duplicate" in row["flags"] and plan_c:
         out.append({"action": "dedupe", "tool": "", "label": "Find duplicates", "why": "the same part is in one tool more than once"})
     return out
+
+
+def copy_parts(ws, keys, tool, project="", who=None):
+    """Copy parts into the hub's library for tool (hub_copy), and, with a project from [hub] projects, import that
+    library into the project. -> {tool, copied: [{key, name, from, files, notes}], skipped: [{key, name, why}], project}"""
+    from . import hub_copy as HC
+    if tool not in HC.TARGETS:
+        raise ValueError(f"copying into {LABEL.get(tool, tool)} isn't supported yet: the hub copies between "
+                         f"{' and '.join(LABEL[t] for t in HC.TARGETS)}")
+    res = build(ws)
+    if project and project not in {p["path"] for p in res["project_list"]}:
+        raise ValueError(f"{project} is not one of the projects under [hub] projects")
+    if project and next(p for p in res["project_list"] if p["path"] == project)["tool"] != tool:
+        raise ValueError(f"{Path(project).name} is not a {LABEL[tool]} project")
+    rows = {r["key"]: r for r in res["rows"]}
+    copied, skipped, events = [], [], []
+    for key in dict.fromkeys(keys):
+        row = rows.get(key)
+        if row is None:
+            skipped.append({"key": key, "name": key, "why": "not in the library hub"})
+            continue
+        if tool in row["cells"]:
+            skipped.append({"key": key, "name": row["name"], "why": f"already in {LABEL[tool]}"})
+            continue
+        src = HC.source_for([c for c in res["_copies"] if c["key"] == key], tool)
+        if not src:
+            skipped.append({"key": key, "name": row["name"], "why": f"no copy ecadlib can convert to {LABEL[tool]}: "
+                                                                    f"it needs an Altium SchLib or a KiCad .kicad_sym"})
+            continue
+        try:
+            files, fp, notes = (HC.to_kicad if tool == "kicad" else HC.to_altium)(ws, src, row["name"])
+        except Exception as e:                    # noqa: BLE001 - one part's failure is reported, the rest go on
+            skipped.append({"key": key, "name": row["name"], "why": f"{type(e).__name__}: {e}"})
+            continue
+        copied.append({"key": key, "name": row["name"], "from": f"{LABEL[src['tool']]} ({src['where']})",
+                       "files": [Path(ws.root).resolve().joinpath(f).relative_to(Path(ws.root).resolve()).as_posix()
+                                 if Path(ws.root).resolve() in Path(f).resolve().parents else str(f) for f in files],
+                       "footprint": fp, "notes": notes[:10]})
+        events.append({"when": now(), "who": who, "what": f"copied to {LABEL[tool]} from {LABEL[src['tool']]}",
+                       "kind": "action", "key": key, "name": row["name"], "tool": tool})
+    imported = HC.import_into_project(ws, project, tool) if project and copied else None
+    if imported:
+        events.append({"when": now(), "who": who, "what": imported, "kind": "action", "tool": tool, "file": project})
+    record(ws.root, events)
+    return {"tool": tool, "copied": copied, "skipped": skipped, "project": imported,
+            "library": str(HC.library_dir(ws) / ("kicad" if tool == "kicad" else "altium"))}
 
 
 def one_line_bom(row, copies):
@@ -1294,6 +1437,10 @@ def main(argv=None):
     ap.add_argument("--have", default="", help="only parts in these tools (comma list: altium,altium365,kicad,fusion,easyeda)")
     ap.add_argument("--lack", default="", help="only parts missing from these tools")
     ap.add_argument("--state", default="", help="only parts with a cell in these states (different,behind,present,same)")
+    ap.add_argument("--tool", default="", help="one tool's library only (altium, altium365, kicad, fusion, easyeda)")
+    ap.add_argument("--project", default="", help="only parts this project uses (a .kicad_pro / .PrjPcb under [hub] projects)")
+    ap.add_argument("--copy-to", default="", choices=["", "altium", "kicad"],
+                    help="copy the listed parts that this tool lacks into the hub library (and into --project)")
     ap.add_argument("--part", default="", help="show one part (its key or name)")
     ap.add_argument("--json", action="store_true", help="print JSON")
     a = ap.parse_args(argv)
@@ -1317,7 +1464,19 @@ def main(argv=None):
             for e in p["history"][:15]:
                 print(f"  {e.get('when', '')[:19]}  {e.get('who') or '':<24} {e.get('what')} {e.get('tool_label') or ''} {e.get('detail') or ''}")
         return 0
-    res = listing(ws, a.search, split(a.have), split(a.lack), split(a.state), size=500)
+    res = listing(ws, a.search, split(a.have), split(a.lack), split(a.state), size=500, tool=a.tool,
+                  project=str(Path(a.project).resolve()) if a.project else "")
+    if a.copy_to:
+        out = copy_parts(ws, [r["key"] for r in res["rows"] if a.copy_to not in r["cells"]], a.copy_to,
+                         str(Path(a.project).resolve()) if a.project else "")
+        if a.json:
+            print(json.dumps(out, indent=1, default=str))
+        else:
+            print(f"copied {len(out['copied'])} part(s) to {LABEL[a.copy_to]} in {out['library']}" +
+                  (f"; {out['project']}" if out["project"] else ""))
+            for x in out["skipped"]:
+                print(f"  skipped {x['name']}: {x['why']}")
+        return 0
     if a.json:
         print(json.dumps(res, indent=1, default=str))
     else:

@@ -260,7 +260,18 @@ TOOLS = [
                                     "lack": {"type": "array", "items": {"type": "string"}, "description": "only parts missing from these tools"},
                                     "states": {"type": "array", "items": {"type": "string", "enum": ["missing", "same", "present", "different", "behind"]}},
                                     "flags": {"type": "array", "items": {"type": "string", "enum": ["different", "behind", "held", "awaiting_approval", "eol", "duplicate"]}},
+                                    "tool": {"type": "string", "description": "one tool's library only (its copies, which file each is in)"},
+                                    "project": {"type": "string", "description": "only parts a project uses (a path from project_list)"},
                                     "page": {"type": "integer"}, "size": {"type": "integer"}}}},
+    {"name": "library_hub_copy",
+     "description": "Copy parts to another tool through the library hub: Altium (SchLib/PcbLib) -> KiCad or KiCad "
+                    "(.kicad_sym/.kicad_mod) -> Altium, converted into <workspace>/hub/library. With a project from "
+                    "library_hub's project_list, the library is also imported there (KiCad lib tables or the .PrjPcb). "
+                    "The user's own library files are not edited. Writes files: ask the user first.",
+     "inputSchema": {"type": "object", "required": ["keys", "tool"],
+                     "properties": {"keys": {"type": "array", "items": {"type": "string"}, "description": "part keys from library_hub"},
+                                    "tool": {"type": "string", "enum": ["altium", "kicad"]},
+                                    "project": {"type": "string"}}}},
     {"name": "library_hub_part",
      "description": "One part of the library hub: every tool's copy (file, symbol, footprint, last changed, by whom, what "
                     "differs and from which copy), sources, release check, sign-offs, where-used, lifecycle, history and "
@@ -502,7 +513,10 @@ def call_tool(ws, name, args):
             return ws.project_bom(args["project"], args.get("variant") or None)
         if name == "library_hub":
             return ws.hub(args.get("q") or "", args.get("have") or (), args.get("lack") or (), args.get("states") or (), "",
-                          args.get("flags") or (), "name", args.get("page") or 1, args.get("size") or 100)
+                          args.get("flags") or (), "name", args.get("page") or 1, args.get("size") or 100, False,
+                          args.get("tool") or "", "", args.get("project") or "")
+        if name == "library_hub_copy":
+            return ws.hub_copy(args["keys"], args["tool"], args.get("project") or "")
         if name == "library_hub_part":
             p = ws.hub_part(args["key"])
             return {k: v for k, v in p.items() if k not in ("pictures", "symbol")} | {

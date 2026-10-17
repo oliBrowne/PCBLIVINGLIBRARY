@@ -837,14 +837,15 @@ class Workspace:
         return dict(PV.cards(plan_f.parent, items, pictures), bom=self._bom_label(bom_path), plan=self.rel(plan_f), reports=reports)
 
     # ------------------------------------------------------------------ library hub (ecadlib.hub)
-    def hub(self, q="", have=(), lack=(), states=(), origin="", flags=(), sort="name", page=1, size=100, force=False):
+    def hub(self, q="", have=(), lack=(), states=(), origin="", flags=(), sort="name", page=1, size=100, force=False,
+            tool="", library="", project=""):
         """Every part once across your libraries and ecadlib's own, with a cell per tool (missing / same / different /
         behind), last updated and by whom. Filters as in hub.listing. Reads only; notes go to <workspace>/hub/."""
         from . import hub as H
-        bad = [t for t in [*have, *lack] if t not in H.LABEL] + [s for s in states if s not in H.STATES]
+        bad = [t for t in [*have, *lack, *([tool] if tool else [])] if t not in H.LABEL] + [s for s in states if s not in H.STATES]
         if bad:
             raise ValueError(f"unknown tool or state {bad[0]!r}: tools are {', '.join(H.LABEL)}; states {', '.join(H.STATES)}")
-        return H.listing(self, q, have, lack, states, origin, flags, sort, page, size, force)
+        return H.listing(self, q, have, lack, states, origin, flags, sort, page, size, force, tool, library, project)
 
     def hub_part(self, key):
         """One hub part: each tool's copy (where, updated, by, what differs), footprint and symbol pictures, sources,
@@ -861,6 +862,8 @@ class Workspace:
         offered = {f["action"] for f in H.fixes(row, copies)}
         if action not in offered:
             raise ValueError(f"{action!r} is not on offer for {row['name']}: {', '.join(sorted(offered)) or 'nothing to fix'}")
+        if action.startswith("copy:"):
+            return {"action": action, "part": row["name"], "result": H.copy_parts(self, [key], action[5:], "", who)}
         pc = next(c for c in copies if c["plan"] and c["origin"] == "ecadlib" and c["bom"])
         if action == "kicad":
             out = self.kicad_dblib(pc["bom"])
@@ -882,6 +885,12 @@ class Workspace:
             H.record(self.root, [{"when": H.now(), "who": who, "what": what, "kind": "action", "key": key, "name": row["name"],
                                   "bom": pc["bom"], "tool": action[5:] if action.startswith("tool:") else action}])
         return {"action": action, "part": row["name"], "result": out}
+
+    def hub_copy(self, keys, tool, project="", who=None):
+        """Copy parts to another tool through the hub (Altium <-> KiCad), into <workspace>/hub/library; with a project
+        listed under [hub] projects, also import that library into the project. Your own library files are not edited."""
+        from . import hub as H
+        return H.copy_parts(self, keys, tool, project, who)
 
     def hub_build_bom(self, key):
         """A one-line BOM for a part that is only in your libraries (for "Build it with ecadlib") -> its workspace path."""

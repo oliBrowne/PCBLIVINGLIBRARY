@@ -109,7 +109,7 @@ Both servers use only the standard library on top of the package requirements. T
 * **Undo.** Approve and reject (in step 2 and in the review queue) show at once and are sent when the few-second Undo window closes; *Release anyway* is recorded at once and its Undo holds the part again.
 * **Keyboard.** `?` lists the shortcuts: `/` search, `j` / `k` next / previous part, `Enter` open, `Esc` close, `h` held only, `u` choose a file, `1` `2` `3` steps, `q` review queue, `s` status. Light and dark themes follow the system; `prefers-reduced-motion` turns animations off.
 * The same part cards are available as `Workspace.library_parts(bom)`, `GET /api/parts?bom=` and the MCP tool `library_parts` (`ecadlib/partview.py`).
-* **Your library** (`l`) shows your whole library across tools: every part once, with a column per tool (Altium, Altium 365, KiCad, Fusion, EasyEDA), last changed and by whom, and a part page with pictures, sources, release check, sign-off, where-used, lifecycle, history and fix buttons. See section 39.
+* **Your library** (`l`) shows your whole library across tools: a tile per tool (Altium, Altium 365, KiCad, Fusion, EasyEDA) that opens your library as it is in that tool, or every part once with a column per tool; last changed and by whom, copying parts between Altium and KiCad (into a project too), and a part page with pictures, sources, release check, sign-off, where-used, lifecycle, history and fix buttons. See section 39.
 
 ### Team server (`ecadlib ui --team`)
 
@@ -1901,10 +1901,14 @@ names or server paths.
 
 ## 39. `hub.py`: your library across tools, in one place
 
-The **Your library** page of the web UI (also `ecadlib hub`, Workspace `hub` / `hub_part` / `hub_fix`, MCP
-`library_hub` / `library_hub_part`) lists every part once, whichever tool it is in, with one column per tool:
-Altium, Altium 365, KiCad, Fusion and EasyEDA. It reads your existing libraries as well as the parts ecadlib built, and
-it never writes to your library files (its own notes live in `<workspace>/hub/`).
+The **Your library** page of the web UI (also `ecadlib hub`, Workspace `hub` / `hub_part` / `hub_fix` / `hub_copy`,
+MCP `library_hub` / `library_hub_part` / `library_hub_copy`) opens on a tile per tool: Altium, Altium 365, KiCad,
+Fusion and EasyEDA, each with its part count, how many libraries hold them, when the tool's library last changed and
+by whom, and how many parts it lacks. Click a tile to see your library as it is in that tool (which library file each
+part is in, its symbol and footprint, last changed, whether it matches the other tools, where else it is), narrowed to
+one library file if you like; **Compare all** shows every part once with a column per tool. It reads your existing
+libraries as well as the parts ecadlib built, and it never writes to your library files (its own notes and the parts
+it copies live in `<workspace>/hub/`).
 
 * **What it reads.** ecadlib's own parts from every librarian plan (the .SchLib / .PcbLib each part was built into, the
   KiCad library `kicad-dblib` wrote for that BOM, the Altium 365 component it was pushed to or pulled from), and your
@@ -1934,6 +1938,18 @@ it never writes to your library files (its own notes live in `<workspace>/hub/`)
   the part's BOM), *Send to Altium 365* (a dry run first), *See why it is held* / *Sign it off*, *Find duplicates*, and
   for a part only in your libraries *Build it with ecadlib* (a one-line BOM through the librarian, so ecadlib has its
   own checked copy to compare with yours). A copy in your own library that differs is reported, never overwritten.
+* **Copy between tools.** *Copy to KiCad* / *Copy to Altium* on a part page, or *Copy them to KiCad* on a tool's
+  page for every part the other tools have and it lacks, converts the copy (Altium .SchLib / .PcbLib -> KiCad, KiCad
+  .kicad_sym / .kicad_mod -> Altium, with the same converters as kicad-export and the librarian) into the hub library,
+  `<workspace>/hub/library/` (`kicad/ecadlib_hub.kicad_sym`, `kicad/ecadlib_hub.pretty`, its lib-table rows, and
+  `altium/<part>.SchLib`, `<footprint>.PcbLib`). The hub reads that folder back, so the part shows in the tool's column
+  straight away and its geometry is compared with the original.
+* **Projects.** Every KiCad (.kicad_pro) and Altium (.PrjPcb) project under `[hub] projects` is in the Project picker,
+  with the library parts its schematics use (KiCad `lib_id` / MPN fields, Altium where-used) and how many of them its
+  tool lacks. *Copy them into &lt;project&gt;* copies those parts and imports the hub library into the project: a KiCad
+  project gets `ecadlib_hub` rows in its own sym-lib-table / fp-lib-table (other rows are kept); an Altium project gets
+  the SchLib / PcbLib files as project libraries (`[DocumentN]` entries; the old file is kept as `.PrjPcb.ecadlib-bak`
+  the first time). ecadlib keeps one shared library rather than a library per project, so a fix reaches every board.
 * **Filters**: search, needs a look (different or behind), held, end of life, duplicates, built by ecadlib, your
   libraries, "in Altium but not in KiCad", sorted by name, last changed or what needs a look.
 * **Other tools.** `hub.register_tool(tool, label, exts, read, workspace_dirs=(), fix=None)` adds a reader (and
@@ -1946,7 +1962,7 @@ it never writes to your library files (its own notes live in `<workspace>/hub/`)
   ```toml
   [hub]
   libraries = ["D:/Altium/Libraries", "~/kicad/my_libs"]   # read on top of --lib
-  projects = ["D:/Projects"]                                # Altium projects, for where-used
+  projects = ["D:/Projects"]                                # Altium and KiCad projects: where-used, copy into
   stale_days = 14
   ```
 * Works the same in local and team mode: viewers can see everything, a librarian runs the fixes, and in team mode the

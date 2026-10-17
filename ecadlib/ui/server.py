@@ -57,7 +57,7 @@ ROUTES = {
     ("POST", "/api/rules/propose"): "admin",               # reads any folder on the server
     ("POST", "/api/rules/save"): "admin",
     ("GET", "/api/hub"): "viewer", ("GET", "/api/hub/part"): "viewer",   # library hub: every part across tools
-    ("POST", "/api/hub/fix"): "librarian",
+    ("POST", "/api/hub/fix"): "librarian", ("POST", "/api/hub/copy"): "librarian",
     ("GET", "/api/team/users"): "admin", ("POST", "/api/team/users"): "admin", ("GET", "/api/team/audit"): "admin",
 }
 LIVE_PUSH = "approver"
@@ -545,7 +545,8 @@ def make_handler(ws: Workspace, team=None):
                     lst = lambda k: [x for x in (q.get(k) or "").split(",") if x]
                     return self._send(200, ws.hub(q.get("q", ""), lst("have"), lst("lack"), lst("state"), q.get("origin", ""),
                                                   lst("flags"), q.get("sort", "name"), _int(q.get("page"), 1),
-                                                  _int(q.get("size"), 100), q.get("rescan") == "1"))
+                                                  _int(q.get("size"), 100), q.get("rescan") == "1",
+                                                  q.get("tool", ""), q.get("library", ""), q.get("project", "")))
                 if u.path == "/api/hub/part":
                     try:
                         return self._send(200, ws.hub_part(q.get("key", "")))
@@ -652,6 +653,14 @@ def make_handler(ws: Workspace, team=None):
                                                            key="librarian:" + bom), bom=bom))
                 with write_lock:
                     return self._send(200, ws.hub_fix(key, action, self._who(b)))
+            if u.path == "/api/hub/copy":                         # copy parts to another tool (and into a project)
+                b = self._json()
+                keys = b.get("keys")
+                if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys) or len(keys) > 2000:
+                    raise ValueError("keys must be a list of part keys from /api/hub")
+                with write_lock:
+                    return self._send(200, ws.hub_copy(keys, _str(b.get("tool"), "tool"), _str(b.get("project"), "project", True) or "",
+                                                       self._who(b)))
             if u.path == "/api/altium365/workspaces":             # read-only network call, no lock
                 self._json()
                 return self._send(200, ws.altium365_workspaces())

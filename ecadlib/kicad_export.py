@@ -223,12 +223,12 @@ def _kicad_pin_name(s):
     return out
 
 
-def symbol_from_schlib(path, name, notes):
-    """First symbol of a .SchLib -> KiCad symbol tree (KiCad 8 syntax), via altium_lib.read_schlib."""
+def symbol_from_schlib(path, name, notes, pick=None):
+    """First symbol of a .SchLib (or the one named pick) -> KiCad symbol tree (KiCad 8 syntax), via altium_lib.read_schlib."""
     _, syms = AL.read_schlib(path)
     if not syms:
         raise ValueError(f"{path}: no symbol")
-    recs = syms[0]["records"]
+    recs = next((s for s in syms if pick and s["name"].upper() == pick.upper()), syms[0])["records"]
     comp = recs[0]
     v = lambda r, k: (int(r.get(k.upper(), 0) or 0) + int(r.get(k.upper() + "_FRAC", 0) or 0) / 100000) * 0.254
     xy = lambda r, a, b: (_num(v(r, a)), _num(v(r, b)))
@@ -455,9 +455,10 @@ def _custom_pads(recs):
     return custom, used
 
 
-def footprint_from_pcblib(path, name, notes):
-    """First footprint of a .PcbLib -> .kicad_mod text (KiCad 8), via altium_lib.read_pcblib."""
-    fp = AL.read_pcblib(path)[0]
+def footprint_from_pcblib(path, name, notes, pick=None):
+    """First footprint of a .PcbLib (or the one named pick) -> .kicad_mod text (KiCad 8), via altium_lib.read_pcblib."""
+    fps = AL.read_pcblib(path)
+    fp = next((f for f in fps if pick and f["name"].upper() == pick.upper()), fps[0])
     m = lambda u: _num(AL.to_mm(u))
     pt = lambda x, y: f"{m(x)} {m(-y)}"
     stroke = lambda w: f'(stroke (width {m(w) if w else "0.1"}) (type solid))'
