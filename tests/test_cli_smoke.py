@@ -81,6 +81,7 @@ CASES = [
     (["completion", "bash"], (0,)),
     (["ai", "show"], (0,)),
     (["ai", "rails"], (0,)),
+    (["costs", "--all"], (0,)),
     (["plugins", "list"], (0,)),
     (["plugins", "export", "nosuch", "{out}/lib/plan.json", "-o", "{out}/px"], (2,)),
     (["notify", "show", "--rules", "{in}/ecadlib.toml"], (0,)),
