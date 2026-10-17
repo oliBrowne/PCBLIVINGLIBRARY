@@ -11,7 +11,7 @@ license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "oliver browne" }]
 requires-python = ">=3.10"
-dependencies = ["requests", "pandas", "openpyxl", "jsonschema", "olefile"]   # olefile: the release check,
+dependencies = ["requests", "pandas", "openpyxl", "jsonschema", "olefile", "tomli>=1.1; python_version < '3.11'"]   # olefile: the release check,
                                        # kicad-export, dedupe and project BOMs read .SchLib/.PcbLib/.SchDoc back
 keywords = [
     "ecad", "pcb", "eda", "footprint", "ipc-7351", "kicad", "altium", "altium-365",
@@ -44,7 +44,7 @@ altium = ["olefile"]                   # kept for old install commands; olefile 
 pdf = ["pypdf"]                        # datasheet reader: trim a PDF to --pages before sending it
 vision = ["pillow", "pypdf"]           # visual-check: draw footprints / symbols (pdftoppm renders datasheet pages)
 all = ["olefile", "pypdf", "pillow"]
-dev = ["olefile", "graphql-core", "pyaltiumlib", "pypdf", "pillow"]
+dev = ["olefile", "graphql-core", "pyaltiumlib", "pypdf", "pillow", "tomli"]   # tomli: the Python 3.10 path is tested
 
 [project.scripts]
 ecadlib = "ecadlib.cli:main"
