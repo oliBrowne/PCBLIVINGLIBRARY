@@ -61,6 +61,7 @@ CASES = [
     (["review", "--workspace", "{out}/ws", "--yes", "--offline"], (0, 2)),
     (["approve", "{out}/lib/plan.json", "status"], (0,)),
     (["dedupe", "{out}/lib/plan.json", "-o", "{out}/dedupe"], (0,)),
+    (["hub", "--workspace", "{out}/ws", "--lib", "{in}/lib", "--json"], (0,)),
     (["datasheet", "estimate", "{out}/lib/plan.json"], (0, 1, 2)),
     (["sourcing", "{in}/bom.csv", "--offline", "--cache", "{out}/cache", "-o", "{out}/src"], (0, 1, 3)),
     (["step-gen", "{pkg}/package_specs/SOIC-8_3.9x4.9mm_P1.27mm.json", "-o", "{out}/soic.step"], (0,)),
