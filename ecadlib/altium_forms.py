@@ -59,6 +59,7 @@ def _dlg_pas():
   One dark dialog for every menu entry, shown with OpenDialog(Mode, Project, MPN):
     Mode 'add'   ask for an MPN (unless one is given), build it, show where it came from, reinstall the library
     Mode 'bom'   check the project's BOM, show the counts, offer to fill the library, fill it
+    Mode 'fill'  fill the library from the project's BOM straight away
   A timer polls the job folder (progress.ini while ecadlib runs, result.ini at the end), so Altium never freezes. }
 
 Var
@@ -443,6 +444,8 @@ Begin
             Layout;
         End;
     End
+    Else If AMode = 'fill' Then
+        StartFill
     Else
         StartBom;
     EcadlibDialog.ShowModal;
