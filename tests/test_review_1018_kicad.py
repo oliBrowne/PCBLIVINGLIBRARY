@@ -90,6 +90,23 @@ def test_altium_keepouts_on_copper_are_not_copper():
     assert any("keep-out" in n for n in notes), notes
 
 
+def test_altium_rotated_fill_keeps_its_rotation():
+    d = _tmp()
+    f = _pcblib(d, _fp(fills=[(-2, -0.5, 2, 0.5, AL.TOP_OVERLAY), (3, -0.5, 5, 0.5, AL.TOP_PASTE)]), fill_rot=90.0)
+    t = sexpr.parse(X.footprint_from_pcblib(f, "PROBE", []))
+    silk = next(g for g in sexpr.find(t, "fp_poly") if sexpr.first(g, "layer")[1] == "F.SilkS")
+    pts = [(float(p[1]), float(p[2])) for p in sexpr.find(sexpr.first(silk, "pts"), "xy")]
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    assert math.isclose(max(xs) - min(xs), 1, abs_tol=1e-3) and math.isclose(max(ys) - min(ys), 4, abs_tol=1e-3), pts
+    paste = next(p for p in sexpr.find(t, "pad") if p[1] == "")
+    at, size = sexpr.first(paste, "at"), sexpr.first(paste, "size")
+    w, h = float(size[1]), float(size[2])
+    rot = float(at[3]) if len(at) > 3 else 0
+    if round(rot) % 180 == 90:
+        w, h = h, w
+    assert (round(float(at[1]), 3), round(float(at[2]), 3), round(w, 3), round(h, 3)) == (4, 0, 1, 2), paste
+
+
 # ---------------------------------------------------------------- duplicate names
 def _dup_plan(change):
     plan, http = _plan()

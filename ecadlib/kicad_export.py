@@ -545,7 +545,16 @@ def footprint_from_pcblib(path, name, notes, pick=None):
                 out.append(f'\t(fp_arc (start {p(r["a0"])}) (mid {p(r["a0"] + span / 2)}) (end {p(r["a0"] + span)}) {stroke(r["w"])} (layer "{layer}"))')
         elif t in ("fill", "region") and layer:
             pts = [(r["x1"], r["y1"]), (r["x2"], r["y1"]), (r["x2"], r["y2"]), (r["x1"], r["y2"])] if t == "fill" else r["pts"]
-            if layer == "F.Paste":            # paste window without copper: a paste-only pad, as KiCad draws them
+            frot = (struct.unpack_from("<d", r["raw"][0], 29)[0] % 360 if t == "fill" and r.get("raw") and len(r["raw"][0]) >= 37
+                    else 0.0)                 # an Altium fill turns about its centre
+            if frot:
+                cx, cy, a = (r["x1"] + r["x2"]) / 2, (r["y1"] + r["y2"]) / 2, math.radians(frot)
+                pts = [(cx + (x - cx) * math.cos(a) - (y - cy) * math.sin(a), cy + (x - cx) * math.sin(a) + (y - cy) * math.cos(a))
+                       for x, y in pts]
+            if layer == "F.Paste" and frot:
+                pads.append(f'\t(pad "" smd rect (at {pt(cx, cy)} {_num(frot)}) '
+                            f'(size {m(abs(r["x2"] - r["x1"]))} {m(abs(r["y2"] - r["y1"]))}) (layers "F.Paste"))')
+            elif layer == "F.Paste":          # paste window without copper: a paste-only pad, as KiCad draws them
                 xs, ys = [p[0] for p in pts], [p[1] for p in pts]
                 pads.append(f'\t(pad "" smd rect (at {pt((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)}) '
                             f'(size {m(max(xs) - min(xs))} {m(max(ys) - min(ys))}) (layers "F.Paste"))')
