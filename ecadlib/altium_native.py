@@ -450,6 +450,8 @@ ALTIUM_API = {
     "Point": "SCH API: Point(X, Y) : TLocation", "MilsToCoord": "TR0135 / SCH API: MilsToCoord",
     "GetRunningScriptProjectName": "used in Altium-Designer-addons scripts; ecadlib altium-pkg's install script",
     "ExtractFilePath": "TR0136 p29", "FileExists": "TR0135 p143", "DeleteFile": "TR0120 File IO Routines",
+    "RenameFile": "TR0120 File IO Routines", "FileOpen": "TR0120 File IO Routines", "FileSeek": "TR0120 File IO Routines",
+    "FileClose": "TR0120 File IO Routines",
     "TStringList": "TR0135 Helper classes; TR0120 p10", "LoadFromFile": "TStringList.LoadFromFile",
     "SaveToFile": "TR0135 p196 (TStringList)", "Add": "TStringList.Add", "Clear": "TStringList.Clear",
     "Count": "TStringList.Count", "Strings": "TStringList.Strings", "Create": "constructors", "Free": "destructor, TR0120 p10",
@@ -494,7 +496,8 @@ PAS = r"""{ ecadlib: build libraries inside Altium Designer (written by `ecadlib
 
   BuildLibrariesInAltium   reads ecadlib_build.txt next to this script project and, for every library listed in it,
                            makes a new PcbLib / SchLib document, creates each footprint / symbol with Altium's own
-                           object factories, and saves it over the file named there. Libraries that are open are
+                           object factories, and saves it over the file named there (the old file is kept as
+                           NAME.ecadlib_old until the new one is saved, and put back when the build fails). Libraries that are open are
                            closed first (unsaved changes in them are lost: they would be overwritten anyway).
                            Writes ecadlib_build_report.txt: one line per library, OK or FAILED.
   BuildLibraries(Folder)   the same for the ecadlib_build.txt in Folder (other scripts call this).
@@ -592,7 +595,7 @@ End;
 
 Function MissingStep(Folder : String) : String;
 { The first STEP file a BODY line of the current block names that is not there ('' when all are). Checked before the
-  old library is deleted, so a library Altium cannot build is left on disk as it was. }
+  old library is moved aside, so a library Altium cannot build is left on disk as it was. }
 Var
     k : Integer;
 Begin
@@ -619,6 +622,71 @@ Begin
     Doc := Client.GetDocumentByPath(Path);
     If Doc <> Nil Then
         Client.CloseDocument(Doc);
+End;
+
+{ The old library file is moved aside (Path + '.ecadlib_old') before Altium writes the new one, and removed only once
+  the new one is on disk and not empty: a build that fails puts the old file back, so it never leaves the library
+  missing. }
+Function EbSize(Path : String) : Integer;
+Var
+    H : Integer;
+Begin
+    Result := 0;
+    If Not FileExists(Path) Then Exit;
+    H := FileOpen(Path, 64);                   { fmOpenRead or fmShareDenyNone }
+    If H < 0 Then
+    Begin
+        Result := 1;                           { there, but it cannot be read now: not counted as missing }
+        Exit;
+    End;
+    Result := FileSeek(H, 0, 2);
+    FileClose(H);
+End;
+
+Function EbSetAside(Path : String) : String;
+{ '' when Path can be written: the old file, if any, is now Path + '.ecadlib_old'. Else why not (Path is untouched). }
+Var
+    Bak : String;
+Begin
+    Result := '';
+    Bak := Path + '.ecadlib_old';
+    If FileExists(Bak) And Not FileExists(Path) Then
+        RenameFile(Bak, Path);                 { left by a build that was cut short }
+    If Not FileExists(Path) Then Exit;
+    If FileExists(Bak) Then
+        DeleteFile(Bak);
+    If Not RenameFile(Path, Bak) Then
+        Result := 'could not move the old file aside to ' + Bak + ' (is it open in another program?); the library file was left as it was';
+End;
+
+Function EbPutBack(Path : String) : String;
+{ After a failed build: the old file back at Path. Says what happened ('' when there was no old file). }
+Var
+    Bak : String;
+Begin
+    Result := '';
+    Bak := Path + '.ecadlib_old';
+    CloseIfOpen(Path);
+    If Not FileExists(Bak) Then Exit;
+    If FileExists(Path) Then
+        DeleteFile(Path);
+    If RenameFile(Bak, Path) Then
+        Result := ' (the previous library file was kept)'
+    Else
+        Result := ' (the previous library file is at ' + Bak + ')';
+End;
+
+Function EbFinish(Path : String; Kind : String; Done : String) : String;
+{ The report line once Altium has saved Path: OK only when the file is there and not empty. }
+Begin
+    If EbSize(Path) > 0 Then
+    Begin
+        If FileExists(Path + '.ecadlib_old') Then
+            DeleteFile(Path + '.ecadlib_old');
+        Result := 'OK' + #9 + Kind + #9 + Path + #9 + Done;
+    End
+    Else
+        Result := 'FAILED' + #9 + Kind + #9 + Path + #9 + 'Altium did not save the file' + EbPutBack(Path);
 End;
 
 { ------------------------------------------------------------------ footprints }
@@ -810,8 +878,13 @@ Begin
         Exit;
     End;
     CloseIfOpen(Path);
-    If FileExists(Path) Then
-        DeleteFile(Path);
+    EbErr := EbSetAside(Path);
+    If EbErr <> '' Then
+    Begin
+        SkipBlock;
+        Result := 'FAILED' + #9 + 'PCBLIB' + #9 + Path + #9 + EbErr;
+        Exit;
+    End;
     Doc := Client.OpenNewDocument('PCBLIB', Path, '', False);
     Client.ShowDocument(Doc);
     Lib := PCBServer.GetCurrentPCBLibrary;
@@ -849,7 +922,7 @@ Begin
     Begin
         SkipBlock;
         Client.CloseDocument(Doc);
-        Result := 'FAILED' + #9 + 'PCBLIB' + #9 + Path + #9 + EbErr;
+        Result := 'FAILED' + #9 + 'PCBLIB' + #9 + Path + #9 + EbErr + EbPutBack(Path);
         Exit;
     End;
     If (Blank <> Nil) And (Count > 0) Then
@@ -859,7 +932,7 @@ Begin
     Doc.SetModified(True);
     Doc.DoFileSave('PCBLIB');
     Client.CloseDocument(Doc);
-    Result := 'OK' + #9 + 'PCBLIB' + #9 + Path + #9 + IntToStr(Count) + ' footprint(s)';
+    Result := EbFinish(Path, 'PCBLIB', IntToStr(Count) + ' footprint(s)');
 End;
 
 { ------------------------------------------------------------------ symbols }
@@ -1040,8 +1113,13 @@ Var
 Begin
     Path := Folder + EbF[1];
     CloseIfOpen(Path);
-    If FileExists(Path) Then
-        DeleteFile(Path);
+    EbErr := EbSetAside(Path);
+    If EbErr <> '' Then
+    Begin
+        SkipBlock;
+        Result := 'FAILED' + #9 + 'SCHLIB' + #9 + Path + #9 + EbErr;
+        Exit;
+    End;
     Doc := Client.OpenNewDocument('SCHLIB', Path, '', False);
     Client.ShowDocument(Doc);
     Lib := SchServer.GetCurrentSchDocument;
@@ -1096,7 +1174,7 @@ Begin
     Doc.SetModified(True);
     Doc.DoFileSave('SCHLIB');
     Client.CloseDocument(Doc);
-    Result := 'OK' + #9 + 'SCHLIB' + #9 + Path + #9 + IntToStr(Count) + ' symbol(s)';
+    Result := EbFinish(Path, 'SCHLIB', IntToStr(Count) + ' symbol(s)');
 End;
 
 { ------------------------------------------------------------------ entry points }
@@ -1130,7 +1208,7 @@ Begin
                         Line := BuildSchLib(Folder);
                     EbReport.Add(Line);
                 Except
-                    EbReport.Add('FAILED' + #9 + Kind + #9 + Folder + Name + #9 + 'Altium raised an error while building it');
+                    EbReport.Add('FAILED' + #9 + Kind + #9 + Folder + Name + #9 + 'Altium raised an error while building it' + EbPutBack(Folder + Name));
                     SkipBlock;
                 End;
             End;

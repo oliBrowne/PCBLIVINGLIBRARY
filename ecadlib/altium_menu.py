@@ -316,8 +316,36 @@ Begin
         If Copy(R.Strings[i], 1, 6) = 'FAILED' Then
             Bad := Bad + 1;
     If Bad > 0 Then
-        Result := #13#10 + 'Altium build: ' + IntToStr(Bad) + ' of ' + IntToStr(R.Count) + ' libraries FAILED. Next: read ' + Folder + 'ecadlib_build_report.txt';
+        Result := #13#10 + 'Altium build: FAILED for ' + IntToStr(Bad) + ' of ' + IntToStr(R.Count) + ' libraries. Next: read ' + Folder + 'ecadlib_build_report.txt';
     R.Free;
+End;
+
+Function MissingLibraries(Folder : String) : String;
+{ The libraries ecadlib_build.txt lists that are not on disk after the build ('' when all are), '; ' between. }
+Var
+    R : TStringList;
+    i : Integer;
+    P : String;
+Begin
+    Result := '';
+    R := TStringList.Create;
+    R.LoadFromFile(Folder + 'ecadlib_build.txt');
+    For i := 0 To R.Count - 1 Do
+        If (Copy(R.Strings[i], 1, 7) = 'PCBLIB' + #9) Or (Copy(R.Strings[i], 1, 7) = 'SCHLIB' + #9) Then
+        Begin
+            P := Copy(R.Strings[i], 8, Length(R.Strings[i]));
+            If Pos(#9, P) > 0 Then
+                P := Copy(P, 1, Pos(#9, P) - 1);
+            If Not FileExists(Folder + P) Then
+                Result := Result + Folder + P + '; ';
+        End;
+    R.Free;
+End;
+
+Function BuildFailed(Extra : String) : Boolean;
+{ What BuildInAltium returned says a library was not built: nothing is installed then, and nothing says ready. }
+Begin
+    Result := Pos('Altium build: FAILED', Extra) > 0;
 End;
 
 Function BuildInAltium(Job : String) : String;
@@ -329,6 +357,7 @@ Var
     Folder : String;
     List : String;
     P : String;
+    Missing : String;
 Begin
     Result := '';
     Folder := Answer(Job, 'build');
@@ -349,7 +378,13 @@ Begin
     If FileExists(Folder + 'ecadlib_build_report.txt') Then
         DeleteFile(Folder + 'ecadlib_build_report.txt');
     BuildLibraries(Folder);
-    Result := BuildReport(Folder);
+    If FileExists(Folder + 'ecadlib_build_report.txt') Then
+        Result := BuildReport(Folder)
+    Else
+        Result := #13#10 + 'Altium build: FAILED, it wrote no ecadlib_build_report.txt in ' + Folder;
+    Missing := MissingLibraries(Folder);
+    If Missing <> '' Then
+        Result := Result + #13#10 + 'Altium build: FAILED, these library files are not there: ' + Missing;
 End;
 
 Function Reinstall(Job : String) : String;
@@ -360,6 +395,11 @@ Var
     P : String;
 Begin
     Result := BuildInAltium(Job);
+    If BuildFailed(Result) Then
+    Begin
+        Result := Result + #13#10 + 'Nothing was installed: the library is not ready. Next: read the report, fix it, run this again.';
+        Exit;
+    End;
     List := Answer(Job, 'install');
     While List <> '' Do
     Begin
@@ -394,7 +434,9 @@ End;
 
 Procedure ShowResult(Title : String; Job : String; Extra : String);
 Begin
-    If Answer(Job, 'status') = 'error' Then
+    If BuildFailed(Extra) Then
+        ShowError(Title + #13#10 + #13#10 + 'Altium could not build the library files.' + Extra)
+    Else If Answer(Job, 'status') = 'error' Then
         ShowError(Title + #13#10 + #13#10 + MessageText(Job, Extra))
     Else
         ShowMessage(Title + #13#10 + #13#10 + MessageText(Job, Extra));
