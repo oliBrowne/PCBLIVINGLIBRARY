@@ -138,7 +138,7 @@ class OpenAICompatClient:
         return s(chat)
 
     def chat(self, chat):
-        from ..datasheet import APIError
+        from ..datasheet import APIError, redact
         url = self.base + "/chat/completions"
         h = {"content-type": "application/json"}
         if self.key and self.key != "no-key-needed":
@@ -154,7 +154,7 @@ class OpenAICompatClient:
                 with waiting(f"the model at {self.base} (model call)"):
                     r = post(url, headers=h, json=chat, timeout=self.timeout)
             except requests.RequestException as e:
-                err = APIError(f"{self.base}: request failed: {type(e).__name__}: {str(e)[:200]}", retryable=True)
+                err = APIError(f"{self.base}: request failed: {type(e).__name__}: {redact(e, self.key)[:200]}", retryable=True)
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))
             else:
                 try:
@@ -167,7 +167,7 @@ class OpenAICompatClient:
                     self._log(rec)
                     return payload
                 e = (payload or {}).get("error") if isinstance(payload, dict) else None
-                emsg = (e.get("message") if isinstance(e, dict) else e) or (getattr(r, "text", "") or "")[:200]
+                emsg = redact((e.get("message") if isinstance(e, dict) else e) or (getattr(r, "text", "") or "")[:200], self.key)
                 hint = {401: " (the key was rejected: check it and the variable it is read from)",
                         404: " (unknown model or endpoint: check [ai] model and base_url)",
                         429: " (rate limited)"}.get(r.status_code, "")

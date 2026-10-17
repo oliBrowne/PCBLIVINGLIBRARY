@@ -224,6 +224,16 @@ def _err_of(payload):
     return e.get("type", "?"), e.get("message", "")
 
 
+def redact(text, key):
+    """text with the API key (as given, and without surrounding whitespace) replaced: requests puts a header value it
+    rejects (a key with a stray space or newline from the environment) into its error message."""
+    text = str(text)
+    for k in sorted({str(key or ""), str(key or "").strip()}, key=len, reverse=True):
+        if len(k) >= 8:
+            text = text.replace(k, "<api key>")
+    return text
+
+
 class Client:
     """The Claude API over requests: retries 408/409/429/5xx/529 and network errors with exponential backoff
     (honouring retry-after), logs every request as one JSON line without the key or the PDF bytes."""
@@ -264,7 +274,7 @@ class Client:
                     r = (requests.post(url, headers=h, json=body, timeout=self.timeout) if method == "POST"
                          else requests.get(url, headers=h, timeout=self.timeout))
             except requests.RequestException as e:
-                err = APIError(f"API request failed: {type(e).__name__}: {str(e)[:200]}", retryable=retry_on is None)
+                err = APIError(f"API request failed: {type(e).__name__}: {redact(e, self.key)[:200]}", retryable=retry_on is None)
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))
                 retry_after = None
             else:
@@ -287,6 +297,7 @@ class Client:
                     self._log(rec)
                     return payload
                 etype, emsg = _err_of(payload) if payload is not None else ("?", "non-JSON response")
+                emsg = redact(emsg, self.key)         # a gateway (ANTHROPIC_BASE_URL) may echo the key it refused
                 st = r.status_code
                 if st == 529 or etype == "overloaded_error":
                     st = 529
@@ -1590,8 +1601,9 @@ class Reader:
         # pages come first), and only within [datasheet] max_attempts answers per part
         allow = "rung" in job and n_att + 1 <= self.router.max_attempts and \
             self.router.next_step(job["rung"], job["level"], len(job["levels"]), "failed", n_att) is None
+        guard = lambda b: self._guard_cost([dict(job, body=b)])   # the feedback turn is held to max_cost_usd too
         try:
-            return LR.ask(job, inf, send, judge, cl, allow_feedback=allow)
+            return LR.ask(job, inf, send, judge, cl, allow_feedback=allow, guard=guard)
         except APIError:
             raise                                     # no answer came back: nothing to record
         except DatasheetError as e:                   # the rails gave up (steps off-format, family too hard, no text):
@@ -2040,7 +2052,7 @@ def batch_main(argv, estimate=False):
     return 2 if held else 0
 
 
-def ask_once(inf, headers, body, key, part, package, datasheet, offset):
+def ask_once(inf, headers, body, key, part, package, datasheet, offset, guard=None):
     """One read outside a Reader (`ecadlib datasheet PDF --part ...`): the same rails as the Reader, the support
     feedback turn included (here there is no route to escalate along, so a failing answer gets it at once)."""
     from . import ds_route as DR
@@ -2069,7 +2081,7 @@ def ask_once(inf, headers, body, key, part, package, datasheet, offset):
             return DR.assess(process(parse_message(m), part, datasheet, body["model"], offset, m))
         except DatasheetError as e:
             return "failed", [str(e)]
-    return LR.ask({"body": body, "part": part, "package": package}, inf, send, judge, cl)
+    return LR.ask({"body": body, "part": part, "package": package}, inf, send, judge, cl, guard=guard)
 
 
 def main(argv=None):
@@ -2144,10 +2156,12 @@ def main(argv=None):
                 print(f"cached   {cache.dir / (ck + '.json')} (no API call; --no-cache to ask again)")
             else:
                 prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None}
-                Reader(a.out, Path(a.out) / "cache", key=key, rules=rules, model=a.model, effort=a.effort, log=None,
-                       yes=a.yes)._guard_cost([{"name": a.part, "url": a.pdf, "body": body, "prov": prov}])
+                grd = Reader(a.out, Path(a.out) / "cache", key=key, rules=rules, model=a.model, effort=a.effort, log=None,
+                             yes=a.yes)
+                guard = lambda b: grd._guard_cost([{"name": a.part, "url": a.pdf, "body": b, "prov": prov}])
+                guard(body)                           # the feedback turn, if any, is held to the same cap
                 with logging_to(Path(a.out) / "api_log.jsonl", print):
-                    msg = ask_once(inf, headers, body, key, a.part, a.package, a.pdf, offset)
+                    msg = ask_once(inf, headers, body, key, a.part, a.package, a.pdf, offset, guard=guard)
             ext = parse_message(msg)
             if not rec:
                 cache.put(ck, {"key": ck, "part": a.part, "url": a.pdf, "model": a.model, "page_offset": offset, "via": "sync",
