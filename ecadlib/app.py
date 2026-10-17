@@ -836,6 +836,71 @@ class Workspace:
         reports = [self.rel(f) for f in (plan_f.parent / n for n in ("review.md", "release_check.md", "plan.json")) if f.exists()]
         return dict(PV.cards(plan_f.parent, items, pictures), bom=self._bom_label(bom_path), plan=self.rel(plan_f), reports=reports)
 
+    # ------------------------------------------------------------------ library hub (ecadlib.hub)
+    def hub(self, q="", have=(), lack=(), states=(), origin="", flags=(), sort="name", page=1, size=100, force=False,
+            tool="", library="", project=""):
+        """Every part once across your libraries and ecadlib's own, with a cell per tool (missing / same / different /
+        behind), last updated and by whom. Filters as in hub.listing. Reads only; notes go to <workspace>/hub/."""
+        from . import hub as H
+        bad = [t for t in [*have, *lack, *([tool] if tool else [])] if t not in H.LABEL] + [s for s in states if s not in H.STATES]
+        if bad:
+            raise ValueError(f"unknown tool or state {bad[0]!r}: tools are {', '.join(H.LABEL)}; states {', '.join(H.STATES)}")
+        return H.listing(self, q, have, lack, states, origin, flags, sort, page, size, force, tool, library, project)
+
+    def hub_part(self, key):
+        """One hub part: each tool's copy (where, updated, by, what differs), footprint and symbol pictures, sources,
+        release check, sign-off, where-used, lifecycle, history and the fixes on offer."""
+        from . import hub as H
+        return H.part(self, key)
+
+    def hub_fix(self, key, action, who=None):
+        """Run one of a hub part's fixes: kicad (write the KiCad library of its BOM), a365_preview (Altium 365 dry run),
+        dedupe (find duplicates in its plan), tool:<id> (another tool's exporter). "build" is hub_build_bom + the
+        librarian; "open_plan" happens in the browser."""
+        from . import hub as H
+        row, copies = H.copies_of(self, key)
+        offered = {f["action"] for f in H.fixes(row, copies)}
+        if action not in offered:
+            raise ValueError(f"{action!r} is not on offer for {row['name']}: {', '.join(sorted(offered)) or 'nothing to fix'}")
+        if action.startswith("copy:"):
+            return {"action": action, "part": row["name"], "result": H.copy_parts(self, [key], action[5:], "", who)}
+        pc = next(c for c in copies if c["plan"] and c["origin"] == "ecadlib" and c["bom"])
+        if action == "kicad":
+            out = self.kicad_dblib(pc["bom"])
+            what = "made the KiCad version"
+        elif action == "a365_preview":
+            r = self.altium365_push(pc["bom"], None, dry_run=True)
+            out = dict(r, results=[x for x in r["results"] if x.get("name") == pc["name"]])
+            what = None
+        elif action == "dedupe":
+            out, what = self.find_duplicates(pc["bom"]), None
+        elif action.startswith("tool:"):
+            reg = H._READERS[action[5:]]
+            items = json.loads(self.inside(pc["plan"]).read_text(encoding="utf-8"))
+            out = reg["fix"](self, self.inside(pc["plan"]), items[pc["item"]],
+                             **({"bom": pc["bom"]} if getattr(reg["fix"], "wants_bom", False) else {}))
+            what = f"made the {reg['label']} version"
+        else:
+            raise ValueError(f"{action!r} runs from the web page, not here")
+        if what:
+            H.record(self.root, [{"when": H.now(), "who": who, "what": what, "kind": "action", "key": key, "name": row["name"],
+                                  "bom": pc["bom"], "tool": action[5:] if action.startswith("tool:") else action}])
+        return {"action": action, "part": row["name"], "result": out}
+
+    def hub_copy(self, keys, tool, project="", who=None):
+        """Copy parts to another tool through the hub (Altium <-> KiCad), into <workspace>/hub/library; with a project
+        listed under [hub] projects, also import that library into the project. Your own library files are not edited."""
+        from . import hub as H
+        return H.copy_parts(self, keys, tool, project, who)
+
+    def hub_build_bom(self, key):
+        """A one-line BOM for a part that is only in your libraries (for "Build it with ecadlib") -> its workspace path."""
+        from . import hub as H
+        row, copies = H.copies_of(self, key)
+        if not row["mpn"]:
+            raise ValueError(f"{row['name']} has no manufacturer part number, so ecadlib can't look it up")
+        return self.save_upload(f"hub_{self.safe_name(row['mpn'])}.csv", H.one_line_bom(row, copies))
+
     def demo_bom(self):
         """Copy the bundled sample BOM (the one `ecadlib demo` uses) into uploads/demo/; -> its workspace path."""
         import shutil

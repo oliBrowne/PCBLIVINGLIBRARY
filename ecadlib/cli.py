@@ -88,6 +88,7 @@ COMMANDS = {
     "step-gen": ("ecadlib.step_gen", "package-shaped STEP 3D models from a package spec or footprint name"),
     "upkeep": ("ecadlib.upkeep", "weekly lifecycle / upstream / price / A365 checks; new changes as one issue or PR"),
     "project": ("ecadlib.altium_project", "BOM straight from an Altium project (.PrjPcb / .SchDoc / ActiveBOM)"),
+    "hub": ("ecadlib.hub", "your library across tools: every part once, a column per tool, last changed and by whom"),
     "where-used": ("ecadlib.altium_project:where_used_main", "which projects use which library part, and flags"),
     "sim-models": ("ecadlib.sim_models", "find, check and attach SPICE / IBIS simulation models for a plan"),
     "agent-watch": ("ecadlib.agent_watch", "library agent watch step: new / changed / removed parts in watched projects and BOMs"),
