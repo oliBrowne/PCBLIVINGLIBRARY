@@ -643,14 +643,35 @@ def _openings(text):
     return CM.openings(CM.footprint(text))
 
 
-def _copper_cover(src_text, back_text):
-    """Pad copper per side, source vs read back, on a fine grid -> diffs (none when the copper is the same)."""
+def _copper_cover(src_text, back_text, importer=False):
+    """Pad copper per side, source vs read back, on a fine grid -> diffs (none when the copper is the same).
+    importer: the read-back is KiCad's EasyEDA Pro importer, which makes extra copper fills footprint drawings rather
+    than pad copper and every hole plated, so filled copper drawings count on both sides and a plated pad where the
+    source has a non-plated hole is left out."""
     src, back = CM.footprint(src_text), CM.footprint(back_text)
+    npth = [(p["x"], p["y"]) for p in src["pads"] if p["kind"] == "npth"]
+
+    def drawn(fp, side):
+        if not importer:
+            return []
+        out = []
+        for g in fp["graphics"]:
+            if g["layer"] == f"cu_{side.lower()}" and g.get("fill"):
+                if g["kind"] == "poly":
+                    out.append(CM.grown_points(g["pts"], g["w"] / 2) if g["w"] > 0 else g["pts"])
+                elif g["kind"] == "circle":
+                    out.append(CM.disc(g["c"], g["r"] + g["w"] / 2))
+        return out
+
+    def hole(p):
+        return importer and any(abs(p["x"] - x) < 1e-3 and abs(p["y"] - y) < 1e-3 for x, y in npth)
+
     out = []
     for side in ("F", "B"):
         want = [q for p in src["pads"] if p["kind"] == "tht" or p["kind"] == "smd" and p["side"] == side for q in CM.pad_polys(p)]
-        got = [q for p in back["pads"] if p["kind"] == "tht" or p["kind"] == "smd" and p["side"] == side for q in _back_polys(p)]
-        same, diff, total = CM.same_cover(want, got, rel=0.01)
+        got = [q for p in back["pads"] if (p["kind"] == "tht" and not hole(p)) or p["kind"] == "smd" and p["side"] == side
+               for q in _back_polys(p)]
+        same, diff, total = CM.same_cover(want + drawn(src, side), got + drawn(back, side), rel=0.01)
         if not same:
             PY._d(out, "error", f"{side}.Cu pads", "copper", f"{total} mm2", f"{diff} mm2 differs", "pad copper covered by one and not the other")
     return out
@@ -690,13 +711,13 @@ def _note_approx(fp, approx):
 SETTLED = ("custom anchor", "size/rotation", "custom outline", "shape", "copper offset from hole")
 
 
-def _settle_custom(diffs, src_text, back_text):
+def _settle_custom(diffs, src_text, back_text, importer=False):
     """EasyEDA polygon pads have no KiCad anchor (size, rotation, anchor kind): those pads are compared by their copper
     instead, side by side on a fine grid; copper that differs is an error."""
     if not any(d["field"] in SETTLED for d in diffs):
         return diffs
     src, back = CM.footprint(src_text), CM.footprint(back_text)
-    bad = _copper_cover(src_text, back_text)
+    bad = _copper_cover(src_text, back_text, importer)
     diffs += bad
     custom = {p["num"] for p in src["pads"] if p["shape"] == "custom"} | {p["num"] for p in back["pads"] if p["shape"] == "custom"}
     if not bad:
@@ -757,18 +778,22 @@ def compare_device(attrs, want):
 
 def compare_kicad_reread(src_text, reread_text, approx=()):
     """What KiCad's EasyEDA Pro importer made of a footprint vs the source. That importer reads pads' copper and
-    holes only (every pad opens mask and paste, every hole is plated, polygon pads get a dot anchor), so mask, paste,
-    NPTH and anchors are left to the first reader."""
+    holes only (every pad opens mask and paste, every hole is plated, copper off a hole is centred, polygon pads get
+    a dot anchor and extra copper fills become drawings, and EasyEDA has no courtyard layer for it to map), so mask,
+    paste, NPTH, copper offsets, anchors and the courtyard are left to the first reader."""
     diffs = EG.compare_kicad_reread(src_text, reread_text, approx)
     keep = []
     src = {p["num"] for p in CM.footprint(src_text)["pads"] if p["kind"] == "npth" or p["shape"] == "custom" or
            p["kind"] == "tht" and p["offset"] != (0.0, 0.0)}
     for d in diffs:
         num = d["what"][4:] if d["what"].startswith("pad ") else None
-        if num is not None and num in src and d["field"] in ("side", "shape", "size/rotation", "custom anchor", "custom outline"):
+        if num is not None and num in src and d["field"] in ("side", "shape", "size/rotation", "custom anchor",
+                                                             "custom outline", "copper offset from hole"):
             continue
+        if d["field"] == "side" and d["kicad"] == "NPTH" or d["what"] == "courtyard":   # every hole plated; no
+            continue                                                                    # courtyard layer
         keep.append(d)
-    keep = _settle_custom(keep, src_text, reread_text) if any(d["field"] in ("shape", "size/rotation") for d in keep) else keep
+    keep = _settle_custom(keep, src_text, reread_text, importer=True) if any(d["field"] in ("shape", "size/rotation") for d in keep) else keep
     for d in keep:
         d["msg"] = d["msg"].replace(" / EasyEDA ", " / KiCad's importer ").replace(" / Altium ", " / KiCad's importer ")
     return keep
