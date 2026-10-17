@@ -322,6 +322,36 @@ TOOLS = [
                     "replace it (the old file is kept as ecadlib.toml.bak).",
      "inputSchema": {"type": "object", "required": ["toml"],
                      "properties": {"toml": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}}},
+    {"name": "learn_house_style",
+     "description": "Teach ecadlib the user's house style from their current library so new parts match it: naming, "
+                    "description patterns, how values are written (1% or ±1%), the parameters most parts carry, the "
+                    "active-low pin notation, and real example parts. `direction` is the user's own written instruction "
+                    "(e.g. 'IC descriptions start with the function in capitals'); it wins over what the library does. "
+                    "ai true: the configured model ([style] / [ai]: Claude, another API or a local model) writes a style "
+                    "guide and turns the direction into ecadlib.toml settings (shown, not written). Writes house_style.json.",
+     "inputSchema": {"type": "object",
+                     "properties": {"paths": {"type": "array", "items": {"type": "string"},
+                                              "description": "library folders or files (default: the --lib folders)"},
+                                    "direction": {"type": "array", "items": {"type": "string"},
+                                                  "description": "lines of the user's direction, added to the saved ones"},
+                                    "ai": {"type": "boolean", "default": False},
+                                    "model": {"type": "string", "description": "model for ai (default [style] / [ai])"}}}},
+    {"name": "house_style",
+     "description": "Show the learned house style (or add direction with `direction`, clear true to start over).",
+     "inputSchema": {"type": "object",
+                     "properties": {"direction": {"type": "string"}, "clear": {"type": "boolean", "default": False}}}},
+    {"name": "check_house_style",
+     "description": "How far each part of a BOM's librarian plan is from the house style, per part and field.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "part": {"type": "string"}}}},
+    {"name": "apply_house_style",
+     "description": "Adapt a BOM's plan to the house style: exact fixes by code; ai true also lets the model reword "
+                    "descriptions and values (checked: no new numbers, manufacturer / part numbers / links never "
+                    "touched). dry_run (default true) shows the changes; call again with dry_run false after the user agrees.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "part": {"type": "string"},
+                                    "ai": {"type": "boolean", "default": False}, "model": {"type": "string"},
+                                    "dry_run": {"type": "boolean", "default": True}}}},
     {"name": "agent_watch_scan",
      "description": "Library agent watch step: scan the watched projects and BOMs (rules [agent.watch] sources, or the "
                     "sources given: bom_file / folder / altium_project / a365_project with a ref) and return the parts that "
@@ -550,6 +580,20 @@ def call_tool(ws, name, args):
             return r
         if name == "save_rules":
             return ws.save_rules(args["toml"], args.get("overwrite") is True)
+        if name == "learn_house_style":
+            r = ws.learn_house_style(args.get("paths") or None, args.get("direction") or None, args.get("ai") is True,
+                                     args.get("model") or None)
+            r.pop("summary", None)
+            return r
+        if name == "house_style":
+            if args.get("direction") or args.get("clear"):
+                return ws.style_direction(args.get("direction") or None, args.get("clear") is True)
+            return ws.house_style()
+        if name == "check_house_style":
+            return ws.check_house_style(args["bom"], args.get("part") or None)
+        if name == "apply_house_style":
+            return ws.apply_house_style(args["bom"], args.get("ai") is True, args.get("model") or None,
+                                        args.get("dry_run") is not False, args.get("part") or None)
         if name == "workspace_status":
             return ws.status()
         if name == "doctor":

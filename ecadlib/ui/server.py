@@ -60,6 +60,9 @@ ROUTES = {
     ("POST", "/api/rules/save"): "admin",
     ("GET", "/api/hub"): "viewer", ("GET", "/api/hub/part"): "viewer",   # library hub: every part across tools
     ("POST", "/api/hub/fix"): "librarian", ("POST", "/api/hub/copy"): "librarian",
+    ("GET", "/api/style"): "viewer",                       # the learned house style (ecadlib.house_style)
+    ("POST", "/api/style/learn"): "admin",                 # reads library folders; may call the configured model
+    ("POST", "/api/style/direction"): "admin",
     ("GET", "/api/team/users"): "admin", ("POST", "/api/team/users"): "admin", ("GET", "/api/team/audit"): "admin",
 }
 LIVE_PUSH = "approver"
@@ -534,6 +537,8 @@ def make_handler(ws: Workspace, team=None):
                     return self._send(200, ws.example_specs())
                 if u.path == "/api/rules":
                     return self._send(200, ws.rules_info())
+                if u.path == "/api/style":
+                    return self._send(200, ws.house_style())
                 if u.path == "/api/status":
                     return self._send(200, ws.status())
                 if u.path == "/api/doctor":
@@ -673,6 +678,12 @@ def make_handler(ws: Workspace, team=None):
                 with write_lock:
                     return self._send(200, ws.hub_copy(keys, _str(b.get("tool"), "tool"), _str(b.get("project"), "project", True) or "",
                                                        self._who(b)))
+            if u.path == "/api/style/learn":                      # scans library folders, maybe asks the model: a job
+                b = self._json()
+                return self._send(200, jobs.start(self._learn_style, _strs(b.get("paths"), "paths"),
+                                                  _strs(b.get("direction"), "direction"), b.get("ai") is True,
+                                                  _str(b.get("model"), "model", True) or None, label="house style",
+                                                  owner=self._owner()))
             if u.path == "/api/altium365/workspaces":             # read-only network call, no lock
                 self._json()
                 return self._send(200, ws.altium365_workspaces())
@@ -691,6 +702,8 @@ def make_handler(ws: Workspace, team=None):
                 "/api/approvals/decide": self._decide,
                 "/api/dedupe": lambda b: ws.find_duplicates(self._bom(b, True), b.get("merge") is True),
                 "/api/rules/save": lambda b: ws.save_rules(_str(b.get("text"), "text"), b.get("overwrite") is True),
+                "/api/style/direction": lambda b: ws.style_direction(_str(b.get("text"), "text", True) or None,
+                                                                     b.get("clear") is True),
                 "/api/altium365/push": self._push,
                 "/api/agent/queue/approve": lambda b: self._queue(b, "approve"),
                 "/api/agent/queue/reject": lambda b: self._queue(b, "reject"),
@@ -845,6 +858,10 @@ def make_handler(ws: Workspace, team=None):
         @staticmethod
         def _propose(paths, a365, choices, progress=None):
             return ws.propose_rules(paths, a365, choices, progress)
+
+        @staticmethod
+        def _learn_style(paths, direction, ai, model, progress=None):
+            return ws.learn_house_style(paths, direction, ai, model, progress)
 
         @staticmethod
         def _triage(bom, user, progress=None):
