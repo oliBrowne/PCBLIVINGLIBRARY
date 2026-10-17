@@ -1039,6 +1039,8 @@ def check_pcblib(fp, rules=None, pin1=None):
     texts = [r.get("text", "") for r in recs if r["type"] == "text"]
     if ".Designator" not in texts:
         add("warning", "no .Designator special string")
+    elif pads and not any(r["type"] == "text" and r.get("text") == ".Designator" and r.get("layer") == asm for r in recs):
+        add("warning", f"no .Designator on {rules['layers']['assembly']}: the assembly drawing has no designators (KLC F5.2)")
     for lvl, msg in pcblib_text_issues(fp):
         add(lvl, msg)
     if not any(r["type"] == "body" for r in recs) and not fp["params"].get("HEIGHT"):

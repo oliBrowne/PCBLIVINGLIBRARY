@@ -197,12 +197,12 @@ def sparse_designator_library(d, n=48, designator_on_all=False):
     fps = []
     for i in range(n):
         fp, _ = footprint(sizes[i % len(sizes)], f"EXAMPLE_{i:02d}")
-        if i and not designator_on_all:
-            fp["texts"] = []
+        fp["texts"] = [] if i and not designator_on_all else [t for t in fp["texts"] if t[6] != AL.MECH13 or t[0] != ".Designator"]
         fps.append(fp)
     assert any(t[0] == ".Designator" for t in fps[0].get("texts", [])), "the writer's footprints carry a .Designator"
     (d / "PcbLib").mkdir(parents=True, exist_ok=True)
-    AL.write_pcblib(d / "PcbLib" / "Examples.PcbLib", fps, lay)
+    path = d / "PcbLib" / "Examples.PcbLib"          # not write_pcblib: it would add an assembly .Designator to each
+    path.write_bytes(AL.pcblib_bytes([AL.remap_layers(fp, lay) for fp in fps], path.name))
     return d
 
 
