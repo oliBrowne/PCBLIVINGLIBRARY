@@ -11,11 +11,14 @@
     ecadlib team      add-user|set-role|reset-password|remove|list|setup   users and roles for `ecadlib ui --team`; setup: Docker + HTTPS
     ecadlib mcp       --lib <kicad libs>          MCP server (stdio) for Claude and other agents
     ecadlib triage    BOM --lib ... -o out/x      BOM triage report (.md + .csv)
+    ecadlib sources-check [--save DIR] [--json]   check the unofficial EasyEDA / JLCPCB endpoints against the live sites
     ecadlib footprint gen|compare ...             IPC-7351B footprint generator (also BGA, pin headers, connectors, pad tables)
+    ecadlib check     x.kicad_mod|DIR.pretty [--summary]   footprints against the rule book (KLC / IPC-7351)
     ecadlib footprint-bench [--offline]           compare generated footprints with KiCad's official ones, pad by pad
     ecadlib eval      run|compare|sets|show ...   accuracy test set: run the pipeline on known parts, pass rate and cost
     ecadlib dblib     BOM -o out/altium           Altium DbLib (SQLite + XLSX + .DbLib)
     ecadlib altium-lib pcblib|schlib|dump ...     write/read Altium .PcbLib/.SchLib files
+    ecadlib altium-native write|compare DIR       let Altium build the .PcbLib/.SchLib files itself; compare the result
     ecadlib altium365 plan|workspaces|push ...    Altium 365 release via Nexar
     ecadlib dblib-sync plan.json --to DIR [--svn] Altium without 365: sync a plan into a .DbLib/.SVNDbLib folder
     ecadlib librarian BOM --lib ... -o out/lib    BOM -> missing parts filled -> Altium models + plan + review
@@ -33,6 +36,7 @@
     ecadlib dedupe    plan.json [--lib ...] [--merge]  duplicate parts, footprints and symbols
     ecadlib sourcing  BOM [--qty N] [--alternates] price, stock, second sources and alternates per BOM line
     ecadlib project   BOARD.PrjPcb [-o bom.csv] [--variant V]   BOM straight from an Altium project (.PrjPcb/.SchDoc)
+    ecadlib hub       [-q WORDS] [--have T] [--lack T] [--part P]   your library across tools: every part once, a column per tool
     ecadlib where-used --projects DIR... [--part X] [--plan plan.json]   which projects use which library part
     ecadlib step-gen  SPEC.json|FOOTPRINT -o x.step   package-shaped 3D model (STEP); --check FILE.step validates
     ecadlib upkeep    PLAN|BOM [--checks ...] [--apply] [--github issue|pr]   weekly checks, only what is new, one issue/PR
