@@ -247,6 +247,9 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     from .approvals import push_block
     from .rules import house_item
     from .a365_sync import is_a365
+    from .rules import DEFAULTS
+    # symbols and footprints go under the same root as the components ([folders] root), so a test root holds them all
+    models_root = f"{(rules or DEFAULTS)['folders'].get('root') or 'Components'}/Models"
     # sign-off is checked on the item as it was approved (ecadlib's parameter names: the content hash covers them)
     blocks = [push_block(i, policy) for i in items]
     # a pulled item already carries the workspace's own parameter names: renaming it would rename them there
@@ -288,7 +291,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
             else:
                 files = [it["symbol"]["file"]], [it["footprint"]["file"]]
                 ids = tuple([(Path(p).name, upload(p)) for p in group] for group in files)
-                inp = release_input(it, ws, defs, ids)
+                inp = release_input(it, ws, defs, ids, models_root)
                 res["action"] = "release"
                 if dry_run:
                     res["detail"] = {"mutation": "desReleaseComponent", "input": inp}

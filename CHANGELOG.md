@@ -9,6 +9,10 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Altium 365 push: symbols and footprints are released under the `[folders] root` too (`<root>/Models/Symbols`, `<root>/Models/Footprints`), not always under `Components/Models`, so a test root keeps everything together.
+
+### Fixed
+
 - Altium menu: a failed Altium build keeps the previous library files, installs nothing and says so instead of "Ready". When Altium stops the build script part way (a script error writes no report), the menu puts the moved-aside library back.
 - Altium menu: shared resistor / capacitor / inductor symbols carry no footprint, so each DbLib row's Footprint Ref picks it; passive parts get Passive pins; distributor categories (including LCSC's "LED Indication - Discrete") route parts to the Capacitors, Transistors, Diodes, Crystals and Connectors tables; *Open review queue* lists the menu's held parts; an MPN no source knows is "Not found", not held.
 - A space in an MPN becomes `_` in the DbLib part name (`FC-135 32.768KA-AG0` → `FC-135_32.768KA-AG0`); the Manufacturer Part Number column keeps the space.

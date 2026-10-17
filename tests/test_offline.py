@@ -98,6 +98,16 @@ def test_altium365_plan_and_push():
         assert rel["componentRevisionNamingSchemeNodeId"] == "cs" and rel["symbolLifeCycleDefinitionNodeId"] == "sl"
         dry = A.push(items, None, "https://ws", dry_run=True)
         assert {r["action"] for r in dry} == {"release", "skip"}, dry
+        assert rel["symbolReleaseFolder"] == "Components/Models/Symbols", rel
+        # a test root ([folders] root) holds the symbols and footprints too, not only the components
+        from ecadlib import rules as RU
+        import copy
+        rules = copy.deepcopy(RU.DEFAULTS); rules["folders"]["root"] = "ecadlib-test-47"
+        inp = next(r for r in A.push(A.plan(lines, models=d, root="ecadlib-test-47"), None, "https://ws", dry_run=True,
+                                     rules=rules) if r["action"] == "release")["detail"]["input"]
+        assert inp["componentReleaseFolder"] == "ecadlib-test-47/ICs", inp
+        assert (inp["symbolReleaseFolder"], inp["footprintReleaseFolder"]) == (
+            "ecadlib-test-47/Models/Symbols", "ecadlib-test-47/Models/Footprints"), inp
 
 
 def test_altium365_ops_match_nexar_schema():
