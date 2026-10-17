@@ -675,6 +675,28 @@ def to_spec(pkg, part, datasheet, model, offset, review):
     return spec, prov
 
 
+NO_NET = re.compile(r"^(|~|-|n\.?\s*c\.?|n/c|d\.?n\.?c\.?|n\.?u\.?|nc\d*|no\s*connect.*|reserved|rsvd)$", re.I)
+
+
+def same_net_from_pins(pins, groups=None):
+    """Pad groups on one net: the given same_net groups plus pins that share a name in the pin table (VIN on 1, 2 and
+    the paddle 26). NC / DNC / reserved pins are never joined. Groups that share a pad are merged."""
+    by = {}
+    for p in pins or []:
+        nm = str(p.get("name") or "").strip()
+        if not NO_NET.match(nm) and nm != str(p.get("num")):
+            by.setdefault(nm, set()).add(str(p["num"]))
+    out = [set(map(str, g)) for g in groups or []] + [g for g in by.values() if len(g) > 1]
+    merged = []
+    for g in out:
+        for m in [m for m in merged if m & g]:
+            g |= m
+            merged.remove(m)
+        merged.append(g)
+    key = lambda n: (len(n), n)
+    return sorted((sorted(g, key=key) for g in merged), key=lambda g: key(g[0]))
+
+
 def schema_check(spec, review):
     """package_schema.json via footprint_gen.validate; every error listed when it fails."""
     try:
@@ -868,6 +890,12 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None):
         if bad:
             review.append(f"the model cited page(s) {bad} of the {len(offset)} pages sent: those values have no source page")
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
+    if spec.get("pad_table"):
+        nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
+        if nets != (spec.get("same_net") or []):
+            spec["same_net"] = nets
+            review.append("same_net from the pin table (pads whose pins share a name may overlap): "
+                          + "; ".join(",".join(g) for g in nets))
     ok = schema_check(spec, review)
     sanity(spec, review)
     check_pins(spec, ext, review)

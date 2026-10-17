@@ -563,6 +563,11 @@ class Run:
 
     def put_datasheet(self, st, res, job, fp_name, sym_name, how=""):
         url, where = job["url"], job["where"]
+        from . import fp_edit as FE                   # hand edits of this part's pad table (ecadlib fp-edit)
+        res, edited = FE.apply(FE.for_part(FE.load(self.out), st.get("name"), job.get("name"), job["part"]), res)
+        if edited:
+            st["tried"].extend(edited)
+            st["review"].extend(edited)
         got = []
         if not st["footprint"]:
             text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))

@@ -57,6 +57,7 @@ CASES = [
     (["librarian", "{in}/bom.csv", "--lib", "{in}/lib", "-o", "{out}/lib", "--offline", "--cache", "{out}/cache",
       "--sources", "kicad"], (0, 2)),
     (["release-check", "{out}/lib/plan.json", "-o", "{out}/rc"], (0, 2)),
+    (["fp-edit", "{out}/lib/plan.json", "--part", "NOPE", "show"], (2,)),       # no datasheet answer for that part
     (["rebuild", "{out}/lib", "--check", "--keep", "{out}/rebuild"], (0, 1)),
     (["migrate", "{out}", "--check"], (0, 1)),
     (["kicad-export", "{out}/lib/plan.json", "-o", "{out}/kicad", "--offline", "--cache", "{out}/cache",
