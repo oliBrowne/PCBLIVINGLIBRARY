@@ -14,8 +14,10 @@
         AddPartFromMPN     asks for an MPN (+ optional manufacturer), builds the part, reinstalls the library
         CheckProjectBOM    checks the focused project's BOM, opens the report, offers to fill the library
         OpenReviewQueue    opens the ecadlib web UI at the review queue (starts `ecadlib ui` when it is not running)
-  ecadlib_build.pas                 Altium builds the library files itself (ecadlib.altium_native): the menu calls
-                                    its BuildLibraries before it reinstalls the library
+  ecadlib_build.pas                 Altium builds the library files itself (ecadlib.altium_native):
+        BuildLibrariesInAltium   (File > Run Script) builds every library in ecadlib_build.txt next to the project
+        BuildLibraries(Folder)   the same for Folder; the menu calls it before it reinstalls the library
+                                    (PROCS + BUILD_PROCS below; `build` prints them all)
   ecadlib_dialog.pas + .dfm         the ecadlib dialog (ecadlib.altium_forms): dark, like Altium's own, with
                                     live progress read from the job's progress.ini; dialogs=0 in the .ini turns it off
   ecadlib_menu.ini                  settings: workspace, library folder, command, hidden, timeout_s, port (kept when
@@ -65,6 +67,14 @@ RUN_CMD, RUN_VBS, PREFS, README = "ecadlib_run.cmd", "ecadlib_run.vbs", "ecadlib
 PROCS = [("AddPartFromMPN", "&Add part from MPN...", "Build a part from its manufacturer part number with ecadlib"),
          ("CheckProjectBOM", "&Check this project BOM", "Check the focused project's BOM against the library; offer to fill it"),
          ("OpenReviewQueue", "Open &review queue", "Open the ecadlib web UI at the review queue")]
+# the other procedures the script project offers (ecadlib_build.pas, ecadlib.altium_native): not menu entries
+BUILD_PROCS = [("BuildLibrariesInAltium", "ecadlib_build.pas", "Altium writes the libraries in ecadlib_build.txt itself"),
+               ("BuildLibraries(Folder)", "ecadlib_build.pas", "the same for Folder; the menu calls it before reinstalling")]
+
+
+def procedures():
+    """Every procedure the script project offers: the menu entries (PROCS), then BUILD_PROCS."""
+    return [p for p, _, _ in PROCS] + [p for p, _, _ in BUILD_PROCS]
 MENU_BOM = "uploads/altium-menu/parts.csv"
 HEADER = ["Designator", "Qty", "Value", "Footprint", "Manufacturer", "Mfr. Part #", "LCSC Part Number", "Description", "Datasheet"]
 ACTIONS = ("add-part", "check-bom", "fill", "queue", "open")
@@ -136,6 +146,8 @@ def pas_text():
                       Altium 365 when ecadlib.toml names a workspace) and reinstalls the database library
     CheckProjectBOM   checks the BOM of the focused project, opens the report and offers to fill the library
     OpenReviewQueue   opens the ecadlib web UI at the review queue (starts it when it is not running)
+  ecadlib_build.pas in this project adds BuildLibrariesInAltium (File > Run Script) and BuildLibraries(Folder),
+  which Reinstall calls so Altium writes the library files itself.
 
   How: each entry writes jobs\<id>\request.ini next to this script, runs ecadlib_run.cmd (without a console window
   through ecadlib_run.vbs unless hidden=0 in ecadlib_menu.ini), waits for jobs\<id>\exit.txt and reads
@@ -754,6 +766,9 @@ def readme_text(win_dir, prefs):
    it again with --win-dir if you move this folder.""" if prefs else
             f"""   (No {PREFS} here: the Windows folder was not known. Run `ecadlib altium-menu build --win-dir {w}` on
    this PC to get the ready-made menu file.)""")
+    run_script = ", ".join(p for p in procedures() if "(" not in p)            # parameterless: Run Script lists them
+    build_procs = "\n".join(f"     {p:<24} {u}: {d}" for p, u, d in BUILD_PROCS)
+    entries = ", ".join(f"{UNIT}>{p}" for p, _, _ in PROCS)
     return f"""ecadlib menu for Altium Designer (written by `ecadlib altium-menu build`, ecadlib {__version__})
 
 What it adds: an "ecadlib" menu (or toolbar buttons) with three entries:
@@ -785,9 +800,10 @@ again: the "ecadlib" menu is in the menu bar of the schematic, PCB and library e
 into Altium's own menu file (%APPDATA%\\Altium\\Altium Designer {{...}}\\DXP.RCS, backed up next to it first);
 `--remove` takes it out again. The step-by-step way, without closing Altium:
 1. Altium: DXP (AD17) or the gear icon (AD18+) > Preferences > Scripting System > Global Projects > Install from
-   file... > {w}\\{PROJECT}. The three procedures now appear in File > Run Script... under {PROJECT}.
+   file... > {w}\\{PROJECT}. File > Run Script... under {PROJECT} now lists {run_script}:
+{build_procs}
 2. Menu: right-click any menu or toolbar > Customize... > Categories: [Scripts] (or [Custom]) > drag
-   {UNIT}>AddPartFromMPN, >CheckProjectBOM, and >OpenReviewQueue onto a menu or toolbar; rename them in the entry's
+   {entries} onto a menu or toolbar; rename them in the entry's
    properties. Repeat for each editor you want them in (schematic, PCB, library editors).
 {menu}
 3. Try it: open a PCB project and pick ecadlib > Check this project BOM.
@@ -877,7 +893,7 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
             (out / PREFS).write_bytes(data)
             written.append(PREFS)
     problems = project_problems(files)
-    rep = {"folder": str(out), "project": PROJECT, "procedures": [p for p, _, _ in PROCS], "written": written,
+    rep = {"folder": str(out), "project": PROJECT, "procedures": procedures(), "menu_entries": [p for p, _, _ in PROCS], "written": written,
            "kept": kept, "win_dir": win_dir, "menu_file": PREFS if win_dir else None, "problems": problems,
            "command": load_command(ini), "command_filled": filled}
     (out / "altium_menu.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
@@ -1799,7 +1815,9 @@ def main(argv=None):
                 print(f"  {INI}: command= was empty; set it to {rep['command']}")
             print(f"  runs ecadlib with: {rep['command'] or 'ecadlib on PATH, else py -3 / python (set command= in ' + INI + ' for a venv)'}")
             print(f"  in Altium: Preferences > Scripting System > Global Projects > Install from file > {PROJECT}; "
-                  f"then Customize to put {', '.join(rep['procedures'])} on a menu (see {README})")
+                  f"then Customize to put {', '.join(rep['menu_entries'])} on a menu (see {README})")
+            for p, u, d in BUILD_PROCS:
+                print(f"  also in the project: {p} ({u}): {d}")
             if not rep["menu_file"]:
                 print(f"  no {PREFS}: give --win-dir (the folder on the Altium PC) for the ready-made menu file")
         return 1 if rep["problems"] else 0
