@@ -37,6 +37,8 @@ def test_librarian_ne555_footprint_text_and_10pt_symbol_font():
         assert des["layer"] == AL.TOP_OVERLAY and com["layer"] == AL.MECH13, (des["layer"], com["layer"])
         assert abs(AL.to_mm(des["h"]) - 1.0) < 1e-3 and abs(AL.to_mm(des["w"]) - 0.15) < 1e-3
         assert des["y"] > top and com["y"] + com["h"] < min(p["y"] - p["h"] / 2 for p in pads), (des, top)
+        from ecadlib import footprint_rules as FR
+        assert not [c for c in FR.check_pcblib(lib) if c[1] in ("silktext", "text")], FR.check_pcblib(lib)
 
 
 # ---------------------------------------------------------------- 2. PcbLib text and pin-1 dot
@@ -63,6 +65,9 @@ def test_ne555_footprint_text_and_pin1_dot():
     gap = min(max(abs(x - p["x"]) - p["w"] / 2, abs(y - p["y"]) - p["h"] / 2) for x, y in pts for p in pads)
     assert gap >= 0.2 - 0.05, gap                                                           # 0.2 mm less the stroke
     assert not [c for c in FC.check(text) if c[0] == "error"], FC.check(text)
+    from ecadlib import footprint_rules as FR                               # the rule book: text sizes, nothing on pads
+    assert not [c for c in FR.check(text) if c[1] in ("text", "silktext", "layers")], FR.check(text)
+    assert '(fp_text user "${REFERENCE}" (at 0 0) (layer "F.Fab")' in text
     # Altium side: the reference was on silk, so .Designator is on Top Overlay; a fab-only reference goes to Mech 13
     fp, _ = K.convert_footprint(text, "SOIC8", "x", [])
     layers = {tx[0]: tx[6] for tx in fp["texts"]}

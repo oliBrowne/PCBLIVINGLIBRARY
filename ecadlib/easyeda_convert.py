@@ -152,6 +152,13 @@ def footprint_to_kicad(data, name=None, notes=None):
            "  (attr smd)" if all(" smd " in p for p in pads) else "  (attr through_hole)",
            f'  (fp_text reference "REF**" (at {_n(cx_)} {_n(ref_y)}) (layer "F.SilkS") {font})',
            f'  (fp_text value {_q(name)} (at {_n(cx_)} {_n(val_y)}) (layer "F.Fab") {font})']
+    # ${REFERENCE} on the assembly drawing (KLC F5.2), in the middle of the body, 0.5 .. 1.0 mm to fit it
+    bpts = [pt for a, b, _, layer in lines if layer in ("F.Fab", "F.SilkS") for pt in (a, b)] or [pt for pt in extent]
+    bw, bh = max(p[0] for p in bpts) - min(p[0] for p in bpts), max(p[1] for p in bpts) - min(p[1] for p in bpts)
+    fs = max(0.5, min(1.0, math.floor(100 * min(bw / (len("REF**") * 0.9), bh * 0.6)) / 100))
+    bc = (round((max(p[0] for p in bpts) + min(p[0] for p in bpts)) / 2, 4), round((max(p[1] for p in bpts) + min(p[1] for p in bpts)) / 2, 4))
+    out.append(f'  (fp_text user "${{REFERENCE}}" (at {_n(bc[0])} {_n(bc[1])}) (layer "F.Fab") '
+               f'(effects (font (size {_n(fs)} {_n(fs)}) (thickness {_n(round(0.15 * fs, 3))}))))')
     for (x1, y1), (x2, y2), w, layer in lines:
         out.append(f'  (fp_line (start {_n(x1)} {_n(y1)}) (end {_n(x2)} {_n(y2)}) (stroke (width {_n(w or 0.1)}) (type solid)) (layer "{layer}"))')
     for cx, cy, r, w, layer in circles:          # as a 16-gon: footprint_check reads fp_circle's centre from (start)
