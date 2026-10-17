@@ -130,15 +130,17 @@ def to_rows(lines, triage=None, rules=None):
         fp_ref = fp.split(":")[-1]
         pkg = package_of(fp, ln.get("description")) or ""
         value = ln.get("value", "")
-        if custom:
+        name_mpn = re.sub(r"\s+", "_", mpn.strip())   # a space in an MPN is a separator ('FC-135 32.768KA-AG0'
+        if custom:                                    # -> FC-135_32.768KA-AG0, as kicad_export.kname), not dropped
             f = RU.line_fields(ln, cat, pkg, rules, ref)
-            pn = (RU.component_name(f, rules) or ln.get("designator", "").split(",")[0]).replace(" ", "")
+            pn = (RU.component_name({**f, "mpn": name_mpn}, rules)
+                  or ln.get("designator", "").split(",")[0]).replace(" ", "")
         else:                                         # an empty token drops out with its dash: IND-10uH, not IND--10uH
             pn = ("-".join(t for t in (cat[:3].upper(), pkg, value) if t)
                   if cat in GENERIC_SYMBOL and value and not (kind and value == mpn)
-                  else mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
+                  else name_mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
         if seen.setdefault(pn, mpn) != mpn:      # same synthetic PN, different part (e.g. 100nF 16V vs 50V): keep both
-            pn = f"{pn}-{mpn}".replace(" ", "")
+            pn = f"{pn}-{name_mpn}".replace(" ", "")
         lib_ref = lib_name(GENERIC_SYMBOL.get(cat) or (custom and mpn and RU.symbol_name(f, rules)) or mpn or pn)
         kicad_fp = fp_ref = lib_name(fp_ref)
         if custom:
