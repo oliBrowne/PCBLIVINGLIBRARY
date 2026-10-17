@@ -1471,7 +1471,7 @@ def check_bom(cfg, project, opener=None, progress=None):
                                                                     if d < t else text))
     have = _library_mpns(cfg, ws)
     rows, counts = [], {"lines": 0, "in_library": 0, "missing": 0, "dnp": 0}
-    kinds = {"source": 0, "footprint": 0, "unverified": 0}
+    kinds = {"source": 0, "footprint": 0, "unverified": 0, "no_pn": 0}
     for r in tri["rows"]:
         dnp = str(r.get("status", "")).startswith("dnp")
         inlib = bool(r.get("mpn")) and r["mpn"].strip().upper() in have
@@ -1480,7 +1480,8 @@ def check_bom(cfg, project, opener=None, progress=None):
         counts["dnp" if dnp else "in_library" if inlib else "missing"] += 1
         if not dnp and not inlib:
             st = str(r.get("status", ""))
-            kinds["footprint" if st.startswith("needs_footprint") else "unverified" if st.startswith("unverified")
+            kinds["no_pn" if not (r.get("mpn") or r.get("lcsc"))       # nothing to look up: not a source problem
+                  else "footprint" if st.startswith("needs_footprint") else "unverified" if st.startswith("unverified")
                   else "source"] += 1
     stem = Path(tri["reports"][0]).with_suffix("").name
     out = ws.root / "reports" / f"{stem}_altium.html"
@@ -1502,7 +1503,9 @@ def check_bom(cfg, project, opener=None, progress=None):
     shown = [row_text("already in your library", counts["in_library"], True),
              row_text("a source can supply", kinds["source"]) if kinds["source"] else None,
              row_text("needs a footprint", kinds["footprint"]) if kinds["footprint"] else None,
-             row_text("could not check (offline)", kinds["unverified"]) if kinds["unverified"] else None,
+             row_text("no part number", kinds["no_pn"]) if kinds["no_pn"] else None,
+             row_text("could not check (offline)" if ws.offline else "source refused/unreachable",
+                      kinds["unverified"]) if kinds["unverified"] else None,
              row_text("not fitted", counts["dnp"]) if counts["dnp"] else None]
     res.update(rows_result([r for r in shown if r], M.plural(counts["lines"], "line")))
     return res

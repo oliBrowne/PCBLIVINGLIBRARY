@@ -506,6 +506,33 @@ def test_check_bom_report_offer_and_fill():
     assert r["status"] == "error" and "no such file" in r["message"] and r["fix"].startswith("save the project")
 
 
+def test_check_bom_says_why_lines_were_not_checked():
+    """Lines with no part number are counted as such, and an unverified line is 'offline' only when the run was
+    offline: online it is a source that refused or could not be reached (it once read 'offline: 26' online)."""
+    from ecadlib.app import Workspace
+    d = _tmp()
+    _, cfg = _setup(d)
+    bom = d / "bom.csv"
+    bom.write_text("Designator,Qty,MPN\nR1,1,\n", encoding="utf-8")
+    un = "unverified (source unreachable)"
+    rows = [{"line": 1, "mpn": "", "lcsc": "", "status": un}, {"line": 2, "mpn": "", "lcsc": "", "status": un},
+            {"line": 3, "mpn": "TPS62162DSGR", "lcsc": "", "status": un},
+            {"line": 4, "mpn": "", "lcsc": "C25804", "status": "available_easyeda"},
+            {"line": 5, "mpn": "X1", "lcsc": "", "status": "dnp (not fitted)"}]
+
+    def fake(self, bom, progress=None, **kw):
+        (self.root / "reports").mkdir(parents=True, exist_ok=True)
+        (self.root / "reports" / "triage_bom.md").write_text("x", encoding="utf-8")
+        return {"rows": [{"designator": "", "qty": 1, "manufacturer": "", "notes": "", **r} for r in rows],
+                "reports": ["reports/triage_bom.md"]}
+    for offline, label in ((False, "source refused/unreachable"), (True, "could not check (offline)")):
+        with mock.patch.object(Workspace, "triage", fake):
+            r = AM.check_bom({**cfg, "offline": offline}, str(bom), opener=False)
+        shown = [r[f"row{i}"] for i in range(1, int(r["rows"]) + 1)]
+        assert shown == ["already in your library|0|1", "a source can supply|1|0", "no part number|2|0",
+                         f"{label}|1|0", "not fitted|1|0"], (offline, shown)
+
+
 def test_dialog_results_rows_and_reports():
     """With dialog=1 (the ecadlib dialog) a BOM check opens nothing: the dialog shows the counts and opens the report
     on request (action=open, files in the workspace only). Each result carries the big line and the rows."""
