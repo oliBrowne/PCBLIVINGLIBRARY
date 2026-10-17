@@ -30,6 +30,14 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -e ".[dev]"
+      - name: Install poppler (pdftoppm, for the datasheet picture tests)
+        shell: pwsh
+        run: |
+          choco install poppler -y --no-progress
+          if (-not (Get-Command pdftoppm -ErrorAction SilentlyContinue)) {
+            $bin = (Get-ChildItem "$env:ChocolateyInstall\lib\poppler" -Recurse -Filter pdftoppm.exe | Select-Object -First 1).DirectoryName
+            $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          }
       - name: Run all tests (offline; no secrets needed)
         env:
           SOURCE_DATE_EPOCH: "1791936000"

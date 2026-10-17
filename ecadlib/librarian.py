@@ -198,7 +198,7 @@ class Run:
         return self._kicad
 
     def rel(self, p):
-        return os.path.relpath(p, self.out)
+        return os.path.relpath(p, self.out).replace(os.sep, "/")
 
     # ---- writers: everything goes through kicad_import's converters
     def put_fp(self, st, text, name, source, http=None, height=None, height_src="", spec=None):
