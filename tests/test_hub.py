@@ -1,6 +1,6 @@
 """Library hub (ecadlib.hub): every part once across your libraries and ecadlib's own, a cell per tool, last changed
 and by whom, history, fixes; and its web routes in local and team mode."""
-import json, os, shutil, subprocess, tempfile, threading, urllib.error, urllib.request
+import json, os, re, shutil, subprocess, tempfile, threading, urllib.error, urllib.request
 from pathlib import Path
 
 from ecadlib import hub as H
@@ -302,7 +302,7 @@ def test_tool_view_lists_one_tools_library():
     res = ws.hub(tool="kicad")
     kicad = next(x for x in res["tools"] if x["tool"] == "kicad")
     assert res["matched"] == kicad["parts"] and all("kicad" in r["cells"] for r in res["rows"])
-    libs = {l["library"].split("/")[-1]: l for l in kicad["libraries"]}
+    libs = {re.split(r"[\\/]", l["library"])[-1]: l for l in kicad["libraries"]}   # absolute paths are native on Windows
     assert "my.kicad_sym" in libs and libs["my.kicad_sym"]["origin"] == "library" and kicad["updated"], libs
     one = ws.hub(tool="kicad", library=libs["my.kicad_sym"]["library"])
     assert one["matched"] == libs["my.kicad_sym"]["parts"] and all(
