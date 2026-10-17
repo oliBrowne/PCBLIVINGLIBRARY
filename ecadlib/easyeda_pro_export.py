@@ -92,9 +92,9 @@ def path_poly(pts, closed=True):
 
 
 def path_circle(c, r):
-    """A full circle as a path of two half arcs (a pad outline or fill: no CIRCLE token needed)."""
-    a, b = (c[0] + r, c[1]), (c[0] - r, c[1])
-    return _pt(a) + ["ARC", 180] + _pt(b) + ["ARC", 180] + _pt(a)
+    """A full circle as EasyEDA's CIRCLE path. Not two half arcs: KiCad's EasyEDA Pro importer reads arcs in a pad
+    outline as strokes only, so a round custom pad would lose its copper there."""
+    return ["CIRCLE"] + _pt(c) + [m(r)]
 
 
 def path_round_rect(cx, cy, w, h, r, a):
