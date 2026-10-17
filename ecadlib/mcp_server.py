@@ -357,6 +357,16 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"}, "kicad": {"type": "boolean", "default": False},
                                     "name": {"type": "string", "description": "KiCad library name (default ecadlib)"}}}},
+    {"name": "tool_export",
+     "description": "Write the BOM's library for another PCB tool, natively, and read every part back pad by pad: "
+                    "tool='eagle' writes an Autodesk Fusion Electronics / EAGLE .lbr (symbols, packages, devicesets; "
+                    "STEP models beside it) in fusion/<bom>/, tool='easyeda' an EasyEDA Pro device library .elibz "
+                    "(symbols, footprints, devices) in easyeda/<bom>/. Returns the file, counts, read-back errors and "
+                    "what had to be approximated for the target format.",
+     "inputSchema": {"type": "object", "required": ["bom", "tool"],
+                     "properties": {"bom": {"type": "string"}, "tool": {"type": "string", "enum": ["eagle", "easyeda"]},
+                                    "name": {"type": "string", "description": "library name (default ecadlib)"},
+                                    "include_held": {"type": "boolean", "default": False}}}},
     {"name": "tool_packages",
      "description": "Package the BOM's library to plug into the tools: a KiCad Plugin and Content Manager zip (install "
                     "with 'Install from File...'; libraries appear as PCM_<name>) and an Altium folder with a .LibPkg "
@@ -509,6 +519,8 @@ def call_tool(ws, name, args):
                                   args.get("port") or 8765)
         if name == "parity":
             return ws.parity(args["bom"], args.get("kicad") is True, args.get("name") or "ecadlib")
+        if name == "tool_export":
+            return ws.tool_export(args["bom"], args.get("tool"), args.get("name") or "ecadlib", args.get("include_held") is True)
         if name == "tool_packages":
             return ws.tool_packages(args["bom"], args.get("name") or "ecadlib", args.get("kicad") or 8,
                                     args.get("include_held") is True)

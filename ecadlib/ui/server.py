@@ -43,6 +43,7 @@ ROUTES = {
     ("POST", "/api/librarian/run"): "librarian", ("POST", "/api/resolve/candidates"): "librarian",
     ("POST", "/api/resolve/choose"): "librarian", ("POST", "/api/footprint/approve"): "librarian",
     ("POST", "/api/export/dblib"): "librarian", ("POST", "/api/altium/models"): "librarian",
+    ("POST", "/api/export/tool"): "librarian",             # Fusion Electronics / EAGLE .lbr, EasyEDA Pro .elibz
     ("POST", "/api/altium365/plan"): "librarian", ("POST", "/api/altium365/workspaces"): "librarian",
     ("POST", "/api/altium365/push"): "librarian",          # dry run; a live push needs LIVE_PUSH
     ("POST", "/api/release-check"): "librarian", ("POST", "/api/dedupe"): "librarian",
@@ -490,6 +491,7 @@ def make_handler(ws: Workspace, team=None):
             actions = {
                 "/api/footprint/approve": lambda b: ws.approve_footprint(b["spec"], b.get("density"), bool(b.get("overwrite"))),
                 "/api/export/dblib": lambda b: ws.export_dblib(self._bom(b, True)),
+                "/api/export/tool": lambda b: ws.tool_export(self._bom(b, True), b.get("tool")),
                 "/api/altium/models": lambda b: ws.build_altium_models(self._bom(b, True)),
                 "/api/altium365/plan": lambda b: ws.altium365_plan(self._bom(b, True)),
                 "/api/release-check": lambda b: ws.release_check(self._bom(b, True), _names(b.get("allow")), _names(b.get("unallow")),
