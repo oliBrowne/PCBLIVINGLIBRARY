@@ -984,18 +984,20 @@ Plans keep ecadlib's own parameter names internally; your house names (`[paramet
 
 **Accuracy and limits.** On synthetic libraries in four house styles (classic Altium SchLib/PcbLib, glued names in a DbLib, MPN-named Altium 365 list, KiCad), inference gets 34 of 34 settings right, and parts planned with the inferred file come out named like the existing ones. Not checked: no real customer library has been scanned and nothing written was opened in Altium; IPC-7351 names from the generator are approximate; name case (upper/lower) is not inferred; `.mdb` DbLib data is not read. Because the current folder's `ecadlib.toml` is used when the input folder has none, a stray file there will change output; pass `--rules` to be explicit.
 
-## 19. `symbol_layout.py`: tidy symbols for big chips
+## 19. `symbol_layout.py`: one pin rule for every IC symbol
 
-A 100-pin MCU used to come out as one long column per side, in pin-number order. Now every symbol with 40 or more pins is laid out by function. The layout is used for datasheet-reader symbols, for EasyEDA symbols (the librarian re-lays them out; symbols taken from the KiCad libraries stay as drawn), for `altium_lib.ic_symbol` and `schlib`, and for the KiCad export, which reads those SchLibs back.
+The house rule: **inputs left, outputs right, power on top, ground on the bottom** (`power_side = "top"`, the default). The other variant, `power_side = "left"`, leaves the top and bottom edges empty and puts the power pins at the top of the left side and the ground pins at its bottom, so no pin name is ever drawn sideways. Every IC symbol is laid out this way, from a 555 to a 100-pin MCU. The layout is used for datasheet-reader symbols, for EasyEDA IC symbols (the librarian re-lays them out), for `altium_lib.ic_symbol` and `schlib`, and for the KiCad export, which reads those SchLibs back. Symbols taken from the KiCad libraries stay as drawn unless their pin text would overlap in Altium; then they are re-laid out too, with a note. Only plain IC boxes are re-laid out (designator U / IC, one rectangle, every pin on its edge); connectors, transistors, op-amp triangles and gates keep their drawing.
 
-* **Groups.** Pins are grouped by name, and by type when the name says nothing. Power (VDD, 3V3, VBAT), analog supply (VDDA, VREF+) and power out (VCAP, 3V3OUT) go on top; ground (GND, VSS, AGND, VREF-) and the exposed pad go on the bottom. Reset/boot/enable, clock/oscillator, debug (SWD, JTAG, boot UART such as U0TXD), USB, ADC/DAC and other inputs go on the left. UART, I2C, SPI, CAN, Ethernet, ports, other outputs and NC go on the right.
+* **Overlapping text.** `symbol_layout.text_problems(sym)` estimates every shown pin name and number as Altium draws it (60 mil per character, 80 mil high, scaled down for a 50 mil pitch) and reports any two that overlap and any name running out of the body. `check` includes it, so `ecadlib symbol` exits 1 on it. The NE555DR from EasyEDA in Oliver's first Altium run is the test case: its VCC and RST names ran down into DISCH and OUT, and GND ran up into THRES and CONT.
+
+* **Groups.** Pins are grouped by name, and by type when the name says nothing. Power (VDD, 3V3, VBAT) and analog supply (VDDA, VREF+) go on top; ground (GND, VSS, AGND, VREF-) and the exposed pad go on the bottom. Reset/boot/enable, clock/oscillator, debug (SWD, JTAG, boot UART such as U0TXD), USB, ADC/DAC and inputs (IN+, TRIG, THRES, FB, SENSE, type input) go on the left. Power out (VOUT, VCAP, 3V3OUT), UART, I2C, SPI, CAN, Ethernet, ports, outputs (OUT, Q, DISCH, PGOOD, SW, type output) and NC go on the right. A pin's type beats a direction guessed from its name. Pins with no direction (passive, bidirectional) are `other`: left, moved right only to keep the body square.
 * **Names.** Alternate-function names are grouped by their first name (`PA9/USART1_TX` and `PH0-OSC_IN` are port pins). Overbars and active-low marks (`~{RESET}`, `/RESET`, `RESET#`, `RST_N`) are ignored for grouping.
 * **Ports.** Each port is its own block, sorted by number (PA0..PA15, then PB0...). Blocks are separated by one empty grid row. Whole ports move between the left and right side to keep the body roughly square. A port is split only when that saves more than 6 rows.
 * **Stacking.** Power pins that share a name (VDD, or VDD_1..VDD_5 numbered 1..n) are stacked: one pin shows its name and number, and the rest sit on the same spot with name and number hidden. Names that only look alike are never stacked: VDD1 / VDD2 (an isolator's two sides), VDD18 / VDD33 and VDD_18 / VDD_33 are different supplies. KiCad gets the rest as hidden passive pins (KLC S4.3). `stack_power = "hide"` makes them hidden pins tied to the net by name instead (Altium HiddenNetName; the KiCad export names those hidden power pins after that net, since KiCad connects them by name); `"none"` draws every pin.
 * **Grid.** Everything is on the grid: body edges, pin ends and pin pitch (100 mil, which is 2.54 mm in KiCad).
 * **Multi-part.** With `split_pins` set, larger parts become multi-part symbols. Part A holds power, ground and NC; the other parts hold the signal blocks in order, at most `unit_pins` pins each.
 
-Parts below `layout_pins` pins keep the plain "side per pin" layout byte for byte. `layout=True/False` (or `"layout"` in symbol JSON) forces the grouped layout on or off.
+With `layout_pins` set above 1, parts with fewer pins keep the plain "side per pin" layout byte for byte. `layout=True/False` (or `"layout"` in symbol JSON) forces the grouped layout on or off.
 
 ```
 ecadlib symbol pins.csv -o out/STM32F103VET6.SchLib --kicad out/STM32F103VET6.kicad_sym --preview out/stm32.svg --list
@@ -1006,7 +1008,8 @@ The CSV needs `num` and `name` columns; `type` and `group` (to override the grou
 
 ```toml
 [symbols]
-layout_pins = 40        # grouped layout from this many pins (0 = never)
+layout_pins = 1         # grouped layout from this many pins (0 = never)
+power_side = "top"      # top: power top, ground bottom | left: both on the left side
 split_pins = 0          # multi-part above this many pins (0 = never)
 unit_pins = 48          # most pins in one signal part
 stack_power = "stack"   # stack | hide | none
@@ -2126,6 +2129,13 @@ guide: [docs/house-style.md](docs/house-style.md).
 * Also in the UI (**Settings: your house style**) and MCP (`learn_house_style`, `house_style`, `check_house_style`,
   `apply_house_style`). Tests: `tests/test_house_style.py`, which runs offline with a fake model for each tier.
 * **Not verified:** no real customer library has been scanned and no real model has been called.
+
+## Credits
+
+Parts converted from EasyEDA (the `easyeda` source, by LCSC number) come from the **JLCEDA/EasyEDA Official Library**
+([easyeda.com](https://easyeda.com), [lceda.cn](https://lceda.cn)), whose data asks anyone reusing it to credit it.
+ecadlib keeps that credit on every converted part: in the footprint's description, as a `Credit` property on the KiCad
+symbol, and as a `Library Credit` parameter on the Altium part. Leave it in place if you share or publish the library.
 
 ## Releases
 

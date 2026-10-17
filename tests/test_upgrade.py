@@ -437,7 +437,7 @@ def test_workspace_and_mcp_tools():
         w.librarian_run("uploads/board.csv")
         rep = M.call_tool(w, "rebuild_check", {"bom": "uploads/board.csv"})
         # EEPART1 (ready, kept from 0.3.0) rebuilds with today's EasyEDA converter, which places REF** / value above /
-        # below the courtyard: its footprint files drift, nothing else does
+        # below the courtyard and fp_tidy tidies it: its footprint files drift, nothing else does
         assert rep["lock"] == "librarian/board/library.lock.json", RB.render(rep)
         drift = {(r["part"], Path(r["file"]).suffix) for r in rep["rows"] if r["result"] == "DRIFT"}
         assert drift <= {("EEPART1", ".PcbLib"), ("EEPART1", ".kicad_mod")}, RB.render(rep)
