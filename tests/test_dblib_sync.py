@@ -352,6 +352,8 @@ def test_menu_part_goes_to_the_table_its_source_names():
     lcsc = "'-55℃~+155℃ 100mW 10kΩ 75V Thick Film Resistor ±1% ±100ppm/℃ 0603 Chip Resistor - Surface Mount ROHS"
     assert X.kind_of(["", lcsc], ["", "", "0603"]) == "Resistors"
     assert X.kind_of(["Gate driver IC, 600V half bridge - SOIC-8"]) is None
+    assert X.kind_of([lcsc]) is None                    # the noun alone is not enough: an LDO "stable with ceramic
+    assert X.kind_of(["LDO regulator, stable with ceramic output capacitors"], ["", "", "SOT-223"]) is None  # capacitors"
 
 
 if __name__ == "__main__":

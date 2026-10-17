@@ -48,8 +48,9 @@ def kind_of(descriptions=(), footprints=()):
         for cat, rx in KIND_WORDS:
             if re.fullmatch(rf"(?:[\w/&-]+\s+){{0,3}}(?i:{rx})(?:\s+[A-Z]{{2,5}})?", parts[0]):
                 return cat
-        for cat, rx in KIND_WORDS:          # LCSC's long text ends a phrase with its category: "... 0603 Chip Resistor -
-            if any(re.search(rf"(?:^|\s)(?i:{rx})$", p) for p in parts):     # Surface Mount ROHS"
+    if any(re.fullmatch(r"(?:01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)", str(f or "").strip()) for f in footprints):
+        for cat, rx in KIND_WORDS[:3]:      # a bare chip size (LCSC's package "0603") and the noun anywhere in the
+            if any(re.search(rf"\b(?i:{rx})\b", str(d or "")) for d in descriptions):     # text: "... Chip Resistor"
                 return cat
     for f in footprints:
         if re.match(r"^([RCL])(?:\d{4}|_\d{4}_\d{4}Metric)(?:_|$)", str(f or "").split(":")[-1].split(" ")[0]):
