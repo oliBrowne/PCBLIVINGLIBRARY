@@ -118,6 +118,15 @@ def _xl_text(v):
     return str(v)
 
 
+def _decode_line(b):
+    for enc in ("utf-8-sig", "cp1252"):
+        try:
+            return b.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return b.decode("latin-1")
+
+
 def _read_csv(p):
     """Tolerant CSV read: Altium ActiveBOM exports put title rows ('Bill of Materials;;;;;', a blank
     row) above a wider header, which pandas' sniffer chokes on. Rows may be ragged; they are padded."""
@@ -128,12 +137,11 @@ def _read_csv(p):
         data = data.decode(utf16_without_bom(data), errors="replace").encode("utf-8")
     if b"\x00" in data[:4096]:
         raise ValueError(f"{p}: not a text BOM (binary data); save it as CSV or XLSX")
-    for enc in ("utf-8-sig", "cp1252", "latin-1"):                       # Excel 'CSV' on Windows is cp1252
-        try:
-            text = data.decode(enc)
-            break
-        except UnicodeDecodeError:
-            continue
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:                                            # Excel 'CSV' on Windows is cp1252; decided
+        text = "".join(_decode_line(ln) for ln in data.splitlines(keepends=True))   # per line: one cp1252 byte in a
+                                                                          # UTF-8 file must not turn 10µF into 10ÂµF
     lines = [ln for ln in text.splitlines(keepends=True) if ln.strip()]  # keepends: a quoted cell may span lines
     if not lines:
         raise ValueError(f"{p}: the BOM file is empty")

@@ -65,6 +65,16 @@ def test_european_decimal_quantities():
     assert [S.line_qty(l) for l in lines] == [1, 2, 1, 1000], lines
 
 
+def test_mostly_utf8_file_with_one_cp1252_byte():
+    """One stray cp1252 byte made the whole file decode as cp1252: every '10µF' became '10ÂµF' (parsed as 10 farad)."""
+    data = "Designator;Value;Description\nC1;10µF;cap\nR1;4.7kΩ;res\n".encode() + "R2;1k;caf\xe9\n".encode("cp1252")
+    lines, _ = T.read_bom(_write("bom.csv", data))
+    assert [l["value"] for l in lines] == ["10µF", "4.7kΩ", "1k"] and lines[2]["description"] == "café", lines
+    assert abs(parse_value(lines[0]["value"]) - 1e-5) < 1e-12
+    lines, _ = T.read_bom(_write("bom.csv", "Designator;Value;Tol\nC1;10µF;±10%\n".encode("cp1252")))   # pure cp1252
+    assert lines[0]["value"] == "10µF", lines
+
+
 if __name__ == "__main__":
     import sys
     fails = 0
