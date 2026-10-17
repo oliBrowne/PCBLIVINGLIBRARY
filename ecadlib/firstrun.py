@@ -194,8 +194,10 @@ def config_defaults(cmd, argv, environ=None, start="."):
 
 
 # ------------------------------------------------------------------ checks before a command runs
-LIB_CHECKED = {"triage", "librarian", "resolve", "kicad-export", "mcp", "ui", "agent-watch", "agent", "dedupe"}
-OUT_CHECKED = {"init", "demo", "triage", "librarian", "kicad-export", "kicad-dblib", "dblib", "export-parts", "dblib-sync"}
+LIB_CHECKED = {"triage", "librarian", "resolve", "kicad-export", "eagle-export", "easyeda-export", "mcp", "ui", "agent-watch",
+               "agent", "dedupe"}
+OUT_CHECKED = {"init", "demo", "triage", "librarian", "kicad-export", "eagle-export", "easyeda-export", "kicad-dblib", "dblib",
+               "export-parts", "dblib-sync"}
 
 
 def _values(argv, flags):

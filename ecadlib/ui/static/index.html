@@ -290,6 +290,10 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
         <div class="out" id="dryout"></div>
       </div>
     </div>
+    <div class="row" style="margin-top:10px"><span class="muted small">Other tools, read back pad by pad:</span>
+      <button class="small" id="toeagle" data-role="librarian">Fusion / EAGLE .lbr</button>
+      <button class="small" id="toeasyeda" data-role="librarian">EasyEDA Pro .elibz</button></div>
+    <div class="out" id="toolout"></div>
   </section>
 
   <section class="card" id="queuecard">
@@ -506,7 +510,7 @@ async function runJob(start, label) {
 
 function showResult(t) {
   current = t; filter = null; $("#q").value = ""; planned = null;
-  ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#approut", "#dedupeout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
+  ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#approut", "#dedupeout", "#toolout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
   $("#dry").disabled = $("#push").disabled = true; disabledWhy(); render();
 }
 
@@ -617,6 +621,12 @@ $("#models").addEventListener("click", e => action(e.target, $("#modelsout"), as
     `<div class="muted">Files are in the <span class="mono">altium_models</span> folder of the workspace.</div>` +
     (r.footprints.length ? "" : `<div class="next s-warn"><span>No footprint was converted: none of this BOM's footprints is in your KiCad libraries. Step 2 (Fill the library) finds and builds them.</span></div>`);
 }));
+["eagle", "easyeda"].forEach(tool => $("#to" + tool).addEventListener("click", e => action(e.target, $("#toolout"), async () => {
+  const r = await api("/api/export/tool", { bom: current.bom, tool });
+  return `Written: ${fileLink(r.file)} (${Object.entries(r.counts).map(([k, v]) => v + " " + k).join(", ")}).` +
+    (r.ok ? `<div class="muted">Read back the same as the library.</div>` : `<div class="next s-warn"><span>${esc(r.errors.length)} difference(s) on reading back: ${esc(r.errors.slice(0, 3).join("; "))}</span></div>`) +
+    (r.approximations.length ? `<div class="muted">Approximated for this format: ${esc(r.approximations.slice(0, 5).join("; "))}</div>` : "");
+})));
 let planned = null;
 $("#plan").addEventListener("click", e => action(e.target, $("#planout"), async () => {
   planned = await api("/api/altium365/plan", { bom: current.bom });

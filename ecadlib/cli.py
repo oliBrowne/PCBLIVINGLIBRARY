@@ -18,6 +18,8 @@
     ecadlib datasheet PDF --part MPN | batch PLAN|BOM | estimate PLAN|BOM   Claude reads datasheets -> symbols + footprints
     ecadlib release-check plan.json [--allow P]   hold back plan items that fail the pre-release checks
     ecadlib kicad-export plan.json -o DIR --name LIB   the same library as KiCad files (.kicad_sym, .pretty)
+    ecadlib eagle-export plan.json -o DIR --name LIB   the same library for Autodesk Fusion Electronics / EAGLE (.lbr)
+    ecadlib easyeda-export plan.json -o DIR --name LIB the same library for EasyEDA Pro (.elibz)
     ecadlib resolve   plan.json [--part P] list|show|choose ...   fix held parts: ranked candidates, pick one
     ecadlib upstream  check-kicad|check-a365 ...  upstream change alerts (KiCad sources, Altium 365 drift)
     ecadlib a365      pull|status|reconcile PLAN --workspace URL [--state F]   two-way Altium 365 sync
@@ -75,6 +77,8 @@ COMMANDS = {
     "datasheet": ("ecadlib.datasheet", "Claude datasheet reader: one PDF, or a whole plan/BOM as one Message Batch"),
     "release-check": ("ecadlib.release_check", "pre-release checks on an altium365 plan"),
     "kicad-export": ("ecadlib.kicad_export", "librarian plan -> KiCad .kicad_sym / .pretty / .3dshapes"),
+    "eagle-export": ("ecadlib.eagle_export", "librarian plan -> Autodesk Fusion Electronics / EAGLE .lbr, read back pad by pad"),
+    "easyeda-export": ("ecadlib.easyeda_pro_export", "librarian plan -> EasyEDA Pro device library .elibz, read back pad by pad"),
     "resolve": ("ecadlib.resolve", "fix held parts: candidates for a missing symbol/footprint, choose one"),
     "upstream": ("ecadlib.upstream", "KiCad upstream changes and Altium 365 drift"),
     "a365": ("ecadlib.a365_sync", "two-way Altium 365 sync: pull workspace components into the plan, status, reconcile"),
