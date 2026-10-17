@@ -54,7 +54,8 @@ PROJECT, UNIT, INI = "ecadlib_menu.PrjScr", "ecadlib_menu.pas", "ecadlib_menu.in
 RUN_CMD, RUN_VBS, PREFS, README = "ecadlib_run.cmd", "ecadlib_run.vbs", "ecadlib_menu.DXPPrf", "ALTIUM_MENU_README.txt"
 PROCS = [("AddPartFromMPN", "&Add part from MPN...", "Build a part from its manufacturer part number with ecadlib"),
          ("CheckProjectBOM", "&Check this project BOM", "Check the focused project's BOM against the library; offer to fill it"),
-         ("OpenReviewQueue", "Open &review queue", "Open the ecadlib web UI at the review queue")]
+         ("OpenReviewQueue", "Open &review queue", "Open the ecadlib web UI at the review queue"),
+         ("ShowEcadlibPanel", "ecadlib &panel", "Open the ecadlib panel next to your design")]
 MENU_BOM = "uploads/altium-menu/parts.csv"
 HEADER = ["Designator", "Qty", "Value", "Footprint", "Manufacturer", "Mfr. Part #", "LCSC Part Number", "Description", "Datasheet"]
 ACTIONS = ("add-part", "check-bom", "fill", "queue", "open")
@@ -405,6 +406,11 @@ Begin
     ShowResult(Title, Job, Publish(Job));
 End;
 
+Procedure ShowEcadlibPanel;
+Begin
+    ShowPanel;
+End;
+
 Procedure OpenReviewQueue;
 Var
     Job : String;
@@ -604,9 +610,10 @@ def build(out, workspace=None, library=None, name="ecadlib", command="", win_dir
     if name and not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$", name):
         raise ValueError(f"--name {name!r}: letters, digits, _ . - only")
     from . import altium_forms as AF
-    files = {PROJECT: prjscr_text(UNIT, AF.DIALOG_UNIT), UNIT: pas_text(), AF.DIALOG_UNIT: AF.dialog_pas_text(),
-             AF.DIALOG_FORM: AF.dialog_dfm_text(), RUN_CMD: run_cmd_text(), RUN_VBS: run_vbs_text(),
-             README: readme_text(win_dir, bool(win_dir))}
+    files = {PROJECT: prjscr_text(UNIT, AF.DIALOG_UNIT, AF.PANEL_UNIT), UNIT: pas_text(),
+             AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text(),
+             AF.PANEL_UNIT: AF.panel_pas_text(), AF.PANEL_FORM: AF.panel_dfm_text(),
+             RUN_CMD: run_cmd_text(), RUN_VBS: run_vbs_text(), README: readme_text(win_dir, bool(win_dir))}
     written, kept = [], []
     for fname, text in files.items():
         data = text.encode("utf-8")
@@ -829,19 +836,25 @@ def unit_names(text):
 
 
 def project_problems(files):
-    """pas_problems of both units, each knowing the other's routines; the dialog also knows its form's components
-    and the form API (altium_forms.FORM_API). Problems are prefixed with the unit's file name."""
+    """pas_problems of every unit of the script project, each knowing the other units' routines and globals; a form
+    unit also knows its .dfm's components and the form API (altium_forms.FORM_API, PANEL_API). Every handler a .dfm
+    names (OnClick = X) must be a method of its form in the unit. Problems are prefixed with the file name."""
     from . import altium_forms as AF
-    menu, dlg = files[UNIT], files[AF.DIALOG_UNIT]
-    comps = AF.dfm_names(files[AF.DIALOG_FORM])
-    handlers = set(re.findall(r"(?m)^\s*On\w+ = (\w+)", files[AF.DIALOG_FORM]))
-    probs = [f"{UNIT}: {p}" for p in pas_problems(menu, known=unit_names(dlg))]
-    probs += [f"{AF.DIALOG_UNIT}: {p}" for p in pas_problems(dlg, {**ALTIUM_API, **AF.FORM_API},
-                                                               known=unit_names(menu) | set(comps), procs=[])]
-    form = comps[0] if comps else ""
-    methods = {n.split(".")[1] for n in pas_routines(pas_tokens(dlg)) if n.startswith(f"T{form}.")}
-    probs += [f"{AF.DIALOG_FORM}: {h} is named in the form but {AF.DIALOG_UNIT} has no T{form}.{h}"
-              for h in sorted(handlers - methods)]
+    units = {UNIT: None, AF.DIALOG_UNIT: AF.DIALOG_FORM, AF.PANEL_UNIT: AF.PANEL_FORM}
+    names = {u: unit_names(files[u]) for u in units}
+    api = {**ALTIUM_API, **AF.FORM_API, **AF.PANEL_API}
+    probs = []
+    for u, form_file in units.items():
+        others = set().union(*(n for o, n in names.items() if o != u))
+        if form_file is None:
+            probs += [f"{u}: {p}" for p in pas_problems(files[u], known=others)]
+            continue
+        comps = AF.dfm_names(files[form_file])
+        probs += [f"{u}: {p}" for p in pas_problems(files[u], api, known=others | set(comps), procs=[])]
+        form = comps[0] if comps else ""
+        methods = {n.split(".")[1] for n in pas_routines(pas_tokens(files[u])) if n.startswith(f"T{form}.")}
+        handlers = set(re.findall(r"(?m)^\s*On\w+ = (\w+)", files[form_file]))
+        probs += [f"{form_file}: {h} is named in the form but {u} has no T{form}.{h}" for h in sorted(handlers - methods)]
     return probs
 
 
@@ -1354,8 +1367,34 @@ def run_job(job, opener=None):
     except Exception as e:                                   # every failure becomes one dialog line with a fix
         res = _error(e)
     write_result(job / "result.ini", res)
+    remember(job.parent.parent / "recent.ini", req.get("action", "") if "req" in dir() else "", res)
     prune_jobs(job.parent, keep=job)
     return res
+
+
+TITLES = {"add-part": "Add part", "check-bom": "BOM check", "fill": "Fill", "queue": "", "open": ""}
+
+
+def remember(path, action, res, keep=5):
+    """recent.ini next to the menu (the panel's "Recent" list): newest first, `keep` entries, one line each."""
+    title = TITLES.get(action, "")
+    if not title:
+        return
+    head = res.get("part") or res.get("mpn") or ""
+    entry = (f"{title}{' ' + head if head else ''}: {res.get('big') or res.get('status', '')}", res.get("message", "")[:70])
+    old = []
+    try:
+        sec = read_ini(path)["recent"]
+        old = [(sec.get(f"title{i}", ""), sec.get(f"text{i}", "")) for i in range(1, keep + 1) if sec.get(f"title{i}")]
+    except (OSError, KeyError, configparser.Error):
+        pass
+    out = {}
+    for i, (t, x) in enumerate([entry] + old[:keep - 1], 1):
+        out[f"title{i}"], out[f"text{i}"] = t, x
+    try:
+        write_result(path, out, section="recent")
+    except OSError:
+        pass
 
 
 def prune_jobs(jobs_dir, days=14, keep=None, now=None):

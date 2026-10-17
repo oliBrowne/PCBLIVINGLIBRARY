@@ -631,3 +631,116 @@ def dfm_names(dfm):
     """Component names declared in a .dfm (object Name: TClass), the form's included."""
     import re
     return re.findall(r"(?m)^\s*object (\w+): \w+", dfm)
+
+
+# ------------------------------------------------------------------ the ecadlib panel
+PANEL_UNIT, PANEL_FORM = "ecadlib_panel.pas", "ecadlib_panel.dfm"
+RECENT = 5
+PANEL_WIDTH = 260
+PANEL_BG = "$00404040"     # Altium paints a server panel's body #404040 whatever the form's Color (AD 26.10 on a real PC)
+
+PANEL_API = {
+    "EcadlibPanel": "the panel form's instance (named after the .dfm's object)", "Show": "TForm.Show (modeless)",
+    "BringToFront": "TControl.BringToFront", "ReadInteger": "TR0135 p191 (TIniFile)",
+}
+
+
+def _panel_pas():
+    recent_set = "\n".join(f"""    EcadlibPanel.Recent{i}A.Caption := Ini.ReadString('recent', 'title{i}', '');
+    EcadlibPanel.Recent{i}B.Caption := Ini.ReadString('recent', 'text{i}', '');
+    EcadlibPanel.Recent{i}.Visible := EcadlibPanel.Recent{i}A.Caption <> '';""" for i in range(1, RECENT + 1))
+    return r"""{ ecadlib panel for Altium Designer (written by `ecadlib altium-menu build`, ecadlib @VERSION@).
+
+  ShowEcadlibPanel (in the menu) opens it. It stays open next to your design: type an MPN and Add part, check the
+  focused project's BOM, open the review queue, and see the last results (recent.ini, which run-job keeps). The work
+  itself runs in the ecadlib dialog (ecadlib_dialog.pas). }
+
+Procedure RefreshPanel;
+Var
+    Ini : TIniFile;
+Begin
+    EcadlibPanel.Sub.Caption := 'Library: ' + Setting('name', 'ecadlib');
+    Ini := TIniFile.Create(Here + 'recent.ini');
+@RECENT_SET@
+    EcadlibPanel.Empty.Visible := Ini.ReadString('recent', 'title1', '') = '';
+    Ini.Free;
+End;
+
+Procedure ShowPanel;
+Begin
+    RefreshPanel;
+    EcadlibPanel.Show;
+    EcadlibPanel.BringToFront;
+    EcadlibPanel.Refresh.Enabled := True;
+End;
+
+Procedure TEcadlibPanel.AddClick(Sender : TObject);
+Begin
+    OpenDialog('add', '', Trim(EditMpn.Text));
+    EditMpn.Text := '';
+    RefreshPanel;
+End;
+
+Procedure TEcadlibPanel.BomClick(Sender : TObject);
+Begin
+    CheckProjectBOM;
+    RefreshPanel;
+End;
+
+Procedure TEcadlibPanel.QueueClick(Sender : TObject);
+Begin
+    OpenReviewQueue;
+End;
+
+Procedure TEcadlibPanel.RefreshTimer(Sender : TObject);
+Begin
+    RefreshPanel;
+End;
+""".replace("@RECENT_SET@", recent_set).replace("@VERSION@", __version__)
+
+
+def panel_dfm_text(kind="fkServerPanel"):
+    """The panel: title, library line, MPN box + Add part, Check project BOM, the review queue link and the last
+    RECENT results. kind: fkServerPanel (docks in Altium's panel area) or fkNormal (a floating window)."""
+    w = PANEL_WIDTH - 24
+    button_font = {"color": "$00FFFFFF"}
+    recent = "".join(_panel(f"Recent{i}", 12, 236 + (i - 1) * 44, w, 44, PANEL_BG, visible=False, body=(
+        _label(f"Recent{i}A", 0, 4, w, 18, "", face="Consolas") +
+        _label(f"Recent{i}B", 0, 22, w, 16, "", color=DIM, size=-11) +
+        _panel(f"Recent{i}Rule", 0, 43, w, 1, RULE, ind="    "))) for i in range(1, RECENT + 1))
+    return f"""object EcadlibPanel: TEcadlibPanel
+  Left = 0
+  Top = 0
+  Caption = 'ecadlib'
+  ClientHeight = 480
+  ClientWidth = {PANEL_WIDTH}
+  Color = {PANEL_BG}
+{_font(ind="  ")}  FormKind = {kind}
+  FormStyle = fsStayOnTop
+  OldCreateOrder = False
+  PixelsPerInch = 96
+  TextHeight = 15
+{_label("Title", 12, 10, w, 20, "ecadlib", ind="  ", size=-14, bold=True)}{_label("Sub", 12, 32, w, 18, "Library: ecadlib", ind="  ", color=DIM)}{_label("AskMpn", 12, 62, w, 16, "Add a part by MPN", ind="  ", color=DIM)}{_edit("EditMpn", 12, 80, w, ind="  ")}{_panel("Add", 12, 112, w, 30, BLUE, caption="Add part", onclick="AddClick", font=button_font)}{_panel("Bom", 12, 150, w, 30, BTN, caption="Check project BOM", onclick="BomClick", font=button_font)}  object Queue: TLabel
+    Left = 12
+    Top = 188
+    Width = {w}
+    Height = 18
+    AutoSize = False
+    Caption = 'Open review queue'
+    Cursor = crHandPoint
+{_font(color=BLUE, ind="    ")}    Transparent = True
+    OnClick = QueueClick
+  end
+{_label("RecentHead", 12, 216, w, 16, "Recent", ind="  ", color=DIM)}{_label("Empty", 12, 236, w, 18, "Nothing yet.", ind="  ", color=DIM)}{recent}  object Refresh: TTimer
+    Enabled = False
+    Interval = 3000
+    OnTimer = RefreshTimer
+    Left = 4
+    Top = 4
+  end
+end
+""".replace("\n", "\r\n")
+
+
+def panel_pas_text():
+    return _panel_pas().replace("\n", "\r\n")

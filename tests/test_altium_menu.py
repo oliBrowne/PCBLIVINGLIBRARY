@@ -111,17 +111,17 @@ def test_build_writes_well_formed_files():
     out = d / "menu dir"
     rep = AM.build(out, "D:\\ecadlib ws", None, win_dir="D:\\Altium Scripts\\ecadlib (menu)")
     assert rep["problems"] == [] and rep["menu_file"] == AM.PREFS, rep
-    assert set(rep["written"]) == {AM.PROJECT, AM.UNIT, AF.DIALOG_UNIT, AF.DIALOG_FORM, AM.INI, AM.RUN_CMD, AM.RUN_VBS,
-                                   AM.README, AM.PREFS}
-    for f in (AM.PROJECT, AM.UNIT, AF.DIALOG_UNIT, AF.DIALOG_FORM, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README):
+    units = (AF.DIALOG_UNIT, AF.DIALOG_FORM, AF.PANEL_UNIT, AF.PANEL_FORM)
+    assert set(rep["written"]) == {AM.PROJECT, AM.UNIT, *units, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README, AM.PREFS}
+    for f in (AM.PROJECT, AM.UNIT, *units, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README):
         raw = (out / f).read_bytes()
         assert b"\n" not in raw.replace(b"\r\n", b""), f"{f}: every line ends with CRLF (Windows tools)"
         raw.decode("ascii")                                       # plain ASCII: any code page reads it
         assert not re.search(rb"(?i)sk-ant|api[_-]?key\s*=|NEXAR_TOKEN\s*=|password\s*=", raw), f"{f}: no secrets"
     prj = configparser.ConfigParser()
     prj.read_string((out / AM.PROJECT).read_text())
-    assert prj.sections() == ["Design", "Document1", "Document2"] and prj["Document1"]["DocumentPath"] == AM.UNIT
-    assert prj["Document2"]["DocumentPath"] == AF.DIALOG_UNIT and (out / AF.DIALOG_FORM).is_file()
+    assert prj.sections() == ["Design", "Document1", "Document2", "Document3"]
+    assert [prj[f"Document{i}"]["DocumentPath"] for i in (1, 2, 3)] == [AM.UNIT, AF.DIALOG_UNIT, AF.PANEL_UNIT]
     ini = configparser.ConfigParser(interpolation=None)
     ini.read_string((out / AM.INI).read_text())
     assert {k for k in ini["ecadlib"]} == {"workspace", "library", "name", "command", "hidden", "timeout_s", "port", "offline",
@@ -187,7 +187,7 @@ def test_menu_file_follows_altiums_format():
     # the menus and the item they go before, as Menu_SVN's DXP.RCS names them
     assert targets == [("MNSchematicMenu", "MNDesignMenu_Window1_3"), ("MNPCBMenu", "MNDesignMenu_Window1_1"),
                        ("MNSchLibMenu", "MNDesignMenu_Window1_4"), ("MNPCBLibMenu", "MNDesignMenu_Window1_2")]
-    assert set(links) == set(pl) and len(links) == 3 * 8
+    assert set(links) == set(pl) and len(links) == len(AM.PROCS) * 8
     procs = {p for p, _, _ in AM.PROCS}
     for pid, (_, command, params, caption, _) in pl.items():
         assert command == "ScriptingSystem:RunScript"            # TR0124: ProjectName | ProcName = file>procedure
@@ -199,8 +199,8 @@ def test_menu_file_follows_altiums_format():
 
 def test_pas_uses_only_documented_calls_and_is_balanced():
     text = AM.pas_text()
-    assert AM.pas_problems(text, known=AM.unit_names(AF.dialog_pas_text())) == []
     assert any("OpenDialog is not declared" in p for p in AM.pas_problems(text)), "the dialog unit is what declares it"
+    assert AM.pas_problems(text, known=AM.unit_names(AF.dialog_pas_text()) | AM.unit_names(AF.panel_pas_text())) == []
     toks = AM.pas_tokens(text)
     routines = AM.pas_routines(toks)
     for proc, _, _ in AM.PROCS:
@@ -225,7 +225,7 @@ def test_pas_uses_only_documented_calls_and_is_balanced():
 
 
 def test_pas_checker_catches_mistakes():
-    ok = "Procedure AddPartFromMPN;\nBegin\nEnd;\nProcedure CheckProjectBOM;\nBegin\nEnd;\nProcedure OpenReviewQueue;\nBegin\nEnd;\n"
+    ok = "".join(f"Procedure {p};\nBegin\nEnd;\n" for p, _, _ in AM.PROCS)
     assert AM.pas_problems(ok) == []
     cases = {
         "not in the API allow-list": ok + "Procedure X;\nBegin\n    ShellExecute(0, 'open', 'x', '', '', 1);\nEnd;\n",
@@ -247,8 +247,11 @@ def test_pas_checker_catches_mistakes():
 def test_dialog_form_matches_its_unit_and_the_results():
     """The ecadlib dialog (ecadlib_dialog.pas + .dfm): every component the unit names is in the form, every handler
     the form names is in the unit, the .dfm nests object / end, and the keys the dialog reads are ones run-job writes."""
-    files = {AM.UNIT: AM.pas_text(), AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text()}
+    files = {AM.UNIT: AM.pas_text(), AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text(),
+             AF.PANEL_UNIT: AF.panel_pas_text(), AF.PANEL_FORM: AF.panel_dfm_text()}
     assert AM.project_problems(files) == []
+    assert "FormKind = fkServerPanel" in files[AF.PANEL_FORM] and "OnClick = AddClick" in files[AF.PANEL_FORM]
+    assert "OpenDialog('add', '', Trim(EditMpn.Text))" in files[AF.PANEL_UNIT]
     dfm = files[AF.DIALOG_FORM]
     names = AF.dfm_names(dfm)
     assert names[0] == "EcadlibDialog" and len(names) == len(set(names))
@@ -575,7 +578,7 @@ def test_cli_workspace_and_mcp():
     ws = Workspace(d / "ws2", offline=True)
     rep = M.call_tool(ws, "altium_menu", {"win_dir": "D:\\ws2\\altium_menu"})
     assert rep["problems"] == [] and rep["menu_file"] == AM.PREFS and rep["folder"] == "altium_menu"
-    assert set(rep["procedures"]) == {"AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue"}
+    assert set(rep["procedures"]) == {"AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue", "ShowEcadlibPanel"}
     c = AM.load_config(ws.root / "altium_menu" / AM.INI)
     assert c["workspace"].resolve() == ws.root and c["library"].resolve() == ws.root / "altium_library"
     assert "altium_menu" in {t["name"] for t in M.TOOLS}
