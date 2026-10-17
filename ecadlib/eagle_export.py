@@ -1193,14 +1193,28 @@ def copy_models(shapes, dest, rep, lib):
     library are removed, so the folder (and the zip) holds this library's models only."""
     if not shapes.is_dir():
         return
-    dest.mkdir(exist_ok=True)
     keep = {f.name for f in shapes.iterdir() if f.is_file()}
-    for f in dest.iterdir():
-        if f.is_file() and f.name not in keep:
-            f.unlink()
+    same = dest.is_dir() and dest.resolve() == shapes.resolve()     # -o is the --kicad folder: the models are there
+    if not same:
+        dest.mkdir(exist_ok=True)
+        for f in dest.iterdir():
+            if f.is_file() and f.name not in keep:
+                f.unlink()
     for name in sorted(keep):
-        shutil.copyfile(shapes / name, dest / name)
+        if not same:
+            shutil.copyfile(shapes / name, dest / name)
         rep["models"][name] = f"{lib}.3dshapes/{name}"
+
+
+def copy_notice(kdir, out):
+    """kicad-export's NOTICE.txt (CC-BY-SA attributions) next to the library; an earlier export's notice is removed
+    when this library has none. Nothing to copy when -o is the --kicad folder itself."""
+    src, dest = Path(kdir) / "NOTICE.txt", Path(out) / "NOTICE.txt"
+    if src.is_file():
+        if not (dest.is_file() and dest.resolve() == src.resolve()):
+            shutil.copyfile(src, dest)
+    elif dest.is_file():
+        dest.unlink()
 
 
 HANDOFF = {
@@ -1306,10 +1320,7 @@ def export(plan, out, name="ecadlib", include_held=False, libs=(), http=None, lo
         lbr = out / f"{lib}.lbr"
         lbr.write_text(text, encoding="utf-8")
         copy_models(kdir / f"{krep['library']}.3dshapes", out / f"{lib}.3dshapes", rep, lib)
-        if (kdir / "NOTICE.txt").is_file():
-            shutil.copyfile(kdir / "NOTICE.txt", out / "NOTICE.txt")
-        elif (out / "NOTICE.txt").is_file():         # an earlier export's notice; this library has no CC-BY-SA content
-            (out / "NOTICE.txt").unlink()
+        copy_notice(kdir, out)
         # ---- read back what was written
         back = read_lbr(lbr)
         for pname, (src, approx) in sources.items():

@@ -26,6 +26,23 @@ def plugin_for(path):
     return m.PluginFind(getattr(m, kind))
 
 
+def saved_file(pretty, before, fp=None):
+    """The .kicad_mod FootprintSave just wrote: the new file in the folder, else the one named after the footprint
+    (KiCad names it <footprint>.kicad_mod; a second footprint of the same name overwrites the first). Not the newest
+    mtime: several saves in one tick of a coarse clock (FAT, HFS+, 1-2 s) would all point at one file."""
+    new = sorted(set(pretty.glob("*.kicad_mod")) - set(before))
+    if new:
+        return new[0]
+    try:
+        f = pretty / f"{fp.GetFPID().GetLibItemName()}.kicad_mod"
+        if f.is_file():
+            return f
+    except Exception:
+        pass
+    files = sorted(pretty.glob("*.kicad_mod"), key=lambda f: f.stat().st_mtime)
+    return files[-1] if files else None
+
+
 def main(argv):
     lib, out = Path(argv[0]), Path(argv[1])
     out.mkdir(parents=True, exist_ok=True)
@@ -47,9 +64,10 @@ def main(argv):
             if fp is None:
                 errors[name] = "not loaded"
                 continue
+            before = set(pretty.glob("*.kicad_mod"))
             k.FootprintSave(str(pretty), fp)
-            files = sorted(pretty.glob("*.kicad_mod"), key=lambda f: f.stat().st_mtime)
-            got[name] = str(files[-1]) if files else None
+            f = saved_file(pretty, before, fp)
+            got[name] = str(f) if f else None
         except Exception as e:                # one bad footprint must not stop the others
             errors[name] = f"{type(e).__name__}: {e}"
     print(json.dumps({"kicad": pcbnew.Version(), "footprints": got, "errors": errors}))
