@@ -293,7 +293,8 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
         return next((r for r in rows if r.get("Part Number") == pn), None)
 
     for it in items:
-        res = {"name": it["name"], "action": "", "detail": "", "table": table_of(it)}
+        t0 = table_of(it)                                   # Excel sheet names ignore case: Passives = passives
+        res = {"name": it["name"], "action": "", "detail": "", "table": next((k for k in tables if k.lower() == t0.lower()), t0)}
         results.append(res)
         if it.get("status") == "held":
             res["action"], res["detail"] = "held", "; ".join(it.get("hold_reasons") or ["release check"])
@@ -417,6 +418,9 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                 managed_files.discard(rel)
                 if not dry_run:
                     f.unlink()
+                    recipe = f.with_name(f.name + AN.EXT)      # else Altium's rebuild would make a file put here later
+                    if recipe.is_file():                       # from the recipe of the one pruned
+                        recipe.unlink()
             else:
                 res["detail"] = "no row uses it; kept (--prune deletes it)"
             results.append(res)

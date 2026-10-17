@@ -46,7 +46,7 @@ The script is written from Altium's scripting references (TR0120 DelphiScript, T
 Schematic API references) and Altium's own example scripts; ALTIUM_API lists every identifier it calls and where it is
 documented. tests/test_altium_native.py checks that the script calls nothing else. Run in Altium Designer 26 on a
 real PC before it is trusted: see docs/altium-native.md for the result of that run."""
-import argparse, json, re, sys
+import argparse, hashlib, json, re, sys
 from pathlib import Path
 
 from . import altium_lib as AL
@@ -79,7 +79,10 @@ def step_file(fp, k, body):
     """Where a body's embedded STEP model is written beside its PcbLib (relative, '/' separators): its own folder,
     so the file keeps the model's name and Altium embeds it under that name."""
     name = Path(str((body.get("step") or {}).get("name") or f"{AL.file_stem(fp['name'])}.step").replace("\\", "/")).name
-    return f"ecadlib_3d/{AL.file_stem(fp['name'])}_{k}/{_t(name)}"
+    stem = AL.file_stem(fp["name"])
+    if stem != AL.lib_name(fp["name"]):       # 'A/B' and 'A_B' would share a folder (and one STEP file): keep them apart
+        stem += "_" + hashlib.sha1(AL.lib_name(fp["name"]).encode("utf-8")).hexdigest()[:6]
+    return f"ecadlib_3d/{stem}_{k}/{_t(name)}"
 
 
 def footprint_lines(fp):
