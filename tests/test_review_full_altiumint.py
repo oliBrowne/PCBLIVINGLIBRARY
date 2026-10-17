@@ -19,7 +19,9 @@ def _loops_over_installed(pas):
 def test_menu_script_counts_installed_libraries():
     pas = M.pas_text()
     _loops_over_installed(pas)
-    assert M.pas_problems(pas) == []                         # InstalledLibraryCount is in the documented allow-list
+    from ecadlib import altium_forms as AF                   # OpenDialog / ShowPanel live in the dialog and panel units
+    other = M.unit_names(AF.dialog_pas_text()) | M.unit_names(AF.panel_pas_text())
+    assert M.pas_problems(pas, known=other) == []            # InstalledLibraryCount is in the documented allow-list
 
 
 def test_install_script_counts_installed_libraries():
