@@ -518,7 +518,10 @@ def make_handler(ws: Workspace, team=None):
             return data
 
         def _json(self):
-            b = json.loads(self._body(MAX_JSON) or b"{}")
+            try:
+                b = json.loads(self._body(MAX_JSON) or b"{}")
+            except RecursionError:
+                raise ValueError("the JSON body is nested too deeply") from None
             if not isinstance(b, dict):
                 raise ValueError("expected a JSON object")
             self._fields = {k: b[k] for k in AUDIT_KEYS if k in b and isinstance(b[k], (str, bool, int, list))

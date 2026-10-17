@@ -43,6 +43,19 @@ def test_local_ui_refuses_to_be_framed():
                 assert "frame-ancestors 'none'" in h.get("content-security-policy", ""), (path, h)
 
 
+def test_deeply_nested_json_body_is_a_plain_400():
+    """A 2 MB body of '[' raised RecursionError inside json.loads: the terminal got a traceback and the page "Something
+    went wrong (RecursionError ...)" instead of a bad-request answer (the MCP server already treats it as a parse error)."""
+    with tempfile.TemporaryDirectory() as d:
+        ws = Workspace(Path(d) / "w", providers=["digikey"])
+        err = io.StringIO()
+        with _served(ws) as port, contextlib.redirect_stderr(err):
+            st, _, body = _req(port, "POST", "/api/footprint/preview", b"[" * 100000)
+        msg = json.loads(body)["error"]
+        assert st == 400 and "Something went wrong" not in msg and "nested" in msg, (st, msg)
+        assert "Traceback" not in err.getvalue(), err.getvalue()[-500:]
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_review_1018_ui_mcp"]))
