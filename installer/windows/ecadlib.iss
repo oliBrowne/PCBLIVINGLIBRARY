@@ -25,6 +25,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile={#Root}\LICENSE
+InfoBeforeFile={#Root}\PRIVACY.md
 OutputDir={#Root}\dist
 OutputBaseFilename=ecadlib-setup-{#AppVersion}
 SetupIconFile={#Root}\build\ecadlib.ico

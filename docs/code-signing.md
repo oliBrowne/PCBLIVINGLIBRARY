@@ -33,11 +33,35 @@ The certificate is issued to a verified person or organisation, so the maintaine
 The next Windows build then signs everything and fails if a signature is not valid. The client secret expires (the
 default is 6 months). When it does, make a new one and update `AZURE_CLIENT_SECRET`.
 
-## The free alternative
+## The free alternative: SignPath Foundation
 
-[SignPath Foundation](https://signpath.org) signs open-source projects for free. You apply, and they decide. Their
-signing runs through their own GitHub action, so switching to it means replacing the two signing steps in
-`windows.yml`.
+[SignPath Foundation](https://signpath.org) signs open-source projects for free. You apply at
+<https://signpath.org/apply>, and they decide. Their conditions (from <https://signpath.org/terms>), and where this
+repository stands on each:
+
+- **OSI license, no proprietary code, no malware:** MIT, and every bundled dependency is open source. This is met.
+- **Actively maintained, released in the form to be signed:** the installer must be on a GitHub release. This is met
+  after the first tagged release.
+- **A privacy policy shown at install:** `PRIVACY.md` exists. Showing it in the installer is a one-line change to
+  `ecadlib.iss` (`InfoBeforeFile`).
+- **Uninstall:** the installer has an uninstaller. This is met.
+- **A "Code signing policy" section on the home and download pages:** a ready-made one is below. Add it to the README
+  and the release notes once you are accepted.
+- **MFA on GitHub and SignPath for every team member:** turn it on in your GitHub account settings.
+- **Team roles (authors, reviewers, approvers):** for now this is you alone. Every release is approved by hand in
+  SignPath.
+
+Switching to SignPath means replacing the two signing steps in `windows.yml` with SignPath's GitHub action.
+
+### Code signing policy (to publish once accepted)
+
+> Free code signing provided by [SignPath.io](https://signpath.io), certificate by
+> [SignPath Foundation](https://signpath.org).
+>
+> - Committers and reviewers: [oliBrowne](https://github.com/oliBrowne)
+> - Approvers: [oliBrowne](https://github.com/oliBrowne)
+>
+> Privacy: see [PRIVACY.md](../PRIVACY.md). ecadlib sends nothing anywhere unless you use a feature that needs it.
 
 ## Notes
 
