@@ -56,6 +56,24 @@ def test_deeply_nested_json_body_is_a_plain_400():
         assert "Traceback" not in err.getvalue(), err.getvalue()[-500:]
 
 
+def test_network_error_message_does_not_carry_the_api_key():
+    """requests' ConnectionError names the URL, so Mouser's ?apiKey= reached Response.error and http.log (the triage
+    report's "HTTP (this run)" list, downloadable from the UI) with the first characters of the key in the 120-char cut."""
+    with tempfile.TemporaryDirectory() as d:
+        h = CachedHTTP(d, min_interval=0)
+        key = "S3CRETKEYabcdefghijklmnop"
+        url = f"https://api.mouser.com/api/v1/search/keyword?apiKey={key}"
+
+        def boom(method, u, **kw):
+            raise requests.ConnectionError(f"HTTPSConnectionPool(host='api.mouser.com', port=443): Max retries exceeded "
+                                           f"with url: /api/v1/search/keyword?apiKey={key} (Caused by NewConnectionError)")
+        h.s.request = boom
+        r = h.post(url, "{}", cache=False)
+        assert r.status == 0 and r.error.startswith("ConnectionError"), r.error
+        assert "S3C" not in r.error, r.error
+        assert not any("S3C" in str(x) for e in h.log for x in e[2:]), h.log
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_review_1018_ui_mcp"]))
