@@ -325,8 +325,8 @@ def test_add_part_held_says_why_and_publishes_nothing():
     menu, cfg = _setup()
     r = AM.run_job(_job(menu, {"action": "add-part", "mpn": "NE555DR", "manufacturer": "Texas Instruments"}))
     assert r["status"] == "held" and r["install"] == "", r
-    assert r["message"].startswith("NE555DR is held") and "no symbol model" in r["message"]
-    assert "review queue" in r["fix"] and "ecadlib resolve" in r["fix"]
+    assert r["message"].startswith("NE555DR is held") and "There is no symbol for this part yet." in r["message"], r
+    assert "review queue" in r["fix"] and "release it anyway" in r["fix"] and "plan.json" not in r["message"] + r["fix"]
     assert not cfg["library"].exists() or not list(cfg["library"].glob("*.DbLib"))
     for bad in ("", "  ", "x;del *", "A" * 90):
         r = AM.run_job(_job(menu, {"action": "add-part", "mpn": bad}))

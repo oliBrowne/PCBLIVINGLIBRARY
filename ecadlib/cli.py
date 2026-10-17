@@ -19,6 +19,7 @@
     ecadlib release-check plan.json [--allow P]   hold back plan items that fail the pre-release checks
     ecadlib kicad-export plan.json -o DIR --name LIB   the same library as KiCad files (.kicad_sym, .pretty)
     ecadlib resolve   plan.json [--part P] list|show|choose ...   fix held parts: ranked candidates, pick one
+    ecadlib review    [plan.json] [--part P] [--yes]   go through held parts one by one: why, pick a candidate, release anyway
     ecadlib upstream  check-kicad|check-a365 ...  upstream change alerts (KiCad sources, Altium 365 drift)
     ecadlib a365      pull|status|reconcile PLAN --workspace URL [--state F]   two-way Altium 365 sync
     ecadlib queue     list|show|approve|reject|rebuild|retry [ID]   the library agent's review queue
@@ -52,7 +53,8 @@
     ecadlib testpack  --out DIR                   small Altium + KiCad test pack (6 parts) + CHECKLIST.md for a person to open
     ecadlib parity    plan.json [--kicad DIR] [--altium DIR] | pair A B | survey   KiCad and Altium files of every part match
 
-`ecadlib <command> -h` shows that command's options. --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
+`ecadlib <command> -h` shows that command's options. -q / --quiet prints only the outcome, -v / --verbose every
+detail; colour only on a terminal (NO_COLOR=1 or ECADLIB_COLOR=never turns it off). --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
 one-line error. ECADLIB_LIB, ECADLIB_WORKSPACE and ECADLIB_CONFIG are defaults for --lib, --workspace and the rules file."""
 import importlib, sys
 
@@ -78,6 +80,7 @@ COMMANDS = {
     "release-check": ("ecadlib.release_check", "pre-release checks on an altium365 plan"),
     "kicad-export": ("ecadlib.kicad_export", "librarian plan -> KiCad .kicad_sym / .pretty / .3dshapes"),
     "resolve": ("ecadlib.resolve", "fix held parts: candidates for a missing symbol/footprint, choose one"),
+    "review": ("ecadlib.review_cli", "go through held parts one at a time: the reason in plain words, pick a candidate, release anyway, open the datasheet"),
     "upstream": ("ecadlib.upstream", "KiCad upstream changes and Altium 365 drift"),
     "a365": ("ecadlib.a365_sync", "two-way Altium 365 sync: pull workspace components into the plan, status, reconcile"),
     "queue": ("ecadlib.agent_queue", "the library agent's review queue: list, show, approve, reject, rebuild"),
@@ -87,6 +90,7 @@ COMMANDS = {
     "step-gen": ("ecadlib.step_gen", "package-shaped STEP 3D models from a package spec or footprint name"),
     "upkeep": ("ecadlib.upkeep", "weekly lifecycle / upstream / price / A365 checks; new changes as one issue or PR"),
     "project": ("ecadlib.altium_project", "BOM straight from an Altium project (.PrjPcb / .SchDoc / ActiveBOM)"),
+    "hub": ("ecadlib.hub", "your library across tools: every part once, a column per tool, last changed and by whom"),
     "where-used": ("ecadlib.altium_project:where_used_main", "which projects use which library part, and flags"),
     "sim-models": ("ecadlib.sim_models", "find, check and attach SPICE / IBIS simulation models for a plan"),
     "agent-watch": ("ecadlib.agent_watch", "library agent watch step: new / changed / removed parts in watched projects and BOMs"),
@@ -127,7 +131,9 @@ def main(argv=None):
     if not cmd:
         print(f"ecadlib: unknown command {argv[0]!r}. Commands: {', '.join(COMMANDS)}", file=sys.stderr)
         return 2
-    args, notes = env_defaults(argv[0], argv[1:])            # ECADLIB_LIB / ECADLIB_WORKSPACE when the flag is not given
+    from . import term
+    rest = term.set_from_argv(argv[1:])                      # -q / -v for every command; --json: never styled
+    args, notes = env_defaults(argv[0], rest)            # ECADLIB_LIB / ECADLIB_WORKSPACE when the flag is not given
     from . import firstrun as FR
     args, more = FR.config_defaults(argv[0], args)          # then ecadlib.toml [setup] libs / workspace
     notes += more

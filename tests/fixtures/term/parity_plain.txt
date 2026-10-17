@@ -1,0 +1,11 @@
+  match  AMS1117-3.3
+  match  AO3401A
+  match  CAP-0402-100nF
+  match  CH340C
+  match  KT-0603R
+  match  RES-0603-10k
+  match  RES-0603-4.7k
+
+KiCad and Altium: 7 match, 0 differ
+written:
+  ws/librarian/demo_bom_demo/parity.md  parity report

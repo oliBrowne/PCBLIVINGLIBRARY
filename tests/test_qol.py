@@ -246,9 +246,9 @@ def test_doctor_hints_use_this_oss_shell():
     assert w.startswith('setx ANTHROPIC_API_KEY "..."') and '$env:ANTHROPIC_API_KEY = "..."' in w and "export" not in w
     with mock.patch.object(DR, "_windows", lambda: True):
         keys = {c["check"]: c for c in DR.check_keys({}, {})}
-    assert keys["key anthropic"]["hint"].startswith("setx ANTHROPIC_API_KEY"), keys["key anthropic"]
+    assert keys["key anthropic"]["hint"].startswith("to add it: setx ANTHROPIC_API_KEY"), keys["key anthropic"]
     keys = {c["check"]: c for c in DR.check_keys({}, {})}
-    assert keys["key anthropic"]["hint"].startswith(("export ANTHROPIC_API_KEY" if os.name != "nt" else "setx"))
+    assert keys["key anthropic"]["hint"].startswith("to add it: " + ("export ANTHROPIC_API_KEY" if os.name != "nt" else "setx"))
 
 def test_doctor_end_to_end_exit_codes_and_writes_nothing():
     with tempfile.TemporaryDirectory() as d, _env(**CLEAN), _cwd(d):
@@ -326,7 +326,7 @@ def test_status_summary_read_only():
         assert s["last_upkeep"] == {"date": "2026-10-05T00:00:00Z", "new_changes": 4, "state": "agent/upkeep/p/state/upkeep_last.json"}
         assert s["agent"]["state"] == "idle" and s["agent"]["queue"] == {"review": 2, "pushed": 1} and s["agent"]["waiting_review"] == 2
         text = WS.render(s)
-        assert "5 in 2 plan(s): 1 ready, 2 held, 1 waiting for sign-off, 1 duplicates" in text
+        assert "5 parts in 2 library plans: 1 ready, 2 held, 1 waiting for sign-off, 1 duplicate" in text
         assert "2 waiting for review" in text and "ecadlib resolve" in text and "WARN" in text
         assert {p: p.stat().st_mtime_ns for p in ws.rglob("*")} == before
         empty = WS.status(Path(d, "nothing"))

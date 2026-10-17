@@ -412,17 +412,29 @@ def check(lib_dir, keep=None, log=print):
             "counts": {k: sum(r["result"] == k for r in rows) for k in ("identical", "normalised", "DRIFT")}}
 
 
-def render(rep):
-    out = [f"rebuild --check {rep['lock']}"]
-    for d in rep["inputs"]:
-        out.append(f"  {'note ' if d.get('info') else 'INPUT'} {d['part'] or '(library)'}: {d['detail']}")
-    for r in rep["rows"]:
-        if r["result"] != "identical":
-            out.append(f"  {r['result']:<10} {r['part']}: {r['file']} {r['detail']}")
+def render(rep, styled=False, width=None, verbosity=0):
+    """The --check result as text: what drifted (in plain words), then the outcome."""
+    import io
+    from . import messages as M, term as TM
+    buf = io.StringIO()
+    t = TM.Term(buf, styled=styled, width=width, verbosity=verbosity)
+    lock = rep["lock"]
+    try:
+        rel = os.path.relpath(lock)
+        lock = rel if not rel.startswith("..") else lock
+    except ValueError:
+        pass
+    t.write(f"rebuild --check {lock}")
+    rows = [[t.status("info" if d.get("info") else "held", "note" if d.get("info") else "input changed"),
+             d["part"] or "(library)", M.clean(d["detail"])] for d in rep["inputs"]]
+    rows += [[t.status("held" if r["result"] == "DRIFT" else "skipped", r["result"].lower()), r["part"],
+              f"{r['file']} {M.clean(r['detail'])}".strip()] for r in rep["rows"] if r["result"] == "DRIFT" or (r["result"] != "identical" and t.verbose)]
+    t.table(rows)
     c = rep["counts"]
-    out.append(f"{c['identical']} file(s) byte-identical, {c['normalised']} identical after normalising dates, "
-               f"{c['DRIFT']} drifted; " + ("OK: the library rebuilds from its lock" if rep["ok"] else "DRIFT found"))
-    return "\n".join(out)
+    t.summary(("OK: the library rebuilds from its lock" if rep["ok"] else "DRIFT found: the library does not rebuild the same")
+              + f" ({c['identical']} file(s) byte-identical, {c['normalised']} identical after normalising dates, {c['DRIFT']} drifted)",
+              next=[] if rep["ok"] else [("ecadlib rebuild LIB --check --keep /tmp/rb", "keep the rebuilt copy to compare")])
+    return buf.getvalue().strip("\n")
 
 
 def main(argv=None):
@@ -439,8 +451,11 @@ def main(argv=None):
     quiet = lambda *x: None
     try:
         if a.check:
-            rep = check(lib, a.keep, log=quiet if a.json else quiet)
-            print(json.dumps(rep, indent=1) if a.json else render(rep))
+            from . import term as TM
+            with TM.working("rebuilding offline into a temporary copy"):
+                rep = check(lib, a.keep, log=quiet if a.json else quiet)
+            print(json.dumps(rep, indent=1) if a.json else render(rep, TM.wants_style(sys.stdout), TM.term_width(sys.stdout),
+                                                                  TM.VERBOSITY))
             return 0 if rep["ok"] else 1
         new, drift = rebuild(lib, log=quiet if a.json else print)
     except FileNotFoundError as e:

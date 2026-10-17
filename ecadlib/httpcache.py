@@ -101,7 +101,9 @@ class CachedHTTP:
             time.sleep(wait)
         self._last[host] = time.time()
         try:
-            r = self.s.request(method, url, data=body, headers=headers, timeout=timeout or self.timeout)
+            from .term import waiting, source_name               # a slow source says so on the terminal
+            with waiting(source_name(host)):
+                r = self.s.request(method, url, data=body, headers=headers, timeout=timeout or self.timeout)
         except requests.RequestException as e:
             m = re.search(r"Tunnel connection failed: ([^'\")]+)", str(e))
             msg = f"{type(e).__name__}: " + (f"proxy CONNECT refused ({m.group(1).strip()})" if m else str(e)[:120])

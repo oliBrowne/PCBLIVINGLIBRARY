@@ -1,0 +1,14 @@
+  ready  CAP-0402-100nF
+  ready  KT-0603R
+  ready  AMS1117-3.3
+  held   CH340C          There is no symbol for this part yet.
+  ready  RES-0603-10k
+  ready  RES-0603-4.7k
+  ready  AO3401A
+
+6 ready, 1 held  (held: CH340C)
+written:
+  ws/librarian/demo_bom_demo/release_check.md  release check report
+  ws/librarian/demo_bom_demo/plan.json         library plan, statuses updated
+next:
+  ecadlib review ws/librarian/demo_bom_demo/plan.json  # go through the held parts one by one

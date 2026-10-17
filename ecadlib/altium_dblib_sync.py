@@ -505,20 +505,36 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     out = sync(a.plan, a.to, "svndblib" if a.svn else "dblib", a.name, a.prune, a.win_dir, a.svn_url, a.dry_run, rules=a.rules)
+    from . import messages as M, term as TM
+    t = TM.Term()
+    rows = []
     for r in out["results"]:
-        print(f"  {r['action']:<12} {r['table']:<12} {r['name']:<28} {r['detail']}"[:200].rstrip())
-    print(("would write " if a.dry_run else "wrote ") + (", ".join(out["written"]) or "nothing") +
-          (f"; removed {', '.join(out['removed'])}" if out["removed"] else ""))
+        st = {"added": "ready", "updated": "ready", "unchanged": "skipped", "held": "held", "error": "failed",
+              "removed": "info"}.get(r["action"], "info")
+        detail = M.explain(r["detail"].removeprefix("held: "))["text"] if r["action"] == "held" else M.clean(r["detail"])
+        if r["action"] in ("added", "updated", "unchanged") and not t.verbose:
+            detail = ""
+        rows.append([t.status(st, r["action"]), r["table"], r["name"], detail])
+    t.table(rows)
     if out.get("warning"):
-        print("warning: " + out["warning"])
+        t.note(M.clean(out["warning"]), None)
+    if a.dry_run and not t.quiet:
+        t.wrap("would write " + (", ".join(out["written"]) or "nothing"), 0)
     if a.svn and not a.dry_run:
         s = svn_step(a.to, out["written"], out["removed"], a.commit, a.message)
         out["svn"] = s
-        print(f"svn: {s.get('note') or ('committed' if s['ran'] else s.get('error', ''))}")
+        t.write(f"svn: {s.get('note') or ('committed' if s['ran'] else s.get('error', ''))}")
         if not s["ran"]:
             for c in s["commands"]:
-                print(f"  {c}")
-    print(f"{summary(out)} -> {out['dblib']}")
+                t.write(f"  {c}")
+    written = [] if a.dry_run else [(out["dblib"], "open this in Altium (it lists the parts from the .xlsx next to it)")]
+    if not a.dry_run and t.verbose:
+        written += [(w, "") for w in out["written"]]
+    t.summary(f"{summary(out)}" + (" (dry run: nothing written; " + M.plural(len(out["written"]), "file") + " would be)" if a.dry_run else "")
+              + (f"; removed {', '.join(out['removed'])}" if out["removed"] else ""),
+              written=written,
+              next=[(f"ecadlib dblib-sync {a.plan} --to {a.to}", "write it for real")] if a.dry_run else
+              ([(f"ecadlib review {a.plan}", "the held parts")] if any(r["action"] == "held" for r in out["results"]) else []))
     if a.out:
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         Path(a.out).write_text(json.dumps(out, indent=2))

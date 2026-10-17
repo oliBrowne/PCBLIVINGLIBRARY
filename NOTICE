@@ -44,3 +44,10 @@ tests/nexar/schema.graphql is from NexarDeveloper/nexar-release-component-demo-w
 
 No code from altium-designer-mcp (GPL-3.0) is included; it was read only
 for behavioural notes about which files Altium Designer accepts.
+
+ecadlib/ui/static/hairline.js bundles line figures from Hairline
+(https://github.com/lucasmarkes/hairline), Copyright (c) 2026 Lucas Marques,
+licensed under the MIT License: the slow, drawer and sieve figures and the
+package's drawing and motion core, unmodified. scripts/hairline/seat.js is
+ecadlib's own figure, written with Hairline's hairline-create skill and built
+on that core (scripts/build_ui_figures.sh).

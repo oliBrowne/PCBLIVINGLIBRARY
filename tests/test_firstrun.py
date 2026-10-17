@@ -134,7 +134,7 @@ def test_init_questions_validate_answers_and_set_sources():
         assert rc == 0
         text = out.getvalue()
         assert "please type altium, kicad or both" in text and "libs1 does not exist" in text
-        assert any("ANTHROPIC_API_KEY is NOT set" in q for q in seen)      # names only, and its state
+        assert any("ANTHROPIC_API_KEY, which is not set yet" in q for q in seen)      # names only, and its state
         raw = RU.parse_text((Path(d) / "ecadlib.toml").read_text())
         assert raw["setup"] == {"tool": "altium", "libs": ["libs1", "/nope"], "workspace": "myws"}
         assert raw["sources"]["order"] == ["standard"]                     # no online lookups, no datasheet reader
@@ -239,7 +239,7 @@ def test_librarian_json_and_progress():
         rc, out, _ = _run(["librarian", str(bom), "-o", str(Path(d) / "o2"), "--offline", "--sources", "standard",
                            "--cache", str(Path(d) / "c")])
         assert "BOM: 1 lines" in out and "finding symbols and footprints for 1 part(s)" in out
-        assert out.strip().splitlines()[-1].startswith("1 parts: 1 ready, 0 held ->")
+        assert "\n1 part: 1 ready\n" in out and "next:" in out and "ecadlib kicad-export" in out      # the summary block
 
 
 # ------------------------------------------------------------------ the CLI tree: descriptions, examples, flag names

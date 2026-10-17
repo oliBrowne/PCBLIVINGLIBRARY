@@ -468,8 +468,10 @@ def main(argv=None):
         return 2
     index = KiCadIndex(a.lib)
     say = (lambda *x: None) if a.json else print
-    say(f"BOM lines: {len(lines)}  header map: {mapping}")
-    say(f"local index: {len(index.symbols)} symbols, {len(index.footprints)} footprints")
+    from . import term as TM
+    say(f"BOM: {len(lines)} lines; columns: " + ", ".join(f"{k} = {v!r}" for k, v in mapping.items()))
+    if a.lib or TM.VERBOSITY > 0:
+        say(f"your KiCad libraries: {len(index.symbols)} symbols, {len(index.footprints)} footprints")
     rows = triage(lines, index, provs, http)
     counts = write_reports(rows, mapping, provs, http, a.out, a.bom)
     if a.json:                                           # stable shape: README "Machine-readable output (--json)"
@@ -477,11 +479,41 @@ def main(argv=None):
                           "counts": {str(k): int(v) for k, v in counts.items()}, "rows": rows,
                           "reports": [str(Path(a.out).with_suffix(x)) for x in (".md", ".csv")]}, indent=2, default=str))
         return 0
-    for r in rows:
-        print(f"{r['line']:>2} {r['mpn'][:24]:<24} {r['lcsc']:<9} {r['status']:<34} {r['notes'][:90]}")
-    print("\n" + counts.to_string())
-    print(f"\nwrote {Path(a.out).with_suffix('.md')} and .csv")
+    print_result(rows, counts, a)
 
+
+TRIAGE_WORDS = {   # triage status -> (term status, plain words)
+    "in_library": ("ready", "in your library"),
+    "in_library (generated footprint)": ("ready", "in your library (footprint generated)"),
+    "available_easyeda": ("signoff", "found online (EasyEDA)"),
+    "easyeda_footprint_only": ("held", "footprint online, no symbol"),
+    "unverified (source unreachable)": ("skipped", "not checked: source unreachable"),
+    "needs_footprint_generation": ("held", "needs a new footprint"),
+}
+
+
+def print_result(rows, counts, a, t=None):
+    """Terminal view: a row per BOM line in plain words (-v: the source notes), the counts, the next step."""
+    from . import messages as M, term as TM
+    t = t or TM.Term()
+    table = []
+    for r in rows:
+        st, word = TRIAGE_WORDS.get(r["status"], ("info", r["status"].replace("_", " ")))
+        table.append([str(r["line"]), t.status(st, word), r["mpn"][:32], r["lcsc"],
+                      M.clean(r["notes"])[:200] if t.verbose else ""])
+    t.table(table, right=(0,))
+    by = {TRIAGE_WORDS.get(str(k), ("", str(k)))[1]: int(v) for k, v in counts.items()}
+    unreach = sum(int(v) for k, v in counts.items() if str(k).startswith("unverified"))
+    notes = []
+    if unreach:
+        notes.append((f"{M.plural(unreach, 'line')} could not be checked: the part sources were not reachable"
+                      + (" (--offline: only the cache)" if a.offline else ""),
+                      "run again online, or add API keys (`ecadlib doctor` lists them)"))
+    stem = Path(a.out)
+    t.summary(f"{M.plural(len(rows), 'BOM line')}: " + ", ".join(f"{v} {k}" for k, v in by.items()),
+              written=[(str(stem.with_suffix(".md")), "triage report"), (str(stem.with_suffix(".csv")), "the same as a table")],
+              next=[(f"ecadlib librarian {a.bom} -o ws/librarian/board", "fill the missing parts and build the library")],
+              notes=notes)
 
 if __name__ == "__main__":
     sys.exit(main())

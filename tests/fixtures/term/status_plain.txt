@@ -1,0 +1,14 @@
+Workspace ws
+  7 parts in 1 library plan: 6 ready, 1 held
+
+library plans:
+  librarian/demo_bom_demo  7 parts  6 ready  1 held
+
+rules        ecadlib.toml
+BOMs         1 uploaded
+last triage  never
+upkeep       never
+agent        never run; review queue: empty
+
+next:
+  ecadlib review --workspace ws  # 1 held part: why, and pick a fix (or `ecadlib resolve <plan.json> list`)

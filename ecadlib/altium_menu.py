@@ -216,7 +216,7 @@ Begin
     Code := RunApplication(Cmd);
     If Code <> 0 Then
     Begin
-        Result := 'Windows could not start: ' + Cmd + ' (error ' + IntToStr(Code) + '). Fix: set hidden=0 in ' + Here + 'ecadlib_menu.ini';
+        Result := 'Windows could not start ecadlib (error ' + IntToStr(Code) + ').' + #13#10 + 'Next: set hidden=0 in ' + Here + 'ecadlib_menu.ini and try again.';
         Exit;
     End;
     Waited := 0;
@@ -231,7 +231,7 @@ Begin
                 Waited := 0
             Else
             Begin
-                Result := 'Stopped waiting; ecadlib may still finish in the background. Its log: ' + Job + '\log.txt';
+                Result := 'Stopped waiting. ecadlib may still finish in the background.' + #13#10 + 'Next: look at its log, ' + Job + '\log.txt';
                 Exit;
             End;
         End;
@@ -240,9 +240,9 @@ Begin
     If FileExists(Job + '\result.ini') Then
         Exit;
     If FileExists(Job + '\notfound.txt') Then
-        Result := 'ecadlib was not found (not on PATH, no Python that can import it). Fix: pip install ecadlib, or set command= in ' + Here + 'ecadlib_menu.ini'
+        Result := 'ecadlib is not installed on this PC (not on PATH, and no Python can import it).' + #13#10 + 'Next: pip install ecadlib, or set command= in ' + Here + 'ecadlib_menu.ini'
     Else
-        Result := 'ecadlib stopped without a result. Its log: ' + Job + '\log.txt';
+        Result := 'ecadlib stopped without a result.' + #13#10 + 'Next: look at its log, ' + Job + '\log.txt';
 End;
 
 Function IsInstalled(Path : String) : Boolean;
@@ -299,7 +299,7 @@ Function MessageText(Job : String; Extra : String) : String;
 Begin
     Result := Answer(Job, 'message');
     If Answer(Job, 'fix') <> '' Then
-        Result := Result + #13#10 + #13#10 + 'Fix: ' + Answer(Job, 'fix');
+        Result := Result + #13#10 + #13#10 + 'Next: ' + Answer(Job, 'fix');
     If Extra <> '' Then
         Result := Result + #13#10 + Extra;
 End;
@@ -987,13 +987,14 @@ def add_part(cfg, mpn, manufacturer="", **hints):
     _, _, items = ws._plan(rel)
     it = _item_for(items, mpn)
     if it is None:
-        return {"status": "error", "message": f"{mpn}: the librarian made no plan item for it",
-                "fix": f"see {ws.root / ws._librarian_dir(bom).relative_to(ws.root) / 'review.md'}"}
+        return {"status": "error", "message": f"ecadlib could not add {mpn} to the library.",
+                "fix": f"Check the part number. What was tried is in {ws.root / ws._librarian_dir(bom).relative_to(ws.root) / 'review.html'}"}
     pub = publish(ws, rel, cfg["library"], cfg["name"]) if it["status"] == "ready" else {"install": [], "problems": []}
     st, nm = it["status"], it["name"]
     res = {"status": st, "part": nm, "mpn": mpn, "install": ";".join(pub.get("install") or []),
            "refresh": pub.get("target", ""), "review": str(ws._librarian_dir(bom) / "review.md")}
-    why = "; ".join(it.get("hold_reasons") or []) or "see the review"
+    from . import messages as M
+    whys = M.explain_all(it.get("hold_reasons") or [])
     if st == "ready":
         where = (f"released to Altium 365 ({pub['workspace']}): refresh the Components panel to see it"
                  if pub.get("target") == "a365" else
@@ -1003,14 +1004,14 @@ def add_part(cfg, mpn, manufacturer="", **hints):
             res.update(status="error", message=f"{mpn} was built ({nm}) but not published: {pub['problems'][0]}",
                        fix=pub.get("fix") or "run `ecadlib altium-pkg` or `ecadlib altium365 push` by hand to see more")
     elif st == "awaiting_approval":
-        res.update(message=f"{mpn} was built as {nm} and waits for sign-off before it goes into the library.",
-                   fix="approve it in the review queue (ecadlib > Open review queue), then add it again")
+        res.update(message=f"{mpn} was built as {nm} and is waiting for sign-off before it goes into the library.",
+                   fix="Approve it in the review queue (ecadlib > Open review queue), then add it again.")
     elif st == "duplicate":
         res.update(message=f"{mpn} is already in the library as {it.get('duplicate_of') or nm}.")
     else:
-        res.update(status="held", message=f"{mpn} is held ({nm}): {why}",
-                   fix="open the review queue (ecadlib > Open review queue) to pick a symbol/footprint, or "
-                       f"`ecadlib resolve` on {ws._librarian_dir(bom) / 'plan.json'}")
+        res.update(status="held", message=f"{mpn} is held ({nm}): " + (" ".join(w["text"] for w in whys[:3]) or "see the review."),
+                   fix=(whys[0]["fix"] + " " if whys else "") + "Open the review queue (ecadlib > Open review queue) "
+                       "to pick a symbol or footprint, or release it anyway.")
     return res
 
 
@@ -1110,7 +1111,7 @@ def fill(cfg, project):
         res["message"] += f" Not published: {pub['problems'][0]}"
         res["fix"] = pub.get("fix") or "run `ecadlib altium-pkg` / `ecadlib altium365 push` by hand to see more"
     elif s["held"] or s["awaiting_approval"]:
-        res["fix"] = "held parts: ecadlib > Open review queue (or `ecadlib resolve`) shows why and what to pick"
+        res["fix"] = "Open the review queue (ecadlib > Open review queue): it says why each part is held and what to pick."
     return res
 
 

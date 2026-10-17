@@ -124,6 +124,11 @@ def upkeep_events(rep):
     return evs
 
 
+def _plain(reason):
+    from . import messages as M
+    return M.explain(reason)["text"] if reason else ""
+
+
 def agent_events(rep, lookup=None):
     """batch_ready / part_held / upkeep_changes / lifecycle events for an agent.run_once report.
     lookup(item id) -> the queue item (for the part number of a failed item)."""
@@ -132,8 +137,10 @@ def agent_events(rep, lookup=None):
         n = len(b.get("items") or [])
         where = b.get("pr_url") or ""
         evs.append(event("batch_ready", f"Library agent: batch {b.get('id')} has {n} part(s) to review",
-                         f"pull request {b.get('pr_action') or 'ready'}" if where else
-                         f"no pull request ({b.get('fallback') or 'not published'}); review in {b.get('folder')}",
+                         f"Next: compare the pictures with the datasheets, then approve or reject each part "
+                         f"(pull request {b.get('pr_action') or 'ready'})." if where else
+                         f"Next: review the parts in the review queue or in {b.get('folder')} "
+                         f"(no pull request: {b.get('fallback') or 'not published'}).",
                          [], where, {"batch": b.get("id"), "items": b.get("items") or [], "pr_url": b.get("pr_url"),
                                      "folder": b.get("folder")}))
     failed = rep.get("failed") or []
@@ -142,12 +149,12 @@ def agent_events(rep, lookup=None):
             it = (lookup(f["id"]) if lookup else None) or {}
             return it.get("mpn") or it.get("key") or f["id"]
         evs.append(event("part_held", f"Library agent: {len(failed)} part(s) held",
-                         "could not be built or failed the visual proof; see the review queue",
-                         [f"{part(f)}: {f.get('reason', '')}"[:300] for f in failed], "",
+                         "They could not be built or failed the independent check. Next: open them in the review queue.",
+                         [f"{part(f)}: {_plain(f.get('reason', ''))}"[:300] for f in failed], "",
                          {"items": [{"id": f["id"], "part": part(f), "reason": f.get("reason")} for f in failed]}))
     found = (rep.get("upkeep") or {}).get("items") or []
     if found:
-        evs.append(event("upkeep_changes", f"Library agent upkeep: {len(found)} new finding(s)", "now in the review queue",
+        evs.append(event("upkeep_changes", f"Library agent upkeep: {len(found)} new finding(s)", "Next: they are in the review queue.",
                          [f"[{c.get('check')}] {_change_line(c)}" for c in found], "", {"count": len(found), "changes": found[:200]}))
         life = [c for c in found if _is_lifecycle(c)]
         if life:

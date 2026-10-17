@@ -71,20 +71,20 @@ def ask_setup(existing=None, given=None, inp=input, out=print, interactive=True,
             else:
                 out(f"    keeping {ans['tool']}")
         if "libs" not in given:
-            a = inp("  Your existing library folders (KiCad .kicad_sym/.pretty or Altium .SchLib/.PcbLib), comma-separated"
+            a = inp("  Your existing library folders (KiCad .kicad_sym/.pretty or Altium .SchLib/.PcbLib), separated by commas"
                     f" [{', '.join(ans['libs']) or 'none'}]: ").strip()
             if a:
                 ans["libs"] = [] if a.lower() == "none" else _split(a)
             for l in ans["libs"]:
                 if not Path(l).expanduser().exists():
-                    out(f"    note: {l} does not exist (yet); `ecadlib doctor` will flag it")
+                    out(f"    note: {l} does not exist yet; check the path (the setup check will flag it too)")
         if "workspace" not in given:
-            a = inp(f"  Workspace folder for uploads, plans and outputs [{ans['workspace']}]: ").strip()
+            a = inp(f"  Folder where ecadlib keeps your BOMs and the libraries it builds [{ans['workspace']}]: ").strip()
             ans["workspace"] = a or ans["workspace"]
         if ans["sources"] is None:
             online = _yes(inp("  Look missing parts up online (KiCad library on gitlab.com, EasyEDA/LCSC)? [Y/n]: "))
-            ds = _yes(inp(f"  Use the Claude datasheet reader for parts nothing else has? ({ds_env} is "
-                          f"{'set' if ds_key else 'NOT set'}) [{'Y/n' if ds_key else 'y/N'}]: "), default=ds_key)
+            ds = _yes(inp(f"  Let a model read the datasheet for parts no library has? (needs {ds_env}, which is "
+                          f"{'set' if ds_key else 'not set yet'}) [{'Y/n' if ds_key else 'y/N'}]: "), default=ds_key)
             order = [s for s in cur_sources if (online or s not in ("kicad", "easyeda")) and (ds or s != "datasheet")]
             if "standard" not in order:
                 order.append("standard")
@@ -143,7 +143,9 @@ def finish_init(ans, rules_file, out=print, environ=None, run_doctor=True):
         libs = [str(_rel_to(l, rules_file)) for l in ans["libs"]]
         rep = doctor.run(str(ws), libs, str(rules_file), environ)
         out("\nChecking the setup (ecadlib doctor):")
-        out(doctor.render(rep))
+        from . import term as TM               # styled on a terminal; plain when captured (web UI, tests)
+        out(doctor.render(rep, TM.wants_style(sys.stdout), TM.term_width(sys.stdout), TM.VERBOSITY) if out is print
+            else doctor.render(rep))
     out("\nNext:")
     for c, why in next_steps(ans):
         out(f"  {c}\n      {why}")
@@ -305,6 +307,8 @@ def build_demo(ws, tool="both", bom=None, log=print):
     from .app import Workspace
     t0 = time.time()
     root = Path(ws.root)
+    if root.resolve() == Path(root.resolve().anchor):
+        raise ValueError(f"refusing to build the demo at the filesystem root ({root}); give a folder, e.g. -o ecadlib-demo")
     rules_f = root / "ecadlib.toml"
     if rules_f.exists() and not rules_f.read_text(encoding="utf-8").startswith(DEMO_HEADER):
         raise ValueError(f"{root} has its own ecadlib.toml; the demo needs a folder of its own (e.g. -o ecadlib-demo)")
@@ -375,20 +379,19 @@ def demo_main(argv=None):
     if a.json:
         print(json.dumps(res, indent=1))
         return 0
-    print(f"\n{res['parts']} parts: {res['ready']} ready, {res['held']} held in {res['seconds']} s"
-          + (f" (held: {', '.join(res['held_parts'])}; that is expected, see the review)" if res["held"] else ""))
-    print(f"written in {res['workspace']}/:")
-    print(f"  {res['plan']}   the library plan; review: {', '.join(res['review'])}")
+    from . import term as TM
+    t = TM.Term()
+    written = [(f"{a.out}/{res['plan']}", "the library plan"), (", ".join(f"{a.out}/{r}" for r in res["review"]), "review: what to check, part by part")]
     if res["altium"]:
-        print(f"  {len(res['altium'])} Altium files: {res['altium'][0]} ...")
+        written.append((f"{a.out}/{Path(res['altium'][0]).parent.parent}/", f"{len(res['altium'])} Altium files (.SchLib, .PcbLib)"))
     if res["kicad"]:
         kd = Path(res["workspace"]) / res["kicad"]["folder"]
-        print(f"  {res['kicad']['folder']}/   KiCad: " + ", ".join(sorted(p.name + ("/" if p.is_dir() else "") for p in kd.iterdir())))
-    steps = [(f"ecadlib status --workspace {a.out}", "one-screen summary"),
-             (f"ecadlib ui --workspace {a.out}", "look at it in the browser (held parts, sign-off, exports)"),
-             ("ecadlib init", "set up for your own libraries and BOMs")]
-    w = max(len(c) for c, _ in steps)
-    print("next:")
-    for c, why in steps:
-        print(f"  {c:<{w}}   # {why}")
+        written.append((f"{a.out}/{res['kicad']['folder']}/", "KiCad: " + ", ".join(sorted(p.name + ("/" if p.is_dir() else "")
+                                                                                   for p in kd.iterdir() if p.suffix in (".kicad_sym", ".pretty", ".kicad_dbl")))))
+    t.summary(f"{res['parts']} parts: {res['ready']} ready, {res['held']} held in {res['seconds']} s"
+              + (f" (held: {', '.join(res['held_parts'])}; that is expected, see the review)" if res["held"] else ""),
+              written=written,
+              next=[(f"ecadlib status --workspace {a.out}", "one-screen summary"),
+                    (f"ecadlib ui --workspace {a.out}", "look at it in the browser (held parts, sign-off, exports)"),
+                    ("ecadlib init", "set up for your own libraries and BOMs")])
     return 0
