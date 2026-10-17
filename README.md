@@ -1508,7 +1508,7 @@ Settings live in `ecadlib_menu.ini` next to the script (workspace, library, name
 offline; relative paths start at that folder; a rebuild keeps the file). Workspace `altium_menu(win_dir)` and the MCP
 tool `altium_menu` write it into `<workspace>/altium_menu/` with `workspace=..`.
 
-**The ecadlib dialog and panel.** The entries work in one dark, borderless dialog (`ecadlib_dialog.pas` + `.dfm`,
+**The ecadlib dialog.** The entries work in one dark, borderless dialog (`ecadlib_dialog.pas` + `.dfm`,
 `ecadlib/altium_forms.py`) styled like Altium's own: **Check project BOM** shows "Checking...", the line being looked
 up and a progress line, then the count ("24 lines") with a row per kind (already in your library, a source can supply,
 needs a footprint, not fitted) and **Later** / **Fill the library now**; the fill shows the librarian part by part,
