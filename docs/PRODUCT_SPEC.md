@@ -1,6 +1,6 @@
 # ecadlib product spec
 
-Last updated 2026-10-17, for v0.3.0. The plan for what comes next is in [ROADMAP.md](../ROADMAP.md).
+Last updated 2026-10-17, for v0.3.1. The plan for what comes next is in [ROADMAP.md](../ROADMAP.md).
 
 ## Problem
 
