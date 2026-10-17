@@ -255,6 +255,11 @@ def test_fuzz_web_json_endpoints():
                 st, j = call("POST", x[0], x[1])
                 if st >= 500 or tracebacks:
                     raise Found(f"{x[0]} -> {st} {str(j)[:200]}\n" + "".join(tracebacks[-1:]))
+                if isinstance(j, dict) and j.get("job"):           # a background job (the demo BOM ...) must not
+                    for _ in range(1200):                          # still be writing when the folder is removed
+                        if call("GET", f"/api/job?id={j['job']}")[1].get("state") != "running":
+                            break
+                        time.sleep(0.05)
             _fuzz("web JSON endpoints", 300, 18, make, run, ())
         finally:
             srv.shutdown()
