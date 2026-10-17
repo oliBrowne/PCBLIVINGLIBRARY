@@ -115,6 +115,30 @@ def test_step_models_keep_their_name():
         assert r"ecadlib_3d\SOIC-8_3.9x4.9mm_P1.27mm_0\SOIC-8.step" in (d / AN.BUILD).read_text(encoding="utf-8-sig")
 
 
+def test_a_copied_library_takes_its_recipe_and_step_files_along():
+    """dblib-sync copies each part's files into the library folder under another name: the recipe and its STEP files
+    go with it, so the menu can let Altium build the library there."""
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        fp = dict(_soic8(), bodies=[{"pts": [(-1, -1), (1, -1), (1, 1), (-1, 1)], "height": 1.5,
+                                     "step": {"name": "SOIC-8.step", "data": b"ISO-10303-21;", "rot": (0.0, 0.0, 0.0)}}])
+        (d / "part").mkdir()
+        AL.write_pcblib(d / "part" / "fp.PcbLib", [fp])
+        (d / "lib" / "PcbLib").mkdir(parents=True)
+        dst = d / "lib" / "PcbLib" / "SOIC8.PcbLib"
+        dst.write_bytes((d / "part" / "fp.PcbLib").read_bytes())
+        written = AN.copy_recipe(d / "part" / "fp.PcbLib", dst)
+        rel = AN.step_file(fp, 0, fp["bodies"][0])
+        assert (dst.parent / rel).read_bytes() == b"ISO-10303-21;" and len(written) == 2, written
+        assert "PCBLIB\tSOIC8.PcbLib\n" in (d / "lib" / "PcbLib" / "SOIC8.PcbLib.ecadbuild").read_text(encoding="utf-8")
+        assert AN.copy_recipe(d / "part" / "fp.PcbLib", dst) == [], "nothing rewritten the second time"
+        assert AN.copy_recipe(d / "nothing.PcbLib", dst) == []
+        AN.write(d / "lib")
+        assert [r for r, _ in AN.recipes(d / "lib")] == [Path("PcbLib/SOIC8.PcbLib")]
+        cmp = AN.compare(d / "lib")
+        assert cmp["checked"] == 1 and cmp["problems"] == [] and cmp["unreadable"] == [], cmp
+
+
 def test_compare_finds_a_moved_pad_and_a_renamed_pin():
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)

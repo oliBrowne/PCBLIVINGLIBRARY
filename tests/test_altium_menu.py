@@ -6,7 +6,7 @@ import configparser, contextlib, csv, io, json, os, re, socket, subprocess, sys,
 from pathlib import Path
 from unittest import mock
 
-from ecadlib import altium_forms as AF, altium_menu as AM
+from ecadlib import altium_forms as AF, altium_menu as AM, altium_native as AN
 
 ROOT = Path(__file__).parent.parent
 RULES = ('[sources]\norder = ["standard"]\n\n[parameters]\n'
@@ -111,7 +111,7 @@ def test_build_writes_well_formed_files():
     out = d / "menu dir"
     rep = AM.build(out, "D:\\ecadlib ws", None, win_dir="D:\\Altium Scripts\\ecadlib (menu)")
     assert rep["problems"] == [] and rep["menu_file"] == AM.PREFS, rep
-    units = (AF.DIALOG_UNIT, AF.DIALOG_FORM)
+    units = (AF.DIALOG_UNIT, AF.DIALOG_FORM, AN.UNIT)
     assert set(rep["written"]) == {AM.PROJECT, AM.UNIT, *units, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README, AM.PREFS}
     for f in (AM.PROJECT, AM.UNIT, *units, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README):
         raw = (out / f).read_bytes()
@@ -120,12 +120,13 @@ def test_build_writes_well_formed_files():
         assert not re.search(rb"(?i)sk-ant|api[_-]?key\s*=|NEXAR_TOKEN\s*=|password\s*=", raw), f"{f}: no secrets"
     prj = configparser.ConfigParser()
     prj.read_string((out / AM.PROJECT).read_text())
-    assert prj.sections() == ["Design", "Document1", "Document2"]
-    assert [prj[f"Document{i}"]["DocumentPath"] for i in (1, 2)] == [AM.UNIT, AF.DIALOG_UNIT]
+    assert prj.sections() == ["Design", "Document1", "Document2", "Document3"]
+    assert [prj[f"Document{i}"]["DocumentPath"] for i in (1, 2, 3)] == [AM.UNIT, AF.DIALOG_UNIT, AN.UNIT]
+    assert (out / AN.UNIT).read_bytes() == AN.pas_text().encode(), "the menu calls BuildLibraries (ecadlib_build.pas)"
     ini = configparser.ConfigParser(interpolation=None)
     ini.read_string((out / AM.INI).read_text())
     assert {k for k in ini["ecadlib"]} == {"workspace", "library", "name", "command", "hidden", "timeout_s", "port", "offline",
-                                    "dialogs"}
+                                    "dialogs", "native_build"}
     assert ini["ecadlib"]["workspace"] == "D:\\ecadlib ws" and ini["ecadlib"]["hidden"] == "1"
     assert not any(";" in v for v in ini["ecadlib"].values()), "TIniFile does not strip inline comments"
     # again: nothing rewritten; the user's settings survive
@@ -250,7 +251,7 @@ def test_menu_goes_straight_into_altiums_menu_file():
 def test_pas_uses_only_documented_calls_and_is_balanced():
     text = AM.pas_text()
     assert any("OpenDialog is not declared" in p for p in AM.pas_problems(text)), "the dialog unit is what declares it"
-    assert AM.pas_problems(text, known=AM.unit_names(AF.dialog_pas_text())) == []
+    assert AM.pas_problems(text, known=AM.unit_names(AF.dialog_pas_text()) | AM.unit_names(AN.pas_text())) == []
     toks = AM.pas_tokens(text)
     routines = AM.pas_routines(toks)
     for proc, _, _ in AM.PROCS:
@@ -271,7 +272,20 @@ def test_pas_uses_only_documented_calls_and_is_balanced():
     # the job folder never ends with a backslash (a \\" would escape the closing quote)
     assert "Result := Here + 'jobs\\' + FormatDateTime('yyyymmdd-hhnnss', Now) + '-' + IntToStr(Random(100000));" in text
     # the result keys the script reads are the ones run-job writes
-    assert set(re.findall(r"Answer\(Job, '(\w+)'\)", text)) == {"install", "message", "fix", "status", "offer_fill", "offer"}
+    assert set(re.findall(r"Answer\(Job, '(\w+)'\)", text)) == {"install", "build", "message", "fix", "status", "offer_fill", "offer"}
+
+
+def test_menu_lets_altium_build_the_library_before_reinstalling_it():
+    """build= in result.ini: the menu uninstalls the listed DbLibs, calls BuildLibraries (ecadlib_build.pas) with a
+    folder ending in a backslash, reports FAILED libraries, then installs again; never a message box mid-run."""
+    text = AM.pas_text()
+    r = AM.pas_routines(AM.pas_tokens(text))
+    assert "Result := BuildInAltium(Job);" in text and list(r).index("BuildInAltium") < list(r).index("Reinstall")
+    body = text[text.index("Function BuildInAltium"):text.index("Function Reinstall")]
+    assert "Folder := Folder + '\\';" in body and body.index("UninstallLibrary") < body.index("BuildLibraries(Folder);")
+    assert "Setting('native_build', '1') = '0'" in body and "ShowMessage" not in body and "ConfirmNoYes" not in body
+    assert "'FAILED'" in text[text.index("Function BuildReport"):text.index("Function BuildInAltium")]
+    assert "Pos('Altium build:', Extra)" in AF.dialog_pas_text(), "the dialog shows a failed build"
 
 
 def test_pas_checker_catches_mistakes():
@@ -297,7 +311,8 @@ def test_pas_checker_catches_mistakes():
 def test_dialog_form_matches_its_unit_and_the_results():
     """The ecadlib dialog (ecadlib_dialog.pas + .dfm): every component the unit names is in the form, every handler
     the form names is in the unit, the .dfm nests object / end, and the keys the dialog reads are ones run-job writes."""
-    files = {AM.UNIT: AM.pas_text(), AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text()}
+    files = {AM.UNIT: AM.pas_text(), AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text(),
+             AN.UNIT: AN.pas_text()}
     assert AM.project_problems(files) == []
     assert "OnClose = EcadlibDialogClose" in files[AF.DIALOG_FORM], "a closed form's timer must stop (AD 26.10)"
     dfm = files[AF.DIALOG_FORM]
@@ -321,7 +336,7 @@ def test_dialog_form_matches_its_unit_and_the_results():
     broken = dict(files, **{AF.DIALOG_UNIT: files[AF.DIALOG_UNIT].replace("EcadlibDialog.Report.Visible := False;", "EcadlibDialog.Gone.Visible := False;", 1)})
     assert any("Gone is not declared" in p for p in AM.project_problems(broken))
     read = set(re.findall(r"Answer\(Job, '(\w+)'\)", files[AF.DIALOG_UNIT]))
-    assert read == {"status", "install", "big", "report", "warnings", "offer_fill", "fix", "offer_queue"}, read
+    assert read == {"status", "install", "build", "big", "report", "warnings", "offer_fill", "fix", "offer_queue"}, read
     assert "ReadString('progress', 'text'" in files[AF.DIALOG_UNIT] and "'row' + IntToStr(i)" in files[AF.DIALOG_UNIT]
     # the menu entries open the dialog, unless dialogs=0 asks for Altium's plain message boxes
     assert "OpenDialog('add', '', '')" in files[AM.UNIT] and "OpenDialog('bom', PrjPath, '')" in files[AM.UNIT]
@@ -430,6 +445,12 @@ def test_add_part_ready_through_run_job_exactly_as_the_script_runs_it():
     rows = list(csv.DictReader((dblib.with_suffix(".csv")).open(encoding="utf-8")))
     assert [row["Manufacturer Part Number"] for row in rows] == ["CL05B104KO5NNNC"]
     assert (dblib.parent / "SchLib").is_dir() and (dblib.parent / "PcbLib").is_dir() and (dblib.parent / "ecadlib.LibPkg").is_file()
+    # the recipes Altium builds the libraries from (the menu calls BuildLibraries on build= before it reinstalls)
+    assert r["build"] == str(cfg["library"].resolve()), r
+    built = (dblib.parent / AN.BUILD).read_text(encoding="utf-8-sig")
+    libs = {ln.split("\t")[1] for ln in built.splitlines() if ln.startswith(("PCBLIB\t", "SCHLIB\t"))}
+    on_disk = {str(f.relative_to(dblib.parent)).replace("/", "\\") for f in dblib.parent.glob("*/*.*Lib")}
+    assert libs == on_disk and len(libs) == 2, (libs, on_disk)
     # the part list in the workspace; a second add of the same MPN does not duplicate it and keeps the library
     bom = cfg["workspace"] / AM.MENU_BOM
     job2 = _job(menu, {"action": "add-part", "mpn": "cl05b104ko5nnnc", "manufacturer": ""})
@@ -440,7 +461,7 @@ def test_add_part_ready_through_run_job_exactly_as_the_script_runs_it():
 def test_add_part_held_says_why_and_publishes_nothing():
     menu, cfg = _setup()
     r = AM.run_job(_job(menu, {"action": "add-part", "mpn": "NE555DR", "manufacturer": "Texas Instruments"}))
-    assert r["status"] == "held" and r["install"] == "", r
+    assert r["status"] == "held" and r["install"] == "" and r["build"] == "", r
     assert r["message"].startswith("NE555DR is held") and "There is no symbol for this part yet." in r["message"], r
     assert "review queue" in r["fix"] and "release it anyway" in r["fix"] and "plan.json" not in r["message"] + r["fix"]
     assert not cfg["library"].exists() or not list(cfg["library"].glob("*.DbLib"))
@@ -478,6 +499,7 @@ def test_check_bom_report_offer_and_fill():
     AM.run_job(job)
     r = _result(job)
     assert r["status"] == "ok" and r["held"] == "4" and r["ready"] == "2" and r["install"].endswith("ecadlib.DbLib"), r
+    assert r["build"] and (Path(r["build"]) / AN.BUILD).is_file(), r
     assert r["message"].startswith("6 parts: 2 ready") and "review queue" in r["fix"] and Path(r["review"]).is_file()
     # a project that is not saved / not there: one line and a fix, never a traceback
     r = AM.run_job(_job(menu, {"action": "check-bom", "project": str(d / "Unsaved.PrjPcb")}))
@@ -539,7 +561,7 @@ def test_altium_365_target():
     with mock.patch.object(Workspace, "altium365_push", push):
         r = AM.run_job(_job(menu, {"action": "add-part", **CAP}))
     assert calls == [("uploads/altium-menu/parts.csv", "https://acme.365.altium.com", False)]
-    assert r["status"] == "ready" and r["install"] == "" and r["refresh"] == "a365", r
+    assert r["status"] == "ready" and r["install"] == "" and r["build"] == "" and r["refresh"] == "a365", r
     assert "refresh the Components panel" in r["message"]
 
 

@@ -34,6 +34,7 @@ import argparse, csv, io, json, os, re, shutil, subprocess, sys
 from pathlib import Path, PureWindowsPath
 
 from . import altium_lib as AL
+from . import altium_native as AN
 from . import sheetsafe as SS
 from .altium_export import (COLUMNS, dblib_links, excel_connection, fieldmap_section, table_section)
 
@@ -322,6 +323,8 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                 continue
             copied[rel] = data
             if dst.exists() and dst.read_bytes() == data:
+                if not dry_run:
+                    AN.copy_recipe(src, dst)
                 continue
             notes.append(f"{rel} {'updated' if dst.exists() else 'added'}")
             if not dry_run:
@@ -336,6 +339,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                     notes.pop()
                     continue
                 os.replace(tmp, dst)
+                AN.copy_recipe(src, dst)            # what Altium rebuilds the file from (ecadlib.altium_native)
             else:
                 err = _readback(src, d, ref)
                 if err:
