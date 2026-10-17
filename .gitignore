@@ -14,3 +14,4 @@ out/kicad/
 api-keys.env
 .env
 certs/
+dist/

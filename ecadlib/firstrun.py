@@ -105,7 +105,7 @@ def keys_lines(rules=None, environ=None):
     main = [k for k in key_status(rules, environ) if not k[2].endswith("part lookups")]
     have = [n for n, ok, _ in main if ok]
     miss = [f"{n} ({why.split(',')[0]})" for n, ok, why in main if not ok]
-    return ["API keys (names only; set them in your shell, never in ecadlib.toml): "
+    return ["API keys (names only; `ecadlib keys set NAME`, the setup page or your environment, never ecadlib.toml): "
             + "; ".join(x for x in (f"set: {', '.join(have)}" if have else "", f"not set: {', '.join(miss)}" if miss else "") if x)
             + ". None is needed for KiCad-library and standard parts."]
 
@@ -295,7 +295,8 @@ def blockers(rows, rules=None, offline=False):
     if nokey:
         env = ((rules or {}).get("datasheet") or {}).get("api_key_env") or "ANTHROPIC_API_KEY"
         out.append((f"{len(set(nokey))} part(s) need the datasheet reader, but {env} is not set",
-                    f"export {env}=... (`ecadlib doctor` checks it), or take datasheet out of [sources] order in ecadlib.toml"))
+                    f"add it on the setup page (`ecadlib setup`) or with `ecadlib keys set {env}`, or take datasheet out of "
+                    "[sources] order in ecadlib.toml"))
     return out
 
 

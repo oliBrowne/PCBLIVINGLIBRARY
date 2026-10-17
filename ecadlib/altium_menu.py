@@ -1080,8 +1080,9 @@ def probe_ui(port, host="127.0.0.1", timeout=1.5):
 
 
 def start_ui(ws_root, port):
-    """`python -m ecadlib ui --workspace W --port P --no-browser`, detached, no window; output in altium_menu_ui.log."""
-    cmd = [sys.executable, "-m", "ecadlib", "ui", "--workspace", str(ws_root), "--port", str(port), "--no-browser"]
+    """`ecadlib ui --workspace W --port P --no-browser`, detached, no window; output in altium_menu_ui.log."""
+    from .userconfig import self_command                  # this Python, or the Windows app's bundled ecadlib.exe
+    cmd = self_command() + ["ui", "--workspace", str(ws_root), "--port", str(port), "--no-browser"]
     log = open(Path(ws_root) / "altium_menu_ui.log", "ab")
     env = dict(os.environ)                        # this ecadlib, also when it runs from a checkout (not installed)
     env["PYTHONPATH"] = os.pathsep.join([str(Path(__file__).resolve().parent.parent)] +

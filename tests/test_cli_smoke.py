@@ -35,6 +35,7 @@ PINS = "number,name,type\n1,VDD,power_in\n2,PA0,bidirectional\n3,PA1,bidirection
 CASES = [
     (["rules", "check", "{in}/ecadlib.toml"], (0,)),
     (["rules", "show"], (0,)),
+    (["keys", "list"], (0,)),
     (["init", "--from", "{in}/lib", "-o", "{out}/ecadlib.toml", "--yes"], (0,)),
     (["demo", "-o", "{out}/demo"], (0,)),
     (["team", "--workspace", "{out}/teamws", "list"], (0,)),
@@ -96,7 +97,7 @@ CASES = [
     (["parity", "{out}/lib/plan.json", "-o", "{out}/parity"], (0, 1)),
     (["parity", "{out}/lib/plan.json", "--kicad", "{out}/kicad", "--name", "ecadlib", "-o", "{out}/parity_k"], (0, 1)),
 ]
-HELP_ONLY = {"ui", "mcp", "a365", "project"}       # need a server / network / an Altium project: -h (and mcp below)
+HELP_ONLY = {"ui", "mcp", "a365", "project", "setup", "start"}   # need a server / network / an Altium project: -h (and mcp below)
 
 
 def _snapshot(root, skip):
