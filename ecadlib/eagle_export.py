@@ -265,7 +265,8 @@ def package(fp, name):
         drill = min(d)
         ox, oy = CM.rot(*p["offset"], a)              # copper centre - hole, footprint frame
         shape = p["shape"]
-        if shape == "custom":
+        custom = shape == "custom"
+        if custom:
             approx.append(f"pad {p['num'] or pname}: custom through-hole pad written as a round pad plus copper polygons")
             shape = "circle"
         square = shape in ("rect", "roundrect")
@@ -276,8 +277,24 @@ def package(fp, name):
         exact = abs(w - h) < 1e-9 and abs(ox) < 1e-9 and abs(oy) < 1e-9
         diameter = side_len
         mm_ = p.get("mask_margin")
+        own_stop = exact and p["mask"] and not custom and mm_ is not None and abs(mm_) > 1e-9
         _el(pk, "pad", name=pname, x=n(x), y=n(y), drill=n(drill), diameter=n(diameter),
-            shape="square" if square and exact else None, rot=rot_attr(a), stop=None if p["mask"] else "no")
+            shape="square" if square and exact else None, rot=rot_attr(a),
+            stop=None if p["mask"] and not own_stop else "no")
+        if own_stop:                          # Eagle's own stop frame has no per-pad margin: draw the opening
+            g = STOP_FRAME if mm_ is None else mm_
+            for layer in (TSTOP, BSTOP):
+                _pad_outline(pk, layer, x, y, diameter + 2 * g, diameter + 2 * g, a, "rect" if square else "circle")
+        if custom:                            # the custom copper on both sides, and its mask opening
+            for part in p.get("parts") or []:
+                sg = STOP_FRAME if mm_ is None else mm_
+                for layer, on, grow in ((TOP, True, 0.0), (BOTTOM, True, 0.0), (TSTOP, p["mask"], sg), (BSTOP, p["mask"], sg)):
+                    if not on:
+                        continue
+                    if part[0] == "poly":
+                        _poly(pk, layer, part[1], part[2] + 2 * grow if part[2] + 2 * grow > 0 else 0.0)
+                    else:
+                        _el(pk, "circle", x=n(part[1][0]), y=n(part[1][1]), radius=n(part[2] + grow), width="0", layer=str(layer))
         if not exact:                         # the rest of the copper, on both sides, and its mask opening
             cx, cy = x + ox, y + oy
             grow = mm_ if mm_ is not None else STOP_FRAME
@@ -865,7 +882,7 @@ def _slot(mill, used, x, y, d):
     R = math.hypot(_f(straight[0], "x1") - x, _f(straight[0], "y1") - y)
     length = 2 * math.sqrt(max(0.0, R * R - (d / 2) ** 2)) + d
     dx, dy = _f(straight[0], "x2") - _f(straight[0], "x1"), _f(straight[0], "y2") - _f(straight[0], "y1")
-    return (d, length, math.degrees(math.atan2(-dy, dx)) % 180.0)
+    return (d, length, math.degrees(math.atan2(dy, dx)) % 180.0)      # counter-clockwise, as the pad rotation
 
 
 def read_lbr(path):
@@ -1174,7 +1191,7 @@ def export(plan, out, name="ecadlib", include_held=False, libs=(), http=None, lo
                 fields = {k: v for k, v in cs["props"].items()}
                 dname = _unique(ename(row["symbol_name"]), ds_used)
                 gates, approx = symbols(cs, _unique(ename(row["symbol_name"]), sym_used))
-                for _, sel, _ in gates[1:]:
+                for _, sel, _ in gates:
                     sym_used.add(sel.get("name").upper())
                 symbols_ += [g[1] for g in gates]
                 ds, missing = deviceset(dname, cs, gates, part["package"], pads, fields)
