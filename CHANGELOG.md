@@ -11,6 +11,7 @@ a minor release may change command-line options and file formats.
 
 - Altium builds the libraries itself (`ecadlib/altium_native.py`, docs/altium-native.md): every `.PcbLib` / `.SchLib` ecadlib writes gets a `.ecadbuild` recipe, and a DelphiScript (`ecadlib_build.pas`) rebuilds them inside Altium with its own object API; `ecadlib altium-native write|compare` and a *Rebuild with Altium* step in `altium-pkg` (`--no-native-build` to skip). `compare` reads Altium's result back pad by pad and pin by pin.
 - The ecadlib menu in Altium lets Altium build the library files itself before it reinstalls the library: each job copies the parts' build recipes into the library folder and writes `ecadlib_build.txt`, and the menu calls `BuildLibraries` (`ecadlib_build.pas`, now part of the menu's script project). The dialog says when a library failed to build. `native_build=0` in `ecadlib_menu.ini` turns it off.
+- Edits made in Altium are kept: each library ecadlib copies into a library folder gets a `.ecadstate` (the hash of ecadlib's file and of the file Altium built from it). A library someone changed in Altium afterwards is no longer rebuilt by the native build or replaced by `dblib-sync` / `altium-pkg`; they report it instead (`dblib-sync --overwrite-edits`, `altium-native write --rebuild-all` replace it). Libraries Altium already built and ecadlib has not changed are not rebuilt on every run.
 - `ecadlib sources-check` and a weekly `sources-canary` workflow: checks the unofficial EasyEDA / JLCPCB endpoints against known parts.
 
 ### Changed

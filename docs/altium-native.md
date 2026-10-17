@@ -32,6 +32,27 @@ ecadlib altium-native compare D:/libs/ecadlib      # read back what Altium saved
 
 `ecadlib_build_report.txt` lists each library as OK or FAILED. `compare` exits 1 on any difference.
 
+## Edits made in Altium are kept
+
+When `dblib-sync` or `altium-pkg` copies a library into a library folder, ecadlib writes `<file>.ecadstate` beside it.
+That file records two hashes: one of the bytes ecadlib copied in, and one of the file Altium built from them. Altium's
+build is recognised the first time the file on disk is no longer ecadlib's but still matches its recipe pad by pad and
+pin by pin. Every later run then sorts each library into one of three cases:
+
+- **ecadlib's file, not built yet:** it goes into `ecadlib_build.txt`.
+- **Altium's build, and ecadlib's part has not changed:** it is left alone and not rebuilt.
+- **Neither of those:** someone changed it in Altium. It is not rebuilt and not replaced by a newer ecadlib copy.
+  `altium-native write` lists it as kept, and `dblib-sync` adds a note to the part.
+
+To replace an edited library anyway, use `ecadlib dblib-sync ... --overwrite-edits` (copies ecadlib's current file
+over it) and then `ecadlib altium-native write ... --rebuild-all`.
+
+Limits:
+
+- An edit made before ecadlib has seen Altium's build is taken as the build, as long as it doesn't change pads or
+  pins (for example, silkscreen only). Later edits are caught either way.
+- Libraries written in place, without a copy step, have no `.ecadstate` and are built as before.
+
 ## What still uses the byte-level writer
 
 - Altium 365 release (`ecadlib altium365 push`) uploads the files ecadlib wrote, because it runs outside Altium.
