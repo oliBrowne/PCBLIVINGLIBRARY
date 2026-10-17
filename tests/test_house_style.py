@@ -135,7 +135,7 @@ def test_rules_style_section():
         (Path(td) / "ecadlib.toml").write_text('[style]\napply = "off"\n')
         H.save({"schema_version": 1, "direction": []}, Path(td) / "house_style.json")
         rules = RU.load(start=td)
-        assert H.profile_path(rules) == Path(td) / "house_style.json"
+        assert H.profile_path(rules).samefile(Path(td) / "house_style.json")       # Windows: a short vs long temp path
         assert H.load(rules) is not None and H.active(rules) is None
 
 
