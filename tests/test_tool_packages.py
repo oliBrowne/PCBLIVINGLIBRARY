@@ -305,7 +305,8 @@ def test_kicad7_footprints_of_every_spec_load_in_pcbnew():
 # ---------------------------------------------------------------- the pcbnew action plugin
 def _plugin_module():
     fake = types.ModuleType("pcbnew")
-    fake.ActionPlugin = type("ActionPlugin", (), {"register": lambda self: setattr(fake, "registered", self)})
+    fake.registered = []
+    fake.ActionPlugin = type("ActionPlugin", (), {"register": lambda self: fake.registered.append(self)})
     with mock.patch.dict(sys.modules, {"pcbnew": fake}):
         src = ROOT / "ecadlib" / "assets" / "kicad_action_plugin.py"
         mod = types.ModuleType("ecadlib_kicad_action_plugin")
@@ -315,56 +316,60 @@ def _plugin_module():
 
 
 def test_action_plugin_helpers():
+    from ecadlib import altium_menu as AM
     mod, fake = _plugin_module()
-    assert type(fake.registered).__name__ == "EcadlibAddPart"
-    p = fake.registered
-    p.defaults()
-    assert p.name == "ecadlib: add part"
+    names = []
+    for p in fake.registered:
+        p.defaults()
+        names.append(p.name)
+    assert names == ["ecadlib", "ecadlib: add part", "ecadlib: check project BOM", "ecadlib: open review queue"], names
+    assert fake.registered[0].show_toolbar_button and fake.registered[0].icon_file_name.endswith("ecadlib.png")
+    assert not any(p.show_toolbar_button for p in fake.registered[1:])
     d = _tmp()
-    bom = mod.add_to_list(str(d), "TPS62133RGTR")
-    mod.add_to_list(str(d), " TPS62133RGTR ")
-    mod.add_to_list(str(d), "LM358DR")
-    rows = list(csv.DictReader(open(bom, newline="")))
-    assert [r["Mfr. Part #"] for r in rows] == ["TPS62133RGTR", "LM358DR"] and rows[1]["Designator"] == "P2"
+    c = mod.job_command(["ecadlib"], "J", "add-part", "b.kicad_pcb", " LM358DR ", "TI")
+    assert c == ["ecadlib", "kicad-menu", "run-job", "J", "--action", "add-part", "--project", "b.kicad_pcb",
+                 "--mpn", "LM358DR", "--manufacturer", "TI"], c
+    assert mod.job_command(["e"], "J", "check-bom", "b.kicad_pcb")[-2:] == ["--project", "b.kicad_pcb"]
     for bad in ("", "a;rm -rf /", "x" * 200, "--help"):
         try:
-            mod.add_to_list(str(d), bad)
+            mod.job_command(["ecadlib"], "J", "add-part", "b", bad)
             raise AssertionError(bad)
         except ValueError:
             pass
-    cmds = mod.commands(str(d), ["ecadlib"])
-    assert cmds[0][:2] == ["ecadlib", "librarian"] and cmds[1][:2] == ["ecadlib", "kicad-export"] and "--name" in cmds[1]
-    # the BOM the plugin writes is one the librarian reads
-    from ecadlib.bom_triage import read_bom
-    lines, _ = read_bom(bom)
-    assert [l["mpn"] for l in lines] == ["TPS62133RGTR", "LM358DR"], lines
+    # the window reads the files ecadlib writes (UTF-16 with a BOM)
+    AM.write_result(d / "result.ini", {"status": "held", "message": "LM358DR is held", "fix": "Pick a symbol",
+                                       **AM.rows_result([AM.row_text("symbol", "none yet"), AM.row_text("release check", "ready", True)], "Held")})
+    res = mod.read_ini(str(d / "result.ini"), "result")
+    assert res["big"] == "Held" and res["fix"] == "Pick a symbol"
+    assert mod.rows_of(res) == [("symbol", "none yet", False), ("release check", "ready", True)]
+    assert mod.read_ini(str(d / "missing.ini"), "result") == {}
+    job = mod.new_job(str(d), "fill")
+    assert os.path.isdir(job) and job.startswith(str(d / "ecadlib-work" / "jobs"))
     (d / "fp-lib-table").write_text('(fp_lib_table\n  (version 7)\n  (lib (name "Other")(type "KiCad")(uri "x")(options "")(descr ""))\n)\n')
     ch = mod.ensure_tables(str(d))
     assert len(ch) == 2 and mod.ensure_tables(str(d)) == []
     fp = sexpr.parse((d / "fp-lib-table").read_text())
     assert [sexpr.first(l, "name")[1] for l in sexpr.find(fp, "lib")] == ["Other", "ecadlib"]
     assert sexpr.first(next(sexpr.find(sexpr.parse((d / "sym-lib-table").read_text()), "lib")), "uri")[1] == "${KIPRJMOD}/ecadlib/ecadlib.kicad_sym"
-    (d / "ecadlib").mkdir()
-    (d / "ecadlib" / "kicad_export.json").write_text(json.dumps({"parts": [{"part": "A", "footprint": "SOT-23"}, {"part": "B", "footprint": None}],
-                                                                 "skipped": [{"part": "C", "why": "held: pins"}]}))
-    assert mod.footprint_for(str(d), "A") == ("SOT-23", None)
-    assert mod.footprint_for(str(d), "B")[0] is None and "held" in mod.footprint_for(str(d), "C")[1]
     assert mod.ecadlib_command({"ECADLIB_CMD": "py -m ecadlib"}) == ["py", "-m", "ecadlib"]
     assert mod.ecadlib_command({}, which=lambda x: "/bin/ecadlib" if x == "ecadlib" else None) == ["/bin/ecadlib"]
     assert mod.ecadlib_command({}, which=lambda x: None) is None
+    src = (ROOT / "ecadlib" / "assets" / "kicad_action_plugin.py").read_text()
+    assert "cwd=self.project" not in src           # python -m ecadlib in the project folder imports its ecadlib/ library
 
 
 def test_action_plugin_package_loads_and_registers_in_pcbnew():
     R = _kicad()
     rep = KP.plugin_build(_tmp() / "plug")
     meta = json.loads(zipfile.ZipFile(rep["zip"]).read("metadata.json"))
-    assert meta["type"] == "plugin" and rep["problems"] == [] and zipfile.ZipFile(rep["zip"]).namelist() == ["metadata.json", "plugins/__init__.py"]
+    assert meta["type"] == "plugin" and rep["problems"] == [] and zipfile.ZipFile(rep["zip"]).namelist() == ["metadata.json", "plugins/__init__.py", "plugins/ecadlib.png", "resources/icon.png"]
     if not R.pcbnew_python():
         return R._skip("pcbnew (KiCad's Python module)")
     tp = Path(rep["zip"]).parent / "3rd"
     KP.install(rep["zip"], tp)
-    code = ("import json, pcbnew\ngot = []\norig = pcbnew.PYTHON_ACTION_PLUGINS.register_action\n"
-            "def spy(p):\n    got.append([p.GetName(), p.GetCategoryName(), type(p).__module__])\n    return orig(p)\n"
+    code = ("import json, pcbnew\ngot = []\n"
+            "def spy(p):\n    got.append([p.GetName(), p.GetCategoryName(), type(p).__module__])\n"
+            "    return None\n"                     # pcbnew's own register_action needs KiCad's app for a second plugin
             "pcbnew.PYTHON_ACTION_PLUGINS.register_action = spy\n"
             f"pcbnew.LoadPlugins(None, None, {str(tp / 'plugins')!r})\n"
             "print(json.dumps({'got': got, 'trace': pcbnew.FULL_BACK_TRACE, 'not_loaded': pcbnew.NOT_LOADED_WIZARDS}))\n")
@@ -372,7 +377,8 @@ def test_action_plugin_package_loads_and_registers_in_pcbnew():
                        env=dict(os.environ, KICAD_CONFIG_HOME=str(tp.parent / "cfg")))
     assert r.returncode == 0, r.stderr[-2000:]
     out = json.loads(r.stdout.strip().splitlines()[-1])
-    assert out["got"] == [["ecadlib: add part", "Library", "local_ecadlib_add-part"]] and not out["trace"], (out, r.stderr[-1000:])
+    assert [g[0] for g in out["got"]] == ["ecadlib", "ecadlib: add part", "ecadlib: check project BOM", "ecadlib: open review queue"] \
+        and all(g[1:] == ["Library", "local_ecadlib_add-part"] for g in out["got"]) and not out["trace"], (out, r.stderr[-1000:])
 
 
 # ---------------------------------------------------------------- Altium hand-off

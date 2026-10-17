@@ -1134,9 +1134,11 @@ def _a365_url(ws):
     return str((ws.rules().get("altium365") or {}).get("workspace") or "").strip()
 
 
-def publish(ws, bom_rel, library, name="ecadlib"):
-    """Ready parts of the BOM's plan -> the library folder (altium-pkg / dblib-sync) or Altium 365 (push).
-    Returns {"target", "install": [DbLib paths], "problems", "note"}."""
+def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
+    """Ready parts of the BOM's plan -> the library folder (altium-pkg / dblib-sync) or Altium 365 (push); with
+    tool="kicad", the KiCad library folder (kicad-export). Returns {"target", "install": [DbLib paths], "problems", "note"}."""
+    if tool == "kicad":
+        return publish_kicad(ws, bom_rel, library, name)
     from . import altium_pkg as AP
     url = _a365_url(ws)
     if url:
@@ -1159,6 +1161,30 @@ def publish(ws, bom_rel, library, name="ecadlib"):
         return {"target": "folder", "install": [], "problems": [str(e)], "library": str(library)}
     return {"target": "folder", "install": [str((Path(library) / d).resolve()) for d in rep["dblibs"]],
             "problems": rep["problems"], "library": str(library)}
+
+
+def publish_kicad(ws, bom_rel, library, name="ecadlib"):
+    """The plan's parts -> <library>/<name>.kicad_sym, .pretty, .3dshapes (kicad_export). One plan makes the whole
+    library, so the KiCad menu keeps every part in one list (MENU_BOM). "footprints" maps part -> footprint name."""
+    from . import kicad_export as KX
+    from .httpcache import CachedHTTP
+    _, plan_f, _ = ws._plan(bom_rel)
+    rep = KX.export(plan_f, library, name, http=CachedHTTP(ws.root / "http_cache", offline=ws.offline, timeout=60),
+                    rules=ws.rules_in_use(), log=lambda *a, **k: None)
+    return {"target": "kicad", "install": [], "problems": rep["errors"], "library": str(library),
+            "footprints": {p["part"]: p.get("footprint") or "" for p in rep["parts"]}}
+
+
+def _where(cfg, pub):
+    if pub.get("target") == "a365":
+        return f"released to Altium 365 ({pub['workspace']}): refresh the Components panel to see it"
+    if pub.get("target") == "kicad":
+        return f"in the {cfg['name']} KiCad library ({pub.get('library')})"
+    return f"in the {cfg['name']} database library ({pub.get('library')})"
+
+
+def _queue_hint(cfg):
+    return "the Open review queue button in the ecadlib window" if cfg.get("tool") == "kicad" else "ecadlib > Open review queue"
 
 
 def _workspace(cfg):
@@ -1197,28 +1223,28 @@ def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
                 "fix": f"Check the part number. What was tried is in {ws.root / ws._librarian_dir(bom).relative_to(ws.root) / 'review.html'}"}
     if it["status"] == "ready":
         progress.step(0, 0, "putting it into the library")
-    pub = publish(ws, rel, cfg["library"], cfg["name"]) if it["status"] == "ready" else {"install": [], "problems": []}
+    pub = (publish(ws, rel, cfg["library"], cfg["name"], cfg.get("tool", "altium")) if it["status"] == "ready"
+           else {"install": [], "problems": []})
     st, nm = it["status"], it["name"]
     res = {"status": st, "part": nm, "mpn": mpn, "install": ";".join(pub.get("install") or []),
            "refresh": pub.get("target", ""), "review": str(ws._librarian_dir(bom) / "review.md")}
     from . import messages as M
     whys = M.explain_all(it.get("hold_reasons") or [])
     if st == "ready":
-        where = (f"released to Altium 365 ({pub['workspace']}): refresh the Components panel to see it"
-                 if pub.get("target") == "a365" else
-                 f"in the {cfg['name']} database library ({pub.get('library')})")
-        res["message"] = f"{mpn} is ready as {nm}: {where}."
+        res["message"] = f"{mpn} is ready as {nm}: {_where(cfg, pub)}."
+        if pub.get("footprints", {}).get(nm):
+            res["footprint"] = pub["footprints"][nm]
         if pub.get("problems"):
             res.update(status="error", message=f"{mpn} was built ({nm}) but not published: {pub['problems'][0]}",
                        fix=pub.get("fix") or "run `ecadlib altium-pkg` or `ecadlib altium365 push` by hand to see more")
     elif st == "awaiting_approval":
         res.update(message=f"{mpn} was built as {nm} and is waiting for sign-off before it goes into the library.",
-                   fix="Approve it in the review queue (ecadlib > Open review queue), then add it again.")
+                   fix=f"Approve it in the review queue ({_queue_hint(cfg)}), then add it again.")
     elif st == "duplicate":
         res.update(message=f"{mpn} is already in the library as {it.get('duplicate_of') or nm}.")
     else:
         res.update(status="held", message=f"{mpn} is held ({nm}): " + (" ".join(w["text"] for w in whys[:3]) or "see the review."),
-                   fix=(whys[0]["fix"] + " " if whys else "") + "Open the review queue (ecadlib > Open review queue) "
+                   fix=(whys[0]["fix"] + " " if whys else "") + f"Open the review queue ({_queue_hint(cfg)}) "
                        "to pick a symbol or footprint, or release it anyway.")
     res.update(rows_result(part_rows(it), {"ready": "Ready", "duplicate": "Already in your library",
                                            "awaiting_approval": "Waiting for sign-off"}.get(st, "Held")))
@@ -1315,7 +1341,7 @@ def check_bom(cfg, project, opener=None, progress=None):
     shown = [row_text("already in your library", counts["in_library"], True),
              row_text("a source can supply", kinds["source"]) if kinds["source"] else None,
              row_text("needs a footprint", kinds["footprint"]) if kinds["footprint"] else None,
-             row_text("could not check (source offline)", kinds["unverified"]) if kinds["unverified"] else None,
+             row_text("could not check (offline)", kinds["unverified"]) if kinds["unverified"] else None,
              row_text("not fitted", counts["dnp"]) if counts["dnp"] else None]
     res.update(rows_result([r for r in shown if r], M.plural(counts["lines"], "line")))
     return res
@@ -1329,8 +1355,9 @@ def fill(cfg, project, progress=None):
     s = ws.librarian_run(bom, progress=progress)
     if s["ready"]:
         progress.step(progress.total, progress.total, "putting the ready parts into the library")
-    pub = publish(ws, bom, cfg["library"], cfg["name"]) if s["ready"] else {"install": [], "problems": []}
+    pub = publish(ws, bom, cfg["library"], cfg["name"], cfg.get("tool", "altium")) if s["ready"] else {"install": [], "problems": []}
     where = ("released to Altium 365: refresh the Components panel" if pub.get("target") == "a365"
+             else f"in the {cfg['name']} KiCad library" if pub.get("target") == "kicad"
              else f"in the {cfg['name']} database library")
     msg = f"{s['parts']} parts: {s['ready']} ready" + (f" ({where})" if s["ready"] else "")
     msg += "".join(f", {n} {label}" for n, label in ((s["held"], "held"), (s["awaiting_approval"], "waiting for sign-off"),
@@ -1342,7 +1369,7 @@ def fill(cfg, project, progress=None):
         res["message"] += f" Not published: {pub['problems'][0]}"
         res["fix"] = pub.get("fix") or "run `ecadlib altium-pkg` / `ecadlib altium365 push` by hand to see more"
     elif s["held"] or s["awaiting_approval"]:
-        res["fix"] = "Open the review queue (ecadlib > Open review queue): it says why each part is held and what to pick."
+        res["fix"] = f"Open the review queue ({_queue_hint(cfg)}): it says why each part is held and what to pick."
     shown = [row_text("ready, in your library" if pub.get("target") != "a365" else "released to Altium 365", s["ready"], s["ready"] > 0)]
     shown += [row_text(label, n) for n, label in ((s["held"], "held for a person"), (s["awaiting_approval"], "waiting for sign-off"),
                                                    (s["duplicates"], "already in the library")) if n]

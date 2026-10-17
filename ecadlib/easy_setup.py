@@ -290,19 +290,22 @@ def install_kicad_plugin(series=None):
         kicads = [k for k in kicads if k["series"] == series] or [{"series": series}]
     if not kicads:
         raise ValueError("no KiCad found on this computer; install KiCad 7 or newer, then press this again")
+    from .kicad_menu import icon_png
     src = Path(__file__).with_name("assets") / "kicad_action_plugin.py"
     done = []
     for k in kicads:
         d = detect.kicad_plugin_dir(k["series"]) / "ecadlib_add_part"
         d.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, d / "__init__.py")
+        (d / "ecadlib.png").write_bytes(icon_png(24))
         (d / "ecadlib_cmd.json").write_text(json.dumps({"command": UC.self_command(), "ecadlib": __version__}, indent=2) + "\n",
                                             encoding="utf-8")
         done.append(str(d))
     _record_install("kicad_plugin", done)
     return {"installed": done,
             "steps": ["Restart KiCad (or in the PCB editor: Tools > External Plugins > Refresh Plugins)",
-                      "Open a saved board, then Tools > External Plugins > ecadlib: add part"]}
+                      "Open a saved board, then press the ecadlib button in the top toolbar (also under Tools > "
+                      "External Plugins)"]}
 
 
 # ------------------------------------------------------------------ web routes (local mode only)

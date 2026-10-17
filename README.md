@@ -1428,7 +1428,7 @@ Checks (2026-10-16, kicad-footprints f8440fa, kicad-symbols 9280a93):
 ```
 ecadlib kicad-pcm out/librarian/plan.json --out out/pcm --name mylib [--kicad 7|8|9|10] [--prefix PCM_] [--pkg-version 1.2.0]
 ecadlib kicad-pcm out/kicad --out site/kicad --base-url https://example.com/kicad   # + repository.json / packages.json
-ecadlib kicad-pcm --plugin --out out/pcm                    # the "ecadlib: add part" PCB editor action plugin
+ecadlib kicad-pcm --plugin --out out/pcm                    # the ecadlib button and window for KiCad's PCB editor
 ecadlib altium-pkg out/librarian/plan.json --out D:/libs/mylib --name mylib   # or a folder of .SchLib/.PcbLib
 python3 -m tests.test_tool_packages
 ```
@@ -1444,9 +1444,18 @@ symbols' Footprint fields say `PCM_<lib>:<footprint>` and the footprints' models
 `--pkg-version`, or kept while the content is unchanged, else today's date, so a re-run changes no file. With
 `--base-url` it also writes `repository.json` and `packages.json` (sha256, sizes) for Manage Repositories; KiCad only
 fetches repositories over http(s) (`kicad_curl_easy.cpp`), so a `file://` URL is refused.
-`--plugin` writes a PCM *plugin* package: in the PCB editor, Tools > External Plugins > "ecadlib: add part" asks for an
-MPN, adds it to `<project>/ecadlib-work/parts.csv`, runs `ecadlib librarian` and `kicad-export` into `<project>/ecadlib/`,
-adds `${KIPRJMOD}/ecadlib/...` rows to the project's tables and places the footprint.
+`--plugin` writes a PCM *plugin* package: an **ecadlib** button in the PCB editor's top toolbar (and Tools > External
+Plugins > ecadlib: add part / check project BOM / open review queue) that opens the ecadlib window, the same flow as
+the ecadlib menu in Altium, drawn in the same dark colours: Add part from MPN (MPN, manufacturer optional, a live
+lookup, then the footprint placed in the middle of the board), Check project BOM (the schematic's lines: already in
+your library / a source can supply / needs a footprint, then Later or Fill the library now, and the report on
+request) and Open review queue. The window does not block KiCad. It runs `ecadlib kicad-menu run-job` in the background
+(`ecadlib/kicad_menu.py`) and reads its `progress.ini` / `result.ini`, as the Altium dialog does. Per project,
+`<project>/ecadlib-work/` is the workspace (one parts list for every part added or filled, so one plan makes the whole
+library) and `<project>/ecadlib/` the KiCad library, added to the project's tables as `${KIPRJMOD}/ecadlib/...`.
+KiCad gives plugins no menu or toolbar slot in the schematic editor; its Tools > Generate BOM can run
+`ecadlib kicad-menu check-bom "%I"` there, which checks the netlist against the library and opens the report.
+Tried in KiCad 7.0.11: toolbar button, BOM check, fill and add part with the footprint placed.
 
 **Altium.** `altium-pkg` writes a folder that opens in Altium as is: `SchLib/`, `PcbLib/`, `<name>.LibPkg` (an
 integrated library package listing every `.SchLib`/`.PcbLib` as `SchLib\x.SchLib`; compile it to an `.IntLib`),
