@@ -344,8 +344,8 @@ class Run:
             except Exception as e:            # one bad source or part must not stop the run
                 st["tried"].append(f"{s}: failed ({type(e).__name__}: {e})")
         lc = (row.get("lcsc") or "").split(" ")[0]
-        if row.get("src_description"):        # the part search's own text (JLCPCB / LCSC), after a KiCad symbol's
-            st["found"].setdefault("description", (row["src_description"], f"LCSC/JLCPCB part data {lc}".strip()))
+        if row.get("src_description"):        # the part search's own text (Nexar / DigiKey / Mouser / LCSC), after a KiCad symbol's
+            st["found"].setdefault("description", (row["src_description"], f"{_desc_label(row)} part data {lc}".strip()))
         return st
 
     def local(self, st, row, kind, fp_name, sym_name):
@@ -683,6 +683,12 @@ def write_review(rows, out, bom, items=None):
     reports.write_review_files(items, out, bom, details)
 
 
+def _desc_label(row):
+    """Who wrote the part search's description: LCSC/JLCPCB for the unofficial routes, else the official API's name."""
+    src = row.get("src_description_from") or row.get("src") or ""
+    return "LCSC/JLCPCB" if src in ("", "jlcpcb_search", "easyeda") else src
+
+
 def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_index=False, allow=(), offline=False,
         cache="out/http_cache", rate=0.5, providers=None, http=None, api_key=None, log=print, gen_step=True,
         rules=None, user=None, datasheet_batch=False, reader=None, progress=None):
@@ -696,6 +702,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     MG.open_folder(out, log=log)
     rules = RU.resolve(rules, out)
     sources = list(sources) if sources is not None else list(rules["sources"]["order"])
+    if not P.unofficial_allowed(rules) and "easyeda" in sources:
+        sources.remove("easyeda")                      # [providers] unofficial = false: no undocumented endpoints
+        log("  easyeda source skipped: [providers] unofficial = false")
     http = http or CachedHTTP(cache, min_interval=rate, offline=offline, timeout=60)
     bad = set(sources) - set(SOURCES)
     if bad:
@@ -713,8 +722,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         raise ValueError(f"{bom}: the BOM has a header but no part rows")
     log(f"  BOM: {len(lines)} lines; looking them up in your libraries and the part sources (triage) ...")
     index = KiCadIndex(libs)
-    from . import plugins as PL                      # providers: None = [providers] order, else jlcpcb_search,easyeda
-    provs = [c(http) for c in PL.select(providers, rules, default="jlcpcb_search,easyeda")]
+    from . import plugins as PL                      # providers: None = [providers] order, else P.DEFAULT_ORDER
+    provs = [c(http) for c in PL.select(providers, rules, default=P.DEFAULT_ORDER)]
     rows = T.triage(lines, index, provs, http)
     T.write_reports(rows, mapping, provs, http, out / "triage", bom)
     items = A365.plan(lines, pd.DataFrame(rows, dtype=str).fillna("") if rows else None, rules=rules)
@@ -825,7 +834,7 @@ def main(argv=None):
     ap.add_argument("--refresh", nargs="*", metavar="PART", help="redo finished parts: all, or the named ones")
     ap.add_argument("--refresh-index", action="store_true", help="rebuild the KiCad library name index")
     ap.add_argument("--allow", action="append", default=[], metavar="PART", help="release PART despite its release-check failures")
-    ap.add_argument("--providers", help="triage providers in order (default: [providers] order, else jlcpcb_search,easyeda)")
+    ap.add_argument("--providers", help="triage providers in order (default: [providers] order, else nexar,digikey,mouser,jlcpcb_search,easyeda)")
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--rate", type=float, default=0.5, help="min seconds between requests per host")

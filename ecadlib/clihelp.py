@@ -33,6 +33,8 @@ EXAMPLES = {
     "team": ["ecadlib team add-user alice --role librarian", "ecadlib team list", "ecadlib team setup --domain lib.example.com"],
     "mcp": ["claude mcp add ecadlib -- ecadlib mcp --lib ~/kicad/libs --workspace ws"],
     "triage": ["ecadlib triage my_bom.csv -o out/triage", "ecadlib triage my_bom.csv --lib ~/kicad/libs --offline --json"],
+    "altium-native": ["ecadlib altium-native write out/altium_pkg", "ecadlib altium-native compare out/altium_pkg"],
+    "sources-check": ["ecadlib sources-check", "ecadlib sources-check --save out/sources-check --json"],
     "footprint": ["ecadlib footprint gen ecadlib/package_specs/soic8.json -o out/fp",
                   "ecadlib footprint compare out/fp/SOIC-8.kicad_mod ref/SOIC-8.kicad_mod"],
     "check": ["ecadlib check out/fp/*.kicad_mod"],

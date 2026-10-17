@@ -9,7 +9,10 @@ parts workbook):
   <name>.LibPkg                 integrated-library package listing every .SchLib and .PcbLib by relative path
                                 (SchLib\\x.SchLib): open it in Altium and compile it into <name>.IntLib
   <name>_Install.PrjScr + .pas  DelphiScript project: run InstallDatabaseLibrary, BuildIntegratedLibrary,
-                                InstallFileLibraries or UninstallAll from File > Run Script
+                                InstallFileLibraries or UninstallAll from File > Run Script. When the folder has
+                                build recipes (ecadlib_build.txt, see ecadlib.altium_native), each install first lets
+                                Altium rebuild every .SchLib / .PcbLib with its own API (RebuildWithAltium), so the
+                                files Altium installs are ones Altium wrote; --no-native-build leaves that out
   ALTIUM_README.txt             what to click, in order
   altium_pkg.json               what was written and the checks
 
@@ -28,7 +31,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from . import altium_lib as AL
 
 MODEL_EXT = {".schlib": "SchLib", ".pcblib": "PcbLib"}
-COPY_EXT = {".schlib", ".pcblib", ".dblib", ".svndblib", ".xlsx", ".xls", ".csv", ".intlib"}
+COPY_EXT = {".schlib", ".pcblib", ".dblib", ".svndblib", ".xlsx", ".xls", ".csv", ".intlib", ".ecadbuild", ".step"}
 
 # [Design] and [DocumentN] keys as Altium writes them in a .LibPkg (particle-iot/hardware-libraries Particle-Devices.LibPkg)
 DESIGN = ["Version=1.0", "HierarchyMode=0", "ChannelRoomNamingStyle=0", "ReleasesFolder=",
@@ -60,22 +63,40 @@ def libpkg_text(docs):
     return "\r\n".join(L)
 
 
-def prjscr_text(pas):
+def prjscr_text(pas, *more):
     """Script project as Altium saves one (Altium-Designer-addons/scripts-libraries QuickSilk.PrjScr)."""
-    return "\r\n".join(["[Design]", "Version=1.0", "", "[Document1]", f"DocumentPath={pas}", ""])
+    L = ["[Design]", "Version=1.0", ""]
+    for i, d in enumerate((pas, *more), 1):
+        L += [f"[Document{i}]", f"DocumentPath={d}", ""]
+    return "\r\n".join(L)
 
 
 def _pas_str(s):
     return "'" + str(s).replace("'", "''") + "'"
 
 
-def install_script(name, dblibs, libpkg, files):
-    """DelphiScript with the four procedures; every path is relative to the script project's folder."""
+def install_script(name, dblibs, libpkg, files, native=False):
+    """DelphiScript with the four procedures; every path is relative to the script project's folder. native: the
+    project also holds ecadlib_build.pas, and every install first lets Altium rebuild the libraries (RebuildWithAltium)."""
     add = lambda var, xs: "\n".join(f"    {var}.Add({_pas_str(x)});" for x in xs) or f"    {{ none }}"
     intlib = f"Project Outputs for {Path(libpkg).stem}\\{Path(libpkg).stem}.IntLib"
     # user-chosen names go into a { } comment (a '}' would end it) and into '...' literals (a lone ' would end those)
     c = lambda v: str(v).replace("}", ")")
     sname, spkg = _pas_str(name)[1:-1], _pas_str(libpkg)[1:-1]
+    native_doc = ("Altium writes every .SchLib / .PcbLib of this folder again with its own API, from ecadlib_build.txt"
+                  if native else "(does nothing here: this package was written without build recipes)")
+    native_body = "    { no build recipes in this package }" if not native else "\n".join([
+        "    If Not FileExists(Folder + 'ecadlib_build.txt') Then",
+        "        Exit;",
+        "    BuildLibraries(Folder);",
+        "    R := TStringList.Create;",
+        "    If FileExists(Folder + 'ecadlib_build_report.txt') Then",
+        "        R.LoadFromFile(Folder + 'ecadlib_build_report.txt');",
+        "    For i := 0 To R.Count - 1 Do",
+        "        If Pos('FAILED', R.Strings[i]) = 1 Then",
+        "            Report.Add('Altium could not rebuild: ' + R.Strings[i]);",
+        "    Report.Add('rebuilt by Altium: ' + IntToStr(R.Count) + ' libraries (ecadlib_build_report.txt)');",
+        "    R.Free;"])
     return f"""{{ Install the {c(name)} library (written by ecadlib altium-pkg; paths are relative to this folder).
 
   In Altium Designer: File > Open... > {c(name)}_Install.PrjScr, then File > Run Script... and pick one:
@@ -84,6 +105,7 @@ def install_script(name, dblibs, libpkg, files):
     BuildIntegratedLibrary   opens {c(libpkg)}, compiles it into an .IntLib and installs that
     InstallFileLibraries     adds every .SchLib and .PcbLib of this folder (one per part)
     UninstallAll             removes every library of this folder from the installed list
+    RebuildWithAltium        {native_doc}
   Re-running is safe: a library already installed is removed and added again, so Altium re-reads it.
   The folder can be moved or copied: paths are worked out from where this script project is. }}
 
@@ -138,12 +160,28 @@ Begin
     Report.Free;
 End;
 
+Procedure NativeBuild;
+Var
+    R : TStringList;
+    i : Integer;
+Begin
+{native_body}
+End;
+
+Procedure RebuildWithAltium;
+Begin
+    Report := TStringList.Create;
+    NativeBuild;
+    Finish('{sname}: libraries rebuilt by Altium');
+End;
+
 Procedure InstallDatabaseLibrary;
 Var
     L : TStringList;
     i : Integer;
 Begin
     Report := TStringList.Create;
+    NativeBuild;
     L := DbLibs;
     If L.Count = 0 Then
         Report.Add('No .DbLib in this folder: run `ecadlib altium-pkg plan.json` or `ecadlib dblib-sync` first.');
@@ -159,6 +197,7 @@ Var
     i : Integer;
 Begin
     Report := TStringList.Create;
+    NativeBuild;
     L := ModelFiles;
     For i := 0 To L.Count - 1 Do
         InstallOne(Folder + L.Strings[i]);
@@ -173,6 +212,7 @@ Var
     IntLib : String;
 Begin
     Report := TStringList.Create;
+    NativeBuild;
     WS := GetWorkspace;
     Prj := WS.DM_OpenProject(Folder + {_pas_str(libpkg)}, True);
     If Prj = Nil Then
@@ -310,8 +350,9 @@ def check_folder(out, libpkg, dblibs):
     return probs, facts
 
 
-def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print):
-    """Write the Altium hand-off folder; returns the report dict (also altium_pkg.json)."""
+def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=True):
+    """Write the Altium hand-off folder; returns the report dict (also altium_pkg.json). native: write the build
+    recipes as ecadlib_build.txt + ecadlib_build.pas so the install script lets Altium write the libraries itself."""
     src, out = Path(src), Path(out)
     out.mkdir(parents=True, exist_ok=True)
     rep = {"source": str(src), "folder": str(out), "name": name, "sync": None}
@@ -335,8 +376,13 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print):
                     and p.resolve().is_relative_to(out.resolve()))
     libpkg = f"{name}.LibPkg"
     written = []
-    for fname, text in ((libpkg, libpkg_text(docs)), (f"{name}_Install.PrjScr", prjscr_text(f"{name}_Install.pas")),
-                        (f"{name}_Install.pas", install_script(name, dblibs, libpkg, docs)),
+    from . import altium_native as AN
+    native = bool(native and AN.recipes(out))
+    if native:
+        written += AN.write(out)["files"]
+    more = (AN.UNIT,) if native else ()
+    for fname, text in ((libpkg, libpkg_text(docs)), (f"{name}_Install.PrjScr", prjscr_text(f"{name}_Install.pas", *more)),
+                        (f"{name}_Install.pas", install_script(name, dblibs, libpkg, docs, native)),
                         ("ALTIUM_README.txt", readme_text(name, libpkg, dblibs, sum(1 for d in docs if d.lower().endswith(".schlib")),
                                                           sum(1 for d in docs if d.lower().endswith(".pcblib"))))):
         data = text.encode("utf-8")
@@ -345,7 +391,7 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print):
             p.write_bytes(data)
             written.append(fname)
     probs, facts = check_folder(out, libpkg, dblibs)
-    rep.update(libpkg=libpkg, script=f"{name}_Install.PrjScr", dblibs=dblibs, documents=docs, written=written,
+    rep.update(libpkg=libpkg, script=f"{name}_Install.PrjScr", dblibs=dblibs, documents=docs, written=written, native_build=native,
                problems=probs + rep.get("sync_errors", []), **facts)
     (out / "altium_pkg.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
     return rep
@@ -365,10 +411,12 @@ def main(argv=None):
     ap.add_argument("--win-dir", help="with a plan: Windows folder for the DbLib's connection string (Altium rewrites it "
                                       "from the relative workbook path anyway)")
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan)")
+    ap.add_argument("--no-native-build", action="store_true", help="leave out the build recipes: Altium installs the "
+                    ".SchLib / .PcbLib files ecadlib wrote instead of rebuilding them with its own API first")
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
     a = ap.parse_args(argv)
     try:
-        rep = build(a.src, a.out, a.name, a.win_dir, a.rules)
+        rep = build(a.src, a.out, a.name, a.win_dir, a.rules, native=not a.no_native_build)
     except (OSError, ValueError) as e:
         print(f"ecadlib altium-pkg: {e}", file=sys.stderr)
         return 2

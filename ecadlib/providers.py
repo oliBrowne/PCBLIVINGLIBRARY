@@ -1,12 +1,20 @@
 """Pluggable part-source providers for BOM triage.
 
 Provider interface:  lookup(line) -> SourceResult   (raise NotConfigured if credentials missing)
-Implemented (unauthenticated, as used by easyeda2kicad 1.0.1):
-  * JLCPCBSearch - POST keyword search, resolves MPN -> LCSC number
-  * EasyEDA      - GET component JSON by LCSC number; reports symbol / footprint / 3D presence
-Stubs (document auth, raise NotConfigured without keys): DigiKey, Mouser, Nexar, SnapMagic, SamacSys.
+Official APIs (documented, with your own free developer keys), asked first by default:
+  * Nexar        - Octopart/Altium supply API (GraphQL): MPN -> manufacturer, description, datasheet, and the LCSC
+                   number when LCSC is one of the part's sellers (NEXAR_CLIENT_ID/SECRET or NEXAR_SUPPLY_TOKEN)
+  * DigiKey      - Product Information API v4 (DIGIKEY_CLIENT_ID/SECRET)
+  * Mouser       - Search API v1 (MOUSER_API_KEY)
+  These identify the part and give its datasheet; none of them hands out symbol or footprint geometry.
+Unofficial (official = False: undocumented endpoints that easyeda2kicad also uses; they can change without notice,
+`[providers] unofficial = false` in ecadlib.toml turns them off, and .github/workflows/sources-canary.yml checks them
+against the live sites every week):
+  * JLCPCBSearch - POST keyword search, resolves MPN -> LCSC number (only when no official source found it)
+  * EasyEDA      - GET component JSON by LCSC number; the only free source of ready symbol / footprint / 3D data
+Stubs (document auth, raise NotConfigured without keys): SnapMagic, SamacSys (no self-serve public API).
 All response bodies are untrusted: parsed as JSON only, fields read defensively."""
-import json, os
+import json, os, re
 from dataclasses import dataclass, field
 
 
@@ -52,6 +60,7 @@ class Provider:
     name = "base"
     auth = "none"                       # human-readable description of the credentials needed
     env = ()                            # environment variables that must be set
+    official = True                     # False: an undocumented endpoint ([providers] unofficial = false drops it)
 
     def __init__(self, http):
         self.http = http
@@ -66,7 +75,8 @@ class Provider:
 # ------------------------------------------------------------------ EasyEDA (LCSC id -> CAD data)
 class EasyEDA(Provider):
     name = "easyeda"
-    auth = "none (public endpoint used by easyeda2kicad; Referer https://easyeda.com/ header)"
+    auth = "none (unofficial: undocumented endpoint used by easyeda2kicad; Referer https://easyeda.com/ header)"
+    official = False
     # easyeda2kicad 1.0.1: API_ENDPOINT = "https://easyeda.com/api/products/{lcsc_id}/components"
     # (older releases appended ?version=6.4.19.5; kept here since the server ignores/accepts it)
     URL = "https://easyeda.com/api/products/{}/components?version=6.4.19.5"
@@ -128,7 +138,8 @@ def parse_easyeda(data, res):
 # ------------------------------------------------------------------ JLCPCB parts search (MPN -> LCSC)
 class JLCPCBSearch(Provider):
     name = "jlcpcb_search"
-    auth = "none (anonymous JSON POST; Origin/Referer jlcpcb.com) - as used by easyeda2kicad search"
+    auth = "none (unofficial: anonymous JSON POST; Origin/Referer jlcpcb.com) - as used by easyeda2kicad search"
+    official = False
     URL = "https://jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood/selectSmtComponentList"
     HEADERS = {"Content-Type": "application/json", "Origin": "https://jlcpcb.com", "Referer": "https://jlcpcb.com/parts"}
     REFUSED = {403: "JLCPCB refused the request (403)", 429: "JLCPCB refused the request (429, too many requests)"}
@@ -162,25 +173,30 @@ class JLCPCBSearch(Provider):
         if not r.ok:
             res.error = r.error or f"HTTP {r.status}"
             return res
-        try:
-            from .kicad_index import norm_mpn
-            items = (((r.json().get("data") or {}).get("componentPageInfo") or {}).get("list")) or []
-            exact = [i for i in items if norm_mpn(i.get("componentModelEn")) == norm_mpn(mpn)]
-        except (ValueError, AttributeError, TypeError) as e:          # untrusted body of an unexpected shape
-            res.error = f"unparseable: {e}"
-            return res
-        best = (exact or [None])[0]
-        res.found = bool(best)
-        if best:
-            res.lcsc = best.get("componentCode", "")
-            res.manufacturer = best.get("componentBrandEn", "")
-            res.package = best.get("componentSpecificationEn", "")
-            res.extra = {"stock": best.get("stockCount"), "library_type": best.get("componentLibraryType")}
-            desc = describe(best.get("describe") or best.get("description"),
-                            best.get("secondSortName") or best.get("firstSortName"), res.package)
-            if desc:                           # JLCPCB/LCSC's description of the part, else its category + package
-                res.extra["description"] = desc
+        return parse_jlcpcb(r, mpn, res)
+
+
+def parse_jlcpcb(r, mpn, res):
+    """One JLCPCB search answer -> res (exact MPN match only; the field paths easyeda2kicad reads)."""
+    try:
+        from .kicad_index import norm_mpn
+        items = (((r.json().get("data") or {}).get("componentPageInfo") or {}).get("list")) or []
+        exact = [i for i in items if norm_mpn(i.get("componentModelEn")) == norm_mpn(mpn)]
+    except (ValueError, AttributeError, TypeError) as e:          # untrusted body of an unexpected shape
+        res.error = f"unparseable: {e}"
         return res
+    best = (exact or [None])[0]
+    res.found = bool(best)
+    if best:
+        res.lcsc = best.get("componentCode", "")
+        res.manufacturer = best.get("componentBrandEn", "")
+        res.package = best.get("componentSpecificationEn", "")
+        res.extra = {"stock": best.get("stockCount"), "library_type": best.get("componentLibraryType")}
+        desc = describe(best.get("describe") or best.get("description"),
+                        best.get("secondSortName") or best.get("firstSortName"), res.package)
+        if desc:                           # JLCPCB/LCSC's description of the part, else its category + package
+            res.extra["description"] = desc
+    return res
 
 
 # ------------------------------------------------------------------ authenticated distributor / CAD stubs
@@ -193,22 +209,120 @@ class _Stub(Provider):
         raise NotImplementedError(f"{self.name}: credentials present but client not implemented in prototype. {self.docs}")
 
 
-class DigiKey(_Stub):
+def lcsc_sku(text):
+    """'C2040' from an LCSC SKU or product link, '' when it is not one."""
+    m = re.search(r"(?<![A-Za-z0-9])(C\d{3,9})(?![0-9])", str(text or ""))
+    return m.group(1) if m else ""
+
+
+def from_part_info(info, res):
+    """sourcing.PartInfo -> SourceResult. Official sources identify the part (MPN, maker, description, datasheet,
+    package, LCSC number via LCSC's offer); they carry no CAD geometry, so has_symbol / has_footprint stay None and
+    triage goes on to the next source."""
+    if info.error:
+        res.error = info.error
+        return res
+    res.found = info.found
+    if not info.found:
+        return res
+    res.mpn, res.manufacturer, res.url = info.mpn, info.manufacturer, info.url
+    specs = getattr(info, "specs", {}) or {}
+    res.package = clean_text(specs.get("package") or specs.get("case/package") or "", 80)
+    for o in info.offers:
+        if re.search(r"\blcsc\b", str(o.distributor), re.I) and lcsc_sku(o.sku):
+            res.lcsc = lcsc_sku(o.sku)
+            break
+    desc = describe(info.description)
+    if desc:
+        res.extra["description"] = desc
+    if getattr(info, "datasheet", "") and re.match(r"https?://", info.datasheet):
+        res.extra["datasheet"] = info.datasheet
+    return res
+
+
+class _Official(Provider):
+    """Delegates to the sourcing client of the same API (one per provider, so its OAuth token is fetched once)."""
+    client_cls = ""
+
+    def _client(self):
+        from . import sourcing as S
+        cls = getattr(S, self.client_cls)
+        if isinstance(self, cls):
+            return self
+        if getattr(self, "_src", None) is None:
+            self._src = cls(self.http)
+        return self._src
+
+    def lookup(self, line):
+        if not self.configured():
+            raise NotConfigured(f"{self.name}: set {', '.join(self.env)} ({self.auth})")
+        mpn = (line.get("mpn") or "").strip()
+        res = SourceResult(self.name, mpn=mpn)
+        if not mpn:
+            res.error = "no MPN"
+            return res
+        info = self._client().part({"mpn": mpn, "manufacturer": (line.get("manufacturer") or "").strip(),
+                                    "lcsc": (line.get("lcsc") or "").strip()})
+        return from_part_info(info, res)
+
+
+class DigiKey(_Official):
     name, env = "digikey", ("DIGIKEY_CLIENT_ID", "DIGIKEY_CLIENT_SECRET")
     auth = "OAuth2 client-credentials app from developer.digikey.com (Product Information API v4)"
-    docs = "POST https://api.digikey.com/products/v4/search/keyword with X-DIGIKEY-Client-Id + Bearer token."
+    client_cls = "DigiKeySourcing"
+    TOKEN_URL = "https://api.digikey.com/v1/oauth2/token"
+    _token = _token_err = None
+
+    def token(self):
+        if not (self._token or self._token_err):
+            from urllib.parse import urlencode
+            body = urlencode({"client_id": os.environ["DIGIKEY_CLIENT_ID"], "client_secret": os.environ["DIGIKEY_CLIENT_SECRET"],
+                              "grant_type": "client_credentials"})
+            r = self.http.post(self.TOKEN_URL, body, cache=False, headers={"Content-Type": "application/x-www-form-urlencoded"})
+            try:
+                self._token = r.json().get("access_token") if r.ok else None
+            except ValueError:
+                pass
+            if not self._token:
+                self._token_err = f"token request failed: {r.error or f'HTTP {r.status}'}"
+        return self._token
 
 
-class Mouser(_Stub):
+class Mouser(_Official):
     name, env = "mouser", ("MOUSER_API_KEY",)
     auth = "Search API key (free, mouser.com/api-hub) passed as ?apiKey="
-    docs = "POST https://api.mouser.com/api/v1/search/partnumber?apiKey=KEY {SearchByPartRequest:{mouserPartNumber}}."
+    client_cls = "MouserSourcing"
 
 
-class Nexar(_Stub):
+class Nexar(_Official):
     name, env = "nexar", ("NEXAR_CLIENT_ID", "NEXAR_CLIENT_SECRET")
     auth = "OAuth2 client-credentials (identity.nexar.com) for the Octopart/Nexar GraphQL API; quota-limited"
-    docs = "POST https://api.nexar.com/graphql query supSearchMpn(q:...) {results{part{mpn manufacturer{name} cadModels...}}}."
+    client_cls = "NexarSourcing"
+    TOKEN_URL = os.environ.get("NEXAR_TOKEN_URL", "https://identity.nexar.com/connect/token")
+    API_URL = os.environ.get("NEXAR_API_URL", "https://api.nexar.com/graphql")
+    _token = _token_err = None
+
+    def configured(self):
+        return bool(os.environ.get("NEXAR_SUPPLY_TOKEN")) or super().configured()
+
+    def token(self):
+        if self._token or self._token_err:
+            return self._token
+        tok = os.environ.get("NEXAR_SUPPLY_TOKEN")
+        if not tok:
+            from urllib.parse import urlencode
+            body = urlencode({"grant_type": "client_credentials", "client_id": os.environ["NEXAR_CLIENT_ID"],
+                              "client_secret": os.environ["NEXAR_CLIENT_SECRET"], "scope": "supply.domain"})
+            r = self.http.post(self.TOKEN_URL, body, cache=False,
+                               headers={"Content-Type": "application/x-www-form-urlencoded"})
+            try:
+                tok = r.json().get("access_token") if r.ok else None
+            except ValueError:
+                tok = None
+            if not tok:
+                self._token_err = f"token request failed: {r.error or f'HTTP {r.status}'}"
+        self._token = tok
+        return tok
 
 
 class SnapMagic(_Stub):
@@ -224,3 +338,11 @@ class SamacSys(_Stub):
 
 
 ALL = [JLCPCBSearch, EasyEDA, DigiKey, Mouser, Nexar, SnapMagic, SamacSys]
+# what triage / the librarian ask when neither --providers nor [providers] order says: the official APIs first (each
+# is skipped with a "not configured" note until its key is set), then the unofficial EasyEDA route
+DEFAULT_ORDER = "nexar,digikey,mouser,jlcpcb_search,easyeda"
+
+
+def unofficial_allowed(rules):
+    """[providers] unofficial (default true): false keeps every undocumented endpoint (EasyEDA, JLCPCB search) out."""
+    return bool(((rules or {}).get("providers") or {}).get("unofficial", True))

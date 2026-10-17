@@ -1,0 +1,1031 @@
+"""Let Altium Designer build the .PcbLib / .SchLib files itself, through its own scripting API, instead of trusting
+ecadlib's byte-level writer (altium_lib) with a format Altium does not document.
+
+    ecadlib altium-native write LIBFOLDER [--out DIR]     collect the build recipes under LIBFOLDER into DIR
+                                                          (default LIBFOLDER): ecadlib_build.txt + the script project
+    ecadlib altium-native compare LIBFOLDER [--json]      after Altium has built them: read every library Altium saved
+                                                          and compare it with its recipe, pad by pad and pin by pin
+
+How it fits together:
+  1. Every time ecadlib writes a .PcbLib or .SchLib (altium_lib.write_pcblib / write_schlib), it also writes the same
+     content as a plain-text recipe next to it: <file>.ecadbuild. A recipe is a list of primitives (pads, tracks,
+     arcs, fills, regions, text, 3D bodies; pins, rectangles, lines, arcs, labels, parameters, the footprint link)
+     in Altium's own units, nothing Altium-specific about the file format.
+  2. `write` gathers the recipes of a library folder into ecadlib_build.txt (STEP models referenced by a footprint are
+     written beside it as files) and writes ecadlib_build.PrjScr + ecadlib_build.pas.
+  3. In Altium, File > Run Script > BuildLibrariesInAltium (or the install script's procedures, see altium_pkg) reads
+     ecadlib_build.txt and, for each library, opens a new PcbLib / SchLib document, creates every primitive with
+     PCBServer / SchServer object factories, and saves the document over the file ecadlib wrote. The file on disk
+     is then one Altium itself wrote. It writes ecadlib_build_report.txt: one line per library, OK or FAILED.
+  4. `compare` reads those files back and checks them against the recipes (pad designators, positions, sizes,
+     holes; pin numbers, names, positions, lengths): proof that what Altium built is what ecadlib meant.
+
+Recipe format (UTF-8, one primitive per line, fields separated by TAB; PCB lengths in Altium internal units:
+1 mil = 10000; schematic lengths in 1/1000 mil; angles in 1/1000 degree; layers as Altium's legacy layer numbers):
+  ECADLIB-BUILD 1
+  PCBLIB <file name>                        then one or more:
+    FOOTPRINT name description height
+    PAD designator x y w h rot shape(rect|round|roundrect|octagonal) corner% layer hole hole_shape(round|square|slot)
+        slot hole_rot plated(1|0) paste_mode(rule|manual) paste mask_mode mask offset_x offset_y
+    TRACK x1 y1 x2 y2 width layer             ARC cx cy r start end width layer
+    FILL x1 y1 x2 y2 layer                    REGION layer keepout(0|1) n x1 y1 ... xn yn
+    TEXT text x y height stroke rot layer     BODY layer height standoff step_file rx ry rz dz n x1 y1 ...
+  SCHLIB <file name>
+    SYMBOL name description designator comment parts modes
+    PIN part mode number name etype orient x y length show_name show_number hidden inner_edge outer_edge inner outer
+        description hidden_net
+    RECT part mode x1 y1 x2 y2 width fill     LINE part mode x1 y1 x2 y2 width
+    POLYLINE part mode width n x1 y1 ...      POLYGON part mode width fill n x1 y1 ...
+    SARC part mode cx cy r start end width    CIRCLE part mode cx cy r width fill
+    LABEL part mode x y orientation text      PARAM name value
+    DESIGNATOR x y                            COMMENT x y
+    FOOTPRINTLINK name
+  END                                        closes a PCBLIB / SCHLIB block
+
+The script is written from Altium's scripting references (TR0120 DelphiScript, TR0135 Client/System, the PCB and
+Schematic API references) and Altium's own example scripts; ALTIUM_API lists every identifier it calls and where it is
+documented. tests/test_altium_native.py checks that the script calls nothing else. Run in Altium Designer 26 on a
+real PC before it is trusted: see docs/altium-native.md for the result of that run."""
+import argparse, json, re, sys
+from pathlib import Path
+
+from . import altium_lib as AL
+
+EXT = ".ecadbuild"
+BUILD, PROJECT, UNIT, REPORT = "ecadlib_build.txt", "ecadlib_build.PrjScr", "ecadlib_build.pas", "ecadlib_build_report.txt"
+FILL = {"body": "body", "line": "line"}
+
+
+# ------------------------------------------------------------------ recipe text
+def _t(s):
+    """A text field: tabs and line breaks would split the record, so they become spaces."""
+    return re.sub(r"[\t\r\n]+", " ", str(s if s is not None else ""))
+
+
+def _a(deg):
+    return str(int(round(float(deg or 0) * 1000)))
+
+
+def _s(v):
+    """Schematic length (DXP units, 10 mil) -> 1/1000 mil."""
+    return str(int(round(float(v) * 10000)))
+
+
+def _line(*f):
+    return "\t".join(_t(x) for x in f)
+
+
+def footprint_lines(fp):
+    """Recipe lines for one footprint dict (altium_lib's model: mm, y up)."""
+    mm = AL.mm
+    out = [_line("FOOTPRINT", fp["name"], AL.clean(fp.get("description", "")), mm(fp.get("height_mm") or 0))]
+    for p in fp.get("pads", []):
+        w, h = mm(p["w"]), mm(p["h"])
+        def exp(v):
+            if v is None:
+                return "rule", 0
+            if v == "none":                 # closed aperture: the expansion altium_lib uses
+                return "manual", -max(w, h) // 2 - mm(0.01)
+            return "manual", mm(v) if isinstance(v, float) else int(v)
+        pm, pv = exp(p.get("paste"))
+        mm_, mv = exp(p.get("mask"))
+        ox, oy = (mm(v) for v in p["offset"]) if p.get("offset") else (0, 0)
+        shape = "round" if p["shape"] in ("circle", "oval") else p["shape"]
+        out.append(_line("PAD", p["designator"], mm(p["x"]), mm(p["y"]), w, h, _a(p.get("rot")), shape,
+                         int(round(p.get("corner", 0))) if p["shape"] == "roundrect" else 0, p.get("layer", AL.TOP),
+                         mm(p.get("hole", 0)), p.get("hole_shape", "round"), mm(p.get("slot", 0)), _a(p.get("hole_rot")),
+                         1 if p.get("plated", True) else 0, pm, pv, mm_, mv, ox, oy))
+    for x1, y1, x2, y2, w, layer in fp.get("tracks", []):
+        out.append(_line("TRACK", mm(x1), mm(y1), mm(x2), mm(y2), mm(w), layer))
+    for cx, cy, r, a0, a1, w, layer in fp.get("arcs", []):
+        out.append(_line("ARC", mm(cx), mm(cy), mm(r), _a(a0), _a(a1), mm(w), layer))
+    for x1, y1, x2, y2, layer in fp.get("fills", []):
+        out.append(_line("FILL", mm(x1), mm(y1), mm(x2), mm(y2), layer))
+    for pts, layer, *ko in fp.get("regions", []):
+        out.append(_line("REGION", layer, 1 if ko and ko[0] is not None else 0, len(pts), *[mm(v) for xy in pts for v in xy]))
+    for txt, x, y, h, w, rot, layer in fp.get("texts", []):
+        out.append(_line("TEXT", txt, mm(x), mm(y), mm(h), mm(w), _a(rot), layer))
+    for k, b in enumerate(fp.get("bodies", [])):
+        st = b.get("step") or {}
+        step = f"{AL.file_stem(fp['name'])}_{k}.step" if st.get("data") else ""
+        rot = st.get("rot") or (0, 0, 0)
+        out.append(_line("BODY", fp.get("body_layer", AL.MECH13), mm(b["height"]), mm(b.get("standoff", 0)), step,
+                         _a(rot[0]), _a(rot[1]), _a(rot[2]), mm(st.get("dz", 0)), len(b["pts"]),
+                         *[mm(v) for xy in b["pts"] for v in xy]))
+    return out
+
+
+def symbol_lines(sym):
+    """Recipe lines for one symbol dict (altium_lib's model: DXP units, y up)."""
+    parts = sym.get("prim_parts") or [1] * len(sym["prims"])
+    modes = sym.get("prim_modes") or [0] * len(sym["prims"])
+    out = [_line("SYMBOL", AL.lib_name(sym["name"]), AL.clean(sym.get("description", "")), sym.get("designator", "U?"),
+                 sym.get("comment", "*"), sym.get("parts", 1), sym.get("modes", 1))]
+    for pr, part, mode in zip(sym["prims"], parts, modes):
+        k = pr[0]
+        if k == "rect":
+            fill = pr[6] if len(pr) > 6 else "body"
+            out.append(_line("RECT", part, mode, *map(_s, (min(pr[1], pr[3]), min(pr[2], pr[4]), max(pr[1], pr[3]), max(pr[2], pr[4]))),
+                             pr[5] if len(pr) > 5 and pr[5] else 1, FILL.get(fill, "none")))
+        elif k == "line":
+            out.append(_line("LINE", part, mode, *map(_s, pr[1:5]), pr[5]))
+        elif k in ("polyline", "polygon"):
+            pts = [_s(v) for xy in pr[1] for v in xy]
+            if k == "polyline":
+                out.append(_line("POLYLINE", part, mode, pr[2], len(pr[1]), *pts))
+            else:
+                out.append(_line("POLYGON", part, mode, pr[2], FILL.get(pr[3], "none"), len(pr[1]), *pts))
+        elif k == "arc":
+            out.append(_line("SARC", part, mode, _s(pr[1]), _s(pr[2]), _s(pr[3]), _a(pr[4]), _a(pr[5]), pr[6]))
+        elif k == "circle":
+            out.append(_line("CIRCLE", part, mode, _s(pr[1]), _s(pr[2]), _s(pr[3]), pr[4], FILL.get(pr[5], "none")))
+        elif k == "text":
+            out.append(_line("LABEL", part, mode, _s(pr[1]), _s(pr[2]), pr[4] or 0, AL.clean(pr[3])))
+        else:                                   # ("pin", p, side, x, y, length[, show])
+            _, p, side, x, y, length, *show = pr
+            sn = show[0] if show else True
+            sn_name, sn_num = (sn if p.get("show_name") is None else p["show_name"]), (sn if p.get("show_num") is None else p["show_num"])
+            out.append(_line("PIN", part, mode, p["num"], AL.overline(p["name"]), AL.ETYPE[p.get("type", "passive")], AL.ORIENT[side],
+                             _s(x), _s(y), _s(length), int(bool(sn_name)), int(bool(sn_num)), int(bool(p.get("hidden"))),
+                             *AL.pin_symbols(p.get("shape")), AL.clean(p.get("description", "")), AL.clean(p.get("net") or "")))
+    (dx, dy), (cx, cy) = sym["label_at"]
+    out += [_line("DESIGNATOR", _s(dx), _s(dy)), _line("COMMENT", _s(cx), _s(cy))]
+    out += [_line("PARAM", AL.clean(n), AL.clean(v)) for n, v in sym.get("params", [])]
+    if sym.get("footprint"):
+        out.append(_line("FOOTPRINTLINK", AL.lib_name(sym["footprint"])))
+    return out
+
+
+def recipe_text(kind, filename, items):
+    """kind 'PCBLIB' (items: footprint dicts) or 'SCHLIB' (symbol dicts) -> one recipe block (with the header line)."""
+    body = []
+    for it in items:
+        body += footprint_lines(it) if kind == "PCBLIB" else symbol_lines(it)
+    return "\n".join(["ECADLIB-BUILD\t1", _line(kind, filename), *body, "END"]) + "\n"
+
+
+def write_recipe(lib_path, kind, items):
+    """Write <lib_path>.ecadbuild next to a library ecadlib just wrote (and any STEP files its bodies embed)."""
+    lib_path = Path(lib_path)
+    text = recipe_text(kind, lib_path.name, items)
+    rp = lib_path.with_name(lib_path.name + EXT)
+    if not (rp.is_file() and rp.read_text(encoding="utf-8") == text):
+        rp.write_text(text, encoding="utf-8")
+    if kind == "PCBLIB":
+        for fp in items:
+            for k, b in enumerate(fp.get("bodies", [])):
+                data = (b.get("step") or {}).get("data")
+                if data:
+                    sp = lib_path.with_name(f"{AL.file_stem(fp['name'])}_{k}.step")
+                    if not (sp.is_file() and sp.read_bytes() == data):
+                        sp.write_bytes(data)
+    return rp
+
+
+# ------------------------------------------------------------------ collecting a library folder
+def recipes(folder):
+    """[(library path relative to folder, recipe path)] for every recipe under folder whose library exists."""
+    folder = Path(folder)
+    out = []
+    for rp in sorted(folder.rglob("*" + EXT)):
+        lib = rp.with_name(rp.name[:-len(EXT)])
+        if lib.is_file():
+            out.append((lib.relative_to(folder), rp))
+    return out
+
+
+def build_text(folder):
+    """ecadlib_build.txt for a folder: each recipe with its library path (Windows separators, relative to the folder)."""
+    lines = ["ECADLIB-BUILD\t1"]
+    for rel, rp in recipes(folder):
+        for ln in rp.read_text(encoding="utf-8").splitlines():
+            if ln.startswith("ECADLIB-BUILD"):
+                continue
+            kind = ln.split("\t", 1)[0]
+            if kind in ("PCBLIB", "SCHLIB"):
+                ln = _line(kind, str(rel).replace("/", "\\"))
+            elif kind == "BODY":           # STEP files sit beside their PcbLib: make the name folder-relative
+                f = ln.split("\t")
+                if f[4]:
+                    f[4] = str(rel.parent / f[4]).replace("/", "\\")
+                ln = "\t".join(f)
+            lines.append(ln)
+    return "\n".join(lines) + "\n"
+
+
+def write(folder, out=None):
+    """Write ecadlib_build.txt and the script project into out (default: folder). -> report dict."""
+    folder = Path(folder)
+    out = Path(out) if out else folder
+    out.mkdir(parents=True, exist_ok=True)
+    found = recipes(folder)
+    text = build_text(folder)
+    if out.resolve() != folder.resolve():       # the script resolves library paths from its own folder
+        import os
+        prefix = Path(os.path.relpath(folder, out))
+        fixed = []
+        for ln in text.splitlines():
+            f = ln.split("\t")
+            if f[0] in ("PCBLIB", "SCHLIB") or (f[0] == "BODY" and f[4]):
+                i = 1 if f[0] != "BODY" else 4
+                f[i] = str(prefix / f[i].replace("\\", "/")).replace("/", "\\")
+            fixed.append("\t".join(f))
+        text = "\n".join(fixed) + "\n"
+    (out / BUILD).write_text(text, encoding="utf-8-sig")       # BOM: TStringList.LoadFromFile reads it as UTF-8
+    (out / PROJECT).write_text(prjscr_text(), encoding="utf-8", newline="")
+    (out / UNIT).write_text(pas_text(), encoding="utf-8", newline="")
+    return {"folder": str(folder), "out": str(out), "libraries": [str(r) for r, _ in found],
+            "files": [BUILD, PROJECT, UNIT]}
+
+
+def prjscr_text():
+    return "\r\n".join(["[Design]", "Version=1.0", "", "[Document1]", f"DocumentPath={UNIT}", ""])
+
+
+# ------------------------------------------------------------------ the DelphiScript
+# Every identifier the script calls from Altium, and where it is documented (TRxxxx = Altium scripting reference PDFs
+# as kept in github.com/Altium-Designer-addons/scripting-reference; "examples" = Altium's own PCB / SCH example scripts
+# shipped with Altium Designer: CreateComponentInLibrary.pas (PCB), CreateSchObjects / LibraryIterator scripts (SCH)).
+ALTIUM_API = {
+    "Client": "TR0135 System Reference (Client object)",
+    "OpenNewDocument": "TR0135 IClient.OpenNewDocument(Kind, FileName, NickName, ReadOnly) : IServerDocument",
+    "ShowDocument": "TR0135 IClient.ShowDocument(Document)",
+    "CloseDocument": "TR0135 IClient.CloseDocument(Document)",
+    "GetDocumentByPath": "TR0135 IClient.GetDocumentByPath(Path) : IServerDocument",
+    "DoFileSave": "TR0135 IServerDocument.DoFileSave(Kind)",
+    "SetModified": "TR0135 IServerDocument.SetModified",
+    "PCBServer": "PCB API reference: global PCBServer : IPCB_ServerInterface",
+    "GetCurrentPCBLibrary": "PCB API: IPCB_ServerInterface.GetCurrentPCBLibrary : IPCB_Library",
+    "CreatePCBLibComp": "PCB API: IPCB_ServerInterface.CreatePCBLibComp (example CreateComponentInLibrary)",
+    "RegisterComponent": "PCB API: IPCB_Library.RegisterComponent",
+    "RemoveComponent": "PCB API: IPCB_Library.RemoveComponent",
+    "CurrentComponent": "PCB API: IPCB_Library.CurrentComponent",
+    "PCBObjectFactory": "PCB API: IPCB_ServerInterface.PCBObjectFactory(ObjectId, DimensionKind, CreationMode)",
+    "PCBContourFactory": "PCB API: IPCB_ServerInterface.PCBContourFactory : IPCB_Contour",
+    "AddPoint": "PCB API: IPCB_Contour.AddPoint(X, Y)",
+    "SetOutlineContour": "PCB API: IPCB_Region / IPCB_ComponentBody.SetOutlineContour",
+    "AddPCBObject": "PCB API: IPCB_LibComponent.AddPCBObject (example CreateComponentInLibrary)",
+    "PreProcess": "PCB API: IPCB_ServerInterface.PreProcess", "PostProcess": "PCB API: IPCB_ServerInterface.PostProcess",
+    "SendMessageToRobots": "PCB API: IPCB_ServerInterface.SendMessageToRobots (example CreateComponentInLibrary)",
+    "I_ObjectAddress": "PCB / SCH API: object address for robot messages",
+    "SetState_StackCRPctOnLayer": "PCB API: IPCB_Pad.SetState_StackCRPctOnLayer(Layer, Percent) (rounded-rectangle corner)",
+    "ModelFactory_CreateExtruded": "PCB API: IPCB_ComponentBody.ModelFactory_CreateExtruded(Standoff, Height, Colour)",
+    "ModelFactory_FromFilename": "PCB API: IPCB_ComponentBody.ModelFactory_FromFilename(FileName, Embedded)",
+    "SetState_FromModel": "PCB API: IPCB_ComponentBody.SetState_FromModel",
+    "SetState": "PCB API: IPCB_Model.SetState(RotX, RotY, RotZ, Dz)",
+    "MechanicalLayer": "PCB API: LayerUtils.MechanicalLayer(N) (AD19+ layer ids)",
+    "LayerUtils": "PCB API: LayerUtils",
+    "SchServer": "Schematic API reference: global SchServer : ISch_ServerInterface",
+    "GetCurrentSchDocument": "SCH API: ISch_ServerInterface.GetCurrentSchDocument (an ISch_Lib in the library editor)",
+    "SchObjectFactory": "SCH API: ISch_ServerInterface.SchObjectFactory(ObjectId, CreationMode)",
+    "AddSchComponent": "SCH API: ISch_Lib.AddSchComponent", "RemoveSchComponent": "SCH API: ISch_Lib.RemoveSchComponent",
+    "CurrentSchComponent": "SCH API: ISch_Lib.CurrentSchComponent",
+    "AddSchObject": "SCH API: ISch_BasicContainer.AddSchObject",
+    "AddSchImplementation": "SCH API: ISch_Component.AddSchImplementation : ISch_Implementation",
+    "AddDataFileLink": "SCH API: ISch_Implementation.AddDataFileLink(EntityName, Location, FileKind)",
+    "ClearAllDatafileLinks": "SCH API: ISch_Implementation.ClearAllDatafileLinks",
+    "RobotManager": "SCH API: ISch_ServerInterface.RobotManager", "SendMessage": "SCH API: ISch_RobotManager.SendMessage",
+    "GraphicallyInvalidate": "SCH API: ISch_Document.GraphicallyInvalidate",
+    "Point": "SCH API: Point(X, Y) : TLocation", "MilsToCoord": "TR0135 / SCH API: MilsToCoord",
+    "GetRunningScriptProjectName": "used in Altium-Designer-addons scripts; ecadlib altium-pkg's install script",
+    "ExtractFilePath": "TR0136 p29", "FileExists": "TR0135 p143", "DeleteFile": "TR0120 File IO Routines",
+    "TStringList": "TR0135 Helper classes; TR0120 p10", "LoadFromFile": "TStringList.LoadFromFile",
+    "SaveToFile": "TR0135 p196 (TStringList)", "Add": "TStringList.Add", "Clear": "TStringList.Clear",
+    "Count": "TStringList.Count", "Strings": "TStringList.Strings", "Create": "constructors", "Free": "destructor, TR0120 p10",
+    "StrToInt": "TR0120 String Routines", "IntToStr": "TR0120 p6", "Copy": "TR0120 p17", "Length": "TR0120 p17",
+    "Pos": "TR0120 p17", "Trim": "TR0120 p17", "ShowMessage": "TR0120 p3", "Inc": "TR0120 Ordinal Routines",
+}
+
+# Object properties and enum constants the script sets, from the same references: IPCB_Pad / IPCB_Track / IPCB_Arc /
+# IPCB_Fill / IPCB_Region / IPCB_Text / IPCB_ComponentBody / IPCB_LibComponent (PCB API reference, "PCB Objects
+# Interfaces"; TLayer, TShape, TObjectId, TPadMode, TMaskExpansionMode, THoleType enums) and ISch_Component /
+# ISch_Pin / ISch_Rectangle / ISch_Line / ISch_Polyline / ISch_Arc / ISch_Ellipse / ISch_Label / ISch_Parameter /
+# ISch_Implementation (Schematic API reference; TObjectId, TPinElectrical, TRotationBy90 enums).
+PROPERTIES = {
+    "pcb": ["X", "Y", "Name", "Mode", "TopXSize", "TopYSize", "MidXSize", "MidYSize", "BotXSize", "BotYSize", "TopShape",
+            "MidShape", "BotShape", "Rotation", "Layer", "HoleSize", "HoleType", "HoleWidth", "HoleRotation", "Plated",
+            "PasteMaskExpansionMode", "PasteMaskExpansion", "SolderMaskExpansionMode", "SolderMaskExpansion", "X1", "Y1",
+            "X2", "Y2", "Width", "XCenter", "YCenter", "Radius", "StartAngle", "EndAngle", "LineWidth", "X1Location",
+            "Y1Location", "X2Location", "Y2Location", "IsKeepout", "UseTTFonts", "Text", "XLocation", "YLocation", "Size",
+            "BodyProjection", "Model", "Description", "Height",
+            "ePadObject", "eTrackObject", "eArcObject", "eFillObject", "eRegionObject", "eTextObject",
+            "eComponentBodyObject", "eNoDimension", "eCreate_Default", "ePadMode_Simple", "eRectangular", "eRounded",
+            "eRoundedRectangular", "eOctagonal", "eRoundHole", "eSquareHole", "eSlotHole", "eMaskExpansionMode_Manual",
+            "eTopLayer", "eMidLayer1", "eBottomLayer", "eTopOverlay", "eBottomOverlay", "eTopPaste", "eBottomPaste",
+            "eTopSolder", "eBottomSolder", "eKeepOutLayer", "eMultiLayer", "eBoardSide_Top", "c_Broadcast",
+            "PCBM_BoardRegisteration"],
+    "sch": ["Designator", "Electrical", "Orientation", "Location", "PinLength", "ShowName", "ShowDesignator", "IsHidden",
+            "Symbol_InnerEdge", "Symbol_OuterEdge", "Symbol_Inner", "Symbol_Outer", "HiddenNetName", "Corner", "Color",
+            "AreaColor", "IsSolid", "VerticesCount", "Vertex", "SecondaryRadius", "OwnerPartId", "OwnerPartDisplayMode",
+            "CurrentPartID", "DisplayMode", "DisplayModeCount", "PartCount", "LibReference", "ComponentDescription",
+            "Comment", "ModelName", "ModelType", "IsCurrent",
+            "eSchComponent", "ePin", "eRectangle", "eLine", "ePolyline", "ePolygon", "eArc", "eEllipse", "eLabel",
+            "eParameter", "c_BroadCast", "SCHM_PrimitiveRegistration"],
+}
+
+
+def pas_text():
+    """The DelphiScript unit (CRLF)."""
+    return PAS.replace("\r\n", "\n").replace("\n", "\r\n")
+
+
+PAS = r"""{ ecadlib: build libraries inside Altium Designer (written by `ecadlib altium-native write`).
+
+  BuildLibrariesInAltium   reads ecadlib_build.txt next to this script project and, for every library listed in it,
+                           makes a new PcbLib / SchLib document, creates each footprint / symbol with Altium's own
+                           object factories, and saves it over the file named there. Libraries that are open are
+                           closed first (unsaved changes in them are lost: they would be overwritten anyway).
+                           Writes ecadlib_build_report.txt: one line per library, OK or FAILED.
+  BuildLibraries(Folder)   the same for the ecadlib_build.txt in Folder (other scripts call this).
+
+  Units in the recipe: PCB lengths in Altium internal units (1 mil = 10000), schematic lengths in 1/1000 mil,
+  angles in 1/1000 degree, layers as legacy layer numbers. }
+
+Var
+    EbF      : TStringList;     { fields of the current recipe line }
+    EbLines  : TStringList;
+    EbReport : TStringList;
+    EbIdx    : Integer;
+
+Procedure EbSplit(S : String);
+Var
+    i   : Integer;
+    Cur : String;
+Begin
+    EbF.Clear;
+    Cur := '';
+    For i := 1 To Length(S) Do
+    Begin
+        If S[i] = #9 Then
+        Begin
+            EbF.Add(Cur);
+            Cur := '';
+        End
+        Else
+            Cur := Cur + S[i];
+    End;
+    EbF.Add(Cur);
+End;
+
+Function EbN(i : Integer) : Integer;
+Begin
+    Result := StrToInt(Trim(EbF[i]));
+End;
+
+Function EbAng(i : Integer) : Double;
+Begin
+    Result := StrToInt(Trim(EbF[i])) / 1000;
+End;
+
+Function EbSchC(i : Integer) : Integer;
+Begin
+    Result := MilsToCoord(StrToInt(Trim(EbF[i])) / 1000);
+End;
+
+Function PcbLayer(L : Integer) : Integer;
+Begin
+    Case L Of
+        1  : Result := eTopLayer;
+        32 : Result := eBottomLayer;
+        33 : Result := eTopOverlay;
+        34 : Result := eBottomOverlay;
+        35 : Result := eTopPaste;
+        36 : Result := eBottomPaste;
+        37 : Result := eTopSolder;
+        38 : Result := eBottomSolder;
+        56 : Result := eKeepOutLayer;
+        74 : Result := eMultiLayer;
+    Else
+        If (L >= 57) And (L <= 72) Then
+            Result := LayerUtils.MechanicalLayer(L - 56)
+        Else
+            Result := L;
+    End;
+End;
+
+Function PadShape(S : String) : Integer;
+Begin
+    If S = 'rect' Then Result := eRectangular
+    Else If S = 'roundrect' Then Result := eRoundedRectangular
+    Else If S = 'octagonal' Then Result := eOctagonal
+    Else Result := eRounded;
+End;
+
+Function HoleShape(S : String) : Integer;
+Begin
+    If S = 'square' Then Result := eSquareHole
+    Else If S = 'slot' Then Result := eSlotHole
+    Else Result := eRoundHole;
+End;
+
+Procedure CloseIfOpen(Path : String);
+Var
+    Doc : IServerDocument;
+Begin
+    Doc := Client.GetDocumentByPath(Path);
+    If Doc <> Nil Then
+        Client.CloseDocument(Doc);
+End;
+
+{ ------------------------------------------------------------------ footprints }
+Procedure AddPrim(Comp : IPCB_LibComponent; Prim : IPCB_Primitive);
+Begin
+    Comp.AddPCBObject(Prim);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast, PCBM_BoardRegisteration, Prim.I_ObjectAddress);
+End;
+
+Function EbContour(First : Integer) : IPCB_Contour;
+Var
+    k, Cnt : Integer;
+Begin
+    Result := PCBServer.PCBContourFactory;
+    Cnt := EbN(First);
+    For k := 0 To Cnt - 1 Do
+        Result.AddPoint(EbN(First + 1 + 2 * k), EbN(First + 2 + 2 * k));
+End;
+
+Procedure MakePad(Comp : IPCB_LibComponent);
+Var
+    Pad : IPCB_Pad;
+Begin
+    Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+    Pad.Mode := ePadMode_Simple;
+    Pad.Name := EbF[1];
+    Pad.X := EbN(2);
+    Pad.Y := EbN(3);
+    Pad.TopXSize := EbN(4);
+    Pad.TopYSize := EbN(5);
+    Pad.MidXSize := EbN(4);
+    Pad.MidYSize := EbN(5);
+    Pad.BotXSize := EbN(4);
+    Pad.BotYSize := EbN(5);
+    Pad.TopShape := PadShape(EbF[7]);
+    Pad.MidShape := PadShape(EbF[7]);
+    Pad.BotShape := PadShape(EbF[7]);
+    Pad.Rotation := EbAng(6);
+    Pad.Layer := PcbLayer(EbN(9));
+    If EbN(10) > 0 Then
+    Begin
+        Pad.HoleSize := EbN(10);
+        Pad.HoleType := HoleShape(EbF[11]);
+        If EbF[11] = 'slot' Then
+            Pad.HoleWidth := EbN(12);
+        Pad.HoleRotation := EbAng(13);
+        Pad.Plated := EbN(14) = 1;
+    End
+    Else
+        Pad.HoleSize := 0;
+    If EbF[7] = 'roundrect' Then
+    Begin
+        Pad.SetState_StackCRPctOnLayer(eTopLayer, EbN(8));
+        Pad.SetState_StackCRPctOnLayer(eMidLayer1, EbN(8));
+        Pad.SetState_StackCRPctOnLayer(eBottomLayer, EbN(8));
+    End;
+    If EbF[15] = 'manual' Then
+    Begin
+        Pad.PasteMaskExpansionMode := eMaskExpansionMode_Manual;
+        Pad.PasteMaskExpansion := EbN(16);
+    End;
+    If EbF[17] = 'manual' Then
+    Begin
+        Pad.SolderMaskExpansionMode := eMaskExpansionMode_Manual;
+        Pad.SolderMaskExpansion := EbN(18);
+    End;
+    AddPrim(Comp, Pad);
+End;
+
+Procedure MakeTrack(Comp : IPCB_LibComponent);
+Var
+    T : IPCB_Track;
+Begin
+    T := PCBServer.PCBObjectFactory(eTrackObject, eNoDimension, eCreate_Default);
+    T.X1 := EbN(1); T.Y1 := EbN(2); T.X2 := EbN(3); T.Y2 := EbN(4);
+    T.Width := EbN(5);
+    T.Layer := PcbLayer(EbN(6));
+    AddPrim(Comp, T);
+End;
+
+Procedure MakeArc(Comp : IPCB_LibComponent);
+Var
+    A : IPCB_Arc;
+Begin
+    A := PCBServer.PCBObjectFactory(eArcObject, eNoDimension, eCreate_Default);
+    A.XCenter := EbN(1); A.YCenter := EbN(2); A.Radius := EbN(3);
+    A.StartAngle := EbAng(4); A.EndAngle := EbAng(5);
+    A.LineWidth := EbN(6);
+    A.Layer := PcbLayer(EbN(7));
+    AddPrim(Comp, A);
+End;
+
+Procedure MakeFill(Comp : IPCB_LibComponent);
+Var
+    Fl : IPCB_Fill;
+Begin
+    Fl := PCBServer.PCBObjectFactory(eFillObject, eNoDimension, eCreate_Default);
+    Fl.X1Location := EbN(1); Fl.Y1Location := EbN(2); Fl.X2Location := EbN(3); Fl.Y2Location := EbN(4);
+    Fl.Rotation := 0;
+    Fl.Layer := PcbLayer(EbN(5));
+    AddPrim(Comp, Fl);
+End;
+
+Procedure MakeRegion(Comp : IPCB_LibComponent);
+Var
+    R : IPCB_Region;
+Begin
+    R := PCBServer.PCBObjectFactory(eRegionObject, eNoDimension, eCreate_Default);
+    R.SetOutlineContour(EbContour(3));
+    R.Layer := PcbLayer(EbN(1));
+    If EbN(2) = 1 Then
+        R.IsKeepout := True;
+    AddPrim(Comp, R);
+End;
+
+Procedure MakeText(Comp : IPCB_LibComponent);
+Var
+    T : IPCB_Text;
+Begin
+    T := PCBServer.PCBObjectFactory(eTextObject, eNoDimension, eCreate_Default);
+    T.UseTTFonts := False;
+    T.Text := EbF[1];
+    T.XLocation := EbN(2); T.YLocation := EbN(3);
+    T.Size := EbN(4);
+    T.Width := EbN(5);
+    T.Rotation := EbAng(6);
+    T.Layer := PcbLayer(EbN(7));
+    AddPrim(Comp, T);
+End;
+
+Procedure MakeBody(Comp : IPCB_LibComponent; Folder : String);
+Var
+    B : IPCB_ComponentBody;
+    M : IPCB_Model;
+Begin
+    B := PCBServer.PCBObjectFactory(eComponentBodyObject, eNoDimension, eCreate_Default);
+    B.SetOutlineContour(EbContour(9));
+    B.Layer := PcbLayer(EbN(1));
+    B.BodyProjection := eBoardSide_Top;
+    If EbF[4] <> '' Then
+    Begin
+        M := B.ModelFactory_FromFilename(Folder + EbF[4], True);
+        M.SetState(EbAng(5), EbAng(6), EbAng(7), EbN(8));
+    End
+    Else
+        M := B.ModelFactory_CreateExtruded(EbN(3), EbN(2), $808080);
+    B.Model := M;
+    B.SetState_FromModel;
+    AddPrim(Comp, B);
+End;
+
+Function BuildPcbLib(Folder : String) : String;
+Var
+    Path    : String;
+    Doc     : IServerDocument;
+    Lib     : IPCB_Library;
+    Blank   : IPCB_LibComponent;
+    Comp    : IPCB_LibComponent;
+    Kind    : String;
+    Count   : Integer;
+Begin
+    Path := Folder + EbF[1];
+    CloseIfOpen(Path);
+    If FileExists(Path) Then
+        DeleteFile(Path);
+    Doc := Client.OpenNewDocument('PCBLIB', Path, '', False);
+    Client.ShowDocument(Doc);
+    Lib := PCBServer.GetCurrentPCBLibrary;
+    Blank := Lib.CurrentComponent;
+    Comp := Nil;
+    Count := 0;
+    PCBServer.PreProcess;
+    Inc(EbIdx);
+    While EbIdx < EbLines.Count Do
+    Begin
+        EbSplit(EbLines[EbIdx]);
+        Kind := EbF[0];
+        If Kind = 'END' Then Break;
+        If Kind = 'FOOTPRINT' Then
+        Begin
+            Comp := PCBServer.CreatePCBLibComp;
+            Comp.Name := EbF[1];
+            Comp.Description := EbF[2];
+            Comp.Height := EbN(3);
+            Lib.RegisterComponent(Comp);
+            Inc(Count);
+        End
+        Else If Kind = 'PAD' Then MakePad(Comp)
+        Else If Kind = 'TRACK' Then MakeTrack(Comp)
+        Else If Kind = 'ARC' Then MakeArc(Comp)
+        Else If Kind = 'FILL' Then MakeFill(Comp)
+        Else If Kind = 'REGION' Then MakeRegion(Comp)
+        Else If Kind = 'TEXT' Then MakeText(Comp)
+        Else If Kind = 'BODY' Then MakeBody(Comp, Folder);
+        Inc(EbIdx);
+    End;
+    PCBServer.PostProcess;
+    If (Blank <> Nil) And (Count > 0) Then
+        Lib.RemoveComponent(Blank);
+    If Comp <> Nil Then
+        Lib.CurrentComponent := Comp;
+    Doc.SetModified(True);
+    Doc.DoFileSave('PCBLIB');
+    Client.CloseDocument(Doc);
+    Result := 'OK' + #9 + EbF[0] + #9 + Path + #9 + IntToStr(Count) + ' footprint(s)';
+End;
+
+{ ------------------------------------------------------------------ symbols }
+Procedure Own(Comp : ISch_Component; O : ISch_GraphicalObject);
+Begin
+    O.OwnerPartId := EbN(1);
+    O.OwnerPartDisplayMode := EbN(2);
+    Comp.AddSchObject(O);
+End;
+
+Procedure Filled(O : ISch_GraphicalObject; Fill : String);
+Begin
+    O.Color := 128;
+    If Fill = 'body' Then
+    Begin
+        O.AreaColor := 11599871;
+        O.IsSolid := True;
+    End
+    Else If Fill = 'line' Then
+    Begin
+        O.AreaColor := 128;
+        O.IsSolid := True;
+    End
+    Else
+        O.IsSolid := False;
+End;
+
+Procedure Vertices(O : ISch_Polyline; First : Integer);
+Var
+    k, Cnt : Integer;
+Begin
+    Cnt := EbN(First);
+    O.VerticesCount := Cnt;
+    For k := 0 To Cnt - 1 Do
+        O.Vertex[k + 1] := Point(EbSchC(First + 1 + 2 * k), EbSchC(First + 2 + 2 * k));
+End;
+
+Procedure MakePin(Comp : ISch_Component);
+Var
+    P : ISch_Pin;
+Begin
+    P := SchServer.SchObjectFactory(ePin, eCreate_Default);
+    P.Designator := EbF[3];
+    P.Name := EbF[4];
+    P.Electrical := EbN(5);
+    P.Orientation := EbN(6);
+    P.Location := Point(EbSchC(7), EbSchC(8));
+    P.PinLength := EbSchC(9);
+    P.ShowName := EbN(10) = 1;
+    P.ShowDesignator := EbN(11) = 1;
+    P.IsHidden := EbN(12) = 1;
+    P.Symbol_InnerEdge := EbN(13);
+    P.Symbol_OuterEdge := EbN(14);
+    P.Symbol_Inner := EbN(15);
+    P.Symbol_Outer := EbN(16);
+    P.Description := EbF[17];
+    If EbF[18] <> '' Then
+        P.HiddenNetName := EbF[18];
+    Own(Comp, P);
+End;
+
+Procedure MakeRect(Comp : ISch_Component);
+Var
+    R : ISch_Rectangle;
+Begin
+    R := SchServer.SchObjectFactory(eRectangle, eCreate_Default);
+    R.Location := Point(EbSchC(3), EbSchC(4));
+    R.Corner := Point(EbSchC(5), EbSchC(6));
+    R.LineWidth := EbN(7);
+    Filled(R, EbF[8]);
+    Own(Comp, R);
+End;
+
+Procedure MakeLine(Comp : ISch_Component);
+Var
+    L : ISch_Line;
+Begin
+    L := SchServer.SchObjectFactory(eLine, eCreate_Default);
+    L.Location := Point(EbSchC(3), EbSchC(4));
+    L.Corner := Point(EbSchC(5), EbSchC(6));
+    L.LineWidth := EbN(7);
+    L.Color := 128;
+    Own(Comp, L);
+End;
+
+Procedure MakePoly(Comp : ISch_Component; Closed : Boolean);
+Var
+    P : ISch_Polyline;
+Begin
+    If Closed Then
+    Begin
+        P := SchServer.SchObjectFactory(ePolygon, eCreate_Default);
+        P.LineWidth := EbN(3);
+        Filled(P, EbF[4]);
+        Vertices(P, 5);
+    End
+    Else
+    Begin
+        P := SchServer.SchObjectFactory(ePolyline, eCreate_Default);
+        P.LineWidth := EbN(3);
+        P.Color := 128;
+        Vertices(P, 4);
+    End;
+    Own(Comp, P);
+End;
+
+Procedure MakeSchArc(Comp : ISch_Component);
+Var
+    A : ISch_Arc;
+Begin
+    A := SchServer.SchObjectFactory(eArc, eCreate_Default);
+    A.Location := Point(EbSchC(3), EbSchC(4));
+    A.Radius := EbSchC(5);
+    A.StartAngle := EbAng(6);
+    A.EndAngle := EbAng(7);
+    A.LineWidth := EbN(8);
+    A.Color := 128;
+    Own(Comp, A);
+End;
+
+Procedure MakeCircle(Comp : ISch_Component);
+Var
+    E : ISch_Ellipse;
+Begin
+    E := SchServer.SchObjectFactory(eEllipse, eCreate_Default);
+    E.Location := Point(EbSchC(3), EbSchC(4));
+    E.Radius := EbSchC(5);
+    E.SecondaryRadius := EbSchC(5);
+    E.LineWidth := EbN(6);
+    Filled(E, EbF[7]);
+    Own(Comp, E);
+End;
+
+Procedure MakeLabel(Comp : ISch_Component);
+Var
+    L : ISch_Label;
+Begin
+    L := SchServer.SchObjectFactory(eLabel, eCreate_Default);
+    L.Location := Point(EbSchC(3), EbSchC(4));
+    L.Orientation := EbN(5);
+    L.Text := EbF[6];
+    L.Color := 128;
+    Own(Comp, L);
+End;
+
+Procedure MakeParam(Comp : ISch_Component);
+Var
+    P : ISch_Parameter;
+Begin
+    P := SchServer.SchObjectFactory(eParameter, eCreate_Default);
+    P.Name := EbF[1];
+    P.Text := EbF[2];
+    P.IsHidden := True;
+    Comp.AddSchObject(P);
+End;
+
+Procedure LinkFootprint(Comp : ISch_Component);
+Var
+    Impl : ISch_Implementation;
+Begin
+    Impl := Comp.AddSchImplementation;
+    Impl.ClearAllDatafileLinks;
+    Impl.ModelName := EbF[1];
+    Impl.ModelType := 'PCBLIB';
+    Impl.AddDataFileLink(EbF[1], '', 'PCBLIB');
+    Impl.IsCurrent := True;
+End;
+
+Function BuildSchLib(Folder : String) : String;
+Var
+    Path  : String;
+    Doc   : IServerDocument;
+    Lib   : ISch_Lib;
+    Blank : ISch_Component;
+    Comp  : ISch_Component;
+    Kind  : String;
+    Count : Integer;
+Begin
+    Path := Folder + EbF[1];
+    CloseIfOpen(Path);
+    If FileExists(Path) Then
+        DeleteFile(Path);
+    Doc := Client.OpenNewDocument('SCHLIB', Path, '', False);
+    Client.ShowDocument(Doc);
+    Lib := SchServer.GetCurrentSchDocument;
+    Blank := Lib.CurrentSchComponent;
+    Comp := Nil;
+    Count := 0;
+    Inc(EbIdx);
+    While EbIdx < EbLines.Count Do
+    Begin
+        EbSplit(EbLines[EbIdx]);
+        Kind := EbF[0];
+        If Kind = 'END' Then Break;
+        If Kind = 'SYMBOL' Then
+        Begin
+            If Comp <> Nil Then
+                SchServer.RobotManager.SendMessage(Lib.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Comp.I_ObjectAddress);
+            Comp := SchServer.SchObjectFactory(eSchComponent, eCreate_Default);
+            Comp.CurrentPartID := 1;
+            Comp.DisplayMode := 0;
+            Comp.LibReference := EbF[1];
+            Comp.ComponentDescription := EbF[2];
+            Comp.Designator.Text := EbF[3];
+            Comp.Comment.Text := EbF[4];
+            If EbN(5) > 1 Then
+                Comp.PartCount := EbN(5);
+            If EbN(6) > 1 Then
+                Comp.DisplayModeCount := EbN(6);
+            Lib.AddSchComponent(Comp);
+            Inc(Count);
+        End
+        Else If Kind = 'PIN' Then MakePin(Comp)
+        Else If Kind = 'RECT' Then MakeRect(Comp)
+        Else If Kind = 'LINE' Then MakeLine(Comp)
+        Else If Kind = 'POLYLINE' Then MakePoly(Comp, False)
+        Else If Kind = 'POLYGON' Then MakePoly(Comp, True)
+        Else If Kind = 'SARC' Then MakeSchArc(Comp)
+        Else If Kind = 'CIRCLE' Then MakeCircle(Comp)
+        Else If Kind = 'LABEL' Then MakeLabel(Comp)
+        Else If Kind = 'PARAM' Then MakeParam(Comp)
+        Else If Kind = 'DESIGNATOR' Then Comp.Designator.Location := Point(EbSchC(1), EbSchC(2))
+        Else If Kind = 'COMMENT' Then Comp.Comment.Location := Point(EbSchC(1), EbSchC(2))
+        Else If Kind = 'FOOTPRINTLINK' Then LinkFootprint(Comp);
+        Inc(EbIdx);
+    End;
+    If Comp <> Nil Then
+    Begin
+        SchServer.RobotManager.SendMessage(Lib.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Comp.I_ObjectAddress);
+        Lib.CurrentSchComponent := Comp;
+    End;
+    If (Blank <> Nil) And (Count > 0) Then
+        Lib.RemoveSchComponent(Blank);
+    Lib.GraphicallyInvalidate;
+    Doc.SetModified(True);
+    Doc.DoFileSave('SCHLIB');
+    Client.CloseDocument(Doc);
+    Result := 'OK' + #9 + EbF[0] + #9 + Path + #9 + IntToStr(Count) + ' symbol(s)';
+End;
+
+{ ------------------------------------------------------------------ entry points }
+Procedure SkipBlock;
+Begin
+    While EbIdx < EbLines.Count Do
+    Begin
+        EbSplit(EbLines[EbIdx]);
+        If EbF[0] = 'END' Then Break;
+        Inc(EbIdx);
+    End;
+End;
+
+Procedure BuildLibraries(Folder : String);
+Var
+    Kind, Name, Line : String;
+Begin
+    EbF := TStringList.Create;
+    EbLines := TStringList.Create;
+    EbReport := TStringList.Create;
+    Try
+        If Not FileExists(Folder + 'ecadlib_build.txt') Then
+        Begin
+            EbReport.Add('FAILED' + #9 + 'ecadlib_build.txt' + #9 + Folder + #9 + 'no build file here');
+            Exit;
+        End;
+        EbLines.LoadFromFile(Folder + 'ecadlib_build.txt');
+        EbIdx := 0;
+        While EbIdx < EbLines.Count Do
+        Begin
+            EbSplit(EbLines[EbIdx]);
+            Kind := EbF[0];
+            If (Kind = 'PCBLIB') Or (Kind = 'SCHLIB') Then
+            Begin
+                Name := EbF[1];
+                Try
+                    If Kind = 'PCBLIB' Then
+                        Line := BuildPcbLib(Folder)
+                    Else
+                        Line := BuildSchLib(Folder);
+                    EbReport.Add(Line);
+                Except
+                    EbReport.Add('FAILED' + #9 + Kind + #9 + Folder + Name + #9 + 'Altium raised an error while building it');
+                    SkipBlock;
+                End;
+            End;
+            Inc(EbIdx);
+        End;
+    Finally
+        EbReport.SaveToFile(Folder + 'ecadlib_build_report.txt');
+        EbReport.Free;
+        EbLines.Free;
+        EbF.Free;
+    End;
+End;
+
+Procedure BuildLibrariesInAltium;
+Begin
+    BuildLibraries(ExtractFilePath(GetRunningScriptProjectName));
+    ShowMessage('ecadlib: libraries built by Altium. See ecadlib_build_report.txt next to this script.');
+End;
+"""
+
+
+# ------------------------------------------------------------------ compare what Altium saved with the recipes
+def _recipe_items(rp):
+    """{name: {"pads"|"pins": [fields...]}} from one recipe file."""
+    out, cur = {}, None
+    for ln in Path(rp).read_text(encoding="utf-8").splitlines():
+        f = ln.split("\t")
+        if f[0] in ("FOOTPRINT", "SYMBOL"):
+            cur = out.setdefault(f[1], {"pads": [], "pins": []})
+        elif f[0] == "PAD" and cur is not None:
+            cur["pads"].append({"designator": f[1], "x": int(f[2]), "y": int(f[3]), "w": int(f[4]), "h": int(f[5]),
+                                "hole": int(f[10])})
+        elif f[0] == "PIN" and cur is not None:
+            cur["pins"].append({"num": f[3], "name": f[4], "x": round(int(f[7]) / 10000), "y": round(int(f[8]) / 10000),
+                                "length": round(int(f[9]) / 10000), "orient": int(f[6]), "etype": int(f[5])})
+    return out
+
+
+def _key(d):
+    return (d.get("designator") or d.get("num"), d["x"], d["y"])
+
+
+def compare_one(lib, rp, tol=10):
+    """-> list of problems ('' list = match) between an Altium-saved library and its recipe. tol: internal units."""
+    want = _recipe_items(rp)
+    probs = []
+    if lib.suffix.lower() == ".pcblib":
+        got = {c["name"]: [r for r in c["records"] if r["type"] == "pad"] for c in AL.read_pcblib(lib)}
+        for name, w in want.items():
+            if name not in got:
+                probs.append(f"{lib.name}: footprint {name} missing")
+                continue
+            g = got[name]
+            if len(g) != len(w["pads"]):
+                probs.append(f"{lib.name}/{name}: {len(g)} pads, recipe has {len(w['pads'])}")
+            for a, b in zip(sorted(w["pads"], key=_key), sorted(g, key=_key)):
+                bad = [k for k in ("x", "y", "w", "h", "hole") if abs(a[k] - b[k]) > tol]
+                if a["designator"] != b["designator"] or bad:
+                    probs.append(f"{lib.name}/{name} pad {a['designator']}: " + ", ".join(
+                        f"{k} {b[k]} != {a[k]}" for k in bad) + ("" if a["designator"] == b["designator"] else f" (got {b['designator']})"))
+    else:
+        _, comps = AL.read_schlib(lib)
+        got = {c["name"]: [r for r in c["records"] if r.get("RECORD") == "2"] for c in comps}
+        for name, w in want.items():
+            if name not in got:
+                probs.append(f"{lib.name}: symbol {name} missing")
+                continue
+            g = got[name]
+            if len(g) != len(w["pins"]):
+                probs.append(f"{lib.name}/{name}: {len(g)} pins, recipe has {len(w['pins'])}")
+            for a, b in zip(sorted(w["pins"], key=_key), sorted(g, key=_key)):
+                bad = [k for k in ("x", "y", "length", "orient", "etype") if a[k] != b[k]]
+                if a["num"] != b["num"] or a["name"] != b["name"] or bad:
+                    probs.append(f"{lib.name}/{name} pin {a['num']}: " + ", ".join(f"{k} {b[k]} != {a[k]}" for k in bad)
+                                 + ("" if a["name"] == b["name"] else f" name {b['name']!r} != {a['name']!r}"))
+    return probs
+
+
+def compare(folder):
+    """-> {"checked": n, "problems": [...], "unreadable": [...]} for every library under folder that has a recipe."""
+    folder = Path(folder)
+    rep = {"checked": 0, "problems": [], "unreadable": []}
+    for rel, rp in recipes(folder):
+        try:
+            rep["problems"] += compare_one(folder / rel, rp)
+            rep["checked"] += 1
+        except (ValueError, OSError) as e:
+            rep["unreadable"].append(f"{rel}: {e}")
+    return rep
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="ecadlib altium-native", description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    w = sub.add_parser("write", help="collect the recipes of a library folder and write the Altium script project")
+    w.add_argument("folder")
+    w.add_argument("--out", help="where the script project goes (default: the library folder)")
+    c = sub.add_parser("compare", help="compare the libraries Altium saved with their recipes")
+    c.add_argument("folder")
+    c.add_argument("--json", action="store_true")
+    a = ap.parse_args(argv)
+    if a.cmd == "write":
+        rep = write(a.folder, a.out)
+        print(f"{len(rep['libraries'])} libraries in {Path(rep['out']) / BUILD}")
+        print(f"In Altium: File > Open {Path(rep['out']) / PROJECT}, then File > Run Script > BuildLibrariesInAltium")
+        return 0 if rep["libraries"] else 1
+    rep = compare(a.folder)
+    if a.json:
+        print(json.dumps(rep, indent=2))
+    else:
+        print(f"{rep['checked']} libraries checked, {len(rep['problems'])} differences, {len(rep['unreadable'])} unreadable")
+        for p in rep["problems"] + rep["unreadable"]:
+            print("  " + p)
+    return 1 if rep["problems"] or rep["unreadable"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

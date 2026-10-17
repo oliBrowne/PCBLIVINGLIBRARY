@@ -242,6 +242,7 @@ class PartInfo:
     url: str = ""
     note: str = ""
     error: str = ""
+    datasheet: str = ""                # the source's datasheet link (official APIs: Nexar bestDatasheet, DigiKey, Mouser)
 
 
 def _ceil_to(q, mult):
@@ -285,7 +286,7 @@ class NexarSourcing(L.NexarSupply):
               "ASSUMED: attribute names for passives (Resistance, Capacitance, Tolerance, Voltage Rating (DC), Dielectric, "
               "Power Rating, Case/Package); similarParts may be empty without a plan that includes it.")
     FIELDS = """fragment F on SupPart {
-  mpn manufacturer { name } octopartUrl shortDescription estimatedFactoryLeadDays
+  mpn manufacturer { name } octopartUrl shortDescription estimatedFactoryLeadDays bestDatasheet { url }
   specs { attribute { name shortname } displayValue value }
   sellers { company { name } isAuthorized
     offers { sku inventoryLevel moq orderMultiple factoryLeadDays packaging clickUrl
@@ -363,7 +364,8 @@ query ($q: String!, $limit: Int, $country: String!, $currency: String!) {
 def nexar_info(part, provider, currency):
     info = PartInfo(provider, True, part.get("mpn") or "", (part.get("manufacturer") or {}).get("name") or "",
                     part.get("shortDescription") or "", url=part.get("octopartUrl") or "",
-                    lead_days=_int(part.get("estimatedFactoryLeadDays")))
+                    lead_days=_int(part.get("estimatedFactoryLeadDays")),
+                    datasheet=str((part.get("bestDatasheet") or {}).get("url") or ""))
     pairs = []
     for s in part.get("specs") or []:
         a = s.get("attribute") or {}
@@ -498,7 +500,8 @@ def digikey_info(prod, provider, currency):
     lead = _int(prod.get("ManufacturerLeadWeeks"))
     info = PartInfo(provider, True, prod.get("ManufacturerProductNumber") or "", (m.get("Name") if isinstance(m, dict) else m) or "",
                     desc, max(known, key=L.SEVERITY.get) if known else "unknown", "; ".join(w for w in words if w),
-                    url=prod.get("ProductUrl") or "", lead_days=lead * 7 if lead is not None else None)
+                    url=prod.get("ProductUrl") or "", lead_days=lead * 7 if lead is not None else None,
+                    datasheet=str(prod.get("DatasheetUrl") or ""))
     info.specs = specs_from_pairs([(x.get("ParameterText"), x.get("ValueText")) for x in prod.get("Parameters") or []
                                    if isinstance(x, dict)])
     for v in prod.get("ProductVariations") or []:
@@ -614,7 +617,8 @@ def mouser_info(x, provider):
         stock = _int(x.get("Availability"))
     info = PartInfo(provider, True, x.get("ManufacturerPartNumber") or "", x.get("Manufacturer") or "",
                     x.get("Description") or "", L.normalise(status) if status else "active", status,
-                    url=x.get("ProductDetailUrl") or "", lead_days=lead_days(x.get("LeadTime")))
+                    url=x.get("ProductDetailUrl") or "", lead_days=lead_days(x.get("LeadTime")),
+                    datasheet=str(x.get("DataSheetUrl") or ""))
     info.specs = specs_from_pairs([(a.get("AttributeName"), a.get("AttributeValue")) for a in x.get("ProductAttributes") or []
                                    if isinstance(a, dict)])
     breaks, cur = [], ""

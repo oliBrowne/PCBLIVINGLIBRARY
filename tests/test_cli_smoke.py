@@ -51,6 +51,8 @@ CASES = [
     (["dblib", "{in}/bom.csv", "-o", "{out}/dblib"], (0,)),
     (["altium-lib", "pcblib", "{pkg}/package_specs/R_0603_1608Metric.json", "-o", "{out}/al"], (0,)),
     (["altium-lib", "dump", "{out}/al/R_0603_1608Metric.PcbLib"], (0,)),
+    (["altium-native", "write", "{out}/al"], (0,)),
+    (["altium-native", "compare", "{out}/al"], (0,)),
     (["altium365", "plan", "{in}/bom.csv", "-o", "{out}/a365plan.json"], (0,)),
     (["librarian", "{in}/bom.csv", "--lib", "{in}/lib", "-o", "{out}/lib", "--offline", "--cache", "{out}/cache",
       "--sources", "kicad"], (0, 2)),
@@ -104,7 +106,7 @@ CASES = [
     (["eagle-export", "{out}/lib/plan.json", "-o", "{out}/fusion", "--kicad", "{out}/kicad", "--no-kicad-check"], (0, 1)),
     (["easyeda-export", "{out}/lib/plan.json", "-o", "{out}/easyeda", "--kicad", "{out}/kicad", "--no-kicad-check"], (0, 1)),
 ]
-HELP_ONLY = {"ui", "mcp", "a365", "project", "setup", "start"}   # need a server / network / an Altium project: -h (and mcp below)
+HELP_ONLY = {"ui", "mcp", "a365", "project", "setup", "start", "sources-check"}   # need a server / network / an Altium project: -h (and mcp below)
 
 
 def _snapshot(root, skip):

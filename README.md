@@ -426,16 +426,27 @@ python3 -m tests.test_offline
   * `unverified (source unreachable)`, which is kept separate on purpose so a network failure is never reported as "needs generation"
 * **Providers** (`providers.py`, interface `lookup(line) -> SourceResult`, raising `NotConfigured`):
 
-  | provider | auth needed | state in prototype |
-  |---|---|---|
-  | `jlcpcb_search` | none: anonymous JSON POST to `jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood/selectSmtComponentList` (taken from easyeda2kicad 1.0.1 `search_jlcpcb_components`; its docstring says "Works anonymously") | implemented; MPN → LCSC by exact normalised match |
-  | `easyeda` | none: `GET https://easyeda.com/api/products/{LCSC}/components` with `Referer: https://easyeda.com/` | implemented; parses `result.dataStr.head.c_para`, `packageDetail.dataStr.shape` and `SVGNODE~{…c_etype: outline3D}` for 3D, following easyeda2kicad's importer |
-  | `digikey` | OAuth2 client credentials (`DIGIKEY_CLIENT_ID/SECRET`), Product Information API v4 | stub |
-  | `mouser` | `MOUSER_API_KEY` (Search API) | stub |
-  | `nexar` | OAuth2 client credentials (`NEXAR_CLIENT_ID/SECRET`), GraphQL, quota-limited | stub |
-  | `snapmagic` | partner token only, with no self-serve public API | stub |
-  | `samacsys` | account plus Library Loader or partner access, with no documented public REST API | stub |
+  Default order: `nexar,digikey,mouser,jlcpcb_search,easyeda`. The official APIs come first; each is skipped with a
+  "not configured" note until its key is set. None of them hands out symbol or footprint geometry, so they identify
+  the part (maker, description, datasheet link, package, and the LCSC number when LCSC sells it) and the EasyEDA
+  route or the datasheet reader supplies the CAD data.
 
+  | provider | official? | auth needed | what it gives |
+  |---|---|---|---|
+  | `nexar` | yes (Octopart / Altium supply API) | OAuth2 client credentials (`NEXAR_CLIENT_ID/SECRET` or `NEXAR_SUPPLY_TOKEN`), GraphQL, quota-limited | MPN match, maker, description, best datasheet, LCSC number from LCSC's offer |
+  | `digikey` | yes (Product Information API v4) | OAuth2 client credentials (`DIGIKEY_CLIENT_ID/SECRET`) | MPN match, maker, description, datasheet, package |
+  | `mouser` | yes (Search API v1) | `MOUSER_API_KEY` | MPN match, maker, description, datasheet |
+  | `jlcpcb_search` | **no**: anonymous JSON POST to `jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood/selectSmtComponentList` (from easyeda2kicad 1.0.1) | none | MPN → LCSC, only when no official source found the LCSC number |
+  | `easyeda` | **no**: `GET https://easyeda.com/api/products/{LCSC}/components` with `Referer: https://easyeda.com/` | none | the symbol, footprint and 3D data (the only free source of ready CAD data) |
+  | `snapmagic` | partner token only, no self-serve public API | | stub |
+  | `samacsys` | account plus Library Loader or partner access, no documented public REST API | | stub |
+
+  * `[providers] unofficial = false` in `ecadlib.toml` keeps the two undocumented endpoints out entirely (triage, the
+    librarian's EasyEDA source, the UI). Parts then come from your libraries, the KiCad libraries, the standard
+    packages and the datasheet reader.
+  * `ecadlib sources-check` asks both unofficial endpoints about known parts (NE555DR, LM358DR, RP2040) and checks the
+    converter still gives the right pad and pin counts. `.github/workflows/sources-canary.yml` runs it every Monday and
+    keeps the raw answers as an artifact, so a change on their side shows up as a red run, not as broken user parts.
   * easyeda2kicad 1.0.1 calls `/components` with no `?version=`. The `?version=6.4.19.5` suffix comes from older releases; I kept it, and it is untested.
   * easyeda2kicad 1.0.1 also knows `pro.easyeda.com/api/components/searchByNumbers` (LCSC → v2 UUID, unauthenticated). Its other v2 endpoints are marked "requires auth" in its source.
   * I found no public, unauthenticated LCSC search endpoint. The `wmsc.lcsc.com` endpoints are undocumented and were also blocked here.
@@ -586,6 +597,10 @@ python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sa
         --models out/altium_models -o out/altium365/plan.json      # -> 4 ready, 10 needs_altium_models
                                                                      #    add --models out/altium_models_kicad (section 6) -> 14 ready
 ```
+
+**Altium can now build these files itself.** Every library written here also gets a plain-text recipe beside it
+(`<file>.ecadbuild`), and the install script lets Altium rebuild each library from it with its own scripting API
+before installing it. See [docs/altium-native.md](docs/altium-native.md) and `ecadlib altium-native`.
 
 No dependencies beyond the standard library. `cfb.py` writes the OLE2 container (v3, 512-byte sectors, mini stream, DIFAT for files over ~7 MB). `altium_lib.py` builds the Altium streams inside it. The record layouts are ported from **AltiumSharp** (C#, Apache-2.0; attribution in the file header and `NOTICE`). `altium-designer-mcp` (GPL-3.0) was read for notes only, and none of its code is used.
 

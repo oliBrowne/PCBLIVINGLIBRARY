@@ -139,6 +139,11 @@ def select(names=None, rules=None, default=None, eps=None):
         if n not in seen:
             seen.add(n)
             out.append(avail[n])
+    if not P.unofficial_allowed(rules):                 # [providers] unofficial = false: undocumented endpoints are out,
+        dropped = [c.name for c in out if not getattr(c, "official", True)]      # even when named
+        if dropped:
+            print(f"ecadlib: [providers] unofficial = false: skipping {', '.join(dropped)}", file=sys.stderr)
+        out = [c for c in out if getattr(c, "official", True)]
     return out
 
 
