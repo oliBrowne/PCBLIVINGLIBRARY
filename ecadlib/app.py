@@ -1290,11 +1290,12 @@ class Workspace:
                          default=[c.name for c in P.ALL])
 
     def _librarian_providers(self):
-        """The librarian's sources: [providers] order when set (and no --providers), else the free built-in two."""
-        from . import plugins as PL
-        if not self._providers_given and PL.order_set(self.rules()):
+        """The librarian's sources: --providers when given, else None ([providers] order, else P.DEFAULT_ORDER,
+        official APIs first, the same as `ecadlib librarian`)."""
+        if not self._providers_given:
             return None
-        return ",".join(p for p in ("jlcpcb_search", "easyeda") if p in self.provider_names)
+        lib = P.DEFAULT_ORDER.split(",")
+        return ",".join(p for p in self.provider_names if p in lib) or None
 
     def plugins(self):
         """Installed provider / exporter plugins, the [providers] order in use and the [notify] targets (no secrets)."""

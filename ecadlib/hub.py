@@ -1436,7 +1436,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="ecadlib hub", description="your library across tools: every part once, a column per tool")
     ap.add_argument("--workspace", default=os.environ.get("ECADLIB_WORKSPACE") or "ecadlib_workspace")
     ap.add_argument("--lib", action="append", default=[], help="library folder or file to include (repeatable)")
-    ap.add_argument("-q", "--search", default="", help="words to look for in name, MPN, maker, description")
+    ap.add_argument("--search", default="", help="words to look for in name, MPN, maker, description")
     ap.add_argument("--have", default="", help="only parts in these tools (comma list: altium,altium365,kicad,fusion,easyeda)")
     ap.add_argument("--lack", default="", help="only parts missing from these tools")
     ap.add_argument("--state", default="", help="only parts with a cell in these states (different,behind,present,same)")

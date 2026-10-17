@@ -1135,7 +1135,8 @@ def main(argv=None):
         return 2
     http = CachedHTTP(a.cache, min_interval=a.rate, ttl_s=a.max_age * 3600, offline=a.offline)
     want = a.providers.split(",")
-    provs = [c(http) for c in PROVIDERS if c.name in want]
+    provs = [c(http) for c in P.fence(                # [providers] unofficial = false keeps the JLCPCB search out
+        [c for c in PROVIDERS if c.name in want], rules)]
     for p in provs:
         p.country, p.currency = a.country, a.currency.upper()
     rows, unconfigured = source_bom(lines, provs, a.qty, a.currency.upper(), a.alternates, a.low_stock_factor)
