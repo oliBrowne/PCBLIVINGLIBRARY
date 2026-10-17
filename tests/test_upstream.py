@@ -99,7 +99,7 @@ def test_manifest_written_on_conversion_local_fixtures():
         fp.write_text('(footprint "SOT-223-3" (layer "F.Cu")\n' + "".join(
             f'  (pad "{n}" smd rect (at {x} 3.15) (size 0.95 2) (layers "F.Cu" "F.Paste" "F.Mask"))\n' for n, x in (("1", -2.3), ("2", 0), ("3", 2.3)))
             + '  (pad "2" smd rect (at 0 -3.15) (size 3.25 2) (layers "F.Cu" "F.Paste" "F.Mask"))\n'
-            + '  (fp_rect (start -4 -4.5) (end 4 4.5) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))\n)')
+            + '  (fp_rect (start -4 -4.5) (end 4 4.5) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))\n)', newline="\n")   # as KiCad writes it
         for k in ("PcbLib", "SchLib"):
             (Path(d) / "out" / k).mkdir(parents=True)
         spec = {"mpn": "AMS1117-3.3", "footprint": str(fp), "symbol": f"{FIX}/Regulator_Linear_AMS1117.kicad_sym:AMS1117-3.3", "height_mm": 1.8}
@@ -118,7 +118,7 @@ def test_manifest_written_on_conversion_local_fixtures():
         assert s["sources"][0]["summary"]["extends"] == "AP1117-15" and s["output"] == "SchLib/AMS1117-3.3.SchLib"
         rows, worst = U.check_kicad(man, None)                      # local sources: no GitLab needed
         assert set(worst.values()) == {"unchanged"}, rows
-        fp.write_text(fp.read_text().replace("(at 2.3 3.15)", "(at 2.4 3.15)"))
+        fp.write_text(fp.read_text().replace("(at 2.3 3.15)", "(at 2.4 3.15)"), newline="\n")
         rows, worst = U.check_kicad(man, None)
         assert worst["footprint:SOT-223-3"] == "changed" and "moved 3 (2.3,3.15)->(2.4,3.15)" in rows[0]["summary"], rows
         fp.unlink()

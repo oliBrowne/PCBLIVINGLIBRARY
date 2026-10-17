@@ -1,6 +1,6 @@
 """Packaging checks (offline, fast): the version is single-sourced and every runtime data file
 inside ecadlib/ is shipped by [tool.setuptools.package-data]. Run:  python3 -m tests.test_packaging"""
-import contextlib, io, re
+import contextlib, io, os, re
 from pathlib import Path
 
 import ecadlib
@@ -83,11 +83,11 @@ def test_release_marks_prereleases():
     import shutil, subprocess
     line = next(l for l in (ROOT / ".github" / "workflows" / "release.yml").read_text().splitlines() if "--prerelease" in l)
     expr = re.search(r"\$\((.*)\)", line).group(1)
-    if not shutil.which("bash"):
+    if not shutil.which("bash") or os.name == "nt":                   # Windows' bash.exe is WSL, often with no Linux
         print("skip  no bash")
         return
     for tag, pre in (("v0.2.0", False), ("v1.0.0.post1", False), ("v0.3.0rc1", True), ("v0.3.0b2", True), ("v0.3.0.dev1", True)):
-        out = subprocess.run(["bash", "-c", f"echo $({expr})"], env={"GITHUB_REF_NAME": tag}, capture_output=True, text=True).stdout
+        out = subprocess.run(["bash", "-c", f"echo $({expr})"], env={**os.environ, "GITHUB_REF_NAME": tag}, capture_output=True, text=True).stdout
         assert (out.strip() == "--prerelease") == pre, (tag, out)
 
 if __name__ == "__main__":

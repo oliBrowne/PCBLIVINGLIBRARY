@@ -275,18 +275,16 @@ def _find_file(base, rel):
     p = Path(base) / Path(*PureWindowsPath(rel).parts) if rel else None
     if p is None:
         return None
-    if p.exists():
+    if p.exists() and os.name != "nt":
         return p
-    cur = Path(base)                                  # Windows paths are case-insensitive: match part by part
-    for part in PureWindowsPath(rel).parts:
+    cur = Path(base)                                  # Windows paths are case-insensitive: match part by part (on
+    for part in PureWindowsPath(rel).parts:           # Windows too, for the name as it is spelled on disk)
         if part == "..":
             cur = cur.parent
             continue
-        if not cur.is_dir():
-            return None
-        hit = next((c for c in cur.iterdir() if c.name.lower() == part.lower()), None)
-        if hit is None:
-            return None
+        hit = cur.is_dir() and next((c for c in cur.iterdir() if c.name.lower() == part.lower()), None)
+        if not hit:
+            return p if p.exists() else None
         cur = hit
     return cur
 

@@ -22,7 +22,7 @@ line: "<file> was made by ecadlib X.Y (<kind> schema N; this ecadlib 0.3.0 reads
 
 To change a format: bump KINDS[kind].current and add MIGRATIONS[(kind, old)] = function(folder, files) -> {path: new
 text}; a test that opens a fixture from before the change (tests/fixtures/upgrade/) proves it."""
-import argparse, datetime, json, os, shutil, sys
+import argparse, datetime, json, os, shutil, sys, time
 from pathlib import Path
 
 from . import __version__
@@ -89,10 +89,22 @@ def _ver(v):
         return 1
 
 
+def _read(f):
+    """Windows refuses a read while another process is replacing the file (os.replace): wait a moment and retry."""
+    from .fsutil import DELAYS
+    for delay in DELAYS + (None,):
+        try:
+            return f.read_text(encoding="utf-8")
+        except PermissionError:
+            if os.name != "nt" or delay is None:
+                raise
+            time.sleep(delay)
+
+
 def read_stamp(folder):
     f = Path(folder) / STAMP
     try:
-        d = json.loads(f.read_text(encoding="utf-8"))
+        d = json.loads(_read(f))
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as e:

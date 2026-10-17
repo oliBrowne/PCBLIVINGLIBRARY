@@ -165,9 +165,11 @@ def key_for(ep, explicit=None, environ=None):
 
 def needs_key_message(ep):
     if ep["provider"] == "anthropic":
-        return f"{ep['key_env']} is not set: export your Claude API key"
-    return (f"{ep['key_env'] or '[ai] api_key_env'} is not set: export the key for {ep['base_url']} "
-            f"(or point [ai] base_url at a local server, which needs none)")
+        return (f"{ep['key_env']} is not set: add your Claude API key on the setup page (`ecadlib setup`) or with "
+                f"`ecadlib keys set {ep['key_env']}`")
+    name = ep['key_env'] or '[ai] api_key_env'
+    return (f"{name} is not set: add the key for {ep['base_url']} on the setup page (`ecadlib setup`) or with "
+            f"`ecadlib keys set {name}` (or point [ai] base_url at a local server, which needs none)")
 
 
 # ---------------------------------------------------------------- model registry (prices / profiles of models in use)

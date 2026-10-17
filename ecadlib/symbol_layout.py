@@ -647,7 +647,7 @@ def main(argv=None):
         notes = []
         ks = X.symbol_from_schlib(out, X.kname(name), notes)
         tree = ["kicad_symbol_lib", ["version", X.SYM_VERSION], ["generator", sexpr.Q("ecadlib")], ["generator_version", sexpr.Q("8.0")], ks]
-        Path(a.kicad).write_text(sexpr.dumps(tree), encoding="utf-8")
+        Path(a.kicad).write_text(sexpr.dumps(tree), encoding="utf-8", newline="\n")
         print(f"  KiCad symbol -> {a.kicad}")
     if a.preview:
         Path(a.preview).write_text(svg(sym), encoding="utf-8")

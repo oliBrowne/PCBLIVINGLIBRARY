@@ -115,7 +115,8 @@ def test_plan_paths_survive_cwd_change():
     """plan.json stores model paths relative to itself, so push can run from any folder."""
     import subprocess, sys
     root = Path(__file__).resolve().parents[1]
-    with tempfile.TemporaryDirectory() as d:
+    (root / "out").mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=root / "out") as d:               # same drive as the repo (relative paths on Windows)
         out = Path(d) / "sub" / "plan.json"
         subprocess.run([sys.executable, "-m", "ecadlib.altium365", "plan", "examples/sample_bom.csv", "--models",
                         "out/altium_models", "-o", str(out)], cwd=root, check=True, capture_output=True)

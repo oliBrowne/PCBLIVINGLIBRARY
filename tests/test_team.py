@@ -92,7 +92,8 @@ def test_users_file_hashes_and_roles():
         st = add_users(d)
         raw = Path(d, TM.USERS_FILE).read_text()
         assert not any(pw in raw for pw in PW.values())                        # never stored in clear
-        assert stat.S_IMODE(os.stat(Path(d, TM.USERS_FILE)).st_mode) == 0o600
+        if os.name != "nt":                                                    # Windows has no mode bits
+            assert stat.S_IMODE(os.stat(Path(d, TM.USERS_FILE)).st_mode) == 0o600
         recs = st.users()
         assert recs["ada"]["password"]["alg"] == "scrypt" and recs["ada"]["password"]["salt"] != recs["lib"]["password"]["salt"]
         assert TM.verify_password(PW["lib"], recs["lib"]["password"]) and not TM.verify_password("wrong-pass-xx", recs["lib"]["password"])
@@ -603,7 +604,8 @@ def test_team_files_hidden_under_other_names():
         c = Client(port)
         c.login("lib")
         users = ws.root / TM.USERS_FILE
-        os.link(users, ws.root / "TEAM_USERS.JSON")                             # what a case-insensitive disk shows
+        if not (ws.root / "TEAM_USERS.JSON").exists():                           # a case-insensitive disk shows it already
+            os.link(users, ws.root / "TEAM_USERS.JSON")
         os.link(users, ws.root / "reports" / "copy.json")
         (ws.root / "team_users.json.1.tmp").write_text(users.read_text())     # a writer's temp file (pid 1 in Docker)
         (ws.root / "notes.txt").write_text("hello")

@@ -206,7 +206,7 @@ def test_lifecycle_dblib_path_with_hash_sign():
     import sqlite3
     from ecadlib import lifecycle as LC
     with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "Lib #2?" / "parts.sqlite"
+        p = Path(d) / ("Lib #2" if os.name == "nt" else "Lib #2?") / "parts.sqlite"      # Windows forbids '?' in names
         p.parent.mkdir()
         con = sqlite3.connect(p)
         con.execute('create table R ("Part Number" text, "Manufacturer Part Number" text, Manufacturer text)')
