@@ -202,6 +202,8 @@ def read_bom(path, columns=None, rules=None):
             continue                                                     # 'Total;;;12' footer / a bare sum, not a part
         if "dnp" in d:
             d["dnp"] = _yes(d["dnp"])
+        elif DNP_MARK.search(d.get("value", "")) or DNP_MARK.fullmatch(d.get("mpn", "")):
+            d["dnp"] = True                                              # no DNP column: Value 'DNP' / '10k (DNF)'
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
         lines.append(d)
@@ -243,6 +245,10 @@ def _is_total(d):
     """A totals footer: some cell says 'Total' and the row names no part."""
     return (not any(d.get(f) for f in ("mpn", "lcsc", "value", "libref", "footprint", "manufacturer"))
             and any(TOTAL.fullmatch(str(v).strip()) for v in d.values()))
+
+
+DNP_MARK = re.compile(r"(?<![A-Za-z0-9])(dnp|dnf|dni|do\s*not\s*(populate|place|fit|install|mount)|not\s*(fitted|populated|placed))"
+                      r"(?![A-Za-z0-9])", re.I)
 
 
 def _yes(v):

@@ -44,6 +44,20 @@ def test_quantity_only_footer_is_not_a_part():
     assert [l["designator"] for l in lines] == ["R1"], lines
 
 
+def test_dnp_written_in_the_value_or_mpn_cell():
+    """No DNP column, but Value / MPN says 'DNP' or '10k DNF' (the KiCad / Altium habit): the line was triaged and
+    bought as a fitted part."""
+    text = ("Designator,Value,MPN,Qty\nR1,10k,RC0603FR-0710KL,1\nR9,DNP,,1\nR10,10k (DNF),RC0603FR-0710KL,1\n"
+            "R11,10k,DNP,1\nC1,100nF NP0,CL05C101JB5NNNC,1\n")
+    lines, _ = T.read_bom(_write("bom.csv", text))
+    assert [bool(l.get("dnp")) for l in lines] == [False, True, True, True, False], lines
+    assert lines[2]["value"] == "10k (DNF)", lines                      # the cell itself is kept as written
+    lines, _ = T.read_bom(_write("bom.csv", "Designator,Value,DNP\nR9,DNP,\n"))   # a DNP column decides
+    assert lines[0]["dnp"] is False, lines
+    rows = T.triage(T.read_bom(_write("bom.csv", text))[0], T.KiCadIndex([]), [], None)
+    assert rows[1]["status"].startswith("dnp"), rows[1]
+
+
 if __name__ == "__main__":
     import sys
     fails = 0
