@@ -31,7 +31,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from . import altium_lib as AL
 
 MODEL_EXT = {".schlib": "SchLib", ".pcblib": "PcbLib"}
-COPY_EXT = {".schlib", ".pcblib", ".dblib", ".svndblib", ".xlsx", ".xls", ".csv", ".intlib", ".ecadbuild", ".step"}
+COPY_EXT = {".schlib", ".pcblib", ".dblib", ".svndblib", ".xlsx", ".xls", ".csv", ".intlib", ".ecadbuild", ".step", ".stp"}
 
 # [Design] and [DocumentN] keys as Altium writes them in a .LibPkg (particle-iot/hardware-libraries Particle-Devices.LibPkg)
 DESIGN = ["Version=1.0", "HierarchyMode=0", "ChannelRoomNamingStyle=0", "ReleasesFolder=",

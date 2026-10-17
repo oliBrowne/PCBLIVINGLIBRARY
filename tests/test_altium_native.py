@@ -77,7 +77,7 @@ def test_script_parses_and_calls_only_documented_api():
     assert routines["BuildLibrariesInAltium"]["kind"] == "procedure" and not routines["BuildLibrariesInAltium"]["params"]
     assert routines["BuildLibraries"]["params"] == {"folder"}
     allowed = {k.lower() for k in AN.ALTIUM_API} | {w.lower() for ws in AN.PROPERTIES.values() for w in ws}
-    known = {n.lower() for n in routines} | {"ebf", "eblines", "ebreport", "ebidx"}
+    known = {n.lower() for n in routines} | {"ebf", "eblines", "ebreport", "ebidx", "eberr"}
     bad = set()
     for name, r in routines.items():
         local = r["params"] | r["vars"]
@@ -99,6 +99,22 @@ def test_script_parses_and_calls_only_documented_api():
     assert not re.search(r"^\s+(Report|Lines|F|Idx)\s*:", text, re.M)
 
 
+def test_step_models_keep_their_name():
+    """Altium embeds a STEP model under its file name, so the file beside the recipe carries the model's own name."""
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        fp = dict(_soic8(), bodies=[{"pts": [(-1, -1), (1, -1), (1, 1), (-1, 1)], "height": 1.5,
+                                     "step": {"name": "SOIC-8.step", "data": b"ISO-10303-21;", "rot": (0.0, 0.0, 90.0)}}])
+        AL.write_pcblib(d / "SOIC8.PcbLib", [fp])
+        rel = AN.step_file(fp, 0, fp["bodies"][0])
+        assert rel == "ecadlib_3d/SOIC-8_3.9x4.9mm_P1.27mm_0/SOIC-8.step", rel
+        assert (d / rel).read_bytes() == b"ISO-10303-21;"
+        body = [ln.split("\t") for ln in (d / "SOIC8.PcbLib.ecadbuild").read_text(encoding="utf-8").splitlines() if ln.startswith("BODY\t")]
+        assert body[0][4] == rel and body[0][7] == "90000", body
+        AN.write(d)
+        assert r"ecadlib_3d\SOIC-8_3.9x4.9mm_P1.27mm_0\SOIC-8.step" in (d / AN.BUILD).read_text(encoding="utf-8-sig")
+
+
 def test_compare_finds_a_moved_pad_and_a_renamed_pin():
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
@@ -115,6 +131,13 @@ def test_compare_finds_a_moved_pad_and_a_renamed_pin():
         rep = AN.compare(d)
         assert rep["checked"] == 2 and len(rep["problems"]) == 2, rep
         assert any("pad 3: x" in p for p in rep["problems"]) and any("pin 8" in p and "VDD" in p for p in rep["problems"]), rep
+        # a symbol saved with the wrong part count (Altium's factory default) or without its parameters shows up too
+        rp = d / "SchLib" / "NE555DR.SchLib.ecadbuild"
+        lines = rp.read_text(encoding="utf-8").splitlines()
+        lines = [("\t".join(ln.split("\t")[:5] + ["2"] + ln.split("\t")[6:]) if ln.startswith("SYMBOL\t") else ln) for ln in lines]
+        rp.write_text("\n".join(lines + ["PARAM\tManufacturer\tTI"]) + "\n", encoding="utf-8")
+        probs = AN.compare(d)["problems"]
+        assert any("PARTCOUNT 2 != 3" in p for p in probs) and any("parameter Manufacturer" in p for p in probs), probs
         (d / "PcbLib" / "SOIC8.PcbLib").write_bytes(b"not an ole file")
         assert AN.compare(d)["unreadable"], "a file Altium could not save shows up"
 

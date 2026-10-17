@@ -12,7 +12,7 @@ How it fits together:
      arcs, fills, regions, text, 3D bodies; pins, rectangles, lines, arcs, labels, parameters, the footprint link)
      in Altium's own units, nothing Altium-specific about the file format.
   2. `write` gathers the recipes of a library folder into ecadlib_build.txt (STEP models referenced by a footprint are
-     written beside it as files) and writes ecadlib_build.PrjScr + ecadlib_build.pas.
+     written beside it as files, ecadlib_3d/<footprint>_<n>/<model name>) and writes ecadlib_build.PrjScr + ecadlib_build.pas.
   3. In Altium, File > Run Script > BuildLibrariesInAltium (or the install script's procedures, see altium_pkg) reads
      ecadlib_build.txt and, for each library, opens a new PcbLib / SchLib document, creates every primitive with
      PCBServer / SchServer object factories, and saves the document over the file ecadlib wrote. The file on disk
@@ -75,6 +75,13 @@ def _line(*f):
     return "\t".join(_t(x) for x in f)
 
 
+def step_file(fp, k, body):
+    """Where a body's embedded STEP model is written beside its PcbLib (relative, '/' separators): its own folder,
+    so the file keeps the model's name and Altium embeds it under that name."""
+    name = Path(str((body.get("step") or {}).get("name") or f"{AL.file_stem(fp['name'])}.step").replace("\\", "/")).name
+    return f"ecadlib_3d/{AL.file_stem(fp['name'])}_{k}/{_t(name)}"
+
+
 def footprint_lines(fp):
     """Recipe lines for one footprint dict (altium_lib's model: mm, y up)."""
     mm = AL.mm
@@ -107,7 +114,7 @@ def footprint_lines(fp):
         out.append(_line("TEXT", txt, mm(x), mm(y), mm(h), mm(w), _a(rot), layer))
     for k, b in enumerate(fp.get("bodies", [])):
         st = b.get("step") or {}
-        step = f"{AL.file_stem(fp['name'])}_{k}.step" if st.get("data") else ""
+        step = step_file(fp, k, b) if st.get("data") else ""
         rot = st.get("rot") or (0, 0, 0)
         out.append(_line("BODY", fp.get("body_layer", AL.MECH13), mm(b["height"]), mm(b.get("standoff", 0)), step,
                          _a(rot[0]), _a(rot[1]), _a(rot[2]), mm(st.get("dz", 0)), len(b["pts"]),
@@ -176,7 +183,8 @@ def write_recipe(lib_path, kind, items):
             for k, b in enumerate(fp.get("bodies", [])):
                 data = (b.get("step") or {}).get("data")
                 if data:
-                    sp = lib_path.with_name(f"{AL.file_stem(fp['name'])}_{k}.step")
+                    sp = lib_path.parent / step_file(fp, k, b)
+                    sp.parent.mkdir(parents=True, exist_ok=True)
                     if not (sp.is_file() and sp.read_bytes() == data):
                         sp.write_bytes(data)
     return rp
@@ -268,6 +276,8 @@ ALTIUM_API = {
     "PreProcess": "PCB API: IPCB_ServerInterface.PreProcess", "PostProcess": "PCB API: IPCB_ServerInterface.PostProcess",
     "SendMessageToRobots": "PCB API: IPCB_ServerInterface.SendMessageToRobots (example CreateComponentInLibrary)",
     "I_ObjectAddress": "PCB / SCH API: object address for robot messages",
+    "GetState_Cache": "PCB API: IPCB_Pad.GetState_Cache : TPadCache (AD26 SDK IPCB_Pad.Internal_GetState_Cache)",
+    "SetState_Cache": "PCB API: IPCB_Pad.SetState_Cache(TPadCache) (AD26 SDK; ScriptingSystem wraps TPadCache with setters)",
     "SetState_StackCRPctOnLayer": "PCB API: IPCB_Pad.SetState_StackCRPctOnLayer(Layer, Percent) (rounded-rectangle corner)",
     "ModelFactory_CreateExtruded": "PCB API: IPCB_ComponentBody.ModelFactory_CreateExtruded(Standoff, Height, Colour)",
     "ModelFactory_FromFilename": "PCB API: IPCB_ComponentBody.ModelFactory_FromFilename(FileName, Embedded)",
@@ -304,13 +314,13 @@ ALTIUM_API = {
 PROPERTIES = {
     "pcb": ["X", "Y", "Name", "Mode", "TopXSize", "TopYSize", "MidXSize", "MidYSize", "BotXSize", "BotYSize", "TopShape",
             "MidShape", "BotShape", "Rotation", "Layer", "HoleSize", "HoleType", "HoleWidth", "HoleRotation", "Plated",
-            "PasteMaskExpansionMode", "PasteMaskExpansion", "SolderMaskExpansionMode", "SolderMaskExpansion", "X1", "Y1",
+            "PasteMaskExpansion", "PasteMaskExpansionValid", "SolderMaskExpansion", "SolderMaskExpansionValid", "X1", "Y1",
             "X2", "Y2", "Width", "XCenter", "YCenter", "Radius", "StartAngle", "EndAngle", "LineWidth", "X1Location",
             "Y1Location", "X2Location", "Y2Location", "IsKeepout", "UseTTFonts", "Text", "XLocation", "YLocation", "Size",
             "BodyProjection", "Model", "Description", "Height",
             "ePadObject", "eTrackObject", "eArcObject", "eFillObject", "eRegionObject", "eTextObject",
             "eComponentBodyObject", "eNoDimension", "eCreate_Default", "ePadMode_Simple", "eRectangular", "eRounded",
-            "eRoundedRectangular", "eOctagonal", "eRoundHole", "eSquareHole", "eSlotHole", "eMaskExpansionMode_Manual",
+            "eRoundedRectangular", "eOctagonal", "eRoundHole", "eSquareHole", "eSlotHole", "eCacheManual", "eCacheValid",
             "eTopLayer", "eMidLayer1", "eBottomLayer", "eTopOverlay", "eBottomOverlay", "eTopPaste", "eBottomPaste",
             "eTopSolder", "eBottomSolder", "eKeepOutLayer", "eMultiLayer", "eBoardSide_Top", "c_Broadcast",
             "PCBM_BoardRegisteration"],
@@ -346,6 +356,7 @@ Var
     EbLines  : TStringList;
     EbReport : TStringList;
     EbIdx    : Integer;
+    EbErr    : String;      { set by a Make* routine that cannot build its primitive }
 
 Procedure EbSplit(S : String);
 Var
@@ -418,6 +429,16 @@ Begin
     Else Result := eRoundHole;
 End;
 
+Procedure SkipBlock;
+Begin
+    While EbIdx < EbLines.Count Do
+    Begin
+        EbSplit(EbLines[EbIdx]);
+        If EbF[0] = 'END' Then Break;
+        Inc(EbIdx);
+    End;
+End;
+
 Procedure CloseIfOpen(Path : String);
 Var
     Doc : IServerDocument;
@@ -446,7 +467,8 @@ End;
 
 Procedure MakePad(Comp : IPCB_LibComponent);
 Var
-    Pad : IPCB_Pad;
+    Pad   : IPCB_Pad;
+    Cache : TPadCache;
 Begin
     Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
     Pad.Mode := ePadMode_Simple;
@@ -481,17 +503,26 @@ Begin
         Pad.SetState_StackCRPctOnLayer(eMidLayer1, EbN(8));
         Pad.SetState_StackCRPctOnLayer(eBottomLayer, EbN(8));
     End;
+    AddPrim(Comp, Pad);
+    { mask expansions go through the pad cache: in Altium 26 PasteMaskExpansion / SolderMaskExpansion are read-only
+      on the pad (assigning them crashes the script engine). Rule pads are set too: the first footprint of a session
+      otherwise keeps an invalid cache and is saved with no mask expansion mode at all. }
+    Cache := Pad.GetState_Cache;
     If EbF[15] = 'manual' Then
     Begin
-        Pad.PasteMaskExpansionMode := eMaskExpansionMode_Manual;
-        Pad.PasteMaskExpansion := EbN(16);
-    End;
+        Cache.PasteMaskExpansion := EbN(16);
+        Cache.PasteMaskExpansionValid := eCacheManual;
+    End
+    Else
+        Cache.PasteMaskExpansionValid := eCacheValid;
     If EbF[17] = 'manual' Then
     Begin
-        Pad.SolderMaskExpansionMode := eMaskExpansionMode_Manual;
-        Pad.SolderMaskExpansion := EbN(18);
-    End;
-    AddPrim(Comp, Pad);
+        Cache.SolderMaskExpansion := EbN(18);
+        Cache.SolderMaskExpansionValid := eCacheManual;
+    End
+    Else
+        Cache.SolderMaskExpansionValid := eCacheValid;
+    Pad.SetState_Cache(Cache);
 End;
 
 Procedure MakeTrack(Comp : IPCB_LibComponent);
@@ -566,11 +597,22 @@ Begin
     B.BodyProjection := eBoardSide_Top;
     If EbF[4] <> '' Then
     Begin
+        If Not FileExists(Folder + EbF[4]) Then
+        Begin
+            EbErr := 'STEP file missing: ' + Folder + EbF[4];
+            Exit;
+        End;
         M := B.ModelFactory_FromFilename(Folder + EbF[4], True);
-        M.SetState(EbAng(5), EbAng(6), EbAng(7), EbN(8));
+        If M <> Nil Then
+            M.SetState(EbAng(5), EbAng(6), EbAng(7), EbN(8));
     End
     Else
         M := B.ModelFactory_CreateExtruded(EbN(3), EbN(2), $808080);
+    If M = Nil Then
+    Begin
+        EbErr := 'Altium made no 3D model for a body (' + EbF[4] + ')';
+        Exit;
+    End;
     B.Model := M;
     B.SetState_FromModel;
     AddPrim(Comp, B);
@@ -619,9 +661,17 @@ Begin
         Else If Kind = 'REGION' Then MakeRegion(Comp)
         Else If Kind = 'TEXT' Then MakeText(Comp)
         Else If Kind = 'BODY' Then MakeBody(Comp, Folder);
+        If EbErr <> '' Then Break;
         Inc(EbIdx);
     End;
     PCBServer.PostProcess;
+    If EbErr <> '' Then
+    Begin
+        SkipBlock;
+        Client.CloseDocument(Doc);
+        Result := 'FAILED' + #9 + 'PCBLIB' + #9 + Path + #9 + EbErr;
+        Exit;
+    End;
     If (Blank <> Nil) And (Count > 0) Then
         Lib.RemoveComponent(Blank);
     If Comp <> Nil Then
@@ -629,7 +679,7 @@ Begin
     Doc.SetModified(True);
     Doc.DoFileSave('PCBLIB');
     Client.CloseDocument(Doc);
-    Result := 'OK' + #9 + EbF[0] + #9 + Path + #9 + IntToStr(Count) + ' footprint(s)';
+    Result := 'OK' + #9 + 'PCBLIB' + #9 + Path + #9 + IntToStr(Count) + ' footprint(s)';
 End;
 
 { ------------------------------------------------------------------ symbols }
@@ -835,8 +885,7 @@ Begin
             Comp.ComponentDescription := EbF[2];
             Comp.Designator.Text := EbF[3];
             Comp.Comment.Text := EbF[4];
-            If EbN(5) > 1 Then
-                Comp.PartCount := EbN(5);
+            Comp.PartCount := EbN(5);          { always: a new component has 0 parts (saved as PARTCOUNT=1, Altium wants 2) }
             If EbN(6) > 1 Then
                 Comp.DisplayModeCount := EbN(6);
             Lib.AddSchComponent(Comp);
@@ -867,20 +916,10 @@ Begin
     Doc.SetModified(True);
     Doc.DoFileSave('SCHLIB');
     Client.CloseDocument(Doc);
-    Result := 'OK' + #9 + EbF[0] + #9 + Path + #9 + IntToStr(Count) + ' symbol(s)';
+    Result := 'OK' + #9 + 'SCHLIB' + #9 + Path + #9 + IntToStr(Count) + ' symbol(s)';
 End;
 
 { ------------------------------------------------------------------ entry points }
-Procedure SkipBlock;
-Begin
-    While EbIdx < EbLines.Count Do
-    Begin
-        EbSplit(EbLines[EbIdx]);
-        If EbF[0] = 'END' Then Break;
-        Inc(EbIdx);
-    End;
-End;
-
 Procedure BuildLibraries(Folder : String);
 Var
     Kind, Name, Line : String;
@@ -903,6 +942,7 @@ Begin
             If (Kind = 'PCBLIB') Or (Kind = 'SCHLIB') Then
             Begin
                 Name := EbF[1];
+                EbErr := '';
                 Try
                     If Kind = 'PCBLIB' Then
                         Line := BuildPcbLib(Folder)
@@ -939,7 +979,13 @@ def _recipe_items(rp):
     for ln in Path(rp).read_text(encoding="utf-8").splitlines():
         f = ln.split("\t")
         if f[0] in ("FOOTPRINT", "SYMBOL"):
-            cur = out.setdefault(f[1], {"pads": [], "pins": []})
+            cur = out.setdefault(f[1], {"pads": [], "pins": [], "params": {}, "footprint": None})
+            if f[0] == "SYMBOL":
+                cur["parts"] = int(f[5])
+        elif f[0] == "PARAM" and cur is not None:
+            cur["params"][f[1]] = f[2]
+        elif f[0] == "FOOTPRINTLINK" and cur is not None:
+            cur["footprint"] = f[1]
         elif f[0] == "PAD" and cur is not None:
             cur["pads"].append({"designator": f[1], "x": int(f[2]), "y": int(f[3]), "w": int(f[4]), "h": int(f[5]),
                                 "hole": int(f[10])})
@@ -973,12 +1019,23 @@ def compare_one(lib, rp, tol=10):
                         f"{k} {b[k]} != {a[k]}" for k in bad) + ("" if a["designator"] == b["designator"] else f" (got {b['designator']})"))
     else:
         _, comps = AL.read_schlib(lib)
-        got = {c["name"]: [r for r in c["records"] if r.get("RECORD") == "2"] for c in comps}
+        recs = {c["name"]: c["records"] for c in comps}
+        got = {n: [r for r in rs if r.get("RECORD") == "2"] for n, rs in recs.items()}
         for name, w in want.items():
             if name not in got:
                 probs.append(f"{lib.name}: symbol {name} missing")
                 continue
             g = got[name]
+            head = next((r for r in recs[name] if r.get("RECORD") == "1"), {})
+            if str(head.get("PARTCOUNT")) != str(w["parts"] + 1):      # Altium saves parts + 1
+                probs.append(f"{lib.name}/{name}: PARTCOUNT {head.get('PARTCOUNT')} != {w['parts'] + 1}")
+            params = {r.get("NAME"): r.get("TEXT", "") for r in recs[name] if r.get("RECORD") == "41"}
+            for k, v in w["params"].items():
+                if params.get(k) != v:
+                    probs.append(f"{lib.name}/{name}: parameter {k} {params.get(k)!r} != {v!r}")
+            models = [r.get("MODELNAME") for r in recs[name] if r.get("RECORD") == "45"]
+            if w["footprint"] and w["footprint"] not in models:
+                probs.append(f"{lib.name}/{name}: footprint link {w['footprint']} missing (got {models})")
             if len(g) != len(w["pins"]):
                 probs.append(f"{lib.name}/{name}: {len(g)} pins, recipe has {len(w['pins'])}")
             for a, b in zip(sorted(w["pins"], key=_key), sorted(g, key=_key)):
