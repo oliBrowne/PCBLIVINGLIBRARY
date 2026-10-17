@@ -264,6 +264,43 @@ def test_text():
     expect(t.replace(fab, fab.replace("(thickness 0.15)", "(thickness 0.4)")), "text", "warning")
 
 
+def test_silk_text():
+    """Silkscreen text 0.5-2.0 mm and clear of the pads, on the .kicad_mod and on the PcbLib as Altium shows it
+    (the real Altium run: a reference on F.Fab at the centre came out as .Designator over the part)."""
+    t = gold("SOIC-8_3.9x4.9mm_P1.27mm")
+    ref = re.search(r'\(property "Reference".*?\n\t\)', t, re.S).group(0)
+    expect(t.replace(ref, ref.replace("(size 1 1)", "(size 3 3)")), "silktext", "error")
+    expect(t.replace(ref, ref.replace("(size 1 1)", "(size 0.3 0.3)")), "silktext", "error")
+    over = t.replace(ref, ref.replace("(at 0 -3.4 0)", "(at -1.9 1.9 0)"))
+    assert any("over pad 4" in m for l, r, m in run(over) if r == "silktext" and l == "error"), run(over)
+    centre = t.replace(ref, ref.replace("(at 0 -3.4 0)", "(at 0 0 0)").replace('"F.SilkS"', '"F.Fab"'))
+    assert any("Altium export" in m and "body" in m for l, r, m in run(centre) if r == "silktext"), run(centre)
+    hidden = t.replace(ref, ref.replace("(size 1 1)", "(size 3 3)").replace("(layer \"F.SilkS\")", "(layer \"F.SilkS\") (hide yes)"))
+    hid = [m for l, r, m in run(hidden) if r == "silktext"]       # hidden in KiCad, but the export still shows it
+    assert hid and all(m.startswith("in the Altium export") for m in hid), hid
+    assert R.text_box(0, 0, 1.0, 2, 90) == R.text_box(0, 0, 1.0, 2, 270)
+    with tempfile.TemporaryDirectory() as d:
+        for text, want in ((t, None), (over, "over pad 4"), (centre, "over the part body"),
+                           (t.replace(ref, ref.replace("(size 1 1)", "(size 3 3)")), "3 mm high")):
+            f = Path(d) / "x.PcbLib"
+            AL.write_pcblib(f, [AL.footprint_from_kicad(text)])
+            got = R.pcblib_text_issues(AL.read_pcblib(f)[0])
+            assert (not got) if want is None else any(want in m for _, m in got), (want, got)
+
+
+def test_release_gate_holds_text_over_pads():
+    from tests.test_release_check import make
+    from ecadlib import release_check as RC
+    t = gold("SOIC-8_3.9x4.9mm_P1.27mm")
+    ref = re.search(r'\(property "Reference".*?\n\t\)', t, re.S).group(0)
+    big = t.replace(ref, ref.replace("(size 1 1)", "(size 3 3)"))
+    with tempfile.TemporaryDirectory() as d:
+        fails, _, _ = RC.check_item(make(d, kmod=big), d)
+        assert any("silktext" in m and "over pad" in m for r, m in fails if r == "footprint"), fails
+        fails, warns, _ = RC.check_item(make(d, kmod=big, source="kicad:Package_SO:SOIC-8"), d)
+        assert not any("silktext" in m for _, m in fails) and any("silktext" in w for w in warns)
+
+
 def test_model():
     t = gold("SOIC-8_3.9x4.9mm_P1.27mm")
     m = re.search(r"\(model .*?\n\t\)", t, re.S).group(0)

@@ -24,6 +24,7 @@ Rule ids (RULES) and their levels:
   tht       annular ring >= 0.15 mm (F7.5, IPC-2221), slot clearance, no zero drills
   vias      thermal vias carry the exposed pad's number (F4.3), 0.2-0.3 mm drill, no paste over vias >= 0.3 mm (F4.4)
   text      reference on F.SilkS 1.0 mm / 0.15 mm; value and ${REFERENCE} on F.Fab, 0.5-1.0 mm, ~15 % stroke (F5.1/F5.2)
+  silktext  silkscreen text 0.5-2.0 mm and off the pads, the designator off the body; also the Altium .Designator
   model     a 3D model reference, named after the footprint, STEP, scale 1 / rotation 0, a portable path (F9.3)
   margin    courtyard clearance around pads and body: 0.25 mm (0.15 under 1.5 mm), 0.5 connectors / crystals /
             canned capacitors, 1.0 BGA (F5.3)
@@ -51,6 +52,7 @@ RULES = {
     "tht": "Annular ring and slot clearance",
     "vias": "Thermal vias share the exposed pad's number, 0.2-0.3 mm drill, no paste on them",
     "text": "Reference, value and ${REFERENCE} on the right layers at the right size",
+    "silktext": "Silkscreen text 0.5-2.0 mm high and clear of copper pads; the designator outside the body",
     "model": "3D model reference named after the footprint, STEP, unscaled, portable path",
     "margin": "Courtyard clearance for the part class",
     "polarity": "Pin 1 / polarity visible on silkscreen and fab",
@@ -62,7 +64,7 @@ RULES = {
 
 # rule-book errors the release check holds a part for (ecadlib's own and converted footprints; KiCad library parts
 # get them as warnings). pinmap holds every part: the symbol-to-footprint pairing is ours either way.
-RELEASE_HOLDS = ("name", "layers", "attr", "tht", "vias", "pinmap")
+RELEASE_HOLDS = ("name", "layers", "attr", "tht", "vias", "silktext", "pinmap")
 
 # KLC F3.1: imperial <-> metric chip codes, and the nominal body (length x width) the metric code names
 CHIP_CODES = {"01005": "0402", "0201": "0603", "0402": "1005", "0603": "1608", "0805": "2012", "1008": "2520",
@@ -694,6 +696,84 @@ def _text_rules(tree, s, add):
             break
 
 
+SILK = ("F.SilkS", "B.SilkS", "F.Silkscreen", "B.Silkscreen")
+SILK_TEXT = (0.5, 2.0)        # mm: below this a board house cannot print it, above it the text swamps the part
+NOMINAL_REF = 3               # characters a designator shows on a board ("U12"), whatever the library string says
+
+
+def text_box(x, y, size, n, rot=0.0, just=0.5):
+    """Box (x0, y0, x1, y1) of n stroke characters of height size whose anchor (x, y) sits at fraction just
+    (0 left, 0.5 centre, 1 right) of the width and at the middle of the height, rotated by a multiple of 90 degrees."""
+    from .altium_lib import CHAR_W
+    w = CHAR_W * size * n
+    x0, x1, y0, y1 = -w * just, w * (1 - just), -size / 2, size / 2
+    if round(rot / 90) % 2:
+        x0, x1, y0, y1 = y0, y1, x0, x1
+    if round(rot / 90) % 4 in (1, 2):
+        x0, x1 = -x1, -x0
+    if round(rot / 90) % 4 in (2, 3):
+        y0, y1 = -y1, -y0
+    return (x + x0, y + y0, x + x1, y + y1)
+
+
+def _boxes_overlap(a, b, gap=0.0):
+    return a[0] < b[2] - gap and b[0] < a[2] - gap and a[1] < b[3] - gap and b[1] < a[3] - gap
+
+
+def _silk_texts(tree):
+    """Visible silkscreen texts: (kind, layer, size, box) with the box in KiCad coordinates (y down)."""
+    out = []
+    for n in list(sexpr.find(tree, "property")) + list(sexpr.find(tree, "fp_text")):
+        layer, at = _layer(n), sexpr.first(n, "at")
+        eff = sexpr.first(n, "effects") or []
+        hidden = "hide" in n or "hide" in eff or any(isinstance(c, list) and c[0] == "hide" and c[1:2] != ["no"]
+                                                      for c in list(n) + list(eff))
+        if layer not in SILK or not at or hidden:
+            continue
+        kind = (str(n[1]) if n[0] == "fp_text" else str(n[1]).lower())
+        val = str(n[2]) if len(n) > 2 and not isinstance(n[2], list) else ""
+        if kind not in ("reference", "value", "user"):
+            continue
+        size = _font(n)[0] or 1.0
+        ref = kind == "reference" or val in ("${REFERENCE}", "%R")
+        just = sexpr.first(eff, "justify") or []
+        frac = 0.0 if "left" in just else 1.0 if "right" in just else 0.5
+        rot = _f(at[3]) if len(at) > 3 and at[3] != "unlocked" else 0.0
+        out.append(("reference" if ref else kind, layer, size,
+                    text_box(_f(at[1]), _f(at[2]), size, NOMINAL_REF if ref else max(len(val), 1), rot, frac)))
+    return out
+
+
+def _silktext_rules(tree, s, add):
+    lo, hi = SILK_TEXT
+    for kind, layer, size, box in _silk_texts(tree):
+        if not lo - EPS <= size <= hi + EPS:
+            add("error", "silktext", f"{kind} text on {layer} is {size:g} mm high (readable silkscreen text is "
+                                     f"{lo:g}-{hi:g} mm; KLC F5.1 uses 1.0 mm)")
+        side = "F" if layer.startswith("F.") else "B"
+        hit = [p["num"] or "?" for p in s["rects"] if (p["copper"] or p["hole"]) and
+               any(l in (f"{side}.Cu", "*.Cu") for l in p["layers"]) and
+               _boxes_overlap(box, (p["x"] - p["w"] / 2, p["y"] - p["h"] / 2, p["x"] + p["w"] / 2, p["y"] + p["h"] / 2), 0.01)]
+        if hit:
+            add("error", "silktext", f"{kind} text on {layer} lies over pad{'s' if len(hit) > 1 else ''} "
+                                     f"{FC._ranges(hit)}: the board house clips it off the copper (KLC F5.1)")
+        fb = s["fab_box"]
+        if kind == "reference" and fb and not hit and _boxes_overlap(box, fb, 0.01) and s["copper"]:
+            add("warning", "silktext", f"the designator on {layer} sits over the part body: it is hidden once the part "
+                                       "is placed (KLC F5.1 puts it outside the body)")
+    if any(kind == "reference" for kind, *_ in _silk_texts(tree)) or not s["copper"]:
+        return
+    # no designator on silk: the Altium export still puts .Designator on Top Overlay where the reference was
+    from . import altium_lib as AL
+    texts = [(t, x, y, h, rot, True) for t, x, y, h, _, rot, layer in AL.texts_from_kicad(tree) if layer == AL.TOP_OVERLAY]
+    flip = lambda b: (b[0], -b[3], b[2], -b[1])
+    pads = [(p["num"] or "?", flip((p["x"] - p["w"] / 2, p["y"] - p["h"] / 2, p["x"] + p["w"] / 2, p["y"] + p["h"] / 2)),
+             None if any(l == "*.Cu" for l in p["layers"]) else "F.Cu" in p["layers"]) for p in s["rects"] if p["copper"]]
+    body = flip(s["fab_box"]) if s["fab_box"] else flip(s["pad_box"]) if s["pad_box"] else None
+    for lvl, msg in overlay_text_issues(texts, pads, body):
+        add(lvl, "silktext", f"in the Altium export: {msg}")
+
+
 def _model_rules(tree, s, add, require=False):
     models = list(sexpr.find(tree, "model"))
     if not models:
@@ -872,6 +952,7 @@ def check(text, filename=None, symbol_pins=None, require_model=False, geometry=T
     _tht_rules(s, add)
     _via_rules(s, add)
     _text_rules(tree, s, add)
+    _silktext_rules(tree, s, add)
     _model_rules(tree, s, add, require=require_model)
     _margin_rules(tree, s, add)
     _polarity_rules(tree, s, claim, add)
@@ -882,6 +963,50 @@ def check(text, filename=None, symbol_pins=None, require_model=False, geometry=T
 
 
 # ------------------------------------------------------------------ Altium
+def overlay_text_issues(texts, pads, body=None):
+    """Altium overlay text, y up, in mm: texts [(string, x, y, height, rotation, on top)] anchored at the bottom-left
+    corner as Altium anchors stroke text; pads [(number, (x0, y0, x1, y1), on top / None for Multi-Layer)].
+    -> [(level, message)]: height outside SILK_TEXT, text over a pad, the designator over the body."""
+    from .altium_lib import CHAR_W
+    lo, hi = SILK_TEXT
+    out = []
+    for name, x, y, h, rot, on_top in texts:
+        if not lo - EPS <= h <= hi + EPS:
+            out.append(("error", f"overlay text '{name}' is {h:g} mm high (readable silkscreen text is {lo:g}-{hi:g} mm)"))
+        a = math.radians(rot)
+        corners = [(u * math.cos(a) - v * math.sin(a), u * math.sin(a) + v * math.cos(a))
+                   for u in (0, CHAR_W * h * (NOMINAL_REF if name == ".Designator" else len(name))) for v in (0, h)]
+        box = (x + min(c[0] for c in corners), y + min(c[1] for c in corners),
+               x + max(c[0] for c in corners), y + max(c[1] for c in corners))
+        hit = [n for n, b, side in pads if side in (None, on_top) and _boxes_overlap(box, b, 0.01)]
+        if hit:
+            out.append(("error", f"overlay text '{name}' lies over pad{'s' if len(hit) > 1 else ''} {FC._ranges(hit)}"))
+        elif name == ".Designator" and body and _boxes_overlap(box, body, 0.01):
+            out.append(("warning", "the .Designator sits over the part body: it is hidden once the part is placed"))
+    return out
+
+
+def pcblib_text_issues(fp):
+    """overlay_text_issues on one footprint read back by altium_lib.read_pcblib; the body is the box through the
+    pad centres. -> [(level, message)]"""
+    from . import altium_lib as AL
+    pads = [r for r in fp["records"] if r["type"] == "pad"]
+    top = lambda layer: layer in (AL.TOP, AL.TOP_OVERLAY)
+    boxes = []
+    for p in pads:
+        w, h = AL.to_mm(p["w"]), AL.to_mm(p["h"])
+        if round((p.get("rot") or 0) / 90) % 2:
+            w, h = h, w
+        x, y = AL.to_mm(p["x"]), AL.to_mm(p["y"])
+        boxes.append((p["designator"] or "?", (x - w / 2, y - h / 2, x + w / 2, y + h / 2),
+                      None if p["layer"] == AL.MULTI else top(p["layer"])))
+    texts = [(t.get("text") or "?", AL.to_mm(t["x"]), AL.to_mm(t["y"]), AL.to_mm(t["h"]), t.get("rot") or 0.0,
+              top(t["layer"])) for t in fp["records"] if t["type"] == "text" and t.get("layer") in (AL.TOP_OVERLAY, AL.BOTTOM_OVERLAY)]
+    ctr = [(AL.to_mm(p["x"]), AL.to_mm(p["y"])) for p in pads]
+    body = (min(c[0] for c in ctr), min(c[1] for c in ctr), max(c[0] for c in ctr), max(c[1] for c in ctr)) if ctr else None
+    return overlay_text_issues(texts, boxes, body)
+
+
 def check_pcblib(fp, rules=None, pin1=None):
     """Altium-side rules on one footprint from altium_lib.read_pcblib: [(level, "altium", message)]."""
     from . import altium_lib as AL, rules as RU
@@ -908,6 +1033,8 @@ def check_pcblib(fp, rules=None, pin1=None):
     texts = [r.get("text", "") for r in recs if r["type"] == "text"]
     if ".Designator" not in texts:
         add("warning", "no .Designator special string")
+    for lvl, msg in pcblib_text_issues(fp):
+        add(lvl, msg)
     if not any(r["type"] == "body" for r in recs) and not fp["params"].get("HEIGHT"):
         add("warning", "no 3D body and no height")
     nums = {p["designator"] for p in pads}
