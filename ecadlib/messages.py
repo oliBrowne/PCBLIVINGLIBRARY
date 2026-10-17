@@ -95,6 +95,29 @@ CODES = {
     "pins.pad_without_pin": ("Footprint {pads_have} no pin on the symbol.",
                              "Pick a symbol that has those pins, or a footprint that matches; mounting pads are fine.",
                              [r"^pins: pads without a symbol pin: (?P<pads>.+)"]),
+    # the datasheet's pad table failed footprint_adv.check_pad_table, so no footprint was built (librarian, release check)
+    "padtable.no_pin1": ("The footprint read from the datasheet has no pad numbered 1 or A1[ (its pads are {pads})], so "
+                         "nothing says which pad is pin 1.",
+                         "Find pin 1 in the datasheet, rename that pad to 1 and the others in order (ecadlib fp-edit PLAN "
+                         "--part PART rename OLD=1 ...), then fill the library again.",
+                         [r"datasheet pad table: no pad numbered 1(?: \(or A1\))?(?: - pads named (?P<pads>.+))?"]),
+    "padtable.overlap": ("In the footprint read from the datasheet, pads {a} and {b} overlap, and their pins have "
+                         "different names, so they would join two nets.",
+                         "If the datasheet shows them as one net, join them (ecadlib fp-edit PLAN --part PART same-net "
+                         "{a},{b}); if not, a pad was misread: compare the land pattern with the datasheet, or pick a "
+                         "footprint by hand (ecadlib resolve).",
+                         [r"datasheet pad table: pads (?P<a>\S+) \([^)]*\) and (?P<b>\S+) \([^)]*\) overlap"]),
+    "padtable.duplicate": ("The datasheet read lists pad {pad} twice at the same place and size, which usually means a "
+                           "row of the land-pattern table was read twice.",
+                           "Compare the land pattern with the datasheet, then read it again or pick a footprint by hand.",
+                           [r"datasheet pad table: pad (?P<pad>\S+) is listed twice at the same place"]),
+    "padtable.symbol_waits": ("The symbol was read from the datasheet too; it is written once the footprint passes.",
+                              "Fix the footprint (the other reason here); the symbol comes with it.",
+                              [r"datasheet pad table: the symbol waits for the footprint"]),
+    "padtable.other": ("The footprint read from the datasheet does not add up: {detail}.",
+                       "Compare the land pattern with the datasheet; fix it with ecadlib fp-edit, or pick a footprint "
+                       "by hand (ecadlib resolve).",
+                       [r"datasheet pad table: (?P<detail>.+)"]),
     # footprint (rule `footprint`: footprint_check findings, or the PcbLib minimum)
     "footprint.overlap": ("Pads {a} and {b} overlap[ by {mm} mm].",
                           "Pick another footprint or fix the pad sizes; if the pads are one net on purpose, release anyway.",

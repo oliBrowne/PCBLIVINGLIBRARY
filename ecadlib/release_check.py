@@ -140,7 +140,11 @@ def check_item(item, base=".", rules=None):
     syms = fps = None
     pin_names = {}
     for kind, f, reader in (("symbol", sym_f, AL.read_schlib), ("footprint", fp_f, AL.read_pcblib)):
-        if not f:
+        pads_why = [r for r in (item.get("librarian") or {}).get("review") or [] if str(r).startswith("datasheet pad table: ")]
+        if not f and pads_why:                         # why the datasheet's footprint was not built, and its fix
+            for r in (pads_why if kind == "footprint" else ["datasheet pad table: the symbol waits for the footprint"]):
+                add("files", r)
+        elif not f:
             add("files", f"no {kind} model (.{'SchLib' if kind == 'symbol' else 'PcbLib'})")
         elif not f.exists():
             add("files", f"{kind} file missing: {f}")

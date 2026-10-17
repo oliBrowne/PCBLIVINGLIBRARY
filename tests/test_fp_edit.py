@@ -76,6 +76,17 @@ def test_fp_edit_cli_builds_a_held_connector_on_the_next_run():
         assert "NLJ2MDXX-V" not in json.loads((plan.parent / FE.FILE).read_text())
 
 
+def test_held_part_says_why_and_what_to_do():
+    from ecadlib import messages as M
+    with tempfile.TemporaryDirectory() as d:
+        G.run(out=d, ids=["connector-NSJ12HF-1"])
+        it = json.loads((Path(d) / "lib" / "plan.json").read_text())[0]
+        codes = {e["code"]: e for e in M.explain_all(it["hold_reasons"])}
+        assert set(codes) == {"padtable.no_pin1", "padtable.overlap", "padtable.symbol_waits"}, it["hold_reasons"]
+        assert "G, R1" in codes["padtable.no_pin1"]["text"] and "fp-edit" in codes["padtable.no_pin1"]["fix"]
+        assert "same-net G,S2" in codes["padtable.overlap"]["fix"]
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
