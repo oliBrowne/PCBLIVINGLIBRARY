@@ -234,7 +234,7 @@ def write(folder, out=None):
     (out / BUILD).write_text(text, encoding="utf-8-sig")       # BOM: TStringList.LoadFromFile reads it as UTF-8
     (out / PROJECT).write_text(prjscr_text(), encoding="utf-8", newline="")
     (out / UNIT).write_text(pas_text(), encoding="utf-8", newline="")
-    return {"folder": str(folder), "out": str(out), "libraries": [str(r) for r, _ in found],
+    return {"folder": str(folder), "out": str(out), "libraries": [r.as_posix() for r, _ in found],
             "files": [BUILD, PROJECT, UNIT]}
 
 
