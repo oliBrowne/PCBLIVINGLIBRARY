@@ -677,6 +677,8 @@ def main(argv=None):
     ap.add_argument("--providers")
     ap.add_argument("--offline", action="store_true")
     a = ap.parse_args(argv)
+    from . import userconfig
+    userconfig.apply_env()                         # keys stored by the setup page / `ecadlib keys` (env variables win)
     ws = Workspace(a.workspace, a.lib, a.providers.split(",") if a.providers else None, a.offline)
     serve(ws, sys.stdin.buffer, sys.stdout.buffer)
 

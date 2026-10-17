@@ -180,7 +180,8 @@ def test_schlib_utf8_twin_for_every_non_ascii_value():
     with tempfile.TemporaryDirectory() as d:
         p = AL.write_schlib(Path(d) / "u.SchLib", [sym])
         import olefile
-        raw = olefile.OleFileIO(str(p)).openstream("R_10K/Data").read()
+        with olefile.OleFileIO(str(p)) as ole:                                 # closed: Windows can't delete open files
+            raw = ole.openstream("R_10K/Data").read()
         assert b"|%UTF8%Text=-40\xc2\xb0C|||Text=-40\xb0C|" in raw
         assert b"|%UTF8%ComponentDescription=Resistor 10k \xc2\xb11%|||ComponentDescription=Resistor 10k \xb11%|" in raw
         h, syms = AL.read_schlib(p)

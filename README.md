@@ -6,6 +6,14 @@ These are small Python prototypes for an open-source tool that manages ECAD comp
 2. A deterministic generator turns that JSON into an IPC-7351B land pattern.
 3. A triage step works out which BOM lines already exist locally, which can be pulled from a public source, and which need a generated footprint.
 
+## Start here (no terminal needed)
+
+**Electronics engineer who just wants it to work?** Read [docs/START_HERE.md](docs/START_HERE.md). On Windows,
+download **ecadlib-setup-&lt;version&gt;.exe** from the [Releases page](https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases)
+and run it. ecadlib then opens a setup page in your browser where you paste an API key, pick a model, and add ecadlib
+to Altium or KiCad. There is no Python to install and no config file to edit. The rest of this README is for people
+who use the command line or work on ecadlib itself (section 38 covers how the installer works).
+
 ## Quick start
 
 ```
@@ -1977,6 +1985,41 @@ it copies live in `<workspace>/hub/`).
   ```
 * Works the same in local and team mode: viewers can see everything, a librarian runs the fixes, and in team mode the
   history names the signed-in user. Tests: `tests/test_hub.py`.
+## 40. Easy setup: the Windows installer, the setup page and stored keys
+
+For people who are used to installers, not terminals. The guide for them is `docs/START_HERE.md`.
+
+* **The installer** (`installer/windows/`, built by `.github/workflows/windows.yml` on every PR and attached to each
+  release by `release.yml`): PyInstaller bundles Python and every dependency into `ecadlib-app.exe` (no console: the
+  desktop app) and `ecadlib.exe` (the command line). Inno Setup wraps them into `ecadlib-setup-<version>.exe`. It
+  installs per user by default (`%LOCALAPPDATA%\Programs\ecadlib`, no administrator) and adds Start menu entries for
+  **ecadlib** and **ecadlib setup**. A desktop icon and adding `ecadlib` to PATH are optional. CI installs the result
+  silently, runs it, checks the Start menu entries and PATH, and uninstalls it.
+* **`ecadlib start`** (`launcher.py`, what the Start menu runs) starts the web UI on 127.0.0.1:8765 and opens the
+  browser. The first run opens the setup page. A small window has Open, Setup, Workspace folder and Quit, and closing
+  it stops ecadlib. A second start reuses the running copy.
+* **`ecadlib setup`** (`easy_setup.py`, `ui/static/setup.html`): pick the AI provider and model, then paste and check
+  the key (a free request for the provider's model list). It finds Altium Designer and KiCad (`detect.py`) and asks
+  for the tool, the workspace and your library folders. Saving writes `<workspace>/ecadlib.toml` through `ecadlib
+  init`'s own code, so it learns your naming from your libraries. **Add to Altium** writes the menu script project
+  (section 31) and sets it to run this ecadlib. One step inside Altium is left (Install from file...), because Altium
+  keeps its list of script projects to itself. **Add to KiCad** copies the action plugin into each KiCad's
+  `scripting/plugins` folder, with this ecadlib's command next to it, so no PATH change is needed. The setup routes
+  exist in local mode only: team mode answers 404, because keys belong to each person.
+* **`ecadlib keys list|set NAME|remove NAME`** (`userconfig.py`): API keys stored per user, as an alternative to
+  environment variables. On Windows they are encrypted with DPAPI for your account. Elsewhere they are in a file only
+  you can read (mode 600). The folder is `%APPDATA%\ecadlib`, `~/Library/Application Support/ecadlib` or
+  `~/.config/ecadlib`, and `ECADLIB_HOME` overrides it. Every entry point (CLI, `ui`, `mcp`, the app) copies stored
+  keys into its environment where the variable is not already set, so an environment variable always wins. A key
+  value is never printed, logged, shown by the web UI or written to `ecadlib.toml`.
+* **The doctor on a fresh install** now shows only what matters. A key or tool for a feature you have not turned on
+  is OK ("only needed for ..."): git and pdftoppm for the library agent, NEXAR_TOKEN without an `[altium365]`
+  workspace, GITHUB_TOKEN without the agent, kicad-cli when you only make Altium libraries. The optional part-lookup
+  services share one line. kicad-cli is also found in KiCad's install folder when it is not on PATH. The hints say
+  `ecadlib keys set NAME` or the setup page instead of a Unix `export`.
+
+Code signing: the build signs the app and the installer with Azure Artifact Signing once the repository has the
+secrets and variables in `docs/code-signing.md`; until then it is unsigned. Still to do: macOS (a `.dmg` or `.pkg`).
 
 ## 40. `house_style.py`: teach it your house style (`ecadlib style`)
 

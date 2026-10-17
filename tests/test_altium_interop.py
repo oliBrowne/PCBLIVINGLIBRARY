@@ -92,7 +92,8 @@ def test_writer_keeps_text_cp1252_cannot_hold():
         assert h["COMPDESCR0"] == "Resistor 10kΩ ±1% ≤0.1W"
         assert syms[0]["records"][0]["COMPONENTDESCRIPTION"] == "Resistor 10kΩ ±1% ≤0.1W"
         assert [r["TEXT"] for r in syms[0]["records"] if r.get("NAME") == "Tolerance"] == ["≤1%"]
-        raw = olefile.OleFileIO(str(p)).openstream("R_10K/Data").read()
+        with olefile.OleFileIO(str(p)) as ole:                                 # closed: Windows can't delete open files
+            raw = ole.openstream("R_10K/Data").read()
         assert b"|%UTF8%ComponentDescription=Resistor 10k\xce\xa9 \xc2\xb11% \xe2\x89\xa40.1W|||ComponentDescription=Resistor 10k? \xb11% ?0.1W|" in raw
     assert AL.pblock("|RECORD=1|Text=abc", utf8=True) == AL.pblock("|RECORD=1|Text=abc")
     # Altium twins every non-ASCII value, cp1252-encodable ones too (Celestial library: '|%UTF8%Text=90\xc2\xb0, Right

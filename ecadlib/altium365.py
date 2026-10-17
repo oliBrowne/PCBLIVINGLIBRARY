@@ -335,7 +335,10 @@ def main(argv=None):
         for i in items:                        # model paths relative to the plan file, so push works from any cwd
             for k in ("symbol", "footprint"):
                 if i[k]["file"]:
-                    i[k]["file"] = os.path.relpath(i[k]["file"], out.parent.resolve())
+                    try:
+                        i[k]["file"] = os.path.relpath(i[k]["file"], out.parent.resolve()).replace(os.sep, "/")
+                    except ValueError:         # another drive on Windows: keep it absolute
+                        i[k]["file"] = Path(i[k]["file"]).resolve().as_posix()
         out.write_text(json.dumps(items, indent=2))
         ready = sum(i["status"] == "ready" for i in items)
         print(f"{len(items)} components planned, {ready} ready, {len(items) - ready} need Altium models -> {out}")

@@ -3,7 +3,10 @@
     ecadlib doctor [--workspace W] [--lib DIR ...] [--rules FILE] [--json]
 
 Checks: the Python version; the packages ecadlib needs (FAIL when missing) and the optional ones (pillow, pypdf) and
-tools (pdftoppm, kicad-cli, git) (WARN); which API keys are set (names only, never the values); the rules file
+tools (pdftoppm, kicad-cli, git) (WARN only when a feature you turned on needs them: git and pdftoppm for the library
+agent, kicad-cli unless you only make Altium libraries; kicad-cli is also found in KiCad's install folder when it is
+not on PATH); which API keys are set (names only, never the values; Altium 365 and GitHub warn only when configured,
+the optional part-lookup services are one line); the rules file
 (ecadlib.toml: which one is used and whether it is valid - errors name file:line where the line can be found); the
 workspace (exists, writable); the library folders (--lib / $ECADLIB_LIB, [agent] libs and library_repo) and the watched
 sources in [agent.watch]. Exit code 1 when any line is FAIL, else 0. --json prints {"ok", "checks": [{"check",
@@ -43,7 +46,28 @@ def check_python(v=None):
     return _c("python", "OK", f"Python {s}")
 
 
-def check_packages(find_spec=importlib.util.find_spec, which=shutil.which):
+def _needs(tool, rules):
+    """Does a feature that is turned on need this tool? (so a fresh install is not a page of warnings)"""
+    r = rules if isinstance(rules, dict) else {}
+    if tool in ("git", "pdftoppm"):
+        return bool((r.get("agent") or {}).get("enabled"))
+    if tool == "kicad-cli":
+        return ((r.get("setup") or {}).get("tool") or "both") != "altium"
+    return True
+
+
+def _find_tool(tool, which):
+    p = which(tool)
+    if p or tool != "kicad-cli" or which is not shutil.which:
+        return p
+    try:
+        from . import detect
+        return detect.kicad_cli()
+    except Exception:
+        return None
+
+
+def check_packages(find_spec=importlib.util.find_spec, which=shutil.which, rules=None):
     out = []
     missing = [pip for mod, pip in CORE if find_spec(mod) is None]
     out.append(_c("packages", "FAIL", f"missing: {', '.join(missing)}", f"pip install {' '.join(missing)}") if missing
@@ -52,8 +76,13 @@ def check_packages(find_spec=importlib.util.find_spec, which=shutil.which):
         out.append(_c(f"optional {pip}", "OK", "installed") if find_spec(mod) is not None
                    else _c(f"optional {pip}", "WARN", f"not installed ({why})", f"pip install {pip}"))
     for tool, why, fix in TOOLS:
-        p = which(tool)
-        out.append(_c(f"tool {tool}", "OK", p) if p else _c(f"tool {tool}", "WARN", f"not found ({why})", fix))
+        p = _find_tool(tool, which)
+        if p:
+            out.append(_c(f"tool {tool}", "OK", p))
+        elif _needs(tool, rules):
+            out.append(_c(f"tool {tool}", "WARN", f"not found ({why})", fix))
+        else:
+            out.append(_c(f"tool {tool}", "OK", f"not installed; only needed for {why}"))
     return out
 
 
@@ -104,23 +133,52 @@ def check_ai(rules=None, environ=None):
     elif key:
         out.append(_c("ai key", "OK", f"{ep['key_env'] or 'ANTHROPIC_API_KEY'} set"))
     else:
-        out.append(_c("ai key", "WARN", f"{ep['key_env']} not set: datasheets cannot be read and the visual check is skipped",
-                      f"to add it: export {ep['key_env']}=... (ecadlib.toml keeps only the name, never the key)"))
+        out.append(_c("ai key", "WARN", f"{ep['key_env']} not set (datasheet reader and visual-check skipped)",
+                      key_hint(ep["key_env"])))
     return out
+
+
+def key_hint(name):
+    """How to set a key on any OS (the setup page, or `ecadlib keys set`); ecadlib.toml only ever holds the name."""
+    from .userconfig import key_hint as h
+    return h(name) + " (ecadlib.toml keeps only the name, never the key)"
+
+
+def _configured(name, rules):
+    """Is the feature behind this key turned on? Unset keys of features nobody uses are not warnings."""
+    r = rules if isinstance(rules, dict) else {}
+    if name == "altium365":
+        return bool((r.get("altium365") or {}).get("workspace"))
+    if name == "github":
+        ag = r.get("agent") or {}
+        return bool(ag.get("enabled") or ag.get("github_repo"))
+    return True
 
 
 def check_keys(rules=None, environ=None):
     environ = os.environ if environ is None else environ
-    out = []
+    out, lookups = [], []
     for name, env, why in key_services(rules):
         ok = all(environ.get(e) for e in env)
         if name == "altium365" and not ok:
             ok = bool(environ.get("NEXAR_CLIENT_ID") and environ.get("NEXAR_CLIENT_SECRET"))
             env = env if not ok else ["NEXAR_CLIENT_ID", "NEXAR_CLIENT_SECRET"]
-        out.append(_c(f"key {name}", "OK", f"{' + '.join(env)} set") if ok
-                   else _c(f"key {name}", "WARN", f"{' + '.join(env)} not set: {why} skipped",
-                           f"to add it: export {env[0]}=... (ecadlib.toml keeps only the name, never the key)"
-                           + ("; NEXAR_CLIENT_ID + NEXAR_CLIENT_SECRET also work" if name == "altium365" else "")))
+        if why.endswith("part lookups"):                 # optional extra sources: one line for all of them
+            lookups.append((name, env, ok))
+            continue
+        if ok:
+            out.append(_c(f"key {name}", "OK", f"{' + '.join(env)} set"))
+        elif _configured(name, rules):
+            out.append(_c(f"key {name}", "WARN", f"{' + '.join(env)} not set ({why} skipped)", key_hint(env[0])
+                          + ("; NEXAR_CLIENT_ID + NEXAR_CLIENT_SECRET also work" if name == "altium365" else "")))
+        else:
+            out.append(_c(f"key {name}", "OK", f"{' + '.join(env)} not set; only needed for {why}"))
+    if lookups:
+        have = [n for n, _, ok in lookups if ok]
+        rest = [f"{n} ({' + '.join(e)})" for n, e, ok in lookups if not ok]
+        out.append(_c("key part lookups", "OK", (f"set: {', '.join(have)}" if have else "none set")
+                      + (f"; optional, not set: {', '.join(rest)}" if rest else "")
+                      + ("" if have else " (KiCad, EasyEDA/LCSC and standard parts need no key)")))
     return out
 
 
@@ -194,7 +252,7 @@ def check_rules(path=None, workspace=None):
 def check_workspace(ws):
     p = Path(ws).expanduser()
     if not p.exists():
-        return _c("workspace", "WARN", f"{p.resolve()}: does not exist yet", "created on first use by `ecadlib ui` / `ecadlib mcp`")
+        return _c("workspace", "OK", f"{p.resolve()}: does not exist yet; created on first use")
     if not p.is_dir():
         return _c("workspace", "FAIL", f"{p.resolve()}: not a folder", "point --workspace (or ECADLIB_WORKSPACE) at a folder")
     try:
@@ -250,14 +308,14 @@ def check_paths(libs=(), rules=None):
         else:
             out.append(_c(what, bad, f"{p}: not found", "fix the path (relative paths start at the current folder)"))
     if not libs:
-        out.append(_c("lib", "WARN", "no --lib / ECADLIB_LIB library folder given",
-                      "export ECADLIB_LIB=/path/to/kicad/libs (several: separate with " + repr(os.pathsep) + ")"))
+        out.append(_c("lib", "OK", "no library folder of yours given: ecadlib builds a new library (to reuse your parts, "
+                                   "add your folders on the setup page or with `ecadlib init --lib FOLDER`)"))
     return out
 
 
 def run(workspace="ecadlib_workspace", libs=(), rules_path=None, environ=None):
-    checks = [check_python()] + check_packages()
     rc, rules = check_rules(rules_path, workspace if Path(workspace).is_dir() else None)
+    checks = [check_python()] + check_packages(rules=rules)
     checks.append(rc)
     checks += check_ai(rules, environ)
     checks += check_keys(rules, environ)

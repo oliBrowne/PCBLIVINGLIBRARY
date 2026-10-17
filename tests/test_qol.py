@@ -233,7 +233,8 @@ def test_doctor_keys_names_only():
                          {"MY_CLAUDE_KEY": secret, "NEXAR_CLIENT_ID": "id-zzz", "NEXAR_CLIENT_SECRET": "s3cr3t"})
     by = {c["check"]: c for c in keys}
     assert by["key anthropic"]["level"] == "OK" and "MY_CLAUDE_KEY" in by["key anthropic"]["detail"]
-    assert by["key altium365"]["level"] == "OK" and by["key mouser"]["level"] == "WARN"
+    assert by["key altium365"]["level"] == "OK" and by["key part lookups"]["level"] == "OK"
+    assert "mouser (MOUSER_API_KEY)" in by["key part lookups"]["detail"]             # optional extras: one line
     text = json.dumps(keys)
     assert secret not in text and "s3cr3t" not in text and "id-zzz" not in text
 
@@ -261,7 +262,7 @@ def test_doctor_end_to_end_exit_codes_and_writes_nothing():
         assert by["rules"]["detail"].startswith(str(ws / "ecadlib.toml"))
         f = Path(d, "afile")
         f.write_text("")
-        assert DR.check_workspace(f)["level"] == "FAIL" and DR.check_workspace(Path(d, "new"))["level"] == "WARN"
+        assert DR.check_workspace(f)["level"] == "FAIL" and DR.check_workspace(Path(d, "new"))["level"] == "OK"
 
 
 # ------------------------------------------------------------------ --json on release-check and approve status
@@ -332,7 +333,7 @@ def test_workspace_and_mcp_status_and_doctor():
         assert s["totals"]["held"] == 2 and s["workspace"] == str(ws.root)
         rep = M.call_tool(ws, "doctor", {})
         by = {c["check"]: c for c in rep["checks"]}
-        assert by["workspace"]["level"] == "OK" and by["lib"]["level"] == "WARN"
+        assert by["workspace"]["level"] == "OK" and by["lib"]["level"] == "OK"
         json.dumps(rep)
 
 

@@ -221,7 +221,7 @@ def test_librarian_notes_unreachable_sources_and_missing_key():
     got = FR.blockers(rows, {"datasheet": {"api_key_env": "MY_KEY"}})
     text = "\n".join(m + " | " + f for m, f in got)
     assert "easyeda could not be reached (or refused) for 1 part(s)" in text and "kicad could not be reached (or refused) for 2" in text
-    assert "1 part(s) need the datasheet reader, but MY_KEY is not set" in text and "export MY_KEY=" in text
+    assert "1 part(s) need the datasheet reader, but MY_KEY is not set" in text and "ecadlib keys set MY_KEY" in text
     assert "--offline --sources standard" in text
     assert FR.blockers(rows[2:]) == []
     assert "--offline" in FR.blockers(rows[:1], offline=True)[0][0]

@@ -10,7 +10,7 @@
 * Nexar / Altium 365: FakeNexar answers the GraphQL and file-upload calls `altium365 push` makes (NEXAR_API_URL /
   NEXAR_FILES_URL), recording every upload and release, so a push is checked without Altium 365. FakeGitHub answers the
   agent's pull-request calls ([agent] github_api); both run over HTTPS with a throwaway certificate (REQUESTS_CA_BUNDLE)."""
-import json, os, signal, subprocess, sys, threading, time
+import json, os, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -323,7 +323,7 @@ def ecadlib_killed(cwd, *args, env=None, when=None, timeout=300):
         killed, t0 = False, time.time()
         while p.poll() is None and time.time() - t0 < timeout:
             if when():
-                os.kill(p.pid, signal.SIGKILL)
+                p.kill()                                    # SIGKILL; TerminateProcess on Windows
                 killed = True
                 break
             time.sleep(0.02)

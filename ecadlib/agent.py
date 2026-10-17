@@ -155,12 +155,13 @@ def run_lock(ws, create=True):
     if create:
         d.mkdir(parents=True, exist_ok=True)
     f = open(d / "run.lock", "a+" if create else "r")
+    got = False
     try:
         try:
             try:
                 import fcntl
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except ImportError:                     # Windows
+            except ImportError:                     # Windows: locks a byte range from the position, so byte 0 for all
                 import msvcrt
                 f.seek(0)                           # msvcrt locks bytes from the file position: "a+" starts at the end,
                 msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)   # which moves once the pid is written: always byte 0
@@ -172,6 +173,13 @@ def run_lock(ws, create=True):
                 f.seek(0); f.truncate(); f.write(f"{os.getpid()} {stamp()}\n"); f.flush()
         yield got
     finally:
+        if got and os.name == "nt":
+            import msvcrt
+            try:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
         f.close()
 
 

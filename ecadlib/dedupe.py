@@ -274,8 +274,7 @@ class Collector:
                 import pandas as pd
                 tables = {k: v.fillna("").astype(str).to_dict("records") for k, v in pd.read_excel(f, sheet_name=None, dtype=str).items()}
             else:
-                from urllib.parse import quote       # a folder named "Lib #2" must not end the URI path (read nothing)
-                with contextlib.closing(sqlite3.connect(f"file:{quote(Path(f).resolve().as_posix(), safe='/:')}?mode=ro", uri=True)) as con:
+                with contextlib.closing(sqlite3.connect(Path(f).resolve().as_uri() + "?mode=ro", uri=True)) as con:   # closed: Windows locks open files
                     con.row_factory = sqlite3.Row
                     for (t,) in con.execute("select name from sqlite_master where type='table'"):
                         tables[t] = [dict(r) for r in con.execute(f'select * from "{t}"')]
@@ -368,9 +367,9 @@ def find_groups(col, keep=(), ignore=()):
 # ---------------------------------------------------------------- merge
 def _rel(f, base):
     try:
-        return os.path.relpath(Path(f).resolve(), Path(base).resolve())
+        return os.path.relpath(Path(f).resolve(), Path(base).resolve()).replace(os.sep, "/")
     except ValueError:                                        # other drive on Windows
-        return str(Path(f).resolve())
+        return Path(f).resolve().as_posix()
 
 
 def merge(items, groups, base, kinds=("mpn", "footprint", "symbol"), who="ecadlib dedupe"):

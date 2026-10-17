@@ -1,0 +1,163 @@
+name: windows
+
+# The Windows side: the test suite on Windows, and the installer (ecadlib-setup-<version>.exe) that people who never
+# use a terminal download. The installer is PyInstaller (installer/windows/ecadlib.spec: Python and every dependency
+# bundled, no Python install needed) wrapped by Inno Setup (installer/windows/ecadlib.iss), then installed, run and
+# uninstalled here to prove it works. release.yml calls this on a tag and attaches the installer to the release.
+#
+# Code signing (Azure Artifact Signing, formerly Trusted Signing): skipped until the repository has these set
+# (Settings > Secrets and variables > Actions; docs/code-signing.md says where each value comes from):
+#   variables  AZURE_SIGNING_ENDPOINT (e.g. https://weu.codesigning.azure.net/), AZURE_SIGNING_ACCOUNT, AZURE_SIGNING_PROFILE
+#   secrets    AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+# Then both .exe files and the installer are signed and timestamped, and the build checks the signatures.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Install poppler (pdftoppm, for the datasheet picture tests)
+        shell: pwsh
+        run: |
+          choco install poppler -y --no-progress
+          if (-not (Get-Command pdftoppm -ErrorAction SilentlyContinue)) {
+            $bin = (Get-ChildItem "$env:ChocolateyInstall\lib\poppler" -Recurse -Filter pdftoppm.exe | Select-Object -First 1).DirectoryName
+            $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          }
+      - name: Run all tests (offline; no secrets needed)
+        env:
+          SOURCE_DATE_EPOCH: "1791936000"
+          PYTHONUTF8: "1"
+        run: python -m tests.run_all
+
+  installer:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install ecadlib and PyInstaller
+        run: python -m pip install ".[all]" pyinstaller
+      - name: Build the app (PyInstaller)
+        run: |
+          python installer/windows/make_icon.py build/ecadlib.ico
+          pyinstaller --noconfirm installer/windows/ecadlib.spec
+          Get-ChildItem dist/ecadlib -Filter *.exe
+      - name: Sign the app (Azure Artifact Signing)
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist\ecadlib
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Smoke-test the built app
+        env:
+          ECADLIB_HOME: ${{ runner.temp }}\ecadlib-home
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = "dist\ecadlib\ecadlib.exe"
+          & $exe --version; if ($LASTEXITCODE) { exit 1 }
+          & $exe doctor --workspace "$env:RUNNER_TEMP\ws"; if ($LASTEXITCODE) { exit 1 }
+          & $exe demo -o "$env:RUNNER_TEMP\demo"; if ($LASTEXITCODE) { exit 1 }
+          "sk-test-not-a-real-key" | & $exe keys set ANTHROPIC_API_KEY --stdin; if ($LASTEXITCODE) { exit 1 }
+          if ((Get-Content "$env:ECADLIB_HOME\keys.json" -Raw) -notmatch '"dpapi:') { throw "key not encrypted with DPAPI" }
+          & $exe keys list; if ($LASTEXITCODE) { exit 1 }
+          # the desktop app, without its window: it must answer on the port and serve the setup page
+          $app = Start-Process "dist\ecadlib\ecadlib-app.exe" -ArgumentList "--no-window","--no-browser","--port","8790","--workspace","$env:RUNNER_TEMP\appws" -PassThru
+          $ok = $false
+          foreach ($i in 1..60) {
+            Start-Sleep -Seconds 1
+            try { $s = Invoke-RestMethod "http://127.0.0.1:8790/api/setup"; $ok = $true; break } catch { }
+          }
+          if (-not $ok) { Get-Content "$env:ECADLIB_HOME\app.log" -ErrorAction SilentlyContinue; throw "the app did not start" }
+          if (-not $s.frozen) { throw "not running the frozen app" }
+          $page = Invoke-WebRequest "http://127.0.0.1:8790/setup" -UseBasicParsing
+          if ($page.Content -notmatch "ecadlib setup") { throw "no setup page" }
+          $alt = Invoke-RestMethod "http://127.0.0.1:8790/api/setup/altium" -Method Post -ContentType "application/json" -Body "{}"
+          if (-not (Test-Path $alt.project)) { throw "no Altium script project" }
+          if (-not (Test-Path $alt.menu_file)) { throw "no Altium menu file" }
+          Select-String -Path (Join-Path $alt.folder "ecadlib_menu.ini") -Pattern "^command=.*ecadlib.exe"
+          Stop-Process -Id $app.Id -Force
+      - name: Install Inno Setup
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Build the installer (Inno Setup)
+        run: |
+          $ver = python -c "import ecadlib; print(ecadlib.__version__)"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$ver" installer\windows\ecadlib.iss
+          if ($LASTEXITCODE) { exit 1 }
+          Get-ChildItem dist -Filter ecadlib-setup-*.exe | Format-Table Name, Length
+      - name: Sign the installer (Azure Artifact Signing)
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Check the signatures
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        run: |
+          $files = @(Get-ChildItem dist -Filter ecadlib-setup-*.exe) + @(Get-ChildItem dist\ecadlib -Filter *.exe)
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            "$($f.Name): $($sig.Status) $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne "Valid") { throw "$($f.Name) is not validly signed" }
+          }
+      - name: Install, run and uninstall it (current user, silent)
+        env:
+          ECADLIB_HOME: ${{ runner.temp }}\ecadlib-home-2
+        run: |
+          $ErrorActionPreference = "Stop"
+          $setup = (Get-ChildItem dist -Filter ecadlib-setup-*.exe)[0].FullName
+          Start-Process $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/CURRENTUSER","/TASKS=addtopath","/LOG=$env:RUNNER_TEMP\install.log" -Wait
+          $dir = "$env:LOCALAPPDATA\Programs\ecadlib"
+          if (-not (Test-Path "$dir\ecadlib-app.exe")) { Get-Content "$env:RUNNER_TEMP\install.log"; throw "not installed in $dir" }
+          $lnk = Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Recurse -Filter "ecadlib*.lnk"
+          if (-not $lnk) { throw "no Start menu entry" }
+          $lnk | Format-Table Name
+          & "$dir\ecadlib.exe" --version; if ($LASTEXITCODE) { exit 1 }
+          if ((Get-ItemProperty HKCU:\Environment).Path -notlike "*$dir*") { throw "not added to PATH" }
+          Start-Process "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES" -Wait
+          Start-Sleep -Seconds 3
+          if (Test-Path "$dir\ecadlib.exe") { throw "uninstall left the program behind" }
+          if ((Get-ItemProperty HKCU:\Environment).Path -like "*$dir*") { throw "uninstall left PATH changed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/ecadlib-setup-*.exe
+          if-no-files-found: error
