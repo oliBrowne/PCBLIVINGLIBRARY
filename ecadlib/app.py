@@ -877,7 +877,8 @@ class Workspace:
         elif action.startswith("tool:"):
             reg = H._READERS[action[5:]]
             items = json.loads(self.inside(pc["plan"]).read_text(encoding="utf-8"))
-            out = reg["fix"](self, self.inside(pc["plan"]), items[pc["item"]])
+            out = reg["fix"](self, self.inside(pc["plan"]), items[pc["item"]],
+                             **({"bom": pc["bom"]} if getattr(reg["fix"], "wants_bom", False) else {}))
             what = f"made the {reg['label']} version"
         else:
             raise ValueError(f"{action!r} runs from the web page, not here")

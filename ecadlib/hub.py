@@ -49,7 +49,7 @@ HISTORY_MAX = 4 * 1024 * 1024
 STATE = "state.json"
 BULK = 40                        # more added/removed copies than this in one file in one scan: one event for the file
 NOT_PARAMS = {"comment", "description", "designator", "hiddennetname", "value"}
-MPN_FIELDS = ("manufacturer part number", "mpn", "mfr part number", "manufacturer_part_number", "mfr_pn", "mpn1",
+MPN_FIELDS = ("manufacturer part number", "manufacturer part", "mpn", "mfr part number", "manufacturer_part_number", "mfr_pn", "mpn1",
               "manufacturer part number 1")
 MFR_FIELDS = ("manufacturer", "manufacturer 1", "mfr", "manufacturer name")
 
@@ -65,7 +65,7 @@ def register_tool(tool, label, exts, read, workspace_dirs=(), fix=None):
                     "pads": [(number, x_mm, y_mm, w_mm, h_mm, rot_deg, drilled)], "pins": [(number, name)]}]
     with y pointing up (Altium's and dedupe's frame). workspace_dirs: folders inside the workspace where ecadlib's own
     exporter writes this tool's files (scanned as ecadlib's copies). fix(ws, plan_path, item) -> dict: optional
-    "make this tool's copy" action for a part ecadlib built."""
+    "make this tool's copy" action for a part ecadlib built (a fix with wants_bom = True also gets bom=)."""
     if tool not in LABEL:
         TOOLS.append((tool, label))
         LABEL[tool] = label
@@ -82,12 +82,9 @@ def _plugin_readers():
 
 
 def _builtin_readers():
-    """Fusion / EasyEDA readers from their exporter modules, when this ecadlib has them."""
-    for mod in ("fusion_lib", "eagle_lib", "easyeda_pro"):
-        with contextlib.suppress(ImportError):
-            m = __import__(f"{__package__}.{mod}", fromlist=["hub_register"])
-            if hasattr(m, "hub_register"):
-                m.hub_register(register_tool)
+    """Fusion / EasyEDA readers (hub_tools, on eagle-export's and easyeda-export's read-back), when this ecadlib has them."""
+    from . import hub_tools
+    hub_tools.hub_register(lambda tool, *a, **k: None if tool in _READERS else register_tool(tool, *a, **k))  # a plugin's wins
 
 
 # ------------------------------------------------------------------ small helpers

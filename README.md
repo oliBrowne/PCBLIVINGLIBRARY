@@ -1954,8 +1954,10 @@ it copies live in `<workspace>/hub/`).
   libraries, "in Altium but not in KiCad", sorted by name, last changed or what needs a look.
 * **Other tools.** `hub.register_tool(tool, label, exts, read, workspace_dirs=(), fix=None)` adds a reader (and
   optionally a "make this tool's copy" fix); `read(path)` returns one dict per part with `name`, `mpn`, `pads`
-  `[(number, x, y, w, h, rot, drilled)]` in mm with y up, and `pins` `[(number, name)]`. The Fusion (Eagle .lbr) and
-  EasyEDA Pro exporters register theirs; plugins can too (entry point group `ecadlib.hub_tools`). Until a reader is
+  `[(number, x, y, w, h, rot, drilled)]` in mm with y up, and `pins` `[(number, name)]`. `ecadlib/hub_tools.py`
+  registers Fusion (.lbr) and EasyEDA Pro (.elibz) readers on eagle-export's and easyeda-export's read-back code when
+  this ecadlib has those exporters, with *Make the Fusion version* / *Make the EasyEDA version* buttons for parts
+  ecadlib built; plugins can add more (entry point group `ecadlib.hub_tools`). Until a reader is
   there the column says "no reader yet".
 * Settings in `ecadlib.toml`:
 
