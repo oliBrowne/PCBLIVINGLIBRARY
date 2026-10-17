@@ -118,6 +118,15 @@ def _xl_text(v):
     return str(v)
 
 
+def _decode_line(b):
+    for enc in ("utf-8-sig", "cp1252"):
+        try:
+            return b.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return b.decode("latin-1")
+
+
 def _read_csv(p):
     """Tolerant CSV read: Altium ActiveBOM exports put title rows ('Bill of Materials;;;;;', a blank
     row) above a wider header, which pandas' sniffer chokes on. Rows may be ragged; they are padded."""
@@ -128,12 +137,11 @@ def _read_csv(p):
         data = data.decode(utf16_without_bom(data), errors="replace").encode("utf-8")
     if b"\x00" in data[:4096]:
         raise ValueError(f"{p}: not a text BOM (binary data); save it as CSV or XLSX")
-    for enc in ("utf-8-sig", "cp1252", "latin-1"):                       # Excel 'CSV' on Windows is cp1252
-        try:
-            text = data.decode(enc)
-            break
-        except UnicodeDecodeError:
-            continue
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:                                            # Excel 'CSV' on Windows is cp1252; decided
+        text = "".join(_decode_line(ln) for ln in data.splitlines(keepends=True))   # per line: one cp1252 byte in a
+                                                                          # UTF-8 file must not turn 10µF into 10ÂµF
     lines = [ln for ln in text.splitlines(keepends=True) if ln.strip()]  # keepends: a quoted cell may span lines
     if not lines:
         raise ValueError(f"{p}: the BOM file is empty")
@@ -198,10 +206,15 @@ def read_bom(path, columns=None, rules=None):
                 continue
         if _EXP.fullmatch(d.get("value", "")):                         # a CSV that kept Excel's 1e-07
             d["value"] = _plain_number(d["value"])
-        if _is_total(d):
-            continue                                                     # 'Total;;;12' footer, not a part
+        q = re.fullmatch(r"(\d+)(?:,0{1,2}|\.0+)", d.get("qty", ""))
+        if q:                                                            # '1,0' / '2,00' (European Excel), '1.0':
+            d["qty"] = q.group(1)                                        # not 10 / 200 pieces ('1,000' stays 1000)
+        if _is_total(d) or not any(v for f, v in d.items() if f not in ("qty", "dnp")):
+            continue                                                     # 'Total;;;12' footer / a bare sum, not a part
         if "dnp" in d:
             d["dnp"] = _yes(d["dnp"])
+        elif DNP_MARK.search(d.get("value", "")) or DNP_MARK.fullmatch(d.get("mpn", "")):
+            d["dnp"] = True                                              # no DNP column: Value 'DNP' / '10k (DNF)'
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
         lines.append(d)
@@ -235,13 +248,18 @@ def _read_excel(p):
     return max(sheets, key=_header_score) if sheets else pd.DataFrame()
 
 
-TOTAL = re.compile(r"(grand\s*|sub\s*)?totals?\s*:?", re.I)
+TOTAL = re.compile(r"(grand\s*|sub\s*)?totals?(\s+(parts?|components?|qty|quantity|count|items?|lines?|pcs))?\s*:?\s*\d*",
+                   re.I)                                                  # 'Total', 'Total parts:', 'Total Qty', 'Total: 42'
 
 
 def _is_total(d):
     """A totals footer: some cell says 'Total' and the row names no part."""
     return (not any(d.get(f) for f in ("mpn", "lcsc", "value", "libref", "footprint", "manufacturer"))
             and any(TOTAL.fullmatch(str(v).strip()) for v in d.values()))
+
+
+DNP_MARK = re.compile(r"(?<![A-Za-z0-9])(dnp|dnf|dni|do\s*not\s*(populate|place|fit|install|mount)|not\s*(fitted|populated|placed))"
+                      r"(?![A-Za-z0-9])", re.I)
 
 
 def _yes(v):
@@ -280,7 +298,7 @@ def part_numbers(ln):
 def count_refs(s):
     """'R1, R2, R5-R8' -> 6 (ranges like R5-R8, R5-8 or 'R5 - R8' count every designator). Units of one multi-unit
     part ('U1A, U1B', Altium's suffixed designators) count once, as does a designator listed twice."""
-    s = re.sub(r"(?<=[0-9A-Za-z])\s*[-\u2013\u2014]\s*(?=[A-Za-z]*\d)", "-", s.strip())   # 'R1 – R4' -> 'R1-R4'
+    s = re.sub(r"(?<=[0-9A-Za-z])\s*[-\u2013\u2014~\uff5e]\s*(?=[A-Za-z]*\d)", "-", s.strip())   # 'R1 – R4', 'C1~C4' -> 'R1-R4'
     seen, extra = set(), 0
     for tok in re.split(r"[,;\s]+", s):
         m = re.fullmatch(r"([A-Za-z]+)(\d+)[A-Za-z]?(?:-(?:\1)?(\d+)[A-Za-z]?)?", tok)
@@ -328,6 +346,9 @@ def triage(lines, index, provs, http):
             notes.append(f"part number taken from {'Comment/value' if pns[0] == ln.get('value', '').strip() else 'LibRef'}: {pns[0]}")
         if ln.get("altium_mpn_source") == "Comment":
             notes.append("MPN taken from the schematic Comment (the component has no Manufacturer Part Number parameter)")
+        if re.fullmatch(r"\d+(\.\d+)?E\+\d+", ln.get("mpn", ""), re.I):     # Excel turned 530470610 into 5.30E+08
+            notes.append(f"MPN '{ln['mpn']}' is in Excel scientific notation: its digits were lost; "
+                         "re-export the BOM with the MPN column formatted as text")
         if ln.get("lcsc_invalid"):
             notes.append(f"ignored malformed LCSC '{ln['lcsc_invalid']}'")
         if not (sym and fp_key):

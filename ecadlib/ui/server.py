@@ -73,6 +73,7 @@ TEAM_HEADERS = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", 
                 "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' "
                 "'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
                 "form-action 'self'; frame-ancestors 'none'"}
+LOCAL_HEADERS = {"X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'"}
 
 
 class Refused(Exception):
@@ -368,6 +369,9 @@ def make_handler(ws: Workspace, team=None):
                     self.send_header(k, v)
                 if team.tls:
                     self.send_header("Strict-Transport-Security", "max-age=31536000")
+            else:                                          # no other page may frame the UI (clickjacking)
+                for k, v in LOCAL_HEADERS.items():
+                    self.send_header(k, v)
             for k, v in (headers or {}).items():
                 self.send_header(k, v)
             self.end_headers()
@@ -514,7 +518,10 @@ def make_handler(ws: Workspace, team=None):
             return data
 
         def _json(self):
-            b = json.loads(self._body(MAX_JSON) or b"{}")
+            try:
+                b = json.loads(self._body(MAX_JSON) or b"{}")
+            except RecursionError:
+                raise ValueError("the JSON body is nested too deeply") from None
             if not isinstance(b, dict):
                 raise ValueError("expected a JSON object")
             self._fields = {k: b[k] for k in AUDIT_KEYS if k in b and isinstance(b[k], (str, bool, int, list))

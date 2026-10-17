@@ -106,7 +106,9 @@ class CachedHTTP:
                 r = self.s.request(method, url, data=body, headers=headers, timeout=timeout or self.timeout)
         except requests.RequestException as e:
             m = re.search(r"Tunnel connection failed: ([^'\")]+)", str(e))
-            msg = f"{type(e).__name__}: " + (f"proxy CONNECT refused ({m.group(1).strip()})" if m else str(e)[:120])
+            text = re.sub(r"([?&])([^=&\s'\"]+)=([^&\s'\")]*)",          # the URL in the message: no ?apiKey= value
+                          lambda q: f"{q[1]}{q[2]}=REDACTED" if SECRET_Q.search(q[2]) else q[0], str(e))
+            msg = f"{type(e).__name__}: " + (f"proxy CONNECT refused ({m.group(1).strip()})" if m else text[:120])
             self.log.append((method, url, msg, False))
             return Response(0, "", error=msg)
         self.log.append((method, url, r.status_code, False))
