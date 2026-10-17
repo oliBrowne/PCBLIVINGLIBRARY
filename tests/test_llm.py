@@ -25,14 +25,16 @@ def h(o):
 
 # Request hashes captured from the code BEFORE ecadlib.llm existed (base 6894b8e, same scenarios as below), so a Claude
 # request with the default settings is proven byte-identical to what was sent before.
-GOLDEN = {"build_sync": "7438ca2bc61c4d587fed00cf41d1d51300fd7fe8098d42828c6e835e68ecc62b",
-          "build_batch": "984323ae43fcd14d5c04f5c9aa0a2900f901a07c0a44d19caca7335df00b8d23",
-          "build_url_haiku": "9f7f31bd4492f3173c8c814125f8f16cf7531a4c4cb8068f654161365da5a650",
-          "reader_sync_calls": ["670182b12227596423de63c722866378ab4252e3784c029a0038bc1a4ac8faec",
-                                "e0a230d679c1a1cc1197698b813b757c1ef319a436f8b138b4e5e993e4df8e3d"],
+# Updated once (review): the output schema's `tab` held a dangling "$ref": "#/$defs/dim" (no $defs in the request);
+# it is now inlined. That is the only difference from the earlier hashes (checked by re-inserting the $ref).
+GOLDEN = {"build_sync": "c5729ab44d99fd166f0e8afa4f32be791506ebdc83ce1c91eb9cc95dc1534ddd",
+          "build_batch": "59179fbe90c78027d8ddd0bcf88fc5605cae236ef4521aa05a02dc1583cf022b",
+          "build_url_haiku": "999b76b192734e3dfaf0631155a7c110411a2778e623337bd80f41e87edf5ac6",
+          "reader_sync_calls": ["64db6094e42a8b67c337fae5613fcb01e08e0571ec79407d51477a0b6faa9454",
+                                "3c6a04b23b0da59a198036da7d965aabb4cbb6b482487833d22c96bc5f3e0fb2"],
           "visual": "2617a48dcb947471108561ff7f8eabce190b1cb553e2d2c4cbf4ff3974a03181",
-          "batch_posts": ["34452d3fe93a19ef2693e5af90f105f6a28d4c1ef7e03607532fb763b9e7ceae",
-                          "033ccd5094fe4d2d331a802f0a6eda344f78ca230d7bf1650c8ba35cee67a0e1"]}
+          "batch_posts": ["a10f4baee5803e22880ba1337a3d81e7d4387ad38ed09a1f23de7dcbf1d87719",
+                          "557fbd0998788628a3bddc53d1c39b6d2c608d0e27865cfd3c4c9c5ad82544f0"]}
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 

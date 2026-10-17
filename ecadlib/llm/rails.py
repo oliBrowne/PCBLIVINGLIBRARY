@@ -117,6 +117,10 @@ def extract_json(text):
     if i > 0 or j < len(t) - 1:
         fixes.append("text around the JSON removed")
     t = t[i:j + 1]
+    try:                                              # valid once unwrapped: the literal fixes below would edit strings
+        return json.loads(t), fixes
+    except ValueError:
+        pass
     for rx, rep, what in ((r",\s*([}\]])", r"\1", "trailing commas"), (r"\bNone\b", "null", "None -> null"),
                           (r"\bTrue\b", "true", "True -> true"), (r"\bFalse\b", "false", "False -> false")):
         t2 = re.sub(rx, rep, t)

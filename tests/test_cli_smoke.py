@@ -218,7 +218,7 @@ def test_third_party_imports_are_declared():
                      [node.module] if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module else [])
             for n in names:
                 top = n.split(".")[0]
-                if top != "ecadlib" and top not in sys.stdlib_module_names:
+                if top != "ecadlib" and top not in sys.stdlib_module_names and top != "tomllib":   # stdlib from 3.11 (tomli on 3.10)
                     used.setdefault(top, f"{f.name}:{node.lineno}")
     undeclared = {m: where for m, where in used.items() if m.lower() not in declared and m not in OPTIONAL}
     assert not undeclared, f"imported but not in [project] dependencies: {undeclared}"

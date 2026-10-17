@@ -304,8 +304,9 @@ def main(argv=None):
             print(f"{t['name']:<20} {t['type']:<6} ${t['url_env']} ({st})  events: {', '.join(sorted(t['events']))}")
         return 0
     if a.target:
-        rules = dict(rules, notify=dict(rules["notify"], targets=[
-            t for i, t in enumerate(rules["notify"]["targets"]) if (t.get("name") or f"{t['type']}{i + 1}") == a.target]))
+        rules = dict(rules, notify=dict(rules["notify"], targets=[      # the name kept: alone it would be renumbered 1
+            dict(t, name=t.get("name") or f"{t['type']}{i + 1}") for i, t in enumerate(rules["notify"]["targets"])
+            if (t.get("name") or f"{t['type']}{i + 1}") == a.target]))
         if not rules["notify"]["targets"]:
             print(f"no target named {a.target!r}", file=sys.stderr)
             return 1
