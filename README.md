@@ -2078,6 +2078,37 @@ For people who are used to installers, not terminals. The guide for them is `doc
 Code signing: the build signs the app and the installer with Azure Artifact Signing once the repository has the
 secrets and variables in `docs/code-signing.md`; until then it is unsigned. Still to do: macOS (a `.dmg` or `.pkg`).
 
+## 40. `house_style.py`: teach it your house style (`ecadlib style`)
+
+Point ecadlib at your current library and tell it what you want, and new parts come out looking like yours. Full
+guide: [docs/house-style.md](docs/house-style.md).
+
+* `ecadlib style learn --from DIR` (offline, no model) learns what `ecadlib init` infers, plus description patterns
+  per category, how values are written (`±1%`, `16 V`), the parameters most parts carry, the active-low pin notation
+  and a few example parts. It all goes into `house_style.json` next to `ecadlib.toml`.
+* `ecadlib style direct "TEXT"` adds your direction. Direction is the instruction and the library is the evidence;
+  where they disagree, the direction wins. `learn --ai` has the model you choose (`[style]`, else `[ai]`: Claude,
+  another API or a local one) write a style guide and turn the direction into `ecadlib.toml` settings. Every
+  setting is validated before it is kept, and `--write-rules` writes them.
+* New parts follow the style automatically (`[style] apply = "auto"`). Code applies what can be applied exactly:
+  description patterns, value formats, and pin names on datasheet symbols. `style check PLAN` and
+  `style apply PLAN [--ai]` work on an existing plan.
+* The model's help scales with its tier (examples, batch size, a worked example, the schema in the prompt). For every
+  model the answer is checked the same way: no new numbers, no new parameters, and no identity fields (MPNs,
+  manufacturer, links), which the model never sees.
+* `ecadlib style export-dataset` writes your library as chat-format JSONL for fine-tuning a model of your own (OpenAI,
+  Unsloth, axolotl, mlx-lm). Serve the result locally and name it in `[style] model`.
+* Also in the UI (**Settings: your house style**) and MCP (`learn_house_style`, `house_style`, `check_house_style`,
+  `apply_house_style`). Tests: `tests/test_house_style.py`, which runs offline with a fake model for each tier.
+* **Not verified:** no real customer library has been scanned and no real model has been called.
+
+## Credits
+
+Parts converted from EasyEDA (the `easyeda` source, by LCSC number) come from the **JLCEDA/EasyEDA Official Library**
+([easyeda.com](https://easyeda.com), [lceda.cn](https://lceda.cn)), whose data asks anyone reusing it to credit it.
+ecadlib keeps that credit on every converted part: in the footprint's description, as a `Credit` property on the KiCad
+symbol, and as a `Library Credit` parameter on the Altium part. Leave it in place if you share or publish the library.
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:
