@@ -111,7 +111,7 @@ def test_build_writes_well_formed_files():
     out = d / "menu dir"
     rep = AM.build(out, "D:\\ecadlib ws", None, win_dir="D:\\Altium Scripts\\ecadlib (menu)")
     assert rep["problems"] == [] and rep["menu_file"] == AM.PREFS, rep
-    units = (AF.DIALOG_UNIT, AF.DIALOG_FORM, AF.PANEL_UNIT, AF.PANEL_FORM)
+    units = (AF.DIALOG_UNIT, AF.DIALOG_FORM)
     assert set(rep["written"]) == {AM.PROJECT, AM.UNIT, *units, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README, AM.PREFS}
     for f in (AM.PROJECT, AM.UNIT, *units, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README):
         raw = (out / f).read_bytes()
@@ -120,8 +120,8 @@ def test_build_writes_well_formed_files():
         assert not re.search(rb"(?i)sk-ant|api[_-]?key\s*=|NEXAR_TOKEN\s*=|password\s*=", raw), f"{f}: no secrets"
     prj = configparser.ConfigParser()
     prj.read_string((out / AM.PROJECT).read_text())
-    assert prj.sections() == ["Design", "Document1", "Document2", "Document3"]
-    assert [prj[f"Document{i}"]["DocumentPath"] for i in (1, 2, 3)] == [AM.UNIT, AF.DIALOG_UNIT, AF.PANEL_UNIT]
+    assert prj.sections() == ["Design", "Document1", "Document2"]
+    assert [prj[f"Document{i}"]["DocumentPath"] for i in (1, 2)] == [AM.UNIT, AF.DIALOG_UNIT]
     ini = configparser.ConfigParser(interpolation=None)
     ini.read_string((out / AM.INI).read_text())
     assert {k for k in ini["ecadlib"]} == {"workspace", "library", "name", "command", "hidden", "timeout_s", "port", "offline",
@@ -200,7 +200,7 @@ def test_menu_file_follows_altiums_format():
 def test_pas_uses_only_documented_calls_and_is_balanced():
     text = AM.pas_text()
     assert any("OpenDialog is not declared" in p for p in AM.pas_problems(text)), "the dialog unit is what declares it"
-    assert AM.pas_problems(text, known=AM.unit_names(AF.dialog_pas_text()) | AM.unit_names(AF.panel_pas_text())) == []
+    assert AM.pas_problems(text, known=AM.unit_names(AF.dialog_pas_text())) == []
     toks = AM.pas_tokens(text)
     routines = AM.pas_routines(toks)
     for proc, _, _ in AM.PROCS:
@@ -247,11 +247,9 @@ def test_pas_checker_catches_mistakes():
 def test_dialog_form_matches_its_unit_and_the_results():
     """The ecadlib dialog (ecadlib_dialog.pas + .dfm): every component the unit names is in the form, every handler
     the form names is in the unit, the .dfm nests object / end, and the keys the dialog reads are ones run-job writes."""
-    files = {AM.UNIT: AM.pas_text(), AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text(),
-             AF.PANEL_UNIT: AF.panel_pas_text(), AF.PANEL_FORM: AF.panel_dfm_text()}
+    files = {AM.UNIT: AM.pas_text(), AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text()}
     assert AM.project_problems(files) == []
-    assert "FormKind = fkServerPanel" in files[AF.PANEL_FORM] and "OnClick = AddClick" in files[AF.PANEL_FORM]
-    assert "OpenDialog('add', '', Trim(EditMpn.Text))" in files[AF.PANEL_UNIT]
+    assert "OnClose = EcadlibDialogClose" in files[AF.DIALOG_FORM], "a closed form's timer must stop (AD 26.10)"
     dfm = files[AF.DIALOG_FORM]
     names = AF.dfm_names(dfm)
     assert names[0] == "EcadlibDialog" and len(names) == len(set(names))
@@ -292,11 +290,17 @@ def test_progress_file_for_the_live_view():
     pr(6, 6, "writing report\nnow")                                # the Workspace progress(done, total, label) form
     assert got()["done"] == "6" and got()["text"] == "writing report now"
     pr.row("KiCad library", "no symbol | named like X")            # rows are always written
+    t[0] = 2.0
+    pr.step(0, 0, "  done NE555DR      sym=easyeda:C7593 fp=easyeda:C7593")   # librarian log lines, in plain words
+    assert got()["text"] == "NE555DR: checked"
     pr.row("symbol", "EasyEDA", True)
     g = got()
     assert g["rows"] == "2" and g["row1"] == "KiCad library|no symbol / named like X|0" and g["row2"] == "symbol|EasyEDA|1"
     assert (d / "progress.ini").read_bytes()[:2] == b"\xff\xfe" and not list(d.glob("*.tmp"))
     AM.Progress().step(1, 2, "no job: nothing written")
+    # the columns do not wrap: values are cut at a word to what fits (seen clipped on a real AD 26.10 dialog)
+    r = AM.row_text("KiCad library", "library index unavailable (kicad-symbols tree page 3 timed out)")
+    assert r == "KiCad library|library index unavailable...|0" and all(len(x) <= 30 for x in r.split("|"))
     assert AM.rows_result(["a|1|1"], "1 line") == {"big": "1 line", "rows": 1, "row1": "a|1|1"}
 
 
@@ -578,7 +582,7 @@ def test_cli_workspace_and_mcp():
     ws = Workspace(d / "ws2", offline=True)
     rep = M.call_tool(ws, "altium_menu", {"win_dir": "D:\\ws2\\altium_menu"})
     assert rep["problems"] == [] and rep["menu_file"] == AM.PREFS and rep["folder"] == "altium_menu"
-    assert set(rep["procedures"]) == {"AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue", "ShowEcadlibPanel"}
+    assert set(rep["procedures"]) == {"AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue"}
     c = AM.load_config(ws.root / "altium_menu" / AM.INI)
     assert c["workspace"].resolve() == ws.root and c["library"].resolve() == ws.root / "altium_library"
     assert "altium_menu" in {t["name"] for t in M.TOOLS}

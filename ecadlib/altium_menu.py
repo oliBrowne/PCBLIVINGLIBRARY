@@ -14,9 +14,7 @@
         AddPartFromMPN     asks for an MPN (+ optional manufacturer), builds the part, reinstalls the library
         CheckProjectBOM    checks the focused project's BOM, opens the report, offers to fill the library
         OpenReviewQueue    opens the ecadlib web UI at the review queue (starts `ecadlib ui` when it is not running)
-        ShowEcadlibPanel   opens the ecadlib panel (an Altium panel: MPN box, Check project BOM, recent results)
-  ecadlib_dialog.pas + .dfm, ecadlib_panel.pas + .dfm
-                                    the ecadlib dialog and panel (ecadlib.altium_forms): dark, like Altium's own, with
+  ecadlib_dialog.pas + .dfm         the ecadlib dialog (ecadlib.altium_forms): dark, like Altium's own, with
                                     live progress read from the job's progress.ini; dialogs=0 in the .ini turns it off
   ecadlib_menu.ini                  settings: workspace, library folder, command, hidden, timeout_s, port (kept when
                                     it exists, so your edits survive a rebuild)
@@ -58,8 +56,7 @@ PROJECT, UNIT, INI = "ecadlib_menu.PrjScr", "ecadlib_menu.pas", "ecadlib_menu.in
 RUN_CMD, RUN_VBS, PREFS, README = "ecadlib_run.cmd", "ecadlib_run.vbs", "ecadlib_menu.DXPPrf", "ALTIUM_MENU_README.txt"
 PROCS = [("AddPartFromMPN", "&Add part from MPN...", "Build a part from its manufacturer part number with ecadlib"),
          ("CheckProjectBOM", "&Check this project BOM", "Check the focused project's BOM against the library; offer to fill it"),
-         ("OpenReviewQueue", "Open &review queue", "Open the ecadlib web UI at the review queue"),
-         ("ShowEcadlibPanel", "ecadlib &panel", "Open the ecadlib panel next to your design")]
+         ("OpenReviewQueue", "Open &review queue", "Open the ecadlib web UI at the review queue")]
 MENU_BOM = "uploads/altium-menu/parts.csv"
 HEADER = ["Designator", "Qty", "Value", "Footprint", "Manufacturer", "Mfr. Part #", "LCSC Part Number", "Description", "Datasheet"]
 ACTIONS = ("add-part", "check-bom", "fill", "queue", "open")
@@ -410,11 +407,6 @@ Begin
     ShowResult(Title, Job, Publish(Job));
 End;
 
-Procedure ShowEcadlibPanel;
-Begin
-    ShowPanel;
-End;
-
 Procedure OpenReviewQueue;
 Var
     Job : String;
@@ -576,12 +568,10 @@ def readme_text(win_dir, prefs):
    this PC to get the ready-made menu file.)""")
     return f"""ecadlib menu for Altium Designer (written by `ecadlib altium-menu build`, ecadlib {__version__})
 
-What it adds: an "ecadlib" menu (or toolbar buttons) with four entries:
+What it adds: an "ecadlib" menu (or toolbar buttons) with three entries:
   Add part from MPN        asks for a manufacturer part number, builds the part, reinstalls the library
   Check this project BOM   checks the focused project's BOM: counts per kind, then Later / Fill the library now
   Open review queue        opens the ecadlib web UI at the review queue in your browser
-  ecadlib panel            an Altium panel with an MPN box, Check project BOM and the last results. While it is
-                           open, Altium runs no other script: use its buttons, and close it to run other scripts.
 The entries work in the ecadlib dialog (dark, like Altium's own, with live progress); you stay in Altium. Only the
 review queue (a held part needs a person) and the full BOM report (on request) open in your browser. dialogs=0 in
 {INI} brings back Altium's plain message boxes.
@@ -591,9 +581,9 @@ Needs: ecadlib installed on this PC (pip install ecadlib; `ecadlib doctor` check
 
 Install (once):
 1. Altium: DXP (AD17) or the gear icon (AD18+) > Preferences > Scripting System > Global Projects > Install from
-   file... > {w}\\{PROJECT}. The four procedures now appear in File > Run Script... under {PROJECT}.
+   file... > {w}\\{PROJECT}. The three procedures now appear in File > Run Script... under {PROJECT}.
 2. Menu: right-click any menu or toolbar > Customize... > Categories: [Scripts] (or [Custom]) > drag
-   {UNIT}>AddPartFromMPN, >CheckProjectBOM, >OpenReviewQueue and >ShowEcadlibPanel onto a menu or toolbar; rename them in the entry's
+   {UNIT}>AddPartFromMPN, >CheckProjectBOM, and >OpenReviewQueue onto a menu or toolbar; rename them in the entry's
    properties. Repeat for each editor you want them in (schematic, PCB, library editors).
 {menu}
 3. Try it: open a PCB project and pick ecadlib > Check this project BOM.
@@ -620,9 +610,8 @@ def build(out, workspace=None, library=None, name="ecadlib", command="", win_dir
     if name and not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$", name):
         raise ValueError(f"--name {name!r}: letters, digits, _ . - only")
     from . import altium_forms as AF
-    files = {PROJECT: prjscr_text(UNIT, AF.DIALOG_UNIT, AF.PANEL_UNIT), UNIT: pas_text(),
+    files = {PROJECT: prjscr_text(UNIT, AF.DIALOG_UNIT), UNIT: pas_text(),
              AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text(),
-             AF.PANEL_UNIT: AF.panel_pas_text(), AF.PANEL_FORM: AF.panel_dfm_text(),
              RUN_CMD: run_cmd_text(), RUN_VBS: run_vbs_text(), README: readme_text(win_dir, bool(win_dir))}
     written, kept = [], []
     for fname, text in files.items():
@@ -847,12 +836,12 @@ def unit_names(text):
 
 def project_problems(files):
     """pas_problems of every unit of the script project, each knowing the other units' routines and globals; a form
-    unit also knows its .dfm's components and the form API (altium_forms.FORM_API, PANEL_API). Every handler a .dfm
+    unit also knows its .dfm's components and the form API (altium_forms.FORM_API). Every handler a .dfm
     names (OnClick = X) must be a method of its form in the unit. Problems are prefixed with the file name."""
     from . import altium_forms as AF
-    units = {UNIT: None, AF.DIALOG_UNIT: AF.DIALOG_FORM, AF.PANEL_UNIT: AF.PANEL_FORM}
+    units = {UNIT: None, AF.DIALOG_UNIT: AF.DIALOG_FORM}
     names = {u: unit_names(files[u]) for u in units}
-    api = {**ALTIUM_API, **AF.FORM_API, **AF.PANEL_API}
+    api = {**ALTIUM_API, **AF.FORM_API}
     probs = []
     for u, form_file in units.items():
         others = set().union(*(n for o, n in names.items() if o != u))
@@ -918,7 +907,7 @@ class Progress:
         self.every_s, self.clock, self.last = every_s, clock, None
 
     def step(self, done, total, text):
-        self.done, self.total, self.text = done, total, _one_line(text)[:120]
+        self.done, self.total, self.text = done, total, step_text(text)
         self.flush(force=bool(total) and done >= total)          # the last step always shows
 
     def row(self, label, value="", ok=False):
@@ -940,10 +929,30 @@ class Progress:
             pass
 
 
+def clip(text, n):
+    """One line of at most n characters, cut at a word with "..." when longer (the dialog's columns do not wrap)."""
+    t = _one_line(text)
+    if len(t) <= n:
+        return t
+    cut = t[:n - 3].rsplit(" ", 1)[0] if " " in t[:n - 3] else t[:n - 3]
+    return cut.rstrip(" ,;:(") + "..."
+
+
 def row_text(label, value="", ok=False):
-    """One dialog row: "label|value|1" (the script splits on |, so neither part may hold one)."""
-    clean = lambda v: _one_line(v).replace("|", "/")
-    return f"{clean(label)}|{clean(value)}|{1 if ok else 0}"
+    """One dialog row: "label|value|1" (the script splits on |, so neither part may hold one). The label column fits
+    about 26 characters, the value column about 30 (altium_forms.LABEL_W, WIDTH)."""
+    clean = lambda v, n: clip(str(v).replace("|", "/"), n)
+    return f"{clean(label, 26)}|{clean(value, 30)}|{1 if ok else 0}"
+
+
+def step_text(msg):
+    """A librarian log line -> what the dialog's status line says (it fits about 55 characters)."""
+    t = _one_line(msg)
+    m = re.match(r"^(done|open|skip)\s+(\S+)", t)
+    if m:
+        return clip(f"{m.group(2)}: {'checked' if m.group(1) != 'open' else 'still needs a person'}", 55)
+    t = re.sub(r"\s*\(sources: [^)]*\)?", "", t)
+    return clip(t, 55)
 
 
 def rows_result(rows, big=""):
@@ -1064,7 +1073,7 @@ def part_rows(it, limit=7):
     for t in (it.get("librarian") or {}).get("tried", [])[:4]:
         kind, _, rest = str(t).partition(":")
         if rest and kind.strip() in M.SOURCES:
-            rows.append(row_text(M.SOURCES[kind.strip()], rest.strip()[:48]))
+            rows.append(row_text(M.SOURCES[kind.strip()], rest.strip()))
     for k in ("symbol", "footprint"):
         rows.append(row_text(k, M.source_word(src.get(k)) if src.get(k) else "none yet", bool(src.get(k))))
     st = it.get("status", "")
@@ -1236,8 +1245,10 @@ def fill(cfg, project, progress=None):
     shown = [row_text("ready, in your library" if pub.get("target") != "a365" else "released to Altium 365", s["ready"], s["ready"] > 0)]
     shown += [row_text(label, n) for n, label in ((s["held"], "held for a person"), (s["awaiting_approval"], "waiting for sign-off"),
                                                    (s["duplicates"], "already in the library")) if n]
-    shown += [row_text(r["part"], (r.get("why") or "").split(";")[0][:44]) for r in s.get("review", [])
-              if r.get("status") == "held"][:3]
+    held = [r for r in s.get("review", []) if r.get("status") == "held"]
+    shown += [row_text(r["part"], (r.get("why") or "").split(";")[0]) for r in held[:3]]
+    if len(held) > 3:
+        shown.append(row_text(f"and {len(held) - 3} more held", "in the review queue"))
     res.update(rows_result(shown, f"{s['ready']} of {s['parts']} ready"))
     res["offer_queue"] = "1" if s["held"] or s["awaiting_approval"] else "0"
     return res
@@ -1377,34 +1388,8 @@ def run_job(job, opener=None):
     except Exception as e:                                   # every failure becomes one dialog line with a fix
         res = _error(e)
     write_result(job / "result.ini", res)
-    remember(job.parent.parent / "recent.ini", req.get("action", "") if "req" in dir() else "", res)
     prune_jobs(job.parent, keep=job)
     return res
-
-
-TITLES = {"add-part": "Add part", "check-bom": "BOM check", "fill": "Fill", "queue": "", "open": ""}
-
-
-def remember(path, action, res, keep=5):
-    """recent.ini next to the menu (the panel's "Recent" list): newest first, `keep` entries, one line each."""
-    title = TITLES.get(action, "")
-    if not title:
-        return
-    head = res.get("part") or res.get("mpn") or ""
-    entry = (f"{title}{' ' + head if head else ''}: {res.get('big') or res.get('status', '')}", res.get("message", "")[:70])
-    old = []
-    try:
-        sec = read_ini(path)["recent"]
-        old = [(sec.get(f"title{i}", ""), sec.get(f"text{i}", "")) for i in range(1, keep + 1) if sec.get(f"title{i}")]
-    except (OSError, KeyError, configparser.Error):
-        pass
-    out = {}
-    for i, (t, x) in enumerate([entry] + old[:keep - 1], 1):
-        out[f"title{i}"], out[f"text{i}"] = t, x
-    try:
-        write_result(path, out, section="recent")
-    except OSError:
-        pass
 
 
 def prune_jobs(jobs_dir, days=14, keep=None, now=None):

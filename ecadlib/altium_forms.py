@@ -20,7 +20,8 @@ from . import __version__
 
 DIALOG_UNIT, DIALOG_FORM = "ecadlib_dialog.pas", "ecadlib_dialog.dfm"
 ROWS = 7
-WIDTH = 360
+WIDTH = 420
+LABEL_W = 190             # the rows' left column; the value column gets the rest (Consolas: about 7 px a character)
 
 # Altium's dark UI, as Delphi TColor values ($00BBGGRR)
 BG, HEAD, TEXT, DIM, RULE = "$002E2A2A", "$00242121", "$00E8E8E8", "$009C9C9C", "$00433D3D"
@@ -66,7 +67,7 @@ Var
     Mode : String;
     Phase : String;
     Job : String;
-    Action : String;
+    JobAction : String;
     Project : String;
     Title : String;
     Second : String;
@@ -132,6 +133,22 @@ Begin
     EcadlibDialog.Secondary.Left := EcadlibDialog.Primary.Left - 8 - EcadlibDialog.Secondary.Width;
 End;
 
+Function NoteLines(S : String) : Integer;
+{ How many lines the note wraps to (a word-wrapped TLabel with AutoSize would shrink to its first word). }
+Var
+    k : Integer;
+Begin
+    Result := 1;
+    k := Pos(#10, S);
+    While k > 0 Do
+    Begin
+        Result := Result + 1 + ((k * 7) Div @NOTE_W@);
+        S := Copy(S, k + 1, Length(S));
+        k := Pos(#10, S);
+    End;
+    Result := Result + ((Length(S) * 7) Div @NOTE_W@);
+End;
+
 Procedure Layout;
 Var
     Y : Integer;
@@ -160,6 +177,7 @@ Begin
     End;
     If EcadlibDialog.Note.Visible Then
     Begin
+        EcadlibDialog.Note.Height := NoteLines(EcadlibDialog.Note.Caption) * 17;
         EcadlibDialog.Note.Top := Y + 6;
         Y := Y + EcadlibDialog.Note.Height + 10;
     End;
@@ -220,7 +238,7 @@ Procedure Run(Act : String);
 Var
     Code : Integer;
 Begin
-    Action := Act;
+    JobAction := Act;
     Phase := 'run';
     Waited := 0;
     Shown := 0;
@@ -360,7 +378,7 @@ Begin
     EcadlibDialog.Note.Caption := '';
     Second := '';
     Phase := 'done';
-    If Action = 'check-bom' Then
+    If JobAction = 'check-bom' Then
     Begin
         EcadlibDialog.Report.Visible := Answer(Job, 'report') <> '';
         If Answer(Job, 'warnings') <> '' Then
@@ -419,7 +437,7 @@ Begin
     Mode := AMode;
     Project := AProject;
     Job := '';
-    Action := '';
+    JobAction := '';
     Second := '';
     ClearRows;
     EcadlibDialog.Tick.Enabled := False;
@@ -499,6 +517,12 @@ Begin
     Fire('open', 'path', Answer(Job, 'report'));
 End;
 
+Procedure TEcadlibDialog.EcadlibDialogClose(Sender : TObject; Var CloseAction : TCloseAction);
+{ A closed form's enabled timer fires again whenever this script project runs (AD 26.10): stop it. }
+Begin
+    Tick.Enabled := False;
+End;
+
 Procedure TEcadlibDialog.CloseClick(Sender : TObject);
 Begin
     If Phase = 'run' Then
@@ -508,7 +532,7 @@ Begin
 End;
 """.replace("@ROWS_SET@", rows_set).replace("@ROWS_TOP@", rows_top).replace("@ROWS@", str(ROWS)) \
         .replace("@WIDTH@", str(WIDTH)).replace("@TEXT@", TEXT).replace("@GREEN@", GREEN).replace("@RED@", RED) \
-        .replace("@DIM@", DIM).replace("@BLUE@", BLUE).replace("@BLUE_OFF@", BLUE_OFF).replace("@VERSION@", __version__)
+        .replace("@DIM@", DIM).replace("@NOTE_W@", str(WIDTH - 40)).replace("@BLUE@", BLUE).replace("@BLUE_OFF@", BLUE_OFF).replace("@VERSION@", __version__)
 
 
 def _font(color=TEXT, size=-12, face="Segoe UI", bold=False, ind="      "):
@@ -533,7 +557,7 @@ def _label(name, left, top, width, height, caption, ind="    ", align="", wrap=F
     i2 = ind + "  "
     extra = (f"{i2}Alignment = taRightJustify\n" if align == "r" else "") + (f"{i2}WordWrap = True\n" if wrap else "")
     return (f"{ind}object {name}: TLabel\n{i2}Left = {left}\n{i2}Top = {top}\n{i2}Width = {width}\n{i2}Height = {height}\n"
-            f"{i2}AutoSize = {'True' if wrap else 'False'}\n{i2}Caption = {_dfm_str(caption)}\n{_font(ind=i2, **font)}"
+            f"{i2}AutoSize = False\n{i2}Caption = {_dfm_str(caption)}\n{_font(ind=i2, **font)}"
             f"{i2}Transparent = True\n{extra}{ind}end\n")
 
 
@@ -556,8 +580,8 @@ def dialog_dfm_text():
     link and two buttons. Positions are set again by Layout at run time; these are the first frame's."""
     w = WIDTH - 32
     rows = "".join(_panel(f"Row{i}", 16, 90 + 26 * i, w, 26, BG, visible=False, body=(
-        _label(f"Row{i}A", 0, 4, w - 90, 18, "", face="Consolas") +
-        _label(f"Row{i}B", w - 90, 4, 90, 18, "", align="r", face="Consolas") +
+        _label(f"Row{i}A", 0, 4, LABEL_W, 18, "", face="Consolas") +
+        _label(f"Row{i}B", LABEL_W, 4, w - LABEL_W, 18, "", align="r", face="Consolas") +
         _panel(f"Row{i}Rule", 0, 25, w, 1, RULE, ind="    "))) for i in range(1, ROWS + 1))
     ask = _panel("AskBox", 16, 46, w, 104, BG, visible=False, body=(
         _label("AskMpn", 0, 0, w, 16, "MPN", color=DIM) + _edit("EditMpn", 0, 18, w) +
@@ -580,6 +604,7 @@ def dialog_dfm_text():
 {_font(ind="  ")}  FormKind = fkModal
   KeyPreview = True
   OldCreateOrder = False
+  OnClose = EcadlibDialogClose
   Position = poMainFormCenter
   PixelsPerInch = 96
   TextHeight = 15
@@ -634,116 +659,3 @@ def dfm_names(dfm):
     """Component names declared in a .dfm (object Name: TClass), the form's included."""
     import re
     return re.findall(r"(?m)^\s*object (\w+): \w+", dfm)
-
-
-# ------------------------------------------------------------------ the ecadlib panel
-PANEL_UNIT, PANEL_FORM = "ecadlib_panel.pas", "ecadlib_panel.dfm"
-RECENT = 5
-PANEL_WIDTH = 260
-PANEL_BG = "$00404040"     # Altium paints a server panel's body #404040 whatever the form's Color (AD 26.10 on a real PC)
-
-PANEL_API = {
-    "EcadlibPanel": "the panel form's instance (named after the .dfm's object)", "Show": "TForm.Show (modeless)",
-    "BringToFront": "TControl.BringToFront", "ReadInteger": "TR0135 p191 (TIniFile)",
-}
-
-
-def _panel_pas():
-    recent_set = "\n".join(f"""    EcadlibPanel.Recent{i}A.Caption := Ini.ReadString('recent', 'title{i}', '');
-    EcadlibPanel.Recent{i}B.Caption := Ini.ReadString('recent', 'text{i}', '');
-    EcadlibPanel.Recent{i}.Visible := EcadlibPanel.Recent{i}A.Caption <> '';""" for i in range(1, RECENT + 1))
-    return r"""{ ecadlib panel for Altium Designer (written by `ecadlib altium-menu build`, ecadlib @VERSION@).
-
-  ShowEcadlibPanel (in the menu) opens it. It stays open next to your design: type an MPN and Add part, check the
-  focused project's BOM, open the review queue, and see the last results (recent.ini, which run-job keeps). The work
-  itself runs in the ecadlib dialog (ecadlib_dialog.pas). }
-
-Procedure RefreshPanel;
-Var
-    Ini : TIniFile;
-Begin
-    EcadlibPanel.Sub.Caption := 'Library: ' + Setting('name', 'ecadlib');
-    Ini := TIniFile.Create(Here + 'recent.ini');
-@RECENT_SET@
-    EcadlibPanel.Empty.Visible := Ini.ReadString('recent', 'title1', '') = '';
-    Ini.Free;
-End;
-
-Procedure ShowPanel;
-Begin
-    RefreshPanel;
-    EcadlibPanel.Show;
-    EcadlibPanel.BringToFront;
-    EcadlibPanel.Refresh.Enabled := True;
-End;
-
-Procedure TEcadlibPanel.AddClick(Sender : TObject);
-Begin
-    OpenDialog('add', '', Trim(EditMpn.Text));
-    EditMpn.Text := '';
-    RefreshPanel;
-End;
-
-Procedure TEcadlibPanel.BomClick(Sender : TObject);
-Begin
-    CheckProjectBOM;
-    RefreshPanel;
-End;
-
-Procedure TEcadlibPanel.QueueClick(Sender : TObject);
-Begin
-    OpenReviewQueue;
-End;
-
-Procedure TEcadlibPanel.RefreshTimer(Sender : TObject);
-Begin
-    RefreshPanel;
-End;
-""".replace("@RECENT_SET@", recent_set).replace("@VERSION@", __version__)
-
-
-def panel_dfm_text(kind="fkServerPanel"):
-    """The panel: title, library line, MPN box + Add part, Check project BOM, the review queue link and the last
-    RECENT results. kind: fkServerPanel (docks in Altium's panel area) or fkNormal (a floating window)."""
-    w = PANEL_WIDTH - 24
-    button_font = {"color": "$00FFFFFF"}
-    recent = "".join(_panel(f"Recent{i}", 12, 236 + (i - 1) * 44, w, 44, PANEL_BG, visible=False, body=(
-        _label(f"Recent{i}A", 0, 4, w, 18, "", face="Consolas") +
-        _label(f"Recent{i}B", 0, 22, w, 16, "", color=DIM, size=-11) +
-        _panel(f"Recent{i}Rule", 0, 43, w, 1, RULE, ind="    "))) for i in range(1, RECENT + 1))
-    return f"""object EcadlibPanel: TEcadlibPanel
-  Left = 0
-  Top = 0
-  Caption = 'ecadlib'
-  ClientHeight = 480
-  ClientWidth = {PANEL_WIDTH}
-  Color = {PANEL_BG}
-{_font(ind="  ")}  FormKind = {kind}
-  FormStyle = fsStayOnTop
-  OldCreateOrder = False
-  PixelsPerInch = 96
-  TextHeight = 15
-{_label("Title", 12, 10, w, 20, "ecadlib", ind="  ", size=-14, bold=True)}{_label("Sub", 12, 32, w, 18, "Library: ecadlib", ind="  ", color=DIM)}{_label("AskMpn", 12, 62, w, 16, "Add a part by MPN", ind="  ", color=DIM)}{_edit("EditMpn", 12, 80, w, ind="  ")}{_panel("Add", 12, 112, w, 30, BLUE, caption="Add part", onclick="AddClick", font=button_font)}{_panel("Bom", 12, 150, w, 30, BTN, caption="Check project BOM", onclick="BomClick", font=button_font)}  object Queue: TLabel
-    Left = 12
-    Top = 188
-    Width = {w}
-    Height = 18
-    AutoSize = False
-    Caption = 'Open review queue'
-    Cursor = crHandPoint
-{_font(color=BLUE, ind="    ")}    Transparent = True
-    OnClick = QueueClick
-  end
-{_label("RecentHead", 12, 216, w, 16, "Recent", ind="  ", color=DIM)}{_label("Empty", 12, 236, w, 18, "Nothing yet.", ind="  ", color=DIM)}{recent}  object Refresh: TTimer
-    Enabled = False
-    Interval = 3000
-    OnTimer = RefreshTimer
-    Left = 4
-    Top = 4
-  end
-end
-""".replace("\n", "\r\n")
-
-
-def panel_pas_text():
-    return _panel_pas().replace("\n", "\r\n")
