@@ -261,17 +261,22 @@ def test_kicad_importers_read_the_written_libraries():
         print(f"skip: KiCad {rr.get('kicad')} has no EasyEDA Pro importer (KiCad 8+)")
         return
     assert not rr.get("error"), rr
+    bad = {}
     for name, fp in rr["footprints"].items():
         src = (r["d"] / "kicad" / "lib.pretty" / f"{name}.kicad_mod").read_text()
-        assert not _errors(EZ.compare_kicad_reread(src, fp, r["easyeda"]["packages"][name]["approximations"])), name
+        bad[name] = _errors(EZ.compare_kicad_reread(src, fp, r["easyeda"]["packages"][name]["approximations"]))
     for f in HARD:                                                # the hard ones through KiCad's EasyEDA Pro importer
         lines, approx = EZ.footprint_lines(CM.footprint(f.read_text()), f.stem)
         lib = r["d"] / "hard" / f"{f.stem[:40]}.elibz"
         lib.parent.mkdir(exist_ok=True)
         EZ.write_elibz(lib, {}, {EZ.uid("fp", f.stem): (f.stem, lines)}, {})
         got = EG.kicad_reread(lib, r["d"] / "rr3" / f.stem[:40])
-        assert f.stem in got["footprints"], (f.name, got.get("errors"))
-        assert not _errors(EZ.compare_kicad_reread(f.read_text(), got["footprints"][f.stem], approx)), f.name
+        if f.stem not in got.get("footprints", {}):
+            bad[f.name] = [f"not read: {got.get('error') or got.get('errors')}"]
+            continue
+        bad[f.name] = _errors(EZ.compare_kicad_reread(f.read_text(), got["footprints"][f.stem], approx))
+    bad = {k: v for k, v in bad.items() if v}                     # every footprint's differences in one report
+    assert not bad, json.dumps(bad, indent=1)
 
 
 if __name__ == "__main__":
