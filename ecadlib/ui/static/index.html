@@ -1777,8 +1777,8 @@ function renderHub() {
       t.libraries.map(l => `<span class="chip${hublib === l.library ? " active" : ""}" tabindex="0" role="button" data-hublib="${esc(l.library)}" title="${esc(l.library)}${l.updated ? ` · changed ${esc(String(l.updated).slice(0, 16).replace("T", " "))} by ${esc(l.updated_by || "not recorded")}` : ""}">${esc(l.library.split("/").pop())} · ${esc(l.parts)}</span>`).join("") + `</div>`;
     if (t.can_copy && can("librarian"))
       head += `<div class="hubstrip"><span>${esc(t.can_copy)} part${t.can_copy === 1 ? "" : "s"} in your other tools ${t.can_copy === 1 ? "isn't" : "aren't"} in ${esc(t.label)} yet. ecadlib can convert ${t.can_copy === 1 ? "it" : "them"} into its hub library for ${esc(t.label)}.</span><button class="small primary" data-hubcopyall="${esc(t.tool)}">Copy ${t.can_copy === 1 ? "it" : "them"} to ${esc(t.label)}</button></div>`;
-    else if (t.missing && COPYABLE.includes(t.tool) === false && t.tool !== "altium365")
-      head += `<div class="muted small" style="margin-top:6px">${esc(t.missing)} part(s) aren't in ${esc(t.label)}. Copying into ${esc(t.label)} comes with its reader.</div>`;
+    else if (t.missing && !COPYABLE.includes(t.tool) && t.tool !== "altium365" && t.reader)
+      head += `<div class="muted small" style="margin-top:6px">${esc(t.missing)} part(s) aren't in ${esc(t.label)}. For a part ecadlib built, open it and use Make the ${esc(t.label)} version; copying your own parts into ${esc(t.label)} isn't supported yet.</div>`;
   }
   $("#hubtoolhead").innerHTML = head;
   const s = r.summary;

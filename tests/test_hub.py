@@ -64,7 +64,10 @@ def test_ecadlib_parts_show_altium_and_kicad():
     held = _row(res, "CH340C")
     assert held["status"] == "held" and "held" in held["flags"] and "kicad" not in held["cells"]
     tools = {x["tool"]: x for x in res["tools"]}
-    assert tools["kicad"]["reader"] and not tools["fusion"]["reader"] and not tools["easyeda"]["reader"]
+    import importlib.util
+    assert tools["kicad"]["reader"] and tools["fusion"]["reader"] == bool(importlib.util.find_spec("ecadlib.eagle_export"))
+    assert tools["easyeda"]["reader"] == bool(importlib.util.find_spec("ecadlib.easyeda_pro_export"))
+    assert tools["fusion"]["parts"] == 0 and tools["easyeda"]["parts"] == 0
     assert res["summary"]["held"] == 1 and res["summary"]["parts"] == 7
 
 
@@ -227,6 +230,27 @@ def test_other_tool_reader_fills_its_column():
     finally:
         H._READERS.clear()
         H._READERS.update(saved)
+
+
+def test_fusion_and_easyeda_columns_from_their_exporters():
+    """With eagle-export and easyeda-export in this ecadlib, their .lbr / .elibz fill the Fusion and EasyEDA columns."""
+    import importlib.util
+    if not (importlib.util.find_spec("ecadlib.eagle_export") and importlib.util.find_spec("ecadlib.easyeda_pro_export")):
+        return                                     # exporters not in this build
+    t = _demo()
+    ws = Workspace(t / "ws", offline=True)
+    _fresh()
+    acts = [f["action"] for f in ws.hub_part("AO3401A")["fixes"]]
+    assert "tool:fusion" in acts and "tool:easyeda" in acts, acts
+    assert ws.hub_fix("AO3401A", "tool:fusion")["result"]["file"].endswith(".lbr")
+    assert ws.hub_fix("AO3401A", "tool:easyeda")["result"]["file"].endswith(".elibz")
+    _fresh()
+    res = ws.hub()
+    for name in ("AO3401A", "RES-0603-10k"):
+        cells = _row(res, name)["cells"]
+        assert cells["fusion"]["state"] == "same" and cells["easyeda"]["state"] == "same", (name, cells)
+    tools = {x["tool"]: x for x in res["tools"]}
+    assert tools["fusion"]["reader"] and tools["fusion"]["parts"] == 6 and tools["easyeda"]["parts"] == 6
 
 
 def test_compare_rules():
