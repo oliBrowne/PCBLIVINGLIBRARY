@@ -8,7 +8,7 @@ Rules, per plan item:
             mounting pads (MP, MH, SH, MTG, ...) are allowed without a pin
   footprint footprint_check and the rule book (footprint_rules, docs/footprint-rulebook.md) on the item's .kicad_mod:
             every footprint_check error fails, and rule-book errors in FR.RELEASE_HOLDS (name, layers, type, annular
-            ring, thermal vias); a reversed diode / LED / polarized-capacitor pin map fails for every part. Parts taken from the official KiCad
+            ring, thermal vias, silkscreen text size / over pads, also on the PcbLib); a reversed diode / LED / polarized-capacitor pin map fails for every part. Parts taken from the official KiCad
             library are held only for overlapping pads, a missing courtyard and a missing pin 1 (their other
             findings are reported as warnings). Without a .kicad_mod the same three are checked on the PcbLib.
             Overlapping pads whose symbol pins share a name (USB-C A1/B12 = GND) are stacked on purpose: a warning.
@@ -194,6 +194,8 @@ def check_item(item, base=".", rules=None):
             for lvl, rule, msg in book:
                 if rule == "connect":
                     continue                   # the pins rule above already compares the Altium symbol and footprint
+                if fps and msg.startswith("in the Altium export"):
+                    continue                   # the PcbLib itself is checked below
                 hard = lvl == "error" and (rule == "pinmap" or (not kicad_lib and rule in FR.RELEASE_HOLDS))
                 (add("footprint", f"{rule}: {msg}") if hard else warns.append(f"{lvl} {rule}: {msg}"))
     if not kmod and fps:
@@ -202,6 +204,10 @@ def check_item(item, base=".", rules=None):
             add("footprint", m)
         warns += [f"{m} (same pin name: stacked on purpose)" for m in mw]
         warns.append("no .kicad_mod: only overlap, courtyard and pin 1 checked (on the PcbLib)")
+    if fps:                                    # silkscreen text as Altium shows it: size, over pads, over the body
+        for lvl, msg in FR.pcblib_text_issues(fps[0]):
+            hard = lvl == "error" and not kicad_lib
+            (add("footprint", f"silktext: {msg}") if hard else warns.append(f"{lvl} silktext: {msg}"))
     # ---- KiCad and Altium read back the same (ecadlib.parity)
     mode = (rules.get("release") or {}).get("parity", "hold")
     if mode != "off" and kmod and fps:

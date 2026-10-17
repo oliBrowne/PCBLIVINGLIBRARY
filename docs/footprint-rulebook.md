@@ -164,6 +164,22 @@ smaller (BGAs and connectors below 0.25 mm: KiCad's own small WLCSPs and JST hea
 The reference `REF**` on F.SilkS at 1.00 mm, 0.15 mm stroke (F5.1). The value and a `${REFERENCE}` on F.Fab at
 0.5-1.0 mm with a stroke of about 15 % (F5.2): the assembly drawing needs the designator inside the outline.
 
+### `silktext`
+
+Silkscreen text has to be printable and must not sit on copper. Every visible text on F.SilkS / B.SilkS is
+0.5-2.0 mm high (F5.1 uses 1.0 mm; below 0.5 mm a board house cannot print it, above 2 mm it swamps the part), and
+its box, at the stroke font's advance of 0.93 x height per character, does not cross a copper pad on its side
+(the board house clips silkscreen off pads, F5.1). A designator is measured as three characters ("U12"), the
+width it has on a board. A reference sitting over the part body is a warning: it is hidden once the part is placed.
+
+The same rule is run on Altium's side, because that is where Oliver's first real Altium run went wrong: an
+EasyEDA footprint had its reference on F.Fab at the centre, the export put `.Designator` on Top Overlay at the
+same spot, and it came out over the body. So when a footprint has no designator on silk, the check also looks at
+the `.Designator` the Altium export will write ("in the Altium export: ..."), and `pcblib_text_issues` checks the
+overlay text of the PcbLib itself, anchored at its bottom-left corner as Altium anchors it. (In Altium's library
+editor `.Designator` shows as the literal 11-character string, so it always looks wider there than on a board.)
+Size and over-pad errors hold ecadlib's own and converted parts in the release check.
+
 ### `polarity`
 
 Pin 1 / polarity is visible on the silkscreen and on the fab layer of every polarized part (ICs, diodes, LEDs,
@@ -265,7 +281,8 @@ SOT, BGA, DIP, TO, crystals, pin headers, JST, USB). The new rules in this book 
 (0.5 %); on the six families KiCad builds with its generator (Resistor_SMD, Capacitor_SMD, Package_SO,
 Package_QFP, Package_DFN_QFN, Package_BGA) 17 of 1,687 (1.0 %), and each one was read: they are deliberate KiCad
 exceptions (TO-220F-5 rings at 0.04 mm forced by a 1.7 mm pitch, DSBGA "Level B/C" parts without paste,
-`SOT-223-6_TabPin3` with five pads), not checker noise. The test `test_corpus` repeats this whenever
+`SOT-223-6_TabPin3` with five pads), not checker noise. `silktext` raises no error on any of the 4,976 (four
+warnings, on parts with no designator on silk). The test `test_corpus` repeats this whenever
 `ECADLIB_KICAD_FOOTPRINTS` points at a checkout. Writing the book also fixed footprint_check: an F.Cu lead and a
 B.Cu heat spreader no longer count as overlapping copper (88 false overlap findings, most on KiCad's ThermalVias parts).
 
@@ -280,7 +297,7 @@ TO-252 / TO-263 origins on the lead row, as KiCad's; KiCad-size courtyards on sm
 ## Where it runs
 
 * `ecadlib check` (any footprint), and `--summary` for a library.
-* The release check (`ecadlib release-check`): rule-book errors in `name`, `layers`, `attr`, `tht`, `vias` hold
+* The release check (`ecadlib release-check`): rule-book errors in `name`, `layers`, `attr`, `tht`, `vias`, `silktext` hold
   ecadlib's own and converted parts; KiCad library parts get them as warnings; `pinmap` holds every part.
 * `tests/test_footprint_rulebook.py`: the golden examples, one mutant per defect, ecadlib's footprints, the
   Altium read-back and the release gate.
