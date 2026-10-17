@@ -1,0 +1,17 @@
+  written  AMS1117-3.3     SOT-223-3_TabPin2
+  written  AO3401A         SOT-23
+  written  CAP-0402-100nF  C_0402_1005Metric
+  written  KT-0603R        LED_0603_1608Metric
+  written  RES-0603-10k    R_0603_1608Metric
+  written  RES-0603-4.7k   R_0603_1608Metric
+  skipped  CH340C          There is no symbol for this part yet.
+
+6 symbols, 5 footprints, 5/5 3D models written; 1 held part left out (--include-held adds them)
+written:
+  kx/mylib.kicad_sym              symbols
+  kx/mylib.pretty/                footprints
+  kx/sym-lib-table, fp-lib-table  library tables (paths use ${KIPRJMOD})
+next:
+  cp -r kx/* <your KiCad project folder>/                         # then reopen the project; or add the library in Preferences > Manage Symbol / Footprint Libraries
+  ecadlib parity ws/librarian/demo_bom_demo/plan.json --kicad kx  # check KiCad and Altium agree, part by part
+  ecadlib review ws/librarian/demo_bom_demo/plan.json             # the held parts

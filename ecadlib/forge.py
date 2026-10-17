@@ -20,7 +20,7 @@ GITLAB_API = "https://gitlab.com/api/v4"
 
 
 class GitLabError(Exception):
-    pass
+    status = None                                  # the HTTP status of a refused API call
 
 
 # ------------------------------------------------------------------ which host
@@ -134,8 +134,10 @@ class GitLab:
         r = self.session.request(method, url, json=body, timeout=60,
                                  headers={"PRIVATE-TOKEN": self.token, "Accept": "application/json"})
         if not 200 <= r.status_code < 300:
-            raise GitLabError(f"GitLab {method} /projects/{self.project}/{path}: HTTP {r.status_code} "
-                              f"{str(getattr(r, 'text', ''))[:200]}")
+            e = GitLabError(f"GitLab {method} /projects/{self.project}/{path}: HTTP {r.status_code} "
+                            f"{str(getattr(r, 'text', ''))[:200]}")
+            e.status = r.status_code
+            raise e
         return r.json() if r.status_code != 204 and getattr(r, "content", b"") else None
 
     # web links
@@ -203,7 +205,12 @@ def upsert_mr(gl, rec, title, body, base):
     review any more, so a new one is opened; an open one is updated, never duplicated. Updates rec in place."""
     num = rec.get("pr_number")
     if num:
-        cur = gl.get_mr(num)
+        try:
+            cur = gl.get_mr(num)
+        except GitLabError as e:                   # 404: the MR was deleted; like a closed one it is not a review
+            if e.status != 404:
+                raise
+            cur = {"state": "closed"}
         if isinstance(cur, dict) and cur.get("state") in ("closed", "merged", "locked"):
             rec.setdefault("closed_prs", []).append(rec.get("pr_url"))
             num, rec["pr_number"], rec["pr_url"] = None, None, None

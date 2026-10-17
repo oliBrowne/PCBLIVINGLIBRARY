@@ -27,6 +27,8 @@ Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0):
     TEXT_TEST .PcbLib) and three pin records (CLOCK_PIN, INVERTED_PIN and
     ACTIVE_LOW_PIN .SchLib) from AltiumSharp TestData as byte references.
 
+tests/fixtures/kicad_golden/*.kicad_mod (24 footprints, kicad-footprints commit
+f8440fa61a5690b48b325c891fdb99c0038a5a59, unmodified) and
 tests/fixtures/kicad/USB_C_Receptacle_HRO_TYPE-C-31-M-12.kicad_mod and
 tests/fixtures/kicad/Regulator_Linear_AMS1117.kicad_sym (symbols AP1117-15 and
 AMS1117-3.3 combined into one library file) are from the KiCad libraries
@@ -42,3 +44,10 @@ tests/nexar/schema.graphql is from NexarDeveloper/nexar-release-component-demo-w
 
 No code from altium-designer-mcp (GPL-3.0) is included; it was read only
 for behavioural notes about which files Altium Designer accepts.
+
+ecadlib/ui/static/hairline.js bundles line figures from Hairline
+(https://github.com/lucasmarkes/hairline), Copyright (c) 2026 Lucas Marques,
+licensed under the MIT License: the slow, drawer and sieve figures and the
+package's drawing and motion core, unmodified. scripts/hairline/seat.js is
+ecadlib's own figure, written with Hairline's hairline-create skill and built
+on that core (scripts/build_ui_figures.sh).

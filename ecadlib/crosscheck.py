@@ -349,8 +349,11 @@ def run(reader, job, res, model):
     strong = [c for c in checks if len(c["compared"]) >= 2]
     if mode == "always" or not strong:
         checks.append(second_read(reader, job, first, first_pins, model))
+    # a table check too weak to stand alone (one field, e.g. only the pin count of a pad-table entry) can hold a part
+    # but cannot accept it: when the second read could not be made, the part stays unchecked
     st = [c["status"] for c in checks]
-    status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in st else "unchecked"
+    ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong]
+    status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok else "unchecked"
     return {"mode": mode, "status": status, "checks": checks}
 
 
@@ -377,7 +380,9 @@ def report_md(rec):
     """Markdown section for the part's <part>.review.md."""
     if not rec:
         return []
-    out = ["", f"## Cross-check ([datasheet] cross_check = {rec['mode']}): {rec['status']}", ""]
+    word = {"agreed": "agreed", "disagreed": "disagreed, the part is held", "unchecked": "could not be made",
+            "skipped": "not needed"}.get(rec["status"], rec["status"])
+    out = ["", f"## Cross-check: {word}", "", f"Setting: [datasheet] cross_check = {rec['mode']}", ""]
     if rec["status"] == "skipped":
         return out + [rec.get("why") or ""]
     for c in rec.get("checks") or []:
@@ -390,8 +395,8 @@ def report_md(rec):
         if c.get("agreed"):
             out.append(f"  agreed: {', '.join(LABEL.get(f, f) for f in c['agreed'])}")
     if rec["status"] == "disagreed":
-        out += ["", "The part is held: nothing was written to the library. Neither value was picked; read the drawing, "
-                    "then fix the BOM package or re-read with --pages / another model."]
+        out += ["", "The part is held and nothing was written to the library. Neither value was picked.",
+                "**Next:** read the drawing, then fix the BOM's package, or read it again with other pages or another model."]
     return out
 
 

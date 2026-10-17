@@ -6,119 +6,182 @@
 <title>ecadlib</title>
 <link rel="icon" href="data:,">
 <style>
+/* Hairline: one ground colour, 1px lines, ink for what matters, motion that eases out (github.com/lucasmarkes/hairline) */
 :root {
-  --bg: #f6f7f9; --panel: #fff; --text: #1b1f24; --muted: #5d6673; --line: #dde1e6;
-  --accent: #2357d9; --accent-weak: #e7eefc;
-  --ok: #1d7a46; --ok-bg: #e3f4ea; --warn: #9a5b00; --warn-bg: #fdf1dc; --bad: #b3261e; --bad-bg: #fbe6e4;
-  --info: #3d4aa8; --info-bg: #e9ebfb; --off: #5d6673; --off-bg: #eceef1;
-  --copper: #c8743a; --p1: #d9382b; --crtyd: #8a96a3; --on-accent: #fff;
+  color-scheme: light dark;
+  --bg: #ffffff; --panel: #ffffff; --text: #232327; --muted: #6f6f78; --line: #e0e0e4; --line-2: #ececef; --hover: #f6f6f7;
+  --accent: #232327; --accent-weak: #f3f3f5; --on-accent: #ffffff;
+  --ok: #2f8a57; --warn: #b07210; --bad: #c4392f; --info: #4b5bd6; --off: #8a8c95;
+  --ok-bg: transparent; --warn-bg: transparent; --bad-bg: transparent; --info-bg: transparent; --off-bg: transparent;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --ease: cubic-bezier(.32, .72, 0, 1);
+  --hairline-plate: var(--bg); --hairline-hi: #232327; --hairline-edge: #a1a1aa; --hairline-mid: #b4b4bb; --hairline-lo: #e4e4e7;
+  /* the footprint preview is Altium's PCB editor in both themes: black board, Top Layer red, Multi-Layer silver */
+  --pcb-board: #000000; --pcb-grid: #1e1e1e; --pcb-grid-major: #3a3a3a; --pcb-top: #ff0000; --pcb-multi: #c0c0c0;
+  --pcb-hole: #1a1a1a; --pcb-fab: #ff00ff; --pcb-crtyd: #00d000; --pcb-text: #ffffff; --pcb-origin: #ffffff;
+  /* one colour per design tool, on the library hub's tiles, columns and tags */
+  --t-altium: #8f6410; --t-altium365: #08787a; --t-kicad: #3a52c4; --t-fusion: #b84a0c; --t-easyeda: #8433b0; --t-all: var(--text);
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #14171b; --panel: #1c2026; --text: #e6e9ed; --muted: #9aa3ad; --line: #2e343c;
-    --accent: #7ea2ff; --accent-weak: #22304f; --ok: #6fd39a; --ok-bg: #173325; --warn: #f0b660; --warn-bg: #3a2c12;
-    --bad: #ff8a80; --bad-bg: #3d1d1b; --info: #a9b3ff; --info-bg: #262a4a; --off: #9aa3ad; --off-bg: #262b32;
-    --copper: #e0955c; --p1: #ff6b5e; --crtyd: #6b7682; --on-accent: #0b1430; }
+  :root { --bg: #08090a; --panel: #08090a; --text: #d0d6e0; --muted: #8a8c95; --line: #29292d; --line-2: #1d1d20; --hover: #111214;
+    --accent: #d0d6e0; --accent-weak: #16171a; --on-accent: #08090a;
+    --ok: #5fc58c; --warn: #e2a64a; --bad: #f07a70; --info: #9aa6ff; --off: #6f7178;
+    --hairline-hi: #fafafa; --hairline-edge: #a1a1aa; --hairline-mid: #52525b; --hairline-lo: #27272a;
+    --t-altium: #e0b45c; --t-altium365: #4cc9c9; --t-kicad: #8c9dff; --t-fusion: #ff9a57; --t-easyeda: #c98af0; }
 }
 * { box-sizing: border-box; }
-body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
-header { display: flex; align-items: baseline; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
-header h1 { font-size: 17px; margin: 0; }
-header .meta { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
-main { max-width: 1280px; margin: 0 auto; padding: 18px 16px 60px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-.card h2 { font-size: 15px; margin: 0 0 4px; }
-.drop { border: 2px dashed var(--line); border-radius: 10px; padding: 26px; text-align: center; color: var(--muted); cursor: pointer; }
-.drop.over, .drop:focus-visible { border-color: var(--accent); background: var(--accent-weak); color: var(--text); outline: none; }
-.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+[hidden] { display: none !important; }
+html { scroll-behavior: smooth; }
+body { margin: 0; font: 13.5px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+::selection { background: var(--text); color: var(--bg); }
+header { display: flex; align-items: baseline; gap: 18px; padding: 18px 24px 14px; flex-wrap: wrap; }
+header h1 { font: 500 15px/1 var(--mono); letter-spacing: .02em; margin: 0; }
+header h1::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--text); margin-right: 9px; vertical-align: 1px; animation: pulse 3.2s var(--ease) infinite; }
+header .meta { color: var(--muted); font: 11.5px/1.5 var(--mono); overflow-wrap: anywhere; }
+main { max-width: 1240px; margin: 0 auto; padding: 22px 20px 80px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; margin-bottom: 18px; animation: rise .7s var(--ease) both; }
+main > .card:nth-of-type(2) { animation-delay: .04s; } main > .card:nth-of-type(3) { animation-delay: .08s; } main > .card:nth-of-type(4) { animation-delay: .12s; }
+main > .card:nth-of-type(5) { animation-delay: .16s; } main > .card:nth-of-type(6) { animation-delay: .2s; } main > .card:nth-of-type(n+7) { animation-delay: .24s; }
+.card h2 { font-size: 15px; font-weight: 550; letter-spacing: -.005em; margin: 0 0 4px; }
+.drop { display: grid; grid-template-columns: minmax(150px, 230px) 1fr; align-items: center; gap: 8px 24px; border: 1px dashed var(--line); border-radius: 12px; padding: 8px 24px 8px 8px; text-align: left; color: var(--muted); cursor: pointer; transition: border-color .4s var(--ease), background .4s var(--ease); }
+.drop strong { color: var(--text); font-weight: 550; }
+.drop .fig { width: 100%; aspect-ratio: 5 / 4; }
+.drop.over, .drop:hover, .drop:focus-visible { border-color: var(--text); background: var(--hover); outline: none; }
+.drop.over { border-style: solid; }
+@media (max-width: 600px) { .drop { grid-template-columns: 1fr; padding: 8px 16px 16px; text-align: center; } .drop .fig { max-width: 220px; margin: 0 auto; } }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .spread { justify-content: space-between; }
-button, select, input[type=search], input[type=text] { font: inherit; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; }
+button, select, input[type=search], input[type=text] { font: inherit; font-size: 13px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--text); padding: 6px 12px; min-height: 32px; transition: border-color .3s var(--ease), background .3s var(--ease), color .3s var(--ease), transform .3s var(--ease); }
+select { background: var(--bg); }
 button { cursor: pointer; }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-button:focus-visible, a:focus-visible, .chip:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-button.danger { border-color: var(--bad); color: var(--bad); }
-button:disabled { opacity: .5; cursor: default; }
+button:hover:not(:disabled) { border-color: var(--text); }
+button:active:not(:disabled) { transform: translateY(1px); }
+button.primary { background: var(--text); border-color: var(--text); color: var(--bg); }
+button.primary:hover:not(:disabled) { opacity: .88; }
+input[type=search]:focus, input[type=text]:focus, select:focus, textarea:focus { border-color: var(--text); outline: none; }
+button:focus-visible, a:focus-visible, .chip:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 1.5px solid var(--text); outline-offset: 2px; }
+button.danger { border-color: color-mix(in srgb, var(--bad) 55%, transparent); color: var(--bad); }
+button:disabled { opacity: .4; cursor: default; }
 input[type=search] { min-width: 220px; }
+input::placeholder { color: var(--muted); opacity: .7; }
 #boms { max-width: 100%; }
-label.field { display: inline-flex; gap: 6px; align-items: center; }
-.signoff { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
+label.field { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
+.signoff { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-top: 14px; }
 .acts { display: flex; gap: 4px; flex-wrap: wrap; }
 td .sub { font-size: 11.5px; margin-top: 3px; }
 #picklist table td { font-size: 12.5px; }
-.chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 12px; }
-.chip { border-radius: 999px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; border: 1px solid transparent; }
-.chip.active { border-color: currentColor; }
-.s-ok { background: var(--ok-bg); color: var(--ok); }
-.s-warn { background: var(--warn-bg); color: var(--warn); }
-.s-bad { background: var(--bad-bg); color: var(--bad); }
-.s-info { background: var(--info-bg); color: var(--info); }
-.s-off { background: var(--off-bg); color: var(--off); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; }
+.chip { border-radius: 999px; padding: 3px 11px 3px 9px; font-size: 12px; cursor: pointer; border: 1px solid var(--line); color: var(--text) !important; transition: border-color .3s var(--ease), background .3s var(--ease); }
+.chip:hover { border-color: var(--muted); }
+.chip.active { border-color: var(--text); background: var(--hover); }
+/* status: a tone, shown as a dot on a hairline pill, never as a filled block */
+.s-ok { --tone: var(--ok); } .s-warn { --tone: var(--warn); } .s-bad { --tone: var(--bad); } .s-info { --tone: var(--info); } .s-off { --tone: var(--off); }
+.chip[class*="s-"]::before, .pill[class*="s-"]::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--tone); margin-right: 7px; vertical-align: 1px; }
 .tablewrap { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
-th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
-td.notes { color: var(--muted); max-width: 340px; }
-td code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.pill { border-radius: 6px; padding: 2px 7px; font-size: 12px; white-space: nowrap; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line-2); vertical-align: top; }
+th { color: var(--muted); font: 500 10.5px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; border-bottom-color: var(--line); }
+tbody tr { transition: background .3s var(--ease); animation: rise .6s var(--ease) both; }
+tbody tr:hover td { background: var(--hover); }
+tbody tr:nth-child(2) { animation-delay: .03s; } tbody tr:nth-child(3) { animation-delay: .06s; } tbody tr:nth-child(4) { animation-delay: .09s; }
+tbody tr:nth-child(5) { animation-delay: .12s; } tbody tr:nth-child(6) { animation-delay: .15s; } tbody tr:nth-child(7) { animation-delay: .18s; }
+tbody tr:nth-child(8) { animation-delay: .21s; } tbody tr:nth-child(9) { animation-delay: .24s; } tbody tr:nth-child(n+10) { animation-delay: .27s; }
+td.notes { color: var(--muted); max-width: 340px; overflow-wrap: anywhere; }
+td code, .mono { font-family: var(--mono); font-size: 12px; }
+.pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px 1px 8px; font-size: 11.5px; white-space: nowrap; color: var(--text) !important; }
 .muted { color: var(--muted); }
 .small { font-size: 12.5px; }
 .scroll { overflow-x: auto; max-width: 100%; }
-button.small { padding: 3px 8px; font-size: 12.5px; white-space: nowrap; }
+button.small { padding: 3px 10px; font-size: 12px; min-height: 28px; white-space: nowrap; }
 ul.why { margin: 0; padding-left: 16px; }
 #libout td.mono { word-break: normal; white-space: nowrap; }
-.banner { border-radius: 8px; padding: 9px 12px; margin: 10px 0; white-space: pre-wrap; display: flex; gap: 10px; justify-content: space-between; align-items: start; }
-.banner button { padding: 0 8px; border: none; background: transparent; color: inherit; font-size: 16px; }
-.progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 8px; }
-.progress > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
-.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
-.box { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
-.box h3 { font-size: 14px; margin: 0 0 4px; }
-.box p { margin: 4px 0 10px; }
+/* banners and next-step lines: a toned hairline on the left, text in ink */
+.banner { border: 1px solid var(--line); border-left: 2px solid var(--tone, var(--line)); border-radius: 8px; padding: 9px 12px; margin: 10px 0; white-space: pre-wrap; display: flex; gap: 10px; justify-content: space-between; align-items: start; color: var(--text) !important; animation: slide .5s var(--ease) both; }
+.banner button { padding: 0 8px; min-height: 0; border: none; background: transparent; color: var(--muted); font-size: 16px; }
+.next { border: 1px solid var(--line); border-left: 2px solid var(--tone, var(--line)); border-radius: 8px; padding: 9px 12px; margin: 10px 0; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; color: var(--text) !important; animation: slide .5s var(--ease) both; }
+.next > span { flex: 1 1 260px; }
+.next button { padding: 3px 10px; font-size: 12px; min-height: 28px; }
+.progress { position: relative; height: 1px; background: var(--line); overflow: hidden; margin-top: 10px; }
+.progress > div { height: 100%; background: var(--text); width: 0; transition: width .6s var(--ease); }
+.progress::after { content: ""; position: absolute; inset: 0; width: 30%; background: linear-gradient(90deg, transparent, var(--text), transparent); opacity: .5; animation: sweep 1.6s var(--ease) infinite; }
+.busyfig { width: 150px; aspect-ratio: 5 / 4; margin: 6px 0 -6px -10px; }
+.busyrow { display: flex; align-items: center; gap: 12px; }
+.busyrow > div:last-child { flex: 1; min-width: 0; }
+.emptyfig { width: 140px; aspect-ratio: 5 / 4; margin: 4px 0 0 -10px; }
+.empty { display: flex; align-items: center; gap: 10px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; align-items: start; }
+.box .out table { overflow-wrap: normal; }
+.box .out td:first-child { min-width: 9.5em; }
+.box .out { overflow-x: auto; }
+.box .out .pill { white-space: normal; border-radius: 10px; }
+.box { border: 1px solid var(--line); border-radius: 12px; padding: 16px; transition: border-color .4s var(--ease); }
+.box:hover { border-color: var(--muted); }
+.box h3 { font-size: 13.5px; font-weight: 550; margin: 0 0 4px; }
+.box p { margin: 4px 0 12px; }
 .out { margin-top: 8px; font-size: 12.5px; overflow-wrap: anywhere; }
-dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 0; width: min(1000px, 96vw); }
-dialog::backdrop { background: rgba(0,0,0,.35); }
-.dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); gap: 10px; flex-wrap: wrap; }
-.dlg-body { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; }
+dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--text); padding: 0; width: min(1040px, 96vw); box-shadow: 0 30px 80px -30px rgba(0,0,0,.35); }
+dialog[open] { animation: pop .45s var(--ease) both; }
+dialog::backdrop { background: color-mix(in srgb, var(--bg) 55%, transparent); backdrop-filter: blur(3px); }
+.dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); gap: 10px; flex-wrap: wrap; }
+.dlg-body { display: grid; grid-template-columns: 1fr 1.15fr; gap: 18px; padding: 18px; }
 @media (max-width: 760px) { .dlg-body { grid-template-columns: 1fr; } input[type=search] { min-width: 0; width: 100%; } }
-textarea { width: 100%; min-height: 330px; font: 12px/1.4 ui-monospace, Menlo, monospace; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
-.preview { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; text-align: center; min-height: 220px; }
-.preview svg { max-width: 100%; height: auto; max-height: 340px; }
-svg.fp .pad { fill: var(--copper); }
-svg.fp .pad.p1 { fill: var(--p1); }
-svg.fp .pad.ep { fill: var(--copper); opacity: .7; }
-svg.fp .crtyd { fill: none; stroke: var(--crtyd); stroke-width: .05; stroke-dasharray: .15 .1; }
-svg.fp .fab { fill: none; stroke: var(--muted); stroke-width: .04; opacity: .6; }
-svg.fp .hole { fill: var(--bg); stroke: var(--muted); stroke-width: .02; }
-.nums { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; margin-top: 10px; font-size: 12.5px; text-align: left; }
-.nums div { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px; }
-.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; display: none; max-width: 90vw; }
-a { color: var(--accent); }
-pre.diff { white-space: pre-wrap; max-height: 280px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: 12px/1.4 ui-monospace, Menlo, monospace; }
+textarea { width: 100%; min-height: 330px; font: 12px/1.5 var(--mono); background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+/* footprint preview: Altium's PCB editor */
+.preview { background: var(--pcb-board); border: 1px solid #000; border-radius: 10px 10px 0 0; padding: 0; text-align: center; min-height: 240px; display: grid; place-items: center; overflow: hidden; }
+.preview svg { display: block; width: 100%; height: auto; max-height: 360px; animation: fadein .6s var(--ease) both; }
+.layertabs { display: flex; gap: 0; overflow-x: auto; background: #1b1b1b; border: 1px solid #000; border-top: 0; border-radius: 0 0 10px 10px; font: 11px/1 system-ui, sans-serif; color: #d6d6d6; scrollbar-width: none; }
+.layertabs span { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; white-space: nowrap; border-right: 1px solid #000; }
+.layertabs span:first-child { color: #9a9a9a; }
+.layertabs span.on { background: #2a2a2a; color: #fff; }
+.layertabs i { width: 9px; height: 9px; display: inline-block; border: 1px solid #000; }
+svg.fp .board { fill: var(--pcb-board); }
+svg.fp .grid { fill: none; stroke: var(--pcb-grid); stroke-width: .012; }
+svg.fp .grid.major { stroke: var(--pcb-grid-major); stroke-width: .016; }
+svg.fp .pad { fill: var(--pcb-top); }
+svg.fp .pad.tht { fill: var(--pcb-multi); }
+svg.fp .pad.p1 { stroke: #ffffff; stroke-width: .03; }
+svg.fp g.pad.p1 polygon { stroke: #ffffff; stroke-width: .03; }
+svg.fp .pad.ep { fill: var(--pcb-top); }
+svg.fp .crtyd { fill: none; stroke: var(--pcb-crtyd); stroke-width: .03; }
+svg.fp .fab { fill: none; stroke: var(--pcb-fab); stroke-width: .03; }
+svg.fp .hole { fill: var(--pcb-hole); stroke: #6e6e6e; stroke-width: .02; }
+svg.fp .padnum { fill: var(--pcb-text); font-family: Arial, Helvetica, sans-serif; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+svg.fp .origin { fill: none; stroke: var(--pcb-origin); stroke-width: .03; }
+svg.fp .pad:hover, svg.fp g.pad:hover polygon { fill: #ff5a5a; }
+.nums { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 0; margin-top: 12px; font-size: 12.5px; text-align: left; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.nums div { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 6px 9px; font-family: var(--mono); font-size: 12px; animation: fadein .5s var(--ease) both; }
+.nums div:nth-child(2) { animation-delay: .03s; } .nums div:nth-child(3) { animation-delay: .06s; } .nums div:nth-child(4) { animation-delay: .09s; } .nums div:nth-child(n+5) { animation-delay: .12s; }
+.toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 999px; display: none; max-width: 90vw; font-size: 12.5px; animation: toast .5s var(--ease) both; }
+a { color: var(--text); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; transition: text-decoration-color .3s var(--ease); }
+a:hover { text-decoration-color: var(--text); }
+pre.diff { white-space: pre-wrap; max-height: 280px; overflow: auto; background: transparent; border: 1px solid var(--line); border-radius: 10px; padding: 10px; font: 12px/1.5 var(--mono); }
 #rulestoml { min-height: 240px; }
 /* step bar and next-step hints */
-nav.steps { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; overflow-x: auto; padding: 6px 16px; background: var(--panel); border-bottom: 1px solid var(--line); scrollbar-width: thin; }
-nav.steps a { white-space: nowrap; padding: 4px 10px; border-radius: 999px; text-decoration: none; color: var(--text); font-size: 13px; }
-nav.steps a:hover, nav.steps a.here { background: var(--accent-weak); }
-nav.steps a.off { color: var(--muted); }
-nav.steps .count { background: var(--warn-bg); color: var(--warn); border-radius: 999px; padding: 0 6px; margin-left: 4px; font-size: 12px; }
+nav.steps { position: sticky; top: 0; z-index: 5; display: flex; gap: 2px; overflow-x: auto; padding: 0 20px; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(10px); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); scrollbar-width: none; }
+nav.steps a { position: relative; white-space: nowrap; padding: 11px 12px; text-decoration: none; color: var(--muted); font: 12px/1 var(--mono); letter-spacing: .01em; transition: color .3s var(--ease); }
+nav.steps a::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 1px; background: var(--text); transform: scaleX(0); transform-origin: left; transition: transform .5s var(--ease); }
+nav.steps a:hover, nav.steps a.here { color: var(--text); }
+nav.steps a:hover::after, nav.steps a.here::after { transform: scaleX(1); }
+nav.steps a.off { color: var(--muted); opacity: .55; }
+nav.steps .count { border: 1px solid var(--warn); color: var(--warn); border-radius: 999px; padding: 1px 6px; margin-left: 6px; font-size: 10.5px; }
 nav.steps .count:empty { display: none; }
-main > section { scroll-margin-top: 48px; }
-.next { border-radius: 8px; padding: 9px 12px; margin: 10px 0; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.next > span { flex: 1 1 260px; }
-.next button { padding: 3px 10px; font-size: 12.5px; }
-.stepno { display: inline-block; min-width: 20px; height: 20px; line-height: 20px; text-align: center; border-radius: 50%; background: var(--accent-weak); color: var(--accent); font-size: 12px; margin-right: 6px; }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin: 10px 0; }
-.stats div { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
-.stats b { display: block; font-size: 18px; }
-.check { padding: 5px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
-@media (max-width: 600px) { header { padding: 10px 16px; } .signoff input[type=text] { width: 100%; } label.field { flex-wrap: wrap; } }
+main > section { scroll-margin-top: 56px; }
+.stepno { display: inline-block; font: 500 11px/1 var(--mono); color: var(--muted); margin-right: 10px; letter-spacing: .04em; vertical-align: 1px; }
+.stepno::before { content: "0"; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0; margin: 14px 0; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.stats div { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 12px 14px; color: var(--muted); font-size: 12px; animation: fadein .6s var(--ease) both; }
+.stats div:nth-child(2) { animation-delay: .05s; } .stats div:nth-child(3) { animation-delay: .1s; } .stats div:nth-child(4) { animation-delay: .15s; } .stats div:nth-child(n+5) { animation-delay: .2s; }
+.stats b { display: block; font: 400 26px/1.15 var(--mono); color: var(--text); letter-spacing: -.02em; font-variant-numeric: tabular-nums; margin-bottom: 2px; }
+.check { padding: 7px 0; border-bottom: 1px solid var(--line-2); overflow-wrap: anywhere; }
+@media (max-width: 600px) { header { padding: 14px 16px 10px; } main { padding: 16px 12px 60px; } .card { padding: 18px 16px; } .signoff input[type=text] { width: 100%; } label.field { flex-wrap: wrap; } }
 /* team mode */
-header .user { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 13px; flex-wrap: wrap; }
-header .user .who { color: var(--muted); }
-header .user button { padding: 3px 9px; font-size: 12.5px; }
-.signin { max-width: 380px; margin: 8vh auto 0; }
-.signin label { display: block; margin-top: 10px; font-size: 13px; color: var(--muted); }
+header .user { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 12.5px; flex-wrap: wrap; }
+header .user .who { color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+header .user button { padding: 3px 10px; font-size: 12px; min-height: 28px; }
+.signin { max-width: 380px; margin: 10vh auto 0; }
+.signin label { display: block; margin-top: 12px; font-size: 12.5px; color: var(--muted); }
 .signin input, .form input[type=password], .form input[type=text], .form input[type=email] { width: 100%; margin-top: 4px; }
-input[type=password], input[type=email] { font: inherit; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; }
+input[type=password], input[type=email] { font: inherit; font-size: 13px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--text); padding: 6px 12px; min-height: 32px; }
 .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px 12px; align-items: end; margin-top: 10px; }
 .form label { font-size: 12.5px; color: var(--muted); }
 [data-role-hidden] { display: none !important; }
@@ -126,26 +189,180 @@ header .user[hidden], label.field[hidden], span[hidden], nav.steps[hidden] { dis
 .form label { display: block; }
 .form select { display: block; width: 100%; margin-top: 4px; }
 /* review queue */
-#qrows tr.sel td { background: var(--accent-weak); }
-.qview { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
-.qview h3 { font-size: 14px; margin: 14px 0 6px; }
+#qrows tr.sel td { background: var(--hover); }
+.qview { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-top: 12px; animation: rise .6s var(--ease) both; }
+.qview h3 { font-size: 13.5px; margin: 16px 0 6px; }
 .qview h3:first-child { margin-top: 0; }
-.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; font-size: 13px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 13px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; overflow-wrap: anywhere; }
 .pics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.pics figure { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; min-height: 120px; }
-.pics figcaption { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.pics figure { margin: 0; border: 1px solid var(--line); border-radius: 10px; padding: 10px; min-height: 120px; }
+.pics figcaption { font: 10.5px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
 .pics img { display: block; max-width: 100%; height: auto; margin: 0 auto 8px; background: #fff; border-radius: 4px; }
 @media (max-width: 760px) { .pics { grid-template-columns: 1fr; } }
 #qnote { min-height: 56px; }
 ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
+/* round 10 (fluid and friendly), in the Hairline style: 1px lines, ink for what matters, tones only as dots */
+.skip { position: absolute; left: -999px; top: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line); padding: 8px 12px; z-index: 50; border-radius: 0 0 8px 0; }
+.skip:focus { left: 0; }
+header .keyhint { color: var(--muted); font: 11.5px/1 var(--mono); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; min-height: 0; background: transparent; }
+header .keyhint:hover { color: var(--text); }
+.welcome h2 { font-size: 17px; margin-bottom: 6px; }
+.welcome ol { margin: 10px 0 14px; padding-left: 20px; }
+.welcome ol li { margin: 3px 0; }
+.joblines { list-style: none; margin: 10px 0 0; padding: 0; max-height: 190px; overflow-y: auto; font: 12px/1.5 var(--mono); border-top: 1px solid var(--line); }
+.joblines:empty { display: none; }
+.joblines li { display: flex; gap: 10px; align-items: center; padding: 4px 2px; border-bottom: 1px solid var(--line-2); animation: fadein .4s var(--ease) both; }
+.joblines .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; border: 1px solid var(--muted); }
+.joblines .working .dot { border-color: var(--text); animation: pulse 1.4s var(--ease) infinite; }
+.joblines .ready .dot, .joblines .done .dot, .joblines .found .dot { background: var(--ok); border-color: var(--ok); }
+.joblines .held .dot, .joblines .missing .dot { background: var(--warn); border-color: var(--warn); }
+.joblines .awaiting_approval .dot { background: var(--info); border-color: var(--info); }
+.jobhead { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 10px; }
+.jobhead .muted { flex: 1 1 240px; }
+/* drop anywhere */
+#dropall { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(3px); }
+#dropall.on { display: flex; }
+#dropall > div { border: 1px dashed var(--text); border-radius: 14px; padding: 40px 48px; background: var(--bg); font-size: 16px; text-align: center; max-width: 90vw; animation: pop .45s var(--ease) both; }
+/* toasts: ink pills stacked at the bottom, an optional action */
+#toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; flex-direction: column; gap: 8px; align-items: center; width: max-content; max-width: min(560px, 92vw); pointer-events: none; }
+#toast .t { pointer-events: auto; background: var(--text); color: var(--bg); padding: 7px 8px 7px 16px; min-height: 36px; border-radius: 999px; display: flex; gap: 12px; align-items: center; font-size: 12.5px; box-shadow: 0 18px 40px -18px rgba(0,0,0,.45); animation: rise .45s var(--ease) both; }
+#toast .t:not(:has(button)) { padding-right: 16px; }
+#toast .t.bad::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--bad); flex: none; }
+#toast .t button { border: 1px solid color-mix(in srgb, var(--bg) 45%, transparent); background: transparent; color: inherit; padding: 2px 12px; min-height: 24px; font-size: 12px; border-radius: 999px; }
+#toast .t button:hover { border-color: var(--bg); }
+/* part cards */
+.libsum { display: flex; gap: 8px 16px; flex-wrap: wrap; align-items: baseline; margin-top: 10px; }
+.libsum .big { font-size: 15px; }
+.libsum .big strong { font: 400 22px/1 var(--mono); letter-spacing: -.02em; }
+.r9 { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 0; }
+.ptools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 14px 0 8px; }
+.ptools .chips { margin: 0; }
+.parts { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.pcard { display: grid; grid-template-columns: 76px 1fr auto; gap: 14px; align-items: center; border-bottom: 1px solid var(--line-2); padding: 10px 6px; transition: background .3s var(--ease); animation: rise .5s var(--ease) both; }
+.pcard:hover { background: var(--hover); }
+.pcard.sel { background: var(--hover); box-shadow: inset 2px 0 0 var(--text); }
+.pcard.pending { opacity: .7; }
+.pcard.pending .pwhy { color: var(--text); }
+.thumb { width: 76px; height: 58px; border-radius: 8px; background: var(--pcb-board); border: 1px solid #000; display: flex; align-items: center; justify-content: center; overflow: hidden; color: #9a9a9a; font: 10px/1.25 var(--mono); text-align: center; }
+.thumb.none { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
+.thumb svg { width: 100%; height: 100%; display: block; }
+.thumb svg .padnum, .thumb svg .grid { display: none; }
+.pmain { min-width: 0; }
+.pname { font: 500 13px/1.3 var(--mono); background: none; border: none; padding: 0; min-height: 0; color: var(--text); text-align: left; cursor: pointer; overflow-wrap: anywhere; margin-right: 6px; }
+.pname:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
+.pdesc { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.pwhy { font-size: 12.5px; margin-top: 3px; }
+.ptags { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; }
+.ptags .pill { font-size: 11px; }
+.r9 .pill, .ptags .pill { white-space: normal; overflow-wrap: anywhere; border-radius: 10px; }
+.pacts { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 600px) { .pcard { grid-template-columns: 60px 1fr; gap: 10px; } .thumb { width: 60px; height: 48px; } .pacts { grid-column: 1 / -1; justify-content: flex-start; } .pdesc { white-space: normal; } }
+/* side panel: a sheet from the right, one hairline on its edge */
+#panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(500px, 100vw); z-index: 30; background: var(--bg); border-left: 1px solid var(--line); box-shadow: -30px 0 80px -40px rgba(0,0,0,.35); overflow-y: auto; transform: translateX(100%); transition: transform .5s var(--ease), visibility 0s linear .5s; visibility: hidden; }
+#panel.open { transform: none; visibility: visible; transition: transform .5s var(--ease); }
+#panel:focus { outline: none; }
+#panel .phead { position: sticky; top: 0; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); padding: 16px 20px 12px; display: flex; gap: 10px; justify-content: space-between; align-items: start; z-index: 1; }
+#panel .phead h2 { font: 500 14px/1.35 var(--mono); margin: 0 0 4px; overflow-wrap: anywhere; }
+#panel .pbody { padding: 14px 20px 32px; }
+#panel h3 { font: 500 10.5px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 22px 0 8px; }
+#panel .bigpic { border-radius: 10px; overflow: hidden; border: 1px solid #000; background: var(--pcb-board); }
+#panel .bigpic svg { display: block; width: 100%; height: auto; max-height: 240px; }
+.reason { border-left: 1px solid var(--warn); padding: 3px 0 3px 12px; margin: 8px 0; }
+.reason .fix { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+.reason .fix b { color: var(--text); font-weight: 550; }
+.vs td.diff { color: var(--text); font-weight: 550; font-family: var(--mono); background: color-mix(in srgb, var(--warn) 10%, var(--bg)); }
+.pactions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+.pactions a { font-size: 12.5px; }
+kbd { font: 11.5px var(--mono); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; color: var(--text); }
+#keysdlg { width: min(520px, 94vw); }
+#keysdlg table td { padding: 7px 8px; }
+#keysdlg table td:first-child { white-space: nowrap; width: 1%; }
+@keyframes jobpulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+.joblines .working .dot { animation-name: jobpulse; }
+details summary { cursor: pointer; color: var(--muted); }
+:is(.s-ok, .s-warn, .s-bad, .s-info, .s-off):not(.pill, .chip, .banner, .next) { color: var(--tone); }
+/* library hub: every part once, a hairline column per tool */
+.hubbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 12px 0 4px; }
+.hubbar .chips { margin: 0; }
+.hubbar label.field select { min-width: 0; }
+.hubtable td, .hubtable th { white-space: nowrap; }
+.hubtable td.hp { white-space: normal; min-width: 180px; max-width: 320px; }
+.hubtable th.tool span { display: block; font-size: 10px; text-transform: none; letter-spacing: 0; opacity: .8; }
+.hubtable td.cell { text-align: left; }
+.hubtable td.cell .sub, .hubtable td .sub { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.hubtable .none { color: var(--muted); opacity: .6; font-family: var(--mono); }
+.hubtable tr { cursor: pointer; }
+.hubtable tr:focus-visible td { background: var(--hover); outline: none; }
+@media (max-width: 760px) { .hubtable td.hp, .hubtable thead th:first-child { position: sticky; left: 0; background: var(--bg); z-index: 1; min-width: 140px; box-shadow: 1px 0 0 var(--line); } }
+[data-tc="altium"] { --tc: var(--t-altium); } [data-tc="altium365"] { --tc: var(--t-altium365); } [data-tc="kicad"] { --tc: var(--t-kicad); }
+[data-tc="fusion"] { --tc: var(--t-fusion); } [data-tc="easyeda"] { --tc: var(--t-easyeda); } [data-tc="all"] { --tc: var(--t-all); }
+.hubtools { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 14px 0 6px; }
+.hubtool { all: unset; box-sizing: border-box; display: flex; flex-direction: column; gap: 3px; padding: 12px 14px 13px; cursor: pointer; border: 1.5px solid var(--tc, var(--line)); border-radius: 10px; font-size: 12px; color: var(--muted); transition: background .3s var(--ease), box-shadow .3s var(--ease); animation: fadein .6s var(--ease) both; min-width: 0; }
+.hubtool:hover { background: color-mix(in srgb, var(--tc, var(--text)) 6%, transparent); }
+.hubtool:focus-visible { outline: 2px solid var(--tc, var(--text)); outline-offset: 2px; }
+.hubtool[aria-selected="true"] { background: color-mix(in srgb, var(--tc, var(--text)) 9%, transparent); box-shadow: inset 0 0 0 1.5px var(--tc, var(--text)); }
+.hubtool .tn { font: 500 10.5px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--tc, var(--text)); }
+.hubtool.off { border-style: dashed; }
+.tooltag { display: inline-block; border: 1px solid var(--tc, var(--line)); color: var(--tc, var(--text)); border-radius: 999px; padding: 0 8px; font-size: 11.5px; line-height: 18px; margin: 0 4px 3px 0; white-space: nowrap; }
+.hubtable th.tool { color: var(--tc, var(--muted)); box-shadow: inset 0 2px 0 var(--tc, transparent); }
+.hublibs .chip[data-tc] { border-color: color-mix(in srgb, var(--tc) 55%, var(--line)); }
+.hublibs .chip[data-tc].active { border-color: var(--tc); background: color-mix(in srgb, var(--tc) 9%, transparent); }
+#hubdlg .copies td:first-child { box-shadow: inset 3px 0 0 var(--tc, transparent); padding-left: 10px; }
+#hubdlg .copies td:first-child b { color: var(--tc, var(--text)); }
+.hubtool b { font: 400 26px/1.15 var(--mono); color: var(--text); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.hubtool .tw { overflow-wrap: anywhere; }
+.hubtool.off { opacity: .6; }
+@media (max-width: 760px) { .hubtools { grid-template-columns: repeat(2, minmax(0, 1fr)); } .hubtool { padding: 9px 11px 10px; gap: 1px; } .hubtool b { font-size: 20px; } .hubtool .tx { display: none; } }
+.hublibs { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 2px; }
+.hubstrip { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; margin: 10px 0 2px; font-size: 13px; }
+.hubpager { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; flex-wrap: wrap; }
+#hubdlg { width: min(1180px, 96vw); }
+#hubdlg .dlg-body { grid-template-columns: minmax(0, .9fr) minmax(0, 1.25fr); }
+#hubdlg .dlg-body > div { min-width: 0; }
+#hubdlg .kv dd, #hubdlg .copies td { overflow-wrap: break-word; word-break: break-word; }
+#hubdlg h3 { font: 500 10.5px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 20px 0 8px; }
+#hubdlg h3:first-child { margin-top: 0; }
+.hubpics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.hubpics figure { margin: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.hubpics figcaption { font: 10.5px/1.4 var(--mono); color: var(--muted); padding: 6px 9px; border-top: 1px solid var(--line); }
+.hubpics .fpbox { background: var(--pcb-board); display: grid; place-items: center; min-height: 120px; }
+.hubpics .fpbox svg { display: block; width: 100%; height: auto; max-height: 190px; }
+.hubpics .symbox { background: #fffdf2; display: grid; place-items: center; min-height: 120px; padding: 6px; }
+.hubpics .symbox svg { display: block; max-width: 100%; height: auto; max-height: 260px; }
+svg.sym .body { fill: #ffffb0; stroke: #800000; stroke-width: 1; }
+svg.sym .pin { stroke: #000; stroke-width: 1; }
+svg.sym text { font: 9px Arial, Helvetica, sans-serif; fill: #000; }
+svg.sym .num { fill: #444; font-size: 8px; }
+svg.sym .ref { fill: #800000; font-size: 9px; }
+.copies td { vertical-align: top; }
+.copies .why { font-size: 12px; margin-top: 3px; }
+.hubfix { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 2px; }
+ol.hubhist { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); font-size: 12.5px; }
+ol.hubhist li { display: grid; grid-template-columns: 9.5em 1fr; gap: 10px; padding: 6px 2px; border-bottom: 1px solid var(--line-2); }
+ol.hubhist .t { font: 11.5px/1.5 var(--mono); color: var(--muted); }
+@media (max-width: 760px) { #hubdlg .dlg-body { grid-template-columns: minmax(0, 1fr); } #hubdlg .dlg-body > div:last-child { order: -1; } #hubdlg .copies thead { display: none; } #hubdlg .copies, #hubdlg .copies tbody, #hubdlg .copies tr, #hubdlg .copies td { display: block; } #hubdlg .copies tr { padding: 8px 0; border-bottom: 1px solid var(--line-2); } #hubdlg .copies td { border: 0; padding: 2px 0; overflow-wrap: break-word; } ol.hubhist li { grid-template-columns: 1fr; gap: 0; } }
+/* motion: everything eases out on (.32, .72, 0, 1), and holds still for people who asked for less */
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes slide { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes toast { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@keyframes pulse { 0%, 100% { background: transparent; } 50% { background: var(--text); } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  html { scroll-behavior: auto; }
+}
 </style>
 </head>
 <body>
+<a class="skip" href="#app">Skip to content</a>
 <header>
   <h1>ecadlib</h1>
   <span class="meta" id="meta">loading…</span>
+  <button class="keyhint" id="keysbtn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">? Shortcuts</button>
   <div class="user" id="usermenu" hidden>
     <span class="who" id="whoami"></span>
     <button id="teambtn" data-role="admin">Users</button>
@@ -154,7 +371,7 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
   </div>
 </header>
 <nav class="steps" id="steps" aria-label="Sections" hidden>
-  <a href="#bomcard">1. Check a BOM</a><a href="#libcard" data-needs-bom>2. Fill the library</a><a href="#export" data-needs-bom>3. Send to Altium</a><a href="#queuecard">Review queue<span class="count" id="navq"></span></a><a href="#fpcard">Footprints</a><a href="#statuscard">Status</a><a href="#setup">Settings</a>
+  <a href="#bomcard">1. Check a BOM</a><a href="#libcard" data-needs-bom>2. Fill the library</a><a href="#export" data-needs-bom>3. Send to Altium</a><a href="#hubcard">Your library</a><a href="#queuecard">Review queue<span class="count" id="navq"></span></a><a href="#fpcard">Footprints</a><a href="#statuscard">Status</a><a href="#setup">Settings</a>
 </nav>
 <section class="card signin" id="signin" hidden>
   <h2>Sign in to ecadlib</h2>
@@ -168,6 +385,27 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
 </section>
 <main id="app">
   <div id="rolenote"></div>
+
+  <section class="card welcome" id="welcome" hidden aria-labelledby="welcomeh">
+    <h2 id="welcomeh">Welcome to ecadlib</h2>
+    <p style="margin:0">ecadlib turns a BOM into a checked parts library for Altium and KiCad. Nothing is in this workspace yet. Three ways to start:</p>
+    <ol>
+      <li><b>Try it with a sample BOM</b>: seven common parts, built from ecadlib's own standard parts. Offline, no API key, about a minute.</li>
+      <li><b>Drop your own BOM</b> anywhere on this page (CSV or XLSX from Altium, KiCad or a spreadsheet).</li>
+      <li><b>Run the setup check</b> to see which part sources and tools are ready.</li>
+    </ol>
+    <div class="row">
+      <button class="primary" id="demobtn" data-role="librarian">Try it with a sample BOM</button>
+      <button id="welcomefile" data-role="librarian">Choose a BOM file…</button>
+      <button id="welcomedoctor" data-role="admin">Run the setup check</button>
+    </div>
+    <div id="demobusy" hidden>
+      <div class="jobhead"><span class="muted small" id="demobusytext" role="status" aria-live="polite"></span><button class="small" id="demostop">Stop</button></div>
+      <div class="progress"><div id="demobar"></div></div>
+      <ul class="joblines" id="demolines" aria-label="Progress per part"></ul>
+    </div>
+    <div id="demoerr"></div>
+  </section>
 
   <section class="card" id="teamcard" hidden>
     <div class="row spread">
@@ -195,8 +433,11 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
   <section class="card" id="bomcard">
     <h2 style="margin-bottom:8px"><span class="stepno">1</span>Check a BOM</h2>
     <div class="drop" id="drop" data-role="librarian" tabindex="0" role="button" aria-label="Choose a BOM file">
-      <strong>Drop a BOM here</strong> (CSV or XLSX), or click to choose a file.
-      <div class="muted small" style="margin-top:6px">Altium, KiCad and spreadsheet BOMs work. Columns such as Designator, Comment, MPN, Manufacturer, LCSC, Value and Footprint are matched automatically.</div>
+      <div class="fig" data-fig="seat" aria-hidden="true"></div>
+      <div>
+        <strong>Drop a BOM here</strong> (CSV or XLSX), or click to choose a file.
+        <div class="muted small" style="margin-top:6px">Altium, KiCad and spreadsheet BOMs work. Columns such as Designator, Comment, MPN, Manufacturer, LCSC, Value and Footprint are matched automatically.</div>
+      </div>
       <input type="file" id="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls" hidden>
     </div>
     <div class="row" style="margin-top:10px" data-role="librarian">
@@ -204,9 +445,13 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
       <select id="boms"></select>
       <button id="rerun" data-role="librarian">Check again</button>
     </div>
-    <div id="busy" hidden>
-      <div class="muted small" id="busytext" style="margin-top:10px"></div>
-      <div class="progress"><div id="bar"></div></div>
+    <div id="busy" class="busyrow" hidden>
+      <div class="busyfig" data-fig="slow" aria-hidden="true"></div>
+      <div>
+        <div class="jobhead"><span class="muted small" id="busytext" role="status" aria-live="polite"></span><button class="small" id="busystop">Stop</button></div>
+        <div class="progress"><div id="bar"></div></div>
+        <ul class="joblines" id="busylines" aria-label="Progress per BOM line"></ul>
+      </div>
     </div>
     <div id="error"></div>
     <div id="history">
@@ -214,6 +459,7 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
         <h2 style="margin:0">Past BOM checks</h2>
         <div class="row"><input type="search" id="histq" placeholder="Filter by BOM or person…" aria-label="Filter past BOM checks"><button class="small" id="histreload">Refresh</button></div>
       </div>
+      <div class="emptyfig" data-fig="sieve" id="histfig" aria-hidden="true" hidden></div>
       <div class="muted small" id="histnote" style="margin:2px 0 6px">Every finished triage in this workspace. Opening one shows its saved result; nothing is looked up again.</div>
       <div class="tablewrap" id="histwrap"><table>
         <thead><tr><th>BOM</th><th>Finished (UTC)</th><th>By</th><th>Lines</th><th>Status</th><th></th></tr></thead>
@@ -244,7 +490,14 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
       <p class="muted small" style="margin:2px 0 0">Finds every missing symbol and footprint (official KiCad libraries, then EasyEDA, then the datasheet), converts them to Altium files and checks each part before release. Parts that fail a check are held back from Altium 365 until you look at them.</p></div>
       <div class="row"><button id="librun" data-role="librarian">Fill missing parts</button><button id="librerun" hidden>Redo all</button></div>
     </div>
-    <div id="libbusy" hidden><div class="muted small" id="libbusytext" style="margin-top:10px"></div><div class="progress"><div id="libbar"></div></div></div>
+    <div id="libbusy" class="busyrow" hidden>
+      <div class="busyfig" data-fig="slow" aria-hidden="true"></div>
+      <div>
+        <div class="jobhead"><span class="muted small" id="libbusytext" role="status" aria-live="polite"></span><button class="small" id="libstop">Stop</button></div>
+        <div class="progress"><div id="libbar"></div></div>
+        <ul class="joblines" id="liblines" aria-label="Progress per part"></ul>
+      </div>
+    </div>
     <div class="signoff" id="libtools" hidden>
       <div class="row">
         <label class="field small" id="signerwrap">Your name <input type="text" id="signer" placeholder="Ann Lee &lt;ann@example.com&gt;" size="28" autocomplete="name"></label>
@@ -258,6 +511,7 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
       <div class="out" id="approut"></div>
       <div class="out" id="dedupeout"></div>
     </div>
+    <div id="liberr"></div>
     <div class="out" id="libout"></div>
   </section>
 
@@ -296,6 +550,36 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
     <div class="out" id="toolout"></div>
   </section>
 
+  <section class="card" id="hubcard">
+    <div class="row spread">
+      <div><h2>Your library</h2>
+      <p class="muted small" style="margin:2px 0 0">Your parts in every tool you use. Pick a tool to see your library as it is there, when each part last changed and who changed it, or compare all tools side by side. Your own library files are only read; copies between tools go into ecadlib's hub library.</p></div>
+      <div class="row"><button class="small" id="hubrescan">Look again</button></div>
+    </div>
+    <div class="hubtools" id="hubtools" role="tablist" aria-label="Tools"></div>
+    <div id="hubtoolhead"></div>
+    <div id="hubstats"></div>
+    <div class="hubbar">
+      <input type="search" id="hubq" placeholder="Search name, MPN, maker…" aria-label="Search the library">
+      <div class="chips" id="hubchips" role="group" aria-label="Show"></div>
+    </div>
+    <div class="hubbar">
+      <label class="field small" data-hubcompare>In <select id="hubhave" aria-label="In this tool"><option value="">any tool</option></select></label>
+      <label class="field small" data-hubcompare>but not in <select id="hublack" aria-label="Not in this tool"><option value="">–</option></select></label>
+      <label class="field small">Project <select id="hubproject" aria-label="Project"><option value="">all parts</option></select></label>
+      <label class="field small">Sort <select id="hubsort" aria-label="Sort"><option value="name">by name</option><option value="updated">last changed first</option><option value="attention">needs a look first</option></select></label>
+    </div>
+    <div id="hubproj"></div>
+    <div id="hubnote"></div>
+    <div class="tablewrap" id="hubwrap"><table class="hubtable">
+      <thead id="hubhead"></thead>
+      <tbody id="hubrows"></tbody>
+    </table></div>
+    <div class="empty" id="hubempty" hidden><div class="emptyfig" data-fig="drawer" aria-hidden="true"></div><div class="muted small" id="hubemptytext"></div></div>
+    <div class="hubpager" id="hubpager"></div>
+    <div id="hubprob"></div>
+  </section>
+
   <section class="card" id="queuecard">
     <div class="row spread">
       <div><h2>Review queue</h2>
@@ -309,7 +593,7 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
       <thead><tr><th>Part</th><th>Change</th><th>Status</th><th>Proof</th><th>Batch</th><th>Updated (UTC)</th><th></th></tr></thead>
       <tbody id="qrows"></tbody>
     </table></div>
-    <div class="muted small" id="qempty" hidden>Nothing in the queue. The library agent adds parts here when a watched project or BOM changes.</div>
+    <div class="empty" id="qemptywrap" hidden><div class="emptyfig" data-fig="drawer" aria-hidden="true"></div><div class="muted small" id="qempty">Nothing in the queue. The library agent adds parts here when a watched project or BOM changes.</div></div>
     <div class="qview" id="qview" hidden></div>
   </section>
 
@@ -369,6 +653,7 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
     </div>
     <div>
       <div class="preview" id="preview"></div>
+      <div class="layertabs" aria-label="Layers, coloured as in Altium Designer"><span>LS</span><span class="on"><i style="background:var(--pcb-top)"></i>Top Layer</span><span><i style="background:var(--pcb-multi)"></i>Multi-Layer</span><span><i style="background:var(--pcb-fab)"></i>Top Assembly</span><span><i style="background:var(--pcb-crtyd)"></i>Top Courtyard</span><span><i style="background:var(--pcb-hole)"></i>Drill</span></div>
       <div class="nums" id="nums"></div>
       <div id="dlgerr"></div>
       <div class="row" style="margin-top:12px; justify-content:flex-end">
@@ -403,7 +688,41 @@ ol.hist { margin: 0; padding-left: 18px; font-size: 12.5px; }
     <div class="row" style="margin-top:12px;justify-content:flex-end"><button value="cancel" id="pwcancel" formnovalidate>Cancel</button><button class="primary" id="pwok" value="ok">Save</button></div>
   </form>
 </dialog>
-<div class="toast" id="toast" role="status"></div>
+<dialog id="hubdlg" aria-labelledby="hubtitle">
+  <div class="dlg-head"><div><strong id="hubtitle"></strong><div class="muted small" id="hubsub"></div></div><button id="hubclose">Close</button></div>
+  <div class="dlg-body" id="hubbody"></div>
+</dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+<div id="dropall" aria-hidden="true"><div><strong>Drop the BOM to check it</strong><div class="muted small" style="margin-top:6px">CSV or XLSX, up to 20 MB</div></div></div>
+<aside id="panel" aria-labelledby="ptitle" tabindex="-1">
+  <div class="phead"><div><h2 id="ptitle"></h2><div class="muted small" id="psub"></div></div><button class="small" id="pclose" aria-label="Close the part panel">Close</button></div>
+  <div class="pbody" id="pbody"></div>
+</aside>
+<dialog id="keysdlg" aria-labelledby="keystitle">
+  <div class="dlg-head"><strong id="keystitle">Keyboard shortcuts</strong><button id="keysclose">Close</button></div>
+  <div style="padding:10px 16px 16px"><table><tbody>
+    <tr><td><kbd>?</kbd></td><td>Show this list</td></tr>
+    <tr><td><kbd>/</kbd></td><td>Search parts (or the BOM lines)</td></tr>
+    <tr><td><kbd>j</kbd> <kbd>k</kbd></td><td>Next / previous part</td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>Open the part under focus</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>Close the part panel or a dialog</td></tr>
+    <tr><td><kbd>h</kbd></td><td>Show held parts only (again: all)</td></tr>
+    <tr><td><kbd>u</kbd></td><td>Choose a BOM file</td></tr>
+    <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td><td>Go to step 1, 2 or 3</td></tr>
+    <tr><td><kbd>l</kbd></td><td>Go to your library (every part across tools)</td></tr>
+    <tr><td><kbd>q</kbd> / <kbd>s</kbd></td><td>Go to the review queue / status</td></tr>
+  </tbody></table>
+  <p class="muted small" style="margin:10px 0 0">Shortcuts are off while you type in a box. You can also drop a BOM file anywhere on the page.</p></div>
+</dialog>
+<script type="module">
+// Line figures from Hairline (github.com/lucasmarkes/hairline): each [data-fig] element gets one. They only decorate,
+// so a figure that fails to draw is skipped and the page works without it.
+import * as HL from "/hairline.js";
+const OPTS = { seat: { play: true }, slow: { intensity: 0.3 }, sieve: {}, drawer: {} };
+for (const el of document.querySelectorAll("[data-fig]")) {
+  try { HL[el.dataset.fig](el, OPTS[el.dataset.fig]); } catch (e) { el.remove(); }
+}
+</script>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -436,7 +755,25 @@ async function api(path, body, raw) {
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fileUrl = p => "/api/file?path=" + encodeURIComponent(p);
 const fileLink = p => `<a href="${fileUrl(p)}">${esc(p.split("/").pop())}</a>`;
-function toast(msg) { const t = $("#toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", 3200); }
+// toasts: a short line at the bottom; an optional action button (Undo, Open); stacked, newest last, max 3
+function toast(msg, opt = {}) {
+  const box = $("#toast"), t = document.createElement("div");
+  t.className = "t" + (opt.bad ? " bad" : "");
+  const span = document.createElement("span"); span.textContent = msg; t.appendChild(span);
+  let done = false;
+  const close = () => { if (done) return; done = true; t.remove(); clearTimeout(t.timer); if (opt.onClose) opt.onClose(); };
+  if (opt.action) {
+    const b = document.createElement("button"); b.textContent = opt.action;
+    b.onclick = () => { const f = opt.onAction; opt.onClose = null; close(); f && f(); };
+    t.appendChild(b);
+  }
+  box.appendChild(t);
+  while (box.children.length > 3) box.firstElementChild.remove();
+  t.timer = setTimeout(close, opt.ms || (opt.action ? 6000 : 3600));
+  return { close, el: t };
+}
+const reduced = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const motion = () => reduced() ? "auto" : "smooth";
 function banner(el, msg, cls = "s-bad") {
   el.innerHTML = msg ? `<div class="banner ${cls}"><span>${esc(msg)}</span><button aria-label="Dismiss">×</button></div>` : "";
   if (msg) el.querySelector("button").onclick = () => el.innerHTML = "";
@@ -450,11 +787,16 @@ function goTo(id) {
   const el = document.getElementById(id);
   if (!el) return;
   if (el.hidden) return toast("Check a BOM first (step 1), or open one under Past BOM checks.");
-  el.scrollIntoView({ behavior: "smooth", block: "start" });
+  el.scrollIntoView({ behavior: motion(), block: "start" });
   const f = el.querySelector("button.primary:not(:disabled), button:not(:disabled):not([data-role-hidden])");
   if (f) f.focus({ preventScroll: true });
 }
 document.addEventListener("click", e => { const g = e.target.closest && e.target.closest("[data-go]"); if (g) { e.preventDefault(); goTo(g.dataset.go); } });
+// the step bar underlines the section in the middle of the screen
+const spy = new IntersectionObserver(es => es.forEach(e => {
+  if (e.isIntersecting) document.querySelectorAll("#steps a").forEach(a => a.classList.toggle("here", a.getAttribute("href") === "#" + e.target.id));
+}), { rootMargin: "-40% 0px -55% 0px" });
+document.querySelectorAll("#steps a").forEach(a => { const t = document.getElementById(a.getAttribute("href").slice(1)); if (t) spy.observe(t); });
 $("#steps").addEventListener("click", e => {
   const a = e.target.closest("a"); if (!a) return;
   e.preventDefault(); goTo(a.getAttribute("href").slice(1));
@@ -484,6 +826,7 @@ async function loadInfo() {
   $("#a365hint").textContent = info.altium365.token
     ? "Plans one managed component per part. A part is ready once its .SchLib and .PcbLib exist. Dry run shows the requests without sending anything."
     : "Plans one managed component per part (ready once its .SchLib and .PcbLib exist). To push, restart ecadlib with NEXAR_TOKEN set; Dry run works without it.";
+  welcome();
 }
 
 function setBusy(on, text = "", frac = null) {
@@ -492,26 +835,30 @@ function setBusy(on, text = "", frac = null) {
   ["#rerun", "#file"].forEach(s => $(s).disabled = on);
 }
 
+const triageWords = t => { const todo = t.rows.filter(r => !String(r.status).startsWith("in_library") && !String(r.status).startsWith("dnp")).length;
+  return todo ? `${t.rows.length - todo} of ${t.rows.length} lines already in your library, ${todo} need work` : `all ${t.rows.length} lines already in your library`; };
 async function runJob(start, label) {
   if (busy) return;
-  showErr(); setBusy(true, `Checking ${label}…`);
+  showErr(); setBusy(true, `Checking ${label}…`); $("#busylines").innerHTML = "";
   try {
     const { job } = await start;
-    for (;;) {
-      await new Promise(r => setTimeout(r, 400));
-      const j = await api("/api/job?id=" + job);
-      if (j.total) setBusy(true, `Checking ${label}: line ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? " (" + j.label + ")" : ""}`, j.done / j.total);
-      if (j.state === "done") { showResult(j.result); loadHistory().catch(() => {}); loadStatus().catch(() => {}); $("#results").scrollIntoView({ behavior: "smooth", block: "start" }); break; }
-      if (j.state === "error") throw new Error(j.error);
-    }
-  } catch (e) { showErr(e); $("#error").scrollIntoView({ behavior: "smooth", block: "center" }); }
-  finally { setBusy(false); loadInfo().then(() => { if (current && current.bom) $("#boms").value = current.bom; }).catch(() => {}); }
+    const j = await pollJob(job, { text: $("#busytext"), bar: $("#bar"), lines: $("#busylines"), stop: $("#busystop"),
+      label: j => j.total ? `Checking ${label}: line ${Math.min(j.done + 1, j.total)} of ${j.total}${secs(j)}` : `Checking ${label}…` });
+    showResult(j.result); loadHistory().catch(() => {}); loadStatus().catch(() => {}); loadHub().catch(() => {});
+    toast(`Checked ${j.result.name || label}: ${triageWords(j.result)}.`);
+    $("#results").scrollIntoView({ behavior: motion(), block: "start" });
+  } catch (e) {
+    if (e.cancelled) toast("Stopped checking the BOM. Nothing was saved.");
+    else { showErr(e); $("#error").scrollIntoView({ behavior: motion(), block: "center" }); }
+  }
+  finally { setBusy(false); loadInfo().then(() => { if (current && current.bom) $("#boms").value = current.bom; welcome(); }).catch(() => {}); }
 }
 
 function showResult(t) {
-  current = t; filter = null; $("#q").value = ""; planned = null;
-  ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#approut", "#dedupeout", "#toolout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
+  current = t; filter = null; $("#q").value = ""; planned = null; parts = null; pfilter = ""; closePanel();
+  ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#liberr", "#approut", "#dedupeout", "#toolout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
   $("#dry").disabled = $("#push").disabled = true; disabledWhy(); render();
+  if (t.bom && !libbusy) loadParts(true).catch(() => {});           // a plan from an earlier run: show its parts at once
 }
 
 function render() {
@@ -558,26 +905,65 @@ $("#rows").addEventListener("click", e => { const n = e.target.dataset.gen; if (
 const drop = $("#drop");
 drop.addEventListener("click", () => !busy && $("#file").click());
 drop.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && !busy) { e.preventDefault(); $("#file").click(); } });
-drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
-drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); });
+// drop a BOM anywhere on the page
+const hasFiles = e => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
+let dragDepth = 0;
+document.addEventListener("dragenter", e => { if (!hasFiles(e) || !can("librarian") || $("#app").hidden) return; e.preventDefault(); dragDepth++; $("#dropall").classList.add("on"); drop.classList.add("over"); });
+document.addEventListener("dragover", e => { if (hasFiles(e)) e.preventDefault(); });
+document.addEventListener("dragleave", e => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; $("#dropall").classList.remove("on"); drop.classList.remove("over"); } });
+document.addEventListener("drop", e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; $("#dropall").classList.remove("on"); drop.classList.remove("over");
+  if (!can("librarian") || $("#app").hidden) return;
+  const f = e.dataTransfer.files[0];
+  if (f) { if (busy) toast("A BOM is still being checked; drop this one when it has finished.", { bad: true }); else upload(f); }
+});
 $("#file").addEventListener("change", e => { if (e.target.files[0]) upload(e.target.files[0]); e.target.value = ""; });
 async function upload(f) {
   if (busy) return;
   if (f.size > 20 * 1024 * 1024) return showErr("That file is over 20 MB, which is too big for a BOM.");
+  $("#bomcard").scrollIntoView({ behavior: motion(), block: "start" });
   runJob(api("/api/upload", await f.arrayBuffer(), f.name), f.name);
 }
 $("#rerun").addEventListener("click", () => { const b = $("#boms").value; if (b) runJob(api("/api/triage", { bom: b }), b); });
 
+// ---- first visit: an empty workspace offers the sample BOM and the setup check
+function welcome() {
+  const empty = info && !info.boms.length && !(history || []).length;
+  $("#welcome").hidden = !(empty && can("librarian")) && !demoRunning;
+}
+let demoRunning = false;
+$("#demobtn").addEventListener("click", async () => {
+  if (demoRunning || busy) return;
+  demoRunning = true; $("#demobtn").disabled = true; banner($("#demoerr"), "");
+  $("#demobusy").hidden = false; $("#demolines").innerHTML = ""; $("#demobusytext").textContent = "Starting…";
+  try {
+    const { job } = await api("/api/demo", {});
+    const j = await pollJob(job, { text: $("#demobusytext"), bar: $("#demobar"), lines: $("#demolines"), stop: $("#demostop"),
+      label: j => (j.total ? `Building the sample library: ${Math.min(j.done + 1, j.total)} of ${j.total}` : "Checking the sample BOM") + `${secs(j)}…` });
+    showResult(j.result.triage); await showLibrarian(j.result);
+    toast(`Sample library built: ${counts({ ready: j.result.ready, held: j.result.held, waiting: j.result.awaiting_approval })}.`);
+    demoRunning = false; $("#welcome").hidden = true;
+    loadHistory().catch(() => {}); loadStatus().catch(() => {}); loadHub().catch(() => {}); await loadInfo().catch(() => {});
+    if (current && current.bom) $("#boms").value = current.bom;
+    goTo("libcard");
+  } catch (e) {
+    if (e.cancelled) toast("Stopped the sample. Nothing was added to your library.");
+    else banner($("#demoerr"), e.message);
+  } finally { demoRunning = false; $("#demobtn").disabled = false; $("#demobusy").hidden = true; }
+});
+$("#welcomefile").addEventListener("click", () => $("#file").click());
+$("#welcomedoctor").addEventListener("click", () => { goTo("statuscard"); $("#doctorbtn").click(); });
+
 // ---- past triages (any signed-in user: finished results are library data; running jobs stay private)
 let history = [];
 async function loadHistory() {
-  history = (await api("/api/triage/history")).triages; renderHistory();
+  history = (await api("/api/triage/history")).triages; renderHistory(); welcome();
 }
 function renderHistory() {
   const q = $("#histq").value.trim().toLowerCase();
   const rows = history.filter(h => !q || [h.name, h.bom, h.user].join(" ").toLowerCase().includes(q));
-  $("#histwrap").hidden = !history.length;
+  $("#histwrap").hidden = !history.length; $("#histfig").hidden = !!history.length;
   $("#histnote").textContent = history.length ? "Every finished triage in this workspace. Opening one shows its saved result; nothing is looked up again."
     : "No triages yet." + (can("librarian") ? " Drop a BOM above to run the first one." : " A librarian runs them; they show up here.");
   $("#histrows").innerHTML = rows.map(h => {
@@ -593,7 +979,7 @@ $("#histreload").addEventListener("click", () => loadHistory().catch(e => banner
 $("#histrows").addEventListener("click", async e => {
   const id = e.target.dataset.open; if (!id || busy) return;
   banner($("#histerr"), "");
-  try { showResult(await api("/api/triage/result?id=" + encodeURIComponent(id))); if (current.bom && info && info.boms.includes(current.bom)) $("#boms").value = current.bom; $("#results").scrollIntoView({ behavior: "smooth" }); }
+  try { showResult(await api("/api/triage/result?id=" + encodeURIComponent(id))); if (current.bom && info && info.boms.includes(current.bom)) $("#boms").value = current.bom; $("#results").scrollIntoView({ behavior: motion() }); }
   catch (err) { banner($("#histerr"), err.message); }
 });
 
@@ -661,37 +1047,233 @@ $("#push").addEventListener("click", e => {
   action(e.target, $("#dryout"), async () => {
     const r = await api("/api/altium365/push", { bom: current.bom, workspace: ws.value, dry_run: false });
     const bad = r.results.filter(x => x.action === "error");
-    loadStatus().catch(() => {});
+    loadStatus().catch(() => {}); loadHub().catch(() => {});
     return `Pushed: ${r.results.filter(x => x.action === "release").length} released, ${r.results.filter(x => x.action === "update_parameters").length} updated, ${bad.length} failed. Report: ${fileLink(r.report)}` +
       (bad.length ? `<div class="muted">${bad.map(b => esc(b.name + ": " + b.detail)).join("<br>")}</div>` : "");
   });
 });
 
-// ---- librarian
-let libbusy = false;
+// ---- long jobs: poll the job, show its live per-part lines, Stop
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const secs = j => j.elapsed >= 2 ? ` (${Math.round(j.elapsed)} s so far)` : "";
+function jobLines(ul, lines) {
+  const atEnd = ul.scrollTop + ul.clientHeight >= ul.scrollHeight - 4;
+  ul.innerHTML = lines.map(l => `<li class="${esc(l.state)}"><span class="dot" aria-hidden="true"></span><span>${esc(l.text || l.name)}</span></li>`).join("");
+  if (atEnd) ul.scrollTop = ul.scrollHeight;
+}
+async function pollJob(id, view) {
+  view.stop.disabled = false; view.stop.textContent = "Stop";
+  view.stop.onclick = async () => {
+    view.stop.disabled = true; view.stop.textContent = "Stopping…";
+    try { await api("/api/job/cancel", { id }); } catch (e) { view.stop.disabled = false; view.stop.textContent = "Stop"; toast(e.message, { bad: true }); }
+  };
+  for (;;) {
+    await sleep(400);
+    const j = await api("/api/job?id=" + encodeURIComponent(id));
+    view.text.textContent = view.label(j);
+    view.bar.style.width = j.total ? `${Math.round(j.done / j.total * 100)}%` : "6%";
+    if (view.lines) jobLines(view.lines, j.lines || []);
+    if (j.state === "done") return j;
+    if (j.state === "cancelled") { const e = new Error("Stopped."); e.cancelled = true; throw e; }
+    if (j.state === "error") throw new Error(j.error);
+  }
+}
+
+// ---- librarian: fill the library, then the parts as cards with a side panel per part
+let libbusy = false, parts = null, pfilter = "", popen = null;
+const pending = new Map();                 // part -> {what, timer, commit}: decisions still inside their Undo window
+const WORD = { ready: "ready", held: "held", awaiting_approval: "waiting for sign-off", duplicate: "duplicate", existing: "already in Altium 365" };
+const PILL = { ready: "s-ok", held: "s-warn", awaiting_approval: "s-info", duplicate: "s-off", existing: "s-off" };
+const counts = c => [c.ready && `${c.ready} ready`, c.held && `${c.held} held`, c.waiting && `${c.waiting} waiting for sign-off`].filter(Boolean).join(", ") || "no parts";
+const usd = v => "$" + (v >= 1 ? v.toFixed(2) : v >= 0.01 ? v.toFixed(3) : v.toFixed(4));
 async function librarian(refresh) {
-  if (libbusy || busy) return;
-  libbusy = true; $("#librun").disabled = $("#librerun").disabled = true; banner($("#libout"), "");
-  libProgress(true, "Filling the library: starting…");
+  if (libbusy || !hasBom()) return;
+  libbusy = true; $("#librun").disabled = $("#librerun").disabled = true; banner($("#liberr"), "");
+  $("#libbusy").hidden = false; $("#liblines").innerHTML = ""; $("#libbusytext").textContent = "Filling the library: starting…"; $("#libbar").style.width = "4%";
+  const bom = current.bom;
   try {
-    const { job } = await api("/api/librarian/run", { bom: current.bom, refresh: refresh || null });
-    for (;;) {
-      await new Promise(r => setTimeout(r, 600));
-      const j = await api("/api/job?id=" + job);
-      if (j.total) libProgress(true, `Filling the library: part ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? " (" + j.label + ")" : ""}. Online look-ups take about a second each; you can leave this page open and look around.`, j.done / j.total);
-      if (j.state === "done") { showLibrarian(j.result); break; }
-      if (j.state === "error") throw new Error(j.error);
-    }
-  } catch (e) { banner($("#libout"), e.message); }
-  finally { libbusy = false; libProgress(false); $("#librun").disabled = $("#librerun").disabled = false; planned = null;
-            ["#planout", "#dryout"].forEach(s => $(s).innerHTML = ""); $("#dry").disabled = $("#push").disabled = true; disabledWhy();
-            loadStatus().catch(() => {}); }
+    const { job } = await api("/api/librarian/run", { bom, refresh: refresh || null });
+    const j = await pollJob(job, { text: $("#libbusytext"), bar: $("#libbar"), lines: $("#liblines"), stop: $("#libstop"),
+      label: j => (j.total ? `Filling the library: part ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? ", " + j.label : ""}` : `Filling the library: ${j.label || "starting"}`) +
+        `${secs(j)}. Online look-ups take about a second each; the rest of the page keeps working.` });
+    if (current && current.bom === bom) await showLibrarian(j.result);
+    toast(`Library filled: ${counts({ ready: j.result.ready, held: j.result.held, waiting: j.result.awaiting_approval })}.`);
+  } catch (e) {
+    if (e.cancelled) toast("Stopped. The library plan was not changed; Fill missing parts starts again from the top, reusing what was downloaded.");
+    else banner($("#liberr"), e.message);
+  } finally {
+    libbusy = false; $("#libbusy").hidden = true; $("#librun").disabled = $("#librerun").disabled = false; planned = null;
+    ["#planout", "#dryout"].forEach(s => $(s).innerHTML = ""); $("#dry").disabled = $("#push").disabled = true; disabledWhy();
+    loadStatus().catch(() => {}); loadHub().catch(() => {});
+  }
 }
-function libProgress(on, text = "", frac = null) {
-  busy = on; $("#libbusy").hidden = !on; $("#libbusytext").textContent = text;
-  $("#libbar").style.width = frac == null ? "0" : `${Math.round(frac * 100)}%`;
-  ["#rerun", "#file"].forEach(s => $(s).disabled = on);
+// after the librarian, a pick, a decision or a release: reload the cards (the summary r is only a fallback)
+async function showLibrarian(r) {
+  $("#librerun").hidden = false; $("#libtools").hidden = false;
+  try { await loadParts(); }
+  catch (e) { $("#libout").innerHTML = `<strong>${r.ready} of ${r.parts}</strong> parts ready, ${r.held} held. ` + r.reports.map(fileLink).join(" · ") + libNext(r); }
 }
+async function loadParts(quiet) {
+  const bom = current && current.bom;
+  if (!bom) return;
+  try { parts = await api("/api/parts?bom=" + encodeURIComponent(bom)); }
+  catch (e) { if (quiet) { parts = null; $("#libout").innerHTML = ""; return; } throw e; }
+  if (!current || current.bom !== bom) return;
+  $("#librerun").hidden = false; $("#libtools").hidden = false;
+  renderParts();
+  if (popen) { const p = parts.parts.find(x => x.part === popen); if (p) showPanel(p, false); else closePanel(); }
+}
+function libNext(r) {
+  const held = r.held || 0, aw = r.awaiting_approval || 0, lib = can("librarian");
+  const out = [];
+  if (held) out.push(`<b>${held} held</b>: click a part to see why and how to fix it. ` + (lib ? "There you can <i>Pick…</i> a symbol or footprint, open the datasheet, or <i>Release anyway</i> once you have checked the part." : "A librarian picks a symbol or footprint for each."));
+  if (aw) out.push(`<b>${aw} waiting for sign-off</b>: ` + (can("approver") ? (session.team ? "click Approve on each." : "type your name above, then click Approve on each.") : "an approver signs them off."));
+  if (r.ready) out.push(`${out.length ? "Meanwhile" : "Next"}: the <b>${r.ready}</b> ready part(s) can go to Altium (step 3).`);
+  else if (!out.length) out.push("No part is ready yet.");
+  return `<div class="next ${held || aw ? "s-warn" : "s-ok"}" role="status"><span>${out.join("<br>")}</span>${r.ready ? '<button class="small" data-go="export">Go to step 3</button>' : ""}</div>`;
+}
+function effective(p) {                     // the status a pending (not yet sent) decision will give
+  const d = pending.get(p.part);
+  return d ? d.status : p.status;
+}
+function renderParts() {
+  if (!parts) return;
+  const c = parts.counts, cost = parts.cost, q = ($("#pq") && $("#pq").value || "").trim().toLowerCase();
+  const sum = { ready: c.ready, held: c.held, awaiting_approval: c.waiting, parts: c.parts };
+  const r9 = [];
+  if (c.cross_check_disagreed) r9.push(`<span class="pill s-warn">cross-check: ${c.cross_check_disagreed} disagree</span>`);
+  if (c.parity_mismatch) r9.push(`<span class="pill s-warn">KiCad / Altium: ${c.parity_mismatch} differ</span>`);
+  else if (parts.parts.some(p => p.parity.result === "match")) r9.push(`<span class="pill s-ok">KiCad / Altium: all compared parts match</span>`);
+  r9.push(cost.answers ? `<span class="pill s-info">datasheet reads so far: ${usd(cost.usd)} for ${cost.answers} read(s)${cost.models.length ? " · " + esc(cost.models.join(", ")) : ""}</span>`
+    : `<span class="pill s-off">no datasheet reads yet ($0)</span>`);
+  const keep = document.activeElement && document.activeElement.id === "pq";
+  const states = ["held", "awaiting_approval", "ready", "duplicate"].filter(s => parts.parts.some(p => effective(p) === s));
+  const shown = parts.parts.filter(p => (!pfilter || effective(p) === pfilter) &&
+    (!q || [p.part, p.description, p.folder, p.footprint.ref, p.symbol.ref].join(" ").toLowerCase().includes(q)));
+  const lib = can("librarian"), appr = can("approver");
+  $("#libout").innerHTML = `<div class="libsum"><span class="big"><strong>${c.ready} of ${c.parts}</strong> parts ready</span><span>${esc(counts(c))}</span><span class="small">${parts.reports.map(fileLink).join(" · ")}</span></div>
+    <div class="r9">${r9.join("")}</div>` + libNext(sum) +
+    `<div class="ptools"><input type="search" id="pq" placeholder="Search parts, footprints, folders…" aria-label="Search parts" value="${esc(q)}">
+      <div class="chips" role="group" aria-label="Show parts">${[["", `All ${c.parts}`]].concat(states.map(s => [s, `${WORD[s] || s} ${parts.parts.filter(p => effective(p) === s).length}`]))
+        .map(([s, lab]) => `<button class="chip ${s ? PILL[s] : "s-off"}${pfilter === s ? " active" : ""}" data-pf="${esc(s)}" aria-pressed="${pfilter === s}">${esc(lab)}</button>`).join("")}</div></div>` +
+    `<ul class="parts" id="plist" aria-label="Parts">${shown.map(p => card(p, lib, appr)).join("") || '<li class="muted">No parts match.</li>'}</ul>`;
+  if (keep) { const i = $("#pq"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
+}
+function card(p, lib, appr) {
+  const st = effective(p), d = pending.get(p.part);
+  const tags = [];
+  if (p.allowed) tags.push('<span class="pill s-info">released anyway</span>');
+  if (p.cross_check) tags.push(`<span class="pill ${p.cross_check.status === "disagreed" ? "s-warn" : p.cross_check.status === "agreed" ? "s-ok" : "s-off"}">cross-check: ${esc(p.cross_check.status === "disagreed" ? "disagrees" : p.cross_check.status)}</span>`);
+  if (p.parity.result) tags.push(`<span class="pill ${p.parity.result === "match" ? "s-ok" : "s-warn"}">KiCad / Altium ${p.parity.result === "match" ? "match" : "differ"}</span>`);
+  if (p.cost) tags.push(`<span class="pill s-off">${usd(p.cost.usd)}${p.cost.models.length ? " · " + esc(p.cost.models[0]) : ""}</span>`);
+  if (p.approval && p.approval.approved_by && p.approval.approved_by.length) tags.push(`<span class="pill s-ok">approved by ${esc(p.approval.approved_by.join(", "))}</span>`);
+  const why = d ? `<div class="pwhy">${esc(d.what)}, sending in a moment… <button class="small" data-undo="${esc(p.part)}">Undo</button></div>`
+    : st === "held" && p.reasons.length ? `<div class="pwhy">${esc(p.reasons[0].text)}${p.reasons.length > 1 ? ` <span class="muted">(+${p.reasons.length - 1} more)</span>` : ""}</div>`
+    : st === "awaiting_approval" && p.reasons.length ? `<div class="pwhy">${esc(p.reasons[0].text)}</div>` : "";
+  const acts = (st === "held" ? `<button class="small" data-fix="${esc(p.part)}">${lib ? "Fix…" : "Why?"}</button>` : "") +
+    (appr && !d && (st === "ready" || st === "awaiting_approval") ? `<button class="small" data-approve="${esc(p.part)}">Approve</button><button class="small" data-reject="${esc(p.part)}">Reject…</button>` : "");
+  return `<li class="pcard${popen === p.part ? " sel" : ""}${d ? " pending" : ""}" data-part="${esc(p.part)}">
+    <div class="thumb${p.picture ? "" : " none"}" aria-hidden="true">${p.picture || (p.footprint.found ? "" : "no<br>footprint")}</div>
+    <div class="pmain"><button class="pname" data-openp="${esc(p.part)}" aria-label="${esc(p.part)}, ${esc(WORD[st] || st)}: open details">${esc(p.part)}</button>
+      <span class="pill ${PILL[st] || "s-info"}">${esc(d ? d.label : WORD[st] || st)}</span>
+      <div class="pdesc">${esc(p.description || p.folder)}${p.footprint.ref ? ` · ${esc(p.footprint.ref)}` : ""}${p.footprint.pads ? ` · ${p.footprint.pads} pads` : ""}</div>
+      ${why}<div class="ptags">${tags.join("")}</div></div>
+    <div class="pacts">${acts}</div></li>`;
+}
+// ---- the side panel of one part
+function showPanel(p, focus = true) {
+  popen = p.part;
+  const lib = can("librarian"), appr = can("approver"), st = effective(p), url = p.datasheet && safeUrl(p.datasheet.url);
+  const dsLink = (page, txt) => url ? `<a href="${esc(url)}${page ? "#page=" + encodeURIComponent(page) : ""}" target="_blank" rel="noopener noreferrer">${esc(txt)}</a>` : "";
+  $("#ptitle").textContent = p.part;
+  $("#psub").innerHTML = `<span class="pill ${PILL[st] || "s-info"}">${esc(WORD[st] || st)}</span> ${esc(p.description || "")}`;
+  const reasons = p.reasons.map(r => `<div class="reason"><div>${esc(r.text)}</div><div class="fix"><b>Next:</b> ${esc(r.fix)}</div></div>`).join("");
+  const cc = p.cross_check, par = p.parity;
+  const ccRows = cc && cc.rows.length ? `<div class="scroll"><table class="vs"><thead><tr><th>What</th><th>Datasheet read</th><th>${cc.rows[0].second_is === "table" ? "Standard table" : "Second read"}</th><th>Page</th></tr></thead><tbody>` +
+    cc.rows.map(r => `<tr><td>${esc(r.label)}</td><td class="diff">${esc(r.first)}</td><td class="diff">${esc(r.second)}</td><td>${r.page ? dsLink(r.page, "p. " + r.page) || esc(r.page) : "–"}</td></tr>`).join("") + "</tbody></table></div>" +
+    `<div class="muted small">Compared against ${esc(cc.rows[0].against.replace(/^standard:/, "the standard package "))}. Neither value was picked for you.</div>` : "";
+  const parRows = par.rows.length ? `<div class="scroll"><table class="vs"><thead><tr><th>What</th><th>KiCad</th><th>Altium</th></tr></thead><tbody>` +
+    par.rows.map(r => `<tr><td>${esc(r.what)}</td><td class="diff">${esc(r.kicad)}</td><td class="diff">${esc(r.altium)}</td></tr>`).join("") + "</tbody></table></div>" : "";
+  const acts = [];
+  if (lib && st === "held") acts.push(`<button class="primary" data-pick="${esc(p.part)}">Pick a symbol or footprint…</button>`);
+  if (url) acts.push(`<a class="small" href="${esc(url)}${p.datasheet.page ? "#page=" + encodeURIComponent(p.datasheet.page) : ""}" target="_blank" rel="noopener noreferrer" id="pdslink">Open the datasheet${p.datasheet.page ? ` (page ${esc(p.datasheet.page)})` : ""}</a>`);
+  if (lib && st === "held" && !p.allowed) acts.push(`<button data-allow="${esc(p.part)}">Release anyway (I checked it)</button>`);
+  if (lib && p.allowed) acts.push(`<button data-unallow="${esc(p.part)}">Hold it again</button>`);
+  if (appr && (st === "ready" || st === "awaiting_approval") && !pending.has(p.part)) acts.push(`<button class="primary" data-approve="${esc(p.part)}">Approve</button><button data-reject="${esc(p.part)}">Reject…</button>`);
+  $("#pbody").innerHTML = `${p.picture ? `<div class="bigpic" aria-label="Footprint top view">${p.picture.replace(/width="\d+" height="\d+"/, "")}</div>` : ""}
+    ${reasons ? `<h3>${st === "held" ? "Why it is held" : "What it waits for"}</h3>${reasons}` : st === "ready" ? `<p>This part passed every check and is ready for Altium${p.allowed ? " (released anyway by a person)" : ""}.</p>` : ""}
+    ${acts.length ? `<div class="pactions">${acts.join("")}</div>` : ""}
+    <div id="perr"></div>
+    ${cc ? `<h3>Cross-check: ${esc(cc.label)}</h3>${ccRows || `<div class="small">${esc(cc.summary || "")}</div>`}` : ""}
+    <h3>KiCad and Altium</h3><div class="small">${par.result === "match" ? '<span class="pill s-ok">match</span> The KiCad footprint and the Altium files read back the same.' : par.result === "mismatch" ? '<span class="pill s-warn">differ</span> Both values are below.' : '<span class="muted">Not compared yet: compared once both files exist.</span>'}</div>${parRows}
+    <h3>Where it came from</h3>
+    <dl class="kv"><dt>Symbol</dt><dd>${p.symbol.found ? esc(p.symbol.from || p.symbol.ref) : `<span class="s-warn pill">none yet</span>`}</dd>
+      <dt>Footprint</dt><dd>${p.footprint.found ? esc(p.footprint.from || p.footprint.ref) : `<span class="s-warn pill">none yet</span>`}${p.footprint.pads ? ` · ${p.footprint.pads} pads` : ""}</dd>
+      <dt>Folder</dt><dd>${esc(p.folder || "–")}</dd>
+      <dt>Datasheet</dt><dd>${url ? dsLink(p.datasheet.page, url.replace(/^https:\/\//, "")) : "no link"}</dd>
+      <dt>Datasheet reads</dt><dd>${p.cost ? `${usd(p.cost.usd)} for ${p.cost.answers} read(s)${p.cost.models.length ? " · " + esc(p.cost.models.join(", ")) : ""}` : "none ($0)"}</dd></dl>
+    ${p.tried.length ? `<details style="margin-top:10px"><summary class="muted small">What ecadlib tried (${p.tried.length})</summary><ul class="why small">${p.tried.map(t => `<li>${esc(t)}</li>`).join("")}</ul></details>` : ""}`;
+  const panel = $("#panel");
+  if (!panel.classList.contains("open")) panel.returnFocus = document.activeElement;
+  panel.classList.add("open");
+  document.querySelectorAll("#plist .pcard").forEach(li => li.classList.toggle("sel", li.dataset.part === p.part));
+  if (focus) panel.focus({ preventScroll: true });
+}
+function closePanel() {
+  const panel = $("#panel"); if (!panel.classList.contains("open")) return;
+  panel.classList.remove("open"); const part = popen; popen = null;
+  document.querySelectorAll("#plist .pcard.sel").forEach(li => li.classList.remove("sel"));
+  const back = part && document.querySelector(`#plist [data-openp="${CSS.escape(part)}"]`) || panel.returnFocus;
+  if (back && back.focus) back.focus({ preventScroll: true });
+}
+$("#pclose").addEventListener("click", closePanel);
+const findPart = n => parts && parts.parts.find(p => p.part === n);
+// approve / reject: the card changes at once; the decision is sent when the Undo window closes (nothing to take back)
+function decideLater(part, decision, who, role, comment) {
+  const label = decision === "approve" ? `approved by ${who}` : "rejected";
+  const what = `${decision === "approve" ? "Approved" : "Rejected"} ${part}`;
+  const send = async () => {
+    pending.delete(part);
+    try {
+      const r = await api("/api/approvals/decide", session.team ? { bom: current.bom, part, decision, role, comment } : { bom: current.bom, part, decision, user: who, role, comment });
+      banner($("#approut"), ""); loadStatus().catch(() => {}); loadHub().catch(() => {});
+      if (!r.decision.enforced) toast(`${what}. Recorded (there is no approvals.json, so sign-off is not enforced).`);
+      await loadParts();
+    } catch (err) { await loadParts().catch(() => {}); toast(`${what} failed: ${err.message}`, { bad: true, ms: 8000 }); }
+  };
+  pending.set(part, { status: decision === "approve" ? "ready" : "held", label, what, commit: send });
+  const t = toast(`${what}.`, { action: "Undo", onAction: () => { pending.delete(part); renderParts(); if (popen === part) showPanel(findPart(part), false); toast(`${what}: undone, nothing was sent.`); },
+    onClose: send });
+  pending.get(part).toast = t;
+  renderParts(); if (popen === part) showPanel(findPart(part), false);
+}
+function undoPending(part) { const d = pending.get(part); if (d && d.toast) { const f = d.toast; d.toast = null; pending.delete(part); f.el.querySelector("button").click(); } }
+window.addEventListener("pagehide", () => pending.forEach(d => { if (d.toast) { d.toast.close(); } }));
+// release anyway: recorded at once; Undo takes it back (Hold it again)
+async function release(part, allow) {
+  try {
+    await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: session.team ? null : $("#signer").value.trim() || null });
+    await loadParts(); loadStatus().catch(() => {}); loadHub().catch(() => {});
+    if (allow) toast(`Released ${part} anyway: it goes to Altium with the next push.`, { action: "Undo", onAction: () => release(part, false) });
+    else toast(`${part} is held again.`);
+  } catch (err) { banner(popen ? $("#perr") : $("#liberr"), err.message); }
+}
+async function partClick(e) {
+  const b = e.target.closest("button, a"); if (!b) return;
+  const d = b.dataset;
+  if (d.openp || d.fix) { const p = findPart(d.openp || d.fix); if (p) showPanel(p); return; }
+  if (d.pf !== undefined) { pfilter = d.pf; renderParts(); const n = $(`#libout [data-pf="${CSS.escape(pfilter)}"]`); if (n) n.focus(); return; }
+  if (d.undo) return undoPending(d.undo);
+  if (d.pick) return openPick(d.pick);
+  if (d.approve || d.reject) return decide(d.approve || d.reject, d.approve ? "approve" : "reject", b);
+  if (d.allow || d.unallow) return release(d.allow || d.unallow, !!d.allow);
+}
+$("#libout").addEventListener("click", partClick);
+$("#pbody").addEventListener("click", partClick);
+$("#libout").addEventListener("input", e => { if (e.target.id === "pq") renderParts(); });
+$("#librun").addEventListener("click", () => librarian(null));
+$("#librerun").addEventListener("click", () => { if (confirm("Look up every part again, including the ones already finished?")) librarian(true); });
+
 function whyList(why) {
   const items = (why || "").split("; ").filter(Boolean);
   if (!items.length) return '<span class="muted">nothing</span>';
@@ -699,51 +1281,6 @@ function whyList(why) {
   return `<ul class="why">${li(items.slice(0, 3))}</ul>` +
     (items.length > 3 ? `<details><summary class="muted">${items.length - 3} more</summary><ul class="why">${li(items.slice(3))}</ul></details>` : "");
 }
-function showLibrarian(r) {
-  $("#librerun").hidden = false;
-  $("#libtools").hidden = false;
-  const PILL = { ready: "s-ok", held: "s-warn", awaiting_approval: "s-info", duplicate: "s-off" };
-  const pill = x => `<span class="pill ${PILL[x.status] || "s-info"}">${x.status === "ready" && x.allowed ? "released by you" : x.status === "duplicate" ? "duplicate of " + esc(x.duplicate_of || "?") : esc(x.status.replace("_", " "))}</span>` +
-    (x.status === "held" || x.status === "duplicate" ? "" : x.approval && x.approval.required ? `<div class="muted sub">${x.approval.met ? "approved by " + esc(x.approval.approved_by.join(", ")) : "needs " + esc(x.approval.missing.join("; "))}</div>`
-      : x.approval && x.approval.approved_by.length ? `<div class="muted sub">approved by ${esc(x.approval.approved_by.join(", "))}</div>` : "");
-  const lib = can("librarian"), appr = can("approver");
-  const acts = x => `<div class="acts">` + (lib && x.status === "held" ? `<button class="small" data-pick="${esc(x.part)}">Pick…</button>` : "") +
-    (!lib ? "" : x.allowed ? `<button class="small" data-unallow="${esc(x.part)}">Hold again</button>` : x.status === "held" ? `<button class="small" data-allow="${esc(x.part)}">Release anyway…</button>` : "") +
-    (appr && (x.status === "ready" || x.status === "awaiting_approval") ? `<button class="small" data-approve="${esc(x.part)}">Approve</button><button class="small" data-reject="${esc(x.part)}">Reject…</button>` : "") + `</div>`;
-  const from = s => esc((s || "–").replace(/^(\w+):/, "$1 · "));
-  $("#libout").innerHTML = `<strong>${r.ready} of ${r.parts}</strong> parts ready for Altium 365, ${r.held} held` +
-    (r.awaiting_approval ? `, ${r.awaiting_approval} awaiting approval` : "") + (r.duplicates ? `, ${r.duplicates} duplicate(s)` : "") + `, ${r.needs_person} need a look. ` +
-    r.reports.map(fileLink).join(" · ") + libNext(r) +
-    `<div class="scroll"><table style="margin-top:6px"><thead><tr><th>Part</th><th>Status</th><th>Symbol from</th><th>Footprint from</th><th>What needs a person</th><th></th></tr></thead><tbody>` +
-    r.review.map(x => `<tr><td class="mono">${esc(x.part)}</td><td>${pill(x)}</td><td class="small">${from(x.symbol_from)}</td><td class="small">${from(x.footprint_from)}</td>
-      <td class="small">${whyList(x.why)}</td>
-      <td>${acts(x)}</td></tr>`).join("") +
-    "</tbody></table></div>";
-}
-function libNext(r) {
-  const held = r.held || 0, aw = r.awaiting_approval || 0, lib = can("librarian");
-  const parts = [];
-  if (held) parts.push(`<b>${held} held</b>: the last column says why. ` + (lib ? "Use <i>Pick…</i> to choose a symbol or footprint, or <i>Release anyway…</i> once you have checked the part yourself." : "A librarian picks a symbol or footprint for each."));
-  if (aw) parts.push(`<b>${aw} awaiting approval</b>: ` + (can("approver") ? (session.team ? "click Approve on each." : "type your name above, then click Approve on each.") : "an approver signs them off."));
-  if (r.ready) parts.push(`${parts.length ? "Meanwhile" : "Next"}: the <b>${r.ready}</b> ready part(s) can go to Altium (step 3).`);
-  else if (!parts.length) parts.push("No part is ready yet.");
-  return `<div class="next ${held || aw ? "s-warn" : "s-ok"}" role="status"><span>${parts.join("<br>")}</span>${r.ready ? '<button class="small" data-go="export">Go to step 3</button>' : ""}</div>`;
-}
-$("#librun").addEventListener("click", () => librarian(null));
-$("#librerun").addEventListener("click", () => { if (confirm("Look up every part again, including the ones already finished?")) librarian(true); });
-$("#libout").addEventListener("click", async e => {
-  const d = e.target.dataset;
-  if (d.pick) return openPick(d.pick);
-  if (d.approve || d.reject) return decide(d.approve || d.reject, d.approve ? "approve" : "reject", e.target);
-  const a = d.allow, u = d.unallow;
-  if (!a && !u) return;
-  const row = a && e.target.closest("tr");
-  const why = row ? row.children[4].textContent : "";
-  if (a && !confirm(`Release ${a} to Altium 365 even though it failed these checks?\n\n${why}\n\nOnly do this if you have checked the part yourself. It is recorded in the plan.`)) return;
-  e.target.disabled = true;
-  try { showLibrarian(await api("/api/release-check", { bom: current.bom, allow: a ? [a] : [], unallow: u ? [u] : [], user: session.team ? null : $("#signer").value.trim() || null })); }
-  catch (err) { banner($("#libout"), err.message); }
-});
 
 // ---- held parts: pick a candidate
 const pickdlg = $("#pickdlg");
@@ -819,13 +1356,9 @@ async function decide(part, decision, btn) {
   const who = signer(); if (!who) return;
   let comment = "";
   if (decision === "reject") { comment = prompt(`What is wrong with ${part}? (required for a reject)`) || ""; if (!comment.trim()) return; }
-  btn.disabled = true;
-  try {
-    const role = session.team ? $("#signas").value || null : $("#signrole").value.trim() || null;
-    const r = await api("/api/approvals/decide", session.team ? { bom: current.bom, part, decision, role, comment } : { bom: current.bom, part, decision, user: who, role, comment });
-    showLibrarian(r); banner($("#approut"), ""); loadStatus().catch(() => {});
-    toast(`${decision === "approve" ? "Approved" : "Rejected"} ${part} as ${who}; now ${r.decision.status}` + (r.decision.enforced ? "" : " (no approvals.json: recorded, not enforced)"));
-  } catch (err) { banner($("#approut"), err.message); btn.disabled = false; }
+  const role = session.team ? $("#signas").value || null : $("#signrole").value.trim() || null;
+  banner($("#approut"), "");
+  decideLater(part, decision, who, role, comment);
 }
 $("#apprstatus").addEventListener("click", e => action(e.target, $("#approut"), async () => {
   const r = await api("/api/approvals/status", { bom: current.bom });
@@ -1047,7 +1580,7 @@ function showUsers(r) {
 async function openTeam() {
   $("#teamcard").hidden = false; banner($("#teamerr"), ""); $("#auditout").innerHTML = "";
   try { showUsers(await api("/api/team/users")); } catch (e) { banner($("#teamerr"), e.message); }
-  $("#teamcard").scrollIntoView({ behavior: "smooth" });
+  $("#teamcard").scrollIntoView({ behavior: motion() });
 }
 $("#teambtn").addEventListener("click", openTeam);
 $("#teamclose").addEventListener("click", () => { $("#teamcard").hidden = true; });
@@ -1102,7 +1635,7 @@ async function loadQueue() {
     <td>${it.verdict ? pill(it.verdict, QVERDICT[it.verdict]) : '<span class="muted">–</span>'}${it.findings ? `<div class="muted sub">${esc(it.findings)} finding(s)</div>` : ""}</td>
     <td class="mono">${esc(it.batch || "–")}</td><td class="mono small">${esc(it.updated)}</td>
     <td><button class="small" data-open="${esc(it.id)}">Open</button></td></tr>`).join("");
-  $("#qwrap").hidden = !r.items.length; $("#qempty").hidden = !!r.items.length;
+  $("#qwrap").hidden = !r.items.length; $("#qemptywrap").hidden = !!r.items.length;
   $("#qempty").textContent = total ? "No items match this filter." : "Nothing in the queue. The library agent adds parts here when a watched project or BOM changes.";
 }
 function kv(obj, keys) {
@@ -1163,7 +1696,7 @@ async function openQueueItem(id) {
   catch (e) { banner($("#qerr"), e.message); }
   document.querySelectorAll("#qrows tr").forEach(tr => tr.classList.toggle("sel", tr.dataset.id === id));
 }
-$("#qrows").addEventListener("click", e => { const id = e.target.dataset.open; if (id) openQueueItem(id).then(() => $("#qview").scrollIntoView({ behavior: "smooth", block: "nearest" })); });
+$("#qrows").addEventListener("click", e => { const id = e.target.dataset.open; if (id) openQueueItem(id).then(() => $("#qview").scrollIntoView({ behavior: motion(), block: "nearest" })); });
 const qchip = e => { const c = e.target.closest(".chip"); if (!c) return; qfilter = c.dataset.s; loadQueue().then(() => { const n = $(`#qchips [data-s="${qfilter}"]`); if (n && e.type === "keydown") n.focus(); }).catch(err => banner($("#qerr"), err.message)); };
 $("#qchips").addEventListener("click", qchip);
 $("#qchips").addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); qchip(e); } });
@@ -1181,18 +1714,272 @@ $("#qview").addEventListener("click", async e => {
     if (!body.user) return banner($("#qdecerr"), "Type your name first: it is recorded with the decision.");
     $("#signer").value = body.user;
   }
-  e.target.disabled = true;
-  try {
-    const r = await api(`/api/agent/queue/${act}`, body);
-    const name = r.item.mpn || qopen, st = r.item.status;
-    const what = st === "approved" ? `Approved ${name}` + (r.approval ? (r.approval.recorded ? " (also recorded in its plan)" : " (in the queue only)") : "") +
-        ". The library agent pushes it on its next pass (or run: ecadlib agent push)."
-      : st === "rejected" ? `Rejected ${name}. It stays out of the library until its source changes or someone clicks Retry.`
-      : `${name}: rebuild requested (now ${st}). The library agent rebuilds it on its next pass, then it comes back here for review.`;
-    await loadQueue(); showQueueItem(await api("/api/agent/queue/item?id=" + encodeURIComponent(qopen)));
-    nextStep($("#qdecerr"), esc(what), null, st === "rejected" ? "s-warn" : "s-ok"); toast(what); loadStatus().catch(() => {});
-  } catch (err) { banner($("#qdecerr"), err.message); e.target.disabled = false; }
+  const btn = e.target;
+  const send = async () => {
+    btn.disabled = true;
+    try {
+      const r = await api(`/api/agent/queue/${act}`, body);
+      const name = r.item.mpn || body.id, st = r.item.status;
+      const what = st === "approved" ? `Approved ${name}` + (r.approval ? (r.approval.recorded ? " (also recorded in its plan)" : " (in the queue only)") : "") +
+          ". The library agent pushes it on its next pass (or run: ecadlib agent push)."
+        : st === "rejected" ? `Rejected ${name}. It stays out of the library until its source changes or someone clicks Retry.`
+        : `${name}: rebuild requested (now ${st}). The library agent rebuilds it on its next pass, then it comes back here for review.`;
+      await loadQueue();
+      if (qopen === body.id) showQueueItem(await api("/api/agent/queue/item?id=" + encodeURIComponent(body.id)));
+      nextStep($("#qdecerr"), esc(what), null, st === "rejected" ? "s-warn" : "s-ok"); loadStatus().catch(() => {}); loadHub().catch(() => {});
+      if (act === "rebuild") toast(what);
+    } catch (err) { banner($("#qdecerr"), err.message); btn.disabled = false; toast(`${act === "approve" ? "Approval" : "Rejection"} failed: ${err.message}`, { bad: true, ms: 8000 }); }
+  };
+  if (act === "rebuild") return send();
+  // approve / reject: shown at once, sent when the Undo window closes (a sent decision cannot be taken back)
+  const name = ($("#qview strong") || {}).textContent || body.id, verb = act === "approve" ? "Approved" : "Rejected";
+  document.querySelectorAll("#qview [data-q]").forEach(b => b.disabled = true);
+  $("#qdecerr").innerHTML = `<div class="banner s-info pending" role="status"><span>${esc(verb)} ${esc(name)}: sending in a few seconds.</span><button class="small" id="qundo" style="font-size:12.5px;border:1px solid currentColor">Undo</button></div>`;
+  const t = toast(`${verb} ${name}.`, { action: "Undo", ms: 5000, onClose: send,
+    onAction: () => { $("#qdecerr").innerHTML = ""; document.querySelectorAll("#qview [data-q]").forEach(b => b.disabled = false); toast(`${verb} ${name}: undone, nothing was sent.`); } });
+  $("#qundo").onclick = () => { const b = t.el.querySelector("button"); if (b) b.click(); };
 });
+// ---- your library (the hub): a tile per tool (your library as it is in that tool), or every tool side by side
+const HUBSTATE = { same: ["same", "s-ok"], present: ["there", "s-info"], different: ["different", "s-warn"], behind: ["behind", "s-bad"] };
+const HUBCHIPS = [["", "All"], ["look", "Needs a look"], ["held", "Held"], ["eol", "End of life"], ["duplicate", "Duplicates"],
+  ["ecadlib", "Built by ecadlib"], ["library", "Your libraries"]];
+const COPYABLE = ["altium", "kicad"];
+let hub = null, hubchip = "", hubpage = 1, hubtimer = null, hubkey = null, hublib = "";
+let hubtool = store.get("hubtool") || "", hubpicked = !!hubtool;   // "all" = compare every tool
+const day = ts => ts ? esc(String(ts).slice(0, 10)) : "";
+const whoShort = w => w ? esc(String(w).replace(/\s*<[^>]*>$/, "")) : "not recorded";
+const toolLabel = t => (hub && (hub.tools.find(x => x.tool === t) || {}).label) || t;
+function hubQuery(rescan) {
+  const one = hubtool && hubtool !== "all";
+  const p = new URLSearchParams({ q: $("#hubq").value.trim(), sort: $("#hubsort").value, page: hubpage, size: 100,
+    project: $("#hubproject").value });
+  if (one) { p.set("tool", hubtool); if (hublib) p.set("library", hublib); }
+  else { p.set("have", $("#hubhave").value); p.set("lack", $("#hublack").value); }
+  if (hubchip === "look") p.set("state", "different,behind");
+  else if (["held", "eol", "duplicate"].includes(hubchip)) p.set("flags", hubchip === "held" ? "held,awaiting_approval" : hubchip);
+  else if (hubchip) p.set("origin", hubchip);
+  if (rescan) p.set("rescan", "1");
+  return "/api/hub?" + p.toString();
+}
+async function loadHub(rescan) {
+  banner($("#hubprob"), "");
+  if (!hubpicked) {                                 // until a tile is clicked: the tool with the most parts, else compare
+    const first = await api("/api/hub?size=1");
+    const best = first.tools.filter(t => t.parts).sort((x, y) => y.parts - x.parts)[0];
+    hubtool = best ? best.tool : "all";
+  }
+  hub = await api(hubQuery(rescan));
+  if (hubtool !== "all" && !hub.tools.some(t => t.tool === hubtool)) { hubtool = "all"; hub = await api(hubQuery()); }
+  renderHub();
+}
+function hubCell(c) {
+  if (!c) return `<td class="cell"><span class="none" aria-label="missing">–</span></td>`;
+  const [w, cls] = HUBSTATE[c.state] || [c.state, "s-info"];
+  const tip = [c.note, c.updated ? `last changed ${String(c.updated).replace("T", " ").slice(0, 16)} UTC by ${c.updated_by || "not recorded"}` : ""].filter(Boolean).join(" · ");
+  return `<td class="cell" title="${esc(tip)}"><span class="pill ${cls}">${esc(w)}${c.duplicate ? ` ×${c.copies}` : ""}</span><div class="sub">${day(c.updated)}</div></td>`;
+}
+function hubTiles(r) {
+  const s = r.summary;
+  const tile = (id, name, body, off) => `<button class="hubtool${off ? " off" : ""}" role="tab" aria-selected="${hubtool === id}" data-hubtool="${esc(id)}" data-tc="${esc(id)}">${body.replace("%N", `<span class="tn">${esc(name)}</span>`)}</button>`;
+  return r.tools.map(t => !t.reader && !t.parts
+      ? tile(t.tool, t.label, `%N<b>–</b><span>Not connected yet</span>`, true)
+      : tile(t.tool, t.label, `%N<b>${esc(t.parts)}</b><span class="tx">${t.parts ? `part${t.parts === 1 ? "" : "s"} in ${t.libraries.length} librar${t.libraries.length === 1 ? "y" : "ies"}` : "parts"}</span>` +
+          `<span class="tw">${t.updated ? `Changed ${day(t.updated)}${t.updated_by ? " by " + whoShort(t.updated_by) : ""}` : t.parts ? "No changes recorded" : "Nothing here yet"}</span>` +
+          `<span>${t.behind || t.different ? `<span class="pill ${t.behind ? "s-bad" : "s-warn"}">${t.behind + t.different} to look at</span>` : t.missing ? `${t.missing} not here yet` : "Has every part"}</span>`)).join("") +
+    tile("all", "Compare all", `%N<b>${esc(s.parts)}</b><span class="tx">parts across every tool</span><span class="tx">${s.updated ? `Newest change ${day(s.updated)}` : "No changes recorded"}</span><span>Side by side, a column per tool</span>`);
+}
+function renderHub() {
+  const r = hub, tools = r.tools, one = hubtool !== "all", t = tools.find(x => x.tool === hubtool);
+  $("#hubtools").innerHTML = hubTiles(r);
+  document.querySelectorAll("[data-hubcompare]").forEach(el => el.hidden = one);
+  // the chosen tool: its libraries, and the parts other tools have that it lacks
+  let head = "";
+  if (one && t) {
+    head = `<div class="hublibs" role="group" aria-label="Libraries in ${esc(t.label)}"><span class="chip${hublib ? "" : " active"}" tabindex="0" role="button" data-tc="${esc(t.tool)}" data-hublib="">All ${esc(t.label)} libraries</span>` +
+      t.libraries.map(l => `<span class="chip${hublib === l.library ? " active" : ""}" tabindex="0" role="button" data-tc="${esc(t.tool)}" data-hublib="${esc(l.library)}" title="${esc(l.library)}${l.updated ? ` · changed ${esc(String(l.updated).slice(0, 16).replace("T", " "))} by ${esc(l.updated_by || "not recorded")}` : ""}">${esc(l.library.split("/").pop())} · ${esc(l.parts)}</span>`).join("") + `</div>`;
+    if (t.can_copy && can("librarian"))
+      head += `<div class="hubstrip"><span>${esc(t.can_copy)} part${t.can_copy === 1 ? "" : "s"} in your other tools ${t.can_copy === 1 ? "isn't" : "aren't"} in ${esc(t.label)} yet. ecadlib can convert ${t.can_copy === 1 ? "it" : "them"} into its hub library for ${esc(t.label)}.</span><button class="small primary" data-hubcopyall="${esc(t.tool)}">Copy ${t.can_copy === 1 ? "it" : "them"} to ${esc(t.label)}</button></div>`;
+    else if (t.missing && !COPYABLE.includes(t.tool) && t.tool !== "altium365" && t.reader)
+      head += `<div class="muted small" style="margin-top:6px">${esc(t.missing)} part(s) aren't in ${esc(t.label)}. For a part ecadlib built, open it and use Make the ${esc(t.label)} version; copying your own parts into ${esc(t.label)} isn't supported yet.</div>`;
+  }
+  $("#hubtoolhead").innerHTML = head;
+  const s = r.summary;
+  const stat = (n, lab) => `<div><b>${esc(n)}</b><span class="muted small">${esc(lab)}</span></div>`;
+  $("#hubstats").innerHTML = one ? "" : `<div class="stats">${stat(s.parts, "parts")}${stat(s.ecadlib, "built by ecadlib")}${stat(s.library, "in your libraries")}` +
+    `${stat(s.different, "differ between tools")}${stat(s.behind, "with a copy behind")}${stat(s.held, "held or awaiting sign-off")}${stat(s.eol, "end of life")}</div>` +
+    `<div class="small muted">Libraries read: ${r.libraries.length ? r.libraries.map(esc).join(", ") : "none (start ecadlib with --lib, or add [hub] libraries to ecadlib.toml)"}</div>`;
+  $("#hubchips").innerHTML = HUBCHIPS.map(([k, lab]) => `<span class="chip${hubchip === k ? " active" : ""}" tabindex="0" role="button" aria-pressed="${hubchip === k}" data-hubchip="${k}">${esc(lab)}</span>`).join("");
+  for (const [sel, first] of [["#hubhave", "any tool"], ["#hublack", "–"]]) {
+    const el = $(sel), keep = el.value;
+    el.innerHTML = `<option value="">${first}</option>` + tools.map(t => `<option value="${esc(t.tool)}">${esc(t.label)}</option>`).join("");
+    el.value = keep;
+  }
+  const pj = $("#hubproject"), pkeep = pj.value, plist = r.project_list || [];
+  pj.innerHTML = `<option value="">${plist.length ? "all parts" : "none found ([hub] projects)"}</option>` +
+    plist.map(p => `<option value="${esc(p.path)}">${esc(p.name)} (${esc(toolLabel(p.tool))}) · ${esc(p.parts)} parts</option>`).join("");
+  pj.value = plist.some(p => p.path === pkeep) ? pkeep : "";
+  const proj = plist.find(p => p.path === pj.value);
+  $("#hubproj").innerHTML = proj ? `<div class="hubstrip"><span><b>${esc(proj.name)}</b> uses ${esc(proj.parts)} of your library's parts` +
+    (proj.missing ? `; ${esc(proj.missing)} of them ${proj.missing === 1 ? "isn't" : "aren't"} in ${esc(toolLabel(proj.tool))} yet.` : `, all of them in ${esc(toolLabel(proj.tool))}.`) + `</span>` +
+    (proj.can_copy && can("librarian") ? `<button class="small primary" data-hubcopyall="${esc(proj.tool)}" data-project="${esc(proj.path)}">Copy ${proj.can_copy === proj.missing ? (proj.missing === 1 ? "it" : "them") : proj.can_copy} into ${esc(proj.name)}</button>`
+      : proj.missing ? `<span class="muted small">No other tool has a copy ecadlib can convert${proj.missing === 1 ? "" : " for these"}.</span>` : "") + `</div>` : "";
+  if (one && t) {
+    $("#hubhead").innerHTML = `<tr><th>Part</th><th>Library</th><th>Symbol · footprint</th><th>Last changed</th><th>Against other tools</th><th>Also in</th><th>Used in</th></tr>`;
+    $("#hubrows").innerHTML = r.rows.map(p => {
+      const c = p.cells[t.tool] || {}, pl = (p.places[t.tool] || [])[0] || {}, others = tools.filter(x => x.tool !== t.tool && p.cells[x.tool]);
+      const [w, cls] = !others.length ? ["only here", "s-info"] : HUBSTATE[c.state] || [c.state, "s-info"];
+      return `<tr tabindex="0" data-hub="${esc(p.key)}">
+      <td class="hp"><b class="mono">${esc(p.name)}</b>${p.mpn && p.mpn !== p.name ? `<div class="sub">${esc(p.mpn)}${p.manufacturer ? " · " + esc(p.manufacturer) : ""}</div>` : (p.manufacturer ? `<div class="sub">${esc(p.manufacturer)}</div>` : "")}
+        ${p.flags.filter(f => ["held", "awaiting_approval", "eol"].includes(f)).map(f => `<span class="pill ${f === "eol" ? "s-bad" : "s-warn"}">${f === "eol" ? esc(p.lifecycle ? p.lifecycle.label : "end of life") : f === "held" ? "held" : "awaiting sign-off"}</span> `).join("")}</td>
+      <td><span class="mono small" title="${esc(pl.library || "")}">${esc(String(pl.library || "").split("/").pop())}</span><div class="sub">${pl.origin === "ecadlib" ? "ecadlib" : "your library"}${c.duplicate ? ` · ${c.copies} copies` : ""}</div></td>
+      <td><span class="mono small">${esc(String(pl.symbol || "").split(":").pop() || "–")}</span><div class="sub">${esc(String(pl.footprint || "").split(":").pop())}</div></td>
+      <td>${day(c.updated)}<div class="sub">${whoShort(c.updated_by)}</div></td>
+      <td title="${esc(c.note || "")}"><span class="pill ${cls}">${esc(w)}</span></td>
+      <td class="small">${others.map(x => `<span class="tooltag" data-tc="${esc(x.tool)}">${esc(x.label)}</span>`).join("") || '<span class="none">–</span>'}</td>
+      <td>${p.used_in ? `${p.used_in} project${p.used_in > 1 ? "s" : ""}` : '<span class="none">–</span>'}</td></tr>`;
+    }).join("");
+  } else {
+    $("#hubhead").innerHTML = `<tr><th>Part</th>${tools.map(t => `<th class="tool" data-tc="${esc(t.tool)}">${esc(t.label)}<span>${t.reader ? `${t.parts} parts` : "no reader yet"}</span></th>`).join("")}<th>Last changed</th><th>Used in</th></tr>`;
+    $("#hubrows").innerHTML = r.rows.map(p => `<tr tabindex="0" data-hub="${esc(p.key)}">
+      <td class="hp"><b class="mono">${esc(p.name)}</b>${p.mpn && p.mpn !== p.name ? `<div class="sub">${esc(p.mpn)}${p.manufacturer ? " · " + esc(p.manufacturer) : ""}</div>` : (p.manufacturer ? `<div class="sub">${esc(p.manufacturer)}</div>` : "")}
+        ${p.flags.filter(f => ["held", "awaiting_approval", "eol"].includes(f)).map(f => `<span class="pill ${f === "eol" ? "s-bad" : "s-warn"}">${f === "eol" ? esc(p.lifecycle ? p.lifecycle.label : "end of life") : f === "held" ? "held" : "awaiting sign-off"}</span> `).join("")}</td>
+      ${tools.map(t => hubCell(p.cells[t.tool])).join("")}
+      <td>${day(p.updated)}<div class="sub">${whoShort(p.updated_by)}</div></td><td>${p.used_in ? `${p.used_in} project${p.used_in > 1 ? "s" : ""}` : '<span class="none">–</span>'}</td></tr>`).join("");
+  }
+  const none = !r.total;
+  $("#hubwrap").hidden = none || !r.rows.length; $("#hubempty").hidden = !none && !!r.rows.length;
+  $("#hubemptytext").textContent = none ? "Nothing here yet. Point ecadlib at your libraries (ecadlib ui --lib FOLDER, or [hub] libraries in ecadlib.toml), or fill a library from a BOM; every part then shows up here, under each tool that has it."
+    : one && t && !t.parts ? `None of your parts are in ${t.label} yet.` + (t.can_copy ? ` Copy them over with the button above.` : "")
+    : "No part matches. Clear the search or pick All.";
+  const from = (r.page - 1) * r.size;
+  $("#hubpager").innerHTML = r.matched > r.size ? `<span class="muted small">Showing ${from + 1}–${Math.min(from + r.size, r.matched)} of ${r.matched}</span>
+    <span class="row"><button class="small" data-hubpage="-1" ${r.page <= 1 ? "disabled" : ""}>Previous</button><button class="small" data-hubpage="1" ${from + r.size >= r.matched ? "disabled" : ""}>Next</button></span>`
+    : (r.total ? `<span class="muted small">${r.matched} of ${one && t ? t.parts : r.total} parts</span>` : "");
+  const probs = [...r.errors.map(e => "couldn't read " + e), ...r.warnings];
+  $("#hubprob").innerHTML = probs.length ? `<details style="margin-top:8px"><summary class="small">${probs.length} library file(s) or folder(s) couldn't be read</summary><ul class="why small">${probs.map(p => `<li>${esc(p)}</li>`).join("")}</ul></details>` : "";
+}
+function copyDone(r) {
+  const lab = toolLabel(r.tool), n = r.copied.length;
+  const skip = r.skipped.length ? ` ${r.skipped.length} skipped: ${r.skipped.slice(0, 3).map(x => `${esc(x.name)} (${esc(x.why)})`).join("; ")}${r.skipped.length > 3 ? "…" : ""}.` : "";
+  const where = r.project ? esc(r.project) + "." : r.tool === "kicad"
+    ? `They're in the ecadlib_hub library (<span class="mono">${esc(r.library)}</span>); add its sym-lib-table and fp-lib-table rows to KiCad once, or pick a project above and copy into it.`
+    : `They're in <span class="mono">${esc(r.library)}</span>; add that folder to Altium's libraries once, or pick a project above and copy into it.`;
+  return `Copied ${n} part${n === 1 ? "" : "s"} to ${esc(lab)}. ${n ? where : ""}${skip}`;
+}
+async function hubCopyAll(btn) {
+  const tool = btn.dataset.hubcopyall, project = btn.dataset.project || "";
+  btn.disabled = true; banner($("#hubnote"), "");
+  try {
+    const p = new URLSearchParams({ lack: tool, size: 500, project });
+    const keys = (await api("/api/hub?" + p.toString())).rows.map(r => r.key);
+    const r = await api("/api/hub/copy", { keys, tool, project, user: $("#signer") ? $("#signer").value.trim() : "" });
+    await loadHub();
+    nextStep($("#hubnote"), copyDone(r), null, r.copied.length ? "s-ok" : "s-warn");
+  } catch (e) { banner($("#hubnote"), e.message); }
+  finally { btn.disabled = false; }
+}
+const hubReload = () => { hubpage = 1; loadHub().catch(e => banner($("#hubprob"), e.message)); };
+$("#hubq").addEventListener("input", () => { clearTimeout(hubtimer); hubtimer = setTimeout(hubReload, 250); });
+["#hubhave", "#hublack", "#hubsort", "#hubproject"].forEach(s => $(s).addEventListener("change", hubReload));
+$("#hubtools").addEventListener("click", e => { const b = e.target.closest("[data-hubtool]"); if (!b) return; hubtool = b.dataset.hubtool; hubpicked = true; hublib = ""; store.set("hubtool", hubtool); hubReload(); });
+$("#hubtools").addEventListener("keydown", e => {
+  if (!["ArrowRight", "ArrowLeft"].includes(e.key)) return;
+  const all = [...document.querySelectorAll("[data-hubtool]")], i = all.indexOf(document.activeElement);
+  if (i < 0) return; e.preventDefault(); all[(i + (e.key === "ArrowRight" ? 1 : all.length - 1)) % all.length].focus();
+});
+function hubLib(e) { const c = e.target.closest("[data-hublib]"); if (!c) return; hublib = c.dataset.hublib; hubReload(); }
+$("#hubtoolhead").addEventListener("click", e => { const b = e.target.closest("[data-hubcopyall]"); if (b) return hubCopyAll(b); hubLib(e); });
+$("#hubtoolhead").addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hubLib(e); } });
+$("#hubproj").addEventListener("click", e => { const b = e.target.closest("[data-hubcopyall]"); if (b) hubCopyAll(b); });
+$("#hubrescan").addEventListener("click", e => action(e.target, $("#hubnote"), async () => { hubpage = 1; await loadHub(true); toast("Looked at every library again."); return ""; }));
+function hubChip(e) { const c = e.target.closest("[data-hubchip]"); if (!c) return; hubchip = hubchip === c.dataset.hubchip ? "" : c.dataset.hubchip; hubReload(); }
+$("#hubchips").addEventListener("click", hubChip);
+$("#hubchips").addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hubChip(e); } });
+$("#hubpager").addEventListener("click", e => { const b = e.target.closest("[data-hubpage]"); if (!b) return; hubpage += +b.dataset.hubpage; loadHub().then(() => $("#hubcard").scrollIntoView({ behavior: motion() })).catch(err => banner($("#hubprob"), err.message)); });
+$("#hubrows").addEventListener("click", e => { const tr = e.target.closest("[data-hub]"); if (tr) openHubPart(tr.dataset.hub); });
+$("#hubrows").addEventListener("keydown", e => { const tr = e.target.closest("[data-hub]"); if (tr && e.key === "Enter") { e.preventDefault(); openHubPart(tr.dataset.hub); } });
+$("#hubclose").addEventListener("click", () => $("#hubdlg").close());
+
+async function openHubPart(key) {
+  hubkey = key;
+  $("#hubtitle").textContent = "Loading…"; $("#hubsub").textContent = ""; $("#hubbody").innerHTML = "";
+  if (!$("#hubdlg").open) $("#hubdlg").showModal();
+  try { renderHubPart(await api("/api/hub/part?key=" + encodeURIComponent(key))); }
+  catch (e) { $("#hubtitle").textContent = "Couldn't open this part"; banner($("#hubbody"), e.message); }
+}
+function renderHubPart(p) {
+  $("#hubtitle").textContent = p.name;
+  $("#hubsub").textContent = [p.mpn !== p.name ? p.mpn : "", p.manufacturer, p.description].filter(Boolean).join(" · ");
+  const pics = p.pictures.map(f => `<figure><div class="fpbox">${f.svg}</div><figcaption>${esc(f.tool)} footprint ${esc(f.footprint || "")} · ${f.pads} pads</figcaption></figure>`).join("") +
+    (p.symbol ? `<figure><div class="symbox">${p.symbol.svg}</div><figcaption>${esc(p.symbol.tool)} symbol ${esc(p.symbol.symbol || "")} · ${p.symbol.pins} pins (pinout sketch)</figcaption></figure>` : "");
+  const fixes = p.fixes.filter(f => f.action === "open_plan" || can("librarian")).map(f =>
+    `<button class="small${f.action === "build" || f.action === "kicad" ? " primary" : ""}" data-hubfix="${esc(f.action)}" data-bom="${esc(p.plan ? p.plan.bom || "" : "")}" title="${esc(f.why)}">${esc(f.label)}</button>`).join("");
+  const copies = p.copies.map(c => {
+    const [w, cls] = HUBSTATE[c.state] || [c.state, "s-info"];
+    const why = c.state === "behind" ? `${esc(c.behind.words)} behind ${esc(({altium: "Altium", altium365: "Altium 365", kicad: "KiCad", fusion: "Fusion", easyeda: "EasyEDA"})[c.behind.tool] || c.behind.tool)}` : "";
+    return `<tr><td data-tc="${esc(c.tool)}"><b>${esc(c.tool_label)}</b><div class="sub muted">${c.origin === "ecadlib" ? "built by ecadlib" : "your library"}</div></td>
+      <td><span class="mono small">${esc(c.where || "")}</span>${c.file ? `<div class="sub muted mono" title="${esc(c.file)}">${esc(c.file.split("/").slice(-2).join("/"))}</div>` : ""}
+        <div class="sub muted">${[c.symbol, c.footprint].filter(Boolean).map(esc).join(" · ")}${c.revision ? " · rev " + esc(c.revision) : ""}</div></td>
+      <td class="mono small">${c.updated ? when(c.updated) : "–"}<div class="sub muted">${whoShort(c.updated_by)}${c.updated_how ? " · " + esc(c.updated_how) : ""}</div></td>
+      <td><span class="pill ${cls}">${esc(w)}</span>${why ? `<div class="why">${why}</div>` : ""}${(c.diffs || []).map(d => `<div class="why">${esc(d.what)}: ${esc(d.text)}</div>`).join("")}${c.origin !== "ecadlib" && c.diffs && c.diffs.length ? '<div class="why muted">ecadlib never edits your library files: update this copy in the tool, or copy ecadlib\'s version over it.</div>' : ""}</td></tr>`;
+  }).join("");
+  const missing = hub ? hub.tools.filter(t => t.reader && !p.cells[t.tool]).map(t => t.label) : [];
+  const pl = p.plan;
+  const release = pl ? `<h3>Release check</h3><div><span class="pill ${pl.status === "ready" ? "s-ok" : pl.status === "held" ? "s-warn" : "s-info"}">${esc(pl.status_label || pl.status)}</span>${pl.allowed ? ' <span class="pill s-warn">released by override</span>' : ""}</div>` +
+    (pl.reasons || []).map(x => `<div class="reason"><div>${esc(x.text)}</div>${x.fix ? `<div class="fix"><b>Next:</b> ${esc(x.fix)}</div>` : ""}</div>`).join("") +
+    `<h3>Sign-off</h3>` + (pl.approvals.length ? `<ol class="hubhist">${pl.approvals.map(a => `<li><span class="t">${when(a.when)}</span><span>${a.decision === "approve" ? "Approved" : "Rejected"} by ${esc(a.who)}${a.role ? ` as ${esc(a.role)}` : ""}${a.comment ? `: ${esc(a.comment)}` : ""}</span></li>`).join("")}</ol>` : '<div class="muted small">Nobody has signed it off yet.</div>') +
+    `<h3>Sources</h3><dl class="kv">${Object.entries(pl.source).filter(([, v]) => v).map(([k, v]) => `<dt>${esc(k)}</dt><dd class="mono small">${esc(v)}</dd>`).join("")}` +
+    `${pl.datasheet ? `<dt>datasheet</dt><dd><a href="${esc(pl.datasheet)}" target="_blank" rel="noopener noreferrer">${esc(pl.datasheet.split("/").pop() || pl.datasheet)}</a></dd>` : ""}` +
+    `${Object.entries(pl.field_sources).map(([k, v]) => `<dt>${esc(k)}</dt><dd class="small">${esc(v)}</dd>`).join("")}</dl>` +
+    (pl.notes.length ? `<details style="margin-top:6px"><summary class="small">How ecadlib built it</summary><ul class="why small">${[...pl.tried, ...pl.notes].map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>` : "")
+    : `<h3>Release check</h3><div class="muted small">Not built by ecadlib, so it has no release check or sign-off here. ${p.mpn ? "Build it with ecadlib to have both copies compared." : ""}</div>`;
+  const life = p.lifecycle ? `<span class="pill ${["nrnd", "ltb", "obsolete"].includes(p.lifecycle.status) ? "s-bad" : p.lifecycle.status === "active" ? "s-ok" : "s-off"}">${esc(p.lifecycle.label || p.lifecycle.status)}</span> <span class="muted small">from ${esc(p.lifecycle.from || "")}${p.lifecycle.checked ? ", checked " + when(p.lifecycle.checked) : ""}</span>`
+    : '<span class="muted small">Not checked yet: the weekly upkeep (lifecycle check) or an Altium 365 pull fills this in.</span>';
+  const used = p.where_used.length ? `<ol class="hubhist">${p.where_used.map(u => `<li><span class="t">${u.qty}×</span><span><b>${esc(u.project)}</b> <span class="muted small">${esc(u.designators.join(", "))}</span></span></li>`).join("")}</ol>`
+    : `<div class="muted small">${p.projects_set ? "No project in the [hub] projects folders uses it." : "Add your project folders to [hub] projects in ecadlib.toml to see which designs use each part."}</div>`;
+  const hist = p.history.length ? `<ol class="hubhist">${p.history.map(e => `<li><span class="t">${when(e.when)}</span><span>${esc(e.what)}${e.tool_label ? ` in ${esc(e.tool_label)}` : ""}${e.who ? ` by ${esc(e.who)}` : ""}${e.detail ? `<span class="muted small"> · ${esc(e.detail)}</span>` : ""}${e.file ? `<div class="sub muted mono">${esc(String(e.file).split("/").slice(-2).join("/"))}</div>` : ""}</span></li>`).join("")}</ol>`
+    : '<div class="muted small">No changes recorded since the hub first looked. From now on every added, changed or removed copy and every fix made here is listed.</div>';
+  $("#hubbody").innerHTML = `<div>${pics ? `<div class="hubpics">${pics}</div>` : '<div class="muted small">No footprint or symbol to draw: no copy has pads or pins ecadlib can read.</div>'}
+      ${release}<h3>Lifecycle</h3><div>${life}</div><h3>Used in</h3>${used}</div>
+    <div>${fixes ? `<div class="hubfix">${fixes}</div>` : ""}<div id="hubfixout"></div>
+      <h3>Copies</h3><div class="tablewrap"><table class="copies"><thead><tr><th>Tool</th><th>Where</th><th>Last changed (UTC)</th><th>Compared</th></tr></thead><tbody>${copies}</tbody></table></div>
+      ${missing.length ? `<div class="muted small" style="margin-top:6px">Not in ${missing.map(esc).join(", ")}.</div>` : ""}
+      <h3>History</h3>${hist}</div>`;
+}
+$("#hubbody").addEventListener("click", async e => {
+  const b = e.target.closest("[data-hubfix]"); if (!b) return;
+  const act = b.dataset.hubfix, out = $("#hubfixout");
+  if (act === "open_plan") {
+    const h = history.find(x => x.bom === b.dataset.bom);
+    if (!h) return toast("Couldn't find the BOM check for this part under Past BOM checks.");
+    $("#hubdlg").close();
+    try { showResult(await api("/api/triage/result?id=" + encodeURIComponent(h.id))); goTo("libcard"); } catch (err) { showErr(err); }
+    return;
+  }
+  b.disabled = true; banner(out, "");
+  try {
+    const r = await api("/api/hub/fix", { key: hubkey, action: act, user: $("#signer") ? $("#signer").value.trim() : "" });
+    if (act === "build") {
+      out.innerHTML = `<div class="jobhead"><span class="muted small" id="hubjobtext" role="status" aria-live="polite">Building it from its MPN…</span><button class="small" id="hubjobstop">Stop</button></div><div class="progress"><div id="hubjobbar"></div></div><ul class="joblines" id="hubjoblines"></ul>`;
+      const j = await pollJob(r.job, { text: $("#hubjobtext"), bar: $("#hubjobbar"), lines: $("#hubjoblines"), stop: $("#hubjobstop"),
+        label: j => j.total ? `Building it from its MPN: step ${Math.min(j.done + 1, j.total)} of ${j.total}` : "Building it from its MPN…" });
+      const s = j.result || {};
+      nextStep(out, `Built: ${esc(s.ready || 0)} ready, ${esc(s.held || 0)} held. Open the part again to compare the copies.`, null, s.ready ? "s-ok" : "s-warn");
+    } else if (act.startsWith("copy:")) {
+      nextStep(out, copyDone(r.result), null, r.result.copied.length ? "s-ok" : "s-warn");
+    } else if (act === "kicad") {
+      nextStep(out, `Wrote the KiCad library for this part's BOM in <span class="mono">${esc(r.result.folder)}</span>.`, null, "s-ok");
+    } else if (act === "a365_preview") {
+      const x = (r.result.results || [])[0];
+      nextStep(out, x ? `Dry run: ${esc(x.status || "")} ${esc(x.action || "")}. Nothing was sent; use Send to Altium for the real push.` : "Dry run done: nothing to send for this part.", ["export", "Send to Altium"]);
+    } else {
+      nextStep(out, "Done.", null, "s-ok");
+    }
+    await loadHub(); if ($("#hubdlg").open) { const keep = out.innerHTML; await openHubPart(hubkey); $("#hubfixout").innerHTML = keep; }
+  } catch (err) { banner(out, err.message); }
+  finally { b.disabled = false; }
+});
+
 // ---- status (workspace summary) and setup check
 async function loadStatus() {
   const r = await api("/api/status"), t = r.totals, a = r.agent;
@@ -1230,8 +2017,37 @@ function startApp() {
   $("#signin").hidden = true; $("#app").hidden = false; $("#steps").hidden = false;
   applyRoles(); roleNote(); navState(); loadStatus().catch(e => banner($("#stout"), e.message));
   loadInfo().catch(showErr); loadSpecs().catch(showErr); loadRules().catch(showErr); loadHistory().catch(e => banner($("#histerr"), e.message));
-  loadQueue().catch(e => banner($("#qerr"), e.message));
+  loadQueue().catch(e => banner($("#qerr"), e.message)); loadHub().catch(e => banner($("#hubprob"), e.message));
 }
+// ---- keyboard shortcuts ("?" lists them); never while typing in a box or with Ctrl / Alt / Cmd held
+const keysdlg = $("#keysdlg");
+$("#keysbtn").addEventListener("click", () => keysdlg.showModal());
+$("#keysclose").addEventListener("click", () => keysdlg.close());
+function movePart(step) {
+  const cards = Array.from(document.querySelectorAll("#plist [data-openp]"));
+  if (!cards.length) return toast("No parts shown yet: fill the library first (step 2).");
+  const i = cards.indexOf(document.activeElement);
+  const n = cards[i < 0 ? (step > 0 ? 0 : cards.length - 1) : Math.max(0, Math.min(cards.length - 1, i + step))];
+  n.focus(); n.closest(".pcard").scrollIntoView({ behavior: motion(), block: "nearest" });
+  if ($("#panel").classList.contains("open")) { const p = findPart(n.dataset.openp); if (p) showPanel(p, false); }
+}
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && $("#panel").classList.contains("open") && !document.querySelector("dialog[open]")) { e.preventDefault(); return closePanel(); }
+  const t = e.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+  if (typing || e.ctrlKey || e.metaKey || e.altKey || document.querySelector("dialog[open]") || $("#app").hidden) return;
+  const k = e.key;
+  const go = id => { e.preventDefault(); goTo(id); };
+  if (k === "?") { e.preventDefault(); keysdlg.showModal(); }
+  else if (k === "/") { e.preventDefault(); const f = $("#pq") || (!$("#results").hidden && $("#q")) || $("#histq"); f.focus(); f.scrollIntoView({ behavior: motion(), block: "center" }); }
+  else if (k === "j") { e.preventDefault(); movePart(1); }
+  else if (k === "k") { e.preventDefault(); movePart(-1); }
+  else if (k === "h" && parts) { e.preventDefault(); pfilter = pfilter === "held" ? "" : "held"; renderParts(); goTo("libcard"); toast(pfilter ? "Showing held parts only." : "Showing all parts."); }
+  else if (k === "u" && can("librarian")) { e.preventDefault(); $("#file").click(); }
+  else if (k === "1") go("bomcard"); else if (k === "2") go("libcard"); else if (k === "3") go("export");
+  else if (k === "l") go("hubcard");
+  else if (k === "q") go("queuecard"); else if (k === "s") go("statuscard");
+});
+
 (async () => {
   try { session = await api("/api/session"); } catch (e) { session = { team: false }; }
   if (session.team && !session.user) showSignin(); else startApp();

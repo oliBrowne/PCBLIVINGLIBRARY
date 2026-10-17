@@ -1,7 +1,7 @@
 """Standard parts without Claude: when the package is fully set by standard data, build the footprint (and, for the
 part kinds whose pinout is standard, the symbol) offline and deterministically. The librarian's `standard` source.
 
-    ecadlib stdparts resolve "SOIC-8" | "0603" --kind R | --mpn GRM188R71H104KA93D ...   what would be built, and why
+    ecadlib stdparts resolve "SOIC-8 3.9x4.9mm" | "0603" --kind R | --mpn GRM188R71H104KA93D --kind C   what would be built, and why
     ecadlib stdparts list [PATTERN]                    the packages the table knows
     ecadlib stdparts bench [--kicad DIR] [--fixture F] every table entry against KiCad's official footprint
     ecadlib stdparts coverage BOM [BOM ...]            how many BOM lines this source resolves (no network)
@@ -194,8 +194,10 @@ def _mpn_rules():
         (re.compile(r"^(?:GRM|GCM|GJM|GCJ|GRT|GCQ|GQM|GMA)(\d\d)"), "C", m3),                   # Murata MLCC
         (re.compile(r"^(?:LQG|LQM|LQW|LQP)(\d\d)"), "L", m3), (re.compile(r"^BLM(\d\d)"), "L", m3),   # Murata L, beads
         (re.compile(r"^CL(\d\d)[A-Z]\d"), "C", cl),                                              # Samsung MLCC
-        (re.compile(r"^C(0402|0603|1005|1608|2012|3216|3225|4532|5750)(?:C0G|NP0|X[5-8][RSTP]|JB|CH|X[5-8])"), "C", "metric"),   # TDK
-        (re.compile(r"^C" + imp + r"C\d{3}[A-Z]"), "C", None),                                   # KEMET MLCC
+        (re.compile(r"^C(0402|0603|1005|1608|2012|3216|3225|4532|5750)(?:C0G|NP0|X[5-8][A-Z]|JB|CH)"), "C", "metric"),   # TDK
+        # KEMET MLCC: C<imperial><C standard | X flexible termination | F ...><capacitance>; C0603X563K1RACTU is an
+        # imperial 0603, not TDK's metric 0603 (X followed by a digit is KEMET's capacitance code, not a dielectric)
+        (re.compile(r"^C" + imp + r"[CXF]\d{3}[A-Z]"), "C", None),
         (re.compile(r"^ERJ-?(XG|1G|1T|12Z|12|14|PA[2368]|P0[368]|[2368])"), "R", erj),           # Panasonic
         (re.compile(r"^(?:CRCW|TNPW|RCG|RCS)" + imp), "R", None),                                # Vishay
         (re.compile(r"^RMCF" + imp), "R", None), (re.compile(r"^CR" + imp + r"-"), "R", None),   # Stackpole, Bourns
@@ -572,7 +574,7 @@ def symbol_text(key, mpn=""):
     if ":" in key:
         what, order = key.split(":")
         if what == "REG":
-            fixed = order != "1117" or bool(re.search(r"-?(\d\.\d|\d{2})(?![\d.])", re.sub(r"^.*?1117", "", str(mpn).upper())))
+            fixed = order != "1117" or bool(re.search(r"-?(\d\.\d|\d{2}|\d-\d)(?![\d.])", re.sub(r"^.*?1117", "", str(mpn).upper())))
             gnd = "GND" if fixed else "ADJ"
             names = {"1117": [gnd, "VO", "VI"], "78": ["VI", "GND", "VO"], "79": ["GND", "VI", "VO"], "317": ["ADJ", "VO", "VI"],
                      "78L": ["VO", "GND", "VI"]}[order]

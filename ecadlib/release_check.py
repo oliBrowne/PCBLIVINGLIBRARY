@@ -6,7 +6,9 @@ Rules, per plan item:
   files     the .SchLib and .PcbLib exist and read back with altium_lib's reader (cannot be overridden)
   pins      every symbol pin has a pad with the same number and every pad a pin; unnumbered, NPTH and
             mounting pads (MP, MH, SH, MTG, ...) are allowed without a pin
-  footprint footprint_check on the item's .kicad_mod: every error fails. Parts taken from the official KiCad
+  footprint footprint_check and the rule book (footprint_rules, docs/footprint-rulebook.md) on the item's .kicad_mod:
+            every footprint_check error fails, and rule-book errors in FR.RELEASE_HOLDS (name, layers, type, annular
+            ring, thermal vias, silkscreen text size / over pads, also on the PcbLib); a reversed diode / LED / polarized-capacitor pin map fails for every part. Parts taken from the official KiCad
             library are held only for overlapping pads, a missing courtyard and a missing pin 1 (their other
             findings are reported as warnings). Without a .kicad_mod the same three are checked on the PcbLib.
             Overlapping pads whose symbol pins share a name (USB-C A1/B12 = GND) are stacked on purpose: a warning.
@@ -22,7 +24,7 @@ that list. altium365 push releases only `ready` items. Items `ecadlib a365 pull`
 import argparse, csv, datetime, re, sys
 from pathlib import Path
 
-from . import altium_lib as AL, footprint_check as FC
+from . import altium_lib as AL, footprint_check as FC, footprint_rules as FR
 from . import sheetsafe as SS
 from .fsutil import write_text_atomic
 
@@ -184,12 +186,28 @@ def check_item(item, base=".", rules=None):
             hard = lvl == "error" and (not kicad_lib or (rule == "copper" and "overlap" in msg) or
                                        (rule == "courtyard" and msg.startswith("no courtyard")) or (rule == "pin1" and "no pad" in msg))
             (add("footprint", f"{rule}: {msg}") if hard else warns.append(f"{lvl} {rule}: {msg}"))
+        if kmod:                               # the rule book (footprint_rules): naming, layers, type, pin map ...
+            try:
+                book = FR.check(text, filename=kmod.name, symbol_pins=pin_names if syms else None, geometry=False)
+            except Exception as e:             # a rule-book crash must not hide the other rules
+                book = [("warning", "rulebook", f"footprint_rules failed ({type(e).__name__}: {e})")]
+            for lvl, rule, msg in book:
+                if rule == "connect":
+                    continue                   # the pins rule above already compares the Altium symbol and footprint
+                if fps and msg.startswith("in the Altium export"):
+                    continue                   # the PcbLib itself is checked below
+                hard = lvl == "error" and (rule == "pinmap" or (not kicad_lib and rule in FR.RELEASE_HOLDS))
+                (add("footprint", f"{rule}: {msg}") if hard else warns.append(f"{lvl} {rule}: {msg}"))
     if not kmod and fps:
         mf, mw = _pcblib_minimal(fps[0], pin_names, RU.layer_id(rules["layers"]["courtyard"]), pin1)
         for m in mf:
             add("footprint", m)
         warns += [f"{m} (same pin name: stacked on purpose)" for m in mw]
         warns.append("no .kicad_mod: only overlap, courtyard and pin 1 checked (on the PcbLib)")
+    if fps:                                    # silkscreen text as Altium shows it: size, over pads, over the body
+        for lvl, msg in FR.pcblib_text_issues(fps[0]):
+            hard = lvl == "error" and not kicad_lib
+            (add("footprint", f"silktext: {msg}") if hard else warns.append(f"{lvl} silktext: {msg}"))
     # ---- KiCad and Altium read back the same (ecadlib.parity)
     mode = (rules.get("release") or {}).get("parity", "hold")
     if mode != "off" and kmod and fps:
@@ -291,23 +309,72 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
     return rows
 
 
+def _split(failures):
+    """A report row's "rule: msg; rule: msg" back into reasons (messages may contain "; " themselves)."""
+    return [x for x in re.split(r"; (?=(?:%s): )" % "|".join(("files", "pins", "footprint", "height", "fields", "parity", "verify")),
+                                failures or "") if x]
+
+
 def write_report(rows, stem, plan=""):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["name", "status"])
         w.writeheader(); w.writerows(rows)
+    from . import messages as M
     held = [r for r in rows if r["status"] == "held"]
-    md = [f"# Release check{f' - `{plan}`' if plan else ''}", "",
-          f"{len(rows)} parts: {len(rows) - len(held)} ready ({sum(r['result'] == 'allowed' for r in rows)} by --allow), {len(held)} held.", "",
-          "| Part | Status | Symbol from | Footprint from | Height | Failures |", "|---|---|---|---|---|---|"]
-    md += [f"| {r['name']} | {r['result']} | {r['symbol_source']} | {r['footprint_source']} | {r['height_mm']} | "
-           f"{r['failures'].replace('|', '/') or '-'} |" for r in rows]
+    allowed = sum(r["result"] == "allowed" for r in rows)
+    where = Path(str(plan)).parent.name if plan else ""
+    md = [f"# Release check{': ' + where if where else ''}", "",
+          f"**{M.plural(len(rows), 'part')}: {M.counts(r['status'] for r in rows)}.**"
+          + (f" {allowed} of the ready ones {'was' if allowed == 1 else 'were'} released anyway." if allowed else ""), "",
+          ("Held parts stay out of the library until they are fixed or released anyway." if held
+           else "Nothing is held."), ""]
+    if held:
+        md += [f"## Held ({len(held)})", ""]
+        for r in held:
+            md += [f"### {r['name']}", ""]
+            for e in M.explain_all(_split(r["failures"])):
+                md.append(f"- {e['text']}" + (f" {e['note']}" if e["note"] else "") + f"  \n  **Next:** {e['fix']}")
+            md.append("")
+    rest = [r for r in rows if r["status"] != "held"]
+    if rest:
+        md += [f"## Not held ({len(rest)})", "", "| Part | Status | Symbol from | Footprint from | Height |", "|---|---|---|---|---|"]
+        md += [f"| {r['name']} | {M.status_word('allowed' if r['result'] == 'allowed' else r['status'])} | {M.source_word(r['symbol_source'])} | "
+               f"{M.source_word(r['footprint_source'])} | {r['height_mm'] + ' mm' if r['height_mm'] else '-'} |" for r in rest]
+        md.append("")
     warned = [r for r in rows if r["warnings"]]
     if warned:
-        md += ["", "## Warnings (not held)", ""] + [f"- **{r['name']}**: {r['warnings']}" for r in warned]
+        md += ["## Warnings (not held)", ""] + [f"- **{r['name']}**: {M.clean(r['warnings'])}" for r in warned]
     stem.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return stem
+
+
+def print_result(rows, plan, stem, t=None):
+    """The terminal view: one row per part (status, name, the reason in plain words), then the summary."""
+    from . import messages as M, term as TM
+    t = t or TM.Term()
+    table = []
+    for r in rows:
+        st = {"pass": "ready", "allowed": "ready"}.get(r["result"], r["status"])
+        word = "released anyway" if r["result"] == "allowed" else None
+        reasons = [x for x in (r["failures"] or "").split("; ") if x] if r["status"] == "held" else []
+        why = M.explain_all(reasons)
+        first = why[0]["text"] + (f" (+{len(why) - 1} more)" if len(why) > 1 else "") if why else ""
+        table.append([t.status(st, word), r["name"], first])
+        if t.verbose:                       # -v: every reason, each with its next step
+            for k, e in enumerate(why):
+                table += ([["", "", e["text"]]] if k else []) + [["", "", f"fix: {e['fix']}"]]
+    t.table(table)
+    held = [r["name"] for r in rows if r["status"] == "held"]
+    nxt = [(f"ecadlib review {plan}", "go through the held parts one by one")] if held else []
+    if any(r["status"] == "awaiting_approval" for r in rows):
+        nxt.append((f"ecadlib approve {plan} status", "who still has to sign off"))
+    if not held:
+        nxt.append((f"ecadlib kicad-export {plan} -o kicad --name mylib", "write the KiCad library"))
+    t.summary(M.counts(r["status"] for r in rows) + (f"  (held: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''})" if held else ""),
+              written=[(str(stem.with_suffix(".md")), "release check report"), (str(plan), "library plan, statuses updated")],
+              next=nxt)
 
 
 def main(argv=None):
@@ -341,11 +408,7 @@ def main(argv=None):
         print(json.dumps({"plan": str(plan), "report": str(stem.with_suffix(".md")),
                           "counts": {s: sum(r["status"] == s for r in rows) for s in st}, "rows": rows}, indent=2, default=str))
         return 2 if held else 0
-    for r in rows:
-        print(f"  {r['result']:<8} {r['name']:<28} {r['failures'][:110]}")
-    other = {s: sum(r["status"] == s for r in rows) for s in ("awaiting_approval", "duplicate")}   # approvals / dedupe
-    print(f"{sum(r['status'] == 'ready' for r in rows)} ready, {held} held"
-          + "".join(f", {n} {s.replace('_', ' ')}" for s, n in other.items() if n) + f" -> {plan}; report {stem.with_suffix('.md')}")
+    print_result(rows, plan, stem)
     return 2 if held else 0
 
 

@@ -13,7 +13,7 @@ A Workspace is one folder on the user's machine:
     <root>/http_cache/                    provider responses
 
 Each action returns plain JSON-able dicts so the UI and the MCP server can share it."""
-import contextlib, datetime, hashlib, html, json, math, os, re, secrets
+import contextlib, datetime, hashlib, html, itertools, json, math, os, re, secrets
 from pathlib import Path
 
 import pandas as pd
@@ -462,7 +462,7 @@ class Workspace:
             yield
 
     def _librarian_summary(self, bom_path, items, log):
-        from . import librarian as L
+        from . import librarian as L, reports as RP
         out = self._librarian_dir(bom_path)
         rows = L.review_rows(items)
         for r, it in zip(rows, items):
@@ -471,7 +471,10 @@ class Workspace:
             r["approval"] = {k: a.get(k) for k in ("required", "met", "approved_by", "missing", "stale")} if a else None
             if it.get("duplicate_of"):
                 r["duplicate_of"] = it["duplicate_of"]
-        files = [out / f for f in ("review.md", "release_check.md", "plan.json", "dedupe.md")]
+            v = RP.part_view(it)                    # the shared voice: status word, reasons and checks with a next step
+            r["word"] = v["word"]
+            r["says"] = [{k: e[k] for k in ("code", "text", "fix", "note")} for e in v["reasons"] + v["checks"]]
+        files = [out / f for f in ("review.md", "review.html", "release_check.md", "plan.json", "dedupe.md")]
         return {"bom": self.rel(bom_path) if self._is_inside(bom_path) else str(bom_path),
                 "parts": len(items), "ready": sum(i["status"] == "ready" for i in items),
                 "held": sum(i["status"] == "held" for i in items),
@@ -516,7 +519,10 @@ class Workspace:
         """Held plan items: name, folder, missing halves, hold reasons and where each half came from. No network."""
         from . import resolve as R
         bom_path, plan_f, _ = self._plan(bom)
-        return {"bom": self._bom_label(bom_path), "plan": self.rel(plan_f), "held": R.held(plan_f)}
+        from . import messages as M            # each reason also as a plain sentence + next step (code kept)
+        held = [dict(h, reasons=[{k: e[k] for k in ("code", "text", "fix", "note")} for e in M.explain_all(h["hold_reasons"])])
+                for h in R.held(plan_f)]
+        return {"bom": self._bom_label(bom_path), "plan": self.rel(plan_f), "held": held}
 
     def part_candidates(self, bom, part, kind=None, limit=10, progress=None):
         """Ranked symbol / footprint candidates for one plan item (default: its missing halves, else both), with the
@@ -820,6 +826,92 @@ class Workspace:
                  for it in json.loads(plan_f.read_text(encoding="utf-8")) if it.get("cross_check")]
         counts = {s: sum(p["cross_check"] == s for p in parts) for s in ("agreed", "disagreed", "unchecked", "skipped")}
         return {"parts": parts, "counts": counts, "modes": list(CC.MODES)}
+
+    def library_parts(self, bom, pictures=True):
+        """The librarian plan of a BOM as cards (ecadlib.partview): status in plain words, held reasons with a next
+        step, cross-check and KiCad/Altium results with both values, datasheet link, cost and model, a footprint
+        picture. Read-only, no network."""
+        from . import partview as PV
+        bom_path, plan_f, items = self._plan(bom)
+        reports = [self.rel(f) for f in (plan_f.parent / n for n in ("review.md", "release_check.md", "plan.json")) if f.exists()]
+        return dict(PV.cards(plan_f.parent, items, pictures), bom=self._bom_label(bom_path), plan=self.rel(plan_f), reports=reports)
+
+    # ------------------------------------------------------------------ library hub (ecadlib.hub)
+    def hub(self, q="", have=(), lack=(), states=(), origin="", flags=(), sort="name", page=1, size=100, force=False,
+            tool="", library="", project=""):
+        """Every part once across your libraries and ecadlib's own, with a cell per tool (missing / same / different /
+        behind), last updated and by whom. Filters as in hub.listing. Reads only; notes go to <workspace>/hub/."""
+        from . import hub as H
+        bad = [t for t in [*have, *lack, *([tool] if tool else [])] if t not in H.LABEL] + [s for s in states if s not in H.STATES]
+        if bad:
+            raise ValueError(f"unknown tool or state {bad[0]!r}: tools are {', '.join(H.LABEL)}; states {', '.join(H.STATES)}")
+        return H.listing(self, q, have, lack, states, origin, flags, sort, page, size, force, tool, library, project)
+
+    def hub_part(self, key):
+        """One hub part: each tool's copy (where, updated, by, what differs), footprint and symbol pictures, sources,
+        release check, sign-off, where-used, lifecycle, history and the fixes on offer."""
+        from . import hub as H
+        return H.part(self, key)
+
+    def hub_fix(self, key, action, who=None):
+        """Run one of a hub part's fixes: kicad (write the KiCad library of its BOM), a365_preview (Altium 365 dry run),
+        dedupe (find duplicates in its plan), tool:<id> (another tool's exporter). "build" is hub_build_bom + the
+        librarian; "open_plan" happens in the browser."""
+        from . import hub as H
+        row, copies = H.copies_of(self, key)
+        offered = {f["action"] for f in H.fixes(row, copies)}
+        if action not in offered:
+            raise ValueError(f"{action!r} is not on offer for {row['name']}: {', '.join(sorted(offered)) or 'nothing to fix'}")
+        if action.startswith("copy:"):
+            return {"action": action, "part": row["name"], "result": H.copy_parts(self, [key], action[5:], "", who)}
+        pc = next(c for c in copies if c["plan"] and c["origin"] == "ecadlib" and c["bom"])
+        if action == "kicad":
+            out = self.kicad_dblib(pc["bom"])
+            what = "made the KiCad version"
+        elif action == "a365_preview":
+            r = self.altium365_push(pc["bom"], None, dry_run=True)
+            out = dict(r, results=[x for x in r["results"] if x.get("name") == pc["name"]])
+            what = None
+        elif action == "dedupe":
+            out, what = self.find_duplicates(pc["bom"]), None
+        elif action.startswith("tool:"):
+            reg = H._READERS[action[5:]]
+            items = json.loads(self.inside(pc["plan"]).read_text(encoding="utf-8"))
+            out = reg["fix"](self, self.inside(pc["plan"]), items[pc["item"]],
+                             **({"bom": pc["bom"]} if getattr(reg["fix"], "wants_bom", False) else {}))
+            what = f"made the {reg['label']} version"
+        else:
+            raise ValueError(f"{action!r} runs from the web page, not here")
+        if what:
+            H.record(self.root, [{"when": H.now(), "who": who, "what": what, "kind": "action", "key": key, "name": row["name"],
+                                  "bom": pc["bom"], "tool": action[5:] if action.startswith("tool:") else action}])
+        return {"action": action, "part": row["name"], "result": out}
+
+    def hub_copy(self, keys, tool, project="", who=None):
+        """Copy parts to another tool through the hub (Altium <-> KiCad), into <workspace>/hub/library; with a project
+        listed under [hub] projects, also import that library into the project. Your own library files are not edited."""
+        from . import hub as H
+        return H.copy_parts(self, keys, tool, project, who)
+
+    def hub_build_bom(self, key):
+        """A one-line BOM for a part that is only in your libraries (for "Build it with ecadlib") -> its workspace path."""
+        from . import hub as H
+        row, copies = H.copies_of(self, key)
+        if not row["mpn"]:
+            raise ValueError(f"{row['name']} has no manufacturer part number, so ecadlib can't look it up")
+        return self.save_upload(f"hub_{self.safe_name(row['mpn'])}.csv", H.one_line_bom(row, copies))
+
+    def demo_bom(self):
+        """Copy the bundled sample BOM (the one `ecadlib demo` uses) into uploads/demo/; -> its workspace path."""
+        import shutil
+        from .firstrun import DEMO_BOM
+        if self.root.resolve() == Path(self.root.resolve().anchor):
+            raise ValueError("the workspace is the filesystem root; start ecadlib ui with --workspace FOLDER")
+        dest = self.root / "uploads" / "demo" / DEMO_BOM.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if not dest.exists() or dest.read_bytes() != DEMO_BOM.read_bytes():
+            shutil.copyfile(DEMO_BOM, dest)
+        return self.rel(dest)
 
     def altium365_workspaces(self):
         from . import altium365 as A
@@ -1198,10 +1290,15 @@ def footprint_geometry(kicad_mod):
     return out
 
 
+_SVG_IDS = itertools.count(1)
+
+
 def footprint_svg(rep, scale=40, kicad_mod=None):
     """Top view: copper pads (pin 1 highlighted), drills, exposed pad, fab body and courtyard. KiCad Y points down,
     as SVG's does. The view box fits what is drawn (through-hole connectors put pin 1, not the centre, at 0,0).
-    kicad_mod: draw from the footprint itself (rotation, polygon pads, holes); else from the report's numbers."""
+    kicad_mod: draw from the footprint itself (rotation, polygon pads, holes); else from the report's numbers.
+    The UI colours it like Altium's PCB editor: a black board under a 0.5 / 2.5 mm grid, pad numbers on the copper,
+    and the footprint's origin as a cross. Through-hole pads (a drill at the pad) get the extra class "tht"."""
     f = lambda v: f"{float(v):.4f}".rstrip("0").rstrip(".")
     body, pts = [], []
     if kicad_mod:
@@ -1230,9 +1327,17 @@ def footprint_svg(rep, scale=40, kicad_mod=None):
                          "pts": [(x - w / 2, y - h / 2), (x + w / 2, y + h / 2)]})
         geo = {"holes": []}
     p1 = next((p["num"] for p in pads if p["num"] in ("1", "A1")), None)
+    drilled = {(round(q["x"], 3), round(q["y"], 3)) for q in geo["holes"]}
+    labels = []
     for p in pads:
         pts += p["pts"]
         cls = "pad p1" if p["num"] == p1 else "pad"
+        if (round(p["x"], 3), round(p["y"], 3)) in drilled:
+            cls += " tht"
+        size = min(p["w"], p["h"]) * 0.55
+        if size > 0:
+            labels.append(f'<text class="padnum" x="{f(p["x"])}" y="{f(p["y"])}" font-size="{f(min(size, 0.6))}">'
+                          f'{html.escape(p["num"])}</text>')
         num = html.escape(p["num"])                                    # the UI inserts this SVG as HTML
         tip = f'<title>pad {num}: {p["w"]:.3f} x {p["h"]:.3f} mm @ ({p["x"]:.3f}, {p["y"]:.3f})</title>'
         if p.get("polys"):
@@ -1250,5 +1355,13 @@ def footprint_svg(rep, scale=40, kicad_mod=None):
     m = 0.6
     x0, y0 = min(x for x, _ in pts) - m, min(y for _, y in pts) - m
     vw, vh = max(x for x, _ in pts) + m - x0, max(y for _, y in pts) + m - y0
+    gid = f"fpgrid{next(_SVG_IDS)}"
+    board = (f'<defs><pattern id="{gid}f" width="0.5" height="0.5" patternUnits="userSpaceOnUse">'
+             f'<path class="grid" d="M0.5 0V0.5H0"/></pattern>'
+             f'<pattern id="{gid}" width="2.5" height="2.5" patternUnits="userSpaceOnUse">'
+             f'<rect width="2.5" height="2.5" fill="url(#{gid}f)"/><path class="grid major" d="M2.5 0V2.5H0"/></pattern></defs>'
+             f'<rect class="board" x="{f(x0)}" y="{f(y0)}" width="{f(vw)}" height="{f(vh)}"/>'
+             f'<rect class="board-grid" x="{f(x0)}" y="{f(y0)}" width="{f(vw)}" height="{f(vh)}" fill="url(#{gid})"/>')
+    origin = '<path class="origin" d="M-0.4 0H0.4M0 -0.4V0.4"/>'
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{f(x0)} {f(y0)} {f(vw)} {f(vh)}" width="{vw * scale:.0f}" '
-            f'height="{vh * scale:.0f}" class="fp">' + "".join(body) + "</svg>")
+            f'height="{vh * scale:.0f}" class="fp">' + board + "".join(body) + "".join(labels) + origin + "</svg>")

@@ -104,6 +104,129 @@ def test_queue_approval_refusal_reads_plainly():
             assert str(e).startswith("the library plan refused this approval") and "approvals.py" not in str(e), e
 
 
+def test_parts_endpoint_says_why_with_both_values_and_cost():
+    """/api/parts: every part as a card; held reasons in plain words with a next step; the cross-check and the
+    KiCad / Altium comparison with both values; datasheet page; cost and model; a footprint picture."""
+    with tempfile.TemporaryDirectory() as d:
+        ws, bom = FX.build(d, queue=False)
+        srv, call = serve(ws)
+        try:
+            st, r = call("GET", "/api/parts?bom=" + bom)
+            assert st == 200, r
+            assert r["counts"] == {"parts": 14, "ready": 6, "held": 8, "waiting": 0, "cross_check_disagreed": 1,
+                                   "parity_mismatch": 1}, r["counts"]
+            assert r["cost"]["usd"] == 0.111 and r["cost"]["models"] == ["claude-sonnet-4-5"] and r["cost"]["answers"] == 2
+            by = {p["part"]: p for p in r["parts"]}
+            tps = by["TPS62133RGTR"]
+            assert tps["status_label"] == "held" and tps["reasons"][0]["code"] == "crosscheck.disagree", tps["reasons"]
+            assert "pin pitch (0.65 mm vs 0.5 mm)" in tps["reasons"][0]["text"] and "page 34" in tps["reasons"][0]["fix"]
+            rows = tps["cross_check"]["rows"]
+            assert [(x["label"], x["first"], x["second"], x["page"]) for x in rows] == [
+                ("pin pitch", "0.65 mm", "0.5 mm", 34), ("body width", "3 mm", "3.1 mm", 34)], rows
+            assert tps["datasheet"] == {"url": "https://www.lcsc.com/datasheet/C73973.pdf", "page": 34}
+            assert tps["cost"] == {"usd": 0.111, "models": ["claude-sonnet-4-5"], "answers": 2}
+            stm = by["STM32F103C8T6"]
+            assert stm["parity"]["result"] == "mismatch" and stm["parity"]["rows"] == [
+                {"what": "pad 1 size", "kicad": "0.3 x 1.5 mm", "altium": "0.3 x 1.45 mm"}], stm["parity"]
+            assert any("KiCad 0.3 x 1.5 mm, Altium 0.3 x 1.45 mm" in x["text"] for x in stm["reasons"]), stm["reasons"]
+            assert stm["picture"].startswith("<svg") and stm["footprint"]["pads"] == 48
+            for p in r["parts"]:                      # every held part says why and what to do, without machine words
+                if p["status"] == "held":
+                    assert p["reasons"] and all(x["text"] and x["fix"] for x in p["reasons"]), p
+                    assert not any(w in x["text"] + x["fix"] for x in p["reasons"] for w in (".SchLib", ".PcbLib", "plan.json", "parity:", "files:")), p["reasons"]
+            assert str(ws.root) not in json.dumps(r)
+            from ecadlib import mcp_server as M
+            got = M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                "params": {"name": "library_parts", "arguments": {"bom": bom}}})
+            mc = json.loads(got["result"]["content"][0]["text"])
+            assert mc["counts"]["held"] == 8 and all(p["picture"] is None for p in mc["parts"]), mc["counts"]
+            st, r = call("GET", "/api/parts?bom=uploads/nope.csv")
+            assert st == 400 and str(ws.root) not in r["error"], r
+        finally:
+            srv.shutdown()
+
+
+def test_jobs_stream_lines_and_stop():
+    """Long jobs keep one line per part ("3/14 NAME  ready") and stop when asked; a stopped librarian run leaves the
+    plan as it was."""
+    from tests.test_ui import wait_job
+    with tempfile.TemporaryDirectory() as d:
+        ws, bom = FX.build(d, queue=False)
+        srv, call = serve(ws)
+        try:
+            st, j = call("POST", "/api/triage", {"bom": bom})
+            res = wait_job(call, j["job"])
+            assert res["state"] == "done" and len(res["lines"]) == 14 and all(x["state"] == "done" for x in res["lines"]), res["lines"]
+            assert res["lines"][0]["text"].startswith("1/14 ") and res["elapsed"] >= 0, res["lines"][0]
+            st, j = call("POST", "/api/librarian/run", {"bom": bom})
+            res = wait_job(call, j["job"])
+            assert res["state"] == "done", res
+            texts = [x["text"] for x in res["lines"]]
+            assert len(texts) == 14 and texts[0] == "1/14 CAP-0402-100nF  ready" and any(t.endswith("  held") for t in texts), texts
+            plan = (ws.root / "librarian" / "sample_bom" / "plan.json").read_bytes()
+            jobs = S.Jobs()
+            gate = threading.Event()
+
+            def slow(progress=None):
+                for i in range(200):
+                    progress(i, 200, f"line {i}")
+                    progress.line(f"p{i}", text=f"{i}/200")
+                    gate.wait(0.02)
+                return "finished"
+            jid = jobs.start(slow, owner="ann")["job"]
+            assert jobs.cancel(jid, {"username": "bob", "role": "librarian"}) is None   # team mode: not your job
+            assert jobs.cancel(jid)["cancel"] is True
+            for _ in range(200):
+                if jobs.get(jid)["state"] != "running":
+                    break
+                gate.wait(0.02)
+            got = jobs.get(jid)
+            assert got["state"] == "cancelled" and got["result"] is None and 0 < len(got["lines"]) < 200, got["state"]
+            st, j = call("POST", "/api/librarian/run", {"bom": bom, "refresh": True})
+            st, c = call("POST", "/api/job/cancel", {"id": j["job"]})
+            assert st == 200, c
+            res = wait_job(call, j["job"])
+            assert res["state"] in ("cancelled", "done"), res
+            if res["state"] == "cancelled":
+                assert (ws.root / "librarian" / "sample_bom" / "plan.json").read_bytes() == plan
+            assert call("POST", "/api/job/cancel", {"id": "nope"})[0] == 404
+        finally:
+            srv.shutdown()
+
+
+def test_demo_builds_the_sample_offline():
+    from tests.test_ui import wait_job
+    with tempfile.TemporaryDirectory() as d:
+        ws = Workspace(d, [FX.LIB], providers=["digikey"], offline=True)
+        srv, call = serve(ws)
+        try:
+            st, j = call("POST", "/api/demo", {})
+            assert st == 200 and j["bom"] == "uploads/demo/demo_bom.csv", j
+            res = wait_job(call, j["job"])
+            assert res["state"] == "done", res
+            r = res["result"]
+            assert r["parts"] == 7 and r["ready"] + r["held"] == 7 and len(r["triage"]["rows"]) == 7, r
+            assert any(x["text"] == "BOM checked: 7 lines" for x in res["lines"])
+            assert not (ws.root / "ecadlib.toml").exists()           # the person's workspace keeps its own rules
+            assert call("GET", "/api/parts?bom=" + j["bom"])[1]["counts"]["parts"] == 7
+        finally:
+            srv.shutdown()
+    from unittest import mock
+    from ecadlib import firstrun
+    ws = Workspace.__new__(Workspace)                     # never touches the disk: the guard comes first
+    ws.root = Path(Path.cwd().anchor)
+    for fn in (ws.demo_bom, lambda: firstrun.build_demo(ws, log=lambda *a: None)):
+        with mock.patch.object(Path, "mkdir", side_effect=AssertionError("wrote at /")), \
+                mock.patch("shutil.copyfile", side_effect=AssertionError("wrote at /")):
+            try:
+                fn()
+                raise AssertionError("demo ran at the filesystem root")
+            except ValueError as e:
+                assert "filesystem root" in str(e), e
+    for path, role in ((("GET", "/api/parts")), "viewer"), ((("POST", "/api/job/cancel")), "viewer"), ((("POST", "/api/demo")), "librarian"):
+        assert S.ROUTES[path] == role, path
+
+
 # ------------------------------------------------------------------ real Chromium
 def _browser():
     """(node, NODE_PATH, chromium executable or None) or None when any piece is missing."""
@@ -135,6 +258,7 @@ def _servers(d):
         for w in (1280, 390):
             urls["local"][str(w)] = up(FX.build(Path(d) / f"local{w}")[0])
         urls["empty"] = up(Workspace(Path(d) / "empty", [FX.LIB], providers=["digikey"], offline=True))
+        urls["demo"] = {str(w): up(Workspace(Path(d) / f"demo{w}", [FX.LIB], providers=["digikey"], offline=True)) for w in (1280, 390)}
         ws, _ = FX.build(Path(d) / "team", team=True)
         urls["team"] = up(ws, TM.Team(ws.root))
         yield urls
@@ -151,12 +275,12 @@ def test_browser_main_flows():
     with tempfile.TemporaryDirectory() as d, _servers(d) as urls:
         cfg = {**urls, "bom": str(ROOT / "examples" / "sample_bom.csv"), "password": FX.PW, "executable": exe,
                "shots": os.environ.get("ECADLIB_UI_SHOTS")}
-        p = subprocess.run([node, str(ROOT / "tests" / "ui_browser.js"), json.dumps(cfg)], capture_output=True, text=True,
+        p = subprocess.run([node, str(ROOT / "tests" / "ui_browser.js"), json.dumps(cfg)], capture_output=True, text=True, cwd=d,
                            env={**os.environ, "NODE_PATH": mods}, timeout=900)
         assert p.returncode == 0, p.stderr[-3000:]
         checks = json.loads(p.stdout.strip().splitlines()[-1])["checks"]
     bad = [c for c in checks if not c[1]]
-    assert len(checks) >= 60 and not bad, (len(checks), bad)
+    assert len(checks) >= 120 and not bad, (len(checks), bad)
     print(f"      {len(checks)} browser checks passed")
 
 

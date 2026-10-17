@@ -86,8 +86,8 @@ def load_policy(base):
         raw = RU.load(None, start=base)["release"]["approvals"]
         return normalize_policy(dict(raw), "ecadlib.toml [release.approvals]") if raw else None
     if f.suffix == ".toml":
-        import tomllib
-        raw = tomllib.loads(f.read_text(encoding="utf-8"))
+        from .rules import parse_text
+        raw = parse_text(f.read_text(encoding="utf-8"), f.name)
         raw = raw.get("approvals", raw)            # either top level or an [approvals] table
     else:
         raw = json.loads(f.read_text(encoding="utf-8") or "{}")
