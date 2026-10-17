@@ -220,7 +220,7 @@ class Run:
         except ValueError as e:
             notes.append(f"no 3D body: {e}")
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
-        kmod.write_text(text, encoding="utf-8")
+        kmod.write_text(text, encoding="utf-8", newline="\n")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
                            "name": name, "hash": h, **renamed}

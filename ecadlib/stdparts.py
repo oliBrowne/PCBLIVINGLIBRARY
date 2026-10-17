@@ -704,7 +704,7 @@ def main(argv=None):
     if a.cmd == "resolve":
         res = resolve(a.text, a.kind, a.mpn, a.description)
         if a.kicad_mod and res["footprint"]:
-            Path(a.kicad_mod).write_text(build(res["footprint"])[0], encoding="utf-8")
+            Path(a.kicad_mod).write_text(build(res["footprint"])[0], encoding="utf-8", newline="\n")
         print(json.dumps(res, indent=2) if a.json else
               f"footprint: {res['kicad_ref'] or '-'} ({res['fp_how']})\nsymbol:    {res['symbol'] or '-'} ({res['sym_how']})")
         return 0 if res["footprint"] or res["symbol"] else 1

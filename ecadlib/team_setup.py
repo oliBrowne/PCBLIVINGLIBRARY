@@ -99,7 +99,10 @@ class Asker:
                 raise SetupError(f"no {label}: give {flag}")
             return ""
         while True:
-            v = input(f"{label}: ").strip()
+            try:
+                v = input(f"{label}: ").strip()
+            except EOFError:                            # stdin ran out (Windows calls NUL a terminal)
+                raise SetupError(f"no {label}: give {flag}") from None
             if v or not required:
                 return v
 

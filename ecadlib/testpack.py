@@ -117,11 +117,11 @@ def write_source(d):
     pretty.mkdir(parents=True, exist_ok=True)
     for n in LOCAL_FP:
         text, _ = F.build(json.loads(spec_path(n).read_text(encoding="utf-8")))
-        (pretty / f"{n}.kicad_mod").write_text(text, encoding="utf-8")
+        (pretty / f"{n}.kicad_mod").write_text(text, encoding="utf-8", newline="\n")
     syms = [kicad_symbol(n, ref, fp, pins, next((p[5] for p in PARTS if p[4] == n), "")) for n, (ref, fp, pins) in SYMBOLS.items()]
     text = '(kicad_symbol_lib (version 20220914) (generator "ecadlib_testpack")\n' + "\n".join(syms) + "\n)\n"
     sexpr.parse(text)
-    (d / f"{NAME}.kicad_sym").write_text(text, encoding="utf-8")
+    (d / f"{NAME}.kicad_sym").write_text(text, encoding="utf-8", newline="\n")
     return d
 
 
