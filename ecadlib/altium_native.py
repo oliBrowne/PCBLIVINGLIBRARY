@@ -228,6 +228,16 @@ def copy_recipe(src_lib, dst_lib):
 
 
 # ------------------------------------------------------------------ collecting a library folder
+def recipe_steps(lib_path):
+    """The STEP files the recipe next to a library names (ecadlib_3d/<footprint>_<n>/<model>, relative to the library's
+    folder, '/' separators); [] when it has no recipe."""
+    rp = Path(lib_path).with_name(Path(lib_path).name + EXT)
+    if not rp.is_file():
+        return []
+    return [f[4] for f in (ln.split("\t") for ln in rp.read_text(encoding="utf-8").splitlines())
+            if f[0] == "BODY" and len(f) > 4 and f[4]]
+
+
 def recipes(folder):
     """[(library path relative to folder, recipe path)] for every recipe under folder whose library exists."""
     folder = Path(folder)

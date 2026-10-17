@@ -331,8 +331,8 @@ def read_prjpcb(path):
         f = _find_file(path.parent, rel)
         if f is None:
             missing.append(rel)
-        else:
-            (sch if ext in SCH_EXT else bom).append(f)
+        elif not any(Path(f).resolve() == Path(x).resolve() for x in sch + bom):   # listed twice (X.SchDoc, .\x.schdoc):
+            (sch if ext in SCH_EXT else bom).append(f)                              # read once, not every part twice
     for rel in devs:
         if PureWindowsPath(rel).suffix.lower() not in SCH_EXT:
             continue
@@ -495,6 +495,11 @@ def load_project(path, rules=None):
         prev = by_des.get(k)
         if prev:
             same = (prev["design_item_id"], prev["libref"]) == (c["design_item_id"], c["libref"])
+            if same and c["unique_id"] and c["unique_id"] == prev["unique_id"] and c["current_part"] == prev["current_part"]:
+                warnings.append(f"{c['designator']} is on {prev['sheet']} and {c['sheet']} with the same UniqueId "
+                                f"({c['unique_id']}): one component (a copied sheet?), counted once")
+                prev["sheets"] = sorted(set(prev["sheets"]) | {c["sheet"]})
+                continue
             if same and (prev["part_count"] > 1 or c["part_count"] > 1):
                 prev["parts_placed"] += 1
                 prev["sheets"] = sorted(set(prev["sheets"]) | {c["sheet"]})

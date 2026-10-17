@@ -17,7 +17,7 @@ a librarian killed mid-run then re-run (recovers).
 Sources are offline and recorded (tests/e2e_support.py): real KiCad library files from gitlab.com, a SYNTHETIC
 EasyEDA payload, SYNTHETIC Claude answers from a local fake API (ANTHROPIC_BASE_URL); every other request goes to a
 dead proxy. Nothing here was opened in Altium Designer or Altium 365: the Altium checks are file-level only."""
-import atexit, csv, json, re, shutil, sqlite3, subprocess, tempfile
+import atexit, contextlib, csv, json, re, shutil, sqlite3, subprocess, tempfile
 from pathlib import Path
 
 from ecadlib import altium_lib as AL, sexpr
@@ -153,7 +153,7 @@ def test_kicad_tables_and_database_library_map_to_real_files():
     syms = {s[1] for s in sexpr.find(sexpr.parse((w / "e2e.kicad_sym").read_text()), "symbol") if ":" not in s[1]}
     fps = {f.stem for f in (w / "e2e.pretty").glob("*.kicad_mod")}
     rows = []
-    with sqlite3.connect(w / "e2e.sqlite") as db:
+    with contextlib.closing(sqlite3.connect(w / "e2e.sqlite")) as db:
         for lib in dbl["libraries"]:
             q = f'SELECT * FROM "{lib["table"]}"'
             cur = db.execute(q)
@@ -200,7 +200,7 @@ def test_kicad_loads_every_symbol_and_footprint_and_drc_passes():
         return KR._skip("pcbnew")
     # a board with every part of the .xlsx BOM, placed through the project's fp-lib-table by the footprint the
     # database library gives it; KiCad's DRC library check finds each one in the table, unchanged
-    with sqlite3.connect(k / "e2e.sqlite") as db:
+    with contextlib.closing(sqlite3.connect(k / "e2e.sqlite")) as db:
         refs = sorted({r[0] for t in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
                        for r in db.execute(f'SELECT "Footprint" FROM "{t[0]}"')})
     names = [r.split(":", 1)[1] for r in refs]
