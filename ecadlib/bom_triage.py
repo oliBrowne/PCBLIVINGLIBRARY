@@ -298,7 +298,7 @@ def part_numbers(ln):
 def count_refs(s):
     """'R1, R2, R5-R8' -> 6 (ranges like R5-R8, R5-8 or 'R5 - R8' count every designator). Units of one multi-unit
     part ('U1A, U1B', Altium's suffixed designators) count once, as does a designator listed twice."""
-    s = re.sub(r"(?<=[0-9A-Za-z])\s*[-\u2013\u2014]\s*(?=[A-Za-z]*\d)", "-", s.strip())   # 'R1 – R4' -> 'R1-R4'
+    s = re.sub(r"(?<=[0-9A-Za-z])\s*[-\u2013\u2014~\uff5e]\s*(?=[A-Za-z]*\d)", "-", s.strip())   # 'R1 – R4', 'C1~C4' -> 'R1-R4'
     seen, extra = set(), 0
     for tok in re.split(r"[,;\s]+", s):
         m = re.fullmatch(r"([A-Za-z]+)(\d+)[A-Za-z]?(?:-(?:\1)?(\d+)[A-Za-z]?)?", tok)

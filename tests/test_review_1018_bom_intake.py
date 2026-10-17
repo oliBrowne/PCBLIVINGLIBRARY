@@ -75,6 +75,13 @@ def test_mostly_utf8_file_with_one_cp1252_byte():
     assert lines[0]["value"] == "10µF", lines
 
 
+def test_tilde_designator_ranges():
+    """'C1~C4' (LCSC / JLCPCB-style BOMs) counted 0 designators: a BOM without a Qty column bought one."""
+    assert T.count_refs("C1~C4") == 4 and T.count_refs("C1 ~ C4, C7") == 5 and T.count_refs("R1～R3") == 3
+    lines, _ = T.read_bom(_write("bom.csv", "Designator,Value\nC1~C4,100n\n"))
+    assert S.line_qty(lines[0]) == 4
+
+
 if __name__ == "__main__":
     import sys
     fails = 0
