@@ -203,7 +203,7 @@ def _gullwing(spec, fil):
         pos += [{"number": str(per + i + 1), "side": "R", "offset": ((per - 1) / 2 - i) * e} for i in range(per)]
     pitch = _min_pitch({"pin_positions": pos})
     X = min(r["X"], rdn(pitch - MIN_PAD_GAP)) if pitch else r["X"]
-    pads = [(p["number"], (-1 if p["side"] == "L" else 1) * r["pad_ctr"], p["offset"], r["pad_len"], X) for p in pos]
+    pads = [(str(p["number"]), (-1 if p["side"] == "L" else 1) * r["pad_ctr"], p["offset"], r["pad_len"], X) for p in pos]
     rep = {"Z": r["Z"], "G": r["G"], "X": X, "X_unclamped": r["X"]}
     tab = spec.get("tab")
     if tab:                                                   # SOT-223 / DPAK style wide tab on one side
@@ -332,7 +332,8 @@ def sanity(spec):
     if t == "qfn" and T and T >= min(L, W) / 2:
         errs.append(f"terminal_length {T} reaches the middle of the {L} x {W} body")
     ep = spec.get("exposed_pad")
-    if ep and (dim(ep["length"])[1] >= L or dim(ep["width"])[1] >= W):
+    bx, by = (W, L) if t == "gullwing" else (L, W)            # EP length is along X: gullwing X is body_width (E1)
+    if ep and (dim(ep["length"])[1] >= bx or dim(ep["width"])[1] >= by):
         errs.append("the exposed pad is as big as the body: check its length/width")
     elif ep and t == "qfn" and T:
         tmin = dim(spec["terminal_length"])[0]
@@ -385,7 +386,7 @@ def build(spec, density=None):
     ep_lines = []
     if ep:
         ew, eh = dim(ep["length"])[1], dim(ep["width"])[1]
-        epnum = str(ep.get("number") or spec["pin_count"] + 1)
+        epnum = str(ep.get("number") or (spec.get("pin_count") or len(pads)) + 1)   # pin_positions specs may omit pin_count
         lr = (lambda p: abs(p[1]) > abs(p[2])) if t in ("qfn", "qfp") else (lambda p: True)   # gullwing: all pads are L/R
         gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p in pads if lr(p)]                 # left/right rows vs EP
         gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p in pads if not lr(p)]            # qfn top/bottom rows vs EP

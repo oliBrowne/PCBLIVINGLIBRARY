@@ -1,7 +1,8 @@
 # Footprint rules and where the numbers come from
 
 Researched 2026-10-13. Units are mm. Densities A/B/C are IPC most/nominal/least (KiCad's M/N/L).
-`ecadlib/footprint_gen.py` and `ecadlib/footprint_check.py` implement what is below.
+`ecadlib/footprint_gen.py` and `ecadlib/footprint_check.py` implement what is below. Everything around the pads (naming,
+layers, text, 3D, polarity, the pad-to-pin map) is in [footprint-rulebook.md](footprint-rulebook.md).
 
 ## Sources
 

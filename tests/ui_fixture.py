@@ -26,6 +26,36 @@ def png(w=120, h=80, rgb=(200, 116, 58)):
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
+CC_SUMMARY = "standard:VQFN-16-1EP_3x3mm_P0.5mm: pitch read 0.65 mm, table 0.5 mm; body width read 3 mm, table 3.1 mm"
+PARITY_MSG = "pad 1 size: KiCad 0.3 x 1.5 mm / Altium 0.3 x 1.45 mm"
+
+
+def round9(out):
+    """What a run with the datasheet reader leaves behind (no API key here, so written by hand): TPS62133RGTR held
+    because the read and the standard package table disagree on the pitch, STM32F103C8T6 held because its KiCad and
+    Altium footprints differ, and two datasheet reads in the cost ledger."""
+    plan_f = Path(out) / "plan.json"
+    items = json.loads(plan_f.read_text(encoding="utf-8"))
+    for it in items:
+        if it["name"] == "TPS62133RGTR":
+            it["cross_check"] = {"status": "disagreed", "summary": CC_SUMMARY}
+            it["librarian"]["review"].append("cross-check disagrees, nothing written: " + CC_SUMMARY)
+        if it["name"] == "STM32F103C8T6":
+            it["hold_reasons"].append("parity: " + PARITY_MSG)
+            it["release_check"].update(parity="mismatch", failures=it["hold_reasons"][:])
+    plan_f.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    d = Path(out) / "datasheet"
+    d.mkdir(exist_ok=True)
+    (d / "TPS62133RGTR.extraction.json").write_text(json.dumps({
+        "part": "TPS62133RGTR", "datasheet": "https://www.lcsc.com/datasheet/C73973.pdf", "model": "claude-sonnet-4-5",
+        "dimensions": {"pitch": {"page": 34}, "body_width": {"page": 34}}}), encoding="utf-8")
+    (d / "cost.jsonl").write_text("".join(json.dumps(r) + "\n" for r in (
+        {"name": "TPS62133RGTR", "model": "claude-sonnet-4-5", "input_tokens": 18000, "output_tokens": 1200, "usd": 0.072,
+         "how": "usage"},
+        {"name": "TPS62133RGTR", "model": "claude-sonnet-4-5", "input_tokens": 9000, "output_tokens": 800, "usd": 0.039,
+         "how": "usage", "purpose": "cross_check"})), encoding="utf-8")
+
+
 def build(root, team=False, librarian=True, queue=True):
     """Builds the workspace in root (an empty or missing folder). Returns (Workspace, bom path)."""
     root = Path(root)
@@ -39,6 +69,8 @@ def build(root, team=False, librarian=True, queue=True):
         ws.triage(bom, user="lena" if team else None)
         if librarian:
             ws.librarian_run(bom, sources=["kicad", "standard"])
+    if librarian:
+        round9(ws.root / "librarian" / "sample_bom")
     if queue:
         q = AQ.Queue(ws.root)
         pics = ws.root / "agent" / "pictures"

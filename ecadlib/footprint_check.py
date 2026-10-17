@@ -234,6 +234,13 @@ def _ranges(nums):
     return ", ".join(out + sorted(str(n) for n in nums if not str(n).isdigit()))
 
 
+def _share_copper(a, b):
+    """Two pads on at least one common copper layer (through-hole '*.Cu' is on all of them)."""
+    la = {l for l in a["layers"] if l.endswith(".Cu")}
+    lb = {l for l in b["layers"] if l.endswith(".Cu")}
+    return "*.Cu" in la or "*.Cu" in lb or bool(la & lb) or (a["drill"] and bool(lb)) or (b["drill"] and bool(la))
+
+
 def _usb_c_stack(a, b, nums):
     """Two overlapping pads of a USB-C receptacle that the USB-C pinout ties together (GND or VBUS)."""
     return {"A1", "B12", "A4", "B9"} <= nums and any({a, b} <= g for g in USB_C_STACKS)
@@ -259,6 +266,8 @@ def check(text, allow_duplicate_pads=None, same_net=None):
         for b in cu[i + 1:]:
             if a["num"] and a["num"] == b["num"]:
                 continue                             # same net (e.g. SOT-223 pin 2 + tab): no web needed
+            if not _share_copper(a, b):
+                continue                             # F.Cu lead vs a B.Cu heat spreader: different layers
             tied = any({a["num"], b["num"]} <= g for g in groups) or _usb_c_stack(a["num"], b["num"], numset)
             g = _rect_gap(a, b)
             if g < MIN_WEB - EPS and (a.get("poly") or b.get("poly")):

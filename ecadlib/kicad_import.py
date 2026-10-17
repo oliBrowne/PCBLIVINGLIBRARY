@@ -59,7 +59,7 @@ def fetch(http, repo, path):
 def load_footprint(ref, http):
     """'Lib:Name' or a .kicad_mod path -> (text, source label)."""
     if Path(ref).suffix == ".kicad_mod":
-        return Path(ref).read_text(), Path(ref).name
+        return Path(ref).read_text(encoding="utf-8"), Path(ref).name
     lib, name = ref.split(":", 1)
     text = fetch(http, "kicad-footprints", f"{lib}.pretty/{name}.kicad_mod")
     if text is None:
@@ -77,11 +77,11 @@ def load_symbol(ref, http, keep_quotes=False):
         def get(name):
             for f in (path, path.with_name(f"{name}.kicad_sym")):
                 if f.exists():
-                    s = _find_symbol(parse(f.read_text()), name)
+                    s = _find_symbol(parse(f.read_text(encoding="utf-8")), name)
                     if s:
                         return s
             raise FileNotFoundError(f"symbol {name} not in {path}")
-        name = m.group(2) or [s[1] for s in sexpr.find(sexpr.parse(path.read_text()), "symbol")][0]
+        name = m.group(2) or [s[1] for s in sexpr.find(sexpr.parse(path.read_text(encoding="utf-8")), "symbol")][0]
         label = path.name
     else:
         lib, name = ref.split(":", 1)
@@ -739,9 +739,9 @@ def _sym_prim(it, hide_names, hide_nums, pins_at, unit, pin_map, notes):
             (cx, cy), r = pt(sexpr.first(rad, "at")), _u(sexpr.first(rad, "length")[1])
             a0, a1 = (float(v) for v in sexpr.first(rad, "angles")[1:3])
         return ("arc", round(cx, 5), round(cy, 5), round(r, 5), round(a0 % 360, 3), round(a1 % 360 or 360, 3), lw)
-    if k == "text":
-        at = sexpr.first(it, "at")
-        return ("text", _u(at[1]), _u(at[2]), it[1], int(float(at[3]) // 90) % 4 if len(at) > 3 else 0)
+    if k == "text":                           # a symbol text's angle is in tenths of a degree (KiCad's parser: "LIB_TEXT
+        at = sexpr.first(it, "at")            # is really decidegrees"), unlike every other (at ...)
+        return ("text", _u(at[1]), _u(at[2]), it[1], round(float(at[3]) / 900) % 4 if len(at) > 3 else 0)
     if k == "pin":
         etype, at = it[1], sexpr.first(it, "at")
         x, y, a = float(at[1]), float(at[2]), int(float(at[3])) % 360 if len(at) > 3 else 0
@@ -858,7 +858,7 @@ def main(argv=None):
         record(out, {"symbol": a.ref, "symbol_as": a.as_, "symbol_footprint": a.footprint, "params": a.param}, {"schlib": str(path), "notes": notes}, http)
         print(f"{sym['name']}: {sum(pr[0] == 'pin' for pr in sym['prims'])} pins -> {path}" + "".join(f"\n   {n}" for n in notes))
         return
-    specs = json.loads(Path(a.parts).read_text()) if a.cmd == "batch" else [{"footprint": a.ref, "footprint_as": a.as_, "height_mm": a.height}]
+    specs = json.loads(Path(a.parts).read_text(encoding="utf-8")) if a.cmd == "batch" else [{"footprint": a.ref, "footprint_as": a.as_, "height_mm": a.height}]
     (out / "PcbLib").mkdir(parents=True, exist_ok=True); (out / "SchLib").mkdir(parents=True, exist_ok=True)
     from . import rules as RU
     lay = RU.layers(RU.load(getattr(a, "rules", None), start=out))
@@ -869,7 +869,7 @@ def main(argv=None):
         for n in r["notes"] + ([r["error"]] if r.get("error") else []):
             print(f"     {n}")
     if a.cmd == "batch":
-        (out / "report.json").write_text(json.dumps(reps, indent=2))
+        (out / "report.json").write_text(json.dumps(reps, indent=2), encoding="utf-8")
     if not all(r["ok"] for r in reps):
         sys.exit(f"{sum(not r['ok'] for r in reps)} of {len(reps)} failed")
 

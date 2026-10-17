@@ -34,11 +34,16 @@ def _norm(h):
     return re.sub(r"[^a-z0-9]+", " ", str(h).lower()).strip()
 
 
+def _hnorm(h):
+    """A header normalised for matching: '#' and 'P/N' mean part number ('Mfr. #' is the MPN, not the maker)."""
+    return _norm(re.sub(r"(?i)\bp\s*/\s*n\b", " pn ", str(h)).replace("#", " no "))
+
+
 def map_headers(headers, threshold=0.72):
     """Fuzzy, case-insensitive header -> field mapping. Returns {field: header}."""
     scores = []
     for h in headers:
-        nh = _norm(h)
+        nh = _hnorm(h)
         for f, syns in FIELDS.items():
             best = 0.0
             for s in syns:
@@ -180,9 +185,10 @@ def read_bom(path, columns=None, rules=None):
     mapping = apply_columns(map_headers(headers), headers, columns)
     if not {"designator", "mpn", "value"} & mapping.keys():
         raise ValueError(f"{p}: no BOM header found (need a Designator, MPN or Value/Comment column)")
+    col = {f: headers.index(h) for f, h in mapping.items()}       # by position: a BOM may repeat a header (a 2nd 'MPN')
     lines = []
     for _, row in df.iterrows():
-        d = {f: SS.unquote(str(row[h]).strip()) for f, h in mapping.items()}       # "'=X" from our own reports
+        d = {f: SS.unquote(str(row.iloc[j]).strip()) for f, j in col.items()}     # "'=X" from our own reports
         if not any(d.values()):
             continue
         if lines and d.get("designator") and not any(v for f, v in d.items() if f != "designator"):
@@ -248,6 +254,14 @@ GENERIC_LIBREF = re.compile(r"(res(istor)?|cap(acitor)?|ind(uctor)?|led|diode|ze
                             r"([\s_-]*(pol|semi|var|adj|smd|tvs))*[\s_-]*\d*", re.I)   # Altium generic symbols: Res1, Cap Pol1
 
 
+PLACEHOLDER_MPN = re.compile(r"\s*(n/?a|none|tbd|tba|tbc|dnp|dnf|n\.?c\.?|generic|any|various|not applicable|-+|\?+|x+)\s*", re.I)
+
+
+def placeholder_mpn(s):
+    """True for an MPN cell that names no part ('N/A', 'TBD', 'Generic', '-'): two such cells are not the same part."""
+    return bool(PLACEHOLDER_MPN.fullmatch(str(s or "")))
+
+
 def part_numbers(ln):
     """MPN candidates, best first: the MPN column, then an Altium 'Comment'/value that is not a
     passive value (ICs carry their part number there, e.g. STM32F103C8T6), then the LibRef."""
@@ -269,6 +283,8 @@ def count_refs(s):
     for tok in re.split(r"[,;\s]+", s):
         m = re.fullmatch(r"([A-Za-z]+)(\d+)[A-Za-z]?(?:-(?:\1)?(\d+)[A-Za-z]?)?", tok)
         if not m:
+            if re.fullmatch(r"[A-Za-z]+\d+[A-Za-z0-9_.]*", tok):   # Altium channel designators (R1_CH1, R1_A): one each
+                seen.add(("", tok.upper()))
             continue
         pre, lo = m.group(1).upper(), int(m.group(2))
         hi = int(m.group(3)) if m.group(3) and int(m.group(3)) >= lo else lo
@@ -445,8 +461,10 @@ def main(argv=None):
         return 2
     index = KiCadIndex(a.lib)
     say = (lambda *x: None) if a.json else print
-    say(f"BOM lines: {len(lines)}  header map: {mapping}")
-    say(f"local index: {len(index.symbols)} symbols, {len(index.footprints)} footprints")
+    from . import term as TM
+    say(f"BOM: {len(lines)} lines; columns: " + ", ".join(f"{k} = {v!r}" for k, v in mapping.items()))
+    if a.lib or TM.VERBOSITY > 0:
+        say(f"your KiCad libraries: {len(index.symbols)} symbols, {len(index.footprints)} footprints")
     rows = triage(lines, index, provs, http)
     counts = write_reports(rows, mapping, provs, http, a.out, a.bom)
     if a.json:                                           # stable shape: README "Machine-readable output (--json)"
@@ -454,11 +472,41 @@ def main(argv=None):
                           "counts": {str(k): int(v) for k, v in counts.items()}, "rows": rows,
                           "reports": [str(Path(a.out).with_suffix(x)) for x in (".md", ".csv")]}, indent=2, default=str))
         return 0
-    for r in rows:
-        print(f"{r['line']:>2} {r['mpn'][:24]:<24} {r['lcsc']:<9} {r['status']:<34} {r['notes'][:90]}")
-    print("\n" + counts.to_string())
-    print(f"\nwrote {Path(a.out).with_suffix('.md')} and .csv")
+    print_result(rows, counts, a)
 
+
+TRIAGE_WORDS = {   # triage status -> (term status, plain words)
+    "in_library": ("ready", "in your library"),
+    "in_library (generated footprint)": ("ready", "in your library (footprint generated)"),
+    "available_easyeda": ("signoff", "found online (EasyEDA)"),
+    "easyeda_footprint_only": ("held", "footprint online, no symbol"),
+    "unverified (source unreachable)": ("skipped", "not checked: source unreachable"),
+    "needs_footprint_generation": ("held", "needs a new footprint"),
+}
+
+
+def print_result(rows, counts, a, t=None):
+    """Terminal view: a row per BOM line in plain words (-v: the source notes), the counts, the next step."""
+    from . import messages as M, term as TM
+    t = t or TM.Term()
+    table = []
+    for r in rows:
+        st, word = TRIAGE_WORDS.get(r["status"], ("info", r["status"].replace("_", " ")))
+        table.append([str(r["line"]), t.status(st, word), r["mpn"][:32], r["lcsc"],
+                      M.clean(r["notes"])[:200] if t.verbose else ""])
+    t.table(table, right=(0,))
+    by = {TRIAGE_WORDS.get(str(k), ("", str(k)))[1]: int(v) for k, v in counts.items()}
+    unreach = sum(int(v) for k, v in counts.items() if str(k).startswith("unverified"))
+    notes = []
+    if unreach:
+        notes.append((f"{M.plural(unreach, 'line')} could not be checked: the part sources were not reachable"
+                      + (" (--offline: only the cache)" if a.offline else ""),
+                      "run again online, or add API keys (`ecadlib doctor` lists them)"))
+    stem = Path(a.out)
+    t.summary(f"{M.plural(len(rows), 'BOM line')}: " + ", ".join(f"{v} {k}" for k, v in by.items()),
+              written=[(str(stem.with_suffix(".md")), "triage report"), (str(stem.with_suffix(".csv")), "the same as a table")],
+              next=[(f"ecadlib librarian {a.bom} -o ws/librarian/board", "fill the missing parts and build the library")],
+              notes=notes)
 
 if __name__ == "__main__":
     sys.exit(main())
