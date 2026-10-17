@@ -73,7 +73,7 @@ class TStringList:
         self.items = _host(p).read_text(encoding="utf-8-sig").splitlines()
 
     def savetofile(self, p):
-        _host(p).write_text("\r\n".join(self.items) + "\r\n", encoding="utf-8")
+        _host(p).write_text("\r\n".join(self.items) + "\r\n", encoding="utf-8", newline="")
 
 
 def _host(p):
