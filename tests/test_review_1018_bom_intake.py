@@ -58,6 +58,13 @@ def test_dnp_written_in_the_value_or_mpn_cell():
     assert rows[1]["status"].startswith("dnp"), rows[1]
 
 
+def test_european_decimal_quantities():
+    """'1,0' / '2,00' from a European Excel (numbers formatted with decimals) counted 10 and 200 pieces in sourcing."""
+    text = "Designator;Value;Qty\nR1;10k;1,00\nR2,R3;1k;2,0\nC1;1n;1.0\nR4-R1003;10k;1,000\n"
+    lines, _ = T.read_bom(_write("bom.csv", text))
+    assert [S.line_qty(l) for l in lines] == [1, 2, 1, 1000], lines
+
+
 if __name__ == "__main__":
     import sys
     fails = 0

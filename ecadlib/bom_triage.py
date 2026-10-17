@@ -198,6 +198,9 @@ def read_bom(path, columns=None, rules=None):
                 continue
         if _EXP.fullmatch(d.get("value", "")):                         # a CSV that kept Excel's 1e-07
             d["value"] = _plain_number(d["value"])
+        q = re.fullmatch(r"(\d+)(?:,0{1,2}|\.0+)", d.get("qty", ""))
+        if q:                                                            # '1,0' / '2,00' (European Excel), '1.0':
+            d["qty"] = q.group(1)                                        # not 10 / 200 pieces ('1,000' stays 1000)
         if _is_total(d) or not any(v for f, v in d.items() if f not in ("qty", "dnp")):
             continue                                                     # 'Total;;;12' footer / a bare sum, not a part
         if "dnp" in d:
