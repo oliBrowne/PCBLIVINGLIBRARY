@@ -652,7 +652,7 @@ class JLCSourcing(L.JLCLifecycle):
         return jlc_info(best, self.name)
 
     def _query(self, kw, size=10):
-        r = self.http.post(self.URL, json.dumps({"keyword": kw, "currentPage": 1, "pageSize": size}), headers=self.HEADERS)
+        r = self.post(kw, size)
         if not r.ok:
             return [], L._http_error(L.LifecycleResult(self.name), r).error
         try:

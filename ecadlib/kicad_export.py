@@ -351,10 +351,11 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None):
                 f = item["symbol"].get("file")
                 npins = len({str(sexpr.first(p, "number")[1]) for u in sexpr.find(ks, "symbol") for p in sexpr.find(u, "pin")})
                 from . import symbol_layout as SL
-                if not (SL.wants_layout(npins, rules) and f and (plan_dir / f).exists()):
+                relaid = SL.needs_relayout(K.convert_symbol([ks], name, None, [], None, []), rules)
+                if not (relaid and f and (plan_dir / f).exists()):
                     notes.extend(sub)
                     return ks, f"EasyEDA {lcsc} (converted again with easyeda_convert)"
-                why.append(f"EasyEDA {lcsc}: {npins} pins, grouped by function in the SchLib")
+                why.append(f"EasyEDA {lcsc}: {npins} pins, re-laid out (grouped by function) in the SchLib")
             else:
                 why.append(f"EasyEDA {lcsc}: " + ("no single-unit symbol" if r.ok else r.error or f"HTTP {r.status}"))
     except (IOError, ValueError, KeyError) as e:

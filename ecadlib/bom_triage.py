@@ -250,7 +250,9 @@ GENERIC_LIBREF = re.compile(r"(res(istor)?|cap(acitor)?|ind(uctor)?|led|diode|ze
 
 def part_numbers(ln):
     """MPN candidates, best first: the MPN column, then an Altium 'Comment'/value that is not a
-    passive value (ICs carry their part number there, e.g. STM32F103C8T6), then the LibRef."""
+    passive value (ICs carry their part number there, e.g. STM32F103C8T6), then the LibRef. Altium vault item ids
+    (CMP-1035-02800-1: the LibRef / Comment of Content Vault and Altium 365 parts) are never part numbers."""
+    from .altium_project import is_vault_id
     out = [ln.get("mpn", "")]
     v = ln.get("value", "")
     if v and parse_value(v) is None and re.search(r"[A-Za-z]", v) and re.search(r"\d", v) and " " not in v.strip():
@@ -258,7 +260,7 @@ def part_numbers(ln):
     lib = ln.get("libref", "").strip()
     if not GENERIC_LIBREF.fullmatch(lib):
         out.append(lib)
-    return [c for c in dict.fromkeys(c.strip() for c in out) if c]
+    return [c for c in dict.fromkeys(c.strip() for c in out) if c and not is_vault_id(c)]
 
 
 def count_refs(s):

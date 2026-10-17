@@ -113,6 +113,17 @@ def _ci(d, names):
     return ""
 
 
+def _mpn_of(d, names):
+    """First MPN parameter value that is a part number: Altium vault / Altium 365 item ids (CMP-1035-02800-1, which
+    Content Vault parts carry as LibRef, Design Item ID and sometimes 'Part Number') are skipped."""
+    low = {k.lower(): v for k, v in d.items()}
+    for n in names:
+        v = str(low.get(n.lower()) or "").strip()
+        if v not in ("", "*") and not _is_vault_id(v):
+            return v
+    return ""
+
+
 def _param_names(field, defaults, rules):
     names = list(defaults)
     if RU and rules is not None:
@@ -181,7 +192,7 @@ def read_schdoc(path, rules=None):
         cur = next((m for m in impls if m.get("ISCURRENT", "").upper() == "T"), impls[0] if impls else None)
         kind = next((_int(r[k], 0) for k in ("COMPONENTKINDVERSION3", "COMPONENTKINDVERSION2", "COMPONENTKIND") if k in r), 0)
         comment = _resolve(params.get("Comment", ""), params)
-        mpn = _ci(params, _param_names("Manufacturer Part Number", MPN_PARAMS, rules))
+        mpn = _mpn_of(params, _param_names("Manufacturer Part Number", MPN_PARAMS, rules))
         did = r.get("DESIGNITEMID", "").strip()
         comps.append({
             "sheet": path.name, "designator": des, "libref": r.get("LIBREFERENCE", ""), "design_item_id": did,
@@ -506,7 +517,7 @@ def load_project(path, rules=None):
                   next((it for it in bom_items if not it["designators"] and it["design_item_id"] and it["design_item_id"] == c["design_item_id"]), None)
             if hit:
                 ch = hit["chosen"]
-                c.update(mpn=ch.get("mpn", c["mpn"]), manufacturer=ch.get("manufacturer") or c["manufacturer"],
+                c.update(mpn=ch["mpn"] if ch.get("mpn") and not _is_vault_id(ch["mpn"]) else c["mpn"], manufacturer=ch.get("manufacturer") or c["manufacturer"],
                          supplier=ch.get("supplier") or c["supplier"], supplier_pn=ch.get("supplier_pn") or c["supplier_pn"],
                          alternates=hit["alternates"], mpn_source="BomDoc")
     for c in comps:
@@ -532,9 +543,10 @@ VALUE_RE = re.compile(r"(?i)^[0-9]+([.,][0-9]+)?\s*([pnuµμmkKMGRL]|meg)?[0-9]*
 
 def looks_like_mpn(s):
     """A Comment that reads as a manufacturer part number: one word of letters and digits (- _ . / # + allowed), at least
-    5 characters with 2 letters and 2 digits, not '=Param' and not a plain value (10k, 100nF, 4k7, 1uF/16V, 0R)."""
+    5 characters with 2 letters and 2 digits, not '=Param', not a plain value (10k, 100nF, 4k7, 1uF/16V, 0R) and not
+    an Altium vault item id (CMP-1035-02800-1: a Content Vault part's LibRef, shown as its Comment)."""
     s = (s or "").strip()
-    if not s or s.startswith("=") or len(s) < 5 or len(s) > 60 or not re.fullmatch(r"[A-Za-z0-9][-A-Za-z0-9_./#+]*", s):
+    if not s or s.startswith("=") or _is_vault_id(s) or len(s) < 5 or len(s) > 60 or not re.fullmatch(r"[A-Za-z0-9][-A-Za-z0-9_./#+]*", s):
         return False
     if sum(ch.isalpha() for ch in s) < 2 or sum(ch.isdigit() for ch in s) < 2:
         return False
@@ -570,6 +582,30 @@ def channel_designator(fmt, des, room, index):
     return re.sub("|".join(re.escape(k) for k in sorted(vals, key=len, reverse=True)), lambda t: vals[t.group(0)], fmt)
 
 
+def unique_rooms(rooms):
+    """Room names made unique the way Altium numbers channels: sheet symbols that all carry the same name (six
+    symbols 'Red_LED' on one sheet) become Red_LED1 ... Red_LED6, so every channel's designators differ. Names that are
+    already unique are kept."""
+    count = {}
+    for r in rooms:
+        count[r] = count.get(r, 0) + 1
+    taken, seen, out = set(rooms), {}, []
+    for r in rooms:
+        if count[r] == 1:
+            out.append(r)
+            continue
+        k = seen.get(r, 0)
+        while True:
+            k += 1
+            cand = f"{r}{k}"
+            if cand not in taken:
+                break
+        seen[r] = k
+        taken.add(cand)
+        out.append(cand)
+    return out
+
+
 def expand_channels(sheet, read, fmt=CHANNEL_FORMAT, warnings=None):
     """The sheet's components, once per channel when sheet symbols use it more than once (REPEAT(CH,1,4), or several
     symbols naming the same file): designators per Altium's channel format, e.g. R1_CH1 ... R1_CH4."""
@@ -579,7 +615,7 @@ def expand_channels(sheet, read, fmt=CHANNEL_FORMAT, warnings=None):
         return list(comps)
     while all(len(p) > 1 for p in paths) and len({p[0] for p in paths}) == 1:
         paths = [p[1:] for p in paths]                 # a level every instance shares (one sheet symbol) names nothing
-    rooms = ["_".join(p) for p in paths]
+    rooms = unique_rooms(["_".join(p) for p in paths])
     out = []
     for c in comps:
         for i, room in enumerate(rooms, 1):
@@ -590,12 +626,21 @@ def expand_channels(sheet, read, fmt=CHANNEL_FORMAT, warnings=None):
         ex = channel_designator(fmt, comps[0]["designator"], rooms[0], 1) if comps and comps[0]["designator"] else ""
         warnings.append(f"{name}: multi-channel sheet, {len(rooms)} channels ({', '.join(rooms[:6])}{' ...' if len(rooms) > 6 else ''}): "
                         f"{len(comps)} components counted once per channel" + (f", designators like {ex} ({fmt})" if ex else "")
-                        + ("; nested channels joined with _" if any(len(p) > 1 for p in paths) else ""))
+                        + ("; nested channels joined with _" if any(len(p) > 1 for p in paths) else "")
+                        + ("; sheet symbols with the same name numbered 1, 2, ..." if len(set("_".join(p) for p in paths)) < len(paths) else ""))
     return out
 
 
-def _is_vault_id(s):
-    return bool(re.fullmatch(r"[A-Z]{2,5}-\d{3,}(-\d+)+", s or ""))      # Altium 365 item-revision ids: CMP-003-000000-1
+VAULT_ID_RE = re.compile(r"(?i)[A-Z]{2,5}-\d{3,}(-\d+)+(\.\d+)?")
+
+
+def is_vault_id(s):
+    """Altium vault / Altium 365 item(-revision) ids: CMP-1035-02800-1, CMP-003-000000-1, PCC-011-0000-2, SYM-001-0001.
+    Never a manufacturer part number."""
+    return bool(VAULT_ID_RE.fullmatch(str(s or "").strip()))
+
+
+_is_vault_id = is_vault_id
 
 
 def variant_of(project, name):
@@ -637,7 +682,7 @@ def apply_variant(comps, variant):
             if params != c["params"]:
                 changed = {k for k in params if params[k] != c["params"].get(k)}
                 c["params"] = params
-                mpn = _ci({k: params[k] for k in changed}, MPN_PARAMS)
+                mpn = _mpn_of({k: params[k] for k in changed}, MPN_PARAMS)
                 c["comment"] = _resolve(params.get("Comment", c["comment"]), params)
                 c["value"] = _ci(params, VALUE_PARAMS) or c["comment"]
                 if mpn:

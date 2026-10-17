@@ -35,6 +35,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from . import __version__
 from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
                footprint_gen as F, fp_share as FS, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .fsutil import write_text_atomic
@@ -260,7 +261,8 @@ class Run:
         fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes)
         try:
             K.add_body(fp, t, http, height, False, notes, gen_step=self.gen_step, spec=spec,      # a part-specific
-                       height_src=(height_src or "caller") if height else None)                      # height beats the table
+                       height_src=(height_src or "caller") if height else None,                      # height beats the table
+                       kind=st.get("kind"), names=st.get("names", ()))
         except ValueError as e:
             notes.append(f"no 3D body: {e}")
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
@@ -296,14 +298,15 @@ class Run:
         self.written[str(path)] = st["symbol"]
 
     def put_kicad_sym(self, st, chain, name, fp_name, source, extra=(), layout=False):
-        """layout: re-lay big symbols out with pins grouped by function (EasyEDA symbols; KiCad library symbols are
-        curated and kept as drawn)."""
+        """layout: re-lay big symbols, and symbols whose pin names collide as drawn, out with pins grouped by function
+        (EasyEDA symbols; KiCad library symbols are curated and kept as drawn)."""
         notes = []
         sym = K.convert_symbol(chain, name, fp_name, list(extra), None, notes)
         npins = len({pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin"})
-        if layout and SL.wants_layout(npins, self.rules) and sym.get("parts", 1) == 1:
+        if layout and SL.needs_relayout(sym, self.rules):
+            why = "" if SL.wants_layout(npins, self.rules) else f" (as drawn: {SL.name_clashes(sym)[0]})"
             sym = SL.relayout(sym, self.rules)
-            notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else ""))
+            notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else "") + why)
         self.put_sym(st, sym, source, notes)
 
     # ---- per part
@@ -320,6 +323,7 @@ class Run:
             st["tried"].append("DNP line: not fetched")
             return st
         kind, fp_name, sym_name = passive_kind(item), item["footprint"]["ref"], item["symbol"]["ref"]
+        st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         try:
             self.local(st, row, kind, fp_name, sym_name)
         except Exception as e:
@@ -567,6 +571,19 @@ def _fingerprint(item, ln, row):
                        ln.get("footprint"), ln.get("datasheet"), row.get("local_symbol"), row.get("local_footprint")])
 
 
+BUILD_REV = 2              # bump when a source's conversion changes what it writes (1: before the build_rev stamp)
+
+
+def _built_now(st, rules):
+    """True when this ecadlib (version and BUILD_REV) built the part with these rules. A held part built otherwise is
+    built again on the next run: it is not in the library yet, and keeping it would make the release check judge the
+    old version's models and fields (silk not cut back, no Description). Ready parts are kept as they are (updates
+    never change a library's parts behind its back; `--refresh` rebuilds them)."""
+    from .rebuild import rules_hash
+    bw = st.get("built_with") or {}
+    return bw.get("ecadlib") == __version__ and st.get("build_rev") == BUILD_REV and bw.get("rules_sha256") == rules_hash(rules)
+
+
 def _done(st, out):
     return all(st.get(k) and (Path(out) / st[k]["file"]).exists() for k in ("symbol", "footprint"))
 
@@ -711,7 +728,13 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
             it["footprint"]["ref"] = AL.lib_name(it["name"])
         fpr, st = _fingerprint(it, ln, row), state.get(it["name"])
         redo = refresh is not None and (not refresh or it["name"] in refresh)
-        if st and st.get("key") == fpr and _done(st, out) and not redo and not FS.unchecked_share(st.get("footprint")):
+        stale = bool(st) and (old.get(it["name"]) or {}).get("status") == "held" and not _built_now(st, rules)
+        if stale and st.get("key") == fpr and _done(st, out) and not redo:
+            bw = st.get("built_with") or {}
+            why = (f"built by ecadlib {bw['ecadlib']}" if bw.get("ecadlib") and bw["ecadlib"] != __version__ else
+                   "built with other rules" if st.get("build_rev") == BUILD_REV else "built by an older ecadlib")
+            log(f"  {it['name']}: held, {why}: built again, so its models, fields and release check are this version's")
+        if st and st.get("key") == fpr and _done(st, out) and not redo and not stale and not FS.unchecked_share(st.get("footprint")):
             st["skipped"] = True
             for k in ("symbol", "footprint"):
                 r.written.setdefault(str(out / st[k]["file"]), st[k])
@@ -735,6 +758,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
             st = r.resolve(it, ln, row, keeps[it["name"]])
         st["key"], st["skipped"] = fpr, False
         LK.stamp_state(st, rec.take(it["name"]), rules)
+        st["build_rev"] = BUILD_REV
         state[it["name"]] = st
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
     for it in items:

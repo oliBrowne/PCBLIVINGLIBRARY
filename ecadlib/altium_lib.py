@@ -228,7 +228,8 @@ KTEXT = {"reference": (".Designator", TOP_OVERLAY, 3), "value": (".Comment", MEC
 
 def texts_from_kicad(t):
     """KiCad Reference / Value (fp_text or KiCad 8+ property) -> [(text, x, y, height, stroke, rot, layer)] in mm, y up:
-    .Designator on Top Overlay, .Comment on Mechanical 13. KiCad centres text on (at); Altium anchors stroke text at
+    .Designator on Top Overlay when KiCad has the reference on silk (F.SilkS / B.SilkS), else on Mechanical 13 with the
+    rest of the fab drawing (a Fab reference is assembly text, not silk), .Comment on Mechanical 13. KiCad centres text on (at); Altium anchors stroke text at
     the bottom-left, so the anchor is moved left by half the estimated width (all of it for right-justified text) of a
     nominal designator (3 characters, "U12") or comment (8 characters) and down by half the height, rotated with the text."""
     out = []
@@ -243,6 +244,9 @@ def texts_from_kicad(t):
         rot = float(at[3]) % 360 if len(at) > 3 and at[3] != "unlocked" else 0.0    # KiCad 6/7: (at x y [rot] unlocked)
         rot = rot - 180 if 90 < rot <= 270 else rot        # KiCad keeps footprint text upright; Altium doesn't
         txt, layer, chars = KTEXT[kind]
+        src = (sexpr.first(n, "layer") or [None, ""])[1]
+        if kind == "reference" and "SilkS" not in str(src):
+            layer = MECH13
         a, dx, dy = math.radians(rot), -CHAR_W * h * chars * (0 if "left" in just else 1 if "right" in just else 0.5), -h / 2
         x, y = float(at[1]) + dx * math.cos(a) - dy * math.sin(a), -float(at[2]) + dx * math.sin(a) + dy * math.cos(a)
         out.append((txt, round(x, 4), round(y, 4), h, float(th[1]) if th else round(0.15 * h, 3), rot, layer))

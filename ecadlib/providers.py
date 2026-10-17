@@ -131,13 +131,33 @@ class JLCPCBSearch(Provider):
     auth = "none (anonymous JSON POST; Origin/Referer jlcpcb.com) - as used by easyeda2kicad search"
     URL = "https://jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood/selectSmtComponentList"
     HEADERS = {"Content-Type": "application/json", "Origin": "https://jlcpcb.com", "Referer": "https://jlcpcb.com/parts"}
+    REFUSED = {403: "JLCPCB refused the request (403)", 429: "JLCPCB refused the request (429, too many requests)"}
+
+    def post(self, keyword, size=10):
+        """One search request. JLCPCB answers 403 (or 429) when it blocks automated searches: that is reported as
+        'JLCPCB refused the request (403)' and the rest of the run sends JLCPCB nothing more (no retries, no hammering;
+        the refusal is kept on the HTTP client, so every JLCPCB source sharing it stops). Callers go on to their other
+        sources."""
+        from .httpcache import Response
+        refused = getattr(self.http, "_jlcpcb_refused", None)
+        if refused:
+            return Response(refused[0], "", error=f"{refused[1]}; not asked again this run")
+        r = self.http.post(self.URL, json.dumps({"keyword": keyword, "currentPage": 1, "pageSize": size}), headers=self.HEADERS)
+        if r.status in self.REFUSED and not r.ok:
+            msg = self.REFUSED[r.status]
+            try:
+                self.http._jlcpcb_refused = (r.status, msg)
+            except AttributeError:            # a client that takes no attributes: nothing remembered
+                pass
+            return Response(r.status, r.text, error=f"{msg}: the site blocks automated part searches from here; "
+                                                    "other sources are still tried (set the LCSC number in the BOM to skip the search)")
+        return r
 
     def lookup(self, line):
         mpn = (line.get("mpn") or "").strip()
         if not mpn:
             return SourceResult(self.name, found=None, error="no MPN")
-        body = json.dumps({"keyword": mpn, "currentPage": 1, "pageSize": 10})
-        r = self.http.post(self.URL, body, headers=self.HEADERS)
+        r = self.post(mpn)
         res = SourceResult(self.name, mpn=mpn)
         if not r.ok:
             res.error = r.error or f"HTTP {r.status}"

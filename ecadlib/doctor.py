@@ -315,7 +315,24 @@ def check_altium_menu(ini, run=subprocess.run, which=shutil.which):
     return _c("altium menu", "OK", f"{ini}: command= {cmd} ({out.splitlines()[-1]})")
 
 
-def run(workspace="ecadlib_workspace", libs=(), rules_path=None, environ=None, altium_menu=None):
+def menu_workspace(ini):
+    """workspace= of an ecadlib_menu.ini, resolved against its folder as the menu resolves it; None when unreadable."""
+    import configparser
+    try:
+        from .altium_menu import load_config
+        return load_config(ini)["workspace"] if Path(ini).is_file() else None
+    except (OSError, KeyError, ValueError, ImportError, configparser.Error):
+        return None
+
+
+def run(workspace=None, libs=(), rules_path=None, environ=None, altium_menu=None):
+    """workspace: None = the workspace= of the --altium-menu ini when one is given, else $ECADLIB_WORKSPACE, else
+    ./ecadlib_workspace."""
+    menu = find_menu_ini(altium_menu)
+    if workspace is None:
+        env = os.environ if environ is None else environ
+        workspace = (altium_menu and menu is not None and menu_workspace(menu)) or env.get("ECADLIB_WORKSPACE") or "ecadlib_workspace"
+    workspace = str(workspace)
     checks = [check_python()] + check_packages()
     rc, rules = check_rules(rules_path, workspace if Path(workspace).is_dir() else None)
     checks.append(rc)
@@ -325,7 +342,6 @@ def run(workspace="ecadlib_workspace", libs=(), rules_path=None, environ=None, a
     if Path(workspace).is_dir():
         checks.append(check_formats(workspace))
     checks += check_paths(libs, rules)
-    menu = find_menu_ini(altium_menu)
     if menu is not None:
         checks.append(check_altium_menu(menu))
     return {"ok": not any(c["level"] == "FAIL" for c in checks), "checks": checks}
@@ -345,7 +361,8 @@ def render(rep):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="ecadlib doctor", description="check this machine's ecadlib setup (OK / WARN / FAIL)")
-    ap.add_argument("--workspace", default=os.environ.get("ECADLIB_WORKSPACE") or "ecadlib_workspace")
+    ap.add_argument("--workspace", help="workspace to check (default: the --altium-menu ini's workspace=, else "
+                                        "$ECADLIB_WORKSPACE, else ./ecadlib_workspace)")
     ap.add_argument("--lib", action="append", default=[], help="KiCad library folder to check (repeatable; default $ECADLIB_LIB)")
     ap.add_argument("--rules", help="rules file to check (default: the workspace's, then ECADLIB_CONFIG, then the search)")
     ap.add_argument("--altium-menu", metavar="INI", help="the Altium menu's ecadlib_menu.ini (or its folder) to check "

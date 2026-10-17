@@ -292,7 +292,7 @@ class JLCLifecycle(P.JLCPCBSearch):
         if not (lcsc or mpn):
             res.error = "no MPN or LCSC number"
             return res
-        r = self.http.post(self.URL, json.dumps({"keyword": lcsc or mpn, "currentPage": 1, "pageSize": 10}), headers=self.HEADERS)
+        r = self.post(lcsc or mpn)
         if not r.ok:
             return _http_error(res, r)
         try:
