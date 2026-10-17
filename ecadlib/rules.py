@@ -135,6 +135,8 @@ DEFAULTS["providers"] = {"order": []}
 # [setup]: written by the `ecadlib init` setup questions (ecadlib.firstrun). libs / workspace are the defaults for
 # --lib / --workspace (after the command line and ECADLIB_LIB / ECADLIB_WORKSPACE); empty = as before.
 DEFAULTS["setup"] = {"tool": "both", "libs": [], "workspace": ""}
+# [hub]: the Library page / `ecadlib hub` (ecadlib.hub). libraries are read on top of --lib; projects feed where-used.
+DEFAULTS["hub"] = {"libraries": [], "projects": [], "stale_days": 14}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
@@ -142,7 +144,7 @@ INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): 
              ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600), ("datasheet", "page_budget"): (0, 600),
              ("datasheet", "max_attempts"): (1, 10),
              ("agent", "interval_minutes"): (1, 10_080), ("agent", "batch_size"): (1, 500),
-             ("notify", "retries"): (0, 10), ("notify", "timeout_s"): (1, 120)}
+             ("notify", "retries"): (0, 10), ("notify", "timeout_s"): (1, 120), ("hub", "stale_days"): (1, 3650)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
 
@@ -881,6 +883,10 @@ HELP = {
                  "[] = each command's built-in default; `ecadlib plugins list` shows what is installed",
     "setup": "Written by `ecadlib init`: the tool you use, your library folders (the default --lib) and the workspace "
              "(the default --workspace); relative paths start at this file's folder",
+    "hub": "The Library page (ecadlib hub): libraries = extra library folders or files to show next to --lib (.SchLib, "
+           ".PcbLib, .DbLib, .kicad_sym, .pretty, .kicad_dbl, Altium 365 lists), projects = Altium project folders for "
+           "where-used, stale_days = how much older a differing copy must be to count as behind; relative paths start "
+           "at this file's folder",
     "setup.tool": "altium | kicad | both: which outputs `ecadlib init` and `ecadlib demo` point you at",
     "symbols.order": "group order on each side; groups: power analog power_out ground ep reset clock debug usb adc other_in uart i2c spi can eth ports other_out nc",
 }

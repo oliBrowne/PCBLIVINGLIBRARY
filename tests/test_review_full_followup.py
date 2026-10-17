@@ -33,7 +33,7 @@ def test_kicad_export_keeps_3d_models_of_a_local_kicad_library():
         shipped = Path(d) / "demo" / "kicad" / "demo_bom_demo" / "ecadlib_demo.3dshapes" / "SOT-23.step"
         assert (Path(d) / "k2" / "mylib.3dshapes" / "SOT-23.step").read_bytes() == shipped.read_bytes()
         r = _ecadlib(d, "parity", "lib/plan.json", "--kicad", "k1", "--name", "mylib")
-        assert " 0 mismatch" in r.stdout, r.stdout[-2000:]
+        assert " 0 differ" in r.stdout, r.stdout[-2000:]
 
 
 def test_help_examples_that_used_to_fail():

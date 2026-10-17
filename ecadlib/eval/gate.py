@@ -304,7 +304,9 @@ def main(argv=None):
         print(f"replay pack: {p} ({load_replay(p)['meta']['answers']} answers)")
         return 0
     t0 = time.time()
-    rep = run(a.set, a.out, a.replay)
+    from .. import term as TM
+    with TM.working(f"the {a.set} accuracy set (offline)"):
+        rep = run(a.set, a.out, a.replay)
     bp = Path(a.baseline or baseline_path(a.set))
     if a.update or not bp.exists():
         bp.parent.mkdir(parents=True, exist_ok=True)
@@ -313,8 +315,43 @@ def main(argv=None):
         print(f"baseline written: {bp} ({o['pass']}/{o['cases']} pass, {time.time() - t0:.1f} s)")
         return 0
     res = check(rep, json.loads(bp.read_text(encoding="utf-8")), a.tol)
-    print(json.dumps({k: v for k, v in res.items() if k != "text"}, indent=1) if a.json else res["text"])
+    if a.json:
+        print(json.dumps({k: v for k, v in res.items() if k != "text"}, indent=1))
+    else:
+        print_result(rep, json.loads(bp.read_text(encoding="utf-8")), res)
     return 0 if res["ok"] else 1
+
+
+def print_result(rep, base, res, t=None):
+    """Terminal view: the outcome first, a row per package family against the baseline, then what broke."""
+    from .. import term as TM
+    t = t or TM.Term()
+    o, bo = rep["summary"]["overall"], base["overall"]
+    t.write(t.bold(f"Accuracy gate {rep['meta']['set']}: " + ("passed" if res["ok"] else "FAILED")
+                   + f" - {o['pass']}/{o['cases']} parts right (baseline {bo['pass']}/{bo['cases']}), {rep['meta']['wall_s']} s"))
+    rows = []
+    for k, b in sorted(base["families"].items()):
+        f = rep["summary"]["families"].get(k)
+        if not f:
+            continue
+        drop = any(p.startswith(f"family {k}:") for p in res["problems"])
+        rows.append([t.status("held" if drop else "ready", "dropped" if drop else "ok"), k,
+                     f"{f['pass']}/{f['cases']}", f"{100 * (f['rate'] or 0):.1f} %", t.dim(f"baseline {100 * (b['rate'] or 0):.1f} %")])
+    if not t.quiet:
+        t.table(rows, right=(2, 3))
+    t.detail(f"  network requests (all refused, as they should be): {rep['meta'].get('network_requests', '?')}")
+    if res["fixed"]:
+        t.write(f"  newly passing ({len(res['fixed'])}): " + ", ".join(res["fixed"]))
+    for p in res["problems"]:
+        t.write(f"  {t.status('failed', 'broke')}  {p}")
+    nxt = []
+    if res["problems"]:
+        nxt.append(("ecadlib eval gate -o /tmp/gate", "keep the run's report and library to look at"))
+    if res["fixed"]:
+        nxt.append(("ecadlib eval gate --update", "lock the newly passing parts into the baseline; review the diff"))
+    if nxt and not t.quiet:
+        t.write("next:")
+        t.table([[c, f"# {w}"] for c, w in nxt])
 
 
 if __name__ == "__main__":

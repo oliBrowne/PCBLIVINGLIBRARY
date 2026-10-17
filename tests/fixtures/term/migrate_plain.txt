@@ -1,0 +1,6 @@
+  ok  ecadlib.toml                                  up to date
+  ok  librarian/demo_bom_demo/plan.json             up to date
+  ok  librarian/demo_bom_demo/librarian_state.json  up to date
+  ok  librarian/demo_bom_demo/library.lock.json     up to date
+
+4 versioned files: 0 would be migrated, 0 newer or unreadable; nothing written

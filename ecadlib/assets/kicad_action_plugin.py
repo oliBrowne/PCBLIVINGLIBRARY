@@ -87,7 +87,7 @@ def footprint_for(project_dir, mpn):
     """(footprint name, None) for the part from kicad_export.json, or (None, why)."""
     rep = os.path.join(project_dir, LIB, "kicad_export.json")
     if not os.path.isfile(rep):
-        return None, "kicad-export wrote no report"
+        return None, "ecadlib wrote no KiCad library (see ecadlib-work/out/review.html for what was tried)"
     data = json.load(open(rep, encoding="utf-8"))
     names = {mpn}                             # the plan names parts by the library rules (RES-0603-10k, upper case ...),
     plan = os.path.join(project_dir, "ecadlib-work", "out", "plan.json")      # not always by the MPN typed here
@@ -98,11 +98,14 @@ def footprint_for(project_dir, mpn):
                 names.add(it.get("name"))
     for p in data.get("parts", []):
         if p.get("part") in names:
-            return (p["footprint"], None) if p.get("footprint") else (None, "the part has no footprint")
+            return (p["footprint"], None) if p.get("footprint") else (None, "the part has no footprint yet")
     for s in data.get("skipped", []):
         if s.get("part") in names:
+            says = s.get("says") or []
+            if says:
+                return None, f"it is held. {says[0]['text']}\nNext: {says[0]['fix']}"
             return None, f"held: {s.get('why')} (fix it with `ecadlib resolve`)"
-    return None, "the librarian did not add it (see ecadlib-work/out/review.md)"
+    return None, "ecadlib could not add it (see ecadlib-work/out/review.html for what was tried)"
 
 
 class EcadlibAddPart(pcbnew.ActionPlugin):
@@ -117,12 +120,14 @@ class EcadlibAddPart(pcbnew.ActionPlugin):
         board = pcbnew.GetBoard()
         path = board.GetFileName() if board else ""
         if not path:
-            wx.MessageBox("Save the board first: ecadlib puts the library next to the project.", "ecadlib")
+            wx.MessageBox("Save the board first: ecadlib puts the library next to the project.\n"
+                          "Next: File > Save, then run ecadlib: add part again.", "ecadlib")
             return
         project = os.path.dirname(os.path.abspath(path))
         cmd = ecadlib_command()
         if not cmd:
-            wx.MessageBox("The ecadlib command was not found. Install it (pip install ecadlib) or set ECADLIB_CMD.", "ecadlib")
+            wx.MessageBox("ecadlib is not installed where KiCad can find it.\n"
+                          "Next: pip install ecadlib, or set ECADLIB_CMD to its command.", "ecadlib")
             return
         dlg = wx.TextEntryDialog(None, "Manufacturer part number:", "ecadlib: add part")
         if dlg.ShowModal() != wx.ID_OK:
@@ -138,7 +143,8 @@ class EcadlibAddPart(pcbnew.ActionPlugin):
             for c in commands(project, cmd):
                 r = subprocess.run(c, capture_output=True, text=True, cwd=project)
                 if r.returncode not in (0, 1):            # 1 = finished with held parts / check failures
-                    wx.MessageBox(f"{' '.join(c[:3])} failed:\n{(r.stderr or r.stdout)[-1500:]}", "ecadlib")
+                    wx.MessageBox(f"ecadlib could not build {mpn}.\nNext: check the part number; ecadlib's last words "
+                                  f"are below.\n\n{(r.stderr or r.stdout)[-1500:]}", "ecadlib")
                     return
         finally:
             del busy

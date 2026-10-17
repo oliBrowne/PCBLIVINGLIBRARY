@@ -1084,7 +1084,7 @@ def _ask(q, inp=input, out=print):
     for i, c in enumerate(q["choices"], 1):
         cnt = (q.get("counts") or {}).get(c)
         out(f"  {i}) {c}" + (f"   ({cnt} seen)" if cnt else "") + ("   [best guess]" if c == q["default"] else ""))
-    a = inp(f"choice [1-{len(q['choices'])}, Enter = best guess, or type a value]: ").strip()
+    a = inp(f"Pick 1-{len(q['choices'])}, press Enter for the best guess, or type your own: ").strip()
     if not a:
         return q["default"]
     if a.isdigit() and 1 <= int(a) <= len(q["choices"]):

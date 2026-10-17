@@ -201,7 +201,7 @@ def test_testpack_kicad_export_and_altium_dblib_match():
     assert rep["ok"] and rep["counts"]["match"] == 6, [(p["part"], p["diffs"]) for p in rep["parts"]]
     usb = next(p for p in rep["parts"] if p["part"] == "TYPE-C-31-M-12")
     assert {"pyaltiumlib", "pin -> pad", "fields (DbLib row)"} <= set(usb["checked"]) and "footprint (22 pads)" in usb["checked"]
-    assert (d / "parity.md").is_file() and "6 match, 0 mismatch" in (d / "parity.md").read_text()
+    assert (d / "parity.md").is_file() and "**6 parts match, 0 differ.**" in (d / "parity.md").read_text()
 
 
 def test_export_mode_catches_missing_3d_file_symbol_and_database_rows():
@@ -232,7 +232,7 @@ def test_export_mode_catches_missing_3d_file_symbol_and_database_rows():
         from ecadlib import parity
         assert parity.main([str(d / "library" / "plan.json"), "--kicad", str(d / "kicad"), "--altium", str(d / "altium"),
                             "-o", str(Path(t) / "rep"), "--no-pyaltiumlib"]) == 1
-        assert "pin 3 name: KiCad IN_A / Altium +IN_A" in (Path(t) / "rep.md").read_text()
+        assert "pin 3 name is IN_A in KiCad and +IN_A in Altium" in (Path(t) / "rep.md").read_text()
 
 
 def test_kicad_export_writes_the_altium_3d_model_regression():

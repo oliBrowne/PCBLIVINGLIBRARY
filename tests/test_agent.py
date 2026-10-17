@@ -193,7 +193,7 @@ def test_full_loop_pr_idempotent_then_push_after_approval():
         b = rep["batches"][0]
         assert [c[0] for c in gh.calls] == ["GET", "POST"], gh.calls
         body = gh.calls[1][2]["body"]
-        assert "| Before | After |" in body and "?raw=true" in body and "pin 1 mark" in body and "proof doubt" in body
+        assert "| Before | After |" in body and "?raw=true" in body and "pin 1 mark" in body and "The independent check is not sure about this part" in body
         assert f"/blob/{b['commit']}/agent-pictures/" in body and gh.calls[1][2]["head"] == "ecadlib/agent-b1"
         tree = gitc(Path(d) / "remote.git", "ls-tree", "-r", "--name-only", "ecadlib/agent-b1").splitlines()
         assert any(p.startswith("agent-pictures/b1/") for p in tree) and any(p.endswith(".PcbLib") for p in tree), tree
