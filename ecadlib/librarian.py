@@ -229,6 +229,8 @@ class Run:
         except ValueError as e:
             notes.append(f"no 3D body: {e}")
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
+        text = re.sub(r'^(\s*\((?:footprint|module)\s+)("(?:[^"\\]|\\.)*"|[^\s()]+)',     # KiCad links a footprint by its file name,
+                      lambda m: m.group(1) + '"' + stem.replace('"', '\\"') + '"', text, count=1)   # Altium by this name: one name
         kmod.write_text(text, encoding="utf-8", newline="\n")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
@@ -392,6 +394,7 @@ class Run:
             st["found"].setdefault("datasheet", (url, f"EasyEDA {lcsc} (lcsc.url)"))
         if res.manufacturer:
             st["found"].setdefault("manufacturer", (res.manufacturer, f"EasyEDA {lcsc}"))
+        st["found"].setdefault("lcsc", (lcsc, f"EasyEDA {lcsc}" + ("" if ln.get("lcsc") else " (LCSC number found by ecadlib, not in the BOM)")))
         got = []
         if not st["footprint"]:
             pkg = (result.get("packageDetail") or {})
@@ -555,6 +558,12 @@ def apply_state(item, st, ln):
     elif "datasheet" in st.get("found", {}):
         u, w = st["found"]["datasheet"]
         _set_par(item, "ComponentLink2Description", "Datasheet"); _set_par(item, "ComponentLink2URL", u); fields["ComponentLink2URL"] = w
+    if not par.get("Supplier Part Number 1") and "lcsc" in st.get("found", {}):     # an LCSC number the BOM did not give
+        v, w = st["found"]["lcsc"]
+        _set_par(item, "Supplier 1", "LCSC"); _set_par(item, "Supplier Part Number 1", v); fields["Supplier Part Number 1"] = w
+        if not par.get("ComponentLink1URL"):
+            _set_par(item, "ComponentLink1Description", "LCSC")
+            _set_par(item, "ComponentLink1URL", f"https://www.lcsc.com/product-detail/{v}.html"); fields["ComponentLink1URL"] = w
     if not par.get("Manufacturer") and "manufacturer" in st.get("found", {}):
         v, w = st["found"]["manufacturer"]
         _set_par(item, "Manufacturer", v); fields["Manufacturer"] = w

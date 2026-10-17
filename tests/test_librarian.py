@@ -293,3 +293,29 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn(); print("ok", name)
+
+
+def test_lcsc_number_found_by_ecadlib_fills_the_supplier():
+    """LM358DR in the PR #29 Altium run: no LCSC number in the BOM, ecadlib found C5423 and used EasyEDA, but the part
+    had no Supplier 1 / LCSC field. A number the BOM gave is kept as it is."""
+    item = {"symbol": {}, "footprint": {}, "parameters": [{"name": "Supplier 1", "value": ""}, {"name": "Supplier Part Number 1", "value": ""}]}
+    st = {"found": {"lcsc": ("C5423", "EasyEDA C5423 (LCSC number found by ecadlib, not in the BOM)")}}
+    L.apply_state(item, st, {})
+    par = {p["name"]: p["value"] for p in item["parameters"]}
+    assert par["Supplier 1"] == "LCSC" and par["Supplier Part Number 1"] == "C5423", par
+    assert par["ComponentLink1URL"] == "https://www.lcsc.com/product-detail/C5423.html"
+    assert "not in the BOM" in item["field_sources"]["Supplier Part Number 1"]
+    given = {"symbol": {}, "footprint": {}, "parameters": [{"name": "Supplier 1", "value": "LCSC"}, {"name": "Supplier Part Number 1", "value": "C7593"}]}
+    L.apply_state(given, st, {"lcsc": "C7593"})
+    assert {p["name"]: p["value"] for p in given["parameters"]}["Supplier Part Number 1"] == "C7593"
+
+
+def test_converted_footprint_is_named_after_its_file():
+    """PR #29 Altium run: NE555DR.kicad_mod held a footprint named after EasyEDA's package, so the rule book reported
+    'footprint name is not its file name' (KiCad links by file, Altium by name)."""
+    with tempfile.TemporaryDirectory() as d:
+        items, _ = run(d)
+        it = items["EEPART1"]
+        kmod = Path(d) / "out" / it["footprint"]["kicad_mod"]
+        assert sexpr.parse(kmod.read_text())[1] == kmod.stem, kmod.read_text()[:80]
+        assert not any("is not its file name" in w for w in it["release_check"]["warnings"]), it["release_check"]["warnings"]
