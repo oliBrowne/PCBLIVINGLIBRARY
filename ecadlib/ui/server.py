@@ -753,7 +753,8 @@ def make_handler(ws: Workspace, team=None):
             if role not in roles:
                 raise Refused(f"you sign as {', '.join(roles)}, not {role}")
             return ws.approve_part(self._bom(b, True), _str(b.get("part"), "part"), b.get("decision"), TM.identity(self.user),
-                                   role, comment, via="ecadlib ui (team, signed in)")
+                                   role, comment, via="ecadlib ui (team, signed in)",
+                                   aliases=(self.user["username"], self.user.get("email") or ""))
 
         def _queue(self, b, action):
             """Review queue decision. Team mode: identity and approval role from the session (typed names ignored);
