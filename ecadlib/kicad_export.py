@@ -32,7 +32,7 @@ pins and footprint pads are compared. Exit code 1 when a check fails.
 
 KiCad's libraries are CC-BY-SA 4.0 (with a design-use exception): exports holding KiCad content get a NOTICE.txt
 and must not be committed here (out/kicad/ is in .gitignore)."""
-import argparse, copy, json, math, re, sys
+import argparse, copy, json, math, re, struct, sys
 from pathlib import Path
 
 from . import altium_lib as AL, easyeda_convert as EC, footprint_check as FC, kicad_import as K, providers as P, \
@@ -462,6 +462,19 @@ def _custom_pads(recs):
     return custom, used
 
 
+def _not_copper(r):
+    """Why an Altium primitive is no drawing at all, or None: a keep-out (flags bit 9, on any layer) or a region that
+    is not copper (polygon / board cutout, cavity, ...). Written as fp_poly / fp_line on F.Cu they would be copper."""
+    if r["type"] in ("track", "arc", "fill", "region") and r.get("raw") and len(r["raw"][0]) >= 3 \
+            and struct.unpack_from("<H", r["raw"][0], 1)[0] & 0x200:
+        return "keep-out"
+    if r["type"] == "region":
+        p = AL.parse_params(r.get("params") or "")
+        if p.get("KIND", "0") not in ("0", "") or p.get("ISBOARDCUTOUT", "").upper() == "TRUE":
+            return f"region (kind {p.get('KIND')}{', board cutout' if p.get('ISBOARDCUTOUT', '').upper() == 'TRUE' else ''})"
+    return None
+
+
 def footprint_from_pcblib(path, name, notes, pick=None):
     """First footprint of a .PcbLib (or the one named pick) -> .kicad_mod text (KiCad 8), via altium_lib.read_pcblib."""
     fps = AL.read_pcblib(path)
@@ -470,8 +483,15 @@ def footprint_from_pcblib(path, name, notes, pick=None):
     pt = lambda x, y: f"{m(x)} {m(-y)}"
     stroke = lambda w: f'(stroke (width {m(w) if w else "0.1"}) (type solid))'
     out, pads, smd = [], [], True
-    custom, used = _custom_pads(fp["records"])
+    recs = []
     for r in fp["records"]:
+        why = _not_copper(r)
+        if why:
+            K._note(notes, f"Altium {why} {r['type']} on layer {r.get('layer')} not converted (add a KiCad rule area by hand)")
+        else:
+            recs.append(r)
+    custom, used = _custom_pads(recs)
+    for r in recs:
         t, layer = r["type"], LAYER_K.get(r.get("layer"))
         if id(r) in used:
             continue                          # copper / mask / paste outline of a polygon pad: part of that pad

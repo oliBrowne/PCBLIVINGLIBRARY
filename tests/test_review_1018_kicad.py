@@ -59,6 +59,46 @@ def test_every_golden_footprint_loads_in_kicad7_pcbnew():
     assert sorted(got) == sorted(names) and not [k for k, v in got.items() if not v], [k for k, v in got.items() if not v]
 
 
+# ---------------------------------------------------------------- Altium-origin footprints
+def _pcblib(d, fp, fill_rot=None):
+    """write_pcblib, optionally with every fill rotated by fill_rot degrees (Altium fills carry a rotation)."""
+    if fill_rot is None:
+        return AL.write_pcblib(d / "p.PcbLib", [fp])
+    orig = AL.fill_rec
+    with mock.patch.object(AL, "fill_rec", lambda *a, **k: orig(*a, rot=fill_rot)):
+        return AL.write_pcblib(d / "p.PcbLib", [fp])
+
+
+def _fp(**kw):
+    fp = {"name": "PROBE", "description": "probe", "height_mm": 0, "tracks": [], "fills": [], "regions": [], "texts": [],
+          "pads": [{"designator": "1", "x": 0, "y": 0, "w": 1, "h": 0.6, "rot": 0, "shape": "rect", "layer": AL.TOP}]}
+    fp.update(kw)
+    return fp
+
+
+def test_altium_keepouts_on_copper_are_not_copper():
+    # an Altium keep-out (flags bit 9) on the Top layer, here one around pad 1 and one beside it, is a routing
+    # restriction: written as F.Cu copper it shorts whatever runs under it (and the one around pad 1 became its shape)
+    d = _tmp()
+    sq = lambda x, y, s: [(x - s, y - s), (x + s, y - s), (x + s, y + s), (x - s, y + s)]
+    f = _pcblib(d, _fp(regions=[(sq(0, 0, 2), AL.TOP, 31), (sq(5, 5, 1), AL.TOP, 31), (sq(-5, -5, 1), AL.TOP)]))
+    notes = []
+    t = sexpr.parse(X.footprint_from_pcblib(f, "PROBE", notes))
+    cu = [g for g in sexpr.find(t, "fp_poly") if sexpr.first(g, "layer")[1] == "F.Cu"]
+    assert len(cu) == 1, cu                                              # only the plain copper region
+    assert [p[3] for p in sexpr.find(t, "pad")] == ["rect"]              # pad 1 is not a custom pad
+    assert any("keep-out" in n for n in notes), notes
+
+
+# ---------------------------------------------------------------- duplicate names
+def _dup_plan(change):
+    plan, http = _plan()
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    change(items)
+    plan.write_text(json.dumps(items), encoding="utf-8")
+    return plan, http
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_review_1018_kicad"]))
