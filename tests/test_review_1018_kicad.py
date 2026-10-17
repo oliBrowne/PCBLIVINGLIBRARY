@@ -129,6 +129,22 @@ def _dup_plan(change):
     return plan, http
 
 
+def test_footprints_whose_names_clash_are_not_merged():
+    # "EEPART1 " (another part's own footprint) is written as EEPART1 too: the second part must not silently get the
+    # first part's footprint
+    def change(items):
+        ee = next(i for i in items if i["name"] == "EEPART1")
+        soic = next(i for i in items if i["name"] == "TPS1234DSGR")
+        two = json.loads(json.dumps(ee))
+        two["name"] = "EEPART2"
+        two["footprint"] = {"ref": "EEPART1 ", "file": soic["footprint"]["file"]}
+        items.append(two)
+    plan, http = _dup_plan(change)
+    rep = X.export(plan, plan.parent.parent / "k", "lib", http=http, log=_quiet)
+    row = next(r for r in rep["parts"] if r["part"] == "EEPART2")
+    assert row["footprint"] != "EEPART1" and any("EEPART2" in e and "EEPART1" in e for e in rep["errors"]), (row, rep["errors"])
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_review_1018_kicad"]))

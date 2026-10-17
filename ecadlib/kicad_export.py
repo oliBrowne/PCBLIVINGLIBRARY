@@ -672,7 +672,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     out.mkdir(parents=True, exist_ok=True)
     pretty.mkdir(exist_ok=True)
     rep = {"plan": str(plan), "library": lib, "parts": [], "skipped": [], "footprints": {}, "models": {}, "errors": [], "kicad_content": False}
-    symbols, fps, written = {}, {}, set()
+    symbols, fps, written, fp_refs = {}, {}, set(), {}
     for it in items:
         status = it.get("status", "ready")
         if status == "held" and not include_held:
@@ -689,6 +689,12 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
         # footprint first: the symbol's Footprint field names it
         fref = it["footprint"].get("ref")
         fpn = kname(fref) if fref and (it["footprint"].get("file") or it["footprint"].get("kicad_mod")) else None
+        if fpn and fp_refs.setdefault(fpn.casefold(), (fref, fpn, it["name"]))[0] != fref:
+            o_ref, o_fpn, o_part = fp_refs[fpn.casefold()]      # another footprint already has this file name (KiCad
+            rep["errors"].append(f"{it['name']}: footprint {fref!r} would be {lib}:{fpn}, the name of footprint "  # name;
+                                 f"{o_ref!r} ({o_part}); rename one of them")         # ignoring case: Windows / macOS)
+            notes.append(f"footprint left out: {fpn} is footprint {o_ref!r} of {o_part}")
+            fpn = ""
         if fpn and fpn not in fps:
             kmod = RC._kicad_mod(it, plan_dir, RC._path(plan_dir, it["footprint"].get("file")))
             fnotes = []
