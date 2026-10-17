@@ -449,6 +449,8 @@ class Run:
         st["found"].setdefault("lcsc", (lcsc, f"EasyEDA {lcsc}" + ("" if ln.get("lcsc") else " (LCSC number found by ecadlib, not in the BOM)")))
         if res.extra.get("description"):
             st["found"].setdefault("description", (res.extra["description"], f"EasyEDA {lcsc}"))
+        if res.package:
+            st["found"].setdefault("package", (res.package, f"EasyEDA {lcsc}"))
         got = []
         if not st["footprint"]:
             pkg = (result.get("packageDetail") or {})
@@ -613,6 +615,40 @@ def _done(st, out):
     return all(st.get(k) and (Path(out) / st[k]["file"]).exists() for k in ("symbol", "footprint"))
 
 
+GENERATED_DESCRIPTION = "written by ecadlib from the part's category and package (check it)"
+SINGULAR = {"ICs": "IC", "Resistors": "Resistor", "Capacitors": "Capacitor", "Inductors": "Inductor", "Diodes": "Diode",
+            "Transistors": "Transistor", "Connectors": "Connector", "Crystals": "Crystal", "Oscillators": "Oscillator",
+            "Switches": "Switch", "Relays": "Relay", "Fuses": "Fuse", "LEDs": "LED", "Sensors": "Sensor"}
+
+
+def _package_name(text, mpn=""):
+    """'SOIC-8_3.9x4.9mm_P1.27mm' / 'SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL' -> 'SOIC-8', 'CAP 0603 (1608 Metric)' -> '0603';
+    '' when it names no package ecadlib knows (an MPN, a maker's series)."""
+    t = str(text or "").split(":")[-1].strip()
+    pkg = package_of(t) if t and norm_mpn(t) != norm_mpn(mpn) else None
+    if not pkg:
+        return ""
+    first = re.split(r"[_ ]", t)[0]
+    return first if first.replace("-", "").upper() == pkg.upper() else pkg
+
+
+def generated_description(item, st, ln):
+    """A plain description when no source gave one: '<category>, <package>, <manufacturer> <MPN>' from what the
+    plan already knows (nothing is guessed about what the part does). '' when there is not even a part number."""
+    par = _par(item)
+    mpn = str(par.get("Manufacturer Part Number") or ln.get("mpn") or "").strip()
+    if not mpn:
+        return ""
+    folder = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    cat = SINGULAR.get(folder, folder if folder not in ("", "Misc", "Components") else "")
+    pkg = next((p for p in (_package_name((st.get("found", {}).get("package") or ("",))[0], mpn),
+                            _package_name((st.get("footprint") or {}).get("name"), mpn),
+                            _package_name(item.get("footprint", {}).get("kicad"), mpn),
+                            _package_name(ln.get("footprint"), mpn)) if p), "")
+    who = " ".join(x for x in (str(par.get("Manufacturer") or "").strip(), mpn) if x)
+    return ", ".join(x for x in (cat, pkg, who) if x)
+
+
 def apply_state(item, st, ln):
     """Copy a part's state into its plan item: model files, sources, filled-in fields, what was tried."""
     for k in ("symbol", "footprint"):
@@ -646,6 +682,10 @@ def apply_state(item, st, ln):
         _set_par(item, "Library Credit", v); fields["Library Credit"] = w
     if not str(item.get("description") or "").strip() and "description" in st.get("found", {}):
         item["description"], fields["Description"] = st["found"]["description"]
+    if not str(item.get("description") or "").strip():          # no source gave one: write a plain one to check
+        desc = generated_description(item, st, ln)
+        if desc:
+            item["description"], fields["Description"] = desc, GENERATED_DESCRIPTION
     item["field_sources"] = fields
     item["verify"] = list(st.get("verify", []))
     if st.get("cross_check"):                     # ecadlib.crosscheck: agreed / disagreed (held) / unchecked / skipped

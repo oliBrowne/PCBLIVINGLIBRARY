@@ -100,21 +100,20 @@ def test_kicad_files_read_and_written_as_utf8():
 
 
 def test_action_plugin_finds_part_named_by_the_library_rules():
-    # the plan names parts by [naming] (RES-0603-10k, case = "upper" ...): the MPN typed in KiCad is not the part name
-    from tests.test_tool_packages import _plugin_module
-    mod, _ = _plugin_module()
+    # the plan names parts by [naming] (RES-0603-10k, case = "upper" ...): the MPN typed in KiCad is not the part name;
+    # a part already in the library comes back as a duplicate and its footprint is found under the plan's name
+    from unittest import mock
+    from ecadlib import altium_menu as AM, kicad_menu as KM
     d = _tmp()
     (d / "ecadlib").mkdir()
     (d / "ecadlib" / "kicad_export.json").write_text(json.dumps(
         {"parts": [{"part": "RES-0603-10k", "footprint": "R_0603_1608Metric"}], "skipped": [{"part": "LM358DR", "why": "held: pins"}]}))
-    (d / "ecadlib-work" / "out").mkdir(parents=True)
-    (d / "ecadlib-work" / "out" / "plan.json").write_text(json.dumps(
-        [{"name": "RES-0603-10k", "parameters": [{"name": "Manufacturer Part Number", "value": "RC0603FR-0710KL"}]},
-         {"name": "LM358DR", "parameters": [{"name": "Manufacturer Part Number", "value": "LM358DR"}]}]))
-    assert mod.footprint_for(str(d), "RC0603FR-0710KL") == ("R_0603_1608Metric", None)
-    assert mod.footprint_for(str(d), "rc0603fr-0710kl") == ("R_0603_1608Metric", None)
-    assert "held" in mod.footprint_for(str(d), "LM358DR")[1]
-    assert mod.footprint_for(str(d), "NOPE")[0] is None
+    dup = {"status": "duplicate", "part": "rc0603fr-0710kl", "message": "rc0603fr-0710kl is already in the library as RES-0603-10k."}
+    with mock.patch.object(AM, "add_part", lambda *a, **k: dict(dup)):
+        assert KM.add_part(KM.config(d), "rc0603fr-0710kl")["footprint"] == "R_0603_1608Metric"
+    held = {"status": "held", "part": "LM358DR", "message": "LM358DR is held (LM358DR): pins."}
+    with mock.patch.object(AM, "add_part", lambda *a, **k: dict(held)):
+        assert "footprint" not in KM.add_part(KM.config(d), "LM358DR")
 
 
 if __name__ == "__main__":

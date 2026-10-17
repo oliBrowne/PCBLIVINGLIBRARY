@@ -244,12 +244,26 @@ def install_altium_menu(ws_root):
     _set_ini_command(ini, command)                           # an older build's .ini is kept: point it at this ecadlib
     project = out / AM.PROJECT
     _record_install("altium_menu", str(project))
-    return {"folder": str(out), "project": str(project), "menu_file": str(out / AM.PREFS) if rep.get("menu_file") else None,
-            "problems": rep.get("problems") or [],
-            "steps": ["In Altium Designer: the gear icon (top right) > Preferences > Scripting System > Global Projects",
-                      f"Install from file... and pick {project}",
-                      "Restart Altium. The menu entries are in File > Run Script... under ecadlib_menu; to get an "
-                      f"\"ecadlib\" menu, use Preferences > Load... with {out / AM.PREFS} (see ALTIUM_MENU_README.txt)"]}
+    bar = {}
+    if os.name == "nt":                     # the "ecadlib" menu straight into Altium's top menu bar (Altium closed)
+        try:
+            bar = AM.install_menu_bar(out)
+        except (OSError, ValueError) as e:
+            bar = {"error": str(e)}
+    res = {"folder": str(out), "project": str(project), "menu_file": str(out / AM.PREFS) if rep.get("menu_file") else None,
+           "problems": rep.get("problems") or [], "menu_bar": bar}
+    if bar.get("folders") and not bar.get("error"):
+        res["steps"] = ["Start Altium Designer and open a schematic or PCB",
+                        "The ecadlib menu is in the menu bar, before Window: Add part from MPN, Check this project BOM, "
+                        "Open review queue",
+                        f"To take it out again: ecadlib altium-menu install-menu --out \"{out}\" --remove"]
+    else:
+        why = f" ({bar['error']})" if bar.get("error") else ""
+        res["steps"] = [f"Close Altium Designer{why}",
+                        f"Run: ecadlib altium-menu install-menu --out \"{out}\" (or press Add to Altium here again)",
+                        "Start Altium: the ecadlib menu is in the menu bar, before Window. Without closing Altium: "
+                        f"Preferences > Load... with {out / AM.PREFS} (see ALTIUM_MENU_README.txt)"]
+    return res
 
 
 def _set_ini_command(ini, command):
@@ -276,19 +290,22 @@ def install_kicad_plugin(series=None):
         kicads = [k for k in kicads if k["series"] == series] or [{"series": series}]
     if not kicads:
         raise ValueError("no KiCad found on this computer; install KiCad 7 or newer, then press this again")
+    from .kicad_menu import icon_png
     src = Path(__file__).with_name("assets") / "kicad_action_plugin.py"
     done = []
     for k in kicads:
         d = detect.kicad_plugin_dir(k["series"]) / "ecadlib_add_part"
         d.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, d / "__init__.py")
+        (d / "ecadlib.png").write_bytes(icon_png(24))
         (d / "ecadlib_cmd.json").write_text(json.dumps({"command": UC.self_command(), "ecadlib": __version__}, indent=2) + "\n",
                                             encoding="utf-8")
         done.append(str(d))
     _record_install("kicad_plugin", done)
     return {"installed": done,
             "steps": ["Restart KiCad (or in the PCB editor: Tools > External Plugins > Refresh Plugins)",
-                      "Open a saved board, then Tools > External Plugins > ecadlib: add part"]}
+                      "Open a saved board, then press the ecadlib button in the top toolbar (also under Tools > "
+                      "External Plugins)"]}
 
 
 # ------------------------------------------------------------------ web routes (local mode only)

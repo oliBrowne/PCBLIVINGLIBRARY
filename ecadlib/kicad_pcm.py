@@ -387,16 +387,18 @@ def global_table_rows(installed, third_party, kicad, prefix="PCM_"):
 
 
 def plugin_build(out, identifier="local.ecadlib.add-part", kicad=7, author="ecadlib user", schema=None):
-    """The "ecadlib: add part" pcbnew action plugin as a PCM plugin package (plugins/__init__.py)."""
+    """The ecadlib pcbnew action plugins (the toolbar button and the ecadlib window) as a PCM plugin package:
+    plugins/__init__.py, plugins/ecadlib.png (the toolbar icon) and resources/icon.png (the PCM's list icon)."""
     from . import __version__
+    from .kicad_menu import icon_png
     src = Path(__file__).with_name("assets") / "kicad_action_plugin.py"
     version = re.match(r"\d+(\.\d+){0,2}", __version__).group(0)
-    files = {"plugins/__init__.py": src.read_bytes()}
-    meta = metadata("ecadlib add part", identifier, version, kicad, "MIT", author,
-                    description="Build a part from its manufacturer part number with ecadlib and place its footprint")
+    files = {"plugins/__init__.py": src.read_bytes(), "plugins/ecadlib.png": icon_png(24), "resources/icon.png": icon_png(64)}
+    meta = metadata("ecadlib", identifier, version, kicad, "MIT", author,
+                    description="ecadlib in the PCB editor: add parts by MPN, check the project BOM, review queue")
     meta["type"], meta["tags"] = "plugin", ["library", "parts"]
     meta["description_full"] = (src.read_text(encoding="utf-8").split('"""')[1].strip())[:5000]
-    meta["versions"][0]["install_size"] = len(files["plugins/__init__.py"])
+    meta["versions"][0]["install_size"] = sum(len(v) for v in files.values())
     problems, how = check_metadata(meta, schema)
     files["metadata.json"] = (json.dumps(meta, indent=2) + "\n").encode()
     data = zip_bytes(files)
@@ -419,7 +421,7 @@ def main(argv=None):
                "then in KiCad: Plugin and Content Manager > Install from File... > the .zip")
     ap.add_argument("src", nargs="?", help="librarian plan.json, or a folder `ecadlib kicad-export` wrote")
     ap.add_argument("--plugin", action="store_true",
-                    help="instead: package the 'ecadlib: add part' PCB editor action plugin (KiCad 7+)")
+                    help="instead: package the ecadlib PCB editor plugin: toolbar button and window (KiCad 7+)")
     ap.add_argument("-o", "--out", default="out/pcm", help="output folder (default %(default)s)")
     ap.add_argument("--name", default="ecadlib", help="library name when building from a plan (default %(default)s)")
     ap.add_argument("--identifier", help="package id, e.g. com.example.mylib (default local.ecadlib.<lib>)")
@@ -442,7 +444,7 @@ def main(argv=None):
         print(json.dumps(rep, indent=2) if a.json else
               "\n".join([f"  PROBLEM {p}" for p in rep["problems"]] +
                         [f"  in KiCad: Plugin and Content Manager > Install from File... > {Path(rep['zip']).name}; "
-                         "then PCB Editor > Tools > External Plugins > ecadlib: add part", f"wrote {rep['zip']}"]))
+                         "then the ecadlib button in the PCB editor's top toolbar", f"wrote {rep['zip']}"]))
         return 1 if rep["problems"] else 0
     if not a.src:
         ap.error("give a plan.json or a kicad-export folder (or --plugin)")

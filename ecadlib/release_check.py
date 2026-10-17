@@ -276,6 +276,9 @@ def check_item(item, base=".", rules=None):
         elif k == "Description":
             if not str(item.get("description") or "").strip():
                 add("fields", "Description is empty")
+            elif str((item.get("field_sources") or {}).get("Description", "")).startswith("written by ecadlib"):
+                warns.append(f"Description \"{item['description']}\" was written by ecadlib from the category and "
+                             "package (no source had one): check it")
         elif not str(par.get(RU.canonical_param(k, rules), par.get(k, ""))).strip():
             add("fields", f"{k} is empty")
     for v in item.get("verify") or []:

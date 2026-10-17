@@ -1478,7 +1478,7 @@ Checks (2026-10-16, kicad-footprints f8440fa, kicad-symbols 9280a93):
 ```
 ecadlib kicad-pcm out/librarian/plan.json --out out/pcm --name mylib [--kicad 7|8|9|10] [--prefix PCM_] [--pkg-version 1.2.0]
 ecadlib kicad-pcm out/kicad --out site/kicad --base-url https://example.com/kicad   # + repository.json / packages.json
-ecadlib kicad-pcm --plugin --out out/pcm                    # the "ecadlib: add part" PCB editor action plugin
+ecadlib kicad-pcm --plugin --out out/pcm                    # the ecadlib button and window for KiCad's PCB editor
 ecadlib altium-pkg out/librarian/plan.json --out D:/libs/mylib --name mylib   # or a folder of .SchLib/.PcbLib
 python3 -m tests.test_tool_packages
 ```
@@ -1494,9 +1494,18 @@ symbols' Footprint fields say `PCM_<lib>:<footprint>` and the footprints' models
 `--pkg-version`, or kept while the content is unchanged, else today's date, so a re-run changes no file. With
 `--base-url` it also writes `repository.json` and `packages.json` (sha256, sizes) for Manage Repositories; KiCad only
 fetches repositories over http(s) (`kicad_curl_easy.cpp`), so a `file://` URL is refused.
-`--plugin` writes a PCM *plugin* package: in the PCB editor, Tools > External Plugins > "ecadlib: add part" asks for an
-MPN, adds it to `<project>/ecadlib-work/parts.csv`, runs `ecadlib librarian` and `kicad-export` into `<project>/ecadlib/`,
-adds `${KIPRJMOD}/ecadlib/...` rows to the project's tables and places the footprint.
+`--plugin` writes a PCM *plugin* package: an **ecadlib** button in the PCB editor's top toolbar (and Tools > External
+Plugins > ecadlib: add part / check project BOM / open review queue) that opens the ecadlib window, the same flow as
+the ecadlib menu in Altium, drawn in the same dark colours: Add part from MPN (MPN, manufacturer optional, a live
+lookup, then the footprint placed in the middle of the board), Check project BOM (the schematic's lines: already in
+your library / a source can supply / needs a footprint, then Later or Fill the library now, and the report on
+request) and Open review queue. The window does not block KiCad. It runs `ecadlib kicad-menu run-job` in the background
+(`ecadlib/kicad_menu.py`) and reads its `progress.ini` / `result.ini`, as the Altium dialog does. Per project,
+`<project>/ecadlib-work/` is the workspace (one parts list for every part added or filled, so one plan makes the whole
+library) and `<project>/ecadlib/` the KiCad library, added to the project's tables as `${KIPRJMOD}/ecadlib/...`.
+KiCad gives plugins no menu or toolbar slot in the schematic editor; its Tools > Generate BOM can run
+`ecadlib kicad-menu check-bom "%I"` there, which checks the netlist against the library and opens the report.
+Tried in KiCad 7.0.11: toolbar button, BOM check, fill and add part with the footprint placed.
 
 **Altium.** `altium-pkg` writes a folder that opens in Altium as is: `SchLib/`, `PcbLib/`, `<name>.LibPkg` (an
 integrated library package listing every `.SchLib`/`.PcbLib` as `SchLib\x.SchLib`; compile it to an `.IntLib`),
@@ -1565,6 +1574,20 @@ channel (R1_CH1 ...); a Content Vault component without an MPN parameter uses it
 one. Workspace `altium_menu(win_dir)` and the MCP
 tool `altium_menu` write it into `<workspace>/altium_menu/` with `workspace=..`.
 
+**The ecadlib dialog.** The entries work in one dark, borderless dialog (`ecadlib_dialog.pas` + `.dfm`,
+`ecadlib/altium_forms.py`) styled like Altium's own: **Check project BOM** shows "Checking...", the line being looked
+up and a progress line, then the count ("24 lines") with a row per kind (already in your library, a source can supply,
+needs a footprint, not fitted) and **Later** / **Fill the library now**; the fill shows the librarian part by part,
+then "N of M ready" with the held parts. **Add part from MPN** asks for the MPN and manufacturer in the same dialog,
+then lists where ecadlib looked, what it took and the release check, and reinstalls the library so the part shows in
+the Components panel. A `TTimer` reads `jobs\<id>\progress.ini` (done, total, text, rows) while ecadlib runs and
+`result.ini` (`big`, `rows`, `row1`.. as `label|value|ok`) at the end, so Altium keeps painting. Only the review
+queue (for a held part) and the full BOM report (**Open the full report**, `action=open`, files in the workspace only)
+open in the browser. `dialogs=0` in the .ini brings back Altium's plain message boxes. Run in Altium Designer 26.10:
+script forms, colours, the timer and modal results work. Not used, and why: a web view (`TWebBrowser` is an
+undeclared identifier to scripts) and a panel that stays open (any open script form, a server panel or a floating
+one, keeps the script running, and Altium then runs no other script: "Another script executing now").
+
 **How the script runs ecadlib.** No user text goes on a command line: each click makes `jobs\<id>\` next to the
 script and writes `request.ini` with `TIniFile` (action, mpn, manufacturer, project, config). It then calls
 `RunApplication('wscript.exe //B //NoLogo "<dir>\ecadlib_run.vbs" "<dir>\ecadlib_run.cmd" "<job>"')`; the .vbs runs
@@ -1578,7 +1601,12 @@ values are one line; finished job folders older than 14 days are removed. Every 
 NEXAR_TOKEN, port taken, ...); ecadlib's output is in `jobs\<id>\log.txt`. `hidden=0` runs the .cmd in a visible
 console instead. No key is in any file: keys stay in environment variables.
 
-**Install.** Preferences > Scripting System > Global Projects > Install from file > `ecadlib_menu.PrjScr`; then
+**Install.** The quick way: close Altium and run `ecadlib altium-menu install-menu --out <folder>` (the setup
+page's Add to Altium does this on Windows). It merges the ecadlib commands and the four menu insertions into Altium's
+own menu file, `%APPDATA%\Altium\Altium Designer {GUID}\DXP.RCS` (backed up next to it first; other customisations
+are kept; `--remove` takes ours out), so the "ecadlib" menu sits in the top menu bar before Window. Altium must be
+closed because it writes that file when it closes. The menu entries run the script project by its path, so it need
+not be a global project. By hand: Preferences > Scripting System > Global Projects > Install from file > `ecadlib_menu.PrjScr`; then
 right-click a menu or toolbar > Customize > [Scripts] and drag the three procedures onto a menu (once per editor).
 With `--win-dir` (or when built on Windows) it also writes `ecadlib_menu.DXPPrf`, a preferences file (zip of `DXP.RCS`
 + `IncludedFiles.ini`, the format of Altium-Designer-addons' Altium-saved `UI customizations/Menu_SVN`) that adds an

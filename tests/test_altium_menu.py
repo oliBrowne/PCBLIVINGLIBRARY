@@ -6,7 +6,7 @@ import configparser, contextlib, csv, io, json, os, re, socket, subprocess, sys,
 from pathlib import Path
 from unittest import mock
 
-from ecadlib import altium_menu as AM
+from ecadlib import altium_forms as AF, altium_menu as AM
 
 ROOT = Path(__file__).parent.parent
 RULES = ('[sources]\norder = ["standard"]\n\n[parameters]\n'
@@ -111,18 +111,21 @@ def test_build_writes_well_formed_files():
     out = d / "menu dir"
     rep = AM.build(out, "D:\\ecadlib ws", None, win_dir="D:\\Altium Scripts\\ecadlib (menu)")
     assert rep["problems"] == [] and rep["menu_file"] == AM.PREFS, rep
-    assert set(rep["written"]) == {AM.PROJECT, AM.UNIT, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README, AM.PREFS}
-    for f in (AM.PROJECT, AM.UNIT, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README):
+    units = (AF.DIALOG_UNIT, AF.DIALOG_FORM)
+    assert set(rep["written"]) == {AM.PROJECT, AM.UNIT, *units, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README, AM.PREFS}
+    for f in (AM.PROJECT, AM.UNIT, *units, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README):
         raw = (out / f).read_bytes()
         assert b"\n" not in raw.replace(b"\r\n", b""), f"{f}: every line ends with CRLF (Windows tools)"
         raw.decode("ascii")                                       # plain ASCII: any code page reads it
         assert not re.search(rb"(?i)sk-ant|api[_-]?key\s*=|NEXAR_TOKEN\s*=|password\s*=", raw), f"{f}: no secrets"
     prj = configparser.ConfigParser()
     prj.read_string((out / AM.PROJECT).read_text())
-    assert prj.sections() == ["Design", "Document1"] and prj["Document1"]["DocumentPath"] == AM.UNIT
+    assert prj.sections() == ["Design", "Document1", "Document2"]
+    assert [prj[f"Document{i}"]["DocumentPath"] for i in (1, 2)] == [AM.UNIT, AF.DIALOG_UNIT]
     ini = configparser.ConfigParser(interpolation=None)
     ini.read_string((out / AM.INI).read_text())
-    assert {k for k in ini["ecadlib"]} == {"workspace", "library", "name", "command", "hidden", "timeout_s", "port", "offline"}
+    assert {k for k in ini["ecadlib"]} == {"workspace", "library", "name", "command", "hidden", "timeout_s", "port", "offline",
+                                    "dialogs"}
     assert ini["ecadlib"]["workspace"] == "D:\\ecadlib ws" and ini["ecadlib"]["hidden"] == "1"
     assert not any(";" in v for v in ini["ecadlib"].values()), "TIniFile does not strip inline comments"
     # again: nothing rewritten; the user's settings survive
@@ -165,7 +168,7 @@ def test_menu_file_follows_altiums_format():
         if m:
             pl[m.group(1)] = m.groups()
             continue
-        m = re.match(r"^Insertion (\w+) TargetID='(\w+)' RefID0='(\w+)' $", ln)
+        m = re.match(r"^Insertion (\w+) TargetID='(\w+)' RefID0='(\w+)' InsertType='Before' $", ln)   # as AdvPcb.rcs
         if m:
             targets.append((m.group(2), m.group(3)))
             depth += 1
@@ -184,7 +187,7 @@ def test_menu_file_follows_altiums_format():
     # the menus and the item they go before, as Menu_SVN's DXP.RCS names them
     assert targets == [("MNSchematicMenu", "MNDesignMenu_Window1_3"), ("MNPCBMenu", "MNDesignMenu_Window1_1"),
                        ("MNSchLibMenu", "MNDesignMenu_Window1_4"), ("MNPCBLibMenu", "MNDesignMenu_Window1_2")]
-    assert set(links) == set(pl) and len(links) == 3 * 8
+    assert set(links) == set(pl) and len(links) == len(AM.PROCS) * 8
     procs = {p for p, _, _ in AM.PROCS}
     for pid, (_, command, params, caption, _) in pl.items():
         assert command == "ScriptingSystem:RunScript"            # TR0124: ProjectName | ProcName = file>procedure
@@ -194,16 +197,69 @@ def test_menu_file_follows_altiums_format():
         assert f == f"{win}\\{AM.UNIT}" and proc in procs and pid == f"ecadlib_{proc}"
 
 
+def test_menu_goes_straight_into_altiums_menu_file():
+    """install-menu merges the ecadlib menu into Altium's own DXP.RCS (Altium closed), after a backup: other
+    customisations stay ([Custom] trees untouched), a second run changes nothing, and remove
+    gives back the file as it was. The user file is the one seen on a real AD 26.10 (one line)."""
+    d = _tmp()
+    alt = d / "Roaming" / "Altium" / "Altium Designer {EDA20636-A941-48A8-9173-5E8D6A734E05}"
+    alt.mkdir(parents=True)
+    theirs = ("Tree PCBCustom Caption='[Custom]' TopLevel='True'  End\r\n"
+              "PL Mine_Run Command='ScriptingSystem:RunScript' Params='ProjectName=C:\\x.PrjScr' Caption='Mine' End\r\n"
+              "Insertion Mine_Menu TargetID='MNPCBMenu' RefID0='MNDesignMenu_Window1_1' \r\n"
+              "    Tree Mine_Tree Caption='Mine' Popup='N' \r\n        Link Mine_L PLID='Mine_Run'  End\r\n    End\r\nEnd\r\n")
+    (alt / "DXP.RCS").write_bytes(theirs.encode("latin-1"))
+    assert AM.altium_user_folders(d / "Roaming") == [alt]
+    try:
+        AM.install_menu_bar("D:\\ecadlib menu", running=lambda: True)
+        raise AssertionError("must refuse while Altium runs")
+    except ValueError as e:
+        assert "close it first" in str(e)
+    win = "D:\\ecadlib menu" if os.name != "nt" else str(d / "menu")
+    with mock.patch.object(AM, "check_win_dir", lambda w: "D:\\ecadlib menu"):
+        # an Altium still closing writes its old file back: reported, not taken for done
+        try:
+            AM.install_menu_bar(win, [alt], running=lambda: False,
+                                sleep=lambda s: (alt / "DXP.RCS").write_bytes(theirs.encode("latin-1")))
+            raise AssertionError("must notice the overwrite")
+        except ValueError as e:
+            assert "still closing" in str(e)
+        r = AM.install_menu_bar(win, [alt], running=lambda: False, now=__import__("datetime").datetime(2026, 10, 17, 4, 0),
+                                sleep=lambda s: None)
+        text = (alt / "DXP.RCS").read_bytes().decode("latin-1")
+        assert r["installed"] == [str(alt / "DXP.RCS")] and Path(r["backups"][0]).read_bytes() == theirs.encode("latin-1")
+        blocks = AM.rcs_blocks(text)
+        ids = [AM._block_id(b) for b in blocks]
+        assert ids.count("PCBCustom") == 1 and "Mine_Menu" in ids and "Mine_Run" in ids
+        assert {"SchDoc_ecadlib_Menu", "PcbDoc_ecadlib_Menu", "SchLib_ecadlib_Menu", "PcbLib_ecadlib_Menu"} <= set(ids)
+        assert blocks[ids.index("PCBCustom")] == ["Tree PCBCustom Caption='[Custom]' TopLevel='True'  End"]
+        assert "ProcName=D:\\ecadlib menu\\ecadlib_menu.pas>CheckProjectBOM" in text
+        again = AM.install_menu_bar(win, [alt], running=lambda: False, sleep=lambda s: None)
+        assert again["installed"] == [] and again["backups"] == []
+        AM.install_menu_bar(win, [alt], remove=True, running=lambda: False, sleep=lambda s: None)
+        back = (alt / "DXP.RCS").read_bytes().decode("latin-1")
+        assert "ecadlib" not in back and [AM._block_id(b) for b in AM.rcs_blocks(back)] == ["PCBCustom", "Mine_Run", "Mine_Menu"]
+    for bad in ("Tree X Caption='a' \r\n", "End\r\n"):
+        try:
+            AM.rcs_blocks(bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+
+
 def test_pas_uses_only_documented_calls_and_is_balanced():
     text = AM.pas_text()
-    assert AM.pas_problems(text) == []
+    assert any("OpenDialog is not declared" in p for p in AM.pas_problems(text)), "the dialog unit is what declares it"
+    assert AM.pas_problems(text, known=AM.unit_names(AF.dialog_pas_text())) == []
     toks = AM.pas_tokens(text)
     routines = AM.pas_routines(toks)
     for proc, _, _ in AM.PROCS:
         assert routines[proc]["kind"] == "procedure" and not routines[proc]["params"]
     used = {t[1].lower() for r in routines.values() for t in r["body"] if t[0] == "word"}
     api = {k.lower() for k in AM.ALTIUM_API}
-    assert api <= used | {"processmessages", "application"} | {"create", "free"}, sorted(api - used)
+    dlg = {t[1].lower() for r in AM.pas_routines(AM.pas_tokens(AF.dialog_pas_text())).values() for t in r["body"]
+           if t[0] == "word"}
+    assert api <= used | dlg | {"processmessages", "application"} | {"create", "free"}, sorted(api - used - dlg)
     for name, where in AM.ALTIUM_API.items():
         assert re.search(r"TR01\d\d|used in|see ", where), f"{name}: no reference"
     # every Begin / Try has its End, counted across the whole unit
@@ -219,7 +275,7 @@ def test_pas_uses_only_documented_calls_and_is_balanced():
 
 
 def test_pas_checker_catches_mistakes():
-    ok = "Procedure AddPartFromMPN;\nBegin\nEnd;\nProcedure CheckProjectBOM;\nBegin\nEnd;\nProcedure OpenReviewQueue;\nBegin\nEnd;\n"
+    ok = "".join(f"Procedure {p};\nBegin\nEnd;\n" for p, _, _ in AM.PROCS)
     assert AM.pas_problems(ok) == []
     cases = {
         "not in the API allow-list": ok + "Procedure X;\nBegin\n    ShellExecute(0, 'open', 'x', '', '', 1);\nEnd;\n",
@@ -236,6 +292,66 @@ def test_pas_checker_catches_mistakes():
     # strings and comments do not count as calls; '' is a quote inside a string; #13#10 is a character code
     toks = AM.pas_tokens("{ ShellExecute } (* RunApplicationAndWait *) // CreateProcess\n'it''s' + #13#10")
     assert toks == [("str", "it's", 2), ("sym", "+", 2), ("str", "\r", 2), ("str", "\n", 2)]
+
+
+def test_dialog_form_matches_its_unit_and_the_results():
+    """The ecadlib dialog (ecadlib_dialog.pas + .dfm): every component the unit names is in the form, every handler
+    the form names is in the unit, the .dfm nests object / end, and the keys the dialog reads are ones run-job writes."""
+    files = {AM.UNIT: AM.pas_text(), AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text()}
+    assert AM.project_problems(files) == []
+    assert "OnClose = EcadlibDialogClose" in files[AF.DIALOG_FORM], "a closed form's timer must stop (AD 26.10)"
+    dfm = files[AF.DIALOG_FORM]
+    names = AF.dfm_names(dfm)
+    assert names[0] == "EcadlibDialog" and len(names) == len(set(names))
+    assert dfm.startswith("object EcadlibDialog: TEcadlibDialog\r\n") and dfm.rstrip().endswith("end")
+    depth = 0
+    for ln in dfm.split("\r\n"):
+        if re.match(r"^\s*object \w+: T\w+$", ln):
+            depth += 1
+        elif re.match(r"^\s*end$", ln):
+            depth -= 1
+            assert depth >= 0
+    assert depth == 0
+    assert {f"Row{i}{x}" for i in range(1, AF.ROWS + 1) for x in ("", "A", "B")} <= set(names)
+    assert "FormKind = fkModal" in dfm and "BorderStyle = bsNone" in dfm and "OnTimer = TickTimer" in dfm
+    assert "'ecadlib '#183' Check project BOM'" in dfm, "non-ASCII characters as #codes"
+    # what the checker catches in the dialog: a handler the form names but the unit lacks, a component not in the form
+    broken = dict(files, **{AF.DIALOG_UNIT: files[AF.DIALOG_UNIT].replace("Procedure TEcadlibDialog.ReportClick", "Procedure ReportGone")})
+    assert any("ReportClick" in p for p in AM.project_problems(broken))
+    broken = dict(files, **{AF.DIALOG_UNIT: files[AF.DIALOG_UNIT].replace("EcadlibDialog.Report.Visible := False;", "EcadlibDialog.Gone.Visible := False;", 1)})
+    assert any("Gone is not declared" in p for p in AM.project_problems(broken))
+    read = set(re.findall(r"Answer\(Job, '(\w+)'\)", files[AF.DIALOG_UNIT]))
+    assert read == {"status", "install", "big", "report", "warnings", "offer_fill", "fix", "offer_queue"}, read
+    assert "ReadString('progress', 'text'" in files[AF.DIALOG_UNIT] and "'row' + IntToStr(i)" in files[AF.DIALOG_UNIT]
+    # the menu entries open the dialog, unless dialogs=0 asks for Altium's plain message boxes
+    assert "OpenDialog('add', '', '')" in files[AM.UNIT] and "OpenDialog('bom', PrjPath, '')" in files[AM.UNIT]
+    assert "Setting('dialogs', '1') = '0'" in files[AM.UNIT]
+
+
+def test_progress_file_for_the_live_view():
+    d = _tmp()
+    t = [0.0]
+    pr = AM.Progress(d, every_s=0.25, clock=lambda: t[0])
+    pr.step(0, 6, "line 1 of 6: LM358DR")
+    pr.step(1, 6, "line 2 of 6: skipped (too soon)")              # within 0.25 s: not written
+    got = lambda: dict(AM.read_ini(d / "progress.ini")["progress"])
+    assert got() == {"done": "0", "total": "6", "text": "line 1 of 6: LM358DR", "rows": "0"}
+    t[0] = 1.0
+    pr(6, 6, "writing report\nnow")                                # the Workspace progress(done, total, label) form
+    assert got()["done"] == "6" and got()["text"] == "writing report now"
+    pr.row("KiCad library", "no symbol | named like X")            # rows are always written
+    t[0] = 2.0
+    pr.step(0, 0, "  done NE555DR      sym=easyeda:C7593 fp=easyeda:C7593")   # librarian log lines, in plain words
+    assert got()["text"] == "NE555DR: checked"
+    pr.row("symbol", "EasyEDA", True)
+    g = got()
+    assert g["rows"] == "2" and g["row1"] == "KiCad library|no symbol / named like X|0" and g["row2"] == "symbol|EasyEDA|1"
+    assert (d / "progress.ini").read_bytes()[:2] == b"\xff\xfe" and not list(d.glob("*.tmp"))
+    AM.Progress().step(1, 2, "no job: nothing written")
+    # the columns do not wrap: values are cut at a word to what fits (seen clipped on a real AD 26.10 dialog)
+    r = AM.row_text("KiCad library", "library index unavailable (kicad-symbols tree page 3 timed out)")
+    assert r == "KiCad library|library index unavailable...|0" and all(len(x) <= 28 for x in r.split("|")[1:])
+    assert AM.rows_result(["a|1|1"], "1 line") == {"big": "1 line", "rows": 1, "row1": "a|1|1"}
 
 
 def test_command_lines_survive_spaces_and_windows_separators():
@@ -356,15 +472,54 @@ def test_check_bom_report_offer_and_fill():
     page = Path(r["report"]).read_text(encoding="utf-8")
     assert "GRM188R71C104KA01D" in page and "LM358DR" in page and page.count("<tr>") == 7
     assert Path(r["bom"]).is_file()
-    # the user says yes: fill (offline, standard parts only: all held, nothing published, a fix that says where to look)
+    # the user says yes: fill (offline, standard parts only: the two passives are ready with a description ecadlib
+    # wrote, the rest held, and a fix that says where to look)
     job = _job(menu, {"action": "fill", "project": str(prj)})
     AM.run_job(job)
     r = _result(job)
-    assert r["status"] == "ok" and r["held"] == "6" and r["ready"] == "0" and r["install"] == "", r
-    assert r["message"] == "6 parts: 0 ready, 6 held." and "review queue" in r["fix"] and Path(r["review"]).is_file()
+    assert r["status"] == "ok" and r["held"] == "4" and r["ready"] == "2" and r["install"].endswith("ecadlib.DbLib"), r
+    assert r["message"].startswith("6 parts: 2 ready") and "review queue" in r["fix"] and Path(r["review"]).is_file()
     # a project that is not saved / not there: one line and a fix, never a traceback
     r = AM.run_job(_job(menu, {"action": "check-bom", "project": str(d / "Unsaved.PrjPcb")}))
     assert r["status"] == "error" and "no such file" in r["message"] and r["fix"].startswith("save the project")
+
+
+def test_dialog_results_rows_and_reports():
+    """With dialog=1 (the ecadlib dialog) a BOM check opens nothing: the dialog shows the counts and opens the report
+    on request (action=open, files in the workspace only). Each result carries the big line and the rows."""
+    from tests.test_altium_project import board
+    d = _tmp()
+    menu, cfg = _setup(d)
+    prj = board(d / "Board files (rev A)")
+    opened = []
+    job = _job(menu, {"action": "check-bom", "project": str(prj), "dialog": "1"})
+    AM.run_job(job, opener=opened.append)
+    r = _result(job)
+    assert opened == [] and "Report:" in r["message"] and r["big"] == "6 lines", r
+    rows = [r[f"row{i}"] for i in range(1, int(r["rows"]) + 1)]
+    assert rows[0] == "already in your library|0|1" and all(x.count("|") == 2 for x in rows), rows
+    assert sum(int(x.split("|")[1]) for x in rows) == 6, rows          # every line counted once
+    pg = dict(AM.read_ini(job / "progress.ini")["progress"])
+    assert pg["done"] == pg["total"] == "6", pg
+    # the dialog's "Open the full report": only a report inside the workspace or the library folder
+    r2 = AM.run_job(_job(menu, {"action": "open", "path": r["report"]}), opener=opened.append)
+    assert r2["status"] == "ok" and opened == [str(Path(r["report"]).resolve())], r2
+    for bad in (str(menu / AM.INI), str(d / "elsewhere.html"), sys.executable):
+        assert AM.run_job(_job(menu, {"action": "open", "path": bad}), opener=opened.append)["status"] == "error", bad
+    assert len(opened) == 1
+    # fill: big line, ready / held rows, and the review queue offered for the held parts
+    job = _job(menu, {"action": "fill", "project": str(prj), "dialog": "1"})
+    AM.run_job(job)
+    r = _result(job)
+    assert r["big"] == "2 of 6 ready" and r["offer_queue"] == "1" and r["row1"] == "ready, in your library|2|1", r
+    assert r["row2"] == "held for a person|4|0", r
+    # one part: where ecadlib looked and what it took, then the release check
+    job = _job(menu, {"action": "add-part", "dialog": "1", **CAP})
+    AM.run_job(job)
+    r = _result(job)
+    rows = [r[f"row{i}"] for i in range(1, int(r["rows"]) + 1)]
+    assert r["big"] == "Ready" and rows[-1] == "release check|ready|1", rows
+    assert any(x.startswith("symbol|standard parts") and x.endswith("|1") for x in rows), rows
 
 
 def test_altium_365_target():
@@ -566,3 +721,21 @@ if __name__ == "__main__":
         if k.startswith("test_"):
             v()
             print("ok", k)
+
+
+def test_pas_checker_catches_a_routine_used_before_it_is_declared():
+    """DelphiScript has no forward declarations: AD 26.10 stopped on "Undeclared identifier: ClipboardMpn" when
+    OpenDialog called a procedure written below it."""
+    text = "Procedure A;\nBegin\n    B;\nEnd;\n\nProcedure B;\nBegin\nEnd;\n"
+    assert any("B is used before it is declared" in p for p in AM.pas_problems(text, procs=[]))
+    assert not AM.pas_problems(text.replace("    B;\n", ""), procs=[])
+
+
+def test_dialog_moves_by_its_header():
+    """The dialog has no Windows title bar (bsNone): its header and title drag it around the screen."""
+    from ecadlib import altium_forms as AF
+    dfm, pas = AF.dialog_dfm_text(), AF.dialog_pas_text()
+    head = dfm[dfm.index("object Head:"):dfm.index("object HeadClose:")]
+    assert head.count("OnMouseDown = HeadMouseDown") == 2 and head.count("OnMouseMove = HeadMouseMove") == 2
+    for h in ("HeadMouseDown", "HeadMouseMove", "HeadMouseUp"):
+        assert f"Procedure TEcadlibDialog.{h}(" in pas
