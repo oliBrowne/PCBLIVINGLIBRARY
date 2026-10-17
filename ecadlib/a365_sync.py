@@ -49,7 +49,7 @@ Q_COMPONENTS = """query ($ws: String!, $first: Int!, $after: String) {
 fragment A365Component on DesComponent {
   id name comment description isManaged createdAt modifiedAt
   folder { path }
-  revision { id details { lifeCycleState { name } createdAt modifiedAt } }
+  revision { revisionId details { lifeCycleState { name } createdAt modifiedAt } }
   details {
     parameters { name value }
     symbols { name guid dataDownloadUrl folder { path } }
@@ -125,7 +125,7 @@ def snapshot(node):
     rev = node.get("revision") or {}
     rd = rev.get("details") or {}
     syms, fps = d.get("symbols") or [], d.get("footprints") or []
-    return {"id": node.get("id"), "revision": rev.get("id"),
+    return {"id": node.get("id"), "revision": rev.get("revisionId") or rev.get("id"),
             "lifecycle": (rd.get("lifeCycleState") or {}).get("name"),
             "modified_at": node.get("modifiedAt") or rd.get("modifiedAt"), "managed": node.get("isManaged"),
             "folder": _norm((node.get("folder") or {}).get("path")),

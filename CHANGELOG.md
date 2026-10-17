@@ -10,6 +10,7 @@ a minor release may change command-line options and file formats.
 ### Fixed
 
 - Altium 365 push: symbols and footprints are released under the `[folders] root` too (`<root>/Models/Symbols`, `<root>/Models/Footprints`), not always under `Components/Models`, so a test root keeps everything together.
+- Altium 365: Nexar renamed `DesRevision.id` to `revisionId`; push, `a365 pull/status` and `upstream check-a365` asked for the old field and every lookup failed with HTTP 400. The test schema is updated to match.
 
 ### Fixed
 

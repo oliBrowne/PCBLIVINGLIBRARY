@@ -45,10 +45,10 @@ Q_DEFS = """query ($ws: String!) {
 }"""
 
 Q_FIND = """query ($ws: String!, $name: String!) {
-  desLibrary(workspaceUrl: $ws) { components(first: 1, where: {name: {eq: $name}}) { nodes { id name revision { id } details { parameters { name value } } } } }
+  desLibrary(workspaceUrl: $ws) { components(first: 1, where: {name: {eq: $name}}) { nodes { id name revision { revisionId } details { parameters { name value } } } } }
 }"""
 
-Q_BY_ID = """query ($id: ID!) { desComponentById(id: $id) { id name revision { id } details { parameters { name value } } } }"""
+Q_BY_ID = """query ($id: ID!) { desComponentById(id: $id) { id name revision { revisionId } details { parameters { name value } } } }"""
 
 M_RELEASE = """mutation ($input: DesReleaseComponentInput!) { desReleaseComponent(input: $input) { errors { message } } }"""
 
@@ -164,6 +164,12 @@ def plan(lines, triage=None, models=None, root=None, rules=None):
     return items
 
 
+def _rev_id(node):
+    """A component's revision id: Nexar renamed DesRevision.id to revisionId (live schema, 2026-10)."""
+    r = (node or {}).get("revision") or {}
+    return r.get("revisionId") or r.get("id")
+
+
 def release_input(item, ws, defs, file_ids, models_root="Components/Models"):
     sym_ids, fp_ids = file_ids
     nid = lambda k: (defs.get(k) or {}).get("id")
@@ -220,7 +226,7 @@ def push_existing(it, client, ws, dry_run=False, note="ecadlib sync"):
             node = client.component(a["id"])
         if not node:
             return {"action": "skip", "detail": "not in the workspace (deleted or renamed there): run `ecadlib a365 reconcile`"}
-        rev = (node.get("revision") or {}).get("id")
+        rev = _rev_id(node)
         cur = {p["name"]: p["value"] for p in ((node.get("details") or {}).get("parameters") or [])}
         if rev and a.get("revision") and rev != a["revision"] and base is not None and cur != base:
             return {"action": "skip", "detail": f"edited in the workspace since the last pull (revision {a['revision']} -> {rev}): "
@@ -234,7 +240,7 @@ def push_existing(it, client, ws, dry_run=False, note="ecadlib sync"):
     cid = client.update_params(node["id"], new, note, replace=True)
     after = client.find(ws, it["name"]) or (client.component(cid) if cid and hasattr(client, "component") else None) or {}
     a["id"] = after.get("id") or cid
-    a["revision"] = (after.get("revision") or {}).get("id") or a.get("revision")
+    a["revision"] = _rev_id(after) or a.get("revision")
     a.setdefault("base", {})["parameters"] = {p["name"]: p["value"] for p in new}
     return {"action": "update_parameters", "detail": cid, "a365_updated": True}
 

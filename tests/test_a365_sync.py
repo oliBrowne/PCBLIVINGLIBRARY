@@ -41,7 +41,7 @@ def node(name, params, folder="Components/ICs", sym="CH340C", fp="SOIC-16", rev=
          description="", cid=None):
     return {"id": cid or f"id-{name}-{rev}", "name": name, "comment": comment, "description": description, "isManaged": True,
             "createdAt": "2026-01-01T00:00:00Z", "modifiedAt": "2026-01-02T00:00:00Z", "folder": {"path": folder},
-            "revision": {"id": rev, "details": {"lifeCycleState": {"name": "Released"}, "createdAt": "2026-01-01T00:00:00Z",
+            "revision": {"revisionId": rev, "details": {"lifeCycleState": {"name": "Released"}, "createdAt": "2026-01-01T00:00:00Z",
                                                 "modifiedAt": "2026-01-02T00:00:00Z"}},
             "details": {"parameters": [{"name": k, "value": v} for k, v in params.items()],
                         "symbols": [{"name": sym, "guid": "S" + guid, "dataDownloadUrl": f"https://dl/{sym}.SchLib", "folder": {"path": "Symbols"}}],
@@ -97,8 +97,8 @@ class FakeA365(FakeNexar):
             else:
                 n[k] = v
         self.n += 1
-        n["revision"]["id"] = f"{n['revision']['id']}.{self.n}"
-        n["id"] = f"id-{name}-{n['revision']['id']}"
+        n["revision"]["revisionId"] = f"{n['revision']['revisionId']}.{self.n}"
+        n["id"] = f"id-{name}-{n['revision']['revisionId']}"
 
     def download(self, url):
         self.downloads.append(url)

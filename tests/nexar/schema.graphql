@@ -2175,7 +2175,7 @@ type DesReuseBlockRevision implements Node {
 "Revision details ID for later use or full details."
 type DesRevision {
   "The revision details ID for `desRevisionDetailsById`. The instance may not exist for unmanaged components."
-  id: ID!
+  revisionId: ID!
   "The revision details or null for unmanaged components."
   details: DesRevisionDetails
 }
