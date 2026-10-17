@@ -21,6 +21,9 @@ Families (package_schema.json `package_type`, else parsed from the footprint nam
   TH        PinHeader_RxC_P2.54/2.00/1.27mm_Vertical, C/CP_Radial_D..mm_P..mm, R/D_Axial / D_DO-35/41/201AD
   bga       BGA/LGA/CSP: balls on the footprint_adv grid (depopulated balls left out) under a flat body, A1 dot
   connector connector / custom pad_table specs: box over the body, pins through the plated holes, flat SMD contacts
+EasyEDA / LCSC names are read too: SOIC-8_L5.0-W4.0-P1.27-LS6.0-BL (body L along the pin rows x W, pitch P, lead span
+LS; gullwing, SOT-23-3/-5, QFP), QFN-32_L5.0-W5.0-P0.50-BL-EP3.4 (qfn/dfn), R0603 / C0402 / LED0603 (imperial chips).
+Their footprints draw the pin rows along x (pin 1 bottom left), so those models are turned 90 degrees (spec rotation).
 Height: --height, else the spec's height_max, else the CP_EIA-xxxx-HH suffix, else HEIGHT below, else the middle
 of release_check.HEIGHTS for the family.
 
@@ -47,7 +50,7 @@ HEIGHT = [(r"^R_0201", 0.26), (r"^R_0402", 0.35), (r"^R_0603", 0.45), (r"^R_0805
           (r"^L_0402", 0.5), (r"^L_0603", 0.8), (r"^L_0805", 1.0), (r"^L_", 1.2), (r"^LED_0402", 0.4), (r"^LED_0603", 0.6),
           (r"^LED_0805", 0.8), (r"^LED_", 1.1), (r"^CP_EIA", 1.6), (r"^(D_)?SOD-?123", 1.17), (r"^(D_)?SOD-?323", 0.9),
           (r"^(D_)?SOD-?523", 0.6), (r"^(D_)?SM[ABC]\b", 2.3), (r"^SOT-223", 1.8), (r"^SOT-89", 1.5), (r"^SOT-?(323|363|353)", 0.95),
-          (r"^SOT-23", 1.1), (r"^(TSSOP|MSOP|VSSOP|HTSSOP|TSOP)", 1.1), (r"^SSOP", 1.75), (r"^(SOIC|SOP|SO-)", 1.75),
+          (r"^SOT-23", 1.1), (r"^(TSSOP|MSOP|VSSOP|HTSSOP|TSOP)", 1.1), (r"^SSOP", 1.75), (r"^(SOIC|[EH]?SOP|SO-)", 1.75),
           (r"(QFN|DFN|SON)", 0.8), (r"^LQFP", 1.6), (r"^TQFP", 1.2), (r"QFP", 2.0)]
 
 
@@ -172,7 +175,7 @@ def _n(spec, k):
 
 
 def _kind(name):
-    m = re.match(r"(LED|CP|R|C|L|D|F)_", name or "")
+    m = re.match(r"(LED|CP|R|C|L|D|F)(?:_|(?=\d{4}))", name or "")     # KiCad R_0603_..., EasyEDA R0603
     return m.group(1) if m else ""
 
 
@@ -504,6 +507,52 @@ NAMED = {
                  "tab": {"number": "2", "side": "R", "offset": 0, "width": _d(1.7)}},
 }
 GW_SPAN = {3.9: 6.0, 7.5: 10.3, 5.3: 7.8, 4.4: 6.4, 3.0: 4.9, 6.1: 8.1}      # body width E1 -> lead span E
+IMPERIAL = {"0201": "0603", "0402": "1005", "0603": "1608", "0805": "2012", "1008": "2520", "1206": "3216", "1210": "3225",
+            "1812": "4532", "2010": "5025", "2220": "5750", "2512": "6332"}             # EIA inch code -> metric code
+# EasyEDA / LCSC names: <family>-<pins>_L<body along the pin rows>-W<body across>-P<pitch>[-LS<lead span>][-BL|BR|TL..][-EP<w>[x<l>]]
+EASYEDA = re.compile(r"([A-Z][A-Z0-9-]*?)-(\d+)_L([\d.]+)-W([\d.]+)-P([\d.]+)(?:-LS([\d.]+))?(?:-[A-Z]{2})?(?:-EP([\d.]+)(?:[xX\-]([\d.]+))?)?")
+SOT_ODD = re.compile(r"(SOT-23|SOT-323|SOT-353|SOT-416|SOT-523|SC-59|SC-70|SC-88)$")      # 3 / 5 pins: 2+1 / 3+2 leads
+
+
+def _easyeda_spec(name, m):
+    """EasyEDA/LCSC footprint name match -> spec. Their footprints draw the pin rows along x with pin 1 bottom-left,
+    so the spec carries rotation 90 (the KiCad-orientated model turned counter-clockwise)."""
+    fam, n = m.group(1), int(m.group(2))
+    L, W, e = float(m.group(3)), float(m.group(4)), float(m.group(5))
+    LS = float(m.group(6)) if m.group(6) else None
+    if re.search(r"QFN|DFN|SON", fam):
+        quad = "QFN" in fam
+        if quad and n % 4 and (n - 1) % 4 == 0:            # pin count includes the exposed pad
+            n -= 1
+        s = {"name": name, "package_type": "qfn", "pin_count": n, "pitch": e, "body_length": _d(W), "body_width": _d(L),
+             "terminal_width": _d(round(min(0.3, 0.5 * e), 3)), "terminal_length": _d(0.4), "rotation": 90}
+        if not quad:
+            s.update(pins_left_right=n // 2, pins_top_bottom=0)
+        if m.group(7):
+            s["exposed_pad"] = {"length": _d(float(m.group(7))), "width": _d(float(m.group(8) or m.group(7)))}
+        return s
+    if LS is None or LS <= W:
+        return None
+    if "QFP" in fam:
+        return {"name": name, "package_type": "qfp", "pin_count": n, "pitch": e, "body_length": _d(W), "body_width": _d(L),
+                "lead_span": _d(LS), "lead_span_y": _d(round(LS - W + L, 3)), "terminal_width": _d(round(min(0.37, 0.45 * e), 3)),
+                "terminal_length": _d(0.6), "rotation": 90}
+    s = {"name": name, "package_type": "gullwing", "pin_count": n, "lead_span": _d(LS), "body_width": _d(W), "body_length": _d(L),
+         "terminal_width": _d(round(min(0.42, 0.33 * e), 3)),
+         "terminal_length": _d(round(min(0.8 if e >= 1.0 else 0.6, 0.7 * (LS - W) / 2), 2)), "rotation": 90}
+    if n % 2 == 0:
+        s["pitch"] = e
+    elif n == 3 and SOT_ODD.match(fam):                       # P is the pin 1 - pin 2 spacing on the two-lead side
+        s["pin_positions"] = [{"number": "1", "side": "L", "offset": -e / 2}, {"number": "2", "side": "L", "offset": e / 2},
+                              {"number": "3", "side": "R", "offset": 0}]
+    elif n == 5 and SOT_ODD.match(fam):
+        s["pin_positions"] = [{"number": str(i + 1), "side": "L", "offset": (i - 1) * e} for i in range(3)] + \
+                             [{"number": "4", "side": "R", "offset": e}, {"number": "5", "side": "R", "offset": -e}]
+    else:
+        return None
+    return s
+
+
 AXIAL = {"DO-35": (4.0, 2.0), "DO-41": (5.2, 2.7), "DO-201AD": (9.5, 5.3), "DO-201": (9.5, 5.3), "DO-15": (7.6, 3.6)}
 
 
@@ -522,6 +571,15 @@ def spec_from_name(name):
     m = re.match(r"(R|C|L|LED|D|F|Fuse)_(\d{4})_(\d{4})Metric", name)
     if m:
         return _chip_spec(name, m.group(1), m.group(3))
+    m = re.match(r"(R|C|L|LED|D|F)(\d{4})(?:[-_].*)?$", name)          # EasyEDA / LCSC chip: R0603, C0402, LED0603-RD
+    if m and m.group(2) in IMPERIAL:
+        s = _chip_spec(name, m.group(1), IMPERIAL[m.group(2)])
+        km = f"{m.group(1)}_{m.group(2)}_{IMPERIAL[m.group(2)]}Metric"                # family height as for the KiCad name
+        h = next((v for rx, v in HEIGHT if re.search(rx, km)), None)
+        return dict(s, height_max=h) if h else s
+    m = EASYEDA.match(name)
+    if m:
+        return _easyeda_spec(name, m)
     m = re.match(r"CP_EIA-(\d{4})-(\d{2})", name)
     if m:
         L, W = int(m.group(1)[:2]) / 10, int(m.group(1)[2:]) / 10
@@ -684,6 +742,9 @@ def build(spec, height=None):
     if not H:
         raise ValueError(f"{spec['name']}: no height (no height_max, no table entry); pass a height")
     solids = BUILDERS[t](spec, H)
+    if spec.get("rotation") == 90:                   # footprint drawn turned (EasyEDA): (x, y) -> (-y, x)
+        for sol in solids:
+            sol.verts = [(-y + 0.0, x, z) for x, y, z in sol.verts]
     return solids, {"family": t, "height": H, "height_src": src, "solids": len(solids)}
 
 

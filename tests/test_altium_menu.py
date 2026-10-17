@@ -106,6 +106,22 @@ def cmd_s_c(cmdline):
 
 
 # ---------------------------------------------------------------- the files
+def test_build_names_every_procedure():
+    """`altium-menu build`, its README and the docs name every procedure the project offers (PROCS + BUILD_PROCS),
+    and each one exists in the unit the table names (ecadlib_build.pas came with the native build)."""
+    assert AM.procedures() == ["AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue", "BuildLibrariesInAltium", "BuildLibraries(Folder)"]
+    units = {AM.UNIT: AM.pas_text(), AN.UNIT: AN.pas_text()}
+    for p, unit, _ in [(p, AM.UNIT, d) for p, _, d in AM.PROCS] + AM.BUILD_PROCS:
+        name, end = p.split("(")[0], r"\(" if "(" in p else ";"
+        assert re.search(rf"(?m)^Procedure {name}{end}", units[unit]), (p, unit)
+    d = _tmp()
+    rc, out = _quiet(AM.main, ["build", "--out", str(d / "m")])
+    readme = (d / "m" / AM.README).read_text()
+    for p in AM.procedures():
+        assert p in out and p in readme and p in AM.__doc__ and p in AM.pas_text(), (p, out)
+    assert "now lists AddPartFromMPN, CheckProjectBOM, OpenReviewQueue, BuildLibrariesInAltium:" in readme, readme
+
+
 def test_build_writes_well_formed_files():
     d = _tmp()
     out = d / "menu dir"
@@ -506,6 +522,33 @@ def test_check_bom_report_offer_and_fill():
     assert r["status"] == "error" and "no such file" in r["message"] and r["fix"].startswith("save the project")
 
 
+def test_check_bom_says_why_lines_were_not_checked():
+    """Lines with no part number are counted as such, and an unverified line is 'offline' only when the run was
+    offline: online it is a source that refused or could not be reached (it once read 'offline: 26' online)."""
+    from ecadlib.app import Workspace
+    d = _tmp()
+    _, cfg = _setup(d)
+    bom = d / "bom.csv"
+    bom.write_text("Designator,Qty,MPN\nR1,1,\n", encoding="utf-8")
+    un = "unverified (source unreachable)"
+    rows = [{"line": 1, "mpn": "", "lcsc": "", "status": un}, {"line": 2, "mpn": "", "lcsc": "", "status": un},
+            {"line": 3, "mpn": "TPS62162DSGR", "lcsc": "", "status": un},
+            {"line": 4, "mpn": "", "lcsc": "C25804", "status": "available_easyeda"},
+            {"line": 5, "mpn": "X1", "lcsc": "", "status": "dnp (not fitted)"}]
+
+    def fake(self, bom, progress=None, **kw):
+        (self.root / "reports").mkdir(parents=True, exist_ok=True)
+        (self.root / "reports" / "triage_bom.md").write_text("x", encoding="utf-8")
+        return {"rows": [{"designator": "", "qty": 1, "manufacturer": "", "notes": "", **r} for r in rows],
+                "reports": ["reports/triage_bom.md"]}
+    for offline, label in ((False, "source refused/unreachable"), (True, "could not check (offline)")):
+        with mock.patch.object(Workspace, "triage", fake):
+            r = AM.check_bom({**cfg, "offline": offline}, str(bom), opener=False)
+        shown = [r[f"row{i}"] for i in range(1, int(r["rows"]) + 1)]
+        assert shown == ["already in your library|0|1", "a source can supply|1|0", "no part number|2|0",
+                         f"{label}|1|0", "not fitted|1|0"], (offline, shown)
+
+
 def test_dialog_results_rows_and_reports():
     """With dialog=1 (the ecadlib dialog) a BOM check opens nothing: the dialog shows the counts and opens the report
     on request (action=open, files in the workspace only). Each result carries the big line and the rows."""
@@ -655,7 +698,7 @@ def test_cli_workspace_and_mcp():
     ws = Workspace(d / "ws2", offline=True)
     rep = M.call_tool(ws, "altium_menu", {"win_dir": "D:\\ws2\\altium_menu"})
     assert rep["problems"] == [] and rep["menu_file"] == AM.PREFS and rep["folder"] == "altium_menu"
-    assert set(rep["procedures"]) == {"AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue"}
+    assert rep["procedures"] == AM.procedures() and rep["menu_entries"] == ["AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue"]
     c = AM.load_config(ws.root / "altium_menu" / AM.INI)
     assert c["workspace"].resolve() == ws.root and c["library"].resolve() == ws.root / "altium_library"
     assert "altium_menu" in {t["name"] for t in M.TOOLS}

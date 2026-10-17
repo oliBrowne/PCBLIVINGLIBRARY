@@ -363,6 +363,41 @@ def test_jlc_parse():
     assert j.part({"mpn": "", "manufacturer": "", "lcsc": ""}).error
 
 
+def test_lcsc_number_priced_directly_when_jlcpcb_search_refuses():
+    """Regression: JLCPCB answered 403 to every search, so lines that carry an LCSC number got no_answer. The C-number
+    is now asked of LCSC directly (EasyEDA product endpoint) and the line is priced."""
+    easy = {"success": True, "result": {"title": "0603WAF1002T5E", "description": "10k 1% 0603",
+            "dataStr": {"head": {"c_para": {"Manufacturer Part": "0603WAF1002T5E", "Manufacturer": "UNI-ROYAL",
+                                            "package": "0603"}}},
+            "lcsc": {"number": "C25804", "price": 0.0012, "min": 100, "step": 100, "stock": 5000000}}}
+
+    def refused(method, url, body):
+        if "jlcpcb.com" in url:
+            return 403, "Forbidden"
+        if "easyeda.com/api/products/C25804/" in url:
+            return 200, easy
+        if "easyeda.com" in url:
+            return 200, {"success": False, "result": None}
+        return 0, "no route"
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "bom.csv"
+        f.write_text("Designator,Qty,Value,Footprint,Manufacturer,MPN,LCSC\n"
+                     '"R1,R2",2,10k,R_0603,UNI-ROYAL,0603WAF1002T5E,C25804\n'
+                     "R3,1,1k,R_0603,UNI-ROYAL,0603WAF1001T5E,C99999\n"
+                     "U9,1,X,SOIC-8,Nobody,NOLCSC123,\n")
+        lines = T.read_bom(f)[0]
+    http = Router(refused)
+    rows, _ = S.source_bom(lines, [S.JLCSourcing(http)], 10, "USD")
+    r = rows[0]
+    assert r["answered"] and "no_answer" not in r["flags"], r
+    c = r["chosen"]
+    assert (c["distributor"], c["sku"], c["order_qty"], c["ext"]) == ("LCSC", "C25804", 100, 0.12), c
+    assert r["manufacturer"] == "UNI-ROYAL" and "no_stock" not in r["flags"]
+    assert sum("jlcpcb.com" in x["url"] for x in http.calls) == 1               # refused once, not asked again
+    assert "not_found" in rows[1]["flags"] and "C99999 not listed" in " ".join(rows[1]["notes"]), rows[1]
+    assert "no_answer" in rows[2]["flags"] and not any("easyeda" in x["url"] for x in http.calls if "NOLCSC" in x["url"])
+
+
 def test_merge_dedupes_direct_and_nexar_offers():
     a = S.PartInfo("nexar", True, "X", "M", lifecycle="active", offers=[S.Offer("nexar", "Digi-Key Electronics", "1-ND", 5),
                                                                         S.Offer("nexar", "Arrow", "A1", 9)])

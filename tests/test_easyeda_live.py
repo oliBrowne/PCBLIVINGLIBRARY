@@ -47,3 +47,14 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+def test_manufacturer_drops_the_chinese_alias():
+    # real EasyEDA answers name the maker "TI(德州仪器)"; the library wants "TI"
+    from ecadlib import providers as P
+    for lcsc, *_ in PARTS:
+        assert P.parse_easyeda(_load(lcsc), P.SourceResult("easyeda")).manufacturer == "TI", lcsc
+    assert P.clean_maker("YAGEO(国巨)") == "YAGEO" and P.clean_maker("YAGEO（国巨）") == "YAGEO"
+    assert P.clean_maker("Murata Electronics (村田)") == "Murata Electronics"
+    assert P.clean_maker("德州仪器") == "德州仪器"                          # only a Chinese name: kept
+    assert P.clean_maker("Amphenol (FCI)") == "Amphenol (FCI)"          # a Latin alias is part of the name

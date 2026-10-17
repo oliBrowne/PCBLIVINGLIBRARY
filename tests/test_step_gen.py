@@ -80,6 +80,46 @@ def test_footprint_names():
     assert S.generate("SOIC-8_3.9x4.9mm_P1.27mm", 1.5)[1]["bbox"][5] == 1.5       # caller height wins
 
 
+EASYEDA = ["SOIC-8_L5.0-W4.0-P1.27-LS6.0-BL", "SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL", "SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR",
+           "SOT-23-5_L3.0-W1.7-P0.95-LS2.8-BR", "TSSOP-20_L6.5-W4.4-P0.65-LS6.4-BL", "ESOP-8_L4.9-W3.9-P1.27-LS6.0-BL-EP",
+           "LQFP-48_L7.0-W7.0-P0.50-LS9.0-BL", "QFN-32_L5.0-W5.0-P0.50-BL-EP3.4", "DFN-8_L3.0-W3.0-P0.65-BL-EP1.6x2.4",
+           "R0603", "C0402", "LED0603-RD", "R1206"]
+
+
+def test_easyeda_footprint_names():
+    """EasyEDA / LCSC footprint names (the 'Add part from MPN' path): dimensions read from the name, family height,
+    and the leads sit on the pads of the real EasyEDA footprints in tests/fixtures/easyeda*."""
+    from ecadlib import easyeda_convert as EC
+    for n in EASYEDA:
+        text, info = S.generate(n)
+        r = _ok(text, n)
+        x0, y0, _, x1, y1, z1 = r["bbox"]
+        m = S.EASYEDA.match(n)
+        if m and m.group(6):                                   # rows along x: lead span along y, L along x (not QFP: leads)
+            assert abs(y1 - y0 - float(m.group(6))) < 1e-6 and ("QFP" in n or abs(x1 - x0 - float(m.group(3))) < 0.5), (n, r["bbox"])
+        assert z1 == S.default_height(S.spec_from_name(n)) > 0, (n, z1)
+    assert S.generate("SOIC-8_L5.0-W4.0-P1.27-LS6.0-BL")[1]["height"] == 1.75 and S.generate("R0603")[1]["height"] == 0.45
+    assert S.spec_from_name("R0603")["body_length"]["nom"] == 1.6 and S.spec_from_name("C0805")["body_width"]["nom"] == 1.2
+    assert S.spec_from_name("R9999") is None and S.spec_from_name("SOT-89-3_L4.5-W2.5-P1.50-LS4.2-BR") is None
+    seen = set()
+    for f in sorted(Path(__file__).parent.glob("fixtures/easyeda*/*.json")):
+        pkg = (json.loads(f.read_text()).get("result") or {}).get("packageDetail") or {}
+        name = pkg.get("title") or ""
+        if not S.EASYEDA.match(name) or name in seen:
+            continue
+        seen.add(name)
+        fp, t = K.convert_footprint(EC.footprint_to_kicad(pkg.get("dataStr") or {}, name))
+        boxes = _solid_boxes(S.build(S.spec_from_name(name))[0])
+        for p in fp["pads"]:
+            b = boxes[f"pin {p['designator']}"]
+            cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+            assert abs(cx - p["x"]) < 1e-6 and abs(cy - p["y"]) < p["h"] / 2 + 0.6, (name, p["designator"], (p["x"], p["y"]), b)
+        notes = []                                             # kicad_import: a generated STEP, not the extruded box
+        K.add_body(fp, t, None, None, False, notes, gen_step=True)
+        assert fp["bodies"][0].get("step") and "generated STEP (gullwing" in notes[-1], notes
+    assert {"SOIC-8_L5.0-W4.0-P1.27-LS6.0-BL", "SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR"} <= seen, seen
+
+
 def _solid_boxes(solids):
     return {s.name: (min(v[0] for v in s.verts), min(v[1] for v in s.verts), max(v[0] for v in s.verts), max(v[1] for v in s.verts))
             for s in solids}
@@ -186,7 +226,8 @@ def test_librarian_embeds_generated_models():
             assert any(x.startswith("3D: generated STEP") for x in f["notes"]) and not S.check(data.decode())["errors"], (n, f["notes"])
             assert items[n]["release_check"]["height"] and not any(r.startswith("height") for r in items[n]["hold_reasons"]), items[n]
         assert any("datasheet height_max" in x for x in st["DSPART1"]["footprint"]["notes"])
-        assert any("extruded body" in x for x in st["EEPART1"]["footprint"]["notes"])          # unknown family: box
+        f = st["EEPART1"]["footprint"]                                                           # EasyEDA SOT-23-3_L2.9-W1.3-...
+        assert any(x.startswith("3D: generated STEP (gullwing") for x in f["notes"]), f["notes"]
     with tempfile.TemporaryDirectory() as d:                                                     # --box: old behaviour
         TL.run(d, gen_step=False)
         st = json.loads((Path(d) / "out" / "librarian_state.json").read_text())

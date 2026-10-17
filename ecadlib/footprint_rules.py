@@ -239,6 +239,9 @@ NUM = r"(\d+(?:\.\d+)?)"
 NUMBERED_PKG = re.compile(r"^((?:TSOT|SOT|TO|SOD|SC|DO|MO|HVSOF|SuperSOT|PowerDI|TDSON|TSDSON|DPAK|D2PAK|SMPA?|"
                           r"PG-TO|PG-HSOF|PG-DSO|PG-TSDSON)-\d{1,3}[A-Za-z]*)(?:-(\d+)(?:-(\d+))?(?:-(\d+)EP)?)?(?:_|$)")
 
+# module names whose trailing number is a variant (ESP32-S3-WROOM-1, ESP32-WROVER-E), not a pin count
+MODULE_NAME = re.compile(r"WROOM|WROVER|MODULE", re.I)
+
 
 def parse_name(name):
     """What a footprint name claims, as a dict: style ("klc" / "ipc"), family, pins, ep, mp, sh, pitch (tuple),
@@ -256,6 +259,9 @@ def parse_name(name):
             out.update(style="klc", family="chip", prefix=m.group(1), chip=(None, m.group(2)), pins=2)
     m = NUMBERED_PKG.match(name) or re.match(r"^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)*)-(\d+)(?:-(\d+))?"
                                               r"(?:-(\d+)EP)?(?:_|$)", name)
+    generic = m and m.re is not NUMBERED_PKG
+    if generic and (int(m.group(2)) < 2 or MODULE_NAME.search(m.group(1))):
+        m = None                    # ESP32-S3-WROOM-1: a module variant number, not a pin count
     if m and not out and m.group(2) and len(m.group(2)) <= 3 and not re.match(r"^\d{4}", m.group(2)):
         out.update(style="klc", family=m.group(1), pins=int(m.group(2)))
         if m.group(3) and int(m.group(3)) > int(m.group(2)):
