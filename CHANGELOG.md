@@ -11,6 +11,7 @@ a minor release may change command-line options and file formats.
 
 - Altium builds the libraries itself (`ecadlib/altium_native.py`, docs/altium-native.md): every `.PcbLib` / `.SchLib` ecadlib writes gets a `.ecadbuild` recipe, and a DelphiScript (`ecadlib_build.pas`) rebuilds them inside Altium with its own object API; `ecadlib altium-native write|compare` and a *Rebuild with Altium* step in `altium-pkg` (`--no-native-build` to skip). `compare` reads Altium's result back pad by pad and pin by pin.
 - The ecadlib menu in Altium lets Altium build the library files itself before it reinstalls the library: each job copies the parts' build recipes into the library folder and writes `ecadlib_build.txt`, and the menu calls `BuildLibraries` (`ecadlib_build.pas`, now part of the menu's script project). The dialog says when a library failed to build. `native_build=0` in `ecadlib_menu.ini` turns it off.
+- Altium footprints carry the designator on the assembly drawing too: KiCad's `${REFERENCE}` on F.Fab becomes a `.Designator` on Mechanical 13 (the `[layers] assembly` layer), and footprints without one get it centred on the body. `ecadlib parity` and the footprint check compare it between KiCad and Altium (#37).
 - `ecadlib sources-check` and a weekly `sources-canary` workflow: checks the unofficial EasyEDA / JLCPCB endpoints against known parts.
 
 ### Changed

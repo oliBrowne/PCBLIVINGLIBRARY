@@ -61,7 +61,8 @@ def test_generated_footprint_designator_and_comment():
         strict(path)
         q = AL.read_pcblib(path)[0]
         assert q["header_count"] == len(q["records"])
-        des, com = texts_of(path)
+        des, com, fab = texts_of(path)
+        assert (fab["text"], fab["layer"]) == (".Designator", AL.MECH13)        # ${REFERENCE} on F.Fab (#37)
         pads = [r for r in q["records"] if r["type"] == "pad"]
         top, bot = max(p["y"] + p["h"] // 2 for p in pads), min(p["y"] - p["h"] // 2 for p in pads)
         assert (des["text"], des["layer"], des["h"], des["w"], des["font"], des["just"]) == (".Designator", AL.TOP_OVERLAY, AL.mm(1), AL.mm(0.15), 1, 3)
@@ -73,23 +74,25 @@ def test_generated_footprint_designator_and_comment():
             ws = AL.parse_params(AL._blk(o.openstream(f"{q['storage']}/WideStrings").read(), 0)[0].rstrip(b"\0").decode())
         assert "".join(map(chr, map(int, ws["ENCODEDTEXT1"].split(",")))) == ".Comment" and com["ws"] == 1
         lib = __import__("pyaltiumlib").read(str(path))
-        assert sorted((r.text, r.layer) for r in lib.Parts[0].Records if type(r).__name__ == "PcbString") == [(".Comment", 69), (".Designator", 33)]
+        assert sorted((r.text, r.layer) for r in lib.Parts[0].Records if type(r).__name__ == "PcbString") == [(".Comment", 69), (".Designator", 33), (".Designator", 69)]
 
 
 def test_kicad_footprint_text_conversion():
     notes = []
     fp, _ = K.convert_footprint(KICAD8_FP, notes=notes)
-    (dt, dx, dy, dh, dw, drot, dl), (ct, cx, cy, ch, cw, crot, cl) = fp["texts"]
+    (dt, dx, dy, dh, dw, drot, dl), (ct, cx, cy, ch, cw, crot, cl) = [t for t in fp["texts"] if t[6] == AL.TOP_OVERLAY or t[0] == ".Comment"]
+    assert [(t[0], t[3], t[6]) for t in fp["texts"] if t[0] == ".Designator" and t[6] == AL.MECH13] == [(".Designator", 0.5, AL.MECH13)]
     assert (dt, dl, dh, dw, drot) == (".Designator", AL.TOP_OVERLAY, 0.8, 0.12, 90.0)
     assert dx == round(0.4, 4) and abs(dy - (2 - AL.CHAR_W * 0.8 * 1.5)) < 1e-4       # rotated anchor: left of / below centre
     assert (ct, cl, ch, cw, crot) == (".Comment", AL.MECH13, 1.0, 0.15, 0.0)          # 180 kept upright, default stroke
-    assert "1 user fp_text not converted" in notes and not any("2 fp_text" in n for n in notes)
+    assert not any("fp_text not converted" in n for n in notes) and any("${REFERENCE} on F.Fab" in n for n in notes)
     fp2, _ = K.convert_footprint((FIX / "USB_C_Receptacle_HRO_TYPE-C-31-M-12.kicad_mod").read_text())
-    assert [t[0] for t in fp2["texts"]] == [".Designator", ".Comment"] and fp2["texts"][0][2] > 0
+    fp2t = [t for t in fp2["texts"] if t[6] == AL.TOP_OVERLAY or t[0] == ".Comment"]
+    assert [t[0] for t in fp2t] == [".Designator", ".Comment"] and fp2t[0][2] > 0
     with tempfile.TemporaryDirectory() as d:
         path = AL.write_pcblib(Path(d) / "k.PcbLib", [fp])
         strict(path)
-        t = texts_of(path)[0]
+        t = next(r for r in texts_of(path) if r["layer"] == AL.TOP_OVERLAY)
         assert t["rot"] == 90.0 and (t["x"], t["y"]) == (AL.mm(dx), AL.mm(dy))
 
 

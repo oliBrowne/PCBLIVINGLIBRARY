@@ -132,7 +132,7 @@ def test_rotated_pad_slot_custom_and_arcs():
     assert arcs[0.15][3:6] == (0.0, 360.0, 0.3)                     # filled 0.25 mm circle + 0.1 stroke
     body = fp["bodies"][0]
     assert body["height"] == 2.0 and min(x for x, _ in body["pts"]) == -3.5   # fab outline incl. the poly arc
-    assert any("custom shape" in n for n in notes) and any("fp_text" in n for n in notes) and any("caller" in n for n in notes)
+    assert any("custom shape" in n for n in notes) and any("${REFERENCE} on F.Fab" in n for n in notes) and any("caller" in n for n in notes)
     with tempfile.TemporaryDirectory() as d:
         AL.write_pcblib(Path(d) / "t.PcbLib", [fp])
         got = AL.read_pcblib(Path(d) / "t.PcbLib")[0]

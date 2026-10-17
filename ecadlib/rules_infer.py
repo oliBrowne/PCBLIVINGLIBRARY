@@ -897,6 +897,8 @@ def infer_layers(lib):
                 votes["assembly"][l] += 1
                 asm.add(l)
         des = {l for t, l in f["texts"] if t == ".Designator"}
+        if len(des) > 1:                          # silk designator + the assembly drawing's one: the silk one is the role
+            des = {l for l in des if not 57 <= l <= 72} or des
         for l in des:
             votes["designator"][l] += 1
         have["designator"] += bool(des)

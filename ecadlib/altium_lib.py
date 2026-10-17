@@ -245,18 +245,27 @@ def text_rec(text, x, y, h, sw, layer, rot=0.0, ws=0, font=1, mirror=False, box=
     return b"\x05" + block(b) + sblock(text)
 
 
-KTEXT = {"reference": (".Designator", TOP_OVERLAY, 3), "value": (".Comment", MECH13, 8)}   # + nominal characters shown
+KTEXT = {"reference": (".Designator", TOP_OVERLAY, 3), "value": (".Comment", MECH13, 8),    # + nominal characters shown
+         "fabref": (".Designator", MECH13, 3)}     # user ${REFERENCE} on F.Fab: the assembly drawing's designator
+FAB_REF = ("${REFERENCE}", "%R")                    # KiCad 6+ / KiCad 5 reference variable in user text
+
+
+def _fab_ref(n):
+    """True for a KiCad user text that shows the reference on the fab layer (fp_text user "${REFERENCE}" ... F.Fab)."""
+    return (n[0] == "fp_text" and len(n) > 2 and str(n[1]) == "user" and str(n[2]) in FAB_REF
+            and str((sexpr.first(n, "layer") or [None, ""])[1]) in ("F.Fab", "B.Fab"))
 
 
 def texts_from_kicad(t):
-    """KiCad Reference / Value (fp_text or KiCad 8+ property) -> [(text, x, y, height, stroke, rot, layer)] in mm, y up:
-    .Designator on Top Overlay when KiCad has the reference on silk (F.SilkS / B.SilkS), else on Mechanical 13 with the
-    rest of the fab drawing (a Fab reference is assembly text, not silk), .Comment on Mechanical 13. KiCad centres text on (at); Altium anchors stroke text at
+    """KiCad Reference / Value (fp_text or KiCad 8+ property) and the fab ${REFERENCE} -> [(text, x, y, height, stroke,
+    rot, layer)] in mm, y up: .Designator on Top Overlay when KiCad has the reference on silk (F.SilkS / B.SilkS), else
+    on Mechanical 13 with the rest of the fab drawing (a Fab reference is assembly text, not silk), .Comment and the
+    ${REFERENCE} (a second .Designator) on Mechanical 13; at most one .Designator per layer. KiCad centres text on (at); Altium anchors stroke text at
     the bottom-left, so the anchor is moved left by half the estimated width (all of it for right-justified text) of a
     nominal designator (3 characters, "U12") or comment (8 characters) and down by half the height, rotated with the text."""
     out = []
     for n in list(sexpr.find(t, "fp_text")) + [p for p in sexpr.find(t, "property") if p[1] in ("Reference", "Value")]:
-        kind = n[1].lower()
+        kind = "fabref" if _fab_ref(n) else n[1].lower()
         if kind not in KTEXT or not sexpr.first(n, "at"):
             continue
         at, eff = sexpr.first(n, "at"), sexpr.first(n, "effects") or []
@@ -271,8 +280,43 @@ def texts_from_kicad(t):
             layer = MECH13
         a, dx, dy = math.radians(rot), -CHAR_W * h * chars * (0 if "left" in just else 1 if "right" in just else 0.5), -h / 2
         x, y = float(at[1]) + dx * math.cos(a) - dy * math.sin(a), -float(at[2]) + dx * math.sin(a) + dy * math.cos(a)
+        if any(o[0] == txt and o[6] == layer for o in out):      # Fab reference and ${REFERENCE}: keep the first
+            continue
         out.append((txt, round(x, 4), round(y, 4), h, float(th[1]) if th else round(0.15 * h, 3), rot, layer))
     return out
+
+
+def text_centre(txt, x, y, h, rot):
+    """Centre (mm, y up) of a stroke text written by texts_from_kicad / add_fab_designator from its bottom-left anchor:
+    the inverse of their nominal-width shift."""
+    chars = 3 if txt == ".Designator" else 8 if txt == ".Comment" else len(txt)
+    a, dx, dy = math.radians(rot), CHAR_W * h * chars / 2, h / 2
+    return x + dx * math.cos(a) - dy * math.sin(a), y + dx * math.sin(a) + dy * math.cos(a)
+
+
+def add_fab_designator(fp):
+    """fp with a .Designator on Mechanical 13 (the assembly layer) centred on the body, as KiCad's ${REFERENCE} on
+    F.Fab (rule book: reference on silk, designator on the assembly drawing). The body is the box round the
+    Mechanical 13 outline, else round the pads. Text height as footprint_gen: half the longer body side, 0.25-1 mm.
+    A footprint that already has one, or has no pads, comes back unchanged (the same dict)."""
+    texts = fp.get("texts") or []
+    if any(t[0] == ".Designator" and t[6] == MECH13 for t in texts) or not fp.get("pads"):
+        return fp
+    pts = [q for x1, y1, x2, y2, _, l in fp.get("tracks", []) if l == MECH13 for q in ((x1, y1), (x2, y2))]
+    pts += [q for r in fp.get("regions", []) if r[1] == MECH13 for q in r[0]]
+    pts += [(cx + s * r, cy + u * r) for cx, cy, r, _, _, _, l in fp.get("arcs", []) if l == MECH13 for s in (-1, 1) for u in (-1, 1)]
+    if not pts:
+        for p in fp["pads"]:
+            w, h = (p["h"], p["w"]) if round((p.get("rot") or 0) / 90) % 2 else (p["w"], p["h"])
+            pts += [(p["x"] - w / 2, p["y"] - h / 2), (p["x"] + w / 2, p["y"] + h / 2)]
+    x0, y0 = min(q[0] for q in pts), min(q[1] for q in pts)
+    x1, y1 = max(q[0] for q in pts), max(q[1] for q in pts)
+    h = math.floor(100 * min(1.0, max(0.25, 0.25 * max(x1 - x0, y1 - y0)))) / 100
+    rot = 90.0 if y1 - y0 > 1.5 * (x1 - x0) else 0.0          # along a tall body, as KiCad's generators do
+    a, dx, dy = math.radians(rot), -CHAR_W * h * 3 / 2, -h / 2
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    x, y = cx + dx * math.cos(a) - dy * math.sin(a), cy + dx * math.sin(a) + dy * math.cos(a)
+    return dict(fp, texts=list(texts) + [(".Designator", round(x, 4), round(y, 4), h, round(0.15 * h, 3), rot, MECH13)])
 
 
 def body_params(layer, height, model_id, checksum, standoff=0, step=None):
@@ -556,7 +600,7 @@ def write_pcblib(path, footprints, layers=None):
     library keeps them; None = ecadlib's layers (Mechanical 15 / 13, Top Overlay)."""
     from .fsutil import write_bytes_atomic
     path = Path(path)
-    fps = [remap_layers(fp, layers) for fp in footprints]
+    fps = [remap_layers(add_fab_designator(fp), layers) for fp in footprints]
     from . import altium_native as AN
     old = _pcblib_stamp(path)
     if old and path.read_bytes() == pcblib_bytes(fps, path.name, old):

@@ -40,7 +40,8 @@ from pathlib import Path
 from . import altium_lib as AL, sexpr
 
 TOL = {"position": 0.001, "size": 0.001, "drill": 0.001, "margin": 0.001, "rotation": 0.01, "corner": 1.0,
-       "courtyard": 0.005, "window": 0.002, "outline": 0.005, "coverage": 0.5}
+       "courtyard": 0.005, "window": 0.002, "outline": 0.005, "coverage": 0.5,
+       "text": 0.01}
 MODES = ("hold", "warn", "off")
 
 
@@ -320,6 +321,8 @@ def kicad_footprint(text):
                     pts += [(_f(s[1]), _f(s[2])), (_f(e[1]), _f(e[2]))]
     out["courtyard"] = _bbox(pts)
     out["models"] = [str(m[1]) for m in sexpr.find(t, "model")]
+    fab = [x for x in AL.texts_from_kicad(t) if x[0] == ".Designator" and x[6] == AL.MECH13]
+    out["fab_ref"] = (lambda c: (c[0], -c[1]))(AL.text_centre(*fab[0][:4], fab[0][5])) if fab else None
     return out
 
 
@@ -434,6 +437,10 @@ def altium_footprint(fp, courtyard=AL.MECH15):
     out["courtyard"] = _bbox(cy)
     out["bodies"] = sum(1 for r in recs if r["type"] == "body")
     out["embedded"] = len(fp.get("models") or [])
+    fab = [r for r in recs if r["type"] == "text" and r.get("text") == ".Designator"     # assembly-layer designator: any
+           and r.get("layer") not in (AL.TOP_OVERLAY, AL.BOTTOM_OVERLAY, AL.TOP, AL.BOTTOM)]   # layer but silk / copper
+    out["fab_designator"] = (lambda c: (c[0], -c[1]))(AL.text_centre(".Designator", _mm(fab[0]["x"]), _mm(fab[0]["y"]),
+                                                             _mm(fab[0]["h"]), fab[0]["rot"])) if fab else None
     return out
 
 
@@ -632,6 +639,15 @@ def compare_footprints(k, a, export=False, model_ok=None):
         _d(out, "error", "courtyard", "presence", ck, ca)
     elif ck and any(abs(p - q) > TOL["courtyard"] for p, q in zip(ck, ca)):
         _d(out, "error", "courtyard", "extent", ck, ca, "x0, y0, x1, y1 mm")
+    fk, fa = k.get("fab_ref"), a.get("fab_designator")
+    if "fab_designator" not in a:             # the other side is not an Altium footprint (EAGLE, EasyEDA Pro read-back)
+        pass
+    elif fk and not fa:                       # the assembly drawing's designator (KiCad ${REFERENCE} on F.Fab):
+        # a warning, so footprints older ecadlib wrote without one are not held
+        _d(out, "warn", "fab designator", "presence", "${REFERENCE} on F.Fab", "no .Designator on the assembly layer",
+           "an older ecadlib wrote this PcbLib; rebuild the footprint to add it")
+    elif fk and any(abs(p - q) > TOL["text"] for p, q in zip(fk, fa)):
+        _d(out, "warn", "fab designator", "centre", fk, fa, "x, y mm")
     has_a = a["bodies"] > 0 or a["embedded"] > 0
     if export:
         ok = [m for m, good in zip(k["models"], model_ok or [True] * len(k["models"])) if good]

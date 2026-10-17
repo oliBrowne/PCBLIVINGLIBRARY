@@ -361,7 +361,7 @@ def test_thin_layer_evidence_is_not_written():
         no_silk_ref = lambda warns: [w for w in warns if "no .Designator on Top / Bottom Overlay" in w]
         AL.write_pcblib(d / "f.PcbLib", [fp], RU.layers(rules))
         texts = [r for r in AL.read_pcblib(d / "f.PcbLib")[0]["records"] if r["type"] == "text"]
-        assert [r["layer"] for r in texts if r["text"] == ".Designator"] == [AL.TOP_OVERLAY], texts
+        assert [r["layer"] for r in texts if r["text"] == ".Designator"] == [AL.TOP_OVERLAY, RU.layer_id(rules["layers"]["assembly"])], texts
         _, warns, _ = RC.check_item(item, d, rules)
         assert not no_silk_ref(warns), warns
         # the old learned rules (designator on Mechanical 5): the release check now says so
