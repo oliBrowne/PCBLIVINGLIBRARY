@@ -8,7 +8,7 @@ KiCad library. It is free and open source. If you would rather not use a termina
 1. Download **ecadlib-setup-<version>.exe** from the
    [Releases page](https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases).
 2. Run it. It installs for your Windows account only, so it does not ask for an administrator password.
-   Windows may show "Windows protected your PC" because the installer is not code-signed yet: click
+   If Windows shows "Windows protected your PC" (builds made before code signing was set up), click
    **More info**, then **Run anyway**.
 3. At the end, leave **Start ecadlib now** ticked.
 
