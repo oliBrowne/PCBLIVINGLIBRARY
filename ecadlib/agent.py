@@ -162,7 +162,8 @@ def run_lock(ws, create=True):
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except ImportError:                     # Windows
                 import msvcrt
-                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                f.seek(0)                           # msvcrt locks bytes from the file position: "a+" starts at the end,
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)   # which moves once the pid is written: always byte 0
         except OSError:
             got = False
         else:
@@ -416,15 +417,20 @@ def upkeep_findings(ws, rules, now=None, log=None):
     """Default MAINTAIN step: upkeep.run on every librarian plan in the workspace; -> list of finding dicts."""
     from . import upkeep as UK
     ws = Path(ws)
-    found = []
+    found, runs = [], []
     for plan in sorted((ws / "librarian").glob("*/plan.json")):
         base = ws / "agent" / "upkeep" / plan.parent.name
         rep = UK.run(str(plan), None, base / "state", base / "upkeep", rules=rules,
-                     ctx=UK.Ctx(cache=ws / "http_cache"), now=stamp(now))
+                     ctx=UK.Ctx(cache=ws / "http_cache"), now=stamp(now), save=False)
+        runs.append((rep, base / "state"))
         items = read_json(plan, [])
         for sec in rep["checks"]:
             for c in sec["changes"]:
                 found.append(dict(c, check=sec["check"], plan=plan.relative_to(ws).as_posix(), _items=items))
+    # the state (what upkeep remembers as reported) is saved only once every plan was checked: a later plan that fails
+    # must not leave the earlier ones' findings remembered as seen but never returned (never queued, never reported)
+    for rep, state in runs:
+        UK.save_state(rep, state)
     return found
 
 
@@ -472,10 +478,13 @@ def _url(v):
 
 
 def pr_body(batch_id, items, link, t, removed=()):
+    from . import messages as M
+    sts = [((it.get("build") or {}).get("status")) for it in items if (it.get("build") or {}).get("status")]
     md = [f"# Library agent batch {_md(batch_id)}", "",
-          f"{len(items)} part(s) built by `ecadlib agent` ({_md(t)}). Check the pictures against the datasheet, then approve "
-          "or reject each part in the web UI's **Review queue** (or `ecadlib agent approve ID`). Approved parts are pushed "
-          "to Altium 365 by the agent; merging this PR only keeps the library files in git.", ""]
+          f"**{M.plural(len(items), 'part')} to review**" + (f" ({_md(M.counts(sts))})" if sts else "") + f", built {_md(t)}.", "",
+          "**Next:** compare each part's pictures with its datasheet, then **Approve** or **Reject** it in the review queue "
+          "(`ecadlib ui`, Review queue, or `ecadlib agent approve ID`). Approved parts are released to Altium 365 by the "
+          "agent; merging this PR only keeps the library files in git.", ""]
     for it in items:
         ch, b, pr = it.get("change") or {}, it.get("build") or {}, it.get("proof") or {}
         src = ch.get("source") or {}
@@ -485,8 +494,9 @@ def pr_body(batch_id, items, link, t, removed=()):
                + (f" in {_md(src.get('type'))} {_md(src.get('name') or src.get('ref'))}" if src else "")
                + (f": {_md(ch.get('detail'))}" if it.get("origin") == "upkeep" and ch.get("detail") else ""), ""]
         if b.get("part"):
-            md.append(f"Plan part {_md(b['part'])}: release check **{_md(b.get('status', '?'))}**; symbol from "
-                      f"{_md((b.get('source') or {}).get('symbol') or '-')}, footprint from {_md((b.get('source') or {}).get('footprint') or '-')}.")
+            md.append(f"Library part {_md(b['part'])}: **{_md(M.status_word(b.get('status', '?')))}**; symbol from "
+                      f"{_md(M.source_word((b.get('source') or {}).get('symbol')))}, footprint from "
+                      f"{_md(M.source_word((b.get('source') or {}).get('footprint')))}.")
             md.append("")
         elif b.get("action") == "none":
             md += [f"Nothing rebuilt: {_md(b.get('reason', ''))}", ""]
@@ -502,7 +512,7 @@ def pr_body(batch_id, items, link, t, removed=()):
                 md.append(f"| {cell(before)} | {cell(after)} |")
             md.append("")
         if pr:
-            md.append(f"**Proof:** {_md(pr.get('verdict', '?'))}" + (f" (score {pr['score']:.2f})" if isinstance(pr.get("score"), (int, float)) else "")
+            md.append(f"**Independent check:** {_md(pr.get('verdict', '?'))}" + (f" (score {pr['score']:.2f})" if isinstance(pr.get("score"), (int, float)) else "")
                       + (f": {_md(pr.get('reason'))}" if pr.get("reason") else "")
                       + (f" ({_md(pr['model'])})" if pr.get("model") and pr.get("verdict") != "skipped" else ""))
             if pr.get("findings"):
@@ -518,7 +528,8 @@ def pr_body(batch_id, items, link, t, removed=()):
         if pr.get("verdict") in ("doubt", "skipped"):
             doubts.insert(0, f"proof {pr['verdict']}: {pr.get('reason', '')}")
         if doubts:
-            md += ["**Doubts:**", ""] + [f"- {_md(d)}" for d in dict.fromkeys(map(str, doubts))] + [""]
+            md += ["**Check before you approve:**", ""] + [f"- {_md(e['text'])} Next: {_md(e['fix'])}"
+                                                           for e in M.explain_all(dict.fromkeys(map(str, doubts)))] + [""]
     if removed:
         md += ["## Taken out of this PR", "", "These parts were rejected, failed or moved to another batch; their files "
                "and pictures were removed from this branch:", ""]
@@ -737,10 +748,12 @@ def close_batch(ws, rules, batch_id, members, now=None, env=None, session=None, 
             if gh is None:
                 raise RuntimeError(f"PR not updated: {why}")
             gitlab = getattr(gh, "kind", "") == "gitlab"
-            if gitlab:
-                gh.comment_mr(rec["pr_number"], text)
-            else:
-                gh.api("POST", f"issues/{rec['pr_number']}/comments", {"body": text})
+            if not rec.get("commented"):                 # a close that fails after it is retried without a 2nd comment
+                if gitlab:
+                    gh.comment_mr(rec["pr_number"], text)
+                else:
+                    gh.api("POST", f"issues/{rec['pr_number']}/comments", {"body": text})
+                rec["commented"] = stamp(now)
             if not pushed:                               # a PR holding pushed parts is never closed by the agent
                 if gitlab:
                     gh.close_mr(rec["pr_number"])
@@ -1330,6 +1343,7 @@ def main(argv=None):
     s.add_argument("--lib", action="append", default=[])
     st = sub.add_parser("status", help="last run, queue counts, batches")
     st.add_argument("--healthy", type=float, metavar="SECONDS", help="exit 1 unless the status was written within SECONDS")
+    st.add_argument("--json", action="store_true", help="print status.json + queue counts + batches as JSON")
     for name in ("approve", "reject"):
         p = sub.add_parser(name, help=f"{name} a review-queue item")
         p.add_argument("id")
@@ -1352,7 +1366,11 @@ def main(argv=None):
         return 0
     if a.cmd == "status":
         stt = status(ws)
-        print(json.dumps(stt, indent=2, default=str))
+        if a.json:
+            print(json.dumps(stt, indent=2, default=str))
+        else:
+            from .term_views import agent_status
+            agent_status(stt, a.workspace)
         if a.healthy is not None:
             hb = _epoch(stt.get("heartbeat"))
             return 0 if hb and time.time() - hb <= a.healthy else 1
@@ -1370,7 +1388,7 @@ def main(argv=None):
             print(f"error: {e.args[0] if e.args else e}", file=sys.stderr)
             return 2
         ap_ = r.get("approval")
-        print(f"{a.id}: {r['item']['status']}" + (f"; approvals.py: {'recorded' if ap_['recorded'] else ap_['reason']}" if ap_ else ""))
+        print(f"{a.id}: {r['item']['status']}" + (f"; sign-off: {'recorded' if ap_['recorded'] else ap_['reason']}" if ap_ else ""))
         return 0
     rep = push_approved(ws, rules, a.dry_run)
     print(json.dumps(rep, indent=2, default=str))

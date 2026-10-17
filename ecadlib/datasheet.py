@@ -108,7 +108,8 @@ def page_limit(model):
 def worst_usd(model, tin, max_out, cache_write=1.0, mult=1.0, fallback=False):
     """Worst-case USD of one request: every output token used, plus a full re-run on a fallback model when
     fallbacks are on. None when the model has no known price."""
-    pin, pout = price_of(model) or (None, None)
+    from .ds_route import prices                      # price_of + the long-prompt tier (Haiku 5.5 over 100K tokens)
+    pin, pout = prices(model, tin) or (None, None)
     if pin is None:
         return None
     usd = (tin * cache_write * pin + max_out * pout) / 1e6 * mult
@@ -257,8 +258,11 @@ class Client:
             if h.get("anthropic-beta"):
                 rec["beta"] = h["anthropic-beta"]
             try:
-                r = (requests.post(url, headers=h, json=body, timeout=self.timeout) if method == "POST"
-                     else requests.get(url, headers=h, timeout=self.timeout))
+                from .term import waiting            # "waiting on Claude (model call)  12 s" on the terminal
+                with waiting("Claude (model call)" if method == "POST" and "/messages" in url and "batches" not in url
+                             else "Claude API"):
+                    r = (requests.post(url, headers=h, json=body, timeout=self.timeout) if method == "POST"
+                         else requests.get(url, headers=h, timeout=self.timeout))
             except requests.RequestException as e:
                 err = APIError(f"API request failed: {type(e).__name__}: {str(e)[:200]}", retryable=retry_on is None)
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))
@@ -362,6 +366,10 @@ def _strip(s):
         return [_strip(x) for x in s]
     if not isinstance(s, dict):
         return s
+    ref = s.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):   # the output schema has no $defs: inline the definition
+        d = {k: v for k, v in SCHEMA["$defs"][ref.split("/")[-1]].items() if k != "anyOf"}   # (required-only anyOf:
+        s = {**d, **{k: v for k, v in s.items() if k != "$ref"}}                           #  checked locally instead)
     out = {k: _strip(v) for k, v in s.items()
            if k not in ("pattern", "minimum", "maximum", "default", "exclusiveMinimum", "minItems", "maxItems")}
     if out.get("type") == "object" and "properties" in out:
@@ -452,7 +460,11 @@ def require_key(key=None, rules=None):
     """The API key: explicit, else the environment variable named by [datasheet] api_key_env (default
     ANTHROPIC_API_KEY), else ANTHROPIC_API_KEY. The key itself never goes in a rules file, log or cache."""
     var = settings(rules)["api_key_env"]
-    ai_var = ((rules or {}).get("ai") or {}).get("api_key_env") if isinstance(rules, dict) else None
+    ai = ((rules or {}).get("ai") or {}) if isinstance(rules, dict) else {}
+    # another provider's key ([ai] provider = openai ...) is never sent to the Claude API
+    ai_var = ai.get("api_key_env") if str(ai.get("provider") or "anthropic").strip().lower() == "anthropic" else None
+    if ai_var and var == SETTINGS["api_key_env"]:     # [datasheet] at its default: the [ai] key variable decides
+        var = ai_var
     key = key or os.environ.get(var) or (os.environ.get(ai_var) if ai_var else None) or os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         raise DatasheetError(f"{var} is not set: export your Claude API key to read datasheets "
@@ -886,14 +898,29 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None):
 
 
 def report(res):
+    """<part>.review.md: what was read and from where, what a person must check first, then the numbers to compare."""
+    from . import messages as M
     s, sym, side = res["spec"], res["symbol"], res["sidecar"]
-    out = [f"# {side['part']}: datasheet extraction review", "",
-           f"* Datasheet: {side['datasheet']}", f"* Model: {side['model']} (served by {side['model_served']})",
-           f"* Footprint spec: `{s['name']}.json`; symbol: `{sym['name']}.json`; provenance: `{sym['name']}.extraction.json`",
-           "* Page numbers are 1-based PDF page indices of the original file.", "",
-           f"## Needs review ({len(res['needs_review'])})", ""]
-    out += [f"- [ ] {r}" for r in res["needs_review"]] or ["Nothing failed the automatic checks. A person still has to compare the drawing."]
-    out += ["", "## Dimensions", "", "| field | label | printed | mm (min / nom / max) | page | figure |", "|---|---|---|---|---|---|"]
+    pins = len(sym.get("pins") or [])
+    page = (s.get("source") or {}).get("page")
+    fp = f"footprint {s['name']}" + (f" ({s['pitch']} mm pitch)" if isinstance(s.get("pitch"), (int, float)) else "")
+    cc = side.get("cross_check") or {}
+    out = [f"# {side['part']}: what the datasheet reader found", "",
+           f"**The {fp} and the symbol ({M.plural(pins, 'pin')}) were read from the datasheet"
+           + (f", drawing on page {page}" if page else "") + ".**", ""]
+    if cc.get("status") == "disagreed":
+        d = next((x for c in cc.get("checks") or [] for x in c.get("disagreed") or []), None)
+        other = next((c["source"] for c in cc.get("checks") or [] if c.get("disagreed")), "")
+        t, f = M.held("crosscheck.disagree", field=CC_LABEL(d["field"]) if d else "", first=d and d["first"],
+                      second=d and d["second"], other=other)
+        out += [f"Held: {t}", f"**Next:** {f}", ""]
+    else:
+        out += ["A person has to compare it with the datasheet before it is released; until then the part is held.", ""]
+    out += [f"## Check these first ({len(res['needs_review'])})", ""]
+    out += [f"- [ ] {M.explain(r)['text']}" for r in res["needs_review"]] or \
+        ["Nothing failed the automatic checks. Still compare the drawing with the numbers below."]
+    out += ["", "Page numbers are pages of the original PDF, counting from 1."]
+    out += ["", "## Dimensions to compare with the drawing", "", "| Dimension | Label | Printed | mm (min / nom / max) | Page | Figure |", "|---|---|---|---|---|---|"]
     for k, p in side["dimensions"].items():
         pr = " / ".join(f"{p['printed'].get(x, '-')}" for x in ("min", "nom", "max")) + f" {p['unit']}"
         mm = " / ".join(f"{p['mm'].get(x, '-')}" for x in ("min", "nom", "max"))
@@ -913,7 +940,16 @@ def report(res):
                 for i, a in enumerate(rt["attempts"], 1)]
     from . import crosscheck as CC
     out += CC.report_md(side.get("cross_check"))
+    out += ["", "## Details", "", f"* Datasheet: <{side['datasheet']}>" if str(side.get("datasheet", "")).startswith("http")
+            else f"* Datasheet: {Path(str(side.get('datasheet') or '-')).name}",
+            f"* Model: {side['model']} (served by {side['model_served']})",
+            f"* Files: footprint `{s['name']}.json`, symbol `{sym['name']}.json`, where each number came from `{sym['name']}.extraction.json`"]
     return "\n".join(out) + "\n"
+
+
+def CC_LABEL(field):
+    from . import crosscheck as CC
+    return CC.LABEL.get(field, field)
 
 
 def write(res, outdir):
@@ -1521,6 +1557,8 @@ class Reader:
             key = require_key(self.key if self.ep["provider"] == "anthropic" else LL.key_for(ep), self.rules)
 
             def send(body, _h=job["headers"]):
+                if body.get("model") != ep["model"]:     # a named endpoint's ref ('claude:...'): the API's model id
+                    body = dict(body, model=ep["model"])
                 try:
                     return call(_h, body, key)[1]
                 except DatasheetError as e:
@@ -1533,7 +1571,8 @@ class Reader:
         k = LL.key_for(ep)
         if not k:
             raise DatasheetError(LL.needs_key_message(ep))
-        cl = OpenAICompatClient(ep["base_url"], k, inf["prof"], log_file=self.log_file, say=self.say, sleep=self.sleep)
+        cl = OpenAICompatClient(ep["base_url"], k, inf["prof"], log_file=self.log_file, say=self.say, sleep=self.sleep,
+                                model=ep["model"])
         cl.sampling = inf.get("sampling") or {}      # temperature / seed where the model takes them (ecadlib.llm.sampling)
         return (lambda body: cl.messages(body, {})), cl
 
@@ -1590,6 +1629,8 @@ class Reader:
                 pages = len(j["prov"]["pages_sent"]) if j["prov"].get("pages_sent") else j["prov"].get("pages") or URL_PAGES
                 tin, how = pages * PAGE_TOKENS + 1500, f"rough: {pages} pages x {PAGE_TOKENS}"
             tin += len(json.dumps(output_schema())) // 4       # the output format (not in count_tokens): rough
+            from .ds_route import prices
+            pin, pout = prices(model, tin) or (None, None)     # the long-prompt tier where the model has one
             cw = 1.0 if batch else CACHE_WRITE
             cost = (tin * cw * pin + OUT_TOKENS * pout) / 1e6 * mult if pin else None
             worst = worst_usd(model, tin, j["body"]["max_tokens"], cw, mult, fallback=bool(j["body"].get("fallbacks")))
@@ -1751,7 +1792,9 @@ class Reader:
                     taken.add(cid)
                     ids[cid] = j["key"]
                     models[cid] = j.get("model") or self.model
-                    reqs.append({"custom_id": cid, "params": j["body"]})
+                    api_model = self.info(models[cid])["ep"]["model"]      # 'claude:x' (a named endpoint) -> 'x'
+                    reqs.append({"custom_id": cid, "params": j["body"] if j["body"]["model"] == api_model
+                                 else dict(j["body"], model=api_model)})
                 mark = {"fingerprint": hashlib.sha256(json.dumps([self.model, sorted(ids.items())]).encode()).hexdigest()[:24],
                         "at": time.time(), "n": len(reqs), "model": self.model, "requests": ids,
                         "parts": {c: j["name"] for c, j in zip(ids, chunk)}}
@@ -2003,6 +2046,8 @@ def ask_once(inf, headers, body, key, part, package, datasheet, offset):
     cl = None
     if inf["ep"]["provider"] == "anthropic":
         def send(b):
+            if b.get("model") != inf["ep"]["model"]:     # a named endpoint's ref ('claude:...'): the API's model id
+                b = dict(b, model=inf["ep"]["model"])
             try:
                 return call(headers, b, key)[1]
             except DatasheetError as e:
@@ -2011,7 +2056,7 @@ def ask_once(inf, headers, body, key, part, package, datasheet, offset):
                 return e.api_message
     else:
         from .llm.openai_compat import OpenAICompatClient
-        cl = OpenAICompatClient(inf["ep"]["base_url"], key, inf["prof"])
+        cl = OpenAICompatClient(inf["ep"]["base_url"], key, inf["prof"], model=inf["ep"]["model"])
         cl.sampling = inf.get("sampling") or {}
         send = lambda b: cl.messages(b, {})
 

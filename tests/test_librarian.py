@@ -201,7 +201,10 @@ def test_each_source_and_review():
         plan = json.loads((out / "plan.json").read_text())
         assert {i["name"]: i["status"] for i in plan} == {n: i["status"] for n, i in items.items()}
         rev = (out / "review.md").read_text()
-        assert "**DSPART1** (held)" in rev and "needs datasheet reader (no API key)" in rev and "**RES-0603-10k**" not in rev.split("## Needs a person")[1].split("## What")[0]
+        held = rev.split("## Held: fix these first")[1].split("\n## ")[0]
+        assert "### DSPART1 (held)" in held and "### RES-0603-10k" not in held, held
+        assert "The datasheet reader is not set up (no model API key)." in rev or "needs datasheet reader (no API key)" in rev
+        assert (out / "review.html").exists() and "DSPART1" in (out / "review.html").read_text()
         for f in ("review.csv", "release_check.md", "release_check.csv", "triage.md", "librarian_state.json"):
             assert (out / f).exists(), f
 

@@ -223,12 +223,12 @@ def _kicad_pin_name(s):
     return out
 
 
-def symbol_from_schlib(path, name, notes):
-    """First symbol of a .SchLib -> KiCad symbol tree (KiCad 8 syntax), via altium_lib.read_schlib."""
+def symbol_from_schlib(path, name, notes, pick=None):
+    """First symbol of a .SchLib (or the one named pick) -> KiCad symbol tree (KiCad 8 syntax), via altium_lib.read_schlib."""
     _, syms = AL.read_schlib(path)
     if not syms:
         raise ValueError(f"{path}: no symbol")
-    recs = syms[0]["records"]
+    recs = next((s for s in syms if pick and s["name"].upper() == pick.upper()), syms[0])["records"]
     comp = recs[0]
     v = lambda r, k: (int(r.get(k.upper(), 0) or 0) + int(r.get(k.upper() + "_FRAC", 0) or 0) / 100000) * 0.254
     xy = lambda r, a, b: (_num(v(r, a)), _num(v(r, b)))
@@ -455,9 +455,10 @@ def _custom_pads(recs):
     return custom, used
 
 
-def footprint_from_pcblib(path, name, notes):
-    """First footprint of a .PcbLib -> .kicad_mod text (KiCad 8), via altium_lib.read_pcblib."""
-    fp = AL.read_pcblib(path)[0]
+def footprint_from_pcblib(path, name, notes, pick=None):
+    """First footprint of a .PcbLib (or the one named pick) -> .kicad_mod text (KiCad 8), via altium_lib.read_pcblib."""
+    fps = AL.read_pcblib(path)
+    fp = next((f for f in fps if pick and f["name"].upper() == pick.upper()), fps[0])
     m = lambda u: _num(AL.to_mm(u))
     pt = lambda x, y: f"{m(x)} {m(-y)}"
     stroke = lambda w: f'(stroke (width {m(w) if w else "0.1"}) (type solid))'
@@ -566,6 +567,14 @@ def footprint_tree(text, name, lib, notes):
     return t, models
 
 
+def _local_model(src3d, fn, libs):
+    """A footprint's STEP in a local library folder (--lib): <lib>/**/<X>.3dshapes/<fn>, else None."""
+    if not src3d:
+        return None
+    d = Path(src3d).parent.name
+    return next((p for r in libs for p in sorted(Path(r).rglob(fn)) if p.parent.name == d and p.is_file()), None)
+
+
 def altium_model(pcblib, fpn, lib, shapes, taken, notes):
     """The 3D model of a footprint that has no KiCad (model ...): the STEP embedded in its .PcbLib, else a STEP extruded
     from its 3D body (outline, standoff and height), written to <lib>.3dshapes/. -> ((model ...) node, file name, how)
@@ -621,7 +630,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     plan_dir, lib = plan.parent, kname(name)
     from .rules import resolve
     rules = resolve(rules, plan_dir)
-    items = sorted(json.loads(plan.read_text()), key=lambda i: kname(i["name"]))
+    items = sorted(json.loads(plan.read_text(encoding="utf-8")), key=lambda i: kname(i["name"]))
     pretty, shapes = out / f"{lib}.pretty", out / f"{lib}.3dshapes"
     out.mkdir(parents=True, exist_ok=True)
     pretty.mkdir(exist_ok=True)
@@ -630,7 +639,9 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     for it in items:
         status = it.get("status", "ready")
         if status == "held" and not include_held:
-            rep["skipped"].append({"part": it["name"], "why": "held: " + "; ".join(it.get("hold_reasons", []))})
+            from . import messages as M        # "says": the same reasons in plain words, for dialogs (KiCad plugin)
+            rep["skipped"].append({"part": it["name"], "why": "held: " + "; ".join(it.get("hold_reasons", [])),
+                                   "says": [{k: e[k] for k in ("code", "text", "fix")} for e in M.explain_all(it.get("hold_reasons"))]})
             continue
         sname, notes = kname(it["name"]), []
         row = {"part": it["name"], "symbol_name": sname, "status": status, "symbol": None, "footprint": None, "notes": notes}
@@ -646,24 +657,30 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
             fnotes = []
             try:
                 if kmod:
-                    text, how = kmod.read_text(), f"{kmod.relative_to(plan_dir) if kmod.is_relative_to(plan_dir) else kmod}"
+                    text, how = kmod.read_text(encoding="utf-8"), f"{kmod.relative_to(plan_dir) if kmod.is_relative_to(plan_dir) else kmod}"
                 else:
                     text, how = footprint_from_pcblib(plan_dir / it["footprint"]["file"], fpn, fnotes), f"{it['footprint']['file']} converted back"
                 tree, models = footprint_tree(text, fpn, lib, fnotes)
                 body = sexpr.dumps(tree) + "\n"
                 sexpr.parse(body)
-                (pretty / f"{fpn}.kicad_mod").write_text(body)
+                (pretty / f"{fpn}.kicad_mod").write_text(body, encoding="utf-8")
                 for src3d, fn in models:
                     if fn in rep["models"]:
                         continue
                     data = None
+                    local = _local_model(src3d, fn, libs)
                     try:
-                        data = K.fetch(http, "kicad-packages3D", src3d) if src3d and http is not None else None
+                        data = K.fetch(http, "kicad-packages3D", src3d) if not local and src3d and http is not None else None
                     except IOError as e:
                         fnotes.append(f"3D {src3d}: {e}")
-                    if data:
+                    if local:                         # the model next to the footprint's own library (${KIPRJMOD}/...)
                         shapes.mkdir(exist_ok=True)
-                        (shapes / fn).write_text(data)
+                        if not (shapes / fn).is_file() or (shapes / fn).read_bytes() != local.read_bytes():
+                            (shapes / fn).write_bytes(local.read_bytes())
+                        rep["models"][fn] = str(local)
+                    elif data:
+                        shapes.mkdir(exist_ok=True)
+                        (shapes / fn).write_text(data, encoding="utf-8")
                         rep["models"][fn] = f"kicad-packages3D/{src3d}"
                         rep["kicad_content"] = True
                     elif (shapes / fn).is_file():     # put there by hand or by an earlier export: keep it
@@ -672,11 +689,26 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
                         rep["models"][fn] = None
                         fnotes.append(f"STEP {fn} not available offline: put it in {lib}.3dshapes/")
                 pcb = RC._path(plan_dir, it["footprint"].get("file"))
-                got = altium_model(pcb, fpn, lib, shapes, rep["models"], fnotes) if not models and pcb and pcb.is_file() else None
+                got = None
+                if models and not any(rep["models"].get(fn) for _, fn in models) and pcb and pcb.is_file():
+                    # no KiCad STEP to be had (e.g. a ${KIPRJMOD} path of a library not under --lib): the .PcbLib's
+                    # 3D model instead of a model path that points at nothing
+                    for _, fn in models:              # the KiCad model's own file name stays free for the real
+                        rep["models"].pop(fn, None)   # model (put there by hand, or fetched by a later online export)
+                    got = altium_model(pcb, fpn, lib, shapes, {**rep["models"], **{fn: True for _, fn in models}}, fnotes)
+                    if got:
+                        tree[:] = [x for x in tree if not (isinstance(x, list) and x and str(x[0]) == "model")]
+                        fnotes[:] = [n for n in fnotes if "not available offline" not in n]
+                        fnotes.append(f"3D: the KiCad model {', '.join(fn for _, fn in models)} is not available; {got[2]} instead")
+                    else:
+                        for _, fn in models:
+                            rep["models"][fn] = None
+                elif not models and pcb and pcb.is_file():
+                    got = altium_model(pcb, fpn, lib, shapes, rep["models"], fnotes)
                 if got:                       # no KiCad model: the Altium one, so both libraries have the part in 3D
                     tree.append(got[0])
                     body = sexpr.dumps(tree) + "\n"
-                    (pretty / f"{fpn}.kicad_mod").write_text(body)
+                    (pretty / f"{fpn}.kicad_mod").write_text(body, encoding="utf-8")
                     rep["models"][got[1]] = got[2]
                 elif not models:
                     fnotes.append("no 3D model (no KiCad model and no 3D body in the .PcbLib)")
@@ -711,7 +743,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
             symbols[sname] = sym
             row["symbol"] = how
             if row["footprint"]:
-                pads = {p[1] for p in sexpr.find(sexpr.parse((pretty / f"{row['footprint']}.kicad_mod").read_text()), "pad") if p[1]}
+                pads = {p[1] for p in sexpr.find(sexpr.parse((pretty / f"{row['footprint']}.kicad_mod").read_text(encoding="utf-8")), "pad") if p[1]}
                 missing = sorted(_pins(sym) - pads)
                 if missing:
                     notes.append(f"symbol pins without a pad in {row['footprint']}: {', '.join(missing)}")
@@ -723,7 +755,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     text = sexpr.dumps(tree) + "\n"
     parsed = sexpr.parse(text)
     assert [s[1] for s in sexpr.find(parsed, "symbol")] == sorted(symbols)
-    (out / f"{lib}.kicad_sym").write_text(text)
+    (out / f"{lib}.kicad_sym").write_text(text, encoding="utf-8")
     for old in pretty.glob("*.kicad_mod"):    # a re-export drops files no longer in the plan
         if old.stem not in fps:
             old.unlink()
@@ -735,11 +767,45 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     for kind, table, uri in (("sym", "sym_lib_table", f"{lib}.kicad_sym"), ("fp", "fp_lib_table", f"{lib}.pretty")):  # export) stay
         add_lib_row(out / f"{kind}-lib-table", lib, f"${{KIPRJMOD}}/{uri}", desc, "KiCad", table)
     if rep["kicad_content"]:
-        (out / "NOTICE.txt").write_text(KICAD_NOTICE)
+        (out / "NOTICE.txt").write_text(KICAD_NOTICE, encoding="utf-8")
     rep["footprints"] = {k: fps[k] for k in sorted(fps)}
     rep["symbols"] = len(symbols)
-    (out / "kicad_export.json").write_text(json.dumps(rep, indent=2) + "\n")
+    (out / "kicad_export.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
     return rep
+
+
+def print_result(rep, out, plan, t=None):
+    """Terminal view of an export: a row per part (-v: with the conversion notes), skipped parts with the reason in
+    plain words, errors, then the summary (what was written, how to add it in KiCad)."""
+    from . import messages as M, term as TM
+    t = t or TM.Term()
+    rows = []
+    for r in rep["parts"]:
+        rows.append([t.status("ready" if r["symbol"] else "failed", "written" if r["symbol"] else "failed"),
+                     r["symbol_name"], r["footprint"] or "-"])
+        if t.verbose:
+            rows += [["", "", t.dim(n)] for n in r["notes"]]
+    for s in rep["skipped"]:
+        e = M.explain(str(s["why"]).removeprefix("held: "))
+        rows.append([t.status("held", "skipped"), s["part"], e["text"]])
+    t.table(rows)
+    if t.verbose:
+        for fpn, f in rep["footprints"].items():
+            for n in f["notes"]:
+                t.write(t.dim(f"  {fpn}: {n}"))
+    for e in rep["errors"]:
+        t.err.error("kicad-export", M.clean(str(e)), "run again with -v to see which part; --debug for details")
+    steps = sum(1 for v in rep["models"].values() if v)
+    lib = rep["library"]
+    head = (f"{M.plural(rep['symbols'], 'symbol')}, {M.plural(len(rep['footprints']), 'footprint')}, "
+            f"{steps}/{len(rep['models'])} 3D models written"
+            + (f"; {M.plural(len(rep['skipped']), 'held part')} left out (--include-held adds them)" if rep["skipped"] else ""))
+    t.summary(head, written=[(f"{out}/{lib}.kicad_sym", "symbols"), (f"{out}/{lib}.pretty/", "footprints"),
+                             (f"{out}/sym-lib-table, fp-lib-table", "library tables (paths use ${KIPRJMOD})")],
+              next=[(f"cp -r {out}/* <your KiCad project folder>/", "then reopen the project; or add the library in "
+                     "Preferences > Manage Symbol / Footprint Libraries"),
+                    (f"ecadlib parity {plan} --kicad {out}", "check KiCad and Altium agree, part by part")]
+              + ([(f"ecadlib review {plan}", "the held parts")] if rep["skipped"] else []))
 
 
 def main(argv=None):
@@ -759,22 +825,7 @@ def main(argv=None):
     if a.json:
         print(json.dumps(rep, default=str))
         return 1 if rep["errors"] else 0
-    for r in rep["parts"]:
-        print(f"  {r['symbol_name']:<28} fp={r['footprint'] or '-':<40} sym={r['symbol'] or 'FAILED'}")
-        for n in r["notes"]:
-            print(f"      {n}")
-    for fpn, f in rep["footprints"].items():
-        for n in f["notes"]:
-            print(f"  {fpn}: {n}")
-    for s in rep["skipped"]:
-        print(f"  skipped {s['part']}: {s['why'][:120]}")
-    for e in rep["errors"]:
-        print(f"  ERROR {e}")
-    print(f"{rep['symbols']} symbols, {len(rep['footprints'])} footprints, {sum(1 for v in rep['models'].values() if v)}/{len(rep['models'])} STEP models "
-          f"-> {Path(a.out) / (rep['library'] + '.kicad_sym')}; {len(rep['skipped'])} held parts skipped")
-    print(f"wrote {Path(a.out)}/: {rep['library']}.kicad_sym, {rep['library']}.pretty/, sym-lib-table, fp-lib-table "
-          f"(the tables use ${{KIPRJMOD}}: copy this folder's contents into your KiCad project folder, or add the library "
-          f"in Preferences > Manage Symbol / Footprint Libraries)")
+    print_result(rep, Path(a.out), a.plan)
     return 1 if rep["errors"] else 0
 
 

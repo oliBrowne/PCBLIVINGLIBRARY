@@ -69,7 +69,8 @@ TOOLS = [
                     "libraries, then EasyEDA, then the datasheet reader), write the Altium .SchLib/.PcbLib models and "
                     "the release plan, and run the release check. Slow (minutes for a big BOM); finished parts are "
                     "skipped on a re-run unless refresh is set. Returns ready/held counts and a review row per part "
-                    "saying what still needs a person.",
+                    "saying what still needs a person: `says` holds each reason as a plain sentence (`text`) and the "
+                    "next step (`fix`); show those to the user, keep `code` for logic.",
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"},
                                     "sources": {"type": "array", "items": {"type": "string", "enum": ["kicad", "easyeda", "standard", "datasheet"]},
@@ -88,7 +89,8 @@ TOOLS = [
                                     "unallow": {"type": "array", "items": {"type": "string"}}}}},
     {"name": "held_parts",
      "description": "List the parts the release check held in the librarian's plan for a BOM: what is missing (symbol, "
-                    "footprint) and why each is held. Use part_candidates / choose_part to fix one.",
+                    "footprint) and why each is held: `reasons` has a plain sentence (`text`) and the next step (`fix`) "
+                    "per reason, to show the user as written. Use part_candidates / choose_part to fix one.",
      "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "part_candidates",
      "description": "Ranked symbol or footprint candidates for one plan part (official KiCad library, the indexed local "
@@ -186,6 +188,11 @@ TOOLS = [
                     "source (the standard package table, or a second read of only the critical numbers) and the outcome: "
                     "agreed, disagreed (held, with both values), unchecked or skipped. Sends nothing.",
      "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
+    {"name": "library_parts",
+     "description": "A BOM's library plan part by part, in plain words: ready, held (each reason as a sentence plus the "
+                    "next step) or waiting for sign-off; the cross-check and KiCad/Altium results with both values when "
+                    "they disagree; the datasheet link and page; what the datasheet reads cost and which model. No network.",
+     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "build_altium_models",
      "description": "Write the Altium .PcbLib files for a BOM's footprints that are in the KiCad libraries, plus generic "
                     "Resistor/Capacitor .SchLib symbols, into the workspace altium_models/ folder.",
@@ -241,6 +248,35 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["project"],
                      "properties": {"project": {"type": "string", "description": "path to the .PrjPcb or .SchDoc"},
                                     "variant": {"type": "string"}}}},
+    {"name": "library_hub",
+     "description": "The whole parts library across tools: every part once (your libraries from --lib / [hub] libraries "
+                    "plus the parts ecadlib built), with a cell per tool (altium, altium365, kicad, fusion, easyeda): "
+                    "missing, same, present, different (pads, pins or value differ from the newest copy) or behind "
+                    "(different and older by [hub] stale_days). Each row has last changed, by whom, lifecycle, where-used "
+                    "count and flags. Filter with have / lack (tools), states, flags. Read-only.",
+     "inputSchema": {"type": "object",
+                     "properties": {"q": {"type": "string", "description": "words in name, MPN, maker or description"},
+                                    "have": {"type": "array", "items": {"type": "string"}, "description": "only parts in these tools"},
+                                    "lack": {"type": "array", "items": {"type": "string"}, "description": "only parts missing from these tools"},
+                                    "states": {"type": "array", "items": {"type": "string", "enum": ["missing", "same", "present", "different", "behind"]}},
+                                    "flags": {"type": "array", "items": {"type": "string", "enum": ["different", "behind", "held", "awaiting_approval", "eol", "duplicate"]}},
+                                    "tool": {"type": "string", "description": "one tool's library only (its copies, which file each is in)"},
+                                    "project": {"type": "string", "description": "only parts a project uses (a path from project_list)"},
+                                    "page": {"type": "integer"}, "size": {"type": "integer"}}}},
+    {"name": "library_hub_copy",
+     "description": "Copy parts to another tool through the library hub: Altium (SchLib/PcbLib) -> KiCad or KiCad "
+                    "(.kicad_sym/.kicad_mod) -> Altium, converted into <workspace>/hub/library. With a project from "
+                    "library_hub's project_list, the library is also imported there (KiCad lib tables or the .PrjPcb). "
+                    "The user's own library files are not edited. Writes files: ask the user first.",
+     "inputSchema": {"type": "object", "required": ["keys", "tool"],
+                     "properties": {"keys": {"type": "array", "items": {"type": "string"}, "description": "part keys from library_hub"},
+                                    "tool": {"type": "string", "enum": ["altium", "kicad"]},
+                                    "project": {"type": "string"}}}},
+    {"name": "library_hub_part",
+     "description": "One part of the library hub: every tool's copy (file, symbol, footprint, last changed, by whom, what "
+                    "differs and from which copy), sources, release check, sign-offs, where-used, lifecycle, history and "
+                    "the fixes on offer. key comes from library_hub rows.",
+     "inputSchema": {"type": "object", "required": ["key"], "properties": {"key": {"type": "string"}}}},
     {"name": "where_used",
      "description": "Scan folders of Altium projects and report where each part is used (project, designators, quantity, "
                     "revision, variants where it is not fitted), with flags: parts missing from the library, library parts "
@@ -458,6 +494,8 @@ def call_tool(ws, name, args):
             return r
         if name == "cross_checks":
             return ws.cross_checks(args["bom"])
+        if name == "library_parts":
+            return ws.library_parts(args["bom"], pictures=False)
         if name == "build_altium_models":
             return ws.build_altium_models(args["bom"])
         if name == "altium365_plan":
@@ -484,6 +522,16 @@ def call_tool(ws, name, args):
             return ws.agent_run(args.get("dry_run", True) is not False)
         if name == "project_bom":
             return ws.project_bom(args["project"], args.get("variant") or None)
+        if name == "library_hub":
+            return ws.hub(args.get("q") or "", args.get("have") or (), args.get("lack") or (), args.get("states") or (), "",
+                          args.get("flags") or (), "name", args.get("page") or 1, args.get("size") or 100, False,
+                          args.get("tool") or "", "", args.get("project") or "")
+        if name == "library_hub_copy":
+            return ws.hub_copy(args["keys"], args["tool"], args.get("project") or "")
+        if name == "library_hub_part":
+            p = ws.hub_part(args["key"])
+            return {k: v for k, v in p.items() if k not in ("pictures", "symbol")} | {
+                "pictures": [{k: v for k, v in x.items() if k != "svg"} for x in p["pictures"]]}
         if name == "where_used":
             return ws.where_used(args["projects"], args.get("part") or None, args.get("plan") or None)
         if name == "agent_watch_scan":
@@ -528,6 +576,22 @@ def call_tool(ws, name, args):
     raise KeyError(f"unknown tool {name}")
 
 
+def _arg_errors(tool, args):
+    """The arguments checked against the tool's inputSchema: '' when they fit, else one line per problem. A string
+    given for a list (a small model's usual slip) becomes a one-item list first, comma-split for a list of names."""
+    import jsonschema
+    for k, sch in tool["inputSchema"].get("properties", {}).items():
+        types = [sch] + list(sch.get("anyOf", []))
+        if isinstance(args.get(k), str) and any(t.get("type") == "array" for t in types) \
+                and not any(t.get("type") == "string" for t in types):
+            arr = next(t for t in types if t.get("type") == "array")
+            enum = (arr.get("items") or {}).get("enum")
+            args[k] = [x.strip() for x in args[k].split(",") if x.strip()] if enum else [args[k]]
+    v = jsonschema.Draft7Validator(tool["inputSchema"])
+    errs = sorted(v.iter_errors(args), key=lambda e: list(e.path))
+    return "; ".join(f"{'.'.join(map(str, e.path)) or '(arguments)'}: {e.message}" for e in errs[:5])
+
+
 def handle(ws, msg):
     """Return a JSON-RPC response dict, or None for notifications."""
     if not isinstance(msg, dict) or not isinstance(msg.get("params", {}), (dict, type(None))):
@@ -553,6 +617,10 @@ def handle(ws, msg):
         missing = [k for k in tool["inputSchema"].get("required", []) if k not in (params.get("arguments") or {})]
         if missing:
             return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"missing argument(s): {', '.join(missing)}"}}
+        bad = _arg_errors(tool, params.get("arguments") or {})
+        if bad:                                           # e.g. a string where a list goes (it was used letter by letter):
+            return {"jsonrpc": "2.0", "id": mid,           # a tool error, so the model reads it and calls again
+                    "result": {"content": [{"type": "text", "text": f"invalid argument(s): {bad}"}], "isError": True}}
         try:
             out = call_tool(ws, params.get("name"), params.get("arguments") or {})
             result = {"content": [{"type": "text", "text": json.dumps(out, indent=1, default=str)}], "isError": False}
@@ -560,7 +628,11 @@ def handle(ws, msg):
             user_error = isinstance(e, (ValueError, KeyError, FileExistsError, FileNotFoundError, PermissionError))
             if not user_error:                            # a bug: keep the traceback; a wrong id / path is the caller's
                 traceback.print_exc(file=sys.stderr)
-            msg = (e.args[0] if isinstance(e, KeyError) and e.args else str(e)) if user_error else f"{type(e).__name__}: {e}"
+            if user_error:
+                msg = e.args[0] if isinstance(e, KeyError) and e.args else str(e)
+            else:                                         # one line what went wrong, one line what to do (shared voice)
+                from . import messages as M
+                msg = "\n".join(M.friendly_error(e))
             result = {"content": [{"type": "text", "text": msg}], "isError": True}
     else:
         return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}}
@@ -596,8 +668,8 @@ def serve(ws, inp, out):
                 traceback.print_exc(file=sys.stderr)
                 mid = msg.get("id") if isinstance(msg, dict) and isinstance(msg.get("id"), (str, int)) else None
                 resp = {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": f"internal error: {type(e).__name__}"}}
-        if resp is not None:
-            out.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
+        if resp is not None:                                # a lone surrogate (an undecodable file name) -> its \\u escape
+            out.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8", "backslashreplace"))
             out.flush()
 
 
