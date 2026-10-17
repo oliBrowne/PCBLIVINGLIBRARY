@@ -690,7 +690,11 @@ def adapt_schema():
 def _facts(it):
     text = " ".join([it.get("name") or "", it.get("description") or "", it.get("comment") or "",
                      (it.get("footprint") or {}).get("ref") or ""] + [str(p.get("value", "")) for p in it.get("parameters") or []])
-    return {n.replace(",", ".").lstrip("0") or "0" for n in NUM.findall(text)}
+    out = set()
+    for n in NUM.findall(text):
+        n = n.replace(",", ".")
+        out |= {n.lstrip("0") or "0"} | {x.lstrip("0") or "0" for x in n.split(".")}   # 4.7 also allows 4K7
+    return out
 
 
 def _new_numbers(old_facts, text):
