@@ -24,6 +24,8 @@ jobs:
           ver="$(python -c 'import ecadlib; print(ecadlib.__version__)')"
           [ "$tag" = "$ver" ] || { echo "::error::tag $GITHUB_REF_NAME but ecadlib.__version__ is $ver"; exit 1; }
           grep -q "^## \[$ver\] - " CHANGELOG.md || { echo "::error::CHANGELOG.md has no '## [$ver] - DATE' section"; exit 1; }
+      - name: pdftoppm for the visual-check tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
       - name: Run the test suite
         env:
           SOURCE_DATE_EPOCH: "1791936000"
