@@ -268,11 +268,13 @@ def _readback(path, kind, ref):
 
 
 def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=None, svn_url=None,
-         dry_run=False, base=None, runner=run_cmd, which=shutil.which, rules=None):
+         dry_run=False, base=None, runner=run_cmd, which=shutil.which, rules=None, overwrite_edits=False):
     """Bring <target_dir> in line with the plan. plan: a plan.json path, or its items (model paths absolute or
     relative to `base`). Returns {"results": [...], "written": [...], "removed": [...], "dblib": path, ...};
     results are {"name", "action", "detail", "table"} with action added/updated/up_to_date/held/skipped/error,
-    and not_in_plan/removed for rows (kind "row") and model files (kind "file") the plan no longer has."""
+    and not_in_plan/removed for rows (kind "row") and model files (kind "file") the plan no longer has.
+    A model file changed in Altium since ecadlib's copy was built there is left as it is (a note says so) unless
+    overwrite_edits (ecadlib.altium_native, <file>.ecadstate)."""
     if mode not in EXT:
         raise ValueError(f"mode must be one of {sorted(EXT)}")
     items = load_plan(plan) if isinstance(plan, (str, Path)) else plan
@@ -325,6 +327,12 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
             if dst.exists() and dst.read_bytes() == data:
                 if not dry_run:
                     AN.copy_recipe(src, dst)
+                continue
+            act = AN.replace_action(data, dst, overwrite_edits, save=not dry_run)
+            if act == "keep":                               # Altium's build of these same bytes: leave it
+                continue
+            if act == "edited":
+                notes.append(f"{rel} {AN.EDITED_NOTE}")
                 continue
             notes.append(f"{rel} {'updated' if dst.exists() else 'added'}")
             if not dry_run:
@@ -487,11 +495,14 @@ def main(argv=None):
     ap.add_argument("--commit", action="store_true", help="svn add/commit the changed files (needs svn on PATH and a working copy)")
     ap.add_argument("-m", "--message", default="ecadlib dblib-sync", help="svn commit message")
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
+    ap.add_argument("--overwrite-edits", action="store_true",
+                    help="replace library files someone changed in Altium since ecadlib's copy was built there")
     ap.add_argument("-o", "--out", help="write the JSON report here")
     ap.add_argument("--rules", help="library rules file: house parameter names (default: ecadlib.toml found from the plan)")
     a = ap.parse_args(argv)
 
-    out = sync(a.plan, a.to, "svndblib" if a.svn else "dblib", a.name, a.prune, a.win_dir, a.svn_url, a.dry_run, rules=a.rules)
+    out = sync(a.plan, a.to, "svndblib" if a.svn else "dblib", a.name, a.prune, a.win_dir, a.svn_url, a.dry_run, rules=a.rules,
+               overwrite_edits=a.overwrite_edits)
     from . import messages as M, term as TM
     t = TM.Term()
     rows = []

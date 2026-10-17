@@ -19,6 +19,14 @@ How it fits together:
      is then one Altium itself wrote. It writes ecadlib_build_report.txt: one line per library, OK or FAILED.
   4. `compare` reads those files back and checks them against the recipes (pad designators, positions, sizes,
      holes; pin numbers, names, positions, lengths): proof that what Altium built is what ecadlib meant.
+  5. Edits made in Altium are kept. Beside each library, <file>.ecadstate remembers the hash of the bytes ecadlib
+     wrote ("source") and of the file Altium built from them ("built"; taken the first time the file on disk differs
+     from ecadlib's bytes and still matches its recipe, i.e. after Altium's build). A library whose file is neither
+     is one someone changed in Altium: `write` leaves it out of ecadlib_build.txt and dblib-sync / altium-pkg do not
+     copy over it (they report it instead); `write --rebuild-all` / overwrite_edits=True replace it anyway. A library
+     Altium already built and ecadlib has not changed since is not rebuilt either. The state is kept where libraries
+     are copied to (dblib-sync, altium-pkg from a folder: the folder Altium builds in), not where ecadlib writes them;
+     libraries with no .ecadstate (written in place, or before this) are built as before.
 
 Recipe format (UTF-8, one primitive per line, fields separated by TAB; PCB lengths in Altium internal units:
 1 mil = 10000; schematic lengths in 1/1000 mil; angles in 1/1000 degree; layers as Altium's legacy layer numbers):
@@ -46,12 +54,13 @@ The script is written from Altium's scripting references (TR0120 DelphiScript, T
 Schematic API references) and Altium's own example scripts; ALTIUM_API lists every identifier it calls and where it is
 documented. tests/test_altium_native.py checks that the script calls nothing else. Run in Altium Designer 26 on a
 real PC before it is trusted: see docs/altium-native.md for the result of that run."""
-import argparse, json, re, sys
+import argparse, hashlib, json, re, sys
 from pathlib import Path
 
 from . import altium_lib as AL
 
 EXT = ".ecadbuild"
+STATE_EXT = ".ecadstate"                # {"source": sha256 of ecadlib's bytes, "built": sha256 of Altium's build}
 BUILD, PROJECT, UNIT, REPORT = "ecadlib_build.txt", "ecadlib_build.PrjScr", "ecadlib_build.pas", "ecadlib_build_report.txt"
 FILL = {"body": "body", "line": "line"}
 
@@ -198,9 +207,10 @@ def copy_recipe(src_lib, dst_lib):
     src_lib, dst_lib = Path(src_lib), Path(dst_lib)
     rp = src_lib.with_name(src_lib.name + EXT)
     if not rp.is_file():
-        stale = dst_lib.with_name(dst_lib.name + EXT)
-        if src_lib.is_file() and stale.is_file():
-            stale.unlink()
+        for ext in (EXT, STATE_EXT):
+            stale = dst_lib.with_name(dst_lib.name + ext)
+            if src_lib.is_file() and stale.is_file():
+                stale.unlink()
         return []
     lines = rp.read_text(encoding="utf-8").splitlines()
     out, written = [], []
@@ -221,7 +231,81 @@ def copy_recipe(src_lib, dst_lib):
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(text, encoding="utf-8")
         written.append(dst)
+    if src_lib.is_file():
+        record(dst_lib, _sha(src_lib.read_bytes()))
     return written
+
+
+# ------------------------------------------------------------------ edits made in Altium (<file>.ecadstate)
+def _sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def state_of(lib):
+    """The library's .ecadstate ({"source", "built"}), or None (none, or not readable)."""
+    lib = Path(lib)
+    try:
+        st = json.loads(lib.with_name(lib.name + STATE_EXT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return st if isinstance(st, dict) and st.get("source") else None
+
+
+def _save_state(lib, st):
+    lib = Path(lib)
+    p, text = lib.with_name(lib.name + STATE_EXT), json.dumps(st, sort_keys=True) + "\n"
+    if not (p.is_file() and p.read_text(encoding="utf-8") == text):
+        p.write_text(text, encoding="utf-8")
+
+
+def record(lib, source):
+    """ecadlib's bytes for lib (sha256 `source`) are, or are about to be, on disk. An earlier build is only kept when
+    it was built from these same bytes."""
+    old = state_of(lib) or {}
+    _save_state(lib, {"source": source, "built": old.get("built") if old.get("source") == source else None})
+
+
+def lib_state(lib, rp=None, save=True):
+    """'new' (ecadlib's bytes, not built yet), 'built' (as Altium built it), 'edited' (changed after that) or
+    'unknown' (no .ecadstate: written before ecadlib kept one). rp: its recipe, to recognise Altium's first build."""
+    lib = Path(lib)
+    st = state_of(lib)
+    if st is None or not lib.is_file():
+        return "unknown"
+    h = _sha(lib.read_bytes())
+    if h == st["source"]:
+        return "new"
+    if h == st.get("built"):
+        return "built"
+    rp = Path(rp) if rp else lib.with_name(lib.name + EXT)
+    if not st.get("built") and rp.is_file():        # the first file after ecadlib's that still matches the recipe:
+        try:                                         # what Altium built. Remember it, so a later edit shows.
+            same = not compare_one(lib, rp)
+        except (ValueError, OSError, KeyError, IndexError):
+            same = False
+        if same:
+            if save:
+                _save_state(lib, dict(st, built=h))
+            return "built"
+    return "edited"
+
+
+def replace_action(src_data, dst, overwrite_edits=False, save=True):
+    """May a copy of ecadlib's library (bytes src_data) go over dst? -> 'copy', 'keep' (dst is Altium's build of these
+    same bytes: nothing to do) or 'edited' (someone changed dst in Altium: leave it, unless overwrite_edits)."""
+    dst = Path(dst)
+    if not dst.is_file():
+        return "copy"
+    s = lib_state(dst, save=save)
+    if s == "edited" and not overwrite_edits:
+        return "edited"
+    if s == "built" and state_of(dst)["source"] == _sha(src_data):
+        return "keep"
+    return "copy"
+
+
+EDITED_NOTE = ("changed in Altium since ecadlib last built it: left as it is (dblib-sync --overwrite-edits, "
+               "altium-native write --rebuild-all replace it)")
 
 
 # ------------------------------------------------------------------ collecting a library folder
@@ -236,10 +320,25 @@ def recipes(folder):
     return out
 
 
-def build_text(folder):
-    """ecadlib_build.txt for a folder: each recipe with its library path (Windows separators, relative to the folder)."""
-    lines = ["ECADLIB-BUILD\t1"]
+def to_build(folder, rebuild_all=False):
+    """-> (recipes to build, {"built": [rel], "edited": [rel]}): what Altium still has to build, and what it leaves
+    alone (already built from ecadlib's current bytes, or changed in Altium since)."""
+    folder = Path(folder)
+    build, left = [], {"built": [], "edited": []}
     for rel, rp in recipes(folder):
+        s = "new" if rebuild_all else lib_state(folder / rel, rp)
+        if s in ("built", "edited"):
+            left[s].append(rel.as_posix())
+        else:
+            build.append((rel, rp))
+    return build, left
+
+
+def build_text(folder, found=None):
+    """ecadlib_build.txt for a folder: each recipe with its library path (Windows separators, relative to the folder).
+    found: the recipes to take (default: every one, recipes(folder))."""
+    lines = ["ECADLIB-BUILD\t1"]
+    for rel, rp in (recipes(folder) if found is None else found):
         for ln in rp.read_text(encoding="utf-8").splitlines():
             if ln.startswith("ECADLIB-BUILD"):
                 continue
@@ -255,13 +354,15 @@ def build_text(folder):
     return "\n".join(lines) + "\n"
 
 
-def write(folder, out=None):
-    """Write ecadlib_build.txt and the script project into out (default: folder). -> report dict."""
+def write(folder, out=None, rebuild_all=False):
+    """Write ecadlib_build.txt and the script project into out (default: folder). -> report dict. Libraries Altium
+    already built from ecadlib's current bytes, and libraries changed in Altium since, are left out (to_build);
+    rebuild_all takes every one."""
     folder = Path(folder)
     out = Path(out) if out else folder
     out.mkdir(parents=True, exist_ok=True)
-    found = recipes(folder)
-    text = build_text(folder)
+    found, left = to_build(folder, rebuild_all)
+    text = build_text(folder, found)
     if out.resolve() != folder.resolve():       # the script resolves library paths from its own folder
         import os
         prefix = Path(os.path.relpath(folder, out))
@@ -280,7 +381,7 @@ def write(folder, out=None):
             (out / name).write_bytes(data)
             written.append(name)
     return {"folder": str(folder), "out": str(out), "libraries": [r.as_posix() for r, _ in found],
-            "files": [BUILD, PROJECT, UNIT], "written": written}
+            "up_to_date": left["built"], "edited": left["edited"], "files": [BUILD, PROJECT, UNIT], "written": written}
 
 
 def prjscr_text():
@@ -1131,15 +1232,20 @@ def main(argv=None):
     w = sub.add_parser("write", help="collect the recipes of a library folder and write the Altium script project")
     w.add_argument("folder")
     w.add_argument("--out", help="where the script project goes (default: the library folder)")
+    w.add_argument("--rebuild-all", action="store_true",
+                   help="build every library again, also ones already built and ones changed in Altium since")
     c = sub.add_parser("compare", help="compare the libraries Altium saved with their recipes")
     c.add_argument("folder")
     c.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if a.cmd == "write":
-        rep = write(a.folder, a.out)
-        print(f"{len(rep['libraries'])} libraries in {Path(rep['out']) / BUILD}")
+        rep = write(a.folder, a.out, a.rebuild_all)
+        print(f"{len(rep['libraries'])} libraries in {Path(rep['out']) / BUILD}"
+              + (f"; {len(rep['up_to_date'])} already built by Altium" if rep["up_to_date"] else ""))
+        for rel in rep["edited"]:
+            print(f"  kept {rel}: {EDITED_NOTE}")
         print(f"In Altium: File > Open {Path(rep['out']) / PROJECT}, then File > Run Script > BuildLibrariesInAltium")
-        return 0 if rep["libraries"] else 1
+        return 0 if rep["libraries"] or rep["up_to_date"] or rep["edited"] else 1
     rep = compare(a.folder)
     if a.json:
         print(json.dumps(rep, indent=2))

@@ -277,24 +277,42 @@ None of this was opened in Altium when it was written: if a step fails, the Mess
 
 
 # ---------------------------------------------------------------- build
-def collect(src, out):
+def collect(src, out, kept=None, overwrite_edits=False):
     """Copy library files under `src` into `out` (same relative layout) unless they are the same folder.
-    Returns the list of paths in `out`."""
+    Returns the list of paths in `out`. A library someone changed in Altium since ecadlib's copy was built there is
+    left as it is, with its recipe, unless overwrite_edits; kept (a list) gets a note for each (altium_native)."""
+    from . import altium_native as AN
     src, out = Path(src).resolve(), Path(out).resolve()
     files = [p for p in sorted(src.rglob("*")) if p.is_file() and p.suffix.lower() in COPY_EXT
              and not (out != src and p.is_relative_to(out))]
     if src == out:
         return files
-    got = []
+    got, leave = [], set()
     for p in files:
         dst = out / p.relative_to(src)
+        recipe = p.with_name(p.name + AN.EXT)
+        if p.suffix.lower() == AN.EXT and p.with_name(p.name[:-len(AN.EXT)]) in leave:
+            got.append(dst)                                   # the kept library's recipe stays with it
+            continue
         if not dst.is_file() or dst.read_bytes() != p.read_bytes():
+            act = (AN.replace_action(p.read_bytes(), dst, overwrite_edits)
+                   if p.suffix.lower() in MODEL_EXT and recipe.is_file() else "copy")
+            if act != "copy":
+                leave.add(p)
+                if act == "edited" and kept is not None:
+                    kept.append(f"{dst.relative_to(out).as_posix()} {AN.EDITED_NOTE}")
+                got.append(dst)
+                continue
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(p, dst)
-        if p.suffix.lower() in MODEL_EXT and not p.with_name(p.name + ".ecadbuild").is_file():
-            stale = dst.with_name(dst.name + ".ecadbuild")    # a recipe from an earlier copy: Altium would rebuild
-            if stale.is_file():                               # this library from it (altium_native)
-                stale.unlink()
+        if p.suffix.lower() in MODEL_EXT:
+            if recipe.is_file():
+                AN.record(dst, AN._sha(p.read_bytes()))      # ecadlib's bytes: Altium builds them next
+            else:
+                for ext in (AN.EXT, AN.STATE_EXT):            # a recipe from an earlier copy: Altium would rebuild
+                    stale = dst.with_name(dst.name + ext)     # this library from it (altium_native)
+                    if stale.is_file():
+                        stale.unlink()
         got.append(dst)
     return got
 
@@ -366,9 +384,13 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
         rep["sync"] = DS.summary(res)
         bad = [r for r in res["results"] if r["action"] == "error"]
         rep["sync_errors"] = [f"{r['name']}: {r['detail']}" for r in bad]
+        rep["kept_edits"] = [f"{r['name']}: {n}" for r in res["results"] for n in (r.get("detail") or "").split("; ")
+                             if "changed in Altium" in n]
         files = sorted(p for p in out.rglob("*") if p.is_file())
     elif src.is_dir():
-        files = collect(src, out)
+        kept = []
+        files = collect(src, out, kept)
+        rep["kept_edits"] = kept
     else:
         raise FileNotFoundError(f"{src}: no such plan.json or folder")
     models = sorted((p for p in files if p.suffix.lower() in MODEL_EXT and p.resolve().is_relative_to(out.resolve())),
@@ -383,7 +405,9 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
     from . import altium_native as AN
     native = bool(native and AN.recipes(out))
     if native:
-        written += AN.write(out)["written"]
+        nat = AN.write(out)
+        written += nat["written"]
+        rep.update(native_up_to_date=nat["up_to_date"], native_edited=nat["edited"])
     more = (AN.UNIT,) if native else ()
     for fname, text in ((libpkg, libpkg_text(docs)), (f"{name}_Install.PrjScr", prjscr_text(f"{name}_Install.pas", *more)),
                         (f"{name}_Install.pas", install_script(name, dblibs, libpkg, docs, native)),

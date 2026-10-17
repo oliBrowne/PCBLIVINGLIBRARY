@@ -424,7 +424,8 @@ def test_altium_pkg_from_models_folder_and_broken_links():
     out = plan.parent.parent / "alt2"
     rep = AP.build(models, out, log=lambda *a: None)
     assert rep["problems"] == [] and rep["dblibs"] == [] and (out / "SchLib").is_dir(), rep
-    assert sorted(p.name for p in (out / "PcbLib").iterdir()) == sorted(p.name for p in (models / "PcbLib").iterdir())
+    copied = sorted(p.name for p in (out / "PcbLib").iterdir() if not p.name.endswith(".ecadstate"))  # ecadlib's own
+    assert copied == sorted(p.name for p in (models / "PcbLib").iterdir())           # record of each copy (altium_native)
     (out / "PcbLib" / "SOIC-8_3.9x4.9mm_P1.27mm.PcbLib").unlink()                   # a symbol's footprint goes missing
     probs, _ = AP.check_folder(out, "ecadlib.LibPkg", [])
     assert any("SOIC-8_3.9x4.9mm_P1.27mm" in p and "not in the folder" in p for p in probs), probs
