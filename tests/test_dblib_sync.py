@@ -305,30 +305,26 @@ def test_csv_resaved_in_cp1252_does_not_crash():
         assert "ecadlib.csv" in out["written"]
 
 
-
-def test_connection_names_the_real_folder_on_windows():
-    from unittest import mock
+def test_connection_is_portable():
+    """On every OS (the Windows CI job runs this too) the Data Source is --win-dir or the fixed placeholder, never the
+    library's own absolute path: Altium opens the workbook through LibraryDatabasePath + DatabasePathRelative=1."""
     with tempfile.TemporaryDirectory() as t:
         d = Path(t); _models(d)
         lib = d / "lib"
-        S.sync(_plan(d, _base_items()), lib)                          # not on Windows: the placeholder
-        assert "Data Source=C:\\ecadlib\\library\\ecadlib.xlsx" in (lib / "ecadlib.DbLib").read_text()
-        real = S.PureWindowsPath(S.os.path.abspath(lib)) / "ecadlib.xlsx"
-        with mock.patch.object(S, "_nt", lambda: True):
-            assert S.win_folder(lib) == S.PureWindowsPath(S.os.path.abspath(lib))
-            assert S.win_folder(lib, "D:\\libs") == S.PureWindowsPath("D:\\libs")
-            S.sync(_plan(d, _base_items()), lib)                      # the placeholder an older build wrote is replaced
-            text = (lib / "ecadlib.DbLib").read_text()
-            assert f"Data Source={real};" in text and "C:\\ecadlib\\library" not in text, text[:300]
-            assert "LibraryDatabasePath=ecadlib.xlsx" in text and "DatabasePathRelative=1" in text
-            fresh = d / "fresh"
-            S.sync(_plan(d, _base_items()), fresh)
-            assert f"Data Source={S.PureWindowsPath(S.os.path.abspath(fresh)) / 'ecadlib.xlsx'};" in (fresh / "ecadlib.DbLib").read_text()
-            # a connection set in Altium's DbLib editor stays
-            f = lib / "ecadlib.DbLib"
-            f.write_bytes(f.read_bytes().replace(str(real).encode(), b"E:\\mine\\ecadlib.xlsx"))
-            S.sync(_plan(d, _base_items()), lib)
-            assert "Data Source=E:\\mine\\ecadlib.xlsx" in f.read_text()
+        S.sync(_plan(d, _base_items()), lib)
+        f = lib / "ecadlib.DbLib"
+        text = f.read_text()
+        assert "Data Source=C:\\ecadlib\\library\\ecadlib.xlsx;" in text, text[:300]
+        assert str(S.PureWindowsPath(S.os.path.abspath(lib))) not in text and str(lib) not in text and t not in text
+        assert "LibraryDatabasePath=ecadlib.xlsx" in text and "DatabasePathRelative=1" in text
+        assert S.win_folder() == S.PureWindowsPath(S.PLACEHOLDER_DIR)
+        assert S.win_folder("D:\\libs") == S.PureWindowsPath("D:\\libs")
+        # a connection set in Altium's DbLib editor stays; --win-dir replaces it
+        f.write_bytes(f.read_bytes().replace(b"C:\\ecadlib\\library", b"E:\\mine"))
+        S.sync(_plan(d, _base_items()), lib)
+        assert "Data Source=E:\\mine\\ecadlib.xlsx" in f.read_text()
+        S.sync(_plan(d, _base_items()), lib, win_dir="D:\\libs")
+        assert "Data Source=D:\\libs\\ecadlib.xlsx" in f.read_text()
 
 
 if __name__ == "__main__":
