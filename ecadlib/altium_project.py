@@ -9,6 +9,9 @@
 
 What is read
   .PrjPcb   UTF-8 INI text. [DocumentN] DocumentPath (Windows-relative; .SchDoc and .BomDoc are used),
+            [DeviceSheetN] DocumentPath (device sheets: relative, absolute, or Managed\\Sheets\\<guid>\\X.SchDoc; looked
+            for next to the project, as written, and in Altium's device-sheet / data folders and $ECADLIB_DEVICE_SHEETS;
+            one that is nowhere is a warning saying its components are not in the BOM),
             [ProjectVariantN] Description + VariationN=Designator=..|UniqueId=\\ABCDEFGH|Kind=0 fitted,1 not fitted,
             2 alternate|AlternatePart=..|AltLibLink_*=.. and ParamVariationN (ParameterName/VariantValue, paired with
             ParamDesignatorN; or ParameterCount + ParameterNameK/VariantValueK), [ParameterN] Name/Value.
@@ -20,6 +23,11 @@ What is read
             RECORD=44 -> RECORD=45 implementations (ModelType PCBLIB, IsCurrent=T is the footprint in use).
             '%UTF8%Key' fields override their cp1252 twin. Components of kind Graphical, Net Tie (No BOM) and
             Standard (No BOM) are left out of the BOM. Multi-part components (U1A, U1B on any sheet) count once.
+            Sheet symbols (RECORD=15, device sheet symbols 215: RECORD=32 name, 33 file name): a sheet used by
+            REPEAT(CH,1,4) or by several symbols is multi-channel, and its components are listed once per channel with
+            Altium's channel designators ([Design] ChannelDesignatorFormatString, default $Component_$RoomName: R1_CH1).
+            A component with no MPN parameter whose Comment reads as a part number (STM32F101T6U6A, not 10k / 100nF)
+            gets the Comment as its MPN (mpn_source Comment, a warning, a triage note).
   .BomDoc   ActiveBOM document. Its layout is not published and no sample was available: the reader is tolerant
             (INI sections or |KEY=VALUE| lines with designator / item id + manufacturer part number / supplier
             fields; the first solution is the chosen one, the rest become alternates) and says when it found nothing.
@@ -56,6 +64,9 @@ LCSC_PARAMS = ["LCSC", "LCSC Part", "LCSC Part Number", "LCSC Part #", "JLCPCB P
 DATASHEET_PARAMS = ["Datasheet", "Datasheet URL", "DatasheetURL", "Datasheet Link", "HelpURL"]
 LIFECYCLE_PARAMS = ["Lifecycle Status", "Lifecycle", "Part Status", "Life Cycle", "LifeCycle"]
 VALUE_PARAMS = ["Value"]
+REPEAT_RE = re.compile(r"\s*repeat\s*\(\s*([^,()]*?)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", re.I)
+CHANNEL_FORMAT = "$Component_$RoomName"           # Altium's default channel designator format (Project Options > Multi-Channel)
+DEVICE_SHEETS_ENV = "ECADLIB_DEVICE_SHEETS"       # extra folders to look for device sheets in (os.pathsep between them)
 
 
 # ---------------------------------------------------------------- .SchDoc
@@ -143,11 +154,16 @@ def read_schdoc(path, rules=None):
         oi = _int(r.get("OWNERINDEX"), -1)
         if oi >= 0:
             kids.setdefault(oi, []).append(j)
-    comps = []
+    comps, symbols = [], []
     for idx, r in enumerate(recs):
         rt = r.get("RECORD")
-        if rt == "33" and re.match(r"\s*repeat\s*\(", r.get("TEXT", ""), re.I):
-            warnings.append(f"{path.name}: multi-channel sheet symbol {r.get('TEXT')!r}: repeated channels are counted once")
+        if rt in ("15", "215"):                       # sheet symbol / device sheet symbol: RECORD=32 name, 33 file name
+            name = next((recs[j].get("TEXT", "") for j in kids.get(idx, []) if recs[j].get("RECORD") == "32"), "").strip()
+            fname = next((recs[j].get("TEXT", "") for j in kids.get(idx, []) if recs[j].get("RECORD") == "33"), "").strip()
+            if fname:
+                m = REPEAT_RE.match(name)
+                symbols.append({"name": name, "file": fname, "repeat": (m.group(1), int(m.group(2)), int(m.group(3))) if m else None})
+            continue
         if rt != "1":
             continue
         params, des, impls = {}, "", []
@@ -187,7 +203,7 @@ def read_schdoc(path, rules=None):
             warnings.append(f"{path.name}: component {r.get('LIBREFERENCE', '?')} ({r.get('UNIQUEID', '')}) has no designator")
         elif des.endswith("?"):
             warnings.append(f"{path.name}: {des} ({r.get('LIBREFERENCE', '')}) is not annotated")
-    return {"path": str(path), "header": header, "components": comps, "warnings": warnings}
+    return {"path": str(path), "header": header, "components": comps, "warnings": warnings, "sheet_symbols": symbols}
 
 
 def _datasheet(params):
@@ -268,13 +284,15 @@ def read_prjpcb(path):
     """-> {path, name, documents, schdocs, bomdocs, missing, variants, parameters, design}."""
     path = Path(path)
     secs = parse_ini(_read_text(path))
-    docs, variants, params, design = [], [], {}, {}
+    docs, devs, variants, params, design = [], [], [], {}, {}
     for name, kv in secs:
         d = dict(kv)
         if name.lower() == "design":
             design = d
         elif re.fullmatch(r"Document\d+", name, re.I) and d.get("DocumentPath"):
             docs.append(d["DocumentPath"])
+        elif re.fullmatch(r"DeviceSheet\d+", name, re.I) and d.get("DocumentPath"):
+            devs.append(d["DocumentPath"])
         elif re.fullmatch(r"Parameter\d+", name, re.I) and d.get("Name"):
             params[d["Name"]] = d.get("Value", "")
         elif re.fullmatch(r"ProjectVariant\d+", name, re.I):
@@ -296,7 +314,7 @@ def read_prjpcb(path):
                                 "value": f.get("VariantValue", "")})
             variants.append({"name": d.get("Description") or name, "unique_id": d.get("UniqueId", ""),
                              "allow_fabrication": d.get("AllowFabrication", "") == "1", "variations": vs, "param_variations": pvs})
-    sch, bom, missing = [], [], []
+    sch, bom, missing, dev_missing = [], [], [], []
     for rel in docs:
         ext = PureWindowsPath(rel).suffix.lower()
         if ext not in SCH_EXT + BOM_EXT:
@@ -306,8 +324,68 @@ def read_prjpcb(path):
             missing.append(rel)
         else:
             (sch if ext in SCH_EXT else bom).append(f)
-    return {"path": str(path), "name": path.stem, "documents": docs, "schdocs": sch, "bomdocs": bom, "missing": missing,
-            "variants": variants, "parameters": params, "design": design}
+    for rel in devs:
+        if PureWindowsPath(rel).suffix.lower() not in SCH_EXT:
+            continue
+        f = find_device_sheet(path.parent, rel)
+        if f is None:
+            dev_missing.append(rel)
+        elif not any(Path(f).resolve() == Path(x).resolve() for x in sch):
+            sch.append(f)
+    return {"path": str(path), "name": path.stem, "documents": docs + devs, "device_sheets": devs, "schdocs": sch, "bomdocs": bom,
+            "missing": missing, "device_missing": dev_missing, "variants": variants, "parameters": params, "design": design}
+
+
+def device_sheet_dirs(environ=None):
+    """Folders device sheets usually live in: $ECADLIB_DEVICE_SHEETS, Altium's 'Device Sheets' library folders under
+    %PUBLIC% / your Documents, and Altium's data folders under %APPDATA% / %LOCALAPPDATA% / %PROGRAMDATA% (managed
+    device sheets are cached there)."""
+    env = os.environ if environ is None else environ
+    out = [Path(x) for x in (env.get(DEVICE_SHEETS_ENV) or "").split(os.pathsep) if x.strip()]
+    for var, pats in (("PUBLIC", ["Documents/Altium/*/Library/Device Sheets", "Documents/Altium/*/Library"]),
+                      ("USERPROFILE", ["Documents/Altium/*/Library/Device Sheets", "Documents/Altium"]),
+                      ("APPDATA", ["Altium*"]), ("LOCALAPPDATA", ["Altium*"]), ("PROGRAMDATA", ["Altium*"])):
+        if env.get(var):
+            for pat in pats:
+                out += sorted(Path(env[var]).glob(pat))
+    return [d for d in dict.fromkeys(out) if d.is_dir()]
+
+
+def _find_named(root, name, limit=50000):
+    """A file called `name` (any case) under root, depth first, giving up after `limit` entries."""
+    n, want = 0, name.lower()
+    for dirpath, dirnames, filenames in os.walk(root):
+        n += len(dirnames) + len(filenames)
+        hit = next((f for f in filenames if f.lower() == want), None)
+        if hit:
+            return Path(dirpath) / hit
+        if n > limit:
+            return None
+    return None
+
+
+def find_device_sheet(base, rel, dirs=None):
+    """A [DeviceSheetN] DocumentPath on this machine: relative to the project, the absolute path as written, the same
+    relative path (Managed\\Sheets\\<guid>\\X.SchDoc ...) under each device-sheet folder, then the file name anywhere
+    under those folders and the project's folder. None when it is nowhere."""
+    f = _find_file(base, rel)
+    if f is not None:
+        return f
+    w = PureWindowsPath(rel)
+    if w.is_absolute() and Path(rel).is_file():
+        return Path(rel)
+    dirs = device_sheet_dirs() if dirs is None else list(dirs)
+    tail = PureWindowsPath(*w.parts[1:]) if w.is_absolute() else w          # the path without its drive
+    for d in dirs:
+        for k in range(len(tail.parts)):                                  # ...\Library\Device Sheets\X.SchDoc: try shorter tails
+            f = _find_file(d, str(PureWindowsPath(*tail.parts[k:])))
+            if f is not None and f.is_file():
+                return f
+    for d in [Path(base)] + dirs:
+        f = _find_named(d, w.name)
+        if f is not None:
+            return f
+    return None
 
 
 # ---------------------------------------------------------------- .BomDoc (ActiveBOM)
@@ -385,17 +463,23 @@ def load_project(path, rules=None):
     else:
         raise ValueError(f"{p.name}: not an Altium project, schematic or BomDoc")
     warnings += [f"{Path(proj['path']).name}: document {m} not found" for m in proj["missing"]]
+    warnings += [f"{Path(proj['path']).name}: device sheet {m} not found (looked next to the project and in Altium's device "
+                 f"sheet folders; its components are NOT in this BOM). Fix: put the sheet there or add its folder to "
+                 f"{DEVICE_SHEETS_ENV}" for m in proj.get("device_missing", [])]
     if not proj["schdocs"]:
         warnings.append(f"{Path(proj['path']).name}: no schematic documents found")
-    raw = []
+    raw, read = [], []
     for f in proj["schdocs"]:
         try:
             s = read_schdoc(f, rules)
         except Exception as e:                        # one unreadable sheet should not hide the rest
             warnings.append(f"{Path(f).name}: {type(e).__name__}: {e}")
             continue
-        raw += s["components"]
+        read.append(s)
         warnings += s["warnings"]
+    fmt = (proj.get("design") or {}).get("ChannelDesignatorFormatString") or CHANNEL_FORMAT
+    for s in read:
+        raw += expand_channels(s, read, fmt, warnings)
     comps, by_des = [], {}
     for c in raw:                                     # multi-part: U1 part A on one sheet, part B on another -> one part
         k = c["designator"] if c["designator"] and not c["designator"].endswith("?") else f"?{c['sheet']}:{c['unique_id']}"
@@ -431,9 +515,83 @@ def load_project(path, rules=None):
             c["mpn_source"] = "parameter" if c["mpn"] else ""
         if not c["mpn"] and c["design_item_id"] and not _is_vault_id(c["design_item_id"]) and c["source_library"].lower().endswith((".dblib", ".svndblib")):
             c["mpn"], c["mpn_source"] = c["design_item_id"], "DesignItemId"   # a DbLib's key is usually the part number
+        if not c["mpn"] and c["in_bom"] and looks_like_mpn(c["comment"]):
+            c["mpn"], c["mpn_source"] = c["comment"].strip(), "Comment"          # Content Vault parts: no MPN parameter
+    by_comment = sorted({c["designator"] for c in comps if c.get("mpn_source") == "Comment"}, key=_natkey)
+    if by_comment:
+        warnings.append(f"no Manufacturer Part Number parameter on {len(by_comment)} component(s) "
+                        f"({', '.join(by_comment[:8])}{' ...' if len(by_comment) > 8 else ''}): their Comment is used as the MPN")
     return {"name": proj["name"], "path": proj["path"], "components": comps, "variants": proj["variants"],
             "parameters": proj["parameters"], "warnings": list(dict.fromkeys(warnings)),
             "bomdocs": [str(b) for b in bomdocs], "sheets": [str(s) for s in proj["schdocs"]]}
+
+
+VALUE_RE = re.compile(r"(?i)^[0-9]+([.,][0-9]+)?\s*([pnuµμmkKMGRL]|meg)?[0-9]*\s*(f|h|r|Ω|ohms?|v|a|w|hz|%|ppm)?"
+                      r"([/_\-±+][0-9a-zµμΩ.%±/_\-+]*)?$")
+
+
+def looks_like_mpn(s):
+    """A Comment that reads as a manufacturer part number: one word of letters and digits (- _ . / # + allowed), at least
+    5 characters with 2 letters and 2 digits, not '=Param' and not a plain value (10k, 100nF, 4k7, 1uF/16V, 0R)."""
+    s = (s or "").strip()
+    if not s or s.startswith("=") or len(s) < 5 or len(s) > 60 or not re.fullmatch(r"[A-Za-z0-9][-A-Za-z0-9_./#+]*", s):
+        return False
+    if sum(ch.isalpha() for ch in s) < 2 or sum(ch.isdigit() for ch in s) < 2:
+        return False
+    return not VALUE_RE.match(s)
+
+
+def _channel_paths(sheet, read, seen=()):
+    """Room-name paths of every instance of a sheet: () for a top sheet; one entry per channel otherwise."""
+    name = Path(sheet["path"]).name.lower()
+    parents = [(p, sym) for p in read for sym in p.get("sheet_symbols", [])
+               if PureWindowsPath(sym["file"]).name.lower() == name and p is not sheet]
+    if not parents or name in seen:
+        return [()]
+    out = []
+    for p, sym in parents:
+        rooms = ([f"{sym['repeat'][0]}{i}" for i in range(sym["repeat"][1], sym["repeat"][2] + 1)] if sym["repeat"]
+                 else [sym["name"] or PureWindowsPath(sym["file"]).stem])
+        out += [pp + (r,) for pp in _channel_paths(p, read, seen + (name,)) for r in rooms]
+    return out
+
+
+def channel_designator(fmt, des, room, index):
+    """Altium's channel designator: fmt tokens $Component, $ComponentPrefix, $ComponentIndex, $RoomName, $ChannelIndex,
+    $ChannelAlpha (R1 in channel CH2 with '$Component_$RoomName' -> R1_CH2)."""
+    m = re.match(r"([^\d]*)(\d*)(.*)", des)
+    alpha = ""
+    k = index
+    while k:
+        k, r = divmod(k - 1, 26)
+        alpha = chr(65 + r) + alpha
+    vals = {"$ComponentPrefix": m.group(1), "$ComponentIndex": m.group(2) + m.group(3), "$Component": des, "$RoomName": room,
+            "$ChannelIndex": str(index), "$ChannelAlpha": alpha}
+    return re.sub("|".join(re.escape(k) for k in sorted(vals, key=len, reverse=True)), lambda t: vals[t.group(0)], fmt)
+
+
+def expand_channels(sheet, read, fmt=CHANNEL_FORMAT, warnings=None):
+    """The sheet's components, once per channel when sheet symbols use it more than once (REPEAT(CH,1,4), or several
+    symbols naming the same file): designators per Altium's channel format, e.g. R1_CH1 ... R1_CH4."""
+    paths = _channel_paths(sheet, read)
+    comps = sheet["components"]
+    if len(paths) <= 1:
+        return list(comps)
+    while all(len(p) > 1 for p in paths) and len({p[0] for p in paths}) == 1:
+        paths = [p[1:] for p in paths]                 # a level every instance shares (one sheet symbol) names nothing
+    rooms = ["_".join(p) for p in paths]
+    out = []
+    for c in comps:
+        for i, room in enumerate(rooms, 1):
+            des = channel_designator(fmt, c["designator"], room, i) if c["designator"] else c["designator"]
+            out.append(dict(c, designator=des, unique_id=f"{c['unique_id']}@{room}", channel=room))
+    if warnings is not None:
+        name = Path(sheet["path"]).name
+        ex = channel_designator(fmt, comps[0]["designator"], rooms[0], 1) if comps and comps[0]["designator"] else ""
+        warnings.append(f"{name}: multi-channel sheet, {len(rooms)} channels ({', '.join(rooms[:6])}{' ...' if len(rooms) > 6 else ''}): "
+                        f"{len(comps)} components counted once per channel" + (f", designators like {ex} ({fmt})" if ex else "")
+                        + ("; nested channels joined with _" if any(len(p) > 1 for p in paths) else ""))
+    return out
 
 
 def _is_vault_id(s):
@@ -456,8 +614,10 @@ def apply_variant(comps, variant):
     for c in comps:
         c = dict(c, fitted=c["in_bom"], variant_note="")
         if variant:
-            uid = c["unique_id"]
-            hit = next((v for v in variant["variations"] if v.get("UniqueId") and v["UniqueId"].rsplit("\\", 1)[-1] == uid), None) or \
+            uid = c["unique_id"].split("@")[0]               # a channel copy: <UniqueID>@<room>
+            by_uid = [v for v in variant["variations"] if v.get("UniqueId") and v["UniqueId"].rsplit("\\", 1)[-1] == uid]
+            hit = next((v for v in by_uid if v.get("Designator") == c["designator"]), None) or \
+                  next(iter(by_uid), None) or \
                   next((v for v in variant["variations"] if not v.get("UniqueId") and v.get("Designator") == c["designator"]), None)
             if hit:
                 kind = _int(hit.get("Kind"), 0)
@@ -472,7 +632,7 @@ def apply_variant(comps, variant):
                                  libref=next((v for k, v in hit.items() if re.search(r"libreference", k, re.I) and v), c["libref"]))
             params = dict(c["params"])
             for pv in variant["param_variations"]:
-                if (pv["unique_id"] and pv["unique_id"].rsplit("\\", 1)[-1] == uid) or (not pv["unique_id"] and pv["designator"] == c["designator"]):
+                if (pv["unique_id"] and pv["unique_id"].rsplit("\\", 1)[-1] == uid and (not c.get("channel") or pv["designator"] in ("", c["designator"]))) or (not pv["unique_id"] and pv["designator"] == c["designator"]):
                     params[pv["name"]] = pv["value"]
             if params != c["params"]:
                 changed = {k for k in params if params[k] != c["params"].get(k)}
@@ -547,6 +707,8 @@ def bom_lines(path, variant=None, rules=None):
         for k in ("design_item_id", "item_guid", "revision_guid", "supplier", "supplier_pn", "lifecycle"):
             if g.get(k):
                 ln[f"altium_{k}"] = g[k]
+        if g.get("mpn_source") == "Comment":
+            ln["altium_mpn_source"] = "Comment"
         lines.append(ln)
     if not lines:
         raise ValueError(f"{Path(path).name}: no components found in the project's schematics")
@@ -564,7 +726,7 @@ CSV_COLS = [("Designator", "designator"), ("Quantity", "qty"), ("Manufacturer Pa
 def write_bom_csv(groups, out, variants=()):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out, "w", newline="", encoding="utf-8") as f:
+    with open(out, "w", newline="", encoding="utf-8-sig") as f:
         w = SS.writer(f)
         w.writerow([h for h, _ in CSV_COLS] + [f"Qty [{v}]" for v in variants])
         for g in groups:
@@ -800,11 +962,11 @@ def write_where_used(res, stem):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     rows = where_used_rows(res)
-    with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
+    with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=WU_COLS)
         w.writeheader()
         w.writerows(rows)
-    with open(stem.with_name(stem.name + "_flags.csv"), "w", newline="", encoding="utf-8") as f:
+    with open(stem.with_name(stem.name + "_flags.csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=["flag", "part", "mpn", "projects", "detail"], extrasaction="ignore")
         w.writeheader()
         w.writerows(res["flags"])

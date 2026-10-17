@@ -1019,7 +1019,7 @@ def write_reports(rows, out, meta, provs, unconfigured, http, roll, plan_changes
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     cur = roll["currency"]
-    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
+    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=COLS)
         w.writeheader()
         w.writerows(csv_row(r, cur) for r in rows)

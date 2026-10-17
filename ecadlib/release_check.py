@@ -279,7 +279,7 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
 def write_report(rows, stem, plan=""):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
-    with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
+    with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["name", "status"])
         w.writeheader(); w.writerows(rows)
     held = [r for r in rows if r["status"] == "held"]

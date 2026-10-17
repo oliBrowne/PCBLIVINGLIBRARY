@@ -109,7 +109,7 @@ Var
     i : Integer;
 Begin
     Result := False;
-    For i := 0 To IntegratedLibraryManager.AvailableLibraryCount - 1 Do
+    For i := 0 To IntegratedLibraryManager.InstalledLibraryCount - 1 Do
         If UpperCase(IntegratedLibraryManager.InstalledLibraryPath(i)) = UpperCase(Path) Then
             Result := True;
 End;
@@ -195,7 +195,7 @@ Var
     P : String;
 Begin
     Report := TStringList.Create;
-    For i := IntegratedLibraryManager.AvailableLibraryCount - 1 DownTo 0 Do
+    For i := IntegratedLibraryManager.InstalledLibraryCount - 1 DownTo 0 Do
     Begin
         P := IntegratedLibraryManager.InstalledLibraryPath(i);
         If Pos(UpperCase(Folder), UpperCase(P)) = 1 Then

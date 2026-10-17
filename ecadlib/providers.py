@@ -14,6 +14,24 @@ class NotConfigured(Exception):
     pass
 
 
+def clean_text(v, limit=250):
+    """One line of plain text from an untrusted field (None / non-text -> ''), cut at `limit` characters."""
+    if not isinstance(v, str):
+        return ""
+    v = " ".join(v.split())
+    return v if len(v) <= limit else v[:limit - 3].rstrip() + "..."
+
+
+def describe(text="", category="", package=""):
+    """The part description a source gives: its own description text, else '<category>, <package>' when it names a
+    category (both are the distributor's words; nothing is made up). '' when it gives neither."""
+    text = clean_text(text)
+    if text:
+        return text
+    category = clean_text(category, 120)
+    return ", ".join(x for x in (category, clean_text(package, 80)) if x) if category else ""
+
+
 @dataclass
 class SourceResult:
     provider: str
@@ -100,6 +118,10 @@ def parse_easyeda(data, res):
                 res.has_3d = True
                 res.extra["model_uuid"] = attrs.get("uuid", "")
     res.extra["footprint_name"] = pkg.get("title", "")
+    tags = r.get("tags") if isinstance(r.get("tags"), list) else []
+    desc = describe(r.get("description"), next((t for t in tags if isinstance(t, str) and t.strip()), ""), res.package)
+    if desc:                                   # result.description (LCSC's text), else its category tag + package
+        res.extra["description"] = desc
     return res
 
 
@@ -134,6 +156,10 @@ class JLCPCBSearch(Provider):
             res.manufacturer = best.get("componentBrandEn", "")
             res.package = best.get("componentSpecificationEn", "")
             res.extra = {"stock": best.get("stockCount"), "library_type": best.get("componentLibraryType")}
+            desc = describe(best.get("describe") or best.get("description"),
+                            best.get("secondSortName") or best.get("firstSortName"), res.package)
+            if desc:                           # JLCPCB/LCSC's description of the part, else its category + package
+                res.extra["description"] = desc
         return res
 
 

@@ -1,14 +1,16 @@
 """`ecadlib doctor`: one screen that says whether this machine is ready, each line OK / WARN / FAIL with a fix.
 
-    ecadlib doctor [--workspace W] [--lib DIR ...] [--rules FILE] [--json]
+    ecadlib doctor [--workspace W] [--lib DIR ...] [--rules FILE] [--altium-menu ecadlib_menu.ini] [--json]
 
 Checks: the Python version; the packages ecadlib needs (FAIL when missing) and the optional ones (pillow, pypdf) and
 tools (pdftoppm, kicad-cli, git) (WARN); which API keys are set (names only, never the values); the rules file
 (ecadlib.toml: which one is used and whether it is valid - errors name file:line where the line can be found); the
 workspace (exists, writable); the library folders (--lib / $ECADLIB_LIB, [agent] libs and library_repo) and the watched
-sources in [agent.watch]. Exit code 1 when any line is FAIL, else 0. --json prints {"ok", "checks": [{"check",
+sources in [agent.watch]; the Altium menu's command= (--altium-menu, else an ecadlib_menu.ini in the current folder or
+out/altium_menu): set, and the program it names runs `ecadlib --version`. Hints for environment variables use the
+shell of this OS (setx / PowerShell on Windows, export elsewhere). Exit code 1 when any line is FAIL, else 0. --json prints {"ok", "checks": [{"check",
 "level", "detail", "hint"}]}. Nothing is written except a temporary probe file in the workspace, removed at once."""
-import argparse, importlib.util, json, os, re, shutil, sys, tempfile
+import argparse, importlib.util, json, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
 LEVELS = ("OK", "WARN", "FAIL")
@@ -22,6 +24,19 @@ TOOLS = (("pdftoppm", "datasheet pages for visual-check", "install poppler-utils
 
 def _c(check, level, detail, hint=""):
     return {"check": check, "level": level, "detail": detail, "hint": hint}
+
+
+def _windows():
+    return os.name == "nt"
+
+
+def set_env_hint(name, value="...", nt=None):
+    """How to set an environment variable in this OS's shell."""
+    nt = _windows() if nt is None else nt
+    if nt:
+        return (f'setx {name} "{value}" (then open a new terminal and restart Altium / the app that runs ecadlib; '
+                f'PowerShell, this window only: $env:{name} = "{value}")')
+    return f"export {name}={value}"
 
 
 def check_python(v=None):
@@ -96,7 +111,7 @@ def check_ai(rules=None, environ=None):
         out.append(_c("ai key", "OK", f"{ep['key_env'] or 'ANTHROPIC_API_KEY'} set"))
     else:
         out.append(_c("ai key", "WARN", f"{ep['key_env']} not set (datasheet reader and visual-check skipped)",
-                      f"export {ep['key_env']}=... (only the name goes in ecadlib.toml, never the value)"))
+                      f"{set_env_hint(ep['key_env'])} (only the name goes in ecadlib.toml, never the value)"))
     return out
 
 
@@ -110,7 +125,7 @@ def check_keys(rules=None, environ=None):
             env = env if not ok else ["NEXAR_CLIENT_ID", "NEXAR_CLIENT_SECRET"]
         out.append(_c(f"key {name}", "OK", f"{' + '.join(env)} set") if ok
                    else _c(f"key {name}", "WARN", f"{' + '.join(env)} not set ({why} skipped)",
-                           f"export {env[0]}=... (only the name goes in ecadlib.toml, never the value)"
+                           f"{set_env_hint(env[0])} (only the name goes in ecadlib.toml, never the value)"
                            + ("; NEXAR_CLIENT_ID + NEXAR_CLIENT_SECRET also work" if name == "altium365" else "")))
     return out
 
@@ -242,11 +257,65 @@ def check_paths(libs=(), rules=None):
             out.append(_c(what, bad, f"{p}: not found", "fix the path (relative paths start at the current folder)"))
     if not libs:
         out.append(_c("lib", "WARN", "no --lib / ECADLIB_LIB library folder given",
-                      "export ECADLIB_LIB=/path/to/kicad/libs (several: separate with " + repr(os.pathsep) + ")"))
+                      set_env_hint("ECADLIB_LIB", "D:\\kicad\\libs" if _windows() else "/path/to/kicad/libs")
+                      + " (several: separate with " + repr(os.pathsep) + ")"))
     return out
 
 
-def run(workspace="ecadlib_workspace", libs=(), rules_path=None, environ=None):
+MENU_INI = "ecadlib_menu.ini"
+
+
+def find_menu_ini(given=None, cwd="."):
+    """The ecadlib_menu.ini to check: --altium-menu (the file or its folder), else one in the current folder or in
+    out/altium_menu (`ecadlib altium-menu build`'s default --out). None when there is none."""
+    if given:
+        p = Path(given).expanduser()
+        return p / MENU_INI if p.is_dir() else p
+    return next((p for p in (Path(cwd) / MENU_INI, Path(cwd) / "out" / "altium_menu" / MENU_INI) if p.is_file()), None)
+
+
+def split_command(cmd):
+    """'"C:\\x y\\python.exe" -m ecadlib' -> ['C:\\x y\\python.exe', '-m', 'ecadlib'] (cmd.exe's quoting: a quoted
+    program, then words)."""
+    cmd = cmd.strip()
+    if cmd.startswith('"'):
+        end = cmd.find('"', 1)
+        if end < 0:
+            return [cmd[1:]]
+        return [cmd[1:end]] + cmd[end + 1:].split()
+    return cmd.split()
+
+
+def check_altium_menu(ini, run=subprocess.run, which=shutil.which):
+    """command= of the Altium menu's settings: empty (the runner searches PATH, py -3, python, which misses a venv),
+    a program that does not exist, or one that does not run ecadlib."""
+    from .altium_menu import default_command, load_command
+    ini = Path(ini)
+    example = default_command() or '"C:\\...\\python.exe" -m ecadlib'
+    fix = (f"set command={example} in {ini}, or run `ecadlib altium-menu build --out <that folder>` again with the "
+           "Python that has ecadlib (it fills an empty command=)")
+    if not ini.is_file():
+        return _c("altium menu", "FAIL", f"{ini}: not found", "give the ecadlib_menu.ini of your menu folder")
+    cmd = load_command(ini)
+    if not cmd:
+        return _c("altium menu", "WARN", f"{ini}: command= is empty, so the menu looks for ecadlib on PATH, then py -3, then "
+                                         "python; an install in a virtual environment (venv) is found by none of them", fix)
+    argv = split_command(cmd)
+    exe = argv[0] if argv else ""
+    found = exe if (os.sep in exe or "/" in exe or "\\" in exe) and Path(exe).is_file() else which(exe) if exe else None
+    if not found:
+        return _c("altium menu", "FAIL", f"{ini}: command= {cmd}: {exe or '(nothing)'} does not exist", fix)
+    try:
+        r = run(argv + ["--version"], capture_output=True, text=True, timeout=60)
+        out = ((r.stdout or "") + (r.stderr or "")).strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        return _c("altium menu", "FAIL", f"{ini}: command= {cmd} did not run ({e})", fix)
+    if r.returncode != 0 or "ecadlib" not in out:
+        return _c("altium menu", "FAIL", f"{ini}: command= {cmd} does not run ecadlib: {out.splitlines()[-1] if out else r.returncode}", fix)
+    return _c("altium menu", "OK", f"{ini}: command= {cmd} ({out.splitlines()[-1]})")
+
+
+def run(workspace="ecadlib_workspace", libs=(), rules_path=None, environ=None, altium_menu=None):
     checks = [check_python()] + check_packages()
     rc, rules = check_rules(rules_path, workspace if Path(workspace).is_dir() else None)
     checks.append(rc)
@@ -256,6 +325,9 @@ def run(workspace="ecadlib_workspace", libs=(), rules_path=None, environ=None):
     if Path(workspace).is_dir():
         checks.append(check_formats(workspace))
     checks += check_paths(libs, rules)
+    menu = find_menu_ini(altium_menu)
+    if menu is not None:
+        checks.append(check_altium_menu(menu))
     return {"ok": not any(c["level"] == "FAIL" for c in checks), "checks": checks}
 
 
@@ -276,9 +348,11 @@ def main(argv=None):
     ap.add_argument("--workspace", default=os.environ.get("ECADLIB_WORKSPACE") or "ecadlib_workspace")
     ap.add_argument("--lib", action="append", default=[], help="KiCad library folder to check (repeatable; default $ECADLIB_LIB)")
     ap.add_argument("--rules", help="rules file to check (default: the workspace's, then ECADLIB_CONFIG, then the search)")
+    ap.add_argument("--altium-menu", metavar="INI", help="the Altium menu's ecadlib_menu.ini (or its folder) to check "
+                                                         "(default: one in the current folder or out/altium_menu)")
     ap.add_argument("--json", action="store_true", help='print {"ok", "checks": [{"check", "level", "detail", "hint"}]}')
     a = ap.parse_args(argv)
-    rep = run(a.workspace, a.lib, a.rules)
+    rep = run(a.workspace, a.lib, a.rules, altium_menu=a.altium_menu)
     print(json.dumps(rep, indent=2) if a.json else render(rep))
     return 0 if rep["ok"] else 1
 

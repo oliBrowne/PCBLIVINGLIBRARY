@@ -57,8 +57,9 @@ class CachedHTTP:
         extra = "".join(f"\n{k}: {v}" for k, v in vary)
         return hashlib.sha256(f"{method}\n{url}\n{body or ''}{extra}".encode()).hexdigest()[:32]
 
-    def request(self, method, url, body=None, headers=None, cache=True):
-        """cache=False: never read or store (credentials in the URL or body, tokens in the response).
+    def request(self, method, url, body=None, headers=None, cache=True, timeout=None):
+        """cache=False: never read or store (credentials in the URL or body, tokens in the response). timeout: seconds
+        for this request (default: the client's).
         Query-string secrets (apiKey=, token=...) are redacted from cache keys and stored URLs."""
         f = self.dir / f"{self._key(method, redact(url), body, headers)}.json"
         d = None
@@ -80,7 +81,7 @@ class CachedHTTP:
             time.sleep(wait)
         self._last[host] = time.time()
         try:
-            r = self.s.request(method, url, data=body, headers=headers, timeout=self.timeout)
+            r = self.s.request(method, url, data=body, headers=headers, timeout=timeout or self.timeout)
         except requests.RequestException as e:
             m = re.search(r"Tunnel connection failed: ([^'\")]+)", str(e))
             msg = f"{type(e).__name__}: " + (f"proxy CONNECT refused ({m.group(1).strip()})" if m else str(e)[:120])

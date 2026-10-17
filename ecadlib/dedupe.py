@@ -459,7 +459,7 @@ def write_reports(groups, mapping, stem, plan, errors=()):
     stem.parent.mkdir(parents=True, exist_ok=True)
     rows = report_rows(groups)
     fields = ["group", "kind", "key", "member", "keeper", "origin", "where", "mpn", "used_by", "status"]
-    with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
+    with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(rows)
     mp = stem.parent / f"{stem.name}_map.csv"
     with open(mp, "w", newline="", encoding="utf-8") as f:

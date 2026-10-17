@@ -22,7 +22,9 @@ are read back with altium_lib's readers and must contain the Library Ref / Footp
 
 An existing .DbLib/.SVNDbLib is updated, not replaced: settings made in Altium's DbLib editor are kept, missing
 tables and field maps are appended, and ConnectionString / SVNRepositoryURL are only rewritten when --win-dir /
---svn-url are given (or the URL is read from `svn info`).
+--svn-url are given (or the URL is read from `svn info`). The Excel connection's Data Source is the --win-dir folder;
+without it, on Windows, the --to folder's real absolute path (also replacing the C:\\ecadlib\\library placeholder an
+older ecadlib wrote), elsewhere that placeholder. Altium finds the workbook through DatabasePathRelative=1 either way.
 
 SVN (--svn): <to> is meant to be an SVN working copy; the .SVNDbLib gets SVNRepositoryURL and a LibrarySearchPath
 of <url>/SchLib;<url>/PcbLib. With --commit, and `svn` on PATH and <to> a working copy, it runs svn add / delete /
@@ -133,6 +135,34 @@ def _sections(text):
         elif secs and ln.strip():
             secs[-1][1].append(ln)
     return secs
+
+
+PLACEHOLDER_DIR = r"C:\ecadlib\library"      # the Data Source folder when the real one is not known (not on Windows)
+
+
+def _nt():
+    return os.name == "nt"
+
+
+def win_folder(to, win_dir=None):
+    """The Windows folder the connection string names: --win-dir; else, on Windows, the library folder itself (absolute);
+    else PLACEHOLDER_DIR. Altium reads the workbook through LibraryDatabasePath + DatabasePathRelative=1 (next to the
+    DbLib) either way; the Data Source is what its DbLib editor shows and uses if the relative option is switched off."""
+    if win_dir:
+        return PureWindowsPath(win_dir)
+    if _nt():
+        return PureWindowsPath(os.path.abspath(to))
+    return PureWindowsPath(PLACEHOLDER_DIR)
+
+
+def _placeholder_connection(lib):
+    """True when the existing DbLib's ConnectionString is missing, empty, or names PLACEHOLDER_DIR (an older ecadlib wrote
+    it without knowing the folder), so the real folder may replace it."""
+    if not Path(lib).exists():
+        return True
+    db = next((sec for sec in _sections(Path(lib).read_bytes().decode("utf-8", "replace")) if sec[0] == "DatabaseLinks"), None)
+    cs = _kv(db[1]).get("ConnectionString", "") if db else ""
+    return not cs.strip() or ("Data Source=" + PLACEHOLDER_DIR + "\\").lower() in cs.lower()
 
 
 def _kv(lines):
@@ -425,12 +455,12 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
             put(csvf.name, ct)
 
     url = svn_url or (svn_info(to, runner, which) if mode == "svndblib" else None)
-    win = PureWindowsPath(win_dir or r"C:\ecadlib\library")
+    win = win_folder(to, win_dir)
     extra = (("SVNRepositoryURL", url or ""), ("FileRepositoryIsRelative", "0")) if mode == "svndblib" else ()
     links = dict(conn_str=excel_connection(win / xlsx.name), db_type="Microsoft Excel", db_path=xlsx.name,
                  relative=True, search_path=f"{url}/SchLib;{url}/PcbLib" if url else "", extra=extra)
     override = {"LibraryDatabaseType", "LibraryDatabasePath", "DatabasePathRelative"}
-    if win_dir:
+    if win_dir or (_nt() and _placeholder_connection(lib)):       # never a connection set in Altium's DbLib editor
         override.add("ConnectionString")
     if url:
         override |= {"SVNRepositoryURL", "LibrarySearchPath"}
@@ -465,7 +495,7 @@ def main(argv=None):
     ap.add_argument("--svn", action="store_true", help="write an .SVNDbLib (SVN Database Library) instead of a .DbLib")
     ap.add_argument("--name", default="ecadlib", help="base name of the .DbLib/.SVNDbLib, .xlsx and .csv")
     ap.add_argument("--prune", action="store_true", help="delete rows and model files (written by ecadlib) no longer in the plan")
-    ap.add_argument("--win-dir", help=r"Windows folder the library lives in, for the Excel connection string (default C:\ecadlib\library)")
+    ap.add_argument("--win-dir", help=r"Windows folder the library lives in, for the Excel connection string (default: on Windows the --to folder itself, elsewhere C:\ecadlib\library)")
     ap.add_argument("--svn-url", help="repository URL of --to (default: from `svn info`)")
     ap.add_argument("--commit", action="store_true", help="svn add/commit the changed files (needs svn on PATH and a working copy)")
     ap.add_argument("-m", "--message", default="ecadlib dblib-sync", help="svn commit message")

@@ -579,7 +579,7 @@ COLS = ["change", "mpn", "manufacturer", "name", "prev_status", "status", "prev_
 def write_reports(rows, out, meta, provs, unconfigured, http, a365=None):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
+    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=COLS, extrasaction="ignore")
         w.writeheader()
         w.writerows({**r, "sources": ",".join(r["sources"])} for r in rows)

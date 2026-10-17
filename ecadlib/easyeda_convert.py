@@ -28,6 +28,7 @@ easyeda2kicad 1.0.1's parameter dataclasses, not real payloads):
 import math, re
 
 U = 0.254                                     # one EasyEDA unit (10 mil) in mm
+SILK_CLEAR, SILK_HARD = 0.2, 0.1              # KLC F5.1 silk-to-pad gap; below SILK_HARD footprint_check errors
 FP_LAYERS = {3: "F.SilkS", 101: "F.SilkS", 13: "F.Fab", 99: "F.Fab", 100: "F.Fab"}
 PIN_TYPE = {"0": "unspecified", "1": "input", "2": "output", "3": "bidirectional", "4": "power_in"}
 
@@ -67,7 +68,7 @@ def footprint_to_kicad(data, name=None, notes=None):
     ox, oy = _f(head.get("x")), _f(head.get("y"))
     name = name or (head.get("c_para") or {}).get("package") or "EasyEDA"
     X, Y = (lambda x: (_f(x) - ox) * U), (lambda y: (_f(y) - oy) * U)
-    pads, lines, circles, dropped, extent = [], [], [], {}, []
+    pads, lines, circles, dropped, extent, copper = [], [], [], {}, [], []
     for s in data.get("shape") or []:
         if not isinstance(s, str):
             continue
@@ -96,10 +97,12 @@ def footprint_to_kicad(data, name=None, notes=None):
                 side = "B" if str(layer) == "2" else "F"
                 pads.append(f'  (pad {_q(num)} smd {kshape} {at} (size {_n(w)} {_n(h)}) (layers "{side}.Cu" "{side}.Paste" "{side}.Mask"))')
             extent += _rect(cx, cy, w, h, rot)
+            copper.append({"num": num, "x": cx, "y": cy, "w": w, "h": h, "rot": rot, "shape": kshape})
         elif kind == "HOLE":
             cx, cy, d = X(f[1]), Y(f[2]), 2 * _f(f[3]) * U
             pads.append(f'  (pad "" np_thru_hole circle (at {_n(cx)} {_n(cy)}) (size {_n(d)} {_n(d)}) (drill {_n(d)}) (layers "*.Cu" "*.Mask"))')
             extent += [(cx - d / 2, cy - d / 2), (cx + d / 2, cy + d / 2)]
+            copper.append({"num": "", "x": cx, "y": cy, "w": d, "h": d, "rot": 0, "shape": "circle"})
         elif kind in ("TRACK", "RECT", "CIRCLE"):
             lid = int(_f(f[2] if kind == "TRACK" else f[5] if kind in ("RECT", "CIRCLE") else 0))
             layer = FP_LAYERS.get(lid)
@@ -121,6 +124,7 @@ def footprint_to_kicad(data, name=None, notes=None):
                 dropped[kind] = dropped.get(kind, 0) + 1
         else:
             dropped[kind] = dropped.get(kind, 0) + 1
+    lines, circles = _clear_silk(lines, circles, copper, notes)
     if dropped:
         notes.append("EasyEDA shapes not converted: " + ", ".join(f"{k} x{v}" for k, v in sorted(dropped.items())))
     if not pads:
@@ -143,6 +147,40 @@ def footprint_to_kicad(data, name=None, notes=None):
                f'(end {_n(_grid(max(xs) + c, True))} {_n(_grid(max(ys) + c, True))}) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))')
     notes.append("courtyard drawn by ecadlib: pads and fab outline + 0.25 mm (EasyEDA has no courtyard layer)")
     return "\n".join(out + pads) + "\n)\n"
+
+
+def _clear_silk(lines, circles, copper, notes):
+    """Silk kept off the copper, as KiCad's own footprints and footprint_check want it (KLC F5.1): EasyEDA's library
+    draws silk outlines up to, or over, the pads (the fab cuts silk from copper when it makes the board). Silk lines are
+    cut back to SILK_CLEAR from every pad's outline (pieces shorter than 0.2 mm go); a silk circle (a pin-1 dot) is kept
+    whole unless it comes within SILK_HARD of a pad, and then left out. Returns (lines, circles)."""
+    from .footprint_adv import _clip_any, _pad_dist
+    if not copper:
+        return lines, circles
+    near = lambda pts, c: min(_pad_dist(x, y, p) for x, y in pts for p in copper) < c
+    out, cut = [], 0
+    for a, b, w, layer in lines:
+        sw = w or 0.1
+        c = SILK_CLEAR + sw / 2 + 0.005
+        L = math.hypot(b[0] - a[0], b[1] - a[1])
+        n = max(2, int(L / 0.01))
+        if layer != "F.SilkS" or not near([(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for k in range(n + 1)], c):
+            out.append((a, b, w, layer))
+            continue
+        cut += 1
+        out += [(p, q, w, layer) for p, q in _clip_any(a, b, copper, c, min_len=min(0.2, L))]
+    keep, gone = [], 0
+    for cx, cy, r, w, layer in circles:
+        ring = [(cx + r * math.cos(k * math.pi / 16), cy + r * math.sin(k * math.pi / 16)) for k in range(32)] + [(cx, cy)]
+        if layer == "F.SilkS" and near(ring, SILK_HARD + (w or 0.1) / 2 + 0.005):
+            gone += 1
+            continue
+        keep.append((cx, cy, r, w, layer))
+    if cut:
+        notes.append(f"silk: {cut} line(s) cut back to {SILK_CLEAR} mm from the pads (the EasyEDA outline ran up to or over the copper)")
+    if gone:
+        notes.append(f"silk: {gone} circle(s) left out: within {SILK_HARD} mm of a pad")
+    return out, keep
 
 
 def _rect(cx, cy, w, h, rot):

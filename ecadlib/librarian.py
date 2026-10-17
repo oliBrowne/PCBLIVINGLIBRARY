@@ -8,9 +8,10 @@ Per plan item (one per unique part), parts the triage found in a --lib library a
 anything still missing, the sources are tried in --sources order, each filling only what is still missing:
   kicad      the official KiCad libraries on gitlab.com. A name index of kicad-symbols (KiCad 9 <Lib>.kicad_symdir/
              <Name>.kicad_sym, so derived symbols/aliases are names too) and kicad-footprints is built once from the
-             GitLab tree API and cached (<cache>/kicad_library_index.json, 30 days). Symbol by MPN: exact name, a name
-             with KiCad's `x` wildcards (STM32F103C8Tx), or the MPN minus an ordering suffix (TPS62162DSG for
-             TPS62162DSGR); generic connectors by value (Conn_01x04). Footprint: the BOM footprint name, the symbol's
+             GitLab tree API and cached (<cache>/kicad_library_index.json, 30 days; a build stopped by a timeout or
+             HTTP 429 resumes from the cached pages after a pause of 15 min / 1 h, in which runs skip gitlab.com).
+             Symbol by MPN: exact name, a name with KiCad's `x` wildcards (STM32F103C8Tx), or the MPN minus an
+             ordering suffix (TPS62162DSG for TPS62162DSGR); generic connectors by value (Conn_01x04). Footprint: the BOM footprint name, the symbol's
              Footprint property, a footprint named after the MPN, or the shortest name starting with the BOM footprint.
              R/C/L/LED use Device:R/C/C_Polarized/L/LED and <Family>_SMD:<X>_<imperial>_<metric>Metric by package.
   easyeda    LCSC number (BOM, or found by MPN in triage) -> EasyEDA component JSON -> easyeda_convert -> KiCad text
@@ -52,19 +53,41 @@ SPECS = Path(F.__file__).with_name("package_specs")
 
 # ---------------------------------------------------------------- official KiCad library name index
 class KiCadLibrary:
-    def __init__(self, http, cache_file, refresh=False, max_age=30 * 86400):
+    """Name index of the official KiCad libraries (see the module docstring). Building it reads ~400 GitLab tree pages;
+    each page is kept in the HTTP cache, so a build that stops (timeout, HTTP 429) resumes where it stopped. After a
+    failed build, <index>.retry.json holds the next attempt back for RETRY_AFTER s (RETRY_AFTER_429 after a 429) so
+    every run in between goes straight to the other sources instead of waiting on gitlab.com again."""
+    PAGE_TIMEOUT = 20                          # s per tree page (the client's own timeout is 60 s)
+    RETRY_AFTER, RETRY_AFTER_429 = 15 * 60, 60 * 60
+
+    def __init__(self, http, cache_file, refresh=False, max_age=30 * 86400, now=time.time):
         self.http, self.error, self.symbols, self.footprints = http, None, {}, {}
         f = Path(cache_file)
-        if f.exists() and not refresh and (http.offline or time.time() - f.stat().st_mtime < max_age):
+        retry = f.with_name(f.name + ".retry.json")
+        wait = self._backoff(retry, now()) if not refresh else None
+        if f.exists() and not refresh and (getattr(http, "offline", False) or now() - f.stat().st_mtime < max_age):
             self._load(f)
+        elif wait:
+            self.error = wait
+            if f.exists():                     # a stale index beats none
+                self._load(f)
         else:
             try:
                 self.symbols = self._crawl("kicad-symbols", ".kicad_symdir", ".kicad_sym")
                 self.footprints = self._crawl("kicad-footprints", ".pretty", ".kicad_mod")
                 f.parent.mkdir(parents=True, exist_ok=True)
                 f.write_text(json.dumps({"built": time.strftime("%Y-%m-%d"), "symbols": self.symbols, "footprints": self.footprints}), encoding="utf-8")
+                retry.unlink(missing_ok=True)
             except IOError as e:
                 self.error = str(e)
+                self.symbols, self.footprints = {}, {}
+                if not getattr(http, "offline", False):
+                    try:
+                        retry.parent.mkdir(parents=True, exist_ok=True)
+                        hold = self.RETRY_AFTER_429 if "HTTP 429" in self.error else self.RETRY_AFTER
+                        retry.write_text(json.dumps({"after": now() + hold, "error": self.error}), encoding="utf-8")
+                    except OSError:
+                        pass
                 if f.exists():                 # a stale index beats none
                     self._load(f)
         self._norm, self._wild, self._fpn = {}, [], []
@@ -79,10 +102,29 @@ class KiCadLibrary:
         d = json.loads(f.read_text(encoding="utf-8"))
         self.symbols, self.footprints = d["symbols"], d["footprints"]
 
+    @staticmethod
+    def _backoff(retry, t):
+        """Why the index is not fetched now (a recent failed build), or None."""
+        try:
+            d = json.loads(retry.read_text(encoding="utf-8"))
+            after = float(d["after"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if t >= after:
+            return None
+        return (f"{d.get('error') or 'the last build failed'}; not retried until "
+                f"{time.strftime('%H:%M', time.localtime(after))} (--refresh-index retries now)")
+
+    def _get(self, url):
+        try:
+            return self.http.get(url, timeout=self.PAGE_TIMEOUT)
+        except TypeError:                      # a client without a per-request timeout
+            return self.http.get(url)
+
     def _crawl(self, repo, dsuf, fsuf):
         out = {}
         for page in range(1, 2000):
-            r = self.http.get(TREE.format(repo=repo, page=page))
+            r = self._get(TREE.format(repo=repo, page=page))
             if not r.ok:
                 raise IOError(f"{repo} tree page {page}: {r.error or f'HTTP {r.status}'}")
             items = r.json()
@@ -191,9 +233,11 @@ class Run:
     def kicad(self):
         if self._kicad is None:
             f = Path(self._kicad_args[0] or "")
-            if self._kicad_args[0] and not self.http.offline and (self._kicad_args[1] or not f.exists()):
+            held = self._kicad_args[0] and KiCadLibrary._backoff(f.with_name(f.name + ".retry.json"), time.time())
+            if self._kicad_args[0] and not self.http.offline and (self._kicad_args[1] or not f.exists()) and \
+                    (self._kicad_args[1] or not held):
                 getattr(self, "log", print)("  building the KiCad library name index from gitlab.com (first run only, "
-                                            "can take a few minutes; cached for 30 days) ...")
+                                            "can take a few minutes; cached for 30 days; resumes if it stops) ...")
             self._kicad = KiCadLibrary(self.http, *self._kicad_args)
         return self._kicad
 
@@ -287,6 +331,9 @@ class Run:
                 getattr(self, f"src_{s}")(st, item, ln, row, kind, mpn, fp_name, sym_name)
             except Exception as e:            # one bad source or part must not stop the run
                 st["tried"].append(f"{s}: failed ({type(e).__name__}: {e})")
+        lc = (row.get("lcsc") or "").split(" ")[0]
+        if row.get("src_description"):        # the part search's own text (JLCPCB / LCSC), after a KiCad symbol's
+            st["found"].setdefault("description", (row["src_description"], f"LCSC/JLCPCB part data {lc}".strip()))
         return st
 
     def local(self, st, row, kind, fp_name, sym_name):
@@ -379,6 +426,8 @@ class Run:
             st["found"].setdefault("datasheet", (url, f"EasyEDA {lcsc} (lcsc.url)"))
         if res.manufacturer:
             st["found"].setdefault("manufacturer", (res.manufacturer, f"EasyEDA {lcsc}"))
+        if res.extra.get("description"):
+            st["found"].setdefault("description", (res.extra["description"], f"EasyEDA {lcsc}"))
         got = []
         if not st["footprint"]:
             pkg = (result.get("packageDetail") or {})
@@ -576,9 +625,20 @@ def review_rows(items):
     return rows
 
 
-def write_review(rows, out, bom):
+def review_target(rules):
+    """Where ready parts go, for the review's wording: Altium 365 when the rules name a workspace, else the library."""
+    return "Altium 365" if str(((rules or {}).get("altium365") or {}).get("workspace") or "").strip() else "the library"
+
+
+def write_review(rows, out, bom, rules=None):
+    """rules: the library rules (None: the ecadlib.toml found from `out`), only for where ready parts go."""
     out = Path(out)
-    with open(out / "review.csv", "w", newline="", encoding="utf-8") as f:
+    if rules is None:
+        try:
+            rules = RU.resolve(None, out)
+        except Exception:                      # a broken ecadlib.toml is reported elsewhere; the review still gets written
+            rules = {}
+    with open(out / "review.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["part"])
         w.writeheader(); w.writerows(rows)
     src = lambda s: (s or "-").split(":")[0]
@@ -586,7 +646,7 @@ def write_review(rows, out, bom):
     for r in rows:
         counts[(src(r["symbol_from"]), src(r["footprint_from"]))] = counts.get((src(r["symbol_from"]), src(r["footprint_from"])), 0) + 1
     md = [f"# Librarian review - `{bom}`", "",
-          f"{len(rows)} parts: {sum(r['status'] == 'ready' for r in rows)} ready for Altium 365, "
+          f"{len(rows)} parts: {sum(r['status'] == 'ready' for r in rows)} ready for {review_target(rules)}, "
           f"{sum(r['status'] == 'held' for r in rows)} held, {sum(bool(r['needs_human']) for r in rows)} need a person.", "",
           "Sources (symbol / footprint): " + ", ".join(f"{a} / {b}: {n}" for (a, b), n in sorted(counts.items())), "",
           "| Part | Status | Symbol from | Footprint from |", "|---|---|---|---|"]
@@ -707,7 +767,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     MG.write_stamp(out, ["plan", "librarian_state"])
     LK.write_lock(out, items, state, bom, libs, sources, cache, providers, gen_step, rules)
     RC.write_report(checks, out / "release_check", plan_f)
-    write_review(review_rows(items), out, bom)
+    write_review(review_rows(items), out, bom, rules)
     return items
 
 
