@@ -1493,7 +1493,7 @@ ecadlib altium-menu check-bom D:/boards/x/Board.PrjPcb | fill Board.PrjPcb | que
 python3 -m tests.test_altium_menu
 ```
 
-`build` writes a DelphiScript script project (`ecadlib_menu.PrjScr` + `.pas`) with three procedures that a menu or
+`build` writes a DelphiScript script project (`ecadlib_menu.PrjScr` + `.pas`) with four procedures that a menu or
 toolbar button can call: **AddPartFromMPN** (input boxes for the MPN and an optional manufacturer; the part is added
 to `<workspace>/uploads/altium-menu/parts.csv`, the librarian runs on that list, and a ready part is synced into the
 library folder with `altium-pkg`/`dblib-sync`, or released to Altium 365 when the rules set `[altium365] workspace`;
@@ -1507,6 +1507,21 @@ answers; refuses a port that serves another workspace or another program).
 Settings live in `ecadlib_menu.ini` next to the script (workspace, library, name, command, hidden, timeout_s, port,
 offline; relative paths start at that folder; a rebuild keeps the file). Workspace `altium_menu(win_dir)` and the MCP
 tool `altium_menu` write it into `<workspace>/altium_menu/` with `workspace=..`.
+
+**The ecadlib dialog and panel.** The entries work in one dark, borderless dialog (`ecadlib_dialog.pas` + `.dfm`,
+`ecadlib/altium_forms.py`) styled like Altium's own: **Check project BOM** shows "Checking...", the line being looked
+up and a progress line, then the count ("24 lines") with a row per kind (already in your library, a source can supply,
+needs a footprint, not fitted) and **Later** / **Fill the library now**; the fill shows the librarian part by part,
+then "N of M ready" with the held parts. **Add part from MPN** asks for the MPN and manufacturer in the same dialog,
+then lists where ecadlib looked, what it took and the release check, and reinstalls the library so the part shows in
+the Components panel. A `TTimer` reads `jobs\<id>\progress.ini` (done, total, text, rows) while ecadlib runs and
+`result.ini` (`big`, `rows`, `row1`.. as `label|value|ok`) at the end, so Altium keeps painting. Only the review
+queue (for a held part) and the full BOM report (**Open the full report**, `action=open`, files in the workspace only)
+open in the browser. **ShowEcadlibPanel** opens an Altium panel (`FormKind = fkServerPanel`, `ecadlib_panel.pas`)
+with an MPN box, Check project BOM, the review queue and the last results (`recent.ini`); while it is open Altium
+runs no other script, so close it to run others. `dialogs=0` in the .ini brings back Altium's plain message boxes.
+Tested in Altium Designer 26.10 (script forms, colours, timer, modal results; a web view is not available to
+scripts: `TWebBrowser` is an undeclared identifier there).
 
 **How the script runs ecadlib.** No user text goes on a command line: each click makes `jobs\<id>\` next to the
 script and writes `request.ini` with `TIniFile` (action, mpn, manufacturer, project, config). It then calls
@@ -1522,7 +1537,7 @@ NEXAR_TOKEN, port taken, ...); ecadlib's output is in `jobs\<id>\log.txt`. `hidd
 console instead. No key is in any file: keys stay in environment variables.
 
 **Install.** Preferences > Scripting System > Global Projects > Install from file > `ecadlib_menu.PrjScr`; then
-right-click a menu or toolbar > Customize > [Scripts] and drag the three procedures onto a menu (once per editor).
+right-click a menu or toolbar > Customize > [Scripts] and drag the four procedures onto a menu (once per editor).
 With `--win-dir` (or when built on Windows) it also writes `ecadlib_menu.DXPPrf`, a preferences file (zip of `DXP.RCS`
 + `IncludedFiles.ini`, the format of Altium-Designer-addons' Altium-saved `UI customizations/Menu_SVN`) that adds an
 "&ecadlib" menu before Window in the schematic, PCB, SchLib and PcbLib editors (`ScriptingSystem:RunScript` with

@@ -14,6 +14,10 @@
         AddPartFromMPN     asks for an MPN (+ optional manufacturer), builds the part, reinstalls the library
         CheckProjectBOM    checks the focused project's BOM, opens the report, offers to fill the library
         OpenReviewQueue    opens the ecadlib web UI at the review queue (starts `ecadlib ui` when it is not running)
+        ShowEcadlibPanel   opens the ecadlib panel (an Altium panel: MPN box, Check project BOM, recent results)
+  ecadlib_dialog.pas + .dfm, ecadlib_panel.pas + .dfm
+                                    the ecadlib dialog and panel (ecadlib.altium_forms): dark, like Altium's own, with
+                                    live progress read from the job's progress.ini; dialogs=0 in the .ini turns it off
   ecadlib_menu.ini                  settings: workspace, library folder, command, hidden, timeout_s, port (kept when
                                     it exists, so your edits survive a rebuild)
   ecadlib_run.cmd + ecadlib_run.vbs how the script runs ecadlib: the .vbs starts the .cmd without a console window
@@ -572,25 +576,31 @@ def readme_text(win_dir, prefs):
    this PC to get the ready-made menu file.)""")
     return f"""ecadlib menu for Altium Designer (written by `ecadlib altium-menu build`, ecadlib {__version__})
 
-What it adds: an "ecadlib" menu (or toolbar buttons) with three entries:
+What it adds: an "ecadlib" menu (or toolbar buttons) with four entries:
   Add part from MPN        asks for a manufacturer part number, builds the part, reinstalls the library
-  Check this project BOM   checks the focused project's BOM, opens the report, offers to fill the library
+  Check this project BOM   checks the focused project's BOM: counts per kind, then Later / Fill the library now
   Open review queue        opens the ecadlib web UI at the review queue in your browser
+  ecadlib panel            an Altium panel with an MPN box, Check project BOM and the last results. While it is
+                           open, Altium runs no other script: use its buttons, and close it to run other scripts.
+The entries work in the ecadlib dialog (dark, like Altium's own, with live progress); you stay in Altium. Only the
+review queue (a held part needs a person) and the full BOM report (on request) open in your browser. dialogs=0 in
+{INI} brings back Altium's plain message boxes.
 
 Needs: ecadlib installed on this PC (pip install ecadlib; `ecadlib doctor` checks it). Settings are in {INI}
 (workspace, library folder, how to run ecadlib). Your API keys stay in environment variables; no file here holds one.
 
 Install (once):
 1. Altium: DXP (AD17) or the gear icon (AD18+) > Preferences > Scripting System > Global Projects > Install from
-   file... > {w}\\{PROJECT}. The three procedures now appear in File > Run Script... under {PROJECT}.
+   file... > {w}\\{PROJECT}. The four procedures now appear in File > Run Script... under {PROJECT}.
 2. Menu: right-click any menu or toolbar > Customize... > Categories: [Scripts] (or [Custom]) > drag
-   {UNIT}>AddPartFromMPN, >CheckProjectBOM and >OpenReviewQueue onto a menu or toolbar; rename them in the entry's
+   {UNIT}>AddPartFromMPN, >CheckProjectBOM, >OpenReviewQueue and >ShowEcadlibPanel onto a menu or toolbar; rename them in the entry's
    properties. Repeat for each editor you want them in (schematic, PCB, library editors).
 {menu}
 3. Try it: open a PCB project and pick ecadlib > Check this project BOM.
 
 What happens on a click: the script writes jobs\\<id>\\request.ini next to it, runs {RUN_CMD} without a console
-window (through {RUN_VBS}; set hidden=0 in {INI} to see the console), waits, and reads jobs\\<id>\\result.ini.
+window (through {RUN_VBS}; set hidden=0 in {INI} to see the console); the dialog follows jobs\\<id>\\progress.ini
+and reads jobs\\<id>\\result.ini at the end.
 If something fails, the message names the fix and jobs\\<id>\\log.txt has ecadlib's output.
 
 This script was written from Altium's scripting reference and public scripts and was never run inside Altium when it
