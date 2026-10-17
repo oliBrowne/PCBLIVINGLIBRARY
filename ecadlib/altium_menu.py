@@ -614,7 +614,8 @@ def altium_running():
     return "x2.exe" in out.lower()
 
 
-def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_running, now=None):
+def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_running, now=None, settle_s=5.0,
+                     sleep=time.sleep):
     """Put the "ecadlib" menu into Altium's top menu bar (schematic, PCB, SchLib and PcbLib editors, before Window)
     by merging it into each Altium's DXP.RCS, after a backup next to it. Altium must be closed: it writes that
     file when it closes. remove=True takes it out again. -> {"installed"|"removed": [DXP.RCS], "backups": [...]}."""
@@ -640,6 +641,14 @@ def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_runnin
             backups.append(str(bak))
         rcs.write_bytes(new.encode("latin-1"))
         done.append(str(rcs))
+    if done and settle_s:                # an Altium still closing writes its old menus over ours: look again
+        sleep(settle_s)
+        lost = [r for r in done if Path(r).read_bytes() != merge_rcs(Path(r).read_text(encoding="latin-1"), win,
+                                                                       remove=remove).encode("latin-1")]
+        if lost or running():
+            raise ValueError("an Altium Designer that was still closing wrote its old menus back over the ecadlib menu"
+                             f" ({', '.join(lost) or 'Altium is running again'}): wait until no X2.EXE is left in Task "
+                             "Manager, then run this again")
     return {"removed" if remove else "installed": done, "backups": backups, "folders": [str(f) for f in folders]}
 
 

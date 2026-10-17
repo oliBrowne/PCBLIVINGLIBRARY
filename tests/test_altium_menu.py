@@ -217,7 +217,15 @@ def test_menu_goes_straight_into_altiums_menu_file():
         assert "close it first" in str(e)
     win = "D:\\ecadlib menu" if os.name != "nt" else str(d / "menu")
     with mock.patch.object(AM, "check_win_dir", lambda w: "D:\\ecadlib menu"):
-        r = AM.install_menu_bar(win, [alt], running=lambda: False, now=__import__("datetime").datetime(2026, 10, 17, 4, 0))
+        # an Altium still closing writes its old file back: reported, not taken for done
+        try:
+            AM.install_menu_bar(win, [alt], running=lambda: False,
+                                sleep=lambda s: (alt / "DXP.RCS").write_bytes(theirs.encode("latin-1")))
+            raise AssertionError("must notice the overwrite")
+        except ValueError as e:
+            assert "still closing" in str(e)
+        r = AM.install_menu_bar(win, [alt], running=lambda: False, now=__import__("datetime").datetime(2026, 10, 17, 4, 0),
+                                sleep=lambda s: None)
         text = (alt / "DXP.RCS").read_bytes().decode("latin-1")
         assert r["installed"] == [str(alt / "DXP.RCS")] and Path(r["backups"][0]).read_bytes() == theirs.encode("latin-1")
         blocks = AM.rcs_blocks(text)
@@ -226,9 +234,9 @@ def test_menu_goes_straight_into_altiums_menu_file():
         assert {"SchDoc_ecadlib_Menu", "PcbDoc_ecadlib_Menu", "SchLib_ecadlib_Menu", "PcbLib_ecadlib_Menu"} <= set(ids)
         assert blocks[ids.index("PCBCustom")] == ["Tree PCBCustom Caption='[Custom]' TopLevel='True'  End"]
         assert "ProcName=D:\\ecadlib menu\\ecadlib_menu.pas>CheckProjectBOM" in text
-        again = AM.install_menu_bar(win, [alt], running=lambda: False)
+        again = AM.install_menu_bar(win, [alt], running=lambda: False, sleep=lambda s: None)
         assert again["installed"] == [] and again["backups"] == []
-        AM.install_menu_bar(win, [alt], remove=True, running=lambda: False)
+        AM.install_menu_bar(win, [alt], remove=True, running=lambda: False, sleep=lambda s: None)
         back = (alt / "DXP.RCS").read_bytes().decode("latin-1")
         assert "ecadlib" not in back and [AM._block_id(b) for b in AM.rcs_blocks(back)] == ["PCBCustom", "Mine_Run", "Mine_Menu"]
     for bad in ("Tree X Caption='a' \r\n", "End\r\n"):
