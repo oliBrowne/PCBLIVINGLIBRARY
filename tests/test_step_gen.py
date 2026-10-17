@@ -120,6 +120,22 @@ def test_easyeda_footprint_names():
     assert {"SOIC-8_L5.0-W4.0-P1.27-LS6.0-BL", "SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR"} <= seen, seen
 
 
+def test_easyeda_names_that_are_not_two_gullwing_rows():
+    """LCSC's DIP-8 (through-hole), TO-252-2 (two leads and a tab on the other side) and SOT-223-4 names have the same
+    L-W-P-LS shape as an SOIC; they made an SMD gull-wing model with a lead row where the tab is. No model now.
+    TSOT-23-5 / SC-70-6 read like SOT-23-5 / SOT-363 and have a family height."""
+    for n in ("DIP-8_L9.8-W6.6-P2.54-LS7.6-BL", "TO-252-2_L6.5-W6.1-P4.58-LS9.9-BR", "TO-263-2_L10.0-W9.1-P5.08-LS15.3-BR",
+              "SOT-223-4_L6.5-W3.5-P2.30-LS7.0-BR"):
+        assert S.spec_from_name(n) is None, n
+    for n, h in (("TSOT-23-5_L2.9-W1.6-P0.95-LS2.8-BR", 1.0), ("SC-70-6_L2.0-W1.3-P0.65-LS2.1-BL", 0.95)):
+        text, info = S.generate(n)
+        _ok(text, n)
+        x0, y0, _, x1, y1, z1 = info["bbox"]
+        m = S.EASYEDA.match(n)
+        assert abs(y1 - y0 - float(m.group(6))) < 1e-6 and abs(x1 - x0 - float(m.group(3))) < 1e-6 and z1 == h, (n, info["bbox"])
+        assert sum(1 for s in S.build(S.spec_from_name(n))[0] if re.fullmatch(r"pin \d+", s.name)) == int(m.group(2))
+
+
 def _solid_boxes(solids):
     return {s.name: (min(v[0] for v in s.verts), min(v[1] for v in s.verts), max(v[0] for v in s.verts), max(v[1] for v in s.verts))
             for s in solids}

@@ -356,6 +356,22 @@ def test_menu_part_goes_to_the_table_its_source_names():
     assert X.kind_of(["LDO regulator, stable with ceramic output capacitors"], ["", "", "SOT-223"]) is None  # capacitors"
 
 
+def test_lcsc_number_footprint_is_not_a_chip_capacitor():
+    # an EasyEDA part's footprint is named by its LCSC number: easyeda:C7593 is an NE555, not "C" + a 4-digit size
+    for fp in ("easyeda:C7593", "easyeda:C6186", "LCSC:C1525", "C2002", "easyeda:C1206"):
+        assert X.kind_of([], [fp]) is None, fp
+    rows = X.to_rows([{"designator": "U1", "mpn": "NE555DR", "value": "NE555DR", "footprint": "easyeda:C7593"}])
+    assert list(rows) == ["ICs"], list(rows)
+    for fp, cat in (("C0603", "Capacitors"), ("R0402", "Resistors"), ("L1008", "Inductors"),
+                    ("Capacitor_SMD:C_0805_2012Metric", "Capacitors"), ("R_01005_0402Metric", "Resistors")):
+        assert X.kind_of([], [fp]) == cat, fp
+    # an IC package outranks the words: a digipot / matched pair / ESD array is an IC
+    assert X.kind_of(["Precision Matched Resistors"], ["SOT-23"]) is None
+    assert X.kind_of(["Programmable Resistor"], ["", "MSOP-10"]) is None
+    assert X.kind_of(["ESD Protection for Connector"], ["Package_TO_SOT_SMD:SOT-23-6"]) is None
+    assert X.kind_of(["USB Connectors"], ["SMD"]) == "Connectors"
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_dblib_sync"]))

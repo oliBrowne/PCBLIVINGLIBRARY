@@ -50,7 +50,7 @@ HEIGHT = [(r"^R_0201", 0.26), (r"^R_0402", 0.35), (r"^R_0603", 0.45), (r"^R_0805
           (r"^L_0402", 0.5), (r"^L_0603", 0.8), (r"^L_0805", 1.0), (r"^L_", 1.2), (r"^LED_0402", 0.4), (r"^LED_0603", 0.6),
           (r"^LED_0805", 0.8), (r"^LED_", 1.1), (r"^CP_EIA", 1.6), (r"^(D_)?SOD-?123", 1.17), (r"^(D_)?SOD-?323", 0.9),
           (r"^(D_)?SOD-?523", 0.6), (r"^(D_)?SM[ABC]\b", 2.3), (r"^SOT-223", 1.8), (r"^SOT-89", 1.5), (r"^SOT-?(323|363|353)", 0.95),
-          (r"^SOT-23", 1.1), (r"^(TSSOP|MSOP|VSSOP|HTSSOP|TSOP)", 1.1), (r"^SSOP", 1.75), (r"^(SOIC|[EH]?SOP|SO-)", 1.75),
+          (r"^SC-?70", 0.95), (r"^TSOT-23", 1.0), (r"^SOT-23", 1.1), (r"^(TSSOP|MSOP|VSSOP|HTSSOP|TSOP)", 1.1), (r"^SSOP", 1.75), (r"^(SOIC|[EH]?SOP|SO-)", 1.75),
           (r"(QFN|DFN|SON)", 0.8), (r"^LQFP", 1.6), (r"^TQFP", 1.2), (r"QFP", 2.0)]
 
 
@@ -511,7 +511,9 @@ IMPERIAL = {"0201": "0603", "0402": "1005", "0603": "1608", "0805": "2012", "100
             "1812": "4532", "2010": "5025", "2220": "5750", "2512": "6332"}             # EIA inch code -> metric code
 # EasyEDA / LCSC names: <family>-<pins>_L<body along the pin rows>-W<body across>-P<pitch>[-LS<lead span>][-BL|BR|TL..][-EP<w>[x<l>]]
 EASYEDA = re.compile(r"([A-Z][A-Z0-9-]*?)-(\d+)_L([\d.]+)-W([\d.]+)-P([\d.]+)(?:-LS([\d.]+))?(?:-[A-Z]{2})?(?:-EP([\d.]+)(?:[xX\-]([\d.]+))?)?")
-SOT_ODD = re.compile(r"(SOT-23|SOT-323|SOT-353|SOT-416|SOT-523|SC-59|SC-70|SC-88)$")      # 3 / 5 pins: 2+1 / 3+2 leads
+SOT_ODD = re.compile(r"T?(SOT-23|SOT-323|SOT-353|SOT-416|SOT-523|SC-59|SC-70|SC-88)$")    # 3 / 5 pins: 2+1 / 3+2 leads
+# two rows of gull-wing leads; not DIP-8 (through-hole), TO-252-2 / SOT-223 / SOT-89 (leads on one side and a tab)
+GULLWING_FAM = re.compile(r"(?:[A-Z]*SOP|[A-Z]*SOIC|SO|T?SOT-(?:23|26|323|353|363|416|523|563|666)|SC-(?:59|70|74|88))$")
 
 
 def _easyeda_spec(name, m):
@@ -537,6 +539,8 @@ def _easyeda_spec(name, m):
         return {"name": name, "package_type": "qfp", "pin_count": n, "pitch": e, "body_length": _d(W), "body_width": _d(L),
                 "lead_span": _d(LS), "lead_span_y": _d(round(LS - W + L, 3)), "terminal_width": _d(round(min(0.37, 0.45 * e), 3)),
                 "terminal_length": _d(0.6), "rotation": 90}
+    if not GULLWING_FAM.match(fam):
+        return None
     s = {"name": name, "package_type": "gullwing", "pin_count": n, "lead_span": _d(LS), "body_width": _d(W), "body_length": _d(L),
          "terminal_width": _d(round(min(0.42, 0.33 * e), 3)),
          "terminal_length": _d(round(min(0.8 if e >= 1.0 else 0.6, 0.7 * (LS - W) / 2), 2)), "rotation": 90}
