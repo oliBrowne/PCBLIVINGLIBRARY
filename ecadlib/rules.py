@@ -90,15 +90,16 @@ DEFAULTS = {
                   "escalate": True, "max_attempts": 4,
                   # ecadlib.crosscheck: a second source (standard table / a second read) before a footprint is accepted
                   "cross_check": "auto", "cross_check_model": ""},
-    "symbols": {                               # ecadlib.symbol_layout: grouped pins for big IC symbols
-        "layout_pins": 40,                     # parts with at least this many pins get grouped (0 = never)
+    "symbols": {                               # ecadlib.symbol_layout: IC symbol pins grouped by function
+        "layout_pins": 1,                      # parts with at least this many pins get grouped (0 = never)
+        "power_side": "top",                   # top: power top, ground bottom | left: both on the left side, top and bottom empty
         "split_pins": 0,                       # parts with more pins than this become multi-part (0 = never)
         "unit_pins": 48,                       # most pins in one signal part when split
         "stack_power": "stack",                # stack | hide | none (same-name power pins)
         "pin_length": 300,                     # mil
         "grid": 100,                           # mil (pin pitch, body edges)
-        "order": ["power", "analog", "power_out", "reset", "clock", "debug", "usb", "adc", "other_in", "uart", "i2c", "spi",
-                  "can", "eth", "ports", "other_out", "nc", "ground", "ep"],
+        "order": ["power", "analog", "reset", "clock", "debug", "usb", "adc", "other_in", "other", "power_out", "uart", "i2c",
+                  "spi", "can", "eth", "ports", "other_out", "nc", "ground", "ep"],
         "sides": {},                           # group -> left | right | top | bottom (overrides)
     },
     "agent": {                                 # ecadlib.agent: the library agent (off unless enabled)
@@ -473,7 +474,9 @@ def _check_table(where, sec, k, v, d):
 
 
 def _check_symbols(where, sy):
-    from .symbol_layout import GROUPS, STACKS
+    from .symbol_layout import GROUPS, STACKS, POWER_SIDES
+    if "power_side" in sy and sy["power_side"] not in POWER_SIDES:
+        _err(where, "symbols.power_side", f"= {sy['power_side']!r}: must be one of {', '.join(POWER_SIDES)}")
     if "stack_power" in sy and sy["stack_power"] not in STACKS:
         _err(where, "symbols.stack_power", f"= {sy['stack_power']!r}: must be one of {', '.join(STACKS)}")
     grid = sy.get("grid", DEFAULTS["symbols"]["grid"])
@@ -856,8 +859,9 @@ HELP = {
     "ai.assist": "auto: rails by the model's tier (frontier: none beyond support) | off: support only | full: every rail",
     "ai.feedback_retry": "one more turn with datasheet's exact check errors before a failing answer is kept (every model)",
     "datasheet.provider": "\"\" = [ai] provider; set it to read datasheets with another provider than the rest",
-    "symbols": "Big IC symbols: pins grouped by function (power top, ground bottom, inputs left, ports right); see `ecadlib symbol -h`",
+    "symbols": "IC symbols: pins grouped by function (inputs left, outputs right, power top, ground bottom); see `ecadlib symbol -h`",
     "symbols.layout_pins": "parts with at least this many pins get the grouped layout; smaller parts keep the plain one (0 = never)",
+    "symbols.power_side": "top: power pins on top, ground on the bottom | left: top and bottom empty, power at the top of the left side, ground at its bottom",
     "symbols.split_pins": "more pins than this: a multi-part symbol (power part + signal parts); 0 = one part always",
     "symbols.stack_power": "stack (one pin shown, the rest on top of it) | hide (the rest hidden, tied by name) | none",
     "agent.watch": "sources = [{ type = bom_file|folder|altium_project|a365_project, ref = path or project, name, workspace, "
@@ -888,7 +892,7 @@ HELP = {
            "where-used, stale_days = how much older a differing copy must be to count as behind; relative paths start "
            "at this file's folder",
     "setup.tool": "altium | kicad | both: which outputs `ecadlib init` and `ecadlib demo` point you at",
-    "symbols.order": "group order on each side; groups: power analog power_out ground ep reset clock debug usb adc other_in uart i2c spi can eth ports other_out nc",
+    "symbols.order": "group order on each side; groups: power analog power_out ground ep reset clock debug usb adc other_in other uart i2c spi can eth ports other_out nc",
 }
 
 

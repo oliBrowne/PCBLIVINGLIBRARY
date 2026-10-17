@@ -39,7 +39,7 @@ from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_tria
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from . import crosscheck as CC, messages as M, sheetsafe as SS
-from . import symbol_layout as SL
+from . import fp_tidy as FT, symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
 
 TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository/tree?ref=master&recursive=true&per_page=100&page={page}"
@@ -261,14 +261,18 @@ class Run:
         self.written[str(path)] = st["symbol"]
 
     def put_kicad_sym(self, st, chain, name, fp_name, source, extra=(), layout=False):
-        """layout: re-lay big symbols out with pins grouped by function (EasyEDA symbols; KiCad library symbols are
-        curated and kept as drawn)."""
+        """layout: re-lay plain IC symbols out by the house pin rule (EasyEDA symbols). KiCad library symbols are curated
+        and kept as drawn, unless their pin text would overlap in Altium (symbol_layout.text_problems)."""
         notes = []
         sym = K.convert_symbol(chain, name, fp_name, list(extra), None, notes)
         npins = len({pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin"})
-        if layout and SL.wants_layout(npins, self.rules) and sym.get("parts", 1) == 1:
+        clash = SL.text_problems(sym)
+        if (layout or clash) and SL.wants_layout(npins, self.rules) and SL.is_box_ic(sym):
             sym = SL.relayout(sym, self.rules)
-            notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else ""))
+            notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else "")
+                         + (f"; the drawn symbol's pin text overlapped ({clash[0]})" if clash else ""))
+        elif clash:
+            notes.append(f"pin text overlaps ({'; '.join(clash[:3])}); not a plain IC box, so kept as drawn: check it")
         self.put_sym(st, sym, source, notes)
 
     # ---- per part
@@ -393,6 +397,7 @@ class Run:
             pkg = (result.get("packageDetail") or {})
             notes = []
             text = EC.footprint_to_kicad(pkg.get("dataStr") or {}, pkg.get("title") or fp_name, notes)
+            text = FT.tidy(text, notes)                       # to the rule book: silk reference, pin 1, rounded pads
             self.put_fp(st, text, fp_name, f"easyeda:{lcsc}", None)
             st["footprint"]["notes"] = notes + st["footprint"]["notes"]
             got.append(f"footprint {pkg.get('title', '')}")

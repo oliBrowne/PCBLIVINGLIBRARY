@@ -435,7 +435,10 @@ def test_workspace_and_mcp_tools():
         assert M.call_tool(w, "file_formats", {})["old"] == 0
         w.librarian_run("uploads/board.csv")
         rep = M.call_tool(w, "rebuild_check", {"bom": "uploads/board.csv"})
-        assert rep["ok"] and rep["lock"] == "librarian/board/library.lock.json", RB.render(rep)
+        assert rep["lock"] == "librarian/board/library.lock.json", RB.render(rep)
+        # the only drift: EEPART1's footprint, kept from 0.3.0, rebuilds tidier now (fp_tidy, after 0.3.0)
+        drift = {(r["part"], Path(r["file"]).suffix) for r in rep["rows"] if r["result"] == "DRIFT"}
+        assert drift <= {("EEPART1", ".PcbLib"), ("EEPART1", ".kicad_mod")}, RB.render(rep)
         assert {d["part"] for d in rep["inputs"] if d["what"] == "inputs"} == {"EEPART1"}   # kept from 0.3.0: not recorded
 
 
