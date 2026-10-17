@@ -200,7 +200,7 @@ def test_kicad_fix_and_build_bom():
     _fresh()
     row = _row(ws2.hub(), "LM358")
     assert row["origin"] == "library" and row["cells"]["kicad"]["state"] == "present"
-    assert [f["action"] for f in ws2.hub_part(row["key"])["fixes"]] == ["build"]
+    assert [f["action"] for f in ws2.hub_part(row["key"])["fixes"]] == ["build", "copy:altium"]
     bom = ws2.hub_build_bom(row["key"])
     text = ws2.inside(bom).read_text(encoding="utf-8")
     assert "LM358DR" in text and "SOIC-8" in text and text.splitlines()[1].startswith("U1,")
@@ -254,6 +254,112 @@ def _serve(ws, team=None):
     return srv, f"http://127.0.0.1:{srv.server_address[1]}"
 
 
+def _projects(t, ws_dir):
+    """A KiCad project whose schematic uses AO3401A and Resistor, an Altium project, and [hub] projects naming both."""
+    b = t / "boards"
+    (b / "kb").mkdir(parents=True)
+    (b / "ab").mkdir()
+    (b / "kb" / "kb.kicad_pro").write_text("{}")
+    (b / "kb" / "kb.kicad_sch").write_text('(kicad_sch (version 20231120)\n (symbol (lib_id "my:AO3401A") (property "Reference" "Q1"))\n'
+                                           ' (symbol (lib_id "old:Resistor") (property "Reference" "R1"))\n'
+                                           ' (symbol (lib_id "power:GND") (property "Reference" "#PWR01")))\n')
+    (b / "ab" / "ab.PrjPcb").write_text("[Design]\r\nVersion=1.0\r\n\r\n[Document1]\r\nDocumentPath=ab.SchDoc\r\n\r\n"
+                                        "[Parameter1]\r\nName=Board\r\nValue=ab\r\n")
+    Path(ws_dir).mkdir(parents=True, exist_ok=True)
+    (Path(ws_dir) / "ecadlib.toml").write_text(f'[hub]\nprojects = ["{b.as_posix()}"]\n')
+    return b
+
+
+def test_tool_view_lists_one_tools_library():
+    t = _demo()
+    lib = _mylib(t)
+    ws = Workspace(t / "ws", [str(lib)], offline=True)
+    _fresh()
+    res = ws.hub(tool="kicad")
+    kicad = next(x for x in res["tools"] if x["tool"] == "kicad")
+    assert res["matched"] == kicad["parts"] and all("kicad" in r["cells"] for r in res["rows"])
+    libs = {l["library"].split("/")[-1]: l for l in kicad["libraries"]}
+    assert "my.kicad_sym" in libs and libs["my.kicad_sym"]["origin"] == "library" and kicad["updated"], libs
+    one = ws.hub(tool="kicad", library=libs["my.kicad_sym"]["library"])
+    assert one["matched"] == libs["my.kicad_sym"]["parts"] and all(
+        any(p["library"].endswith("my.kicad_sym") for p in r["places"]["kicad"]) for r in one["rows"])
+    try:
+        ws.hub(tool="orcad")
+        raise AssertionError("unknown tool must be refused")
+    except ValueError as e:
+        assert "unknown tool" in str(e)
+
+
+def test_copy_altium_to_kicad_into_a_project():
+    t = _demo()
+    lib = _mylib(t)
+    alt = t / "altonly"
+    shutil.copytree(lib / "altium", alt)
+    b = _projects(t, t / "ws2")
+    ws = Workspace(t / "ws2", [str(alt)], offline=True)
+    _fresh()
+    res = ws.hub()
+    assert all("kicad" not in r["cells"] for r in res["rows"])
+    kicad = next(x for x in res["tools"] if x["tool"] == "kicad")
+    assert kicad["can_copy"] == res["total"] and kicad["missing"] == res["total"]
+    prj = {p["name"]: p for p in res["project_list"]}
+    assert prj["kb"]["tool"] == "kicad" and prj["kb"]["parts"] == 2 and prj["kb"]["can_copy"] == 2, prj
+    assert [r["name"] for r in ws.hub(project=prj["kb"]["path"])["rows"]] == ["AO3401A", "Resistor"]
+    part = ws.hub_part("AO3401A")
+    assert "copy:kicad" in {f["action"] for f in part["fixes"]}
+    try:
+        ws.hub_copy(["AO3401A"], "kicad", prj["ab"]["path"])
+        raise AssertionError("an Altium project can't take KiCad copies")
+    except ValueError as e:
+        assert "not a KiCad project" in str(e)
+    try:
+        ws.hub_copy(["AO3401A"], "kicad", str(t / "elsewhere.kicad_pro"))
+        raise AssertionError("only projects under [hub] projects")
+    except ValueError as e:
+        assert "[hub] projects" in str(e)
+    before = {f: f.read_bytes() for f in alt.iterdir()}
+    out = ws.hub_copy([r["key"] for r in res["rows"]], "kicad", prj["kb"]["path"], "Ann <ann@example.com>")
+    assert len(out["copied"]) == res["total"] and not out["skipped"], out["skipped"]
+    assert "kb's sym-lib-table" in out["project"]
+    assert {f: f.read_bytes() for f in alt.iterdir()} == before                 # the user's library is only read
+    table = (b / "kb" / "sym-lib-table").read_text()
+    assert '(name "ecadlib_hub")' in table and "hub/library/kicad/ecadlib_hub.kicad_sym" in table
+    assert "ecadlib_hub.pretty" in (b / "kb" / "fp-lib-table").read_text()
+    _fresh()
+    res = ws.hub()
+    r = _row(res, "AO3401A")
+    assert r["cells"]["kicad"]["state"] == "same", r["cells"]                  # the converted copy matches the Altium one
+    assert r["places"]["kicad"][0]["library"] == "hub/library/kicad/ecadlib_hub.kicad_sym" and r["places"]["kicad"][0]["origin"] == "ecadlib"
+    assert r["cells"]["kicad"]["updated_by"] == "Ann <ann@example.com>"
+    assert ws.hub_copy(["AO3401A"], "kicad")["skipped"][0]["why"] == "already in KiCad"
+    assert any(e.get("what") == "copied to KiCad from Altium" and e.get("key") == "AO3401A" for e in H.read_history(ws.root))
+
+
+def test_copy_kicad_to_altium_into_a_prjpcb():
+    t = _demo()
+    lib = _mylib(t)
+    kic = t / "kionly"
+    shutil.copytree(lib / "kicad", kic)
+    b = _projects(t, t / "ws3")
+    ws = Workspace(t / "ws3", [str(kic)], offline=True)
+    _fresh()
+    res = ws.hub()
+    ab = next(p for p in res["project_list"] if p["name"] == "ab")
+    out = ws.hub_copy(["AO3401A"], "altium", ab["path"])
+    assert [c["name"] for c in out["copied"]] == ["AO3401A"] and "added to ab.PrjPcb" in out["project"], out
+    text = (b / "ab" / "ab.PrjPcb").read_text()
+    assert "[Document2]" in text and "AO3401A.SchLib" in text and "SOT-23.PcbLib" in text and text.index("[Parameter1]") > text.index("[Document2]")
+    assert (b / "ab" / "ab.PrjPcb.ecadlib-bak").read_text().count("[Document") == 1
+    _fresh()
+    r = _row(ws.hub(), "AO3401A")
+    assert r["cells"]["altium"]["state"] == "same", r["cells"]
+    try:
+        ws.hub_copy(["AO3401A"], "fusion")
+        raise AssertionError("fusion copies aren't supported")
+    except ValueError as e:
+        assert "isn't supported" in str(e)
+
+
 def _get(url, headers=None):
     req = urllib.request.Request(url, headers=headers or {})
     with urllib.request.urlopen(req, timeout=30) as r:
@@ -292,6 +398,11 @@ def test_web_routes_local():
         code, body = _post(base + "/api/hub/fix", {"key": "AO3401A", "action": "rm -rf"})
         assert code == 400 and "not on offer" in body["error"], (code, body)
         assert any(e.get("who") == "Ann <ann@example.com>" for e in H.read_history(ws.root))
+        code, body = _post(base + "/api/hub/copy", {"keys": "AO3401A", "tool": "kicad"})
+        assert code == 400 and "keys must be a list" in body["error"], body
+        code, body = _post(base + "/api/hub/copy", {"keys": ["AO3401A"], "tool": "altium"})
+        assert code == 200 and body["skipped"][0]["why"] == "already in Altium", body
+        assert _get(base + "/api/hub?tool=altium&size=1")["rows"][0]["places"]["altium"]
         html = urllib.request.urlopen(base + "/").read().decode()
         assert 'id="hubcard"' in html and 'href="#hubcard"' in html
     finally:
@@ -302,6 +413,7 @@ def test_web_routes_team_roles():
     from ecadlib.ui import server as S
     from tests.test_team import Client, server
     assert S.ROUTES[("GET", "/api/hub")] == "viewer" and S.ROUTES[("POST", "/api/hub/fix")] == "librarian"
+    assert S.ROUTES[("POST", "/api/hub/copy")] == "librarian"
     t = _demo()
     shutil.rmtree(t / "ws" / "kicad")
     _fresh()
@@ -314,6 +426,7 @@ def test_web_routes_team_roles():
         assert st == 200 and r["total"] == 7
         assert vic.call("GET", "/api/hub/part?key=AO3401A")[0] == 200
         assert vic.call("POST", "/api/hub/fix", {"key": "AO3401A", "action": "kicad"})[0] == 403
+        assert vic.call("POST", "/api/hub/copy", {"keys": ["AO3401A"], "tool": "kicad"})[0] == 403
         lib = Client(port)
         lib.login("lib")
         st, r = lib.call("POST", "/api/hub/fix", {"key": "AO3401A", "action": "kicad", "user": "someone else"})

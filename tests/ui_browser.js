@@ -188,10 +188,23 @@ async function demo(browser, width) {
   check("sample builds a 7-part library" + w, await p.locator("#plist .pcard").count() === 7, await p.locator("#plist .pcard").count());
   check("welcome goes away after the sample" + w, await p.locator("#welcome").isHidden());
   check("demo: no sideways scroll" + w, await overflow(p) <= 0, await overflow(p));
-  // your library: every part once, a column per tool, and a part page
+  // your library: a tile per tool, that tool's library, every tool side by side, and a part page
   await p.click('#steps a[href="#hubcard"]');
-  await p.waitForFunction(() => document.querySelectorAll("#hubrows tr").length >= 7 && /AO3401A/.test(document.querySelector("#hubrows").innerText), null, { timeout: 30000 });
-  check("library: the sample parts with Altium and KiCad columns" + w, /same/.test(await text(p, "#hubrows")) && /KiCad/i.test(await text(p, "#hubhead")));
+  await p.waitForFunction(() => document.querySelectorAll("#hubrows tr").length >= 6 && /AO3401A/.test(document.querySelector("#hubrows").innerText), null, { timeout: 30000 });
+  check("library: a tile per tool, the busiest one open" + w, await p.locator("#hubtools [data-hubtool]").count() >= 6 &&
+    await p.locator('#hubtools [aria-selected="true"]').count() === 1 && /library/i.test(await text(p, "#hubhead")));
+  await p.locator('#hubtools [data-hubtool="kicad"]').click();
+  await p.waitForFunction(() => document.querySelector('[data-hubtool="kicad"]').getAttribute("aria-selected") === "true", null, { timeout: 30000 });
+  if (!/AO3401A/.test(await text(p, "#hubrows")) || !(await p.locator("#hubwrap").isVisible())) {   // the sample is Altium only: copy it over
+    await p.locator("#hubtoolhead [data-hubcopyall]").click();
+    await p.waitForFunction(() => /Copied \d+ part/.test(document.querySelector("#hubnote").innerText), null, { timeout: 60000 });
+  }
+  await p.waitForFunction(() => /AO3401A/.test(document.querySelector("#hubrows").innerText), null, { timeout: 30000 });
+  check("library: the KiCad tile shows the KiCad library" + w, /\.kicad_sym/.test(await text(p, "#hubrows")) && /same/.test(await text(p, "#hubrows")));
+  await p.locator('#hubtools [data-hubtool="all"]').click();
+  await p.waitForFunction(() => /KiCad/i.test(document.querySelector("#hubhead").innerText) && document.querySelectorAll("#hubrows tr").length >= 7, null, { timeout: 30000 });
+  check("library: compare all shows a column per tool" + w, /same/.test(await text(p, "#hubrows")) && /Altium 365/i.test(await text(p, "#hubhead")));
+  check("library: tiles fit the screen" + w, await overflow(p) <= 0, await overflow(p));
   await p.locator("#hubrows tr").first().click();
   await p.waitForSelector("#hubdlg[open] .copies tbody tr", { timeout: 30000 });
   check("library: part page lists each copy" + w, await p.locator("#hubdlg .copies tbody tr").count() >= 2);

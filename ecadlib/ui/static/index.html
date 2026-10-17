@@ -293,6 +293,18 @@ details summary { cursor: pointer; color: var(--muted); }
 .hubtable tr { cursor: pointer; }
 .hubtable tr:focus-visible td { background: var(--hover); outline: none; }
 @media (max-width: 760px) { .hubtable td.hp, .hubtable thead th:first-child { position: sticky; left: 0; background: var(--bg); z-index: 1; min-width: 140px; box-shadow: 1px 0 0 var(--line); } }
+.hubtools { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0; margin: 14px 0 6px; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.hubtool { all: unset; box-sizing: border-box; display: flex; flex-direction: column; gap: 3px; padding: 12px 14px 13px; cursor: pointer; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); transition: background .3s var(--ease); animation: fadein .6s var(--ease) both; min-width: 0; }
+.hubtool:hover { background: var(--hover); }
+.hubtool:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+.hubtool[aria-selected="true"] { background: var(--hover); box-shadow: inset 0 -2px 0 var(--text); }
+.hubtool .tn { font: 500 10.5px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--text); }
+.hubtool b { font: 400 26px/1.15 var(--mono); color: var(--text); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.hubtool .tw { overflow-wrap: anywhere; }
+.hubtool.off { opacity: .55; }
+@media (max-width: 760px) { .hubtools { grid-template-columns: repeat(2, minmax(0, 1fr)); } .hubtool { padding: 9px 11px 10px; gap: 1px; } .hubtool b { font-size: 20px; } .hubtool .tx { display: none; } }
+.hublibs { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 2px; }
+.hubstrip { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; margin: 10px 0 2px; font-size: 13px; }
 .hubpager { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; flex-wrap: wrap; }
 #hubdlg { width: min(1180px, 96vw); }
 #hubdlg .dlg-body { grid-template-columns: minmax(0, .9fr) minmax(0, 1.25fr); }
@@ -525,19 +537,23 @@ ol.hubhist .t { font: 11.5px/1.5 var(--mono); color: var(--muted); }
   <section class="card" id="hubcard">
     <div class="row spread">
       <div><h2>Your library</h2>
-      <p class="muted small" style="margin:2px 0 0">Every part once, from your own libraries and the parts ecadlib built, with a column per tool. A cell says whether that tool has the part and whether its copy matches the newest one (pads, pins, value). <b>Behind</b> means it differs and was last changed long before the newest copy.</p></div>
+      <p class="muted small" style="margin:2px 0 0">Your parts in every tool you use. Pick a tool to see your library as it is there, when each part last changed and who changed it, or compare all tools side by side. Your own library files are only read; copies between tools go into ecadlib's hub library.</p></div>
       <div class="row"><button class="small" id="hubrescan">Look again</button></div>
     </div>
+    <div class="hubtools" id="hubtools" role="tablist" aria-label="Tools"></div>
+    <div id="hubtoolhead"></div>
     <div id="hubstats"></div>
     <div class="hubbar">
       <input type="search" id="hubq" placeholder="Search name, MPN, maker…" aria-label="Search the library">
       <div class="chips" id="hubchips" role="group" aria-label="Show"></div>
     </div>
     <div class="hubbar">
-      <label class="field small">In <select id="hubhave" aria-label="In this tool"><option value="">any tool</option></select></label>
-      <label class="field small">but not in <select id="hublack" aria-label="Not in this tool"><option value="">–</option></select></label>
+      <label class="field small" data-hubcompare>In <select id="hubhave" aria-label="In this tool"><option value="">any tool</option></select></label>
+      <label class="field small" data-hubcompare>but not in <select id="hublack" aria-label="Not in this tool"><option value="">–</option></select></label>
+      <label class="field small">Project <select id="hubproject" aria-label="Project"><option value="">all parts</option></select></label>
       <label class="field small">Sort <select id="hubsort" aria-label="Sort"><option value="name">by name</option><option value="updated">last changed first</option><option value="attention">needs a look first</option></select></label>
     </div>
+    <div id="hubproj"></div>
     <div id="hubnote"></div>
     <div class="tablewrap" id="hubwrap"><table class="hubtable">
       <thead id="hubhead"></thead>
@@ -1701,15 +1717,22 @@ $("#qview").addEventListener("click", async e => {
     onAction: () => { $("#qdecerr").innerHTML = ""; document.querySelectorAll("#qview [data-q]").forEach(b => b.disabled = false); toast(`${verb} ${name}: undone, nothing was sent.`); } });
   $("#qundo").onclick = () => { const b = t.el.querySelector("button"); if (b) b.click(); };
 });
-// ---- your library (the hub): every part once, a column per tool
+// ---- your library (the hub): a tile per tool (your library as it is in that tool), or every tool side by side
 const HUBSTATE = { same: ["same", "s-ok"], present: ["there", "s-info"], different: ["different", "s-warn"], behind: ["behind", "s-bad"] };
 const HUBCHIPS = [["", "All"], ["look", "Needs a look"], ["held", "Held"], ["eol", "End of life"], ["duplicate", "Duplicates"],
   ["ecadlib", "Built by ecadlib"], ["library", "Your libraries"]];
-let hub = null, hubchip = "", hubpage = 1, hubtimer = null, hubkey = null;
+const COPYABLE = ["altium", "kicad"];
+let hub = null, hubchip = "", hubpage = 1, hubtimer = null, hubkey = null, hublib = "";
+let hubtool = store.get("hubtool") || "", hubpicked = !!hubtool;   // "all" = compare every tool
 const day = ts => ts ? esc(String(ts).slice(0, 10)) : "";
 const whoShort = w => w ? esc(String(w).replace(/\s*<[^>]*>$/, "")) : "not recorded";
+const toolLabel = t => (hub && (hub.tools.find(x => x.tool === t) || {}).label) || t;
 function hubQuery(rescan) {
-  const p = new URLSearchParams({ q: $("#hubq").value.trim(), have: $("#hubhave").value, lack: $("#hublack").value, sort: $("#hubsort").value, page: hubpage, size: 100 });
+  const one = hubtool && hubtool !== "all";
+  const p = new URLSearchParams({ q: $("#hubq").value.trim(), sort: $("#hubsort").value, page: hubpage, size: 100,
+    project: $("#hubproject").value });
+  if (one) { p.set("tool", hubtool); if (hublib) p.set("library", hublib); }
+  else { p.set("have", $("#hubhave").value); p.set("lack", $("#hublack").value); }
   if (hubchip === "look") p.set("state", "different,behind");
   else if (["held", "eol", "duplicate"].includes(hubchip)) p.set("flags", hubchip === "held" ? "held,awaiting_approval" : hubchip);
   else if (hubchip) p.set("origin", hubchip);
@@ -1718,7 +1741,13 @@ function hubQuery(rescan) {
 }
 async function loadHub(rescan) {
   banner($("#hubprob"), "");
+  if (!hubpicked) {                                 // until a tile is clicked: the tool with the most parts, else compare
+    const first = await api("/api/hub?size=1");
+    const best = first.tools.filter(t => t.parts).sort((x, y) => y.parts - x.parts)[0];
+    hubtool = best ? best.tool : "all";
+  }
   hub = await api(hubQuery(rescan));
+  if (hubtool !== "all" && !hub.tools.some(t => t.tool === hubtool)) { hubtool = "all"; hub = await api(hubQuery()); }
   renderHub();
 }
 function hubCell(c) {
@@ -1727,39 +1756,119 @@ function hubCell(c) {
   const tip = [c.note, c.updated ? `last changed ${String(c.updated).replace("T", " ").slice(0, 16)} UTC by ${c.updated_by || "not recorded"}` : ""].filter(Boolean).join(" · ");
   return `<td class="cell" title="${esc(tip)}"><span class="pill ${cls}">${esc(w)}${c.duplicate ? ` ×${c.copies}` : ""}</span><div class="sub">${day(c.updated)}</div></td>`;
 }
+function hubTiles(r) {
+  const s = r.summary;
+  const tile = (id, name, body, off) => `<button class="hubtool${off ? " off" : ""}" role="tab" aria-selected="${hubtool === id}" data-hubtool="${esc(id)}">${body.replace("%N", `<span class="tn">${esc(name)}</span>`)}</button>`;
+  return r.tools.map(t => !t.reader && !t.parts
+      ? tile(t.tool, t.label, `%N<b>–</b><span>Not connected yet</span>`, true)
+      : tile(t.tool, t.label, `%N<b>${esc(t.parts)}</b><span class="tx">${t.parts ? `part${t.parts === 1 ? "" : "s"} in ${t.libraries.length} librar${t.libraries.length === 1 ? "y" : "ies"}` : "parts"}</span>` +
+          `<span class="tw">${t.updated ? `Changed ${day(t.updated)}${t.updated_by ? " by " + whoShort(t.updated_by) : ""}` : t.parts ? "No changes recorded" : "Nothing here yet"}</span>` +
+          `<span>${t.behind || t.different ? `<span class="pill ${t.behind ? "s-bad" : "s-warn"}">${t.behind + t.different} to look at</span>` : t.missing ? `${t.missing} not here yet` : "Has every part"}</span>`)).join("") +
+    tile("all", "Compare all", `%N<b>${esc(s.parts)}</b><span class="tx">parts across every tool</span><span class="tx">${s.updated ? `Newest change ${day(s.updated)}` : "No changes recorded"}</span><span>Side by side, a column per tool</span>`);
+}
 function renderHub() {
-  const r = hub, s = r.summary, tools = r.tools;
+  const r = hub, tools = r.tools, one = hubtool !== "all", t = tools.find(x => x.tool === hubtool);
+  $("#hubtools").innerHTML = hubTiles(r);
+  document.querySelectorAll("[data-hubcompare]").forEach(el => el.hidden = one);
+  // the chosen tool: its libraries, and the parts other tools have that it lacks
+  let head = "";
+  if (one && t) {
+    head = `<div class="hublibs" role="group" aria-label="Libraries in ${esc(t.label)}"><span class="chip${hublib ? "" : " active"}" tabindex="0" role="button" data-hublib="">All ${esc(t.label)} libraries</span>` +
+      t.libraries.map(l => `<span class="chip${hublib === l.library ? " active" : ""}" tabindex="0" role="button" data-hublib="${esc(l.library)}" title="${esc(l.library)}${l.updated ? ` · changed ${esc(String(l.updated).slice(0, 16).replace("T", " "))} by ${esc(l.updated_by || "not recorded")}` : ""}">${esc(l.library.split("/").pop())} · ${esc(l.parts)}</span>`).join("") + `</div>`;
+    if (t.can_copy && can("librarian"))
+      head += `<div class="hubstrip"><span>${esc(t.can_copy)} part${t.can_copy === 1 ? "" : "s"} in your other tools ${t.can_copy === 1 ? "isn't" : "aren't"} in ${esc(t.label)} yet. ecadlib can convert ${t.can_copy === 1 ? "it" : "them"} into its hub library for ${esc(t.label)}.</span><button class="small primary" data-hubcopyall="${esc(t.tool)}">Copy ${t.can_copy === 1 ? "it" : "them"} to ${esc(t.label)}</button></div>`;
+    else if (t.missing && COPYABLE.includes(t.tool) === false && t.tool !== "altium365")
+      head += `<div class="muted small" style="margin-top:6px">${esc(t.missing)} part(s) aren't in ${esc(t.label)}. Copying into ${esc(t.label)} comes with its reader.</div>`;
+  }
+  $("#hubtoolhead").innerHTML = head;
+  const s = r.summary;
   const stat = (n, lab) => `<div><b>${esc(n)}</b><span class="muted small">${esc(lab)}</span></div>`;
-  $("#hubstats").innerHTML = `<div class="stats">${stat(s.parts, "parts")}${stat(s.ecadlib, "built by ecadlib")}${stat(s.library, "in your libraries")}` +
+  $("#hubstats").innerHTML = one ? "" : `<div class="stats">${stat(s.parts, "parts")}${stat(s.ecadlib, "built by ecadlib")}${stat(s.library, "in your libraries")}` +
     `${stat(s.different, "differ between tools")}${stat(s.behind, "with a copy behind")}${stat(s.held, "held or awaiting sign-off")}${stat(s.eol, "end of life")}</div>` +
-    `<div class="small muted">Newest change ${s.updated ? when(s.updated) : "none yet"} · Libraries read: ${r.libraries.length ? r.libraries.map(esc).join(", ") : "none (start ecadlib with --lib, or add [hub] libraries to ecadlib.toml)"}` +
-    `${r.projects.length ? " · Projects for where-used: " + r.projects.map(esc).join(", ") : ""}</div>`;
+    `<div class="small muted">Libraries read: ${r.libraries.length ? r.libraries.map(esc).join(", ") : "none (start ecadlib with --lib, or add [hub] libraries to ecadlib.toml)"}</div>`;
   $("#hubchips").innerHTML = HUBCHIPS.map(([k, lab]) => `<span class="chip${hubchip === k ? " active" : ""}" tabindex="0" role="button" aria-pressed="${hubchip === k}" data-hubchip="${k}">${esc(lab)}</span>`).join("");
   for (const [sel, first] of [["#hubhave", "any tool"], ["#hublack", "–"]]) {
     const el = $(sel), keep = el.value;
     el.innerHTML = `<option value="">${first}</option>` + tools.map(t => `<option value="${esc(t.tool)}">${esc(t.label)}</option>`).join("");
     el.value = keep;
   }
-  $("#hubhead").innerHTML = `<tr><th>Part</th>${tools.map(t => `<th class="tool">${esc(t.label)}<span>${t.reader ? `${t.parts} parts` : "no reader yet"}</span></th>`).join("")}<th>Last changed</th><th>Used in</th></tr>`;
-  $("#hubrows").innerHTML = r.rows.map(p => `<tr tabindex="0" data-hub="${esc(p.key)}">
-    <td class="hp"><b class="mono">${esc(p.name)}</b>${p.mpn && p.mpn !== p.name ? `<div class="sub">${esc(p.mpn)}${p.manufacturer ? " · " + esc(p.manufacturer) : ""}</div>` : (p.manufacturer ? `<div class="sub">${esc(p.manufacturer)}</div>` : "")}
-      ${p.flags.filter(f => ["held", "awaiting_approval", "eol"].includes(f)).map(f => `<span class="pill ${f === "eol" ? "s-bad" : "s-warn"}">${f === "eol" ? esc(p.lifecycle ? p.lifecycle.label : "end of life") : f === "held" ? "held" : "awaiting sign-off"}</span> `).join("")}</td>
-    ${tools.map(t => hubCell(p.cells[t.tool])).join("")}
-    <td>${day(p.updated)}<div class="sub">${whoShort(p.updated_by)}</div></td><td>${p.used_in ? `${p.used_in} project${p.used_in > 1 ? "s" : ""}` : '<span class="none">–</span>'}</td></tr>`).join("");
+  const pj = $("#hubproject"), pkeep = pj.value, plist = r.project_list || [];
+  pj.innerHTML = `<option value="">${plist.length ? "all parts" : "none found ([hub] projects)"}</option>` +
+    plist.map(p => `<option value="${esc(p.path)}">${esc(p.name)} (${esc(toolLabel(p.tool))}) · ${esc(p.parts)} parts</option>`).join("");
+  pj.value = plist.some(p => p.path === pkeep) ? pkeep : "";
+  const proj = plist.find(p => p.path === pj.value);
+  $("#hubproj").innerHTML = proj ? `<div class="hubstrip"><span><b>${esc(proj.name)}</b> uses ${esc(proj.parts)} of your library's parts` +
+    (proj.missing ? `; ${esc(proj.missing)} of them ${proj.missing === 1 ? "isn't" : "aren't"} in ${esc(toolLabel(proj.tool))} yet.` : `, all of them in ${esc(toolLabel(proj.tool))}.`) + `</span>` +
+    (proj.can_copy && can("librarian") ? `<button class="small primary" data-hubcopyall="${esc(proj.tool)}" data-project="${esc(proj.path)}">Copy ${proj.can_copy === proj.missing ? (proj.missing === 1 ? "it" : "them") : proj.can_copy} into ${esc(proj.name)}</button>`
+      : proj.missing ? `<span class="muted small">No other tool has a copy ecadlib can convert${proj.missing === 1 ? "" : " for these"}.</span>` : "") + `</div>` : "";
+  if (one && t) {
+    $("#hubhead").innerHTML = `<tr><th>Part</th><th>Library</th><th>Symbol · footprint</th><th>Last changed</th><th>Against other tools</th><th>Also in</th><th>Used in</th></tr>`;
+    $("#hubrows").innerHTML = r.rows.map(p => {
+      const c = p.cells[t.tool] || {}, pl = (p.places[t.tool] || [])[0] || {}, others = tools.filter(x => x.tool !== t.tool && p.cells[x.tool]);
+      const [w, cls] = !others.length ? ["only here", "s-info"] : HUBSTATE[c.state] || [c.state, "s-info"];
+      return `<tr tabindex="0" data-hub="${esc(p.key)}">
+      <td class="hp"><b class="mono">${esc(p.name)}</b>${p.mpn && p.mpn !== p.name ? `<div class="sub">${esc(p.mpn)}${p.manufacturer ? " · " + esc(p.manufacturer) : ""}</div>` : (p.manufacturer ? `<div class="sub">${esc(p.manufacturer)}</div>` : "")}
+        ${p.flags.filter(f => ["held", "awaiting_approval", "eol"].includes(f)).map(f => `<span class="pill ${f === "eol" ? "s-bad" : "s-warn"}">${f === "eol" ? esc(p.lifecycle ? p.lifecycle.label : "end of life") : f === "held" ? "held" : "awaiting sign-off"}</span> `).join("")}</td>
+      <td><span class="mono small" title="${esc(pl.library || "")}">${esc(String(pl.library || "").split("/").pop())}</span><div class="sub">${pl.origin === "ecadlib" ? "ecadlib" : "your library"}${c.duplicate ? ` · ${c.copies} copies` : ""}</div></td>
+      <td><span class="mono small">${esc(String(pl.symbol || "").split(":").pop() || "–")}</span><div class="sub">${esc(String(pl.footprint || "").split(":").pop())}</div></td>
+      <td>${day(c.updated)}<div class="sub">${whoShort(c.updated_by)}</div></td>
+      <td title="${esc(c.note || "")}"><span class="pill ${cls}">${esc(w)}</span></td>
+      <td class="small">${others.map(x => esc(x.label)).join(", ") || '<span class="none">–</span>'}</td>
+      <td>${p.used_in ? `${p.used_in} project${p.used_in > 1 ? "s" : ""}` : '<span class="none">–</span>'}</td></tr>`;
+    }).join("");
+  } else {
+    $("#hubhead").innerHTML = `<tr><th>Part</th>${tools.map(t => `<th class="tool">${esc(t.label)}<span>${t.reader ? `${t.parts} parts` : "no reader yet"}</span></th>`).join("")}<th>Last changed</th><th>Used in</th></tr>`;
+    $("#hubrows").innerHTML = r.rows.map(p => `<tr tabindex="0" data-hub="${esc(p.key)}">
+      <td class="hp"><b class="mono">${esc(p.name)}</b>${p.mpn && p.mpn !== p.name ? `<div class="sub">${esc(p.mpn)}${p.manufacturer ? " · " + esc(p.manufacturer) : ""}</div>` : (p.manufacturer ? `<div class="sub">${esc(p.manufacturer)}</div>` : "")}
+        ${p.flags.filter(f => ["held", "awaiting_approval", "eol"].includes(f)).map(f => `<span class="pill ${f === "eol" ? "s-bad" : "s-warn"}">${f === "eol" ? esc(p.lifecycle ? p.lifecycle.label : "end of life") : f === "held" ? "held" : "awaiting sign-off"}</span> `).join("")}</td>
+      ${tools.map(t => hubCell(p.cells[t.tool])).join("")}
+      <td>${day(p.updated)}<div class="sub">${whoShort(p.updated_by)}</div></td><td>${p.used_in ? `${p.used_in} project${p.used_in > 1 ? "s" : ""}` : '<span class="none">–</span>'}</td></tr>`).join("");
+  }
   const none = !r.total;
   $("#hubwrap").hidden = none || !r.rows.length; $("#hubempty").hidden = !none && !!r.rows.length;
-  $("#hubemptytext").textContent = none ? "Nothing here yet. Point ecadlib at your libraries (ecadlib ui --lib FOLDER, or [hub] libraries in ecadlib.toml), or fill a library from a BOM; every part then shows up here once, with a column per tool."
+  $("#hubemptytext").textContent = none ? "Nothing here yet. Point ecadlib at your libraries (ecadlib ui --lib FOLDER, or [hub] libraries in ecadlib.toml), or fill a library from a BOM; every part then shows up here, under each tool that has it."
+    : one && t && !t.parts ? `None of your parts are in ${t.label} yet.` + (t.can_copy ? ` Copy them over with the button above.` : "")
     : "No part matches. Clear the search or pick All.";
   const from = (r.page - 1) * r.size;
   $("#hubpager").innerHTML = r.matched > r.size ? `<span class="muted small">Showing ${from + 1}–${Math.min(from + r.size, r.matched)} of ${r.matched}</span>
     <span class="row"><button class="small" data-hubpage="-1" ${r.page <= 1 ? "disabled" : ""}>Previous</button><button class="small" data-hubpage="1" ${from + r.size >= r.matched ? "disabled" : ""}>Next</button></span>`
-    : (r.total ? `<span class="muted small">${r.matched} of ${r.total} parts</span>` : "");
+    : (r.total ? `<span class="muted small">${r.matched} of ${one && t ? t.parts : r.total} parts</span>` : "");
   const probs = [...r.errors.map(e => "couldn't read " + e), ...r.warnings];
   $("#hubprob").innerHTML = probs.length ? `<details style="margin-top:8px"><summary class="small">${probs.length} library file(s) or folder(s) couldn't be read</summary><ul class="why small">${probs.map(p => `<li>${esc(p)}</li>`).join("")}</ul></details>` : "";
 }
+function copyDone(r) {
+  const lab = toolLabel(r.tool), n = r.copied.length;
+  const skip = r.skipped.length ? ` ${r.skipped.length} skipped: ${r.skipped.slice(0, 3).map(x => `${esc(x.name)} (${esc(x.why)})`).join("; ")}${r.skipped.length > 3 ? "…" : ""}.` : "";
+  const where = r.project ? esc(r.project) + "." : r.tool === "kicad"
+    ? `They're in the ecadlib_hub library (<span class="mono">${esc(r.library)}</span>); add its sym-lib-table and fp-lib-table rows to KiCad once, or pick a project above and copy into it.`
+    : `They're in <span class="mono">${esc(r.library)}</span>; add that folder to Altium's libraries once, or pick a project above and copy into it.`;
+  return `Copied ${n} part${n === 1 ? "" : "s"} to ${esc(lab)}. ${n ? where : ""}${skip}`;
+}
+async function hubCopyAll(btn) {
+  const tool = btn.dataset.hubcopyall, project = btn.dataset.project || "";
+  btn.disabled = true; banner($("#hubnote"), "");
+  try {
+    const p = new URLSearchParams({ lack: tool, size: 500, project });
+    const keys = (await api("/api/hub?" + p.toString())).rows.map(r => r.key);
+    const r = await api("/api/hub/copy", { keys, tool, project, user: $("#signer") ? $("#signer").value.trim() : "" });
+    await loadHub();
+    nextStep($("#hubnote"), copyDone(r), null, r.copied.length ? "s-ok" : "s-warn");
+  } catch (e) { banner($("#hubnote"), e.message); }
+  finally { btn.disabled = false; }
+}
 const hubReload = () => { hubpage = 1; loadHub().catch(e => banner($("#hubprob"), e.message)); };
 $("#hubq").addEventListener("input", () => { clearTimeout(hubtimer); hubtimer = setTimeout(hubReload, 250); });
-["#hubhave", "#hublack", "#hubsort"].forEach(s => $(s).addEventListener("change", hubReload));
+["#hubhave", "#hublack", "#hubsort", "#hubproject"].forEach(s => $(s).addEventListener("change", hubReload));
+$("#hubtools").addEventListener("click", e => { const b = e.target.closest("[data-hubtool]"); if (!b) return; hubtool = b.dataset.hubtool; hubpicked = true; hublib = ""; store.set("hubtool", hubtool); hubReload(); });
+$("#hubtools").addEventListener("keydown", e => {
+  if (!["ArrowRight", "ArrowLeft"].includes(e.key)) return;
+  const all = [...document.querySelectorAll("[data-hubtool]")], i = all.indexOf(document.activeElement);
+  if (i < 0) return; e.preventDefault(); all[(i + (e.key === "ArrowRight" ? 1 : all.length - 1)) % all.length].focus();
+});
+function hubLib(e) { const c = e.target.closest("[data-hublib]"); if (!c) return; hublib = c.dataset.hublib; hubReload(); }
+$("#hubtoolhead").addEventListener("click", e => { const b = e.target.closest("[data-hubcopyall]"); if (b) return hubCopyAll(b); hubLib(e); });
+$("#hubtoolhead").addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hubLib(e); } });
+$("#hubproj").addEventListener("click", e => { const b = e.target.closest("[data-hubcopyall]"); if (b) hubCopyAll(b); });
 $("#hubrescan").addEventListener("click", e => action(e.target, $("#hubnote"), async () => { hubpage = 1; await loadHub(true); toast("Looked at every library again."); return ""; }));
 function hubChip(e) { const c = e.target.closest("[data-hubchip]"); if (!c) return; hubchip = hubchip === c.dataset.hubchip ? "" : c.dataset.hubchip; hubReload(); }
 $("#hubchips").addEventListener("click", hubChip);
@@ -1834,6 +1943,8 @@ $("#hubbody").addEventListener("click", async e => {
         label: j => j.total ? `Building it from its MPN: step ${Math.min(j.done + 1, j.total)} of ${j.total}` : "Building it from its MPN…" });
       const s = j.result || {};
       nextStep(out, `Built: ${esc(s.ready || 0)} ready, ${esc(s.held || 0)} held. Open the part again to compare the copies.`, null, s.ready ? "s-ok" : "s-warn");
+    } else if (act.startsWith("copy:")) {
+      nextStep(out, copyDone(r.result), null, r.result.copied.length ? "s-ok" : "s-warn");
     } else if (act === "kicad") {
       nextStep(out, `Wrote the KiCad library for this part's BOM in <span class="mono">${esc(r.result.folder)}</span>.`, null, "s-ok");
     } else if (act === "a365_preview") {
