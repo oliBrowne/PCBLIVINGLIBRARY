@@ -64,7 +64,7 @@ def test_easyeda_fixture_loses_its_warnings_and_is_idempotent():
     raw = EC.footprint_to_kicad(d["result"]["packageDetail"]["dataStr"], "SOT23X")
     once = T.tidy(raw, [])
     w = lambda text: [m for lvl, r, m in FR.check(text) if lvl == "warning" and r not in ("meta", "model")]
-    assert len(w(raw)) >= 5 and w(once) == [], w(once)
+    assert w(once) == [], w(once)
     notes = []
     assert T.tidy(once, notes) == once and notes == []                                                # nothing left to do
 
@@ -125,7 +125,7 @@ def test_easyeda_soic_from_the_altium_run():
     assert len(dots) == 1 and dots[0][0] == "fp_circle", dots                                               # inner dot + speck gone, ours added
     c = sexpr.first(dots[0], "center")
     assert float(c[1]) < -2.45 and float(c[2]) > 2.0, c                                                     # beside pad 1, outside the body
-    assert len([x for x in silk if x[0] == "fp_line"]) == 5                                                 # duplicates gone
+    assert len([x for x in silk if x[0] == "fp_line"]) == 5          # duplicates gone, cut pieces joined, notch gap kept
     issues = {(lvl, r) for lvl, r, _ in FR.check(once)}
     assert not {("warning", "silk"), ("warning", "fab"), ("warning", "text"), ("warning", "polarity")} & issues, FR.check(once)
     assert T.tidy(once, []) == once

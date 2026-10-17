@@ -264,7 +264,9 @@ def placeholder_mpn(s):
 
 def part_numbers(ln):
     """MPN candidates, best first: the MPN column, then an Altium 'Comment'/value that is not a
-    passive value (ICs carry their part number there, e.g. STM32F103C8T6), then the LibRef."""
+    passive value (ICs carry their part number there, e.g. STM32F103C8T6), then the LibRef. Altium vault item ids
+    (CMP-1035-02800-1: the LibRef / Comment of Content Vault and Altium 365 parts) are never part numbers."""
+    from .altium_project import is_vault_id
     out = [ln.get("mpn", "")]
     v = ln.get("value", "")
     if v and parse_value(v) is None and re.search(r"[A-Za-z]", v) and re.search(r"\d", v) and " " not in v.strip():
@@ -272,7 +274,7 @@ def part_numbers(ln):
     lib = ln.get("libref", "").strip()
     if not GENERIC_LIBREF.fullmatch(lib):
         out.append(lib)
-    return [c for c in dict.fromkeys(c.strip() for c in out) if c]
+    return [c for c in dict.fromkeys(c.strip() for c in out) if c and not is_vault_id(c)]
 
 
 def count_refs(s):
@@ -303,7 +305,7 @@ def triage(lines, index, provs, http):
                          "mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""),
                          "value": ln.get("value", ""), "package": "", "status": "dnp (not fitted)",
                          "local_symbol": "", "local_footprint": "", "src": "", "src_symbol": "", "src_footprint": "",
-                         "src_3d": "", "src_mpn": "", "notes": "marked do-not-populate; not triaged"})
+                         "src_3d": "", "src_mpn": "", "src_description": "", "notes": "marked do-not-populate; not triaged"})
             continue
         pns = part_numbers(ln)
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"), *pns)
@@ -320,10 +322,12 @@ def triage(lines, index, provs, http):
             fp_key, _ = index.footprint(ln.get("footprint", ""))
         gen_fp = None if fp_key else index.find_footprint_for_package(
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
-        notes, src, errored, work, unconfigured = [], None, False, dict(ln), []
+        notes, src, errored, work, unconfigured, desc = [], None, False, dict(ln), [], ""
         if pns and not ln.get("mpn"):
             work["mpn"] = pns[0]                               # let providers search by the Comment/LibRef part number
             notes.append(f"part number taken from {'Comment/value' if pns[0] == ln.get('value', '').strip() else 'LibRef'}: {pns[0]}")
+        if ln.get("altium_mpn_source") == "Comment":
+            notes.append("MPN taken from the schematic Comment (the component has no Manufacturer Part Number parameter)")
         if ln.get("lcsc_invalid"):
             notes.append(f"ignored malformed LCSC '{ln['lcsc_invalid']}'")
         if not (sym and fp_key):
@@ -352,9 +356,12 @@ def triage(lines, index, provs, http):
                 elif isinstance(prov, P.JLCPCBSearch):
                     if r.found:
                         work["lcsc"] = r.lcsc
+                        desc = desc or (r.extra or {}).get("description") or ""
                     notes.append(f"jlcpcb: MPN -> {r.lcsc}" if r.found else "jlcpcb: no exact MPN match")
                 else:
                     src = r
+                    if r.found:
+                        desc = desc or (r.extra or {}).get("description") or ""
                     if r.found and ln.get("mpn") and r.mpn and _n(r.mpn) != _n(ln["mpn"]):
                         notes.append(f"MPN mismatch: BOM {ln['mpn']} vs {prov.name} {r.mpn}")
                     if r.found and r.has_footprint:
@@ -385,7 +392,7 @@ def triage(lines, index, provs, http):
             "local_footprint": fp_key or (f"{gen_fp} (generated, by package)" if gen_fp else ""),
             "src": src.provider if src else "", "src_symbol": _yn(src and src.has_symbol),
             "src_footprint": _yn(src and src.has_footprint), "src_3d": _yn(src and src.has_3d),
-            "src_mpn": src.mpn if src else "", "notes": "; ".join(dict.fromkeys(notes)),
+            "src_mpn": src.mpn if src else "", "src_description": desc, "notes": "; ".join(dict.fromkeys(notes)),
         })
     return rows
 
@@ -401,7 +408,7 @@ def _yn(v):
 def write_reports(rows, mapping, provs, http, out, bom):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
+    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["line", "status"])   # no formulas from BOM cells
         w.writeheader()
         w.writerows(rows)

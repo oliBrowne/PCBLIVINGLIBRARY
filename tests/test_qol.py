@@ -3,6 +3,7 @@ ECADLIB_DEBUG), ECADLIB_LIB / ECADLIB_WORKSPACE / ECADLIB_CONFIG defaults, --jso
 approve status, `ecadlib status` and `ecadlib completion`.  Run:  python3 -m tests.test_qol"""
 import contextlib, io, json, os, shutil, subprocess, sys, tempfile
 from pathlib import Path
+from unittest import mock
 
 from ecadlib import cli, cliutil as CU, completion as CO, doctor as DR, rules as RU, ws_status as WS
 from tests.test_cli_smoke import BOM, KICAD_SYM
@@ -237,6 +238,12 @@ def test_doctor_keys_names_only():
     assert "mouser (MOUSER_API_KEY)" in by["key part lookups"]["detail"]             # optional extras: one line
     text = json.dumps(keys)
     assert secret not in text and "s3cr3t" not in text and "id-zzz" not in text
+
+
+
+def test_doctor_key_hint_is_the_same_on_every_os():
+    keys = {c["check"]: c for c in DR.check_keys({}, {})}        # keys: `ecadlib keys set`, the same on every OS
+    assert "ecadlib keys set ANTHROPIC_API_KEY" in keys["key anthropic"]["hint"], keys["key anthropic"]
 
 
 def test_doctor_end_to_end_exit_codes_and_writes_nothing():

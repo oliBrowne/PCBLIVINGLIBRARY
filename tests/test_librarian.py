@@ -289,6 +289,140 @@ def test_cli():
         assert rc == 2 and (Path(d) / "out" / "plan.json").exists()
 
 
+
+def _ee_0603():
+    """An EasyEDA chip-resistor land shaped like LCSC's 0603 ones: two 0.9 x 1.0 mm pads 1.6 mm apart, and a silk
+    outline (0.15 mm line) drawn straight across the pads, plus a short silk mark clear of the copper."""
+    u = lambda mm: round(mm / EC.U, 4)
+    pad = lambda n, x: f"PAD~RECT~{4000 + u(x)}~3000~{u(0.9)}~{u(1.0)}~1~~{n}~0~~0~g{n}~0~~Y~0"
+    box = " ".join(f"{4000 + u(x)} {3000 + u(y)}" for x, y in ((-1.4, -0.45), (1.4, -0.45), (1.4, 0.45), (-1.4, 0.45), (-1.4, -0.45)))
+    top = " ".join(f"{4000 + u(x)} {3000 + u(-1.0)}" for x in (-1.4, 1.4))
+    return {"head": {"x": 4000, "y": 3000}, "shape": [pad(1, -0.8), pad(2, 0.8), f"TRACK~0.6~3~~{box}~g9~0",
+                                                      f"TRACK~0.6~3~~{top}~g10~0",
+                                                      f"CIRCLE~{4000 + u(-0.8)}~3000~0.3~0.5~3~g11~0"]}
+
+
+def test_easyeda_silk_is_cut_back_from_the_pads():
+    data = _ee_0603()
+    notes = []
+    text = EC.footprint_to_kicad(data, "R0603", notes)
+    # without the cut the outline crosses both pads: footprint_check says 0.000 mm and the part is held
+    with mock.patch.object(EC, "_clear_silk", lambda lines, circles, copper, notes: (lines, circles)):
+        before = EC.footprint_to_kicad(data, "R0603")
+    assert any(lv == "error" and "0.000 mm from pad 1" in m for lv, _, m in FC.check(before)), FC.check(before)
+    assert not [f for f in FC.check(text) if f[1] == "silk"], FC.check(text)
+    silk = [l for l in text.splitlines() if "F.SilkS" in l]
+    t = sexpr.parse(text)
+    lines = [ln for ln in sexpr.find(t, "fp_line") if sexpr.first(ln, "layer")[1] == "F.SilkS"]
+    ys = sorted({sexpr.first(ln, "start")[2] for ln in lines})
+    assert ys == ["-1"], silk                                   # the outline over the pads went; the clear line stayed whole
+    assert [sexpr.first(lines[0], k)[1] for k in ("start", "end")] == ["-1.4", "1.4"], silk
+    assert not [g for g in sexpr.find(t, "fp_poly") if sexpr.first(g, "layer")[1] == "F.SilkS"]   # the dot on pad 1
+    assert any("cut back to 0.2 mm" in n for n in notes) and any("circle(s) left out" in n for n in notes), notes
+    # the SOT-23 fixture's pin-1 dot (0.18 mm from pad 1, a warning) is kept
+    t2 = EC.footprint_to_kicad(EE["result"]["packageDetail"]["dataStr"])
+    assert [g for g in sexpr.find(sexpr.parse(t2), "fp_poly") if sexpr.first(g, "layer")[1] == "F.SilkS"]
+
+
+def test_part_search_description_fills_an_empty_one():
+    assert P.describe("  100mW Thick Film\nResistors 10k  ", "Chip Resistor", "0603") == "100mW Thick Film Resistors 10k"
+    assert P.describe("", "Chip Resistor - Surface Mount", "0603") == "Chip Resistor - Surface Mount, 0603"
+    assert P.describe("", "", "0603") == "" and P.describe(None, None, None) == ""          # a package alone is no description
+    ee = copy.deepcopy(EE)
+    assert P.parse_easyeda(ee, P.SourceResult("easyeda")).extra["description"] == "synthetic SOT-23 part"
+    ee["result"]["description"], ee["result"]["tags"] = "", ["Bipolar Transistors"]
+    assert P.parse_easyeda(ee, P.SourceResult("easyeda")).extra["description"] == \
+        "Bipolar Transistors, SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR"
+    ee["result"]["tags"] = []
+    assert "description" not in P.parse_easyeda(ee, P.SourceResult("easyeda")).extra
+
+    class JLC(FakeHTTP):
+        def post(self, url, body, headers=None, **kw):
+            self.calls.append(url)
+            item = {"componentCode": "C2002", "componentModelEn": "EEPART1", "componentBrandEn": "ACME",
+                    "componentSpecificationEn": "SOT-23", "describe": "NPN 40V 200mA SOT-23 transistor"}
+            return Response(200, json.dumps({"data": {"componentPageInfo": {"list": [item]}}}))
+    with tempfile.TemporaryDirectory() as d:
+        bom = "Designator,Qty,Value,Manufacturer,Mfr. Part #\nQ1,1,EEPART1,ACME,EEPART1\n"
+        items, _ = run(d, JLC({"C2002": ee}), bom=bom, sources=["easyeda"])
+        it = items["EEPART1"]
+        assert it["description"] == "NPN 40V 200mA SOT-23 transistor", it["description"]
+        assert it["field_sources"]["Description"] == "LCSC/JLCPCB part data C2002", it["field_sources"]
+        assert not any("Description is empty" in h for h in it.get("hold_reasons", [])), it.get("hold_reasons")
+
+
+class _Gitlab429(FakeHTTP):
+    """A KiCad tree whose page 2 answers HTTP 429 (or times out) until `ok` is set."""
+    def __init__(self, fail="HTTP 429"):
+        super().__init__()
+        self.fail, self.ok = fail, False
+        page1 = json.loads(self.routes[L.TREE.format(repo="kicad-symbols", page=1)])
+        self.routes[L.TREE.format(repo="kicad-symbols", page=1)] = json.dumps(page1 + [{"type": "blob", "path": "README.md"}] * 100)
+        self.timeouts = []
+
+    def get(self, url, headers=None, timeout=None, **kw):
+        if "tree" in url:
+            self.timeouts.append(timeout)
+        if url == L.TREE.format(repo="kicad-symbols", page=2) and not self.ok:
+            self.calls.append(url)
+            return Response(429, "", error="HTTP 429") if self.fail == "HTTP 429" else \
+                Response(0, "", error="ReadTimeout: read timed out. (read timeout=20)")
+        if url == L.TREE.format(repo="kicad-symbols", page=2):
+            self.calls.append(url)
+            return Response(200, "[]")
+        return super().get(url, headers)
+
+
+def test_kicad_index_backs_off_after_a_failed_build_and_resumes():
+    for fail, hold in (("HTTP 429", L.KiCadLibrary.RETRY_AFTER_429), ("timeout", L.KiCadLibrary.RETRY_AFTER)):
+        with tempfile.TemporaryDirectory() as d:
+            idx, t = Path(d) / "idx.json", [1000.0]
+            http = _Gitlab429(fail)
+            lib = L.KiCadLibrary(http, idx, now=lambda: t[0])
+            assert not lib.symbols and "page 2" in lib.error and not idx.exists(), lib.error
+            assert set(http.timeouts) == {L.KiCadLibrary.PAGE_TIMEOUT}, http.timeouts     # short per-page timeout
+            retry = json.loads(idx.with_name("idx.json.retry.json").read_text())
+            assert retry["after"] == 1000.0 + hold, retry
+            n = len(http.calls)
+            t[0] += hold - 1                                     # within the pause: no request at all
+            lib = L.KiCadLibrary(http, idx, now=lambda: t[0])
+            assert len(http.calls) == n and not lib.symbols and "not retried until" in lib.error, lib.error
+            lib = L.KiCadLibrary(http, idx, refresh=True, now=lambda: t[0])        # --refresh-index tries now
+            assert len(http.calls) > n and not lib.symbols
+            t[0] += hold + 1                                     # after it: tries again; the network works now
+            http.ok = True
+            lib = L.KiCadLibrary(http, idx, now=lambda: t[0])
+            assert lib.symbols["TPS1234DSG"] == ["Regulator_Test"] and lib.error is None and idx.exists()
+            assert not idx.with_name("idx.json.retry.json").exists()
+
+
+def test_http_client_takes_a_per_request_timeout():
+    from ecadlib.httpcache import CachedHTTP
+    with tempfile.TemporaryDirectory() as d:
+        h = CachedHTTP(d, min_interval=0, timeout=60)
+        seen = []
+
+        def req(method, url, data=None, headers=None, timeout=None):
+            seen.append(timeout)
+            raise __import__("requests").ConnectionError("no network here")
+        h.s.request = req
+        assert h.get("https://gitlab.com/x", timeout=20).error and h.get("https://gitlab.com/y").error
+        assert seen == [20, 60], seen
+
+
+
+def test_review_names_the_real_target_and_csvs_open_in_excel():
+    import pandas as pd
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "run").mkdir()
+        items, _ = run(Path(d) / "run")
+        out = Path(d) / "run" / "out"
+        assert "ready for Altium 365" not in (out / "review.md").read_text(encoding="utf-8-sig")   # no workspace named
+        for f in ("review.csv", "triage.csv", "release_check.csv"):
+            raw = (out / f).read_bytes()
+            assert raw[:3] == b"\xef\xbb\xbf", f                    # UTF-8 with a BOM: Excel shows ± and µ, not Â±
+            assert not pd.read_csv(out / f, dtype=str).columns[0].startswith("\ufeff"), f
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

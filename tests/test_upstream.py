@@ -186,7 +186,7 @@ def test_update_reconverts_changed_parts():
         fake = FakeGitLab(upstream_now(USB2, REG))
         code = run_main(["check-kicad", str(mpath), "--update", "--offline", "--cache", str(Path(d) / "cache"), "-o", str(Path(d) / "r")], fake)
         assert code == 1
-        rows = list(csv.DictReader(open(Path(d) / "r.csv")))
+        rows = list(csv.DictReader(open(Path(d) / "r.csv", encoding="utf-8-sig")))
         assert [(r["entry"], r["status"], r["update"]) for r in rows] == [("footprint:USB_C_16P", "changed", "reconverted")], rows
         new = json.loads(mpath.read_text())["entries"]["footprint:USB_C_16P"]
         assert new["sources"][0]["blob_id"] == U.digests(USB2)[1] and new["output_sha256"] != old_sha
@@ -314,7 +314,7 @@ def test_check_a365_exit_codes():
             assert json.loads((Path(d) / "s.json").read_text())["CH340C"]["revision"] == "r1"
             A.Nexar = lambda token: FakeWorkspace([])
             assert U.main(argv) == 1
-            rows = list(csv.DictReader(open(Path(d) / "a.csv")))
+            rows = list(csv.DictReader(open(Path(d) / "a.csv", encoding="utf-8-sig")))
             assert [(r["name"], r["status"]) for r in rows] == [("CH340C", "missing")], rows
             def boom(token):
                 raise A.NexarError("401 Unauthorized")

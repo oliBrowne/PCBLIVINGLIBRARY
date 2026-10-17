@@ -75,7 +75,8 @@ def test_old_workspaces_open_and_rebuild_the_same_parts():
             assert (lib / "librarian_state.json").read_bytes() == old_state_bytes
             old_state = json.loads(old_state_bytes)
             done_before = {n: (lib / it["symbol"]["file"]).read_bytes() for n, it in old_plan.items()   # what the
-                           if L._done(old_state.get(n) or {}, lib)}                                    # librarian skips
+                           if L._done(old_state.get(n) or {}, lib) and it["status"] != "held"}         # librarian skips
+            # (a held part an older version built is built again, so the release check sees today's models and fields)
             # today's code opens the workspace and runs the librarian on it
             w = Workspace(ws, offline=True)
             assert RU.load(None, start=ws)["footprint"]["density"] == ("N" if man["rules"] else RU.DEFAULTS["footprint"]["density"])
@@ -435,8 +436,9 @@ def test_workspace_and_mcp_tools():
         assert M.call_tool(w, "file_formats", {})["old"] == 0
         w.librarian_run("uploads/board.csv")
         rep = M.call_tool(w, "rebuild_check", {"bom": "uploads/board.csv"})
+        # EEPART1 (ready, kept from 0.3.0) rebuilds with today's EasyEDA converter, which places REF** / value above /
+        # below the courtyard and fp_tidy tidies it: its footprint files drift, nothing else does
         assert rep["lock"] == "librarian/board/library.lock.json", RB.render(rep)
-        # the only drift: EEPART1's footprint, kept from 0.3.0, rebuilds tidier now (fp_tidy, after 0.3.0)
         drift = {(r["part"], Path(r["file"]).suffix) for r in rep["rows"] if r["result"] == "DRIFT"}
         assert drift <= {("EEPART1", ".PcbLib"), ("EEPART1", ".kicad_mod")}, RB.render(rep)
         assert {d["part"] for d in rep["inputs"] if d["what"] == "inputs"} == {"EEPART1"}   # kept from 0.3.0: not recorded

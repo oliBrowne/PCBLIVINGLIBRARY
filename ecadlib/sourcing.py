@@ -652,7 +652,7 @@ class JLCSourcing(L.JLCLifecycle):
         return jlc_info(best, self.name)
 
     def _query(self, kw, size=10):
-        r = self.http.post(self.URL, json.dumps({"keyword": kw, "currentPage": 1, "pageSize": size}), headers=self.HEADERS)
+        r = self.post(kw, size)
         if not r.ok:
             return [], L._http_error(L.LifecycleResult(self.name), r).error
         try:
@@ -1047,7 +1047,7 @@ def write_reports(rows, out, meta, provs, unconfigured, http, roll, plan_changes
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     cur = roll["currency"]
-    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
+    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=COLS)
         w.writeheader()
         w.writerows(csv_row(r, cur) for r in rows)

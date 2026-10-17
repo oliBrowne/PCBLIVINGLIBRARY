@@ -3,9 +3,11 @@
 The KiCad text then goes through kicad_import (convert_footprint / convert_symbol) to Altium, and footprint_check
 can read the .kicad_mod. Only what a land pattern and a pin map need is converted:
   footprint: PAD (RECT / ELLIPSE / OVAL; POLYGON as its bounding rectangle), SMD and through-hole (round or slot,
-             plated or not), HOLE (NPTH), TRACK, RECT, CIRCLE (as a 16-gon) and circular ARC on silk / fab layers, the body region (SOLIDREGION
-             on layer 99) as a fab outline; a courtyard is drawn around pads and fab (EasyEDA has no courtyard
-             layer); TEXT, VIA and other regions (layer-100 lead shapes) are dropped with a note
+             plated or not), HOLE (NPTH), TRACK, RECT, CIRCLE (as a 16-gon) and circular ARC on silk / fab layers, the body
+             region (SOLIDREGION on layer 99) as a fab outline; a courtyard is drawn around pads and fab (EasyEDA
+             has no courtyard layer); TEXT, VIA and other regions (layer-100 lead shapes) are dropped with a note;
+             REF** goes on silk above the courtyard and the value on fab below it (1 mm, 0.15 mm stroke); a pin-1 dot
+             inside the body is moved beside pad 1
   symbol:    pins (number, name, electrical type, position, length), rectangles, polylines, polygons, circles;
              arcs, paths, text and multi-unit `subparts` are not converted
 
@@ -29,6 +31,9 @@ easyeda2kicad 1.0.1's parameter dataclasses, not real payloads):
 import math, re
 
 U = 0.254                                     # one EasyEDA unit (10 mil) in mm
+SILK_CLEAR, SILK_HARD = 0.2, 0.1              # KLC F5.1 silk-to-pad gap; below SILK_HARD footprint_check errors
+TEXT_H, TEXT_W, TEXT_GAP = 1.0, 0.15, 0.2      # reference / value text: height, stroke, gap to courtyard / silk (mm)
+DOT_R = 0.5                                   # a silk circle this small (radius, mm) is a pin-1 dot
 FP_LAYERS = {3: "F.SilkS", 101: "F.SilkS", 13: "F.Fab", 99: "F.Fab", 100: "F.Fab"}
 PIN_TYPE = {"0": "unspecified", "1": "input", "2": "output", "3": "bidirectional", "4": "power_in"}
 
@@ -68,7 +73,7 @@ def footprint_to_kicad(data, name=None, notes=None):
     ox, oy = _f(head.get("x")), _f(head.get("y"))
     name = name or (head.get("c_para") or {}).get("package") or "EasyEDA"
     X, Y = (lambda x: (_f(x) - ox) * U), (lambda y: (_f(y) - oy) * U)
-    pads, lines, circles, arcs, dropped, extent = [], [], [], [], {}, []
+    pads, lines, circles, arcs, dropped, extent, copper = [], [], [], [], {}, [], []
     for s in data.get("shape") or []:
         if not isinstance(s, str):
             continue
@@ -97,10 +102,12 @@ def footprint_to_kicad(data, name=None, notes=None):
                 side = "B" if str(layer) == "2" else "F"
                 pads.append(f'  (pad {_q(num)} smd {kshape} {at} (size {_n(w)} {_n(h)}) (layers "{side}.Cu" "{side}.Paste" "{side}.Mask"))')
             extent += _rect(cx, cy, w, h, rot)
+            copper.append({"num": num, "x": cx, "y": cy, "w": w, "h": h, "rot": rot, "shape": kshape})
         elif kind == "HOLE":
             cx, cy, d = X(f[1]), Y(f[2]), 2 * _f(f[3]) * U
             pads.append(f'  (pad "" np_thru_hole circle (at {_n(cx)} {_n(cy)}) (size {_n(d)} {_n(d)}) (drill {_n(d)}) (layers "*.Cu" "*.Mask"))')
             extent += [(cx - d / 2, cy - d / 2), (cx + d / 2, cy + d / 2)]
+            copper.append({"num": "", "x": cx, "y": cy, "w": d, "h": d, "rot": 0, "shape": "circle"})
         elif kind in ("TRACK", "RECT", "CIRCLE"):
             lid = int(_f(f[2] if kind == "TRACK" else f[5] if kind in ("RECT", "CIRCLE") else 0))
             layer = FP_LAYERS.get(lid)
@@ -128,15 +135,37 @@ def footprint_to_kicad(data, name=None, notes=None):
                 dropped[what] = dropped.get(what, 0) + 1
         else:
             dropped[kind] = dropped.get(kind, 0) + 1
+    lines, circles = _clear_silk(lines, circles, copper, notes)
+    circles = _pin1_dot(circles, lines, copper, notes)
     if dropped:
         notes.append("EasyEDA shapes not converted: " + ", ".join(f"{k} x{v}" for k, v in sorted(dropped.items())))
     if not pads:
         raise ValueError("EasyEDA footprint has no pads")
+    extent += [pt for a, b, _, layer in lines if layer == "F.Fab" for pt in (a, b)]
+    extent += [(cx + s * r, cy + s * r) for cx, cy, r, _, layer in circles if layer == "F.Fab" for s in (-1, 1)]
+    xs, ys = [p[0] for p in extent], [p[1] for p in extent]
+    c = 0.25                                  # IPC-7351B nominal courtyard excess, on the 0.01 mm grid
+    crt = (_grid(min(xs) - c, False), _grid(min(ys) - c, False), _grid(max(xs) + c, True), _grid(max(ys) + c, True))
+    # Reference on silk just above everything (courtyard and silk), Value on fab just below: 1 mm text, 0.15 mm stroke,
+    # clear of the pads, as footprint_gen and KiCad's own library place them (EasyEDA's TEXT shapes are not converted)
+    silk_y = [v for a, b, _, layer in lines if layer == "F.SilkS" for v in (a[1], b[1])] + \
+        [cy + s * (r + w / 2) for cx, cy, r, w, layer in circles if layer == "F.SilkS" for s in (-1, 1)]
+    ref_y = round(min([crt[1]] + silk_y) - TEXT_GAP - TEXT_H / 2, 4)
+    val_y = round(max([crt[3]] + silk_y) + TEXT_GAP + TEXT_H / 2, 4)
+    cx_ = round((crt[0] + crt[2]) / 2, 4)
+    font = f"(effects (font (size {_n(TEXT_H)} {_n(TEXT_H)}) (thickness {_n(TEXT_W)})))"
     out = [f"(footprint {_q(name)} (version 20221018) (generator ecadlib_easyeda) (layer \"F.Cu\")",
            f"  (descr {_q('converted from EasyEDA by ecadlib.easyeda_convert; check against the datasheet')})",
            "  (attr smd)" if all(" smd " in p for p in pads) else "  (attr through_hole)",
-           '  (fp_text reference "REF**" (at 0 0) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))))',
-           f'  (fp_text value {_q(name)} (at 0 0) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))))']
+           f'  (fp_text reference "REF**" (at {_n(cx_)} {_n(ref_y)}) (layer "F.SilkS") {font})',
+           f'  (fp_text value {_q(name)} (at {_n(cx_)} {_n(val_y)}) (layer "F.Fab") {font})']
+    # ${REFERENCE} on the assembly drawing (KLC F5.2), in the middle of the body, 0.5 .. 1.0 mm to fit it
+    bpts = [pt for a, b, _, layer in lines if layer in ("F.Fab", "F.SilkS") for pt in (a, b)] or [pt for pt in extent]
+    bw, bh = max(p[0] for p in bpts) - min(p[0] for p in bpts), max(p[1] for p in bpts) - min(p[1] for p in bpts)
+    fs = max(0.5, min(1.0, math.floor(100 * min(bw / (len("REF**") * 0.9), bh * 0.6)) / 100))
+    bc = (round((max(p[0] for p in bpts) + min(p[0] for p in bpts)) / 2, 4), round((max(p[1] for p in bpts) + min(p[1] for p in bpts)) / 2, 4))
+    out.append(f'  (fp_text user "${{REFERENCE}}" (at {_n(bc[0])} {_n(bc[1])}) (layer "F.Fab") '
+               f'(effects (font (size {_n(fs)} {_n(fs)}) (thickness {_n(round(0.15 * fs, 3))}))))')
     for (x1, y1), (x2, y2), w, layer in lines:
         out.append(f'  (fp_line (start {_n(x1)} {_n(y1)}) (end {_n(x2)} {_n(y2)}) (stroke (width {_n(w or 0.1)}) (type solid)) (layer "{layer}"))')
     for cx, cy, r, w, layer in circles:          # as a 16-gon: footprint_check reads fp_circle's centre from (start)
@@ -145,12 +174,8 @@ def footprint_to_kicad(data, name=None, notes=None):
     for a, m, b, w, layer in arcs:
         out.append(f'  (fp_arc (start {_n(a[0])} {_n(a[1])}) (mid {_n(m[0])} {_n(m[1])}) (end {_n(b[0])} {_n(b[1])}) '
                    f'(stroke (width {_n(w or 0.1)}) (type solid)) (layer "{layer}"))')
-    extent += [pt for a, b, _, layer in lines if layer == "F.Fab" for pt in (a, b)]
-    extent += [(cx + s * r, cy + s * r) for cx, cy, r, _, layer in circles if layer == "F.Fab" for s in (-1, 1)]
-    xs, ys = [p[0] for p in extent], [p[1] for p in extent]
-    c = 0.25                                  # IPC-7351B nominal courtyard excess, on the 0.01 mm grid
-    out.append(f'  (fp_rect (start {_n(_grid(min(xs) - c, False))} {_n(_grid(min(ys) - c, False))}) '
-               f'(end {_n(_grid(max(xs) + c, True))} {_n(_grid(max(ys) + c, True))}) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))')
+    out.append(f'  (fp_rect (start {_n(crt[0])} {_n(crt[1])}) '
+               f'(end {_n(crt[2])} {_n(crt[3])}) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))')
     notes.append("courtyard drawn by ecadlib: pads and fab outline + 0.25 mm (EasyEDA has no courtyard layer)")
     return "\n".join(out + pads) + "\n)\n"
 
@@ -181,6 +206,84 @@ def _region(path):
     v = _nums(path)
     pts = list(zip(v[0::2], v[1::2]))
     return pts if len(pts) >= 3 and len(v) % 2 == 0 else None
+
+
+def _clear_silk(lines, circles, copper, notes):
+    """Silk kept off the copper, as KiCad's own footprints and footprint_check want it (KLC F5.1): EasyEDA's library
+    draws silk outlines up to, or over, the pads (the fab cuts silk from copper when it makes the board). Silk lines are
+    cut back to SILK_CLEAR from every pad's outline (pieces shorter than 0.2 mm go); a silk circle (a pin-1 dot) is kept
+    whole unless it comes within SILK_HARD of a pad, and then left out. Returns (lines, circles)."""
+    from .footprint_adv import _clip_any, _pad_dist
+    if not copper:
+        return lines, circles
+    near = lambda pts, c: min(_pad_dist(x, y, p) for x, y in pts for p in copper) < c
+    out, cut = [], 0
+    for a, b, w, layer in lines:
+        sw = w or 0.1
+        c = SILK_CLEAR + sw / 2 + 0.005
+        L = math.hypot(b[0] - a[0], b[1] - a[1])
+        n = max(2, int(L / 0.01))
+        if layer != "F.SilkS" or not near([(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for k in range(n + 1)], c):
+            out.append((a, b, w, layer))
+            continue
+        cut += 1
+        out += [(p, q, w, layer) for p, q in _clip_any(a, b, copper, c, min_len=min(0.2, L))]
+    keep, gone = [], 0
+    for cx, cy, r, w, layer in circles:
+        ring = [(cx + r * math.cos(k * math.pi / 16), cy + r * math.sin(k * math.pi / 16)) for k in range(32)] + [(cx, cy)]
+        if layer == "F.SilkS" and near(ring, SILK_HARD + (w or 0.1) / 2 + 0.005):
+            gone += 1
+            continue
+        keep.append((cx, cy, r, w, layer))
+    if cut:
+        notes.append(f"silk: {cut} line(s) cut back to {SILK_CLEAR} mm from the pads (the EasyEDA outline ran up to or over the copper)")
+    if gone:
+        notes.append(f"silk: {gone} circle(s) left out: within {SILK_HARD} mm of a pad")
+    return out, keep
+
+
+def _pin1_dot(circles, lines, copper, notes):
+    """EasyEDA's pin-1 dot usually sits inside the body outline, where the part covers it once placed. A small silk
+    circle (a dot, r <= DOT_R) inside the body is moved next to pad 1, outside the body and the pads: the spot beside
+    pad 1 (left / right / above / below) closest to it that keeps SILK_CLEAR from every pad and from the body outline."""
+    p1 = next((p for p in copper if p["num"] == "1"), None)
+    if p1 is None or len([p for p in copper if p["num"]]) < 3:
+        return circles
+    outline = [pt for a, b, _, layer in lines if layer in ("F.SilkS", "F.Fab") for pt in (a, b)]
+    pads = [pt for p in copper for pt in _rect(p["x"], p["y"], p["w"], p["h"], p["rot"])]
+    pts = outline or pads
+    body = (min(x for x, _ in pts), min(y for _, y in pts), max(x for x, _ in pts), max(y for _, y in pts))
+    pb = (min(x for x, _ in pads), min(y for _, y in pads), max(x for x, _ in pads), max(y for _, y in pads))
+    from .footprint_adv import _pad_dist
+    out = []
+    for cx, cy, r, w, layer in circles:
+        inside = body[0] < cx < body[2] and body[1] < cy < body[3] or pb[0] < cx < pb[2] and pb[1] < cy < pb[3]
+        if layer != "F.SilkS" or r > DOT_R or not inside:
+            out.append((cx, cy, r, w, layer))
+            continue
+        ext = r + (w or 0.1) / 2
+        gap = SILK_CLEAR + ext
+        x1 = _rect(p1["x"], p1["y"], p1["w"], p1["h"], p1["rot"])
+        hx, hy = (max(x for x, _ in x1) - min(x for x, _ in x1)) / 2, (max(y for _, y in x1) - min(y for _, y in x1)) / 2
+        best = None
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            x, y = p1["x"] + dx * (hx + gap), p1["y"] + dy * (hy + gap)
+            if dx and body[0] - gap < x < body[2] + gap and body[1] < y < body[3]:    # still on the body: past its edge
+                x = body[0] - gap if dx < 0 else body[2] + gap
+            if dy and body[1] - gap < y < body[3] + gap and body[0] < x < body[2]:
+                y = body[1] - gap if dy < 0 else body[3] + gap
+            if min(_pad_dist(x, y, p) for p in copper) < gap - 1e-6:
+                continue
+            d = math.hypot(x - p1["x"], y - p1["y"])
+            if best is None or d < best[0]:
+                best = (d, round(x, 4), round(y, 4))
+        if best is None:
+            out.append((cx, cy, r, w, layer))
+            continue
+        out.append((best[1], best[2], r, w, layer))
+        notes.append(f"silk: pin-1 dot moved from ({cx:.2f}, {cy:.2f}) inside the body to ({best[1]:.2f}, {best[2]:.2f}) "
+                     f"beside pad 1, {SILK_CLEAR} mm clear of the pads")
+    return out
 
 
 def _rect(cx, cy, w, h, rot):

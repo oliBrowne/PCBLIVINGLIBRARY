@@ -1555,7 +1555,14 @@ HTML report, and offers "Fill the library now?", which runs the librarian on the
 (opens `http://127.0.0.1:<port>/#queuecard`, starting `ecadlib ui --workspace W --no-browser` detached when nothing
 answers; refuses a port that serves another workspace or another program).
 Settings live in `ecadlib_menu.ini` next to the script (workspace, library, name, command, hidden, timeout_s, port,
-offline; relative paths start at that folder; a rebuild keeps the file). Workspace `altium_menu(win_dir)` and the MCP
+offline; relative paths start at that folder; a rebuild keeps the file). Built on Windows without `--command`,
+`command=` is the Python that ran the build (`"<sys.executable>" -m ecadlib`), so an install in a venv is found; a
+rebuild fills an empty `command=` (older builds) and changes nothing else. `ecadlib doctor --altium-menu <folder>`
+checks that `command=` runs ecadlib. Without an AI key, parts no free source fully describes come back held with the
+reason (the dialog and the review queue say which), and nothing held reaches the library. Check this project BOM reads the
+project's device sheets (`[DeviceSheetN]`; one it cannot find is a warning) and lists multi-channel sheets once per
+channel (R1_CH1 ...); a Content Vault component without an MPN parameter uses its Comment as the MPN when it reads as
+one. Workspace `altium_menu(win_dir)` and the MCP
 tool `altium_menu` write it into `<workspace>/altium_menu/` with `workspace=..`.
 
 **How the script runs ecadlib.** No user text goes on a command line: each click makes `jobs\<id>\` next to the

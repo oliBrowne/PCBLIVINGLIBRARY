@@ -13,7 +13,7 @@ Footprints: SMD, plated and non-plated through-hole pads (round and slotted dril
 circle pads, custom pads as an anchor pad plus copper / mask / paste regions (curved primitives: bounding
 rectangle), trapezoids as rectangles, per-pad mask margins and tented pads, pad rotation, fp_line / fp_rect /
 fp_poly / fp_circle / fp_arc on silkscreen, fab (Mechanical 13), courtyard (Mechanical 15), F.Cu, F.Mask, F.Paste.
-Reference / Value text become .Designator (Top Overlay) / .Comment (Mechanical 13).
+Reference / Value text become .Designator (Top Overlay from silk, Mechanical 13 from fab) / .Comment (Mechanical 13).
 Not converted (listed in the notes): user text, zones other than keep-outs, drill offsets.
 3D: an extruded ComponentBody on Mechanical 13 over the fab outline (else the courtyard), its height from the
 KiCad STEP model (max z after the model transform), else DEFAULT_HEIGHT, else --height. --step embeds the STEP
@@ -40,6 +40,34 @@ DEFAULT_HEIGHT = [(r"^SOT-23", 1.2), (r"^SOT-223", 1.8), (r"^(LQFP|TQFP)", 1.6),
                   (r"QFN|DFN|WSON|SON", 0.8), (r"_0402_", 0.6), (r"_0603_", 0.9), (r"_0805_", 1.3), (r"_1206_", 1.6),
                   (r"^Crystal_SMD_3225", 1.0), (r"^Crystal_SMD_2016", 0.8), (r"^USB_C_Receptacle", 3.3), (r"^JST_SH_", 2.95),
                   (r"^PinHeader_.*P1.27mm.*SMD", 4.3), (r"^ESP32-S3-WROOM", 3.25)]
+# package default heights (mm) for standard chip sizes when nothing better is known (no KiCad model, no datasheet): chip
+# resistors at their nominal thickness (thick film, as step_gen), MLCCs at a conservative maximum for the size (a 0603
+# MLCC is 0.8 mm nominal, up to 0.9 mm). Used with the label 'package default, verify': a warning, not a hold.
+CHIP_HEIGHT = {"R": {"0201": 0.26, "0402": 0.35, "0603": 0.45, "0805": 0.5, "1206": 0.55, "1210": 0.55, "2010": 0.6, "2512": 0.6},
+               "C": {"0201": 0.33, "0402": 0.55, "0603": 0.9, "0805": 1.35, "1206": 1.8, "1210": 2.7}}
+PKG_HEIGHT = [(r"(?i)\bSOT-?23(?![0-9])", 1.2, "SOT-23"), (r"(?i)\bSOT-?23-?[56]\b", 1.2, "SOT-23-5/6"), (r"(?i)\bSOD-?123\b", 1.35, "SOD-123"),
+              (r"(?i)\bSOD-?323\b", 1.1, "SOD-323"), (r"(?i)\bSOT-?323\b", 1.1, "SOT-323")]
+CHIP_RE = re.compile(r"(?<![0-9])(0201|0402|0603|0805|1206|1210|2010|2512)(?![0-9])")
+
+
+def package_default_height(names, kind=None):
+    """(height mm, label) for a standard package named in any of names (footprint name, KiCad ref, description ...),
+    or None. kind: 'R' / 'C' (CP counts as C) when the part's kind is known; else read from the names (R_ / RES / C_ /
+    CAP / resistor / capacitor)."""
+    text = " ".join(str(n) for n in names if n)
+    k = {"CP": "C"}.get(kind, kind)
+    if k not in CHIP_HEIGHT:
+        k = ("R" if re.search(r"(?i)(^|[\s:/_])(R|RES|RESC)[_ ]|resistor", text) else
+             "C" if re.search(r"(?i)(^|[\s:/_])(C|CAP|CAPC)[_ ]|capacitor|MLCC", text) else None)
+    m = CHIP_RE.search(text)
+    if k and m and m.group(1) in CHIP_HEIGHT[k]:
+        return CHIP_HEIGHT[k][m.group(1)], f"{m.group(1)} {'resistor' if k == 'R' else 'capacitor'}"
+    for rx, h, label in PKG_HEIGHT:
+        if re.search(rx, text):
+            return h, label
+    return None
+
+
 KTYPE = {"input": "input", "output": "output", "bidirectional": "io", "tri_state": "tristate", "passive": "passive",
          "free": "passive", "unspecified": "passive", "power_in": "power_in", "power_out": "power_out",
          "open_collector": "open_collector", "open_emitter": "open_emitter", "no_connect": "nc"}
@@ -234,7 +262,8 @@ def _convert_footprint(text, name=None, source="", notes=None):
     _zones(fp, t, notes)
     fp["texts"] = AL.texts_from_kicad(t)
     if fp["texts"]:
-        notes.append("Reference -> .Designator (Top Overlay), Value -> .Comment (Mechanical 13)")
+        des = next((t[6] for t in fp["texts"] if t[0] == ".Designator"), None)
+        notes.append(f"Reference -> .Designator ({'Top Overlay' if des == AL.TOP_OVERLAY else 'Mechanical 13'}), Value -> .Comment (Mechanical 13)")
     for k in ("fp_text", "fp_text_box", "dimension", "image"):
         n = len([g for g in sexpr.find(t, k) if k != "fp_text" or g[1] not in AL.KTEXT])
         if n:
@@ -556,11 +585,13 @@ def step_extent(text, mi):
     return tuple(min(p[i] for p in pts) for i in range(3)) + tuple(max(p[i] for p in pts) for i in range(3))
 
 
-def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=False, spec=None, height_src=None):
+def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=False, spec=None, height_src=None, kind=None, names=()):
     """3D body: the KiCad STEP model embedded (step=True, model without offset/rotation/scale), else with
     gen_step=True a package-shaped STEP from step_gen (spec dict, else package_specs / the footprint name) when
     there is no KiCad STEP to embed, else an extruded body over the fab outline (else courtyard, else pads).
-    height_src: the caller's height is part-specific and beats the default table (label for the notes)."""
+    height_src: the caller's height is part-specific and beats the default table (label for the notes).
+    kind / names: the part's kind ('R', 'C') and other names (KiCad ref, description) for package_default_height, the
+    last resort ('HEIGHT from package default ..., verify')."""
     notes = [] if notes is None else notes
     mi, text, src = model_info(t), None, None
     if mi and http is not None and model_url_path(mi["path"]):
@@ -580,6 +611,10 @@ def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=Fal
         src = "default table" if h else None
         if h is None and height:
             h, src = height, "caller"
+        if h is None:
+            pd = package_default_height([t[1], *names], kind)
+            if pd:
+                h, src = pd[0], f"HEIGHT from package default ({pd[1]}), verify"
     embeddable = bool(ext) and mi["rotate"] == [0, 0, 0] and mi["offset"] == [0, 0, 0] and mi["scale"] == [1, 1, 1]
     if gen_step and not (step and embeddable) and (not ext or step):
         from . import step_gen

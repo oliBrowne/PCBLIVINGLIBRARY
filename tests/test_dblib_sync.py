@@ -305,6 +305,28 @@ def test_csv_resaved_in_cp1252_does_not_crash():
         assert "ecadlib.csv" in out["written"]
 
 
+def test_connection_is_portable():
+    """On every OS (the Windows CI job runs this too) the Data Source is --win-dir or the fixed placeholder, never the
+    library's own absolute path: Altium opens the workbook through LibraryDatabasePath + DatabasePathRelative=1."""
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t); _models(d)
+        lib = d / "lib"
+        S.sync(_plan(d, _base_items()), lib)
+        f = lib / "ecadlib.DbLib"
+        text = f.read_text()
+        assert "Data Source=C:\\ecadlib\\library\\ecadlib.xlsx;" in text, text[:300]
+        assert str(S.PureWindowsPath(S.os.path.abspath(lib))) not in text and str(lib) not in text and t not in text
+        assert "LibraryDatabasePath=ecadlib.xlsx" in text and "DatabasePathRelative=1" in text
+        assert S.win_folder() == S.PureWindowsPath(S.PLACEHOLDER_DIR)
+        assert S.win_folder("D:\\libs") == S.PureWindowsPath("D:\\libs")
+        # a connection set in Altium's DbLib editor stays; --win-dir replaces it
+        f.write_bytes(f.read_bytes().replace(b"C:\\ecadlib\\library", b"E:\\mine"))
+        S.sync(_plan(d, _base_items()), lib)
+        assert "Data Source=E:\\mine\\ecadlib.xlsx" in f.read_text()
+        S.sync(_plan(d, _base_items()), lib, win_dir="D:\\libs")
+        assert "Data Source=D:\\libs\\ecadlib.xlsx" in f.read_text()
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_dblib_sync"]))

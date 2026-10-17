@@ -166,6 +166,39 @@ def _clear_rows(tree, pads, items):
     return 0
 
 
+def _join_lines(tree, pads, lines, arc_pts=(), tol=1e-3):
+    """Axis-aligned silk lines on one row with gaps between them: a gap is closed when the joined line stays
+    SILK_CLEAR (plus half its width) from every pad and no arc (a pin-1 notch) ends in it. Returns the gaps closed."""
+    rows = {}
+    for it in lines:
+        (ax, ay), (bx, by) = _pts(it)
+        if abs(ay - by) < tol and abs(ax - bx) > tol:
+            rows.setdefault((0, round(ay, 3), round(_width(it), 3)), []).append((min(ax, bx), max(ax, bx), it))
+        elif abs(ax - bx) < tol and abs(ay - by) > tol:
+            rows.setdefault((1, round(ax, 3), round(_width(it), 3)), []).append((min(ay, by), max(ay, by), it))
+    closed = 0
+    for (ax, c, w), segs in rows.items():
+        segs.sort(key=lambda t: t[0])
+        cur = list(segs[0])
+        for lo, hi, it in segs[1:]:
+            pts = [(v, c) if ax == 0 else (c, v) for v in (cur[1], lo, (cur[1] + lo) / 2)]
+            pts += [((cur[1] + (lo - cur[1]) * k / 20, c) if ax == 0 else (c, cur[1] + (lo - cur[1]) * k / 20)) for k in range(21)]
+            notch = any(abs((q[1] if ax == 0 else q[0]) - c) < 0.05 and cur[1] - tol <= (q[0] if ax == 0 else q[1]) <= lo + tol
+                        for q in arc_pts)
+            if lo > cur[1] + tol and not notch and all(_pad_gap(x, y, p) >= SILK_CLEAR + w / 2 - tol for x, y in pts for p in pads):
+                closed += 1
+            elif lo > cur[1] + tol:
+                cur = [lo, hi, it]
+                continue
+            cur[1] = max(cur[1], hi)
+            tree.remove(it)
+            ends = ("start", "end")
+            a, b = (sexpr.first(cur[2], k) for k in ends)
+            lo_, hi_ = cur[0], cur[1]
+            a[1:3], b[1:3] = ([_fmt(lo_), _fmt(c)], [_fmt(hi_), _fmt(c)]) if ax == 0 else ([_fmt(c), _fmt(lo_)], [_fmt(c), _fmt(hi_)])
+    return closed
+
+
 def _stroke(w):
     return ["stroke", ["width", _fmt(w)], ["type", "solid"]]
 
@@ -210,6 +243,18 @@ def tidy(text, notes=None):
     if specks:
         notes.append(f"silk: {len(specks)} speck(s) under 0.15 mm removed (too small to print)")
 
+    # a dot drawn as a thick ring (EasyEDA's CIRCLE, a 16-gon from the converter) -> the same dot, filled, with a KLC width
+    dots = 0
+    for it in silk_items():
+        if it[0] in ("fp_poly", "fp_circle") and _extent(it) <= 0.65 and not 0.1 - 1e-6 <= _width(it) <= 0.15 + 1e-6:
+            bb, R = _bbox(_pts(it)), _extent(it) / 2
+            x, y = (bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2
+            tree[tree.index(it)] = ["fp_circle", ["center", _fmt(x), _fmt(y)], ["end", _fmt(x + max(R - 0.06, 0.03)), _fmt(y)],
+                                    _stroke(0.12), ["fill", "solid"], ["layer", Q("F.SilkS")]]
+            dots += 1
+    if dots:
+        notes.append(f"silk: {dots} dot(s) redrawn filled with a 0.12 mm line (same size)")
+
     # silk line width to KLC's 0.10-0.15 mm
     widths = 0
     for it in silk_items():
@@ -243,6 +288,12 @@ def tidy(text, notes=None):
     moved = _clear_rows(tree, pads, [it for it in silk_items() if it[0] in ("fp_line", "fp_arc")])
     if moved:
         notes.append(f"silk: outline moved in {moved} mm to clear the pads by {SILK_CLEAR} mm")
+
+    # collinear silk pieces whose gap no longer needs to be there (cut back from pads before the outline moved in)
+    joined = _join_lines(tree, pads, [it for it in silk_items() if it[0] == "fp_line"],
+                         [q for it in silk_items() if it[0] == "fp_arc" for q in _pts(it)])
+    if joined:
+        notes.append(f"silk: {joined} gap(s) in the outline closed (now clear of the pads)")
 
     # pin 1 mark on silk, outside the body and clear of copper
     if pin1 and len(numbered) >= 3:
