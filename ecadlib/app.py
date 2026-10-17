@@ -585,7 +585,7 @@ class Workspace:
                 "awaiting_approval": sum(i.get("status") == "awaiting_approval" for i in items),
                 "audit": self.rel(audit) if audit.exists() else None}
 
-    def approve_part(self, bom, part, decision, user, role=None, comment="", via="ecadlib ui/mcp"):
+    def approve_part(self, bom, part, decision, user, role=None, comment="", via="ecadlib ui/mcp", aliases=()):
         """Record an approve / reject (see _approve_part). Holds <workspace>/agent/plan.lock while it rewrites the plan:
         while the library agent's librarian rewrites a plan the decision is refused ("decide again in a minute")
         instead of being overwritten when the librarian saves its copy."""
@@ -593,7 +593,32 @@ class Workspace:
         with plan_lock(self.root, wait=False) as free:
             if not free:
                 raise ValueError("the library agent is rebuilding the library right now; decide again in a minute")
+            if decision == "approve":                  # the queue's no-self-approval holds on this route too
+                self._queue_self_check(bom, part, user, aliases)
             return self._approve_part(bom, part, decision, user, role, comment, via)
+
+    def _queue_self_check(self, bom, part, user, aliases=()):
+        """PermissionError when `user` (or one of aliases) started or asked for the build of an open library agent
+        queue item for this plan part: approving that part here would bypass the queue's no-self-approval."""
+        from . import agent_queue as AQ
+        if not (self.root / "agent" / "queue" / "items").is_dir():
+            return
+        try:
+            want = self.rel(self._bom_path(bom))
+        except ValueError:
+            return
+        me = {AQ._who_key(x) for x in (user, *aliases) if isinstance(x, str) and x.strip()}
+        for it in AQ.Queue(self.root).list(list(AQ.OPEN)):
+            b = it.get("build") or {}
+            if b.get("part") != part or not isinstance(b.get("bom"), str):
+                continue
+            try:
+                same = self.rel(self._bom_path(b["bom"])) == want
+            except ValueError:
+                continue
+            if same and any(AQ._who_key(x) in me for x in AQ.builders(it)):
+                raise PermissionError(f"{user} started or asked for the library agent's build of {part} "
+                                      f"(queue item {it['id']}) and cannot approve it (no self-approval)")
 
     def _approve_part(self, bom, part, decision, user, role=None, comment="", via="ecadlib ui/mcp"):
         """Record an approve / reject for one part as `user`. user is required: locally there is no login, so the
