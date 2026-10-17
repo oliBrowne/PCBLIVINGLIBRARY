@@ -28,7 +28,7 @@ on 2026-10-17; their commits are on `main`.
 | 2026-10-17 | #27, #28, #29, #30, #33 | Altium menu fixes from a real AD26 PC, house style (`ecadlib style`), one pin rule for every IC symbol, tidier converted footprints, the ecadlib dialog in Altium and window in KiCad, EasyEDA credit on converted parts |
 | 2026-10-17 | #31, #32, #34 | **v0.3.0** released: on PyPI (`pip install ecadlib`) and as a Windows installer on the GitHub release |
 | 2026-10-17 | #35 | Official part APIs first with unofficial endpoints fenced off, weekly sources canary, and Altium rebuilding every library itself (8 of 8 test libraries, 0 differences on AD26) |
-| 2026-10-17 | #61-#75 (issues #36-#40) | **v0.3.1** released: Build libraries in the Altium menu, fab-layer designator in Altium, multi-part symbols, keep-outs and bottom-side pads checked in AD26, and the fixes from the overnight system test |
+| 2026-10-17 | #61-#80 (issues #36-#40) | **v0.3.1** released: Build libraries in the Altium menu, fab-layer designator in Altium, multi-part symbols, keep-outs and bottom-side pads checked in AD26, and the fixes from the overnight system test |
 
 ## Next milestones
 

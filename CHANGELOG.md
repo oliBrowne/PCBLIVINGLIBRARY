@@ -36,6 +36,8 @@ a minor release may change command-line options and file formats.
 - Standard parts refuse land variants, exposed-pad SOTs and contradicting size codes.
 - The approval gate works under house parameter names, and placeholder MPNs are handled.
 - Models: the feedback turn is capped, API keys are redacted, unit repair is strict, configured key names are used.
+- Altium: DbLib table names Altium's database driver can open, install scripts written in cp1252, and a warning for Unicode pin names.
+- Team server: no self-approval through the plan approval route, and an odd `sign_as` is a plain 400.
 - Security: no API key in network error messages, framing refused in local mode, a deeply nested JSON body is a plain 400.
 
 ## [0.3.0] - 2026-10-17
