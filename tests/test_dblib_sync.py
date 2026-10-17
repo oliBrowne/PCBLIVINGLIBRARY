@@ -327,6 +327,29 @@ def test_connection_is_portable():
         assert "Data Source=D:\\libs\\ecadlib.xlsx" in f.read_text()
 
 
+def test_menu_part_goes_to_the_table_its_source_names():
+    # a real "Add part from MPN" run filed RC0603FR-0710KL (EasyEDA C98220, "Resistors, R0603") under ICs: the menu
+    # writes designator U1 for every part, and the designator was the only thing that chose the table
+    import pandas as pd
+    from ecadlib import altium365 as A365, providers as P
+    lines = [{"designator": "U1", "mpn": "RC0603FR-0710KL", "value": "RC0603FR-0710KL", "lcsc": "C98220"},
+             {"designator": "U2", "mpn": "CL05B104KO5NNNC", "value": "CL05B104KO5NNNC", "lcsc": "C1525"},
+             {"designator": "U3", "mpn": "STM32F103C8T6", "value": "STM32F103C8T6", "lcsc": "C8734"},
+             {"designator": "U4", "mpn": "IRS2003", "value": "IRS2003", "description": "MOSFET driver"}]
+    tri = pd.DataFrame([{"mpn": "RC0603FR-0710KL", "package": "R0603", "local_footprint": "",
+                         "src_description": P.describe("", "Resistors", "R0603")},
+                        {"mpn": "CL05B104KO5NNNC", "package": "", "local_footprint": "Capacitor_SMD:C_0402_1005Metric",
+                         "src_description": ""},
+                        {"mpn": "STM32F103C8T6", "package": "LQFP-48", "local_footprint": "",
+                         "src_description": "ARM Cortex-M3 MCU 64KB Flash"}], dtype=str)
+    got = {i["name"]: S.table_of(i) for i in A365.plan(lines, tri)}
+    assert got["RC0603FR-0710KL"] == "Resistors", got           # named by its MPN (the menu sets Value = MPN)
+    assert got["CL05B104KO5NNNC"] == "Capacitors", got
+    assert got["STM32F103C8T6"] == "ICs" and got["IRS2003"] == "ICs", got
+    assert X.kind_of(["Chip Resistor - Surface Mount"]) == "Resistors"
+    assert X.kind_of(["Resistor Networks & Arrays", "Capacitive touch sensor"]) is None
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_dblib_sync"]))

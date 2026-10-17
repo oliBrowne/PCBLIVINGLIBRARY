@@ -32,6 +32,26 @@ CATEGORY = {"R": "Resistors", "C": "Capacitors", "L": "Inductors", "D": "Diodes"
             "Y": "Crystals", "J": "Connectors", "P": "Connectors", "U": "ICs",                         # LED1 is not an L,
             "LED": "Diodes", "IC": "ICs", "CN": "Connectors", "JP": "Connectors"}                      # CN1 not a C
 GENERIC_SYMBOL = {"Resistors": "Resistor", "Capacitors": "Capacitor", "Inductors": "Inductor"}
+# what a source's category says (EasyEDA / LCSC "Resistors, R0603", "Chip Resistor - Surface Mount") or a chip
+# footprint / package (R_0603_1608Metric, R0603), for a line whose designator says nothing (the menu's "Add part from
+# MPN" writes U1, U2 ...). The category noun ends the phrase: "MOSFET driver", "Resistor Networks" are not one.
+KIND_WORDS = (("Resistors", r"resistors?"), ("Capacitors", r"capacitors?"), ("Inductors", r"inductors?|ferrite beads?"),
+              ("Crystals", r"crystals?"), ("Connectors", r"connectors?"))
+KIND_FP = {"R": "Resistors", "C": "Capacitors", "L": "Inductors"}
+
+
+def kind_of(descriptions=(), footprints=()):
+    """Resistors / Capacitors / Inductors / Crystals / Connectors from a source's category words or a chip
+    footprint, else None."""
+    for d in descriptions:
+        head = re.split(r",|;| - ", re.sub(r"\([^)]*\)", "", str(d or "")), maxsplit=1)[0].strip()
+        for cat, rx in KIND_WORDS:
+            if re.fullmatch(rf"(?:[\w/&-]+\s+){{0,3}}(?i:{rx})(?:\s+[A-Z]{{2,5}})?", head):
+                return cat
+    for f in footprints:
+        if re.match(r"^([RCL])(?:\d{4}|_\d{4}_\d{4}Metric)(?:_|$)", str(f or "").split(":")[-1].split(" ")[0]):
+            return KIND_FP[str(f).split(":")[-1][0]]
+    return None
 
 
 def to_rows(lines, triage=None, rules=None):
@@ -52,23 +72,30 @@ def to_rows(lines, triage=None, rules=None):
         mpn, lcsc = ln.get("mpn", ""), ln.get("lcsc", "")
         fp = ln.get("footprint", "")
         t = tri.get(mpn)
+        ref, kind = (prefix.group(0) if prefix else "U"), None
+        if cat in ("ICs", "Misc"):              # U? / no designator: what the part is, if the source or footprint says
+            got = t if t is not None else {}
+            kind = kind_of((ln.get("description"), got.get("src_description")),
+                           (fp, got.get("local_footprint"), got.get("package")))
+            if kind:
+                cat, ref = kind, RU.CAT_REF[kind]
         if t is not None and isinstance(t.get("local_footprint"), str) and t["local_footprint"]:
             fp = t["local_footprint"].split(" ")[0]
         fp_ref = fp.split(":")[-1]
         pkg = package_of(fp, ln.get("description")) or ""
         value = ln.get("value", "")
         if custom:
-            f = RU.line_fields(ln, cat, pkg, rules, prefix.group(0) if prefix else "U")
+            f = RU.line_fields(ln, cat, pkg, rules, ref)
             pn = (RU.component_name(f, rules) or ln.get("designator", "").split(",")[0]).replace(" ", "")
         else:
-            pn = (f"{cat[:3].upper()}-{pkg}-{value}" if cat in GENERIC_SYMBOL and value
+            pn = (f"{cat[:3].upper()}-{pkg}-{value}" if cat in GENERIC_SYMBOL and value and not (kind and value == mpn)
                   else mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
         if seen.setdefault(pn, mpn) != mpn:      # same synthetic PN, different part (e.g. 100nF 16V vs 50V): keep both
             pn = f"{pn}-{mpn}".replace(" ", "")
         lib_ref = lib_name(GENERIC_SYMBOL.get(cat) or (custom and mpn and RU.symbol_name(f, rules)) or mpn or pn)
         kicad_fp = fp_ref = lib_name(fp_ref)
         if custom:
-            fp_ref = lib_name(RU.footprint_name(fp_ref, rules, prefix.group(0) if prefix else None))
+            fp_ref = lib_name(RU.footprint_name(fp_ref, rules, ref))
             if fp_ref != kicad_fp:
                 renamed[pn] = kicad_fp
         out.setdefault(cat, []).append({
