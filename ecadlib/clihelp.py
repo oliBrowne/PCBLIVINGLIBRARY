@@ -18,6 +18,8 @@ EXAMPLES = {
                   "ecadlib kicad-pcm out/kicad -o out/pcm --kicad 7", "ecadlib kicad-pcm --plugin -o out/pcm"],
     "altium-menu": ["ecadlib altium-menu build --out out/altium_menu --workspace D:/ecadlib-ws --win-dir D:\\ecadlib-menu",
                     "ecadlib altium-menu add-part LM358DR --manufacturer TI --workspace D:/ecadlib-ws --result-file r.ini"],
+    "kicad-menu": ["ecadlib kicad-menu run-job JOB --action add-part --project board.kicad_pcb --mpn LM358DR",
+                   "ecadlib kicad-menu check-bom board.kicad_sch --no-open"],
     "altium-pkg": ["ecadlib altium-pkg out/librarian/plan.json --out out/altium_pkg --name mylib",
                    "ecadlib altium-pkg out/altium_models --out out/altium_pkg"],
     "testpack": ["ecadlib testpack --out altium_kicad_testpack"],
