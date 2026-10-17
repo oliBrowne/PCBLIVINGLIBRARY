@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from ecadlib import house_style as H, symbol_layout as SL
+from tests.fixtures_lite import lite
 
 
 def test_two_overbars_in_one_name_are_not_one_active_low_pin():
@@ -21,6 +22,7 @@ def test_differential_negative_leg_is_not_renamed():
     assert got["active_low"] == "hash" and got["active_low_pins"] == 3
 
 
+@lite
 def test_learn_reads_setup_libs_relative_to_the_rules_file(tmp_path, monkeypatch):
     proj = tmp_path / "proj"
     (proj / "lib").mkdir(parents=True)
@@ -33,6 +35,7 @@ def test_learn_reads_setup_libs_relative_to_the_rules_file(tmp_path, monkeypatch
     assert [Path(p) for p in prof["learned_from"]] == [(proj / "lib").resolve()]
 
 
+@lite
 def test_learn_from_relative_path_is_kept_absolute(tmp_path, monkeypatch):
     (tmp_path / "lib").mkdir()
     monkeypatch.chdir(tmp_path)
@@ -41,6 +44,7 @@ def test_learn_from_relative_path_is_kept_absolute(tmp_path, monkeypatch):
     assert prof["learned_from"] == [str((tmp_path / "lib").resolve())]
 
 
+@lite
 def test_profile_that_is_not_an_object_is_a_style_error(tmp_path):
     f = tmp_path / "house_style.json"
     f.write_text("[]", encoding="utf-8")

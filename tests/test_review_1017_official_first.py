@@ -4,8 +4,10 @@ from pathlib import Path
 
 from ecadlib import providers as P, sourcing as S, upkeep as U
 from ecadlib.app import Workspace
+from tests.fixtures_lite import lite
 
 
+@lite
 def test_web_librarian_defaults_to_the_cli_order(tmp_path):
     # no --providers and no [providers] order: the web UI / MCP librarian used only JLCPCB + EasyEDA
     ws = Workspace(Path(tmp_path) / "ws", offline=True)
@@ -13,6 +15,7 @@ def test_web_librarian_defaults_to_the_cli_order(tmp_path):
     assert Workspace(Path(tmp_path) / "w2", providers=["nexar", "easyeda"], offline=True)._librarian_providers() == "nexar,easyeda"
 
 
+@lite
 def test_upkeep_sourcing_respects_unofficial_false(tmp_path, monkeypatch):
     bom = tmp_path / "bom.csv"
     bom.write_text("Designator,Quantity,Manufacturer Part Number\nR1,1,RC0603FR-0710KL\n", encoding="utf-8")

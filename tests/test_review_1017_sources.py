@@ -2,10 +2,9 @@
 vendor answer is a MOCK. Run:  python3 -m pytest -q tests/test_review_1017_sources.py"""
 import json
 
-import pytest
-
 from ecadlib import easyeda_convert as EC, lifecycle as L, plugins as PL, providers as P, release_check as RC
 from ecadlib.httpcache import Response
+from tests.fixtures_lite import lite
 
 
 class FakeHTTP:
@@ -28,6 +27,7 @@ def test_builtin_default_order_is_official_first():
     assert names.index("mouser") < names.index("jlcpcb_search"), names
 
 
+@lite
 def test_lifecycle_honours_unofficial_false(tmp_path, monkeypatch):
     (tmp_path / "ecadlib.toml").write_text("[providers]\nunofficial = false\n", encoding="utf-8")
     bom = tmp_path / "bom.csv"
@@ -42,9 +42,12 @@ def test_lifecycle_honours_unofficial_false(tmp_path, monkeypatch):
         raise Stop
 
     monkeypatch.setattr(L, "check_parts", fake_check)
-    with pytest.raises(Stop):
+    try:
         L.main([str(bom), "--offline", "--cache", str(tmp_path / "cache"), "-o", str(tmp_path / "out"),
                 "--state", str(tmp_path / "state.json")])
+        raise AssertionError("check_parts was not reached")
+    except Stop:
+        pass
     assert "jlcpcb_search" not in seen["names"] and "nexar" in seen["names"], seen
 
 
@@ -59,6 +62,7 @@ def test_jlcpcb_component_code_must_be_an_lcsc_number():
     assert r.found and r.lcsc == "C7593" and not r.error
 
 
+@lite
 def test_official_source_with_a_non_object_answer_is_an_error_not_a_crash(monkeypatch):
     monkeypatch.setenv("NEXAR_SUPPLY_TOKEN", "tok")
     r = P.Nexar(FakeHTTP([1, 2, 3])).lookup({"mpn": "NE555DR"})      # a JSON list where an object belongs
