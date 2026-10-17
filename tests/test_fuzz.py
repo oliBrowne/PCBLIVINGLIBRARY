@@ -11,7 +11,7 @@ Documented error types:
   rules.load / parse_text             rules.RulesError (a ValueError)
   web UI JSON endpoints               an HTTP status below 500 and no traceback from the handler
   MCP tools/call                      a result (isError for bad input), no traceback for user errors"""
-import contextlib, copy, io, json, os, random, sys, tempfile, time, traceback
+import contextlib, copy, io, json, os, random, sys, tempfile, threading, time, traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -221,6 +221,7 @@ def test_fuzz_web_json_endpoints():
     from ecadlib.ui import server as SV
     from tests.test_ui import serve, wait_job
     tracebacks = []
+    before = set(threading.enumerate())
     real = SV.traceback.print_exc
     SV.traceback.print_exc = lambda *a, **k: tracebacks.append(traceback.format_exc())
     with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -258,6 +259,8 @@ def test_fuzz_web_json_endpoints():
             _fuzz("web JSON endpoints", 300, 18, make, run, ())
         finally:
             srv.shutdown()
+            for t in set(threading.enumerate()) - before:   # background jobs (a demo run) finish before the folder goes
+                t.join(120)
             SV.traceback.print_exc = real
 
 
