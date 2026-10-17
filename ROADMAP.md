@@ -4,7 +4,7 @@ Last updated 2026-10-17. What ecadlib is for, who it is for and how success is m
 [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md). Every planned item below has an issue, and every milestone is a
 [GitHub milestone](https://github.com/oliBrowne/PCBLIVINGLIBRARY/milestones) with the same due date.
 
-Milestones follow the package version (v0.3.1, v0.4.0, v0.5.0), not v1 / v1.1: ecadlib is at 0.3.0 on PyPI, and
+Milestones follow the package version (v0.3.1, v0.4.0, v0.5.0), not v1 / v1.1: ecadlib is at 0.3.1 on PyPI, and
 the changelog keeps 0.x minor releases free to change command-line options and file formats until 1.0.0.
 
 **Focus until v0.4.0:** a proven BOM-to-Altium 365 flow with a published accuracy benchmark, and real-BOM trials
@@ -27,27 +27,10 @@ on 2026-10-17; their commits are on `main`.
 | 2026-10-16 and 17 | #17, #18, #19, #20, #21, #22, #23, #24, #25, #26 | Hairline web UI and landing page, one plain voice in every interface, 42 bugs from the full technical review, cost per job for every model, library hub, footprint rule book in the release gate, Fusion / EAGLE and EasyEDA Pro exports, Windows installer and setup page |
 | 2026-10-17 | #27, #28, #29, #30, #33 | Altium menu fixes from a real AD26 PC, house style (`ecadlib style`), one pin rule for every IC symbol, tidier converted footprints, the ecadlib dialog in Altium and window in KiCad, EasyEDA credit on converted parts |
 | 2026-10-17 | #31, #32, #34 | **v0.3.0** released: on PyPI (`pip install ecadlib`) and as a Windows installer on the GitHub release |
-| 2026-10-17 | #35 | Official part APIs first with unofficial endpoints fenced off, weekly sources canary, and Altium rebuilding every library itself (8 of 8 test libraries, 0 differences on AD26). In `[Unreleased]`, ships in v0.3.1 |
+| 2026-10-17 | #35 | Official part APIs first with unofficial endpoints fenced off, weekly sources canary, and Altium rebuilding every library itself (8 of 8 test libraries, 0 differences on AD26) |
+| 2026-10-17 | #61-#80 (issues #36-#40) | **v0.3.1** released: Build libraries in the Altium menu, fab-layer designator in Altium, multi-part symbols, keep-outs and bottom-side pads checked in AD26, and the fixes from the overnight system test |
 
 ## Next milestones
-
-### v0.3.1: Altium loop closed (due 2026-10-31)
-
-**Goal.** A librarian can build, rebuild and check libraries without leaving Altium, and the Altium cases nobody has
-opened in Altium Designer yet are checked.
-
-| Item | Issue | Label |
-|---|---|---|
-| P1. *Build libraries* (altium_native) in the ecadlib menu | [#36](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/36) | feature |
-| P2. `${REFERENCE}` designator on the fab layer in Altium | [#37](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/37) | feature |
-| P3. Check multi-part symbols in Altium Designer | [#38](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/38) | bug |
-| P3. Check keep-outs in Altium Designer | [#39](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/39) | bug |
-| P3. Check bottom-side pads in Altium Designer | [#40](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/40) | bug |
-| P4. Release v0.3.1 | [#41](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/41) | docs |
-
-**Exit criteria.** The menu builds and compares libraries on AD26; multi-part symbols, keep-outs and bottom-side
-pads open correctly in AD26 with regression tests for anything fixed; the test suite is green; v0.3.1 is on PyPI
-with its Windows installer.
 
 ### v0.4.0: Proven BOM-to-Altium 365 flow (due 2026-11-30)
 
@@ -112,10 +95,10 @@ gantt
     Official APIs first, Altium builds the libraries    :done, s7, 2026-10-17, 1d
 
     section v0.3.1 Altium loop closed
-    Build libraries in the Altium menu                  :p1, 2026-10-18, 6d
-    Fab-layer designator in Altium                      :p2, 2026-10-18, 6d
-    Check multi-part, keep-outs, bottom pads in AD26    :p3, 2026-10-20, 9d
-    v0.3.1 release                                     :milestone, r1, 2026-10-31, 0d
+    Build libraries in the Altium menu                  :done, p1, 2026-10-17, 1d
+    Fab-layer designator in Altium                      :done, p2, 2026-10-17, 1d
+    Check multi-part, keep-outs, bottom pads in AD26    :done, p3, 2026-10-17, 1d
+    v0.3.1 release                                     :milestone, done, r1, 2026-10-17, 0d
 
     section v0.4.0 Proven BOM to Altium 365
     Real Altium 365 release of a full BOM               :p10, 2026-11-01, 10d

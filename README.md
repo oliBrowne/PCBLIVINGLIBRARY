@@ -19,7 +19,7 @@ doubt for a person to sign off, and releases the rest to **Altium 365** or **KiC
 * **Altium 365 release.** Parts go to your Altium 365 workspace, or out as `.SchLib`/`.PcbLib`, a database library
   and KiCad libraries, from one plan.
 
-Install it with `pip install ecadlib` (v0.3.0, Python 3.10+), or on Windows run the installer from the
+Install it with `pip install ecadlib` (v0.3.1, Python 3.10+), or on Windows run the installer from the
 [Releases page](https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases). It is free and open source under the MIT
 licence. Website: [pcblivinglibrary.vercel.app](https://pcblivinglibrary.vercel.app).
 

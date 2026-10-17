@@ -7,6 +7,8 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-17
+
 ### Added
 
 - Altium builds the libraries itself (`ecadlib/altium_native.py`, docs/altium-native.md): every `.PcbLib` / `.SchLib` ecadlib writes gets a `.ecadbuild` recipe, and a DelphiScript (`ecadlib_build.pas`) rebuilds them inside Altium with its own object API; `ecadlib altium-native write|compare` and a *Rebuild with Altium* step in `altium-pkg` (`--no-native-build` to skip). `compare` reads Altium's result back pad by pad and pin by pin.
@@ -22,6 +24,21 @@ a minor release may change command-line options and file formats.
 - Official part APIs first: the default provider order is Nexar, DigiKey, Mouser, then the unofficial JLCPCB search and EasyEDA. Nexar / DigiKey / Mouser answers now give the LCSC number and datasheet link. `[providers] unofficial = false` turns the unofficial endpoints off completely.
 
 - Altium (Altium 365 first) and KiCad are the supported targets. The Fusion Electronics / EAGLE and EasyEDA Pro exports are marked experimental in the README and `ecadlib -h`: they keep working but get no new features and may be removed later.
+
+### Fixed
+
+- BOM intake: `C1~C4` designator ranges are counted; European decimal quantities are not multiplied by ten; one cp1252 byte no longer garbles a UTF-8 CSV; `DNP` / `DNF` in the Value or MPN cell marks the line; a quantity-only footer row is not a part; an MPN that Excel turned into scientific notation is flagged.
+- DbLib table: parts go to the right table (LCSC long descriptions, `easyeda:C7593` is an LCSC number, an IC package outranks the description words, menu parts follow their source).
+- Altium: variants per channel and part, variant alternates by Design Item ID, the encoding of a DbLib Altium saved is kept, prune removes the STEP files ecadlib wrote, sheet name case, menu jobs and pin numbers; the native build keeps recipe footprint names as stored and keeps a library when a STEP file is missing.
+- KiCad export: re-export touches nothing unchanged and never loses hand edits; Altium keep-outs and non-copper regions are not written as copper; Bottom Paste / Bottom Solder and fill rotation are kept; KiCad name clashes are reported; a database row never points at another part's symbol.
+- 3D models: the STEP model is turned to the footprint's pads, and more EasyEDA / LCSC package names get the right body.
+- House style: `style learn` needs coverage before a setting is high and does not write low settings; `power_side = "left"` puts a lone ground at the bottom.
+- Standard parts refuse land variants, exposed-pad SOTs and contradicting size codes.
+- The approval gate works under house parameter names, and placeholder MPNs are handled.
+- Models: the feedback turn is capped, API keys are redacted, unit repair is strict, configured key names are used.
+- Altium: DbLib table names Altium's database driver can open, install scripts written in cp1252, and a warning for Unicode pin names.
+- Team server: no self-approval through the plan approval route, and an odd `sign_as` is a plain 400.
+- Security: no API key in network error messages, framing refused in local mode, a deeply nested JSON body is a plain 400.
 
 ## [0.3.0] - 2026-10-17
 
@@ -199,7 +216,8 @@ a minor release may change command-line options and file formats.
 - Initial prototypes: IPC-7351B footprint generator driven by `package_schema.json`, BOM triage
   against local KiCad libraries and public part sources, and Altium Database Library (DbLib) export.
 
-[Unreleased]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases/tag/v0.1.0
