@@ -90,6 +90,7 @@ class Library:
     def __init__(self):
         self.components, self.footprints, self.boms, self.files, self.warnings = [], [], [], Counter(), []
         self.sym_pins = []                        # per SchLib symbol: (name, [(x, y, length) of each pin], DXP units)
+        self.pin_names = []                       # every pin name of every symbol (house_style: active-low notation)
 
     def add_component(self, name, origin, params=None, category=None, folder="", symbol="", footprint="", designator="",
                       description=""):
@@ -196,6 +197,7 @@ def scan_schlib(lib, f):
         lib.add_component(s["name"], f"SchLib {f.name}", params, None, f.stem if category_of(f.stem) else "", s["name"], fp,
                           desig, desc)
         pins = [(r["x"], r["y"], r["length"]) for r in recs if r.get("RECORD") == "2" and not r.get("mode")]
+        lib.pin_names += [r["name"] for r in recs if r.get("RECORD") == "2" and not r.get("mode") and r.get("name")]
         if pins:
             lib.sym_pins.append((s["name"], pins))
 
@@ -251,6 +253,17 @@ def scan_kicad_sym(lib, f):
             params["Value"] = props["Value"]
         lib.add_component(s[1], f"KiCad {f.name}", params, None, "", s[1], props.get("Footprint", "").split(":")[-1],
                           props.get("Reference", ""), props.get("Description", ""))
+        lib.pin_names += [str(nm[1]) for pin in _walk(s, "pin") for nm in sexpr.find(pin, "name") if len(nm) > 1 and nm[1] != "~"]
+
+
+def _walk(node, head):
+    """Every list under node (any depth) whose first element == head: a KiCad symbol's pins sit in its unit symbols."""
+    for c in node:
+        if isinstance(c, list) and c:
+            if c[0] == head:
+                yield c
+            else:
+                yield from _walk(c, head)
 
 
 def scan_kicad_mod(lib, f):
