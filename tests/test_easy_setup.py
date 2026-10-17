@@ -170,7 +170,8 @@ def test_state_never_contains_a_key_value():
             raise AssertionError
         except ValueError:
             pass
-        assert ES.forget_key({"name": "ANTHROPIC_API_KEY"})["removed"]
+        assert ES.forget_key({"name": "ANTHROPIC_API_KEY"}) == {"removed": True, "still_in_env": False}
+        assert "ANTHROPIC_API_KEY" not in os.environ        # the running server stops using a forgotten key
         os.environ.pop("ANTHROPIC_API_KEY", None)
 
 

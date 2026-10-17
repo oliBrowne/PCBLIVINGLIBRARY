@@ -1071,7 +1071,8 @@ def probe_ui(port, host="127.0.0.1", timeout=1.5):
     """What answers on the port: ("ecadlib", workspace) | ("ecadlib-team", None) | ("other", None) | (None, None)."""
     import urllib.request, urllib.error
     try:
-        with urllib.request.urlopen(f"http://{host}:{port}/api/info", timeout=timeout) as r:
+        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # never through a system proxy
+        with direct.open(f"http://{host}:{port}/api/info", timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8"))
         return ("ecadlib", data.get("workspace")) if isinstance(data, dict) and "workspace" in data else ("other", None)
     except urllib.error.HTTPError as e:
