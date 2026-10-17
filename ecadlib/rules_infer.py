@@ -21,7 +21,7 @@ Footprints: IPC-7351 names (RESC1608X55N; the last letter is the density), KiCad
 Density comes from IPC names, ecadlib's own tags and, for chip parts 0603 and up, the toe-to-toe pad length
 compared with footprint_gen at L/N/M. Where the evidence is split, `init` asks one short question (with --yes it
 takes the best guess). An existing ecadlib.toml is never replaced without confirmation: the diff is shown."""
-import argparse, json, re, sqlite3, sys
+import argparse, contextlib, json, re, sqlite3, sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -120,7 +120,7 @@ def scan(paths, a365=None):
                     found.append(f)
             own = _own_output_dirs(p, found)
             for d in sorted(own):
-                lib.warnings.append(f"skipped {d}: ecadlib's own output (it would teach ecadlib its own defaults)")
+                lib.warnings.append(f"skipped {d.as_posix()}: ecadlib's own output (it would teach ecadlib its own defaults)")
             files += [(f, False) for f in found if not any(d in f.parents for d in own)]
         elif p.is_file():
             files.append((p, True))
@@ -322,7 +322,7 @@ def read_table_file(f):
     suf = f.suffix.lower()
     if suf in (".sqlite", ".db", ".sqlite3"):
         out = {}
-        with sqlite3.connect(f"file:{f}?mode=ro", uri=True) as con:
+        with contextlib.closing(sqlite3.connect(Path(f).resolve().as_uri() + "?mode=ro", uri=True)) as con:   # closed: Windows locks open files
             for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'"):
                 cur = con.execute(f'SELECT * FROM "{t}"')
                 cols = [c[0] for c in cur.description]

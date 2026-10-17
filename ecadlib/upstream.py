@@ -237,7 +237,7 @@ def record(out, spec, rep, http, step=False, gen_step=True, layers=None):
             f = Path(rep[key])
             man["entries"][f"{kind}:{f.stem}"] = {
                 "kind": kind, "kicad_ref": ref, "mpn": spec.get("mpn", ""),
-                "output": os.path.relpath(f, Path(out)), "output_sha256": hashlib.sha256(f.read_bytes()).hexdigest(),
+                "output": os.path.relpath(f, Path(out)).replace(os.sep, "/"), "output_sha256": hashlib.sha256(f.read_bytes()).hexdigest(),
                 "converter": converter_version(), "converted_at": now, "step": bool(step), "gen_step": bool(gen_step),
                 "layers": layers,
                 "spec": {k: v for k, v in spec.items() if v is not None},

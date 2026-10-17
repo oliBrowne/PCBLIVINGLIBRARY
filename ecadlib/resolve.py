@@ -427,7 +427,7 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None):
     state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.exists() else None
     shared_with = lambda k: [i["name"] for i in items if i is not it and i[k].get("file") and
                              i[k]["file"] == os.path.relpath(base / "models" / ("SchLib" if k == "symbol" else "PcbLib") /
-                                                             f"{AL.file_stem(it[k]['ref'])}.{'SchLib' if k == 'symbol' else 'PcbLib'}", base)]
+                                                             f"{AL.file_stem(it[k]['ref'])}.{'SchLib' if k == 'symbol' else 'PcbLib'}", base).replace(os.sep, "/")]
     shared = shared_with(kind)
     rewritten = {n for k, _, _ in done for n in shared_with(k)}      # every part whose model file this choice overwrites
     notes = []

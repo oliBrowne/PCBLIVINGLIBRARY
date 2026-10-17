@@ -118,7 +118,7 @@ class Jobs:
 def _msg(e, root=None):
     m = (e.args[0] if isinstance(e, KeyError) and e.args else str(e)) or type(e).__name__
     if root:                                                # workspace paths as the person sees them: relative
-        m = str(m).replace(str(root) + os.sep, "").replace(str(root), "the workspace")
+        m = str(m).replace(str(root) + os.sep, "").replace(str(root) + "/", "").replace(str(root), "the workspace")
     return (m if isinstance(e, (ValueError, FileExistsError, PermissionError, KeyError)) else f"{type(e).__name__}: {m}")[:600]
 
 

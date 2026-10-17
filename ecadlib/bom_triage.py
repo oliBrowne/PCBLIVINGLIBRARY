@@ -452,7 +452,7 @@ def main(argv=None):
     if a.json:                                           # stable shape: README "Machine-readable output (--json)"
         print(json.dumps({"bom": str(a.bom), "lines": len(rows), "mapping": mapping,
                           "counts": {str(k): int(v) for k, v in counts.items()}, "rows": rows,
-                          "reports": [str(Path(a.out).with_suffix(x)) for x in (".md", ".csv")]}, indent=2, default=str))
+                          "reports": [Path(a.out).with_suffix(x).as_posix() for x in (".md", ".csv")]}, indent=2, default=str))
         return 0
     for r in rows:
         print(f"{r['line']:>2} {r['mpn'][:24]:<24} {r['lcsc']:<9} {r['status']:<34} {r['notes'][:90]}")
