@@ -974,12 +974,15 @@ def pas_problems(text, api=None, known=(), procs=None):
     probs = []
     glob = routines.pop(GLOBALS, {"vars": set()})["vars"]
     known = {n.lower() for n in routines} | {n.split(".")[-1].lower() for n in routines} | glob | {k.lower() for k in known}
-    for name, r in routines.items():
+    order = {n.lower(): i for i, n in enumerate(routines) if "." not in n}      # plain routines, in file order
+    for here, (name, r) in enumerate(routines.items()):
         local = r["params"] | r["vars"]
         for idx, (kind, val, line) in enumerate(r["body"]):
             if kind != "word":
                 continue
             w = val.lower()
+            if order.get(w, -1) > here and w not in local:   # DelphiScript has no forward declarations (AD 26.10:
+                probs.append(f"line {line}: {name}: {val} is used before it is declared")  # "Undeclared identifier")
             if w in PAS_KEYWORDS or w in PAS_TYPES or w in known or w in local or w in api:
                 continue
             probs.append(f"line {line}: {name}: {val} is not declared and not in the API allow-list")

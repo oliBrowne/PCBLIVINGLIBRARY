@@ -137,6 +137,36 @@ Begin
     EcadlibDialog.Secondary.Left := EcadlibDialog.Primary.Left - 8 - EcadlibDialog.Secondary.Width;
 End;
 
+Procedure PasteInto(Box : TEdit);
+{ Altium takes Ctrl+V / Shift+Insert as its own paste, so the boxes paste here. }
+Begin
+    Box.PasteFromClipboard;
+End;
+
+Function LooksLikeMpn(S : String) : Boolean;
+{ One word of 3 to 40 characters with a digit in it: a part number, not a sentence or a path someone copied. }
+Var
+    i : Integer;
+Begin
+    Result := False;
+    If (Length(S) < 3) Or (Length(S) > 40) Then Exit;
+    If (Pos(' ', S) > 0) Or (Pos(#13, S) > 0) Or (Pos(#10, S) > 0) Or (Pos(#9, S) > 0) Or (Pos('\', S) > 0) Then Exit;
+    For i := 1 To Length(S) Do
+        If (S[i] >= '0') And (S[i] <= '9') Then
+            Result := True;
+End;
+
+Procedure ClipboardMpn;
+{ A part number on the clipboard goes into the MPN box, selected, so typing replaces it. }
+Begin
+    PasteInto(EcadlibDialog.EditMpn);
+    EcadlibDialog.EditMpn.Text := Trim(EcadlibDialog.EditMpn.Text);
+    If LooksLikeMpn(EcadlibDialog.EditMpn.Text) Then
+        EcadlibDialog.EditMpn.SelectAll
+    Else
+        EcadlibDialog.EditMpn.Text := '';
+End;
+
 Function NoteLines(S : String) : Integer;
 { How many lines the note wraps to (a word-wrapped TLabel with AutoSize would shrink to its first word). }
 Var
@@ -522,36 +552,6 @@ End;
 Procedure TEcadlibDialog.ReportClick(Sender : TObject);
 Begin
     Fire('open', 'path', Answer(Job, 'report'));
-End;
-
-Procedure PasteInto(Box : TEdit);
-{ Altium takes Ctrl+V / Shift+Insert as its own paste, so the boxes paste here. }
-Begin
-    Box.PasteFromClipboard;
-End;
-
-Function LooksLikeMpn(S : String) : Boolean;
-{ One word of 3 to 40 characters with a digit in it: a part number, not a sentence or a path someone copied. }
-Var
-    i : Integer;
-Begin
-    Result := False;
-    If (Length(S) < 3) Or (Length(S) > 40) Then Exit;
-    If (Pos(' ', S) > 0) Or (Pos(#13, S) > 0) Or (Pos(#10, S) > 0) Or (Pos(#9, S) > 0) Or (Pos('\', S) > 0) Then Exit;
-    For i := 1 To Length(S) Do
-        If (S[i] >= '0') And (S[i] <= '9') Then
-            Result := True;
-End;
-
-Procedure ClipboardMpn;
-{ A part number on the clipboard goes into the MPN box, selected, so typing replaces it. }
-Begin
-    PasteInto(EcadlibDialog.EditMpn);
-    EcadlibDialog.EditMpn.Text := Trim(EcadlibDialog.EditMpn.Text);
-    If LooksLikeMpn(EcadlibDialog.EditMpn.Text) Then
-        EcadlibDialog.EditMpn.SelectAll
-    Else
-        EcadlibDialog.EditMpn.Text := '';
 End;
 
 Procedure TEcadlibDialog.EcadlibDialogKeyDown(Sender : TObject; Var Key : Word; Shift : TShiftState);

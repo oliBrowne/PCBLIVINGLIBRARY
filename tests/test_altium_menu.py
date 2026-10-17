@@ -721,3 +721,11 @@ if __name__ == "__main__":
         if k.startswith("test_"):
             v()
             print("ok", k)
+
+
+def test_pas_checker_catches_a_routine_used_before_it_is_declared():
+    """DelphiScript has no forward declarations: AD 26.10 stopped on "Undeclared identifier: ClipboardMpn" when
+    OpenDialog called a procedure written below it."""
+    text = "Procedure A;\nBegin\n    B;\nEnd;\n\nProcedure B;\nBegin\nEnd;\n"
+    assert any("B is used before it is declared" in p for p in AM.pas_problems(text, procs=[]))
+    assert not AM.pas_problems(text.replace("    B;\n", ""), procs=[])
