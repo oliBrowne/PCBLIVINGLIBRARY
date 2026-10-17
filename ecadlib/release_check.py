@@ -12,6 +12,7 @@ Rules, per plan item:
             library are held only for overlapping pads, a missing courtyard and a missing pin 1 (their other
             findings are reported as warnings). Without a .kicad_mod the same three are checked on the PcbLib.
             Overlapping pads whose symbol pins share a name (USB-C A1/B12 = GND) are stacked on purpose: a warning.
+            A PcbLib with no .Designator on the Top / Bottom Overlay (no reference on silk) is a warning.
   height    a 3D height is present and inside the plausible range for the package family (HEIGHTS)
   fields    Manufacturer, Manufacturer Part Number, a datasheet link and Description are filled in
   parity    the .kicad_mod and the .PcbLib / .SchLib read back the same (ecadlib.parity: pads, drills, paste, courtyard,
@@ -217,6 +218,11 @@ def check_item(item, base=".", rules=None):
         for lvl, msg in FR.pcblib_text_issues(fps[0]):
             hard = lvl == "error" and not kicad_lib
             (add("footprint", f"silktext: {msg}") if hard else warns.append(f"{lvl} silktext: {msg}"))
+        des = [r.get("layer") for r in fps[0]["records"] if r["type"] == "text" and r.get("text") == ".Designator"]
+        if not any(l in (AL.TOP_OVERLAY, AL.BOTTOM_OVERLAY) for l in des):
+            warns.append("warning silktext: no .Designator on Top / Bottom Overlay: the board shows no reference on silk"
+                         + (f" (it is on {', '.join(sorted({RU.layer_name(l) for l in des}))}; see [layers] designator)"
+                            if des else ""))
     # ---- KiCad and Altium read back the same (ecadlib.parity)
     mode = (rules.get("release") or {}).get("parity", "hold")
     if mode != "off" and kmod and fps:
