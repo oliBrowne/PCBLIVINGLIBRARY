@@ -669,12 +669,13 @@ def apply_variant(comps, variant):
                 if kind == 1:
                     c["fitted"], c["variant_note"] = False, "not fitted"
                 elif kind == 2:
-                    alt = next((v for k, v in hit.items() if re.search(r"designitemid|libreference|libref", k, re.I) and v), "") \
-                        or hit.get("AlternatePart", "")
+                    pick = lambda pat: next((v for k, v in hit.items() if re.search(pat, k, re.I) and v), "")
+                    # the alternate's Design Item ID, whatever order the keys come in (not its symbol's LibReference)
+                    alt = pick(r"designitemid") or pick(r"libreference|libref") or hit.get("AlternatePart", "")
                     c["variant_note"] = f"alternate part {alt}".strip()
                     if alt and not alt.startswith("="):
                         c.update(design_item_id=alt, mpn=alt if c["mpn_source"] in ("DesignItemId", "") else c["mpn"],
-                                 libref=next((v for k, v in hit.items() if re.search(r"libreference", k, re.I) and v), c["libref"]))
+                                 libref=pick(r"libreference") or c["libref"])
             params = dict(c["params"])
             for pv in variant["param_variations"]:
                 if (pv["unique_id"] and pv["unique_id"].rsplit("\\", 1)[-1] in uids and (not c.get("channel") or pv["designator"] in ("", c["designator"]))) or (not pv["unique_id"] and pv["designator"] == c["designator"]):
