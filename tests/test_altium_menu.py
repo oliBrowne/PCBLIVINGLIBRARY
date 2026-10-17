@@ -168,7 +168,7 @@ def test_menu_file_follows_altiums_format():
         if m:
             pl[m.group(1)] = m.groups()
             continue
-        m = re.match(r"^Insertion (\w+) TargetID='(\w+)' RefID0='(\w+)' $", ln)
+        m = re.match(r"^Insertion (\w+) TargetID='(\w+)' RefID0='(\w+)' InsertType='Before' $", ln)   # as AdvPcb.rcs
         if m:
             targets.append((m.group(2), m.group(3)))
             depth += 1
@@ -195,6 +195,48 @@ def test_menu_file_follows_altiums_format():
         assert kv["ProjectName"] == f"{win}\\{AM.PROJECT}"
         f, proc = kv["ProcName"].split(">")
         assert f == f"{win}\\{AM.UNIT}" and proc in procs and pid == f"ecadlib_{proc}"
+
+
+def test_menu_goes_straight_into_altiums_menu_file():
+    """install-menu merges the ecadlib menu into Altium's own DXP.RCS (Altium closed), after a backup: other
+    customisations stay ([Custom] trees untouched), a second run changes nothing, and remove
+    gives back the file as it was. The user file is the one seen on a real AD 26.10 (one line)."""
+    d = _tmp()
+    alt = d / "Roaming" / "Altium" / "Altium Designer {EDA20636-A941-48A8-9173-5E8D6A734E05}"
+    alt.mkdir(parents=True)
+    theirs = ("Tree PCBCustom Caption='[Custom]' TopLevel='True'  End\r\n"
+              "PL Mine_Run Command='ScriptingSystem:RunScript' Params='ProjectName=C:\\x.PrjScr' Caption='Mine' End\r\n"
+              "Insertion Mine_Menu TargetID='MNPCBMenu' RefID0='MNDesignMenu_Window1_1' \r\n"
+              "    Tree Mine_Tree Caption='Mine' Popup='N' \r\n        Link Mine_L PLID='Mine_Run'  End\r\n    End\r\nEnd\r\n")
+    (alt / "DXP.RCS").write_bytes(theirs.encode("latin-1"))
+    assert AM.altium_user_folders(d / "Roaming") == [alt]
+    try:
+        AM.install_menu_bar("D:\\ecadlib menu", running=lambda: True)
+        raise AssertionError("must refuse while Altium runs")
+    except ValueError as e:
+        assert "close it first" in str(e)
+    win = "D:\\ecadlib menu" if os.name != "nt" else str(d / "menu")
+    with mock.patch.object(AM, "check_win_dir", lambda w: "D:\\ecadlib menu"):
+        r = AM.install_menu_bar(win, [alt], running=lambda: False, now=__import__("datetime").datetime(2026, 10, 17, 4, 0))
+        text = (alt / "DXP.RCS").read_bytes().decode("latin-1")
+        assert r["installed"] == [str(alt / "DXP.RCS")] and Path(r["backups"][0]).read_bytes() == theirs.encode("latin-1")
+        blocks = AM.rcs_blocks(text)
+        ids = [AM._block_id(b) for b in blocks]
+        assert ids.count("PCBCustom") == 1 and "Mine_Menu" in ids and "Mine_Run" in ids
+        assert {"SchDoc_ecadlib_Menu", "PcbDoc_ecadlib_Menu", "SchLib_ecadlib_Menu", "PcbLib_ecadlib_Menu"} <= set(ids)
+        assert blocks[ids.index("PCBCustom")] == ["Tree PCBCustom Caption='[Custom]' TopLevel='True'  End"]
+        assert "ProcName=D:\\ecadlib menu\\ecadlib_menu.pas>CheckProjectBOM" in text
+        again = AM.install_menu_bar(win, [alt], running=lambda: False)
+        assert again["installed"] == [] and again["backups"] == []
+        AM.install_menu_bar(win, [alt], remove=True, running=lambda: False)
+        back = (alt / "DXP.RCS").read_bytes().decode("latin-1")
+        assert "ecadlib" not in back and [AM._block_id(b) for b in AM.rcs_blocks(back)] == ["PCBCustom", "Mine_Run", "Mine_Menu"]
+    for bad in ("Tree X Caption='a' \r\n", "End\r\n"):
+        try:
+            AM.rcs_blocks(bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
 
 
 def test_pas_uses_only_documented_calls_and_is_balanced():

@@ -244,12 +244,26 @@ def install_altium_menu(ws_root):
     _set_ini_command(ini, command)                           # an older build's .ini is kept: point it at this ecadlib
     project = out / AM.PROJECT
     _record_install("altium_menu", str(project))
-    return {"folder": str(out), "project": str(project), "menu_file": str(out / AM.PREFS) if rep.get("menu_file") else None,
-            "problems": rep.get("problems") or [],
-            "steps": ["In Altium Designer: the gear icon (top right) > Preferences > Scripting System > Global Projects",
-                      f"Install from file... and pick {project}",
-                      "Restart Altium. The menu entries are in File > Run Script... under ecadlib_menu; to get an "
-                      f"\"ecadlib\" menu, use Preferences > Load... with {out / AM.PREFS} (see ALTIUM_MENU_README.txt)"]}
+    bar = {}
+    if os.name == "nt":                     # the "ecadlib" menu straight into Altium's top menu bar (Altium closed)
+        try:
+            bar = AM.install_menu_bar(out)
+        except (OSError, ValueError) as e:
+            bar = {"error": str(e)}
+    res = {"folder": str(out), "project": str(project), "menu_file": str(out / AM.PREFS) if rep.get("menu_file") else None,
+           "problems": rep.get("problems") or [], "menu_bar": bar}
+    if bar.get("folders") and not bar.get("error"):
+        res["steps"] = ["Start Altium Designer and open a schematic or PCB",
+                        "The ecadlib menu is in the menu bar, before Window: Add part from MPN, Check this project BOM, "
+                        "Open review queue",
+                        f"To take it out again: ecadlib altium-menu install-menu --out \"{out}\" --remove"]
+    else:
+        why = f" ({bar['error']})" if bar.get("error") else ""
+        res["steps"] = [f"Close Altium Designer{why}",
+                        f"Run: ecadlib altium-menu install-menu --out \"{out}\" (or press Add to Altium here again)",
+                        "Start Altium: the ecadlib menu is in the menu bar, before Window. Without closing Altium: "
+                        f"Preferences > Load... with {out / AM.PREFS} (see ALTIUM_MENU_README.txt)"]
+    return res
 
 
 def _set_ini_command(ini, command):

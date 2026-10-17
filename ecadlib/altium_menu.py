@@ -533,7 +533,7 @@ def rcs_text(win_dir):
                  f"{w}\\{UNIT}>{proc}' Caption='{caption}' Description='{desc.replace(chr(39), '')}' DefaultChecked=0  End")
     L.append("")
     for kind, target, ref, _ in MENUS:
-        L += [f"Insertion {kind}_ecadlib_Menu TargetID='{target}' RefID0='{ref}' ",
+        L += [f"Insertion {kind}_ecadlib_Menu TargetID='{target}' RefID0='{ref}' InsertType='Before' ",
               f"    Tree {kind}_ecadlib_Tree Caption='&ecadlib' Popup='N' "]
         L += [f"        Link {kind}_ecadlib_{proc} PLID='ecadlib_{proc}'          End" for proc, _, _ in PROCS]
         L += ["    End", "End"]
@@ -543,6 +543,104 @@ def rcs_text(win_dir):
         L += [f"    Link {custom}_ecadlib_{proc} PLID='ecadlib_{proc}'          End" for proc, _, _ in PROCS]
         L.append("End")
     return "\r\n".join(L) + "\r\n"
+
+
+# ------------------------------------------------------------------ the menu straight into Altium's DXP.RCS
+def rcs_blocks(text):
+    """DXP.RCS -> [lines of each top-level block]. A line ending in End closes itself; Insertion / Tree / other lines
+    without one open a block that an End line closes (the grammar of Altium's .rcs resources)."""
+    blocks, cur, depth = [], [], 0
+    for ln in text.replace("\r\n", "\n").split("\n"):
+        if not ln.strip():
+            if depth == 0:
+                continue
+            cur.append(ln)
+            continue
+        cur.append(ln)
+        st = ln.strip()
+        if st == "End":
+            depth -= 1
+        elif not re.search(r"\bEnd\s*$", st):
+            depth += 1
+        if depth < 0:
+            raise ValueError(f"DXP.RCS: an End without its block near {st[:60]!r}")
+        if depth == 0:
+            blocks.append(cur)
+            cur = []
+    if depth or cur:
+        raise ValueError("DXP.RCS: a block is not closed (End missing)")
+    return blocks
+
+
+def _block_id(block):
+    m = re.match(r"^\s*\w+\s+(\w+)", block[0])
+    return m.group(1) if m else ""
+
+
+def merge_rcs(current, win_dir, remove=False):
+    """Altium's DXP.RCS with the ecadlib menu in it (or, remove=True, without it): ecadlib's commands (PL) and the
+    four menu Insertions. Earlier ecadlib entries are replaced, our links inside a [Custom] tree (from loading the
+    .DXPPrf) are taken out, and everything else is kept as it was. The [Custom] trees themselves are left alone."""
+    ours = [] if remove else [b for b in rcs_blocks(rcs_text(win_dir)) if not _block_id(b).endswith("Custom")]
+    mine = lambda i: i.startswith("ecadlib_") or "_ecadlib_" in i
+    out = []
+    for b in rcs_blocks(current or ""):
+        if mine(_block_id(b)):
+            continue
+        out.append([ln for ln in b if not mine(_block_id([ln]))])
+    out += ours
+    return "\r\n".join(ln for b in out for ln in b) + ("\r\n" if out else "")
+
+
+def altium_user_folders(appdata=None):
+    """%APPDATA%\\Altium\\Altium Designer {GUID} folders (one per installed Altium), newest first."""
+    base = Path(appdata or os.environ.get("APPDATA", "")) / "Altium"
+    if not base.is_dir():
+        return []
+    found = [d for d in base.glob("Altium Designer {*}") if d.is_dir()]
+    return sorted(found, key=lambda d: (d / "DXP.RCS").stat().st_mtime if (d / "DXP.RCS").exists() else d.stat().st_mtime,
+                  reverse=True)
+
+
+def altium_running():
+    """True when an Altium Designer (X2.EXE) runs on this PC (it writes DXP.RCS when it closes)."""
+    if os.name != "nt":
+        return False
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq X2.EXE", "/NH"], capture_output=True, text=True,
+                             timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "x2.exe" in out.lower()
+
+
+def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_running, now=None):
+    """Put the "ecadlib" menu into Altium's top menu bar (schematic, PCB, SchLib and PcbLib editors, before Window)
+    by merging it into each Altium's DXP.RCS, after a backup next to it. Altium must be closed: it writes that
+    file when it closes. remove=True takes it out again. -> {"installed"|"removed": [DXP.RCS], "backups": [...]}."""
+    win = check_win_dir(str(Path(menu_dir).resolve()) if os.name == "nt" else str(menu_dir))
+    if running():
+        raise ValueError("Altium Designer is running: close it first (it rewrites its menu file when it closes), "
+                         "then run this again")
+    folders = [Path(f) for f in folders] if folders else altium_user_folders()
+    if not folders:
+        raise ValueError("no Altium Designer settings folder found (%APPDATA%\\Altium\\Altium Designer {...}): start "
+                         "Altium once, close it, then run this again")
+    stamp = (now or datetime.datetime.now()).strftime("%Y%m%d-%H%M%S")
+    done, backups = [], []
+    for f in folders:
+        rcs = f / "DXP.RCS"
+        cur = rcs.read_text(encoding="latin-1") if rcs.is_file() else ""
+        new = merge_rcs(cur, win, remove=remove)
+        if new.replace("\r\n", "\n").strip() == cur.replace("\r\n", "\n").strip():
+            continue
+        if rcs.is_file():
+            bak = f / f"DXP.RCS.before-ecadlib-{stamp}"
+            bak.write_bytes(rcs.read_bytes())
+            backups.append(str(bak))
+        rcs.write_bytes(new.encode("latin-1"))
+        done.append(str(rcs))
+    return {"removed" if remove else "installed": done, "backups": backups, "folders": [str(f) for f in folders]}
 
 
 def dxpprf_bytes(win_dir):
@@ -579,7 +677,10 @@ review queue (a held part needs a person) and the full BOM report (on request) o
 Needs: ecadlib installed on this PC (pip install ecadlib; `ecadlib doctor` checks it). Settings are in {INI}
 (workspace, library folder, how to run ecadlib). Your API keys stay in environment variables; no file here holds one.
 
-Install (once):
+Install (once), the quick way: close Altium, run `ecadlib altium-menu install-menu --out "{w}"` and start Altium
+again: the "ecadlib" menu is in the menu bar of the schematic, PCB and library editors, before Window. It is merged
+into Altium's own menu file (%APPDATA%\\Altium\\Altium Designer {{...}}\\DXP.RCS, backed up next to it first);
+`--remove` takes it out again. The step-by-step way, without closing Altium:
 1. Altium: DXP (AD17) or the gear icon (AD18+) > Preferences > Scripting System > Global Projects > Install from
    file... > {w}\\{PROJECT}. The three procedures now appear in File > Run Script... under {PROJECT}.
 2. Menu: right-click any menu or toolbar > Customize... > Categories: [Scripts] (or [Custom]) > drag
@@ -1470,7 +1571,24 @@ def main(argv=None):
         s.add_argument("--json", action="store_true", help="print the result as JSON")
     r = sub.add_parser("run-job", help="what the Altium script runs: JOB/request.ini -> JOB/result.ini")
     r.add_argument("job")
+    m = sub.add_parser("install-menu", help="put the ecadlib menu into Altium's top menu bar (Altium closed)")
+    m.add_argument("--out", default="out/altium_menu", help="the folder `build` wrote (default %(default)s)")
+    m.add_argument("--altium-folder", action="append", help="an Altium settings folder (default: every "
+                   "%%APPDATA%%\\Altium\\Altium Designer {...})")
+    m.add_argument("--remove", action="store_true", help="take the ecadlib menu out again")
     a = ap.parse_args(argv)
+    if a.cmd == "install-menu":
+        try:
+            rep = install_menu_bar(a.out, a.altium_folder, remove=a.remove)
+        except (OSError, ValueError) as e:
+            print(f"ecadlib altium-menu: {e}", file=sys.stderr)
+            return 2
+        what = rep.get("removed") if a.remove else rep.get("installed")
+        print(("removed the ecadlib menu from " if a.remove else "added the ecadlib menu to ") + (", ".join(what) or
+              "nothing (already as wanted)") + "".join(f"\n  backup: {b}" for b in rep["backups"]))
+        if not a.remove:
+            print("  start Altium: the ecadlib menu is in the schematic, PCB and library editors, before Window")
+        return 0
     if a.cmd == "build":
         try:
             rep = build(a.out, a.workspace, a.library, a.name, a.command, a.win_dir, a.port, not a.console, a.timeout,

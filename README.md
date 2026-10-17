@@ -1535,7 +1535,12 @@ values are one line; finished job folders older than 14 days are removed. Every 
 NEXAR_TOKEN, port taken, ...); ecadlib's output is in `jobs\<id>\log.txt`. `hidden=0` runs the .cmd in a visible
 console instead. No key is in any file: keys stay in environment variables.
 
-**Install.** Preferences > Scripting System > Global Projects > Install from file > `ecadlib_menu.PrjScr`; then
+**Install.** The quick way: close Altium and run `ecadlib altium-menu install-menu --out <folder>` (the setup
+page's Add to Altium does this on Windows). It merges the ecadlib commands and the four menu insertions into Altium's
+own menu file, `%APPDATA%\Altium\Altium Designer {GUID}\DXP.RCS` (backed up next to it first; other customisations
+are kept; `--remove` takes ours out), so the "ecadlib" menu sits in the top menu bar before Window. Altium must be
+closed because it writes that file when it closes. The menu entries run the script project by its path, so it need
+not be a global project. By hand: Preferences > Scripting System > Global Projects > Install from file > `ecadlib_menu.PrjScr`; then
 right-click a menu or toolbar > Customize > [Scripts] and drag the three procedures onto a menu (once per editor).
 With `--win-dir` (or when built on Windows) it also writes `ecadlib_menu.DXPPrf`, a preferences file (zip of `DXP.RCS`
 + `IncludedFiles.ini`, the format of Altium-Designer-addons' Altium-saved `UI customizations/Menu_SVN`) that adds an
