@@ -374,6 +374,10 @@ def build(name, pins, description="", designator="U?", footprint=None, comment="
         sd = u["sides"]
         nets = {k: v for bl in sd.values() for b in bl for k, v in b.get("nets", {}).items()}
         left, right, top, bot = _rows(sd["left"]), _rows(sd["right"]), _rows(sd["top"]), _rows(sd["bottom"])
+        tail = [b for b in sd["left"] if b["side"] == "bottom"]          # power_side "left": ground at the bottom
+        if tail and len(tail) < len(sd["left"]) and len(right) > len(left):     # of the left side, not mid-way down
+            head, foot = _rows([b for b in sd["left"] if b["side"] != "bottom"]), _rows(tail)
+            left = head + [None] * (len(right) - len(head) - len(foot)) + foot
         names = lambda rows: max([_nlen(sl[0]) for sl in rows if sl] or [0])
         lch, rch = names(left), names(right)
         t_need = _up(names(top) * CHAR + 10, g) if top else 0          # vertical names of top / bottom pins

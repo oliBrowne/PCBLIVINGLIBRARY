@@ -157,10 +157,11 @@ def _load(path, default):
 
 
 # ------------------------------------------------------------------ lifecycle
-def check_lifecycle(src, state_dir, ctx, cfg, now):
+def check_lifecycle(src, state_dir, ctx, cfg, now, rules=None):
     from . import lifecycle as L
     sec = _section("lifecycle")
-    provs = [c(ctx.http) for c in L.PROVIDERS]
+    from . import providers as P                     # [providers] unofficial = false keeps the JLCPCB search out
+    provs = [c(ctx.http) for c in P.fence(L.PROVIDERS, rules)]
     with _environ(ctx.env):
         creds = [p.name for p in provs if p.name != "jlcpcb_search" and p.configured()]
         if not creds:
@@ -216,7 +217,7 @@ class _environ:
 
 
 # ------------------------------------------------------------------ sourcing
-def check_sourcing(src, state_dir, ctx, cfg, now):
+def check_sourcing(src, state_dir, ctx, cfg, now, rules=None):
     from . import sourcing as S
     from .kicad_index import norm_mpn
     sec = _section("sourcing")
@@ -224,7 +225,8 @@ def check_sourcing(src, state_dir, ctx, cfg, now):
         sec.update(status="skipped", reason="the plan has no items")
         return sec
     cur_ccy, qty, pct = str(cfg["currency"]).upper(), int(cfg["build_qty"]), float(cfg["price_jump_pct"])
-    provs = [c(ctx.http) for c in S.PROVIDERS]
+    from . import providers as P
+    provs = [c(ctx.http) for c in P.fence(S.PROVIDERS, rules)]
     for p in provs:
         p.currency = cur_ccy
     with _environ(ctx.env):
@@ -391,9 +393,9 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
     for name in checks:
         try:
             if name == "lifecycle":
-                sec = check_lifecycle(src, state_dir, ctx, cfg, now)
+                sec = check_lifecycle(src, state_dir, ctx, cfg, now, rules)
             elif name == "sourcing":
-                sec = check_sourcing(src, state_dir, ctx, cfg, now)
+                sec = check_sourcing(src, state_dir, ctx, cfg, now, rules)
             elif name == "upstream":
                 sec = check_upstream(src, state_dir, ctx, cfg, now, apply)
             else:

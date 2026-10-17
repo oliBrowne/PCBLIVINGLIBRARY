@@ -143,7 +143,9 @@ def main(argv=None):
     try:
         if a.no_window or not window(app, open_page):
             print("Ctrl+C stops it")
-            threading.Event().wait()
+            stop = threading.Event()
+            while not stop.wait(0.5):           # a timed wait: on Windows an untimed one never sees Ctrl+C
+                pass
     except KeyboardInterrupt:
         pass
     finally:

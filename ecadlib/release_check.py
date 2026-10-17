@@ -332,8 +332,10 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
 
 def _split(failures):
     """A report row's "rule: msg; rule: msg" back into reasons (messages may contain "; " themselves)."""
-    return [x for x in re.split(r"; (?=(?:%s): )" % "|".join(("files", "pins", "footprint", "height", "fields", "parity", "verify")),
-                                failures or "") if x]
+    return [x for x in re.split(r"; (?=(?:%s): )" % "|".join(RULES), failures or "") if x]
+
+
+RULES = ("files", "pins", "footprint", "height", "fields", "parity", "eagle", "easyeda", "verify")   # check_item's add()
 
 
 def write_report(rows, stem, plan=""):
@@ -379,7 +381,7 @@ def print_result(rows, plan, stem, t=None):
     for r in rows:
         st = {"pass": "ready", "allowed": "ready"}.get(r["result"], r["status"])
         word = "released anyway" if r["result"] == "allowed" else None
-        reasons = [x for x in (r["failures"] or "").split("; ") if x] if r["status"] == "held" else []
+        reasons = _split(r["failures"]) if r["status"] == "held" else []
         why = M.explain_all(reasons)
         first = why[0]["text"] + (f" (+{len(why) - 1} more)" if len(why) > 1 else "") if why else ""
         table.append([t.status(st, word), r["name"], first])

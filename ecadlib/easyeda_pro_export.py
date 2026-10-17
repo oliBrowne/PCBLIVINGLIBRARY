@@ -857,10 +857,7 @@ def export(plan, out, name="ecadlib", include_held=False, libs=(), http=None, lo
         elibz = out / f"{lib}.elibz"
         write_elibz(elibz, symbols, footprints, devices)
         EG.copy_models(kdir / f"{krep['library']}.3dshapes", out / f"{lib}.3dshapes", rep, lib)
-        if (kdir / "NOTICE.txt").is_file():
-            shutil.copyfile(kdir / "NOTICE.txt", out / "NOTICE.txt")
-        elif (out / "NOTICE.txt").is_file():         # an earlier export's notice; this library has no CC-BY-SA content
-            (out / "NOTICE.txt").unlink()
+        EG.copy_notice(kdir, out)
         # ---- read back what was written
         back = read_elibz(elibz)
         for fpn, (src, approx) in sources.items():

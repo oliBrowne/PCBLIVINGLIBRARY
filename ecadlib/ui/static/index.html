@@ -1837,7 +1837,7 @@ function renderHub() {
   let head = "";
   if (one && t) {
     head = `<div class="hublibs" role="group" aria-label="Libraries in ${esc(t.label)}"><span class="chip${hublib ? "" : " active"}" tabindex="0" role="button" data-tc="${esc(t.tool)}" data-hublib="">All ${esc(t.label)} libraries</span>` +
-      t.libraries.map(l => `<span class="chip${hublib === l.library ? " active" : ""}" tabindex="0" role="button" data-tc="${esc(t.tool)}" data-hublib="${esc(l.library)}" title="${esc(l.library)}${l.updated ? ` · changed ${esc(String(l.updated).slice(0, 16).replace("T", " "))} by ${esc(l.updated_by || "not recorded")}` : ""}">${esc(l.library.split("/").pop())} · ${esc(l.parts)}</span>`).join("") + `</div>`;
+      t.libraries.map(l => `<span class="chip${hublib === l.library ? " active" : ""}" tabindex="0" role="button" data-tc="${esc(t.tool)}" data-hublib="${esc(l.library)}" title="${esc(l.library)}${l.updated ? ` · changed ${esc(String(l.updated).slice(0, 16).replace("T", " "))} by ${esc(l.updated_by || "not recorded")}` : ""}">${esc(l.library.split(/[\\/]/).pop())} · ${esc(l.parts)}</span>`).join("") + `</div>`;
     if (t.can_copy && can("librarian"))
       head += `<div class="hubstrip"><span>${esc(t.can_copy)} part${t.can_copy === 1 ? "" : "s"} in your other tools ${t.can_copy === 1 ? "isn't" : "aren't"} in ${esc(t.label)} yet. ecadlib can convert ${t.can_copy === 1 ? "it" : "them"} into its hub library for ${esc(t.label)}.</span><button class="small primary" data-hubcopyall="${esc(t.tool)}">Copy ${t.can_copy === 1 ? "it" : "them"} to ${esc(t.label)}</button></div>`;
     else if (t.missing && !COPYABLE.includes(t.tool) && t.tool !== "altium365" && t.reader)
@@ -1872,7 +1872,7 @@ function renderHub() {
       return `<tr tabindex="0" data-hub="${esc(p.key)}">
       <td class="hp"><b class="mono">${esc(p.name)}</b>${p.mpn && p.mpn !== p.name ? `<div class="sub">${esc(p.mpn)}${p.manufacturer ? " · " + esc(p.manufacturer) : ""}</div>` : (p.manufacturer ? `<div class="sub">${esc(p.manufacturer)}</div>` : "")}
         ${p.flags.filter(f => ["held", "awaiting_approval", "eol"].includes(f)).map(f => `<span class="pill ${f === "eol" ? "s-bad" : "s-warn"}">${f === "eol" ? esc(p.lifecycle ? p.lifecycle.label : "end of life") : f === "held" ? "held" : "awaiting sign-off"}</span> `).join("")}</td>
-      <td><span class="mono small" title="${esc(pl.library || "")}">${esc(String(pl.library || "").split("/").pop())}</span><div class="sub">${pl.origin === "ecadlib" ? "ecadlib" : "your library"}${c.duplicate ? ` · ${c.copies} copies` : ""}</div></td>
+      <td><span class="mono small" title="${esc(pl.library || "")}">${esc(String(pl.library || "").split(/[\\/]/).pop())}</span><div class="sub">${pl.origin === "ecadlib" ? "ecadlib" : "your library"}${c.duplicate ? ` · ${c.copies} copies` : ""}</div></td>
       <td><span class="mono small">${esc(String(pl.symbol || "").split(":").pop() || "–")}</span><div class="sub">${esc(String(pl.footprint || "").split(":").pop())}</div></td>
       <td>${day(c.updated)}<div class="sub">${whoShort(c.updated_by)}</div></td>
       <td title="${esc(c.note || "")}"><span class="pill ${cls}">${esc(w)}</span></td>
@@ -1959,7 +1959,7 @@ function renderHubPart(p) {
     const [w, cls] = HUBSTATE[c.state] || [c.state, "s-info"];
     const why = c.state === "behind" ? `${esc(c.behind.words)} behind ${esc(({altium: "Altium", altium365: "Altium 365", kicad: "KiCad", fusion: "Fusion", easyeda: "EasyEDA"})[c.behind.tool] || c.behind.tool)}` : "";
     return `<tr><td data-tc="${esc(c.tool)}"><b>${esc(c.tool_label)}</b><div class="sub muted">${c.origin === "ecadlib" ? "built by ecadlib" : "your library"}</div></td>
-      <td><span class="mono small">${esc(c.where || "")}</span>${c.file ? `<div class="sub muted mono" title="${esc(c.file)}">${esc(c.file.split("/").slice(-2).join("/"))}</div>` : ""}
+      <td><span class="mono small">${esc(c.where || "")}</span>${c.file ? `<div class="sub muted mono" title="${esc(c.file)}">${esc(c.file.split(/[\\/]/).slice(-2).join("/"))}</div>` : ""}
         <div class="sub muted">${[c.symbol, c.footprint].filter(Boolean).map(esc).join(" · ")}${c.revision ? " · rev " + esc(c.revision) : ""}</div></td>
       <td class="mono small">${c.updated ? when(c.updated) : "–"}<div class="sub muted">${whoShort(c.updated_by)}${c.updated_how ? " · " + esc(c.updated_how) : ""}</div></td>
       <td><span class="pill ${cls}">${esc(w)}</span>${why ? `<div class="why">${why}</div>` : ""}${(c.diffs || []).map(d => `<div class="why">${esc(d.what)}: ${esc(d.text)}</div>`).join("")}${c.origin !== "ecadlib" && c.diffs && c.diffs.length ? '<div class="why muted">ecadlib never edits your library files: update this copy in the tool, or copy ecadlib\'s version over it.</div>' : ""}</td></tr>`;
@@ -1970,7 +1970,7 @@ function renderHubPart(p) {
     (pl.reasons || []).map(x => `<div class="reason"><div>${esc(x.text)}</div>${x.fix ? `<div class="fix"><b>Next:</b> ${esc(x.fix)}</div>` : ""}</div>`).join("") +
     `<h3>Sign-off</h3>` + (pl.approvals.length ? `<ol class="hubhist">${pl.approvals.map(a => `<li><span class="t">${when(a.when)}</span><span>${a.decision === "approve" ? "Approved" : "Rejected"} by ${esc(a.who)}${a.role ? ` as ${esc(a.role)}` : ""}${a.comment ? `: ${esc(a.comment)}` : ""}</span></li>`).join("")}</ol>` : '<div class="muted small">Nobody has signed it off yet.</div>') +
     `<h3>Sources</h3><dl class="kv">${Object.entries(pl.source).filter(([, v]) => v).map(([k, v]) => `<dt>${esc(k)}</dt><dd class="mono small">${esc(v)}</dd>`).join("")}` +
-    `${pl.datasheet ? `<dt>datasheet</dt><dd><a href="${esc(pl.datasheet)}" target="_blank" rel="noopener noreferrer">${esc(pl.datasheet.split("/").pop() || pl.datasheet)}</a></dd>` : ""}` +
+    `${/^https?:\/\/[^\s"'<>]+$/i.test(pl.datasheet || "") ? `<dt>datasheet</dt><dd><a href="${esc(pl.datasheet)}" target="_blank" rel="noopener noreferrer">${esc(pl.datasheet.split("/").pop() || pl.datasheet)}</a></dd>` : ""}` +
     `${Object.entries(pl.field_sources).map(([k, v]) => `<dt>${esc(k)}</dt><dd class="small">${esc(v)}</dd>`).join("")}</dl>` +
     (pl.notes.length ? `<details style="margin-top:6px"><summary class="small">How ecadlib built it</summary><ul class="why small">${[...pl.tried, ...pl.notes].map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>` : "")
     : `<h3>Release check</h3><div class="muted small">Not built by ecadlib, so it has no release check or sign-off here. ${p.mpn ? "Build it with ecadlib to have both copies compared." : ""}</div>`;
@@ -1978,7 +1978,7 @@ function renderHubPart(p) {
     : '<span class="muted small">Not checked yet: the weekly upkeep (lifecycle check) or an Altium 365 pull fills this in.</span>';
   const used = p.where_used.length ? `<ol class="hubhist">${p.where_used.map(u => `<li><span class="t">${u.qty}×</span><span><b>${esc(u.project)}</b> <span class="muted small">${esc(u.designators.join(", "))}</span></span></li>`).join("")}</ol>`
     : `<div class="muted small">${p.projects_set ? "No project in the [hub] projects folders uses it." : "Add your project folders to [hub] projects in ecadlib.toml to see which designs use each part."}</div>`;
-  const hist = p.history.length ? `<ol class="hubhist">${p.history.map(e => `<li><span class="t">${when(e.when)}</span><span>${esc(e.what)}${e.tool_label ? ` in ${esc(e.tool_label)}` : ""}${e.who ? ` by ${esc(e.who)}` : ""}${e.detail ? `<span class="muted small"> · ${esc(e.detail)}</span>` : ""}${e.file ? `<div class="sub muted mono">${esc(String(e.file).split("/").slice(-2).join("/"))}</div>` : ""}</span></li>`).join("")}</ol>`
+  const hist = p.history.length ? `<ol class="hubhist">${p.history.map(e => `<li><span class="t">${when(e.when)}</span><span>${esc(e.what)}${e.tool_label ? ` in ${esc(e.tool_label)}` : ""}${e.who ? ` by ${esc(e.who)}` : ""}${e.detail ? `<span class="muted small"> · ${esc(e.detail)}</span>` : ""}${e.file ? `<div class="sub muted mono">${esc(String(e.file).split(/[\\/]/).slice(-2).join("/"))}</div>` : ""}</span></li>`).join("")}</ol>`
     : '<div class="muted small">No changes recorded since the hub first looked. From now on every added, changed or removed copy and every fix made here is listed.</div>';
   $("#hubbody").innerHTML = `<div>${pics ? `<div class="hubpics">${pics}</div>` : '<div class="muted small">No footprint or symbol to draw: no copy has pads or pins ecadlib can read.</div>'}
       ${release}<h3>Lifecycle</h3><div>${life}</div><h3>Used in</h3>${used}</div>

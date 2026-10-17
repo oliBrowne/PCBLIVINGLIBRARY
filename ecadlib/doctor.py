@@ -339,9 +339,10 @@ def split_command(cmd):
     return cmd.split()
 
 
-def check_altium_menu(ini, run=subprocess.run, which=shutil.which):
+def check_altium_menu(ini, run=subprocess.run, which=shutil.which, probe=True):
     """command= of the Altium menu's settings: empty (the runner searches PATH, py -3, python, which misses a venv),
-    a program that does not exist, or one that does not run ecadlib."""
+    a program that does not exist, or one that does not run ecadlib. probe=False: only check that the program exists,
+    never start it (an ini found by itself in the current folder may come from a downloaded project)."""
     from .altium_menu import default_command, load_command
     ini = Path(ini)
     example = default_command() or '"C:\\...\\python.exe" -m ecadlib'
@@ -358,6 +359,8 @@ def check_altium_menu(ini, run=subprocess.run, which=shutil.which):
     found = exe if (os.sep in exe or "/" in exe or "\\" in exe) and Path(exe).is_file() else which(exe) if exe else None
     if not found:
         return _c("altium menu", "FAIL", f"{ini}: command= {cmd}: {exe or '(nothing)'} does not exist", fix)
+    if not probe:
+        return _c("altium menu", "OK", f"{ini}: command= {cmd} (found; not run: give --altium-menu {ini} to try it)")
     try:
         r = run(argv + ["--version"], capture_output=True, text=True, timeout=60)
         out = ((r.stdout or "") + (r.stderr or "")).strip()
@@ -396,7 +399,7 @@ def run(workspace=None, libs=(), rules_path=None, environ=None, altium_menu=None
         checks.append(check_formats(workspace))
     checks += check_paths(libs, rules)
     if menu is not None:
-        checks.append(check_altium_menu(menu))
+        checks.append(check_altium_menu(menu, probe=bool(altium_menu)))   # run its command only when named
     return {"ok": not any(c["level"] == "FAIL" for c in checks), "checks": checks}
 
 
@@ -407,6 +410,7 @@ def render(rep, styled=False, width=None, verbosity=0):
     from . import term as TM
     buf = io.StringIO()
     t = TM.Term(buf, styled=styled, width=width, verbosity=verbosity)
+    t.unicode = styled and TM._can_encode(sys.stdout)     # the text is printed there: no glyph a cp1252 console lacks
     n = {lv: sum(c["level"] == lv for c in rep["checks"]) for lv in LEVELS}
     st = {"FAIL": "failed", "WARN": "warn", "OK": "ok"}
     head = ("Ready to use." if not n["FAIL"] else f"Not ready: {n['FAIL']} problem{'s' if n['FAIL'] != 1 else ''} to fix first.") \
@@ -442,7 +446,7 @@ def main(argv=None):
         print(json.dumps(rep, indent=2))
     else:
         from . import term as TM
-        print(render(rep, TM.wants_style(sys.stdout), TM.term_width(sys.stdout), TM.VERBOSITY))
+        TM._print_safe(render(rep, TM.wants_style(sys.stdout), TM.term_width(sys.stdout), TM.VERBOSITY), sys.stdout)
     return 0 if rep["ok"] else 1
 
 

@@ -42,9 +42,10 @@ PIN_TYPE = {"0": "unspecified", "1": "input", "2": "output", "3": "bidirectional
 
 def _f(v, d=0.0):
     try:
-        return float(v)
+        v = float(v)
     except (TypeError, ValueError):
         return d
+    return v if math.isfinite(v) else d          # untrusted text: 'nan' / 'inf' are not coordinates
 
 
 def _q(s):
@@ -81,8 +82,8 @@ def footprint_to_kicad(data, name=None, notes=None):
             continue
         f = s.split("~")
         kind = f[0]
+        f += [""] * (17 - len(f))                 # a shape cut short (untrusted data) reads as empty fields, not IndexError
         if kind == "PAD":
-            f += [""] * (17 - len(f))
             shape, cx, cy, w, h, layer, num, hole_r = f[1], X(f[2]), Y(f[3]), _f(f[4]) * U, _f(f[5]) * U, f[6], f[8], _f(f[9]) * U
             rot, hole_len = _f(f[11]) % 360, _f(f[13]) * U
             if shape == "POLYGON":

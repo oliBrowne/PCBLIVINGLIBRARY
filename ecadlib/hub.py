@@ -1283,7 +1283,7 @@ def part(ws, key):
         appr = [{k: a.get(k) for k in ("who", "when", "role", "decision", "comment")} for a in it.get("approvals") or [] if isinstance(a, dict)]
         plan_info = {"plan": pc["plan"], "bom": pc["bom"], "status": it.get("status"), "status_label": card.get("status_label"),
                      "reasons": card.get("reasons"), "source": it.get("source") or {}, "field_sources": it.get("field_sources") or {},
-                     "datasheet": PV.datasheet_url(it), "tried": ((it.get("librarian") or {}).get("tried") or [])[:6],
+                     "datasheet": _web_url(PV.datasheet_url(it)), "tried": ((it.get("librarian") or {}).get("tried") or [])[:6],
                      "notes": ((it.get("librarian") or {}).get("notes") or [])[:6], "approvals": appr,
                      "approval": card.get("approval"), "allowed": bool(it.get("allow"))}
         history += [{"when": a["when"], "who": a["who"], "what": "approved" if a["decision"] == "approve" else "rejected",
@@ -1306,6 +1306,12 @@ def part(ws, key):
     return {**row, "copies": [_public(c, show) for c in copies], "pictures": pictures, "symbol": symbol, "plan": plan_info,
             "history": history[:200], "where_used": uses, "projects_set": bool(cfg["projects"]),
             "fixes": fixes(row, copies)}
+
+
+def _web_url(u):
+    """A link the page may put in an href: http(s) only (a vendor's datasheet field could say javascript:...)."""
+    u = str(u or "").strip()
+    return u if re.fullmatch(r"https?://[^\s\"'<>]+", u, re.I) else None
 
 
 def fixes(row, copies):
@@ -1430,7 +1436,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="ecadlib hub", description="your library across tools: every part once, a column per tool")
     ap.add_argument("--workspace", default=os.environ.get("ECADLIB_WORKSPACE") or "ecadlib_workspace")
     ap.add_argument("--lib", action="append", default=[], help="library folder or file to include (repeatable)")
-    ap.add_argument("-q", "--search", default="", help="words to look for in name, MPN, maker, description")
+    ap.add_argument("--search", default="", help="words to look for in name, MPN, maker, description")
     ap.add_argument("--have", default="", help="only parts in these tools (comma list: altium,altium365,kicad,fusion,easyeda)")
     ap.add_argument("--lack", default="", help="only parts missing from these tools")
     ap.add_argument("--state", default="", help="only parts with a cell in these states (different,behind,present,same)")

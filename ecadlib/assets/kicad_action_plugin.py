@@ -33,11 +33,24 @@ BLUE, BLUE_OFF, GREEN, RED, BTN, FIELD = ((0x2F, 0x77, 0xD9), (0x4A, 0x5A, 0x70)
                                          (0x3E, 0x3E, 0x44), (0x1D, 0x1D, 0x20))
 
 
+def split_command(text, nt=None):
+    """ECADLIB_CMD -> argv. On Windows backslashes are path separators, not escapes (shlex's POSIX rules would turn
+    C:\\Tools\\ecadlib.exe into C:Toolsecadlib.exe); a whole value that is an existing file is one program even
+    with spaces in it ("C:\\Program Files\\ecadlib\\ecadlib.exe")."""
+    nt = os.name == "nt" if nt is None else nt
+    text = text.strip()
+    if os.path.isfile(text.strip('"')):
+        return [text.strip('"')]
+    if not nt:
+        return shlex.split(text)
+    return [w[1:-1] if len(w) > 1 and w[0] == w[-1] == '"' else w for w in shlex.split(text, posix=False)]
+
+
 def ecadlib_command(environ=None, which=shutil.which, run=subprocess.run, cmd_file=None):
     """The command line that runs ecadlib, or None."""
     environ = os.environ if environ is None else environ
     if environ.get("ECADLIB_CMD"):
-        return shlex.split(environ["ECADLIB_CMD"])
+        return split_command(environ["ECADLIB_CMD"])
     cmd_file = cmd_file or os.path.join(HERE, "ecadlib_cmd.json")
     try:
         with open(cmd_file, encoding="utf-8") as f:

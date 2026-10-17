@@ -73,6 +73,16 @@ def _can_encode(stream, text="✓…○✗·"):
         return False
 
 
+def _print_safe(text, stream):
+    """print(), but a character the stream's encoding cannot hold (a part value's "Ω" on a cp1252 pipe on Windows)
+    becomes "?" instead of a UnicodeEncodeError that stops the command."""
+    try:
+        print(text, file=stream)
+    except UnicodeEncodeError:
+        enc = getattr(stream, "encoding", None) or "utf-8"
+        print(str(text).encode(enc, "replace").decode(enc, "replace"), file=stream)
+
+
 def term_width(stream, environ=None):
     """Columns to fit: $COLUMNS, else the terminal's width; None (no limit) when piped."""
     env = os.environ if environ is None else environ
@@ -151,7 +161,7 @@ class Term:
     def write(self, text=""):
         with self.lock:
             self._clear_live()
-            print(text, file=self.stream)
+            _print_safe(text, self.stream)
             self._redraw_live()
 
     def line(self, text="", level=0):

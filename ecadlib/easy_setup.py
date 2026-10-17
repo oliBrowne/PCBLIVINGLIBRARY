@@ -17,7 +17,7 @@ Saving writes <workspace>/ecadlib.toml through `ecadlib init`'s own code (rules_
 conventions from the library folders given) and the answers to the user's settings.json.
 
 The routes (ecadlib/ui/server.py) exist in local mode only: team mode refuses them, since keys are per person."""
-import argparse, json, os, shutil, sys
+import argparse, json, os, re, shutil, sys
 from pathlib import Path
 
 from . import __version__, detect, userconfig as UC
@@ -285,6 +285,8 @@ def _set_ini_command(ini, command):
 def install_kicad_plugin(series=None):
     """Copy the action plugin into KiCad's per-user plugin folder (every KiCad found, or one series). -> {installed:
     [folder], steps}."""
+    if series is not None and not (isinstance(series, str) and re.fullmatch(r"\d{1,3}\.\d{1,3}", series)):
+        raise ValueError("series must be a KiCad version series such as 8.0")    # it names a folder: no ../ paths
     kicads = [k for k in detect.kicad() if k["series"]]
     if series:
         kicads = [k for k in kicads if k["series"] == series] or [{"series": series}]
