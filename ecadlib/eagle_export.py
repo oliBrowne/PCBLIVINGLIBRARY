@@ -353,9 +353,9 @@ def symbols(sym, base):
                 dx, dy = CM.rot(1.0, 0.0, p["angle"])
                 _el(el, "wire", x1=n(p["x"] + dx * L), y1=n(p["y"] + dy * L), x2=n(p["x"] + dx * p["length"]),
                     y2=n(p["y"] + dy * p["length"]), width="0.1524", layer=str(SYMBOLS), cap="flat")
-            name_vis = not sym["pin_names_hidden"] and CM.pin_text(p["name"], overbar) != ""
-            num_vis = not sym["pin_numbers_hidden"]
-            vis = "off" if p["hidden"] else {(True, True): "both", (True, False): "pin", (False, True): "pad"}.get((name_vis, num_vis), "off")
+            vis = pin_visible(sym, p)
+            if p["hidden"]:
+                approx.append(f"pin {p['num']}: hidden in KiCad; Eagle draws every pin (written without its name or number)")
             if p["type"] in ("power_out", "open_emitter", "free", "unspecified"):
                 approx.append(f"pin {p['num']}: KiCad type {p['type']} written as Eagle {DIRECTION[p['type']]}")
             _el(el, "pin", name=pname, x=n(p["x"]), y=n(p["y"]), length=lname, direction=DIRECTION.get(p["type"], "pas"),
@@ -370,6 +370,14 @@ def symbols(sym, base):
         _el(el, "text", x=n(vx), y=n(vy), size="1.778", layer=str(VALUES), align="center").text = ">VALUE"
         gates.append(("G$1" if not multi else chr(65 + i) if i < 26 else f"G{i + 1}", el, pins))
     return gates, approx
+
+
+def pin_visible(sym, p):
+    """Eagle's pin `visible` (which texts are shown: both, pin name, pad number, off) for a KiCad pin."""
+    if p["hidden"]:
+        return "off"
+    name_vis = not sym["pin_names_hidden"] and CM.pin_text(p["name"], overbar) != ""
+    return {(True, True): "both", (True, False): "pin", (False, True): "pad"}.get((name_vis, not sym["pin_numbers_hidden"]), "off")
 
 
 def _sym_shape(el, s):
@@ -398,10 +406,28 @@ def _sym_shape(el, s):
             rot=rot_attr(s["angle"]), align="center").text = s["text"]
 
 
-def deviceset(name, sym, gates, pkg_name, pad_names, fields):
-    """<deviceset> with its gates, one device (the package) and the fields as technology attributes."""
+PASSIVE = {"R", "C", "L", "FB"}                # Eagle's own rcl.lbr: the value is typed on the placed part
+
+
+def fusion_attrs(item, footprint):
+    """Fusion's standard component attributes that the KiCad fields don't carry: PACKAGE, CATEGORY_L1 / L2 (the
+    plan's folder below its root) and VENDOR / VPN (the first supplier), as Fusion's BOM and library manager read them."""
+    out = {"PACKAGE": footprint or ""}
+    cats = [c for c in str((item or {}).get("folder") or "").split("/") if c]
+    cats = cats[1:] if len(cats) > 1 else cats
+    out["CATEGORY_L1"], out["CATEGORY_L2"] = (cats + ["", ""])[:2]
+    par = {p.get("name"): str(p.get("value") or "") for p in (item or {}).get("parameters") or []}
+    out["VENDOR"], out["VPN"] = par.get("Supplier 1", ""), par.get("Supplier Part Number 1", "")
+    return {k: v for k, v in out.items() if v.strip()}
+
+
+def deviceset(name, sym, gates, pkg_name, pad_names, fields, extra=None):
+    """<deviceset> with its gates, one device (the package) and the fields as technology attributes (then `extra`
+    attributes the fields don't already give)."""
     ref = re.sub(r"[^A-Za-z]", "", sym["props"].get("Reference", "U")) or "U" if sym else "U"
     ds = ET.Element("deviceset", name=name, prefix=ref)
+    if ref in PASSIVE:
+        ds.set("uservalue", "yes")
     desc = fields.get("Description", "")
     ds_link = fields.get("Datasheet", "")
     text = html.escape(desc) + (f'<p><a href="{html.escape(ds_link)}">Datasheet</a></p>' if ds_link.startswith("http") else "")
@@ -427,7 +453,7 @@ def deviceset(name, sym, gates, pkg_name, pad_names, fields):
     techs = ET.SubElement(dev, "technologies")
     tech = _el(techs, "technology", name="")
     seen = set()
-    for k, v in fields.items():
+    for k, v in list(fields.items()) + list((extra or {}).items()):
         a = attr_name(k)
         if k in SKIP_FIELDS or a in seen or a in ("NAME", "VALUE", "PART", "GATE") or not str(v).strip():
             continue
@@ -896,7 +922,7 @@ def read_lbr(path):
                         length += math.hypot(_f(w, "x2") - _f(w, "x1"), _f(w, "y2") - _f(w, "y1"))
                         break
                 pins[key] = {"name": eagle_pin_name(p.get("name")), "type": BACK.get(p.get("direction") or "io", "bidirectional"),
-                             "hidden": p.get("visible") == "off", "x": _f(p, "x"), "y": _f(p, "y"), "angle": ang,
+                             "visible": p.get("visible") or "both", "x": _f(p, "x"), "y": _f(p, "y"), "angle": ang,
                              "length": length, "gate": gname, "pads": [pad_number(x) for x in pads]}
         tech = dev.find("technologies/technology") if dev is not None else None
         attrs = {a.get("name"): a.get("value") for a in (tech.iter("attribute") if tech is not None else [])}
@@ -1013,8 +1039,8 @@ def compare_symbol(sym, ds):
             PY._d(out, "error", f"pin {num}", "direction", p["angle"], e["angle"], "degrees")
         if abs(p["length"] - e["length"]) > 1e-3:
             PY._d(out, "error", f"pin {num}", "length", p["length"], e["length"], "mm")
-        if p["hidden"] != e["hidden"]:
-            PY._d(out, "error", f"pin {num}", "hidden", p["hidden"], e["hidden"])
+        if pin_visible(sym, p) != e["visible"]:            # names / numbers shown as in KiCad (a hidden pin: none)
+            PY._d(out, "error", f"pin {num}", "texts shown", pin_visible(sym, p), e["visible"])
     return _relabel(out, "Eagle")
 
 
@@ -1139,6 +1165,76 @@ def plan_parts(kdir, krep):
     return rows
 
 
+# ---------------------------------------------------------------- hand-off: STEP models, INSTALL.md, one zip
+def model_files(fptext, have):
+    """The STEP files (names in `have`) a kicad-export footprint links as its 3D model."""
+    return [Path(m).name for m in re.findall(r'\(model\s+"?([^"\s)]+)', fptext or "") if Path(m).name in have]
+
+
+def copy_models(shapes, dest, rep, lib):
+    """kicad-export's STEP models into dest; STEP files an earlier export left there for parts no longer in the
+    library are removed, so the folder (and the zip) holds this library's models only."""
+    if not shapes.is_dir():
+        return
+    dest.mkdir(exist_ok=True)
+    keep = {f.name for f in shapes.iterdir() if f.is_file()}
+    for f in dest.iterdir():
+        if f.is_file() and f.name not in keep:
+            f.unlink()
+    for name in sorted(keep):
+        shutil.copyfile(shapes / name, dest / name)
+        rep["models"][name] = f"{lib}.3dshapes/{name}"
+
+
+HANDOFF = {
+    "fusion": ("Autodesk Fusion Electronics / EAGLE", "package", """\
+1. **Fusion:** upload `{file}` to a project (Data Panel > Upload) and open it, or in an electronics design open the
+   Library Manager and import it. **EAGLE 9:** Library > Open, or Library > Use to make it available in a design.
+2. Every part is a device set named after the BOM part, with its symbol, its package and the pin-to-pad connections.
+   The attributes MPN, MANUFACTURER, DATASHEET, DESCRIPTION, PACKAGE, CATEGORY_L1/L2 and VENDOR/VPN (the first
+   supplier) are filled where the library has them, which is what Fusion's BOM reads.
+3. **3D models.** An .lbr cannot carry a STEP file (Fusion keeps 3D packages in its cloud). For each package in the
+   table, open it in the library editor, create its 3D package and insert the STEP file named there; it is already at
+   the footprint's origin and orientation (the same model the KiCad and Altium libraries carry).
+4. Exporting again later keeps every device set, package and symbol name, so Library > Update in a design picks up
+   the new version of each part."""),
+    "easyeda": ("EasyEDA Pro", "footprint", """\
+1. In EasyEDA Pro: **File > Import > EasyEDA Pro**, choose `{file}` and the library to import it into (a personal or
+   team library). Devices, symbols and footprints arrive together, linked to each other.
+2. Every device is named after the BOM part. Its attributes carry Manufacturer, Manufacturer Part, the datasheet
+   link and the supplier numbers (LCSC numbers as Supplier "LCSC" / Supplier Part, which JLCPCB assembly matches).
+3. **3D models.** EasyEDA links 3D models from its own model library, so they cannot be inside the .elibz. Import the
+   STEP files in `{models}` as 3D models (EasyEDA Pro takes .step / .stp), then on each footprint in the table set
+   its 3D model to the file named there; it already sits at the footprint's origin and orientation.
+4. Exporting again later keeps every device, symbol and footprint id and name the same."""),
+}
+
+
+def handoff(out, rep, tool, models_by_fp):
+    """INSTALL.md (bringing the library into the tool, and which STEP goes on which footprint) and <lib>_<tool>.zip
+    with the library file, its STEP models, INSTALL.md and NOTICE.txt: one file to hand to the person who installs it."""
+    import zipfile
+    out, lib = Path(out), rep["library"]
+    title, unit, steps = HANDOFF[tool]
+    rows = "\n".join(f"| {fp} | {', '.join(f'`{lib}.3dshapes/{m}`' for m in ms) or 'none'} |" for fp, ms in sorted(models_by_fp.items()))
+    errs = (f"\n**{len(rep['errors'])} difference(s) were found on reading this library back** (see the .json report): "
+            "check those parts before using them.\n") if rep["errors"] else ""
+    text = (f"# {lib}: installing in {title}\n\nWritten by ecadlib from `{Path(rep['plan']).name}` and read back {unit} by "
+            f"{unit} against the KiCad library it was made from. ecadlib's tests cannot open {title.split(' / ')[0]} "
+            f"itself: if a step below does not match what you see, tell us.\n{errs}\n"
+            + steps.format(file=rep["file"], models=f"{lib}.3dshapes/") + f"\n\n| {unit.capitalize()} | 3D model |\n|---|---|\n{rows}\n")
+    (out / "INSTALL.md").write_text(text, encoding="utf-8")
+    bundle = out / f"{lib}_{tool}.zip"
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in [out / rep["file"], out / "INSTALL.md", out / "NOTICE.txt"] + sorted((out / f"{lib}.3dshapes").glob("*")):
+            if f.is_file():
+                info = zipfile.ZipInfo(f.relative_to(out).as_posix(), (2020, 1, 1, 0, 0, 0))   # same bytes every time
+                info.compress_type = zipfile.ZIP_DEFLATED
+                z.writestr(info, f.read_bytes())
+    rep["install"], rep["bundle"] = "INSTALL.md", bundle.name
+    return bundle
+
+
 def export(plan, out, name="ecadlib", include_held=False, libs=(), http=None, log=print, rules=None, kicad_dir=None,
            second_reader=True):
     """Write <lib>.lbr for plan.json into `out`; returns the report dict (also eagle_export.json)."""
@@ -1152,6 +1248,7 @@ def export(plan, out, name="ecadlib", include_held=False, libs=(), http=None, lo
         rep["skipped"] = krep.get("skipped", [])
         rep["errors"] += [f"kicad-export: {e}" for e in krep.get("errors", [])]
         packages, symbols_, devicesets, pk_names, sym_used, ds_used = [], [], [], {}, set(), set()
+        items = {i.get("name"): i for i in json.loads(Path(plan).read_text(encoding="utf-8"))}
         sources, approx_by_pkg = {}, {}
         for row, sym, fptext in plan_parts(kdir, krep):
             part = {"part": row["part"], "deviceset": None, "package": None, "notes": list(row.get("notes") or [])}
@@ -1177,7 +1274,8 @@ def export(plan, out, name="ecadlib", include_held=False, libs=(), http=None, lo
                 for _, sel, _ in gates[1:]:
                     sym_used.add(sel.get("name").upper())
                 symbols_ += [g[1] for g in gates]
-                ds, missing = deviceset(dname, cs, gates, part["package"], pads, fields)
+                ds, missing = deviceset(dname, cs, gates, part["package"], pads, fields,
+                                        fusion_attrs(items.get(row["part"]), row.get("footprint")))
                 devicesets.append(ds)
                 part["deviceset"] = dname
                 part["approximations"] = approx + cs["notes"]
@@ -1190,15 +1288,11 @@ def export(plan, out, name="ecadlib", include_held=False, libs=(), http=None, lo
         text = library_xml(packages, symbols_, devicesets, desc)
         lbr = out / f"{lib}.lbr"
         lbr.write_text(text, encoding="utf-8")
-        shapes = kdir / f"{krep['library']}.3dshapes"
-        if shapes.is_dir():
-            dest = out / f"{lib}.3dshapes"
-            dest.mkdir(exist_ok=True)
-            for f in sorted(shapes.iterdir()):
-                shutil.copyfile(f, dest / f.name)
-                rep["models"][f.name] = f"{lib}.3dshapes/{f.name}"
+        copy_models(kdir / f"{krep['library']}.3dshapes", out / f"{lib}.3dshapes", rep, lib)
         if (kdir / "NOTICE.txt").is_file():
             shutil.copyfile(kdir / "NOTICE.txt", out / "NOTICE.txt")
+        elif (out / "NOTICE.txt").is_file():         # an earlier export's notice; this library has no CC-BY-SA content
+            (out / "NOTICE.txt").unlink()
         # ---- read back what was written
         back = read_lbr(lbr)
         for pname, (src, approx) in sources.items():
@@ -1245,6 +1339,7 @@ def export(plan, out, name="ecadlib", include_held=False, libs=(), http=None, lo
         rep["warnings"] += [f"{part['part']}: {a}" for a in part.get("approximations") or []]
     rep["counts"] = {"devicesets": len([p for p in rep["parts"] if p["deviceset"]]), "packages": len(rep["packages"]),
                      "symbols": len(symbols_)}
+    handoff(out, rep, "fusion", {p: model_files(src, rep["models"]) for p, (src, _) in sources.items()})
     (out / "eagle_export.json").write_text(json.dumps(rep, indent=2, default=str) + "\n")
     return rep
 
@@ -1270,7 +1365,7 @@ def main(argv=None):
         print(json.dumps(rep, default=str))
         return 1 if rep["errors"] else 0
     _print(rep, Path(a.out), "Fusion Electronics / EAGLE",
-           "open it in Fusion (Electronics > Library > Open) or EAGLE (Library > Open), or add it in the Library Manager")
+           "open it in Fusion (upload it, or import it in the Library Manager) or EAGLE (Library > Open)")
     return 1 if rep["errors"] else 0
 
 
@@ -1289,7 +1384,8 @@ def _print(rep, out, tool, how):
               else "; KiCad's importer not available for a second read" if rr is None else f"; KiCad re-read failed: {rr.get('error')}")
     print(f"{rep['counts']['devicesets']} parts, {rep['counts']['packages']} footprints -> {out / rep['file']}: "
           f"read back {'with differences' if rep['errors'] else 'the same as the KiCad library'}{second}")
-    print(f"{how}; {len(rep['models'])} STEP models in {out / (rep['library'] + '.3dshapes')}")
+    print(f"{how}; {len(rep['models'])} STEP models in {out / (rep['library'] + '.3dshapes')} to attach "
+          f"(steps in {out / 'INSTALL.md'}; all of it in {out / rep['bundle']})")
 
 
 if __name__ == "__main__":

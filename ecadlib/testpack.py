@@ -1,4 +1,4 @@
-"""A small Altium + KiCad test pack for a person to open in the real tools (no network, no keys).
+"""A small Altium + KiCad + Fusion + EasyEDA test pack for a person to open in the real tools (no network, no keys).
 
     ecadlib testpack --out DIR [--name LIB] [--json]
 
@@ -12,13 +12,17 @@ Six representative parts go through the same pipeline a BOM does (librarian -> r
     J2  61300511121       1x05 2.54 mm THT header    footprint from package_specs/advanced (drilled pads, square pin 1)
 
 DIR gets:
-    CHECKLIST.md        what to open in Altium Designer, Altium 365 and KiCad, and what each part must look like
+    CHECKLIST.md        what to open in Altium Designer, Altium 365, KiCad, Fusion and EasyEDA Pro, and what each part
+                        must look like
     bom.csv             the BOM the pack was built from
     source/             the pack's own "existing library" (.kicad_sym + .pretty), used like a user's --lib
     library/            the librarian's output: plan.json, review.md, release_check.md, models/ (SchLib, PcbLib, KiCad)
     altium/             a Database Library: testpack.DbLib + .xlsx/.csv + SchLib/ + PcbLib/ (ecadlib dblib-sync)
     kicad/              testpack.kicad_sym, testpack.pretty, testpack.3dshapes, fp-lib-table, sym-lib-table, and the
                         database library testpack.kicad_dbl + testpack.sqlite (ecadlib kicad-export / kicad-dblib)
+    fusion/             testpack.lbr for Autodesk Fusion Electronics / EAGLE, its STEP models, INSTALL.md and one zip
+                        (ecadlib eagle-export)
+    easyeda/            testpack.elibz for EasyEDA Pro, its STEP models, INSTALL.md and one zip (ecadlib easyeda-export)
     testpack.json       what was built, for scripts
 
 The pin maps of U1, U2 and J1 are written from the manufacturers' datasheets (and match KiCad's own symbols for the
@@ -155,6 +159,12 @@ def build(out, name=NAME, log=print):
     from . import parity as PY                 # both libraries read back and compared, part by part and row by row
     py = PY.check_plan(plan, out / "kicad", name, out / "altium")
     PY.write_report(py, out / "parity")
+    from . import eagle_export as EG, easyeda_pro_export as EZ   # from the KiCad files above, each read back pad by pad
+    other = {}
+    for key, mod in (("fusion", EG), ("easyeda", EZ)):
+        r = mod.export(plan, out / key, name, kicad_dir=out / "kicad", log=quiet, second_reader=False)
+        other[key] = {"file": f"{key}/{r['file']}", "bundle": f"{key}/{r['bundle']}", "counts": r["counts"],
+                      "errors": r["errors"], "approximations": len(r["warnings"]), "models": len(r["models"])}
     parts = []
     for it in items:
         parts.append({"part": it["name"], "status": it["status"], "symbol": (it.get("symbol") or {}).get("ref"),
@@ -164,10 +174,18 @@ def build(out, name=NAME, log=print):
     summary = {"name": name, "tables": tables, "parts": parts, "held": held, "kicad": {"symbols": kx.get("symbols"),
                "footprints": sorted(kx.get("footprints") or {})}, "kicad_dblib": kd.get("dblib") if isinstance(kd, dict) else None,
                "altium": {"dblib": str(Path(ad["dblib"]).relative_to(out).as_posix()) if ad.get("dblib") else None},
-               "parity": {**py["counts"], "database_rows": py.get("database_rows"), "report": "parity.md"}}
+               "parity": {**py["counts"], "database_rows": py.get("database_rows"), "report": "parity.md"}, **other}
     (out / "testpack.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     (out / "CHECKLIST.md").write_text(checklist(summary), encoding="utf-8")
     return summary
+
+
+def _other(s, key):
+    o = s.get(key) or {}
+    if not o:
+        return f"{key} not written"
+    return (f"{o['file']} {'read back the same' if not o['errors'] else 'read back with ' + str(len(o['errors'])) + ' difference(s)'}"
+            f" ({o['approximations']} approximation(s) listed in its report)")
 
 
 def checklist(s):
@@ -178,7 +196,7 @@ def checklist(s):
     return f"""# ecadlib test pack: what to open and what you should see
 
 This folder was written by `ecadlib testpack` with no network and no API keys. Nothing in it has been opened in
-Altium Designer, Altium 365 or KiCad by ecadlib's own tests (see the end of this file for what was checked); please go
+Altium Designer, Altium 365, KiCad, Fusion or EasyEDA Pro by ecadlib's own tests (see the end of this file for what was checked); please go
 through the steps below and report anything that does not match (a screenshot and the step number are enough).
 
 ## The six parts
@@ -236,6 +254,39 @@ The KiCad files are in KiCad 8 format: KiCad 7 refuses to open them (it will say
 6. Database library (optional; needs an SQLite ODBC driver, see `ecadlib kicad-dblib -h`): the `{n}-db` row in the
    symbol table opens `{n}.kicad_dbl`; the parts appear grouped by category with Value, Manufacturer and MPN columns.
 
+## 4. Autodesk Fusion Electronics or EAGLE 9 (`fusion/`)
+
+`fusion/INSTALL.md` has the import steps; `fusion/{n}_fusion.zip` is the same folder as one file.
+
+1. Fusion: upload `fusion/{n}.lbr` to a project (Data Panel > Upload) and open it, or import it in an electronics
+   design's Library Manager. EAGLE 9: **Library > Open** `fusion/{n}.lbr`.
+2. The library lists six device sets named after the parts (column 1 of the table above) and six packages named after
+   the footprints. Each device set has one device with its package, and **Connect** shows every pin on a pad.
+3. Open each package: the pads as in the table above, the silkscreen on tPlace, the courtyard on tKeepout, the
+   assembly outline on tDocu. USB-C: four shell pads with slots (the slot outline is on the Milling layer, 46) and
+   two non-plated holes; stacked pads A1/B12 GND and A4/B9 VBUS are separate pads, as in the KiCad footprint.
+4. Open each device set's attributes: MPN, MANUFACTURER, DATASHEET, DESCRIPTION, PACKAGE and CATEGORY_L1 are filled
+   (R1's value is typed when it is placed, as in Eagle's own resistors).
+5. Place all six in a schematic, switch to the board: every package arrives; run DRC: no errors between pads of one
+   part (the USB-C stacked pads aside, as in Altium).
+6. Optional: attach the STEP files in `fusion/{n}.3dshapes/` as 3D packages (INSTALL.md's table says which file goes
+   on which package) and check the 3D view: each body sits on its pads.
+
+## 5. EasyEDA Pro (`easyeda/`)
+
+`easyeda/INSTALL.md` has the import steps; `easyeda/{n}_easyeda.zip` is the same folder as one file.
+
+1. In EasyEDA Pro (the web version is enough): **File > Import > EasyEDA Pro**, choose `easyeda/{n}.elibz` and a
+   personal library to import into.
+2. The library lists six devices named after the parts, each with its symbol and footprint linked.
+3. Open each footprint: the pads as in the table above, top silkscreen, the courtyard; the exposed pad of U2 (pad 17)
+   has its paste split into windows as in the KiCad footprint. Open each symbol: the pin numbers and names in the table
+   (overbars are written with a trailing #).
+4. Device attributes: Manufacturer, Manufacturer Part, Datasheet; Designator R?, Q?, U?, J?.
+5. Place all six in a schematic and update the PCB from it: every footprint arrives; run DRC.
+6. Optional: import the STEP files in `easyeda/{n}.3dshapes/` as 3D models and attach each to its footprint (INSTALL.md
+   says which), then check the 3D view.
+
 ## What ecadlib itself checked before writing this pack
 
 * the release check passed for every part not listed as held above (pins match pads, footprint checks, 3D height,
@@ -243,6 +294,10 @@ The KiCad files are in KiCad 8 format: KiCad 7 refuses to open them (it will say
 * KiCad / Altium parity (`ecadlib parity`, report `parity.md`): {s.get('parity', {}).get('match', '?')} of {len(s['parts'])} parts
   read back the same from the KiCad and the Altium files (pads, drills, paste, courtyard, 3D model, pins, fields), and
   the KiCad database rows match the DbLib rows;
+* the Fusion / EAGLE and EasyEDA Pro libraries were read back by ecadlib's own readers and compared with the KiCad
+  footprints pad by pad and the symbols pin by pin: {_other(s, 'fusion')}; {_other(s, 'easyeda')}. In ecadlib's
+  CI, KiCad 8's own Eagle and EasyEDA Pro importers read libraries like these as a second check. Neither was opened in
+  Fusion or EasyEDA Pro;
 * `tests/test_e2e.py` (run in ecadlib's own test suite) loads a pack like this one with KiCad 7's kicad-cli and pcbnew
   (after converting to KiCad 7 syntax), places every footprint through the library table and runs DRC, and reads every
   .PcbLib / .SchLib back with pyaltiumlib and ecadlib's own reader. That is all file-level: the real Altium checks are

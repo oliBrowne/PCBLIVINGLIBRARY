@@ -388,12 +388,17 @@ def write_elibz(path, symbols, footprints, devices):
         "devices": {u: {"source": "", "description": d, "tags": TAGS, "custom_tags": "", "title": t, "version": "",
                         "images": [], "attributes": a} for u, (t, d, a) in devices.items()},
     }
+    def put(z, name, text):                   # a fixed date: the same library is the same file (clean git diffs)
+        info = zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_DEFLATED
+        z.writestr(info, text)
+
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("device.json", json.dumps(meta, ensure_ascii=False, indent=1))
+        put(z, "device.json", json.dumps(meta, ensure_ascii=False, indent=1))
         for u, (_, lines) in symbols.items():
-            z.writestr(f"SYMBOL/{u}.esym", _jl(lines))
+            put(z, f"SYMBOL/{u}.esym", _jl(lines))
         for u, (_, lines) in footprints.items():
-            z.writestr(f"FOOTPRINT/{u}.efoo", _jl(lines))
+            put(z, f"FOOTPRINT/{u}.efoo", _jl(lines))
 
 
 # ---------------------------------------------------------------- reader
@@ -850,15 +855,11 @@ def export(plan, out, name="ecadlib", include_held=False, libs=(), http=None, lo
             rep["parts"].append(part)
         elibz = out / f"{lib}.elibz"
         write_elibz(elibz, symbols, footprints, devices)
-        shapes = kdir / f"{krep['library']}.3dshapes"
-        if shapes.is_dir():
-            dest = out / f"{lib}.3dshapes"
-            dest.mkdir(exist_ok=True)
-            for f in sorted(shapes.iterdir()):
-                shutil.copyfile(f, dest / f.name)
-                rep["models"][f.name] = f"{lib}.3dshapes/{f.name}"
+        EG.copy_models(kdir / f"{krep['library']}.3dshapes", out / f"{lib}.3dshapes", rep, lib)
         if (kdir / "NOTICE.txt").is_file():
             shutil.copyfile(kdir / "NOTICE.txt", out / "NOTICE.txt")
+        elif (out / "NOTICE.txt").is_file():         # an earlier export's notice; this library has no CC-BY-SA content
+            (out / "NOTICE.txt").unlink()
         # ---- read back what was written
         back = read_elibz(elibz)
         for fpn, (src, approx) in sources.items():
@@ -919,6 +920,7 @@ def export(plan, out, name="ecadlib", include_held=False, libs=(), http=None, lo
         rep["warnings"].append("3D models are not inside the .elibz (EasyEDA links them from its cloud library): "
                                f"upload the STEP files in {lib}.3dshapes and attach them to the footprints")
     rep["counts"] = {"devices": len(devices), "footprints": len(footprints), "symbols": len(symbols)}
+    EG.handoff(out, rep, "easyeda", {f: EG.model_files(src, rep["models"]) for f, (src, _) in sources.items()})
     (out / "easyeda_export.json").write_text(json.dumps(rep, indent=2, default=str) + "\n")
     return rep
 
@@ -954,12 +956,14 @@ def main(argv=None):
         print(f"  ERROR   {e}")
     rr = rep.get("kicad_reread")
     second = (f"; KiCad {rr['kicad']} importer re-read {rr['checked']} footprints, {rr['mismatched']} differ" if rr and rr.get("kicad") and not rr.get("error")
-              else "; KiCad 8+ not available for a second read" if rr is None else f"; KiCad re-read: {rr.get('error')}")
+              else "; KiCad 8+ not available for a second read" if rr is None or "cannot read" in str(rr.get("error"))
+              else f"; KiCad re-read failed: {rr.get('error')}")
     out = Path(a.out)
     print(f"{rep['counts']['devices']} devices, {rep['counts']['footprints']} footprints -> {out / rep['file']}: "
           f"read back {'with differences' if rep['errors'] else 'the same as the KiCad library'}{second}")
-    print("open it in EasyEDA Pro with File > Open (or Import > EasyEDA Pro) and save it to a library; "
-          f"{len(rep['models'])} STEP models in {out / (rep['library'] + '.3dshapes')}")
+    print("import it in EasyEDA Pro with File > Import > EasyEDA Pro; "
+          f"{len(rep['models'])} STEP models in {out / (rep['library'] + '.3dshapes')} to attach "
+          f"(steps in {out / 'INSTALL.md'}; all of it in {out / rep['bundle']})")
     return 1 if rep["errors"] else 0
 
 

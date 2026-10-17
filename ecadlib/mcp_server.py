@@ -361,8 +361,9 @@ TOOLS = [
      "description": "Write the BOM's library for another PCB tool, natively, and read every part back pad by pad: "
                     "tool='eagle' writes an Autodesk Fusion Electronics / EAGLE .lbr (symbols, packages, devicesets; "
                     "STEP models beside it) in fusion/<bom>/, tool='easyeda' an EasyEDA Pro device library .elibz "
-                    "(symbols, footprints, devices) in easyeda/<bom>/. Returns the file, counts, read-back errors and "
-                    "what had to be approximated for the target format.",
+                    "(symbols, footprints, devices) in easyeda/<bom>/. Returns the file, a zip to hand over (library, "
+                    "STEP models, INSTALL.md with the import steps), counts, read-back errors and what had to be "
+                    "approximated for the target format.",
      "inputSchema": {"type": "object", "required": ["bom", "tool"],
                      "properties": {"bom": {"type": "string"}, "tool": {"type": "string", "enum": ["eagle", "easyeda"]},
                                     "name": {"type": "string", "description": "library name (default ecadlib)"},

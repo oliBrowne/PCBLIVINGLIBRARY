@@ -214,8 +214,7 @@ def check_item(item, base=".", rules=None):
         for d in diffs:
             if d["level"] == "error":
                 (add(tool, f"{label}: {d['msg']}") if tmode == "hold" else warns.append(f"{tool}: {d['msg']}"))
-        if any(d["level"] == "error" for d in diffs):
-            info[tool] = "mismatch"
+        info[tool] = "mismatch" if any(d["level"] == "error" for d in diffs) else "match"
     # ---- 3D height
     if fps:
         bodies = [AL.parse_params(r["params"]) for r in fps[0]["records"] if r["type"] == "body"]
