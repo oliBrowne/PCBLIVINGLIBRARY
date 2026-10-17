@@ -55,10 +55,24 @@ def load_plan(path):
     return items
 
 
-def table_of(item):
-    """Sheet name from the workspace folder (Components/Capacitors -> Capacitors); Excel's sheet name rules."""
-    t = re.sub(r"[\[\]:*?/\\]", "_", (item.get("folder") or "Misc").rstrip("/").rsplit("/", 1)[-1]).strip("'")
+def sheet_name(name):
+    """A sheet name Excel accepts that Excel's ACE provider exposes unchanged (plus '$'), so the DbLib TableName
+    matches it. ACE drops an apostrophe ("Driver's ICs" -> "Drivers ICs$") and turns a '.' into '#'
+    ("Res. Networks" -> "Res# Networks$"): the apostrophe is dropped here as well, and '.' becomes '_'."""
+    t = re.sub(r"[\[\]:*?/\\.]", "_", str(name)).replace("'", "")
     return (t or "Misc")[:31]
+
+
+def table_of(item):
+    """Sheet name from the workspace folder (Components/Capacitors -> Capacitors); see sheet_name."""
+    return sheet_name((item.get("folder") or "Misc").rstrip("/").rsplit("/", 1)[-1])
+
+
+def table_key(name):
+    """One table under every spelling it has had: a sheet name, a DbLib TableName ('$' at the end), the name ACE
+    gave it ('#' for '.', no apostrophe) or an older ecadlib wrote ('.', apostrophe), in any case."""
+    name = str(name)
+    return sheet_name(name[:-1] if name.endswith("$") else name).replace("#", "_").lower()
 
 
 def _steps(to, rel):
@@ -162,6 +176,65 @@ def _kv(lines):
     return dict(ln.split("=", 1) for ln in lines if "=" in ln)
 
 
+def _same_tables(secs, names, num):
+    """-> (secs, names) with each wanted table ({'Drivers ICs$': cols}) held by one [TableN] section. A section naming
+    it in another spelling (table_key: "Driver's ICs$" an older ecadlib wrote, "Res# Networks$" Altium saved from
+    ACE) is renamed to it, or dropped when another section already has it; its [FieldMapN] sections follow it
+    (renamed, or dropped when the kept table maps that column already). A section differing only in case is kept as
+    it is, and names takes its spelling. Sections are renumbered only when one was dropped."""
+    want = {table_key(tn): tn for tn in names}
+    groups = {}
+    for s in secs:
+        if num(s, "Table") is not None:
+            tn = _kv(s[1]).get("TableName", "")
+            if tn and table_key(tn) in want:
+                groups.setdefault(table_key(tn), []).append(s)
+    rename, drop, keep_name = {}, [], {}
+    for k, ss in groups.items():
+        tn = want[k]
+        keep = next((s for s in ss if _kv(s[1])["TableName"].lower() == tn.lower()), ss[0])
+        keep_name[k] = _kv(keep[1])["TableName"] if _kv(keep[1])["TableName"].lower() == tn.lower() else tn
+        for s in ss:
+            old = _kv(s[1])["TableName"]
+            if old != keep_name[k]:
+                rename[old] = keep_name[k]
+            if s is not keep:
+                drop.append(s)
+    names = {keep_name.get(table_key(tn), tn): cols for tn, cols in names.items()}
+    if not rename:
+        return secs, names
+    dropped = {id(s) for s in drop}
+    secs = [s for s in secs if id(s) not in dropped]
+    for s in secs:
+        if num(s, "Table") is not None and _kv(s[1]).get("TableName") in rename:
+            s[1] = [f"TableName={rename[_kv(s[1])['TableName']]}" if ln.split("=", 1)[0] == "TableName" else ln for ln in s[1]]
+        elif s[0] == "DatabaseLinks" and _kv(s[1]).get("LastFocusedTable") in rename:
+            s[1] = [f"LastFocusedTable={rename[_kv(s[1])['LastFocusedTable']]}" if ln.split("=", 1)[0] == "LastFocusedTable"
+                    else ln for ln in s[1]]
+    opts = lambda s: dict(p.split("=", 1) for p in _kv(s[1]).get("Options", "").split("|") if "=" in p)
+    fm = [s for s in secs if num(s, "FieldMap") is not None]
+    have = {opts(s).get("FieldName", "").lower() for s in fm if opts(s).get("TableNameOnly") not in rename}
+    gone = set()
+    for s in fm:
+        o = opts(s)
+        t = o.get("TableNameOnly")
+        if t not in rename:
+            continue
+        o["TableNameOnly"], o["FieldName"] = rename[t], f"{rename[t]}.{o.get('FieldNameOnly', '')}"
+        if o["FieldName"].lower() in have:
+            gone.add(id(s))
+            continue
+        have.add(o["FieldName"].lower())
+        s[1] = [("Options=" + "|".join(f"{a}={b}" for a, b in o.items())) if ln.split("=", 1)[0] == "Options" else ln
+                for ln in s[1]]
+    secs = [s for s in secs if id(s) not in gone]
+    if drop or gone:                          # [Table1].. and [FieldMap1].. stay numbered without gaps
+        for p in ("Table", "FieldMap"):
+            for i, s in enumerate((s for s in secs if num(s, p) is not None), 1):
+                s[0] = f"{p}{i}"
+    return secs, names
+
+
 def dblib_update(existing, tables, links, override=()):
     """New or merged INI text. tables: {sheet: columns} (sheet names without '$'); links: kwargs for
     altium_export.dblib_links; override: [DatabaseLinks] keys whose template value replaces the existing one."""
@@ -190,8 +263,9 @@ def dblib_update(existing, tables, links, override=()):
         elif k in override and have[k] != v:
             db[1] = [f"{k}={v}" if ln.split("=", 1)[0] == k else ln for ln in db[1]]
     num = lambda s, p: int(s[0][len(p):]) if s[0].startswith(p) and s[0][len(p):].isdigit() else None
+    secs, names = _same_tables(secs, names, num)
     tabs = {_kv(s[1]).get("TableName") for s in secs if num(s, "Table") is not None}
-    fmaps = {_kv(s[1]).get("Options", "").split("|", 1)[0] for s in secs if num(s, "FieldMap") is not None}
+    fmaps = {_kv(s[1]).get("Options", "").split("|", 1)[0].lower() for s in secs if num(s, "FieldMap") is not None}
     ti = max([num(s, "Table") or 0 for s in secs] + [0])
     fi = max([num(s, "FieldMap") or 0 for s in secs] + [0])
     last_t = max([k for k, s in enumerate(secs) if num(s, "Table") is not None] + [secs.index(db)])
@@ -202,7 +276,7 @@ def dblib_update(existing, tables, links, override=()):
             sec = table_section(ti, tn)
             new_t.append([sec[0][1:-1], sec[1:]])
         for c in cols:
-            if f"FieldName={tn}.{c}" not in fmaps:
+            if f"FieldName={tn}.{c}".lower() not in fmaps:
                 fi += 1
                 sec = fieldmap_section(fi, tn, c)
                 new_f.append([sec[0][1:-1], sec[1:]])
@@ -296,7 +370,12 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     state = json.loads(statef.read_text()) if statef.exists() else {}
     managed_rows, managed_files = set(state.get("rows", [])), set(state.get("files", []))
     old = read_tables(xlsx)
-    tables = {t: (list(h), [dict(r) for r in rows]) for t, (h, rows) in old.items()}
+    tables = {}
+    for t, (h, rows) in old.items():                    # a sheet an older ecadlib named "Driver's ICs": ACE's name
+        t = next((k for k in tables if table_key(k) == table_key(t)), sheet_name(t))
+        hdr, rs = tables.setdefault(t, ([], []))
+        hdr += [c for c in h if c not in hdr]
+        rs += [dict(r) for r in rows]
     where = {r.get("Part Number"): t for t, (_, rows) in tables.items() for r in rows}
     results, written, removed, copied, failed, prune_steps = [], [], [], {}, {}, set()
 
@@ -306,7 +385,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
 
     for it in items:
         t0 = table_of(it)                                   # Excel sheet names ignore case: Passives = passives
-        res = {"name": it["name"], "action": "", "detail": "", "table": next((k for k in tables if k.lower() == t0.lower()), t0)}
+        res = {"name": it["name"], "action": "", "detail": "", "table": next((k for k in tables if table_key(k) == table_key(t0)), t0)}
         results.append(res)
         if it.get("status") == "held":
             res["action"], res["detail"] = "held", "; ".join(it.get("hold_reasons") or ["release check"])
@@ -465,7 +544,8 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                     if folder.name != "PcbLib" and folder.is_dir() and not any(folder.iterdir()):
                         folder.rmdir()
     managed_files |= set(written)
-    tables = {t: v for t, v in tables.items() if v[1] or t in old}  # never create an empty sheet
+    had = {table_key(t) for t in old}
+    tables = {t: v for t, v in tables.items() if v[1] or table_key(t) in had}  # never create an empty sheet
 
     # parts table, DbLib file, state: only rewritten when their content changes
     out = {"results": results, "written": written, "removed": removed, "dblib": str(lib), "mode": mode,

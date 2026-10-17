@@ -1179,8 +1179,19 @@ def _key(d):
     return (d.get("designator") or d.get("num"), d["x"], d["y"])
 
 
-def compare_one(lib, rp, tol=10):
-    """-> list of problems ('' list = match) between an Altium-saved library and its recipe. tol: internal units."""
+def best_fit_name(want, got):
+    """True when got is want as a cp1252 pin record holds it: every character cp1252 can store is the same, and each
+    one it can't ('Φ', 'ϕ') became one character - '?' as ecadlib writes it, or Windows' best-fit substitute ('F')
+    that Altium writes when it rebuilds the library. The SchLib pin record has no UTF-8 copy of the name."""
+    if not AL.not_cp1252(want) or len(want) != len(got):
+        return False
+    return all(a == b or (AL.not_cp1252(a) and not AL.not_cp1252(b)) for a, b in zip(want, got))
+
+
+def compare_one(lib, rp, tol=10, known=None):
+    """-> list of problems ('' list = match) between an Altium-saved library and its recipe. tol: internal units.
+    known: a list that gets the expected differences (pin names cp1252 can't hold, see best_fit_name) instead."""
+    known = [] if known is None else known
     want = _recipe_items(rp)
     probs = []
     if lib.suffix.lower() == ".pcblib":
@@ -1220,6 +1231,10 @@ def compare_one(lib, rp, tol=10):
                 probs.append(f"{lib.name}/{name}: {len(g)} pins, recipe has {len(w['pins'])}")
             for a, b in zip(sorted(w["pins"], key=_key), sorted(g, key=_key)):
                 bad = [k for k in ("x", "y", "length", "orient", "etype") if a[k] != b[k]]
+                if a["name"] != b["name"] and best_fit_name(a["name"], b["name"]):
+                    known.append(f"{lib.name}/{name} pin {a['num']}: name {b['name']!r} for {a['name']!r} (cp1252 can't hold "
+                                 f"{AL.not_cp1252(a['name'])!r}; the SchLib pin record has no Unicode copy)")
+                    b = dict(b, name=a["name"])
                 if a["num"] != b["num"] or a["name"] != b["name"] or bad:
                     probs.append(f"{lib.name}/{name} pin {a['num']}: " + ", ".join(f"{k} {b[k]} != {a[k]}" for k in bad)
                                  + ("" if a["name"] == b["name"] else f" name {b['name']!r} != {a['name']!r}"))
@@ -1227,12 +1242,13 @@ def compare_one(lib, rp, tol=10):
 
 
 def compare(folder):
-    """-> {"checked": n, "problems": [...], "unreadable": [...]} for every library under folder that has a recipe."""
+    """-> {"checked": n, "problems": [...], "unreadable": [...], "known": [...]} for every library under folder that
+    has a recipe. known: expected differences (best_fit_name) that are reported but are not problems."""
     folder = Path(folder)
-    rep = {"checked": 0, "problems": [], "unreadable": []}
+    rep = {"checked": 0, "problems": [], "unreadable": [], "known": []}
     for rel, rp in recipes(folder):
         try:
-            rep["problems"] += compare_one(folder / rel, rp)
+            rep["problems"] += compare_one(folder / rel, rp, known=rep["known"])
             rep["checked"] += 1
         except (ValueError, OSError) as e:
             rep["unreadable"].append(f"{rel}: {e}")
@@ -1266,6 +1282,10 @@ def main(argv=None):
         print(f"{rep['checked']} libraries checked, {len(rep['problems'])} differences, {len(rep['unreadable'])} unreadable")
         for p in rep["problems"] + rep["unreadable"]:
             print("  " + p)
+        if rep["known"]:
+            print(f"{len(rep['known'])} known differences (not errors):")
+            for p in rep["known"]:
+                print("  " + p)
     return 1 if rep["problems"] or rep["unreadable"] else 0
 
 
