@@ -322,7 +322,9 @@ def read_table_file(f):
     suf = f.suffix.lower()
     if suf in (".sqlite", ".db", ".sqlite3"):
         out = {}
-        with sqlite3.connect(f"file:{f}?mode=ro", uri=True) as con:
+        from contextlib import closing
+        from urllib.parse import quote               # a folder named "Lib #2" must not end the URI path
+        with closing(sqlite3.connect(f"file:{quote(Path(f).resolve().as_posix(), safe='/:')}?mode=ro", uri=True)) as con:
             for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'"):
                 cur = con.execute(f'SELECT * FROM "{t}"')
                 cols = [c[0] for c in cur.description]
@@ -1082,7 +1084,7 @@ def _ask(q, inp=input, out=print):
     for i, c in enumerate(q["choices"], 1):
         cnt = (q.get("counts") or {}).get(c)
         out(f"  {i}) {c}" + (f"   ({cnt} seen)" if cnt else "") + ("   [best guess]" if c == q["default"] else ""))
-    a = inp(f"choice [1-{len(q['choices'])}, Enter = best guess, or type a value]: ").strip()
+    a = inp(f"Pick 1-{len(q['choices'])}, press Enter for the best guess, or type your own: ").strip()
     if not a:
         return q["default"]
     if a.isdigit() and 1 <= int(a) <= len(q["choices"]):

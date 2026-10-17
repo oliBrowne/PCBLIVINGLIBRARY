@@ -344,10 +344,13 @@ class Queue:
             self.lock.cache[f"{it['id']}.json"] = copy.deepcopy(it)
 
     def find(self, key, open_only=False):
-        """The newest item for a part key (open ones first when open_only is False), or None."""
+        """The newest item for a part key (open ones first when open_only is False), or None. `created` is to the
+        second and ids sort at random within one, so of two items made in the same second a pushed one counts as the
+        older: a part gets a new item only once its last one was pushed (else upsert would make a new item beside a
+        failed / rejected one, and a retry of that one would leave two open)."""
         with self.lock:
             items = sorted((it for it in self._all().values() if it.get("key") == key),
-                           key=lambda it: (it.get("created") or "", it["id"]), reverse=True)
+                           key=lambda it: (it.get("created") or "", it.get("status") != "pushed", it["id"]), reverse=True)
             live = [it for it in items if it.get("status") in OPEN]
             hit = (live or ([] if open_only else items) or [None])[0]
             return copy.deepcopy(hit)
@@ -594,6 +597,19 @@ def summary(it):
             "batch": it.get("batch"), "pr_url": it.get("pr_url"), "created": it.get("created"), "updated": it.get("updated")}
 
 
+def human_summary(it):
+    """One plain line about a queue item for people (shared voice): what it is, its state, the independent check."""
+    from . import messages as M
+    s = summary(it)
+    what = {"new": "new part", "changed": "changed part", "removed": "removed part"}.get(s["kind"], s["kind"] or "part")
+    line = f"{s['mpn'] or s['key']}: {what}" + (f" from {s['source']}" if s["source"] else "") + f", {M.status_word(s['status'])}"
+    if s["verdict"]:
+        line += f"; independent check: {s['verdict']}" + (f" ({M.plural(s['findings'], 'finding')})" if s["findings"] else "")
+    if s["cross_check"] in ("disagreed", "unchecked"):
+        line += f"; cross-check {s['cross_check']}"
+    return line
+
+
 def picture_path(workspace_root, path):
     """A picture the review page may show: an image file inside <workspace>/agent/ (after resolving links), else
     ValueError. path: workspace-relative, or absolute."""
@@ -728,6 +744,7 @@ def main(argv=None):
     p = sub.add_parser("list", help="items, newest first")
     p.add_argument("--status", choices=STATES)
     p.add_argument("--batch")
+    p.add_argument("--json", action="store_true", help="print the items' summaries as JSON (for scripts)")
     p = sub.add_parser("show", help="one item as JSON")
     p.add_argument("id")
     for a in ACTIONS:
@@ -741,10 +758,11 @@ def main(argv=None):
     try:
         if a.cmd == "list":
             items = Queue(root).list(a.status, a.batch)
-            for it in items:
-                s = summary(it)
-                print(f"  {s['id']:<24} {s['status']:<9} {s['key']:<36} {s['kind']:<8} {s['verdict'] or '':<8} {s['batch'] or ''}")
-            print(f"{len(items)} item(s) in {Queue(root).dir}")
+            if a.json:
+                print(json.dumps([summary(i) for i in items], indent=2, default=str))
+                return 0
+            from .term_views import queue_list
+            queue_list(items, summary, Queue(root).dir)
         elif a.cmd == "show":
             print(json.dumps(Queue(root).get(a.id), indent=2))
         else:
@@ -752,7 +770,7 @@ def main(argv=None):
             from .approvals import identity
             r = decide(Workspace(root), a.id, a.cmd, identity(a.user, cwd=root), a.role, a.note, via="ecadlib queue")
             ap_ = r["approval"]
-            print(f"{a.id}: {r['item']['status']}" + (f"; approvals.py: {'recorded' if ap_['recorded'] else ap_['reason']}" if ap_ else ""))
+            print(f"{a.id}: {r['item']['status']}" + (f"; sign-off: {'recorded' if ap_['recorded'] else ap_['reason']}" if ap_ else ""))
     except (ValueError, KeyError, PermissionError) as e:
         sys.exit(f"ecadlib queue: {e.args[0] if e.args else e}")
     return 0
