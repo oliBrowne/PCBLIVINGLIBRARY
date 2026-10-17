@@ -28,7 +28,7 @@ Conventions (mirroring Altium-made libraries in AltiumSharp's TestData):
   Units: 1 mil = 10000 internal units, so 1 mm = 10^8/254 units (rounded to the nearest unit,
   2.54 nm). KiCad's Y axis points down, Altium's up: y is negated on import.
 Schematic units: 1 = 10 mil (DXP); pins on a 100 mil (10 unit) grid."""
-import argparse, functools, gzip, hashlib, json, math, re, struct, sys, time, uuid, zlib
+import argparse, functools, gzip, hashlib, json, math, re, struct, sys, time, uuid, warnings, zlib
 from fractions import Fraction
 from pathlib import Path
 
@@ -132,6 +132,15 @@ def pin_number(s, what="pin number"):
     except UnicodeEncodeError as e:
         raise ValueError(f"{what} {s!r} has characters Altium libraries can't store ({str(s)[e.start:e.end]!r}); rename it") from None
     return str(s)
+
+
+class PinNameWarning(UserWarning):
+    """A pin name holds characters the SchLib binary pin record can't store (see not_cp1252 / pin_rec)."""
+
+
+def not_cp1252(s):
+    """-> the characters of s, in order and without repeats, that cp1252 can't encode ('' when it all fits)."""
+    return "".join(dict.fromkeys(c for c in str(s) if c.encode("cp1252", "replace") == b"?" and c != "?"))
 
 
 def file_stem(s):
@@ -631,6 +640,11 @@ def pin_rec(num, name, etype, orient, x, y, length, show=True, hidden=False, par
             symbols=(0, 0, 0, 0), mode=0, desc=""):
     """symbols: (inside edge, outside edge, inside, outside) IEEE symbol ids; mode: owner display mode (0 = normal)."""
     sn, sd = show if show_name is None else show_name, show if show_num is None else show_num
+    lost = not_cp1252(name)
+    if lost:                                  # the binary pin record holds cp1252 Pascal strings only (no %UTF8% twin)
+        warnings.warn(f"pin {num}: name {name!r} has characters a SchLib pin record can't store ({lost!r}); it is written "
+                      f"as {enc(name).decode('cp1252')!r}, and a library Altium rebuilds may show a best-fit substitute "
+                      f"(e.g. 'F' for 'Φ')", PinNameWarning, stacklevel=2)
     cong = orient | 0x20 | (0x04 if hidden else 0) | (0x08 if sn else 0) | (0x10 if sd else 0)   # 0x04 hidden, 0x08 name, 0x10 number
     d = enc(desc)[:255]
     b = struct.pack("<iBhB4B", 2, 0, part, mode, *symbols) + bytes([len(d)]) + d      # owner part, display mode, symbols, description
