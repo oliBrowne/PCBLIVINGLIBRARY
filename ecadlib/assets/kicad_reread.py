@@ -36,7 +36,10 @@ def main(argv):
     m = _mgr()
     k = m.PluginFind(m.KICAD_SEXP)
     pretty = Path(tempfile.mkdtemp(dir=out)) / "reread.pretty"
-    k.FootprintLibCreate(str(pretty))
+    try:
+        k.FootprintLibCreate(str(pretty))
+    except AttributeError:                    # KiCad 8.0's Python shim calls a CreateLibrary its plugin has not got;
+        pretty.mkdir()                        # a .kicad_mod library is only a folder
     got, errors = {}, {}
     for name in p.FootprintEnumerate(str(lib)):
         try:
