@@ -64,7 +64,7 @@ def test_write_collects_recipes_with_folder_relative_paths():
         assert "PCBLIB\tPcbLib\\SOIC8.PcbLib" in text and "SCHLIB\tSchLib\\NE555DR.SchLib" in text
         assert text.count("ECADLIB-BUILD") == 1 and text.count("\nEND") == 2
         assert (d / AN.PROJECT).read_bytes().decode() == "[Design]\r\nVersion=1.0\r\n\r\n[Document1]\r\nDocumentPath=ecadlib_build.pas\r\n"
-        assert "\r\n" in (d / AN.UNIT).read_text(encoding="utf-8", newline="")
+        assert b"\r\n" in (d / AN.UNIT).read_bytes()
         out = d / "elsewhere"
         AN.write(d, out)
         assert "PCBLIB\t..\\PcbLib\\SOIC8.PcbLib" in (out / AN.BUILD).read_text(encoding="utf-8-sig")
