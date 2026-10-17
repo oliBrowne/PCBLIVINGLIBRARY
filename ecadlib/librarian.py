@@ -459,6 +459,8 @@ class Run:
                 self.put_kicad_sym(st, chain, sym_name, fp_name, f"easyeda:{lcsc}", [("MPN", mpn)] if mpn else [], layout=True)
                 st["symbol"]["notes"] = notes + st["symbol"]["notes"]
                 got.append("symbol")
+        if got:
+            st["found"].setdefault("credit", (EC.CREDIT, f"EasyEDA {lcsc}"))
         st["tried"].append(f"easyeda {lcsc}: " + (", ".join(got) or "nothing needed"))
         st["review"].append(f"EasyEDA {lcsc} conversion: check pads and pins against the datasheet (native converter, format assumed)")
 
@@ -623,6 +625,9 @@ def apply_state(item, st, ln):
     if not par.get("Manufacturer") and "manufacturer" in st.get("found", {}):
         v, w = st["found"]["manufacturer"]
         _set_par(item, "Manufacturer", v); fields["Manufacturer"] = w
+    if "credit" in st.get("found", {}):          # EasyEDA's library data asks for this credit on every reuse
+        v, w = st["found"]["credit"]
+        _set_par(item, "Library Credit", v); fields["Library Credit"] = w
     if not str(item.get("description") or "").strip() and "description" in st.get("found", {}):
         item["description"], fields["Description"] = st["found"]["description"]
     item["field_sources"] = fields
