@@ -202,13 +202,28 @@ def build(plan, out, name="ecadlib", include_held=False, rules=None, driver=DEFA
     if exp.is_file():                                        # only point at symbols / footprints that were written
         xr = json.loads(exp.read_text(encoding="utf-8"))
         syms = {p["symbol_name"] for p in xr.get("parts", []) if p.get("symbol")}
+        owner = {p["symbol_name"]: p["part"] for p in xr.get("parts", []) if p.get("symbol")}
+        own_fp = {p["part"]: p.get("footprint") for p in xr.get("parts", [])}
         fps = set((xr.get("footprints") or {}))
-        for t, rows in tables.items():
-            for r in rows:
-                if r["Symbol"].split(":", 1)[1] not in syms:
+        for t, rows in list(tables.items()):
+            for r in list(rows):
+                sname = r["Symbol"].split(":", 1)[1]
+                if owner.get(sname, r["Part ID"]) != r["Part ID"]:   # two part names, one KiCad name: the symbol is
+                    rows.remove(r)                                    # the other part's (kicad-export reported it)
+                    skipped.append({"part": r["Part ID"], "why": f"symbol {r['Symbol']} is part {owner[sname]}'s "
+                                                                 "(same KiCad name); rename one of them"})
+                    continue
+                if sname not in syms:
                     rep["warnings"].append(f"{r['Part ID']}: symbol {r['Symbol']} is not in {lib}.kicad_sym")
-                if r["Footprint"] and r["Footprint"].split(":", 1)[1] not in fps:
+                fpn = r["Footprint"].split(":", 1)[1] if r["Footprint"] else None
+                if fpn and r["Part ID"] in own_fp and own_fp[r["Part ID"]] != fpn and fpn in fps:
+                    rep["warnings"].append(f"{r['Part ID']}: footprint {r['Footprint']} is another part's (same KiCad "
+                                           "name); left empty")
+                    r["Footprint"] = ""
+                elif fpn and fpn not in fps:
                     rep["warnings"].append(f"{r['Part ID']}: footprint {r['Footprint']} is not in {lib}.pretty")
+            if not rows:
+                del tables[t]
     else:
         rep["warnings"].append(f"no kicad_export.json in {out}: run `ecadlib kicad-export --name {name}` into this folder "
                                "(or pass --export) so the Symbol / Footprint columns resolve")
