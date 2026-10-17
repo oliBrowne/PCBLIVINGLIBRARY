@@ -442,7 +442,7 @@ ol.hubhist .t { font: 11.5px/1.5 var(--mono); color: var(--muted); }
     </div>
     <div class="row" style="margin-top:10px" data-role="librarian">
       <span class="muted">Or re-check one already in the workspace:</span>
-      <select id="boms"></select>
+      <select id="boms" aria-label="BOM already in the workspace"></select>
       <button id="rerun" data-role="librarian">Check again</button>
     </div>
     <div id="busy" class="busyrow" hidden>
@@ -634,6 +634,24 @@ ol.hubhist .t { font: 11.5px/1.5 var(--mono); color: var(--muted); }
       <div class="row" style="margin-top:8px"><button id="rulesapply" hidden>Apply my answers</button><button class="primary" id="rulessave" data-role="admin">Save ecadlib.toml</button><button class="danger" id="rulesreplace" hidden>Replace the existing file</button></div>
       <div id="rulesdiff"></div>
     </div>
+  </section>
+
+  <section class="card" id="style">
+    <div class="row spread">
+      <div><h2>Settings: your house style</h2>
+      <p class="muted small" style="margin:2px 0 0" id="stylestate">Loading…</p></div>
+      <button id="styleopen" data-role="admin">Teach it my style…</button>
+    </div>
+    <div id="styleform" hidden style="margin-top:10px">
+      <label class="muted small" for="stylepaths">Your library folders or files, one per line (empty: the --lib folders). ecadlib learns how your parts are named and described, how values are written, which parameters they carry and how active-low pins are drawn.</label>
+      <textarea id="stylepaths" style="min-height:52px" spellcheck="false" placeholder="D:\Altium\Libraries"></textarea>
+      <label class="muted small" for="styledir" style="display:block;margin-top:8px">Your direction, one instruction per line. It wins over what the library does today.</label>
+      <textarea id="styledir" style="min-height:64px" placeholder="IC descriptions start with the function in capitals&#10;Write tolerances as ±1%"></textarea>
+      <div class="row" style="margin-top:8px"><label class="small"><input type="checkbox" id="styleai"> Let my AI model write a style guide from this (uses the model set in ecadlib.toml: Claude, another API or a local one)</label></div>
+      <div class="row" style="margin-top:8px"><button class="primary" id="stylego">Learn my style</button><span class="muted small">Saved next to your library rules. New parts follow it.</span></div>
+    </div>
+    <div id="stylebusy" class="muted small" hidden>Learning your style…<div class="progress"><div style="width:30%"></div></div></div>
+    <div id="styleout" class="out"></div>
   </section>
 </main>
 
@@ -1515,6 +1533,28 @@ async function saveRules(overwrite) {
   } catch (e) { banner($("#rulesdiff"), e.message); }
 }
 $("#rulessave").addEventListener("click", () => saveRules(false));
+async function loadStyle() {
+  const r = await api("/api/style");
+  $("#stylestate").textContent = r.exists
+    ? `Learned from ${r.components} parts (${r.file}); new parts follow it.` + (r.direction && r.direction.length ? ` ${r.direction.length} line(s) of your direction.` : "")
+    : "Not learned yet. ecadlib can learn how your library writes parts and adapt new ones to it, plus anything you tell it.";
+  $("#styleout").innerHTML = r.exists ? `<pre class="diff">${esc(r.summary)}</pre>` : "";
+}
+$("#styleopen").addEventListener("click", () => { $("#styleform").hidden = !$("#styleform").hidden; });
+$("#stylego").addEventListener("click", async () => {
+  const lines = id => $(id).value.split("\n").map(x => x.trim()).filter(Boolean);
+  $("#stylego").disabled = true; $("#stylebusy").hidden = false;
+  try {
+    const { job } = await api("/api/style/learn", { paths: lines("#stylepaths"), direction: lines("#styledir"), ai: $("#styleai").checked });
+    for (;;) {
+      await new Promise(r => setTimeout(r, 400));
+      const j = await api("/api/job?id=" + job);
+      if (j.state === "done") { toast("House style saved"); $("#styledir").value = ""; await loadStyle(); break; }
+      if (j.state === "error") throw new Error(j.error);
+    }
+  } catch (e) { banner($("#styleout"), e.message); }
+  finally { $("#stylego").disabled = false; $("#stylebusy").hidden = true; }
+});
 $("#rulesreplace").addEventListener("click", () => saveRules(true));
 
 // ---- team mode: sign-in, user menu, roles, users page
@@ -2017,7 +2057,7 @@ function roleNote() {
 function startApp() {
   $("#signin").hidden = true; $("#app").hidden = false; $("#steps").hidden = false;
   applyRoles(); roleNote(); navState(); loadStatus().catch(e => banner($("#stout"), e.message));
-  loadInfo().catch(showErr); loadSpecs().catch(showErr); loadRules().catch(showErr); loadHistory().catch(e => banner($("#histerr"), e.message));
+  loadInfo().catch(showErr); loadSpecs().catch(showErr); loadRules().catch(showErr); loadStyle().catch(showErr); loadHistory().catch(e => banner($("#histerr"), e.message));
   loadQueue().catch(e => banner($("#qerr"), e.message)); loadHub().catch(e => banner($("#hubprob"), e.message));
 }
 // ---- keyboard shortcuts ("?" lists them); never while typing in a box or with Ctrl / Alt / Cmd held

@@ -6,6 +6,7 @@
     ecadlib init      [--yes] [--tool T] [--lib DIR] [--from DIR ...]   set up: tool, libraries, workspace, sources -> ecadlib.toml, doctor
     ecadlib demo      [-o DIR]                    a small library from a bundled BOM, offline, no keys (start here)
     ecadlib rules     check|show                  validate the rules file / print the defaults
+    ecadlib style     learn|show|direct|check|apply|export-dataset   learn your house style from your library + your direction
     ecadlib ui        --lib <kicad libs>          local web UI in your browser (--team: shared server with sign-in)
     ecadlib team      add-user|set-role|reset-password|remove|list|setup   users and roles for `ecadlib ui --team`; setup: Docker + HTTPS
     ecadlib mcp       --lib <kicad libs>          MCP server (stdio) for Claude and other agents
@@ -71,6 +72,7 @@ COMMANDS = {
     "init": ("ecadlib.rules_infer", "set up ecadlib: tool, library folders, workspace, sources; learn your conventions -> ecadlib.toml"),
     "demo": ("ecadlib.firstrun:demo_main", "build a small library from a bundled sample BOM, offline, no API keys"),
     "rules": ("ecadlib.rules", "check or show the library rules"),
+    "style": ("ecadlib.house_style", "learn your house style from your library and your written direction; new parts follow it"),
     "ui": ("ecadlib.ui.server", "local web UI"),
     "team": ("ecadlib.team", "users and roles for the team web server (ecadlib ui --team)"),
     "mcp": ("ecadlib.mcp_server", "MCP server over stdio"),

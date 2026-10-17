@@ -14,6 +14,24 @@ class NotConfigured(Exception):
     pass
 
 
+def clean_text(v, limit=250):
+    """One line of plain text from an untrusted field (None / non-text -> ''), cut at `limit` characters."""
+    if not isinstance(v, str):
+        return ""
+    v = " ".join(v.split())
+    return v if len(v) <= limit else v[:limit - 3].rstrip() + "..."
+
+
+def describe(text="", category="", package=""):
+    """The part description a source gives: its own description text, else '<category>, <package>' when it names a
+    category (both are the distributor's words; nothing is made up). '' when it gives neither."""
+    text = clean_text(text)
+    if text:
+        return text
+    category = clean_text(category, 120)
+    return ", ".join(x for x in (category, clean_text(package, 80)) if x) if category else ""
+
+
 @dataclass
 class SourceResult:
     provider: str
@@ -100,6 +118,10 @@ def parse_easyeda(data, res):
                 res.has_3d = True
                 res.extra["model_uuid"] = attrs.get("uuid", "")
     res.extra["footprint_name"] = pkg.get("title", "")
+    tags = r.get("tags") if isinstance(r.get("tags"), list) else []
+    desc = describe(r.get("description"), next((t for t in tags if isinstance(t, str) and t.strip()), ""), res.package)
+    if desc:                                   # result.description (LCSC's text), else its category tag + package
+        res.extra["description"] = desc
     return res
 
 
@@ -109,13 +131,33 @@ class JLCPCBSearch(Provider):
     auth = "none (anonymous JSON POST; Origin/Referer jlcpcb.com) - as used by easyeda2kicad search"
     URL = "https://jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood/selectSmtComponentList"
     HEADERS = {"Content-Type": "application/json", "Origin": "https://jlcpcb.com", "Referer": "https://jlcpcb.com/parts"}
+    REFUSED = {403: "JLCPCB refused the request (403)", 429: "JLCPCB refused the request (429, too many requests)"}
+
+    def post(self, keyword, size=10):
+        """One search request. JLCPCB answers 403 (or 429) when it blocks automated searches: that is reported as
+        'JLCPCB refused the request (403)' and the rest of the run sends JLCPCB nothing more (no retries, no hammering;
+        the refusal is kept on the HTTP client, so every JLCPCB source sharing it stops). Callers go on to their other
+        sources."""
+        from .httpcache import Response
+        refused = getattr(self.http, "_jlcpcb_refused", None)
+        if refused:
+            return Response(refused[0], "", error=f"{refused[1]}; not asked again this run")
+        r = self.http.post(self.URL, json.dumps({"keyword": keyword, "currentPage": 1, "pageSize": size}), headers=self.HEADERS)
+        if r.status in self.REFUSED and not r.ok:
+            msg = self.REFUSED[r.status]
+            try:
+                self.http._jlcpcb_refused = (r.status, msg)
+            except AttributeError:            # a client that takes no attributes: nothing remembered
+                pass
+            return Response(r.status, r.text, error=f"{msg}: the site blocks automated part searches from here; "
+                                                    "other sources are still tried (set the LCSC number in the BOM to skip the search)")
+        return r
 
     def lookup(self, line):
         mpn = (line.get("mpn") or "").strip()
         if not mpn:
             return SourceResult(self.name, found=None, error="no MPN")
-        body = json.dumps({"keyword": mpn, "currentPage": 1, "pageSize": 10})
-        r = self.http.post(self.URL, body, headers=self.HEADERS)
+        r = self.post(mpn)
         res = SourceResult(self.name, mpn=mpn)
         if not r.ok:
             res.error = r.error or f"HTTP {r.status}"
@@ -134,6 +176,10 @@ class JLCPCBSearch(Provider):
             res.manufacturer = best.get("componentBrandEn", "")
             res.package = best.get("componentSpecificationEn", "")
             res.extra = {"stock": best.get("stockCount"), "library_type": best.get("componentLibraryType")}
+            desc = describe(best.get("describe") or best.get("description"),
+                            best.get("secondSortName") or best.get("firstSortName"), res.package)
+            if desc:                           # JLCPCB/LCSC's description of the part, else its category + package
+                res.extra["description"] = desc
         return res
 
 

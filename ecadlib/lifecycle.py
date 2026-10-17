@@ -292,7 +292,7 @@ class JLCLifecycle(P.JLCPCBSearch):
         if not (lcsc or mpn):
             res.error = "no MPN or LCSC number"
             return res
-        r = self.http.post(self.URL, json.dumps({"keyword": lcsc or mpn, "currentPage": 1, "pageSize": 10}), headers=self.HEADERS)
+        r = self.post(lcsc or mpn)
         if not r.ok:
             return _http_error(res, r)
         try:
@@ -579,7 +579,7 @@ COLS = ["change", "mpn", "manufacturer", "name", "prev_status", "status", "prev_
 def write_reports(rows, out, meta, provs, unconfigured, http, a365=None):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8") as f:
+    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=COLS, extrasaction="ignore")
         w.writeheader()
         w.writerows({**r, "sources": ",".join(r["sources"])} for r in rows)

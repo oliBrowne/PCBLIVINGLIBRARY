@@ -273,14 +273,19 @@ def test_silk_text():
     expect(t.replace(ref, ref.replace("(size 1 1)", "(size 0.3 0.3)")), "silktext", "error")
     over = t.replace(ref, ref.replace("(at 0 -3.4 0)", "(at -1.9 1.9 0)"))
     assert any("over pad 4" in m for l, r, m in run(over) if r == "silktext" and l == "error"), run(over)
+    # a reference on F.Fab at the centre (what put .Designator over the part in the real Altium run): altium_lib now
+    # keeps a Fab reference on Mechanical 13, so the export has no designator on Top Overlay to clash
     centre = t.replace(ref, ref.replace("(at 0 -3.4 0)", "(at 0 0 0)").replace('"F.SilkS"', '"F.Fab"'))
-    assert any("Altium export" in m and "body" in m for l, r, m in run(centre) if r == "silktext"), run(centre)
+    assert not [m for l, r, m in run(centre) if r == "silktext"], run(centre)
+    assert {x[0]: x[6] for x in AL.texts_from_kicad(sexpr.parse(centre))}[".Designator"] == AL.MECH13
+    on_silk = t.replace(ref, ref.replace("(at 0 -3.4 0)", "(at 0 0 0)"))       # the same on silk: over the body
+    assert any("body" in m for l, r, m in run(on_silk) if r == "silktext"), run(on_silk)
     hidden = t.replace(ref, ref.replace("(size 1 1)", "(size 3 3)").replace("(layer \"F.SilkS\")", "(layer \"F.SilkS\") (hide yes)"))
     hid = [m for l, r, m in run(hidden) if r == "silktext"]       # hidden in KiCad, but the export still shows it
     assert hid and all(m.startswith("in the Altium export") for m in hid), hid
     assert R.text_box(0, 0, 1.0, 2, 90) == R.text_box(0, 0, 1.0, 2, 270)
     with tempfile.TemporaryDirectory() as d:
-        for text, want in ((t, None), (over, "over pad 4"), (centre, "over the part body"),
+        for text, want in ((t, None), (over, "over pad 4"), (centre, None), (on_silk, "over the part body"),
                            (t.replace(ref, ref.replace("(size 1 1)", "(size 3 3)")), "3 mm high")):
             f = Path(d) / "x.PcbLib"
             AL.write_pcblib(f, [AL.footprint_from_kicad(text)])

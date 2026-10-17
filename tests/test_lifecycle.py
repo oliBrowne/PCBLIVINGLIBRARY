@@ -312,7 +312,7 @@ def test_cli_runs_and_exit_codes():
             assert run() == 0                                                   # unchanged
             _seed(f"{d}/c", "LM339", "Last Time Buy", 500); _seed(f"{d}/c", "NE555", "Production", 0)
             assert run("--no-save") == 1                                        # LTB + out of stock
-            rows = {r["mpn"]: r for r in csv.DictReader(open(f"{d}/r.csv"))}
+            rows = {r["mpn"]: r for r in csv.DictReader(open(f"{d}/r.csv", encoding="utf-8-sig"))}
             assert rows["LM339"]["change"] == "worse" and rows["LM339"]["prev_status"] == "active" and rows["LM339"]["status"] == "ltb"
             assert rows["NE555"]["change"] == "worse" and rows["NE555"]["stock"] == "0"
             md = Path(f"{d}/r.md").read_text()

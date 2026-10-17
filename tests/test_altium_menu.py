@@ -638,6 +638,83 @@ def test_cli_workspace_and_mcp():
     assert "altium_menu" in {t["name"] for t in M.TOOLS}
 
 
+
+def test_build_writes_this_pythons_command_on_windows_and_fills_an_empty_one():
+    exe = "C:\\Users\\Oliver\\ecadlib venv\\Scripts\\python.exe"
+    assert AM.default_command(exe, nt=True) == '"C:\\Users\\Oliver\\ecadlib venv\\Scripts\\python.exe" -m ecadlib'
+    assert AM.default_command(exe, nt=False) == ""               # built elsewhere: that Python is not on the Altium PC
+    assert AM.default_command('C:\\a"b\\python.exe', nt=True) == ""
+    with mock.patch.object(AM, "_short_path", lambda p: "C:\\Users\\OLIVER~1\\venv\\Scripts\\python.exe"):
+        assert AM.default_command("C:\\Users\\Olivér\\venv\\Scripts\\python.exe", nt=True) == \
+            '"C:\\Users\\OLIVER~1\\venv\\Scripts\\python.exe" -m ecadlib'           # the .ini stays ASCII
+    cmd = AM.default_command(exe, nt=True)
+    d = _tmp()
+    with mock.patch.object(AM, "default_command", lambda *a, **k: cmd):
+        rep = AM.build(d / "new", "ws", None)
+        assert rep["command"] == cmd and not rep["command_filled"], rep
+        raw = (d / "new" / AM.INI).read_bytes()
+        assert b'\r\ncommand="C:\\Users\\Oliver\\ecadlib venv\\Scripts\\python.exe" -m ecadlib\r\n' in raw
+        assert AM.load_command(d / "new" / AM.INI) == cmd                  # TIniFile keeps a value that only starts with "
+        # what the runner does with it: set /p reads the line, %ECADLIB% altium-menu run-job "<job>" runs it
+        line = f'{cmd} altium-menu run-job "C:\\menu\\jobs\\1"'
+        assert argv_w(line) == [exe, "-m", "ecadlib", "altium-menu", "run-job", "C:\\menu\\jobs\\1"]
+        # an older build left command= empty: a rebuild fills only that line; an edited command= is kept
+        old = AM.ini_text("ws", "lib", command="").replace("port=8765", "port=9001").encode()
+        (d / "old").mkdir()
+        (d / "old" / AM.INI).write_bytes(old)
+        rep = AM.build(d / "old", "elsewhere", None)
+        assert rep["command_filled"] and rep["kept"] == [AM.INI], rep
+        assert (d / "old" / AM.INI).read_bytes() == old.replace(b"\r\ncommand=\r\n", b"\r\ncommand=" + cmd.encode() + b"\r\n")
+        mine = old.replace(b"\r\ncommand=\r\n", b"\r\ncommand=ecadlib\r\n")
+        (d / "old" / AM.INI).write_bytes(mine)
+        assert not AM.build(d / "old", "x", None)["command_filled"] and (d / "old" / AM.INI).read_bytes() == mine
+        rep = AM.build(d / "given", "ws", None, command="py -3.13 -m ecadlib")   # --command wins
+        assert rep["command"] == "py -3.13 -m ecadlib"
+    readme = (d / "new" / AM.README).read_text()
+    assert "venv" in readme and "come back held" in readme and "setx ANTHROPIC_API_KEY" in readme
+
+
+def test_installed_libraries_are_counted_with_the_installed_count():
+    from ecadlib import altium_pkg as AP
+    for text in (AM.pas_text(), AP.install_script("lib", ["lib.DbLib"], "lib.LibPkg", ["SchLib\\a.SchLib"])):
+        assert "AvailableLibraryCount" not in text
+        loops = re.findall(r"For i := .*LibraryCount.*Do", text)
+        assert loops and all("InstalledLibraryCount" in l for l in loops), loops
+        assert "InstalledLibraryPath(i)" in text
+    src = Path(AP.__file__).read_text()
+    assert "AvailableLibraryCount" not in src and src.count("InstalledLibraryCount") == 2
+
+
+def test_doctor_checks_the_menus_command():
+    from ecadlib import doctor as DR
+    d = _tmp()
+    ini = d / AM.INI
+    ini.write_bytes(AM.ini_text(command="").encode())
+    c = DR.check_altium_menu(ini)
+    assert c["level"] == "WARN" and "command= is empty" in c["detail"] and "venv" in c["detail"], c
+    ini.write_bytes(AM.ini_text(command=f'"{d / "nope" / "python.exe"}" -m ecadlib').encode())
+    assert DR.check_altium_menu(ini)["level"] == "FAIL" and "does not exist" in DR.check_altium_menu(ini)["detail"]
+    ini.write_bytes(AM.ini_text(command=f'"{sys.executable}" -m ecadlib').encode())
+    seen = []
+    def run(argv, **kw):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "ecadlib 9.9\n", "")
+    c = DR.check_altium_menu(ini, run=run)
+    assert c["level"] == "OK" and "ecadlib 9.9" in c["detail"] and seen == [[sys.executable, "-m", "ecadlib", "--version"]], (c, seen)
+    c = DR.check_altium_menu(ini, run=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", "No module named ecadlib"))
+    assert c["level"] == "FAIL" and "No module named ecadlib" in c["detail"], c
+    assert DR.split_command('"C:\\Program Files\\Python\\python.exe" -m ecadlib') == ["C:\\Program Files\\Python\\python.exe", "-m", "ecadlib"]
+    assert DR.split_command("py -3 -m ecadlib") == ["py", "-3", "-m", "ecadlib"]
+    assert DR.find_menu_ini(d) == ini and DR.find_menu_ini(None, cwd=d) == ini and DR.find_menu_ini(None, cwd=d / "x") is None
+    # really running it (this Python, from the checkout): the same check the user gets
+    env = dict(os.environ, PYTHONPATH=str(ROOT))
+    with mock.patch.dict(os.environ, env):
+        c = DR.check_altium_menu(ini)
+    assert c["level"] == "OK", c
+    rep = DR.run(str(d / "ws"), altium_menu=str(d))
+    assert any(x["check"] == "altium menu" for x in rep["checks"])
+
+
 if __name__ == "__main__":
     for k, v in list(globals().items()):
         if k.startswith("test_"):
