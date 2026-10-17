@@ -20,7 +20,7 @@ from pathlib import Path, PureWindowsPath
 import pandas as pd
 
 from .altium_lib import file_stem, lib_name
-from .bom_triage import read_bom
+from .bom_triage import placeholder_mpn, read_bom
 from .kicad_index import package_of
 
 COLUMNS = ["Part Number", "Library Ref", "Library Path", "Footprint Ref", "Footprint Path",
@@ -80,6 +80,8 @@ def to_rows(lines, triage=None, rules=None):
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
         cat = CATEGORY.get(prefix.group(0) if prefix else "U", "Misc")
         mpn, lcsc = ln.get("mpn", ""), ln.get("lcsc", "")
+        if placeholder_mpn(mpn):               # 'N/A' / '-' names no part: two such lines are two parts, not one
+            mpn = ""
         fp = ln.get("footprint", "")
         t = tri.get(mpn)
         ref, kind = (prefix.group(0) if prefix else "U"), None
