@@ -116,6 +116,9 @@ def fp_kicad8(t, notes):
             if isinstance(c, list) and c:
                 if c[0] in FP_DROP or (node[0] == "zone" and c[0] == "placement") or (node[0] == "footprint" and c[0] == "generator_version"):
                     continue
+                if node[0] == "footprint" and c[0] == "point":   # KiCad 10 snap point: KiCad 7-9 refuse the whole file
+                    K._note(notes, "KiCad 10 (point ...) markers dropped")
+                    continue
                 if c[0] in FP_NEWER:
                     K._note(notes, f"KiCad 9+ node ({c[0]} ...) kept: may not load in KiCad 8")
             out.append(walk(c, node[0]))
