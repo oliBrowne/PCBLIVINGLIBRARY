@@ -26,7 +26,7 @@ async function local(browser, width) {
   const p = await page(browser, width), w = `@${width}`;
   await p.goto(cfg.local[width]);
   await p.waitForSelector("#steps:not([hidden])");
-  check("nav shown" + w, await p.locator("#steps a").count() === 7);
+  check("nav shown" + w, await p.locator("#steps a").count() === 8);
   check("no sideways scroll on load" + w, await overflow(p) <= 0, await overflow(p));
   await step("upload" + w, async () => {
     await p.setInputFiles("#file", cfg.bom);
@@ -40,6 +40,48 @@ async function local(browser, width) {
     check("go to step 2 scrolls there" + w, box && box.y < 300, box && box.y);
     check("focus lands on Fill missing parts" + w, await p.evaluate(() => document.activeElement && document.activeElement.id) === "librun");
   });
+  await step("part cards" + w, async () => {
+    const id = await p.evaluate(async () => (await (await fetch("/api/triage/history")).json()).triages.find(h => h.bom === "uploads/sample_bom.csv").id);
+    await p.click(`#histrows [data-open="${id}"]`);
+    await p.waitForSelector("#plist .pcard", { timeout: 20000 });
+    check("parts shown as cards" + w, await p.locator("#plist .pcard").count() === 14, await p.locator("#plist .pcard").count());
+    check("cards have footprint pictures" + w, await p.locator("#plist .thumb svg").count() >= 6, await p.locator("#plist .thumb svg").count());
+    const r9 = await text(p, "#libout .r9");
+    check("round-9 info: cross-check, KiCad/Altium, cost, model" + w, /cross-check: 1 disagree/.test(r9) && /KiCad \/ Altium: 1 differ/.test(r9) && /\$0\.111/.test(r9) && /claude-sonnet-4-5/.test(r9), r9);
+    await p.fill("#pq", "TPS");
+    check("search filters parts" + w, await p.locator("#plist .pcard").count() === 2, await p.locator("#plist .pcard").count());
+    await p.fill("#pq", "");
+    await p.click('#libout [data-pf="held"]');
+    check("held chip filters" + w, await p.locator("#plist .pcard").count() === 8);
+    await p.click('#libout [data-pf=""]');
+    await p.click('#plist [data-openp="TPS62133RGTR"]');
+    await p.waitForSelector("#panel.open");
+    const pt = await text(p, "#pbody");
+    check("panel: held reason in plain words with both values" + w, /disagree on pin pitch \(0\.65 mm vs 0\.5 mm\)/.test(pt) && /Next:/.test(pt), pt);
+    check("panel: cross-check table has both values" + w, /0\.65 mm/.test(await text(p, "#pbody table.vs")) && /0\.5 mm/.test(await text(p, "#pbody table.vs")));
+    check("panel: opens the datasheet page" + w, /#page=34$/.test(await p.getAttribute("#pdslink", "href") || ""), await p.getAttribute("#pdslink", "href"));
+    check("panel: pick and release actions" + w, await p.locator("#pbody [data-pick]").count() === 1 && await p.locator("#pbody [data-allow]").count() === 1);
+    check("panel gets focus" + w, await p.evaluate(() => document.activeElement && document.activeElement.id) === "panel");
+    check("no sideways scroll with the panel open" + w, await overflow(p) <= 0, await overflow(p));
+    await shot(p, `panel-${width}`);
+    await p.keyboard.press("Escape");
+    check("Escape closes the panel and focus returns to the part" + w, !(await p.locator("#panel.open").count()) &&
+      await p.evaluate(() => document.activeElement && document.activeElement.dataset.openp) === "TPS62133RGTR");
+    await p.click('#plist [data-openp="STM32F103C8T6"]');
+    await p.waitForSelector("#panel.open");
+    const vs = await text(p, "#pbody table.vs");
+    check("panel: KiCad and Altium values side by side" + w, /0\.3 x 1\.5 mm/.test(vs) && /0\.3 x 1\.45 mm/.test(vs), vs);
+    await p.click("#pclose");
+    await p.keyboard.press("?");
+    check("? opens the shortcut list" + w, await p.locator("#keysdlg[open]").count() === 1);
+    await p.keyboard.press("Escape");
+    await p.evaluate(() => document.activeElement && document.activeElement.blur());
+    await p.keyboard.press("j"); await p.keyboard.press("j"); await p.keyboard.press("k");
+    check("j moves to the first part" + w, await p.evaluate(() => document.activeElement && document.activeElement.dataset.openp) === "CAP-0402-100nF");
+    await p.keyboard.press("Enter");
+    check("Enter opens the part under focus" + w, (await text(p, "#ptitle")) === "CAP-0402-100nF");
+    await p.keyboard.press("Escape");
+  });
   await step("bad upload" + w, async () => {
     await p.setInputFiles("#file", { name: "notes.csv", mimeType: "text/csv", buffer: Buffer.from("hello world\n") });
     await p.waitForSelector("#error .banner", { timeout: 30000 });
@@ -50,8 +92,13 @@ async function local(browser, width) {
     check("bad upload: error scrolled into view" + w, box && box.y >= 0 && box.y < 900, box && box.y);
   });
   await step("librarian" + w, async () => {
+    await p.evaluate(() => { window.__lines = []; new MutationObserver(() => document.querySelectorAll("#liblines li").forEach(li => window.__lines.push(li.textContent)))
+      .observe(document.querySelector("#liblines"), { childList: true, subtree: true }); });
     await p.click("#librun");
     await p.waitForSelector("#libbusy:not([hidden])", { timeout: 5000 }).then(() => check("librarian shows progress in its own card" + w, true)).catch(() => check("librarian shows progress in its own card" + w, true, "finished before the first poll"));
+    await p.waitForFunction(() => window.__lines.some(t => /\d+\/\d+ /.test(t)), null, { timeout: 15000 })
+      .then(() => check("librarian lists parts live" + w, true)).catch(async () => check("librarian lists parts live" + w, false, JSON.stringify(await p.evaluate(() => window.__lines.slice(-3)))));
+    check("page stays usable while it runs" + w, await p.isEnabled("#qreload") && await p.isEnabled("#newfp"));
     await p.waitForSelector("#libtools:not([hidden])", { timeout: 60000 });
     const t = await text(p, "#libout .next");
     check("librarian says what next" + w, /held/.test(t) && /Pick/.test(t) && /step 3/.test(t), t);
@@ -62,6 +109,30 @@ async function local(browser, width) {
     await p.fill("#signer", "");
     await p.locator("#libout [data-approve]").first().click();
     check("approve without a name explains" + w, /Type your name first/.test(await text(p, "#approut")));
+  });
+  await step("approve with undo" + w, async () => {
+    await p.fill("#signer", "Ann Lee");
+    const part = await p.locator("#plist [data-approve]").first().getAttribute("data-approve");
+    await p.locator("#plist [data-approve]").first().click();
+    check("approve shows at once (optimistic)" + w, await p.locator(`#plist .pcard.pending[data-part="${part}"]`).count() === 1);
+    await p.locator("#toast .t button", { hasText: "Undo" }).last().click();
+    check("undo puts it back" + w, await p.locator("#plist .pcard.pending").count() === 0 && /undone, nothing was sent/.test(await text(p, "#toast")));
+    await p.waitForTimeout(6500);
+    check("an undone approval is never sent" + w, !/approved by/.test(await text(p, `#plist .pcard[data-part="${part}"]`)));
+    await p.locator(`#plist [data-approve="${part}"]`).click();
+    await p.waitForFunction(pt => { const c = document.querySelector(`#plist .pcard[data-part="${pt}"]`); return c && !c.classList.contains("pending") && /approved by Ann Lee/.test(c.innerText); }, part, { timeout: 15000 });
+    check("approval sent after the undo window" + w, true);
+  });
+  await step("release anyway with undo" + w, async () => {
+    await p.click('#plist [data-openp="TYPE-C-31-M-12"]');
+    await p.waitForSelector("#pbody [data-allow]");
+    await p.click("#pbody [data-allow]");
+    await p.waitForSelector('#plist .pcard[data-part="TYPE-C-31-M-12"] .pill.s-info', { timeout: 10000 });
+    check("release anyway is recorded at once" + w, /released anyway/.test(await text(p, '#plist .pcard[data-part="TYPE-C-31-M-12"]')));
+    await p.locator("#toast .t button", { hasText: "Undo" }).last().click();
+    await p.waitForFunction(() => !/released anyway/.test(document.querySelector('#plist .pcard[data-part="TYPE-C-31-M-12"]').innerText), null, { timeout: 10000 });
+    check("undo holds it again" + w, true);
+    await p.click("#pclose");
   });
   await step("altium" + w, async () => {
     check("dry run disabled says why" + w, await p.getAttribute("#dry", "title") === "Click Plan release first");
@@ -80,7 +151,8 @@ async function local(browser, width) {
     check("queue approve without a name explains" + w, /Type your name/.test(await text(p, "#qdecerr")));
     await p.fill("#qsigner", "Ann Lee");
     await p.click('#qview [data-q="approve"]');
-    await p.waitForSelector("#qdecerr .next", { timeout: 10000 });
+    check("queue approve can be undone for a few seconds" + w, /sending in a few seconds/.test(await text(p, "#qdecerr")));
+    await p.waitForSelector("#qdecerr .next", { timeout: 20000 });
     const t = await text(p, "#qdecerr");
     check("queue approve says what happens next" + w, /^Approved .*next pass/.test(t), t);
     const chip = p.locator("#qchips .chip").first();
@@ -103,6 +175,82 @@ async function local(browser, width) {
   });
   check("no page errors" + w, !p.errors.length, p.errors.join(" | "));
   await p.context().close();
+}
+
+async function demo(browser, width) {
+  const p = await page(browser, width), w = `@${width}`;
+  await p.goto(cfg.demo[width]);
+  await p.waitForSelector("#welcome:not([hidden])");
+  check("first visit: welcome offers the sample" + w, /Try it with a sample BOM/.test(await text(p, "#welcome")) && await p.isVisible("#welcomedoctor"));
+  await shot(p, `welcome-${width}`);
+  await p.click("#demobtn");
+  await p.waitForSelector("#plist .pcard", { timeout: 60000 });
+  check("sample builds a 7-part library" + w, await p.locator("#plist .pcard").count() === 7, await p.locator("#plist .pcard").count());
+  check("welcome goes away after the sample" + w, await p.locator("#welcome").isHidden());
+  check("demo: no sideways scroll" + w, await overflow(p) <= 0, await overflow(p));
+  // your library: a tile per tool, that tool's library, every tool side by side, and a part page
+  await p.click('#steps a[href="#hubcard"]');
+  await p.waitForFunction(() => document.querySelectorAll("#hubrows tr").length >= 6 && /AO3401A/.test(document.querySelector("#hubrows").innerText), null, { timeout: 30000 });
+  check("library: a tile per tool, the busiest one open" + w, await p.locator("#hubtools [data-hubtool]").count() >= 6 &&
+    await p.locator('#hubtools [aria-selected="true"]').count() === 1 && /library/i.test(await text(p, "#hubhead")));
+  await p.locator('#hubtools [data-hubtool="kicad"]').click();
+  await p.waitForFunction(() => document.querySelector('[data-hubtool="kicad"]').getAttribute("aria-selected") === "true", null, { timeout: 30000 });
+  if (!/AO3401A/.test(await text(p, "#hubrows")) || !(await p.locator("#hubwrap").isVisible())) {   // the sample is Altium only: copy it over
+    await p.locator("#hubtoolhead [data-hubcopyall]").click();
+    await p.waitForFunction(() => /Copied \d+ part/.test(document.querySelector("#hubnote").innerText), null, { timeout: 60000 });
+  }
+  await p.waitForFunction(() => /AO3401A/.test(document.querySelector("#hubrows").innerText), null, { timeout: 30000 });
+  check("library: the KiCad tile shows the KiCad library" + w, /\.kicad_sym/.test(await text(p, "#hubrows")) && /same/.test(await text(p, "#hubrows")));
+  await p.locator('#hubtools [data-hubtool="all"]').click();
+  await p.waitForFunction(() => /KiCad/i.test(document.querySelector("#hubhead").innerText) && document.querySelectorAll("#hubrows tr").length >= 7, null, { timeout: 30000 });
+  check("library: compare all shows a column per tool" + w, /same/.test(await text(p, "#hubrows")) && /Altium 365/i.test(await text(p, "#hubhead")));
+  check("library: tiles fit the screen" + w, await overflow(p) <= 0, await overflow(p));
+  await p.locator("#hubrows tr").first().click();
+  await p.waitForSelector("#hubdlg[open] .copies tbody tr", { timeout: 30000 });
+  check("library: part page lists each copy" + w, await p.locator("#hubdlg .copies tbody tr").count() >= 2);
+  check("library: part page fits the screen" + w, await p.evaluate(() => { const d = document.querySelector("#hubdlg"); return d.scrollWidth <= d.clientWidth + 1; }));
+  await shot(p, `library-part-${width}`);
+  await p.keyboard.press("Escape");
+  check("library: Escape closes the part page" + w, await p.locator("#hubdlg[open]").count() === 0);
+  // a BOM dropped anywhere on the page is checked
+  await p.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["Designator,Qty,Value,Footprint,Mfr. Part #\nR1,1,10k,R_0603_1608Metric,0603WAF1002T5E\n"], "dropped.csv", { type: "text/csv" }));
+    for (const t of ["dragenter", "dragover", "drop"]) document.querySelector("#queuecard").dispatchEvent(new DragEvent(t, { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  await p.waitForFunction(() => /dropped\.csv/.test(document.querySelector("#bomname").textContent), null, { timeout: 30000 });
+  check("drop anywhere checks the BOM" + w, true);
+  check("drop overlay hidden again" + w, !(await p.locator("#dropall.on").count()));
+  check("demo: no page errors" + w, !p.errors.length, p.errors.join(" | "));
+  await p.context().close();
+}
+
+// contrast of text on its background in both themes, labels on every control, reduced motion
+async function a11y(browser) {
+  const ratio = `(() => {
+    const lum = c => { const k = /^color\\(srgb/.test(c) ? 1 : 255; const [r, g, b] = c.match(/[\\d.]+/g).slice(0, 3).map(Number).map(v => { v /= k; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; }); return .2126 * r + .7152 * g + .0722 * b; };
+    const bg = el => { for (; el; el = el.parentElement) { const c = getComputedStyle(el).backgroundColor; if (!/rgba\\(0, 0, 0, 0\\)|transparent/.test(c)) return c; } return "rgb(255,255,255)"; };
+    const host = document.createElement("div"); document.querySelector("#libcard").appendChild(host);
+    host.innerHTML = '<span class="pill s-ok">a</span><span class="pill s-warn">a</span><span class="pill s-bad">a</span><span class="pill s-info">a</span><span class="pill s-off">a</span><span class="muted">a</span><div class="next s-warn">a</div><button class="primary">a</button><table class="vs"><tr><td class="diff">a</td></tr></table>';
+    const out = [...host.querySelectorAll("span, div, button, td")].map(e => { const a = lum(getComputedStyle(e).color), b = lum(bg(e)); return [e.className, (Math.max(a, b) + .05) / (Math.min(a, b) + .05)]; });
+    host.remove(); return out; })()`;
+  for (const scheme of ["light", "dark"]) {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: scheme, reducedMotion: "reduce" });
+    const p = await ctx.newPage();
+    await p.goto(cfg.local["1280"]);
+    await p.waitForSelector("#steps:not([hidden])");
+    const bad = (await p.evaluate(ratio)).filter(([, r]) => r < 4.5);
+    check(`contrast >= 4.5:1 (${scheme})`, !bad.length, JSON.stringify(bad));
+    const unlabeled = await p.evaluate(() => [...document.querySelectorAll("button, input, select, textarea")].filter(e => {
+      if (e.type === "hidden" || e.type === "file" || e.closest("[hidden]")) return false;
+      const lab = e.getAttribute("aria-label") || (e.labels && e.labels.length && e.labels[0].textContent.trim()) || e.textContent.trim() || e.placeholder;
+      return !lab; }).map(e => e.id || e.outerHTML.slice(0, 60)));
+    check(`every control has a label (${scheme})`, !unlabeled.length, unlabeled.join(", "));
+    check(`reduced motion: no panel animation (${scheme})`, parseFloat(await p.evaluate(() => getComputedStyle(document.querySelector("#panel")).transitionDuration)) < 0.02);
+    await p.keyboard.press("Tab");
+    check(`first Tab lands on Skip to content (${scheme})`, (await p.evaluate(() => document.activeElement.textContent)) === "Skip to content");
+    await ctx.close();
+  }
 }
 
 async function empty(browser, width) {
@@ -151,7 +299,9 @@ async function team(browser, width) {
       if (cfg.local) await local(browser, width).catch(e => check("local run", false, e.message));
       if (cfg.empty) await empty(browser, width).catch(e => check("empty run", false, e.message));
       if (cfg.team) await team(browser, width).catch(e => check("team run", false, e.message));
+      if (cfg.demo) await demo(browser, width).catch(e => check("demo run", false, e.message));
     }
+    await a11y(browser).catch(e => check("a11y run", false, e.message));
   } finally { await browser.close(); }
   console.log(JSON.stringify({ checks }));
 })();

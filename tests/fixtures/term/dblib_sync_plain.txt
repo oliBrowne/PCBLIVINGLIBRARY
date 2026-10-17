@@ -1,0 +1,12 @@
+  added  Capacitors   CAP-0402-100nF
+  added  Diodes       KT-0603R
+  added  ICs          AMS1117-3.3
+  held   ICs          CH340C          There is no symbol for this part yet.
+  added  Resistors    RES-0603-10k
+  added  Resistors    RES-0603-4.7k
+  added  Transistors  AO3401A
+would write SchLib/Capacitor.SchLib, PcbLib/C_0402_1005Metric.PcbLib, SchLib/KT-0603R.SchLib, PcbLib/LED_0603_1608Metric.PcbLib, SchLib/AMS1117-3.3.SchLib, PcbLib/SOT-223-3_TabPin2.PcbLib, SchLib/Resistor.SchLib, PcbLib/R_0603_1608Metric.PcbLib, SchLib/AO3401A.SchLib, PcbLib/SOT-23.PcbLib, ecadlib.xlsx, ecadlib.csv, ecadlib.DbLib, ecadlib_sync.json
+
+6 added, 1 held (dry run: nothing written; 14 files would be)
+next:
+  ecadlib dblib-sync ws/librarian/demo_bom_demo/plan.json --to dbs  # write it for real

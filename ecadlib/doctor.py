@@ -27,13 +27,22 @@ def _c(check, level, detail, hint=""):
     return {"check": check, "level": level, "detail": detail, "hint": hint}
 
 
+def _toml_ok():
+    try:
+        from .rules import toml_module
+        return toml_module() is not None
+    except ImportError:
+        return False
+
+
 def check_python(v=None):
     v = tuple(v or sys.version_info[:3])
     s = ".".join(map(str, v))
     if v < (3, 10):
         return _c("python", "FAIL", f"Python {s}", "ecadlib needs Python 3.10 or newer")
-    if v < (3, 11):
-        return _c("python", "WARN", f"Python {s}", "3.10 cannot read TOML: use ecadlib_rules.json, or Python 3.11+")
+    if v < (3, 11) and not (v == tuple(sys.version_info[:3]) and _toml_ok()):     # 3.10 reads TOML with tomli
+        return _c("python", "WARN", f"Python {s}", "3.10 cannot read TOML without tomli: pip install tomli, "
+                  "use ecadlib_rules.json, or Python 3.11+")
     return _c("python", "OK", f"Python {s}")
 
 
@@ -81,7 +90,7 @@ def key_services(rules=None):
     """[(service, [env var names], what it unlocks)] - the names come from the rules where the rules name them."""
     ds = ((rules or {}).get("datasheet") or {}).get("api_key_env") or "ANTHROPIC_API_KEY"
     gh = ((rules or {}).get("agent") or {}).get("github_token_env") or "GITHUB_TOKEN"
-    out = [("anthropic", [ds], "datasheet reader, visual-check")] if _ai_provider(rules) == "anthropic" else []
+    out = [("anthropic", [ds], "datasheet reader and visual check")] if _ai_provider(rules) == "anthropic" else []
     out += [("altium365", ["NEXAR_TOKEN"], "Altium 365 push / pull")]
     try:
         from . import providers as P
@@ -317,16 +326,31 @@ def run(workspace="ecadlib_workspace", libs=(), rules_path=None, environ=None):
     return {"ok": not any(c["level"] == "FAIL" for c in checks), "checks": checks}
 
 
-def render(rep):
-    w = max(len(c["check"]) for c in rep["checks"])
-    lines = []
-    for c in rep["checks"]:
-        lines.append(f"{c['level']:<4}  {c['check']:<{w}}  {c['detail']}")
-        if c["hint"] and c["level"] != "OK":
-            lines.append(f"      {'':<{w}}  -> {c['hint']}")
+def render(rep, styled=False, width=None, verbosity=0):
+    """Outcome first, then what must be fixed, then what is optional, then what is fine (each with its fix on the next
+    line). styled: glyphs + colour (a terminal); -q: only the outcome and the problems."""
+    import io
+    from . import term as TM
+    buf = io.StringIO()
+    t = TM.Term(buf, styled=styled, width=width, verbosity=verbosity)
     n = {lv: sum(c["level"] == lv for c in rep["checks"]) for lv in LEVELS}
-    lines.append(f"\n{n['OK']} ok, {n['WARN']} warning(s), {n['FAIL']} failure(s)")
-    return "\n".join(lines)
+    st = {"FAIL": "failed", "WARN": "warn", "OK": "ok"}
+    head = ("Ready to use." if not n["FAIL"] else f"Not ready: {n['FAIL']} problem{'s' if n['FAIL'] != 1 else ''} to fix first.") \
+        + (f" {n['WARN']} optional thing{'s' if n['WARN'] != 1 else ''} not set up." if n["WARN"] else "")
+    t.write(t.bold(head))
+    for lv, title in (("FAIL", "Fix these:"), ("WARN", "Optional (works without them):"), ("OK", "Fine:")):
+        group = [c for c in rep["checks"] if c["level"] == lv]
+        if not group or (lv == "OK" and t.quiet):
+            continue
+        t.write("\n" + title)
+        rows = []
+        for c in group:
+            rows.append([t.status(st.get(lv, "info"), lv) if styled else lv, c["check"], c["detail"]])
+            if c["hint"] and lv != "OK":
+                rows.append(["", "", f"-> {c['hint']}"])
+        t.table(rows, indent=0)
+    t.write(f"\n{n['OK']} ok, {n['WARN']} warning(s), {n['FAIL']} failure(s)")
+    return buf.getvalue().rstrip("\n")
 
 
 def main(argv=None):
@@ -337,7 +361,11 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help='print {"ok", "checks": [{"check", "level", "detail", "hint"}]}')
     a = ap.parse_args(argv)
     rep = run(a.workspace, a.lib, a.rules)
-    print(json.dumps(rep, indent=2) if a.json else render(rep))
+    if a.json:
+        print(json.dumps(rep, indent=2))
+    else:
+        from . import term as TM
+        print(render(rep, TM.wants_style(sys.stdout), TM.term_width(sys.stdout), TM.VERBOSITY))
     return 0 if rep["ok"] else 1
 
 

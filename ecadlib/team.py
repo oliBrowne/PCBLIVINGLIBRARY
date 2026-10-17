@@ -318,7 +318,8 @@ class Sessions:
 class Throttle:
     """Failed sign-ins per user name and per client address. Unknown names count too (no user enumeration)."""
     def __init__(self, max_failures=5, lockout_minutes=15, max_per_ip=30):
-        self.max, self.window, self.max_ip = max_failures, lockout_minutes * 60, max_per_ip
+        # at least one try: 0 in team.json used to index an empty list (every sign-in a 500), and is not "off"
+        self.max, self.window, self.max_ip = max(1, int(max_failures)), lockout_minutes * 60, max(1, int(max_per_ip))
         self.by_user, self.by_ip, self.lock = {}, {}, threading.Lock()
 
     def _recent(self, d, k, t):

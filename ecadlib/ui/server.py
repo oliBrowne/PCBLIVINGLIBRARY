@@ -10,13 +10,13 @@ Team mode (`--team`): one server for the whole team with sign-in (ecadlib/team.p
 team_users.json, session cookies, a CSRF token on every POST, a minimum role per route (ROUTES), approvals signed as
 the signed-in user, every write in team_audit.jsonl. A non-loopback address needs --cert/--key (built-in TLS) or an
 explicit --allow-http (behind an HTTPS reverse proxy on another host)."""
-import argparse, contextlib, hmac, io, http.cookies, ipaddress, itertools, json, mimetypes, secrets, socket, ssl, sys, threading, \
-    os, time, traceback, webbrowser
+import argparse, contextlib, hmac, io, http.cookies, ipaddress, itertools, json, mimetypes, re, secrets, socket, ssl, sys, \
+    threading, os, time, traceback, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from .. import agent_queue as AQ, team as TM
+from .. import agent_queue as AQ, hub as HUB, team as TM
 from ..app import Workspace
 from .. import easy_setup as ES
 
@@ -30,11 +30,14 @@ COOKIE = "ecadlib_session"
 # stays unreachable until it gets a role; tests/test_team.py checks every "/api/..." in this file is listed.
 PUBLIC = "public"
 ROUTES = {
-    ("GET", "/"): PUBLIC, ("GET", "/index.html"): PUBLIC,
+    ("GET", "/"): PUBLIC, ("GET", "/index.html"): PUBLIC, ("GET", "/hairline.js"): PUBLIC,
     ("GET", "/api/session"): PUBLIC, ("POST", "/api/login"): PUBLIC,
     ("POST", "/api/logout"): "viewer", ("POST", "/api/account/password"): "viewer",
     ("GET", "/api/info"): "viewer", ("GET", "/api/specs"): "viewer", ("GET", "/api/rules"): "viewer",
     ("GET", "/api/job"): "viewer", ("GET", "/api/file"): "viewer",
+    ("POST", "/api/job/cancel"): "viewer",                 # only the job's owner (or an admin) can see it to stop it
+    ("GET", "/api/parts"): "viewer",                       # a BOM's library plan as part cards (ecadlib.partview)
+    ("POST", "/api/demo"): "librarian",                    # first visit: the bundled sample BOM, checked and filled
     ("GET", "/api/status"): "viewer",                      # workspace summary (Status card)
     ("GET", "/api/doctor"): "admin",                       # setup check: tool paths, which API key names are set
     ("GET", "/api/triage/history"): "viewer", ("GET", "/api/triage/result"): "viewer",   # finished results: library data
@@ -54,6 +57,8 @@ ROUTES = {
     ("POST", "/api/agent/queue/approve"): "approver",
     ("POST", "/api/rules/propose"): "admin",               # reads any folder on the server
     ("POST", "/api/rules/save"): "admin",
+    ("GET", "/api/hub"): "viewer", ("GET", "/api/hub/part"): "viewer",   # library hub: every part across tools
+    ("POST", "/api/hub/fix"): "librarian", ("POST", "/api/hub/copy"): "librarian",
     ("GET", "/api/team/users"): "admin", ("POST", "/api/team/users"): "admin", ("GET", "/api/team/audit"): "admin",
 }
 LIVE_PUSH = "approver"
@@ -70,10 +75,17 @@ class Refused(Exception):
     """403 with a message (team mode: role too low for this variant of a route)."""
 
 
+class Cancelled(Exception):
+    """Raised inside a job's progress callback once someone pressed Stop (checked between lines / parts)."""
+
+
 class Jobs:
     """Long actions (triage looks parts up online, about a second per request) run in a thread; the page polls.
     Each job remembers who started it (team mode: only they and admins see it) and an optional key: a second job
-    with the same key, e.g. the librarian on one BOM, is refused while the first runs."""
+    with the same key, e.g. the librarian on one BOM, is refused while the first runs. A job keeps a short list of
+    per-part lines ({key, n, total, name, state, text}) for the live progress list, and can be stopped (cancel)."""
+    MAX_LINES = 400
+
     def __init__(self, root=None):
         self.jobs, self.ids, self.lock = {}, itertools.count(1), threading.Lock()
         self.root = root
@@ -86,22 +98,41 @@ class Jobs:
                                       + (f" (started by {busy['owner']})" if busy["owner"] else "") + "; wait for it to finish")
             jid = f"{next(self.ids)}-{secrets.token_hex(6)}"
             job = {"id": jid, "state": "running", "done": 0, "total": 0, "label": label, "result": None, "error": None,
-                   "owner": owner, "key": key}
+                   "owner": owner, "key": key, "lines": [], "cancel": False, "started": time.time()}
             self.jobs[jid] = job
             for old in [k for k in self.jobs if self.jobs[k]["state"] != "running"][:-20]:   # keep the last 20 finished
                 del self.jobs[old]
 
         def progress(done, total, lab):
+            if job["cancel"]:
+                raise Cancelled()
             job.update(done=done, total=total, label=lab)
+
+        def line(key, **kw):
+            """Add or update one line of the live list (by key, e.g. the part name)."""
+            with self.lock:
+                cur = next((x for x in job["lines"] if x["key"] == key), None)
+                if cur is None:
+                    if len(job["lines"]) >= self.MAX_LINES:
+                        return
+                    cur = {"key": key, "n": None, "total": None, "name": key, "state": "working", "text": ""}
+                    job["lines"].append(cur)
+                cur.update({k: v for k, v in kw.items() if v is not None})
+        progress.line = line
+        progress.sort = lambda: job["lines"].sort(key=lambda x: (x["n"] is not None, x["n"] or 0))
+        progress.cancelled = lambda: job["cancel"]
 
         def run():
             try:
                 job["result"] = fn(*args, progress=progress)
                 job["state"] = "done"
+            except Cancelled:
+                job["state"] = "cancelled"
             except Exception as e:
                 if not isinstance(e, EXPECTED):
                     traceback.print_exc()
                 job["error"], job["state"] = _msg(e, self.root), "error"
+            job["seconds"] = round(time.time() - job["started"], 1)
         threading.Thread(target=run, daemon=True).start()
         return {"job": jid}
 
@@ -112,14 +143,94 @@ class Jobs:
         job = self.jobs.get(jid)
         if job and user is not None and job["owner"] != user["username"] and user["role"] != "admin":
             return None                                     # team mode: other people's jobs are invisible
-        return job and {k: v for k, v in job.items() if k != "key"}
+        if not job:
+            return None
+        out = {k: v for k, v in job.items() if k not in ("key", "lines")}
+        out["lines"] = [dict(x) for x in list(job["lines"])]
+        out["elapsed"] = job.get("seconds") or round(time.time() - job["started"], 1)
+        return out
+
+    def cancel(self, jid, user=None):
+        """Ask a running job to stop at its next line or part. -> the job, or None when unknown / not yours."""
+        if self.get(jid, user) is None:
+            return None
+        job = self.jobs[jid]
+        if job["state"] == "running":
+            job["cancel"] = True
+        return self.get(jid, user)
+
+
+def _triage_word(status):
+    s = str(status or "")
+    return ("in your library" if s.startswith("in_library") else "not fitted" if s.startswith("dnp")
+            else "unverified" if s.startswith("unverified") else "needs work")
+
+
+def _line_lines(progress, what=None):
+    """Triage progress -> one live line per BOM line ("3/14 CL05B104KO5NNNC  checking")."""
+    def cb(done, total, label):
+        progress(done, total, label)
+        if what:
+            progress.line("__triage", state="working", text=f"{what}: line {min(done + 1, total)} of {total}")
+        elif done < total:
+            progress.line(f"line {done + 1}", n=done + 1, total=total, name=label, state="working",
+                          text=f"{done + 1}/{total} {label}  checking")
+    cb.line = progress.line
+    return cb
+
+
+_PART = re.compile(r"^\[(\d+)/(\d+)\] (.+)$")
+_DONE = re.compile(r"^(done|open|skip) +(\S.*?) +sym=(\S+) +fp=(\S+)")
+
+
+def _part_lines(progress):
+    """The librarian's log lines -> real part counts and one live line per part ("3/14 SOT-23  ready")."""
+    state = {"total": 0, "n": 0, "prev": None}
+
+    def cb(done, total, label):
+        m, d = _PART.match(label or ""), _DONE.match(label or "")
+        if m:
+            n, tot, name = int(m.group(1)), int(m.group(2)), m.group(3).strip()
+            if state["prev"]:
+                pn, pname = state["prev"]
+                progress.line(pname, state="found", text=f"{pn}/{tot} {pname}  looked up")
+            state.update(total=tot, n=n, prev=(n, name))
+            progress(n - 1, tot, name)
+            progress.line(name, n=n, total=tot, name=name, state="working", text=f"{n}/{tot} {name}  looking up")
+        elif d:
+            word = {"done": "found", "open": "still missing a symbol or footprint", "skip": "already done"}[d.group(1)]
+            progress.line(d.group(2), name=d.group(2), state="found" if d.group(1) != "open" else "missing",
+                          text=f"{d.group(2)}  {word}")
+            if state["total"]:
+                progress(state["total"], state["total"], "release check")
+        elif not state["total"]:                            # the log's own wording stays in the log
+            progress(0, 0, "finding symbols and footprints" if (label or "").startswith("finding") else "checking the BOM lines")
+        else:
+            progress(state["n"], state["total"], "checking each part before release")
+    cb.line = progress.line
+    return cb
+
+
+def _final_lines(progress, r):
+    """After the release check: every part's line says ready / held / waiting for sign-off."""
+    from .. import messages as M
+    rows = (r.get("review") if isinstance(r, dict) else None) or []
+    n = len(rows)
+    for i, x in enumerate(rows, 1):
+        word = M.status_word(x["status"])
+        progress.line(x["part"], n=i, total=n, name=x["part"], state=x["status"], text=f"{i}/{n} {x['part']}  {word}")
+    progress.sort()
+    return r
 
 
 def _msg(e, root=None):
     m = (e.args[0] if isinstance(e, KeyError) and e.args else str(e)) or type(e).__name__
     if root:                                                # workspace paths as the person sees them: relative
         m = str(m).replace(str(root) + os.sep, "").replace(str(root) + "/", "").replace(str(root), "the workspace")
-    return (m if isinstance(e, (ValueError, FileExistsError, PermissionError, KeyError)) else f"{type(e).__name__}: {m}")[:600]
+    from .. import messages as M                            # absolute paths and module names never reach the page
+    m = M.clean(m)
+    return (m if isinstance(e, (ValueError, FileExistsError, PermissionError, KeyError))
+            else f"Something went wrong ({type(e).__name__}: {m}). The terminal running ecadlib ui shows the details.")[:600]
 
 
 def _names(v):
@@ -137,6 +248,24 @@ def _str(v, what, optional=False):
     if not isinstance(v, str) or (not optional and not v.strip()):
         raise ValueError(f"{what} must be a non-empty string")
     return v
+
+
+def _int(v, default):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+_LOCAL_WHO = []
+
+
+def local_who():
+    """This computer's user, as approvals records it (ECADLIB_USER, git config, login name); looked up once."""
+    if not _LOCAL_WHO:
+        from ..approvals import identity
+        _LOCAL_WHO.append(identity())
+    return _LOCAL_WHO[0]
 
 
 def _strs(v, what):
@@ -339,6 +468,8 @@ def make_handler(ws: Workspace, team=None):
             bom = (body if body is not None else self._json()).get("bom")
             if not isinstance(bom, str) or not bom:
                 raise ValueError("no BOM given")
+            if len(bom) > 1000 or any(len(x) > 200 for x in bom.replace("\\", "/").split("/")):
+                raise ValueError("that BOM name is too long; pick a BOM from the list")
             if _team_file(ws, ws.inside(bom)):
                 raise ValueError(f"{bom} is not a BOM")
             if write and jobs.running("librarian:" + bom):
@@ -392,6 +523,8 @@ def make_handler(ws: Workspace, team=None):
                     return self._send(200, (STATIC / "setup.html").read_bytes(), "text/html; charset=utf-8")
                 if not team and u.path in ES.GET_ROUTES:
                     return self._send(200, ES.GET_ROUTES[u.path](ws.root, q))
+                if u.path == "/hairline.js":                    # the line figures (scripts/build_ui_figures.sh)
+                    return self._send(200, (STATIC / "hairline.js").read_bytes(), "text/javascript; charset=utf-8")
                 if u.path == "/api/session":
                     return self._send(200, self._session_info())
                 if u.path == "/api/info":
@@ -411,6 +544,19 @@ def make_handler(ws: Workspace, team=None):
                         return self._send(200, ws.triage_result(q.get("id", "")))
                     except KeyError as e:
                         return self._send(404, {"error": _msg(e)})
+                if u.path == "/api/parts":                      # part cards of a BOM's library plan
+                    return self._send(200, ws.library_parts(self._bom({"bom": q.get("bom")}), q.get("pictures") != "0"))
+                if u.path == "/api/hub":                        # the library hub: one page of parts, filtered
+                    lst = lambda k: [x for x in (q.get(k) or "").split(",") if x]
+                    return self._send(200, ws.hub(q.get("q", ""), lst("have"), lst("lack"), lst("state"), q.get("origin", ""),
+                                                  lst("flags"), q.get("sort", "name"), _int(q.get("page"), 1),
+                                                  _int(q.get("size"), 100), q.get("rescan") == "1",
+                                                  q.get("tool", ""), q.get("library", ""), q.get("project", "")))
+                if u.path == "/api/hub/part":
+                    try:
+                        return self._send(200, ws.hub_part(q.get("key", "")))
+                    except KeyError as e:
+                        return self._send(404, {"error": _msg(e)})
                 if u.path == "/api/job":                        # a running job (its live log): owner or admin only
                     job = jobs.get(q.get("id", ""), self.user if team else None)
                     return self._send(200, job) if job else self._send(404, {"error": "no such job"})
@@ -419,8 +565,10 @@ def make_handler(ws: Workspace, team=None):
                     if not p.is_file() or _team_file(ws, p):
                         return self._send(404, {"error": "not found"})
                     ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+                    plain = re.sub(r'[^\x20-\x7e]|["\\]', "_", p.name)   # headers are latin-1: UTF-8 name in filename*
                     return self._send(200, p.read_bytes(), ctype,
-                                      {"Content-Disposition": f'attachment; filename="{p.name}"'})
+                                      {"Content-Disposition": f'attachment; filename="{plain}"'
+                                                              + (f"; filename*=UTF-8''{quote(p.name, errors='replace')}" if plain != p.name else "")})
                 if u.path == "/api/agent/queue":
                     return self._send(200, ws.agent_queue_list(q.get("status") or None, q.get("batch") or None))
                 if u.path == "/api/agent/queue/item":
@@ -464,6 +612,15 @@ def make_handler(ws: Workspace, team=None):
             if u.path == "/api/footprint/preview":                # read-only, no lock
                 b = self._json()
                 return self._send(200, ws.preview_footprint(b["spec"], b.get("density")))
+            if u.path == "/api/job/cancel":                       # Stop: the job ends at its next line or part
+                job = jobs.cancel(_str(self._json().get("id"), "id"), self.user if team else None)
+                return self._send(200, job) if job else self._send(404, {"error": "no such job"})
+            if u.path == "/api/demo":                             # first visit: the bundled sample BOM, offline
+                self._json()
+                with write_lock:
+                    rel = ws.demo_bom()
+                return self._send(200, dict(jobs.start(self._demo, rel, self._owner(), label=rel, owner=self._owner(),
+                                                       key="librarian:" + rel), bom=rel))
             if u.path == "/api/upload":
                 name = unquote(self.headers.get("X-Filename", "bom.csv"))
                 self._fields = {"file": name[:200]}
@@ -477,6 +634,8 @@ def make_handler(ws: Workspace, team=None):
                 b = self._json()
                 bom = self._bom(b)
                 refresh = [] if b.get("refresh") is True else (b.get("refresh") or None)
+                with contextlib.suppress(Exception):
+                    HUB.note_action(ws.root, u.path, dict(b, bom=bom), self._who(b))
                 return self._send(200, jobs.start(self._librarian, bom, b.get("sources"), refresh, label=bom,
                                                   owner=self._owner(), key="librarian:" + bom))
             if u.path == "/api/resolve/candidates":               # may fetch KiCad library files: a background job
@@ -493,6 +652,26 @@ def make_handler(ws: Workspace, team=None):
                     raise ValueError("choices must map setting keys to values")
                 return self._send(200, jobs.start(self._propose, paths, a365, choices, label="library rules",
                                                   owner=self._owner()))
+            if u.path == "/api/hub/fix":                          # a fix button on the library hub
+                b = self._json()
+                key, action = _str(b.get("key"), "key"), _str(b.get("action"), "action")
+                if action == "build":                             # a one-line BOM through the librarian: a job
+                    with write_lock:
+                        bom = ws.hub_build_bom(key)
+                    HUB.record(ws.root, [{"when": HUB.now(), "who": self._who(b), "what": "asked ecadlib to build it",
+                                          "kind": "action", "key": key, "bom": bom}])
+                    return self._send(200, dict(jobs.start(self._librarian, bom, None, None, label=bom, owner=self._owner(),
+                                                           key="librarian:" + bom), bom=bom))
+                with write_lock:
+                    return self._send(200, ws.hub_fix(key, action, self._who(b)))
+            if u.path == "/api/hub/copy":                         # copy parts to another tool (and into a project)
+                b = self._json()
+                keys = b.get("keys")
+                if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys) or len(keys) > 2000:
+                    raise ValueError("keys must be a list of part keys from /api/hub")
+                with write_lock:
+                    return self._send(200, ws.hub_copy(keys, _str(b.get("tool"), "tool"), _str(b.get("project"), "project", True) or "",
+                                                       self._who(b)))
             if u.path == "/api/altium365/workspaces":             # read-only network call, no lock
                 self._json()
                 return self._send(200, ws.altium365_workspaces())
@@ -518,8 +697,19 @@ def make_handler(ws: Workspace, team=None):
             if u.path in actions:
                 b = self._json()
                 with write_lock:
-                    return self._send(200, actions[u.path](b))
+                    res = actions[u.path](b)
+                with contextlib.suppress(Exception):             # the hub's "who changed it": never fails the action
+                    HUB.note_action(ws.root, u.path, b, self._who(b), res)
+                return self._send(200, res)
             return self._send(404, {"error": "not found"})
+
+        def _who(self, b):
+            """Who did it, for the hub's history: the signed-in user (team), else the name typed in the page or this
+            computer's user (git config / login name)."""
+            if team and self.user:
+                return TM.identity(self.user)
+            typed = b.get("user") if isinstance(b.get("user"), str) else ""
+            return typed.strip()[:120] or local_who()
 
         def _decide(self, b):
             role, comment = _str(b.get("role"), "role", True), _str(b.get("comment"), "comment", True)
@@ -636,7 +826,15 @@ def make_handler(ws: Workspace, team=None):
         # ---------------------------------------------------------- jobs
         @staticmethod
         def _librarian(bom, sources, refresh, progress=None):
-            return ws.librarian_run(bom, sources, (), refresh, progress)
+            return _final_lines(progress, ws.librarian_run(bom, sources, (), refresh, _part_lines(progress)))
+
+        @staticmethod
+        def _demo(bom, user, progress=None):
+            """Triage, then fill the library from the built-in standard parts only (no network, no API key)."""
+            t = ws.triage(bom, _line_lines(progress, "Checking the BOM"), lock=write_lock, user=user)
+            progress.line("__triage", state="done", text=f"BOM checked: {len(t['rows'])} lines")
+            r = _final_lines(progress, ws.librarian_run(bom, ["standard"], (), None, _part_lines(progress)))
+            return dict(r, triage=t)
 
         @staticmethod
         def _candidates(bom, part, kind, limit, progress=None):
@@ -648,7 +846,11 @@ def make_handler(ws: Workspace, team=None):
 
         @staticmethod
         def _triage(bom, user, progress=None):
-            return ws.triage(bom, progress, lock=write_lock, user=user)   # lock only while the reports are written
+            t = ws.triage(bom, _line_lines(progress), lock=write_lock, user=user)   # lock only while reports are written
+            for r in t["rows"]:
+                progress.line(f"line {r['line']}", state="done", text=f"{r['line']}/{len(t['rows'])} "
+                              f"{r.get('mpn') or r.get('value') or r.get('designator') or ''}  {_triage_word(r.get('status'))}")
+            return t
 
         def _error(self, e):
             if isinstance(e, Refused):
@@ -707,7 +909,9 @@ class Server(ThreadingHTTPServer):
 
 def make_server(ws, host="127.0.0.1", port=0, team=None, cert=None, key=None):
     """The UI server (not started). cert/key: serve HTTPS with the standard library's ssl (TLS 1.2+)."""
-    srv = Server((host, port), make_handler(ws, team))
+    host = host.strip("[]")
+    cls = type("Server6", (Server,), {"address_family": socket.AF_INET6}) if ":" in host else Server   # --host ::1 / ::
+    srv = cls((host, port), make_handler(ws, team))
     srv.team = team
     if cert:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -788,7 +992,8 @@ def main(argv=None):
         sys.exit(f"TLS certificate/key: {e}")
     except OSError as e:
         sys.exit(f"can't listen on {a.host}:{a.port} ({e.strerror}); is ecadlib already running? Try --port {a.port + 1}")
-    shown = socket.getfqdn() if a.host in ("0.0.0.0", "::") else a.host
+    shown = socket.getfqdn() if a.host.strip("[]") in ("0.0.0.0", "::") else a.host
+    shown = f"[{shown}]" if ":" in shown and not shown.startswith("[") else shown       # IPv6 literal in a URL
     url = f"{'https' if a.cert else 'http'}://{shown}:{srv.server_address[1]}/"
     print(f"ecadlib UI on {url}  (workspace {ws.root}{'; team mode' if team else ''}; Ctrl+C to stop)")
     if a.setup and team:

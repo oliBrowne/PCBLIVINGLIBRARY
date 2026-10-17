@@ -22,6 +22,7 @@
     ecadlib release-check plan.json [--allow P]   hold back plan items that fail the pre-release checks
     ecadlib kicad-export plan.json -o DIR --name LIB   the same library as KiCad files (.kicad_sym, .pretty)
     ecadlib resolve   plan.json [--part P] list|show|choose ...   fix held parts: ranked candidates, pick one
+    ecadlib review    [plan.json] [--part P] [--yes]   go through held parts one by one: why, pick a candidate, release anyway
     ecadlib upstream  check-kicad|check-a365 ...  upstream change alerts (KiCad sources, Altium 365 drift)
     ecadlib a365      pull|status|reconcile PLAN --workspace URL [--state F]   two-way Altium 365 sync
     ecadlib queue     list|show|approve|reject|rebuild|retry [ID]   the library agent's review queue
@@ -44,17 +45,19 @@
     ecadlib notify    show|test [--event E]       [notify] webhooks (Slack, Teams, JSON): targets, send a test message
     ecadlib kicad-dblib plan.json -o DIR --name LIB [--export]   KiCad database library (.kicad_dbl + SQLite)
     ecadlib export-parts plan.json --format csv|json|xlsx [-o F]   parts table with stable columns (PLM / ERP)
-    ecadlib stdparts resolve "SOIC-8" | coverage BOM | bench     standard packages built offline (librarian source)
+    ecadlib stdparts resolve "SOIC-8 3.9x4.9mm" | coverage BOM | bench   standard packages built offline (librarian source)
     ecadlib kicad-pcm plan.json|KICAD_DIR --out DIR [--kicad 7]   KiCad Plugin and Content Manager zip (--plugin: action plugin)
     ecadlib altium-pkg plan.json|MODELS_DIR --out DIR   Altium .LibPkg (-> IntLib), install script, relative DbLib
     ecadlib altium-menu build --out DIR [--win-dir W]   an "ecadlib" menu inside Altium (script project): add part, check BOM, queue
+    ecadlib costs     [--model M] [--all] [--md F] [--xlsx F]   estimated AI cost per job, for your model or every model
     ecadlib ai        show [--model M] [--detect] | rails   which model / provider / guide rails the AI features use
     ecadlib migrate   [PATH] [--check] [--dry-run]   check / upgrade workspace files to this version (backups first)
     ecadlib rebuild   LIB_DIR [--check]           rebuild a library from library.lock.json offline; report drift
     ecadlib testpack  --out DIR                   small Altium + KiCad test pack (6 parts) + CHECKLIST.md for a person to open
     ecadlib parity    plan.json [--kicad DIR] [--altium DIR] | pair A B | survey   KiCad and Altium files of every part match
 
-`ecadlib <command> -h` shows that command's options. --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
+`ecadlib <command> -h` shows that command's options. -q / --quiet prints only the outcome, -v / --verbose every
+detail; colour only on a terminal (NO_COLOR=1 or ECADLIB_COLOR=never turns it off). --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
 one-line error. ECADLIB_LIB, ECADLIB_WORKSPACE and ECADLIB_CONFIG are defaults for --lib, --workspace and the rules file."""
 import importlib, sys
 
@@ -70,7 +73,7 @@ COMMANDS = {
     "mcp": ("ecadlib.mcp_server", "MCP server over stdio"),
     "triage": ("ecadlib.bom_triage", "BOM triage report"),
     "footprint": ("ecadlib.footprint_gen", "IPC-7351B footprint generator"),
-    "check": ("ecadlib.footprint_check", "check .kicad_mod files against KLC/IPC rules"),
+    "check": ("ecadlib.footprint_rules", "check .kicad_mod files against the footprint rule book (KLC / IPC-7351)"),
     "footprint-bench": ("ecadlib.footprint_bench", "compare generated footprints (BGA, connectors, ...) with KiCad's official ones"),
     "eval": ("ecadlib.eval.cli", "accuracy test set: run the pipeline on parts with a known answer, score, compare runs"),
     "dblib": ("ecadlib.altium_export", "Altium DbLib export"),
@@ -78,10 +81,12 @@ COMMANDS = {
     "altium365": ("ecadlib.altium365", "Altium 365 release via Nexar"),
     "dblib-sync": ("ecadlib.altium_dblib_sync", "sync a plan into an Altium .DbLib / .SVNDbLib library folder"),
     "librarian": ("ecadlib.librarian", "BOM to library: fill missing parts, plan, release check"),
+    "costs": ("ecadlib.costs", "estimated AI cost per job (datasheet read, BOM, library) for your model or every model"),
     "datasheet": ("ecadlib.datasheet", "Claude datasheet reader: one PDF, or a whole plan/BOM as one Message Batch"),
     "release-check": ("ecadlib.release_check", "pre-release checks on an altium365 plan"),
     "kicad-export": ("ecadlib.kicad_export", "librarian plan -> KiCad .kicad_sym / .pretty / .3dshapes"),
     "resolve": ("ecadlib.resolve", "fix held parts: candidates for a missing symbol/footprint, choose one"),
+    "review": ("ecadlib.review_cli", "go through held parts one at a time: the reason in plain words, pick a candidate, release anyway, open the datasheet"),
     "upstream": ("ecadlib.upstream", "KiCad upstream changes and Altium 365 drift"),
     "a365": ("ecadlib.a365_sync", "two-way Altium 365 sync: pull workspace components into the plan, status, reconcile"),
     "queue": ("ecadlib.agent_queue", "the library agent's review queue: list, show, approve, reject, rebuild"),
@@ -91,6 +96,7 @@ COMMANDS = {
     "step-gen": ("ecadlib.step_gen", "package-shaped STEP 3D models from a package spec or footprint name"),
     "upkeep": ("ecadlib.upkeep", "weekly lifecycle / upstream / price / A365 checks; new changes as one issue or PR"),
     "project": ("ecadlib.altium_project", "BOM straight from an Altium project (.PrjPcb / .SchDoc / ActiveBOM)"),
+    "hub": ("ecadlib.hub", "your library across tools: every part once, a column per tool, last changed and by whom"),
     "where-used": ("ecadlib.altium_project:where_used_main", "which projects use which library part, and flags"),
     "sim-models": ("ecadlib.sim_models", "find, check and attach SPICE / IBIS simulation models for a plan"),
     "agent-watch": ("ecadlib.agent_watch", "library agent watch step: new / changed / removed parts in watched projects and BOMs"),
@@ -131,9 +137,10 @@ def main(argv=None):
     if not cmd:
         print(f"ecadlib: unknown command {argv[0]!r}. Commands: {', '.join(COMMANDS)}", file=sys.stderr)
         return 2
-    from . import userconfig
+    from . import term, userconfig
     userconfig.apply_env()                                   # keys from `ecadlib keys` / the setup page; env vars win
-    args, notes = env_defaults(argv[0], argv[1:])            # ECADLIB_LIB / ECADLIB_WORKSPACE when the flag is not given
+    rest = term.set_from_argv(argv[1:])                      # -q / -v for every command; --json: never styled
+    args, notes = env_defaults(argv[0], rest)                # ECADLIB_LIB / ECADLIB_WORKSPACE when the flag is not given
     from . import firstrun as FR
     args, more = FR.config_defaults(argv[0], args)          # then ecadlib.toml [setup] libs / workspace
     notes += more

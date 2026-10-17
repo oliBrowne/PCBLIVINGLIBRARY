@@ -315,7 +315,7 @@ def test_status_summary_read_only():
         assert s["last_upkeep"] == {"date": "2026-10-05T00:00:00Z", "new_changes": 4, "state": "agent/upkeep/p/state/upkeep_last.json"}
         assert s["agent"]["state"] == "idle" and s["agent"]["queue"] == {"review": 2, "pushed": 1} and s["agent"]["waiting_review"] == 2
         text = WS.render(s)
-        assert "5 in 2 plan(s): 1 ready, 2 held, 1 waiting for sign-off, 1 duplicates" in text
+        assert "5 parts in 2 library plans: 1 ready, 2 held, 1 waiting for sign-off, 1 duplicate" in text
         assert "2 waiting for review" in text and "ecadlib resolve" in text and "WARN" in text
         assert {p: p.stat().st_mtime_ns for p in ws.rglob("*")} == before
         empty = WS.status(Path(d, "nothing"))

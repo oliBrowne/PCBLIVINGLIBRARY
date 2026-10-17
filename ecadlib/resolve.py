@@ -23,7 +23,7 @@ choose(plan, part, kind, id, src=..., pin_map=...)."""
 import argparse, fnmatch, json, math, os, re, sys
 from pathlib import Path
 
-from . import altium_lib as AL, footprint_gen as F, kicad_import as K, librarian as L, release_check as RC, rules as RU, sexpr
+from . import altium_lib as AL, footprint_gen as F, kicad_import as K, librarian as L, messages as M, release_check as RC, rules as RU, sexpr
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex, _body, norm_mpn, package_of
@@ -498,8 +498,8 @@ def main(argv=None):
             return emit(r) or 0
         for h in r:
             print(f"{h['name']}  ({h['folder']}){'  missing ' + ' + '.join(h['missing']) if h['missing'] else ''}")
-            for m in h["hold_reasons"]:
-                print(f"    {m}")
+            for e in M.explain_all(h["hold_reasons"]):
+                print(f"    {e['text']}" + (f" {e['note']}" if e["note"] else "") + f"\n      next: {e['fix']}")
         print(f"{len(r)} held")
         return 0
     if not a.part:
@@ -518,8 +518,8 @@ def main(argv=None):
         if c:
             print(f"  pins vs pads: {'match' if c['match'] else 'pins without pad ' + str(c['pins_without_pad']) + ', pads without pin ' + str(c['pads_without_pin'])}"
                   + (f"; suggest --map {' --map '.join(f'{x}={y}' for x, y in c['pin_map'].items())}" if c and c["pin_map"] else ""))
-        for m in r["hold_reasons"]:
-            print(f"  held: {m}")
+        for e in M.explain_all(r["hold_reasons"]):
+            print(f"  held: {e['text']}\n        next: {e['fix']}")
         return 0
     if a.cmd == "list":
         plan = _load_plan(a.plan)
@@ -545,8 +545,8 @@ def main(argv=None):
         emit(r)
     else:
         print(f"{a.part}: {a.kind} <- {r['source']} ({r['file']}); now {r['status']}")
-        for m in r["hold_reasons"]:
-            print(f"    held: {m}")
+        for e in M.explain_all(r["hold_reasons"]):
+            print(f"    held: {e['text']}  next: {e['fix']}")
         for n in r["notes"]:
             print(f"    note: {n}")
     return 0 if r["status"] == "ready" else 2

@@ -98,7 +98,7 @@ def test_second_read_agrees_is_cached_costed_and_reported():
         led = TR.ledger(d)
         assert [r["verdict"] for r in led] == ["ok", "cross-check"] and led[1]["purpose"] == "cross_check" and led[1]["usd"] > 0
         md = (Path(d) / "out" / "datasheet" / "TESTPART.review.md").read_text()
-        assert "## Cross-check ([datasheet] cross_check = auto): agreed" in md
+        assert "## Cross-check: agreed" in md and "Setting: [datasheet] cross_check = auto" in md
         # a re-run costs nothing: both answers come from the result cache, and give the same record
         res2 = read(d, api)
         assert len(api.sent) == 2 and res2["sidecar"]["cross_check"]["status"] == "agreed"
@@ -266,7 +266,8 @@ def test_librarian_reports_agreed_and_held_parts():
         assert any("pitch read 0.5 mm, second read 0.65 mm" in r for r in b["librarian"]["review"])
         md = (Path(d) / "out" / "review.md").read_text()
         assert "## Cross-checks of datasheet reads" in md and "| DSPART2 | disagreed |" in md and "| DSPART1 | agreed |" in md
-        assert "pitch read 0.5 mm, second read 0.65 mm" in md                 # both values, in "Needs a person"
+        assert "The two datasheet reads disagree on pitch (0.5 mm vs 0.65 mm)" in md     # both values, in plain words
+        assert "Check the datasheet and pick one, or release anyway." in md
         assert "cross-check" in (Path(d) / "out" / "datasheet" / "cost.jsonl").read_text()
 
 

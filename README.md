@@ -108,6 +108,17 @@ The UI and MCP server write everything to one workspace folder (default `./ecadl
 
 Both servers use only the standard library on top of the package requirements. The web UI binds to 127.0.0.1. It refuses requests with an unexpected Host header (DNS rebinding), cross-origin POSTs, and any file path outside the workspace.
 
+### Using the web UI
+
+* **First visit.** An empty workspace shows a welcome card: *Try it with a sample BOM* builds the 7-part sample (the one `ecadlib demo` uses) from ecadlib's standard parts, offline and without an API key; *Run the setup check* runs `ecadlib doctor`.
+* **Drop a BOM anywhere on the page** (CSV or XLSX). Long actions (checking a BOM, filling the library, the sample) show live progress with one line per part ("3/14 SOT-23  ready") and a **Stop** button; the rest of the page keeps working. A stopped librarian run leaves the library plan as it was.
+* **Parts as cards.** Step 2 lists every part with a footprint picture and chips: ready / held / waiting for sign-off, the cross-check result, KiCad / Altium match, and what reading its datasheet cost and with which model; the header adds the totals so far. Search and status chips filter the list.
+* **Click a part** to open its side panel: why it is held in plain words with the next step (wording from `ecadlib/messages.py`), both values when the cross-check or the KiCad / Altium comparison disagrees, the datasheet (at the page in question when known), and the actions: pick a symbol or footprint, release anyway, approve or reject.
+* **Undo.** Approve and reject (in step 2 and in the review queue) show at once and are sent when the few-second Undo window closes; *Release anyway* is recorded at once and its Undo holds the part again.
+* **Keyboard.** `?` lists the shortcuts: `/` search, `j` / `k` next / previous part, `Enter` open, `Esc` close, `h` held only, `u` choose a file, `1` `2` `3` steps, `q` review queue, `s` status. Light and dark themes follow the system; `prefers-reduced-motion` turns animations off.
+* The same part cards are available as `Workspace.library_parts(bom)`, `GET /api/parts?bom=` and the MCP tool `library_parts` (`ecadlib/partview.py`).
+* **Your library** (`l`) shows your whole library across tools: a tile per tool (Altium, Altium 365, KiCad, Fusion, EasyEDA) that opens your library as it is in that tool, or every part once with a column per tool; last changed and by whom, copying parts between Altium and KiCad (into a project too), and a part page with pictures, sources, release check, sign-off, where-used, lifecycle, history and fix buttons. See section 39.
+
 ### Team server (`ecadlib ui --team`)
 
 Run the web UI on one machine for the whole team, with sign-in. Local mode (no `--team`) is unchanged.
@@ -212,7 +223,7 @@ Tests: `python3 -m tests.test_team_setup` runs the setup end to end against a st
 
 Tests: `python3 -m tests.test_ui` covers the workspace, web server, MCP server and CLI. `python3 -m tests.test_offline` covers the core modules. `python3 -m tests.test_footprints` checks generated footprints by part type against KiCad's library and the KLC rules.
 
-Requirements: Python 3.10 or later (tested on 3.11 and 3.13) with `requests`, `pandas`, `openpyxl`, `jsonschema` and `olefile`, which pip installs. `pypdf` and `pillow` are optional extras. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
+Requirements: Python 3.10 or later (tested on 3.11 and 3.13) with `requests`, `pandas`, `openpyxl`, `jsonschema` and `olefile` (and `tomli` on Python 3.10), which pip installs. `pypdf` and `pillow` are optional extras. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
 
 ```
 ecad-librarian/
@@ -264,7 +275,8 @@ ecad-librarian/
 ```
 ecadlib footprint gen ecadlib/package_specs/*.json -o out/footprints/ecadlib.pretty [--density A|B|C]
 ecadlib footprint compare <mine.kicad_mod> <reference path or URL>
-ecadlib check <any.kicad_mod> ...          # KLC-style rule check, works on KiCad's own footprints too
+ecadlib check <any.kicad_mod or .pretty> ... # the footprint rule book, works on KiCad's own footprints too
+ecadlib check --summary Lib.pretty/         # counts per rule for a whole library
 ```
 
 * **Package types** (`package_type`, with `lead_type` to pick a different IPC lead family):
@@ -282,7 +294,10 @@ ecadlib check <any.kicad_mod> ...          # KLC-style rule check, works on KiCa
   fab 0.10 with a pin-1 chamfer, courtyard 0.05 on the 0.01 mm grid with 0.25 mm excess (0.15 under 0603),
   roundrect pads, exposed-pad paste split into windows at 65 %. Format `version 20221018` (KiCad 7+; Altium imports it).
 * **Checks:** every generated footprint is run through `footprint_check` (copper gaps, silk clearance, fab,
-  courtyard, pin 1, paste). Spec mistakes, such as lead span and body width swapped, mils instead of mm,
+  courtyard, pin 1, paste), and every footprint the release check sees through the
+  [footprint rule book](docs/footprint-rulebook.md): naming (KLC and IPC-7351 names checked against the copper),
+  part type, origin, pad layers and shapes, annular rings, thermal vias, text, 3D model, courtyard clearance,
+  polarity marks, and the pad-to-pin map (an unwired exposed pad, a reversed diode). Spec mistakes, such as lead span and body width swapped, mils instead of mm,
   or more pins than fit, are refused with a plain-language reason.
 
 ### Compared with KiCad's official footprints
@@ -1118,7 +1133,7 @@ ecadlib status [--workspace W] [--json]                           one screen abo
 ecadlib completion bash|zsh|fish                                  shell completion script
 ```
 
-* **doctor** prints one line per check, each OK / WARN / FAIL with a fix: Python version (3.10 warns: no TOML), the core packages (FAIL when missing), pillow / pypdf, `pdftoppm`, `kicad-cli` and `git` (WARN), which API keys are set (variable **names** only, never values; the names follow `[datasheet] api_key_env` and `[agent] github_token_env`), the rules file in use and whether it is valid (an error names `file:line`), the workspace (exists, writable: a temporary probe file is created and removed), the `--lib` folders, `[agent] libs` / `library_repo` and the `[agent.watch]` sources. Also `Workspace.doctor()` and the MCP tool `doctor`.
+* **doctor** prints one line per check, each OK / WARN / FAIL with a fix: Python version (3.10 warns when neither tomllib nor tomli can read TOML), the core packages (FAIL when missing), pillow / pypdf, `pdftoppm`, `kicad-cli` and `git` (WARN), which API keys are set (variable **names** only, never values; the names follow `[datasheet] api_key_env` and `[agent] github_token_env`), the rules file in use and whether it is valid (an error names `file:line`), the workspace (exists, writable: a temporary probe file is created and removed), the `--lib` folders, `[agent] libs` / `library_repo` and the `[agent.watch]` sources. Also `Workspace.doctor()` and the MCP tool `doctor`.
 * **status** summarises a workspace without creating or changing anything: parts per librarian plan (ready, held, waiting for sign-off, duplicates), uploaded BOMs, the last triage, the last upkeep run (the workspace's and the agent's), the library agent's state and its review-queue counts, and what to run next. A damaged file is named under WARN and skipped. Exit 1 when the workspace does not exist. Also `Workspace.status()` and the MCP tool `workspace_status`.
 * **completion** builds the script from each command's own argparse parser (commands, subcommands, options, fixed choices), so it always matches the installed version: `ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib`, `source <(ecadlib completion zsh)` (uses zsh's `bashcompinit`), `ecadlib completion fish > ~/.config/fish/completions/ecadlib.fish`.
 * **Errors:** a missing file, bad JSON, an unreadable table, a missing package, no permission or a bad `ecadlib.toml` print one line and a hint (exit 2) instead of a traceback; anything else prints `internal error (...)` (exit 1). `--debug` anywhere on the line, or `ECADLIB_DEBUG=1`, shows the full traceback.
@@ -1129,6 +1144,38 @@ ecadlib completion bash|zsh|fish                                  shell completi
   * `approve PLAN status --json`: `{"plan", "policy_file", "enforced", "awaiting_approval", "rows": [{"name", "status", "approved_by", "missing", "stale", ...}]}`
   * `doctor --json`: `{"ok", "checks": [{"check", "level", "detail", "hint"}]}`; `status --json`: `{"workspace", "exists", "rules", "boms", "plans", "totals", "last_triage", "last_upkeep", "agent", "problems"}`
   * Already there before: `agent-watch --json`, `resolve --json`, `project --json`, `init --json`, `footprint-bench --json FILE`.
+
+### 25b. The terminal, human-friendly: `term.py` and `ecadlib review`
+
+Every command people run most (`demo`, `init`, `doctor`, `librarian`, `triage`, `release-check`, `review`, `status`,
+`kicad-export`, `dblib-sync`, `altium-pkg`, `parity`, `eval gate`, `migrate`, `rebuild`, `agent status`, `queue list`)
+prints through one small layer, `ecadlib/term.py` (stdlib only), in the shared voice (`docs/ui-voice.md`):
+
+* **One vocabulary:** a part is `✓ ready`, `! held` (with the reason in plain words, from `ecadlib/messages.py`) or
+  `○ waiting for sign-off`; `… working`, `✗ failed`, `- skipped`. Plain output (piped, logs) prints the word only.
+* **Colour and symbols only on a terminal**, never with `NO_COLOR`, `--json`, `TERM=dumb` or in CI logs (`CI`,
+  `GITHUB_ACTIONS`, `GITLAB_CI`, ...). `ECADLIB_COLOR=always|never` overrides.
+* **Tables fit the terminal** (`COLUMNS`, else its width; no limit when piped): the last column wraps under itself.
+* **A final summary block:** the outcome (`6 ready, 1 held`), what was written where, and the next 1-3 commands.
+* **Live progress** on a terminal: `librarian` shows one line `[3/14] SOT-23  ✓ ready` that updates in place, then a
+  row per part; piped, the plain log lines as before. A slow network source or model call says what it waits on and
+  for how long (`… waiting on the KiCad library (gitlab.com)  12 s`); piped: `still waiting on ... (30 s)` after 10 s,
+  30 s, 60 s and then every minute. Live lines go to stderr.
+* **`-q` / `--quiet`** (only the outcome and errors) and **`-v` / `--verbose`** (every reason with its fix, notes,
+  sources) work for every command, anywhere on the line.
+* **`--json` is unchanged**, byte for byte (`tests/test_term.py`); `ecadlib agent status` now prints a short summary
+  and takes `--json` for the JSON it printed before; `ecadlib queue list` has a new `--json` (the item summaries).
+
+```
+ecadlib review [PLAN] [--workspace W] [--part P] [--yes] [--offline] [--lib DIR] [--limit N]
+```
+
+`ecadlib review` goes through the held parts one at a time: the reason and the fix in plain words, the datasheet link,
+and for a missing symbol / footprint (or pins that do not match the pads) the best candidates from `resolve`. Then it
+asks: `1-N` use a candidate (converted, written into the plan, re-checked), `a` release anyway (recorded with your name,
+like `release-check --allow`; not offered when a file is missing), `d` open the datasheet (at the page a reason names),
+`s` skip, `q` quit. With `--yes`, or when not on a terminal, it never asks: it prints each part with the commands that
+fix it. Without PLAN it reviews every plan in the workspace. Exit 2 while anything is still held.
 
 ## 26. Connections to other tools: notifications, GitLab, plugins
 
@@ -1558,8 +1605,12 @@ model endpoint you configure, with the key you export, and there is no telemetry
   byte-for-byte the ones ecadlib sent before this layer existed (a test compares them with hashes taken from the old code).
 * **openai-compatible**: any `/v1/chat/completions` server: OpenAI, OpenRouter, Google's OpenAI-compatible Gemini
   endpoint, and local servers (Ollama, LM Studio, vLLM, llama.cpp). Presets fill in the usual `base_url` and key
-  variable. A local server needs no key and costs $0 in the cost ledger; other unknown prices show tokens only
-  (OpenRouter's `/models` prices are picked up when `detect` is on).
+  variable. A local server needs no key and costs $0 in the cost ledger. Common OpenAI, Gemini and DeepSeek models
+  have built-in list prices; other unknown prices show tokens only (OpenRouter's `/models` prices are picked up when
+  `detect` is on).
+
+What it costs: [docs/costs.md](docs/costs.md) has an estimate per job (datasheet read, 50-line BOM, 500-part library,
+visual check) for every model above, and `ecadlib costs` prints the same for the model in your `ecadlib.toml`.
 
 ```toml
 # ecadlib.toml: pick ONE [ai] block (keys come from environment variables; only the variable's NAME goes here)
@@ -1842,7 +1893,99 @@ are documented (a curved custom pad as its bounding rectangle, trapezoid as rect
 * **Not verified:** nothing was opened in Altium Designer; KiCad models that cannot be downloaded offline stay missing
   in an export (parity reports them as `file missing`).
 
-## 38. Easy setup: the Windows installer, the setup page and stored keys
+## 38. One voice: `messages.py`, `reports.py` and `docs/ui-voice.md`
+
+Every message and report a person reads follows [docs/ui-voice.md](docs/ui-voice.md): what happened first, then what
+to do; a part is **ready**, **held** or **waiting for sign-off**; numbers with units; errors in two lines; no internal
+names or server paths.
+
+* `ecadlib/messages.py` is the one table of held reasons: `held(code, **values) -> (text, fix)`,
+  `explain(raw_reason) -> {code, text, fix, note}` for any reason already in a plan, `error()` / `friendly_error()`,
+  `status_word()`, `counts()` ("6 ready, 2 held"), `source_word()` and `clean()`. Plans, CSVs and `--json` keep their
+  machine strings; the sentence is shown next to the code.
+* `ecadlib/reports.py` builds the library review once and renders it as `review.md` and `review.html` (the web UI's
+  colours, light and dark, readable at phone width): held parts first with each reason and its next step, then parts
+  waiting for sign-off, ready parts a person should double-check, duplicates, the ready table and the details.
+* Rewritten in the same voice: `release_check.md`, the datasheet reader's `<part>.review.md`, the parity report, the
+  eval `report.md`, the test pack's `CHECKLIST.md`, the agent's PR body and notifications, `ecadlib doctor` (outcome,
+  then what to fix, what is optional, what is fine), the Altium menu and KiCad plugin dialogs, the `init` questions and
+  MCP errors. Workspace `librarian_run` rows carry `word` and `says`, `held_parts` carries `reasons`.
+* Checked by `tests/test_messages.py` (every code has a sentence; a new release-check rule, footprint-check error,
+  KiCad/Altium field, review note or agent failure without one fails) and `tests/test_ui_voice.py` (snapshots in
+  `tests/fixtures/voice/`, Markdown and HTML say the same, demo and test pack reports free of internal names and
+  absolute paths). After a deliberate wording change: `UPDATE_VOICE=1 python -m tests.run_all test_ui_voice`.
+
+## 39. `hub.py`: your library across tools, in one place
+
+The **Your library** page of the web UI (also `ecadlib hub`, Workspace `hub` / `hub_part` / `hub_fix` / `hub_copy`,
+MCP `library_hub` / `library_hub_part` / `library_hub_copy`) opens on a tile per tool: Altium, Altium 365, KiCad,
+Fusion and EasyEDA, each with its part count, how many libraries hold them, when the tool's library last changed and
+by whom, and how many parts it lacks. Click a tile to see your library as it is in that tool (which library file each
+part is in, its symbol and footprint, last changed, whether it matches the other tools, where else it is), narrowed to
+one library file if you like; **Compare all** shows every part once with a column per tool. It reads your existing
+libraries as well as the parts ecadlib built, and it never writes to your library files (its own notes and the parts
+it copies live in `<workspace>/hub/`).
+
+* **What it reads.** ecadlib's own parts from every librarian plan (the .SchLib / .PcbLib each part was built into, the
+  KiCad library `kicad-dblib` wrote for that BOM, the Altium 365 component it was pushed to or pulled from), and your
+  libraries from `--lib` plus `[hub] libraries`: .SchLib / .PcbLib, .DbLib / .SvnDbLib with their database, .kicad_sym,
+  .pretty, .kicad_dbl (SQLite), and Altium 365 component lists (`a365 pull`'s `workspace_plan.json`, check-a365
+  state files). Same readers as `ecadlib init`, dedupe and where-used.
+* **One row per part.** Copies are grouped by MPN (packaging suffixes stripped, as dedupe does), or by name when a copy
+  has no MPN. A DbLib row or a KiCad database row is a part; the symbols it points at are not counted again.
+* **Each cell** is *missing*, *same* (pads, pins and value match the newest copy that has them), *there* (nothing to
+  compare, such as an Altium 365 component without files), *different* (the detail says what: pad count, one pad's
+  size or position, a pin name, the value) or *behind* (different and last changed `[hub] stale_days`, default 14, or
+  more before the newest copy: "KiCad is 6 weeks behind Altium"). Pin names count only when both copies name the pin,
+  so KiCad's `~` and pin numbers used as names are not differences.
+* **Last changed and by whom**, per part and per tool copy: the last git commit when the library file is in a git
+  repository and has no uncommitted change (author and date); the Altium 365 revision date; else the file's own date,
+  with the person ecadlib recorded doing it through the web app (fill, pick, push, fix; the signed-in user in team
+  mode), or "not recorded".
+* **History.** Each look is compared with the previous one (`hub/state.json`): added, changed (with what changed:
+  footprint pads, symbol pins, value, revision) and removed copies go to `hub/history.jsonl`, with web-app actions.
+  A part's history adds its sign-offs and Altium 365 syncs. A library that is not read this time (another `--lib`)
+  does not count as removed.
+* **The part page**: footprint pictures of each distinct copy (Altium PCB-editor colours), a pinout sketch, every copy
+  with where it is, when and by whom it last changed and what differs, the release check with reasons and next steps,
+  sign-offs, sources and the datasheet, lifecycle (upkeep's lifecycle check or Altium 365), where-used (Altium projects
+  under `[hub] projects`) and the history.
+* **Fix buttons**: *Make the KiCad version* (ecadlib's KiCad copy missing or different: writes the KiCad library of
+  the part's BOM), *Send to Altium 365* (a dry run first), *See why it is held* / *Sign it off*, *Find duplicates*, and
+  for a part only in your libraries *Build it with ecadlib* (a one-line BOM through the librarian, so ecadlib has its
+  own checked copy to compare with yours). A copy in your own library that differs is reported, never overwritten.
+* **Copy between tools.** *Copy to KiCad* / *Copy to Altium* on a part page, or *Copy them to KiCad* on a tool's
+  page for every part the other tools have and it lacks, converts the copy (Altium .SchLib / .PcbLib -> KiCad, KiCad
+  .kicad_sym / .kicad_mod -> Altium, with the same converters as kicad-export and the librarian) into the hub library,
+  `<workspace>/hub/library/` (`kicad/ecadlib_hub.kicad_sym`, `kicad/ecadlib_hub.pretty`, its lib-table rows, and
+  `altium/<part>.SchLib`, `<footprint>.PcbLib`). The hub reads that folder back, so the part shows in the tool's column
+  straight away and its geometry is compared with the original.
+* **Projects.** Every KiCad (.kicad_pro) and Altium (.PrjPcb) project under `[hub] projects` is in the Project picker,
+  with the library parts its schematics use (KiCad `lib_id` / MPN fields, Altium where-used) and how many of them its
+  tool lacks. *Copy them into &lt;project&gt;* copies those parts and imports the hub library into the project: a KiCad
+  project gets `ecadlib_hub` rows in its own sym-lib-table / fp-lib-table (other rows are kept); an Altium project gets
+  the SchLib / PcbLib files as project libraries (`[DocumentN]` entries; the old file is kept as `.PrjPcb.ecadlib-bak`
+  the first time). ecadlib keeps one shared library rather than a library per project, so a fix reaches every board.
+* **Filters**: search, needs a look (different or behind), held, end of life, duplicates, built by ecadlib, your
+  libraries, "in Altium but not in KiCad", sorted by name, last changed or what needs a look.
+* **Other tools.** `hub.register_tool(tool, label, exts, read, workspace_dirs=(), fix=None)` adds a reader (and
+  optionally a "make this tool's copy" fix); `read(path)` returns one dict per part with `name`, `mpn`, `pads`
+  `[(number, x, y, w, h, rot, drilled)]` in mm with y up, and `pins` `[(number, name)]`. `ecadlib/hub_tools.py`
+  registers Fusion (.lbr) and EasyEDA Pro (.elibz) readers on eagle-export's and easyeda-export's read-back code when
+  this ecadlib has those exporters, with *Make the Fusion version* / *Make the EasyEDA version* buttons for parts
+  ecadlib built; plugins can add more (entry point group `ecadlib.hub_tools`). Until a reader is
+  there the column says "no reader yet".
+* Settings in `ecadlib.toml`:
+
+  ```toml
+  [hub]
+  libraries = ["D:/Altium/Libraries", "~/kicad/my_libs"]   # read on top of --lib
+  projects = ["D:/Projects"]                                # Altium and KiCad projects: where-used, copy into
+  stale_days = 14
+  ```
+* Works the same in local and team mode: viewers can see everything, a librarian runs the fixes, and in team mode the
+  history names the signed-in user. Tests: `tests/test_hub.py`.
+## 40. Easy setup: the Windows installer, the setup page and stored keys
 
 For people who are used to installers, not terminals. The guide for them is `docs/START_HERE.md`.
 
