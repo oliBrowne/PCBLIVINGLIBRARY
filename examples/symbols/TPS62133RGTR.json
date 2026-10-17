@@ -4,7 +4,7 @@
   "designator": "U?",
   "footprint": "VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
   "needs_datasheet_verification": true,
-  "cross_check": "2026-10-13: pin numbers match KiCad's official symbol Regulator_Switching:TPS62133 (extends TPS62130; gitlab.com kicad-symbols master). KiCad names pins 10-12 VIN and 6/15/16/17 GND where this file uses AVIN/PVIN and AGND/PGND/EP. The TI datasheet PDF could not be fetched from the build sandbox, so names are still not checked against the datasheet.",
+  "cross_check": "2026-10-13: pin numbers match KiCad's official symbol Regulator_Switching:TPS62133 (extends TPS62130; gitlab.com kicad-symbols master). KiCad names pins 10-12 VIN and 6/15/16/17 GND where this file uses AVIN/PVIN and AGND/PGND/EP. The TI datasheet PDF could not be fetched from the build sandbox, so names are still not checked against the datasheet. 2026-10-16: pin numbers and names checked against the TI datasheet SLVSAG7F (RGT pin functions table): all match; the exposed thermal pad has no number there (17 here and in KiCad).",
   "pins": [
     {"num": "11", "name": "PVIN", "type": "power", "side": "left"},
     {"num": "12", "name": "PVIN", "type": "power", "side": "left"},

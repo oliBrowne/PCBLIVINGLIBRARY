@@ -268,7 +268,7 @@ def test_every_route_has_a_role():
     routed = {p for _, p in S.ROUTES}
     assert mentioned <= routed, sorted(mentioned - routed)
     assert all(r == S.PUBLIC or r in TM.ROLES for r in S.ROUTES.values())
-    assert {p for (m, p), r in S.ROUTES.items() if r == S.PUBLIC} == {"/", "/index.html", "/api/session", "/api/login"}
+    assert {p for (m, p), r in S.ROUTES.items() if r == S.PUBLIC} == {"/", "/index.html", "/hairline.js", "/api/session", "/api/login"}
 
 
 def test_role_enforcement_per_route():

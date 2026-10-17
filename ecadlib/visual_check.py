@@ -1442,15 +1442,19 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
     cache = ProofCache((root / "agent" / "proof_cache") if root else out_dir / ".proof_cache")
     ck = ProofCache.key(body)
     rec = cache.get(ck)
-    if rec:
-        v, score, reason, findings, _ = parse_verdict(rec["message"], required, cfg["fail_on"])
-        return _proof(v, reason, score=score, findings=findings, cost=0.0, cached=True, **dict(base, model=rec.get("model") or model))
     inf = None
     try:
         from .llm import run as LR
         inf = LR.info(model, rules if isinstance(rules, dict) else None, "proof")
     except Exception as e:
-        return _proof("skipped", f"model setup: {e}", **base)
+        if not rec:
+            return _proof("skipped", f"model setup: {e}", **base)
+    small_pass = lambda v, p: v == "pass" and p.get("tier") == "small" and "hold_on_doubt" in p["rails"]
+    if rec:
+        v, score, reason, findings, _ = parse_verdict(rec["message"], required, cfg["fail_on"])
+        if inf and small_pass(v, inf["plan"]):        # a cached answer is held to the same rule as a fresh one
+            v, reason = "doubt", f"a small model ({model}) said pass; that is not proof enough: a person checks the pictures"
+        return _proof(v, reason, score=score, findings=findings, cost=0.0, cached=True, **dict(base, model=rec.get("model") or model))
     if client is None and inf["ep"]["provider"] != "anthropic":
         from . import llm as LL
         from .llm.openai_compat import OpenAICompatClient
@@ -1460,7 +1464,8 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
         k = LL.key_for(inf["ep"], key)
         if not k:
             return _proof("skipped", LL.needs_key_message(inf["ep"]) + "; no visual proof was run", **base)
-        client = OpenAICompatClient(inf["ep"]["base_url"], k, inf["prof"], log_file=out_dir / "api_log.jsonl", say=say)
+        client = OpenAICompatClient(inf["ep"]["base_url"], k, inf["prof"], log_file=out_dir / "api_log.jsonl", say=say,
+                                    model=inf["ep"]["model"])
     if client is None:
         try:
             k = key or os.environ.get(cfg["api_key_env"]) or os.environ.get("ANTHROPIC_API_KEY")
@@ -1491,7 +1496,7 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
         msg = LRL.repair_message(msg, output_schema(), plan)
     cost = usage_cost(msg.get("model") or model, msg.get("usage"))
     v, score, reason, findings, ans = parse_verdict(msg, required, cfg["fail_on"])
-    if v == "pass" and plan.get("tier") == "small" and "hold_on_doubt" in plan["rails"]:
+    if small_pass(v, plan):
         v, reason = "doubt", f"a small model ({model}) said pass; that is not proof enough: a person checks the pictures"
     if ans is not None:                                 # only usable answers are cached; a refusal is asked again
         cache.put(ck, {"key": ck, "part": inp["part"], "model": msg.get("model") or model, "message": msg})

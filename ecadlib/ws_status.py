@@ -112,46 +112,76 @@ def status(root):
     return out
 
 
-def render(s):
-    L = [f"workspace  {s['workspace']}" + ("" if s["exists"] else "  (does not exist yet)")]
+def render(s, styled=False, width=None, shown=None, verbosity=0):
+    """The one-screen summary as text. styled: colour + glyphs (a terminal); shown: the workspace as the user typed it
+    (the absolute path only with -v)."""
+    import io
+    from . import messages as M, term as TM
+    buf = io.StringIO()
+    t = TM.Term(buf, styled=styled, width=width, verbosity=verbosity)
+    name = shown or s["workspace"]
     if not s["exists"]:
-        L.append("  nothing here yet: `ecadlib ui --workspace ...` or `ecadlib mcp --workspace ...` creates it")
-        return "\n".join(L)
-    t = s["totals"]
-    L.append(f"rules      {s['rules'] or 'none in the workspace (searched from here / ECADLIB_CONFIG, else defaults)'}")
-    L.append(f"BOMs       {s['boms']} uploaded")
-    L.append(f"parts      {t['parts']} in {len(s['plans'])} plan(s): {t['ready']} ready, {t['held']} held, "
-             f"{t['awaiting_approval']} waiting for sign-off" + (f", {t['duplicates']} duplicates" if t["duplicates"] else ""))
+        t.write(t.bold(f"Workspace {name} does not exist yet."))
+        t.write("  fix: `ecadlib demo -o <folder>` makes a sample one; `ecadlib ui --workspace ...` or "
+                "`ecadlib librarian BOM -o <folder>/librarian/x` starts a real one")
+        return buf.getvalue().rstrip("\n")
+    tot = s["totals"]
+    cnt = {"ready": tot["ready"], "held": tot["held"], "awaiting_approval": tot["awaiting_approval"], "duplicate": tot["duplicates"]}
+    t.write(t.bold(f"Workspace {name}") + (t.dim(f"  ({s['workspace']})") if t.verbose and shown else ""))
+    head = (f"{M.plural(tot['parts'], 'part')} in {M.plural(len(s['plans']), 'library plan')}: {M.counts(cnt)}"
+            if s["plans"] else "no library yet (no BOM has been through the librarian)")
+    t.write(f"  {head}")
+    if t.quiet:
+        return buf.getvalue().rstrip("\n")
+    rows = []
     for p in s["plans"][:8]:
-        L.append(f"  {p['plan']:<44} {p['parts']:>4} parts  {p['held']:>3} held  {p['awaiting_approval']:>3} sign-off")
+        cells = [p["plan"].removesuffix("/plan.json"), M.plural(p["parts"], "part")]
+        cells.append("  ".join(t.status(k, f"{p[k]} {M.status_word(k)}") for k in ("ready", "held", "awaiting_approval") if p[k]))
+        rows.append(cells)
+    if rows:
+        t.write("")
+        t.write("library plans:")
+        t.table(rows, right=(1,))
     if len(s["plans"]) > 8:
-        L.append(f"  ... {len(s['plans']) - 8} more (--json lists all)")
-    lt = s["last_triage"]
-    L.append("triage     " + (f"{lt.get('name') or lt['report']}, {lt['finished']}"
-                              + (f", {lt['lines']} lines" if lt.get("lines") is not None else "")
-                              + (f" ({', '.join(f'{k} {v}' for k, v in lt['counts'].items())})" if lt.get("counts") else "")
-                              if lt else "never"))
-    lu = s["last_upkeep"]
-    L.append("upkeep     " + (f"{lu['date']}, {lu['new_changes']} new change(s)" if lu else "never"))
+        t.write(f"  ... {len(s['plans']) - 8} more (--json lists all)")
+    t.write("")
+    lt, lu, ag = s["last_triage"], s["last_upkeep"], s["agent"]
+    kv = [["rules", s["rules"] or "defaults (no ecadlib.toml in the workspace)"],
+          ["BOMs", f"{s['boms']} uploaded"],
+          ["last triage", (f"{lt.get('name') or lt['report']}, {lt['finished']}"
+                           + (f", {M.plural(lt['lines'], 'line')}" if lt.get("lines") is not None else "")
+                           + (f" ({', '.join(f'{k} {v}' for k, v in lt['counts'].items())})" if lt.get("counts") else "")
+                           if lt else "never")],
+          ["upkeep", f"{lu['date']}, {M.plural(lu['new_changes'] or 0, 'new change')}" if lu else "never"]]
     ds = s.get("datasheet")
     if ds:
-        L.append(f"datasheet  {ds['answers']} Claude answers for {ds['parts']} parts, ${ds['usd']:.2f}"
-                 + (f" (+ ${ds['usd_estimated']:.2f} estimated)" if ds.get("usd_estimated") else "")
-                 + f", {ds['input_tokens']:,} tokens in: "
-                 + ", ".join(f"{m} {v['answers']} (${v['usd']:.2f})" for m, v in sorted(ds["by_model"].items())))
-    ag = s["agent"]
-    q = ", ".join(f"{k} {v}" for k, v in sorted(ag["queue"].items())) or "empty"
-    L.append(f"agent      {ag['state']}" + (f", last heartbeat {ag['heartbeat']}" if ag.get("heartbeat") else "")
-             + f"; queue: {q}" + (f"; {ag['waiting_review']} waiting for review (`ecadlib queue list`)" if ag["waiting_review"] else ""))
+        kv.append(["datasheet", f"{ds['answers']} Claude answers for {M.plural(ds['parts'], 'part')}, ${ds['usd']:.2f}"
+                   + (f" (+ ${ds['usd_estimated']:.2f} estimated)" if ds.get("usd_estimated") else "")
+                   + f", {ds['input_tokens']:,} tokens in: "
+                   + ", ".join(f"{m} {v['answers']} (${v['usd']:.2f})" for m, v in sorted(ds["by_model"].items()))])
+    q = ", ".join(f"{v} {M.status_word(k)}" for k, v in sorted(ag["queue"].items())) or "empty"
+    kv.append(["agent", f"{ag['state']}" + (f", last heartbeat {ag['heartbeat']}" if ag.get("heartbeat") else "")
+               + f"; review queue: {q}" + (f"; {ag['waiting_review']} waiting for review" if ag["waiting_review"] else "")])
     if ag.get("last_error"):
-        L.append(f"  last error: {str(ag['last_error'])[:160]}")
-    if t["held"]:
-        L.append("next       held parts: `ecadlib resolve <plan.json> list`")
-    if t["awaiting_approval"]:
-        L.append("next       sign-off: `ecadlib approve <plan.json> status`")
+        kv.append(["", t.color("last error: ", "red") + M.clean(str(ag["last_error"]))[:160]])
+    t.table(kv, indent=0)
     for p in s["problems"]:
-        L.append(f"WARN       {p}")
-    return "\n".join(L)
+        t.note(f"WARN {M.clean(p)}", "the file was skipped; `ecadlib migrate --check` or `ecadlib doctor` says more")
+    nxt = []
+    ws = f" --workspace {shown}" if shown else ""
+    if tot["held"]:
+        nxt.append((f"ecadlib review{ws}", f"{M.plural(tot['held'], 'held part')}: why, and pick a fix (or `ecadlib resolve <plan.json> list`)"))
+    if tot["awaiting_approval"]:
+        nxt.append(("ecadlib approve <plan.json> status", "who still has to sign off"))
+    if ag["waiting_review"]:
+        nxt.append((f"ecadlib queue list{ws}", "the agent's review queue"))
+    if not s["plans"]:
+        nxt.append((f"ecadlib librarian BOM.csv -o {shown or '<workspace>'}/librarian/board", "fill a library from a BOM"))
+    if nxt:
+        t.write("")
+        t.write("next:")
+        t.table([[c, f"# {w}"] for c, w in nxt[:3]])
+    return buf.getvalue().rstrip("\n")
 
 
 def main(argv=None):
@@ -160,7 +190,12 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="print the summary as JSON (stable keys; see README)")
     a = ap.parse_args(argv)
     s = status(a.workspace)
-    print(json.dumps(s, indent=2) if a.json else render(s))
+    if a.json:
+        print(json.dumps(s, indent=2))
+    else:
+        from . import term as TM
+        print(render(s, styled=TM.wants_style(sys.stdout), width=TM.term_width(sys.stdout), shown=a.workspace,
+                     verbosity=TM.VERBOSITY))
     return 0 if s["exists"] else 1
 
 

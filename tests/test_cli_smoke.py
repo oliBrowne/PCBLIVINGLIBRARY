@@ -59,8 +59,10 @@ CASES = [
       "--include-held"], (0,)),
     (["dblib-sync", "{out}/lib/plan.json", "--to", "{out}/dbsync", "-o", "{out}/dbsync.json"], (0,)),
     (["resolve", "{out}/lib/plan.json", "--offline", "--cache", "{out}/cache", "list"], (0,)),
+    (["review", "--workspace", "{out}/ws", "--yes", "--offline"], (0, 2)),
     (["approve", "{out}/lib/plan.json", "status"], (0,)),
     (["dedupe", "{out}/lib/plan.json", "-o", "{out}/dedupe"], (0,)),
+    (["hub", "--workspace", "{out}/ws", "--lib", "{in}/lib", "--json"], (0,)),
     (["datasheet", "estimate", "{out}/lib/plan.json"], (0, 1, 2)),
     (["sourcing", "{in}/bom.csv", "--offline", "--cache", "{out}/cache", "-o", "{out}/src"], (0, 1, 3)),
     (["step-gen", "{pkg}/package_specs/SOIC-8_3.9x4.9mm_P1.27mm.json", "-o", "{out}/soic.step"], (0,)),
@@ -82,6 +84,7 @@ CASES = [
     (["completion", "bash"], (0,)),
     (["ai", "show"], (0,)),
     (["ai", "rails"], (0,)),
+    (["costs", "--all"], (0,)),
     (["plugins", "list"], (0,)),
     (["plugins", "export", "nosuch", "{out}/lib/plan.json", "-o", "{out}/px"], (2,)),
     (["notify", "show", "--rules", "{in}/ecadlib.toml"], (0,)),
@@ -218,7 +221,7 @@ def test_third_party_imports_are_declared():
                      [node.module] if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module else [])
             for n in names:
                 top = n.split(".")[0]
-                if top != "ecadlib" and top not in sys.stdlib_module_names:
+                if top != "ecadlib" and top not in sys.stdlib_module_names and top != "tomllib":   # stdlib from 3.11 (tomli on 3.10)
                     used.setdefault(top, f"{f.name}:{node.lineno}")
     undeclared = {m: where for m, where in used.items() if m.lower() not in declared and m not in OPTIONAL}
     assert not undeclared, f"imported but not in [project] dependencies: {undeclared}"

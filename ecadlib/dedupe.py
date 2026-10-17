@@ -59,7 +59,11 @@ def load_config(path=None, base=None):
 
 
 def mpn_key(s, cfg=None):
-    """'LM1117MPX-3.3/NOPB/TR' -> 'LM1117MPX33NOPB'; '' for an empty MPN."""
+    """'LM1117MPX-3.3/NOPB/TR' -> 'LM1117MPX33NOPB'; '' for an empty MPN or a placeholder ('N/A', 'TBD'): parts whose
+    MPN cell says N/A are not one part."""
+    from .bom_triage import placeholder_mpn
+    if placeholder_mpn(s):
+        return ""
     pats = (cfg or load_config())["patterns"]
     s = str(s or "").strip().upper()
     for _ in range(4):                                       # suffixes can stack: -TR then (LF)

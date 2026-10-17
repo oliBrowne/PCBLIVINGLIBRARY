@@ -125,8 +125,8 @@ def endpoint(rules=None, section="datasheet", model=None):
         base = sec.get("base_url") or ("" if own_provider and sec.get("provider") != ai["provider"] else ai["base_url"]) \
             or (PRESETS[preset][0] if preset else "")
         sk = sec.get("api_key_env") or ""
-        if sk == ANTHROPIC_KEY and provider != "anthropic":
-            sk = ""                                       # [datasheet]'s default key name is Claude's, not this endpoint's
+        if sk == ANTHROPIC_KEY and (provider != "anthropic" or ai["api_key_env"]):
+            sk = ""                                       # [datasheet]'s default key name: [ai] api_key_env / the endpoint's decide
         key_env = sk or ai["api_key_env"] or (PRESETS[preset][1] if preset else "") or \
             (ANTHROPIC_KEY if provider == "anthropic" else "")
         assist = sec.get("assist") or ai["assist"]

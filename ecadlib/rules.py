@@ -8,7 +8,7 @@ footprint density, which every ecadlib tool follows so new parts match your exis
 Without a file nothing changes: DEFAULTS is today's behaviour exactly. The file is searched in: an explicit
 --rules PATH, then the folder the tool works in (plan / output folder) and its parents, then the current folder
 and its parents. A workspace (UI / MCP) uses <workspace>/ecadlib.toml. Python 3.10 has no tomllib: there the
-same content as JSON in ecadlib_rules.json works.
+tomli package (installed with ecadlib) reads it, or the same content as JSON in ecadlib_rules.json works.
 
 Plans (plan.json) keep ecadlib's own parameter names ("Manufacturer Part Number", "Supplier 1", ...); your house
 names from [parameters.names] are applied where data leaves ecadlib: Altium 365 push, the DbLib export and sync,
@@ -135,6 +135,8 @@ DEFAULTS["providers"] = {"order": []}
 # [setup]: written by the `ecadlib init` setup questions (ecadlib.firstrun). libs / workspace are the defaults for
 # --lib / --workspace (after the command line and ECADLIB_LIB / ECADLIB_WORKSPACE); empty = as before.
 DEFAULTS["setup"] = {"tool": "both", "libs": [], "workspace": ""}
+# [hub]: the Library page / `ecadlib hub` (ecadlib.hub). libraries are read on top of --lib; projects feed where-used.
+DEFAULTS["hub"] = {"libraries": [], "projects": [], "stale_days": 14}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
@@ -142,7 +144,7 @@ INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): 
              ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600), ("datasheet", "page_budget"): (0, 600),
              ("datasheet", "max_attempts"): (1, 10),
              ("agent", "interval_minutes"): (1, 10_080), ("agent", "batch_size"): (1, 500),
-             ("notify", "retries"): (0, 10), ("notify", "timeout_s"): (1, 120)}
+             ("notify", "retries"): (0, 10), ("notify", "timeout_s"): (1, 120), ("hub", "stale_days"): (1, 3650)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
 
@@ -175,16 +177,28 @@ def find(start="."):
     return None
 
 
+def toml_module():
+    """tomllib (Python 3.11+), else tomli (the same API; a dependency on 3.10), else None."""
+    try:
+        import tomllib
+    except ImportError:
+        try:
+            import tomli as tomllib
+        except ImportError:
+            return None
+    return tomllib
+
+
 def parse_text(text, name="ecadlib.toml"):
     if str(name).endswith(".json"):
         try:
             return json.loads(text or "{}")
         except json.JSONDecodeError as e:
             raise RulesError(f"{name}: not valid JSON ({e})") from None
-    try:
-        import tomllib
-    except ImportError:                       # Python 3.10
-        raise RulesError(f"{name}: reading TOML needs Python 3.11+; on 3.10 put the same content as JSON in ecadlib_rules.json") from None
+    tomllib = toml_module()
+    if tomllib is None:                       # Python 3.10 without the tomli package
+        raise RulesError(f"{name}: reading TOML on Python 3.10 needs the tomli package (pip install tomli), "
+                         "or put the same content as JSON in ecadlib_rules.json") from None
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
@@ -869,6 +883,10 @@ HELP = {
                  "[] = each command's built-in default; `ecadlib plugins list` shows what is installed",
     "setup": "Written by `ecadlib init`: the tool you use, your library folders (the default --lib) and the workspace "
              "(the default --workspace); relative paths start at this file's folder",
+    "hub": "The Library page (ecadlib hub): libraries = extra library folders or files to show next to --lib (.SchLib, "
+           ".PcbLib, .DbLib, .kicad_sym, .pretty, .kicad_dbl, Altium 365 lists), projects = Altium project folders for "
+           "where-used, stale_days = how much older a differing copy must be to count as behind; relative paths start "
+           "at this file's folder",
     "setup.tool": "altium | kicad | both: which outputs `ecadlib init` and `ecadlib demo` point you at",
     "symbols.order": "group order on each side; groups: power analog power_out ground ep reset clock debug usb adc other_in uart i2c spi can eth ports other_out nc",
 }
