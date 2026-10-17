@@ -145,6 +145,26 @@ def test_footprints_whose_names_clash_are_not_merged():
     assert row["footprint"] != "EEPART1" and any("EEPART2" in e and "EEPART1" in e for e in rep["errors"]), (row, rep["errors"])
 
 
+def test_dblib_row_never_points_at_another_parts_symbol():
+    # "RES-0603-10k " and "RES-0603-10k" are both the KiCad symbol RES-0603-10k; kicad-export writes the first and
+    # reports the second, so the database row of the second must not use the first part's symbol
+    def change(items):
+        r = json.loads(json.dumps(next(i for i in items if i["name"] == "RES-0603-10k")))
+        r["name"] = "RES-0603-10k "
+        for p in r["parameters"]:
+            if p["name"] == "Value":
+                p["value"] = "22k"
+        items.append(r)
+    plan, http = _dup_plan(change)
+    out = plan.parent.parent / "k"
+    rep = KD.build(plan, out, "lib", export=True, http=http, log=_quiet)
+    con = sqlite3.connect(out / "lib.sqlite")
+    ids = [r[0] for r in con.execute('SELECT "Part ID" FROM "Resistors"')]
+    con.close()
+    assert ids == ["RES-0603-10k"], ids
+    assert any(s["part"] == "RES-0603-10k " for s in rep["skipped"]), rep["skipped"]
+
+
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_review_1018_kicad"]))
