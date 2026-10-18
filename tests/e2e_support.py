@@ -279,11 +279,12 @@ class FakeNexar(_Server):
                     return self._send(200, {"data": ids})
                 if "folders" in q:                 # an empty library: every folder is created on first use
                     return self._send(200, {"data": {"desLibrary": {"folders": srv.folders}}})
-                if "desCreateFolder" in q:
+                if "desCreateFolder" in q:             # live schema: parentFolderId (GUID) in, folderId (GUID) out
                     inp = body["variables"]["input"]
-                    fid = f"fld-{len(srv.folders) + 1}"
-                    srv.folders.append({"id": fid, "name": inp["name"], "parent": {"id": inp["parentId"]} if inp.get("parentId") else None})
-                    return self._send(200, {"data": {"desCreateFolder": {"id": fid, "errors": []}}})
+                    n = len(srv.folders) + 1
+                    par = next((f["id"] for f in srv.folders if f["folderId"] == inp.get("parentFolderId")), None)
+                    srv.folders.append({"id": f"fld-{n}", "folderId": f"G-{n}", "name": inp["name"], "parent": {"id": par} if par else None})
+                    return self._send(200, {"data": {"desCreateFolder": {"folderId": f"G-{n}", "errors": []}}})
                 if "desLibrary" in q:
                     return self._send(200, {"data": {"desLibrary": {"components": {"nodes": []}}}})
                 if "desReleaseComponent" in q:

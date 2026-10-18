@@ -1164,7 +1164,7 @@ type DesCreateCommentThreadPayload {
 "Payload associated with creating a folder."
 type DesCreateFolderPayload {
   "ID of the created folder."
-  id: ID
+  folderId: String
   "Payload errors."
   errors: [DesPayloadError!]!
 }
@@ -1407,6 +1407,8 @@ type DesFolder implements Node {
   createdAt: DateTime!
   "The `DateTime` this folder was last updated at."
   updatedAt: DateTime!
+  "Folder GUID (desCreateFolder parentFolderId)."
+  folderId: String!
   "Folder type."
   folderType: DesFolderType!
 }
@@ -3511,7 +3513,7 @@ input DesCreateFolderInput {
   "Folder type."
   folderType: DesFolderType!
   "ID of the parent folder. If omitted or set to `null`, the folder will be placed under the library root."
-  parentId: ID
+  parentFolderId: String
   "Naming scheme for the folder items."
   itemNamingSchemeTemplate: String
   "Folder permissions (non recursive)."

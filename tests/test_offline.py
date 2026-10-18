@@ -118,31 +118,60 @@ def test_altium365_plan_and_push():
 
 def test_altium365_folder_id_finds_or_creates_each_level():
     """A nested component folder resolves level by level: existing folders by name under their parent (any case),
-    missing ones created once under the right parent; the folder list is read once per run."""
+    missing ones created under the right parent (by its GUID, live schema 2026-10) and read back for their node id;
+    the folder list is read once per run plus once per create."""
     class N(A.Nexar):
         def __init__(self):
-            self.token, self.calls, self.n = "t", [], 0
-            self.lib = [{"id": "f-c", "name": "Components", "parent": None},
-                        {"id": "f-ic", "name": "ICs", "parent": {"id": "f-c"}},
-                        {"id": "f-x", "name": "ecadlib-test-47", "parent": {"id": "f-c"}}]   # same name, other parent
+            self.token, self.calls = "t", []
+            self.lib = [{"id": "f-c", "folderId": "G-c", "name": "Components", "parent": None},
+                        {"id": "f-ic", "folderId": "G-ic", "name": "ICs", "parent": {"id": "f-c"}},
+                        {"id": "f-x", "folderId": "G-x", "name": "ecadlib-test-47", "parent": {"id": "f-c"}}]  # other parent
         def gql(self, query, variables=None):
             self.calls.append(query)
             if query == A.Q_FOLDERS:
-                return {"desLibrary": {"folders": self.lib}}
-            self.n += 1
-            assert query == A.M_CREATE_FOLDER and variables["input"]["folderType"] == "GENERIC_FOLDER", variables
-            return {"desCreateFolder": {"id": f"new-{self.n}:{variables['input']['name']}<{variables['input']['parentId']}", "errors": []}}
+                return {"desLibrary": {"folders": [dict(f) for f in self.lib]}}
+            inp = variables["input"]
+            assert query == A.M_CREATE_FOLDER and inp["folderType"] == "GENERIC_FOLDER" and "parentId" not in inp, inp
+            par = next((f["id"] for f in self.lib if f["folderId"] == inp["parentFolderId"]), None)
+            assert (par is None) == (inp["parentFolderId"] is None), inp
+            n = len(self.lib)
+            self.lib.append({"id": f"f-{n}", "folderId": f"G-{n}", "name": inp["name"], "parent": {"id": par} if par else None})
+            return {"desCreateFolder": {"folderId": f"G-{n}", "errors": []}}
     n = N()
     assert n.folder_id("https://ws", "components/ICs") == "f-ic"
-    top = n.folder_id("https://ws", "ecadlib-test-47")
-    assert top == "new-1:ecadlib-test-47<None", top           # a root folder, not the Components/ecadlib-test-47 one
-    assert n.folder_id("https://ws", "ecadlib-test-47/Sub") == f"new-2:Sub<{top}"
-    assert n.folder_id("https://ws", "ecadlib-test-47/Sub") == f"new-2:Sub<{top}"       # cached, not created again
-    assert n.calls.count(A.Q_FOLDERS) == 1 and n.calls.count(A.M_CREATE_FOLDER) == 2, n.calls
+    assert n.folder_id("https://ws", "ecadlib-test-47") == "f-3"      # a new root folder, not Components/ecadlib-test-47
+    assert n.folder_id("https://ws", "ecadlib-test-47/Sub") == "f-4" and n.lib[-1]["parent"] == {"id": "f-3"}
+    assert n.folder_id("https://ws", "ecadlib-test-47/Sub") == "f-4"  # found, not created again
+    assert n.calls.count(A.Q_FOLDERS) == 3 and n.calls.count(A.M_CREATE_FOLDER) == 2, n.calls
     assert A.split_folder("ecadlib-test-47/ICs") == ("ecadlib-test-47", "ICs") and A.split_folder("ICs") == ("", "ICs")
     item = {**A.plan([{"designator": "U1", "mpn": "CH340C", "footprint": "SOIC-16"}])[0], "folder": "ICs"}
     inp = A.release_input(item, "https://ws", {}, ([], []))
     assert "componentParentFolderId" not in inp and inp["componentReleaseFolder"] == "ICs", inp
+
+
+def test_altium365_release_retries_the_parent_folder_by_guid():
+    """Nexar does not document whether componentParentFolderId is the folder's node id or its GUID: a folder error with
+    the node id is retried once with the GUID; any other error is reported as is."""
+    class C:
+        def __init__(self, fail):
+            self.fail, self.sent = fail, []
+        def release_defs(self, ws): return {}
+        def find(self, ws, name): return None
+        def upload(self, p): return "f"
+        def folder(self, ws, path): return {"id": "node-1", "guid": "GUID-1"}
+        def folder_id(self, ws, path): return "node-1"
+        def release(self, inp):
+            self.sent.append(inp["componentParentFolderId"])
+            if inp["componentParentFolderId"] == "node-1" and self.fail:
+                raise A.NexarError(self.fail)
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "SchLib").mkdir(); (Path(d) / "PcbLib").mkdir()
+        (Path(d) / "SchLib" / "CH340C.SchLib").write_bytes(b"x"); (Path(d) / "PcbLib" / "SOIC-16.PcbLib").write_bytes(b"x")
+        items = [i for i in A.plan([{"designator": "U1", "mpn": "CH340C", "footprint": "SOIC-16"}], models=d) if i["status"] == "ready"]
+        for fail, sent, action in ((None, ["node-1"], "release"), ("Parent folder not found", ["node-1", "GUID-1"], "release"),
+                                   ("Invalid revision naming scheme", ["node-1"], "error")):
+            c = C(fail)
+            assert A.push(items, c, "https://ws")[0]["action"] == action and c.sent == sent, (fail, c.sent)
 
 
 def test_altium365_ops_match_nexar_schema():

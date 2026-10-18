@@ -86,7 +86,7 @@ def gp():
         with E.FakeAnthropic() as fa, E.FakeNexar(tls) as nx:
             steps = golden_path(root / "work", fa, nx, tls)
             _GP.update(root=root, work=root / "work", steps=steps, tls=tls, claude=list(fa.kinds),
-                       uploads=dict(nx.uploads), releases=list(nx.releases))
+                       uploads=dict(nx.uploads), releases=list(nx.releases), folders=list(nx.folders))
             _GP["snapshot"] = E.snapshot(root / "work")
     return _GP
 
@@ -287,7 +287,9 @@ def test_altium365_release_package_is_consistent():
         par = {x["name"]: x["value"] for x in r["parameters"]}
         assert par.get("Manufacturer Part Number") and par.get("Manufacturer"), (r["componentItemName"], par)
         assert par.get("ComponentLink2URL", "").startswith("http"), (r["componentItemName"], par)
-        assert r["componentReleaseFolder"].startswith("Components/"), r["componentReleaseFolder"]
+        # one folder name under the Components folder (by id): a "/" in componentReleaseFolder is refused by Altium 365
+        top = next(f["id"] for f in g["folders"] if f["name"] == "Components" and not f["parent"])
+        assert "/" not in r["componentReleaseFolder"] and r["componentParentFolderId"] == top, r
         for kind, ext, reader in (("symbol", "SchLib", lambda f: AL.read_schlib(f)[1]), ("footprint", "PcbLib", AL.read_pcblib)):
             files = r[f"{kind}Files"]
             assert len(files) == 1 and files[0]["relativePath"].endswith("." + ext), files

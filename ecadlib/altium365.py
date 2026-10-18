@@ -54,9 +54,11 @@ M_RELEASE = """mutation ($input: DesReleaseComponentInput!) { desReleaseComponen
 
 # folders by parent: componentReleaseFolder is one child folder name (a "/" in it fails with AddALU_FoldersInvalid
 # folder HRID), so a nested component folder is released as componentParentFolderId + leaf name
-Q_FOLDERS = """query ($ws: String!) { desLibrary(workspaceUrl: $ws) { folders { id name parent { id } } } }"""
+# live schema 2026-10: a folder has a node id (base64) and a folderId (GUID); desCreateFolder takes the parent's
+# folderId as parentFolderId and returns only the new folderId
+Q_FOLDERS = """query ($ws: String!) { desLibrary(workspaceUrl: $ws) { folders { id folderId name parent { id } } } }"""
 
-M_CREATE_FOLDER = """mutation ($input: DesCreateFolderInput!) { desCreateFolder(input: $input) { id errors { message } } }"""
+M_CREATE_FOLDER = """mutation ($input: DesCreateFolderInput!) { desCreateFolder(input: $input) { folderId errors { message } } }"""
 
 M_UPDATE_PARAMS = """mutation ($input: DesUpdateComponentRevisionParametersInput!) {
   desUpdateComponentRevisionParameters(input: $input) { componentId errors { message } }
@@ -120,25 +122,35 @@ class Nexar:
         if errs:
             raise NexarError("; ".join(e["message"] for e in errs))
 
-    def folder_id(self, ws, path):
-        """Id of the workspace folder at path ("a/b"), creating any missing level as a generic folder.
-        The folder list is read once per client; folders it creates are added to it."""
+    def _read_folders(self, ws):
+        self._folders = [{"id": f["id"], "guid": f.get("folderId"), "name": f["name"], "parent": (f.get("parent") or {}).get("id")}
+                         for f in self.gql(Q_FOLDERS, {"ws": ws})["desLibrary"]["folders"]]
+        self._folders_ws = ws
+
+    def folder(self, ws, path):
+        """The workspace folder at path ("a/b") as {"id", "guid", ...}, creating any missing level as a generic folder.
+        The folder list is read once per client, and again after a create (the create returns only the GUID)."""
         if getattr(self, "_folders_ws", None) != ws:
-            self._folders = [{"id": f["id"], "name": f["name"], "parent": (f.get("parent") or {}).get("id")}
-                             for f in self.gql(Q_FOLDERS, {"ws": ws})["desLibrary"]["folders"]]
-            self._folders_ws = ws
-        parent = None
+            self._read_folders(ws)
+        hit = None
         for name in [p for p in path.split("/") if p]:
-            hit = next((f for f in self._folders if f["parent"] == parent and f["name"].lower() == name.lower()), None)
-            if not hit:
-                inp = {"workspaceUrl": ws, "name": name, "folderType": "GENERIC_FOLDER", "parentId": parent}
+            parent = hit["id"] if hit else None
+            find = lambda: next((f for f in self._folders if f["parent"] == parent and f["name"].lower() == name.lower()), None)
+            nxt = find()
+            if not nxt:
+                inp = {"workspaceUrl": ws, "name": name, "folderType": "GENERIC_FOLDER", "parentFolderId": hit["guid"] if hit else None}
                 res = self.gql(M_CREATE_FOLDER, {"input": inp})["desCreateFolder"]
-                if res.get("errors") or not res.get("id"):
+                if res.get("errors") or not res.get("folderId"):
                     raise NexarError(f"creating folder {name!r}: " + "; ".join(e["message"] for e in res.get("errors") or []))
-                hit = {"id": res["id"], "name": name, "parent": parent}
-                self._folders.append(hit)
-            parent = hit["id"]
-        return parent
+                self._read_folders(ws)
+                nxt = find() or next((f for f in self._folders if f["guid"] == res["folderId"]), None)
+                if not nxt:
+                    raise NexarError(f"folder {name!r} was created ({res['folderId']}) but is not in the folder list")
+            hit = nxt
+        return hit
+
+    def folder_id(self, ws, path):
+        return self.folder(ws, path)["id"]
 
     def update_params(self, component_id, params, note, replace=False):
         inp = {"componentId": component_id, "releaseNote": note, "replaceExisting": replace, "parameters": params}
@@ -340,7 +352,13 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     res["detail"] = {"mutation": "desReleaseComponent", "input": inp,
                                      **({"parent_folder": parent} if parent else {})}
                 else:
-                    client.release(inp)
+                    try:
+                        client.release(inp)
+                    except NexarError as e:    # the schema does not say which folder id the parent takes: try the GUID
+                        guid = (client.folder(ws, parent) or {}).get("guid") if parent and hasattr(client, "folder") else None
+                        if not (guid and "folder" in str(e).lower()):
+                            raise
+                        client.release({**inp, "componentParentFolderId": guid})
         except Exception as e:                 # keep going; report per part
             res["action"], res["detail"] = "error", f"{type(e).__name__}: {e}"
         sim = (it.get("sim_model") or {}).get("attached", {}).get("altium")
