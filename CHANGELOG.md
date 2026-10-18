@@ -12,8 +12,15 @@ a minor release may change command-line options and file formats.
 - `ecadlib status` shows how long the last BOM run took, step by step: triage, build, release check, review (from the release check to the last sign-off, `--allow` or resolve choice) and the Altium 365 push, with ecadlib's own time and the total (#44). Each plan folder keeps a `timing.jsonl`; `status --json` has `last_run` and a `timing` per plan.
 - `ecadlib status` shows the review rate: of the parts built, how many passed first time, are held (with the top reasons), were approved, rejected or changed by a person (#45). `status --json` has `review`, overall and per plan.
 - docs/START_HERE.md asks people trying ecadlib to send those two lines.
+- `ecadlib eval run` reports the parts that never reached the model (no datasheet PDF could be fetched) apart, with the pass rate without them (`summary.no_datasheet`, `summary.with_datasheet`).
+
+### Changed
+
+- pypdf is a core dependency (it was the `[pdf]` extra): without it a large datasheet (the 1976-page SAM E70 family sheet) could not be cut to the pages that matter and every read of it failed.
 
 ### Fixed
+
+- Datasheet reader: a maker's link that refuses this machine (HTTP 401, 403 or 429: Nexperia, Renesas, Altera on the live benchmark) is sent as a URL for the API to fetch, as a blocked host already was; only a 404-style error, an HTML page or an oversized file rules a link out.
 
 - Altium 365 push: symbols and footprints are released under the `[folders] root` too (`<root>/Models/Symbols`, `<root>/Models/Footprints`), not always under `Components/Models`, so a test root keeps everything together.
 - Altium 365: Nexar renamed `DesRevision.id` to `revisionId`; push, `a365 pull/status` and `upstream check-a365` asked for the old field and every lookup failed with HTTP 400. The test schema is updated to match.

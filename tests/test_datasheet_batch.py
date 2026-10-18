@@ -128,6 +128,8 @@ class PdfHTTP(TL.FakeHTTP):
         self.fetched.append(url)
         if url in self.pdfs:
             v = self.pdfs[url]
+            if isinstance(v, int):                       # an HTTP error status
+                return (v, b"refused", "text/html", url, None)
             return (200, v, "application/pdf" if D.is_pdf(v) else "text/html", url, None)
         return (0, None, "", url, "ProxyError: proxy CONNECT refused (403 Forbidden)")
 
@@ -268,6 +270,16 @@ def test_datasheet_urls_and_pdf_store():
         assert j["prov"]["attempts"][0]["error"].endswith("bytes)") and j["body"]["fallbacks"] == "default"
         j = rd.job("TESTPART", [("https://a/view", "BOM"), ("https://blocked/x.pdf", "pattern")])
         assert j["body"]["messages"][0]["content"][0]["source"] == {"type": "url", "url": "https://blocked/x.pdf"}
+        # a maker's site that refuses this machine (403 Nexperia / Renesas, 429) is the API's to fetch; a 404 is not
+        http.pdfs.update({"https://maker/403.pdf": 403, "https://maker/429.pdf": 429, "https://maker/404.pdf": 404})
+        for code in (403, 429):
+            j = rd.job("TESTPART", [(f"https://maker/{code}.pdf", "KiCad")])
+            assert j["body"]["messages"][0]["content"][0]["source"] == {"type": "url", "url": f"https://maker/{code}.pdf"}, code
+        try:
+            rd.job("TESTPART", [("https://maker/404.pdf", "KiCad")])
+            raise AssertionError("404")
+        except D.DatasheetError as e:
+            assert "HTTP 404" in str(e)
         try:
             rd.job("TESTPART", [("https://a/view", "BOM")])
             raise AssertionError("html only")

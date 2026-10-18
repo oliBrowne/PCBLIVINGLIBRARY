@@ -211,7 +211,7 @@ def test_every_command_help_and_minimal_run():
     assert not problems, "\n\n".join(problems)
 
 
-OPTIONAL = {"PIL": "pillow", "pypdf": "pypdf", "pyaltiumlib": "pyaltiumlib"}   # pyaltiumlib: parity's second reader           # extras: every use handles ImportError with a message
+OPTIONAL = {"PIL": "pillow", "pyaltiumlib": "pyaltiumlib"}   # pyaltiumlib: parity's second reader           # extras: every use handles ImportError with a message
 
 
 def test_third_party_imports_are_declared():
@@ -234,7 +234,7 @@ def test_third_party_imports_are_declared():
                     used.setdefault(top, f"{f.name}:{node.lineno}")
     undeclared = {m: where for m, where in used.items() if m.lower() not in declared and m not in OPTIONAL}
     assert not undeclared, f"imported but not in [project] dependencies: {undeclared}"
-    assert "olefile" in declared
+    assert "olefile" in declared and "pypdf" in declared   # without pypdf a 1976-page datasheet went whole and failed
 
 
 if __name__ == "__main__":

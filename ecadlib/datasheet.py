@@ -1247,6 +1247,11 @@ def custom_id(name, taken):
     return cid
 
 
+# A link that is wrong everywhere: not a PDF, too big, or gone. 401 / 403 / 429 are not in it: a maker's site that
+# refuses this machine (bot rules, a corporate proxy) usually serves the API's fetcher, so such a link goes as a URL.
+BROKEN_LINK = r"not a PDF|HTTP 4(?!01|03|29)\d\d|larger than"
+
+
 class Reader:
     """Reads datasheets for many parts. job() finds and validates the PDF, cached() answers from the result cache,
     read_now() makes one synchronous call; with batch=True (or estimate=True) jobs are collected with submit() and
@@ -1332,7 +1337,7 @@ class Reader:
         if data is None:
             if not urls:
                 raise DatasheetError("no datasheet URL known")
-            wrong = {a["url"] for a in attempts if re.search(r"not a PDF|HTTP 4\d\d|larger than", a["error"])}
+            wrong = {a["url"] for a in attempts if re.search(BROKEN_LINK, a["error"])}
             usable = [(u, w) for u, w in urls if u not in wrong]
             if not usable:
                 raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts))
