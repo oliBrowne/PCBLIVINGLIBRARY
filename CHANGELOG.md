@@ -9,6 +9,7 @@ a minor release may change command-line options and file formats.
 
 ### Added
 
+- `ecadlib eval run --batch` sends the datasheet reads as one Message Batch (half price); the report prices those parts at the batch rate, and recordings keep it so a replay gives the same cost.
 - `ecadlib status` shows how long the last BOM run took, step by step: triage, build, release check, review (from the release check to the last sign-off, `--allow` or resolve choice) and the Altium 365 push, with ecadlib's own time and the total (#44). Each plan folder keeps a `timing.jsonl`; `status --json` has `last_run` and a `timing` per plan.
 - `ecadlib status` shows the review rate: of the parts built, how many passed first time, are held (with the top reasons), were approved, rejected or changed by a person (#45). `status --json` has `review`, overall and per plan.
 - docs/START_HERE.md asks people trying ecadlib to send those two lines.
@@ -22,12 +23,16 @@ a minor release may change command-line options and file formats.
 - `ecadlib mcp --tools core|read-only|<names>` (or `ECADLIB_MCP_TOOLS`) offers fewer tools, for small models and remote agents.
 - MCP tools `upload_bom`, `ai_quote`, `ai_read`, `house_style_guide` and `job_status`; every tool has a title and read-only / destructive / internet hints; the server sends usage instructions on connect.
 - docs/mcp.md: setup for Claude Code, Claude Desktop, Codex and Grok.
+- docs/START_HERE.md walks an Altium user from the installer to a project BOM released into Altium 365, all from the ecadlib menu: the Nexar token and workspace, Check this project BOM, Fill the library with the AI cost shown first, the review queue for held parts, and the Components panel (#51).
+
+### Removed
+
+- The Fusion Electronics / EAGLE (`ecadlib eagle-export`, `.lbr`) and EasyEDA Pro (`ecadlib easyeda-export`, `.elibz`) exports, with their web UI buttons, `POST /api/export/tool`, the Workspace and MCP `tool_export`, the Fusion and EasyEDA columns of the library hub, the `fusion/` and `easyeda/` folders of `ecadlib testpack` and the `[release] eagle` / `easyeda` checks (#50). Why: no user asked for them, neither was ever opened in the real tool, and about 3,000 lines of writers and read-back took one maintainer's time away from the BOM-to-Altium 365 flow. The two commands now print that the last version with them is 0.3.1 (`pip install "ecadlib==0.3.1"`); an `ecadlib.toml` that still sets `[release] eagle` or `easyeda` loads, and the keys are ignored. Importing parts *from* EasyEDA / JLCPCB is unchanged.
 
 ### Changed
 
 - API keys are read from ecadlib's own key store when they are needed and are never copied into the environment (they used to be copied into each ecadlib process's environment, which every program it started inherited). A stored key now comes before an environment variable of the same name; the variable is used only when nothing is stored. The Altium menu README no longer suggests `setx`. The eval gate and golden builds never read the key store.
 - pypdf is a core dependency (it was the `[pdf]` extra): without it a large datasheet (the 1976-page SAM E70 family sheet) could not be cut to the pages that matter and every read of it failed.
-
 - MCP: a missing or wrong argument is now a tool error the model can read (it was a protocol error), naming the arguments the tool takes; `null` optional arguments, numbers and booleans sent as text and objects sent as JSON strings are accepted. `librarian_run`'s `refresh` takes a list of part names and `refresh_all` redoes everything (`refresh: true` still works). Answers are compact JSON without `\u` escapes and are cut at `--max-chars` (default 80,000) with a hint.
 
 ### Fixed
@@ -35,6 +40,7 @@ a minor release may change command-line options and file formats.
 - MCP `librarian_run` ran the paid datasheet reader without a price or a yes. It now prices those parts (`ai`) like the other front ends, and `ai_read` needs the approved amount. `learn_house_style` with `ai` returns a quote too.
 - MCP calls that take longer than `--wait` (default 45 s) answer with a job id for `job_status` instead of running into the client's timeout (Codex waits 60 s).
 - MCP: a child process (kicad-cli, pdftoppm, git) can no longer write into the protocol stream on stdout.
+- The Altium menu and the web UI no longer tell you to put NEXAR_TOKEN in an environment variable and restart: the token is read from ecadlib's key store (setup page, Optional keys).
 - Datasheet page picking: a family sheet's "LQFP144, 144-lead LQFP" no longer counts as this part's LQFP-100 (a bare family word matched every LQFP), and the drawing and land-pattern slots never go to a page about another package. The SAM E70 sheet (1976 pages) now sends the LQFP100 drawing instead of the LQFP144 and QFN pages.
 - Standard parts: DO-41 (DO-204AL, SOD81) on a diode resolves to KiCad's D_DO-41_SOD81_P10.16mm_Horizontal.
 - Datasheet checks: 1.25 mm (JST GH) is a standard pitch.

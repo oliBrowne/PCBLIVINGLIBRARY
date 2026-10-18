@@ -24,8 +24,8 @@ Install it with `pip install ecadlib` (v0.3.1, Python 3.10+), or on Windows run 
 licence. Website: [pcblivinglibrary.vercel.app](https://pcblivinglibrary.vercel.app).
 
 **Supported tools:** Altium (Altium 365 first) and KiCad are the supported targets: they get the testing, the
-benchmarks and the fixes. The Fusion Electronics / EAGLE and EasyEDA Pro exports (section 11b) still work but are
-**experimental**: kept as they are, not a focus, and they may be removed.
+benchmarks and the fixes. The Fusion Electronics / EAGLE and EasyEDA Pro exports were removed after 0.3.1; the last
+version with them is 0.3.1 (`pip install "ecadlib==0.3.1"`).
 
 **Where it's going:** [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) says who ecadlib is for, what it must do and how
 success is measured; [ROADMAP.md](ROADMAP.md) lists what has shipped and the next milestones (v0.3.1, v0.4.0, v0.5.0)
@@ -119,7 +119,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    Its tools include `workspace_status`, `workspace_info`, `upload_bom`, `triage_bom` (with `summary_only` for large BOMs), `preview_footprint`, `approve_footprint`, `librarian_run` (fill every missing part, then the release check), `release_check` (with `allow` for parts a person has signed off), `held_parts`, `part_candidates` and `choose_part` (fix a held part), `approval_status` and `approve_part` (sign-off; `user` is required, the agent must pass the person's own name), `find_duplicates` (with `merge`), `build_altium_models`, `export_altium_dblib`, `altium365_plan`, `altium365_push` (dry run unless `dry_run` is false; held parts are never pushed), `sim_models` (SPICE/IBIS models; `attach` writes them), `ai_quote` and `ai_read` (datasheet reads, only after the user approved the price), `job_status` (slow tools hand back a job) and `list_example_specs`.
-3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib eagle-export` and `ecadlib easyeda-export` (Fusion Electronics / EAGLE and EasyEDA Pro, experimental, section 11b), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib demo` (section 32), `ecadlib kicad-pcm` and `ecadlib altium-pkg` (section 31), `ecadlib ai` (section 33), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22), `ecadlib visual-check` (23), `ecadlib migrate` and `ecadlib rebuild` (35). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
+3. **CLI**, for scripts and CI: `ecadlib triage`, `ecadlib footprint`, `ecadlib check`, `ecadlib footprint-bench`, `ecadlib dblib`, `ecadlib dblib-sync`, `ecadlib altium-lib`, `ecadlib altium365`, `ecadlib kicad-export` (the library as KiCad files, section 11), `ecadlib resolve`, `ecadlib approve`, `ecadlib dedupe`, `ecadlib sourcing`, `ecadlib step-gen`, `ecadlib upkeep` (section 15), `ecadlib a365`, `ecadlib project`, `ecadlib where-used` and `ecadlib sim-models` (section 17), `ecadlib init` and `ecadlib rules` (section 18), `ecadlib demo` (section 32), `ecadlib kicad-pcm` and `ecadlib altium-pkg` (section 31), `ecadlib ai` (section 33), `ecadlib symbol` (section 19), `ecadlib datasheet`, `ecadlib team`, `ecadlib agent` (the library agent, section 20), `ecadlib agent-watch` (21), `ecadlib queue` (22), `ecadlib visual-check` (23), `ecadlib migrate` and `ecadlib rebuild` (35). Run `ecadlib <command> -h` for options. Each is described below; the older `python3 -m ecadlib.<module>` form still works.
 
 The UI and MCP server write everything to one workspace folder (default `./ecadlib_workspace`). It has these subfolders:
 * `uploads/`
@@ -142,7 +142,7 @@ Both servers use only the standard library on top of the package requirements. T
 * **Undo.** Approve and reject (in step 2 and in the review queue) show at once and are sent when the few-second Undo window closes; *Release anyway* is recorded at once and its Undo holds the part again.
 * **Keyboard.** `?` lists the shortcuts: `/` search, `j` / `k` next / previous part, `Enter` open, `Esc` close, `h` held only, `u` choose a file, `1` `2` `3` steps, `q` review queue, `s` status. Light and dark themes follow the system; `prefers-reduced-motion` turns animations off.
 * The same part cards are available as `Workspace.library_parts(bom)`, `GET /api/parts?bom=` and the MCP tool `library_parts` (`ecadlib/partview.py`).
-* **Your library** (`l`) shows your whole library across tools: a tile per tool (Altium, Altium 365, KiCad, Fusion, EasyEDA) that opens your library as it is in that tool, or every part once with a column per tool; last changed and by whom, copying parts between Altium and KiCad (into a project too), and a part page with pictures, sources, release check, sign-off, where-used, lifecycle, history and fix buttons. See section 39.
+* **Your library** (`l`) shows your whole library across tools: a tile per tool (Altium, Altium 365, KiCad) that opens your library as it is in that tool, or every part once with a column per tool; last changed and by whom, copying parts between Altium and KiCad (into a project too), and a part page with pictures, sources, release check, sign-off, where-used, lifecycle, history and fix buttons. See section 39.
 
 ### Team server (`ecadlib ui --team`)
 
@@ -829,56 +829,6 @@ Writes what the librarian built for Altium as a KiCad library: `mylib.kicad_sym`
 * **Format:** KiCad 8 (`.kicad_sym` version 20231120, footprints at most 20240108), so KiCad 8, 9 and 10 can open it. KiCad 9/10 syntax from the upstream library is written the KiCad 8 way and flags KiCad 8 doesn't know are dropped.
 * **Checks:** every file parses with `ecadlib.sexpr`, each footprint passes release_check's footprint rule at the level the release check recorded, and symbol pins are checked against footprint pads. **In KiCad itself** (7.0.11, see section 28): the `fp-lib-table` resolves in a KiCad project and its footprints match the library; KiCad 7 refuses the KiCad 8 symbol library as such, and loads it with the two KiCad 8 tokens (`exclude_from_sim`, `generator_version`) removed, every pin, graphic and field unchanged. KiCad 8, 9 and 10 were not run here. A KiCad 7 symbol's `ki_description` becomes the `Description` field.
 * **License:** KiCad library content is CC-BY-SA 4.0. An export that includes some gets a `NOTICE.txt`, and the export stays out of git (`out/kicad/` is in `.gitignore`).
-
-## 11b. `eagle_export.py` and `easyeda_pro_export.py`: Fusion Electronics / EAGLE and EasyEDA Pro (experimental)
-
-> **Experimental.** ecadlib focuses on Altium and KiCad. These two exports keep working and keep their read-back
-> checks, but they get no new features and may be removed in a later release.
-
-```
-ecadlib eagle-export out/librarian/plan.json -o out/fusion --name mylib [--kicad out/kicad] [--include-held] [--offline]
-ecadlib easyeda-export out/librarian/plan.json -o out/easyeda --name mylib [--kicad out/kicad] [--include-held] [--offline]
-python3 -m tests.run_all test_tool_exports
-```
-
-The same library for two more tools, built from what `kicad-export` writes (it runs first, or `--kicad` reuses its
-folder), so every tool gets the same symbols, footprints and fields.
-
-* **Fusion Electronics / EAGLE:** `mylib.lbr` (EAGLE 9 XML; Fusion opens it with Library > Open or the Library
-  Manager's Import) with one package, symbol and deviceset per part: pads with size, rotation, roundness, side, paste and
-  mask; KiCad mask / paste margins as the exact openings on tStop / tCream (Eagle has no per-pad margin); oval and
-  rectangular through-hole pads as an Eagle pad plus the rest of the copper; slots on Milling; custom pads as the anchor
-  pad plus polygons; gates and pin-to-pad connects; Fusion's standard attributes (MPN, MANUFACTURER, DATASHEET,
-  DESCRIPTION, PACKAGE, CATEGORY_L1 / L2 from the library folder, VENDOR / VPN from the first supplier) so its BOM and
-  part search fill in; resistors, capacitors, inductors and ferrite beads get a user value.
-* **EasyEDA Pro:** `mylib.elibz` (EasyEDA Pro's device library; File > Open / Import > EasyEDA Pro) with one device, symbol
-  and footprint per part, written to the line format EasyEDA Pro uses (checked field by field against its own files):
-  pads with solder mask and paste expansion per side, plating, the hole and the copper off the hole; custom pads as
-  their outline (with exact arcs) plus copper fills; pins with type, shape and names; LCSC numbers as EasyEDA's
-  Supplier / Supplier Part.
-* **3D models:** neither format holds a STEP file (Fusion and EasyEDA keep 3D models in their own cloud), so
-  `mylib.3dshapes/` holds the export's STEP files to attach there; models no longer in the library are removed.
-* **Hand-off:** each export also writes `INSTALL.md` (the import steps for that tool, which footprint takes which STEP
-  file, and any differences found in the read-back) and `mylib_fusion.zip` / `mylib_easyeda.zip` with the library,
-  `INSTALL.md`, the licence notices and the STEP files: one file to hand to whoever uses the tool. The zip and the
-  `.elibz` are byte-identical when nothing changed.
-* **Read back pad by pad:** each library is parsed again by ecadlib's own reader and every footprint compared with its
-  KiCad original (pads, drills, shapes, paste and mask per pad, exposed pad, courtyard), then the mask and paste layers
-  are compared as areas, so an opening that belongs to a neighbouring pad is not reported as a fault while a missing
-  one is. Symbols are compared pin by pin. Where a Python with KiCad's pcbnew is found, KiCad's own Eagle importer
-  (and, from KiCad 8, its EasyEDA Pro importer) reads the files as a second, independent reader. What a format cannot
-  hold is written approximately and listed as a warning, never silently: curved custom shapes in Eagle become polygons,
-  an Eagle hole always opens the mask, EasyEDA pin types collapse to input / output / bidirectional, and overbars are
-  written as a trailing `#`.
-* **Release gate:** `[release] eagle` and `[release] easyeda` (`"hold" | "warn" | "off"`, default `"warn"`) run the same
-  read-back on every part in the release check, so a footprint that would not survive the trip is held or warned about.
-* **Surveyed:** every 7th footprint of KiCad's own library (1,927) was written and read back in both formats; the
-  hardest ten are kept in `tests/fixtures/kicad/tool_export/`.
-* **Also:** the web UI's "Send to Altium" step has buttons for both and links the zip, `POST /api/export/tool`
-  (librarian role, returns `bundle` and `install`), the Workspace's `tool_export` and an MCP tool of the same name.
-  `ecadlib testpack` exports both into `fusion/` and `easyeda/`, and its `CHECKLIST.md` has a section for checking
-  each one in the real tool. `tests/test_tool_exports.py` runs the CLI, MCP, web UI and release gate on a real
-  workspace.
 
 ## 12. `approvals.py` and `dedupe.py`: sign-off and duplicates
 
@@ -2046,8 +1996,8 @@ names or server paths.
 ## 39. `hub.py`: your library across tools, in one place
 
 The **Your library** page of the web UI (also `ecadlib hub`, Workspace `hub` / `hub_part` / `hub_fix` / `hub_copy`,
-MCP `library_hub` / `library_hub_part` / `library_hub_copy`) opens on a tile per tool: Altium, Altium 365, KiCad,
-Fusion and EasyEDA, each with its part count, how many libraries hold them, when the tool's library last changed and
+MCP `library_hub` / `library_hub_part` / `library_hub_copy`) opens on a tile per tool: Altium, Altium 365 and KiCad,
+each with its part count, how many libraries hold them, when the tool's library last changed and
 by whom, and how many parts it lacks. Click a tile to see your library as it is in that tool (which library file each
 part is in, its symbol and footprint, last changed, whether it matches the other tools, where else it is), narrowed to
 one library file if you like; **Compare all** shows every part once with a column per tool. It reads your existing
@@ -2098,11 +2048,8 @@ it copies live in `<workspace>/hub/`).
   libraries, "in Altium but not in KiCad", sorted by name, last changed or what needs a look.
 * **Other tools.** `hub.register_tool(tool, label, exts, read, workspace_dirs=(), fix=None)` adds a reader (and
   optionally a "make this tool's copy" fix); `read(path)` returns one dict per part with `name`, `mpn`, `pads`
-  `[(number, x, y, w, h, rot, drilled)]` in mm with y up, and `pins` `[(number, name)]`. `ecadlib/hub_tools.py`
-  registers Fusion (.lbr) and EasyEDA Pro (.elibz) readers on eagle-export's and easyeda-export's read-back code when
-  this ecadlib has those exporters, with *Make the Fusion version* / *Make the EasyEDA version* buttons for parts
-  ecadlib built; plugins can add more (entry point group `ecadlib.hub_tools`). Until a reader is
-  there the column says "no reader yet".
+  `[(number, x, y, w, h, rot, drilled)]` in mm with y up, and `pins` `[(number, name)]`. Plugins register
+  readers through the entry point group `ecadlib.hub_tools`; a new tool gets its own column.
 * Settings in `ecadlib.toml`:
 
   ```toml

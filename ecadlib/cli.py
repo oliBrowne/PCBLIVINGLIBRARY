@@ -26,8 +26,6 @@
     ecadlib datasheet PDF --part MPN | batch PLAN|BOM | estimate PLAN|BOM   Claude reads datasheets -> symbols + footprints
     ecadlib release-check plan.json [--allow P]   hold back plan items that fail the pre-release checks
     ecadlib kicad-export plan.json -o DIR --name LIB   the same library as KiCad files (.kicad_sym, .pretty)
-    ecadlib eagle-export plan.json -o DIR --name LIB   (experimental) the library for Fusion Electronics / EAGLE (.lbr)
-    ecadlib easyeda-export plan.json -o DIR --name LIB (experimental) the library for EasyEDA Pro (.elibz)
     ecadlib resolve   plan.json [--part P] list|show|choose ...   fix held parts: ranked candidates, pick one
     ecadlib review    [plan.json] [--part P] [--yes]   go through held parts one by one: why, pick a candidate, release anyway
     ecadlib upstream  check-kicad|check-a365 ...  upstream change alerts (KiCad sources, Altium 365 drift)
@@ -98,8 +96,6 @@ COMMANDS = {
     "datasheet": ("ecadlib.datasheet", "Claude datasheet reader: one PDF, or a whole plan/BOM as one Message Batch"),
     "release-check": ("ecadlib.release_check", "pre-release checks on an altium365 plan"),
     "kicad-export": ("ecadlib.kicad_export", "librarian plan -> KiCad .kicad_sym / .pretty / .3dshapes"),
-    "eagle-export": ("ecadlib.eagle_export", "(experimental) librarian plan -> Fusion Electronics / EAGLE .lbr, read back pad by pad"),
-    "easyeda-export": ("ecadlib.easyeda_pro_export", "(experimental) librarian plan -> EasyEDA Pro device library .elibz, read back pad by pad"),
     "resolve": ("ecadlib.resolve", "fix held parts: candidates for a missing symbol/footprint, choose one"),
     "review": ("ecadlib.review_cli", "go through held parts one at a time: the reason in plain words, pick a candidate, release anyway, open the datasheet"),
     "upstream": ("ecadlib.upstream", "KiCad upstream changes and Altium 365 drift"),
@@ -138,6 +134,15 @@ COMMANDS = {
 }
 
 
+# Commands that were removed, and where to find the last version that had them.
+REMOVED = {
+    "eagle-export": "the Fusion Electronics / EAGLE export was removed after 0.3.1 (see CHANGELOG.md). "
+                    "The last version with it is 0.3.1: pip install \"ecadlib==0.3.1\"",
+    "easyeda-export": "the EasyEDA Pro export was removed after 0.3.1 (see CHANGELOG.md). "
+                      "The last version with it is 0.3.1: pip install \"ecadlib==0.3.1\"",
+}
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     from .cliutil import debug_wanted, env_defaults, report
@@ -149,6 +154,9 @@ def main(argv=None):
         from . import __version__
         print(f"ecadlib {__version__}")
         return 0
+    if argv[0] in REMOVED:
+        print(f"ecadlib {argv[0]}: {REMOVED[argv[0]]}", file=sys.stderr)
+        return 2
     cmd = COMMANDS.get(argv[0])
     if not cmd:
         print(f"ecadlib: unknown command {argv[0]!r}. Commands: {', '.join(COMMANDS)}", file=sys.stderr)

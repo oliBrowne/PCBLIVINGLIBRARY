@@ -82,8 +82,7 @@ def test_easyeda_short_or_non_finite_shapes_do_not_break_the_footprint():
     assert "nan" not in text and "inf" not in text
 
 
-def test_release_report_keeps_eagle_and_easyeda_reasons_apart():
-    s = "height: no 3D height (no 3D body and no HEIGHT); eagle: EAGLE / Fusion: pad 3 differs; easyeda: EasyEDA Pro: pad 1"
-    assert RC._split(s) == ["height: no 3D height (no 3D body and no HEIGHT)", "eagle: EAGLE / Fusion: pad 3 differs",
-                            "easyeda: EasyEDA Pro: pad 1"]
+def test_release_report_keeps_each_reason_apart():
+    s = "height: no 3D height (no 3D body and no HEIGHT); parity: pad 3 differs; verify: pin 1"
+    assert RC._split(s) == ["height: no 3D height (no 3D body and no HEIGHT)", "parity: pad 3 differs", "verify: pin 1"]
     assert RC._split("footprint: silk: a; b; pins: x") == ["footprint: silk: a; b", "pins: x"]

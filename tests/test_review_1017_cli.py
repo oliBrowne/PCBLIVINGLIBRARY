@@ -85,45 +85,6 @@ def test_plugin_ecadlib_cmd_keeps_windows_backslashes():
     assert mod.ecadlib_command({"ECADLIB_CMD": str(exe)}) == [str(exe)]     # a path with a space, unquoted
 
 
-def test_reread_names_each_saved_footprint_not_the_newest_mtime():
-    fake = types.ModuleType("pcbnew")
-    with mock.patch.dict(sys.modules, {"pcbnew": fake}):
-        src = ROOT / "ecadlib" / "assets" / "kicad_reread.py"
-        mod = types.ModuleType("kicad_reread")
-        exec(compile(src.read_text(), str(src), "exec"), mod.__dict__)
-    d = _tmp() / "x.pretty"
-    d.mkdir()
-    (d / "B.kicad_mod").write_text("b")
-    import os
-    os.utime(d / "B.kicad_mod", (2_000_000_000, 2_000_000_000))      # newer than what is saved next
-    before = set(d.glob("*.kicad_mod"))
-    (d / "A.kicad_mod").write_text("a")
-    assert mod.saved_file(d, before).name == "A.kicad_mod"
-    fp = types.SimpleNamespace(GetFPID=lambda: types.SimpleNamespace(GetLibItemName=lambda: "A"))
-    assert mod.saved_file(d, set(d.glob("*.kicad_mod")), fp).name == "A.kicad_mod"   # overwritten in place
-
-
-def test_tool_export_into_its_own_kicad_folder_does_not_crash():
-    """eagle-export / easyeda-export -o DIR --kicad DIR: the STEP models and NOTICE.txt are already there."""
-    from ecadlib import eagle_export as EG
-    k = _tmp()
-    shapes = k / "lib.3dshapes"
-    shapes.mkdir()
-    (shapes / "a.step").write_text("x")
-    (k / "NOTICE.txt").write_text("cc-by-sa")
-    rep = {"models": {}}
-    EG.copy_models(shapes, k / "lib.3dshapes", rep, "lib")         # was shutil.SameFileError
-    EG.copy_notice(k, k)
-    assert (shapes / "a.step").read_text() == "x" and rep["models"] == {"a.step": "lib.3dshapes/a.step"}
-    assert (k / "NOTICE.txt").read_text() == "cc-by-sa"
-    other = _tmp()
-    EG.copy_notice(k, other)
-    assert (other / "NOTICE.txt").read_text() == "cc-by-sa"
-    (k / "NOTICE.txt").unlink()
-    EG.copy_notice(k, other)
-    assert not (other / "NOTICE.txt").exists()
-
-
 def test_launcher_waits_with_a_timeout():
     """`ecadlib start --no-window` on Windows: an untimed Event.wait() never sees Ctrl+C."""
     src = (ROOT / "ecadlib" / "launcher.py").read_text()
