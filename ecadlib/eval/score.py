@@ -81,6 +81,7 @@ def norm_name(s):
     s = s.replace("~", "")
     s = re.sub(r"^(N(?=[A-Z]{2,})|/|#)", "", s)
     s = re.sub(r"[/#*_-]", "", s)
+    s = re.sub(r"^N\.C\.?$", "NC", s)                 # "N.C." is KiCad's "NC"
     return WORDS.get(s, s)                            # a pin spelled out ("Enable") is the same pin as KiCad's "EN"
 
 
@@ -115,7 +116,7 @@ def score_footprint(mine, ref, tol=None):
         out["pitch"] = _f(True)
     else:
         out["pitch"] = _f(pa is not None and abs(pa - pb) <= t["pitch"] + 1e-9, f"pitch {pa} mm, KiCad {pb} mm", ours=pa, ref=pb)
-    left, worst, bad = list(ref["pads"]), {"pos": 0.0, "size": 0.0, "drill": 0.0}, []
+    left, worst, bad, bad_pads = list(ref["pads"]), {"pos": 0.0, "size": 0.0, "drill": 0.0}, [], []
     for p in m["pads"]:
         cands = [r for r in left if r[0] == p[0]]
         if not cands:
@@ -129,8 +130,9 @@ def score_footprint(mine, ref, tol=None):
         why = [f"{k} off {v:.3f}" for k, v in e.items() if v > t[k] + 1e-9]
         if why:
             bad.append(f"pad {p[0] or '(hole)'}: " + ", ".join(why))
+            bad_pads.append(p[0])
     out["pads"] = _f(not bad, f"{len(bad)} pads out of tolerance: " + "; ".join(bad[:4]) + (" ..." if len(bad) > 4 else ""),
-                     worst={k: round(v, 4) for k, v in worst.items()}, bad=len(bad))
+                     worst={k: round(v, 4) for k, v in worst.items()}, bad=len(bad), bad_pads=bad_pads)
     ca, cb = m["courtyard"], ref["courtyard"]
     if not cb:
         out["courtyard"] = _f(True)
@@ -166,6 +168,46 @@ def score_symbol(mine_pins, ref_pins, tol=None):
                                  + (f" ({len(moved)} on the wrong pin)" if moved else "") + "; " + "; ".join(diff[:4]),
                                  matched=len(same), named=len(named), moved=len(moved))
     return out
+
+
+def maker_land(mine, spec, tol=None):
+    """Does our footprint use the datasheet's recommended land (spec["land"]: pad_length x pad_width at +-pad_center,
+    the maker's example board layout) rather than an IPC-7351B land worked out from the package dimensions? KiCad
+    builds its land from the dimensions, so a maker's land can miss KiCad's pads while being what the datasheet asks
+    for. -> None (no land given or no footprint), else {followed, pads: the pads that use it, ep: the exposed pad
+    numbers (not part of the land)}."""
+    land = (spec or {}).get("land") or {}
+    pl, pw, pc = (land.get(k) for k in ("pad_length", "pad_width", "pad_center"))
+    if mine is None or not all(isinstance(v, (int, float)) for v in (pl, pw, pc)):
+        return None
+    t = dict(TOL, **(tol or {}))
+    pcy = land.get("pad_center_y") if isinstance(land.get("pad_center_y"), (int, float)) else pc
+    pads = [p for p in mine["pads"] if not p[5]]
+    if not pads:
+        return None
+    cx, cy = _centre(pads)
+    areas = sorted(p[3] * p[4] for p in pads)
+    big = areas[len(areas) // 2] * 2
+    ep = [p for p in pads if p[3] * p[4] > big]
+    near = lambda a, b, k: abs(a - b) <= t[k] + 1e-9
+    def fits(p):
+        x, y = abs(p[1] - cx), abs(p[2] - cy)
+        return (near(p[3], pl, "size") and near(p[4], pw, "size") and near(x, pc, "pos")) or \
+               (near(p[4], pl, "size") and near(p[3], pw, "size") and near(y, pcy, "pos"))
+    rest = [p for p in pads if p not in ep]
+    used = [p[0] for p in rest if fits(p)]
+    return {"followed": bool(rest) and len(used) == len(rest), "pads": used, "ep": [p[0] for p in ep]}
+
+
+def only_maker_land(fields, ml):
+    """A KiCad miss explained by the maker's land: only pads (and the courtyard, which follows the pads) differ, and
+    every pad that differs is one of the land's pads (an exposed pad that differs is a real miss)."""
+    if not ml or not ml["followed"]:
+        return False
+    failed = {k for k, f in fields.items() if not f["ok"] and k not in INFO_ONLY}
+    if not failed or not failed <= {"pads", "courtyard"}:
+        return False
+    return set((fields.get("pads") or {}).get("bad_pads") or []) <= set(ml["pads"])
 
 
 def verdict(fields):

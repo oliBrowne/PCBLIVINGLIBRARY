@@ -1205,6 +1205,12 @@ def write(res, outdir):
     spec_f = d / f"{spec_stem}.json"
     if spec_f in paths.values() or (spec_f.exists() and not holds(spec_f, "spec")):
         spec_f = d / f"{spec_stem}.package.json"      # a symbol / sidecar there is never overwritten by a spec
+    try:                                              # another part's package of the same name but other numbers
+        other = json.loads(spec_f.read_text(encoding="utf-8")) if spec_f.exists() else None
+    except (OSError, ValueError):
+        other = None
+    if isinstance(other, dict) and "package_type" in other and other != json.loads(json.dumps(res["spec"])):
+        spec_f = d / f"{spec_stem}.{part}.json"       # kept apart: ecadlib fp-edit reads this part's own
     paths = {"spec": spec_f, **paths}
     for k in ("spec", "symbol", "sidecar"):
         paths[k].write_text(json.dumps(res[k], indent=2) + "\n", encoding="utf-8")

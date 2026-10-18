@@ -855,6 +855,24 @@ def test_write_never_lets_spec_and_symbol_overwrite_each_other():
         assert p3["symbol"] != p2["spec"] and "package_type" in json.loads(p2["spec"].read_text())
 
 
+def test_two_parts_with_one_package_name_and_other_numbers_keep_their_own_spec():
+    """#42: ISL8117FVEZ and TPS26600PWP both read an HTSSOP-16 of the same name with other lands; the second no
+    longer overwrites the first one's spec, and ecadlib fp-edit reads each part's own."""
+    from ecadlib import fp_edit as FE
+    with tempfile.TemporaryDirectory() as d:
+        a = D.process(copy.deepcopy(TD.GOOD), "PARTA", "u")
+        pa = D.write(a, Path(d) / "datasheet")
+        D.write(D.process(copy.deepcopy(TD.GOOD), "SAME", "u"), Path(d) / "datasheet")      # same numbers: one file
+        assert len(list((Path(d) / "datasheet").glob(f"{pa['spec'].stem}*.json"))) == 1
+        b = D.process(copy.deepcopy(TD.GOOD), "PARTB", "u")
+        b["spec"]["pitch"] = 0.65
+        pb = D.write(b, Path(d) / "datasheet")
+        assert pb["spec"] != pa["spec"] and json.loads(pa["spec"].read_text())["pitch"] != 0.65
+        plan = Path(d) / "plan.json"
+        plan.write_text("{}")
+        assert FE.read(plan, "PARTB")["spec"]["pitch"] == 0.65 and FE.read(plan, "PARTA")["spec"]["pitch"] != 0.65
+
+
 def test_worst_case_counts_the_fallback_model():
     api = FakeAPI(tokens=20000)
     with tempfile.TemporaryDirectory() as d, patched(api):

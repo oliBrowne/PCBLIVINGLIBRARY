@@ -418,6 +418,10 @@ def table_layout(spec):
         body = (min(xa, xb), min(ya, yb), max(xa, xb), max(ya, yb))
     elif spec.get("body_length") and spec.get("body_width"):
         bx, by = _dim(spec["body_length"])[1] / 2, _dim(spec["body_width"])[1] / 2
+        ex = max(q["x"] for q in pads) - min(q["x"] for q in pads) if pads else 0
+        ey = max(q["y"] for q in pads) - min(q["y"] for q in pads) if pads else 0
+        if (ex - ey) * (bx - by) < 0:                  # the body's length runs with the long pad rows (27C256: a DIP
+            bx, by = by, bx                            # table with its rows down y; D is the length, not the width)
         body = (-bx, -by, bx, by)
     keepouts = []
     for k in t.get("keepouts") or []:
