@@ -21,6 +21,10 @@ a minor release may change command-line options and file formats.
 - The Altium dialog, the KiCad window and the web UI show the model and the cost of every AI step before it starts, and wait for a click: Fill the library and Add part run every free source, then price the datasheet reads a part still needs ("3 parts need the datasheet read by AI (claude-opus-5-5): about $0.42, at most $1.10"). Above `[datasheet] ask_above_usd` (new, default $1.00) or `max_cost_usd` they ask a second time. The reads are held to the amount approved, and the real cost (from the API's usage) is shown next to the estimate afterwards (#49). The house style guide is priced the same way. `Workspace.ai_quote` / `ai_read`, `/api/ai/quote`, `/api/ai/read`, `/api/style/guide`; `ecadlib/ai_cost.py`.
 - `ecadlib doctor` warns when a paid AI key comes only from an environment variable, which other programs can read and bill.
 - docs/api-keys.md: where your key lives, who can read it, and how the cost is shown.
+- `ecadlib mcp --http`: the MCP server over Streamable HTTP for agents that cannot start a local program, such as Grok through the xAI API. A bearer token is required (`--token` / `ECADLIB_MCP_TOKEN`, else one is printed), web page origins are refused, and file arguments must stay inside the workspace and `--lib` folders.
+- `ecadlib mcp --tools core|read-only|<names>` (or `ECADLIB_MCP_TOOLS`) offers fewer tools, for small models and remote agents.
+- MCP tools `upload_bom`, `ai_quote`, `ai_read`, `house_style_guide` and `job_status`; every tool has a title and read-only / destructive / internet hints; the server sends usage instructions on connect.
+- docs/mcp.md: setup for Claude Code, Claude Desktop, Codex and Grok.
 - docs/START_HERE.md walks an Altium user from the installer to a project BOM released into Altium 365, all from the ecadlib menu: the Nexar token and workspace, Check this project BOM, Fill the library with the AI cost shown first, the review queue for held parts, and the Components panel (#51).
 
 ### Removed
@@ -31,6 +35,7 @@ a minor release may change command-line options and file formats.
 
 - API keys are read from ecadlib's own key store when they are needed and are never copied into the environment (they used to be copied into each ecadlib process's environment, which every program it started inherited). A stored key now comes before an environment variable of the same name; the variable is used only when nothing is stored. The Altium menu README no longer suggests `setx`. The eval gate and golden builds never read the key store.
 - pypdf is a core dependency (it was the `[pdf]` extra): without it a large datasheet (the 1976-page SAM E70 family sheet) could not be cut to the pages that matter and every read of it failed.
+- MCP: a missing or wrong argument is now a tool error the model can read (it was a protocol error), naming the arguments the tool takes; `null` optional arguments, numbers and booleans sent as text and objects sent as JSON strings are accepted. `librarian_run`'s `refresh` takes a list of part names and `refresh_all` redoes everything (`refresh: true` still works). Answers are compact JSON without `\u` escapes and are cut at `--max-chars` (default 80,000) with a hint.
 
 ### Fixed
 
@@ -38,6 +43,11 @@ a minor release may change command-line options and file formats.
 - A batch answer the parser rejected is downloaded again from its collected batch (free, within the API's 29 days) and read by the current code, instead of being bought again on the next run.
 - The pin-1 triangle of a tiny QFN (QFN-16 1.8x2.6 mm) moves out past the top-row pads instead of sitting 0.07 mm from pad 16 (KLC F5.1).
 - `[datasheet] max_cost_usd` counts each answer at what it really cost once it comes back, not at its worst-case estimate. A multi-round run (more pages, a stronger model) was refused its second round long before real spend reached the cap: the #42 benchmark's first round was held at $24.61 and cost $3.42.
+- Converted footprints were all labelled "(CC-BY-SA 4.0)" in their description, including EasyEDA parts, your own `--lib` files and footprints ecadlib generated; only parts from the KiCad libraries are labelled now (#54).
+- A part whose symbol or footprint comes from the KiCad libraries now gets a `Library Credit` parameter on the Altium side, as EasyEDA parts already did, and the librarian writes a `NOTICE.txt` in its output folder naming the third-party terms of the parts in it (#54).
+- MCP `librarian_run` ran the paid datasheet reader without a price or a yes. It now prices those parts (`ai`) like the other front ends, and `ai_read` needs the approved amount. `learn_house_style` with `ai` returns a quote too.
+- MCP calls that take longer than `--wait` (default 45 s) answer with a job id for `job_status` instead of running into the client's timeout (Codex waits 60 s).
+- MCP: a child process (kicad-cli, pdftoppm, git) can no longer write into the protocol stream on stdout.
 - The Altium menu and the web UI no longer tell you to put NEXAR_TOKEN in an environment variable and restart: the token is read from ecadlib's key store (setup page, Optional keys).
 - Datasheet page picking: a family sheet's "LQFP144, 144-lead LQFP" no longer counts as this part's LQFP-100 (a bare family word matched every LQFP), and the drawing and land-pattern slots never go to a page about another package. The SAM E70 sheet (1976 pages) now sends the LQFP100 drawing instead of the LQFP144 and QFN pages.
 - Standard parts: DO-41 (DO-204AL, SOD81) on a diode resolves to KiCad's D_DO-41_SOD81_P10.16mm_Horizontal.

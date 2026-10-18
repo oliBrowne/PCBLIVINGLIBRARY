@@ -178,7 +178,7 @@ def test_workspace_ui_and_mcp_setup():
         assert res["needs_confirm"] and not res["saved"]
         res = json.loads(call("save_rules", {"toml": out["toml"].replace("Mechanical1\"", "Mechanical4\""), "overwrite": True})["result"]["content"][0]["text"])
         assert res["saved"] and res["backup"] == "ecadlib.toml.bak" and ws.rules()["layers"]["courtyard"] == "Mechanical4"
-        assert call("save_rules", {})["error"]["code"] == -32602
+        assert call("save_rules", {})["result"]["isError"]
         # web UI: Setup card, propose as a job, save with confirmation
         srv, http = serve(ws)
         try:
