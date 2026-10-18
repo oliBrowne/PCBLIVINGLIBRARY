@@ -499,10 +499,15 @@ def from_wire(ext):
     if not isinstance(pkg, dict) or not ("dims" in pkg or "other_json" in pkg):
         return ext
     _, pk, other_s = _wire_parts()
+    raw = str(pkg.get("other_json") or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw) or "{}"          # a model that fences or prefixes the JSON text
     try:
-        other = json.loads(pkg.get("other_json") or "{}")
+        other = json.loads(raw)
     except ValueError:
-        raise DatasheetError("response package.other_json is not JSON; rejected")
+        try:
+            other = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
+        except ValueError:
+            raise DatasheetError(f"response package.other_json is not JSON ({raw[:60]!r}); rejected")
     if not isinstance(other, dict):
         raise DatasheetError("response package.other_json is not a JSON object; rejected")
     dims = {}
@@ -571,13 +576,18 @@ def task_text(part, package=None, pages=None):
     return t + "Return the package dimensions and the pin list for this part."
 
 
+def api_url(url):
+    """The API fetches https links only ("Only HTTPS URLs are supported"); maker sites serve the same file on https."""
+    return "https://" + url[7:] if str(url).lower().startswith("http://") else url
+
+
 def build_request(source, part, package=None, pages=None, model=MODEL, effort="high", fallback=True, cache_doc=True):
     """source = ("base64", pdf bytes) or ("url", https url). Returns (headers without key, body).
     fallback: server-side refusal fallback (Messages API only; the Batches API rejects it). cache_doc: cache the
     system + PDF prefix (worth it for a synchronous call that may be retried; a batch reads each PDF once)."""
     kind, val = source
     src = ({"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(val).decode()}
-           if kind == "base64" else {"type": "url", "url": val})
+           if kind == "base64" else {"type": "url", "url": api_url(val)})
     doc = {"type": "document", "source": src}
     if cache_doc:
         doc["cache_control"] = {"type": "ephemeral"}                                    # system + PDF prefix cached
@@ -932,7 +942,7 @@ def check_pins(spec, ext, review):
 
 
 # ---------------------------------------------------------------- self-check: the extraction against itself and family norms
-STD_PITCH = (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.8, 0.95, 1.0, 1.1, 1.27, 1.5, 1.7, 1.778, 1.9, 2.0, 2.29, 2.5, 2.54,
+STD_PITCH = (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.8, 0.95, 1.0, 1.1, 1.25, 1.27, 1.5, 1.7, 1.778, 1.9, 2.0, 2.29, 2.5, 2.54,
              3.0, 3.5, 3.81, 3.96, 5.0, 5.08)
 FAMILY_CODES = re.compile(r"(SOT|SOD|TO|DO|SC|SMA|SMB|SMC|D?PAK|DO-?\d+)\d*", re.I)   # first number is the outline, not pins
 # package_type -> (pitch mm range or None, longest body side mm range, pin_count range). A family the schema gains
@@ -1248,8 +1258,9 @@ class PdfStore:
             h.log.append(("GET", url, r.status_code, False))
         return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None
 
-    def fetch(self, url, where=""):
-        """-> (pdf bytes, provenance). Raises DatasheetError (with the reason) when it is not a usable PDF."""
+    def fetch(self, url, where="", follow=True):
+        """-> (pdf bytes, provenance). Raises DatasheetError (with the reason) when it is not a usable PDF.
+        follow: a link that gives a product HTML page is followed once to the PDF the page links to."""
         stem = hashlib.sha256(url.encode()).hexdigest()[:24]
         pdf_f, meta_f = self.dir / f"{stem}.pdf", self.dir / f"{stem}.json"
         if pdf_f.exists() and meta_f.exists():
@@ -1267,7 +1278,15 @@ class PdfStore:
         if len(data) > MAX_DOWNLOAD:
             raise DatasheetError(f"{url}: larger than {MAX_DOWNLOAD >> 20} MB; download it and pass --pages")
         if not is_pdf(data):
-            kind = "an HTML page" if re.search(rb"<(!doctype|html)", data[:2048], re.I) else f"{ctype or 'unknown type'}"
+            html = bool(re.search(rb"<(!doctype|html)", data[:2048], re.I))
+            link = pdf_link(data, final or url) if html and follow else None
+            if link and link != url:
+                try:
+                    pdf, meta = self.fetch(link, where, follow=False)
+                    return pdf, dict(meta, page_url=url)
+                except DatasheetError as e:
+                    raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {e}")
+            kind = "an HTML page" if html else f"{ctype or 'unknown type'}"
             raise DatasheetError(f"{url}: not a PDF ({kind}, {len(data)} bytes)")
         meta = {"url": url, "final_url": final, "where": where, "status": status, "content_type": ctype,
                 "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "pages": pdf_pages(data),
@@ -1276,6 +1295,22 @@ class PdfStore:
         pdf_f.write_bytes(data)
         meta_f.write_text(json.dumps(meta, indent=2), encoding="utf-8")
         return data, dict(meta, from_cache=False)
+
+
+def pdf_link(html, base):
+    """The datasheet PDF an HTML product page links to (an href ending .pdf, or a meta refresh), absolute; a link
+    whose name says datasheet, and then one on the page's own site, is preferred. None when there is none."""
+    from urllib.parse import urljoin, urlparse
+    text = html.decode("utf-8", "replace") if isinstance(html, bytes) else str(html)
+    refresh = re.search(r"""http-equiv=["']?refresh["']?[^>]*?url=([^"'>\s]+)""", text, re.I)
+    links = [m.group(1) for m in re.finditer(r"""href=["']([^"'#]+?\.pdf(?:\?[^"']*)?)["']""", text, re.I)]
+    if refresh:
+        links.insert(0, refresh.group(1))
+    if not links:
+        return None
+    host = urlparse(base).netloc
+    key = lambda u: (not re.search(r"data.?sheet|/ds/|_ds|-ds", u, re.I), urlparse(urljoin(base, u)).netloc != host)
+    return urljoin(base, sorted(links, key=key)[0])
 
 
 def select_pages(data, budget):
@@ -1462,7 +1497,7 @@ class Reader:
         failed before starts where it left off ('final' = the cached answer at this step is the one to use)."""
         from . import ds_route as DR
         attempts, data, prov = [], None, None
-        for url, where in urls:
+        for url, where in [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))]:   # http, then https
             try:
                 data, prov = self.store.fetch(url, where)
                 break
@@ -1472,7 +1507,7 @@ class Reader:
             if not urls:
                 raise DatasheetError("no datasheet URL known")
             wrong = {a["url"] for a in attempts if re.search(BROKEN_LINK, a["error"])}
-            usable = [(u, w) for u, w in urls if u not in wrong]
+            usable = [(u, w) for u, w in urls if u not in wrong and api_url(u) not in wrong]
             if not usable:
                 raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts))
             url, where = usable[0]

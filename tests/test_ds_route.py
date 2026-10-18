@@ -505,6 +505,26 @@ def test_a_fallback_answer_is_priced_at_the_model_that_served_it():
     assert R.billed_model(HAIKU, TD.message(GOOD, model=HAIKU)) == HAIKU
 
 
+def test_a_family_sheet_picks_this_packages_drawing_not_another_lqfp_or_the_qfn_land():
+    # the SAM E70 family sheet (1976 pages, benchmark 2026-10-18): "LQFP144, 144-lead LQFP" named a bare LQFP too, so
+    # every LQFP page matched LQFP-100, and the land slot went to the QFN page
+    def texts():
+        t = ["filler electrical characteristics text"] * 60
+        t[0] = "SAM E70 family. Packages: LQFP144, LQFP100, LQFP64, TFBGA100, QFN64"
+        for i in (28, 29, 35, 39):
+            t[i] = "Pin configuration LQFP100 pinout (top view). Pin name Pin number table. Package outline see section 62"
+        t[49] = "62. Packaging Information 62.1 LQFP144, 144-lead LQFP, 20x20 mm, pitch 0.5 mm package drawing min max A1 D1 E1 mm"
+        t[50] = "Table 62-2. LQFP Package Reference JEDEC drawing reference package dimensions"
+        t[53] = "62.3 TFBGA144, 144-ball TFBGA, 10x10mm, pitch 0.8 mm TOP VIEW package drawing"
+        t[56] = "62.5 LQFP100, 100-lead LQFP, 14x14 mm, pitch 0.5 mm package drawing Table 62-13 min max A1 D1 E1 mm"
+        t[57] = "62.6 TFBGA100, 100-ball TFBGA, 9x9 mm, pitch 0.8 mm TOP VIEW package drawing"
+        t[59] = "Table 62-27. QFN Package Characteristics recommended land pattern package dimensions"
+        return t
+    pages, why = R.pick_pages(texts(), 6, "ATSAME70N19A-AN", "LQFP-100")
+    assert 57 in pages and "drawing" in why[57] and 50 not in pages and 60 not in pages, (pages, why)
+    assert R.package_tokens("62.1 LQFP144, 144-lead LQFP") == {"QFP144"} and R.package_tokens("LQFP Package") == {"QFP"}
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

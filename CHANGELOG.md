@@ -21,6 +21,16 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Datasheet page picking: a family sheet's "LQFP144, 144-lead LQFP" no longer counts as this part's LQFP-100 (a bare family word matched every LQFP), and the drawing and land-pattern slots never go to a page about another package. The SAM E70 sheet (1976 pages) now sends the LQFP100 drawing instead of the LQFP144 and QFN pages.
+- Standard parts: DO-41 (DO-204AL, SOD81) on a diode resolves to KiCad's D_DO-41_SOD81_P10.16mm_Horizontal.
+- Datasheet checks: 1.25 mm (JST GH) is a standard pitch.
+- Datasheet reader: an answer whose `other_json` the model fenced or wrapped in a sentence is read instead of rejected.
+- Datasheet download: a plain http:// link that fails here is tried again over https before it is sent to the API.
+- BGA / WCSP footprints: a ball grid that fits the body only turned a quarter turn (the datasheet's length x width on the other axis than its rows x columns, TPS628436YKA) turns the body and says so in the report, instead of refusing the read.
+- A datasheet read that leaves a needed dimension blank without listing it as unresolved says which one.
+- Datasheet download: a link that gives a product HTML page (ENS210) is followed once to the datasheet PDF the page links to; the provenance keeps the page as `page_url`.
+- Datasheet reader: a plain http:// datasheet link sent to the API for it to fetch is sent as https:// (the API answered "Only HTTPS URLs are supported"; 7 parts of the live benchmark).
+- Cross-check: two reads that name a pin with different wording agree: "K" and "cathode (K)", "A" and "anode", "VO" and "VO (output)", "V_{SS}" and "VSS", or "GND" and "PowerPAD" for the exposed pad. 18 benchmark parts were held on wording like this.
 - Datasheet reader: the live API refused every read ("Schemas contains too many parameters with union types (184 ...). limit: 16"). The request now asks for the dimensions as a list of named records (min / nom / max as printed text, "" where blank) and the optional family fields as one JSON text, with no nullable fields; the answer is turned back into the same extraction as before, so checks, the result cache and recorded answers are unchanged. The cross-check's second read had the same problem (26 union fields) and is fixed the same way.
 - Datasheet reader: the optional family fields reached the model without their descriptions, so a land pattern's `pad_center` came back as the datasheet's C (row to row) and SOT-23-6 pads sat 2.4 mm out instead of 1.2 (BCR430UW6, AH1806-W). The descriptions are back, `pad_center` says C / 2, and a pad_center past the leads is flagged.
 - `ecadlib eval`: KiCad's pin-name markup (`V_{SS}`) matches the datasheet's plain `VSS`.

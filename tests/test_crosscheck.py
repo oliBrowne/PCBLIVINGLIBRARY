@@ -409,6 +409,14 @@ def test_workspace_and_mcp_list_cross_checks():
         assert any(t["name"] == "cross_checks" for t in M.TOOLS)
 
 
+def test_pin_names_that_differ_only_in_wording_agree():
+    # the 2026-10-18 benchmark held 18 parts on wording like these
+    assert CC.compare_pins([(1, "K"), (2, "A"), (5, "VO"), (21, "GND"), (7, "V_{SS}")],
+                          [(1, "cathode (K)"), (2, "anode"), (5, "VO (output)"), (21, "PowerPAD"), (7, "VSS")]) == []
+    d = CC.compare_pins([(1, "VCC"), (2, "D")], [(1, "GND"), (2, "S")])
+    assert d and d[0]["field"] == "pin_names" and "1 VCC" in d[0]["first"] and "2 D" in d[0]["first"]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

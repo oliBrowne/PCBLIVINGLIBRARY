@@ -87,9 +87,32 @@ def critical(spec):
 
 
 def norm_pin_name(s):
-    s = str(s or "").upper().replace("~{", "").replace("}", "").replace("\\", "").replace(" ", "").replace("~", "")
+    s = str(s or "").upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "").replace("~", "")
     s = re.sub(r"^(N(?=[A-Z]{2,})|/|#)", "", s)
     return re.sub(r"[/#*_\-]", "", s)
+
+
+LETTER = {"A": "ANODE", "K": "CATHODE", "C": "COLLECTOR", "E": "EMITTER", "B": "BASE", "G": "GATE", "D": "DRAIN",
+          "S": "SOURCE"}      # the one-letter names discretes print beside the full ones
+EP_NAMES = {"EP", "EPAD", "PAD", "POWERPAD", "THERMALPAD", "EXPOSEDPAD", "DAP", "TAB", "SLUG", "PADDLE"}
+
+
+def _names(s):
+    """The names one pin answers to: "1 cathode (k)" -> {CATHODE(K), CATHODE, K}; "VO (output)" -> {VO(OUTPUT), VO, OUTPUT}."""
+    raw = str(s or "")
+    out = {norm_pin_name(raw)}
+    for part in re.split(r"[()\[\],]|\s/\s", raw):
+        if norm_pin_name(part):
+            out.add(norm_pin_name(part))
+    out |= {LETTER[n] for n in out if n in LETTER}
+    return out - {""}
+
+
+def names_agree(a, b):
+    """Two reads name a pin the same: equal after normalising, one read's name is the other's alias in brackets
+    ("K" vs "cathode (K)", "VO" vs "VO (output)"), or one calls the exposed pad by its pad name ("GND" vs "PowerPAD")."""
+    na, nb = _names(a), _names(b)
+    return bool(na & nb) or bool((na & EP_NAMES) or (nb & EP_NAMES))
 
 
 def _show(v):
@@ -156,9 +179,9 @@ def compare_pins(a, b):
     if only_a or only_b:
         out.append({"field": "pins", "first": f"{len(da)} pins" + (f", only here: {', '.join(only_a[:12])}" if only_a else ""),
                     "second": f"{len(db)} pins" + (f", only here: {', '.join(only_b[:12])}" if only_b else "")})
-    diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and da[n] != db[n]]
+    na, nb = {str(n): s for n, s in a}, {str(n): s for n, s in b}
+    diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and not names_agree(na[n], nb[n])]
     if diff:
-        na, nb = {str(n): s for n, s in a}, {str(n): s for n, s in b}
         out.append({"field": "pin_names", "first": "; ".join(f"{n} {na[n]}" for n in diff[:12]),
                     "second": "; ".join(f"{n} {nb[n]}" for n in diff[:12])})
     return out
@@ -237,7 +260,7 @@ def build_request(source, part, package, model, effort, fallback=True):
     from . import datasheet as D
     kind, val = source
     src = ({"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(val).decode()}
-           if kind == "base64" else {"type": "url", "url": val})
+           if kind == "base64" else {"type": "url", "url": D.api_url(val)})
     body = {"model": model, "max_tokens": CHECK_MAX_TOKENS, "system": [{"type": "text", "text": SYSTEM}],
             "messages": [{"role": "user", "content": [{"type": "document", "source": src},
                                                       {"type": "text", "text": task_text(part, package)}]}],

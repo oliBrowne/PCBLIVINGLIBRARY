@@ -66,14 +66,15 @@ def norm_text(t):
 
 def package_tokens(text):
     """'SOIC-8_3.9x4.9mm' -> {'SO8'}, 'SOT-223-3_TabPin2' -> {'SOT223'}, 'LQFP-32_7x7mm' -> {'QFP32'}; a family
-    without a number ('WSON') gives the family alone."""
+    without a number ('WSON') gives the family alone, unless the text also numbers it ("LQFP144, 144-lead LQFP" is
+    QFP144 only: a family-only token would match every other LQFP)."""
     out = set()
     for m in _FAM_RX.finditer(norm_text(text).upper()):
         fam, sep, n1 = FAMILY[m.group(1)], m.group(2) or "", m.group(3)
         if fam in NEEDS_NUM and (not n1 or sep.strip() == "" and sep):   # "TO-220", "SO8"; never "to 85" or "SO 2"
             continue
         out.add(fam + (n1 or ""))
-    return out
+    return {t for t in out if re.search(r"\d$", t) or not any(o != t and re.sub(r"\d+$", "", o) == t for o in out)}
 
 
 def _tok_match(own, page_toks):
@@ -192,7 +193,7 @@ def pick_pages(texts, budget, part=None, package=None):
 
     best = {}
     for cat in ("drawing", "pinout", "land", "ordering"):
-        cands = [i for i in range(len(rows)) if _rank(rows[i], cat) > 0]
+        cands = [i for i in range(len(rows)) if _rank(rows[i], cat) > 0 and not (cat in ("drawing", "land") and rows[i]["other"])]
         if cands:
             best[cat] = max(cands, key=lambda i: (_rank(rows[i], cat), total(i), -i))
             add(best[cat], cat)
