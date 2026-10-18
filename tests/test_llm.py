@@ -27,14 +27,15 @@ def h(o):
 # request with the default settings is proven byte-identical to what was sent before.
 # Updated once (review): the output schema's `tab` held a dangling "$ref": "#/$defs/dim" (no $defs in the request);
 # it is now inlined. That is the only difference from the earlier hashes (checked by re-inserting the $ref).
-GOLDEN = {"build_sync": "c5729ab44d99fd166f0e8afa4f32be791506ebdc83ce1c91eb9cc95dc1534ddd",
-          "build_batch": "59179fbe90c78027d8ddd0bcf88fc5605cae236ef4521aa05a02dc1583cf022b",
-          "build_url_haiku": "999b76b192734e3dfaf0631155a7c110411a2778e623337bd80f41e87edf5ac6",
-          "reader_sync_calls": ["64db6094e42a8b67c337fae5613fcb01e08e0571ec79407d51477a0b6faa9454",
-                                "3c6a04b23b0da59a198036da7d965aabb4cbb6b482487833d22c96bc5f3e0fb2"],
+# 2026-10-18: requests ask for wire_schema() (the API takes at most 16 union-typed fields)
+GOLDEN = {"build_sync": "7ae38d02776acbf6f74a209579a674211352ea7b479a05c0380f9a7f27e7f8a3",
+          "build_batch": "4e676ab0d5e2e777959bdc09ffeabef0906cdc5279048e00865c2d8d4f396c44",
+          "build_url_haiku": "7bba8b801bac5e9ad0212a5f31a878f89c90d670ad9f3ea49f8b8f8c0663d0b0",
+          "reader_sync_calls": ["89539673dbe22c93a78e732b94db02cd305a8c442e279fa61820e2f08741ac2c",
+                                "92744db077f0ee4f8ddc1677f11ec89cbf931dbb765bc75b51268532141ce541"],
           "visual": "2617a48dcb947471108561ff7f8eabce190b1cb553e2d2c4cbf4ff3974a03181",
-          "batch_posts": ["a10f4baee5803e22880ba1337a3d81e7d4387ad38ed09a1f23de7dcbf1d87719",
-                          "557fbd0998788628a3bddc53d1c39b6d2c608d0e27865cfd3c4c9c5ad82544f0"]}
+          "batch_posts": ["fb427e869a9e1e90aa926c7d42fe2d03017b170070b00b025a0acaaee5d8a248",
+                          "9ffc35850400ddc5bc4ae53af084a9df891cdbd483bd7eccc3e14ac39977c883"]}
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 
@@ -434,7 +435,7 @@ def test_mid_model_single_call_with_pdf_examples_repair_and_feedback():
     def answer(body):
         n = len(srv.chats())
         ext = BAD if n == 1 else GOOD
-        return chat("```json\n" + json.dumps(ext) + "\n```")
+        return chat("```json\n" + json.dumps(D.to_wire(ext)) + "\n```")   # answers the schema it was sent
     with FakeOpenAI(answer) as srv, tempfile.TemporaryDirectory() as d:
         rd = TR.reader(d, {"https://a/ds.pdf": TD.PDF}, rules=small_rules(srv.base, model="gpt-4o"))
         res = rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "R_0603_1608Metric"))
@@ -537,7 +538,7 @@ def test_eval_compares_providers_with_record_and_replay():
 
     def answer(body):
         task = json.dumps(body["messages"][-1])
-        return chat(json.dumps(TD.INCH if "SOICPART" in task else TE.qfn_ext()), model="gpt-4o-2024-11-20")
+        return chat(json.dumps(D.to_wire(TD.INCH if "SOICPART" in task else TE.qfn_ext())), model="gpt-4o-2024-11-20")
     pdfs = {"https://example.com/soic.pdf": TD.PDF, "https://example.com/qfn.pdf": TD.PDF}
     with FakeOpenAI(answer) as srv, tempfile.TemporaryDirectory() as d:
         rep = ER.run(TE.mini_set(d), Path(d) / "live", cache=Path(d) / "cache", http=TB.PdfHTTP(pdfs), log=lambda *a: None,

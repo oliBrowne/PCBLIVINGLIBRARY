@@ -434,7 +434,7 @@ def test_librarian_batch_one_request_per_part():
         assert sorted(r["custom_id"] for r in reqs) == ["DSPART1", "DSPART2"], reqs
         p = reqs[0]["params"]
         assert "fallbacks" not in p and "anthropic-beta" not in creates[0][2] and creates[0][2]["x-api-key"] == KEY
-        assert p["output_config"]["format"]["schema"] == D.output_schema() and p["max_tokens"] == D.MAX_TOKENS
+        assert p["output_config"]["format"]["schema"] == D.wire_schema() and p["max_tokens"] == D.MAX_TOKENS
         assert "cache_control" not in p["messages"][0]["content"][0] and p["system"][0]["cache_control"] == {"type": "ephemeral"}
         assert len([c for c in api.calls if c[0] == "GET" and not c[1].endswith("/results")]) == 3   # 2 in_progress + ended
         assert "https://www.lcsc.com/datasheet/C9999.pdf" in http.fetched
