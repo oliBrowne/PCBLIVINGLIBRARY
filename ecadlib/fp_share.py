@@ -3,8 +3,8 @@
 The librarian writes one <out>/models/PcbLib/<name>.PcbLib per footprint name, and the name comes from the BOM's
 footprint field. Two BOM lines can name the same package for different land patterns (`SOIC-14` on a 3.9 mm and on
 a 5.3 mm body; `QFN-16` at 0.5 and 0.65 mm pitch). Before this module the second part silently got the first
-part's file. Now a part shares a file only when the footprints are the same: the same pads and courtyard (the
-geometry hash `ecadlib dedupe` uses). Otherwise it gets its own name, tried in this order:
+part's file. Now a part shares a file only when the footprints are the same: the same pads, pad shapes, holes and
+courtyard (the geometry hash `ecadlib dedupe` uses). Otherwise it gets its own name, tried in this order:
 
   1. the real package name of its footprint (the KiCad / standard / EasyEDA footprint name), when it starts with
      the BOM name, else <BOM name>_<real name>; e.g. SOIC-14 -> SOIC-14_5.3x10.2mm_P1.27mm
@@ -24,7 +24,7 @@ from . import altium_lib as AL, sexpr
 
 
 def digest(text):
-    """Geometry hash of a .kicad_mod: dedupe's footprint hash (pads + courtyard); a text hash when it has no pads."""
+    """Geometry hash of a .kicad_mod: dedupe's footprint hash (pads, shapes, holes, courtyard); a text hash when it has no pads."""
     from . import dedupe as DD
     try:
         h = DD.fp_hash(DD.fp_geometry_kicad(text))
