@@ -66,6 +66,7 @@ def test_names_resolve_or_stay_ambiguous():
         r = SP.resolve([text], kind)
         assert r["footprint"] is None and why in r["fp_how"], (text, r)
     assert SP.resolve(["SMA"], "D", "SS14")["footprint"] == "D_SMA"
+    assert SP.resolve(["DO-41"], "D", "1N4002")["footprint"] == "D_DO-41_SOD81_P10.16mm_Horizontal"   # benchmark 2026-10-18
     assert SP.resolve(["TO-220"], "U", "LM7805CT")["footprint"] == "TO-220-3_Vertical"
     # an MPN family whose package is stated picks the KiCad variant with its tab numbering
     assert SP.resolve(["SOT-223"], "U", "AMS1117-3.3")["footprint"] == "SOT-223-3_TabPin2"

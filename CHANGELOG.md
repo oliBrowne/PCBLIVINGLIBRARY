@@ -21,6 +21,10 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Datasheet page picking: a family sheet's "LQFP144, 144-lead LQFP" no longer counts as this part's LQFP-100 (a bare family word matched every LQFP), and the drawing and land-pattern slots never go to a page about another package. The SAM E70 sheet (1976 pages) now sends the LQFP100 drawing instead of the LQFP144 and QFN pages.
+- Standard parts: DO-41 (DO-204AL, SOD81) on a diode resolves to KiCad's D_DO-41_SOD81_P10.16mm_Horizontal.
+- Datasheet checks: 1.25 mm (JST GH) is a standard pitch.
+- Datasheet reader: an answer whose `other_json` the model fenced or wrapped in a sentence is read instead of rejected.
 - Datasheet download: a plain http:// link that fails here is tried again over https before it is sent to the API.
 - BGA / WCSP footprints: a ball grid that fits the body only turned a quarter turn (the datasheet's length x width on the other axis than its rows x columns, TPS628436YKA) turns the body and says so in the report, instead of refusing the read.
 - A datasheet read that leaves a needed dimension blank without listing it as unresolved says which one.

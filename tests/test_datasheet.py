@@ -136,6 +136,17 @@ def test_a_plain_http_link_is_sent_to_the_api_as_https():
     assert D.api_url("https://x/y.pdf") == "https://x/y.pdf"
 
 
+def test_a_fenced_or_prefixed_other_json_is_read():
+    # LP38693MP-1.8 (benchmark 2026-10-18) was rejected for an other_json the model wrapped in text
+    for raw in ('```json\n{"ball_map": 1}\n```', 'Here it is: {"ball_map": 1}'):
+        assert D.from_wire({"package": {"dims": [], "other_json": raw, "unresolved": []}})["package"]["ball_map"] == 1
+    try:
+        D.from_wire({"package": {"dims": [], "other_json": "none", "unresolved": []}})
+        raise AssertionError("garbage other_json accepted")
+    except D.DatasheetError as e:
+        assert "not JSON" in str(e)
+
+
 def test_good_roundtrip():
     with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}), \
             mock.patch.object(D.requests, "post", fake_post(message(GOOD))):

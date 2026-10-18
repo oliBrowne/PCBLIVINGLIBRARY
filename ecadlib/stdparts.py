@@ -81,6 +81,8 @@ DIODE_ALIASES = {
     "SMA": "D_SMA", "DO214AC": "D_SMA", "SMB": "D_SMB", "DO214AA": "D_SMB", "SMC": "D_SMC", "DO214AB": "D_SMC",
     "SMF": "D_SMF", "DO219AB": "D_SMF", "MINIMELF": "D_MiniMELF", "SOD80": "D_MiniMELF", "LL34": "D_MiniMELF",
     "MELF": "D_MELF", "DO213AB": "D_MELF", "LL41": "D_MELF",
+    "DO41": "D_DO-41_SOD81_P10.16mm_Horizontal", "DO204AL": "D_DO-41_SOD81_P10.16mm_Horizontal",
+    "SOD81": "D_DO-41_SOD81_P10.16mm_Horizontal",       # axial, laid flat with KiCad's 10.16 mm lead bend
 }
 AMBIGUOUS = {"SOT233": "KiCad's SOT-23-3 is the 1.6 mm MO-178 body; distributors use SOT-23-3 for TO-236 SOT-23",
              "SOT223": "SOT-223: tab numbered 2 (SOT-223-3_TabPin2, regulators) or 4 (KiCad's SOT-223)",
