@@ -10,11 +10,57 @@ and a damaged file is skipped (and named) instead of stopping the summary.
      "last_upkeep": {...} | null, "agent": {"state", "heartbeat", "last_run", "queue": {state: n}, "waiting_review"},
      "problems": [text]}
 plus "datasheet": {"answers", "parts", "input_tokens", "output_tokens", "usd", "usd_estimated", "escalations",
-"by_model"} once a Claude datasheet read has been paid for in the workspace."""
+"by_model"} once a Claude datasheet read has been paid for in the workspace.
+
+Each plan row also has "timing" (its last BOM run, ecadlib.timing: {"started", "finished", "steps": {step: seconds},
+"work_seconds", "total_seconds"} or null) and "review" (see review_stats); the top level has "last_run" (the newest
+plan's timing, with "plan") and "review" (review_stats summed over the plans, top held reasons across them)."""
 import argparse, datetime, json, os, sys
 from pathlib import Path
 
 COUNTS = ("ready", "held", "awaiting_approval", "duplicate")
+BUILT = ("ready", "held", "awaiting_approval")         # what the librarian built (not duplicates, not workspace parts)
+REVIEW_KEYS = ("built", "held", "passed_first_time", "approved", "rejected", "changed")
+
+
+def review_stats(items, folder):
+    """How parts fare in review (#45). Of the parts the librarian built:
+    held: the release check holds them now; held_reasons: by rule (the text before the first ":"), most first;
+    approved / rejected: someone signed them off / rejected them at least once (approvals);
+    changed: a person changed the part: released it anyway (--allow), picked another symbol or footprint (resolve,
+    review), or edited its footprint's pads (fp-edit);
+    passed_first_time: not held, never rejected, never changed: the part ecadlib built went through as it was."""
+    folder = Path(folder)
+    chosen = set()
+    try:
+        state = json.loads((folder / "librarian_state.json").read_text(encoding="utf-8"))
+        chosen = {n for n, st in state.items() if isinstance(st, dict)
+                  and any((st.get(k) or {}).get("chosen") for k in ("symbol", "footprint"))}
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        edited = set(json.loads((folder / "footprint_edits.json").read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        edited = set()
+    out = {k: 0 for k in REVIEW_KEYS}
+    reasons = {}
+    for it in items:
+        if not isinstance(it, dict) or it.get("status") not in BUILT:
+            continue
+        out["built"] += 1
+        decisions = [a.get("decision") for a in it.get("approvals") or [] if isinstance(a, dict)]
+        rejected, changed = "reject" in decisions, bool(it.get("allow")) or it.get("name") in chosen | edited
+        out["held"] += it["status"] == "held"
+        out["approved"] += "approve" in decisions
+        out["rejected"] += rejected
+        out["changed"] += changed
+        out["passed_first_time"] += it["status"] != "held" and not rejected and not changed
+        if it["status"] == "held":
+            for r in it.get("hold_reasons") or []:
+                key = str(r).split(":", 1)[0].strip()[:40] or "?"
+                reasons.setdefault(key, {"reason": key, "parts": 0, "example": str(r)[:160]})["parts"] += 1
+    out["held_reasons"] = sorted(reasons.values(), key=lambda r: (-r["parts"], r["reason"]))
+    return out
 
 
 def _iso(ts):
@@ -46,7 +92,8 @@ def status(root):
     problems = []
     out = {"workspace": str(root), "exists": root.is_dir(), "rules": None, "boms": 0, "plans": [],
            "totals": {"parts": 0, **{("duplicates" if k == "duplicate" else k): 0 for k in COUNTS}},
-           "last_triage": None, "last_upkeep": None,
+           "last_triage": None, "last_upkeep": None, "last_run": None,
+           "review": {**{k: 0 for k in REVIEW_KEYS}, "held_reasons": []},
            "agent": {"state": "never run", "heartbeat": None, "last_run": None, "queue": {}, "waiting_review": 0},
            "problems": problems}
     if not out["exists"]:
@@ -57,6 +104,8 @@ def status(root):
     up = root / "uploads"
     out["boms"] = len(_files(up, "*")) + len(_files(up, "*/*")) if up.is_dir() else 0
 
+    from . import timing as TI
+    rv, reasons = out["review"], {}
     for pf in _files(root, "librarian/*/plan.json"):
         items = _json(pf, problems)
         if not isinstance(items, list):
@@ -65,10 +114,19 @@ def status(root):
             continue
         st = [i.get("status") for i in items if isinstance(i, dict)]
         row = {"plan": rel(pf), "parts": len(st), **{("duplicates" if k == "duplicate" else k): st.count(k) for k in COUNTS},
-               "updated": _iso(pf.stat().st_mtime)}
+               "updated": _iso(pf.stat().st_mtime), "timing": TI.last_run(pf.parent, problems),
+               "review": review_stats(items, pf.parent)}
         out["plans"].append(row)
         for k in out["totals"]:
             out["totals"][k] += row[k]
+        for k in REVIEW_KEYS:
+            rv[k] += row["review"][k]
+        for r in row["review"]["held_reasons"]:
+            agg = reasons.setdefault(r["reason"], dict(r, parts=0))
+            agg["parts"] += r["parts"]
+    rv["held_reasons"] = sorted(reasons.values(), key=lambda r: (-r["parts"], r["reason"]))[:5]
+    runs = [dict(p["timing"], plan=p["plan"]) for p in out["plans"] if p["timing"]]
+    out["last_run"] = max(runs, key=lambda r: r["finished"]) if runs else None
 
     tri = _files(root, "reports/triage_*.json") or _files(root, "reports/triage_*.csv")
     if tri:
@@ -153,6 +211,19 @@ def render(s, styled=False, width=None, shown=None, verbosity=0):
                            + (f" ({', '.join(f'{k} {v}' for k, v in lt['counts'].items())})" if lt.get("counts") else "")
                            if lt else "never")],
           ["upkeep", f"{lu['date']}, {M.plural(lu['new_changes'] or 0, 'new change')}" if lu else "never"]]
+    lr = s.get("last_run")
+    if lr:
+        from . import timing as TI
+        names = {"triage": "triage", "build": "build", "release_check": "release check", "review": "review", "push": "push"}
+        kv.append(["last run", f"{TI.human(lr['total_seconds'])} BOM to "
+                   + ("released" if "push" in lr["steps"] else "plan") + f" ({TI.human(lr['work_seconds'])} ecadlib work): "
+                   + ", ".join(f"{names.get(k, k)} {TI.human(v)}" for k, v in lr["steps"].items())])
+    rv = s.get("review") or {}
+    if rv.get("built"):
+        kv.append(["review", f"{rv['built']} built: {rv['passed_first_time']} passed first time, {rv['held']} held, "
+                   f"{rv['approved']} approved, {rv['rejected']} rejected, {rv['changed']} changed by a person"])
+        if rv["held_reasons"]:
+            kv.append(["held for", "; ".join(f"{r['reason']} {r['parts']}" for r in rv["held_reasons"][:3])])
     ds = s.get("datasheet")
     if ds:
         kv.append(["datasheet", f"{ds['answers']} Claude answers for {M.plural(ds['parts'], 'part')}, ${ds['usd']:.2f}"

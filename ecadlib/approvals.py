@@ -384,6 +384,8 @@ def _run(a):
             print(f"  refused  {it['name']:<28} {e}")
         audit(base, entry)
     write_text_atomic(plan, json.dumps(items, indent=2))
+    from . import timing                       # review time: from the release check to this decision
+    timing.mark_review(plan.parent, a.action)
     if not policy:
         print("no approval policy (approvals.json/.toml next to the plan, or [release.approvals] in ecadlib.toml): "
               "recorded, but push does not require them")

@@ -434,6 +434,9 @@ def main(argv=None):
             stamp_allow(items, a.allow, identity(a.user, cwd=plan.parent))
             post_check(items, plan.parent, rows)
         write_text_atomic(plan, json.dumps(items, indent=2))
+        if a.allow or a.unallow:
+            from . import timing
+            timing.mark_review(plan.parent, "allow")
         stem = write_report(rows, a.out or plan.parent / "release_check", plan)
     held = sum(r["status"] == "held" for r in rows)
     if a.json:                                 # stable shape: README "Machine-readable output (--json)"

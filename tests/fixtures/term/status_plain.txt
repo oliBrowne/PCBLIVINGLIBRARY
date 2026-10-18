@@ -8,6 +8,9 @@ rules        ecadlib.toml
 BOMs         1 uploaded
 last triage  never
 upkeep       never
+last run     Ns BOM to plan (Ns ecadlib work): triage Ns, build Ns, release check Ns
+review       7 built: 6 passed first time, 1 held, 0 approved, 0 rejected, 0 changed by a person
+held for     files 1
 agent        never run; review queue: empty
 
 next:

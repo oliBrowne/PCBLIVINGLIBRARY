@@ -134,6 +134,8 @@ def release_anyway(plan, name, user=None):
         stamp_allow([it], [name], identity(user, cwd=plan.parent))
         post_check([it], plan.parent, rows)
         write_text_atomic(plan, json.dumps(items, indent=2))
+    from . import timing
+    timing.mark_review(plan.parent, "allow")
     return it
 
 

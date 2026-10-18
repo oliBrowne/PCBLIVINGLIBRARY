@@ -156,4 +156,5 @@ def test_second_testpack_run_changes_nothing():
     E.ecadlib(k["root"], "testpack", "--out", "pack")
     again = E.snapshot(k["dir"])
     changed = sorted(x for x in set(k["snap"]) | set(again) if k["snap"].get(x) != again.get(x))
+    changed = [x for x in changed if x != "library/timing.jsonl"]   # each run appends its step times (ecadlib.timing)
     assert changed in ([], ["library/librarian_state.json"]), changed
