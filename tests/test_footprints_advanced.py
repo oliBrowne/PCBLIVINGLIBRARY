@@ -132,6 +132,17 @@ def test_bga_nsmd_and_smd_lands():
     assert build(spec, "A")[1]["courtyard"] == (15.0, 15.0) and build(spec, "C")[1]["courtyard"] == (12.0, 12.0)
 
 
+def test_a_ball_grid_that_fits_only_the_turned_body_turns_the_body():
+    # TPS628436YKA (benchmark 2026-10-18): 3 rows x 2 columns at 0.35 mm, body given as 1.05 x 0.797 mm
+    spec = SPEC("BGA-100_11.0x11.0mm_Layout10x10_P1.0mm_Ball0.5mm_Pad0.4mm_NSMD")
+    spec = dict(spec, name="WCSP-6", rows=3, cols=2, pitch=0.35, pin_count=6, ball_diameter={"nom": 0.2},
+                body_length={"nom": 1.05}, body_width={"nom": 0.797})
+    spec.pop("land_diameter", None)
+    txt, rep = build(spec)
+    assert any("turned" in n for n in rep.get("notes", [])), rep.get("notes")
+    assert rep["courtyard"][0] < rep["courtyard"][1]          # the long side now runs along the 3 rows
+
+
 def test_bga_mistakes_are_explained():
     spec = SPEC("BGA-256_17.0x17.0mm_Layout16x16_P1.0mm_Ball0.5mm_Pad0.4mm_NSMD")
     for change, words in (({"pitch": 1.27}, "doesn't fit"), ({"ball_diameter": {"nom": 19.7}}, "mils")):

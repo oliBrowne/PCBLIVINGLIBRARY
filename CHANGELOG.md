@@ -21,6 +21,9 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Datasheet download: a plain http:// link that fails here is tried again over https before it is sent to the API.
+- BGA / WCSP footprints: a ball grid that fits the body only turned a quarter turn (the datasheet's length x width on the other axis than its rows x columns, TPS628436YKA) turns the body and says so in the report, instead of refusing the read.
+- A datasheet read that leaves a needed dimension blank without listing it as unresolved says which one.
 - Datasheet download: a link that gives a product HTML page (ENS210) is followed once to the datasheet PDF the page links to; the provenance keeps the page as `page_url`.
 - Datasheet reader: a plain http:// datasheet link sent to the API for it to fetch is sent as https:// (the API answered "Only HTTPS URLs are supported"; 7 parts of the live benchmark).
 - Cross-check: two reads that name a pin with different wording agree: "K" and "cathode (K)", "A" and "anode", "VO" and "VO (output)", "V_{SS}" and "VSS", or "GND" and "PowerPAD" for the exposed pad. 18 benchmark parts were held on wording like this.

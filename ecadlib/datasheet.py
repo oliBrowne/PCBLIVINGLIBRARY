@@ -1492,7 +1492,7 @@ class Reader:
         failed before starts where it left off ('final' = the cached answer at this step is the one to use)."""
         from . import ds_route as DR
         attempts, data, prov = [], None, None
-        for url, where in urls:
+        for url, where in [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))]:   # http, then https
             try:
                 data, prov = self.store.fetch(url, where)
                 break
@@ -1502,7 +1502,7 @@ class Reader:
             if not urls:
                 raise DatasheetError("no datasheet URL known")
             wrong = {a["url"] for a in attempts if re.search(BROKEN_LINK, a["error"])}
-            usable = [(u, w) for u, w in urls if u not in wrong]
+            usable = [(u, w) for u, w in urls if u not in wrong and api_url(u) not in wrong]
             if not usable:
                 raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts))
             url, where = usable[0]

@@ -268,6 +268,10 @@ def test_datasheet_urls_and_pdf_store():
                           "https://maker/docs/ENS210_Datasheet.pdf": PDF})
         data, prov = st.fetch("https://maker/p/ens210")
         assert data == PDF and prov["url"] == "https://maker/docs/ENS210_Datasheet.pdf" and prov["page_url"] == "https://maker/p/ens210"
+        # Reader.job: a plain http link that fails here is tried again over https before going to the API
+        http.pdfs["https://plain/x.pdf"] = PDF
+        j = D.Reader(d, d, key=KEY, http=http, log=None).job("TESTPART", [("http://plain/x.pdf", "KiCad")])
+        assert j["body"]["messages"][0]["content"][0]["source"]["type"] == "base64" and j["url"] == "https://plain/x.pdf", j["url"]
         # Reader.job: first link is HTML -> skipped; blocked link -> URL source; nothing usable -> error
         rd = D.Reader(d, d, key=KEY, http=http, log=None)
         j = rd.job("TESTPART", [("https://a/view", "BOM"), ("https://a/ds.pdf", "LCSC")], "RGT")
