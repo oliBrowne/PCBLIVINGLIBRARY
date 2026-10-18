@@ -16,14 +16,15 @@ def test_confined_save_rules_cannot_point_outside_the_workspace():
     with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as out:
         ws = Workspace(d)
         ws.mcp_options = M.Options(confine=True)
-        for toml in (f'[style]\nprofile = "{out}/pwn.json"\n', '[style]\nprofile = "../pwn.json"\n',
-                     f'[agent.watch]\nsources = [{{type = "folder", ref = "{out}"}}]\n', '[style]\nprofile = "C:\\\\x\\\\p.json"\n'):
+        for toml in (f"[style]\nprofile = '{out}/pwn.json'\n", "[style]\nprofile = '../pwn.json'\n",   # TOML literal
+                     f"[agent.watch]\nsources = [{{type = 'folder', ref = '{out}'}}]\n",                # strings: Windows
+                     "[style]\nprofile = 'C:\\x\\p.json'\n"):                                           # temp paths
             r = _call(ws, "save_rules", {"toml": toml, "overwrite": True})["result"]
             assert r["isError"] and "outside the workspace" in _text({"result": r}), (toml, r)
         assert not Path(d, "ecadlib.toml").exists()
         assert M._rule_paths('[style]\nprofile = "styles/house.json"\n[a]\nb = "https://x/y"\n') == []
         ws.mcp_options = M.Options()                                   # stdio without --confine: allowed
-        r = _call(ws, "save_rules", {"toml": f'[style]\nprofile = "{out}/p.json"\n', "overwrite": True})["result"]
+        r = _call(ws, "save_rules", {"toml": f"[style]\nprofile = '{out}/p.json'\n", "overwrite": True})["result"]
         assert "outside the workspace" not in _text({"result": r}), r
 
 
@@ -64,7 +65,7 @@ def test_eval_batch_prices_earlier_answers_by_how_they_were_sent():
     assert abs(R._cost(case, m)[2] - 1.5 * one) < 1e-6
     del case["attempts"][0]["via"]                                     # an older recording: the kept answer's way
     assert abs(R._cost(case, m)[2] - one) < 1e-6
-    src = (REPO / "ecadlib/eval/runner.py").read_text()
+    src = (REPO / "ecadlib/eval/runner.py").read_text(encoding="utf-8")
     assert re.search(r"again = run\([^)]*batch=batch\)", src, re.S), "repeats keep --batch"
 
 
@@ -89,7 +90,7 @@ def test_exposed_pad_name_only_stands_in_for_ground_or_pad():
 
 def test_ui_favicon_and_token_advice():
     for f in ("index.html", "setup.html"):
-        s = (REPO / "ecadlib/ui/static" / f).read_text()
+        s = (REPO / "ecadlib/ui/static" / f).read_text(encoding="utf-8")
         href = re.search(r'href="(data:image/svg\+xml,[^"]*)"', s).group(1)
         assert "#" not in href, f"{f}: a bare # cuts the data URI"
         assert "NEXAR_TOKEN: restart" not in s
@@ -101,7 +102,7 @@ def test_ui_favicon_and_token_advice():
         app._nexar_token()
     except ValueError as e:
         assert "setup page" in str(e) and "before starting" not in str(e), e
-        assert str(e).split(":")[0] in (REPO / "docs/START_HERE.md").read_text(), "START_HERE quotes the real message"
+        assert str(e).split(":")[0] in (REPO / "docs/START_HERE.md").read_text(encoding="utf-8"), "START_HERE quotes the real message"
     finally:
         UC.secret = real
 
