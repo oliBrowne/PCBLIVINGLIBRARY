@@ -21,6 +21,8 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Datasheet reader: a plain http:// datasheet link sent to the API for it to fetch is sent as https:// (the API answered "Only HTTPS URLs are supported"; 7 parts of the live benchmark).
+- Cross-check: two reads that name a pin with different wording agree: "K" and "cathode (K)", "A" and "anode", "VO" and "VO (output)", "V_{SS}" and "VSS", or "GND" and "PowerPAD" for the exposed pad. 18 benchmark parts were held on wording like this.
 - Datasheet reader: the live API refused every read ("Schemas contains too many parameters with union types (184 ...). limit: 16"). The request now asks for the dimensions as a list of named records (min / nom / max as printed text, "" where blank) and the optional family fields as one JSON text, with no nullable fields; the answer is turned back into the same extraction as before, so checks, the result cache and recorded answers are unchanged. The cross-check's second read had the same problem (26 union fields) and is fixed the same way.
 - Datasheet reader: the optional family fields reached the model without their descriptions, so a land pattern's `pad_center` came back as the datasheet's C (row to row) and SOT-23-6 pads sat 2.4 mm out instead of 1.2 (BCR430UW6, AH1806-W). The descriptions are back, `pad_center` says C / 2, and a pad_center past the leads is flagged.
 - `ecadlib eval`: KiCad's pin-name markup (`V_{SS}`) matches the datasheet's plain `VSS`.

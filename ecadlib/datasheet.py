@@ -571,13 +571,18 @@ def task_text(part, package=None, pages=None):
     return t + "Return the package dimensions and the pin list for this part."
 
 
+def api_url(url):
+    """The API fetches https links only ("Only HTTPS URLs are supported"); maker sites serve the same file on https."""
+    return "https://" + url[7:] if str(url).lower().startswith("http://") else url
+
+
 def build_request(source, part, package=None, pages=None, model=MODEL, effort="high", fallback=True, cache_doc=True):
     """source = ("base64", pdf bytes) or ("url", https url). Returns (headers without key, body).
     fallback: server-side refusal fallback (Messages API only; the Batches API rejects it). cache_doc: cache the
     system + PDF prefix (worth it for a synchronous call that may be retried; a batch reads each PDF once)."""
     kind, val = source
     src = ({"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(val).decode()}
-           if kind == "base64" else {"type": "url", "url": val})
+           if kind == "base64" else {"type": "url", "url": api_url(val)})
     doc = {"type": "document", "source": src}
     if cache_doc:
         doc["cache_control"] = {"type": "ephemeral"}                                    # system + PDF prefix cached
