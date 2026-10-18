@@ -7,8 +7,9 @@ SVN Database Library (.SVNDbLib) folder.
 
 Folder layout (one entry per model file, the altium_lib / altium365 convention):
     <to>/<name>.DbLib | <name>.SVNDbLib     INI file Altium opens (Excel connection, field maps, tables)
-    <to>/<name>.xlsx                        parts table: one sheet per category (Capacitors, ICs, ...), all text
-    <to>/<name>.csv                         the same rows flat (Table column first), for diffs and review only
+    <to>/<file>.xlsx                        parts table: one sheet per category (Capacitors, ICs, ...), all text
+    <to>/<file>.csv                         the same rows flat (Table column first), for diffs and review only
+                                            (<file> = <name> in ASCII, see data_file_name: Bibliothèque -> Bibliotheque)
     <to>/SchLib/<Library Ref>.SchLib        symbol per file;  [Library Path]   = SchLib\\<Library Ref>.SchLib
     <to>/PcbLib/<Footprint Ref>.PcbLib      footprint per file; [Footprint Path] = PcbLib\\<Footprint Ref>.PcbLib
     <to>/ecadlib_sync.json                  which rows and files this tool manages (only those are --prune-able)
@@ -61,6 +62,21 @@ def sheet_name(name):
     ("Res. Networks" -> "Res# Networks$"): the apostrophe is dropped here as well, and '.' becomes '_'."""
     t = re.sub(r"[\[\]:*?/\\.]", "_", str(name)).replace("'", "")
     return (t or "Misc")[:31]
+
+
+_FOLD = str.maketrans({"ß": "ss", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ø": "o", "Ø": "O", "ł": "l",
+                       "Ł": "L", "đ": "d", "Đ": "D", "þ": "th", "Þ": "Th"})      # letters NFKD doesn't split
+
+
+def data_file_name(name):
+    """Base name of the .xlsx / .csv: the package name folded to ASCII ('Bibliothèque' -> 'Bibliotheque'). Altium
+    installs 'Bibliothèque.DbLib' fine, but opening a workbook with a non-ASCII file name through the Excel (ACE)
+    connection fails for every table (#82, AD26)."""
+    import unicodedata
+    s = str(name).translate(_FOLD)
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+    s = re.sub(r'[^\x20-\x7e]|[<>:"/\\|?*]', "_", s).strip(" .")
+    return s if s.strip("_") else "ecadlib"
 
 
 def table_of(item):
@@ -366,10 +382,14 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     to = Path(target_dir)
     from .rules import param_name, resolve
     rules = resolve(rules, base)                            # house parameter names: ecadlib.toml found from the plan
-    xlsx, csvf, lib, statef = to / f"{name}.xlsx", to / f"{name}.csv", to / f"{name}{EXT[mode]}", to / STATE
+    fname = data_file_name(name)
+    xlsx, csvf, lib, statef = to / f"{fname}.xlsx", to / f"{fname}.csv", to / f"{name}{EXT[mode]}", to / STATE
     state = json.loads(statef.read_text()) if statef.exists() else {}
     managed_rows, managed_files = set(state.get("rows", [])), set(state.get("files", []))
-    old = read_tables(xlsx)
+    # an older ecadlib named the workbook after the package ('Bibliothèque.xlsx'), which Altium can't open: move to
+    # the ASCII name, keeping the rows (and columns added by hand) of the old one
+    legacy = [f for f in (to / f"{name}.xlsx", to / f"{name}.csv") if fname != name and f.exists()]
+    old = read_tables(xlsx if xlsx.exists() or not legacy else legacy[0])
     tables = {}
     for t, (h, rows) in old.items():                    # a sheet an older ecadlib named "Driver's ICs": ACE's name
         t = next((k for k in tables if table_key(k) == table_key(t)), sheet_name(t))
@@ -558,7 +578,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
             else:
                 (to / rel).write_bytes(data if data is not None else text.encode("utf-8"))
         written.append(rel)
-    if tables and tables != old:
+    if tables and (tables != old or not xlsx.exists()):
         put(xlsx.name, writer=lambda: write_xlsx(xlsx, tables))
     if tables:
         ct = csv_text(tables)
@@ -571,7 +591,7 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     links = dict(conn_str=excel_connection(win / xlsx.name), db_type="Microsoft Excel", db_path=xlsx.name,
                  relative=True, search_path=f"{url}/SchLib;{url}/PcbLib" if url else "", extra=extra)
     override = {"LibraryDatabaseType", "LibraryDatabasePath", "DatabasePathRelative"}
-    if win_dir:                                     # else keep a connection set in Altium's DbLib editor
+    if win_dir or legacy:                           # else keep a connection set in Altium's DbLib editor
         override.add("ConnectionString")
     if url:
         override |= {"SVNRepositoryURL", "LibrarySearchPath"}
@@ -590,6 +610,13 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     url = url or _kv(db[1]).get("SVNRepositoryURL") or None      # the one already in the file
     if mode == "svndblib" and not url:
         out["warning"] = "no SVN repository URL (pass --svn-url, or sync into an svn working copy)"
+    if tables and legacy:                           # the ASCII-named workbook replaces them
+        for f in legacy:
+            removed.append(f.name)
+            results.append({"name": f.name, "action": "removed", "detail": f"renamed to {fname}{f.suffix}",
+                            "table": "", "kind": "file"})
+            if not dry_run:
+                f.unlink()
     st = {"rows": sorted(managed_rows), "files": sorted(managed_files)}
     if st != {"rows": sorted(state.get("rows", [])), "files": sorted(state.get("files", []))}:
         put(STATE, json.dumps(st, indent=1) + "\n")
@@ -609,7 +636,7 @@ def main(argv=None):
     ap.add_argument("plan", help="plan.json from `ecadlib librarian` or `ecadlib altium365 plan`")
     ap.add_argument("--to", required=True, help="library folder (for --svn: an svn working copy)")
     ap.add_argument("--svn", action="store_true", help="write an .SVNDbLib (SVN Database Library) instead of a .DbLib")
-    ap.add_argument("--name", default="ecadlib", help="base name of the .DbLib/.SVNDbLib, .xlsx and .csv")
+    ap.add_argument("--name", default="ecadlib", help="base name of the .DbLib/.SVNDbLib, and (in ASCII) of the .xlsx and .csv")
     ap.add_argument("--prune", action="store_true", help="delete rows and model files (written by ecadlib) no longer in the plan")
     ap.add_argument("--win-dir", help=r"Windows folder the library lives in, for the Excel connection string (default C:\ecadlib\library; Altium finds the workbook relative to the DbLib either way)")
     ap.add_argument("--svn-url", help="repository URL of --to (default: from `svn info`)")
