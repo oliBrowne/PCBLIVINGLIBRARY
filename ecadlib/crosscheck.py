@@ -108,11 +108,18 @@ def _names(s):
     return out - {""}
 
 
+GROUNDISH = re.compile(r"^(?:[PADS]?GND|VSS|[PA]?VSS|GROUND|0V|EP|EPAD|PAD|THERMAL)")
+
+
 def names_agree(a, b):
     """Two reads name a pin the same: equal after normalising, one read's name is the other's alias in brackets
     ("K" vs "cathode (K)", "VO" vs "VO (output)"), or one calls the exposed pad by its pad name ("GND" vs "PowerPAD")."""
     na, nb = _names(a), _names(b)
-    return bool(na & nb) or bool((na & EP_NAMES) or (nb & EP_NAMES))
+    if na & nb:
+        return True
+    # the pad name only stands in for a ground / pad name: "TAB" vs "VIN" is a real disagreement (SOT-223 numbering)
+    padish = lambda n: bool(n & EP_NAMES) or any(GROUNDISH.match(x) for x in n)
+    return bool((na & EP_NAMES and padish(nb)) or (nb & EP_NAMES and padish(na)))
 
 
 def _show(v):

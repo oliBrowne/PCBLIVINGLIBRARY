@@ -655,7 +655,7 @@ What gets written:
 * `LayerKindMapping` is empty, so Mechanical 13 and 15 have no layer types and appear as plain mechanical layers. Solder mask and paste use "from rule" except on the EP.
 * SchLib: `Weight` = records + 1 and the pin flag bits were inferred from real files.
 * Not written by the generator path: through-hole pads and 3D bodies (the KiCad import in section 6 adds through-hole pads, arcs, keep-outs and 3D bodies) and `PrimitiveGuids`.
-* Text: Altium is assumed to recalculate the cached text size (exact only for `.Designator`/`.Comment`). Not checked in Altium: signal-flow arrow direction, the falling-edge clock written as clock plus active-low input, and how display modes behave when switching views. Names over 31 characters are truncated as CFB storage names, and `SectionKeys` holds the mapping in the same way Altium does.
+* Text: Altium is assumed to recalculate the cached text size (exact only for `.Designator`/`.Comment`). Not checked in Altium: signal-flow arrow direction, and the falling-edge clock written as clock plus active-low input. (De Morgan display modes were checked in AD26; see docs/altium-native.md.) Names over 31 characters are truncated as CFB storage names, and `SectionKeys` holds the mapping in the same way Altium does.
 
 **Checked against real Altium libraries (2026-10-15, `tests/test_altium_interop.py`):** 553 Altium-saved `.PcbLib`/`.SchLib` files from the
 Celestial Altium Library (github.com/issus/altium-library; its license forbids redistribution, so none is committed) read with our reader

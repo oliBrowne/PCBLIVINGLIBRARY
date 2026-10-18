@@ -1172,8 +1172,10 @@ class Workspace:
         """What having the model write the house style guide costs (ecadlib.ai_cost), sending nothing."""
         from . import ai_cost as AC, house_style as HS
         prof = self._style_or_raise()
+        from . import llm as LL
         system, user, schema, ref, _ = HS.guide_request(prof, self.rules(), model)
-        return AC.style_quote(system, user, schema, ref, self.rules())
+        key = bool(LL.key_for(HS.model_info(self.rules(), model)[0]["ep"]))
+        return AC.style_quote(system, user, schema, ref, self.rules(), key_set=key)
 
     def style_guide(self, approved_usd=None, over_limit_ok=False, price_unknown_ok=False, model=None, progress=None):
         """The model writes the house style guide after the person approved style_quote()'s cost; "ai_cost" puts
@@ -1423,8 +1425,9 @@ def _now(ts=None):
 def _nexar_token():
     tok = UC.secret("NEXAR_TOKEN")
     if not tok:
-        raise ValueError("set NEXAR_TOKEN before starting ecadlib (a Nexar portal token with the "
-                         "design.domain, user.access and openid scopes)")
+        raise ValueError("no Altium 365 (Nexar) token: save it on the setup page (Optional keys) or run "
+                         "`ecadlib keys set NEXAR_TOKEN` (a Nexar portal token with the design.domain, user.access "
+                         "and openid scopes)")
     return tok
 
 
