@@ -12,6 +12,7 @@ a minor release may change command-line options and file formats.
 - `ecadlib status` shows how long the last BOM run took, step by step: triage, build, release check, review (from the release check to the last sign-off, `--allow` or resolve choice) and the Altium 365 push, with ecadlib's own time and the total (#44). Each plan folder keeps a `timing.jsonl`; `status --json` has `last_run` and a `timing` per plan.
 - `ecadlib status` shows the review rate: of the parts built, how many passed first time, are held (with the top reasons), were approved, rejected or changed by a person (#45). `status --json` has `review`, overall and per plan.
 - docs/START_HERE.md asks people trying ecadlib to send those two lines.
+- A logo: the Sprout Trace mark (a copper trace growing from a via into two leaves) on the website, its favicon, the web UI, the KiCad toolbar button and the Windows icon, with copper as the one accent colour. docs/brand.md has the rules; `site/brand/` has the files.
 
 ### Fixed
 

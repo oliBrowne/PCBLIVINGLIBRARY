@@ -26,7 +26,7 @@ def test_page_has_steps_next_hints_and_no_favicon_404():
         assert f'id="{sec}"' in PAGE and f'href="#{sec}"' in PAGE or sec == "results", sec
     order = [PAGE.index(f'<section class="card" id="{s}"') for s in ("bomcard", "results", "libcard", "export", "queuecard")]
     assert order == sorted(order), "the steps are not in the order a user does them"
-    assert '<link rel="icon" href="data:,">' in PAGE                  # no /favicon.ico 404 in the console
+    assert '<link rel="icon" href="data:image/svg+xml,' in PAGE    # the mark inline: no /favicon.ico 404 in the console
     assert "--on-accent" in PAGE                                      # white on light blue in dark mode was ~2:1
     for el in ("tnext", "libbusy", "rolenote", "stout", "doctorout"):
         assert f'id="{el}"' in PAGE, el

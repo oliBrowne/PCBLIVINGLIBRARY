@@ -14,7 +14,7 @@ Per project, next to the board: ecadlib-work/ is the ecadlib workspace (one part
 for every part added or filled, so one plan makes the whole library) and ecadlib/ the KiCad library (ecadlib.kicad_sym,
 ecadlib.pretty, ecadlib.3dshapes, kicad_export.json). The plugin adds ${KIPRJMOD}/ecadlib/... rows to the project's
 library tables and places the footprint; nothing here needs KiCad."""
-import argparse, csv, json, struct, sys, zlib
+import argparse, csv, json, sys
 from pathlib import Path
 
 from . import altium_menu as AM
@@ -135,28 +135,9 @@ def run_job(job, action, project, mpn="", manufacturer="", path="", opener=None,
 
 # ------------------------------------------------------------------ the toolbar icon
 def icon_png(size=24):
-    """The ecadlib toolbar icon (a blue tile with three white shelves, the one on top shorter) as PNG bytes."""
-    blue, white = (0x2F, 0x77, 0xD9, 255), (255, 255, 255, 255)
-    rows = []
-    r = size // 6
-    for y in range(size):
-        line = bytearray([0])
-        for x in range(size):
-            cx, cy = min(x, size - 1 - x), min(y, size - 1 - y)          # rounded corners
-            if cx < r and cy < r and (r - cx) ** 2 + (r - cy) ** 2 > r * r:
-                line += bytes(4)
-                continue
-            px = blue
-            for i, (y0, x1) in enumerate(((size * 5 // 24, size * 14 // 24), (size * 10 // 24, size * 18 // 24),
-                                          (size * 15 // 24, size * 18 // 24))):
-                if y0 <= y < y0 + max(2, size // 10) and size * 6 // 24 <= x < x1:
-                    px = white
-            line += bytes(px)
-        rows.append(bytes(line))
-    def chunk(t, d):
-        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
-            + chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b""))
+    """The ecadlib toolbar icon (the Sprout Trace mark on a dark tile, see ecadlib/brand.py) as PNG bytes."""
+    from .brand import mark_png
+    return mark_png(size, tile=True)
 
 
 def main(argv=None):
