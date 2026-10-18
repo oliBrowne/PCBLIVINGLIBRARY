@@ -31,7 +31,11 @@ tests/fixtures/kicad_golden/*.kicad_mod (24 footprints, kicad-footprints commit
 f8440fa61a5690b48b325c891fdb99c0038a5a59, unmodified) and
 tests/fixtures/kicad/USB_C_Receptacle_HRO_TYPE-C-31-M-12.kicad_mod and
 tests/fixtures/kicad/Regulator_Linear_AMS1117.kicad_sym (symbols AP1117-15 and
-AMS1117-3.3 combined into one library file) are from the KiCad libraries
+AMS1117-3.3 combined into one library file) and
+tests/fixtures/change_control/*.kicad_sym (the symbols
+D_Schottky_Dual_CommonCathode_AAK_Parallel before and after kicad-symbols commit
+177f3614596c, and LED before and after commit 051843b6abaf, each extracted into
+its own library file) are from the KiCad libraries
 (https://gitlab.com/kicad/libraries, kicad-footprints and kicad-symbols),
 Copyright the KiCad Library contributors, licensed CC-BY-SA 4.0 with the KiCad
 libraries' design-use exception (https://www.kicad.org/libraries/license/).

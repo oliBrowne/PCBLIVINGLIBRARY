@@ -300,6 +300,21 @@ def test_rebuild_check_ignores_the_ledger():
     assert rep["ok"], [r for r in rep["rows"] if r["result"] == "DRIFT"]
 
 
+def test_kicad9_tilde_and_kicad10_empty_are_the_same_pin_and_field():
+    """KiCad 9 wrote an empty pin name, pin number or field as ~, KiCad 10 writes "": the corpus run found two false
+    electrical holds (Valve:ECH81, Valve:EM84, a pin with no number) and 11,671 cosmetic lines from this alone."""
+    def sym(empty):
+        return sexpr.parse(f'(symbol "V" (property "Reference" "V" (at 0 0 0)) (property "Datasheet" "{empty}" (at 0 0 0)) '
+                           f'(symbol "V_1_1" (pin passive line (at 0 0 0) (length 2.54) (name "{empty}") (number "1")) '
+                           f'(pin input line (at 0 2.54 0) (length 2.54) (name "K_G5") (number "{empty}"))))')
+    old, new = (FP.of_kicad(sym(e), None, part="V") for e in ("~", ""))
+    assert CD.diff(old, new) == []
+    renamed = FP.of_kicad(sexpr.parse('(symbol "V" (property "Reference" "V" (at 0 0 0)) (symbol "V_1_1" (pin passive line '
+                                      '(at 0 0 0) (length 2.54) (name "~") (number "1")) (pin input line (at 0 2.54 0) '
+                                      '(length 2.54) (name "K_G5") (number "7"))))'), None, part="V")
+    assert CD.worst(CD.diff(old, renamed)) == "electrical"
+
+
 # ---------------------------------------------------------------- property tests
 NAMES = ["VCC", "GND", "SDA", "SCL", "EN", "~{RESET}", "TX", "RX", "MISO", "MOSI", "SCK", "~{CS}", "INT", "VREF", "OUT",
          "IN+", "IN-", "FB", "SW", "BOOT", "PG", "NC1", "NC2", "VBAT", "D+", "D-", "CLK", "DATA", "ADJ", "SENSE"]
