@@ -84,17 +84,24 @@ U4,1,NOWHERE1,,,NOWHERE1,,,
 """
 
 
-def ee_as(mpn, lcsc):
+def ee_as(mpn, lcsc, footprint_of=None):
+    """The synthetic EasyEDA payload as another part; footprint_of: a recorded EasyEDA answer whose footprint it takes
+    (an 8-pin MPN on the SOT-23 payload would fail the assembly check, ecadlib.assembly, against its SOIC-8)."""
     e = copy.deepcopy(EE)
     e["result"]["dataStr"]["head"]["c_para"]["Manufacturer Part"] = e["result"]["title"] = mpn
     e["result"]["lcsc"]["number"] = lcsc
+    if footprint_of:
+        e["result"]["packageDetail"] = json.loads(Path(footprint_of).read_text(encoding="utf-8"))["result"]["packageDetail"]
     return e
+
+
+SOIC8 = Path(__file__).parent / "fixtures" / "easyeda_live" / "C5423.json"   # REAL: JLCPCB's SOIC-8 footprint
 
 
 def run(d, http=None, bom=BOM, **kw):
     b = Path(d) / "bom.csv"
     b.write_text(bom)
-    http = http or FakeHTTP({"C2002": EE, "C3003": ee_as("TPS1234DSGR", "C3003")})
+    http = http or FakeHTTP({"C2002": EE, "C3003": ee_as("TPS1234DSGR", "C3003", SOIC8)})
     with mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}, clear=True):
         items = L.run(b, [], Path(d) / "out", cache=Path(d) / "cache", http=http, log=lambda *a: None, **kw)
     return {i["name"]: i for i in items}, http
@@ -189,6 +196,10 @@ def test_each_source_and_review():
         for n in ("RES-0603-10k", "LED-RED-0603", "TPS1234DSGR", "EEPART1"):
             assert items[n]["status"] == "ready", (n, items[n]["hold_reasons"])
             assert (out / items[n]["symbol"]["file"]).exists() and (out / items[n]["footprint"]["kicad_mod"]).exists()
+        asm = items["TPS1234DSGR"]["assembly"]          # KiCad's SOIC-8 against JLCPCB's for C3003 (ecadlib.assembly)
+        assert (asm["pads"], asm["rotation"], asm["correction"]) == ("compatible", "verified", 270), asm
+        assert (out / asm["overlay"]).exists() and {p["name"]: p["value"] for p in items["TPS1234DSGR"]["parameters"]}["Assembly Rotation"] == "270"
+        assert items["RES-0603-10k"]["assembly"]["rotation"] == "table"          # C1001 is blocked: the chip family's pose
         assert items["RES-0603-10k"]["symbol"]["file"] == "models/SchLib/Resistor.SchLib"
         assert items["TPS1234DSGR"]["field_sources"]["ComponentLink2URL"] == "LCSC datasheet URL pattern (not fetched)"
         assert any("ordering suffix" in r for r in items["TPS1234DSGR"]["librarian"]["review"])

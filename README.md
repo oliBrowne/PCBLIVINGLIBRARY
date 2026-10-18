@@ -1495,7 +1495,7 @@ Plugins > ecadlib: add part / check project BOM / open review queue) that opens 
 the ecadlib menu in Altium, drawn in the same dark colours: Add part from MPN (MPN, manufacturer optional, a live
 lookup, then the footprint placed in the middle of the board), Check project BOM (the schematic's lines: already in
 your library / a source can supply / needs a footprint, then Later or Fill the library now, and the report on
-request) and Open review queue. The window does not block KiCad. It runs `ecadlib kicad-menu run-job` in the background
+request), Assembly check (JLCPCB: pads, rotations, BOM + CPL, see docs/assembly.md) and Open review queue. The window does not block KiCad. It runs `ecadlib kicad-menu run-job` in the background
 (`ecadlib/kicad_menu.py`) and reads its `progress.ini` / `result.ini`, as the Altium dialog does. Per project,
 `<project>/ecadlib-work/` is the workspace (one parts list for every part added or filled, so one plan makes the whole
 library) and `<project>/ecadlib/` the KiCad library, added to the project's tables as `${KIPRJMOD}/ecadlib/...`.
@@ -1626,7 +1626,7 @@ public Altium scripts: `InputBox` (BrettLMiller PolygonReFitBO.pas), `GetRunning
 **Checked here** (16 tests in `tests/test_altium_menu.py`, offline): the PrjScr and .ini parse as INI, every file is
 CRLF ASCII with no secrets; the .pas tokenises (a small Pascal tokenizer: comments, `''` strings, `#13#10`), every
 Begin/Try has its End, every identifier is declared in the unit or on the allow-list, each Function sets Result, the
-three entries are parameterless Procedures (the checker itself is tested on 7 broken units); the RCS follows the
+menu entries are parameterless Procedures (the checker itself is tested on 7 broken units); the RCS follows the
 Menu_SVN grammar, every Link names a defined entry and every ProcName a procedure of the .pas; the command lines,
 parsed with CommandLineToArgvW rules and cmd's `/s /c` quote rule, give back the exact paths for folders with spaces,
 `&`, parentheses and backslashes; `run-job` on a request.ini written in cp1252 (as TIniFile does) adds a ready
@@ -2125,6 +2125,15 @@ guide: [docs/house-style.md](docs/house-style.md).
   `apply_house_style`). Tests: `tests/test_house_style.py`, which runs offline with a fake model for each tier.
 * **Not verified:** no real customer library has been scanned and no real model has been called.
 
+## 41. `assembly.py`: assembly-ready parts (JLCPCB)
+
+Every part with an LCSC number is checked against the footprint JLCPCB actually places by, and its CPL rotation is
+worked out from the pads, not guessed: `ecadlib assembly export board.kicad_pcb -o out/` writes JLCPCB's BOM and CPL
+and lists every part it could not settle. The librarian runs the same check on each part it builds (incompatible pads
+are held). The Altium menu and the KiCad window have **Assembly check (JLCPCB)**. The rules are data in
+`ecadlib/assembly_profiles/jlcpcb.json`, each with its source. See [docs/assembly.md](docs/assembly.md) for the method,
+the golden-set results and the limits.
+
 ## Credits
 
 Parts converted from EasyEDA (the `easyeda` source, by LCSC number) come from the **JLCEDA/EasyEDA Official Library**
@@ -2138,6 +2147,9 @@ CC-BY-SA 4.0 with a design-use exception) get the same treatment on the Altium s
 into a SchLib, a DbLib or Altium 365. Footprints ecadlib generates and parts from your own `--lib` folders are not
 labelled. The librarian also writes a `NOTICE.txt` in its output folder listing the third-party terms of the parts in
 that run, and removes it again when none are left.
+
+The assembly check (`ecadlib assembly`) reads JLCPCB's footprints from the same JLCEDA/EasyEDA library, and its way of
+aligning a KiCad footprint onto them follows [kicad-jlcpcb-tools](https://github.com/Bouni/kicad-jlcpcb-tools) (MIT).
 
 ## Releases
 

@@ -279,6 +279,14 @@ def check_item(item, base=".", rules=None):
             add("fields", f"{k} is empty")
     for v in item.get("verify") or []:
         add("verify", v)
+    # ---- assembly: the pads against the assembler's footprint (ecadlib.assembly; [assembly] strict)
+    from . import assembly as ASM
+    for h in ASM.holds(item, rules):
+        add("assembly", h)
+    asm = item.get("assembly") or {}
+    if asm.get("pads") == "risky" and not any(f[0] == "assembly" and "pads risky" in f[1] for f in fails):
+        warns.append(f"assembly: pads risky against {asm.get('theirs') or asm.get('profile')} ({asm.get('lcsc')}): "
+                     + "; ".join(asm.get("reasons") or []))
     return fails, warns, info
 
 
@@ -331,7 +339,7 @@ def _split(failures):
     return [x for x in re.split(r"; (?=(?:%s): )" % "|".join(RULES), failures or "") if x]
 
 
-RULES = ("files", "pins", "footprint", "height", "fields", "parity", "verify")   # check_item's add()
+RULES = ("files", "pins", "footprint", "height", "fields", "parity", "verify", "assembly")   # check_item's add()
 
 
 def write_report(rows, stem, plan=""):

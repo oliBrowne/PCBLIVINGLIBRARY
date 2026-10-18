@@ -144,6 +144,11 @@ DEFAULTS["hub"] = {"libraries": [], "projects": [], "stale_days": 14}
 # profile exists; off = never. The model for `ecadlib style learn/apply --ai` may be set here ("" = [ai]).
 DEFAULTS["style"] = {"profile": "house_style.json", "apply": "auto", "model": "", "api_key_env": "",
                      **{k: "" for k in _LL.SECTION_KEYS}}
+# [assembly]: assembly-ready parts (ecadlib.assembly, `ecadlib assembly`, docs/assembly.md). profile: the assembler
+# (bundled: jlcpcb) or a path to your own profile .json. check: the librarian checks each part with an LCSC number
+# against the assembler's footprint and writes the Assembly parameters. strict: risky pads and unknown rotations hold
+# the part too (incompatible pads always hold).
+DEFAULTS["assembly"] = {"profile": "jlcpcb", "check": True, "strict": False}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
@@ -908,6 +913,10 @@ HELP = {
                  "[] = each command's built-in default (the official Nexar / DigiKey / Mouser APIs first, then EasyEDA); "
                  "unofficial = false keeps out the undocumented EasyEDA and JLCPCB search endpoints; "
                  "`ecadlib plugins list` shows what is installed",
+    "assembly": "Assembly-ready parts (docs/assembly.md): profile = the assembler (jlcpcb, or a path to your own profile "
+                ".json); check = the librarian checks parts that have an LCSC number against the assembler's footprint "
+                "and writes Assembly Rotation / Offset / Check / Evidence; strict = risky pads and unknown rotations "
+                "hold the part (incompatible pads always do)",
     "setup": "Written by `ecadlib init`: the tool you use, your library folders (the default --lib) and the workspace "
              "(the default --workspace); relative paths start at this file's folder",
     "hub": "The Library page (ecadlib hub): libraries = extra library folders or files to show next to --lib (.SchLib, "

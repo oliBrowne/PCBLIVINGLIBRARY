@@ -146,6 +146,48 @@ def test_parts_endpoint_says_why_with_both_values_and_cost():
             srv.shutdown()
 
 
+def test_parts_show_the_assembly_check_and_its_overlay():
+    """A part the librarian checked against the assembler (docs/assembly.md) carries its verdicts on the card, and its
+    overlay picture is served from the plan's assembly/ folder only."""
+    with tempfile.TemporaryDirectory() as d:
+        ws, bom = FX.build(d, queue=False)
+        plan_f = ws._plan(bom)[1]
+        items = json.loads(plan_f.read_text(encoding="utf-8"))
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+        (plan_f.parent / "assembly").mkdir()
+        (plan_f.parent / "assembly" / "STM32F103C8T6.png").write_bytes(png)
+        (plan_f.parent / "secret.png").write_bytes(png)
+        for it in items:
+            if it["name"] == "STM32F103C8T6":
+                it["assembly"] = {"profile": "jlcpcb", "lcsc": "C8734", "theirs": "LQFP-48_L7.0-W7.0-P0.50-LS9.0-BL",
+                                  "pads": "compatible", "rotation": "verified", "correction": 270, "reasons": [],
+                                  "review": [], "notes": [], "overlay": "assembly/STM32F103C8T6.png"}
+            if it["name"] == "TPS62133RGTR":
+                it["assembly"] = {"profile": "jlcpcb", "lcsc": "C1", "pads": "incompatible", "rotation": "unknown",
+                                  "correction": None, "reasons": ["pin count differs"], "overlay": "../secret.png"}
+        plan_f.write_text(json.dumps(items), encoding="utf-8")
+        srv, call = serve(ws)
+        try:
+            st, r = call("GET", "/api/parts?bom=" + bom)
+            by = {p["part"]: p for p in r["parts"]}
+            assert by["STM32F103C8T6"]["assembly"] == {
+                "profile": "jlcpcb", "lcsc": "C8734", "theirs": "LQFP-48_L7.0-W7.0-P0.50-LS9.0-BL", "pads": "compatible",
+                "rotation": "verified", "correction": 270, "reasons": [], "review": [], "notes": [], "overlay": True}
+            assert by["TPS62133RGTR"]["assembly"]["reasons"] == ["pin count differs"]
+            res = by["RES-0603-10k"]["assembly"]                   # checked by the librarian, offline: from the table
+            assert (res["lcsc"], res["pads"], res["rotation"], res["overlay"]) == ("C25804", "unchecked", "table", False), res
+            assert by["TYPE-C-31-M-12"]["assembly"] is None             # no LCSC number
+            q = lambda part: "/api/parts/assembly-overlay?bom=" + bom + "&part=" + part
+            st, img = call("GET", q("STM32F103C8T6"))
+            assert st == 200 and img == png, st
+            for bad in ("TPS62133RGTR", "RES-0603-10k", "NOPE"):         # outside assembly/, no overlay, not in the plan
+                st, e = call("GET", q(bad))
+                assert st in (400, 404) and str(ws.root) not in json.dumps(e), (bad, st, e)
+        finally:
+            srv.shutdown()
+    assert "/api/parts/assembly-overlay?" in PAGE and S.ROUTES[("GET", "/api/parts/assembly-overlay")] == "viewer"
+
+
 def test_jobs_stream_lines_and_stop():
     """Long jobs keep one line per part ("3/14 NAME  ready") and stop when asked; a stopped librarian run leaves the
     plan as it was."""

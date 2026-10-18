@@ -1,0 +1,22 @@
+{
+ "about": "Golden set for #104 (docs/assembly.md). Each entry: a real LCSC part, JLCPCB's own (EasyEDA) footprint for it recorded in easyeda/<lcsc>.json, the KiCad library footprint it is paired with (kicad7.pretty), and the answer decided by hand, independently of ecadlib.assembly: 'correction' is the degrees JLCPCB's CPL needs added to the KiCad board angle (Assembly Rotation), 'pads' the expected pad verdict. 'how' says how the answer was decided. 'evidence': jlc-footprint (read off JLCPCB's footprint drawing: pin 1 / cathode mark / pin names, rendered with visual_check), jlc-preview (seen in JLCPCB's placement preview), community (published preview evidence).",
+ "parts": [
+  {"lcsc": "C25744", "ours": "R_0402_1005Metric", "polarized": false, "correction": 0, "pads": "risky", "evidence": "jlc-footprint",
+   "how": "R0402: pad 1 left on both; KiCad pads 1.02 mm apart against 0.87 mm on JLCPCB's: the r/KiCad 0402 rejection (+18%)"},
+  {"lcsc": "C25804", "ours": "R_0603_1608Metric", "polarized": false, "correction": 0, "pads": "compatible", "evidence": "jlc-footprint", "how": "R0603: pad 1 left on both"},
+  {"lcsc": "C17414", "ours": "R_0805_2012Metric", "polarized": false, "correction": 0, "pads": "compatible", "evidence": "jlc-footprint", "how": "R0805: pad 1 left on both"},
+  {"lcsc": "C17902", "ours": "R_1206_3216Metric", "polarized": false, "correction": 0, "pads": "compatible", "evidence": "jlc-footprint", "how": "R1206: pad 1 left on both"},
+  {"lcsc": "C1525", "ours": "C_0402_1005Metric", "polarized": false, "correction": 0, "pads": "compatible", "evidence": "jlc-footprint", "how": "C0402: pad 1 left on both"},
+  {"lcsc": "C14663", "ours": "C_0603_1608Metric", "polarized": false, "correction": 0, "pads": "compatible", "evidence": "jlc-footprint", "how": "C0603: pad 1 left on both"},
+  {"lcsc": "C15850", "ours": "C_0805_2012Metric", "polarized": false, "correction": 0, "pads": "compatible", "evidence": "jlc-footprint", "how": "C0805: pad 1 left on both"},
+  {"lcsc": "C13585", "ours": "C_1206_3216Metric", "polarized": false, "correction": 0, "pads": "compatible", "evidence": "jlc-footprint", "how": "C1206: pad 1 left on both"},
+  {"lcsc": "C80165", "ours": "L_0603_1608Metric", "polarized": false, "correction": 0, "pads": "compatible", "evidence": "jlc-footprint", "how": "ferrite bead L0603: pad 1 left on both"},
+  {"lcsc": "C2286", "ours": "LED_0603_1608Metric", "polarized": true, "correction": 0, "pads": "compatible", "evidence": "jlc-footprint",
+   "how": "red LED: JLCPCB numbers the cathode pad 2 (symbol pin 2 = K) and draws it on the left with the arrow-shaped silk; KiCad's cathode (pad 1) is on the left: no turn"},
+  {"lcsc": "C72043", "ours": "LED_0603_1608Metric", "polarized": true, "correction": 0, "pads": "compatible", "evidence": "jlc-footprint",
+   "how": "green LED: JLCPCB's pad 1 = C (cathode), on the left, chamfered silk corner and bar on that end; KiCad's cathode on the left: no turn"},
+  {"lcsc": "C5423", "ours": "SOIC-8_3.9x4.9mm_P1.27mm", "polarized": false, "correction": 270, "pads": "compatible", "evidence": "community",
+   "how": "SOIC-8 ...-BL: JLCPCB's pin 1 bottom-left, numbers running right; KiCad's pin 1 top-left, numbers running down; kicad-jlcpcb-tools saw 270 in JLCPCB's preview"},
+  {"lcsc": "C7593", "ours": "SOIC-8_3.9x4.9mm_P1.27mm", "polarized": false, "correction": 270, "pads": "compatible", "evidence": "community", "how": "as C5423 (NE555, SOIC-8 ...-BL)"}
+ ]
+}

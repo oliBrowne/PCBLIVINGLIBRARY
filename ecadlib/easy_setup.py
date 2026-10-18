@@ -251,7 +251,7 @@ def install_altium_menu(ws_root):
     if bar.get("folders") and not bar.get("error"):
         res["steps"] = ["Start Altium Designer and open a schematic or PCB",
                         "The ecadlib menu is in the menu bar, before Window: Add part from MPN, Check this project BOM, "
-                        "Open review queue",
+                        "Assembly check (JLCPCB), Open review queue",
                         f"To take it out again: ecadlib altium-menu install-menu --out \"{out}\" --remove"]
     else:
         why = f" ({bar['error']})" if bar.get("error") else ""
