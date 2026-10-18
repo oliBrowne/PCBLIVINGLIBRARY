@@ -389,7 +389,8 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     # an older ecadlib named the workbook after the package ('Bibliothèque.xlsx'), which Altium can't open: move to
     # the ASCII name, keeping the rows (and columns added by hand) of the old one
     legacy = [f for f in (to / f"{name}.xlsx", to / f"{name}.csv") if fname != name and f.exists()]
-    old = read_tables(xlsx if xlsx.exists() or not legacy else legacy[0])
+    old_xlsx = to / f"{name}.xlsx"
+    old = read_tables(old_xlsx if old_xlsx in legacy and not xlsx.exists() else xlsx)
     tables = {}
     for t, (h, rows) in old.items():                    # a sheet an older ecadlib named "Driver's ICs": ACE's name
         t = next((k for k in tables if table_key(k) == table_key(t)), sheet_name(t))

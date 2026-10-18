@@ -78,3 +78,16 @@ def test_package_build_with_non_ascii_name(tmp_path):
     rep = PKG.build(plan, tmp_path / "pkg", "Bibliothèque", log=lambda *a: None)
     assert rep["problems"] == [] and rep["dblibs"] == ["Bibliothèque.DbLib"], rep
     assert (tmp_path / "pkg" / "Bibliotheque.xlsx").exists() and (tmp_path / "pkg" / "Bibliothèque.DbLib").exists()
+
+
+@lite
+def test_only_an_old_csv_left(tmp_path):
+    """The old .csv without its workbook (deleted by hand) is not read as a workbook; it goes like the rest."""
+    _models(tmp_path)
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps([_item("R1", "Resistors")]))
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    (lib / "Bibliothèque.csv").write_text("Table,Part Number\nResistors,R1\n", encoding="utf-8")
+    out = S.sync(plan, lib, name="Bibliothèque")
+    assert not (lib / "Bibliothèque.csv").exists() and (lib / "Bibliotheque.xlsx").exists(), out["removed"]
