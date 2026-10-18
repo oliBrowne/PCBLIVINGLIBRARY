@@ -1025,6 +1025,9 @@ def write_plan(plan_path, rows, build_qty, currency, now=None, max_alternates=2)
     for r in rows:
         if norm_mpn(r["mpn"]) and not placeholder_mpn(r["mpn"]) and "dnp" not in r["flags"] and "merged" not in r["flags"]:
             by.setdefault(norm_mpn(r["mpn"]), r)       # 'N/A' / '-' names no part: never matched to a plan item
+    from . import change_gate as CG            # change control (#105): filled supplier fields are recorded per part
+    gate = CG.Guard(path.parent, "sourcing-plan")
+    gate.begin(items)
     changed = []
     for it in items:
         par = {p["name"]: p["value"] for p in it.get("parameters", [])}
@@ -1056,6 +1059,8 @@ def write_plan(plan_path, rows, build_qty, currency, now=None, max_alternates=2)
                           "alternates": [{k: a[k] for k in ("mpn", "manufacturer", "verdict", "lifecycle", "notes")}
                                          for a in r["alternates"][:5]]}
         changed.append((it["name"], sorted(sets)))
+    held = {r["part"] for r in gate.settle(items) if r["action"] == "hold"}
+    changed = [c for c in changed if c[0] not in held]
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(items, indent=2), encoding="utf-8")
     os.replace(tmp, path)

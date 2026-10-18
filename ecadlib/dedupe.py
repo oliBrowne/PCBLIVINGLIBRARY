@@ -547,16 +547,21 @@ def run(plan, libs=(), a365=None, config=None, keep=(), do_merge=False, kinds=("
     if a365:
         col.add_a365(a365)
     groups = find_groups(col, list(keep) + cfg["keep"], cfg["ignore"])
+    change = []
     if do_merge:
         backup(plan)
+        from . import change_gate as CG        # change control (#105): a merge that changes a released part is held
+        gate = CG.Guard(base, "dedupe-merge", log=log)
+        gate.begin(items)
         mapping = merge(items, groups, base, kinds, who)
+        change = gate.settle(items)
         write_text_atomic(plan, json.dumps(items, indent=2))
     else:
         mapping = merge(json.loads(json.dumps(items)), groups, base, kinds, who)   # dry run on a copy: what would change
     stem, mp = write_reports(groups, mapping, out or base / "dedupe", plan, col.errors)
     bom_out = remap_bom(bom, mapping, Path(stem).parent / f"{Path(bom).stem}_deduped.csv") if bom else None
     return {"groups": groups, "mapping": mapping, "report": stem.with_suffix(".md"), "map": mp, "bom": bom_out,
-            "errors": col.errors, "items": items}
+            "errors": col.errors, "items": items, "change": change}
 
 
 def main(argv=None):
@@ -582,6 +587,10 @@ def main(argv=None):
         print(f"  {g['kind']:<18} keep {g['keeper'] or '-':<28} " + ", ".join(m["name"] for m in g["members"] if m["name"] != g["keeper"]))
     for e in r["errors"]:
         print(f"  unreadable: {e}")
+    for c in r.get("change") or []:
+        if c["action"] == "hold":
+            print(f"  held: {c['part']} is released (r{c['revision']}); merging changes it: {c['summary']} "
+                  f"(ecadlib part show {a.plan} {c['part']})")
     acted = [m for m in r["mapping"] if m["parts"]]
     print(f"{len(r['groups'])} groups; {len(acted)} plan rewrites {'applied' if a.merge else 'proposed (use --merge)'}"
           f" -> {r['report']}, {r['map']}" + (f", BOM {r['bom'][0]} ({r['bom'][1]} cells)" if r["bom"] else ""))

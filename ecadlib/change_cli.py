@@ -315,6 +315,7 @@ def _apply_group(plan, items, group, who, comment, lg):
     checked = [i for i in sel if not i.get("_manifest")]   # kicad_import parts have no plan fields to check
     RC.apply(checked, folder)
     bad = [i for i in checked if i.get("status") == "held"]
+    reasons = "; ".join(f"{i['name']}: {', '.join(i.get('hold_reasons') or [])}" for i in bad)
     if bad:                                    # the approved version fails the release check: put the released one back
         for p in group:
             lg.restore_files(heads[p["part"]].get("files"), folder)
@@ -324,7 +325,6 @@ def _apply_group(plan, items, group, who, comment, lg):
         for p in group:
             if p["part"] in byname:
                 byname[p["part"]]["change"] = CG.held_block(p)
-        reasons = "; ".join(f"{i['name']}: {', '.join(i.get('hold_reasons') or [])}" for i in bad)
         raise CG.ChangeError(f"not applied: the proposed version fails the release check ({reasons}); the released "
                              f"version stays")
     g = CG.Guard(folder, "approve", user=who)

@@ -43,7 +43,7 @@ from . import __version__
 
 ACTIONS = ("pass", "warn", "hold")
 POLICY = {"identity": "hold", "electrical": "hold", "geometry_major": "hold", "geometry_minor": "warn", "cosmetic": "pass",
-          "approvers": 1}
+          "approvers": 1, "a365_transition": ""}
 ALLOWED = {"identity": ("hold", "warn"), "electrical": ("hold", "warn")}
 CLASS_KEY = {c: c.replace("-", "_") for c in CD.CLASSES}
 RELEASED_STATUSES = ("ready", "existing")
@@ -58,6 +58,8 @@ WRITERS = {
     "upstream-update": {"mode": "gate", "module": "ecadlib.upstream", "what": "upstream check-kicad --update / upkeep --apply"},
     "dedupe-merge": {"mode": "gate", "module": "ecadlib.dedupe", "what": "ecadlib dedupe --merge points a part at its keeper's files"},
     "sim-models": {"mode": "gate", "module": "ecadlib.sim_models", "what": "ecadlib sim-models --attach (simulation link in the symbol)"},
+    "datasheet": {"mode": "gate", "module": "ecadlib.datasheet", "what": "ecadlib datasheet batch: parts read from datasheets"},
+    "sourcing-plan": {"mode": "gate", "module": "ecadlib.sourcing", "what": "ecadlib sourcing --write-plan fills supplier fields"},
     "a365-pull": {"mode": "observe", "module": "ecadlib.a365_sync", "what": "ecadlib a365 pull: workspace revisions come in"},
     "approve": {"mode": "gate", "module": "ecadlib.change_cli", "what": "ecadlib part approve: a person releases a held change"},
     "revert": {"mode": "gate", "module": "ecadlib.change_cli", "what": "ecadlib part revert PART@REV: an older revision again"},
@@ -87,6 +89,12 @@ NOT_LIBRARY_WRITERS = {
     "ecadlib.parity": "survey work folder",
     "ecadlib.rebuild": "rebuild --check copies the library to a temporary folder (in-place rebuild runs the librarian)",
     "ecadlib.altium_pkg": "the hand-off folder it creates from the plan's (gated) files",
+    "ecadlib.release_check": "status, hold reasons and --allow overrides only (not fingerprinted)",
+    "ecadlib.approvals": "sign-off records only (not fingerprinted)",
+    "ecadlib.review_cli": "release anyway (status only); its choices go through ecadlib.resolve (gated)",
+    "ecadlib.change_cli": "ecadlib part: the gate's own approve / reject / revert",
+    "ecadlib.change_gate": "the gate itself",
+    "ecadlib.upkeep": "upkeep --apply reconverts through change_gate.guarded_rewrite (writer upstream-update)",
 }
 
 
@@ -121,6 +129,8 @@ def normalize_policy(raw, where="[change]"):
         raise ValueError(f"{where} approvers = {p['approvers']!r}: a whole number (1, or 2 for the two-person rule)") from None
     if p["approvers"] < 1:
         raise ValueError(f"{where} approvers must be 1 or more")
+    if not isinstance(p["a365_transition"], str):
+        raise ValueError(f"{where} a365_transition: the name of an Altium 365 life-cycle transition or state, as text")
     return p
 
 
@@ -175,6 +185,7 @@ class Guard:
         self.log = log or (lambda *a, **k: None)
         self.report = []
         self.chosen_by = chosen_by
+        self.pre = {}                          # path -> bytes on disk at begin() that are the released part
 
     def __enter__(self):
         self.begin()
@@ -195,13 +206,53 @@ class Guard:
             items = read_plan(self.folder)
         n = 0
         for it in items or []:
-            if released(it) and not self.ledger.head(it["name"]) and self._has_files(it):
-                self._release(it, FP.of_item(it, self.base), [], {"action": "pass", "why": []}, decision="baseline",
+            head = self.ledger.head(it["name"]) if released(it) else None
+            if released(it) and not head and self._has_files(it):
+                fp = FP.of_item(it, self.base)
+                if fp.get("notes"):            # an unreadable file is no released revision to keep
+                    continue
+                self._release(it, fp, [], {"action": "pass", "why": []}, decision="baseline",
                               reason="adopted: released before change control recorded it")
                 n += 1
+            elif head:
+                self._keep_bytes(it, head)
         if n:
             self.log(f"  change control: {n} released part(s) recorded as revision 1 (they were released before the ledger)")
         return n
+
+    def _keep_bytes(self, it, head):
+        """The files on disk now, when their bytes differ from the head's snapshot but they still are the released
+        part (same fingerprint: rewritten with new timestamps, a simulation model attached). A hold puts these bytes
+        back rather than the older snapshot, so nothing outside the fingerprint is lost."""
+        recs = {str((self.base / r["path"]).resolve()): r for r in (head.get("files") or {}).values()}
+        now = {}
+        for p, r in recs.items():
+            f = Path(p)
+            if f.is_file():
+                b = f.read_bytes()
+                if LG.sha_bytes(b) != r["sha256"]:
+                    now[p] = b
+                    side = f.with_name(f.name + ".ecadbuild")
+                    if side.is_file():
+                        now[str(side)] = side.read_bytes()
+        if now and FP.of_item(it, self.base)["hashes"]["digest"] == head.get("digest"):
+            self.pre.update(now)
+
+    def _restore(self, files):
+        """restore_files, preferring the bytes begin() kept for the same paths."""
+        rest = {}
+        for k, r in (files or {}).items():
+            p = str((self.base / r["path"]).resolve()) if not Path(r["path"]).is_absolute() else str(Path(r["path"]).resolve())
+            if p in self.pre:
+                for f in (Path(p), Path(p + ".ecadbuild")):
+                    data = self.pre.get(str(f))
+                    if data is not None and (not f.is_file() or f.read_bytes() != data):
+                        tmp = f.with_name(f.name + ".restore.tmp")
+                        tmp.write_bytes(data)
+                        os.replace(tmp, f)
+            else:
+                rest[k] = r
+        self.ledger.restore_files(rest, self.base)
 
     def _has_files(self, it):
         return any((self.base / p if not Path(p).is_absolute() else Path(p)).is_file() for p in LG.item_files(it).values())
@@ -266,12 +317,48 @@ class Guard:
             self.log(f"  change {r['action']:<5} {r['part']:<28} {r['summary']}")
         return rows
 
+    def restyle(self, before, after):
+        """A restyle (ecadlib style apply, fp_tidy) may only change cosmetics. Each part's before -> after difference
+        is classified; anything else is an ecadlib bug, so that part keeps its fields (action "refused"). The parts
+        that passed then settle against their released revision like any write (mode gate: an earlier hand edit
+        found there is held as a change, not blamed on the restyle). -> report rows"""
+        rows, keep = [], []
+        bmap = {i["name"]: i for i in before}
+        for it in after:
+            b = bmap.get(it["name"])
+            if b is None or LG.content_of(b) == LG.content_of(it):
+                continue
+            ch = CD.diff(FP.of_item(b, self.base), FP.of_item(it, self.base))
+            bad = [c for c in ch if c["class"] != "cosmetic"]
+            if bad:
+                LG.apply_content(it, LG.content_of(b))
+                head = self.ledger.head(it["name"]) or {}
+                rows.append({"part": it["name"], "action": "refused", "revision": head.get("revision"),
+                             "summary": f"a restyle may only change cosmetics; this one changed {bad[0]['class']} "
+                                        f"({bad[0]['text']}): not applied (an ecadlib bug, please report it)",
+                             "changes": [{"class": c["class"], "text": c["text"]} for c in ch]})
+            else:
+                keep.append(it)
+        mode, self.mode = self.mode, "gate"
+        try:
+            rows += self.settle(keep)
+        finally:
+            self.mode = mode
+        for r in rows:
+            if r["action"] == "refused":
+                self.report.append(r)
+                self.log(f"  change refused {r['part']:<28} {r['summary']}")
+        return rows
+
     def baseline(self, items):
         """Revision 1 for every part that is released now (status ready / existing) and has no ledger head."""
         rows = []
         for it in items:
             if released(it) and not self.ledger.head(it["name"]) and self._has_files(it):
-                rows.append(self._release(it, FP.of_item(it, self.base), [], {"action": "pass", "why": []}, decision="baseline",
+                fp = FP.of_item(it, self.base)
+                if fp.get("notes"):            # an unreadable file is no released revision to keep
+                    continue
+                rows.append(self._release(it, fp, [], {"action": "pass", "why": []}, decision="baseline",
                                           reason="first release"))
         self.report += rows
         return rows
@@ -346,7 +433,7 @@ class Guard:
         """Put the released version back (files and plan fields) and mark the item held."""
         it, head, changes, prop = t["item"], t["head"], t["changes"], t["prop"]
         name = it["name"]
-        self.ledger.restore_files(head.get("files"), self.base)
+        self._restore(head.get("files"))
         LG.apply_content(it, head.get("item") or {})
         it["change"] = held_block(prop)
         return {"part": name, "action": "hold", "revision": head["revision"], "summary": CD.summary(changes),

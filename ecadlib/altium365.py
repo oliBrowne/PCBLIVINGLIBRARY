@@ -67,6 +67,14 @@ Q_FOLDERS = """query ($ws: String!) { desLibrary(workspaceUrl: $ws) { folders { 
 
 M_CREATE_FOLDER = """mutation ($input: DesCreateFolderInput!) { desCreateFolder(input: $input) { folderId errors { message } } }"""
 
+# the component life cycle's transitions, for [change] a365_transition (a new revision moved to a state after release)
+Q_TRANSITIONS = """query ($id: ID!) { desLifeCycleDefinitionById(id: $id) { stateTransitions { lifeCycleStateTransitionId name
+  lifeCycleStateAfter { name } } } }"""
+
+M_LIFECYCLE = """mutation ($input: DesUpdateComponentLifeCycleStateInput!) {
+  desUpdateComponentLifeCycleState(input: $input) { errors { message } }
+}"""
+
 M_UPDATE_PARAMS = """mutation ($input: DesUpdateComponentRevisionParametersInput!) {
   desUpdateComponentRevisionParameters(input: $input) { componentId errors { message } }
 }"""
@@ -184,6 +192,24 @@ class Nexar:
 
     def folder_id(self, ws, path):
         return self.folder(ws, path)["id"]
+
+    def transition(self, ws, defs, component_id, name, note):
+        """Move a component revision through the life-cycle transition called `name` (or the one ending in state
+        `name`). -> the transition's name; NexarError when the workspace has no such transition."""
+        lc = (defs.get("componentLifeCycle") or {}).get("id")
+        if not lc:
+            raise NexarError("the workspace has no component life cycle definition")
+        ts = (self.gql(Q_TRANSITIONS, {"id": lc})["desLifeCycleDefinitionById"] or {}).get("stateTransitions") or []
+        low = name.strip().lower()
+        t = next((t for t in ts if t and (t.get("name") or "").lower() == low), None) or \
+            next((t for t in ts if t and ((t.get("lifeCycleStateAfter") or {}).get("name") or "").lower() == low), None)
+        if not t:
+            raise NexarError(f"no life-cycle transition {name!r} (have: {', '.join(sorted(x['name'] for x in ts if x))})")
+        inp = {"componentId": component_id, "lifeCycleStateTransitionId": t["lifeCycleStateTransitionId"], "comment": note}
+        errs = self.gql(M_LIFECYCLE, {"input": inp})["desUpdateComponentLifeCycleState"]["errors"]
+        if errs:
+            raise NexarError("; ".join(e["message"] for e in errs))
+        return t["name"]
 
     def update_params(self, component_id, params, note, replace=False):
         inp = {"componentId": component_id, "releaseNote": note, "replaceExisting": replace, "parameters": params}
@@ -350,11 +376,93 @@ def push_existing(it, client, ws, dry_run=False, note="ecadlib sync"):
     return {"action": "update_parameters", "detail": cid, "a365_updated": True}
 
 
-def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rules=None):
+def change_mode(lg, it, target):
+    """What a push of an existing component must do under change control: "revision" when the released revision
+    (ledger head) changed the symbol, footprint or 3D model since the revision last published to `target` (a new
+    component revision, never an edit of the released one), else "params". -> (mode, {"symbol", "footprint"} changed,
+    head, published revision)"""
+    from . import fingerprint as FP
+    head = lg.head(it["name"]) if lg else None
+    pub = lg.published(it["name"], target) if lg else None
+    old = lg.revision(it["name"], pub["revision"]) if head and pub and pub.get("revision") != head.get("revision") else None
+    if not old or all(old.get(k) == head.get(k) for k in ("eid", "gid", "mid")):
+        return "params", set(), head, pub
+    a, b = lg.fingerprint(old) or {}, lg.fingerprint(head) or {}
+    halves = {"symbol"} if FP.digest(a.get("symbol")) != FP.digest(b.get("symbol")) else set()
+    if FP.digest([a.get("footprint"), a.get("model")]) != FP.digest([b.get("footprint"), b.get("model")]):
+        halves.add("footprint")
+    if old.get("eid") != head.get("eid") and not halves:
+        halves = {"symbol", "footprint"}      # the pin-pad map changed: both go up
+    return "revision", halves, head, pub
+
+
+def _dup(e):
+    return "duplicate" in str(e).lower()
+
+
+def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, dry_run=False, note="ecadlib sync",
+                  transition=None):
+    """A new revision of a component already in the workspace, for a change control approved (#105): the changed
+    symbol / footprint are released as new models (under their item name, or NAME-r<rev> when the workspace refuses a
+    second item of that name), the unchanged one is linked, and desReleaseComponent releases the component item
+    again, which makes its next revision. The released revision is never edited. When the workspace makes no new
+    revision, the result is an error and nothing else is sent. transition: an optional life-cycle transition (or
+    target state) for the new revision ([change] a365_transition)."""
+    names = model_item_names(it)
+    before = _rev_id(node) if node else None
+    found = []
+    for kind, name, sub, half in zip(("symbols", "footprints"), names, ("Symbols", "Footprints"), ("symbol", "footprint")):
+        if half in halves or not name:
+            found.append(None)
+        else:
+            found.append(f"<id of {name}>" if dry_run else client.find_model(ws, kind, name, f"{models_root}/{sub}"))
+    files = [] if found[0] else [it["symbol"]["file"]], [] if found[1] else [it["footprint"]["file"]]
+    ids = tuple([(Path(p).name, upload(p)) for p in group] for group in files)
+    parent, _ = split_folder(it["folder"])
+    pid = (f"<id of {parent}>" if dry_run else client.folder_id(ws, parent)) if parent else None
+    inp = release_input(it, ws, defs, ids, models_root, pid, tuple(found))
+    detail = {"mutation": "desReleaseComponent", "new_revision_of": before or "<current revision>",
+              "changed": sorted(halves), "ledger_revision": rev}
+    if dry_run:
+        return {"action": "new_revision", "detail": dict(detail, input=inp)}
+    try:
+        client.release(inp)
+    except NexarError as e:
+        if not _dup(e):
+            raise
+        renamed = dict(inp)                    # a model item of that name exists: the new model gets its own item
+        for half, key in (("symbol", "symbolItemName"), ("footprint", "footprintItemName")):
+            if half in halves and renamed.get(key):
+                renamed[key] = f"{renamed[key]}-r{rev}"
+        if renamed == inp:
+            raise
+        try:
+            client.release(renamed)
+        except NexarError as e2:
+            return {"action": "error", "detail": f"Altium 365 made no new revision of {it['name']} ({e2}); the released "
+                                                 f"revision {before} is unchanged in the workspace"}
+        detail["model_item_names"] = [renamed.get("symbolItemName"), renamed.get("footprintItemName")]
+    after = client.find(ws, it["name"]) or {}
+    if not _rev_id(after) or _rev_id(after) == before:
+        return {"action": "error", "detail": f"Altium 365 accepted the release but {it['name']} is still at revision "
+                                             f"{before}: no new revision was made; nothing else was sent"}
+    detail["revision"] = _rev_id(after)
+    if transition:
+        try:
+            detail["transition"] = client.transition(ws, defs, after["id"], transition, note)
+        except NexarError as e:
+            detail["transition_error"] = str(e)
+    return {"action": "new_revision", "detail": detail}
+
+
+def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rules=None, folder=None):
     """Release new parts, update parameters of parts already in the workspace.
     dry_run: no uploads or mutations; records the requests that would be sent.
     policy: the plan's approval policy (approvals.load_policy); None uses the one release_check stored per item.
-    rules: parameter names go to the workspace in the rules' house names ([parameters] names)."""
+    rules: parameter names go to the workspace in the rules' house names ([parameters] names).
+    folder: the library folder (the plan's): change control (#105). Its ledger says which revision each part last
+    published to this workspace; a released change to the symbol / footprint / 3D model then goes up as a new
+    component revision (push_revision), a held change sends nothing new, and every push is recorded."""
     from .approvals import push_block
     from .rules import house_item
     from .a365_sync import is_a365
@@ -367,6 +475,10 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     items = [i if is_a365(i) else house_item(i, rules) for i in items]
     defs = {} if dry_run else client.release_defs(ws)
     results, uploaded, released = [], {}, set()   # one upload per file per run; (kind, name) released this run
+    from . import ledger as LG
+    lg = LG.Ledger(folder) if folder and LG.Ledger(folder).exists() else None
+    target = f"altium365:{ws.rstrip('/')}"
+    transition = ((rules or {}).get("change") or {}).get("a365_transition") or None
     def upload(p):
         if p not in uploaded:
             uploaded[p] = "<fileId>" if dry_run else client.upload(p)
@@ -388,9 +500,17 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                 res["action"], res["detail"] = "error", f"{type(e).__name__}: {e}"
             results.append(res)
             continue
+        held = (it.get("change") or {}).get("state") == "held"
+        if held:                               # a change waits for approval: the workspace keeps the released one
+            res["change"] = (f"a change is held for approval; revision r{it['change'].get('base')} stays "
+                             "(ecadlib part show)")
         try:
             existing = None if dry_run else client.find(ws, it["name"])
-            if existing:
+            mode, halves, head, _ = change_mode(lg, it, target) if lg else ("params", set(), None, None)
+            if (existing or (dry_run and lg and lg.published(it["name"], target))) and mode == "revision":
+                res.update(push_revision(it, client, ws, defs, upload, models_root, existing, halves, head["revision"],
+                                         dry_run, note, transition))
+            elif existing:
                 new = merged_params(existing, it)
                 if new is None:
                     res["action"] = "up_to_date"
@@ -434,11 +554,19 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
         except Exception as e:                 # keep going; report per part
             res["action"], res["detail"] = "error", f"{type(e).__name__}: {e}"
         sim = (it.get("sim_model") or {}).get("attached", {}).get("altium")
-        if sim and res["action"] in ("release", "update_parameters", "up_to_date"):
+        if sim and res["action"] in ("release", "update_parameters", "up_to_date", "new_revision"):
             res["sim_model"] = (f"{sim['type']} link {sim['model_name']} travels inside the .SchLib; the model file "
                                 f"{sim.get('file') or '(none: built-in)'} is not uploaded (Nexar has no simulation-model input)")
         results.append(res)
+    if lg and not dry_run:                     # what went up, per part, at which ledger revision
+        from . import change_gate as CG
+        ok = {r["name"] for r in results if r["action"] in PUSHED}
+        CG.record_publish(folder, items, target, ok=lambda i: i["name"] in ok,
+                          detail=lambda i: next((r["action"] for r in results if r["name"] == i["name"]), ""))
     return results
+
+
+PUSHED = ("release", "update_parameters", "up_to_date", "new_revision")
 
 
 def main(argv=None):
@@ -496,15 +624,19 @@ def main(argv=None):
                 print(f"{w['name']:<30} {w['url']}")
             return
         items = json.loads(Path(a.plan).read_text())
+        from .approvals import load_policy
+        from . import change_gate as CG
+        import time
+        rules = RU.load(a.rules, start=Path(a.plan).parent)
+        if not a.dry_run:                      # change control: a hand edit since the last writer is settled first
+            CG.publish_guard(Path(a.plan), items, "altium365", rules=rules)
         for i in items:
             for k in ("symbol", "footprint"):
                 if i[k]["file"]:
                     i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
-        from .approvals import load_policy
-        import time
         t0 = time.time()
         results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent),
-                       rules=RU.load(a.rules, start=Path(a.plan).parent))
+                       rules=rules, folder=Path(a.plan).parent)
         if not a.dry_run:
             record_push(Path(a.plan).parent, t0, results)
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work

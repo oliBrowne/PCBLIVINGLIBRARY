@@ -2291,6 +2291,9 @@ def fill_plan(plan, reader, rules=None, log=print, parts=None):
         for k in ("symbol", "footprint"):
             if st.get(k) and st[k].get("file"):
                 r.written.setdefault(str(out / st[k]["file"]), st[k])
+    from . import change_gate as CG                    # change control (#105): a re-read may not change a released part
+    gate = CG.Guard(out, "datasheet", rules=rules, log=log)
+    gate.begin(items)
     todo = []
     for it in list(open_parts(plan_f, items, state, parts)):
         st = state.get(it["name"]) or {"name": it["name"], "symbol": None, "footprint": None, "tried": [], "review": [],
@@ -2311,7 +2314,9 @@ def fill_plan(plan, reader, rules=None, log=print, parts=None):
         state[it["name"]] = st
         log(f"  {'done ' if L._done(st, out) else 'open '}{it['name']:<28} sym={it['source']['symbol'] or '-'}  fp={it['source']['footprint'] or '-'}")
     write_text_atomic(state_f, json.dumps(state, indent=2))
+    gate.settle(items)
     checks = RC.apply(items, out, rules=rules)
+    gate.baseline(items)
     write_text_atomic(plan_f, json.dumps(items, indent=2))
     RC.write_report(checks, out / "release_check", plan_f)
     L.write_review(L.review_rows(items), out, str(plan_f))

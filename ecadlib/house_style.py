@@ -1051,6 +1051,15 @@ def _run(a, rules, pf, send):
         more, rejected = adapt_with_model(work, old, rules, a.model, send, only)
         for k, v in more.items():
             done.setdefault(k, []).extend(v)
+    if done and not a.dry_run:                 # change control (#105): a restyle may only change cosmetics
+        from . import change_gate as CG
+        gate = CG.Guard(plan_f.parent, "style-apply", rules=rules)
+        gate.begin(items)
+        for r in gate.restyle(items, work):
+            if r["action"] in ("refused", "hold"):
+                done.pop(r["part"], None)
+                rejected.append(f"{r['part']}: {r['summary']}" + ("" if r["action"] == "refused" else
+                                f" (held for approval: ecadlib part show {plan_f} {r['part']})"))
     if a.json:
         print(json.dumps({"changes": done, "rejected": rejected, "written": not a.dry_run and bool(done)}, indent=1,
                          ensure_ascii=False))

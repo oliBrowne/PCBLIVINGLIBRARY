@@ -1008,6 +1008,11 @@ class Workspace:
         from . import altium365 as A
         if not workspace_url and not dry_run:
             raise ValueError("choose an Altium 365 workspace first")
+        if not dry_run:                               # change control: a hand edit since the last writer settles first
+            from . import change_gate as CG
+            lib_plan = self._librarian_dir(self._bom_path(bom)) / "plan.json"
+            if lib_plan.is_file():
+                CG.publish_guard(lib_plan, json.loads(lib_plan.read_text(encoding="utf-8")), "altium365", rules=self.rules())
         plan = self.altium365_plan(bom)
         client = None if dry_run else A.Nexar(_nexar_token())
         policy = None
@@ -1017,7 +1022,8 @@ class Workspace:
         import time
         t0 = time.time()
         results = A.push(plan["items"], client, workspace_url or "https://<workspace>", dry_run=dry_run, policy=policy,
-                         rules=self.rules())
+                         rules=self.rules(),
+                         folder=self.inside(plan["plan"]).parent if plan["source"] == "librarian" else None)
         if not dry_run and plan["source"] == "librarian":
             A.record_push(self.inside(plan["plan"]).parent, t0, results)
         if any(r.get("a365_updated") for r in results):
@@ -1227,6 +1233,15 @@ class Workspace:
                 more, rejected = HS.adapt_with_model(items, prof, self.rules(), model, only=only)
                 for k, v in more.items():
                     done.setdefault(k, []).extend(v)
+            if done and not dry_run:              # change control (#105): a restyle may only change cosmetics
+                from . import change_gate as CG
+                before = json.loads(plan_f.read_text(encoding="utf-8"))
+                gate = CG.Guard(plan_f.parent, "style-apply", rules=self.rules())
+                gate.begin(before)
+                for r in gate.restyle(before, items):
+                    if r["action"] in ("refused", "hold"):
+                        done.pop(r["part"], None)
+                        rejected.append(f"{r['part']}: {r['summary']}")
             if done and not dry_run:
                 bak = plan_f.with_name(plan_f.name + ".style.bak")
                 if not bak.exists():

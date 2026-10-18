@@ -146,7 +146,7 @@ DEFAULTS["style"] = {"profile": "house_style.json", "apply": "auto", "model": ""
                      **{k: "" for k in _LL.SECTION_KEYS}}
 # [change]: change control (ecadlib.change_gate): what a change to a released part needs, per class of change.
 DEFAULTS["change"] = {"identity": "hold", "electrical": "hold", "geometry_major": "hold", "geometry_minor": "warn",
-                      "cosmetic": "pass", "approvers": 1}
+                      "cosmetic": "pass", "approvers": 1, "a365_transition": ""}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
@@ -867,6 +867,8 @@ HELP = {
     "change.geometry_major": "hold | warn | pass: pads moved, rotated, resized beyond tolerance, drills, 3D origin",
     "change.geometry_minor": "hold | warn | pass: pad size within tolerance, corner rounding, margins, courtyard, 3D height",
     "change.cosmetic": "hold | warn | pass: silkscreen, fab, texts, symbol graphics, pin lengths, other fields",
+    "change.a365_transition": "optional: the Altium 365 life-cycle transition (or state) a new component revision is "
+                              "moved to after an approved change, e.g. \"Promote to Prototype\"; empty = leave it",
     "sim": "Parasitics for the built-in passive simulation models (sim-models), e.g. capacitor_esr = \"10m\"",
     "datasheet": "Claude datasheet reader (ecadlib datasheet / librarian): model, effort, which environment variable holds the "
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",
