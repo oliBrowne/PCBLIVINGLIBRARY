@@ -52,6 +52,12 @@ Q_BY_ID = """query ($id: ID!) { desComponentById(id: $id) { id name revision { r
 
 M_RELEASE = """mutation ($input: DesReleaseComponentInput!) { desReleaseComponent(input: $input) { errors { message } } }"""
 
+# folders by parent: componentReleaseFolder is one child folder name (a "/" in it fails with AddALU_FoldersInvalid
+# folder HRID), so a nested component folder is released as componentParentFolderId + leaf name
+Q_FOLDERS = """query ($ws: String!) { desLibrary(workspaceUrl: $ws) { folders { id name parent { id } } } }"""
+
+M_CREATE_FOLDER = """mutation ($input: DesCreateFolderInput!) { desCreateFolder(input: $input) { id errors { message } } }"""
+
 M_UPDATE_PARAMS = """mutation ($input: DesUpdateComponentRevisionParametersInput!) {
   desUpdateComponentRevisionParameters(input: $input) { componentId errors { message } }
 }"""
@@ -114,6 +120,26 @@ class Nexar:
         if errs:
             raise NexarError("; ".join(e["message"] for e in errs))
 
+    def folder_id(self, ws, path):
+        """Id of the workspace folder at path ("a/b"), creating any missing level as a generic folder.
+        The folder list is read once per client; folders it creates are added to it."""
+        if getattr(self, "_folders_ws", None) != ws:
+            self._folders = [{"id": f["id"], "name": f["name"], "parent": (f.get("parent") or {}).get("id")}
+                             for f in self.gql(Q_FOLDERS, {"ws": ws})["desLibrary"]["folders"]]
+            self._folders_ws = ws
+        parent = None
+        for name in [p for p in path.split("/") if p]:
+            hit = next((f for f in self._folders if f["parent"] == parent and f["name"].lower() == name.lower()), None)
+            if not hit:
+                inp = {"workspaceUrl": ws, "name": name, "folderType": "GENERIC_FOLDER", "parentId": parent}
+                res = self.gql(M_CREATE_FOLDER, {"input": inp})["desCreateFolder"]
+                if res.get("errors") or not res.get("id"):
+                    raise NexarError(f"creating folder {name!r}: " + "; ".join(e["message"] for e in res.get("errors") or []))
+                hit = {"id": res["id"], "name": name, "parent": parent}
+                self._folders.append(hit)
+            parent = hit["id"]
+        return parent
+
     def update_params(self, component_id, params, note, replace=False):
         inp = {"componentId": component_id, "releaseNote": note, "replaceExisting": replace, "parameters": params}
         res = self.gql(M_UPDATE_PARAMS, {"input": inp})["desUpdateComponentRevisionParameters"]
@@ -170,12 +196,21 @@ def _rev_id(node):
     return r.get("revisionId") or r.get("id")
 
 
-def release_input(item, ws, defs, file_ids, models_root="Components/Models"):
+def split_folder(path):
+    """("parent/path", "leaf") of a component folder; parent is "" for a top-level folder."""
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    return "/".join(parts[:-1]), parts[-1] if parts else ""
+
+
+def release_input(item, ws, defs, file_ids, models_root="Components/Models", parent_id=None):
+    """parent_id: workspace id of the component folder's parent (split_folder); None for a top-level folder."""
     sym_ids, fp_ids = file_ids
     nid = lambda k: (defs.get(k) or {}).get("id")
+    _, leaf = split_folder(item["folder"])
     return {
         "workspaceUrl": ws,
-        "componentReleaseFolder": item["folder"], "useExistingComponentReleaseFolder": True,
+        **({"componentParentFolderId": parent_id} if parent_id else {}),
+        "componentReleaseFolder": leaf, "useExistingComponentReleaseFolder": True,
         "componentItemName": item["name"], "componentComment": item["comment"],
         "componentDescription": item["description"], "parameters": item["parameters"],
         "componentRevisionNamingSchemeNodeId": nid("componentScheme"),
@@ -297,10 +332,13 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
             else:
                 files = [it["symbol"]["file"]], [it["footprint"]["file"]]
                 ids = tuple([(Path(p).name, upload(p)) for p in group] for group in files)
-                inp = release_input(it, ws, defs, ids, models_root)
+                parent, _ = split_folder(it["folder"])
+                pid = (f"<id of {parent}>" if dry_run else client.folder_id(ws, parent)) if parent else None
+                inp = release_input(it, ws, defs, ids, models_root, pid)
                 res["action"] = "release"
                 if dry_run:
-                    res["detail"] = {"mutation": "desReleaseComponent", "input": inp}
+                    res["detail"] = {"mutation": "desReleaseComponent", "input": inp,
+                                     **({"parent_folder": parent} if parent else {})}
                 else:
                     client.release(inp)
         except Exception as e:                 # keep going; report per part

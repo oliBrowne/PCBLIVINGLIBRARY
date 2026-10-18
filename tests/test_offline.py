@@ -65,6 +65,9 @@ class FakeNexar:
     def upload(self, path):
         self.calls.append(("upload", Path(path).name)); return f"id-{Path(path).name}"
 
+    def folder_id(self, ws, path):
+        return "fld-" + path
+
     def release(self, inp):
         self.calls.append(("release", inp))
 
@@ -105,9 +108,41 @@ def test_altium365_plan_and_push():
         rules = copy.deepcopy(RU.DEFAULTS); rules["folders"]["root"] = "ecadlib-test-47"
         inp = next(r for r in A.push(A.plan(lines, models=d, root="ecadlib-test-47"), None, "https://ws", dry_run=True,
                                      rules=rules) if r["action"] == "release")["detail"]["input"]
-        assert inp["componentReleaseFolder"] == "ecadlib-test-47/ICs", inp
+        # componentReleaseFolder is one folder name: "ecadlib-test-47/ICs" failed live with AddALU_FoldersInvalid
+        # folder HRID ("/" not permitted), so the parent goes by id
+        assert (inp["componentParentFolderId"], inp["componentReleaseFolder"]) == ("<id of ecadlib-test-47>", "ICs"), inp
+        assert rel["componentParentFolderId"] == "fld-Components" and rel["componentReleaseFolder"] == "ICs", rel
         assert (inp["symbolReleaseFolder"], inp["footprintReleaseFolder"]) == (
             "ecadlib-test-47/Models/Symbols", "ecadlib-test-47/Models/Footprints"), inp
+
+
+def test_altium365_folder_id_finds_or_creates_each_level():
+    """A nested component folder resolves level by level: existing folders by name under their parent (any case),
+    missing ones created once under the right parent; the folder list is read once per run."""
+    class N(A.Nexar):
+        def __init__(self):
+            self.token, self.calls, self.n = "t", [], 0
+            self.lib = [{"id": "f-c", "name": "Components", "parent": None},
+                        {"id": "f-ic", "name": "ICs", "parent": {"id": "f-c"}},
+                        {"id": "f-x", "name": "ecadlib-test-47", "parent": {"id": "f-c"}}]   # same name, other parent
+        def gql(self, query, variables=None):
+            self.calls.append(query)
+            if query == A.Q_FOLDERS:
+                return {"desLibrary": {"folders": self.lib}}
+            self.n += 1
+            assert query == A.M_CREATE_FOLDER and variables["input"]["folderType"] == "GENERIC_FOLDER", variables
+            return {"desCreateFolder": {"id": f"new-{self.n}:{variables['input']['name']}<{variables['input']['parentId']}", "errors": []}}
+    n = N()
+    assert n.folder_id("https://ws", "components/ICs") == "f-ic"
+    top = n.folder_id("https://ws", "ecadlib-test-47")
+    assert top == "new-1:ecadlib-test-47<None", top           # a root folder, not the Components/ecadlib-test-47 one
+    assert n.folder_id("https://ws", "ecadlib-test-47/Sub") == f"new-2:Sub<{top}"
+    assert n.folder_id("https://ws", "ecadlib-test-47/Sub") == f"new-2:Sub<{top}"       # cached, not created again
+    assert n.calls.count(A.Q_FOLDERS) == 1 and n.calls.count(A.M_CREATE_FOLDER) == 2, n.calls
+    assert A.split_folder("ecadlib-test-47/ICs") == ("ecadlib-test-47", "ICs") and A.split_folder("ICs") == ("", "ICs")
+    item = {**A.plan([{"designator": "U1", "mpn": "CH340C", "footprint": "SOIC-16"}])[0], "folder": "ICs"}
+    inp = A.release_input(item, "https://ws", {}, ([], []))
+    assert "componentParentFolderId" not in inp and inp["componentReleaseFolder"] == "ICs", inp
 
 
 def test_altium365_ops_match_nexar_schema():
@@ -118,10 +153,10 @@ def test_altium365_ops_match_nexar_schema():
     except ImportError:
         print("skip test_altium365_ops_match_nexar_schema (pip install graphql-core)"); return
     schema = build_schema(Path("tests/nexar/schema.graphql").read_text(), assume_valid_sdl=True)
-    for op in (A.Q_WORKSPACES, A.Q_DEFS, A.Q_FIND, A.M_RELEASE, A.M_UPDATE_PARAMS):
+    for op in (A.Q_WORKSPACES, A.Q_DEFS, A.Q_FIND, A.M_RELEASE, A.M_UPDATE_PARAMS, A.Q_FOLDERS, A.M_CREATE_FOLDER):
         assert not validate(schema, parse(op)), op
     item = A.plan([{"designator": "U1", "mpn": "CH340C", "footprint": "SOIC-16"}])[0]
-    inp = A.release_input(item, "https://ws", {}, ([("a.SchLib", "f1")], [("b.PcbLib", "f2")]))
+    inp = A.release_input(item, "https://ws", {}, ([("a.SchLib", "f1")], [("b.PcbLib", "f2")]), parent_id="fld-1")
     var_defs = parse(A.M_RELEASE).definitions[0].variable_definitions
     res = get_variable_values(schema, var_defs, {"input": inp})
     assert not isinstance(res, list), [e.message for e in res]

@@ -76,6 +76,9 @@ class Stateful:
     def release_defs(self, ws): return {}
     def find(self, ws, name): return self.comps.get(name)
     def upload(self, p): self.calls.append(("upload", Path(p).name)); return "f" + str(len(self.calls))
+    def folder_id(self, ws, path):
+        return "fld-" + path
+
     def release(self, inp):
         self.calls.append(("release", inp))
         self.comps[inp["componentItemName"]] = {"id": "c" + inp["componentItemName"],

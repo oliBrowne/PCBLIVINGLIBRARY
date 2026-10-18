@@ -277,13 +277,20 @@ class FakeNexar(_Server):
                     ids = {k: {"id": f"{k}-id", "name": k} for k in ("componentScheme", "symbolScheme", "footprintScheme",
                                                                      "componentLifeCycle", "symbolLifeCycle", "footprintLifeCycle")}
                     return self._send(200, {"data": ids})
+                if "folders" in q:                 # an empty library: every folder is created on first use
+                    return self._send(200, {"data": {"desLibrary": {"folders": srv.folders}}})
+                if "desCreateFolder" in q:
+                    inp = body["variables"]["input"]
+                    fid = f"fld-{len(srv.folders) + 1}"
+                    srv.folders.append({"id": fid, "name": inp["name"], "parent": {"id": inp["parentId"]} if inp.get("parentId") else None})
+                    return self._send(200, {"data": {"desCreateFolder": {"id": fid, "errors": []}}})
                 if "desLibrary" in q:
                     return self._send(200, {"data": {"desLibrary": {"components": {"nodes": []}}}})
                 if "desReleaseComponent" in q:
                     srv.releases.append(body["variables"]["input"])
                     return self._send(200, {"data": {"desReleaseComponent": {"errors": []}}})
                 return self._send(200, {"errors": [{"message": f"FakeNexar: query not known: {q[:80]}"}]})
-        self.uploads, self.releases, self.workspace = {}, [], "https://acme.365.altium.com"
+        self.uploads, self.releases, self.folders, self.workspace = {}, [], [], "https://acme.365.altium.com"
         super().__init__(H, tls)
 
 

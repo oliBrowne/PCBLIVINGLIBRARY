@@ -112,6 +112,9 @@ class Nexar:
     def find(self, ws, name):
         return None
 
+    def folder_id(self, ws, path):
+        return "fld-" + path
+
     def release(self, inp):
         self.released.append(inp)
 
