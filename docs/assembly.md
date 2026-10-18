@@ -33,6 +33,8 @@ This is issue #104. Everything that is specific to one assembler lives in a prof
   - `Assembly Offset` (JLCPCB's origin in your footprint's frame, mm, x right and y up)
   - `Assembly Check` (the pad verdict)
   - `Assembly Evidence` (the rotation evidence)
+
+  They are measurements ecadlib repeats on every run, so writing or changing them never voids a sign-off.
 - **An overlay picture**: your pads (red outline) over JLCPCB's (blue fill) after the turn, with both pin 1s, pin
   names and the verdict. It shows in the web UI's part panel, in the menu's report, and in `--png` / `--overlays`.
 - **JLCPCB's BOM and CPL files** for your board, top and bottom, with a report of every part that needs a person.

@@ -483,3 +483,16 @@ def test_librarian_annotation_release_holds_and_messages():
         assert "assembly" in RC.RULES
         off = {"name": "X", "parameters": [], "footprint": {}, "symbol": {}}
         assert A.annotate_items([off], d, FakeHTTP(), {"assembly": {"check": False}}) == 0
+
+
+def test_assembly_parameters_never_void_a_sign_off():
+    """The check's parameters are measurements repeated on every run: writing or changing them keeps a sign-off valid
+    (an older workspace's approvals still count after the upgrade); any other parameter still voids it."""
+    from ecadlib import approvals as AP
+    assert AP.DERIVED_PARAMS == set(A.PARAMS)
+    item = {"name": "R1", "symbol": {}, "footprint": {}, "parameters": [{"name": "Value", "value": "10k"}]}
+    h = AP.content_hash(item)
+    item["parameters"] += [{"name": k, "value": "x"} for k in A.PARAMS]
+    assert AP.content_hash(item) == h
+    item["parameters"][0]["value"] = "4k7"
+    assert AP.content_hash(item) != h
