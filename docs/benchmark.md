@@ -37,7 +37,8 @@ misses are, so the next steps are the ones that move the number.
   them as right. Three did, each checked by hand against the datasheet page:
   CD4066BM (TI D0014A, p25: 1.55 x 0.6 pads on 5.4 mm), UCC256301 (TI DDB0014A, p70: the same) and BCR430UW6
   (Diodes SOT26, p8: X 0.55, Y 0.80, C 2.40). KiCad's pads are 1.95 and 1.6 mm long. 13 of the parts read from a
-  datasheet came with a land pattern, and every one of their footprints uses it.
+  datasheet came with a land pattern, and ecadlib built each of those footprints from it (a misread land would be
+  followed too, so only the three above are counted, after a hand check).
 * **KiCad errata.** One case where KiCad's reference disagrees with the datasheet is scored right, with the
   evidence in `ecadlib/eval/sets/kicad-v1.errata.json`: AH1806-W, whose SC59 pins 2 and 3 KiCad swaps (Diodes
   AH1806 datasheet p1-2: pin 2 GND, pin 3 OUTPUT).
@@ -48,7 +49,7 @@ misses are, so the next steps are the ones that move the number.
 |---|---|---|
 | chip | 10/10 | standard table |
 | diode | 9/10 | |
-| sot | 3/10 | |
+| sot | 3/10 | +1 counting the maker's land |
 | bga | 2/10 | |
 | soic | 2/10 | +2 counting the maker's land |
 | tht | 2/10 | |

@@ -13,7 +13,7 @@ Standard library only (plus jsonschema): newline-delimited JSON-RPC 2.0 on stdin
 Streamable HTTP), tools capability only. Every call runs as a job: one that is not done within --wait seconds answers
 with a job id for job_status instead of running into the client's timeout. Logs go to stderr; file descriptor 1 is
 moved aside so not even a child process can corrupt the protocol stream."""
-import argparse, contextlib, json, re, sys, traceback
+import argparse, contextlib, json, re, sys, threading, traceback
 
 from . import __version__
 from .app import Workspace
@@ -764,10 +764,14 @@ def _opts(ws):
     return getattr(ws, "mcp_options", None) or Options()
 
 
+_JOBS_LOCK = threading.Lock()
+
+
 def _jobs(ws):
-    if getattr(ws, "_mcp_jobs", None) is None:
-        from .ui.server import Jobs
-        ws._mcp_jobs = Jobs(ws.root)
+    with _JOBS_LOCK:                          # HTTP: the first calls arrive on several threads at once
+        if getattr(ws, "_mcp_jobs", None) is None:
+            from .ui.server import Jobs
+            ws._mcp_jobs = Jobs(ws.root)
     return ws._mcp_jobs
 
 
@@ -845,7 +849,7 @@ def _arg_errors(tool, args):
     return "; ".join(f"{'.'.join(map(str, e.path)) or '(arguments)'}: {e.message}" for e in errs[:5])
 
 
-PATH_ARGS = {"bom", "project", "projects", "paths", "a365", "target", "datasheet", "symbol", "models", "win_dir", "plan"}
+PATH_ARGS = {"bom", "project", "projects", "paths", "a365", "target", "datasheet", "symbol", "models", "plan"}   # win_dir: a folder on the Altium PC, never opened here
 
 
 def _check_paths(ws, args):
@@ -899,6 +903,43 @@ def _rule_paths(text):
                                      or ".." in re.split(r"[\\/]", v)):
             yield at, v
     return list(walk(data, ""))
+
+
+ENDPOINT_KEYS = {"provider", "base_url", "api_key_env", "endpoints"}
+
+
+def _endpoints(text):
+    """{dotted key: value} of every setting in a rules TOML that says where a model request (and the API key) goes."""
+    from .rules import toml_module
+    lib = toml_module()
+    try:
+        data = lib.loads(text) if lib and text else {}
+    except Exception:
+        return {}
+    out = {}
+
+    def walk(v, at):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                key = f"{at}.{k}" if at else str(k)
+                if k in ENDPOINT_KEYS:
+                    out[key] = json.dumps(x, sort_keys=True)
+                else:
+                    walk(x, key)
+    walk(data, "")
+    return out
+
+
+def _check_endpoints(ws, text):
+    """save_rules from an agent may not change where model requests go: the stored API key would follow the request
+    to any URL. The person edits [ai] / [datasheet] base_url, provider and api_key_env themselves."""
+    f = ws.rules_file()
+    old = _endpoints(f.read_text(encoding="utf-8")) if f.is_file() else {}
+    new = _endpoints(text if isinstance(text, str) else "")
+    changed = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+    if changed:
+        raise ValueError(f"save_rules cannot change {', '.join(changed)} (where model requests and your API key go): "
+                         f"ask the user to edit {f.name} themselves")
 
 
 # ------------------------------------------------------------------ answers
@@ -955,7 +996,7 @@ def _await(ws, jid, wait, notify=None, token=None, forget=False):
             return _result(ws, _job_view(ws, j))
         time.sleep(0.05 if time.time() - j["started"] < 2 else 0.25)
     out = j["result"]
-    if forget:
+    if forget and not j.get("shared"):
         with jobs.lock:
             jobs.jobs.pop(jid, None)
     if j["state"] == "cancelled":
@@ -993,10 +1034,13 @@ def _call(ws, tool, args, notify=None, token=None):
         return _job_status(ws, args, notify, token)
     if _opts(ws).confine:
         _check_paths(ws, args)
+    if name == "save_rules":
+        _check_endpoints(ws, args.get("toml"))
     jobs = _jobs(ws)
     key = None if name in READ_ONLY or not args.get("bom") else f"bom:{_bom_key(ws, args['bom'])}"   # one writer per BOM
     busy = key and jobs.running(key)
     if busy:
+        busy["shared"] = True                     # another caller was given its id: keep it for job_status
         return _result(ws, f"{busy.get('tool')} is still running on {args['bom']} (job {busy['id']}): call job_status "
                            f"with id {busy['id']!r} and try again once it is done", True)
 
@@ -1008,8 +1052,7 @@ def _call(ws, tool, args, notify=None, token=None):
             if isinstance(e, Cancelled):
                 raise
             return ("error", _error_text(e))
-    jid = jobs.start(run, label=name, key=key)["job"]
-    jobs.jobs[jid]["tool"] = name
+    jid = jobs.start(run, label=name, key=key, tool=name)["job"]
     return _await(ws, jid, _opts(ws).wait, notify, token, forget=True)
 
 

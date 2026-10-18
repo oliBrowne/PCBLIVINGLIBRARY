@@ -748,6 +748,8 @@ def write_notice(out, items):
         if f.is_file() and f.read_text(encoding="utf-8").startswith(("Parts of this library come from", "Parts converted from")):
             f.unlink()
         return None
+    if f.is_file() and not f.read_text(encoding="utf-8").startswith(("Parts of this library come from", "Parts converted from")):
+        return None                            # a NOTICE.txt you wrote is yours: never overwritten
     if not f.is_file() or f.read_text(encoding="utf-8") != text:
         write_text_atomic(f, text)
     return f

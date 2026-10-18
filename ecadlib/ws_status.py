@@ -216,7 +216,8 @@ def render(s, styled=False, width=None, shown=None, verbosity=0):
         from . import timing as TI
         names = {"triage": "triage", "build": "build", "release_check": "release check", "review": "review", "push": "push"}
         kv.append(["last run", f"{TI.human(lr['total_seconds'])} BOM to "
-                   + ("released" if "push" in lr["steps"] else "plan") + f" ({TI.human(lr['work_seconds'])} ecadlib work): "
+                   + ("plan" if "push" not in lr["steps"] else "released" if not lr.get("push_errors")
+                      else f"push, {lr['push_errors']} failed") + f" ({TI.human(lr['work_seconds'])} ecadlib work): "
                    + ", ".join(f"{names.get(k, k)} {TI.human(v)}" for k, v in lr["steps"].items())])
     rv = s.get("review") or {}
     if rv.get("built"):

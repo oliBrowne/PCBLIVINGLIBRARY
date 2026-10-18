@@ -414,6 +414,8 @@ Begin
     If St = 'error' Then
     Begin
         Fail(MessageText(Job, ''));
+        If Answer(Job, 'big') <> '' Then
+            EcadlibDialog.Big.Caption := Answer(Job, 'big');      { "Not found" for a bad part number }
         Exit;
     End;
     Extra := '';
