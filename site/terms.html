@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terms of use · ecadlib</title>
+<meta name="description" content="Terms of use for the ecadlib website and the ecadlib software: free, open source under the MIT License, provided as is.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5' fill='none' stroke='%23888' stroke-width='1.4'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<header class="nav scrolled">
+  <a class="brand" href="/" aria-label="ecadlib home"><span class="ring"></span>ecadlib</a>
+  <nav aria-label="Legal">
+    <a href="/terms" class="on">Terms of use</a>
+    <a href="/privacy">Privacy</a>
+  </nav>
+  <div class="navend">
+    <button id="themebtn" class="ghost" type="button" aria-label="Switch between light and dark">theme</button>
+  </div>
+</header>
+
+<main class="legal">
+  <p class="mono small muted">Version 1.0 · Last revised 18 October 2026</p>
+  <h1>Terms of use</h1>
+
+  <p class="lede">ecadlib is a free, open-source project. You can use the website and the software without an account and without paying anything. These terms explain the few rules that come with that, and make clear that you check every part before you build hardware with it.</p>
+
+  <p>The website at <a href="https://pcblivinglibrary.vercel.app">pcblivinglibrary.vercel.app</a> (the "<strong>Site</strong>") and the ecadlib project are run by Oliver Browne, an individual ("<strong>we</strong>", "<strong>us</strong>" or "<strong>our</strong>"). These Terms of Use ("<strong>Terms</strong>") apply to your use of the Site. By using the Site you agree to them. If you do not agree, please do not use the Site.</p>
+
+  <h2 id="software">1. The software and its license</h2>
+  <ol>
+    <li><strong>MIT License.</strong> The ecadlib software, including its source code, the Python package on PyPI, the Windows installer and the Altium and KiCad plugins (the "<strong>Software</strong>"), is licensed under the <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/LICENSE">MIT License</a>. Your use, copying, changing and distribution of the Software is governed by that license and by the third-party notices in the <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/NOTICE">NOTICE</a> file, not by these Terms. If these Terms and the MIT License ever conflict about the Software, the MIT License wins.</li>
+    <li><strong>The Site.</strong> The Site's source code is part of the same repository and is also MIT licensed. Nothing in these Terms limits what the MIT License allows you to do with it.</li>
+    <li><strong>Contributions.</strong> Issues, pull requests and other contributions to the project on GitHub are made under the MIT License, and under GitHub's own terms. Please do not send anything you consider confidential.</li>
+    <li><strong>Names and marks.</strong> The MIT License covers the code, not the project's name. Please do not use the name "ecadlib" in a way that suggests we endorse or made your product or fork.</li>
+  </ol>
+
+  <h2 id="parts">2. Generated parts must be checked</h2>
+  <p>ecadlib finds, generates and converts schematic symbols, PCB footprints, 3D models and part data (together, "<strong>Library Output</strong>"). Some of it is produced by AI models and some of it comes from third-party sources. It can be wrong.</p>
+  <ol>
+    <li><strong>You are the engineer of record.</strong> Before you use any Library Output in a design, a prototype or a production board, you must check it yourself against the manufacturer's current datasheet and your own design rules: pad sizes and positions, pin 1 and pin numbering, pin functions, polarity, courtyard, paste and mask, 3D height, and part data such as values and ratings.</li>
+    <li><strong>No guarantee of fitness.</strong> We do not promise that any Library Output is accurate, complete, current or suitable for any purpose, or that a board made with it will work, pass inspection or be safe. Review holds, checks and accuracy figures in the Software are aids, not a guarantee.</li>
+    <li><strong>Not for critical use without independent review.</strong> Do not rely on Library Output for medical, automotive, aviation, safety, life-support or other high-risk products unless it has passed your own qualified, independent review.</li>
+    <li><strong>Third-party data.</strong> Library Output may include data from KiCad's libraries, distributors and other providers. That data remains under its own license and terms, which you are responsible for following.</li>
+  </ol>
+
+  <h2 id="byok">3. Your own AI model and API keys</h2>
+  <ol>
+    <li>ecadlib has no server of its own. When you use AI features, the Software sends requests straight from your computer to the AI provider you choose, using your own API key. Your use of that provider is between you and them, under their terms and their prices. You are responsible for any charges they make.</li>
+    <li>The same applies to distributor and platform keys you add (for example DigiKey, Mouser, Nexar or Altium 365). Keep your keys secret. We never receive them.</li>
+    <li>What the Software sends, and to whom, is listed in our <a href="/privacy">Privacy Policy</a> and in <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/PRIVACY.md">PRIVACY.md</a>.</li>
+  </ol>
+
+  <h2 id="site">4. Using the Site</h2>
+  <ol>
+    <li><strong>Fair use.</strong> Do not use the Site to break the law, to attack or overload it, or to try to get into systems you are not allowed into.</li>
+    <li><strong>Changes.</strong> The Site is a free project page. We may change it, or take it down, at any time and without notice. We do not promise any support.</li>
+    <li><strong>Links and other services.</strong> The Site links to GitHub, PyPI, LinkedIn and other websites we do not control. We are not responsible for them; their own terms and privacy policies apply.</li>
+    <li><strong>Feedback.</strong> If you send us feedback or ideas, we may use them freely, without owing you anything.</li>
+    <li><strong>Trademarks.</strong> Altium, Altium 365, KiCad and other product names are trademarks of their owners. ecadlib is an independent project and is not affiliated with, endorsed by or sponsored by them.</li>
+  </ol>
+
+  <h2 id="warranty">5. No warranty</h2>
+  <p class="caps">The Site, the Software and all Library Output are provided "as is" and "as available", without warranty of any kind, express or implied, including warranties of merchantability, fitness for a particular purpose, accuracy, title and non-infringement. We do not warrant that the Site or the Software will be uninterrupted, error-free, secure or free of harmful code.</p>
+
+  <h2 id="liability">6. Limitation of liability</h2>
+  <p class="caps">To the maximum extent permitted by law, we will not be liable for any indirect, incidental, special, consequential, exemplary or punitive damages, or for any lost profits, lost data, cost of substitute goods, scrapped or reworked boards, delays, or recalls, arising from or related to the Site, the Software or any Library Output, even if we were told they were possible. Because the Site and the Software are free, our total liability for any claim arising from them is limited to 50 US dollars.</p>
+  <p>Nothing in these Terms limits liability that cannot be limited by law, such as liability for death or personal injury caused by negligence, or for fraud, and nothing in them takes away rights you have as a consumer under the law of the country you live in.</p>
+
+  <h2 id="indemnity">7. Your responsibility</h2>
+  <p>If someone makes a claim against us because of how you used the Site, the Software or Library Output (for example, a product you built with a part you did not check), or because you broke these Terms or the law, you agree to cover our reasonable costs of dealing with it, to the extent the law allows.</p>
+
+  <h2 id="general">8. General</h2>
+  <ol>
+    <li><strong>Changes to these Terms.</strong> We may update these Terms. The date at the top shows the latest version, and the history is public in the repository. If you keep using the Site after a change, the new Terms apply.</li>
+    <li><strong>Export.</strong> You are responsible for following export control and sanctions laws that apply to you.</li>
+    <li><strong>Severability.</strong> If a court finds part of these Terms unenforceable, it is changed only as much as needed to make it enforceable, and the rest still applies. Not enforcing a term is not a waiver of it.</li>
+    <li><strong>Entire agreement.</strong> These Terms, the Privacy Policy and, for the Software, the MIT License are the whole agreement between you and us about the Site.</li>
+    <li><strong>Accessibility.</strong> We aim for the Site to meet WCAG 2.1 Level AA. If something is hard to use, please tell us.</li>
+    <li><strong>Contact.</strong> Open an issue on <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues">GitHub</a>, or contact Oliver Browne on <a href="https://www.linkedin.com/in/olibrowne/">LinkedIn</a>.</li>
+  </ol>
+
+  <p class="mono small muted source">Adapted from the Website Terms of Use template prepared and made publicly available by General Legal, PC ("General Legal") under CC0 1.0. It is provided for general reference purposes only and does not constitute, and should not be construed as, legal advice. Use of the template does not create an attorney-client relationship with General Legal. General Legal has not reviewed, and takes no position on, any modifications made to this document.</p>
+</main>
+
+<footer class="legalfoot mono small muted">
+  <a href="/">ecadlib</a> · <a href="/terms">Terms of use</a> · <a href="/privacy">Privacy</a> · <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/LICENSE">MIT License</a>
+</footer>
+<script src="legal.js"></script>
+</body>
+</html>
