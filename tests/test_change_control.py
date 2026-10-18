@@ -164,6 +164,50 @@ def test_footprint_0603_to_0402_held_approved_then_reverted():
         raise AssertionError("revert to the released revision accepted")
 
 
+def test_web_ui_shows_the_held_update_and_approves_rejects_reverts():
+    """The web UI's part card carries the held update (old -> new per change), /api/change/history lists the
+    revisions, /api/change/decide approves or rejects (a reject needs a reason), /api/change/revert goes back."""
+    from ecadlib.app import Workspace
+    from tests.test_ui import serve
+    plan, lib = demo()
+    ws, bom = Workspace(lib.parent.parent, [], offline=True), "uploads/demo/demo_bom.csv"
+    items = items_of(plan)
+    g = gate(lib)
+    it = item(items, "RES-0603-10k")
+    text, _ = SP.build("R_0402_1005Metric")
+    AL.write_pcblib(lib / "models" / "PcbLib" / "R_0402_1005Metric.PcbLib", [AL.footprint_from_kicad(text)])
+    (lib / "models" / "KiCad" / "R_0402_1005Metric.kicad_mod").write_text(text, encoding="utf-8")
+    it["footprint"] = {"ref": "R_0402_1005Metric", "file": "models/PcbLib/R_0402_1005Metric.PcbLib",
+                       "kicad_mod": "models/KiCad/R_0402_1005Metric.kicad_mod"}
+    g.settle(items)
+    CG.write_plan(plan, items)
+    srv, call = serve(ws)
+    try:
+        st, cards = call("GET", "/api/parts?bom=" + bom)
+        assert st == 200 and cards["counts"]["changes_held"] == 1, (st, cards.get("counts"))
+        card = next(p for p in cards["parts"] if p["part"] == "RES-0603-10k")
+        assert card["change"]["base"] == 1 and card["reasons"][0]["code"] == "change.held", card["reasons"][:1]
+        assert any("R_0603_1608Metric to R_0402_1005Metric" in c["text"] for c in card["change"]["changes"]), card["change"]
+        st, h = call("POST", "/api/change/history", {"bom": bom, "part": "RES-0603-10k"})
+        assert st == 200 and h["revision"] == 1 and [e["event"] for e in h["history"] if e["event"] != "publish"] == ["hold", "release"], h
+        st, e = call("POST", "/api/change/decide", {"bom": bom, "part": "RES-0603-10k", "decision": "reject", "user": ANN})
+        assert st == 400 and "needs a reason" in e["error"], e
+        st, r = call("POST", "/api/change/decide", {"bom": bom, "part": "RES-0603-10k", "decision": "approve", "user": ANN,
+                                                    "comment": "0402 on the new board"})
+        assert st == 200 and r["results"][0]["revision"] == 2, r
+        st, cards = call("GET", "/api/parts?bom=" + bom)
+        assert next(p for p in cards["parts"] if p["part"] == "RES-0603-10k")["change"] is None
+        st, r = call("POST", "/api/change/revert", {"bom": bom, "part": "RES-0603-10k", "revision": 1, "user": BOB,
+                                                    "comment": "board already made with 0603"})
+        assert st == 200 and r["results"][0]["revision"] == 3, r
+        st, e = call("POST", "/api/change/revert", {"bom": bom, "part": "RES-0603-10k", "revision": "x", "user": BOB})
+        assert st == 400 and "number" in e["error"], e
+        st, h = call("POST", "/api/change/history", {"bom": bom, "part": "RES-0603-10k"})
+        assert h["revision"] == 3 and h["history"][0]["event"] == "revert", h["history"][:1]
+    finally:
+        srv.shutdown()
+
+
 def test_parts_sharing_a_file_are_held_together_and_keep_their_bytes():
     """RES-0603-10k and RES-0603-4.7k share R_0603 and Resistor.SchLib: a denser footprint holds both, each proposal
     keeps the new file (not the restored one), one approval releases both."""

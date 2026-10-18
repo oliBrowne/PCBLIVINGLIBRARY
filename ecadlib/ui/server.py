@@ -51,6 +51,8 @@ ROUTES = {
     ("POST", "/api/altium365/push"): "librarian",          # dry run; a live push needs LIVE_PUSH
     ("POST", "/api/release-check"): "librarian", ("POST", "/api/dedupe"): "librarian",
     ("POST", "/api/approvals/decide"): "approver",
+    ("POST", "/api/change/history"): "viewer",             # change control: a part's revisions and its held change
+    ("POST", "/api/change/decide"): "approver", ("POST", "/api/change/revert"): "approver",
     ("GET", "/api/agent/queue"): "viewer", ("GET", "/api/agent/queue/item"): "viewer",
     ("GET", "/api/agent/queue/picture"): "viewer",             # images under <workspace>/agent/ only
     ("POST", "/api/agent/queue/rebuild"): "librarian", ("POST", "/api/agent/queue/reject"): "librarian",
@@ -762,6 +764,10 @@ def make_handler(ws: Workspace, team=None):
                                                                 self._who(b)),
                 "/api/approvals/status": lambda b: ws.approval_status(self._bom(b)),
                 "/api/approvals/decide": self._decide,
+                "/api/change/history": lambda b: ws.part_history(self._bom(b), _str(b.get("part"), "part")),
+                "/api/change/decide": self._change_decide,
+                "/api/change/revert": lambda b: ws.revert_part(self._bom(b, True), _str(b.get("part"), "part"), b.get("revision"),
+                                                               self._signer(b), _str(b.get("comment"), "comment", True)),
                 "/api/dedupe": lambda b: ws.find_duplicates(self._bom(b, True), b.get("merge") is True),
                 "/api/rules/save": lambda b: ws.save_rules(_str(b.get("text"), "text"), b.get("overwrite") is True),
                 "/api/style/direction": lambda b: ws.style_direction(_str(b.get("text"), "text", True) or None,
@@ -787,6 +793,22 @@ def make_handler(ws: Workspace, team=None):
                 return TM.identity(self.user)
             typed = b.get("user") if isinstance(b.get("user"), str) else ""
             return typed.strip()[:120] or local_who()
+
+        def _signer(self, b):
+            """Who signs a change-control decision: the signed-in user (team), else the name typed in the page."""
+            if team:
+                return TM.identity(self.user)
+            return _str(b.get("user"), "user")
+
+        def _change_decide(self, b):
+            role = _str(b.get("role"), "role", True)
+            if team:
+                roles = TM.sign_roles(self.user)
+                role = (role or "").strip() or roles[0]
+                if role not in roles:
+                    raise Refused(f"you sign as {', '.join(roles)}, not {role}")
+            return ws.decide_change(self._bom(b, True), _str(b.get("part"), "part"), b.get("decision"), self._signer(b),
+                                    _str(b.get("comment"), "comment", True), role)
 
         def _decide(self, b):
             role, comment = _str(b.get("role"), "role", True), _str(b.get("comment"), "comment", True)

@@ -179,6 +179,12 @@ def cards(out, items, pictures=True):
             reasons.insert(0, cc["reason"])
         elif st == "held" and not reasons:
             reasons = [reason(x) for x in (review.get(name, {}).get("why") or "").split("; ") if x][:3]
+        chg = it.get("change") if (it.get("change") or {}).get("state") == "held" else None
+        if chg:                                # change control: an update to the released part waits for a person
+            reasons.insert(0, {"code": "change.held", "detail": f"change to released r{chg.get('base')} held",
+                               "text": f"A library update would change the released part (revision {chg.get('base')}): "
+                                       f"{chg.get('summary') or 'see the change list'}. The released version is kept.",
+                               "fix": "Look at the change list and approve it, or reject it with a reason."})
         appr = it.get("approval") or None
         if st == "awaiting_approval" and appr:
             for m in appr.get("missing") or []:
@@ -205,11 +211,14 @@ def cards(out, items, pictures=True):
             "approval": {k: appr.get(k) for k in ("required", "met", "approved_by", "missing", "stale")} if appr
             else _decisions(it.get("approvals")),
             "tried": (it.get("librarian") or {}).get("tried") or [],
+            "change": {k: chg.get(k) for k in ("base", "summary", "classes", "changes", "writer", "proposed_at", "approvals",
+                                               "rejected_by", "used_in") if chg.get(k) is not None} if chg else None,
         })
     counts = {"parts": len(parts), "ready": sum(p["status"] == "ready" for p in parts),
               "held": sum(p["status"] == "held" for p in parts),
               "waiting": sum(p["status"] == "awaiting_approval" for p in parts),
               "cross_check_disagreed": sum(bool(p["cross_check"]) and p["cross_check"]["status"] == "disagreed" for p in parts),
-              "parity_mismatch": sum(p["parity"]["result"] == "mismatch" for p in parts)}
+              "parity_mismatch": sum(p["parity"]["result"] == "mismatch" for p in parts),
+              "changes_held": sum(bool(p["change"]) for p in parts)}
     return {"parts": parts, "counts": counts,
             "cost": {k: cost[k] for k in ("answers", "usd", "usd_estimated", "models", "tokens")}}

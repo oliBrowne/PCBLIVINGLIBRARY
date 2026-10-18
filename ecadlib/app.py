@@ -921,6 +921,63 @@ class Workspace:
         reports = [self.rel(f) for f in (plan_f.parent / n for n in ("review.md", "release_check.md", "plan.json")) if f.exists()]
         return dict(PV.cards(plan_f.parent, items, pictures), bom=self._bom_label(bom_path), plan=self.rel(plan_f), reports=reports)
 
+    # ------------------------------------------------------------------ change control (ecadlib.change_gate, #105)
+    def part_history(self, bom, part):
+        """One part's ledger: released revisions, holds, approvals, rejects, publishes (newest first), and its held
+        change if one waits. Read-only."""
+        from . import change_gate as CG, ledger as LG
+        _, plan_f, items = self._plan(bom)
+        it = self._part(items, part)
+        lg = LG.Ledger(plan_f.parent)
+        head = lg.head(part)
+        rows = []
+        for e in lg.history(part):
+            rows.append({k: e.get(k) for k in ("event", "revision", "base", "at", "writer", "by", "decision", "reason", "target",
+                                                 "classes", "approved_by") if e.get(k) not in (None, "", [], {})})
+            if e.get("changes") and e.get("event") in LG.RELEASES:
+                rows[-1]["changes"] = [{"class": c["class"], "text": c["text"]} for c in e["changes"]][:200]
+        change = it.get("change") if (it.get("change") or {}).get("state") == "held" else None
+        return {"part": part, "revision": head and head["revision"], "change": change, "history": rows[::-1],
+                "policy": {k: v for k, v in CG.policy(None, plan_f.parent).items()}}
+
+    def decide_change(self, bom, part, decision, user, comment="", role=None):
+        """Approve or reject a held change to a released part, from the web UI or MCP (the same as `ecadlib part
+        approve / reject`). Holds the agent's plan lock like approve_part."""
+        from . import change_cli as CC, change_gate as CG
+        from .agent_queue import plan_lock
+        if decision not in ("approve", "reject"):
+            raise ValueError("decision must be approve or reject")
+        _, plan_f, items = self._plan(bom)
+        self._part(items, part)
+        with plan_lock(self.root, wait=False) as free:
+            if not free:
+                raise ValueError("the library agent is rebuilding the library right now; decide again in a minute")
+            try:
+                res = (CC.approve(plan_f, [part], user, comment or "", role) if decision == "approve"
+                       else CC.reject(plan_f, [part], user, comment or ""))
+            except CG.ChangeError as e:
+                raise ValueError(str(e)) from None
+        return {"part": part, "decision": decision, "results": res}
+
+    def revert_part(self, bom, part, revision, user, comment=""):
+        """Release an older revision of a part again, as a new revision (`ecadlib part revert PART@REV`)."""
+        from . import change_cli as CC, change_gate as CG
+        from .agent_queue import plan_lock
+        try:
+            revision = int(revision)
+        except (TypeError, ValueError):
+            raise ValueError("revision must be a number") from None
+        _, plan_f, items = self._plan(bom)
+        self._part(items, part)
+        with plan_lock(self.root, wait=False) as free:
+            if not free:
+                raise ValueError("the library agent is rebuilding the library right now; try again in a minute")
+            try:
+                res = CC.revert(plan_f, f"{part}@{revision}", user, comment or "")
+            except CG.ChangeError as e:
+                raise ValueError(str(e)) from None
+        return {"part": part, "results": res}
+
     # ------------------------------------------------------------------ library hub (ecadlib.hub)
     def hub(self, q="", have=(), lack=(), states=(), origin="", flags=(), sort="name", page=1, size=100, force=False,
             tool="", library="", project=""):
