@@ -201,6 +201,16 @@ def shared_symbol(sym):
     return dict(sym, footprint=None, params=[(k, v) for k, v in sym.get("params") or [] if str(k).lower() not in PART_PARAMS])
 
 
+def _where(e):
+    """' at datasheet.py:742 in to_spec' for a bug (TypeError, KeyError ...) so a report names the line; nothing for
+    the errors a source raises on purpose (no datasheet, HTTP, held)."""
+    if not isinstance(e, (TypeError, KeyError, AttributeError, IndexError, ZeroDivisionError, UnboundLocalError)):
+        return ""
+    import traceback
+    fr = [f for f in traceback.extract_tb(e.__traceback__) if "ecadlib" in f.filename.replace("\\", "/")]
+    return f" at {Path(fr[-1].filename).name}:{fr[-1].lineno} in {fr[-1].name}" if fr else ""
+
+
 def is_passive_part(item, ln=None):
     """R / C / L / ferrite bead / crystal: every pin is Passive, whatever the source's symbol says (an EasyEDA pin
     typed 1 = Input made Altium warn 'Nets containing floating input pins' on every resistor)."""
@@ -387,7 +397,7 @@ class Run:
             try:
                 getattr(self, f"src_{s}")(st, item, ln, row, kind, mpn, fp_name, sym_name)
             except Exception as e:            # one bad source or part must not stop the run
-                st["tried"].append(f"{s}: failed ({type(e).__name__}: {e})")
+                st["tried"].append(f"{s}: failed ({type(e).__name__}: {e}{_where(e)})")
         lc = (row.get("lcsc") or "").split(" ")[0]
         if row.get("src_description"):        # the part search's own text (Nexar / DigiKey / Mouser / LCSC), after a KiCad symbol's
             st["found"].setdefault("description", (row["src_description"], f"{_desc_label(row)} part data {lc}".strip()))
@@ -607,7 +617,11 @@ class Run:
         got = []
         if not st["footprint"]:
             st["review"].extend(pad_table_problems(res["spec"]))
-            text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
+            try:
+                text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
+            except (KeyError, TypeError) as e:     # a read that left a needed dimension blank: say so, not KeyError
+                unres = res["spec"].get("unresolved") or []
+                raise D.DatasheetError("no footprint: the datasheet read left " + (", ".join(unres) or str(e)) + " unresolved") from e
             h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
             got.append("footprint")

@@ -226,6 +226,15 @@ def _cost(case_used, model):
     return est.get("input_tokens", 0), est.get("output_tokens", 0), est.get("usd"), f"estimate ({est.get('how', '')})"
 
 
+# The part never reached the model: no datasheet link, or none gave a PDF (here or to the API's fetcher). The benchmark
+# reports these apart: a dead maker link is not a misread drawing.
+NO_DATASHEET = re.compile(r"no datasheet (link gave a PDF|URL known)|could not (be )?(fetch|download)|unable to (fetch|download)", re.I)
+
+
+def no_datasheet(row):
+    return row["source"] == "none" and any(NO_DATASHEET.search(str(t)) for t in row.get("tried") or [])
+
+
 def summarize(rows):
     def agg(rs):
         n = len(rs)
@@ -252,7 +261,10 @@ def summarize(rows):
     for r in rows:
         if r.get("cross_check"):
             cc[r["cross_check"]] = cc.get(r["cross_check"], 0) + 1
-    return {"cross_check": dict(sorted(cc.items())),"overall": agg(rows), "shared_footprints": {"cases": len(shared), "failing": sum(not r["pass"] for r in shared)}, "families": {k: agg(v) for k, v in sorted(fams.items())},
+    unread = [r for r in rows if no_datasheet(r)]
+    return {"cross_check": dict(sorted(cc.items())),"overall": agg(rows),
+            "no_datasheet": {"cases": len(unread), "ids": [r["id"] for r in unread]},
+            "with_datasheet": agg([r for r in rows if not no_datasheet(r)]), "shared_footprints": {"cases": len(shared), "failing": sum(not r["pass"] for r in shared)}, "families": {k: agg(v) for k, v in sorted(fams.items())},
             "by_source": {k: agg(v) for k, v in sorted(srcs.items())},
             "fields": {k: {"ok": a, "of": b} for k, (a, b) in sorted(fields.items())}}
 
@@ -396,6 +408,11 @@ def report_md(rep):
           f"Model {m['model']}, sources {', '.join(m['sources'])}, mode {m['mode']}. {m['cases']} parts in {m['wall_s']} s "
           f"({m['wall_s_per_part']} s per part); {o['tokens_in']} tokens in / {o['tokens_out']} out; "
           f"{_usd(o['usd'])} in all, {_usd(o['usd_per_part'])} per part.", ""]
+    nd = s.get("no_datasheet") or {}
+    if nd.get("cases"):
+        w = s["with_datasheet"]
+        md += [f"{nd['cases']} {'part' if nd['cases'] == 1 else 'parts'} never reached the model (no datasheet PDF could be "
+               f"fetched); without them: **{w['pass']}/{w['cases']} ({_pct(w['rate'])})**.", ""]
     if bad:
         md += [f"## Wrong parts ({len(bad)})", ""]
         for r in bad:

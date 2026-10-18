@@ -32,7 +32,7 @@ def test_estimate_knows_the_price_of_a_direct_openai_model():
 
 def test_job_costs():
     rin, rout = C.read_tokens()
-    assert 25_000 < rin < 35_000 and rout == D.OUT_TOKENS
+    assert 20_000 < rin < 35_000 and rout == D.OUT_TOKENS
     opus = C.jobs("claude-opus-5-5")
     assert abs(opus["read"] - (rin * 1.25 * 4 + rout * 20) / 1e6) < 1e-9
     assert abs(opus["read_batch"] - (rin * 4 + rout * 20) / 1e6 / 2) < 1e-9

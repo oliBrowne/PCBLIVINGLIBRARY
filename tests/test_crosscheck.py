@@ -36,10 +36,17 @@ def first(**over):
 def check_answer(pitch=0.5, pins=None, unit="mm", **pkg):
     """An answer in the second read's own (smaller) schema."""
     d = lambda lab, mn, nom, mx: {"label": lab, "min": mn, "nom": nom, "max": mx, "unit": unit, "page": 1, "figure": "outline"}
-    p = {"name": QFN, "package_type": "qfn", "pin_count": 16, "pitch": d("e", None, pitch, None),
+    p = {"name": QFN, "package_type": "qfn", "pin_count": 16, "pitch": pitch if isinstance(pitch, dict) else d("e", None, pitch, None),
          "body_length": d("D", 2.9, 3.0, 3.1), "body_width": d("E", 2.9, 3.0, 3.1), "lead_span": None,
          "exposed_pad": {"length": d("D2", None, 1.68, None), "width": d("E2", None, 1.68, None)}, "unresolved": []}
     p.update(pkg)
+    num = lambda v: "" if v is None else f"{v:g}"
+    dims = [{"name": k, "label": r["label"], "unit": r["unit"], **{x: num(r[x]) for x in ("min", "nom", "max")}}
+            for k, r in [(k, p.pop(k)) for k in ("pitch", "body_length", "body_width", "lead_span")] if r]
+    ep = p.pop("exposed_pad") or {}
+    dims += [{"name": f"exposed_pad.{k}", "label": r["label"], "unit": r["unit"], **{x: num(r[x]) for x in ("min", "nom", "max")}}
+             for k, r in ep.items() if r]
+    p = dict(p, dims=dims, pin_count=p["pin_count"] or 0)
     return {"package": p, "pins": pins if pins is not None else [{"num": x["num"], "name": x["name"]} for x in TD.GOOD["pins"]],
             "embedded_instructions": []}
 
@@ -216,7 +223,7 @@ def test_modes_off_always_skipped_and_unchecked():
         assert api.sent == [("read", "claude-opus-5-5")] and "cross_check" not in res["sidecar"]
     with tempfile.TemporaryDirectory() as d:                                       # always: the table AND a second read
         api = API(lambda k, m, b: soic if k == "read" else check_answer(
-            name="SOIC-8_3.9x4.9mm_P1.27mm", package_type="gullwing", pin_count=8, pitch={**check_answer()["package"]["pitch"], "nom": 50, "unit": "mil"},
+            name="SOIC-8_3.9x4.9mm_P1.27mm", package_type="gullwing", pin_count=8, pitch={"label": "e", "min": None, "nom": 50, "max": None, "unit": "mil", "page": 1, "figure": "outline"},
             body_length=None, body_width=None, exposed_pad=None, pins=[{"num": str(i), "name": f"P{i}"} for i in range(1, 9)]))
         res = read(d, api, rules={"datasheet": {"cross_check": "always", "cross_check_model": "claude-sonnet-5-5"}},
                    package="SOIC-8_3.9x4.9mm_P1.27mm")

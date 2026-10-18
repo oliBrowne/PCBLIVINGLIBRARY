@@ -348,6 +348,25 @@ def test_eval_cost_counts_every_answer_of_the_route_and_replays_it():
                [(c["id"], c["pass"], c["usd"], c["tokens_in"]) for c in rep["cases"]]
 
 
+def test_parts_without_a_datasheet_pdf_are_reported_apart():
+    """#42: a dead or refused maker link never reaches the model; the report gives the rate without those parts too."""
+    from ecadlib.eval import runner as RN
+    row = lambda i, ok, src, tried=(): {"id": i, "family": "qfn", "pass": ok, "source": src, "fields": {}, "usd": None,
+                                        "tokens_in": 0, "tokens_out": 0, "tried": list(tried)}
+    rows = [row("a", True, "datasheet"), row("b", False, "datasheet"),
+            row("c", False, "none", ["datasheet: failed (DatasheetError: no datasheet link gave a PDF: x: HTTP 404)"]),
+            row("d", False, "none", ["easyeda: failed (HTTP 403)"])]
+    s = RN.summarize(rows)
+    assert s["no_datasheet"] == {"cases": 1, "ids": ["c"]}, s["no_datasheet"]
+    assert (s["overall"]["pass"], s["overall"]["cases"]) == (1, 4) and (s["with_datasheet"]["pass"], s["with_datasheet"]["cases"]) == (1, 3)
+
+
+def test_kicad_subscript_pin_names_match_plain_ones():
+    """KiCad writes V_{SS}; a datasheet says VSS: the same pin name (CD4066BNS failed on this alone)."""
+    assert S.norm_name("V_{SS}") == S.norm_name("VSS") and S.norm_name("V_{DD}") == S.norm_name("Vdd")
+    assert S.norm_name("~{RESET}") == S.norm_name("RESET") and S.norm_name("V_{SS}") != S.norm_name("VDD")
+
+
 if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_") and callable(f):

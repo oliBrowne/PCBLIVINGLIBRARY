@@ -11,8 +11,9 @@ license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "oliver browne" }]
 requires-python = ">=3.10"
-dependencies = ["requests", "pandas", "openpyxl", "jsonschema", "olefile", "tomli>=1.1; python_version < '3.11'"]   # olefile: the release check,
-                                       # kicad-export, dedupe and project BOMs read .SchLib/.PcbLib/.SchDoc back
+dependencies = ["requests", "pandas", "openpyxl", "jsonschema", "olefile", "pypdf", "tomli>=1.1; python_version < '3.11'"]   # olefile: the release check,
+                                       # kicad-export, dedupe and project BOMs read .SchLib/.PcbLib/.SchDoc back;
+                                       # pypdf: the datasheet reader sends only the pages it needs (a 1976-page PDF fails whole)
 keywords = [
     "ecad", "pcb", "eda", "footprint", "ipc-7351", "kicad", "altium", "altium-365",
     "component-library", "bom", "datasheet", "mcp",
@@ -41,7 +42,7 @@ Changelog = "https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/CHANGELOG.m
 
 [project.optional-dependencies]
 altium = ["olefile"]                   # kept for old install commands; olefile is now a core dependency
-pdf = ["pypdf"]                        # datasheet reader: trim a PDF to --pages before sending it
+pdf = ["pypdf"]                        # kept for old install commands; pypdf is now a core dependency
 vision = ["pillow", "pypdf"]           # visual-check: draw footprints / symbols (pdftoppm renders datasheet pages)
 all = ["olefile", "pypdf", "pillow"]
 dev = ["olefile", "graphql-core", "pyaltiumlib", "pypdf", "pillow", "tomli"]   # tomli: the Python 3.10 path is tested

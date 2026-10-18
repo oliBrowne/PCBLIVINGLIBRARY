@@ -128,6 +128,8 @@ class PdfHTTP(TL.FakeHTTP):
         self.fetched.append(url)
         if url in self.pdfs:
             v = self.pdfs[url]
+            if isinstance(v, int):                       # an HTTP error status
+                return (v, b"refused", "text/html", url, None)
             return (200, v, "application/pdf" if D.is_pdf(v) else "text/html", url, None)
         return (0, None, "", url, "ProxyError: proxy CONNECT refused (403 Forbidden)")
 
@@ -268,6 +270,16 @@ def test_datasheet_urls_and_pdf_store():
         assert j["prov"]["attempts"][0]["error"].endswith("bytes)") and j["body"]["fallbacks"] == "default"
         j = rd.job("TESTPART", [("https://a/view", "BOM"), ("https://blocked/x.pdf", "pattern")])
         assert j["body"]["messages"][0]["content"][0]["source"] == {"type": "url", "url": "https://blocked/x.pdf"}
+        # a maker's site that refuses this machine (403 Nexperia / Renesas, 429) is the API's to fetch; a 404 is not
+        http.pdfs.update({"https://maker/403.pdf": 403, "https://maker/429.pdf": 429, "https://maker/404.pdf": 404})
+        for code in (403, 429):
+            j = rd.job("TESTPART", [(f"https://maker/{code}.pdf", "KiCad")])
+            assert j["body"]["messages"][0]["content"][0]["source"] == {"type": "url", "url": f"https://maker/{code}.pdf"}, code
+        try:
+            rd.job("TESTPART", [("https://maker/404.pdf", "KiCad")])
+            raise AssertionError("404")
+        except D.DatasheetError as e:
+            assert "HTTP 404" in str(e)
         try:
             rd.job("TESTPART", [("https://a/view", "BOM")])
             raise AssertionError("html only")
@@ -422,7 +434,7 @@ def test_librarian_batch_one_request_per_part():
         assert sorted(r["custom_id"] for r in reqs) == ["DSPART1", "DSPART2"], reqs
         p = reqs[0]["params"]
         assert "fallbacks" not in p and "anthropic-beta" not in creates[0][2] and creates[0][2]["x-api-key"] == KEY
-        assert p["output_config"]["format"]["schema"] == D.output_schema() and p["max_tokens"] == D.MAX_TOKENS
+        assert p["output_config"]["format"]["schema"] == D.wire_schema() and p["max_tokens"] == D.MAX_TOKENS
         assert "cache_control" not in p["messages"][0]["content"][0] and p["system"][0]["cache_control"] == {"type": "ephemeral"}
         assert len([c for c in api.calls if c[0] == "GET" and not c[1].endswith("/results")]) == 3   # 2 in_progress + ended
         assert "https://www.lcsc.com/datasheet/C9999.pdf" in http.fetched

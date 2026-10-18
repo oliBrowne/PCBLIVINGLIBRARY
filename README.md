@@ -71,8 +71,7 @@ See section 32 for the first-run commands in detail.
 Install it with pip (Python 3.10 or later):
 
 ```
-pip install ecadlib                 # from PyPI
-pip install "ecadlib[pdf]"          # pypdf trims datasheets to --pages
+pip install ecadlib                 # from PyPI (pypdf included: the datasheet reader sends only the pages it needs)
 pip install -e ".[dev]"             # from a checkout: editable, plus everything the test suite uses
 ```
 

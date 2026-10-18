@@ -12,9 +12,20 @@ a minor release may change command-line options and file formats.
 - `ecadlib status` shows how long the last BOM run took, step by step: triage, build, release check, review (from the release check to the last sign-off, `--allow` or resolve choice) and the Altium 365 push, with ecadlib's own time and the total (#44). Each plan folder keeps a `timing.jsonl`; `status --json` has `last_run` and a `timing` per plan.
 - `ecadlib status` shows the review rate: of the parts built, how many passed first time, are held (with the top reasons), were approved, rejected or changed by a person (#45). `status --json` has `review`, overall and per plan.
 - docs/START_HERE.md asks people trying ecadlib to send those two lines.
+- `ecadlib eval run` reports the parts that never reached the model (no datasheet PDF could be fetched) apart, with the pass rate without them (`summary.no_datasheet`, `summary.with_datasheet`).
 - A logo: the Sprout Trace mark (a copper trace growing from a via into two leaves) on the website, its favicon, the web UI, the KiCad toolbar button and the Windows icon, with copper as the one accent colour. docs/brand.md has the rules; `site/brand/` has the files.
 
+### Changed
+
+- pypdf is a core dependency (it was the `[pdf]` extra): without it a large datasheet (the 1976-page SAM E70 family sheet) could not be cut to the pages that matter and every read of it failed.
+
 ### Fixed
+
+- Datasheet reader: the live API refused every read ("Schemas contains too many parameters with union types (184 ...). limit: 16"). The request now asks for the dimensions as a list of named records (min / nom / max as printed text, "" where blank) and the optional family fields as one JSON text, with no nullable fields; the answer is turned back into the same extraction as before, so checks, the result cache and recorded answers are unchanged. The cross-check's second read had the same problem (26 union fields) and is fixed the same way.
+- Datasheet reader: the optional family fields reached the model without their descriptions, so a land pattern's `pad_center` came back as the datasheet's C (row to row) and SOT-23-6 pads sat 2.4 mm out instead of 1.2 (BCR430UW6, AH1806-W). The descriptions are back, `pad_center` says C / 2, and a pad_center past the leads is flagged.
+- `ecadlib eval`: KiCad's pin-name markup (`V_{SS}`) matches the datasheet's plain `VSS`.
+- Datasheet reader: an answer with no `unresolved` list crashed ("'NoneType' object is not iterable"), and a read that left a needed dimension blank crashed the footprint build (`KeyError: 'terminal_length'`, "'>' not supported between NoneType"). The part is now left for review with "no footprint: the datasheet read left terminal_length unresolved". A bug in a source names its file and line in the part's log.
+- Datasheet reader: a maker's link that refuses this machine (HTTP 401, 403 or 429: Nexperia, Renesas, Altera on the live benchmark) is sent as a URL for the API to fetch, as a blocked host already was; only a 404-style error, an HTML page or an oversized file rules a link out.
 
 - Altium 365 push: symbols and footprints are released under the `[folders] root` too (`<root>/Models/Symbols`, `<root>/Models/Footprints`), not always under `Components/Models`, so a test root keeps everything together.
 - Altium 365: Nexar renamed `DesRevision.id` to `revisionId`; push, `a365 pull/status` and `upstream check-a365` asked for the old field and every lookup failed with HTTP 400. The test schema is updated to match.

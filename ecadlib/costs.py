@@ -55,7 +55,7 @@ HEAD = {"model": "Model", "id": "Model id", "tier": "Tier", "usd_in": "$ in / MT
 def read_tokens(page_budget=None):
     """(input, output) tokens of one datasheet read at the default page budget."""
     pages = page_budget or D.SETTINGS["page_budget"]
-    return pages * D.PAGE_TOKENS + 1500 + len(json.dumps(D.output_schema())) // 4, D.OUT_TOKENS
+    return pages * D.PAGE_TOKENS + 1500 + len(json.dumps(D.wire_schema())) // 4, D.OUT_TOKENS
 
 
 def check_tokens(max_pages=None):

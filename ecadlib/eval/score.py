@@ -74,7 +74,7 @@ def pitch(pads):
 
 
 def norm_name(s):
-    s = str(s or "").upper().replace("~{", "").replace("}", "").replace("\\", "").replace(" ", "")
+    s = str(s or "").upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "")
     s = s.replace("~", "")
     s = re.sub(r"^(N(?=[A-Z]{2,})|/|#)", "", s)
     return re.sub(r"[/#*_-]", "", s)
