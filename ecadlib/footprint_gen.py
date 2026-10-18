@@ -352,6 +352,14 @@ def build(spec, density=None):
     if spec["package_type"] in ADVANCED:
         from . import footprint_adv
         return footprint_adv.build(spec, density)
+    ep, turned = spec.get("exposed_pad"), []
+    if spec["package_type"] == "gullwing" and ep and spec.get("body_length") and spec.get("body_width") and \
+            dim(ep["length"])[1] > dim(ep["width"])[1] and dim(spec["body_length"])[1] > dim(spec["body_width"])[1]:
+        # TLC5951DAP (benchmark 2026-10-18): a PowerPAD read long side first (5.7 x 3.04) in a body that runs down the
+        # rows; across the rows it pushed every heel out past the body. The EP runs with the body, like its length.
+        spec = dict(spec, exposed_pad=dict(ep, length=ep["width"], width=ep["length"]))
+        turned.append(f"exposed pad turned to run with the body: {round(dim(ep['width'])[1], 3)} across the rows, "
+                      f"{round(dim(ep['length'])[1], 3)} along them")
     problems = sanity(spec)
     if problems:
         raise ValueError("the package numbers don't add up: " + "; ".join(problems))
@@ -359,7 +367,7 @@ def build(spec, density=None):
     t = spec["package_type"]
     fam = family(spec)
     fil = FILLETS[fam][density]
-    rep = {"name": spec["name"], "type": t, "density": density, "ipc_family": fam}
+    rep = {"name": spec["name"], "type": t, "density": density, "ipc_family": fam, **({"notes": turned} if turned else {})}
     if t in ("chip", "molded"):
         pads, (bx, by), r = _two_terminal(spec, fil)
     elif t == "gullwing":

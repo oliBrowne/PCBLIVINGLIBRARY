@@ -9,6 +9,8 @@ a minor release may change command-line options and file formats.
 
 ### Added
 
+- `ecadlib eval run` tells a footprint that uses the datasheet's recommended land pattern (the maker's example board layout) apart from a misread: when it misses KiCad's pads only because KiCad works its land out from the package dimensions, the report says so and gives the pass rate counting those as right (`summary.maker_land`, per case `maker_land` and `kicad_differs_maker_land`). Checked by hand on CD4066BM, UCC256301 and BCR430UW6.
+- A test set can carry an errata file (`<set>.errata.json`) of cases where KiCad's reference disagrees with the datasheet, checked by hand: the field is scored right when ours is what the datasheet says, and the report lists it. kicad-v1 has one: AH1806-W, whose SC59 pins 2 and 3 KiCad swaps.
 - The standard source knows DO-201AD (axial, 15.24 mm bend), MicroMELF and SC-82AB, from KiCad's hand-drawn footprints (618 packages, each benched against KiCad). Three #42 benchmark parts (1N5400, BAV301, NCP662) now build without a datasheet.
 - `ecadlib eval run --cached-only` re-scores a live run's out folder with nothing sent: its cached answers, and the answers of its collected batches downloaded again (free), are read by the current code; a part that would need another read is reported, not sent.
 - `ecadlib eval run --batch` sends the datasheet reads as one Message Batch (half price); the report prices those parts at the batch rate, and recordings keep it so a replay gives the same cost.
@@ -39,6 +41,10 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- A gull-wing exposed pad read long side first (TLC5951DAP's PowerPAD, 5.7 x 3.04 mm) is turned to run with the body; across the rows it pushed every pad's heel out past the body.
+- A DIP or other pad table with its rows down the page now gets a body (and courtyard) that runs with the rows: 27C256's courtyard was 37 mm wide.
+- Two parts whose datasheet packages share a name but not their numbers (ISL8117FVEZ and TPS26600PWP, both HTSSOP-16) keep their own spec file; `ecadlib fp-edit` reads each part's own.
+- `ecadlib eval` pin names: "N.C." is KiCad's "NC".
 - `eval run --cached-only` scores a part from its best saved answer for the same datasheet when the route now asks for a step the live run never sent (it went another way past an answer the old parser rejected).
 - A BGA body read the other way round from its ball grid (CY14U256LA-BA: 8 x 6 balls, body 10 x 6 mm) is turned so its long side runs with the grid's long side, with a note.
 - Benchmark scoring: a pin name spelled out ("Enable", "Ground") counts as KiCad's "EN" / "GND"; the eval BOM names through-hole diodes D, as a real BOM does, so DO-41 / DO-201AD parts resolve from the standard table.

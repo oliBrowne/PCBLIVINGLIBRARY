@@ -157,6 +157,19 @@ def test_a_bga_body_runs_with_its_ball_grid():
     assert not build(spec)[1].get("notes")
 
 
+def test_a_dip_table_body_runs_with_its_pin_rows():
+    # 27C256 (benchmark 2026-10-18): a DIP-28 read as a pad table with its rows down y and the body as D x E1
+    # (37 x 13.7): the courtyard was 37 mm wide across the rows; the body's length runs with the rows
+    arr = lambda x, first, step: {"count": 14, "x": x, "y": 0, "dx": 0, "dy": 2.54, "first_number": first, "number_step": step}
+    spec = {"name": "DIP-28_W15.24mm", "package_type": "custom", "pin_count": 28, "pitch": 2.54, "height_max": 4.826,
+            "body_length": {"min": 36.703, "max": 37.338}, "body_width": {"min": 13.462, "max": 13.97},
+            "pad_table": {"unit": "mm", "y_axis": "down", "view": "top", "origin": "pin1", "footprint_origin": "pin1",
+                          "default_pad": {"w": 1.6, "h": 1.6, "shape": "oval", "type": "tht", "drill": 0.8},
+                          "arrays": [arr(0, 1, 1), arr(15.24, 28, -1)]}}
+    x1, y1, x2, y2 = B.numbers(F.build(spec, "B")[0])["courtyard"]
+    assert x2 - x1 < 18 and y2 - y1 > 37, (x1, y1, x2, y2)
+
+
 def test_bga_mistakes_are_explained():
     spec = SPEC("BGA-256_17.0x17.0mm_Layout16x16_P1.0mm_Ball0.5mm_Pad0.4mm_NSMD")
     for change, words in (({"pitch": 1.27}, "doesn't fit"), ({"ball_diameter": {"nom": 19.7}}, "mils")):

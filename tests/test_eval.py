@@ -436,8 +436,51 @@ def test_spelled_out_pin_names_and_through_hole_diodes():
     a through-hole diode D, as a real BOM does, so the standard source treats it as a diode."""
     assert S.norm_name("Enable") == S.norm_name("EN") and S.norm_name("Ground") == "GND"
     assert S.norm_name("ENA") == "ENA"                                     # only whole words
+    assert S.norm_name("N.C.") == S.norm_name("NC") == S.norm_name("N.C")         # TLP2745
     with tempfile.TemporaryDirectory() as d:
         cases = [c for c in R.load_set("kicad-v1")["cases"] if c["mpn"] in ("1N5400", "1N4002")]
         rows = (Path(d) / "b.csv")
         R.write_bom(cases, rows)
         assert [ln.split(",")[0][0] for ln in rows.read_text().splitlines()[1:]] == ["D", "D"]
+
+
+def test_a_footprint_on_the_makers_land_is_told_apart_from_a_misread():
+    """CD4066BM (benchmark 2026-10-18): TI's example board layout is 1.55 x 0.6 pads at +-2.7; KiCad's SO-14 works
+    its land out from the dimensions (1.95 at +-2.475). Ours follows the datasheet: reported, not counted as a pass."""
+    def so14(pl, pc, ep=None):
+        pads = [[str(i + 1), -pc, -3.81 + 1.27 * i, pl, 0.6, 0.0] for i in range(7)]
+        pads += [[str(14 - i), pc, -3.81 + 1.27 * i, pl, 0.6, 0.0] for i in range(7)]
+        if ep:
+            pads.append(["15", 0.0, 0.0, ep, ep, 0.0])
+        return {"pads": pads, "courtyard": [-pc - pl / 2 - 0.25, -4.58, pc + pl / 2 + 0.25, 4.58]}
+    spec = {"land": {"pad_length": 1.55, "pad_width": 0.6, "pad_center": 2.7}}
+    mine, ref = so14(1.55, 2.7), so14(1.95, 2.475)
+    sc = S.score(mine, ref)
+    ml = S.maker_land(mine, spec)
+    assert not sc["pass"] and ml["followed"] and S.only_maker_land(sc["fields"], ml), (sc["errors"], ml)
+    assert S.maker_land(mine, {"land": {}}) is None and S.maker_land(None, spec) is None
+    assert not S.maker_land(so14(1.3, 2.7), spec)["followed"]                     # not the land the datasheet gives
+    mine_ep = so14(1.55, 2.7, ep=2.0)                                             # a wrong exposed pad is still a miss
+    sc = S.score(mine_ep, so14(1.55, 2.7, ep=3.4))
+    ml = S.maker_land(mine_ep, spec)
+    assert ml["followed"] and ml["ep"] == ["15"] and not S.only_maker_land(sc["fields"], ml)
+    rows = [{"id": "a", "family": "soic", "pass": False, "source": "datasheet", "fields": {}, "tokens_in": 0,
+             "tokens_out": 0, "usd": 0, "maker_land": {"followed": True}, "kicad_differs_maker_land": True, "tried": []}]
+    assert R.summarize(rows)["maker_land"] == {"given": 1, "followed": 1, "kicad_differs": ["a"]}
+
+
+def test_a_checked_reference_erratum_scores_the_datasheets_pins_right():
+    """AH1806-W (benchmark 2026-10-18): KiCad's symbol swaps SC59 pins 2 and 3; the Diodes datasheet has 2 GND,
+    3 OUTPUT. Ours as the datasheet says passes, with the erratum named; ours as KiCad says, or wrong, does not pass by it."""
+    er = R.load_errata("kicad-v1")["AH1806-W"]
+    ref = [("1", "VDD"), ("2", "OUTPUT"), ("3", "GND")]
+    ours = [("1", "VDD"), ("2", "GND"), ("3", "OUTPUT")]
+    sc = S.score(None, None, ours, ref)
+    sc["fields"].pop("footprint")
+    sc["pass"], sc["errors"] = S.verdict(sc["fields"]), [e for e in sc["errors"] if not e.startswith("footprint")]
+    assert not sc["pass"] and R.apply_errata(sc, ours, er) == ["symbol_names"] and sc["pass"] and not sc["errors"], sc
+    assert "AH1806" in sc["fields"]["symbol_names"]["erratum"]
+    wrong = [("1", "GND"), ("2", "VDD"), ("3", "OUTPUT")]
+    sc = S.score(None, None, wrong, ref)
+    assert R.apply_errata(sc, wrong, er) == [] and not sc["pass"]
+    assert "kicad-v1.errata" not in R.available() and R.load_errata("nonexistent.json") == {}

@@ -259,3 +259,20 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok ", name)
+
+
+def test_a_powerpad_read_long_side_first_runs_with_the_body():
+    # TLC5951DAP (benchmark 2026-10-18): HTSSOP-38, EP read 5.05-6.35 x 2.69-3.39 with "length" (across the rows)
+    # the long side; across, it pushed the heels out to 3.05 mm. Turned, the pads are KiCad's (1.575 at +-3.7125).
+    spec = {"name": "HTSSOP-38-1EP", "package_type": "gullwing", "pin_count": 38, "pitch": 0.65,
+            "body_length": {"min": 12.4, "max": 12.6}, "body_width": {"min": 6.0, "max": 6.2},
+            "lead_span": {"min": 7.9, "max": 8.3}, "terminal_length": {"min": 0.5, "max": 0.75},
+            "terminal_width": {"min": 0.19, "max": 0.3}, "height_max": 1.2,
+            "exposed_pad": {"length": {"min": 5.05, "max": 6.35}, "width": {"min": 2.69, "max": 3.39}}}
+    from ecadlib import footprint_bench as FB
+    txt, rep = F.build(spec, "B")
+    pads = FB.numbers(txt)["pads"]
+    assert abs(pads[0][1] + 3.7125) < 1e-6 and abs(pads[0][3] - 1.575) < 1e-6, pads[0]
+    assert pads[-1][3] < pads[-1][4] and "turned" in rep["notes"][0], (pads[-1], rep)
+    square = dict(spec, exposed_pad={"length": {"nom": 3.0}, "width": {"nom": 3.0}})
+    assert not F.build(square, "B")[1].get("notes")

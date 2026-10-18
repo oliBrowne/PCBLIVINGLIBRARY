@@ -1,0 +1,12 @@
+{
+ "about": "Cases where KiCad's reference disagrees with the maker's datasheet, checked by hand against the datasheet text. A field listed here that fails against KiCad is scored as right (the report lists it as a reference erratum) when ours is what the datasheet says.",
+ "cases": {
+  "AH1806-W": {
+   "symbol_names": {
+    "ours": [["2", "GND"], ["3", "OUTPUT"]],
+    "why": "Diodes AH1806 datasheet (AH1806.pdf) p1 pinout and p2 pin table: SC59 (the -W package, p5) pin 1 VDD, pin 2 GND, pin 3 OUTPUT. KiCad's Sensor_Magnetic:AH1806-W has 2 OUTPUT, 3 GND.",
+    "checked": "2026-10-18"
+   }
+  }
+ }
+}

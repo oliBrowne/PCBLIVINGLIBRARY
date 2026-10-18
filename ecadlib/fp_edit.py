@@ -86,7 +86,8 @@ def read(plan, part):
             break
     if sym is None:
         raise FileNotFoundError(f"no datasheet answer for {part} in {d} (only parts read from a datasheet can be edited)")
-    for f in (d / f"{_safe(sym['footprint'])}.json", d / f"{_safe(sym['footprint'])}.package.json"):
+    fp = _safe(sym["footprint"])
+    for f in (d / f"{fp}.{_safe(sym['name'])}.json", d / f"{fp}.json", d / f"{fp}.package.json"):
         try:
             v = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):

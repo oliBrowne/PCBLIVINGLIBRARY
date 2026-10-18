@@ -36,7 +36,37 @@ def set_path(name):
 
 
 def available():
-    return sorted(f.stem for f in SETS.glob("*.json"))
+    return sorted(f.stem for f in SETS.glob("*.json") if not f.stem.endswith(".errata"))
+
+
+def load_errata(set_name):
+    """<set>.errata.json next to the set: {mpn: {field: {ours: [[num, name]...], why}}}, the cases where KiCad's
+    reference disagrees with the datasheet (checked by hand). {} when there is none."""
+    try:
+        f = set_path(set_name)
+        f = f.with_name(f.stem + ".errata.json")
+        return json.loads(f.read_text(encoding="utf-8")).get("cases") or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def apply_errata(sc, mine_pins, errata):
+    """A failing field that a checked erratum covers, with ours what the datasheet says, is scored right."""
+    fixed = []
+    for field, e in (errata or {}).items():
+        f = sc["fields"].get(field)
+        if not f or f["ok"]:
+            continue
+        if field.startswith("symbol_") and e.get("ours"):
+            have = {str(n): S.norm_name(v) for n, v in mine_pins or []}
+            if any(have.get(str(n)) != S.norm_name(v) for n, v in e["ours"]):
+                continue                              # ours is not what the datasheet says either: a real miss
+        sc["fields"][field] = dict(f, ok=True, error="", erratum=e["why"])
+        fixed.append(field)
+    if fixed:
+        sc["pass"] = S.verdict(sc["fields"])
+        sc["errors"] = [x for x in sc["errors"] if x.split(":")[0] not in fixed]
+    return fixed
 
 
 def load_set(name):
@@ -236,7 +266,9 @@ class EvalReader(D.Reader):
             (self.record / f"{_safe(job['part'])}.json").write_text(json.dumps(
                 {"part": job["part"], "model": rec.get("model") or self.model, "recorded": datetime.datetime.now().isoformat(timespec="seconds"),
                  "job": j, "estimate": job.get("estimate"), "message": msg, "attempts": u["attempts"], "batch": u["batch"]}, indent=1, default=str), encoding="utf-8")
-        return super()._result(job, rec)
+        res = super()._result(job, rec)
+        u["spec"] = res["spec"]                       # the package as read: its land is scored as the maker's (S.maker_land)
+        return res
 
 
 def _symbol_pins(path):
@@ -321,7 +353,11 @@ def summarize(rows):
         if r.get("cross_check"):
             cc[r["cross_check"]] = cc.get(r["cross_check"], 0) + 1
     unread = [r for r in rows if no_datasheet(r)]
-    return {"cross_check": dict(sorted(cc.items())),"overall": agg(rows),
+    given = [r for r in rows if r.get("maker_land")]
+    maker = {"given": len(given), "followed": sum(r["maker_land"]["followed"] for r in given),
+             "kicad_differs": [r["id"] for r in rows if r.get("kicad_differs_maker_land")]}
+    return {"cross_check": dict(sorted(cc.items())), "overall": agg(rows), "maker_land": maker,
+            "errata": {r["id"]: r["errata"] for r in rows if r.get("errata")},
             "no_datasheet": {"cases": len(unread), "ids": [r["id"] for r in unread]},
             "with_datasheet": agg([r for r in rows if not no_datasheet(r)]), "shared_footprints": {"cases": len(shared), "failing": sum(not r["pass"] for r in shared)}, "families": {k: agg(v) for k, v in sorted(fams.items())},
             "by_source": {k: agg(v) for k, v in sorted(srcs.items())},
@@ -378,7 +414,7 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     for it in items:
         mpn = next((p["value"] for p in it.get("parameters", []) if p["name"] == "Manufacturer Part Number"), it["name"])
         by_mpn[mpn] = it
-    rows = []
+    rows, erratas = [], load_errata(set_name)
     for c in cases:
         it = by_mpn.get(c["mpn"]) or {}
         fp = (it.get("footprint") or {}).get("kicad_mod")
@@ -386,8 +422,10 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         sf = (it.get("symbol") or {}).get("file")
         pins = _symbol_pins(lib / sf) if sf and (lib / sf).exists() else None
         sc = S.score(mine, data["references"][c["footprint"]], pins, c.get("pins"), tol)
+        errata = apply_errata(sc, pins, erratas.get(c["mpn"]))
         tin, tout, cost, how = _cost(reader.used.get(c["mpn"]), reader.model)
         src = ((it.get("source") or {}).get("footprint") or "none").split(":")[0]
+        ml = S.maker_land(mine, (reader.used.get(c["mpn"]) or {}).get("spec")) if src == "datasheet" else None
         shared = next((n[len("shared with "):] for n in (it.get("librarian") or {}).get("notes", []) if n.startswith("shared with ")), "")
         files = {}                                    # what this run wrote for the part (consistency between runs)
         for kind, rel in (("kicad_mod", fp), ("pcblib", (it.get("footprint") or {}).get("file")), ("schlib", sf)):
@@ -396,7 +434,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         rows.append({"id": c["id"], "family": c["family"], "mpn": c["mpn"], "footprint": c["footprint"], "pass": sc["pass"],
                      "files": files, "cross_check": (it.get("cross_check") or {}).get("status", ""),
                      "source": src, "symbol_source": ((it.get("source") or {}).get("symbol") or "none").split(":")[0],
-                     "errors": sc["errors"], "fields": sc["fields"], "tokens_in": tin, "tokens_out": tout, "usd": cost,
+                     "errors": sc["errors"], "fields": sc["fields"], "maker_land": ml, "errata": errata,
+                     "kicad_differs_maker_land": not sc["pass"] and S.only_maker_land(sc["fields"], ml), "tokens_in": tin, "tokens_out": tout, "usd": cost,
                      "cost_how": how, "footprint_shared_with": shared, "api_s": (reader.used.get(c["mpn"]) or {}).get("api_s"),
                      "tried": ((it.get("librarian") or {}).get("tried") or [])})
     rep = {"meta": {"set": data["meta"]["name"], "set_version": data["meta"].get("version"), "set_built": data["meta"].get("built"),
@@ -479,12 +518,24 @@ def report_md(rep):
         w = s["with_datasheet"]
         md += [f"{nd['cases']} {'part' if nd['cases'] == 1 else 'parts'} never reached the model (no datasheet PDF could be "
                f"fetched); without them: **{w['pass']}/{w['cases']} ({_pct(w['rate'])})**.", ""]
+    if s.get("errata"):
+        md += [f"{len(s['errata'])} {'part is' if len(s['errata']) == 1 else 'parts are'} scored right where KiCad's reference "
+               "disagrees with the datasheet (checked by hand, see the set's errata file): "
+               + ", ".join(f"{k} ({', '.join(v)})" for k, v in s["errata"].items()) + ".", ""]
+    ml = s.get("maker_land") or {}
+    if ml.get("kicad_differs"):
+        n = len(ml["kicad_differs"])
+        md += [f"{n} of the wrong {'part follows' if n == 1 else 'parts follow'} the datasheet's recommended land pattern, "
+               f"which KiCad's land (worked out from the package dimensions) does not: {', '.join(ml['kicad_differs'])}. "
+               f"With them: **{o['pass'] + n}/{o['cases']} ({_pct(round((o['pass'] + n) / o['cases'], 4))})** match KiCad "
+               "or the maker's land.", ""]
     if bad:
         md += [f"## Wrong parts ({len(bad)})", ""]
         for r in bad:
             why = "; ".join(r["errors"][:3]) if r["source"] != "none" else "no source had it: " + "; ".join(r["tried"][-2:])
             sh = f" [footprint shared with {r['footprint_shared_with']}]" if r.get("footprint_shared_with") else ""
-            md.append(f"- **{r['id']}** (from {r['source']}){sh}: {why}")
+            ml_ = " [follows the datasheet's land pattern; KiCad's differs]" if r.get("kicad_differs_maker_land") else ""
+            md.append(f"- **{r['id']}** (from {r['source']}){sh}{ml_}: {why}")
         md.append("")
     md += ["## By package family", "", "| Family | Cases | Pass | Rate | Answered by | USD / part |", "|---|---|---|---|---|---|"]
     for k, f in s["families"].items():
