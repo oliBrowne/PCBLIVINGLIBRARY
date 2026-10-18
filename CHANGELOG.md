@@ -11,6 +11,9 @@ a minor release may change command-line options and file formats.
 
 - Altium 365 push: symbols and footprints are released under the `[folders] root` too (`<root>/Models/Symbols`, `<root>/Models/Footprints`), not always under `Components/Models`, so a test root keeps everything together.
 - Altium 365: Nexar renamed `DesRevision.id` to `revisionId`; push, `a365 pull/status` and `upstream check-a365` asked for the old field and every lookup failed with HTTP 400. The test schema is updated to match.
+- Altium 365 push: a nested component folder (`ecadlib-test-47/ICs`) is released under its parent folder's id; Nexar takes only one folder name there and refused the path ("AddALU_FoldersInvalid folder HRID"). Missing parent folders are created (`desCreateFolder` with the live `parentFolderId` / `folderId` fields).
+- Altium 365 push: a symbol or footprint several parts share (Capacitor, C_0603) is released with the first part and linked by the others; releasing it again failed with "AddALU_ItemsDuplicate item HRID". A symbol or footprint item named like its component gets `-SYM` / `-FP` (Altium 365 refused "Duplicate ID").
+- Altium 365: looking a component up by name matched other items too (Altium's sample part `CMP-017-000002-1` for `AMS1117-3.3`), so a push or lifecycle update could change a part that is not ours. Only an item of that name (or its revision) counts now.
 
 ### Fixed
 
