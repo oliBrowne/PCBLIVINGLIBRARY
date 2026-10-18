@@ -200,14 +200,23 @@ Find the mechanical package drawing (and its dimension table) for the requested 
 Do not convert units, compute, round or fill in values from memory or JEDEC norms. If a value cannot be read with confidence, set it to null and name it in unresolved."""
 
 
+CHECK_DIMS = ("pitch", "body_length", "body_width", "lead_span", "exposed_pad.length", "exposed_pad.width")
+
+
 def output_schema():
+    """No nullable fields (the API takes at most 16 union-typed ones per schema): dimensions as named records with
+    min / nom / max as printed text ("" = blank), pin_count 0 when the datasheet does not give it."""
     from . import datasheet as D
-    dim = D._null(D.RAW_DIM)
     types = (D.SCHEMA["properties"].get("package_type") or {}).get("enum") or ["chip", "gullwing", "qfn"]
+    txt = lambda d: {"type": "string", "description": d}
+    dim = D._obj({"name": {"enum": list(CHECK_DIMS)}, "label": txt("the drawing's symbol for it"),
+                  "min": txt('as printed; "" where blank'), "nom": txt('as printed; "" where blank'),
+                  "max": txt('as printed; "" where blank'), "unit": {"enum": list(D.TO_MM)}})
     pkg = D._obj({"name": {"type": "string"}, "package_type": {"enum": list(types)},
-                  "pin_count": D._null({"type": "integer"}), "pitch": dim, "body_length": dim, "body_width": dim,
-                  "lead_span": dim,
-                  "exposed_pad": D._null(D._obj({"length": dim, "width": dim})),
+                  "pin_count": {"type": "integer", "description": "terminals, not counting an exposed pad; 0 if not given"},
+                  "dims": {"type": "array", "items": dim,
+                           "description": "each of these the drawing gives, once; leave out the others (exposed_pad.*: "
+                                          "the exposed / thermal pad, if there is one)"},
                   "unresolved": {"type": "array", "items": {"type": "string"}}})
     pin = D._obj({"num": {"type": "string"}, "name": {"type": "string"}})
     return D._obj({"package": pkg, "pins": {"type": "array", "items": pin},
@@ -256,6 +265,18 @@ def parse(msg):
     pkg = ext.get("package") if isinstance(ext, dict) else None
     if not isinstance(pkg, dict):
         raise Unavailable("the second read has no package")
+    if isinstance(pkg.get("dims"), list):            # this schema's dims list -> the per-field records read below
+        pkg = dict(pkg, pin_count=pkg.get("pin_count") or None)
+        for d in pkg["dims"]:
+            if isinstance(d, dict) and d.get("name") in CHECK_DIMS:
+                try:
+                    raw = dict(d, **{k: D._wire_num(d.get(k), f"{d['name']}.{k}") for k in ("min", "nom", "max")})
+                except D.DatasheetError as e:
+                    raise Unavailable(str(e))
+                if d["name"].startswith("exposed_pad."):
+                    pkg.setdefault("exposed_pad", {})[d["name"].split(".")[1]] = raw
+                else:
+                    pkg[d["name"]] = raw
     spec = {"name": pkg.get("name"), "package_type": pkg.get("package_type"),
             "pin_count": pkg.get("pin_count") if isinstance(pkg.get("pin_count"), int) else None}
 

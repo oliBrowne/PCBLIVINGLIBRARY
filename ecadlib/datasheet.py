@@ -440,7 +440,7 @@ def count_unions(s):
 def _wire_parts():
     full = output_schema()
     pk = full["properties"]["package"]["properties"]
-    other = {k: v for k, v in pk.items() if "anyOf" in v and k not in DIMS + NUM_DIMS + ["exposed_pad"]}
+    other = {k: v for k, v in pk.items() if "anyOf" in v and k not in DIMS + NUM_DIMS + ["exposed_pad", "unresolved"]}
     return full, pk, other
 
 
@@ -460,6 +460,9 @@ def wire_schema():
                 "figure": txt("figure/table title or drawing code it was read from")},
                "One dimension exactly as printed. No unit conversion, averaging or computed values.")
     props = {k: v for k, v in pk.items() if "anyOf" not in v}
+    props["unresolved"] = {"type": "array", "items": {"type": "string"},
+                           "description": "names of the dimensions above that could not be read with confidence (left "
+                                          "out of dims); empty if none"}
     props["dims"] = {"type": "array", "items": dim,
                      "description": "every dimension below that the drawing gives, once each; leave out the ones it "
                                     "does not give. " + names}
@@ -507,7 +510,9 @@ def from_wire(ext):
     for k in pk:
         if k in out:
             continue
-        if k == "exposed_pad":
+        if k == "unresolved":
+            out[k] = []
+        elif k == "exposed_pad":
             ep = {x: dims.get(f"exposed_pad.{x}") for x in ("length", "width")}
             out[k] = ep if any(ep.values()) else None
         elif k in DIMS or k in NUM_DIMS:
@@ -739,7 +744,7 @@ def _drop_nulls(v):
 
 def to_spec(pkg, part, datasheet, model, offset, review):
     spec, prov, unres = {"name": pkg["name"], "description": pkg["description"] or f"{part} package",
-                         "package_type": pkg["package_type"]}, {}, list(pkg["unresolved"])
+                         "package_type": pkg["package_type"]}, {}, list(pkg.get("unresolved") or [])
     for k in ("pin_count", "pins_left_right", "pins_top_bottom"):
         if pkg.get(k) is not None:
             spec[k] = pkg[k]

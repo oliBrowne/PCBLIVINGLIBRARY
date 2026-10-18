@@ -342,7 +342,9 @@ def test_pages_arg():
 def test_wire_answer_round_trips_and_stays_under_the_union_limit():
     """The live API refused every read ("184 parameters with type arrays or anyOf ... limit: 16"): the request asks
     for dims as named records and the optional fields as one JSON text, and the answer comes back to the old shape."""
+    from ecadlib import crosscheck as CC, visual_check as V
     assert D.count_unions(D.wire_schema()) <= D.MAX_UNIONS < D.count_unions(D.output_schema())
+    assert D.count_unions(CC.output_schema()) <= D.MAX_UNIONS and D.count_unions(V.output_schema()) <= D.MAX_UNIONS   # 26 refused
     w = D.to_wire(GOOD)
     assert D.from_wire(w) == GOOD and D.from_wire(GOOD) == GOOD          # recorded answers (old shape) pass through
     assert D.parse_message(message(w)) == GOOD
@@ -356,7 +358,10 @@ def test_wire_answer_round_trips_and_stays_under_the_union_limit():
         raise AssertionError("text accepted as a number")
     except D.DatasheetError as e:
         assert "pitch.nom" in str(e)
-    w = D.to_wire(GOOD)
+    w = D.to_wire(GOOD)                               # unresolved is its own list; a blank answer gives [] not None
+    w["package"]["other_json"] = "{}"
+    assert D.from_wire(w)["package"]["description"] is None and D.from_wire(w)["package"]["unresolved"] == GOOD["package"]["unresolved"]
+    D.process(D.parse_message(message(dict(w, package={k: v for k, v in w["package"].items() if k != "unresolved"}))), "TESTPART", "x")
     w["package"]["other_json"] = "{broken"
     try:
         D.parse_message(message(w))
