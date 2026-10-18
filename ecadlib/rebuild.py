@@ -392,7 +392,9 @@ def check(lib_dir, keep=None, log=print):
         dst = tmp / lib_dir.name
         if dst.exists():
             shutil.rmtree(dst)
-        shutil.copytree(lib_dir, dst, ignore=shutil.ignore_patterns(".ecadlib_backup", "*.tmp"))
+        # without the change-control ledger: the rebuild must reproduce the files, not be held back to them
+        shutil.copytree(lib_dir, dst, ignore=shutil.ignore_patterns(".ecadlib_backup", "*.tmp", ".ecadlib",
+                                                                    "library.ledger.jsonl", "library.usage.json"))
         # the copy points at the same BOM, libraries and cache: write the lock's relative paths as absolute
         lk = json.loads((dst / LOCK).read_text(encoding="utf-8"))
         lk["bom"]["file"] = str(_abs(lk["bom"]["file"], lib_dir))

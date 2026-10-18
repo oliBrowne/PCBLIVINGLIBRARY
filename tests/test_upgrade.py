@@ -83,7 +83,7 @@ def test_old_workspaces_open_and_rebuild_the_same_parts():
             w.librarian_run("uploads/board.csv")
             backups = list((lib / MG.BACKUP).glob("librarian_state-v1-*/librarian_state.json"))
             assert len(backups) == 1 and backups[0].read_bytes() == old_state_bytes, label
-            assert json.loads((lib / MG.STAMP).read_text())["kinds"] == {"approvals_audit": 1, "librarian_state": 2, "plan": 1} \
+            assert json.loads((lib / MG.STAMP).read_text())["kinds"] == {"approvals_audit": 1, "ledger": 1, "librarian_state": 2, "plan": 1} \
                 if (lib / "approvals_audit.jsonl").exists() else True
             assert MG.folder_version(lib, "librarian_state")[0] == 2
             new = {i["name"]: i for i in json.loads((lib / "plan.json").read_text())}
@@ -279,7 +279,7 @@ def test_lock_records_inputs_and_is_stable():
         text, stamp = (lib / RB.LOCK).read_bytes(), (lib / MG.STAMP).read_bytes()
         L.run(Path(d) / "bom.csv", out=lib, offline=True, cache=Path(d) / "cache", rules={}, log=lambda *a: None)
         assert (lib / RB.LOCK).read_bytes() == text and (lib / MG.STAMP).read_bytes() == stamp, "a re-run changes nothing"
-        assert json.loads(stamp)["kinds"] == {"librarian_state": 2, "plan": 1}
+        assert json.loads(stamp)["kinds"] == {"ledger": 1, "librarian_state": 2, "plan": 1}   # ledger: change control
 
 
 def test_rebuild_check_passes_then_reports_drift():
@@ -354,7 +354,8 @@ def test_pcblib_dates_are_the_only_wall_clock_value():
         for f in sorted(a.rglob("*")):             # everything else ecadlib writes for the library is byte-identical
             rel = f.relative_to(a)
             if f.is_file() and f.suffix not in (".PcbLib", ".md", ".json") and ".ecadlib" not in str(rel) \
-                    and f.name != "timing.jsonl":   # how long each step took: wall clock by design (ecadlib.timing)
+                    and f.name not in ("timing.jsonl",          # how long each step took: wall clock by design
+                                       "library.ledger.jsonl"):  # when each revision was released (change control)
                 assert f.read_bytes() == (b / rel).read_bytes(), rel
         la, lb = RB.read_lock(a), RB.read_lock(b)
         assert [r for r in RB.compare(la, lb) if r["result"] == "DRIFT"] == []

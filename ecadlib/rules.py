@@ -144,6 +144,9 @@ DEFAULTS["hub"] = {"libraries": [], "projects": [], "stale_days": 14}
 # profile exists; off = never. The model for `ecadlib style learn/apply --ai` may be set here ("" = [ai]).
 DEFAULTS["style"] = {"profile": "house_style.json", "apply": "auto", "model": "", "api_key_env": "",
                      **{k: "" for k in _LL.SECTION_KEYS}}
+# [change]: change control (ecadlib.change_gate): what a change to a released part needs, per class of change.
+DEFAULTS["change"] = {"identity": "hold", "electrical": "hold", "geometry_major": "hold", "geometry_minor": "warn",
+                      "cosmetic": "pass", "approvers": 1}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
@@ -151,7 +154,7 @@ INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): 
              ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600), ("datasheet", "page_budget"): (0, 600),
              ("datasheet", "max_attempts"): (1, 10),
              ("agent", "interval_minutes"): (1, 10_080), ("agent", "batch_size"): (1, 500),
-             ("notify", "retries"): (0, 10), ("notify", "timeout_s"): (1, 120), ("hub", "stale_days"): (1, 3650)}
+             ("notify", "retries"): (0, 10), ("change", "approvers"): (1, 9), ("notify", "timeout_s"): (1, 120), ("hub", "stale_days"): (1, 3650)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
 
@@ -398,6 +401,12 @@ def validate(raw, where="ecadlib.toml"):
         try:
             normalize_policy(dict(raw["release"]["approvals"]), f"{where}: release.approvals")
         except (ValueError, TypeError) as e:
+            raise RulesError(str(e)) from None
+    if raw.get("change"):
+        from .change_gate import normalize_policy as change_policy
+        try:
+            change_policy(dict(raw["change"]), f"{where}: [change]")
+        except ValueError as e:
             raise RulesError(str(e)) from None
     _check_symbols(where, raw.get("symbols") or {})
     ag = raw.get("agent") or {}
@@ -851,6 +860,13 @@ HELP = {
     "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header, or field = [\"header\", \"alias\"])",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
     "release.parity": "hold | warn | off: a part whose KiCad and Altium files differ (pads, drills, courtyard, 3D, pins) is held",
+    "change": "Change control: what a change to a released part needs, per class (hold = a person approves it, warn = "
+              "released and listed, pass = released); approvers = people per held change (2 = two-person rule)",
+    "change.identity": "hold | warn: the MPN, manufacturer or value changed",
+    "change.electrical": "hold | warn: pins renamed / swapped / retyped, pins or pads added or removed, pin -> pad changed",
+    "change.geometry_major": "hold | warn | pass: pads moved, rotated, resized beyond tolerance, drills, 3D origin",
+    "change.geometry_minor": "hold | warn | pass: pad size within tolerance, corner rounding, margins, courtyard, 3D height",
+    "change.cosmetic": "hold | warn | pass: silkscreen, fab, texts, symbol graphics, pin lengths, other fields",
     "sim": "Parasitics for the built-in passive simulation models (sim-models), e.g. capacitor_esr = \"10m\"",
     "datasheet": "Claude datasheet reader (ecadlib datasheet / librarian): model, effort, which environment variable holds the "
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",

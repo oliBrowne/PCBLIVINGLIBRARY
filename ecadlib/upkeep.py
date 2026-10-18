@@ -277,6 +277,12 @@ def check_sourcing(src, state_dir, ctx, cfg, now, rules=None):
 
 
 # ------------------------------------------------------------------ KiCad upstream
+def _gate_folder(manifest):
+    """The library folder change control keeps the ledger in for a manifest: the plan's folder, else the manifest's."""
+    m = Path(manifest).parent
+    return next((d for d in (m, m.parent) if (d / "plan.json").is_file()), m)
+
+
 def check_upstream(src, state_dir, ctx, cfg, now, apply=False):
     from . import upstream as U
     sec = _section("upstream")
@@ -299,13 +305,21 @@ def check_upstream(src, state_dir, ctx, cfg, now, apply=False):
         if ch:
             pins = {r["_src"]["url"]: r["_text"] for r in ch if r["_src"].get("url") and r["_text"] is not None}
             todo = sorted({r["entry"] for r in ch})
-            done = U.reconvert([man["entries"][e] for e in todo], src.manifest.parent, U.Pinned(ctx.http, pins))
+            from . import change_gate as CG            # never applies a change to a released part: it is held (#105)
+            done, held, gate_rows = CG.guarded_rewrite(
+                src.manifest, "upstream-update",
+                lambda: U.reconvert([man["entries"][e] for e in todo], src.manifest.parent, U.Pinned(ctx.http, pins)))
             for r in rows:
                 rep = done.get(json.dumps(r["spec"], sort_keys=True))
                 if rep:
                     r["update"] = "reconverted" if rep.get("ok") else f"reconvert failed: {rep.get('error')}"
-                    if rep.get("ok"):
+                    out = str((src.manifest.parent / man["entries"][r["entry"]]["output"]).resolve())
+                    if rep.get("ok") and out in held:
+                        r["update"] = held[out]
+                    elif rep.get("ok"):
                         applied[r["entry"]] = man["entries"][r["entry"]]["output"]
+            if gate_rows:                              # the ledger and its blobs travel with the library files
+                sec["ledger"] = [str(_gate_folder(src.manifest) / n) for n in ("library.ledger.jsonl", ".ecadlib")]
     for r in rows:
         if r["status"] in ("unchanged", "error"):
             continue
@@ -313,6 +327,13 @@ def check_upstream(src, state_dir, ctx, cfg, now, apply=False):
         if r.get("update") == "reconverted":
             sec["changes"].append(_change("reconverted", r["entry"], r["source"], r["upstream_commit"] or "upstream", r["summary"]))
             continue                                       # the manifest now matches upstream: nothing left to remember
+        if (r.get("update") or "").startswith("held:"):    # reported once when first held, then waits on a person
+            hk = _fp(r["entry"], r["source"], "held", key)
+            seen[hk] = {"entry": r["entry"], "source": r["source"], "status": "held",
+                        "first_seen": old["seen"].get(hk, {}).get("first_seen", now)}
+            if hk not in old["seen"]:
+                sec["changes"].append(_change("held for approval", r["entry"], r["source"],
+                                              r["upstream_commit"] or "upstream", r["update"][len("held: "):]))
         seen[key] = {"entry": r["entry"], "source": r["source"], "status": r["status"], "first_seen": old["seen"].get(key, {}).get("first_seen", now)}
         if key not in old["seen"]:
             sec["changes"].append(_change(f"KiCad {r['status']}", r["entry"], r["source"],
@@ -328,6 +349,7 @@ def check_upstream(src, state_dir, ctx, cfg, now, apply=False):
     sec["applied"] = [str(src.manifest.parent / f) for f in sorted(set(applied.values()))]
     if sec["applied"]:
         sec["applied"].append(str(src.manifest))
+    sec["applied"] += sec.pop("ledger", [])
     counts = {s: sum(v == s for v in worst.values()) for s in U.RANK}
     sec["notes"].append(f"manifest `{src.manifest}`: " + ", ".join(f"{v} {s}" for s, v in counts.items() if v))
     unsafe = [r["entry"] for r in rows if r["status"] in ("renamed", "deleted")]

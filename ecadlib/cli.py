@@ -37,6 +37,7 @@
     ecadlib project   BOARD.PrjPcb [-o bom.csv] [--variant V]   BOM straight from an Altium project (.PrjPcb/.SchDoc)
     ecadlib hub       [-q WORDS] [--have T] [--lack T] [--part P]   your library across tools: every part once, a column per tool
     ecadlib where-used --projects DIR... [--part X] [--plan plan.json]   which projects use which library part
+    ecadlib part      status|show|diff|history|approve|reject|revert [LIBRARY]   change control for released parts
     ecadlib step-gen  SPEC.json|FOOTPRINT -o x.step   package-shaped 3D model (STEP); --check FILE.step validates
     ecadlib upkeep    PLAN|BOM [--checks ...] [--apply] [--github issue|pr]   weekly checks, only what is new, one issue/PR
     ecadlib sim-models plan.json [--models DIR] [--attach]   find, check and attach SPICE / IBIS simulation models
@@ -109,6 +110,7 @@ COMMANDS = {
     "project": ("ecadlib.altium_project", "BOM straight from an Altium project (.PrjPcb / .SchDoc / ActiveBOM)"),
     "hub": ("ecadlib.hub", "your library across tools: every part once, a column per tool, last changed and by whom"),
     "where-used": ("ecadlib.altium_project:where_used_main", "which projects use which library part, and flags"),
+    "part": ("ecadlib.change_cli", "change control: held changes to released parts, diff, history, approve / reject / revert"),
     "sim-models": ("ecadlib.sim_models", "find, check and attach SPICE / IBIS simulation models for a plan"),
     "agent-watch": ("ecadlib.agent_watch", "library agent watch step: new / changed / removed parts in watched projects and BOMs"),
     "agent": ("ecadlib.agent", "library agent: watch projects, build + prove parts, batch PRs, push approved parts, upkeep"),

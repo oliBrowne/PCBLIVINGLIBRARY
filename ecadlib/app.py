@@ -603,14 +603,14 @@ class Workspace:
 
     _CID = re.compile(r"(kicad|local):[^:/\\\0]+:[^:/\\\0]+|spec:[^:/\\\0]+")
 
-    def choose_part(self, bom, part, kind, candidate_id, pin_map=None):
+    def choose_part(self, bom, part, kind, candidate_id, pin_map=None, user=None):
         """Use a candidate (kicad:Lib:Name, local:Lib:Name or spec:Name) for one half of a plan item, convert it into
         the librarian's models folder, then re-run the release check and rewrite the review / release-check reports.
         pin_map {symbol pin: pad} remaps pin numbers. Returns the librarian summary plus `chosen`."""
         with self._plan_lock():
-            return self._choose_part(bom, part, kind, candidate_id, pin_map)
+            return self._choose_part(bom, part, kind, candidate_id, pin_map, user)
 
-    def _choose_part(self, bom, part, kind, candidate_id, pin_map=None):
+    def _choose_part(self, bom, part, kind, candidate_id, pin_map=None, user=None):
         from . import resolve as R
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
@@ -622,7 +622,8 @@ class Workspace:
                 isinstance(a, str) and isinstance(b, str) and a and b and len(a) < 40 and len(b) < 40 for a, b in pin_map.items())):
             raise ValueError("pin_map must map symbol pin numbers to pad numbers, e.g. {\"S1\": \"SH\"}")
         try:
-            chosen = R.choose(plan_f, part, kind, candidate_id, src=self._resolve_sources(), pin_map=pin_map or None)
+            chosen = R.choose(plan_f, part, kind, candidate_id, src=self._resolve_sources(), pin_map=pin_map or None,
+                              user=user)
         except FileNotFoundError as e:
             raise ValueError(str(e)) from e
         out = self._release_check(bom)    # the whole plan again (lock already held): reports, statuses, approvals

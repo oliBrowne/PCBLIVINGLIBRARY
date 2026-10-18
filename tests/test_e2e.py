@@ -423,13 +423,15 @@ def test_mcp_server_over_stdio():
 # ---------------------------------------------------------------- 3. again, and after a crash
 LOGS = re.compile(r"(^|/)(datasheet/api_log|timing)\.jsonl$")   # append-only logs: API requests (held parts are asked
                                                                   # again), each run's step times (ecadlib.timing)
-REFRESHED = re.compile(r"^(ecadlib\.toml\.proposed|lib/[^/]+/librarian_state\.json|lib/parts/review\.(md|csv|html))$")
+REFRESHED = re.compile(r"^(ecadlib\.toml\.proposed|lib/[^/]+/librarian_state\.json|lib/parts/review\.(md|csv|html)"
+                       # change control: the part released by run 1's --allow gets its revision 1 on run 2
+                       r"|lib/parts/(library\.ledger\.jsonl|library\.usage\.json|\.ecadlib/blobs/.*))$")
 
 
 def test_second_run_changes_nothing():
     """The whole path again on the same folder, twice. Run 2 changes only: the API log, the librarian's per-run state
-    (which parts it skipped), review.md/.csv (written before the --allow on run 1, so now up to date) and init's
-    proposal (ecadlib.toml itself is kept). Run 3 changes nothing but the log: no duplicate parts, no file rewritten
+    (which parts it skipped), review.md/.csv (written before the --allow on run 1, so now up to date), init's
+    proposal (ecadlib.toml itself is kept) and the ledger (the part released by --allow gets its revision 1). Run 3 changes nothing but the log: no duplicate parts, no file rewritten
     with a new timestamp, no reordered plan.json."""
     g = gp()
     snaps = [g["snapshot"]]

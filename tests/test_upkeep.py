@@ -146,9 +146,18 @@ def test_upstream_new_only_then_apply_reconverts():
 
         old_sha = json.loads((plan.parent / "manifest.json").read_text())["entries"]["footprint:USB_C_16P"]["output_sha256"]
         r = go(TU.upstream_now(TU.USB2, TU.REG), NOW3, apply=True)
-        assert ("reconverted", "footprint:USB_C_16P") in kinds(r, "upstream"), kinds(r, "upstream")
-        assert sorted(Path(p).name for p in r["applied_paths"]) == ["TYPE-C-31-M-12.SchLib", "USB_C_16P.PcbLib", "manifest.json"], \
-            r["applied_paths"]                                            # the spec's symbol is rewritten with it
+        # change control (#105): upkeep never applies an electrical change to a released part (pad B12 removed): it
+        # is held, reported once, and only the ledger (with the proposal) is written
+        assert kinds(r, "upstream") == [("held for approval", "footprint:USB_C_16P")], kinds(r, "upstream")
+        assert "pad B12 removed" in section(r, "upstream")["changes"][0]["detail"]
+        assert sorted(Path(p).name for p in r["applied_paths"]) == [".ecadlib", "library.ledger.jsonl"], r["applied_paths"]
+        assert json.loads((plan.parent / "manifest.json").read_text())["entries"]["footprint:USB_C_16P"]["output_sha256"] == old_sha
+        assert go(TU.upstream_now(TU.USB2, TU.REG), NOW3, apply=True)["new_changes"] == 0    # not again next week
+        from ecadlib import change_cli as CC, ledger as LG
+        [prop] = LG.Ledger(plan.parent).proposals()
+        plan_text = plan.read_text()
+        assert CC.approve(plan, [prop["part"]], who="Ann <ann@example.com>")[0]["result"] == "released"
+        assert json.loads(plan.read_text()) == json.loads(plan_text)     # a kicad_import part is not a plan item
         new = json.loads((plan.parent / "manifest.json").read_text())["entries"]["footprint:USB_C_16P"]
         assert new["output_sha256"] != old_sha and new["sources"][0]["blob_id"] == TU.U.digests(TU.USB2)[1]
         assert "## Applied" in out.with_suffix(".md").read_text()
