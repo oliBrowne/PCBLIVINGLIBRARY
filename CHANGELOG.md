@@ -13,6 +13,7 @@ a minor release may change command-line options and file formats.
 - `ecadlib status` shows the review rate: of the parts built, how many passed first time, are held (with the top reasons), were approved, rejected or changed by a person (#45). `status --json` has `review`, overall and per plan.
 - docs/START_HERE.md asks people trying ecadlib to send those two lines.
 - `ecadlib eval run` reports the parts that never reached the model (no datasheet PDF could be fetched) apart, with the pass rate without them (`summary.no_datasheet`, `summary.with_datasheet`).
+- A logo: the Sprout Trace mark (a copper trace growing from a via into two leaves) on the website, its favicon, the web UI, the KiCad toolbar button and the Windows icon, with copper as the one accent colour. docs/brand.md has the rules; `site/brand/` has the files.
 
 ### Changed
 
