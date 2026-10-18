@@ -45,7 +45,7 @@ Q_DEFS = """query ($ws: String!) {
 }"""
 
 Q_FIND = """query ($ws: String!, $name: String!) {
-  desLibrary(workspaceUrl: $ws) { components(first: 1, where: {name: {eq: $name}}) { nodes { id name revision { revisionId } details { parameters { name value } } } } }
+  desLibrary(workspaceUrl: $ws) { components(first: 20, where: {name: {eq: $name}}) { nodes { id name revision { revisionId } details { parameters { name value } } } } }
 }"""
 
 Q_BY_ID = """query ($id: ID!) { desComponentById(id: $id) { id name revision { revisionId } details { parameters { name value } } } }"""
@@ -69,6 +69,15 @@ M_CREATE_FOLDER = """mutation ($input: DesCreateFolderInput!) { desCreateFolder(
 M_UPDATE_PARAMS = """mutation ($input: DesUpdateComponentRevisionParametersInput!) {
   desUpdateComponentRevisionParameters(input: $input) { componentId errors { message } }
 }"""
+
+
+def pick_named(nodes, name):
+    """The node that is item `name` ("SS34" or its revision "SS34-1"), or None. Live 2026-10-18: the
+    `name: {eq: "AMS1117-3.3"}` filter also returns Altium's sample part CMP-017-000002-1 (it matches more than
+    the item name), so a hit is only a match when its own name is the item's."""
+    import re
+    rev = re.compile(re.escape(name or "") + r"(-[^-]+)?$", re.I)
+    return next((n for n in nodes or [] if name and rev.fullmatch(n.get("name") or "")), None)
 
 
 class NexarError(Exception):
@@ -104,8 +113,7 @@ class Nexar:
 
     def find(self, ws, name):
         conn = self.gql(Q_FIND, {"ws": ws, "name": name})["desLibrary"]["components"] or {}
-        nodes = conn.get("nodes") or []
-        return nodes[0] if nodes else None
+        return pick_named(conn.get("nodes"), name)
 
     def component(self, cid):
         return self.gql(Q_BY_ID, {"id": cid})["desComponentById"]

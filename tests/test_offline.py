@@ -254,6 +254,20 @@ def test_altium365_find_model_matches_the_item_by_revision_name_in_its_folder():
         assert "Components/Models/Symbols" in str(e), e
 
 
+def test_altium365_find_ignores_other_items_the_name_filter_returns():
+    """Live 2026-10-18: components(where: {name: {eq: "AMS1117-3.3"}}) returned Altium's sample part
+    CMP-017-000002-1, so a push would have updated it as ours. Only a node named as the item (or its revision) counts."""
+    sample = {"id": "s", "name": "CMP-017-000002-1"}
+    assert A.pick_named([sample], "AMS1117-3.3") is None
+    assert A.pick_named([sample, {"id": "o", "name": "AMS1117-3.3-1"}], "AMS1117-3.3")["id"] == "o"
+    assert A.pick_named([{"id": "p", "name": "SS34"}], "ss34")["id"] == "p"
+    assert A.pick_named([{"id": "q", "name": "SS34-SYM-1"}], "SS34") is None and A.pick_named([], "x") is None
+    class N(A.Nexar):
+        def __init__(self): self.token = "t"
+        def gql(self, query, variables=None): return {"desLibrary": {"components": {"nodes": [sample]}}}
+    assert N().find("https://ws", "AMS1117-3.3") is None
+
+
 def test_altium365_ops_match_nexar_schema():
     """Every query/mutation, and a release input built by plan(), validates against Nexar's schema."""
     try:
