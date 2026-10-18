@@ -142,7 +142,7 @@ the window stops ecadlib. Nothing runs in the background after that.
 ## If something is wrong
 
 - **The browser page does not open:** go to <http://127.0.0.1:8765/> yourself.
-- **"Altium 365: NEXAR_TOKEN is not set":** save the token on the setup page (**Optional keys**), then try again.
+- **"no Altium 365 (Nexar) token":** save the token on the setup page (**Optional keys**), then try again.
   Altium does not need a restart.
 - **The ecadlib menu says "ecadlib was not found":** press **Add to Altium** on the setup page again.
 - **"API key refused":** copy the key again from your provider's page. Then on the setup page, press **Save key** and

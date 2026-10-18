@@ -173,7 +173,8 @@ class EvalReader(D.Reader):
         u.update(usage=msg.get("usage"), model=DR.billed_model(rec.get("model") or job.get("model") or self.model, msg))
         # every answer the part's route paid for (cheaper / fewer-page tries first, this one last): all count in the cost
         atts = (job["recording"].get("attempts") if job.get("recording") else
-                [{"model": a.get("served") or a.get("model"), "usage": a.get("usage")} for a in (job.get("route") or {}).get("attempts") or []])
+                [{"model": a.get("served") or a.get("model"), "usage": a.get("usage"), "via": a.get("via")}
+                 for a in (job.get("route") or {}).get("attempts") or []])
         u["attempts"] = atts or []
         if self.record and not job.get("recording"):
             self.record.mkdir(parents=True, exist_ok=True)
@@ -213,7 +214,8 @@ def _cost(case_used, model):
             au = a.get("usage") or {}
             tin += au.get("input_tokens", 0) + au.get("cache_creation_input_tokens", 0) + au.get("cache_read_input_tokens", 0)
             tout += au.get("output_tokens", 0)
-            c = usd(a.get("model") or model, au) if au else None
+            ab = str(a["via"] or "").startswith("batch") if "via" in a else bat   # older recordings: the kept answer's way
+            c = usd(a.get("model") or model, au, ab) if au else None
             cost = None if cost is None or c is None else round(cost + c, 6)
         if earlier:
             how += f" + {len(earlier)} earlier answer{'s' if len(earlier) > 1 else ''}"
@@ -348,7 +350,7 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
            "summary": summarize(rows), "cases": rows}
     for i in range(2, max(1, int(repeat or 1)) + 1):
         again = run(set_name, out / f"repeat-{i}", limit, model, None, replay or record, sources, families, ids, offline, cache,
-                    http, api_key, rules, providers, tol, log, provider, base_url, assist, api_key_env)
+                    http, api_key, rules, providers, tol, log, provider, base_url, assist, api_key_env, batch=batch)
         c = consistency(rep, again)
         prev = rep["summary"].get("consistency")
         if prev is None or c["same"] < prev["same"]:

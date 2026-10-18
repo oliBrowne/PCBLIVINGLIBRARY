@@ -13,7 +13,7 @@ Standard library only (plus jsonschema): newline-delimited JSON-RPC 2.0 on stdin
 Streamable HTTP), tools capability only. Every call runs as a job: one that is not done within --wait seconds answers
 with a job id for job_status instead of running into the client's timeout. Logs go to stderr; file descriptor 1 is
 moved aside so not even a child process can corrupt the protocol stream."""
-import argparse, contextlib, json, sys, traceback
+import argparse, contextlib, json, re, sys, traceback
 
 from . import __version__
 from .app import Workspace
@@ -860,14 +860,45 @@ def _check_paths(ws, args):
         elif k == "sources" and isinstance(v, list):
             vals += [("sources.ref", x.get("ref")) for x in v if isinstance(x, dict) and isinstance(x.get("ref"), str)
                      and x.get("type") in ("bom_file", "folder", "altium_project")]
+    if "toml" in args and isinstance(args["toml"], str):   # save_rules: rules settings that name a file ([style]
+        vals += [(f"toml {k}", x) for k, x in _rule_paths(args["toml"])]   # profile, [agent.watch] sources, ...)
     for k, x in vals:
         if x.startswith(("http://", "https://")) or not x.strip():
             continue
         p = Path(x).expanduser()
+        if not p.is_absolute() and re.match(r"[A-Za-z]:[\\/]|\\\\", x):   # a Windows path on another OS
+            raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens files "
+                             "there (start it with --any-path to allow more)")
         p = (p if p.is_absolute() else ws.root / p).resolve()
         if not any(p == r or r in p.parents for r in (Path(r).resolve() for r in roots)):
             raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens files "
                              "there (start it with --any-path to allow more)")
+
+
+def _rule_paths(text):
+    """(key, value) of every string in a rules TOML that reaches outside the folder it is read from: an absolute
+    path (also C:\\..., ~/...) or one with a '..' step. Relative ones stay in the workspace."""
+    import re
+    from .rules import toml_module
+    lib = toml_module()
+    if lib is None:
+        return []
+    try:
+        data = lib.loads(text)
+    except Exception:
+        return []                                 # save_rules reports the syntax error itself
+
+    def walk(v, at):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                yield from walk(x, f"{at}.{k}" if at else str(k))
+        elif isinstance(v, list):
+            for x in v:
+                yield from walk(x, at)
+        elif isinstance(v, str) and (v.startswith(("/", "\\", "~")) or re.match(r"[A-Za-z]:[\\/]", v)
+                                     or ".." in re.split(r"[\\/]", v)):
+            yield at, v
+    return list(walk(data, ""))
 
 
 # ------------------------------------------------------------------ answers
@@ -900,8 +931,10 @@ def _job_view(ws, j):
             "next": f"Still running. Call job_status with id {j['id']!r} to wait for the result (up to {wait} s per call)."}
 
 
-def _await(ws, jid, wait, notify=None, token=None):
-    """Wait up to `wait` seconds for a job; -> a tools/call result (the tool's answer once done, else the job)."""
+def _await(ws, jid, wait, notify=None, token=None, forget=False):
+    """Wait up to `wait` seconds for a job; -> a tools/call result (the tool's answer once done, else the job).
+    forget: drop the job once its answer is given here, so quick calls don't push a slow job's result out of the
+    last 20 the job list keeps."""
     import time
     jobs, end, sent, last = _jobs(ws), time.time() + max(0.0, wait), [0], None
     while True:
@@ -922,6 +955,9 @@ def _await(ws, jid, wait, notify=None, token=None):
             return _result(ws, _job_view(ws, j))
         time.sleep(0.05 if time.time() - j["started"] < 2 else 0.25)
     out = j["result"]
+    if forget:
+        with jobs.lock:
+            jobs.jobs.pop(jid, None)
     if j["state"] == "cancelled":
         return _result(ws, "stopped: the job was cancelled before it finished (finished parts are kept)", True)
     if j["state"] == "error" or (isinstance(out, tuple) and out[0] == "error"):
@@ -941,6 +977,14 @@ def _job_status(ws, args, notify=None, token=None):
     return _await(ws, jid, _opts(ws).wait if wait is None else min(float(wait), 600), notify, token)
 
 
+def _bom_key(ws, bom):
+    """x.csv, ./x.csv and its full path are one BOM."""
+    try:
+        return str(ws._bom_path(bom).resolve())
+    except (ValueError, OSError):                 # outside the workspace: the tool itself says so
+        return str(bom)
+
+
 def _call(ws, tool, args, notify=None, token=None):
     """Run a tool as a job and wait for it up to the server's wait: a quick tool answers at once, a slow one answers
     with a job id instead of running into the client's timeout (Codex stops waiting after 60 s by default)."""
@@ -950,7 +994,7 @@ def _call(ws, tool, args, notify=None, token=None):
     if _opts(ws).confine:
         _check_paths(ws, args)
     jobs = _jobs(ws)
-    key = None if name in READ_ONLY or not args.get("bom") else f"bom:{args['bom']}"   # one writer per BOM at a time
+    key = None if name in READ_ONLY or not args.get("bom") else f"bom:{_bom_key(ws, args['bom'])}"   # one writer per BOM
     busy = key and jobs.running(key)
     if busy:
         return _result(ws, f"{busy.get('tool')} is still running on {args['bom']} (job {busy['id']}): call job_status "
@@ -966,7 +1010,7 @@ def _call(ws, tool, args, notify=None, token=None):
             return ("error", _error_text(e))
     jid = jobs.start(run, label=name, key=key)["job"]
     jobs.jobs[jid]["tool"] = name
-    return _await(ws, jid, _opts(ws).wait, notify, token)
+    return _await(ws, jid, _opts(ws).wait, notify, token, forget=True)
 
 
 def handle(ws, msg, notify=None):

@@ -36,6 +36,8 @@ def money(v):
         return "price unknown"
     if v == 0:
         return "$0 (free)"
+    if v < 0.001:
+        return "under $0.001"
     return f"${v:.2f}" if v >= 0.095 else f"${v:.3f}" if v >= 0.001 else "under $0.001"
 
 
@@ -174,7 +176,7 @@ def after(q, got):
     return r
 
 
-def style_quote(system, user, schema, model, rules=None, max_tokens=8000, retry=True):
+def style_quote(system, user, schema, model, rules=None, max_tokens=8000, retry=True, key_set=True):
     """The house style guide request priced the same way (one request; a second one only when the answer does not
     fit). -> a quote dict like quote()'s, step "style"."""
     from . import ds_route as DR
@@ -185,11 +187,13 @@ def style_quote(system, user, schema, model, rules=None, max_tokens=8000, retry=
     worst = round((tin * p[0] + max_tokens * p[1]) / 1e6 * (2.2 if retry else 1), 4) if p else None
     q = {"step": "style", "parts": 1, "names": [], "model": model, "usd": usd, "usd_max": worst, "limit_usd": lim,
          "limit_name": which, "price_known": worst is not None, "over_limit": worst is None or (lim > 0 and worst > lim),
-         "exact": False, "cross_check": False, "key_set": True, "skipped": [], "cached": []}
+         "exact": False, "cross_check": False, "key_set": bool(key_set), "skipped": [], "cached": []}
     q["approve_usd"] = round(worst + TOLERANCE, 2) if worst is not None else None
     if worst is None:
         q["text"] = f"Writing the style guide asks {model} once; ecadlib does not know its price."
     else:
         q["text"] = (f"Writing the style guide asks {model} once: about {money(usd)}, at most {money(worst)}."
                      + (f" That is more than your limit of {money(lim)} ([datasheet] {which})." if q["over_limit"] else ""))
+    if not key_set:
+        q["text"] += " No API key is stored for it yet: add one on the setup page or with `ecadlib keys set`."
     return q

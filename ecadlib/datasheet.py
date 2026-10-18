@@ -485,6 +485,10 @@ def _wire_num(v, where):
     s = str(v if v is not None else "").strip().replace(",", ".")
     if s in ("", "-", "—", "–", "null", "n/a", "N/A"):
         return None
+    # as printed on the drawing: "0.50 BSC", "1.27 TYP", "(0.2)" (a reference value), "−0.05" (a Unicode minus)
+    s = s.replace("\u2212", "-").replace("\u2013", "-")
+    s = re.sub(r"\s*\b(BSC|TYP|TYPICAL|REF|NOM|MAX|MIN)\b\.?", "", s, flags=re.I).strip()
+    s = re.sub(r"^[(\[](.*)[)\]]$", r"\1", s).strip()
     try:
         return float(s)
     except ValueError:
@@ -1878,7 +1882,7 @@ class Reader:
                          "usd_max": worst, "usd_max_route": route_max, "start": (j.get("route") or {}).get("start"),
                          "url": j["url"]})
         known = all(r["usd"] is not None for r in rows)
-        tot = lambda k: round(sum(r[k] for r in rows), 2) if known and all(r[k] is not None for r in rows) else None
+        tot = lambda k: round(sum(r[k] for r in rows), 4) if known and all(r[k] is not None for r in rows) else None
         one = next(iter(models)) if len(models) == 1 else None
         price = lambda m: f"{m} ${price_of(m)[0]}/${price_of(m)[1]}" if price_of(m) else f"no price known for {m}"
         self.last_estimate = {"model": one or self.model, "models": models, "route": self.router.route,
