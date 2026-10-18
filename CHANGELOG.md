@@ -37,6 +37,8 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Converted footprints were all labelled "(CC-BY-SA 4.0)" in their description, including EasyEDA parts, your own `--lib` files and footprints ecadlib generated; only parts from the KiCad libraries are labelled now (#54).
+- A part whose symbol or footprint comes from the KiCad libraries now gets a `Library Credit` parameter on the Altium side, as EasyEDA parts already did, and the librarian writes a `NOTICE.txt` in its output folder naming the third-party terms of the parts in it (#54).
 - MCP `librarian_run` ran the paid datasheet reader without a price or a yes. It now prices those parts (`ai`) like the other front ends, and `ai_read` needs the approved amount. `learn_house_style` with `ai` returns a quote too.
 - MCP calls that take longer than `--wait` (default 45 s) answer with a job id for `job_status` instead of running into the client's timeout (Codex waits 60 s).
 - MCP: a child process (kicad-cli, pdftoppm, git) can no longer write into the protocol stream on stdout.

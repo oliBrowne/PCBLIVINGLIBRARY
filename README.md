@@ -2129,6 +2129,13 @@ Parts converted from EasyEDA (the `easyeda` source, by LCSC number) come from th
 ecadlib keeps that credit on every converted part: in the footprint's description, as a `Credit` property on the KiCad
 symbol, and as a `Library Credit` parameter on the Altium part. Leave it in place if you share or publish the library.
 
+Parts whose symbol or footprint comes from the **KiCad libraries** ([gitlab.com/kicad/libraries](https://gitlab.com/kicad/libraries),
+CC-BY-SA 4.0 with a design-use exception) get the same treatment on the Altium side: the footprint description ends in
+`(CC-BY-SA 4.0)` and the part gets a `Library Credit` parameter naming the KiCad libraries, so the credit travels with it
+into a SchLib, a DbLib or Altium 365. Footprints ecadlib generates and parts from your own `--lib` folders are not
+labelled. The librarian also writes a `NOTICE.txt` in its output folder listing the third-party terms of the parts in
+that run, and removes it again when none are left.
+
 ## Releases
 
 The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyproject.toml` reads it from there. To cut a release:
