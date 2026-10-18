@@ -309,7 +309,8 @@ class Run:
             return
         pcb, stem = Path(pcb), AL.file_stem(name)
         notes = [f"named {name}: footprint {bom_name} is another part's, with other pads"] if renamed else []
-        fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes)
+        fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes,
+                                    K.KICAD_LICENSE if source.startswith("kicad:") else "")
         try:
             K.add_body(fp, t, http, height, False, notes, gen_step=self.gen_step, spec=spec,      # a part-specific
                        height_src=(height_src or "caller") if height else None,                      # height beats the table
@@ -726,6 +727,29 @@ def generated_description(item, st, ln):
     return ", ".join(x for x in (cat, pkg, who) if x)
 
 
+def is_kicad_source(source):
+    """A symbol or footprint taken from the KiCad libraries (CC-BY-SA 4.0), not generated or from your own files."""
+    return str(source or "").startswith("kicad:")
+
+
+def write_notice(out, items):
+    """<out>/NOTICE.txt naming the third-party terms of what the plan holds (KiCad CC-BY-SA, EasyEDA's credit);
+    removed again when nothing from those sources is left. Returns the path written, else None."""
+    from . import easyeda_convert as EC, kicad_export as KX
+    srcs = [str(s or "") for it in items for s in (it.get("source") or {}).values()]
+    text = (KX.KICAD_NOTICE if any(is_kicad_source(s) for s in srcs) else "") + \
+           (f"Parts converted from EasyEDA: {EC.CREDIT}. Keep this credit if you share the library.\n"
+            if any(s.startswith("easyeda:") for s in srcs) else "")
+    f = Path(out) / "NOTICE.txt"
+    if not text:
+        if f.is_file() and f.read_text(encoding="utf-8").startswith(("Parts of this library come from", "Parts converted from")):
+            f.unlink()
+        return None
+    if not f.is_file() or f.read_text(encoding="utf-8") != text:
+        write_text_atomic(f, text)
+    return f
+
+
 def apply_state(item, st, ln):
     """Copy a part's state into its plan item: model files, sources, filled-in fields, what was tried."""
     for k in ("symbol", "footprint"):
@@ -754,9 +778,12 @@ def apply_state(item, st, ln):
     if not par.get("Manufacturer") and "manufacturer" in st.get("found", {}):
         v, w = st["found"]["manufacturer"]
         _set_par(item, "Manufacturer", v); fields["Manufacturer"] = w
-    if "credit" in st.get("found", {}):          # EasyEDA's library data asks for this credit on every reuse
-        v, w = st["found"]["credit"]
-        _set_par(item, "Library Credit", v); fields["Library Credit"] = w
+    credits = [st["found"]["credit"]] if "credit" in st.get("found", {}) else []   # EasyEDA asks for credit on every reuse
+    kicad = [k for k in ("symbol", "footprint") if is_kicad_source(item["source"][k])]
+    if kicad:                                    # so does KiCad's CC-BY-SA library
+        credits.append((K.KICAD_CREDIT, f"KiCad library {' and '.join(kicad)}"))
+    if credits:
+        _set_par(item, "Library Credit", "; ".join(v for v, _ in credits)); fields["Library Credit"] = "; ".join(w for _, w in credits)
     if not str(item.get("description") or "").strip() and "description" in st.get("found", {}):
         item["description"], fields["Description"] = st["found"]["description"]
     if not str(item.get("description") or "").strip():          # no source gave one: write a plain one to check
@@ -961,6 +988,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         stamp_allow(items, allow, identity(user, cwd=out))
         post_check(items, out, checks)
     write_text_atomic(plan_f, json.dumps(items, indent=2))
+    write_notice(out, items)
     rec.close()
     MG.write_stamp(out, ["plan", "librarian_state"])
     LK.write_lock(out, items, state, bom, libs, sources, cache, providers, gen_step, rules)

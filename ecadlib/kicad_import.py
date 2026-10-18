@@ -32,6 +32,11 @@ from pathlib import Path
 from . import altium_lib as AL, sexpr
 from .httpcache import CachedHTTP
 
+# KiCad's library terms ask for attribution; only parts converted from those libraries carry them (not your own files,
+# EasyEDA parts or footprints ecadlib generates)
+KICAD_LICENSE = "CC-BY-SA 4.0"
+KICAD_CREDIT = ("From the KiCad libraries (https://gitlab.com/kicad/libraries), CC-BY-SA 4.0 with the KiCad libraries' "
+                "design-use exception")
 GITLAB = "https://gitlab.com/kicad/libraries/{repo}/-/raw/master/{path}"
 LAYERS = {"F.SilkS": AL.TOP_OVERLAY, "B.SilkS": AL.BOTTOM_OVERLAY, "F.Fab": AL.MECH13, "F.CrtYd": AL.MECH15,
           "F.Cu": AL.TOP, "F.Mask": AL.TOP_SOLDER, "F.Paste": AL.TOP_PASTE}
@@ -231,20 +236,22 @@ def _hidden(node):                            # KiCad 7 bare `hide` atom or KiCa
 MALFORMED = (IndexError, TypeError, AttributeError, KeyError, OverflowError, ZeroDivisionError)
 
 
-def convert_footprint(text, name=None, source="", notes=None):
+def convert_footprint(text, name=None, source="", notes=None, license_=""):
     """.kicad_mod text -> altium_lib footprint dict (mm, y up), no 3D body yet. Raises ValueError for a file that
-    does not parse or is missing what a footprint needs (a pad without a size, a line without an end ...)."""
+    does not parse or is missing what a footprint needs (a pad without a size, a line without an end ...).
+    license_: the source's license, added to the description after "from <source>" (KICAD_LICENSE for KiCad parts)."""
     try:
-        return _convert_footprint(text, name, source, notes)
+        return _convert_footprint(text, name, source, notes, license_)
     except MALFORMED as e:
         raise ValueError(f"malformed KiCad footprint {name or ''}: {type(e).__name__}: {e}".replace("  ", " ")) from e
 
 
-def _convert_footprint(text, name=None, source="", notes=None):
+def _convert_footprint(text, name=None, source="", notes=None, license_=""):
     notes = [] if notes is None else notes
     t = sexpr.parse(text)
     descr = (sexpr.first(t, "descr") or ["", ""])[1]
-    fp = {"name": name or t[1], "description": AL.clean("; ".join(x for x in (descr, f"from {source} (CC-BY-SA 4.0)" if source else "") if x)),
+    origin = f"from {source}" + (f" ({license_})" if license_ else "") if source else ""
+    fp = {"name": name or t[1], "description": AL.clean("; ".join(x for x in (descr, origin) if x)),
           "height_mm": 0.0, "pads": [], "tracks": [], "fills": [], "regions": [], "arcs": [], "bodies": [], "texts": []}
     for p in sexpr.find(t, "pad"):
         _pad(fp, p, notes)
@@ -827,7 +834,8 @@ def import_part(spec, out, http, step=False, write=True, gen_step=True, layers=N
     rep = {"mpn": spec.get("mpn", ""), "footprint": spec["footprint"], "symbol": spec.get("symbol"), "notes": [], "ok": False}
     try:
         text, src = load_footprint(spec["footprint"], http)
-        fp, t = convert_footprint(text, spec.get("footprint_as"), src, rep["notes"])
+        fp, t = convert_footprint(text, spec.get("footprint_as"), src, rep["notes"],
+                                  KICAD_LICENSE if src.startswith("KiCad ") else "")
         add_body(fp, t, http, spec.get("height_mm"), step, rep["notes"], gen_step=gen_step)
         rep["pcblib"] = str(AL.write_pcblib(Path(out) / "PcbLib" / f"{AL.file_stem(fp['name'])}.PcbLib", [fp], layers)) if write else None
         rep["pads"] = len(fp["pads"])
