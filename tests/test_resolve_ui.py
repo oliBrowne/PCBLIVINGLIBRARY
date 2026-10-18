@@ -194,7 +194,8 @@ def test_mcp_tools():
         fps = body(2)["candidates"]["footprint"]
         assert fps[0]["id"] == HDR and len(fps) <= 3, fps
         assert body(3)["chosen"]["status"] == "ready" and "log" not in body(3)
-        assert resp[4]["error"]["code"] == -32602 and "user" in resp[4]["error"]["message"], resp[4]
+        r4 = resp[4]["result"]                             # a tool error the model can read and fix, not a protocol error
+        assert r4["isError"] and "user" in r4["content"][0]["text"], resp[4]
         assert body(5)["decision"]["who"] == ANN and "log" not in body(5)
         assert next(r for r in body(6)["rows"] if r["name"] == "FTSH-105-TEST")["approved_by"] == ANN
         assert body(7)["merged"] is False
