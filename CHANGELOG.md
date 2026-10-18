@@ -39,6 +39,9 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- `eval run --cached-only` scores a part from its best saved answer for the same datasheet when the route now asks for a step the live run never sent (it went another way past an answer the old parser rejected).
+- A BGA body read the other way round from its ball grid (CY14U256LA-BA: 8 x 6 balls, body 10 x 6 mm) is turned so its long side runs with the grid's long side, with a note.
+- Benchmark scoring: a pin name spelled out ("Enable", "Ground") counts as KiCad's "EN" / "GND"; the eval BOM names through-hole diodes D, as a real BOM does, so DO-41 / DO-201AD parts resolve from the standard table.
 - Datasheet answers whose `other_json` objects left out optional fields (a land without `pad_center_y`, a tab given as bare numbers, a number as text) were rejected as "not valid under any of the given schemas"; they are now read (missing optional fields become null, a bare number for a range is its nominal). The #42 benchmark lost 23 paid answers to this.
 - A batch answer the parser rejected is downloaded again from its collected batch (free, within the API's 29 days) and read by the current code, instead of being bought again on the next run.
 - The pin-1 triangle of a tiny QFN (QFN-16 1.8x2.6 mm) moves out past the top-row pads instead of sitting 0.07 mm from pad 16 (KLC F5.1).

@@ -241,6 +241,29 @@ def test_cached_only_rescores_a_live_run_without_sending():
         assert rep2["meta"]["mode"] == "cached answers only (nothing sent)" and cs["SOICPART"]["source"] == "datasheet", cs["SOICPART"]
 
 
+def test_cached_only_scores_a_route_step_never_sent_from_the_saved_answer():
+    """After a parser fix the route can ask for a step the live run never sent (it took another way past the
+    rejected answer): --cached-only scores the part from its saved answer for the same datasheet, sending nothing."""
+    pdfs = {"https://example.com/soic.pdf": TD.PDF, "https://example.com/qfn.pdf": TD.PDF}
+    api = TB.FakeAPI(answer=lambda part: TD.message(TD.INCH if part == "SOICPART" else qfn_ext()), polls=0)
+    with tempfile.TemporaryDirectory() as d:
+        kw = dict(cache=Path(d) / "cache", http=TB.PdfHTTP(pdfs), log=lambda *a: None, batch=True)
+        with TB.patched(api), mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": TB.KEY}):
+            rep = R.run(mini_set(d), Path(d) / "live", **kw)
+            assert {c["mpn"]: c for c in rep["cases"]}["SOICPART"]["pass"]
+            res = Path(d) / "live" / "lib" / "cache" / "datasheet_results"
+            for f in res.glob("*.json"):                              # the saved answers now sit under other steps' keys
+                if json.loads(f.read_text())["part"] == "SOICPART":
+                    f.rename(f.with_name(f.name[:17] + "other-step-" + f.name[17:]))
+            for f in (Path(d) / "live").rglob("batch_state.json"):    # and no batch holds an answer for this step
+                f.unlink()
+            sent = len(api.calls)
+            rep2 = R.run(mini_set(d), Path(d) / "live", cached_only=True, **kw)
+        assert not [c for c in api.calls[sent:] if c[0] == "POST"], "something was sent"
+        s = {c["mpn"]: c for c in rep2["cases"]}["SOICPART"]
+        assert s["pass"] and s["source"] == "datasheet", s
+
+
 def test_estimate_mode_sends_nothing():
     pdfs = {"https://example.com/soic.pdf": TB.pdf_with(["SOIC-8 package"] * 3)}
     with tempfile.TemporaryDirectory() as d, \
@@ -406,3 +429,15 @@ if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_") and callable(f):
             f(); print("ok", k)
+
+
+def test_spelled_out_pin_names_and_through_hole_diodes():
+    """NCP662 (benchmark 2026-10-18): the datasheet's "Enable" is KiCad's "EN". 1N5400 / 1N4002: the eval BOM names
+    a through-hole diode D, as a real BOM does, so the standard source treats it as a diode."""
+    assert S.norm_name("Enable") == S.norm_name("EN") and S.norm_name("Ground") == "GND"
+    assert S.norm_name("ENA") == "ENA"                                     # only whole words
+    with tempfile.TemporaryDirectory() as d:
+        cases = [c for c in R.load_set("kicad-v1")["cases"] if c["mpn"] in ("1N5400", "1N4002")]
+        rows = (Path(d) / "b.csv")
+        R.write_bom(cases, rows)
+        assert [ln.split(",")[0][0] for ln in rows.read_text().splitlines()[1:]] == ["D", "D"]
