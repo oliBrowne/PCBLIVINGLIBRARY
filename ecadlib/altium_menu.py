@@ -155,6 +155,9 @@ def pas_text():
   jobs\<id>\result.ini, which `ecadlib altium-menu run-job` writes. Settings: ecadlib_menu.ini. No keys or passwords
   are in these files: API keys stay in ecadlib's own key store (ecadlib keys set). }
 
+Var
+    WasInstalled : String;      { the libraries BuildInAltium uninstalled, ';' between: installed again when it fails }
+
 Function Here : String;
 Begin
     Result := ExtractFilePath(GetRunningScriptProjectName);
@@ -393,12 +396,16 @@ Begin
     If Not FileExists(Folder + 'ecadlib_build.txt') Then
         Exit;
     List := Answer(Job, 'install');
+    WasInstalled := '';
     While List <> '' Do
     Begin
         P := FirstPath(List);
         List := OtherPaths(List);
         If (P <> '') And IsInstalled(P) Then
+        Begin
             IntegratedLibraryManager.UninstallLibrary(P);
+            WasInstalled := WasInstalled + P + ';';
+        End;
     End;
     If FileExists(Folder + 'ecadlib_build_report.txt') Then
         DeleteFile(Folder + 'ecadlib_build_report.txt');
@@ -423,10 +430,23 @@ Var
     List : String;
     P : String;
 Begin
+    WasInstalled := '';
     Result := BuildInAltium(Job);
     If BuildFailed(Result) Then
     Begin
-        Result := Result + #13#10 + 'Nothing was installed: the library is not ready. Next: read the report, fix it, run this again.';
+        List := WasInstalled;
+        While List <> '' Do
+        Begin
+            P := FirstPath(List);
+            List := OtherPaths(List);
+            If (P <> '') And FileExists(P) Then
+                IntegratedLibraryManager.InstallLibrary(P);
+        End;
+        If WasInstalled <> '' Then
+            Result := Result + #13#10 + 'The library you had is installed again; the new part has no symbol or footprint yet.'
+        Else
+            Result := Result + #13#10 + 'Nothing was installed: the library is not ready.';
+        Result := Result + ' Next: read the report, fix it, run this again.';
         Exit;
     End;
     List := Answer(Job, 'install');
@@ -1618,7 +1638,7 @@ def not_found(triage_csv, mpn, item):
         return False
     if row.get("local_symbol") or row.get("local_footprint") or row.get("src_mpn") or row.get("src_description"):
         return False
-    return bool(row.get("src")) or "jlcpcb: no exact MPN match" in (row.get("notes") or "")   # a source answered
+    return bool(row.get("src") and row.get("src") != "easyeda") or "jlcpcb: no exact MPN match" in (row.get("notes") or "")   # a source answered
 
 
 def _library_mpns(cfg, ws):
