@@ -494,6 +494,51 @@ def _wire_num(v, where):
         raise DatasheetError(f"response {where} {v!r} is not a number; rejected")
 
 
+def _nullable(s):
+    t = s.get("type")
+    return any(_nullable(b) for b in s.get("anyOf") or []) or t == "null" or (isinstance(t, list) and "null" in t)
+
+
+def _fit(v, s):
+    """A value from other_json -> the shape output_schema() wants. other_json's prompt schema leaves out `required`,
+    so a model gives an object without its optional (nullable) fields, a number as text, or a bare number for a
+    min/nom/max range: those become null / the number / the nominal; keys the schema does not have are dropped. Anything else is left for the schema check to reject."""
+    if v is None or not isinstance(s, dict):
+        return v
+    if "anyOf" in s:
+        want = dict if isinstance(v, dict) else list if isinstance(v, list) else None
+        for br in s["anyOf"]:
+            if want and br.get("type") == {dict: "object", list: "array"}[want]:
+                return _fit(v, br)
+            if isinstance(v, (int, float, str)) and br.get("type") in ("object", "number", "integer"):
+                f = _fit(v, br)
+                if f is not v:
+                    return f
+        return v
+    t = s.get("type")
+    if t == "object" and isinstance(v, (int, float)) and not isinstance(v, bool) and "nom" in (s.get("properties") or {}):
+        v = {"nom": v}                                # a bare number where a min/nom/max range is wanted: the nominal
+    if t == "object" and isinstance(v, dict):
+        props = s.get("properties") or {}
+        out = {k: _fit(x, props[k]) if k in props else x for k, x in v.items()
+               if k in props or s.get("additionalProperties") is not False}
+        for k in s.get("required") or []:
+            if k not in out and _nullable(props.get(k) or {}):
+                out[k] = None
+            elif k not in out and (props.get(k) or {}).get("type") == "array":
+                out[k] = []
+        return out
+    if t == "array" and isinstance(v, list):
+        return [_fit(x, s.get("items") or {}) for x in v]
+    if t in ("number", "integer") and isinstance(v, str):
+        try:
+            n = float(v.strip().replace(",", "."))
+            return int(n) if t == "integer" and n == int(n) else n
+        except ValueError:
+            return v
+    return v
+
+
 def from_wire(ext):
     """A wire_schema() answer -> the output_schema() shape. An answer already in that shape (recorded before, or the
     split-steps rail's) is returned as it is."""
@@ -531,7 +576,7 @@ def from_wire(ext):
         elif k in DIMS or k in NUM_DIMS:
             out[k] = dims.get(k)
         else:
-            out[k] = other.get(k) if k in other_s else None
+            out[k] = _fit(other.get(k), pk[k]) if k in other_s else None
     return dict(ext, package=out)
 
 
@@ -1458,6 +1503,7 @@ class Reader:
         self.log_file = self.dir / "api_log.jsonl"
         self.say, self.sleep = log or (lambda *a: None), sleep or time.sleep
         self._client, self.pending, self.last_estimate, self.committed_usd = client, {}, None, 0.0
+        self._holds = {}                              # key -> worst-case USD held for requests not yet answered
         from . import ds_route as DR                  # pages and model per part, escalation, cost ledger
         self.router, self.ledger, self.page_budget = DR.Router(dict(self.cfg, model=self.model), model), DR.Ledger(self.dir), \
             self.cfg["page_budget"]
@@ -1641,8 +1687,8 @@ class Reader:
             raise CC.Unavailable("no answer: no key for the second read")
         from .llm import rails as LRL
         try:                                          # held to [datasheet] max_cost_usd like every other request
-            self._guard_cost([{"name": job.get("name") or job["part"], "model": model, "body": body, "url": job.get("url", ""),
-                               "prov": {"pages": pages_sent or job.get("n_pages")}}])
+            self._guard_cost([{"key": key, "name": job.get("name") or job["part"], "model": model, "body": body,
+                               "url": job.get("url", ""), "prov": {"pages": pages_sent or job.get("n_pages")}}])
         except APIError:
             raise
         except DatasheetError as e:
@@ -1659,6 +1705,7 @@ class Reader:
         except DatasheetError as e:
             raise CC.Unavailable(str(e)[:200])
         msg = LRL.repair_message(msg, CC.output_schema(), p)
+        self._settle(key, model, msg, "sync")
         r = DR.attempt_record(job["part"], job.get("name"), model, msg, "sync", pages_sent, job.get("n_pages"), "cross-check")
         r["purpose"] = "cross_check"
         self.ledger.add(r)
@@ -1716,6 +1763,7 @@ class Reader:
                 return None
             wider = "more pages" if nx[1] != job["level"] else ""
             return ", ".join(x for x in (self.router.ladder[nx[0]] if nx[0] != job["rung"] else "", wider) if x)
+        self._settle(job["key"], model, msg, via)
         try:
             if error is not None:
                 raise error
@@ -1903,9 +1951,23 @@ class Reader:
                                  "pass --yes to send anyway")
         if self.committed_usd + est["usd_max"] > cap:
             raise DatasheetError(f"estimated up to ${est['usd_max']:.2f} for {est['parts']} parts"
-                                 + (f" (after ${self.committed_usd:.2f} already sent)" if self.committed_usd else "")
+                                 + (f" (after ${self.committed_usd:.2f} already spent or held)" if self.committed_usd else "")
                                  + f", over [datasheet] max_cost_usd = {cap}; see --estimate, raise the cap or pass --yes")
-        self.committed_usd += est["usd_max"]
+        for j, r in zip(jobs, est["rows"]):         # unrounded, so an answer's real cost replaces exactly its hold
+            self.committed_usd += r["usd_max"] or 0.0
+            self._holds.setdefault(j.get("key"), []).append(r["usd_max"] or 0.0)
+
+    def _settle(self, key, model, msg, via):
+        """An answer came back: the worst case held for it under max_cost_usd gives way to what it really cost (from
+        its usage block, half price on the Batches API; a feedback turn's usage is in the same answer). Without a known
+        price the hold stays."""
+        from . import ds_route as DR
+        if not self._holds.get(key):
+            return
+        usd = DR.usage_usd(model, (msg or {}).get("usage"), batch=str(via or "").startswith("batch"))
+        if usd is None:
+            return
+        self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key)) + usd)
 
     # --- batch
     def _state(self):
@@ -1915,6 +1977,46 @@ class Reader:
     def _save_state(self, st):
         self.dir.mkdir(parents=True, exist_ok=True)
         write_text_atomic(self.dir / "batch_state.json", json.dumps(st, indent=2))
+
+    def recollect(self, jobs=()):
+        """Answers already paid for in a collected batch that this code reads now (a parser fix since): the Batches API
+        keeps results for 29 days, so they are downloaded again (free) and cached instead of being bought again. Covers
+        the steps cached as failed and, for `jobs`, the ones not cached at all. -> how many answers were cached."""
+        if self.estimate_only or not self.key or not (self.dir / "batch_state.json").exists():
+            return 0
+        st, by, n = self._state(), {j["key"]: j for j in jobs}, 0
+        for b in st["batches"]:
+            recs = {c: self.results.get(k) for c, k in b["requests"].items()} if b.get("collected") else {}
+            lost = {c: b["requests"][c] for c, rec in recs.items()
+                    if (rec is not None and "message" not in rec) or (rec is None and b["requests"][c] in by)}
+            if not lost:
+                continue
+            try:
+                with logging_to(self.log_file, self.say):
+                    client = self.client()
+                    lines = client.batch_results(client.batch_get(b["id"]))
+            except (APIError, DatasheetError) as e:   # expired (29 days) or offline: nothing to recover from it
+                self.say(f"  datasheet batch {b['id']}: answers not downloaded again ({str(e)[:80]})")
+                continue
+            for line in lines:
+                k, r = lost.get(line.get("custom_id")), line.get("result") or {}
+                if k is None or r.get("type") != "succeeded":
+                    continue
+                try:
+                    parse_message(r["message"])
+                except DatasheetError:
+                    continue
+                old, j = self.results.get(k) or {}, by.get(k) or {}
+                self.results.put(k, {"key": k, "part": old.get("part") or j.get("part") or b["parts"].get(line["custom_id"]),
+                                     "url": old.get("url", j.get("url", "")),
+                                     "model": old.get("model") or j.get("model") or (b.get("models") or {}).get(line["custom_id"])
+                                     or b.get("model"), "page_offset": old.get("page_offset", j.get("offset", 0)),
+                                     "via": f"batch {b['id']}", "at": datetime.datetime.now().isoformat(timespec="seconds"),
+                                     "message": r["message"], "recollected": True})
+                n += 1
+        if n:
+            self.say(f"  datasheet: {n} answers from collected batches read again (not paid again)")
+        return n
 
     def _resolve_pending_creates(self, st, client):
         """A batch create whose answer was lost (timeout, connection reset, 5xx) may have created a paid batch. Before
@@ -1999,7 +2101,10 @@ class Reader:
         with logging_to(self.log_file, self.say):
             self._resolve_pending_creates(st, client)   # a create that may have gone through is found, never re-sent
             open_ = {k for b in st["batches"] if not b.get("collected") for k in b["requests"].values()}
-            new = [j for j in jobs if j["key"] not in open_]
+        if self.recollect(jobs):                      # answered in a collected batch, readable now: never sent again
+            st = self._state()
+        with logging_to(self.log_file, self.say):
+            new = [j for j in jobs if j["key"] not in open_ and "message" not in (self.results.get(j["key"]) or {})]
             self._guard_cost(new)                     # parts already in a submitted batch are paid for: collect them
             chunks, size = [[]], 0                    # a batch holds up to 100,000 requests / 256 MB
             for j in new:

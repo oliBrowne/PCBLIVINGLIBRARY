@@ -1441,7 +1441,7 @@ python3 -m tests.test_stdparts
 ```
 
 The librarian's `standard` source (default order `kicad, easyeda, standard, datasheet`) builds parts whose package is
-fully set by standard data, with no API call. Footprints come only from `package_specs/standard.json.gz`: 615 KiCad
+fully set by standard data, with no API call. Footprints come only from `package_specs/standard.json.gz`: 618 KiCad
 generic packages (510 gullwing / no-lead from the KiCad footprint generator's JEDEC size files, built with
 `footprint_gen`'s IPC-7351B equations; 74 R/C/L/D/LED/fuse chips; 31 hand-drawn ones such as SOD-123, SMA/SMB/SMC,
 MELF, SOT-223, SOT-89, DPAK/D2PAK, TO-220 vertical, TO-92 inline, stored as KiCad's recommended land as a pad table).
@@ -1456,7 +1456,7 @@ and MOSFETs, 1117 LDOs, 78xx/79xx/LM317 for listed MPN families (with a review n
 recorded as `standard:<Lib>:<Name>` / `standard:<symbol>`.
 
 Checks (2026-10-16, kicad-footprints f8440fa, kicad-symbols 9280a93):
-* `bench`: 615 / 615 table entries match KiCad's footprint (pads and courtyard, footprint_bench tolerances); the test
+* `bench`: 618 / 618 table entries match KiCad's footprint (pads and courtyard, footprint_bench tolerances); the test
   suite repeats it against a numbers-only fixture. Packages where our IPC build differs from KiCad's (fine-pitch
   gullwing with KiCad's 0.15 mm pad gap, SOT-723, PowerDI-123, TO-92L, TO-220 horizontal, R_0508) are left out.
 * KiCad symbols as an MPN list (description and MPN only, Footprint property hidden): 1953 of 17050 resolve; 1925

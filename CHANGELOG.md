@@ -9,6 +9,8 @@ a minor release may change command-line options and file formats.
 
 ### Added
 
+- The standard source knows DO-201AD (axial, 15.24 mm bend), MicroMELF and SC-82AB, from KiCad's hand-drawn footprints (618 packages, each benched against KiCad). Three #42 benchmark parts (1N5400, BAV301, NCP662) now build without a datasheet.
+- `ecadlib eval run --cached-only` re-scores a live run's out folder with nothing sent: its cached answers, and the answers of its collected batches downloaded again (free), are read by the current code; a part that would need another read is reported, not sent.
 - `ecadlib eval run --batch` sends the datasheet reads as one Message Batch (half price); the report prices those parts at the batch rate, and recordings keep it so a replay gives the same cost.
 - `ecadlib status` shows how long the last BOM run took, step by step: triage, build, release check, review (from the release check to the last sign-off, `--allow` or resolve choice) and the Altium 365 push, with ecadlib's own time and the total (#44). Each plan folder keeps a `timing.jsonl`; `status --json` has `last_run` and a `timing` per plan.
 - `ecadlib status` shows the review rate: of the parts built, how many passed first time, are held (with the top reasons), were approved, rejected or changed by a person (#45). `status --json` has `review`, overall and per plan.
@@ -32,6 +34,10 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Datasheet answers whose `other_json` objects left out optional fields (a land without `pad_center_y`, a tab given as bare numbers, a number as text) were rejected as "not valid under any of the given schemas"; they are now read (missing optional fields become null, a bare number for a range is its nominal). The #42 benchmark lost 23 paid answers to this.
+- A batch answer the parser rejected is downloaded again from its collected batch (free, within the API's 29 days) and read by the current code, instead of being bought again on the next run.
+- The pin-1 triangle of a tiny QFN (QFN-16 1.8x2.6 mm) moves out past the top-row pads instead of sitting 0.07 mm from pad 16 (KLC F5.1).
+- `[datasheet] max_cost_usd` counts each answer at what it really cost once it comes back, not at its worst-case estimate. A multi-round run (more pages, a stronger model) was refused its second round long before real spend reached the cap: the #42 benchmark's first round was held at $24.61 and cost $3.42.
 - The Altium menu and the web UI no longer tell you to put NEXAR_TOKEN in an environment variable and restart: the token is read from ecadlib's key store (setup page, Optional keys).
 - Datasheet page picking: a family sheet's "LQFP144, 144-lead LQFP" no longer counts as this part's LQFP-100 (a bare family word matched every LQFP), and the drawing and land-pattern slots never go to a page about another package. The SAM E70 sheet (1976 pages) now sends the LQFP100 drawing instead of the LQFP144 and QFN pages.
 - Standard parts: DO-41 (DO-204AL, SOD81) on a diode resolves to KiCad's D_DO-41_SOD81_P10.16mm_Horizontal.
