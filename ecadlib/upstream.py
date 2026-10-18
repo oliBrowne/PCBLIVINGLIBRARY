@@ -397,7 +397,7 @@ Q_COMPONENTS = """query ($ws: String!, $after: String) {
     components(first: 100, after: $after) {
       pageInfo { hasNextPage endCursor }
       nodes { id name comment description isManaged folder { path }
-              revision { id details { lifeCycleState { name } createdAt } }
+              revision { revisionId details { lifeCycleState { name } createdAt } }
               details { parameters { name value } symbols { name guid } footprints { name guid } } }
     }
   }
@@ -456,7 +456,7 @@ def check_a365(items, nodes, folders=None, state=None, rules=None):
             if ref and names and ref not in names:
                 row(it["name"], kind, kind, ref, ", ".join(names))
         rev = n.get("revision") or {}
-        snap = {"revision": rev.get("id"), "lifecycle": ((rev.get("details") or {}).get("lifeCycleState") or {}).get("name"),
+        snap = {"revision": rev.get("revisionId") or rev.get("id"), "lifecycle": ((rev.get("details") or {}).get("lifeCycleState") or {}).get("name"),
                 "symbols": sorted(x.get("guid") or "" for x in d.get("symbols") or []),
                 "footprints": sorted(x.get("guid") or "" for x in d.get("footprints") or [])}
         new_state[it["name"]] = snap

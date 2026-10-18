@@ -45,16 +45,39 @@ Q_DEFS = """query ($ws: String!) {
 }"""
 
 Q_FIND = """query ($ws: String!, $name: String!) {
-  desLibrary(workspaceUrl: $ws) { components(first: 1, where: {name: {eq: $name}}) { nodes { id name revision { id } details { parameters { name value } } } } }
+  desLibrary(workspaceUrl: $ws) { components(first: 20, where: {name: {eq: $name}}) { nodes { id name revision { revisionId } details { parameters { name value } } } } }
 }"""
 
-Q_BY_ID = """query ($id: ID!) { desComponentById(id: $id) { id name revision { id } details { parameters { name value } } } }"""
+Q_BY_ID = """query ($id: ID!) { desComponentById(id: $id) { id name revision { revisionId } details { parameters { name value } } } }"""
 
 M_RELEASE = """mutation ($input: DesReleaseComponentInput!) { desReleaseComponent(input: $input) { errors { message } } }"""
+
+# an existing symbol / footprint, by item name: `name` on these is the revision name ("Capacitor-1"), so the lookup is
+# a prefix and the revision is picked here (live schema 2026-10-18)
+Q_MODELS = {k: """query ($ws: String!, $prefix: String!) {
+  desLibrary(workspaceUrl: $ws) { %s(first: 50, where: {name: {startsWith: $prefix}}) { nodes { id name releasedAt folder { path } } } }
+}""" % k for k in ("symbols", "footprints")}
+
+# folders by parent: componentReleaseFolder is one child folder name (a "/" in it fails with AddALU_FoldersInvalid
+# folder HRID), so a nested component folder is released as componentParentFolderId + leaf name
+# live schema 2026-10: a folder has a node id (base64) and a folderId (GUID); desCreateFolder takes the parent's
+# folderId as parentFolderId and returns only the new folderId
+Q_FOLDERS = """query ($ws: String!) { desLibrary(workspaceUrl: $ws) { folders { id folderId name parent { id } } } }"""
+
+M_CREATE_FOLDER = """mutation ($input: DesCreateFolderInput!) { desCreateFolder(input: $input) { folderId errors { message } } }"""
 
 M_UPDATE_PARAMS = """mutation ($input: DesUpdateComponentRevisionParametersInput!) {
   desUpdateComponentRevisionParameters(input: $input) { componentId errors { message } }
 }"""
+
+
+def pick_named(nodes, name):
+    """The node that is item `name` ("SS34" or its revision "SS34-1"), or None. Live 2026-10-18: the
+    `name: {eq: "AMS1117-3.3"}` filter also returns Altium's sample part CMP-017-000002-1 (it matches more than
+    the item name), so a hit is only a match when its own name is the item's."""
+    import re
+    rev = re.compile(re.escape(name or "") + r"(-[^-]+)?$", re.I)
+    return next((n for n in nodes or [] if name and rev.fullmatch(n.get("name") or "")), None)
 
 
 class NexarError(Exception):
@@ -90,8 +113,7 @@ class Nexar:
 
     def find(self, ws, name):
         conn = self.gql(Q_FIND, {"ws": ws, "name": name})["desLibrary"]["components"] or {}
-        nodes = conn.get("nodes") or []
-        return nodes[0] if nodes else None
+        return pick_named(conn.get("nodes"), name)
 
     def component(self, cid):
         return self.gql(Q_BY_ID, {"id": cid})["desComponentById"]
@@ -113,6 +135,54 @@ class Nexar:
         errs = self.gql(M_RELEASE, {"input": inp})["desReleaseComponent"]["errors"]
         if errs:
             raise NexarError("; ".join(e["message"] for e in errs))
+
+    def find_model(self, ws, kind, item_name, folder):
+        """Node id of the newest revision of symbol / footprint item_name in folder ("a/b"), or None.
+        kind: "symbols" or "footprints". A same-named item in another folder is an error: item names are unique in
+        the workspace, so releasing it again would fail, and linking someone else's model is not ours to decide."""
+        import re
+        rev = re.compile(re.escape(item_name) + r"-[^-]+$", re.I)          # "Capacitor-1", not "Capacitor-SYM-1"
+        conn = self.gql(Q_MODELS[kind], {"ws": ws, "prefix": item_name + "-"})["desLibrary"][kind] or {}
+        nodes = [n for n in conn.get("nodes") or [] if rev.match(n.get("name") or "")]
+        if not nodes:
+            return None
+        norm = lambda p: "/".join(x for x in (p or "").replace("\\", "/").split("/") if x).lower()
+        here = [n for n in nodes if norm((n.get("folder") or {}).get("path")) == norm(folder)]
+        if not here:
+            where = sorted({(n.get("folder") or {}).get("path") or "?" for n in nodes})
+            raise NexarError(f"{kind[:-1]} {item_name!r} already exists in {', '.join(where)}, not in {folder}: "
+                             "rename it in the plan or release under that folder")
+        return max(here, key=lambda n: n.get("releasedAt") or "")["id"]
+
+    def _read_folders(self, ws):
+        self._folders = [{"id": f["id"], "guid": f.get("folderId"), "name": f["name"], "parent": (f.get("parent") or {}).get("id")}
+                         for f in self.gql(Q_FOLDERS, {"ws": ws})["desLibrary"]["folders"]]
+        self._folders_ws = ws
+
+    def folder(self, ws, path):
+        """The workspace folder at path ("a/b") as {"id", "guid", ...}, creating any missing level as a generic folder.
+        The folder list is read once per client, and again after a create (the create returns only the GUID)."""
+        if getattr(self, "_folders_ws", None) != ws:
+            self._read_folders(ws)
+        hit = None
+        for name in [p for p in path.split("/") if p]:
+            parent = hit["id"] if hit else None
+            find = lambda: next((f for f in self._folders if f["parent"] == parent and f["name"].lower() == name.lower()), None)
+            nxt = find()
+            if not nxt:
+                inp = {"workspaceUrl": ws, "name": name, "folderType": "GENERIC_FOLDER", "parentFolderId": hit["guid"] if hit else None}
+                res = self.gql(M_CREATE_FOLDER, {"input": inp})["desCreateFolder"]
+                if res.get("errors") or not res.get("folderId"):
+                    raise NexarError(f"creating folder {name!r}: " + "; ".join(e["message"] for e in res.get("errors") or []))
+                self._read_folders(ws)
+                nxt = find() or next((f for f in self._folders if f["guid"] == res["folderId"]), None)
+                if not nxt:
+                    raise NexarError(f"folder {name!r} was created ({res['folderId']}) but is not in the folder list")
+            hit = nxt
+        return hit
+
+    def folder_id(self, ws, path):
+        return self.folder(ws, path)["id"]
 
     def update_params(self, component_id, params, note, replace=False):
         inp = {"componentId": component_id, "releaseNote": note, "replaceExisting": replace, "parameters": params}
@@ -164,25 +234,57 @@ def plan(lines, triage=None, models=None, root=None, rules=None):
     return items
 
 
-def release_input(item, ws, defs, file_ids, models_root="Components/Models"):
+def _rev_id(node):
+    """A component's revision id: Nexar renamed DesRevision.id to revisionId (live schema, 2026-10)."""
+    r = (node or {}).get("revision") or {}
+    return r.get("revisionId") or r.get("id")
+
+
+def split_folder(path):
+    """("parent/path", "leaf") of a component folder; parent is "" for a top-level folder."""
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    return "/".join(parts[:-1]), parts[-1] if parts else ""
+
+
+def model_item_names(item):
+    """Workspace item names for the part's symbol and footprint. Altium 365 item names share one namespace, so a
+    symbol named like its component ("SS34" for SS34) failed live with "Duplicate ID is not allowed": such a name
+    gets a -SYM / -FP suffix. The library ref inside the .SchLib/.PcbLib is not changed."""
+    comp = (item.get("name") or "").lower()
+    sym, fp = item["symbol"]["ref"] or None, item["footprint"]["ref"] or None
+    return (f"{sym}-SYM" if sym and sym.lower() == comp else sym), (f"{fp}-FP" if fp and fp.lower() == comp else fp)
+
+
+def release_input(item, ws, defs, file_ids, models_root="Components/Models", parent_id=None, existing=(None, None)):
+    """parent_id: workspace id of the component folder's parent (split_folder); None for a top-level folder.
+    existing: (symbol id, footprint id) already in the workspace; such a model is linked, not released again."""
     sym_ids, fp_ids = file_ids
     nid = lambda k: (defs.get(k) or {}).get("id")
-    return {
+    _, leaf = split_folder(item["folder"])
+    sym_name, fp_name = model_item_names(item)
+    inp = {
         "workspaceUrl": ws,
-        "componentReleaseFolder": item["folder"], "useExistingComponentReleaseFolder": True,
+        **({"componentParentFolderId": parent_id} if parent_id else {}),
+        "componentReleaseFolder": leaf, "useExistingComponentReleaseFolder": True,
         "componentItemName": item["name"], "componentComment": item["comment"],
         "componentDescription": item["description"], "parameters": item["parameters"],
         "componentRevisionNamingSchemeNodeId": nid("componentScheme"),
         "componentLifeCycleDefinitionNodeId": nid("componentLifeCycle"),
-        "symbolReleaseFolder": f"{models_root}/Symbols", "symbolItemName": item["symbol"]["ref"] or None,
+        "symbolReleaseFolder": f"{models_root}/Symbols", "symbolItemName": sym_name,
         "symbolFiles": [{"fileId": i, "relativePath": f"Released\\{n}"} for n, i in sym_ids],
         "symbolRevisionNamingSchemeNodeId": nid("symbolScheme"),
         "symbolLifeCycleDefinitionNodeId": nid("symbolLifeCycle"),
-        "footprintReleaseFolder": f"{models_root}/Footprints", "footprintItemName": item["footprint"]["ref"] or None,
+        "footprintReleaseFolder": f"{models_root}/Footprints", "footprintItemName": fp_name,
         "footprintFiles": [{"fileId": i, "relativePath": f"Released\\{n}"} for n, i in fp_ids],
         "footprintRevisionNamingSchemeNodeId": nid("footprintScheme"),
         "footprintLifeCycleDefinitionNodeId": nid("footprintLifeCycle"),
     }
+    sym_id, fp_id = existing
+    if sym_id:                                 # a shared Capacitor symbol: released once, then linked
+        inp.update(symbol={"id": sym_id}, symbolFiles=[], symbolReleaseFolder=None, symbolItemName=None)
+    if fp_id:
+        inp.update(footprints=[{"id": fp_id}], footprintFiles=[], footprintReleaseFolder=None, footprintItemName=None)
+    return inp
 
 
 # ------------------------------------------------------------------ push
@@ -220,7 +322,7 @@ def push_existing(it, client, ws, dry_run=False, note="ecadlib sync"):
             node = client.component(a["id"])
         if not node:
             return {"action": "skip", "detail": "not in the workspace (deleted or renamed there): run `ecadlib a365 reconcile`"}
-        rev = (node.get("revision") or {}).get("id")
+        rev = _rev_id(node)
         cur = {p["name"]: p["value"] for p in ((node.get("details") or {}).get("parameters") or [])}
         if rev and a.get("revision") and rev != a["revision"] and base is not None and cur != base:
             return {"action": "skip", "detail": f"edited in the workspace since the last pull (revision {a['revision']} -> {rev}): "
@@ -234,7 +336,7 @@ def push_existing(it, client, ws, dry_run=False, note="ecadlib sync"):
     cid = client.update_params(node["id"], new, note, replace=True)
     after = client.find(ws, it["name"]) or (client.component(cid) if cid and hasattr(client, "component") else None) or {}
     a["id"] = after.get("id") or cid
-    a["revision"] = (after.get("revision") or {}).get("id") or a.get("revision")
+    a["revision"] = _rev_id(after) or a.get("revision")
     a.setdefault("base", {})["parameters"] = {p["name"]: p["value"] for p in new}
     return {"action": "update_parameters", "detail": cid, "a365_updated": True}
 
@@ -247,12 +349,15 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     from .approvals import push_block
     from .rules import house_item
     from .a365_sync import is_a365
+    from .rules import DEFAULTS
+    # symbols and footprints go under the same root as the components ([folders] root), so a test root holds them all
+    models_root = f"{(rules or DEFAULTS)['folders'].get('root') or 'Components'}/Models"
     # sign-off is checked on the item as it was approved (ecadlib's parameter names: the content hash covers them)
     blocks = [push_block(i, policy) for i in items]
     # a pulled item already carries the workspace's own parameter names: renaming it would rename them there
     items = [i if is_a365(i) else house_item(i, rules) for i in items]
     defs = {} if dry_run else client.release_defs(ws)
-    results, uploaded = [], {}                  # one upload per file per run (shared Resistor.SchLib etc.)
+    results, uploaded, released = [], {}, set()   # one upload per file per run; (kind, name) released this run
     def upload(p):
         if p not in uploaded:
             uploaded[p] = "<fileId>" if dry_run else client.upload(p)
@@ -286,14 +391,37 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
             elif it["status"] != "ready":
                 res["action"], res["detail"] = "skip", "needs_altium_models (no .SchLib/.PcbLib)"
             else:
-                files = [it["symbol"]["file"]], [it["footprint"]["file"]]
+                # a symbol / footprint shared by several parts (Capacitor, R_0603) is released with the first and
+                # linked by the others: releasing it again fails with AddALU_ItemsDuplicate item HRID
+                names = model_item_names(it)
+                found = []
+                for kind, name, sub in zip(("symbols", "footprints"), names, ("Symbols", "Footprints")):
+                    key = (kind, (name or "").lower())
+                    if not name:
+                        found.append(None)
+                    elif dry_run:
+                        found.append(f"<id of {name}>" if key in released else None)
+                    else:
+                        found.append(client.find_model(ws, kind, name, f"{models_root}/{sub}"))
+                files = [] if found[0] else [it["symbol"]["file"]], [] if found[1] else [it["footprint"]["file"]]
                 ids = tuple([(Path(p).name, upload(p)) for p in group] for group in files)
-                inp = release_input(it, ws, defs, ids)
+                parent, _ = split_folder(it["folder"])
+                pid = (f"<id of {parent}>" if dry_run else client.folder_id(ws, parent)) if parent else None
+                inp = release_input(it, ws, defs, ids, models_root, pid, tuple(found))
                 res["action"] = "release"
                 if dry_run:
-                    res["detail"] = {"mutation": "desReleaseComponent", "input": inp}
+                    released.update((k, (n or "").lower()) for k, n in zip(("symbols", "footprints"), names) if n)
+                    res["detail"] = {"mutation": "desReleaseComponent", "input": inp,
+                                     **({"parent_folder": parent} if parent else {})}
                 else:
-                    client.release(inp)
+                    try:
+                        client.release(inp)
+                    except NexarError as e:    # the schema does not say which folder id the parent takes: try the GUID
+                        guid = (client.folder(ws, parent) or {}).get("guid") if parent and hasattr(client, "folder") else None
+                        if not (guid and "folder" in str(e).lower()):
+                            raise
+                        client.release({**inp, "componentParentFolderId": guid})
+                released.update((k, (n or "").lower()) for k, n in zip(("symbols", "footprints"), names) if n)
         except Exception as e:                 # keep going; report per part
             res["action"], res["detail"] = "error", f"{type(e).__name__}: {e}"
         sim = (it.get("sim_model") or {}).get("attached", {}).get("altium")

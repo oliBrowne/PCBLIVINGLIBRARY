@@ -339,7 +339,7 @@ Q_LIBRARY = """query ($ws: String!, $after: String) {
 
 Q_FIND_PARAMS = """query ($ws: String!, $name: String!) {
   desLibrary(workspaceUrl: $ws) {
-    components(first: 1, where: {name: {eq: $name}}) { nodes { id name isManaged details { parameters { name value } } } }
+    components(first: 20, where: {name: {eq: $name}}) { nodes { id name isManaged details { parameters { name value } } } }
   }
 }"""
 
@@ -503,7 +503,8 @@ def a365_updates(rows, client, ws, apply=False, param="Lifecycle", note="ecadlib
             cur_params = None
             if client:                           # fetch the current revision: a replace must carry every parameter
                 nodes = client.gql(Q_FIND_PARAMS, {"ws": ws, "name": r["name"]})["desLibrary"]["components"] or {}
-                node = (nodes.get("nodes") or [None])[0]
+                from .altium365 import pick_named   # the name filter also matches other items (Altium's samples)
+                node = pick_named(nodes.get("nodes"), r["name"])
                 if not node or not node.get("isManaged"):
                     rec["action"] = "skip"
                     rec["detail"] = "not in workspace" if not node else "not a released (managed) component"

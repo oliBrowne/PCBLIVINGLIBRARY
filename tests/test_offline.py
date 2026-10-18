@@ -65,6 +65,12 @@ class FakeNexar:
     def upload(self, path):
         self.calls.append(("upload", Path(path).name)); return f"id-{Path(path).name}"
 
+    def find_model(self, ws, kind, name, folder):
+        return None
+
+    def folder_id(self, ws, path):
+        return "fld-" + path
+
     def release(self, inp):
         self.calls.append(("release", inp))
 
@@ -98,6 +104,168 @@ def test_altium365_plan_and_push():
         assert rel["componentRevisionNamingSchemeNodeId"] == "cs" and rel["symbolLifeCycleDefinitionNodeId"] == "sl"
         dry = A.push(items, None, "https://ws", dry_run=True)
         assert {r["action"] for r in dry} == {"release", "skip"}, dry
+        assert rel["symbolReleaseFolder"] == "Components/Models/Symbols", rel
+        # a test root ([folders] root) holds the symbols and footprints too, not only the components
+        from ecadlib import rules as RU
+        import copy
+        rules = copy.deepcopy(RU.DEFAULTS); rules["folders"]["root"] = "ecadlib-test-47"
+        inp = next(r for r in A.push(A.plan(lines, models=d, root="ecadlib-test-47"), None, "https://ws", dry_run=True,
+                                     rules=rules) if r["action"] == "release")["detail"]["input"]
+        # componentReleaseFolder is one folder name: "ecadlib-test-47/ICs" failed live with AddALU_FoldersInvalid
+        # folder HRID ("/" not permitted), so the parent goes by id
+        assert (inp["componentParentFolderId"], inp["componentReleaseFolder"]) == ("<id of ecadlib-test-47>", "ICs"), inp
+        assert rel["componentParentFolderId"] == "fld-Components" and rel["componentReleaseFolder"] == "ICs", rel
+        assert (inp["symbolReleaseFolder"], inp["footprintReleaseFolder"]) == (
+            "ecadlib-test-47/Models/Symbols", "ecadlib-test-47/Models/Footprints"), inp
+
+
+def test_altium365_folder_id_finds_or_creates_each_level():
+    """A nested component folder resolves level by level: existing folders by name under their parent (any case),
+    missing ones created under the right parent (by its GUID, live schema 2026-10) and read back for their node id;
+    the folder list is read once per run plus once per create."""
+    class N(A.Nexar):
+        def __init__(self):
+            self.token, self.calls = "t", []
+            self.lib = [{"id": "f-c", "folderId": "G-c", "name": "Components", "parent": None},
+                        {"id": "f-ic", "folderId": "G-ic", "name": "ICs", "parent": {"id": "f-c"}},
+                        {"id": "f-x", "folderId": "G-x", "name": "ecadlib-test-47", "parent": {"id": "f-c"}}]  # other parent
+        def gql(self, query, variables=None):
+            self.calls.append(query)
+            if query == A.Q_FOLDERS:
+                return {"desLibrary": {"folders": [dict(f) for f in self.lib]}}
+            inp = variables["input"]
+            assert query == A.M_CREATE_FOLDER and inp["folderType"] == "GENERIC_FOLDER" and "parentId" not in inp, inp
+            par = next((f["id"] for f in self.lib if f["folderId"] == inp["parentFolderId"]), None)
+            assert (par is None) == (inp["parentFolderId"] is None), inp
+            n = len(self.lib)
+            self.lib.append({"id": f"f-{n}", "folderId": f"G-{n}", "name": inp["name"], "parent": {"id": par} if par else None})
+            return {"desCreateFolder": {"folderId": f"G-{n}", "errors": []}}
+    n = N()
+    assert n.folder_id("https://ws", "components/ICs") == "f-ic"
+    assert n.folder_id("https://ws", "ecadlib-test-47") == "f-3"      # a new root folder, not Components/ecadlib-test-47
+    assert n.folder_id("https://ws", "ecadlib-test-47/Sub") == "f-4" and n.lib[-1]["parent"] == {"id": "f-3"}
+    assert n.folder_id("https://ws", "ecadlib-test-47/Sub") == "f-4"  # found, not created again
+    assert n.calls.count(A.Q_FOLDERS) == 3 and n.calls.count(A.M_CREATE_FOLDER) == 2, n.calls
+    assert A.split_folder("ecadlib-test-47/ICs") == ("ecadlib-test-47", "ICs") and A.split_folder("ICs") == ("", "ICs")
+    item = {**A.plan([{"designator": "U1", "mpn": "CH340C", "footprint": "SOIC-16"}])[0], "folder": "ICs"}
+    inp = A.release_input(item, "https://ws", {}, ([], []))
+    assert "componentParentFolderId" not in inp and inp["componentReleaseFolder"] == "ICs", inp
+
+
+def test_altium365_release_retries_the_parent_folder_by_guid():
+    """Nexar does not document whether componentParentFolderId is the folder's node id or its GUID: a folder error with
+    the node id is retried once with the GUID; any other error is reported as is."""
+    class C:
+        def __init__(self, fail):
+            self.fail, self.sent = fail, []
+        def release_defs(self, ws): return {}
+        def find(self, ws, name): return None
+        def upload(self, p): return "f"
+        def find_model(self, ws, kind, name, folder): return None
+        def folder(self, ws, path): return {"id": "node-1", "guid": "GUID-1"}
+        def folder_id(self, ws, path): return "node-1"
+        def release(self, inp):
+            self.sent.append(inp["componentParentFolderId"])
+            if inp["componentParentFolderId"] == "node-1" and self.fail:
+                raise A.NexarError(self.fail)
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "SchLib").mkdir(); (Path(d) / "PcbLib").mkdir()
+        (Path(d) / "SchLib" / "CH340C.SchLib").write_bytes(b"x"); (Path(d) / "PcbLib" / "SOIC-16.PcbLib").write_bytes(b"x")
+        items = [i for i in A.plan([{"designator": "U1", "mpn": "CH340C", "footprint": "SOIC-16"}], models=d) if i["status"] == "ready"]
+        for fail, sent, action in ((None, ["node-1"], "release"), ("Parent folder not found", ["node-1", "GUID-1"], "release"),
+                                   ("Invalid revision naming scheme", ["node-1"], "error")):
+            c = C(fail)
+            assert A.push(items, c, "https://ws")[0]["action"] == action and c.sent == sent, (fail, c.sent)
+
+
+def test_altium365_symbol_named_like_its_component_gets_a_suffix():
+    """Live 2026-10-18: SS34's symbol item "SS34" failed with "Duplicate ID is not allowed" (item names share one
+    namespace); a model item named like its component gets -SYM / -FP, other names are kept."""
+    it = {"name": "SS34", "symbol": {"ref": "SS34"}, "footprint": {"ref": "ss34"}}
+    assert A.model_item_names(it) == ("SS34-SYM", "ss34-FP")
+    assert A.model_item_names({"name": "CAP-0402-100nF", "symbol": {"ref": "Capacitor"}, "footprint": {"ref": "C_0402"}}) == (
+        "Capacitor", "C_0402")
+    item = {**A.plan([{"designator": "U1", "mpn": "CH340C", "footprint": "SOIC-16"}])[0]}
+    inp = A.release_input(item, "https://ws", {}, ([], []))
+    assert inp["symbolItemName"] == "CH340C-SYM" and inp["footprintItemName"] == "SOIC-16", inp
+
+
+def test_altium365_shared_symbol_is_released_once_then_linked():
+    """Live 2026-10-18: the second capacitor failed with AddALU_ItemsDuplicate item HRID: Capacitor. A symbol or
+    footprint already in the workspace folder (released earlier, or by an earlier part of this run) is linked by
+    its node id and not uploaded again; the dry run shows the same."""
+    lines = [{"designator": f"C{i}", "mpn": mpn, "value": v, "footprint": fp, "description": f"Capacitor {v}"}
+             for i, (mpn, v, fp) in enumerate([("CL05B104KO5NNNC", "100nF", "C_0402"), ("CL05A105KA5NQNC", "1uF", "C_0402"),
+                                               ("CL10A106KP8NNNC", "10uF", "C_0603")], 1)]
+    class W:                                   # a workspace: what was released is found by revision name
+        def __init__(self): self.rel, self.up = [], []
+        def release_defs(self, ws): return {}
+        def find(self, ws, name): return None
+        def upload(self, p): self.up.append(Path(p).name); return "id-" + Path(p).name
+        def folder(self, ws, path): return {"id": "node-" + path, "guid": "G"}
+        def folder_id(self, ws, path): return "node-" + path
+        def find_model(self, ws, kind, name, folder):
+            k = kind[:-1]
+            hit = [r for r in self.rel if r.get(k + "ItemName") == name and r[k + "ReleaseFolder"] == folder]
+            return f"{k}-rev:{name}" if hit else None
+        def release(self, inp): self.rel.append(inp)
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "SchLib").mkdir(); (Path(d) / "PcbLib").mkdir()
+        (Path(d) / "SchLib" / "Capacitor.SchLib").write_bytes(b"x")
+        for fp in ("C_0402", "C_0603"):
+            (Path(d) / "PcbLib" / f"{fp}.PcbLib").write_bytes(b"x")
+        items = A.plan(lines, models=d, root="ecadlib-test-47")
+        assert [i["status"] for i in items] == ["ready"] * 3 and {i["symbol"]["ref"] for i in items} == {"Capacitor"}, items
+        w = W()
+        out = A.push(items, w, "https://ws")
+        assert [r["action"] for r in out] == ["release"] * 3, out
+        first, second, third = w.rel
+        assert first["symbolFiles"] and "symbol" not in first and first["symbolItemName"] == "Capacitor", first
+        assert second["symbol"] == {"id": "symbol-rev:Capacitor"} and second["symbolFiles"] == [] and second["symbolItemName"] is None
+        assert second["footprints"] == [{"id": "footprint-rev:C_0402"}] and second["footprintFiles"] == [], second
+        assert third["symbol"] == {"id": "symbol-rev:Capacitor"} and third["footprintItemName"] == "C_0603" and third["footprintFiles"]
+        assert sorted(w.up) == ["C_0402.PcbLib", "C_0603.PcbLib", "Capacitor.SchLib"], w.up      # each file once
+        dry = [r["detail"]["input"] for r in A.push(items, None, "https://ws", dry_run=True)]
+        assert "symbol" not in dry[0] and dry[1]["symbol"] == {"id": "<id of Capacitor>"} and dry[2]["footprintFiles"], dry
+
+
+def test_altium365_find_model_matches_the_item_by_revision_name_in_its_folder():
+    """Symbols and footprints are listed by revision name (Capacitor-1): the newest revision of exactly that item in
+    the release folder is linked; a longer name (Capacitor-SYM-1) is another item; the same item in another folder
+    is reported, never linked."""
+    class N(A.Nexar):
+        def __init__(self, nodes): self.token, self.nodes, self.q = "t", nodes, []
+        def gql(self, query, variables=None):
+            self.q.append((query, variables))
+            return {"desLibrary": {"symbols": {"nodes": [n for n in self.nodes if n["name"].startswith(variables["prefix"])]}}}
+    f = {"path": "ecadlib-test-47/Models/Symbols"}
+    n = N([{"id": "a", "name": "Capacitor-1", "releasedAt": "2026-10-18T00:49:53Z", "folder": f},
+           {"id": "b", "name": "Capacitor-2", "releasedAt": "2026-10-19T00:00:00Z", "folder": f},
+           {"id": "c", "name": "Capacitor-SYM-1", "releasedAt": "2026-10-20T00:00:00Z", "folder": f}])
+    assert n.find_model("https://ws", "symbols", "Capacitor", "ecadlib-test-47/Models/Symbols") == "b"
+    assert n.q[0][0] == A.Q_MODELS["symbols"] and n.q[0][1]["prefix"] == "Capacitor-", n.q
+    assert n.find_model("https://ws", "symbols", "Capacitor-SYM", "/ecadlib-test-47/models/symbols/") == "c"
+    assert n.find_model("https://ws", "symbols", "Resistor", "ecadlib-test-47/Models/Symbols") is None
+    other = N([{"id": "x", "name": "Capacitor-1", "releasedAt": "", "folder": {"path": "Components/Models/Symbols"}}])
+    try:
+        other.find_model("https://ws", "symbols", "Capacitor", "ecadlib-test-47/Models/Symbols")
+        raise AssertionError("linked a model from another folder")
+    except A.NexarError as e:
+        assert "Components/Models/Symbols" in str(e), e
+
+
+def test_altium365_find_ignores_other_items_the_name_filter_returns():
+    """Live 2026-10-18: components(where: {name: {eq: "AMS1117-3.3"}}) returned Altium's sample part
+    CMP-017-000002-1, so a push would have updated it as ours. Only a node named as the item (or its revision) counts."""
+    sample = {"id": "s", "name": "CMP-017-000002-1"}
+    assert A.pick_named([sample], "AMS1117-3.3") is None
+    assert A.pick_named([sample, {"id": "o", "name": "AMS1117-3.3-1"}], "AMS1117-3.3")["id"] == "o"
+    assert A.pick_named([{"id": "p", "name": "SS34"}], "ss34")["id"] == "p"
+    assert A.pick_named([{"id": "q", "name": "SS34-SYM-1"}], "SS34") is None and A.pick_named([], "x") is None
+    class N(A.Nexar):
+        def __init__(self): self.token = "t"
+        def gql(self, query, variables=None): return {"desLibrary": {"components": {"nodes": [sample]}}}
+    assert N().find("https://ws", "AMS1117-3.3") is None
 
 
 def test_altium365_ops_match_nexar_schema():
@@ -108,12 +276,16 @@ def test_altium365_ops_match_nexar_schema():
     except ImportError:
         print("skip test_altium365_ops_match_nexar_schema (pip install graphql-core)"); return
     schema = build_schema(Path("tests/nexar/schema.graphql").read_text(), assume_valid_sdl=True)
-    for op in (A.Q_WORKSPACES, A.Q_DEFS, A.Q_FIND, A.M_RELEASE, A.M_UPDATE_PARAMS):
+    for op in (A.Q_WORKSPACES, A.Q_DEFS, A.Q_FIND, A.M_RELEASE, A.M_UPDATE_PARAMS, A.Q_FOLDERS, A.M_CREATE_FOLDER,
+               *A.Q_MODELS.values()):
         assert not validate(schema, parse(op)), op
     item = A.plan([{"designator": "U1", "mpn": "CH340C", "footprint": "SOIC-16"}])[0]
-    inp = A.release_input(item, "https://ws", {}, ([("a.SchLib", "f1")], [("b.PcbLib", "f2")]))
+    inp = A.release_input(item, "https://ws", {}, ([("a.SchLib", "f1")], [("b.PcbLib", "f2")]), parent_id="fld-1")
     var_defs = parse(A.M_RELEASE).definitions[0].variable_definitions
     res = get_variable_values(schema, var_defs, {"input": inp})
+    assert not isinstance(res, list), [e.message for e in res]
+    linked = A.release_input(item, "https://ws", {}, ([], []), parent_id="fld-1", existing=("sym-1", "fp-1"))
+    res = get_variable_values(schema, var_defs, {"input": linked})
     assert not isinstance(res, list), [e.message for e in res]
 
 
