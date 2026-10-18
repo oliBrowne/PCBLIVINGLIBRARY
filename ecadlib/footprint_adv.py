@@ -881,6 +881,11 @@ def _bga(spec, density):
         # (TPS628436YKA: 3 x 2 at 0.35 mm, body 1.05 x 0.797): the grid fits the body turned a quarter turn
         bx, by = by, bx
         turned = f"body {2 * by:g} x {2 * bx:g} mm turned to {2 * bx:g} x {2 * by:g} to fit the {rows} x {cols} grid"
+    elif (gx - gy) * (bx - by) < -1e-9 and gx + land / 2 <= by and gy + land / 2 <= bx:
+        # the grid is long one way and the body the other (CY14U256LA: 6 x 8 balls, body read as 10 x 6 mm): the
+        # long side of a BGA body runs with the long side of its ball grid
+        bx, by = by, bx
+        turned = f"body {2 * by:g} x {2 * bx:g} mm turned to {2 * bx:g} x {2 * by:g} to run with the {rows} x {cols} grid"
     if gx + land / 2 > bx or gy + land / 2 > by:
         raise ValueError(f"the {rows} x {cols} grid at {e:g} mm pitch ({2 * gx:.2f} x {2 * gy:.2f} mm) doesn't fit the "
                          f"{2 * bx:g} x {2 * by:g} mm body: rows/cols swapped or pitch misread?")

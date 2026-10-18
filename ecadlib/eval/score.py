@@ -73,11 +73,15 @@ def pitch(pads):
     return round(min(v for v, n in best if n == top), 4)            # ties: the smaller spacing
 
 
+WORDS = {"ENABLE": "EN", "GROUND": "GND", "INPUT": "IN", "OUTPUT": "OUT", "CATHODE": "K", "ANODE": "A"}
+
+
 def norm_name(s):
     s = str(s or "").upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "")
     s = s.replace("~", "")
     s = re.sub(r"^(N(?=[A-Z]{2,})|/|#)", "", s)
-    return re.sub(r"[/#*_-]", "", s)
+    s = re.sub(r"[/#*_-]", "", s)
+    return WORDS.get(s, s)                            # a pin spelled out ("Enable") is the same pin as KiCad's "EN"
 
 
 def _f(ok, error="", **kw):
