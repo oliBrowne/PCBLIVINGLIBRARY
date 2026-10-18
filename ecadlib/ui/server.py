@@ -330,7 +330,7 @@ def make_handler(ws: Workspace, team=None):
         server_version = "ecadlib-ui/0.1"
         job_runner = jobs
         user = sess = _audit_route = None
-        _gated = False
+        _gated = _body_read = False
         if team:
             timeout = 120                                  # a stalled client can't hold a thread forever
 
@@ -495,6 +495,7 @@ def make_handler(ws: Workspace, team=None):
             return bom
 
         def _body(self, limit=MAX_UPLOAD):
+            self._body_read = True
             n = int(self.headers.get("Content-Length") or 0)
             if n < 0 or n > limit:
                 self.close_connection = True
@@ -617,13 +618,32 @@ def make_handler(ws: Workspace, team=None):
         def do_POST(self):
             # team mode: _send() writes the audit line (every POST that passes the gate, and 401/403 refusals)
             self._audit_route = urlparse(self.path).path if team else None
-            u = self._gate("POST")
-            if u is None:
-                return
+            self._body_read = False
             try:
-                return self._post(u)
-            except Exception as e:
-                return self._error(e)
+                u = self._gate("POST")
+                if u is None:
+                    return
+                try:
+                    return self._post(u)
+                except Exception as e:
+                    return self._error(e)
+            finally:
+                self._drain()
+
+        def _drain(self):
+            """Read and drop a small POST body nobody read (a refused request): Windows resets a connection closed
+            with unread data, and the client loses the answer it was already sent."""
+            if self._body_read:
+                return
+            self._body_read = True
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                if 0 < n <= 65536:
+                    self.rfile.read(n)
+                elif n:
+                    self.close_connection = True
+            except (OSError, ValueError):
+                self.close_connection = True
 
         def _post(self, u):
             if team and u.path in TEAM_ONLY:

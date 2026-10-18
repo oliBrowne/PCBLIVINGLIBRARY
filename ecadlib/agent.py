@@ -845,8 +845,11 @@ def push_approved(workspace, rules=None, dry_run=False, queue=None, a365=None, e
             else:
                 rep["results"].append({"id": it["id"], "action": "skip", "detail": f"now {cur.get('status')}: not pushed"})
         pairs = live
+    t0 = time.time()
     results = A.push([p for _, p in pairs], client, url or "https://<workspace>", dry_run=dry_run,
                      policy=load_policy(out), rules=rules) if pairs else []
+    if pairs and not dry_run:
+        A.record_push(out, t0, results)                 # the push step of the agent BOM's run (timing.jsonl)
     for (it, _), res in zip(pairs, results):
         res = dict(res, id=it["id"])
         rep["results"].append(res)

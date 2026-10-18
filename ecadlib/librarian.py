@@ -837,6 +837,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         if LR.wants(rules, "prefer_standard"):         # only for what the offline standard parts can't build
             sources.remove("standard")
             sources.insert(sources.index("datasheet"), "standard")
+    from . import timing as TI                       # wall time per step (timing.jsonl, `ecadlib status`)
+    t_run = time.time()
     lines, mapping = T.read_bom(bom, RU.bom_columns(rules))
     if not lines:
         raise ValueError(f"{bom}: the BOM has a header but no part rows")
@@ -846,6 +848,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     provs = [c(http) for c in PL.select(providers, rules, default=P.DEFAULT_ORDER)]
     rows = T.triage(lines, index, provs, http)
     T.write_reports(rows, mapping, provs, http, out / "triage", bom)
+    t_build = time.time()
+    TI.record(out, "triage", t_run, t_build, new_run=True, bom=Path(bom).name, lines=len(lines))
     items = A365.plan(lines, pd.DataFrame(rows, dtype=str).fillna("") if rows else None, rules=rules)
     state_f, plan_f = out / "librarian_state.json", out / "plan.json"
     state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.exists() else {}
@@ -931,6 +935,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         styled = HS.adapt_items([it for it in items if it["name"] not in in_ws], prof, rules)
         if styled:
             log(f"  style {len(styled)} part(s) written in your house style (descriptions, value formats)")
+    t_check = time.time()
+    TI.record(out, "build", t_build, t_check, parts=len(todo))
     checks = RC.apply(items, out, allow, rules=rules)
     if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
         from .approvals import identity, post_check, stamp_allow
@@ -942,6 +948,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     LK.write_lock(out, items, state, bom, libs, sources, cache, providers, gen_step, rules)
     RC.write_report(checks, out / "release_check", plan_f)
     write_review(review_rows(items), out, bom, items)
+    TI.record(out, "release_check", t_check, held=sum(i.get("status") == "held" for i in items))
     return items
 
 

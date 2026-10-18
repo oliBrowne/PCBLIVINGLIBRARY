@@ -446,6 +446,9 @@ class Workspace:
             stamp_allow(items, list(allow), user)
             post_check(items, out, rows)
         write_text_atomic(plan_f, json.dumps(items, indent=2))
+        if allow or unallow:
+            from . import timing
+            timing.mark_review(out, "allow")
         RC.write_report(rows, out / "release_check", plan_f)
         from . import librarian as L
         L.write_review(L.review_rows(items), out, str(bom_path))
@@ -650,6 +653,8 @@ class Workspace:
         entry.update(role=rec["role"], hash=rec["hash"], result="recorded", status=status)
         AP.audit(base, entry)
         write_text_atomic(plan_f, json.dumps(items, indent=2))
+        from . import timing                   # review time: from the release check to this decision
+        timing.mark_review(base, decision)
         L.write_review(L.review_rows(items), base, str(bom_path))
         out = self._librarian_summary(bom_path, items, [])
         out["decision"] = {"part": part, "decision": decision, "who": user, "role": rec["role"], "status": status,
@@ -954,8 +959,12 @@ class Workspace:
         if plan["source"] == "librarian":             # the sign-off policy as it is now, not as at the last check
             from .approvals import load_policy
             policy = load_policy(self.inside(plan["plan"]).parent)
+        import time
+        t0 = time.time()
         results = A.push(plan["items"], client, workspace_url or "https://<workspace>", dry_run=dry_run, policy=policy,
                          rules=self.rules())
+        if not dry_run and plan["source"] == "librarian":
+            A.record_push(self.inside(plan["plan"]).parent, t0, results)
         if any(r.get("a365_updated") for r in results):
             from .a365_sync import save_meta          # new revisions of pulled parts, so the next push is not a conflict
             save_meta(self.inside(plan["plan"]), plan["items"])

@@ -380,6 +380,7 @@ def test_http_senders_never_follow_redirects():
 
     class Redirect(Other):
         def do_GET(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))   # unread, Windows resets the 302
             self.send_response(302)
             self.send_header("Location", f"http://localhost:{other.server_port}/steal")
             self.end_headers()

@@ -49,6 +49,16 @@ as Altium or KiCad export it. Then:
 3. **Send to your tool.** For Altium, use a database library (DbLib), `.SchLib`/`.PcbLib` files, or an Altium 365
    workspace. For KiCad, use `.kicad_sym`/`.pretty` files.
 
+## Trying ecadlib for us? Send two numbers
+
+After your first BOM, run `ecadlib status` in a terminal (or `ecadlib status --json`) and send us the **last run**
+line and the **review** line:
+
+- **last run:** how long the BOM took to become a released library, step by step (triage, build, release check,
+  your review, the Altium 365 push), and how much of that was ecadlib's own work.
+- **review:** how many parts went through as ecadlib built them, how many were held (and the top reasons), and how
+  many you approved, rejected or changed.
+
 ## While it runs
 
 A small "ecadlib is running" window stays open. It has buttons for Open, Setup, Workspace folder and Quit. Closing

@@ -98,6 +98,7 @@ def in_demo(copy=False):
 def golden(name, text):
     f = GOLD / f"{name}.txt"
     text = re.sub(r"in \d+\.\d s", "in X.X s", text).replace("\\", "/")     # Windows prints its own separators
+    text = re.sub(r"\b\d+(?:h \d{2}m|m \d{2}s|s)\b", "Ns", text)          # step times in `status` (ecadlib.timing.human)
     if os.environ.get("ECADLIB_UPDATE_GOLDEN") or not f.exists():
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(text, encoding="utf-8")

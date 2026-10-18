@@ -288,6 +288,14 @@ def release_input(item, ws, defs, file_ids, models_root="Components/Models", par
 
 
 # ------------------------------------------------------------------ push
+def record_push(folder, started, results):
+    """The push step of the plan's BOM run (timing.jsonl, `ecadlib status`)."""
+    from . import timing
+    acts = [r.get("action") for r in results]
+    timing.record(folder, "push", started, released=acts.count("release"), updated=acts.count("update_parameters"),
+                  errors=acts.count("error"))
+
+
 def merged_params(existing, item):
     """Parameter list to send with replaceExisting=True, or None when the workspace already matches.
     Starts from the current revision's parameters so ones added by hand in Altium 365 survive; plan
@@ -492,8 +500,12 @@ def main(argv=None):
                 if i[k]["file"]:
                     i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
         from .approvals import load_policy
+        import time
+        t0 = time.time()
         results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent),
                        rules=RU.load(a.rules, start=Path(a.plan).parent))
+        if not a.dry_run:
+            record_push(Path(a.plan).parent, t0, results)
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work
         hint = " (token rejected: check it has design.domain, user.access, openid)" if "401" in str(e) else ""
         sys.exit(f"Nexar request failed: {type(e).__name__}: {e}{hint}")

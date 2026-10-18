@@ -353,7 +353,8 @@ def test_pcblib_dates_are_the_only_wall_clock_value():
         assert RB.norm_sha(fa) == RB.norm_sha(fb)
         for f in sorted(a.rglob("*")):             # everything else ecadlib writes for the library is byte-identical
             rel = f.relative_to(a)
-            if f.is_file() and f.suffix not in (".PcbLib", ".md", ".json") and ".ecadlib" not in str(rel):
+            if f.is_file() and f.suffix not in (".PcbLib", ".md", ".json") and ".ecadlib" not in str(rel) \
+                    and f.name != "timing.jsonl":   # how long each step took: wall clock by design (ecadlib.timing)
                 assert f.read_bytes() == (b / rel).read_bytes(), rel
         la, lb = RB.read_lock(a), RB.read_lock(b)
         assert [r for r in RB.compare(la, lb) if r["result"] == "DRIFT"] == []

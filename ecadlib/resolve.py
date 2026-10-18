@@ -455,6 +455,8 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None):
     write_text_atomic(plan, json.dumps(items, indent=2))
     if state is not None:
         write_text_atomic(state_f, json.dumps(state, indent=2))
+    from . import timing                       # a person picked a part: review time runs to here
+    timing.mark_review(plan.parent, f"choose {kind}")
     pins, pads = item_pins(it, base), item_pads(it, base)
     return {"name": part, "status": it["status"], "hold_reasons": it["hold_reasons"],
             "warnings": it["release_check"]["warnings"], "file": it[kind]["file"], "source": it["source"][kind],
