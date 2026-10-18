@@ -4,6 +4,7 @@
   color-scheme: light;
   --bg: #ffffff; --text: #232327; --muted: #6f6f78; --line: #e0e0e4; --line-2: #ececef; --hover: #f6f6f7;
   --trace: #d9d9de; --trace-hi: #232327;
+  --copper: #c2622d;                                  /* brand accent: the mark's leaves, focus rings, small highlights only */
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --ease: cubic-bezier(.32, .72, 0, 1);
@@ -15,14 +16,14 @@
   :root:not([data-theme="light"]) {
     color-scheme: dark;
     --bg: #08090a; --text: #d0d6e0; --muted: #8a8c95; --line: #29292d; --line-2: #1d1d20; --hover: #111214;
-    --trace: #1f2023; --trace-hi: #d0d6e0;
+    --trace: #1f2023; --trace-hi: #d0d6e0; --copper: #e8834a;
     --hairline-hi: #fafafa; --hairline-edge: #a1a1aa; --hairline-mid: #52525b; --hairline-lo: #27272a;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #08090a; --text: #d0d6e0; --muted: #8a8c95; --line: #29292d; --line-2: #1d1d20; --hover: #111214;
-  --trace: #1f2023; --trace-hi: #d0d6e0;
+  --trace: #1f2023; --trace-hi: #d0d6e0; --copper: #e8834a;
   --hairline-hi: #fafafa; --hairline-edge: #a1a1aa; --hairline-mid: #52525b; --hairline-lo: #27272a;
 }
 
@@ -36,7 +37,7 @@ code { font: 13px/1 var(--mono); padding: 1px 5px; border: 1px solid var(--line)
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .sr { position: absolute; width: 0; height: 0; overflow: hidden; }
-:focus-visible { outline: 1.5px solid var(--text); outline-offset: 3px; border-radius: 6px; }
+:focus-visible { outline: 1.5px solid var(--copper); outline-offset: 3px; border-radius: 6px; }
 
 /* nav */
 .nav { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 24px; padding: 14px clamp(16px, 4vw, 40px);
@@ -44,8 +45,7 @@ code { font: 13px/1 var(--mono); padding: 1px 5px; border: 1px solid var(--line)
   border-bottom: 1px solid transparent; transition: border-color .5s var(--ease); }
 .nav.scrolled { border-bottom-color: var(--line); }
 .brand { display: inline-flex; align-items: center; gap: 10px; font: 500 15px/1 var(--mono); letter-spacing: .02em; text-decoration: none; }
-.brand .ring { width: 9px; height: 9px; border-radius: 50%; border: 1px solid currentColor; position: relative; }
-.brand .ring::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; border: 1px solid currentColor; opacity: 0; animation: ping 3.2s var(--ease) infinite; }
+.brand .mark { width: 20px; height: 20px; flex: none; }
 .nav nav { display: flex; gap: 22px; margin-left: 12px; }
 .nav nav a { white-space: nowrap; font: 12.5px/1 var(--mono); color: var(--muted); text-decoration: none; position: relative; padding: 6px 0; transition: color .3s var(--ease); }
 .nav nav a::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--text); transform: scaleX(0); transform-origin: left; transition: transform .5s var(--ease); }
@@ -239,7 +239,7 @@ svg.fp[data-solo="top"] .pad.on:not(.focus) { opacity: .45 !important; }
 .foot { margin-top: clamp(90px, 12vw, 160px); border-top: 1px solid var(--line); position: relative; overflow: hidden; }
 .footin { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 40px; padding-top: 56px; padding-bottom: 64px; position: relative; }
 .brand.big { font-size: 22px; margin: 0 0 14px; }
-.brand.big .ring { width: 12px; height: 12px; }
+.brand.big .mark { width: 28px; height: 28px; }
 .credits p { margin: 0 0 12px; line-height: 1.6; }
 @media (max-width: 760px) { .footin { grid-template-columns: 1fr; } }
 .maker { margin-top: 36px; padding-top: 24px; border-top: 1px solid var(--line); display: grid; gap: 6px; max-width: 46ch; }
@@ -262,7 +262,6 @@ svg.fp[data-solo="top"] .pad.on:not(.focus) { opacity: .45 !important; }
 .steps .reveal:nth-child(2) { transition-delay: .06s; } .steps .reveal:nth-child(3) { transition-delay: .12s; }
 .steps .reveal:nth-child(4) { transition-delay: .18s; } .steps .reveal:nth-child(5) { transition-delay: .24s; }
 .grid3 .reveal:nth-child(2), .grid2 .reveal:nth-child(2) { transition-delay: .08s; } .grid3 .reveal:nth-child(3) { transition-delay: .16s; }
-@keyframes ping { 0% { transform: scale(.6); opacity: .7; } 70%, 100% { transform: scale(1.6); opacity: 0; } }
 @keyframes blink { 50% { opacity: 0; } }
 @keyframes marquee { to { transform: translateX(-50%); } }
 @keyframes bus { 0% { transform: translateX(-100%); } 100% { transform: translateX(560%); } }
