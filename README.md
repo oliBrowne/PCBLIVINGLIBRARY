@@ -1340,6 +1340,9 @@ Run 2026-10-15 with KiCad 7.0.11 (`kicad-cli`, `pcbnew` from `/usr/bin/python3`)
 
 ## 29. `eval`: accuracy test set and scorer (`ecadlib/eval/`)
 
+The live benchmark on 110 of these parts (method, results per family, every miss, cost, how to rerun) is in
+[docs/benchmark.md](docs/benchmark.md).
+
 How often does the pipeline get a part right, and what does it cost? `ecadlib/eval/sets/kicad-v1.json` holds 331 real
 parts with a known answer, taken from KiCad's official libraries (kicad-symbols 9280a93, kicad-footprints f8440fa):
 chip passives 36, SOT 40, SOIC 30, TSSOP/MSOP/SSOP 30, QFN/DFN/SON 40, QFP 25, BGA/CSP 25, diodes 25, power SMD

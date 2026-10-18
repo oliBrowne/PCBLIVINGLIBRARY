@@ -104,6 +104,11 @@
       </div>
     </div>
     <div class="pkgs mono reveal" id="fppkgs" role="tablist" aria-label="Packages"></div>
+    <div class="grid3" id="benchmark">
+      <article class="card reveal"><p class="mono n">benchmark · 18 Oct 2026</p><h3>30 of 110 real parts right</h3><p>Built with no KiCad library and scored against KiCad's: 27 % of all parts, 42 % of those not stopped by a missing PDF. 26 PDFs never reached the model and 13 parts have no working link. Not yet the 97 % we are aiming for.</p></article>
+      <article class="card reveal"><p class="mono n">pads</p><h3>72 % of footprints, every pad</h3><p>Of the 46 footprints built, 33 match KiCad on every pad, 36 counting three that use the maker's own land pattern. Most misses are thermal pads on PowerPAD parts and reads that left a number blank, which are held, not guessed.</p></article>
+      <article class="card reveal"><p class="mono n">cost</p><h3>$14.34 for the run</h3><p>139 datasheet reads, mostly at the half-price batch rate, and free to re-score after a fix. The method, every miss and the command to run it yourself are in <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/docs/benchmark.md">docs/benchmark.md</a>.</p></article>
+    </div>
   </section>
 
   <!-- 04 house style -->
