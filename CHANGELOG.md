@@ -21,6 +21,8 @@ a minor release may change command-line options and file formats.
 ### Fixed
 
 - Datasheet reader: the live API refused every read ("Schemas contains too many parameters with union types (184 ...). limit: 16"). The request now asks for the dimensions as a list of named records (min / nom / max as printed text, "" where blank) and the optional family fields as one JSON text, with no nullable fields; the answer is turned back into the same extraction as before, so checks, the result cache and recorded answers are unchanged. The cross-check's second read had the same problem (26 union fields) and is fixed the same way.
+- Datasheet reader: the optional family fields reached the model without their descriptions, so a land pattern's `pad_center` came back as the datasheet's C (row to row) and SOT-23-6 pads sat 2.4 mm out instead of 1.2 (BCR430UW6, AH1806-W). The descriptions are back, `pad_center` says C / 2, and a pad_center past the leads is flagged.
+- `ecadlib eval`: KiCad's pin-name markup (`V_{SS}`) matches the datasheet's plain `VSS`.
 - Datasheet reader: an answer with no `unresolved` list crashed ("'NoneType' object is not iterable"), and a read that left a needed dimension blank crashed the footprint build (`KeyError: 'terminal_length'`, "'>' not supported between NoneType"). The part is now left for review with "no footprint: the datasheet read left terminal_length unresolved". A bug in a source names its file and line in the part's log.
 - Datasheet reader: a maker's link that refuses this machine (HTTP 401, 403 or 429: Nexperia, Renesas, Altera on the live benchmark) is sent as a URL for the API to fetch, as a blocked host already was; only a 404-style error, an HTML page or an oversized file rules a link out.
 

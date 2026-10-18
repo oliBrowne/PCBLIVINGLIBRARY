@@ -1027,7 +1027,7 @@
         "pad_width",
         "pad_center"
       ],
-      "description": "The manufacturer's recommended land pattern, when the datasheet gives one. It replaces the IPC-7351B pads for the signal pins (a tab or exposed pad keeps its own size). pad_center = distance from the part centre to each pad centre.",
+      "description": "The manufacturer's recommended land pattern, when the datasheet gives one. It replaces the IPC-7351B pads for the signal pins (a tab or exposed pad keeps its own size). pad_center = distance from the part centre to each pad centre: half the centre-to-centre distance across the rows (a datasheet's C / 2).",
       "properties": {
         "pad_length": {
           "type": "number",

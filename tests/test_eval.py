@@ -361,6 +361,12 @@ def test_parts_without_a_datasheet_pdf_are_reported_apart():
     assert (s["overall"]["pass"], s["overall"]["cases"]) == (1, 4) and (s["with_datasheet"]["pass"], s["with_datasheet"]["cases"]) == (1, 3)
 
 
+def test_kicad_subscript_pin_names_match_plain_ones():
+    """KiCad writes V_{SS}; a datasheet says VSS: the same pin name (CD4066BNS failed on this alone)."""
+    assert S.norm_name("V_{SS}") == S.norm_name("VSS") and S.norm_name("V_{DD}") == S.norm_name("Vdd")
+    assert S.norm_name("~{RESET}") == S.norm_name("RESET") and S.norm_name("V_{SS}") != S.norm_name("VDD")
+
+
 if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_") and callable(f):

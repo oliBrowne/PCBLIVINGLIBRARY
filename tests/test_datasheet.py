@@ -370,6 +370,19 @@ def test_wire_answer_round_trips_and_stays_under_the_union_limit():
         assert "other_json" in str(e)
 
 
+def test_land_pad_center_given_as_the_row_distance_is_flagged():
+    """BCR430UW6 / AH1806-W: the datasheet's C (2.40, centre to centre across the rows) went in as pad_center, so the
+    pads sat 2.4 mm out instead of 1.2. A pad_center past the leads is flagged with the likely C/2."""
+    spec = {"package_type": "gullwing", "pin_count": 6, "pitch": 0.95, "lead_span": {"min": 2.7, "nom": 2.8, "max": 3.0},
+            "body_width": {"min": 1.5, "nom": 1.6, "max": 1.7}, "land": {"pad_length": 0.8, "pad_width": 0.55, "pad_center": 2.4}}
+    review = []
+    D.sanity(spec, review)
+    assert any("land.pad_center 2.4" in r and "C/2 = 1.2" in r for r in review), review
+    review = []
+    D.sanity(dict(spec, land={"pad_length": 0.8, "pad_width": 0.55, "pad_center": 1.2}), review)
+    assert not any("pad_center" in r for r in review), review
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

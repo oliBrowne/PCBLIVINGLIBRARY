@@ -444,9 +444,15 @@ def _wire_parts():
     return full, pk, other
 
 
+def _lean(s):
+    """A schema as prompt text: the descriptions stay (what pad_center measures is in them), strict-mode noise goes."""
+    if isinstance(s, dict):
+        return {k: _lean(v) for k, v in s.items() if k not in ("additionalProperties", "required")}
+    return [_lean(x) for x in s] if isinstance(s, list) else s
+
+
 def wire_schema():
     full, pk, other = _wire_parts()
-    from .llm.rails import _compact
     txt = lambda d: {"type": "string", "description": d}
     names = "; ".join(f"{k}: {(pk[k]['anyOf'][0].get('description') or '').split('. ')[0]}" for k in DIMS + NUM_DIMS) \
         + "; exposed_pad.length / exposed_pad.width: the exposed / thermal pad (leave both out if there is none)"
@@ -468,7 +474,7 @@ def wire_schema():
                                     "does not give. " + names}
     props["other_json"] = txt("A JSON object (as text) with the fields of this schema that apply to this package, "
                               "each as described there; leave the others out: "
-                              + json.dumps(_compact({"type": "object", "properties": {k: v["anyOf"][0] for k, v in other.items()}}),
+                              + json.dumps(_lean({"type": "object", "properties": {k: v["anyOf"][0] for k, v in other.items()}}),
                                            separators=(",", ":")))
     return _obj(dict(full["properties"], package=_obj(props, full["properties"]["package"].get("description"))))
 
@@ -885,6 +891,12 @@ def sanity(spec, review):
         v, body = _dim(ep.get(d)), g(k)
         if v and body and v[1] >= body[0]:
             review.append(f"exposed_pad.{d} {v[1]} >= {k} min {body[0]}")
+    land, outer = spec.get("land") or {}, g("lead_span") or g("body_width")
+    lc, ll = land.get("pad_center"), land.get("pad_length")
+    if isinstance(lc, (int, float)) and isinstance(ll, (int, float)) and outer and lc > outer[2] / 2 + ll:
+        review.append(f"land.pad_center {lc:g} mm puts the pads past the leads ({'lead_span' if g('lead_span') else 'body_width'} "
+                      f"max {outer[2]:g} mm): pad_center is from the part centre to each pad centre, half the "
+                      f"centre-to-centre distance across the rows (C/2 = {lc / 2:g} if {lc:g} is C)")
 
 
 def check_pins(spec, ext, review):
