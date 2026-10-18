@@ -137,6 +137,7 @@ Both servers use only the standard library on top of the package requirements. T
 * **First visit.** An empty workspace shows a welcome card: *Try it with a sample BOM* builds the 7-part sample (the one `ecadlib demo` uses) from ecadlib's standard parts, offline and without an API key; *Run the setup check* runs `ecadlib doctor`.
 * **Drop a BOM anywhere on the page** (CSV or XLSX). Long actions (checking a BOM, filling the library, the sample) show live progress with one line per part ("3/14 SOT-23  ready") and a **Stop** button; the rest of the page keeps working. A stopped librarian run leaves the library plan as it was.
 * **Parts as cards.** Step 2 lists every part with a footprint picture and chips: ready / held / waiting for sign-off, the cross-check result, KiCad / Altium match, and what reading its datasheet cost and with which model; the header adds the totals so far. Search and status chips filter the list.
+* **AI steps ask first.** *Fill missing parts* never calls a model. Parts only a datasheet read can finish come back priced: the model, about how much and at most how much, and nothing is sent until you click *Read with AI*; above `[datasheet] ask_above_usd` (default $1.00, or `max_cost_usd` when set) it asks a second time. The reads are held to the amount you approved, and the real cost then shows next to the estimate. *AI cost of the rest* prices an older plan. The Altium dialog and the KiCad window work the same way. See [docs/api-keys.md](docs/api-keys.md).
 * **Click a part** to open its side panel: why it is held in plain words with the next step (wording from `ecadlib/messages.py`), both values when the cross-check or the KiCad / Altium comparison disagrees, the datasheet (at the page in question when known), and the actions: pick a symbol or footprint, release anyway, approve or reject.
 * **Undo.** Approve and reject (in step 2 and in the review queue) show at once and are sent when the few-second Undo window closes; *Release anyway* is recorded at once and its Undo holds the part again.
 * **Keyboard.** `?` lists the shortcuts: `/` search, `j` / `k` next / previous part, `Enter` open, `Esc` close, `h` held only, `u` choose a file, `1` `2` `3` steps, `q` review queue, `s` status. Light and dark themes follow the system; `prefers-reduced-motion` turns animations off.
@@ -697,7 +698,7 @@ Claude reads the package drawing and pin table and returns every dimension as pr
 ### A whole BOM in one batch
 
 ```
-export ANTHROPIC_API_KEY=...                      # or name another variable in ecadlib.toml [datasheet] api_key_env
+ecadlib keys set ANTHROPIC_API_KEY               # stored for ecadlib only, never an environment variable (docs/api-keys.md)
 ecadlib datasheet estimate out/librarian/plan.json          # tokens and $ before anything is sent
 ecadlib datasheet batch out/librarian/plan.json [--no-wait] [--no-batch] [--part P] [--yes]
 ecadlib datasheet batch examples/sample_bom.csv -o out/librarian --lib ...   # librarian + batch in one go
@@ -1740,18 +1741,18 @@ What it costs: [docs/costs.md](docs/costs.md) has an estimate per job (datasheet
 visual check) for every model above, and `ecadlib costs` prints the same for the model in your `ecadlib.toml`.
 
 ```toml
-# ecadlib.toml: pick ONE [ai] block (keys come from environment variables; only the variable's NAME goes here)
+# ecadlib.toml: pick ONE [ai] block (store the key with `ecadlib keys set NAME`; only the NAME goes here)
 
 [ai]                                   # Claude (the default: this block is the same as having none)
-provider = "anthropic"                 # export ANTHROPIC_API_KEY=...
+provider = "anthropic"                 # ecadlib keys set ANTHROPIC_API_KEY
 model = "claude-opus-5-5"
 
 [ai]                                   # OpenAI
-provider = "openai"                    # export OPENAI_API_KEY=...
+provider = "openai"                    # ecadlib keys set OPENAI_API_KEY
 model = "gpt-5"
 
 [ai]                                   # OpenRouter (any model it serves)
-provider = "openrouter"                # export OPENROUTER_API_KEY=...
+provider = "openrouter"                # ecadlib keys set OPENROUTER_API_KEY
 model = "anthropic/claude-opus-5-5"    # or "openai/gpt-5", "qwen/qwen-2.5-72b-instruct", ...
 
 [ai]                                   # Ollama on this machine: free, no key, nothing leaves the machine
@@ -2133,12 +2134,14 @@ For people who are used to installers, not terminals. The guide for them is `doc
   keeps its list of script projects to itself. **Add to KiCad** copies the action plugin into each KiCad's
   `scripting/plugins` folder, with this ecadlib's command next to it, so no PATH change is needed. The setup routes
   exist in local mode only: team mode answers 404, because keys belong to each person.
-* **`ecadlib keys list|set NAME|remove NAME`** (`userconfig.py`): API keys stored per user, as an alternative to
-  environment variables. On Windows they are encrypted with DPAPI for your account. Elsewhere they are in a file only
-  you can read (mode 600). The folder is `%APPDATA%\ecadlib`, `~/Library/Application Support/ecadlib` or
-  `~/.config/ecadlib`, and `ECADLIB_HOME` overrides it. Every entry point (CLI, `ui`, `mcp`, the app) copies stored
-  keys into its environment where the variable is not already set, so an environment variable always wins. A key
-  value is never printed, logged, shown by the web UI or written to `ecadlib.toml`.
+* **`ecadlib keys list|set NAME|remove NAME`** (`userconfig.py`): API keys stored per user, the way to give ecadlib a
+  key. On Windows they are encrypted with DPAPI for your account. Elsewhere they are in a file only you can read
+  (mode 600). The folder is `%APPDATA%\ecadlib`, `~/Library/Application Support/ecadlib` or `~/.config/ecadlib`, and
+  `ECADLIB_HOME` overrides it. ecadlib reads a stored key when it needs it and never puts it into an environment
+  variable, so other programs (a coding assistant that bills an `ANTHROPIC_API_KEY` it finds, or anything ecadlib
+  starts) cannot use it. An environment variable of the same name is used only when nothing is stored, and `ecadlib
+  doctor` warns about it. A key value is never printed, logged, shown by the web UI or written to `ecadlib.toml`.
+  See [docs/api-keys.md](docs/api-keys.md).
 * **The doctor on a fresh install** now shows only what matters. A key or tool for a feature you have not turned on
   is OK ("only needed for ..."): git and pdftoppm for the library agent, NEXAR_TOKEN without an `[altium365]`
   workspace, GITHUB_TOKEN without the agent, kicad-cli when you only make Altium libraries. The optional part-lookup

@@ -87,6 +87,7 @@ DEFAULTS = {
     "sim": {"capacitor_esr": "", "capacitor_esl": "", "inductor_dcr": ""},   # ecadlib.sim_models ("" = none)
     "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)
                   "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40,
+                  "ask_above_usd": 1.0,                 # ecadlib.ai_cost: the dialogs ask twice above this (max_cost_usd wins)
                   # ecadlib.ds_route: pages and model per part (route = "single": `model` for every part, as before)
                   "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
                   "escalate": True, "max_attempts": 4,
@@ -854,6 +855,8 @@ HELP = {
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",
     "datasheet.api_key_env": "name of the environment variable with the API key; the key itself never goes in this file",
     "datasheet.max_cost_usd": "refuse a run whose estimated worst-case cost is higher (0 = no cap; --yes overrides)",
+    "datasheet.ask_above_usd": "the Altium dialog, KiCad window and web UI always show the model and cost before an AI step; "
+                               "above this (or above max_cost_usd when set) they ask a second time (default 1.00)",
     "datasheet.page_budget": "pages sent on the first try, picked by text (drawing for this package, land pattern, pin table, "
                              "ordering info); widened to 3x, then the whole PDF, when the answer is incomplete (0 = whole PDF)",
     "datasheet.route": "single = `model` for every part | ladder = start on the cheapest model of `ladder` that suits the "

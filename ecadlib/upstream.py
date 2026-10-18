@@ -23,6 +23,7 @@ from urllib.parse import quote
 from . import __version__, kicad_import as K, sexpr
 from . import sheetsafe as SS
 from .httpcache import CachedHTTP, Response
+from . import userconfig as UC
 
 RAW = re.compile(r"https://gitlab\.com/kicad/libraries/([^/]+)/-/raw/([^/]+)/(.+)$")
 API = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository"
@@ -523,7 +524,7 @@ def main(argv=None):
             return 2
         try:
             man = json.loads(Path(a.manifest).read_text(encoding="utf-8"))
-            rows, worst = check_kicad(man, GitLab(token=os.environ.get("GITLAB_TOKEN")))
+            rows, worst = check_kicad(man, GitLab(token=UC.secret("GITLAB_TOKEN")))
         except Exception as e:
             print(f"check-kicad: {type(e).__name__}: {e}", file=sys.stderr); return 2
         if a.update:
@@ -547,7 +548,7 @@ def main(argv=None):
         print("  ".join(f"{v} {s}" for s, v in counts.items() if v) + f"   -> {Path(a.out).with_suffix('.md')} and .csv")
         return 2 if counts["error"] else 1 if any(counts[s] for s in ("changed", "renamed", "deleted")) else 0
 
-    token = os.environ.get("NEXAR_TOKEN")
+    token = UC.secret("NEXAR_TOKEN")
     if not token:
         print("check-a365: set NEXAR_TOKEN (design.domain, user.access, openid)", file=sys.stderr); return 2
     try:

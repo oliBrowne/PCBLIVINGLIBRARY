@@ -20,7 +20,7 @@ from pathlib import Path
 from . import altium_menu as AM
 
 WORK, LIB = "ecadlib-work", "ecadlib"
-ACTIONS = ("add-part", "check-bom", "fill", "queue", "open")
+ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read")
 
 
 def project_dir(project):
@@ -102,7 +102,9 @@ def fill(cfg, project, progress=None):
     return res
 
 
-def run_action(cfg, action, project, mpn="", manufacturer="", path="", opener=None, progress=None):
+def run_action(cfg, action, project, mpn="", manufacturer="", path="", opener=None, progress=None, ai=None):
+    if action == "ai-read":                    # only after the window showed the cost and the person said yes
+        return AM.ai_read(cfg, dict(ai or {}, mpn=mpn), progress=progress)
     if action == "add-part":
         return add_part(cfg, mpn, manufacturer, progress=progress)
     if action == "check-bom":
@@ -116,14 +118,14 @@ def run_action(cfg, action, project, mpn="", manufacturer="", path="", opener=No
     raise ValueError(f"unknown action {action!r} (one of {', '.join(ACTIONS)})")
 
 
-def run_job(job, action, project, mpn="", manufacturer="", path="", opener=None, offline=False):
+def run_job(job, action, project, mpn="", manufacturer="", path="", opener=None, offline=False, ai=None):
     """What the plugin runs: JOB/progress.ini while working, JOB/result.ini at the end. Returns the result dict."""
     job = Path(job)
     job.mkdir(parents=True, exist_ok=True)
     try:
         cfg = config(project, offline=offline)
         res = run_action(cfg, action, project, mpn, manufacturer, path,
-                         opener=False if action == "check-bom" else opener, progress=AM.Progress(job))
+                         opener=False if action == "check-bom" else opener, progress=AM.Progress(job), ai=ai)
     except Exception as e:                                   # every failure becomes one dialog line with a fix
         res = AM._error(e)
     AM.write_result(job / "result.ini", res)
@@ -153,6 +155,11 @@ def main(argv=None):
     r.add_argument("--manufacturer", default="")
     r.add_argument("--path", default="", help="open: the report to open")
     r.add_argument("--offline", action="store_true", help="cached downloads and standard parts only")
+    r.add_argument("--bom", default="", help="ai-read: the workspace BOM the AI step's cost was shown for")
+    r.add_argument("--part", default="", help="ai-read: only this part")
+    r.add_argument("--approved-usd", default="", help="ai-read: the amount the person approved (the reads are held to it)")
+    r.add_argument("--over-limit-ok", action="store_true", help="ai-read: the person said yes to a cost over the limit")
+    r.add_argument("--price-unknown-ok", action="store_true", help="ai-read: the person said yes without a known price")
     c = sub.add_parser("check-bom", help='check a schematic against the library and open the report (Generate BOM: "%%I")')
     c.add_argument("project", help="netlist (.xml) KiCad's Generate BOM passes as %%I, a .kicad_sch or a board")
     c.add_argument("output", nargs="?", help="KiCad's %%O (ignored)")
@@ -160,7 +167,9 @@ def main(argv=None):
     c.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if a.cmd == "run-job":
-        res = run_job(a.job, a.action, a.project, a.mpn, a.manufacturer, a.path, offline=a.offline)
+        ai = {"bom": a.bom, "part": a.part, "approved_usd": a.approved_usd,
+              "over_limit_ok": "1" if a.over_limit_ok else "", "price_unknown_ok": "1" if a.price_unknown_ok else ""}
+        res = run_job(a.job, a.action, a.project, a.mpn, a.manufacturer, a.path, offline=a.offline, ai=ai)
         return 0 if res.get("status") != "error" else 1
     try:
         res = AM.check_bom(config(a.project), schematic_of(a.project), opener=False if a.no_open else None)

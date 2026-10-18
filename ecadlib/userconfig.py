@@ -1,6 +1,6 @@
 """Per-user settings and API keys, for people who set ecadlib up from the setup page instead of a terminal.
 
-    ecadlib keys list                  which keys are stored (names only) and which are set in the environment
+    ecadlib keys list                  which keys are stored (names only) and which only the environment has
     ecadlib keys set NAME              asks for the value (hidden), stores it for this user
     ecadlib keys remove NAME
 
@@ -11,12 +11,13 @@ Where: a folder of this user's own, never the workspace or a repository:
   keys.json       stored API keys: on Windows each value is encrypted for this Windows account (DPAPI, the same store
                   browsers use), elsewhere the file is readable by this user only (mode 600), like ~/.netrc
 
-How keys are used: every ecadlib entry point (the command line, `ecadlib ui`, the MCP server, the desktop app) calls
-apply_env() first, which copies each stored key into the process environment when that variable is NOT already set.
-So an environment variable always wins, and the rest of ecadlib still reads keys from the environment only. A key
-value is never printed, logged, returned by the web UI or written anywhere else.
+How keys are used: ecadlib reads a key from this file when it needs it (secret(name)), and from an environment
+variable of the same name only when nothing is stored. It never copies a key into the environment, never sets one for
+the user (no setx, no shell profile) and never needs one, so other programs (a coding assistant, a build tool, any
+child process ecadlib starts) cannot pick a stored key up. A key value is never printed, logged, returned by the web
+UI or written anywhere else.
 
-apply_env() also puts KiCad's bin folder on PATH when kicad-cli is not found there but a KiCad install is (the
+apply_env() puts KiCad's bin folder on PATH when kicad-cli is not found there but a KiCad install is (the
 Windows installer of KiCad does not add it to PATH)."""
 import argparse, base64, getpass, json, os, re, sys, tempfile
 from pathlib import Path
@@ -24,6 +25,7 @@ from pathlib import Path
 SETTINGS, KEYS = "settings.json", "keys.json"
 NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 MAX_KEY = 4096
+NO_STORED = "ECADLIB_NO_STORED_KEYS"          # set (the eval gate, golden builds): stored keys are not read
 
 
 def config_dir(environ=None):
@@ -165,31 +167,60 @@ def remove_key(name, environ=None):
     return True
 
 
+_CACHE = {}
+
+
 def get_key(name, environ=None):
-    """The stored value, or None (unreadable entries are skipped). For apply_env and the key check only."""
-    stored = _read_json(config_dir(environ) / KEYS).get(name)
-    if stored is None:
+    """The stored value, or None (unreadable entries are skipped)."""
+    f = config_dir(environ) / KEYS
+    try:
+        st = f.stat()
+        stamp = (str(f), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    if _CACHE.get("stamp") != stamp:                  # decrypt once per change of keys.json, not on every request
+        _CACHE.clear()
+        _CACHE.update(stamp=stamp, values={})
+    vals = _CACHE["values"]
+    if name not in vals:
+        stored = _read_json(f).get(name)
+        try:
+            vals[name] = None if stored is None else _decode(stored)
+        except (OSError, ValueError):
+            vals[name] = None
+    return vals[name]
+
+
+def secret(name, environ=None):
+    """A key or token ecadlib needs: the one stored for this user (`ecadlib keys set`, the setup page), else an
+    environment variable of that name (environ: that environment, for tests), else None. Read when needed; never
+    copied into the environment."""
+    env = os.environ if environ is None else environ
+    if not name:
         return None
     try:
-        return _decode(stored)
-    except (OSError, ValueError):
-        return None
+        v = None if os.environ.get(NO_STORED) else get_key(name)
+    except Exception:                                 # a broken config folder must not stop any command
+        v = None
+    return v or env.get(name) or None
+
+
+def key_source(name, environ=None):
+    """Where secret(name) comes from: "stored", "environment" or None (names only, never the value)."""
+    env = os.environ if environ is None else environ
+    try:
+        if not os.environ.get(NO_STORED) and get_key(name):
+            return "stored"
+    except Exception:
+        pass
+    return "environment" if env.get(name) else None
 
 
 def apply_env(environ=None, config_environ=None):
-    """Stored keys -> the environment where the variable is not set; KiCad's bin folder -> PATH when kicad-cli is
-    missing. Returns the names it set. Never raises: a broken config folder must not stop any command."""
+    """Puts KiCad's bin folder on PATH when kicad-cli is missing there but KiCad is installed. Stored keys are NOT put
+    into the environment (read them with secret()); returns [] (the names of keys set, kept for old callers).
+    Never raises: a broken config folder must not stop any command."""
     environ = os.environ if environ is None else environ
-    done = []
-    try:
-        for name in stored_names(config_environ or environ):
-            if NAME_RE.fullmatch(name) and not environ.get(name):
-                v = get_key(name, config_environ or environ)
-                if v:
-                    environ[name] = v
-                    done.append(name)
-    except Exception:
-        pass
     try:
         import shutil
         if not shutil.which("kicad-cli", path=environ.get("PATH")):
@@ -199,7 +230,7 @@ def apply_env(environ=None, config_environ=None):
                 environ["PATH"] = environ.get("PATH", "") + os.pathsep + str(Path(cli).parent)
     except Exception:
         pass
-    return done
+    return []
 
 
 # ------------------------------------------------------------------ how to run ecadlib from another program
@@ -221,8 +252,8 @@ def key_hint(name):
 def main(argv=None, inp=None, out=print):
     ap = argparse.ArgumentParser(prog="ecadlib keys", description="API keys stored for this user (names only are shown)")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("list", help="stored keys and which are set in the environment")
-    s = sub.add_parser("set", help="store a key (asked for, hidden); an environment variable of the same name still wins")
+    sub.add_parser("list", help="stored keys (names only)")
+    s = sub.add_parser("set", help="store a key (asked for, hidden); ecadlib uses it before any environment variable")
     s.add_argument("name", help="the variable name, e.g. ANTHROPIC_API_KEY")
     s.add_argument("--stdin", action="store_true", help="read the value from standard input (scripts)")
     r = sub.add_parser("remove", help="forget a stored key")
@@ -234,8 +265,9 @@ def main(argv=None, inp=None, out=print):
         if not names:
             out("  none stored")
         for n in names:
-            env = "also set in the environment, which wins" if os.environ.get(n) and os.environ.get(n) != get_key(n) else ""
+            env = "also set in the environment; ecadlib uses the stored one" if os.environ.get(n) and os.environ.get(n) != get_key(n) else ""
             out(f"  {n}" + (f"   ({env})" if env else ""))
+        out("ecadlib reads these itself and never puts them in the environment, so other programs cannot use them.")
         return 0
     if a.cmd == "set":
         check_name(a.name)
@@ -244,7 +276,7 @@ def main(argv=None, inp=None, out=print):
         else:
             value = (inp or getpass.getpass)(f"{a.name} (input hidden): ")
         set_key(a.name, value)
-        out(f"stored {a.name} for this user; every ecadlib command uses it from now on")
+        out(f"stored {a.name} for this user; every ecadlib command uses it from now on (only ecadlib reads it)")
         return 0
     if remove_key(a.name):
         out(f"removed {a.name}")

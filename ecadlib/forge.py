@@ -15,6 +15,7 @@ place (never duplicated), commented with notes and closed with state_event=close
 with pulls / issues comments / state=closed."""
 import json, re
 from urllib.parse import quote, urlsplit
+from . import userconfig as UC
 
 GITLAB_API = "https://gitlab.com/api/v4"
 
@@ -257,7 +258,7 @@ def client(cfg, remote, env, session=None):
     if kind == "gitlab":
         proj = cfg.get("gitlab_project") or project_from_remote(remote, cfg.get("gitlab_api") or GITLAB_API)
         tok_env = cfg.get("gitlab_token_env") or ""
-        token = env.get(tok_env) if tok_env else None
+        token = UC.secret(tok_env, env) if tok_env else None
         if not (remote and proj and token):
             return kind, None, "no GitLab remote or token"
         bad = None if cfg.get("gitlab_project") else wrong_api_host(cfg.get("gitlab_api") or GITLAB_API, remote)

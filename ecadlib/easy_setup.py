@@ -78,9 +78,9 @@ def current_ai(raw):
 
 
 def _key_row(name, label, why, url, environ):
-    stored = name in UC.stored_names()
-    return {"name": name, "label": label, "why": why, "url": url, "stored": stored,
-            "set": bool(environ.get(name)), "from_env": bool(environ.get(name)) and not stored}
+    src = UC.key_source(name, environ)
+    return {"name": name, "label": label, "why": why, "url": url, "stored": src == "stored",
+            "set": bool(src), "from_env": src == "environment"}
 
 
 def state(ws_root, environ=None):
@@ -171,18 +171,14 @@ def store_key(b):
         raise ValueError(f"{name!r} is not a key this page stores; use `ecadlib keys set NAME` for others")
     if not isinstance(value, str):
         raise ValueError("no key given")
-    UC.set_key(name, value)
-    os.environ[name] = value.strip()            # this running server uses it at once
+    UC.set_key(name, value)                     # read from the store when needed: never put into the environment
     return {"stored": name}
 
 
 def forget_key(b):
     name = b.get("name")
     UC.check_name(name if isinstance(name, str) else "")
-    old = UC.get_key(name)
     gone = UC.remove_key(name)
-    if gone and old is not None and os.environ.get(name) == old:
-        os.environ.pop(name)                      # the copy store_key / apply_env put here: this server stops using it
     return {"removed": gone, "still_in_env": bool(os.environ.get(name))}
 
 
@@ -194,7 +190,7 @@ def check_key(b, get=None):
         return {"ok": True, "message": "no AI chosen: nothing to check"}
     from . import llm as LL
     base = "https://api.anthropic.com/v1" if p[2] == "anthropic" else LL.PRESETS[p[2]][0]
-    key = os.environ.get(p[3]) if p[3] else None
+    key = UC.secret(p[3]) if p[3] else None
     if p[3] and not key:
         return {"ok": False, "message": f"no key yet: paste your {p[1]} key above"}
     if get is None:

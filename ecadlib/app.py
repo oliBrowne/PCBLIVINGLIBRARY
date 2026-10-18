@@ -22,6 +22,7 @@ from . import bom_triage as T, footprint_gen as F, providers as P, rules as RU, 
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex
+from . import userconfig as UC
 
 STATUS_ORDER = ["needs_footprint_generation", "unverified (source unreachable)", "easyeda_footprint_only",
                 "available_easyeda", "in_library (generated footprint)", "in_library"]
@@ -119,7 +120,7 @@ class Workspace:
                 "symbols": len(index.symbols), "footprints": len(index.footprints),
                 "providers": [{"name": c.name, "auth": c.auth, "enabled": c.name in self.provider_names,
                                "configured": c(http).configured()} for c in P.ALL],
-                "altium365": {"token": bool(os.environ.get("NEXAR_TOKEN"))},
+                "altium365": {"token": bool(UC.secret("NEXAR_TOKEN"))},
                 "rules": (lambda f: self._label(f) if f else None)(self.rules_in_use()),
                 "altium_models": {k: sorted(p.stem for p in (self.models / k).glob(f"*.{k}")) for k in ("PcbLib", "SchLib")},
                 "boms": self._uploaded_boms()}
@@ -397,10 +398,13 @@ class Workspace:
     def _librarian_dir(self, bom_path):
         return self.root / "librarian" / self._key(bom_path)
 
-    def librarian_run(self, bom, sources=None, allow=(), refresh=None, progress=None):
+    def librarian_run(self, bom, sources=None, allow=(), refresh=None, progress=None, ai=True):
         """BOM -> library in one go (ecadlib.librarian): triage, fill every missing symbol and footprint from
         the KiCad libraries, EasyEDA or the datasheet, write Altium models and the plan, run the release check.
-        refresh: None resumes (finished parts are skipped), [] redoes everything, [names] redoes those."""
+        refresh: None resumes (finished parts are skipped), [] redoes everything, [names] redoes those.
+        ai=False (the Altium dialog, the KiCad window, the web UI): no paid model call; parts only a datasheet read
+        can finish are priced instead, and the summary's "ai" is that quote (ecadlib.ai_cost) or None. The person
+        then says yes and ai_read() reads them."""
         from . import librarian as L
         bom_path = self._bom_path(bom)
         lines, _ = self._read_bom(bom_path)               # same friendly error as triage for unreadable files
@@ -415,10 +419,60 @@ class Workspace:
         if progress:
             progress(0, len(lines), "looking up parts")
         provs = self._librarian_providers()
+        reader = None if ai else self._datasheet_reader(out, batch=False, estimate=True)
         items = L.run(str(bom_path), self.libs + [str(self.root / "footprints")], out,
                       list(sources) if sources else None, refresh, False, list(allow), self.offline,
-                      self.root / "http_cache", 0.5, provs, log=note, rules=self.rules())
-        return self._librarian_summary(bom_path, items, log)
+                      self.root / "http_cache", 0.5, provs, log=note, rules=self.rules(), reader=reader)
+        r = self._librarian_summary(bom_path, items, log)
+        if not ai:
+            from . import ai_cost as AC
+            r["ai"] = AC.quote(reader.last_estimate, self.rules(), key_set=bool(reader.key))
+        return r
+
+    def ai_quote(self, bom, parts=None):
+        """The cost of reading the datasheets the librarian plan still needs (ecadlib.ai_cost.quote), sending
+        nothing: model, about, at most, the limit. None when no part needs a read."""
+        from . import ai_cost as AC, datasheet as D
+        out = self._librarian_dir(self._bom_path(bom))
+        plan_f = out / "plan.json"
+        if not plan_f.exists():
+            raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
+        rd = self._datasheet_reader(out, batch=False, estimate=True)
+        return AC.quote(D.estimate_plan(plan_f, rd, set(parts or []) or None), self.rules(), key_set=bool(rd.key))
+
+    def ai_read(self, bom, approved_usd=None, over_limit_ok=False, price_unknown_ok=False, parts=None, progress=None):
+        """Read the datasheets of ai_quote() after the person approved its cost: one synchronous request per part,
+        held to approved_usd (the Reader's max_cost_usd), built, marked verify, release check re-run. The summary's
+        "ai_cost" puts the real cost (the cost ledger) next to the estimate. Raises ValueError when the estimate is
+        now higher than approved, over the limit without over_limit_ok, or the model has no known price without
+        price_unknown_ok."""
+        from . import ai_cost as AC, datasheet as D
+        bom_path = self._bom_path(bom)
+        out = self._librarian_dir(bom_path)
+        q = self.ai_quote(bom, parts)
+        if q is None:
+            r = self._librarian_summary(bom_path, json.loads((out / "plan.json").read_text(encoding="utf-8")), [])
+            return dict(r, ai=None, ai_cost=None)
+        if not q["key_set"]:
+            raise ValueError(q["text"])
+        cap, yes = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
+        rd = self._datasheet_reader(out, batch=False, yes=yes)
+        rd.cfg["max_cost_usd"] = cap                  # never more than the person saw and approved
+        log, n = [], [0]
+
+        def note(msg):
+            log.append(str(msg).strip())
+            n[0] += 1
+            if progress:
+                progress(min(n[0], q["parts"]), q["parts"], str(msg).strip()[:80])
+        rd.say = note
+        if progress:
+            progress(0, q["parts"], f"reading {q['parts']} datasheet(s) with {q['model']}")
+        since = AC.mark(out)
+        items = D.fill_plan(out / "plan.json", rd, self.rules(), log=note, parts=set(parts or []) or None)
+        r = self._librarian_summary(bom_path, items, log)
+        r["ai_cost"] = AC.after(q, AC.spent(out, since))
+        return r
 
     def release_check(self, bom, allow=(), unallow=(), user=None):
         """Re-run the release check on the librarian's plan, optionally releasing named parts despite their
@@ -1087,10 +1141,13 @@ class Workspace:
                 **{k: prof.get(k) for k in ("learned_at", "learned_from", "components", "categories", "settings", "descriptions",
                                             "param_formats", "param_presence", "pins", "direction", "guide")}}
 
-    def learn_house_style(self, paths=None, direction=None, ai=False, model=None, progress=None):
+    def learn_house_style(self, paths=None, direction=None, ai=False, model=None, progress=None, approved_usd=None,
+                          over_limit_ok=False, price_unknown_ok=False, ask_first=False):
         """Learn the house style from the person's library (paths default to the --lib folders), keep their direction
         (a line or a list of lines, added to what is there), and with ai=True have the configured model write the
-        guide and the settings the direction implies. Writes <workspace>/house_style.json; ecadlib.toml is untouched."""
+        guide and the settings the direction implies. Writes <workspace>/house_style.json; ecadlib.toml is untouched.
+        ask_first=True (the web UI): with ai, the scan is saved and the guide request only priced ("ai", an
+        ecadlib.ai_cost quote); style_guide() sends it once the person approved that."""
         from . import house_style as HS
         paths = [paths] if isinstance(paths, (str, Path)) else paths
         paths = [str(x).strip() for x in (paths or []) if str(x).strip()] or self._rules_sources()
@@ -1101,12 +1158,36 @@ class Workspace:
             progress(0, 2 if ai else 1, "scanning " + ", ".join(Path(x).name for x in paths)[:80])
         prof = HS.learn(paths, None, direction, old)
         prof["_file"] = str(f)
+        if ai and ask_first:
+            HS.save(prof, f)
+            return dict(self.house_style(), ai=self.style_quote(model))
         if ai:
             if progress:
                 progress(1, 2, "the model is writing the guide")
             HS.write_guide(prof, self.rules(), model)
         HS.save(prof, f)
         return self.house_style()
+
+    def style_quote(self, model=None):
+        """What having the model write the house style guide costs (ecadlib.ai_cost), sending nothing."""
+        from . import ai_cost as AC, house_style as HS
+        prof = self._style_or_raise()
+        system, user, schema, ref, _ = HS.guide_request(prof, self.rules(), model)
+        return AC.style_quote(system, user, schema, ref, self.rules())
+
+    def style_guide(self, approved_usd=None, over_limit_ok=False, price_unknown_ok=False, model=None, progress=None):
+        """The model writes the house style guide after the person approved style_quote()'s cost; "ai_cost" puts
+        what it really cost next to the estimate."""
+        from . import ai_cost as AC, house_style as HS
+        q = self.style_quote(model)
+        AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
+        prof = self._style_or_raise()
+        if progress:
+            progress(1, 2, "the model is writing the guide")
+        g = HS.write_guide(prof, self.rules(), model)
+        HS.save(prof, self._style_file())
+        got = {"usd": g.get("usd") or 0.0, "reads": 1, "models": [g.get("model")], "unpriced": int(g.get("usd") is None)}
+        return dict(self.house_style(), ai_cost=AC.after(q, got))
 
     def style_direction(self, text=None, clear=False):
         """Add a line of direction (what the person wants new parts to look like); clear=True removes the old ones."""
@@ -1338,7 +1419,7 @@ class Workspace:
         r = self.rules()
         d["order"] = [c.name for c in self._provider_classes()]
         d["notify"] = [{"name": t["name"], "type": t["type"], "events": sorted(t["events"]), "url_env": t["url_env"],
-                        "url_set": bool(os.environ.get(t["url_env"]))} for t in N.settings(r)["targets"]]
+                        "url_set": bool(UC.secret(t["url_env"]))} for t in N.settings(r)["targets"]]
         return d
 
     def plugin_export(self, name, bom):
@@ -1360,7 +1441,7 @@ def _now(ts=None):
 
 
 def _nexar_token():
-    tok = os.environ.get("NEXAR_TOKEN")
+    tok = UC.secret("NEXAR_TOKEN")
     if not tok:
         raise ValueError("set NEXAR_TOKEN before starting ecadlib (a Nexar portal token with the "
                          "design.domain, user.access and openid scopes)")

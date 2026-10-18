@@ -30,6 +30,7 @@ Report: <plan dir>/a365_sync.md and .csv (-o to change). Exit codes: 0 nothing t
 unresolved conflicts (pull), 2 error. Nexar needs NEXAR_TOKEN (scopes openid, user.access, design.domain)."""
 import argparse, copy, datetime, io, json, os, re, sys, zipfile
 from pathlib import Path
+from . import userconfig as UC
 
 try:
     from . import rules as RU
@@ -612,7 +613,7 @@ def main(argv=None):
     ws = a.workspace or ((rules or {}).get("altium365") or {}).get("workspace")
     if not ws:
         print("a365: give --workspace URL (see `ecadlib altium365 workspaces`)", file=sys.stderr); return 2
-    token = os.environ.get("NEXAR_TOKEN")
+    token = UC.secret("NEXAR_TOKEN")
     if not token:
         print("a365: set NEXAR_TOKEN (design.domain, user.access, openid)", file=sys.stderr); return 2
     from . import altium365 as A

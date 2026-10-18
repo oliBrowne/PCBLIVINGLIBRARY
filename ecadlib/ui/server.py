@@ -4,7 +4,7 @@
     (or: python -m ecadlib.ui ...)
 
 Local mode (default): standard library only (http.server), bound to 127.0.0.1; a single-user desktop tool, provider
-API keys stay in the user's environment.
+API keys stay in ecadlib's own key store (or the user's environment); the server never returns one.
 
 Team mode (`--team`): one server for the whole team with sign-in (ecadlib/team.py): users and roles in
 team_users.json, session cookies, a CSRF token on every POST, a minimum role per route (ROUTES), approvals signed as
@@ -63,6 +63,9 @@ ROUTES = {
     ("GET", "/api/style"): "viewer",                       # the learned house style (ecadlib.house_style)
     ("POST", "/api/style/learn"): "admin",                 # reads library folders; may call the configured model
     ("POST", "/api/style/direction"): "admin",
+    ("POST", "/api/style/guide"): "admin",                 # the model writes the guide, after its cost was approved
+    ("POST", "/api/ai/quote"): "librarian",                # the cost of the datasheet reads a plan needs; sends nothing paid
+    ("POST", "/api/ai/read"): "librarian",                 # the reads, held to the cost the person approved
     ("GET", "/api/team/users"): "admin", ("POST", "/api/team/users"): "admin", ("GET", "/api/team/audit"): "admin",
 }
 LIVE_PUSH = "approver"
@@ -235,6 +238,15 @@ def _final_lines(progress, r):
         progress.line(x["part"], n=i, total=n, name=x["part"], state=x["status"], text=f"{i}/{n} {x['part']}  {word}")
     progress.sort()
     return r
+
+
+def _usd(v):
+    """An approved amount from the page: a number of dollars, or None (not approved / no price known)."""
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v < 1e6:
+        raise ValueError("approved_usd must be a number of dollars")
+    return float(v)
 
 
 def _msg(e, root=None):
@@ -681,6 +693,20 @@ def make_handler(ws: Workspace, team=None):
                     HUB.note_action(ws.root, u.path, dict(b, bom=bom), self._who(b))
                 return self._send(200, jobs.start(self._librarian, bom, b.get("sources"), refresh, label=bom,
                                                   owner=self._owner(), key="librarian:" + bom))
+            if u.path == "/api/ai/quote":                         # downloads datasheets (cached) to price them: a job
+                bom = self._bom(self._json())
+                return self._send(200, jobs.start(self._ai_quote, bom, label=bom, owner=self._owner()))
+            if u.path == "/api/ai/read":                          # paid model calls the person approved: a job
+                b = self._json()
+                bom = self._bom(b)
+                return self._send(200, jobs.start(self._ai_read, bom, _usd(b.get("approved_usd")), b.get("over_limit_ok") is True,
+                                                  b.get("price_unknown_ok") is True, label=bom, owner=self._owner(),
+                                                  key="librarian:" + bom))
+            if u.path == "/api/style/guide":                      # the model writes the guide: a job
+                b = self._json()
+                return self._send(200, jobs.start(self._style_guide, _usd(b.get("approved_usd")), b.get("over_limit_ok") is True,
+                                                  b.get("price_unknown_ok") is True, _str(b.get("model"), "model", True) or None,
+                                                  label="house style", owner=self._owner()))
             if u.path == "/api/resolve/candidates":               # may fetch KiCad library files: a background job
                 b = self._json()
                 bom, part = self._bom(b), _str(b.get("part"), "part")
@@ -879,14 +905,29 @@ def make_handler(ws: Workspace, team=None):
         # ---------------------------------------------------------- jobs
         @staticmethod
         def _librarian(bom, sources, refresh, progress=None):
-            return _final_lines(progress, ws.librarian_run(bom, sources, (), refresh, _part_lines(progress)))
+            # never a paid model call here: parts that need a datasheet read come back priced ("ai"), see /api/ai/read
+            return _final_lines(progress, ws.librarian_run(bom, sources, (), refresh, _part_lines(progress), ai=False))
+
+        @staticmethod
+        def _ai_quote(bom, progress=None):
+            if progress:
+                progress(0, 0, "pricing the datasheet reads")
+            return {"ai": ws.ai_quote(bom)}
+
+        @staticmethod
+        def _ai_read(bom, approved, over_ok, unknown_ok, progress=None):
+            return _final_lines(progress, ws.ai_read(bom, approved, over_ok, unknown_ok, progress=progress))
+
+        @staticmethod
+        def _style_guide(approved, over_ok, unknown_ok, model, progress=None):
+            return ws.style_guide(approved, over_ok, unknown_ok, model, progress)
 
         @staticmethod
         def _demo(bom, user, progress=None):
             """Triage, then fill the library from the built-in standard parts only (no network, no API key)."""
             t = ws.triage(bom, _line_lines(progress, "Checking the BOM"), lock=write_lock, user=user)
             progress.line("__triage", state="done", text=f"BOM checked: {len(t['rows'])} lines")
-            r = _final_lines(progress, ws.librarian_run(bom, ["standard"], (), None, _part_lines(progress)))
+            r = _final_lines(progress, ws.librarian_run(bom, ["standard"], (), None, _part_lines(progress), ai=False))
             return dict(r, triage=t)
 
         @staticmethod
@@ -899,7 +940,7 @@ def make_handler(ws: Workspace, team=None):
 
         @staticmethod
         def _learn_style(paths, direction, ai, model, progress=None):
-            return ws.learn_house_style(paths, direction, ai, model, progress)
+            return ws.learn_house_style(paths, direction, ai, model, progress, ask_first=True)   # the guide: /api/style/guide
 
         @staticmethod
         def _triage(bom, user, progress=None):
@@ -1012,7 +1053,7 @@ def main(argv=None):
     t.add_argument("--proxy-user-header", help="header carrying the signed-in user (default X-Forwarded-User)")
     a = ap.parse_args(argv)
     from .. import userconfig
-    userconfig.apply_env()                                  # keys stored by the setup page (env variables win)
+    userconfig.apply_env()                                  # kicad-cli on PATH; stored keys are read when needed
     if bool(a.cert) != bool(a.key):
         sys.exit("give both --cert and --key")
     for f in filter(None, (a.cert, a.key)):

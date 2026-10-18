@@ -29,6 +29,7 @@ from . import sheetsafe as SS
 from .altium365 import M_UPDATE_PARAMS, Nexar as DesignClient
 from .httpcache import CachedHTTP
 from .kicad_index import norm_mpn
+from . import userconfig as UC
 
 SEVERITY = {"active": 0, "nrnd": 1, "ltb": 2, "obsolete": 3}
 LABEL = {"active": "Active", "nrnd": "NRND", "ltb": "Last Time Buy", "obsolete": "Obsolete", "unknown": "Unknown"}
@@ -156,7 +157,7 @@ class DigiKeyLifecycle(P.DigiKey):
             res.error = self._token_err
             return res
         r = self.http.get(self.URL.format(quote(part["mpn"], safe="")), headers={
-            "X-DIGIKEY-Client-Id": os.environ["DIGIKEY_CLIENT_ID"], "Authorization": f"Bearer {self._token}",
+            "X-DIGIKEY-Client-Id": UC.secret("DIGIKEY_CLIENT_ID"), "Authorization": f"Bearer {self._token}",
             "Accept": "application/json"})
         if r.status == 404:
             res.found = False
@@ -208,7 +209,7 @@ class MouserLifecycle(P.Mouser):
         if not part["mpn"]:
             res.error = "no MPN"
             return res
-        key = os.environ["MOUSER_API_KEY"]
+        key = UC.secret("MOUSER_API_KEY")
         body = json.dumps({"SearchByPartRequest": {"mouserPartNumber": part["mpn"], "partSearchOptions": "Exact"}})
         r = self.http.post(self.URL.format(quote(key, safe="")), body, cache=False,      # key is in the URL: never on disk
                            headers={"Content-Type": "application/json", "Accept": "application/json"})
@@ -599,7 +600,7 @@ def main(argv=None):
         ap.error("give at least one input file or --a365 WORKSPACE_URL")
     if a.update_a365 and not ws:
         ap.error("--update-a365 needs --workspace or --a365")
-    token = os.environ.get("NEXAR_TOKEN")
+    token = UC.secret("NEXAR_TOKEN")
     if (a.a365 or a.apply) and not token:
         ap.error("set NEXAR_TOKEN (Nexar user token with design.domain, user.access, openid scopes)")
     client = DesignClient(token) if token and (a.a365 or a.update_a365) else None

@@ -61,15 +61,33 @@ def test_keys_are_stored_privately_and_never_listed_by_value():
         assert UC.remove_key("ANTHROPIC_API_KEY") and not UC.remove_key("ANTHROPIC_API_KEY")
 
 
-def test_apply_env_fills_only_unset_variables():
+def test_stored_keys_are_read_but_never_put_into_the_environment():
     with _home():
         UC.set_key("ANTHROPIC_API_KEY", "stored")
         UC.set_key("NEXAR_TOKEN", "stored-nexar")
         env = {"NEXAR_TOKEN": "from-env", "PATH": ""}
-        assert UC.apply_env(env, config_environ=os.environ) == ["ANTHROPIC_API_KEY"]
-        assert env["ANTHROPIC_API_KEY"] == "stored" and env["NEXAR_TOKEN"] == "from-env"     # the environment wins
+        assert UC.apply_env(env, config_environ=os.environ) == []
+        assert "ANTHROPIC_API_KEY" not in env and env["NEXAR_TOKEN"] == "from-env"            # nothing exported
+        assert "ANTHROPIC_API_KEY" not in os.environ
+        assert UC.secret("ANTHROPIC_API_KEY", env) == "stored"                               # read from the store
+        assert UC.secret("NEXAR_TOKEN", env) == "stored-nexar"                               # the store comes first
+        assert UC.secret("OPENAI_API_KEY", {"OPENAI_API_KEY": "env-only"}) == "env-only"      # else the environment
+        assert UC.key_source("ANTHROPIC_API_KEY", env) == "stored"
+        assert UC.key_source("OPENAI_API_KEY", {"OPENAI_API_KEY": "x"}) == "environment"
+        from ecadlib import cli
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            cli.main(["--version"])
+        assert "ANTHROPIC_API_KEY" not in os.environ                                         # entry points export nothing
+        with mock.patch.dict(os.environ, {UC.NO_STORED: "1"}):                                # the eval gate: store ignored
+            assert UC.secret("ANTHROPIC_API_KEY", {}) is None
+        rep = DR.check_key_safety({}, {"ANTHROPIC_API_KEY": "sk-env"})
+        assert not rep                                                                        # stored one is used: fine
+        UC.remove_key("ANTHROPIC_API_KEY")
+        rep = DR.check_key_safety({}, {"ANTHROPIC_API_KEY": "sk-env"})
+        assert rep and rep[0]["level"] == "WARN" and "sk-env" not in json.dumps(rep), rep
         Path(os.environ["ECADLIB_HOME"], UC.KEYS).write_text("{broken")
         assert UC.apply_env({"PATH": ""}, config_environ=os.environ) == []                      # never raises
+        assert UC.secret("NEXAR_TOKEN", {}) is None
 
 
 def test_keys_cli_set_from_stdin_and_the_cli_uses_it():
@@ -81,8 +99,10 @@ def test_keys_cli_set_from_stdin_and_the_cli_uses_it():
         with contextlib.redirect_stdout(io.StringIO()):
             cli.main(["--version"])
             cli.main(["keys", "list"])
-        assert os.environ.get("OPENAI_API_KEY") == "sk-from-stdin"
-        os.environ.pop("OPENAI_API_KEY", None)
+        assert os.environ.get("OPENAI_API_KEY") is None                    # never exported to the environment
+        from ecadlib import llm as LL
+        ep = LL.endpoint({"ai": {"provider": "openai", "model": "gpt-5"}})
+        assert LL.key_for(ep) == "sk-from-stdin"                          # but every ecadlib command reads it
 
 
 def test_self_command_source_and_frozen():

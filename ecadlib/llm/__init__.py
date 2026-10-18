@@ -26,10 +26,12 @@ Settings (ecadlib.toml), all optional - with no [ai] table everything is exactly
     provider = "ollama"           #   "claude-opus-5-5"] tries the local model first and escalates to Claude
 
 [datasheet] and [agent.proof] may set provider / base_url / api_key_env / model / assist of their own; empty = [ai].
-Keys are read from environment variables only and never written anywhere. Nothing here phones home: no telemetry,
+Keys are read from ecadlib's own key store (`ecadlib keys set`, the setup page), else an environment variable of the
+name given; ecadlib never puts a key into the environment or writes it anywhere else. Nothing here phones home: no telemetry,
 no hosted service of this project; requests go only to the endpoint you configure."""
 import ipaddress, os, re
 from urllib.parse import urlparse
+from .. import userconfig as UC
 
 PROVIDERS = ("anthropic", "openai-compatible")
 # preset name -> (base_url, key env var name); every preset is an openai-compatible endpoint
@@ -150,14 +152,14 @@ def endpoint(rules=None, section="datasheet", model=None):
 
 
 def key_for(ep, explicit=None, environ=None):
-    """The key for an endpoint, from the environment only. Anthropic: explicit, the named variable, then
-    ANTHROPIC_API_KEY (as datasheet.require_key always did). A local endpoint needs none (NO_KEY). Otherwise None."""
+    """The key for an endpoint (userconfig.secret: stored for this user, else the environment). Anthropic: explicit,
+    the named key, then ANTHROPIC_API_KEY (as datasheet.require_key always did). A local endpoint needs none (NO_KEY). Otherwise None."""
     env = os.environ if environ is None else environ
     if explicit:
         return explicit
-    k = env.get(ep["key_env"]) if ep.get("key_env") else None
+    k = UC.secret(ep["key_env"], env) if ep.get("key_env") else None
     if ep["provider"] == "anthropic":
-        return k or env.get(ANTHROPIC_KEY)
+        return k or UC.secret(ANTHROPIC_KEY, env)
     if k:
         return k
     return NO_KEY if ep["local"] or not ep.get("key_env") else None   # no key named: the server takes none

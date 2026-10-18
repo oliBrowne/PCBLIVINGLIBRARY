@@ -35,6 +35,7 @@ re-read; a project without variants named in the source uses its first variant; 
 BOM item (the schema notes it is heavier than desComponentById)."""
 import argparse, contextlib, datetime, fnmatch, hashlib, json, os, re, sys
 from pathlib import Path
+from . import userconfig as UC
 
 TYPES = ("bom_file", "folder", "altium_project", "a365_project")
 WATCH_FIELDS = ("footprint", "value", "datasheet", "lcsc")          # a difference here makes a part "changed"
@@ -441,7 +442,7 @@ def scan_a365(src, ws, client, old, rules):
     if not ws:
         raise ValueError("no Altium 365 workspace: set workspace on the source or [altium365] workspace in the rules")
     if client is None:
-        tok = os.environ.get("NEXAR_TOKEN")
+        tok = UC.secret("NEXAR_TOKEN")
         if not tok:
             raise ValueError("NEXAR_TOKEN is not set (a Nexar token with the design.domain, user.access, openid scopes)")
         from .altium365 import Nexar

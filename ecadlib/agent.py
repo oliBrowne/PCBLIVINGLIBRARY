@@ -42,6 +42,7 @@ import argparse, contextlib, copy, csv, datetime as _dt, hashlib, json, os, re, 
 from pathlib import Path
 
 from . import rules as RU, sheetsafe as SS
+from . import userconfig as UC
 
 AGENT = "ecadlib-agent"
 BOM_NAME = "library_bom.csv"
@@ -634,7 +635,7 @@ def publish_batch(ws, rules, batch_id, items, out, now=None, env=None, session=N
                 tok_env, host = cfg["gitlab_token_env"], "GitLab"
             else:
                 slug, tok_env, host = cfg["github_repo"] or github_slug(remote), cfg["github_token_env"], "GitHub"
-            token = env.get(tok_env) if tok_env else None
+            token = UC.secret(tok_env, env) if tok_env else None
             start = base
             if remote:
                 # start from the remote's base, never the local one: local commits nobody pushed (work in progress,
@@ -724,7 +725,7 @@ def _github(ws, cfg, env, session):
     if kind == "gitlab":
         return gl, why
     slug = cfg["github_repo"] or github_slug(remote)
-    token = env.get(cfg["github_token_env"]) if cfg["github_token_env"] else None
+    token = UC.secret(cfg["github_token_env"], env) if cfg["github_token_env"] else None
     if not (remote and slug and token):
         return None, "no GitHub remote or token"
     from .upkeep import GitHub
@@ -802,7 +803,7 @@ def push_approved(workspace, rules=None, dry_run=False, queue=None, a365=None, e
         return rep
     client = a365
     if client is None and not dry_run:
-        tok = env.get("NEXAR_TOKEN")
+        tok = UC.secret("NEXAR_TOKEN", env)
         if not tok:
             rep["skipped"] = "NEXAR_TOKEN is not set: approved parts wait for the push"
             return rep

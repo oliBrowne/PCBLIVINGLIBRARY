@@ -647,8 +647,8 @@ def check_setting(key, value, base_raw=None):
     return raw
 
 
-def write_guide(prof, rules=None, model=None, send=None, base_raw=None):
-    """Ask the model for the guide + settings implied by the direction. Fills prof["guide"]; returns it."""
+def guide_request(prof, rules=None, model=None):
+    """(system, user text, schema, model ref, tier) of the guide request write_guide sends (ai_cost prices it)."""
     rules = RU.resolve(rules)
     inf, tier = model_info(rules, model)
     t = TIER[tier]
@@ -660,7 +660,16 @@ def write_guide(prof, rules=None, model=None, send=None, base_raw=None):
             + f"\n\nWrite at most {t['guide']} guide rules.")
     if t["worked_example"]:
         user += "\n\n" + WORKED_GUIDE
-    val, meta = ask(rules, GUIDE_SYSTEM, user, guide_schema(), model, send)
+    return GUIDE_SYSTEM, user, guide_schema(), inf["ep"]["ref"], tier
+
+
+def write_guide(prof, rules=None, model=None, send=None, base_raw=None):
+    """Ask the model for the guide + settings implied by the direction. Fills prof["guide"]; returns it (with "usd":
+    what the answer cost, from its usage, or None when the model has no known price)."""
+    rules = RU.resolve(rules)
+    system, user, schema, _, tier = guide_request(prof, rules, model)
+    t = TIER[tier]
+    val, meta = ask(rules, system, user, schema, model, send)
     good, dropped = [], []
     for s in val.get("settings") or []:
         try:
@@ -679,6 +688,8 @@ def write_guide(prof, rules=None, model=None, send=None, base_raw=None):
                      "settings": good, "pin_style": val.get("pin_style") or "", "description_templates": temps,
                      "conflicts": val.get("conflicts") or [], "dropped": dropped, "model": meta["model"],
                      "tier": tier, "at": _now(), "direction_seen": len(prof.get("direction") or [])}
+    from . import ds_route as DR
+    prof["guide"]["usd"] = DR.usage_usd(meta["model"], meta.get("usage")) if meta.get("usage") else None
     return prof["guide"]
 
 

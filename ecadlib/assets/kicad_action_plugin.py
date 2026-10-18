@@ -72,14 +72,24 @@ def ecadlib_command(environ=None, which=shutil.which, run=subprocess.run, cmd_fi
 MPN_RE = re.compile(r"^[A-Za-z0-9][-A-Za-z0-9_.+/#,() ]{0,79}$")
 
 
-def job_command(cmd, job, action, project, mpn="", manufacturer="", path=""):
-    """The ecadlib run for one job of the window."""
+AI_ARGS = (("bom", "--bom"), ("part", "--part"), ("approved_usd", "--approved-usd"))
+
+
+def job_command(cmd, job, action, project, mpn="", manufacturer="", path="", **ai):
+    """The ecadlib run for one job of the window. ai: the AI step's bom / part / approved_usd and the over_limit_ok /
+    price_unknown_ok yeses (ai-read, after the window showed the cost and the person said yes)."""
     if action == "add-part" and not MPN_RE.match(mpn.strip()):
         raise ValueError(f"not a part number: {mpn!r}")
     c = cmd + ["kicad-menu", "run-job", job, "--action", action, "--project", project]
     for k, v in (("--mpn", mpn.strip()), ("--manufacturer", manufacturer.strip()), ("--path", path)):
         if v:
             c += [k, v]
+    for k, flag in AI_ARGS:
+        if ai.get(k):
+            c += [flag, str(ai[k])]
+    for k in ("over_limit_ok", "price_unknown_ok"):
+        if ai.get(k) == "1":
+            c.append("--" + k.replace("_", "-"))
     return c
 
 
@@ -402,6 +412,18 @@ def _window_class():
             self.fire("queue")
             self.Close()
 
+        def read_ai(self):
+            """The AI step the last job offered: a second yes above the limit, then the reads, held to the amount shown."""
+            r = self.result
+            if r.get("ai_over") == "1" and wx.MessageBox(r.get("ai_confirm", ""), "ecadlib", wx.YES_NO | wx.NO_DEFAULT,
+                                                         self) != wx.YES:
+                return
+            if self.action == "add-part":
+                self.mpn = r.get("ai_mpn") or getattr(self, "mpn", "")
+            self.run("ai-read", "Read with AI", mpn=r.get("ai_mpn", ""), bom=r.get("ai_bom", ""), part=r.get("ai_part", ""),
+                     approved_usd=r.get("ai_approve", ""), over_limit_ok=r.get("ai_over", ""),
+                     price_unknown_ok=r.get("ai_unknown", ""))
+
         def report(self):
             self.fire("open", path=self.result.get("report", ""))
 
@@ -439,7 +461,7 @@ def _window_class():
 
         def live(self, prog, default=""):
             s = self.page(self.title)
-            big = {"add-part": self.mpn, "check-bom": "Checking…", "fill": "Filling…"}.get(self.action, "")
+            big = {"add-part": self.mpn, "check-bom": "Checking…", "fill": "Filling…", "ai-read": "Reading…"}.get(self.action, "")
             s.Add(self.text(self.body, big, TEXT, 20, True), 0, wx.TOP, 10)
             self.rows(s, rows_of(prog))
             s.Add(self.text(self.body, prog.get("text") or default, DIM, 9), 0, wx.TOP, 10)
@@ -483,7 +505,7 @@ def _window_class():
             if st == "error":
                 return self.fail(res.get("message", "") + (f"\nNext: {res['fix']}" if res.get("fix") else ""))
             placed, extra = "", ""
-            if self.action == "add-part" and res.get("footprint") and st in ("ready", "duplicate"):
+            if self.action in ("add-part", "ai-read") and res.get("footprint") and st in ("ready", "duplicate"):
                 board, project, _ = board_project()
                 try:
                     changed = ensure_tables(self.project)
@@ -513,9 +535,14 @@ def _window_class():
                 else:
                     self.buttons(s, "Done", self.Close)
             else:
+                if res.get("ai_cost_text"):
+                    self.note(s, res["ai_cost_text"], GREEN)
                 if res.get("fix") and st != "ready":
                     self.note(s, "Next: " + res["fix"])
-                if st in ("held", "awaiting_approval") or res.get("offer_queue") == "1":
+                if res.get("offer_ai") == "1":
+                    self.note(s, "AI step: " + res.get("ai_text", "") + " Nothing is sent until you click.")
+                    self.buttons(s, res.get("ai_button") or "Read with AI", self.read_ai, "Not now", self.Close)
+                elif st in ("held", "awaiting_approval") or res.get("offer_queue") == "1":
                     self.buttons(s, "Done", self.Close, "Open review queue", self.queue)
                 elif self.action == "add-part":
                     self.buttons(s, "Done", self.Close, "Add another", self.ask)

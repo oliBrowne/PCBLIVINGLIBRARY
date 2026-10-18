@@ -507,12 +507,14 @@ ol.hubhist .t { font: 11.5px/1.5 var(--mono); color: var(--muted); }
         <span class="small" id="signedas" hidden></span>
         <button class="small" id="apprstatus">Approval status</button>
         <button class="small" id="dedupe" data-role="librarian">Find duplicates</button>
+        <button class="small" id="aiprice" data-role="librarian" title="What reading the remaining datasheets with AI costs; nothing is sent">AI cost of the rest</button>
       </div>
       <div class="muted small" style="margin-top:6px" id="signnote">There is no login: ecadlib is a local tool, so whatever name you type is recorded as given with each approval, rejection or release override (in the plan and in <span class="mono">approvals_audit.jsonl</span>). Sign-off is enforced only when an <span class="mono">approvals.json</span> sits next to the plan.</div>
       <div class="out" id="approut"></div>
       <div class="out" id="dedupeout"></div>
     </div>
     <div id="liberr"></div>
+    <div id="aibox" aria-live="polite"></div>
     <div class="out" id="libout"></div>
   </section>
 
@@ -648,7 +650,7 @@ ol.hubhist .t { font: 11.5px/1.5 var(--mono); color: var(--muted); }
       <textarea id="stylepaths" style="min-height:52px" spellcheck="false" placeholder="D:\Altium\Libraries"></textarea>
       <label class="muted small" for="styledir" style="display:block;margin-top:8px">Your direction, one instruction per line. It wins over what the library does today.</label>
       <textarea id="styledir" style="min-height:64px" placeholder="IC descriptions start with the function in capitals&#10;Write tolerances as ±1%"></textarea>
-      <div class="row" style="margin-top:8px"><label class="small"><input type="checkbox" id="styleai"> Let my AI model write a style guide from this (uses the model set in ecadlib.toml: Claude, another API or a local one)</label></div>
+      <div class="row" style="margin-top:8px"><label class="small"><input type="checkbox" id="styleai"> Let my AI model write a style guide from this (uses the model set in ecadlib.toml: Claude, another API or a local one; you see the model and the cost and say yes before anything is sent)</label></div>
       <div class="row" style="margin-top:8px"><button class="primary" id="stylego">Learn my style</button><span class="muted small">Saved next to your library rules. New parts follow it.</span></div>
     </div>
     <div id="stylebusy" class="muted small" hidden>Learning your style…<div class="progress"><div style="width:30%"></div></div></div>
@@ -875,7 +877,7 @@ async function runJob(start, label) {
 
 function showResult(t) {
   current = t; filter = null; $("#q").value = ""; planned = null; parts = null; pfilter = ""; closePanel();
-  ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#liberr", "#approut", "#dedupeout", "#toolout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
+  ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#liberr", "#aibox", "#approut", "#dedupeout", "#toolout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
   $("#dry").disabled = $("#push").disabled = true; disabledWhy(); render();
   if (t.bom && !libbusy) loadParts(true).catch(() => {});           // a plan from an earlier run: show its parts at once
 }
@@ -1116,8 +1118,9 @@ async function librarian(refresh) {
     const j = await pollJob(job, { text: $("#libbusytext"), bar: $("#libbar"), lines: $("#liblines"), stop: $("#libstop"),
       label: j => (j.total ? `Filling the library: part ${Math.min(j.done + 1, j.total)} of ${j.total}${j.label ? ", " + j.label : ""}` : `Filling the library: ${j.label || "starting"}`) +
         `${secs(j)}. Online look-ups take about a second each; the rest of the page keeps working.` });
-    if (current && current.bom === bom) await showLibrarian(j.result);
-    toast(`Library filled: ${counts({ ready: j.result.ready, held: j.result.held, waiting: j.result.awaiting_approval })}.`);
+    if (current && current.bom === bom) { await showLibrarian(j.result); showAi(j.result.ai); }
+    toast(`Library filled: ${counts({ ready: j.result.ready, held: j.result.held, waiting: j.result.awaiting_approval })}.` +
+      (j.result.ai ? " Some parts need an AI datasheet read: see its cost below." : ""));
   } catch (e) {
     if (e.cancelled) toast("Stopped. The library plan was not changed; Fill missing parts starts again from the top, reusing what was downloaded.");
     else banner($("#liberr"), e.message);
@@ -1127,6 +1130,63 @@ async function librarian(refresh) {
     loadStatus().catch(() => {}); loadHub().catch(() => {});
   }
 }
+// ---- AI steps: the model and the cost first, nothing sent without a click (a second yes above the limit),
+// then the real cost next to the estimate (ecadlib.ai_cost)
+let aiq = null;
+const usdOr = v => v == null ? "price unknown" : usd(v);
+function showAi(q, cost) {
+  const box = $("#aibox");
+  if (cost) { aiq = null; box.innerHTML = `<div class="next s-ok" role="status"><span><b>AI step done.</b> ${esc(cost.text)}</span></div>`; return; }
+  aiq = q || null;
+  if (!q) { box.innerHTML = ""; return; }
+  const go = q.key_set && can("librarian")
+    ? `<button class="small" id="aigo">${q.price_known ? `Read with AI (about ${esc(usdOr(q.usd))})` : "Read with AI (price unknown)"}</button>` : "";
+  box.innerHTML = `<div class="next ${q.over_limit || !q.key_set ? "s-warn" : "s-info"}" role="status"><span><b>AI step, not started:</b> ${esc(q.text)}` +
+    ` Nothing is sent until you click.</span>${go}<button class="small" id="aino">Not now</button></div>`;
+}
+function aiConfirm(q, what) {
+  if (!q.over_limit) return true;
+  return confirm(q.price_known
+    ? `${what} can cost up to ${usd(q.usd_max)} with ${q.model}, more than your limit of ${usd(q.limit_usd)} ([datasheet] ${q.limit_name} in ecadlib.toml). Go ahead anyway?`
+    : `ecadlib does not know what ${q.model} costs, so it cannot say what ${what.toLowerCase()} costs. Go ahead anyway?`);
+}
+document.addEventListener("click", async e => {
+  if (e.target.id === "aino") { showAi(null); return; }
+  if (e.target.id !== "aigo" || !aiq || libbusy || !hasBom()) return;
+  const q = aiq, bom = current.bom;
+  if (!aiConfirm(q, "Reading the datasheets")) return;
+  libbusy = true; $("#librun").disabled = $("#librerun").disabled = true; banner($("#liberr"), ""); $("#aibox").innerHTML = "";
+  $("#libbusy").hidden = false; $("#liblines").innerHTML = ""; $("#libbar").style.width = "4%";
+  try {
+    const { job } = await api("/api/ai/read", { bom, approved_usd: q.approve_usd, over_limit_ok: q.over_limit, price_unknown_ok: !q.price_known });
+    const j = await pollJob(job, { text: $("#libbusytext"), bar: $("#libbar"), lines: $("#liblines"), stop: $("#libstop"),
+      label: j => `Reading datasheets with ${q.model}${j.total ? `: ${Math.min(j.done + 1, j.total)} of ${j.total}` : ""}${secs(j)}` });
+    if (current && current.bom === bom) { await showLibrarian(j.result); showAi(null, j.result.ai_cost); }
+    toast(j.result.ai_cost ? j.result.ai_cost.text : "No part needed a datasheet read.");
+  } catch (err) {
+    if (err.cancelled) toast("Stopped. What was read so far is kept (and paid); the rest was not sent.");
+    else { banner($("#liberr"), err.message); showAi(q); }
+  } finally {
+    libbusy = false; $("#libbusy").hidden = true; $("#librun").disabled = $("#librerun").disabled = false;
+    loadStatus().catch(() => {}); loadHub().catch(() => {});
+  }
+});
+$("#aiprice").addEventListener("click", async e => {
+  const btn = e.target;
+  if (!hasBom() || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const { job } = await api("/api/ai/quote", { bom: current.bom });
+    for (;;) {
+      await sleep(400);
+      const j = await api("/api/job?id=" + encodeURIComponent(job));
+      if (j.state === "error") throw new Error(j.error);
+      if (j.state === "done") { showAi(j.result.ai); if (!j.result.ai) toast("No part needs a datasheet read: nothing to pay for."); break; }
+    }
+  } catch (err) { banner($("#aibox"), err.message); }
+  finally { btn.disabled = false; }
+});
+
 // after the librarian, a pick, a decision or a release: reload the cards (the summary r is only a fallback)
 async function showLibrarian(r) {
   $("#librerun").hidden = false; $("#libtools").hidden = false;
@@ -1550,12 +1610,36 @@ $("#stylego").addEventListener("click", async () => {
     for (;;) {
       await new Promise(r => setTimeout(r, 400));
       const j = await api("/api/job?id=" + job);
-      if (j.state === "done") { toast("House style saved"); $("#styledir").value = ""; await loadStyle(); break; }
+      if (j.state === "done") {
+        toast("House style saved"); $("#styledir").value = ""; await loadStyle();
+        if (j.result && j.result.ai) styleAi(j.result.ai);
+        break;
+      }
       if (j.state === "error") throw new Error(j.error);
     }
   } catch (e) { banner($("#styleout"), e.message); }
   finally { $("#stylego").disabled = false; $("#stylebusy").hidden = true; }
 });
+function styleAi(q) {
+  const box = document.createElement("div");
+  box.className = `next ${q.over_limit ? "s-warn" : "s-info"}`; box.setAttribute("role", "status");
+  box.innerHTML = `<span><b>AI step, not started:</b> ${esc(q.text)} Nothing is sent until you click.</span><button class="small">Write the guide (${esc(q.price_known ? "about " + usdOr(q.usd) : "price unknown")})</button>`;
+  $("#styleout").prepend(box);
+  box.querySelector("button").addEventListener("click", async ev => {
+    if (!aiConfirm(q, "Writing the style guide")) return;
+    ev.target.disabled = true; $("#stylebusy").hidden = false;
+    try {
+      const { job } = await api("/api/style/guide", { approved_usd: q.approve_usd, over_limit_ok: q.over_limit, price_unknown_ok: !q.price_known });
+      for (;;) {
+        await sleep(400);
+        const j = await api("/api/job?id=" + encodeURIComponent(job));
+        if (j.state === "error") throw new Error(j.error);
+        if (j.state === "done") { await loadStyle(); toast(j.result.ai_cost.text); $("#styleout").insertAdjacentHTML("afterbegin", `<div class="next s-ok" role="status"><span><b>Guide written.</b> ${esc(j.result.ai_cost.text)}</span></div>`); return; }
+      }
+    } catch (err) { banner($("#styleout"), err.message); }
+    finally { $("#stylebusy").hidden = true; }
+  });
+}
 $("#rulesreplace").addEventListener("click", () => saveRules(true));
 
 // ---- team mode: sign-in, user menu, roles, users page

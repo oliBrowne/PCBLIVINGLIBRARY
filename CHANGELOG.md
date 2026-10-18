@@ -15,8 +15,13 @@ a minor release may change command-line options and file formats.
 - `ecadlib eval run` reports the parts that never reached the model (no datasheet PDF could be fetched) apart, with the pass rate without them (`summary.no_datasheet`, `summary.with_datasheet`).
 - A logo: the Sprout Trace mark (a copper trace growing from a via into two leaves) on the website, its favicon, the web UI, the KiCad toolbar button and the Windows icon, with copper as the one accent colour. docs/brand.md has the rules; `site/brand/` has the files.
 
+- The Altium dialog, the KiCad window and the web UI show the model and the cost of every AI step before it starts, and wait for a click: Fill the library and Add part run every free source, then price the datasheet reads a part still needs ("3 parts need the datasheet read by AI (claude-opus-5-5): about $0.42, at most $1.10"). Above `[datasheet] ask_above_usd` (new, default $1.00) or `max_cost_usd` they ask a second time. The reads are held to the amount approved, and the real cost (from the API's usage) is shown next to the estimate afterwards (#49). The house style guide is priced the same way. `Workspace.ai_quote` / `ai_read`, `/api/ai/quote`, `/api/ai/read`, `/api/style/guide`; `ecadlib/ai_cost.py`.
+- `ecadlib doctor` warns when a paid AI key comes only from an environment variable, which other programs can read and bill.
+- docs/api-keys.md: where your key lives, who can read it, and how the cost is shown.
+
 ### Changed
 
+- API keys are read from ecadlib's own key store when they are needed and are never copied into the environment (they used to be copied into each ecadlib process's environment, which every program it started inherited). A stored key now comes before an environment variable of the same name; the variable is used only when nothing is stored. The Altium menu README no longer suggests `setx`. The eval gate and golden builds never read the key store.
 - pypdf is a core dependency (it was the `[pdf]` extra): without it a large datasheet (the 1976-page SAM E70 family sheet) could not be cut to the pages that matter and every read of it failed.
 
 ### Fixed
