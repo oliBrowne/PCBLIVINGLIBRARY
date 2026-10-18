@@ -15,6 +15,7 @@ the ini's workspace= unless --workspace is given. Exit code 1 when any line is F
 "level", "detail", "hint"}]}. Nothing is written except a temporary probe file in the workspace, removed at once."""
 import argparse, importlib.util, json, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
+from . import userconfig as UC
 
 LEVELS = ("OK", "WARN", "FAIL")
 CORE = (("requests", "requests"), ("pandas", "pandas"), ("openpyxl", "openpyxl"), ("jsonschema", "jsonschema"),
@@ -174,9 +175,9 @@ def check_keys(rules=None, environ=None):
     environ = os.environ if environ is None else environ
     out, lookups = [], []
     for name, env, why in key_services(rules):
-        ok = all(environ.get(e) for e in env)
+        ok = all(UC.secret(e, environ) for e in env)
         if name == "altium365" and not ok:
-            ok = bool(environ.get("NEXAR_CLIENT_ID") and environ.get("NEXAR_CLIENT_SECRET"))
+            ok = bool(UC.secret("NEXAR_CLIENT_ID", environ) and UC.secret("NEXAR_CLIENT_SECRET", environ))
             env = env if not ok else ["NEXAR_CLIENT_ID", "NEXAR_CLIENT_SECRET"]
         if why.endswith("part lookups"):                 # optional extra sources: one line for all of them
             lookups.append((name, env, ok))
@@ -195,6 +196,27 @@ def check_keys(rules=None, environ=None):
                       + (f"; optional, not set: {', '.join(rest)}" if rest else "")
                       + ("" if have else " (KiCad, EasyEDA/LCSC and standard parts need no key)")))
     return out
+
+
+AI_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY")
+
+
+def check_key_safety(rules=None, environ=None):
+    """A paid AI key that only an environment variable holds: every program started from that environment can read
+    it, and some (coding assistants, SDKs) use ANTHROPIC_API_KEY / OPENAI_API_KEY on their own and bill it. ecadlib
+    reads its own key store first and never sets a variable; this says when the key is still in one."""
+    names = set(AI_KEYS)
+    for sec in ("datasheet", "ai"):
+        v = ((rules if isinstance(rules, dict) else {}).get(sec) or {}).get("api_key_env")
+        if v:
+            names.add(v)
+    env_only = sorted(n for n in names if UC.key_source(n, environ) == "environment")
+    if not env_only:
+        return []
+    return [_c("key safety", "WARN", f"{', '.join(env_only)} comes from an environment variable: other programs you run "
+               "can read it and spend your credit (for example a coding assistant that uses ANTHROPIC_API_KEY)",
+               f"store it for ecadlib only with `ecadlib keys set {env_only[0]}` (or the setup page), then remove the "
+               "variable (Windows: System > Environment Variables; a shell: your profile)")]
 
 
 def locate(err, path):
@@ -407,6 +429,7 @@ def run(workspace=None, libs=(), rules_path=None, environ=None, altium_menu=None
     checks.append(rc)
     checks += check_ai(rules, environ)
     checks += check_keys(rules, environ)
+    checks += check_key_safety(rules, environ)
     checks.append(check_workspace(workspace))
     if Path(workspace).is_dir():
         checks.append(check_formats(workspace))

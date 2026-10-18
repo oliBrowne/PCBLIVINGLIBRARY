@@ -16,6 +16,7 @@ Stubs (document auth, raise NotConfigured without keys): SnapMagic, SamacSys (no
 All response bodies are untrusted: parsed as JSON only, fields read defensively."""
 import json, os, re
 from dataclasses import dataclass, field
+from . import userconfig as UC
 
 
 class NotConfigured(Exception):
@@ -77,7 +78,7 @@ class Provider:
         self.http = http
 
     def configured(self):
-        return all(os.environ.get(e) for e in self.env)
+        return all(UC.secret(e) for e in self.env)
 
     def lookup(self, line) -> SourceResult:
         raise NotImplementedError
@@ -295,7 +296,7 @@ class DigiKey(_Official):
     def token(self):
         if not (self._token or self._token_err):
             from urllib.parse import urlencode
-            body = urlencode({"client_id": os.environ["DIGIKEY_CLIENT_ID"], "client_secret": os.environ["DIGIKEY_CLIENT_SECRET"],
+            body = urlencode({"client_id": UC.secret("DIGIKEY_CLIENT_ID"), "client_secret": UC.secret("DIGIKEY_CLIENT_SECRET"),
                               "grant_type": "client_credentials"})
             r = self.http.post(self.TOKEN_URL, body, cache=False, headers={"Content-Type": "application/x-www-form-urlencoded"})
             try:
@@ -322,16 +323,16 @@ class Nexar(_Official):
     _token = _token_err = None
 
     def configured(self):
-        return bool(os.environ.get("NEXAR_SUPPLY_TOKEN")) or super().configured()
+        return bool(UC.secret("NEXAR_SUPPLY_TOKEN")) or super().configured()
 
     def token(self):
         if self._token or self._token_err:
             return self._token
-        tok = os.environ.get("NEXAR_SUPPLY_TOKEN")
+        tok = UC.secret("NEXAR_SUPPLY_TOKEN")
         if not tok:
             from urllib.parse import urlencode
-            body = urlencode({"grant_type": "client_credentials", "client_id": os.environ["NEXAR_CLIENT_ID"],
-                              "client_secret": os.environ["NEXAR_CLIENT_SECRET"], "scope": "supply.domain"})
+            body = urlencode({"grant_type": "client_credentials", "client_id": UC.secret("NEXAR_CLIENT_ID"),
+                              "client_secret": UC.secret("NEXAR_CLIENT_SECRET"), "scope": "supply.domain"})
             r = self.http.post(self.TOKEN_URL, body, cache=False,
                                headers={"Content-Type": "application/x-www-form-urlencoded"})
             try:

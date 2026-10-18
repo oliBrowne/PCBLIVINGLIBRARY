@@ -65,6 +65,8 @@ def _dlg_pas():
     Mode 'add'   ask for an MPN (unless one is given), build it, show where it came from, reinstall the library
     Mode 'bom'   check the project's BOM, show the counts, offer to fill the library, fill it
     Mode 'fill'  fill the library from the project's BOM straight away
+  A part only an AI datasheet read can finish is offered as an AI step: the model and the cost first, the read only
+  after a click (and a second yes above the limit), then the real cost next to the estimate.
   A timer polls the job folder (progress.ini while ecadlib runs, result.ini at the end), so Altium never freezes. }
 
 Var
@@ -322,6 +324,28 @@ Begin
     Run('add-part');
 End;
 
+Procedure StartAi;
+{ The AI step the last job offered: read the datasheets, held to the amount shown (result.ini ai_approve). }
+Var
+    Prev : String;
+Begin
+    Prev := Job;
+    If Answer(Prev, 'ai_over') = '1' Then
+        If Not ConfirmNoYes(Answer(Prev, 'ai_confirm')) Then
+            Exit;
+    SetTitle('Read with AI');
+    EcadlibDialog.Big.Caption := 'Reading...';
+    Job := StartJob('ai-read');
+    Ask(Job, 'dialog', '1');
+    Ask(Job, 'bom', Answer(Prev, 'ai_bom'));
+    Ask(Job, 'mpn', Answer(Prev, 'ai_mpn'));
+    Ask(Job, 'part', Answer(Prev, 'ai_part'));
+    Ask(Job, 'approved_usd', Answer(Prev, 'ai_approve'));
+    Ask(Job, 'over_limit_ok', Answer(Prev, 'ai_over'));
+    Ask(Job, 'price_unknown_ok', Answer(Prev, 'ai_unknown'));
+    Run('ai-read');
+End;
+
 Procedure StartBom;
 Begin
     SetTitle('Check project BOM');
@@ -439,7 +463,15 @@ Begin
     Begin
         If (Answer(Job, 'fix') <> '') And (St <> 'ready') Then
             EcadlibDialog.Note.Caption := 'Next: ' + Answer(Job, 'fix');
-        If (St = 'held') Or (St = 'awaiting_approval') Or (Answer(Job, 'offer_queue') = '1') Then
+        If Answer(Job, 'ai_cost_text') <> '' Then
+            EcadlibDialog.Note.Caption := Answer(Job, 'ai_cost_text') + #13#10 + EcadlibDialog.Note.Caption;
+        If Answer(Job, 'offer_ai') = '1' Then
+        Begin
+            Phase := 'offer_ai';
+            EcadlibDialog.Note.Caption := 'AI step: ' + Answer(Job, 'ai_text') + #13#10 + 'Nothing is sent until you click.';
+            Buttons(Answer(Job, 'ai_button'), 'Not now', False);
+        End
+        Else If (St = 'held') Or (St = 'awaiting_approval') Or (Answer(Job, 'offer_queue') = '1') Then
         Begin
             Second := 'queue';
             Buttons('Done', 'Open review queue', False);
@@ -540,6 +572,8 @@ Begin
         StartAdd
     Else If Phase = 'offer' Then
         StartFill
+    Else If Phase = 'offer_ai' Then
+        StartAi
     Else If Phase = 'done' Then
         ModalResult := mrOk;
 End;

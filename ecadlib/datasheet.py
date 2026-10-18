@@ -24,6 +24,7 @@ import requests
 
 from . import altium_lib as AL, footprint_gen as F
 from .fsutil import write_text_atomic
+from . import userconfig as UC
 
 API_BASE = "https://api.anthropic.com"
 API_URL = API_BASE + "/v1/messages"
@@ -58,7 +59,8 @@ PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-opus-5": (5.0, 25.0), "claude-
 BATCH_DISCOUNT, CACHE_WRITE = 0.5, 1.25
 BATCH_BYTES, BATCH_MAX = 200 * 2 ** 20, 100_000       # per batch (API limits: 256 MB, 100,000 requests)
 PAGE_TOKENS, OUT_TOKENS, URL_PAGES = 3000, 6000, 30  # rough estimate without a key: per PDF page, typical output, unknown PDF
-SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40,
+SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "ask_above_usd": 1.0,
+            "auto_pages": 40,
             "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", MODEL],
             "escalate": True, "max_attempts": 4,            # pages / model per part: ecadlib.ds_route
             "cross_check": "auto", "cross_check_model": ""}  # second source before a footprint is accepted: ecadlib.crosscheck
@@ -605,18 +607,19 @@ def build_request(source, part, package=None, pages=None, model=MODEL, effort="h
 
 
 def require_key(key=None, rules=None):
-    """The API key: explicit, else the environment variable named by [datasheet] api_key_env (default
-    ANTHROPIC_API_KEY), else ANTHROPIC_API_KEY. The key itself never goes in a rules file, log or cache."""
+    """The API key: explicit, else the key stored under the name [datasheet] api_key_env gives (default
+    ANTHROPIC_API_KEY; `ecadlib keys set`, the setup page), else an environment variable of that name, else
+    ANTHROPIC_API_KEY. The key itself never goes in a rules file, log, cache or the environment."""
     var = settings(rules)["api_key_env"]
     ai = ((rules or {}).get("ai") or {}) if isinstance(rules, dict) else {}
     # another provider's key ([ai] provider = openai ...) is never sent to the Claude API
     ai_var = ai.get("api_key_env") if str(ai.get("provider") or "anthropic").strip().lower() == "anthropic" else None
     if ai_var and var == SETTINGS["api_key_env"]:     # [datasheet] at its default: the [ai] key variable decides
         var = ai_var
-    key = key or os.environ.get(var) or (os.environ.get(ai_var) if ai_var else None) or os.environ.get("ANTHROPIC_API_KEY")
+    key = key or UC.secret(var) or (UC.secret(ai_var) if ai_var else None) or UC.secret("ANTHROPIC_API_KEY")
     if not key:
-        raise DatasheetError(f"{var} is not set: export your Claude API key to read datasheets "
-                             "(or use --from-response to re-check a saved response offline)")
+        raise DatasheetError(f"{var} is not set: store your Claude API key with `ecadlib keys set {var}` or on the setup "
+                             "page to read datasheets (or use --from-response to re-check a saved response offline)")
     return key
 
 
@@ -1837,11 +1840,16 @@ class Reader:
         for j in jobs:
             model = j.get("model") or self.model
             pin, pout = price_of(model) or (None, None)
+            tin = None
             if self.key and self._plain(model):
-                with logging_to(self.log_file, self.say):
-                    tin = self.client().count_tokens(j["body"])
-                how = "count_tokens"
-            else:
+                try:
+                    with logging_to(self.log_file, self.say):
+                        tin = self.client().count_tokens(j["body"])
+                    how = "count_tokens"
+                except Exception as e:                # offline, a refused key: an estimate never stops the run
+                    self.say(f"  count_tokens failed ({type(e).__name__}): rough estimate instead")
+                    exact = False
+            if tin is None:
                 pages = len(j["prov"]["pages_sent"]) if j["prov"].get("pages_sent") else j["prov"].get("pages") or URL_PAGES
                 tin, how = pages * PAGE_TOKENS + 1500, f"rough: {pages} pages x {PAGE_TOKENS}"
             tin += len(json.dumps(output_schema())) // 4       # the output format (not in count_tokens): rough

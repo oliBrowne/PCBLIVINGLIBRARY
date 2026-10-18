@@ -32,6 +32,7 @@ import argparse, base64, functools, hashlib, io, json, math, os, re, shutil, sub
 from pathlib import Path
 
 from . import datasheet as D, sexpr
+from . import userconfig as UC
 
 FONT_FILES = ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf",
               "/Library/Fonts/Arial.ttf", "C:/Windows/Fonts/arial.ttf")
@@ -1469,8 +1470,8 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
     if client is None:
         try:
             from . import llm as LL               # [ai] api_key_env counts, as for the datasheet reader
-            k = key or (LL.key_for(inf["ep"]) if inf else None) or os.environ.get(cfg["api_key_env"]) \
-                or os.environ.get("ANTHROPIC_API_KEY")
+            k = key or (LL.key_for(inf["ep"]) if inf else None) or UC.secret(cfg["api_key_env"]) \
+                or UC.secret("ANTHROPIC_API_KEY")
         except Exception:
             k = None
         if not k:

@@ -229,6 +229,7 @@ def run(set_name="kicad-v1", out=None, replay=None, log=lambda *a: None, ids=Non
         out = Path(out) if out else Path(tmp.name) / "run"
         rec = expand(load_replay(replay), Path(tmp.name) / "replay")
         env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY") and not k.startswith("ECADLIB_")}
+        env["ECADLIB_NO_STORED_KEYS"] = "1"            # no key stored with `ecadlib keys set` either: never a paid call
         http = NoNetwork()
         with mock.patch.dict(os.environ, env, clear=True):
             rep = R.run(set_name, out, replay=rec, sources=SOURCES, ids=ids, offline=True, cache=Path(tmp.name) / "cache", http=http,

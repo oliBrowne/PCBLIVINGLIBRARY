@@ -288,7 +288,8 @@ def test_pas_uses_only_documented_calls_and_is_balanced():
     # the job folder never ends with a backslash (a \\" would escape the closing quote)
     assert "Result := Here + 'jobs\\' + FormatDateTime('yyyymmdd-hhnnss', Now) + '-' + IntToStr(Random(100000));" in text
     # the result keys the script reads are the ones run-job writes
-    assert set(re.findall(r"Answer\(Job, '(\w+)'\)", text)) == {"install", "build", "message", "fix", "status", "offer_fill", "offer"}
+    assert set(re.findall(r"Answer\(Job, '(\w+)'\)", text)) == {"install", "build", "message", "fix", "status", "offer_fill", "offer",
+        "offer_ai", "ai_text", "ai_over", "ai_confirm", "ai_bom", "ai_mpn", "ai_part", "ai_approve", "ai_unknown"}
 
 
 def test_menu_lets_altium_build_the_library_before_reinstalling_it():
@@ -352,7 +353,10 @@ def test_dialog_form_matches_its_unit_and_the_results():
     broken = dict(files, **{AF.DIALOG_UNIT: files[AF.DIALOG_UNIT].replace("EcadlibDialog.Report.Visible := False;", "EcadlibDialog.Gone.Visible := False;", 1)})
     assert any("Gone is not declared" in p for p in AM.project_problems(broken))
     read = set(re.findall(r"Answer\(Job, '(\w+)'\)", files[AF.DIALOG_UNIT]))
-    assert read == {"status", "install", "build", "big", "report", "warnings", "offer_fill", "fix", "offer_queue"}, read
+    assert read == {"status", "install", "build", "big", "report", "warnings", "offer_fill", "fix", "offer_queue",
+                    "offer_ai", "ai_text", "ai_button", "ai_cost_text"}, read
+    asked = set(re.findall(r"Answer\(Prev, '(\w+)'\)", files[AF.DIALOG_UNIT]))       # the AI step's next job
+    assert asked == {"ai_over", "ai_confirm", "ai_bom", "ai_mpn", "ai_part", "ai_approve", "ai_unknown"}, asked
     assert "ReadString('progress', 'text'" in files[AF.DIALOG_UNIT] and "'row' + IntToStr(i)" in files[AF.DIALOG_UNIT]
     # the menu entries open the dialog, unless dialogs=0 asks for Altium's plain message boxes
     assert "OpenDialog('add', '', '')" in files[AM.UNIT] and "OpenDialog('bom', PrjPath, '')" in files[AM.UNIT]
@@ -737,7 +741,8 @@ def test_build_writes_this_pythons_command_on_windows_and_fills_an_empty_one():
         rep = AM.build(d / "given", "ws", None, command="py -3.13 -m ecadlib")   # --command wins
         assert rep["command"] == "py -3.13 -m ecadlib"
     readme = (d / "new" / AM.README).read_text()
-    assert "venv" in readme and "come back held" in readme and "setx ANTHROPIC_API_KEY" in readme
+    assert "venv" in readme and "come back held" in readme and "ecadlib keys set ANTHROPIC_API_KEY" in readme \
+        and "setx ANTHROPIC_API_KEY" not in readme
 
 
 def test_installed_libraries_are_counted_with_the_installed_count():

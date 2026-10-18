@@ -342,6 +342,7 @@ BUILDERS = {"testpack": build_testpack, "demo": build_demo, "specs": build_specs
 
 def build(group):
     env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")}
+    env["ECADLIB_NO_STORED_KEYS"] = "1"                # no key stored with `ecadlib keys set` either: never a paid call
     from unittest import mock
     with tempfile.TemporaryDirectory(prefix="ecadlib-golden-") as tmp, mock.patch.dict(os.environ, env, clear=True):
         cwd = os.getcwd()

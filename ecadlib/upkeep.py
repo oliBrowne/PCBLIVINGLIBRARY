@@ -41,6 +41,7 @@ currency = "USD"; [altium365] workspace = "https://..."."""
 import argparse, hashlib, json, os, shutil, subprocess, sys
 from datetime import datetime, timezone
 from pathlib import Path
+from . import userconfig as UC
 
 CHECKS = ("lifecycle", "upstream", "sourcing", "a365")
 LABEL = "ecadlib-upkeep"
@@ -136,7 +137,7 @@ class Ctx:
     def gitlab(self):
         if self._gitlab is None:
             from .upstream import GitLab
-            self._gitlab = GitLab(token=self.env.get("GITLAB_TOKEN"))
+            self._gitlab = GitLab(token=UC.secret("GITLAB_TOKEN", self.env))
         return self._gitlab
 
 
@@ -350,7 +351,7 @@ def check_a365(src, state_dir, ctx, cfg, now, workspace=None):
         return sec
     client = ctx.design
     if client is None:
-        token = ctx.env.get("NEXAR_TOKEN")
+        token = UC.secret("NEXAR_TOKEN", ctx.env)
         if not token:
             sec.update(status="skipped", reason="NEXAR_TOKEN not set (Nexar user token: design.domain, user.access, openid)")
             return sec
@@ -675,7 +676,7 @@ def main(argv=None, ctx=None, gh=None, runner=None, notifier=None):
         write_report(rep, a.out)
     if a.github:
         try:
-            token = os.environ.get("GITHUB_TOKEN")             # REST when token and repo are known, else `gh api`
+            token = UC.secret("GITHUB_TOKEN")             # REST when token and repo are known, else `gh api`
             g = gh or GitHub(a.repo, token if token and a.repo else None, runner=runner)
             res = publish(rep, a.github, g, runner, a.base)
             rep["github"] = res
@@ -709,7 +710,7 @@ def _gitlab_client(rules, a, runner=None):
         if bad:
             raise forge.GitLabError(bad + "; or pass --gitlab-api")
     tok_env = ag.get("gitlab_token_env") or "GITLAB_TOKEN"
-    token = os.environ.get(tok_env)
+    token = UC.secret(tok_env)
     if not token:
         raise forge.GitLabError(f"no GitLab token: set ${tok_env} (a project or personal access token with api scope)")
     return forge.GitLab(proj, token, api=api)

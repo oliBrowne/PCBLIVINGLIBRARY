@@ -154,7 +154,7 @@ def main(argv=None):
         print(f"ecadlib: unknown command {argv[0]!r}. Commands: {', '.join(COMMANDS)}", file=sys.stderr)
         return 2
     from . import term, userconfig
-    userconfig.apply_env()                                   # keys from `ecadlib keys` / the setup page; env vars win
+    userconfig.apply_env()                                   # kicad-cli on PATH; keys are read from the store, never exported
     rest = term.set_from_argv(argv[1:])                      # -q / -v for every command; --json: never styled
     args, notes = env_defaults(argv[0], rest)                # ECADLIB_LIB / ECADLIB_WORKSPACE when the flag is not given
     from . import firstrun as FR

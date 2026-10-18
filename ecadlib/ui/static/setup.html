@@ -189,7 +189,7 @@ function showProvider(id, keepModel) {
   $("keybox").hidden = !prov.key;
   if (prov.key) {
     const k = keyRow(prov.key);
-    $("keystate").innerHTML = k.stored ? pill("saved", "ok") : k.set ? pill("set in your environment", "ok") : pill("not set yet", "warn");
+    $("keystate").innerHTML = k.stored ? pill("saved", "ok") : k.set ? pill("only in an environment variable: other programs can use it; save it here", "warn") : pill("not set yet", "warn");
     $("keyurl").href = prov.key_url;
     $("key").value = "";
   }
@@ -225,7 +225,7 @@ function render() {
   $("add-kicad").title = d.kicad.length ? "" : "KiCad was not found on this computer";
 
   $("extrakeys").innerHTML = S.keys.filter((k) => !S.providers.some((p) => p.key === k.name)).map((k) => `
-    <label class="f" for="x-${k.name}">${esc(k.label)} <span>${k.stored ? pill("saved", "ok") : k.set ? pill("set in your environment", "ok") : pill("not set", "info")}</span></label>
+    <label class="f" for="x-${k.name}">${esc(k.label)} <span>${k.stored ? pill("saved", "ok") : k.set ? pill("only in an environment variable: other programs can use it; save it here", "warn") : pill("not set", "info")}</span></label>
     <div class="row"><input type="password" id="x-${k.name}" autocomplete="off" placeholder="${esc(k.name)}">
       <button data-k="${k.name}" class="xsave">Save</button>${k.stored ? `<button data-k="${k.name}" class="xforget">Remove</button>` : ""}</div>
     <p class="hint">For ${esc(k.why)}. <a href="${esc(k.url)}" target="_blank" rel="noopener">Where to get it</a></p>`).join("");

@@ -28,6 +28,7 @@ import pandas as pd
 from .altium_export import RESERVED, to_rows
 from .altium_lib import file_stem
 from .bom_triage import read_bom
+from . import userconfig as UC
 
 API_URL = os.environ.get("NEXAR_API_URL", "https://api.nexar.com/graphql")
 FILES_URL = os.environ.get("NEXAR_FILES_URL", "https://files.nexar.com")
@@ -485,7 +486,7 @@ def main(argv=None):
 
     if a.cmd == "push" and not Path(a.plan).is_file():
         sys.exit(f"{a.plan}: no such plan file (write one with `ecadlib altium365 plan BOM -o {a.plan}`)")
-    token = os.environ.get("NEXAR_TOKEN")
+    token = UC.secret("NEXAR_TOKEN")
     if not token and not (a.cmd == "push" and a.dry_run):
         sys.exit("set NEXAR_TOKEN (Nexar portal token with design.domain, user.access, openid scopes)")
     client = Nexar(token) if token else None

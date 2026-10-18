@@ -36,6 +36,7 @@ outcome is returned (the agent puts them in its report as rep["notify"]). Tests 
     ecadlib notify show                                         targets, events and whether their variables are set"""
 import argparse, json, re, sys, time
 from urllib.parse import urlsplit
+from . import userconfig as UC
 
 EVENTS = ("batch_ready", "part_held", "upkeep_changes", "lifecycle")
 TYPES = ("slack", "teams", "json")
@@ -239,7 +240,7 @@ def send(rules, events, env=None, sender=None, sleep=time.sleep, log=None, clock
                 continue
             rec = {"target": t["name"], "event": ev["event"], "attempts": 0}
             out.append(rec)
-            url = (env.get(t["url_env"]) or "").strip()
+            url = (UC.secret(t["url_env"], env) or "").strip()
             if not url:
                 rec["result"] = f"skipped: ${t['url_env']} is not set"
                 log(f"notify: {t['name']}: {rec['result']}")
@@ -251,7 +252,7 @@ def send(rules, events, env=None, sender=None, sleep=time.sleep, log=None, clock
             host = urlsplit(url).hostname
             headers = {"Content-Type": "application/json", "User-Agent": "ecadlib-notify"}
             if t["token_env"]:
-                tok = env.get(t["token_env"])
+                tok = UC.secret(t["token_env"], env)
                 if not tok:
                     rec["result"] = f"skipped: ${t['token_env']} is not set"
                     log(f"notify: {t['name']}: {rec['result']}")
@@ -307,7 +308,7 @@ def main(argv=None):
         return 0 if a.cmd == "show" else 1
     if a.cmd == "show":
         for t in cfg["targets"]:
-            st = "set" if os.environ.get(t["url_env"]) else "NOT SET"
+            st = "set" if UC.secret(t["url_env"]) else "NOT SET"
             print(f"{t['name']:<20} {t['type']:<6} ${t['url_env']} ({st})  events: {', '.join(sorted(t['events']))}")
         return 0
     if a.target:

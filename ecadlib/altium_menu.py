@@ -77,7 +77,7 @@ def procedures():
     return [p for p, _, _ in PROCS] + [p for p, _, _ in BUILD_PROCS]
 MENU_BOM = "uploads/altium-menu/parts.csv"
 HEADER = ["Designator", "Qty", "Value", "Footprint", "Manufacturer", "Mfr. Part #", "LCSC Part Number", "Description", "Datasheet"]
-ACTIONS = ("add-part", "check-bom", "fill", "queue", "open")
+ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read")
 QUEUE_ANCHOR = "#queuecard"
 
 # Every identifier the .pas calls from Altium / DelphiScript, and where it is documented. TRxxxx = Altium's scripting
@@ -153,7 +153,7 @@ def pas_text():
   How: each entry writes jobs\<id>\request.ini next to this script, runs ecadlib_run.cmd (without a console window
   through ecadlib_run.vbs unless hidden=0 in ecadlib_menu.ini), waits for jobs\<id>\exit.txt and reads
   jobs\<id>\result.ini, which `ecadlib altium-menu run-job` writes. Settings: ecadlib_menu.ini. No keys or passwords
-  are in these files: API keys stay in your environment variables. }
+  are in these files: API keys stay in ecadlib's own key store (ecadlib keys set). }
 
 Function Here : String;
 Begin
@@ -484,6 +484,36 @@ Begin
     Result := Setting('dialogs', '1') = '0';
 End;
 
+Procedure OfferAi(Job : String);
+{ A part only an AI datasheet read can finish: show the model and the cost, read only on a yes (a second yes when it
+  can cost more than the limit), then show the real cost next to the estimate. }
+Var
+    Ai : String;
+    Problem : String;
+Begin
+    If Answer(Job, 'offer_ai') <> '1' Then
+        Exit;
+    If Not ConfirmNoYes('ecadlib: AI step' + #13#10 + #13#10 + Answer(Job, 'ai_text') + #13#10 + #13#10 + 'Read the datasheets with AI now? Nothing is sent unless you say yes.') Then
+        Exit;
+    If Answer(Job, 'ai_over') = '1' Then
+        If Not ConfirmNoYes(Answer(Job, 'ai_confirm')) Then
+            Exit;
+    Ai := StartJob('ai-read');
+    Ask(Ai, 'bom', Answer(Job, 'ai_bom'));
+    Ask(Ai, 'mpn', Answer(Job, 'ai_mpn'));
+    Ask(Ai, 'part', Answer(Job, 'ai_part'));
+    Ask(Ai, 'approved_usd', Answer(Job, 'ai_approve'));
+    Ask(Ai, 'over_limit_ok', Answer(Job, 'ai_over'));
+    Ask(Ai, 'price_unknown_ok', Answer(Job, 'ai_unknown'));
+    Problem := RunJob(Ai, 'ecadlib: read with AI');
+    If Problem <> '' Then
+    Begin
+        ShowError('ecadlib: read with AI' + #13#10 + #13#10 + Problem);
+        Exit;
+    End;
+    ShowResult('ecadlib: read with AI', Ai, Publish(Ai));
+End;
+
 Procedure AddPartFromMPN;
 Var
     MPN : String;
@@ -512,6 +542,7 @@ Begin
         Exit;
     End;
     ShowResult(Title, Job, Publish(Job));
+    OfferAi(Job);
 End;
 
 Procedure CheckProjectBOM;
@@ -565,6 +596,7 @@ Begin
         Exit;
     End;
     ShowResult(Title, Job, Publish(Job));
+    OfferAi(Job);
 End;
 
 Procedure OpenReviewQueue;
@@ -851,8 +883,8 @@ review queue (a held part needs a person) and the full BOM report (on request) o
 {INI} brings back Altium's plain message boxes.
 
 Needs: ecadlib installed on this PC (pip install ecadlib; `ecadlib doctor --altium-menu {INI}` checks it). Settings
-are in {INI} (workspace, library folder, how to run ecadlib). Your API keys stay in environment variables; no file
-here holds one.
+are in {INI} (workspace, library folder, how to run ecadlib). Your API keys stay in ecadlib's own key store (`ecadlib keys
+set NAME` or the setup page), never in an environment variable; no file here holds one.
 
 How the menu runs ecadlib: command= in {INI}. `ecadlib altium-menu build` run on Windows writes the Python it ran
 with there ("C:\\...\\python.exe" -m ecadlib), so an install in a virtual environment (venv) works. When command=
@@ -863,8 +895,10 @@ command= and keeps your other settings), or set command= yourself.
 Without an AI key (ANTHROPIC_API_KEY, or the model set in ecadlib.toml [ai]), ecadlib cannot read datasheets, so
 parts no free source fully describes come back held with the reason ("fields: Description is empty", "footprint:
 ..."). Held parts never go into the library: open the review queue (ecadlib > Open review queue) to see why and
-pick or fill what is missing, or set the key (Windows: setx ANTHROPIC_API_KEY "<your key>" in a terminal, then
-restart Altium so it sees the new variable) and add the part again.
+pick or fill what is missing, or store the key for ecadlib only (`ecadlib keys set ANTHROPIC_API_KEY` in a terminal,
+or the setup page) and add the part again. Do not use setx or another environment variable: every program on the PC
+can read those, and some (coding assistants) bill an ANTHROPIC_API_KEY they find. Before ecadlib reads a datasheet
+the dialog shows the model and the estimated cost and asks you; afterwards it shows what the reads really cost.
 
 Install (once), the quick way: close Altium, run `ecadlib altium-menu install-menu --out "{w}"` and start Altium
 again: the "ecadlib" menu is in the menu bar of the schematic, PCB and library editors, before Window. It is merged
@@ -1475,7 +1509,12 @@ def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
     bom = add_to_parts(ws.root, mpn, manufacturer, **hints)
     rel = ws.rel(bom)
     progress.step(0, 0, f"looking up {mpn}")
-    ws.librarian_run(rel, progress=lambda d, t, text: progress.step(0, 0, text))
+    s = ws.librarian_run(rel, progress=lambda d, t, text: progress.step(0, 0, text), ai=False)   # AI only after an OK
+    return _part_result(cfg, ws, bom, rel, mpn, progress, s.get("ai"))
+
+
+def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
+    """add_part / ai-read for one part: publish it when ready, else say why it is held (and offer the AI read)."""
     _, _, items = ws._plan(rel)
     it = _item_for(items, mpn)
     if it is None:
@@ -1510,11 +1549,59 @@ def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
         res.update(status="held", message=f"{mpn} is held ({nm}): " + (" ".join(w["text"] for w in whys[:3]) or "see the review."),
                    fix=(whys[0]["fix"] + " " if whys else "") + f"Open the review queue ({_queue_hint(cfg)}) "
                        "to pick a symbol or footprint, or release it anyway.")
-    res.update(rows_result(part_rows(it), {"ready": "Ready", "duplicate": "Already in your library",
-                                           "awaiting_approval": "Waiting for sign-off"}.get(st, "Held")))
+    res.update(rows_result(cost_rows(ai_cost) + part_rows(it), {"ready": "Ready", "duplicate": "Already in your library",
+                                                                "awaiting_approval": "Waiting for sign-off"}.get(st, "Held")))
     if res["status"] == "error":
         res["big"] = "Not found" if res.get("reason") == "not_found" else "Not published"
+    if res["status"] == "held" and ai and nm in ai["names"]:
+        q = ws.ai_quote(rel, parts=[nm]) if ai["parts"] > 1 else ai      # the menu's list may hold other parts too
+        if q:
+            offer_ai(res, q, rel, mpn, nm)
+    if ai_cost:
+        res["message"] = (res.get("message") or "") + " " + ai_cost["text"]
+        res["ai_cost_text"] = ai_cost["text"]
     return res
+
+
+def offer_ai(res, q, bom, mpn="", part=""):
+    """result.ini keys for the dialog's AI step: the model and cost (ai_text), and, with a key, the offer to read
+    (offer_ai, the button, the amount to approve, whether a second yes is needed). Nothing has been sent."""
+    from . import ai_cost as AC
+    res["ai_text"] = q["text"]
+    if not q["key_set"]:
+        res["fix"] = (res.get("fix") or "") + " " + q["text"]
+        return res
+    res.update(offer_ai="1", ai_bom=bom, ai_mpn=mpn, ai_part=part, ai_model=q["model"], ai_over="1" if q["over_limit"] else "0",
+               ai_unknown="0" if q["price_known"] else "1",
+               ai_approve="" if q["approve_usd"] is None else f"{q['approve_usd']:.2f}",
+               ai_button=f"Read with AI (about {AC.money(q['usd'])})" if q["price_known"] else "Read with AI (price unknown)",
+               ai_confirm=(f"Reading the datasheets can cost up to {AC.money(q['usd_max'])} with {q['model']}, more than your "
+                           f"limit of {AC.money(q['limit_usd'])} ([datasheet] {q['limit_name']}). Go ahead anyway?")
+               if q["price_known"] else f"ecadlib does not know what {q['model']} costs. Read the datasheets anyway?")
+    return res
+
+
+def cost_rows(c):
+    """The dialog rows after an AI step: the estimate and what it really cost."""
+    if not c:
+        return []
+    from . import ai_cost as AC
+    return [row_text("AI estimate", f"about {AC.money(c['estimate_usd'])}"),
+            row_text("AI cost", f"{AC.money(c['actual_usd'])} ({c['reads']} read{'s' if c['reads'] != 1 else ''})", True)]
+
+
+def ai_read(cfg, req, progress=None):
+    """The dialog's "Read with AI": the datasheet reads of the BOM ai_bom names, held to the amount the person
+    approved, then the same publish and result as add-part (ai_mpn given) or fill, with the real cost."""
+    progress = progress or Progress()
+    ws = _workspace(cfg)
+    bom = req.get("bom", "")
+    approved = req.get("approved_usd") or None
+    s = ws.ai_read(bom, float(approved) if approved else None, req.get("over_limit_ok") == "1",
+                   req.get("price_unknown_ok") == "1", parts=[req["part"]] if req.get("part") else None, progress=progress)
+    if req.get("mpn"):
+        return _part_result(cfg, ws, ws._bom_path(bom), bom, req["mpn"], progress, None, s.get("ai_cost"))
+    return _fill_result(cfg, ws, bom, s, progress, s.get("ai_cost"))
 
 
 def not_found(triage_csv, mpn, item):
@@ -1636,7 +1723,11 @@ def fill(cfg, project, progress=None):
     progress = progress or Progress()
     ws = _workspace(cfg)
     bom, pb = _bom_of(ws, project)
-    s = ws.librarian_run(bom, progress=progress)
+    s = ws.librarian_run(bom, progress=progress, ai=False)          # paid AI reads only after the person's OK
+    return _fill_result(cfg, ws, bom, s, progress)
+
+
+def _fill_result(cfg, ws, bom, s, progress, ai_cost=None):
     if s["ready"]:
         progress.step(progress.total, progress.total, "putting the ready parts into the library")
     pub = publish(ws, bom, cfg["library"], cfg["name"], cfg.get("tool", "altium")) if s["ready"] else {"install": [], "problems": []}
@@ -1661,8 +1752,13 @@ def fill(cfg, project, progress=None):
     shown += [row_text(r["part"], (r.get("why") or "").split(";")[0]) for r in held[:3]]
     if len(held) > 3:
         shown.append(row_text(f"and {len(held) - 3} more held", "in the review queue"))
-    res.update(rows_result(shown, f"{s['ready']} of {s['parts']} ready"))
+    res.update(rows_result(cost_rows(ai_cost) + shown, f"{s['ready']} of {s['parts']} ready"))
     res["offer_queue"] = "1" if s["held"] or s["awaiting_approval"] else "0"
+    if s.get("ai"):
+        offer_ai(res, s["ai"], bom)
+    if ai_cost:
+        res["message"] += " " + ai_cost["text"]
+        res["ai_cost_text"] = ai_cost["text"]
     return res
 
 
@@ -1778,6 +1874,8 @@ def run_action(cfg, action, req, opener=None, progress=None):
                          progress=progress)
     if action == "fill":
         return fill(cfg, req.get("project", ""), progress=progress)
+    if action == "ai-read":                    # only after the dialog showed the cost and the person said yes
+        return ai_read(cfg, req, progress=progress)
     if action == "open":                       # a report or review the dialog offers: only files in the workspace
         return open_file(cfg, req.get("path", ""), opener=opener)
     if action == "queue":

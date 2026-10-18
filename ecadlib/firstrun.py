@@ -15,6 +15,7 @@ import argparse, json, os, re, shutil, sys, tempfile, time
 from pathlib import Path
 
 from . import rules as RU
+from . import userconfig as UC
 
 TOOLS = ("altium", "kicad", "both")
 DEMO_BOM = Path(__file__).with_name("assets") / "demo_bom.csv"
@@ -29,8 +30,8 @@ def key_status(rules=None, environ=None):
     environ = os.environ if environ is None else environ
     out = []
     for name, env, why in key_services(rules):
-        ok = all(environ.get(e) for e in env)
-        if name == "altium365" and not ok and environ.get("NEXAR_CLIENT_ID") and environ.get("NEXAR_CLIENT_SECRET"):
+        ok = all(UC.secret(e, environ) for e in env)
+        if name == "altium365" and not ok and UC.secret("NEXAR_CLIENT_ID", environ) and UC.secret("NEXAR_CLIENT_SECRET", environ):
             env, ok = ["NEXAR_CLIENT_ID", "NEXAR_CLIENT_SECRET"], True
         out.append((" + ".join(env), ok, why))
     return out

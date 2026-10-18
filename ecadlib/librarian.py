@@ -553,6 +553,7 @@ class Run:
         st["tried"].append("standard: " + "; ".join(got + why))
 
     def src_datasheet(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
+        st["tried"] = [t for t in st["tried"] if "waiting for your OK to read it with AI" not in t]   # asked again now
         urls = D.datasheet_urls(item, ln, row, st["found"])
         if not urls:
             st["tried"].append("datasheet: no datasheet URL known")
@@ -603,6 +604,8 @@ class Run:
                     st["tried"].append(f"datasheet: failed ({type(e).__name__}: {e})")
             elif isinstance(r, Exception):
                 st["tried"].append(f"datasheet reader: failed ({r})")
+            elif r == "estimate only":                    # priced, not sent: the person approves the cost first
+                st["tried"].append(f"datasheet: waiting for your OK to read it with AI ({job['url']})")
             else:
                 st["tried"].append(f"datasheet: {r or 'not sent'}" + ("; run again to collect" if str(r).startswith("pending") else ""))
         self.waiting = []

@@ -45,6 +45,7 @@ from . import sheetsafe as SS
 from .bom_triage import count_refs, part_numbers, placeholder_mpn, read_bom
 from .httpcache import CachedHTTP
 from .kicad_index import norm_mpn, package_of, parse_value
+from . import userconfig as UC
 
 RISKY = {"nrnd", "ltb", "obsolete"}
 SUPPLIER = {"digikey": "Digi-Key", "mouser": "Mouser", "lcsc": "LCSC", "farnell": "Farnell", "newark": "Newark",
@@ -420,7 +421,7 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
     country, currency = "US", "USD"
 
     def _headers(self):
-        return {"X-DIGIKEY-Client-Id": os.environ["DIGIKEY_CLIENT_ID"], "Authorization": f"Bearer {self._token}",
+        return {"X-DIGIKEY-Client-Id": UC.secret("DIGIKEY_CLIENT_ID"), "Authorization": f"Bearer {self._token}",
                 "Accept": "application/json", "Content-Type": "application/json",
                 "X-DIGIKEY-Locale-Site": self.country, "X-DIGIKEY-Locale-Currency": self.currency}
 
@@ -531,7 +532,7 @@ class MouserSourcing(L.MouserLifecycle):
         if not self.configured():
             raise P.NotConfigured(f"{self.name}: set {', '.join(self.env)} ({self.auth})")
         # the key is a query parameter: httpcache redacts apiKey= from the cache key and the stored URL
-        return self.http.post(url.format(quote(os.environ["MOUSER_API_KEY"], safe="")), json.dumps(body),
+        return self.http.post(url.format(quote(UC.secret("MOUSER_API_KEY"), safe="")), json.dumps(body),
                               headers={"Content-Type": "application/json", "Accept": "application/json"})
 
     def part(self, p, alternates=False):

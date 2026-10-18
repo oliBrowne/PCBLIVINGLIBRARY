@@ -57,6 +57,7 @@ EXAMPLES = {
     "crosscheck.unchecked": "cross-check unchecked: second read: not checked (refused)",
     "datasheet.no_link": "datasheet: no datasheet URL known",
     "datasheet.no_key": "needs datasheet reader (no API key): https://x.example/a.pdf (BOM)",
+    "datasheet.awaiting_ok": "datasheet: waiting for your OK to read it with AI (https://x.example/a.pdf)",
     "datasheet.not_downloaded": "the PDF was not downloaded here (sent as a URL): its content was not validated locally",
     "datasheet.some_pages": "only some pages were sent (pages 1-4 of 40): check nothing was missed",
     "datasheet.failed": "datasheet reader: failed (HTTP 500)",
