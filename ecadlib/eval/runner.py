@@ -88,9 +88,10 @@ def _safe(s):
 class EvalReader(D.Reader):
     """datasheet.Reader that remembers what each part cost, and can record answers or replay them."""
 
-    def __init__(self, *a, record=None, replay=None, **kw):
+    def __init__(self, *a, record=None, replay=None, cached_only=False, **kw):
         super().__init__(*a, **kw)
         self.record, self.replay = (Path(record) if record else None), (Path(replay) if replay else None)
+        self.cached_only = cached_only
         self.results = D.ResultCache(self.out / "cache")          # per eval run: no answer leaks in from elsewhere
         self.used = {}
         if self.replay:
@@ -154,6 +155,14 @@ class EvalReader(D.Reader):
                 r["check"] = {"model": model, "message": msg}
                 f.write_text(json.dumps(r, indent=1, default=str), encoding="utf-8")
         return msg, via
+
+    def recollect(self, jobs=()):
+        return 0 if self.replay else super().recollect(jobs)
+
+    def _guard_cost(self, jobs):
+        if self.cached_only and jobs:
+            raise D.DatasheetError("not sent (--cached-only: saved answers only); a live run reads it")
+        return super()._guard_cost(jobs)
 
     def read_now(self, job, _guarded=False):
         if self.replay:
@@ -276,13 +285,16 @@ def summarize(rows):
 
 def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=None, replay=None, sources=None,
         families=None, ids=None, offline=False, cache="out/http_cache", http=None, api_key=None, rules=None, providers=None,
-        tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None, repeat=1, batch=False):
+        tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None, repeat=1, batch=False,
+        cached_only=False):
     """repeat: run the same cases again (into <out>/repeat-2 ...) and report how many parts gave the same files
     (summary["consistency"]): from the recorded answers when there are any (--record / --replay: the code must be
     deterministic), else live again (the model's own consistency; this pays again).
     provider / base_url / assist / api_key_env: the [ai] settings for this run (ecadlib.llm), so models from any
     provider can be compared on the same set: e.g. provider="ollama", model="qwen2.5:7b" against the Claude default.
-    batch: the datasheet reads go out as one Message Batch (half price; the run waits for it)."""
+    batch: the datasheet reads go out as one Message Batch (half price; the run waits for it).
+    cached_only: re-score a live run's out folder with nothing sent: its cached answers, and the answers of its
+    collected batches downloaded again (free), are read by this code; a part that needs another read is reported."""
     data = load_set(set_name)
     cases = select(data["cases"], families, ids, limit)
     if not cases:
@@ -306,8 +318,9 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         from ..httpcache import CachedHTTP
         http = CachedHTTP(cache, min_interval=0.5, offline=offline, timeout=60)
     reader = EvalReader(lib, cache, api_key, rules, http, model=model, record=record, replay=replay, log=lambda *a: None,
-                        batch=bool(batch and not replay))
+                        batch=bool(batch and not replay), cached_only=bool(cached_only and not replay))
     mode = "replay" if replay else "estimate (no API key: nothing sent)" if reader.estimate_only else \
+        "cached answers only (nothing sent)" if reader.cached_only else \
         ("live, recording" if record else "live") + (", batch" if reader.batch else "")
     inf = reader.info(reader.model)
     log(f"  eval {data['meta']['name']}: {len(cases)} cases, sources {','.join(sources)}, model {reader.model} "
@@ -350,7 +363,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
            "summary": summarize(rows), "cases": rows}
     for i in range(2, max(1, int(repeat or 1)) + 1):
         again = run(set_name, out / f"repeat-{i}", limit, model, None, replay or record, sources, families, ids, offline, cache,
-                    http, api_key, rules, providers, tol, log, provider, base_url, assist, api_key_env, batch=batch)
+                    http, api_key, rules, providers, tol, log, provider, base_url, assist, api_key_env, batch=batch,
+                    cached_only=cached_only)
         c = consistency(rep, again)
         prev = rep["summary"].get("consistency")
         if prev is None or c["same"] < prev["same"]:

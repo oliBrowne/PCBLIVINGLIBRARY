@@ -457,6 +457,12 @@ def build(spec, density=None):
         if not two_term:                                              # pin-1 triangle just above pad 1
             if t == "qfn" and spec.get("pins_top_bottom", 1) != 0:
                 ax, ay = -sx, -sy
+                for _ in pads:                                        # tiny QFN: the top row reaches the corner,
+                    hit = [p for p in pads if p[2] - p[4] / 2 - c < ay and p[2] + p[4] / 2 + c > ay - 0.33 and
+                           p[1] - p[3] / 2 - c < ax + 0.24 and p[1] + p[3] / 2 + c > ax - 0.24]
+                    if not hit:                                       # so the triangle moves out past it (KLC F5.1)
+                        break
+                    ax = round(min(p[1] - p[3] / 2 for p in hit) - c - 0.24, 4)
             else:
                 ax, ay = p1[1], p1[2] - p1[4] / 2 - c
             out.append(pin1_triangle(ax, ay))

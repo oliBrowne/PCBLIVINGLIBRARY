@@ -66,7 +66,7 @@ def test_eval_batch_prices_earlier_answers_by_how_they_were_sent():
     del case["attempts"][0]["via"]                                     # an older recording: the kept answer's way
     assert abs(R._cost(case, m)[2] - one) < 1e-6
     src = (REPO / "ecadlib/eval/runner.py").read_text(encoding="utf-8")
-    assert re.search(r"again = run\([^)]*batch=batch\)", src, re.S), "repeats keep --batch"
+    assert re.search(r"again = run\([^)]*batch=batch[,)]", src, re.S), "repeats keep --batch"
 
 
 def test_wire_dimensions_as_printed():

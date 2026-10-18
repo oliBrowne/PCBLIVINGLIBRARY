@@ -221,6 +221,26 @@ def test_a_batch_run_records_half_price_and_replays_it():
         assert [(c["id"], c["pass"], c["usd"]) for c in rep2["cases"]] == [(c["id"], c["pass"], c["usd"]) for c in rep["cases"]]
 
 
+def test_cached_only_rescores_a_live_run_without_sending():
+    """#42: a live batch run whose answers the parser rejected is re-scored with nothing bought again: the collected
+    batch's answers are downloaded again (free); a part that needs a read that was never made is reported, not sent."""
+    pdfs = {"https://example.com/soic.pdf": TD.PDF, "https://example.com/qfn.pdf": TD.PDF}
+    soic = copy.deepcopy(TD.INCH)
+    soic["package"]["land"] = {"pad_length": 1.55, "pad_width": 0.6, "pad_center": 2.7}      # no pad_center_y
+    api = TB.FakeAPI(answer=lambda part: TD.message(D.to_wire(soic) if part == "SOICPART" else qfn_ext()), polls=0)
+    with tempfile.TemporaryDirectory() as d:
+        kw = dict(cache=Path(d) / "cache", http=TB.PdfHTTP(pdfs), log=lambda *a: None, batch=True)
+        with TB.patched(api), mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": TB.KEY}):
+            with mock.patch.object(D, "_fit", lambda v, s: v):            # the parser before the fix
+                rep = R.run(mini_set(d), Path(d) / "live", **kw)
+            sent = len(api.of("/v1/messages/batches")) + len(api.of("/v1/messages"))
+            assert not {c["mpn"]: c for c in rep["cases"]}["SOICPART"]["pass"]
+            rep2 = R.run(mini_set(d), Path(d) / "live", cached_only=True, **kw)
+        assert len(api.of("/v1/messages/batches")) + len(api.of("/v1/messages")) == sent, "something was sent"
+        cs = {c["mpn"]: c for c in rep2["cases"]}
+        assert rep2["meta"]["mode"] == "cached answers only (nothing sent)" and cs["SOICPART"]["source"] == "datasheet", cs["SOICPART"]
+
+
 def test_estimate_mode_sends_nothing():
     pdfs = {"https://example.com/soic.pdf": TB.pdf_with(["SOIC-8 package"] * 3)}
     with tempfile.TemporaryDirectory() as d, \

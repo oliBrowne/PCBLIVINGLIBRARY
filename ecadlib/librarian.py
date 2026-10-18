@@ -565,6 +565,9 @@ class Run:
         if not rd.key and not rd.estimate_only:
             st["tried"].append(f"needs datasheet reader (no API key): {urls[0][0]} ({urls[0][1]})")
             return
+        if not getattr(rd, "_recollected", False):    # answers paid for in earlier batches, before a parser fix
+            rd._recollected = True
+            rd.recollect()
         job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
         try:
             res = hit = rd.cached(job)

@@ -6,10 +6,10 @@ part kinds whose pinout is standard, the symbol) offline and deterministically. 
     ecadlib stdparts bench [--kicad DIR] [--fixture F] every table entry against KiCad's official footprint
     ecadlib stdparts coverage BOM [BOM ...]            how many BOM lines this source resolves (no network)
 
-Footprints come only from package_specs/standard.json.gz: 615 packages, each with its KiCad name and library. Their
+Footprints come only from package_specs/standard.json.gz: 618 packages, each with its KiCad name and library. Their
 dimensions are the KiCad footprint generator's size definitions (JEDEC / IPC-SM-782 / manufacturer package drawings,
 built here with footprint_gen's IPC-7351B equations) or, for the packages KiCad draws by hand (SOD, SMA/SMB/SMC, MELF,
-SOT-223, SOT-89, DPAK/D2PAK, TO-220, TO-92), the published recommended land as a pad table. Every entry was built and
+SOT-223, SOT-89, SC-82AB, DO-41, DO-201AD, DPAK/D2PAK, TO-220, TO-92), the published recommended land as a pad table. Every entry was built and
 compared with kicad-footprints (pads and courtyard within footprint_bench tolerances) before it went into the table;
 `bench` repeats that check.
 
@@ -22,7 +22,7 @@ Footprint property; then the description and value; then the MPN):
                        Panasonic ERJ-, Vishay CRCW/TNPW, Stackpole RMCF, Bourns CR, KOA RK73, Uni-Royal). Two different
                        sizes from two places (footprint 0603, MPN GRM21 = 0805) is a conflict: nothing is built.
   named packages       SOT-23/-5/-6, SOT-323/353/363, SOT-523, SOT-89, SOD-123(F)/323(F)/523/923/128, SMA/SMB/SMC/SMF
-                       (DO-214), MiniMELF/MELF, DPAK/D2PAK (TO-252/263), TO-220 (vertical), TO-92 (inline), and
+                       (DO-214), MicroMELF/MiniMELF/MELF, DO-41/DO-201AD (axial), SC-82AB, DPAK/D2PAK (TO-252/263), TO-220 (vertical), TO-92 (inline), and
                        SOIC/SO/TSSOP/MSOP/SSOP/QSOP/QFN/DFN/SON/QFP families from the name (pins, body, pitch, exposed pad,
                        KiCad or LCSC style "QFN-32_L5.0-W5.0-P0.50-EP3.5"). Plain SOIC-8/14/16 means JEDEC MS-012
                        (3.9 mm body), SOIC-nW MS-013 (7.5 mm), TSSOP-8..28 MO-153 (4.4 mm, 0.65 mm pitch), MSOP-8 3x3
@@ -74,6 +74,7 @@ ALIASES = {
     "D2PAK": "TO-263-2", "TO263": "TO-263-2", "TO263AB": "TO-263-2", "TO2632": "TO-263-2", "TO2635": None,     # 5-lead: KiCad counts 4 or 5
     "TO220": "TO-220-3_Vertical", "TO2203": "TO-220-3_Vertical", "TO220AB": "TO-220-3_Vertical",
     "TO92": "TO-92_Inline", "TO923": "TO-92_Inline", "TO92A": None,
+    "SC82AB": "SC-82AB",                          # 4 leads, 2 x 2.1 mm body (SOT-343 is a different land)
 }
 DIODE_ALIASES = {
     "SOD123": "D_SOD-123", "SOD123F": "D_SOD-123F", "SOD323": "D_SOD-323", "SC76": "D_SOD-323", "SC90": "D_SOD-323",
@@ -83,6 +84,8 @@ DIODE_ALIASES = {
     "MELF": "D_MELF", "DO213AB": "D_MELF", "LL41": "D_MELF",
     "DO41": "D_DO-41_SOD81_P10.16mm_Horizontal", "DO204AL": "D_DO-41_SOD81_P10.16mm_Horizontal",
     "SOD81": "D_DO-41_SOD81_P10.16mm_Horizontal",       # axial, laid flat with KiCad's 10.16 mm lead bend
+    "DO201AD": "D_DO-201AD_P15.24mm_Horizontal", "DO201": "D_DO-201AD_P15.24mm_Horizontal",   # 15.24 mm bend
+    "MICROMELF": "D_MicroMELF",
 }
 AMBIGUOUS = {"SOT233": "KiCad's SOT-23-3 is the 1.6 mm MO-178 body; distributors use SOT-23-3 for TO-236 SOT-23",
              "SOT223": "SOT-223: tab numbered 2 (SOT-223-3_TabPin2, regulators) or 4 (KiCad's SOT-223)",
@@ -372,7 +375,7 @@ def named_package(text, diode=False, weak=False, kind=None):
     if POWER_PKG.search(str(text or "")):
         return None, f"power package ({POWER_PKG.search(str(text)).group(0)}): not a standard JEDEC outline"
     t = str(text or "").upper()
-    for m in re.finditer(r"(?<![A-Z0-9])(SOT|TSOT|SOD|SC|DO|TO|SM[ABCF]|D2PAK|DPAK|MINIMELF|MELF|LL)[-_ ]?(\d{0,3}[A-Z]{0,2})(?:[-_ ]?(\d)L?)?(?![A-Z0-9]|[-_ ]?\d)", t):
+    for m in re.finditer(r"(?<![A-Z0-9])(SOT|TSOT|SOD|SC|DO|TO|SM[ABCF]|D2PAK|DPAK|MICROMELF|MINIMELF|MELF|LL)[-_ ]?(\d{0,3}[A-Z]{0,2})(?:[-_ ]?(\d)L?)?(?![A-Z0-9]|[-_ ]?\d)", t):
         key = _norm(m.group(0))
         key = re.sub(r"L$", "", key) if re.fullmatch(r"(SOT|TSOT)\d+\dL", key) else key
         if key in AMBIGUOUS:

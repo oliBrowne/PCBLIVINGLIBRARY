@@ -9,7 +9,7 @@ import copy, io, json, os, tempfile
 from pathlib import Path
 from unittest import mock
 
-from ecadlib import datasheet as D, librarian as L, mcp_server as M
+from ecadlib import datasheet as D, ds_route as DR, librarian as L, mcp_server as M
 from ecadlib.app import Workspace
 from tests import test_datasheet as TD, test_librarian as TL
 
@@ -64,6 +64,8 @@ class FakeAPI:
         raise AssertionError(url)
 
     def _results(self, bid):
+        if "lines" in self.batches[bid]:                           # an ended batch's results never change
+            return self.batches[bid]["lines"]
         lines = []
         for rq in self.batches[bid]["requests"]:
             a = self.answer(rq["custom_id"])
@@ -74,6 +76,8 @@ class FakeAPI:
             else:
                 res = {"type": "succeeded", "message": a}
             lines.append({"custom_id": rq["custom_id"], "result": res})
+        if self.batches[bid]["polls"] > self.polls:
+            self.batches[bid]["lines"] = lines[::-1]
         return lines[::-1]                                          # results come in any order
 
     def get(self, url, headers=None, timeout=None):
@@ -591,13 +595,20 @@ def test_cost_cap_holds_on_sync_path_cumulatively_and_unknown_price():
         except D.DatasheetError as e:
             assert "max_cost_usd" in str(e) and not api.of("/v1/messages"), e
         one = rd.estimate([rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT")])["usd_max"]
-        rd = D.Reader(d, d, key=KEY, http=http, log=None, rules={"datasheet": {"max_cost_usd": one * 1.5}})
+        real = DR.usage_usd("claude-opus-5-5", TD.message({})["usage"])
+        assert real < one * 0.5, (real, one)
+        rd = D.Reader(d, d, key=KEY, http=http, log=None, rules={"datasheet": {"max_cost_usd": one * 1.2}})
         rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))      # first part fits
+        assert abs(rd.committed_usd - real) < 1e-6, rd.committed_usd               # its worst case gave way to real
         try:                                                    # the second one would take the run over the cap
             rd.read_now(rd.job("OTHERPART", [("https://a/ds.pdf", "BOM")], "RGT"))
             raise AssertionError("cumulative cap")
         except D.DatasheetError as e:
-            assert "already sent" in str(e) and len(api.of("/v1/messages")) == 1, e
+            assert "already spent or held" in str(e) and len(api.of("/v1/messages")) == 1, e
+        rd = D.Reader(d, d + "/r", key=KEY, http=http, log=None, rules={"datasheet": {"max_cost_usd": one * 1.6}})
+        rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))      # a cap counted on worst cases
+        rd.read_now(rd.job("OTHERPART", [("https://a/ds.pdf", "BOM")], "RGT"))     # would refuse this one
+        assert len(api.of("/v1/messages")) == 3
         rd = D.Reader(d, d + "/u", key=KEY, http=http, log=None, batch=True, model="claude-unpriced-9",
                       rules={"datasheet": {"max_cost_usd": 100.0}})
         rd.submit(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
@@ -609,7 +620,7 @@ def test_cost_cap_holds_on_sync_path_cumulatively_and_unknown_price():
         rd = D.Reader(d, d + "/y", key=KEY, http=http, log=None, model="claude-unpriced-9", yes=True,
                       rules={"datasheet": {"max_cost_usd": 0.01}})
         rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))      # --yes overrides
-        assert len(api.of("/v1/messages")) == 2
+        assert len(api.of("/v1/messages")) == 4
 
 
 def test_cap_never_blocks_collecting_a_batch_already_paid():
@@ -858,3 +869,58 @@ def test_worst_case_counts_the_fallback_model():
         bat = D.Reader(d, d, key=KEY, http=http, log=None, batch=True)
         e = bat.estimate([bat.job("P", [("https://a/ds.pdf", "BOM")])])["rows"][0]
         assert abs(e["usd_max"] - (tin * 4 + D.MAX_TOKENS * 20) / 1e6 * 0.5) < 1e-9       # batches: no fallbacks
+
+
+def test_cap_counts_a_collected_batch_at_its_real_cost():
+    """Issue #42's benchmark: round 1's worst case ($24.61) stayed on the books after its answers came back at $3.42,
+    so the cap refused round 2. Once a batch is collected, its parts count at what they really cost."""
+    api = FakeAPI(polls=0, tokens=20000)
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        http = PdfHTTP({"https://a/ds.pdf": PDF})
+        rd = D.Reader(d, d, key=KEY, http=http, batch=True, log=None)
+        one = rd.estimate([rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT")])["rows"][0]["usd_max"]
+        real = DR.usage_usd("claude-opus-5-5", TD.message({})["usage"], batch=True)
+        rd = D.Reader(d, d + "/o", key=KEY, http=http, batch=True, log=None, rules={"datasheet": {"max_cost_usd": one * 1.8}})
+        rd.submit(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+        rd.flush()
+        assert abs(rd.committed_usd - real) < 1e-6 and not rd._holds, (rd.committed_usd, real)
+        rd.submit(rd.job("OTHERPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+        assert one * 2 > one * 1.8 >= real + one
+        rd.flush()                                    # fits: a worst-case count would have refused it
+        assert len(api.of("/v1/messages/batches")) == 2
+
+
+def test_other_json_objects_without_their_optional_fields_are_read():
+    """other_json's prompt schema has no `required`: a land without pad_center_y, a tab given as bare numbers, a pin
+    offset as text were all rejected as 'not valid under any of the given schemas' (#42: 23 answers lost)."""
+    g = copy.deepcopy(TD.INCH)
+    g["package"]["land"] = {"pad_length": 1.0, "pad_width": "0.8", "pad_center": 1.2, "pad_spacing": 2.4}
+    g["package"]["tab"] = {"number": "4", "side": "R", "offset": 0, "width": 3.0, "length": 2.0}
+    g["package"]["pin_positions"] = [{"number": 1, "side": "L", "offset": "-0.95"}]
+    pkg = D.parse_message(TD.message(D.to_wire(g)))["package"]
+    assert pkg["land"] == {"pad_length": 1.0, "pad_width": 0.8, "pad_center": 1.2, "pad_center_y": None}, pkg["land"]
+    assert pkg["tab"]["width"] == {"nom": 3.0, "min": None, "max": None, "tol": None} and pkg["tab"]["length"]["nom"] == 2.0
+    assert pkg["pin_positions"] == [{"number": 1, "side": "L", "offset": -0.95}]
+    g["package"]["tab"], g["package"]["pin_positions"] = None, None
+    g["package"]["land"] = {"pad_length": "about one", "pad_width": 0.8, "pad_center": 1.2}
+    try:                                                        # a value that is not a number still is not read
+        D.parse_message(TD.message(D.to_wire(g)))
+        raise AssertionError("text accepted as a number")
+    except D.DatasheetError as e:
+        assert "output schema" in str(e), e
+
+
+def test_answers_rejected_at_collection_are_read_again_not_bought_again():
+    """A batch answer the parser rejected (before a fix) is downloaded again from the collected batch, free."""
+    g = copy.deepcopy(TD.GOOD)
+    g["package"]["land"] = {"pad_length": 0.8, "pad_width": 0.25, "pad_center": 1.45}      # no pad_center_y
+    api = FakeAPI(answer=lambda cid: TD.message(D.to_wire(g)), polls=0)
+    with tempfile.TemporaryDirectory() as d:
+        with mock.patch.object(D, "_fit", lambda v, s: v):     # the parser before the fix
+            items, rd, _ = run2(d, api)
+        n = len(api.of("/v1/messages/batches"))
+        assert n >= 1 and not (items["DSPART1"]["source"]["symbol"] or "").startswith("datasheet:"), items["DSPART1"]["librarian"]
+        items, rd, _ = run2(d, api)
+        assert len(api.of("/v1/messages/batches")) == n, "an answer already paid for was bought again"
+        assert items["DSPART1"]["source"]["symbol"].startswith("datasheet:"), items["DSPART1"]["librarian"]["tried"]
+        assert api.of("/results")
