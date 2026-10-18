@@ -206,6 +206,21 @@ def test_record_then_replay_gives_the_same_report():
                [(c["id"], c["pass"], c["usd"], c["tokens_in"]) for c in rep["cases"]]
 
 
+def test_a_batch_run_records_half_price_and_replays_it():
+    pdfs = {"https://example.com/soic.pdf": TD.PDF, "https://example.com/qfn.pdf": TD.PDF}
+    api = TB.FakeAPI(answer=lambda part: TD.message(TD.INCH if part == "SOICPART" else qfn_ext()))
+    with tempfile.TemporaryDirectory() as d:
+        with TB.patched(api), mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": TB.KEY}):
+            rep = R.run(mini_set(d), Path(d) / "live", cache=Path(d) / "cache", http=TB.PdfHTTP(pdfs), log=lambda *a: None,
+                        record=Path(d) / "rec", batch=True)
+        assert rep["meta"]["mode"] == "live, recording, batch" and api.of("/v1/messages/batches"), api.calls
+        live = {c["mpn"]: c for c in rep["cases"]}
+        assert live["SOICPART"]["pass"] and "batch: half price" in live["SOICPART"]["cost_how"], live["SOICPART"]
+        assert abs(live["SOICPART"]["usd"] - R.usd("claude-opus-5-5", TD.message(TD.GOOD)["usage"]) / 2) < 1e-9
+        rep2 = run(d, "replayed", replay=Path(d) / "rec")
+        assert [(c["id"], c["pass"], c["usd"]) for c in rep2["cases"]] == [(c["id"], c["pass"], c["usd"]) for c in rep["cases"]]
+
+
 def test_estimate_mode_sends_nothing():
     pdfs = {"https://example.com/soic.pdf": TB.pdf_with(["SOIC-8 package"] * 3)}
     with tempfile.TemporaryDirectory() as d, \
