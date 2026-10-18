@@ -78,9 +78,7 @@ DEFAULTS = {
     "sources": {"order": list(SOURCES)},
     "bom": {"columns": {}},                    # ecadlib field (mpn, manufacturer, value, ...) -> your BOM header
     "release": {"approvals": {},               # same keys as approvals.json; used when there is no approvals.json
-                "parity": "hold",              # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
-                "eagle": "warn",               # hold | warn | off: the footprint as a Fusion / EAGLE package reads back differently
-                "easyeda": "warn"},            # hold | warn | off: the same for an EasyEDA Pro footprint
+                "parity": "hold"},             # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
     "altium365": {"workspace": ""},
     "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "sourcing", "a365"],   # ecadlib.upkeep
                "price_jump_pct": 20.0, "build_qty": 1, "currency": "USD"},
@@ -269,6 +267,11 @@ def _template_fields(t):
     return re.findall(r"\{(\w+)\}", t)
 
 
+# Keys an older ecadlib knew, accepted and ignored so an old ecadlib.toml still loads (the Fusion / EAGLE and EasyEDA
+# Pro exports were removed after 0.3.1).
+REMOVED_KEYS = {("release", "eagle"), ("release", "easyeda")}
+
+
 def validate(raw, where="ecadlib.toml"):
     """Raise RulesError naming the first bad key; returns raw unchanged when it is fine."""
     if not isinstance(raw, dict):
@@ -286,6 +289,8 @@ def validate(raw, where="ecadlib.toml"):
                 _check_watch(where, v)
                 continue
             if sec == "ai" and k in DEFAULTS["ai"]:      # checked by ecadlib.llm.validate below
+                continue
+            if (sec, k) in REMOVED_KEYS:                # left from an older ecadlib; ignored
                 continue
             if (sec, k) == ("notify", "targets"):
                 from .notify import check_targets
@@ -386,9 +391,8 @@ def validate(raw, where="ecadlib.toml"):
         _err(where, "style.apply", f"= {sty['apply']!r}: must be auto (adapt new parts to house_style.json) or off")
     if sty.get("profile") and not str(sty["profile"]).endswith(".json"):
         _err(where, "style.profile", f"= {sty['profile']!r}: must be a .json file (written by `ecadlib style learn`)")
-    for key in ("parity", "eagle", "easyeda"):
-        if key in (raw.get("release") or {}) and raw["release"][key] not in ("hold", "warn", "off"):
-            _err(where, f"release.{key}", f"= {raw['release'][key]!r}: must be hold, warn or off")
+    if "parity" in (raw.get("release") or {}) and raw["release"]["parity"] not in ("hold", "warn", "off"):
+        _err(where, "release.parity", f"= {raw['release']['parity']!r}: must be hold, warn or off")
     if (raw.get("release") or {}).get("approvals"):
         from .approvals import normalize_policy
         try:
@@ -847,9 +851,6 @@ HELP = {
     "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header, or field = [\"header\", \"alias\"])",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
     "release.parity": "hold | warn | off: a part whose KiCad and Altium files differ (pads, drills, courtyard, 3D, pins) is held",
-    "release.eagle": "hold | warn | off: a footprint written as a Fusion Electronics / EAGLE package that reads back "
-                     "differently (pads, drills, mask, paste, courtyard) is held or warned about",
-    "release.easyeda": "hold | warn | off: the same check for the footprint written as an EasyEDA Pro footprint",
     "sim": "Parasitics for the built-in passive simulation models (sim-models), e.g. capacitor_esr = \"10m\"",
     "datasheet": "Claude datasheet reader (ecadlib datasheet / librarian): model, effort, which environment variable holds the "
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",

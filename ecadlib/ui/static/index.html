@@ -547,10 +547,6 @@ ol.hubhist .t { font: 11.5px/1.5 var(--mono); color: var(--muted); }
         <div class="out" id="dryout"></div>
       </div>
     </div>
-    <div class="row" style="margin-top:10px"><span class="muted small">Other tools, read back pad by pad:</span>
-      <button class="small" id="toeagle" data-role="librarian">Fusion / EAGLE .lbr</button>
-      <button class="small" id="toeasyeda" data-role="librarian">EasyEDA Pro .elibz</button></div>
-    <div class="out" id="toolout"></div>
   </section>
 
   <section class="card" id="hubcard">
@@ -846,7 +842,7 @@ async function loadInfo() {
   $("#rerun").title = info.boms.length ? "" : "No BOM in the workspace yet: drop one above";
   $("#a365hint").textContent = info.altium365.token
     ? "Plans one managed component per part. A part is ready once its .SchLib and .PcbLib exist. Dry run shows the requests without sending anything."
-    : "Plans one managed component per part (ready once its .SchLib and .PcbLib exist). To push, restart ecadlib with NEXAR_TOKEN set; Dry run works without it.";
+    : "Plans one managed component per part (ready once its .SchLib and .PcbLib exist). To push, save your Nexar token on the setup page (Optional keys); Dry run works without it.";
   welcome();
 }
 
@@ -877,7 +873,7 @@ async function runJob(start, label) {
 
 function showResult(t) {
   current = t; filter = null; $("#q").value = ""; planned = null; parts = null; pfilter = ""; closePanel();
-  ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#liberr", "#aibox", "#approut", "#dedupeout", "#toolout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
+  ["#dblibout", "#modelsout", "#planout", "#dryout", "#libout", "#liberr", "#aibox", "#approut", "#dedupeout"].forEach(s => $(s).innerHTML = ""); $("#librerun").hidden = true; $("#libtools").hidden = true;
   $("#dry").disabled = $("#push").disabled = true; disabledWhy(); render();
   if (t.bom && !libbusy) loadParts(true).catch(() => {});           // a plan from an earlier run: show its parts at once
 }
@@ -1028,13 +1024,6 @@ $("#models").addEventListener("click", e => action(e.target, $("#modelsout"), as
     `<div class="muted">Files are in the <span class="mono">altium_models</span> folder of the workspace.</div>` +
     (r.footprints.length ? "" : `<div class="next s-warn"><span>No footprint was converted: none of this BOM's footprints is in your KiCad libraries. Step 2 (Fill the library) finds and builds them.</span></div>`);
 }));
-["eagle", "easyeda"].forEach(tool => $("#to" + tool).addEventListener("click", e => action(e.target, $("#toolout"), async () => {
-  const r = await api("/api/export/tool", { bom: current.bom, tool });
-  return `Written: ${fileLink(r.file)} (${Object.entries(r.counts).map(([k, v]) => v + " " + k).join(", ")}). ` +
-    `To hand over: ${fileLink(r.bundle)} (the library, ${esc(r.models)} STEP model(s) and ${fileLink(r.install)} with the import steps).` +
-    (r.ok ? `<div class="muted">Read back the same as the library.</div>` : `<div class="next s-warn"><span>${esc(r.errors.length)} difference(s) on reading back: ${esc(r.errors.slice(0, 3).join("; "))}</span></div>`) +
-    (r.approximations.length ? `<div class="muted">Approximated for this format: ${esc(r.approximations.slice(0, 5).join("; "))}</div>` : "");
-})));
 let planned = null;
 $("#plan").addEventListener("click", e => action(e.target, $("#planout"), async () => {
   planned = await api("/api/altium365/plan", { bom: current.bom });
@@ -1061,7 +1050,7 @@ $("#dry").addEventListener("click", e => action(e.target, $("#dryout"), async ()
   const n = a => r.results.filter(x => x.action === a).length;
   return `Dry run, nothing sent: ${n("release")} would be released, ${n("skip")} skipped. Requests: ${fileLink(r.report)}` +
     `<div class="next s-info"><span>${info.altium365.token ? (can("approver") ? "Next: <i>Push</i> sends them to the workspace you picked (it asks first)." : "An approver can now push them.")
-      : "Nothing can be sent yet: restart ecadlib with NEXAR_TOKEN set (README, Altium 365) to push."}</span></div>`;
+      : "Nothing can be sent yet: save your Nexar token on the setup page (Optional keys) to push."}</span></div>`;
 }));
 $("#push").addEventListener("click", e => {
   const ws = $("#wsurl").selectedOptions[0];

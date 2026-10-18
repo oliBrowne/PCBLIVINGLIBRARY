@@ -35,7 +35,7 @@ own library, and nobody keeps them current once they are in.
 - A hosted service or a paid tier.
 - Circuit design, part selection advice or schematic generation.
 - Replacing a PLM system or a large company's library process.
-- New features for the experimental Fusion Electronics / EAGLE and EasyEDA Pro exports.
+- Fusion Electronics / EAGLE and EasyEDA Pro exports (removed on 2026-10-18; the last version with them is 0.3.1).
 - Scraping sources whose terms forbid it (for example SnapMagic), or spoofing a browser to reach an endpoint.
 
 ## Requirements
@@ -76,7 +76,7 @@ Status: **shipped** is in v0.3.0; **planned** names the roadmap item in [ROADMAP
 | Team server with roles and sign-in | `ecadlib ui --team`, Docker | shipped |
 | Library agent that opens review PRs | `agent` | shipped |
 | SPICE / IBIS models | `sim_models` | shipped |
-| Fusion Electronics / EAGLE and EasyEDA Pro exports | `eagle_export`, `easyeda_pro_export` | experimental; keep-or-remove decision planned (P13) |
+| Fusion Electronics / EAGLE and EasyEDA Pro exports | (removed) | removed 2026-10-18 (P13); last in 0.3.1 |
 
 ## Success metrics
 
@@ -100,5 +100,5 @@ Each risk has its own issue, labelled `risk`. The owner of all of them is the ma
 | R3 | Licensing of third-party part data (KiCad CC-BY-SA, EasyEDA credit) | NOTICE files, KiCad exports kept out of git, EasyEDA credit on every converted part, no SnapMagic; own code MIT. | Handled | [#54](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/54) |
 | R4 | Model API cost surprises users | Most parts use no model; page routing and model ladder; cost estimate and `max_cost_usd`; docs/costs.md. Estimate in the GUIs next. | Mitigated on the CLI | [#55](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/55) |
 | R5 | External part APIs change or block us | Official APIs first; unofficial ones last and switchable off; own User-Agent; weekly `sources-canary`. | Watched weekly | [#56](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/56) |
-| R6 | Scope too wide for one maintainer | Altium + KiCad supported, other exports experimental; v0.4.0 only proves the core flow. | Mitigating | [#57](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/57) |
+| R6 | Scope too wide for one maintainer | Altium + KiCad supported, other exports removed; v0.4.0 only proves the core flow. | Mitigating | [#57](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/57) |
 | R7 | No outside users yet; competitors cover single-part generation | Lead with the BOM-level librarian workflow; real-BOM trials and a published benchmark. | Open | [#58](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/58) |

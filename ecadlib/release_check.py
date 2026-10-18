@@ -238,20 +238,6 @@ def check_item(item, base=".", rules=None):
         for d in diffs:
             (add("parity", d["msg"]) if d["level"] == "error" and mode == "hold" else warns.append(f"parity: {d['msg']}"))
         info["parity"] = "mismatch" if any(d["level"] == "error" for d in diffs) else "match"
-    # ---- the footprint written for Fusion / EAGLE and EasyEDA Pro reads back the same (eagle_export, easyeda_pro_export)
-    for tool, module, label in (("eagle", "eagle_export", "EAGLE / Fusion"), ("easyeda", "easyeda_pro_export", "EasyEDA Pro")):
-        tmode = (rules.get("release") or {}).get(tool, "warn")
-        if tmode == "off" or not kmod:
-            continue
-        import importlib
-        try:
-            diffs = importlib.import_module(f"ecadlib.{module}").check_footprint(text, kmod.stem)
-        except Exception as e:                 # a writer crash must not hide the other rules
-            diffs = [{"level": "error", "msg": f"{label} export failed ({type(e).__name__}: {e})"}]
-        for d in diffs:
-            if d["level"] == "error":
-                (add(tool, f"{label}: {d['msg']}") if tmode == "hold" else warns.append(f"{tool}: {d['msg']}"))
-        info[tool] = "mismatch" if any(d["level"] == "error" for d in diffs) else "match"
     # ---- 3D height
     if fps:
         bodies = [AL.parse_params(r["params"]) for r in fps[0]["records"] if r["type"] == "body"]
@@ -345,7 +331,7 @@ def _split(failures):
     return [x for x in re.split(r"; (?=(?:%s): )" % "|".join(RULES), failures or "") if x]
 
 
-RULES = ("files", "pins", "footprint", "height", "fields", "parity", "eagle", "easyeda", "verify")   # check_item's add()
+RULES = ("files", "pins", "footprint", "height", "fields", "parity", "verify")   # check_item's add()
 
 
 def write_report(rows, stem, plan=""):

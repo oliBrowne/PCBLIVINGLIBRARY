@@ -64,10 +64,7 @@ def test_ecadlib_parts_show_altium_and_kicad():
     held = _row(res, "CH340C")
     assert held["status"] == "held" and "held" in held["flags"] and "kicad" not in held["cells"]
     tools = {x["tool"]: x for x in res["tools"]}
-    import importlib.util
-    assert tools["kicad"]["reader"] and tools["fusion"]["reader"] == bool(importlib.util.find_spec("ecadlib.eagle_export"))
-    assert tools["easyeda"]["reader"] == bool(importlib.util.find_spec("ecadlib.easyeda_pro_export"))
-    assert tools["fusion"]["parts"] == 0 and tools["easyeda"]["parts"] == 0
+    assert tools["kicad"]["reader"] and "fusion" not in tools and "easyeda" not in tools
     assert res["summary"]["held"] == 1 and res["summary"]["parts"] == 7
 
 
@@ -218,7 +215,7 @@ def test_other_tool_reader_fills_its_column():
                                                          ["3", 1.1, 0, 1.4, 0.6, 0, False]],
                                                 "pins": [["1", "G"], ["2", "S"], ["3", "D"]]}]), encoding="utf-8")
     _age(lib / "parts.lbr", 1)                     # older than ecadlib's copies, which are then the newest to compare with
-    saved = dict(H._READERS)
+    saved, tools_before, labels = dict(H._READERS), list(H.TOOLS), dict(H.LABEL)
     try:
         H.register_tool("fusion", "Fusion", (".lbr",), lambda p: json.loads(Path(p).read_text(encoding="utf-8")))
         ws = Workspace(t / "ws", [str(lib)], offline=True)
@@ -230,27 +227,9 @@ def test_other_tool_reader_fills_its_column():
     finally:
         H._READERS.clear()
         H._READERS.update(saved)
-
-
-def test_fusion_and_easyeda_columns_from_their_exporters():
-    """With eagle-export and easyeda-export in this ecadlib, their .lbr / .elibz fill the Fusion and EasyEDA columns."""
-    import importlib.util
-    if not (importlib.util.find_spec("ecadlib.eagle_export") and importlib.util.find_spec("ecadlib.easyeda_pro_export")):
-        return                                     # exporters not in this build
-    t = _demo()
-    ws = Workspace(t / "ws", offline=True)
-    _fresh()
-    acts = [f["action"] for f in ws.hub_part("AO3401A")["fixes"]]
-    assert "tool:fusion" in acts and "tool:easyeda" in acts, acts
-    assert ws.hub_fix("AO3401A", "tool:fusion")["result"]["file"].endswith(".lbr")
-    assert ws.hub_fix("AO3401A", "tool:easyeda")["result"]["file"].endswith(".elibz")
-    _fresh()
-    res = ws.hub()
-    for name in ("AO3401A", "RES-0603-10k"):
-        cells = _row(res, name)["cells"]
-        assert cells["fusion"]["state"] == "same" and cells["easyeda"]["state"] == "same", (name, cells)
-    tools = {x["tool"]: x for x in res["tools"]}
-    assert tools["fusion"]["reader"] and tools["fusion"]["parts"] == 6 and tools["easyeda"]["parts"] == 6
+        H.TOOLS[:] = tools_before
+        H.LABEL.clear()
+        H.LABEL.update(labels)
 
 
 def test_compare_rules():
