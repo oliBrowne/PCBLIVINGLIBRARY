@@ -93,14 +93,28 @@ def _pad_tuple(num, x, y, w, h, rot, hole):
     return (str(num), round(_q(x), 2), round(_q(y), 2), round(_q(w), 2), round(_q(h), 2), round(rot % 90, 1), bool(hole))
 
 
+_ALTIUM_SHAPE = {1: "round", 2: "rect", 9: "roundrect"}                 # altium_lib.SHAPE; octagonal etc.: other
+_KICAD_SHAPE = {"circle": "round", "oval": "round", "rect": "rect", "roundrect": "roundrect"}
+
+
+def _pad_kind(num, shape, drill=0.0, slot=0.0):
+    """What the pad tuple leaves out but a board can't do without: the pad shape and the hole (diameter, or a slot's
+    width and length). Two footprints with the same pads but a 0.8 vs 1.0 mm drill are not the same footprint."""
+    d = sorted((round(_q(drill), 2), round(_q(max(slot, drill)), 2))) if drill else [0, 0]
+    return (str(num), shape, *d)
+
+
 def _box(xs, ys):
     return [round(_q(v, 0.05), 2) for v in (min(xs), min(ys), max(xs), max(ys))] if xs else None
 
 
 def fp_geometry_pcblib(fp, courtyard=AL.MECH15):
     """courtyard: the layer id the library rules draw courtyards on; Mechanical 15 (ecadlib's own) when nothing is there."""
+    recs = [r for r in fp["records"] if r["type"] == "pad"]
     pads = [_pad_tuple(r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), AL.to_mm(r["w"]), AL.to_mm(r["h"]), r["rot"], r["hole"] > 0)
-            for r in fp["records"] if r["type"] == "pad"]
+            for r in recs]
+    kinds = [_pad_kind(r["designator"], _ALTIUM_SHAPE.get(r.get("shape"), "other"), AL.to_mm(r["hole"]),
+                       AL.to_mm(r.get("slot") or 0) if r.get("hole_shape") == 2 else 0.0) for r in recs]
     xs, ys = [], []
     shapes = ("track", "arc", "region", "fill")
     if not any(r["layer"] == courtyard for r in fp["records"] if r["type"] in shapes):
@@ -115,12 +129,12 @@ def fp_geometry_pcblib(fp, courtyard=AL.MECH15):
         elif r["type"] in ("region", "fill"):
             pts = r.get("pts") or [(r["x1"], r["y1"]), (r["x2"], r["y2"])]
             xs += [AL.to_mm(p[0]) for p in pts]; ys += [AL.to_mm(p[1]) for p in pts]
-    return {"pads": sorted(pads), "courtyard": _box(xs, ys)}
+    return {"pads": sorted(pads), "courtyard": _box(xs, ys), "kinds": sorted(kinds)}
 
 
 def fp_geometry_kicad(text):
     t = sexpr.parse(text)
-    pads = []
+    pads, kinds = [], []
     for p in sexpr.find(t, "pad"):
         layers = (sexpr.first(p, "layers") or ["layers"])[1:]
         if p[2] != "np_thru_hole" and not any(str(x).endswith(".Cu") for x in layers):
@@ -129,12 +143,18 @@ def fp_geometry_kicad(text):
         rot = float(at[3]) if len(at) > 3 else 0.0
         w, h = float(size[1]), float(size[2] if len(size) > 2 else size[1])
         pads.append(_pad_tuple(p[1], float(at[1]), -float(at[2]), w, h, rot, p[2] in ("thru_hole", "np_thru_hole")))
+        dr = [x for x in (sexpr.first(p, "drill") or ["drill"])[1:] if not isinstance(x, list)]
+        nums = [float(x) for x in dr if x != "oval"]
+        kinds.append(_pad_kind(p[1], _KICAD_SHAPE.get(p[3], "other"), nums[0] if nums else 0.0,
+                               nums[1] if "oval" in dr and len(nums) > 1 else 0.0))
     cy = sexpr.courtyard_bbox(t)
-    return {"pads": sorted(pads), "courtyard": _box([cy[0], cy[2]], [-cy[3], -cy[1]]) if cy else None}
+    return {"pads": sorted(pads), "courtyard": _box([cy[0], cy[2]], [-cy[3], -cy[1]]) if cy else None, "kinds": sorted(kinds)}
 
 
 def fp_hash(geom):
-    return _digest([list(p) for p in geom["pads"]] + [geom["courtyard"]]) if geom and geom["pads"] else None
+    if not geom or not geom["pads"]:
+        return None
+    return _digest([list(p) for p in geom["pads"]] + [geom["courtyard"]] + [list(k) for k in geom.get("kinds", [])])
 
 
 def _pin_name(s):
