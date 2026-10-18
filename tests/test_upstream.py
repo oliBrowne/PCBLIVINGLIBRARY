@@ -247,7 +247,7 @@ class FakeWorkspace:
 
 def node(name, folder, params, sym="CH340C", fp="SOIC-16", rev="r1", guid="g1", comment="*", description=""):
     return {"id": "id-" + name, "name": name, "comment": comment, "description": description, "isManaged": True,
-            "folder": {"path": folder}, "revision": {"id": rev, "details": {"lifeCycleState": {"name": "Released"}, "createdAt": "2026-01-01"}},
+            "folder": {"path": folder}, "revision": {"revisionId": rev, "details": {"lifeCycleState": {"name": "Released"}, "createdAt": "2026-01-01"}},
             "details": {"parameters": [{"name": k, "value": v} for k, v in params.items()],
                         "symbols": [{"name": sym, "guid": "s" + guid}], "footprints": [{"name": fp, "guid": "f" + guid}]}}
 

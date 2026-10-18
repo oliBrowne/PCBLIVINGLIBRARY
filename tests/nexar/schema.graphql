@@ -1164,7 +1164,7 @@ type DesCreateCommentThreadPayload {
 "Payload associated with creating a folder."
 type DesCreateFolderPayload {
   "ID of the created folder."
-  id: ID
+  folderId: String
   "Payload errors."
   errors: [DesPayloadError!]!
 }
@@ -1407,6 +1407,8 @@ type DesFolder implements Node {
   createdAt: DateTime!
   "The `DateTime` this folder was last updated at."
   updatedAt: DateTime!
+  "Folder GUID (desCreateFolder parentFolderId)."
+  folderId: String!
   "Folder type."
   folderType: DesFolderType!
 }
@@ -1433,6 +1435,10 @@ type DesFolderPermission {
 
 "Footprint files. Footprints define the space a component occupies."
 type DesFootprint {
+  "Node identifier (a revision: .../symbol-revision/<guid>)."
+  id: ID!
+  "Release time."
+  releasedAt: DateTime
   pins: [DesPin!]! @deprecated(reason: "Not implemented and may be removed.")
   "ECAD entity full size image URL."
   imageFullSizeUrl: String!
@@ -1526,6 +1532,10 @@ type DesLayerProperty {
 
 "Information about your library. All component data in A365 is stored in your library."
 type DesLibrary {
+  "Symbol revisions; `name` is the revision name (Capacitor-1)."
+  symbols(first: Int after: String last: Int before: String where: DesSymbolFilterInput): DesSymbolConnection
+  "Footprint revisions; `name` is the revision name (C_0402-1)."
+  footprints(first: Int after: String last: Int before: String where: DesFootprintFilterInput): DesFootprintConnection
   "The user that created the library."
   createdBy: DesUser!
   "The user that updated the library."
@@ -2175,7 +2185,7 @@ type DesReuseBlockRevision implements Node {
 "Revision details ID for later use or full details."
 type DesRevision {
   "The revision details ID for `desRevisionDetailsById`. The instance may not exist for unmanaged components."
-  id: ID!
+  revisionId: ID!
   "The revision details or null for unmanaged components."
   details: DesRevisionDetails
 }
@@ -2411,6 +2421,10 @@ type DesSupplierStock {
 
 "A component symbol. These represent the body and the pins on the physical component."
 type DesSymbol {
+  "Node identifier (a revision: .../symbol-revision/<guid>)."
+  id: ID!
+  "Release time."
+  releasedAt: DateTime
   "The list of pins."
   pins: [DesPin!]!
   "ECAD entity full size image URL."
@@ -3511,7 +3525,7 @@ input DesCreateFolderInput {
   "Folder type."
   folderType: DesFolderType!
   "ID of the parent folder. If omitted or set to `null`, the folder will be placed under the library root."
-  parentId: ID
+  parentFolderId: String
   "Naming scheme for the folder items."
   itemNamingSchemeTemplate: String
   "Folder permissions (non recursive)."
@@ -3919,6 +3933,16 @@ input DesReleaseComponentFileInput {
 }
 
 "Input for releasing component."
+input DesReleaseComponentSymbolInput {
+  "Symbol identifier."
+  id: ID!
+}
+
+input DesReleaseComponentFootprintInput {
+  "Footprint identifier."
+  id: ID!
+}
+
 input DesReleaseComponentInput {
   "Workspace URL for releasing a component."
   workspaceUrl: String!
@@ -3944,8 +3968,12 @@ input DesReleaseComponentInput {
   componentDescription: String
   "Parameters for component."
   parameters: [DesRevisionParameterInput!]!
+  "Existing symbol to include. Either `symbolFiles` or `symbol` must be provided."
+  symbol: DesReleaseComponentSymbolInput
+  "Existing footprints to include. Either `footprintFiles` or `footprints` must be provided."
+  footprints: [DesReleaseComponentFootprintInput] = []
   "The symbol folder path, existing or to be created."
-  symbolReleaseFolder: String!
+  symbolReleaseFolder: String
   "The symbol name. Use null to be generated."
   symbolItemName: String
   "The symbol files."
@@ -3959,7 +3987,7 @@ input DesReleaseComponentInput {
   "The symbol life cycle definition identifier."
   symbolLifeCycleDefinitionNodeId: ID
   "The footprint folder path, existing or to be created."
-  footprintReleaseFolder: String!
+  footprintReleaseFolder: String
   "The footprint name. Use null to be generated."
   footprintItemName: String
   "The footprint files."
@@ -6865,3 +6893,29 @@ directive @rename(name: String!) on INPUT_FIELD_DEFINITION | INPUT_OBJECT | ENUM
 extend schema @key(fields: "id")
 
 extend scalar Map @serializationType(name: "System.Text.Json.JsonElement") @runtimeType(name: "System.Text.Json.JsonElement")
+
+type DesSymbolConnection {
+  pageInfo: PageInfo!
+  nodes: [DesSymbol!]
+}
+
+type DesFootprintConnection {
+  pageInfo: PageInfo!
+  nodes: [DesFootprint!]
+}
+
+input DesSymbolFilterInput {
+  and: [DesSymbolFilterInput!]
+  or: [DesSymbolFilterInput!]
+  name: StringOperationFilterInput
+  description: StringOperationFilterInput
+  comment: StringOperationFilterInput
+}
+
+input DesFootprintFilterInput {
+  and: [DesFootprintFilterInput!]
+  or: [DesFootprintFilterInput!]
+  name: StringOperationFilterInput
+  description: StringOperationFilterInput
+  comment: StringOperationFilterInput
+}

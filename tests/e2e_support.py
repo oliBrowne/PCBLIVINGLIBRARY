@@ -277,13 +277,28 @@ class FakeNexar(_Server):
                     ids = {k: {"id": f"{k}-id", "name": k} for k in ("componentScheme", "symbolScheme", "footprintScheme",
                                                                      "componentLifeCycle", "symbolLifeCycle", "footprintLifeCycle")}
                     return self._send(200, {"data": ids})
+                for kind, key in (("symbols", "symbol"), ("footprints", "footprint")):
+                    if f"{kind}(" in q:            # models released so far, under their revision names (Capacitor-1)
+                        pre = body["variables"]["prefix"]
+                        nodes = [{"id": f"{key}-rev:{r[key + 'ItemName']}", "name": r[key + "ItemName"] + "-1", "releasedAt": "2026-10-18T00:00:00Z",
+                                  "folder": {"path": r[key + "ReleaseFolder"]}} for r in srv.releases
+                                 if r.get(key + "ItemName") and (r[key + "ItemName"] + "-1").startswith(pre)]
+                        return self._send(200, {"data": {"desLibrary": {kind: {"nodes": nodes}}}})
+                if "folders" in q:                 # an empty library: every folder is created on first use
+                    return self._send(200, {"data": {"desLibrary": {"folders": srv.folders}}})
+                if "desCreateFolder" in q:             # live schema: parentFolderId (GUID) in, folderId (GUID) out
+                    inp = body["variables"]["input"]
+                    n = len(srv.folders) + 1
+                    par = next((f["id"] for f in srv.folders if f["folderId"] == inp.get("parentFolderId")), None)
+                    srv.folders.append({"id": f"fld-{n}", "folderId": f"G-{n}", "name": inp["name"], "parent": {"id": par} if par else None})
+                    return self._send(200, {"data": {"desCreateFolder": {"folderId": f"G-{n}", "errors": []}}})
                 if "desLibrary" in q:
                     return self._send(200, {"data": {"desLibrary": {"components": {"nodes": []}}}})
                 if "desReleaseComponent" in q:
                     srv.releases.append(body["variables"]["input"])
                     return self._send(200, {"data": {"desReleaseComponent": {"errors": []}}})
                 return self._send(200, {"errors": [{"message": f"FakeNexar: query not known: {q[:80]}"}]})
-        self.uploads, self.releases, self.workspace = {}, [], "https://acme.365.altium.com"
+        self.uploads, self.releases, self.folders, self.workspace = {}, [], [], "https://acme.365.altium.com"
         super().__init__(H, tls)
 
 
