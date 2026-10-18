@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated 2026-10-17. What ecadlib is for, who it is for and how success is measured are in
+Last updated 2026-10-18. What ecadlib is for, who it is for and how success is measured are in
 [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md). Every planned item below has an issue, and every milestone is a
 [GitHub milestone](https://github.com/oliBrowne/PCBLIVINGLIBRARY/milestones) with the same due date.
 
@@ -9,7 +9,7 @@ the changelog keeps 0.x minor releases free to change command-line options and f
 
 **Focus until v0.4.0:** a proven BOM-to-Altium 365 flow with a published accuracy benchmark, and real-BOM trials
 with 3 to 5 Altium users (from the 2026-10-17 market-fit review). Altium (Altium 365 first) and KiCad are the
-supported targets; the Fusion Electronics / EAGLE and EasyEDA Pro exports are experimental.
+supported targets. The Fusion Electronics / EAGLE and EasyEDA Pro exports were removed on 2026-10-18 (P13, below).
 
 ## Shipped
 
@@ -60,12 +60,18 @@ from us.
 |---|---|---|
 | P11. Sign the Windows installer | [#48](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/48) | feature |
 | P12. Show the cost before every AI step in Altium, KiCad and the web UI | [#49](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/49) | feature |
-| P13. Decide on the experimental Fusion / EAGLE and EasyEDA Pro exports | [#50](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/50) | docs |
+| P13. Decide on the experimental Fusion / EAGLE and EasyEDA Pro exports: **removed** (2026-10-18) | [#50](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/50) | docs |
 | P14. One-page guide from installer to a BOM in Altium 365 | [#51](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/51) | docs |
 
 **Exit criteria.** The installer is signed and installs without a SmartScreen warning; every place that starts a
 model call shows its estimated cost first; the experimental exports are kept or removed with the reason recorded;
 a trial user follows docs/START_HERE.md to a released BOM without help.
+
+**P13 decision (2026-10-18): remove.** No user asked for either export, neither library was ever opened in Fusion or
+EasyEDA Pro, and the two writers with their read-back were about 3,000 lines that one maintainer had to keep working
+next to the Altium and KiCad paths (risk R6). ecadlib's time goes to the BOM-to-Altium 365 flow instead. The last
+version with them is 0.3.1 (`pip install "ecadlib==0.3.1"`); `ecadlib eagle-export` and `ecadlib easyeda-export`
+now say so.
 
 ## Risks
 

@@ -51,8 +51,8 @@ How a menu entry talks to ecadlib (no stdout parsing, no quoting of user text on
 Where parts go: the workspace is an ordinary ecadlib workspace (`ecadlib ui --workspace` shows it); parts added from
 the menu collect in <workspace>/uploads/altium-menu/parts.csv and the librarian runs on that list (finished parts are
 kept). Ready parts are synced into the library folder (`ecadlib altium-pkg`: DbLib + SchLib/PcbLib + LibPkg), or,
-when the rules name an Altium 365 workspace ([altium365] workspace), released there (`altium365 push`; NEXAR_TOKEN in
-the environment): the Components panel then shows them after a refresh. Held parts are never published.
+when the rules name an Altium 365 workspace ([altium365] workspace), released there (`altium365 push`; the Nexar token from
+ecadlib's key store): the Components panel then shows them after a refresh. Held parts are never published.
 
 Never run inside Altium here: the script is written from Altium's scripting references (TR0120 DelphiScript,
 TR0124 Server Process, TR0135 System, TR0136 Integrated Library, TR0140 Workspace Manager; 2008 PDFs kept in
@@ -1439,7 +1439,7 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
             res = ws.altium365_push(bom_rel, url, dry_run=False)
         except ValueError as e:
             return {"target": "a365", "install": [], "problems": [str(e)], "workspace": url,
-                    "fix": "set NEXAR_TOKEN in your environment, then restart Altium" if "NEXAR_TOKEN" in str(e) else ""}
+                    "fix": "store your Nexar token on the setup page (Start menu > ecadlib setup) or with `ecadlib keys set NEXAR_TOKEN`, then try again" if "NEXAR_TOKEN" in str(e) else ""}
         acts = [r.get("action") for r in res["results"]]
         return {"target": "a365", "install": [], "problems": [f"{r['name']}: {r.get('detail')}" for r in res["results"]
                                                               if r.get("action") == "error"],
@@ -1889,7 +1889,7 @@ def _error(e):
     if isinstance(e, FileNotFoundError) or "no such file" in msg:
         fix = "save the project, then try again"
     elif "NEXAR_TOKEN" in msg:
-        fix = "set NEXAR_TOKEN in your environment, then restart Altium"
+        fix = "store your Nexar token on the setup page (Start menu > ecadlib setup) or with `ecadlib keys set NEXAR_TOKEN`, then try again"
     elif "ecadlib.toml" in msg or "rules" in msg.lower():
         fix = "`ecadlib rules check` shows the problem in ecadlib.toml"
     return {"status": "error", "message": msg if isinstance(e, (ValueError, OSError)) else f"{type(e).__name__}: {msg}",

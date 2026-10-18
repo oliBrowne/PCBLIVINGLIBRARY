@@ -11,8 +11,8 @@ What it reads (nothing is written to your libraries; the hub keeps its own notes
                         (with their database), .kicad_sym, .pretty/*.kicad_mod, .kicad_dbl, and Altium 365 component
                         lists (a365 pull's workspace_plan.json, check-a365 --state files). Same readers as `ecadlib
                         init`, dedupe and where-used. Files inside the workspace are read through the plans instead.
-  other tools           Fusion (Eagle .lbr) and EasyEDA Pro columns fill in once their reader is registered with
-                        register_tool(); until then the column says "no reader yet".
+  other tools           a plugin can add a column for another tool by registering a reader with register_tool()
+                        (entry point group ecadlib.hub_tools).
 
 One row per part: copies are grouped by normalised MPN (dedupe.mpn_key: packaging suffixes stripped), or by name
 when a copy has no MPN. Each tool's cell is
@@ -38,7 +38,7 @@ from pathlib import Path, PureWindowsPath
 
 from .fsutil import write_text_atomic
 
-TOOLS = [("altium", "Altium"), ("altium365", "Altium 365"), ("kicad", "KiCad"), ("fusion", "Fusion"), ("easyeda", "EasyEDA")]
+TOOLS = [("altium", "Altium"), ("altium365", "Altium 365"), ("kicad", "KiCad")]
 LABEL = dict(TOOLS)
 STATES = ("missing", "same", "present", "different", "behind")
 RANK = {"missing": 0, "same": 1, "present": 1, "different": 2, "behind": 3}
@@ -53,14 +53,14 @@ MPN_FIELDS = ("manufacturer part number", "manufacturer part", "mpn", "mfr part 
               "manufacturer part number 1")
 MFR_FIELDS = ("manufacturer", "manufacturer 1", "mfr", "manufacturer name")
 
-# ------------------------------------------------------------------ other tools (Fusion, EasyEDA, plugins)
+# ------------------------------------------------------------------ other tools (plugins)
 _READERS = {}
 
 
 def register_tool(tool, label, exts, read, workspace_dirs=(), fix=None):
     """A reader for another tool's library files, so the hub fills that tool's column.
 
-    tool: "fusion", "easyeda" or a new id (a new id gets its own column). exts: file suffixes, e.g. (".lbr",).
+    tool: a new id gets its own column. exts: file suffixes, e.g. (".lbr",).
     read(path) -> [{"name", "mpn", "symbol", "footprint", "prefix", "fields": {..},
                     "pads": [(number, x_mm, y_mm, w_mm, h_mm, rot_deg, drilled)], "pins": [(number, name)]}]
     with y pointing up (Altium's and dedupe's frame). workspace_dirs: folders inside the workspace where ecadlib's own
@@ -79,12 +79,6 @@ def _plugin_readers():
     for ep in PL._entry_points("ecadlib.hub_tools"):
         with contextlib.suppress(Exception):
             ep.load()()
-
-
-def _builtin_readers():
-    """Fusion / EasyEDA readers (hub_tools, on eagle-export's and easyeda-export's read-back), when this ecadlib has them."""
-    from . import hub_tools
-    hub_tools.hub_register(lambda tool, *a, **k: None if tool in _READERS else register_tool(tool, *a, **k))  # a plugin's wins
 
 
 # ------------------------------------------------------------------ small helpers
@@ -1035,7 +1029,6 @@ def build(ws, force=False):
 
 
 def _build(ws, force):
-    _builtin_readers()
     _plugin_readers()
     cfg = settings(ws)
     root = Path(ws.root).resolve()
@@ -1437,10 +1430,10 @@ def main(argv=None):
     ap.add_argument("--workspace", default=os.environ.get("ECADLIB_WORKSPACE") or "ecadlib_workspace")
     ap.add_argument("--lib", action="append", default=[], help="library folder or file to include (repeatable)")
     ap.add_argument("--search", default="", help="words to look for in name, MPN, maker, description")
-    ap.add_argument("--have", default="", help="only parts in these tools (comma list: altium,altium365,kicad,fusion,easyeda)")
+    ap.add_argument("--have", default="", help="only parts in these tools (comma list: altium,altium365,kicad)")
     ap.add_argument("--lack", default="", help="only parts missing from these tools")
     ap.add_argument("--state", default="", help="only parts with a cell in these states (different,behind,present,same)")
-    ap.add_argument("--tool", default="", help="one tool's library only (altium, altium365, kicad, fusion, easyeda)")
+    ap.add_argument("--tool", default="", help="one tool's library only (altium, altium365, kicad)")
     ap.add_argument("--project", default="", help="only parts this project uses (a .kicad_pro / .PrjPcb under [hub] projects)")
     ap.add_argument("--copy-to", default="", choices=["", "altium", "kicad"],
                     help="copy the listed parts that this tool lacks into the hub library (and into --project)")
