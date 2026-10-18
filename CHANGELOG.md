@@ -9,6 +9,7 @@ a minor release may change command-line options and file formats.
 
 ### Added
 
+- docs/benchmark.md: the live accuracy benchmark on 110 real parts (#42), with the method, results per family, every miss and its cause, the cost and the commands to run it again; the website shows the headline numbers.
 - `ecadlib eval run` tells a footprint that uses the datasheet's recommended land pattern (the maker's example board layout) apart from a misread: when it misses KiCad's pads only because KiCad works its land out from the package dimensions, the report says so and gives the pass rate counting those as right (`summary.maker_land`, per case `maker_land` and `kicad_differs_maker_land`). Checked by hand on CD4066BM, UCC256301 and BCR430UW6.
 - A test set can carry an errata file (`<set>.errata.json`) of cases where KiCad's reference disagrees with the datasheet, checked by hand: the field is scored right when ours is what the datasheet says, and the report lists it. kicad-v1 has one: AH1806-W, whose SC59 pins 2 and 3 KiCad swaps.
 - The standard source knows DO-201AD (axial, 15.24 mm bend), MicroMELF and SC-82AB, from KiCad's hand-drawn footprints (618 packages, each benched against KiCad). Three #42 benchmark parts (1N5400, BAV301, NCP662) now build without a datasheet.
