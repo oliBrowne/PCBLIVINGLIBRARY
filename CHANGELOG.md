@@ -21,6 +21,7 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Datasheet download: a link that gives a product HTML page (ENS210) is followed once to the datasheet PDF the page links to; the provenance keeps the page as `page_url`.
 - Datasheet reader: a plain http:// datasheet link sent to the API for it to fetch is sent as https:// (the API answered "Only HTTPS URLs are supported"; 7 parts of the live benchmark).
 - Cross-check: two reads that name a pin with different wording agree: "K" and "cathode (K)", "A" and "anode", "VO" and "VO (output)", "V_{SS}" and "VSS", or "GND" and "PowerPAD" for the exposed pad. 18 benchmark parts were held on wording like this.
 - Datasheet reader: the live API refused every read ("Schemas contains too many parameters with union types (184 ...). limit: 16"). The request now asks for the dimensions as a list of named records (min / nom / max as printed text, "" where blank) and the optional family fields as one JSON text, with no nullable fields; the answer is turned back into the same extraction as before, so checks, the result cache and recorded answers are unchanged. The cross-check's second read had the same problem (26 union fields) and is fixed the same way.

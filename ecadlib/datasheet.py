@@ -1253,8 +1253,9 @@ class PdfStore:
             h.log.append(("GET", url, r.status_code, False))
         return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None
 
-    def fetch(self, url, where=""):
-        """-> (pdf bytes, provenance). Raises DatasheetError (with the reason) when it is not a usable PDF."""
+    def fetch(self, url, where="", follow=True):
+        """-> (pdf bytes, provenance). Raises DatasheetError (with the reason) when it is not a usable PDF.
+        follow: a link that gives a product HTML page is followed once to the PDF the page links to."""
         stem = hashlib.sha256(url.encode()).hexdigest()[:24]
         pdf_f, meta_f = self.dir / f"{stem}.pdf", self.dir / f"{stem}.json"
         if pdf_f.exists() and meta_f.exists():
@@ -1272,7 +1273,15 @@ class PdfStore:
         if len(data) > MAX_DOWNLOAD:
             raise DatasheetError(f"{url}: larger than {MAX_DOWNLOAD >> 20} MB; download it and pass --pages")
         if not is_pdf(data):
-            kind = "an HTML page" if re.search(rb"<(!doctype|html)", data[:2048], re.I) else f"{ctype or 'unknown type'}"
+            html = bool(re.search(rb"<(!doctype|html)", data[:2048], re.I))
+            link = pdf_link(data, final or url) if html and follow else None
+            if link and link != url:
+                try:
+                    pdf, meta = self.fetch(link, where, follow=False)
+                    return pdf, dict(meta, page_url=url)
+                except DatasheetError as e:
+                    raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {e}")
+            kind = "an HTML page" if html else f"{ctype or 'unknown type'}"
             raise DatasheetError(f"{url}: not a PDF ({kind}, {len(data)} bytes)")
         meta = {"url": url, "final_url": final, "where": where, "status": status, "content_type": ctype,
                 "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "pages": pdf_pages(data),
@@ -1281,6 +1290,22 @@ class PdfStore:
         pdf_f.write_bytes(data)
         meta_f.write_text(json.dumps(meta, indent=2), encoding="utf-8")
         return data, dict(meta, from_cache=False)
+
+
+def pdf_link(html, base):
+    """The datasheet PDF an HTML product page links to (an href ending .pdf, or a meta refresh), absolute; a link
+    whose name says datasheet, and then one on the page's own site, is preferred. None when there is none."""
+    from urllib.parse import urljoin, urlparse
+    text = html.decode("utf-8", "replace") if isinstance(html, bytes) else str(html)
+    refresh = re.search(r"""http-equiv=["']?refresh["']?[^>]*?url=([^"'>\s]+)""", text, re.I)
+    links = [m.group(1) for m in re.finditer(r"""href=["']([^"'#]+?\.pdf(?:\?[^"']*)?)["']""", text, re.I)]
+    if refresh:
+        links.insert(0, refresh.group(1))
+    if not links:
+        return None
+    host = urlparse(base).netloc
+    key = lambda u: (not re.search(r"data.?sheet|/ds/|_ds|-ds", u, re.I), urlparse(urljoin(base, u)).netloc != host)
+    return urljoin(base, sorted(links, key=key)[0])
 
 
 def select_pages(data, budget):

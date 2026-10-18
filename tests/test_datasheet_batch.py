@@ -263,6 +263,11 @@ def test_datasheet_urls_and_pdf_store():
             raise AssertionError("offline")
         except D.DatasheetError as e:
             assert "offline" in str(e)
+        # a product page that links its datasheet is followed once to the PDF
+        http.pdfs.update({"https://maker/p/ens210": b'<html><a href="/app/brief.pdf">b</a><a href="/docs/ENS210_Datasheet.pdf">',
+                          "https://maker/docs/ENS210_Datasheet.pdf": PDF})
+        data, prov = st.fetch("https://maker/p/ens210")
+        assert data == PDF and prov["url"] == "https://maker/docs/ENS210_Datasheet.pdf" and prov["page_url"] == "https://maker/p/ens210"
         # Reader.job: first link is HTML -> skipped; blocked link -> URL source; nothing usable -> error
         rd = D.Reader(d, d, key=KEY, http=http, log=None)
         j = rd.job("TESTPART", [("https://a/view", "BOM"), ("https://a/ds.pdf", "LCSC")], "RGT")
