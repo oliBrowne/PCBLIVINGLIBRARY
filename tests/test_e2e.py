@@ -296,7 +296,9 @@ def test_altium365_release_package_is_consistent():
             name = files[0]["relativePath"].split("\\")[-1]
             local = w / "lib" / "parts" / it[kind]["file"]
             assert name == local.name and up[name] == local.read_bytes(), (name, local)
-            assert r[f"{kind}ItemName"] in {x["name"] for x in reader(local)}, (r[f"{kind}ItemName"], local)
+            # the item is named after the model inside the file; -SYM / -FP when that name is the component's own
+            item = r[f"{kind}ItemName"].removesuffix("-SYM" if kind == "symbol" else "-FP")
+            assert item in {x["name"] for x in reader(local)}, (r[f"{kind}ItemName"], local)
     print(f"      Altium 365 (FakeNexar): {len(rel)} releases, {len(up)} uploaded files, all consistent")
 
 

@@ -112,6 +112,9 @@ class Nexar:
     def find(self, ws, name):
         return None
 
+    def find_model(self, ws, kind, name, folder):
+        return None
+
     def folder_id(self, ws, path):
         return "fld-" + path
 

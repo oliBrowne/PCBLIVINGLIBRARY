@@ -277,6 +277,13 @@ class FakeNexar(_Server):
                     ids = {k: {"id": f"{k}-id", "name": k} for k in ("componentScheme", "symbolScheme", "footprintScheme",
                                                                      "componentLifeCycle", "symbolLifeCycle", "footprintLifeCycle")}
                     return self._send(200, {"data": ids})
+                for kind, key in (("symbols", "symbol"), ("footprints", "footprint")):
+                    if f"{kind}(" in q:            # models released so far, under their revision names (Capacitor-1)
+                        pre = body["variables"]["prefix"]
+                        nodes = [{"id": f"{key}-rev:{r[key + 'ItemName']}", "name": r[key + "ItemName"] + "-1", "releasedAt": "2026-10-18T00:00:00Z",
+                                  "folder": {"path": r[key + "ReleaseFolder"]}} for r in srv.releases
+                                 if r.get(key + "ItemName") and (r[key + "ItemName"] + "-1").startswith(pre)]
+                        return self._send(200, {"data": {"desLibrary": {kind: {"nodes": nodes}}}})
                 if "folders" in q:                 # an empty library: every folder is created on first use
                     return self._send(200, {"data": {"desLibrary": {"folders": srv.folders}}})
                 if "desCreateFolder" in q:             # live schema: parentFolderId (GUID) in, folderId (GUID) out

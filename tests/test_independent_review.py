@@ -76,6 +76,9 @@ class Stateful:
     def release_defs(self, ws): return {}
     def find(self, ws, name): return self.comps.get(name)
     def upload(self, p): self.calls.append(("upload", Path(p).name)); return "f" + str(len(self.calls))
+    def find_model(self, ws, kind, name, folder):
+        return None
+
     def folder_id(self, ws, path):
         return "fld-" + path
 
@@ -124,7 +127,8 @@ def test_p6_shared_models_reuse_item_names_and_uploads():
         assert {r["symbolItemName"] for r in rel} == {"Resistor"} and {r["footprintItemName"] for r in rel} == {"R_0603_1608Metric"}
         assert sorted(c[1] for c in ws.calls if c[0] == "upload") == ["R_0603_1608Metric.PcbLib", "Resistor.SchLib"]
         dry = A.push(items, None, "w", dry_run=True)
-        assert all(r["detail"]["input"]["symbolItemName"] == "Resistor" for r in dry)
+        assert dry[0]["detail"]["input"]["symbolItemName"] == "Resistor", dry      # released once, then linked
+        assert all(r["detail"]["input"]["symbol"] == {"id": "<id of Resistor>"} for r in dry[1:]), dry
 
 
 def test_p7_package_regex_word_boundaries():
