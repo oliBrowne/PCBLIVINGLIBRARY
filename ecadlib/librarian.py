@@ -615,20 +615,16 @@ class Run:
             st["tried"].extend(edited)
             st["review"].extend(edited)
         got = []
-        unres = res["spec"].get("unresolved") or []
         if not st["footprint"]:
             st["review"].extend(pad_table_problems(res["spec"]))
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
-            except (KeyError, TypeError, ValueError) as e:   # a read that left a needed dimension blank: no footprint,
-                text = None                                  # the symbol is still built from the pin table
-                why = f"the datasheet read left {', '.join(unres)} unresolved" if unres else f"{type(e).__name__}: {e}"
-                st["tried"].append(f"datasheet reader ({where}): no footprint built: {why}")
-                st["review"].append(f"datasheet footprint not built: {why}; read the drawing, or pick a footprint (ecadlib resolve)")
-            if text is not None:
-                h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
-                self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
-                got.append("footprint")
+            except (KeyError, TypeError) as e:     # a read that left a needed dimension blank: say so, not KeyError
+                unres = res["spec"].get("unresolved") or []
+                raise D.DatasheetError("no footprint: the datasheet read left " + (", ".join(unres) or str(e)) + " unresolved") from e
+            h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
+            self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
+            got.append("footprint")
         if not st["symbol"]:
             from . import house_style as HS              # active-low pins in your library's notation ([style])
             sym, renamed = HS.adapt_symbol(res["symbol"], HS.active(self.rules, self.out))
