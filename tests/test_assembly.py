@@ -128,6 +128,15 @@ def test_registration_off_grid_turns_and_noise():
         a = A.assess(fp, moved(fp, turn, 0.3, -0.2), PROF)
         assert abs(a["turn"] - turn) < 0.01 and a["pads"] == "identical", (turn, a["turn"], a["pads"])
     a = A.assess(fp, moved(fp, 90, noise=0.03, rng=rng), PROF)           # small drawing differences: compatible
+    theirs45 = moved(fp, 45)                     # a fit a hair either side of 45 deg (libm differs per platform):
+    for eps in (-1e-9, 0.0, 1e-9):               # our pads keep their pads' axes, nothing swaps
+        class Fit:
+            turn = 45 + eps
+
+            def apply(self, x, y):
+                return A.rot(x, y, self.turn)
+        rows, lost_ours, lost_theirs, _ = A.compare(fp, theirs45, Fit(), PROF["tolerances"])
+        assert not lost_ours and not lost_theirs and all(abs(r["dw"]) < 1e-6 and abs(r["dh"]) < 1e-6 for r in rows), (eps, rows[0])
     assert a["pads"] == "compatible" and a["turn"] == 90, (a["pads"], a["reasons"])
 
 
@@ -250,8 +259,8 @@ def test_overlay_picture():
         a = A.assess(ours("SOIC-8_3.9x4.9mm_P1.27mm"), theirs("C5423"), PROF, "C5423")
         f = A.render_overlay(ours("SOIC-8_3.9x4.9mm_P1.27mm"), theirs("C5423"), a, Path(d) / "x.png")
         from PIL import Image
-        im = Image.open(f)
-        assert im.size[0] >= 720 and im.size[1] > 300
+        with Image.open(f) as im:                # closed before the folder goes (Windows keeps open files)
+            assert im.size[0] >= 720 and im.size[1] > 300
 
 
 # ---------------------------------------------------------------- fetching the assembler's footprint

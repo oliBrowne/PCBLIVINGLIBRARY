@@ -598,6 +598,11 @@ def compare(ours, theirs, fit, tol):
         d, i = min(cand)
         used.add(i)
         p, x, y, w, h = mov[i]
+        # our pad's size in their pad's axes, from the angle between the two pads: at a 45 deg turn the axis-aligned
+        # sizes of each would swap on float noise alone (45.0000001 vs 44.9999999), on one side and not the other
+        w, h = (p.h, p.w) if round(((p.rot + fit.turn - b.rot) % 180) / 90) % 2 else (p.w, p.h)
+        if (bw, bh) != (b.w, b.h):
+            w, h = h, w
         along_x = bw >= bh                          # their pad's long axis: the lead's direction
         across = abs(b.y - y) if along_x else abs(b.x - x)
         if abs(bw - bh) < 0.05 * max(bw, bh):        # square / round land: no lead axis
