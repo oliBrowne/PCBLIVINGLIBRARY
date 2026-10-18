@@ -22,7 +22,10 @@ def test_site_brand_files_match_the_drawing():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     for rel, data in mod.files().items():
-        assert (ROOT / "site" / rel).read_bytes() == data, f"site/{rel} is stale: run python scripts/build_brand.py"
+        have = (ROOT / "site" / rel).read_bytes()
+        if rel.endswith(".svg"):                                   # a Windows checkout may turn \n into \r\n
+            have = have.replace(b"\r\n", b"\n")
+        assert have == data, f"site/{rel} is stale: run python scripts/build_brand.py"
 
 
 def test_copper_is_the_leaves_only():
