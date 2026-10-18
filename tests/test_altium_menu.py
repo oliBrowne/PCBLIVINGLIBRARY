@@ -809,3 +809,14 @@ def test_dialog_moves_by_its_header():
     assert head.count("OnMouseDown = HeadMouseDown") == 2 and head.count("OnMouseMove = HeadMouseMove") == 2
     for h in ("HeadMouseDown", "HeadMouseMove", "HeadMouseUp"):
         assert f"Procedure TEcadlibDialog.{h}(" in pas
+
+
+def test_ai_offer_keeps_the_review_queue():
+    """On AD26 the AI offer replaced the "Next: open the review queue" hint and button for a fill with held parts
+    (2026-10-18): the hint stays under the offer, and Not now goes back to Done / Open review queue."""
+    from ecadlib import altium_forms as AF
+    pas = AF.dialog_pas_text()
+    offer = pas[pas.index("If Answer(Job, 'offer_ai') = '1' Then"):pas.index("Else If (St = 'held')")]
+    assert "Second := 'after_ai'" in offer and "NextHint" in offer and "Buttons(Answer(Job, 'ai_button'), 'Not now'" in offer
+    back = pas[pas.index("Else If Second = 'after_ai' Then"):pas.index("Else If Second = 'log' Then")]
+    assert "Second := 'queue'" in back and "Buttons('Done', 'Open review queue', False)" in back and "NextHint" in back

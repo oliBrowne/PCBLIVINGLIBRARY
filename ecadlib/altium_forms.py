@@ -77,6 +77,7 @@ Var
     Project : String;
     Title : String;
     Second : String;
+    NextHint : String;
     Waited : Integer;
     Shown : Integer;
     Total : Integer;
@@ -465,10 +466,18 @@ Begin
             EcadlibDialog.Note.Caption := 'Next: ' + Answer(Job, 'fix');
         If Answer(Job, 'ai_cost_text') <> '' Then
             EcadlibDialog.Note.Caption := Answer(Job, 'ai_cost_text') + #13#10 + EcadlibDialog.Note.Caption;
+        NextHint := '';
+        If (Answer(Job, 'fix') <> '') And (St <> 'ready') Then
+            NextHint := 'Next: ' + Answer(Job, 'fix');
         If Answer(Job, 'offer_ai') = '1' Then
         Begin
             Phase := 'offer_ai';
+            { Not now goes back to the review-queue view (SecondaryClick), so the AI offer hides nothing for good. }
+            If (St = 'held') Or (St = 'awaiting_approval') Or (Answer(Job, 'offer_queue') = '1') Then
+                Second := 'after_ai';
             EcadlibDialog.Note.Caption := 'AI step: ' + Answer(Job, 'ai_text') + #13#10 + 'Nothing is sent until you click.';
+            If NextHint <> '' Then
+                EcadlibDialog.Note.Caption := EcadlibDialog.Note.Caption + #13#10 + NextHint;
             Buttons(Answer(Job, 'ai_button'), 'Not now', False);
         End
         Else If (St = 'held') Or (St = 'awaiting_approval') Or (Answer(Job, 'offer_queue') = '1') Then
@@ -584,6 +593,15 @@ Begin
     Begin
         Fire('queue', '', '');
         ModalResult := mrOk;
+    End
+    Else If Second = 'after_ai' Then
+    Begin
+        Phase := 'done';
+        Second := 'queue';
+        EcadlibDialog.Note.Caption := NextHint;
+        EcadlibDialog.Note.Visible := NextHint <> '';
+        Buttons('Done', 'Open review queue', False);
+        Layout;
     End
     Else If Second = 'log' Then
         RunApplication('notepad.exe "' + Job + '\log.txt"')

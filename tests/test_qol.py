@@ -329,6 +329,21 @@ def test_status_summary_read_only():
         assert empty["exists"] is False and not Path(d, "nothing").exists() and "does not exist" in WS.render(empty)
 
 
+def test_status_finds_a_librarian_out_folder():
+    # `ecadlib librarian bom.csv -o ws/library` then `ecadlib status --workspace ws` (or the library folder itself)
+    # reported 0 plans on the #47 sensor-board run, so the review rate (#45) was missing
+    with tempfile.TemporaryDirectory() as d:
+        lib = Path(d, "ws", "library"); lib.mkdir(parents=True)
+        (lib / "plan.json").write_text(json.dumps([{"name": "A", "status": "ready"}, {"name": "B", "status": "held"}]))
+        (lib / "review.md").write_text("# Library review\n")
+        other = Path(d, "ws", "altium365"); other.mkdir()
+        (other / "plan.json").write_text(json.dumps([{"name": "X", "status": "ready"}]))  # not a librarian output
+        for root in (Path(d, "ws"), lib):
+            s = WS.status(root)
+            assert [p["plan"] for p in s["plans"]] == [("library/" if root != lib else "") + "plan.json"], s["plans"]
+            assert s["totals"]["parts"] == 2 and s["totals"]["held"] == 1 and s["review"]["built"] >= 0
+
+
 def test_workspace_and_mcp_status_and_doctor():
     from ecadlib import mcp_server as M
     from ecadlib.app import Workspace

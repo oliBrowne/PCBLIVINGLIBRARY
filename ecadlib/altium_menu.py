@@ -1573,9 +1573,9 @@ def offer_ai(res, q, bom, mpn="", part=""):
         return res
     res.update(offer_ai="1", ai_bom=bom, ai_mpn=mpn, ai_part=part, ai_model=q["model"], ai_over="1" if q["over_limit"] else "0",
                ai_unknown="0" if q["price_known"] else "1",
-               ai_approve="" if q["approve_usd"] is None else f"{q['approve_usd']:.2f}",
+               ai_approve="" if q["approve_usd"] is None else f"{q['approve_usd']:.3f}",
                ai_button=f"Read with AI (about {AC.money(q['usd'])})" if q["price_known"] else "Read with AI (price unknown)",
-               ai_confirm=(f"Reading the datasheets can cost up to {AC.money(q['usd_max'])} with {q['model']}, more than your "
+               ai_confirm=(f"Reading the datasheets can cost up to {AC.money(AC.up(q['usd_max']))} with {q['model']}, more than your "
                            f"limit of {AC.money(q['limit_usd'])} ([datasheet] {q['limit_name']}). Go ahead anyway?")
                if q["price_known"] else f"ecadlib does not know what {q['model']} costs. Read the datasheets anyway?")
     return res

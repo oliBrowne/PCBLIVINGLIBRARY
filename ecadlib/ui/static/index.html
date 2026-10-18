@@ -1136,7 +1136,7 @@ function showAi(q, cost) {
 function aiConfirm(q, what) {
   if (!q.over_limit) return true;
   return confirm(q.price_known
-    ? `${what} can cost up to ${usd(q.usd_max)} with ${q.model}, more than your limit of ${usd(q.limit_usd)} ([datasheet] ${q.limit_name} in ecadlib.toml). Go ahead anyway?`
+    ? `${what} can cost up to ${usd(q.approve_usd ?? q.usd_max)} with ${q.model}, more than your limit of ${usd(q.limit_usd)} ([datasheet] ${q.limit_name} in ecadlib.toml). Go ahead anyway?`
     : `ecadlib does not know what ${q.model} costs, so it cannot say what ${what.toLowerCase()} costs. Go ahead anyway?`);
 }
 document.addEventListener("click", async e => {
