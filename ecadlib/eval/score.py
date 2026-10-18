@@ -196,7 +196,15 @@ def maker_land(mine, spec, tol=None):
                (near(p[4], pl, "size") and near(p[3], pw, "size") and near(y, pcy, "pos"))
     rest = [p for p in pads if p not in ep]
     used = [p[0] for p in rest if fits(p)]
-    return {"followed": bool(rest) and len(used) == len(rest), "pads": used, "ep": [p[0] for p in ep]}
+    # the land is the model's own reading, so "followed" alone cannot tell it from a misread: it must at least solder
+    # the leads it read (reach the toe, start inside the shortest foot, be no narrower than the lead)
+    rng = lambda k: [v for v in ((spec.get(k) or {}).get(x) for x in ("min", "nom", "max")) if isinstance(v, (int, float))] \
+        if isinstance(spec.get(k), dict) else []
+    span, T, b = rng("lead_span"), rng("terminal_length"), rng("terminal_width")
+    sane = not (span and T and b) or (pc + pl / 2 >= min(span) / 2 - t["pos"] and
+                                     pc - pl / 2 <= max(span) / 2 - min(T) + t["pos"] and pw >= min(b) - 1e-9)
+    return {"followed": bool(rest) and len(used) == len(rest) and sane, "pads": used, "ep": [p[0] for p in ep],
+            **({} if sane else {"implausible": "the land does not cover the leads read from the same drawing"})}
 
 
 def only_maker_land(fields, ml):

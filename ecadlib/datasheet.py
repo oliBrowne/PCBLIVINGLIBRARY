@@ -550,7 +550,8 @@ def from_wire(ext):
     if not isinstance(pkg, dict) or not ("dims" in pkg or "other_json" in pkg):
         return ext
     _, pk, other_s = _wire_parts()
-    raw = str(pkg.get("other_json") or "").strip()
+    oj = pkg.get("other_json")                        # a model without strict schemas may answer the object itself
+    raw = json.dumps(oj) if isinstance(oj, dict) else str(oj or "").strip()
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw) or "{}"          # a model that fences or prefixes the JSON text
     try:
         other = json.loads(raw)
@@ -1209,7 +1210,8 @@ def write(res, outdir):
         other = json.loads(spec_f.read_text(encoding="utf-8")) if spec_f.exists() else None
     except (OSError, ValueError):
         other = None
-    if isinstance(other, dict) and "package_type" in other and other != json.loads(json.dumps(res["spec"])):
+    own = d / f"{spec_stem}.{part}.json"              # once this part has its own file, it stays the one fp-edit reads
+    if own.exists() or isinstance(other, dict) and "package_type" in other and other != json.loads(json.dumps(res["spec"])):
         spec_f = d / f"{spec_stem}.{part}.json"       # kept apart: ecadlib fp-edit reads this part's own
     paths = {"spec": spec_f, **paths}
     for k in ("spec", "symbol", "sidecar"):

@@ -85,8 +85,12 @@ def pick_named(nodes, name):
     `name: {eq: "AMS1117-3.3"}` filter also returns Altium's sample part CMP-017-000002-1 (it matches more than
     the item name), so a hit is only a match when its own name is the item's."""
     import re
-    rev = re.compile(re.escape(name or "") + r"(-[^-]+)?$", re.I)
-    return next((n for n in nodes or [] if name and rev.fullmatch(n.get("name") or "")), None)
+    if not name:
+        return None
+    nodes = nodes or []
+    exact = next((n for n in nodes if (n.get("name") or "").lower() == name.lower()), None)
+    rev = re.compile(re.escape(name) + r"-(\d+|[A-Z]\.\d+)", re.I)     # a revision ("-1", "-A.1"), not "LM358-N"
+    return exact or next((n for n in nodes if rev.fullmatch(n.get("name") or "")), None)
 
 
 class NexarError(Exception):

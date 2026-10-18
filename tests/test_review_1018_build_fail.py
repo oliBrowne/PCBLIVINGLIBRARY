@@ -511,7 +511,9 @@ def _old_files_intact(lib):
 
 # ------------------------------------------------------------------ the tests
 @lite
-def test_altium_saving_nothing_keeps_the_old_files_and_installs_nothing(tmp_path):
+def test_altium_saving_nothing_keeps_the_old_files_and_installs_the_old_library_again(tmp_path):
+    """The library installed before the failed build is installed again (it was uninstalled to build), so the person
+    keeps a working library; "Ready" is never shown."""
     lib = _library(tmp_path)
     mgr, shown = Manager(), []
     pas, dblib = _menu(lib, "nothing", mgr, shown)
@@ -521,8 +523,8 @@ def test_altium_saving_nothing_keeps_the_old_files_and_installs_nothing(tmp_path
     report = (lib / "ecadlib_build_report.txt").read_text(encoding="utf-8").splitlines()
     assert [ln.split("\t")[0] for ln in report] == ["FAILED", "FAILED"], report
     assert all("Altium did not save the file (the previous library file was kept)" in ln for ln in report), report
-    assert pas.call("BuildFailed", extra) and "Nothing was installed" in extra, extra
-    assert ("install", dblib) not in mgr.calls, mgr.calls
+    assert pas.call("BuildFailed", extra) and "The library you had is installed again" in extra, extra
+    assert mgr.calls == [("uninstall", dblib), ("install", dblib)] and dblib in mgr.installed, mgr.calls
     pas.call("ShowResult", "ecadlib: add NE555DR", "job", extra)
     assert [k for k, _ in shown] == ["error"] and "Ready" not in shown[0][1], shown
 

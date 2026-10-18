@@ -45,8 +45,9 @@ class Kind:
 # where="stamp": the version is in the folder's ecadlib_schema.json; "key": a top-level schema_version in the file
 KINDS = {k.name: k for k in (
     Kind("plan", 1, ["plan.json"], note="librarian / altium365 plan (a JSON list of parts)"),
-    Kind("librarian_state", 2, ["librarian_state.json"],
-         note="what the librarian found per part; v2: footprint name + geometry hash recorded, `inputs` for the lock"),
+    Kind("librarian_state", 3, ["librarian_state.json"],
+         note="what the librarian found per part; v2: footprint name + geometry hash recorded, `inputs` for the lock; "
+              "v3: the hash covers pad shapes and holes (#97)"),
     Kind("approvals_audit", 1, ["approvals_audit.jsonl"], note="append-only sign-off log"),
     Kind("agent", 1, ["status.json", "agent_state.json", "watch_state.json", "watch_pending.json", "library_bom.json"],
          note="library agent state (<workspace>/agent/)"),
@@ -80,8 +81,25 @@ def _state_1_to_2(folder, data):
     return data
 
 
+def _state_2_to_3(folder, data):
+    """librarian_state v2 -> v3: the footprint geometry hash now covers pad shapes and holes (#97), so a hash recorded
+    before it never equals a new one and every re-run wrote a second copy of a footprint the library already had.
+    Each recorded hash is computed again from its .kicad_mod; one whose file is gone is dropped, so it is re-checked."""
+    from . import fp_share as FS
+    for rec in (data or {}).values():
+        fp = (rec or {}).get("footprint") if isinstance(rec, dict) else None
+        if not isinstance(fp, dict) or not fp.get("hash"):
+            continue
+        k = Path(folder) / (fp.get("kicad_mod") or "")
+        if fp.get("kicad_mod") and k.is_file():
+            fp["hash"] = FS.digest(k.read_text(encoding="utf-8"))
+        else:
+            fp.pop("hash")
+    return data
+
+
 # (kind, from_version) -> function(folder, parsed data of the kind's main file) -> migrated data
-MIGRATIONS = {("librarian_state", 1): _state_1_to_2}
+MIGRATIONS = {("librarian_state", 1): _state_1_to_2, ("librarian_state", 2): _state_2_to_3}
 
 
 # ------------------------------------------------------------------ stamps

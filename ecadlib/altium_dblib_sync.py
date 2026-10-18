@@ -463,7 +463,16 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
                     failed[rel] = err
                     notes.pop()
                     continue
-                os.replace(tmp, dst)
+                try:
+                    os.replace(tmp, dst)
+                except PermissionError:                     # Windows: the file is open (locked) in Altium or another
+                    tmp.unlink(missing_ok=True)             # program; this part is skipped, the others still sync
+                    err = (f"{rel} could not be replaced: it is open in Altium or another program. "
+                           "Close it there (or wait for Altium's build to finish), then run this again")
+                    problems.append(err)
+                    failed[rel] = err
+                    notes.pop()
+                    continue
                 AN.copy_recipe(src, dst)            # what Altium rebuilds the file from (ecadlib.altium_native)
                 managed_files.update(_steps(to, rel))       # its STEP files are ecadlib's too: --prune removes them
             else:

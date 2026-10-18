@@ -83,9 +83,9 @@ def test_old_workspaces_open_and_rebuild_the_same_parts():
             w.librarian_run("uploads/board.csv")
             backups = list((lib / MG.BACKUP).glob("librarian_state-v1-*/librarian_state.json"))
             assert len(backups) == 1 and backups[0].read_bytes() == old_state_bytes, label
-            assert json.loads((lib / MG.STAMP).read_text())["kinds"] == {"approvals_audit": 1, "ledger": 1, "librarian_state": 2, "plan": 1} \
+            assert json.loads((lib / MG.STAMP).read_text())["kinds"] == {"approvals_audit": 1, "ledger": 1, "librarian_state": 3, "plan": 1} \
                 if (lib / "approvals_audit.jsonl").exists() else True
-            assert MG.folder_version(lib, "librarian_state")[0] == 2
+            assert MG.folder_version(lib, "librarian_state")[0] == 3
             new = {i["name"]: i for i in json.loads((lib / "plan.json").read_text())}
             assert set(new) == set(old_plan) == set(fresh), label
             for n, it in new.items():             # the same parts as a fresh build with today's code; a part the old
@@ -235,11 +235,11 @@ def test_state_migration_is_safe_on_new_data_and_keeps_unchecked_shares():
         once = MG.migrate_data("librarian_state", 1, json.loads(json.dumps(data)), d)
         assert once["P1"]["footprint"]["hash"] and once["P1"]["footprint"]["name"] == "A"
         assert "hash" not in once["P2"]["footprint"], "a name-only share stays unchecked so the librarian re-checks it"
-        assert once["P3"]["footprint"]["hash"] == "h-already"
+        assert "hash" not in once["P3"]["footprint"], "a hash from before #97 with no .kicad_mod to recompute it from"
         assert MG.migrate_data("librarian_state", 1, json.loads(json.dumps(once)), d) == once     # idempotent
-        assert MG.migrate_data("librarian_state", 2, once, d) is once
+        assert MG.migrate_data("librarian_state", 3, once, d) is once
         try:
-            MG.migrate_data("librarian_state", 3, once, d)
+            MG.migrate_data("librarian_state", 4, once, d)
             raise AssertionError
         except MG.SchemaTooNew:
             pass
@@ -279,7 +279,7 @@ def test_lock_records_inputs_and_is_stable():
         text, stamp = (lib / RB.LOCK).read_bytes(), (lib / MG.STAMP).read_bytes()
         L.run(Path(d) / "bom.csv", out=lib, offline=True, cache=Path(d) / "cache", rules={}, log=lambda *a: None)
         assert (lib / RB.LOCK).read_bytes() == text and (lib / MG.STAMP).read_bytes() == stamp, "a re-run changes nothing"
-        assert json.loads(stamp)["kinds"] == {"ledger": 1, "librarian_state": 2, "plan": 1}   # ledger: change control
+        assert json.loads(stamp)["kinds"] == {"ledger": 1, "librarian_state": 3, "plan": 1}   # ledger: change control
 
 
 def test_rebuild_check_passes_then_reports_drift():

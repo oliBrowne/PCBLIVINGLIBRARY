@@ -69,7 +69,7 @@ def source_kind(descriptions=()):
             if t == t.upper() and re.match(rf"(?:{rx})", t):
                 return cat
         for cat, rx in SOURCE_CATEGORY:
-            if re.search(rf"(?<![\w-])(?<!(?i:for) )(?<!(?i:with) )(?<!(?i:of) )(?:{rx})(?![\w-])", t):   # not "driver for MOSFETs"
+            if re.search(rf"(?<![\w-])(?<!(?i:for) )(?<!(?i:with) )(?<!(?i:of) )(?<!(?i:integrated) )(?<!(?i:internal) )(?<!(?i:built-in) )(?:{rx})(?![\w-])", t):   # not "driver for MOSFETs"
                 return cat
     return None
 

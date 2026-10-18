@@ -50,7 +50,7 @@ def load_errata(set_name):
         return {}
 
 
-def apply_errata(sc, mine_pins, errata):
+def apply_errata(sc, mine_pins, errata, ref_pins=None, tol=None):
     """A failing field that a checked erratum covers, with ours what the datasheet says, is scored right."""
     fixed = []
     for field, e in (errata or {}).items():
@@ -61,6 +61,11 @@ def apply_errata(sc, mine_pins, errata):
             have = {str(n): S.norm_name(v) for n, v in mine_pins or []}
             if any(have.get(str(n)) != S.norm_name(v) for n, v in e["ours"]):
                 continue                              # ours is not what the datasheet says either: a real miss
+            if ref_pins:                              # the pins the erratum does not cover must still agree with KiCad
+                fixed_ref = dict((str(n), v) for n, v in ref_pins)
+                fixed_ref.update((str(n), v) for n, v in e["ours"])
+                if not S.score_symbol(mine_pins, list(fixed_ref.items()), tol).get(field, {"ok": True})["ok"]:
+                    continue
         sc["fields"][field] = dict(f, ok=True, error="", erratum=e["why"])
         fixed.append(field)
     if fixed:
@@ -422,7 +427,7 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         sf = (it.get("symbol") or {}).get("file")
         pins = _symbol_pins(lib / sf) if sf and (lib / sf).exists() else None
         sc = S.score(mine, data["references"][c["footprint"]], pins, c.get("pins"), tol)
-        errata = apply_errata(sc, pins, erratas.get(c["mpn"]))
+        errata = apply_errata(sc, pins, erratas.get(c["mpn"]), c.get("pins"), tol)
         tin, tout, cost, how = _cost(reader.used.get(c["mpn"]), reader.model)
         src = ((it.get("source") or {}).get("footprint") or "none").split(":")[0]
         ml = S.maker_land(mine, (reader.used.get(c["mpn"]) or {}).get("spec")) if src == "datasheet" else None
