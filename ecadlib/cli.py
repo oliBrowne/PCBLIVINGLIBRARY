@@ -9,7 +9,7 @@
     ecadlib style     learn|show|direct|check|apply|export-dataset   learn your house style from your library + your direction
     ecadlib ui        --lib <kicad libs>          local web UI in your browser (--team: shared server with sign-in)
     ecadlib team      add-user|set-role|reset-password|remove|list|setup   users and roles for `ecadlib ui --team`; setup: Docker + HTTPS
-    ecadlib mcp       --lib <kicad libs>          MCP server (stdio) for Claude and other agents
+    ecadlib mcp       --lib <kicad libs>          MCP server for Claude, Codex, Grok and other agents (stdio, or --http)
     ecadlib triage    BOM --lib ... -o out/x      BOM triage report (.md + .csv)
     ecadlib sources-check [--save DIR] [--json]   check the unofficial EasyEDA / JLCPCB endpoints against the live sites
     ecadlib footprint gen|compare ...             IPC-7351B footprint generator (also BGA, pin headers, connectors, pad tables)
@@ -78,7 +78,7 @@ COMMANDS = {
     "style": ("ecadlib.house_style", "learn your house style from your library and your written direction; new parts follow it"),
     "ui": ("ecadlib.ui.server", "local web UI"),
     "team": ("ecadlib.team", "users and roles for the team web server (ecadlib ui --team)"),
-    "mcp": ("ecadlib.mcp_server", "MCP server over stdio"),
+    "mcp": ("ecadlib.mcp_server", "MCP server for AI agents (stdio, or --http)"),
     "triage": ("ecadlib.bom_triage", "BOM triage report"),
     "sources-check": ("ecadlib.sources_check", "check the unofficial EasyEDA / JLCPCB endpoints against the live sites"),
     "footprint": ("ecadlib.footprint_gen", "IPC-7351B footprint generator"),

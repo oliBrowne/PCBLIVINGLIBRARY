@@ -180,7 +180,8 @@ def test_mcp():
         assert call(4, "approve_footprint", {"spec": SPEC("R_0603_1608Metric")})["result"]["isError"] is False
         r = call(5, "approve_footprint", {"spec": SPEC("R_0603_1608Metric")})["result"]
         assert r["isError"] and "already in the workspace" in r["content"][0]["text"], r
-        assert call(6, "triage_bom", {})["error"]["code"] == -32602                                 # missing argument
+        r = call(6, "triage_bom", {})["result"]                     # missing argument: a tool error the model can fix
+        assert r["isError"] and "missing argument(s): bom" in r["content"][0]["text"], r
         assert call(7, "rm_rf", {})["error"]["code"] == -32602                                      # unknown tool
         r = call(8, "altium365_push", {"bom": bom})["result"]                                       # dry run by default
         assert r["isError"] is False and json.loads(r["content"][0]["text"])["dry_run"] is True, r
