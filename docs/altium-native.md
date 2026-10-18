@@ -94,4 +94,11 @@ Notes:
   `BuildLibraries(Folder)` from another unit.
 - A library that fails has already been deleted (it is rebuilt in place): run `ecadlib` again to get the
   byte-written file back.
-- Not covered by that run: multi-part symbols and alternate display modes, keep-out regions, bottom-side pads.
+- Not covered by that run, checked separately on AD26 26.10.1:
+  - Multi-part symbols (#38): an LM324 with parts A to D plus a power part places as U1A to U1E with the right pins.
+  - Keep-out regions (#39): DRC flags a track through a footprint's keep-out.
+  - Bottom-side pads (#40): they flip with the component.
+  - De Morgan display modes (2026-10-18, #53): NAND2_DM from `tests/fixtures`, with 2 parts and 2 modes, rebuilds
+    OK with 0 differences. Byte-written and rebuilt libraries read back the same: each part in each mode has its own
+    graphics and inverted-pin dots. Altium's Mode command shows both views, and parts placed in mode 0 and mode 1
+    show the right view after the sheet is saved and reopened.

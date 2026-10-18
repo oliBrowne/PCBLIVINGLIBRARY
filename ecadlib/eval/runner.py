@@ -72,13 +72,13 @@ def write_bom(cases, path):
     return path
 
 
-def usd(model, usage):
-    """USD of one message from its usage block (synchronous rates): ds_route.usage_usd, which also knows the cache-read
-    prices and Claude Haiku 5.5's dearer tier above 100K prompt tokens."""
+def usd(model, usage, batch=False):
+    """USD of one message from its usage block (synchronous rates, half for a Message Batch): ds_route.usage_usd, which
+    also knows the cache-read prices and Claude Haiku 5.5's dearer tier above 100K prompt tokens."""
     if not usage:
         return None
     from .. import ds_route
-    return ds_route.usage_usd(model, usage)
+    return ds_route.usage_usd(model, usage, batch=batch)
 
 
 def _safe(s):
@@ -168,6 +168,7 @@ class EvalReader(D.Reader):
         msg = rec["message"]
         u = self.used.setdefault(job["part"], {"estimate": job.get("estimate")})
         u.setdefault("via", rec.get("via") or "live")
+        u["batch"] = str(rec.get("via") or "").startswith("batch") or bool((job.get("recording") or {}).get("batch"))
         from .. import ds_route as DR                 # priced as the served model when its price is known
         u.update(usage=msg.get("usage"), model=DR.billed_model(rec.get("model") or job.get("model") or self.model, msg))
         # every answer the part's route paid for (cheaper / fewer-page tries first, this one last): all count in the cost
@@ -179,7 +180,7 @@ class EvalReader(D.Reader):
             j = {k: job[k] for k in ("url", "where", "offset", "prov")}
             (self.record / f"{_safe(job['part'])}.json").write_text(json.dumps(
                 {"part": job["part"], "model": rec.get("model") or self.model, "recorded": datetime.datetime.now().isoformat(timespec="seconds"),
-                 "job": j, "estimate": job.get("estimate"), "message": msg, "attempts": u["attempts"]}, indent=1, default=str), encoding="utf-8")
+                 "job": j, "estimate": job.get("estimate"), "message": msg, "attempts": u["attempts"], "batch": u["batch"]}, indent=1, default=str), encoding="utf-8")
         return super()._result(job, rec)
 
 
@@ -203,8 +204,10 @@ def _cost(case_used, model):
     u, est = case_used.get("usage"), case_used.get("estimate") or {}
     if u:
         tin = u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0)
-        tout, cost = u.get("output_tokens", 0), usd(case_used.get("model") or model, u)
+        bat = bool(case_used.get("batch"))
+        tout, cost = u.get("output_tokens", 0), usd(case_used.get("model") or model, u, bat)
         how = {"replay": "recorded usage (replay)", "cached": "recorded usage (cached)"}.get(case_used.get("via"), "API usage")
+        how += " (batch: half price)" if bat else ""
         earlier = (case_used.get("attempts") or [])[:-1]          # answers before the kept one (route escalations)
         for a in earlier:
             au = a.get("usage") or {}
@@ -271,12 +274,13 @@ def summarize(rows):
 
 def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=None, replay=None, sources=None,
         families=None, ids=None, offline=False, cache="out/http_cache", http=None, api_key=None, rules=None, providers=None,
-        tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None, repeat=1):
+        tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None, repeat=1, batch=False):
     """repeat: run the same cases again (into <out>/repeat-2 ...) and report how many parts gave the same files
     (summary["consistency"]): from the recorded answers when there are any (--record / --replay: the code must be
     deterministic), else live again (the model's own consistency; this pays again).
     provider / base_url / assist / api_key_env: the [ai] settings for this run (ecadlib.llm), so models from any
-    provider can be compared on the same set: e.g. provider="ollama", model="qwen2.5:7b" against the Claude default."""
+    provider can be compared on the same set: e.g. provider="ollama", model="qwen2.5:7b" against the Claude default.
+    batch: the datasheet reads go out as one Message Batch (half price; the run waits for it)."""
     data = load_set(set_name)
     cases = select(data["cases"], families, ids, limit)
     if not cases:
@@ -299,9 +303,10 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     if http is None:
         from ..httpcache import CachedHTTP
         http = CachedHTTP(cache, min_interval=0.5, offline=offline, timeout=60)
-    reader = EvalReader(lib, cache, api_key, rules, http, model=model, record=record, replay=replay, log=lambda *a: None)
+    reader = EvalReader(lib, cache, api_key, rules, http, model=model, record=record, replay=replay, log=lambda *a: None,
+                        batch=bool(batch and not replay))
     mode = "replay" if replay else "estimate (no API key: nothing sent)" if reader.estimate_only else \
-        "live, recording" if record else "live"
+        ("live, recording" if record else "live") + (", batch" if reader.batch else "")
     inf = reader.info(reader.model)
     log(f"  eval {data['meta']['name']}: {len(cases)} cases, sources {','.join(sources)}, model {reader.model} "
         f"({inf['ep']['name']}, {inf['plan']['tier']} tier, assist {inf['plan']['assist']}), {mode}")

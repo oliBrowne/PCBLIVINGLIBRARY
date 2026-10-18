@@ -141,7 +141,7 @@ async function local(browser, width) {
     check("plan says what next" + w, /Dry run/.test(await text(p, "#planout .next")));
     await p.click("#dry");
     await p.waitForSelector("#dryout .next", { timeout: 20000 });
-    check("dry run says how to push" + w, /NEXAR_TOKEN/.test(await text(p, "#dryout .next")), await text(p, "#dryout"));
+    check("dry run says how to push" + w, /Nexar token/.test(await text(p, "#dryout .next")), await text(p, "#dryout"));
   });
   await step("queue" + w, async () => {
     await p.locator("#qrows [data-open]").first().click();
@@ -191,7 +191,7 @@ async function demo(browser, width) {
   // your library: a tile per tool, that tool's library, every tool side by side, and a part page
   await p.click('#steps a[href="#hubcard"]');
   await p.waitForFunction(() => document.querySelectorAll("#hubrows tr").length >= 6 && /AO3401A/.test(document.querySelector("#hubrows").innerText), null, { timeout: 30000 });
-  check("library: a tile per tool, the busiest one open" + w, await p.locator("#hubtools [data-hubtool]").count() >= 6 &&
+  check("library: a tile per tool, the busiest one open" + w, await p.locator("#hubtools [data-hubtool]").count() >= 4 &&
     await p.locator('#hubtools [aria-selected="true"]').count() === 1 && /library/i.test(await text(p, "#hubhead")));
   await p.locator('#hubtools [data-hubtool="kicad"]').click();
   await p.waitForFunction(() => document.querySelector('[data-hubtool="kicad"]').getAttribute("aria-selected") === "true", null, { timeout: 30000 });

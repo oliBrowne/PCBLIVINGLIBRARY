@@ -640,7 +640,7 @@ def compare_footprints(k, a, export=False, model_ok=None):
     elif ck and any(abs(p - q) > TOL["courtyard"] for p, q in zip(ck, ca)):
         _d(out, "error", "courtyard", "extent", ck, ca, "x0, y0, x1, y1 mm")
     fk, fa = k.get("fab_ref"), a.get("fab_designator")
-    if "fab_designator" not in a:             # the other side is not an Altium footprint (EAGLE, EasyEDA Pro read-back)
+    if "fab_designator" not in a:             # the other side is not an Altium footprint
         pass
     elif fk and not fa:                       # the assembly drawing's designator (KiCad ${REFERENCE} on F.Fab):
         # a warning, so footprints older ecadlib wrote without one are not held

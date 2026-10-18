@@ -49,6 +49,8 @@ def main(argv=None):
     r.add_argument("--repeat", type=int, default=1, metavar="N",
                    help="run the cases N times (the repeats from the recorded answers when --record/--replay) and report "
                         "how many parts gave the same files")
+    r.add_argument("--batch", action="store_true", help="send the datasheet reads as one Message Batch (half price; "
+                                                         "answers can take minutes to hours)")
     r.add_argument("--offline", action="store_true", help="HTTP cache only")
     r.add_argument("--cache", default="out/http_cache")
     r.add_argument("--rules", help="library rules file")
@@ -105,7 +107,7 @@ def main(argv=None):
         tol[k] = float(v)
     rep = R.run(a.set, a.out, a.limit, a.model, a.record, a.replay, _list(a.sources), _list(a.family), _list(a.case),
                 a.offline, a.cache, rules=a.rules, providers=a.providers, tol=tol, provider=a.provider,
-                base_url=a.base_url, assist=a.assist, api_key_env=a.api_key_env, repeat=a.repeat)
+                base_url=a.base_url, assist=a.assist, api_key_env=a.api_key_env, repeat=a.repeat, batch=a.batch)
     if a.json:
         print(json.dumps(rep["summary"], indent=1))
     else:
