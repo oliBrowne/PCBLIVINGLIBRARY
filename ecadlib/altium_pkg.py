@@ -456,9 +456,21 @@ def script_bytes(fname, text):
                          f"this file in; rename the file or library that brings it in") from None
 
 
-def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=True):
+def ecadlib_made(src):
+    """Files in a folder that say ecadlib wrote its libraries (a DbLib sync record, build recipes, edit records)."""
+    src = Path(src)
+    marks = [src / "ecadlib_sync.json"] if (src / "ecadlib_sync.json").is_file() else []
+    for pat in ("*.ecadbuild", "*.ecadstate"):
+        marks += sorted(src.rglob(pat))[:3]
+    return marks
+
+
+def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=True, plan=None, unchecked=False):
     """Write the Altium hand-off folder; returns the report dict (also altium_pkg.json). native: write the build
-    recipes as ecadlib_build.txt + ecadlib_build.pas so the install script lets Altium write the libraries itself."""
+    recipes as ecadlib_build.txt + ecadlib_build.pas so the install script lets Altium write the libraries itself.
+    plan: for a folder, the plan.json of the ecadlib library its files come from (else found beside the folder or in
+    an earlier altium_pkg.json). unchecked: package a folder of ecadlib-made files whose library is not known without
+    checking them against the released revisions (the report and the output say so)."""
     src, out = Path(src), Path(out)
     check_name(name)
     out.mkdir(parents=True, exist_ok=True)
@@ -475,16 +487,23 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
     elif src.is_dir():
         kept = []
         from . import change_gate as CG
-        lib = library_of(src)
+        if plan and not Path(plan).is_file():
+            raise FileNotFoundError(f"{plan}: no such plan.json")
+        lib = Path(plan).resolve() if plan else library_of(src)
         with CG.publishing(lib.parent) if lib else contextlib.nullcontext():
             if lib:                            # change control (#105): only the released revisions leave the library
                 check_released(src, lib, rules)
-            elif (src / "ecadlib_sync.json").is_file():
-                raise ValueError(f"{src}: an ecadlib DbLib folder whose library is not known (no altium_pkg.json naming "
-                                 f"its plan), so its files cannot be checked against the released revisions: package "
-                                 f"the plan.json instead (ecadlib altium-pkg PLAN --out {src})")
+            elif ecadlib_made(src) and not unchecked:
+                marks = ", ".join(m.relative_to(src).as_posix() for m in ecadlib_made(src)[:3])
+                raise ValueError(f"{src}: these are ecadlib-made libraries ({marks}) but their library is not known (no "
+                                 f"plan.json beside them, no altium_pkg.json naming it), so they cannot be checked "
+                                 f"against the released revisions: name it with --plan PLAN, package the plan.json "
+                                 f"itself, or pass --unchecked to package them as they are")
             files = collect(src, out, kept)
         rep["kept_edits"] = kept
+        rep["checked"] = str(lib) if lib else None
+        if not lib and unchecked:
+            rep["unchecked"] = True
     else:
         raise FileNotFoundError(f"{src}: no such plan.json or folder")
     models = sorted((p for p in files if p.suffix.lower() in MODEL_EXT and p.resolve().is_relative_to(out.resolve())),
@@ -507,7 +526,9 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
             (f"{name}_Install.PrjScr", script_bytes(f"{name}_Install.PrjScr", prjscr_text(f"{name}_Install.pas", *more))),
             (f"{name}_Install.pas", script_bytes(f"{name}_Install.pas", install_script(name, dblibs, libpkg, docs, native))),
             ("ALTIUM_README.txt", readme_text(name, libpkg, dblibs, sum(1 for d in docs if d.lower().endswith(".schlib")),
-                                              sum(1 for d in docs if d.lower().endswith(".pcblib"))).encode("utf-8"))]
+                                              sum(1 for d in docs if d.lower().endswith(".pcblib"))).encode("utf-8")
+                                  + (b"\nNOT CHECKED: packaged with --unchecked. These libraries were not compared with "
+                                     b"any released revision of an ecadlib library.\n" if rep.get("unchecked") else b""))]
     for fname, data in outs:                                    # can't hold leaves no half-written package
         p = out / fname
         if not p.is_file() or p.read_bytes() != data:
@@ -536,10 +557,15 @@ def main(argv=None):
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan)")
     ap.add_argument("--no-native-build", action="store_true", help="leave out the build recipes: Altium installs the "
                     ".SchLib / .PcbLib files ecadlib wrote instead of rebuilding them with its own API first")
+    ap.add_argument("--plan", help="with a folder: the plan.json of the ecadlib library its files come from (they are "
+                                   "checked against its released revisions)")
+    ap.add_argument("--unchecked", action="store_true", help="with a folder of ecadlib-made files whose library is "
+                    "not known: package them without checking them against released revisions")
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
     a = ap.parse_args(argv)
     try:
-        rep = build(a.src, a.out, a.name, a.win_dir, a.rules, native=not a.no_native_build)
+        rep = build(a.src, a.out, a.name, a.win_dir, a.rules, native=not a.no_native_build, plan=a.plan,
+                    unchecked=a.unchecked)
     except (OSError, ValueError) as e:
         print(f"ecadlib altium-pkg: {e}", file=sys.stderr)
         return 2
@@ -550,6 +576,9 @@ def main(argv=None):
     t = TM.Term()
     for p in rep["problems"]:
         t.note(M.clean(p), "fix the part in the plan (ecadlib review), then run altium-pkg again")
+    if rep.get("unchecked"):
+        t.note("--unchecked: these libraries were packaged as they are, not checked against any released revision",
+               "package the library's plan.json (or pass --plan) for a checked package")
     if rep["sync"]:
         t.detail(f"  database library: {rep['sync']}")
     t.summary(f"{len(rep['documents'])} Altium libraries packed ({M.plural(rep['symbols'], 'symbol')}, "

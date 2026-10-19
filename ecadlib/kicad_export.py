@@ -258,7 +258,8 @@ def symbol_from_schlib(path, name, notes, pick=None):
             x, y, L = r["x"] * 0.254, r["y"] * 0.254, r["length"] * 0.254
             nm = _kicad_pin_name(r["name"]) or "~"
             if r["conglomerate"] & 0x04 and hidden_net.get(ri):   # Altium ties a hidden pin to its HiddenNetName net;
-                nm = hidden_net[ri]                                # KiCad ties a hidden power pin to the net of its name
+                nm = _kicad_pin_name(hidden_net[ri])               # KiCad ties a hidden power pin to the net of its name
+                #                                                  (an Altium overbar is KiCad's ~{...}, as on a pin name)
                 K._note(notes, "hidden pins named after their Altium HiddenNetName (KiCad connects them by name)")
             spot = (r["part"], r["mode"], r["x"], r["y"], r["orient"])
             lead = spots.get(spot) if not r["conglomerate"] & 0x04 else None
