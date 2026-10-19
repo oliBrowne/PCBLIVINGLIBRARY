@@ -504,7 +504,9 @@ def test_a_parity_refusal_says_what_to_do():
     e = raises(CC.approve, plan, ["AO3401A"], ANN, digests={"AO3401A": d}, contains="parity")
     from ecadlib import cliutil
     msg, hint, code = cliutil.friendly(e)
-    assert hint and "other file" in hint and "part reject" in hint, (msg, hint)
+    assert hint and "edit the .PcbLib too" in hint and "fp-edit" in hint and "part reject" in hint, (msg, hint)
+    rc, out = run_cli("approve", lib, "--part", "AO3401A", "--digest", d[:12], "-m", "ok", "--user", ANN)
+    assert rc == 2 and "hint: only the .kicad_mod was edited" in out, out
 
 
 def test_odd_pin_numbers_and_invisible_characters_in_messages():
@@ -553,3 +555,238 @@ def test_an_approval_killed_while_putting_files_in_place_is_not_an_overwrite():
     it = item(items_of(plan), "AO3401A")
     head = LG.Ledger(lib).head("AO3401A")
     assert CC._mix_of(it, lib, (head,)) is True
+
+
+# ================================================================ round 4, second pass (the critic's re-test: B1-B9)
+def _lock_status(lib, part, status):
+    """Set (or with None remove) the status library.lock.json recorded for a part when the librarian built it."""
+    from ecadlib import rebuild as RB
+    f = lib / RB.LOCK
+    lk = json.loads(f.read_text(encoding="utf-8"))
+    for name, rec in lk["parts"].items():
+        if part in (name, "*"):
+            if status is None:
+                rec.pop("status", None)
+            else:
+                rec["status"] = status
+    f.write_text(json.dumps(lk, indent=1), encoding="utf-8")
+
+
+def test_the_lock_records_each_parts_status_when_built():
+    from ecadlib import rebuild as RB
+    plan, lib = demo()
+    lk = json.loads((lib / RB.LOCK).read_text(encoding="utf-8"))
+    st = {n: r.get("status") for n, r in lk["parts"].items()}
+    assert st["AO3401A"] == "ready" and st.get("CH340C") in (None, "held"), st
+
+
+def test_a_part_held_at_its_first_build_and_fixed_by_hand_is_no_lost_release():
+    """B1: in a new library a part held by the release check and then fixed by hand (or by resolve) before its first
+    release differs from library.lock.json. That was taken as proof of a lost release, and kicad-export refused the
+    whole library. The lock now records each part's status at build time; only a part released then counts.
+    release-check --allow records the release itself (revision 1)."""
+    from ecadlib import kicad_export as KX
+    plan, lib = demo()
+    _lose_all(lib, stamp=False)                # a brand-new library: no ledger yet
+    _lock_status(lib, "AO3401A", "held")       # held when the librarian built it
+    write_symbol(lib, item(items_of(plan), "AO3401A"), SGD)    # fixed by hand before its first release
+    g = CG.Guard(lib, "kicad-export")
+    assert not g.lost_history("AO3401A", item(items_of(plan), "AO3401A"))
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        rc = RC.main([str(plan), "--allow", "AO3401A", "--user", ANN])
+    head = LG.Ledger(lib).head("AO3401A")
+    assert head and head["revision"] == 1 and head.get("writer") == "release-allow", (rc, head)
+    rep = KX.export(plan, lib.parent / "kx", "t", log=_quiet)
+    assert not rep["errors"] and LG.Ledger(lib).head("KT-0603R")["revision"] == 1
+
+
+def test_a_lock_without_statuses_is_no_sign_of_a_lost_release():
+    """B1: a library built before the lock recorded statuses (pre-#105, or #105's first versions) and edited after the
+    build (resolve, review) upgrades without a refusal."""
+    from ecadlib import kicad_export as KX
+    plan, lib = demo()
+    _lose_all(lib, stamp=False)
+    _lock_status(lib, "*", None)
+    write_symbol(lib, item(items_of(plan), "AO3401A"), SGD)
+    rep = KX.export(plan, lib.parent / "kx", "t", log=_quiet)
+    assert not rep["errors"] and LG.Ledger(lib).head("AO3401A")["revision"] == 1
+
+
+def test_release_anyway_and_the_web_ui_record_the_release():
+    from ecadlib import review_cli as RV
+    plan, lib = demo()
+    _lose_all(lib, stamp=False)
+    _lock_status(lib, "*", "held")
+    RV.release_anyway(plan, "AO3401A", user=ANN)
+    assert LG.Ledger(lib).head("AO3401A")["revision"] == 1
+    from ecadlib.app import Workspace
+    Workspace(lib.parent.parent, [], offline=True).release_check("uploads/demo/demo_bom.csv", allow=["KT-0603R"], user=BOB)
+    assert LG.Ledger(lib).head("KT-0603R")["revision"] == 1
+
+
+def _proj(d, nick_fp="TFp", inst="TFp:SOT23", board="TFp:SOT23", extra_table=""):
+    from tests.test_project_check import make_project
+    pro = make_project(d)
+    d = Path(d)
+    if nick_fp != "TFp" or extra_table:
+        (d / "fp-lib-table").write_text('(fp_lib_table (version 7)\n  (lib (name "%s")(type "KiCad")(uri "${KIPRJMOD}/lib/'
+                                        'TFp.pretty")(options "")(descr ""))\n%s)\n' % (nick_fp, extra_table), encoding="utf-8")
+    sch = (d / "board.kicad_sch").read_text(encoding="utf-8")
+    sch = sch.replace('(property "Footprint" "TFp:SOT23" (at 50 50 0)', f'(property "Footprint" "{inst}" (at 50 50 0)')
+    if nick_fp != "TFp" or extra_table:       # the whole project uses the other nickname (Q1 is changed above)
+        sch = sch.replace('(property "Footprint" "TFp:SOT23" (at 50 60 0)', f'(property "Footprint" "{inst}" (at 50 60 0)')
+    (d / "board.kicad_sch").write_text(sch, encoding="utf-8")
+    pcb = (d / "board.kicad_pcb").read_text(encoding="utf-8")
+    (d / "board.kicad_pcb").write_text(pcb.replace('"TFp:SOT23"', f'"{board}"', -1 if nick_fp != "TFp" or extra_table
+                                                   else 1), encoding="utf-8")
+    return pro
+
+
+def test_project_check_compares_each_placed_symbols_footprint_and_the_boards():
+    """B2: only the schematic's cached copy was compared. A placed symbol whose own Footprint property names another
+    footprint, or a board footprint with another lib_id, is not the part the library releases."""
+    from ecadlib import project_check as PJ
+    from tests.test_project_check import lib_fp
+    with tempfile.TemporaryDirectory() as d:
+        pro = _proj(d, inst="TFp:SOT23B")
+        (Path(d) / "lib" / "TFp.pretty" / "SOT23B.kicad_mod").write_text(lib_fp("SOT23B"), encoding="utf-8")
+        sym = next(r for r in PJ.check_kicad(pro, use_global=False)["rows"] if r["kind"] == "symbol")
+        assert sym["action"] == "hold" and any("Q1 places TFp:SOT23B (its Footprint property)" in c["text"]
+                                               for c in sym["changes"]), sym["changes"]
+    with tempfile.TemporaryDirectory() as d:
+        pro = _proj(d, board="TFp:SOT23B")
+        (Path(d) / "lib" / "TFp.pretty" / "SOT23B.kicad_mod").write_text(lib_fp("SOT23B"), encoding="utf-8")
+        sym = next(r for r in PJ.check_kicad(pro, use_global=False)["rows"] if r["kind"] == "symbol")
+        assert sym["action"] == "hold" and any("(the board)" in c["text"] for c in sym["changes"]), sym["changes"]
+
+
+def test_another_nickname_for_the_same_footprint_library_is_no_change():
+    """B3: a project that names the library's .pretty with another nickname got a false hold."""
+    from ecadlib import project_check as PJ
+    from tests.test_project_check import states
+    with tempfile.TemporaryDirectory() as d:
+        pro = _proj(d, extra_table='  (lib (name "Other")(type "KiCad")(uri "${KIPRJMOD}/lib/TFp.pretty")(options "")(descr ""))\n',
+                    inst="Other:SOT23", board="Other:SOT23")
+        res = PJ.check_kicad(pro, use_global=False)
+        sym = next(r for r in res["rows"] if r["kind"] == "symbol")
+        assert sym["action"] != "hold" and res["held"] == 0, res["rows"]
+    with tempfile.TemporaryDirectory() as d:          # the library's own nickname is not in this project's table
+        pro = _proj(d, nick_fp="Mine", inst="Mine:SOT23", board="Mine:SOT23")
+        res = PJ.check_kicad(pro, use_global=False)
+        assert res["held"] == 0, res["rows"]
+
+
+def test_altium_pkg_refuses_a_copy_of_ecadlib_files_whose_library_is_unknown():
+    """B4: a plain copy of a library's models/ folder (no plan beside it) was packaged unchecked."""
+    from ecadlib import altium_pkg as AP
+    plan, lib = demo()
+    own = lib.parent / "copy" / "AltiumLib"
+    shutil.copytree(lib / "models", own)
+    raises(AP.build, own, lib.parent / "p0", log=_quiet, exc=ValueError, contains="--plan PLAN")
+    rep = AP.build(own, lib.parent / "p1", log=_quiet, plan=plan)
+    assert rep["checked"] and not rep.get("unchecked")
+    write_symbol(lib, item(items_of(plan), "AO3401A"), SGD)
+    shutil.copy(lib / item(items_of(plan), "AO3401A")["symbol"]["file"], own / "SchLib")
+    raises(AP.build, own, lib.parent / "p2", log=_quiet, plan=plan, exc=ValueError, contains="AO3401A")
+    rep = AP.build(own, lib.parent / "p3", log=_quiet, unchecked=True)
+    assert rep["unchecked"] and "NOT CHECKED" in (lib.parent / "p3" / "ALTIUM_README.txt").read_text(encoding="utf-8")
+
+
+def test_kicad_pcm_packages_a_foreign_folder_only_with_unchecked():
+    """B5: a KiCad folder ecadlib did not export is packaged only with --unchecked, and the package says so."""
+    from ecadlib import kicad_export as KX, kicad_pcm as PCM
+    plan, lib = demo()
+    out = lib.parent / "kx"
+    KX.export(plan, out, "t", log=_quiet)
+    (out / "kicad_export.json").unlink()
+    raises(PCM.build, out, lib.parent / "pcm0", log=_quiet, exc=ValueError, contains="--unchecked")
+    rep = PCM.build(out, lib.parent / "pcm1", log=_quiet, unchecked=True)
+    import zipfile
+    z = zipfile.ZipFile(rep["zip"])
+    assert rep["unchecked"] and "NOT CHECKED" in z.read("NOTICE.txt").decode("utf-8")
+
+
+def test_an_altium_overbar_in_a_hidden_pins_net_is_kicads_overbar():
+    """B6: a hidden pin's HiddenNetName 'V\\C\\C\\' was exported as KiCad net 'V\\C\\C\\', not '~{VCC}'."""
+    from ecadlib import altium_lib as AL, kicad_export as KX, kicad_import as K
+    sym_text = ('(kicad_symbol_lib (version 20231120) (generator "t") (symbol "P" (property "Reference" "U" (at 0 0 0)) '
+                '(property "Value" "P" (at 0 0 0)) (symbol "P_1_1" (pin input line (at -5.08 0 0) (length 2.54) '
+                '(name "IN" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27))))) '
+                '(pin power_in line (at 0 5.08 270) (length 2.54) (hide yes) (name "VCC" (effects (font (size 1.27 1.27)))) '
+                '(number "2" (effects (font (size 1.27 1.27))))))))')
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "t.kicad_sym").write_text(sym_text, encoding="utf-8")
+        chain, _ = K.load_symbol(f"{d}/t.kicad_sym:P", None)
+        sym = K.convert_symbol(chain, "P", notes=[])
+
+        def walk(x):
+            if isinstance(x, dict):
+                if x.get("net") == "VCC":
+                    x["net"] = "V\\C\\C\\"
+                for v in x.values():
+                    walk(v)
+            elif isinstance(x, (list, tuple)):
+                for v in x:
+                    walk(v)
+        walk(sym)
+        AL.write_schlib(Path(d) / "p.SchLib", [sym])
+        tree = KX.symbol_from_schlib(Path(d) / "p.SchLib", "P", [])
+        names = [str(n[1]) for n in sexpr.find(tree, "name") if len(n) > 1] if not isinstance(tree, str) else []
+        text = sexpr.dumps(tree) if not isinstance(tree, str) else tree
+        assert "~{VCC}" in text and "V\\\\C" not in text and "V\\C\\C" not in text, (names, text[:600])
+
+
+def test_previews_show_an_unsettled_hand_edit_as_held_and_write_nothing():
+    """B7: the web UI / MCP Altium 365 plan and `altium365 push --dry-run` showed a hand edit not yet settled as
+    ready, with its new value. They show it held, and change nothing."""
+    from ecadlib.app import Workspace
+    plan, lib = demo()
+    _hand_edit_value(plan, "RES-0603-10k", "1k")
+    before, n = plan.read_bytes(), len(LG.Ledger(lib).lines())
+    r = Workspace(lib.parent.parent, [], offline=True).altium365_plan("uploads/demo/demo_bom.csv")
+    it = item(r["items"], "RES-0603-10k")
+    assert it["status"] == "held" and any("not yet settled" in h for h in it["hold_reasons"]), it
+    assert plan.read_bytes() == before and len(LG.Ledger(lib).lines()) == n
+    from ecadlib import altium365 as A
+    out = lib.parent / "dry.json"
+    with contextlib.redirect_stdout(io.StringIO()), mock.patch.dict(os.environ, {"NEXAR_TOKEN": ""}):
+        A.main(["push", str(plan), "--workspace", "https://x.365.altium.com", "--dry-run", "-o", str(out)])
+    rows = {x["name"]: x for x in json.loads(out.read_text(encoding="utf-8"))}
+    assert rows["RES-0603-10k"]["action"] not in ("release", "update", "revision"), rows["RES-0603-10k"]
+    assert plan.read_bytes() == before and len(LG.Ledger(lib).lines()) == n
+
+
+def test_the_same_name_with_two_emails_is_two_people():
+    """B9: when both identities give an e-mail, the e-mail decides; the name decides only when one has none."""
+    from ecadlib import approvals as AP
+    assert not AP.same_person("Ann Lee <ann@x.com>", "Ann Lee <ann.lee@y.com>")
+    assert AP.same_person("Ann Lee <ann@x.com>", "Ann Lee") and AP.same_person("Ann Lee <ann@x.com>", "A. N. Other <ann@x.com>")
+    assert AP.same_person("Ann Lee <ann@x.com>", "Аnn Lee")
+
+
+def test_adopt_all_adopts_the_clean_parts_and_lists_the_rest():
+    plan, lib = demo()
+    led = lib / LG.LEDGER
+    led.write_text("".join(l + "\n" for l in led.read_text(encoding="utf-8").splitlines()
+                           if '"AO3401A"' not in l and '"KT-0603R"' not in l), encoding="utf-8")
+    write_symbol(lib, item(items_of(plan), "AO3401A"), SGD)
+    rows = {r["part"]: r for r in CC.adopt(plan, [], ANN, "checked", all_lost=True)}
+    assert rows["KT-0603R"]["result"] == "adopted" and rows["AO3401A"]["result"] == "refused", rows
+    assert any("swapped" in c for c in rows["AO3401A"]["changes"]), rows["AO3401A"]
+    lg = LG.Ledger(lib)
+    assert lg.head("KT-0603R") and not lg.head("AO3401A")
+    rc, out = run_cli("adopt", lib, "--all", "-m", "again")
+    assert rc == 2 or ("refused" in out and rc == 1), (rc, out)
+
+
+def test_demo_over_an_edited_bom_says_it_reset_it():
+    from ecadlib import firstrun as FR
+    from ecadlib.app import Workspace
+    plan, lib = demo()
+    ws_root = lib.parent.parent
+    bom = ws_root / "uploads" / "demo" / "demo_bom.csv"
+    bom.write_text(bom.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    said = []
+    FR.build_demo(Workspace(ws_root, offline=True), "altium", log=lambda *a: said.append(" ".join(map(str, a))))
+    assert any("reset" in s and ".edited" in s for s in said), said
+    assert (bom.parent / "demo_bom.csv.edited").is_file() and bom.read_bytes() == FR.DEMO_BOM.read_bytes()
