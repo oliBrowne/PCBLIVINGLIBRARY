@@ -39,7 +39,7 @@ def golden_path(work, fa, nx, tls, first=True):
     if first:
         assert not any(work.iterdir()), "the golden path starts in an empty folder"
     rules = (work / "ecadlib.toml").read_text() if not first else None
-    out["init"] = E.ecadlib(work, "init", "--yes", env=env, check=first)
+    out["init"] = E.ecadlib(work, "init", "--yes", "--unofficial", env=env, check=first)
     assert (work / "ecadlib.toml").is_file()
     if not first:                  # init again: the rules file is never replaced without --force (a .proposed is written)
         assert out["init"].returncode in (0, 1) and (work / "ecadlib.toml").read_text() == rules, out["init"].stdout[-2000:]

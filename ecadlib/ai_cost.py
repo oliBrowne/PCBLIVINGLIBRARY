@@ -5,15 +5,16 @@ The Altium dialog, the KiCad window and the web UI never start a paid model call
   1. the free part runs first (Fill the library / Add part: every free source; the house style scan). Parts only a
      datasheet read can finish are priced, not sent: `quote()` -> the model, about how much, at most how much;
   2. the person says yes (a second, explicit yes when the most it can cost is above the limit: [datasheet]
-     max_cost_usd when set, else [datasheet] ask_above_usd, default $1.00, or when the model's price is unknown);
+     max_cost_usd when you set one, else [datasheet] ask_above_usd, default $1.00, or when the model's price is unknown);
   3. the reads run held to what was approved (`approve()`: the Reader's max_cost_usd becomes the approved amount,
      so a retry or a bigger answer can never spend more than the person saw), and `after()` puts what the cost
      ledger (<plan folder>/datasheet/cost.jsonl) recorded for this run next to the estimate.
 
 Estimates come from datasheet.Reader.estimate (exact input token counts with a key, pages x PAGE_TOKENS without)
 plus the cross-check's second read where [datasheet] cross_check may make one. "at most" is the worst case: every
-answer at max_tokens and every step of the part's route. The command line keeps `ecadlib datasheet estimate` and
---yes; the library agent keeps its own [agent.proof] max_cost_usd."""
+answer at max_tokens and every step of the part's route. The command line keeps `ecadlib datasheet estimate`; it
+refuses a run over [datasheet] max_cost_usd (default $10 per run, --max-cost-usd changes it, --yes does not lift it);
+the library agent keeps its own [agent.proof] max_cost_usd."""
 import json
 import math
 from pathlib import Path
@@ -27,7 +28,7 @@ def limit(rules=None):
     from . import datasheet as D
     s = D.settings(rules)
     cap = float(s.get("max_cost_usd") or 0)
-    if cap > 0:
+    if cap > 0 and cap != D.DEFAULT_MAX_COST_USD:     # a cap you set; the default one is for unattended runs
         return cap, "max_cost_usd"
     return float(s.get("ask_above_usd") or 0), "ask_above_usd"
 

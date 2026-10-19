@@ -90,7 +90,7 @@ def test_split_evidence_asks_one_question():
         assert RU.load(out)["naming"]["by_category"]["Resistors"] == "{cat3}_{package}_{value}_{tolerance}"
         # interactive: the person picks the second choice
         out2 = Path(d) / "two.toml"
-        answers = iter(["", "", "", "", "", "2"])         # Enter for the 5 setup questions, then the 2nd naming choice
+        answers = iter(["", "", "", "", "", "", "2"])     # Enter for the 6 setup questions, then the 2nd naming choice
         assert quiet(I.main, ["--from", str(lib), "-o", str(out2)], inp=lambda *_: next(answers)) == 0
         assert RU.load(out2)["naming"]["by_category"]["Resistors"] == "{mpn}"
         assert "you chose this value" in out2.read_text()
