@@ -356,7 +356,8 @@ def test_altium_pkg_folder_is_checked_against_the_released_revisions():
     shutil.copy(sch, hand / sch.name)
     sch.write_bytes(keep)
     raises(AP.check_released, hand.parent, plan, exc=ValueError, contains="AO3401A r1")
-    assert AP.library_of(lib / "models") == lib / "plan.json"
+    # resolved on both sides: a Windows temp folder can be named by its 8.3 short name (C:\Users\RUNNER~1\...)
+    assert AP.library_of(lib / "models") == (lib / "plan.json").resolve()
 
 
 # ---------------------------------------------------------------- H4: project check, the Footprint field
@@ -521,17 +522,42 @@ def test_odd_pin_numbers_and_invisible_characters_in_messages():
 
 
 def test_a_broken_pipe_is_quiet():
-    r = subprocess.run(f'"{sys.executable}" -m ecadlib --help | head -c 10', shell=True, cwd=ROOT, capture_output=True,
-                       text=True, timeout=120)
-    assert "Traceback" not in r.stderr and "BrokenPipe" not in r.stderr, r.stderr
+    """A reader that goes away after 10 bytes (`| head -c 10`, done in Python: Windows has no head). POSIX reports
+    it as BrokenPipeError, Windows as OSError EINVAL; both stop quietly."""
+    import errno
+    p = subprocess.Popen([sys.executable, "-m", "ecadlib", "--help"], cwd=ROOT, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE)
+    p.stdout.read(10)
+    p.stdout.close()
+    err = p.stderr.read().decode("utf-8", "replace")
+    p.wait(timeout=120)
+    p.stderr.close()
+    assert "Traceback" not in err and "BrokenPipe" not in err and "Errno" not in err, err
     from ecadlib import cli
 
-    def boom(*a, **k):
-        raise BrokenPipeError
-    with mock.patch.object(cli, "os") as fake_os, mock.patch("importlib.import_module") as imp:
-        imp.return_value.main = boom
-        assert cli.main(["part", "status", "x"]) == 1
-        assert fake_os.dup2.called
+    class Gone(io.StringIO):                   # stdout whose reader went away the Windows way
+        def write(self, s=""):
+            raise OSError(errno.EINVAL, "Invalid argument")
+        flush = write
+        def fileno(self):
+            return 1
+    for exc in (BrokenPipeError, OSError(errno.EINVAL, "Invalid argument")):
+        def boom(*a, **k):
+            raise exc
+        with mock.patch.object(cli, "os") as fake_os, mock.patch("importlib.import_module") as imp, \
+                mock.patch.object(sys, "stdout", Gone()):
+            imp.return_value.main = boom
+            assert cli.main(["part", "status", "x"]) == 1
+            assert fake_os.dup2.called
+    with mock.patch.object(cli, "os") as fake_os, mock.patch.object(sys, "stdout", Gone()):
+        assert cli.main(["--help"]) == 1 and fake_os.dup2.called
+    err = io.StringIO()                         # an EINVAL that is not the pipe (stdout fine) is reported as an error
+    def bad(*a, **k):
+        raise OSError(errno.EINVAL, "Invalid argument: 'x'")
+    with mock.patch("importlib.import_module") as imp, mock.patch.object(sys, "stderr", err):
+        imp.return_value.main = bad
+        assert cli.main(["part", "status", "x"]) != 0
+    assert "Invalid argument" in err.getvalue(), err.getvalue()
 
 
 def test_an_approval_killed_while_putting_files_in_place_is_not_an_overwrite():

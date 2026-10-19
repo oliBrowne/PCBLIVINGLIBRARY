@@ -59,7 +59,7 @@
 `ecadlib <command> -h` shows that command's options. -q / --quiet prints only the outcome, -v / --verbose every
 detail; colour only on a terminal (NO_COLOR=1 or ECADLIB_COLOR=never turns it off). --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
 one-line error. ECADLIB_LIB, ECADLIB_WORKSPACE and ECADLIB_CONFIG are defaults for --lib, --workspace and the rules file."""
-import importlib, os, sys
+import errno, importlib, os, sys
 
 COMMANDS = {
     "setup": ("ecadlib.easy_setup", "open the setup page: AI model and key, Altium / KiCad, folders, add ecadlib to Altium and KiCad"),
@@ -140,7 +140,39 @@ for _cmd, _what in (("agent", "the library agent"), ("agent-watch", "the library
     REMOVED[_cmd] = f"{_what} is {_PARKED} (see CHANGELOG.md). The last code with it: {_ARCHIVE}"
 
 
+def _pipe_gone(e):
+    """The reader of stdout went away (`| head`, a closed pager): POSIX says EPIPE (BrokenPipeError); Windows says
+    EINVAL on the write, so there it counts only when stdout cannot be flushed either."""
+    if isinstance(e, BrokenPipeError) or getattr(e, "errno", None) == errno.EPIPE:
+        return True
+    if getattr(e, "errno", None) != errno.EINVAL:
+        return False
+    try:
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        return True
+    return False
+
+
+def _quiet_stdout():
+    """Point stdout at devnull, so the exit flush has nowhere to fail once the reader has gone."""
+    try:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):
+        pass
+    return 1
+
+
 def main(argv=None):
+    try:
+        return _main(argv)
+    except OSError as e:                                     # the top-level help or version line to a closed pipe
+        if not _pipe_gone(e):
+            raise
+        return _quiet_stdout()
+
+
+def _main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     from .cliutil import debug_wanted, env_defaults, report
     debug, argv = debug_wanted(argv)
@@ -188,13 +220,9 @@ def main(argv=None):
             raise
         print(f"ecadlib {argv[0]}: interrupted", file=sys.stderr)
         return 130
-    except BrokenPipeError:                                  # the reader went away (`| head`): stop quietly, and point
-        try:                                                 # stdout at devnull so the exit flush has nowhere to fail
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        except (OSError, ValueError, AttributeError):
-            pass
-        return 1
-    except Exception as e:                                   # one line + hint; --debug / ECADLIB_DEBUG=1: the traceback
+    except Exception as e:
+        if isinstance(e, OSError) and _pipe_gone(e):         # the reader went away (`| head`): stop quietly
+            return _quiet_stdout()                                   # one line + hint; --debug / ECADLIB_DEBUG=1: the traceback
         if debug:
             raise
         return report(argv[0], e, sys.stderr)
