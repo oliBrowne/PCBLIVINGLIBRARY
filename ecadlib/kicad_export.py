@@ -911,9 +911,8 @@ def print_result(rep, out, plan, t=None):
     t.summary(head, written=[(f"{out}/{lib}.kicad_sym", "symbols"), (f"{out}/{lib}.pretty/", "footprints"),
                              (f"{out}/sym-lib-table, fp-lib-table", "library tables (paths use ${KIPRJMOD})")],
               next=[(f"ecadlib kicad-export {plan} -o <your KiCad project folder> --name {lib}",
-                     "into the project itself: its own sym-lib-table / fp-lib-table rows are kept and this library's "
-                     "row is added (copying the tables over would drop the project's rows); or add the library in "
-                     "Preferences > Manage Symbol / Footprint Libraries"),
+                     "into the project: its own lib-table rows are kept (copying these tables over would drop them); "
+                     "or Preferences > Manage Symbol / Footprint Libraries"),
                     (f"ecadlib parity {plan} --kicad {out}", "check KiCad and Altium agree, part by part")]
               + ([(f"ecadlib review {plan}", "the held parts")] if rep["skipped"] else []))
 
