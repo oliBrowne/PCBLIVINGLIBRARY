@@ -346,10 +346,16 @@ def read_bom(path, columns=None, rules=None, root=None):
         if _not_a_part(d):                                               # 'Resistors' heading, 'Notes: ...' row
             skipped += 1
             continue
+        said = dnp_written(d)                                            # Value 'DNP' / '10k (DNF)', MPN 'DNP'
         if "dnp" in d or "fitted" in d:
+            flag = "the DNP column" if "dnp" in d else "the fitted column"
+            blank = not str(d.get("dnp", d.get("fitted", ""))).strip()
             d["dnp"] = dnp_cell(d.get("dnp", "")) or dnp_cell(d.pop("fitted", ""), "fitted")
-        elif dnp_value(d.get("value", "")) or DNP_MARK.fullmatch(d.get("mpn", "")):
-            d["dnp"] = True                                              # no DNP column: Value 'DNP' / '10k (DNF)'
+            if said and not d["dnp"]:                                    # the column left blank (KiCad 8 always
+                d["dnp"] = True                                          # exports one): the cell still decides
+                warn_dnp_written(d.get("designator", "?"), said, flag + (" is empty" if blank else " says fitted"))
+        elif said:
+            d["dnp"] = True                                              # no DNP column
         elif re.fullmatch(r"0+([.,]0+)?", d.get("qty", "")):
             d["dnp"] = True                                              # no DNP column, Quantity 0: an Altium variant
                                                                          # BOM's 'not fitted'
@@ -658,6 +664,20 @@ def dnp_value(v):
     """True when a Value / Comment / MPN cell says the part is not fitted: 'DNP', '10k (DNF)', 'No Pop', 'NF', 'N/F'."""
     v = str(v or "")
     return bool(DNP_MARK.search(v) or DNP_SHORT.fullmatch(v))
+
+
+def dnp_written(line):
+    """'Value' or 'MPN' when that cell of a BOM line says the part is not fitted ('DNP', '10k (DNF)'; the MPN only as
+    the whole cell), else ''.  Shared by the spreadsheet and KiCad readers (BOM-31, BOM-45)."""
+    if dnp_value(line.get("value", "")):
+        return "Value"
+    m = str(line.get("mpn", "") or "").strip()
+    return "MPN" if m and (DNP_MARK.fullmatch(m) or DNP_SHORT.fullmatch(m)) else ""
+
+
+def warn_dnp_written(designator, cell, flag_state="the DNP column is empty"):
+    """The Value / MPN cell says DNP but the explicit DNP flag does not: the line is treated as DNP, and said so."""
+    print(f"  warning: {designator}: {cell} says DNP but {flag_state}: treated as DNP; check the BOM", file=sys.stderr)
 
 
 def dnp_cell(v, column="dnp"):

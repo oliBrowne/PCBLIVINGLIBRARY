@@ -52,8 +52,12 @@ def test_dnp_written_in_the_value_or_mpn_cell():
     lines, _ = T.read_bom(_write("bom.csv", text))
     assert [bool(l.get("dnp")) for l in lines] == [False, True, True, True, False], lines
     assert lines[2]["value"] == "10k (DNF)", lines                      # the cell itself is kept as written
-    lines, _ = T.read_bom(_write("bom.csv", "Designator,Value,DNP\nR9,DNP,\n"))   # a DNP column decides
-    assert lines[0]["dnp"] is False, lines
+    import contextlib, io
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):                                # BOM-31: an empty DNP column (KiCad 8
+        lines, _ = T.read_bom(_write("bom.csv", "Designator,Value,DNP\nR9,DNP,\nR1,10k,\n"))   # exports one)
+    assert [l["dnp"] for l in lines] == [True, False], lines             # does not override the Value cell
+    assert "R9: Value says DNP but the DNP column is empty: treated as DNP" in err.getvalue(), err.getvalue()
     rows = T.triage(T.read_bom(_write("bom.csv", text))[0], T.KiCadIndex([]), [], None)
     assert rows[1]["status"].startswith("dnp"), rows[1]
 
