@@ -1,5 +1,5 @@
 """Datasheet getting and reading, 2026-10-19 (research: /mnt/project-files/research/2026-10-19_datasheet_pdf_research.md):
-tolerances printed in one cell ("6.5 ±0.2") become min/nom/max in code; every official datasheet link is kept and tried;
+every official datasheet link is kept and tried;
 the PDF's bookmarks steer the page picker; TI's Package Option Addendum gives the pin count by MPN."""
 import io, json
 from pathlib import Path
@@ -8,40 +8,6 @@ from ecadlib import bom_triage as T, datasheet as D, ds_route as R, part_lookup 
 from tests.test_ds_route import pdf_lines
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-# ---------------------------------------------------------------- tolerances
-def test_a_tolerance_in_one_cell_becomes_min_nom_max():
-    for v, want in (("6.5 ±0.2", (6.3, 6.5, 6.7)), ("6.5±0.2 mm", (6.3, 6.5, 6.7)), ("6.5 +/-0.2", (6.3, 6.5, 6.7)),
-                    ("6.5 (±0.2)", (6.3, 6.5, 6.7)), ("0.50 ±0.05 BSC", (0.45, 0.5, 0.55)),
-                    ("6.5 +0.1/-0.2", (6.3, 6.5, 6.6)), ("6.5 +0.1 -0.2", (6.3, 6.5, 6.6)), ("6.5 -0.2/+0.1", (6.3, 6.5, 6.6)),
-                    ("6.3~6.7", (6.3, None, 6.7)), ("6.3 to 6.7", (6.3, None, 6.7)), ("6.3 - 6.7", (6.3, None, 6.7)),
-                    ("6.3–6.7", (6.3, None, 6.7))):
-        assert D._wire_range(v) == want, (v, D._wire_range(v))
-    for v in ("0.50 BSC", "-0.05", "−0.05", "6.7-6.3", "1.2", "", None, "see note 3"):
-        assert D._wire_range(v) is None, v
-
-
-def test_the_wire_answer_fills_the_blank_cells_and_keeps_printed_ones():
-    assert D._wire_dim({"min": "", "nom": "6.5 ±0.2", "max": ""}, "D") == {"min": 6.3, "nom": 6.5, "max": 6.7}
-    assert D._wire_dim({"min": "6.2", "nom": "6.5 ±0.2", "max": ""}, "D") == {"min": 6.2, "nom": 6.5, "max": 6.7}
-    assert D._wire_dim({"min": "", "nom": "", "max": "6.3~6.7"}, "D") == {"min": 6.3, "nom": None, "max": 6.7}
-    assert D._wire_dim({"min": "0.40", "nom": "0.50", "max": "0.60"}, "b") == {"min": 0.4, "nom": 0.5, "max": 0.6}
-    try:
-        D._wire_dim({"min": "", "nom": "see note", "max": ""}, "D")
-        raise AssertionError("expected DatasheetError")
-    except D.DatasheetError as e:
-        assert "not a number" in str(e)
-    ans = {"package": {"dims": [{"name": "body_length", "label": "D", "min": "", "nom": "6.5 ±0.2", "max": "", "unit": "mm",
-                                 "page": 3, "figure": "Package outline"}], "other_json": "{}", "unresolved": []}}
-    got = D.from_wire(ans)["package"]["body_length"]
-    assert (got["min"], got["nom"], got["max"]) == (6.3, 6.5, 6.7), got
-
-
-def test_a_range_text_in_other_json_becomes_a_range():
-    s = {"type": "object", "properties": {"min": {"type": "number"}, "nom": {"type": "number"}, "max": {"type": "number"}}}
-    assert D._fit("1.0 ±0.1", s) == {"min": 0.9, "nom": 1.0, "max": 1.1}
-    assert D._fit("not a range", s) == "not a range"
 
 
 # ---------------------------------------------------------------- every official link

@@ -483,59 +483,6 @@ def wire_schema():
     return _obj(dict(full["properties"], package=_obj(props, full["properties"]["package"].get("description"))))
 
 
-def _wire_text(v):
-    """A printed value with its decoration taken off: "0.50 BSC", "1.27 TYP", "−0.05" (a Unicode minus), "6.5 mm"."""
-    s = str(v if v is not None else "").strip().replace(",", ".")
-    s = s.replace("\u2212", "-").replace("\u2013", "-").replace("\u2014", "-").replace("\uff5e", "~")
-    s = re.sub(r"\s*\b(BSC|TYP|TYPICAL|REF|NOM|MAX|MIN)\b\.?", "", s, flags=re.I).strip()
-    return re.sub(r"\s*\b(mm|mils?|in|inch)\b\.?", "", s, flags=re.I).strip()
-
-
-_NUM = r"(\d*\.?\d+)"
-
-
-def _wire_range(v):
-    """A tolerance or a range printed in one cell -> (min, nom, max), else None:
-    "6.5 ±0.2" / "6.5 +/-0.2" / "6.5 (±0.2)" -> (6.3, 6.5, 6.7); "6.5 +0.1/-0.2" / "6.5 +0.1 -0.2" -> (6.3, 6.5, 6.6);
-    "6.3~6.7" / "6.3 to 6.7" / "6.3 - 6.7" -> (6.3, None, 6.7). A drawing prints these when it has no min/nom/max
-    table; a model that copies the cell as printed (as asked) gives them as one value."""
-    s = _wire_text(v)
-    if not s:
-        return None
-    r = lambda x: round(x, 6)
-    m = re.fullmatch(rf"{_NUM}\s*\(?\s*(?:±|\+/-|\+-|\+ / -)\s*{_NUM}\s*\)?", s)
-    if m:
-        a, t = float(m.group(1)), float(m.group(2))
-        return r(a - t), a, r(a + t)
-    m = re.fullmatch(rf"{_NUM}\s*\(?\s*\+\s*{_NUM}\s*[/,]?\s*-\s*{_NUM}\s*\)?", s) or \
-        re.fullmatch(rf"{_NUM}\s*\(?\s*-\s*(?P<lo>{_NUM[1:-1]})\s*[/,]?\s*\+\s*(?P<hi>{_NUM[1:-1]})\s*\)?", s)
-    if m:
-        a = float(m.group(1))
-        hi, lo = (float(m.group(2)), float(m.group(3))) if "lo" not in m.groupdict() else (float(m["hi"]), float(m["lo"]))
-        return r(a - lo), a, r(a + hi)
-    m = re.fullmatch(rf"{_NUM}\s*(?:~|to|-|\.\.)\s*{_NUM}", s, flags=re.I)
-    if m and float(m.group(1)) < float(m.group(2)):
-        return float(m.group(1)), None, float(m.group(2))
-    return None
-
-
-def _wire_dim(d, n):
-    """One wire dimension's min/nom/max texts -> numbers. A cell holding a tolerance or a range ("6.5 ±0.2") gives the
-    blank ones too; a value printed in its own cell is never overwritten."""
-    raw = {k: d.get(k) for k in ("min", "nom", "max")}
-    got = {}
-    for k in ("nom", "min", "max"):
-        rng = _wire_range(raw[k])
-        if rng is not None:
-            got[k] = rng
-    out = {k: (None if k in got else _wire_num(raw[k], f"{n}.{k}")) for k in raw}
-    for k, rng in got.items():
-        for kk, x in zip(("min", "nom", "max"), rng):
-            if out[kk] is None and (kk == k or not str(raw[kk] or "").strip() or kk in got):
-                out[kk] = x
-    return out
-
-
 def _wire_num(v, where):
     s = str(v if v is not None else "").strip().replace(",", ".")
     if s in ("", "-", "—", "–", "null", "n/a", "N/A"):
@@ -577,8 +524,6 @@ def _fit(v, s):
     t = s.get("type")
     if t == "object" and isinstance(v, (int, float)) and not isinstance(v, bool) and "nom" in (s.get("properties") or {}):
         v = {"nom": v}                                # a bare number where a min/nom/max range is wanted: the nominal
-    if t == "object" and isinstance(v, str) and "nom" in (s.get("properties") or {}) and _wire_range(v):
-        v = dict(zip(("min", "nom", "max"), _wire_range(v)))   # "6.5 ±0.2" where a min/nom/max range is wanted
     if t == "object" and isinstance(v, dict):
         props = s.get("properties") or {}
         out = {k: _fit(x, props[k]) if k in props else x for k, x in v.items()
@@ -624,7 +569,7 @@ def from_wire(ext):
         if not isinstance(d, dict) or d.get("name") not in WIRE_DIMS:
             continue
         n = d["name"]
-        dims[n] = {"label": d.get("label", ""), **_wire_dim(d, n),
+        dims[n] = {"label": d.get("label", ""), **{k: _wire_num(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")},
                    "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
     out = {k: v for k, v in pkg.items() if k not in ("dims", "other_json")}
     for k in pk:
