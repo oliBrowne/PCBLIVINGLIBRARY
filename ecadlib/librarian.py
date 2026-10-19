@@ -428,6 +428,8 @@ class Run:
         sym_ref = how = fp_ref = fp_how = None
         if kind:
             sym_ref, how = PASSIVE[kind][0], "generic passive symbol"
+            if kind == "R" and RU.resistor_style(self.rules) == "us" and "Device" in lib.symbols.get("R_US", ()):
+                sym_ref = "Device:R_US"                # [symbols] resistor = "us": the zigzag symbol
             pkg = package_of(item["footprint"].get("kicad") or fp_name, item.get("description"))
             if PASSIVE[kind][1] and pkg in IMP2MET:
                 fp_ref, fp_how = lib.footprint(PASSIVE[kind][1].format(pkg, IMP2MET[pkg])), f"by package {pkg}"
@@ -537,6 +539,8 @@ class Run:
             got.append(f"footprint {res['kicad_ref']} ({res['fp_how']})")
         fp_src = str((st["footprint"] or {}).get("source") or "")
         same_fp = res["footprint"] and fp_src.endswith(":" + res["footprint"])
+        if res["symbol"] == "R" and RU.resistor_style(self.rules) == "us":
+            res["symbol"] = "R_US"
         if not st["symbol"] and res["symbol"] and (k in ("R", "C", "CP", "L") or same_fp):
             text, name = SP.symbol_text(res["symbol"], mpn)
             shared = k in ("R", "C", "CP", "L")

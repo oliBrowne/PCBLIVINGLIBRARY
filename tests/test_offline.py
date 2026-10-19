@@ -452,3 +452,14 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok ", name)
+
+
+def test_nexar_401_says_when_the_token_expired():
+    # 2026-10-19: a token that worked for a push at 21:48 was refused hours later with a hint about scopes only
+    import base64
+    from ecadlib import altium365 as A
+    jwt = lambda claims: "h." + base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=") + ".s"
+    old = A.token_hint(jwt({"exp": 1_760_000_000}), now=1_760_000_100)
+    assert "expired at 2025-10-09 08:53 UTC" in old and "ecadlib keys set NEXAR_TOKEN" in old, old
+    for tok in (jwt({"exp": 1_760_000_200}), "not-a-jwt", None, jwt({})):
+        assert "design.domain" in A.token_hint(tok, now=1_760_000_100), tok
