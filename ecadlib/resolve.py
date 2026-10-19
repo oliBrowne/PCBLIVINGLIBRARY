@@ -476,7 +476,10 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
         notes.append(f"{kind} file is shared with {', '.join(shared)}: they now use this {kind} too")
     gated = gate.settle([it] + [i for i in items if i["name"] in rewritten])
     for r in gated:
-        if r["action"] == "hold":
+        if r["action"] == "hold" and r.get("refused"):
+            notes.append(f"change to released {r['part']} r{r['revision']} not applied ({r['summary']}): {r['refused']}; "
+                         f"it waits as a held change (ecadlib part show {plan} {r['part']})")
+        elif r["action"] == "hold":
             notes.append(f"change to released {r['part']} r{r['revision']} held for a second approval ({r['summary']}): "
                          f"ecadlib part approve {plan} --part {r['part']}")
     RC.apply([it] + [i for i in items if i["name"] in rewritten], base)   # the parts sharing the overwritten file are
@@ -574,15 +577,23 @@ def main(argv=None):
     from .approvals import cli_plan_lock
     with cli_plan_lock(a.plan):                # the web UI may be recording into this plan right now
         r = choose(a.plan, a.part, a.kind, a.id, src=src(), pin_map=_pin_map(a.map))
+    # change control: the choice of a released part may be held (refused by the release check, or waiting for a
+    # second person); the released version then stays, so the part is not "now ready" with the choice
+    gated = next((c for c in r.get("change") or [] if c["part"] == a.part and c["action"] == "hold"), None)
     if emit:
         emit(r)
+    elif gated:
+        print(f"{a.part}: {a.kind} <- {r['source']}: held, not applied; the released revision r{gated['revision']} stays "
+              f"({gated['summary']})")
+        for n in r["notes"]:
+            print(f"    note: {n}")
     else:
         print(f"{a.part}: {a.kind} <- {r['source']} ({r['file']}); now {r['status']}")
         for e in M.explain_all(r["hold_reasons"]):
             print(f"    held: {e['text']}  next: {e['fix']}")
         for n in r["notes"]:
             print(f"    note: {n}")
-    return 0 if r["status"] == "ready" else 2
+    return 0 if r["status"] == "ready" and not gated else 2
 
 
 if __name__ == "__main__":

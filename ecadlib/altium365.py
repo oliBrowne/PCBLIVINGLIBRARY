@@ -377,6 +377,30 @@ def merged_params(existing, item):
     return None if want == cur else [{"name": k, "value": v} for k, v in want.items()]
 
 
+def _ecad_name(k, rules):
+    """ecadlib's name for workspace parameter k (inverse of the rules' [parameters] names)."""
+    inv = {v: c for c, v in (((rules or {}).get("parameters") or {}).get("names") or {}).items()}
+    return inv.get(k, k)
+
+
+def identity_change(existing, params, rules=None):
+    """A parameter update that would make a released workspace component another part: [change text] for each
+    identity field (MPN, manufacturer, the value as a number) the workspace has and `params` (the list a push would
+    send) changes. Filling one the component does not have yet is no change of part. Both sides carry the house
+    names of [parameters.names] ("MfrPN"): they are read back under ecadlib's names, which the fingerprint knows."""
+    from . import change_diff as CD, fingerprint as FP
+    cur = {_ecad_name(p["name"], rules): p["value"] for p in ((existing.get("details") or {}).get("parameters") or [])}
+    new = {_ecad_name(p["name"], rules): p["value"] for p in params}
+    a, b = FP.build("", params=cur), FP.build("", params=new)
+    return [c["text"] for c in CD.diff(a, b) if c["class"] == "identity" and str(c.get("old") or "").strip()]
+
+
+IDENTITY_REFUSED = ("not applied in place: a released workspace component keeps its MPN, manufacturer and value. "
+                    "A different part needs its own component (another name in the plan); a correction goes through "
+                    "change control (run the librarian on the BOM, then `ecadlib part approve`), which releases it as a "
+                    "new component revision")
+
+
 def change_mode(lg, it, target):
     """What a push of an existing component must do under change control: "revision" when the released revision
     (ledger head) changed the symbol, footprint or 3D model since the revision last published to `target` (a new
@@ -392,8 +416,10 @@ def change_mode(lg, it, target):
     halves = {"symbol"} if FP.digest(a.get("symbol")) != FP.digest(b.get("symbol")) else set()
     if FP.digest([a.get("footprint"), a.get("model")]) != FP.digest([b.get("footprint"), b.get("model")]):
         halves.add("footprint")
-    if old.get("eid") != head.get("eid") and not halves:
+    if FP.hashes(a)["eid"] != FP.hashes(b)["eid"] and not halves:   # recomputed: the two may be of different schemas
         halves = {"symbol", "footprint"}      # the pin-pad map changed: both go up
+    if not halves:                             # stored hashes of two schemas differed, the files did not
+        return "params", set(), head, pub
     return "revision", halves, head, pub
 
 
@@ -505,8 +531,11 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
             elif existing:
                 new = merged_params(existing, it)
                 res["a365_revision"] = _rev_id(existing)
+                ident = identity_change(existing, new, rules) if new is not None else []
                 if new is None:
                     res["action"] = "up_to_date"
+                elif ident:                    # change control (#105): in-place edits never make it another part
+                    res["action"], res["detail"] = "skip", f"identity change ({'; '.join(ident)}) {IDENTITY_REFUSED}"
                 else:                          # full replace: a merge, so parameters added in Altium 365 are kept
                     res["action"] = "update_parameters"
                     res["detail"] = client.update_params(existing["id"], new, note, replace=True)
@@ -635,17 +664,21 @@ def main(argv=None):
         from . import change_gate as CG
         import time
         rules = RU.load(a.rules, start=Path(a.plan).parent)
-        if not a.dry_run:                      # change control: a hand edit since the last writer is settled first
-            CG.publish_guard(Path(a.plan), items, "altium365", rules=rules)
-        for i in items:
-            for k in ("symbol", "footprint"):
-                if i[k]["file"]:
-                    i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
-        t0 = time.time()
-        results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent),
-                       rules=rules, folder=Path(a.plan).parent)
-        if not a.dry_run:
-            record_push(Path(a.plan).parent, t0, results)
+        import contextlib                      # a real push holds the library lock from the settle step to the record
+        with contextlib.nullcontext() if a.dry_run else CG.publishing(Path(a.plan).parent):
+            if not a.dry_run:                  # change control: a hand edit since the last writer is settled first
+                CG.publish_guard(Path(a.plan), items, "altium365", rules=rules)
+            else:                              # a dry run writes nothing: an unsettled hand edit is shown as held
+                CG.preview_unsettled(Path(a.plan).parent, items, rules)
+            for i in items:
+                for k in ("symbol", "footprint"):
+                    if i[k]["file"]:
+                        i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
+            t0 = time.time()
+            results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent),
+                           rules=rules, folder=Path(a.plan).parent)
+            if not a.dry_run:
+                record_push(Path(a.plan).parent, t0, results)
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work
         hint = token_hint(token) if "401" in str(e) else ""
         sys.exit(f"Nexar request failed: {type(e).__name__}: {e}{hint}")

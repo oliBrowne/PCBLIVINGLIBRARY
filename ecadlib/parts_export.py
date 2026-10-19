@@ -66,6 +66,10 @@ def rows(plan, lib="ecadlib", include_held=False):
     items = json.loads(Path(plan).read_text(encoding="utf-8")) if not isinstance(plan, list) else plan
     if not isinstance(items, list):
         raise ValueError(f"{plan}: not a librarian plan (expected a list of parts)")
+    if not isinstance(plan, list):             # change control (#105): a hand edit of a released part's fields is
+        from . import change_gate as CG        # held, and its released fields go out (as kicad-export ships them)
+        with CG.publishing(base):
+            items = CG.settled_plan(plan, "export-parts", log=lambda *a, **k: None)
     keep = [it for it in items if isinstance(it, dict) and it.get("name")
             and (it.get("status", "ready") in LIBRARY_STATUS or (include_held and it.get("status") == "held"))]
     sign = _signoff(keep, base) if not isinstance(plan, list) else {}

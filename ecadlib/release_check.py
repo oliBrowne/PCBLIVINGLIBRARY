@@ -303,12 +303,55 @@ def check_item(item, base=".", rules=None):
     return fails, warns, info
 
 
-def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
+CHANGE_HOLD = "change control:"              # a held change no release check or --allow clears (`ecadlib part approve`)
+
+
+def change_hold(it, base=".", ledger=None):
+    """Why a part waits for `ecadlib part approve` with no released revision to fall back on (a new part held against
+    the released part whose MPN it carries, adopted files waiting for approval), or None. The release check never
+    clears this: only an approval does. Read from the item's change block and from the library's held proposals, so
+    a plan edited by hand does not drop it."""
+    ch = it.get("change") or {}
+    if ch.get("state") == "held" and ch.get("base") is None:
+        return ch.get("summary") or "a held change"
+    try:
+        from . import ledger as LG
+        lg = ledger if ledger is not None else LG.Ledger(Path(base))
+        prop = lg.proposal(it["name"]) if (lg.store / "proposed").is_dir() else None
+        if prop and prop.get("base") is None and not lg.head(it["name"]):
+            return "; ".join(c.get("text", "") for c in (prop.get("changes") or [])[:3]) or "a held change"
+    except Exception:                          # a damaged ledger: the item's own block above decides
+        pass
+    return None
+
+
+def record_releases(items, base, names, who=None, log=None):
+    """Parts a person released with --allow (also review's release anyway and the web UI / MCP release check): record
+    revision 1 in the ledger now, as the librarian's baseline would, so the release is the files as they are at this
+    moment and no later writer has to guess. A new part carrying the MPN of a released one is compared with it first
+    (it may be held: its status is updated in `items`). A lost ledger history is refused (LedgerError). -> ledger rows"""
+    from . import change_gate as CG
+    names = set(names or ())
+    sel = [i for i in items if i.get("name") in names and CG.released(i)]
+    if not sel:
+        return []
+    g = CG.Guard(Path(base), "release-allow", user=who, log=log or (lambda *a, **k: None))
+    try:
+        return g.baseline(sel)
+    finally:
+        g.close()
+
+
+def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, change_holds=True):
     """Run check_item on every item, set status ready / held, record --allow overrides. Returns report rows.
-    rules: a loaded rules dict, a path, or None to use the ecadlib.toml found from `base` (defaults when none)."""
-    from . import rules as RU
+    rules: a loaded rules dict, a path, or None to use the ecadlib.toml found from `base` (defaults when none).
+    change_holds: a part waiting for `ecadlib part approve` with no released revision (change_hold) stays held with
+    its "change control:" reason, whatever the check finds and whatever --allow says. Only `part approve` passes False,
+    while it checks the version it is about to release."""
+    from . import ledger as LG, rules as RU
     rules = RU.resolve(rules, base)
     rows, today = [], datetime.date.today().isoformat()
+    lg = LG.Ledger(Path(base)) if change_holds else None
     for it in items:
         if it.get("a365") and it.get("status") in ("existing", "deleted_in_workspace"):
             # pulled from Altium 365 (ecadlib a365 pull): already released there, nothing to release or hold back
@@ -337,6 +380,12 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
         it["hold_reasons"] = open_ if result == "held" else []
         if result == "held" and it.get("allow"):
             it["hold_reasons"] = [m + (" (cannot be overridden)" if m in hard else " (not covered by --allow)") for m in open_]
+        held_change = change_hold(it, base, lg) if change_holds else None
+        if held_change:                        # waits for `ecadlib part approve`: never ready from here
+            it["status"], result = "held", "held"
+            it["hold_reasons"] = [h for h in it["hold_reasons"] if not h.startswith(CHANGE_HOLD)] + [
+                f"{CHANGE_HOLD} {held_change}; a person approves it (ecadlib part show {Path(base) / 'plan.json'} "
+                f"{it['name']})"]
         it["release_check"] = {"result": result, "failures": msgs, "warnings": warns, **{k: v for k, v in info.items() if k in ("height", "parity")}}
         rows.append({"name": it["name"], "status": it["status"], "result": result,
                      "symbol_source": (it.get("source") or {}).get("symbol") or "", "footprint_source": (it.get("source") or {}).get("footprint") or "",
@@ -442,8 +491,10 @@ def main(argv=None):
         rows = apply(items, plan.parent, a.allow, a.unallow, rules=a.rules)
         if a.allow:                            # record the person, so approvals can refuse self-approval
             from .approvals import identity, post_check, stamp_allow
-            stamp_allow(items, a.allow, identity(a.user, cwd=plan.parent))
+            who = identity(a.user, cwd=plan.parent)
+            stamp_allow(items, a.allow, who)
             post_check(items, plan.parent, rows)
+            record_releases(items, plan.parent, a.allow, who)       # change control: revision 1 of what was released
         write_text_atomic(plan, json.dumps(items, indent=2))
         from .librarian import refresh_review
         refresh_review(plan, items)

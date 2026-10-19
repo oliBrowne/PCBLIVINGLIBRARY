@@ -69,10 +69,69 @@ def identity(user=None, cwd=None):
 
 
 def user_key(who):
-    """Comparable key for a person: the e-mail when there is one, else the lower-cased name."""
+    """Comparable key for a person: the e-mail when there is one, else the name (case and spacing folded)."""
     who = str(who or "").strip()
     m = re.search(r"<([^<>]+)>", who)
-    return (m.group(1) if m and m.group(1).strip() else who).strip().lower()
+    if m and m.group(1).strip():
+        return m.group(1).strip().lower()
+    return _fold(who)
+
+
+_EMAIL = re.compile(r"[^\s<>()\[\],;]+@[^\s<>()\[\],;]+")
+
+
+def _fold(s):
+    import unicodedata
+    return " ".join(unicodedata.normalize("NFKC", str(s or "")).casefold().split())
+
+
+# letters of other scripts that look like Latin ones (after casefold), as Unicode's confusables list maps them: a
+# Cyrillic 'а' in 'Аnn' is not a second person
+_CONFUSABLE = str.maketrans({
+    "а": "a", "в": "b", "е": "e", "ё": "e", "з": "3", "і": "i", "ї": "i", "ј": "j", "к": "k", "м": "m", "н": "h",
+    "о": "o", "р": "p", "с": "c", "т": "t", "у": "y", "х": "x", "ѕ": "s", "ԁ": "d", "һ": "h", "ӏ": "l", "ԛ": "q",
+    "ԝ": "w", "ɡ": "g", "α": "a", "β": "b", "ε": "e", "η": "n", "ι": "i", "κ": "k", "μ": "m", "ν": "v", "ο": "o",
+    "ρ": "p", "τ": "t", "υ": "u", "χ": "x", "ζ": "z", "ω": "w", "ϲ": "c", "ı": "i", "ł": "l", "ø": "o", "đ": "d",
+    "ħ": "h", "ŀ": "l"})
+_TRAIL = ".,;:!?-_'\"`"
+
+
+def skeleton(s):
+    """One spelling for text a person types as their name or e-mail: Unicode forms (NFKC) and case folded, zero-width
+    and other invisible format characters dropped, accents removed (Zoë = Zoe), and letters of other scripts that
+    look Latin read as Latin (a Cyrillic or Greek 'а' / 'ο' is an 'a' / 'o')."""
+    import unicodedata
+    s = unicodedata.normalize("NFKC", str(s or ""))
+    s = "".join(ch for ch in s if unicodedata.category(ch) not in ("Cf", "Cc", "Mn", "Me") or ch in "\t\n")
+    s = "".join(ch for ch in unicodedata.normalize("NFKD", s) if unicodedata.category(ch) not in ("Mn", "Me"))
+    return " ".join(unicodedata.normalize("NFKC", s).casefold().translate(_CONFUSABLE).split())
+
+
+def person(who):
+    """'Ann Lee <ann@x.com>', 'ann lee', 'ann@x.com', 'Ann Lee (ann@x.com)' -> (folded name, folded e-mail): spacing,
+    case, Unicode forms, accents, invisible characters and look-alike letters folded (skeleton); a +tag in the e-mail's
+    local part dropped (ann+2@x.com is ann@x.com's mailbox), and a mailto: or trailing punctuation ('Ann.',
+    'ann@x.com.') left out."""
+    s = re.sub(r"mailto:", " ", skeleton(who))
+    m = _EMAIL.search(s)
+    email = ""
+    if m:
+        local, _, dom = m.group(0).partition("@")
+        email = f"{local.split('+', 1)[0].strip(_TRAIL)}@{dom.strip(_TRAIL)}"
+        s = s[:m.start()] + s[m.end():]
+    name = " ".join(re.sub(r"[<>()\[\]\"']", " ", s).split()).strip(_TRAIL + " ")
+    return name, email
+
+
+def same_person(a, b):
+    """Two identities name one person when their e-mails match. When both give an e-mail the e-mail decides (two
+    people may share a name: 'Ann Lee <ann@x.com>' and 'Ann Lee <ann.lee@y.com>' are two); when one of them gives none,
+    their names decide. The two-person rule counts people with this, so a second spelling of one name or mailbox is
+    never a second approver."""
+    (na, ea), (nb, eb) = person(a), person(b)
+    if ea and eb:
+        return ea == eb
+    return bool(na and na == nb)
 
 
 # ---------------------------------------------------------------- policy
@@ -185,17 +244,19 @@ def evaluate(item, policy, base=".", h=None):
     """-> {required, met, hash, approved_by, missing, stale, rejected_by, ignored}."""
     h = h or content_hash(item, base)
     latest = {}
-    for r in item.get("approvals") or []:
-        latest[r.get("key") or user_key(r["who"])] = r
+    for r in item.get("approvals") or []:          # one person, however they spelled their name (same_person)
+        k = r.get("key") or user_key(r["who"])
+        k = next((x for x, y in latest.items() if x == k or same_person(y["who"], r["who"])), k)
+        latest[k] = r
     valid, stale, rejected, ignored = [], [], [], []
-    self_key = user_key(_allow_user(item)) if _allow_user(item) else None
+    self_user = _allow_user(item)
     users = (policy or {}).get("users") or {}
     for k, r in latest.items():
         if r.get("hash") != h:
             stale.append(r["who"])
         elif r["decision"] == "reject":
             rejected.append(f"{r['who']}" + (f" ({r['comment']})" if r.get("comment") else ""))
-        elif policy and policy["no_self_approval"] and self_key and k == self_key:
+        elif policy and policy["no_self_approval"] and self_user and (k == user_key(self_user) or same_person(r["who"], self_user)):
             ignored.append(f"{r['who']}: released it with --allow")
         elif users and (k not in users or (r.get("role") and r["role"] not in users[k])):
             ignored.append(f"{r['who']}: not authorised" + (f" as {r['role']}" if r.get("role") else ""))
@@ -282,7 +343,8 @@ def decide(item, decision, who, role=None, comment="", base=".", policy=None):
                 raise Refused(f"{who} may sign as {', '.join(users[k])}, not {role}")
             if not role and len(users[k]) == 1:
                 role = users[k][0]
-        if decision == "approve" and policy["no_self_approval"] and _allow_user(item) and user_key(_allow_user(item)) == k:
+        if decision == "approve" and policy["no_self_approval"] and _allow_user(item) and (
+                user_key(_allow_user(item)) == k or same_person(_allow_user(item), who)):
             raise Refused(f"{who} released {item['name']} with --allow and cannot approve it (no_self_approval)")
     rec = {"who": who, "key": k, "when": now(), "role": role or "", "decision": decision,
            "comment": comment or "", "hash": content_hash(item, base)}

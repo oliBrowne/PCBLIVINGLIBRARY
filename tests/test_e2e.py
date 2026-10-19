@@ -341,8 +341,9 @@ def test_mcp_server_over_stdio():
 LOGS = re.compile(r"(^|/)(datasheet/api_log|timing)\.jsonl$")   # append-only logs: API requests (held parts are asked
                                                                   # again), each run's step times (ecadlib.timing)
 REFRESHED = re.compile(r"^(ecadlib\.toml\.proposed|lib/[^/]+/librarian_state\.json|lib/parts/review\.(md|csv|html)"
-                       # change control: the part released by run 1's --allow gets its revision 1 on run 2
-                       r"|lib/parts/(library\.ledger\.jsonl|library\.usage\.json|\.ecadlib/blobs/.*))$")
+                       # change control: the part released by run 1's --allow (its revision 1 is recorded then) is
+                       # recorded as released in library.lock.json on run 2; the usage index and the publish lines
+                       r"|lib/parts/(library\.ledger\.jsonl|library\.usage\.json|library\.lock\.json|\.ecadlib/blobs/.*))$")
 
 
 def test_second_run_changes_nothing():

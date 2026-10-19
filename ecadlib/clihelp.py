@@ -70,7 +70,7 @@ EXAMPLES = {
                 "ecadlib project check board.PrjPcb --workspace https://acme.365.altium.com --library ws/library"],
     "where-used": ["ecadlib where-used --projects ~/projects --part CH340C"],
     "part": ["ecadlib part status ws/library", "ecadlib part show ws/library AO3401A",
-             "ecadlib part approve ws/library --part AO3401A -m \"new datasheet drawing\"",
+             "ecadlib part approve ws/library --part AO3401A --digest 3f2a9c41d0e8 -m \"new datasheet drawing\"",
              "ecadlib part history ws/library AO3401A", "ecadlib part revert ws/library AO3401A@2"],
     "visual-check": ["ecadlib visual-check out/fp/SOIC-8.kicad_mod --datasheet ds.pdf --pages 3 --render-only"],
     "symbol": ["ecadlib symbol pins.csv -o out/MCU.SchLib --preview out/MCU.svg"],

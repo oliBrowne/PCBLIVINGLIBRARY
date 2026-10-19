@@ -420,6 +420,8 @@ class Workspace:
         lib_plan = self._librarian_dir(bom_path) / "plan.json"
         if lib_plan.exists():
             items = json.loads(lib_plan.read_text(encoding="utf-8"))
+            from . import change_gate as CG    # a preview writes nothing: an unsettled hand edit is shown as held
+            CG.preview_unsettled(lib_plan.parent, items, self.rules())
             for it in items:                          # librarian paths are relative to its output folder
                 for k in ("symbol", "footprint"):
                     f = it[k].get("file")
@@ -550,6 +552,8 @@ class Workspace:
             from .approvals import post_check, stamp_allow
             stamp_allow(items, list(allow), user)
             post_check(items, out, rows)
+        if allow:                                          # change control: revision 1 of what was released
+            RC.record_releases(items, out, list(allow), user or None)
         write_text_atomic(plan_f, json.dumps(items, indent=2))
         if allow or unallow:
             from . import timing
@@ -931,23 +935,28 @@ class Workspace:
             if e.get("changes") and e.get("event") in LG.RELEASES:
                 rows[-1]["changes"] = [{"class": c["class"], "text": c["text"]} for c in e["changes"]][:200]
         change = it.get("change") if (it.get("change") or {}).get("state") == "held" else None
+        if change and lg.proposal(part):       # the digest of the held change as it is now (what an approval names)
+            change = dict(change, digest=CG.review_digest(lg, part))
         return {"part": part, "revision": head and head["revision"], "change": change, "history": rows[::-1],
                 "policy": {k: v for k, v in CG.policy(None, plan_f.parent).items()}}
 
-    def decide_change(self, bom, part, decision, user, comment="", role=None):
+    def decide_change(self, bom, part, decision, user, comment="", role=None, digest=None):
         """Approve or reject a held change to a released part, from the web UI or MCP (the same as `ecadlib part
-        approve / reject`). Holds the plan lock like approve_part."""
+        approve / reject`). An approval names the digest of the held change the person was shown (the part card's
+        change.digest); a change proposed again since is refused. Holds the plan lock like approve_part."""
         from . import change_cli as CC, change_gate as CG
         from .fsutil import plan_lock
         if decision not in ("approve", "reject"):
             raise ValueError("decision must be approve or reject")
+        if decision == "approve" and not str(digest or "").strip():
+            raise ValueError("digest is required: the digest of the held change shown to you (reload the part to see it)")
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
         with plan_lock(self.root, wait=False) as free:
             if not free:
                 raise ValueError("another ecadlib command is changing this plan right now; decide again in a minute")
             try:
-                res = (CC.approve(plan_f, [part], user, comment or "", role) if decision == "approve"
+                res = (CC.approve(plan_f, [part], user, comment or "", role, {part: str(digest)}) if decision == "approve"
                        else CC.reject(plan_f, [part], user, comment or ""))
             except CG.ChangeError as e:
                 raise ValueError(str(e)) from None
@@ -991,14 +1000,20 @@ class Workspace:
     def altium365_push(self, bom, workspace_url, dry_run=True):
         """Release ready parts and update parameters of existing ones; parts the release check held are left
         alone. dry_run (the default) sends nothing and returns the requests that would be made."""
-        from . import altium365 as A
         if not workspace_url and not dry_run:
             raise ValueError("choose an Altium 365 workspace first")
-        if not dry_run:                               # change control: a hand edit since the last writer settles first
+        import contextlib
+        from . import change_gate as CG
+        lib_plan = self._librarian_dir(self._bom_path(bom)) / "plan.json"
+        # a real push of a librarian library holds the library lock from the settle step to the record (change control)
+        with contextlib.nullcontext() if dry_run or not lib_plan.is_file() else CG.publishing(lib_plan.parent):
+            return self._altium365_push(bom, workspace_url, dry_run, lib_plan)
+
+    def _altium365_push(self, bom, workspace_url, dry_run, lib_plan):
+        from . import altium365 as A
+        if not dry_run and lib_plan.is_file():        # change control: a hand edit since the last writer settles first
             from . import change_gate as CG
-            lib_plan = self._librarian_dir(self._bom_path(bom)) / "plan.json"
-            if lib_plan.is_file():
-                CG.publish_guard(lib_plan, json.loads(lib_plan.read_text(encoding="utf-8")), "altium365", rules=self.rules())
+            CG.publish_guard(lib_plan, json.loads(lib_plan.read_text(encoding="utf-8")), "altium365", rules=self.rules())
         plan = self.altium365_plan(bom)
         client = None if dry_run else A.Nexar(_nexar_token())
         policy = None

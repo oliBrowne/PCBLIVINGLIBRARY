@@ -464,9 +464,21 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     and not_in_plan/removed for rows (kind "row") and model files (kind "file") the plan no longer has; a pruned
     footprint's STEP files (ecadlib_3d/..., written by ecadlib) are results with kind "3d".
     A model file changed in Altium since ecadlib's copy was built there is left as it is (a note says so) unless
-    overwrite_edits (ecadlib.altium_native, <file>.ecadstate)."""
+    overwrite_edits (ecadlib.altium_native, <file>.ecadstate). A real sync holds the library lock throughout
+    (change control: the model files copied are the settled ones)."""
     if mode not in EXT:
         raise ValueError(f"mode must be one of {sorted(EXT)}")
+    lib_dir = Path(base or (Path(plan).parent if isinstance(plan, (str, Path)) else "."))
+    if dry_run:
+        return _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules,
+                     overwrite_edits)
+    from . import change_gate as CG
+    with CG.publishing(lib_dir):
+        return _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules,
+                     overwrite_edits)
+
+
+def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules, overwrite_edits):
     items = load_plan(plan) if isinstance(plan, (str, Path)) else plan
     base = Path(base or (Path(plan).parent if isinstance(plan, (str, Path)) else "."))
     to = Path(target_dir)

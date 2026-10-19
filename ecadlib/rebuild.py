@@ -211,7 +211,9 @@ def build_lock(out, items, state, bom, libs, sources, cache, providers, gen_step
         if st is None:                                  # an Altium 365 item reused as it is: nothing was built
             continue
         p = {"key": st.get("key"), "built_with": st.get("built_with"),
-             "inputs": st.get("inputs"), "symbol": _half(out, st.get("symbol")), "footprint": _half(out, st.get("footprint"))}
+             "inputs": st.get("inputs"), "symbol": _half(out, st.get("symbol")), "footprint": _half(out, st.get("footprint")),
+             # released when built? (change control: only then do other bytes on disk say a lost ledger knew the part)
+             "status": it.get("status")}
         local = []
         for k in ("symbol", "footprint"):
             for f in _local_inputs((st.get(k) or {}).get("source"), libs):
@@ -395,6 +397,13 @@ def check(lib_dir, keep=None, log=print):
         # without the change-control ledger: the rebuild must reproduce the files, not be held back to them
         shutil.copytree(lib_dir, dst, ignore=shutil.ignore_patterns(".ecadlib_backup", "*.tmp", ".ecadlib",
                                                                     "library.ledger.jsonl", "library.usage.json"))
+        from . import migrate as MG            # the copy keeps no ledger: its stamp must not say it does
+        st = dst / MG.STAMP
+        if st.is_file():
+            d = json.loads(st.read_text(encoding="utf-8"))
+            if isinstance(d, dict) and "ledger" in (d.get("kinds") or {}):
+                d["kinds"] = {k: v for k, v in d["kinds"].items() if k != "ledger"}
+                st.write_text(json.dumps(d, indent=1) + "\n", encoding="utf-8")
         # the copy points at the same BOM, libraries and cache: write the lock's relative paths as absolute
         lk = json.loads((dst / LOCK).read_text(encoding="utf-8"))
         lk["bom"]["file"] = str(_abs(lk["bom"]["file"], lib_dir))

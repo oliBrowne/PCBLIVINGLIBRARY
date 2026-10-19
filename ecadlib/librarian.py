@@ -1088,7 +1088,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         from .approvals import identity, post_check, stamp_allow
         stamp_allow(items, allow, identity(user, cwd=out))
         post_check(items, out, checks)
-    gate.baseline(items)                       # parts released for the first time: revision 1 in the ledger
+    gate.baseline(items)                       # parts released for the first time: revision 1 in the ledger (a new
+                                               # part with a released part's MPN is compared with it first)
+    gate.retire([n for n in old if n not in {i["name"] for i in items}], f"no longer in the plan ({Path(bom).name})")
     CG.record_bom_usage(out, bom, items)
     write_text_atomic(plan_f, json.dumps(items, indent=2))
     write_notice(out, items)

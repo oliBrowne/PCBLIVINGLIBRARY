@@ -424,9 +424,16 @@ def build_demo(ws, tool="both", bom=None, log=print):
     src = Path(bom) if bom else DEMO_BOM
     dest = root / "uploads" / "demo" / src.name
     dest.parent.mkdir(parents=True, exist_ok=True)
+    reset = None
+    if dest.exists() and dest.read_bytes() != src.read_bytes():   # an edited copy from an earlier run: kept aside
+        reset = dest.with_name(dest.name + ".edited")
+        shutil.copyfile(dest, reset)
     if not dest.exists() or dest.read_bytes() != src.read_bytes():
         shutil.copyfile(src, dest)
     rel = ws.rel(dest)
+    if reset:
+        log(f"      note: {rel} was edited since the last demo run; it is reset to "
+            f"{'the bundled sample' if not bom else src.name} and your edited copy is kept as {ws.rel(reset)}")
     log(f"[1/3] BOM: {rel} ({sum(1 for _ in open(dest, encoding='utf-8')) - 1} lines)")
     log("[2/3] finding symbols and footprints (built-in standard parts; no network, no API key) ...")
     res = ws.librarian_run(rel, sources=["standard"])

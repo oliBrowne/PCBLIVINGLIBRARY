@@ -21,6 +21,9 @@ Symbols, by the plan item's `source.symbol`:
   anything else      (datasheet reader, generated, or a KiCad source that cannot be reached): the item's .SchLib
                      read back with altium_lib.read_schlib and drawn as a KiCad symbol (pins, rectangles, lines,
                      polygons, circles, arcs, text; parts -> units, display modes -> De Morgan body styles)
+  A symbol taken again from its source must be the released revision: one whose pins, types or pin -> pad map
+  differ from the item's .SchLib (an upstream change since the release) is not used; the .SchLib is read back and
+  the report lists a warning (change control, #105).
 Footprints: the item's .kicad_mod (models/KiCad/...) when present, else its .PcbLib records converted back.
 Format: KiCad 8 (symbol library version 20231120, footprints up to 20240108), which KiCad 8, 9 and 10 open.
 Newer upstream syntax is written the KiCad 8 way: `(hide yes)` -> `hide`, KiCad 9/10-only flags (in_pos_files,
@@ -306,7 +309,8 @@ def symbol_from_schlib(path, name, notes, pick=None):
             x, y, L = r["x"] * 0.254, r["y"] * 0.254, r["length"] * 0.254
             nm = _kicad_pin_name(r["name"]) or "~"
             if r["conglomerate"] & 0x04 and hidden_net.get(ri):   # Altium ties a hidden pin to its HiddenNetName net;
-                nm = hidden_net[ri]                                # KiCad ties a hidden power pin to the net of its name
+                nm = _kicad_pin_name(hidden_net[ri])               # KiCad ties a hidden power pin to the net of its name
+                #                                                  (an Altium overbar is KiCad's ~{...}, as on a pin name)
                 K._note(notes, "hidden pins named after their Altium HiddenNetName (KiCad connects them by name)")
             spot = (r["part"], r["mode"], r["x"], r["y"], r["orient"])
             lead = spots.get(spot) if not r["conglomerate"] & 0x04 else None
@@ -379,23 +383,122 @@ def symbol_from_schlib(path, name, notes, pick=None):
     return sym
 
 
-def load_symbol(item, plan_dir, http, libs, name, notes, rules=None):
+def released_differs(item, plan_dir, sym):
+    """A symbol fetched again from the part's source (KiCad, --lib, EasyEDA) against the released revision, the item's
+    .SchLib (publish_guard has put a held change back) -> the changes that are more than cosmetic (pin names and types,
+    hidden pins, the pin -> pad map); [] when it is the released symbol; None when there is no .SchLib to compare with.
+    How the symbol is drawn is no difference: the house rules may redraw the .SchLib (pins grouped, one end per power
+    pin) while KiCad keeps the source's drawing, so pin ends that moved, and power pins of one name stacked or not,
+    are left out; a stack that joins other pins is a difference.
+    The fetched symbol is compared as the librarian releases it (converted to Altium and read back), so what the
+    conversion always does (stacked pins hidden, unit 0 pins in every part) is no difference."""
+    import tempfile
+    from . import change_diff as CD, fingerprint as FP
+    f = (item.get("symbol") or {}).get("file")
+    if not f or not (plan_dir / f).is_file():
+        return None
+    rel = FP.of_item(item, plan_dir)
+    if rel.get("symbol") is None:
+        return None
+    try:
+        conv = K.convert_symbol([sym], str(sym[1]), None, [], None, [])
+        with tempfile.TemporaryDirectory(prefix="ecadlib-kx-") as tmp:
+            _, entries = AL.read_schlib(AL.write_schlib(Path(tmp) / "fetched.SchLib", [conv]))
+        fetched = FP.altium_symbol(entries[0])[0]
+    except (ValueError, KeyError, IndexError, OSError) as e:
+        return [{"class": "electrical", "text": f"the fetched symbol cannot be compared ({type(e).__name__}: {e})"}]
+    got = copy.deepcopy(rel)
+    got["symbol"] = dict(fetched, name=rel["symbol"].get("name"))
+    got["hashes"] = FP.hashes(got)
+    return [c for c in CD.diff(rel, got) if c["class"] != "cosmetic" and not c.get("drawing")]
+
+
+def kicad_pin_details(sym):
+    """The KiCad-only details of a symbol's pins, which do not survive the conversion to Altium (passive / free /
+    no_connect / unspecified are one Altium type, power_in / power_out another; alternate functions are dropped):
+    {number: {name, ktype, alt}}. Recorded on a KiCad publish line, so a later export of the same revision that reuses
+    the source's symbol again can tell when the source changed one of them."""
+    from . import fingerprint as FP
+    fp, _ = FP.kicad_symbol(sym)
+    return {n: {"name": p["name"], "ktype": p["ktype"], "alt": p["alt"]} for n, p in sorted(fp["pins"].items())}
+
+
+def kicad_baseline_differs(item, plan_dir, details):
+    """KiCad-only pin details of a fetched symbol against those an earlier KiCad publish of the same released
+    revision shipped -> [{class, text}] (electrical); [] when they match or no earlier publish recorded them."""
+    from . import ledger as LG
+    lg = LG.Ledger(plan_dir)
+    head = lg.head(item["name"]) if lg.exists() else None
+    if not head:
+        return []
+    base = next((e["detail"]["ksym"] for e in reversed(lg.history(item["name"]))
+                 if e.get("event") == "publish" and str(e.get("target") or "").startswith("kicad")
+                 and e.get("revision") == head["revision"] and isinstance(e.get("detail"), dict)
+                 and e["detail"].get("ksym")), None)
+    if base is None:
+        return []
+    out = []
+    for n in sorted(set(base) | set(details)):
+        a, b = base.get(n), details.get(n)
+        if a is None or b is None:
+            out.append({"class": "electrical", "text": f"pin {n} {'added' if a is None else 'removed'}"})
+            continue
+        if a["ktype"] != b["ktype"]:
+            out.append({"class": "electrical", "text": f"pin {n} ({b['name']}) KiCad type {a['ktype']} -> {b['ktype']}"})
+        if a["alt"] != b["alt"]:
+            out.append({"class": "electrical", "text": f"pin {n} ({b['name']}) alternate functions changed"})
+    return out
+
+
+def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=None, kpins=None):
     """-> (KiCad symbol tree, how). Reuses KiCad / EasyEDA sources; else reads the SchLib back. An EasyEDA IC
     symbol (a plain box, [symbols] layout_pins) is read back from the SchLib, which the librarian wrote with its pins
-    grouped (ecadlib.symbol_layout), so both libraries show the same symbol."""
+    grouped (ecadlib.symbol_layout), so both libraries show the same symbol. A reused symbol must be the released
+    revision (change control, #105): when the source changed since the release (an upstream pin swap), the released
+    .SchLib is read back instead and the difference goes to `warnings`; upstream check-kicad --update or a librarian
+    re-run brings the source's change through change control. The KiCad-only pin details (types the Altium
+    conversion merges, alternate functions) are compared with those the first KiCad publish of the revision shipped;
+    kpins: {part: those details} of a reused symbol, for the publish line."""
     src = str((item.get("source") or {}).get("symbol") or "")
     why = []
+
+    def released(sym, how):
+        bad = released_differs(item, plan_dir, sym)
+        details = None
+        if not bad:
+            try:
+                details = kicad_pin_details(sym)
+                bad = kicad_baseline_differs(item, plan_dir, details)
+            except (ValueError, KeyError, IndexError, TypeError) as e:
+                bad = [{"class": "electrical", "text": f"the fetched symbol cannot be compared ({type(e).__name__}: {e})"}]
+        if not bad:
+            if kpins is not None and details is not None:
+                kpins[item["name"]] = details
+            return sym, how
+        from . import change_diff as CD
+        why.append(f"{how} is not the released revision ({CD.summary(bad)})")
+        if warnings is not None:
+            warnings.append(f"{item['name']}: the symbol at its source, {how}, is not the released revision "
+                            f"({CD.summary(bad)}); the released symbol ({item['symbol']['file']}) is exported. Bring "
+                            f"the source's change through change control (ecadlib upstream check-kicad --update, or a "
+                            f"librarian re-run) to release it")
+        return None
     try:
         if src.startswith("kicad:"):
             chain, _ = K.load_symbol(src[6:], http, keep_quotes=True)
-            return flatten(chain, name), f"KiCad {src[6:]} (reused" + (", flattened from " + " -> ".join(str(s[1]) for s in chain[1:]) if len(chain) > 1 else "") + ")"
+            got = released(flatten(chain, name), f"KiCad {src[6:]} (reused" + (", flattened from " + " -> ".join(str(s[1]) for s in chain[1:]) if len(chain) > 1 else "") + ")")
+            if got:
+                return got
         if src.startswith("local:"):
             lib, sname = src[6:].split(":", 1)
             f = next((p for r in libs for p in sorted(Path(r).rglob(f"{lib}.kicad_sym"))), None)
             if f:
                 chain, _ = K.load_symbol(f"{f}:{sname}", None, keep_quotes=True)
-                return flatten(chain, name), f"local KiCad {lib}:{sname} (reused from {f.name})"
-            why.append(f"{lib}.kicad_sym not under --lib")
+                got = released(flatten(chain, name), f"local KiCad {lib}:{sname} (reused from {f.name})")
+                if got:
+                    return got
+            else:
+                why.append(f"{lib}.kicad_sym not under --lib")
         if src.startswith("easyeda:"):
             lcsc = src[8:]
             r = http.get(P.EasyEDA.URL.format(lcsc), headers=P.EasyEDA.HEADERS)
@@ -413,9 +516,12 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None):
                 except ValueError:
                     box = False
                 if not (SL.wants_layout(npins, rules) and box and f and (plan_dir / f).exists()):
-                    notes.extend(sub)
-                    return ks, f"EasyEDA {lcsc} (converted again with easyeda_convert)"
-                why.append(f"EasyEDA {lcsc}: {npins} pins, grouped by function in the SchLib")
+                    got = released(ks, f"EasyEDA {lcsc} (converted again with easyeda_convert)")
+                    if got:
+                        notes.extend(sub)
+                        return got
+                else:
+                    why.append(f"EasyEDA {lcsc}: {npins} pins, grouped by function in the SchLib")
             else:
                 why.append(f"EasyEDA {lcsc}: " + ("no single-unit symbol" if r.ok else r.error or f"HTTP {r.status}"))
     except (IOError, ValueError, KeyError) as e:
@@ -815,7 +921,14 @@ def _pins(sym):
 # ---------------------------------------------------------------- driver
 def export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None):
     """Write the KiCad library for plan.json into `out`; returns the report dict (also kicad_export.json).
-    rules: library rules (dict or path); None = the ecadlib.toml found from the plan's folder, if any."""
+    rules: library rules (dict or path); None = the ecadlib.toml found from the plan's folder, if any.
+    The library lock is held for the whole export (change control: the files read are the settled ones)."""
+    from . import change_gate as CG
+    with CG.publishing(Path(plan).parent):
+        return _export(plan, out, name, include_held, libs, http, log, rules)
+
+
+def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None):
     plan, out = Path(plan), Path(out)
     plan_dir, lib = plan.parent, libname(name)
     from .rules import resolve
@@ -835,7 +948,8 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     out.mkdir(parents=True, exist_ok=True)
     pretty.mkdir(exist_ok=True)
     rep = {"plan": str(plan), "library": lib, "parts": [], "skipped": [], "footprints": {}, "models": {}, "errors": [], "kicad_content": False}
-    rep.update(warnings=[], written={})
+    rep.update(warnings=[], written={}, change_control=True)   # made with a ledger (a lost one fails closed)
+    kpins = {}                                 # part -> KiCad-only pin details of a reused symbol (publish line)
     report = out / "kicad_export.json"
     try:                                      # what the last export wrote (and its sha256): edited by hand since?
         prev = json.loads(report.read_text(encoding="utf-8")) if report.is_file() else {}
@@ -1015,7 +1129,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
             rep["parts"].append(row)
             continue
         try:
-            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules)
+            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules, warnings=rep["warnings"], kpins=kpins)
             sym = sym_kicad8(sym)
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
             set_fields(sym, plan_fields(it, lib, row["footprint"], props, rules))
@@ -1078,13 +1192,20 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     rep["footprints"] = {k: fps[k] for k in sorted(fps)}
     rep["symbols"] = len(symbols)
     rep["written"] = dict(sorted(rep["written"].items()))
+    rep["held_changes"] = []
+    shipped = {r["part"] for r in rep["parts"] if r.get("symbol") or r.get("footprint")}
     for it in items:
         ch = it.get("change") or {}
         if ch.get("state") == "held":
-            rep["warnings"].append(f"{it['name']}: a change is held for approval ({ch.get('summary')}); the released "
-                                   f"revision r{ch.get('base')} is exported (ecadlib part show {plan} {it['name']})")
+            rep["held_changes"].append(it["name"])
+            kept = (f"the released revision r{ch['base']} is exported" if ch.get("base") is not None else
+                    "it has no released revision; --include-held exported the held version anyway"
+                    if it["name"] in shipped else "it has no released revision, so it is not exported")
+            rep["warnings"].append(f"{it['name']}: a change is held for approval ({ch.get('summary')}); {kept} "
+                                   f"(ecadlib part show {plan} {it['name']})")
     exported = {r["part"] for r in rep["parts"] if r.get("symbol") or r.get("footprint")}
-    CG.record_publish(plan_dir, items, f"kicad:{CG.project_key(plan_dir, out)}", ok=lambda it: it["name"] in exported)
+    CG.record_publish(plan_dir, items, f"kicad:{CG.project_key(plan_dir, out)}", ok=lambda it: it["name"] in exported,
+                      detail=lambda it: {"ksym": kpins[it["name"]]} if it["name"] in kpins else {})
     rep["libraries"] = dict(sorted({**prev_libs, lib: _lib_record(rep)}.items()))
     body = json.dumps(rep, indent=2) + "\n"
     if not report.is_file() or report.read_text(encoding="utf-8") != body:
@@ -1130,7 +1251,9 @@ def print_result(rep, out, plan, t=None):
                      "into the project: its own lib-table rows are kept (copying these tables over would drop them); "
                      "or Preferences > Manage Symbol / Footprint Libraries"),
                     (f"ecadlib parity {q(plan)} --kicad {q(out)}", "check KiCad and Altium agree, part by part")]
-              + ([(f"ecadlib review {q(plan)}", "the held parts")] if rep["skipped"] else []))
+              + ([(f"ecadlib review {q(plan)}", "the held parts")] if rep["skipped"] else [])
+              + ([(f"ecadlib part status {q(plan)}", f"{M.plural(len(rep['held_changes']), 'held change')} waiting for "
+                   "a person (exit code 1 until then)")] if rep.get("held_changes") else []))
 
 
 def _shell_quote(s):
@@ -1160,11 +1283,12 @@ def main(argv=None):
     except PlanError as e:
         print(f"ecadlib kicad-export: {e}", file=sys.stderr)
         return 2
+    # exit 1 also while a change is held: the library on disk is not what was exported, a person has to look
     if a.json:
         print(json.dumps(rep, default=str))
-        return 1 if rep["errors"] else 0
+        return 1 if rep["errors"] or rep.get("held_changes") else 0
     print_result(rep, Path(a.out), a.plan)
-    return 1 if rep["errors"] else 0
+    return 1 if rep["errors"] or rep.get("held_changes") else 0
 
 
 if __name__ == "__main__":

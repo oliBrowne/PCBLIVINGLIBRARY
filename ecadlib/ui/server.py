@@ -510,7 +510,7 @@ def make_handler(ws: Workspace):
         def _change_decide(self, b):
             return ws.decide_change(self._bom(b, True), _str(b.get("part"), "part"), b.get("decision"),
                                     _str(b.get("user"), "user"), _str(b.get("comment"), "comment", True),
-                                    _str(b.get("role"), "role", True))
+                                    _str(b.get("role"), "role", True), _str(b.get("digest"), "digest", True))
 
         def _decide(self, b):
             return ws.approve_part(self._bom(b, True), _str(b.get("part"), "part"), b.get("decision"),
