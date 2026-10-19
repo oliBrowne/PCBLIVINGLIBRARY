@@ -719,7 +719,15 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
             rep["skipped"].append({"part": it["name"], "why": "held: " + "; ".join(it.get("hold_reasons", [])),
                                    "says": [{k: e[k] for k in ("code", "text", "fix")} for e in M.explain_all(it.get("hold_reasons"))]})
             continue
+        if status == "awaiting_approval":      # never released (no ledger revision): nothing to publish yet (#105)
+            rep["skipped"].append({"part": it["name"], "why": "awaiting_approval: waiting for sign-off, not released yet",
+                                   "says": [{"code": "awaiting_approval", "text": "Waiting for sign-off: not released yet.",
+                                             "fix": f"ecadlib approve {plan} status"}]})
+            continue
         sname, notes = kname(it["name"]), []
+        if str((it.get("source") or {}).get("symbol") or "").startswith("easyeda:") and not P.unofficial_allowed(rules):
+            notes.append("EasyEDA not fetched again ([providers] unofficial = false): the symbol is read back from the SchLib")
+            it = dict(it, source=dict(it["source"], symbol=""))
         row = {"part": it["name"], "symbol_name": sname, "status": status, "symbol": None, "footprint": None, "notes": notes}
         if sname in symbols:
             rep["errors"].append(f"{it['name']}: symbol name {sname} already used by another part"); continue
@@ -883,8 +891,8 @@ def print_result(rep, out, plan, t=None):
         if t.verbose:
             rows += [["", "", t.dim(n)] for n in r["notes"]]
     for s in rep["skipped"]:
-        e = M.explain(str(s["why"]).removeprefix("held: "))
-        rows.append([t.status("held", "skipped"), s["part"], e["text"]])
+        says = s.get("says") or [M.explain(str(s["why"]).removeprefix("held: "))]   # one sentence per reason
+        rows.append([t.status("held", "skipped"), s["part"], says[0]["text"] + (f" (+{len(says) - 1} more)" if len(says) > 1 else "")])
     t.table(rows)
     if t.verbose:
         for fpn, f in rep["footprints"].items():
@@ -896,9 +904,12 @@ def print_result(rep, out, plan, t=None):
         t.err.error("kicad-export", M.clean(str(e)), "run again with -v to see which part; --debug for details")
     steps = sum(1 for v in rep["models"].values() if v)
     lib = rep["library"]
+    waiting = [s for s in rep["skipped"] if str(s["why"]).startswith("awaiting_approval")]
+    held = [s for s in rep["skipped"] if s not in waiting]
     head = (f"{M.plural(rep['symbols'], 'symbol')}, {M.plural(len(rep['footprints']), 'footprint')}, "
             f"{steps}/{len(rep['models'])} 3D models written"
-            + (f"; {M.plural(len(rep['skipped']), 'held part')} left out (--include-held adds them)" if rep["skipped"] else ""))
+            + (f"; {M.plural(len(held), 'held part')} left out (--include-held adds them)" if held else "")
+            + (f"; {M.plural(len(waiting), 'part')} waiting for sign-off left out" if waiting else ""))
     t.summary(head, written=[(f"{out}/{lib}.kicad_sym", "symbols"), (f"{out}/{lib}.pretty/", "footprints"),
                              (f"{out}/sym-lib-table, fp-lib-table", "library tables (paths use ${KIPRJMOD})")],
               next=[(f"cp -r {out}/* <your KiCad project folder>/", "then reopen the project; or add the library in "
