@@ -448,6 +448,7 @@ def held_block(prop):
             "changes": [{"class": c["class"], "text": c["text"]} for c in ch], "writer": prop.get("writer"),
             "proposed_at": prop.get("at"), "approvals": [a.get("who") for a in prop.get("approvals") or []],
             **({"rejected_by": prop["rejected"].get("by")} if prop.get("rejected") else {}),
+            **({"refused": prop["refused"].get("reason")} if prop.get("refused") else {}),
             **({"used_in": prop["used_in"]} if prop.get("used_in") else {})}
 
 

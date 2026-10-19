@@ -663,6 +663,9 @@ def main(argv=None):
     for r in results:
         print(f"  {r['action']:<18} {r['name']}")
     print(f"report -> {out}")
+    if a.dry_run:                              # no network: what the workspace already holds was not looked up
+        print("dry run: the workspace was not read, so a part shown as `release` may already be there (the real push "
+              "then updates it, or adds a new revision for an approved change)")
     failed = sum(r["action"] == "error" for r in results)
     if failed:
         sys.exit(f"{failed} of {len(results)} parts failed (see {out})")

@@ -18,7 +18,8 @@ kicad_import manifest.json when there is no plan. A line of the ledger:
 Events: `release` (a new revision: the first one is the baseline, later ones passed the gate or were approved),
 `revert` (a new revision that copies an older one), `hold` (a change was held; the proposal is in .ecadlib/proposed),
 `reject` (a person rejected a held change; the same proposal is held again without asking), `publish` (a revision went
-to a target: altium365, dblib, kicad), `approve` (one approval of a held change, for the two-person rule). The head of
+to a target: altium365, dblib, kicad), `approve` (one approval of a held change, for the two-person rule), `refused`
+(an approval not applied because the proposed version fails the release check; it is not counted as an approval). The head of
 a part is its last release or revert. Nothing is ever deleted: `ecadlib part history` shows every line."""
 import datetime, hashlib, json, os, re
 from pathlib import Path

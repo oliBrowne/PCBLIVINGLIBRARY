@@ -15,7 +15,8 @@ change); with --plan, PART@3 and PART@proposed are enough. The answer: each chan
 electrical, geometry-major, geometry-minor, cosmetic) and what the [change] policy does with it.
 
 approve: with [change] approvers = 2 a change needs two different people; the first approval is recorded and the
-change stays held. The approved files go through the release check first; a version that fails it is not applied.
+change stays held. The approved files go through the release check first; a version that fails it is not applied,
+and that approval is not counted (`part status` shows "approval refused: release check").
 Parts that share a file with the approved part (two resistors on one Resistor.SchLib) are approved with it.
 Who you are: --user, else $ECADLIB_USER, else git config user.name / user.email. When the sign-off policy
 (approvals.json / [release.approvals]) lists users, only they may approve. Exit codes: 0 done / nothing held,
@@ -130,6 +131,8 @@ def cmd_status(a):
     print(f"{len(props)} held change(s) waiting for a person (approvers needed: {pol['approvers']}):")
     for p in props:
         rej = f"  (rejected before by {p['rejected'].get('by')})" if p.get("rejected") else ""
+        if p.get("refused"):
+            rej += f"  (approval refused: release check, {p['refused'].get('by')})"
         got = len(p.get("approvals") or [])
         print(f"  {p['part']:<28} r{p['base']} -> proposed by {p['writer']}: {_counts(p['classes'])}{rej}"
               + (f"  [{got}/{pol['approvers']} approvals]" if got else ""))
@@ -150,7 +153,8 @@ def cmd_show(a):
         print(json.dumps({"part": a.part, "head": head and {k: head.get(k) for k in ("revision", "at", "by", "decision", "eid",
                                                                                      "gid", "digest")},
                           "proposal": prop and {k: prop.get(k) for k in ("base", "writer", "by", "at", "changes", "classes",
-                                                                         "why", "approvals", "used_in", "rejected", "digest")},
+                                                                         "why", "approvals", "used_in", "rejected", "refused",
+                                                                         "digest")},
                           "used_in": [{"project": p, "revision": r} for p, r, _ in LG.used_in(plan.parent, a.part)]},
                          indent=1, default=str))
         return 0
@@ -172,6 +176,8 @@ def cmd_show(a):
         print("approved so far by: " + ", ".join(x["who"] for x in prop["approvals"]))
     if prop.get("rejected"):
         print(f"rejected before by {prop['rejected'].get('by')}: {prop['rejected'].get('reason') or ''}")
+    if prop.get("refused"):
+        print(f"approval by {prop['refused'].get('by')} refused: {prop['refused'].get('reason')}")
     print(f"diff again: ecadlib part diff {plan}:{a.part}@head {plan}:{a.part}@proposed")
     return 0
 
@@ -277,13 +283,29 @@ def approve(plan, parts, who=None, comment="", role=None):
             if any(AP.user_key(x["who"]) == key for x in prop.get("approvals") or []):
                 raise CG.ChangeError(f"{prop['part']}: {who} approved this change already"
                                      + (f"; it needs {pol['approvers']} different people" if pol["approvers"] > 1 else ""))
+        final = len(g[0].get("approvals") or []) + 1 >= pol["approvers"]
+        if final:                              # the last approval: the proposed files must pass the release check first
+            try:
+                _put_proposed(plan, items, g, lg)
+            except CG.ChangeError as e:        # not recorded as an approval: the part stays held, and says why
+                for prop in g:
+                    prop["refused"] = {"by": who, "at": LG.now(), "reason": str(e)}
+                    lg.append({"event": "refused", "part": prop["part"], "digest": prop["digest"], "by": who,
+                               "base": prop["base"], "reason": str(e)})
+                    lg.save_proposal(prop)
+                    it = next((i for i in items if i["name"] == prop["part"]), None)
+                    if it is not None:
+                        it["change"] = CG.held_block(prop)
+                _save(plan, items)
+                raise
         for prop in g:
+            prop.pop("refused", None)
             prop.setdefault("approvals", []).append({"who": who, "key": key, "when": LG.now(), "comment": comment or "",
                                                      **({"role": role} if role else {})})
             lg.append({"event": "approve", "part": prop["part"], "digest": prop["digest"], "by": who, "base": prop["base"],
                        **({"reason": comment} if comment else {})})
             lg.save_proposal(prop)
-        if len(g[0]["approvals"]) < pol["approvers"]:
+        if not final:
             for prop in g:
                 it = next((i for i in items if i["name"] == prop["part"]), None)
                 if it is not None:
@@ -296,7 +318,9 @@ def approve(plan, parts, who=None, comment="", role=None):
     return out
 
 
-def _apply_group(plan, items, group, who, comment, lg):
+def _put_proposed(plan, items, group, lg):
+    """Put the proposed files and fields in place and run the release check on them. A version that fails it is
+    replaced by the released one again and raises ChangeError. -> the checked plan items."""
     from . import release_check as RC
     folder = plan.parent
     byname = {i["name"]: i for i in items}
@@ -327,6 +351,12 @@ def _apply_group(plan, items, group, who, comment, lg):
                 byname[p["part"]]["change"] = CG.held_block(p)
         raise CG.ChangeError(f"not applied: the proposed version fails the release check ({reasons}); the released "
                              f"version stays")
+    return checked
+
+
+def _apply_group(plan, items, group, who, comment, lg):
+    folder = plan.parent
+    byname = {i["name"]: i for i in items}         # the proposed version is in place: approve() put it there
     g = CG.Guard(folder, "approve", user=who)
     out = []
     for p in group:

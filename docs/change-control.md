@@ -59,6 +59,10 @@ ecadlib part revert ws/library AO3401A@2       # release revision 2 again (as a 
 ecadlib part diff OLD.kicad_sym NEW.kicad_sym  # classify any two versions of a part
 ```
 
+An approved change goes through the release check before it is released. If it fails (for example silkscreen now too
+close to a moved pad), the released part stays, the approval is not counted, and `part status` shows "approval refused:
+release check" with the reason.
+
 The review list (`review.md`), the web UI and the librarian's summary show held changes with what changed. Picking a
 symbol or footprint yourself in `ecadlib resolve` counts as one approval.
 

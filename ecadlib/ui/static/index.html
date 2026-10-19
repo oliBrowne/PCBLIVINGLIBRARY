@@ -1303,7 +1303,7 @@ function changeBlock(p, appr) {
   const c = p.change; if (!c) return "";
   const n = c.changes ? c.changes.length : 0;
   return `<h3>Held update to revision ${esc(c.base)}</h3>
-    <p class="small">${esc(c.writer ? `Proposed by ${c.writer}` : "Proposed")}${c.proposed_at ? ` on ${esc(c.proposed_at.slice(0, 16).replace("T", " "))}` : ""}. The released part stays as it is until this is approved.${c.approvals && c.approvals.length ? ` Approved so far by ${esc(c.approvals.join(", "))}.` : ""}${c.rejected_by ? ` Rejected before by ${esc(c.rejected_by)}.` : ""}</p>
+    <p class="small">${esc(c.writer ? `Proposed by ${c.writer}` : "Proposed")}${c.proposed_at ? ` on ${esc(c.proposed_at.slice(0, 16).replace("T", " "))}` : ""}. The released part stays as it is until this is approved.${c.approvals && c.approvals.length ? ` Approved so far by ${esc(c.approvals.join(", "))}.` : ""}${c.rejected_by ? ` Rejected before by ${esc(c.rejected_by)}.` : ""}${c.refused ? ` The last approval was not applied: ${esc(c.refused)}` : ""}</p>
     ${n ? changeRows(c.changes.slice(0, 200)) + (n > 200 ? `<div class="muted small">and ${n - 200} more</div>` : "") : ""}
     ${c.used_in && c.used_in.length ? `<p class="small">Used in: ${esc(c.used_in.join(", "))}</p>` : ""}
     ${appr ? `<div class="pactions"><button class="primary" data-chg="approve" data-part="${esc(p.part)}">Approve the update</button><button data-chg="reject" data-part="${esc(p.part)}">Keep the released part (reject)…</button></div>` : ""}`;
@@ -1315,7 +1315,7 @@ async function loadPartHistory(part, appr) {
     if (!box()) return;
     const rows = r.history.filter(e => e.event !== "approve");
     if (!rows.length) { box().textContent = "Not released yet: the first revision is recorded when the part passes the release check."; return; }
-    const what = e => e.event === "publish" ? `published r${e.revision} to ${e.target}` : e.event === "hold" ? "update held" : e.event === "reject" ? "update rejected"
+    const what = e => e.event === "publish" ? `published r${e.revision} to ${e.target}` : e.event === "hold" ? "update held" : e.event === "reject" ? "update rejected" : e.event === "refused" ? "approval refused by the release check"
       : `r${e.revision} ${e.event === "revert" ? "reverted" : e.decision || "released"}`;
     box().classList.remove("muted");
     box().innerHTML = `<div class="scroll"><table class="vs"><thead><tr><th>When</th><th>What</th><th>Who</th><th></th></tr></thead><tbody>` +

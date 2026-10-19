@@ -212,7 +212,7 @@ def cards(out, items, pictures=True):
             else _decisions(it.get("approvals")),
             "tried": (it.get("librarian") or {}).get("tried") or [],
             "change": {k: chg.get(k) for k in ("base", "summary", "classes", "changes", "writer", "proposed_at", "approvals",
-                                               "rejected_by", "used_in") if chg.get(k) is not None} if chg else None,
+                                               "rejected_by", "refused", "used_in") if chg.get(k) is not None} if chg else None,
         })
     counts = {"parts": len(parts), "ready": sum(p["status"] == "ready" for p in parts),
               "held": sum(p["status"] == "held" for p in parts),

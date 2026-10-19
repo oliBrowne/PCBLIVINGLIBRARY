@@ -316,6 +316,40 @@ def test_hand_edit_found_by_a_publisher_is_held():
     assert status["CAP-0402-100nF"] is None and status["CH340C"].startswith("not released")
 
 
+def test_an_approval_the_release_check_refuses_is_not_counted():
+    """Found in the live check on AD26: an approved change that fails the release check stays held, and the approval
+    is not recorded as one (status said "1/1 approvals" on a part that was still held). It is a `refused` line."""
+    plan, lib = demo()
+    items = items_of(plan)
+    it = item(items, "RES-0603-4.7k")
+    f = lib / it["footprint"]["file"]
+    before = f.read_bytes()
+    conv = AL.footprint_from_kicad(SP.build("R_0603_1608Metric")[0])
+    conv["pads"][0]["x"] -= 0.25               # the PcbLib only: KiCad / Altium parity fails on the approved version
+    AL.write_pcblib(f, [conv])
+    CG.publish_guard(plan, items, "kicad")
+    CG.write_plan(plan, items)
+    try:
+        CC.approve(plan, ["RES-0603-4.7k"], who=ANN, comment="new drawing")
+    except CG.ChangeError as e:
+        assert "fails the release check" in str(e) and "parity" in str(e), e
+    else:
+        raise AssertionError("a version that fails the release check was approved")
+    lg = LG.Ledger(lib)
+    prop = lg.proposal("RES-0603-4.7k")
+    assert prop["approvals"] == [] and prop["refused"]["by"] == ANN, prop
+    assert [e["event"] for e in lg.history("RES-0603-4.7k")][-2:] == ["hold", "refused"]
+    assert f.read_bytes() == before, "the released footprint is back in place"
+    ch = item(items_of(plan), "RES-0603-4.7k")["change"]
+    assert ch["state"] == "held" and ch["approvals"] == [] and "release check" in ch["refused"], ch
+    a = __import__("argparse").Namespace(plan=str(plan), json=False)
+    import contextlib, io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        CC.cmd_status(a)
+    assert "approval refused: release check" in buf.getvalue() and "approvals]" not in buf.getvalue(), buf.getvalue()
+
+
 def test_ledger_is_append_only_json_lines_and_status_cli():
     plan, lib = demo()
     items = items_of(plan)
