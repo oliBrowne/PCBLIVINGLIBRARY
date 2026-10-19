@@ -75,8 +75,7 @@ changed.
 
 ## Which model
 
-The model is set in `ecadlib.toml`, the same way as every other AI feature (see the README's "Bring your own model"
-section):
+The model is set in `ecadlib.toml`, the same way as every other AI feature (see [Bring your own model](models.md)):
 
 ```toml
 [style]
