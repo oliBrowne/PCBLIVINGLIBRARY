@@ -92,8 +92,10 @@ def test_canonical_frame_and_family_table():
     assert A.family_of(PROF, ["SOT-23"], ours("SOIC-8_3.9x4.9mm_P1.27mm")) is None     # 8 pins is no SOT-23
     a = A.assess(ours("SOIC-8_3.9x4.9mm_P1.27mm"))                       # no assembler footprint: the table
     assert (a["rotation"], A.correction(a), a["pads"]) == ("table", 270, "unchecked"), a
-    a = A.assess(ours("SOT-23"))                                         # no rule for SOT-23 yet: unknown, said why
-    assert a["rotation"] == "unknown" and A.correction(a) is None and any("no 0 deg rule for sot23" in n for n in a["notes"])
+    a = A.assess(ours("SOT-23"))                                         # SOT-23: JLCPCB's ...-BR pose, 11 / 11 parts
+    assert (a["rotation"], A.correction(a)) == ("table", 180), a
+    a = A.assess(ours("QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm"))          # JLCPCB draws QFNs both ways: no rule, said why
+    assert a["rotation"] == "unknown" and A.correction(a) is None and any("no 0 deg rule for qfn" in n for n in a["notes"])
 
 
 # ---------------------------------------------------------------- registration (synthetic robustness)
@@ -184,7 +186,7 @@ def test_risky_pad_differences():
 # ---------------------------------------------------------------- real parts and real mismatches
 def test_golden_set_agreement():
     g = json.loads((FIX / "golden.json").read_text(encoding="utf-8"))["parts"]
-    assert len(g) >= 13 and sum(p["polarized"] for p in g) >= 2
+    assert len(g) >= 60 and sum(p["polarized"] for p in g) >= 15
     agree, rows = 0, []
     for p in g:
         a = A.assess(ours(p["ours"]), theirs(p["lcsc"]), PROF, p["lcsc"])
@@ -193,6 +195,22 @@ def test_golden_set_agreement():
         rows.append((p["lcsc"], p["ours"], A.correction(a), p["correction"], a["pads"], p["pads"], ok))
     bad = [r for r in rows if not r[-1]]
     assert not bad, f"golden set: {agree}/{len(g)} agree; wrong: {bad}"
+
+
+def test_family_table_matches_every_golden_part():
+    # offline (no assembler footprint) the 0 deg rule of the family gives the rotation: it must give the golden answer
+    # on every golden-set part of that family, and a family without a rule must say why ('measured')
+    g = json.loads((FIX / "golden.json").read_text(encoding="utf-8"))["parts"]
+    seen = {}
+    for p in g:
+        fp = ours(p["ours"])
+        a = A.assess(fp, None, PROF, p["lcsc"], names=[theirs(p["lcsc"]).package], polarized=p["polarized"])
+        if (PROF["families"].get(a["family"] or "") or {}).get("zero"):
+            assert a["rotation"] == "table" and A.correction(a) == p["correction"], (p["lcsc"], a["family"], A.correction(a), a["notes"])
+            seen[a["family"]] = seen.get(a["family"], 0) + 1
+    assert all(n >= 2 for n in seen.values()) and len(seen) >= 10, seen
+    for name, fam in PROF["families"].items():
+        assert fam.get("zero") or fam.get("measured") or name == "two_pin", name
 
 
 def test_kicad_0402_against_jlcpcb_0402_is_risky():
@@ -228,6 +246,86 @@ def test_sot23_with_pin1_in_the_other_corner_is_incompatible():
         p.num = {"1": "2", "2": "1"}.get(p.num, p.num)
     a = A.assess(fp, other, PROF)
     assert a["pads"] == "incompatible" and a["hold"], (a["pads"], a["reasons"])
+
+
+def test_polarity_read_off_the_assemblers_filled_silk_marks():
+    # JLCPCB's pins on these carry no names: the band of a tantalum and the '+' of an electrolytic are filled silk
+    # shapes, which tell the + end (decided by eye on each drawing, see golden.json)
+    for lcsc, name, want in (("C11376", "CP_EIA-6032-28_Kemet-C", 180), ("C7195", "CP_EIA-3528-21_Kemet-B", 180),
+                             ("C37308", "CP_Elec_6.3x5.4", 0), ("C3338", "CP_Elec_6.3x7.7", 180)):
+        th = theirs(lcsc)
+        assert th.marks and {p.func for p in th.pins} <= {"1", "2"}, lcsc
+        a = A.assess(ours(name), th, PROF, lcsc)
+        assert A.correction(a) == want and a["rotation"] == "verified", (lcsc, A.correction(a), a["notes"])
+    th = theirs("C11376")
+    th.marks = []                                                        # without the band: never guessed
+    a = A.assess(ours("CP_EIA-6032-28_Kemet-C"), th, PROF, "C11376")
+    assert a["rotation"] == "unknown" and any("placement preview" in r for r in a["review"]), a
+
+
+def test_diode_whose_assembler_numbers_the_cathode_pad_2():
+    th = theirs("C22452")                                                # SS54: JLCPCB's pad 1 = A, pad 2 = K
+    assert {p.num: p.func for p in th.pins} == {"1": "A", "2": "K"}
+    a = A.assess(ours("D_SMA"), th, PROF, "C22452")
+    assert A.correction(a) == 0 and a["rotation"] == "verified" and a["pads"] == "risky", a   # not the 180 by number
+    for p in th.pads:                                                    # names gone: its silk bar still says
+        p.func = ""
+    a = A.assess(ours("D_SMA"), th, PROF, "C22452")
+    assert A.correction(a) == 0 and a["rotation"] == "verified", (A.correction(a), a["notes"])
+
+
+def test_wrong_footprint_for_the_part_is_flagged():
+    a = A.assess(ours("SOT-23"), theirs("C82942"), PROF, "C82942")      # SOT-23 lands for a SOT-23-5 regulator
+    assert a["pads"] == "incompatible" and a["hold"] and a["rotation"] == "unknown", a
+    a = A.assess(ours("D_SOD-123"), theirs("C8678"), PROF, "C8678")      # SOD-123 lands for an SMA diode
+    assert a["pads"] == "risky" and any("pad spacing differs" in r for r in a["reasons"]), a
+    a = A.assess(ours("SOT-23"), theirs("C2135"), PROF, "C2135")         # the right one: JLCPCB's SOT-23 -BR pose
+    assert a["pads"] == "compatible" and A.correction(a) == 180, a
+
+
+def test_same_pin_on_two_numbers_is_not_a_renumbering():
+    # SOT-223: KiCad numbers the tab 2, JLCPCB numbers it 4 and its own symbol names 4 and 2 both VOUT
+    a = A.assess(ours("SOT-223-3_TabPin2"), theirs("C6186"), PROF, "C6186")
+    assert a["pads"] == "risky" and A.correction(a) == 180 and not any("other numbers" in r for r in a["reasons"]), a
+    th = theirs("C6186")
+    for p in th.pads:
+        if p.num == "4":
+            p.func = "TAB"                                               # a different pin: a real renumbering
+    a = A.assess(ours("SOT-223-3_TabPin2"), th, PROF, "C6186")
+    assert a["pads"] == "incompatible" and any("ours 2 = theirs 4" in r for r in a["reasons"]), a
+    # USB-C: KiCad stacks A1 and B12 on one land, JLCPCB numbers that land 'A1B12'
+    usb = ours("USB_C_Receptacle_HRO_TYPE-C-31-M-12")
+    a = A.assess(usb, theirs("C165948"), PROF, "C165948")
+    assert a["pads"] == "compatible" and A.correction(a) == 0 and a["rotation"] == "verified", a
+    th = theirs("C165948")
+    for p in th.pads:                                                    # CC1 and DP1 swapped: caught
+        p.num = {"A5": "A6", "A6": "A5"}.get(p.num, p.num)
+    a = A.assess(usb, th, PROF, "C165948")
+    assert a["pads"] == "incompatible" and any("ours A5 = theirs A6" in r for r in a["reasons"]), a
+    assert A._aliases(theirs("C165948"))["A1B12"] >= {"A1", "B12"}
+
+
+def test_kicad_custom_and_paste_split_pads():
+    sot89 = {p.num: p for p in ours("SOT-89-3").pads}                    # pad 2 is a custom lead + tab shape
+    assert sot89["2"].w > 4 and sot89["2"].rot == 0, sot89["2"]
+    a = A.assess(ours("SOT-89-3"), theirs("C21583"), PROF, "C21583")
+    assert A.correction(a) == 180 and a["pads"] == "risky" and not any("lacks" in r for r in a["reasons"]), a
+    dpak = ours("TO-252-2")                                              # four copper + paste windows on the tab
+    assert sorted(p.num for p in dpak.pads) == ["1", "2", "3"], [(p.num, p.w, p.h) for p in dpak.pads]
+    a = A.assess(dpak, theirs("C99124"), PROF, "C99124")
+    assert a["pads"] == "compatible" and A.correction(a) == 0, a
+
+
+def test_bidirectional_and_square_lands():
+    a = A.assess(ours("D_SOD-323"), theirs("C2827694"), PROF, "C2827694")   # PESD5V0S1BA, package ...-BI
+    assert not a["polarized"] and a["rotation"] == "verified" and A.correction(a) == 0, a
+    th = theirs("C2827694")
+    th.package = th.package.replace("-BI", "")
+    a = A.assess(ours("D_SOD-323"), th, PROF, "C2827694")                # a plain diode name: the family table,
+    assert a["polarized"] and a["rotation"] == "table", a                # never the unmarked pads, and a person checks
+    assert any("placement preview" in r for r in a["review"]), a
+    a = A.assess(ours("D_SMA"), theirs("C2480"), PROF, "C2480")          # SS14's 1.52 x 1.68 mm lands: the lead runs
+    assert a["pads"] == "compatible", a["reasons"]                       # along x, so 1.68 vs 1.80 is the width
 
 
 def test_override_and_parameters():
@@ -297,7 +395,7 @@ def test_unofficial_false_degrades_to_the_table():
     by = {p["ref"]: p for p in rep["parts"]}
     assert by["R1"]["rotation"] == "table" and by["R1"]["correction"] == 0 and by["R1"]["pads"] == "unchecked"
     assert by["U1"]["rotation"] == "table" and by["U1"]["correction"] == 270
-    assert by["Q1"]["rotation"] == "unknown"
+    assert by["Q1"]["rotation"] == "table" and by["Q1"]["correction"] == 180
     assert any("unofficial = false" in n for n in by["R1"]["notes"])
 
 
@@ -370,7 +468,9 @@ def test_round_trip_assembler_pads_land_on_the_board_pads():
 
 def test_export_files_and_listed_parts():
     pls, info = IO.read_board(BOARDS / "two_sided.kicad_pcb")
-    rep = IO.run_check(pls, PROF, IO.recorded(EE))
+    prof = json.loads(json.dumps(PROF))
+    prof["families"]["sot23"]["zero"] = None                            # Q1 (no LCSC number) with no rule: unknown
+    rep = IO.run_check(pls, prof, IO.recorded(EE))
     with tempfile.TemporaryDirectory() as d:
         files = IO.export(rep, info, PROF, d)
         assert [f.name for f in files] == ["two_sided-jlcpcb-bom.csv", "two_sided-jlcpcb-cpl.csv", "two_sided-jlcpcb-assembly.md",
@@ -442,13 +542,14 @@ def test_cli_export_check_part_and_profiles():
             rc = CLI.main(["export", str(BOARDS / "two_sided.kicad_pcb"), "-o", d, "--recorded", str(EE), "--cache", str(Path(d) / "c")])
         assert rc == 0, buf.getvalue()
         assert (Path(d) / "two_sided-jlcpcb-cpl.csv").exists() and any((Path(d) / "overlays").glob("*.png")) in (True, False)
-        assert "Rotation unknown" in buf.getvalue() and "Q1 (SOT-23)" in buf.getvalue()
+        assert "No LCSC part number" in buf.getvalue() and "Q1 (MMBT3904, SOT-23)" in buf.getvalue()
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             rc = CLI.main(["check", str(BOARDS / "two_sided.kicad_pcb"), "--strict", "--recorded", str(EE), "--json",
                            "--cache", str(Path(d) / "c")])
         js = json.loads(buf.getvalue())
-        assert rc == 1 and js["summary"]["hold"] >= 2, js["summary"]           # strict: risky R3 and unknown Q1 held
+        held = [x["ref"] for x in js["parts"] if x.get("hold")]
+        assert rc == 1 and "R3" in held, (js["summary"], held)              # strict: risky R3 held
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             rc = CLI.main(["part", str(K7 / "R_0402_1005Metric.kicad_mod"), "--theirs", str(EE / "C25744.json"), "--json",

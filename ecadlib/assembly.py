@@ -128,6 +128,7 @@ class Footprint:
     source: str = ""
     package: str = ""                              # the assembler's package name (EasyEDA title), when known
     meta: dict = field(default_factory=dict)       # the assembler's record of the part (easyeda_meta), when fetched
+    marks: list = field(default_factory=list)      # outlines of filled silk shapes (EasyEDA's polarity band, a '+')
 
     @property
     def pins(self):
@@ -212,12 +213,38 @@ def _from_vc(fp, source="", flip=False, angle=0.0):
         if not p["copper"] and p["kind"] != "np_thru_hole":
             continue                                   # paste-only apertures are not pads
         r = p["rot"] - angle                           # a board file keeps each pad's angle with the footprint's added
-        y, r = (-p["y"], -r) if flip else (p["y"], r)
-        pads.append(Pad(p["num"], p["x"], y, p["w"], p["h"], r, p["shape"], p["kind"]))
+        x, y, w, h = p["x"], p["y"], p["w"], p["h"]
+        if p["shape"] == "custom" and p.get("shapes"):   # a custom pad (SOT-89's lead + tab): its whole copper, boxed
+            from .visual_check import _rot               # in footprint axes (no pad angle of its own), as the EasyEDA
+            pts = [_rot(q[0] - p["x"], q[1] - p["y"], -angle) for s in p["shapes"]   # converter boxes a polygon pad
+                   for q in (s[1] if s[0] == "poly" else s[1:3])]
+            xs, ys = [q[0] for q in pts], [q[1] for q in pts]
+            x, y = p["x"] + (min(xs) + max(xs)) / 2, p["y"] + (min(ys) + max(ys)) / 2
+            w, h, r = max(xs) - min(xs), max(ys) - min(ys), 0.0
+        y, r = (-y, -r) if flip else (y, r)
+        pads.append(Pad(p["num"], x, y, w, h, r, p["shape"], p["kind"]))
+    pads = _fold_splits(pads)
     mirror = (lambda s: [((a[0], -a[1]), (b[0], -b[1])) for a, b in s]) if flip else (lambda s: s)
     side = "B" if flip else "F"
     return Footprint(fp["name"], pads, mirror(_segs_kicad(fp["layers"], (f"{side}.SilkS", f"{side}.Silkscreen"))),
                      mirror(_segs_kicad(fp["layers"], (f"{side}.Fab",))), source)
+
+
+def _fold_splits(pads):
+    """Drop a pad that lies wholly inside a bigger pad with the same number: a paste split of a tab (KiCad's TO-252
+    draws four copper + paste windows over its copper-only tab), not a land of its own."""
+    def box(p):
+        w, h = p.size()
+        return p.x - w / 2, p.y - h / 2, p.x + w / 2, p.y + h / 2
+    out = []
+    for p in pads:
+        a = box(p)
+        inside = any(q is not p and q.num == p.num and p.num and q.w * q.h > p.w * p.h and q.kind == p.kind
+                     and (lambda b: a[0] >= b[0] - 1e-6 and a[1] >= b[1] - 1e-6 and a[2] <= b[2] + 1e-6
+                          and a[3] <= b[3] + 1e-6)(box(q)) for q in pads)
+        if not inside:
+            out.append(p)
+    return out
 
 
 def from_node(node, source="", flip=False, angle=0.0):
@@ -301,7 +328,24 @@ def from_easyeda(payload, source=""):
     for p in fp.pads:
         p.func = names.get(_num(p.num), "")
     fp.meta = easyeda_meta(payload)
+    fp.marks = _easyeda_marks(pkg["dataStr"])
     return fp
+
+
+def _easyeda_marks(data):
+    """Outlines of the filled shapes on EasyEDA's top silk (SOLIDREGION on layer 3): the band of a tantalum, the '+'
+    beside an electrolytic's + terminal. The converter leaves them out of the footprint (KiCad text has no use for
+    them there); the polarity check reads them first."""
+    from . import easyeda_convert as EC
+    head = data.get("head") or {}
+    ox, oy = EC._f(head.get("x")), EC._f(head.get("y"))
+    out = []
+    for sh in data.get("shape") or []:
+        f = sh.split("~") if isinstance(sh, str) else []
+        if len(f) > 3 and f[0] == "SOLIDREGION" and EC._f(f[1]) == 3:
+            pts = [((x - ox) * EC.U, (y - oy) * EC.U) for x, y in (EC._region(f[3]) or [])]
+            out += list(zip(pts, pts[1:] + pts[:1])) if len(pts) >= 3 else []
+    return out
 
 
 def transform(pads, turn, mirror=False):
@@ -392,15 +436,16 @@ def frame(fp, family=None):
 
 
 def _marked_end(fp, a, b):
-    """For a two-pin part: 'pin1' / 'pin2' when the silk (else fab) marks one end more than the other (a cathode bar,
-    a '+', a dot), None when the drawing is symmetric. Ink is counted beyond the body centre on each pad's side."""
+    """For a two-pin part: 'pin1' / 'pin2' when the filled silk marks (else the silk lines, else fab) mark one end
+    more than the other (a cathode bar, a '+', a dot), None when the drawing is symmetric. Ink is counted beyond the
+    body centre on each pad's side."""
     ax, ay = b.x - a.x, b.y - a.y
     L = math.hypot(ax, ay)
     if L < 1e-9:
         return None
     ux, uy = ax / L, ay / L
     mx, my = (a.x + b.x) / 2, (a.y + b.y) / 2
-    for segs in (fp.silk, fp.fab):
+    for i_, segs in enumerate((fp.marks, fp.silk, fp.fab)):
         ink = [0.0, 0.0]
         for p, q in segs:
             n = max(1, int(math.hypot(q[0] - p[0], q[1] - p[1]) / 0.05))
@@ -418,7 +463,8 @@ def _marked_end(fp, a, b):
                 return "pin1"
             if ink[1] > 1.35 * ink[0] + 0.1:
                 return "pin2"
-            return None
+            if i_:                                  # filled marks that do not settle it: read the silk lines next
+                return None
     return None
 
 
@@ -587,6 +633,8 @@ def compare(ours, theirs, fit, tol):
         w, h = p.size(fit.turn)
         mov.append((p, x, y, w, h))
     theirs_c = [p for p in theirs.pads if p.kind != "np_thru_hole"]
+    tb = _bbox([q for p in theirs_c for q in _extent(p)]) if theirs_c else (0, 0, 0, 0)
+    tcx, tcy = (tb[0] + tb[2]) / 2, (tb[1] + tb[3]) / 2
     used, rows, lost_theirs = set(), [], []
     for b in sorted(theirs_c, key=lambda b: -b.w * b.h):
         bw, bh = b.size()
@@ -603,7 +651,9 @@ def compare(ours, theirs, fit, tol):
         w, h = (p.h, p.w) if round(((p.rot + fit.turn - b.rot) % 180) / 90) % 2 else (p.w, p.h)
         if (bw, bh) != (b.w, b.h):
             w, h = h, w
-        along_x = bw >= bh                          # their pad's long axis: the lead's direction
+        along_x = bw >= bh                          # their pad's long axis: the lead's direction; a land near
+        if max(bw, bh) < 1.25 * min(bw, bh):         # square (SS14's 1.52 x 1.68 mm) has none: the lead points
+            along_x = abs(b.x - tcx) >= abs(b.y - tcy)  # away from the footprint's centre
         across = abs(b.y - y) if along_x else abs(b.x - x)
         if abs(bw - bh) < 0.05 * max(bw, bh):        # square / round land: no lead axis
             across = max(abs(b.x - x), abs(b.y - y))
@@ -643,9 +693,14 @@ def pad_verdict(ours, theirs, reg, tol):
     if fit is None:
         return "incompatible", [reg.get("why") or "no fit"], []
     reasons = []
-    na = {_num(p.num) for p in ours.pins if not _is_ep(p, ours)}     # an exposed pad on one side only is a risk, below
-    nb = {_num(p.num) for p in theirs.pins if not _is_ep(p, theirs)}
-    if reg.get("by") == "number" and len(na) != len(nb):
+    a_all, b_all = {_num(p.num) for p in ours.pins}, {_num(p.num) for p in theirs.pins}
+    # an exposed pad on one side only is a risk, below; a tab both sides number alike is a pin like any other
+    na = {_num(p.num) for p in ours.pins if not (_is_ep(p, ours) and _num(p.num) not in b_all)}
+    nb = {_num(p.num) for p in theirs.pins if not (_is_ep(p, theirs) and _num(p.num) not in a_all)}
+    al = _aliases(theirs)
+    same = lambda o, t: o == t or o in al.get(t, ())
+    explained = all(any(same(o, t) for t in nb) for o in na) and all(any(same(o, t) for o in na) for t in nb)
+    if reg.get("by") == "number" and len(na) != len(nb) and not explained:
         reasons.append(f"pin count differs: ours {len(na)} ({_names(ours.pins)}), theirs {len(nb)} ({_names(theirs.pins)})")
     m = reg.get("mirror")
     if m and m.residual + 1e-3 < 0.5 * fit.residual and fit.residual > tol["position_mm"]:
@@ -659,7 +714,8 @@ def pad_verdict(ours, theirs, reg, tol):
         w = max(off, key=lambda r: r["across"])
         reasons.append(f"pads do not line up: {len(off)} pad(s) off their land sideways, worst pad {w['ours']} by "
                        f"{w['across']:.3f} mm (pitch or spacing differs)")
-    real_renum = [r for r in renum if not (_is_ep(_pad(ours, r["ours"]), ours) and _is_ep(_pad(theirs, r["theirs"]), theirs))]
+    real_renum = [r for r in renum if not (_is_ep(_pad(ours, r["ours"]), ours) and _is_ep(_pad(theirs, r["theirs"]), theirs))
+                  and not same(_num(r["ours"]), _num(r["theirs"]))]
     if real_renum and reg.get("by") == "number":
         reasons.append("pads in the same place carry other numbers: " +
                        ", ".join(f"ours {r['ours']} = theirs {r['theirs']}" for r in real_renum[:6]))
@@ -671,7 +727,7 @@ def pad_verdict(ours, theirs, reg, tol):
     risky = []
     if lost_t_pins:
         risky.append(f"their footprint has an exposed pad ({', '.join(p.num for p in lost_t_pins)}) that ours lacks")
-    lost_o_pins = [p for p in lost_o if p.num and not MOUNT.match(p.num)]
+    lost_o_pins = [p for p in lost_o if p.num and not MOUNT.match(p.num) and not _stacked(p, ours, rows, al)]
     if lost_o_pins:
         risky.append("our footprint has pads the assembler's lacks: " + ", ".join(p.num for p in lost_o_pins[:8])
                      + (" (exposed pad)" if all(_is_ep(p, ours) for p in lost_o_pins) else ""))
@@ -702,6 +758,36 @@ def pad_verdict(ours, theirs, reg, tol):
     w = max(rows, key=lambda r: max(r["dpos"], abs(r["dw"]), abs(r["dh"]))) if rows else None
     note = [f"same pads within tolerance; largest difference pad {w['ours']}: {max(w['dpos'], abs(w['dw']), abs(w['dh'])):.3f} mm"] if w else []
     return "compatible", note, rows
+
+
+def _stacked(p, fp, rows, al):
+    """Our pad p sits on another of our pads (KiCad's USB-C stacks A1 and B12) that paired with an assembler pad
+    numbered for both pins ('A1B12'): one land, not a pad the assembler lacks."""
+    for r in rows:
+        q = _pad(fp, r["ours"])
+        if q is not p and abs(q.x - p.x) < 0.01 and abs(q.y - p.y) < 0.01 and _num(p.num) in al.get(_num(r["theirs"]), ()):
+            return True
+    return False
+
+
+def _aliases(fp):
+    """{pad number: the numbers that are the same pin} on the assembler's footprint: a pad numbered for two pins at
+    once ('A1B12' on JLCPCB's USB-C, where KiCad stacks A1 and B12), and pads its own symbol gives one pin name
+    (SOT-223's tab 4 and pin 2, both VOUT). Pads named NC / DNC or by bare numbers are not tied."""
+    al, by_name = {}, {}
+    for p in fp.pins:
+        n = _num(p.num)
+        parts = re.findall(r"[A-Z]+\d+", n)
+        al.setdefault(n, {n}).update(parts if len(parts) > 1 and "".join(parts) == n else ())
+        f = re.sub(r"\s", "", str(p.func or "")).upper()
+        if f and not re.fullmatch(r"\d+|N\.?C\.?\d*|DNC|NC\.?", f):
+            by_name.setdefault(f, set()).add(n)
+    for ns in by_name.values():
+        if len(ns) > 1:
+            tied = set().union(*(al[n] for n in ns))
+            for n in ns:
+                al[n] = al[n] | tied
+    return al
 
 
 def _pad(fp, num):
@@ -747,10 +833,14 @@ def assess(ours, theirs=None, prof=None, lcsc="", names=(), strict=False, polari
     fam = family_of(prof, names, ours)
     famd = prof["families"].get(fam or "") or {}
     pol = bool(famd.get("polarized")) if polarized is None else polarized
+    bidi = polarized is None and pol and theirs is not None and re.search(r"-BI(?![A-Z])", theirs.package or "")
+    pol = False if bidi else pol
     fr = frame(ours, fam)
     out = {"profile": prof["profile"], "lcsc": lcsc, "family": fam, "polarized": pol, "frame": fr, "pads": "unchecked",
            "rotation": "unknown", "turn": None, "offset": (0.0, 0.0), "residual": None, "reasons": [], "review": [],
            "hold": [], "rows": [], "fit": None, "notes": [], "theirs": theirs.package if theirs else ""}
+    if bidi:
+        out["notes"].append(f"the assembler's package {theirs.package} is bidirectional (-BI): not polarized")
     ov = override_for(prof, lcsc, names)
     if theirs is not None:
         ra = rb = {}
@@ -762,7 +852,7 @@ def assess(ours, theirs=None, prof=None, lcsc="", names=(), strict=False, polari
                 out["notes"].append(f"terminals paired by polarity: ours from {how_a}, theirs from {how_b}")
                 if how_b == "pin names":
                     mk = roles(Footprint(theirs.name, [Pad(q.num, q.x, q.y, q.w, q.h, q.rot, q.shape, q.kind) for q in theirs.pads],
-                                         theirs.silk, theirs.fab), p1)[0]
+                                         theirs.silk, theirs.fab, marks=theirs.marks), p1)[0]
                     if mk and mk != rb:
                         out["review"].append("the assembler's pin names and its polarity mark point at opposite ends; "
                                              "the pin names were used: check the overlay")

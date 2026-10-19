@@ -2132,7 +2132,7 @@ worked out from the pads, not guessed: `ecadlib assembly export board.kicad_pcb 
 and lists every part it could not settle. The librarian runs the same check on each part it builds (incompatible pads
 are held). The Altium menu and the KiCad window have **Assembly check (JLCPCB)**. The rules are data in
 `ecadlib/assembly_profiles/jlcpcb.json`, each with its source. See [docs/assembly.md](docs/assembly.md) for the method,
-the golden-set results and the limits.
+the golden-set results (79 real parts, all agree with the hand-decided answers) and the limits.
 
 ## Credits
 
