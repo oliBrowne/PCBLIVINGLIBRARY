@@ -20,7 +20,7 @@ import collections, json, random, re, struct, tempfile
 from pathlib import Path
 
 from ecadlib import altium_lib as AL, footprint_adv as A, footprint_bench as B, footprint_check as C, footprint_gen as F, \
-    kicad_export as X, sexpr, step_gen as S, symbol_layout as SL
+    kicad_export as X, rules as RU, sexpr, step_gen as S, symbol_layout as SL
 
 ADV = Path(__file__).resolve().parent.parent / "ecadlib" / "package_specs" / "advanced"
 SPEC = lambda n: json.loads((ADV / f"{n}.json").read_text())
@@ -39,7 +39,7 @@ def test_different_supplies_are_never_stacked():
     pins = [{"num": str(i + 1), "name": n, "type": "power_in"} for i, n in
             enumerate(["VDD1", "GND1", "VDD2", "GND2", "VDD18", "VDD33", "VDD_1", "VDD_2", "VDD_3", "VCC_18", "VCC_33"])]
     pins += [{"num": str(i), "name": f"IO{i}", "type": "io"} for i in range(12, 50)]
-    sym = SL.build("ISO", pins)
+    sym = SL.build("ISO", pins, rules={"symbols": dict(RU.DEFAULTS["symbols"], stack_power="stack")})
     stacks = sorted(sorted(p["name"] for p in ps) for ps in _spots(sym).values() if len(ps) > 1)
     assert stacks == [["VDD_1", "VDD_2", "VDD_3"]], stacks             # instance numbers 1..n only
     assert SL.stack_key("VDD1") == "VDD1" and SL.stack_key("VDD_2") == "VDD"
