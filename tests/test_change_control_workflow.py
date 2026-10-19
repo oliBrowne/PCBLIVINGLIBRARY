@@ -282,7 +282,7 @@ def test_a_deleted_or_cut_ledger_is_never_silently_adopted():
     assert rc == 2 and "pins swapped" in out and "--accept-changes" in out, out     # R2-3: the swap is shown
     rc, out = run_cli("adopt", lib, "--all", "-m", "checked the pinout against the datasheet", "--user", ANN,
                       "--accept-changes")
-    assert rc == 0 and "AO3401A" in out and "signed as Ann Lee" in out, out
+    assert rc == 0 and "AO3401A" in out and "signed as Ann Lee" in out, out    # R3-1: the stored version, the swap held
     head = LG.Ledger(lib).head("AO3401A")
     assert head["decision"] == "adopted" and head["by"] == ANN and "datasheet" in head["reason"], head
     status, _ = CG.publish_guard(plan, items_of(plan), "kicad")

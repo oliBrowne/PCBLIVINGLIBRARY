@@ -72,8 +72,8 @@ def _lose_ledger(lib):
 
 
 def test_adopt_diffs_the_disk_against_the_last_stored_fingerprint():
-    """R2-3: after the ledger is lost, a pin swap made on disk is shown and refused by `part adopt`; --accept-changes
-    takes it and records the changes; an untouched part adopts with no difference, signed by the named person."""
+    """R2-3: after the ledger is lost, a pin swap made on disk is shown and refused by `part adopt`; an untouched part
+    adopts with no difference, signed by the named person, as r2 (it had r1: R3-1). --accept-changes is tested below."""
     plan, lib = demo()
     _lose_ledger(lib)
     write_symbol(lib, item(items_of(plan), "AO3401A"), SGD)
@@ -86,9 +86,7 @@ def test_adopt_diffs_the_disk_against_the_last_stored_fingerprint():
     assert LG.Ledger(lib).head("AO3401A") is None
     rows = CC.adopt(plan, ["RES-0603-10k"], ANN, "checked")
     assert rows[0]["by"] == ANN and rows[0]["changes"] == [] and "blobs" in rows[0]["compared"], rows
-    rows = CC.adopt(plan, ["AO3401A"], ANN, "checked the swap", accept_changes=True)
-    head = LG.Ledger(lib).head("AO3401A")
-    assert head["decision"] == "adopted" and any("swapped" in c["text"] for c in head["changes"]), head
+    assert rows[0]["revision"] == 2 and LG.Ledger(lib).head("RES-0603-10k")["revision"] == 2, rows
 
 
 def test_adopt_never_compares_with_a_held_change():
@@ -321,3 +319,64 @@ def test_an_ohm_sign_is_the_resistor_unit():
         assert _value_class("10k", b, "Ceramic capacitor") == "identity", b
     assert _value_class("10k Ohm", "10k Ohm 1%") == "cosmetic"
     assert _value_class("100n", "100nF") == "identity"
+
+
+# ---------------------------------------------------------------- round 3: adopt --accept-changes (R3-1, R3-3)
+def _two_approvers(lib):
+    toml = lib / "ecadlib.toml"
+    toml.write_text((toml.read_text(encoding="utf-8") if toml.is_file() else "") + "\n[change]\napprovers = 2\n",
+                    encoding="utf-8")
+
+
+def _cut_part(lib, part):
+    led = lib / LG.LEDGER
+    led.write_text("".join(l + "\n" for l in led.read_text(encoding="utf-8").splitlines() if f'"{part}"' not in l),
+                   encoding="utf-8")
+
+
+def test_adopt_accept_changes_adopts_the_stored_version_and_holds_the_disk():
+    """R3-1: with [change] approvers = 2, cutting a part's ledger lines and adopting a pin swap with --accept-changes
+    released it with no approval, as r1 again. Now the stored version's files are found in the blob store and adopted
+    as r2; the swap on disk is a held change that needs two people."""
+    plan, lib = demo()
+    _two_approvers(lib)
+    _cut_part(lib, "AO3401A")
+    write_symbol(lib, item(items_of(plan), "AO3401A"), SGD)
+    rows = CC.adopt(plan, ["AO3401A"], ANN, "checked", accept_changes=True)
+    lg = LG.Ledger(lib)
+    head = lg.head("AO3401A")
+    assert rows[0]["result"] == "adopted (stored version)" and rows[0]["held"], rows
+    assert head["revision"] == 2 and head["decision"] == "adopted" and not head["changes"], head
+    assert {n: p["name"] for n, p in FP.of_item(item(items_of(plan), "AO3401A"), lib)["symbol"]["pins"].items()} == \
+        {"1": "G", "2": "S", "3": "D"}, "the released version is on disk"
+    d = CG.review_digest(lg, "AO3401A")
+    assert CC.approve(plan, ["AO3401A"], ANN, digests={"AO3401A": d})[0]["result"] == "approval recorded"
+    assert CC.approve(plan, ["AO3401A"], BOB, digests={"AO3401A": d})[0]["revision"] == 3
+
+
+def test_adopt_accept_changes_with_nothing_to_compare_is_held_for_approval():
+    """R3-1 / R3-3: with the blob store gone too there is nothing to compare with. Adopt says "not compared" (and the
+    revision the usage index records), refuses without --accept-changes, and with it holds the disk as a change with
+    no released version: the export leaves the part out until people approve it; it is then r2, not r1 again."""
+    import shutil
+    plan, lib = demo()
+    _two_approvers(lib)
+    _cut_part(lib, "AO3401A")
+    shutil.rmtree(lib / ".ecadlib" / "blobs")
+    write_symbol(lib, item(items_of(plan), "AO3401A"), SGD)
+    try:
+        CC.adopt(plan, ["AO3401A"], ANN, "checked")
+        raise AssertionError("adopted with nothing to compare")
+    except CG.ChangeError as e:
+        assert "not compared" in str(e) and "git checkout" in str(e) and ".ecadlib" in str(e), e
+    rows = CC.adopt(plan, ["AO3401A"], ANN, "checked", accept_changes=True)
+    assert rows[0]["result"] == "held for approval" and "not compared" in rows[0]["compared"], rows
+    assert "r1 in use" in rows[0]["compared"], rows
+    lg = LG.Ledger(lib)
+    assert lg.head("AO3401A") is None and lg.proposal("AO3401A")
+    assert item(items_of(plan), "AO3401A")["status"] == "held"
+    d = CG.review_digest(lg, "AO3401A")
+    CC.approve(plan, ["AO3401A"], ANN, digests={"AO3401A": d})
+    assert LG.Ledger(lib).head("AO3401A") is None, "one person is not enough"
+    rows = CC.approve(plan, ["AO3401A"], BOB, digests={"AO3401A": d})
+    assert rows[0]["revision"] == 2 and LG.Ledger(lib).head("AO3401A")["decision"] == "approved", rows

@@ -976,8 +976,10 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
     for it in items:
         ch = it.get("change") or {}
         if ch.get("state") == "held":
-            rep["warnings"].append(f"{it['name']}: a change is held for approval ({ch.get('summary')}); the released "
-                                   f"revision r{ch.get('base')} is exported (ecadlib part show {plan} {it['name']})")
+            kept = (f"the released revision r{ch['base']} is exported" if ch.get("base") is not None else
+                    "it has no released revision, so it is not exported")
+            rep["warnings"].append(f"{it['name']}: a change is held for approval ({ch.get('summary')}); {kept} "
+                                   f"(ecadlib part show {plan} {it['name']})")
     exported = {r["part"] for r in rep["parts"] if r.get("symbol") or r.get("footprint")}
     CG.record_publish(plan_dir, items, f"kicad:{CG.project_key(plan_dir, out)}", ok=lambda it: it["name"] in exported,
                       detail=lambda it: {"ksym": kpins[it["name"]]} if it["name"] in kpins else {})

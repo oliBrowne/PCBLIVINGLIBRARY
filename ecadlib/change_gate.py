@@ -215,6 +215,7 @@ class Guard:
         self.chosen_by = chosen_by
         self.adopt = dict(adopt or {})
         self.adopt_changes = {}                # part -> the changes a person accepted when adopting (part adopt)
+        self.adopt_revision = {}               # part -> the revision an adopted part gets (never one it had before)
         self.pre = {}                          # path -> bytes on disk at begin() that are the released part
         self.pre_steps = {}                    # PcbLib path -> {STEP path: bytes} of a head recorded without its STEPs
         self._lock = None
@@ -271,7 +272,7 @@ class Guard:
                 self._release(it, fp, self.adopt_changes.get(it["name"], []) if why else [],
                               {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
                               reason=self.adopt.get(it["name"]) or "adopted: released before change control recorded it",
-                              by=self.who() if why else None)
+                              by=self.who() if why else None, min_rev=self.adopt_revision.get(it["name"]) if why else None)
                 n += 1
             elif head:
                 self._keep_bytes(it, head)
@@ -323,6 +324,80 @@ class Guard:
             return None, None
         _, sha, fp = max(found, key=lambda x: (x[0], x[1]))
         return fp, f"the newest fingerprint of {part} in {LG.STORE}/blobs ({sha[:12]})"
+
+    def lost_revision(self, part):
+        """The revision a part whose ledger history was lost is adopted as: one above every revision the library
+        still shows it had (surviving ledger lines, the usage index, a held change's base, one per released fingerprint
+        left in the blob store), and never below 2: a lost history means it had a revision 1."""
+        hist = self.ledger.history(part)
+        seen = [int(v) for e in hist for v in (e.get("revision"), e.get("base")) if isinstance(v, int)]
+        try:
+            seen += [int(r) for _, r, _ in LG.used_in(self.folder, part) if r]
+        except (OSError, ValueError, TypeError):
+            pass
+        seen += [int(p["base"]) for p in self.ledger.proposals() if p.get("part") == part and isinstance(p.get("base"), int)]
+        held = {e["digest"] for e in hist if e.get("digest") and e.get("event") not in ("publish", "retired", "release")}
+        held |= {p.get("digest") for p in self.ledger.proposals() if p.get("part") == part}
+        seen.append(len({f["hashes"].get("digest") for _, _, f in self.ledger.stored_fingerprints(part)} - held))
+        return max([1] + seen) + 1
+
+    def files_from_blobs(self, it, old):
+        """The released files of a part whose ledger history was lost, found again in the blob store: for each of its
+        files (symbol, footprint, .kicad_mod) the stored bytes that, with the others, fingerprint as `old` (its last
+        stored fingerprint) -> {path relative to the library: bytes}, or None when no such set is there."""
+        import shutil, tempfile
+        kinds = LG.item_files(it)
+        blobs = self.ledger.store / "blobs"
+        if not kinds or not blobs.is_dir():
+            return None
+        heads = {"symbol": (b"\xd0\xcf\x11\xe0",), "footprint": (b"\xd0\xcf\x11\xe0",), "kicad_mod": (b"(footprint", b"(module")}
+        cands = {k: [] for k in kinds}
+        for p in sorted(blobs.glob("*/*")):
+            try:
+                with open(p, "rb") as f:
+                    head = f.read(16)
+            except OSError:
+                continue
+            for k in kinds:
+                if head.startswith(heads[k]) and len(cands[k]) < 400:
+                    cands[k].append(p)
+        halves = {"symbol": ("symbol", "file"), "footprint": ("footprint", "file"), "kicad_mod": ("footprint", "kicad_mod")}
+
+        def bad(paths, tmp):
+            probe = json.loads(json.dumps(it, default=str))
+            for k, src in paths.items():
+                half, key = halves[k]
+                probe[half] = dict(probe.get(half) or {}, **{key: str(src)})
+            try:
+                return [c for c in CD.diff_stored(old, FP.of_item(probe, tmp)) if c["class"] != "cosmetic"]
+            except Exception as e:             # an unreadable candidate is no match
+                return [{"class": "electrical", "text": str(e)}]
+
+        with tempfile.TemporaryDirectory(prefix="ecadlib-adopt-") as tmp:
+            chosen = {}
+            for k, rel in kinds.items():       # start from the files on disk (copied, so nothing is touched)
+                f = Path(rel) if Path(rel).is_absolute() else self.base / rel
+                dst = Path(tmp) / k / Path(str(rel).replace("\\", "/")).name
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if f.is_file():
+                    shutil.copyfile(f, dst)
+                chosen[k] = dst
+            for k in kinds:                    # per file, the stored bytes that leave the fewest differences
+                best = (len(bad(chosen, tmp)), None)
+                for c in cands[k]:
+                    shutil.copyfile(c, chosen[k])
+                    n = len(bad(chosen, tmp))
+                    if n < best[0]:
+                        best = (n, c.read_bytes())
+                if best[1] is not None:
+                    chosen[k].write_bytes(best[1])
+                else:                          # keep the disk's bytes for this file
+                    f = Path(kinds[k]) if Path(kinds[k]).is_absolute() else self.base / kinds[k]
+                    if f.is_file():
+                        shutil.copyfile(f, chosen[k])
+            if bad(chosen, tmp):
+                return None
+            return {kinds[k]: chosen[k].read_bytes() for k in kinds if chosen[k].is_file()}
 
     def _refuse_lost(self, lost):
         if not lost:
@@ -533,7 +608,8 @@ class Guard:
                     continue
             rows.append(self._release(it, fp, self.adopt_changes.get(it["name"], []) if why else [],
                                       {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
-                                      reason=self.adopt.get(it["name"]) or "first release", by=self.who() if why else None))
+                                      reason=self.adopt.get(it["name"]) or "first release", by=self.who() if why else None,
+                                      min_rev=self.adopt_revision.get(it["name"]) if why else None))
         self.report += rows
         for r in rows:
             if r["action"] == "hold":
@@ -615,9 +691,10 @@ class Guard:
         elif (it.get("change") or {}).get("state") == "held":
             it.pop("change", None)
 
-    def _release(self, it, fp, changes, dec, base=None, decision=None, reason="", approved_by=None, event="release", by=None):
+    def _release(self, it, fp, changes, dec, base=None, decision=None, reason="", approved_by=None, event="release", by=None,
+                 min_rev=None):
         prev = self.ledger.head(it["name"])
-        rev = (prev or {}).get("revision", 0) + 1
+        rev = max((prev or {}).get("revision", 0) + 1, int(min_rev or 0))   # min_rev: an adopted part's next number
         entry = {"event": event, "part": it["name"], "revision": rev, "base": (prev or {}).get("revision"),
                  "writer": self.writer, "by": by or self.who(), "decision": decision or ("warn" if dec["action"] == "warn" else
                                                                                             "observed" if self.mode == "observe" else "pass"),

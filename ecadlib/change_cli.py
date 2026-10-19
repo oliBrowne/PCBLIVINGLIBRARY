@@ -496,7 +496,8 @@ def _apply_group(plan, items, group, who, comment, lg, people=None):
             reason = (reason + "; " if reason else "") + (f"new part with the MPN of released {p['twin']['part']} "
                                                           f"r{p['twin']['revision']}")
         row = g._release(it, fp, changes, {"action": "pass", "why": p.get("why") or []}, decision="approved",
-                         reason=reason, approved_by=by, by=who, event="revert" if p.get("revert_to") else "release")
+                         reason=reason, approved_by=by, by=who, event="revert" if p.get("revert_to") else "release",
+                         min_rev=p.get("min_revision"))
         lg.drop_proposal(p["part"])
         it.pop("change", None)
         out.append({"part": p["part"], "result": "released", "revision": row["revision"], "approvals": len(by),
@@ -639,9 +640,14 @@ def _revert(plan, spec, who, comment):
 def adopt(plan, parts, who=None, comment="", all_lost=False, accept_changes=False):
     """`ecadlib part adopt`: after the ledger lost a part's history (a deleted or cut ledger: the gate then refuses to
     take the files on disk as revision 1), a person who checked those files records them as the part's release
-    (decision "adopted", by them, with their reason). The files on disk are compared with the newest fingerprint the
-    blob store still holds for the part: a difference that is more than cosmetic is refused unless accept_changes
-    (the accepted changes are recorded on the adopted line). -> [{part, result, revision, by, compared, changes}]"""
+    (decision "adopted", by them, with their reason), as the next revision after any it had (lost_revision).
+
+    The files on disk are compared with the newest fingerprint the blob store still holds for the part. Only files
+    with no difference beyond cosmetics are adopted directly. A real difference is refused unless accept_changes, and
+    even then it is never released by the adopter alone: the stored version's files, found again in the blob store,
+    are adopted, and the disk becomes a held change against them; without those files (or with nothing left to
+    compare with) the disk becomes a held change with no released version. Either one needs `part approve` as the
+    [change] policy says. -> [{part, result, revision, by, compared, changes}]"""
     if not (comment or "").strip():
         raise CG.ChangeError("adopt needs a reason (-m): what you checked on disk, and why the history is gone")
     with LG.locked(CG.lib_folder(_plan_path(plan))):
@@ -657,38 +663,99 @@ def adopt(plan, parts, who=None, comment="", all_lost=False, accept_changes=Fals
                                  f"of a lost history: the next writer records it as usual)")
         if not names:
             raise CG.ChangeError("no part has a lost history" if all_lost else "name the parts: --part P (or --all)")
-        compared, refused = {}, []
+        compared, olds, refused = {}, {}, []
         for it in (i for i in items if i["name"] in names):
             old, where = g.stored_fingerprint(it["name"])
             if old is None:
-                compared[it["name"]] = ("no earlier fingerprint is left to compare with", [])
+                used = [(p, r) for p, r, _ in LG.used_in(plan.parent, it["name"]) if r]
+                compared[it["name"]] = (
+                    "not compared: no earlier fingerprint is left in .ecadlib/blobs" +
+                    (f" ({LG.USAGE} records r{used[0][1]} in use by {used[0][0]}, but not its content)" if used else ""),
+                    None)
+                refused.append(it["name"])
                 continue
             if old.get("schema") != FP.SCHEMA:          # stored by an older ecadlib: what it did not record is not compared
                 where += f" (fingerprint schema {old.get('schema')}: only what it recorded is compared)"
             changes = CD.diff_stored(old, FP.of_item(it, g.base))
-            compared[it["name"]] = (f"compared with {where}", changes)
+            compared[it["name"]], olds[it["name"]] = (f"compared with {where}", changes), old
             if any(c["class"] != "cosmetic" for c in changes):
                 refused.append(it["name"])
         if refused and not accept_changes:
             lines = []
             for n in refused:
                 where, changes = compared[n]
-                lines.append(f"{n} ({where}):")
-                lines += [f"    {c['class']:<15} {c['text']}" for c in changes if c["class"] != "cosmetic"]
+                lines.append(f"{n} ({where})" + (":" if changes else ""))
+                lines += [f"    {c['class']:<15} {c['text']}" for c in changes or [] if c["class"] != "cosmetic"]
             raise CG.ChangeError(
-                "the files on disk differ from the part's last stored fingerprint, so they may not be what was "
-                "released:\n  " + "\n  ".join(lines) + "\n  restore the ledger from git, or put the released files back; "
-                "if you checked these changes and want them as the release, add --accept-changes")
-        g.adopt = {n: f"adopted by {who}: {comment.strip()}" for n in names}
-        g.adopt_changes = {n: compared.get(n, ("", []))[1] for n in names}
+                "the files on disk differ from the part's last stored fingerprint, or cannot be compared, so they may "
+                "not be what was released:\n  " + "\n  ".join(lines) + "\n  restore the ledger and .ecadlib/ from git "
+                "(`git checkout -- library.ledger.jsonl .ecadlib` in the library folder), or put the released files "
+                "back; --accept-changes proposes these files as a held change that needs `ecadlib part approve`")
+        revs = {n: g.lost_revision(n) for n in names}
+        direct = [n for n in names if n not in refused]
+        rows = []
         try:
-            rows = g.baseline([i for i in items if i["name"] in g.adopt])
+            if direct:
+                g.adopt = {n: f"adopted by {who}: {comment.strip()}" for n in direct}
+                g.adopt_changes = {n: compared[n][1] for n in direct}
+                g.adopt_revision = {n: revs[n] for n in direct}
+                rows += [dict(r, result="adopted") for r in g.baseline([i for i in items if i["name"] in direct])]
+            for n in refused:
+                rows += _adopt_held(g, plan, items, _item(items, n), olds.get(n), compared[n], revs[n], who, comment)
         finally:
             g.close()
         _save(plan, items)
-        return [{"part": r["part"], "result": "adopted", "revision": r["revision"], "by": who,
-                 "compared": compared.get(r["part"], ("", []))[0],
-                 "changes": [c["text"] for c in compared.get(r["part"], ("", []))[1]]} for r in rows]
+        return [{"part": r["part"], "result": r["result"], "revision": r.get("revision"), "by": who,
+                 "compared": compared[r["part"]][0], "held": r.get("held"),
+                 "changes": [c["text"] for c in compared[r["part"]][1] or []]} for r in rows]
+
+
+def _adopt_held(g, plan, items, it, old, compared, rev, who, comment):
+    """--accept-changes for a part whose disk differs from its last stored fingerprint (or cannot be compared): never
+    a release by the adopter alone. -> report rows"""
+    folder = plan.parent
+    name = it["name"]
+    files = g.files_from_blobs(it, old) if old is not None else None
+    if files:                                  # the stored version is adopted; the disk is a held change against it
+        disk = {}
+        for rel, data in files.items():
+            p = Path(rel) if Path(rel).is_absolute() else folder / rel
+            disk[p] = p.read_bytes() if p.is_file() else None
+            p.write_bytes(data)
+        try:
+            g.adopt = {name: f"adopted by {who} from the last stored version in .ecadlib/blobs: {comment.strip()}"}
+            g.adopt_changes, g.adopt_revision = {}, {name: rev}
+            base = g.baseline([it])
+        finally:
+            for p, data in disk.items():       # the files on disk as the person left them
+                if data is None:
+                    p.unlink(missing_ok=True)
+                else:
+                    p.write_bytes(data)
+        h = CG.Guard(folder, "hand-edit", user=who)
+        try:
+            h.settle(items)
+        finally:
+            h.close()
+        g.ledger.reload()
+        held = g.ledger.proposal(name)
+        return [dict(r, result="adopted (stored version)", held=bool(held)) for r in base]
+    # no released version to put back: the disk waits as a change with no base, released only by `part approve`
+    fp = FP.of_item(it, g.base)
+    changes = compared[1] or [{"class": "electrical", "area": "ledger", "what": "history", "old": None, "new": None,
+                               "text": "no earlier version is left to compare with"}]
+    why = [f"adopted by {who} with --accept-changes after the ledger lost its history ({compared[0]}): a person "
+           f"approves it (ecadlib part approve)"]
+    t = {"item": it, "head": None, "fp": fp, "changes": changes, "rejected": None,
+         "dec": {"action": "hold", "why": why, "by_class": {}}}
+    prop = g._propose(t)
+    prop["min_revision"], prop["comment"] = rev, comment
+    g.ledger.save_proposal(prop)
+    it["change"] = CG.held_block(prop, g.ledger)
+    it["status"] = "held"                      # not released (no revision yet): publishers leave it out
+    it["hold_reasons"] = [x for x in it.get("hold_reasons") or [] if not x.startswith("change control:")] + [
+        f"change control: adopted files wait for approval (ecadlib part show {plan} {name})"]
+    return [{"part": name, "result": "held for approval", "revision": None, "held": True}]
 
 
 # ---------------------------------------------------------------- CLI
@@ -786,8 +853,13 @@ def main(argv=None):
             print(f"  warning: {r['warning']}")
         if r.get("result") == "adopted":
             print(f"    signed as {r['by']}; {r['compared']}" + ("" if r["changes"] else ": no difference"))
-            for t in r["changes"]:
-                print(f"      accepted: {t}")
+        elif "compared" in r:                  # --accept-changes: the disk waits as a held change
+            print(f"    signed as {r['by']}; {r['compared']}")
+            for c in r["changes"]:
+                print(f"      {c}")
+            if r.get("held"):
+                print(f"    the files on disk are held as a change: ecadlib part show {a.plan} {r['part']}, then a person "
+                      f"approves it (ecadlib part approve)")
     return 0
 
 

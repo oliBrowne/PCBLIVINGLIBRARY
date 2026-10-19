@@ -130,8 +130,13 @@ The new revision 1 is recorded with decision `adopted`, your name and your reaso
 Adopt prints the name it signs as (`--user`, else `$ECADLIB_USER`, else git config). It compares the files on disk
 with the part's last fingerprint still kept in `.ecadlib/blobs`. That is the one a surviving publish line names, else
 the newest one that is not a held change. Adopt lists every difference. A difference that is more than cosmetic (a pin
-swap, a moved pad) is refused. If you checked it and want it as the release, add `--accept-changes`. The changes you
-accepted are then recorded on the adopted line.
+swap, a moved pad) is refused. When nothing is left to compare with (`.ecadlib/blobs` is gone too), adopt says "not
+compared" and refuses as well; restore `.ecadlib/` from git if you can. `--accept-changes` never releases such files
+on one person's word. If the blob store still holds the files of the last stored version, that version is adopted, and
+the files on disk become a held change against it. Otherwise the files on disk become a held change with no released
+version, and publishers leave the part out. Either way the change needs `ecadlib part approve`, as many people as
+`[change] approvers` says. An adopted part never gets a revision number it had before. It gets the next one after
+every revision the ledger lines, the usage index and the blob store still show, so at least r2.
 
 When a newer ecadlib reads more of a part (the fingerprint has a schema number), a release recorded by an older one is
 fingerprinted again from its stored files with the new code before it is compared. An upgrade therefore neither shows
