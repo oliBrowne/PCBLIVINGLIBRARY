@@ -12,7 +12,7 @@ use the body centre). Fields, each {ok, error, ...}:
   courtyard     every edge of the courtyard box within TOL["courtyard"]
   symbol_pins   (when the reference knows the pins) the same pin numbers
   symbol_names  (when the reference names its pins) at least TOL["names"] of the names agree after normalising
-                (case, overbars ~{X} / X\\, spaces, '/', '#', leading 'n')
+                (case, overbars ~{X} / X\\ / a combining bar, spaces, '/', '#', leading 'n')
 A case passes when every field present passes (origin is information only)."""
 import math, re
 from collections import Counter
@@ -76,8 +76,11 @@ def pitch(pads):
 WORDS = {"ENABLE": "EN", "GROUND": "GND", "INPUT": "IN", "OUTPUT": "OUT", "CATHODE": "K", "ANODE": "A"}
 
 
+OVERLINE = dict.fromkeys(map(ord, "\u0305\u0304"))     # a combining overline / macron: the bar PDF text gives (AM26LS31CN G̅)
+
+
 def norm_name(s):
-    s = str(s or "").upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "")
+    s = str(s or "").translate(OVERLINE).upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "")
     s = s.replace("~", "")
     s = re.sub(r"^(N(?=[A-Z]{2,})|/|#)", "", s)
     s = re.sub(r"[/#*_-]", "", s)
