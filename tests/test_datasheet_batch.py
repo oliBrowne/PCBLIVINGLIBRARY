@@ -277,7 +277,7 @@ def test_datasheet_urls_and_pdf_store():
         j = D.Reader(d, d, key=KEY, http=http, log=None).job("TESTPART", [("http://plain/x.pdf", "KiCad")])
         assert j["body"]["messages"][0]["content"][0]["source"]["type"] == "base64" and j["url"] == "https://plain/x.pdf", j["url"]
         # Reader.job: first link is HTML -> skipped; blocked link -> URL source; nothing usable -> error
-        rd = D.Reader(d, d, key=KEY, http=http, log=None)
+        rd = D.Reader(d, d, key=KEY, http=http, log=None, sleep=lambda s: None)   # 429 is tried again: no real wait
         j = rd.job("TESTPART", [("https://a/view", "BOM"), ("https://a/ds.pdf", "LCSC")], "RGT")
         assert j["where"] == "LCSC" and j["body"]["messages"][0]["content"][0]["source"]["type"] == "base64"
         assert j["prov"]["attempts"][0]["error"].endswith("bytes)") and j["body"]["fallbacks"] == "default"
