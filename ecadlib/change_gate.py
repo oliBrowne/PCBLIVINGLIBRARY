@@ -759,6 +759,13 @@ def publish_guard(plan, items, target, rules=None, user=None, log=None, base=Non
     return out, g
 
 
+def publishing(folder):
+    """The library lock for one publisher run (a context manager). A publisher holds it from publish_guard through
+    reading or copying the part files to record_publish, so another writer's change can never be shipped (and
+    recorded as published) between the settle step and the read; both steps take the same lock again inside."""
+    return LG.locked(lib_folder(folder))
+
+
 def record_publish(folder, items, target, ok=lambda it: True, by=None, detail=None):
     """A `publish` ledger line per item that went to `target` (its head revision)."""
     with LG.locked(lib_folder(folder)):

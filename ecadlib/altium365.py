@@ -663,17 +663,19 @@ def main(argv=None):
         from . import change_gate as CG
         import time
         rules = RU.load(a.rules, start=Path(a.plan).parent)
-        if not a.dry_run:                      # change control: a hand edit since the last writer is settled first
-            CG.publish_guard(Path(a.plan), items, "altium365", rules=rules)
-        for i in items:
-            for k in ("symbol", "footprint"):
-                if i[k]["file"]:
-                    i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
-        t0 = time.time()
-        results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent),
-                       rules=rules, folder=Path(a.plan).parent)
-        if not a.dry_run:
-            record_push(Path(a.plan).parent, t0, results)
+        import contextlib                      # a real push holds the library lock from the settle step to the record
+        with contextlib.nullcontext() if a.dry_run else CG.publishing(Path(a.plan).parent):
+            if not a.dry_run:                  # change control: a hand edit since the last writer is settled first
+                CG.publish_guard(Path(a.plan), items, "altium365", rules=rules)
+            for i in items:
+                for k in ("symbol", "footprint"):
+                    if i[k]["file"]:
+                        i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
+            t0 = time.time()
+            results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent),
+                           rules=rules, folder=Path(a.plan).parent)
+            if not a.dry_run:
+                record_push(Path(a.plan).parent, t0, results)
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work
         hint = " (token rejected: check it has design.domain, user.access, openid)" if "401" in str(e) else ""
         sys.exit(f"Nexar request failed: {type(e).__name__}: {e}{hint}")

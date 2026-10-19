@@ -1079,14 +1079,20 @@ class Workspace:
     def altium365_push(self, bom, workspace_url, dry_run=True):
         """Release ready parts and update parameters of existing ones; parts the release check held are left
         alone. dry_run (the default) sends nothing and returns the requests that would be made."""
-        from . import altium365 as A
         if not workspace_url and not dry_run:
             raise ValueError("choose an Altium 365 workspace first")
-        if not dry_run:                               # change control: a hand edit since the last writer settles first
+        import contextlib
+        from . import change_gate as CG
+        lib_plan = self._librarian_dir(self._bom_path(bom)) / "plan.json"
+        # a real push of a librarian library holds the library lock from the settle step to the record (change control)
+        with contextlib.nullcontext() if dry_run or not lib_plan.is_file() else CG.publishing(lib_plan.parent):
+            return self._altium365_push(bom, workspace_url, dry_run, lib_plan)
+
+    def _altium365_push(self, bom, workspace_url, dry_run, lib_plan):
+        from . import altium365 as A
+        if not dry_run and lib_plan.is_file():        # change control: a hand edit since the last writer settles first
             from . import change_gate as CG
-            lib_plan = self._librarian_dir(self._bom_path(bom)) / "plan.json"
-            if lib_plan.is_file():
-                CG.publish_guard(lib_plan, json.loads(lib_plan.read_text(encoding="utf-8")), "altium365", rules=self.rules())
+            CG.publish_guard(lib_plan, json.loads(lib_plan.read_text(encoding="utf-8")), "altium365", rules=self.rules())
         plan = self.altium365_plan(bom)
         client = None if dry_run else A.Nexar(_nexar_token())
         policy = None

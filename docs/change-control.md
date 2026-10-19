@@ -106,7 +106,10 @@ file, and of the 3D models its recipe names, are kept in `.ecadlib/blobs`, which
 restore. `ecadlib migrate` stamps the ledger's schema version.
 
 Writers take a lock on the library (`.ecadlib/lock`) while they compare and record. Two exports or a librarian run
-and an export at the same time therefore never record the same revision twice. The lock is an operating-system lock,
+and an export at the same time therefore never record the same revision twice. A publisher (kicad-export,
+kicad-pcm, kicad-dblib, dblib-sync, the Altium 365 push) holds the lock for its whole run, from settling the hand
+edits through reading the files to recording the publish. Another writer's change therefore cannot be shipped before it
+is settled. The lock is an operating-system lock,
 so a crashed run never leaves it behind. A run that waits longer than 10 minutes (`ECADLIB_LOCK_WAIT`, in seconds)
 stops with a message.
 

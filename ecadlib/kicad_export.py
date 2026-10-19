@@ -723,7 +723,14 @@ def _pins(sym):
 # ---------------------------------------------------------------- driver
 def export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None):
     """Write the KiCad library for plan.json into `out`; returns the report dict (also kicad_export.json).
-    rules: library rules (dict or path); None = the ecadlib.toml found from the plan's folder, if any."""
+    rules: library rules (dict or path); None = the ecadlib.toml found from the plan's folder, if any.
+    The library lock is held for the whole export (change control: the files read are the settled ones)."""
+    from . import change_gate as CG
+    with CG.publishing(Path(plan).parent):
+        return _export(plan, out, name, include_held, libs, http, log, rules)
+
+
+def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None):
     plan, out = Path(plan), Path(out)
     plan_dir, lib = plan.parent, kname(name)
     from .rules import resolve
