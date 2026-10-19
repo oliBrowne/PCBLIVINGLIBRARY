@@ -28,7 +28,10 @@ The product stays monochrome: one ground colour, ink for text and lines. **Coppe
 | `--copper` | `#c2622d` | `#e8834a` |
 | ink (`--text`) | `#232327` | `#d0d6e0` (mark on dark: `#ececf0`) |
 
-Use copper for the mark's leaves, keyboard focus rings and at most one small highlight per view. Don't use it for
+Use copper for the mark's leaves, keyboard focus rings, the website's active-section underline in the nav, the short
+rule after each section number, the via dot of a hovered How-it-works step, one of the decorative side traces in each website section
+(drawn at `--trace-cu`, copper mixed 45% into the page colour, with its signal dot in full copper) and at most one
+small highlight per view. Don't use it for
 large fills, body text, buttons or status colours (ok, warning and error keep their own colours).
 Where only one colour is allowed (print, engraving), use the one-colour SVG.
 
