@@ -21,7 +21,7 @@ Events: `release` (a new revision: the first one is the baseline, later ones pas
 to a target: altium365, dblib, kicad), `approve` (one approval of a held change, for the two-person rule), `refused`
 (an approval not applied because the proposed version fails the release check; it is not counted as an approval). The head of
 a part is its last release or revert. Nothing is ever deleted: `ecadlib part history` shows every line."""
-import datetime, hashlib, json, os, re
+import copy, datetime, hashlib, json, os, re, tempfile
 from pathlib import Path
 
 from .fsutil import write_text_atomic
@@ -231,7 +231,42 @@ class Ledger:
         return done
 
     def fingerprint(self, entry):
-        return self.get_json(entry["fingerprint"]) if entry and entry.get("fingerprint") else None
+        """The entry's fingerprint. One stored by an older ecadlib (another fingerprint schema) is read again from the
+        entry's file snapshot with this ecadlib, so it compares like for like with the files on disk: an upgrade that
+        fingerprints more detail neither shows every released part as changed nor hides a real change."""
+        if not entry or not entry.get("fingerprint"):
+            return None
+        fp = self.get_json(entry["fingerprint"])
+        from . import fingerprint as FP
+        if fp.get("schema") == FP.SCHEMA or not entry.get("files") or entry.get("item") is None:
+            return fp
+        key = (entry["fingerprint"], FP.SCHEMA, json.dumps(entry.get("files"), sort_keys=True))
+        cache = self.__dict__.setdefault("_refp", {})
+        if key not in cache:
+            cache[key] = self._refingerprint(entry)
+        return copy.deepcopy(cache[key])
+
+    def _refingerprint(self, entry):
+        """Fingerprint an entry's snapshot (its blobs, written to a temporary folder) with the current code."""
+        from . import fingerprint as FP
+        item = dict(json.loads(json.dumps(entry.get("item") or {})), name=entry.get("part") or "")
+        halves = {"symbol": ("symbol", "file"), "footprint": ("footprint", "file"), "kicad_mod": ("footprint", "kicad_mod")}
+        with tempfile.TemporaryDirectory(prefix="ecadlib-refp-") as tmp:
+            for kind, rec in (entry.get("files") or {}).items():
+                if kind not in halves:
+                    continue
+                p = Path(tmp) / kind / Path(str(rec["path"]).replace("\\", "/")).name
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(self.get_bytes(rec["sha256"]))
+                if rec.get("ecadbuild"):
+                    p.with_name(p.name + ".ecadbuild").write_bytes(self.get_bytes(rec["ecadbuild"]))
+                half, key = halves[kind]
+                item[half] = dict(item.get(half) or {}, **{key: str(p)})
+            for half, key in (("symbol", "file"), ("footprint", "file"), ("footprint", "kicad_mod")):
+                kind = "kicad_mod" if key == "kicad_mod" else half
+                if kind not in (entry.get("files") or {}) and (item.get(half) or {}).get(key):
+                    item[half] = dict(item[half], **{key: str(Path(tmp) / kind / "missing")})   # not snapshotted: absent
+            return FP.of_item(item, tmp)
 
     # ------------------------------------------------------------ proposals (held changes)
     def proposal_path(self, part):

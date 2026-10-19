@@ -395,7 +395,7 @@ def change_mode(lg, it, target):
     halves = {"symbol"} if FP.digest(a.get("symbol")) != FP.digest(b.get("symbol")) else set()
     if FP.digest([a.get("footprint"), a.get("model")]) != FP.digest([b.get("footprint"), b.get("model")]):
         halves.add("footprint")
-    if old.get("eid") != head.get("eid") and not halves:
+    if FP.hashes(a)["eid"] != FP.hashes(b)["eid"] and not halves:   # recomputed: the two may be of different schemas
         halves = {"symbol", "footprint"}      # the pin-pad map changed: both go up
     return "revision", halves, head, pub
 

@@ -40,7 +40,7 @@ from pathlib import Path
 
 from . import altium_lib as AL, parity as PA, sexpr
 
-SCHEMA = 1
+SCHEMA = 2
 ETYPE_NAME = {0: "input", 1: "io", 2: "output", 3: "open_collector", 4: "passive", 5: "hiz", 6: "open_emitter", 7: "power"}
 MPN_KEYS = ("manufacturer part number", "mpn", "mfr part number", "manufacturer_part_number", "mfr. part number",
             "mfr part #", "mfr. #", "part number")

@@ -235,8 +235,14 @@ class Guard:
                     side = f.with_name(f.name + ".ecadbuild")
                     if side.is_file():
                         now[str(side)] = side.read_bytes()
-        if now and FP.of_item(it, self.base)["hashes"]["digest"] == head.get("digest"):
+        if now and self._is_head(FP.of_item(it, self.base), head):
             self.pre.update(now)
+
+    def _is_head(self, fp, head):
+        """fp is the released revision: the same digest as the head's, or (a head an older ecadlib fingerprinted) as
+        the head's snapshot fingerprinted again now."""
+        d = fp["hashes"]["digest"]
+        return d == head.get("digest") or d == ((self.ledger.fingerprint(head) or {}).get("hashes") or {}).get("digest")
 
     def _restore(self, files):
         """restore_files, preferring the bytes begin() kept for the same paths."""
