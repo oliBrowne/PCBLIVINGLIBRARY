@@ -260,3 +260,25 @@ def test_numbered_second_sources_and_a_house_part_number():
     assert worst({}, {"Manufacturer Part Number 2": "ERJ-3EKF1002V"}) == "identity"
     assert worst({"Manufacturer 2": "UNI-ROYAL"}, {"Manufacturer 2": "Panasonic"}) == "identity"
     assert worst({}, {"Supplier Part Number 2": "C1234"}) == "cosmetic"
+
+
+def test_refusals_do_not_hand_out_the_current_digest_and_a_held_choice_is_not_ready():
+    """R2-8: a refused approval printed the digest of the change as it is now, so it could be approved without being
+    read; `resolve choose` printed "now ready" with rc 0 when change control held the choice."""
+    plan, lib = demo()
+    items = items_of(plan)
+    write_symbol(lib, item(items, "AO3401A"), SGD)
+    CG.publish_guard(plan, items, "kicad")
+    cur = CG.review_digest(LG.Ledger(lib), "AO3401A")
+    for d in ("ffffffffffff", "fffff", ""):
+        try:
+            CC.approve(plan, ["AO3401A"], ANN, digests={"AO3401A": d})
+            raise AssertionError("approved")
+        except CG.ChangeError as e:
+            assert cur[:6] not in str(e) and "part show" in str(e), e
+    plan, lib = demo()
+    env = {**__import__("os").environ, "ECADLIB_USER": ANN}
+    r = subprocess.run([sys.executable, "-m", "ecadlib", "resolve", str(plan), "--part", "AO3401A", "--offline",
+                        "--cache", str(lib.parent / "cache"), "choose", "footprint", "spec:SOT-23-5"],
+                       capture_output=True, text=True, env=env, cwd=ROOT, timeout=600)
+    assert r.returncode == 2 and "held, not applied" in r.stdout and "now ready" not in r.stdout, r.stdout + r.stderr

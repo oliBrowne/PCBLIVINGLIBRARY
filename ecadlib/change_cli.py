@@ -296,13 +296,16 @@ def check_digest(lg, group, part, digest):
     `part show` printed, or a prefix of 6+ characters."""
     cur = CG.review_digest(lg, part, group)
     d = str(digest or "").strip().lower()
+    # the messages never print the current digest: it is handed out only with the diff (`part show`), so nobody can
+    # approve a change they have not seen by copying it from an error
+    show = f"`ecadlib part show {lg.folder} {part}`"
     if not d:
-        raise CG.ChangeError(f"{part}: say which held change you approve: --digest {cur[:12]} (the digest `ecadlib part "
-                             f"show` prints), so a change made after you looked at it is never approved by mistake")
+        raise CG.ChangeError(f"{part}: say which held change you approve: --digest D, the digest {show} prints with the "
+                             f"diff, so a change made after you looked at it is never approved by mistake")
     if len(d) < 6 or not cur.startswith(d):
-        raise CG.ChangeError(f"{part}: the held change is not the one you reviewed (digest {d[:12]}; it is {cur[:12]} now): "
-                             f"it was proposed again since you looked; read it again with `ecadlib part show` and approve "
-                             f"that one" if len(d) >= 6 else f"{part}: --digest needs at least 6 characters (it is {cur[:12]})")
+        raise CG.ChangeError(f"{part}: the held change is not the one you reviewed (digest {d[:12]}): it was proposed "
+                             f"again since you looked; read it again with {show} and approve that one" if len(d) >= 6
+                             else f"{part}: --digest needs at least 6 characters of the digest {show} prints")
     return cur
 
 

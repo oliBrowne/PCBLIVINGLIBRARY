@@ -96,7 +96,11 @@ release check" with the reason.
 The review list (`review.md`), the web UI and the librarian's summary show held changes with what changed. Picking a
 symbol or footprint yourself in `ecadlib resolve` counts as one approval. Like any approval, that choice goes through
 the release check first. If it fails, the choice waits as a held change marked "not applied", and every released file
-is put back, 3D models included.
+is put back, 3D models included. `resolve choose` then says the choice is held and exits with code 2, as it also
+does while the choice waits for a second person.
+
+A refused approval (no digest, a digest that is too short, or the digest of an older proposal) never prints the
+current digest. Run `ecadlib part show`, which prints it together with the diff.
 
 ## The ledger
 
