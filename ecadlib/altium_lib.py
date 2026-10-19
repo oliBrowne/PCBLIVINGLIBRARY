@@ -417,7 +417,7 @@ def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
     zones go through kicad_import's converter. notes: list that collects what could not be carried over exactly."""
     from . import kicad_import as K
     notes = [] if notes is None else notes
-    t = sexpr.parse(text)
+    t = K.inherit_margins(sexpr.parse(text))             # footprint-level mask / paste margins apply to every pad
     fp = {"name": t[1], "description": clean(description if description is not None else (sexpr.first(t, "descr") or ["", ""])[1]),
           "height_mm": height_mm, "pads": [], "tracks": [], "fills": [], "regions": [], "texts": texts_from_kicad(t)}
     for p in sexpr.find(t, "pad"):

@@ -34,7 +34,7 @@ length, width and axis direction (mod 180). Tolerances are TOL (mm, degrees, per
 Levels: `error` is a real difference (the release check holds the part, `[release] parity = "hold"`); `warn` is a
 documented approximation of the converters (a curved custom pad drawn as its bounding rectangle, a trapezoid as a
 rectangle, ...): reported, not held."""
-import argparse, json, math, re, sys
+import argparse, copy, json, math, re, sys
 from pathlib import Path
 
 from . import altium_lib as AL, sexpr
@@ -198,7 +198,9 @@ def _filled(g):
 
 def kicad_footprint(text):
     """A .kicad_mod -> canonical footprint dict (KiCad frame, mm)."""
-    t = sexpr.parse(text) if isinstance(text, str) else text
+    from . import kicad_import as K
+    t = sexpr.parse(text) if isinstance(text, str) else copy.deepcopy(text)
+    K.inherit_margins(t)                      # footprint-level mask / paste margins: every pad's, as KiCad applies them
     out = {"name": str(t[1]), "pads": [], "windows": [], "courtyard": None, "models": [], "notes": [], "approx": []}
     for p in sexpr.find(t, "pad"):
         num, kind, shape = str(p[1]), p[2], p[3]
@@ -712,7 +714,9 @@ def altium_fields(row, rules=None):
     return {"Value": get(p("Value"), "Value", "Comment"), "Description": get("Description"),
             "Manufacturer": get(p("Manufacturer"), "Manufacturer"),
             "MPN": get(p("Manufacturer Part Number"), "Manufacturer Part Number"),
-            "Datasheet": get(p("ComponentLink2URL"), "ComponentLink2URL", p("Datasheet"), "Datasheet")}
+            "Datasheet": get(p("ComponentLink2URL"), "ComponentLink2URL", p("Datasheet"), "Datasheet") or get(*(   # or the
+                f"ComponentLink{m.group(1)}URL" for k in sorted(row) for m in [re.fullmatch(r"ComponentLink(\d+)Description", str(k))]
+                if m and "datasheet" in str(row.get(k) or "").lower()))}          # link slot described "Datasheet" (as kicad-export)
 
 
 def plan_row(item):

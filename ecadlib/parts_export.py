@@ -3,8 +3,8 @@
 One row per library part in a librarian plan, with stable columns (COLUMNS; their names and order only ever grow at
 the end, so an import mapping set up once keeps working). Parameters that have no column of their own go in
 "Other Parameters" (CSV / XLSX: "name=value; ..." sorted by name; JSON: an object). Held parts are left out unless
---include-held. Cells that a spreadsheet would run as a formula get a leading apostrophe in CSV / XLSX (sheetsafe);
-JSON keeps the plain text.
+--include-held. Cells that a spreadsheet would run as a formula get a leading apostrophe in CSV (sheetsafe); XLSX
+cells are text cells (never run as a formula) holding the value as it is; JSON keeps the plain text.
 
 KiCad names ("KiCad Symbol", "KiCad Footprint") are the lib ids `ecadlib kicad-export --name LIB` writes
 (LIB:<part>, LIB:<footprint>), the same ones `ecadlib kicad-dblib` puts in its database."""
@@ -30,6 +30,7 @@ LIBRARY_STATUS = ("ready", "existing")
 def kicad_ids(item, lib):
     from .kicad_export import kname
     fp = (item.get("footprint") or {})
+    fp = fp if isinstance(fp, dict) else {}
     has_fp = fp.get("ref") and (fp.get("file") or fp.get("kicad_mod"))
     has_sym = (item.get("source") or {}).get("symbol") or (item.get("symbol") or {}).get("file")
     return (f"{lib}:{kname(item['name'])}" if has_sym else "", f"{lib}:{kname(fp['ref'])}" if has_fp else "")
@@ -59,6 +60,7 @@ def _signoff(items, base):
 
 def rows(plan, lib="ecadlib", include_held=False):
     """Plan items -> [row dict with exactly COLUMNS], sorted by Part ID. plan: path to plan.json or a list of items."""
+    from .kicad_export import libname
     base = Path(plan).parent if not isinstance(plan, list) else Path(".")
     items = json.loads(Path(plan).read_text(encoding="utf-8")) if not isinstance(plan, list) else plan
     if not isinstance(items, list):
@@ -68,11 +70,12 @@ def rows(plan, lib="ecadlib", include_held=False):
     sign = _signoff(keep, base) if not isinstance(plan, list) else {}
     out = []
     for it in sorted(keep, key=lambda i: str(i["name"])):
-        par = {str(p.get("name")): str(p.get("value", "")) for p in it.get("parameters", []) if str(p.get("value", "")).strip()}
+        par = {str(p.get("name")): str(p.get("value", "")) for p in it.get("parameters") or []
+               if isinstance(p, dict) and p.get("name") and str(p.get("value", "")).strip()}
         r = dict.fromkeys(COLUMNS, "")
         folder = str(it.get("folder") or "")
         sym, fp = it.get("symbol") or {}, it.get("footprint") or {}
-        ks, kf = kicad_ids(it, lib)
+        ks, kf = kicad_ids(it, libname(lib))   # the library name kicad-export / kicad-dblib give it ("My Lib" -> My_Lib)
         rc = it.get("release_check") or {}
         r.update({"Part ID": str(it["name"]), "Status": str(it.get("status", "ready")),
                   "Category": folder.rstrip("/").split("/")[-1] if folder else "", "Folder": folder,
@@ -89,7 +92,7 @@ def rows(plan, lib="ecadlib", include_held=False):
             col = PARAM_COLUMNS.get(k)
             if col and not r[col]:
                 r[col] = par[k]
-            elif k not in SKIP_PARAMS and not col:
+            elif k not in SKIP_PARAMS and (not col or r[col] != par[k]):   # a second, different value: kept here
                 other[k] = par[k]
         r["Other Parameters"] = other
         out.append(r)
@@ -119,7 +122,7 @@ def write(rs, out, fmt):
         ws.title = "Parts"
         ws.append(COLUMNS)
         for r in rs:
-            ws.append([SS.cell(ILLEGAL_CHARACTERS_RE.sub(" ", str(_flat(r)[c]))) for c in COLUMNS])
+            ws.append([ILLEGAL_CHARACTERS_RE.sub(" ", str(_flat(r)[c])) for c in COLUMNS])   # text cells below: never run
         for row in ws.iter_rows(min_row=2):
             for c in row:
                 c.data_type, c.number_format = "s", "@"                    # text: '0603' and '1e-7' stay as typed
