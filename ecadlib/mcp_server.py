@@ -13,7 +13,7 @@ Standard library only (plus jsonschema): newline-delimited JSON-RPC 2.0 on stdin
 Streamable HTTP), tools capability only. Every call runs as a job: one that is not done within --wait seconds answers
 with a job id for job_status instead of running into the client's timeout. Logs go to stderr; file descriptor 1 is
 moved aside so not even a child process can corrupt the protocol stream."""
-import argparse, contextlib, json, math, re, sys, threading, traceback
+import argparse, contextlib, json, math, re, sys, threading, time, traceback
 
 from . import __version__
 from .app import Workspace
@@ -122,11 +122,13 @@ TOOLS = [
      "description": "Use a candidate from part_candidates (kicad:Lib:Name, local:Lib:Name or spec:Name) for one half of "
                     "a plan part: converts it to Altium files, records the choice in the plan (a librarian re-run keeps "
                     "it) and re-runs the release check. pin_map maps symbol pin numbers to pad numbers. Show the user "
-                    "the candidates and let them pick; do not choose on a guess.",
+                    "the candidates and let them pick; do not choose on a guess. user is the person choosing (their own "
+                    "answer, e.g. \"Ann Lee <ann@example.com>\"): for a part already released, their choice is the "
+                    "approval of the change; without user such a change is held for a person to approve.",
      "inputSchema": {"type": "object", "required": ["bom", "part", "kind", "candidate_id"],
                      "properties": {"bom": {"type": "string"}, "part": {"type": "string"},
                                     "kind": {"type": "string", "enum": ["symbol", "footprint"]},
-                                    "candidate_id": {"type": "string"},
+                                    "candidate_id": {"type": "string"}, "user": {"type": "string"},
                                     "pin_map": {"type": "object", "additionalProperties": {"type": "string"}}}}},
     {"name": "approval_status",
      "description": "Sign-off state of the librarian's plan for a BOM: the approvals policy (approvals.json next to the "
@@ -458,7 +460,9 @@ def call_tool(ws, name, args, progress=None):
         if name == "part_candidates":
             return ws.part_candidates(args["bom"], args["part"], args.get("kind"), args.get("limit") or 10)
         if name == "choose_part":
-            r = ws.choose_part(args["bom"], args["part"], args["kind"], args["candidate_id"], args.get("pin_map") or None)
+            user = str(args.get("user") or "").strip() or None      # never the server's login: no person, no approval
+            r = ws.choose_part(args["bom"], args["part"], args["kind"], args["candidate_id"], args.get("pin_map") or None,
+                               user, approve=bool(user))
             r.pop("log", None)
             return r
         if name == "approval_status":
@@ -647,7 +651,8 @@ def _jobs(ws):
 
 def _offered(ws):
     allowed = _opts(ws).tools
-    return [t for t in TOOLS if allowed is None or t["name"] in allowed]
+    # job_status always: any tool may answer with a job id, and only job_status gets that result
+    return [t for t in TOOLS if allowed is None or t["name"] in allowed or t["name"] == "job_status"]
 
 
 # ------------------------------------------------------------------ arguments
@@ -731,6 +736,18 @@ def _arg_errors(tool, args):
     return "; ".join(f"{'.'.join(map(str, e.path)) or '(arguments)'}: {e.message}" for e in errs[:5])
 
 
+def _unknown_args(tool, args):
+    """'' or 'unknown argument(s): x (did you mean y?)' for argument names the tool does not take."""
+    import difflib
+    props = tool["inputSchema"].get("properties", {})
+    out = []
+    for k in sorted(k for k in args if k not in props):
+        near = difflib.get_close_matches(str(k), list(props), 1, 0.5) or [p for p in props if p.replace("_", "") == str(
+            k).replace("_", "").lower()]
+        out.append(f"{k}" + (f" (did you mean {near[0]}?)" if near else ""))
+    return f"unknown argument(s): {', '.join(out)}" if out else ""
+
+
 PATH_ARGS = {"bom", "project", "projects", "paths", "a365", "target", "datasheet", "symbol", "models", "plan"}   # win_dir: a folder on the Altium PC, never opened here
 
 
@@ -746,7 +763,10 @@ def _check_paths(ws, args):
     if "toml" in args and isinstance(args["toml"], str):   # save_rules: rules settings that name a file ([style]
         vals += [(f"toml {k}", x) for k, x in _rule_paths(args["toml"])]   # profile, ...)
     for k, x in vals:
-        if x.startswith(("http://", "https://")) or not x.strip():
+        if x.strip().lower().startswith(("http://", "https://")):
+            _check_url(k, x.strip())
+            continue
+        if not x.strip():
             continue
         p = Path(x).expanduser()
         if not p.is_absolute() and re.match(r"[A-Za-z]:[\\/]|\\\\", x):   # a Windows path on another OS
@@ -756,6 +776,28 @@ def _check_paths(ws, args):
         if not any(p == r or r in p.parents for r in (Path(r).resolve() for r in roots)):
             raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens files "
                              "there (start it with --any-path to allow more)")
+
+
+def _check_url(k, url):
+    """--confine: a URL argument (visual_check datasheet) is fetched by this server, so a remote client could reach a
+    service only this computer sees (127.0.0.1, the LAN, cloud metadata). Only https to public addresses."""
+    import ipaddress, socket
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(url)
+        scheme, host, port = u.scheme.lower(), u.hostname, u.port
+    except ValueError:
+        scheme = host = port = None
+    if scheme != "https" or not host:
+        raise ValueError(f"{k}: only https:// links can be fetched on this server")
+    try:
+        addrs = {a[4][0] for a in socket.getaddrinfo(host, port or 443, proto=socket.IPPROTO_TCP)}
+    except (OSError, UnicodeError):
+        raise ValueError(f"{k}: {host} could not be resolved")
+    for a in addrs:
+        ip = ipaddress.ip_address(a.split("%")[0])
+        if not ip.is_global or ip.is_multicast:
+            raise ValueError(f"{k}: {host} is a local or private address; this server only fetches public https links")
 
 
 def _rule_paths(text):
@@ -867,6 +909,9 @@ def _error_text(e):
     from .visual_check import VisualCheckError          # e.g. Pillow not installed: the fix, not a bug report
     if isinstance(e, (ValueError, KeyError, FileExistsError, FileNotFoundError, PermissionError, VisualCheckError)):
         return e.args[0] if isinstance(e, KeyError) and e.args else str(e)   # a wrong id / path is the caller's
+    import errno
+    if isinstance(e, OSError) and e.errno in (errno.ENAMETOOLONG, errno.ENOTDIR, errno.EINVAL, errno.ELOOP):
+        return f"not found: that path is not valid here ({e.strerror or type(e).__name__}); check the BOM / file path"
     traceback.print_exc(file=sys.stderr)                # a bug: keep the traceback on stderr
     from . import messages as M                         # one line what went wrong, one line what to do (shared voice)
     return "\n".join(M.friendly_error(e))
@@ -917,7 +962,8 @@ def _job_status(ws, args, notify=None, token=None):
     jobs = _jobs(ws)
     if not args.get("id"):
         return _result(ws, {"jobs": [{"job": j["id"], "tool": j.get("tool"), "state": j["state"],
-                                      "elapsed_s": round(j.get("seconds") or 0, 1)} for j in list(jobs.jobs.values())]})
+                                      "elapsed_s": round(j.get("seconds") or (time.time() - j.get("started", time.time())), 1)}
+                                     for j in list(jobs.jobs.values())]})      # seconds is set when a job finishes
     jid = str(args["id"])
     if args.get("cancel") and jobs.cancel(jid) is None:
         return _result(ws, f"unknown job {jid!r}", True)
@@ -970,6 +1016,11 @@ def handle(ws, msg, notify=None):
         mid = msg.get("id") if isinstance(msg, dict) else None
         return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32600, "message": "invalid request"}}
     mid, method, params = msg.get("id"), msg.get("method"), msg.get("params") or {}
+    if "method" not in msg and ("result" in msg or "error" in msg):
+        return None                                       # the client's answer to a request: nothing to say back
+    if "id" in msg and (mid is None or isinstance(mid, bool) or not isinstance(mid, (str, int))):
+        return {"jsonrpc": "2.0", "id": None,             # MCP: an id is a string or an integer, never null
+                "error": {"code": -32600, "message": "invalid request: id must be a string or an integer"}}
     if mid is None:
         return None                                       # notifications (initialized, cancelled) need no answer
     if method == "initialize":
@@ -1005,6 +1056,8 @@ def handle(ws, msg, notify=None):
         missing = [k for k in tool["inputSchema"].get("required", []) if k not in args]
         bad = (f"missing argument(s): {', '.join(missing)}" if missing else "") or (
             f"invalid argument(s): {_arg_errors(tool, args)}" if _arg_errors(tool, args) else "")
+        unknown = _unknown_args(tool, args)              # a misspelt dryRun / summary would be dropped silently
+        bad = "; ".join(x for x in (bad, unknown) if x)
         if bad:                                           # a tool error, not a protocol error: the model reads it
             result = _result(ws, f"{bad}. {name} takes: {_usage(tool)}", True)                   # and calls again
         else:
@@ -1031,9 +1084,9 @@ def main(argv=None):
     ap.add_argument("--offline", action="store_true")
     ap.add_argument("--tools", default=os.environ.get("ECADLIB_MCP_TOOLS", "all"),
                     help="tools to offer: all (default), core (21, for small models), read-only, or tool names; comma separated")
-    ap.add_argument("--wait", type=float, default=float(os.environ.get("ECADLIB_MCP_WAIT", 45)),
+    ap.add_argument("--wait", type=float, default=os.environ.get("ECADLIB_MCP_WAIT") or 45.0,
                     help="seconds a tool call may take before it answers with a job id for job_status (default 45)")
-    ap.add_argument("--max-chars", type=int, default=int(os.environ.get("ECADLIB_MCP_MAX_CHARS", 80000)),
+    ap.add_argument("--max-chars", type=int, default=os.environ.get("ECADLIB_MCP_MAX_CHARS") or 80000,
                     help="cut answers longer than this (default 80000, about 20k tokens; 0 = never)")
     ap.add_argument("--http", action="store_true", help="serve MCP over Streamable HTTP instead of stdio")
     ap.add_argument("--host", default="127.0.0.1")
@@ -1045,7 +1098,13 @@ def main(argv=None):
     ap.add_argument("--allow-origin", action="append", default=[], help="HTTP: a browser origin allowed to call")
     ap.add_argument("--any-path", action="store_true", help="HTTP: allow file arguments outside the workspace and --lib")
     ap.add_argument("--confine", action="store_true", help="stdio: only allow file arguments inside the workspace and --lib")
-    a = ap.parse_args(argv)
+    a = ap.parse_args(argv)        # a bad $ECADLIB_MCP_WAIT / _MAX_CHARS is parsed like the flag: one usage error
+    if not (math.isfinite(a.wait) and a.wait >= 0):
+        ap.error("--wait / ECADLIB_MCP_WAIT must be 0 or more seconds")
+    if a.max_chars < 0:
+        ap.error("--max-chars / ECADLIB_MCP_MAX_CHARS must be 0 (never cut) or more")
+    if not 0 <= a.port <= 65535:
+        ap.error("--port must be from 0 to 65535")
     try:
         tools = tool_names(a.tools)
     except ValueError as e:
@@ -1085,7 +1144,7 @@ def serve(ws, inp, out):
         out.write(_encode(resp) + b"\n")
         out.flush()
     for raw in inp:
-        line = raw.decode("utf-8", errors="replace")
+        line = raw.decode("utf-8", errors="replace").lstrip("﻿")   # a byte-order mark (Windows tools)
         if not line.strip():
             continue
         try:
