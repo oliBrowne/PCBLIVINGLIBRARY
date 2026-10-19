@@ -166,6 +166,9 @@ def failure_type(row, mine, spec):
 def apply_errata(sc, mine_pins, errata, ref_pins=None, tol=None):
     """A failing field that a checked erratum covers, with ours what the datasheet says, is scored right."""
     fixed = []
+    num = {k: e["ours"] for k, e in (errata or {}).items() if isinstance(e.get("ours"), (int, float))}
+    if any(abs(((sc["fields"].get(k) or {}).get("ours") or 0) - v) > 0.01 for k, v in num.items()):
+        return fixed                                  # ours isn't the datasheet's package either (PCA9557BS: pitch 0.65)
     for field, e in (errata or {}).items():
         f = sc["fields"].get(field)
         if not f or f["ok"]:
