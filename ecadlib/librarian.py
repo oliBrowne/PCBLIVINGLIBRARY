@@ -582,7 +582,18 @@ class Run:
         except CC.Held as e:
             self.cross_check_held(st, e)
             return
+        except Exception as e:
+            self.refused(st, job, e)
+            raise
         self.put_datasheet(st, res, job, fp_name, sym_name, "cached" if hit else "")
+
+    @staticmethod
+    def refused(st, job, error):
+        """A maker's site refused the PDF here and the API's fetcher failed too: the cause and the way round it, which
+        the release check shows in place of "no footprint"."""
+        line = D.refused_line(job, error)
+        if line:
+            st["review"].append(line)
 
     @staticmethod
     def cross_check_held(st, e):
@@ -610,6 +621,7 @@ class Run:
                     st["tried"].append(f"datasheet: failed ({type(e).__name__}: {e})")
             elif isinstance(r, Exception):
                 st["tried"].append(f"datasheet reader: failed ({r})")
+                self.refused(st, job, r)
             elif r == "estimate only":                    # priced, not sent: the person approves the cost first
                 st["tried"].append(f"datasheet: waiting for your OK to read it with AI ({job['url']})")
             else:

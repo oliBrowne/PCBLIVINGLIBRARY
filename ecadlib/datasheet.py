@@ -23,6 +23,7 @@ from pathlib import Path
 import requests
 
 from . import altium_lib as AL, footprint_gen as F
+from . import httpcache as H
 from .fsutil import write_text_atomic
 from . import userconfig as UC
 
@@ -1300,11 +1301,45 @@ def lcsc_number(item=None, ln=None, row=None):
     return None
 
 
+# Maker URL patterns, tried after every BOM / provider / source link (never instead of one), only for the makers
+# whose pattern holds: (maker name, link host, label, URL). The MPN is lowercased and tried whole first (without a
+# Linear "#PBF" or TI "/NOPB" tail), then as its base part:
+#   TI: the letters after the last digit cut (package, grade, reel; a "-Q1" or "-3.3" tail first): TPS26600PWPR ->
+#       tps26600, SN74LVC1G08DBVR -> sn74lvc1g08, LM1117MPX-3.3/NOPB -> lm1117. TI keeps a symlink per generic part
+#       number, so the family name (tps2660) is not guessed.
+#   ADI / Linear: the letters and the first run of digits: LT8610EMSE#PBF -> lt8610, AD7606BSTZ-RL -> ad7606
+#       (Linear package codes carry digits: LT1763CS8 is lt1763, not lt1763cs8).
+MAKER_URLS = [
+    (r"texas instruments|^ti$|burr.?brown|national semi", r"(^|\.)ti\.com$", "TI",
+     "https://www.ti.com/lit/ds/symlink/{}.pdf", lambda s: re.sub(r"(?<=\d)[A-Z]+$", "", re.sub(r"(-?Q1|-[\d.]+)$", "", s))),
+    (r"analog devices|linear tech|^adi$", r"(^|\.)(analog|linear)\.com$", "Analog Devices",
+     "https://www.analog.com/media/en/technical-documentation/data-sheets/{}.pdf",
+     lambda s: (re.match(r"[A-Z]+\d+", s) or [""])[0]),
+]
+
+
+def maker_urls(mpn, maker="", links=()):
+    """[(url, where)] from MAKER_URLS for a part whose maker (or one of whose known links' hosts) is a listed one."""
+    from urllib.parse import urlparse
+    s = re.split(r"[#/]", str(mpn or "").strip().upper())[0]
+    if not re.search(r"\d", s):
+        return []
+    hosts = {urlparse(u).hostname or "" for u in links}
+    out = []
+    for name_rx, host_rx, label, pattern, base in MAKER_URLS:
+        if not (re.search(name_rx, str(maker or "").strip(), re.I) or any(re.search(host_rx, h) for h in hosts)):
+            continue
+        for b in dict.fromkeys((s, base(s))):
+            if b and re.fullmatch(r"[A-Z0-9][A-Z0-9._-]*", b):
+                out.append((pattern.format(b.lower()), f"{label} datasheet URL pattern ({b.lower()})"))
+    return out
+
+
 def datasheet_urls(item=None, ln=None, row=None, found=None):
     """Datasheet links to try, best first, each with where it came from: the BOM's datasheet column, the link an official
     part API gave in triage (Nexar / DigiKey / Mouser), the plan's
-    ComponentLink2URL / Datasheet, one a source found (KiCad symbol Datasheet property, EasyEDA lcsc.url), then
-    LCSC's datasheet URL pattern for the part's LCSC number."""
+    ComponentLink2URL / Datasheet, one a source found (KiCad symbol Datasheet property, EasyEDA lcsc.url),
+    LCSC's datasheet URL pattern for the part's LCSC number, then the maker's own URL pattern (MAKER_URLS)."""
     par = {p["name"]: p["value"] for p in (item or {}).get("parameters", [])}
     fd = (found or {}).get("datasheet") or ("", "")
     cands = [((ln or {}).get("datasheet"), "BOM"), ((row or {}).get("src_datasheet"), f"{(row or {}).get('src') or 'part source'} datasheet link"),
@@ -1313,6 +1348,9 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
     lc = lcsc_number(item, ln, row)
     if lc:
         cands.append((f"https://www.lcsc.com/datasheet/{lc}.pdf", f"LCSC datasheet URL pattern ({lc})"))
+    mpn = (ln or {}).get("mpn") or par.get("Manufacturer Part Number") or (row or {}).get("mpn") or (row or {}).get("src_mpn")
+    maker = (ln or {}).get("manufacturer") or par.get("Manufacturer") or (row or {}).get("manufacturer")
+    cands += maker_urls(mpn, maker, [str(u or "").strip() for u, _ in cands])
     out, seen = [], set()
     for u, w in cands:
         u = str(u or "").strip()
@@ -1340,17 +1378,70 @@ def is_pdf(data):
     return isinstance(data, (bytes, bytearray)) and b"%PDF-" in data[:1024]
 
 
+# The API's fetcher could not get a URL source either (its words in the #42 Opus run: LTM4671, LTV-352T).
+API_FETCH_FAILED = re.compile(r"could not (be )?(fetch|download)|unable to (fetch|download)|timed out while trying to download"
+                              r"|unable to connect to the remote server", re.I)
+
+
+def refused_line(job, error):
+    """The review line for a part whose PDF a maker's site refused here and the API could not fetch: the likely cause
+    and the way round it. None when that is not what happened."""
+    prov = job.get("prov") or {}
+    r = refusal(prov.get("attempts")) if prov.get("sent_as") == "url" and API_FETCH_FAILED.search(str(error)) else None
+    if not r:
+        return None
+    url, host, why = r
+    return (f"datasheet download refused by {host} ({why}): the maker's site likely blocks automated downloads; download "
+            f"{url} in a browser and read it with `ecadlib datasheet FILE.pdf --part {job['part']}`")
+
+
+def refusal(attempts):
+    """The first download a maker's site refused, as bot protection does: -> (url, host, why), or None. A 403 that
+    is a web page (Nexperia BAT160_SERIES.pdf), a reset connection (analog.com LTM4671, WinError 10054) or a timeout
+    on every try (analog.com LT8610, st.com STULPI01A). A TLS failure (liteon over http) is not one."""
+    from urllib.parse import urlparse
+    for a in attempts or []:
+        e = a.get("error") or ""
+        why = ("answered HTTP 403 with a web page" if re.search(r"HTTP 403 \(a web page", e) else
+               "reset the connection" if re.search(r"ConnectionResetError|Connection reset|10054|RemoteDisconnected", e) else
+               "timed out on every try" if re.search(r"timeout|timed out", e, re.I) and re.search(r"\(\d+ tries\)$", e) else "")
+        if why:
+            return a["url"], urlparse(a["url"]).hostname or a["url"], why
+    return None
+
+
 class PdfStore:
     """Downloaded datasheets, content-validated, with provenance: <cache>/datasheets/<sha256(url)>.pdf + .json.
     httpcache keeps text bodies only, so PDFs (binary) are stored here; the same session, user agent, per-host
-    rate limit and offline switch as the CachedHTTP passed in are used."""
+    rate limit and offline switch as the CachedHTTP passed in are used. A download that fails in a way that may
+    pass is tried again (httpcache.RETRIES), except on a host that already failed every try in this run."""
 
-    def __init__(self, cache_dir, http=None, offline=None):
+    def __init__(self, cache_dir, http=None, offline=None, sleep=None):
         self.dir, self.http = Path(cache_dir) / "datasheets", http
         self.offline = getattr(http, "offline", False) if offline is None else offline
+        self.sleep, self.gave_up = sleep or time.sleep, set()
+
+    def _get_retrying(self, url):
+        """_get, tried again on a transient failure. -> (status, bytes, content-type, final url, error)"""
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname or ""
+        tries = 1 if host in self.gave_up else H.RETRIES + 1
+        for n in range(1, tries + 1):
+            status, data, ctype, final, err, *more = self._get(url)
+            again = bool(H.TRANSIENT.search(err)) if err else status == 429 or 500 <= (status or 0) < 600
+            if not again or n == tries:
+                break
+            hdr = more[0] if more and more[0] is not None else {}
+            wait = H.retry_after(hdr.get("retry-after")) if not err else None
+            self.sleep(H.BACKOFF * 2 ** (n - 1) if wait is None else wait)
+        if again and tries > 1:
+            self.gave_up.add(host)
+        if err and n > 1:
+            err = f"{err} ({n} tries)"
+        return status, data, ctype, final, err
 
     def _get(self, url):
-        """-> (status, bytes, content-type, final url, error)"""
+        """-> (status, bytes, content-type, final url, error[, response headers])"""
         h = self.http
         if h is not None and hasattr(h, "get_bytes"):
             return h.get_bytes(url)
@@ -1369,15 +1460,15 @@ class PdfStore:
         get = sess.get if sess is not None else requests.get
         try:
             r = get(url, timeout=60, allow_redirects=True, stream=True,
-                    headers={"Accept": "application/pdf,*/*;q=0.5"})
+                    headers={"Accept": "application/pdf,*/*;q=0.8"})
             data = r.raw.read(MAX_DOWNLOAD + 1, decode_content=True) if hasattr(r, "raw") and r.raw is not None else r.content
-        except requests.RequestException as e:
+        except (requests.RequestException, requests.packages.urllib3.exceptions.HTTPError) as e:   # the body cut off
             m = re.search(r"Tunnel connection failed: ([^'\")]+)", str(e))
             return 0, None, "", url, f"{type(e).__name__}: " + (f"proxy CONNECT refused ({m.group(1).strip()})" if m else str(e)[:160])
         r.close()
         if h is not None and hasattr(h, "log"):
             h.log.append(("GET", url, r.status_code, False))
-        return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None
+        return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None, r.headers
 
     def fetch(self, url, where="", follow=True):
         """-> (pdf bytes, provenance). Raises DatasheetError (with the reason) when it is not a usable PDF.
@@ -1391,11 +1482,12 @@ class PdfStore:
                 return data, dict(meta, where=where or meta.get("where"), from_cache=True)
         if self.offline:
             raise DatasheetError(f"{url}: offline and not downloaded before")
-        status, data, ctype, final, err = self._get(url)
+        status, data, ctype, final, err = self._get_retrying(url)
         if err:
             raise DatasheetError(f"{url}: {err}")
         if not 200 <= (status or 0) < 300:
-            raise DatasheetError(f"{url}: HTTP {status}")
+            page = status == 403 and bool(re.search(rb"<(!doctype|html)", (data or b"")[:2048], re.I))
+            raise DatasheetError(f"{url}: HTTP {status}" + (" (a web page: the site refused the download)" if page else ""))
         if len(data) > MAX_DOWNLOAD:
             raise DatasheetError(f"{url}: larger than {MAX_DOWNLOAD >> 20} MB; download it and pass --pages")
         if not is_pdf(data):
@@ -1571,7 +1663,7 @@ class Reader:
         self.http, self.batch, self.wait, self.poll, self.max_wait_s = http, batch, wait, poll, max_wait_s
         self.estimate_only, self.yes = estimate, yes
         self.auto_pages = self.cfg["auto_pages"] if auto_pages is None else auto_pages
-        self.store, self.results = PdfStore(cache_dir, http), ResultCache(cache_dir)
+        self.store, self.results = PdfStore(cache_dir, http, sleep=sleep), ResultCache(cache_dir)
         self.dir = self.out / "datasheet"
         self.log_file = self.dir / "api_log.jsonl"
         self.say, self.sleep = log or (lambda *a: None), sleep or time.sleep
