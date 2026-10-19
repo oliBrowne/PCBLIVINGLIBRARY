@@ -358,19 +358,67 @@ def released_differs(item, plan_dir, sym):
     return [c for c in CD.diff(rel, got) if c["class"] != "cosmetic"]
 
 
-def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=None):
+def kicad_pin_details(sym):
+    """The KiCad-only details of a symbol's pins, which do not survive the conversion to Altium (passive / free /
+    no_connect / unspecified are one Altium type, power_in / power_out another; alternate functions are dropped):
+    {number: {name, ktype, alt}}. Recorded on a KiCad publish line, so a later export of the same revision that reuses
+    the source's symbol again can tell when the source changed one of them."""
+    from . import fingerprint as FP
+    fp, _ = FP.kicad_symbol(sym)
+    return {n: {"name": p["name"], "ktype": p["ktype"], "alt": p["alt"]} for n, p in sorted(fp["pins"].items())}
+
+
+def kicad_baseline_differs(item, plan_dir, details):
+    """KiCad-only pin details of a fetched symbol against those an earlier KiCad publish of the same released
+    revision shipped -> [{class, text}] (electrical); [] when they match or no earlier publish recorded them."""
+    from . import ledger as LG
+    lg = LG.Ledger(plan_dir)
+    head = lg.head(item["name"]) if lg.exists() else None
+    if not head:
+        return []
+    base = next((e["detail"]["ksym"] for e in reversed(lg.history(item["name"]))
+                 if e.get("event") == "publish" and str(e.get("target") or "").startswith("kicad")
+                 and e.get("revision") == head["revision"] and isinstance(e.get("detail"), dict)
+                 and e["detail"].get("ksym")), None)
+    if base is None:
+        return []
+    out = []
+    for n in sorted(set(base) | set(details)):
+        a, b = base.get(n), details.get(n)
+        if a is None or b is None:
+            out.append({"class": "electrical", "text": f"pin {n} {'added' if a is None else 'removed'}"})
+            continue
+        if a["ktype"] != b["ktype"]:
+            out.append({"class": "electrical", "text": f"pin {n} ({b['name']}) KiCad type {a['ktype']} -> {b['ktype']}"})
+        if a["alt"] != b["alt"]:
+            out.append({"class": "electrical", "text": f"pin {n} ({b['name']}) alternate functions changed"})
+    return out
+
+
+def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=None, kpins=None):
     """-> (KiCad symbol tree, how). Reuses KiCad / EasyEDA sources; else reads the SchLib back. An EasyEDA IC
     symbol (a plain box, [symbols] layout_pins) is read back from the SchLib, which the librarian wrote with its pins
     grouped (ecadlib.symbol_layout), so both libraries show the same symbol. A reused symbol must be the released
     revision (change control, #105): when the source changed since the release (an upstream pin swap), the released
     .SchLib is read back instead and the difference goes to `warnings`; upstream check-kicad --update or a librarian
-    re-run brings the source's change through change control."""
+    re-run brings the source's change through change control. The KiCad-only pin details (types the Altium
+    conversion merges, alternate functions) are compared with those the first KiCad publish of the revision shipped;
+    kpins: {part: those details} of a reused symbol, for the publish line."""
     src = str((item.get("source") or {}).get("symbol") or "")
     why = []
 
     def released(sym, how):
         bad = released_differs(item, plan_dir, sym)
+        details = None
         if not bad:
+            try:
+                details = kicad_pin_details(sym)
+                bad = kicad_baseline_differs(item, plan_dir, details)
+            except (ValueError, KeyError, IndexError, TypeError) as e:
+                bad = [{"class": "electrical", "text": f"the fetched symbol cannot be compared ({type(e).__name__}: {e})"}]
+        if not bad:
+            if kpins is not None and details is not None:
+                kpins[item["name"]] = details
             return sym, how
         from . import change_diff as CD
         why.append(f"{how} is not the released revision ({CD.summary(bad)})")
@@ -744,6 +792,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
     pretty.mkdir(exist_ok=True)
     rep = {"plan": str(plan), "library": lib, "parts": [], "skipped": [], "footprints": {}, "models": {}, "errors": [], "kicad_content": False}
     rep.update(warnings=[], written={})
+    kpins = {}                                 # part -> KiCad-only pin details of a reused symbol (publish line)
     report = out / "kicad_export.json"
     try:                                      # what the last export wrote (and its sha256): edited by hand since?
         prev = json.loads(report.read_text(encoding="utf-8")) if report.is_file() else {}
@@ -871,7 +920,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             rep["parts"].append(row)
             continue
         try:
-            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules, warnings=rep["warnings"])
+            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules, warnings=rep["warnings"], kpins=kpins)
             sym = sym_kicad8(sym)
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
             set_fields(sym, plan_fields(it, lib, row["footprint"], props, rules))
@@ -930,7 +979,8 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             rep["warnings"].append(f"{it['name']}: a change is held for approval ({ch.get('summary')}); the released "
                                    f"revision r{ch.get('base')} is exported (ecadlib part show {plan} {it['name']})")
     exported = {r["part"] for r in rep["parts"] if r.get("symbol") or r.get("footprint")}
-    CG.record_publish(plan_dir, items, f"kicad:{CG.project_key(plan_dir, out)}", ok=lambda it: it["name"] in exported)
+    CG.record_publish(plan_dir, items, f"kicad:{CG.project_key(plan_dir, out)}", ok=lambda it: it["name"] in exported,
+                      detail=lambda it: {"ksym": kpins[it["name"]]} if it["name"] in kpins else {})
     body = json.dumps(rep, indent=2) + "\n"
     if not report.is_file() or report.read_text(encoding="utf-8") != body:
         report.write_text(body, encoding="utf-8")

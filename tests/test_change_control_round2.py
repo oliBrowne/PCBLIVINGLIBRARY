@@ -107,3 +107,49 @@ def test_adopt_never_compares_with_a_held_change():
     except CG.ChangeError as x:
         e = x
     assert e and "pins swapped" in str(e), e
+
+
+def _qp_symbol(t1="input", t2="passive", t3="passive", alt=""):
+    pin = '(pin {} line (at {}) (length 2.54) (name "{}" (effects (font (size 1.27 1.27)))) (number "{}" (effects (font (size 1.27 1.27)))){})'
+    return ('(kicad_symbol_lib (version 20231120) (generator test)\n  (symbol "QP_TEST" (pin_names (offset 0)) (in_bom yes) (on_board yes)\n'
+            '    (property "Reference" "Q" (at 0 0 0) (effects (font (size 1.27 1.27))))\n'
+            '    (property "Value" "QP" (at 0 0 0) (effects (font (size 1.27 1.27))))\n    (symbol "QP_TEST_1_1"\n      '
+            + "\n      ".join([pin.format(t1, "-5.08 0 0", "G", "1", alt), pin.format(t2, "2.54 -5.08 90", "S", "2", ""),
+                               pin.format(t3, "2.54 5.08 270", "D", "3", "")]) + ")))")
+
+
+class _OneSymbolHTTP:
+    def __init__(self, text):
+        self.text = text
+
+    def get(self, url, **kw):
+        from ecadlib.httpcache import Response
+        return Response(200, self.text) if "QP_TEST" in url else Response(404, "")
+
+
+def test_reused_kicad_symbol_is_compared_as_kicad_with_the_first_publish():
+    """R2-2: KiCad-only pin details (passive -> no_connect / free, an added alternate) do not survive the Altium round
+    trip. The first KiCad publish of a revision records them; a later export whose source changed one of them exports
+    the released symbol with a warning."""
+    from ecadlib import kicad_export as KX
+    plan, lib = demo()
+    items = items_of(plan)
+    item(items, "AO3401A")["source"]["symbol"] = "kicad:Transistor_FET:QP_TEST"
+    CG.write_plan(plan, items)
+
+    def run(text, tag):
+        rep = KX.export(plan, lib.parent / tag, "x", http=_OneSymbolHTTP(text), log=lambda *a, **k: None)
+        row = next(r for r in rep["parts"] if r["part"] == "AO3401A")
+        return row["symbol"], [w for w in rep["warnings"] if w.startswith("AO3401A") and "not the released" in w]
+
+    how, warn = run(_qp_symbol(), "k0")
+    assert how.startswith("KiCad Transistor_FET:QP_TEST (reused") and not warn, (how, warn)
+    pub = [e for e in LG.Ledger(lib).history("AO3401A") if e.get("event") == "publish" and (e.get("detail") or {}).get("ksym")]
+    assert pub and pub[-1]["detail"]["ksym"]["3"]["ktype"] == "passive", pub
+    for k, text, says in (("k1", _qp_symbol(t3="no_connect"), "KiCad type passive -> no_connect"),
+                          ("k2", _qp_symbol(t2="free"), "KiCad type passive -> free"),
+                          ("k3", _qp_symbol(alt=' (alternate "SWAP" output line)'), "alternate functions")):
+        how, warn = run(text, k)
+        assert "read back" in how and warn and says in warn[0], (k, how, warn)
+    how, warn = run(_qp_symbol(), "k4")                   # the source as released: reused again
+    assert "reused" in how and not warn, (how, warn)

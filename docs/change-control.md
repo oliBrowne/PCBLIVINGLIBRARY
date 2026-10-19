@@ -142,7 +142,11 @@ every released part as changed nor hides a real change in what the old fingerpri
   `kicad-pcm` and `kicad-dblib --export`) takes again from the part's source (`kicad:`, `local:` from `--lib`,
   `easyeda:`) is compared with the released .SchLib first. When the source changed more than cosmetics since the
   release (an upstream pin swap), the released .SchLib is exported instead and the export lists a warning; run
-  `upstream check-kicad --update` or the librarian to bring that change through change control.
+  `upstream check-kicad --update` or the librarian to bring that change through change control. Some pin details
+  exist only in KiCad: the types that Altium merges (passive, free, unspecified and no_connect; power_in and
+  power_out) and alternate pin functions. The first KiCad export of a revision records them on its publish line. A
+  later export of that revision whose source changed one of them also exports the released .SchLib, with a warning.
+  The first export of a revision cannot check them, because the release does not record them.
 - **Altium 365 push without a library ledger** (the web UI or MCP push for a BOM the librarian has not run on): it
   never changes the MPN, manufacturer or value of a component that is already in the workspace. That part is skipped
   with the reason; other parameters are still updated. Use another part name for a different part, or run the

@@ -820,10 +820,12 @@ def _record_publish(folder, items, target, ok, by, detail):
         if not head or not ok(it):
             continue
         last = lg.published(it["name"], target)
-        if last and last.get("revision") == head["revision"] and last.get("digest") == head.get("digest"):
+        d = detail(it) if detail else None
+        if last and last.get("revision") == head["revision"] and last.get("digest") == head.get("digest") and not (
+                (d or {}).get("ksym") and not (last.get("detail") or {}).get("ksym")):   # (a KiCad baseline not yet kept)
             continue
         lg.append({"event": "publish", "part": it["name"], "target": target, "revision": head["revision"],
-                   "digest": head.get("digest"), "by": by or "", **({"detail": detail(it)} if detail else {})})
+                   "digest": head.get("digest"), "by": by or "", **({"detail": d} if detail else {})})
         n += 1
     return n
 
