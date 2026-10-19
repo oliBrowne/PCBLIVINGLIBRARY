@@ -1003,6 +1003,7 @@ The CSV needs `num` and `name` columns; `type` and `group` (to override the grou
 [symbols]
 layout_pins = 1         # grouped layout from this many pins (0 = never)
 power_side = "top"      # top: power top, ground bottom | left: both on the left side
+resistor = "us"         # us: zigzag resistor symbol | iec: box
 split_pins = 0          # multi-part above this many pins (0 = never)
 unit_pins = 48          # most pins in one signal part
 stack_power = "stack"   # stack | hide | none
