@@ -110,7 +110,7 @@ def schematic_symbols(files):
 
 
 def _natkey(s):
-    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", s)]
+    return [int(t) if t.isdecimal() else t for t in re.split(r"(\d+)", s)]
 
 
 def board_footprints(pcb, keep_quotes=False):
@@ -273,6 +273,33 @@ def _no_instance_texts(tree):
     return [c for c in tree if keep(c)]
 
 
+def _fp_field(node_or_chain):
+    """A symbol's Footprint field (the footprint it places, Lib:Name), from a cached copy or a library extends chain."""
+    chain = node_or_chain if isinstance(node_or_chain, list) and node_or_chain and isinstance(node_or_chain[0], list) \
+        else [node_or_chain]
+    for node in chain:                         # the derived symbol's own field first, then its parents'
+        for p in sexpr.find(node, "property"):
+            if len(p) > 2 and str(p[1]) == "Footprint":
+                return "" if str(p[2]) == "~" else str(p[2])
+    return ""
+
+
+def _footprint_field(cached, chain, libs):
+    """The symbol's Footprint field, schematic copy -> library: another footprint is what "Update symbols from library"
+    places (geometry-major), and one the library no longer has is held whatever the policy says (marked "missing")."""
+    a, b = _fp_field(cached), _fp_field(chain)
+    out = []
+    if a != b:
+        out.append({"class": "geometry-major", "area": "symbol", "what": "footprint", "old": a, "new": b,
+                    "text": f"footprint reference (the symbol's Footprint field) changed from {CD._f(a)} to {CD._f(b)}"})
+    if b and ":" in b:
+        tree, why = libs.footprint(b)
+        if tree is None and why.endswith(f"is no longer in library {b.partition(':')[0]}"):
+            out.append({"class": "geometry-major", "area": "symbol", "what": "footprint", "old": a, "new": b,
+                        "missing": True, "text": f"the symbol's footprint {b} is not in the library ({why})"})
+    return out
+
+
 def footprint_fp(tree, name, instance=False):
     """instance=True: compare as a placed part (reference and value texts left out, on both sides)."""
     tree = _no_instance_texts(tree) if instance else tree
@@ -311,8 +338,10 @@ def check_kicad(path, libs=(), rules=None, use_global=True):
             except (ValueError, KeyError, IndexError, TypeError) as e:
                 rows.append(_row("symbol", u["lib_id"], u["refs"], state="unreadable", why=f"{type(e).__name__}: {e}"))
                 continue
+            ch += _footprint_field(u["node"], chain, L)
             note = "edited in the schematic (lib_name " + key + ")" if u["edited"] else ""
-            rows.append(_row("symbol", u["lib_id"], u["refs"], ch, "changed" if ch else "same", note, pol))
+            act = "hold" if any(c.get("missing") for c in ch) else None
+            rows.append(_row("symbol", u["lib_id"], u["refs"], ch, "changed" if ch else "same", note, pol, act))
     if kp["pcb"]:
         groups = {}
         for f in board_footprints(kp["pcb"]):
@@ -327,8 +356,9 @@ def check_kicad(path, libs=(), rules=None, use_global=True):
         for (fpid, _), g in sorted(groups.items()):
             refs = sorted(g["refs"], key=_natkey)
             tree, why = L.footprint(fpid)
-            if tree is None:
-                rows.append(_row("footprint", fpid, refs, state="not in library", why=why))
+            if tree is None:                   # a footprint gone from a library that is there: an update cannot find
+                rows.append(_row("footprint", fpid, refs, state="not in library", why=why,   # it: held
+                                 action="hold" if why.endswith(f"is no longer in library {fpid.partition(':')[0]}") else None))
                 continue
             ch = CD.diff(g["fp"], footprint_fp(tree, g["fp"]["part"], instance=True))
             rows.append(_row("footprint", fpid, refs, ch, "changed" if ch else "same", "", pol))
@@ -535,6 +565,11 @@ def freeze_kicad(path, nick=None, dry_run=False, out_dir=None, rewrite=True):
             node = sexpr.parse(sexpr.dumps(cache[k]), keep_quotes=True)
             node[1] = sexpr.Q(sym_new[k])
             _rename_units(node, k.rpartition(":")[2], sym_new[k])
+            if rewrite:                        # the frozen symbol places the frozen footprint, as the schematic will
+                fps = {fpid: f"{nick}:{fp_new[(fpid, ds[0])]}" for fpid, ds in names.items()}
+                for prop in sexpr.find(node, "property"):
+                    if len(prop) > 2 and str(prop[1]) == "Footprint" and str(prop[2]) in fps:
+                        prop[2] = sexpr.Q(fps[str(prop[2])])
             lib.append(node)
         f = out_dir / f"{nick}.kicad_sym"
         if not dry_run:
