@@ -19,11 +19,12 @@ Classes, most severe first (default policy in brackets, see change_gate.POLICY):
   geometry-minor  pad size within SIZE_MINOR, corner rounding, paste / mask margins and windows, courtyard, inner-layer
                   copper of a THT pad, keepouts, footprint type and settings, pad property / pin function, the
                   footprint renamed with the same land pattern, 3D model added / removed / height / file; a symbol
-                  pin end moved; power pins of one name and type no longer sharing an end (a warn at least)     [warn]
+                  pin end moved; power pins of one net and type no longer sharing an end, the number of display
+                  modes (body styles) (both a warn at least); in a new body style or unit, pins that share an end
+                  where body style 1 does not, or a pin that is another signal than in body style 1: electrical [warn]
   cosmetic        silkscreen, fab drawing, texts, symbol graphics, pin positions / lengths that keep the pin end in
                   place, pin shapes, a pin name written
-                  another way (RESET# -> ~{RESET}), the value written another way (100nF -> 100n), display modes,
-                  other fields                                                                                  [pass]
+                  another way (RESET# -> ~{RESET}), the value written another way (100nF -> 100n), other fields                                                                                  [pass]
 
 Tolerances: a length change within TOL["noise"] (parity's position tolerance, 1 um) is no change; SIZE_MINOR is the
 pad-size band that counts as minor (max(50 um, 10 % of that side)); 3D origin within TOL["model"] (10 um)."""
@@ -344,9 +345,28 @@ def _symbol(o, n, out):
     if so.get("units", 1) != sn.get("units", 1):  # units are electrical: a placed unit gains or loses pins
         _chg(out, "electrical", "symbol", "units", so.get("units", 1), sn.get("units", 1),
              f"symbol units {so.get('units', 1)} -> {sn.get('units', 1)}")
-    if so.get("modes", 1) != sn.get("modes", 1):
-        _chg(out, "cosmetic", "symbol", "modes", so.get("modes", 1), sn.get("modes", 1),
-             f"symbol display modes {so.get('modes', 1)} -> {sn.get('modes', 1)}")
+    if so.get("modes", 1) != sn.get("modes", 1):  # a view placed schematics can switch to: a warn at least
+        _chg(out, "geometry-minor", "symbol", "modes", so.get("modes", 1), sn.get("modes", 1),
+             f"symbol display modes (body styles) {so.get('modes', 1)} -> {sn.get('modes', 1)}")
+        out[-1]["least"] = "warn"
+    _new_views(po, pn, out)
+
+
+def _new_views(po, pn, out):
+    """A body style only the new symbol has (an added De Morgan view): each pin's copy in it must be the same signal
+    as its copy in body style 1 of the same unit (a placed symbol switched to the view keeps its wires)."""
+    added = _styles(pn) - _styles(po)
+    if not added:
+        return
+    for c in sorted(set(po) & set(pn), key=_natkey):
+        base = {(x.get("unit") or 0): x for x in _insts(pn[c]) if (x.get("style") or 1) == 1}
+        for x in _insts(pn[c]):
+            b = base.get(x.get("unit") or 0)
+            if (x.get("style") or 1) in added and b is not None and _esig(b) != _esig(x):
+                show = lambda p: (f"{p.get('raw') or p['name'] or '(no name)'} ({p.get('ktype') or p['type']}"
+                                  f"{', hidden' if p.get('hidden') else ''})")
+                _chg(out, "electrical", "symbol", f"pin {c}", list(_esig(b)[:2]), list(_esig(x)[:2]),
+                     f"pin {c} in body style {x.get('style')} (a new body style) is {show(x)}, in body style 1 {show(b)}")
 
 
 def _joined(ends, keep):
@@ -374,9 +394,10 @@ def _pins_text(nums, pins):
 
 
 def _power_alike(nums, pins):
-    """Pins of one name and one type, power (or hidden: joined by name): split apart they join no wrong net."""
+    """Pins of one net and one type, power (or hidden: joined by name): split apart they join no wrong net. The net is
+    a hidden pin's net (Altium's HiddenNetName: AGND and DGND pins both named GND are two nets), else the name."""
     xs = [x for n in nums for x in _insts(pins[n])]
-    return all(_net_pin(x) for x in xs) and len({(x.get("raw"), x["type"], x.get("ktype")) for x in xs}) == 1
+    return all(_net_pin(x) for x in xs) and len({(x.get("net") or x.get("raw"), x["type"], x.get("ktype")) for x in xs}) == 1
 
 
 def _stacked(so, sn, out):
@@ -392,11 +413,18 @@ def _stacked(so, sn, out):
     eo, en = pin_ends(po, so.get("units", 1)), pin_ends(pn, sn.get("units", 1))
     go, gn = _joined(eo, keep), _joined(en, keep)
     multi = max(so.get("units", 1), sn.get("units", 1)) > 1
-    for us in sorted(set(go) & set(gn)):
+    for us in sorted(set(gn)):
         where = (f" in unit {us[0]}" if multi else "") + (f" (body style {us[1]})" if us[1] > 1 else "")
-        old, new = go[us], gn[us]
+        new = gn[us]
+        if us in go:
+            old = go[us]
+        else:                                         # a view or unit that is new: against body style 1 of the
+            old = go.get((us[0], 1)) or []            # unit; in a new unit every stack is a new connection
+            where = (f" in unit {us[0]}" if multi else "") + (f" (body style {us[1]}, a new one)" if (us[0], 1) in go
+                                                              else " (a new unit)")
         for comp in new:                              # connected now: was it in pieces before?
             parts = [c & comp for c in old if c & comp]
+            parts += [{n} for n in comp if not any(n in p for p in parts)]     # pins on no shared end before
             if len(parts) > 1:
                 parts.sort(key=lambda c: (-len(c), _natkey(min(c, key=_natkey))))
                 for p in parts[1:]:
@@ -405,7 +433,7 @@ def _stacked(so, sn, out):
                          f"{_pins_text(parts[0], pn)}: they connect")
                     if _power_alike(comp, pn):        # one net's pins drawn on one end: no wrong connection
                         out[-1]["drawing"] = True
-        for comp in old:                              # connected before: in pieces now?
+        for comp in (old if us in go else []):        # connected before: in pieces now?
             parts = [c & comp for c in new if c & comp]
             if len(parts) <= 1:
                 continue
