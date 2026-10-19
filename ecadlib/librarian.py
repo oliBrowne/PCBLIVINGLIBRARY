@@ -249,9 +249,9 @@ def _set_par(item, k, v):
 
 
 def _line_for(item, lines, rows):
-    """The BOM line and triage row of a plan item: same MPN, else (no MPN) same value. Of several, a fitted line wins
-    over a DNP one (R5 DNP and R1 share the MPN), then the line whose footprint is the item's (10k 0603 and 10k 0402
-    are two items with one value)."""
+    """The BOM line and triage row of a plan item: same MPN, else (no MPN) same value. Of several, the line whose
+    footprint is the item's wins (10k 0603 and 10k 0402 are two items with one value: a DNP 0402 line must never be
+    built from a fitted 0603 line's footprint), then a fitted line over a DNP one (R5 DNP and R1 share the MPN)."""
     par = _par(item)
     mpn, val = par.get("Manufacturer Part Number", ""), par.get("Value", "")
     fp = item.get("footprint") or {}
@@ -261,7 +261,7 @@ def _line_for(item, lines, rows):
         lm = "" if T.placeholder_mpn(ln.get("mpn")) else ln.get("mpn")    # 'N/A': planned without an MPN (altium_export)
         if (mpn and lm == mpn) or (not mpn and not lm and ln.get("value", "") == val):
             fps = {AL.lib_name(str(x).split(" ")[0].split(":")[-1]) for x in (ln.get("footprint"), row.get("local_footprint")) if x}
-            s = (not ln.get("dnp") and not str(row.get("status") or "").startswith("dnp"), bool(fps & want))
+            s = (bool(fps & want), not ln.get("dnp") and not str(row.get("status") or "").startswith("dnp"))
             if score is None or s > score:
                 best, score = (ln, row), s
     return best
