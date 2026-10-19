@@ -310,3 +310,14 @@ def test_altium_project_check_lists_dblib_placed_components_as_not_checked():
     with contextlib.redirect_stdout(buf):
         PJ.print_check(res)
     assert "not checked" in buf.getvalue() and "RES-0603-10k" in buf.getvalue(), buf.getvalue()
+
+
+def test_an_ohm_sign_is_the_resistor_unit():
+    """R3-2: "10k" -> "10k Ohm" / "10kΩ" / "10k Ω" only writes the unit (Ω is unambiguous, so also on a part of unknown
+    kind); on a part known to be a capacitor it is another value. "100n" -> "100nF" stays held for an unknown kind."""
+    for b in ("10k Ohm", "10kΩ", "10k Ω", "10k ohms"):
+        assert _value_class("10k", b) == "cosmetic", b
+        assert _value_class("10k", b, "Resistor") == "cosmetic", b
+        assert _value_class("10k", b, "Ceramic capacitor") == "identity", b
+    assert _value_class("10k Ohm", "10k Ohm 1%") == "cosmetic"
+    assert _value_class("100n", "100nF") == "identity"

@@ -109,10 +109,21 @@ def _kind_unit(fp):
     return next((u for k, u in KIND_UNIT if k in text), None)
 
 
-def _rest_change(a, b, same_mpn):
-    """Value text after the number, a -> b: None when it says the same, 'more' when b only adds detail tokens, 'less'
-    when b drops some and the MPN is the same, else 'other' (an identity change)."""
-    ta, tb = Counter(_value_tokens(a)), Counter(_value_tokens(b))
+OHM_TOKENS = ("OHM", "OHMS", "Ω", "R")
+
+
+def _unit_and_tokens(v, unit):
+    """A value's unit and the tokens after it, an ohm sign written apart ('10k Ohm', '10k Ω') read as the unit."""
+    toks = _value_tokens(v)
+    if not unit and toks and toks[0] in OHM_TOKENS:
+        return "R", toks[1:]
+    return unit, toks
+
+
+def _rest_change(ta, tb, same_mpn):
+    """Value tokens after the number, a -> b: None when they say the same, 'more' when b only adds detail tokens,
+    'less' when b drops some and the MPN is the same, else 'other' (an identity change)."""
+    ta, tb = Counter(ta), Counter(tb)
     if ta == tb:
         return None
     added, dropped = tb - ta, ta - tb
@@ -133,18 +144,18 @@ def _identity(o, n, out):
             _chg(out, "cosmetic", "identity", k, a, b, f"{label} written {_f(a)} -> {_f(b)} (same part)")
     va, vb = io.get("value") or "", inn.get("value") or ""
     na, nb = io.get("value_num"), inn.get("value_num")
-    ua, ub = io.get("value_unit"), inn.get("value_unit")
+    (ua, ta), (ub, tb) = _unit_and_tokens(va, io.get("value_unit")), _unit_and_tokens(vb, inn.get("value_unit"))
     mpn = (io.get("mpn") or "").strip().upper()
     same_mpn = bool(mpn) and mpn == (inn.get("mpn") or "").strip().upper()
-    rest = _rest_change(va, vb, same_mpn) if na is not None and nb is not None else None
+    rest = _rest_change(ta, tb, same_mpn) if na is not None and nb is not None else None
     if na is not None and nb is not None:
         if abs(na - nb) > 1e-9 * max(abs(na), abs(nb), 1e-30):
             _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)}")
         elif ua and ub and ua != ub:          # 100nF -> 100nH
             _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)} (another unit)")
-        elif ub and not ua and ub != (_kind_unit(n) or _kind_unit(o)):
+        elif ub and not ua and ub != (_kind_unit(n) or _kind_unit(o) or ("R" if ub == "R" else None)):
             # 100n -> 100nF only says the unit of a capacitor; 10 -> 10V on a resistor (or a part of unknown kind) is
-            # another value
+            # another value; an ohm sign (10k -> 10k Ohm / 10kΩ) says resistor, unless the part is known to be another
             _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)} (a unit "
                  "that is not this part's)")
         elif rest == "other":                 # a rating after the value changed (50V -> 6.3V), or DNF / ||1k / 0R
