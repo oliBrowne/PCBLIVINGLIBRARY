@@ -162,7 +162,7 @@ rate overall, per family and per answering source, per-field counts, tokens and 
 usage block when live, cached or replayed; otherwise datasheet's estimate, rough without a key) and wall time. Without
 a key and without `--replay` nothing is sent: parts that need Claude are reported unresolved, with an estimate.
 
-Checked here (no API key, so no live accuracy number yet): KiCad's footprints and symbols score 331/331 against
+Checked here (the live accuracy number is in [docs/benchmark.md](benchmark.md)): KiCad's footprints and symbols score 331/331 against
 themselves; the scorer fails a 0.65 mm-pitch QFN built in place of a 0.5 mm one (pitch), a mirrored footprint (pin 1),
 a missing exposed pad (pad count). The whole set through the `kicad` source (KiCad libraries served from local
 clones; GitLab rate-limited the live crawl): first 295 parts resolved, 246 pass, with 29 connectors without a
@@ -195,7 +195,8 @@ land-pattern table (`pad_table`) copied from the reference pads for the rest (BG
 case's pins; and the perfect answer to the cross-check's second read (`crosscheck.py`: the same critical numbers and
 pins), so `[datasheet] cross_check = "auto"` runs as shipped (82 reads agree with the standard table, 171 pad-table reads
 compare pin count and pins only and stay "unchecked", none held). So the gate measures the pipeline (reader checks, spec conversion, generators, pad tables, symbol writer,
-librarian, scorer), not a model. It fails when a family's pass rate drops more than `--tol` (default 0.01) below the
+librarian, scorer), not a model: the footprint is right when the reader's answer is right. How often ecadlib reads a
+real datasheet correctly is the live benchmark, [docs/benchmark.md](benchmark.md). The gate fails when a family's pass rate drops more than `--tol` (default 0.01) below the
 baseline or when any case that passes in the baseline fails; new passes are listed (`--update` locks them in).
 Committed baseline: 327/331 (bga 25/25, chip 36/36, connector 33/35, diode 25/25, power 15/15, qfn 38/40, qfp 25/25,
 soic 30/30, sot 40/40, tht 30/30, tssop 30/30), 20-22 s here. The four failures: footprint_adv's pad-table checks reject
