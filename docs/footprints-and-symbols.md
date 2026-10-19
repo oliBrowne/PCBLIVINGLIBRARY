@@ -131,15 +131,23 @@ rows mostly test the frame handling (units, y axis, bottom view, origins), the d
 BGA lands are computed from the ball size (except UFBGA-132, whose land comes from the ST datasheet). Not checked: real
 PDFs through `datasheet.py` (no API key here), and the generated through-hole and BGA files opened in Altium Designer.
 
----|---|---|---|---|---|
-| R_0603_1608Metric | 0.825×0.91 @0.7925 | 0.80×0.95 @0.825 | +0.025 / −0.04 | −0.033 | 2.92×1.42 / 2.96×1.46 |
-| C_0402_1005Metric | 0.465×0.57 @0.4025 | 0.56×0.62 @0.48 | −0.095 / −0.05 | −0.078 | 1.58×0.88 / 1.82×0.92 |
-| R_0805_2012Metric | 0.96×1.36 @0.925 | 1.025×1.40 @0.9125 | −0.065 / −0.04 | +0.013 | 3.32×1.86 / 3.36×1.90 |
-| R_1206_3216Metric | 1.09×1.71 @1.46 | 1.125×1.75 @1.4625 | −0.035 / −0.04 | −0.003 | 4.52×2.22 / 4.56×2.26 |
-| **SOIC-8_3.9x4.9mm_P1.27mm** | 1.965×0.58 @2.4725 | 1.95×0.60 @2.475 | **+0.015 / −0.02** | −0.003 | 7.42×5.40 / 7.40×5.40 |
-| **QFN-32-1EP_5x5mm_P0.5mm** | 0.845×0.24 @2.4325 | 0.875×0.25 @2.4375 | −0.03 / −0.01 | −0.005 | 6.22×6.22 / 6.26×6.26 |
+Regenerated from today's generator and `ecadlib/package_specs/` (pad 1, mm; `out/footprints/compare_vs_kicad_official.txt`):
 
-SOIC-8 (JEDEC MS-012AA inputs) and QFN-32 come out within 0.03 mm. The fab outline with its pin-1 chamfer matches KiCad's coordinates exactly for SOIC-8 and QFN-32. The QFN pin-1 triangle is identical to KiCad's, and the SOIC one is 0.09 mm higher. The 0402 is the outlier: KiCad deliberately uses larger pads than IPC table 3-6 for parts smaller than 0603. That gap is a policy choice, so it could become an option. Density A gives an 0603 pad of 1.025×1.01 and density C gives 0.625×0.81.
+| Footprint | ecadlib pad | KiCad pad | Δ size (w / h) | Δ centre | Courtyard ecadlib / KiCad |
+|---|---|---|---|---|---|
+| R_0603_1608Metric | 0.80×0.95 @0.825 | 0.80×0.95 @0.825 | 0 / 0 | 0 | 2.96×1.46 / 2.96×1.46 |
+| C_0402_1005Metric | 0.59×0.60 @0.455 | 0.56×0.62 @0.48 | +0.03 / −0.02 | −0.025 | 1.80×0.90 / 1.82×0.92 |
+| R_0805_2012Metric | 1.025×1.40 @0.9125 | 1.025×1.40 @0.9125 | 0 / 0 | 0 | 3.36×1.90 / 3.36×1.90 |
+| R_1206_3216Metric | 1.125×1.75 @1.4625 | 1.125×1.75 @1.4625 | 0 / 0 | 0 | 4.56×2.26 / 4.56×2.26 |
+| SOIC-8_3.9x4.9mm_P1.27mm | 1.95×0.60 @2.475 | 1.95×0.60 @2.475 | 0 / 0 | 0 | 7.40×5.40 / 7.40×5.40 |
+| QFN-32-1EP_5x5mm_P0.5mm | 0.875×0.25 @2.4375 | 0.875×0.25 @2.4375 | 0 / 0 | 0 | 6.26×6.26 / 6.26×6.26 |
+
+Every part matches KiCad exactly except C_0402_1005Metric, and that residual is the example spec's input, not the
+IPC maths: the bundled spec uses a generic datasheet outline (terminal 0.25 ± 0.10, width 0.50 ± 0.05), while KiCad
+builds its 0402 capacitor from the IPC-SM-782 sizes (terminal 0.10–0.30, width 0.40–0.60). Built from KiCad's sizes
+(the `stdparts` table entry) the pads are KiCad's exactly: 0.56 × 0.62 at ±0.48. Older copies of this table showed
+0402 pads about 0.1 mm shorter; that was the first prototype's small-chip fillet table (toe 0.10 instead of table
+3-6's 0.20), since corrected. Density A gives an 0603 pad of 1.025×1.01 and density C gives 0.625×0.81.
 
 ## `stdparts.py`: standard parts without Claude
 
