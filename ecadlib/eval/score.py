@@ -117,10 +117,12 @@ def score_footprint(mine, ref, tol=None):
     else:
         out["pitch"] = _f(pa is not None and abs(pa - pb) <= t["pitch"] + 1e-9, f"pitch {pa} mm, KiCad {pb} mm", ours=pa, ref=pb)
     left, worst, bad, bad_pads = list(ref["pads"]), {"pos": 0.0, "size": 0.0, "drill": 0.0}, [], []
+    compared = 0
     for p in m["pads"]:
         cands = [r for r in left if r[0] == p[0]]
         if not cands:
             continue
+        compared += 1
         r = min(cands, key=lambda r: math.hypot(r[1] - p[1], r[2] - p[2]))
         left.remove(r)
         e = {"pos": max(abs(p[1] - r[1]), abs(p[2] - r[2])), "size": max(abs(p[3] - r[3]), abs(p[4] - r[4])),
@@ -132,7 +134,8 @@ def score_footprint(mine, ref, tol=None):
             bad.append(f"pad {p[0] or '(hole)'}: " + ", ".join(why))
             bad_pads.append(p[0])
     out["pads"] = _f(not bad, f"{len(bad)} pads out of tolerance: " + "; ".join(bad[:4]) + (" ..." if len(bad) > 4 else ""),
-                     worst={k: round(v, 4) for k, v in worst.items()}, bad=len(bad), bad_pads=bad_pads)
+                     worst={k: round(v, 4) for k, v in worst.items()}, bad=len(bad), bad_pads=bad_pads,
+                     right=compared - len(bad), of=len(ref["pads"]))     # pad match: right / of (KiCad's pads)
     ca, cb = m["courtyard"], ref["courtyard"]
     if not cb:
         out["courtyard"] = _f(True)
@@ -170,6 +173,16 @@ def score_symbol(mine_pins, ref_pins, tol=None):
     return out
 
 
+def ep_numbers(num):
+    """The exposed / thermal pads of a footprint: SMD pads more than twice the median pad's area."""
+    pads = [p for p in (num or {}).get("pads") or [] if not p[5]]
+    if len(pads) < 3:
+        return []
+    areas = sorted(p[3] * p[4] for p in pads)
+    big = areas[len(areas) // 2] * 2
+    return [p[0] for p in pads if p[3] * p[4] > big]
+
+
 def maker_land(mine, spec, tol=None):
     """Does our footprint use the datasheet's recommended land (spec["land"]: pad_length x pad_width at +-pad_center,
     the maker's example board layout) rather than an IPC-7351B land worked out from the package dimensions? KiCad
@@ -186,9 +199,7 @@ def maker_land(mine, spec, tol=None):
     if not pads:
         return None
     cx, cy = _centre(pads)
-    areas = sorted(p[3] * p[4] for p in pads)
-    big = areas[len(areas) // 2] * 2
-    ep = [p for p in pads if p[3] * p[4] > big]
+    ep = [p for p in pads if p[0] in ep_numbers(mine)]
     near = lambda a, b, k: abs(a - b) <= t[k] + 1e-9
     def fits(p):
         x, y = abs(p[1] - cx), abs(p[2] - cy)

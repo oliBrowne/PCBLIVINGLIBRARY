@@ -1027,7 +1027,7 @@
         "pad_width",
         "pad_center"
       ],
-      "description": "The manufacturer's recommended land pattern, when the datasheet gives one. It replaces the IPC-7351B pads for the signal pins (a tab or exposed pad keeps its own size). pad_center = distance from the part centre to each pad centre: half the centre-to-centre distance across the rows (a datasheet's C / 2).",
+      "description": "The manufacturer's recommended land pattern, when the datasheet gives one. It replaces the IPC-7351B pads for the signal pins (a tab keeps its own size; an exposed pad takes ep_across x ep_along when given, else the package's exposed_pad). pad_center = distance from the part centre to each pad centre: half the centre-to-centre distance across the rows (a datasheet's C / 2).",
       "properties": {
         "pad_length": {
           "type": "number",
@@ -1045,6 +1045,16 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "QFN/QFP top and bottom rows, when different from pad_center"
+        },
+        "ep_across": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "The exposed/thermal pad's copper on the recommended land, measured across the pad rows (left to right), when the land page gives one (TI PowerPAD: the (3.4) next to the 16X (1.5)). Not the package's exposed pad or a stencil opening."
+        },
+        "ep_along": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "The same thermal land measured along the pad rows (top to bottom), e.g. TI's (5) or (6.5)."
         }
       }
     }
