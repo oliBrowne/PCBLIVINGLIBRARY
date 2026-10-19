@@ -26,10 +26,10 @@ the broken file, not the .PcbLib.
 | Class | What it means | Default |
 |---|---|---|
 | identity | MPN, manufacturer, or the value: its number, its unit, and a rating or tolerance written after it (100nF = 0.1uF = 100n, but 100nF is not 100nH, 3.3V is not 3.9V, 100nF 50V is not 100nF 6.3V; adding a tolerance, a voltage, power or current rating, a temperature coefficient, a dielectric (X7R, C0G) or a package size to `10k` says more and is cosmetic, dropping one is a change unless the MPN stays the same; any other text after the value (`10k DNF`, `10k NC`, `4.7k||1k`, `10k 0R`) is a change; `25 V` and `25V` are the same; a unit added to a value that had none must be the part's own (`100n` -> `100nF` on a capacitor), so `10` -> `10V` on a resistor, or on a part ecadlib cannot tell the kind of, is a change; an ohm sign (`10k` -> `10k Ohm` or `10kΩ`) is cosmetic unless the part is known to be something other than a resistor); a second MPN or manufacturer field that names another part than the first (a house `Part Number` field next to the MPN is the library's own number, so it is cosmetic); a numbered second source (`Manufacturer Part Number 2`, `Manufacturer 2`) added or changed | hold |
-| electrical | a pin's signal name or type, the exact name of a hidden or power pin (it is the net the pin joins, so `VCC` -> `Vcc` or `~{CS}` -> `CS#` on a power pin is a change), pins added / removed / renumbered / swapped, pin to pad map, hidden pins and their nets, units (split, merge, a pin moved to another unit), alternate pin functions; every copy of a pin number counts (stacked pins, power pins repeated in each unit) | hold |
+| electrical | a pin's signal name or type, the exact name of a hidden or power pin (it is the net the pin joins, so `VCC` -> `Vcc` or `~{CS}` -> `CS#` on a power pin is a change), pins added / removed / renumbered / swapped, pin to pad map, hidden pins and their nets, units (split, merge, a pin moved to another unit), alternate pin functions; every copy of a pin number counts (stacked pins, power pins repeated in each unit); pins that now share a pin end (they connect: `pin 3 (D) now shares a pin end with pin 2 (S): they connect`), and pins of different names or types that no longer share one | hold |
 | geometry-major | a pad moved, rotated, resized beyond tolerance, changed side, drill, copper offset, copper layers, paste/mask on/off (also an exposed pad whose paste windows were all removed), custom pad copper shape, zone connection; footprint origin; footprint copper and copper zones; board edge (Edge.Cuts) in the footprint; KiCad assembly flags (exclude from BOM or position files, DNP, board only); 3D origin or rotation | hold |
-| geometry-minor | pad size within tolerance, rect to rounded rect, mask/paste margins (also footprint-wide), courtyard, through-hole copper on the inner layers (`*.Cu` / `F&B.Cu`), keepout zones, footprint type (SMD / through hole), pad fabrication property, pad pin function, 3D model added / removed / height | warn |
-| cosmetic | silkscreen, fab drawing, texts, symbol graphics, pin length or position, a visible signal pin's name written another way (RESET# = ~{RESET}), the value written another way (only spacing and case when it is not read as a number), display modes, other fields | pass |
+| geometry-minor | pad size within tolerance, rect to rounded rect, mask/paste margins (also footprint-wide), courtyard, through-hole copper on the inner layers (`*.Cu` / `F&B.Cu`), keepout zones, footprint type (SMD / through hole), pad fabrication property, pad pin function, 3D model added / removed / height; a pin end moved (where a wire meets the pin: wires in placed schematics may need moving); power pins of one name and type that no longer share a pin end (each now needs its own wire; a warn whatever the policy says) | warn |
+| cosmetic | silkscreen, fab drawing, texts, symbol graphics, pin length or position that leaves the pin end where it was, a visible signal pin's name written another way (RESET# = ~{RESET}), the value written another way (only spacing and case when it is not read as a number), display modes, other fields | pass |
 
 Some values ecadlib cannot read as a number, such as `47kR`, `1E4`, `1uFd`, `C 1uF` or a colour. When either side is
 one of these, the text is all there is to compare. Any other text is then an identity change, even when the MPN stays
@@ -40,6 +40,17 @@ or from such a value is an identity change when the two values differ under eith
 An NPTH hole has no copper, so its copper layers are not compared (`F&B.Cu` and `*.Cu` are the same hole). A pad pin
 function or type is compared only when both versions have one: a board fills them in from the schematic, a library
 footprint usually leaves them out.
+
+Pins that end on one spot are connected: KiCad and Altium join them there. The fingerprint (schema 4) records each
+pin's end and, for each unit and body style, the pins that share one. A pin moved onto another pin's end is a new
+connection and is held, even when the pin keeps its name, so a D-S short drawn by moving D onto S is never a
+cosmetic pin move. Pins pulled apart lose a connection: that is held too, except for power pins of one name and type.
+The house rules now give each stacked power pin its own end (`[symbols] stack_power = "none"`), and a released symbol
+redrawn that way says which pins now need their own wires in placed schematics. It is a warn, never a pass, whatever
+the policy says. A pin end that moves without joining or leaving another pin is a warn as well, because wires in
+placed schematics may need moving; a new pin length or graphics that keep the end in place stay cosmetic. KiCad's pin
+position is its end; an Altium pin's location is its body end, so its end is the location plus the length. `project
+check` uses the same classifier, so a placed symbol and a library update give the same answer.
 
 Messages are plain sentences: `pad 3 moved 0.25 mm in x`, `pin 5 (CONT) type open_collector -> passive`,
 `pad S1 removed; pad SH added`.
@@ -249,7 +260,8 @@ ecadlib project check board.PrjPcb --workspace https://acme.365.altium.com --lib
   what "Update symbols from library" would place, so it is a geometry-major change. A Footprint field naming a
   footprint the library no longer has is held, and so is a board footprint that is gone from a library that is
   still there. Each placed symbol's own Footprint property and the board footprint's library id are compared with
-  the library part's footprint too: a part placed with another footprint is held. Nicknames are resolved to their
+  the library part's footprint too: a part placed with another footprint, or with an empty Footprint property (it
+  places no footprint), is held. Nicknames are resolved to their
   library folder first, so a project that names the same `.pretty` with another nickname shows no change. A
   nickname the project does not define is looked for as `<nickname>.pretty` beside the symbol library, where
   kicad-export writes it.
@@ -294,8 +306,8 @@ python scripts/change_corpus.py kicad-footprints-9.0.8 kicad-symbols-9.0.8 kicad
 | identity | 0 | 0 |
 | electrical | 66 | 158 |
 | geometry-major | 0 | 10 |
-| geometry-minor | 0 | 566 |
-| cosmetic | 157 | 27 |
+| geometry-minor | 9 | 566 |
+| cosmetic | 148 | 27 |
 | **Held** under the default policy | **66** | **168** |
 | Unreadable | 0 | 0 |
 | Missed by the classifier (independent re-read) | **0** | **0** |
@@ -326,6 +338,13 @@ The run was repeated after hidden and power pin names became electrical (round 4
 22,537 / 15,381 in both releases, 223 / 761 changed, 66 / 168 held, no per-part difference and no miss. KiCad 9.0.8
 to 10.0.0 renames no hidden or power pin, so the stricter rule adds no hold there. An Altium hidden pin's
 `HiddenNetName` written with an overbar (`V\C\C\`) is exported to KiCad as `~{VCC}`, as a pin name is.
+
+The run was repeated after pins that share a pin end became connected and a moved pin end became a warn (fingerprint
+schema 4). The held numbers did not change: 66 / 168, with no new hold and no new electrical line about pin ends, so
+KiCad 9.0.8 to 10.0.0 stacks no pin onto another. 9 symbols moved from cosmetic to warn, all real pin-end moves: 4
+jumpers (`Jumper_3_Bridged12`, `Jumper_3_Open`, `SolderJumper_2_Bridged`, `SolderJumper_2_Open`), 2 SiPM sensors, one
+op-amp pin (TSV524xIQ4T pin 17), and two 1-Wire EEPROMs (DS2431Q, DS28E07Q) whose four hidden NC pins, stacked on one
+end in 9.0.8, each have their own end in 10.0.0.
 
 Two false holds the first run found were fixed in the reader: KiCad 9 writes an empty pin name, number or field as
 `~` and KiCad 10 writes `""`. Before the fix this showed 11,671 cosmetic pin-name lines and two false electrical holds
