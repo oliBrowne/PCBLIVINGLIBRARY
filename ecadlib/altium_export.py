@@ -158,10 +158,10 @@ def to_rows(lines, triage=None, rules=None):
         kicad_fp = fp_ref = _name(fp_ref, bad)
         if custom:
             fp_ref = _name(RU.footprint_name(fp_ref, rules, ref), bad)
-        if bad:
-            unstorable[pn] = "; ".join(dict.fromkeys(bad))
             if fp_ref != kicad_fp:
                 renamed[pn] = kicad_fp
+        if bad:
+            unstorable[pn] = "; ".join(dict.fromkeys(bad))
         out.setdefault(cat, []).append({
             "Part Number": pn,
             "Library Ref": lib_ref,

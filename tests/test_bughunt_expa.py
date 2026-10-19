@@ -447,7 +447,7 @@ def test_exp71_bom10_lookalikes_are_stored_and_one_bad_name_is_held():
     assert items["芯片123"]["symbol"]["ref"] == "__123" and items["芯片123"]["name_problems"]
     assert "name_problems" not in items["LM358DR"]
     fails, _, _ = RC.check_item(items["芯片123"], ".")
-    assert any(r == "name" for r, _ in fails), fails
+    assert any(r == "fields" and "can't store" in m for r, m in fails), fails
 
 
 
@@ -464,7 +464,7 @@ def test_exp8_exp52_parity_reads_the_workbook_the_dblib_names(tmp_path):
     rows = P.altium_db_rows(lib)
     r = rows["RES-0603-10k"]
     assert r["Description"] == "-55..125C thick film resistor" and r["Value"] == "+/-1% 10k", r
-    (lib / "Bibliotheque.xlsx").unlink()                                 # only the csv mirror left
+    (lib / "Bibliotheque.csv").unlink()                                  # only the workbook left
     r = P.altium_db_rows(lib)["RES-0603-10k"]
     assert r["Description"] == "-55..125C thick film resistor" and r["Value"] == "+/-1% 10k", r
 

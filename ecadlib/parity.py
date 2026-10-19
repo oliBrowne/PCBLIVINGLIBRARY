@@ -924,8 +924,8 @@ def _dblib_workbook(lib):
 
 
 def altium_db_rows(folder, notes=None):
-    """{Part Number: row} from the DbLib's parts table (the .xlsx Altium reads, else the .csv mirror dblib-sync writes
-    next to it), or None when the folder has no .DbLib / .SVNDbLib. notes: gets a line when the folder has several."""
+    """{Part Number: row} from the DbLib's parts table (the .csv mirror dblib-sync writes next to the workbook the DbLib
+    names, else that .xlsx), or None when the folder has no .DbLib / .SVNDbLib. notes: gets a line when the folder has several."""
     import csv
     from . import sheetsafe as SS
     folder = Path(folder)
@@ -937,16 +937,16 @@ def altium_db_rows(folder, notes=None):
     if len(libs) > 1 and notes is not None:
         notes.append(f"{len(libs)} database libraries in {folder}; compared {lib.name}")
     out = {}
-    if xlsx.is_file():
-        from .altium_dblib_sync import read_tables
-        for t, (_, rows) in read_tables(xlsx).items():
-            for r in rows:
-                out[r.get("Part Number", "")] = dict(r, Table=t)
-    elif csvf.is_file():                      # the review mirror: undo its anti-formula apostrophe ("'+/-1%")
+    if csvf.is_file():                        # undo the mirror's anti-formula apostrophe ("'+/-1%" is "+/-1%")
         with open(csvf, encoding="utf-8-sig", newline="") as fh:
             for r in csv.DictReader(fh):
                 r = {k: SS.unquote(v) for k, v in r.items()}
                 out[r.get("Part Number", "")] = r
+    elif xlsx.is_file():
+        from .altium_dblib_sync import read_tables
+        for t, (_, rows) in read_tables(xlsx).items():
+            for r in rows:
+                out[r.get("Part Number", "")] = dict(r, Table=t)
     return out
 
 
