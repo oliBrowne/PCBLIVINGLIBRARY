@@ -55,7 +55,7 @@ HEIGHT = [(r"^R_0201", 0.26), (r"^R_0402", 0.35), (r"^R_0603", 0.45), (r"^R_0805
           (r"^LED_0805", 0.8), (r"^LED_", 1.1), (r"^CP_EIA", 1.6), (r"^(D_)?SOD-?123", 1.17), (r"^(D_)?SOD-?323", 0.9),
           (r"^(D_)?SOD-?523", 0.6), (r"^(D_)?SM[ABC]\b", 2.3), (r"^SOT-223", 1.8), (r"^SOT-89", 1.5), (r"^SOT-?(323|363|353)", 0.95),
           (r"^SC-?70", 0.95), (r"^TSOT-23", 1.0), (r"^SOT-23", 1.1), (r"^(TSSOP|MSOP|VSSOP|HTSSOP|TSOP)", 1.1), (r"^SSOP", 1.75), (r"^(SOIC|[EH]?SOP|SO-)", 1.75),
-          (r"(QFN|DFN|SON)", 0.8), (r"^LQFP", 1.6), (r"^TQFP", 1.2), (r"QFP", 2.0)]
+          (r"(QFN|DFN|SON)", 0.8), (r"LGA-", 1.0), (r"^LQFP", 1.6), (r"^TQFP", 1.2), (r"QFP", 2.0)]
 
 
 # ---------------------------------------------------------------- vectors
@@ -292,7 +292,10 @@ def gullwing(spec, H):
 
 
 def _quad_pins(spec):
-    """[(number, side, offset along the side)] in KiCad's order: left top->bottom, bottom, right, top (model y up)."""
+    """[(number, side, offset along the side)] in KiCad's order: left top->bottom, bottom, right, top (model y up);
+    an LGA's come from its pads (spec terminals)."""
+    if spec.get("terminals"):
+        return [tuple(t) for t in spec["terminals"]]
     n, e = spec["pin_count"], spec["pitch"]
     nlr = spec.get("pins_left_right", n // 4)
     ntb = spec.get("pins_top_bottom", (n - 2 * nlr) // 2)
@@ -653,6 +656,12 @@ def spec_from_name(name):
         if m.group(6):
             s["exposed_pad"] = {"length": _d(float(m.group(6))), "width": _d(float(m.group(7)))}
         return s
+    m = re.match(r"(?:[A-Za-z]+_)?LGA-(\d+)_([\d.]+)x([\d.]+)mm_P([\d.]+)mm", name)     # Bosch_LGA-8_2.5x2.5mm_P0.65mm_...
+    if m:                                     # pads at the edge like a DFN; two rows up to 8 pads (generate() checks the pads)
+        n, Bx, By, e = int(m.group(1)), float(m.group(2)), float(m.group(3)), float(m.group(4))
+        s = {"name": name, "package_type": "qfn", "pin_count": n, "pitch": e, "body_length": _d(Bx), "body_width": _d(By),
+             "terminal_width": _d(round(min(0.3, 0.5 * e), 3)), "terminal_length": _d(0.4), "lga": True}
+        return dict(s, pins_left_right=n // 2, pins_top_bottom=0) if n <= 8 else s
     m = re.match(r"([A-Z]*QFP)-(\d+)(?:-1EP)?_([\d.]+)x([\d.]+)mm_P([\d.]+)mm", name)
     if m:
         n, Bx, By, e = int(m.group(2)), float(m.group(3)), float(m.group(4)), float(m.group(5))
@@ -844,6 +853,23 @@ def fit_rotation(spec, pads):
     return next((r for r in (0, 90, 180, 270) if r != own and fits(r)), None)
 
 
+def _lga_fit(spec, pads):
+    """LGA: terminals where the footprint's pads are (two rows or four sides, numbered either way round: Bosch counts
+    clockwise), the model turned so pad 1 is at its pin-1 mark (top left)."""
+    num = [p for p in pads if str(p.get("designator") or "")]
+    p1 = next((p for p in num if str(p["designator"]) == "1"), None)
+    rot = next((r for r in (0, 90, 180, 270) if p1 and (lambda x, y: x < 0 < y)(*_turn(p1["x"], p1["y"], -r % 360))), 0)
+    Bx, By = _n(spec, "body_length"), _n(spec, "body_width")
+    if rot % 180:
+        Bx, By = By, Bx
+    terms = []
+    for p in num:
+        x, y = _turn(p["x"], p["y"], -rot % 360)
+        side = ("R" if x > 0 else "L") if abs(x) / Bx >= abs(y) / By else ("T" if y > 0 else "B")
+        terms.append((str(p["designator"]), side, y if side in "LR" else x))
+    return dict(spec, body_length=_d(Bx), body_width=_d(By), terminals=terms, rotation=rot)
+
+
 def generate(src, height=None, name=None, pads=None):
     """spec dict, spec .json path or footprint name -> (STEP text, info). Raises ValueError when the
     footprint family is unknown. pads: the footprint's pads (designator, x, y, w, h, rot; model coordinates, y up);
@@ -856,7 +882,9 @@ def generate(src, height=None, name=None, pads=None):
         spec = spec_from_name(str(src))
         if spec is None:
             raise ValueError(f"{src}: no package spec and the footprint name is not a known package family")
-    if pads:
+    if pads and spec.get("lga"):
+        spec = _lga_fit(spec, pads)
+    elif pads:
         rot = fit_rotation(spec, pads)
         if rot is not None and rot != int(spec.get("rotation") or 0) % 360:
             spec = dict(spec, rotation=rot)
