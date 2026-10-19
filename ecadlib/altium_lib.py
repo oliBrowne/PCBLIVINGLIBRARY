@@ -28,7 +28,7 @@ Conventions (mirroring Altium-made libraries in AltiumSharp's TestData):
   Units: 1 mil = 10000 internal units, so 1 mm = 10^8/254 units (rounded to the nearest unit,
   2.54 nm). KiCad's Y axis points down, Altium's up: y is negated on import.
 Schematic units: 1 = 10 mil (DXP); pins on a 100 mil (10 unit) grid."""
-import argparse, functools, gzip, hashlib, json, math, re, struct, sys, time, uuid, warnings, zlib
+import argparse, functools, gzip, hashlib, json, math, re, struct, sys, time, unicodedata, uuid, warnings, zlib
 from fractions import Fraction
 from pathlib import Path
 
@@ -69,8 +69,13 @@ def v7_layer(layer):
     return 0x01030000 + {33: 6, 34: 7, 35: 8, 36: 9, 37: 10, 38: 11, 55: 12, 56: 13, 73: 14}.get(layer, 15)
 
 
+def nfc(s):
+    """Composed Unicode: 'E' + combining acute (macOS file names, PDF text) is 'É', which cp1252 holds."""
+    return unicodedata.normalize("NFC", str(s))
+
+
 def enc(s):
-    return str(s).encode("cp1252", "replace")
+    return nfc(s).encode("cp1252", "replace")
 
 
 def block(b, flag=0):
@@ -116,7 +121,10 @@ def clean(s):
 def lib_name(s):
     """Library entry name as Altium stores it (cp1252 in the binary records). 'Ω' becomes 'Ohm';
     anything else cp1252 can't hold is an error rather than a silent '?' that makes the entry unreadable."""
-    s = str(s).replace("\u2126", "Ohm").replace("\u03a9", "Ohm")
+    s = nfc(s).replace("\u2126", "Ohm").replace("\u03a9", "Ohm")
+    bad = re.search(r"[\x00-\x1f\x7f]", s)
+    if bad:                                   # a line break would add a ghost entry to the line-based TOC streams
+        raise ValueError(f"name {s!r} has a line break or control character ({bad.group()!r}); rename it")
     try:
         s.encode("cp1252")
     except UnicodeEncodeError as e:
@@ -127,11 +135,12 @@ def lib_name(s):
 def pin_number(s, what="pin number"):
     """A pin number / pad designator for a binary record (cp1252). One cp1252 can't hold is an error: written as '?',
     two of them ('α', 'β') would become the same pin and the symbol-to-footprint mapping would break silently."""
+    s = nfc(s)
     try:
-        str(s).encode("cp1252")
+        s.encode("cp1252")
     except UnicodeEncodeError as e:
-        raise ValueError(f"{what} {s!r} has characters Altium libraries can't store ({str(s)[e.start:e.end]!r}); rename it") from None
-    return str(s)
+        raise ValueError(f"{what} {s!r} has characters Altium libraries can't store ({s[e.start:e.end]!r}); rename it") from None
+    return s
 
 
 class PinNameWarning(UserWarning):
@@ -140,7 +149,7 @@ class PinNameWarning(UserWarning):
 
 def not_cp1252(s):
     """-> the characters of s, in order and without repeats, that cp1252 can't encode ('' when it all fits)."""
-    return "".join(dict.fromkeys(c for c in str(s) if c.encode("cp1252", "replace") == b"?" and c != "?"))
+    return "".join(dict.fromkeys(c for c in nfc(s) if c.encode("cp1252", "replace") == b"?" and c != "?"))
 
 
 def file_stem(s):
@@ -189,7 +198,8 @@ def guid(seed):
 
 def _now():
     import os
-    t = time.localtime(int(os.environ.get("SOURCE_DATE_EPOCH", time.time())))
+    sde = os.environ.get("SOURCE_DATE_EPOCH")       # reproducible builds: the same bytes in every time zone (UTC)
+    t = time.gmtime(int(sde)) if sde else time.localtime()
     return time.strftime("%d/%m/%Y", t), time.strftime("%H:%M:%S", t)
 
 
@@ -411,6 +421,17 @@ def pad_rec(p, guid_a, guid_b):
 
 
 # ---------------------------------------------------------------- footprints: model & converters
+def round_rect(x, y, w, h, r, steps=8):
+    """Outline of a w x h rectangle centred on (x, y) with corner radius r: each corner as `steps` chords."""
+    pts = []
+    for cx, cy, a0 in ((x + w / 2 - r, y + h / 2 - r, 0), (x - w / 2 + r, y + h / 2 - r, 90),
+                       (x - w / 2 + r, y - h / 2 + r, 180), (x + w / 2 - r, y - h / 2 + r, 270)):
+        for k in range(steps + 1):
+            a = math.radians(a0 + 90 * k / steps)
+            pts.append((round(cx + r * math.cos(a), 6), round(cy + r * math.sin(a), 6)))
+    return pts
+
+
 def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
     """Convert a .kicad_mod (as written by footprint_gen) into the writer's footprint dict (mm, y up).
     SMD pads are converted here; through-hole and NPTH pads (round, square, slots), custom (polygon) pads and keep-out
@@ -430,7 +451,13 @@ def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
         if "F.Cu" not in layers:              # paste-only aperture (EP window) -> Top Paste fill
             if layers != ["F.Paste"] or rot:
                 raise ValueError(f"{fp['name']}: unsupported non-copper pad on {layers}")
-            fp["fills"].append((x - w / 2, y - h / 2, x + w / 2, y + h / 2, TOP_PASTE)); continue
+            rr = sexpr.first(p, "roundrect_rratio")
+            r = min(float(rr[1]), 0.5) * min(w, h) if rr and p[3] == "roundrect" else 0.0
+            if r > 0:                         # rounded window (corner rounding controls EP voiding): a region
+                fp["regions"].append((round_rect(x, y, w, h, r), TOP_PASTE))
+            else:
+                fp["fills"].append((x - w / 2, y - h / 2, x + w / 2, y + h / 2, TOP_PASTE))
+            continue
         rr = sexpr.first(p, "roundrect_rratio")
         pad = {"designator": p[1], "x": x, "y": y, "w": w, "h": h, "rot": rot, "shape": p[3],
                "corner": float(rr[1]) * 200 if rr else 0,          # KiCad r/min(w,h) -> Altium r/(min(w,h)/2) %
@@ -1015,6 +1042,9 @@ def read_pcblib(path):
     """Raises ValueError for a damaged or unknown-format file (OSError when it is not an OLE file at all)."""
     import olefile
     with olefile.OleFileIO(str(path)) as o:
+        if not o.exists("Library/Data"):
+            raise ValueError(f"{Path(path).name} is not a .PcbLib (no Library/Data stream"
+                             + ("; it looks like a .SchLib)" if o.exists("FileHeader") and not o.exists("Library") else ")"))
         try:
             return _read_pcblib(o)
         except (struct.error, zlib.error, IndexError, KeyError, EOFError) as e:
@@ -1053,6 +1083,9 @@ def read_schlib(path):
     """Raises ValueError for a damaged or unknown-format file (OSError when it is not an OLE file at all)."""
     import olefile
     with olefile.OleFileIO(str(path)) as o:
+        if o.exists("Library/Data") or not o.exists("FileHeader"):
+            raise ValueError(f"{Path(path).name} is not a .SchLib"
+                             + (" (it looks like a .PcbLib)" if o.exists("Library/Data") else " (no FileHeader stream)"))
         try:
             return _read_schlib(o)
         except (struct.error, zlib.error, IndexError, KeyError, EOFError) as e:
@@ -1091,6 +1124,15 @@ def _read_schlib(o):
 
 # ---------------------------------------------------------------- CLI
 def main(argv=None):
+    try:
+        return _main(argv)
+    except (ValueError, KeyError) as e:          # a spec / symbol file that can't be written: the user's input
+        msg = f"missing field {e}" if isinstance(e, KeyError) else str(e)
+        print(f"ecadlib altium-lib: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+
+def _main(argv=None):
     ap = argparse.ArgumentParser(description="Write Altium .PcbLib/.SchLib files (one entry per file)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("pcblib", help="package JSON specs -> <out>/<name>.PcbLib")

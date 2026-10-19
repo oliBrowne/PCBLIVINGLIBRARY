@@ -539,7 +539,7 @@ def compare_pad(k, a, out):
         _d(out, "warn" if approx else "error", what, "shape", kshape, ashape, ", ".join(approx))
         if not approx:
             return
-    elif kshape == "roundrect" and abs(k["corner"] - a["corner"]) > TOL["corner"]:
+    elif kshape == "roundrect" and not npth and abs(k["corner"] - a["corner"]) > TOL["corner"]:   # NPTH: no copper
         _d(out, "error", what, "corner radius", k["corner"], a["corner"], "% of the shorter side / 2")
     if kshape == "custom" and ashape == "custom":
         if k.get("anchor") != a.get("anchor"):
@@ -708,7 +708,13 @@ def altium_fields(row, rules=None):
     """A DbLib row (or the plan's parameters as one) -> {key field: value}."""
     from . import rules as RU
     p = lambda k: RU.param_name(k, rules)
-    get = lambda *ks: next((str(row.get(k) or "").strip() for k in ks if str(row.get(k) or "").strip()), "")
+    def get(*ks):
+        v = next((str(row.get(k) or "").strip() for k in ks if str(row.get(k) or "").strip()), "")
+        if v.startswith("=") and len(v) > 1:  # Altium's '=Part Number' / '=Value': the parameter it names
+            ref = next((k for k in row if str(k).lower() == v[1:].strip().lower()), None)
+            if ref is not None:
+                return str(row.get(ref) or "").strip()
+        return v
     return {"Value": get(p("Value"), "Value", "Comment"), "Description": get("Description"),
             "Manufacturer": get(p("Manufacturer"), "Manufacturer"),
             "MPN": get(p("Manufacturer Part Number"), "Manufacturer Part Number"),
@@ -899,25 +905,48 @@ def kicad_db_rows(folder, lib):
     return out
 
 
-def altium_db_rows(folder):
-    """{Part Number: row} from the DbLib's parts table (<name>.csv written next to it by dblib-sync, else the
-    .xlsx), or None when the folder has no .DbLib / .SVNDbLib."""
+def _dblib_workbook(lib):
+    """The parts workbook a .DbLib / .SVNDbLib reads: LibraryDatabasePath (next to it), else dblib-sync's name for it
+    (data_file_name: 'Bibliothèque.DbLib' -> 'Bibliotheque.xlsx'). -> (xlsx path, csv mirror path)."""
+    from pathlib import PureWindowsPath
+    from .altium_dblib_sync import _kv, _sections, data_file_name
+    from .fsutil import read_ini_text
+    try:
+        db = next((x for x in _sections(read_ini_text(lib)[0]) if x[0] == "DatabaseLinks"), None)
+    except (OSError, ValueError):
+        db = None
+    path = (_kv(db[1]) if db else {}).get("LibraryDatabasePath", "").strip()
+    names = ([PureWindowsPath(path).stem] if path else []) + [data_file_name(lib.stem), lib.stem]
+    for n in names:
+        if (lib.parent / f"{n}.xlsx").is_file() or (lib.parent / f"{n}.csv").is_file():
+            return lib.parent / f"{n}.xlsx", lib.parent / f"{n}.csv"
+    return lib.parent / f"{names[0]}.xlsx", lib.parent / f"{names[0]}.csv"
+
+
+def altium_db_rows(folder, notes=None):
+    """{Part Number: row} from the DbLib's parts table (the .xlsx Altium reads, else the .csv mirror dblib-sync writes
+    next to it), or None when the folder has no .DbLib / .SVNDbLib. notes: gets a line when the folder has several."""
     import csv
+    from . import sheetsafe as SS
     folder = Path(folder)
     libs = sorted(folder.glob("*.DbLib")) + sorted(folder.glob("*.SVNDbLib"))
     if not libs:
         return None
-    stem = libs[0].stem
+    found = [(lib, *_dblib_workbook(lib)) for lib in libs]
+    lib, xlsx, csvf = next((f for f in found if f[1].is_file() or f[2].is_file()), found[0])
+    if len(libs) > 1 and notes is not None:
+        notes.append(f"{len(libs)} database libraries in {folder}; compared {lib.name}")
     out = {}
-    if (folder / f"{stem}.csv").is_file():
-        with open(folder / f"{stem}.csv", encoding="utf-8-sig", newline="") as fh:
-            for r in csv.DictReader(fh):
-                out[r.get("Part Number", "")] = r
-    elif (folder / f"{stem}.xlsx").is_file():
+    if xlsx.is_file():
         from .altium_dblib_sync import read_tables
-        for t, (_, rows) in read_tables(folder / f"{stem}.xlsx").items():
+        for t, (_, rows) in read_tables(xlsx).items():
             for r in rows:
                 out[r.get("Part Number", "")] = dict(r, Table=t)
+    elif csvf.is_file():                      # the review mirror: undo its anti-formula apostrophe ("'+/-1%")
+        with open(csvf, encoding="utf-8-sig", newline="") as fh:
+            for r in csv.DictReader(fh):
+                r = {k: SS.unquote(v) for k, v in r.items()}
+                out[r.get("Part Number", "")] = r
     return out
 
 
@@ -964,7 +993,10 @@ def check_plan(plan, kicad_dir=None, lib=None, altium_dir=None, rules=None, seco
     rules = resolve(rules, base)
     items = json.loads(plan.read_text(encoding="utf-8"))
     kicad = KiCadLib(kicad_dir, lib) if kicad_dir else None
-    a_rows = altium_db_rows(altium_dir) if altium_dir else None
+    notes = []
+    a_rows = altium_db_rows(altium_dir, notes) if altium_dir else None
+    if altium_dir and a_rows is None:         # a mistyped folder must not pass without comparing anything
+        raise ValueError(f"--altium {altium_dir}: no .DbLib / .SVNDbLib there (the folder dblib-sync wrote)")
     if second_reader is None:
         second_reader = True
     rep = {"plan": str(plan), "mode": "export" if kicad else "plan", "kicad": str(kicad_dir or ""), "altium": str(altium_dir or ""),
@@ -989,6 +1021,8 @@ def check_plan(plan, kicad_dir=None, lib=None, altium_dir=None, rules=None, seco
         else:
             rep["database"] = compare_databases(k_rows, a_rows, kicad, altium_dir, rules)
             rep["database_rows"] = {"kicad": len(k_rows), "altium": len(a_rows)}
+    rep["database"] += [{"level": "warn", "what": "database", "field": "Altium", "kicad": "", "altium": n, "msg": n}
+                        for n in notes]
     rep["counts"] = {s: sum(p["result"] == s for p in rep["parts"]) for s in ("match", "mismatch", "skipped")}
     rep["counts"]["database_errors"] = sum(d["level"] == "error" for d in rep["database"])
     rep["ok"] = not rep["counts"]["mismatch"] and not rep["counts"]["database_errors"]
@@ -1020,7 +1054,8 @@ def write_report(rep, stem):
     good = [p for p in rep["parts"] if p["result"] == "match"]
     if good:
         md += [f"## Match ({len(good)})", "", "| Part | Compared |", "|---|---|"]
-        md += [f"| {p['part']} | {checked(p) or '-'} |" for p in good] + [""]
+        cell = lambda v: str(v).replace("|", "\\|").replace("\n", " ")      # a '|' in a part name is not a column
+        md += [f"| {cell(p['part'])} | {cell(checked(p) or '-')} |" for p in good] + [""]
     skip = [p for p in rep["parts"] if p["result"] not in ("match", "mismatch")]
     if skip:
         md += [f"## Not compared ({len(skip)})", ""]

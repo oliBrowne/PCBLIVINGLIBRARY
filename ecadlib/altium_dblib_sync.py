@@ -441,7 +441,7 @@ def _readback(path, kind, ref):
         names = ([c["name"] for c in AL.read_schlib(path)[1]] if kind == "SchLib"
                  else [f["name"] for f in AL.read_pcblib(path)])
     except Exception as e:
-        return f"{fname} does not read back: {type(e).__name__}: {e}"
+        return f"{fname} does not read back: {type(e).__name__}: {str(e).replace(Path(path).name, fname)}"
     want = AL.lib_name(ref)                       # as the file stores it ('Ω' -> 'Ohm')
     return None if want in names else f"{fname} holds {names}, not {want!r}"
 

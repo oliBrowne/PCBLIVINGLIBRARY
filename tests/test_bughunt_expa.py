@@ -378,6 +378,136 @@ def test_exp79_duplicate_workbook_rows_are_reported(tmp_path):
     out = S.sync(plan, lib, prune=True)
     assert len(S.read_tables(lib / "ecadlib.xlsx")["Resistors"][1]) == 1
 
+# ---------------------------------------------------------------- altium_lib
+def test_exp10_rounded_paste_windows_keep_their_corners():
+    import math
+    from ecadlib import footprint_gen as F, sexpr
+    spec = json.loads((ROOT / "ecadlib/package_specs/QFN-16-1EP_3x3mm_P0.5mm_EP1.75x1.75mm.json").read_text())
+    txt, _ = F.build(spec)
+    kicad = 0.0
+    for p in sexpr.find(sexpr.parse(txt), "pad"):
+        if (sexpr.first(p, "layers") or [None])[1:] == ["F.Paste"]:
+            w, h = (float(v) for v in sexpr.first(p, "size")[1:3])
+            r = float((sexpr.first(p, "roundrect_rratio") or [0, 0])[1]) * min(w, h) if p[3] == "roundrect" else 0
+            kicad += w * h - (4 - math.pi) * r * r
+    fp, _ = AL.footprint_from_spec(spec)
+    area = lambda pts: abs(sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(pts, pts[1:] + pts[:1]))) / 2
+    alt = sum(area(pts) for pts, layer, *_ in fp["regions"] if layer == AL.TOP_PASTE)
+    alt += sum((x2 - x1) * (y2 - y1) for x1, y1, x2, y2, layer in fp["fills"] if layer == AL.TOP_PASTE)
+    assert kicad > 0 and abs(alt - kicad) / kicad < 0.005, (kicad, alt)       # was 5.7 % more paste (square fills)
+
+
+def test_exp16_line_break_in_a_name_is_refused():
+    for bad in ("R_0603\r\nName=GHOST", "RES\nX", "TAB\tNAME"):
+        try:
+            AL.lib_name(bad)
+        except ValueError as e:
+            assert "control character" in str(e)
+        else:
+            raise AssertionError(bad)
+
+
+@lite
+def test_exp25_wrong_kind_of_library_says_so(tmp_path):
+    AL.write_schlib(tmp_path / "x.SchLib", [AL.resistor_symbol()])
+    AL.write_pcblib(tmp_path / "x.PcbLib", [_spec_fp()])
+    for reader, f, want in ((AL.read_pcblib, "x.SchLib", "not a .PcbLib"), (AL.read_schlib, "x.PcbLib", "not a .SchLib")):
+        try:
+            reader(tmp_path / f)
+        except ValueError as e:
+            assert want in str(e), e
+        else:
+            raise AssertionError(f)
+
+
+@lite
+def test_exp54_altium_lib_input_errors_are_not_internal_errors(tmp_path):
+    (tmp_path / "sym.json").write_text(json.dumps({"name": "X"}))
+    try:
+        AL.main(["schlib", str(tmp_path / "sym.json"), "-o", str(tmp_path / "out")])
+    except SystemExit as e:
+        assert e.code == 2
+    else:
+        raise AssertionError("no error")
+
+
+@lite
+def test_exp56_source_date_epoch_is_utc(monkeypatch):
+    import time
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1700000000")
+    monkeypatch.setenv("TZ", "Asia/Tokyo")
+    if hasattr(time, "tzset"):
+        time.tzset()
+    try:
+        assert AL._now() == ("14/11/2023", "22:13:20")
+    finally:
+        monkeypatch.undo()
+        if hasattr(time, "tzset"):
+            time.tzset()
+
+
+def test_exp71_decomposed_accents_are_stored():
+    import unicodedata
+    nfd = unicodedata.normalize("NFD", "TRANSCEIVÉR-485")
+    assert AL.lib_name(nfd) == "TRANSCEIVÉR-485" and AL.pin_number(unicodedata.normalize("NFD", "É1")) == "É1"
+    assert AL.not_cp1252(nfd) == ""
+
+# ---------------------------------------------------------------- parity
+@lite
+def test_exp8_exp52_parity_reads_the_workbook_the_dblib_names(tmp_path):
+    from ecadlib import parity as P
+    _models(tmp_path)
+    items = _base_items()
+    items[0]["description"] = "-55..125C thick film resistor"
+    items[0]["parameters"][0]["value"] = "+/-1% 10k"
+    lib = tmp_path / "lib"
+    S.sync(_plan(tmp_path, items), lib, name="Bibliothèque")
+    rows = P.altium_db_rows(lib)
+    r = rows["RES-0603-10k"]
+    assert r["Description"] == "-55..125C thick film resistor" and r["Value"] == "+/-1% 10k", r
+    (lib / "Bibliotheque.xlsx").unlink()                                 # only the csv mirror left
+    r = P.altium_db_rows(lib)["RES-0603-10k"]
+    assert r["Description"] == "-55..125C thick film resistor" and r["Value"] == "+/-1% 10k", r
+
+
+def test_exp49_npth_roundrect_corner_is_not_compared():
+    from ecadlib import parity as P
+    pad = {"num": "", "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0, "rot": 0.0, "side": "NPTH", "offset": None,
+           "drill": (1.0, 1.0, None), "approx": []}
+    out = []
+    P.compare_pad(dict(pad, shape="roundrect", corner=50), dict(pad, shape="roundrect", corner=0), out)
+    assert not [d for d in out if d["field"] == "corner radius"], out
+
+
+@lite
+def test_exp63_parity_markdown_escapes_pipes(tmp_path):
+    from ecadlib import parity as P
+    rep = {"plan": "", "mode": "plan", "parts": [{"part": "RES|0603|10k", "result": "match", "checked": ["footprint"],
+                                                    "diffs": []}], "database": [],
+           "counts": {"match": 1, "mismatch": 0, "skipped": 0, "database_errors": 0}}
+    md = P.write_report(rep, tmp_path / "parity").with_suffix(".md").read_text()
+    assert "| RES\\|0603\\|10k | footprint |" in md, md
+
+
+@lite
+def test_exp72_parity_altium_folder_without_dblib_is_an_error(tmp_path):
+    from ecadlib import parity as P
+    _models(tmp_path)
+    plan = _plan(tmp_path, _base_items())
+    try:
+        P.check_plan(plan, altium_dir=tmp_path / "no_such_folder", second_reader=False)
+    except ValueError as e:
+        assert "no .DbLib" in str(e)
+    else:
+        raise AssertionError("no error")
+    assert P.main([str(plan), "--altium", str(tmp_path / "no_such_folder"), "--no-pyaltiumlib"]) == 2
+
+
+def test_exp74_comment_parameter_reference_is_resolved():
+    from ecadlib import parity as P
+    f = P.altium_fields({"Part Number": "TPS1234DSGR", "Value": "", "Comment": "=Part Number"})
+    assert f["Value"] == "TPS1234DSGR", f
+
 
 if __name__ == "__main__":
     import sys
