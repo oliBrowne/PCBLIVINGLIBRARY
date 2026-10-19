@@ -16,7 +16,8 @@ if expected:
 
 root = resources.files("ecadlib")
 for rel in ("package_schema.json", "assets/pcblib_template.json.gz", "ui/static/index.html", "eval/sets/kicad-v1.json",
-            "eval/baselines/kicad-v1.json", "eval/replay/kicad-v1.json.gz", "eval/golden/specs.txt"):
+            "eval/baselines/kicad-v1.json", "eval/replay/kicad-v1.json.gz", "eval/golden/specs.txt",
+            "altium_scripts/ecadlib_menu.pas", "altium_scripts/ecadlib_dialog.pas", "altium_scripts/ecadlib_build.pas"):
     assert root.joinpath(rel).is_file(), f"missing package data: {rel}"
 specs = [p for p in root.joinpath("package_specs").iterdir() if p.name.endswith(".json")]
 assert specs, "no package_specs/*.json in the installed package"

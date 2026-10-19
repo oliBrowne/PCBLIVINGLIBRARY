@@ -131,8 +131,9 @@ def _param_names(field, defaults, rules):
             house = RU.param_name(field, rules)
             if house and house not in names:
                 names.insert(0, house)
-        except Exception:
-            pass
+        except Exception as e:
+            from . import fallbacks as FB
+            FB.note(f"house-style parameter name for {field!r} did not load", e, instead=f"the names {', '.join(names)}")
     elif rules:
         house = ((rules.get("parameters") or {}).get("names") or {}).get(field)
         if house and house not in names:

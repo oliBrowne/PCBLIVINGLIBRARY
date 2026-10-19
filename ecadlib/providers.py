@@ -8,7 +8,7 @@ Official APIs (documented, with your own free developer keys), asked first by de
   * Mouser       - Search API v1 (MOUSER_API_KEY)
   These identify the part and give its datasheet; none of them hands out symbol or footprint geometry.
 Unofficial (official = False: undocumented endpoints that easyeda2kicad also uses; they can change without notice,
-`[providers] unofficial = false` in ecadlib.toml turns them off, and .github/workflows/sources-canary.yml checks them
+so they are off unless `[providers] unofficial = true` is in ecadlib.toml (`ecadlib init` asks), and .github/workflows/sources-canary.yml checks them
 against the live sites every week):
   * JLCPCBSearch - POST keyword search, resolves MPN -> LCSC number (only when no official source found it)
   * EasyEDA      - GET component JSON by LCSC number; the only free source of ready symbol / footprint / 3D data
@@ -366,8 +366,9 @@ DEFAULT_ORDER = "nexar,digikey,mouser,jlcpcb_search,easyeda"
 
 
 def unofficial_allowed(rules):
-    """[providers] unofficial (default true): false keeps every undocumented endpoint (EasyEDA, JLCPCB search) out."""
-    return bool(((rules or {}).get("providers") or {}).get("unofficial", True))
+    """[providers] unofficial (default false): true lets the undocumented endpoints (EasyEDA, JLCPCB search) in."""
+    from . import rules as RU
+    return bool(((rules or {}).get("providers") or {}).get("unofficial", RU.DEFAULTS["providers"]["unofficial"]))
 
 
 def fence(provs, rules):

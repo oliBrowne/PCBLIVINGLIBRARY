@@ -714,8 +714,32 @@ def test_single_part_cli_holds_the_cost_cap():
         except SystemExit as e:
             assert "max_cost_usd" in str(e.code), e.code
         assert not [c for c in calls if c["url"].endswith("/v1/messages")]
-        assert D.main([str(f), "--part", "TESTPART", "-o", d + "/out", "--rules", str(rf), "--yes"]) == 0
+        try:                                          # --yes does not lift the cap (a scripted run keeps its ceiling)
+            D.main([str(f), "--part", "TESTPART", "-o", d + "/out", "--rules", str(rf), "--yes"])
+            raise AssertionError("cap with --yes")
+        except SystemExit as e:
+            assert "max_cost_usd" in str(e.code) and "--max-cost-usd" in str(e.code), e.code
+        assert not [c for c in calls if c["url"].endswith("/v1/messages")]
+        assert D.main([str(f), "--part", "TESTPART", "-o", d + "/out", "--rules", str(rf), "--max-cost-usd", "5"]) == 0
         assert len([c for c in calls if c["url"].endswith("/v1/messages")]) == 1
+
+
+def test_default_cap_is_ten_dollars_per_run():
+    assert D.settings()["max_cost_usd"] == D.DEFAULT_MAX_COST_USD == 10.0
+    from ecadlib import rules as RU
+    assert RU.load({})["datasheet"]["max_cost_usd"] == 10.0
+    with tempfile.TemporaryDirectory() as d:          # a big run over the default cap is refused, nothing sent
+        rd = D.Reader(d, d, key=KEY, http=None, log=None)
+        jobs = [{"name": f"P{i}", "url": "https://example.com/x.pdf", "body": {"model": D.MODEL, "messages": []},
+                 "prov": {"pages": 400}} for i in range(20)]
+        with mock.patch.object(rd, "estimate", return_value={"usd_max": 42.0, "parts": 20, "rows": [{}] * 20, "models": {D.MODEL: 20}}):
+            try:
+                rd._guard_cost(jobs)
+                raise AssertionError("over the default cap")
+            except D.DatasheetError as e:
+                assert "max_cost_usd = 10" in str(e), e
+            rd.cfg["max_cost_usd"] = 0                # 0 = no cap
+            rd._guard_cost(jobs)
 
 
 # ---------------------------------------------------------------- review rvA, round 2

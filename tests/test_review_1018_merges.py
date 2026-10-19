@@ -246,7 +246,7 @@ def test_a_locked_library_file_is_reported_and_the_sync_goes_on(tmp_path):
 
 def test_the_dialog_headline_says_not_found_for_a_bad_part_number():
     from ecadlib import altium_forms as AF
-    src = AF.__file__ and open(AF.__file__, encoding="utf-8").read()
+    src = AF.dialog_pas_text()                                        # ecadlib/altium_scripts/ecadlib_dialog.pas
     i = src.index("If St = 'error' Then")
     assert "EcadlibDialog.Big.Caption := Answer(Job, 'big')" in src[i:i + 300]
 
