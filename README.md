@@ -113,9 +113,11 @@ builds an install package, and `ecadlib kicad-export` writes KiCad libraries.
 The release check and the review hold are there because drawing parts is the easy half; checking them is the work.
 What has been measured so far:
 
-* **Accuracy gate:** 328/331 on a committed replay pack, run on every pull request, so accuracy can't silently drop.
-* **Live benchmark:** 110 real parts read from their datasheets, 30 built fully right (27 %). The method and every miss
-  are in [docs/benchmark.md](docs/benchmark.md). That is why anything in doubt is held, not released.
+* **Reading real datasheets (the number that matters):** in the live benchmark, ecadlib read the datasheets of 110
+  real parts and built 30 of them fully right (27 %; run of 2026-10-18, Claude Opus 5.5). The method, every miss and
+  newer runs are in [docs/benchmark.md](docs/benchmark.md). That is why anything in doubt is held, not released.
+* **Footprint generator (replay check):** 328/331 on every pull request. Given a correct package description, the
+  generator draws the right pads. It does not test datasheet reading.
 * **Altium Designer 26:** the generated libraries, the ecadlib menu and parts released to Altium 365 have been tried
   in AD26. Older Altium versions are untested.
 
