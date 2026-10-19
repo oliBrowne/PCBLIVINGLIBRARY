@@ -167,7 +167,8 @@ standard_land = "auto"      # "off" (default) | "auto" | "always"
 ```
 
 - The file is matched by MPN, ignoring case and punctuation: `<MPN>.pdf`, or the MPN followed by a separator
-  (`LTM4671IY-PBF_datasheet.pdf`). Any other match is used only with a review item that names the file: the longest
+  (`LTM4671IY-PBF_datasheet.pdf`). Any other match is used only with a hold that names the file (the part is not released until a
+  person confirms the PDF is this part's): the longest
   name the MPN starts with (`LTM4671.pdf` for `LTM4671IY#PBF`, at least 4 characters and half the MPN) is a family
   datasheet, and a name that goes on with more letters or digits (`BAT54S.pdf` for `BAT54`, `LM317HV.pdf` for
   `LM317`) is another part number, picked only when nothing else fits.

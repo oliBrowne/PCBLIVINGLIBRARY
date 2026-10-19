@@ -643,7 +643,9 @@ class Run:
             st["tried"].extend(edited)
             st["review"].extend(edited)
         from . import stdparts as SP
-        st["review"].extend(r for r in res["needs_review"] if r.startswith("datasheet from your folder:"))   # another file's PDF
+        other = [r for r in res["needs_review"] if r.startswith("datasheet from your folder:")]   # another file's PDF
+        st["review"].extend(other)
+        st["verify"].extend(other)                    # its own hold reason: a person confirms this PDF is this part's
         got = []
         std = self.standard_land(res["spec"]) if not st["footprint"] else None
         if std:                                       # the read named a checked package: its land, not the read's pads

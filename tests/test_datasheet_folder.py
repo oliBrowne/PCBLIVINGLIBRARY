@@ -57,7 +57,11 @@ def test_a_longer_part_number_is_never_taken_for_this_part():
     with tempfile.TemporaryDirectory() as d:                   # through the librarian: a review item, every time
         f = folder(d, "DSPART1X.pdf")
         rules = {"datasheet": {"folder": str(f)}}
-        TB.run2(d, TC.API(lambda k, m, b: TR.on_page(TD.INCH)), reader_kw={"batch": False, "rules": rules}, rules=rules)
+        items, _, _ = TB.run2(d, TC.API(lambda k, m, b: TR.on_page(TD.INCH)), reader_kw={"batch": False, "rules": rules},
+                              rules=rules)
+        a = items["DSPART1"]                                   # held, and the hold names the file
+        assert a["status"] == "held" and any(h.startswith("verify: datasheet from your folder: DSPART1X.pdf")
+                                             for h in a["hold_reasons"]), a["hold_reasons"]
         review = (Path(d) / "out" / "review.md").read_text()
         assert "from a file not named exactly for this part (DSPART1X.pdf)" in review, review
 
