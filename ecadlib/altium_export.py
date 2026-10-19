@@ -98,10 +98,33 @@ def kind_of(descriptions=(), footprints=()):
     return None
 
 
-def to_rows(lines, triage=None, rules=None):
+def _owners(rows, prior):
+    """Lines that share a synthetic Part Number but are different parts (100nF 16V vs 50V) -> {part number: MPN that
+    keeps the plain name}. The part already released under that name keeps it (prior: {name: MPN} of the plan
+    so far), so a line added above it never takes its name; else the generic (MPN-less) line; else the first line."""
+    groups = {}
+    for r in rows:
+        groups.setdefault(r["Part Number"], [])
+        if r["Manufacturer Part Number"] not in groups[r["Part Number"]]:
+            groups[r["Part Number"]].append(r["Manufacturer Part Number"])
+    own = {}
+    for pn, mpns in groups.items():
+        if len(mpns) > 1:
+            was = (prior or {}).get(pn)
+            own[pn] = was if was in mpns else "" if "" in mpns else mpns[0]
+    return own
+
+
+def prior_names(items):
+    """{plan item name: its MPN} of an existing plan, for to_rows(prior=...)."""
+    return {i["name"]: next((str(p.get("value") or "") for p in i.get("parameters") or []
+                             if p.get("name") == "Manufacturer Part Number"), "") for i in items or [] if i.get("name")}
+
+
+def to_rows(lines, triage=None, rules=None, prior=None):
     """{category: DataFrame of DbLib rows}. rules (ecadlib.rules): part names, footprint names, value style and
     supplier columns; None keeps ecadlib's own. df.attrs["kicad_fp"] maps a part to its footprint's original name
-    when the rules renamed it."""
+    when the rules renamed it. prior: {part name: MPN} already in the plan (prior_names), so names stay with parts."""
     from . import rules as RU
     custom = rules is not None and not RU.is_default(rules, "naming")
     tri = {}
@@ -109,7 +132,7 @@ def to_rows(lines, triage=None, rules=None):
         for _, t in triage.iterrows():
             if str(t["mpn"]):                  # an empty MPN would hand one row's footprint to every MPN-less line
                 tri[str(t["mpn"])] = t
-    out, seen, renamed = {}, {}, {}
+    out, renamed = {}, {}
     for ln in lines:
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
         cat = CATEGORY.get(prefix.group(0) if prefix else "U", "Misc")
@@ -139,8 +162,6 @@ def to_rows(lines, triage=None, rules=None):
             pn = ("-".join(t for t in (cat[:3].upper(), pkg, value) if t)
                   if cat in GENERIC_SYMBOL and value and not (kind and value == mpn)
                   else name_mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
-        if seen.setdefault(pn, mpn) != mpn:      # same synthetic PN, different part (e.g. 100nF 16V vs 50V): keep both
-            pn = f"{pn}-{name_mpn}".replace(" ", "")
         lib_ref = lib_name(GENERIC_SYMBOL.get(cat) or (custom and mpn and RU.symbol_name(f, rules)) or mpn or pn)
         kicad_fp = fp_ref = lib_name(fp_ref)
         if custom:
@@ -163,6 +184,14 @@ def to_rows(lines, triage=None, rules=None):
             "ComponentLink2Description": "Datasheet" if lcsc else "",
             "ComponentLink2URL": f"https://www.lcsc.com/datasheet/{lcsc}.pdf" if lcsc else "",
         })
+    own = _owners([r for v in out.values() for r in v], prior)
+    for r in (r for v in out.values() for r in v):   # same synthetic PN, different part (100nF 16V vs 50V): keep both
+        pn, mpn = r["Part Number"], r["Manufacturer Part Number"]
+        if pn in own and own[pn] != mpn:
+            tag = re.sub(r"\s+", "_", mpn.strip()) or "GENERIC"     # the generic line, when a released MPN owns the name
+            r["Part Number"] = f"{pn}-{tag}".replace(" ", "")
+            if pn in renamed:
+                renamed[r["Part Number"]] = renamed[pn]
     cols = columns(rules)
     res = {k: pd.DataFrame(v, columns=cols).fillna("").drop_duplicates("Part Number") for k, v in sorted(out.items())}
     for df in res.values():

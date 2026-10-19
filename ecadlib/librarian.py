@@ -267,6 +267,11 @@ def _line_for(item, lines, rows):
     return best
 
 
+def _own_notes(rec):
+    """A file record's notes without the "shared with" note a sharing part's copy of it carries."""
+    return [n for n in rec.get("notes") or [] if not str(n).startswith("shared with ")]
+
+
 class Run:
     def __init__(self, out, http, index, libs, sources, api_key=None, kicad_cache=None, refresh_index=False, gen_step=True,
                  rules=None, reader=None):
@@ -300,9 +305,10 @@ class Run:
         bom_name = name
         name, pcb, same, h = FS.pick(self.written, self.models, name, text, source, st["name"], self.out, self.hashes)
         renamed = {"renamed_from": bom_name} if name != bom_name else {}
-        if same is not None:
+        if same is not None:                    # (its own file from an earlier run, kept for a skipped part: not shared)
             st["footprint"] = {**{k: v for k, v in same.items() if k not in ("renamed_from", "chosen")},
-                               "notes": [f"shared with {same['by']}"], "name": name, "hash": h, **renamed}
+                               "notes": _own_notes(same) if same.get("by") == st["name"] else
+                               [f"shared with {same['by']}"], "name": name, "hash": h, **renamed}
             self._relink(st, bom_name, name)
             return
         pcb, stem = Path(pcb), AL.file_stem(name)
@@ -347,8 +353,9 @@ class Run:
         fr = st.get("footprint") or {}
         if fr.get("renamed_from") and sym.get("footprint") == fr["renamed_from"]:     # footprint renamed (fp_share)
             sym = dict(sym, footprint=fr["name"])
-        if str(path) in self.written:
-            st["symbol"] = dict(self.written[str(path)], notes=[f"shared with {self.written[str(path)]['by']}"])
+        if str(path) in self.written:           # its own file from an earlier run, kept for a skipped part: not shared
+            rec = self.written[str(path)]
+            st["symbol"] = dict(rec, notes=_own_notes(rec) if rec.get("by") == st["name"] else [f"shared with {rec['by']}"])
             return
         AL.write_schlib(path, [sym])
         self.syms[str(path)] = sym
@@ -895,6 +902,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     bad = set(sources) - set(SOURCES)
     if bad:
         raise ValueError(f"unknown sources {sorted(bad)}; use {','.join(SOURCES)}")
+    from .approvals import load_policy
+    load_policy(out)                                   # a broken approval policy stops the run before anything is written
     if "standard" in sources and "kicad" in sources and sources.index("standard") < sources.index("kicad"):
         sources.remove("standard")                     # never ahead of the KiCad library
         sources.insert(sources.index("kicad") + 1, "standard")
@@ -916,10 +925,12 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     T.write_reports(rows, mapping, provs, http, out / "triage", bom)
     t_build = time.time()
     TI.record(out, "triage", t_run, t_build, new_run=True, bom=Path(bom).name, lines=len(lines))
-    items = A365.plan(lines, pd.DataFrame(rows, dtype=str).fillna("") if rows else None, rules=rules)
     state_f, plan_f = out / "librarian_state.json", out / "plan.json"
     state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.exists() else {}
     old = {i["name"]: i for i in json.loads(plan_f.read_text(encoding="utf-8"))} if plan_f.exists() else {}
+    from .altium_export import prior_names           # a part keeps its name when a line is added above it
+    items = A365.plan(lines, pd.DataFrame(rows, dtype=str).fillna("") if rows else None, rules=rules,
+                      prior=prior_names(old.values()))
     from . import change_gate as CG                  # change control: released parts are compared with their ledger head
     gate = CG.Guard(out, "librarian", rules=rules, user=user, log=log)
     gate.begin(list(old.values()))

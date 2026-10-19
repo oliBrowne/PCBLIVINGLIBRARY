@@ -408,7 +408,11 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="print the result as JSON (plan, report, counts, rows)")
     a = ap.parse_args(argv)
     plan = Path(a.plan)
-    from .approvals import cli_plan_lock
+    from .approvals import cli_plan_lock, load_policy
+    try:
+        load_policy(plan.parent)               # a broken approvals file: say so, before anything is changed
+    except ValueError as e:
+        sys.exit(f"approval policy: {e}")
     with cli_plan_lock(plan):                  # the web UI may be recording into this plan right now
         items = json.loads(plan.read_text(encoding="utf-8"))
         unknown = set(a.allow + a.unallow) - {i["name"] for i in items}

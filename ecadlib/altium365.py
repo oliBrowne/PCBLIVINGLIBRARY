@@ -245,16 +245,17 @@ def find_model(models, kind, ref):
     return next((str(f) for f in (Path(m) / kind / f"{file_stem(ref)}.{kind}" for m in models) if f.exists()), None)
 
 
-def plan(lines, triage=None, models=None, root=None, rules=None):
+def plan(lines, triage=None, models=None, root=None, rules=None, prior=None):
     """One release item per unique Part Number, reusing the DbLib row builder for parameters.
     models: a folder or a list of folders, each with SchLib/<Library Ref>.SchLib and PcbLib/<Footprint Ref>.PcbLib;
     symbol and footprint are looked up independently, first folder wins. rules (ecadlib.rules, loaded): part and
-    footprint names, folders and default parameters; None keeps ecadlib's own. root overrides the rules' folder root."""
+    footprint names, folders and default parameters; None keeps ecadlib's own. root overrides the rules' folder root.
+    prior: {name: MPN} of the plan so far (altium_export.prior_names): a released name stays with its part."""
     from . import rules as RU
     models = [models] if isinstance(models, (str, Path)) else list(models or [])
     items, names = [], set()
     defaults = RU.default_params(rules)
-    for cat, df in to_rows(lines, triage, rules).items():
+    for cat, df in to_rows(lines, triage, rules, prior=prior).items():
         for row in df.to_dict("records"):
             if row["Part Number"] in names:    # same MPN under two designator classes: one workspace item
                 continue

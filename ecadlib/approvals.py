@@ -108,17 +108,39 @@ def policy_source(base, policy):
     return "none (approvals are recorded, not enforced)"
 
 
+def _names(v, where, key):
+    """A list of names; one name on its own is a one-item list (never split into its letters)."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v]
+    if not isinstance(v, (list, tuple)) or not all(isinstance(x, (str, int, float)) and not isinstance(x, bool) for x in v):
+        raise ValueError(f"{where}: {key} must be a list of names, e.g. [\"librarian\"] (got {v!r})")
+    return [str(x) for x in v]
+
+
 def normalize_policy(raw, where="policy"):
+    if not isinstance(raw, dict):
+        raise ValueError(f"{where}: the approval policy must be an object / table of keys "
+                         f"({', '.join(sorted(DEFAULTS))}), not {type(raw).__name__}")
     bad = set(raw) - set(DEFAULTS)
     if bad:
         raise ValueError(f"{where}: unknown keys {sorted(bad)}; known: {sorted(DEFAULTS)}")
     p = {**DEFAULTS, **raw}
-    p["required"] = int(p["required"])
+    req = p["required"]
+    whole = not isinstance(req, bool) and (isinstance(req, int) or (isinstance(req, float) and req.is_integer())
+                                           or (isinstance(req, str) and req.strip().isdigit()))
+    if not whole:
+        raise ValueError(f"{where}: required must be a whole number of approvals, e.g. 1 (got {req!r})")
+    p["required"] = int(req)
     if p["required"] < 0 or p["applies_to"] not in ("all", "allowed"):
         raise ValueError(f"{where}: required must be >= 0 and applies_to 'all' or 'allowed'")
-    p["roles"] = [str(r) for r in p["roles"]]
-    p["users"] = {user_key(k): [str(r) for r in (v if isinstance(v, list) else [v])] for k, v in (p["users"] or {}).items()}
-    p["parts"] = [str(x) for x in p["parts"]]
+    p["roles"] = _names(p["roles"], where, "roles")
+    if not isinstance(p["users"] or {}, dict):
+        raise ValueError(f"{where}: users must be a table / object {{email: [roles]}}, e.g. "
+                         f"{{\"ann@example.com\": [\"librarian\"]}} (got a {type(p['users']).__name__})")
+    p["users"] = {user_key(k): _names(v, where, f"users.{k}") for k, v in (p["users"] or {}).items()}
+    p["parts"] = _names(p["parts"], where, "parts")
     return p
 
 
