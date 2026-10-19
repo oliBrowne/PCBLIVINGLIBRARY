@@ -123,6 +123,11 @@ would hide whatever changed since. The writer stops and changes nothing. Restore
 (`git checkout -- library.ledger.jsonl` in the library folder). If that is not possible, check the files by hand and
 record them yourself: `ecadlib part adopt ws/library --part P -m "what you checked"`, or `--all` for every such part.
 The new revision 1 is recorded with decision `adopted`, your name and your reason.
+Adopt prints the name it signs as (`--user`, else `$ECADLIB_USER`, else git config). It compares the files on disk
+with the part's last fingerprint still kept in `.ecadlib/blobs`. That is the one a surviving publish line names, else
+the newest one that is not a held change. Adopt lists every difference. A difference that is more than cosmetic (a pin
+swap, a moved pad) is refused. If you checked it and want it as the release, add `--accept-changes`. The changes you
+accepted are then recorded on the adopted line.
 
 When a newer ecadlib reads more of a part (the fingerprint has a schema number), a release recorded by an older one is
 fingerprinted again from its stored files with the new code before it is compared. An upgrade therefore neither shows

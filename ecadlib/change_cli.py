@@ -9,7 +9,9 @@
     ecadlib part reject   PLAN --part P -m WHY [--user U]       keep the released version; the same change stays held
     ecadlib part revert   PLAN PART@REV [-m WHY] [--user U]     release an older revision again (as a new revision)
     ecadlib part adopt    PLAN --part P|--all -m WHY [--user U] take the files on disk as the release of a part whose
-                                                                ledger history was lost (after checking them by hand)
+                                                                ledger history was lost (after checking them by hand);
+                                                                the disk is diffed against the part's last stored
+                                                                fingerprint: --accept-changes to take a real change
     ecadlib part fingerprint SPEC [SPEC ...] [--json]           the canonical fingerprint and its hashes
 
 A or B in `part diff`: a file (X.PcbLib[:NAME], X.SchLib[:NAME], X.kicad_mod, Lib.kicad_sym[:NAME], several joined
@@ -630,10 +632,12 @@ def _revert(plan, spec, who, comment):
     return out
 
 
-def adopt(plan, parts, who=None, comment="", all_lost=False):
+def adopt(plan, parts, who=None, comment="", all_lost=False, accept_changes=False):
     """`ecadlib part adopt`: after the ledger lost a part's history (a deleted or cut ledger: the gate then refuses to
     take the files on disk as revision 1), a person who checked those files records them as the part's release
-    (decision "adopted", by them, with their reason). -> [{part, result, revision}]"""
+    (decision "adopted", by them, with their reason). The files on disk are compared with the newest fingerprint the
+    blob store still holds for the part: a difference that is more than cosmetic is refused unless accept_changes
+    (the accepted changes are recorded on the adopted line). -> [{part, result, revision, by, compared, changes}]"""
     if not (comment or "").strip():
         raise CG.ChangeError("adopt needs a reason (-m): what you checked on disk, and why the history is gone")
     with LG.locked(CG.lib_folder(_plan_path(plan))):
@@ -649,13 +653,40 @@ def adopt(plan, parts, who=None, comment="", all_lost=False):
                                  f"of a lost history: the next writer records it as usual)")
         if not names:
             raise CG.ChangeError("no part has a lost history" if all_lost else "name the parts: --part P (or --all)")
+        compared, refused = {}, []
+        for it in (i for i in items if i["name"] in names):
+            old, where = g.stored_fingerprint(it["name"])
+            if old is None:
+                compared[it["name"]] = ("no earlier fingerprint is left to compare with", [])
+                continue
+            new = FP.of_item(it, g.base)
+            if old.get("schema") != FP.SCHEMA:          # stored by an older ecadlib: what it did not record is not compared
+                new = {k: (v if old.get(k) is not None else old.get(k)) for k, v in new.items()}
+                where += f" (fingerprint schema {old.get('schema')}: only what it recorded is compared)"
+            changes = CD.diff(old, new)
+            compared[it["name"]] = (f"compared with {where}", changes)
+            if any(c["class"] != "cosmetic" for c in changes):
+                refused.append(it["name"])
+        if refused and not accept_changes:
+            lines = []
+            for n in refused:
+                where, changes = compared[n]
+                lines.append(f"{n} ({where}):")
+                lines += [f"    {c['class']:<15} {c['text']}" for c in changes if c["class"] != "cosmetic"]
+            raise CG.ChangeError(
+                "the files on disk differ from the part's last stored fingerprint, so they may not be what was "
+                "released:\n  " + "\n  ".join(lines) + "\n  restore the ledger from git, or put the released files back; "
+                "if you checked these changes and want them as the release, add --accept-changes")
         g.adopt = {n: f"adopted by {who}: {comment.strip()}" for n in names}
+        g.adopt_changes = {n: compared.get(n, ("", []))[1] for n in names}
         try:
             rows = g.baseline([i for i in items if i["name"] in g.adopt])
         finally:
             g.close()
         _save(plan, items)
-        return [{"part": r["part"], "result": "adopted", "revision": r["revision"]} for r in rows]
+        return [{"part": r["part"], "result": "adopted", "revision": r["revision"], "by": who,
+                 "compared": compared.get(r["part"], ("", []))[0],
+                 "changes": [c["text"] for c in compared.get(r["part"], ("", []))[1]]} for r in rows]
 
 
 # ---------------------------------------------------------------- CLI
@@ -697,7 +728,9 @@ def main(argv=None):
     s.add_argument("--part", action="append", default=[])
     s.add_argument("--all", action="store_true", help="every part the gate refused to adopt")
     s.add_argument("-m", "--comment", default="", help="what you checked (required)")
-    s.add_argument("--user")
+    s.add_argument("--user", help="who you are (default: $ECADLIB_USER, then git config); printed with the result")
+    s.add_argument("--accept-changes", action="store_true", help="adopt although the files differ from the part's "
+                   "last stored fingerprint by more than cosmetic changes (they are recorded on the adopted line)")
     s.add_argument("--json", action="store_true")
     s = sub.add_parser("fingerprint", help="the canonical fingerprint of files")
     s.add_argument("specs", nargs="+", help="X.PcbLib[:NAME] X.SchLib[:NAME] X.kicad_mod Lib.kicad_sym[:NAME]")
@@ -730,7 +763,7 @@ def main(argv=None):
                                      "approved by mistake")
             rows = approve(a.plan, a.part, a.user, a.comment, a.role, dict(zip(a.part, a.digest)))
         elif a.cmd == "adopt":
-            rows = adopt(a.plan, a.part, a.user, a.comment, a.all)
+            rows = adopt(a.plan, a.part, a.user, a.comment, a.all, a.accept_changes)
         elif a.cmd == "reject":
             rows = reject(a.plan, a.part, a.user, a.comment)
         else:
@@ -749,6 +782,10 @@ def main(argv=None):
         print(f"  {r['result']:<18} {r['part']}{extra}")
         if r.get("warning"):
             print(f"  warning: {r['warning']}")
+        if r.get("result") == "adopted":
+            print(f"    signed as {r['by']}; {r['compared']}" + ("" if r["changes"] else ": no difference"))
+            for t in r["changes"]:
+                print(f"      accepted: {t}")
     return 0
 
 

@@ -214,6 +214,7 @@ class Guard:
         self.report = []
         self.chosen_by = chosen_by
         self.adopt = dict(adopt or {})
+        self.adopt_changes = {}                # part -> the changes a person accepted when adopting (part adopt)
         self.pre = {}                          # path -> bytes on disk at begin() that are the released part
         self.pre_steps = {}                    # PcbLib path -> {STEP path: bytes} of a head recorded without its STEPs
         self._lock = None
@@ -267,7 +268,8 @@ class Guard:
                 fp = FP.of_item(it, self.base)
                 if fp.get("notes"):            # an unreadable file is no released revision to keep
                     continue
-                self._release(it, fp, [], {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
+                self._release(it, fp, self.adopt_changes.get(it["name"], []) if why else [],
+                              {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
                               reason=self.adopt.get(it["name"]) or "adopted: released before change control recorded it",
                               by=self.who() if why else None)
                 n += 1
@@ -299,6 +301,43 @@ class Guard:
         if prop and prop.get("base") is not None:
             return f"a held change to its revision r{prop['base']} waits in {LG.STORE}/proposed"
         return None
+
+    def stored_fingerprint(self, part):
+        """The newest fingerprint of `part` the library still holds after its ledger history was lost -> (fingerprint,
+        where) or (None, None). Fingerprints stay in the blob store (they carry the part's name); one whose digest a
+        surviving ledger line names as published or retired is preferred, the newest file otherwise. Held changes keep
+        their fingerprints in the store too: one a surviving line or a proposal names as held is never taken."""
+        blobs = self.ledger.store / "blobs"
+        if not blobs.is_dir():
+            return None, None
+        hist = self.ledger.history(part)
+        named = [e["digest"] for e in reversed(hist) if e.get("digest") and e.get("event") in ("publish", "retired")]
+        held = {e["digest"] for e in hist if e.get("digest") and e.get("event") not in ("publish", "retired", "release")}
+        held |= {p.get("digest") for p in self.ledger.proposals() if p.get("part") == part}
+        found = []
+        for p in blobs.glob("*/*"):
+            try:
+                if not p.is_file() or p.stat().st_size > 4_000_000:
+                    continue
+                with open(p, "rb") as f:
+                    if f.read(1) != b"{":
+                        continue
+                fp = json.loads(p.read_bytes().decode("utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(fp, dict) and fp.get("part") == part and isinstance(fp.get("hashes"), dict) and "schema" in fp:
+                found.append((p.stat().st_mtime, p.name, fp))
+        if not found:
+            return None, None
+        for d in named:
+            hit = next((x for x in found if x[2]["hashes"].get("digest") == d), None)
+            if hit:
+                return hit[2], f"the fingerprint of digest {d[:12]} that {LG.LEDGER} still names"
+        found = [x for x in found if x[2]["hashes"].get("digest") not in held]
+        if not found:
+            return None, None
+        _, sha, fp = max(found, key=lambda x: (x[0], x[1]))
+        return fp, f"the newest fingerprint of {part} in {LG.STORE}/blobs ({sha[:12]})"
 
     def _refuse_lost(self, lost):
         if not lost:
@@ -507,7 +546,8 @@ class Guard:
                 if row:
                     rows.append(row)
                     continue
-            rows.append(self._release(it, fp, [], {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
+            rows.append(self._release(it, fp, self.adopt_changes.get(it["name"], []) if why else [],
+                                      {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
                                       reason=self.adopt.get(it["name"]) or "first release", by=self.who() if why else None))
         self.report += rows
         for r in rows:

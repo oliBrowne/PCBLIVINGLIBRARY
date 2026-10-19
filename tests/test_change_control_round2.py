@@ -65,3 +65,45 @@ def test_export_holds_the_library_lock_until_the_publish_is_recorded():
     assert [shipped["pins"][n]["raw"] for n in ("1", "2", "3")] == ["G", "S", "D"], shipped["pins"]
     ev = [(e["event"], e.get("revision")) for e in LG.Ledger(lib).lines() if e.get("part") == "AO3401A"]
     assert ev[-1][0] == "hold" and ("publish", 1) in ev, ev
+
+
+def _lose_ledger(lib):
+    (lib / LG.LEDGER).unlink()
+
+
+def test_adopt_diffs_the_disk_against_the_last_stored_fingerprint():
+    """R2-3: after the ledger is lost, a pin swap made on disk is shown and refused by `part adopt`; --accept-changes
+    takes it and records the changes; an untouched part adopts with no difference, signed by the named person."""
+    plan, lib = demo()
+    _lose_ledger(lib)
+    write_symbol(lib, item(items_of(plan), "AO3401A"), SGD)
+    e = None
+    try:
+        CC.adopt(plan, ["AO3401A"], ANN, "checked")
+    except CG.ChangeError as x:
+        e = x
+    assert e and "pins swapped" in str(e) and "--accept-changes" in str(e), e
+    assert LG.Ledger(lib).head("AO3401A") is None
+    rows = CC.adopt(plan, ["RES-0603-10k"], ANN, "checked")
+    assert rows[0]["by"] == ANN and rows[0]["changes"] == [] and "blobs" in rows[0]["compared"], rows
+    rows = CC.adopt(plan, ["AO3401A"], ANN, "checked the swap", accept_changes=True)
+    head = LG.Ledger(lib).head("AO3401A")
+    assert head["decision"] == "adopted" and any("swapped" in c["text"] for c in head["changes"]), head
+
+
+def test_adopt_never_compares_with_a_held_change():
+    """R2-3: a held change keeps its fingerprint in the blob store (newer than the release). After the ledger is lost,
+    the held change written to disk again is still compared with the release, not with itself."""
+    plan, lib = demo()
+    items = items_of(plan)
+    write_symbol(lib, item(items, "AO3401A"), SGD)
+    CG.publish_guard(plan, items, "kicad")
+    assert LG.Ledger(lib).proposal("AO3401A")
+    _lose_ledger(lib)
+    write_symbol(lib, item(items_of(plan), "AO3401A"), SGD)
+    e = None
+    try:
+        CC.adopt(plan, ["AO3401A"], ANN, "checked")
+    except CG.ChangeError as x:
+        e = x
+    assert e and "pins swapped" in str(e), e
