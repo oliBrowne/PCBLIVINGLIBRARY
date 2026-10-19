@@ -417,7 +417,8 @@ def test_a_dimension_printed_with_its_tolerance_gives_min_and_max():
     assert D._toleranced("6.5±0.2") == {"min": 6.3, "nom": 6.5, "max": 6.7}
     assert D._toleranced("3.56 +0.15/-0.25") == {"min": 3.31, "nom": 3.56, "max": 3.71}
     assert D._toleranced("0.74 +0.05 -0.08") == {"min": 0.66, "nom": 0.74, "max": 0.79}
-    assert D._toleranced("0.50 BSC") is None and D._toleranced("6.5") is None
+    assert D._toleranced("6.3~6.7") == {"min": 6.3, "nom": 6.5, "max": 6.7}
+    assert D._toleranced("0.50 BSC") is None and D._toleranced("6.5") is None and D._toleranced("6.7~6.3") is None
     dim = lambda n, nom: {"name": n, "label": n, "min": "", "nom": nom, "max": "", "unit": "mm", "page": 3, "figure": "DCY"}
     w = {"package": {"dims": [dim("body_length", "6.5"), dim("body_width", "3.56 +0.15/-0.25")], "other_json": "{}",
                      "unresolved": ["body_length min/max (printed as 6.5±0.2)", "tab foot length"]}}

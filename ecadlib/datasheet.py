@@ -506,7 +506,12 @@ _TOL = re.compile(r"\s*([-+]?\d*\.?\d+)\s*(?:(?:±|\+/-|\+-)\s*(\d*\.?\d+)|\+\s*
 def _toleranced(v):
     """A dimension printed as nominal and tolerance -> {min, nom, max}; None when v is not one. LP38693MP-1.8 (live
     benchmark 2026-10-19): its drawing prints 6.5±0.2 and 3.56 +0.15/-0.25, and the read left them blank."""
-    m = _TOL.fullmatch(str(v or "").replace(",", "."))
+    t = str(v or "").replace(",", ".")
+    r = re.fullmatch(r"\s*(\d*\.?\d+)\s*(?:~|\.\.|to)\s*(\d*\.?\d+)\s*(?:mm|mil|in|inch)?\.?\s*", t, re.I)
+    if r and float(r.group(1)) < float(r.group(2)):       # "6.3~6.7": a range printed in one cell
+        lo, hi = float(r.group(1)), float(r.group(2))
+        return {"min": lo, "nom": round((lo + hi) / 2, 6), "max": hi}
+    m = _TOL.fullmatch(t)
     if not m:
         return None
     nom = float(m.group(1))
