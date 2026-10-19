@@ -96,7 +96,7 @@ ecadlib export-parts out/lib/plan.json --format csv|json|xlsx -o parts.csv
 python3 -m tests.test_integration_io
 ```
 
-* **BOM inputs** (every one gives the same lines `bom_triage`, the librarian and the agent already use):
+* **BOM inputs** (every one gives the same lines `bom_triage` and the librarian already use):
   * `.kicad_sch` (KiCad 6 to 9): sub-sheets are followed, and a sheet file used twice counts twice with each instance's own references (KiCad 7+ `instances` paths, KiCad 6 root `symbol_instances`). Power symbols and parts marked "exclude from BOM" are left out, "Do not populate" becomes DNP, the units of a multi-unit part count once, and identical parts are grouped (`R1, R2, R30`, quantity 3). Custom fields (`MPN`, `Mfr Part #`, `LCSC`, ...) are matched like CSV headers; when sheets use different names for the same field, each part takes the first one it has. KiCad 5 `.sch` files get a clear "save it in KiCad 6+" message.
   * KiCad netlist / BOM exports: the XML from `kicad-cli sch export netlist --format kicadxml`, `sch export python-bom` and Eeschema's BOM generator, and the S-expression `.net`. Picked by content, so other `.xml` files are not taken for one; an XML with a DOCTYPE or ENTITY is refused.
   * `.xlsx` without openpyxl: when openpyxl is missing, the workbook is read with `zipfile` and ElementTree (shared and inline strings, sparse cells, numbers written the same way as before). pandas is still a dependency.

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ecadlib import cli, mcp_server as M, upkeep as UK
 from ecadlib.app import Workspace
-from tests import test_sourcing as TS, test_upstream as TU
+from tests import sourcing_fixtures as TS, test_upstream as TU
 
 NOW1, NOW2, NOW3 = "2026-10-05T06:23:00+00:00", "2026-10-12T06:23:00+00:00", "2026-10-19T06:23:00+00:00"
 CREDS = {"NEXAR_SUPPLY_TOKEN": "t"}
@@ -46,18 +46,17 @@ def section(rep, check):
     return next(s for s in rep["checks"] if s["check"] == check)
 
 
-def test_lifecycle_and_sourcing_report_only_new_changes():
+def test_lifecycle_reports_only_new_changes_and_cut_sourcing_check_is_skipped():
     with tempfile.TemporaryDirectory() as d:
         bom = Path(d) / "bom.csv"
         bom.write_text(TS.BOM)
         w, st, out = World(), Path(d) / "state", Path(d) / "upkeep"
         go = lambda now: UK.run(bom, ["lifecycle", "sourcing"], st, out, ctx=w.ctx(), now=now)
         r1 = go(NOW1)
-        assert section(r1, "lifecycle")["status"] == "ok" and section(r1, "sourcing")["status"] == "ok", r1
+        assert section(r1, "lifecycle")["status"] == "ok", r1
+        assert section(r1, "sourcing")["status"] == "skipped" and "removed" in section(r1, "sourcing")["reason"], r1
         assert ("new risky part", "CH340C") in kinds(r1, "lifecycle"), kinds(r1, "lifecycle")
-        assert ("stock-out", "CH340C") in kinds(r1, "sourcing"), kinds(r1, "sourcing")
-        assert "first run" in "; ".join(section(r1, "sourcing")["notes"])
-        assert r1["exit_code"] == 1 and (st / "lifecycle_state.json").exists() and (st / "sourcing_state.json").exists()
+        assert r1["exit_code"] == 1 and (st / "lifecycle_state.json").exists() and not (st / "sourcing_state.json").exists()
 
         r2 = go(NOW2)                                                     # same answers: nothing new
         assert r2["new_changes"] == 0 and r2["exit_code"] == 0, [s["changes"] for s in r2["checks"]]
@@ -65,32 +64,17 @@ def test_lifecycle_and_sourcing_report_only_new_changes():
         assert r2["previous_run"] == NOW1
 
         w.lifecycle("0603WAF1002T5E", "Obsolete")                        # EOL transition
-        for _, offers in [(s["company"]["name"], s["offers"]) for s in w.nexar["0603WAF1002T5E"]["sellers"]]:
-            for o in offers:
-                for p in o["prices"]:
-                    p["price"] = p["convertedPrice"] = p["price"] * 3     # price jump on every offer
-        for p in w.jlc["C25804"]["componentPrices"]:
-            p["productPrice"] *= 3
-        w.nexar["CL05B104KO5NNNC"]["sellers"][0]["offers"][0]["inventoryLevel"] = 0   # the only stock is gone
         r3 = go(NOW3)
         assert kinds(r3, "lifecycle") == [("EOL", "0603WAF1002T5E")], kinds(r3, "lifecycle")
         lc = section(r3, "lifecycle")["changes"][0]
         assert lc["was"].startswith("Active") and lc["now"].startswith("Obsolete")
-        assert kinds(r3, "sourcing") == [("price jump", "0603WAF1002T5E"), ("stock-out", "CL05B104KO5NNNC")], kinds(r3, "sourcing")
-        pj = next(c for c in section(r3, "sourcing")["changes"] if c["kind"] == "price jump")
-        assert "+200%" in pj["detail"] and "threshold 20%" in pj["detail"], pj
         md = out.with_suffix(".md").read_text()
-        assert "## Lifecycle" in md and "| EOL | 0603WAF1002T5E |" in md and "| price jump | 0603WAF1002T5E |" in md
+        assert "## Lifecycle" in md and "| EOL | 0603WAF1002T5E |" in md
         js = json.loads(out.with_suffix(".json").read_text())
-        assert js["new_changes"] == 3 and js["exit_code"] == 1 and all("_state" not in s for s in js["checks"])
+        assert js["new_changes"] == 1 and js["exit_code"] == 1 and all("_state" not in s for s in js["checks"])
 
         r4 = go(NOW3)
         assert r4["new_changes"] == 0 and r4["exit_code"] == 0
-        # a higher threshold hides the same jump on a fresh state
-        st2 = Path(d) / "state2"
-        UK.run(bom, ["sourcing"], st2, out, ctx=World().ctx(), now=NOW1)
-        r5 = UK.run(bom, ["sourcing"], st2, out, rules={"upkeep": {"price_jump_pct": 500}}, ctx=w.ctx(), now=NOW2)
-        assert kinds(r5, "sourcing") == [("stock-out", "CL05B104KO5NNNC")]
 
 
 def test_missing_credentials_skip_checks_not_fail():
@@ -102,11 +86,11 @@ def test_missing_credentials_skip_checks_not_fail():
         got = {s["check"]: (s["status"], s["reason"]) for s in rep["checks"]}
         assert set(got) == set(UK.CHECKS)
         assert all(v[0] == "skipped" for v in got.values()), got
-        assert "MOUSER_API_KEY" in got["lifecycle"][1] and "credentials" in got["sourcing"][1]
+        assert "MOUSER_API_KEY" in got["lifecycle"][1]
         assert "manifest" in got["upstream"][1] and "plan.json" in got["a365"][1] and "plan.json" in got["changes"][1]
         assert rep["exit_code"] == 0 and rep["new_changes"] == 0
         md = (Path(d) / "r.md").read_text()
-        assert md.count("| skipped: ") == 5, md
+        assert md.count("| skipped: ") == 4, md
         assert not (Path(d) / "s" / "lifecycle_state.json").exists()
         # with a plan but no workspace / token, the a365 check says which is missing
         plan = Path(d) / "plan.json"
@@ -373,25 +357,6 @@ def test_pr_lookup_ignores_fork_prs_with_the_same_branch_name():
     res = UK.publish(_rep(1, ["lib/x.PcbLib"]), "pr", UK.GitHub(runner=run), run)
     assert (res["action"], res["number"]) == ("opened", 5), res
     assert ("PATCH", "pulls/8") not in [(c[3], c[4].split("/", 3)[3]) for c, _ in run.calls if c[0] == "gh"]
-
-
-def test_sourcing_unpriced_line_does_not_carry_a_price_across_currencies():
-    with tempfile.TemporaryDirectory() as d:
-        bom = Path(d) / "bom.csv"
-        bom.write_text(TS.BOM)
-        w, st = World(), Path(d) / "state"
-        st.mkdir()
-        from ecadlib.kicad_index import norm_mpn
-        (st / "sourcing_state.json").write_text(json.dumps({"version": 1, "updated": NOW1, "lines": {
-            norm_mpn("0603WAF1002T5E"): {"mpn": "0603WAF1002T5E", "unit": 99.0, "currency": "EUR", "distributor": "X",
-                                         "in_stock": 2, "checked": NOW1}}}))
-        for s in w.nexar["0603WAF1002T5E"]["sellers"]:
-            for o in s["offers"]:
-                o["prices"] = []
-        w.jlc["C25804"]["componentPrices"] = []
-        UK.run(bom, ["sourcing"], st, Path(d) / "r", ctx=w.ctx(), now=NOW2)
-        line = json.loads((st / "sourcing_state.json").read_text())["lines"][norm_mpn("0603WAF1002T5E")]
-        assert line["currency"] == "USD" and line["unit"] is None, line          # not 99 EUR relabelled as USD
 
 
 def test_cli_exit_codes_and_failed_github_keeps_state():

@@ -53,7 +53,7 @@ Actions use the same words in every front end: **Pick…** (a symbol or footprin
 | standard package table | ecadlib's built-in table of standard packages (SOT-23, SOIC-8, 0603, ...). | stdparts |
 | release check | The checks a part must pass before it is released (pins vs pads, footprint, height, fields, KiCad/Altium match). | release_check |
 | KiCad and Altium match | The KiCad and Altium files of a part read back the same (pads, holes, paste, courtyard, 3D). | parity |
-| review queue | Parts the library agent built that wait for a person to approve or reject. | queue.json |
+| review queue | Held parts and held changes that wait for a person to decide. | held_parts |
 | library plan | The record of every part, its sources and its state (a file next to the library). | plan.json |
 | release anyway | Override a held reason after looking; recorded with who and when. | --allow |
 
@@ -82,12 +82,12 @@ M.error("no_api_key")                                   # (what went wrong, how 
 | `height.missing`, `height.out_of_range` | No 3D height, or one outside the usual range for the package. |
 | `fields.no_datasheet`, `fields.no_description`, `fields.empty` | A required field is empty. |
 | `parity.*` | The KiCad and Altium files differ (pad count, a pad, a pin, courtyard, 3D model). |
-| `verify.datasheet_read`, `verify.sim_pin_map`, `verify.other` | A person must look first (datasheet-read part, guessed sim pin map). |
+| `verify.datasheet_read`, `verify.other` | A person must look first (datasheet-read part). |
 | `crosscheck.disagree`, `crosscheck.unchecked` | The datasheet read and its second source disagree / could not be compared. |
 | `datasheet.*` | No datasheet link, no API key, PDF not downloaded, only some pages read, the read failed. |
 | `librarian.*` | How a part was found and what to double-check (LCSC mismatch, footprint chosen by name, EasyEDA conversion, family pinout). |
 | `approval.waiting`, `approval.changed`, `dedupe.duplicate`, `a365.deleted` | Sign-off, duplicates, Altium 365 workspace state. |
-| `proof.doubt`, `proof.finding` | The library agent's independent visual check. |
+| `proof.doubt`, `proof.finding` | The independent visual check. |
 | `other` | Anything not in the table: shown as written (cleaned), with a generic next step. |
 
 `tests/test_messages.py` fails when a release-check rule, a footprint-check rule, a KiCad/Altium comparison field or a

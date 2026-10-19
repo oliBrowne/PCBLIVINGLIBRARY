@@ -46,7 +46,7 @@ Altium 1 mil = 10000 units with y up; a pad is reduced to rotation in [0, 90). T
 positions, sizes, drills and margins, 0.005 mm courtyard, 0.01 degrees, 1 % corner radius. Converter approximations that
 are documented (a curved custom pad as its bounding rectangle, trapezoid as rectangle, chamfers) are `approx`, not held.
 
-* **Release check / librarian / agent:** rule `parity` (plan mode) holds a part with one line per field, e.g.
+* **Release check / librarian:** rule `parity` (plan mode) holds a part with one line per field, e.g.
   `parity: pad 1 size/rotation: KiCad (1.95, 0.65, 0) / Altium (1.95, 0.6, 0) (w, h mm, rotation deg)`; `--allow`
   overrides it like the other rules. `[release] parity = "hold"` (default) | `"warn"` | `"off"`.
 * **Also run by** `ecadlib testpack` (`parity.md`, export mode with both databases) and `ecadlib demo`; Workspace

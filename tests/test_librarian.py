@@ -196,10 +196,7 @@ def test_each_source_and_review():
         for n in ("RES-0603-10k", "LED-RED-0603", "TPS1234DSGR", "EEPART1"):
             assert items[n]["status"] == "ready", (n, items[n]["hold_reasons"])
             assert (out / items[n]["symbol"]["file"]).exists() and (out / items[n]["footprint"]["kicad_mod"]).exists()
-        asm = items["TPS1234DSGR"]["assembly"]          # KiCad's SOIC-8 against JLCPCB's for C3003 (ecadlib.assembly)
-        assert (asm["pads"], asm["rotation"], asm["correction"]) == ("compatible", "verified", 270), asm
-        assert (out / asm["overlay"]).exists() and {p["name"]: p["value"] for p in items["TPS1234DSGR"]["parameters"]}["Assembly Rotation"] == "270"
-        assert items["RES-0603-10k"]["assembly"]["rotation"] == "table"          # C1001 is blocked: the chip family's pose
+        assert "assembly" not in items["TPS1234DSGR"]                            # the assembly check was cut
         assert items["RES-0603-10k"]["symbol"]["file"] == "models/SchLib/Resistor.SchLib"
         assert items["TPS1234DSGR"]["field_sources"]["ComponentLink2URL"] == "LCSC datasheet URL pattern (not fetched)"
         assert any("ordering suffix" in r for r in items["TPS1234DSGR"]["librarian"]["review"])

@@ -46,12 +46,10 @@ This is the path ecadlib is built for. You stay inside Altium Designer for every
 ### 3a. Open the ecadlib menu
 
 After **Add to Altium** on the setup page, start Altium Designer and open a schematic or PCB. The **ecadlib** menu
-is in the menu bar, just before **Window**. It has four entries:
+is in the menu bar, just before **Window**. It has three entries:
 
 - **Add part from MPN...** builds one part from its manufacturer part number.
 - **Check this project BOM** checks the open project against your library.
-- **Assembly check (JLCPCB)** checks the project's pick-and-place file against JLCPCB's footprints and writes
-  JLCPCB's BOM and CPL files (see [assembly.md](assembly.md)).
 - **Open review queue** opens the parts that need a person, in your browser.
 
 If the menu is not there, close Altium, press **Add to Altium** on the setup page again, and start Altium. Without

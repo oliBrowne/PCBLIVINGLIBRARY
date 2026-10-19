@@ -1,5 +1,5 @@
 // Drives the ecadlib web UI in Chromium for tests/test_ui_browser.py (which starts the servers and reads the result).
-//   node tests/ui_browser.js '{"local": {"1280": URL, "390": URL} (one workspace per width), "empty": URL, "team": URL, "bom": PATH, "password": PW, "shots": DIR|null}'
+//   node tests/ui_browser.js '{"local": {"1280": URL, "390": URL} (one workspace per width), "empty": URL, "demo": {"1280": URL, "390": URL}, "bom": PATH, "shots": DIR|null}'
 // Prints one JSON line: {"checks": [[name, ok, detail], ...]}. A check never stops the run; the Python side asserts.
 const { chromium } = require("playwright");
 const cfg = JSON.parse(process.argv[2]);
@@ -26,7 +26,7 @@ async function local(browser, width) {
   const p = await page(browser, width), w = `@${width}`;
   await p.goto(cfg.local[width]);
   await p.waitForSelector("#steps:not([hidden])");
-  check("nav shown" + w, await p.locator("#steps a").count() === 8);
+  check("nav shown" + w, await p.locator("#steps a").count() === 6);
   check("no sideways scroll on load" + w, await overflow(p) <= 0, await overflow(p));
   await step("upload" + w, async () => {
     await p.setInputFiles("#file", cfg.bom);
@@ -98,7 +98,7 @@ async function local(browser, width) {
     await p.waitForSelector("#libbusy:not([hidden])", { timeout: 5000 }).then(() => check("librarian shows progress in its own card" + w, true)).catch(() => check("librarian shows progress in its own card" + w, true, "finished before the first poll"));
     await p.waitForFunction(() => window.__lines.some(t => /\d+\/\d+ /.test(t)), null, { timeout: 15000 })
       .then(() => check("librarian lists parts live" + w, true)).catch(async () => check("librarian lists parts live" + w, false, JSON.stringify(await p.evaluate(() => window.__lines.slice(-3)))));
-    check("page stays usable while it runs" + w, await p.isEnabled("#qreload") && await p.isEnabled("#newfp"));
+    check("page stays usable while it runs" + w, await p.isEnabled("#streload") && await p.isEnabled("#newfp"));
     await p.waitForSelector("#libtools:not([hidden])", { timeout: 60000 });
     const t = await text(p, "#libout .next");
     check("librarian says what next" + w, /held/.test(t) && /Pick/.test(t) && /step 3/.test(t), t);
@@ -143,21 +143,6 @@ async function local(browser, width) {
     await p.waitForSelector("#dryout .next", { timeout: 20000 });
     check("dry run says how to push" + w, /Nexar token/.test(await text(p, "#dryout .next")), await text(p, "#dryout"));
   });
-  await step("queue" + w, async () => {
-    await p.locator("#qrows [data-open]").first().click();
-    await p.waitForSelector("#qview:not([hidden])");
-    await p.fill("#qsigner", "");
-    await p.click('#qview [data-q="approve"]');
-    check("queue approve without a name explains" + w, /Type your name/.test(await text(p, "#qdecerr")));
-    await p.fill("#qsigner", "Ann Lee");
-    await p.click('#qview [data-q="approve"]');
-    check("queue approve can be undone for a few seconds" + w, /sending in a few seconds/.test(await text(p, "#qdecerr")));
-    await p.waitForSelector("#qdecerr .next", { timeout: 20000 });
-    const t = await text(p, "#qdecerr");
-    check("queue approve says what happens next" + w, /^Approved .*next pass/.test(t), t);
-    const chip = p.locator("#qchips .chip").first();
-    check("queue filters are keyboard buttons" + w, await chip.getAttribute("tabindex") === "0" && await chip.getAttribute("role") === "button");
-  });
   await step("status" + w, async () => {
     await p.click('#steps a[href="#statuscard"]');
     await p.waitForSelector("#stout .stats");
@@ -188,35 +173,11 @@ async function demo(browser, width) {
   check("sample builds a 7-part library" + w, await p.locator("#plist .pcard").count() === 7, await p.locator("#plist .pcard").count());
   check("welcome goes away after the sample" + w, await p.locator("#welcome").isHidden());
   check("demo: no sideways scroll" + w, await overflow(p) <= 0, await overflow(p));
-  // your library: a tile per tool, that tool's library, every tool side by side, and a part page
-  await p.click('#steps a[href="#hubcard"]');
-  await p.waitForFunction(() => document.querySelectorAll("#hubrows tr").length >= 6 && /AO3401A/.test(document.querySelector("#hubrows").innerText), null, { timeout: 30000 });
-  check("library: a tile per tool, the busiest one open" + w, await p.locator("#hubtools [data-hubtool]").count() >= 4 &&
-    await p.locator('#hubtools [aria-selected="true"]').count() === 1 && /library/i.test(await text(p, "#hubhead")));
-  await p.locator('#hubtools [data-hubtool="kicad"]').click();
-  await p.waitForFunction(() => document.querySelector('[data-hubtool="kicad"]').getAttribute("aria-selected") === "true", null, { timeout: 30000 });
-  if (!/AO3401A/.test(await text(p, "#hubrows")) || !(await p.locator("#hubwrap").isVisible())) {   // the sample is Altium only: copy it over
-    await p.locator("#hubtoolhead [data-hubcopyall]").click();
-    await p.waitForFunction(() => /Copied \d+ part/.test(document.querySelector("#hubnote").innerText), null, { timeout: 60000 });
-  }
-  await p.waitForFunction(() => /AO3401A/.test(document.querySelector("#hubrows").innerText), null, { timeout: 30000 });
-  check("library: the KiCad tile shows the KiCad library" + w, /\.kicad_sym/.test(await text(p, "#hubrows")) && /same/.test(await text(p, "#hubrows")));
-  await p.locator('#hubtools [data-hubtool="all"]').click();
-  await p.waitForFunction(() => /KiCad/i.test(document.querySelector("#hubhead").innerText) && document.querySelectorAll("#hubrows tr").length >= 7, null, { timeout: 30000 });
-  check("library: compare all shows a column per tool" + w, /same/.test(await text(p, "#hubrows")) && /Altium 365/i.test(await text(p, "#hubhead")));
-  check("library: tiles fit the screen" + w, await overflow(p) <= 0, await overflow(p));
-  await p.locator("#hubrows tr").first().click();
-  await p.waitForSelector("#hubdlg[open] .copies tbody tr", { timeout: 30000 });
-  check("library: part page lists each copy" + w, await p.locator("#hubdlg .copies tbody tr").count() >= 2);
-  check("library: part page fits the screen" + w, await p.evaluate(() => { const d = document.querySelector("#hubdlg"); return d.scrollWidth <= d.clientWidth + 1; }));
-  await shot(p, `library-part-${width}`);
-  await p.keyboard.press("Escape");
-  check("library: Escape closes the part page" + w, await p.locator("#hubdlg[open]").count() === 0);
   // a BOM dropped anywhere on the page is checked
   await p.evaluate(() => {
     const dt = new DataTransfer();
     dt.items.add(new File(["Designator,Qty,Value,Footprint,Mfr. Part #\nR1,1,10k,R_0603_1608Metric,0603WAF1002T5E\n"], "dropped.csv", { type: "text/csv" }));
-    for (const t of ["dragenter", "dragover", "drop"]) document.querySelector("#queuecard").dispatchEvent(new DragEvent(t, { bubbles: true, cancelable: true, dataTransfer: dt }));
+    for (const t of ["dragenter", "dragover", "drop"]) document.querySelector("#fpcard").dispatchEvent(new DragEvent(t, { bubbles: true, cancelable: true, dataTransfer: dt }));
   });
   await p.waitForFunction(() => /dropped\.csv/.test(document.querySelector("#bomname").textContent), null, { timeout: 30000 });
   check("drop anywhere checks the BOM" + w, true);
@@ -265,32 +226,6 @@ async function empty(browser, width) {
   await p.context().close();
 }
 
-async function team(browser, width) {
-  const p = await page(browser, width), w = `@${width}`;
-  await p.goto(cfg.team);
-  await p.waitForSelector("#signin:not([hidden])");
-  check("team: nav hidden before sign-in" + w, await p.locator("#steps").isHidden());
-  await p.fill("#login_user", "vic"); await p.fill("#login_pw", "wrong"); await p.click("#signinbtn");
-  await p.waitForSelector("#signinerr .banner");
-  check("team: wrong password says so" + w, /wrong user name or password/.test(await text(p, "#signinerr")));
-  await p.fill("#login_pw", cfg.password); await p.click("#signinbtn");
-  await p.waitForSelector("#rolenote .next");
-  check("team: viewer told what they can do" + w, /viewer role/.test(await text(p, "#rolenote")));
-  check("team: viewer has no drop zone" + w, await p.locator("#drop").isHidden());
-  check("team: viewer has no setup check" + w, await p.locator("#doctorbtn").isHidden());
-  check("team: no sideways scroll" + w, await overflow(p) <= 0, await overflow(p));
-  await p.click("#logout");
-  await p.waitForSelector("#signin:not([hidden])");
-  await p.fill("#login_user", "ada"); await p.fill("#login_pw", cfg.password); await p.click("#signinbtn");
-  await p.waitForSelector("#usermenu:not([hidden])");
-  check("team: admin sees no viewer note" + w, (await text(p, "#rolenote")) === "");
-  await p.click("#doctorbtn");
-  await p.waitForSelector("#doctorout .next", { timeout: 30000 });
-  check("team: admin runs the setup check" + w, /checks OK/.test(await text(p, "#doctorout")));
-  check("team: no page errors" + w, !p.errors.length, p.errors.join(" | "));
-  await p.context().close();
-}
-
 (async () => {
   const opts = cfg.executable ? { executablePath: cfg.executable } : {};
   const browser = await chromium.launch(opts);
@@ -298,7 +233,6 @@ async function team(browser, width) {
     for (const width of [1280, 390]) {
       if (cfg.local) await local(browser, width).catch(e => check("local run", false, e.message));
       if (cfg.empty) await empty(browser, width).catch(e => check("empty run", false, e.message));
-      if (cfg.team) await team(browser, width).catch(e => check("team run", false, e.message));
       if (cfg.demo) await demo(browser, width).catch(e => check("demo run", false, e.message));
     }
     await a11y(browser).catch(e => check("a11y run", false, e.message));

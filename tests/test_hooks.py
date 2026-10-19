@@ -1,14 +1,14 @@
 """Connections to other tools: [notify] webhooks, GitLab merge requests, provider / exporter plugins.
 Offline: every webhook, GitLab and git remote here is a fake or a local bare repo.  python3 -m tests.test_hooks"""
-import io, json, os, subprocess, sys, tempfile
+import io, json, os, sys, tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from ecadlib import agent as A, bom_triage as T, forge as FG, mcp_server as M, notify as N, plugins as PL, \
+from ecadlib import bom_triage as T, forge as FG, mcp_server as M, notify as N, plugins as PL, \
     providers as P, rules as RU, upkeep as UK
 from ecadlib.app import Workspace
-from tests import test_agent as TA, test_upkeep as TUK
+from tests import test_upkeep as TUK
 
 HERE = Path(__file__).resolve().parent
 EXAMPLE = HERE.parent / "examples" / "ecadlib_example_plugin"
@@ -38,17 +38,17 @@ def _targets(*ts, **kw):
 
 
 def test_notify_payload_shapes_and_event_routing():
-    r = _targets({"name": "chan", "type": "slack", "url_env": "SLACK_HOOK", "events": ["batch_ready"]},
+    r = _targets({"name": "chan", "type": "slack", "url_env": "SLACK_HOOK", "events": ["upkeep_changes"]},
                  {"name": "teams", "type": "teams", "url_env": "TEAMS_HOOK"},
                  {"name": "erp", "type": "json", "url_env": "ERP_HOOK", "token_env": "ERP_TOKEN", "events": ["lifecycle"]})
     env = {"SLACK_HOOK": SLACK, "TEAMS_HOOK": "https://prod.westeurope.logic.azure.com/workflows/x", "ERP_HOOK": "https://erp.example.com/h",
            "ERP_TOKEN": "erp-secret"}
     s = Sender()
-    evs = [N.event("batch_ready", "Batch b1 <has> 2 parts & more", "pull request opened", ["RC0603 <x>"], "https://gh/pr/7"),
+    evs = [N.event("upkeep_changes", "Batch b1 <has> 2 parts & more", "pull request opened", ["RC0603 <x>"], "https://gh/pr/7"),
            N.event("lifecycle", "Lifecycle: 1 part", "", ["EOL: TPS1"], "", {"parts": [{"item": "TPS1"}]})]
     res = N.send(r, evs, env=env, sender=s)
     assert [(x["target"], x["event"], x["result"]) for x in res] == [
-        ("chan", "batch_ready", "sent"), ("teams", "batch_ready", "sent"), ("teams", "lifecycle", "sent"),
+        ("chan", "upkeep_changes", "sent"), ("teams", "upkeep_changes", "sent"), ("teams", "lifecycle", "sent"),
         ("erp", "lifecycle", "sent")], res
     slack = s.posts[0][1]
     assert slack["text"].startswith("*Batch b1 &lt;has&gt; 2 parts &amp; more*") and "• RC0603 &lt;x&gt;" in slack["text"]
@@ -63,7 +63,7 @@ def test_notify_payload_shapes_and_event_routing():
 
 def test_notify_retries_backoff_and_never_raises():
     r = _targets({"name": "chan", "type": "slack", "url_env": "SLACK_HOOK"}, retries=3, backoff_s=2.0)
-    ev = [N.event("part_held", "1 part held")]
+    ev = [N.event("upkeep_changes", "1 part held")]
     sleeps = []
     s = Sender(503, OSError("connection reset"), 429, 200)
     res = N.send(r, ev, env={"SLACK_HOOK": SLACK}, sender=s, sleep=sleeps.append)
@@ -73,7 +73,7 @@ def test_notify_retries_backoff_and_never_raises():
     res = N.send(r, ev, env={"SLACK_HOOK": SLACK}, sender=Sender(404), sleep=sleeps.append, log=logs.append)
     assert res[0]["result"] == "failed: HTTP 404 from hooks.slack.com" and res[0]["attempts"] == 1 and not sleeps
     assert not any("SECRET" in str(x) for x in res + logs), (res, logs)
-    # retries give up inside the time budget: never blocks the agent for long
+    # retries give up inside the time budget: never blocks upkeep for long
     t = [0.0]
     res = N.send(r, ev, env={"SLACK_HOOK": SLACK}, sender=Sender(500, 500, 500, 500), sleep=lambda w: t.__setitem__(0, t[0] + w),
                  clock=lambda: t[0], max_seconds=5)
@@ -96,7 +96,7 @@ def test_notify_rules_validation():
            ({"type": "slack", "url_env": SLACK}, "must be the NAME of an environment variable"),
            ({"type": "slack"}, "url_env is required"),
            ({"type": "discord", "url_env": "A"}, "type = 'discord'"),
-           ({"type": "slack", "url_env": "A", "events": ["held"]}, "events are batch_ready"),
+           ({"type": "slack", "url_env": "A", "events": ["held"]}, "events are upkeep_changes"),
            ({"type": "slack", "url_env": "A", "token_env": "T"}, "only used by type = \"json\"")]
     for t, msg in bad:
         try:
@@ -110,50 +110,18 @@ def test_notify_rules_validation():
     except RU.RulesError as e:
         assert "different for each target" in str(e)
     assert RU.DEFAULTS["notify"]["targets"] == [] and RU.load({})["providers"]["order"] == []
+    old = _targets({"type": "slack", "url_env": "A", "events": ["batch_ready", "part_held"]})   # the parked agent's events
+    assert N.settings(old)["targets"][0]["events"] == {"batch_ready", "part_held"}
     toml = RU.dumps(ok, only={"notify.targets"})
     assert RU.load(RU.parse_text(toml))["notify"]["targets"] == ok["notify"]["targets"]   # round-trips through TOML
 
 
-def test_notify_events_from_agent_and_upkeep_reports():
-    rep = {"batches": [{"id": "b1", "items": ["q1", "q2"], "pr_url": "https://gh/pr/7", "pr_action": "opened"}],
-           "failed": [{"id": "q3", "reason": "proof failed: pin 1"}],
-           "upkeep": {"findings": 2, "items": [{"check": "lifecycle", "kind": "NRND", "item": "TPS1", "was": "active", "now": "nrnd"},
-                                               {"check": "sourcing", "kind": "price jump", "item": "R1", "was": "1", "now": "2"}]}}
-    evs = N.agent_events(rep, lambda i: {"mpn": "NOWHERE1"} if i == "q3" else None)
-    assert [e["event"] for e in evs] == ["batch_ready", "part_held", "upkeep_changes", "lifecycle"]
-    assert evs[0]["url"] == "https://gh/pr/7" and "2 part(s)" in evs[0]["title"]
-    assert evs[1]["lines"] == ["NOWHERE1: The independent check found that the part does not match its datasheet: pin 1."] and evs[3]["lines"] == ["NRND: TPS1 (active -> nrnd)"]
+def test_notify_events_from_upkeep_reports():
     uev = N.upkeep_events(TUK._rep(3))
     assert [e["event"] for e in uev] == ["upkeep_changes", "lifecycle"] and len(uev[1]["lines"]) == 3
     assert N.upkeep_events(TUK._rep(0)) == []
     big = N.event("x", "t", lines=[str(i) for i in range(50)])
     assert len(big["lines"]) == N.MAX_LINES and big["more"] == 30 and "... and 30 more" in N.payload("slack", big)["text"]
-
-
-def test_agent_run_notifies_and_survives_a_dead_webhook():
-    with tempfile.TemporaryDirectory() as d:
-        ws, rules = TA.make_ws(d, git=False)
-        rules = RU.load({"agent": {"github_repo": "acme/lib"}, "notify": {
-            "targets": [{"name": "chan", "type": "slack", "url_env": "SLACK_HOOK"}], "retries": 1, "backoff_s": 0.0}})
-        s = Sender()
-        q = TA.FakeQueue()
-        rep = TA.run(ws, rules, q, TA.FakeWatcher(TA.CHANGES), TA.FakeVision(), env={"SLACK_HOOK": SLACK}, notifier=s)
-        events = [p[1]["text"].split("\n")[0] for p in s.posts]
-        assert [x["event"] for x in rep["notify"]] == ["batch_ready", "part_held"], rep["notify"]
-        assert "batch b1 has 2 part(s)" in events[0] and "1 part(s) held" in events[1], events
-        assert "NOWHERE1: " in s.posts[1][1]["text"]                    # the held part by its MPN, with why
-        # a webhook that is down: the run finishes, the failure is in the report
-        q2, ws2 = TA.FakeQueue(), Path(d) / "ws2"
-        ws2.mkdir()
-        dead = Sender(*[OSError("down")] * 10)
-        rep = TA.run(ws2, rules, q2, TA.FakeWatcher(TA.CHANGES), TA.FakeVision(), env={"SLACK_HOOK": SLACK}, notifier=dead)
-        assert rep.get("error") is None and len(rep["review"]) == 2
-        assert all(x["result"] == "failed: OSError from hooks.slack.com" and x["attempts"] == 2 for x in rep["notify"]), rep["notify"]
-        # without [notify]: no notification step at all
-        q3, ws3 = TA.FakeQueue(), Path(d) / "ws3"
-        ws3.mkdir()
-        rep = TA.run(ws3, RU.load({}), q3, TA.FakeWatcher(TA.CHANGES[:1]), TA.FakeVision(), env={}, notifier=Sender())
-        assert "notify" not in rep
 
 
 def test_upkeep_cli_notifies_once_per_change():
@@ -164,7 +132,7 @@ def test_upkeep_cli_notifies_once_per_change():
         rf.write_text(json.dumps({"notify": {"targets": [{"name": "life", "type": "json", "url_env": "HOOK",
                                                           "events": ["upkeep_changes", "lifecycle"]}]}}))
         w, st = TUK.World(), Path(d) / "s"
-        args = [str(bom), "--checks", "lifecycle,sourcing", "--state", str(st), "-o", str(Path(d) / "r"), "--rules", str(rf)]
+        args = [str(bom), "--checks", "lifecycle", "--state", str(st), "-o", str(Path(d) / "r"), "--rules", str(rf)]
         s = Sender()
         with mock.patch.dict(os.environ, {"HOOK": "https://hooks.example.com/x"}), redirect_stdout(io.StringIO()):
             assert UK.main(args + ["--no-save"], ctx=w.ctx(), notifier=s) == 1
@@ -238,57 +206,6 @@ class FakeGitLab:
         return r(200, {})
 
 
-def test_agent_batch_opens_gitlab_merge_request_then_updates_and_closes_it():
-    with tempfile.TemporaryDirectory() as d:
-        ws, rules = TA.make_ws(d, git_host="gitlab", gitlab_project="acme/lib")
-        gl, q, v = FakeGitLab(), TA.FakeQueue(), TA.FakeVision()
-        env = {"GITLAB_TOKEN": "glt", "GITHUB_TOKEN": "ghs-never-used"}
-        rep = TA.run(ws, rules, q, TA.FakeWatcher(TA.CHANGES), v, github_session=gl, env=env)
-        b = rep["batches"][0]
-        assert b["fallback"] is None and b["host"] == "gitlab" and b["pr_number"] == 3, b
-        assert [(m, p.split("?")[0]) for m, p, _ in gl.calls] == [("GET", "merge_requests"), ("POST", "merge_requests")], gl.calls
-        assert "source_branch=ecadlib%2Fagent-b1" in gl.calls[0][1]
-        mr = gl.calls[1][2]
-        assert (mr["source_branch"], mr["target_branch"]) == ("ecadlib/agent-b1", "main") and "| Before | After |" in mr["description"]
-        assert f"https://gitlab.com/acme/lib/-/raw/{b['commit']}/agent-pictures/b1/" in mr["description"]
-        assert TA.gitc(Path(d) / "remote.git", "rev-parse", "ecadlib/agent-b1") == b["commit"]          # pushed
-        assert all(i["pr_url"] == "https://gitlab.com/acme/lib/-/merge_requests/3" for i in q.list(status="review"))
-        # a rebuild updates the same MR (PUT), never a second one
-        rid = next(i["id"] for i in q.list(status="review"))
-        q.transition(rid, "building", user="ann", note="rebuild")
-        q.update(rid, build=dict(q.get(rid)["build"], requested_at="2026-10-15T08:00:00Z", requested_by="ann"))
-        n = len(gl.calls)
-        TA.run(ws, rules, q, TA.FakeWatcher(TA.CHANGES), v, github_session=gl, env=env, now="2026-10-15T09:00:00Z")
-        assert [(m, p) for m, p, _ in gl.calls[n:]] == [("GET", "merge_requests/3"), ("PUT", "merge_requests/3")], gl.calls[n:]
-        # merged meanwhile: a new MR is opened, the old one is remembered
-        gl.state, gl.mrs = "merged", []
-        q.transition(rid, "building", user="ann", note="rebuild")
-        q.update(rid, build=dict(q.get(rid)["build"], requested_at="2026-10-15T10:00:00Z", requested_by="ann"))
-        n = len(gl.calls)
-        rep = TA.run(ws, rules, q, TA.FakeWatcher(TA.CHANGES), v, github_session=gl, env=env, now="2026-10-15T11:00:00Z")
-        assert [m for m, _, _ in gl.calls[n:]] == ["GET", "GET", "POST"] and rep["batches"][0]["closed_prs"], gl.calls[n:]
-        # every part rejected: an outcome note and the MR is closed (state_event), not left open
-        members = [dict(i, status="rejected") for i in q.list(batch="b1")]
-        n = len(gl.calls)
-        rec = A.close_batch(ws, rules, "b1", members, env=env, session=gl)
-        assert rec.get("closed") and rec["pr_state"] == "closed", rec
-        assert [(m, p) for m, p, _ in gl.calls[n:]] == [("POST", "merge_requests/3/notes"), ("PUT", "merge_requests/3")]
-        assert gl.calls[-1][2] == {"state_event": "close"} and "closes this PR" in gl.calls[-2][2]["body"]
-
-
-def test_agent_gitlab_without_token_or_project_explains():
-    with tempfile.TemporaryDirectory() as d:
-        ws, rules = TA.make_ws(d, git_host="gitlab", gitlab_project="acme/lib")
-        gl = FakeGitLab()
-        rep = TA.run(ws, rules, TA.FakeQueue(), TA.FakeWatcher(TA.CHANGES[:1]), TA.FakeVision(), github_session=gl,
-                     env={"GITHUB_TOKEN": "tok"})
-        assert "no GitLab token in $GITLAB_TOKEN" in rep["batches"][0]["fallback"] and gl.calls == []
-    with tempfile.TemporaryDirectory() as d:                    # origin is a local path: no project to derive
-        ws, rules = TA.make_ws(d, git_host="gitlab")
-        rep = TA.run(ws, rules, TA.FakeQueue(), TA.FakeWatcher(TA.CHANGES[:1]), TA.FakeVision(), env={"GITLAB_TOKEN": "glt"})
-        assert "not a GitLab remote and [agent] gitlab_project is empty" in rep["batches"][0]["fallback"]
-
-
 def test_upkeep_gitlab_issue_and_merge_request_self_hosted():
     api = "https://git.example.com/gitlab/api/v4"
     s = FakeGitLab(api)
@@ -321,7 +238,7 @@ def test_upkeep_cli_gitlab_flag():
     with tempfile.TemporaryDirectory() as d:
         bom = Path(d) / "bom.csv"
         bom.write_text(TUK.TS.BOM)
-        args = [str(bom), "--checks", "lifecycle,sourcing", "--state", str(Path(d) / "s"), "-o", str(Path(d) / "r")]
+        args = [str(bom), "--checks", "lifecycle", "--state", str(Path(d) / "s"), "-o", str(Path(d) / "r")]
         s = FakeGitLab()
         with redirect_stdout(io.StringIO()) as out:
             assert UK.main(args + ["--gitlab", "issue"], ctx=TUK.World().ctx(), gh=FG.GitLab("acme/lib", "glt", session=s)) == 1
@@ -405,14 +322,14 @@ def test_http_senders_never_follow_redirects():
 
 def test_notify_time_budget_skips_the_rest():
     """Hanging webhooks: each post may take the whole timeout. Once max_seconds is used up the remaining posts are
-    skipped, so many targets x events cannot hold the agent for minutes."""
+    skipped, so many targets x events cannot hold upkeep for minutes."""
     r = _targets({"name": "a", "type": "slack", "url_env": "H"}, {"name": "b", "type": "json", "url_env": "H"}, retries=0)
     t = [0.0]
 
     def slow(url, body, headers, timeout):
         t[0] += 10
         raise TimeoutError()
-    evs = [N.event("part_held", f"held {i}") for i in range(5)]
+    evs = [N.event("upkeep_changes", f"held {i}") for i in range(5)]
     res = N.send(r, evs, env={"H": "https://hooks.example.com/x"}, sender=slow, sleep=lambda w: None,
                  clock=lambda: t[0], max_seconds=30)
     assert len(res) == 10 and t[0] <= 40, (t, res)

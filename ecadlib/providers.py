@@ -232,7 +232,7 @@ def lcsc_sku(text):
 
 
 def from_part_info(info, res):
-    """sourcing.PartInfo -> SourceResult. Official sources identify the part (MPN, maker, description, datasheet,
+    """part_lookup.PartInfo -> SourceResult. Official sources identify the part (MPN, maker, description, datasheet,
     package, LCSC number via LCSC's offer); they carry no CAD geometry, so has_symbol / has_footprint stay None and
     triage goes on to the next source."""
     if info.error:
@@ -257,11 +257,11 @@ def from_part_info(info, res):
 
 
 class _Official(Provider):
-    """Delegates to the sourcing client of the same API (one per provider, so its OAuth token is fetched once)."""
+    """Delegates to the part_lookup client of the same API (one per provider, so its OAuth token is fetched once)."""
     client_cls = ""
 
     def _client(self):
-        from . import sourcing as S
+        from . import part_lookup as S
         cls = getattr(S, self.client_cls)
         if isinstance(self, cls):
             return self

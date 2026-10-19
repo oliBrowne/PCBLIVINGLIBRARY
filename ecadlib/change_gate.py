@@ -52,15 +52,12 @@ RELEASED_STATUSES = ("ready", "existing")
 # and how it goes through the gate. tests/test_change_control.py checks this list against the code.
 WRITERS = {
     "librarian": {"mode": "gate", "module": "ecadlib.librarian", "what": "librarian runs and re-runs (also rebuild in "
-                  "place, the library agent, fp-edit and ecadlib resolve's re-runs, which run the librarian)"},
+                  "place, fp-edit and ecadlib resolve's re-runs, which run the librarian)"},
     "resolve": {"mode": "gate", "module": "ecadlib.resolve", "what": "ecadlib resolve / review: a person picks a symbol or footprint"},
     "style-apply": {"mode": "restyle", "module": "ecadlib.house_style", "what": "ecadlib style apply (descriptions, value formats)"},
     "upstream-update": {"mode": "gate", "module": "ecadlib.upstream", "what": "upstream check-kicad --update / upkeep --apply"},
     "dedupe-merge": {"mode": "gate", "module": "ecadlib.dedupe", "what": "ecadlib dedupe --merge points a part at its keeper's files"},
-    "sim-models": {"mode": "gate", "module": "ecadlib.sim_models", "what": "ecadlib sim-models --attach (simulation link in the symbol)"},
     "datasheet": {"mode": "gate", "module": "ecadlib.datasheet", "what": "ecadlib datasheet batch: parts read from datasheets"},
-    "sourcing-plan": {"mode": "gate", "module": "ecadlib.sourcing", "what": "ecadlib sourcing --write-plan fills supplier fields"},
-    "a365-pull": {"mode": "observe", "module": "ecadlib.a365_sync", "what": "ecadlib a365 pull: workspace revisions come in"},
     "approve": {"mode": "gate", "module": "ecadlib.change_cli", "what": "ecadlib part approve: a person releases a held change"},
     "revert": {"mode": "gate", "module": "ecadlib.change_cli", "what": "ecadlib part revert PART@REV: an older revision again"},
     "hand-edit": {"mode": "gate", "module": "", "what": "a file changed outside ecadlib, found when a publisher opens the library"},
@@ -76,7 +73,6 @@ NOT_LIBRARY_WRITERS = {
     "ecadlib.footprint_gen": "the generator CLI writes the file a person names",
     "ecadlib.app": "the desktop / web app's model pool (<workspace>/altium_models): new files, an overwrite only when asked; "
                    "publishers gate these files per part (publish_guard)",
-    "ecadlib.hub_copy": "the hub's own copy library (<workspace>/hub/library), never a released library",
     "ecadlib.stdparts": "standard-part CLI output",
     "ecadlib.symbol_layout": "symbol CLI output",
     "ecadlib.testpack": "the test pack folder",

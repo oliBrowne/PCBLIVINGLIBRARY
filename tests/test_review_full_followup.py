@@ -68,8 +68,8 @@ def test_help_examples_that_used_to_fail():
 
 
 def test_mcp_checks_arguments_against_the_schema():
-    """A string where a list goes was iterated letter by letter (librarian_run sources, upkeep_run checks,
-    agent_watch_scan sources): a list of names is now split, anything else that does not fit is refused clearly."""
+    """A string where a list goes was iterated letter by letter (librarian_run sources, upkeep_run checks): a list of
+    names is now split, anything else that does not fit is refused clearly."""
     from ecadlib import mcp_server as M
     tool = lambda n: next(t for t in M.TOOLS if t["name"] == n)
     a = {"bom": "x.csv", "sources": "kicad, standard"}
@@ -77,12 +77,11 @@ def test_mcp_checks_arguments_against_the_schema():
     a = {"bom": "x.csv", "checks": "lifecycle"}
     assert M._arg_errors(tool("upkeep_run"), a) == "" and a["checks"] == ["lifecycle"]
     assert "not one of" in M._arg_errors(tool("librarian_run"), {"bom": "x.csv", "sources": "local"})
-    assert "is not of type 'object'" in M._arg_errors(tool("agent_watch_scan"), {"sources": "bom_file:x.csv"})
     from ecadlib.app import Workspace
     with tempfile.TemporaryDirectory() as d:
         ws = Workspace(d)
         out = M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                            "params": {"name": "agent_watch_scan", "arguments": {"sources": "bom_file:x.csv"}}})
+                            "params": {"name": "librarian_run", "arguments": {"bom": "x.csv", "sources": "local"}}})
         res = out["result"]
         assert res["isError"] and "invalid argument(s): sources" in res["content"][0]["text"], out
 

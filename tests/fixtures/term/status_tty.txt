@@ -11,7 +11,6 @@ upkeep       never
 last run     Ns BOM to plan (Ns ecadlib work): triage Ns, build Ns, release check Ns
 review       7 built: 6 passed first time, 1 held, 0 approved, 0 rejected, 0 changed by a person
 held for     files 1
-agent        never run; review queue: empty
 
 next:
   ecadlib review --workspace ws  # 1 held part: why, and pick a fix (or `ecadlib resolve <plan.json>

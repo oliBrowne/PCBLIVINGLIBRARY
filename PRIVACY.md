@@ -10,7 +10,7 @@ only to the services listed below, and only when you use the feature that needs 
 | EasyEDA / LCSC | Part numbers | When looking parts up online | Remove `easyeda` from `[sources] order` |
 | DigiKey, Mouser, Nexar, SnapMagic, SamacSys | Part numbers, with your key | Only if you set that service's key | Do not set the key |
 | Altium 365 (Nexar) | The parts you push, with your token | Only when you push to Altium 365 | Do not set `NEXAR_TOKEN` |
-| GitHub / GitLab | Library changes as pull requests, upkeep issues | Only if you turn on the library agent | Leave `[agent] enabled = false` (the default) |
+| GitHub | Upkeep issues or pull requests | Only if you run `ecadlib upkeep --github` | Leave out `--github` |
 | A webhook you configure | Short notifications | Only if you set `[notify]` | Leave `[notify]` empty |
 
 API keys you add on the setup page or with `ecadlib keys set` are stored only on your computer: on Windows they are

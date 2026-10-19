@@ -42,7 +42,7 @@ ecadlib init [--yes] [--tool T] [--lib DIR ...] [--workspace W] [--sources LIST]
   one with a header and no rows. After a librarian run, held parts caused by something outside the part get a `note:` and
   a `fix:` line: a source that could not be reached (proxy refused, timeout, HTTP 429) and the datasheet reader without
   its API key.
-* **Not done:** `--workspace` still means an Altium 365 URL for `a365`, `upkeep` and `upstream` (renaming it would break
+* **Not done:** `--workspace` still means an Altium 365 URL for `upkeep` and `upstream` (renaming it would break
   scripts); `dblib-sync` keeps `--to` for the library folder (its `-o` is the report); `--json` is not on every command.
 
 ## Command-line conveniences: `doctor`, `status`, `completion`, `--json`, environment defaults
@@ -53,22 +53,22 @@ ecadlib status [--workspace W] [--json]                           one screen abo
 ecadlib completion bash|zsh|fish                                  shell completion script
 ```
 
-* **doctor** prints one line per check, each OK / WARN / FAIL with a fix: Python version (3.10 warns when neither tomllib nor tomli can read TOML), the core packages (FAIL when missing), pillow / pypdf, `pdftoppm`, `kicad-cli` and `git` (WARN), which API keys are set (variable **names** only, never values; the names follow `[datasheet] api_key_env` and `[agent] github_token_env`), the rules file in use and whether it is valid (an error names `file:line`), the workspace (exists, writable: a temporary probe file is created and removed), the `--lib` folders, `[agent] libs` / `library_repo` and the `[agent.watch]` sources. Also `Workspace.doctor()` and the MCP tool `doctor`.
-* **status** summarises a workspace without creating or changing anything: parts per librarian plan (ready, held, waiting for sign-off, duplicates), uploaded BOMs, the last triage, the last upkeep run (the workspace's and the agent's), the library agent's state and its review-queue counts, and what to run next. A damaged file is named under WARN and skipped. Exit 1 when the workspace does not exist. Also `Workspace.status()` and the MCP tool `workspace_status`.
+* **doctor** prints one line per check, each OK / WARN / FAIL with a fix: Python version (3.10 warns when neither tomllib nor tomli can read TOML), the core packages (FAIL when missing), pillow / pypdf, `pdftoppm`, `kicad-cli` and `git` (WARN), which API keys are set (variable **names** only, never values; the names follow `[datasheet] api_key_env` and `[agent] github_token_env`), the rules file in use and whether it is valid (an error names `file:line`), the workspace (exists, writable: a temporary probe file is created and removed) and the `--lib` folders. Also `Workspace.doctor()` and the MCP tool `doctor`.
+* **status** summarises a workspace without creating or changing anything: parts per librarian plan (ready, held, waiting for sign-off, duplicates), uploaded BOMs, the last triage, the last upkeep run, how parts fared in review, and what to run next. A damaged file is named under WARN and skipped. Exit 1 when the workspace does not exist. Also `Workspace.status()` and the MCP tool `workspace_status`.
 * **completion** builds the script from each command's own argparse parser (commands, subcommands, options, fixed choices), so it always matches the installed version: `ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib`, `source <(ecadlib completion zsh)` (uses zsh's `bashcompinit`), `ecadlib completion fish > ~/.config/fish/completions/ecadlib.fish`.
 * **Errors:** a missing file, bad JSON, an unreadable table, a missing package, no permission or a bad `ecadlib.toml` print one line and a hint (exit 2) instead of a traceback; anything else prints `internal error (...)` (exit 1). `--debug` anywhere on the line, or `ECADLIB_DEBUG=1`, shows the full traceback.
-* **Environment defaults** (a flag on the command line always wins): `ECADLIB_LIB` = `--lib` (several folders separated by `:`, `;` on Windows) for `triage`, `librarian`, `resolve`, `kicad-export`, `mcp`, `ui`, `agent-watch`, `agent run|serve` and `doctor`; `ECADLIB_WORKSPACE` = `--workspace` for `mcp`, `ui`, `team`, `queue`, `agent-watch`, `agent`, `visual-check`, `doctor` and `status` (not for `a365` / `upkeep` / `upstream`, where `--workspace` is an Altium 365 URL); `ECADLIB_CONFIG` = the rules file wherever ecadlib searches for `ecadlib.toml` (an explicit `--rules` and a workspace's own `ecadlib.toml` still come first). Without it `ecadlib.toml` is found by walking up from the working folder (unchanged).
+* **Environment defaults** (a flag on the command line always wins): `ECADLIB_LIB` = `--lib` (several folders separated by `:`, `;` on Windows) for `triage`, `librarian`, `resolve`, `kicad-export`, `mcp`, `ui` and `doctor`; `ECADLIB_WORKSPACE` = `--workspace` for `mcp`, `ui`, `visual-check`, `doctor` and `status` (not for `upkeep` / `upstream`, where `--workspace` is an Altium 365 URL); `ECADLIB_CONFIG` = the rules file wherever ecadlib searches for `ecadlib.toml` (an explicit `--rules` and a workspace's own `ecadlib.toml` still come first). Without it `ecadlib.toml` is found by walking up from the working folder (unchanged).
 * **Machine-readable output (`--json`)**, one JSON object on stdout, nothing else; the keys below are stable (new keys may be added):
   * `triage --json`: `{"bom", "lines", "mapping", "counts": {status: n}, "rows": [{"line", "designator", "qty", "mpn", "manufacturer", "lcsc", "value", "package", "status", "local_symbol", "local_footprint", "src", "src_symbol", "src_footprint", "src_3d", "src_mpn", "notes"}], "reports": [md, csv]}`
   * `release-check --json`: `{"plan", "report", "counts": {"ready", "held", "awaiting_approval", "duplicate"}, "rows": [one per part, as release_check.csv]}`; exit 2 when a part is held, as before.
   * `approve PLAN status --json`: `{"plan", "policy_file", "enforced", "awaiting_approval", "rows": [{"name", "status", "approved_by", "missing", "stale", ...}]}`
-  * `doctor --json`: `{"ok", "checks": [{"check", "level", "detail", "hint"}]}`; `status --json`: `{"workspace", "exists", "rules", "boms", "plans", "totals", "last_triage", "last_upkeep", "last_run", "review", "agent", "problems"}`. `last_run` is the newest BOM run: `{"plan", "started", "finished", "steps": {"triage", "build", "release_check", "review", "push": seconds}, "work_seconds", "total_seconds"}` (`work_seconds`: ecadlib's own time; `total_seconds`: first step to last, people's review included; from `<plan dir>/timing.jsonl`). `review` is `{"built", "held", "passed_first_time", "approved", "rejected", "changed", "held_reasons": [{"reason", "parts", "example"}]}` over every plan; each plan row carries its own `timing` and `review`
-  * Already there before: `agent-watch --json`, `resolve --json`, `project --json`, `init --json`, `footprint-bench --json FILE`.
+  * `doctor --json`: `{"ok", "checks": [{"check", "level", "detail", "hint"}]}`; `status --json`: `{"workspace", "exists", "rules", "boms", "plans", "totals", "last_triage", "last_upkeep", "last_run", "review", "problems"}`. `last_run` is the newest BOM run: `{"plan", "started", "finished", "steps": {"triage", "build", "release_check", "review", "push": seconds}, "work_seconds", "total_seconds"}` (`work_seconds`: ecadlib's own time; `total_seconds`: first step to last, people's review included; from `<plan dir>/timing.jsonl`). `review` is `{"built", "held", "passed_first_time", "approved", "rejected", "changed", "held_reasons": [{"reason", "parts", "example"}]}` over every plan; each plan row carries its own `timing` and `review`
+  * Already there before: `resolve --json`, `project --json`, `init --json`, `footprint-bench --json FILE`.
 
 ### The terminal, human-friendly: `term.py` and `ecadlib review`
 
 Every command people run most (`demo`, `init`, `doctor`, `librarian`, `triage`, `release-check`, `review`, `status`,
-`kicad-export`, `dblib-sync`, `altium-pkg`, `parity`, `eval gate`, `migrate`, `rebuild`, `agent status`, `queue list`)
+`kicad-export`, `dblib-sync`, `altium-pkg`, `parity`, `eval gate`, `migrate`, `rebuild`)
 prints through one small layer, `ecadlib/term.py` (stdlib only), in the shared voice (`docs/ui-voice.md`):
 
 * **One vocabulary:** a part is `✓ ready`, `! held` (with the reason in plain words, from `ecadlib/messages.py`) or
@@ -83,8 +83,7 @@ prints through one small layer, `ecadlib/term.py` (stdlib only), in the shared v
   30 s, 60 s and then every minute. Live lines go to stderr.
 * **`-q` / `--quiet`** (only the outcome and errors) and **`-v` / `--verbose`** (every reason with its fix, notes,
   sources) work for every command, anywhere on the line.
-* **`--json` is unchanged**, byte for byte (`tests/test_term.py`); `ecadlib agent status` now prints a short summary
-  and takes `--json` for the JSON it printed before; `ecadlib queue list` has a new `--json` (the item summaries).
+* **`--json` is unchanged**, byte for byte (`tests/test_term.py`).
 
 ```
 ecadlib review [PLAN] [--workspace W] [--part P] [--yes] [--offline] [--lib DIR] [--limit N]
@@ -116,8 +115,7 @@ For people who are used to installers, not terminals. The guide for them is `doc
   init`'s own code, so it learns your naming from your libraries. **Add to Altium** writes the menu script project
   ([Altium and KiCad plugins](altium.md#plugging-into-the-tools-kicad_pcmpy-and-altium_pkgpy)) and sets it to run this ecadlib. One step inside Altium is left (Install from file...), because Altium
   keeps its list of script projects to itself. **Add to KiCad** copies the action plugin into each KiCad's
-  `scripting/plugins` folder, with this ecadlib's command next to it, so no PATH change is needed. The setup routes
-  exist in local mode only: team mode answers 404, because keys belong to each person.
+  `scripting/plugins` folder, with this ecadlib's command next to it, so no PATH change is needed.
 * **`ecadlib keys list|set NAME|remove NAME`** (`userconfig.py`): API keys stored per user, the way to give ecadlib a
   key. On Windows they are encrypted with DPAPI for your account. Elsewhere they are in a file only you can read
   (mode 600). The folder is `%APPDATA%\ecadlib`, `~/Library/Application Support/ecadlib` or `~/.config/ecadlib`, and
@@ -127,9 +125,9 @@ For people who are used to installers, not terminals. The guide for them is `doc
   doctor` warns about it. A key value is never printed, logged, shown by the web UI or written to `ecadlib.toml`.
   See [docs/api-keys.md](api-keys.md).
 * **The doctor on a fresh install** now shows only what matters. A key or tool for a feature you have not turned on
-  is OK ("only needed for ..."): git and pdftoppm for the library agent, NEXAR_TOKEN without an `[altium365]`
-  workspace, GITHUB_TOKEN without the agent, kicad-cli when you only make Altium libraries. The optional part-lookup
-  services share one line. kicad-cli is also found in KiCad's install folder when it is not on PATH. The hints say
+  is OK ("only needed for ..."): pdftoppm for visual-check, git and GITHUB_TOKEN without an `[agent] github_repo`
+  (upkeep pull requests), NEXAR_TOKEN without an `[altium365]` workspace, kicad-cli when you only make Altium
+  libraries. The optional part-lookup services share one line. kicad-cli is also found in KiCad's install folder when it is not on PATH. The hints say
   `ecadlib keys set NAME` or the setup page instead of a Unix `export`.
 
 Code signing: the build signs the app and the installer with Azure Artifact Signing once the repository has the
@@ -137,10 +135,9 @@ secrets and variables in `docs/code-signing.md`; until then it is unsigned. Stil
 
 ## Connections to other tools: notifications, GitLab, plugins
 
-**Notifications** (`ecadlib/notify.py`). With `[notify]` targets in `ecadlib.toml`, the library agent posts when a review
-batch is published (`batch_ready`), when parts are held because they could not be built or failed their proof
-(`part_held`), when upkeep finds new changes (`upkeep_changes`), and when a part goes EOL, NRND or last time buy
-(`lifecycle`). `ecadlib upkeep` posts the last two after a run that saved its state. Nothing is sent without targets.
+**Notifications** (`ecadlib/notify.py`). With `[notify]` targets in `ecadlib.toml`, `ecadlib upkeep` posts when it finds new
+changes (`upkeep_changes`) and when a part goes EOL, NRND or last time buy (`lifecycle`), after a run that saved its
+state. Nothing is sent without targets.
 
 ```toml
 [notify]
@@ -149,7 +146,7 @@ retries = 3          # retried on 429, 5xx and network errors: backoff_s, then 2
 name = "library-channel"
 type = "slack"                      # slack (incoming webhook) | teams (Teams workflow webhook) | json (generic POST)
 url_env = "SLACK_WEBHOOK_URL"       # the NAME of the environment variable; the URL itself never goes in the file
-events = ["batch_ready", "part_held"]    # default: all four
+events = ["upkeep_changes"]         # default: both
 [[notify.targets]]
 type = "json"
 url_env = "ERP_HOOK_URL"
@@ -158,15 +155,14 @@ events = ["lifecycle"]
 ```
 
 Slack gets a `text` message, Teams an Adaptive Card message, and `json` gets
-`{source, event, title, text, lines, more, url, data, time}`. A failed post goes into the agent report
+`{source, event, title, text, lines, more, url, data, time}`. A failed post goes into the upkeep report
 (`rep["notify"]`) and the log, and the run carries on. Error messages name the target and host, never the URL.
 `ecadlib notify show` lists the targets and whether their variables are set. `ecadlib notify test [--event E]
 [--target NAME]` sends a test message.
 
-**GitLab** (`ecadlib/forge.py`). The library agent's review batches become GitLab merge requests and `ecadlib upkeep
---gitlab issue|pr` opens the rolling issue or a merge request. Each one follows the GitHub path step for step: it finds
-the open MR by source branch (MRs from forks are ignored), updates it in place, opens a new MR when the old one was
-merged or closed, adds outcome notes and closes with `state_event=close`. The host is chosen by `[agent] git_host = "auto"`:
+**GitLab** (`ecadlib/forge.py`). `ecadlib upkeep --gitlab issue|pr` opens the rolling issue or a merge request. It
+follows the GitHub path step for step: it finds the open MR by source branch (MRs from forks are ignored), updates it
+in place, opens a new MR when the old one was merged or closed, adds outcome notes and closes with `state_event=close`. The host is chosen by `[agent] git_host = "auto"`:
 GitLab when origin is on a `gitlab*` host or on the host of `gitlab_api`, otherwise GitHub, so nothing changes for
 GitHub users. Settings: `gitlab_api` (default `https://gitlab.com/api/v4`; for a self-hosted server, e.g.
 `https://git.example.com/api/v4`, including servers under a path), `gitlab_project` (`group/sub/name` or a numeric id;
@@ -187,16 +183,13 @@ markdown-catalog = "ecadlib_example_plugin:markdown_catalog"   # export(items, o
 ```
 
 `[providers] order = ["stockroom", "jlcpcb_search", "easyeda"]` chooses and orders the part sources for triage, the
-librarian, the web UI / MCP workspace and the agent. `[]` keeps each command's default, and `--providers` still
+librarian and the web UI / MCP workspace. `[]` keeps each command's default, and `--providers` still
 overrides it. `jlcpcb_search` is always placed before `easyeda`, because it finds the LCSC number that EasyEDA looks
 parts up by. If a plugin raises an exception, or returns something other than a `SourceResult`, the BOM line gets a
 note and triage carries on. A plugin that fails to import is listed by `ecadlib plugins list` with its error. Run an
 exporter with `ecadlib plugins export NAME plan.json -o DIR` (MCP `plugin_export`, `Workspace.plugin_export`).
 `examples/ecadlib_example_plugin/` holds a complete example: a stockroom-CSV part source and a Markdown catalog
 exporter. Install it with `pip install ./examples/ecadlib_example_plugin`.
-
-There is no read-only `/api/v1/` with token sign-in yet. The team server's API uses session cookies, and token
-sign-in would mean new code in its auth layer.
 
 ## One voice: `messages.py`, `reports.py` and `docs/ui-voice.md`
 
@@ -212,10 +205,10 @@ names or server paths.
   colours, light and dark, readable at phone width): held parts first with each reason and its next step, then parts
   waiting for sign-off, ready parts a person should double-check, duplicates, the ready table and the details.
 * Rewritten in the same voice: `release_check.md`, the datasheet reader's `<part>.review.md`, the parity report, the
-  eval `report.md`, the test pack's `CHECKLIST.md`, the agent's PR body and notifications, `ecadlib doctor` (outcome,
+  eval `report.md`, the test pack's `CHECKLIST.md`, the upkeep notifications, `ecadlib doctor` (outcome,
   then what to fix, what is optional, what is fine), the Altium menu and KiCad plugin dialogs, the `init` questions and
   MCP errors. Workspace `librarian_run` rows carry `word` and `says`, `held_parts` carries `reasons`.
 * Checked by `tests/test_messages.py` (every code has a sentence; a new release-check rule, footprint-check error,
-  KiCad/Altium field, review note or agent failure without one fails) and `tests/test_ui_voice.py` (snapshots in
+  KiCad/Altium field or review note without one fails) and `tests/test_ui_voice.py` (snapshots in
   `tests/fixtures/voice/`, Markdown and HTML say the same, demo and test pack reports free of internal names and
   absolute paths). After a deliberate wording change: `UPDATE_VOICE=1 python -m tests.run_all test_ui_voice`.

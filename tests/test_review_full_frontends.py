@@ -58,9 +58,9 @@ def test_ipv6_host_binds_an_ipv6_socket():
             port = srv.server_address[1]
             c = http.client.HTTPConnection("::1", port, timeout=10)
             with contextlib.redirect_stderr(io.StringIO()):
-                c.request("GET", "/api/session", headers={"Host": f"[::1]:{port}"})
+                c.request("GET", "/api/info", headers={"Host": f"[::1]:{port}"})
                 r = c.getresponse()
-            assert r.status == 200 and json.loads(r.read()) == {"team": False}
+            assert r.status == 200 and isinstance(json.loads(r.read()), dict)
         finally:
             srv.shutdown()
             srv.server_close()

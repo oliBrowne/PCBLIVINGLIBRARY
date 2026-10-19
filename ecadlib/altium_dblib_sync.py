@@ -37,7 +37,7 @@ from pathlib import Path, PureWindowsPath
 from . import altium_lib as AL
 from . import altium_native as AN
 from . import sheetsafe as SS
-from .hub_copy import _read_prj as read_ini_text      # (text, encoding) of an INI Altium saved
+from .fsutil import read_ini_text                     # (text, encoding) of an INI Altium saved
 from .altium_export import (COLUMNS, dblib_links, excel_connection, fieldmap_section, table_section)
 
 STATE = "ecadlib_sync.json"

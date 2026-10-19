@@ -261,19 +261,16 @@ def test_bom_columns_and_pin1():
 
 
 def test_other_tools_sections_are_accepted():
-    """[upkeep] price_jump_pct / build_qty / currency (ecadlib.upkeep) and [sim] (ecadlib.sim_models) are documented
-    there; rejecting them made every tool refuse the whole file. Defaults stay what those modules use on their own."""
-    from ecadlib import sim_models as SM, upkeep as UK
-    r = RU.load(RU.parse_text('[upkeep]\nprice_jump_pct = 15\nbuild_qty = 250\ncurrency = "EUR"\n[sim]\ncapacitor_esr = "10m"\n'))
-    assert r["upkeep"]["build_qty"] == 250 and r["upkeep"]["price_jump_pct"] == 15 and r["sim"]["capacitor_esr"] == "10m"
+    """[upkeep] is documented in ecadlib.upkeep; sections and keys of features cut on 2026-10-19 ([sim], [hub],
+    [assembly], the upkeep price keys, the old [agent] keys) still load and are ignored, so an old file keeps working.
+    Defaults stay what upkeep uses on its own."""
+    from ecadlib import upkeep as UK
+    r = RU.load(RU.parse_text('[upkeep]\nprice_jump_pct = 15\nbuild_qty = 250\ncurrency = "EUR"\n[sim]\ncapacitor_esr = "10m"\n'
+                              '[hub]\nx = 1\n[assembly]\nprofile = "jlcpcb"\n[agent]\nenabled = true\n'))
+    assert r["upkeep"]["checks"] == UK.DEFAULTS["checks"] and not {"sim", "hub", "assembly"} & set(RU.DEFAULTS)
+    assert "build_qty" not in RU.DEFAULTS["upkeep"] and "enabled" not in RU.DEFAULTS["agent"]
     assert UK.upkeep_rules(RU.load({})) == UK.DEFAULTS                     # no file: upkeep exactly as before
     assert {k: RU.DEFAULTS["upkeep"][k] for k in UK.DEFAULTS} == UK.DEFAULTS
-    it = {"name": "C1", "parameters": [{"name": "Value", "value": "100n"}]}
-    assert SM.builtin(it, "C", RU.load({}))[0] == SM.builtin(it, "C", None)[0]        # "" = no ESR, as without rules
-    assert "subckt" in json.dumps(SM.builtin(it, "C", r)[0])
-    bad("[upkeep]\nbuild_qty = 0", "upkeep.build_qty")
-    bad("[upkeep]\nprice_jump_pct = 'x'", "upkeep.price_jump_pct")
-    bad("[sim]\nesr = '1'", "sim.esr")
 
 
 def test_scanned_text_cannot_become_toml():

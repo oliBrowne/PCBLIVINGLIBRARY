@@ -582,7 +582,7 @@ def _point_schematic(tree, nick, sym_new, fps):
 # ---------------------------------------------------------------- scan: the library's usage index
 def scan(path, library, variant=None):
     """Which parts of an ecadlib library (its plan.json folder) a project or BOM uses -> the usage index row."""
-    from . import a365_sync as AS, bom_triage as BT, dedupe as DD, ledger as LG
+    from . import altium365 as A365, bom_triage as BT, dedupe as DD, ledger as LG
     folder = CG.lib_folder(library)
     items = CG.read_plan(folder)
     if not items:
@@ -593,7 +593,7 @@ def scan(path, library, variant=None):
     lines, _ = BT.read_bom(str(src))
     by_mpn = {}
     for it in items:
-        for m in (AS.mpn_of(it), it.get("name") or ""):     # its MPN parameter, and its name (often the MPN too)
+        for m in (A365.mpn_of(it), it.get("name") or ""):     # its MPN parameter, and its name (often the MPN too)
             k = DD.mpn_key(m)
             if k:
                 by_mpn.setdefault(k, it["name"])
