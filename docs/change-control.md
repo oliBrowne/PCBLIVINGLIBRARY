@@ -13,7 +13,10 @@ module that writes library files does not go through the gate.
 ## What counts as a change
 
 Each part gets a fingerprint read from its files (`ecadlib part fingerprint FILE...`). It is the same for KiCad and
-Altium files of the same part, so an export does not look like a change.
+Altium files of the same part, so an export does not look like a change. A part's fingerprint covers its .SchLib, its
+.PcbLib and the .kicad_mod the KiCad publishers ship (`footprint.kicad_mod`, or `models/KiCad/<footprint>.kicad_mod`
+beside the .PcbLib). A change to the .kicad_mod is classified like a footprint change ("KiCad footprint (.kicad_mod):
+pad 1 moved 1 mm in x"), and so is a .kicad_mod whose pads no longer match the .PcbLib's.
 
 | Class | What it means | Default |
 |---|---|---|
@@ -77,7 +80,17 @@ reject, revert, publish), sorted keys, so it diffs well in git. The exact bytes 
 - **Altium 365**: an approved change becomes a new revision of the same component, never a new component. If
   `a365_transition` is set, ecadlib applies that life-cycle transition to the new revision.
 - **KiCad export and DbLib sync**: they publish only released revisions. A hand edit found in the library folder is
-  checked against the policy first, the same as any other writer's change.
+  checked against the policy first, the same as any other writer's change. A symbol that `kicad-export` (and so
+  `kicad-pcm` and `kicad-dblib --export`) takes again from the part's source (`kicad:`, `local:` from `--lib`,
+  `easyeda:`) is compared with the released .SchLib first. When the source changed more than cosmetics since the
+  release (an upstream pin swap), the released .SchLib is exported instead and the export lists a warning; run
+  `upstream check-kicad --update` or the librarian to bring that change through change control.
+- **Altium 365 push without a library ledger** (the web UI or MCP push for a BOM the librarian has not run on): it
+  never changes the MPN, manufacturer or value of a component that is already in the workspace. That part is skipped
+  with the reason; other parameters are still updated. Use another part name for a different part, or run the
+  librarian and approve the change, which releases it as a new component revision.
+- **Upgrading ecadlib**: a revision fingerprinted by an older ecadlib is fingerprinted again from its saved files, so
+  an upgrade that reads more detail does not show every released part as changed.
 
 ## Projects: drift, freeze and usage
 
