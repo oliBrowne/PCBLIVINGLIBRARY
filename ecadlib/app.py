@@ -82,7 +82,9 @@ class Workspace:
                 and b"\0" in head and head[:2] not in (b"\xff\xfe", b"\xfe\xff") and not T.utf16_without_bom(head)):
             raise ValueError(f"{bom_path.name} looks like a binary file, not a CSV; export the BOM as CSV or XLSX")
         try:
-            lines, mapping = T.read_bom(bom_path, RU.bom_columns(self.rules()))
+            fence = self.root if self.root in Path(bom_path).resolve().parents else None   # an uploaded / workspace
+            lines, mapping = T.read_bom(bom_path, RU.bom_columns(self.rules()), root=fence)  # schematic's sub-sheets stay
+                                                                                             # in the workspace
         except Exception as e:                        # pandas/csv/zip errors -> one message a person can act on
             if type(e) is ValueError:                 # the reader's own words: no exception name, no server path
                 raise ValueError(f"couldn't read {bom_path.name} as a BOM: "

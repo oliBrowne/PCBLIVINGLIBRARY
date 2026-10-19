@@ -15,7 +15,7 @@ from .kicad_index import KiCadIndex, package_of, parse_value
 
 FIELDS = {   # canonical field -> header synonyms (normalised: lowercase, punctuation -> space)
     "mpn": ["mpn", "manufacturer part number", "mfr part number", "mfr part", "mfg part number", "mfr pn",
-            "manufacturer part", "part number", "mfr no", "manufacturer pn", "pn", "mfr part no"],
+            "manufacturer part", "part number", "mfr no", "manufacturer pn", "pn", "mfr part no", "part"],
     "manufacturer": ["manufacturer", "mfr", "mfr name", "mfg", "maker", "brand", "vendor", "manufacturer name"],
     "lcsc": ["lcsc", "lcsc part", "lcsc part number", "lcsc part no", "lcsc pn", "jlcpcb part", "jlc part", "lcsc id"],
     "qty": ["qty", "quantity", "count", "qnty", "amount", "pcs"],
@@ -54,12 +54,17 @@ def map_headers(headers, threshold=0.72):
                 if nh == s:
                     sc = 0.97 if f == "mpn" and s in ("part number", "pn") else 1.0   # DigiKey: 'Part Number' is
                                                                      # its own code, 'Manufacturer Part Number' the MPN
-                elif f == "fitted":
-                    continue                                             # one word: exact only ('Mount Side' isn't it)
+                    sc = 0.9 if (f, s) in (("value", "comment"), ("mpn", "part")) else sc   # 'Value' wins over
+                                                                     # Altium's 'Comment' ('Resistor'); a real MPN column
+                                                                     # over a purchasing BOM's 'Part' 
+                elif f == "fitted" or (f, s) == ("mpn", "part"):
+                    continue                                             # one word: exact only ('Mount Side' isn't it,
+                                                                         # 'Part Type' is no MPN)
                 elif re.search(rf"\b{re.escape(s)}\b", nh):
                     sc = 0.75 + 0.2 * len(s) / max(len(nh), 1)          # containment, longer = better
-                elif f == "dnp":
-                    continue                                             # no fuzzy DNP: 'Stuff' is not 'No Stuff'
+                elif f in ("dnp", "designator"):
+                    continue                                             # no fuzzy DNP ('Stuff' is not 'No Stuff') or
+                                                                         # designator ('Part' is not 'Parts')
                 else:
                     sc = difflib.SequenceMatcher(None, nh, s).ratio() * 0.95
                 best = max(best, sc)
@@ -150,6 +155,9 @@ def _read_csv(p):
     except UnicodeDecodeError:                                            # Excel 'CSV' on Windows is cp1252; decided
         text = "".join(_decode_line(ln) for ln in data.splitlines(keepends=True))   # per line: one cp1252 byte in a
                                                                           # UTF-8 file must not turn 10µF into 10ÂµF
+        if re.search(r"[^\x00-\x7f]{3,}", text):                       # runs of accented letters: GBK / Shift-JIS
+            print(f"  warning: {Path(p).name} is not UTF-8: read as Windows-1252 (Western) and the text looks garbled "
+                  "(a Chinese / Japanese / Cyrillic BOM?): save it as 'CSV UTF-8' and run again", file=sys.stderr)
     lines = [ln for ln in text.splitlines(keepends=True) if ln.strip()]  # keepends: a quoted cell may span lines
     if not lines:
         raise ValueError(f"{p}: the BOM file is empty")
@@ -160,10 +168,22 @@ def _read_csv(p):
         return (widths.count(common) if common > 1 else 0, common)
 
     delim = max(DELIMS, key=score)
-    rows = list(csv.reader(lines, delimiter=delim))
+    rows, starts, rd, prev = [], [], csv.reader(lines, delimiter=delim), 0
+    for r in rd:
+        starts.append(prev)                                               # first physical line of the row
+        prev = rd.line_num
+        rows.append(r)
+    if rows and text.count('"') % 2 and any("\n" in c for c in rows[-1]):     # a quote never closed: it ran to EOF
+        k = starts[-1]
+        print(f"  warning: {Path(p).name}: row {k + 1}: a double quote is never closed; the rows after it are read "
+              "line by line (check that row)", file=sys.stderr)
+        rows = rows[:-1] + list(csv.reader([lines[k].replace('"', "")], delimiter=delim)) \
+            + list(csv.reader(lines[k + 1:], delimiter=delim))
     width = max(len(r) for r in rows)
     rows = [[re.sub(r"\s*[\r\n]+\s*", " ", c) for c in r] for r in rows]   # 'RES 10k<newline>0603' -> one line
-    return pd.DataFrame([r + [""] * (width - len(r)) for r in rows], dtype=str)
+    df = pd.DataFrame([r + [""] * (width - len(r)) for r in rows], dtype=str)
+    df.attrs["delimiter"] = delim
+    return df
 
 
 def clean_part_number(s):
@@ -187,33 +207,48 @@ def apply_columns(mapping, headers, columns):
     return mapping
 
 
-def read_bom(path, columns=None, rules=None):
+def read_bom(path, columns=None, rules=None, root=None):
     """columns: the rules' [bom] columns ({field: header}), applied over the fuzzy header match. rules: for an Altium
-    project, the house parameter names to read the MPN / manufacturer from (default: ecadlib.toml found from the project)."""
+    project, the house parameter names to read the MPN / manufacturer from (default: ecadlib.toml found from the project).
+    root: a KiCad schematic's sub-sheets and an Altium project's documents must be inside this folder (servers pass
+    their workspace); None follows them wherever the project says."""
     p = Path(path)
     if p.suffix.lower() in (".prjpcb", ".schdoc", ".bomdoc"):     # Altium project: BOM straight from the schematics
         import os
         from . import rules as RU
         from .altium_project import bom_lines
-        return bom_lines(p, variant=os.environ.get("ECADLIB_VARIANT") or None, rules=RU.resolve(rules, p.parent))
+        return bom_lines(p, variant=os.environ.get("ECADLIB_VARIANT") or None, rules=RU.resolve(rules, p.parent), root=root)
     if p.suffix.lower() == ".kicad_sch" or (p.suffix.lower() in (".xml", ".net") and _BI().is_kicad_netlist(p)):
         bi = _BI()                                                # KiCad schematic / netlist: no header guessing
-        return bi.read_kicad_sch(p, columns) if p.suffix.lower() == ".kicad_sch" else bi.read_kicad_netlist(p, columns)
+        return bi.read_kicad_sch(p, columns, root) if p.suffix.lower() == ".kicad_sch" else bi.read_kicad_netlist(p, columns)
     raw = (_read_excel(p) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else _read_csv(p)).fillna("")
     if raw.empty or not raw.astype(str).apply(lambda c: c.str.strip()).ne("").any().any():
         raise ValueError(f"{p}: the BOM file is empty")
-    hdr_row = max(range(min(10, len(raw))), key=lambda i: len(apply_columns(map_headers(list(raw.iloc[i])),   # header
-                                                                      [str(h).strip() for h in raw.iloc[i]], columns)))  # may not be row 0
+    hdr_row = header_row(raw, columns)                            # the header may not be row 0
     headers = [str(h).strip() for h in raw.iloc[hdr_row]]
     df = raw.iloc[hdr_row + 1:].copy()
     df.columns = headers
     mapping = apply_columns(map_headers(headers), headers, columns)
     if not {"designator", "mpn", "value"} & mapping.keys():
-        raise ValueError(f"{p}: no BOM header found (need a Designator, MPN or Value/Comment column)")
+        raise ValueError(f"{p}: no BOM header found in the first {HEADER_ROWS} rows "
+                         "(need a Designator, MPN or Value/Comment column)")
     col = {f: headers.index(h) for f, h in mapping.items()}       # by position: a BOM may repeat a header (a 2nd 'MPN')
-    lines = []
+    alt = _alternate_mpns(headers, col)                          # Altium 'Manufacturer Part Number 2' (+ its maker)
+    comment = next((j for j, h in enumerate(headers) if _norm(h) == "comment" and j not in col.values()), None) \
+        if "value" in col else None                              # Value and Comment both there: Comment backs Value up
+    decimal_comma = raw.attrs.get("delimiter") == ";"            # ';' CSVs come from decimal-comma Excel: 1,000 = 1
+    lines, skipped = [], 0
     for _, row in df.iterrows():
         d = {f: SS.unquote(str(row.iloc[j]).strip()) for f, j in col.items()}     # "'=X" from our own reports
+        if not d.get("mpn"):
+            for jm, jf in alt:
+                if str(row.iloc[jm]).strip():
+                    d["mpn"] = SS.unquote(str(row.iloc[jm]).strip())
+                    if jf is not None and str(row.iloc[jf]).strip():
+                        d["manufacturer"] = SS.unquote(str(row.iloc[jf]).strip())
+                    break
+        if comment is not None and not d.get("value") and str(row.iloc[comment]).strip():
+            d["value"] = SS.unquote(str(row.iloc[comment]).strip())
         for f in ("mpn", "lcsc"):
             if d.get(f):
                 d[f] = clean_part_number(d[f])
@@ -221,7 +256,8 @@ def read_bom(path, columns=None, rules=None):
             continue
         if lines and d.get("designator") and not any(v for f, v in d.items() if f != "designator"):
             prev, q = lines[-1], re.match(r"\s*(\d+)", lines[-1].get("qty", ""))
-            if q and count_refs(prev["designator"]) < int(q.group(1)):
+            if q and count_refs(prev["designator"]) < int(q.group(1)) and _same_classes(d["designator"], prev["designator"]) \
+                    and count_refs(prev["designator"] + ", " + d["designator"]) <= int(q.group(1)):
                 prev["designator"] += ", " + d["designator"]            # designator list wrapped onto the next row
                 continue
         if _EXP.fullmatch(d.get("value", "")):                         # a CSV that kept Excel's 1e-07
@@ -229,8 +265,14 @@ def read_bom(path, columns=None, rules=None):
         q = re.fullmatch(r"(\d+)(?:,0{1,2}|\.0+)", d.get("qty", ""))
         if q:                                                            # '1,0' / '2,00' (European Excel), '1.0':
             d["qty"] = q.group(1)                                        # not 10 / 200 pieces ('1,000' stays 1000)
+        q = re.fullmatch(r"(\d+),000", d.get("qty", "")) if decimal_comma else None
+        if q and count_refs(d.get("designator", "")) == int(q.group(1)):   # a ';' (decimal-comma) CSV: '1,000' on one
+            d["qty"] = q.group(1)                                        # designator is 1,000 = 1 piece
         if _is_total(d) or not any(v for f, v in d.items() if f not in ("qty", "dnp", "fitted")):
             continue                                                     # 'Total;;;12' footer / a bare sum, not a part
+        if _not_a_part(d):                                               # 'Resistors' heading, 'Notes: ...' row
+            skipped += 1
+            continue
         if "dnp" in d or "fitted" in d:
             d["dnp"] = dnp_cell(d.get("dnp", "")) or dnp_cell(d.pop("fitted", ""), "fitted")
         elif dnp_value(d.get("value", "")) or DNP_MARK.fullmatch(d.get("mpn", "")):
@@ -238,7 +280,55 @@ def read_bom(path, columns=None, rules=None):
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
         lines.append(d)
+    if skipped:
+        print(f"  note: {p.name}: skipped {skipped} row(s) that name no part (section headings, notes)", file=sys.stderr)
     return lines, mapping
+
+
+HEADER_ROWS = 50                                                 # title blocks and blank rows above the header
+
+
+def header_row(raw, columns=None):
+    """The row of a raw sheet that is the BOM header: the one, among the first HEADER_ROWS, whose cells map to the
+    most fields."""
+    return max(range(min(HEADER_ROWS, len(raw))), key=lambda i: len(apply_columns(
+        map_headers(list(raw.iloc[i])), [str(h).strip() for h in raw.iloc[i]], columns)))
+
+
+def _alternate_mpns(headers, col):
+    """[(MPN column, its manufacturer column or None)] for Altium's 'Manufacturer Part Number 2..N' that read_bom did
+    not map, in order: a line whose first MPN is empty takes the first one it has."""
+    used, out = set(col.values()), []
+    for j, h in enumerate(headers):
+        m = re.fullmatch(r"(manufacturer part number|mfr part number|manufacturer pn|mpn) (\d+)", _hnorm(h))
+        if m and j not in used:
+            mf = next((k for k, g in enumerate(headers) if _hnorm(g) in (f"manufacturer {m.group(2)}", f"mfr {m.group(2)}")
+                       and k not in used), None)
+            out.append((j, mf))
+    return out
+
+
+def _classes(s):
+    return {m.group(1).upper() for m in re.finditer(r"(?<![A-Za-z])([A-Za-z]+)\d", s or "")}
+
+
+def _same_classes(new, prev):
+    """A wrapped designator list continues with the same kinds of parts (R1,R2 then R3), not J5 under a resistor."""
+    c = _classes(new)
+    return bool(c) and c <= _classes(prev)
+
+
+def _not_a_part(d):
+    """A section heading ('Resistors') or a note row ('Notes: all parts RoHS'): one cell, no designator digits, no
+    part number shape."""
+    filled = [(f, v) for f, v in d.items() if v and f not in ("dnp", "fitted")]
+    if len(filled) != 1:
+        return False
+    f, v = filled[0]
+    if f == "designator":
+        return not re.search(r"\d|\?", v)
+    return bool(re.search(r"\s", v) and (v.rstrip().endswith(":") or re.match(r"(?i)\s*(notes?|remarks?|comments?|"
+                                                                           r"prepared|approved|checked|drawn)\b", v)))
 
 
 def _BI():
@@ -247,7 +337,48 @@ def _BI():
 
 
 def _header_score(raw):
-    return max((len(map_headers(list(raw.iloc[i]))) for i in range(min(10, len(raw)))), default=0)
+    return max((len(map_headers(list(raw.iloc[i]))) for i in range(min(HEADER_ROWS, len(raw)))), default=0)
+
+
+def _bom_sheet(p, named):
+    """{sheet name: frame} -> the BOM frame. Hidden sheets and hidden columns are left out (an old BOM kept hidden);
+    blank rows are dropped (title blocks); the sheet with the best header wins, then the one with more rows; sheets
+    with the very same header (a Top and a Bottom BOM) are read together; any other BOM-like sheet is named."""
+    try:
+        hidden = _BI().xlsx_hidden(p)
+    except Exception:                                    # not an .xlsx zip (old .xls): nothing is known to be hidden
+        hidden = {}
+    frames = []
+    for name, df in named.items():
+        if name in hidden and hidden[name] is None:
+            continue
+        df = df.copy()
+        for j in hidden.get(name) or ():
+            if j < df.shape[1]:
+                df.iloc[:, j] = ""
+        df = df.fillna("")
+        df = df[df.astype(str).apply(lambda c: c.str.strip()).ne("").any(axis=1)].reset_index(drop=True)
+        frames.append((name, df))
+    if not frames:
+        return pd.DataFrame()
+    info = []
+    for name, df in frames:
+        score = _header_score(df)
+        h = header_row(df) if len(df) else 0
+        head = tuple(_norm(x) for x in df.iloc[h]) if len(df) else ()
+        info.append((score, len(df) - h - 1, name, df, h, head))
+    best = max(info, key=lambda t: (t[0], t[1]))
+    same = [t for t in info if t is not best and t[0] == best[0] and t[5] == best[5] and best[0] >= 2]
+    other = [t[2] for t in info if t is not best and t not in same and t[0] >= 3]
+    out = best[3]
+    if same:
+        out = pd.concat([out] + [t[3].iloc[t[4] + 1:] for t in same], ignore_index=True)
+        print(f"  note: {Path(p).name}: read sheets {', '.join(repr(t[2]) for t in [best] + same)} together "
+              "(same BOM header)", file=sys.stderr)
+    if other:
+        print(f"  note: {Path(p).name}: read sheet {best[2]!r}; sheet(s) {', '.join(map(repr, other))} also look like "
+              "a BOM and were not read", file=sys.stderr)
+    return out
 
 
 def _read_excel(p):
@@ -256,20 +387,20 @@ def _read_excel(p):
     if not head.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0")):     # not a workbook: CSV / tab text named .xls(x)
         return _read_csv(p)
     try:
-        sheets = [df.map(_xl_text) if hasattr(df, "map") else df.applymap(_xl_text)    # numbers as typed: 1e-07 F
-                  for df in pd.read_excel(p, header=None, dtype=object, sheet_name=None).values()]  # -> '100n', not '1e-07'
+        sheets = {n: df.map(_xl_text) if hasattr(df, "map") else df.applymap(_xl_text)    # numbers as typed: 1e-07 F
+                  for n, df in pd.read_excel(p, header=None, dtype=object, sheet_name=None).items()}  # -> '100n', not '1e-07'
     except ImportError as e:                                              # old binary .xls needs xlrd (not a dependency)
         if head.startswith(b"PK"):                                        # .xlsx without openpyxl: read it ourselves
-            sheets = [pd.DataFrame(rows, dtype=object) for rows in _BI().xlsx_sheets(p).values()]
-            return max(sheets, key=_header_score) if sheets else pd.DataFrame()
+            return _bom_sheet(p, {n: pd.DataFrame(rows, dtype=object) for n, rows in _BI().xlsx_sheets(p).items()})
         raise ValueError(f"{p}: can't read this old .xls workbook ({e}); save it as .xlsx or CSV") from e
     except Exception as e:                                                # truncated / corrupt zip, missing parts
         raise ValueError(f"{p}: not a readable Excel workbook ({type(e).__name__}: {e})") from e
-    return max(sheets, key=_header_score) if sheets else pd.DataFrame()
+    return _bom_sheet(p, sheets)
 
 
-TOTAL = re.compile(r"(grand\s*|sub\s*)?totals?(\s+(parts?|components?|qty|quantity|count|items?|lines?|pcs))?\s*:?\s*\d*",
-                   re.I)                                                  # 'Total', 'Total parts:', 'Total Qty', 'Total: 42'
+TOTAL = re.compile(r"((grand\s*|sub\s*)?totals?|sum|summe|gesamt(summe)?|insgesamt|totale?|somme)"
+                   r"(\s+(parts?|components?|qty|quantity|count|items?|lines?|pcs))?\s*:?\s*\d*",
+                   re.I)                                                  # 'Total', 'Total parts:', 'Sum', 'Gesamt: 42'
 
 
 def _is_total(d):
@@ -347,16 +478,18 @@ def part_numbers(ln):
 def count_refs(s):
     """'R1, R2, R5-R8' -> 6 (ranges like R5-R8, R5-8 or 'R5 - R8' count every designator). Units of one multi-unit
     part ('U1A, U1B', Altium's suffixed designators) count once, as does a designator listed twice."""
-    s = re.sub(r"(?<=[0-9A-Za-z])\s*[-\u2013\u2014~\uff5e]\s*(?=[A-Za-z]*\d)", "-", s.strip())   # 'R1 – R4', 'C1~C4' -> 'R1-R4'
+    s = re.sub(r"(?<=[0-9A-Za-z])\s*([-\u2013\u2014~\uff5e:]|\.\.|\s(?i:to)\s)\s*(?=[A-Za-z]*\d)", "-",
+               s.strip())                                        # 'R1 – R4', 'C1~C4', 'R1..R4', 'R1 to R4' -> 'R1-R4'
     seen, extra = set(), 0
-    for tok in re.split(r"[,;\s]+", s):
+    for tok in re.split(r"[,;/&+\s]+", s):
         m = re.fullmatch(r"([A-Za-z]+)(\d+)[A-Za-z]?(?:-(?:\1)?(\d+)[A-Za-z]?)?", tok)
         if not m:
             if re.fullmatch(r"[A-Za-z]+\d+[A-Za-z0-9_.]*", tok):   # Altium channel designators (R1_CH1, R1_A): one each
                 seen.add(("", tok.upper()))
             continue
         pre, lo = m.group(1).upper(), int(m.group(2))
-        hi = int(m.group(3)) if m.group(3) and int(m.group(3)) >= lo else lo
+        hi = int(m.group(3)) if m.group(3) else lo
+        lo, hi = min(lo, hi), max(lo, hi)                        # 'R5-R1' is R1..R5
         if hi - lo > 100000:                     # absurd range: count it, don't enumerate it
             extra += hi - lo + 1
         else:
@@ -398,6 +531,13 @@ def triage(lines, index, provs, http):
         if re.fullmatch(r"\d+(\.\d+)?E\+\d+", ln.get("mpn", ""), re.I):     # Excel turned 530470610 into 5.30E+08
             notes.append(f"MPN '{ln['mpn']}' is in Excel scientific notation: its digits were lost; "
                          "re-export the BOM with the MPN column formatted as text")
+        if re.fullmatch(r"(?i)\d{4}-\d\d-\d\d(T[\d:]+)?|\d{1,2}[-/ ](jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*"
+                        r"([-/ ]\d{2,4})?|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[-/ ]\d{1,4}", ln.get("mpn", "")):
+            notes.append(f"MPN '{ln['mpn']}' looks like a date Excel made of the part number; re-export the BOM with the "
+                         "MPN column formatted as text")
+        nref, qm = count_refs(ln.get("designator", "")), re.fullmatch(r"\s*(\d+)\s*", ln.get("qty", ""))
+        if nref and qm and int(qm.group(1)) != nref:
+            notes.append(f"Qty {qm.group(1)} but {nref} designator(s) ({ln['designator'][:60]}): check the BOM line")
         if ln.get("lcsc_invalid"):
             notes.append(f"ignored malformed LCSC '{ln['lcsc_invalid']}'")
         if not (sym and fp_key):

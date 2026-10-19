@@ -1407,7 +1407,9 @@ def add_to_parts(ws_root, mpn, manufacturer="", **hints):
         raise ValueError(f"not a manufacturer part number: {mpn!r} (letters, digits and - _ . + / # , ( ) only)")
     bom = Path(ws_root) / MENU_BOM
     bom.parent.mkdir(parents=True, exist_ok=True)
-    rows = list(csv.DictReader(bom.open(encoding="utf-8", newline=""))) if bom.is_file() else []
+    from . import sheetsafe as SS
+    rows = [{k: SS.unquote(v) for k, v in r.items()} for r in csv.DictReader(bom.open(encoding="utf-8", newline=""))] \
+        if bom.is_file() else []
     new = {"Mfr. Part #": mpn, "Manufacturer": (manufacturer or "").strip(), "Value": hints.get("value") or "",
            "Footprint": hints.get("footprint") or "", "LCSC Part Number": hints.get("lcsc") or "",
            "Description": hints.get("description") or "", "Datasheet": hints.get("datasheet") or "",
@@ -1423,7 +1425,7 @@ def add_to_parts(ws_root, mpn, manufacturer="", **hints):
         if not r.get("Value"):
             r["Value"] = r.get("Mfr. Part #", "")
     text = io.StringIO()
-    w = csv.DictWriter(text, HEADER, extrasaction="ignore", lineterminator="\n")
+    w = SS.DictWriter(text, HEADER, extrasaction="ignore", lineterminator="\n")   # '=HYPERLINK(..)' is not run
     w.writeheader()
     for r in rows:
         w.writerow({k: r.get(k, "") for k in HEADER})
