@@ -267,17 +267,32 @@ def _clip(seg, pads, c, min_len=SILK_MIN_LEN):
     return [((round(s, 4), y1), (round(e, 4), y1)) if horiz else ((x1, round(s, 4)), (x1, round(e, 4))) for s, e in keep]
 
 
+def _left_right(spec, pads):
+    """For each pad (in builder order), True when it sits in a left/right row (its length runs along X).
+    Taken from how the builders lay pads out, not guessed from coordinates: the end pads of a tall dual-row part
+    (DFN 2 x 4) or of a rectangular QFN have |y| > |x| but are still left/right pads."""
+    t = spec["package_type"]
+    if t not in ("qfn", "qfp"):
+        return [True] * len(pads)                             # chips, gull-wings (and their tab): all along X
+    npins = spec["pin_count"]
+    nlr = spec.get("pins_left_right", npins // 4)
+    ntb = spec.get("pins_top_bottom", (npins - 2 * nlr) // 2)
+    side = ([True] * nlr + [False] * ntb) * 2                 # _qfn(): left, bottom, right, top
+    return [side[i] if i < len(side) else True for i in range(len(pads))]
+
+
 def _apply_land(spec, pads):
     """Replace the IPC-computed signal pads with the datasheet's recommended land (the tab keeps its IPC size)."""
     land = spec["land"]
     ll, lw, lc = land["pad_length"], land["pad_width"], land["pad_center"]
     lcy = land.get("pad_center_y", lc)
     n_sig = len(pads) - (1 if spec.get("tab") else 0)
+    lr = _left_right(spec, pads)
     out = []
     for i, (num, x, y, w, h) in enumerate(pads):
         if i >= n_sig:
             out.append((num, x, y, w, h))
-        elif abs(x) >= abs(y) or w >= h:                      # left/right row: length runs along X
+        elif lr[i]:                                           # left/right row: length runs along X
             out.append((num, math.copysign(lc, x), y, ll, lw))
         else:                                                 # top/bottom row (QFN/QFP)
             out.append((num, x, math.copysign(lcy, y), lw, ll))
@@ -301,6 +316,15 @@ def sanity(spec):
     if errs:
         return errs
     L, W, T = nom("body_length"), nom("body_width"), nom("terminal_length")
+    if t in ("chip", "molded") and L is not None and L < 0.2:     # the smallest chip (008004) is 0.25 mm long
+        errs.append(f"body_length {L} mm is smaller than any chip part: is the drawing in inches? The spec is in millimetres")
+    pos = spec.get("pin_positions") or []
+    if t == "gullwing" and pos and spec.get("body_length") is not None:
+        lim = dim(spec["body_length"])[2] / 2
+        far = [p for p in pos if abs(p["offset"]) > lim + 1e-6]
+        if far:
+            errs.append(f"pin {far[0]['number']} offset {far[0]['offset']} is outside the {round(L, 3)} mm body length "
+                        f"(offsets run from -{round(lim, 3)} to +{round(lim, 3)}): check the drawing")
     if t in ("chip", "molded") and T and not spec.get("inner_span") and 2 * dim(spec["terminal_length"])[0] >= dim(spec["body_length"])[2]:
         errs.append(f"terminal_length {T} is half the body length or more: it should be one end-cap/foot, not the whole part")
     if t in ("gullwing", "qfp"):
@@ -399,9 +423,9 @@ def build(spec, density=None):
             ew, eh = land["ep_across"], land["ep_along"]      # 3 x 3 exposed pad), as KiCad draws it
             rep["ep_land"] = "datasheet"
         epnum = str(ep.get("number") or (spec.get("pin_count") or len(pads)) + 1)   # pin_positions specs may omit pin_count
-        lr = (lambda p: abs(p[1]) > abs(p[2])) if t in ("qfn", "qfp") else (lambda p: True)   # gullwing: all pads are L/R
-        gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p in pads if lr(p)]                 # left/right rows vs EP
-        gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p in pads if not lr(p)]            # qfn top/bottom rows vs EP
+        lr = _left_right(spec, pads)                                                  # gullwing: all pads are L/R
+        gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p, s in zip(pads, lr) if s]         # left/right rows vs EP
+        gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p, s in zip(pads, lr) if not s]    # qfn top/bottom rows vs EP
         if gaps and min(gaps) < MIN_PAD_GAP - 1e-6:
             rep["warning"] = f"EP to pad gap {min(gaps):.3f} < {MIN_PAD_GAP}"
         ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu", "F.Mask")))
@@ -491,6 +515,10 @@ def build(spec, density=None):
     from . import footprint_check
     rep["checks"] = [{"level": l, "rule": r_, "message": m}
                      for l, r_, m in footprint_check.check(text_out, allow_duplicate_pads=[str(spec["tab"]["number"])] if spec.get("tab") else None)]
+    short = [c["message"] for c in rep["checks"] if c["level"] == "error" and c["rule"] == "copper"]
+    if short:                                                 # overlapping or touching pads are a short on the board
+        raise ValueError("the pads would short: " + "; ".join(short) + " (check pitch, pin_count and terminal_length "
+                         "against the drawing)")
     return text_out, rep
 
 
@@ -565,10 +593,16 @@ def main(argv=None):
         from . import rules as RU
         outdir = Path(a.out); outdir.mkdir(parents=True, exist_ok=True)
         rules = RU.load(a.rules, start=outdir)
+        bad = 0
         for sp in a.specs:
             spec = json.loads(Path(sp).read_text())
             validate(spec)
-            txt, rep = build(spec, RU.density_for(spec, rules, a.density))
+            try:
+                txt, rep = build(spec, RU.density_for(spec, rules, a.density))
+            except ValueError as e:                               # a spec that doesn't add up: say why, write nothing
+                print(f"{spec.get('name', sp)}: not written: {e}", file=sys.stderr)
+                bad += 1
+                continue
             from . import sexpr
             sexpr.parse(txt)                                          # sanity: balanced S-expression
             (outdir / f"{spec['name']}.kicad_mod").write_text(txt, encoding="utf-8", newline="\n")
@@ -578,7 +612,11 @@ def main(argv=None):
                   f"pad1 {p1['w']:.3f}x{p1['h']:.3f} @({p1['x']:.3f},{p1['y']:.3f}) "
                   f"crtyd {rep['courtyard'][0]:.2f}x{rep['courtyard'][1]:.2f}"
                   + (f"  WARN {rep['warning']}" if "warning" in rep else "")
-                  + "".join(f"\n    {c['level']}: {c['message']}" for c in rep.get("table_checks", []) if c["level"] != "info"))
+                  + "".join(f"\n    {c['level']}: {c['message']}" for c in rep.get("table_checks", []) if c["level"] != "info")
+                  + "".join(f"\n    error: {c['message']}" for c in rep.get("checks", []) if c["level"] == "error"))
+            bad += any(c["level"] == "error" for c in rep.get("checks", []))
+        if bad:
+            sys.exit(f"{bad} footprint spec(s) failed: fix them before using the footprints")
     else:
         if a.ref.startswith("http"):
             from .httpcache import CachedHTTP
