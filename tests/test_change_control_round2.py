@@ -153,3 +153,25 @@ def test_reused_kicad_symbol_is_compared_as_kicad_with_the_first_publish():
         assert "read back" in how and warn and says in warn[0], (k, how, warn)
     how, warn = run(_qp_symbol(), "k4")                   # the source as released: reused again
     assert "reused" in how and not warn, (how, warn)
+
+
+def _value_class(a, b, kind=""):
+    def fp(v):
+        return FP.build("", params={"Value": v, "Manufacturer Part Number": "X1", **({"Description": kind} if kind else {})})
+    ch = [c for c in CD.diff(fp(a), fp(b)) if c["area"] == "identity"]
+    return CD.worst(ch)
+
+
+def test_value_detail_accepts_only_recognised_tokens():
+    """R2-5: only a tolerance, rating, temperature coefficient, dielectric or package size after the value is "more
+    detail"; DNF, NC, a parallel or another value after it, or a unit that is not the part's, is an identity change.
+    A rating written with a space is the same rating."""
+    for a, b in (("10k", "10k DNF"), ("10k", "10k NC"), ("10k", "10k (do not fit)"), ("4.7k", "4.7k||1k"),
+                 ("10k", "10k 0R"), ("100n", "100nH"), ("10", "10V"), ("100nF 50V", "100nF 6.3V")):
+        assert _value_class(a, b) == "identity", (a, b)
+        assert _value_class(a, b, "Resistor") == "identity", (a, b)
+    assert _value_class("100n", "100nH", "Ceramic capacitor") == "identity"
+    for a, b, kind in (("10uF 25V", "10uF 25 V", ""), ("10k", "10k 1%", ""), ("10k", "10k 1% 0603", ""),
+                       ("100nF", "100nF 50V X7R", ""), ("10k", "10k 1/4W", ""), ("10k 1%", "10k", ""),
+                       ("100n", "100nF", "Ceramic capacitor"), ("10k", "10kΩ", "Resistor"), ("4k7", "4.7k", "")):
+        assert _value_class(a, b, kind) == "cosmetic", (a, b, kind)

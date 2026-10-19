@@ -24,7 +24,7 @@ Classes, most severe first (default policy in brackets, see change_gate.POLICY):
 
 Tolerances: a length change within TOL["noise"] (parity's position tolerance, 1 um) is no change; SIZE_MINOR is the
 pad-size band that counts as minor (max(50 um, 10 % of that side)); 3D origin within TOL["model"] (10 um)."""
-import json
+import json, re
 from collections import Counter
 
 from . import parity as PA
@@ -59,6 +59,70 @@ def _few(xs, n=8):
 
 
 # ---------------------------------------------------------------- identity and fields
+DIELECTRICS = {"X5R", "X6S", "X7R", "X7S", "X7T", "X8R", "Y5V", "Z5U", "C0G", "COG", "NP0", "NPO", "U2J"}
+PACKAGE_SIZES = {"01005", "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512", "1005", "1608",
+                 "2012", "3216", "3225", "4532", "6332"}
+KIND_UNIT = (("resistor", "R"), ("capacitor", "F"), ("inductor", "H"), ("ferrite", "H"), ("crystal", "Hz"),
+             ("oscillator", "Hz"), ("resonator", "Hz"), ("zener", "V"), ("fuse", "A"))
+
+
+def _value_tokens(v):
+    """The text after a value's number, as canonical tokens: '10uF 25 V X7R' -> ['25V', 'X7R'], '10k 1/4W' ->
+    ['0.25W']. A number and its unit written apart ('25 V', '1 %') are one token."""
+    from .kicad_index import split_value
+    try:
+        rest = split_value(v)[2]
+    except Exception:
+        return []
+    rest = re.sub(r"(\d+)\s*/\s*(\d+)\s*W\b", lambda m: f"{int(m.group(1)) / max(int(m.group(2)), 1):g}W", rest)
+    rest = re.sub(r"(?i)(\d)\s+(%|ppm|°C|mV|kV|V|mW|W|mA|A)(?![A-Za-z0-9])", r"\1\2", rest.replace("+/-", "±"))
+    toks = []
+    for t in re.split(r"[\s/,;]+", rest):
+        if not t:
+            continue
+        if t.upper() in PACKAGE_SIZES or t.upper() in DIELECTRICS:
+            toks.append(t.upper())
+            continue
+        try:
+            y, u, left = split_value(t)
+        except Exception:
+            y, u, left = None, "", t
+        toks.append(f"{y:.6g}{u}" if y is not None and not left else t.upper())
+    return toks
+
+
+def _detail_token(t):
+    """A token that only says more about the same part: a tolerance, a voltage, power or current rating, a temperature
+    coefficient or rating, a dielectric, a package size. Anything else after a value (DNF, NC, ||1k, 0R) is not."""
+    if t in DIELECTRICS or t in PACKAGE_SIZES:
+        return True
+    if re.fullmatch(r"[±+-]?\d+(\.\d+)?%|[±+-]?\d+(\.\d+)?PPM(/°?C|/K)?|[+-]?\d+(\.\d+)?°C", t):
+        return True
+    return bool(re.fullmatch(r"\d+(\.\d+)?(e[+-]?\d+)?[VWA]", t))
+
+
+def _kind_unit(fp):
+    """The unit a part's value is in, from what it is ('Resistor' symbol, 'Ceramic capacitor' description), or None."""
+    fields = fp.get("fields") or {}
+    text = " ".join([str((fp.get("symbol") or {}).get("name") or ""), str(fields.get("Description") or ""),
+                     str(fields.get("Comment") or "")]).lower()
+    return next((u for k, u in KIND_UNIT if k in text), None)
+
+
+def _rest_change(a, b, same_mpn):
+    """Value text after the number, a -> b: None when it says the same, 'more' when b only adds detail tokens, 'less'
+    when b drops some and the MPN is the same, else 'other' (an identity change)."""
+    ta, tb = Counter(_value_tokens(a)), Counter(_value_tokens(b))
+    if ta == tb:
+        return None
+    added, dropped = tb - ta, ta - tb
+    if not dropped and all(_detail_token(t) for t in added):
+        return "more"
+    if not added and same_mpn and all(_detail_token(t) for t in dropped):
+        return "less"
+    return "other"
+
+
 def _identity(o, n, out):
     io, inn = o.get("identity") or {}, n.get("identity") or {}
     for k, label in (("mpn", "MPN"), ("manufacturer", "manufacturer")):
@@ -69,20 +133,25 @@ def _identity(o, n, out):
             _chg(out, "cosmetic", "identity", k, a, b, f"{label} written {_f(a)} -> {_f(b)} (same part)")
     va, vb = io.get("value") or "", inn.get("value") or ""
     na, nb = io.get("value_num"), inn.get("value_num")
-    ua, ub, ra, rb = io.get("value_unit"), inn.get("value_unit"), io.get("value_rest"), inn.get("value_rest")
+    ua, ub = io.get("value_unit"), inn.get("value_unit")
+    mpn = (io.get("mpn") or "").strip().upper()
+    same_mpn = bool(mpn) and mpn == (inn.get("mpn") or "").strip().upper()
+    rest = _rest_change(va, vb, same_mpn) if na is not None and nb is not None else None
     if na is not None and nb is not None:
         if abs(na - nb) > 1e-9 * max(abs(na), abs(nb), 1e-30):
             _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)}")
-        elif ua and ub and ua != ub:          # 100nF -> 100nH; 100n -> 100nF only says the unit
+        elif ua and ub and ua != ub:          # 100nF -> 100nH
             _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)} (another unit)")
-        elif ra is not None and rb is not None and ra != rb:    # a rating or tolerance after the value: 50V -> 6.3V
-            mpn = (io.get("mpn") or "").strip().upper()
-            if not ra or not rb and mpn and mpn == (inn.get("mpn") or "").strip().upper():
-                _chg(out, "cosmetic", "identity", "value", va, vb,     # 10k -> 10k 1%: more said, nothing contradicted
-                     f"value written {_f(va)} -> {_f(vb)} (the same value, " +
-                     ("more detail)" if not ra else "the MPN is the same)"))
-            else:
-                _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)}")
+        elif ub and not ua and ub != (_kind_unit(n) or _kind_unit(o)):
+            # 100n -> 100nF only says the unit of a capacitor; 10 -> 10V on a resistor (or a part of unknown kind) is
+            # another value
+            _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)} (a unit "
+                 "that is not this part's)")
+        elif rest == "other":                 # a rating after the value changed (50V -> 6.3V), or DNF / ||1k / 0R
+            _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)}")
+        elif rest:                            # 10k -> 10k 1%: more said, nothing contradicted
+            _chg(out, "cosmetic", "identity", "value", va, vb, f"value written {_f(va)} -> {_f(vb)} (the same value, " +
+                 ("more detail)" if rest == "more" else "the MPN is the same)"))
         elif va != vb:
             _chg(out, "cosmetic", "identity", "value", va, vb, f"value written {_f(va)} -> {_f(vb)} (the same value)")
     elif va.strip().upper() != vb.strip().upper():
