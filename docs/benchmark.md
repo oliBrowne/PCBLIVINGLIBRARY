@@ -3,6 +3,8 @@
 How often does ecadlib build a part right when it has to read the datasheet itself? This page gives the measured
 answer on 110 real parts, how it was measured, what counts as a miss, and how to run it again. It is the live
 counterpart of the accuracy gate (`ecadlib eval gate`, 328/331 on a committed synthetic replay pack, run on every PR).
+The gate is a check of the generator and the pipeline: it says the footprint is right *when the reader's answer is
+right*. This page measures the whole thing, reading included: how often ecadlib reads a real datasheet correctly.
 
 **Run of 2026-10-18** (set kicad-v1, Claude Opus 5.5, sources `standard,datasheet`, code at PR #102):
 
@@ -112,11 +114,42 @@ ecadlib eval run --set kicad-v1 --limit 110 --sources standard,datasheet \
 ecadlib eval run --set kicad-v1 --limit 110 --sources standard,datasheet --cached-only -o bench/run
                                                          # free: re-score the live run's folder in place
 ecadlib eval compare bench/run bench/replay              # what changed, per family and per part
+ecadlib eval pin bench/run                               # pin the PDFs read (URL + SHA-256) in kicad-v1.pins.json
+ecadlib eval publish bench/run -o docs/benchmark-results.md   # the results page: headline, failures by type
 ```
 
-The run needs an Anthropic API key (`ecadlib keys`); `[datasheet] max_cost_usd` caps what one run may spend, and
-the estimate is shown before anything is sent. `report.md` and `report.json` in the out folder have every part's
-result, the reason for each miss, and the cost.
+The run needs an Anthropic API key (`ecadlib keys`); `[datasheet] max_cost_usd` caps what one run may spend (don't
+pass `--yes`, which skips the cap), and the estimate is shown before anything is sent. `report.md` and `report.json`
+in the out folder have every part's result, the reason for each miss, and the cost. Any model works: `--model`, or
+`--provider` and `--base-url` for another provider.
+
+Each run records, per part: the datasheet it read (URL, SHA-256, pages sent), the reader's prompt version (a hash of
+its schema and instructions, so two runs are comparable only when it matches), the model, tokens, cost and time.
+With a pins file (`kicad-v1.pins.json`, or `--pins`), a part whose maker has since changed the PDF is flagged
+`CHANGED since pinned`.
+
+Every failed part gets one failure type:
+
+| Type | What it means |
+|---|---|
+| no_pdf | no datasheet PDF (no link, a dead link, or the maker's site refused the download) |
+| not_read | not read in this run (`--cached-only`, or waiting for the cost OK) |
+| blank_dimension | the read left a needed dimension blank: held, nothing built |
+| held_cross_check | held: the cross-check's second read disagreed |
+| no_footprint | no footprint for another reason |
+| wrong_unit | a unit mistake (mil or inch read as mm, or the reverse) |
+| wrong_variant | the wrong package or variant (pin count or pitch differs) |
+| mirrored | pad 1 in the wrong place: mirrored or rotated |
+| misread_table | a pad table misread (pads in the wrong place or size) |
+| thermal_pad | only the exposed or thermal pad differs |
+| misread_dimension | a dimension misread or made up (pads or courtyard off); the part's review page tells which |
+| maker_land | follows the datasheet's own land pattern, which KiCad's differs from |
+| symbol | the footprint is right; the symbol's pins or names differ |
+
+The **Accuracy benchmark (live)** workflow in GitHub Actions runs the same thing on demand (Actions tab, choose the
+model, the part count and a cost cap; it needs the `ANTHROPIC_API_KEY` repository secret). It has no schedule: a
+weekly run costs money each week, so it is switched on only when wanted. The results page is in the run summary
+and its artifact.
 
 ## Next steps toward 97 %
 
