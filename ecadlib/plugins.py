@@ -183,8 +183,17 @@ def run_exporter(name, plan, out_dir, rules=None, eps=None):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     rules = RU.resolve(rules, Path(plan).parent if not isinstance(plan, list) else out_dir)
-    paths = ex[name][0](items, out_dir, rules) or []
-    return [str(p) for p in paths]
+    fn = ex[name][0]
+    try:
+        paths = fn(items, out_dir, rules) or []
+        return [str(p) for p in paths]
+    except Exception as e:                     # the plugin's bug, not ecadlib's: name it (never fatal, never "report it")
+        raise PluginError(f"exporter {name} (plugin {getattr(fn, '__module__', '?')}) failed: {type(e).__name__}: {e}; "
+                          "this is a problem in that plugin, tell its author") from e
+
+
+class PluginError(ValueError):
+    """An installed plugin raised: reported as that plugin's failure."""
 
 
 def describe(eps_providers=None, eps_exporters=None):

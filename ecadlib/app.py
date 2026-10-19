@@ -105,11 +105,18 @@ class Workspace:
         uploads/<stamp>-<rand>/<name>), plus a short hash of the full path for any other location, so
         /projA/BOM.csv and /projB/BOM.csv (or two uploads called BOM.csv) don't share (and overwrite) one triage."""
         bom_path = Path(bom_path).resolve()
+        h = hashlib.sha1(str(bom_path).encode()).hexdigest()[:8]
         if bom_path.parent == self.root / "uploads":
+            # a flat uploads/<stem>_<dir>.csv would share uploads/<dir>/<stem>.*'s key (and its librarian folder,
+            # plan and sign-offs): uploads now always go in a folder, so the flat file gives way and gets a hash
+            for d in (bom_path.parent.iterdir() if "_" in bom_path.stem else ()):
+                if (d.is_dir() and bom_path.stem.endswith(f"_{d.name}")
+                        and any(f.is_file() and f.stem == bom_path.stem[:-len(d.name) - 1] for f in d.iterdir())):
+                    return f"{bom_path.stem}_{h}"
             return bom_path.stem
         if bom_path.parent.parent == self.root / "uploads":
             return f"{bom_path.stem}_{bom_path.parent.name}"
-        return f"{bom_path.stem}_{hashlib.sha1(str(bom_path).encode()).hexdigest()[:8]}"
+        return f"{bom_path.stem}_{h}"
 
     def _triage_csv(self, bom_path):
         return self.root / "reports" / f"triage_{self._key(bom_path)}.csv"
@@ -610,14 +617,15 @@ class Workspace:
 
     _CID = re.compile(r"(kicad|local):[^:/\\\0]+:[^:/\\\0]+|spec:[^:/\\\0]+")
 
-    def choose_part(self, bom, part, kind, candidate_id, pin_map=None, user=None):
+    def choose_part(self, bom, part, kind, candidate_id, pin_map=None, user=None, approve=True):
         """Use a candidate (kicad:Lib:Name, local:Lib:Name or spec:Name) for one half of a plan item, convert it into
         the librarian's models folder, then re-run the release check and rewrite the review / release-check reports.
-        pin_map {symbol pin: pad} remaps pin numbers. Returns the librarian summary plus `chosen`."""
+        pin_map {symbol pin: pad} remaps pin numbers. Returns the librarian summary plus `chosen`. approve=False: the
+        choice is not an approval of a change to a released part (resolve.choose), which is then held."""
         with self._plan_lock():
-            return self._choose_part(bom, part, kind, candidate_id, pin_map, user)
+            return self._choose_part(bom, part, kind, candidate_id, pin_map, user, approve)
 
-    def _choose_part(self, bom, part, kind, candidate_id, pin_map=None, user=None):
+    def _choose_part(self, bom, part, kind, candidate_id, pin_map=None, user=None, approve=True):
         from . import resolve as R
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
@@ -630,7 +638,7 @@ class Workspace:
             raise ValueError("pin_map must map symbol pin numbers to pad numbers, e.g. {\"S1\": \"SH\"}")
         try:
             chosen = R.choose(plan_f, part, kind, candidate_id, src=self._resolve_sources(), pin_map=pin_map or None,
-                              user=user)
+                              user=user, approve=approve)
         except FileNotFoundError as e:
             raise ValueError(str(e)) from e
         out = self._release_check(bom)    # the whole plan again (lock already held): reports, statuses, approvals
@@ -974,7 +982,7 @@ class Workspace:
 
     def rules_info(self):
         f = self.rules_in_use()
-        return {"file": self._label(f or self.rules_file()), "exists": bool(f), "text": f.read_text(encoding="utf-8") if f else "",
+        return {"file": self._label(f or self.rules_file()), "exists": bool(f), "text": f.read_text(encoding="utf-8-sig") if f else "",
                 "rules": RU.effective(self.rules()), "defaults": RU.DEFAULTS}
 
     def _rules_sources(self):
@@ -1181,6 +1189,18 @@ class Workspace:
             item["symbol"] = str(self.inside(symbol))
         if datasheet and not str(datasheet).startswith("http"):
             item["datasheet"] = str(self.inside(datasheet))
+        if self.offline:                               # --offline: no download and no model call
+            render_only = True
+            ds = item.get("datasheet")
+            if isinstance(ds, str) and ds.startswith("http"):
+                from . import datasheet as D
+                try:
+                    D.PdfStore(self.root / "http_cache", offline=True).fetch(ds, "visual_check")
+                except D.DatasheetError:
+                    raise ValueError(f"offline: the datasheet {ds[:120]} was not downloaded before; run without "
+                                     "--offline or pass a datasheet PDF in the workspace")
+                item["datasheet"] = str(self.root / "http_cache" / "datasheets"
+                                        / (hashlib.sha256(ds.encode()).hexdigest()[:24] + ".pdf"))
         out = self.root / "agent" / "proofs" / self.safe_name(item["part"])
         pr = VC.prove(item, self.root, self.rules(), client=client, out_dir=out, render_only=render_only)
         pr["proof_file"] = self.rel(VC.write_proof(pr, out / "proof.json"))

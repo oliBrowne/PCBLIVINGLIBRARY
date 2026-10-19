@@ -59,7 +59,7 @@
 `ecadlib <command> -h` shows that command's options. -q / --quiet prints only the outcome, -v / --verbose every
 detail; colour only on a terminal (NO_COLOR=1 or ECADLIB_COLOR=never turns it off). --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
 one-line error. ECADLIB_LIB, ECADLIB_WORKSPACE and ECADLIB_CONFIG are defaults for --lib, --workspace and the rules file."""
-import importlib, sys
+import importlib, os, sys
 
 COMMANDS = {
     "setup": ("ecadlib.easy_setup", "open the setup page: AI model and key, Altium / KiCad, folders, add ecadlib to Altium and KiCad"),
@@ -141,6 +141,19 @@ for _cmd, _what in (("agent", "the library agent"), ("agent-watch", "the library
 
 
 def main(argv=None):
+    try:
+        code = _main(argv)
+        sys.stdout.flush()                                   # a closed pipe shows up here for buffered output
+        return code
+    except BrokenPipeError:                                  # `ecadlib ... | head`: the reader left; say nothing
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())   # no second error at exit
+        except (OSError, ValueError, AttributeError):
+            pass
+        return 141 if os.name != "nt" else 1                 # 128 + SIGPIPE, as a shell tool would
+
+
+def _main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     from .cliutil import debug_wanted, env_defaults, report
     debug, argv = debug_wanted(argv)
@@ -189,7 +202,7 @@ def main(argv=None):
         print(f"ecadlib {argv[0]}: interrupted", file=sys.stderr)
         return 130
     except Exception as e:                                   # one line + hint; --debug / ECADLIB_DEBUG=1: the traceback
-        if debug:
+        if debug or isinstance(e, BrokenPipeError):
             raise
         return report(argv[0], e, sys.stderr)
 

@@ -408,12 +408,13 @@ def _write(item, kind, cid, src, base, pin_map=None):
     return rec
 
 
-def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, user=None):
+def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, user=None, approve=True):
     """Use candidate_id for one half of a plan item, write plan.json (and librarian_state.json when present), re-run
     release_check on that item. Returns {name, status, hold_reasons, warnings, file, source, notes, pins_vs_pads}.
     A released part goes through change control (#105): the choice is `user`'s approval (default: approvals.identity),
     so it is released as a new revision, or held for a second person under [change] approvers = 2. Parts sharing the
-    overwritten file go with it. The result's "change" lists what the gate did."""
+    overwritten file go with it. The result's "change" lists what the gate did. approve=False (an MCP agent that named
+    no person): the choice is nobody's approval, so a change to a released part is held for a person to approve."""
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {KINDS}")
     plan, src = Path(plan), src or Sources()
@@ -435,7 +436,7 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
     rewritten = {n for k, _, _ in done for n in shared_with(k)}      # every part whose model file this choice overwrites
     notes = []
     from . import approvals as AP, change_gate as CG
-    gate = CG.Guard(plan.parent, "resolve", base=base, chosen_by=AP.identity(user, cwd=plan.parent))
+    gate = CG.Guard(plan.parent, "resolve", base=base, chosen_by=AP.identity(user, cwd=plan.parent) if approve else None)
     gate.begin(items)
     for k, cid, pm in done:
         rec = _write(it, k, cid, src, base, pm)

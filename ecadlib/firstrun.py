@@ -193,26 +193,42 @@ def config_defaults(cmd, argv, environ=None, start="."):
         return argv, notes
     try:
         f = RU.find(start)
-        if not f:
-            return argv, notes
-        raw = RU.parse_text(f.read_text(encoding="utf-8"), f.name)
+        raw = RU.parse_text(f.read_text(encoding="utf-8-sig"), f.name) if f else {}
         st = raw.get("setup") or {}
     except Exception:
-        return argv, notes
+        f, st = None, {}
     for var, flag, subs in wanted:
         vals = st.get("libs") if flag == "--lib" else [st.get("workspace")] if st.get("workspace") else []
         vals = [v for v in (vals or []) if isinstance(v, str) and v.strip()]
+        where = f"[setup] in {f}"
+        if vals:
+            vals = [str(_rel_to(v, f)) for v in vals]
+        elif flag == "--workspace":
+            vals, where = _settings_workspace(start, environ), "the setup page (settings.json)"
         if not vals:
             continue
-        extra = [x for v in vals for x in (flag, str(_rel_to(v, f)))]
+        extra = [x for v in vals for x in (flag, v)]
         if subs is None:
             argv = extra + argv
         elif _subcommand(argv) in subs:
             argv = argv + extra
         else:
             continue
-        notes.append(f"{flag} from [setup] in {f}")
+        notes.append(f"{flag} from {where}")
     return argv, notes
+
+
+def _settings_workspace(start=".", environ=None):
+    """[the workspace chosen on the setup page / desktop app] (settings.json), the last default for --workspace, when
+    it is a folder and there is no ./ecadlib_workspace here (that one keeps winning, as before); else []."""
+    try:
+        w = UC.load_settings(environ).get("workspace")
+        if isinstance(w, str) and w.strip() and Path(w).expanduser().is_dir() \
+                and not (Path(start) / "ecadlib_workspace").exists():
+            return [str(Path(w).expanduser())]
+    except Exception:
+        pass
+    return []
 
 
 # ------------------------------------------------------------------ checks before a command runs
@@ -269,6 +285,9 @@ def preflight(cmd, argv, environ=None):
             if not Path(l).expanduser().exists():
                 return (f"library folder not found: {l}",
                         "fix --lib (or ECADLIB_LIB, or [setup] libs in ecadlib.toml); `ecadlib doctor` checks every path")
+            if not Path(l).expanduser().is_dir():     # a .kicad_sym itself would index nothing, silently
+                return (f"--lib must be a library folder, not a file: {l}",
+                        f"give the folder it is in: --lib {Path(l).expanduser().parent}")
     if cmd in OUT_CHECKED:
         flags = ["--to"] if cmd == "dblib-sync" else ["-o", "--out"]
         for o in _values(argv, flags + (["--out"] if cmd == "dblib-sync" else [])):
@@ -396,7 +415,16 @@ def demo_main(argv=None):
             tool = (RU.load().get("setup") or {}).get("tool") or "both"
         except RU.RulesError:
             tool = "both"
-    say = (lambda *x: None) if a.json else print
+    from . import term as TM
+    if a.bom:                                   # checked before the workspace folders are made
+        p = Path(a.bom).expanduser()
+        why = ("not found" if not p.exists() else "is a folder, not a BOM file" if not p.is_file()
+               else "is empty" if not p.read_bytes().strip() else "")
+        if why:
+            print(f"ecadlib demo: {a.bom} {why}\n  hint: give a BOM file (CSV, TSV or XLSX), or leave out --bom for "
+                  "the bundled sample", file=sys.stderr)
+            return 2
+    say = (lambda *x: None) if a.json or TM.VERBOSITY < 0 else print   # -q: only the outcome
     say(f"ecadlib demo: building a small library in {a.out}/ from "
         f"{'the bundled sample BOM' if not a.bom else a.bom}, offline")
     ws = Workspace(a.out, offline=True)
