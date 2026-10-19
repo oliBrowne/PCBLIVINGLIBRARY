@@ -62,6 +62,15 @@ def test_generator_footprints_match_both_ways():
 
 
 # ---------------------------------------------------------------- broken files it must catch
+def _drop_paste_window(f):
+    """Remove the last Top Paste window: a rounded one is a region, a square one a fill."""
+    k = max((i for i, r in enumerate(f["regions"]) if r[1] == AL.TOP_PASTE), default=None)
+    if k is not None:
+        del f["regions"][k]
+    else:
+        f["fills"] = f["fills"][:-1]
+
+
 def test_broken_pcblib_is_caught_field_by_field():
     spec = _spec("DFN-8-1EP_3x3mm_P0.5mm_EP1.66x2.38mm")
     text, _ = F.build(spec)
@@ -74,7 +83,7 @@ def test_broken_pcblib_is_caught_field_by_field():
         "mask margin": lambda f: f["pads"][4].update(mask=0.05),
         "corner radius": lambda f: f["pads"][0].update(corner=10),
         "shape": lambda f: f["pads"][0].update(shape="rect"),
-        "paste/mask windows": lambda f: f.update(fills=f["fills"][:-1]),
+        "paste/mask windows": lambda f: _drop_paste_window(f),        # rounded windows are regions (EXP-10)
         "extent": lambda f: f.update(tracks=[t for t in f["tracks"] if t[5] != AL.MECH15][:len(f["tracks"])]
                                      + [(t[0] - 0.1, *t[1:]) for t in f["tracks"] if t[5] == AL.MECH15]),
         "missing": lambda f: f.update(pads=f["pads"][:-1]),
@@ -88,7 +97,7 @@ def test_broken_pcblib_is_caught_field_by_field():
             got = _errors(P.footprint_pair(text, _write(d, bad)))
             assert any(x["field"] == field for x in got), (field, [x["msg"] for x in got])
         bad = copy.deepcopy(fp)                  # the exposed pad's paste windows: one window gone shows on the EP too
-        bad["fills"] = bad["fills"][:-1]
+        _drop_paste_window(bad)
         got = _errors(P.footprint_pair(text, _write(d, bad)))
         assert any(x["what"] == "exposed pad" and "3 windows" in x["msg"] for x in got), [x["msg"] for x in got]
         # a readable per-field message

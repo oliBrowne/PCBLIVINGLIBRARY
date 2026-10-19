@@ -501,9 +501,14 @@ def _pad_core(fp, p, notes, num, kind, shape, x, y, w, h, rot, layers):
         wl = _window_layers(layers)
         if not wl:
             _note(notes, f"pad {num}: no copper, paste or mask on {layers}; dropped"); return
+        rr = sexpr.first(p, "roundrect_rratio")
+        rad = min(float(rr[1]), 0.5) * min(w, h) if rr and shape == "roundrect" else 0.0
         for layer in wl:
             if shape in ("circle", "oval"):
                 fp["regions"].append((_round_pts(x, y, w, h, rot), layer))
+            elif rad > 0 and rot % 90 == 0:   # a rounded window keeps its corners, so its area (EXP-10)
+                fw, fh = (h, w) if rot % 180 else (w, h)
+                fp["regions"].append((AL.round_rect(x, y, fw, fh, rad), layer))
             elif rot % 180 == 0 and layer in (AL.TOP_PASTE, AL.BOTTOM_PASTE):
                 fp["fills"].append((x - w / 2, y - h / 2, x + w / 2, y + h / 2, layer))
             else:

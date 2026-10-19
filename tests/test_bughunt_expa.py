@@ -379,6 +379,35 @@ def test_exp79_duplicate_workbook_rows_are_reported(tmp_path):
     assert len(S.read_tables(lib / "ecadlib.xlsx")["Resistors"][1]) == 1
 
 # ---------------------------------------------------------------- altium_lib
+def test_exp10_rounded_paste_windows_keep_their_corners():
+    import math
+    from ecadlib import footprint_gen as F, kicad_export as KE, parity as P, sexpr
+    spec = json.loads((ROOT / "ecadlib/package_specs/QFN-16-1EP_3x3mm_P0.5mm_EP1.75x1.75mm.json").read_text())
+    txt, _ = F.build(spec)
+    kicad = 0.0
+    for p in sexpr.find(sexpr.parse(txt), "pad"):
+        if (sexpr.first(p, "layers") or [None])[1:] == ["F.Paste"]:
+            w, h = (float(v) for v in sexpr.first(p, "size")[1:3])
+            r = float((sexpr.first(p, "roundrect_rratio") or [0, 0])[1]) * min(w, h) if p[3] == "roundrect" else 0
+            kicad += w * h - (4 - math.pi) * r * r
+    fp, _ = AL.footprint_from_spec(spec)
+    area = lambda pts: abs(sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(pts, pts[1:] + pts[:1]))) / 2
+    alt = sum(area(pts) for pts, layer, *_ in fp["regions"] if layer == AL.TOP_PASTE)
+    alt += sum((x2 - x1) * (y2 - y1) for x1, y1, x2, y2, layer in fp["fills"] if layer == AL.TOP_PASTE)
+    assert kicad > 0 and abs(alt - kicad) / kicad < 0.001, (kicad, alt)       # was 5.7 % more paste (square fills)
+    lib = Path(tempfile.mkdtemp()) / "q.PcbLib"
+    AL.write_pcblib(lib, [fp])
+    assert not [d for d in P.footprint_pair(txt, AL.read_pcblib(lib)[0]) if d["level"] == "error"]
+    back = KE.footprint_from_pcblib(lib, None, [])                            # and back to KiCad: still rounded
+    assert back.count("smd roundrect") >= 4 + 16 and "roundrect_rratio 0.25" in back, back
+    square = copy.deepcopy(fp)                                                # parity now sees square windows
+    square["fills"] += [(min(x for x, _ in q), min(y for _, y in q), max(x for x, _ in q), max(y for _, y in q),
+                         AL.TOP_PASTE) for q, layer, *_ in fp["regions"] if layer == AL.TOP_PASTE]
+    square["regions"] = [r for r in fp["regions"] if r[1] != AL.TOP_PASTE]
+    AL.write_pcblib(lib, [square])
+    got = [d["msg"] for d in P.footprint_pair(txt, AL.read_pcblib(lib)[0]) if d["what"] == "exposed pad"]
+    assert got and "61.4" in got[0] and "64.9" in got[0], got
+
 def test_exp16_line_break_in_a_name_is_refused():
     for bad in ("R_0603\r\nName=GHOST", "RES\nX", "TAB\tNAME"):
         try:
