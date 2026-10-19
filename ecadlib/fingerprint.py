@@ -575,7 +575,7 @@ def _with_kicad_pads(fp, out):
 
 def _with_kicad_land(fp, out):
     kfoot = (fp.get("kicad") or {}).get("footprint")
-    land = kfoot and {k: kfoot[k] for k in out if k in kfoot}
+    land = kfoot and geometry({"footprint": kfoot})     # the same reduction as the .PcbLib's land
     if land and land != out:
         out = dict(out, kicad=land)
     return out
