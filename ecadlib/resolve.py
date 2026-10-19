@@ -560,12 +560,12 @@ def main(argv=None):
         r = choose(a.plan, a.part, a.kind, a.id, src=src(), pin_map=_pin_map(a.map))
     # change control: the choice of a released part may be held (refused by the release check, or waiting for a
     # second person); the released version then stays, so the part is not "now ready" with the choice
-    held = next((c for c in r.get("change") or [] if c["part"] == a.part and c["action"] == "hold"), None)
+    gated = next((c for c in r.get("change") or [] if c["part"] == a.part and c["action"] == "hold"), None)
     if emit:
         emit(r)
-    elif held:
-        print(f"{a.part}: {a.kind} <- {r['source']}: held, not applied; the released revision r{held['revision']} stays "
-              f"({held['summary']})")
+    elif gated:
+        print(f"{a.part}: {a.kind} <- {r['source']}: held, not applied; the released revision r{gated['revision']} stays "
+              f"({gated['summary']})")
         for n in r["notes"]:
             print(f"    note: {n}")
     else:
@@ -574,7 +574,7 @@ def main(argv=None):
             print(f"    held: {e['text']}  next: {e['fix']}")
         for n in r["notes"]:
             print(f"    note: {n}")
-    return 0 if r["status"] == "ready" and not held else 2
+    return 0 if r["status"] == "ready" and not gated else 2
 
 
 if __name__ == "__main__":

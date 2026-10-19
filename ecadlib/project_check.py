@@ -376,8 +376,10 @@ def check_altium(path, client, ws, library=None, rules=None):
     groups, dblib = {}, {}
     for c in proj["components"]:
         if not (c.get("vault_guid") or c.get("item_guid")) or not c.get("revision_guid"):
-            key = (c.get("design_item_id") or c.get("libref") or "", c.get("source_library") or "", c.get("database_table") or "")
-            dblib.setdefault(key, []).append(c.get("designator") or "")
+            src = c.get("source_library") or ""
+            if src.lower().endswith((".dblib", ".svndblib")) or c.get("database_table"):   # a DbLib's part: listed
+                key = (c.get("design_item_id") or c.get("libref") or "", src, c.get("database_table") or "")
+                dblib.setdefault(key, []).append(c.get("designator") or "")
             continue
         k = (_base_id(c.get("design_item_id")) or c.get("libref") or "", _guid(c["revision_guid"]))
         groups.setdefault(k, []).append(c.get("designator") or "")
@@ -421,13 +423,10 @@ def check_altium(path, client, ws, library=None, rules=None):
         rows.append(_row("component", name, refs, changes, "out of date", why, pol,
                          action=None if listed else pol["unlisted"], placed=rev, latest=latest))
     for (did, src, table), refs in sorted(dblib.items()):   # no workspace revision to compare: said, never skipped
-        from_db = src.lower().endswith((".dblib", ".svndblib")) or table or not src
-        where = (f"placed from DbLib {src}" if src else "placed from a DbLib or a file library") if from_db else \
-            f"placed from {src}"
         rows.append(_row("component", did or "(no Design Item ID)", sorted(r for r in refs if r), state="not checked",
-                         why=where + (f" (table {table})" if table else "") + ": it carries no workspace revision, so "
-                         "this check cannot compare it" + (" (the DbLib sync publishes only released revisions)"
-                                                            if from_db else "")))
+                         why=f"placed from DbLib {src or '?'}" + (f" (table {table})" if table else "") +
+                         ": it carries no workspace revision, so this check cannot compare it (the DbLib sync "
+                         "publishes only released revisions)"))
     counts = {}
     for r in rows:
         counts[r["state"]] = counts.get(r["state"], 0) + 1
