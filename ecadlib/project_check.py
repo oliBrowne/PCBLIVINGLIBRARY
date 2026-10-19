@@ -318,11 +318,12 @@ def _footprint_field(cached, chain, libs, inst=None, board=None, near=None):
         for what, got in (("its Footprint property", inst or {}), ("the board", board or {})):
             odd = {}
             for ref, fp in sorted(got.items(), key=lambda x: _natkey(x[0])):
-                if fp and libs.fp_key(fp, near) != kb:
-                    odd.setdefault(fp, []).append(ref)
+                if not fp.strip() or libs.fp_key(fp, near) != kb:     # an empty one places no footprint at all
+                    odd.setdefault(fp.strip(), []).append(ref)
             for fp, refs in odd.items():
+                places = f"{CD._f(fp)} ({what})" if fp else f"no footprint ({what} is empty)"
                 out.append({"class": "geometry-major", "area": "symbol", "what": "footprint", "old": fp, "new": b,
-                            "text": f"{', '.join(refs)} {'place' if len(refs) > 1 else 'places'} {CD._f(fp)} ({what}), "
+                            "text": f"{', '.join(refs)} {'place' if len(refs) > 1 else 'places'} {places}, "
                                     f"but the library part's footprint is {CD._f(b)}"})
     if a != b and libs.fp_key(a, near) != libs.fp_key(b, near):
         out.append({"class": "geometry-major", "area": "symbol", "what": "footprint", "old": a, "new": b,
