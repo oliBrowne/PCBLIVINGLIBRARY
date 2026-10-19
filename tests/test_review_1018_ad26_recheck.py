@@ -159,7 +159,7 @@ def test_install_scripts_are_cp1252(tmp_path):
     src = tmp_path / "src"
     (src / "PcbLib").mkdir(parents=True)
     AL.write_pcblib(src / "PcbLib" / "SOIC8.PcbLib", [_soic8()])
-    rep = PKG.build(src, tmp_path / "pkg", "Bibliothèque", log=lambda *a: None)
+    rep = PKG.build(src, tmp_path / "pkg", "Bibliothèque", log=lambda *a: None, unchecked=True)   # no library
     pkg = tmp_path / "pkg"
     prj = (pkg / "Bibliothèque_Install.PrjScr").read_bytes()
     assert b"DocumentPath=Biblioth\xe8que_Install.pas\r\n" in prj, prj
@@ -169,7 +169,7 @@ def test_install_scripts_are_cp1252(tmp_path):
 
     bad = tmp_path / "bad"
     try:
-        PKG.build(src, bad, "Библиотека", log=lambda *a: None)
+        PKG.build(src, bad, "Библиотека", log=lambda *a: None, unchecked=True)
     except ValueError as e:
         assert "Windows-1252" in str(e) and "--name" in str(e), e
     else:
