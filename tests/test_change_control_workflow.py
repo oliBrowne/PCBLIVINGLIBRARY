@@ -394,8 +394,10 @@ def test_altium_check_reads_pulled_revisions_and_fails_on_unlisted_changes():
                "detail": {"action": "release", "a365_revision": "{AAAA-1}"}})
     it["a365"] = {"revision": "AAAA-2"}                 # a365 pull brings the workspace's revision 2: 0402 now
     to_0402(lib, it)
-    g = CG.Guard(lib, "a365-pull")
-    [row] = g.settle(items)
+    # `a365 pull` is parked (its writer left WRITERS), but ledgers it wrote keep these lines: record one the way it did
+    with mock.patch.dict(CG.WRITERS, {"a365-pull": {"mode": "observe", "module": "ecadlib.a365_sync", "what": "a365 pull"}}):
+        g = CG.Guard(lib, "a365-pull")
+        [row] = g.settle(items)
     assert row["revision"] == 2 and LG.Ledger(lib).head("RES-0603-10k")["a365_revision"] == "AAAA-2", row
     comps = [{"designator": "R1", "design_item_id": "RES-0603-10k", "vault_guid": "v", "item_guid": "i", "revision_guid": "{AAAA-1}"},
              {"designator": "U5", "design_item_id": "TPS7A02-33", "vault_guid": "v", "item_guid": "k", "revision_guid": "X1"},

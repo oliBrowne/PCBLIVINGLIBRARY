@@ -396,7 +396,7 @@ def test_bash_completion_really_completes():
                  't ecadlib completion z\n')
         r = subprocess.run([bash, "--norc", "-c", probe], capture_output=True, text=True, timeout=60)
         assert r.returncode == 0, r.stderr
-        assert r.stdout.splitlines() == ["triage", "approve diff fingerprint history reject revert show status", "A B C", "--offline", "zsh"], r.stdout
+        assert r.stdout.splitlines() == ["triage", "adopt approve diff fingerprint history reject revert show status", "A B C", "--offline", "zsh"], r.stdout
 
 
 if __name__ == "__main__":

@@ -190,7 +190,7 @@ ecadlib project check board.PrjPcb --workspace https://acme.365.altium.com --lib
 - **Altium out-of-date list.** Components placed from Altium 365 record the revision they were placed at.
   `project check` asks the workspace for each component's current revision and lists the out-of-date ones. With
   `--library`, it also lists the classified changes between the two revisions when the ledger records both, whether
-  ecadlib pushed them (`altium365 push`) or pulled them (`a365 pull`), and the `[change]` policy decides. An
+  ecadlib pushed them (`altium365 push`) or an older ecadlib pulled them (`a365 pull`, now parked), and the `[change]` policy decides. An
   out-of-date component whose changes cannot be listed gets the `unlisted` action: by default it is held and the
   exit code is 1. A name such as `TPS7A02-33` is looked up as it is. Only when the workspace has no component of that
   name is a trailing `-<number>` read as an Altium revision number (`CMP-003-000000-1`, `CAP-1`), and the row says so.
