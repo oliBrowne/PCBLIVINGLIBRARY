@@ -178,11 +178,8 @@ class OpenAICompatClient:
             self._log(rec)
             if not err.retryable or attempt == self.retries:
                 raise err
-            try:
-                wait = float(retry_after) if retry_after is not None else None
-            except ValueError:
-                wait = None
-            wait = min(self.max_wait * 5, wait) if wait is not None else min(self.max_wait, self.backoff * 2 ** attempt + random.uniform(0, 1))
+            from .. import datasheet as D
+            wait = D.retry_wait(retry_after, attempt, self.backoff, self.max_wait)
             if self.say:
                 self.say(f"  model API: {err.args[0][:120]}; retry {attempt + 1}/{self.retries} in {wait:.0f}s")
             self.sleep(wait)

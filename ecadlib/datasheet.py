@@ -236,6 +236,30 @@ def redact(text, key):
     return text
 
 
+def retry_wait(retry_after, attempt, backoff, max_wait):
+    """Seconds to wait before a retry: the server's retry-after when it is a usable number (never negative, NaN or
+    over 5 x max_wait), else exponential backoff with jitter."""
+    try:
+        wait = float(retry_after) if retry_after is not None else None
+    except (TypeError, ValueError):
+        wait = None
+    if wait is None or not math.isfinite(wait) or wait < 0:
+        return min(max_wait, backoff * 2 ** attempt + random.uniform(0, 1))
+    return min(max_wait * 5, wait)
+
+
+def not_sent(e):
+    """A requests error that happened before the request reached the server (no connection was made), so sending it
+    again cannot pay twice. A read timeout or a response cut off mid-body may follow a generation the API bills."""
+    if isinstance(e, requests.exceptions.ConnectTimeout):
+        return True
+    if not isinstance(e, requests.exceptions.ConnectionError) or isinstance(e, requests.exceptions.SSLError):
+        return False
+    import urllib3.exceptions as U
+    why = getattr(e.args[0], "reason", None) if e.args else None
+    return isinstance(why, (U.NewConnectionError, U.ConnectTimeoutError))
+
+
 class Client:
     """The Claude API over requests: retries 408/409/429/5xx/529 and network errors with exponential backoff
     (honouring retry-after), logs every request as one JSON line without the key or the PDF bytes."""
@@ -264,6 +288,7 @@ class Client:
         if body is not None:
             h["content-type"] = "application/json"
         h["x-api-key"] = self.key
+        paid = method == "POST" and url.split("?")[0].endswith("/v1/messages")   # a generation the API bills
         for attempt in range(self.retries + 1):
             t0, rec = time.time(), {"t": datetime.datetime.now().isoformat(timespec="seconds"), "method": method,
                                     "url": url, "attempt": attempt + 1, "body": _summary(body) if body is not None else None}
@@ -276,7 +301,10 @@ class Client:
                     r = (requests.post(url, headers=h, json=body, timeout=self.timeout) if method == "POST"
                          else requests.get(url, headers=h, timeout=self.timeout))
             except requests.RequestException as e:
-                err = APIError(f"API request failed: {type(e).__name__}: {redact(e, self.key)[:200]}", retryable=retry_on is None)
+                again = retry_on is None and (not paid or not_sent(e))
+                err = APIError(f"API request failed: {type(e).__name__}: {redact(e, self.key)[:200]}"
+                               + ("" if again or not paid else " (the request may have reached the API and been billed, "
+                                  "so it is not sent again; run again to retry)"), retryable=again)
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))
                 retry_after = None
             else:
@@ -314,11 +342,7 @@ class Client:
                 if err.retryable and attempt:
                     err.args = (f"{err.args[0]} (gave up after {attempt + 1} attempts)",)
                 raise err
-            try:
-                wait = float(retry_after) if retry_after is not None else None
-            except ValueError:
-                wait = None
-            wait = min(self.max_wait * 5, wait) if wait is not None else min(self.max_wait, self.backoff * 2 ** attempt + random.uniform(0, 1))
+            wait = retry_wait(retry_after, attempt, self.backoff, self.max_wait)
             if self.say:
                 self.say(f"  datasheet API: {err.args[0][:120]}; retry {attempt + 1}/{self.retries} in {wait:.0f}s")
             self.sleep(wait)

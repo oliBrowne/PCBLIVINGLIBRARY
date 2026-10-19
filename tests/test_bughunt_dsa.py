@@ -3,6 +3,7 @@ Plain functions (tests.run_all, no pytest). Every API is faked; nothing is sent 
 import copy, json
 
 from ecadlib import datasheet as D, ds_route as DR
+from tests.fixtures_lite import lite
 from tests.test_datasheet import GOOD, _complete, message
 
 
@@ -87,3 +88,62 @@ def test_ds23_mislabelled_height_and_terminal_units_are_flagged():
                      (lambda w, d: d["terminal_length"].update(unit="mil"), "terminal_length")):
         res, (kind, why) = _review(mut)
         assert kind == "failed" and any(r.startswith(key) and "implausib" in r for r in why), (key, why)
+
+
+# ---- DS-4: a negative / NaN retry-after header
+class _R:
+    def __init__(self, status, payload, headers=None):
+        self.status_code, self.payload, self.headers = status, payload, headers or {}
+
+    def json(self):
+        return self.payload
+
+
+def _client_with(answers, monkeypatch):
+    sent, slept = [], []
+
+    def post(url, headers=None, json=None, timeout=None):
+        sent.append(url)
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+    monkeypatch.setattr(D.requests, "post", post)
+    return D.Client("sk-test", sleep=slept.append), sent, slept
+
+
+@lite
+def test_ds4_bad_retry_after_is_ignored(monkeypatch):
+    ok = message(_complete(copy.deepcopy(GOOD)))
+    for bad in ("-1", "nan", "inf", "soon"):
+        busy = _R(429, {"type": "error", "error": {"type": "rate_limit_error", "message": "slow"}}, {"retry-after": bad})
+        cl, sent, slept = _client_with([busy, _R(200, ok)], monkeypatch)
+        assert cl.messages({"model": "m"})["id"] == ok["id"]
+        assert len(sent) == 2 and len(slept) == 1 and 0 <= slept[0] <= 60, (bad, slept)
+    assert D.retry_wait("7", 0, 2.0, 60.0) == 7.0 and D.retry_wait("9999", 0, 2.0, 60.0) == 300.0
+
+
+# ---- DS-15: a paid POST /v1/messages that may have reached the API is not sent again
+@lite
+def test_ds15_paid_request_not_resent_after_a_broken_response(monkeypatch):
+    ok = message(_complete(copy.deepcopy(GOOD)))
+    for e in (D.requests.exceptions.ChunkedEncodingError("Connection broken: IncompleteRead"),
+              D.requests.exceptions.ReadTimeout("Read timed out")):
+        cl, sent, _ = _client_with([e, _R(200, ok)], monkeypatch)
+        try:
+            cl.messages({"model": "m"})
+            raise AssertionError("re-sent")
+        except D.APIError as err:
+            assert "not sent again" in str(err) and len(sent) == 1, (err, sent)
+
+
+@lite
+def test_ds15_connection_refused_is_still_retried(monkeypatch):
+    import urllib3.exceptions as U
+    ok = message(_complete(copy.deepcopy(GOOD)))
+    refused = D.requests.exceptions.ConnectionError(
+        U.MaxRetryError(None, "/v1/messages", U.NewConnectionError(None, "Connection refused")))
+    cl, sent, _ = _client_with([refused, D.requests.exceptions.ConnectTimeout("connect"), _R(200, ok)], monkeypatch)
+    assert cl.messages({"model": "m"})["id"] == ok["id"] and len(sent) == 3
+    cl, sent, _ = _client_with([D.requests.exceptions.ReadTimeout("slow"), _R(200, {"input_tokens": 5})], monkeypatch)
+    assert cl.count_tokens({"model": "m"}) == 5 and len(sent) == 2     # free endpoints keep their retries
