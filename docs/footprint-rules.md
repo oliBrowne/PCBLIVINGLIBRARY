@@ -41,6 +41,26 @@ A and C values for each family are in `FILLETS`. Notes:
 * Pad width is also capped at pitch − 0.2 so a solder-mask web remains.
 * Courtyard = max(pads, nominal body) + excess, rounded outward to 0.01.
 
+## Comparing with KiCad's library
+
+`out/footprints/compare_vs_kicad_official.txt` lists our pads and courtyard next to KiCad's official footprint for seven
+parts (`python3 -m ecadlib.footprint_gen compare OURS.kicad_mod KICAD_URL`), and `tests/test_footprints.py` checks 25
+parts the same way. Parts KiCad generates from the same body sizes match exactly. Where they don't, it is because of the
+inputs, not the IPC maths:
+
+* **C_0402_1005Metric** is about 0.03 mm off (pads a little longer and narrower, centres 0.025 mm further in). Our
+  example spec uses a generic datasheet outline (terminal 0.25 ± 0.10, width 0.50 ± 0.05); KiCad builds its 0402
+  capacitor from the IPC-SM-782 sizes (terminal 0.10–0.30, width 0.40–0.60, `capacitor_chip_smaller_0603.yaml`).
+  Built from KiCad's sizes (the standard library in `package_specs/standard.json.gz`) the pads are KiCad's exactly:
+  0.56 × 0.62 at ±0.48, courtyard 1.82 × 0.92. R_0402 already uses KiCad's sizes and matches exactly. 0402 and 0201
+  use the small-chip table (toe 0.20, courtyard 0.15, round-off 0.02), as KiCad does; density B, not a density change.
+* The copy of that file committed before 2026-10-19 showed 0402 pads about 0.1 mm shorter and 0.08 mm further in, and every other
+  part a few hundredths off. That was the first prototype: its small-chip table had a 0.10 toe, it rounded nothing, and
+  its 0402 spec was typed from a resistor datasheet. The generator was corrected (KiCad's tables and round-off) but the
+  file was not regenerated until 2026-10-19.
+* Hand-drawn KiCad parts (SOD, SMA/SMB, SOT-223, tantalum) follow the maker's land and are only close; the tolerances
+  are in `KICAD_OTHER` in the test.
+
 ## What a reviewer checks (KLC)
 
 * Line widths: silk 0.12 (0.10–0.15), fab 0.10, courtyard 0.05.

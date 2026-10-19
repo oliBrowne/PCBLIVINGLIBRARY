@@ -37,7 +37,7 @@ KICAD_GENERATED = {          # built by kicad-footprint-generator from the same 
     "QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm": ((0.875, 0.25, -2.4375, -1.75), (6.26, 6.26)),
 }
 KICAD_OTHER = {              # hand-drawn in KiCad, or KiCad used body sizes we don't have: (pad, courtyard, tolerance)
-    "C_0402_1005Metric": ((0.56, 0.62, -0.48, 0), (1.82, 0.92), 0.05),
+    "C_0402_1005Metric": ((0.56, 0.62, -0.48, 0), (1.82, 0.92), 0.05),   # spec has datasheet sizes, not KiCad's (footprint-rules.md)
     "L_0805_2012Metric": ((0.875, 1.2, -1.0625, 0), (3.5, 1.7), 0.3),
     "MSOP-8_3x3mm_P0.65mm": ((1.625, 0.4, -2.1125, -0.975), (6.36, 3.5), 0.15),
     "DFN-8-1EP_3x3mm_P0.5mm_EP1.66x2.38mm": ((0.7, 0.25, -1.4, -0.75), (4.0, 3.6), 0.3),
