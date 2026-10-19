@@ -211,7 +211,9 @@ def build_lock(out, items, state, bom, libs, sources, cache, providers, gen_step
         if st is None:                                  # an Altium 365 item reused as it is: nothing was built
             continue
         p = {"key": st.get("key"), "built_with": st.get("built_with"),
-             "inputs": st.get("inputs"), "symbol": _half(out, st.get("symbol")), "footprint": _half(out, st.get("footprint"))}
+             "inputs": st.get("inputs"), "symbol": _half(out, st.get("symbol")), "footprint": _half(out, st.get("footprint")),
+             # released when built? (change control: only then do other bytes on disk say a lost ledger knew the part)
+             "status": it.get("status")}
         local = []
         for k in ("symbol", "footprint"):
             for f in _local_inputs((st.get(k) or {}).get("source"), libs):

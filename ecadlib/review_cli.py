@@ -131,8 +131,10 @@ def release_anyway(plan, name, user=None):
         items = json.loads(plan.read_text(encoding="utf-8"))
         it = next(i for i in items if i["name"] == name)
         rows = RC.apply([it], plan.parent, [name])
-        stamp_allow([it], [name], identity(user, cwd=plan.parent))
+        who = identity(user, cwd=plan.parent)
+        stamp_allow([it], [name], who)
         post_check([it], plan.parent, rows)
+        RC.record_releases([it], plan.parent, [name], who)    # change control: revision 1 of what was released
         write_text_atomic(plan, json.dumps(items, indent=2))
     from . import timing
     timing.mark_review(plan.parent, "allow")

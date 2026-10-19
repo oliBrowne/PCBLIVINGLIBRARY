@@ -657,6 +657,8 @@ def main(argv=None):
         with contextlib.nullcontext() if a.dry_run else CG.publishing(Path(a.plan).parent):
             if not a.dry_run:                  # change control: a hand edit since the last writer is settled first
                 CG.publish_guard(Path(a.plan), items, "altium365", rules=rules)
+            else:                              # a dry run writes nothing: an unsettled hand edit is shown as held
+                CG.preview_unsettled(Path(a.plan).parent, items, rules)
             for i in items:
                 for k in ("symbol", "footprint"):
                     if i[k]["file"]:

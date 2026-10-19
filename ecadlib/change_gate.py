@@ -62,6 +62,8 @@ WRITERS = {
     "revert": {"mode": "gate", "module": "ecadlib.change_cli", "what": "ecadlib part revert PART@REV: an older revision again"},
     "adopt": {"mode": "gate", "module": "ecadlib.change_cli", "what": "ecadlib part adopt: a person takes the files on disk "
               "as the release of a part whose ledger history was lost"},
+    "release-allow": {"mode": "gate", "module": "ecadlib.release_check", "what": "release-check --allow, review's release "
+                      "anyway, the web UI / MCP release check: a part a person released records its revision 1"},
     "hand-edit": {"mode": "gate", "module": "", "what": "a file changed outside ecadlib, found when a publisher opens the library"},
     "kicad-export": {"mode": "publish", "module": "ecadlib.kicad_export", "what": "KiCad library export"},
     "dblib-sync": {"mode": "publish", "module": "ecadlib.altium_dblib_sync", "what": "Altium DbLib / SVNDbLib sync"},
@@ -95,7 +97,6 @@ NOT_LIBRARY_WRITERS = {
     "ecadlib.migrate": "backups of files it upgrades",
     "ecadlib.parity": "survey work folder",
     "ecadlib.rebuild": "rebuild --check copies the library to a temporary folder (in-place rebuild runs the librarian)",
-    "ecadlib.release_check": "status, hold reasons and --allow overrides only (not fingerprinted)",
     "ecadlib.approvals": "sign-off records only (not fingerprinted)",
     "ecadlib.review_cli": "release anyway (status only); its choices go through ecadlib.resolve (gated)",
     "ecadlib.change_cli": "ecadlib part: the gate's own approve / reject / revert",
@@ -347,6 +348,10 @@ class Guard:
             return None
         if not isinstance(rec, dict):
             return None
+        # a difference is a sign of a lost release only for a part the lock records as released when it was built: a
+        # part held then (and fixed since by hand, resolve or review before its first release), or a lock from an
+        # ecadlib that did not record the status (pre-#105 libraries edited after the build), says nothing
+        evidence = rec.get("status") in RELEASED_STATUSES
         seen = False
         for half in ("symbol", "footprint"):
             r = rec.get(half) or {}
@@ -358,12 +363,13 @@ class Guard:
                 if not f or not sha:
                     continue
                 if now and Path(str(now)).as_posix() != Path(str(f)).as_posix():
-                    return f"{RB.LOCK} records {half} file {f} as built, but the plan names {now}"
+                    return f"{RB.LOCK} records {half} file {f} as built, but the plan names {now}" if evidence else None
                 p = self.base / f
                 if not p.is_file():
                     continue
                 if RB.file_sha(p) != sha and (not norm or RB.norm_sha(p) != norm):
-                    return f"{RB.LOCK} records other bytes for {f} than are on disk (changed after the librarian built it)"
+                    return (f"{RB.LOCK} records other bytes for {f} than are on disk (changed after the librarian built "
+                            f"it)") if evidence else None
                 seen = True
         return "" if seen else None
 
@@ -938,6 +944,36 @@ def publish_guard(plan, items, target, rules=None, user=None, log=None, base=Non
     finally:
         g.close()
     return out, g
+
+
+def preview_unsettled(folder, items, rules=None):
+    """Read-only (previews and dry runs, which must not write): mark every released part whose files or fields on disk
+    differ from its ledger head in a way the [change] policy holds as it will be after the next writer settles it:
+    status held, with a "change control:" reason (the released revision is what a real publish sends). Nothing is
+    written to the ledger, the plan or the files. -> {part: summary} of the parts marked."""
+    folder = Path(folder)
+    lg = LG.Ledger(folder)
+    pol = policy(rules, folder)
+    out = {}
+    for it in items:
+        head = lg.head(it.get("name")) if isinstance(it, dict) and it.get("name") else None
+        if not head or not released(it):
+            continue
+        try:
+            new = FP.of_item(it, folder)
+            if new["hashes"]["digest"] == head.get("digest"):
+                continue
+            old = lg.fingerprint(head)
+            changes = CD.diff(old, new) if old else []
+        except Exception as e:                 # unreadable now: a real publish would hold it
+            changes = [{"class": "electrical", "text": f"unreadable ({type(e).__name__})"}]
+        if changes and decide(changes, pol)["action"] == "hold":
+            out[it["name"]] = CD.summary(changes)
+            it["status"] = "held"
+            it["hold_reasons"] = list(it.get("hold_reasons") or []) + [
+                f"change control: an edit not yet settled ({out[it['name']]}) will be held for approval; the released "
+                f"revision r{head['revision']} is what a publish sends"]
+    return out
 
 
 def settled_plan(plan, target, rules=None, log=None):

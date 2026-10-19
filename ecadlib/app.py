@@ -380,6 +380,8 @@ class Workspace:
         lib_plan = self._librarian_dir(bom_path) / "plan.json"
         if lib_plan.exists():
             items = json.loads(lib_plan.read_text(encoding="utf-8"))
+            from . import change_gate as CG    # a preview writes nothing: an unsettled hand edit is shown as held
+            CG.preview_unsettled(lib_plan.parent, items, self.rules())
             for it in items:                          # librarian paths are relative to its output folder
                 for k in ("symbol", "footprint"):
                     f = it[k].get("file")
@@ -499,6 +501,8 @@ class Workspace:
             from .approvals import post_check, stamp_allow
             stamp_allow(items, list(allow), user)
             post_check(items, out, rows)
+        if allow:                                          # change control: revision 1 of what was released
+            RC.record_releases(items, out, list(allow), user or None)
         write_text_atomic(plan_f, json.dumps(items, indent=2))
         if allow or unallow:
             from . import timing

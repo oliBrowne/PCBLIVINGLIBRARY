@@ -304,6 +304,23 @@ def change_hold(it, base=".", ledger=None):
     return None
 
 
+def record_releases(items, base, names, who=None, log=None):
+    """Parts a person released with --allow (also review's release anyway and the web UI / MCP release check): record
+    revision 1 in the ledger now, as the librarian's baseline would, so the release is the files as they are at this
+    moment and no later writer has to guess. A new part carrying the MPN of a released one is compared with it first
+    (it may be held: its status is updated in `items`). A lost ledger history is refused (LedgerError). -> ledger rows"""
+    from . import change_gate as CG
+    names = set(names or ())
+    sel = [i for i in items if i.get("name") in names and CG.released(i)]
+    if not sel:
+        return []
+    g = CG.Guard(Path(base), "release-allow", user=who, log=log or (lambda *a, **k: None))
+    try:
+        return g.baseline(sel)
+    finally:
+        g.close()
+
+
 def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, change_holds=True):
     """Run check_item on every item, set status ready / held, record --allow overrides. Returns report rows.
     rules: a loaded rules dict, a path, or None to use the ecadlib.toml found from `base` (defaults when none).
@@ -449,8 +466,10 @@ def main(argv=None):
         rows = apply(items, plan.parent, a.allow, a.unallow, rules=a.rules)
         if a.allow:                            # record the person, so approvals can refuse self-approval
             from .approvals import identity, post_check, stamp_allow
-            stamp_allow(items, a.allow, identity(a.user, cwd=plan.parent))
+            who = identity(a.user, cwd=plan.parent)
+            stamp_allow(items, a.allow, who)
             post_check(items, plan.parent, rows)
+            record_releases(items, plan.parent, a.allow, who)       # change control: revision 1 of what was released
         write_text_atomic(plan, json.dumps(items, indent=2))
         if a.allow or a.unallow:
             from . import timing
