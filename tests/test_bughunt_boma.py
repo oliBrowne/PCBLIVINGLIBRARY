@@ -264,7 +264,8 @@ def test_bom22_sub_sheet_outside_the_workspace_is_refused(tmp_path):
     (tmp_path / "outside" / "p.kicad_sch").write_text(_sch(_sym("U9", "SECRET")))
     ws = Workspace(tmp_path / "ws", offline=True)
     msgs = []
-    for target in (str(tmp_path / "outside" / "p.kicad_sch"), "../../../outside/p.kicad_sch", "/etc/no-such-file"):
+    # forward slashes: a backslash in a schematic string is an escape, so a Windows path would not survive as typed
+    for target in ((tmp_path / "outside" / "p.kicad_sch").as_posix(), "../../../outside/p.kicad_sch", "/etc/no-such-file"):
         body = _sch(_sym("R1", "10k") + f'(sheet (at 0 0) (size 1 1) (uuid "s1") (property "Sheetname" "x" (at 0 0 0))'
                     f' (property "Sheetfile" "{target}" (at 0 0 0)))')
         p = ws.save_upload("evil.kicad_sch", body.encode())

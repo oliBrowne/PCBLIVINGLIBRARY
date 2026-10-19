@@ -105,8 +105,9 @@ def serve(ws):
     return srv, call
 
 
-def wait_job(call, jid):
-    for _ in range(200):
+def wait_job(call, jid, timeout=30.0):
+    end = time.time() + timeout                            # a slow Windows runner: 10 s was too tight
+    while time.time() < end:
         st, j = call("GET", f"/api/job?id={jid}")
         assert st == 200, j
         if j["state"] != "running":

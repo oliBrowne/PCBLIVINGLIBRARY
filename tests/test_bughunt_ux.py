@@ -89,6 +89,7 @@ def test_ux7_status_names_the_rules_file_init_wrote_above_the_workspace(tmp_path
 
 @lite
 def test_ux8_ux27_default_output_follows_the_init_workspace(tmp_path, monkeypatch):
+    tmp_path = tmp_path.resolve()                                       # Windows: the long form, not RUNNER~1
     from ecadlib import bom_triage as BT, firstrun as FR, librarian as L
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ECADLIB_CONFIG", "")

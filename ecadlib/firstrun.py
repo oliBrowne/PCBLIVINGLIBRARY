@@ -195,7 +195,7 @@ def setup_workspace(start="."):
         return None
     p = _rel_to(ws, f)
     try:
-        return Path(os.path.relpath(p))       # short on the screen when it is below the current folder
+        return Path(os.path.relpath(p, Path.cwd().resolve()))   # short on the screen when below the current folder
     except ValueError:                        # another drive on Windows
         return p
 

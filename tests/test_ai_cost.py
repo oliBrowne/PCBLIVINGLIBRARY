@@ -6,6 +6,8 @@ import contextlib, json, os, tempfile
 from pathlib import Path
 from unittest import mock
 
+import requests
+
 from ecadlib import ai_cost as AC, altium_menu as AM, datasheet as D, userconfig as UC
 from ecadlib.app import Workspace
 from tests import test_datasheet_batch as TB
@@ -20,11 +22,11 @@ def _workspace():
     with tempfile.TemporaryDirectory() as d:
         env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")}
         env["ECADLIB_HOME"] = str(Path(d) / "home")
-        # not --offline (that sends nothing to the model either): the part sources fail at once at a dead proxy and
-        # the Messages API is the fake
-        env.update({k: "http://127.0.0.1:9" for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")})
+        # not --offline (that sends nothing to the model either): the part sources fail at once, as at a dead proxy,
+        # and the Messages API is the fake. Not a real dead proxy: Windows retries a refused connection for seconds
         api = TB.FakeAPI(tokens=20000)
-        with mock.patch.dict(os.environ, env, clear=True), TB.patched(api):
+        down = mock.patch.object(requests.Session, "request", side_effect=requests.exceptions.ProxyError("no network"))
+        with mock.patch.dict(os.environ, env, clear=True), TB.patched(api), down:
             UC.set_key("ANTHROPIC_API_KEY", KEY)
             ws = Workspace(str(Path(d) / "ws"), [], providers=["digikey"])
             bom = ws.save_upload("bom.csv", TB.BOM2.encode())

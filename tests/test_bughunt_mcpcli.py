@@ -312,6 +312,7 @@ def test_cli5_cli6_keys_mistakes_are_user_errors_and_a_damaged_file_is_kept(tmp_
 
 @lite
 def test_cli7_cli12_review_and_the_setup_page_workspace_are_defaults(tmp_path, monkeypatch):
+    tmp_path = tmp_path.resolve()                                       # Windows: the long form, not RUNNER~1
     from ecadlib import cliutil as CU, firstrun as FR
     assert "review" in CU.ENV_FLAGS["ECADLIB_WORKSPACE"][1]
     proj = tmp_path / "proj"
@@ -336,6 +337,7 @@ def test_cli7_cli12_review_and_the_setup_page_workspace_are_defaults(tmp_path, m
 
 @lite
 def test_cli8_a_workspaces_own_rules_beat_ecadlib_config(tmp_path, monkeypatch):
+    tmp_path = tmp_path.resolve()                                       # Windows: the long form, not RUNNER~1
     from ecadlib import rules as RU
     env_f, ws = tmp_path / "env.toml", tmp_path / "ws"
     (ws / "librarian" / "b").mkdir(parents=True)
