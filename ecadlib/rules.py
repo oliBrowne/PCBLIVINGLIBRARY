@@ -131,9 +131,29 @@ class RulesError(ValueError):
 # ------------------------------------------------------------------ load / merge / validate
 def find(start="."):
     """The rules file in `start` or one of its parents, else in the current folder or its parents; None if none.
-    $ECADLIB_CONFIG (a file path), when set, is used instead of the search (an explicit --rules still wins)."""
+    $ECADLIB_CONFIG (a file path), when set, is used instead of the search (an explicit --rules still wins), except
+    that a workspace's own file still comes first: one found from `start` (a plan, a workspace) in a folder that is not
+    the current folder or one of its parents, as app.Workspace does."""
     env = os.environ.get("ECADLIB_CONFIG", "").strip()
-    if env:
+    if env and Path(start) != Path("."):
+        try:
+            here = Path.cwd().resolve()
+            mine = {here, *here.parents}
+            base = Path(start).resolve()
+            for d in [base, *base.parents]:
+                if d in mine:
+                    break
+                for n in FILES:
+                    if (d / n).is_file():
+                        return d / n
+        except OSError:
+            pass
+    if env:                                    # run inside a workspace (its file beside librarian/ or uploads/)
+        here = Path.cwd()
+        if (here / "librarian").is_dir() or (here / "uploads").is_dir():
+            for n in FILES:
+                if (here / n).is_file():
+                    return (here / n).resolve()
         if not Path(env).expanduser().is_file():
             raise RulesError(f"ECADLIB_CONFIG={env}: no such file")
         return Path(env).expanduser().resolve()
@@ -166,6 +186,8 @@ def toml_module():
 
 
 def parse_text(text, name="ecadlib.toml"):
+    if isinstance(text, str):
+        text = text.lstrip("﻿")          # "UTF-8 with BOM" (Notepad, PowerShell 5, Visual Studio): fine
     if str(name).endswith(".json"):
         try:
             return json.loads(text or "{}")

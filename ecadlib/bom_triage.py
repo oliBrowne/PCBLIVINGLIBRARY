@@ -528,6 +528,9 @@ def print_result(rows, counts, a, t=None):
     table = []
     for r in rows:
         st, word = TRIAGE_WORDS.get(r["status"], ("info", r["status"].replace("_", " ")))
+        src = str(r.get("src") or "")
+        if "EasyEDA" in word and src and "easyeda" not in src.lower():   # the status key is kept for old readers;
+            word = word.replace("EasyEDA", src) if "(" in word else f"{word} ({src})"   # the words name the source
         table.append([str(r["line"]), t.status(st, word), r["mpn"][:32], r["lcsc"],
                       M.clean(r["notes"])[:200] if t.verbose else ""])
     t.table(table, right=(0,))

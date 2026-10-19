@@ -14,7 +14,8 @@ import json, os
 ENV_FLAGS = {
     "ECADLIB_LIB": ("--lib", {"triage": None, "librarian": None, "resolve": None, "kicad-export": None, "mcp": None,
                               "ui": None, "doctor": None}),
-    "ECADLIB_WORKSPACE": ("--workspace", {"mcp": None, "ui": None, "visual-check": None, "doctor": None, "status": None}),
+    "ECADLIB_WORKSPACE": ("--workspace", {"mcp": None, "ui": None, "visual-check": None, "doctor": None, "status": None,
+                                          "review": None}),
 }
 DEBUG_ENV = "ECADLIB_DEBUG"
 

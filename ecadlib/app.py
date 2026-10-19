@@ -976,7 +976,7 @@ class Workspace:
 
     def rules_info(self):
         f = self.rules_in_use()
-        return {"file": self._label(f or self.rules_file()), "exists": bool(f), "text": f.read_text(encoding="utf-8") if f else "",
+        return {"file": self._label(f or self.rules_file()), "exists": bool(f), "text": f.read_text(encoding="utf-8-sig") if f else "",
                 "rules": RU.effective(self.rules()), "defaults": RU.DEFAULTS}
 
     def _rules_sources(self):

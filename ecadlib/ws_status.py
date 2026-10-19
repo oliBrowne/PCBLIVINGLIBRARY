@@ -66,11 +66,16 @@ def _iso(ts):
     return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _json(p, problems):
+def _json(p, problems, root=None):
+    """The file's JSON, or None with a problem line naming it relative to the workspace root (never the server path)."""
     try:
         return json.loads(Path(p).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        problems.append(f"{Path(p).as_posix()}: unreadable ({type(e).__name__})")
+        try:
+            name = Path(p).resolve().relative_to(Path(root).resolve()).as_posix() if root else Path(p).as_posix()
+        except (OSError, ValueError):
+            name = Path(p).name
+        problems.append(f"{name}: unreadable ({type(e).__name__})")
         return None
 
 
@@ -118,7 +123,7 @@ def status(root):
     from . import timing as TI
     rv, reasons = out["review"], {}
     for pf in _plans(root):
-        items = _json(pf, problems)
+        items = _json(pf, problems, root)
         if not isinstance(items, list):
             if items is not None:
                 problems.append(f"{rel(pf)}: not a plan (expected a list of parts)")
@@ -144,7 +149,7 @@ def status(root):
         f = tri[0]
         t = {"report": rel(f), "finished": _iso(f.stat().st_mtime)}
         if f.suffix == ".json":
-            d = _json(f, problems) or {}
+            d = _json(f, problems, root) or {}
             if isinstance(d, dict):
                 t.update(name=d.get("name"), finished=d.get("finished") or t["finished"], user=d.get("user"),
                          lines=len(d.get("rows") or []), counts=d.get("counts") or {})
@@ -153,7 +158,7 @@ def status(root):
     ups = _files(root, "upkeep/*/state/upkeep_last.json")
     best = None
     for f in ups:
-        d = _json(f, problems)
+        d = _json(f, problems, root)
         if isinstance(d, dict) and (best is None or str(d.get("date") or "") > str(best["date"] or "")):
             best = {"date": d.get("date"), "new_changes": d.get("new_changes"), "state": rel(f)}
     out["last_upkeep"] = best

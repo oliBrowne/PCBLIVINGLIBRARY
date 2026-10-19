@@ -809,7 +809,7 @@ def _rule_paths(text):
     if lib is None:
         return []
     try:
-        data = lib.loads(text)
+        data = lib.loads(text.lstrip("\ufeff"))
     except Exception:
         return []                                 # save_rules reports the syntax error itself
 
@@ -851,7 +851,7 @@ def _endpoints(text):
     from .rules import toml_module
     lib = toml_module()
     try:
-        data = lib.loads(text) if lib and text else {}
+        data = lib.loads(text.lstrip("\ufeff")) if lib and text else {}
     except Exception:
         return {}
     out = {}

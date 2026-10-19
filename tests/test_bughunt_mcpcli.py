@@ -218,7 +218,8 @@ def test_mcp16_misspelt_arguments_are_an_error_naming_the_right_one(tmp_path):
 def test_mcp17_overlong_path_is_a_plain_error_not_a_bug_report(tmp_path):
     ws = Workspace(tmp_path / "w")
     ws.mcp_options = M.Options()
-    r = _call(ws, "held_parts", {"bom": "x" * 300 + ".csv"})
+    (ws.root / "librarian").mkdir(exist_ok=True)              # a workspace that has run the librarian before
+    r = _call(ws, "held_parts", {"bom": "a" * 300})
     assert r["isError"] and "report" not in _txt(r).lower() and "Something went wrong" not in _txt(r), r
 
 
@@ -246,3 +247,225 @@ def test_mcp19_job_list_shows_elapsed_time_of_running_jobs(tmp_path):
         jobs.jobs["j1"] = {"id": "j1", "tool": "librarian_run", "state": "running", "started": time.time() - 30}
     r = json.loads(_txt(M._job_status(ws, {})))
     assert r["jobs"][0]["elapsed_s"] >= 29, r
+
+
+# ------------------------------------------------------------------ CLI
+def _quiet_run(fn, *a, **k):
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = fn(*a, **k)
+    return code, out.getvalue(), err.getvalue()
+
+
+@lite
+def test_cli3_rules_file_with_a_utf8_byte_order_mark_loads(tmp_path):
+    from ecadlib import rules as RU
+    f = tmp_path / "ecadlib.toml"
+    f.write_bytes(b'\xef\xbb\xbf[naming]\r\ncase = "upper"\r\n')
+    assert RU.load(f)["naming"]["case"] == "upper"
+    assert RU.parse_text("﻿[naming]\n", "ecadlib.toml") == {"naming": {}}
+    # an agent cannot slip a protected setting past save_rules behind a byte-order mark
+    ws = Workspace(tmp_path / "w")
+    ws.mcp_options = M.Options()
+    r = _call(ws, "save_rules", {"toml": "﻿[agent]\ngithub_api = 'https://evil.example'\n", "overwrite": True})
+    assert r["isError"] and "cannot change" in _txt(r), r
+
+
+def test_cli4_a_plugin_source_hit_is_not_called_easyeda():
+    import argparse
+    from ecadlib import bom_triage as T, term as TM
+    buf = io.StringIO()
+    row = {"line": 1, "status": "available_easyeda", "src": "stockroom", "mpn": "RC0603FR-0710KL", "lcsc": "", "notes": ""}
+    T.print_result([row], {"available_easyeda": 1}, argparse.Namespace(offline=False, out="out/t", bom="b.csv"),
+                   TM.Term(buf, styled=False))
+    assert "found online (stockroom)" in buf.getvalue() and "EasyEDA" not in buf.getvalue().split("\n")[0], buf.getvalue()
+    buf = io.StringIO()
+    T.print_result([dict(row, src="easyeda")], {"available_easyeda": 1}, argparse.Namespace(offline=False, out="out/t", bom="b.csv"),
+                   TM.Term(buf, styled=False))
+    assert "found online (EasyEDA)" in buf.getvalue()
+
+
+@lite
+def test_cli5_cli6_keys_mistakes_are_user_errors_and_a_damaged_file_is_kept(tmp_path, monkeypatch):
+    from ecadlib import userconfig as UC
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "cfg"))
+    code, _, err = _quiet_run(UC.main, ["set", "FOO"], inp=lambda prompt: "")
+    assert code == 2 and "the key is empty" in err and "internal error" not in err, err
+    code, _, err = _quiet_run(UC.main, ["set", "bad name"], inp=lambda prompt: "x")
+    assert code == 2 and "not an environment variable name" in err, err
+
+    def eof(prompt):
+        raise EOFError()
+    code, _, err = _quiet_run(UC.main, ["set", "FOO"], inp=eof)
+    assert code == 2 and "no input" in err, err
+    UC.set_key("ANTHROPIC_API_KEY", "sk-one")
+    UC.set_key("NEXAR_TOKEN", "tok-two")
+    f = tmp_path / "cfg" / UC.KEYS
+    f.write_text(f.read_text().rstrip().rstrip("}") + ",}\n")         # one-character damage: a trailing comma
+    lines = []
+    assert UC.main(["list"], out=lines.append) == 1 and "not valid JSON" in "\n".join(lines), lines
+    code, _, err = _quiet_run(UC.set_key, "OTHER", "x")
+    kept = list(f.parent.glob(UC.KEYS + ".damaged-*"))
+    assert len(kept) == 1 and "ANTHROPIC_API_KEY" in kept[0].read_text() and "NEXAR_TOKEN" in kept[0].read_text(), kept
+    assert "warning" in err and kept[0].name in err, err
+
+
+@lite
+def test_cli7_cli12_review_and_the_setup_page_workspace_are_defaults(tmp_path, monkeypatch):
+    from ecadlib import cliutil as CU, firstrun as FR
+    assert "review" in CU.ENV_FLAGS["ECADLIB_WORKSPACE"][1]
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    (proj / "ecadlib.toml").write_text('[setup]\nworkspace = "myws"\n')
+    argv, _ = FR.config_defaults("review", ["--yes"], environ={"ECADLIB_HOME": str(tmp_path / "none")}, start=str(proj))
+    assert argv[:2] == ["--workspace", str(proj / "myws")], argv
+    home, docs = tmp_path / "cfg", tmp_path / "Documents" / "ecadlib"
+    docs.mkdir(parents=True)
+    env = {"ECADLIB_HOME": str(home)}
+    from ecadlib import userconfig as UC
+    UC.save_settings({"workspace": str(docs)}, env)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    argv, notes = FR.config_defaults("status", [], environ=env, start=str(elsewhere))
+    assert argv == ["--workspace", str(docs)] and "settings.json" in notes[0], (argv, notes)
+    (elsewhere / "ecadlib_workspace").mkdir()                          # a local ./ecadlib_workspace still wins
+    assert FR.config_defaults("status", [], environ=env, start=str(elsewhere))[0] == []
+
+
+@lite
+def test_cli8_a_workspaces_own_rules_beat_ecadlib_config(tmp_path, monkeypatch):
+    from ecadlib import rules as RU
+    env_f, ws = tmp_path / "env.toml", tmp_path / "ws"
+    (ws / "librarian" / "b").mkdir(parents=True)
+    env_f.write_text("[naming]\n")
+    (ws / "ecadlib.toml").write_text("[naming]\n")
+    monkeypatch.setenv("ECADLIB_CONFIG", str(env_f))
+    monkeypatch.chdir(tmp_path)
+    assert RU.find(ws / "librarian" / "b") == ws / "ecadlib.toml"
+    assert RU.find(".") == env_f.resolve()                             # elsewhere the variable still wins
+    monkeypatch.chdir(ws)
+    assert RU.find(".") == (ws / "ecadlib.toml").resolve()             # inside the workspace
+
+
+def test_cli9_a_closed_pipe_is_a_silent_exit():
+    from ecadlib import cli
+
+    class Closed(io.StringIO):
+        def write(self, s):
+            raise BrokenPipeError(32, "Broken pipe")
+    err = io.StringIO()
+    with mock.patch("sys.stdout", Closed()), contextlib.redirect_stderr(err):
+        code = cli.main(["--help"])
+        assert cli.main(["completion", "bash"]) == code
+    assert code in (141, 1) and err.getvalue() == "", err.getvalue()
+
+
+@lite
+def test_cli10_demo_with_a_missing_or_empty_bom_writes_nothing(tmp_path):
+    from ecadlib import firstrun as FR
+    (tmp_path / "empty.csv").write_text("  \n")
+    for bom in (tmp_path / "nope.csv", tmp_path / "empty.csv"):
+        code, _, err = _quiet_run(FR.demo_main, ["-o", str(tmp_path / "d"), "--bom", str(bom)])
+        assert code == 2 and "hint" in err, err
+        assert not (tmp_path / "d").exists()
+
+
+@lite
+def test_cli11_web3_a_damaged_plan_is_named_by_migrate_doctor_and_status(tmp_path):
+    from ecadlib import doctor as DR, migrate as MG, ws_status as WS
+    d = tmp_path / "librarian" / "b"
+    d.mkdir(parents=True)
+    (d / "plan.json").write_text("[]")
+    MG.write_stamp(d, ["plan"])
+    (d / "plan.json").write_text('[{"name": "R1",\x01')
+    rows = [r for r in MG.scan(tmp_path) if r["kind"] == "plan"]
+    assert rows and rows[0]["state"] == "error" and "not valid JSON" in rows[0]["error"], rows
+    c = DR.check_formats(tmp_path)
+    assert c["level"] == "FAIL" and "librarian/b/plan.json" in c["detail"] and "upgrade" not in c["hint"], c
+    code, _, _ = _quiet_run(MG.main, [str(tmp_path), "--check"])
+    assert code == 1
+    s = WS.status(tmp_path)
+    assert s["problems"] == ["librarian/b/plan.json: unreadable (JSONDecodeError)"], s["problems"]
+
+
+@lite
+def test_cli13_check_refuses_non_footprints_and_empty_folders(tmp_path):
+    from ecadlib import footprint_rules as FRU
+    (tmp_path / "plan.json").write_text("[]")
+    (tmp_path / "Typo.pretty").mkdir()
+    code, out, _ = _quiet_run(FRU.main, [str(tmp_path / "plan.json")])
+    assert code == 1 and "not a KiCad footprint" in out and "pin1" not in out, out
+    code, _, err = _quiet_run(FRU.main, [str(tmp_path / "Typo.pretty")])
+    assert code == 2 and "no .kicad_mod files" in err, err
+
+
+@lite
+def test_cli14_lib_naming_a_file_is_refused(tmp_path):
+    from ecadlib import doctor as DR, firstrun as FR
+    f = tmp_path / "x.kicad_sym"
+    f.write_text("(kicad_symbol_lib)")
+    bad = FR.preflight("triage", ["bom.csv", "--lib", str(f)])
+    assert bad and "not a file" in bad[0] and str(tmp_path) in bad[1], bad
+    assert FR.preflight("triage", ["bom.csv", "--lib", str(tmp_path)]) is None
+    c = DR.check_paths([str(f)])[0]
+    assert c["level"] == "FAIL" and "not a library folder" in c["detail"], c
+
+
+@lite
+def test_cli15_init_does_not_learn_from_a_triage_report(tmp_path):
+    from ecadlib import rules_infer as RI
+    f = tmp_path / "triage_report.csv"
+    f.write_text("line,designator,qty,mpn,manufacturer,lcsc,value,package,status,local_symbol,local_footprint,src,"
+                 "src_symbol,src_footprint,src_3d,src_mpn,src_description,src_description_from,src_datasheet,notes\n"
+                 "1,R1,1,RC0603FR-0710KL,Yageo,,10k,0603,in_library,,,,,,,,,,,\n")
+    lib = RI.Library()
+    RI.scan_table(lib, f)
+    assert not lib.boms and any("triage report" in w for w in lib.warnings), (lib.boms, lib.warnings)
+
+
+def test_cli16_doctor_quiet_has_no_empty_headings():
+    from ecadlib import doctor as DR
+    rep = {"checks": [DR._c("a", "WARN", "x", "fix x"), DR._c("b", "OK", "y"), DR._c("c", "FAIL", "z", "fix z")]}
+    q = DR.render(rep, verbosity=-1)
+    assert "Optional" not in q and "Fine:" not in q and "Fix these:" in q and "fix z" in q, q
+
+
+def test_cli17_part_history_lists_changes_with_the_global_verbose_flag():
+    import argparse
+    from ecadlib import change_cli as CC, ledger as LG, term as TM
+    lines = [{"event": "release", "revision": 2, "at": "t", "writer": "resolve", "by": "Ann",
+              "classes": {"electrical": 1}, "changes": [{"class": "electrical", "text": "pin 1 was G now S"}]}]
+
+    class Lg:
+        def __init__(self, *a):
+            pass
+
+        def history(self, part):
+            return lines
+    old = TM.VERBOSITY
+    try:
+        TM.VERBOSITY = 1
+        with mock.patch.object(CC, "_load", lambda p: (Path("lib/plan.json"), [])), mock.patch.object(LG, "Ledger", Lg):
+            code, out, _ = _quiet_run(CC.cmd_history, argparse.Namespace(plan="p", part="AO3401A", json=False, verbose=False))
+    finally:
+        TM.VERBOSITY = old
+    assert code == 0 and "pin 1 was G now S" in out, out
+
+
+def test_cli19_a_failing_exporter_plugin_is_named():
+    from ecadlib import plugins as PL
+
+    def boom(items, out_dir, rules):
+        raise RuntimeError("exporter exploded")
+    with mock.patch.object(PL, "exporters", lambda eps=None: ({"exp-raise": (boom, "")}, [])), \
+            mock.patch("ecadlib.rules.resolve", lambda r, start=".": {}):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            try:
+                PL.run_exporter("exp-raise", [], d)
+                raise AssertionError("no error")
+            except PL.PluginError as e:
+                assert "exp-raise" in str(e) and "RuntimeError: exporter exploded" in str(e), e
+                assert isinstance(e, ValueError)

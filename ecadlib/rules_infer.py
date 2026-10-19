@@ -364,6 +364,9 @@ def scan_table(lib, f, explicit=False):
             heads = {f.stem: [str(c) for c in T._read_csv(f).iloc[0]]}
     except Exception:
         return
+    if any({"srcsymbol", "srcfootprint", "status"} <= {_norm(c) for c in hs} for hs in heads.values()):
+        lib.warnings.append(f"skipped {f.name}: an ecadlib triage report (it would teach ecadlib its own columns)")
+        return
     if any({"libraryref", "footprintref"} & {_norm(c) for c in hs} for hs in heads.values()):
         for t, rows in read_table_file(f).items():
             add_table_rows(lib, t, rows, f"table {f.name}[{t}]")
@@ -1234,20 +1237,22 @@ def main(argv=None, inp=input, environ=None):
     if a.json:
         print(json.dumps({k: v for k, v in prop.items() if k != "toml"} | {"toml": prop["toml"]}, indent=1, default=str))
         return 0
-    print(f"\nscanned {', '.join(paths)}: " + (", ".join(f"{v} {k}" for k, v in prop["scanned"].items()) or "nothing ecadlib can read")
-          + f"; {prop['components']} parts, {prop['footprints']} footprints, {prop['boms']} BOMs")
+    from . import term as TM
+    say = (lambda *x, **k: None) if TM.VERBOSITY < 0 else print      # -q: only the outcome line
+    say(f"\nscanned {', '.join(paths)}: " + (", ".join(f"{v} {k}" for k, v in prop["scanned"].items()) or "nothing ecadlib can read")
+        + f"; {prop['components']} parts, {prop['footprints']} footprints, {prop['boms']} BOMs")
     for w in prop["warnings"][:10]:
-        print(f"  note: {w}")
+        say(f"  note: {w}")
     if not prop["settings"]:
-        print("  no conventions to learn (fine for a new library; ecadlib's defaults apply). To learn yours, point "
-              "--from at your Altium/KiCad library folders, a DbLib, an Altium 365 export or a BOM")
+        say("  no conventions to learn (fine for a new library; ecadlib's defaults apply). To learn yours, point "
+            "--from at your Altium/KiCad library folders, a DbLib, an Altium 365 export or a BOM")
     for s in prop["settings"]:
         v = json.dumps(s["value"]) if isinstance(s["value"], (dict, list)) else str(s["value"])   # pin_length is a number
-        print(f"  {s['key']:<34} {v[:60]:<60} {s['level']:<6} {s['evidence'][0][:70] if s['evidence'] else ''}")
+        say(f"  {s['key']:<34} {v[:60]:<60} {s['level']:<6} {s['evidence'][0][:70] if s['evidence'] else ''}")
     choices = {}
     if prop["questions"] and not a.yes:
         if not interactive:
-            print("(not a terminal: taking the best guesses; run with --yes to say so)")
+            say("(not a terminal: taking the best guesses; run with --yes to say so)")
         else:
             for q in prop["questions"]:
                 choices[q["key"]] = _ask(q, inp)
@@ -1255,7 +1260,7 @@ def main(argv=None, inp=input, environ=None):
     if prop["errors"]:
         print("error: " + "; ".join(prop["errors"]), file=sys.stderr)
         return 2
-    done = lambda: FR.finish_init(ans, out, environ=environ, run_doctor=not a.no_doctor) and None
+    done = lambda: FR.finish_init(ans, out, say, environ=environ, run_doctor=not a.no_doctor) and None
     if out.exists():
         res = save(prop["toml"], out, overwrite=False)
         if res.get("unchanged"):
