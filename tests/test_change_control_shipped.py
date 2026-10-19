@@ -68,6 +68,15 @@ def test_kicad_mod_and_pcblib_disagreeing_changes_the_land_hashes():
     assert FP.electrical(b)["kicad_pads"] == ["1", "3"]
 
 
+def test_a_deleted_pcblib_is_still_held_when_the_kicad_mod_is_there():
+    plan, lib = demo()
+    f = lib / item(items_of(plan), "AO3401A")["footprint"]["file"]
+    before = f.read_bytes()
+    f.unlink()
+    CG.publish_guard(plan, items_of(plan), "kicad")
+    assert item(items_of(plan), "AO3401A")["change"]["state"] == "held" and f.read_bytes() == before
+
+
 def test_kicad_mod_beside_the_pcblib_without_a_plan_key_is_snapshotted_and_held():
     """An older plan without footprint.kicad_mod: kicad-export still ships models/KiCad/<ref>.kicad_mod."""
     plan, lib = demo()

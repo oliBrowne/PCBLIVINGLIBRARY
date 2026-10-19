@@ -664,8 +664,8 @@ def of_item(item, base="."):
     if kf:                                     # what kicad-export, kicad-pcm and kicad-dblib --export ship
         try:
             kl, ka, km = kicad_footprint(kf.read_text(encoding="utf-8"))
-            if land is None and not (ff and ff.is_file()):
-                land, art, model = kl, ka, km  # no .PcbLib: the .kicad_mod is the footprint
+            if ff is None:                     # a part with no .PcbLib at all: the .kicad_mod is its footprint
+                land, art, model = kl, ka, km  # (a .PcbLib gone missing stays "footprint removed")
             else:
                 extra["kicad"] = {"footprint": dict(kl, art=ka, name=fref or kl.get("name") or ""), "model": km}
         except (ValueError, OSError, IndexError, TypeError, KeyError) as ex:
