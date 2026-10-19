@@ -1,5 +1,5 @@
 """Bug-hunt regressions (BOM reading, group bomb). Plain functions: python3 -m tests.run_all test_bughunt_bomb"""
-import contextlib, io, shutil, tempfile, uuid, zipfile
+import contextlib, io, re, shutil, tempfile, uuid, zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -261,9 +261,13 @@ def test_bom39_uncached_formula_cells_are_refused():
         for i in zi.infolist():
             d = zi.read(i)
             if i.filename == "xl/worksheets/sheet1.xml":
-                d = d.replace(b'<c r="B2"><f>CONCATENATE("LM358","DR")</f><v></v></c>',
-                              b'<c r="B2" t="str"><f>CONCATENATE("LM358","DR")</f><v>LM358DR</v></c>')
-                d = d.replace(b'<c r="D2"><f>1+0</f><v></v></c>', b'<c r="D2" t="str"><f>""</f><v></v></c>')
+                # by cell, not by exact bytes: openpyxl writes an empty <v> as <v></v> or <v /> depending on the
+                # Python version underneath
+                d, n = re.subn(rb'<c r="B2"[^>]*>.*?</c>|<c r="B2"[^>]*/>',
+                               b'<c r="B2" t="str"><f>CONCATENATE("LM358","DR")</f><v>LM358DR</v></c>', d, flags=re.S)
+                d, m = re.subn(rb'<c r="D2"[^>]*>.*?</c>|<c r="D2"[^>]*/>', b'<c r="D2" t="str"><f>""</f><v></v></c>', d,
+                               flags=re.S)
+                assert n == m == 1, d[:600]
             zo.writestr(i, d)
     lines, _ = T.read_bom(g)
     assert lines[0]["mpn"] == "LM358DR", lines
