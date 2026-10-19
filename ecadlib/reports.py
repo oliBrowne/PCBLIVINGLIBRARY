@@ -211,7 +211,8 @@ def md_to_html(lines):
             rows = []
             while i < len(lines) and lines[i].startswith("|"):
                 if not re.fullmatch(r"\|(\s*:?-+:?\s*\|)+", lines[i].strip()):
-                    rows.append([c.strip() for c in lines[i].strip().strip("|").split("|")])
+                    cells = re.split(r"(?<!\\)\|", re.sub(r"^\||(?<!\\)\|$", "", lines[i].strip()))
+                    rows.append([c.strip().replace("\\|", "|") for c in cells])   # '\|' is a pipe inside a cell
                 i += 1
             head, body = rows[0], rows[1:]
             out.append('<div class="scroll"><table><thead><tr>' + "".join(f"<th>{_inline(c)}</th>" for c in head) + "</tr></thead><tbody>"
