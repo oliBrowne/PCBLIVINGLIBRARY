@@ -734,9 +734,12 @@ def ic_symbol(name, pins, description="", designator="U?", footprint=None, comme
             "footprint": footprint, "prims": prims, "label_at": ((0, top + 2), (0, bot - 8))}
 
 
-def resistor_symbol(name="Resistor", description="Resistor", footprint=None):
+def resistor_symbol(name="Resistor", description="Resistor", footprint=None, style="us"):
+    """style "us": zigzag body; "iec": box body ([symbols] resistor)."""
     pins = [{"num": "1", "name": "1", "type": "passive"}, {"num": "2", "name": "2", "type": "passive"}]
-    prims = [("rect", -15, 4, 15, -4), ("pin", pins[0], "left", -15, 0, 15, False), ("pin", pins[1], "right", 15, 0, 15, False)]
+    body = (("rect", -15, 4, 15, -4) if style == "iec" else
+            ("polyline", [(-15, 0), (-12.5, 4), (-7.5, -4), (-2.5, 4), (2.5, -4), (7.5, 4), (12.5, -4), (15, 0)], 1))
+    prims = [body, ("pin", pins[0], "left", -15, 0, 15, False), ("pin", pins[1], "right", 15, 0, 15, False)]
     return {"name": name, "description": description, "designator": "R?", "comment": "*", "footprint": footprint,
             "prims": prims, "label_at": ((-15, 7), (-15, -14))}
 
