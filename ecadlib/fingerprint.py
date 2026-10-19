@@ -19,6 +19,8 @@ so KiCad and Altium copies of the same part give the same electrical and geometr
   model       the 3D model: KiCad (model file, offset, rotation, scale) or Altium bodies (height, standoff, 2D offset,
               rotations, z offset, embedded STEP name and checksum)
   fields      every other parameter (description, datasheet, supplier numbers, ...)
+  kicad       of_item: the .kicad_mod the KiCad publishers ship besides the .PcbLib (its footprint and 3D model); eid
+              and gid take its pads and land in only where they differ from the .PcbLib's
 
 Hashes (sha256 over the canonical JSON):
   eid     electrical: identity + pins (canonical name, type) + pad numbers + pin -> pad map
@@ -542,16 +544,41 @@ def electrical(fp):
     if ident.get("value_num") is not None:
         ident["value"] = None                  # the number is the value; 100nF and 0.1uF are one part
     pmap, orphans = pin_pad_map(fp)
-    return {"identity": {k: (str(v).strip().upper() if isinstance(v, str) else v) for k, v in ident.items()},
-            "pins": {n: [p["name"], p["type"]] for n, p in sorted((sym or {}).get("pins", {}).items())},
-            "pads": sorted(p["num"] for p in (foot or {}).get("pads", [])), "pinmap": pmap, "orphan_pads": orphans}
+    out = {"identity": {k: (str(v).strip().upper() if isinstance(v, str) else v) for k, v in ident.items()},
+           "pins": {n: [p["name"], p["type"]] for n, p in sorted((sym or {}).get("pins", {}).items())},
+           "pads": sorted(p["num"] for p in (foot or {}).get("pads", [])), "pinmap": pmap, "orphan_pads": orphans}
+    return _with_kicad_pads(fp, out)
 
 
 def geometry(fp):
     foot = fp.get("footprint")
     if not foot:
         return None
-    return {k: foot[k] for k in ("pads", "windows", "copper", "courtyard")}
+    return _with_kicad_land(fp, {k: foot[k] for k in ("pads", "windows", "copper", "courtyard")})
+
+
+# The .kicad_mod the KiCad publishers ship besides the .PcbLib (fp["kicad"]): eid and gid take it in only where it
+# differs from the .PcbLib, so a library whose two files agree keeps the cross-tool hashes, and a disagreement is a change.
+def kicad_shipped(fp):
+    """-> (footprint, model) the KiCad publishers ship: fp["kicad"]'s when the item has a .kicad_mod, else the footprint
+    half's."""
+    k = fp.get("kicad")
+    return (k.get("footprint"), k.get("model")) if k else (fp.get("footprint"), fp.get("model"))
+
+
+def _with_kicad_pads(fp, out):
+    kfoot = (fp.get("kicad") or {}).get("footprint")
+    if kfoot and sorted(p["num"] for p in kfoot["pads"]) != out["pads"]:
+        out["kicad_pads"] = sorted(p["num"] for p in kfoot["pads"])
+    return out
+
+
+def _with_kicad_land(fp, out):
+    kfoot = (fp.get("kicad") or {}).get("footprint")
+    land = kfoot and {k: kfoot[k] for k in out if k in kfoot}
+    if land and land != out:
+        out = dict(out, kicad=land)
+    return out
 
 
 def cosmetic(fp):
@@ -587,9 +614,29 @@ def item_params(item):
     return out
 
 
+def kicad_mod_path(item, base="."):
+    """The .kicad_mod the KiCad publishers ship for a plan item (release_check._kicad_mod's rule): footprint.kicad_mod,
+    else <models>/KiCad/<footprint ref>.kicad_mod next to <models>/PcbLib. -> Path, or None when there is no such file."""
+    half = item.get("footprint") or {}
+    p = _resolve(base, half.get("kicad_mod"))
+    if p and p.is_file():
+        return p
+    q = _resolve(base, kicad_mod_beside(half))
+    return q if q and q.is_file() else None
+
+
+def kicad_mod_beside(half):
+    """The conventional .kicad_mod path (relative like the .PcbLib's) of a footprint half without a kicad_mod key."""
+    if half.get("kicad_mod") or not half.get("file") or not half.get("ref"):
+        return None
+    f = Path(half["file"])
+    return (f.parent.parent / "KiCad" / f"{AL.file_stem(half['ref'])}.kicad_mod").as_posix()
+
+
 def of_item(item, base="."):
-    """A plan item -> its fingerprint: the .SchLib and .PcbLib it releases (the item's refs pick the entries), its
-    parameters, description and comment. A missing file leaves that half empty (None)."""
+    """A plan item -> its fingerprint: the .SchLib and .PcbLib it releases (the item's refs pick the entries), the
+    .kicad_mod the KiCad publishers ship (fingerprint["kicad"]: its footprint and 3D model; the footprint half itself
+    when there is no .PcbLib), its parameters, description and comment. A missing file leaves that half empty (None)."""
     sym = land = art = model = None
     notes = []
     sf = _resolve(base, (item.get("symbol") or {}).get("file"))
@@ -612,9 +659,21 @@ def of_item(item, base="."):
                 land, art, model = altium_footprint(e)
         except (ValueError, OSError) as ex:
             notes.append(f"footprint unreadable: {ex}")
+    extra, fref = {}, (item.get("footprint") or {}).get("ref")
+    kf = kicad_mod_path(item, base)
+    if kf:                                     # what kicad-export, kicad-pcm and kicad-dblib --export ship
+        try:
+            kl, ka, km = kicad_footprint(kf.read_text(encoding="utf-8"))
+            if land is None and not (ff and ff.is_file()):
+                land, art, model = kl, ka, km  # no .PcbLib: the .kicad_mod is the footprint
+            else:
+                extra["kicad"] = {"footprint": dict(kl, art=ka, name=fref or kl.get("name") or ""), "model": km}
+        except (ValueError, OSError, IndexError, TypeError, KeyError) as ex:
+            notes.append(f"KiCad footprint unreadable: {ex}")
+    if notes:
+        extra["notes"] = notes
     fp = build(item.get("name") or "", sym, land, art, model, item_params(item), "altium",
-               footprint_ref=(item.get("footprint") or {}).get("ref"), symbol_ref=(item.get("symbol") or {}).get("ref"),
-               extra={"notes": notes} if notes else None)
+               footprint_ref=fref, symbol_ref=(item.get("symbol") or {}).get("ref"), extra=extra or None)
     return fp
 
 

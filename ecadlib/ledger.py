@@ -81,12 +81,17 @@ def apply_content(item, content):
 
 
 def item_files(item):
-    """{kind: relative path} of the model files a plan item releases (symbol, footprint, kicad_mod)."""
+    """{kind: relative path} of the model files a plan item releases (symbol, footprint, kicad_mod). kicad_mod is the
+    footprint's kicad_mod, else the .kicad_mod beside its .PcbLib (models/KiCad/<ref>.kicad_mod), which the KiCad
+    publishers ship when it is there (fingerprint.kicad_mod_path)."""
+    from .fingerprint import kicad_mod_beside
     out = {}
     for kind, key in (("symbol", "file"), ("footprint", "file"), ("kicad_mod", "kicad_mod")):
         half = item.get("footprint" if kind == "kicad_mod" else kind) or {}
         if half.get(key):
             out[kind] = half[key]
+        elif kind == "kicad_mod" and kicad_mod_beside(half):
+            out[kind] = kicad_mod_beside(half)
     return out
 
 
