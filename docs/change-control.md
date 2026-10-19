@@ -20,11 +20,15 @@ pad 1 moved 1 mm in x"), and so is a .kicad_mod whose pads no longer match the .
 
 | Class | What it means | Default |
 |---|---|---|
-| identity | MPN, manufacturer, or the value as a number (100nF = 0.1uF) | hold |
-| electrical | a pin's signal name or type, pins added / removed / renumbered / swapped, pin to pad map, hidden pins, units | hold |
-| geometry-major | a pad moved, rotated, resized beyond tolerance, changed side, drill, copper offset, paste/mask on/off; footprint origin; 3D origin or rotation | hold |
-| geometry-minor | pad size within tolerance, rect to rounded rect, mask/paste margins, courtyard, 3D model added / removed / height | warn |
-| cosmetic | silkscreen, fab drawing, texts, symbol graphics, pin length or position, a pin name written another way (RESET# = ~{RESET}), other fields | pass |
+| identity | MPN, manufacturer, or the value: its number, its unit, and a rating or tolerance written after it (100nF = 0.1uF = 100n, but 100nF is not 100nH, 3.3V is not 3.9V, 100nF 50V is not 100nF 6.3V; adding a tolerance to `10k` says more and is cosmetic, dropping one is a change unless the MPN stays the same); a second MPN or manufacturer field that names another part than the first | hold |
+| electrical | a pin's signal name or type, pins added / removed / renumbered / swapped, pin to pad map, hidden pins and their nets, units (split, merge, a pin moved to another unit), alternate pin functions; every copy of a pin number counts (stacked pins, power pins repeated in each unit) | hold |
+| geometry-major | a pad moved, rotated, resized beyond tolerance, changed side, drill, copper offset, copper layers, paste/mask on/off (also an exposed pad whose paste windows were all removed), custom pad copper shape, zone connection; footprint origin; footprint copper and copper zones; board edge (Edge.Cuts) in the footprint; KiCad assembly flags (exclude from BOM or position files, DNP, board only); 3D origin or rotation | hold |
+| geometry-minor | pad size within tolerance, rect to rounded rect, mask/paste margins (also footprint-wide), courtyard, through-hole copper on the inner layers (`*.Cu` / `F&B.Cu`), keepout zones, footprint type (SMD / through hole), pad fabrication property, pad pin function, 3D model added / removed / height | warn |
+| cosmetic | silkscreen, fab drawing, texts, symbol graphics, pin length or position, a pin name written another way (RESET# = ~{RESET}), the value written another way, display modes, other fields | pass |
+
+An NPTH hole has no copper, so its copper layers are not compared (`F&B.Cu` and `*.Cu` are the same hole). A pad pin
+function or type is compared only when both versions have one: a board fills them in from the schematic, a library
+footprint usually leaves them out.
 
 Messages are plain sentences: `pad 3 moved 0.25 mm in x`, `pin 5 (CONT) type open_collector -> passive`,
 `pad S1 removed; pad SH added`.
@@ -117,6 +121,10 @@ would hide whatever changed since. The writer stops and changes nothing. Restore
 record them yourself: `ecadlib part adopt ws/library --part P -m "what you checked"`, or `--all` for every such part.
 The new revision 1 is recorded with decision `adopted`, your name and your reason.
 
+When a newer ecadlib reads more of a part (the fingerprint has a schema number), a release recorded by an older one is
+fingerprinted again from its stored files with the new code before it is compared. An upgrade therefore neither shows
+every released part as changed nor hides a real change in what the old fingerprint did not cover.
+
 ## Publishing
 
 - **Altium 365**: an approved change becomes a new revision of the same component, never a new component. If
@@ -182,12 +190,12 @@ python scripts/change_corpus.py kicad-footprints-9.0.8 kicad-symbols-9.0.8 kicad
 | | Symbols | Footprints |
 |---|---|---|
 | In both releases | 22,537 | 15,381 |
-| Changed | 223 | 733 |
+| Changed | 223 | 761 |
 | identity | 0 | 0 |
 | electrical | 66 | 158 |
 | geometry-major | 0 | 10 |
-| geometry-minor | 0 | 536 |
-| cosmetic | 157 | 29 |
+| geometry-minor | 0 | 566 |
+| cosmetic | 157 | 27 |
 | **Held** under the default policy | **66** | **168** |
 | Unreadable | 0 | 0 |
 | Missed by the classifier (independent re-read) | **0** | **0** |
@@ -205,6 +213,14 @@ changes a librarian would want to see before a board uses them:
   pins.
 - 10 footprints change the land pattern: SC-70 / SOT-323 / SOT-353 / SOT-363 / SOT-343 / SC-70-8 pads shrink by
   about 0.3 mm; SSOP-16 and TSSOP-10 pads grow; DFN-8 and MSOP-10 pads move 12.5 um; U.FL moves its origin 0.475 mm.
+
+The run was repeated after the fingerprint learned every copy of a pin, alternate pin functions, units, pad copper
+layers, custom pad shapes, zone connections, pad properties, footprint attributes, keepouts and Edge.Cuts. The held
+numbers did not change, and there is no new hold: the one symbol with new alternate pin functions (GAL16V8) and the
+one footprint with a new zone connection (DFN-8-1EP 3x2 mm) were already held for other changes. 30 more footprints
+now warn, all real changes: 29 pad fabrication properties (heatsink to mechanical on 22 Micro-Fit mounting pads,
+mechanical added on 4 HDMI shield, 2 SMA and 1 SAS footprints) and one keepout redrawn (Hamamatsu C11204-1). The 89 NPTH
+holes whose layers changed from `F&B.Cu` to `*.Cu` are not changes.
 
 Two false holds the first run found were fixed in the reader: KiCad 9 writes an empty pin name, number or field as
 `~` and KiCad 10 writes `""`. Before the fix this showed 11,671 cosmetic pin-name lines and two false electrical holds
