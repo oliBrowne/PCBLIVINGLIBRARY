@@ -498,6 +498,22 @@ def _wire_num(v, where):
         raise DatasheetError(f"response {where} {v!r} is not a number; rejected")
 
 
+# A nominal printed with its tolerance: "6.5±0.2", "6.5 +/- 0.2", "3.56 +0.15/-0.25", "0.74 +0.05 -0.08"
+_TOL = re.compile(r"\s*([-+]?\d*\.?\d+)\s*(?:(?:±|\+/-|\+-)\s*(\d*\.?\d+)|\+\s*(\d*\.?\d+)\s*/?\s*[-\u2212\u2013]\s*(\d*\.?\d+))"
+                  r"\s*(?:mm|mil|in|inch)?\.?\s*", re.I)
+
+
+def _toleranced(v):
+    """A dimension printed as nominal and tolerance -> {min, nom, max}; None when v is not one. LP38693MP-1.8 (live
+    benchmark 2026-10-19): its drawing prints 6.5±0.2 and 3.56 +0.15/-0.25, and the read left them blank."""
+    m = _TOL.fullmatch(str(v or "").replace(",", "."))
+    if not m:
+        return None
+    nom = float(m.group(1))
+    lo, hi = (float(m.group(2)),) * 2 if m.group(2) else (float(m.group(4)), float(m.group(3)))
+    return {"min": round(nom - lo, 6), "nom": nom, "max": round(nom + hi, 6)}
+
+
 def _nullable(s):
     t = s.get("type")
     return any(_nullable(b) for b in s.get("anyOf") or []) or t == "null" or (isinstance(t, list) and "null" in t)
@@ -553,6 +569,8 @@ def from_wire(ext):
     oj = pkg.get("other_json")                        # a model without strict schemas may answer the object itself
     raw = json.dumps(oj) if isinstance(oj, dict) else str(oj or "").strip()
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw) or "{}"          # a model that fences or prefixes the JSON text
+    if "{" not in raw and not raw.startswith("["):     # "x", "none", "n/a": the model had nothing else to give
+        raw = "{}"
     try:
         other = json.loads(raw)
     except ValueError:
@@ -567,8 +585,19 @@ def from_wire(ext):
         if not isinstance(d, dict) or d.get("name") not in WIRE_DIMS:
             continue
         n = d["name"]
-        dims[n] = {"label": d.get("label", ""), **{k: _wire_num(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")},
-                   "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
+        tol = next((t for t in (_toleranced(d.get(k)) for k in ("nom", "min", "max")) if t), None)
+        vals = tol or {k: _wire_num(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")}
+        dims[n] = {"label": d.get("label", ""), **vals, "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
+    unres = []
+    for u in pkg.get("unresolved") or []:                # "body_length min/max (printed as 6.5±0.2)": the read saw it
+        m = re.match(r"\s*([a-z_.]+)\b[^(]*\(printed as ([^),;]+)", str(u))
+        tol = m and m.group(1) in dims and _toleranced(m.group(2))
+        if tol and dims[m.group(1)].get("unit") and tol["nom"] == (dims[m.group(1)].get("nom") or tol["nom"]):
+            dims[m.group(1)].update(tol)
+        else:
+            unres.append(u)
+    if "unresolved" in pkg:
+        pkg = dict(pkg, unresolved=unres)
     out = {k: v for k, v in pkg.items() if k not in ("dims", "other_json")}
     for k in pk:
         if k in out:
@@ -612,6 +641,7 @@ Dimensions:
 - Use the mechanical package drawing (and its dimension table) for the requested part and package.
 - Copy every value exactly as printed: min, nom and max in the drawing's own unit (mm, in or mil). Set a field to null when the drawing leaves it blank. Do not convert units, average, round, compute or fill in values from memory or JEDEC norms. If the drawing prints both mm and inches, use the mm column.
 - For every dimension give its label on the drawing, the 1-based page index in the attached PDF where you read it, and the figure or table title (or drawing code).
+- A value printed as a nominal with a tolerance (6.5±0.2, 3.56 +0.15/-0.25): copy it exactly like that into nom and leave min and max blank; ecadlib works out the limits.
 - If a dimension cannot be read with confidence, set it to null and name it in package.unresolved.
 - Follow the orientation and per-package meaning given in each field's description. name is KiCad style, e.g. SOIC-8_3.9x4.9mm_P1.27mm or VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.
 
@@ -1079,6 +1109,18 @@ def self_check(spec, ext, review):
     return info
 
 
+def _pin_count_from(spec, ext):
+    """A read that left pin_count blank (UCC25800, UCC256301: live benchmark 2026-10-19) -> (n, how) from the package
+    name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "")."""
+    m = re.match(r"[A-Za-z]+[A-Za-z0-9]*?-(\d+)(?=[-_]|$)", str(spec.get("name") or ""))
+    by_name = int(m.group(1)) if m else None
+    nums = {str(p.get("num")) for p in ext.get("pins") or [] if str(p.get("num") or "").isdigit()}
+    by_pins = len(nums) - (1 if spec.get("exposed_pad") and str(len(nums)) in nums else 0) if nums else None
+    if by_name and by_pins and by_name != by_pins:
+        return None, ""
+    return (by_name, f"the package name {spec['name']}") if by_name else (by_pins, "the pin table") if by_pins else (None, "")
+
+
 def process(ext, part, datasheet, model=MODEL, offset=0, msg=None):
     """Extraction -> {spec, symbol, sidecar, needs_review}. Never alters a value to make a check pass."""
     review = [f"document contains instruction-like text (ignored): {q[:200]!r}" for q in ext["embedded_instructions"]]
@@ -1087,6 +1129,11 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None):
         if bad:
             review.append(f"the model cited page(s) {bad} of the {len(offset)} pages sent: those values have no source page")
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
+    if spec.get("pin_count") is None and not spec.get("pad_table"):
+        n, how = _pin_count_from(spec, ext)
+        if n:
+            spec["pin_count"] = n
+            review.append(f"pin_count was left blank: {n} from {how}; check it against the drawing")
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
         if nets != (spec.get("same_net") or []):

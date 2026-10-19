@@ -398,12 +398,16 @@ def test_bga_smd_land_copper_spacing_is_refused():
     0.4 mm pitch passed with 0.38 mm copper (0.02 mm gaps), and `footprint gen` wrote it without a word."""
     s = {"name": "B", "package_type": "bga", "rows": 4, "cols": 4, "pitch": 0.4, "land_diameter": 0.28, "land_style": "SMD",
          "body_length": {"nom": 2}, "body_width": {"nom": 2}, "pin_count": 16}
+    # The land itself fits the pitch, so it is built copper-defined, and the footprint's notes say why
+    # (TPS628436YKA, live benchmark 2026-10-19: 0.2 mm land at 0.35 mm read as SMD-defined)
+    rep = F.build(s)[1]
+    assert rep["copper"] == 0.28 and rep["land_style"] == "NSMD", rep
+    assert any("needs 0.38 mm copper" in n for n in rep["notes"]), rep["notes"]
     try:
-        F.build(s)
+        F.build(dict(s, land_diameter=0.32))                    # 0.32 at 0.4 mm leaves 0.08 mm even copper-defined
         raise AssertionError("built")
     except ValueError as e:
-        assert "copper 0.38" in str(e), e
-    F.build(dict(s, land_style="NSMD"))                          # the same land NSMD is fine
+        assert "copper 0.42" in str(e), e
 
 
 def test_reference_text_clears_silk_past_the_courtyard():
