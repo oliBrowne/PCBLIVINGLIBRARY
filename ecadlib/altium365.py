@@ -539,8 +539,9 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                         client.release({**inp, "componentParentFolderId": guid})
                     try:                       # the revision it made, for `ecadlib project check` (best effort)
                         res["a365_revision"] = _rev_id(client.find(ws, it["name"]))
-                    except Exception:
-                        pass
+                    except Exception as e:     # `ecadlib project check` then can't tell this revision from a later one
+                        from . import fallbacks as FB
+                        FB.note(f"{it['name']}: released, but its new Altium 365 revision id did not read back", e)
                 released.update((k, (n or "").lower()) for k, n in zip(("symbols", "footprints"), names) if n)
         except Exception as e:                 # keep going; report per part
             res["action"], res["detail"] = "error", f"{type(e).__name__}: {e}"

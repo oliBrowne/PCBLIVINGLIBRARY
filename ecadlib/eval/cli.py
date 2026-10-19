@@ -53,6 +53,8 @@ def main(argv=None):
                                                          "answers can take minutes to hours)")
     r.add_argument("--cached-only", action="store_true", help="re-score this out folder with nothing sent: its cached "
                    "answers, and the answers of its collected batches downloaded again (free), read by this code")
+    r.add_argument("--max-cost-usd", type=float, help="spending cap for this run (default [datasheet] max_cost_usd, "
+                   "10; 0 = no cap)")
     r.add_argument("--offline", action="store_true", help="HTTP cache only")
     r.add_argument("--cache", default="out/http_cache")
     r.add_argument("--rules", help="library rules file")
@@ -128,13 +130,16 @@ def main(argv=None):
     rep = R.run(a.set, a.out, a.limit, a.model, a.record, a.replay, _list(a.sources), _list(a.family), _list(a.case),
                 a.offline, a.cache, rules=a.rules, providers=a.providers, tol=tol, provider=a.provider,
                 base_url=a.base_url, assist=a.assist, api_key_env=a.api_key_env, repeat=a.repeat, batch=a.batch,
-                cached_only=a.cached_only, pins=a.pins)
+                cached_only=a.cached_only, pins=a.pins, max_cost_usd=a.max_cost_usd)
     if a.json:
         print(json.dumps(rep["summary"], indent=1))
     else:
         o = rep["summary"]["overall"]
         print("\n".join(R.report_md(rep).splitlines()[2:6]))
-        print(f"report: {a.out}/report.md ({o['pass']}/{o['cases']} pass)")
+        nr = (rep["summary"].get("not_run") or {}).get("cases", 0)
+        print(f"report: {a.out}/report.md ({o['pass']}/{o['cases']} pass)" if not nr else
+              f"report: {a.out}/report.md ({nr} not run: no API key; {rep['summary']['ran']['pass']}/"
+              f"{rep['summary']['ran']['cases']} of the rest pass)")
     return 0
 
 

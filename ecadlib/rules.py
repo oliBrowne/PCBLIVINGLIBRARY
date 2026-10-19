@@ -62,8 +62,8 @@ DEFAULTS = {
     "altium365": {"workspace": ""},
     "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "a365", "changes"]},   # ecadlib.upkeep
     "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)
-                  "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40,
-                  "ask_above_usd": 1.0,                 # ecadlib.ai_cost: the dialogs ask twice above this (max_cost_usd wins)
+                  "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 10.0, "auto_pages": 40,   # per run; 0 = no cap
+                  "ask_above_usd": 1.0,                 # ecadlib.ai_cost: the dialogs ask twice above this (a max_cost_usd you set wins)
                   # ecadlib.ds_route: pages and model per part (route = "single": `model` for every part, as before)
                   "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
                   "escalate": True, "max_attempts": 4,
@@ -75,7 +75,7 @@ DEFAULTS = {
         "resistor": "us",                      # us: zigzag (ANSI/IEEE 315) | iec: box (IEC 60617)
         "split_pins": 0,                       # parts with more pins than this become multi-part (0 = never)
         "unit_pins": 48,                       # most pins in one signal part when split
-        "stack_power": "stack",                # stack | hide | none (same-name power pins)
+        "stack_power": "none",                 # none (every pin its own end) | stack | hide (same-name power pins)
         "pin_length": 300,                     # mil
         "grid": 100,                           # mil (pin pitch, body edges)
         "order": ["power", "analog", "reset", "clock", "debug", "usb", "adc", "other_in", "other", "power_out", "uart", "i2c",
@@ -102,7 +102,7 @@ DEFAULTS["ai"] = {k: (dict(v) if isinstance(v, dict) else v) for k, v in _LL.DEF
 for _k in _LL.SECTION_KEYS:                           # [datasheet] / [agent.proof] may pick their own ("" = [ai])
     DEFAULTS["datasheet"].setdefault(_k, "")
     DEFAULTS["agent"]["proof"].setdefault(_k, "")
-DEFAULTS["providers"] = {"order": [], "unofficial": True}
+DEFAULTS["providers"] = {"order": [], "unofficial": False}   # EasyEDA / JLCPCB search: opt in
 # [setup]: written by the `ecadlib init` setup questions (ecadlib.firstrun). libs / workspace are the defaults for
 # --lib / --workspace (after the command line and ECADLIB_LIB / ECADLIB_WORKSPACE); empty = as before.
 DEFAULTS["setup"] = {"tool": "both", "libs": [], "workspace": ""}
@@ -814,7 +814,8 @@ HELP = {
     "datasheet": "Claude datasheet reader (ecadlib datasheet / librarian): model, effort, which environment variable holds the "
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",
     "datasheet.api_key_env": "name of the environment variable with the API key; the key itself never goes in this file",
-    "datasheet.max_cost_usd": "refuse a run whose estimated worst-case cost is higher (0 = no cap; --yes overrides)",
+    "datasheet.max_cost_usd": "refuse a run whose estimated worst-case cost is higher (default 10.00 per run; 0 = no cap; --yes does not lift it, "
+                             "--max-cost-usd does)",
     "datasheet.ask_above_usd": "the Altium dialog, KiCad window and web UI always show the model and cost before an AI step; "
                                "above this (or above max_cost_usd when set) they ask a second time (default 1.00)",
     "datasheet.page_budget": "pages sent on the first try, picked by text (drawing for this package, land pattern, pin table, "
@@ -844,7 +845,7 @@ HELP = {
     "symbols.power_side": "top: power pins on top, ground on the bottom | left: top and bottom empty, power at the top of the left side, ground at its bottom",
     "symbols.resistor": "us: zigzag resistor symbol (ANSI, default) | iec: box resistor symbol (IEC 60617)",
     "symbols.split_pins": "more pins than this: a multi-part symbol (power part + signal parts); 0 = one part always",
-    "symbols.stack_power": "stack (one pin shown, the rest on top of it) | hide (the rest hidden, tied by name) | none",
+    "symbols.stack_power": "none (default: every pin its own end) | stack (one pin shown, the rest on top of it) | hide (the rest hidden, tied by name)",
     "agent": "GitHub / GitLab settings for `ecadlib upkeep --github | --gitlab` (the library agent that also used them is "
              "parked on a branch); [agent.proof] is the visual check's model",
     "agent.github_token_env": "name of the environment variable with the GitHub token; the token itself never goes in this file",
@@ -857,7 +858,7 @@ HELP = {
               "token_env (json only); retries with backoff, never stops the run",
     "providers": "Part sources for triage / librarian / UI, in order, including plugins (ecadlib.providers entry points); "
                  "[] = each command's built-in default (the official Nexar / DigiKey / Mouser APIs first, then EasyEDA); "
-                 "unofficial = false keeps out the undocumented EasyEDA and JLCPCB search endpoints; "
+                 "unofficial = true lets in the undocumented EasyEDA and JLCPCB search endpoints (default false; `ecadlib init` asks); "
                  "`ecadlib plugins list` shows what is installed",
     "setup": "Written by `ecadlib init`: the tool you use, your library folders (the default --lib) and the workspace "
              "(the default --workspace); relative paths start at this file's folder",
