@@ -65,7 +65,8 @@ SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY"
             "auto_pages": 40,
             "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", MODEL],
             "escalate": True, "max_attempts": 4,            # pages / model per part: ecadlib.ds_route
-            "cross_check": "auto", "cross_check_model": ""}  # second source before a footprint is accepted: ecadlib.crosscheck
+            "cross_check": "auto", "cross_check_model": "",  # second source before a footprint is accepted: ecadlib.crosscheck
+            "browser_headers": False}                       # EXPERIMENT: PdfStore(browser=True); off by default
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # Per-model request parameters (claude-api skill, Thinking & Effort table): effort levels a model accepts (no entry
 # for a listed model = it rejects output_config.effort: Haiku 4.5, Sonnet 4.5), and the PDF page limit of
@@ -1229,6 +1230,11 @@ PDF_KEYWORDS = [(re.compile(p, re.I), w) for p, w in (
     (r"pin (configuration|functions?|descriptions?|assignments?|out)|pinout|terminal functions?", 2),
     (r"dimensions? in (mm|millimet|inch)|\bmax\b.*\bmin\b|\bmin\b.*\bmax\b", 1))]
 MAX_DOWNLOAD = 64 * 2 ** 20
+# EXPERIMENT ([datasheet] browser_headers, off by default): what a desktop browser sends for a PDF link. Datasheet
+# PDF downloads only, never an API call.
+BROWSER_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                 "Chrome/131.0.0.0 Safari/537.36",
+                   "Accept": "application/pdf,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9"}
 
 
 def lcsc_number(item=None, ln=None, row=None):
@@ -1286,9 +1292,21 @@ class PdfStore:
     httpcache keeps text bodies only, so PDFs (binary) are stored here; the same session, user agent, per-host
     rate limit and offline switch as the CachedHTTP passed in are used."""
 
-    def __init__(self, cache_dir, http=None, offline=None):
+    def __init__(self, cache_dir, http=None, offline=None, browser=False, retries=0):
+        """browser: EXPERIMENT ([datasheet] browser_headers, off by default): PDF downloads send a desktop browser's
+        User-Agent, Accept, Accept-Language and a Referer of the link's own site instead of ecadlib's own UA. API
+        calls never do. retries: timeouts, connection errors, 429 and 5xx are tried this many more times."""
         self.dir, self.http = Path(cache_dir) / "datasheets", http
         self.offline = getattr(http, "offline", False) if offline is None else offline
+        self.browser, self.retries = browser, retries
+        self.attempts = 0                             # downloads tried, retries included (scripts/datasheet_probe.py)
+
+    def _headers(self, url):
+        if not self.browser:
+            return {"Accept": "application/pdf,*/*;q=0.5"}
+        from urllib.parse import urlparse
+        u = urlparse(url)
+        return dict(BROWSER_HEADERS, Referer=f"{u.scheme}://{u.netloc}/")
 
     def _get(self, url):
         """-> (status, bytes, content-type, final url, error)"""
@@ -1308,14 +1326,26 @@ class PdfStore:
                 time.sleep(wait)
             h._last[host] = time.time()
         get = sess.get if sess is not None else requests.get
-        try:
-            r = get(url, timeout=60, allow_redirects=True, stream=True,
-                    headers={"Accept": "application/pdf,*/*;q=0.5"})
-            data = r.raw.read(MAX_DOWNLOAD + 1, decode_content=True) if hasattr(r, "raw") and r.raw is not None else r.content
-        except requests.RequestException as e:
-            m = re.search(r"Tunnel connection failed: ([^'\")]+)", str(e))
-            return 0, None, "", url, f"{type(e).__name__}: " + (f"proxy CONNECT refused ({m.group(1).strip()})" if m else str(e)[:160])
-        r.close()
+        for attempt in range(self.retries + 1):
+            self.attempts += 1
+            if attempt:
+                time.sleep(min(retry_after, 30) if retry_after else 2 * 2 ** (attempt - 1))
+            retry_after = 0
+            try:
+                r = get(url, timeout=60, allow_redirects=True, stream=True, headers=self._headers(url))
+                data = r.raw.read(MAX_DOWNLOAD + 1, decode_content=True) if hasattr(r, "raw") and r.raw is not None else r.content
+            except requests.RequestException as e:
+                m = re.search(r"Tunnel connection failed: ([^'\")]+)", str(e))
+                err = f"{type(e).__name__}: " + (f"proxy CONNECT refused ({m.group(1).strip()})" if m else str(e)[:160])
+                if attempt < self.retries and not m:
+                    continue
+                return 0, None, "", url, err
+            r.close()
+            if attempt < self.retries and (r.status_code == 429 or r.status_code >= 500):
+                ra = str(r.headers.get("retry-after", "")).strip()
+                retry_after = float(ra) if ra.isdigit() else 0
+                continue
+            break
         if h is not None and hasattr(h, "log"):
             h.log.append(("GET", url, r.status_code, False))
         return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None
@@ -1512,7 +1542,7 @@ class Reader:
         self.http, self.batch, self.wait, self.poll, self.max_wait_s = http, batch, wait, poll, max_wait_s
         self.estimate_only, self.yes = estimate, yes
         self.auto_pages = self.cfg["auto_pages"] if auto_pages is None else auto_pages
-        self.store, self.results = PdfStore(cache_dir, http), ResultCache(cache_dir)
+        self.store, self.results = PdfStore(cache_dir, http, browser=self.cfg.get("browser_headers") is True), ResultCache(cache_dir)
         self.dir = self.out / "datasheet"
         self.log_file = self.dir / "api_log.jsonl"
         self.say, self.sleep = log or (lambda *a: None), sleep or time.sleep

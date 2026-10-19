@@ -68,7 +68,9 @@ DEFAULTS = {
                   "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
                   "escalate": True, "max_attempts": 4,
                   # ecadlib.crosscheck: a second source (standard table / a second read) before a footprint is accepted
-                  "cross_check": "auto", "cross_check_model": ""},
+                  "cross_check": "auto", "cross_check_model": "",
+                  # EXPERIMENT, off: datasheet PDF downloads (only those) send a desktop browser's headers
+                  "browser_headers": False},
     "symbols": {                               # ecadlib.symbol_layout: IC symbol pins grouped by function
         "layout_pins": 1,                      # parts with at least this many pins get grouped (0 = never)
         "power_side": "top",                   # top: power top, ground bottom | left: both on the left side, top and bottom empty
