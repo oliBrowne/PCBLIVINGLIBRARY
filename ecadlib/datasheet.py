@@ -17,7 +17,7 @@ key), PdfStore (download + %PDF check + provenance), prepare (page ranges, auto 
 ResultCache (PDF hash + model + schema version: re-runs are free), Reader (one job per part -> cache, a synchronous
 call, or one Message Batch with custom_id = part name, resumable through <out>/datasheet/batch_state.json),
 fill_plan (a librarian plan's open parts -> batch -> .SchLib/.PcbLib marked verify -> release check)."""
-import argparse, base64, contextlib, datetime, hashlib, io, json, os, random, re, sys, time
+import argparse, base64, contextlib, datetime, hashlib, io, json, math, os, random, re, sys, time
 from pathlib import Path
 
 import requests
@@ -481,21 +481,39 @@ def wire_schema():
     return _obj(dict(full["properties"], package=_obj(props, full["properties"]["package"].get("description"))))
 
 
-def _wire_num(v, where):
+def _wire_val(v, where):
+    """A dimension value as the model wrote it -> (number or None, the unit written after it or None)."""
     s = str(v if v is not None else "").strip().replace(",", ".")
     if s in ("", "-", "—", "–", "null", "n/a", "N/A"):
-        return None
+        return None, None
     # as printed on the drawing: "0.50 BSC", "1.27 TYP", "(0.2)" (a reference value), "−0.05" (a Unicode minus)
     s = s.replace("\u2212", "-").replace("\u2013", "-")
     s = re.sub(r"\s*\b(BSC|TYP|TYPICAL|REF|NOM|MAX|MIN)\b\.?", "", s, flags=re.I).strip()
     s = re.sub(r"^[(\[](.*)[)\]]$", r"\1", s).strip()
-    try:
-        return float(s)
-    except ValueError:
-        m = re.fullmatch(r"([-+]?\d*\.?\d+)\s*(mm|mil|in|inch)?\.?", s)
-        if m:
-            return float(m.group(1))
-        raise DatasheetError(f"response {where} {v!r} is not a number; rejected")
+    m = re.fullmatch(r"([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(mm|mils?|in|inch|inches|\")?\.?", s, flags=re.I)
+    if not m:                                         # "nan", "inf", "0.3 to 0.5", words: not a dimension
+        raise DatasheetError(f"response {where} {v!r} is not a finite number; rejected")
+    return float(m.group(1)), _unit_name(m.group(2))
+
+
+def _unit_name(u):
+    u = str(u or "").strip().lower()
+    return {"": None, "mils": "mil", "inch": "in", "inches": "in", '"': "in"}.get(u, u)
+
+
+def _wire_num(v, where):
+    return _wire_val(v, where)[0]
+
+
+def _non_finite(v, path="$"):
+    """The first NaN / Infinity in an answer (json.loads accepts both), as a path; None when there is none."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return path
+    for k, x in (v.items() if isinstance(v, dict) else enumerate(v) if isinstance(v, list) else ()):
+        bad = _non_finite(x, f"{path}.{k}")
+        if bad:
+            return bad
+    return None
 
 
 def _nullable(s):
@@ -543,6 +561,10 @@ def _fit(v, s):
     return v
 
 
+def _dimtxt(d):
+    return "/".join("-" if d.get(k) is None else f"{d[k]:g}" for k in ("min", "nom", "max")) + f" {d.get('unit')}"
+
+
 def from_wire(ext):
     """A wire_schema() answer -> the output_schema() shape. An answer already in that shape (recorded before, or the
     split-steps rail's) is returned as it is."""
@@ -567,8 +589,17 @@ def from_wire(ext):
         if not isinstance(d, dict) or d.get("name") not in WIRE_DIMS:
             continue
         n = d["name"]
-        dims[n] = {"label": d.get("label", ""), **{k: _wire_num(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")},
-                   "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
+        vals = {k: _wire_val(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")}
+        for k, (x, u) in vals.items():                # "0.016 in" in a row whose unit is mm: which one is it?
+            if u and u != _unit_name(d.get("unit")):
+                raise DatasheetError(f"response {n}.{k} {d.get(k)!r} is written in {u!r} but the dimension's unit is "
+                                     f"{d.get('unit')!r}; rejected")
+        new = {"label": d.get("label", ""), **{k: x for k, (x, _) in vals.items()},
+               "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
+        if n in dims and any(dims[n][k] != new[k] for k in ("min", "nom", "max", "unit")):
+            raise DatasheetError(f"response gives {n} twice with different values ({_dimtxt(dims[n])} and {_dimtxt(new)}): "
+                                 "two package variants or a misread; rejected")
+        dims.setdefault(n, new)
     out = {k: v for k, v in pkg.items() if k not in ("dims", "other_json")}
     for k in pk:
         if k in out:
@@ -697,6 +728,9 @@ def parse_message(msg):
     except ValueError:
         raise DatasheetError("response is not JSON; rejected")
     ext = from_wire(ext)
+    bad = _non_finite(ext)
+    if bad:                                           # NaN / Infinity would be written into the spec and footprint
+        raise DatasheetError(f"response {bad} is not a finite number; rejected")
     try:
         import jsonschema
         errs = [e.message for e in jsonschema.Draft202012Validator(output_schema()).iter_errors(ext)]
@@ -918,6 +952,20 @@ def sanity(spec, review):
         d = g(k)
         if d and d[2] > 60:
             review.append(f"{k}: {d[2]} mm is implausible for an SMD package (unit mislabelled?)")
+    for k in DIMS + NUM_DIMS + ["exposed_pad.length", "exposed_pad.width"]:   # sizes are > 0 (a min may be 0)
+        v = (spec.get("exposed_pad") or {}).get(k.split(".")[1]) if k.startswith("exposed_pad.") else spec.get(k)
+        vals = [v] if isinstance(v, (int, float)) and not isinstance(v, bool) else \
+            [v.get(x) for x in ("min", "nom", "max")] if isinstance(v, dict) else []
+        vals = [x for x in vals if isinstance(x, (int, float)) and not isinstance(x, bool)]
+        if any(not math.isfinite(x) or x < 0 for x in vals) or (vals and max(vals) <= 0 and k != "courtyard_excess"):
+            review.append(f"{k}: {v} mm is implausible (a size must be a number above 0)")
+    for k in ("terminal_length", "terminal_width", "ball_diameter", "land_diameter", "drill"):
+        d = g(k)                                      # smaller than any real lead: a mil value labelled mm, or mil -> mm twice
+        if d and 0 < d[2] < 0.05:
+            review.append(f"{k}: {d[2]} mm is implausibly small (unit mislabelled?)")
+    h, hi = spec.get("height_max"), 60 if t in NO_BODY else 25
+    if isinstance(h, (int, float)) and not isinstance(h, bool) and 0 < h and not 0.1 <= h <= hi:
+        review.append(f"height_max: {h} mm is implausible (0.1-{hi} mm expected; unit mislabelled?)")
     bl = g("body_length")
     if bl and bl[2] < 0.35:
         review.append(f"body_length: {bl[2]} mm is implausibly small (inch values labelled mm?)")
