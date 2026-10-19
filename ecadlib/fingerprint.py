@@ -35,7 +35,7 @@ rational conversion the writer uses, so a KiCad 0.9525 and the Altium unit it wa
 Pin names: active-low notations (Altium R\\E\\S\\E\\T\\, KiCad ~{RESET}, RESET#, /RESET, nRESET, RESET_N) and case are
 one canonical name; the spelling is cosmetic. Pin types: Altium's eight electrical types; KiCad's finer ones
 (power_in / power_out, tri_state, free ...) are kept as `ktype` and compared KiCad to KiCad."""
-import hashlib, json, math, re
+import copy, hashlib, json, math, re
 from pathlib import Path
 
 from . import altium_lib as AL, parity as PA, sexpr
@@ -219,6 +219,71 @@ def _kicad_models(t):
             rec[k] = [round(float(v), 4) for v in xyz[1:4]] if xyz else None
         out.append(rec)
     return {"tool": "kicad", "models": sorted(out, key=json.dumps)}
+
+
+def _num_s(v):
+    out = ("%.6f" % v).rstrip("0").rstrip(".")
+    return "0" if out in ("-0", "") else out
+
+
+def _flip_layer(s):
+    if s.startswith(("B.", "F.")):
+        return type(s)(("F." if s[0] == "B" else "B.") + s[2:])
+    return s
+
+
+_PT_HEADS = ("start", "end", "mid", "center", "xy", "offset")
+
+
+def unplace(node, mirror="y"):
+    """A footprint placed on a board (a .kicad_pcb `footprint` node) -> the same footprint in its library frame:
+    position and rotation taken off, and a bottom-side footprint turned back to the top. Inside a footprint KiCad keeps
+    positions in the footprint's own frame but pad and text angles absolute (footprint angle added), and a flipped
+    footprint's items are mirrored top to bottom in that frame (y negated, angles negated, B.* and F.* layers swapped).
+    (KiCad's FOOTPRINT::Flip flips every child top to bottom in the footprint's frame, then a left / right flip turns the
+    whole footprint 180 degrees, which only changes the footprint angle.) mirror="x" undoes a left / right mirror instead,
+    for files written by other tools. Returns a new tree."""
+    t = copy.deepcopy(node)
+    at = sexpr.first(t, "at")
+    rot = float(at[3]) if at and len(at) > 3 else 0.0
+    back = str((sexpr.first(t, "layer") or [None, "F.Cu"])[1]).startswith("B.")
+    axis = 2 if mirror == "y" else 1
+
+    def angle(a):
+        a = float(a) - rot
+        if back:
+            a = -a if mirror == "y" else 180.0 - a
+        return _num_s(((a + 180.0) % 360.0) - 180.0 if abs(a) > 1e-9 else 0.0)
+
+    def walk(n):
+        for k, c in enumerate(n):
+            if isinstance(c, str):
+                if k and n[0] in ("layer", "layers"):
+                    n[k] = _flip_layer(c) if back else c
+                continue
+            if not c:
+                continue
+            h = c[0]
+            if h == "model":                   # the 3D model's offset / rotation are its own, never placed
+                continue
+            if h in _PT_HEADS and len(c) >= 3 and not isinstance(c[1], list):
+                if back:
+                    c[axis] = _num_s(-float(c[axis]))
+            elif h == "at" and len(c) >= 3:
+                if back:
+                    c[axis] = _num_s(-float(c[axis]))
+                if len(c) > 3 or back or rot:
+                    a = angle(c[3] if len(c) > 3 else 0)
+                    c[3:] = [a] if a != "0" else []
+            walk(c)
+
+    body = [c for c in t[2:] if not (isinstance(c, list) and c and c[0] in ("at", "layer"))]
+    t[2:] = body
+    walk(t)
+    t[2:2] = [["layer", sexpr.Q("F.Cu")]]
+    if isinstance(t[1], str) and ":" in t[1]:  # the board names it Lib:Name, the library file Name
+        t[1] = type(t[1])(t[1].split(":", 1)[1])
+    return t
 
 
 def kicad_footprint(text):

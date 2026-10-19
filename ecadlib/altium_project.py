@@ -1047,7 +1047,12 @@ def write_where_used(res, stem):
 
 # ---------------------------------------------------------------- CLI
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="ecadlib project", description="BOM straight from an Altium project (.PrjPcb / .SchDoc / .BomDoc)")
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in ("check", "freeze", "scan"):    # change control: drift, freeze, usage (ecadlib.project_check)
+        from . import project_check
+        return project_check.main(argv)
+    ap = argparse.ArgumentParser(prog="ecadlib project", description="BOM straight from an Altium project (.PrjPcb / .SchDoc / "
+                                 ".BomDoc); `ecadlib project check|freeze|scan ...` for change control")
     ap.add_argument("project")
     ap.add_argument("-o", "--out", help="BOM CSV to write (default: <project>_bom.csv next to the project)")
     ap.add_argument("--variant", help="apply this project variant (default: the base design)")

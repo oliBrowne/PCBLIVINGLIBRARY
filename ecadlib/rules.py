@@ -80,7 +80,7 @@ DEFAULTS = {
     "release": {"approvals": {},               # same keys as approvals.json; used when there is no approvals.json
                 "parity": "hold"},             # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
     "altium365": {"workspace": ""},
-    "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "sourcing", "a365"],   # ecadlib.upkeep
+    "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "sourcing", "a365", "changes"],   # ecadlib.upkeep
                "price_jump_pct": 20.0, "build_qty": 1, "currency": "USD"},
     "sim": {"capacitor_esr": "", "capacitor_esl": "", "inductor_dcr": ""},   # ecadlib.sim_models ("" = none)
     "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)

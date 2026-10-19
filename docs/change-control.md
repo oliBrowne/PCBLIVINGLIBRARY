@@ -75,6 +75,36 @@ reject, revert, publish), sorted keys, so it diffs well in git. The exact bytes 
 - **KiCad export and DbLib sync**: they publish only released revisions. A hand edit found in the library folder is
   checked against the policy first, the same as any other writer's change.
 
+## Projects: drift, freeze and usage
+
+```text
+ecadlib project check board.kicad_pro -o out/drift        # what a library update would change in this project
+ecadlib project freeze board.kicad_pro                     # copy the parts it uses into project libraries
+ecadlib project scan board.kicad_pro --library ws/library  # record which library parts (and revisions) it uses
+ecadlib project check board.PrjPcb --workspace https://acme.365.altium.com --library ws/library
+```
+
+- **KiCad check.** A schematic keeps a copy of each symbol it uses, and the board keeps a copy of each footprint.
+  `project check` compares each copy with the library today, through the project's library tables, KiCad's global
+  tables and any `--lib` folder. Board footprints are read back in their library frame first, so rotation and the
+  bottom side do not count as changes. Each difference is classified the same way as a library update, with the
+  references that use the part. Parts that differ only in texts or graphics are listed on one line. The exit code is
+  1 when a change is one the policy holds.
+- **KiCad freeze.** `project freeze` copies the exact symbols and footprints the project uses into
+  `<project>-frozen.kicad_sym` and `<project>-frozen.pretty`. It adds them to the project's library tables and
+  points the schematic and board at them. The files it changes are backed up in `.ecadlib/freeze-<time>/` first, and
+  `--dry-run` shows the plan without changing anything. 3D models keep their paths. The project pack (#109) uses
+  the same code.
+- **Altium out-of-date list.** Components placed from Altium 365 record the revision they were placed at.
+  `project check` asks the workspace for each component's current revision and lists the out-of-date ones. With
+  `--library`, it also lists the classified changes between the two revisions, when ecadlib pushed both.
+- **Usage index.** `project scan` records which parts of an ecadlib library a project or BOM uses, and at which
+  revision, in `library.usage.json`. The librarian also records its own BOM there. A held change then says which
+  projects use the part.
+- **Upkeep.** The weekly `ecadlib upkeep` run has a `changes` check. It reports held changes waiting for a person,
+  projects in the usage index that use an older revision than the released one, and KiCad projects whose parts
+  differ from the library in a way the policy holds. It never applies a change.
+
 ## Proof: KiCad 9.0.8 to 10.0.0
 
 `scripts/change_corpus.py` classifies every symbol and footprint that exists in both KiCad library releases. It then
@@ -120,7 +150,9 @@ A seeded sample of 50 changed parts (seed 105) was also checked by hand; all 50 
 of the changes are courtyard rounding (537 footprints, warn), rect pads changed to rounded rects (59, warn),
 datasheet URLs and descriptions (cosmetic) and silkscreen / fab redraws (cosmetic).
 
-The test suite adds fixtures from real KiCad history (a dual diode whose pin order changed, an LED whose `Sim.Pins`
+The issue that started this work cites a KiCad update that reversed `Device:LED_RGB`'s pin order. Comparing that
+symbol across KiCad 8.0, 9.0, 9.0.8 and 10.0 shows no pin change, so the fixtures use two other real kicad-symbols
+commits instead. The test suite adds fixtures from real KiCad history (a dual diode whose pin order changed, an LED whose `Sim.Pins`
 changed), a SOT-23 pin remap, 0603 to 0402 held / approved / reverted, the two-person rule, 2,200 seeded property
 tests (cosmetic changes never hold; any pin, pad or identity change always holds), and a check that KiCad and Altium
 files of the same part have the same fingerprint.
