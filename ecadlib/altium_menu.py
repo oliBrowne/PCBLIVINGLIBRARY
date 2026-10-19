@@ -443,7 +443,7 @@ Begin
                 IntegratedLibraryManager.InstallLibrary(P);
         End;
         If WasInstalled <> '' Then
-            Result := Result + #13#10 + 'The library you had is installed again; the new part has no symbol or footprint yet.'
+            Result := Result + #13#10 + 'The library you had is installed again; what this run added is not built yet.'
         Else
             Result := Result + #13#10 + 'Nothing was installed: the library is not ready.';
         Result := Result + ' Next: read the report, fix it, run this again.';

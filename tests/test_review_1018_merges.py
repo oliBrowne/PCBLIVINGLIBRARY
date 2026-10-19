@@ -249,3 +249,29 @@ def test_the_dialog_headline_says_not_found_for_a_bad_part_number():
     src = AF.__file__ and open(AF.__file__, encoding="utf-8").read()
     i = src.index("If St = 'error' Then")
     assert "EcadlibDialog.Big.Caption := Answer(Job, 'big')" in src[i:i + 300]
+
+
+@lite
+def test_an_exclusively_locked_library_file_is_reported_too(tmp_path):
+    """AD26 recheck after #112: a file locked with no sharing failed already at the read, with a bare Errno 13."""
+    from pathlib import Path
+    from ecadlib import altium_dblib_sync as S
+    from tests.test_review_1018_ad26_recheck import _item, _models
+    _models(tmp_path)
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps([_item("R1", "Resistors")]))
+    S.sync(plan, tmp_path / "lib")                                    # the files exist, then one is locked
+    lib = str(tmp_path / "lib")
+    real = Path.read_bytes
+
+    def locked(self):
+        if str(self).startswith(lib) and self.suffix == ".PcbLib":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+    Path.read_bytes = locked
+    try:
+        out = S.sync(plan, tmp_path / "lib")
+    finally:
+        Path.read_bytes = real
+    text = json.dumps(out)
+    assert "is open in Altium or another program" in text and "Errno" not in text, text
