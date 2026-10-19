@@ -911,6 +911,18 @@ class Workspace:
         counts = {s: sum(p["cross_check"] == s for p in parts) for s in ("agreed", "disagreed", "unchecked", "skipped")}
         return {"parts": parts, "counts": counts, "modes": list(CC.MODES)}
 
+    def assembly_overlay(self, bom, part):
+        """The assembly overlay picture of a part in a BOM's plan (<plan folder>/assembly/*.png, ecadlib.assembly):
+        its path, else ValueError."""
+        _, plan_f, items = self._plan(bom)
+        it = self._part(items, part)
+        rel = (it.get("assembly") or {}).get("overlay") or ""
+        folder = (plan_f.parent / "assembly").resolve()
+        p = (plan_f.parent / rel).resolve() if rel else None
+        if p is None or folder not in p.parents or p.suffix.lower() != ".png" or not p.is_file():
+            raise ValueError(f"{part} has no assembly overlay picture")
+        return p
+
     def library_parts(self, bom, pictures=True):
         """The librarian plan of a BOM as cards (ecadlib.partview): status in plain words, held reasons with a next
         step, cross-check and KiCad/Altium results with both values, datasheet link, cost and model, a footprint

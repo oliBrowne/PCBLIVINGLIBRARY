@@ -17,7 +17,9 @@ approvals are only recorded. Keys (all optional):
   reject_blocks     a current reject holds the item until that person approves again (default true)
 Each decision is stored in the item's `approvals` list: who, key, when, role, decision, comment and `hash`, a sha256
 over the item's .SchLib/.PcbLib bytes and its key fields (name, folder, description, comment, parameters, cleared,
-symbol/footprint refs). Any later change to them makes the approval stale; it then no longer counts. The latest
+symbol/footprint refs). Any later change to them makes the approval stale; it then no longer counts. The assembly
+check's parameters (Assembly *, LCSC Part: ecadlib.assembly) are measurements ecadlib repeats on every run, not content a
+person signs, so they do not count: a new check or JLCPCB redrawing its footprint never voids a sign-off. The latest
 decision per person counts. Every decision (and every refused one) is appended to approvals_audit.jsonl next to
 the plan.
 release_check calls post_check() at the end: with a policy, an item that passes but is not signed off gets status
@@ -129,6 +131,8 @@ def applies(item, policy):
 
 
 # ---------------------------------------------------------------- content hash
+DERIVED_PARAMS = frozenset(("Assembly Profile", "LCSC Part", "Assembly Rotation", "Assembly Offset", "Assembly Check",
+                            "Assembly Evidence"))          # ecadlib.assembly.PARAMS: written by the check, not signed
 def _resolve(base, p):
     return None if not p else Path(p) if Path(p).is_absolute() else Path(base) / p
 
@@ -141,7 +145,8 @@ def content_hash(item, base="."):
         h.update(f"{kind}:{(item.get(kind) or {}).get('ref') or ''}\0".encode())
         h.update(hashlib.sha256(f.read_bytes()).digest() if f and f.is_file() else b"missing")
     fields = {k: item.get(k) or "" for k in KEY_FIELDS}
-    fields["parameters"] = sorted((p["name"], str(p["value"])) for p in item.get("parameters") or [])
+    fields["parameters"] = sorted((p["name"], str(p["value"])) for p in item.get("parameters") or []
+                                  if p["name"] not in DERIVED_PARAMS)
     fields["cleared"] = sorted(item.get("cleared") or [])
     h.update(json.dumps(fields, sort_keys=True).encode())
     return h.hexdigest()

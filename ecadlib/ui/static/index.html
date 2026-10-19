@@ -270,6 +270,7 @@ header .keyhint:hover { color: var(--text); }
 #panel h3 { font: 500 10.5px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 22px 0 8px; }
 #panel .bigpic { border-radius: 10px; overflow: hidden; border: 1px solid #000; background: var(--pcb-board); }
 #panel .bigpic svg { display: block; width: 100%; height: auto; max-height: 240px; }
+#panel .asmpic { display: block; width: 100%; height: auto; margin-top: 8px; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
 .reason { border-left: 1px solid var(--warn); padding: 3px 0 3px 12px; margin: 8px 0; }
 .reason .fix { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
 .reason .fix b { color: var(--text); font-weight: 550; }
@@ -1261,6 +1262,14 @@ function showPanel(p, focus = true) {
   const ccRows = cc && cc.rows.length ? `<div class="scroll"><table class="vs"><thead><tr><th>What</th><th>Datasheet read</th><th>${cc.rows[0].second_is === "table" ? "Standard table" : "Second read"}</th><th>Page</th></tr></thead><tbody>` +
     cc.rows.map(r => `<tr><td>${esc(r.label)}</td><td class="diff">${esc(r.first)}</td><td class="diff">${esc(r.second)}</td><td>${r.page ? dsLink(r.page, "p. " + r.page) || esc(r.page) : "–"}</td></tr>`).join("") + "</tbody></table></div>" +
     `<div class="muted small">Compared against ${esc(cc.rows[0].against.replace(/^standard:/, "the standard package "))}. Neither value was picked for you.</div>` : "";
+  // the assembly check (docs/assembly.md): the pads against the assembler's footprint, the CPL rotation, the overlay
+  const asm = p.assembly, ASMPILL = { identical: "s-ok", compatible: "s-ok", risky: "s-warn", incompatible: "s-bad", unchecked: "s-off", verified: "s-ok", override: "s-info", table: "s-warn", unknown: "s-bad" };
+  const asmHtml = asm ? `<h3>Assembly (${esc(asm.profile)})</h3>
+    <div class="small">Pads <span class="pill ${ASMPILL[asm.pads] || "s-info"}">${esc(asm.pads)}</span> against ${esc(asm.theirs || "no assembler footprint")} (${esc(asm.lcsc)}) ·
+      rotation <span class="pill ${ASMPILL[asm.rotation] || "s-info"}">${esc(asm.rotation)}</span>${asm.correction != null ? ` · CPL rotation = board angle + ${esc(asm.correction)}°` : ""}</div>
+    ${[...asm.reasons, ...asm.review.map(r => "Check in the placement preview: " + r)].map(r => `<div class="reason"><div>${esc(r)}</div></div>`).join("")}
+    ${asm.notes.length ? `<ul class="why small muted">${asm.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+    ${asm.overlay && current ? `<img class="asmpic" loading="lazy" alt="Our pads (red outline) over the assembler's (blue) for ${esc(p.part)}" src="/api/parts/assembly-overlay?${new URLSearchParams({ bom: current.bom, part: p.part })}">` : ""}` : "";
   const parRows = par.rows.length ? `<div class="scroll"><table class="vs"><thead><tr><th>What</th><th>KiCad</th><th>Altium</th></tr></thead><tbody>` +
     par.rows.map(r => `<tr><td>${esc(r.what)}</td><td class="diff">${esc(r.kicad)}</td><td class="diff">${esc(r.altium)}</td></tr>`).join("") + "</tbody></table></div>" : "";
   const acts = [];
@@ -1274,6 +1283,7 @@ function showPanel(p, focus = true) {
     ${acts.length ? `<div class="pactions">${acts.join("")}</div>` : ""}
     <div id="perr"></div>
     ${cc ? `<h3>Cross-check: ${esc(cc.label)}</h3>${ccRows || `<div class="small">${esc(cc.summary || "")}</div>`}` : ""}
+    ${asmHtml}
     <h3>KiCad and Altium</h3><div class="small">${par.result === "match" ? '<span class="pill s-ok">match</span> The KiCad footprint and the Altium files read back the same.' : par.result === "mismatch" ? '<span class="pill s-warn">differ</span> Both values are below.' : '<span class="muted">Not compared yet: compared once both files exist.</span>'}</div>${parRows}
     <h3>Where it came from</h3>
     <dl class="kv"><dt>Symbol</dt><dd>${p.symbol.found ? esc(p.symbol.from || p.symbol.ref) : `<span class="s-warn pill">none yet</span>`}</dd>

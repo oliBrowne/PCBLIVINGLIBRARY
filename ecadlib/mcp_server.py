@@ -491,7 +491,7 @@ TOOLS = [
                                     "include_held": {"type": "boolean", "default": False}}}},
     {"name": "altium_menu",
      "description": "Write the 'ecadlib' menu for Altium Designer into the workspace's altium_menu/ folder: a DelphiScript "
-                    "project (Add part from MPN, Check this project BOM, Open review queue) that runs ecadlib on the "
+                    "project (Add part from MPN, Check this project BOM, Assembly check, Open review queue) that runs ecadlib on the "
                     "Altium PC and reinstalls the library, its settings and runner, and with win_dir a ready-made menu "
                     "file (.DXPPrf). Never run inside Altium by ecadlib's tests.",
      "inputSchema": {"type": "object",
