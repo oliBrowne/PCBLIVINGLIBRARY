@@ -12,10 +12,6 @@ property MPN=AMS1117-3.3 at=(at 0 0 0) hidden
 property Manufacturer="Advanced Monolithic Systems" at=(at 0 0 0) hidden
 property "LCSC URL"=https://www.lcsc.com/product-detail/C6186.html at=(at 0 0 0) hidden
 property LCSC=C6186 at=(at 0 0 0) hidden
-property "Assembly Check"="pads unchecked; rotation unknown" at=(at 0 0 0) hidden
-property "Assembly Evidence"="no assembler footprint" at=(at 0 0 0) hidden
-property "Assembly Profile"=jlcpcb at=(at 0 0 0) hidden
-property "LCSC Part"=C6186 at=(at 0 0 0) hidden
 graphics rectangle unitAMS1117-3.3_1_1: 1 bbox(-5.08,-5.08,5.08,2.54) #8a5ebe5bd1
 pin 1 GND power_in line unit=AMS1117-3.3_1_1 at=(at 0 -7.62 90) length=2.54
 pin 2 VO power_in line unit=AMS1117-3.3_1_1 at=(at 7.62 0 180) length=2.54
@@ -34,24 +30,19 @@ property MPN=AO3401A at=(at 0 0 0) hidden
 property Manufacturer="Alpha & Omega Semiconductor" at=(at 0 0 0) hidden
 property "LCSC URL"=https://www.lcsc.com/product-detail/C15127.html at=(at 0 0 0) hidden
 property LCSC=C15127 at=(at 0 0 0) hidden
-property "Assembly Check"="pads unchecked; rotation table" at=(at 0 0 0) hidden
-property "Assembly Evidence"="family sot23 0 deg rule" at=(at 0 0 0) hidden
-property "Assembly Offset"="0.000, 0.000" at=(at 0 0 0) hidden
-property "Assembly Profile"=jlcpcb at=(at 0 0 0) hidden
-property "Assembly Rotation"=180 at=(at 0 0 0) hidden
-property "LCSC Part"=C15127 at=(at 0 0 0) hidden
 graphics circle unitAO3401A_1_1: 1 bbox(1.27,0,1.27,0) #b21e6b72b2
 graphics polyline unitAO3401A_1_1: 9 bbox(-2.54,-2.54,2.54,2.54) #565bf8eda7
 pin 1 G input line unit=AO3401A_1_1 at=(at -5.08 0 0) length=2.54
 pin 2 S passive line unit=AO3401A_1_1 at=(at 2.54 -5.08 90) length=2.54
 pin 3 D passive line unit=AO3401A_1_1 at=(at 2.54 5.08 270) length=2.54
 ### kicad/demo_bom_demo/ecadlib_demo.kicad_sym:CAP-0402-100nF
+(pin_numbers hide)
 (pin_names (offset 1.016) hide)
 (exclude_from_sim no)
 (in_bom yes)
 (on_board yes)
-property Reference=C at=(at -2.032 1.778 0)
-property Value=100nF at=(at -2.032 -3.048 0)
+property Reference=C at=(at -2.032 1.524 0)
+property Value=100nF at=(at -2.032 -2.794 0)
 property Footprint=ecadlib_demo:C_0402_1005Metric at=(at 0 0 0) hidden
 property Datasheet=https://www.lcsc.com/datasheet/C1525.pdf at=(at 0 0 0) hidden
 property Description="Capacitor 100nF 16V X7R 0402" at=(at 0 0 0) hidden
@@ -59,16 +50,11 @@ property Manufacturer="Samsung Electro-Mechanics" at=(at 0 0 0) hidden
 property MPN=CL05B104KO5NNNC at=(at 0 0 0) hidden
 property "LCSC URL"=https://www.lcsc.com/product-detail/C1525.html at=(at 0 0 0) hidden
 property LCSC=C1525 at=(at 0 0 0) hidden
-property "Assembly Check"="pads unchecked; rotation table" at=(at 0 0 0) hidden
-property "Assembly Evidence"="family chip 0 deg rule" at=(at 0 0 0) hidden
-property "Assembly Offset"="0.000, 0.000" at=(at 0 0 0) hidden
-property "Assembly Profile"=jlcpcb at=(at 0 0 0) hidden
-property "Assembly Rotation"=0 at=(at 0 0 0) hidden
-property "LCSC Part"=C1525 at=(at 0 0 0) hidden
 graphics polyline unitCAP-0402-100nF_1_1: 2 bbox(-2.032,-0.762,2.032,0.762) #d6a2061611
-pin 1 "~" passive line unit=CAP-0402-100nF_1_1 at=(at 0 3.81 270) length=2.794
-pin 2 "~" passive line unit=CAP-0402-100nF_1_1 at=(at 0 -3.81 90) length=2.794
+pin 1 "~" passive line unit=CAP-0402-100nF_1_1 at=(at 0 5.08 270) length=4.318
+pin 2 "~" passive line unit=CAP-0402-100nF_1_1 at=(at 0 -5.08 90) length=4.318
 ### kicad/demo_bom_demo/ecadlib_demo.kicad_sym:KT-0603R
+(pin_numbers hide)
 (pin_names (offset 1.016) hide)
 (exclude_from_sim no)
 (in_bom yes)
@@ -82,16 +68,11 @@ property MPN=KT-0603R at=(at 0 0 0) hidden
 property Manufacturer="Hubei KENTO Elec" at=(at 0 0 0) hidden
 property "LCSC URL"=https://www.lcsc.com/product-detail/C2286.html at=(at 0 0 0) hidden
 property LCSC=C2286 at=(at 0 0 0) hidden
-property "Assembly Check"="pads unchecked; rotation table" at=(at 0 0 0) hidden
-property "Assembly Evidence"="family led_chip 0 deg rule" at=(at 0 0 0) hidden
-property "Assembly Offset"="0.000, 0.000" at=(at 0 0 0) hidden
-property "Assembly Profile"=jlcpcb at=(at 0 0 0) hidden
-property "Assembly Rotation"=0 at=(at 0 0 0) hidden
-property "LCSC Part"=C2286 at=(at 0 0 0) hidden
 graphics polyline unitKT-0603R_1_1: 9 bbox(-1.27,-2.794,2.032,1.27) #7f1f2eba92
-pin 1 K passive line unit=KT-0603R_1_1 at=(at 3.81 0 180) length=2.54
-pin 2 A passive line unit=KT-0603R_1_1 at=(at -3.81 0 0) length=2.54
+pin 1 K passive line unit=KT-0603R_1_1 at=(at -5.08 0 0) length=3.81
+pin 2 A passive line unit=KT-0603R_1_1 at=(at 5.08 0 180) length=3.81
 ### kicad/demo_bom_demo/ecadlib_demo.kicad_sym:RES-0603-10k
+(pin_numbers hide)
 (pin_names (offset 1.016) hide)
 (exclude_from_sim no)
 (in_bom yes)
@@ -105,16 +86,11 @@ property Manufacturer=UNI-ROYAL at=(at 0 0 0) hidden
 property MPN=0603WAF1002T5E at=(at 0 0 0) hidden
 property "LCSC URL"=https://www.lcsc.com/product-detail/C25804.html at=(at 0 0 0) hidden
 property LCSC=C25804 at=(at 0 0 0) hidden
-property "Assembly Check"="pads unchecked; rotation table" at=(at 0 0 0) hidden
-property "Assembly Evidence"="family chip 0 deg rule" at=(at 0 0 0) hidden
-property "Assembly Offset"="0.000, 0.000" at=(at 0 0 0) hidden
-property "Assembly Profile"=jlcpcb at=(at 0 0 0) hidden
-property "Assembly Rotation"=0 at=(at 0 0 0) hidden
-property "LCSC Part"=C25804 at=(at 0 0 0) hidden
-graphics rectangle unitRES-0603-10k_1_1: 1 bbox(-1.016,-2.54,1.016,2.54) #360b21a811
-pin 1 "~" passive line unit=RES-0603-10k_1_1 at=(at 0 3.81 270) length=1.27
-pin 2 "~" passive line unit=RES-0603-10k_1_1 at=(at 0 -3.81 90) length=1.27
+graphics polyline unitRES-0603-10k_1_1: 1 bbox(-1.016,-2.54,1.016,2.54) #7e75acf971
+pin 1 "~" passive line unit=RES-0603-10k_1_1 at=(at 0 5.08 270) length=2.54
+pin 2 "~" passive line unit=RES-0603-10k_1_1 at=(at 0 -5.08 90) length=2.54
 ### kicad/demo_bom_demo/ecadlib_demo.kicad_sym:RES-0603-4.7k
+(pin_numbers hide)
 (pin_names (offset 1.016) hide)
 (exclude_from_sim no)
 (in_bom yes)
@@ -128,27 +104,21 @@ property Manufacturer=UNI-ROYAL at=(at 0 0 0) hidden
 property MPN=0603WAF4701T5E at=(at 0 0 0) hidden
 property "LCSC URL"=https://www.lcsc.com/product-detail/C23162.html at=(at 0 0 0) hidden
 property LCSC=C23162 at=(at 0 0 0) hidden
-property "Assembly Check"="pads unchecked; rotation table" at=(at 0 0 0) hidden
-property "Assembly Evidence"="family chip 0 deg rule" at=(at 0 0 0) hidden
-property "Assembly Offset"="0.000, 0.000" at=(at 0 0 0) hidden
-property "Assembly Profile"=jlcpcb at=(at 0 0 0) hidden
-property "Assembly Rotation"=0 at=(at 0 0 0) hidden
-property "LCSC Part"=C23162 at=(at 0 0 0) hidden
-graphics rectangle unitRES-0603-4.7k_1_1: 1 bbox(-1.016,-2.54,1.016,2.54) #4e5a437bb0
-pin 1 "~" passive line unit=RES-0603-4.7k_1_1 at=(at 0 3.81 270) length=1.27
-pin 2 "~" passive line unit=RES-0603-4.7k_1_1 at=(at 0 -3.81 90) length=1.27
+graphics polyline unitRES-0603-4.7k_1_1: 1 bbox(-1.016,-2.54,1.016,2.54) #f39525a3fd
+pin 1 "~" passive line unit=RES-0603-4.7k_1_1 at=(at 0 5.08 270) length=2.54
+pin 2 "~" passive line unit=RES-0603-4.7k_1_1 at=(at 0 -5.08 90) length=2.54
 ### kicad/demo_bom_demo/ecadlib_demo.sqlite
-table Capacitors: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC,Assembly Check,Assembly Evidence,Assembly Offset,Assembly Profile,Assembly Rotation,LCSC Part
-row Capacitors: ["CAP-0402-100nF", "ecadlib_demo:CAP-0402-100nF", "ecadlib_demo:C_0402_1005Metric", "100nF", "https://www.lcsc.com/datasheet/C1525.pdf", "Capacitor 100nF 16V X7R 0402", "Samsung Electro-Mechanics", "CL05B104KO5NNNC", "https://www.lcsc.com/product-detail/C1525.html", "C1525", "pads unchecked; rotation table", "family chip 0 deg rule", "0.000, 0.000", "jlcpcb", "0", "C1525"]
-table Diodes: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC,Assembly Check,Assembly Evidence,Assembly Offset,Assembly Profile,Assembly Rotation,LCSC Part
-row Diodes: ["KT-0603R", "ecadlib_demo:KT-0603R", "ecadlib_demo:LED_0603_1608Metric", "RED", "https://www.lcsc.com/datasheet/C2286.pdf", "LED red 0603", "Hubei KENTO Elec", "KT-0603R", "https://www.lcsc.com/product-detail/C2286.html", "C2286", "pads unchecked; rotation table", "family led_chip 0 deg rule", "0.000, 0.000", "jlcpcb", "0", "C2286"]
-table ICs: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC,Assembly Check,Assembly Evidence,Assembly Profile,LCSC Part
-row ICs: ["AMS1117-3.3", "ecadlib_demo:AMS1117-3.3", "ecadlib_demo:SOT-223-3_TabPin2", "AMS1117-3.3", "https://www.lcsc.com/datasheet/C6186.pdf", "LDO 3.3V 1A SOT-223", "Advanced Monolithic Systems", "AMS1117-3.3", "https://www.lcsc.com/product-detail/C6186.html", "C6186", "pads unchecked; rotation unknown", "no assembler footprint", "jlcpcb", "C6186"]
-table Resistors: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC,Assembly Check,Assembly Evidence,Assembly Offset,Assembly Profile,Assembly Rotation,LCSC Part
-row Resistors: ["RES-0603-10k", "ecadlib_demo:RES-0603-10k", "ecadlib_demo:R_0603_1608Metric", "10k", "https://www.lcsc.com/datasheet/C25804.pdf", "Resistor 10k 1% 0603", "UNI-ROYAL", "0603WAF1002T5E", "https://www.lcsc.com/product-detail/C25804.html", "C25804", "pads unchecked; rotation table", "family chip 0 deg rule", "0.000, 0.000", "jlcpcb", "0", "C25804"]
-row Resistors: ["RES-0603-4.7k", "ecadlib_demo:RES-0603-4.7k", "ecadlib_demo:R_0603_1608Metric", "4.7k", "https://www.lcsc.com/datasheet/C23162.pdf", "Resistor 4.7k 1% 0603", "UNI-ROYAL", "0603WAF4701T5E", "https://www.lcsc.com/product-detail/C23162.html", "C23162", "pads unchecked; rotation table", "family chip 0 deg rule", "0.000, 0.000", "jlcpcb", "0", "C23162"]
-table Transistors: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC,Assembly Check,Assembly Evidence,Assembly Offset,Assembly Profile,Assembly Rotation,LCSC Part
-row Transistors: ["AO3401A", "ecadlib_demo:AO3401A", "ecadlib_demo:SOT-23", "AO3401A", "https://www.lcsc.com/datasheet/C15127.pdf", "P-MOSFET -30V -4A SOT-23", "Alpha & Omega Semiconductor", "AO3401A", "https://www.lcsc.com/product-detail/C15127.html", "C15127", "pads unchecked; rotation table", "family sot23 0 deg rule", "0.000, 0.000", "jlcpcb", "180", "C15127"]
+table Capacitors: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC
+row Capacitors: ["CAP-0402-100nF", "ecadlib_demo:CAP-0402-100nF", "ecadlib_demo:C_0402_1005Metric", "100nF", "https://www.lcsc.com/datasheet/C1525.pdf", "Capacitor 100nF 16V X7R 0402", "Samsung Electro-Mechanics", "CL05B104KO5NNNC", "https://www.lcsc.com/product-detail/C1525.html", "C1525"]
+table Diodes: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC
+row Diodes: ["KT-0603R", "ecadlib_demo:KT-0603R", "ecadlib_demo:LED_0603_1608Metric", "RED", "https://www.lcsc.com/datasheet/C2286.pdf", "LED red 0603", "Hubei KENTO Elec", "KT-0603R", "https://www.lcsc.com/product-detail/C2286.html", "C2286"]
+table ICs: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC
+row ICs: ["AMS1117-3.3", "ecadlib_demo:AMS1117-3.3", "ecadlib_demo:SOT-223-3_TabPin2", "AMS1117-3.3", "https://www.lcsc.com/datasheet/C6186.pdf", "LDO 3.3V 1A SOT-223", "Advanced Monolithic Systems", "AMS1117-3.3", "https://www.lcsc.com/product-detail/C6186.html", "C6186"]
+table Resistors: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC
+row Resistors: ["RES-0603-10k", "ecadlib_demo:RES-0603-10k", "ecadlib_demo:R_0603_1608Metric", "10k", "https://www.lcsc.com/datasheet/C25804.pdf", "Resistor 10k 1% 0603", "UNI-ROYAL", "0603WAF1002T5E", "https://www.lcsc.com/product-detail/C25804.html", "C25804"]
+row Resistors: ["RES-0603-4.7k", "ecadlib_demo:RES-0603-4.7k", "ecadlib_demo:R_0603_1608Metric", "4.7k", "https://www.lcsc.com/datasheet/C23162.pdf", "Resistor 4.7k 1% 0603", "UNI-ROYAL", "0603WAF4701T5E", "https://www.lcsc.com/product-detail/C23162.html", "C23162"]
+table Transistors: Part ID,Symbol,Footprint,Value,Datasheet,Description,Manufacturer,MPN,LCSC URL,LCSC
+row Transistors: ["AO3401A", "ecadlib_demo:AO3401A", "ecadlib_demo:SOT-23", "AO3401A", "https://www.lcsc.com/datasheet/C15127.pdf", "P-MOSFET -30V -4A SOT-23", "Alpha & Omega Semiconductor", "AO3401A", "https://www.lcsc.com/product-detail/C15127.html", "C15127"]
 ### librarian/demo_bom_demo/models/KiCad/C_0402_1005Metric.kicad_mod
 footprint C_0402_1005Metric
 (version 20221018)
@@ -385,18 +355,18 @@ graphics record7: 1 #d9b01ca983
 graphics record8: 1 #b7bba8885b
 ### librarian/demo_bom_demo/models/SchLib/Capacitor.SchLib:Capacitor
 record1 ALLPINCOUNT=2 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Unpolarized capacitor CURRENTPARTID=1 DESIGNITEMID=Capacitor DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=Capacitor OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
-pin 1 "" etype=4 orient=1 at=(0,4) length=11 part=1 mode=0 symbols=[0, 0, 0, 0] cong=49
-pin 2 "" etype=4 orient=3 at=(0,-4) length=11 part=1 mode=0 symbols=[0, 0, 0, 0] cong=51
-record34 COLOR=8388608 FONTID=1 LOCATION.X=-8 LOCATION.Y=7 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=C?
-record41 COLOR=8388608 FONTID=1 LOCATION.X=-8 LOCATION.Y=-12 NAME=Comment OWNERPARTID=-1 TEXT=*
-record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-8 LOCATION.Y=-22 NAME=Value OWNERPARTID=-1 TEXT=C
-record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-8 LOCATION.Y=-32 NAME=Description OWNERPARTID=-1 TEXT=Unpolarized capacitor
+pin 1 "" etype=4 orient=1 at=(0,3) length=17 part=1 mode=0 symbols=[0, 0, 0, 0] cong=33
+pin 2 "" etype=4 orient=3 at=(0,-3) length=17 part=1 mode=0 symbols=[0, 0, 0, 0] cong=35
+record34 COLOR=8388608 FONTID=1 LOCATION.X=-8 LOCATION.Y=6 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=C?
+record41 COLOR=8388608 FONTID=1 LOCATION.X=-8 LOCATION.Y=-11 NAME=Comment OWNERPARTID=-1 TEXT=*
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-8 LOCATION.Y=-21 NAME=Value OWNERPARTID=-1 TEXT=C
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-8 LOCATION.Y=-31 NAME=Description OWNERPARTID=-1 TEXT=Unpolarized capacitor
 record44 
 graphics record6: 2 #fc4492e435
 ### librarian/demo_bom_demo/models/SchLib/KT-0603R.SchLib:KT-0603R
 record1 ALLPINCOUNT=2 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Light emitting diode (pin 1 = cathode) CURRENTPARTID=1 DESIGNITEMID=KT-0603R DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=KT-0603R OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
-pin 1 "K" etype=4 orient=0 at=(5,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=48
-pin 2 "A" etype=4 orient=2 at=(-5,0) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=50
+pin 1 "K" etype=4 orient=2 at=(-5,0) length=15 part=1 mode=0 symbols=[0, 0, 0, 0] cong=34
+pin 2 "A" etype=4 orient=0 at=(5,0) length=15 part=1 mode=0 symbols=[0, 0, 0, 0] cong=32
 record34 COLOR=8388608 FONTID=1 LOCATION.X=-5 LOCATION.Y=8 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=D?
 record41 COLOR=8388608 FONTID=1 LOCATION.X=-5 LOCATION.Y=-19 NAME=Comment OWNERPARTID=-1 TEXT=*
 record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-5 LOCATION.Y=-29 NAME=Value OWNERPARTID=-1 TEXT=LED
@@ -408,12 +378,12 @@ record46 OWNERINDEX=18
 record48 OWNERINDEX=18
 graphics record6: 9 #38a2e30048
 ### librarian/demo_bom_demo/models/SchLib/Resistor.SchLib:Resistor
-record1 ALLPINCOUNT=2 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Resistor CURRENTPARTID=1 DESIGNITEMID=Resistor DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=Resistor OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
-pin 1 "" etype=4 orient=1 at=(0,10) length=5 part=1 mode=0 symbols=[0, 0, 0, 0] cong=49
-pin 2 "" etype=4 orient=3 at=(0,-10) length=5 part=1 mode=0 symbols=[0, 0, 0, 0] cong=51
+record1 ALLPINCOUNT=2 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Resistor, US symbol CURRENTPARTID=1 DESIGNITEMID=Resistor DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=Resistor OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin 1 "" etype=4 orient=1 at=(0,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=33
+pin 2 "" etype=4 orient=3 at=(0,-10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=35
 record34 COLOR=8388608 FONTID=1 LOCATION.X=-4 LOCATION.Y=13 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=R?
 record41 COLOR=8388608 FONTID=1 LOCATION.X=-4 LOCATION.Y=-18 NAME=Comment OWNERPARTID=-1 TEXT=*
-record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-4 LOCATION.Y=-28 NAME=Value OWNERPARTID=-1 TEXT=R
-record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-4 LOCATION.Y=-38 NAME=Description OWNERPARTID=-1 TEXT=Resistor
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-4 LOCATION.Y=-28 NAME=Value OWNERPARTID=-1 TEXT=R_US
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-4 LOCATION.Y=-38 NAME=Description OWNERPARTID=-1 TEXT=Resistor, US symbol
 record44 
-graphics record14: 1 #9f6e1490e0
+graphics record6: 1 #30123e7a10

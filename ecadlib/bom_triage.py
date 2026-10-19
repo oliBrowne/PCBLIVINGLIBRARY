@@ -503,7 +503,7 @@ def main(argv=None):
         say(f"your KiCad libraries: {len(index.symbols)} symbols, {len(index.footprints)} footprints")
     rows = triage(lines, index, provs, http)
     counts = write_reports(rows, mapping, provs, http, a.out, a.bom)
-    if a.json:                                           # stable shape: README "Machine-readable output (--json)"
+    if a.json:                                           # stable shape: docs/command-line.md "Machine-readable output (--json)"
         print(json.dumps({"bom": str(a.bom), "lines": len(rows), "mapping": mapping,
                           "counts": {str(k): int(v) for k, v in counts.items()}, "rows": rows,
                           "reports": [Path(a.out).with_suffix(x).as_posix() for x in (".md", ".csv")]}, indent=2, default=str))

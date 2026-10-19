@@ -1,0 +1,67 @@
+name: Accuracy benchmark (live)
+
+# The live accuracy benchmark (docs/benchmark.md): real datasheets read by a real model, scored pad by pad against
+# KiCad's library. It costs money (about $15 for 110 parts on Claude Opus in batch mode), so it only runs when
+# someone starts it from the Actions tab: there is no schedule. It needs the repository secret ANTHROPIC_API_KEY.
+# The run never spends more than max_usd: [datasheet] max_cost_usd holds each request's worst case before it is sent.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model that reads the datasheets"
+        default: claude-opus-5-5
+      limit:
+        description: "Parts (first N of kicad-v1, families interleaved)"
+        default: "110"
+      max_usd:
+        description: "Hard cost cap for the run, in US dollars"
+        default: "20"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e .
+      - name: Rules for the run (cost cap, one model, no escalation)
+        env:
+          MAX_USD: ${{ inputs.max_usd }}
+        run: |
+          python - <<'EOF'
+          import os
+          cap = float(os.environ["MAX_USD"])
+          assert cap > 0, "max_usd must be above 0"
+          open("bench.toml", "w").write(f'[datasheet]\nmax_cost_usd = {cap}\nroute = "single"\ncross_check_model = ""\n')
+          EOF
+      - name: Run the benchmark
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: ${{ inputs.model }}
+          LIMIT: ${{ inputs.limit }}
+        run: |
+          python -m ecadlib eval run --set kicad-v1 --limit "$LIMIT" --model "$MODEL" --sources standard,datasheet \
+            --batch --rules bench.toml --record bench/record -o bench/out --cache bench/http_cache --json
+      - name: Results page
+        if: always()
+        run: |
+          if [ -f bench/out/report.json ]; then
+            python -m ecadlib eval publish bench/out -o bench/results.md
+            cat bench/results.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ inputs.model }}
+          path: |
+            bench/out/report.json
+            bench/out/report.md
+            bench/results.md
+            bench/record/
+          retention-days: 90

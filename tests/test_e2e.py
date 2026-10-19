@@ -10,14 +10,13 @@ Run:  python3 -m tests.run_all test_e2e      (about a minute; the KiCad checks s
 and then proves each output plugs into its tool: KiCad loads every symbol and footprint through the library tables
 the export wrote and a board with every part passes DRC (needs KiCad), the .kicad_dbl's SQLite maps to real symbols
 and footprints, every .PcbLib / .SchLib reads back with pyaltiumlib and our reader and holds every name the DbLib, the
-parts table and the Altium 365 release reference. Also: `ecadlib agent run` against a local bare git remote (branch,
-commit, PR, queue, approve, push), `ecadlib mcp` over stdio, a second run of the whole path (nothing changes) and
+parts table and the Altium 365 release reference. Also: `ecadlib mcp` over stdio, a second run of the whole path (nothing changes) and
 a librarian killed mid-run then re-run (recovers).
 
 Sources are offline and recorded (tests/e2e_support.py): real KiCad library files from gitlab.com, a SYNTHETIC
 EasyEDA payload, SYNTHETIC Claude answers from a local fake API (ANTHROPIC_BASE_URL); every other request goes to a
 dead proxy. Nothing here was opened in Altium Designer or Altium 365: the Altium checks are file-level only."""
-import atexit, contextlib, csv, json, re, shutil, sqlite3, subprocess, tempfile
+import atexit, contextlib, csv, json, re, shutil, sqlite3, tempfile
 from pathlib import Path
 
 from ecadlib import altium_lib as AL, sexpr
@@ -301,93 +300,7 @@ def test_altium365_release_package_is_consistent():
     print(f"      Altium 365 (FakeNexar): {len(rel)} releases, {len(up)} uploaded files, all consistent")
 
 
-# ---------------------------------------------------------------- 2c. agent and 2d. MCP
-AGENT_BOM = ("Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #,LCSC Part Number,Description,Datasheet\n"
-             "U2,1,LM358DR,SOIC-8_3.9x4.9mm_P1.27mm,Texas Instruments,LM358DR,,Dual op amp,datasheets/lm358.pdf\n"
-             "Q1,1,EEPART1,,ACME,EEPART1,C2002,EasyEDA-only part,datasheets/ee.pdf\n")
-
-
-def _git(cwd, *a):
-    return subprocess.run(["git", *map(str, a)], cwd=cwd, check=True, capture_output=True, text=True, env=E.clean_env()).stdout
-
-
-def test_agent_run_branch_pr_queue_approve_push():
-    from tests.test_visual_check import make_pdf, DS_PAGES
-    if not shutil.which("pdftoppm"):
-        return print("      (pdftoppm not installed: skipped)")
-    root = _tmp("ecadlib-e2e-agent-")
-    tls = E.self_signed(root)
-    remote, ws = root / "remote.git", root / "lib"
-    _git(root, "init", "--bare", "-b", "main", remote)
-    ws.mkdir()
-    _git(ws, "init", "-b", "main")
-    _git(ws, "remote", "add", "origin", remote)
-    (ws / "boms").mkdir()
-    (ws / "datasheets").mkdir()
-    for n in ("lm358", "ee"):
-        (ws / "datasheets" / f"{n}.pdf").write_bytes(make_pdf(DS_PAGES))
-    (ws / "boms" / "main.csv").write_text(AGENT_BOM)
-    (ws / ".gitignore").write_text("http_cache/\n")
-    E.seed_cache(ws / "http_cache")
-    with E.FakeAnthropic() as fa, E.FakeGitHub(tls) as gh, E.FakeNexar(tls) as nx:
-        (ws / "ecadlib.toml").write_text(f"""
-[agent]
-enabled = true
-github_repo = "acme/lib"
-github_api = "{gh.url}"
-upkeep_schedule = "off"
-datasheet_batch = false
-
-[agent.watch]
-sources = [ {{ type = "bom_file", ref = "boms/main.csv" }} ]
-
-[agent.proof]
-max_pages = 3
-api_key_env = "ANTHROPIC_API_KEY"
-
-[altium365]
-workspace = "{nx.workspace}"
-""")
-        _git(ws, "add", ".")
-        _git(ws, "commit", "-m", "library repo")
-        _git(ws, "push", "origin", "main")
-        env = E.clean_env(ANTHROPIC_API_KEY="sk-e2e-test", ANTHROPIC_BASE_URL=fa.url, GITHUB_TOKEN="ghp-e2e",
-                          REQUESTS_CA_BUNDLE=tls[0], NEXAR_TOKEN="nexar-e2e", NEXAR_API_URL=nx.url + "/graphql",
-                          NEXAR_FILES_URL=nx.url)
-        head = _git(ws, "rev-parse", "HEAD").strip()
-        p = E.ecadlib(ws, "agent", "--workspace", ws, "run", env=env)
-        rep = json.loads(p.stdout[p.stdout.index("\n{") + 1:])
-        assert sorted(d["mpn"] for d in rep["detected"]) == ["EEPART1", "LM358DR"], rep["detected"]
-        assert len(rep["review"]) == 2 and not rep["failed"], rep
-        b = rep["batches"][0]
-        assert b["pr_action"] == "opened" and b["fallback"] is None, b
-        # the branch is on the remote, with the library files and the pictures; the user's checkout did not move
-        on_remote = _git(remote, "ls-tree", "-r", "--name-only", b["branch"]).split()
-        assert any(f.endswith("LM358DR.SchLib") for f in on_remote) and any(f.endswith(".png") for f in on_remote), on_remote
-        assert _git(ws, "rev-parse", "HEAD").strip() == head and _git(ws, "symbolic-ref", "--short", "HEAD").strip() == "main"
-        assert [c[1] for c in gh.calls if c[0] == "POST" and c[1].endswith("/pulls")] == ["acme/lib/pulls"], gh.calls
-        assert gh.prs[7]["head"] == b["branch"] and gh.prs[7]["base"] == "main", gh.prs
-        assert sorted(fa.kinds) == [("proof", "EEPART1"), ("proof", "LM358DR")], fa.kinds
-        # the review queue, sign-off, then the push to Altium 365 (FakeNexar)
-        q = E.ecadlib(ws, "queue", "--workspace", ws, "list", env=env).stdout
-        ids = re.findall(r"^\s+(\d{8}-\d{6}-[0-9a-f]{6})\s+waiting for review\b", q, re.M)
-        assert len(ids) == 2, q
-        for i in ids:
-            a = E.ecadlib(ws, "agent", "--workspace", ws, "approve", i, "--user", "Alice Approver", env=env)
-            assert f"{i}: approved" in a.stdout, a.stdout
-        pu = E.ecadlib(ws, "agent", "--workspace", ws, "push", env=env)
-        push = json.loads(pu.stdout[pu.stdout.index("{"):])
-        assert sorted(push["pushed"]) == sorted(ids) and not push["skipped"], push
-        assert sorted(r["componentItemName"] for r in nx.releases) == ["EEPART1", "LM358DR"], nx.releases
-        # a second run finds nothing new: no new item, branch or PR
-        p2 = E.ecadlib(ws, "agent", "--workspace", ws, "run", env=env)
-        rep2 = json.loads(p2.stdout[p2.stdout.index("\n{") + 1:])
-        assert not rep2["detected"] and not rep2["batches"], rep2
-        assert [c[1] for c in gh.calls if c[0] == "POST" and c[1].endswith("/pulls")] == ["acme/lib/pulls"], gh.calls
-        q2 = json.loads(E.ecadlib(ws, "queue", "--workspace", ws, "list", "--json", env=env).stdout)
-        assert sorted(i["id"] for i in q2) == sorted(ids), q2
-
-
+# ---------------------------------------------------------------- 2d. MCP
 def test_mcp_server_over_stdio():
     root = _tmp("ecadlib-e2e-mcp-")
     (root / "ws" / "uploads").mkdir(parents=True)

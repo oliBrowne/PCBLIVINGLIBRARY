@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated 2026-10-18. What ecadlib is for, who it is for and how success is measured are in
+Last updated 2026-10-19. What ecadlib is for, who it is for and how success is measured are in
 [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md). Every planned item below has an issue, and every milestone is a
 [GitHub milestone](https://github.com/oliBrowne/PCBLIVINGLIBRARY/milestones) with the same due date.
 
@@ -10,12 +10,15 @@ the changelog keeps 0.x minor releases free to change command-line options and f
 **Focus until v0.4.0:** a proven BOM-to-Altium 365 flow with a published accuracy benchmark, and real-BOM trials
 with 3 to 5 Altium users (from the 2026-10-17 market-fit review). Altium (Altium 365 first) and KiCad are the
 supported targets. The Fusion Electronics / EAGLE and EasyEDA Pro exports were removed on 2026-10-18 (P13, below).
+On 2026-10-19 five more features were cut and three parked for the same reason
+([Cut on 2026-10-19](#cut-on-2026-10-19), [Parked](#parked)).
 
 ## Shipped
 
 Dates are the day each pull request was merged to `main`. PRs #1-#12 were opened on 2026-10-13 and 2026-10-14 and
 merged together on 2026-10-15. GitHub shows some PRs as closed rather than merged because the history was rewritten
-on 2026-10-17; their commits are on `main`.
+on 2026-10-17; their commits are on `main`. Some of what shipped was cut or parked on 2026-10-19 (see below); the
+table is kept as the record of what was merged.
 
 | Merged | PRs | What shipped |
 |---|---|---|
@@ -72,6 +75,31 @@ EasyEDA Pro, and the two writers with their read-back were about 3,000 lines tha
 next to the Altium and KiCad paths (risk R6). ecadlib's time goes to the BOM-to-Altium 365 flow instead. The last
 version with them is 0.3.1 (`pip install "ecadlib==0.3.1"`); `ecadlib eagle-export` and `ecadlib easyeda-export`
 now say so.
+
+## Cut on 2026-10-19
+
+These are deleted from `main`. The last version with them is on the branch
+[`archive/before-trim`](https://github.com/oliBrowne/PCBLIVINGLIBRARY/tree/archive/before-trim).
+
+| Cut | Why |
+|---|---|
+| JLCPCB assembly output and check (`ecadlib assembly`, assembly profiles, the LCSC Part and Assembly Rotation fields, the *Assembly check (JLCPCB)* entry in the Altium and KiCad menus) | The fab hand-off is a different product. Issue [#104](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/104) is out of scope. |
+| SPICE / IBIS sim models (`ecadlib sim-models`, `[sim]` rules) | A wrong SPICE model fails silently, and checking them is a project of its own. |
+| Pricing, stock and alternates (`ecadlib sourcing`, the upkeep price and stock check) | Octopart and DigiKey do it better. Finding the part through Nexar, DigiKey and Mouser stays. |
+| Library hub (`ecadlib hub`, the "Your library" page across tools, copying parts between tools) | Sharing across tools needs a community, and a stranger's footprint is what the review hold exists to stop. |
+| Team server (`ecadlib team`, `ecadlib ui --team`, sign-in, roles, users, audit log, the Docker and Caddy HTTPS setup) | A login system with no users is pure liability. Trials run as one local user, and the web UI is for one local user. |
+
+## Parked
+
+Removed from `main`, kept on the branch
+[`parked/agent-and-a365-pull`](https://github.com/oliBrowne/PCBLIVINGLIBRARY/tree/parked/agent-and-a365-pull):
+
+- **The library agent:** `ecadlib agent`, `ecadlib agent-watch`, its review queue (`ecadlib queue`), the visual check
+  as the agent used it, and its branch / pull request batches.
+- **Two-way Altium 365 sync:** `ecadlib a365 pull`, `status` and `reconcile`. Pushing to Altium 365
+  (`ecadlib altium365 push`) stays: it is the v0.4.0 goal.
+
+Frozen: **KiCad PCM packaging** (`ecadlib kicad-pcm`) stays in the code, but gets no new work.
 
 ## Risks
 

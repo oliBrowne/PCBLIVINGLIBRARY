@@ -1,7 +1,7 @@
-"""Weekly upkeep: run the lifecycle, upstream, price/stock and Altium 365 drift checks in one go, report only what is
+"""Weekly upkeep: run the lifecycle, upstream, Altium 365 drift and change-control checks in one go, report only what is
 NEW since the last run, and open (or update) one GitHub issue or pull request listing it.
 
-    python -m ecadlib upkeep PLAN|BOM [--checks lifecycle,upstream,sourcing,a365] [--state DIR] [-o REPORT]
+    python -m ecadlib upkeep PLAN|BOM [--checks lifecycle,upstream,a365,changes] [--state DIR] [-o REPORT]
         [--manifest models/manifest.json] [--bom BOM] [--workspace URL] [--apply] [--github issue|pr] [--repo OWNER/NAME]
 
 Checks (each runs in-process; a check whose credentials are missing is skipped with a line saying so, never failed):
@@ -12,9 +12,6 @@ Checks (each runs in-process; a check whose credentials are missing is skipped w
              the plan, in <plan dir>/models/, or given with --manifest). GITLAB_TOKEN optional. New: a KiCad source
              changed, was renamed or deleted since the last report. --apply reconverts parts whose sources *changed*
              (not renamed/deleted: those need a person) so a PR carries the real library diff.
-  sourcing   sourcing.py (Nexar / DigiKey / Mouser with credentials, JLCPCB without). New: the best unit price for a line
-             rose by more than the threshold (default 20 %, [upkeep] price_jump_pct), a line went out of stock at
-             every distributor, or came back.
   a365       upstream.check_a365 against an Altium 365 workspace (NEXAR_TOKEN and --workspace, or [altium365] workspace
              in the rules). New: a drift row (missing, parameter, folder, symbol/footprint, revision) not reported before.
   changes    change control (#105), on a plan's library folder: changes to released parts held for approval, projects in
@@ -40,16 +37,17 @@ gitlab_project / the origin remote, API from --gitlab-api / CI_API_V4_URL / [age
 Notifications: with [notify] targets in the rules, a run that found new changes (and saved its state) posts an
 upkeep_changes event, and a lifecycle event for parts that went EOL / NRND / last time buy (ecadlib/notify.py).
 
-Rules (ecadlib.toml, optional): [upkeep] checks = [...], schedule = "weekly", price_jump_pct = 20, build_qty = 1,
-currency = "USD"; [altium365] workspace = "https://..."."""
+Rules (ecadlib.toml, optional): [upkeep] checks = [...], schedule = "weekly"; [altium365] workspace = "https://...".
+The price and stock check was cut on 2026-10-19: a "sourcing" in --checks or [upkeep] checks is skipped with a note."""
 import argparse, hashlib, json, os, shutil, subprocess, sys
 from datetime import datetime, timezone
 from pathlib import Path
 from . import userconfig as UC
 
-CHECKS = ("lifecycle", "upstream", "sourcing", "a365", "changes")
+CHECKS = ("lifecycle", "upstream", "a365", "changes")
+CUT_CHECKS = ("sourcing",)                          # removed on 2026-10-19; an old list that names one still runs
 LABEL = "ecadlib-upkeep"
-DEFAULTS = {"schedule": "weekly", "checks": list(CHECKS), "price_jump_pct": 20.0, "build_qty": 1, "currency": "USD"}
+DEFAULTS = {"schedule": "weekly", "checks": list(CHECKS)}
 LIFECYCLE_ENV = "NEXAR_CLIENT_ID+NEXAR_CLIENT_SECRET (or NEXAR_SUPPLY_TOKEN), DIGIKEY_CLIENT_ID+DIGIKEY_CLIENT_SECRET, MOUSER_API_KEY"
 BODY_MAX = 60000                                    # GitHub issue/PR bodies stop at 65536 characters
 
@@ -87,7 +85,7 @@ def upkeep_rules(rules):
 
 # ------------------------------------------------------------------ inputs
 class Source:
-    """The input: a plan.json (lifecycle, sourcing, a365) or a BOM (lifecycle, sourcing); plus where the manifest is."""
+    """The input: a plan.json (every check) or a BOM (lifecycle); plus where the manifest is."""
     def __init__(self, path, manifest=None, bom=None, columns=None):
         self.path, self.columns = Path(path), columns   # columns: the rules' [bom] columns
         if not self.path.is_file():
@@ -105,22 +103,6 @@ class Source:
             if c.is_file():
                 return c
         return None
-
-    def lines(self):
-        """BOM lines for sourcing: the BOM when there is one, else one line per plan item."""
-        from .bom_triage import read_bom
-        if self.bom:
-            return read_bom(self.bom, self.columns)[0]
-        out = []
-        for it in self.items:
-            if it.get("status") == "duplicate":
-                continue
-            prm = {p["name"]: p["value"] for p in it.get("parameters", [])}
-            lcsc = prm.get("Supplier Part Number 1", "") if prm.get("Supplier 1", "").upper() in ("LCSC", "JLCPCB") else ""
-            out.append({"designator": "", "qty": "1", "mpn": prm.get("Manufacturer Part Number", ""),
-                        "manufacturer": prm.get("Manufacturer", ""), "lcsc": lcsc, "value": prm.get("Value", ""),
-                        "description": it.get("description", ""), "footprint": (it.get("footprint") or {}).get("ref", "")})
-        return out
 
 
 class Ctx:
@@ -219,65 +201,6 @@ class _environ:
         if self.env is not os.environ:
             os.environ.clear()
             os.environ.update(self.old)
-
-
-# ------------------------------------------------------------------ sourcing
-def check_sourcing(src, state_dir, ctx, cfg, now, rules=None):
-    from . import sourcing as S
-    from .kicad_index import norm_mpn
-    sec = _section("sourcing")
-    if src.kind == "plan" and not src.items:
-        sec.update(status="skipped", reason="the plan has no items")
-        return sec
-    cur_ccy, qty, pct = str(cfg["currency"]).upper(), int(cfg["build_qty"]), float(cfg["price_jump_pct"])
-    from . import providers as P
-    provs = [c(ctx.http) for c in P.fence(S.PROVIDERS, rules)]
-    for p in provs:
-        p.currency = cur_ccy
-    with _environ(ctx.env):
-        creds = [p.name for p in provs if p.name != "jlcpcb_search" and p.configured()]
-        rows, unconf = S.source_bom(src.lines(), provs, qty, cur_ccy, False)
-    fitted = [r for r in rows if "dnp" not in r["flags"] and "merged" not in r["flags"]]   # merged: bought on another line
-    if fitted and not any(r["answered"] for r in fitted):
-        if not creds:
-            sec.update(status="skipped", reason=f"no distributor answered and no credentials set ({LIFECYCLE_ENV})")
-        else:
-            sec.update(status="error", reason="no source answered for any line (quota, network or bad credentials)")
-        return sec
-    old = _load(state_dir / "sourcing_state.json", {"version": 1, "updated": None, "lines": {}})
-    first = old.get("updated") is None
-    lines = dict(old["lines"])
-    for r in fitted:
-        key = norm_mpn(r["mpn"]) if r["mpn"] else f"LCSC:{r['lcsc']}" if r["lcsc"] else ""
-        if not key or not r["answered"] or "not_found" in r["flags"]:
-            continue
-        c = r["chosen"] or {}
-        cur = {"mpn": r["mpn"] or r["lcsc"], "unit": c.get("unit"), "currency": cur_ccy, "distributor": c.get("distributor"),
-               "in_stock": r["distributors_in_stock"], "checked": now}
-        prev = old["lines"].get(key)
-        price = lambda d: "-" if d.get("unit") is None else f"{d['unit']:g} {d.get('currency', cur_ccy)} ({d.get('distributor') or '-'})"
-        if prev is None:
-            if cur["in_stock"] == 0 and not first:
-                sec["changes"].append(_change("stock-out", cur["mpn"], "(new line)", "no distributor has stock"))
-            elif cur["in_stock"] == 0:
-                sec["changes"].append(_change("stock-out", cur["mpn"], "(first run)", "no distributor has stock"))
-        else:
-            if prev.get("in_stock", 0) > 0 and cur["in_stock"] == 0:
-                sec["changes"].append(_change("stock-out", cur["mpn"], f"{prev['in_stock']} distributors", "none in stock"))
-            elif prev.get("in_stock") == 0 and cur["in_stock"] > 0:
-                sec["changes"].append(_change("back in stock", cur["mpn"], "none in stock", f"{cur['in_stock']} distributors"))
-            pu, cu = prev.get("unit"), cur["unit"]
-            if pu and cu is not None and prev.get("currency", cur_ccy) == cur_ccy and cu > pu * (1 + pct / 100):
-                sec["changes"].append(_change("price jump", cur["mpn"], price(prev), price(cur),
-                                              f"+{(cu / pu - 1) * 100:.0f}% (threshold {pct:g}%) at {r['need']} pcs"))
-        if cur["unit"] is None and prev and prev.get("currency", cur_ccy) == cur_ccy:   # unpriced: keep the last price
-            cur.update(unit=prev.get("unit"), distributor=prev.get("distributor"))
-        lines[key] = cur
-    if unconf:
-        sec["notes"].append(f"not configured: {', '.join(unconf)}")
-    sec["notes"].append(f"{len(fitted)} lines priced for {qty} board(s) in {cur_ccy}" + (" (first run: baseline recorded)" if first else ""))
-    sec["_state"] = {"sourcing_state.json": {"version": 1, "updated": now, "lines": lines}}
-    return sec
 
 
 # ------------------------------------------------------------------ KiCad upstream
@@ -454,8 +377,9 @@ def check_changes(src, state_dir, ctx, cfg, now):
 
 
 # ------------------------------------------------------------------ run, report, state
-TITLES = {"lifecycle": "Lifecycle (NRND / EOL / stock)", "upstream": "KiCad upstream", "sourcing": "Price and stock",
-          "a365": "Altium 365 drift", "changes": "Change control (held changes, project drift)"}
+TITLES = {"lifecycle": "Lifecycle (NRND / EOL / stock)", "upstream": "KiCad upstream",
+          "a365": "Altium 365 drift", "changes": "Change control (held changes, project drift)",
+          "sourcing": "Price and stock (removed)"}
 
 
 def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep", manifest=None, bom=None,
@@ -463,6 +387,8 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
     """Run the checks, write <out>.md and <out>.json, save the state (save=False leaves that to save_state)."""
     cfg = upkeep_rules(rules)
     checks = list(checks or cfg["checks"])
+    cut = [c for c in checks if c in CUT_CHECKS]
+    checks = [c for c in checks if c not in CUT_CHECKS]
     bad = [c for c in checks if c not in CHECKS]
     if bad:
         raise ValueError(f"unknown check(s) {', '.join(bad)}; choose from {', '.join(CHECKS)}")
@@ -475,8 +401,6 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
         try:
             if name == "lifecycle":
                 sec = check_lifecycle(src, state_dir, ctx, cfg, now, rules)
-            elif name == "sourcing":
-                sec = check_sourcing(src, state_dir, ctx, cfg, now, rules)
             elif name == "upstream":
                 sec = check_upstream(src, state_dir, ctx, cfg, now, apply)
             elif name == "changes":
@@ -486,6 +410,8 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
         except Exception as e:                       # one broken check never hides the others
             sec = _section(name, "error", f"{type(e).__name__}: {e}")
         sections.append(sec)
+    for name in cut:
+        sections.append(_section(name, "skipped", "the price and stock check was removed from ecadlib on 2026-10-19"))
     new = sum(len(s["changes"]) for s in sections)
     error = any(s["status"] == "error" for s in sections)
     rep = {"version": 1, "date": now, "previous_run": prev, "input": str(input_path), "input_kind": src.kind,
@@ -697,14 +623,14 @@ def publish(rep, mode, gh, runner=None, base=None, cwd=None):
 
 # ------------------------------------------------------------------ CLI
 def main(argv=None, ctx=None, gh=None, runner=None, notifier=None):
-    ap = argparse.ArgumentParser(description="Weekly library upkeep: lifecycle, KiCad upstream, price/stock and "
-                                             "Altium 365 drift; report what is new; one GitHub issue or PR")
-    ap.add_argument("input", help="altium365 plan.json (all checks) or a BOM .csv/.xlsx (lifecycle, sourcing)")
+    ap = argparse.ArgumentParser(description="Weekly library upkeep: lifecycle, KiCad upstream, Altium 365 drift "
+                                             "and change control; report what is new; one GitHub issue or PR")
+    ap.add_argument("input", help="altium365 plan.json (all checks) or a BOM .csv/.xlsx (lifecycle)")
     ap.add_argument("--checks", help=f"comma list from {','.join(CHECKS)} (default: [upkeep] checks, else all)")
     ap.add_argument("--state", default="out/upkeep_state", help="folder with the last run's state")
     ap.add_argument("-o", "--out", default="out/upkeep", help="report path stem (.md and .json)")
     ap.add_argument("--manifest", help="KiCad provenance manifest.json (default: next to the plan, or <plan dir>/models/)")
-    ap.add_argument("--bom", help="BOM for the price/stock check when the input is a plan (quantities per board)")
+    ap.add_argument("--bom", help="BOM whose lines the lifecycle check adds when the input is a plan")
     ap.add_argument("--workspace", help="Altium 365 workspace URL for the a365 check")
     ap.add_argument("--apply", action="store_true", help="reconvert KiCad parts whose sources changed (safe fixes only)")
     ap.add_argument("--github", choices=("issue", "pr"), help="open/update one rolling issue, or a PR with applied changes")
@@ -718,20 +644,12 @@ def main(argv=None, ctx=None, gh=None, runner=None, notifier=None):
                     help="https://host/api/v4 (default CI_API_V4_URL, else [agent] gitlab_api)")
     ap.add_argument("--no-notify", action="store_true", help="do not send [notify] webhooks for this run")
     ap.add_argument("--rules", help="ecadlib.toml (default: searched from the input's folder)")
-    ap.add_argument("--qty", type=int, help="boards per build for prices (default [upkeep] build_qty, else 1)")
-    ap.add_argument("--currency", help="default [upkeep] currency, else USD")
-    ap.add_argument("--price-jump", type=float, help="report a unit price rise above this percent (default 20)")
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--offline", action="store_true", help="HTTP cache only")
     ap.add_argument("--no-save", action="store_true", help="do not update the state (dry run)")
     a = ap.parse_args(argv)
     try:
         rules = load_rules(a.rules, start=str(Path(a.input).resolve().parent))
-        up = dict((rules or {}).get("upkeep") or {})
-        for k, v in (("build_qty", a.qty), ("currency", a.currency), ("price_jump_pct", a.price_jump)):
-            if v is not None:
-                up[k] = v
-        rules = {**(rules or {}), "upkeep": up}
         checks = [c.strip() for c in a.checks.split(",") if c.strip()] if a.checks else None
         rep = run(a.input, checks, a.state, a.out, a.manifest, a.bom, a.workspace, a.apply, rules,
                   ctx or Ctx(cache=a.cache, offline=a.offline), save=False)

@@ -140,21 +140,6 @@ def test_parity_report_snapshot():
     _no_leaks(md, "parity.md")
 
 
-def test_pr_body_snapshot():
-    from ecadlib import agent as A
-    it = {"id": "q1", "key": "acme|X1", "mpn": "X1", "manufacturer": "ACME", "origin": "watch",
-          "change": {"kind": "new", "source": {"type": "bom_file", "name": "b.csv"}, "line": {"datasheet": "https://example.com/x1.pdf"}},
-          "build": {"part": "X1", "status": "held", "source": {"symbol": "kicad:Device:R", "footprint": "datasheet:https://example.com/x1.pdf"},
-                    "hold_reasons": ["verify: datasheet reader output (footprint): compare with https://example.com/x1.pdf; see datasheet/*.review.md"],
-                    "cross_check": {"status": "disagreed", "summary": "SOT-23 table: pin count read 5, table 3"}},
-          "proof": {"verdict": "doubt", "reason": "pin 1 mark on the other side", "model": "m"}, "pictures": {}}
-    md = A.pr_body("b1", [it], lambda i, p: p, "2026-10-16")
-    _snap("PR.md", md)
-    assert "**1 part to review** (1 held)" in md and "**Check before you approve:**" in md
-    assert "The datasheet read and the standard package table disagree on pin count \\(5 vs 3\\)" in md     # markdown-escaped
-    _no_leaks(md, "PR.md")
-
-
 # ---------------------------------------------------------------- real runs: demo, test pack, datasheet review, dialogs
 def test_generated_reports_have_no_internal_names_or_absolute_paths():
     """`ecadlib demo` and `ecadlib testpack` end to end (offline): every report a person opens is clean, and every

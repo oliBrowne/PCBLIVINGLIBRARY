@@ -28,14 +28,15 @@ def h(o):
 # Updated once (review): the output schema's `tab` held a dangling "$ref": "#/$defs/dim" (no $defs in the request);
 # it is now inlined. That is the only difference from the earlier hashes (checked by re-inserting the $ref).
 # 2026-10-18: requests ask for wire_schema() (the API takes at most 16 union-typed fields)
-GOLDEN = {"build_sync": "2e2f0fad3f28ca1aac0651ade4c611c315b163560740c74d6828f25e2519d5bc",
-          "build_batch": "452d4551627c8a20832b625be32665a24a7df3ab19e5076e6539641d4394135d",
-          "build_url_haiku": "4ea95a42933f787a120f94fd3036a57815bf72514453bed2bb9cb2270fee8b54",
-          "reader_sync_calls": ["3229e8bd7a3108cf0558de14e8c4bbe046b240d50ed0abd35c314e0078203faf",
-                                "dd21f66c69c39b555c9a5797fc58534e07d51feb1281f722671253b798900096"],
+# 2026-10-18 (#42): land gains ep_across / ep_along, the maker's thermal-pad land; nothing else changed.
+GOLDEN = {"build_sync": "d62d8ae5ffc8f5bcbfde3dbb11d1ad57080b035a3061b024b7513705bf63e1eb",
+          "build_batch": "b0889b10ac4e1f38ac6beb25bc1733f100f3e412b211f9f203727820471c45b0",
+          "build_url_haiku": "ca3116a877d4f952c767badb78e1a263222611fc21817337ecff3972ee3a98e7",
+          "reader_sync_calls": ["6529a35a0ab87bbb8b6505e236a788c9e04fa127d60ad64cb3412007bcc580a4",
+                                "3b6ba60527ccc47b7b3ff5080b2d128029fba5bb508c58a2eb2a5cc47660dad5"],
           "visual": "2617a48dcb947471108561ff7f8eabce190b1cb553e2d2c4cbf4ff3974a03181",
-          "batch_posts": ["07e5d57dd7c779f111f8e3517a2d97926f47777e7ee5963d662e1272aac21f6e",
-                          "cf6f52eea14d9f2830435758348ad7df82036433a7ae9661a8e0790360478303"]}
+          "batch_posts": ["13021628491523a21aa3909ffa1d767739bd49895286ae939d2a5ba1b0b07594",
+                          "5ef27cced9c82e55355bb52748abd9ae7665cc3178887fcd5ffe292c14c6edb4"]}
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 

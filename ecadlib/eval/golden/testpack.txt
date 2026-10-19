@@ -59,6 +59,7 @@ pin 1 B input line unit=MMBT3904LT1G_1_1 at=(at -5.08 0 0) length=2.54
 pin 2 E passive line unit=MMBT3904LT1G_1_1 at=(at 2.54 -5.08 90) length=2.54
 pin 3 C passive line unit=MMBT3904LT1G_1_1 at=(at 2.54 5.08 270) length=2.54
 ### kicad/testpack.kicad_sym:RES-0603-10k
+(pin_numbers hide)
 (pin_names (offset 1.016) hide)
 (exclude_from_sim no)
 (in_bom yes)
@@ -70,9 +71,9 @@ property Datasheet=https://www.yageo.com/upload/media/product/productsearch/data
 property Description="Resistor 10k 1% 0.1W 0603" at=(at 0 0 0) hidden
 property Manufacturer=Yageo at=(at 0 0 0) hidden
 property MPN=RC0603FR-0710KL at=(at 0 0 0) hidden
-graphics rectangle unitRES-0603-10k_1_1: 1 bbox(-1.016,-2.54,1.016,2.54) #360b21a811
-pin 1 "~" passive line unit=RES-0603-10k_1_1 at=(at 0 3.81 270) length=1.27
-pin 2 "~" passive line unit=RES-0603-10k_1_1 at=(at 0 -3.81 90) length=1.27
+graphics polyline unitRES-0603-10k_1_1: 1 bbox(-1.016,-2.54,1.016,2.54) #7e75acf971
+pin 1 "~" passive line unit=RES-0603-10k_1_1 at=(at 0 5.08 270) length=2.54
+pin 2 "~" passive line unit=RES-0603-10k_1_1 at=(at 0 -5.08 90) length=2.54
 ### kicad/testpack.kicad_sym:TPS62133RGTR
 (in_bom yes)
 (on_board yes)
@@ -400,15 +401,15 @@ graphics record6: 4 #e88f15e4d9
 graphics record7: 1 #331c782b8a
 graphics record8: 1 #b7bba8885b
 ### library/models/SchLib/Resistor.SchLib:Resistor
-record1 ALLPINCOUNT=2 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Resistor CURRENTPARTID=1 DESIGNITEMID=Resistor DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=Resistor OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
-pin 1 "" etype=4 orient=1 at=(0,10) length=5 part=1 mode=0 symbols=[0, 0, 0, 0] cong=49
-pin 2 "" etype=4 orient=3 at=(0,-10) length=5 part=1 mode=0 symbols=[0, 0, 0, 0] cong=51
+record1 ALLPINCOUNT=2 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=Resistor, US symbol CURRENTPARTID=1 DESIGNITEMID=Resistor DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=Resistor OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
+pin 1 "" etype=4 orient=1 at=(0,10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=33
+pin 2 "" etype=4 orient=3 at=(0,-10) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=35
 record34 COLOR=8388608 FONTID=1 LOCATION.X=-4 LOCATION.Y=13 NAME=Designator OWNERPARTID=-1 READONLYSTATE=1 TEXT=R?
 record41 COLOR=8388608 FONTID=1 LOCATION.X=-4 LOCATION.Y=-18 NAME=Comment OWNERPARTID=-1 TEXT=*
-record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-4 LOCATION.Y=-28 NAME=Value OWNERPARTID=-1 TEXT=R
-record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-4 LOCATION.Y=-38 NAME=Description OWNERPARTID=-1 TEXT=Resistor
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-4 LOCATION.Y=-28 NAME=Value OWNERPARTID=-1 TEXT=R_US
+record41 COLOR=8388608 FONTID=1 ISHIDDEN=T LOCATION.X=-4 LOCATION.Y=-38 NAME=Description OWNERPARTID=-1 TEXT=Resistor, US symbol
 record44 
-graphics record14: 1 #9f6e1490e0
+graphics record6: 1 #30123e7a10
 ### library/models/SchLib/TPS62133RGTR.SchLib:TPS62133RGTR
 record1 ALLPINCOUNT=17 AREACOLOR=11599871 COLOR=128 COMPONENTDESCRIPTION=3-17V 3A step-down converter 3.3V VQFN-16 3x3mm with exposed pad CURRENTPARTID=1 DESIGNITEMID=TPS62133RGTR DISPLAYMODECOUNT=1 LIBRARYPATH=* LIBREFERENCE=TPS62133RGTR OWNERPARTID=-1 PARTCOUNT=2 PARTIDLOCKED=T SHEETPARTFILENAME=* SOURCELIBRARYNAME=* TARGETFILENAME=*
 pin 11 "PVIN" etype=7 orient=2 at=(-30,40) length=10 part=1 mode=0 symbols=[0, 0, 0, 0] cong=58

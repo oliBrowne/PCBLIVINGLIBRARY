@@ -208,7 +208,7 @@ class Workspace:
         return out
 
     def triage_history(self, limit=200):
-        """Finished triages in this workspace, newest first: id, BOM, file name, when, who ran it (team mode),
+        """Finished triages in this workspace, newest first: id, BOM, file name, when, who ran it,
         status counts and report links. Older triages that only left a .csv are listed too (no BOM / user)."""
         items = []
         for tid, (j, c) in self._triage_files().items():
@@ -510,12 +510,13 @@ class Workspace:
 
     @contextlib.contextmanager
     def _plan_lock(self):
-        """<workspace>/agent/plan.lock around a plan rewrite (not re-entrant: locked methods call the unlocked _bodies): while the library agent's
-        librarian rewrites a plan, a change written now would be overwritten by its copy, so it is refused instead."""
-        from .agent_queue import plan_lock
+        """<workspace>/plan.lock around a plan rewrite (not re-entrant: locked methods call the unlocked _bodies): while
+        another ecadlib command rewrites the plan, a change written now would be overwritten by its copy, so it is
+        refused instead."""
+        from .fsutil import plan_lock
         with plan_lock(self.root, wait=False) as free:
             if not free:
-                raise ValueError("the library agent is rebuilding the library right now; try again in a minute")
+                raise ValueError("another ecadlib command is changing this plan right now; try again in a minute")
             yield
 
     def _librarian_summary(self, bom_path, items, log):
@@ -644,44 +645,18 @@ class Workspace:
                 "audit": self.rel(audit) if audit.exists() else None}
 
     def approve_part(self, bom, part, decision, user, role=None, comment="", via="ecadlib ui/mcp", aliases=()):
-        """Record an approve / reject (see _approve_part). Holds <workspace>/agent/plan.lock while it rewrites the plan:
-        while the library agent's librarian rewrites a plan the decision is refused ("decide again in a minute")
-        instead of being overwritten when the librarian saves its copy."""
-        from .agent_queue import plan_lock
+        """Record an approve / reject (see _approve_part). Holds <workspace>/plan.lock while it rewrites the plan: while
+        another ecadlib command rewrites it, the decision is refused ("decide again in a minute") instead of being
+        overwritten when that command saves its copy."""
+        from .fsutil import plan_lock
         with plan_lock(self.root, wait=False) as free:
             if not free:
-                raise ValueError("the library agent is rebuilding the library right now; decide again in a minute")
-            if decision == "approve":                  # the queue's no-self-approval holds on this route too
-                self._queue_self_check(bom, part, user, aliases)
+                raise ValueError("another ecadlib command is changing this plan right now; decide again in a minute")
             return self._approve_part(bom, part, decision, user, role, comment, via)
-
-    def _queue_self_check(self, bom, part, user, aliases=()):
-        """PermissionError when `user` (or one of aliases) started or asked for the build of an open library agent
-        queue item for this plan part: approving that part here would bypass the queue's no-self-approval."""
-        from . import agent_queue as AQ
-        if not (self.root / "agent" / "queue" / "items").is_dir():
-            return
-        try:
-            want = self.rel(self._bom_path(bom))
-        except ValueError:
-            return
-        me = {AQ._who_key(x) for x in (user, *aliases) if isinstance(x, str) and x.strip()}
-        for it in AQ.Queue(self.root).list(list(AQ.OPEN)):
-            b = it.get("build") or {}
-            if b.get("part") != part or not isinstance(b.get("bom"), str):
-                continue
-            try:
-                same = self.rel(self._bom_path(b["bom"])) == want
-            except ValueError:
-                continue
-            if same and any(AQ._who_key(x) in me for x in AQ.builders(it)):
-                raise PermissionError(f"{user} started or asked for the library agent's build of {part} "
-                                      f"(queue item {it['id']}) and cannot approve it (no self-approval)")
 
     def _approve_part(self, bom, part, decision, user, role=None, comment="", via="ecadlib ui/mcp"):
         """Record an approve / reject for one part as `user`. user is required: locally there is no login, so the
-        caller says who it is (never taken from this machine's git identity); the team server passes the signed-in
-        user and via="ecadlib ui (team, signed in)", which the audit entry records. Every decision, refused ones included, is
+        caller says who it is (never taken from this machine's git identity). Every decision, refused ones included, is
         appended to approvals_audit.jsonl; the part then flips between ready and awaiting_approval."""
         from . import approvals as AP, librarian as L
         if decision not in ("approve", "reject"):
@@ -715,28 +690,6 @@ class Workspace:
         out["decision"] = {"part": part, "decision": decision, "who": user, "role": rec["role"], "status": status,
                            "enforced": bool(policy)}
         return out
-
-    # ------------------------------------------------------------------ library agent review queue (ecadlib.agent_queue)
-    def agent_queue_list(self, status=None, batch=None):
-        """Queue items (summaries, newest first), counts per state and batches; batch=ID adds that batch."""
-        from . import agent_queue as AQ
-        return AQ.ws_list(self.root, status, batch)
-
-    def agent_queue_get(self, item_id):
-        """One queue item in full, its showable pictures (paths inside agent/), allowed next states and its batch."""
-        from . import agent_queue as AQ
-        return AQ.ws_get(self.root, item_id)
-
-    def agent_queue_decide(self, item_id, action, user, role=None, note="", via="ecadlib ui/mcp", aliases=(), expect=None):
-        """approve / reject / rebuild / retry a queue item as `user`; approve and reject also go through approvals.py.
-        expect: the build_token agent_queue_get gave; the decision is refused if the item was rebuilt since."""
-        from . import agent_queue as AQ
-        return AQ.decide(self, item_id, action, user, role, note, via, aliases, expect=expect)
-
-    def agent_picture(self, path):
-        """Path of a picture under <workspace>/agent/ (anything else: ValueError)."""
-        from . import agent_queue as AQ
-        return AQ.picture_path(self.root, path)
 
     # ------------------------------------------------------------------ duplicates (ecadlib.dedupe)
     def find_duplicates(self, bom, merge=False):
@@ -793,19 +746,6 @@ class Workspace:
                 "checks": [{k: s[k] for k in ("check", "status", "reason", "changes", "resolved", "notes")} for s in rep["checks"]],
                 "applied": [rel(p) for p in rep["applied_paths"]],
                 "reports": [self.rel(base / "upkeep.md"), self.rel(base / "upkeep.json")]}
-    # ------------------------------------------------------------------ library agent (ecadlib.agent)
-    def agent_status(self):
-        """What the library agent did last (status.json), its queue counts per state and its batches/PRs."""
-        from . import agent as AG
-        return AG.status(self.root)
-
-    def agent_run(self, dry_run=True):
-        """One agent pass now: scan watched sources, build and prove new parts, batch PR, push (if [agent] auto_push).
-        dry_run (the default) reports what would happen and changes nothing."""
-        from . import agent as AG
-        rep = AG.run_once(self.root, self.rules(), dry_run=bool(dry_run), libs=self.libs)
-        return {k: v for k, v in rep.items() if k != "push"} | {"push": rep.get("push")}
-
     # ------------------------------------------------------------------ Altium projects (ecadlib.altium_project)
     def project_bom(self, project, variant=None):
         """BOM straight from an Altium .PrjPcb / .SchDoc (with variants and ActiveBOM choices); writes
@@ -837,22 +777,6 @@ class Workspace:
         return {"projects": res["projects"], "flags": res["flags"], "rows": rows, "warnings": res["warnings"],
                 "library": [self.rel(p) if self._is_inside(p) else str(p) for p in plans[:1]] + [self.rel(l) for l in libs],
                 "reports": [self.rel(f) for f in files.values()]}
-    def sim_models(self, bom, attach=False, models=None):
-        """Find and check SPICE / IBIS models for the librarian plan's parts (built-in passives, the workspace's
-        sim_models/ folder plus `models` folders inside the workspace, Nexar documents, vendor URL patterns).
-        attach=True writes SIM links into the .SchLib files and Sim.* fields for kicad-export, and re-runs the
-        release check (a model whose pin map is unverified holds its part as `verify`)."""
-        from . import sim_models as SM
-        _, plan_f, _ = self._plan(bom)
-        dirs = [self.inside(m) for m in ([models] if isinstance(models, str) else models or [])]
-        own = self.root / "sim_models"
-        if own.is_dir():
-            dirs.insert(0, own)
-        rep = SM.run(plan_f, [d for d in dirs if d.is_dir()], attach=bool(attach),
-                     http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), rules=self.rules(), log=lambda *a: None)
-        return {"attach": rep["attach"], "parts": rep["parts"], "hosts": rep["hosts"], "altium365": rep["altium365"],
-                "errors": rep.get("errors", []), "reports": [self.rel(plan_f.parent / "sim_models.md"), self.rel(plan_f.parent / "sim_models.json")]}
-
     def _datasheet_reader(self, out, batch=True, wait=False, estimate=False, yes=False):
         from . import datasheet as D
         return D.Reader(out, self.root / "http_cache", rules=self.rules(), batch=batch, wait=wait, estimate=estimate, yes=yes,
@@ -912,18 +836,6 @@ class Workspace:
         counts = {s: sum(p["cross_check"] == s for p in parts) for s in ("agreed", "disagreed", "unchecked", "skipped")}
         return {"parts": parts, "counts": counts, "modes": list(CC.MODES)}
 
-    def assembly_overlay(self, bom, part):
-        """The assembly overlay picture of a part in a BOM's plan (<plan folder>/assembly/*.png, ecadlib.assembly):
-        its path, else ValueError."""
-        _, plan_f, items = self._plan(bom)
-        it = self._part(items, part)
-        rel = (it.get("assembly") or {}).get("overlay") or ""
-        folder = (plan_f.parent / "assembly").resolve()
-        p = (plan_f.parent / rel).resolve() if rel else None
-        if p is None or folder not in p.parents or p.suffix.lower() != ".png" or not p.is_file():
-            raise ValueError(f"{part} has no assembly overlay picture")
-        return p
-
     def library_parts(self, bom, pictures=True):
         """The librarian plan of a BOM as cards (ecadlib.partview): status in plain words, held reasons with a next
         step, cross-check and KiCad/Altium results with both values, datasheet link, cost and model, a footprint
@@ -954,16 +866,16 @@ class Workspace:
 
     def decide_change(self, bom, part, decision, user, comment="", role=None):
         """Approve or reject a held change to a released part, from the web UI or MCP (the same as `ecadlib part
-        approve / reject`). Holds the agent's plan lock like approve_part."""
+        approve / reject`). Holds the plan lock like approve_part."""
         from . import change_cli as CC, change_gate as CG
-        from .agent_queue import plan_lock
+        from .fsutil import plan_lock
         if decision not in ("approve", "reject"):
             raise ValueError("decision must be approve or reject")
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
         with plan_lock(self.root, wait=False) as free:
             if not free:
-                raise ValueError("the library agent is rebuilding the library right now; decide again in a minute")
+                raise ValueError("another ecadlib command is changing this plan right now; decide again in a minute")
             try:
                 res = (CC.approve(plan_f, [part], user, comment or "", role) if decision == "approve"
                        else CC.reject(plan_f, [part], user, comment or ""))
@@ -974,7 +886,7 @@ class Workspace:
     def revert_part(self, bom, part, revision, user, comment=""):
         """Release an older revision of a part again, as a new revision (`ecadlib part revert PART@REV`)."""
         from . import change_cli as CC, change_gate as CG
-        from .agent_queue import plan_lock
+        from .fsutil import plan_lock
         try:
             revision = int(revision)
         except (TypeError, ValueError):
@@ -983,77 +895,12 @@ class Workspace:
         self._part(items, part)
         with plan_lock(self.root, wait=False) as free:
             if not free:
-                raise ValueError("the library agent is rebuilding the library right now; try again in a minute")
+                raise ValueError("another ecadlib command is changing this plan right now; try again in a minute")
             try:
                 res = CC.revert(plan_f, f"{part}@{revision}", user, comment or "")
             except CG.ChangeError as e:
                 raise ValueError(str(e)) from None
         return {"part": part, "results": res}
-
-    # ------------------------------------------------------------------ library hub (ecadlib.hub)
-    def hub(self, q="", have=(), lack=(), states=(), origin="", flags=(), sort="name", page=1, size=100, force=False,
-            tool="", library="", project=""):
-        """Every part once across your libraries and ecadlib's own, with a cell per tool (missing / same / different /
-        behind), last updated and by whom. Filters as in hub.listing. Reads only; notes go to <workspace>/hub/."""
-        from . import hub as H
-        bad = [t for t in [*have, *lack, *([tool] if tool else [])] if t not in H.LABEL] + [s for s in states if s not in H.STATES]
-        if bad:
-            raise ValueError(f"unknown tool or state {bad[0]!r}: tools are {', '.join(H.LABEL)}; states {', '.join(H.STATES)}")
-        return H.listing(self, q, have, lack, states, origin, flags, sort, page, size, force, tool, library, project)
-
-    def hub_part(self, key):
-        """One hub part: each tool's copy (where, updated, by, what differs), footprint and symbol pictures, sources,
-        release check, sign-off, where-used, lifecycle, history and the fixes on offer."""
-        from . import hub as H
-        return H.part(self, key)
-
-    def hub_fix(self, key, action, who=None):
-        """Run one of a hub part's fixes: kicad (write the KiCad library of its BOM), a365_preview (Altium 365 dry run),
-        dedupe (find duplicates in its plan), tool:<id> (another tool's exporter). "build" is hub_build_bom + the
-        librarian; "open_plan" happens in the browser."""
-        from . import hub as H
-        row, copies = H.copies_of(self, key)
-        offered = {f["action"] for f in H.fixes(row, copies)}
-        if action not in offered:
-            raise ValueError(f"{action!r} is not on offer for {row['name']}: {', '.join(sorted(offered)) or 'nothing to fix'}")
-        if action.startswith("copy:"):
-            return {"action": action, "part": row["name"], "result": H.copy_parts(self, [key], action[5:], "", who)}
-        pc = next(c for c in copies if c["plan"] and c["origin"] == "ecadlib" and c["bom"])
-        if action == "kicad":
-            out = self.kicad_dblib(pc["bom"])
-            what = "made the KiCad version"
-        elif action == "a365_preview":
-            r = self.altium365_push(pc["bom"], None, dry_run=True)
-            out = dict(r, results=[x for x in r["results"] if x.get("name") == pc["name"]])
-            what = None
-        elif action == "dedupe":
-            out, what = self.find_duplicates(pc["bom"]), None
-        elif action.startswith("tool:"):
-            reg = H._READERS[action[5:]]
-            items = json.loads(self.inside(pc["plan"]).read_text(encoding="utf-8"))
-            out = reg["fix"](self, self.inside(pc["plan"]), items[pc["item"]],
-                             **({"bom": pc["bom"]} if getattr(reg["fix"], "wants_bom", False) else {}))
-            what = f"made the {reg['label']} version"
-        else:
-            raise ValueError(f"{action!r} runs from the web page, not here")
-        if what:
-            H.record(self.root, [{"when": H.now(), "who": who, "what": what, "kind": "action", "key": key, "name": row["name"],
-                                  "bom": pc["bom"], "tool": action[5:] if action.startswith("tool:") else action}])
-        return {"action": action, "part": row["name"], "result": out}
-
-    def hub_copy(self, keys, tool, project="", who=None):
-        """Copy parts to another tool through the hub (Altium <-> KiCad), into <workspace>/hub/library; with a project
-        listed under [hub] projects, also import that library into the project. Your own library files are not edited."""
-        from . import hub as H
-        return H.copy_parts(self, keys, tool, project, who)
-
-    def hub_build_bom(self, key):
-        """A one-line BOM for a part that is only in your libraries (for "Build it with ecadlib") -> its workspace path."""
-        from . import hub as H
-        row, copies = H.copies_of(self, key)
-        if not row["mpn"]:
-            raise ValueError(f"{row['name']} has no manufacturer part number, so ecadlib can't look it up")
-        return self.save_upload(f"hub_{self.safe_name(row['mpn'])}.csv", H.one_line_bom(row, copies))
 
     def demo_bom(self):
         """Copy the bundled sample BOM (the one `ecadlib demo` uses) into uploads/demo/; -> its workspace path."""
@@ -1095,51 +942,9 @@ class Workspace:
                          folder=self.inside(plan["plan"]).parent if plan["source"] == "librarian" else None)
         if not dry_run and plan["source"] == "librarian":
             A.record_push(self.inside(plan["plan"]).parent, t0, results)
-        if any(r.get("a365_updated") for r in results):
-            from .a365_sync import save_meta          # new revisions of pulled parts, so the next push is not a conflict
-            save_meta(self.inside(plan["plan"]), plan["items"])
         out = self.root / "altium365" / f"push_{'dry_run_' if dry_run else ''}{self._key(self._bom_path(bom))}.json"
         out.write_text(json.dumps(results, indent=2), encoding="utf-8")
         return {"dry_run": dry_run, "results": results, "report": self.rel(out)}
-
-    # ------------------------------------------------------------------ two-way sync (ecadlib.a365_sync)
-    def _a365_plan(self, bom=None):
-        """The plan a pull writes into: the librarian plan of a BOM (so the librarian reuses workspace parts), or
-        altium365/workspace_plan.json for the whole workspace library."""
-        if bom:
-            f = self._librarian_dir(self._bom_path(bom)) / "plan.json"
-            f.parent.mkdir(parents=True, exist_ok=True)
-            return self.inside(self.rel(f))
-        return self.root / "altium365" / "workspace_plan.json"
-
-    def _a365_run(self, mode, workspace_url, bom=None, folders=None, client=None):
-        from . import a365_sync as S, altium365 as A
-        if not workspace_url:
-            raise ValueError("choose an Altium 365 workspace first")
-        r = S.run(mode, self._a365_plan(bom), client or A.Nexar(_nexar_token()), workspace_url,
-                  folders=folders or None, rules=self.rules(), log=lambda *_: None)
-        return {"mode": mode, "summary": r["summary"], "conflicts": r["conflicts"], "unresolved": r["unresolved"],
-                "rows": [x for x in r["rows"] if x["status"] != "in_sync"], "components": len(r["components"]),
-                "plan": self.rel(r["plan"]), "state": self.rel(r["state"]) if mode != "status" else None,
-                "report": self.rel(r["report"])}
-
-    def a365_pull(self, workspace_url, bom=None, folders=None, client=None):
-        """Import the workspace's components into a plan (status `existing`), refresh ones pulled before, download
-        their .SchLib/.PcbLib. Changes local files only; conflicts are reported, not settled."""
-        return self._a365_run("pull", workspace_url, bom, folders, client)
-
-    def a365_status(self, workspace_url, bom=None, client=None):
-        """Read-only comparison of the plan with the workspace (new, changed on either side, conflicts, deleted)."""
-        return self._a365_run("status", workspace_url, bom, None, client)
-
-    # ------------------------------------------------------------------ library agent: watch (ecadlib.agent_watch)
-    def agent_watch_scan(self, sources=None, dry_run=False, client=None):
-        """New / changed / removed parts in the watched projects and BOMs ([agent.watch] sources, or `sources`), compared
-        with the last scan (agent/watch_state.json; dry_run leaves it alone). Relative refs are workspace-relative."""
-        from . import agent_watch as AW
-        rep = AW.scan_report(self, sources=sources, client=client, dry_run=dry_run)
-        rep["state"] = self.rel(rep["state"])
-        return rep
 
     # ------------------------------------------------------------------ library rules (ecadlib.rules / rules_infer)
     def rules_file(self):
@@ -1453,7 +1258,7 @@ class Workspace:
     # ------------------------------------------------------------------ setup check and summary (ecadlib.doctor / ws_status)
     def status(self):
         """One-screen summary (read-only): parts per librarian plan, held, waiting for sign-off, last triage, last
-        upkeep, the library agent's state and queue counts. Paths are relative to the workspace."""
+        upkeep. Paths are relative to the workspace."""
         from . import ws_status
         return ws_status.status(self.root)
 

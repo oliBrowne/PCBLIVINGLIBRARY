@@ -109,7 +109,7 @@ def cmd_s_c(cmdline):
 def test_build_names_every_procedure():
     """`altium-menu build`, its README and the docs name every procedure the project offers (PROCS + BUILD_PROCS),
     and each one exists in the unit the table names (ecadlib_build.pas came with the native build)."""
-    assert AM.procedures() == ["AddPartFromMPN", "CheckProjectBOM", "AssemblyCheck", "OpenReviewQueue", "BuildLibrariesInAltium", "BuildLibraries(Folder)"]
+    assert AM.procedures() == ["AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue", "BuildLibrariesInAltium", "BuildLibraries(Folder)"]
     units = {AM.UNIT: AM.pas_text(), AN.UNIT: AN.pas_text()}
     for p, unit, _ in [(p, AM.UNIT, d) for p, _, d in AM.PROCS] + AM.BUILD_PROCS:
         name, end = p.split("(")[0], r"\(" if "(" in p else ";"
@@ -119,7 +119,7 @@ def test_build_names_every_procedure():
     readme = (d / "m" / AM.README).read_text()
     for p in AM.procedures():
         assert p in out and p in readme and p in AM.__doc__ and p in AM.pas_text(), (p, out)
-    assert "now lists AddPartFromMPN, CheckProjectBOM, AssemblyCheck, OpenReviewQueue, BuildLibrariesInAltium:" in readme, readme
+    assert "now lists AddPartFromMPN, CheckProjectBOM, OpenReviewQueue, BuildLibrariesInAltium:" in readme, readme
 
 
 def test_build_writes_well_formed_files():
@@ -622,7 +622,7 @@ def test_open_queue_starts_reuses_and_refuses():
         state["kind"] = "ecadlib"
     r = AM.open_queue(cfg, opener=opened.append, probe=probe, launcher=launcher, sleep=lambda s: None)
     assert r["status"] == "ok" and r["started"] == "1" and launched == [(cfg["workspace"], 8765)]
-    assert opened == ["http://127.0.0.1:8765/#queuecard"]
+    assert opened == ["http://127.0.0.1:8765/#libcard"]
     r = AM.open_queue(cfg, opener=opened.append, probe=probe, launcher=launcher)
     assert r["started"] == "0" and len(launched) == 1
     state["kind"] = "other"
@@ -648,7 +648,7 @@ def test_open_queue_starts_the_real_web_ui():
         r = AM.open_queue(cfg, opener=opened.append, launcher=lambda ws, port: procs.append(AM.start_ui(ws, port)))
         assert r["status"] == "ok" and r["started"] == "1", r
         page = urllib.request.urlopen(opened[0].split("#")[0], timeout=10).read().decode("utf-8")
-        assert 'id="queuecard"' in page and opened[0].endswith("#queuecard")
+        assert 'id="libcard"' in page and opened[0].endswith("#libcard")
         assert AM.probe_ui(cfg["port"]) == ("ecadlib", str(cfg["workspace"].resolve()))
     finally:
         for p in procs:
@@ -702,7 +702,7 @@ def test_cli_workspace_and_mcp():
     ws = Workspace(d / "ws2", offline=True)
     rep = M.call_tool(ws, "altium_menu", {"win_dir": "D:\\ws2\\altium_menu"})
     assert rep["problems"] == [] and rep["menu_file"] == AM.PREFS and rep["folder"] == "altium_menu"
-    assert rep["procedures"] == AM.procedures() and rep["menu_entries"] == ["AddPartFromMPN", "CheckProjectBOM", "AssemblyCheck", "OpenReviewQueue"]
+    assert rep["procedures"] == AM.procedures() and rep["menu_entries"] == ["AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue"]
     c = AM.load_config(ws.root / "altium_menu" / AM.INI)
     assert c["workspace"].resolve() == ws.root and c["library"].resolve() == ws.root / "altium_library"
     assert "altium_menu" in {t["name"] for t in M.TOOLS}

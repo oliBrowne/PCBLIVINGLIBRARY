@@ -279,14 +279,6 @@ def check_item(item, base=".", rules=None):
             add("fields", f"{k} is empty")
     for v in item.get("verify") or []:
         add("verify", v)
-    # ---- assembly: the pads against the assembler's footprint (ecadlib.assembly; [assembly] strict)
-    from . import assembly as ASM
-    for h in ASM.holds(item, rules):
-        add("assembly", h)
-    asm = item.get("assembly") or {}
-    if asm.get("pads") == "risky" and not any(f[0] == "assembly" and "pads risky" in f[1] for f in fails):
-        warns.append(f"assembly: pads risky against {asm.get('theirs') or asm.get('profile')} ({asm.get('lcsc')}): "
-                     + "; ".join(asm.get("reasons") or []))
     return fails, warns, info
 
 
@@ -339,7 +331,7 @@ def _split(failures):
     return [x for x in re.split(r"; (?=(?:%s): )" % "|".join(RULES), failures or "") if x]
 
 
-RULES = ("files", "pins", "footprint", "height", "fields", "parity", "verify", "assembly")   # check_item's add()
+RULES = ("files", "pins", "footprint", "height", "fields", "parity", "verify")   # check_item's add()
 
 
 def write_report(rows, stem, plan=""):
@@ -417,7 +409,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     plan = Path(a.plan)
     from .approvals import cli_plan_lock
-    with cli_plan_lock(plan):                  # the library agent's librarian may be rewriting this plan right now
+    with cli_plan_lock(plan):                  # the web UI may be recording into this plan right now
         items = json.loads(plan.read_text(encoding="utf-8"))
         unknown = set(a.allow + a.unallow) - {i["name"] for i in items}
         if unknown:
@@ -433,7 +425,7 @@ def main(argv=None):
             timing.mark_review(plan.parent, "allow")
         stem = write_report(rows, a.out or plan.parent / "release_check", plan)
     held = sum(r["status"] == "held" for r in rows)
-    if a.json:                                 # stable shape: README "Machine-readable output (--json)"
+    if a.json:                                 # stable shape: docs/command-line.md "Machine-readable output (--json)"
         st = ("ready", "held", "awaiting_approval", "duplicate")
         print(json.dumps({"plan": str(plan), "report": str(stem.with_suffix(".md")),
                           "counts": {s: sum(r["status"] == s for r in rows) for s in st}, "rows": rows}, indent=2, default=str))

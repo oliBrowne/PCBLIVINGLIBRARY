@@ -117,20 +117,16 @@ HOUSE_BOM = "Pos;Bauteil;Sachnummer;Menge\n1;R1;RC0603FR-0710KL;1\n2;U1;STM32F10
 HOUSE_RULES = '[bom]\ncolumns = { designator = "Bauteil", mpn = "Sachnummer", qty = "Menge" }\n'
 
 
-def test_rules_bom_columns_reach_sourcing_upkeep_and_lifecycle():
-    """[bom] columns worked for triage/librarian but sourcing, upkeep and the lifecycle reader ignored them."""
+def test_rules_bom_columns_reach_upkeep_and_lifecycle():
+    """[bom] columns worked for triage/librarian but upkeep and the lifecycle reader ignored them."""
     with tempfile.TemporaryDirectory() as d:
         bom = _write("bom.csv", HOUSE_BOM, d)
         _write("ecadlib.toml", HOUSE_RULES, d)
-        rc, text = _cli("sourcing", str(bom), "--offline", "--cache", f"{d}/c", "-o", f"{d}/out/s", "--providers", "jlcpcb_search")
-        assert "cannot read BOM" not in text and rc in (0, 1, 3), text
-        assert "STM32F103C8T6" in Path(f"{d}/out/s.md").read_text()
         cols = {"designator": "Bauteil", "mpn": "Sachnummer", "qty": "Menge"}
-        assert [l["mpn"] for l in UK.Source(bom, columns=cols).lines()] == ["RC0603FR-0710KL", "STM32F103C8T6"]
         assert len(L.read_inputs([bom], cols)) == 2
         rules = {"bom": {"columns": cols}, "upkeep": {}}
         with contextlib.redirect_stdout(io.StringIO()):
-            rep = UK.run(bom, ["sourcing"], f"{d}/st", f"{d}/out/u", rules=rules, ctx=UK.Ctx(cache=f"{d}/c", offline=True),
+            rep = UK.run(bom, ["lifecycle"], f"{d}/st", f"{d}/out/u", rules=rules, ctx=UK.Ctx(cache=f"{d}/c", offline=True),
                          save=False)
         assert rep["checks"] and all(s["status"] != "error" for s in rep["checks"]), rep["checks"]
 
@@ -148,9 +144,10 @@ def test_unreadable_bom_is_a_message_not_a_traceback():
 
 def test_bad_rules_file_is_a_message_not_a_traceback():
     with tempfile.TemporaryDirectory() as d:
-        _write("ecadlib.toml", '[agent.watch]\nsources = ["folder:boms"]\n', d)
-        rc, text = _cli("agent", "--workspace", d, "status")
-        assert rc == 2 and "agent.watch.sources[0]" in text and "Traceback" not in text, text
+        rules = _write("ecadlib.toml", '[footprint]\ndensity = "Q"\n', d)
+        bom = _write("bom.csv", "Designator,MPN\nR1,X\n", d)
+        rc, text = _cli("triage", str(bom), "--rules", str(rules), "-o", f"{d}/t", "--offline", "--cache", f"{d}/c")
+        assert rc == 2 and "footprint.density" in text and "Traceback" not in text, text
 
 
 FP = Path("tests/fixtures/kicad/USB_C_Receptacle_HRO_TYPE-C-31-M-12.kicad_mod")
@@ -201,11 +198,6 @@ def test_mcp_wrong_id_is_a_user_error():
     with tempfile.TemporaryDirectory() as d:
         ws = Workspace(d, [], offline=True)
         err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            r = M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                              "params": {"name": "agent_queue_get", "arguments": {"id": "nope"}}})
-        assert r["result"]["isError"] and "Traceback" not in err.getvalue(), (r, err.getvalue())
-        assert r["result"]["content"][0]["text"].startswith("no queue item"), r
         with contextlib.redirect_stderr(err):
             r = M.handle(ws, {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "where_used",
                               "arguments": {"projects": [], "plan": "."}}})   # a folder as the plan
@@ -279,7 +271,6 @@ def test_reports_neutralise_spreadsheet_formulas():
         bom = _write("bom.csv", EVIL, d)
         out = f"{d}/out"
         runs = [["triage", str(bom), "-o", f"{out}/t", "--offline", "--cache", f"{d}/c"],
-                ["sourcing", str(bom), "-o", f"{out}/s", "--offline", "--cache", f"{d}/c"],
                 ["librarian", str(bom), "-o", f"{out}/lib", "--offline", "--cache", f"{d}/c", "--sources", "kicad"],
                 ["release-check", f"{out}/lib/plan.json", "-o", f"{out}/rc"],
                 ["dedupe", f"{out}/lib/plan.json", "-o", f"{out}/dd", "--bom", str(bom)],

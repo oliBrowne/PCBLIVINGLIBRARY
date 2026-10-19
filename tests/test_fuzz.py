@@ -11,7 +11,7 @@ Documented error types:
   rules.load / parse_text             rules.RulesError (a ValueError)
   web UI JSON endpoints               an HTTP status below 500 and no traceback from the handler
   MCP tools/call                      a result (isError for bad input), no traceback for user errors"""
-import contextlib, copy, io, json, os, random, sys, tempfile, time, traceback
+import contextlib, copy, inspect, io, json, os, random, re, sys, tempfile, time, traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -231,8 +231,11 @@ def test_fuzz_web_json_endpoints():
                 st, j = call("POST", "/api/upload", b, {"X-Filename": "bom" + suf})
                 assert st == 200, j
                 rels.append((wait_job(call, j["job"]).get("result") or {}).get("bom") or "x")
-            posts = [p for (m, p) in SV.ROUTES if m == "POST" and p not in SV.TEAM_ONLY
-                     and p not in ("/api/upload", "/api/librarian/run", "/api/rules/propose", "/api/altium365/workspaces")]
+            src = inspect.getsource(SV)
+            post_src = src[src.index("def do_POST"):]
+            posts = sorted({p for p in re.findall(r'"(/api/[a-z0-9/_-]+)"', post_src)}
+                           - {"/api/upload", "/api/librarian/run", "/api/rules/propose", "/api/altium365/workspaces"})
+            assert len(posts) > 20, posts
             keys = ["bom", "spec", "density", "overwrite", "part", "kind", "id", "pin_map", "allow", "unallow", "user", "role",
                     "comment", "decision", "merge", "text", "dry_run", "workspace", "note", "refresh", "limit"]
 

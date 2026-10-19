@@ -3,13 +3,12 @@
     ecadlib doctor [--workspace W] [--lib DIR ...] [--rules FILE] [--altium-menu ecadlib_menu.ini] [--json]
 
 Checks: the Python version; the packages ecadlib needs (FAIL when missing) and the optional ones (pillow, pypdf) and
-tools (pdftoppm, kicad-cli, git) (WARN only when a feature you turned on needs them: git and pdftoppm for the library
-agent, kicad-cli unless you only make Altium libraries; kicad-cli is also found in KiCad's install folder when it is
+tools (pdftoppm, kicad-cli, git) (WARN only when a feature you turned on needs them: git for `upkeep --github`,
+kicad-cli unless you only make Altium libraries; kicad-cli is also found in KiCad's install folder when it is
 not on PATH); which API keys are set (names only, never the values; Altium 365 and GitHub warn only when configured,
 the optional part-lookup services are one line); the rules file
 (ecadlib.toml: which one is used and whether it is valid - errors name file:line where the line can be found); the
-workspace (exists, writable); the library folders (--lib / $ECADLIB_LIB, [agent] libs and library_repo) and the watched
-sources in [agent.watch]; the Altium menu's command= (--altium-menu, else an ecadlib_menu.ini in the current folder or
+workspace (exists, writable); the library folders (--lib / $ECADLIB_LIB); the Altium menu's command= (--altium-menu, else an ecadlib_menu.ini in the current folder or
 out/altium_menu): set, and the program it names runs `ecadlib --version`; with --altium-menu the workspace checked is
 the ini's workspace= unless --workspace is given. Exit code 1 when any line is FAIL, else 0. --json prints {"ok", "checks": [{"check",
 "level", "detail", "hint"}]}. Nothing is written except a temporary probe file in the workspace, removed at once."""
@@ -23,7 +22,7 @@ CORE = (("requests", "requests"), ("pandas", "pandas"), ("openpyxl", "openpyxl")
 OPTIONAL = (("PIL", "pillow", "visual-check pictures"), ("pypdf", "pypdf", "datasheet page trimming"))
 TOOLS = (("pdftoppm", "datasheet pages for visual-check", "install poppler-utils"),
          ("kicad-cli", "KiCad checks and SVG previews", "install KiCad 7 or newer"),
-         ("git", "the library agent's batch PRs", "install git"))
+         ("git", "upkeep pull requests", "install git"))
 
 
 def _c(check, level, detail, hint=""):
@@ -52,8 +51,10 @@ def check_python(v=None):
 def _needs(tool, rules):
     """Does a feature that is turned on need this tool? (so a fresh install is not a page of warnings)"""
     r = rules if isinstance(rules, dict) else {}
-    if tool in ("git", "pdftoppm"):
-        return bool((r.get("agent") or {}).get("enabled"))
+    if tool == "git":
+        return bool((r.get("agent") or {}).get("github_repo"))
+    if tool == "pdftoppm":
+        return False
     if tool == "kicad-cli":
         return ((r.get("setup") or {}).get("tool") or "both") != "altium"
     return True
@@ -94,13 +95,13 @@ def key_services(rules=None):
     ds = _ai_key_env(rules)
     gh = ((rules or {}).get("agent") or {}).get("github_token_env") or "GITHUB_TOKEN"
     out = [("anthropic", [ds], "datasheet reader and visual check")] if _ai_provider(rules) == "anthropic" else []
-    out += [("altium365", ["NEXAR_TOKEN"], "Altium 365 push / pull")]
+    out += [("altium365", ["NEXAR_TOKEN"], "Altium 365 push")]
     try:
         from . import providers as P
         out += [(c.name, list(c.env), f"{c.name} part lookups") for c in P.ALL if c.env]
     except Exception:                                  # a missing package is reported by check_packages
         pass
-    out.append(("github", [gh], "library agent PRs, upkeep issues"))
+    out.append(("github", [gh], "upkeep issues and PRs"))
     return out
 
 
@@ -134,7 +135,7 @@ def check_ai(rules=None, environ=None):
     try:
         ep = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")
     except LL.AIConfigError as e:
-        return [_c("ai model", "FAIL", str(e), "fix [ai] in ecadlib.toml (README: Bring your own model)")]
+        return [_c("ai model", "FAIL", str(e), "fix [ai] in ecadlib.toml (docs/models.md)")]
     prof = PR.profile(ep["model"], ep["provider"], rules)
     plan = R.plan(prof, ep["assist"], ep["feedback_retry"])
     guide = [k for k in plan["rails"] if R.RAILS[k][0] != "support"]
@@ -167,7 +168,7 @@ def _configured(name, rules):
         return bool((r.get("altium365") or {}).get("workspace"))
     if name == "github":
         ag = r.get("agent") or {}
-        return bool(ag.get("enabled") or ag.get("github_repo"))
+        return bool(ag.get("github_repo"))
     return True
 
 
@@ -331,17 +332,11 @@ def _lib_summary(p):
 
 def check_paths(libs=(), rules=None):
     out = []
-    ag = (rules or {}).get("agent") or {}
-    named = [("lib", l, "FAIL") for l in libs] + [("agent.libs", l, "FAIL") for l in ag.get("libs") or []]
-    if ag.get("library_repo"):
-        named.append(("agent.library_repo", ag["library_repo"], "FAIL"))
-    for s in ((ag.get("watch") or {}).get("sources") or []):
-        if isinstance(s, dict) and s.get("type") in ("bom_file", "folder", "altium_project") and s.get("ref"):
-            named.append((f"watch {s['type']}", s["ref"], "WARN"))
+    named = [("lib", l, "FAIL") for l in libs]
     for what, l, bad in named:
         p = Path(str(l)).expanduser()
         if p.exists():
-            out.append(_c(what, "OK", f"{p}" + (f" ({_lib_summary(p)})" if p.is_dir() and what != "agent.library_repo" else "")))
+            out.append(_c(what, "OK", f"{p}" + (f" ({_lib_summary(p)})" if p.is_dir() else "")))
         else:
             out.append(_c(what, bad, f"{p}: not found", "fix the path (relative paths start at the current folder)"))
     if not libs:

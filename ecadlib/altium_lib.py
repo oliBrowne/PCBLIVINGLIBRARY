@@ -13,7 +13,7 @@ primitive record layouts (13-byte common header, 49-byte track, 50-byte fill, re
 main block with its 141-byte extended-tail template, 596-byte pad size/shape block, the SchLib pin
 record) and v7 layer ids. ecadlib/assets/pcblib_template.json.gz holds the Library/Data board
 header and FileVersionInfo of an Altium-saved PcbLib from AltiumSharp's TestData (see NOTICE).
-Field values were cross-checked against real Altium files (README "Altium library writer").
+Field values were cross-checked against real Altium files (docs/altium.md, "Altium library writer").
 
 Also from AltiumSharp: through-hole pad holes (size, round/square/slot, slot length, hole rotation, plated),
 the 60-byte arc, the ComponentBody record (extruded or embedded STEP) and the Library/Models storage with
@@ -734,9 +734,12 @@ def ic_symbol(name, pins, description="", designator="U?", footprint=None, comme
             "footprint": footprint, "prims": prims, "label_at": ((0, top + 2), (0, bot - 8))}
 
 
-def resistor_symbol(name="Resistor", description="Resistor", footprint=None):
+def resistor_symbol(name="Resistor", description="Resistor", footprint=None, style="us"):
+    """style "us": zigzag body; "iec": box body ([symbols] resistor)."""
     pins = [{"num": "1", "name": "1", "type": "passive"}, {"num": "2", "name": "2", "type": "passive"}]
-    prims = [("rect", -15, 4, 15, -4), ("pin", pins[0], "left", -15, 0, 15, False), ("pin", pins[1], "right", 15, 0, 15, False)]
+    body = (("rect", -15, 4, 15, -4) if style == "iec" else
+            ("polyline", [(-15, 0), (-12.5, 4), (-7.5, -4), (-2.5, 4), (2.5, -4), (7.5, 4), (12.5, -4), (15, 0)], 1))
+    prims = [body, ("pin", pins[0], "left", -15, 0, 15, False), ("pin", pins[1], "right", 15, 0, 15, False)]
     return {"name": name, "description": description, "designator": "R?", "comment": "*", "footprint": footprint,
             "prims": prims, "label_at": ((-15, 7), (-15, -14))}
 

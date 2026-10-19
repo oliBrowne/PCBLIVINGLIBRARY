@@ -27,16 +27,14 @@ Everything is converted through kicad_import into <out>/models/{SchLib,PcbLib} (
 and the release-check result), <out>/review.{md,csv}, <out>/release_check.{md,csv}, <out>/triage.{md,csv}.
 Resumable: <out>/librarian_state.json remembers finished parts; a re-run skips them unless --refresh (all, or the
 named parts) or their BOM line changed. --allow PART is recorded in plan.json and survives re-runs, and so does a
-symbol or footprint chosen with `ecadlib resolve` (held parts: see ecadlib/resolve.py).
-A part already in the Altium 365 workspace (an item `ecadlib a365 pull` put in <out>/plan.json, matched by name or
-MPN) is reused as it is: nothing is fetched or converted for it, and pulled items the BOM does not use stay in the plan."""
+symbol or footprint chosen with `ecadlib resolve` (held parts: see ecadlib/resolve.py)."""
 import argparse, csv, json, os, re, sys, time
 from pathlib import Path
 
 import pandas as pd
 
 from . import __version__
-from . import (a365_sync as A365S, altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
+from . import (altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
                footprint_gen as F, fp_share as FS, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
@@ -430,6 +428,8 @@ class Run:
         sym_ref = how = fp_ref = fp_how = None
         if kind:
             sym_ref, how = PASSIVE[kind][0], "generic passive symbol"
+            if kind == "R" and RU.resistor_style(self.rules) == "us" and "Device" in lib.symbols.get("R_US", ()):
+                sym_ref = "Device:R_US"                # [symbols] resistor = "us": the zigzag symbol
             pkg = package_of(item["footprint"].get("kicad") or fp_name, item.get("description"))
             if PASSIVE[kind][1] and pkg in IMP2MET:
                 fp_ref, fp_how = lib.footprint(PASSIVE[kind][1].format(pkg, IMP2MET[pkg])), f"by package {pkg}"
@@ -539,6 +539,8 @@ class Run:
             got.append(f"footprint {res['kicad_ref']} ({res['fp_how']})")
         fp_src = str((st["footprint"] or {}).get("source") or "")
         same_fp = res["footprint"] and fp_src.endswith(":" + res["footprint"])
+        if res["symbol"] == "R" and RU.resistor_style(self.rules) == "us":
+            res["symbol"] = "R_US"
         if not st["symbol"] and res["symbol"] and (k in ("R", "C", "CP", "L") or same_fp):
             text, name = SP.symbol_text(res["symbol"], mpn)
             shared = k in ("R", "C", "CP", "L")
@@ -918,7 +920,6 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     state_f, plan_f = out / "librarian_state.json", out / "plan.json"
     state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.exists() else {}
     old = {i["name"]: i for i in json.loads(plan_f.read_text(encoding="utf-8"))} if plan_f.exists() else {}
-    items, in_ws = A365S.reuse_existing(items, list(old.values()), rules)  # parts `ecadlib a365 pull` found in the workspace
     from . import change_gate as CG                  # change control: released parts are compared with their ledger head
     gate = CG.Guard(out, "librarian", rules=rules, user=user, log=log)
     gate.begin(list(old.values()))
@@ -928,8 +929,6 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
             reader)
     todo = []
     for it in items:
-        if it["name"] in in_ws:
-            continue
         ln, row = _line_for(it, lines, rows)
         if not it["footprint"]["ref"]:
             it["footprint"]["ref"] = AL.lib_name(it["name"])
@@ -977,9 +976,6 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         state[it["name"]] = st
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
     for it in items:
-        if it["name"] in in_ws:
-            log(f"  a365  {it['name']:<28} in the Altium 365 workspace: reused, not fetched")
-            continue
         apply_state(it, state[it["name"]], _line_for(it, lines, rows)[0])
         for k in ("allow", "approvals", "duplicate_of"):     # decisions people made survive re-runs
             if old.get(it["name"], {}).get(k):
@@ -999,13 +995,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     from . import house_style as HS                 # new parts in your house style (house_style.json, [style] apply)
     prof = HS.active(rules, out)
     if prof:
-        styled = HS.adapt_items([it for it in items if it["name"] not in in_ws], prof, rules)
+        styled = HS.adapt_items(items, prof, rules)
         if styled:
             log(f"  style {len(styled)} part(s) written in your house style (descriptions, value formats)")
-    from . import assembly as ASM                   # assembly-ready parts ([assembly] check): pads against the
-    n_asm = ASM.annotate_items([it for it in items if it["name"] not in in_ws], out, http, rules, log=log)   # assembler's
-    if n_asm:                                                                                               # footprint
-        log(f"  assembly {n_asm} part(s) checked against the {(rules.get('assembly') or {}).get('profile', 'jlcpcb')} footprints")
     gate.settle(items)                         # held changes put the released files and fields back first
     t_check = time.time()
     TI.record(out, "build", t_build, t_check, parts=len(todo))
