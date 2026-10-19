@@ -467,7 +467,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Triage a BOM against a local KiCad library and part sources")
     ap.add_argument("bom")
     ap.add_argument("--lib", action="append", default=[], help="KiCad library dir (repeatable)")
-    ap.add_argument("-o", "--out", default="out/triage", help="report path stem (.md and .csv written)")
+    ap.add_argument("-o", "--out", help="report path stem (.md and .csv written; default: <[setup] workspace>/reports/"
+                    "triage_<BOM name> after `ecadlib init`, else out/triage)")
     ap.add_argument("--providers", help="comma list in order (default: [providers] order in the rules, else "
                     "nexar,digikey,mouser,jlcpcb_search,easyeda: the official APIs first); plugins: `ecadlib plugins list`")
     ap.add_argument("--offline", action="store_true", help="use HTTP cache only")
@@ -476,6 +477,8 @@ def main(argv=None):
     ap.add_argument("--rules", help="library rules file; its [bom] columns name your BOM headers (default: ecadlib.toml found from here)")
     ap.add_argument("--json", action="store_true", help="print the result as JSON (bom, lines, mapping, counts, rows, reports)")
     a = ap.parse_args(argv)
+    from .firstrun import default_out
+    a.out = a.out or default_out("triage", a.bom)
 
     from . import rules as RU
     from . import plugins as PL
@@ -521,6 +524,14 @@ TRIAGE_WORDS = {   # triage status -> (term status, plain words)
 }
 
 
+def _lib_out(bom):
+    """The librarian folder to suggest for this BOM: <[setup] workspace or ecadlib_workspace>/librarian/<BOM name>."""
+    from .firstrun import default_out
+    out = default_out("librarian", bom)
+    stem = re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem) or "bom"
+    return out if out != "out/librarian" else f"ecadlib_workspace/librarian/{stem}"
+
+
 def print_result(rows, counts, a, t=None):
     """Terminal view: a row per BOM line in plain words (-v: the source notes), the counts, the next step."""
     from . import messages as M, term as TM
@@ -541,7 +552,7 @@ def print_result(rows, counts, a, t=None):
     stem = Path(a.out)
     t.summary(f"{M.plural(len(rows), 'BOM line')}: " + ", ".join(f"{v} {k}" for k, v in by.items()),
               written=[(str(stem.with_suffix(".md")), "triage report"), (str(stem.with_suffix(".csv")), "the same as a table")],
-              next=[(f"ecadlib librarian {a.bom} -o ws/librarian/board", "fill the missing parts and build the library")],
+              next=[(f"ecadlib librarian {a.bom} -o {_lib_out(a.bom)}", "fill the missing parts and build the library")],
               notes=notes)
 
 if __name__ == "__main__":
