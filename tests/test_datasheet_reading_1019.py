@@ -264,3 +264,31 @@ def test_pdfplumber_reads_ti_s_newer_package_pins_column():
                       ["BQ25750RRVR.A", "Active", "Production", "VQFN (RRV) | 36", "3000 | LARGE"]])
     f = R.ordering_facts(R.page_texts(data), "BQ25750RRVR", data)
     assert f and (f["pins"], f["package"], f["code"], f["how"]) == (36, "VQFN", "RRV", "pdfplumber table"), f
+
+
+def test_pdf_render_pypdfium2_and_fallback():
+    """Page pictures come from pypdfium2 (in process); pdftoppm is the fallback when it is missing."""
+    import io, shutil, sys
+    from ecadlib import pdf_render as R
+    from tests.test_visual_check import make_pdf as _pdf
+    pdf = _pdf(["PAGE ONE", "PAGE TWO"])
+    png = R.render_png(pdf, 2, dpi=72)
+    assert png.startswith(b"\x89PNG") and R.renderer() == "pypdfium2"
+    from PIL import Image
+    im = Image.open(io.BytesIO(png))
+    assert im.mode == "RGB" and im.size[0] > 100 and min(im.convert("L").get_flattened_data() if hasattr(im, "get_flattened_data") else im.convert("L").getdata()) < 128   # text drawn in black
+    try:
+        R.render_png(pdf, 3)
+        raise AssertionError("page 3 should not exist")
+    except R.RenderError:
+        pass
+    saved = sys.modules.get("pypdfium2")
+    sys.modules["pypdfium2"] = None                     # import now raises ImportError
+    try:
+        if shutil.which("pdftoppm"):
+            assert R.renderer() == "pdftoppm" and R.render_png(pdf, 1, dpi=72).startswith(b"\x89PNG")
+    finally:
+        sys.modules["pypdfium2"] = saved
+    from ecadlib.llm import rails
+    blocks = rails.page_images(pdf, [1, 2])
+    assert [b["type"] for b in blocks] == ["text", "image", "text", "image"]

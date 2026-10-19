@@ -11,7 +11,7 @@ SUPPORT (every model, Claude included - it checks and helps, it never narrows wh
 
 CAPABILITY (what the endpoint cannot take, adapted; any tier):
   pdf_as_text       no PDF input: the picked pages' extracted text, page-numbered, instead of the PDF
-  page_images       ... plus pictures of those pages when the model has vision (pdftoppm)
+  page_images       ... plus pictures of those pages when the model has vision (pypdfium2, else pdftoppm)
   schema_in_prompt  no JSON-schema response format: the schema goes in the prompt, the answer through json_repair
 
 GUIDANCE (scaled by tier with [ai] assist = "auto"; "off" = none; "full" = every rail; frontier gets none):
@@ -316,28 +316,21 @@ def page_blocks(pdf, prof, p, pages=None, budget_tokens=None, notes=None):
 
 
 def page_images(pdf, pages, notes=None, dpi=110):
-    import shutil, subprocess, tempfile
-    from pathlib import Path
-    if not shutil.which("pdftoppm"):
+    from .. import pdf_render
+    if pdf_render.renderer() is None:
         if notes is not None:
-            notes.append("page_images: pdftoppm not installed, text only")
+            notes.append("page_images: no PDF renderer (pip install pypdfium2), text only")
         return []
     out = []
-    with tempfile.TemporaryDirectory() as d:
-        src = Path(d) / "in.pdf"
-        src.write_bytes(pdf)
-        for i in pages:
-            stem = Path(d) / f"p{i}"
-            try:
-                subprocess.run(["pdftoppm", "-png", "-r", str(dpi), "-f", str(i), "-l", str(i), "-singlefile", str(src), str(stem)],
-                               check=True, capture_output=True, timeout=60)
-                data = (Path(d) / f"p{i}.png").read_bytes()
-            except Exception as e:
-                if notes is not None:
-                    notes.append(f"page_images: page {i} not rendered ({type(e).__name__})")
-                continue
-            out += [{"type": "text", "text": f"Picture of PDF page {i}:"},
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(data).decode()}}]
+    for i in pages:
+        try:
+            data = pdf_render.render_png(pdf, i, dpi)
+        except Exception as e:
+            if notes is not None:
+                notes.append(f"page_images: page {i} not rendered ({type(e).__name__})")
+            continue
+        out += [{"type": "text", "text": f"Picture of PDF page {i}:"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(data).decode()}}]
     return out
 
 
