@@ -118,10 +118,27 @@ def clean(s):
     return re.sub(r"\s+", " ", re.sub(r"\s*\|\s*", "; ", str(s))).strip()
 
 
+_INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"))      # zero-width space / joiners, BOM
+
+
+def storable(s):
+    """s with the look-alikes cp1252 can hold: NFC ('E' + combining acute -> 'É'), Greek mu -> micro sign 'µ',
+    'Ω' -> 'Ohm', zero-width characters (pasted from web pages) dropped, and any other character cp1252 lacks whose
+    compatibility form it has (fullwidth 'ＬＭ358' -> 'LM358')."""
+    s = nfc(s).translate(_INVISIBLE).replace("\u03bc", "\u00b5").replace("\u2126", "Ohm").replace("\u03a9", "Ohm")
+    out = []
+    for c in s:
+        if c.encode("cp1252", "replace") == b"?" and c != "?":
+            k = unicodedata.normalize("NFKC", c)
+            c = k if k.encode("cp1252", "replace") != b"?" * len(k) or k == "?" else c
+        out.append(c)
+    return "".join(out)
+
+
 def lib_name(s):
     """Library entry name as Altium stores it (cp1252 in the binary records). 'Ω' becomes 'Ohm';
     anything else cp1252 can't hold is an error rather than a silent '?' that makes the entry unreadable."""
-    s = nfc(s).replace("\u2126", "Ohm").replace("\u03a9", "Ohm")
+    s = storable(s)
     bad = re.search(r"[\x00-\x1f\x7f]", s)
     if bad:                                   # a line break would add a ghost entry to the line-based TOC streams
         raise ValueError(f"name {s!r} has a line break or control character ({bad.group()!r}); rename it")

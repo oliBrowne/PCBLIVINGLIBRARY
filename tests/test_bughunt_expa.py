@@ -434,6 +434,23 @@ def test_exp71_decomposed_accents_are_stored():
     assert AL.lib_name(nfd) == "TRANSCEIVÉR-485" and AL.pin_number(unicodedata.normalize("NFD", "É1")) == "É1"
     assert AL.not_cp1252(nfd) == ""
 
+def test_exp71_bom10_lookalikes_are_stored_and_one_bad_name_is_held():
+    from ecadlib import altium365 as A3, altium_export as X, release_check as RC
+    assert AL.lib_name("μA741") == "µA741" and AL.lib_name("LM358DR​") == "LM358DR"
+    assert AL.lib_name("ＬＭ358DR") == "LM358DR" and AL.lib_name("x²") == "x²"
+    lines = [{"designator": "U1", "value": "X", "footprint": "SOIC-8", "mpn": "芯片123"},
+             {"designator": "U2", "value": "LM358", "footprint": "SOIC-8", "mpn": "LM358DR"}]
+    tables = X.to_rows(lines)
+    bad = next(iter(tables.values())).attrs["unstorable"]
+    assert list(bad) == ["芯片123"] and "can't store" in bad["芯片123"], bad
+    items = {i["name"]: i for i in A3.plan(lines)}
+    assert items["芯片123"]["symbol"]["ref"] == "__123" and items["芯片123"]["name_problems"]
+    assert "name_problems" not in items["LM358DR"]
+    fails, _, _ = RC.check_item(items["芯片123"], ".")
+    assert any(r == "name" for r, _ in fails), fails
+
+
+
 # ---------------------------------------------------------------- parity
 @lite
 def test_exp8_exp52_parity_reads_the_workbook_the_dblib_names(tmp_path):

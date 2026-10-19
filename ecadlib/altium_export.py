@@ -19,7 +19,7 @@ from pathlib import Path, PureWindowsPath
 
 import pandas as pd
 
-from .altium_lib import file_stem, lib_name
+from .altium_lib import file_stem, lib_name, not_cp1252, storable
 from .bom_triage import placeholder_mpn, read_bom
 from .kicad_index import package_of
 
@@ -98,10 +98,22 @@ def kind_of(descriptions=(), footprints=()):
     return None
 
 
+def _name(s, bad):
+    """lib_name(s); a name Altium can't store (a CJK MPN) gets '_' for those characters and the reason goes to `bad`,
+    so one such BOM line is held instead of stopping the whole run (BOM-10)."""
+    try:
+        return lib_name(s)
+    except ValueError as e:
+        bad.append(str(e))
+        t = re.sub(r"[\x00-\x1f\x7f]", "_", storable(s))
+        return lib_name("".join("_" if not_cp1252(c) else c for c in t))
+
+
 def to_rows(lines, triage=None, rules=None):
     """{category: DataFrame of DbLib rows}. rules (ecadlib.rules): part names, footprint names, value style and
     supplier columns; None keeps ecadlib's own. df.attrs["kicad_fp"] maps a part to its footprint's original name
-    when the rules renamed it."""
+    when the rules renamed it; df.attrs["unstorable"] maps a part whose names Altium can't store to the reason (its
+    refs got '_' for those characters: hold it)."""
     from . import rules as RU
     custom = rules is not None and not RU.is_default(rules, "naming")
     tri = {}
@@ -109,7 +121,7 @@ def to_rows(lines, triage=None, rules=None):
         for _, t in triage.iterrows():
             if str(t["mpn"]):                  # an empty MPN would hand one row's footprint to every MPN-less line
                 tri[str(t["mpn"])] = t
-    out, seen, renamed = {}, {}, {}
+    out, seen, renamed, unstorable = {}, {}, {}, {}
     for ln in lines:
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
         cat = CATEGORY.get(prefix.group(0) if prefix else "U", "Misc")
@@ -141,10 +153,13 @@ def to_rows(lines, triage=None, rules=None):
                   else name_mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
         if seen.setdefault(pn, mpn) != mpn:      # same synthetic PN, different part (e.g. 100nF 16V vs 50V): keep both
             pn = f"{pn}-{name_mpn}".replace(" ", "")
-        lib_ref = lib_name(GENERIC_SYMBOL.get(cat) or (custom and mpn and RU.symbol_name(f, rules)) or mpn or pn)
-        kicad_fp = fp_ref = lib_name(fp_ref)
+        bad = []
+        lib_ref = _name(GENERIC_SYMBOL.get(cat) or (custom and mpn and RU.symbol_name(f, rules)) or mpn or pn, bad)
+        kicad_fp = fp_ref = _name(fp_ref, bad)
         if custom:
-            fp_ref = lib_name(RU.footprint_name(fp_ref, rules, ref))
+            fp_ref = _name(RU.footprint_name(fp_ref, rules, ref), bad)
+        if bad:
+            unstorable[pn] = "; ".join(dict.fromkeys(bad))
             if fp_ref != kicad_fp:
                 renamed[pn] = kicad_fp
         out.setdefault(cat, []).append({
@@ -167,6 +182,7 @@ def to_rows(lines, triage=None, rules=None):
     res = {k: pd.DataFrame(v, columns=cols).fillna("").drop_duplicates("Part Number") for k, v in sorted(out.items())}
     for df in res.values():
         df.attrs["kicad_fp"] = renamed
+        df.attrs["unstorable"] = unstorable
     return res
 
 
@@ -250,6 +266,8 @@ def main(argv=None):
         return 2
     tri = pd.read_csv(a.triage, dtype=str).fillna("") if a.triage else None
     tables = to_rows(lines, tri, rules)
+    for pn, why in next(iter(tables.values())).attrs.get("unstorable", {}).items() if tables else ():
+        print(f"warning: {pn}: {why} (written with '_' in its place)", file=sys.stderr)
     tables = {k: df.rename(columns=lambda c: RU.house_row({c: 0}, rules).popitem()[0]) for k, df in tables.items()}
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
 

@@ -279,6 +279,8 @@ def check_item(item, base=".", rules=None):
             add("fields", f"{k} is empty")
     for v in item.get("verify") or []:
         add("verify", v)
+    for v in item.get("name_problems") or []:         # altium365.plan: a name Altium can't store (altium_export._name)
+        add("name", v)
     return fails, warns, info
 
 

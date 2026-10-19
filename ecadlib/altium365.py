@@ -275,6 +275,9 @@ def plan(lines, triage=None, models=None, root=None, rules=None):
                 "footprint": {"ref": row["Footprint Ref"], "file": fp},
                 "status": "ready" if sym and fp else "needs_altium_models",
             })
+            why = df.attrs.get("unstorable", {}).get(row["Part Number"])
+            if why:                            # a name Altium can't store: this part is held, the others go on
+                items[-1]["name_problems"] = [why]
             kfp = df.attrs.get("kicad_fp", {}).get(row["Part Number"])
             if kfp:                            # renamed by the rules: keep the library name for lookups and checks
                 items[-1]["footprint"]["kicad"] = kfp
