@@ -189,6 +189,8 @@ ecadlib project check board.PrjPcb --workspace https://acme.365.altium.com --lib
   out-of-date component whose changes cannot be listed gets the `unlisted` action: by default it is held and the
   exit code is 1. A name such as `TPS7A02-33` is looked up as it is. Only when the workspace has no component of that
   name is a trailing `-<number>` read as an Altium revision number (`CMP-003-000000-1`, `CAP-1`), and the row says so.
+  A component placed from a DbLib (or a file library) carries no workspace revision. It is listed as `not checked`,
+  with the library it came from, and it does not change the exit code.
 - **Usage index.** `project scan` records which parts of an ecadlib library a project or BOM uses, and at which
   revision, in `library.usage.json`. The librarian also records its own BOM there. A held change then says which
   projects use the part. A KiCad project without a schematic is read from its board: KiCad copies each symbol's MPN

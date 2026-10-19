@@ -282,3 +282,31 @@ def test_refusals_do_not_hand_out_the_current_digest_and_a_held_choice_is_not_re
                         "--cache", str(lib.parent / "cache"), "choose", "footprint", "spec:SOT-23-5"],
                        capture_output=True, text=True, env=env, cwd=ROOT, timeout=600)
     assert r.returncode == 2 and "held, not applied" in r.stdout and "now ready" not in r.stdout, r.stdout + r.stderr
+
+
+def test_altium_project_check_lists_dblib_placed_components_as_not_checked():
+    """Known item (d): a component placed from a DbLib carries no workspace revision. The Altium project check
+    skipped it without a word; it is now a "not checked" row that says why (and does not fail the check)."""
+    from ecadlib import altium_project as AP, project_check as PJ
+
+    class Nexar:
+        def find(self, ws, name):
+            return {"id": "CMP-1", "name": name, "revision": {"revisionId": "R1"}} if name == "WS-PMOS" else None
+
+    comps = [{"designator": "Q1", "design_item_id": "WS-PMOS", "vault_guid": "v", "item_guid": "i", "revision_guid": "R1",
+              "libref": "WS-PMOS"},
+             {"designator": "R9", "design_item_id": "RES-0603-10k", "vault_guid": "", "item_guid": "", "revision_guid": "",
+              "libref": "Resistor", "source_library": "ecadlib.DbLib", "database_table": "Resistors"},
+             {"designator": "R10", "design_item_id": "RES-0603-10k", "libref": "Resistor", "source_library": "ecadlib.DbLib",
+              "database_table": "Resistors"}]
+    with mock.patch.object(AP, "load_project", lambda p, rules=None: {"path": p, "components": comps}):
+        res = PJ.check_altium("board.PrjPcb", Nexar(), "https://acme.365.altium.com")
+    rows = {r["id"]: r for r in res["rows"]}
+    assert rows["WS-PMOS"]["state"] == "same"
+    r = rows["RES-0603-10k"]
+    assert r["state"] == "not checked" and r["refs"] == ["R10", "R9"] and "placed from DbLib ecadlib.DbLib" in r["why"], r
+    assert r["action"] == "pass" and res["held"] == 0
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        PJ.print_check(res)
+    assert "not checked" in buf.getvalue() and "RES-0603-10k" in buf.getvalue(), buf.getvalue()
