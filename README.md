@@ -62,7 +62,10 @@ rest goes to **Altium 365** or **KiCad**. Free and open source (MIT); you bring 
   [Releases page](https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases) and run it. A setup page opens where you
   paste an API key, pick a model and add ecadlib to Altium or KiCad. [docs/START_HERE.md](docs/START_HERE.md) walks
   through it.
-* **Command line:** `pip install ecadlib` (Python 3.10+).
+* **Command line:** `pip install ecadlib` (Python 3.10+). These docs follow the main branch: what
+  [CHANGELOG.md](CHANGELOG.md) lists under *Unreleased* (change control and `ecadlib part`, `mcp --http`, the run and
+  review lines of `ecadlib status`) is not in the PyPI release yet. To get it:
+  `pip install "ecadlib @ git+https://github.com/oliBrowne/PCBLIVINGLIBRARY"`.
 
 ## Try the demo
 
@@ -108,7 +111,7 @@ writes the Altium files, a `plan.json` and a review, then runs the release check
 
 ```
 ecadlib datasheet estimate my_bom.csv            # optional: what the AI reads would cost, before anything is sent
-ecadlib librarian my_bom.csv -o out/my_bom
+ecadlib librarian my_bom.csv                     # writes ecadlib_workspace/librarian/my_bom (the init workspace)
 ecadlib status                                   # ready, held, waiting for sign-off
 ```
 
@@ -116,14 +119,14 @@ ecadlib status                                   # ready, held, waiting for sign
 footprint candidates to pick from, or **release anyway** after you have looked (recorded in the plan).
 
 ```
-ecadlib review out/my_bom/plan.json
+ecadlib review ecadlib_workspace/librarian/my_bom/plan.json
 ```
 
 **4. Sign off** (optional policy). With an `approvals.json` next to the plan, parts wait until the named people
-approve them.
+approve them. A rejected part is held either way, policy or not, until it is approved again.
 
 ```
-ecadlib approve out/my_bom/plan.json approve --part CH340C -m "pinout checked"
+ecadlib approve ecadlib_workspace/librarian/my_bom/plan.json approve --part CH340C -m "pinout checked"
 ```
 
 **5. Release to Altium 365.** Set `NEXAR_TOKEN` (or `ecadlib keys set NEXAR_TOKEN`), check the plan with a dry run,
@@ -132,8 +135,8 @@ control lets it through.
 
 ```
 ecadlib altium365 workspaces
-ecadlib altium365 push out/my_bom/plan.json --workspace https://acme.365.altium.com --dry-run
-ecadlib altium365 push out/my_bom/plan.json --workspace https://acme.365.altium.com
+ecadlib altium365 push ecadlib_workspace/librarian/my_bom/plan.json --workspace https://acme.365.altium.com --dry-run
+ecadlib altium365 push ecadlib_workspace/librarian/my_bom/plan.json --workspace https://acme.365.altium.com
 ```
 
 No Altium 365? `ecadlib dblib-sync` writes the same plan into a `.DbLib`/`.SVNDbLib` folder, `ecadlib altium-pkg`

@@ -24,17 +24,18 @@ Footprint property; then the description and value; then the MPN):
   named packages       SOT-23/-5/-6, SOT-323/353/363, SOT-523, SOT-89, SOD-123(F)/323(F)/523/923/128, SMA/SMB/SMC/SMF
                        (DO-214), MicroMELF/MiniMELF/MELF, DO-41/DO-201AD (axial), SC-82AB, DPAK/D2PAK (TO-252/263), TO-220 (vertical), TO-92 (inline), and
                        SOIC/SO/TSSOP/MSOP/SSOP/QSOP/QFN/DFN/SON/QFP families from the name (pins, body, pitch, exposed pad,
-                       KiCad or LCSC style "QFN-32_L5.0-W5.0-P0.50-EP3.5"). Plain SOIC-8/14/16 means JEDEC MS-012
-                       (3.9 mm body), SOIC-nW MS-013 (7.5 mm), TSSOP-8..28 MO-153 (4.4 mm, 0.65 mm pitch), MSOP-8 3x3
-                       0.65 mm, QFP without "EP" no exposed pad. Anything else must be in the name.
+                       KiCad or LCSC style "QFN-32_L5.0-W5.0-P0.50-EP3.5"). The name must give the body: a bare
+                       family name (SOIC-8, SO-14, TSSOP-20, SOIC-16W) never resolves, because several bodies share it;
+                       write e.g. "SOIC-8 3.9x4.9mm" or "SO-8 150mil". MSOP-8 (3x3 mm, 0.65 mm, JEDEC MO-187-AA) is the
+                       one exception. SOIC/SO without a pitch is 1.27 mm; QFP without "EP" has no exposed pad.
   ambiguous -> nothing: a name that fits two different footprints (QFN-16 without a body size, LQFP-64 without body and
                        pitch, "SOT-23-3", which KiCad uses for the 1.6 mm MO-178 body and distributors for TO-236,
                        bare "SOT-223" / TSOT-23 / SC-70 / SC-75 / SOT-26 (tab numbering or body differ by vendor),
                        power packages (PowerPAK, LFPAK, SO-8FL ...), TO-220 marked horizontal, a diode in a TO/DPAK
                        package, "SMA" on a part that is not a diode); the next source tries. Uniqueness is judged
                        against every generic name in KiCad's library, not only this table. A description is weaker
-                       evidence than a footprint field: there no JEDEC defaults apply, IC families need the body
-                       size, and a bare family (SOT-23, TO-220 ...) only counts for transistors and diodes.
+                       evidence than a footprint field: there no defaults apply (not even MSOP-8 or the SOIC pitch),
+                       and a bare family (SOT-23, TO-220 ...) only counts for transistors and diodes.
 
 Symbols (only when the pinout is standard for the part): R, C, C_Polarized, L, LED and diodes (2-pin packages: pin 1
 cathode, as KiCad's footprints), and these MPN families: SOT-23 BJTs (MMBT39xx/2222/2907/4401/4403/5401/5551/A42/A92,
@@ -269,16 +270,12 @@ def _free_attrs(text):
 
 
 def _defaults(a):
-    """JEDEC defaults where the bare family name means one package."""
+    """JEDEC defaults where the name leaves one package (ic_package already refused names without a body size)."""
     fam, n = a["fam"], a["pins"]
     if fam == "SO" or (fam == "SOP" and n in (8, 14, 16) and (a.get("body_w") == 3.9 or (a["body"] or (0,))[0] == 3.9)):
         a["fam"] = fam = "SOIC"                           # SO-8, and SOP-8 150 mil (LCSC), are JEDEC SOIC
     if fam == "SOIC" and a["pitch"] is None:
         a["pitch"] = 1.27
-    if fam == "SOIC" and not a["body"] and not a.get("body_w"):
-        a["body_w"] = 7.5 if a["w"] else 3.9 if n in (8, 14, 16) else None
-    if fam == "TSSOP" and not a["body"] and not a.get("body_w") and n in (8, 14, 16, 20, 24, 28) and a["pitch"] in (None, 0.65):
-        a["body_w"], a["pitch"] = 4.4, 0.65
     if fam == "MSOP" and not a["body"] and n == 8 and a["pitch"] in (None, 0.65):
         a["body"], a["pitch"] = (3.0, 3.0), 0.65
     if fam not in NO_LEAD and a["ep"] is None:            # leaded packages with a pad name it (HTSSOP, -1EP, PowerPAD)

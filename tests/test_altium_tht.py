@@ -105,12 +105,26 @@ def test_every_advanced_spec_approves_into_a_pcblib_matching_the_kicad_footprint
                 if not any("Mask" in l for l in layers):         # thermal vias: tented (mask opening closed)
                     assert m[102] == 2 and struct.unpack_from("<i", m, 90)[0] < -max(ap["w"], ap["h"]) // 2, (stem, kp[1])
                 totals["pads"] += 1
-            # paste windows -> Top Paste fills at the same place
-            assert len([f for f in fills if f["layer"] == AL.TOP_PASTE]) == len(windows), stem
-            for kp, f in zip(windows, [f for f in fills if f["layer"] == AL.TOP_PASTE]):
+            # paste windows -> Top Paste at the same place: a fill for a square window, a region with the same
+            # rounded outline (and area) for a roundrect one (EXP-10)
+            pfills = [f for f in fills if f["layer"] == AL.TOP_PASTE]
+            pregs = [r for r in regions if r["layer"] == AL.TOP_PASTE]
+            assert len(pfills) + len(pregs) == len(windows), stem
+            area = lambda q: abs(sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(q, q[1:] + q[:1]))) / 2
+            for kp in windows:
                 at, size = sexpr.first(kp, "at"), sexpr.first(kp, "size")
                 x, y, w, h = float(at[1]), -float(at[2]), float(size[1]), float(size[2])
-                assert abs(AL.to_mm(f["x1"]) - (x - w / 2)) < TOL and abs(AL.to_mm(f["y2"]) - (y + h / 2)) < TOL, stem
+                rr = sexpr.first(kp, "roundrect_rratio")
+                r = float(rr[1]) * min(w, h) if rr and kp[3] == "roundrect" else 0.0
+                if r > 0:
+                    got = [[(AL.to_mm(a), AL.to_mm(b)) for a, b in g["pts"]] for g in pregs]
+                    q = next(q for q in got if abs(min(a for a, _ in q) - (x - w / 2)) < TOL
+                             and abs(max(b for _, b in q) - (y + h / 2)) < TOL)
+                    want = w * h - (4 - math.pi) * r * r
+                    assert abs(area(q) - want) / want < 0.001, (stem, area(q), want)
+                else:
+                    assert any(abs(AL.to_mm(f["x1"]) - (x - w / 2)) < TOL and abs(AL.to_mm(f["y2"]) - (y + h / 2)) < TOL
+                               for f in pfills), stem
                 totals["windows"] += 1
             # polygon pads -> copper + solder-mask regions with the KiCad outline
             for kp in [p for p in copper if p[3] == "custom"]:

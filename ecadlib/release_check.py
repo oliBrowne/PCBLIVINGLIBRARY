@@ -128,6 +128,21 @@ def _has_pin1(nums, pin1=None):
     return bool(set(pin1 or ("1", "A1")) & set(nums))
 
 
+_LCSC_FIELDS = {"lcsc", "lcsc part", "lcsc part number", "lcsc part #", "lcsc#", "jlcpcb part", "jlcpcb part #"}
+
+
+def _supplier_number(par, field, rules):
+    """A required LCSC field (a house name `init` learned from a KiCad library) is filled when the part carries the LCSC
+    number as `LCSC Part` or as `Supplier Part Number N` with `Supplier N` = LCSC, as the librarian writes it."""
+    from . import rules as RU
+    if str(RU.canonical_param(field, rules)).strip().casefold() not in _LCSC_FIELDS:
+        return False
+    if str(par.get("LCSC Part", "")).strip():
+        return True
+    return any(str(v).strip() and str(par.get("Supplier " + k[len("Supplier Part Number "):], "")).strip().casefold()
+               in ("lcsc", "jlcpcb") for k, v in par.items() if k.startswith("Supplier Part Number "))
+
+
 def check_item(item, base=".", rules=None):
     """-> (failures [(rule, message)], warnings [str], info {height, ...}). rules (ecadlib.rules): required fields,
     accepted pin-1 names and the courtyard layer; None = ecadlib's own."""
@@ -279,10 +294,12 @@ def check_item(item, base=".", rules=None):
             elif str((item.get("field_sources") or {}).get("Description", "")).startswith("written by ecadlib"):
                 warns.append(f"Description \"{item['description']}\" was written by ecadlib from the category and "
                              "package (no source had one): check it")
-        elif not str(par.get(RU.canonical_param(k, rules), par.get(k, ""))).strip():
+        elif not str(par.get(RU.canonical_param(k, rules), par.get(k, ""))).strip() and not _supplier_number(par, k, rules):
             add("fields", f"{k} is empty")
     for v in item.get("verify") or []:
         add("verify", v)
+    for v in item.get("name_problems") or []:         # altium365.plan: a name Altium can't store (altium_export._name)
+        add("fields", v)
     return fails, warns, info
 
 
@@ -461,7 +478,11 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="print the result as JSON (plan, report, counts, rows)")
     a = ap.parse_args(argv)
     plan = Path(a.plan)
-    from .approvals import cli_plan_lock
+    from .approvals import cli_plan_lock, load_policy
+    try:
+        load_policy(plan.parent)               # a broken approvals file: say so, before anything is changed
+    except ValueError as e:
+        sys.exit(f"approval policy: {e}")
     with cli_plan_lock(plan):                  # the web UI may be recording into this plan right now
         items = json.loads(plan.read_text(encoding="utf-8"))
         unknown = set(a.allow + a.unallow) - {i["name"] for i in items}
@@ -475,6 +496,8 @@ def main(argv=None):
             post_check(items, plan.parent, rows)
             record_releases(items, plan.parent, a.allow, who)       # change control: revision 1 of what was released
         write_text_atomic(plan, json.dumps(items, indent=2))
+        from .librarian import refresh_review
+        refresh_review(plan, items)
         if a.allow or a.unallow:
             from . import timing
             timing.mark_review(plan.parent, "allow")

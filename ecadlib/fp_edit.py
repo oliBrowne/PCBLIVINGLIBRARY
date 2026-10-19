@@ -45,6 +45,34 @@ def for_part(edits, *names):
     return next((edits[n] for n in names if n and n in edits), None)
 
 
+_ARRAY_KEYS = ("count", "dx", "dy", "first_number", "number_step", "prefix", "x", "y")
+
+
+def _array_pads(a):
+    """One pad_table array as explicit pad rows (the numbers and positions footprint_adv._expand_table gives it)."""
+    step, first = a.get("number_step", 1), a.get("first_number", 1)
+    keep = {k: v for k, v in a.items() if k not in _ARRAY_KEYS}
+    return [dict(keep, number=f"{a.get('prefix', '')}{first + k * step}", x=a["x"] + k * a.get("dx", 0),
+                 y=a["y"] + k * a.get("dy", 0)) for k in range(a["count"])]
+
+
+def _array_numbers(t):
+    return {str(p["number"]) for a in t.get("arrays") or [] for p in _array_pads(a)}
+
+
+def _expand_arrays(t, numbers):
+    """Turn every array that makes a pad in `numbers` into explicit pads, so a rename reaches those pads too."""
+    keep = []
+    for a in t.get("arrays") or []:
+        rows = _array_pads(a)
+        if any(str(p["number"]) in numbers for p in rows):
+            t.setdefault("pads", []).extend(rows)
+        else:
+            keep.append(a)
+    if "arrays" in t:
+        t["arrays"] = keep
+
+
 def apply(edit, res):
     """A datasheet result {spec, symbol, ...} with one part's edit applied (a copy) -> (res, notes)."""
     if not edit:
@@ -55,6 +83,12 @@ def apply(edit, res):
     spec, sym = res["spec"], res.get("symbol") or {}
     if ren:
         t = spec.get("pad_table") or {}
+        _expand_arrays(t, set(ren))
+        have = {str(p.get("number")) for p in t.get("pads") or []} | _array_numbers(t)
+        gone = [k for k in ren if k not in have]
+        if gone and t:                                    # renaming only the symbol pin would cross pin and pad
+            notes.append("rename skipped, no such pad: " + ", ".join(f"{k} -> {ren[k]}" for k in gone))
+            ren = {k: v for k, v in ren.items() if k in have}
         for p in t.get("pads") or []:
             if str(p.get("number")) in ren:
                 p["number"] = ren[str(p["number"])]
@@ -63,7 +97,8 @@ def apply(edit, res):
                 p["num"] = ren[str(p["num"])]
         if spec.get("same_net"):
             spec["same_net"] = [[ren.get(str(n), str(n)) for n in g] for g in spec["same_net"]]
-        notes.append("pads renamed by hand: " + ", ".join(f"{a} -> {b}" for a, b in ren.items()))
+        if ren:
+            notes.append("pads renamed by hand: " + ", ".join(f"{a} -> {b}" for a, b in ren.items()))
     if edit.get("same_net"):
         from .datasheet import same_net_from_pins
         spec["same_net"] = same_net_from_pins([], (spec.get("same_net") or []) + edit["same_net"])

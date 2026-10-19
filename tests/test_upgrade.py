@@ -291,8 +291,13 @@ def test_rebuild_check_reuses_cached_datasheet_answers_and_never_calls_a_model()
         url = E.seed_datasheet(d / "cache", "DSPART16")
         (d / "bom.csv").write_text("Designator,Qty,Value,Footprint,Manufacturer,Mfr Part #,LCSC,Description,Datasheet\n"
                                    f"U3,1,DSPART16,,ACME,DSPART16,,Buck converter VQFN-16,{url}\n", encoding="utf-8")
-        with E.FakeAnthropic() as fa, mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-e2e-test", "ANTHROPIC_BASE_URL": fa.url}):
-            L.run(d / "bom.csv", out=d / "lib", offline=True, cache=d / "cache", rules={}, log=lambda *a: None)
+        # not offline (--offline sends nothing to the model either): the recorded cache answers, any other request
+        # fails at once at a dead proxy, and Claude is the local fake
+        dead = {k: "http://127.0.0.1:9" for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
+        dead.update(NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
+        with E.FakeAnthropic() as fa, mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-e2e-test", "ANTHROPIC_BASE_URL": fa.url,
+                                                                   **dead}):
+            L.run(d / "bom.csv", out=d / "lib", offline=False, cache=d / "cache", rules={}, log=lambda *a: None)
             assert ("datasheet", "DSPART16") in fa.kinds, fa.kinds
         p = RB.read_lock(d / "lib")["parts"]["DSPART16"]
         assert p["footprint"]["source"] == f"datasheet:{url}", p

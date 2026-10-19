@@ -47,21 +47,35 @@ KINDS = (("symbol", "SchLib", "Library"), ("footprint", "PcbLib", "Footprint"))
 
 # ------------------------------------------------------------------ plan -> rows
 def load_plan(path):
-    """plan.json with model paths resolved against the plan's folder (as altium365 push does)."""
-    items = json.loads(Path(path).read_text())
-    for i in items:
-        for k, _, _ in KINDS:
-            if (i.get(k) or {}).get("file"):
-                i[k]["file"] = str((Path(path).parent / i[k]["file"]).resolve())
-    return items
+    """plan.json's items as written: model paths stay relative to the plan's folder (sync resolves them against
+    `base`), so the change-control bookkeeping that may rewrite plan.json never puts this machine's paths in it."""
+    return json.loads(Path(path).read_text())
+
+
+_CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")     # what openpyxl refuses in a cell (ILLEGAL_CHARACTERS_RE)
+CELL_MAX = 32767                                          # Excel's cell limit: openpyxl cuts longer text on save
+LINK_COLUMNS = ("Part Number", "Library Ref", "Library Path", "Footprint Ref", "Footprint Path")   # always ecadlib's
+
+
+def cell_text(v):
+    """A value as the workbook can hold it: control characters (a \\x0b copied from a datasheet) become spaces, and
+    it is cut to Excel's 32767 characters, so the .xlsx, the .csv and the next run's compare all see the same text."""
+    return _CTRL.sub(" ", str(v))[:CELL_MAX]
+
+
+def column_name(name):
+    """A parameter name as a column and DbLib field map: no '|' or line breaks (they split the INI's Options record),
+    no control characters. '' when nothing is left."""
+    return _CTRL.sub(" ", AL.clean(name)).strip()
 
 
 def sheet_name(name):
     """A sheet name Excel accepts that Excel's ACE provider exposes unchanged (plus '$'), so the DbLib TableName
     matches it. ACE drops an apostrophe ("Driver's ICs" -> "Drivers ICs$") and turns a '.' into '#'
     ("Res. Networks" -> "Res# Networks$"): the apostrophe is dropped here as well, and '.' becomes '_'."""
-    t = re.sub(r"[\[\]:*?/\\.]", "_", str(name)).replace("'", "")
-    return (t or "Misc")[:31]
+    t = re.sub(r"[\[\]:*?/\\.]", "_", str(name).strip()).replace("'", "")
+    t = (t or "Misc")[:31]
+    return t + "_" if t.lower() == "history" else t      # Excel reserves the sheet name History
 
 
 _FOLD = str.maketrans({"ß": "ss", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ø": "o", "Ø": "O", "ł": "l",
@@ -84,6 +98,30 @@ def table_of(item):
     return sheet_name((item.get("folder") or "Misc").rstrip("/").rsplit("/", 1)[-1])
 
 
+def sheet_names(items, tables=()):
+    """{id(item): sheet} for the items whose folder would share a sheet with another folder only because sheet names
+    are cut to Excel's 31 characters: the first folder (in name order) keeps the sheet, the others end in ~2, ~3
+    ('Optoelectronics and Light Em~2'). Folders differing only in case share a sheet on purpose (Excel ignores
+    case). tables: the workbook's sheets (a new name never takes one of them)."""
+    raw = lambda it: (it.get("folder") or "Misc").rstrip("/").rsplit("/", 1)[-1].strip() or "Misc"
+    full = lambda it: re.sub(r"[\[\]:*?/\\.]", "_", raw(it)).replace("'", "").lower()
+    groups, first = {}, {}
+    for it in items:
+        groups.setdefault(table_key(sheet_name(raw(it))), set()).add(full(it))
+        first.setdefault(full(it), raw(it))
+    taken = {table_key(t) for t in tables} | set(groups)
+    alias = {}
+    for names in groups.values():
+        n = 2
+        for f in sorted(names)[1:]:
+            while table_key(cand := f"{sheet_name(first[f])[:28]}~{n}") in taken:
+                n += 1
+            taken.add(table_key(cand))
+            alias[f] = cand
+            n += 1
+    return {id(it): alias[full(it)] for it in items if full(it) in alias}
+
+
 def table_key(name):
     """One table under every spelling it has had: a sheet name, a DbLib TableName ('$' at the end), the name ACE
     gave it ('#' for '.', no apostrophe) or an older ecadlib wrote ('.', apostrophe), in any case."""
@@ -103,27 +141,50 @@ def plan_row(item, rules=None):
     """The DbLib row for one plan item, columns in altium_export order, then any extra plan parameters; parameter
     columns in the rules' house names ([parameters] names)."""
     row = {c: "" for c in COLUMNS}
-    row.update({"Part Number": item["name"], "Description": item.get("description", ""), "Comment": item.get("comment", "")})
+    row.update({"Description": cell_text(item.get("description", "")), "Comment": cell_text(item.get("comment", ""))})
+    for p in item.get("parameters", []):            # a parameter named like a key / link column never replaces it
+        n = column_name(p["name"])
+        if n and n not in LINK_COLUMNS:
+            row[n] = cell_text(p["value"])
+    row["Part Number"] = cell_text(item["name"])
     for k, d, w in KINDS:
         ref = (item.get(k) or {}).get("ref") or ""
-        row[f"{w} Ref"] = ref
+        row[f"{w} Ref"] = AL.lib_name(ref) if ref else ""      # the name inside the file ('Ω' is stored as 'Ohm')
         row[f"{w} Path"] = f"{d}\\{AL.file_stem(ref)}.{d}" if ref else ""
-    row.update({p["name"]: str(p["value"]) for p in item.get("parameters", [])})
     from .rules import house_row
     return house_row(row, rules)
 
 
 # ------------------------------------------------------------------ parts table (xlsx + csv)
-def read_tables(xlsx):
-    """{sheet: (header, [row dicts])} from an existing parts workbook; {} if there is none."""
+class Kept(str):
+    """A cell from the workbook that is not text (a number, date, true/false or formula someone put in a column of
+    their own): it compares as its text, and write_xlsx writes it back as it was (raw)."""
+    def __new__(cls, text, raw):
+        o = str.__new__(cls, text)
+        o.raw = raw
+        return o
+
+
+def _cell_in(c, keep):
+    v = c.value
+    if v is None:
+        return ""
+    if not keep or (isinstance(v, str) and c.data_type != "f"):
+        return str(v)
+    return Kept(str(v), v)
+
+
+def read_tables(xlsx, keep=False):
+    """{sheet: (header, [row dicts])} from an existing parts workbook; {} if there is none. Values are text; keep=True
+    (dblib-sync) reads formulas as formulas and returns non-text cells as Kept, so they are written back unchanged."""
     if not Path(xlsx).exists():
         return {}
     import openpyxl
-    wb = openpyxl.load_workbook(xlsx, read_only=True, data_only=True)
+    wb = openpyxl.load_workbook(xlsx, read_only=True, data_only=not keep)
     out = {}
     try:
         for ws in wb.worksheets:
-            rows = [["" if v is None else str(v) for v in r] for r in ws.iter_rows(values_only=True)]
+            rows = [[_cell_in(c, keep) for c in r] for r in ws.iter_rows()]
             if not rows:
                 continue
             cols = [(i, h) for i, h in enumerate(rows[0]) if h]       # by position: a blank header column must not
@@ -141,15 +202,15 @@ def write_xlsx(path, tables):
     wb.remove(wb.active)
     for name, (hdr, rows) in tables.items():
         ws = wb.create_sheet(name)
-        ws.append(hdr)
-        for r in rows:
-            ws.append([r.get(c, "") for c in hdr])
-        for row in ws.iter_rows(min_row=2):  # all text: "=Value" is a parameter, not a formula; '0402' stays '0402'
-            for c in row:
-                if isinstance(c.value, str):
+        # all text: "=Value" is a parameter, not a formula; '0402' stays '0402'; the header too (a column named
+        # "=HYPERLINK(..)" is text). Only a Kept cell (a number, date or formula read from the workbook) keeps its type.
+        for vals in [hdr] + [[r.get(c, "") for c in hdr] for r in rows]:
+            ws.append([v.raw if isinstance(v, Kept) else cell_text(v) for v in vals])
+            for c, v in zip(ws[ws.max_row], vals):
+                if isinstance(c.value, str) and not isinstance(v, Kept):
                     c.data_type = TYPE_STRING
         ws.freeze_panes = "B2"
-    tmp = Path(str(path) + ".tmp")
+    tmp = Path(path).with_name(f"{Path(path).name}.{os.getpid()}.tmp")   # its own name: two runs never share one
     wb.save(tmp)
     os.replace(tmp, path)
 
@@ -300,6 +361,23 @@ def dblib_update(existing, tables, links, override=()):
     return "".join(f"[{n}]\r\n" + "".join(ln + "\r\n" for ln in body) for n, body in secs)
 
 
+def check_existing_dblib(lib, fname, name):
+    """An existing .DbLib / .SVNDbLib at the target must be ecadlib's kind (an Excel workbook next to it): merging
+    into a company's Access / SQL Server database library would switch it to ecadlib's workbook and break it."""
+    if not Path(lib).is_file():
+        return
+    db = next((s for s in _sections(read_ini_text(lib)[0]) if s[0] == "DatabaseLinks"), None)
+    kv = _kv(db[1]) if db else {}
+    typ, path = kv.get("LibraryDatabaseType", "").strip(), kv.get("LibraryDatabasePath", "").strip()
+    ours = {f"{fname}.xlsx".lower(), f"{name}.xlsx".lower()}
+    if typ and typ.lower() != "microsoft excel":
+        raise ValueError(f"{lib} is a {typ} database library, not ecadlib's Excel one: it is left as it is. "
+                         "Sync into another folder, or pass another --name")
+    if path and PureWindowsPath(path).name.lower() not in ours:
+        raise ValueError(f"{lib} reads the workbook {path}, not ecadlib's {fname}.xlsx: it is left as it is. "
+                         "Sync into another folder, or pass another --name")
+
+
 # ------------------------------------------------------------------ svn
 def run_cmd(cmd, cwd=None):
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
@@ -358,12 +436,24 @@ def _q(s):
 # ------------------------------------------------------------------ sync
 def _readback(path, kind, ref):
     """None if the written model reads back with altium_lib and holds `ref`, else the problem."""
+    fname = re.sub(r"(\.\d+)?\.tmp$", "", Path(path).name)       # the file it becomes, not the temporary copy
     try:
         names = ([c["name"] for c in AL.read_schlib(path)[1]] if kind == "SchLib"
                  else [f["name"] for f in AL.read_pcblib(path)])
     except Exception as e:
-        return f"{Path(path).name} does not read back: {type(e).__name__}: {e}"
-    return None if ref in names else f"{Path(path).name} holds {names}, not {ref!r}"
+        return f"{fname} does not read back: {type(e).__name__}: {str(e).replace(Path(path).name, fname)}"
+    want = AL.lib_name(ref)                       # as the file stores it ('Ω' -> 'Ohm')
+    return None if want in names else f"{fname} holds {names}, not {want!r}"
+
+
+def _copy_recipe(to, src, dst):
+    """AN.copy_recipe, -> the files it wrote (recipe, STEP files, .ecadstate) relative to `to`, for svn."""
+    st = dst.with_name(dst.name + AN.STATE_EXT)
+    before = st.read_bytes() if st.is_file() else None
+    paths = [Path(p) for p in AN.copy_recipe(src, dst)]
+    if st.is_file() and st.read_bytes() != before:
+        paths.append(st)
+    return [p.relative_to(to).as_posix() for p in paths]
 
 
 def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=None, svn_url=None,
@@ -394,6 +484,9 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
     to = Path(target_dir)
     from .rules import param_name, resolve
     rules = resolve(rules, base)                            # house parameter names: ecadlib.toml found from the plan
+    if not name or name in (".", "..") or Path(name).name != name or PureWindowsPath(name).name != name:
+        raise ValueError(f"--name {name!r} is a file name, not a path: use --to for the folder")
+    check_existing_dblib(to / f"{name}{EXT[mode]}", data_file_name(name), name)
     from . import change_gate as CG                         # change control (#105): hand edits settle first; a held
     if not dry_run:                                         # change syncs the released revision
         CG.publish_guard(plan if isinstance(plan, (str, Path)) else base, items, mode, rules=rules, base=base)
@@ -405,22 +498,32 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
     # the ASCII name, keeping the rows (and columns added by hand) of the old one
     legacy = [f for f in (to / f"{name}.xlsx", to / f"{name}.csv") if fname != name and f.exists()]
     old_xlsx = to / f"{name}.xlsx"
-    old = read_tables(old_xlsx if old_xlsx in legacy and not xlsx.exists() else xlsx)
+    from_legacy = old_xlsx in legacy and not xlsx.exists()
+    old = read_tables(old_xlsx if from_legacy else xlsx, keep=True)
+    # a sheet without a Part Number column (notes, a change log) is not a component table: written back as it is
+    others = {t: v for t, v in old.items() if "Part Number" not in v[0]}
+    old = {t: v for t, v in old.items() if t not in others}
     tables = {}
     for t, (h, rows) in old.items():                    # a sheet an older ecadlib named "Driver's ICs": ACE's name
         t = next((k for k in tables if table_key(k) == table_key(t)), sheet_name(t))
         hdr, rs = tables.setdefault(t, ([], []))
         hdr += [c for c in h if c not in hdr]
         rs += [dict(r) for r in rows]
-    where = {r.get("Part Number"): t for t, (_, rows) in tables.items() for r in rows}
+    where = {}
+    for t, (_, rows) in tables.items():                 # the first row of a Part Number is its row (EXP-79: the rest
+        for r in rows:                                  # are reported as duplicates below)
+            where.setdefault(r.get("Part Number"), t)
     results, written, removed, copied, failed, prune_steps = [], [], [], {}, {}, set()
+    folded = {}                                         # rel.casefold() -> rel: Windows shares ignore case
+    sheets = sheet_names(items, tables)
+    seen = {}
 
     def find(pn, t):
         rows = tables.get(t, ([], []))[1]
         return next((r for r in rows if r.get("Part Number") == pn), None)
 
     for it in items:
-        t0 = table_of(it)                                   # Excel sheet names ignore case: Passives = passives
+        t0 = sheets.get(id(it)) or table_of(it)             # Excel sheet names ignore case: Passives = passives
         res = {"name": it["name"], "action": "", "detail": "", "table": next((k for k in tables if table_key(k) == table_key(t0)), t0)}
         results.append(res)
         if it.get("status") == "held":
@@ -431,12 +534,29 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         if it.get("status") != "ready":
             res["action"], res["detail"] = "skipped", it.get("status") or "not ready"
             continue
+        missing = [k for k, _, _ in KINDS if not ((it.get(k) or {}).get("file") and (it.get(k) or {}).get("ref"))]
+        if missing:                                         # "items without both models are skipped"
+            res["action"], res["detail"] = "skipped", "no " + " / ".join(missing) + " model"
+            continue
+        if _CTRL.search(it["name"]):
+            res["action"], res["detail"] = "error", "the part name has a control character (a line break or tab copied " \
+                                                    "from somewhere): rename it"
+            continue
+        if it["name"].casefold() in seen:                   # Altium Part Numbers ignore case
+            res["action"] = "error"
+            res["detail"] = f"duplicate part name in the plan (also {seen[it['name'].casefold()]!r}): rename one of them"
+            continue
+        seen[it["name"].casefold()] = it["name"]
         notes, problems = [], []
         for k, d, w in KINDS:                               # model files first: a bad file must not reach the table
             src, ref = it[k]["file"], it[k]["ref"]
             src = Path(src) if Path(src).is_absolute() else base / src
             rel = f"{d}/{AL.file_stem(ref)}.{d}"
             dst = to / rel
+            if folded.setdefault(rel.casefold(), rel) != rel:
+                problems.append(f"{rel}: same file name as {folded[rel.casefold()]} (the names differ only in case, "
+                                "and Windows file names ignore case): rename one of them")
+                continue
             if not src.exists():
                 problems.append(f"{k} file missing: {src}")
                 continue
@@ -453,22 +573,30 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             n_notes = len(notes)
             try:
                 if dst.exists() and dst.read_bytes() == data:
-                    if not dry_run:
-                        AN.copy_recipe(src, dst)
+                    if not dry_run:                         # ecadlib's bytes (an earlier run that failed later on
+                        written += _copy_recipe(to, src, dst)     # copied them): ecadlib's file
                         managed_files.update(_steps(to, rel))
+                        managed_files.add(rel)
                     continue
                 act = AN.replace_action(data, dst, overwrite_edits, save=not dry_run)
                 if act == "keep":                               # Altium's build of these same bytes: leave it
                     if not dry_run:
                         managed_files.update(_steps(to, rel))
+                        managed_files.add(rel)
                     continue
                 if act == "edited":
                     notes.append(f"{rel} {AN.EDITED_NOTE}")
                     continue
+                if (dst.exists() and rel not in managed_files and AN.state_of(dst) is None
+                        and not overwrite_edits):               # a library of the company's own, not ecadlib's
+                    problems.append(f"{rel} is already there and was not written by ecadlib: not replaced "
+                                    "(rename the part's model, or --overwrite-edits replaces it)")
+                    failed[rel] = problems[-1]
+                    continue
                 notes.append(f"{rel} {'updated' if dst.exists() else 'added'}")
                 if not dry_run:
                     dst.parent.mkdir(parents=True, exist_ok=True)
-                    tmp = dst.with_name(dst.name + ".tmp")
+                    tmp = dst.with_name(f"{dst.name}.{os.getpid()}.tmp")
                     tmp.write_bytes(data)
                     err = _readback(tmp, d, ref)
                     if err:
@@ -478,7 +606,8 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                         notes.pop()
                         continue
                     os.replace(tmp, dst)
-                    AN.copy_recipe(src, dst)            # what Altium rebuilds the file from (ecadlib.altium_native)
+                    # what Altium rebuilds the file from (ecadlib.altium_native): svn needs it too
+                    written += _copy_recipe(to, src, dst)
                     managed_files.update(_steps(to, rel))       # its STEP files are ecadlib's too: --prune removes them
                 else:
                     err = _readback(src, d, ref)
@@ -488,7 +617,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                         continue
                 written.append(rel)
             except PermissionError:                         # Windows: the file is open (locked) in Altium or another
-                dst.with_name(dst.name + ".tmp").unlink(missing_ok=True)   # program: this part is skipped, the others sync
+                dst.with_name(f"{dst.name}.{os.getpid()}.tmp").unlink(missing_ok=True)   # program: this part is skipped, the others sync
                 err = (f"{rel} could not be read or replaced: it is open in Altium or another program. "
                        "Close it there (or wait for Altium's build to finish), then run this again")
                 problems.append(err)
@@ -537,6 +666,17 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         for r in list(rows):
             pn = r.get("Part Number", "")
             if pn in plan_names:
+                cur = find(pn, where[pn]) if pn in where else None
+                if cur is None or r is cur:
+                    continue
+                res = {"name": pn, "action": "duplicate", "table": t, "kind": "row",     # a copy-paste in Excel: Altium
+                       "detail": f"a second row for this Part Number (ecadlib keeps the one in {where[pn]} up to date)"}
+                if prune and pn in managed_rows:                                     # lists the part twice
+                    rows.remove(r)
+                    res["action"] = "removed"
+                else:
+                    res["detail"] += "; kept" + (" (--prune deletes it)" if pn in managed_rows else "")
+                results.append(res)
                 continue
             res = {"name": pn, "action": "not_in_plan", "detail": "", "table": t, "kind": "row"}
             if pn not in managed_rows:
@@ -588,7 +728,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                 for folder in ((to / rel).parent, (to / rel).parent.parent):
                     if folder.name != "PcbLib" and folder.is_dir() and not any(folder.iterdir()):
                         folder.rmdir()
-    managed_files |= set(written)
+    managed_files |= {w for w in written if not w.endswith((AN.EXT, AN.STATE_EXT)) and "/ecadlib_3d/" not in w}
     had = {table_key(t) for t in old}
     tables = {t: v for t, v in tables.items() if v[1] or table_key(t) in had}  # never create an empty sheet
 
@@ -604,7 +744,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                 (to / rel).write_bytes(data if data is not None else text.encode("utf-8"))
         written.append(rel)
     if tables and (tables != old or not xlsx.exists()):
-        put(xlsx.name, writer=lambda: write_xlsx(xlsx, tables))
+        put(xlsx.name, writer=lambda: write_xlsx(xlsx, {**others, **tables}))   # other sheets: as they were
     if tables:
         ct = csv_text(tables)
         if not csvf.exists() or csvf.read_bytes().decode("utf-8", "replace") != ct:
@@ -637,6 +777,11 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         out["warning"] = "no SVN repository URL (pass --svn-url, or sync into an svn working copy)"
     if tables and legacy:                           # the ASCII-named workbook replaces them
         for f in legacy:
+            if f.suffix == ".xlsx" and not from_legacy:  # not what this run read: someone's edits may be in it
+                results.append({"name": f.name, "action": "not_in_plan", "table": "", "kind": "file",
+                                "detail": f"an older ecadlib's workbook, not merged ({fname}.xlsx is the one Altium "
+                                          "reads): kept; move what you need from it, then delete it"})
+                continue
             removed.append(f.name)
             results.append({"name": f.name, "action": "removed", "detail": f"renamed to {fname}{f.suffix}",
                             "table": "", "kind": "file"})
@@ -677,8 +822,12 @@ def main(argv=None):
     ap.add_argument("--rules", help="library rules file: house parameter names (default: ecadlib.toml found from the plan)")
     a = ap.parse_args(argv)
 
-    out = sync(a.plan, a.to, "svndblib" if a.svn else "dblib", a.name, a.prune, a.win_dir, a.svn_url, a.dry_run, rules=a.rules,
-               overwrite_edits=a.overwrite_edits)
+    try:
+        out = sync(a.plan, a.to, "svndblib" if a.svn else "dblib", a.name, a.prune, a.win_dir, a.svn_url, a.dry_run,
+                   rules=a.rules, overwrite_edits=a.overwrite_edits)
+    except ValueError as e:                        # a wrong --name, a library folder that isn't ecadlib's kind
+        print(f"ecadlib dblib-sync: {e}", file=sys.stderr)
+        sys.exit(2)
     from . import messages as M, term as TM
     t = TM.Term()
     rows = []

@@ -69,13 +69,23 @@ class StyleError(ValueError):
 
 # ------------------------------------------------------------------ the profile file
 def profile_path(rules=None, start="."):
-    """[style] profile, relative to the rules file's folder (else `start`)."""
+    """[style] profile, relative to the rules file's folder. With no rules file: the first one found in `start` or its
+    parents, then the current folder or its parents (the way ecadlib.toml is found), else `start` / the name."""
     rules = RU.resolve(rules, start)
     p = Path(str(rules["style"]["profile"] or "house_style.json")).expanduser()
     if p.is_absolute():
         return p
-    base = Path(rules["_file"]).parent if rules.get("_file") else Path(start)
-    return base / p
+    if rules.get("_file"):
+        return Path(rules["_file"]).parent / p
+    for base in (Path(start), Path.cwd()):
+        try:
+            base = base.resolve()
+        except OSError:
+            continue
+        for d in (base, *base.parents):
+            if (d / p).is_file():
+                return d / p
+    return Path(start) / p
 
 
 def load(rules=None, start=".", path=None):

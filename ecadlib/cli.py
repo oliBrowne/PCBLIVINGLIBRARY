@@ -165,8 +165,10 @@ def _quiet_stdout():
 
 def main(argv=None):
     try:
-        return _main(argv)
-    except OSError as e:                                     # the top-level help or version line to a closed pipe
+        code = _main(argv)
+        sys.stdout.flush()                                   # a closed pipe shows up here for buffered output
+        return code
+    except OSError as e:                                     # the reader of stdout went away (`| head`): say nothing
         if not _pipe_gone(e):
             raise
         return _quiet_stdout()
@@ -176,6 +178,11 @@ def _main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     from .cliutil import debug_wanted, env_defaults, report
     debug, argv = debug_wanted(argv)
+    lead = []                                                # `ecadlib -q status`: -q / -v before the command too
+    while argv and argv[0] in ("-q", "--quiet", "-v", "--verbose"):
+        lead.append(argv.pop(0))
+    if lead and argv:
+        argv = argv[:1] + lead + argv[1:]
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__)
         return 0
@@ -213,16 +220,18 @@ def _main(argv=None):
     except RulesError as e:                                  # a bad ecadlib.toml: say which key, no traceback
         if debug:
             raise
-        print(f"ecadlib {argv[0]}: {e}\n  hint: `ecadlib doctor` shows the file and line", file=sys.stderr)
+        print(f"ecadlib {argv[0]}: {e}\n  hint: `ecadlib doctor` shows the file and line"
+              + ("; `ecadlib init --force` writes a new file (the old one is kept as .bak)" if "not valid" in str(e) else ""),
+              file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         if debug:
             raise
         print(f"ecadlib {argv[0]}: interrupted", file=sys.stderr)
         return 130
-    except Exception as e:
+    except Exception as e:                                   # one line + hint; --debug / ECADLIB_DEBUG=1: the traceback
         if isinstance(e, OSError) and _pipe_gone(e):         # the reader went away (`| head`): stop quietly
-            return _quiet_stdout()                                   # one line + hint; --debug / ECADLIB_DEBUG=1: the traceback
+            return _quiet_stdout()
         if debug:
             raise
         return report(argv[0], e, sys.stderr)

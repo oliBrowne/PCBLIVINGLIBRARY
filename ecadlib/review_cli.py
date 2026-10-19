@@ -136,6 +136,8 @@ def release_anyway(plan, name, user=None):
         post_check([it], plan.parent, rows)
         RC.record_releases([it], plan.parent, [name], who)    # change control: revision 1 of what was released
         write_text_atomic(plan, json.dumps(items, indent=2))
+        from .librarian import refresh_review
+        refresh_review(plan, items)
     from . import timing
     timing.mark_review(plan.parent, "allow")
     return it

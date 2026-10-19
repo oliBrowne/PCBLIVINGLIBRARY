@@ -33,7 +33,7 @@ Who you are: --user, else $ECADLIB_USER, else git config user.name / user.email.
 import argparse, json, sys
 from pathlib import Path
 
-from . import change_diff as CD, change_gate as CG, fingerprint as FP, ledger as LG
+from . import change_diff as CD, change_gate as CG, fingerprint as FP, ledger as LG, term as TM
 
 CLASS_MARK = {"identity": "ID", "electrical": "EL", "geometry-major": "G+", "geometry-minor": "g-", "cosmetic": "c "}
 
@@ -266,7 +266,7 @@ def cmd_history(a):
             what = ev
             detail = "; ".join(x for x in (_counts(e.get("classes") or {}) if ev == "hold" else "", e.get("reason")) if x)
         print(f"  {e.get('at', ''):<26} {what:<18} {e.get('writer') or '':<15} {e.get('by') or '':<30} {detail}")
-        if ev in LG.RELEASES and e.get("changes") and a.verbose:
+        if ev in LG.RELEASES and e.get("changes") and (a.verbose or TM.VERBOSITY > 0):
             for c in e["changes"]:
                 print(f"      {c['class']:<15} {c['text']}")
     return 0
@@ -330,6 +330,10 @@ def _approve(plan, parts, who, comment, role, digests):
     plan, items = _load(plan)
     folder = plan.parent
     lg = LG.Ledger(folder)
+    gone = sorted({x["part"] for p in parts for x in _group(lg, p)} - {i["name"] for i in items})
+    if gone:                                   # nothing to release them into: refuse before any file or approval moves
+        raise CG.ChangeError(f"{', '.join(gone)}: not in the plan any more; run the librarian with a BOM that uses "
+                             f"{'them' if len(gone) > 1 else 'it'}, or reject the change")
     pol = CG.policy(None, folder)
     who = who or AP.identity(None, cwd=folder)
     key = AP.user_key(who)
