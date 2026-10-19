@@ -1959,7 +1959,14 @@ class Reader:
         cap = float(self.cfg.get("max_cost_usd") or 0)
         if not cap or not jobs:                       # --yes does not lift the cap: a scripted run keeps its ceiling
             return
-        est = self.estimate(jobs)
+        if cap == DEFAULT_MAX_COST_USD:               # the default safety net: the rough estimate, no count_tokens request
+            k, self.key = self.key, None
+            try:
+                est = self.estimate(jobs)
+            finally:
+                self.key = k
+        else:
+            est = self.estimate(jobs)
         if est["usd_max"] is None:
             if self.yes:                              # a model with no known price (a local one): sent as approved
                 return

@@ -307,6 +307,7 @@ def test_mcp_server_over_stdio():
     (root / "ws" / "uploads").mkdir(parents=True)
     E.seed_cache(root / "ws" / "http_cache")
     E.write_parts_xlsx(root / "ws" / "uploads" / "parts.xlsx")
+    (root / "ws" / "ecadlib.toml").write_text("[providers]\nunofficial = true\n")   # the EasyEDA fixture part
     m = E.MCPClient(root, "--workspace", "ws", "--offline")
     try:
         r = m.send("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},

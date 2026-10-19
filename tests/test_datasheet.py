@@ -96,7 +96,7 @@ def test_request_shape_base64():
         f = Path(d) / "ds.pdf"
         f.write_bytes(PDF)
         assert D.main([str(f), "--part", "TESTPART", "--package", "RGT", "-o", d]) == 0
-    c = next(c for c in calls if not c["url"].endswith("/count_tokens"))   # the default $10 cap counts tokens first
+    c = calls[0]                                  # the default $10 cap is checked on the rough estimate: no count_tokens
     assert c["url"] == "https://api.anthropic.com/v1/messages"
     assert c["headers"]["x-api-key"] == "sk-test" and c["headers"]["anthropic-version"] == "2023-06-01"
     assert c["headers"]["anthropic-beta"] == D.FALLBACK_BETA and c["body"]["fallbacks"] == "default"
