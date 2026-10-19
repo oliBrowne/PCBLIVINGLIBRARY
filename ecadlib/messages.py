@@ -231,8 +231,8 @@ CODES = {
     "datasheet.some_pages": ("Only some datasheet pages were read[ ({pages})].",
                              "Check that the other pages change nothing in the footprint or pinout.",
                              [r"only some pages were sent \((?P<pages>[^)]*)\)"]),
-    "datasheet.family_pdf": ("The datasheet came from your datasheet folder, from a file named for the part family ({file}).",
-                             "Check the PDF covers this exact part number and package.",
+    "datasheet.family_pdf": ("The datasheet came from your datasheet folder, from a file not named exactly for this part ({file}).",
+                             "Check the PDF covers this exact part number, package and pinout.",
                              [r"datasheet from your folder: (?P<file>\S+) in the datasheet folder"]),
     "datasheet.standard_land": ("The datasheet read named the standard package {package} ({why}), so its checked land was used "
                                 "instead of the pads read from the drawing.",

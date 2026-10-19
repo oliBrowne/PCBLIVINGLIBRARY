@@ -166,11 +166,15 @@ folder = "~/datasheets"     # <MPN>.pdf, tried before any link; "" = links only
 standard_land = "auto"      # "off" (default) | "auto" | "always"
 ```
 
-- The file is matched by MPN, ignoring case and punctuation: `<MPN>.pdf`, then a name that starts with the MPN
-  (`LTM4671IY-PBF_datasheet.pdf`), then the longest name the MPN starts with (`LTM4671.pdf` for `LTM4671IY#PBF`, at
-  least 4 characters and half the MPN). The last one is a family datasheet and adds a review item.
-- The part keeps its public datasheet link in the library; the local path is only in the read's provenance.
-- `ecadlib eval run --datasheets DIR` does the same for a benchmark run.
+- The file is matched by MPN, ignoring case and punctuation: `<MPN>.pdf`, or the MPN followed by a separator
+  (`LTM4671IY-PBF_datasheet.pdf`). Any other match is used only with a review item that names the file: the longest
+  name the MPN starts with (`LTM4671.pdf` for `LTM4671IY#PBF`, at least 4 characters and half the MPN) is a family
+  datasheet, and a name that goes on with more letters or digits (`BAT54S.pdf` for `BAT54`, `LM317HV.pdf` for
+  `LM317`) is another part number, picked only when nothing else fits.
+- The part keeps its public datasheet link in the library; the read's provenance records only the file's name, never
+  a path on your machine.
+- `ecadlib eval run --datasheets DIR` does the same for a benchmark run. The report counts the parts read from the
+  folder and gives the pass rate without them, so the number for maker links stays its own.
 
 **Standard land from a read.** A read that left one number blank (a missing terminal length, tab length or annular ring) used to
 be held with no footprint. Now, `stdparts.identify` checks whether the read's pin count, pitch, body and exposed pad fit
@@ -183,7 +187,7 @@ other pads makes it ambiguous, and then nothing changes. The chosen entry must a
 - `auto`: the table's land is used when the read left a number blank or the datasheet prints no land of its own. A
   maker's recommended land, when printed, is kept.
 - `always`: the table's land whenever the read identifies one.
-- The symbol still comes from the read. The review says which package was identified and asks a person to check
+- The symbol and the 3D height (`height_max`, when read) still come from the read. The review says which package was identified and asks a person to check
   the package code on the drawing.
 - Fed every table entry as if a datasheet printed exactly its numbers, `identify` names 292 of 618 (itself or an
   entry with the same pads) and never one with other pads (`tests/test_datasheet_folder.py`). The other entries are

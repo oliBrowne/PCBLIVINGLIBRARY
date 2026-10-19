@@ -643,14 +643,16 @@ class Run:
             st["tried"].extend(edited)
             st["review"].extend(edited)
         from . import stdparts as SP
+        st["review"].extend(r for r in res["needs_review"] if r.startswith("datasheet from your folder:"))   # another file's PDF
         got = []
         std = self.standard_land(res["spec"]) if not st["footprint"] else None
         if std:                                       # the read named a checked package: its land, not the read's pads
             pkg, found, why = std
             sp = SP.spec(pkg)
             text, _ = SP.build(pkg, RU.density_for(sp, self.rules))
-            h = F.dim(sp["height_max"])[2] if sp.get("height_max") else None
-            self.put_fp(st, text, fp_name, f"standard:{SP.kicad_ref(pkg)}", None, h, "standard package table", sp)
+            hs = res["spec"].get("height_max") and "datasheet height_max" or sp.get("height_max") and "standard package table"
+            h = F.dim((res["spec"] if hs == "datasheet height_max" else sp)["height_max"])[2] if hs else None   # this part's own height first
+            self.put_fp(st, text, fp_name, f"standard:{SP.kicad_ref(pkg)}", None, h, hs or "", sp)
             got.append(f"footprint {SP.kicad_ref(pkg)} (identified from the read)")
             st["review"].append(f"standard land: the datasheet read identified {pkg} ({found}); {why}, so the checked standard "
                                 f"land was used. Check the package code on the drawing is this one")

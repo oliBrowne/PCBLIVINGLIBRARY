@@ -1269,11 +1269,29 @@ def _mpn_key(s):
     return re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
 
 
+def _after_mpn(stem, key):
+    """The raw file-name stem after the characters that spell `key` (punctuation skipped), or None when the stem's
+    letters and digits do not start with `key`."""
+    i = n = 0
+    while n < len(key):
+        if i >= len(stem):
+            return None
+        if stem[i].isalnum():
+            if stem[i].upper() != key[n]:
+                return None
+            n += 1
+        i += 1
+    return stem[i:]
+
+
 def local_datasheet(folder, part):
     """The PDF for `part` in a folder of datasheets a person downloaded -> (Path, how) or (None, why). Names are compared
-    without case and punctuation: <MPN>.pdf, a name that starts with the MPN (LTM4671IY-PBF_datasheet.pdf), else the
-    longest name the MPN starts with (LTM4671.pdf for LTM4671IY#PBF; at least 4 characters and half the MPN), which
-    is a family datasheet and is said so. For makers whose sites refuse downloads from scripts (analog.com, Nexperia)."""
+    without case and punctuation: <MPN>.pdf, or the MPN then a separator (LTM4671IY-PBF_datasheet.pdf). Any other
+    name is another part's or a family's file and is said so in `how` (its read gets a review item): the longest
+    name the MPN starts with (LTM4671.pdf for LTM4671IY#PBF; at least 4 characters and half the MPN) is a family
+    datasheet; a name that goes on with more letters or digits (BAT54S.pdf for BAT54, LM317HV.pdf for LM317) is
+    another part number, used only when nothing else fits. For makers whose sites refuse downloads from scripts
+    (analog.com, Nexperia)."""
     if not str(folder or "").strip():
         return None, "no [datasheet] folder"
     d = Path(str(folder)).expanduser()
@@ -1282,21 +1300,23 @@ def local_datasheet(folder, part):
     key = _mpn_key(part)
     if not key:
         return None, "no MPN"
-    exact, longer, prefix = None, None, None
+    exact, prefix, other = None, None, None
     for f in sorted(d.iterdir()):
         if f.suffix.lower() != ".pdf" or not f.is_file():
             continue
-        s = _mpn_key(f.stem)
-        if s == key:
-            exact = exact or f
-        elif s.startswith(key):
-            longer = longer or f
+        s, rest = _mpn_key(f.stem), _after_mpn(f.stem, key)
+        if rest is not None and not rest[:1].isalnum():
+            exact = exact or f                        # BAT54.pdf, BAT54_datasheet.pdf, bat54-rev3.pdf
+        elif rest is not None:
+            other = other or f                        # BAT54S.pdf: another part number that starts like this one
         elif len(s) >= 4 and 2 * len(s) >= len(key) and key.startswith(s) and (prefix is None or len(s) > len(_mpn_key(prefix.stem))):
             prefix = f
-    if exact or longer:
-        return exact or longer, f"{(exact or longer).name} in the datasheet folder"
+    if exact:
+        return exact, f"{exact.name} in the datasheet folder"
     if prefix:
         return prefix, f"{prefix.name} in the datasheet folder (a family datasheet: the name is the start of {part})"
+    if other:
+        return other, f"{other.name} in the datasheet folder (named for another part number that starts with {part})"
     return None, f"no {part}.pdf in {d}"
 
 
@@ -1602,10 +1622,10 @@ class Reader:
             try:
                 data = f.read_bytes()
             except OSError as e:
-                attempts.append({"url": f.as_uri(), "where": "datasheet folder", "error": f"{type(e).__name__}: {e}"})
+                attempts.append({"url": f.name, "where": "datasheet folder", "error": f"{f.name}: {type(e).__name__}"})
                 data = None
             if data is not None and not is_pdf(data):
-                attempts.append({"url": f.as_uri(), "where": "datasheet folder", "error": f"{f.name}: not a PDF"})
+                attempts.append({"url": f.name, "where": "datasheet folder", "error": f"{f.name}: not a PDF"})
                 data = None
             if data is None:
                 how = attempts[-1]["error"]
@@ -1613,7 +1633,7 @@ class Reader:
                 link = urls[0][0] if urls else ""
                 prov = {"url": link, "final_url": link, "where": how, "status": None, "content_type": "application/pdf",
                         "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "pages": pdf_pages(data),
-                        "from_cache": False, "local": str(f)}
+                        "from_cache": False, "local": f.name}   # the name only: no path on this machine
                 urls = []
         for url, where in [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))]:   # http, then https
             try:
@@ -1732,7 +1752,7 @@ class Reader:
             res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k != "picked"}
         if job["prov"].get("sent_as") == "url":
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
-        if job["prov"].get("local") and "family datasheet" in str(job["prov"].get("where")):
+        if job["prov"].get("local") and re.search(r"\((?:a family datasheet|named for another part number)", str(job["prov"].get("where"))):
             res["needs_review"].append(f"datasheet from your folder: {job['prov']['where']}; check it covers this part")
         if job["prov"].get("pages_sent"):
             res["needs_review"].append(f"only some pages were sent ({job['prov']['note']}): check nothing was missed")
