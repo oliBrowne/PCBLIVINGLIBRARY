@@ -62,9 +62,9 @@ def group(parts, columns=None, source="KiCad"):
         if ln.get("datasheet") == "~":
             ln["datasheet"] = ""
         dnp = p["dnp"]
-        if "dnp" in ln:                                        # a house "DNP" field as well as KiCad's flag
-            from .bom_triage import _yes
-            dnp = dnp or _yes(ln.pop("dnp"))
+        if "dnp" in ln or "fitted" in ln:                      # a house "DNP" / "Fitted" field as well as KiCad's flag
+            from .bom_triage import dnp_cell
+            dnp = dnp or dnp_cell(ln.pop("dnp", "")) or dnp_cell(ln.pop("fitted", ""), "fitted")
         key = (tuple(sorted(ln.items())), dnp)
         groups.setdefault(key, (ln, dnp, []))[2].append(p["ref"])
     lines = []

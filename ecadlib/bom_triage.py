@@ -24,7 +24,11 @@ FIELDS = {   # canonical field -> header synonyms (normalised: lowercase, punctu
     "footprint": ["footprint", "package", "case", "package case", "pcb footprint"],
     "description": ["description", "desc", "notes"],
     "libref": ["libref", "lib ref", "library ref", "library reference", "symbol"],
-    "dnp": ["dnp", "dnf", "do not populate", "do not place", "do not fit", "no stuff", "not fitted"],
+    "dnp": ["dnp", "dnf", "dni", "do not populate", "do not place", "do not fit", "do not install", "do not mount",
+            "do not stuff", "no stuff", "no pop", "nopop", "not fitted", "not populated", "not placed", "not installed",
+            "not mounted"],
+    "fitted": ["fitted", "fit", "stuff", "stuffed", "populate", "populated", "install", "installed", "mount",
+               "mounted", "place", "placed", "assemble", "assembled"],   # positive polarity: 'Stuff = No' is DNP
     "datasheet": ["datasheet", "data sheet", "datasheet url", "datasheet link"],
 }
 DELIMS = (",", ";", "\t", "|")
@@ -50,8 +54,12 @@ def map_headers(headers, threshold=0.72):
                 if nh == s:
                     sc = 0.97 if f == "mpn" and s in ("part number", "pn") else 1.0   # DigiKey: 'Part Number' is
                                                                      # its own code, 'Manufacturer Part Number' the MPN
+                elif f == "fitted":
+                    continue                                             # one word: exact only ('Mount Side' isn't it)
                 elif re.search(rf"\b{re.escape(s)}\b", nh):
                     sc = 0.75 + 0.2 * len(s) / max(len(nh), 1)          # containment, longer = better
+                elif f == "dnp":
+                    continue                                             # no fuzzy DNP: 'Stuff' is not 'No Stuff'
                 else:
                     sc = difflib.SequenceMatcher(None, nh, s).ratio() * 0.95
                 best = max(best, sc)
@@ -209,11 +217,11 @@ def read_bom(path, columns=None, rules=None):
         q = re.fullmatch(r"(\d+)(?:,0{1,2}|\.0+)", d.get("qty", ""))
         if q:                                                            # '1,0' / '2,00' (European Excel), '1.0':
             d["qty"] = q.group(1)                                        # not 10 / 200 pieces ('1,000' stays 1000)
-        if _is_total(d) or not any(v for f, v in d.items() if f not in ("qty", "dnp")):
+        if _is_total(d) or not any(v for f, v in d.items() if f not in ("qty", "dnp", "fitted")):
             continue                                                     # 'Total;;;12' footer / a bare sum, not a part
-        if "dnp" in d:
-            d["dnp"] = _yes(d["dnp"])
-        elif DNP_MARK.search(d.get("value", "")) or DNP_MARK.fullmatch(d.get("mpn", "")):
+        if "dnp" in d or "fitted" in d:
+            d["dnp"] = dnp_cell(d.get("dnp", "")) or dnp_cell(d.pop("fitted", ""), "fitted")
+        elif dnp_value(d.get("value", "")) or DNP_MARK.fullmatch(d.get("mpn", "")):
             d["dnp"] = True                                              # no DNP column: Value 'DNP' / '10k (DNF)'
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
@@ -258,13 +266,42 @@ def _is_total(d):
             and any(TOTAL.fullmatch(str(v).strip()) for v in d.values()))
 
 
-DNP_MARK = re.compile(r"(?<![A-Za-z0-9])(dnp|dnf|dni|do\s*not\s*(populate|place|fit|install|mount)|not\s*(fitted|populated|placed))"
+DNP_MARK = re.compile(r"(?<![A-Za-z0-9])(dnp|dnf|dni|do\s*not\s*(populate|place|fit|install|mount|stuff)|"
+                      r"not\s*(fitted|populated|placed|mounted|installed|assembled|stuffed)|no\s*(pop(ulate)?|stuff))"
                       r"(?![A-Za-z0-9])", re.I)
+DNP_SHORT = re.compile(r"[\s(\[]*(n\s*/\s*f|n\.\s*f\.?|nf|np|n\s*/\s*p|nm|n\s*/\s*m)[\s)\]]*", re.I)  # whole cell only:
+                                                                  # 'NF' is DNP, '100 NF' / '10uF NP' are values
+_FITTED_WORDS = re.compile(r"(fit|fitted|populated?|install(ed)?|place(d)?|mount(ed)?|stuff(ed)?|assembled?|ok|"
+                           r"n a|na|none|default|fitted default)")
+_SET_WORDS = re.compile(r"(x|y|yes|1|true|t|on|set|checked)")
+_CLEAR_WORDS = re.compile(r"(|0|n|no|false|f|off)")
+
+
+def dnp_value(v):
+    """True when a Value / Comment / MPN cell says the part is not fitted: 'DNP', '10k (DNF)', 'No Pop', 'NF', 'N/F'."""
+    v = str(v or "")
+    return bool(DNP_MARK.search(v) or DNP_SHORT.fullmatch(v))
+
+
+def dnp_cell(v, column="dnp"):
+    """The one reading of a do-not-populate cell, shared by every BOM reader.
+    column="dnp": a negative column (DNP / DNF / DNI / No Stuff): set (x, yes, 1, DNP, any other mark) = not fitted;
+    blank / no / 0 / false and words that say fitted (Fitted, Populated, Installed, Place, N/A, OK) = fitted.
+    column="fitted": a positive column (Fitted / Stuff / Populate / Install / Mount): no / 0 / false / 'Not Fitted' /
+    DNP = not fitted; blank, yes and anything else = fitted.  Returns True for not fitted."""
+    n = _norm(v)
+    if dnp_value(v) or (n and DNP_SHORT.fullmatch(n)):
+        return True
+    if column == "fitted":
+        return bool(_CLEAR_WORDS.fullmatch(n)) and n != ""
+    if _CLEAR_WORDS.fullmatch(n) or _FITTED_WORDS.fullmatch(n):
+        return False
+    return True                                                  # 'x', 'yes', '*', a check mark: marked
 
 
 def _yes(v):
-    """A DNP cell is set when it says anything other than blank / no / 0 / false / fitted."""
-    return _norm(v) not in ("", "0", "n", "no", "false", "fitted", "populate", "fit")
+    """A DNP-column cell is set (kept for older callers; see dnp_cell)."""
+    return dnp_cell(v, "dnp")
 
 
 GENERIC_LIBREF = re.compile(r"(res(istor)?|cap(acitor)?|ind(uctor)?|led|diode|zener|schottky|fuse|bead|ferrite|"
