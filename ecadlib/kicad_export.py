@@ -815,11 +815,6 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
             set_fields(sym, plan_fields(it, lib, row["footprint"], props, rules))
             sym[:] = [c for c in sym if not (isinstance(c, list) and c[:2] == ["property", "ki_description"])]   # KiCad 7 -> Description
-            if it.get("sim_model"):               # attached by `ecadlib sim-models --attach`: Sim.* fields + model file
-                from .sim_models import kicad_export_fields
-                sim = kicad_export_fields(it, plan_dir, out / f"{lib}.sim", f"{lib}.sim", notes)
-                set_fields(sym, sim)
-                row["sim"] = dict(sim).get("Sim.Name") or dict(sim).get("Sim.Device")
             symbols[sname] = sym
             row["symbol"] = how
             if row["footprint"]:

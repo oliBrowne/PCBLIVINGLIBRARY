@@ -276,3 +276,20 @@ def test_a_powerpad_read_long_side_first_runs_with_the_body():
     assert pads[-1][3] < pads[-1][4] and "turned" in rep["notes"][0], (pads[-1], rep)
     square = dict(spec, exposed_pad={"length": {"nom": 3.0}, "width": {"nom": 3.0}})
     assert not F.build(square, "B")[1].get("notes")
+
+
+def test_the_makers_thermal_land_is_the_exposed_pads_copper():
+    # TPS26600PWP (benchmark 2026-10-18): TI's PWP0016A land page gives a 3.4 x 5 thermal land around the 3 x 3
+    # exposed pad (tps2660.pdf p53); KiCad draws the 3.4 x 5. Without ep_across / ep_along the package's EP stays.
+    spec = {"name": "HTSSOP-16-1EP", "package_type": "gullwing", "pin_count": 16, "pitch": 0.65,
+            "body_length": {"min": 4.9, "max": 5.1}, "body_width": {"min": 4.3, "max": 4.5},
+            "lead_span": {"min": 6.2, "max": 6.6}, "terminal_length": {"min": 0.5, "max": 0.75},
+            "terminal_width": {"min": 0.19, "max": 0.3}, "height_max": 1.2,
+            "exposed_pad": {"length": {"min": 2.7, "max": 3.3}, "width": {"min": 2.7, "max": 3.3}},
+            "land": {"pad_length": 1.5, "pad_width": 0.45, "pad_center": 2.9}}
+    from ecadlib import footprint_bench as FB
+    ep = lambda s: FB.numbers(F.build(s, "B")[0])["pads"][-1]
+    assert ep(spec)[3:5] == [3.0, 3.0]
+    spec["land"].update(ep_across=3.4, ep_along=5.0)
+    txt, rep = F.build(spec, "B")
+    assert FB.numbers(txt)["pads"][-1][3:5] == [3.4, 5.0] and rep["ep_land"] == "datasheet"

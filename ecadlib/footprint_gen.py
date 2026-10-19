@@ -394,6 +394,10 @@ def build(spec, density=None):
     ep_lines = []
     if ep:
         ew, eh = dim(ep["length"])[1], dim(ep["width"])[1]
+        land = spec.get("land") or {}
+        if land.get("ep_across") and land.get("ep_along"):   # the maker's thermal land (TI PowerPAD: 3.4 x 5 around a
+            ew, eh = land["ep_across"], land["ep_along"]      # 3 x 3 exposed pad), as KiCad draws it
+            rep["ep_land"] = "datasheet"
         epnum = str(ep.get("number") or (spec.get("pin_count") or len(pads)) + 1)   # pin_positions specs may omit pin_count
         lr = (lambda p: abs(p[1]) > abs(p[2])) if t in ("qfn", "qfp") else (lambda p: True)   # gullwing: all pads are L/R
         gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p in pads if lr(p)]                 # left/right rows vs EP

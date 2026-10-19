@@ -7,7 +7,7 @@ whole instead of a truncated one that no later command can read.
 On Windows a rename over a file that another process has open (the web UI reading the plan, a virus scanner, a
 search indexer) fails with PermissionError for as long as it is open, where the old in-place write worked: replace()
 retries for a few seconds before giving up."""
-import os, threading, time
+import contextlib, os, threading, time
 from pathlib import Path
 
 RETRY = os.name == "nt"              # only Windows refuses a rename over an open file; elsewhere it is a real error
@@ -60,3 +60,72 @@ def write_bytes_atomic(path, data):
             pass
         raise
     return path
+
+
+def read_ini_text(path):
+    """An INI file Altium saved (.PrjPcb, .DbLib) -> (text, encoding to write it back in): Altium saves them as ANSI
+    (cp1252), UTF-8 (with or without BOM) or UTF-16; reading every one as UTF-8 would turn "Müller" into replacement
+    characters."""
+    data = Path(path).read_bytes()
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16"), "utf-16"
+    if data[:3] == b"\xef\xbb\xbf":
+        return data[3:].decode("utf-8", "replace"), "utf-8-sig"
+    try:
+        return data.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        pass
+    try:
+        return data.decode("cp1252"), "cp1252"
+    except UnicodeDecodeError:
+        return data.decode("latin-1"), "latin-1"      # any byte, written back unchanged
+
+
+@contextlib.contextmanager
+def plan_lock(workspace_root, wait=True):
+    """<workspace>/plan.lock: every path that records into a plan (the web UI's Approvals page / approve_part, change
+    decisions, `ecadlib approve`) takes it while it rewrites plan.json, so two of them never overwrite each other.
+    wait=False yields False at once when it is held. Not re-entrant. Released by the OS if the holder dies."""
+    d = Path(workspace_root).resolve()
+    d.mkdir(parents=True, exist_ok=True)
+    f = open(d / "plan.lock", "a+b")
+    msvcrt = None
+    try:
+        try:
+            try:
+                import fcntl
+                fcntl.flock(f, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+            except ImportError:                                 # Windows
+                import msvcrt
+                _win_lock(msvcrt, f, wait)
+        except OSError:
+            if wait:
+                raise
+            got = False
+        else:
+            got = True
+        try:
+            yield got
+        finally:
+            if msvcrt is not None and got:                      # Windows frees a lock left on a closed file late
+                try:
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+    finally:
+        f.close()
+
+
+def _win_lock(msvcrt, f, wait, poll=0.5):
+    """msvcrt's blocking LK_LOCK gives up with OSError after 10 one-second tries: wait by polling the non-blocking lock
+    instead."""
+    while True:
+        f.seek(0)
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError:
+            if not wait:
+                raise
+        time.sleep(poll)

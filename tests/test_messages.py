@@ -73,16 +73,6 @@ EXAMPLES = {
     "proof.doubt": "proof doubt: the pin 1 mark is on the other side",
     "proof.skipped": "proof skipped: ANTHROPIC_API_KEY is not set",
     "proof.finding": "proof: pad 1 width",
-    "agent.proof_failed": "proof failed: pin 1",
-    "agent.proof_interrupted": "proof interrupted repeatedly",
-    "agent.build_failed": "librarian failed: KeyError 'x'",
-    "agent.build_stuck": "the build stopped the agent 3 times: look at its BOM line",
-    "assembly.incompatible": "assembly: pads incompatible with SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR (C3003): pin count differs: ours 8 (1-8), theirs 3 (1-3) [overlay assembly/TPS1234DSGR.png]",
-    "assembly.risky": "assembly: pads risky against R0402 (C25744): the pad spacing differs by 17% (ours 1.020 mm, theirs 0.870 mm)",
-    "assembly.rotation_unknown": "assembly: rotation unknown (no 0 deg rule for family sot23 and no assembler footprint to check against)",
-    "assembly.review": "assembly (C2286): polarized part with a table rotation: check the cathode in the placement preview",
-    "agent.no_entry": "the librarian made no plan entry for this part (check its BOM line)",
-    "agent.incomplete": "build incomplete: no symbol or footprint",
     "other": "something nobody wrote a sentence for",
 }
 
@@ -193,9 +183,8 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 7, "sim_models.py": 1, "datasheet.py": 3,
+    "librarian.py": 7, "datasheet.py": 3,
 }
-FAIL_SITES = {"agent.py": 8}     # rep["failed"].append( and _fail(...) calls: the agent's failure reasons
 
 
 def test_new_review_notes_need_a_sentence():
@@ -205,6 +194,3 @@ def test_new_review_notes_need_a_sentence():
         src = _src(name)
         got = len(re.findall(r'\["(?:review|verify|needs_review)"\]\.append\(', src))
         assert got == n, f"{name}: {got} review/verify note sites, expected {n}: give the new one a messages.CODES entry"
-    for name, n in FAIL_SITES.items():
-        got = len(re.findall(r'\["failed"\]\.append\(|\b_fail\(q, ', _src(name)))
-        assert got == n, f"{name}: {got} agent failure sites, expected {n}: give the new reason a messages.CODES entry"

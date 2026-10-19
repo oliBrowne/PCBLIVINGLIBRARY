@@ -1,11 +1,11 @@
 """Regression tests for the pipeline review: BOM header mapping, duplicate headers, designator counting, plan item to
-BOM line matching, error bodies in the HTTP cache, duplicate MPNs in sourcing, placeholder MPNs in dedupe, and
+BOM line matching, error bodies in the HTTP cache, placeholder MPNs in dedupe, and
 SQLite paths with '#'.
 Run:  python3 -m tests.test_review_full_pipeline"""
 import json, os, sqlite3, tempfile
 from pathlib import Path
 
-from ecadlib import bom_triage as BT, dedupe as DD, librarian as L, lifecycle as LC, rules_infer as RI, sourcing as S
+from ecadlib import bom_triage as BT, dedupe as DD, librarian as L, lifecycle as LC, part_lookup as S, rules_infer as RI
 from ecadlib.httpcache import CachedHTTP
 
 
@@ -109,38 +109,6 @@ def test_cache_does_not_keep_graphql_errors_body():
             os.environ.pop("NEXAR_SUPPLY_TOKEN", None)
         else:
             os.environ["NEXAR_SUPPLY_TOKEN"] = old
-
-
-class _Fake:
-    name, shapes, auth = "fake", "", ""
-
-    def part(self, p, alternates=False):
-        i = S.PartInfo("fake", True, p["mpn"], "Maker")
-        i.offers = [S.Offer("fake", "Mouser", "SKU1", stock=8, moq=1, mult=1, breaks=[(1, 1.0), (10, 0.5)], currency="USD")]
-        return i
-
-    def search(self, q, limit=20):
-        return [], ""
-
-    def substitutes(self, p):
-        return [], ""
-
-
-def test_sourcing_buys_duplicate_mpn_lines_together():
-    lines = [{"designator": "U1-U5", "qty": "5", "mpn": "LM358", "manufacturer": "TI"},
-             {"designator": "U6-U10", "qty": "5", "mpn": "LM358", "manufacturer": "TI"}]
-    rows, _ = S.source_bom(lines, [_Fake()], 1, "USD")
-    assert rows[0]["need"] == 10 and rows[0]["chosen"]["covers"] is False
-    assert rows[1]["kind"] == "merged" and rows[1]["need"] == 0
-    roll = S.rollup(rows, 1, "USD")
-    assert roll["complete"] is False
-
-
-def test_sourcing_does_not_merge_placeholder_mpns():
-    lines = [{"designator": "R1", "qty": "1", "mpn": "N/A", "manufacturer": "", "value": "10k"},
-             {"designator": "R2", "qty": "1", "mpn": "N/A", "manufacturer": "", "value": "1k"}]
-    rows, _ = S.source_bom(lines, [_Fake()], 1, "USD")
-    assert not any(r.get("kind") == "merged" for r in rows)
 
 
 def test_placeholder_mpn_has_no_dedupe_key():

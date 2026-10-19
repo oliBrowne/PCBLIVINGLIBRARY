@@ -234,7 +234,7 @@ def test_json_output_does_not_change_with_styling():
     """--json is for scripts: colour, width, -q / -v and a terminal must not change one byte."""
     with in_demo(copy=True):
         for argv in (["release-check", PLAN, "--json"], ["status", "--workspace", "ws", "--json"],
-                     ["migrate", "ws", "--check", "--json"], ["agent", "--workspace", "ws", "status", "--json"]):
+                     ["migrate", "ws", "--check", "--json"]):
             base = run(argv)[1]
             json.loads(base)
             for kv, extra in (({"ECADLIB_COLOR": "always", "COLUMNS": "40"}, []), ({}, ["-v"]), ({}, ["-q"])):
@@ -254,25 +254,6 @@ def test_errors_are_one_line_and_a_fix():
     assert "Traceback" not in err.getvalue() and "/" not in lines[0]
 
 
-def test_queue_list_and_agent_status_in_plain_words():
-    from tests import test_qol as Q
-    with tempfile.TemporaryDirectory() as d:
-        ws = Q._ws(d)
-        for i, (st, k) in enumerate((("review", "new"), ("review", "changed"), ("pushed", "new"))):
-            (ws / f"agent/queue/items/{i}.json").write_text(json.dumps({"id": f"q{i}", "key": f"TI|LM358DR{i}", "status": st,
-                                                                          "change": {"kind": k}, "proof": {"verdict": "pass"}}))
-        rc, out = run(["queue", "--workspace", str(ws), "list"])
-        assert rc == 0 and "3 items in the review queue: 1 released, 2 waiting for review" in out or \
-            "3 items in the review queue: 2 waiting for review, 1 released" in out, out
-        assert "  q1  waiting for review  TI|LM358DR1  changed  pass" in out and "ecadlib queue approve ID" in out, out
-        js = json.loads(run(["queue", "--workspace", str(ws), "list", "--json"])[1])
-        assert [i["id"] for i in js] == ["q2", "q1", "q0"] and js[1]["status"] == "review"
-        rc, out = run(["agent", "--workspace", str(ws), "status"])
-        assert out.startswith("Library agent: idle  (last heartbeat 2026-10-06T00:00:00Z)") and "2 waiting for review" in out, out
-        assert json.loads(run(["agent", "--workspace", str(ws), "status", "--json"])[1])["state"] == "idle"
-
-
-# ------------------------------------------------------------------ ecadlib review
 def test_review_non_interactive_never_prompts_and_prints_the_fix():
     with in_demo(copy=True):
         asked = []

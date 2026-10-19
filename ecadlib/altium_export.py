@@ -12,7 +12,7 @@ the parts *database* Altium reads through a .DbLib file (OLE DB / ODBC):
 Column names use Altium's reserved DbLib names ([Library Ref], [Library Path], [Footprint Ref],
 [Footprint Path], [Description]) plus parameters (Part Number = key, Value, Comment, Manufacturer,
 Manufacturer Part Number, Supplier 1/Supplier Part Number 1, ComponentLink1URL/Description).
-See README for what is verified vs assumed about the .DbLib INI keys."""
+See docs/altium.md for what is verified vs assumed about the .DbLib INI keys."""
 import argparse, re, sqlite3, sys
 from contextlib import closing
 from pathlib import Path, PureWindowsPath
@@ -214,7 +214,7 @@ def fieldmap_section(i, table, column, key="Part Number"):
 
 
 def dblib_text(conn_str, tables, left_quote="[", right_quote="]", excel=False, columns=COLUMNS, **links):
-    """INI layout copied from real-world .DbLib files (see README 'verified'). tables: table names, or
+    """INI layout copied from real-world .DbLib files (see docs/altium.md, 'verified'). tables: table names, or
     {table: columns}; excel adds the '$' Altium's Excel provider puts after sheet names."""
     cols = tables if isinstance(tables, dict) else {t: columns for t in tables}
     names = [t + ("$" if excel else "") for t in cols]

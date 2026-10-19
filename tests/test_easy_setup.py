@@ -277,8 +277,8 @@ def _call(port, method, path, body=None, origin=None):
 
 
 @contextlib.contextmanager
-def _server(root, team=None):
-    srv = S.make_server(Workspace(root), "127.0.0.1", 0, team)
+def _server(root):
+    srv = S.make_server(Workspace(root), "127.0.0.1", 0)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     try:
@@ -305,21 +305,6 @@ def test_setup_routes_local_mode():
         st, j = _call(port, "POST", "/api/setup", {"tool": "eagle"})
         assert st == 400 and "tool" in j["error"]
         os.environ.pop("NEXAR_TOKEN", None)
-
-
-def test_setup_routes_do_not_exist_in_team_mode():
-    from tests.test_team import add_users
-    from ecadlib import team as TM
-    with _home() as d:
-        root = d / "ws"
-        root.mkdir()
-        add_users(root)
-        team = TM.Team(root.resolve(), {})
-        with _server(root, team) as port:
-            for m, p in [("GET", "/setup"), ("GET", "/api/setup")] + [("POST", p) for p in ES.POST_ROUTES]:
-                st, _ = _call(port, m, p, {} if m == "POST" else None)
-                assert st == 404, (m, p, st)
-    assert not any(p in ES.GET_ROUTES or p in ES.POST_ROUTES for _, p in S.ROUTES)
 
 
 # ------------------------------------------------------------------ the desktop app
@@ -359,7 +344,7 @@ def test_doctor_on_a_fresh_install_warns_only_about_what_matters():
     assert set(warn) <= {"key anthropic", "tool kicad-cli"}, warn
     hints = " ".join(c["hint"] for c in rep["checks"])
     assert "export " not in hints and "ecadlib keys set ANTHROPIC_API_KEY" in hints
-    rules = {"agent": {"enabled": True}, "altium365": {"workspace": "https://x.365.altium.com"}, "setup": {"tool": "altium"}}
+    rules = {"agent": {"github_repo": "me/lib"}, "altium365": {"workspace": "https://x.365.altium.com"}, "setup": {"tool": "altium"}}
     by = {c["check"]: c for c in DR.check_keys(rules, {})}
     assert by["key altium365"]["level"] == "WARN" and by["key github"]["level"] == "WARN"
     pk = {c["check"]: c for c in DR.check_packages(which=lambda t: None, rules=rules)}

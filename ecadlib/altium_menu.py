@@ -9,11 +9,10 @@
     ecadlib altium-menu run-job JOBFOLDER          what the menu runs: reads JOBFOLDER/request.ini, writes result.ini
 
 `build` writes into --out:
-  ecadlib_menu.PrjScr + ecadlib_menu.pas   the script project; four procedures without parameters (so Altium's
+  ecadlib_menu.PrjScr + ecadlib_menu.pas   the script project; three procedures without parameters (so Altium's
                                     Customize dialog and File > Run Script list them):
         AddPartFromMPN     asks for an MPN (+ optional manufacturer), builds the part, reinstalls the library
         CheckProjectBOM    checks the focused project's BOM, opens the report, offers to fill the library
-        AssemblyCheck      the project's pick-and-place file against JLCPCB: pads, rotations, JLCPCB's BOM + CPL
         OpenReviewQueue    opens the ecadlib web UI at the review queue (starts `ecadlib ui` when it is not running)
   ecadlib_build.pas                 Altium builds the library files itself (ecadlib.altium_native):
         BuildLibrariesInAltium   (File > Run Script) builds every library in ecadlib_build.txt next to the project
@@ -67,7 +66,6 @@ PROJECT, UNIT, INI = "ecadlib_menu.PrjScr", "ecadlib_menu.pas", "ecadlib_menu.in
 RUN_CMD, RUN_VBS, PREFS, README = "ecadlib_run.cmd", "ecadlib_run.vbs", "ecadlib_menu.DXPPrf", "ALTIUM_MENU_README.txt"
 PROCS = [("AddPartFromMPN", "&Add part from MPN...", "Build a part from its manufacturer part number with ecadlib"),
          ("CheckProjectBOM", "&Check this project BOM", "Check the focused project's BOM against the library; offer to fill it"),
-         ("AssemblyCheck", "A&ssembly check (JLCPCB)", "Check the project's parts against JLCPCB's footprints; write its BOM and CPL"),
          ("OpenReviewQueue", "Open &review queue", "Open the ecadlib web UI at the review queue")]
 # the other procedures the script project offers (ecadlib_build.pas, ecadlib.altium_native): not menu entries
 BUILD_PROCS = [("BuildLibrariesInAltium", "ecadlib_build.pas", "Altium writes the libraries in ecadlib_build.txt itself"),
@@ -79,8 +77,8 @@ def procedures():
     return [p for p, _, _ in PROCS] + [p for p, _, _ in BUILD_PROCS]
 MENU_BOM = "uploads/altium-menu/parts.csv"
 HEADER = ["Designator", "Qty", "Value", "Footprint", "Manufacturer", "Mfr. Part #", "LCSC Part Number", "Description", "Datasheet"]
-ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read", "assembly")
-QUEUE_ANCHOR = "#queuecard"
+ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read")
+QUEUE_ANCHOR = "#libcard"
 
 # Every identifier the .pas calls from Altium / DelphiScript, and where it is documented. TRxxxx = Altium's scripting
 # reference PDFs (page numbers of github.com/Altium-Designer-addons/scripting-reference copies); "used in" = public
@@ -144,12 +142,10 @@ def pas_text():
     """The DelphiScript unit (CRLF). Static: everything that differs per install is in ecadlib_menu.ini."""
     return r"""{ ecadlib menu for Altium Designer (written by `ecadlib altium-menu build`, ecadlib @VERSION@).
 
-  Four entries, each a procedure without parameters (Customize > [Scripts] and File > Run Script list them):
+  Three entries, each a procedure without parameters (Customize > [Scripts] and File > Run Script list them):
     AddPartFromMPN    asks for a manufacturer part number, builds it with ecadlib into your library folder (or
                       Altium 365 when ecadlib.toml names a workspace) and reinstalls the database library
     CheckProjectBOM   checks the BOM of the focused project, opens the report and offers to fill the library
-    AssemblyCheck     checks the project's pick-and-place file against JLCPCB's footprints (pads, rotations) and
-                      writes JLCPCB's BOM and CPL; the report opens in the browser
     OpenReviewQueue   opens the ecadlib web UI at the review queue (starts it when it is not running)
   ecadlib_build.pas in this project adds BuildLibrariesInAltium (File > Run Script) and BuildLibraries(Folder),
   which Reinstall calls so Altium writes the library files itself.
@@ -623,38 +619,6 @@ Begin
     OfferAi(Job);
 End;
 
-Procedure AssemblyCheck;
-{ The project's pick-and-place file (Outputs > Assembly Outputs > Generates pick and place files) against the
-  assembler's footprints: pads, placement rotations, and the assembler's BOM + CPL next to the report. }
-Var
-    Prj : IProject;
-    Job : String;
-    Problem : String;
-    Title : String;
-Begin
-    Title := 'ecadlib: assembly check';
-    Prj := GetWorkspace.DM_FocusedProject;
-    If Prj = Nil Then
-    Begin
-        ShowError(Title + #13#10 + #13#10 + 'Open a PCB project first (click it in the Projects panel).');
-        Exit;
-    End;
-    If Prj.DM_ProjectFileName = 'Free Documents' Then
-    Begin
-        ShowError(Title + #13#10 + #13#10 + 'Open a PCB project first (click it in the Projects panel).');
-        Exit;
-    End;
-    Job := StartJob('assembly');
-    Ask(Job, 'project', Prj.DM_ProjectFullPath);
-    Problem := RunJob(Job, Title);
-    If Problem <> '' Then
-    Begin
-        ShowError(Title + #13#10 + #13#10 + Problem);
-        Exit;
-    End;
-    ShowResult(Title, Job, '');
-End;
-
 Procedure OpenReviewQueue;
 Var
     Job : String;
@@ -930,10 +894,9 @@ def readme_text(win_dir, prefs):
     entries = ", ".join(f"{UNIT}>{p}" for p, _, _ in PROCS)
     return f"""ecadlib menu for Altium Designer (written by `ecadlib altium-menu build`, ecadlib {__version__})
 
-What it adds: an "ecadlib" menu (or toolbar buttons) with four entries:
+What it adds: an "ecadlib" menu (or toolbar buttons) with three entries:
   Add part from MPN        asks for a manufacturer part number, builds the part, reinstalls the library
   Check this project BOM   checks the focused project's BOM: counts per kind, then Later / Fill the library now
-  Assembly check (JLCPCB)  checks the project's pick-and-place file against JLCPCB: pads, rotations, BOM + CPL
   Open review queue        opens the ecadlib web UI at the review queue in your browser
 The entries work in the ecadlib dialog (dark, like Altium's own, with live progress); you stay in Altium. Only the
 review queue (a held part needs a person) and the full BOM report (on request) open in your browser. dialogs=0 in
@@ -1922,41 +1885,6 @@ def open_queue(cfg, opener=None, probe=probe_ui, launcher=start_ui, wait_s=30.0,
             "started": "1" if started else "0"}
 
 
-def assembly(cfg, project, opener=None):
-    """AssemblyCheck: the project's newest pick-and-place CSV, LCSC numbers from the project's BOM where the file has
-    none, footprints from the workspace's KiCad models (an Altium file has positions only) -> the check, JLCPCB's BOM +
-    CPL in <workspace>/assembly/<project>/ and the HTML report, opened (ecadlib.assembly_io.menu_check)."""
-    from . import assembly_io as IO
-    from .httpcache import CachedHTTP
-    project = Path(project)
-    if project.suffix.lower() != ".prjpcb":            # a script / library project has no board to place
-        return {"status": "error", "message": f"{project.name or 'this project'} is not a PCB project",
-                "fix": "click your board's .PrjPcb in the Projects panel, then run the assembly check again"}
-    pnp = IO.find_pnp(project)
-    if pnp is None:
-        return {"status": "error", "message": f"{project.name}: no pick-and-place file yet",
-                "fix": "generate it first (File > Assembly Outputs > Generates pick and place files: CSV, metric; add the "
-                       "LCSC Part and Assembly Rotation parameters as columns if your parts have them), then run the "
-                       "assembly check again"}
-    extra = {}
-    if project.is_file():
-        from . import altium_project as AP
-        try:
-            lines, _ = AP.bom_lines(project)
-        except (OSError, ValueError):
-            lines = []
-        for ln in lines:
-            for ref in re.split(r"[\s,;]+", str(ln.get("designator") or "")):
-                if ref and ln.get("lcsc"):
-                    extra[ref.upper()] = {"LCSC Part": ln["lcsc"]}
-    ws = Path(cfg["workspace"])
-    lib = IO.footprints_from(ws) if ws.is_dir() else None
-    res = IO.menu_check(pnp, ws / "assembly" / project.stem, None, CachedHTTP(ws / "http_cache", offline=cfg.get("offline")),
-                        extra, opener, lib)
-    res["message"] = f"{pnp.name}: " + res["message"].split(": ", 1)[1]
-    return res
-
-
 def run_action(cfg, action, req, opener=None, progress=None):
     if action == "add-part":
         hints = {k: req.get(k, "") for k in ("value", "footprint", "lcsc", "description", "datasheet", "designator")}
@@ -1972,8 +1900,6 @@ def run_action(cfg, action, req, opener=None, progress=None):
         return open_file(cfg, req.get("path", ""), opener=opener)
     if action == "queue":
         return open_queue(cfg, opener=opener)
-    if action == "assembly":
-        return assembly(cfg, req.get("project", ""), opener=opener)
     raise ValueError(f"unknown action {action!r} (one of {', '.join(ACTIONS)})")
 
 

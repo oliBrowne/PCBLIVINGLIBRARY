@@ -1,9 +1,9 @@
 """Review rvJ regressions: BOM inputs, KiCad database library, parts export, Altium %UTF8% twins, plan lock and
 atomic writes on Windows (simulated: a fake msvcrt, a rename refused with PermissionError)."""
-import contextlib, json, os, shutil, sqlite3, sys, tempfile, threading, time, types
+import contextlib, json, os, shutil, sqlite3, sys, tempfile, time, types
 from pathlib import Path
 
-from ecadlib import agent_queue as AQ, altium_lib as AL, bom_inputs as BI, fsutil, kicad_dblib as KD, parts_export as PE
+from ecadlib import altium_lib as AL, bom_inputs as BI, fsutil, kicad_dblib as KD, parts_export as PE
 
 FIX = Path(__file__).parent / "fixtures" / "kicad_sch"
 
@@ -122,10 +122,10 @@ def test_plan_lock_waits_on_windows_past_msvcrt_ten_seconds():
     builtins.__import__, time.sleep = imp, (lambda s: None)
     try:
         with tempfile.TemporaryDirectory() as d:
-            with AQ.plan_lock(d, wait=True) as got:
+            with fsutil.plan_lock(d, wait=True) as got:
                 assert got
             state["held"] = 1
-            with AQ.plan_lock(d, wait=False) as got:
+            with fsutil.plan_lock(d, wait=False) as got:
                 assert not got
     finally:
         builtins.__import__, time.sleep = real_import, sleep

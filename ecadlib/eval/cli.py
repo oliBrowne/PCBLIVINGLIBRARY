@@ -58,8 +58,16 @@ def main(argv=None):
     r.add_argument("--rules", help="library rules file")
     r.add_argument("--tol", action="append", default=[], metavar="FIELD=MM",
                    help=f"override a tolerance ({', '.join(f'{k}={v}' for k, v in S.TOL.items())})")
+    r.add_argument("--pins", help="pinned datasheets (URL + SHA-256) to check against (default: <set>.pins.json)")
     r.add_argument("-o", "--out", default="out/eval/run")
     r.add_argument("--json", action="store_true", help="print the summary as JSON")
+    pn = sub.add_parser("pin", help="pin the datasheets a run read (URL + SHA-256) so later runs flag a changed PDF")
+    pn.add_argument("report", help="a run's out folder or report.json")
+    pn.add_argument("-o", "--out", help="pins file (default: <set>.pins.json next to the shipped set)")
+    pb = sub.add_parser("publish", help="a results page (Markdown) from a run's report: headline, failures by type, every miss")
+    pb.add_argument("report", help="a run's out folder or report.json")
+    pb.add_argument("-o", "--out", default="docs/benchmark-results.md")
+    pb.add_argument("--title")
     c = sub.add_parser("compare", help="diff two reports")
     c.add_argument("a"); c.add_argument("b")
     c.add_argument("--json", action="store_true")
@@ -86,6 +94,16 @@ def main(argv=None):
             if not a.family or cs["family"] in _list(a.family):
                 print(f"{cs['id']:<40} {cs['manufacturer'][:18]:<18} {cs['package']:<16} {cs['footprint']}  [{cs['from']['kind']}]")
         return 0
+    if a.cmd == "pin":
+        out = a.out or R.set_path(R._load_report(a.report)["meta"]["set"]).with_name(
+            R._load_report(a.report)["meta"]["set"] + ".pins.json")
+        n = R.write_pins(a.report, out)
+        print(f"{n} datasheets pinned -> {out}")
+        return 0
+    if a.cmd == "publish":
+        print(R.publish(a.report, a.out, a.title))
+        print(f"-> {a.out}")
+        return 0
     if a.cmd == "compare":
         res = R.compare(a.a, a.b)
         print(json.dumps({k: v for k, v in res.items() if k != "text"}, indent=1, default=str) if a.json else res["text"])
@@ -110,7 +128,7 @@ def main(argv=None):
     rep = R.run(a.set, a.out, a.limit, a.model, a.record, a.replay, _list(a.sources), _list(a.family), _list(a.case),
                 a.offline, a.cache, rules=a.rules, providers=a.providers, tol=tol, provider=a.provider,
                 base_url=a.base_url, assist=a.assist, api_key_env=a.api_key_env, repeat=a.repeat, batch=a.batch,
-                cached_only=a.cached_only)
+                cached_only=a.cached_only, pins=a.pins)
     if a.json:
         print(json.dumps(rep["summary"], indent=1))
     else:

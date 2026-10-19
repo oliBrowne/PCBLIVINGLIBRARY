@@ -17,9 +17,9 @@ approvals are only recorded. Keys (all optional):
   reject_blocks     a current reject holds the item until that person approves again (default true)
 Each decision is stored in the item's `approvals` list: who, key, when, role, decision, comment and `hash`, a sha256
 over the item's .SchLib/.PcbLib bytes and its key fields (name, folder, description, comment, parameters, cleared,
-symbol/footprint refs). Any later change to them makes the approval stale; it then no longer counts. The assembly
-check's parameters (Assembly *, LCSC Part: ecadlib.assembly) are measurements ecadlib repeats on every run, not content a
-person signs, so they do not count: a new check or JLCPCB redrawing its footprint never voids a sign-off. The latest
+symbol/footprint refs). Any later change to them makes the approval stale; it then no longer counts. The parameters
+the JLCPCB assembly check wrote until it was removed (Assembly *, LCSC Part) do not count, so a plan built while it
+existed keeps its sign-offs. The latest
 decision per person counts. Every decision (and every refused one) is appended to approvals_audit.jsonl next to
 the plan.
 release_check calls post_check() at the end: with a policy, an item that passes but is not signed off gets status
@@ -132,7 +132,7 @@ def applies(item, policy):
 
 # ---------------------------------------------------------------- content hash
 DERIVED_PARAMS = frozenset(("Assembly Profile", "LCSC Part", "Assembly Rotation", "Assembly Offset", "Assembly Check",
-                            "Assembly Evidence"))          # ecadlib.assembly.PARAMS: written by the check, not signed
+                            "Assembly Evidence"))          # the removed assembly check's PARAMS: not signed
 def _resolve(base, p):
     return None if not p else Path(p) if Path(p).is_absolute() else Path(base) / p
 
@@ -309,38 +309,36 @@ def main(argv=None):
     ap.add_argument("-m", "--comment", default="", help="comment (required for reject)")
     ap.add_argument("--json", action="store_true", help="status: print the policy and one row per part as JSON")
     a = ap.parse_args(argv)
-    ws = agent_workspace(a.plan) if a.action != "status" else None
+    ws = plan_workspace(a.plan) if a.action != "status" else None
     if ws is None:
         return _run(a)
-    from .agent_queue import plan_lock                 # the library agent's librarian may be rewriting this plan
+    from .fsutil import plan_lock                      # the web UI may be recording into this plan
     with plan_lock(ws, wait=False) as free:
         if not free:
-            sys.exit("the library agent is rebuilding the library right now; decide again in a minute")
+            sys.exit("another ecadlib command is changing this plan right now; decide again in a minute")
         return _run(a)
 
 
-def agent_workspace(plan):
-    """The workspace whose library agent may rewrite this plan (<ws>/librarian/<name>/plan.json with <ws>/agent/), or
-    None."""
+def plan_workspace(plan):
+    """The workspace of a workspace plan (<ws>/librarian/<name>/plan.json), whose plan lock the web UI takes, or None."""
     p = Path(plan).resolve()
-    ws = p.parent.parent.parent
-    return ws if p.parent.parent.name == "librarian" and (ws / "agent").is_dir() else None
+    return p.parent.parent.parent if p.parent.parent.name == "librarian" else None
 
 
 @contextlib.contextmanager
 def cli_plan_lock(plan):
-    """For CLI commands that rewrite a plan the library agent owns (<ws>/librarian/<name>/plan.json): wait for the
-    agent's librarian to finish before reading the plan, so neither write is lost. Other plans: no lock."""
-    ws = agent_workspace(plan)
+    """For CLI commands that rewrite a workspace plan (<ws>/librarian/<name>/plan.json): wait while the web UI records
+    into it, so neither write is lost. Other plans: no lock."""
+    ws = plan_workspace(plan)
     if ws is None:
         yield
         return
-    from .agent_queue import plan_lock
+    from .fsutil import plan_lock
     with plan_lock(ws, wait=False) as free:
         if free:
             yield
             return
-    print("the library agent is rebuilding this library; waiting for it to finish ...", file=sys.stderr)
+    print("another ecadlib command is changing this plan; waiting for it to finish ...", file=sys.stderr)
     with plan_lock(ws, wait=True):
         yield
 
@@ -359,7 +357,7 @@ def _run(a):
         sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")
     if a.action == "status":
         sel = [by[n] for n in a.part] if a.part else items
-        if getattr(a, "json", False):              # stable shape: README "Machine-readable output (--json)"
+        if getattr(a, "json", False):              # stable shape: docs/command-line.md "Machine-readable output (--json)"
             pf = policy_file(base)
             print(json.dumps({"plan": str(plan), "policy_file": str(pf) if pf else None, "enforced": bool(policy),
                               "awaiting_approval": sum(i.get("status") == "awaiting_approval" for i in sel),

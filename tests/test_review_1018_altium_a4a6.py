@@ -96,12 +96,10 @@ def test_menu_parts_go_to_their_category_table():
 @lite
 def test_review_queue_opens_the_menus_held_parts(tmp_path):
     from tests import test_altium_menu as TM
-    from ecadlib import agent_queue as AQ
     menu, cfg = TM._setup(tmp_path / "m")
     assert AM.queue_anchor(cfg["workspace"]) == AM.QUEUE_ANCHOR            # nothing added from the menu yet
     r = AM.run_job(TM._job(menu, {"action": "add-part", "mpn": "NE555DR", "manufacturer": "Texas Instruments"}))
     assert r["status"] == "held" and "review queue" in r["fix"], r
-    assert AQ.ws_list(cfg["workspace"])["items"] == []                    # the agent's queue: never these parts
     assert AM.queue_anchor(cfg["workspace"]) == "#review=uploads/altium-menu/parts.csv"
     opened = []
     out = AM.open_queue(cfg, opener=opened.append, probe=lambda p: ("ecadlib", str(cfg["workspace"])), launcher=None)
