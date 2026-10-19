@@ -1929,6 +1929,9 @@ def assembly(cfg, project, opener=None):
     from . import assembly_io as IO
     from .httpcache import CachedHTTP
     project = Path(project)
+    if project.suffix.lower() != ".prjpcb":            # a script / library project has no board to place
+        return {"status": "error", "message": f"{project.name or 'this project'} is not a PCB project",
+                "fix": "click your board's .PrjPcb in the Projects panel, then run the assembly check again"}
     pnp = IO.find_pnp(project)
     if pnp is None:
         return {"status": "error", "message": f"{project.name}: no pick-and-place file yet",
@@ -1936,7 +1939,7 @@ def assembly(cfg, project, opener=None):
                        "LCSC Part and Assembly Rotation parameters as columns if your parts have them), then run the "
                        "assembly check again"}
     extra = {}
-    if project.suffix.lower() == ".prjpcb" and project.is_file():
+    if project.is_file():
         from . import altium_project as AP
         try:
             lines, _ = AP.bom_lines(project)
