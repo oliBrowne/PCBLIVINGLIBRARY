@@ -138,9 +138,12 @@ def next_steps(ans, rules_file="ecadlib.toml"):
              (f"ecadlib librarian YOUR_BOM.csv -o {lib}", "fill every missing symbol and footprint for your BOM, then the "
                                                           "release check (`ecadlib status` shows the result)")]
     if ans.get("tool") in ("kicad", "both"):
-        steps.append((f"ecadlib kicad-export {lib}/plan.json -o {ws}/kicad", "the library as KiCad files with fp-lib-table / sym-lib-table"))
+        steps.append((f"ecadlib kicad-export {lib}/plan.json -o {ws}/kicad/YOUR_BOM --name YOUR_BOM",
+                      "the library as KiCad files with fp-lib-table / sym-lib-table"))
     if ans.get("tool") in ("altium", "both"):
-        steps.append(("ecadlib ui", f"open the web UI on {ws}: review held parts, sign off, send to Altium (DbLib, .SchLib/.PcbLib, Altium 365)"))
+        steps.append(("ecadlib ui", f"or do it in the web UI on {ws}: drop your BOM there, review held parts, sign off, send "
+                                    "to Altium (DbLib, .SchLib/.PcbLib, Altium 365); a plan made on the command line is "
+                                    f"reviewed with `ecadlib review {lib}/plan.json`"))
     return steps
 
 
@@ -170,6 +173,32 @@ def finish_init(ans, rules_file, out=print, environ=None, run_doctor=True):
     for c, why in next_steps(ans):
         out(f"  {c}\n      {why}")
     return rep
+
+
+def setup_workspace(start="."):
+    """The [setup] workspace of the ecadlib.toml found from `start` (relative paths start at that file), or None."""
+    try:
+        f = RU.find(start)
+        ws = (RU.parse_text(f.read_text(encoding="utf-8"), f.name).get("setup") or {}).get("workspace") if f else None
+    except Exception:
+        return None
+    if not isinstance(ws, str) or not ws.strip():
+        return None
+    p = _rel_to(ws, f)
+    try:
+        return Path(os.path.relpath(p))       # short on the screen when it is below the current folder
+    except ValueError:                        # another drive on Windows
+        return p
+
+
+def default_out(kind, bom, start="."):
+    """Default -o of `librarian` / `triage` for this BOM: <[setup] workspace>/librarian/<BOM name> or
+    <workspace>/reports/triage_<BOM name> (where `ecadlib status` looks), else out/librarian / out/triage."""
+    ws = setup_workspace(start)
+    stem = re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem) or "bom"
+    if kind == "librarian":
+        return str(ws / "librarian" / stem) if ws else "out/librarian"
+    return str(ws / "reports" / f"triage_{stem}") if ws else "out/triage"
 
 
 def _rel_to(p, rules_file):
@@ -311,12 +340,13 @@ def bom_hint(err):
 
 NET_RE = re.compile(r"(ProxyError|ConnectionError|ConnectTimeout|ReadTimeout|timed out|Name or service not known|"
                     r"Temporary failure in name resolution|proxy CONNECT refused|HTTP 403|HTTP 407|HTTP 429|"
-                    r"Max retries exceeded|offline and not (?:cached|downloaded))", re.I)
+                    r"Max retries exceeded|offline(?::| and) not (?:in cache|in the cache|cached|downloaded))", re.I)
 
 
 def blockers(rows, rules=None, offline=False):
     """[(message, fix)] for causes outside the parts that held them back: part sources that could not be reached, and
-    the datasheet reader without an API key. rows: librarian.review_rows(items) (each has `part` and `tried`)."""
+    the datasheet reader without an API key, and one field missing on many parts (a BOM without that column).
+    rows: librarian.review_rows(items) (each has `part`, `tried`, and `status` / `why`)."""
     net, nokey = {}, []
     for r in rows:
         for step in re.split(r";\s+(?=[a-z_]+[: ])", r.get("tried") or ""):
@@ -327,6 +357,17 @@ def blockers(rows, rules=None, offline=False):
             if "no API key" in step:
                 nokey.append(r["part"])
     out = []
+    only = {}                                  # parts held for one missing field and nothing else (a BOM column short)
+    for r in rows:
+        m = re.fullmatch(r"fields: (no datasheet link|(.+) is empty)", str(r.get("why") or ""))
+        if r.get("status") == "held" and m:
+            only.setdefault(m.group(1), []).append(r["part"])
+    for what, parts in sorted(only.items()):
+        if len(parts) >= 3:
+            col = "Datasheet" if what == "no datasheet link" else what[:-len(" is empty")]
+            out.append((f"{len(parts)} parts are held only because of '{what}' ({', '.join(parts[:3])}"
+                        f"{' ...' if len(parts) > 3 else ''})",
+                        f"add a {col} column to the BOM, or take {col} out of [parameters] required in ecadlib.toml"))
     for src, (parts, why) in sorted(net.items()):
         if offline:
             out.append((f"{src}: not in the download cache for {len(parts)} part(s) (--offline)",
@@ -439,14 +480,15 @@ def demo_main(argv=None):
     from . import term as TM
     t = TM.Term()
     written = [(f"{a.out}/{res['plan']}", "the library plan"), (", ".join(f"{a.out}/{r}" for r in res["review"]), "review: what to check, part by part")]
-    if res["altium"]:
+    if res["altium"] and tool != "kicad":      # the librarian always writes them; --tool kicad does not point at them
         written.append((f"{a.out}/{Path(res['altium'][0]).parent.parent}/", f"{len(res['altium'])} Altium files (.SchLib, .PcbLib)"))
     if res["kicad"]:
         kd = Path(res["workspace"]) / res["kicad"]["folder"]
         written.append((f"{a.out}/{res['kicad']['folder']}/", "KiCad: " + ", ".join(sorted(p.name + ("/" if p.is_dir() else "")
                                                                                    for p in kd.iterdir() if p.suffix in (".kicad_sym", ".pretty", ".kicad_dbl")))))
     t.summary(f"{res['parts']} parts: {res['ready']} ready, {res['held']} held in {res['seconds']} s"
-              + (f" (held: {', '.join(res['held_parts'])}; that is expected, see the review)" if res["held"] else ""),
+              + (f" (held: {', '.join(res['held_parts'][:5])}{' ...' if len(res['held_parts']) > 5 else ''}"
+                 + ("; that is expected, see the review)" if not a.bom else "; the review says why)") if res["held"] else ""),
               written=written,
               next=[(f"ecadlib status --workspace {a.out}", "one-screen summary"),
                     (f"ecadlib ui --workspace {a.out}", "look at it in the browser (held parts, sign-off, exports)"),

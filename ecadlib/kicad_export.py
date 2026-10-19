@@ -1010,7 +1010,16 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     parsed = sexpr.parse(text)
     assert [s[1] for s in sexpr.find(parsed, "symbol")] == sorted(symbols)
     put(out / f"{lib}.kicad_sym", text)
-    stale = [p for p in pretty.glob("*.kicad_mod") if p.stem not in fps]
+    gone = sorted({r.get("symbol_name") for r in prev.get("parts") or [] if r.get("symbol") and r.get("symbol_name")}
+                  - set(symbols)) if prev.get("library") == lib else []
+    if gone:                                  # a part that left the plan, or another BOM's plan into the same folder
+        same = Path(str(prev.get("plan") or "")).resolve() == plan.resolve()
+        from .messages import plural
+        rep["warnings"].append(f"{plural(len(gone), 'part')} exported last time "
+                               + ("" if same else f"from {prev.get('plan')} ") + f"and not in this plan removed from "
+                               f"{lib}: {', '.join(gone[:8])}{' ...' if len(gone) > 8 else ''}; a KiCad project using "
+                               f"them loses those links" + ("" if same else " (give each plan its own -o folder)"))
+    stale =[p for p in pretty.glob("*.kicad_mod") if p.stem not in fps]
     stale += [p for p in (shapes.glob("*") if shapes.exists() else []) if p.is_file() and not rep["models"].get(p.name)]
     for old in stale:                         # a re-export drops the files no longer in the plan; one it did not write
         rel = old.relative_to(out).as_posix()  # (added by hand) is moved aside and reported, not lost
@@ -1086,8 +1095,9 @@ def print_result(rep, out, plan, t=None):
             + (f"; {M.plural(len(rep['skipped']), 'held part')} left out (--include-held adds them)" if rep["skipped"] else ""))
     t.summary(head, written=[(f"{out}/{lib}.kicad_sym", "symbols"), (f"{out}/{lib}.pretty/", "footprints"),
                              (f"{out}/sym-lib-table, fp-lib-table", "library tables (paths use ${KIPRJMOD})")],
-              next=[(f"cp -r {q(out)}/* <your KiCad project folder>/", "then reopen the project; or add the library in "
-                     "Preferences > Manage Symbol / Footprint Libraries"),
+              next=[(f"ecadlib kicad-export {q(plan)} -o <your KiCad project folder> --name {q(lib)}",
+                     "into the project: its own lib-table rows are kept (copying these tables over would drop them); "
+                     "or Preferences > Manage Symbol / Footprint Libraries"),
                     (f"ecadlib parity {q(plan)} --kicad {q(out)}", "check KiCad and Altium agree, part by part")]
               + ([(f"ecadlib review {q(plan)}", "the held parts")] if rep["skipped"] else []))
 

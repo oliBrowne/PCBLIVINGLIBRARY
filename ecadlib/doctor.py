@@ -351,7 +351,8 @@ def check_paths(libs=(), rules=None):
             out.append(_c(what, bad, f"{p}: not found", "fix the path (relative paths start at the current folder)"))
     if not libs:
         out.append(_c("lib", "OK", "no library folder of yours given: ecadlib builds a new library (to reuse your parts, "
-                                   "add your folders on the setup page or with `ecadlib init --lib FOLDER`)"))
+                                   "add your folders on the setup page, under [setup] libs in ecadlib.toml, or with "
+                                   "`ecadlib init --lib FOLDER --force`, which keeps the old file as .bak)"))
     return out
 
 

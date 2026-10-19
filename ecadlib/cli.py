@@ -157,6 +157,11 @@ def _main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     from .cliutil import debug_wanted, env_defaults, report
     debug, argv = debug_wanted(argv)
+    lead = []                                                # `ecadlib -q status`: -q / -v before the command too
+    while argv and argv[0] in ("-q", "--quiet", "-v", "--verbose"):
+        lead.append(argv.pop(0))
+    if lead and argv:
+        argv = argv[:1] + lead + argv[1:]
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__)
         return 0
@@ -194,7 +199,9 @@ def _main(argv=None):
     except RulesError as e:                                  # a bad ecadlib.toml: say which key, no traceback
         if debug:
             raise
-        print(f"ecadlib {argv[0]}: {e}\n  hint: `ecadlib doctor` shows the file and line", file=sys.stderr)
+        print(f"ecadlib {argv[0]}: {e}\n  hint: `ecadlib doctor` shows the file and line"
+              + ("; `ecadlib init --force` writes a new file (the old one is kept as .bak)" if "not valid" in str(e) else ""),
+              file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         if debug:

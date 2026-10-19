@@ -370,10 +370,21 @@ class Workspace:
                 "symbols": sorted(p.stem for p in (self.models / "SchLib").glob("*.SchLib"))}
 
     def export_dblib(self, bom):
-        """Write the Altium DbLib (SQLite + XLSX + .DbLib) for a BOM, using the latest triage."""
+        """Write the Altium DbLib for a BOM. When the librarian has run for it: its plan through dblib-sync, into
+        altium/<BOM>/ (ready parts only, their .SchLib/.PcbLib copied beside the DbLib). Else a draft from the latest
+        triage (SQLite + XLSX + .DbLib, no symbols or footprints built yet)."""
         from . import altium_export
         bom_path = self._bom_path(bom)
         self._read_bom(bom_path)                      # same friendly error as triage for unreadable files
+        plan = self._librarian_dir(bom_path) / "plan.json"
+        if plan.is_file():                            # held parts stay out, as in `ecadlib dblib-sync`
+            from . import altium_dblib_sync as DS
+            to = self.root / "altium" / self._key(bom_path)
+            rep = DS.sync(plan, to)
+            act = lambda a: [r["name"] for r in rep["results"] if r.get("action") == a and r.get("kind", "part") == "part"]
+            return {"files": [self.rel(p) for p in sorted(to.iterdir()) if p.is_file()], "folder": self.rel(to),
+                    "from_plan": True, "held": act("held"),
+                    "written": len(act("added")) + len(act("updated")) + len(act("up_to_date"))}
         tri = self._triage_csv(bom_path)
         out = self.root / "altium"
         argv = [str(bom_path), "-o", str(out)] + (["--triage", str(tri)] if tri.exists() else [])

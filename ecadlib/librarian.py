@@ -840,6 +840,19 @@ def review_rows(items):
     return rows
 
 
+def refresh_review(plan, items):
+    """review.csv / .md / .html again after a person changed the plan outside a librarian run (resolve, release-check
+    --allow, review, approve), so they say what plan.json says. Only where a librarian run wrote them."""
+    out = Path(plan).parent
+    if not (out / "review.md").is_file():
+        return
+    try:
+        bom = str(out / json.loads((out / "library.lock.json").read_text(encoding="utf-8"))["bom"]["file"])
+    except (OSError, ValueError, KeyError, TypeError):
+        bom = str(plan)
+    write_review(review_rows(items), out, bom, items)
+
+
 def write_review(rows, out, bom, items=None):
     """review.csv (machine columns, unchanged), review.md and review.html (ecadlib.reports: outcome first, held parts
     with a plain reason and the next step). items: the plan items (default: <out>/plan.json, written just before)."""
@@ -1033,7 +1046,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="BOM -> library: triage, fill missing symbols/footprints, Altium models, plan, release check")
     ap.add_argument("bom")
     ap.add_argument("--lib", action="append", default=[], help="local KiCad library dir (repeatable)")
-    ap.add_argument("-o", "--out", default="out/librarian")
+    ap.add_argument("-o", "--out", help="plan folder (default: <[setup] workspace>/librarian/<BOM name> after "
+                    "`ecadlib init`, else out/librarian)")
     ap.add_argument("--sources", help="order of sources to try (default: the rules' [sources] order, else " + ",".join(SOURCES) + ")")
     ap.add_argument("--refresh", nargs="*", metavar="PART", help="redo finished parts: all, or the named ones")
     ap.add_argument("--refresh-index", action="store_true", help="rebuild the KiCad library name index")
@@ -1050,6 +1064,12 @@ def main(argv=None):
     ap.add_argument("--datasheet-no-wait", action="store_true", help="submit the batch and finish; re-run to collect it")
     ap.add_argument("--json", action="store_true", help='print {"plan", "review", "parts", "ready", "held", "blockers"} instead of the log')
     a = ap.parse_args(argv)
+    from . import firstrun as FR
+    a.out = a.out or FR.default_out("librarian", a.bom)
+    other = _plan_bom(a.out)                  # the folder holds another BOM's plan: say so before it is replaced
+    if other and other != Path(a.bom).name and not a.json:
+        print(f"note: {a.out} holds the plan for {other}; it is replaced by {Path(a.bom).name}'s "
+              f"(give each BOM its own -o folder to keep both)", file=sys.stderr)
     rules = RU.load(a.rules, start=a.out)
     reader = None
     if a.datasheet_batch:
@@ -1079,11 +1099,19 @@ def main(argv=None):
         return 2 if held else 0
     if prog is not None:
         prog.t.clear_live()
-    print_result(items, Path(a.out), why, t)
+    print_result(items, Path(a.out), why, t, tool=(rules.get("setup") or {}).get("tool") if isinstance(rules, dict) else None)
     return 2 if held else 0
 
 
-def print_result(items, out, why=(), t=None):
+def _plan_bom(out):
+    """The file name of the BOM whose plan is in `out` (library.lock.json), or None."""
+    try:
+        return Path(str(json.loads((Path(out) / "library.lock.json").read_text(encoding="utf-8"))["bom"]["file"])).name
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def print_result(items, out, why=(), t=None, tool=None):
     """The terminal ending of a librarian run: a row per part on a terminal (status, name, the reason in plain
     words), then notes, the counts, what was written and the next commands."""
     from . import messages as M, term as TM
@@ -1104,9 +1132,13 @@ def print_result(items, out, why=(), t=None):
         nxt.append((f"ecadlib review {plan}", "go through the held parts one by one"))
     if changed:
         nxt.append((f"ecadlib part status {plan}", "changes to released parts, held until a person approves them"))
-    nxt += [(f"ecadlib kicad-export {plan} -o {out.parent.parent / 'kicad' if out.parent.name == 'librarian' else 'kicad'} --name mylib",
-             "write the KiCad library"),
-            (f"ecadlib altium-pkg {plan} --out altium_pkg", "the Altium hand-off folder (.LibPkg, DbLib)")]
+    # one KiCad library / Altium folder per plan, named after it: a second BOM's export never replaces the first one's
+    ws = out.parent.parent if out.parent.name == "librarian" else Path(".")
+    if tool in (None, "", "kicad", "both"):
+        nxt.append((f"ecadlib kicad-export {plan} -o {ws / 'kicad' / out.name} --name {out.name}", "write the KiCad library"))
+    if tool in (None, "", "altium", "both"):
+        nxt.append((f"ecadlib altium-pkg {plan} --out {ws / 'altium_pkg' / out.name}",
+                    "the Altium hand-off folder (.LibPkg, DbLib)"))
     t.summary(f"{M.plural(len(items), 'part')}: {M.counts(i.get('status') for i in items)}"
               + (f"  (held: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''})" if held else "")
               + (f"; {M.plural(len(changed), 'change')} to released parts held, the released version is kept "

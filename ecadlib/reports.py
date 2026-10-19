@@ -53,6 +53,9 @@ def part_view(it):
     if cc == "unchecked":
         checks.append(M.explain("cross-check unchecked: " + str((it.get("cross_check") or {}).get("summary") or "")))
     word = M.status_word("allowed" if rc.get("result") == "allowed" else st)
+    ch = it.get("change") or {}
+    if ch.get("state") == "held":              # change control: the released revision stays until a person decides
+        word += f", r{ch.get('base')} kept: a change waits for approval" if ch.get("base") is not None else ", a change waits for approval"
     src = it.get("source") or {}
     meta = [("Symbol from", M.source_word(src.get("symbol"))), ("Footprint from", M.source_word(src.get("footprint")))]
     if cc:
@@ -93,7 +96,13 @@ def review_doc(items, bom=""):
             f"{len(waiting)} waiting for sign-off." if waiting else "",
             f"{M.plural(len(check), 'ready part')} to double-check." if check else "") if x))
     else:
-        lead.append("Nothing needs a person.")
+        lead.append("Nothing needs a person." if not any((it.get("change") or {}).get("state") == "held" for it in items) else "")
+    changed = [it.get("name", "?") for it in items if (it.get("change") or {}).get("state") == "held"]
+    if changed:
+        lead.append(f"{M.plural(len(changed), 'change')} to released parts {'waits' if len(changed) == 1 else 'wait'} for a person ({', '.join(changed[:5])}"
+                    f"{' ...' if len(changed) > 5 else ''}); the released versions are kept. `ecadlib part status plan.json` "
+                    "shows them.")
+    lead = [x for x in lead if x]
     nxt = []
     if held:
         nxt.append("Go through the held parts one at a time with `ecadlib review` in a terminal, or in `ecadlib ui` (Fill the library): **Pick…** a symbol or footprint, or **Release anyway** after you have looked.")
