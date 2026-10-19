@@ -289,8 +289,17 @@ def _find_file(base, rel):
     return cur
 
 
-def read_prjpcb(path):
-    """-> {path, name, documents, schdocs, bomdocs, missing, variants, parameters, design}."""
+def _inside(f, root):
+    """f, or None when a root is given and f resolves outside it ('..\\..\\x.SchDoc' in an uploaded project)."""
+    if f is None or root is None:
+        return f
+    r, p = Path(root).resolve(), Path(f).resolve()
+    return f if p == r or r in p.parents else None
+
+
+def read_prjpcb(path, root=None):
+    """-> {path, name, documents, schdocs, bomdocs, missing, variants, parameters, design}. root: documents and device
+    sheets outside this folder count as missing (servers pass their workspace); None reads them wherever they are."""
     path = Path(path)
     secs = parse_ini(_read_text(path))
     docs, devs, variants, params, design = [], [], [], {}, {}
@@ -328,7 +337,7 @@ def read_prjpcb(path):
         ext = PureWindowsPath(rel).suffix.lower()
         if ext not in SCH_EXT + BOM_EXT:
             continue
-        f = _find_file(path.parent, rel)
+        f = _inside(_find_file(path.parent, rel), root)
         if f is None:
             missing.append(rel)
         elif not any(Path(f).resolve() == Path(x).resolve() for x in sch + bom):   # listed twice (X.SchDoc, .\x.schdoc):
@@ -336,7 +345,7 @@ def read_prjpcb(path):
     for rel in devs:
         if PureWindowsPath(rel).suffix.lower() not in SCH_EXT:
             continue
-        f = find_device_sheet(path.parent, rel)
+        f = _inside(find_device_sheet(path.parent, rel, [] if root is not None else None), root)
         if f is None:
             dev_missing.append(rel)
         elif not any(Path(f).resolve() == Path(x).resolve() for x in sch):
@@ -452,7 +461,7 @@ def _natkey(s):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
 
 
-def load_project(path, rules=None):
+def load_project(path, rules=None, root=None):
     """.PrjPcb / .SchDoc / .BomDoc -> {name, path, components (one per physical part), variants, warnings, bomdoc}."""
     p = Path(path)
     ext = p.suffix.lower()
@@ -461,10 +470,10 @@ def load_project(path, rules=None):
         prj = sorted(p.parent.glob("*.[Pp][Rr][Jj][Pp][Cc][Bb]"))
         if not prj:
             raise ValueError(f"{p.name}: no .PrjPcb next to the BomDoc; pass the project instead")
-        proj = read_prjpcb(prj[0])
+        proj = read_prjpcb(prj[0], root)
         bomdocs = [p]
     elif ext in PROJECT_EXT:
-        proj = read_prjpcb(p)
+        proj = read_prjpcb(p, root)
         bomdocs = proj["bomdocs"]
     elif ext in SCH_EXT:
         proj = {"path": str(p), "name": p.stem, "schdocs": [p], "bomdocs": [], "missing": [], "variants": [], "parameters": {},
@@ -745,9 +754,9 @@ MAPPING = {"designator": "Designator (RECORD=34)", "qty": "count of designators"
            "dnp": "variant (Kind=1) / component kind"}
 
 
-def bom_lines(path, variant=None, rules=None):
+def bom_lines(path, variant=None, rules=None, root=None):
     """bom_triage.read_bom hook: (lines, mapping) in the same shape read_bom returns for a CSV."""
-    prj = load_project(path, rules)
+    prj = load_project(path, rules, root)
     for w in prj["warnings"]:
         print(f"  warning: {w}", file=sys.stderr)
     lines = []

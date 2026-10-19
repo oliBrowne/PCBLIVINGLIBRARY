@@ -275,6 +275,8 @@ def plan(lines, triage=None, models=None, root=None, rules=None):
                 "footprint": {"ref": row["Footprint Ref"], "file": fp},
                 "status": "ready" if sym and fp else "needs_altium_models",
             })
+            if df.attrs.get("notes", {}).get(row["Part Number"]):    # BOM lines that disagree, renamed characters
+                items[-1]["bom_notes"] = list(df.attrs["notes"][row["Part Number"]])
             kfp = df.attrs.get("kicad_fp", {}).get(row["Part Number"])
             if kfp:                            # renamed by the rules: keep the library name for lookups and checks
                 items[-1]["footprint"]["kicad"] = kfp

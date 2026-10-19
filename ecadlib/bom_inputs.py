@@ -62,14 +62,15 @@ def group(parts, columns=None, source="KiCad"):
         if ln.get("datasheet") == "~":
             ln["datasheet"] = ""
         dnp = p["dnp"]
-        if "dnp" in ln:                                        # a house "DNP" field as well as KiCad's flag
-            from .bom_triage import _yes
-            dnp = dnp or _yes(ln.pop("dnp"))
+        if "dnp" in ln or "fitted" in ln:                      # a house "DNP" / "Fitted" field as well as KiCad's flag
+            from .bom_triage import dnp_cell
+            dnp = dnp or dnp_cell(ln.pop("dnp", "")) or dnp_cell(ln.pop("fitted", ""), "fitted")
         key = (tuple(sorted(ln.items())), dnp)
         groups.setdefault(key, (ln, dnp, []))[2].append(p["ref"])
     lines = []
     for ln, dnp, refs in groups.values():
-        n = len(refs) if any(r.endswith("?") for r in refs) else len(set(refs))   # 'R?' twice is two parts
+        n = len(refs)                                  # 'R?' twice, or a duplicated R1, is two parts (other units of
+                                                       # one part never get here)
         refs = sorted(dict.fromkeys(refs), key=_natkey)
         d = {"designator": ", ".join(refs), "qty": str(n)}
         d.update({k: v for k, v in ln.items() if v})
@@ -90,15 +91,30 @@ def group(parts, columns=None, source="KiCad"):
 # ------------------------------------------------------------------ .kicad_sch
 def _val(node, head, default=None):
     n = sexpr.first(node, head)
-    return n[1] if n and len(n) > 1 else default
+    return n[1] if n and len(n) > 1 and isinstance(n[1], str) else default    # '(ref (x))' is not a reference
 
 
 def _props(node):
-    return {str(p[1]): str(p[2]) for p in sexpr.find(node, "property") if len(p) > 2}
+    return {p[1]: p[2] for p in sexpr.find(node, "property")
+            if len(p) > 2 and isinstance(p[1], str) and isinstance(p[2], str)}
+
+
+def _readable(what):
+    """A decorator: a malformed file (a list where a string belongs, a missing node) is a clear ValueError naming the
+    file, not an internal TypeError / AttributeError."""
+    def wrap(fn):
+        def run(path, *a, **k):
+            try:
+                return fn(path, *a, **k)
+            except (TypeError, AttributeError, IndexError, KeyError) as e:
+                raise ValueError(f"{Path(path).name}: not a readable {what} ({type(e).__name__}: {e})") from None
+        run.__name__, run.__doc__ = fn.__name__, fn.__doc__
+        return run
+    return wrap
 
 
 def _load_sch(path):
-    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    text = Path(path).read_text(encoding="utf-8-sig", errors="replace")     # -sig: a file saved with a BOM mark
     if text.lstrip().startswith("EESchema Schematic File"):
         raise ValueError(f"{Path(path).name}: a KiCad 5 schematic (.sch); open it in KiCad 6 or later and save it, "
                          "or export a BOM / netlist from KiCad")
@@ -111,16 +127,20 @@ def _load_sch(path):
     return tree
 
 
-def read_kicad_sch(path, columns=None):
-    """BOM lines from a KiCad 6+ schematic and all its sub-sheets."""
+@_readable("KiCad schematic")
+def read_kicad_sch(path, columns=None, root=None):
+    """BOM lines from a KiCad 6+ schematic and all its sub-sheets. root: sub-sheets must be inside this folder (the
+    web UI / MCP server pass their workspace, so an uploaded schematic can't read files elsewhere on the server);
+    None reads them wherever the schematic says."""
     path = Path(path)
+    fence = Path(root).resolve() if root is not None else None
     root = _load_sch(path)
     root_uuid = _val(root, "uuid", "")
     legacy = {}                                                # KiCad 6: (symbol_instances (path "/sheet/sym" (reference ..)))
     for p in sexpr.find(sexpr.first(root, "symbol_instances") or [], "path"):
         legacy[tuple(x for x in str(p[1]).split("/") if x)] = {"reference": _val(p, "reference"), "unit": _val(p, "unit"),
                                                                 "value": _val(p, "value"), "footprint": _val(p, "footprint")}
-    parts, seen_refs, cache, count = [], {}, {}, [0]
+    parts, seen_refs, units, cache, count, dups = [], {}, {}, {}, [0], set()
 
     def instance_ref(sym, sheet_path):
         props = _props(sym)
@@ -158,17 +178,23 @@ def read_kicad_sch(path, columns=None):
                 key = (ref, sheet_path, _val(sym, "uuid", "") or id(sym))
             else:
                 key = ref
+            lib, unit = _val(sym, "lib_id", ""), str(_val(sym, "unit", "1"))
             fields = _props(sym)
             fields.update({"Value" if k == "value" else "Footprint": v for k, v in over.items()})
             fields.pop("Reference", None)
             dnp = _val(sym, "dnp", "no") == "yes"
-            if key in seen_refs:                               # another unit of a multi-unit part: one part, whose
+            if key in seen_refs and lib == units[key][0] and unit not in units[key][1]:
+                units[key][1].add(unit)                        # another unit of a multi-unit part: one part, whose
                 p = seen_refs[key]                             # fields may be filled on any unit (as KiCad's BOM does)
                 for k, v in fields.items():
                     if str(v).strip() and not str(p["fields"].get(k, "")).strip():
                         p["fields"][k] = v
                 p["dnp"] = p["dnp"] or dnp
                 continue
+            if key in seen_refs:                               # another symbol, or the same unit again: a second part
+                dups.add(ref)
+                key = (key, len(parts))
+            units[key] = (lib, {unit})
             seen_refs[key] = part = {"ref": ref, "fields": fields, "dnp": dnp, "sheet": "/".join(sheet_path)}
             parts.append(part)
         for sh in sexpr.find(tree, "sheet"):
@@ -180,11 +206,15 @@ def read_kicad_sch(path, columns=None):
             if not target.is_file():                           # drawn on Windows / macOS: the case may differ
                 from .altium_project import _find_file
                 target = _find_file(file.parent, sub) or target
-            if not target.is_file():
+            outside = fence is not None and fence != target.resolve() and fence not in target.resolve().parents
+            if outside or not target.is_file():                # one message for both: no file-existence oracle
                 raise ValueError(f"{path.name}: sub-sheet {sub!r} (sheet {props.get('Sheetname', '?')!r}) not found next to {file.name}")
             walk(target, sheet_path + (_val(sh, "uuid", ""),), chain | {rf})
 
     walk(path, (), frozenset())
+    if dups:
+        print(f"  warning: {path.name}: reference(s) {', '.join(sorted(dups, key=_natkey)[:5])} used by more than one "
+              "symbol; each is counted as its own part: annotate the schematic", file=sys.stderr)
     unannotated = sorted({p["ref"] for p in parts if p["ref"].endswith("?")})
     if unannotated:
         print(f"  warning: {path.name}: unannotated references ({', '.join(unannotated[:5])}); annotate the schematic "
@@ -203,9 +233,12 @@ def _xml_root(data, name):
         raise ValueError(f"{name}: not readable XML ({e})") from e
 
 
+@_readable("KiCad netlist")
 def read_kicad_netlist(path, columns=None):
     path = Path(path)
     data = path.read_bytes()
+    if data[:3] == b"\xef\xbb\xbf":                       # UTF-8 byte-order mark
+        data = data[3:]
     if data.lstrip()[:1] == b"(":
         return _read_net_sexpr(path, data.decode("utf-8", errors="replace"), columns)
     root = _xml_root(data, path.name)
@@ -264,6 +297,8 @@ def is_kicad_netlist(path):
         head = Path(path).read_bytes()[:2048]
     except OSError:
         return False
+    if head[:3] == b"\xef\xbb\xbf":
+        head = head[3:]
     return bool(re.search(rb"^\s*(<\?xml[^>]*>\s*)?<export\b", head) or re.match(rb"\s*\(export\s", head))
 
 
@@ -279,6 +314,34 @@ def _col(ref):
     for ch in re.match(r"[A-Z]*", ref).group(0):
         n = n * 26 + ord(ch) - 64
     return n - 1
+
+
+def xlsx_hidden(path):
+    """{sheet name: None for a hidden sheet, else the set of hidden column indexes (0 = A)} of an .xlsx."""
+    from .bom_triage import MAX_UNZIPPED
+    out = {}
+    with zipfile.ZipFile(path) as z:
+        if sum(i.file_size for i in z.infolist()) > MAX_UNZIPPED:
+            return out                                         # xlsx_sheets / pandas refuse it with the message
+        names = set(z.namelist())
+        rels = {}
+        if "xl/_rels/workbook.xml.rels" in names:
+            for r in _xml_root(z.read("xl/_rels/workbook.xml.rels"), "rels").findall("rel:Relationship", NS):
+                t = r.get("Target", "")
+                rels[r.get("Id")] = t.lstrip("/") if t.startswith("/") else "xl/" + t
+        for i, s in enumerate(_xml_root(z.read("xl/workbook.xml"), "workbook").findall("m:sheets/m:sheet", NS)):
+            name = s.get("name", f"Sheet{i + 1}")
+            if s.get("state") in ("hidden", "veryHidden"):
+                out[name] = None
+                continue
+            target = rels.get(s.get(f"{{{NS['r']}}}id"), f"xl/worksheets/sheet{i + 1}.xml")
+            cols = set()
+            if target in names:
+                for c in _xml_root(z.read(target), target).findall("m:cols/m:col", NS):
+                    if c.get("hidden") in ("1", "true"):
+                        cols.update(range(int(c.get("min", 1)) - 1, min(int(c.get("max", 1)), 16384)))
+            out[name] = cols
+    return out
 
 
 def xlsx_sheets(path, uncached=None):

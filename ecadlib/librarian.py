@@ -389,9 +389,9 @@ class Run:
         for k, rec in (keep or {}).items():
             st[k] = rec
             st["tried"].append(f"resolve: {k} {rec['source']} chosen by user (kept)")
-        if (row.get("status") or "").startswith("dnp"):
-            st["tried"].append("DNP line: not fetched")
-            return st
+        dnp = (row.get("status") or "").startswith("dnp")   # not assembled, but still on the schematic and the PCB:
+        if dnp:                                              # built from the free sources, no paid datasheet read
+            st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")
         kind, fp_name, sym_name = passive_kind(item), item["footprint"]["ref"], item["symbol"]["ref"]
         st["passive"] = is_passive_part(item, ln)
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
@@ -402,6 +402,8 @@ class Run:
         for s in self.sources:
             if st["symbol"] and st["footprint"]:
                 break
+            if dnp and s == "datasheet":
+                continue
             try:
                 getattr(self, f"src_{s}")(st, item, ln, row, kind, mpn, fp_name, sym_name)
             except Exception as e:            # one bad source or part must not stop the run
@@ -813,7 +815,8 @@ def apply_state(item, st, ln):
         item["cross_check"] = dict(st["cross_check"])
     else:
         item.pop("cross_check", None)
-    item["librarian"] = {"tried": st.get("tried", []), "review": st.get("review", []),
+    item["librarian"] = {"tried": st.get("tried", []),
+                         "review": list(dict.fromkeys(st.get("review", []) + item.get("bom_notes", []))),
                          "notes": [n for k in ("symbol", "footprint") for n in (st.get(k) or {}).get("notes", [])]}
 
 
