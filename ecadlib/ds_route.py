@@ -242,6 +242,160 @@ def ordering_facts(texts, part, data=None):
     return {k: h[k] for k in ("pins", "package", "code", "page", "how", "part")}
 
 
+# ---------------------------------------------------------------- dimension tables read in code
+# The "Symbol | millimeters Min Typ Max | inches Min Typ Max" table that ST, Nexperia, NXP, onsemi and others print next
+# to the package drawing. Read by column with pdfplumber, the numbers come out exactly as printed, so the model's
+# reading of the same rows can be checked (and its blanks filled) without asking a model anything.
+DIM_SYM = re.compile(r"(?:[A-Za-z]{1,3}\d{0,2}|[\u03b8\u0398\u03b1]\d?)")       # A, A1, b, D2, e, HE, ccc, θ1
+DIM_KEY = {"D", "E", "b", "e", "L", "D1", "E1", "HD", "HE"}
+DIM_COLS = {"min": "min", "min.": "min", "nom": "nom", "nom.": "nom", "typ": "nom", "typ.": "nom", "max": "max", "max.": "max"}
+ELECTRICAL = re.compile(r"\b(parameter|conditions?|test)\b", re.I)
+UNIT_HEAD = (("mm", re.compile(r"millimet|^mm$|\(mm\)", re.I)), ("in", re.compile(r"inch", re.I)),
+             ("mil", re.compile(r"^mils?$|\(mils?\)", re.I)))
+
+
+def _dim_val(c):
+    c = c.replace("\u2212", "-").replace("\u2013", "-").replace("\u00b0", "").strip()
+    c = re.sub(r"\s*\b(BSC|TYP|REF|BASIC)\b\.?|^\(|\)$", "", c, flags=re.I).strip()
+    if c in ("", "-", "--", "\u2014"):
+        return None
+    try:
+        return float(c.replace(",", "."))
+    except ValueError:
+        return "?"
+
+
+def _sym(c):
+    return re.sub(r"(\s*\(\d*\)?)+$", "", c.strip())     # "b(9)(11)", "A1(12)": footnote marks
+
+
+def _dim_table(tb, page_unit):
+    """One pdfplumber table -> {"unit", "rows": {symbol: {"min", "nom", "max", "span"}}} or None (not a dimension table)."""
+    rows = [[" ".join(str(c or "").split()) for c in r] for r in tb if r]
+    if not rows or any(ELECTRICAL.search(" ".join(r)) for r in rows[:4]):
+        return None
+    hi = next((i for i, r in enumerate(rows[:5]) if sum(c.lower() in DIM_COLS for c in r) >= 2), None)
+    if hi is None:
+        return None
+    head = rows[hi]
+    units = [None] * len(head)                        # unit per column, from a row above ("millimeters" spans 3 cells)
+    for r in rows[max(0, hi - 2):hi + 1]:
+        cur = None
+        for k, c in enumerate(r):
+            u = next((u for u, rx in UNIT_HEAD if c and rx.search(c)), None)
+            cur = u or (cur if not c or c.lower() in DIM_COLS else None)
+            if cur and units[k] is None:
+                units[k] = cur
+    groups = {}
+    for k, c in enumerate(head):
+        if c.lower() in DIM_COLS:
+            groups.setdefault(units[k] or page_unit, {})[DIM_COLS[c.lower()]] = k
+    unit = "mm" if "mm" in groups else next((u for u in groups if u), None)
+    if not unit:
+        return None
+    cols = groups[unit]
+    first = min(cols.values())
+    body = rows[hi + 1:]
+    sym_col = max(range(first), key=lambda k: sum(1 for r in body if k < len(r) and DIM_SYM.fullmatch(_sym(r[k]))),
+                  default=None)
+    if sym_col is None:
+        return None
+    out = {}
+    for r in body:
+        if len(r) <= max(cols.values()):
+            continue
+        sym = _sym(r[sym_col])
+        if not DIM_SYM.fullmatch(sym):
+            continue
+        cell = {x: r[cols[x]] if x in cols else "" for x in ("min", "nom", "max")}
+        vals = {x: _dim_val(v) for x, v in cell.items()}
+        if "?" in vals.values() or all(v is None for v in vals.values()):
+            continue
+        filled = [x for x, v in cell.items() if v]
+        out[sym] = dict(vals, span=len(filled) == 1 and not any(v.strip() in ("-", "\u2014") for v in cell.values()))
+    if len(out) < 3 or not DIM_KEY & set(out):
+        return None
+    return {"unit": unit, "rows": out}
+
+
+def _unit_rows_table(pg):
+    """NXP / Nexperia's unruled table, symbols across and limits down:
+         Unit A A1 bp c D E e ...
+         max 1.1 0.1 0.48 ...
+      mm nom ...
+         min 0.9 ...
+    Each number belongs to the symbol above it (nearest by x), so this needs word positions, not text lines."""
+    lines, top = {}, None
+    for w in sorted(pg.extract_words(), key=lambda w: w["top"]):
+        if top is None or w["top"] - top > 3:         # same line: tops within 3 pt ("Unit(1)" sits 1.3 pt above "A1")
+            top = w["top"]
+        lines.setdefault(top, []).append(w)
+    keys = sorted(lines)
+    for i, k in enumerate(keys):
+        ln = sorted(lines[k], key=lambda w: w["x0"])
+        if not re.fullmatch(r"Unit(\(\d+\))?", ln[0]["text"]) or len(ln) < 4:
+            continue
+        syms = [(_sym(w["text"]), (w["x0"] + w["x1"]) / 2) for w in ln[1:]]
+        if not all(DIM_SYM.fullmatch(t) for t, _ in syms):
+            continue
+        gap = min((b - a for (_, a), (_, b) in zip(syms, syms[1:])), default=10)
+        rows, unit = {t: {"min": None, "nom": None, "max": None, "span": False} for t, _ in syms}, None
+        for k2 in keys[i + 1:i + 8]:
+            ln2 = sorted(lines[k2], key=lambda w: w["x0"])
+            lab = [w for w in ln2 if w["text"].lower() in ("min", "nom", "max")]
+            u = next((w["text"].lower() for w in ln2 if w["text"].lower() in ("mm", "inches", "inch", "mils")), None)
+            if u and unit and u != unit:
+                break                                 # the inch rows: the mm ones are enough
+            unit = unit or u
+            if not lab:
+                if rows and any(v["max"] or v["min"] for v in rows.values()):
+                    break
+                continue
+            x = DIM_COLS[lab[0]["text"].lower()]
+            for w in ln2:
+                if w["x0"] <= lab[0]["x1"]:
+                    continue
+                v = _dim_val(w["text"])
+                if not isinstance(v, float):
+                    continue
+                c = (w["x0"] + w["x1"]) / 2
+                t, d = min(((t, abs(c - sx)) for t, sx in syms), key=lambda z: z[1])
+                if d < 0.6 * gap and rows[t][x] is None:
+                    rows[t][x] = v
+        rows = {t: v for t, v in rows.items() if any(v[x] is not None for x in ("min", "nom", "max"))}
+        if (unit or "mm") == "mm" and len(rows) >= 3 and DIM_KEY & set(rows):
+            return {"unit": "mm", "rows": rows}
+    return None
+
+
+def dim_tables(data, pages, texts=None):
+    """Dimension tables on these pages (1-based), read by column: [{"page", "unit", "rows"}]; [] without pdfplumber,
+    or when none is found (TI and ADI print the numbers on the drawing itself, so the model reads those)."""
+    try:
+        import logging, pdfplumber
+        logging.getLogger("pdfminer").setLevel(logging.ERROR)
+    except ImportError:
+        return []
+    want = [p for p in pages if not texts or re.search(r"\bmin", texts[p - 1] or "", re.I) and re.search(
+        r"\bmax", texts[p - 1] or "", re.I)]
+    out = []
+    try:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            for p in want:
+                if not 1 <= p <= len(pdf.pages):
+                    continue
+                pg = pdf.pages[p - 1]
+                txt = (texts[p - 1] if texts else pg.extract_text()) or ""
+                page_unit = "mm" if re.search(r"millimet|in mm|\(mm\)|unit: mm", txt, re.I) else None
+                found = [t for t in (_dim_table(tb, page_unit) for tb in pg.extract_tables() or []) if t]
+                if not found and re.search(r"^Unit\b", txt, re.M):
+                    found = [t for t in [_unit_rows_table(pg)] if t]
+                out += [dict(t, page=p) for t in found]
+    except Exception:                                 # a PDF pdfminer cannot read: the model's reading stands alone
+        return []
+    return out
+
+
 def page_scores(texts, part=None, package=None, marks=None):
     """Per page: {cat: score} plus 'own' (names this part's package or drawing code) and 'other' (names only another
     package). Table-of-contents pages and tape/reel/revision pages score low. marks (page_marks): the bookmark chapter

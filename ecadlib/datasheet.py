@@ -17,7 +17,7 @@ key), PdfStore (download + %PDF check + provenance), prepare (page ranges, auto 
 ResultCache (PDF hash + model + schema version: re-runs are free), Reader (one job per part -> cache, a synchronous
 call, or one Message Batch with custom_id = part name, resumable through <out>/datasheet/batch_state.json),
 fill_plan (a librarian plan's open parts -> batch -> .SchLib/.PcbLib marked verify -> release check)."""
-import argparse, base64, contextlib, datetime, hashlib, io, json, os, random, re, sys, time
+import argparse, base64, contextlib, copy, datetime, hashlib, io, json, os, random, re, sys, time
 from pathlib import Path
 
 import requests
@@ -65,6 +65,7 @@ SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY"
             "auto_pages": 40,
             "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", MODEL],
             "escalate": True, "max_attempts": 4,            # pages / model per part: ecadlib.ds_route
+            "zoom_drawings": False,                         # close-ups of the drawing pages: zoom_blocks()
             "cross_check": "auto", "cross_check_model": ""}  # second source before a footprint is accepted: ecadlib.crosscheck
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # Per-model request parameters (claude-api skill, Thinking & Effort table): effort levels a model accepts (no entry
@@ -658,6 +659,38 @@ def build_request(source, part, package=None, pages=None, model=MODEL, effort="h
     return headers, body
 
 
+ZOOM_PX = 2240            # a close-up's width: 0.55 of a Letter / A4 page at 2240 px wide is ~4560 visual tokens, under the 4784
+ZOOM_PAGES = 3            # cap of the newer models (2576 px long edge), so it is sent as rendered, not downscaled
+ZOOM_BANDS = ((0.0, 0.55), (0.45, 1.0))              # top and bottom half, overlapping so no dimension is cut in two
+
+
+def zoom_blocks(pdf, sent, why):
+    """Close-ups of the picked drawing / land-pattern pages, for a model that reads the PDF itself. Claude sees each
+    PDF page as one picture of the whole page; the dimension text of a package drawing is often 5-6 pt, a few pixels
+    tall in it. Each half page here is rendered at about 260 dpi. pdf is the PDF as sent, sent the original page
+    numbers in it, why ds_route's reasons per page. [] when no page is a drawing or nothing can render."""
+    from . import pdf_render
+    pages = [p for p in sent if any(str(r).startswith(("drawing", "land")) for r in (why or {}).get(p, []))][:ZOOM_PAGES]
+    if not pages or pdf_render.renderer() is None:
+        return []
+    out = []
+    for p in pages:
+        k = sent.index(p) + 1
+        try:
+            w, h = pdf_render.page_size(pdf, k)
+            dpi = ZOOM_PX / (w / 72)
+            imgs = [pdf_render.render_png(pdf, k, dpi, band) for band in ZOOM_BANDS] if h > w else \
+                [pdf_render.render_png(pdf, k, min(dpi, 2576 / (w / 72)))]       # a landscape page: one picture
+        except Exception:
+            continue
+        half = "top and bottom half" if len(imgs) == 2 else "whole page"
+        out.append({"type": "text", "text": f"Close-up of attached PDF page {k} (original page {p}), {half}, for reading "
+                                            f"small dimension text. Cite page {k} for values read here."})
+        out += [{"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                             "data": base64.b64encode(b).decode()}} for b in imgs]
+    return out
+
+
 def require_key(key=None, rules=None):
     """The API key: explicit, else the key stored under the name [datasheet] api_key_env gives (default
     ANTHROPIC_API_KEY; `ecadlib keys set`, the setup page), else an environment variable of that name, else
@@ -1081,6 +1114,53 @@ def self_check(spec, ext, review):
     return info
 
 
+def table_check(pkg, tables, offset, review):
+    """The model's dimensions against the dimension tables read in code (ds_route.dim_tables): matched by the
+    drawing's symbol (label) on the page the model cited, else the page after or before it (ST prints the table under
+    the figure, on the next page). A number that differs is flagged; a blank the table fills is filled, with a
+    review line. Spans ("9.00 BSC" across min/nom/max) are only compared, never filled."""
+    if not tables or not isinstance(pkg, dict):
+        return
+    by_page = {}
+    for t in tables:
+        by_page.setdefault(t["page"], []).append(t)
+    items = [(k, pkg.get(k)) for k in DIMS + NUM_DIMS]
+    items += [(f"exposed_pad.{x}", (pkg.get("exposed_pad") or {}).get(x)) for x in ("length", "width")]
+    for k, d in items:
+        if not isinstance(d, dict) or not d.get("label"):
+            continue
+        lab = re.sub(r"(\s*\(\d*\)?)+$", "", str(d["label"]).strip())
+        pg = _pg(d.get("page"), offset)
+        row, tp = None, None
+        for q in ((pg, pg + 1, pg - 1) if isinstance(pg, int) else ()):
+            row = next((t["rows"][lab] for t in by_page.get(q, []) if lab in t["rows"]), None)
+            if row:
+                tp = q
+                break
+        if not row:
+            continue
+        k_mm = TO_MM.get(d.get("unit") or "mm")
+        if k_mm is None:
+            continue
+        tol = 0.006 if k_mm == 1.0 else 0.03          # an inch column is rounded differently from the mm one
+        mine = {x: d.get(x) * k_mm for x in ("min", "nom", "max") if isinstance(d.get(x), (int, float))}
+        where = f"the dimension table on p{tp} (read in code)"
+        if row["span"]:
+            v = next(row[x] for x in ("min", "nom", "max") if row[x] is not None)
+            if mine and not any(abs(m - v) <= tol for m in mine.values()):
+                review.append(f"{k} ({lab}) {', '.join(f'{x} {m:g}' for x, m in mine.items())} mm, {where} says {v:g} mm: check the read")
+            continue
+        off = [f"{x} {mine[x]:g}, table {row[x]:g}" for x in mine if row[x] is not None and abs(mine[x] - row[x]) > tol]
+        if off:
+            review.append(f"{k} ({lab}) differs from {where}: {'; '.join(off)} mm: check the read")
+            continue
+        fill = [x for x in ("min", "nom", "max") if x not in mine and row[x] is not None]
+        if fill and k_mm == 1.0:
+            for x in fill:
+                d[x] = row[x]
+            review.append(f"{k} ({lab}) {', '.join(f'{x} {row[x]:g}' for x in fill)} mm filled from {where}; the read left it blank")
+
+
 def ordering_check(pkg, facts, review):
     """The pin count the ordering table gives for this MPN (ds_route.ordering_facts, read in code): fills a pin_count
     the read left blank, and flags one that differs. Never overrides what the drawing gave."""
@@ -1095,16 +1175,17 @@ def ordering_check(pkg, facts, review):
         review.append(f"pin_count {n} differs from {src}: check the package variant")
 
 
-def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, facts=None):
+def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, facts=None, tables=None):
     """Extraction -> {spec, symbol, sidecar, needs_review}. Never alters a value to make a check pass."""
     review = [f"document contains instruction-like text (ignored): {q[:200]!r}" for q in ext["embedded_instructions"]]
     if isinstance(offset, list):                      # auto page selection: page k of the sent PDF is offset[k - 1]
         bad = sorted({p for p in _cited_pages(ext) if isinstance(p, int) and not 1 <= p <= len(offset)})
         if bad:
             review.append(f"the model cited page(s) {bad} of the {len(offset)} pages sent: those values have no source page")
-    if facts:
-        ext = dict(ext, package=dict(ext["package"]))
+    if facts or tables:
+        ext = dict(ext, package=copy.deepcopy(ext["package"]))
         ordering_check(ext["package"], facts, review)
+        table_check(ext["package"], tables, offset, review)
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
@@ -1611,7 +1692,7 @@ class Reader:
             url, where = usable[0]
             prov = {"url": url, "where": where, "sent_as": "url", "note": "not downloaded here; sent as a URL for the API to fetch"}
             src_hash, lv, why, n = "url" + hashlib.sha256(url.encode()).hexdigest(), [None], {}, None
-            facts = None
+            facts = tables = None
         else:
             url, where, src_hash, n = prov["url"], prov["where"], prov["sha256"], prov.get("pages") or pdf_pages(data)
             lv, why = [None], {}
@@ -1620,12 +1701,14 @@ class Reader:
             if not pages and self.page_budget and n and n > self.page_budget:
                 if texts:
                     lv, why = DR.levels(texts, self.page_budget, part, package, n, self._page_marks(data, src_hash))
+            sent = sorted({p for L in lv if isinstance(L, list) for p in L}) or (list(range(1, n + 1)) if n and n <= 40 else [])
+            tables = DR.dim_tables(data, sent, texts) if texts and sent and not pages else None
         prov["attempts"] = attempts
         sent0 = len(lv[0]) if isinstance(lv[0], list) else None
         rung, reason = self.router.start(package, n, sent0)
         base = {"name": name or part, "part": part, "package": package, "url": url, "where": where, "pages": pages,
                 "data": data, "src_hash": src_hash, "levels": lv, "n_pages": n, "base_prov": prov, "fp_needed": fp_needed,
-                "facts": facts,
+                "facts": facts, "tables": tables,
                 "route": {"route": self.router.route, "ladder": self.router.ladder, "start": reason, "picked": why,
                           "attempts": []}}
         first = self._at(base, rung, 0)
@@ -1677,6 +1760,13 @@ class Reader:
                                       cache_doc=not self.deferred)
         from .llm import rails as LRL
         sig = LRL.signature(self.info(model)["plan"])  # "" for a plain request: the cache keys of before
+        if self.cfg.get("zoom_drawings") and cut is not None:
+            zoom = zoom_blocks(cut, lv, base["route"]["picked"])
+            if zoom:                                  # before the task text; its own cache key (a different request)
+                body["messages"][0]["content"][1:1] = zoom
+                sig = f"{sig}|zoom" if sig else "zoom"
+                prov["zoom_pages"] = sorted({int(b["text"].split("original page ")[1].split(")")[0]) for b in zoom
+                                             if b["type"] == "text"})
         key = ResultCache.key(base["src_hash"], model, base["part"], base["package"],
                               offset if isinstance(offset, list) else [offset, hint], self.effort + (f"|{sig}" if sig else ""))
         route = dict(base["route"], attempts=list(base["route"]["attempts"]), rung=rung, level=level, model=model)
@@ -1690,7 +1780,7 @@ class Reader:
         try:
             ext = parse_message(rec["message"])
             res = process(ext, job["part"], job["url"], rec.get("model") or job["model"], job["offset"], rec["message"],
-                          job.get("facts"))
+                          job.get("facts"), job.get("tables"))
         except DatasheetError as e:
             return "failed", [str(e)], None
         kind, why = DR.assess(res)
@@ -1718,7 +1808,7 @@ class Reader:
     def _result(self, job, rec):
         ext = parse_message(rec["message"])
         res = process(ext, job["part"], job["url"], rec.get("model") or self.model, rec.get("page_offset", job["offset"]), rec["message"],
-                      job.get("facts"))
+                      job.get("facts"), job.get("tables"))
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
         if job.get("route"):
             res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k != "picked"}

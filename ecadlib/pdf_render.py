@@ -1,6 +1,8 @@
 """PDF page -> PNG, for the page pictures sent to vision models and drawn by visual-check.
 
   render_png(pdf, page, dpi)  -> PNG bytes of one page (1-based); pdf is bytes or a path
+  render_png(..., band=(0, .55)) -> only that horizontal band of the page (fractions of its height, from the top)
+  page_size(pdf, page)        -> (width, height) in points
   renderer()                  -> "pypdfium2", "pdftoppm" or None (what render_png will use)
 
 pypdfium2 (Apache-2.0 / BSD-3, a pip wheel on Windows, macOS and Linux; pdfplumber already depends on it) renders in
@@ -38,7 +40,20 @@ def _png(w, h, rows):
             + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
-def _pdfium(pdf, page, dpi):
+def page_size(pdf, page):
+    import io
+    from pypdf import PdfReader
+    r = PdfReader(io.BytesIO(pdf) if isinstance(pdf, (bytes, bytearray)) else str(pdf))
+    box = r.pages[page - 1].cropbox
+    w, h = float(box.width), float(box.height)
+    return (h, w) if (r.pages[page - 1].get("/Rotate") or 0) % 180 else (w, h)
+
+
+def _band(h, band):
+    return (0, h) if not band else (max(0, int(h * band[0])), min(h, int(round(h * band[1]))))
+
+
+def _pdfium(pdf, page, dpi, band=None):
     import pypdfium2 as pdfium
     doc = pdfium.PdfDocument(pdf if isinstance(pdf, (bytes, bytearray)) else str(pdf))
     try:
@@ -51,17 +66,18 @@ def _pdfium(pdf, page, dpi):
             raise RenderError(f"unexpected pdfium bitmap mode {bm.mode}")
         buf = bytes(bm.buffer)
         rows = []
-        for y in range(h):
+        y0, y1 = _band(h, band)
+        for y in range(y0, y1):
             r = buf[y * stride:y * stride + w * n]
             if n == 4:                                   # drop alpha / padding byte
                 r = bytes(b for i, b in enumerate(r) if i % 4 != 3)
             rows.append(r)
-        return _png(w, h, rows)
+        return _png(w, y1 - y0, rows)
     finally:
         doc.close()
 
 
-def _poppler(pdf, page, dpi):
+def _poppler(pdf, page, dpi, band=None):
     exe = shutil.which("pdftoppm")
     if not exe:
         raise RenderError("no PDF renderer: pip install pypdfium2 (or install poppler's pdftoppm)")
@@ -72,7 +88,12 @@ def _poppler(pdf, page, dpi):
         else:
             src = Path(pdf)
         stem = Path(d) / "p"
-        r = subprocess.run([exe, "-png", "-r", str(int(dpi)), "-f", str(page), "-l", str(page), "-singlefile",
+        crop = []
+        if band:
+            w, h = (round(v * dpi / 72) for v in page_size(pdf, page))
+            y0, y1 = _band(h, band)
+            crop = ["-x", "0", "-y", str(y0), "-W", str(w), "-H", str(y1 - y0)]
+        r = subprocess.run([exe, "-png", "-r", str(int(dpi)), "-f", str(page), "-l", str(page), *crop, "-singlefile",
                             str(src), str(stem)], capture_output=True, timeout=120)
         f = stem.with_suffix(".png")
         if r.returncode or not f.exists():
@@ -80,9 +101,9 @@ def _poppler(pdf, page, dpi):
         return f.read_bytes()
 
 
-def render_png(pdf, page, dpi=110):
+def render_png(pdf, page, dpi=110, band=None):
     try:
         import pypdfium2  # noqa: F401
     except ImportError:
-        return _poppler(pdf, page, dpi)
-    return _pdfium(pdf, page, dpi)
+        return _poppler(pdf, page, dpi, band)
+    return _pdfium(pdf, page, dpi, band)

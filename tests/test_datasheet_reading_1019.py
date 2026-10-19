@@ -292,3 +292,137 @@ def test_pdf_render_pypdfium2_and_fallback():
     from ecadlib.llm import rails
     blocks = rails.page_images(pdf, [1, 2])
     assert [b["type"] for b in blocks] == ["text", "image", "text", "image"]
+
+
+# ---------------------------------------------------------------- dimension tables read in code
+def _placed_pdf(words, lines=()):
+    """One-page PDF: words [(x, y, text)] in Helvetica 8 pt, and ruled lines [(x0, y0, x1, y1)]."""
+    ops = "".join(f"BT /F1 8 Tf {x} {y} Td ({t}) Tj ET\n" for x, y, t in words)
+    ops += "".join(f"{a} {b} m {c} {d} l S\n" for a, b, c, d in lines)
+    objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [5 0 R] /Count 1 >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            f"<< /Length {len(ops)} >>\nstream\n{ops}endstream",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>"]
+    out, offs = b"%PDF-1.4\n", []
+    for i, o in enumerate(objs, 1):
+        offs.append(len(out))
+        out += f"{i} 0 obj\n{o}\nendobj\n".encode()
+    x = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode() + b"".join(f"{o:010d} 00000 n \n".encode() for o in offs)
+    return out + f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n".encode()
+
+
+ST_ROWS = [["Symbol", "millimeters", "", "", "inches", "", ""], ["", "Min", "Typ", "Max", "Min", "Typ", "Max"],
+           ["A", "-", "-", "1.60", "-", "-", "0.0630"], ["b(9)(11)", "0.30", "0.37", "0.45", "0.0118", "0.0146", "0.0177"],
+           ["D(4)", "9.00 BSC", "", "", "0.3543 BSC", "", ""], ["e", "0.80 BSC", "", "", "0.0315 BSC", "", ""],
+           ["L", "0.45", "0.60", "0.75", "0.0177", "0.0236", "0.0295"]]
+
+
+def _st_pdf():
+    """ST's ruled table: a grid, "9.00 BSC" in a cell merged across min/typ/max, inches beside mm."""
+    xs, top, h = [60, 120, 170, 220, 270, 330, 380, 430], 700, 16
+    words, lines = [], []
+    for r, row in enumerate(ST_ROWS):
+        y = top - r * h
+        for c, t in enumerate(row):
+            if t:
+                words.append((xs[c] + 3, y - 11, t))
+    for r in range(len(ST_ROWS) + 1):
+        lines.append((xs[0], top - r * h, xs[-1], top - r * h))
+    for c, x in enumerate(xs):
+        lines.append((x, top, x, top - len(ST_ROWS) * h))
+    return _placed_pdf(words, lines)
+
+
+def _nxp_pdf():
+    """NXP / Nexperia: no ruling, symbols across, max / nom / min down (the SOT23 table of PESD2CANFD24V)."""
+    syms = ["A", "A1", "bp", "c", "D", "E", "e", "e1", "HE", "Lp", "Q"]
+    xs = [110 + 20 * k for k in range(len(syms))]
+    rows = {"max": ["1.1", "0.1", "0.48", "0.15", "3.0", "1.4", "", "", "2.5", "0.45", "0.55"],
+            "nom": ["", "", "", "", "", "", "1.9", "0.95", "", "", ""],
+            "min": ["0.9", "", "0.38", "0.09", "2.8", "1.2", "", "", "2.1", "0.15", "0.45"]}
+    words = [(60, 700, "Dimensions (mm are the original dimensions)"), (75, 680, "Unit")] + [(x, 680, s) for x, s in zip(xs, syms)]
+    for k, (lab, vals) in enumerate(rows.items()):
+        y = 668 - 9 * k
+        words.append((88, y, lab))
+        if lab == "nom":
+            words.append((66, y, "mm"))
+        words += [(x, y, v) for x, v in zip(xs, vals) if v]
+    return _placed_pdf(words)
+
+
+def test_dim_tables_st_ruled_and_nxp_unruled():
+    from ecadlib import ds_route as DR
+    st = DR.dim_tables(_st_pdf(), [1])
+    assert len(st) == 1 and st[0]["unit"] == "mm" and st[0]["page"] == 1
+    rows = st[0]["rows"]
+    assert rows["b"] == {"min": 0.30, "nom": 0.37, "max": 0.45, "span": False}       # footnote marks dropped
+    assert rows["A"]["max"] == 1.6 and rows["A"]["min"] is None and not rows["A"]["span"]
+    assert rows["D"]["min"] == 9.0 and rows["D"]["span"] and rows["e"]["min"] == 0.8   # "9.00 BSC" across the columns
+    nx = DR.dim_tables(_nxp_pdf(), [1])
+    r = nx[0]["rows"]
+    assert (r["D"]["min"], r["D"]["max"]) == (2.8, 3.0) and r["e"]["nom"] == 1.9 and r["e1"]["nom"] == 0.95
+    assert (r["HE"]["min"], r["HE"]["max"]) == (2.1, 2.5) and r["A1"] == {"min": None, "nom": None, "max": 0.1, "span": False}
+    from tests.test_visual_check import make_pdf
+    assert DR.dim_tables(make_pdf(["Symbol Parameter Conditions Min Typ Max Unit"]), [1]) == []   # electrical: not this
+
+
+def test_table_check_flags_fills_and_spans():
+    from ecadlib import datasheet as D
+    tables = [{"page": 9, "unit": "mm", "rows": {
+        "D": {"min": 2.8, "nom": None, "max": 3.0, "span": False}, "E": {"min": 1.2, "nom": None, "max": 1.4, "span": False},
+        "e": {"min": 0.95, "nom": None, "max": None, "span": True}, "b": {"min": 0.38, "nom": None, "max": 0.48, "span": False}}}]
+    dim = lambda lab, mn, nm, mx, unit="mm", page=3: {"label": lab, "min": mn, "nom": nm, "max": mx, "unit": unit,
+                                                      "page": page, "figure": ""}
+    pkg = {"body_length": dim("D", 2.8, None, 3.1), "body_width": dim("E", None, None, 1.4),
+           "pitch": dim("e", None, 0.95, None), "lead_width": dim("b(2)", 0.38, None, 0.48, page=4)}
+    review = []
+    D.table_check(pkg, tables, [2, 5, 9, 10], review)        # sent page 3 = page 9 of the PDF; page 4 = 10 (next: 9)
+    assert any("body_length (D) differs" in r and "max 3.1, table 3" in r for r in review)
+    assert pkg["body_length"]["max"] == 3.1                  # a differing value is flagged, never changed
+    assert pkg["body_width"]["min"] == 1.2 and any("body_width (E) min 1.2 mm filled" in r for r in review)
+    assert not any("pitch" in r or "lead_width" in r for r in review)   # a span that agrees, a footnoted label on p+1
+    pkg = {"pitch": dim("e", None, 1.0, None)}
+    review = []
+    D.table_check(pkg, tables, [2, 5, 9], review)
+    assert review and "pitch (e) nom 1 mm" in review[0] and "says 0.95 mm" in review[0]
+    review = []
+    D.table_check({"body_length": dim("D", 0.1102, None, 0.1181, unit="in")}, tables, [2, 5, 9], review)
+    assert review == []                                      # inches, within the inch column's rounding
+    from ecadlib import ds_route as DR
+    assert not any(DR.INCOMPLETE.search(r) or DR.FAILED.search(r) for r in
+                   ["body_length (D) differs from the dimension table on p9 (read in code): max 3.1, table 3 mm: check the read"])
+
+
+def test_zoom_blocks_close_ups_of_drawing_pages_only():
+    import base64, io
+    from PIL import Image
+    from ecadlib import datasheet as D
+    from tests.test_visual_check import make_pdf
+    pdf = make_pdf(["PIN TABLE", "PACKAGE OUTLINE", "LAND PATTERN"])
+    why = {12: ["pinout"], 40: ["drawing"], 41: ["land", "drawing (continued)"]}
+    z = D.zoom_blocks(pdf, [12, 40, 41], why)
+    texts = [b["text"] for b in z if b["type"] == "text"]
+    assert texts[0].startswith("Close-up of attached PDF page 2 (original page 40), top and bottom half")
+    assert "Cite page 3" in texts[1] and len(z) == 6
+    for b in z[1:3]:
+        im = Image.open(io.BytesIO(base64.b64decode(b["source"]["data"])))
+        assert im.width == D.ZOOM_PX and -(-im.width // 28) * -(-im.height // 28) <= 4784   # sent as rendered
+    assert D.zoom_blocks(pdf, [12, 40, 41], {12: ["pinout"]}) == []
+    assert D.SETTINGS["zoom_drawings"] is False                                       # off until an A/B says so
+
+
+def test_the_reader_sends_close_ups_only_when_zoom_drawings_is_on():
+    from tests.test_ds_route import reader
+    import tempfile
+    data = bookmarked(mcu_pages(), MCU_MARKS)
+    with tempfile.TemporaryDirectory() as d:
+        rd = reader(d, {"https://a/mcu.pdf": data})
+        off = rd.job("TESTMCU100", [("https://a/mcu.pdf", "BOM")], "LQFP-100")
+        assert not any(b["type"] == "image" for b in off["body"]["messages"][0]["content"])
+        rd.cfg = dict(rd.cfg, zoom_drawings=True)
+        on = rd.job("TESTMCU100", [("https://a/mcu.pdf", "BOM")], "LQFP-100")
+    content = on["body"]["messages"][0]["content"]
+    assert content[0]["type"] == "document" and content[-1]["type"] == "text" and content[-1]["text"].startswith("Part:")
+    assert any(b["type"] == "image" for b in content) and on["prov"]["zoom_pages"]
+    assert on["key"] != off["key"]                    # a different request: never answered from the plain one's cache
