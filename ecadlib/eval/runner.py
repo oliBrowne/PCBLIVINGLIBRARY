@@ -408,12 +408,14 @@ def _symbol_pins(path):
         _, syms = AL.read_schlib(path)
     except (OSError, ValueError):
         return None
-    pins = {}
-    for s in syms:
+    pins = {}                                         # num -> names: one pin repeated in each part of a multi-part
+    for s in syms:                                    # symbol is one pin; one number with two names is scored as such
         for r in s["records"]:
             if r.get("RECORD") == "2" and "num" in r:
-                pins.setdefault(r["num"], r["name"])
-    return list(pins.items())
+                got = pins.setdefault(r["num"], [])
+                if r["name"] not in got:
+                    got.append(r["name"])
+    return [(n, nm) for n, names in pins.items() for nm in names]
 
 
 def _cost(case_used, model):

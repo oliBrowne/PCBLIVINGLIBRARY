@@ -344,11 +344,14 @@ def prices(model, prompt_tokens=0):
 
 def usage_usd(model, usage, batch=False):
     """USD of one response from its usage block (input, cache write 1.25x, cache read, output); half on the Batches
-    API. None when the model has no known price."""
+    API. None when the model has no known price, or when there is no usage (a gateway or server that sends none: the
+    cost is unknown, not $0)."""
     from . import datasheet as D
     u = usage or {}
-    tin, cw, cr, tout = (int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens",
-                                                     "cache_read_input_tokens", "output_tokens"))
+    tin, cw, cr, tout = (max(0, int(u.get(k) or 0)) for k in ("input_tokens", "cache_creation_input_tokens",
+                                                             "cache_read_input_tokens", "output_tokens"))
+    if not (tin or cw or cr or tout):
+        return None
     p = prices(model, tin + cw + cr)
     if not p:
         return None
@@ -482,10 +485,13 @@ def page_texts(data):
         import logging, pypdf
         logging.getLogger("pypdf").setLevel(logging.ERROR)
         rd = pypdf.PdfReader(io.BytesIO(data))
+        if rd.is_encrypted and not rd.decrypt(""):    # a user password: the text can't be read here
+            return None
+        pages = list(rd.pages)
     except Exception:
         return None
     out = []
-    for pg in rd.pages:
+    for pg in pages:
         try:
             out.append(pg.extract_text() or "")
         except Exception:
