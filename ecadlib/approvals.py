@@ -84,17 +84,41 @@ def _fold(s):
     return " ".join(unicodedata.normalize("NFKC", str(s or "")).casefold().split())
 
 
+# letters of other scripts that look like Latin ones (after casefold), as Unicode's confusables list maps them: a
+# Cyrillic 'а' in 'Аnn' is not a second person
+_CONFUSABLE = str.maketrans({
+    "а": "a", "в": "b", "е": "e", "ё": "e", "з": "3", "і": "i", "ї": "i", "ј": "j", "к": "k", "м": "m", "н": "h",
+    "о": "o", "р": "p", "с": "c", "т": "t", "у": "y", "х": "x", "ѕ": "s", "ԁ": "d", "һ": "h", "ӏ": "l", "ԛ": "q",
+    "ԝ": "w", "ɡ": "g", "α": "a", "β": "b", "ε": "e", "η": "n", "ι": "i", "κ": "k", "μ": "m", "ν": "v", "ο": "o",
+    "ρ": "p", "τ": "t", "υ": "u", "χ": "x", "ζ": "z", "ω": "w", "ϲ": "c", "ı": "i", "ł": "l", "ø": "o", "đ": "d",
+    "ħ": "h", "ŀ": "l"})
+_TRAIL = ".,;:!?-_'\"`"
+
+
+def skeleton(s):
+    """One spelling for text a person types as their name or e-mail: Unicode forms (NFKC) and case folded, zero-width
+    and other invisible format characters dropped, accents removed (Zoë = Zoe), and letters of other scripts that
+    look Latin read as Latin (a Cyrillic or Greek 'а' / 'ο' is an 'a' / 'o')."""
+    import unicodedata
+    s = unicodedata.normalize("NFKC", str(s or ""))
+    s = "".join(ch for ch in s if unicodedata.category(ch) not in ("Cf", "Cc", "Mn", "Me") or ch in "\t\n")
+    s = "".join(ch for ch in unicodedata.normalize("NFKD", s) if unicodedata.category(ch) not in ("Mn", "Me"))
+    return " ".join(unicodedata.normalize("NFKC", s).casefold().translate(_CONFUSABLE).split())
+
+
 def person(who):
     """'Ann Lee <ann@x.com>', 'ann lee', 'ann@x.com', 'Ann Lee (ann@x.com)' -> (folded name, folded e-mail): spacing,
-    case and Unicode forms folded; a +tag in the e-mail's local part dropped (ann+2@x.com is ann@x.com's mailbox)."""
-    s = _fold(who)
+    case, Unicode forms, accents, invisible characters and look-alike letters folded (skeleton); a +tag in the e-mail's
+    local part dropped (ann+2@x.com is ann@x.com's mailbox), and a mailto: or trailing punctuation ('Ann.',
+    'ann@x.com.') left out."""
+    s = re.sub(r"mailto:", " ", skeleton(who))
     m = _EMAIL.search(s)
     email = ""
     if m:
         local, _, dom = m.group(0).partition("@")
-        email = f"{local.split('+', 1)[0]}@{dom}"
+        email = f"{local.split('+', 1)[0].strip(_TRAIL)}@{dom.strip(_TRAIL)}"
         s = s[:m.start()] + s[m.end():]
-    name = " ".join(re.sub(r"[<>()\[\]\"']", " ", s).split())
+    name = " ".join(re.sub(r"[<>()\[\]\"']", " ", s).split()).strip(_TRAIL + " ")
     return name, email
 
 

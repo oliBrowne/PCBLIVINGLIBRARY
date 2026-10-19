@@ -302,10 +302,16 @@ def check_digest(lg, group, part, digest):
     if not d:
         raise CG.ChangeError(f"{part}: say which held change you approve: --digest D, the digest {show} prints with the "
                              f"diff, so a change made after you looked at it is never approved by mistake")
-    if len(d) < 6 or not cur.startswith(d):
+    if len(d) < 6:
+        raise CG.ChangeError(f"{part}: --digest needs at least 6 characters of the digest {show} prints")
+    if not cur.startswith(d):
+        seen = {x for p in group for e in lg.history(p["part"]) if e.get("event") in ("hold", "approve", "reject",
+                                                                                        "refused", "superseded")
+                for x in (e.get("digest"), e.get("review")) if x}
+        if not any(str(x).startswith(d) for x in seen):          # a typo, or a digest of something else
+            raise CG.ChangeError(f"{part}: no held change has that digest ({d[:12]}); copy it from {show}")
         raise CG.ChangeError(f"{part}: the held change is not the one you reviewed (digest {d[:12]}): it was proposed "
-                             f"again since you looked; read it again with {show} and approve that one" if len(d) >= 6
-                             else f"{part}: --digest needs at least 6 characters of the digest {show} prints")
+                             f"again since you looked; read it again with {show} and approve that one")
     return cur
 
 
@@ -349,8 +355,10 @@ def _approve(plan, parts, who, comment, role, digests):
                                      f"(r{prop['base']} -> r{head and head['revision']}); run the writer again")
         review = check_digest(lg, g, asked, (digests or {}).get(asked)) if digests is not None else None
         people = _people(g)
-        if any(AP.same_person(who, x) for x in people):
-            raise CG.ChangeError(f"{g[0]['part']}: {who} approved this change already"
+        first = next((x for x in people if AP.same_person(who, x)), None)
+        if first is not None:                  # name the approval on record: "Ann" and "Аnn" are one person
+            same = "" if CD.shown(first) == CD.shown(who) else f" ({CD.shown(who)} is the same person)"
+            raise CG.ChangeError(f"{g[0]['part']}: {CD.shown(first)} approved this change already{same}"
                                  + (f"; it needs {pol['approvers']} different people" if pol["approvers"] > 1 else ""))
         final = len(people) + 1 >= pol["approvers"]
         warnings = []
@@ -417,6 +425,22 @@ def _step_restore(backup, heads, folder):
             f.write_bytes(data)
 
 
+def _mix_of(it, folder, versions):
+    """Every file of `it` on disk is byte for byte one of these versions' (the released head, the proposal), and its
+    fields are one version's: what an approval cut short (killed while it put the files in place) leaves behind. That
+    is no newer edit, so it is not reported as overwritten."""
+    vs = [v for v in versions if v]
+    for kind, rel in LG.item_files(it).items():
+        f = Path(rel) if Path(rel).is_absolute() else folder / rel
+        if not f.is_file():
+            continue
+        sha = LG.sha_bytes(f.read_bytes())
+        if not any(((v.get("files") or {}).get(kind) or {}).get("sha256") == sha for v in vs):
+            return False
+    now = json.loads(json.dumps(LG.content_of(it)))
+    return any(now == json.loads(json.dumps(v.get("item") or {})) for v in vs)
+
+
 def _put_proposed(plan, items, group, lg, who=""):
     """Put the proposed files and fields in place and run the release check on them. A version that fails it is
     replaced by the released one again and raises ChangeError. A newer edit on disk (neither the released version
@@ -435,7 +459,7 @@ def _put_proposed(plan, items, group, lg, who=""):
             now = FP.of_item(it, folder)["hashes"]["digest"]
         except Exception:                      # unreadable now: it is replaced, so keep it
             now = None
-        if now not in lg.digests(heads[p["part"]]) | lg.digests(p):    # recomputed: a head an older ecadlib stored
+        if now not in lg.digests(heads[p["part"]]) | lg.digests(p) and not _mix_of(it, folder, (heads[p["part"]], p)):
             kept = lg.snapshot_files(it, folder)
             text = (f"{p['part']}: the files on disk had a newer edit than the held change (made after it was held); "
                     f"the approved change replaced it. Its bytes are kept (ledger `overwritten`; `ecadlib part history`)")
@@ -456,7 +480,7 @@ def _put_proposed(plan, items, group, lg, who=""):
             U.save_manifest(mp, man)
     sel = [byname[p["part"]] for p in group if p["part"] in byname]
     checked = [i for i in sel if not i.get("_manifest")]   # kicad_import parts have no plan fields to check
-    RC.apply(checked, folder)
+    RC.apply(checked, folder, change_holds=False)     # the version being approved
     bad = [i for i in checked if i.get("status") == "held"]
     reasons = "; ".join(f"{i['name']}: {', '.join(i.get('hold_reasons') or [])}" for i in bad)
     if bad:                                    # the approved version fails the release check: put the released one back
@@ -474,8 +498,14 @@ def _put_proposed(plan, items, group, lg, who=""):
                 byname[p["part"]]["change"] = CG.held_block(p, lg)
                 if heads[p["part"]] is None:
                     byname[p["part"]]["status"] = "held"
+        hint = None
+        if "parity:" in reasons:               # e.g. only the .kicad_mod was edited: it no longer matches the .PcbLib
+            hint = ("the part's KiCad and Altium files must say the same (parity): make the same change to the other "
+                    "file too (the .PcbLib for a .kicad_mod edit, or the other way round), then run the writer again so "
+                    "it proposes both; or `ecadlib part reject` this change. A library that accepts a difference sets "
+                    "[release] parity = \"warn\" in ecadlib.toml")
         raise CG.ChangeError(f"not applied: the proposed version fails the release check ({reasons}); the released "
-                             f"version stays")
+                             f"version stays", hint)
     return warnings
 
 
@@ -655,7 +685,7 @@ def adopt(plan, parts, who=None, comment="", all_lost=False, accept_changes=Fals
         plan, items = _load(plan)
         who = who or AP.identity(None, cwd=plan.parent)
         g = CG.Guard(plan.parent, "adopt", user=who)
-        lost = [i["name"] for i in items if CG.released(i) and not g.ledger.head(i["name"]) and g.lost_history(i["name"])]
+        lost = [i["name"] for i in items if CG.released(i) and not g.ledger.head(i["name"]) and g.lost_history(i["name"], i)]
         names = lost if all_lost else list(parts)
         bad = [n for n in names if n not in lost]
         if bad:
@@ -666,11 +696,17 @@ def adopt(plan, parts, who=None, comment="", all_lost=False, accept_changes=Fals
         compared, olds, refused = {}, {}, []
         for it in (i for i in items if i["name"] in names):
             old, where = g.stored_fingerprint(it["name"])
+            lock = g.lock_check(it) if old is None else None
+            if old is None and lock == "":                 # the files are the bytes the librarian built and recorded
+                compared[it["name"]] = (f"compared with library.lock.json: the files on disk are the ones the librarian "
+                                        f"built", [])
+                continue
             if old is None:
                 used = [(p, r) for p, r, _ in LG.used_in(plan.parent, it["name"]) if r]
                 compared[it["name"]] = (
                     "not compared: no earlier fingerprint is left in .ecadlib/blobs" +
-                    (f" ({LG.USAGE} records r{used[0][1]} in use by {used[0][0]}, but not its content)" if used else ""),
+                    (f" ({LG.USAGE} records r{used[0][1]} in use by {used[0][0]}, but not its content)" if used else "") +
+                    (f"; {lock}" if lock else ""),
                     None)
                 refused.append(it["name"])
                 continue
