@@ -55,16 +55,21 @@ def group(parts, columns=None, source="KiCad"):
     custom = _field_map(names, columns)
     fmap = {f: [k] for k, f in STD.items() if k in names or f in ("designator", "value")}
     fmap.update(custom)
-    groups = {}
+    groups, warned = {}, {}
     for p in parts:
         ln = {f: next((v for v in (str(p["fields"].get(k, "")).strip() for k in ks) if v), "")
               for f, ks in fmap.items() if f != "designator"}
         if ln.get("datasheet") == "~":
             ln["datasheet"] = ""
+        from .bom_triage import dnp_cell, dnp_written
         dnp = p["dnp"]
-        if "dnp" in ln or "fitted" in ln:                      # a house "DNP" / "Fitted" field as well as KiCad's flag
-            from .bom_triage import dnp_cell
+        house = "dnp" in ln or "fitted" in ln
+        if house:                                              # a house "DNP" / "Fitted" field as well as KiCad's flag
             dnp = dnp or dnp_cell(ln.pop("dnp", "")) or dnp_cell(ln.pop("fitted", ""), "fitted")
+        said = dnp_written(ln)                                 # Value 'DNP' / '10k DNF' (the KiCad 5/6 habit)
+        if said and not dnp:
+            dnp = True
+            warned.setdefault((said, house), []).append(p["ref"])
         key = (tuple(sorted(ln.items())), dnp)
         groups.setdefault(key, (ln, dnp, []))[2].append(p["ref"])
     lines = []
@@ -78,6 +83,11 @@ def group(parts, columns=None, source="KiCad"):
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
         lines.append(d)
+    if warned:
+        from .bom_triage import warn_dnp_written
+        for (said, house), refs in warned.items():
+            warn_dnp_written(", ".join(sorted(dict.fromkeys(refs), key=_natkey)), said,
+                             "the DNP field is not set" if house else f"the {source} DNP flag is not set")
     lines.sort(key=lambda d: _natkey(d["designator"].split(",")[0]))
     mapping = {f: " | ".join(ks) for f, ks in fmap.items()}
     if not lines:

@@ -345,3 +345,22 @@ def test_bom37_one_part_per_passive_value_however_it_is_spelled():
     rows = to_rows([{"designator": d, "value": v, "footprint": f} for d, v, f in vals])
     names = sorted(n for df in rows.values() for n in df["Part Number"])
     assert names == ["CAP-0402-100nF", "CAP-0402-100nF50V", "CAP-0402-1µF", "CAP-0603-100nF", "RES-0603-4k7"], names
+
+
+def test_bom31_bom45_dnp_written_in_value_or_mpn_wins_over_an_empty_flag():
+    """KiCad 8 always exports a DNP column, and a .kicad_sch always says (dnp no): Value 'DNP' / '10k DNF' / MPN
+    'DNP' was then bought and built as a fitted part. Now DNP in every format, with a warning naming the line."""
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        csv, _ = T.read_bom(_write("Designator,Value,MPN,DNP\nR1,10k,RC0603,\nR2,DNP,,\nR3,10k DNF,RC0603,\n"
+                                   "R4,10k,DNP,\nR5,10k,RC0603,x\n"))
+    assert [l["dnp"] for l in csv] == [False, True, True, True, True], csv
+    assert "R4: MPN says DNP but the DNP column is empty: treated as DNP; check the BOM" in err.getvalue()
+    assert "R5" not in err.getvalue() and "R1" not in err.getvalue(), err.getvalue()
+    d = Path(tempfile.mkdtemp())
+    (d / "v.kicad_sch").write_text(_sch(_sym("R1", "DNP") + "\n" + _sym("R2", "10k DNF") + "\n" + _sym("R3", "10k")))
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        sch, _ = T.read_bom(d / "v.kicad_sch")
+    assert [(l["designator"], l["dnp"]) for l in sch] == [("R1", True), ("R2", True), ("R3", False)], sch
+    assert "R1, R2: Value says DNP but the KiCad schematic DNP flag is not set: treated as DNP" in err.getvalue(), err.getvalue()

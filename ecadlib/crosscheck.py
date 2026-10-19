@@ -21,7 +21,11 @@ every datasheet part (also when the table matched, and when only the symbol is n
 Comparison is in code (compare()) with the tolerances in TOL: two numbers agree when they are within max(abs, rel x
 value) of each other, or (against the table) when the table's nominal lies inside the min..max the datasheet prints.
 Pin count and pin numbers must be equal; pin names must be equal after normalising case and overbar marks. Agree ->
-the part is accepted as before (a person still verifies every datasheet part) and records "cross-checked". Disagree ->
+the part is accepted as before (a person still verifies every datasheet part) and records "cross-checked" (status
+"agreed"). A table entry found only by the read's OWN package name (the BOM names no package the table resolves) is not
+independent: it shows the read's numbers fit the read's name, which self_check already tests. That outcome is recorded
+as "self-checked" (status "self-checked"), is never counted as an agreement with a second source, and goes on the part's
+review items; auto mode does not add a paid second read for it (cross_check = "always" makes one). Disagree ->
 Held is raised: nothing is written to the library, both values go to the review (never averaged, never one picked).
 A check that could not be made (refusal, unparseable answer, nothing to compare) is recorded as "unchecked" and added
 to the part's review items; it does not hold the part."""
@@ -408,9 +412,15 @@ def run(reader, job, res, model):
     # a table check too weak to stand alone (one field, e.g. only the pin count of a pad-table entry) can hold a part
     # but cannot accept it: when the second read could not be made, the part stays unchecked
     st = [c["status"] for c in checks]
-    ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong]
-    status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok else "unchecked"
+    ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong and not _self(c)]
+    status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
+        else "self-checked" if any(c["status"] == "agreed" for c in strong) else "unchecked"
     return {"mode": mode, "status": status, "checks": checks}
+
+
+def _self(c):
+    """A table check whose entry was chosen by the read's own package name: not an independent source (DS-13)."""
+    return c.get("source") == "standard table" and c.get("via") == "the read's package name"
 
 
 def summary_line(rec):
@@ -425,6 +435,9 @@ def summary_line(rec):
             parts.append(f"{c['against']}: " + "; ".join(f"{LABEL.get(d['field'], d['field'])} read {d['first']}, "
                                                          f"{'table' if c['source'] == 'standard table' else 'second read'} "
                                                          f"{d['second']}" for d in c["disagreed"]))
+        elif c["status"] == "agreed" and _self(c):
+            parts.append(f"self-checked only: {c['against']}, chosen by the read's own package name, fits the read "
+                         f"({', '.join(LABEL.get(f, f) for f in c['agreed'])}); no independent second source")
         elif c["status"] == "agreed":
             parts.append(f"{c['against']} agrees ({', '.join(LABEL.get(f, f) for f in c['agreed'])})")
         else:
@@ -437,19 +450,25 @@ def report_md(rec):
     if not rec:
         return []
     word = {"agreed": "agreed", "disagreed": "disagreed, the part is held", "unchecked": "could not be made",
-            "skipped": "not needed"}.get(rec["status"], rec["status"])
+            "self-checked": "self-checked only (no independent second source)", "skipped": "not needed"}.get(rec["status"], rec["status"])
     out = ["", f"## Cross-check: {word}", "", f"Setting: [datasheet] cross_check = {rec['mode']}", ""]
     if rec["status"] == "skipped":
         return out + [rec.get("why") or ""]
     for c in rec.get("checks") or []:
         out.append(f"* **{c['against']}** ({c['source']}{', ' + c['via'] if c.get('via') and c['source'] == 'standard table' else ''}"
-                   f"{', ' + c['pages'] if c.get('pages') else ''}): {c['status']}" + (f" - {c['why']}" if c.get("why") else ""))
+                   f"{', ' + c['pages'] if c.get('pages') else ''}): "
+                   + ("self-checked (the entry was chosen by this read, so it is not independent)"
+                      if c["status"] == "agreed" and _self(c) else c["status"])
+                   + (f" - {c['why']}" if c.get("why") else ""))
         if c.get("disagreed"):
             out += ["", "| field | this read | other source |", "|---|---|---|"]
             out += [f"| {LABEL.get(d['field'], d['field'])} | {d['first']} | {d['second']} |" for d in c["disagreed"]]
             out.append("")
         if c.get("agreed"):
             out.append(f"  agreed: {', '.join(LABEL.get(f, f) for f in c['agreed'])}")
+    if rec["status"] == "self-checked":
+        out += ["", "**Next:** the BOM names no package the standard table knows, so nothing independent confirmed this "
+                "read. Compare the drawing by hand, put the package in the BOM, or set [datasheet] cross_check = \"always\"."]
     if rec["status"] == "disagreed":
         out += ["", "The part is held and nothing was written to the library. Neither value was picked.",
                 "**Next:** read the drawing, then fix the BOM's package, or read it again with other pages or another model."]
@@ -461,8 +480,9 @@ def review_lines(rows):
     got = [r for r in rows if r.get("cross_check")]
     if not got:
         return []
-    n = {s: sum(r["cross_check"] == s for r in got) for s in ("agreed", "disagreed", "unchecked", "skipped")}
+    n = {s: sum(r["cross_check"] == s for r in got) for s in ("agreed", "self-checked", "disagreed", "unchecked", "skipped")}
     return ["", "## Cross-checks of datasheet reads", "",
-            f"{len(got)} parts: {n['agreed']} agreed with a second source, {n['disagreed']} held for disagreement, "
+            f"{len(got)} parts: {n['agreed']} agreed with a second source, "
+            f"{n['self-checked']} self-checked only (no independent source), {n['disagreed']} held for disagreement, "
             f"{n['unchecked']} could not be checked, {n['skipped']} not needed (footprint from another source).", "",
             "| Part | Cross-check |", "|---|---|"] + [f"| {r['part']} | {r['cross_check']} |" for r in got]

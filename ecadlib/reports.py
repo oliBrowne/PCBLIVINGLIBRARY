@@ -50,8 +50,8 @@ def part_view(it):
         first = [c for c in checks if c["code"] == "crosscheck.disagree"]
         reasons, checks = first + reasons, [c for c in checks if c not in first]
     cc = (it.get("cross_check") or {}).get("status")
-    if cc == "unchecked":
-        checks.append(M.explain("cross-check unchecked: " + str((it.get("cross_check") or {}).get("summary") or "")))
+    if cc in ("unchecked", "self-checked"):
+        checks.append(M.explain(f"cross-check {cc}: " + str((it.get("cross_check") or {}).get("summary") or "")))
     word = M.status_word("allowed" if rc.get("result") == "allowed" else st)
     ch = it.get("change") or {}
     if ch.get("state") == "held":              # change control: the released revision stays until a person decides
@@ -60,7 +60,8 @@ def part_view(it):
     meta = [("Symbol from", M.source_word(src.get("symbol"))), ("Footprint from", M.source_word(src.get("footprint")))]
     if cc:
         meta.append(("Cross-check", {"agreed": "agreed with a second source", "disagreed": "disagreed (held)",
-                                     "unchecked": "could not be made", "skipped": "not needed"}.get(cc, cc)))
+                                     "unchecked": "could not be made", "skipped": "not needed",
+                                     "self-checked": "self-checked only (no independent second source)"}.get(cc, cc)))
     if rc.get("parity"):
         meta.append(("KiCad and Altium", "match" if rc["parity"] == "match" else "differ"))
     if rc.get("height"):

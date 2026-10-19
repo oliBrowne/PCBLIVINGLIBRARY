@@ -2008,7 +2008,7 @@ class Reader:
         cc = CC.run(self, job, res, rec.get("model") or job.get("model") or self.model)
         if cc:
             res["sidecar"]["cross_check"] = res["cross_check"] = cc
-            if cc["status"] == "unchecked":
+            if cc["status"] in ("unchecked", "self-checked"):
                 res["needs_review"].append(f"cross-check: {CC.summary_line(cc)}")
             res["needs_review"] += [f"{INJECTION} (cross-check read): {q[:200]!r}" for c in cc.get("checks") or []
                                     for q in c.get("embedded_instructions") or []]
@@ -2240,7 +2240,7 @@ class Reader:
             mult = BATCH_DISCOUNT if jb else 1.0
             model = j.get("model") or self.model
             pin, pout = price_of(model) or (None, None)
-            tin = None
+            tin, unknown = None, False
             if self.key and self._plain(model):
                 try:
                     with logging_to(self.log_file, self.say):
@@ -2250,16 +2250,27 @@ class Reader:
                     self.say(f"  count_tokens failed ({type(e).__name__}): rough estimate instead")
                     exact = False
             if tin is None:
-                pages = len(j["prov"]["pages_sent"]) if j["prov"].get("pages_sent") else j["prov"].get("pages") or URL_PAGES
+                pages = len(j["prov"]["pages_sent"]) if j["prov"].get("pages_sent") else j["prov"].get("pages")
+                unknown = not pages                   # a PDF sent as a URL, never counted: its size is not known
+                pages = pages or URL_PAGES
                 tin, how = pages * PAGE_TOKENS + 1500, f"rough: {pages} pages x {PAGE_TOKENS}"
-            tin += len(json.dumps(output_schema())) // 4       # the output format (not in count_tokens): rough
+            schema = len(json.dumps(output_schema())) // 4     # the output format (not in count_tokens): rough
+            tin += schema
+            # DS-37: the worst case of a PDF of unknown size is the request's page limit, not the typical URL_PAGES
+            tmax = page_limit(model) * PAGE_TOKENS + 1500 + schema if unknown else tin
+            if unknown:
+                how += f" (size unknown: worst case priced at the {page_limit(model)}-page request limit)"
             from .ds_route import prices
             pin, pout = prices(model, tin) or (None, None)     # the long-prompt tier where the model has one
             cw = 1.0 if jb else CACHE_WRITE
             cost = (tin * cw * pin + OUT_TOKENS * pout) / 1e6 * mult if pin else None
-            worst = worst_usd(model, tin, j["body"]["max_tokens"], cw, mult, fallback=bool(j["body"].get("fallbacks")))
+            worst = worst_usd(model, tmax, j["body"]["max_tokens"], cw, mult, fallback=bool(j["body"].get("fallbacks")))
             calls = j.get("calls") or self._calls(model)  # the small-model steps rail: several calls per read
             worst = worst * calls if worst is not None else None
+            guess = worst                             # unknown size: the worst case at the typical URL_PAGES, used
+            if unknown and worst is not None:         # only once the person confirmed sending it (--yes)
+                guess = worst_usd(model, tin, j["body"]["max_tokens"], cw, mult,
+                                  fallback=bool(j["body"].get("fallbacks"))) * calls
             route_max = worst
             if "rung" in j and worst is not None and self.router.escalate:
                 sent = self._pages_sent(j) or j.get("n_pages") or URL_PAGES
@@ -2269,7 +2280,7 @@ class Reader:
                         if (r, lv) == (j["rung"], j["level"]):
                             continue
                         pg = len(j["levels"][lv]) if isinstance(j["levels"][lv], list) else (j.get("n_pages") or sent)
-                        w = worst_usd(self.router.ladder[r], tin * pg / max(1, sent), j["body"]["max_tokens"], cw, mult,
+                        w = worst_usd(self.router.ladder[r], tmax * pg / max(1, sent), j["body"]["max_tokens"], cw, mult,
                                       fallback=bool(j["body"].get("fallbacks")) and self.router.ladder[r] in FALLBACK_MODELS)
                         steps.append(w * self._calls(self.router.ladder[r]) if w is not None else None)
                 more = max(0, self.router.max_attempts - 1)
@@ -2279,7 +2290,7 @@ class Reader:
                          "pages_total": j.get("n_pages") or j["prov"].get("pages"), "input_tokens": tin, "how": how,
                          "output_tokens": OUT_TOKENS, "max_output_tokens": j["body"]["max_tokens"], "usd": cost,
                          "usd_max": worst, "usd_max_route": route_max, "start": (j.get("route") or {}).get("start"),
-                         "url": j["url"]})
+                         "url": j["url"], "size_unknown": unknown, "usd_max_guess": guess})
         known = all(r["usd"] is not None for r in rows)
         tot = lambda k: round(sum(r[k] for r in rows), 4) if known and all(r[k] is not None for r in rows) else None
         one = next(iter(models)) if len(models) == 1 else None
@@ -2311,6 +2322,19 @@ class Reader:
         if est["usd_max"] is None:
             raise DatasheetError(f"no price known for {', '.join(est['models']) or self.model}: can't hold [datasheet] max_cost_usd = {cap}; "
                                  "pass --yes to send anyway")
+        unk = [r for r in est["rows"] if r.get("size_unknown")]
+        if unk and self.committed_usd + est["usd_max"] > cap:     # DS-37: never a silent 30-page guess
+            what = (f"the size of the PDF of {', '.join(r['part'] for r in unk)} is unknown (sent as a URL, not counted "
+                    f"by count_tokens): its worst case at the {page_limit(unk[0]['model'])}-page request limit makes up to "
+                    f"${est['usd_max']:.2f} for {est['parts']} parts, over [datasheet] max_cost_usd = {cap:g}")
+            if not self.yes:
+                raise DatasheetError(what + "; nothing sent. Download the PDF (or give a local file) so it can be "
+                                     "counted, raise the cap, or pass --yes to send it on a typical "
+                                     f"{URL_PAGES}-page estimate")
+            self.say(f"  datasheet: {what}; --yes: held at a typical {URL_PAGES}-page estimate instead")
+            for r in unk:                             # confirmed: the typical size, said aloud; the cap still holds
+                r["usd_max"] = r["usd_max_guess"]
+            est["usd_max"] = sum(r["usd_max"] or 0.0 for r in est["rows"])
         if self.committed_usd + est["usd_max"] > cap:
             raise DatasheetError(f"estimated up to ${est['usd_max']:.2f} for {est['parts']} parts"
                                  + (f" (after ${self.committed_usd:.2f} already spent or held)" if self.committed_usd else "")

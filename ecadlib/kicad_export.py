@@ -517,6 +517,23 @@ def _custom_pads(recs):
     return custom, used
 
 
+def _round_rect_ratio(pts, tol=400):
+    """A region outline that is an axis-aligned rounded rectangle (as altium_lib.round_rect writes a rounded paste
+    window) -> KiCad's roundrect_rratio (corner radius / shorter side), else None. pts in Altium units; tol ~0.01 mm."""
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    w, h = x1 - x0, y1 - y0
+    top = [x for x, y in pts if abs(y - y1) <= 2]           # the flat top edge (arc points are lower)
+    r = (w - (max(top) - min(top))) / 2 if top else 0
+    if not (w > 0 and h > 0 and tol < r <= min(w, h) / 2 + tol):
+        return None
+    for x, y in pts:                          # every vertex on the rounded outline: r from the inner rectangle
+        cx, cy = min(max(x, x0 + r), x1 - r), min(max(y, y0 + r), y1 - r)
+        if abs(math.hypot(x - cx, y - cy) - r) > tol:
+            return None
+    return min(r / min(w, h), 0.5)
+
+
 def _not_copper(r):
     """Why an Altium primitive is no drawing at all, or None: a keep-out (flags bit 9, on any layer) or a region that
     is not copper (polygon / board cutout, cavity, ...). Written as fp_poly / fp_line on F.Cu they would be copper."""
@@ -619,9 +636,12 @@ def footprint_from_pcblib(path, name, notes, pick=None, rules=None):
                             f'(size {m(abs(r["x2"] - r["x1"]))} {m(abs(r["y2"] - r["y1"]))}) (layers "{layer}"))')
             elif layer in ("F.Paste", "B.Paste"):   # paste window without copper: a paste-only pad, as KiCad draws them
                 xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-                pads.append(f'\t(pad "" smd rect (at {pt((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)}) '
-                            f'(size {m(max(xs) - min(xs))} {m(max(ys) - min(ys))}) (layers "{layer}"))')
-                if t == "region" and len(pts) != 4:
+                rr = _round_rect_ratio(pts) if t == "region" and len(pts) > 4 else None
+                pads.append(f'\t(pad "" smd {"roundrect" if rr else "rect"} '
+                            f'(at {pt((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)}) '
+                            f'(size {m(max(xs) - min(xs))} {m(max(ys) - min(ys))}) (layers "{layer}")'
+                            + (f' (roundrect_rratio {_num(round(rr, 4))})' if rr else "") + ")")
+                if t == "region" and len(pts) != 4 and not rr:
                     K._note(notes, "paste region written as its bounding rectangle")
             else:
                 xy = " ".join(f"(xy {pt(x, y)})" for x, y in pts)

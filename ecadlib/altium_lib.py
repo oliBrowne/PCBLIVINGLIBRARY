@@ -438,6 +438,20 @@ def pad_rec(p, guid_a, guid_b):
 
 
 # ---------------------------------------------------------------- footprints: model & converters
+def round_rect(x, y, w, h, r, steps=16):
+    """Outline of a w x h rectangle centred on (x, y) with corner radius r, each corner as `steps` chords (16: the
+    area is within 0.05 % of the true rounded rectangle for KiCad's 25 % paste-window rounding)."""
+    pts = []
+    for cx, cy, a0 in ((x + w / 2 - r, y + h / 2 - r, 0), (x - w / 2 + r, y + h / 2 - r, 90),
+                       (x - w / 2 + r, y - h / 2 + r, 180), (x + w / 2 - r, y - h / 2 + r, 270)):
+        for k in range(steps + 1):
+            a = math.radians(a0 + 90 * k / steps)
+            q = (round(cx + r * math.cos(a), 6), round(cy + r * math.sin(a), 6))
+            if not pts or q != pts[-1]:       # r = w/2: neighbouring corners meet in one point
+                pts.append(q)
+    return pts[:-1] if len(pts) > 1 and pts[-1] == pts[0] else pts
+
+
 def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
     """Convert a .kicad_mod (as written by footprint_gen) into the writer's footprint dict (mm, y up).
     SMD pads are converted here; through-hole and NPTH pads (round, square, slots), custom (polygon) pads and keep-out
@@ -454,10 +468,16 @@ def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
         layers = (sexpr.first(p, "layers") or ["layers"])[1:]
         if p[2] != "smd" or p[3] == "custom":
             K._pad(fp, p, notes); continue
-        if "F.Cu" not in layers:              # paste-only aperture (EP window) -> Top Paste fill
+        if "F.Cu" not in layers:              # paste-only aperture (EP window) -> Top Paste fill or region
             if layers != ["F.Paste"] or rot:
                 raise ValueError(f"{fp['name']}: unsupported non-copper pad on {layers}")
-            fp["fills"].append((x - w / 2, y - h / 2, x + w / 2, y + h / 2, TOP_PASTE)); continue
+            rr = sexpr.first(p, "roundrect_rratio")
+            r = min(float(rr[1]), 0.5) * min(w, h) if rr and p[3] == "roundrect" else 0.0
+            if r > 0:                         # rounded window (the rounding controls EP voiding): a region with
+                fp["regions"].append((round_rect(x, y, w, h, r), TOP_PASTE))   # the same outline (EXP-10)
+            else:
+                fp["fills"].append((x - w / 2, y - h / 2, x + w / 2, y + h / 2, TOP_PASTE))
+            continue
         rr = sexpr.first(p, "roundrect_rratio")
         pad = {"designator": p[1], "x": x, "y": y, "w": w, "h": h, "rot": rot, "shape": p[3],
                "corner": float(rr[1]) * 200 if rr else 0,          # KiCad r/min(w,h) -> Altium r/(min(w,h)/2) %

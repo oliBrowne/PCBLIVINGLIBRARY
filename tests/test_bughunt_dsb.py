@@ -555,6 +555,58 @@ def test_ds54_librarian_cost_hint_names_real_commands():
     assert L.cost_hint("x: HTTP 404") == "x: HTTP 404"
 
 
+# ---------------------------------------------------------------- DS-13: a table entry picked by the read itself
+def test_ds13_table_match_by_the_reads_own_name_is_self_checked_not_cross_checked():
+    from ecadlib import crosscheck as CC
+    from tests import test_crosscheck as TC
+    soic = TC.TR.on_page(TC.TD.INCH)                 # the read names SOIC-8; the BOM says 'DGK' (TI's MSOP-8 code)
+    api = TC.API(lambda k, m, b: soic)
+    with tempfile.TemporaryDirectory() as d:
+        res = TC.read(d, api, package="DGK")
+        assert api.sent == [("read", "claude-opus-5-5")]                  # no extra paid read in auto mode
+        cc = res["sidecar"]["cross_check"]
+        assert cc["status"] == "self-checked", cc
+        line = CC.summary_line(cc)
+        assert line.startswith("self-checked only: standard:SOIC-8_3.9x4.9mm_P1.27mm") and "agrees" not in line, line
+        assert any(r.startswith("cross-check: self-checked only") for r in res["needs_review"]), res["needs_review"]
+        md = (Path(d) / "out" / "datasheet" / "TESTPART.review.md").read_text()
+        assert "## Cross-check: self-checked only (no independent second source)" in md, md
+    rows = [{"part": "A", "cross_check": "self-checked"}, {"part": "B", "cross_check": "agreed"}]
+    assert "1 agreed with a second source, 1 self-checked only" in "\n".join(CC.review_lines(rows))
+    api = TC.API(lambda k, m, b: soic)                # the BOM names the package itself: an independent agreement
+    with tempfile.TemporaryDirectory() as d:
+        assert TC.read(d, api, package="SOIC-8_3.9x4.9mm_P1.27mm")["sidecar"]["cross_check"]["status"] == "agreed"
+
+
+# ---------------------------------------------------------------- DS-37: a URL PDF of unknown size
+def test_ds37_unknown_size_url_pdf_is_not_priced_on_a_silent_30_page_guess():
+    class NoCount(FakeAPI):
+        def post(self, url, headers=None, json=None, timeout=None):
+            if url.endswith("/count_tokens"):
+                self.calls.append(("POST", url, headers, json))
+                return R(500, {"error": {"type": "api_error", "message": "boom"}})
+            return super().post(url, headers, json, timeout)
+    url = "https://blocked.example/ds.pdf"            # the download is refused here: sent as a URL, never counted
+    with tempfile.TemporaryDirectory() as d:
+        api = NoCount()
+        with patched(api):
+            rd = D.Reader(d, d, key=KEY, http=PdfHTTP({}), batch=False, log=None, sleep=lambda s: None,
+                          rules={"datasheet": {"max_cost_usd": 3.0}})
+            j = rd.job("BIGPART", [(url, "BOM")], "SOIC-8")
+            assert j["prov"]["sent_as"] == "url"
+            row = rd.estimate([j])["rows"][0]
+            assert row["size_unknown"] and "size unknown" in row["how"] and row["usd_max"] > 3.0 > row["usd_max_guess"], row
+            try:
+                rd.read_now(j)
+                raise AssertionError("an unknown-size PDF was sent on the 30-page guess")
+            except D.DatasheetError as e:
+                assert "BIGPART is unknown" in str(e) and "600-page request limit" in str(e) and "--yes" in str(e), e
+            assert not api.of("/v1/messages"), api.calls                       # nothing paid was sent
+            yes = D.Reader(d, d, key=KEY, http=PdfHTTP({}), batch=False, log=None, yes=True,
+                           rules={"datasheet": {"max_cost_usd": 3.0}})
+            yes._guard_cost([yes.job("BIGPART", [(url, "BOM")], "SOIC-8")])    # --yes: the person confirmed it
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

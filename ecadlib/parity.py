@@ -93,6 +93,15 @@ def _bbox(pts):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+def _poly_area(pts):
+    q = list(pts)
+    return abs(sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(q, q[1:] + q[:1]))) / 2
+
+
+def _win_key(kind, box):
+    return (kind, tuple(round(v, 4) for v in box))
+
+
 def _rot_pts(cx, cy, w, h, rot):
     """Corners of a w x h rectangle at (cx, cy) rotated counter-clockwise on screen, KiCad frame (y down)."""
     a = math.radians(rot)
@@ -201,7 +210,8 @@ def kicad_footprint(text):
     from . import kicad_import as K
     t = sexpr.parse(text) if isinstance(text, str) else copy.deepcopy(text)
     K.inherit_margins(t)                      # footprint-level mask / paste margins: every pad's, as KiCad applies them
-    out = {"name": str(t[1]), "pads": [], "windows": [], "courtyard": None, "models": [], "notes": [], "approx": []}
+    out = {"name": str(t[1]), "pads": [], "windows": [], "window_area": {}, "courtyard": None, "models": [], "notes": [],
+           "approx": []}
     for p in sexpr.find(t, "pad"):
         num, kind, shape = str(p[1]), p[2], p[3]
         at, size = sexpr.first(p, "at"), sexpr.first(p, "size")
@@ -221,6 +231,10 @@ def kicad_footprint(text):
                     out["approx"].append(f"{what} window with curves written as its bounding rectangle")
                 else:                                       # the anchor, then each primitive (Altium: one region each)
                     out["windows"] += [(what, b) for b in [_bbox(_rot_pts(x, y, w, h, rot))] + parts]
+                    rr = sexpr.first(p, "roundrect_rratio")
+                    r = min(_f(rr[1]), 0.5) * min(w, h) if rr and shape == "roundrect" else 0.0
+                    if r > 0:                               # the true area of a rounded window (EXP-10)
+                        out["window_area"][_win_key(what, _bbox(_rot_pts(x, y, w, h, rot)))] = w * h - (4 - math.pi) * r * r
             continue
         rr = sexpr.first(p, "roundrect_rratio")
         kshape = {"circle": "round", "oval": "round"}.get(shape, shape)
@@ -368,7 +382,8 @@ def altium_footprint(fp, courtyard=AL.MECH15):
     from .kicad_export import _custom_pads
     recs = fp["records"]
     custom, used = _custom_pads(recs)
-    out = {"name": fp["name"], "pads": [], "windows": [], "courtyard": None, "bodies": 0, "embedded": 0, "notes": []}
+    out = {"name": fp["name"], "pads": [], "windows": [], "window_area": {}, "courtyard": None, "bodies": 0, "embedded": 0,
+           "notes": []}
     for r in recs:
         if r["type"] != "pad":
             continue
@@ -425,7 +440,9 @@ def altium_footprint(fp, courtyard=AL.MECH15):
             a, b = _a2k(r["x1"], r["y1"]), _a2k(r["x2"], r["y2"])
             out["windows"].append((win_layers[layer], _bbox([a, b])))
         elif t == "region" and layer in win_layers:
-            out["windows"].append((win_layers[layer], _bbox(_a2k(px, py) for px, py in r["pts"])))
+            q = [_a2k(px, py) for px, py in r["pts"]]
+            out["windows"].append((win_layers[layer], _bbox(q)))
+            out["window_area"][_win_key(win_layers[layer], _bbox(q))] = _poly_area(q)    # its outline, not its box
         if layer != courtyard:
             continue
         if t == "track":
@@ -575,7 +592,8 @@ def exposed_pad(fp):
     ep = max(cands, key=lambda p: p["w"] * p["h"])
     inside = [b for k, b in fp["windows"] if k == "paste" and b and ep["x"] - ep["w"] / 2 - 1e-6 <= (b[0] + b[2]) / 2 <= ep["x"] + ep["w"] / 2 + 1e-6
               and ep["y"] - ep["h"] / 2 - 1e-6 <= (b[1] + b[3]) / 2 <= ep["y"] + ep["h"] / 2 + 1e-6]
-    area = sum((b[2] - b[0]) * (b[3] - b[1]) for b in inside)
+    wa = fp.get("window_area") or {}                  # a rounded window's own area, else its rectangle (EXP-10)
+    area = sum(wa.get(_win_key("paste", b), (b[2] - b[0]) * (b[3] - b[1])) for b in inside)
     return {"num": ep["num"], "w": ep["w"], "h": ep["h"], "windows": len(inside),
             "coverage": round(100.0 * area / (ep["w"] * ep["h"]), 2) if inside else (100.0 if ep.get("paste") else 0.0)}
 
