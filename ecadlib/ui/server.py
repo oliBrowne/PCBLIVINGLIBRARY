@@ -1091,7 +1091,7 @@ def main(argv=None):
         if not _loopback(a.host):
             sys.exit(f"refusing to serve on {a.host}: the UI has no login without --team, so anyone who can reach it "
                      "could edit the workspace and push to Altium 365 with your token. Keep the default 127.0.0.1; to "
-                     "share it, run `ecadlib ui --team` (README: Team server), or forward the port over SSH "
+                     "share it, run `ecadlib ui --team` (docs/using-ecadlib.md: Team server), or forward the port over SSH "
                      "(ssh -L 8765:127.0.0.1:8765 host).")
     else:
         if not _loopback(a.host) and not a.cert and not a.allow_http:

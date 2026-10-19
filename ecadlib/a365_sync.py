@@ -626,7 +626,7 @@ def main(argv=None):
         r = run(a.cmd, a.plan, A.Nexar(token), ws, a.state, getattr(a, "prefer", "workspace"), a.folder,
                 not getattr(a, "no_models", False), rules, a.out)
     except Exception as e:
-        hint = " (token rejected: check it has design.domain, user.access, openid)" if "401" in str(e) else ""
+        hint = A.token_hint(token) if "401" in str(e) else ""
         print(f"a365 {a.cmd}: {type(e).__name__}: {e}{hint}", file=sys.stderr); return 2
     for x in r["rows"]:
         if x["status"] != "in_sync":

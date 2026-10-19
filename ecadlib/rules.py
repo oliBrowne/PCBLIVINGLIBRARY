@@ -94,6 +94,7 @@ DEFAULTS = {
     "symbols": {                               # ecadlib.symbol_layout: IC symbol pins grouped by function
         "layout_pins": 1,                      # parts with at least this many pins get grouped (0 = never)
         "power_side": "top",                   # top: power top, ground bottom | left: both on the left side, top and bottom empty
+        "resistor": "us",                      # us: zigzag (ANSI/IEEE 315) | iec: box (IEC 60617)
         "split_pins": 0,                       # parts with more pins than this become multi-part (0 = never)
         "unit_pins": 48,                       # most pins in one signal part when split
         "stack_power": "stack",                # stack | hide | none (same-name power pins)
@@ -506,10 +507,20 @@ def _check_table(where, sec, k, v, d):
             _err(where, "agent.proof.fail_on", f"= {v['fail_on']!r}: severities are error, warning")
 
 
+RESISTOR_STYLES = ("us", "iec")
+
+
+def resistor_style(rules):
+    """[symbols] resistor: "us" (zigzag, the default) or "iec" (box)."""
+    return ((rules or {}).get("symbols") or {}).get("resistor", DEFAULTS["symbols"]["resistor"])
+
+
 def _check_symbols(where, sy):
     from .symbol_layout import GROUPS, STACKS, POWER_SIDES
     if "power_side" in sy and sy["power_side"] not in POWER_SIDES:
         _err(where, "symbols.power_side", f"= {sy['power_side']!r}: must be one of {', '.join(POWER_SIDES)}")
+    if "resistor" in sy and sy["resistor"] not in RESISTOR_STYLES:
+        _err(where, "symbols.resistor", f"= {sy['resistor']!r}: must be one of {', '.join(RESISTOR_STYLES)}")
     if "stack_power" in sy and sy["stack_power"] not in STACKS:
         _err(where, "symbols.stack_power", f"= {sy['stack_power']!r}: must be one of {', '.join(STACKS)}")
     grid = sy.get("grid", DEFAULTS["symbols"]["grid"])
@@ -908,6 +919,7 @@ HELP = {
     "symbols": "IC symbols: pins grouped by function (inputs left, outputs right, power top, ground bottom); see `ecadlib symbol -h`",
     "symbols.layout_pins": "parts with at least this many pins get the grouped layout; smaller parts keep the plain one (0 = never)",
     "symbols.power_side": "top: power pins on top, ground on the bottom | left: top and bottom empty, power at the top of the left side, ground at its bottom",
+    "symbols.resistor": "us: zigzag resistor symbol (ANSI, default) | iec: box resistor symbol (IEC 60617)",
     "symbols.split_pins": "more pins than this: a multi-part symbol (power part + signal parts); 0 = one part always",
     "symbols.stack_power": "stack (one pin shown, the rest on top of it) | hide (the rest hidden, tied by name) | none",
     "agent.watch": "sources = [{ type = bom_file|folder|altium_project|a365_project, ref = path or project, name, workspace, "

@@ -280,7 +280,7 @@ def _setup(a):
     elif tls == "acme":
         print(f"The certificate comes from Let's Encrypt: {env['ECADLIB_DOMAIN']} must resolve to this machine and ports "
               f"{env['ECADLIB_HTTP_PORT']}/{env['ECADLIB_HTTPS_PORT']} must be reachable. Logs: docker compose logs caddy")
-    print("Back up: see README, 'Run it for your team'. Upgrade: git pull, then run this setup again.")
+    print("Back up: see docs/using-ecadlib.md, 'Run it for your team'. Upgrade: git pull, then run this setup again.")
     return 0
 
 

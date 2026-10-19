@@ -433,7 +433,7 @@ def main(argv=None):
             timing.mark_review(plan.parent, "allow")
         stem = write_report(rows, a.out or plan.parent / "release_check", plan)
     held = sum(r["status"] == "held" for r in rows)
-    if a.json:                                 # stable shape: README "Machine-readable output (--json)"
+    if a.json:                                 # stable shape: docs/command-line.md "Machine-readable output (--json)"
         st = ("ready", "held", "awaiting_approval", "duplicate")
         print(json.dumps({"plan": str(plan), "report": str(stem.with_suffix(".md")),
                           "counts": {s: sum(r["status"] == s for r in rows) for s in st}, "rows": rows}, indent=2, default=str))
