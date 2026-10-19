@@ -1,12 +1,35 @@
-# ecadlib: a librarian for your parts
+<p align="center">
+  <a href="https://pcblivinglibrary.vercel.app">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/readme/header-dark.svg">
+      <img alt="ecadlib: your component library, kept alive" src="docs/readme/header-light.svg" width="880">
+    </picture>
+  </a>
+</p>
 
-ecadlib keeps your component library alive. Give it a BOM and it finds every symbol, footprint and 3D model you are
-missing, draws the ones nobody has from the datasheet, and makes them match the rest of your library. **Every part is
-checked before it is released**: anything that fails a check, or still needs a person, is held until someone signs it
-off. The rest goes to **Altium 365** or **KiCad**.
+<p align="center">
+  <a href="https://pypi.org/project/ecadlib/"><img alt="PyPI" src="https://img.shields.io/pypi/v/ecadlib?color=c2622d&label=pypi"></a>
+  <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/actions/workflows/tests.yml"><img alt="Tests" src="https://github.com/oliBrowne/PCBLIVINGLIBRARY/actions/workflows/tests.yml/badge.svg"></a>
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776ab">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-555"></a>
+</p>
 
-It is free and open source (MIT). You bring your own API key and pick the model. Website:
-[pcblivinglibrary.vercel.app](https://pcblivinglibrary.vercel.app).
+<p align="center">
+  <a href="https://pcblivinglibrary.vercel.app"><b>Website</b></a> ·
+  <a href="#try-the-demo"><b>Try the demo</b></a> ·
+  <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases/latest"><b>Windows installer</b></a> ·
+  <a href="docs/README.md"><b>Docs</b></a>
+</p>
+
+ecadlib is a librarian for your parts. Give it a BOM and it finds every symbol, footprint and 3D model you are missing,
+draws the ones nobody has from the datasheet, and makes them match the rest of your library. **Every part is verified
+before it is released**: anything that fails a check, or still needs a person, is held until someone signs it off. The
+rest goes to **Altium 365** or **KiCad**. Free and open source (MIT); you bring your own API key and pick the model.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/flow-dark.svg">
+  <img alt="Read the BOM, find the part, draw the rest, check every part, release. Parts in doubt are held for a person, then signed off into the release." src="docs/readme/flow-light.svg" width="100%">
+</picture>
 
 ## What it does
 
@@ -26,6 +49,12 @@ It is free and open source (MIT). You bring your own API key and pick the model.
   pads or the part's identity waits for a person, who sees it in plain words ("pad 5 removed; pad SH added").
 * **Released to your workspace.** Parts go to your Altium 365 workspace, or out as `.SchLib`/`.PcbLib`, a database
   library and KiCad libraries, all from one plan.
+
+<p align="center">
+  <img alt="A held part in the web UI: the datasheet read and the standard package table disagree on pin pitch, so nothing was written; the panel says why and what to do next" src="docs/ui-held-part.png" width="100%">
+  <br><sub>A held part says why and what to do next. Here the datasheet read and the standard package table disagree on
+  pin pitch, so nothing was written to the library.</sub>
+</p>
 
 ## Install
 
@@ -57,7 +86,9 @@ written:
 CH340C is held on purpose, so you see what a held part looks like. `ecadlib ui --workspace ecadlib-demo` opens the
 result in your browser.
 
-![Fill the library](docs/ui-librarian.png)
+<p align="center">
+  <img alt="Fill the library: 6 of 7 parts ready for Altium 365, CH340C held with the reason" src="docs/ui-librarian.png" width="100%">
+</p>
 
 ## From BOM to Altium 365
 
@@ -113,13 +144,11 @@ builds an install package, and `ecadlib kicad-export` writes KiCad libraries.
 The release check and the review hold are there because drawing parts is the easy half; checking them is the work.
 What has been measured so far:
 
-* **Reading real datasheets (the number that matters):** in the live benchmark, ecadlib read the datasheets of 110
-  real parts and built 30 of them fully right (27 %; run of 2026-10-18, Claude Opus 5.5). The method, every miss and
-  newer runs are in [docs/benchmark.md](docs/benchmark.md). That is why anything in doubt is held, not released.
-* **Footprint generator (replay check):** 328/331 on every pull request. Given a correct package description, the
-  generator draws the right pads. It does not test datasheet reading.
-* **Altium Designer 26:** the generated libraries, the ecadlib menu and parts released to Altium 365 have been tried
-  in AD26. Older Altium versions are untested.
+| What | Result | What it tells you |
+|---|---|---|
+| **Reading real datasheets** (the number that matters) | 30 of 110 real parts built fully right (27 %) | Live benchmark of 2026-10-18 with Claude Opus 5.5. That is why anything in doubt is held, not released. Method, every miss and newer runs: [docs/benchmark.md](docs/benchmark.md). |
+| Footprint generator (replay check) | 328 / 331 on every pull request | Given a correct package description, the generator draws the right pads. It does not test datasheet reading. |
+| Altium Designer 26 | Tried | The generated libraries, the ecadlib menu and parts released to Altium 365. Older Altium versions are untested. |
 
 ## Documentation
 

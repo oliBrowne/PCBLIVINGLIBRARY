@@ -11,6 +11,7 @@ keeps growing. It is drawn once, in `ecadlib/brand.py`, and everything else is g
 | Website and web UI header | the mark inline, ink = text colour, leaves = `--copper` | pasted from `brand.mark_svg_body()` |
 | Brand kit | `site/brand/` (SVG on light, on dark, one colour; PNG tiles at 64 and 256) | `python scripts/build_brand.py` |
 | KiCad toolbar button and PCM list icon | the mark on a dark tile, 24 and 64 px | `kicad_menu.icon_png()` |
+| README header and flow diagram | `docs/readme/` (a light and a dark version each, picked with `<picture>`) | `python scripts/build_readme_art.py` |
 | Windows installer, Start menu, .exe | `ecadlib.ico`, every size drawn separately | `installer/windows/make_icon.py` |
 
 `tests/test_brand.py` fails if a generated file no longer matches the drawing.

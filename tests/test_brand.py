@@ -53,3 +53,12 @@ def test_pages_use_the_mark_and_the_copper_token():
 def test_svg_favicon_follows_the_tab_theme():
     s = B.mark_svg(adaptive=True)
     assert "prefers-color-scheme:dark" in s and B.INK_DARK in s and B.COPPER in s and "currentColor" not in s
+
+
+def test_readme_pictures_match_the_drawing():
+    spec = importlib.util.spec_from_file_location("build_readme_art", ROOT / "scripts" / "build_readme_art.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for rel, data in mod.files().items():
+        have = (ROOT / "docs" / "readme" / rel).read_bytes().replace(b"\r\n", b"\n")
+        assert have == data, f"docs/readme/{rel} is stale: run python scripts/build_readme_art.py"
