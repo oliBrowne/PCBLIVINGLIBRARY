@@ -13,7 +13,7 @@ Standard library only (plus jsonschema): newline-delimited JSON-RPC 2.0 on stdin
 Streamable HTTP), tools capability only. Every call runs as a job: one that is not done within --wait seconds answers
 with a job id for job_status instead of running into the client's timeout. Logs go to stderr; file descriptor 1 is
 moved aside so not even a child process can corrupt the protocol stream."""
-import argparse, contextlib, json, re, sys, threading, traceback
+import argparse, contextlib, json, math, re, sys, threading, traceback
 
 from . import __version__
 from .app import Workspace
@@ -652,6 +652,11 @@ def _offered(ws):
 
 # ------------------------------------------------------------------ arguments
 TRUE, FALSE = {"true", "yes", "1", "on"}, {"false", "no", "0", "off", ""}
+# booleans that switch a real change on (dry_run false = a real Altium 365 release; merge / apply / migrate / overwrite
+# rewrite files; the *_ok ones agree to spend more): only true / false (or "true" / "false"), never guessed from "",
+# 0, 1, "no" or "yes"; "" means not given, so the tool's safe default applies
+SAFETY = {"dry_run", "merge", "apply", "migrate", "overwrite", "save", "over_limit_ok", "price_unknown_ok", "sync",
+          "clear", "ai"}
 
 
 def _normalize(tool, args):
@@ -669,6 +674,12 @@ def _normalize(tool, args):
     for k, v in list(out.items()):
         sch = props.get(k) or {}
         typ = sch.get("type")
+        if typ == "boolean" and k in SAFETY:
+            if isinstance(v, str) and not v.strip():
+                out.pop(k)                         # "" = not given: the tool's safe default (dry_run true, merge false)
+            elif isinstance(v, str) and v.strip().lower() in ("true", "false"):
+                out[k] = v.strip().lower() == "true"
+            continue                               # 0, 1, "no", "yes": left as is, so the schema says it is no boolean
         if typ == "boolean":
             if isinstance(v, str) and v.strip().lower() in TRUE | FALSE:
                 out[k] = v.strip().lower() in TRUE
@@ -677,7 +688,8 @@ def _normalize(tool, args):
         elif typ in ("integer", "number") and isinstance(v, str):
             try:
                 f = float(v.strip())
-                out[k] = int(f) if typ == "integer" and f == int(f) else f
+                if math.isfinite(f):                   # "NaN" / "inf" stay strings: the schema refuses them
+                    out[k] = int(f) if typ == "integer" and f == int(f) else f
             except ValueError:
                 pass
         elif typ == "integer" and isinstance(v, float) and v == int(v):
@@ -772,11 +784,28 @@ def _rule_paths(text):
     return list(walk(data, ""))
 
 
-ENDPOINT_KEYS = {"provider", "base_url", "api_key_env", "endpoints"}
+ENDPOINT_KEYS = {"provider", "base_url", "api_key_env", "endpoints",
+                 "git_host", "github_repo", "gitlab_project",          # where `ecadlib upkeep --github` / forge send a token
+                 "targets",                                            # [notify] webhooks (url_env / token_env)
+                 "max_cost_usd", "ask_above_usd"}                      # the money limits the person set
+
+
+def _protected(k):
+    """A rules key an agent may not change over save_rules: where a request goes, which environment variable's secret
+    goes with it, and the spending limits."""
+    k = str(k)
+    return k in ENDPOINT_KEYS or k.endswith(("_env", "_api", "_url"))
+
+
+def _fp(x):
+    """A protected setting's value, comparable: 1 and 1.0 are the same limit."""
+    return json.dumps(float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) else x, sort_keys=True,
+                      default=str)
 
 
 def _endpoints(text):
-    """{dotted key: value} of every setting in a rules TOML that says where a model request (and the API key) goes."""
+    """{dotted key: value} of every setting in a rules TOML that says where a request (and a stored key or token) goes,
+    or how much may be spent."""
     from .rules import toml_module
     lib = toml_module()
     try:
@@ -789,8 +818,8 @@ def _endpoints(text):
         if isinstance(v, dict):
             for k, x in v.items():
                 key = f"{at}.{k}" if at else str(k)
-                if k in ENDPOINT_KEYS:
-                    out[key] = json.dumps(x, sort_keys=True)
+                if _protected(k):
+                    out[key] = _fp(x)
                 else:
                     walk(x, key)
     walk(data, "")
@@ -798,14 +827,25 @@ def _endpoints(text):
 
 
 def _check_endpoints(ws, text):
-    """save_rules from an agent may not change where model requests go: the stored API key would follow the request
-    to any URL. The person edits [ai] / [datasheet] base_url, provider and api_key_env themselves."""
+    """save_rules from an agent may not change where requests go: the stored API key or token would follow the
+    request to any URL (also a later `ecadlib upkeep --github` run by the person). The person edits base_url, provider,
+    the *_env / *_api / *_url settings, [notify] targets and the cost limits themselves."""
     f = ws.rules_file()
-    old = _endpoints(f.read_text(encoding="utf-8")) if f.is_file() else {}
+    old = _endpoints(f.read_text(encoding="utf-8-sig")) if f.is_file() else {}
     new = _endpoints(text if isinstance(text, str) else "")
-    changed = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+    from .rules import DEFAULTS
+
+    def default(k):                                  # a setting left out of the file has its default value
+        v = DEFAULTS
+        for part in k.split("."):
+            if not isinstance(v, dict) or part not in v:
+                return None
+            v = v[part]
+        return _fp(v)
+    changed = sorted(k for k in set(old) | set(new) if old.get(k, default(k)) != new.get(k, default(k)))
     if changed:
-        raise ValueError(f"save_rules cannot change {', '.join(changed)} (where model requests and your API key go): "
+        raise ValueError(f"save_rules cannot change {', '.join(changed)} (where requests and your API keys / tokens "
+                         "go, or the spending limits): "
                          f"ask the user to edit {f.name} themselves")
 
 

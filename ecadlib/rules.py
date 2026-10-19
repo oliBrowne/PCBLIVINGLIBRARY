@@ -14,7 +14,7 @@ Plans (plan.json) keep ecadlib's own parameter names ("Manufacturer Part Number"
 names from [parameters.names] are applied where data leaves ecadlib: Altium 365 push, the DbLib export and sync,
 the KiCad export and the Altium 365 drift check. Part names, folders, footprint names, required fields, default
 parameters, layers and density are applied when the plan and the models are made."""
-import argparse, copy, difflib, json, os, re, sys
+import argparse, copy, difflib, json, math, os, re, sys
 from pathlib import Path
 
 FILES = ("ecadlib.toml", "ecadlib_rules.json")
@@ -294,8 +294,8 @@ def validate(raw, where="ecadlib.toml"):
                 if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
                     _err(where, key, f"must be a whole number from {lo} to {hi}")
             elif isinstance(d, float):
-                if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
-                    _err(where, key, "must be a number of 0 or more")
+                if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or v < 0:
+                    _err(where, key, "must be a number of 0 or more (not nan or inf)")
             elif isinstance(d, dict):
                 _check_table(where, sec, k, v, d)
             elif not isinstance(v, str):

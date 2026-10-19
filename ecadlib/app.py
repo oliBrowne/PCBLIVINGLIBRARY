@@ -99,11 +99,18 @@ class Workspace:
         uploads/<stamp>-<rand>/<name>), plus a short hash of the full path for any other location, so
         /projA/BOM.csv and /projB/BOM.csv (or two uploads called BOM.csv) don't share (and overwrite) one triage."""
         bom_path = Path(bom_path).resolve()
+        h = hashlib.sha1(str(bom_path).encode()).hexdigest()[:8]
         if bom_path.parent == self.root / "uploads":
+            # a flat uploads/<stem>_<dir>.csv would share uploads/<dir>/<stem>.*'s key (and its librarian folder,
+            # plan and sign-offs): uploads now always go in a folder, so the flat file gives way and gets a hash
+            for d in (bom_path.parent.iterdir() if "_" in bom_path.stem else ()):
+                if (d.is_dir() and bom_path.stem.endswith(f"_{d.name}")
+                        and any(f.is_file() and f.stem == bom_path.stem[:-len(d.name) - 1] for f in d.iterdir())):
+                    return f"{bom_path.stem}_{h}"
             return bom_path.stem
         if bom_path.parent.parent == self.root / "uploads":
             return f"{bom_path.stem}_{bom_path.parent.name}"
-        return f"{bom_path.stem}_{hashlib.sha1(str(bom_path).encode()).hexdigest()[:8]}"
+        return f"{bom_path.stem}_{h}"
 
     def _triage_csv(self, bom_path):
         return self.root / "reports" / f"triage_{self._key(bom_path)}.csv"

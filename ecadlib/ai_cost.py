@@ -125,6 +125,8 @@ def approve(q, approved_usd=None, over_limit_ok=False, price_unknown_ok=False):
                          "confirm the higher cost first")
     try:
         approved = float(approved_usd)
+        if isinstance(approved_usd, bool) or not math.isfinite(approved) or approved < 0:
+            raise ValueError(approved_usd)   # NaN / inf / -1 would compare as "within the approval" and lift the cap
     except (TypeError, ValueError):
         raise ValueError(f"approve the cost first: about {money(q['usd'])}, at most {money(up(q['usd_max']))}")
     if q["usd_max"] > approved + TOLERANCE:
