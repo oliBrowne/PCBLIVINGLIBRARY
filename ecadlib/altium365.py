@@ -339,6 +339,23 @@ def merged_params(existing, item):
     return None if want == cur else [{"name": k, "value": v} for k, v in want.items()]
 
 
+def identity_change(existing, params):
+    """A parameter update that would make a released workspace component another part: [change text] for each
+    identity field (MPN, manufacturer, the value as a number) the workspace has and `params` (the list a push would
+    send) changes. Filling one the component does not have yet is no change of part."""
+    from . import change_diff as CD, fingerprint as FP
+    cur = {p["name"]: p["value"] for p in ((existing.get("details") or {}).get("parameters") or [])}
+    new = {p["name"]: p["value"] for p in params}
+    a, b = FP.build("", params=cur), FP.build("", params=new)
+    return [c["text"] for c in CD.diff(a, b) if c["class"] == "identity" and str(c.get("old") or "").strip()]
+
+
+IDENTITY_REFUSED = ("not applied in place: a released workspace component keeps its MPN, manufacturer and value. "
+                    "A different part needs its own component (another name in the plan); a correction goes through "
+                    "change control (run the librarian on the BOM, then `ecadlib part approve`), which releases it as a "
+                    "new component revision")
+
+
 def push_existing(it, client, ws, dry_run=False, note="ecadlib sync"):
     """Parameter update for an item that `ecadlib a365 pull` imported or linked (item.a365 = revision, id and the
     snapshot of the last pull). Refuses when the component was edited in the workspace since that snapshot, so a
@@ -517,8 +534,11 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
             elif existing:
                 new = merged_params(existing, it)
                 res["a365_revision"] = _rev_id(existing)
+                ident = identity_change(existing, new) if new is not None else []
                 if new is None:
                     res["action"] = "up_to_date"
+                elif ident:                    # change control (#105): in-place edits never make it another part
+                    res["action"], res["detail"] = "skip", f"identity change ({'; '.join(ident)}) {IDENTITY_REFUSED}"
                 else:                          # full replace: a merge, so parameters added in Altium 365 are kept
                     res["action"] = "update_parameters"
                     res["detail"] = client.update_params(existing["id"], new, note, replace=True)
