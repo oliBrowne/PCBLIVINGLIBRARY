@@ -253,6 +253,79 @@ def test_ds65_nan_price_rejected_and_unknown():
         assert LL.price("acme-nan") is None
 
 
+# ---------------------------------------------------------------- DS-39 / DS-41 / DS-42 / DS-43 / DS-51 / DS-61
+def test_ds39_eval_tol_rejects_bad_numbers():
+    import contextlib, io
+    from ecadlib.eval import cli as EC
+    for bad in ("pos=abc", "pos=nan", "pos=-1"):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            try:
+                EC.main(["run", "--tol", bad, "--out", "/nonexistent/never-written"])
+                raise AssertionError(f"{bad} accepted")
+            except SystemExit as e:
+                assert e.code == 2, (bad, e.code)
+        assert "--tol" in err.getvalue(), err.getvalue()
+
+
+def test_ds41_dated_model_ids_behave_like_their_alias():
+    from ecadlib.llm import sampling as SM
+    for dated, alias in (("claude-haiku-4-5-20251001", "claude-haiku-4-5"),
+                         ("claude-sonnet-4-5-20250929", "claude-sonnet-4-5")):
+        assert D.output_config(dated, "high", {}) == D.output_config(alias, "high", {})
+        assert "effort" not in D.output_config(dated, "high", {})
+        assert D.page_limit(dated) == D.page_limit(alias) == 100
+        assert D.price_of(dated) == D.price_of(alias) is not None
+        assert SM.takes_sampling(dated) == SM.takes_sampling(alias) is True
+    assert SM.takes_sampling("claude-opus-5-5") is False
+
+
+@lite
+def test_ds42_unknown_part_name_is_an_error(tmp_path):
+    import contextlib, io
+    (tmp_path / "plan.json").write_text(json.dumps([{"name": "TESTPART", "parameters": [], "footprint": {}}]))
+    for verb in ("estimate", "batch"):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": KEY}):
+            rc = D.main([verb, str(tmp_path / "plan.json"), "--part", "TESTPRAT", "--offline", "--cache",
+                         str(tmp_path / "cache")])
+        assert rc == 1 and "no part named TESTPRAT" in err.getvalue() and "TESTPART" in err.getvalue(), (rc, err.getvalue())
+    assert "nothing to read" in D.format_estimate({"rows": [], "parts": 0})
+
+
+def test_ds43_malformed_content_is_rejected_not_a_crash():
+    from ecadlib.llm import rails as RL
+    for m in ({"type": "message", "content": None, "stop_reason": "end_turn"},
+              {"type": "message", "content": [{"type": "text", "text": None}], "stop_reason": "end_turn"},
+              {"type": "message", "content": "hello", "stop_reason": "end_turn"}):
+        try:
+            D.parse_message(m)
+            raise AssertionError("accepted")
+        except D.DatasheetError as e:
+            assert "not JSON" in str(e)
+        assert RL.text_of(m) == ""
+        fb = RL.feedback_body({"model": "m", "messages": []}, m, ["x"])
+        assert fb["messages"][0]["content"] == [{"type": "text", "text": ""}]
+
+
+def test_ds51_huge_page_range_is_refused_by_page_count():
+    from tests.test_datasheet_batch import pdf_with
+    data = pdf_with(["a", "b", "c"])
+    try:
+        D.trim(data, (2, 999_999_999))
+        raise AssertionError("accepted")
+    except D.DatasheetError as e:
+        assert "the PDF has 3 pages" in str(e)
+
+
+def test_ds61_tsot_names_give_the_pin_count():
+    assert D.name_facts("TSOT-23-5")["count"] == 5
+    assert D.name_facts("TSOT-23-6_MK06A")["count"] == 6
+    assert D.name_facts("SOT-23-5")["count"] == 5
+    assert D.name_facts("SOIC-8_3.9x4.9mm_P1.27mm")["count"] == 8
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

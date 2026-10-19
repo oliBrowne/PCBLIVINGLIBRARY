@@ -55,7 +55,8 @@ LINEAR_TYPES = ("chip", "molded", "gullwing", "qfp", "qfn")   # families whose p
 PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-opus-5": (5.0, 25.0), "claude-fable-5-1": (10.0, 50.0),
           "claude-fable-5": (10.0, 50.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-sonnet-5": (2.0, 10.0),
           "claude-haiku-5-5": (0.10, 0.50), "claude-opus-4-8": (5.0, 25.0), "claude-opus-4-7": (5.0, 25.0),
-          "claude-opus-4-6": (5.0, 25.0), "claude-sonnet-4-6": (3.0, 15.0), "claude-haiku-4-5": (1.0, 5.0)}
+          "claude-opus-4-6": (5.0, 25.0), "claude-sonnet-4-6": (3.0, 15.0), "claude-sonnet-4-5": (3.0, 15.0),
+          "claude-haiku-4-5": (1.0, 5.0)}
 BATCH_DISCOUNT, CACHE_WRITE = 0.5, 1.25
 BATCH_BYTES, BATCH_MAX = 200 * 2 ** 20, 100_000       # per batch (API limits: 256 MB, 100,000 requests)
 PAGE_TOKENS, OUT_TOKENS, URL_PAGES = 3000, 6000, 30  # rough estimate without a key: per PDF page, typical output, unknown PDF
@@ -80,11 +81,18 @@ PAGE_LIMIT = {"claude-haiku-4-5": 100, "claude-sonnet-4-5": 100, "claude-opus-4-
 FALLBACK_PRICE = (5.0, 25.0)
 
 
+def base_model(model):
+    """'claude-haiku-4-5-20251001' -> 'claude-haiku-4-5': a dated snapshot id gets its alias's request parameters,
+    page limit and price."""
+    m = str(model or "")
+    return re.sub(r"-\d{8}$", "", m) if m.startswith("claude-") else m
+
+
 def output_config(model, effort, schema):
     """output_config for this model: the effort only where the model takes it (an unsupported level steps down to the
     nearest one it has), always the JSON-schema format."""
     oc = {"format": {"type": "json_schema", "schema": schema}}
-    levels = EFFORT_LEVELS.get(model)
+    levels = EFFORT_LEVELS.get(base_model(model))
     if effort and levels is None:
         oc["effort"] = effort
     elif effort and levels:
@@ -96,7 +104,7 @@ def output_config(model, effort, schema):
 
 def price_of(model):
     """(input, output) $ per MTok: PRICES for Claude, else what ecadlib.llm knows (a local endpoint is $0), else None."""
-    p = PRICES.get(model)
+    p = PRICES.get(model) or PRICES.get(base_model(model))
     if p:
         return p
     from .llm import price
@@ -104,7 +112,7 @@ def price_of(model):
 
 
 def page_limit(model):
-    return PAGE_LIMIT.get(model, MAX_PAGES)
+    return PAGE_LIMIT.get(base_model(model), MAX_PAGES)
 
 
 def worst_usd(model, tin, max_out, cache_write=1.0, mult=1.0, fallback=False):
@@ -735,7 +743,16 @@ def call(headers, body, key, timeout=600):
         raise
 
 
+def message_text(msg):
+    """The text blocks of a Messages answer joined; "" for a malformed one (content null or a string, text null)."""
+    content = (msg or {}).get("content") if isinstance(msg, dict) else None
+    return "".join(str(b.get("text") or "") for b in (content if isinstance(content, list) else [])
+                   if isinstance(b, dict) and b.get("type") == "text")
+
+
 def parse_message(msg):
+    if not isinstance(msg, dict):
+        raise DatasheetError("response is not a message object; rejected")
     if (msg.get("ecadlib") or {}).get("error"):       # the guide rails gave up on this answer (ecadlib.llm.rails)
         raise DatasheetError(msg["ecadlib"]["error"])
     sr = msg.get("stop_reason")
@@ -743,7 +760,7 @@ def parse_message(msg):
         raise DatasheetError(f"model declined (refusal, {(msg.get('stop_details') or {}).get('category')})")
     if sr == "max_tokens":
         raise DatasheetError("response hit max_tokens; the extraction is incomplete")
-    text = "".join(b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text")
+    text = message_text(msg)
     try:
         ext = json.loads(text)
     except ValueError:
@@ -775,7 +792,8 @@ def trim(data, pages):
     except ImportError:
         return None
     _quiet_pypdf()
-    keep = list(pages) if isinstance(pages, list) else list(range(pages[0], pages[1] + 1))
+    # a range, not a list: "--pages 2-999999999" (a typo) is refused by the page count, not by running out of memory
+    keep = list(pages) if isinstance(pages, list) else range(pages[0], pages[1] + 1)
     try:
         rd, w = pypdf.PdfReader(io.BytesIO(data)), pypdf.PdfWriter()
         n = len(rd.pages)
@@ -1050,7 +1068,7 @@ def check_pins(spec, ext, review):
 # ---------------------------------------------------------------- self-check: the extraction against itself and family norms
 STD_PITCH = (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.8, 0.95, 1.0, 1.1, 1.25, 1.27, 1.5, 1.7, 1.778, 1.9, 2.0, 2.29, 2.5, 2.54,
              3.0, 3.5, 3.81, 3.96, 5.0, 5.08)
-FAMILY_CODES = re.compile(r"(SOT|SOD|TO|DO|SC|SMA|SMB|SMC|D?PAK|DO-?\d+)\d*", re.I)   # first number is the outline, not pins
+FAMILY_CODES = re.compile(r"(T?SOT|SSOT|SuperSOT|SOD|TO|DO|SC|SMA|SMB|SMC|D?PAK|DO-?\d+)\d*", re.I)   # first number is the outline, not pins
 # package_type -> (pitch mm range or None, longest body side mm range, pin_count range). A family the schema gains
 # later (BGA, connectors, ...) has no entry: it gets the generic checks and an info line saying so.
 FAMILY_NORMS = {"chip": (None, (0.25, 7.5), (2, 2)), "molded": (None, (1.0, 9.0), (2, 3)),
@@ -2280,6 +2298,8 @@ class _Advance:
 
 def format_estimate(est):
     usd = lambda v: f"${v:.2f}" if v is not None else "n/a"
+    if not est.get("rows"):
+        return "datasheet estimate: nothing to read (no part needs a datasheet read); $0.00"
     lines = [f"datasheet estimate: {est['parts']} parts, {est['model']}, {est['mode']}, {est['prices']}",
              f"  input {est['input_tokens']:,} tokens ({'counted by count_tokens' if est['exact_input'] else 'rough: no API key, pages x ' + str(PAGE_TOKENS)});"
              f" expected {usd(est['usd'])}, at most {usd(est['usd_max'])} (every answer at max_tokens, plus a fallback re-run on synchronous calls)"]
@@ -2416,6 +2436,15 @@ def batch_main(argv, estimate=False):
         print(f"error: {why} (use `ecadlib datasheet estimate` to see the cost without a key)", file=sys.stderr)
         return 1
     try:
+        if plan_mode and a.part:                      # a typo'd --part must not read as "nothing to do"
+            try:
+                names = [it.get("name") for it in json.loads(target.read_text(encoding="utf-8")) if isinstance(it, dict)]
+            except (OSError, ValueError, TypeError) as e:
+                raise DatasheetError(f"can't read {target}: {e}")
+            unknown = [p for p in dict.fromkeys(a.part) if p not in names]
+            if unknown:
+                raise DatasheetError(f"no part named {', '.join(unknown)} in {target} (parts: "
+                                     f"{', '.join(map(str, names[:20]))}{' ...' if len(names) > 20 else ''})")
         if plan_mode and rd.estimate_only:
             est = estimate_plan(target, rd, set(a.part) or None)
             print(format_estimate(est))

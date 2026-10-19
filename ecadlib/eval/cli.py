@@ -124,7 +124,12 @@ def main(argv=None):
         k, _, v = t.partition("=")
         if k not in S.TOL:
             ap.error(f"--tol {t}: unknown field {k!r}")
-        tol[k] = float(v)
+        try:
+            tol[k] = float(v)
+        except ValueError:
+            ap.error(f"--tol {t}: {v!r} is not a number of mm")
+        if not 0 <= tol[k] < float("inf"):            # nan would fail every comparison, a negative one every part
+            ap.error(f"--tol {t}: must be a number of 0 or more")
     rep = R.run(a.set, a.out, a.limit, a.model, a.record, a.replay, _list(a.sources), _list(a.family), _list(a.case),
                 a.offline, a.cache, rules=a.rules, providers=a.providers, tol=tol, provider=a.provider,
                 base_url=a.base_url, assist=a.assist, api_key_env=a.api_key_env, repeat=a.repeat, batch=a.batch,
