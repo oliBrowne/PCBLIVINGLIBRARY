@@ -630,7 +630,11 @@ def kicad_mod_beside(half):
     if half.get("kicad_mod") or not half.get("file") or not half.get("ref"):
         return None
     f = Path(half["file"])
-    return (f.parent.parent / "KiCad" / f"{AL.file_stem(half['ref'])}.kicad_mod").as_posix()
+    try:
+        stem = AL.file_stem(half["ref"])
+    except ValueError:                         # a name Altium cannot store (a workspace footprint): no such file
+        return None
+    return (f.parent.parent / "KiCad" / f"{stem}.kicad_mod").as_posix()
 
 
 def of_item(item, base="."):
