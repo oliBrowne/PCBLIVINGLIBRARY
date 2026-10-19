@@ -436,16 +436,24 @@ def merge(items, groups, base, kinds=("mpn", "footprint", "symbol"), who="ecadli
     return mapping
 
 
-def remap_bom(bom, mapping, out):
-    """Copy of the BOM with LibRef / Footprint cells mapped to the keepers (other columns untouched)."""
+def remap_bom(bom, mapping, out, columns=None):
+    """Copy of the BOM with LibRef / Footprint cells mapped to the keepers (other columns untouched). columns: the
+    rules' [bom] columns, as read_bom uses them (None: from the ecadlib.toml found from the BOM's folder). The copy
+    keeps a CSV's delimiter."""
     from . import bom_triage as T
     import pandas as pd
     p = Path(bom)
+    if columns is None:
+        from . import rules as RU
+        try:
+            columns = RU.bom_columns(RU.load(None, start=p.parent))
+        except Exception as e:                    # a broken ecadlib.toml: the fuzzy header guess alone
+            print(f"  warning: rules for {p.name} not loaded ({e}); BOM columns guessed", file=sys.stderr)
     raw = (T._read_excel(p) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else T._read_csv(p)).fillna("")   # the BOM sheet,
                                                                                   # as read_bom picks it (not a cover sheet)
-    hdr = max(range(min(10, len(raw))), key=lambda i: len(T.map_headers(list(raw.iloc[i]))))
+    hdr = T.header_row(raw, columns)
     headers = [str(h).strip() for h in raw.iloc[hdr]]
-    cols = T.map_headers(headers)
+    cols = T.apply_columns(T.map_headers(headers), headers, columns)
     m = {k: {r["from"]: r["to"] for r in mapping if r["kind"] == k} for k in ("symbol", "footprint")}
     n = 0
     for field, kind in (("libref", "symbol"), ("footprint", "footprint")):
@@ -459,7 +467,7 @@ def remap_bom(bom, mapping, out):
                 raw.iat[i, j] = (f"{lib}:" if lib else "") + m[kind][ref]
                 n += 1
     out = Path(out)
-    SS.frame(raw).to_csv(out, header=False, index=False)
+    SS.frame(raw).to_csv(out, header=False, index=False, sep=raw.attrs.get("delimiter") or ",", encoding="utf-8-sig")
     return out, n
 
 

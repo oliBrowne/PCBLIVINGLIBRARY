@@ -101,7 +101,8 @@ A tunnel puts the server on the internet even though it listens on 127.0.0.1, so
   allow it with `--allow-origin`.
 - File arguments must be inside the workspace or a `--lib` folder. `--any-path` lifts that.
 - Offer fewer tools to a remote agent: `--tools read-only` changes nothing but its own reports in the workspace
-  (parity, project BOM), and `--tools core` keeps only the BOM-to-library flow and leaves out the export tools.
+  (parity, project BOM, where-used, the Altium 365 plan file when there is no librarian plan), and `--tools core`
+  keeps only the BOM-to-library flow and leaves out the export tools.
 
 claude.ai's web connectors need OAuth sign-in, which ecadlib does not offer. Use Claude Code or Claude Desktop.
 

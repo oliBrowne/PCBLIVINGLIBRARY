@@ -21,7 +21,7 @@ def quote(s):
 def parse(text: str, keep_quotes=False):
     """Return nested lists. Quoted strings -> str (Q with keep_quotes), bare atoms -> str (numbers kept as text)."""
     stack, cur = [], []
-    pos, end = 0, len(text)
+    pos, end = (1 if text[:1] == "﻿" else 0), len(text)     # a UTF-8 BOM (Windows editors) is not an atom
     while pos < end:
         m = _TOKEN.match(text, pos)
         if not m:

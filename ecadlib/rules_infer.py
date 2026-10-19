@@ -364,6 +364,9 @@ def scan_table(lib, f, explicit=False):
             heads = {f.stem: [str(c) for c in T._read_csv(f).iloc[0]]}
     except Exception:
         return
+    if any({"srcsymbol", "srcfootprint", "status"} <= {_norm(c) for c in hs} for hs in heads.values()):
+        lib.warnings.append(f"skipped {f.name}: an ecadlib triage report (it would teach ecadlib its own columns)")
+        return
     if any({"libraryref", "footprintref"} & {_norm(c) for c in hs} for hs in heads.values()):
         for t, rows in read_table_file(f).items():
             add_table_rows(lib, t, rows, f"table {f.name}[{t}]")
@@ -1217,10 +1220,11 @@ def main(argv=None, inp=input, environ=None):
         if x not in RU.SOURCES:
             print(f"ecadlib init: unknown source {x!r}\n  hint: sources are {', '.join(RU.SOURCES)}", file=sys.stderr)
             return 2
+    broken = None                                        # an existing file that does not parse: --force replaces it
     try:
         old_raw = RU.parse_text(out.read_text(encoding="utf-8"), out.name) if out.is_file() else {}
-    except (RU.RulesError, OSError):
-        old_raw = {}
+    except (RU.RulesError, OSError) as e:
+        old_raw, broken = {}, e
     ans = FR.ask_setup(old_raw, {"tool": a.tool, "libs": a.lib, "workspace": a.workspace, "sources": sources}, inp, print,
                        interactive and not a.yes and not a.json, environ=environ)
     base = out.resolve().parent                          # [setup] paths are relative to the rules file's folder
@@ -1230,40 +1234,43 @@ def main(argv=None, inp=input, environ=None):
         ans["workspace"] = str(Path(ans["workspace"]).resolve())
     paths = a.paths or [str(_abs(l, base)) for l in ans["libs"] if _abs(l, base).exists()] or ["."]
     extra = FR.setup_raw(ans)
-    prop = propose(paths, a.a365, existing=out, extra=extra)
+    prop = propose(paths, a.a365, existing=None if broken else out, extra=extra)
     if a.json:
         print(json.dumps({k: v for k, v in prop.items() if k != "toml"} | {"toml": prop["toml"]}, indent=1, default=str))
         return 0
-    print(f"\nscanned {', '.join(paths)}: " + (", ".join(f"{v} {k}" for k, v in prop["scanned"].items()) or "nothing ecadlib can read")
-          + f"; {prop['components']} parts, {prop['footprints']} footprints, {prop['boms']} BOMs")
+    from . import term as TM
+    say = (lambda *x, **k: None) if TM.VERBOSITY < 0 else print      # -q: only the outcome line
+    say(f"\nscanned {', '.join(paths)}: " + (", ".join(f"{v} {k}" for k, v in prop["scanned"].items()) or "nothing ecadlib can read")
+        + f"; {prop['components']} parts, {prop['footprints']} footprints, {prop['boms']} BOMs")
     for w in prop["warnings"][:10]:
-        print(f"  note: {w}")
+        say(f"  note: {w}")
     if not prop["settings"]:
-        print("  no conventions to learn (fine for a new library; ecadlib's defaults apply). To learn yours, point "
-              "--from at your Altium/KiCad library folders, a DbLib, an Altium 365 export or a BOM")
+        say("  no conventions to learn (fine for a new library; ecadlib's defaults apply). To learn yours, point "
+            "--from at your Altium/KiCad library folders, a DbLib, an Altium 365 export or a BOM")
     for s in prop["settings"]:
         v = json.dumps(s["value"]) if isinstance(s["value"], (dict, list)) else str(s["value"])   # pin_length is a number
-        print(f"  {s['key']:<34} {v[:60]:<60} {s['level']:<6} {s['evidence'][0][:70] if s['evidence'] else ''}")
+        say(f"  {s['key']:<34} {v[:60]:<60} {s['level']:<6} {s['evidence'][0][:70] if s['evidence'] else ''}")
     choices = {}
     if prop["questions"] and not a.yes:
         if not interactive:
-            print("(not a terminal: taking the best guesses; run with --yes to say so)")
+            say("(not a terminal: taking the best guesses; run with --yes to say so)")
         else:
             for q in prop["questions"]:
                 choices[q["key"]] = _ask(q, inp)
-            prop = propose(paths, a.a365, choices, existing=out, extra=extra)
+            prop = propose(paths, a.a365, choices, existing=None if broken else out, extra=extra)
     if prop["errors"]:
         print("error: " + "; ".join(prop["errors"]), file=sys.stderr)
         return 2
-    done = lambda: FR.finish_init(ans, out, environ=environ, run_doctor=not a.no_doctor) and None
+    done = lambda: FR.finish_init(ans, out, say, environ=environ, run_doctor=not a.no_doctor) and None
     if out.exists():
         res = save(prop["toml"], out, overwrite=False)
         if res.get("unchanged"):
             print(f"{out} already says this; nothing written")
             done()
             return 0
-        print(f"\n{out} exists; changes:\n{res['diff']}")
-        ok = a.force
+        print(f"\n{out} exists and cannot be read ({broken}); a new one is proposed" if broken else
+              f"\n{out} exists; changes:\n{res['diff']}")
+        ok = a.force or (not broken and _setup_only(old_raw, prop["rules"]))   # only the [setup] answers changed
         if not ok and interactive and not a.yes:
             ok = inp(f"replace {out}? (a copy is kept as {out.name}.bak) [y/N] ").strip().lower() in ("y", "yes")
         if not ok:
@@ -1280,6 +1287,16 @@ def main(argv=None, inp=input, environ=None):
           f"`ecadlib rules check` shows the effective rules.")
     done()
     return 0
+
+
+SETUP_SECTIONS = ("setup", "sources", "providers")
+
+
+def _setup_only(old_raw, new_raw):
+    """True when the proposal differs from the existing file only in the init answers ([setup], [sources],
+    [providers]): re-running `init --lib X` then updates them in place (a .bak is kept) instead of asking."""
+    strip = lambda r: {k: v for k, v in (r or {}).items() if k not in SETUP_SECTIONS and not k.startswith("_")}
+    return strip(old_raw) == strip(new_raw)
 
 
 def _abs(p, base):

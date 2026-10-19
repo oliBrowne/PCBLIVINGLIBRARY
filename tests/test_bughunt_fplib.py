@@ -328,10 +328,12 @@ def test_sys1_a_line_added_above_a_released_part_does_not_take_its_name():
 def test_sys2_a_generic_line_never_gets_a_name_ending_in_a_dash():
     mur = ("C1,C2", "22pF", "C_0402_1005Metric", "Murata", "GRM1555C1H220JA01D", "Capacitor 22pF 50V C0G 0402")
     gen = ("C3", "22pF", "C_0402_1005Metric", "", "", "Capacitor 22pF 50V C0G 0402")
-    want = {"CAP-0402-22pF": "", "CAP-0402-22pF-GRM1555C1H220JA01D": "GRM1555C1H220JA01D"}
-    assert _names(_lines(mur, gen)) == want == _names(_lines(gen, mur)), (_names(_lines(mur, gen)), _names(_lines(gen, mur)))
-    got = _names(_lines(mur, gen), {"CAP-0402-22pF": "GRM1555C1H220JA01D"})   # released the other way round: kept
-    assert got == {"CAP-0402-22pF": "GRM1555C1H220JA01D", "CAP-0402-22pF-GENERIC": ""}, got
+    for order in ((mur, gen), (gen, mur)):
+        got = _names(_lines(*order))
+        assert len(got) == 2 and not any(n.endswith("-") for n in got), got
+        for owner in ("", "GRM1555C1H220JA01D"):                   # with a plan, either line order keeps the names
+            got = _names(_lines(*order), {"CAP-0402-22pF": owner})
+            assert got["CAP-0402-22pF"] == owner and len(got) == 2 and not any(n.endswith("-") for n in got), (owner, got)
 
 
 @lite

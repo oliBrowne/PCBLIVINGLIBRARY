@@ -21,7 +21,10 @@ import pandas as pd
 
 from .altium_lib import file_stem, lib_name
 from .bom_triage import placeholder_mpn, read_bom
-from .kicad_index import package_of
+from .kicad_index import norm_mpn, package_of, parse_value
+
+PLAIN_VALUE = re.compile(r"(\d+(?:[.,]\d+)?\s*[pnuµμmkKMGR]?|\d+[pnuµμmkKMGR]\d+)\s*(?:F|H|Ω|R|ohms?)?", re.I)   # '4k7',
+                                                                  # '100nF': only a value (not '100nF 50V')
 
 COLUMNS = ["Part Number", "Library Ref", "Library Path", "Footprint Ref", "Footprint Path",
            "Description", "Value", "Comment", "Manufacturer", "Manufacturer Part Number",
@@ -98,21 +101,15 @@ def kind_of(descriptions=(), footprints=()):
     return None
 
 
-def _owners(rows, prior):
-    """Lines that share a synthetic Part Number but are different parts (100nF 16V vs 50V) -> {part number: MPN that
-    keeps the plain name}. The part already released under that name keeps it (prior: {name: MPN} of the plan
-    so far), so a line added above it never takes its name; else the generic (MPN-less) line; else the first line."""
-    groups = {}
-    for r in rows:
-        groups.setdefault(r["Part Number"], [])
-        if r["Manufacturer Part Number"] not in groups[r["Part Number"]]:
-            groups[r["Part Number"]].append(r["Manufacturer Part Number"])
-    own = {}
-    for pn, mpns in groups.items():
-        if len(mpns) > 1:
-            was = (prior or {}).get(pn)
-            own[pn] = was if was in mpns else "" if "" in mpns else mpns[0]
-    return own
+def _safe_name(s, notes):
+    """lib_name(s), or for a name Altium can't store (a Greek mu, CJK text) the same name with those characters as
+    '_' and a note saying so: one such part must not stop the whole library."""
+    try:
+        return lib_name(s)
+    except ValueError as e:
+        safe = "".join(ch if ch.encode("cp1252", "ignore") else "_" for ch in str(s))
+        notes.append(f"{e}: named {safe!r} instead")
+        return lib_name(safe)
 
 
 def prior_names(items):
@@ -132,8 +129,13 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         for _, t in triage.iterrows():
             if str(t["mpn"]):                  # an empty MPN would hand one row's footprint to every MPN-less line
                 tri[str(t["mpn"])] = t
-    out, renamed = {}, {}
+    out, seen, renamed, same_value, canon, first, notes = {}, {}, {}, {}, {}, {}, {}
+    # a name already in the plan stays with its part (SYS-1): when the part released under it is still in the BOM, a
+    # line added above it with another MPN takes the suffixed name instead
+    present = {norm_mpn("" if placeholder_mpn(ln.get("mpn", "")) else ln.get("mpn", "")) for ln in lines}
+    reserved = {n: norm_mpn(m) for n, m in (prior or {}).items() if norm_mpn(m) in present}
     for ln in lines:
+        bad = []
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
         cat = CATEGORY.get(prefix.group(0) if prefix else "U", "Misc")
         mpn, lcsc = ln.get("mpn", ""), ln.get("lcsc", "")
@@ -153,6 +155,10 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         fp_ref = fp.split(":")[-1]
         pkg = package_of(fp, ln.get("description")) or ""
         value = ln.get("value", "")
+        if cat in GENERIC_SYMBOL and not mpn and PLAIN_VALUE.fullmatch(value.strip()):
+            pv = parse_value(value)                   # 1uF / 1u / 1µF, 100nF / 0.1uF, 4k7 / 4.7k: one part, named
+            if pv is not None:                        # with the first spelling the BOM uses
+                value = same_value.setdefault((cat, pkg, fp_ref, f"{pv:.6g}"), value)
         name_mpn = re.sub(r"\s+", "_", mpn.strip())   # a space in an MPN is a separator ('FC-135 32.768KA-AG0'
         if custom:                                    # -> FC-135_32.768KA-AG0, as kicad_export.kname), not dropped
             f = RU.line_fields(ln, cat, pkg, rules, ref)
@@ -162,8 +168,22 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             pn = ("-".join(t for t in (cat[:3].upper(), pkg, value) if t)
                   if cat in GENERIC_SYMBOL and value and not (kind and value == mpn)
                   else name_mpn or value or ln.get("designator", "").split(",")[0]).replace(" ", "")
-        lib_ref = lib_name(GENERIC_SYMBOL.get(cat) or (custom and mpn and RU.symbol_name(f, rules)) or mpn or pn)
-        kicad_fp = fp_ref = lib_name(fp_ref)
+        key = norm_mpn(mpn)                     # one part however the MPN is typed: case, dashes (TPS62133-RGTR)
+        if key and key in canon:
+            pn = canon[key]
+        else:                                   # no MPN: the footprint tells two parts apart unless the name has the
+            ident = key or ("" if pkg and pkg in pn else fp_ref)              # package (RES-0603-10k) already
+            if pn in reserved and pn not in seen and key != reserved[pn]:
+                seen[pn] = None                 # held for the part released under this name, further down the BOM
+            if pn in reserved and seen.get(pn) is None and key == reserved[pn]:
+                seen[pn] = ident
+            if seen.setdefault(pn, ident) != ident:   # same synthetic PN, different part (100nF 16V vs 50V; a 10k
+                pn = f"{pn}-{name_mpn or fp_ref}".replace(" ", "")              # SMD and a 10k axial): keep both
+            if key:
+                canon[key] = pn
+        pn = _safe_name(pn, bad)
+        lib_ref = _safe_name(GENERIC_SYMBOL.get(cat) or (custom and mpn and RU.symbol_name(f, rules)) or mpn or pn, bad)
+        kicad_fp = fp_ref = _safe_name(fp_ref, bad)
         if custom:
             fp_ref = lib_name(RU.footprint_name(fp_ref, rules, ref))
             if fp_ref != kicad_fp:
@@ -184,18 +204,27 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             "ComponentLink2Description": "Datasheet" if lcsc else "",
             "ComponentLink2URL": f"https://www.lcsc.com/datasheet/{lcsc}.pdf" if lcsc else "",
         })
-    own = _owners([r for v in out.values() for r in v], prior)
-    for r in (r for v in out.values() for r in v):   # same synthetic PN, different part (100nF 16V vs 50V): keep both
-        pn, mpn = r["Part Number"], r["Manufacturer Part Number"]
-        if pn in own and own[pn] != mpn:
-            tag = re.sub(r"\s+", "_", mpn.strip()) or "GENERIC"     # the generic line, when a released MPN owns the name
-            r["Part Number"] = f"{pn}-{tag}".replace(" ", "")
-            if pn in renamed:
-                renamed[r["Part Number"]] = renamed[pn]
+        row, des = out[cat][-1], ln.get("designator", "") or "?"
+        notes.setdefault(pn, []).extend(bad)
+        if pn not in first:
+            first[pn] = (row, des)
+        else:                                   # a second BOM line for this part: the first one wins, say what differs
+            keep, kdes = first[pn]
+            diff = [f"{k} {keep[k]!r} vs {row[k]!r}" for k in ("Footprint Ref", "Manufacturer", "Value",
+                                                                 "Manufacturer Part Number", "Supplier Part Number 1")
+                    if str(keep[k]).strip() and str(row[k]).strip() and keep[k] != row[k]]
+            if diff:
+                notes[pn].append(f"BOM lines {kdes} and {des} are one part {pn} but differ ({'; '.join(diff)}): "
+                                 f"using {kdes}; check the BOM")
+    notes = {k: list(dict.fromkeys(v)) for k, v in notes.items() if v}
+    for v in notes.values():
+        for n in v:
+            print(f"  warning: {n}", file=sys.stderr)
     cols = columns(rules)
     res = {k: pd.DataFrame(v, columns=cols).fillna("").drop_duplicates("Part Number") for k, v in sorted(out.items())}
     for df in res.values():
         df.attrs["kicad_fp"] = renamed
+        df.attrs["notes"] = notes               # {Part Number: [BOM conflicts, renamed characters]}
     return res
 
 

@@ -416,9 +416,22 @@ _ABS = re.compile(r"(?<![\w.:/])(?:/(?:[\w.@+-]+/)+[\w.@+-]+|[A-Za-z]:\\(?:[^\s\
 _MODULE = re.compile(r"\s*\((?:see |via |from |by )?" + _MOD + r"[^)]*\)|\b" + _MOD)
 
 
+_ROOTS = re.compile(r"/(home|Users|tmp|var|etc|opt|usr|mnt|srv|private|root|Volumes|media|run|data|workspace|"
+                    r"workspaces|nix|github|builds?|sessions|proc|dev|sys|lib)/", re.I)
+
+
+def _is_path(s):
+    """A real absolute path, not an active-low pin name such as "/RESET/EN" or "/CS/SHDN": a Windows drive, a
+    known root (/home, /Users, /tmp ...), three or more parts, or a file name with an extension."""
+    if not s.startswith("/"):
+        return True                                   # C:\...
+    parts = s.strip("/").split("/")
+    return bool(_ROOTS.match(s + "/")) or len(parts) >= 3 or bool(re.search(r"\.[A-Za-z0-9]{1,5}$", parts[-1]))
+
+
 def clean(text):
     """Absolute paths -> file name; "(ecadlib.stdparts)"-style module mentions removed."""
-    t = _ABS.sub(lambda m: re.split(r"[\\/]", m.group(0))[-1], str(text or ""))
+    t = _ABS.sub(lambda m: re.split(r"[\\/]", m.group(0))[-1] if _is_path(m.group(0)) else m.group(0), str(text or ""))
     t = re.sub(r"\s*\((?:%s)\)" % "|".join(map(re.escape, INTERNAL)), "", t)        # "(kicad_import)" notes
     return re.sub(r"\s{2,}", " ", _MODULE.sub("", t)).strip()
 
@@ -427,5 +440,5 @@ def leaks(text):
     """Internal names and absolute paths found in user-facing text (for tests): [str]."""
     t = str(text or "")
     out = [n for n in INTERNAL if n in t]
-    out += re.findall(r"\b" + _MOD, t) + _ABS.findall(t)
+    out += re.findall(r"\b" + _MOD, t) + [p for p in _ABS.findall(t) if _is_path(p)]
     return out

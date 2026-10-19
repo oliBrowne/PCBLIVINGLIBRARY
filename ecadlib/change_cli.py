@@ -24,7 +24,7 @@ Who you are: --user, else $ECADLIB_USER, else git config user.name / user.email.
 import argparse, json, sys
 from pathlib import Path
 
-from . import change_diff as CD, change_gate as CG, fingerprint as FP, ledger as LG
+from . import change_diff as CD, change_gate as CG, fingerprint as FP, ledger as LG, term as TM
 
 CLASS_MARK = {"identity": "ID", "electrical": "EL", "geometry-major": "G+", "geometry-minor": "g-", "cosmetic": "c "}
 
@@ -226,7 +226,7 @@ def cmd_history(a):
             what = ev
             detail = "; ".join(x for x in (_counts(e.get("classes") or {}) if ev == "hold" else "", e.get("reason")) if x)
         print(f"  {e.get('at', ''):<26} {what:<18} {e.get('writer') or '':<15} {e.get('by') or '':<30} {detail}")
-        if ev in LG.RELEASES and e.get("changes") and a.verbose:
+        if ev in LG.RELEASES and e.get("changes") and (a.verbose or TM.VERBOSITY > 0):
             for c in e["changes"]:
                 print(f"      {c['class']:<15} {c['text']}")
     return 0

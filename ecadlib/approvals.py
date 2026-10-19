@@ -401,7 +401,9 @@ def _run(a):
         try:
             rec = decide(it, a.action, who, a.role, a.comment, base, policy)
             entry.update(role=rec["role"], hash=rec["hash"], result="recorded", status=refresh_status(it, policy, base))
-            note = "" if it.get("status") != "held" else " (still held by the release check)"
+            note = (" (still held by the release check)" if it.get("status") == "held" else
+                    " (not enforced: no approval policy, so it is still pushed)" if a.action == "reject" and not policy
+                    else "")
             print(f"  {a.action.rstrip('e')}ed  {it['name']:<28} -> {it.get('status')}{note}")
         except Refused as e:
             refused += 1
@@ -409,11 +411,14 @@ def _run(a):
             print(f"  refused  {it['name']:<28} {e}")
         audit(base, entry)
     write_text_atomic(plan, json.dumps(items, indent=2))
+    from .librarian import refresh_review
+    refresh_review(plan, items)
     from . import timing                       # review time: from the release check to this decision
     timing.mark_review(plan.parent, a.action)
     if not policy:
         print("no approval policy (approvals.json/.toml next to the plan, or [release.approvals] in ecadlib.toml): "
-              "recorded, but push does not require them")
+              "recorded, but push does not require them" + ("; a rejected part stays ready and is pushed (with a "
+                                                             "policy, a rejection holds it)" if a.action == "reject" else ""))
     print(f"{len(sel) - refused} recorded as {who}, {refused} refused -> {plan}; log {base / AUDIT}")
     return 2 if refused else 0
 

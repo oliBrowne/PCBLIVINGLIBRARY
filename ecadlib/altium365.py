@@ -276,6 +276,8 @@ def plan(lines, triage=None, models=None, root=None, rules=None, prior=None):
                 "footprint": {"ref": row["Footprint Ref"], "file": fp},
                 "status": "ready" if sym and fp else "needs_altium_models",
             })
+            if df.attrs.get("notes", {}).get(row["Part Number"]):    # BOM lines that disagree, renamed characters
+                items[-1]["bom_notes"] = list(df.attrs["notes"][row["Part Number"]])
             kfp = df.attrs.get("kicad_fp", {}).get(row["Part Number"])
             if kfp:                            # renamed by the rules: keep the library name for lookups and checks
                 items[-1]["footprint"]["kicad"] = kfp
@@ -579,7 +581,7 @@ def main(argv=None):
     sub.add_parser("workspaces", help="list workspaces visible to NEXAR_TOKEN")
     u = sub.add_parser("push", help="release / update parts from a plan")
     u.add_argument("plan")
-    u.add_argument("--workspace", required=True, help="workspace URL from `workspaces`")
+    u.add_argument("--workspace", help="workspace URL from `workspaces` (default: [altium365] workspace in ecadlib.toml)")
     u.add_argument("--dry-run", action="store_true", help="no network; write the requests that would be sent")
     u.add_argument("-o", "--out", default="out/altium365/push_report.json")
     u.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan's folder or here)")
@@ -610,6 +612,11 @@ def main(argv=None):
 
     if a.cmd == "push" and not Path(a.plan).is_file():
         sys.exit(f"{a.plan}: no such plan file (write one with `ecadlib altium365 plan BOM -o {a.plan}`)")
+    if a.cmd == "push" and not a.workspace:
+        a.workspace = str((RU.load(a.rules, start=Path(a.plan).parent).get("altium365") or {}).get("workspace") or "").strip()
+        if not a.workspace:
+            sys.exit("ecadlib altium365 push: no workspace: pass --workspace URL or set [altium365] workspace in ecadlib.toml "
+                     "(`ecadlib altium365 workspaces` lists them)")
     token = UC.secret("NEXAR_TOKEN")
     if not token and not (a.cmd == "push" and a.dry_run):
         sys.exit("set NEXAR_TOKEN (Nexar portal token with design.domain, user.access, openid scopes)")
