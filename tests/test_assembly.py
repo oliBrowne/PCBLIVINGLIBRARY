@@ -606,3 +606,17 @@ def test_assembly_parameters_never_void_a_sign_off():
     assert AP.content_hash(item) == h
     item["parameters"][0]["value"] = "4k7"
     assert AP.content_hash(item) != h
+
+
+def test_altium_menu_assembly_check_wants_a_pcb_project():
+    # AD26 run 2026-10-19: with a script project focused the menu said "h47.PrjScr: no pick-and-place file yet"
+    from ecadlib import altium_menu as AM
+    with tempfile.TemporaryDirectory() as d:
+        cfg = {"workspace": str(Path(d) / "ws"), "offline": True}
+        r = AM.run_action(cfg, "assembly", {"project": str(Path(d) / "h47.PrjScr")})
+        assert r["status"] == "error" and "not a PCB project" in r["message"] and ".PrjPcb" in r["fix"], r
+        prj = Path(d) / "nopnp" / "nopnp.PrjPcb"
+        prj.parent.mkdir()
+        prj.write_text("[Design]\n", encoding="utf-8")
+        r = AM.run_action(cfg, "assembly", {"project": str(prj)})
+        assert r["status"] == "error" and "no pick-and-place file yet" in r["message"], r

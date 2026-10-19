@@ -217,7 +217,7 @@ def read_altium_pnp(path):
                              footprint=r[c_fp].strip() if c_fp is not None else "", x=x, y=y, angle=ang % 360, side=side,
                              tool="altium", fields=fields, point="origin" if use_ref else "center"))
     out.sort(key=lambda p: _natural(p.ref))
-    return out, {"file": str(path), "origin": (0.0, 0.0), "origin_why": "the Altium file's own origin",
+    return out, {"file": str(path), "origin": (0.0, 0.0), "origin_why": "Altium file's own origin",
                  "format": "Altium pick-and-place CSV" + ("" if use_ref else " (Center-X/Y: no Ref-X/Y columns)")}
 
 
