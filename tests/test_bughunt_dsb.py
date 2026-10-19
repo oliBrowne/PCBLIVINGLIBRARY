@@ -555,6 +555,29 @@ def test_ds54_librarian_cost_hint_names_real_commands():
     assert L.cost_hint("x: HTTP 404") == "x: HTTP 404"
 
 
+# ---------------------------------------------------------------- DS-13: a table entry picked by the read itself
+def test_ds13_table_match_by_the_reads_own_name_is_self_checked_not_cross_checked():
+    from ecadlib import crosscheck as CC
+    from tests import test_crosscheck as TC
+    soic = TC.TR.on_page(TC.TD.INCH)                 # the read names SOIC-8; the BOM says 'DGK' (TI's MSOP-8 code)
+    api = TC.API(lambda k, m, b: soic)
+    with tempfile.TemporaryDirectory() as d:
+        res = TC.read(d, api, package="DGK")
+        assert api.sent == [("read", "claude-opus-5-5")]                  # no extra paid read in auto mode
+        cc = res["sidecar"]["cross_check"]
+        assert cc["status"] == "self-checked", cc
+        line = CC.summary_line(cc)
+        assert line.startswith("self-checked only: standard:SOIC-8_3.9x4.9mm_P1.27mm") and "agrees" not in line, line
+        assert any(r.startswith("cross-check: self-checked only") for r in res["needs_review"]), res["needs_review"]
+        md = (Path(d) / "out" / "datasheet" / "TESTPART.review.md").read_text()
+        assert "## Cross-check: self-checked only (no independent second source)" in md, md
+    rows = [{"part": "A", "cross_check": "self-checked"}, {"part": "B", "cross_check": "agreed"}]
+    assert "1 agreed with a second source, 1 self-checked only" in "\n".join(CC.review_lines(rows))
+    api = TC.API(lambda k, m, b: soic)                # the BOM names the package itself: an independent agreement
+    with tempfile.TemporaryDirectory() as d:
+        assert TC.read(d, api, package="SOIC-8_3.9x4.9mm_P1.27mm")["sidecar"]["cross_check"]["status"] == "agreed"
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

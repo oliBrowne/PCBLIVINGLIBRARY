@@ -2000,7 +2000,7 @@ class Reader:
         cc = CC.run(self, job, res, rec.get("model") or job.get("model") or self.model)
         if cc:
             res["sidecar"]["cross_check"] = res["cross_check"] = cc
-            if cc["status"] == "unchecked":
+            if cc["status"] in ("unchecked", "self-checked"):
                 res["needs_review"].append(f"cross-check: {CC.summary_line(cc)}")
             res["needs_review"] += [f"{INJECTION} (cross-check read): {q[:200]!r}" for c in cc.get("checks") or []
                                     for q in c.get("embedded_instructions") or []]

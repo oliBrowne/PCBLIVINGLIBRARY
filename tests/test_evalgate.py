@@ -130,8 +130,10 @@ def test_gate_runs_offline_and_catches_a_wrong_answer():
         res = G.check(rep3, base, subset=True)
         c3 = next(c for c in rep3["cases"] if c["id"] == custom["id"])
         assert not res["ok"] and not c3["pass"] and any("cross-check disagrees" in t for t in c3["tried"]), (res["text"], c3["tried"])
-    assert {c["cross_check"] for c in rep["cases"] if c["source"] == "datasheet"} <= {"agreed", "unchecked"}
-    assert "agreed" in {c["cross_check"] for c in rep["cases"]}
+    assert {c["cross_check"] for c in rep["cases"] if c["source"] == "datasheet"} <= {"agreed", "self-checked", "unchecked"}
+    # DS-13: the gate's cases name no BOM package, so a table entry is found only by the read's own package name:
+    # "self-checked", not an independent agreement
+    assert "self-checked" in {c["cross_check"] for c in rep["cases"]}
 
 
 def test_gate_refuses_every_network_request_and_ignores_keys():

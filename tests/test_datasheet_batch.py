@@ -388,7 +388,9 @@ def test_result_cache_makes_reruns_free():
         j = rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT")
         assert rd.cached(j) is None
         res = rd.read_now(j)
-        assert res["needs_review"] == [] and len(api.of("/v1/messages")) == 1
+        assert len(api.of("/v1/messages")) == 1                    # DS-13: the only item is the table entry found by
+        assert [r for r in res["needs_review"] if not r.startswith("cross-check: self-checked only")] == [], \
+            res["needs_review"]                                     # the read's own package name (not independent)
         assert (Path(d) / "datasheet" / "TESTPART.review.md").exists() and (Path(d) / "datasheet" / "api_log.jsonl").exists()
         assert rd.cached(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))["spec"]["name"] == res["spec"]["name"]
         assert len(api.of("/v1/messages")) == 1

@@ -364,11 +364,12 @@ def test_eval_consistency_and_cross_check_columns():
         with mock.patch.object(D.requests, "post", side_effect=AssertionError("replay must not call the API")):
             rep = TE.run(d, "a", replay=rec, repeat=2)
         cs = {c["mpn"]: c for c in rep["cases"]}
-        assert cs["SOICPART"]["cross_check"] == "agreed" and cs["QFNPART"]["cross_check"] == "agreed"   # table / second read
+        assert cs["SOICPART"]["cross_check"] == "self-checked" and cs["QFNPART"]["cross_check"] == "agreed"   # DS-13: the
+        # table entry was found only by the read's own package name (no BOM package) / an independent second read
         assert cs["QFNPART"]["files"]["kicad_mod"] and cs["QFNPART"]["files"]["pcblib"] and cs["QFNPART"]["files"]["schlib"]
         co = rep["summary"]["consistency"]
         assert co == {"cases": 2, "same": 2, "rate": 1.0, "differ": [], "from": "recorded answers", "runs": 2}, co
-        assert rep["summary"]["cross_check"] == {"agreed": 2}
+        assert rep["summary"]["cross_check"] == {"agreed": 1, "self-checked": 1}
         md = (Path(d) / "a" / "report.md").read_text()
         assert "**Consistency:** 2/2 parts gave the same files when run again (recorded answers, 2 runs)." in md
         # a run whose recording disagrees: different files and cross-check status, and the CLI says so
