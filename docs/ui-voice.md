@@ -53,7 +53,7 @@ Actions use the same words in every front end: **Pick…** (a symbol or footprin
 | standard package table | ecadlib's built-in table of standard packages (SOT-23, SOIC-8, 0603, ...). | stdparts |
 | release check | The checks a part must pass before it is released (pins vs pads, footprint, height, fields, KiCad/Altium match). | release_check |
 | KiCad and Altium match | The KiCad and Altium files of a part read back the same (pads, holes, paste, courtyard, 3D). | parity |
-| review queue | Held parts and held changes that wait for a person to decide. | queue.json |
+| review queue | Held parts and held changes that wait for a person to decide. | held_parts |
 | library plan | The record of every part, its sources and its state (a file next to the library). | plan.json |
 | release anyway | Override a held reason after looking; recorded with who and when. | --allow |
 

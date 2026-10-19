@@ -94,7 +94,7 @@ All 13 of the librarian's `.PcbLib` files hash the same as their source `.kicad_
 
 * `.SchLib`/`.PcbLib`: component and footprint naming patterns, parameter names and how often each is used, which mechanical layers carry the courtyard, assembly and 3D body, and the density (from IPC name suffixes, or from chip pad toe-to-toe compared with IPC-7351 A/B/C);
 * `.DbLib` and its data (`.xlsx`/`.csv`/`.sqlite`; for `.mdb` only the field map is read);
-* an Altium 365 part list (an `altium365` state file, or JSON in the `a365_sync` shape `{name, folder, parameters, symbol, footprint}`): folders and parameters;
+* an Altium 365 part list (an `altium365` state file, or JSON in the shape `{name, folder, parameters, symbol, footprint}`): folders and parameters;
 * KiCad `.kicad_sym`/`.pretty`, and BOM/parts spreadsheets (column names).
 
 Names are pattern-mined per category (`RES_{package}_{value}_{tolerance}`, `R{package}_{value}`, `{mpn}` ...) with value style (`4K7`, `4.7k`, `4.7kΩ`) detected. The written file says, for every setting, where it came from and how confident the guess is. Confidence counts how much of the library shows the convention, not only how much of the evidence agrees: a setting backed by fewer than 3 parts, footprints or symbols, or a footprint layer seen in fewer than half of the footprints (one `.Designator` in 48 footprints), is low. Low settings are not written; they are listed as comments at the top of the file, and ecadlib's default stays. The courtyard is never learned onto a layer that holds the library's 3D bodies, and a `.Designator` on a mechanical layer is not proposed when the library has silkscreen on the overlay. `init` asks a question only where the evidence is split (the best pattern under 60% with a runner-up at 20% or more); `--yes` takes the best guess. If `ecadlib.toml` already exists, `init` shows a diff, writes the proposal to `ecadlib.toml.proposed` and changes nothing unless you confirm or pass `--force` (the old file is kept as `.bak`).
@@ -134,12 +134,11 @@ cross_check_model = ""      # "" = the model that made the first read
   printed min..max. Pins are compared by count, numbers and normalised names.
 - **Agree**: the part is accepted, marked `cross_check: agreed`, and the report says which fields were checked.
   **Disagree**: the part is **held** and nothing is written. Both values go to the review (`review.md` section "Cross-checks
-  of datasheet reads", the datasheet report and the agent PR doubts). Neither value is picked or averaged.
+  of datasheet reads" and the datasheet report). Neither value is picked or averaged.
   **Unchecked** (the second read refused, was over budget, or had nothing comparable): the part is accepted with a review item.
 - With `batch = true`, the first reads go in the batch and the second reads are sent synchronously afterwards.
-- The single-read CLI (`ecadlib datasheet PDF --part`) is not cross-checked; the librarian, the agent and the eval are.
+- The single-read CLI (`ecadlib datasheet PDF --part`) is not cross-checked; the librarian and the eval are.
 - Workspace `cross_checks(bom)` and MCP tool `cross_checks` list agreed / disagreed / unchecked parts of a librarian plan.
-  The agent queue summary carries the cross-check status.
 
 **Repeatable runs.** `[ai] temperature = "auto"` (default) sends `temperature 0` (plus a fixed `seed` on
 OpenAI-compatible endpoints) only to models known to accept it. Recent Claude models (Opus 5.x / 4.7+, Sonnet 5.x)
@@ -160,19 +159,19 @@ Tested offline only, with fake and recorded answers (`tests/test_crosscheck.py`)
 
 **Versioned files.** Everything ecadlib writes and reads back later has a schema version, one integer per kind of file
 (`ecadlib/migrate.py`, `KINDS`): `plan` (plan.json), `librarian_state` (now v2), `approvals_audit`, `agent`
-(`<workspace>/agent/`), `queue` (`agent/queue/`), `http_cache`, `rules` (ecadlib.toml), `approvals_policy`
-(approvals.json) and `lock`. Files other code iterates (a plan is a JSON list, the queue is a folder of items) keep the
+and `queue` (files an older ecadlib's library agent left in `<workspace>/agent/`), `http_cache`, `rules` (ecadlib.toml),
+`approvals_policy` (approvals.json) and `lock`. Files other code iterates (a plan is a JSON list) keep the
 version in the folder's `ecadlib_schema.json`; files a person edits and the lock carry a top-level `schema_version`
 (absent = 1). A folder without a version is a workspace from before versioning (v1 of everything).
 
 * **Older** files are migrated: in memory when they are only read (`migrate.read`), on disk when a command writes the
-  folder anyway (the librarian, the agent, the queue), after a copy to `<folder>/.ecadlib_backup/<kind>-v<old>-<time>/`.
+  folder anyway (the librarian, `ecadlib migrate`), after a copy to `<folder>/.ecadlib_backup/<kind>-v<old>-<time>/`.
   Migrations are registered in `MIGRATIONS` and are safe to run twice. The one so far, `librarian_state` v1 -> v2,
   records each footprint's name and geometry hash (what `fp_share` would compute from its `.kicad_mod` anyway; a
   footprint shared by name only is left unchecked so the librarian re-checks it).
 * **Newer** files are refused with one line, never misread: `librarian/board/plan.json was made by ecadlib 0.5.0 (plan
   schema 2; this ecadlib 0.3.0 reads up to 1): upgrade ecadlib (pip install -U ecadlib)`. Checked when the web UI / MCP
-  workspace opens, by the librarian, agent, queue, HTTP cache, rules and approvals loaders. A kind only a newer ecadlib
+  workspace opens, by the librarian, HTTP cache, rules and approvals loaders. A kind only a newer ecadlib
   knows is left alone.
 * `ecadlib migrate [PATH] [--check] [--dry-run] [--json]` lists every versioned file under PATH (ok / old / new) and
   migrates the old ones; `--check` exits 1 when anything needs migrating or is newer and, like `--dry-run`, writes
@@ -181,12 +180,11 @@ version in the folder's `ecadlib_schema.json`; files a person edits and the lock
 **Proved on real old workspaces.** `tests/fixtures/upgrade/*.tar.gz` (180 KB) are workspaces made by the code of four
 earlier commits (`python3 -m tests.upgrade_fixtures build OLD_CHECKOUT LABEL`, run from a `git worktree` of that commit,
 offline, from the end-to-end tests' recorded KiCad / EasyEDA inputs, through that version's own Workspace API):
-`v0.2.0` (da4e1ad), `v0.3.0` (9916ca1: + approvals, ecadlib.toml), `r5-agent` (f2eedbf: + watch state, review queue,
-agent status) and `r7-stdparts` (26ca9a5). `tests/test_upgrade.py` opens each with today's code: the librarian
+`v0.2.0` (da4e1ad), `v0.3.0` (9916ca1: + approvals, ecadlib.toml), `r5-agent` (f2eedbf) and `r7-stdparts`
+(26ca9a5). `tests/test_upgrade.py` opens each with today's code: the librarian
 migrates the state (backup byte-identical to the original), keeps the parts the old version finished (files
 untouched) and builds the rest exactly as a fresh build would (same statuses and sources); Ann's approval from 0.3.0
-still counts (content hash unchanged); queue items from round 5 are listed, approved into the plan and retried, and the
-old watch state reports no new parts on a re-scan.
+still counts (content hash unchanged).
 
 **Reproducible rebuilds.** The librarian writes `<out>/library.lock.json` at the end of every run (no timestamps: a
 re-run that changes nothing leaves it byte-identical). Per part: the BOM-line fingerprint, the ecadlib version and
@@ -232,12 +230,12 @@ Every `kicad_import` conversion records in `<out>/manifest.json` where each outp
 
 ```
 ecadlib upkeep library/altium365/plan.json [--bom bom.csv] [--manifest models/manifest.json] [--workspace URL] \
-        [--checks lifecycle,upstream,sourcing,a365] [--state out/upkeep_state] [-o out/upkeep] [--apply] [--github issue|pr]
+        [--checks lifecycle,upstream,a365,changes] [--state out/upkeep_state] [-o out/upkeep] [--apply] [--github issue|pr]
 python3 -m tests.test_upkeep
 ```
 
-This runs the lifecycle watcher, the KiCad upstream check, the price and stock check, and the Altium 365 drift check together, in one process. It compares the results with what the last run saw (`--state DIR`) and reports only what is **new**. That covers parts that became NRND, last time buy or EOL; stock that ran out or came back; a best unit price that rose by more than 20 % (`--price-jump`, or `price_jump_pct` under `[upkeep]` in `ecadlib.toml`); KiCad sources that changed, were renamed or were deleted; and new Altium 365 drift rows. The output is one `out/upkeep.md` plus `.json`. Exit codes: 0 nothing new, 1 new changes, 2 error. When a check fails, the other checks still run, its state is kept, and its changes are reported again next time.
+This runs the lifecycle watcher, the KiCad upstream check, the Altium 365 drift check and the change-control check together, in one process. It compares the results with what the last run saw (`--state DIR`) and reports only what is **new**. That covers parts that became NRND, last time buy or EOL; stock that ran out or came back; KiCad sources that changed, were renamed or were deleted; new Altium 365 drift rows; and released parts with changes waiting for approval or projects that use an older revision ([change control](change-control.md)). The output is one `out/upkeep.md` plus `.json`. Exit codes: 0 nothing new, 1 new changes, 2 error. When a check fails, the other checks still run, its state is kept, and its changes are reported again next time.
 
-A check without credentials is **skipped**, not failed, and the report says what to set. Lifecycle needs Nexar, DigiKey or Mouser keys. Sourcing also uses JLCPCB, which needs no key. A365 needs `NEXAR_TOKEN` and a workspace, from `--workspace` or `[altium365] workspace`. Upstream needs the provenance `manifest.json` that `kicad_import` writes. It is found next to the plan or in `<plan dir>/models/`.
+A check without credentials is **skipped**, not failed, and the report says what to set. Lifecycle needs Nexar, DigiKey or Mouser keys. A365 needs `NEXAR_TOKEN` and a workspace, from `--workspace` or `[altium365] workspace`. Upstream needs the provenance `manifest.json` that `kicad_import` writes. It is found next to the plan or in `<plan dir>/models/`.
 
 `--apply` only reconverts KiCad parts whose upstream source *changed*. Renamed and deleted sources are left for a person. This gives a pull request a real library diff. `--github issue` updates **one** rolling issue labelled `ecadlib-upkeep`: it replaces the body and adds a short comment, so it never opens duplicates. `--github pr` commits the applied files to `ecadlib/upkeep-YYYY-MM-DD`, pushes the branch and opens or updates the PR. With nothing to commit, it falls back to the issue. When nothing is new, GitHub is not touched. The GitHub calls use the REST API when `GITHUB_TOKEN` and `GITHUB_REPOSITORY` (or `--repo`) are set, and `gh api` otherwise. If the GitHub step fails, no state is saved, so nothing is lost. [`examples/upkeep.yml`](../examples/upkeep.yml) is a ready-to-copy weekly workflow (cron plus a manual run with an `apply` switch) for **your** library repo, with the secrets it reads listed at the top. It is not active in this repo. The same checks are available from the web/MCP side as the `upkeep_run` tool (`Workspace.upkeep_run`), which never calls GitHub. **Not tested live:** GitHub, GitLab, Nexar and the distributors are fakes in the tests.

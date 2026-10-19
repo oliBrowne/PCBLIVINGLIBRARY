@@ -177,7 +177,8 @@ ecadlib altium-pkg out/librarian/plan.json --out D:/libs/mylib --name mylib   # 
 python3 -m tests.test_tool_packages
 ```
 
-**KiCad.** `kicad-pcm` packages a plan (or a `kicad-export` folder) as a Plugin and Content Manager *library* package:
+**KiCad.** The PCM package (`ecadlib kicad-pcm`) is frozen: it still works, but gets no new features. `kicad-pcm`
+packages a plan (or a `kicad-export` folder) as a Plugin and Content Manager *library* package:
 a zip with `metadata.json`, `symbols/<lib>.kicad_sym`, `footprints/<lib>.pretty/` and `3dmodels/<lib>.3dshapes/`.
 In KiCad: Plugin and Content Manager > Install from File... > the zip. KiCad's PCM (read in its source,
 `kicad/pcm/pcm_task_manager.cpp`, `pcbnew`/`eeschema` lib table loaders, 7.0 and master) extracts each folder to
@@ -193,7 +194,7 @@ Plugins > ecadlib: add part / check project BOM / open review queue) that opens 
 the ecadlib menu in Altium, drawn in the same dark colours: Add part from MPN (MPN, manufacturer optional, a live
 lookup, then the footprint placed in the middle of the board), Check project BOM (the schematic's lines: already in
 your library / a source can supply / needs a footprint, then Later or Fill the library now, and the report on
-request), Assembly check (JLCPCB: pads, rotations, BOM + CPL, see docs/assembly.md) and Open review queue. The window does not block KiCad. It runs `ecadlib kicad-menu run-job` in the background
+request) and Open review queue. The window does not block KiCad. It runs `ecadlib kicad-menu run-job` in the background
 (`ecadlib/kicad_menu.py`) and reads its `progress.ini` / `result.ini`, as the Altium dialog does. Per project,
 `<project>/ecadlib-work/` is the workspace (one parts list for every part added or filled, so one plan makes the whole
 library) and `<project>/ecadlib/` the KiCad library, added to the project's tables as `${KIPRJMOD}/ecadlib/...`.
@@ -235,7 +236,7 @@ paths, and the Excel DbLibs (`dblib-sync` and now `ecadlib dblib`) say `Database
   from the documented scripting API and public scripts, never executed), or opens the relative DbLib. KiCad's PCM GUI
   was not run (no display; the install was replayed from its source); in headless pcbnew `register_action` asserts
   `PgmOrNull()`, so the plugin showing in the menu is unverified; KiCad 8/9/10 not run (the optional CI `kicad` job
-  now also runs these tests on KiCad 8); a sim model's `Sim.Library` through `${KICADn_3RD_PARTY}`.
+  now also runs these tests on KiCad 8).
 
 ### An "ecadlib" menu inside Altium: `altium_menu.py`
 
@@ -255,7 +256,7 @@ libraries, or for A365 says to refresh the Components panel), **CheckProjectBOM*
 path from `GetWorkspace.DM_FocusedProject.DM_ProjectFullPath`; ecadlib reads its BOM (`altium_project.py`), triages
 it, marks which lines the library already has (the DbLib's parts table and ready plan items), writes and opens an
 HTML report, and offers "Fill the library now?", which runs the librarian on the project) and **OpenReviewQueue**
-(opens `http://127.0.0.1:<port>/#queuecard`, starting `ecadlib ui --workspace W --no-browser` detached when nothing
+(opens the held parts at `http://127.0.0.1:<port>/#libcard`, starting `ecadlib ui --workspace W --no-browser` detached when nothing
 answers; refuses a port that serves another workspace or another program).
 Settings live in `ecadlib_menu.ini` next to the script (workspace, library, name, command, hidden, timeout_s, port,
 offline; relative paths start at that folder; a rebuild keeps the file). Built on Windows without `--command`,
@@ -331,7 +332,7 @@ parsed with CommandLineToArgvW rules and cmd's `/s /c` quote rule, give back the
 capacitor into a DbLib (UTF-16 result.ini, install= the .DbLib), holds NE555DR with the reasons, checks a two-sheet
 .PrjPcb (1 line already in the DbLib table, 5 not; HTML report opened; offer to fill; fill: 6 held, offline), routes
 to Altium 365 when the rules say so (and says to set NEXAR_TOKEN when it is missing), and the queue action really
-starts `ecadlib ui` on a free port and opens `#queuecard`.
+starts `ecadlib ui` on a free port and opens `#libcard`.
 **Not checked:** nothing was run inside Altium Designer (none here, no Windows): not that Altium loads the script
 project, that `InputBox` / `GetRunningScriptProjectName` / `Sleep` / `Application.ProcessMessages` behave as in the
 public scripts that use them in the Altium version you have, that `RunApplication` starts `wscript.exe` with that
