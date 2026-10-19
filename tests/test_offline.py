@@ -394,8 +394,8 @@ def test_pcblib_writer_roundtrip():
     assert p1["shape"] == 9 and p1["corner"] == 50 and p1["paste_mode"] == 1
     ep = pads[-1]
     assert ep["designator"] == "33" and ep["shape"] == 2 and ep["paste_mode"] == 2 and ep["paste"] < -ep["w"] // 2
-    layers = {(r["type"], r["layer"]) for r in q["records"]}
-    assert {("fill", AL.TOP_PASTE), ("track", AL.TOP_OVERLAY), ("track", AL.MECH13), ("track", AL.MECH15), ("region", AL.TOP_OVERLAY)} <= layers
+    layers = {(r["type"], r["layer"]) for r in q["records"]}          # EXP-10: rounded EP paste windows are regions
+    assert {("region", AL.TOP_PASTE), ("track", AL.TOP_OVERLAY), ("track", AL.MECH13), ("track", AL.MECH15), ("region", AL.TOP_OVERLAY)} <= layers
     assert q["header_count"] == len(q["records"])
 
 
