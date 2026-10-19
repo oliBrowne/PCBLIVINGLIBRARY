@@ -142,7 +142,10 @@ def _raw_pads(tree):
                 dw = nums[0]
                 dh = nums[1] if oval and len(nums) > 1 else dw
         rr = sexpr.first(p, "roundrect_rratio")
+        num_of = lambda *keys: next((_f(n[1]) for k in keys for n in [sexpr.first(p, k)] if n and len(n) > 1), None)
         out.append({"num": str(p[1]), "type": p[2], "shape": p[3] if len(p) > 3 else "rect",
+                    "mask_margin": num_of("solder_mask_margin"), "paste_margin": num_of("solder_paste_margin"),
+                    "paste_ratio": num_of("solder_paste_margin_ratio", "solder_paste_ratio"),
                     "x": _f(at[1]), "y": _f(at[2]), "rot": _f(at[3]) if len(at) > 3 else 0.0,
                     "w": _f(size[1]), "h": _f(size[2]), "layers": [str(l) for l in (sexpr.first(p, "layers") or ["l"])[1:]],
                     "drill": (dw, dh) if dw is not None else None, "rratio": _f(rr[1]) if rr else None,
@@ -570,6 +573,63 @@ def _layer_rules(s, add):
         add("error", "layers", f"through-hole pads {FC._ranges(tht_mask)} are not open in both solder masks (KLC F7.4)")
 
 
+def _side_margin_rules(tree, s, add):
+    """Copper the same soldering pass cannot reach (one SMD pad on the other side), a mask margin that closes the
+    opening, and paste margins that put solder past the copper (onto the mask or a neighbouring pad)."""
+    top = lambda k: next((_f(n[1]) for n in [sexpr.first(tree, k)] if n and len(n) > 1), None)
+    fp_mask, fp_paste = top("solder_mask_margin"), top("solder_paste_margin")
+    fp_ratio = top("solder_paste_margin_ratio") if top("solder_paste_margin_ratio") is not None else top("solder_paste_ratio")
+    pick = lambda v, d: v if v is not None else (d or 0.0)
+    smd = [r for r in s["raw"] if r["type"] == "smd" and r["num"] and any(l.endswith(".Cu") for l in r["layers"])]
+    sides = {}
+    for r in smd:
+        cu = {l for l in r["layers"] if l.endswith(".Cu")}
+        if cu == {"B.Cu"} and any("Paste" in l for l in r["layers"]):   # (B.Cu without paste: a heat spreader, KLC F4.4)
+            sides.setdefault("B", []).append(r["num"])
+        elif cu == {"F.Cu"}:
+            sides.setdefault("F", []).append(r["num"])
+    if len(sides) == 2:
+        few = min(sides.values(), key=len)
+        add("warning", "layers", f"SMD pads {FC._ranges(few)} are on the other side of the board from the rest: "
+                                 "one reflow pass cannot solder both (fine only for a card edge or a two-sided part)")
+    dims = lambda r: (r["h"], r["w"]) if round(r["rot"] / 90) % 2 else (r["w"], r["h"])
+    closed, apertures = [], []
+    for r in s["raw"]:
+        if not any(l.endswith(".Cu") for l in r["layers"]) or r["type"] == "np_thru_hole":
+            continue
+        w, h = dims(r)
+        if min(w, h) > EPS and any(l.endswith(".Mask") for l in r["layers"]) and \
+                min(w, h) + 2 * pick(r["mask_margin"], fp_mask) <= EPS:            # (zero-size copper: footprint_check)
+            closed.append(r["num"] or "(unnumbered)")
+        if r["type"] == "smd" and any("Paste" in l for l in r["layers"]) and abs(r["rot"] / 90 - round(r["rot"] / 90)) < 1e-6:
+            m, k = pick(r["paste_margin"], fp_paste), pick(r["paste_ratio"], fp_ratio)
+            gw, gh = m + k * w, m + k * h                  # KiCad: each side grows by margin + ratio x size
+            apertures.append((r, (r["x"] - w / 2 - gw, r["y"] - h / 2 - gh, r["x"] + w / 2 + gw, r["y"] + h / 2 + gh),
+                              max(gw, gh)))
+    if closed:
+        add("error", "layers", f"pads {FC._ranges(closed)}: the solder-mask margin closes the opening, mask would cover "
+                               "the copper")
+    over = lambda a, b: a[0] < b[2] - EPS and b[0] < a[2] - EPS and a[1] < b[3] - EPS and b[1] < a[3] - EPS
+    bridge, past = [], []
+    for r, box, grow in apertures:
+        if grow <= EPS:
+            continue
+        hit = next((q for q in s["raw"] if q is not r and q["num"] != r["num"] and any(l.endswith(".Cu") for l in q["layers"])
+                    and over(box, (q["x"] - dims(q)[0] / 2, q["y"] - dims(q)[1] / 2, q["x"] + dims(q)[0] / 2,
+                                   q["y"] + dims(q)[1] / 2))), None)
+        hit = hit or next((q for q, qb, _ in apertures if q is not r and q["num"] != r["num"] and over(box, qb)), None)
+        if hit is not None:
+            bridge.append(f"{r['num']} (reaches pad {hit['num']})")
+        else:
+            past.append(r["num"])
+    if bridge:
+        add("error", "paste", f"the paste opening of pad {', '.join(bridge[:4])} overlaps another pad: the stencil would "
+                              "bridge them")
+    if past:
+        add("warning", "paste", f"pads {FC._ranges(past)}: the paste opening is bigger than the copper, solder lands on "
+                                "the mask (solder balls, bridges); use a zero or negative paste margin")
+
+
 def _opened(r, raw, layer):
     """Another pad (an aperture, a pad of the same number) has `layer` over part of this pad."""
     star = "*." + layer.split(".")[1]
@@ -868,6 +928,16 @@ def _polarity_rules(tree, s, claim, add):
     silk, spolys = FC._graphics(tree, "F.SilkS")
     fab, fpolys = FC._graphics(tree, "F.Fab")
     ones = [p for p in s["signal"] if p["num"] in ("1", "A1")]
+    if POLAR_PREFIX.match(s["name"]) and s["pins"] == ["1", "2"]:
+        twos = [p for p in s["signal"] if p["num"] == "2" and p not in s["vias"]]
+        ones_ = [p for p in ones if p not in s["vias"]]
+        if ones_ and twos:
+            mid = lambda g: (sum(p["x"] for p in g) / len(g), sum(p["y"] for p in g) / len(g))
+            (x1, y1), (x2, y2) = mid(ones_), mid(twos)
+            if x1 > x2 + EPS or (abs(x1 - x2) <= EPS and y1 > y2 + EPS):
+                add("error", "polarity", f"pad 1 (cathode / +) is {'right of' if x1 > x2 + EPS else 'below'} pad 2: KiCad "
+                                         "puts pad 1 of a polarized 2-terminal part on the left (or top), under the "
+                                         "polarity mark (KLC F4.2); pads 1 and 2 look swapped")
     centred = ones and all(abs(p["x"]) < EPS and abs(p["y"]) < EPS for p in ones)
     if centred:
         return
@@ -954,6 +1024,7 @@ def check(text, filename=None, symbol_pins=None, require_model=False, geometry=T
     _attr_rules(tree, s, add)
     _origin_rules(s, add)
     _layer_rules(s, add)
+    _side_margin_rules(tree, s, add)
     _padshape_rules(s, claim, add)
     _tht_rules(s, add)
     _via_rules(s, add)
