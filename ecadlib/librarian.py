@@ -805,7 +805,8 @@ def apply_state(item, st, ln):
         item["cross_check"] = dict(st["cross_check"])
     else:
         item.pop("cross_check", None)
-    item["librarian"] = {"tried": st.get("tried", []), "review": st.get("review", []),
+    item["librarian"] = {"tried": st.get("tried", []),
+                         "review": list(dict.fromkeys(st.get("review", []) + item.get("bom_notes", []))),
                          "notes": [n for k in ("symbol", "footprint") for n in (st.get(k) or {}).get("notes", [])]}
 
 

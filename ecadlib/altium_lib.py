@@ -116,7 +116,8 @@ def clean(s):
 def lib_name(s):
     """Library entry name as Altium stores it (cp1252 in the binary records). 'Ω' becomes 'Ohm';
     anything else cp1252 can't hold is an error rather than a silent '?' that makes the entry unreadable."""
-    s = str(s).replace("\u2126", "Ohm").replace("\u03a9", "Ohm")
+    s = str(s).replace("\u2126", "Ohm").replace("\u03a9", "Ohm").replace("\u03bc", "\u00b5")   # Greek mu -> micro sign
+    s = re.sub("[\u200b-\u200d\u2060\ufeff]", "", s)       # invisible zero-width marks pasted with a web page's text
     try:
         s.encode("cp1252")
     except UnicodeEncodeError as e:

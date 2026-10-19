@@ -4,7 +4,7 @@ and what needs a footprint generated.
     python -m ecadlib.bom_triage examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints \
         -o out/triage [--offline] [--providers easyeda,jlcpcb_search,digikey,...]
 """
-import argparse, csv, difflib, json, re, sys
+import argparse, csv, difflib, json, re, sys, unicodedata
 from pathlib import Path
 
 import pandas as pd
@@ -166,6 +166,15 @@ def _read_csv(p):
     return pd.DataFrame([r + [""] * (width - len(r)) for r in rows], dtype=str)
 
 
+def clean_part_number(s):
+    """A part number as typed into a datasheet or a web page, made plain: fullwidth letters (ＬＭ358) to ASCII,
+    en/em dashes and minus signs to '-', no zero-width marks, no-break spaces as spaces."""
+    s = unicodedata.normalize("NFKC", str(s or "")).replace("\u03bc", "\u00b5")    # NFKC turns the micro sign into mu
+    s = re.sub("[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]", "-", s)
+    s = re.sub("[\u200b-\u200d\u2060\ufeff]", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def apply_columns(mapping, headers, columns):
     """Rules' [bom] columns (field -> your header, or a list of headers: the first one in this BOM is used) win over
     the fuzzy guess; headers not in this BOM are ignored."""
@@ -205,6 +214,9 @@ def read_bom(path, columns=None, rules=None):
     lines = []
     for _, row in df.iterrows():
         d = {f: SS.unquote(str(row.iloc[j]).strip()) for f, j in col.items()}     # "'=X" from our own reports
+        for f in ("mpn", "lcsc"):
+            if d.get(f):
+                d[f] = clean_part_number(d[f])
         if not any(d.values()):
             continue
         if lines and d.get("designator") and not any(v for f, v in d.items() if f != "designator"):
