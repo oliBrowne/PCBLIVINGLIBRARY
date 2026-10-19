@@ -932,6 +932,31 @@ def test_cap_counts_a_collected_batch_at_its_real_cost():
         assert len(api.of("/v1/messages/batches")) == 2
 
 
+def test_a_request_refused_with_an_error_gives_back_its_hold():
+    """Issue #42's Sonnet run: requests the API refused (it could not fetch the datasheet link) were never billed,
+    but their worst case stayed held, so the cap refused 34 later parts at $6.21 of real spend."""
+    err = {"type": "error", "error": {"type": "invalid_request_error", "message": "Unable to download the file"}}
+    api = FakeAPI(script=[(400, err)], tokens=20000)
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        http = PdfHTTP({"https://a/ds.pdf": PDF})
+        rd = D.Reader(d, d, key=KEY, http=http, log=None, rules={"datasheet": {"max_cost_usd": 50.0}})
+        try:
+            rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+            raise AssertionError("400")
+        except D.APIError:
+            pass
+        assert rd.committed_usd == 0 and not rd._holds, (rd.committed_usd, rd._holds)
+        rd.read_now(rd.job("OTHERPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+        assert abs(rd.committed_usd - DR.usage_usd("claude-opus-5-5", TD.message({})["usage"])) < 1e-6
+    api = FakeAPI(answer=lambda cid: "expired", polls=0, tokens=20000)
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        http = PdfHTTP({"https://a/ds.pdf": PDF})
+        rd = D.Reader(d, d, key=KEY, http=http, batch=True, log=None, rules={"datasheet": {"max_cost_usd": 50.0}})
+        rd.submit(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+        rd.flush()                                    # expired, errored or cancelled in a batch: not billed
+        assert rd.committed_usd == 0 and not rd._holds, (rd.committed_usd, rd._holds)
+
+
 def test_other_json_objects_without_their_optional_fields_are_read():
     """other_json's prompt schema has no `required`: a land without pad_center_y, a tab given as bare numbers, a pin
     offset as text were all rejected as 'not valid under any of the given schemas' (#42: 23 answers lost)."""
