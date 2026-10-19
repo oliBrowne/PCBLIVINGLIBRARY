@@ -191,7 +191,7 @@ def test_a_crlf_checkout_gives_the_same_bytes():
     """git on Windows (autocrlf) checks the .pas out with CRLF; Altium must still get exactly one CR per line."""
     with tempfile.TemporaryDirectory() as d:
         for name in (AM.UNIT, AF.DIALOG_UNIT, AN.UNIT):
-            (Path(d) / name).write_bytes((AN.SCRIPTS / name).read_bytes().replace(b"\n", b"\r\n"))
+            (Path(d) / name).write_bytes((AN.SCRIPTS / name).read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
         want = {n: AN.script_text(n) for n in (AM.UNIT, AF.DIALOG_UNIT, AN.UNIT)}
         with mock.patch.object(AN, "SCRIPTS", Path(d)):
             for n, t in want.items():
