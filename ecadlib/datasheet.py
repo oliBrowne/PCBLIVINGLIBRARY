@@ -236,15 +236,46 @@ def redact(text, key):
     return text
 
 
+def safe_url(url):
+    """url without user:password@ (a gateway's basic-auth credentials), for logs and messages."""
+    from urllib.parse import urlsplit, urlunsplit
+    try:
+        u = urlsplit(str(url))
+        if "@" not in (u.netloc or ""):
+            return str(url)
+        return urlunsplit(u._replace(netloc=u.netloc.rsplit("@", 1)[1]))
+    except ValueError:
+        return re.sub(r"//[^/@\s]*@", "//", str(url))
+
+
+_REAL_HTTP = (requests.post, requests.get)
+
+
+def _no_redirects(fn, kw):
+    """allow_redirects=False for the real requests functions: a 3xx must not carry the x-api-key header to whatever
+    host it names (requests strips only Authorization on a cross-host redirect). A test double takes no such argument."""
+    if fn in _REAL_HTTP:
+        kw["allow_redirects"] = False
+    return kw
+
+
 class Client:
     """The Claude API over requests: retries 408/409/429/5xx/529 and network errors with exponential backoff
-    (honouring retry-after), logs every request as one JSON line without the key or the PDF bytes."""
+    (honouring retry-after), logs every request as one JSON line without the key or the PDF bytes. The key is only
+    sent to the configured base: redirects are not followed, plain http:// only to a host on this machine or network."""
 
     def __init__(self, key, base=None, retries=4, backoff=2.0, max_wait=60.0, timeout=600, sleep=None, log_file=None,
                  say=None):
         # base: ANTHROPIC_BASE_URL (as the Anthropic SDKs read it: a gateway, a proxy, a local test server), else the API
         base = (base or os.environ.get("ANTHROPIC_BASE_URL") or API_BASE).rstrip("/")
+        if not re.match(r"https?://", base, re.I):
+            raise APIError(f"ANTHROPIC_BASE_URL {safe_url(base)!r} is not an http(s):// URL")
+        from .llm import is_local
+        if base.lower().startswith("http://") and not is_local(base):
+            raise APIError(f"ANTHROPIC_BASE_URL {safe_url(base)} is plain http:// to a remote host: the API key would "
+                           "travel unencrypted; use https:// (http:// is only for a server on this machine or your network)")
         self.key, self.base, self.retries, self.backoff, self.max_wait, self.timeout = key, base, retries, backoff, max_wait, timeout
+        self.shown = safe_url(base)
         self.sleep = sleep or time.sleep
         self.log_file, self.say = log_file or _LOG["file"], say or _LOG["say"]
 
@@ -266,23 +297,30 @@ class Client:
         h["x-api-key"] = self.key
         for attempt in range(self.retries + 1):
             t0, rec = time.time(), {"t": datetime.datetime.now().isoformat(timespec="seconds"), "method": method,
-                                    "url": url, "attempt": attempt + 1, "body": _summary(body) if body is not None else None}
+                                    "url": safe_url(url), "attempt": attempt + 1, "body": _summary(body) if body is not None else None}
             if h.get("anthropic-beta"):
                 rec["beta"] = h["anthropic-beta"]
             try:
                 from .term import waiting            # "waiting on Claude (model call)  12 s" on the terminal
                 with waiting("Claude (model call)" if method == "POST" and "/messages" in url and "batches" not in url
                              else "Claude API"):
-                    r = (requests.post(url, headers=h, json=body, timeout=self.timeout) if method == "POST"
-                         else requests.get(url, headers=h, timeout=self.timeout))
+                    r = (requests.post(url, **_no_redirects(requests.post, dict(headers=h, json=body, timeout=self.timeout)))
+                         if method == "POST" else
+                         requests.get(url, **_no_redirects(requests.get, dict(headers=h, timeout=self.timeout))))
             except requests.RequestException as e:
-                err = APIError(f"API request failed: {type(e).__name__}: {redact(e, self.key)[:200]}", retryable=retry_on is None)
+                err = APIError(f"API request failed: {type(e).__name__}: {self._scrub(e)[:200]}", retryable=retry_on is None)
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))
                 retry_after = None
             else:
                 hdr = getattr(r, "headers", None) or {}
                 rid = hdr.get("request-id")
                 rec.update(status=r.status_code, request_id=rid, ms=int((time.time() - t0) * 1000))
+                if 300 <= r.status_code < 400:          # never followed: the key stays with the configured base
+                    where = safe_url(hdr.get("location") or "?")
+                    rec["error"] = f"redirect to {where}"
+                    self._log(rec)
+                    raise APIError(f"API HTTP {r.status_code}: redirect to {where} not followed (the API key is only "
+                                   f"sent to {self.shown}); check ANTHROPIC_BASE_URL", r.status_code, "redirect")
                 if r.status_code == 200 and raw:
                     self._log(rec)
                     return r
@@ -299,7 +337,7 @@ class Client:
                     self._log(rec)
                     return payload
                 etype, emsg = _err_of(payload) if payload is not None else ("?", "non-JSON response")
-                emsg = redact(emsg, self.key)         # a gateway (ANTHROPIC_BASE_URL) may echo the key it refused
+                emsg = self._scrub(emsg)              # a gateway (ANTHROPIC_BASE_URL) may echo the key it refused
                 st = r.status_code
                 if st == 529 or etype == "overloaded_error":
                     st = 529
@@ -322,6 +360,16 @@ class Client:
             if self.say:
                 self.say(f"  datasheet API: {err.args[0][:120]}; retry {attempt + 1}/{self.retries} in {wait:.0f}s")
             self.sleep(wait)
+
+    def _scrub(self, text):
+        """Error text without the key or the base URL's user:password."""
+        text = redact(text, self.key)
+        if self.shown != self.base:
+            text = text.replace(self.base, self.shown)
+            cred = self.base.split("//", 1)[-1].rsplit("@", 1)[0]
+            if len(cred) >= 3:
+                text = text.replace(cred, "<credentials>")
+        return text
 
     # --- endpoints
     def messages(self, body, headers=None):
@@ -348,6 +396,10 @@ class Client:
     def batch_results(self, batch):
         """Results JSONL of an ended batch -> list of {custom_id, result} (any order: key by custom_id)."""
         url = batch.get("results_url") or f"/v1/messages/batches/{batch['id']}/results"
+        if url.startswith(API_BASE + "/v1/messages/batches/") and self.base != API_BASE:
+            # a gateway (ANTHROPIC_BASE_URL) passes the batch object through with Anthropic's own results_url: fetch the
+            # same path from the gateway, so the key still goes only to the configured base (any other host is refused)
+            url = url[len(API_BASE):]
         r = self.request("GET", url, raw=True)
         return [json.loads(ln) for ln in r.text.splitlines() if ln.strip()]
 
@@ -851,7 +903,8 @@ def to_spec(pkg, part, datasheet, model, offset, review):
             continue
         spec[k] = _drop_nulls(pkg[k])
         if isinstance(pkg[k], (dict, list)) and numeric(pkg[k]):
-            review.append(f"{k}: copied as the model gave it; check every value against the drawing")
+            # advice for the person, not a failed check: "pad_table:" lines are check_pad_table errors (ds_route.FAILED)
+            review.append(f"{k} (copied as the model gave it): check every value against the drawing")
     pages = [v["page"] for k, v in prov.items() if v["page"] is not None]
     spec["source"] = {"datasheet": datasheet, "drawing": pkg["drawing"], "extracted_by": f"ecadlib.datasheet ({model})"}
     if pages:
@@ -1100,7 +1153,9 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None):
     if spec.get("pad_table"):
         try:
             from . import footprint_adv as FA                 # pad-table checks (added with the new families)
-            review += [f"pad_table: {m}" for m in FA.check_pad_table(spec) or []]
+            for m in FA.check_pad_table(spec) or []:      # [{level, rule, message}]; only errors fail the read
+                m = m if isinstance(m, dict) else {"level": "error", "message": str(m)}
+                review.append(f"pad_table{'' if m.get('level') == 'error' else ' (warning)'}: {m.get('message')}")
         except ImportError:
             pass
         except Exception as e:
