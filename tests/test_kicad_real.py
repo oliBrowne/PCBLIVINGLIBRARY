@@ -63,6 +63,11 @@ def pcbnew_python():
 
 
 def _skip(what):
+    """A test that needs `what`: skipped. Under pytest a real skip (reported as skipped, not passed); under
+    tests.run_all (no pytest) a printed line, and the caller returns."""
+    import sys
+    if "pytest" in sys.modules:
+        sys.modules["pytest"].skip(f"{what} not installed")
     print(f"      ({what} not installed: skipped)")
 
 
