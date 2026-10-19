@@ -131,7 +131,11 @@ accepted are then recorded on the adopted line.
 
 When a newer ecadlib reads more of a part (the fingerprint has a schema number), a release recorded by an older one is
 fingerprinted again from its stored files with the new code before it is compared. An upgrade therefore neither shows
-every released part as changed nor hides a real change in what the old fingerprint did not cover.
+every released part as changed nor hides a real change in what the old fingerprint did not cover. The same holds
+wherever a stored digest meets one computed now: approving (the check for a newer edit on disk), reverting (which
+parts actually change) and a held change proposed again. A reject line keeps the rejected change's files, so a newer
+ecadlib still knows the change was rejected before. For a reject line written by an older ecadlib, which has no files,
+the change is matched on what its stored fingerprint recorded.
 
 ## Publishing
 

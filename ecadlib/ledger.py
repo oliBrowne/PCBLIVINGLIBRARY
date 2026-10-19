@@ -250,6 +250,7 @@ class Ledger:
     def reload(self):
         """Read the file again on the next lines() (another run may have appended since: done under the lock)."""
         self._lines = None
+        self.__dict__.pop("_stored_fps", None)
 
     def exists(self):
         return self.path.is_file()
@@ -285,8 +286,11 @@ class Ledger:
     def parts(self):
         return sorted({e["part"] for e in self.lines() if e.get("event") in RELEASES})
 
-    def rejected(self, part, digest):
-        """The reject line for this proposed digest after the part's head, or None."""
+    def rejected(self, part, digest, fp=None):
+        """The reject line for this proposed digest after the part's head, or None. fp: the proposed fingerprint,
+        to match a reject line recorded by an older ecadlib (another fingerprint schema, so another digest): its
+        snapshot is fingerprinted again, or (a line with no snapshot) its stored fingerprint is compared on what that
+        schema recorded."""
         head = self.head(part)
         after = False if head else True
         hit = None
@@ -294,9 +298,55 @@ class Ledger:
             if e is head:
                 after = True
                 continue
-            if after and e.get("event") == "reject" and e.get("digest") == digest:
+            if after and e.get("event") == "reject" and (e.get("digest") == digest or fp is not None
+                                                         and self._same_proposal(e, fp)):
                 hit = e
         return hit
+
+    def _same_proposal(self, e, fp):
+        from . import change_diff as CD, fingerprint as FP
+        if e.get("fingerprint") and e.get("files") and e.get("item") is not None:
+            return fp["hashes"]["digest"] in self.digests(e)
+        old = next((f for _, _, f in self.stored_fingerprints(e.get("part")) if f["hashes"].get("digest") == e.get("digest")),
+                   None)
+        return bool(old) and old.get("schema") != FP.SCHEMA and not CD.diff_stored(old, fp)
+
+    def digests(self, entry):
+        """The digests a ledger entry (a release, a proposal) stands for: the one it stored and, when an older ecadlib
+        stored it (another fingerprint schema), the one this ecadlib computes from its snapshot. A digest computed now
+        is compared with these, never with the stored one alone."""
+        out = {entry.get("digest")} if entry and entry.get("digest") else set()
+        try:
+            fp = self.fingerprint(entry) if entry and entry.get("fingerprint") else None
+        except (OSError, ValueError, KeyError):
+            fp = None
+        if fp:
+            out.add((fp.get("hashes") or {}).get("digest"))
+        return out - {None}
+
+    def stored_fingerprints(self, part):
+        """Every fingerprint of `part` in the blob store (they carry the part's name) -> [(mtime, sha, fingerprint)]."""
+        blobs = self.store / "blobs"
+        found = []
+        if not blobs.is_dir():
+            return found
+        cache = self.__dict__.setdefault("_stored_fps", {})
+        if part in cache:
+            return cache[part]
+        for p in blobs.glob("*/*"):
+            try:
+                if not p.is_file() or p.stat().st_size > 4_000_000:
+                    continue
+                with open(p, "rb") as f:
+                    if f.read(1) != b"{":
+                        continue
+                fp = json.loads(p.read_bytes().decode("utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(fp, dict) and fp.get("part") == part and isinstance(fp.get("hashes"), dict) and "schema" in fp:
+                found.append((p.stat().st_mtime, p.name, fp))
+        cache[part] = found
+        return found
 
     def published(self, part, target):
         """The last publish line of a part to a target ('altium365', 'dblib', 'kicad'), or None."""

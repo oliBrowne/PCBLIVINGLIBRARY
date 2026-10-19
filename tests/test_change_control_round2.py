@@ -175,3 +175,72 @@ def test_value_detail_accepts_only_recognised_tokens():
                        ("100nF", "100nF 50V X7R", ""), ("10k", "10k 1/4W", ""), ("10k 1%", "10k", ""),
                        ("100n", "100nF", "Ceramic capacitor"), ("10k", "10kΩ", "Resistor"), ("4k7", "4.7k", "")):
         assert _value_class(a, b, kind) == "cosmetic", (a, b, kind)
+
+
+# ---------------------------------------------------------------- stored digests of an older schema (R2-6, a, b)
+def test_approve_after_upgrade_does_not_report_an_overwritten_edit():
+    """R2-6: on a library released by an older ecadlib, approving a held change compared the disk's new digest with
+    the head's stored old one, so every approval warned of a newer edit and wrote an `overwritten` line."""
+    from tests.test_change_control_classifier import _age_ledger
+    plan, lib = demo()
+    _age_ledger(lib)
+    items = items_of(plan)
+    write_symbol(lib, item(items, "AO3401A"), SGD)
+    CG.publish_guard(plan, items, "kicad")
+    rows = CC.approve(plan, ["AO3401A"], ANN, "ok", digests={"AO3401A": CG.review_digest(LG.Ledger(lib), "AO3401A")})
+    assert rows[0]["result"] == "released" and not any(r.get("warning") for r in rows), rows
+    assert not [e for e in LG.Ledger(lib).lines() if e.get("event") == "overwritten"]
+
+
+def test_revert_after_upgrade_writes_no_line_for_an_unchanged_sibling():
+    """Known item (b): reverting RES-0603-10k after an upgrade also wrote a revert line (and a new revision) for
+    RES-0603-4.7k, which shares its .SchLib but did not change."""
+    from tests.test_change_control_classifier import _age_ledger
+    plan, lib = demo()
+    _age_ledger(lib)
+    items = items_of(plan)
+    for p in item(items, "RES-0603-10k")["parameters"]:
+        if p["name"] == "Value":
+            p["value"] = "10k 1%"                          # more detail: released as r2 without asking
+    CG.write_plan(plan, items)
+    CG.publish_guard(plan, items_of(plan), "kicad")
+    assert LG.Ledger(lib).head("RES-0603-10k")["revision"] == 2
+    before = LG.Ledger(lib).head("RES-0603-4.7k")["revision"]
+    CC.revert(plan, "RES-0603-10k@1", ANN, "undo")
+    lg = LG.Ledger(lib)
+    assert lg.head("RES-0603-10k")["revision"] == 3 and lg.head("RES-0603-4.7k")["revision"] == before
+    assert not [e for e in lg.history("RES-0603-4.7k") if e.get("event") == "revert"]
+
+
+def test_a_change_rejected_before_an_upgrade_is_still_known_as_rejected():
+    """Known item (a): a reject line keeps the digest of its schema. After an upgrade the same change came back as a
+    fresh hold with no "rejected before" note. A reject line now keeps the proposal's snapshot (read again by a later
+    schema); an older line without one is matched on what its stored fingerprint recorded."""
+    plan, lib = demo()
+    items = items_of(plan)
+    write_symbol(lib, item(items, "AO3401A"), SGD)
+    CG.publish_guard(plan, items, "kicad")
+    CC.reject(plan, ["AO3401A"], BOB, "the old pinout is right")
+    lg = LG.Ledger(lib)
+    rej = [e for e in lg.lines() if e.get("event") == "reject"][-1]
+    assert rej.get("files") and rej.get("fingerprint"), rej
+    # as an older ecadlib wrote it: no snapshot, and the digest of its own fingerprint schema
+    fp = lg.get_json(rej["fingerprint"])
+    fp["schema"] = 1
+    for p in ((fp.get("symbol") or {}).get("pins") or {}).values():
+        p.pop("inst", None)
+    fp["hashes"] = FP.hashes(fp)
+    lg.put_json(fp)
+    raw = []
+    for line in lg.path.read_text(encoding="utf-8").splitlines():
+        e = json.loads(line)
+        if e.get("event") == "reject":
+            e = {k: v for k, v in e.items() if k not in ("files", "fingerprint", "item")}
+            e["digest"] = fp["hashes"]["digest"]
+        raw.append(json.dumps(e, sort_keys=True))
+    lg.path.write_text("\n".join(raw) + "\n", encoding="utf-8")
+    items = items_of(plan)
+    write_symbol(lib, item(items, "AO3401A"), SGD)        # the same change comes again
+    CG.publish_guard(plan, items, "kicad")
+    prop = LG.Ledger(lib).proposal("AO3401A")
+    assert prop and (prop.get("rejected") or {}).get("by") == BOB, prop and prop.get("rejected")

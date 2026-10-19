@@ -432,7 +432,7 @@ def _put_proposed(plan, items, group, lg, who=""):
             now = FP.of_item(it, folder)["hashes"]["digest"]
         except Exception:                      # unreadable now: it is replaced, so keep it
             now = None
-        if now not in ((heads[p["part"]] or {}).get("digest"), p["digest"]):
+        if now not in lg.digests(heads[p["part"]]) | lg.digests(p):    # recomputed: a head an older ecadlib stored
             kept = lg.snapshot_files(it, folder)
             text = (f"{p['part']}: the files on disk had a newer edit than the held change (made after it was held); "
                     f"the approved change replaced it. Its bytes are kept (ledger `overwritten`; `ecadlib part history`)")
@@ -520,7 +520,8 @@ def _reject(plan, parts, who, comment):
                 continue
             seen.add(prop["part"])
             lg.append({"event": "reject", "part": prop["part"], "digest": prop["digest"], "base": prop["base"], "by": who,
-                       "reason": comment, "classes": prop.get("classes")})
+                       "reason": comment, "classes": prop.get("classes"),
+                       **{k: prop[k] for k in ("fingerprint", "files", "item") if prop.get(k) is not None}})
             lg.drop_proposal(prop["part"])
             it = next((i for i in items if i["name"] == prop["part"]), None)
             if it is not None:
@@ -550,7 +551,7 @@ def _revert(plan, spec, who, comment):
     if not target:
         raise CG.ChangeError(f"{part}: no revision {rev}")
     head = lg.head(part)
-    if head["digest"] == target["digest"]:
+    if lg.digests(head) & lg.digests(target):
         raise CG.ChangeError(f"{part}: revision {target['revision']} is what is released now (r{head['revision']})")
     it = _item(items, part)
     who = who or AP.identity(None, cwd=folder)
@@ -586,7 +587,7 @@ def _revert(plan, spec, who, comment):
     for x in group:
         h = lg.head(x["name"])
         fp = FP.of_item(x, folder)
-        if h and h.get("digest") == fp["hashes"]["digest"]:
+        if h and fp["hashes"]["digest"] in lg.digests(h):
             continue
         changes = CD.diff(old_fp if x is it else lg.fingerprint(h), fp) if h else []
         todo.append((x, h, fp, changes))
@@ -601,7 +602,7 @@ def _revert(plan, spec, who, comment):
                        "dec": {"action": "hold", "why": why, "by_class": {}}})
         for t in ts:
             prev = lg.proposal(t["item"]["name"])
-            if prev and prev.get("digest") != t["fp"]["hashes"]["digest"]:     # a pending held change gives way
+            if prev and t["fp"]["hashes"]["digest"] not in lg.digests(prev):     # a pending held change gives way
                 lg.append({"event": "superseded", "part": prev["part"], "digest": prev.get("digest"), "writer": "revert",
                            "by": who, "reason": f"replaced by a revert to r{target['revision']}"})
                 lg.drop_proposal(prev["part"])
@@ -659,11 +660,9 @@ def adopt(plan, parts, who=None, comment="", all_lost=False, accept_changes=Fals
             if old is None:
                 compared[it["name"]] = ("no earlier fingerprint is left to compare with", [])
                 continue
-            new = FP.of_item(it, g.base)
             if old.get("schema") != FP.SCHEMA:          # stored by an older ecadlib: what it did not record is not compared
-                new = {k: (v if old.get(k) is not None else old.get(k)) for k, v in new.items()}
                 where += f" (fingerprint schema {old.get('schema')}: only what it recorded is compared)"
-            changes = CD.diff(old, new)
+            changes = CD.diff_stored(old, FP.of_item(it, g.base))
             compared[it["name"]] = (f"compared with {where}", changes)
             if any(c["class"] != "cosmetic" for c in changes):
                 refused.append(it["name"])

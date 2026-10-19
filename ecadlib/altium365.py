@@ -416,6 +416,8 @@ def change_mode(lg, it, target):
         halves.add("footprint")
     if FP.hashes(a)["eid"] != FP.hashes(b)["eid"] and not halves:   # recomputed: the two may be of different schemas
         halves = {"symbol", "footprint"}      # the pin-pad map changed: both go up
+    if not halves:                             # stored hashes of two schemas differed, the files did not
+        return "params", set(), head, pub
     return "revision", halves, head, pub
 
 

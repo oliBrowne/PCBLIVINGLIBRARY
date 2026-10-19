@@ -671,6 +671,15 @@ def diff(old, new):
     return sorted(uniq, key=lambda c: RANK[c["class"]])
 
 
+def diff_stored(old, new):
+    """diff() of a fingerprint stored by an older ecadlib (another schema, no snapshot to read again) and one made now:
+    the parts the old schema did not record (a section it had no key for) are left out, so only what both recorded is
+    compared."""
+    if old.get("schema") != new.get("schema"):
+        new = {k: (v if old.get(k) is not None else old.get(k)) for k, v in new.items()}
+    return diff(old, new)
+
+
 def worst(changes):
     return min((c["class"] for c in changes), key=RANK.get, default=None)
 

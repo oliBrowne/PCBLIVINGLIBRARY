@@ -307,26 +307,11 @@ class Guard:
         where) or (None, None). Fingerprints stay in the blob store (they carry the part's name); one whose digest a
         surviving ledger line names as published or retired is preferred, the newest file otherwise. Held changes keep
         their fingerprints in the store too: one a surviving line or a proposal names as held is never taken."""
-        blobs = self.ledger.store / "blobs"
-        if not blobs.is_dir():
-            return None, None
         hist = self.ledger.history(part)
         named = [e["digest"] for e in reversed(hist) if e.get("digest") and e.get("event") in ("publish", "retired")]
         held = {e["digest"] for e in hist if e.get("digest") and e.get("event") not in ("publish", "retired", "release")}
         held |= {p.get("digest") for p in self.ledger.proposals() if p.get("part") == part}
-        found = []
-        for p in blobs.glob("*/*"):
-            try:
-                if not p.is_file() or p.stat().st_size > 4_000_000:
-                    continue
-                with open(p, "rb") as f:
-                    if f.read(1) != b"{":
-                        continue
-                fp = json.loads(p.read_bytes().decode("utf-8"))
-            except (OSError, ValueError):
-                continue
-            if isinstance(fp, dict) and fp.get("part") == part and isinstance(fp.get("hashes"), dict) and "schema" in fp:
-                found.append((p.stat().st_mtime, p.name, fp))
+        found = self.ledger.stored_fingerprints(part)
         if not found:
             return None, None
         for d in named:
@@ -428,7 +413,7 @@ class Guard:
                 self._mark_unchanged(it, head)
                 continue
             dec = decide(changes, self.policy, self.mode)
-            rej = self.ledger.rejected(it["name"], new["hashes"]["digest"]) if dec["action"] == "hold" else None
+            rej = self.ledger.rejected(it["name"], new["hashes"]["digest"], new) if dec["action"] == "hold" else None
             todo[it["name"]] = {"item": it, "head": head, "fp": new, "changes": changes, "dec": dec, "rejected": rej}
         held_files = {}
         for name, t in todo.items():
@@ -583,7 +568,7 @@ class Guard:
         dec = dict(dec, why=[f"a new part with the MPN of released {twin['part']} r{twin['revision']}, which left the "
                              f"plan: compared with it"] + dec["why"])
         t = {"item": it, "head": None, "fp": fp, "changes": changes, "dec": dec, "twin": twin,
-             "rejected": self.ledger.rejected(it["name"], fp["hashes"]["digest"])}
+             "rejected": self.ledger.rejected(it["name"], fp["hashes"]["digest"], fp)}
         prop = self._propose(t)
         it["change"] = held_block(prop, self.ledger)
         it["status"] = "held"                  # not released (no revision yet): publishers leave it out
@@ -665,7 +650,7 @@ class Guard:
         name, digest = it["name"], fp["hashes"]["digest"]
         base = head["revision"] if head else None          # None: a new part held against its MPN twin (baseline)
         prev = self.ledger.proposal(name)
-        if prev and prev.get("digest") == digest and prev.get("base") == base:
+        if prev and digest in self.ledger.digests(prev) and prev.get("base") == base:
             if t.get("refused"):
                 self._refused(prev, t["refused"])
             return prev
