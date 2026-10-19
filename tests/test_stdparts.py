@@ -258,3 +258,62 @@ def test_tvs_symbol_left_to_other_sources():
         r = SP.resolve(["SMA"], "D", mpn, desc)
         assert r["footprint"] == "D_SMA" and r["symbol"] is None and "TVS" in r["sym_how"], (mpn, r)
     assert SP.resolve(["SMA"], "D", "SS14", "Schottky diode")["symbol"] == "D_Schottky"
+
+
+def test_resistor_is_the_us_zigzag_and_2_pin_symbols_show_no_pin_text():
+    # Oliver placed the A365 parts in AD26: "1"/"2" sat on the resistor and capacitor bodies, and he wants the US symbol
+    for key in ("R", "R_US", "C", "CP", "L", "LED", "D", "D_Schottky"):
+        text, name = SP.symbol_text(key)
+        assert "(pin_numbers hide)" in text and "(pin_names (offset 0) hide)" in text, key
+        sym = K.convert_symbol([K._find_symbol(sexpr.parse(text), name)], name, None, [], None, [])
+        for pr in (p for p in sym["prims"] if p[0] == "pin"):
+            assert pr[1].get("show_num") is False and pr[1].get("show_name") is False, (key, pr[1])
+        for num, _n, _t, x, y, ang, ln in SP.SYMBOLS[key][4]:          # pin ends on the 100 mil grid (SS34 sat on 50 mil)
+            assert round(x / 2.54, 6).is_integer() and round(y / 2.54, 6).is_integer() and abs(x) + abs(y) >= 5.08, (key, num, x, y)
+            assert ln > 0, (key, num)
+    for key in ("LED", "D", "D_Schottky", "D_Zener", "D_TVS"):          # SS34 was mirrored: K pin at the triangle's flat side
+        pins = {p[0]: p for p in SP.SYMBOLS[key][4]}
+        assert pins["1"][1] == "K" and pins["1"][3] < 0 < pins["2"][3], key
+        assert '(xy -1.27 1.27) (xy -1.27 -1.27)' in SP.symbol_text(key)[0] or key != "D", key   # the bar on the K side
+    us = SP.symbol_text("R_US")[0]
+    assert "rectangle" not in us and us.count("(xy ") == 10, us
+    assert RU.resistor_style(RU.DEFAULTS) == "us" and RU.resistor_style({"symbols": {"resistor": "iec"}}) == "iec"
+    assert RU.resistor_style(None) == "us"
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "ecadlib.toml"
+        p.write_text('[symbols]\nresistor = "box"\n')
+        try:
+            RU.load(p)
+            raise AssertionError("resistor = box accepted")
+        except ValueError as e:
+            assert "symbols.resistor" in str(e), e
+
+
+def test_librarian_resistor_symbol_follows_the_house_style():
+    bom = "Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #,LCSC Part Number,Description,Datasheet\n" \
+          "R1,1,10k,R_0603_1608Metric,Yageo,RC0603FR-0710KL,,Resistor 10k 0603,https://example.com/r.pdf\n"
+    with tempfile.TemporaryDirectory() as d:                      # standard source (no KiCad index): the zigzag by default
+        items, _ = TL.run(d, bom=bom, http=TL.FakeHTTP(), sources=["standard"])
+        assert next(iter(items.values()))["source"]["symbol"] == "standard:R_US"
+    with tempfile.TemporaryDirectory() as d:
+        rules = RU.merge(RU.DEFAULTS, {"symbols": {"resistor": "iec"}})
+        items, _ = TL.run(d, bom=bom, http=TL.FakeHTTP(), sources=["standard"], rules=rules)
+        assert next(iter(items.values()))["source"]["symbol"] == "standard:R"
+    http = TL.FakeHTTP()                                          # the KiCad library has Device:R_US: it is used
+    sym = TL.ksym("R_US", ["1", "2"], "R", desc="Resistor, US symbol")
+    for repo_page in (L.TREE.format(repo="kicad-symbols", page=1),):
+        tree = json.loads(http.routes[repo_page]) + [{"type": "blob", "path": "Device.kicad_symdir/R_US.kicad_sym"}]
+        http.routes[repo_page] = json.dumps(tree)
+    http.routes[K.GITLAB.format(repo="kicad-symbols", path="Device.kicad_symdir/R_US.kicad_sym")] = sym
+    with tempfile.TemporaryDirectory() as d:
+        items, _ = TL.run(d, bom=bom, http=http)
+        assert next(iter(items.values()))["source"]["symbol"] == "kicad:Device:R_US"
+
+
+def test_altium_resistor_template_is_the_zigzag():
+    from ecadlib import altium_lib as AL
+    assert AL.resistor_symbol()["prims"][0][0] == "polyline"
+    assert AL.resistor_symbol(style="iec")["prims"][0][0] == "rect"
+    with tempfile.TemporaryDirectory() as d:
+        AL.write_schlib(Path(d) / "r.SchLib", [AL.resistor_symbol()])
+        assert (Path(d) / "r.SchLib").stat().st_size > 0
