@@ -500,10 +500,21 @@ def _put_proposed(plan, items, group, lg, who=""):
                     byname[p["part"]]["status"] = "held"
         hint = None
         if "parity:" in reasons:               # e.g. only the .kicad_mod was edited: it no longer matches the .PcbLib
-            hint = ("the part's KiCad and Altium files must say the same (parity): make the same change to the other "
-                    "file too (the .PcbLib for a .kicad_mod edit, or the other way round), then run the writer again so "
-                    "it proposes both; or `ecadlib part reject` this change. A library that accepts a difference sets "
-                    "[release] parity = \"warn\" in ecadlib.toml")
+            moved = set()
+            for p in group:                    # which of the part's files the held change touched
+                old = (heads.get(p["part"]) or {}).get("files") or {}
+                moved |= {k for k, r in (p.get("files") or {}).items() if (old.get(k) or {}).get("sha256") != r.get("sha256")}
+            if moved == {"kicad_mod"}:
+                first = ("only the .kicad_mod was edited, so it no longer matches the .PcbLib: edit the .PcbLib too (or "
+                         "use `ecadlib fp-edit`, which writes both), then run the writer again so it proposes both")
+            elif moved == {"footprint"}:
+                first = ("only the .PcbLib was edited, so it no longer matches the .kicad_mod: edit the .kicad_mod too "
+                         "(or use `ecadlib fp-edit`, which writes both), then run the writer again so it proposes both")
+            else:
+                first = ("the part's KiCad and Altium files must say the same (parity): make the same change to the "
+                         "other file too (or use `ecadlib fp-edit`), then run the writer again so it proposes both")
+            hint = (first + "; or reject it: `ecadlib part reject` this change. A library that accepts a difference "
+                    "sets [release] parity = \"warn\" in ecadlib.toml")
         raise CG.ChangeError(f"not applied: the proposed version fails the release check ({reasons}); the released "
                              f"version stays", hint)
     return warnings
@@ -716,6 +727,14 @@ def adopt(plan, parts, who=None, comment="", all_lost=False, accept_changes=Fals
             compared[it["name"]], olds[it["name"]] = (f"compared with {where}", changes), old
             if any(c["class"] != "cosmetic" for c in changes):
                 refused.append(it["name"])
+        skipped = []
+        if refused and not accept_changes and all_lost and len(refused) < len(names):
+            # --all: the parts that compare clean are adopted; the others are listed, refused, and left as they are
+            skipped = [{"part": n, "result": "refused", "revision": None, "by": who, "compared": compared[n][0],
+                        "held": None, "changes": [c["text"] for c in compared[n][1] or [] if c["class"] != "cosmetic"]}
+                       for n in refused]
+            names = [n for n in names if n not in refused]
+            refused = []
         if refused and not accept_changes:
             lines = []
             for n in refused:
@@ -743,7 +762,7 @@ def adopt(plan, parts, who=None, comment="", all_lost=False, accept_changes=Fals
         _save(plan, items)
         return [{"part": r["part"], "result": r["result"], "revision": r.get("revision"), "by": who,
                  "compared": compared[r["part"]][0], "held": r.get("held"),
-                 "changes": [c["text"] for c in compared[r["part"]][1] or []]} for r in rows]
+                 "changes": [c["text"] for c in compared[r["part"]][1] or []]} for r in rows] + skipped
 
 
 def _adopt_held(g, plan, items, it, old, compared, rev, who, comment):
@@ -875,12 +894,13 @@ def main(argv=None):
             rows = revert(a.plan, a.spec, a.user, a.comment)
     except (CG.ChangeError, ValueError, FileNotFoundError) as e:
         print(f"ecadlib part {a.cmd}: {e}", file=sys.stderr)
-        if isinstance(e, LG.LedgerError):
+        if getattr(e, "hint", None):
             print(f"  hint: {e.hint}", file=sys.stderr)
         return 2
+    refused = [r for r in rows if r.get("result") == "refused"]
     if getattr(a, "json", False):
         print(json.dumps(rows, indent=1))
-        return 0
+        return 1 if refused else 0
     for r in rows:
         extra = (f" -> r{r['revision']}" if r.get("revision") else "") + (
             f" ({r['approvals']}/{r['needed']} approvals)" if r.get("result") == "approval recorded" else "")
@@ -889,6 +909,10 @@ def main(argv=None):
             print(f"  warning: {r['warning']}")
         if r.get("result") == "adopted":
             print(f"    signed as {r['by']}; {r['compared']}" + ("" if r["changes"] else ": no difference"))
+        elif r.get("result") == "refused":            # adopt --all: left as it is
+            print(f"    not adopted: {r['compared']}")
+            for c in r["changes"]:
+                print(f"      {c}")
         elif "compared" in r:                  # --accept-changes: the disk waits as a held change
             print(f"    signed as {r['by']}; {r['compared']}")
             for c in r["changes"]:
@@ -896,6 +920,11 @@ def main(argv=None):
             if r.get("held"):
                 print(f"    the files on disk are held as a change: ecadlib part show {a.plan} {r['part']}, then a person "
                       f"approves it (ecadlib part approve)")
+    if refused:
+        print(f"  {len(refused)} part(s) not adopted: restore the ledger and .ecadlib/ from git, put the released files "
+              f"back, or `ecadlib part adopt {a.plan} --part {refused[0]['part']} --accept-changes` to hold them as a "
+              f"change for approval", file=sys.stderr)
+        return 1
     return 0
 
 

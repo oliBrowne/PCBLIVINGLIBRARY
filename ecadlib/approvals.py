@@ -123,11 +123,14 @@ def person(who):
 
 
 def same_person(a, b):
-    """Two identities name one person when their e-mails match, or their names match (even if only one of them gives
-    an e-mail). The two-person rule counts people with this, so a second spelling of one name is never a second
-    approver."""
+    """Two identities name one person when their e-mails match. When both give an e-mail the e-mail decides (two
+    people may share a name: 'Ann Lee <ann@x.com>' and 'Ann Lee <ann.lee@y.com>' are two); when one of them gives none,
+    their names decide. The two-person rule counts people with this, so a second spelling of one name or mailbox is
+    never a second approver."""
     (na, ea), (nb, eb) = person(a), person(b)
-    return bool((ea and ea == eb) or (na and na == nb))
+    if ea and eb:
+        return ea == eb
+    return bool(na and na == nb)
 
 
 # ---------------------------------------------------------------- policy
