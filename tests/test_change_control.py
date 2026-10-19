@@ -451,14 +451,23 @@ def test_property_cosmetic_edits_never_hold():
     for _ in range(250):
         p = _part(rnd)
         base = _fp(p)
-        for kind in ("silk", "pin_place", "desc", "spelling"):
+        for kind in ("silk", "pin_length", "pin_end", "desc", "spelling"):
             q = copy.deepcopy(p)
             if kind == "silk":
                 q["silk"] = [(-1.2, -1.1, 1.3, -1.1), (rnd.uniform(-2, 2), 1, 1, 1)]
-            elif kind == "pin_place":
+            elif kind == "pin_length":         # KiCad's (at) is the pin's end: a new length keeps the end in place
+                k = rnd.randrange(len(q["pins"]))
+                q["pins"][k][6] = rnd.choice((1.27, 3.81, 5.08))
+            elif kind == "pin_end":            # a pin end moved to a free spot: a warn (wires may need moving), not a hold
                 k = rnd.randrange(len(q["pins"]))
                 q["pins"][k][3] += rnd.choice((-2.54, 2.54))
                 q["pins"][k][6] = rnd.choice((1.27, 3.81, 5.08))
+                ch = CD.diff(base, _fp(q))
+                assert CD.worst(ch) == "geometry-minor", (kind, texts(ch))
+                assert CG.decide(ch, CG.POLICY)["action"] == "warn", (kind, texts(ch))
+                assert any("wires in placed schematics may need moving" in c["text"] for c in ch), texts(ch)
+                cases += 1
+                continue
             elif kind == "desc":
                 q["desc"] = "another description"
             else:                              # an active-low pin written another way: same signal (a power pin's

@@ -9,7 +9,8 @@ Classes, most severe first (default policy in brackets, see change_gate.POLICY):
                   or what follows it (100nF 50V -> 100nF 6.3V); a second MPN / manufacturer field names another part [hold]
   electrical      a pin's name (as a signal) or type changed, pins swapped names, a pin or pad added or removed,
                   pads renumbered, a pin lost its pad, a pin became hidden, its hidden net, it moved to another unit,
-                  the number of units, alternate pin functions; for every copy of a pin number                  [hold]
+                  the number of units, alternate pin functions; for every copy of a pin number; pins that now share
+                  a pin end (they connect), pins of other names or types that no longer share one               [hold]
   geometry-major  a pad moved, rotated, changed side, drill, copper offset, copper layers or paste / mask on-off
                   (also all paste windows over a pad gone); a pad size changed beyond SIZE_MINOR; pad shape changed
                   (other than square <-> rounded corners); custom pad copper shape; zone connection; footprint copper
@@ -17,8 +18,10 @@ Classes, most severe first (default policy in brackets, see change_gate.POLICY):
                   to another land pattern; the 3D model's origin or rotation moved                              [hold]
   geometry-minor  pad size within SIZE_MINOR, corner rounding, paste / mask margins and windows, courtyard, inner-layer
                   copper of a THT pad, keepouts, footprint type and settings, pad property / pin function, the
-                  footprint renamed with the same land pattern, 3D model added / removed / height / file        [warn]
-  cosmetic        silkscreen, fab drawing, texts, symbol graphics, pin positions / lengths / shapes, a pin name written
+                  footprint renamed with the same land pattern, 3D model added / removed / height / file; a symbol
+                  pin end moved; power pins of one name and type no longer sharing an end (a warn at least)     [warn]
+  cosmetic        silkscreen, fab drawing, texts, symbol graphics, pin positions / lengths that keep the pin end in
+                  place, pin shapes, a pin name written
                   another way (RESET# -> ~{RESET}), the value written another way (100nF -> 100n), display modes,
                   other fields                                                                                  [pass]
 
@@ -288,7 +291,7 @@ def _symbol(o, n, out):
     for c, a, b, lab in renamed:
         _chg(out, "electrical", "symbol", f"pin {c}", a["name"], b["name"],
              f"{lab} was {a['raw'] or '(no name)'} now {b['raw'] or '(no name)'}" + (" (pins swapped names)" if swap else ""))
-    moved, art = [], []
+    moved, art, ends = [], [], []
     for c, a, b, lab in pairs:
         if a["name"] == b["name"] and a.get("raw") != b.get("raw"):
             if _net_pin(a) or _net_pin(b):     # a hidden or power pin joins the net of its exact name (case too)
@@ -317,11 +320,19 @@ def _symbol(o, n, out):
             alts = lambda xs: ", ".join(f"{x[0] or '(no name)'} ({x[2] if len(x) > 2 else x[1]})" for x in xs) or "none"
             _chg(out, "electrical", "symbol", f"pin {c}", aa, ab,
                  f"{lab} ({b['raw'] or b['name']}) alternate functions {alts(a.get('alt'))} -> {alts(b.get('alt'))}")
-        if [a.get("at"), a.get("orient"), a.get("len")] != [b.get("at"), b.get("orient"), b.get("len")]:
+        if a.get("end") is not None and b.get("end") is not None and a["end"] != b["end"]:
+            ends.append(c)                     # where a placed schematic's wire meets the pin
+        elif [a.get("at"), a.get("orient"), a.get("len")] != [b.get("at"), b.get("orient"), b.get("len")]:
             moved.append(c)
         if a.get("shape") != b.get("shape"):
             art.append(c)
-    moved, art = list(dict.fromkeys(moved)), list(dict.fromkeys(art))
+    _stacked(so, sn, out)
+    ends = list(dict.fromkeys(ends))
+    moved, art = [c for c in dict.fromkeys(moved) if c not in ends], list(dict.fromkeys(art))
+    if ends:
+        _chg(out, "geometry-minor", "symbol", "pin ends", None, ends,
+             f"pin end moved: {'pins' if len(ends) > 1 else 'pin'} {_few(ends)} (where a wire meets the pin; wires in "
+             f"placed schematics may need moving)")
     if moved:
         _chg(out, "cosmetic", "symbol", "pin positions", None, moved, f"pin position / length / direction changed: {_few(moved)}")
     if art:
@@ -335,6 +346,82 @@ def _symbol(o, n, out):
     if so.get("modes", 1) != sn.get("modes", 1):
         _chg(out, "cosmetic", "symbol", "modes", so.get("modes", 1), sn.get("modes", 1),
              f"symbol display modes {so.get('modes', 1)} -> {sn.get('modes', 1)}")
+
+
+def _joined(ends, keep):
+    """{(unit, style, x, y): {pin numbers}} -> {(unit, style): [sets of pin numbers that are connected]}: pins on one
+    end, and through a pin number with copies on two ends (one pin, one pad), the pins on both."""
+    out = {}
+    for k, v in ends.items():
+        v = v & keep
+        if not v:
+            continue
+        comps, merged = out.setdefault(k[:2], []), set(v)
+        for c in [c for c in comps if c & merged]:
+            comps.remove(c)
+            merged |= c
+        comps.append(merged)
+    return out
+
+
+def _pins_text(nums, pins):
+    nums = sorted(nums, key=_natkey)
+    names = {pins[n].get("raw") or pins[n].get("name") or "no name" for n in nums}
+    if len(names) == 1:
+        return f"{'pins' if len(nums) > 1 else 'pin'} {_few(nums)} ({names.pop()})"
+    return _few([f"pin {n} ({pins[n].get('raw') or pins[n].get('name') or 'no name'})" for n in nums])
+
+
+def _power_alike(nums, pins):
+    """Pins of one name and one type, power (or hidden: joined by name): split apart they join no wrong net."""
+    xs = [x for n in nums for x in _insts(pins[n])]
+    return all(_net_pin(x) for x in xs) and len({(x.get("raw"), x["type"], x.get("ktype")) for x in xs}) == 1
+
+
+def _stacked(so, sn, out):
+    """Pins that share a pin end are connected (KiCad and Altium join pins on one spot). Pins that now share an end are
+    a new connection: electrical, always. Pins that no longer share one: power pins of one name and type (a stack the
+    house rules redraw as separate pins) each need their own wire now, a warn at least whatever the policy; any other
+    split loses a connection: electrical."""
+    if "stacks" not in so or "stacks" not in sn:     # a fingerprint stored before schema 4 has no pin ends
+        return
+    from .fingerprint import pin_ends
+    po, pn = so.get("pins") or {}, sn.get("pins") or {}
+    keep = set(po) & set(pn)                          # an added or removed pin is reported as that
+    eo, en = pin_ends(po, so.get("units", 1)), pin_ends(pn, sn.get("units", 1))
+    go, gn = _joined(eo, keep), _joined(en, keep)
+    multi = max(so.get("units", 1), sn.get("units", 1)) > 1
+    for us in sorted(set(go) & set(gn)):
+        where = (f" in unit {us[0]}" if multi else "") + (f" (body style {us[1]})" if us[1] > 1 else "")
+        old, new = go[us], gn[us]
+        for comp in new:                              # connected now: was it in pieces before?
+            parts = [c & comp for c in old if c & comp]
+            if len(parts) > 1:
+                parts.sort(key=lambda c: (-len(c), _natkey(min(c, key=_natkey))))
+                for p in parts[1:]:
+                    _chg(out, "electrical", "symbol", "pin ends", None, sorted(comp, key=_natkey),
+                         f"{_pins_text(p, pn)}{where} now {'share' if len(p) > 1 else 'shares'} a pin end with "
+                         f"{_pins_text(parts[0], pn)}: they connect")
+        for comp in old:                              # connected before: in pieces now?
+            parts = [c & comp for c in new if c & comp]
+            if len(parts) <= 1:
+                continue
+            if _power_alike(comp, po) and _power_alike(comp, pn):
+                spot = {k[2:] for k, v in eo.items() if k[:2] == us and v & comp}
+                stay = next((p for p in parts if any(k[:2] == us and k[2:] in spot and v & p for k, v in en.items())), None)
+                need = sorted(set(comp) - (stay or set()), key=_natkey)
+                each = "each now needs its own wire" if len(need) == len(comp) else \
+                    f"{'pins' if len(need) > 1 else 'pin'} {_few(need)} now {'need their own wires' if len(need) > 1 else 'needs its own wire'}"
+                _chg(out, "geometry-minor", "symbol", "pin ends", sorted(comp, key=_natkey), need,
+                     f"{_pins_text(comp, pn)}{where} no longer share one pin end: {each} in placed schematics "
+                     f"(a separate pin connects only where it is wired)")
+                out[-1]["least"] = "warn"             # never passes silently, whatever the policy
+            else:
+                parts.sort(key=lambda c: (-len(c), _natkey(min(c, key=_natkey))))
+                for p in parts[1:]:
+                    _chg(out, "electrical", "symbol", "pin ends", sorted(comp, key=_natkey), None,
+                         f"{_pins_text(p, pn)}{where} no longer {'share' if len(p) > 1 else 'shares'} a pin end with "
+                         f"{_pins_text(parts[0], pn)}: they are no longer connected")
 
 
 def _net_pin(x):

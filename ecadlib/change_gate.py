@@ -153,7 +153,10 @@ def normalize_policy(raw, where="[change]"):
 def decide(changes, pol, mode="gate"):
     """-> {action: pass | warn | hold, why: [...], by_class: {class: action}}"""
     pol = pol or POLICY
-    by = {c["class"]: pol[CLASS_KEY[c["class"]]] for c in changes}
+    by = {}
+    for c in changes:                          # "least": a change that is at least a warn whatever the policy says
+        act = max(pol[CLASS_KEY[c["class"]]], c.get("least") or "pass", key=ACTIONS.index)
+        by[c["class"]] = max(by.get(c["class"], "pass"), act, key=ACTIONS.index)
     action = max(by.values(), key=ACTIONS.index, default="pass")
     why = [f"{cls}: {act}" for cls, act in sorted(by.items(), key=lambda x: CD.RANK[x[0]])]
     if mode == "restyle":

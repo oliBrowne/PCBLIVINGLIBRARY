@@ -123,14 +123,15 @@ def test_library_released_before_the_kicad_mod_was_fingerprinted_shows_no_change
 
 
 # ---------------------------------------------------------------- C2: a re-fetched symbol must be the released one
+# (its pin ends where the demo's AO3401A has them: a moved pin end is not the released revision either)
 SYM = """(kicad_symbol_lib (version 20231120) (generator test)
   (symbol "QP" (pin_names (offset 0)) (in_bom yes) (on_board yes)
     (property "Reference" "Q" (at 0 0 0) (effects (font (size 1.27 1.27))))
     (property "Value" "QP" (at 0 0 0) (effects (font (size 1.27 1.27))))
     (symbol "QP_1_1"
       (pin input line (at -5.08 0 0) (length 2.54) (name "{0}" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
-      (pin passive line (at 2.54 5.08 270) (length 2.54) (name "{1}" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
-      (pin passive line (at 2.54 -5.08 90) (length 2.54) (name "D" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
+      (pin passive line (at 2.54 -5.08 90) (length 2.54) (name "{1}" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+      (pin passive line (at 2.54 5.08 270) (length 2.54) (name "D" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
     )
   )
 )

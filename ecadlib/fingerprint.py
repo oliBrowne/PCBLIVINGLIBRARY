@@ -12,9 +12,10 @@ so KiCad and Altium copies of the same part give the same electrical and geometr
   identity    MPN, manufacturer, and the value as a number (100nF = 0.1uF = 100n), its unit and what follows it (a
               rating, a tolerance) from the part's fields
   symbol      pins {number: canonical name, electrical type}, plus what is not electrical: the name as written (RESET#
-              or ~{RESET}), hidden, hidden net, unit, pin shape, position, length; every copy of the number ("inst":
-              stacked pins, a power pin in each unit, De Morgan views) with its unit, body style and KiCad alternate
-              functions; units and display modes; a digest of the symbol graphics
+              or ~{RESET}), hidden, hidden net, unit, pin shape, position, length, end (where a wire meets it); every
+              copy of the number ("inst": stacked pins, a power pin in each unit, De Morgan views) with its unit, body
+              style and KiCad alternate functions; "stacks": the pins that share one end, per unit and body style
+              (they are connected); units and display modes; a digest of the symbol graphics
   footprint   pads (number, position, size, rotation, shape, corner %, side, drill and slot, copper offset, copper
               layers, paste and mask on/off and margins, custom outline and a digest of its shape; KiCad zone
               connection, pin function / type, fabrication property), paste / mask windows, footprint copper,
@@ -27,7 +28,7 @@ so KiCad and Altium copies of the same part give the same electrical and geometr
               and gid take its pads and land in only where they differ from the .PcbLib's
 
 Hashes (sha256 over the canonical JSON):
-  eid     electrical: identity + pins (canonical name, type) + pad numbers + pin -> pad map
+  eid     electrical: identity + pins (canonical name, type) + stacked pins + pad numbers + pin -> pad map
   gid     land pattern: every pad, window, footprint copper and the courtyard
   mid     3D model (tool-specific: KiCad points at a STEP file, Altium embeds bodies, so it is kept out of gid)
   cid     cosmetic: names as written, pin geometry and shapes, symbol graphics, silk, fab, texts, other fields
@@ -48,7 +49,8 @@ from pathlib import Path
 
 from . import altium_lib as AL, parity as PA, sexpr
 
-SCHEMA = 3                                    # 3: a hidden pin's net as written (case and spelling)
+SCHEMA = 4                                    # 3: a hidden pin's net as written (case and spelling); 4: pin ends
+#                                               and the pins that share one ("stacks")
 ETYPE_NAME = {0: "input", 1: "io", 2: "output", 3: "open_collector", 4: "passive", 5: "hiz", 6: "open_emitter", 7: "power"}
 MPN_KEYS = ("manufacturer part number", "manufacturer part number 1", "mpn", "mfr part number", "manufacturer_part_number",
             "manufacturerpartnumber", "manufacturer part #", "mfr. part number", "mfr part #", "mfr. #", "mpn1", "mfr_pn",
@@ -570,6 +572,7 @@ def kicad_symbol(sym):
                     "hidden": hidden, "net": raw if hidden and str(g[1]) == "power_in" else None,
                     "unit": unit, "style": max(1, style), "shape": str(g[2]) if len(g) > 2 and isinstance(g[2], str) else "line",
                     "at": qpt((float(at[1]), float(at[2]))) if at else None,
+                    "end": qpt((float(at[1]), float(at[2]))) if at else None,     # KiCad's (at) is the pin's end
                     "orient": int(float(at[3])) % 360 if at and len(at) > 3 else 0,
                     "len": qmm(float((sexpr.first(g, "length") or [0, 2.54])[1])),
                     "alt": sorted([canon_pin_name("" if str(a[1]) == "~" else a[1]), coarse_type(str(a[2])), kicad_ktype(a[2])]
@@ -581,7 +584,8 @@ def kicad_symbol(sym):
                 art.append([g[0], unit, style, pts, qmm(float(rad[1])) if rad and not isinstance(rad[1], list) else None,
                             str(g[1]) if g[0] == "text" else "", fill, _k_width(g)])
     n_units = max(1, len([u for u in units if u > 0]))
-    sym_d = {"name": str(sym[1]), "pins": _pin_table(pins, n_units), "units": n_units,
+    table = _pin_table(pins, n_units)
+    sym_d = {"name": str(sym[1]), "pins": table, "stacks": stacks(table, n_units), "units": n_units,
              "modes": max(1, len([s for s in styles if s > 0])), "art": sorted(art, key=json.dumps),
              "footprint_link": (props.get("Footprint") or "").split(":")[-1]}
     return sym_d, props
@@ -602,6 +606,34 @@ def _pin_table(found, n_units):
         inst = sorted(recs, key=lambda r: (r.get("style") or 1, r.get("unit") or 0, json.dumps(r, sort_keys=True, default=str)))
         table[num] = dict(first, inst=inst)
     return table
+
+
+def _natkey(s):
+    return [int(t) if t.isdecimal() else t for t in re.split(r"(\d+)", str(s))]
+
+
+def pin_ends(pins, n_units):
+    """{(unit, body style, end): {pin numbers}}: where each pin connects. Pins that end on one spot are connected (KiCad
+    and Altium join them there). A pin of unit 0 (common to all units) is in every unit. Pins with no end recorded (a
+    fingerprint from before schema 4) are left out."""
+    units = list(range(1, n_units + 1)) if n_units > 1 else [1]
+    at = {}
+    for num, p in pins.items():
+        for x in p.get("inst") or [p]:
+            e = x.get("end")
+            if e is None:
+                continue
+            u = x.get("unit") or 0
+            for uu in ([u] if u or n_units <= 1 else units):
+                at.setdefault((uu, x.get("style") or 1, round(e[0], 4), round(e[1], 4)), set()).add(num)
+    return at
+
+
+def stacks(pins, n_units):
+    """[[unit, body style, [pin numbers]]] for each end where pins of more than one number meet (stacked pins): they
+    are connected, so the grouping is electrical (eid)."""
+    return sorted(([k[0], k[1], sorted(v, key=_natkey)] for k, v in pin_ends(pins, n_units).items() if len(v) > 1),
+                  key=lambda s: (s[0], s[1], _natkey(s[2][0]), len(s[2])))
 
 
 _SCH_ART = {"4": "label", "6": "polyline", "7": "polygon", "8": "ellipse", "10": "round_rect", "11": "elliptical_arc",
@@ -629,11 +661,14 @@ def altium_symbol(entry):
         rec = r.get("RECORD")
         if rec == "2":
             hidden = bool(r["conglomerate"] & 0x04)
+            d = {0: (1, 0), 1: (0, 1), 2: (-1, 0), 3: (0, -1)}[(r.get("orient") or 0) & 3]   # Altium's pin points away
+            L = r.get("length") or 0                       # from the body; its end is the location plus the length
             pins.append((str(r["num"]), {
                 "name": canon_pin_name(r["name"]), "raw": r["name"], "type": coarse_type(r["etype"]), "hidden": hidden,
                 "net": net.get(i) if hidden and net.get(i) else None, "unit": max(0, r.get("part") or 0),
                 "style": (r.get("mode") or 0) + 1, "shape": "-".join(str(s) for s in r.get("symbols") or ()) or "line",
-                "at": [qmm(r["x"] * SCH_MM), qmm(r["y"] * SCH_MM)], "orient": (r.get("orient") or 0) * 90,
+                "at": [qmm(r["x"] * SCH_MM), qmm(r["y"] * SCH_MM)],
+                "end": [qmm((r["x"] + L * d[0]) * SCH_MM), qmm((r["y"] + L * d[1]) * SCH_MM)], "orient": (r.get("orient") or 0) * 90,
                 "len": qmm((r.get("length") or 0) * SCH_MM), "alt": []}))
         elif rec == "41" and r.get("NAME") not in (None, "HiddenNetName", "Comment"):
             params[r["NAME"]] = r.get("TEXT", "")
@@ -650,7 +685,8 @@ def altium_symbol(entry):
                         r.get("LINEWIDTH", "")])
     if "Description" not in params and head.get("COMPONENTDESCRIPTION"):
         params["Description"] = head["COMPONENTDESCRIPTION"]
-    sym_d = {"name": entry["name"], "pins": _pin_table(pins, parts), "units": parts, "modes": modes, "art": sorted(art, key=json.dumps),
+    table = _pin_table(pins, parts)
+    sym_d = {"name": entry["name"], "pins": table, "stacks": stacks(table, parts), "units": parts, "modes": modes, "art": sorted(art, key=json.dumps),
              "footprint_link": link or ""}
     return sym_d, params
 
@@ -728,6 +764,8 @@ def electrical(fp):
     out = {"identity": {k: (str(v).strip().upper() if isinstance(v, str) else v) for k, v in ident.items()},
            "pins": {n: _pin_signals(p) for n, p in sorted((sym or {}).get("pins", {}).items())},
            "pads": sorted(p["num"] for p in (foot or {}).get("pads", [])), "pinmap": pmap, "orphan_pads": orphans}
+    if (sym or {}).get("stacks"):                # pins that share an end are connected (left out when none do, so a
+        out["stacks"] = sym["stacks"]            # symbol with no stacked pins keeps its schema 3 eid)
     return _with_kicad_pads(fp, out)
 
 
