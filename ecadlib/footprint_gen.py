@@ -515,11 +515,15 @@ def build(spec, density=None):
     from . import footprint_check
     rep["checks"] = [{"level": l, "rule": r_, "message": m}
                      for l, r_, m in footprint_check.check(text_out, allow_duplicate_pads=[str(spec["tab"]["number"])] if spec.get("tab") else None)]
-    short = [c["message"] for c in rep["checks"] if c["level"] == "error" and c["rule"] == "copper"]
-    if short:                                                 # overlapping or touching pads are a short on the board
-        raise ValueError("the pads would short: " + "; ".join(short) + " (check pitch, pin_count and terminal_length "
-                         "against the drawing)")
     return text_out, rep
+
+
+def shorts(rep):
+    """build()'s copper errors (overlapping or touching pads: a short on the board) as one sentence, or None.
+    `footprint gen` refuses to write such a footprint; the librarian's release check holds it."""
+    short = [c["message"] for c in rep.get("checks") or [] if c["level"] == "error" and c["rule"] == "copper"]
+    return ("the pads would short: " + "; ".join(short) + " (check pitch, pin_count and terminal_length against the "
+            "drawing)") if short else None
 
 
 def altium_footprint(spec, density=None):
@@ -601,6 +605,10 @@ def main(argv=None):
                 txt, rep = build(spec, RU.density_for(spec, rules, a.density))
             except ValueError as e:                               # a spec that doesn't add up: say why, write nothing
                 print(f"{spec.get('name', sp)}: not written: {e}", file=sys.stderr)
+                bad += 1
+                continue
+            if shorts(rep):
+                print(f"{spec['name']}: not written: {shorts(rep)}", file=sys.stderr)
                 bad += 1
                 continue
             from . import sexpr
