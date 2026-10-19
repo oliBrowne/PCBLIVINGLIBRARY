@@ -325,3 +325,12 @@ def test_bom47_upload_name_keeps_its_extension():
         assert ws.safe_name("a" * 130 + ".xlsx").endswith(".xlsx") and len(ws.safe_name("a" * 130 + ".xlsx")) == 120
         assert ws.safe_name("../../etc/BOM v2.csv") == "BOM_v2.csv" and ws.safe_name("..") == "bom.csv"
         assert ws.safe_name("PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Left") == "PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Left"
+
+
+def test_bom51_mpn_key_folds_unicode_instead_of_dropping_it():
+    from ecadlib.dedupe import mpn_key
+    from ecadlib.kicad_index import norm_mpn
+    assert norm_mpn("µA741CN") == norm_mpn("μA741CN") == norm_mpn("UA741CN") == "UA741CN"
+    assert mpn_key("µA741CN") == mpn_key("UA741CN") != mpn_key("A741CN")
+    assert norm_mpn("ＬＭ358DR") == "LM358DR" and norm_mpn("MAX232ÉPE") == "MAX232EPE"
+    assert norm_mpn("LM358-DR/NOPB") == "LM358DRNOPB" and norm_mpn("部品X1") == "部品X1"   # never dropped
