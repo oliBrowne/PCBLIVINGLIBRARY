@@ -255,9 +255,9 @@ def not_sent(e):
         return True
     if not isinstance(e, requests.exceptions.ConnectionError) or isinstance(e, requests.exceptions.SSLError):
         return False
-    import urllib3.exceptions as U
-    why = getattr(e.args[0], "reason", None) if e.args else None
-    return isinstance(why, (U.NewConnectionError, U.ConnectTimeoutError))
+    why = getattr(e.args[0], "reason", None) if e.args else None     # urllib3's MaxRetryError.reason (by class name:
+    return any(c.__name__ in ("NewConnectionError", "ConnectTimeoutError")  # urllib3 comes with requests, undeclared)
+               for c in type(why).__mro__)
 
 
 class Client:
@@ -305,6 +305,7 @@ class Client:
                 err = APIError(f"API request failed: {type(e).__name__}: {redact(e, self.key)[:200]}"
                                + ("" if again or not paid else " (the request may have reached the API and been billed, "
                                   "so it is not sent again; run again to retry)"), retryable=again)
+                err.maybe_billed = paid and not not_sent(e)   # the cost cap keeps its hold
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))
                 retry_after = None
             else:
@@ -373,7 +374,16 @@ class Client:
         """Results JSONL of an ended batch -> list of {custom_id, result} (any order: key by custom_id)."""
         url = batch.get("results_url") or f"/v1/messages/batches/{batch['id']}/results"
         r = self.request("GET", url, raw=True)
-        return [json.loads(ln) for ln in r.text.splitlines() if ln.strip()]
+        out = []
+        for i, ln in enumerate(r.text.splitlines(), 1):
+            if not ln.strip():
+                continue
+            try:
+                v = json.loads(ln)
+            except ValueError:                        # a damaged download: that line is read again next run
+                v = None
+            out.append(v if isinstance(v, dict) else {"unreadable": i})
+        return out
 
 
 # ---------------------------------------------------------------- output contract
@@ -799,19 +809,23 @@ def trim(data, pages):
     return buf.getvalue()
 
 
-def load_source(src, pages=None, fetch=False):
+def load_source(src, pages=None, fetch=False, auto_pages=None, max_pages=None):
     """-> (source, page_offset, pages left for the prompt). URLs go to the API as a url source unless
-    --fetch or --pages needs the bytes here."""
+    --fetch or --pages needs the bytes here. With auto_pages / max_pages (no --pages), a PDF over them is cut to the
+    pages prepare() picks, as the Reader does; the offset is then the list of original page numbers sent."""
     url = re.match(r"https?://", src)
     if url and not fetch and not pages:
         return ("url", src), 0, None
     if url:
         try:
-            r = requests.get(src, timeout=60)
+            r = requests.get(src, timeout=60, stream=True)
             r.raise_for_status()
+            data = read_capped(r)
+            r.close()
         except requests.RequestException as e:
             raise DatasheetError(f"fetch failed: {e}")
-        data = r.content
+        if len(data) > MAX_DOWNLOAD:
+            raise DatasheetError(f"{src}: larger than {MAX_DOWNLOAD >> 20} MB; download it and pass --pages")
     else:
         data = Path(src).read_bytes()
     if not data.startswith(b"%PDF"):
@@ -822,6 +836,9 @@ def load_source(src, pages=None, fetch=False):
             return ("base64", cut), pages[0] - 1, None
         if url and not fetch:
             return ("url", src), 0, pages
+    if not pages and (auto_pages is not None or max_pages is not None):
+        sent, offset, hint, _ = prepare(data, None, auto_pages or 0, max_pages or MAX_PAGES)
+        return ("base64", sent), offset, hint
     if len(data) > MAX_PDF:
         raise DatasheetError(f"PDF is {len(data) >> 20} MB; use --pages to send only the drawing and pin table")
     return ("base64", data), 0, pages
@@ -1151,13 +1168,18 @@ def self_check(spec, ext, review):
     return info
 
 
-def process(ext, part, datasheet, model=MODEL, offset=0, msg=None):
-    """Extraction -> {spec, symbol, sidecar, needs_review}. Never alters a value to make a check pass."""
-    review = [f"document contains instruction-like text (ignored): {q[:200]!r}" for q in ext["embedded_instructions"]]
-    if isinstance(offset, list):                      # auto page selection: page k of the sent PDF is offset[k - 1]
-        bad = sorted({p for p in _cited_pages(ext) if isinstance(p, int) and not 1 <= p <= len(offset)})
+INJECTION = "document contains instruction-like text (ignored)"
+
+
+def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None):
+    """Extraction -> {spec, symbol, sidecar, needs_review}. Never alters a value to make a check pass.
+    n_sent: how many pages were sent when offset is an int (--pages A-B), so citations past them are caught too."""
+    review = [f"{INJECTION}: {q[:200]!r}" for q in ext["embedded_instructions"]]
+    n = len(offset) if isinstance(offset, list) else n_sent   # auto page selection: page k sent is offset[k - 1]
+    if n:
+        bad = sorted({p for p in _cited_pages(ext) if isinstance(p, int) and not 1 <= p <= n})
         if bad:
-            review.append(f"the model cited page(s) {bad} of the {len(offset)} pages sent: those values have no source page")
+            review.append(f"the model cited page(s) {bad} of the {n} pages sent: those values have no source page")
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
@@ -1225,7 +1247,7 @@ def report(res):
     else:
         out += ["A person has to compare it with the datasheet before it is released; until then the part is held.", ""]
     out += [f"## Check these first ({len(res['needs_review'])})", ""]
-    out += [f"- [ ] {M.explain(r)['text']}" for r in res["needs_review"]] or \
+    out += [f"- [ ] {_review_text(r)}" for r in res["needs_review"]] or \
         ["Nothing failed the automatic checks. Still compare the drawing with the numbers below."]
     out += ["", "Page numbers are pages of the original PDF, counting from 1."]
     out += ["", "## Dimensions to compare with the drawing", "", "| Dimension | Label | Printed | mm (min / nom / max) | Page | Figure |", "|---|---|---|---|---|---|"]
@@ -1255,6 +1277,16 @@ def report(res):
     return "\n".join(out) + "\n"
 
 
+def _review_text(r):
+    """One "Check these first" line. Text quoted from the PDF is shown as written, never matched against the message
+    table (the PDF's author would choose the warning); a line no message explains keeps its "<dimension>: " prefix."""
+    from . import messages as M
+    if r.startswith(INJECTION):
+        return M.clean(r)
+    e = M.explain(r)
+    return M.clean(r) if e["code"] == "other" else e["text"]
+
+
 def CC_LABEL(field):
     from . import crosscheck as CC
     return CC.LABEL.get(field, field)
@@ -1264,7 +1296,17 @@ def write(res, outdir):
     d = Path(outdir)
     d.mkdir(parents=True, exist_ok=True)
     safe = lambda s: re.sub(r"[^A-Za-z0-9_.+-]", "_", s)
-    part = safe(res["symbol"]["name"])
+    raw = res["symbol"]["name"]
+    part = safe(raw)
+
+    def other_part(f):                                # a symbol written for a part whose name differs only in punctuation
+        try:
+            v = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+        except (OSError, ValueError):
+            return False
+        return isinstance(v, dict) and "pins" in v and "package_type" not in v and v.get("name") not in (None, raw)
+    if other_part(d / f"{part}.json") or other_part(d / f"{part}.symbol.json"):
+        part = f"{part}-{hashlib.sha1(raw.encode()).hexdigest()[:6]}"
     def holds(f, kind):                               # what an existing file in the folder is (another part's output)
         try:
             v = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
@@ -1299,6 +1341,27 @@ PDF_KEYWORDS = [(re.compile(p, re.I), w) for p, w in (
     (r"pin (configuration|functions?|descriptions?|assignments?|out)|pinout|terminal functions?", 2),
     (r"dimensions? in (mm|millimet|inch)|\bmax\b.*\bmin\b|\bmin\b.*\bmax\b", 1))]
 MAX_DOWNLOAD = 64 * 2 ** 20
+DOWNLOAD_S = 120                                      # wall-clock limit for one datasheet download
+
+
+def read_capped(r, limit=None, deadline=None):
+    """Body of a streamed requests response: at most limit + 1 bytes (the caller reports "larger than"), within
+    deadline seconds overall (requests' timeout is per socket read, so a host sending a byte a minute never times out)."""
+    raw, limit = getattr(r, "raw", None), MAX_DOWNLOAD if limit is None else limit
+    if raw is None:
+        return r.content
+    read1 = getattr(raw, "read1", None)
+    if not callable(read1):                           # urllib3 1.x / a test double: one capped read
+        return raw.read(limit + 1, decode_content=True)
+    t0, buf, deadline = time.monotonic(), bytearray(), DOWNLOAD_S if deadline is None else deadline
+    while len(buf) <= limit:
+        chunk = read1(65536, decode_content=True)
+        if not chunk:
+            break
+        buf += chunk
+        if time.monotonic() - t0 > deadline:
+            raise DatasheetError(f"download too slow ({len(buf) >> 10} KB in {deadline} s); stopped")
+    return bytes(buf)
 
 
 def lcsc_number(item=None, ln=None, row=None):
@@ -1381,7 +1444,10 @@ class PdfStore:
         try:
             r = get(url, timeout=60, allow_redirects=True, stream=True,
                     headers={"Accept": "application/pdf,*/*;q=0.5"})
-            data = r.raw.read(MAX_DOWNLOAD + 1, decode_content=True) if hasattr(r, "raw") and r.raw is not None else r.content
+            data = read_capped(r)
+        except DatasheetError as e:                   # too slow: not a broken link, so the URL can still go to the API
+            r.close()
+            return 0, None, "", url, str(e)
         except requests.RequestException as e:
             m = re.search(r"Tunnel connection failed: ([^'\")]+)", str(e))
             return 0, None, "", url, f"{type(e).__name__}: " + (f"proxy CONNECT refused ({m.group(1).strip()})" if m else str(e)[:160])
@@ -1396,9 +1462,12 @@ class PdfStore:
         stem = hashlib.sha256(url.encode()).hexdigest()[:24]
         pdf_f, meta_f = self.dir / f"{stem}.pdf", self.dir / f"{stem}.json"
         if pdf_f.exists() and meta_f.exists():
-            data = pdf_f.read_bytes()
-            meta = json.loads(meta_f.read_text(encoding="utf-8"))
-            if hashlib.sha256(data).hexdigest() == meta.get("sha256"):
+            try:
+                data = pdf_f.read_bytes()
+                meta = json.loads(meta_f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):             # a damaged record: downloaded again
+                meta = None
+            if isinstance(meta, dict) and hashlib.sha256(data).hexdigest() == meta.get("sha256"):
                 return data, dict(meta, where=where or meta.get("where"), from_cache=True)
         if self.offline:
             raise DatasheetError(f"{url}: offline and not downloaded before")
@@ -1424,8 +1493,10 @@ class PdfStore:
                 "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "pages": pdf_pages(data),
                 "fetched": datetime.datetime.now().isoformat(timespec="seconds")}
         self.dir.mkdir(parents=True, exist_ok=True)
-        pdf_f.write_bytes(data)
-        meta_f.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        tmp = pdf_f.with_suffix(".pdf.tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, pdf_f)
+        write_text_atomic(meta_f, json.dumps(meta, indent=2))
         return data, dict(meta, from_cache=False)
 
 
@@ -1528,8 +1599,13 @@ class ResultCache:
         return f"{src_hash[:16]}-{re.sub(r'[^A-Za-z0-9.-]', '_', model)}-{schema_version()}-{h}"
 
     def get(self, key):
+        """The cached record, or None; a damaged entry (cut short by a crash, a sync tool) is a miss, not a crash."""
         f = self.dir / f"{key}.json"
-        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+        except (OSError, ValueError):
+            return None
+        return rec if isinstance(rec, dict) else None
 
     def put(self, key, rec):
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -1754,6 +1830,8 @@ class Reader:
             res["sidecar"]["cross_check"] = res["cross_check"] = cc
             if cc["status"] == "unchecked":
                 res["needs_review"].append(f"cross-check: {CC.summary_line(cc)}")
+            res["needs_review"] += [f"{INJECTION} (cross-check read): {q[:200]!r}" for c in cc.get("checks") or []
+                                    for q in c.get("embedded_instructions") or []]
         write(res, self.dir)
         if cc and cc["status"] == "disagreed":
             raise CC.held(cc)
@@ -1771,7 +1849,7 @@ class Reader:
             raise CC.Unavailable("no answer: no key for the second read")
         from .llm import rails as LRL
         try:                                          # held to [datasheet] max_cost_usd like every other request
-            self._guard_cost([{"key": key, "name": job.get("name") or job["part"], "model": model, "body": body,
+            self._guard_cost([{"key": key, "name": job.get("name") or job["part"], "model": model, "body": body, "sync": True,
                                "url": job.get("url", ""), "prov": {"pages": pages_sent or job.get("n_pages")}}])
         except APIError:
             raise
@@ -1784,9 +1862,11 @@ class Reader:
             b = LRL.adapt_body(body, inf["prof"], p) if p["guided"] else body
             with logging_to(self.log_file, self.say):
                 msg = send(b)
-        except APIError:
-            raise                                     # no answer came back: the part is retried next run
         except DatasheetError as e:
+            if not getattr(e, "maybe_billed", False):
+                self._release(key)                    # no answer, nothing billed: the hold is given back
+            if isinstance(e, APIError):
+                raise                                 # no answer came back: the part is retried next run
             raise CC.Unavailable(str(e)[:200])
         msg = LRL.repair_message(msg, CC.output_schema(), p)
         self._settle(key, model, msg, "sync")
@@ -1874,7 +1954,7 @@ class Reader:
             if job.get("final"):
                 return self._result(job, self.results.get(job["key"]))
             if not _guarded:
-                self._guard_cost([job])
+                self._guard_cost([dict(job, sync=True)])   # sent now, at synchronous rates
             _guarded = False
             try:
                 with logging_to(self.log_file, self.say):
@@ -1882,6 +1962,8 @@ class Reader:
             except DatasheetError as e:               # refusal / max_tokens / not schema-shaped: an answer, with usage
                 msg = getattr(e, "api_message", None)
                 if msg is None:                       # no answer came back (API error): nothing to record
+                    if not getattr(e, "maybe_billed", False):
+                        self._release(job["key"])
                     raise
             err = None
             try:
@@ -1938,7 +2020,8 @@ class Reader:
         # pages come first), and only within [datasheet] max_attempts answers per part
         allow = "rung" in job and n_att + 1 <= self.router.max_attempts and \
             self.router.next_step(job["rung"], job["level"], len(job["levels"]), "failed", n_att) is None
-        guard = lambda b: self._guard_cost([dict(job, body=b)])   # the feedback turn is held to max_cost_usd too
+        redo = 2 if "split_steps" in inf["plan"]["rails"] else 1   # the steps' redo is one step, with its retry
+        guard = lambda b: self._guard_cost([dict(job, body=b, sync=True, calls=redo)])   # the feedback turn too
         try:
             return LR.ask(job, inf, send, judge, cl, allow_feedback=allow, guard=guard)
         except APIError:
@@ -1967,9 +2050,10 @@ class Reader:
         OUT_TOKENS, and max_tokens for the worst case. Each part is priced on the model its route starts on;
         usd_max_route adds the worst case of every further step its route could take (more pages, the next model)."""
         batch = self.batch if batch is None else batch
-        mult = BATCH_DISCOUNT if batch else 1.0
         rows, exact, models = [], bool(self.key), {}
         for j in jobs:
+            jb = batch and not j.get("sync")          # a synchronous request of a batch run (cross-check, feedback)
+            mult = BATCH_DISCOUNT if jb else 1.0
             model = j.get("model") or self.model
             pin, pout = price_of(model) or (None, None)
             tin = None
@@ -1987,9 +2071,11 @@ class Reader:
             tin += len(json.dumps(output_schema())) // 4       # the output format (not in count_tokens): rough
             from .ds_route import prices
             pin, pout = prices(model, tin) or (None, None)     # the long-prompt tier where the model has one
-            cw = 1.0 if batch else CACHE_WRITE
+            cw = 1.0 if jb else CACHE_WRITE
             cost = (tin * cw * pin + OUT_TOKENS * pout) / 1e6 * mult if pin else None
             worst = worst_usd(model, tin, j["body"]["max_tokens"], cw, mult, fallback=bool(j["body"].get("fallbacks")))
+            calls = j.get("calls") or self._calls(model)  # the small-model steps rail: several calls per read
+            worst = worst * calls if worst is not None else None
             route_max = worst
             if "rung" in j and worst is not None and self.router.escalate:
                 sent = self._pages_sent(j) or j.get("n_pages") or URL_PAGES
@@ -1999,8 +2085,9 @@ class Reader:
                         if (r, lv) == (j["rung"], j["level"]):
                             continue
                         pg = len(j["levels"][lv]) if isinstance(j["levels"][lv], list) else (j.get("n_pages") or sent)
-                        steps.append(worst_usd(self.router.ladder[r], tin * pg / max(1, sent), j["body"]["max_tokens"], cw, mult,
-                                               fallback=bool(j["body"].get("fallbacks")) and self.router.ladder[r] in FALLBACK_MODELS))
+                        w = worst_usd(self.router.ladder[r], tin * pg / max(1, sent), j["body"]["max_tokens"], cw, mult,
+                                      fallback=bool(j["body"].get("fallbacks")) and self.router.ladder[r] in FALLBACK_MODELS)
+                        steps.append(w * self._calls(self.router.ladder[r]) if w is not None else None)
                 more = max(0, self.router.max_attempts - 1)
                 route_max = None if None in steps else worst + sum(sorted(steps, reverse=True)[:more])
             models[model] = models.get(model, 0) + 1
@@ -2023,6 +2110,13 @@ class Reader:
                                          f"no price known for {one}") if one else
                                         "; ".join(price(m) for m in models) + " per MTok in/out"}
         return self.last_estimate
+
+    def _calls(self, model):
+        """Most paid calls one read of this model makes: 1, or 3 steps x 2 attempts on the split_steps rail."""
+        try:
+            return 6 if "split_steps" in self.info(model)["plan"]["rails"] else 1
+        except Exception:                             # a setup that does not resolve is reported where it is sent
+            return 1
 
     def _guard_cost(self, jobs):
         """[datasheet] max_cost_usd over everything this Reader sends (batches and synchronous calls together)."""
@@ -2048,10 +2142,17 @@ class Reader:
         from . import ds_route as DR
         if not self._holds.get(key):
             return
-        usd = DR.usage_usd(model, (msg or {}).get("usage"), batch=str(via or "").startswith("batch"))
-        if usd is None:
+        usd = DR.usage_usd(DR.billed_model(model, msg), (msg or {}).get("usage"),   # the model that served it, as
+                           batch=str(via or "").startswith("batch"))                  # the cost ledger prices it
+        if usd is None:                               # no price, or no usage block: the real cost is unknown
             return
         self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key)) + usd)
+
+    def _release(self, key):
+        """A request that was not billed (an HTTP error answer, no connection, an errored batch request): its hold
+        under max_cost_usd is given back."""
+        if self._holds.get(key):
+            self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key)))
 
     # --- batch
     def _state(self):
@@ -2070,7 +2171,8 @@ class Reader:
             return 0
         st, by, n = self._state(), {j["key"]: j for j in jobs}, 0
         for b in st["batches"]:
-            recs = {c: self.results.get(k) for c, k in b["requests"].items()} if b.get("collected") else {}
+            recs = {c: self.results.get(k) for c, k in b["requests"].items()} if b.get("collected") and \
+                not b.get("foreign") else {}
             lost = {c: b["requests"][c] for c, rec in recs.items()
                     if (rec is not None and "message" not in rec) or (rec is None and b["requests"][c] in by)}
             if not lost:
@@ -2125,7 +2227,7 @@ class Reader:
                 known.add(b["id"])
                 st["batches"].append({"id": b["id"], "created": b.get("created_at"), "model": m["model"],
                                       "requests": m["requests"], "parts": m["parts"], "status": b.get("processing_status"),
-                                      "collected": False, "adopted": m["fingerprint"]})
+                                      "collected": False, "adopted": m["fingerprint"], "mark": m})
                 self.say(f"  datasheet batch {b['id']}: found the batch whose create answer was lost ({m['n']} parts); "
                          "collecting it instead of sending again")
             elif self.yes:
@@ -2219,6 +2321,8 @@ class Reader:
                     if e.status is not None and (e.status < 500 or e.status == 529):   # an answer that says not created
                         st["pending_creates"].remove(mark)
                         self._save_state(st)
+                        for j in chunk:
+                            self._release(j["key"])
                     else:
                         e.args = (f"{e.args[0]} (the batch may have been created: the next run looks for it before "
                                   "sending again)",)
@@ -2244,12 +2348,26 @@ class Reader:
                     self.sleep(self.poll)
                 if info.get("processing_status") != "ended":
                     continue
-                for line in client.batch_results(info):
+                lines = client.batch_results(info)
+                if b.get("adopted") and lines and not any(b["requests"].get(ln.get("custom_id")) for ln in lines):
+                    # adopted after a lost create answer, but none of its requests are ours: another tool's batch
+                    b["collected"], b["foreign"] = True, True
+                    st.setdefault("pending_creates", []).append(b["mark"])   # unconfirmed again: refused without --yes
+                    for k in b["requests"].values():
+                        errors[k] = (f"batch {b['id']} (taken for a create whose answer was lost) holds none of these "
+                                     "parts; check console.anthropic.com > Batches, then run again with --yes to send again")
+                    self._save_state(st)
+                    continue
+                bad, seen = [ln["unreadable"] for ln in lines if "unreadable" in ln], set()
+                for line in lines:
                     key = b["requests"].get(line.get("custom_id"))
                     job = next((j for j in jobs if j["key"] == key), None)
                     r = line.get("result") or {}
                     if key is None:
                         continue
+                    seen.add(key)
+                    if bad and "message" in (self.results.get(key) or {}):
+                        continue                      # stored from an earlier, damaged download of these results
                     if r.get("type") == "succeeded":
                         try:
                             self._store(job or {"key": key, "part": b["parts"].get(line["custom_id"]), "url": "", "offset": 0,
@@ -2260,8 +2378,17 @@ class Reader:
                     elif r.get("type") == "errored":
                         et, em = _err_of(r.get("error"))
                         errors[key] = f"batch request errored: {et}: {em}"
+                        self._release(key)            # not billed
                     else:
                         errors[key] = f"batch request {r.get('type', '?')} (re-run to submit it again)"
+                        self._release(key)
+                if bad and set(b["requests"].values()) - seen:   # kept open: the next run downloads them again (free)
+                    for k in set(b["requests"].values()) - seen:
+                        errors[k] = (f"batch {b['id']}: results line(s) {bad[:5]} could not be read (damaged download); "
+                                     "run again to collect them")
+                    b["errors"] = {c: errors[k] for c, k in b["requests"].items() if k in errors}
+                    self._save_state(st)
+                    continue
                 b["collected"], b["errors"] = True, {c: errors[k] for c, k in b["requests"].items() if k in errors}
                 self._save_state(st)
         for j in jobs:
@@ -2503,7 +2630,7 @@ def main(argv=None):
     ap.add_argument("--package", help="package hint, e.g. 'RGT VQFN-16' or 'SOP-16'")
     ap.add_argument("--pages", help="PDF pages with the drawing and pin table, e.g. 30-33")
     ap.add_argument("--model", help=f"model id (default: [ai] / [datasheet] model, {MODEL}); name:model for an [ai.endpoints] entry")
-    ap.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
+    ap.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"], help="default: [datasheet] effort, high")
     ap.add_argument("--fetch", action="store_true", help="download a URL here and send it base64")
     ap.add_argument("--no-fallback", action="store_true", help="do not send fallbacks: default")
     ap.add_argument("--from-response", help="re-run the checks on a saved Messages API response JSON (no API call)")
@@ -2519,6 +2646,7 @@ def main(argv=None):
         rules = RU.load(a.rules, start=a.out)
     except RU.RulesError as e:
         rules = e
+    a.effort = a.effort or settings(rules if isinstance(rules, dict) else None)["effort"]   # as the Reader does
     try:
         if not a.model:                               # [ai] model / [datasheet] model; the default stays Claude Opus 5.5
             try:
@@ -2543,7 +2671,8 @@ def main(argv=None):
                 key = LL.key_for(inf["ep"])
                 if not key:
                     raise DatasheetError(LL.needs_key_message(inf["ep"]))
-            source, offset, hint = load_source(a.pdf, pages, a.fetch or not LR.plain(inf))
+            source, offset, hint = load_source(a.pdf, pages, a.fetch or not LR.plain(inf), settings(rules)["auto_pages"],
+                                               page_limit(a.model))
             headers, body = build_request(source, a.part, a.package, hint, a.model, a.effort, not a.no_fallback)
             src_hash = hashlib.sha256(source[1] if source[0] == "base64" else ("url" + source[1]).encode()).hexdigest()
             from .llm import rails as LRL
@@ -2555,6 +2684,8 @@ def main(argv=None):
                 print(format_estimate(rd.estimate([{"name": a.part, "url": a.pdf, "body": body, "prov": prov}], batch=False)))
                 return 0
             rec = None if a.no_cache else cache.get(ck)
+            if rec and "message" not in rec:          # a failed step of a route: no answer to replay
+                rec = None
             if rec:
                 msg = rec["message"]
                 print(f"cached   {cache.dir / (ck + '.json')} (no API call; --no-cache to ask again)")
@@ -2570,7 +2701,8 @@ def main(argv=None):
             if not rec:
                 cache.put(ck, {"key": ck, "part": a.part, "url": a.pdf, "model": a.model, "page_offset": offset, "via": "sync",
                                "at": datetime.datetime.now().isoformat(timespec="seconds"), "message": msg})
-        res = process(ext, a.part, a.pdf, a.model, offset, msg)
+        n_sent = pdf_pages(source[1]) if pages and not a.from_response and source[0] == "base64" else None
+        res = process(ext, a.part, a.pdf, a.model, offset, msg, n_sent)
     except DatasheetError as e:
         sys.exit(f"error: {e}")
     paths = write(res, a.out)

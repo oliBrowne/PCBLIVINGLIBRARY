@@ -102,21 +102,25 @@ class OpenAICompatClient:
 
     @staticmethod
     def to_message(resp, model):
-        ch = (resp.get("choices") or [{}])[0]
-        m = ch.get("message") or {}
+        chs = resp.get("choices") if isinstance(resp, dict) else None
+        ch = chs[0] if isinstance(chs, list) and chs else {}
+        if not isinstance(ch, dict) or (chs is not None and not isinstance(chs, list)):   # not a chat completion
+            from ..datasheet import APIError
+            raise APIError(f"malformed answer from the model server: choices = {str(chs)[:80]}")
+        m = ch.get("message") if isinstance(ch.get("message"), dict) else {}
         text = m.get("content")
         if isinstance(text, list):                           # some servers return content parts
             text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
         stop = FINISH.get(ch.get("finish_reason"), "end_turn")
         if m.get("refusal"):
             stop = "refusal"
-        u = resp.get("usage") or {}
-        cached = ((u.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0
+        u = resp.get("usage") if isinstance(resp.get("usage"), dict) else {}
+        cached = int(((u.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
         return {"id": resp.get("id"), "type": "message", "role": "assistant", "model": resp.get("model") or model,
                 "content": [{"type": "text", "text": text or ""}], "stop_reason": stop,
                 "stop_details": {"type": "refusal", "category": None, "explanation": m.get("refusal")} if stop == "refusal" else None,
-                "usage": {"input_tokens": int(u.get("prompt_tokens") or 0) - int(cached), "cache_read_input_tokens": int(cached),
-                          "output_tokens": int(u.get("completion_tokens") or 0)}}
+                "usage": {"input_tokens": max(0, int(u.get("prompt_tokens") or 0) - cached), "cache_read_input_tokens": cached,
+                          "output_tokens": int(u.get("completion_tokens") or 0)} if u else None}   # none sent: unknown
 
     # --- HTTP
     def _log(self, rec):
@@ -155,6 +159,8 @@ class OpenAICompatClient:
                     r = post(url, headers=h, json=chat, timeout=self.timeout)
             except requests.RequestException as e:
                 err = APIError(f"{self.base}: request failed: {type(e).__name__}: {redact(e, self.key)[:200]}", retryable=True)
+                from .. import datasheet as D
+                err.maybe_billed = not D.not_sent(e)         # the cost cap keeps its hold
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))
             else:
                 try:
