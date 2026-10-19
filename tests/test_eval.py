@@ -489,6 +489,19 @@ def test_a_checked_reference_erratum_scores_the_datasheets_pins_right():
     assert "kicad-v1.errata" not in R.available() and R.load_errata("nonexistent.json") == {}
 
 
+def test_a_wrong_variant_reference_is_excused_only_when_we_built_the_datasheets_package():
+    """PCA9557BS (live benchmark 2026-10-19): the datasheet's BS part is SOT629-1, 4 x 4 mm at 0.65 mm; KiCad's reference
+    is the 3 x 3 mm 0.5 mm HVQFN-16. Ours at 0.65 mm passes by the erratum; ours at any other pitch does not."""
+    er = R.load_errata("kicad-v1")["PCA9557BS"]
+    f = lambda ok=False, **k: dict(ok=ok, error="" if ok else "x", **k)
+    for ours, excused in ((0.65, True), (0.8, False)):
+        sc = {"pass": False, "errors": ["pitch: x", "pads: x", "pin1: x", "courtyard: x"],
+              "fields": {"pitch": f(ours=ours, ref=0.5), "pads": f(), "pin1": f(), "courtyard": f(), "pad_count": f(True)}}
+        got = R.apply_errata(sc, None, er)
+        assert (sorted(got) == ["courtyard", "pads", "pin1", "pitch"] and sc["pass"]) if excused else (got == [] and not sc["pass"])
+    assert "O0 - O7" in R.load_errata("kicad-v1")["27C256"]["symbol_names"]["why"]
+
+
 def test_cached_only_rescores_after_the_schema_changes():
     """A new field in the reader's schema changes every answer's cache key: --cached-only still scores the saved
     answers (sync and batch runs alike), sending nothing."""

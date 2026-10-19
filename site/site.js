@@ -7,7 +7,7 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const NS = "http://www.w3.org/2000/svg";
 const svgEl = (tag, attrs = {}, parent) => {
   const el = document.createElementNS(NS, tag);
-  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  for (const k in attrs) if (attrs[k] != null) el.setAttribute(k, attrs[k]);
   if (parent) parent.appendChild(el);
   return el;
 };
@@ -80,8 +80,9 @@ function traces(host) {
   if (Hh < 10 || margin < 80) return;
   const r = rng([...host.dataset.traces].reduce((a, c) => a * 31 + c.charCodeAt(0), 7));
   const svg = svgEl("svg", { class: "traces", viewBox: `0 0 ${W} ${Hh}`, preserveAspectRatio: "none", "aria-hidden": "true" });
-  const buses = 4;
+  const buses = 4, cu = Math.floor(r() * buses);        // one bus per section is copper, the brand accent
   for (let b = 0; b < buses; b++) {
+    const cls = b === cu ? "cu" : null;
     const left = b % 2 === 0, n = 1 + Math.floor(r() * 3), y0 = Hh * (0.12 + 0.76 * r()), up = r() < 0.5 ? -1 : 1;
     const run1 = margin * (0.2 + 0.35 * r()), drop = 14 + r() * Math.min(60, margin * 0.25), run2 = 10 + r() * margin * 0.2;
     for (let k = 0; k < n; k++) {
@@ -89,11 +90,11 @@ function traces(host) {
       const x1 = sx + dir * (run1 + (up > 0 ? off : -off)), y = y0 + off;
       const x2 = x1 + dir * drop, y2 = y + up * drop, x3 = x2 + dir * (run2 + off * 0.5);
       const d = `M${sx} ${y}H${x1}L${x2} ${y2}H${x3}`;
-      const p = svgEl("path", { d, pathLength: 1 }, svg);
+      const p = svgEl("path", { d, pathLength: 1, class: cls }, svg);
       p.style.transitionDelay = `${(b * 0.15 + k * 0.08).toFixed(2)}s`;
-      svgEl("circle", { cx: x3 + dir * 3.5, cy: y2, r: 3.5 }, svg);
+      svgEl("circle", { cx: x3 + dir * 3.5, cy: y2, r: 3.5, class: cls }, svg);
       if (k === 0 && !still.matches && r() < 0.8) {
-        const dot = svgEl("circle", { class: "sig", r: 1.6 }, svg);
+        const dot = svgEl("circle", { class: cls ? "sig cu" : "sig", r: 1.6 }, svg);
         const mo = svgEl("animateMotion", { dur: `${(5 + r() * 5).toFixed(1)}s`, repeatCount: "indefinite", path: d, keyPoints: "0;1", keyTimes: "0;1", calcMode: "spline", keySplines: ".32 .72 0 1", begin: `${(r() * 3).toFixed(1)}s` }, dot);
         mo.setAttribute("rotate", "0");
       }

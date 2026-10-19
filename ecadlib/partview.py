@@ -47,10 +47,11 @@ def cross_check(rec, sidecar=None):
     dims = (sidecar or {}).get("dimensions") or {}
     page = lambda f: (dims.get(f) or {}).get("page") if isinstance(dims.get(f), dict) else None
     if full.get("checks"):
+        from .crosscheck import shown
         for c in full["checks"]:
             for d in c.get("disagreed") or []:
                 rows.append({"field": d["field"], "label": FIELD.get(d["field"], d["field"]), "first": d["first"],
-                             "second": d["second"], "against": c.get("against") or c.get("source") or "",
+                             "second": shown(d), "against": c.get("against") or c.get("source") or "",
                              "second_is": "table" if c.get("source") == "standard table" else "second read",
                              "page": page(d["field"])})
     else:

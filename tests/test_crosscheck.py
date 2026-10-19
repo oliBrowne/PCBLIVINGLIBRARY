@@ -417,6 +417,125 @@ def test_pin_names_that_differ_only_in_wording_agree():
     assert d and d[0]["field"] == "pin_names" and "1 VCC" in d[0]["first"] and "2 D" in d[0]["first"]
 
 
+# ---------------------------------------------------------------- 2026-10-19 benchmark holds
+R = lambda lo, nom, hi: {"min": lo, "nom": nom, "max": hi}
+DFN8 = "DFN-8-1EP_3x2mm_P0.5mm_EP1.3x1.5mm"
+
+
+def test_a_dfn_read_turned_90_degrees_agrees_with_the_table():
+    """AT24CS01-MAHM: D x E = 2 x 3 as printed, KiCad's DFN-8 3 x 2. The same land pattern turned, when the pin rows
+    turn with the body (top/bottom instead of left/right)."""
+    at = CC.critical({"package_type": "qfn", "pin_count": 8, "pitch": 0.5, "body_length": R(1.9, 2, 2.1),
+                      "body_width": R(2.9, 3, 3.1), "exposed_pad": {"length": R(1.4, 1.5, 1.6), "width": R(1.2, 1.3, 1.4)},
+                      "pins_left_right": 0, "pins_top_bottom": 4})
+    rec = CC.against_table(at, DFN8, "BOM package")
+    assert rec["status"] == "agreed" and rec["turned"] == ["body", "exposed pad"], rec
+    assert {"body_length", "body_width", "ep_length", "ep_width"} <= set(rec["agreed"])
+    assert "body and exposed pad with length and width swapped" in CC.summary_line({"status": "agreed", "checks": [rec]})
+    # rows left/right in a 2 mm wide body: the pads would sit 0.5 mm in from KiCad's, not turned with it
+    rec = CC.against_table(dict(at, rows=(4, 0)), DFN8, "x")
+    assert rec["status"] == "disagreed" and "turned" not in rec
+    assert [d["field"] for d in rec["disagreed"]] == ["body_length", "body_width", "ep_length", "ep_width"]
+    assert "but the pads would not turn with it" in rec["disagreed"][0]["note"]
+    # the body turned but its exposed pad not: the pad runs the other way across the body
+    alone = dict(at, ep_length=at["ep_width"], ep_width=at["ep_length"])
+    assert CC.against_table(alone, DFN8, "x")["status"] == "disagreed"
+
+
+def test_an_exposed_pad_turned_on_its_own_holds():
+    """AL8860MP: MSOP-8 3 x 3, EP 1.8 x 1.5 read, 1.5 x 1.8 in the table. footprint_gen lays EP length across the rows
+    (the table's 1.5), so the read would build the pad turned: still a disagreement, with a note saying why."""
+    al = CC.critical({"package_type": "gullwing", "pin_count": 8, "pitch": 0.65, "body_length": R(2.9, 3, 3.1),
+                      "body_width": R(2.9, 3, 3.1), "lead_span": R(4.7, 4.9, 5.1),
+                      "exposed_pad": {"length": R(1.6, 1.8, 2), "width": R(1.3, 1.5, 1.7)}})
+    rec = CC.against_table(al, "MSOP-8-1EP_3x3mm_P0.65mm_EP1.5x1.8mm", "BOM package")
+    assert rec["status"] == "disagreed" and [d["field"] for d in rec["disagreed"]] == ["ep_length", "ep_width"], rec
+    line = CC.summary_line({"status": "disagreed", "checks": [rec]})
+    assert "exposed pad length read 1.8 (1.6..2) mm, table 1.5 (1.3..1.7) mm - the same with length and width swapped" in line
+    second = dict(al, ep_length=al["ep_width"], ep_width=al["ep_length"])
+    assert CC.compare(al, second, "read")["status"] == "disagreed"            # nor against a second read
+
+
+def test_a_second_read_giving_d_and_e_the_other_way_agrees_on_the_body():
+    """IRFS4115 (D2PAK): body 10.16 x 9.015 read in footprint_gen's axes, 9.015 x 10.16 as printed. A gullwing's pads
+    stand on the lead span, not the body. The tab (none vs an exposed pad, 3 pins vs 4) is still a disagreement."""
+    first = CC.critical({"package_type": "gullwing", "pin_count": 3, "pitch": 2.54, "body_length": R(9.65, 10.16, 10.67),
+                         "body_width": R(8.38, 9.015, 9.65)})
+    second = CC.critical({"package_type": "gullwing", "pin_count": 3, "pitch": 2.54, "body_length": R(8.38, 9.015, 9.65),
+                          "body_width": R(9.65, 10.16, 10.67), "exposed_pad": {"length": 8, "width": 10}})
+    rec = CC.compare(first, second, "read")
+    assert rec["turned"] == ["body"] and {"body_length", "body_width"} <= set(rec["agreed"]), rec
+    assert [d["field"] for d in rec["disagreed"]] == ["has_ep"]
+    pins = CC.compare_pins([("1", "G"), ("2", "D"), ("3", "S")], [("1", "G"), ("2", "D"), ("3", "S"), ("4", "D")])
+    assert [d["field"] for d in pins] == ["pins"] and pins[0]["second"] == "4 pins, only here: 4"
+    # a qfn's pads stand on the body, and a second read gives no rows: a turned body there holds
+    q = lambda c: dict(c, package_type="qfn", has_ep=False)
+    assert CC.compare(q(first), q(second), "read")["status"] == "disagreed"
+
+
+def test_a_real_swap_of_different_sizes_still_disagrees():
+    a = CC.critical({"package_type": "gullwing", "pin_count": 8, "pitch": 1.27, "body_length": 2, "body_width": 3})
+    for other in ((4, 2), (3, 4), (2, 4)):                    # 2 x 3 vs 4 x 2, 3 x 4, 2 x 4
+        b = CC.critical({"package_type": "gullwing", "pin_count": 8, "pitch": 1.27, "body_length": other[0], "body_width": other[1]})
+        rec = CC.compare(a, b, "read")
+        assert rec["status"] == "disagreed" and "turned" not in rec, (other, rec)
+    sq = CC.critical({"package_type": "gullwing", "pin_count": 8, "pitch": 1.27, "body_length": 3, "body_width": 3})
+    assert CC.compare(sq, sq, "read")["status"] == "agreed" and "turned" not in CC.compare(sq, sq, "read")
+
+
+def test_active_low_marks_in_any_notation_agree():
+    # AM26LS31CN: ~{G} in one read, G with a combining overline (U+0305) in the other
+    assert CC.compare_pins([("12", "~{G}"), ("4", "~{RESET}")], [("12", "G̅"), ("4", "R̄ĒS̄ĒT̄")]) == []
+    for name in ("RESET#", "/RESET", "nRESET", "RESET_N", "R̅E̅S̅E̅T̅", "R\\E\\S\\E\\T\\"):
+        assert CC.compare_pins([("1", "~{RESET}")], [("1", name)]) == [], name
+    assert CC.compare_pins([("1", "RESET_N")], [("1", "nRESET")]) == []
+    # _N is only an active-low mark against another one: RESET_N vs plain RESET, or a differential leg, still differ
+    for a, b in (("RESET_N", "RESET"), ("CLK_N", "CLK_P"), ("~{G}", "S"), ("G̅", "~{S}")):
+        assert CC.compare_pins([("1", a)], [("1", b)]), (a, b)
+
+
+def test_a_package_type_alone_still_holds_and_says_so():
+    """TC2030 connector vs custom, BD33FC0FP gullwing vs custom: the type picks the builder, so the part is held, but
+    the message says every number agrees. IR4301 (custom vs qfn, 14 vs 15 pins, 0.65 vs 0.775 pitch) and
+    BSC026N08NS5 (9 pins vs 8) are real."""
+    for a, b in (("connector", "custom"), ("gullwing", "custom")):
+        first = CC.critical({"package_type": a, "pin_count": 6, "pitch": 1.27, "body_length": 5, "body_width": 4})
+        rec = CC.compare(first, dict(first, package_type=b), "read")
+        assert rec["status"] == "disagreed" and [d["field"] for d in rec["disagreed"]] == ["package_type"]
+        assert rec["disagreed"][0]["note"] == "only the type label differs: pin count, pitch, body length, body width agree"
+        line = CC.summary_line({"status": "disagreed", "checks": [dict(rec, against="second read (m)", source="second read")]})
+        assert f"package type read {a}, second read {b} - only the type label differs" in line
+        assert "| package type | " + a + " | " + b + " - only the type label differs" in "\n".join(
+            CC.report_md({"status": "disagreed", "mode": "auto", "checks": [dict(rec, against="x", source="second read")]}))
+    ir = CC.compare(CC.critical({"package_type": "custom", "pin_count": 14, "pitch": 0.65}),
+                    CC.critical({"package_type": "qfn", "pin_count": 15, "pitch": 0.775}), "read")
+    assert [d["field"] for d in ir["disagreed"]] == ["package_type", "pin_count", "pitch"] and "note" not in ir["disagreed"][0]
+    bsc = CC.compare_pins([(str(i), "S") for i in range(1, 10)], [(str(i), "S") for i in range(1, 9)])
+    assert [d["field"] for d in bsc] == ["pins"] and bsc[0]["first"] == "9 pins, only here: 9"
+
+
+def test_a_type_only_note_goes_when_the_pins_disagree_too():
+    pins = [{"num": x["num"], "name": x["name"]} for x in TD.GOOD["pins"]]
+    pins[4]["name"] = "VSENSE"
+    api = API(lambda k, m, b: first() if k == "read" else check_answer(package_type="gullwing", pins=pins))
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            read(d, api)
+            raise AssertionError("held expected")
+        except CC.Held as e:
+            (c,) = e.record["checks"]
+            assert [x["field"] for x in c["disagreed"]] == ["package_type", "pin_names"] and "note" not in c["disagreed"][0]
+    api = API(lambda k, m, b: first() if k == "read" else check_answer(package_type="gullwing"))
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            read(d, api)
+            raise AssertionError("held expected")
+        except CC.Held as e:
+            assert "package type read qfn, second read gullwing - only the type label differs: " in str(e)
+            md = (Path(d) / "out" / "datasheet" / "TESTPART.review.md").read_text()
+            assert "only the type label differs" in md
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
