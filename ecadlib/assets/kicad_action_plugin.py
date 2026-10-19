@@ -5,6 +5,8 @@
     the project's ecadlib library and the footprint is placed in the middle of the board;
   * Check project BOM: the schematic's lines against the library (already in your library / a source can supply /
     needs a footprint), then "Fill the library now" builds the missing ones, or the report opens in the browser;
+  * Assembly check (JLCPCB): every part's pads against JLCPCB's own footprint and its placement rotation; writes
+    JLCPCB's BOM and CPL into ecadlib-work/assembly/<board>/ and opens the report on request;
   * Open review queue: ecadlib's page, where held parts get a symbol or footprint picked.
 
 Installed by KiCad's Plugin and Content Manager from the zip `ecadlib kicad-pcm --plugin` writes (or copied into
@@ -371,6 +373,8 @@ def _window_class():
             s.Add(self.text(self.body, "What would you like to do?", DIM), 0, wx.TOP, 12)
             for label, hint, go in (("Add part from MPN…", "look a part up and place its footprint", self.ask),
                                     ("Check project BOM", "which schematic parts the library already has", self.check),
+                                    ("Assembly check (JLCPCB)", "pads and rotations against JLCPCB's footprints; BOM + CPL",
+                                     self.assembly),
                                     ("Open review queue", "pick symbols and footprints for held parts", self.queue)):
                 b = Flat(self.body, label, go, primary=False, width=400)
                 s.Add(b, 0, wx.EXPAND | wx.TOP, 10)
@@ -407,6 +411,9 @@ def _window_class():
 
         def fill(self):
             self.run("fill", "Fill the library")
+
+        def assembly(self):
+            self.run("assembly", "Assembly check")
 
         def queue(self):
             self.fire("queue")
@@ -461,7 +468,8 @@ def _window_class():
 
         def live(self, prog, default=""):
             s = self.page(self.title)
-            big = {"add-part": self.mpn, "check-bom": "Checking…", "fill": "Filling…", "ai-read": "Reading…"}.get(self.action, "")
+            big = {"add-part": self.mpn, "check-bom": "Checking…", "fill": "Filling…", "ai-read": "Reading…",
+                   "assembly": "Checking…"}.get(self.action, "")
             s.Add(self.text(self.body, big, TEXT, 20, True), 0, wx.TOP, 10)
             self.rows(s, rows_of(prog))
             s.Add(self.text(self.body, prog.get("text") or default, DIM, 9), 0, wx.TOP, 10)
@@ -525,7 +533,7 @@ def _window_class():
             for line in (placed, extra):
                 if line:
                     self.note(s, line, GREEN if line is placed else DIM)
-            if self.action == "check-bom":
+            if self.action in ("check-bom", "assembly"):
                 if res.get("warnings"):
                     self.note(s, res["warnings"])
                 if res.get("report"):

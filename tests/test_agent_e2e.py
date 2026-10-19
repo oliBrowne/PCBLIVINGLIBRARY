@@ -146,7 +146,7 @@ def make_ws(d):
 @contextlib.contextmanager
 def services(key=True):
     """Every external service faked for the real modules (also for code paths that build their own clients)."""
-    api, gh, http = Anthropic(), GitHub(), TL.FakeHTTP({"C2002": TL.EE, "C3003": TL.ee_as("TPS1234DSGR", "C3003")})
+    api, gh, http = Anthropic(), GitHub(), TL.FakeHTTP({"C2002": TL.EE, "C3003": TL.ee_as("TPS1234DSGR", "C3003", TL.SOIC8)})
     env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "GITHUB_TOKEN", "NEXAR_TOKEN", "ECADLIB_USER")}
     env["GITHUB_TOKEN"] = "tok"
     if key:

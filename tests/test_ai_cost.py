@@ -104,6 +104,14 @@ def test_quote_without_key_or_price():
     assert AC.approve(q, None, False, price_unknown_ok=True) == (0.0, True)
     assert AC.quote({"rows": []}) is None
     assert AC.money(0) == "$0 (free)" and AC.money(1.234) == "$1.23" and AC.money(0.0123) == "$0.012"
+    # AD26 showed "at most $2.20" next to an approval of $2.21: the text and the approval are now one number
+    assert AC.up(2.2043) == 2.21 and AC.up(2.2) == 2.2 and AC.up(0.0123) == 0.013 and AC.up(0) == 0
+    for worst in (2.2043, 1.0, 0.0123, 0.5049):
+        q = {"parts": 1, "model": "m", "key_set": True, "price_known": True, "usd": worst / 2, "usd_max": worst,
+             "cross_check": False, "over_limit": False, "limit_usd": 5, "limit_name": "max_cost_usd"}
+        q["approve_usd"] = AC.up(worst)
+        assert f"at most {AC.money(q['approve_usd'])}" in AC.text(q) and q["approve_usd"] >= worst, (worst, AC.text(q))
+        assert AC.approve(q, q["approve_usd"]) == (q["approve_usd"], False)
 
 
 def test_altium_and_kicad_dialogs_offer_the_ai_step_with_its_cost():

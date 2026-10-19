@@ -34,6 +34,7 @@
     ecadlib approve   plan.json approve|reject|status [--part P]   sign-off before altium365 push
     ecadlib dedupe    plan.json [--lib ...] [--merge]  duplicate parts, footprints and symbols
     ecadlib sourcing  BOM [--qty N] [--alternates] price, stock, second sources and alternates per BOM line
+    ecadlib assembly  check|export BOARD.kicad_pcb|PNP.csv [-o DIR] | part FP --lcsc C123   assembler BOM + CPL, pads, rotations
     ecadlib project   BOARD.PrjPcb [-o bom.csv] [--variant V]   BOM straight from an Altium project (.PrjPcb/.SchDoc)
     ecadlib hub       [-q WORDS] [--have T] [--lack T] [--part P]   your library across tools: every part once, a column per tool
     ecadlib where-used --projects DIR... [--part X] [--plan plan.json]   which projects use which library part
@@ -107,6 +108,7 @@ COMMANDS = {
     "sourcing": ("ecadlib.sourcing", "price, stock, second sources and alternates for a BOM"),
     "step-gen": ("ecadlib.step_gen", "package-shaped STEP 3D models from a package spec or footprint name"),
     "upkeep": ("ecadlib.upkeep", "weekly lifecycle / upstream / price / A365 checks; new changes as one issue or PR"),
+    "assembly": ("ecadlib.assembly_cli", "assembly-ready parts: pads against JLCPCB's footprints, CPL rotations, the assembler's BOM + CPL"),
     "project": ("ecadlib.altium_project", "BOM straight from an Altium project (.PrjPcb / .SchDoc / ActiveBOM)"),
     "hub": ("ecadlib.hub", "your library across tools: every part once, a column per tool, last changed and by whom"),
     "where-used": ("ecadlib.altium_project:where_used_main", "which projects use which library part, and flags"),

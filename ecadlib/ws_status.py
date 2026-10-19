@@ -87,6 +87,19 @@ def _files(root, pattern):
     return [p for _, p in sorted(out, key=lambda x: x[0], reverse=True)]
 
 
+def _plans(root):
+    """Librarian plans: the UI's <root>/librarian/<bom>/plan.json, and a `librarian -o DIR` output given as the
+    workspace itself or one folder below it (DIR/plan.json with the librarian's review.md next to it)."""
+    seen, out = set(), []
+    for pattern in ("librarian/*/plan.json", "plan.json", "*/plan.json"):
+        for pf in _files(root, pattern):
+            if pf in seen or (not pattern.startswith("librarian/") and not (pf.parent / "review.md").is_file()):
+                continue
+            seen.add(pf)
+            out.append(pf)
+    return out
+
+
 def status(root):
     root = Path(root).expanduser().resolve()
     problems = []
@@ -106,7 +119,7 @@ def status(root):
 
     from . import timing as TI
     rv, reasons = out["review"], {}
-    for pf in _files(root, "librarian/*/plan.json"):
+    for pf in _plans(root):
         items = _json(pf, problems)
         if not isinstance(items, list):
             if items is not None:

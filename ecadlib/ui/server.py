@@ -55,6 +55,7 @@ ROUTES = {
     ("POST", "/api/change/decide"): "approver", ("POST", "/api/change/revert"): "approver",
     ("GET", "/api/agent/queue"): "viewer", ("GET", "/api/agent/queue/item"): "viewer",
     ("GET", "/api/agent/queue/picture"): "viewer",             # images under <workspace>/agent/ only
+    ("GET", "/api/parts/assembly-overlay"): "viewer",          # a plan's assembly/*.png only
     ("POST", "/api/agent/queue/rebuild"): "librarian", ("POST", "/api/agent/queue/reject"): "librarian",
     ("POST", "/api/agent/queue/approve"): "approver",
     ("POST", "/api/rules/propose"): "admin",               # reads any folder on the server
@@ -583,6 +584,11 @@ def make_handler(ws: Workspace, team=None):
                         return self._send(404, {"error": _msg(e)})
                 if u.path == "/api/parts":                      # part cards of a BOM's library plan
                     return self._send(200, ws.library_parts(self._bom({"bom": q.get("bom")}), q.get("pictures") != "0"))
+                if u.path == "/api/parts/assembly-overlay":     # shown inline: the plan's assembly/*.png only
+                    p = ws.assembly_overlay(self._bom({"bom": q.get("bom")}), q.get("part", ""))
+                    return self._send(200, p.read_bytes(), "image/png",
+                                      {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'"}
+                                      if not team else None)
                 if u.path == "/api/hub":                        # the library hub: one page of parts, filtered
                     lst = lambda k: [x for x in (q.get(k) or "").split(",") if x]
                     return self._send(200, ws.hub(q.get("q", ""), lst("have"), lst("lack"), lst("state"), q.get("origin", ""),

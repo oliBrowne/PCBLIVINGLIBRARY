@@ -70,6 +70,8 @@ EXAMPLES = {
             "ecadlib hub --workspace ws --project boards/sensor/sensor.kicad_pro --copy-to kicad"],
     "dedupe": ["ecadlib dedupe ws/library/plan.json", "ecadlib dedupe ws/library/plan.json --merge"],
     "sourcing": ["ecadlib sourcing my_bom.csv --qty 100 --alternates"],
+    "assembly": ["ecadlib assembly export board.kicad_pcb --profile jlcpcb -o out/jlc", "ecadlib assembly check board.kicad_pcb",
+                 "ecadlib assembly check pick_place.csv --bom bom.csv", "ecadlib assembly part R_0402.kicad_mod --lcsc C25744 --png r0402.png"],
     "step-gen": ["ecadlib step-gen SOIC-8_3.9x4.9mm_P1.27mm -o out/soic8.step", "ecadlib step-gen --check out/soic8.step"],
     "upkeep": ["ecadlib upkeep ws/library/plan.json", "ecadlib upkeep ws/library/plan.json --github issue"],
     "project": ["ecadlib project board.PrjPcb -o bom.csv", "ecadlib project check board.kicad_pro -o out/drift",

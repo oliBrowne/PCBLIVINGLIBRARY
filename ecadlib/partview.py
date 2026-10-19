@@ -159,6 +159,17 @@ def _decisions(approvals):
     return {"required": False, "met": None, "approved_by": ok, "rejected_by": no, "missing": [], "stale": []}
 
 
+def assembly(item):
+    """The part's assembly check (ecadlib.assembly, docs/assembly.md) for its card, or None: verdicts, the CPL
+    correction, what to check in the assembler's preview, and whether there is an overlay picture."""
+    a = item.get("assembly") or None
+    if not a:
+        return None
+    return {"profile": a.get("profile"), "lcsc": a.get("lcsc"), "theirs": a.get("theirs") or "", "pads": a.get("pads"),
+            "rotation": a.get("rotation"), "correction": a.get("correction"), "reasons": a.get("reasons") or [],
+            "review": a.get("review") or [], "notes": a.get("notes") or [], "overlay": bool(a.get("overlay"))}
+
+
 # ------------------------------------------------------------------ the cards
 def cards(out, items, pictures=True):
     """out: the librarian folder of a BOM (plan.json, models/, datasheet/); items: the plan. -> {parts, counts, cost}."""
@@ -204,7 +215,7 @@ def cards(out, items, pictures=True):
             "footprint": {"ref": (it.get("footprint") or {}).get("ref"), "found": bool((it.get("footprint") or {}).get("file")),
                           "from": (it.get("source") or {}).get("footprint") or "", "pads": _pads(svg) or None},
             "picture": svg,
-            "cross_check": cc, "parity": parity(it),
+            "cross_check": cc, "parity": parity(it), "assembly": assembly(it),
             "datasheet": {"url": url, "page": page} if url else None,
             "cost": {"usd": round(pc.get("usd", 0.0), 4), "models": [m for m in pc.get("models") or [] if m],
                      "answers": pc.get("answers", 0)} if pc else None,

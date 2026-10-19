@@ -208,6 +208,21 @@ CODES = {
                            [r"^(?:verify: )?sim model (?P<model>\S+): pin map (?:not verified|to verify) \((?P<method>.+)\)"]),
     "verify.other": ("A person has to check this part first: {detail}.", "Check it, then approve it or release anyway.",
                      [r"^verify: (?P<detail>.+)"]),
+    # assembly-ready parts (rule `assembly`, ecadlib.assembly, docs/assembly.md)
+    "assembly.incompatible": ("The pads do not match the assembler's footprint {theirs} ({lcsc}): {detail}.",
+                              "Look at the overlay[ ({overlay})]: use the assembler's footprint, choose an LCSC part whose "
+                              "footprint matches, or fix the pads; then fill the library again.",
+                              [r"^assembly: pads incompatible with (?P<theirs>.+?) \((?P<lcsc>C\d+)\): (?P<detail>.+?)(?: \[overlay (?P<overlay>[^\]]+)\])?$"]),
+    "assembly.risky": ("The pads differ from the assembler's footprint {theirs} ({lcsc}) enough to risk the assembly: {detail}.",
+                       "Look at the overlay[ ({overlay})]: match the pads to the assembler's footprint, or release anyway "
+                       "if the difference is deliberate.",
+                       [r"^assembly: pads risky against (?P<theirs>.+?) \((?P<lcsc>C\d+)\): (?P<detail>.+?)(?: \[overlay (?P<overlay>[^\]]+)\])?$"]),
+    "assembly.rotation_unknown": ("The assembly rotation is not known[ ({why})].",
+                                  "Check the part in the assembler's placement preview and add a profile override, "
+                                  "or release anyway.",
+                                  [r"^assembly: rotation unknown(?: \((?P<why>.+)\))?"]),
+    "assembly.review": ("Assembly ({lcsc}): {detail}.", "Check the part in the assembler's placement preview before ordering.",
+                        [r"^assembly \((?P<lcsc>C\d+)\): (?P<detail>.+)"]),
     # cross-check of a datasheet read (crosscheck)
     "crosscheck.disagree": ("{who} disagree on {field} ({first} vs {second}); nothing was written to the library.",
                             "Check the datasheet[ (page {page})] and pick one, or release anyway.",

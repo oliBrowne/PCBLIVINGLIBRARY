@@ -70,6 +70,8 @@ CASES = [
     (["hub", "--workspace", "{out}/ws", "--lib", "{in}/lib", "--json"], (0,)),
     (["datasheet", "estimate", "{out}/lib/plan.json"], (0, 1, 2)),
     (["sourcing", "{in}/bom.csv", "--offline", "--cache", "{out}/cache", "-o", "{out}/src"], (0, 1, 3)),
+    (["assembly", "export", "{tests}/fixtures/assembly/boards/two_sided.kicad_pcb", "-o", "{out}/asm", "--offline", "--cache",
+      "{out}/cache"], (0, 1)),
     (["step-gen", "{pkg}/package_specs/SOIC-8_3.9x4.9mm_P1.27mm.json", "-o", "{out}/soic.step"], (0,)),
     (["step-gen", "--check", "{out}/soic.step"], (0,)),
     (["upkeep", "{in}/bom.csv", "--offline", "--cache", "{out}/cache", "-o", "{out}/upk", "--state", "{out}/upkstate",

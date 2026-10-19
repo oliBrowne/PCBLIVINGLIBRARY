@@ -1002,6 +1002,10 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         styled = HS.adapt_items([it for it in items if it["name"] not in in_ws], prof, rules)
         if styled:
             log(f"  style {len(styled)} part(s) written in your house style (descriptions, value formats)")
+    from . import assembly as ASM                   # assembly-ready parts ([assembly] check): pads against the
+    n_asm = ASM.annotate_items([it for it in items if it["name"] not in in_ws], out, http, rules, log=log)   # assembler's
+    if n_asm:                                                                                               # footprint
+        log(f"  assembly {n_asm} part(s) checked against the {(rules.get('assembly') or {}).get('profile', 'jlcpcb')} footprints")
     gate.settle(items)                         # held changes put the released files and fields back first
     t_check = time.time()
     TI.record(out, "build", t_build, t_check, parts=len(todo))

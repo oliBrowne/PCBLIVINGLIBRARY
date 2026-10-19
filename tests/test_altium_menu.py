@@ -109,7 +109,7 @@ def cmd_s_c(cmdline):
 def test_build_names_every_procedure():
     """`altium-menu build`, its README and the docs name every procedure the project offers (PROCS + BUILD_PROCS),
     and each one exists in the unit the table names (ecadlib_build.pas came with the native build)."""
-    assert AM.procedures() == ["AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue", "BuildLibrariesInAltium", "BuildLibraries(Folder)"]
+    assert AM.procedures() == ["AddPartFromMPN", "CheckProjectBOM", "AssemblyCheck", "OpenReviewQueue", "BuildLibrariesInAltium", "BuildLibraries(Folder)"]
     units = {AM.UNIT: AM.pas_text(), AN.UNIT: AN.pas_text()}
     for p, unit, _ in [(p, AM.UNIT, d) for p, _, d in AM.PROCS] + AM.BUILD_PROCS:
         name, end = p.split("(")[0], r"\(" if "(" in p else ";"
@@ -119,7 +119,7 @@ def test_build_names_every_procedure():
     readme = (d / "m" / AM.README).read_text()
     for p in AM.procedures():
         assert p in out and p in readme and p in AM.__doc__ and p in AM.pas_text(), (p, out)
-    assert "now lists AddPartFromMPN, CheckProjectBOM, OpenReviewQueue, BuildLibrariesInAltium:" in readme, readme
+    assert "now lists AddPartFromMPN, CheckProjectBOM, AssemblyCheck, OpenReviewQueue, BuildLibrariesInAltium:" in readme, readme
 
 
 def test_build_writes_well_formed_files():
@@ -702,7 +702,7 @@ def test_cli_workspace_and_mcp():
     ws = Workspace(d / "ws2", offline=True)
     rep = M.call_tool(ws, "altium_menu", {"win_dir": "D:\\ws2\\altium_menu"})
     assert rep["problems"] == [] and rep["menu_file"] == AM.PREFS and rep["folder"] == "altium_menu"
-    assert rep["procedures"] == AM.procedures() and rep["menu_entries"] == ["AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue"]
+    assert rep["procedures"] == AM.procedures() and rep["menu_entries"] == ["AddPartFromMPN", "CheckProjectBOM", "AssemblyCheck", "OpenReviewQueue"]
     c = AM.load_config(ws.root / "altium_menu" / AM.INI)
     assert c["workspace"].resolve() == ws.root and c["library"].resolve() == ws.root / "altium_library"
     assert "altium_menu" in {t["name"] for t in M.TOOLS}
@@ -809,3 +809,14 @@ def test_dialog_moves_by_its_header():
     assert head.count("OnMouseDown = HeadMouseDown") == 2 and head.count("OnMouseMove = HeadMouseMove") == 2
     for h in ("HeadMouseDown", "HeadMouseMove", "HeadMouseUp"):
         assert f"Procedure TEcadlibDialog.{h}(" in pas
+
+
+def test_ai_offer_keeps_the_review_queue():
+    """On AD26 the AI offer replaced the "Next: open the review queue" hint and button for a fill with held parts
+    (2026-10-18): the hint stays under the offer, and Not now goes back to Done / Open review queue."""
+    from ecadlib import altium_forms as AF
+    pas = AF.dialog_pas_text()
+    offer = pas[pas.index("If Answer(Job, 'offer_ai') = '1' Then"):pas.index("Else If (St = 'held')")]
+    assert "Second := 'after_ai'" in offer and "NextHint" in offer and "Buttons(Answer(Job, 'ai_button'), 'Not now'" in offer
+    back = pas[pas.index("Else If Second = 'after_ai' Then"):pas.index("Else If Second = 'log' Then")]
+    assert "Second := 'queue'" in back and "Buttons('Done', 'Open review queue', False)" in back and "NextHint" in back
