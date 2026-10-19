@@ -791,7 +791,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
     out.mkdir(parents=True, exist_ok=True)
     pretty.mkdir(exist_ok=True)
     rep = {"plan": str(plan), "library": lib, "parts": [], "skipped": [], "footprints": {}, "models": {}, "errors": [], "kicad_content": False}
-    rep.update(warnings=[], written={})
+    rep.update(warnings=[], written={}, change_control=True)   # made with a ledger (a lost one fails closed)
     kpins = {}                                 # part -> KiCad-only pin details of a reused symbol (publish line)
     report = out / "kicad_export.json"
     try:                                      # what the last export wrote (and its sha256): edited by hand since?
@@ -968,11 +968,15 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
     rep["footprints"] = {k: fps[k] for k in sorted(fps)}
     rep["symbols"] = len(symbols)
     rep["written"] = dict(sorted(rep["written"].items()))
+    rep["held_changes"] = []
+    shipped = {r["part"] for r in rep["parts"] if r.get("symbol") or r.get("footprint")}
     for it in items:
         ch = it.get("change") or {}
         if ch.get("state") == "held":
+            rep["held_changes"].append(it["name"])
             kept = (f"the released revision r{ch['base']} is exported" if ch.get("base") is not None else
-                    "it has no released revision, so it is not exported")
+                    "it has no released revision; --include-held exported the held version anyway"
+                    if it["name"] in shipped else "it has no released revision, so it is not exported")
             rep["warnings"].append(f"{it['name']}: a change is held for approval ({ch.get('summary')}); {kept} "
                                    f"(ecadlib part show {plan} {it['name']})")
     exported = {r["part"] for r in rep["parts"] if r.get("symbol") or r.get("footprint")}
@@ -1017,7 +1021,9 @@ def print_result(rep, out, plan, t=None):
               next=[(f"cp -r {out}/* <your KiCad project folder>/", "then reopen the project; or add the library in "
                      "Preferences > Manage Symbol / Footprint Libraries"),
                     (f"ecadlib parity {plan} --kicad {out}", "check KiCad and Altium agree, part by part")]
-              + ([(f"ecadlib review {plan}", "the held parts")] if rep["skipped"] else []))
+              + ([(f"ecadlib review {plan}", "the held parts")] if rep["skipped"] else [])
+              + ([(f"ecadlib part status {plan}", f"{M.plural(len(rep['held_changes']), 'held change')} waiting for "
+                   "a person (exit code 1 until then)")] if rep.get("held_changes") else []))
 
 
 def main(argv=None):
@@ -1034,11 +1040,12 @@ def main(argv=None):
     a = ap.parse_args(argv)
     rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60), rules=a.rules,
                  log=(lambda *x, **k: None) if a.json else print)
+    # exit 1 also while a change is held: the library on disk is not what was exported, a person has to look
     if a.json:
         print(json.dumps(rep, default=str))
-        return 1 if rep["errors"] else 0
+        return 1 if rep["errors"] or rep.get("held_changes") else 0
     print_result(rep, Path(a.out), a.plan)
-    return 1 if rep["errors"] else 0
+    return 1 if rep["errors"] or rep.get("held_changes") else 0
 
 
 if __name__ == "__main__":

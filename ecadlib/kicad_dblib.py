@@ -42,11 +42,14 @@ def part_rows(plan, lib, include_held=False, rules=None):
     from . import kicad_export as X
     from .parts_export import kicad_ids
     from .rules import resolve
+    from . import change_gate as CG
     plan = Path(plan)
     rules = resolve(rules, plan.parent)
-    items = json.loads(plan.read_text(encoding="utf-8"))
-    if not isinstance(items, list):
+    if not isinstance(json.loads(plan.read_text(encoding="utf-8")), list):
         raise ValueError(f"{plan}: not a librarian plan (expected a list of parts)")
+    # change control (#105): a hand edit of a released part's fields is held, and its released fields go out
+    with CG.publishing(plan.parent):
+        items = CG.settled_plan(plan, "kicad-dblib", rules=rules, log=lambda *a, **k: None)
     tables, skipped, seen, spelled = {}, [], {}, {}
     for it in sorted(items, key=lambda i: str(i.get("name", ""))):
         if not isinstance(it, dict) or not it.get("name"):

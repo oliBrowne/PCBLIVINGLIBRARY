@@ -395,6 +395,13 @@ def check(lib_dir, keep=None, log=print):
         # without the change-control ledger: the rebuild must reproduce the files, not be held back to them
         shutil.copytree(lib_dir, dst, ignore=shutil.ignore_patterns(".ecadlib_backup", "*.tmp", ".ecadlib",
                                                                     "library.ledger.jsonl", "library.usage.json"))
+        from . import migrate as MG            # the copy keeps no ledger: its stamp must not say it does
+        st = dst / MG.STAMP
+        if st.is_file():
+            d = json.loads(st.read_text(encoding="utf-8"))
+            if isinstance(d, dict) and "ledger" in (d.get("kinds") or {}):
+                d["kinds"] = {k: v for k, v in d["kinds"].items() if k != "ledger"}
+                st.write_text(json.dumps(d, indent=1) + "\n", encoding="utf-8")
         # the copy points at the same BOM, libraries and cache: write the lock's relative paths as absolute
         lk = json.loads((dst / LOCK).read_text(encoding="utf-8"))
         lk["bom"]["file"] = str(_abs(lk["bom"]["file"], lib_dir))

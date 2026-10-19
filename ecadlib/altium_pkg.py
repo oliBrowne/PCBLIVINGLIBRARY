@@ -25,7 +25,7 @@ document the LibPkg lists exists and reads back with ecadlib's reader; every foo
 of the package's PcbLibs (what the IntLib compiler looks for); every [Library Path] / [Footprint Path] in the DbLib's
 table resolves from the DbLib's folder. Not checked: that Altium compiles the package or runs the script (both
 written from Altium's documented scripting API and the examples above, never run)."""
-import argparse, json, os, shutil, sys
+import argparse, contextlib, json, os, shutil, sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from . import altium_lib as AL
@@ -317,6 +317,69 @@ def collect(src, out, kept=None, overwrite_edits=False):
     return got
 
 
+def library_of(src):
+    """The plan.json of the ecadlib library a folder of Altium files comes from, or None: the folder itself or one of
+    its two parents (a library's models/ or models/SchLib/), else the plan an earlier altium-pkg named as its source
+    (altium_pkg.json in the folder)."""
+    src = Path(src).resolve()
+    for d in (src, src.parent, src.parent.parent):
+        if (d / "plan.json").is_file():
+            return d / "plan.json"
+    try:
+        s = json.loads((src / "altium_pkg.json").read_text(encoding="utf-8")).get("source")
+    except (OSError, ValueError, AttributeError):
+        s = None
+    for p in ([Path(s), src / s] if s else []):
+        if p.suffix.lower() == ".json" and p.is_file():
+            return p.resolve()
+        if p.is_dir() and p.resolve() != src:
+            return next((d / "plan.json" for d in (p.resolve(), p.resolve().parent, p.resolve().parent.parent)
+                         if (d / "plan.json").is_file()), None)
+    return None
+
+
+def check_released(src, plan, rules=None):
+    """Change control (#105) for a folder of Altium files: the library is settled first (a hand edit of a released
+    part is held and its released files put back, as every publisher does), then every .SchLib / .PcbLib in the folder
+    that is a copy of a released part's file must still be that part: same bytes, or a fingerprint with nothing more
+    than cosmetic changes (Altium's own rebuild writes other bytes). A file that differs is refused with the part and
+    what changed. Files of no released part (new parts, your own libraries) are packaged as before. Raises ValueError."""
+    from . import change_diff as CD, change_gate as CG, fingerprint as FP, ledger as LG
+    src, plan = Path(src).resolve(), Path(plan)
+    lib = plan.parent.resolve()
+    items = CG.settled_plan(plan, "altium-pkg", rules=rules, log=lambda *a, **k: None)
+    lg = LG.Ledger(lib)
+    by_name = {}
+    for it in items:
+        head = lg.head(it["name"])
+        for half in ("symbol", "footprint") if head else ():
+            f = (it.get(half) or {}).get("file")
+            if f:
+                by_name.setdefault(Path(f).name.lower(), []).append((it, half, head))
+    bad = []
+    for f in sorted(p for p in src.rglob("*") if p.is_file() and p.suffix.lower() in MODEL_EXT):
+        for it, half, head in by_name.get(f.name.lower(), []):
+            mine = Path(it[half]["file"]) if Path(it[half]["file"]).is_absolute() else lib / it[half]["file"]
+            if mine.resolve() == f or (mine.is_file() and mine.read_bytes() == f.read_bytes()):
+                continue
+            probe = json.loads(json.dumps(it, default=str))
+            probe[half] = dict(probe[half], file=str(f))
+            kmod = FP.kicad_mod_path(it, lib)  # the library's .kicad_mod, not one looked for beside the copy
+            if half == "footprint" and kmod:
+                probe["footprint"]["kicad_mod"] = str(kmod.resolve())
+            try:
+                changes = [c for c in CD.diff(lg.fingerprint(head), FP.of_item(probe, lib)) if c["class"] != "cosmetic"]
+            except Exception as e:             # unreadable: not the released file
+                changes = [{"class": "electrical", "text": f"unreadable ({type(e).__name__})"}]
+            if changes:
+                bad.append(f"{f.relative_to(src).as_posix()}: {it['name']} r{head['revision']} {CD.summary(changes)}")
+    if bad:
+        raise ValueError(f"{src}: not packaged: files differ from the released revisions of {plan}: "
+                         + "; ".join(bad[:8]) + (f" and {len(bad) - 8} more" if len(bad) > 8 else "")
+                         + ". A change goes through the library (ecadlib part status / approve); package the plan.json "
+                           "to get the released files")
+
+
 def check_folder(out, libpkg, dblibs):
     """Problems a user would hit in Altium that can be seen without it. Returns (problems, facts)."""
     out = Path(out)
@@ -411,7 +474,16 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
         files = sorted(p for p in out.rglob("*") if p.is_file())
     elif src.is_dir():
         kept = []
-        files = collect(src, out, kept)
+        from . import change_gate as CG
+        lib = library_of(src)
+        with CG.publishing(lib.parent) if lib else contextlib.nullcontext():
+            if lib:                            # change control (#105): only the released revisions leave the library
+                check_released(src, lib, rules)
+            elif (src / "ecadlib_sync.json").is_file():
+                raise ValueError(f"{src}: an ecadlib DbLib folder whose library is not known (no altium_pkg.json naming "
+                                 f"its plan), so its files cannot be checked against the released revisions: package "
+                                 f"the plan.json instead (ecadlib altium-pkg PLAN --out {src})")
+            files = collect(src, out, kept)
         rep["kept_edits"] = kept
     else:
         raise FileNotFoundError(f"{src}: no such plan.json or folder")

@@ -207,6 +207,36 @@ def check_metadata(m, schema_path=None, definition="Package"):
 
 
 # ---------------------------------------------------------------- package
+def check_export_folder(src, lib, rep):
+    """Change control (#105): a kicad-export folder is packaged only as kicad-export wrote it. kicad_export.json lists
+    every file the export wrote with its sha256 (taken from the released revisions); a symbol library or footprint
+    edited, replaced or added by hand since is refused, so a package never carries a change no one approved. A 3D
+    model the export did not write stays the user's file (kicad-export keeps those too). Raises ValueError."""
+    src = Path(src)
+    how = f"run `ecadlib kicad-export PLAN -o {src}` again (or package the plan.json itself)"
+    if not rep or "written" not in rep:
+        raise ValueError(f"{src}: no kicad_export.json with the files kicad-export wrote, so nothing can be checked "
+                         f"against the released library: {how}")
+    written = rep.get("written") or {}
+    files = ([src / f"{lib}.kicad_sym"] if (src / f"{lib}.kicad_sym").is_file() else []) + \
+        sorted((src / f"{lib}.pretty").glob("*.kicad_mod")) + \
+        sorted(f for f in (src / f"{lib}.3dshapes").glob("*") if f.is_file() and f"{lib}.3dshapes/{f.name}" in written)
+    bad = []
+    for f in files:
+        rel = f.relative_to(src).as_posix()
+        if rel not in written:
+            bad.append(f"{rel} (not written by kicad-export)")
+        elif hashlib.sha256(f.read_bytes()).hexdigest() != written[rel]:
+            parts = [p["part"] for p in rep.get("parts") or [] if rel.endswith(f"/{p.get('footprint')}.kicad_mod")]
+            bad.append(f"{rel} (changed since kicad-export wrote it" + (f"; part {', '.join(parts)}" if parts else "") + ")")
+    gone = [r for r in written if r.startswith((f"{lib}.kicad_sym", f"{lib}.pretty/")) and not (src / r).is_file()]
+    bad += [f"{r} (removed since kicad-export wrote it)" for r in gone]
+    if bad:
+        raise ValueError(f"{src}: not packaged: files differ from what kicad-export wrote from the released library: "
+                         f"{'; '.join(bad[:8])}" + (f" and {len(bad) - 8} more" if len(bad) > 8 else "") +
+                         f". A change goes through the library (ecadlib part status / approve); then {how}")
+
+
 def _source(src, name, include_held, http, offline, cache, log):
     """(export folder, library name, kicad_export report or None, temp dir to clean up or None)."""
     src = Path(src)
@@ -219,6 +249,7 @@ def _source(src, name, include_held, http, offline, cache, log):
             if not libs:
                 raise FileNotFoundError(f"{src} has no <lib>.kicad_sym or <lib>.pretty: run `ecadlib kicad-export PLAN -o {src}` first")
             lib = libs[0]
+        check_export_folder(src, lib, rep)
         return src, lib, rep, None
     if not src.is_file():
         raise FileNotFoundError(f"{src}: no such plan.json or kicad-export folder")

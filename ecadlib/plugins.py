@@ -177,13 +177,23 @@ def run_exporter(name, plan, out_dir, rules=None, eps=None):
     if name not in ex:
         why = "".join(f"; {n} failed to load: {e}" for n, e in errors if n == name)
         raise ValueError(f"unknown exporter {name!r}; installed: {', '.join(ex) or 'none'}{why}")
-    items = json.loads(Path(plan).read_text()) if not isinstance(plan, list) else plan
+    items = json.loads(Path(plan).read_text(encoding="utf-8")) if not isinstance(plan, list) else plan
     if not isinstance(items, list):
         raise ValueError(f"{plan}: not a plan (a JSON list of parts)")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     rules = RU.resolve(rules, Path(plan).parent if not isinstance(plan, list) else out_dir)
-    paths = ex[name][0](items, out_dir, rules) or []
+    if isinstance(plan, list):
+        paths = ex[name][0](items, out_dir, rules) or []
+        return [str(p) for p in paths]
+    # change control (#105): the plugin gets the released revisions (a hand edit since the last writer is held and the
+    # released files and fields put back), and reads the part files under the library lock; a part waiting for
+    # `ecadlib part approve` with no released revision is left out
+    from . import change_gate as CG, release_check as RC
+    with CG.publishing(Path(plan).parent):
+        items = CG.settled_plan(plan, f"plugin:{name}", rules=rules, log=lambda *a, **k: None)
+        items = [it for it in items if not RC.change_hold(it, Path(plan).parent)]
+        paths = ex[name][0](items, out_dir, rules) or []
     return [str(p) for p in paths]
 
 

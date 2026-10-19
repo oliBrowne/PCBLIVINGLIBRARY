@@ -49,7 +49,19 @@ def _export(with_model=True):
         t = sexpr.dumps([c for c in tree if not (isinstance(c, list) and c[:1] == ["model"])]).rstrip()
         fp.write_text(t[:-1] + '\t(model "${KIPRJMOD}/lib.3dshapes/SOIC-8.step"\n\t\t(offset (xyz 0 0 0))\n'
                       '\t\t(scale (xyz 1 1 1))\n\t\t(rotate (xyz 0 0 0))\n\t)\n)\n')
+        _as_written(out, fp)
     return plan, out, rep
+
+
+def _as_written(out, *files):
+    """Record files changed by the test's setup in kicad_export.json, as if kicad-export had written them (kicad-pcm
+    packages a folder only as kicad-export wrote it)."""
+    import hashlib
+    rp = out / "kicad_export.json"
+    rep = json.loads(rp.read_text(encoding="utf-8"))
+    for f in files:
+        rep["written"][f.relative_to(out).as_posix()] = hashlib.sha256(f.read_bytes()).hexdigest()
+    rp.write_text(json.dumps(rep), encoding="utf-8")
 
 
 # ---------------------------------------------------------------- KiCad PCM package (offline)
@@ -152,6 +164,13 @@ def test_pcm_rebuild_is_idempotent_and_versions_changes():
     assert {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in out.iterdir()} == snap   # no file rewritten
     f = exp / "lib.pretty" / "R_0603_1608Metric.kicad_mod"
     f.write_text(f.read_text().replace("(attr smd)", "(attr smd)\n\t(tags \"changed\")", 1))
+    try:                                       # a hand edit of the export folder is never packaged (change control)
+        KP.build(exp, out, today=d2, base_url="https://x.example/k", log=lambda *a: None)
+    except ValueError as e:
+        assert "changed since kicad-export wrote it" in str(e), e
+    else:
+        raise AssertionError("an edited export folder was packaged")
+    _as_written(exp, f)                        # as a new kicad-export of a released change writes it
     r3 = KP.build(exp, out, today=d2, base_url="https://x.example/k", log=lambda *a: None)
     assert r3["version"] == "2026.11.2" and r3["sha256"] != r1["sha256"]
     assert json.loads((out / "repository.json").read_text())["packages"]["update_timestamp"] > r1["update_timestamp"]

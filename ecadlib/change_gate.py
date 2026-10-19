@@ -66,6 +66,15 @@ WRITERS = {
     "kicad-export": {"mode": "publish", "module": "ecadlib.kicad_export", "what": "KiCad library export"},
     "dblib-sync": {"mode": "publish", "module": "ecadlib.altium_dblib_sync", "what": "Altium DbLib / SVNDbLib sync"},
     "altium365-push": {"mode": "publish", "module": "ecadlib.altium365", "what": "Altium 365 release and updates"},
+    # publishers that read plan.json: they publish the plan's fields (and plugins its files) after settled_plan
+    "kicad-dblib": {"mode": "publish", "module": "ecadlib.kicad_dblib", "what": "KiCad database library (with or without --export)"},
+    "export-parts": {"mode": "publish", "module": "ecadlib.parts_export", "what": "parts table for PLM / ERP (CLI, web UI, MCP)"},
+    "plugin-export": {"mode": "publish", "module": "ecadlib.plugins", "what": "exporter plugins (CLI, web UI, MCP)"},
+    # packagers: from a plan through kicad-export / dblib-sync; from a folder only what matches the released revisions
+    "kicad-pcm": {"mode": "publish", "module": "ecadlib.kicad_pcm", "what": "KiCad PCM package (a plan, or a kicad-export folder "
+                  "checked against its kicad_export.json)"},
+    "altium-pkg": {"mode": "publish", "module": "ecadlib.altium_pkg", "what": "Altium hand-off folder (a plan through dblib-sync, "
+                   "or a folder checked against the library's released revisions)"},
 }
 # Modules that call the Altium / KiCad file writers but never replace a released part: they write new files, the
 # workspace model pool, test material or files a person names on the command line. The coverage test accepts these.
@@ -86,7 +95,6 @@ NOT_LIBRARY_WRITERS = {
     "ecadlib.migrate": "backups of files it upgrades",
     "ecadlib.parity": "survey work folder",
     "ecadlib.rebuild": "rebuild --check copies the library to a temporary folder (in-place rebuild runs the librarian)",
-    "ecadlib.altium_pkg": "the hand-off folder it creates from the plan's (gated) files",
     "ecadlib.release_check": "status, hold reasons and --allow overrides only (not fingerprinted)",
     "ecadlib.approvals": "sign-off records only (not fingerprinted)",
     "ecadlib.review_cli": "release anyway (status only); its choices go through ecadlib.resolve (gated)",
@@ -215,6 +223,9 @@ class Guard:
         self.pre = {}                          # path -> bytes on disk at begin() that are the released part
         self.pre_steps = {}                    # PcbLib path -> {STEP path: bytes} of a head recorded without its STEPs
         self._lock = None
+        self._begun = False                    # begin() ran: what the writer found on disk was checked there
+        self._was_empty = None                 # the ledger had no line when this guard first looked
+        self._empty_why = None                 # ... and the blob store or the stamp said it kept one
 
     def __enter__(self):
         self.begin()
@@ -252,13 +263,14 @@ class Guard:
         now. items: the plan as it is on disk (default: <folder>/plan.json). A part whose history the ledger lost (the
         blob store, the usage index or other ledger lines show it was released) is never adopted: LedgerError."""
         self.hold_lock()
+        self._begun = True
         if items is None:
             items = read_plan(self.folder)
         n, lost = 0, []
         for it in items or []:
             head = self.ledger.head(it["name"]) if released(it) else None
             if released(it) and not head and self._has_files(it):
-                why = self.lost_history(it["name"])
+                why = self.lost_history(it["name"], it)
                 if why and it["name"] not in self.adopt:
                     lost.append((it["name"], why))
                     continue
@@ -277,14 +289,24 @@ class Guard:
             self.log(f"  change control: {n} released part(s) recorded as revision 1 (they were released before the ledger)")
         return n
 
-    def lost_history(self, part):
+    def lost_history(self, part, item=None):
         """Why the ledger must have known `part` although it has no release line for it (the ledger file was deleted,
-        emptied or cut), or None. Adopting the disk then would hide whatever changed since: fail closed."""
+        emptied or cut), or None. Adopting the disk then would hide whatever changed since: fail closed.
+        item: the plan item, to compare its files on disk with what the librarian built (library.lock.json) when the
+        whole ledger is gone; a writer passes it only before it writes (begin), a publisher always."""
         lg = self.ledger
-        if not lg.lines():
-            blobs = lg.store / "blobs"
-            if blobs.is_dir() and any(blobs.iterdir()):
-                return f"{LG.LEDGER} is missing or empty, but {LG.STORE}/blobs holds released files"
+        if self._was_empty is None:            # what the library held when this guard first looked (its own writes
+            self._was_empty = not lg.lines()   # since are no sign of a lost history)
+            self._empty_why = self._store_says() if self._was_empty else None
+        if self._was_empty:
+            if self._empty_why:
+                return self._empty_why
+            why = self.lock_check(item) if item is not None else None
+            if why:
+                return why
+            why = self._exported_with_ledger(part)
+            if why:
+                return why
         for e in lg.history(part):
             if e.get("event") in ("publish", "retired", "superseded", "overwritten") or e.get("base") is not None:
                 return f"{LG.LEDGER} has {e.get('event')} lines for it but no release line"
@@ -297,6 +319,67 @@ class Guard:
         prop = lg.proposal(part)
         if prop and prop.get("base") is not None:
             return f"a held change to its revision r{prop['base']} waits in {LG.STORE}/proposed"
+        return None
+
+    def _store_says(self):
+        """With the ledger missing or empty: the blob store or the migrate stamp says the library kept one -> why."""
+        blobs = self.ledger.store / "blobs"
+        if blobs.is_dir() and any(blobs.iterdir()):
+            return f"{LG.LEDGER} is missing or empty, but {LG.STORE}/blobs holds released files"
+        from . import migrate as MG
+        try:
+            kinds = (MG.read_stamp(self.folder) or {}).get("kinds") or {}
+        except MG.SchemaTooNew:
+            kinds = {}
+        if "ledger" in kinds:
+            return f"{MG.STAMP} says this library keeps {LG.LEDGER}, but the ledger is missing or empty"
+        return None
+
+    def lock_check(self, it):
+        """Are the part's files on disk the ones the librarian built and recorded in library.lock.json? -> None when
+        the lock has no record of them, "" when they are, else why not (another file, or other bytes: something
+        changed them after the build). With no ledger at all, a difference means nothing says what changed: fail
+        closed. A library from before change control whose files are as built adopts as before."""
+        from . import rebuild as RB
+        try:
+            rec = (json.loads((self.folder / RB.LOCK).read_text(encoding="utf-8")).get("parts") or {}).get(it["name"])
+        except (OSError, ValueError, AttributeError):
+            return None
+        if not isinstance(rec, dict):
+            return None
+        seen = False
+        for half in ("symbol", "footprint"):
+            r = rec.get(half) or {}
+            recs = [(r.get("file"), r.get("sha256"), r.get("norm_sha256"), (it.get(half) or {}).get("file"))]
+            k = r.get("kicad_mod") or {}
+            if k.get("file"):
+                recs.append((k["file"], k.get("sha256"), None, (it.get(half) or {}).get("kicad_mod") or k["file"]))
+            for f, sha, norm, now in recs:
+                if not f or not sha:
+                    continue
+                if now and Path(str(now)).as_posix() != Path(str(f)).as_posix():
+                    return f"{RB.LOCK} records {half} file {f} as built, but the plan names {now}"
+                p = self.base / f
+                if not p.is_file():
+                    continue
+                if RB.file_sha(p) != sha and (not norm or RB.norm_sha(p) != norm):
+                    return f"{RB.LOCK} records other bytes for {f} than are on disk (changed after the librarian built it)"
+                seen = True
+        return "" if seen else None
+
+    def _exported_with_ledger(self, part):
+        """With no ledger at all: a KiCad export of this library (the workspace's kicad/<library>/) made by an ecadlib
+        that keeps a ledger and listing the part -> the reason, else None."""
+        plan = (self.folder / "plan.json").resolve()
+        for f in (self.folder / "kicad_export.json", self.folder.parent.parent / "kicad" / self.folder.name / "kicad_export.json"):
+            try:
+                rep = json.loads(f.read_text(encoding="utf-8"))
+                if not rep.get("change_control") or Path(rep.get("plan") or "").resolve() != plan:
+                    continue
+            except (OSError, ValueError, AttributeError, TypeError):
+                continue
+            if any(p.get("part") == part and p.get("symbol") and p.get("status") in RELEASED_STATUSES for p in rep.get("parts") or []):
+                return f"{f} shows it was exported from this library, by an ecadlib that keeps a ledger"
         return None
 
     def stored_fingerprint(self, part):
@@ -537,7 +620,7 @@ class Guard:
         probe = [json.loads(json.dumps(t["item"], default=str)) for t in todo if not t["item"].get("_manifest")]
         if not probe:
             return ""
-        RC.apply(probe, self.base, rules=self.rules)
+        RC.apply(probe, self.base, rules=self.rules, change_holds=False)
         return "; ".join(f"{i['name']}: {', '.join(i.get('hold_reasons') or [])}" for i in probe if i.get("status") == "held")
 
     @_locked_step
@@ -583,7 +666,7 @@ class Guard:
         todo, lost = [], []
         for it in items:
             if released(it) and not self.ledger.head(it["name"]) and self._has_files(it):
-                why = self.lost_history(it["name"])
+                why = self.lost_history(it["name"], None if self._begun else it)
                 if why and it["name"] not in self.adopt:
                     lost.append((it["name"], why))
                 else:
@@ -855,6 +938,20 @@ def publish_guard(plan, items, target, rules=None, user=None, log=None, base=Non
     finally:
         g.close()
     return out, g
+
+
+def settled_plan(plan, target, rules=None, log=None):
+    """The plan's items for a publisher that reads plan.json (kicad-dblib, export-parts, exporter plugins), after
+    publish_guard: a hand edit since the last writer is settled (a held one puts the released files and fields back),
+    so what goes out is the released revision, as kicad-export ships it. Call it inside publishing(the plan's folder)
+    and read the part files under the same lock. A part waiting for `ecadlib part approve` with no released revision
+    keeps status held."""
+    plan = Path(plan)
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    if not isinstance(items, list) or not all(isinstance(i, dict) and i.get("name") for i in items):
+        raise ValueError(f"{plan}: not a librarian plan (expected a list of parts, each with a name)")
+    publish_guard(plan, items, target, rules=rules, log=log)
+    return items
 
 
 def publishing(folder):
