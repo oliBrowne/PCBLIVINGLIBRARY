@@ -6,6 +6,8 @@ import contextlib, json, os, tempfile
 from pathlib import Path
 from unittest import mock
 
+import requests
+
 from ecadlib import ai_cost as AC, altium_menu as AM, datasheet as D, userconfig as UC
 from ecadlib.app import Workspace
 from tests import test_datasheet_batch as TB
@@ -20,10 +22,13 @@ def _workspace():
     with tempfile.TemporaryDirectory() as d:
         env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")}
         env["ECADLIB_HOME"] = str(Path(d) / "home")
+        # not --offline (that sends nothing to the model either): the part sources fail at once, as at a dead proxy,
+        # and the Messages API is the fake. Not a real dead proxy: Windows retries a refused connection for seconds
         api = TB.FakeAPI(tokens=20000)
-        with mock.patch.dict(os.environ, env, clear=True), TB.patched(api):
+        down = mock.patch.object(requests.Session, "request", side_effect=requests.exceptions.ProxyError("no network"))
+        with mock.patch.dict(os.environ, env, clear=True), TB.patched(api), down:
             UC.set_key("ANTHROPIC_API_KEY", KEY)
-            ws = Workspace(str(Path(d) / "ws"), [], providers=["digikey"], offline=True)
+            ws = Workspace(str(Path(d) / "ws"), [], providers=["digikey"])
             bom = ws.save_upload("bom.csv", TB.BOM2.encode())
             for url in ("https://example.com/ds.pdf", "https://www.lcsc.com/datasheet/C9999.pdf"):
                 D.PdfStore(ws.root / "http_cache", TB.PdfHTTP({url: TB.PDF}), offline=False).fetch(url)
@@ -118,7 +123,7 @@ def test_altium_and_kicad_dialogs_offer_the_ai_step_with_its_cost():
     from ecadlib import kicad_menu as KM
     from tests.test_tool_packages import _plugin_module
     with _workspace() as (ws, bom, api):
-        cfg = {"workspace": ws.root, "library": ws.root / "altium_library", "name": "ecadlib", "offline": True}
+        cfg = {"workspace": ws.root, "library": ws.root / "altium_library", "name": "ecadlib", "offline": False}
         res = AM.run_action(cfg, "fill", {"project": str(ws._bom_path(bom))})
         assert not api.of("/v1/messages"), "fill must not call the model"
         assert res["offer_ai"] == "1" and res["ai_model"] == "claude-opus-5-5" and res["ai_approve"], res

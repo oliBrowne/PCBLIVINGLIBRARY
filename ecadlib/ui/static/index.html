@@ -374,7 +374,7 @@ details summary { cursor: pointer; color: var(--muted); }
         <button class="small" id="dedupe">Find duplicates</button>
         <button class="small" id="aiprice" title="What reading the remaining datasheets with AI costs; nothing is sent">AI cost of the rest</button>
       </div>
-      <div class="muted small" style="margin-top:6px" id="signnote">There is no login: ecadlib is a local tool, so whatever name you type is recorded as given with each approval, rejection or release override (in the plan and in <span class="mono">approvals_audit.jsonl</span>). Sign-off is enforced only when an <span class="mono">approvals.json</span> sits next to the plan.</div>
+      <div class="muted small" style="margin-top:6px" id="signnote">There is no login: ecadlib is a local tool, so whatever name you type is recorded as given with each approval, rejection or release override (in the plan and in <span class="mono">approvals_audit.jsonl</span>). Sign-off is enforced only when an <span class="mono">approvals.json</span> sits next to the plan; a rejection always holds the part.</div>
       <div class="out" id="approut"></div>
       <div class="out" id="dedupeout"></div>
     </div>
@@ -809,7 +809,10 @@ async function action(btn, out, fn) {
 }
 $("#dblib").addEventListener("click", e => action(e.target, $("#dblibout"), async () => {
   const r = await api("/api/export/dblib", { bom: current.bom });
-  return "Written: " + r.files.map(fileLink).join(" · ") +
+  if (r.from_plan) return `${r.written} part(s) in <span class="mono">${esc(r.folder)}</span>: ` + r.files.map(fileLink).join(" · ") +
+    (r.held.length ? `<div class="muted">Held, left out until a person decides: ${esc(r.held.join(", "))}</div>` : "") +
+    `<div class="next s-info"><span>Next: copy the whole folder (with its SchLib and PcbLib folders) next to your Altium libraries and open the .DbLib in Altium Designer. The Excel workbook needs the Access database engine.</span></div>`;
+  return "Written (draft, from the triage only: run Fill the library first to build symbols and footprints): " + r.files.map(fileLink).join(" · ") +
     `<div class="next s-info"><span>Next: copy these files next to your Altium libraries and open a .DbLib in Altium Designer. The SQLite one needs the SQLite3 ODBC driver; the Excel one needs the Access database engine.</span></div>`;
 }));
 $("#models").addEventListener("click", e => action(e.target, $("#modelsout"), async () => {
@@ -1162,7 +1165,9 @@ function decideLater(part, decision, who, role, comment) {
     try {
       const r = await api("/api/approvals/decide", { bom: current.bom, part, decision, user: who, role, comment });
       banner($("#approut"), ""); loadStatus().catch(() => {});
-      if (!r.decision.enforced) toast(`${what}. Recorded (there is no approvals.json, so sign-off is not enforced).`);
+      if (!r.decision.enforced) toast(decision === "reject"
+        ? `${what}. It is held: not sent to Altium or exported until it is approved again.`
+        : `${what}. Recorded (there is no approvals.json, so sign-off is not enforced).`);
       await loadParts();
     } catch (err) { await loadParts().catch(() => {}); toast(`${what} failed: ${err.message}`, { bad: true, ms: 8000 }); }
   };

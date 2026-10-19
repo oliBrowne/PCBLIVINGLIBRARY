@@ -14,7 +14,7 @@ Plans (plan.json) keep ecadlib's own parameter names ("Manufacturer Part Number"
 names from [parameters.names] are applied where data leaves ecadlib: Altium 365 push, the DbLib export and sync,
 the KiCad export and the Altium 365 drift check. Part names, folders, footprint names, required fields, default
 parameters, layers and density are applied when the plan and the models are made."""
-import argparse, copy, difflib, json, os, re, sys
+import argparse, copy, difflib, json, math, os, re, sys
 from pathlib import Path
 
 FILES = ("ecadlib.toml", "ecadlib_rules.json")
@@ -131,9 +131,29 @@ class RulesError(ValueError):
 # ------------------------------------------------------------------ load / merge / validate
 def find(start="."):
     """The rules file in `start` or one of its parents, else in the current folder or its parents; None if none.
-    $ECADLIB_CONFIG (a file path), when set, is used instead of the search (an explicit --rules still wins)."""
+    $ECADLIB_CONFIG (a file path), when set, is used instead of the search (an explicit --rules still wins), except
+    that a workspace's own file still comes first: one found from `start` (a plan, a workspace) in a folder that is not
+    the current folder or one of its parents, as app.Workspace does."""
     env = os.environ.get("ECADLIB_CONFIG", "").strip()
-    if env:
+    if env and Path(start) != Path("."):
+        try:
+            here = Path.cwd().resolve()
+            mine = {here, *here.parents}
+            base = Path(start).resolve()
+            for d in [base, *base.parents]:
+                if d in mine:
+                    break
+                for n in FILES:
+                    if (d / n).is_file():
+                        return d / n
+        except OSError:
+            pass
+    if env:                                    # run inside a workspace (its file beside librarian/ or uploads/)
+        here = Path.cwd()
+        if (here / "librarian").is_dir() or (here / "uploads").is_dir():
+            for n in FILES:
+                if (here / n).is_file():
+                    return (here / n).resolve()
         if not Path(env).expanduser().is_file():
             raise RulesError(f"ECADLIB_CONFIG={env}: no such file")
         return Path(env).expanduser().resolve()
@@ -166,6 +186,8 @@ def toml_module():
 
 
 def parse_text(text, name="ecadlib.toml"):
+    if isinstance(text, str):
+        text = text.lstrip("﻿")          # "UTF-8 with BOM" (Notepad, PowerShell 5, Visual Studio): fine
     if str(name).endswith(".json"):
         try:
             return json.loads(text or "{}")
@@ -294,8 +316,8 @@ def validate(raw, where="ecadlib.toml"):
                 if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
                     _err(where, key, f"must be a whole number from {lo} to {hi}")
             elif isinstance(d, float):
-                if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
-                    _err(where, key, "must be a number of 0 or more")
+                if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or v < 0:
+                    _err(where, key, "must be a number of 0 or more (not nan or inf)")
             elif isinstance(d, dict):
                 _check_table(where, sec, k, v, d)
             elif not isinstance(v, str):
@@ -550,7 +572,16 @@ def house_row(row, rules):
     """A DbLib row (column -> value) with parameter columns renamed; key and reserved columns stay."""
     if not (rules or DEFAULTS)["parameters"]["names"]:
         return row
-    return {(k if k in KEY_COLUMNS else param_name(k, rules)): v for k, v in row.items()}
+    out, renamed = {}, set()
+    for k, v in row.items():
+        h = k if k in KEY_COLUMNS else param_name(k, rules)
+        if h != k:                          # the canonical field wins over a parameter already spelled like the house
+            if v or h not in out:           # name (a stale "Mfr PN" BOM column), unless the canonical one is empty
+                out[h] = v
+            renamed.add(h)
+        elif h not in renamed or not out.get(h):
+            out[h] = v
+    return out
 
 
 def default_params(rules):
@@ -817,7 +848,8 @@ HELP = {
     "datasheet.max_cost_usd": "refuse a run whose estimated worst-case cost is higher (default 10.00 per run; 0 = no cap; --yes does not lift it, "
                              "--max-cost-usd does)",
     "datasheet.ask_above_usd": "the Altium dialog, KiCad window and web UI always show the model and cost before an AI step; "
-                               "above this (or above max_cost_usd when set) they ask a second time (default 1.00)",
+                               "above this (or above max_cost_usd when set) they ask a second time (default 1.00; 0 = "
+                               "ask twice for every paid read)",
     "datasheet.page_budget": "pages sent on the first try, picked by text (drawing for this package, land pattern, pin table, "
                              "ordering info); widened to 3x, then the whole PDF, when the answer is incomplete (0 = whole PDF)",
     "datasheet.route": "single = `model` for every part | ladder = start on the cheapest model of `ladder` that suits the "

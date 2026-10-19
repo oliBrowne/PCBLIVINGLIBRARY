@@ -41,7 +41,7 @@ def cross_check(rec, sidecar=None):
         return None
     st = rec.get("status") or "unchecked"
     label = {"agreed": "agrees with a second source", "disagreed": "two sources disagree",
-             "unchecked": "not cross-checked", "skipped": "not needed (footprint from another source)"}.get(st, st)
+             "unchecked": "not cross-checked", "self-checked": "self-checked only (no independent second source)", "skipped": "not needed (footprint from another source)"}.get(st, st)
     rows = []
     full = (sidecar or {}).get("cross_check") or {}
     dims = (sidecar or {}).get("dimensions") or {}

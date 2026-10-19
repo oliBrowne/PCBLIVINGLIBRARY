@@ -283,9 +283,17 @@ def make_handler(ws: Workspace):
             if len(bom) > 1000 or any(len(x) > 200 for x in bom.replace("\\", "/").split("/")):
                 raise ValueError("that BOM name is too long; pick a BOM from the list")
             ws.inside(bom)                                 # refuses a path outside the workspace
-            if write and jobs.running("librarian:" + bom):
+            if write and jobs.running(self._plan_key(bom)):
                 raise FileExistsError(f"the librarian is still running on {bom}; try again when it has finished")
             return bom
+
+        @staticmethod
+        def _plan_key(bom):
+            """One librarian job per plan: two uploads of BOM.csv share one plan folder (Workspace._key)."""
+            try:
+                return "librarian:" + ws._key(ws._bom_path(bom))
+            except (ValueError, OSError):
+                return "librarian:" + bom
 
         def _body(self, limit=MAX_UPLOAD):
             self._body_read = True
@@ -415,7 +423,7 @@ def make_handler(ws: Workspace):
                 self._json()
                 with write_lock:
                     rel = ws.demo_bom()
-                return self._send(200, dict(jobs.start(self._demo, rel, label=rel, key="librarian:" + rel), bom=rel))
+                return self._send(200, dict(jobs.start(self._demo, rel, label=rel, key=self._plan_key(rel)), bom=rel))
             if u.path == "/api/upload":
                 name = unquote(self.headers.get("X-Filename", "bom.csv"))
                 with write_lock:
@@ -429,7 +437,7 @@ def make_handler(ws: Workspace):
                 bom = self._bom(b)
                 refresh = [] if b.get("refresh") is True else (b.get("refresh") or None)
                 return self._send(200, jobs.start(self._librarian, bom, b.get("sources"), refresh, label=bom,
-                                                  key="librarian:" + bom))
+                                                  key=self._plan_key(bom)))
             if u.path == "/api/ai/quote":                         # downloads datasheets (cached) to price them: a job
                 bom = self._bom(self._json())
                 return self._send(200, jobs.start(self._ai_quote, bom, label=bom))
@@ -437,7 +445,7 @@ def make_handler(ws: Workspace):
                 b = self._json()
                 bom = self._bom(b)
                 return self._send(200, jobs.start(self._ai_read, bom, _usd(b.get("approved_usd")), b.get("over_limit_ok") is True,
-                                                  b.get("price_unknown_ok") is True, label=bom, key="librarian:" + bom))
+                                                  b.get("price_unknown_ok") is True, label=bom, key=self._plan_key(bom)))
             if u.path == "/api/style/guide":                      # the model writes the guide: a job
                 b = self._json()
                 return self._send(200, jobs.start(self._style_guide, _usd(b.get("approved_usd")), b.get("over_limit_ok") is True,

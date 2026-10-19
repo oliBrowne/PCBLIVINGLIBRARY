@@ -167,7 +167,10 @@ def failure_type(row, mine, spec):
 
 
 def apply_errata(sc, mine_pins, errata, ref_pins=None, tol=None):
-    """A failing field that a checked erratum covers, with ours what the datasheet says, is scored right."""
+    """A failing field that a checked erratum covers, with ours what the datasheet says, is scored right. Only an
+    erratum that says what the datasheet has can be checked against our part: "ours": [[num, name], ...] on a symbol
+    field, or a number ("pitch": {"ours": 0.65}) that ours must match before the part's footprint fields are excused.
+    One with neither would pass whatever we generated, so it is not applied."""
     fixed = []
     num = {k: e["ours"] for k, e in (errata or {}).items() if isinstance(e.get("ours"), (int, float))}
     if any(abs(((sc["fields"].get(k) or {}).get("ours") or 0) - v) > 0.01 for k, v in num.items()):
@@ -176,7 +179,10 @@ def apply_errata(sc, mine_pins, errata, ref_pins=None, tol=None):
         f = sc["fields"].get(field)
         if not f or f["ok"]:
             continue
-        if field.startswith("symbol_") and e.get("ours"):
+        pins = field.startswith("symbol_") and isinstance(e, dict) and isinstance(e.get("ours"), list) and e["ours"]
+        if not pins and not num:                      # nothing to compare ours with: the field keeps its verdict
+            continue                                  # (a footprint erratum is checked by its numbers, above)
+        if pins:
             have = {str(n): S.norm_name(v) for n, v in mine_pins or []}
             if any(have.get(str(n)) != S.norm_name(v) for n, v in e["ours"]):
                 continue                              # ours is not what the datasheet says either: a real miss
@@ -251,6 +257,7 @@ class EvalReader(D.Reader):
         self.used = {}
         if self.replay:
             self.key, self.estimate_only = "replay (never sent)", False
+            self.offline = False                                      # recorded answers: nothing goes to a model
         elif not self.key:
             self.estimate_only = True
 
@@ -414,12 +421,14 @@ def _symbol_pins(path):
         _, syms = AL.read_schlib(path)
     except (OSError, ValueError):
         return None
-    pins = {}
-    for s in syms:
+    pins = {}                                         # num -> names: one pin repeated in each part of a multi-part
+    for s in syms:                                    # symbol is one pin; one number with two names is scored as such
         for r in s["records"]:
             if r.get("RECORD") == "2" and "num" in r:
-                pins.setdefault(r["num"], r["name"])
-    return list(pins.items())
+                got = pins.setdefault(r["num"], [])
+                if r["name"] not in got:
+                    got.append(r["name"])
+    return [(n, nm) for n, names in pins.items() for nm in names]
 
 
 def _cost(case_used, model, live=False):

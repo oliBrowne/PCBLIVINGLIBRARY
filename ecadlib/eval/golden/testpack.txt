@@ -340,8 +340,8 @@ pad 1 at=(-1.4575,0.75) layer=1 size=(0.835,0.25) hole=0 shape=9 rot=0 corner=50
 pads x8 layer=1 size=(0.25,0.835) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-0.75,-1.4575,0.75,1.4575) #b3bbff1f8f
 pads x8 layer=1 size=(0.835,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.4575,-0.75,1.4575,0.75) #94f6e541ab
 pads x1 layer=1 size=(1.68,1.68) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-0.85 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #5a60363957
-graphics fill 35: 4 bbox(-0.7585,-0.7585,0.7585,0.7585) #8fb75a9917
 graphics region 33: 1 bbox(-1.85,1.61,-1.37,1.94) #efb5063eef
+graphics region 35: 4 bbox(-0.7585,-0.7585,0.7585,0.7585) #7b3f9152a7
 graphics track 33: 11 bbox(-1.85,-1.61,1.61,1.94) #9f42ba53fa
 graphics track 69: 5 bbox(-1.5,-1.5,1.5,1.5) #460ca5617e
 graphics track 71: 4 bbox(-2.13,-2.13,2.13,2.13) #26036e738a
