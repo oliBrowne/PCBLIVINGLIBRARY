@@ -3,7 +3,7 @@ import contextlib, io, tempfile
 from pathlib import Path
 from unittest import mock
 
-from ecadlib import a365_sync as A, altium_project as AP, fallbacks as FB, llm as LL, reports, rules as RU, visual_check as V
+from ecadlib import altium_project as AP, fallbacks as FB, llm as LL, reports, rules as RU, visual_check as V
 
 
 def _quiet():
@@ -34,10 +34,9 @@ def test_model_setting_failure_is_reported_not_silent():
 def test_house_parameter_names_failure_is_reported():
     FB.take()
     with _quiet(), mock.patch.object(RU, "param_name", side_effect=KeyError("names")):
-        assert A._param_name("Manufacturer Part Number", {"parameters": {}}) == "Manufacturer Part Number"
-        AP._param_names("Manufacturer", ["Manufacturer"], {"parameters": {}})
+        assert AP._param_names("Manufacturer", ["Manufacturer"], {"parameters": {}}) == ["Manufacturer"]
     got = FB.take()
-    assert len(got) == 2 and all("house-style parameter name" in g for g in got), got
+    assert len(got) == 1 and "house-style parameter name for 'Manufacturer'" in got[0], got
 
 
 def test_review_md_leads_with_the_fallbacks():
