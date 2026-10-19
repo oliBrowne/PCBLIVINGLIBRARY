@@ -18,6 +18,8 @@
                   "note": "KiCad footprints: pin 1 top-left, numbers counter-clockwise; diodes / LEDs: cathode on pad 1; polarized capacitors: + on pad 1."},
     "golden-set": {"title": "ecadlib golden set (tests/fixtures/assembly, docs/assembly.md)", "url": "https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/docs/assembly.md",
                    "note": "The 0 deg pose of each family as JLCPCB's own (EasyEDA) footprints draw it, measured on the recorded parts listed in docs/assembly.md."},
+    "kjt-bom": {"title": "kicad-jlcpcb-tools, bom_csv.py BOM_LINE_MAX_BYTES (MIT)", "url": "https://github.com/Bouni/kicad-jlcpcb-tools",
+                "note": "JLCPCB rejects a BOM line longer than 2048 bytes (kicad-jlcpcb-tools issue #755: a long Designator cell); their exporter splits a group over several lines. Read 2026-10-19."},
     "jlc-0402": {"title": "r/KiCad, Mar 2026: JLCPCB rejected an order over KiCad vs EasyEDA 0402 pads", "url": "https://www.reddit.com/r/KiCad/comments/1rz1ef6/",
                  "note": "A pad spacing that differs from the EasyEDA footprint's by about 18% (KiCad R_0402 1.02 mm against EasyEDA R0402 0.87 mm) was flagged by JLCPCB; KiCad's 0603 and larger chips sit within 11%."}
   },
@@ -41,8 +43,9 @@
   "tolerances": {
     "identical_mm": 0.02, "position_mm": 0.05, "position_share": 0.15, "size_mm": 0.1, "size_share": 0.25, "min_overlap": 0.7,
     "two_pin_span_share": 0.15, "incompatible_mm": 0.15, "incompatible_pitch_share": 0.25,
-    "source": "jlc-0402",
-    "about": "identical: every pad within identical_mm. risky: a pad off its land sideways by more than max(position_mm, position_share x the land's width), a width that differs by more than max(size_mm, size_share x width), less than min_overlap of their land covered by ours, or (two-pin parts) the pad spacing off by more than two_pin_span_share. incompatible: pin count or numbering differs, a mirror image fits, or a pad off its land sideways by more than max(incompatible_mm, half the land, incompatible_pitch_share x pitch)."
+    "incompatible_span_share": 0.3, "incompatible_span_cover": 0.55,
+    "source": ["jlc-0402", "golden-set"],
+    "about": "identical: every pad within identical_mm. risky: a pad off its land sideways by more than max(position_mm, position_share x the land's width), a width that differs by more than max(size_mm, size_share x width), less than min_overlap of their land covered by ours, or (two-pin parts) the pad spacing off by more than two_pin_span_share. incompatible: pin count or numbering differs, a mirror image fits, or a pad off its land sideways by more than max(incompatible_mm, half the land, incompatible_pitch_share x pitch), or wrong-size lands: the pad spacing (two pins: centre to centre; more: row to row, the extent of the pin centres along each axis) off by more than incompatible_span_share, or by more than two_pin_span_share with less than incompatible_span_cover of the worst land covered (calibrated on the golden set: its worst correct pairings are -24% row to row at 82% covered (SOT-23) and -19% at 65% covered (Kemet B); a 0603 resistor on an 0805 part is -18% at 48%)."
   },
   "families": {
     "led_chip": {"names": ["^LED_(01005|0201|0402|0603|0805|1206|1210)", "^LED[-_]?(0201|0402|0603|0805|1206)", "^LED-SMD_L\\d"],
@@ -90,7 +93,7 @@
   "overrides": [],
   "exports": {
     "bom": {"columns": ["Comment", "Designator", "Footprint", "LCSC Part #"], "group_by": ["Comment", "Footprint", "LCSC Part #"],
-            "designator_case": "upper", "source": ["jlc-bom", "jlc-kicad"]},
+            "designator_case": "upper", "max_line_bytes": 2048, "source": ["jlc-bom", "jlc-kicad", "kjt-bom"]},
     "cpl": {"columns": ["Designator", "Mid X", "Mid Y", "Layer", "Rotation"], "layer_names": {"top": "Top", "bottom": "Bottom"},
             "units": "mm", "decimals": 4, "source": ["jlc-cpl", "jlc-kicad"]}
   }

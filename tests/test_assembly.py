@@ -163,10 +163,10 @@ def test_mirror_renumbering_and_pin_count_are_incompatible():
     a = A.assess(fp, fine, PROF)
     assert a["pads"] == "incompatible" and any("do not line up" in r for r in a["reasons"]), a["reasons"]
     narrow = moved(fp, 0)
-    for p in narrow.pads:                                                # rows 1.3 mm closer: lands half uncovered
+    for p in narrow.pads:                                                # rows 1.3 mm closer: another package width
         p.x *= (abs(p.x) - 0.65) / abs(p.x)
     a = A.assess(fp, narrow, PROF)
-    assert a["pads"] == "risky" and any("covered" in r for r in a["reasons"]), (a["pads"], a["reasons"])
+    assert a["pads"] == "incompatible" and any("wrong-size lands" in r and "row to row" in r for r in a["reasons"]), a["reasons"]
 
 
 def test_risky_pad_differences():
@@ -184,17 +184,38 @@ def test_risky_pad_differences():
 
 
 # ---------------------------------------------------------------- real parts and real mismatches
+SYMBOL_PINS = {"cathode": {"1": "K", "2": "A"}, "positive": {"1": "+", "2": "-"}}   # a symbol that names its pins
+
+
+def named(fp, kind):
+    """fp with the pin names a symbol gives its pads (KiCad's Device:LED / D: 1 = K, 2 = A), as the librarian and a
+    KiCad board pass them."""
+    for q in fp.pads:
+        q.func = SYMBOL_PINS[kind].get(q.num, "")
+    return fp
+
+
 def test_golden_set_agreement():
+    # the turn and the pad verdict agree on every golden part. A polarized part is 'verified' only when both sides
+    # name the pins; a bare library footprint (no symbol) gets its cathode / + from its drawing or ecadlib's pad-1
+    # rule, so its turn is measured but its polarity 'assumed', with a review item
     g = json.loads((FIX / "golden.json").read_text(encoding="utf-8"))["parts"]
     assert len(g) >= 60 and sum(p["polarized"] for p in g) >= 15
-    agree, rows = 0, []
+    agree, rows, verified = 0, [], 0
     for p in g:
         a = A.assess(ours(p["ours"]), theirs(p["lcsc"]), PROF, p["lcsc"])
-        ok = A.correction(a) == p["correction"] and a["pads"] == p["pads"] and a["rotation"] == "verified"
+        ok = A.correction(a) == p["correction"] and a["pads"] == p["pads"] and a["rotation"] == ("assumed" if p["polarized"] else "verified")
+        ok = ok and (not p["polarized"] or any("polarity assumed" in r for r in a["review"])) and (p["polarized"] or not a["review"])
+        if p["polarized"]:
+            b = A.assess(named(ours(p["ours"]), "positive" if p["ours"].startswith("CP_") else "cathode"), theirs(p["lcsc"]), PROF, p["lcsc"])
+            want = "verified" if A.named_polarity(theirs(p["lcsc"])) else "assumed"
+            ok = ok and A.correction(b) == p["correction"] and b["pads"] == p["pads"] and b["rotation"] == want
+            verified += b["rotation"] == "verified"
         agree += ok
-        rows.append((p["lcsc"], p["ours"], A.correction(a), p["correction"], a["pads"], p["pads"], ok))
+        rows.append((p["lcsc"], p["ours"], A.correction(a), p["correction"], a["pads"], p["pads"], a["rotation"], ok))
     bad = [r for r in rows if not r[-1]]
     assert not bad, f"golden set: {agree}/{len(g)} agree; wrong: {bad}"
+    assert verified == 19, verified                                      # every diode / LED: JLCPCB names K / A
 
 
 def test_family_table_matches_every_golden_part():
@@ -224,8 +245,11 @@ def test_kicad_0402_against_jlcpcb_0402_is_risky():
 def test_led_cathode_found_by_pin_names_not_pad_numbers():
     th = theirs("C2286")                                                 # JLCPCB numbers this LED's cathode pad 2
     assert {p.num: p.func for p in th.pins} == {"1": "A", "2": "K"}
-    a = A.assess(ours("LED_0603_1608Metric"), th, PROF, "C2286")         # KiCad: cathode = pad 1 (KLC)
-    assert A.correction(a) == 0 and a["rotation"] == "verified" and any("polarity" in n for n in a["notes"]), a
+    a = A.assess(ours("LED_0603_1608Metric"), th, PROF, "C2286")         # KiCad: cathode = pad 1 (KLC), its silk bar
+    assert A.correction(a) == 0 and a["rotation"] == "assumed" and any("polarity" in n for n in a["notes"]), a
+    assert any("polarity mark on our footprint" in r for r in a["review"]), a["review"]
+    a = A.assess(named(ours("LED_0603_1608Metric"), "cathode"), th, PROF, "C2286")   # the symbol's K / A: measured
+    assert A.correction(a) == 0 and a["rotation"] == "verified" and not a["review"], a
     rev = ours("LED_0603_1608Metric")                                    # a footprint whose cathode is on the right
     for p in rev.pads:
         p.func = {"1": "A", "2": "K"}.get(p.num, "")
@@ -255,8 +279,9 @@ def test_polarity_read_off_the_assemblers_filled_silk_marks():
                              ("C37308", "CP_Elec_6.3x5.4", 0), ("C3338", "CP_Elec_6.3x7.7", 180)):
         th = theirs(lcsc)
         assert th.marks and {p.func for p in th.pins} <= {"1", "2"}, lcsc
-        a = A.assess(ours(name), th, PROF, lcsc)
-        assert A.correction(a) == want and a["rotation"] == "verified", (lcsc, A.correction(a), a["notes"])
+        a = A.assess(named(ours(name), "positive"), th, PROF, lcsc)
+        assert A.correction(a) == want and a["rotation"] == "assumed", (lcsc, A.correction(a), a["notes"])   # a mark is
+        assert any("polarity mark on the assembler's footprint" in r for r in a["review"]), a["review"]     # no pin name
     th = theirs("C11376")
     th.marks = []                                                        # without the band: never guessed
     a = A.assess(ours("CP_EIA-6032-28_Kemet-C"), th, PROF, "C11376")
@@ -266,19 +291,19 @@ def test_polarity_read_off_the_assemblers_filled_silk_marks():
 def test_diode_whose_assembler_numbers_the_cathode_pad_2():
     th = theirs("C22452")                                                # SS54: JLCPCB's pad 1 = A, pad 2 = K
     assert {p.num: p.func for p in th.pins} == {"1": "A", "2": "K"}
-    a = A.assess(ours("D_SMA"), th, PROF, "C22452")
+    a = A.assess(named(ours("D_SMA"), "cathode"), th, PROF, "C22452")
     assert A.correction(a) == 0 and a["rotation"] == "verified" and a["pads"] == "risky", a   # not the 180 by number
-    for p in th.pads:                                                    # names gone: its silk bar still says
-        p.func = ""
-    a = A.assess(ours("D_SMA"), th, PROF, "C22452")
-    assert A.correction(a) == 0 and a["rotation"] == "verified", (A.correction(a), a["notes"])
+    for p in th.pads:                                                    # names gone: its silk bar still says, as an
+        p.func = ""                                                      # assumption a person confirms
+    a = A.assess(named(ours("D_SMA"), "cathode"), th, PROF, "C22452")
+    assert A.correction(a) == 0 and a["rotation"] == "assumed" and a["review"], (A.correction(a), a["notes"])
 
 
 def test_wrong_footprint_for_the_part_is_flagged():
     a = A.assess(ours("SOT-23"), theirs("C82942"), PROF, "C82942")      # SOT-23 lands for a SOT-23-5 regulator
     assert a["pads"] == "incompatible" and a["hold"] and a["rotation"] == "unknown", a
-    a = A.assess(ours("D_SOD-123"), theirs("C8678"), PROF, "C8678")      # SOD-123 lands for an SMA diode
-    assert a["pads"] == "risky" and any("pad spacing differs" in r for r in a["reasons"]), a
+    a = A.assess(ours("D_SOD-123"), theirs("C8678"), PROF, "C8678")      # SOD-123 lands for an SMA diode: wrong size
+    assert a["pads"] == "incompatible" and any("wrong-size lands" in r for r in a["reasons"]), a
     a = A.assess(ours("SOT-23"), theirs("C2135"), PROF, "C2135")         # the right one: JLCPCB's SOT-23 -BR pose
     assert a["pads"] == "compatible" and A.correction(a) == 180, a
 
@@ -478,7 +503,7 @@ def test_export_files_and_listed_parts():
         cpl = list(csv.reader(open(files[1], encoding="utf-8")))
         assert cpl[0] == ["Designator", "Mid X", "Mid Y", "Layer", "Rotation"]
         by = {r[0]: r for r in cpl[1:]}
-        assert "R4" not in by and len(by) == 15
+        assert "R4" not in by and "Q1" not in by and len(by) == 14         # Q1: rotation unknown, left out
         assert by["U1"] == ["U1", "10.0000", "-45.0000", "Top", "270"]       # SOIC-8 -BL: +270 (JLCPCB's preview)
         assert by["U3"][4] == "0" and by["U2"][3:] == ["Bottom", "60"]       # 90 + 270; bottom: (180 - 30) + 270
         assert by["C1"][3:] == ["Bottom", "180"] and by["D1"][4] == "180" and by["R3"][4] == "45"
@@ -486,9 +511,9 @@ def test_export_files_and_listed_parts():
         assert bom[0] == ["Comment", "Designator", "Footprint", "LCSC Part #"]
         rows = {r[1]: r for r in bom[1:]}
         assert rows["U2,U3"] == ["NE555", "U2,U3", "SOIC-8_3.9x4.9mm_P1.27mm", "C7593"]
-        assert rows["Q1"][3] == "" and rows["R5"][3] == ""
+        assert "Q1" not in rows and rows["R5"][3] == ""
         md = files[2].read_text(encoding="utf-8")
-        assert "## Rotation unknown" in md and "Q1 (SOT-23)" in md and "## No LCSC part number" in md and "R5 (4k7" in md
+        assert "## Rotation unknown" in md and "Q1 (SOT-23)" in md and "## Left out of the BOM and CPL" in md and "## No LCSC part number" in md and "R5 (4k7" in md
         assert "## Pads risky" in md and "R3 C25744" in md and "JLCEDA/EasyEDA Official Library" in md
         js = json.loads(files[3].read_text(encoding="utf-8"))
         assert js["summary"]["placed"] == 15 and js["summary"]["no_lcsc"] == 2 and js["origin"] == [100.0, 100.0]

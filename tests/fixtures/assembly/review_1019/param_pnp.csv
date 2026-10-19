@@ -1,0 +1,7 @@
+Designator,Comment,Layer,Footprint,Ref-X(mm),Ref-Y(mm),Rotation,LCSC Part,Assembly Rotation,Assembly Offset,Assembly Check
+U1,LM358,TopLayer,SOIC-8_3.9x4.9mm_P1.27mm,10,10,0,C5423,270,"0.000, 0.000",pads compatible; rotation verified
+U2,LM358,TopLayer,SOIC-8_3.9x4.9mm_P1.27mm,20,10,0,C5423,90°,,
+U3,LM358,TopLayer,SOIC-8_3.9x4.9mm_P1.27mm,30,10,0,C5423,+270,,
+U4,LM358,TopLayer,SOIC-8_3.9x4.9mm_P1.27mm,40,10,0,C5423,,,
+Q1,X,TopLayer,SOT-23-5,50,10,0,C82942,,,
+D1,LED,TopLayer,LED_0603_1608Metric,60,10,0,C2286,,,

@@ -1,0 +1,4 @@
+Designator,Comment,Layer,Footprint,Ref-X(mm),Ref-Y(mm),Rotation
+R1,10k,TopLayer,R_0603_1608Metric,10,10,0
+R2,10k,TopLayer,R_0603_1608Metric,20,10
+R3,10k,TopLayer,R_0603_1608Metric,30,10,

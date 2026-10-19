@@ -6,9 +6,10 @@
     ecadlib assembly profiles [NAME]                                            the profiles and where each rule comes from
 
 The profile comes from --profile, else [assembly] profile in ecadlib.toml (default jlcpcb); --strict (or [assembly]
-strict) holds risky pads and unknown rotations as well as incompatible pads. JLCPCB's own footprints come from EasyEDA
-behind [providers] unofficial: with it off (or --offline and nothing cached) rotations come from the family table, and
-parts it cannot settle are listed, never guessed. Exit status: 0 nothing held, 1 something held, 2 bad input."""
+strict) holds risky pads, unchecked pads and unknown rotations as well as incompatible pads. JLCPCB's own footprints
+come from EasyEDA behind [providers] unofficial: with it off (or --offline and nothing cached) rotations come from the
+family table, every part left unchecked is named on one line, and parts it cannot settle are listed, never guessed;
+held parts and unknown rotations are left out of the BOM and CPL. Exit status: 0 nothing held, 1 something held, 2 bad input."""
 import argparse, json, sys
 from pathlib import Path
 
@@ -40,7 +41,7 @@ def _setup(a, start):
 
 def _common(p, board=True):
     p.add_argument("--profile", help="assembly profile: jlcpcb, or a path to your own .json (default: [assembly] profile)")
-    p.add_argument("--strict", action="store_true", help="hold risky pads and unknown rotations too")
+    p.add_argument("--strict", action="store_true", help="hold risky pads, unchecked pads and unknown rotations too")
     p.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the input's folder)")
     p.add_argument("--offline", action="store_true", help="use the HTTP cache only")
     p.add_argument("--cache", default="out/http_cache")
@@ -66,6 +67,8 @@ def _load_board(a):
 
 def _print_listed(rep):
     for title, rows in IO.listed(rep):
+        if title.startswith("Pads not checked"):       # already said on one line under the summary
+            continue
         print(f"\n{title}:")
         for r in rows:
             print(f"  {r}")
@@ -75,6 +78,8 @@ def cmd_part(a):
     rules, prof, strict, fetch = _setup(a, Path(a.footprint).parent)
     ours = A.from_kicad_mod(Path(a.footprint).read_text(encoding="utf-8"), a.footprint)
     lcsc = (a.lcsc or "").upper()
+    if lcsc and not IO.part_number(lcsc, prof):
+        raise ValueError(f"--lcsc {a.lcsc}: not an LCSC part number (C and digits, e.g. C25804)")
     theirs, note = (None, "no LCSC number given (--lcsc)")
     if a.theirs:
         theirs, note = A.from_easyeda(a.theirs, a.theirs), ""
@@ -84,6 +89,8 @@ def cmd_part(a):
     res = A.assess(ours, theirs, prof, lcsc, strict=strict)
     if note:
         res["notes"].append(note)
+    if strict and lcsc and res["pads"] == "unchecked":
+        res["hold"].append(f"pads unchecked ([assembly] strict): {note}")
     params = A.parameters(res)
     if a.png:
         try:
@@ -120,10 +127,15 @@ def _board_run(a, write):
         print(json.dumps({**IO.report_json(rep, info), "files": [str(f) for f in files]}, indent=1, default=str))
     else:
         s = rep["summary"]
-        print(f"{Path(a.board).name}: {s['placed']} parts to place ({prof['profile']}), {s['skipped']} not placed; "
-              f"pads " + ", ".join(f"{v} {k}" for k, v in s["pads"].items() if v) + "; rotation " +
-              ", ".join(f"{v} {k}" for k, v in s["rotation"].items() if v))
+        if s["placed"]:
+            print(f"{Path(a.board).name}: {s['placed']} parts to place ({prof['profile']}), {s['skipped']} not placed; "
+                  f"pads " + ", ".join(f"{v} {k}" for k, v in s["pads"].items() if v) + "; rotation " +
+                  ", ".join(f"{v} {k}" for k, v in s["rotation"].items() if v))
+        else:
+            print(f"{Path(a.board).name}: no parts to place ({prof['profile']}), {s['skipped']} not placed")
         print(f"coordinates from the {info['origin_why']}")
+        for why, refs in IO.not_checked(rep):             # one line: every part whose pads went unchecked, and why
+            print(f"pads not checked against {prof['profile']}'s footprint ({why}): {', '.join(refs)}")
         _print_listed(rep)
         for f in files:
             print(f"wrote {f}")

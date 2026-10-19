@@ -1,0 +1,6 @@
+Altium Designer Pick and Place Locations
+Units used: mm
+
+"Designator","Comment","Layer","Footprint","Center-X(mm)","Center-Y(mm)","Ref-X(mm)","Ref-Y(mm)","Rotation","Description","LCSC Part"
+"D1","RED","TopLayer","LED_0603_A1","10.0000","10.0000","10.0000","10.0000","0","","C2286"
+"D2","GREEN","TopLayer","LED_0603_A1","20.0000","10.0000","20.0000","10.0000","90","","C72043"

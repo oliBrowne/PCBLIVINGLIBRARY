@@ -1,0 +1,6 @@
+Altium Designer Pick and Place Locations
+Units used: mm
+
+"Designator","Comment","Layer","Footprint","Center-X(mm)","Center-Y(mm)","Ref-X(mm)","Ref-Y(mm)","Rotation","Description","LCSC Part","Assembly Rotation","Assembly Check"
+"C1","100u","TopLayer","CP_EIA-3528-21_Kemet-B","10.0000","10.0000","10.0000","10.0000","0","","C7195","0","pads compatible; rotation verified"
+"C2","100u","TopLayer","CP_EIA-3528-21_Kemet-B","20.0000","10.0000","20.0000","10.0000","0","","C7195","",""

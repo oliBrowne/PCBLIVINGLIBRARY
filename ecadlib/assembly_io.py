@@ -4,10 +4,14 @@ CSV), settle each part's assembly rotation, and write the assembler's BOM and CP
 Each part's rotation comes from, in order (the first that knows wins; nothing is ever guessed silently):
   1. override    the profile's per-part override (cited)
   2. verified    the board's own pads registered on the assembler's footprint for the part's LCSC number
-                 (JLCPCB: the EasyEDA footprint, behind [providers] unofficial)
-  3. parameter   the part's Assembly Rotation / Assembly Offset parameters (written by the librarian's check)
+                 (JLCPCB: the EasyEDA footprint, behind [providers] unofficial); 'assumed' when a polarized part's
+                 cathode / + came from a polarity mark or ecadlib's pad-1 rule, not pin names (a review item)
+  3. parameter   the part's Assembly Rotation / Assembly Offset parameters (written by the librarian's check), when
+                 they were measured for this LCSC number (and footprint); the pads stay unchecked
   4. table       the profile's 0 deg pose for the package family, on the pads' canonical frame
-  5. unknown     the board angle goes out uncorrected and the part is listed in the report
+  5. unknown     the part is left out of the BOM and CPL and listed in the report
+Held parts (pads incompatible, conflicting LCSC fields, a designator used twice, an unreadable row, strict findings)
+are left out of the files too: nothing goes to the assembler on a guess.
 
 CPL point and angle (assembly.py, docs/assembly.md): Mid X / Mid Y are the board position of the assembler's footprint
 origin (our footprint origin + Assembly Offset, turned with the part), top-view coordinates in mm, +y up, from the
@@ -38,6 +42,7 @@ class Placement:
     skip: str = ""                    # why the part is not placed (excluded from position files, DNP, no pads)
     tht: bool = False
     point: str = "origin"             # what x / y are: the footprint origin, or Altium's Center-X/Y (no offset known)
+    problem: str = ""                 # what is wrong with the part's row in the file (held: never placed by a guess)
 
 
 def _natural(s):
@@ -54,12 +59,45 @@ def field_of(fields, names):
     return ""
 
 
+def lcsc_fields(fields, prof):
+    """[(field, value)]: every field of a part that names its LCSC (assembler) part number, in the order they are
+    trusted: the profile's part-number fields, then Supplier N = LCSC / JLCPCB with its Supplier Part Number N (as the
+    librarian reads them)."""
+    pn = prof.get("part_number") or {}
+    low = {str(k).strip().lower(): (str(k).strip(), str(v).strip()) for k, v in (fields or {}).items()}
+    out = []
+    for n in [pn.get("parameter", "LCSC Part")] + list(pn.get("fields", [])):
+        k, v = low.get(n.lower(), ("", ""))
+        if v and v != "~" and (k, v) not in out:
+            out.append((k, v))
+    for i in range(1, 10):
+        k, v = low.get(f"supplier part number {i}", ("", ""))
+        if low.get(f"supplier {i}", ("", ""))[1].upper() in ("LCSC", "JLCPCB", "JLC") and v and (k, v) not in out:
+            out.append((k, v))
+    return out
+
+
+def part_number(v, prof):
+    """v as an LCSC part number ('c25804 ' -> 'C25804'), '' when it is not one."""
+    v = str(v or "").upper().replace(" ", "")
+    return v if re.fullmatch((prof.get("part_number") or {}).get("pattern", r"C\d{1,9}"), v) else ""
+
+
 def lcsc_of(fields, prof):
     """The LCSC (assembler) part number from a part's fields, '' when none or not a part number."""
-    pn = prof.get("part_number") or {}
-    v = field_of(fields, [pn.get("parameter", "LCSC Part")] + list(pn.get("fields", [])))
-    v = v.upper().replace(" ", "")
-    return v if re.fullmatch(pn.get("pattern", r"C\d{1,9}"), v) else ""
+    return next((n for n in (part_number(v, prof) for _, v in lcsc_fields(fields, prof)) if n), "")
+
+
+def lcsc_problems(fields, prof):
+    """What is wrong with a part's LCSC fields: two fields naming different parts (the order would follow one of them
+    silently), a value that is no part number."""
+    got = [(k, v, part_number(v, prof)) for k, v in lcsc_fields(fields, prof)]
+    out = []
+    if len({n for _, _, n in got if n}) > 1:
+        out.append("conflicting LCSC numbers: " + ", ".join(f"{k} = {n}" for k, _, n in got if n)
+                   + ": keep one, or make them agree")
+    out += [f"{k} {v!r} is not an LCSC part number (C and digits)" for k, v, n in got if not n]
+    return out
 
 
 # ---------------------------------------------------------------- KiCad board
@@ -199,23 +237,30 @@ def read_altium_pnp(path):
         raise A.AssemblyError(f"{Path(path).name}: no Ref-X/Y or Center-X/Y columns")
     known = {i for i in (c_ref, c_cmt, c_lay, c_fp, c_rx, c_ry, c_cx, c_cy, c_rot) if i is not None}
     out = []
-    for r in rows[hi + 1:]:
-        if not r or not any(c.strip() for c in r) or len(r) <= max(known):
+    for n, r in enumerate(rows[hi + 1:], hi + 2):
+        if not r or not any(c.strip() for c in r):
             continue
-        ref = r[c_ref].strip()
+        cell = lambda i: r[i].strip() if i is not None and i < len(r) else ""
+        ref = cell(c_ref)
         if not ref:
             continue
+        problem = ""                                     # a row that cannot be read whole is held and listed, never dropped
+        if len(r) <= max(known):
+            problem = f"line {n} has {len(r)} cells, the header {len(header)}: the row is cut short"
+        elif not cell(c_rot):
+            problem = f"line {n}: the Rotation cell is empty"
         try:
-            x, y = _num_unit(r[cx_i], colunit(cx_i)), _num_unit(r[cy_i], colunit(cy_i))
-            ang = float(str(r[c_rot]).strip() or 0)
+            x, y = _num_unit(cell(cx_i), colunit(cx_i)), _num_unit(cell(cy_i), colunit(cy_i))
+            ang = float(cell(c_rot) or 0)
         except ValueError as e:
-            raise A.AssemblyError(f"{Path(path).name}: {ref}: {e}") from None
-        lay = r[c_lay].strip().lower() if c_lay is not None else "top"
+            if not problem:
+                raise A.AssemblyError(f"{Path(path).name}: {ref}: {e}") from None
+            x = y = ang = 0.0
+        lay = cell(c_lay).lower() if c_lay is not None else "top"
         side = LAYER_BOTTOM if lay.startswith("b") else LAYER_TOP
         fields = {header[i].strip(): r[i].strip() for i in range(len(header)) if i not in known and i < len(r)}
-        out.append(Placement(ref=ref, value=r[c_cmt].strip() if c_cmt is not None else "",
-                             footprint=r[c_fp].strip() if c_fp is not None else "", x=x, y=y, angle=ang % 360, side=side,
-                             tool="altium", fields=fields, point="origin" if use_ref else "center"))
+        out.append(Placement(ref=ref, value=cell(c_cmt), footprint=cell(c_fp), x=x, y=y, angle=ang % 360, side=side,
+                             tool="altium", fields=fields, point="origin" if use_ref else "center", problem=problem))
     out.sort(key=lambda p: _natural(p.ref))
     return out, {"file": str(path), "origin": (0.0, 0.0), "origin_why": "Altium file's own origin",
                  "format": "Altium pick-and-place CSV" + ("" if use_ref else " (Center-X/Y: no Ref-X/Y columns)")}
@@ -299,18 +344,46 @@ def cpl_row(pl, correction, off):
 
 
 # ---------------------------------------------------------------- the check
+ROTATION_VALUE = re.compile(r"\s*([+-]?\d+(?:[.,]\d+)?)\s*(?:°|º|deg|degrees?)?\s*", re.I)
+
+
 def _param_assessment(pl, prof, lcsc):
-    """An assessment from the part's own Assembly parameters (the librarian's check), or None."""
+    """(an assessment from the part's own Assembly parameters (the librarian's check), or None; why they were not
+    used). They are trusted only for the part they were measured on: the LCSC number in their evidence (else the part's
+    LCSC Part) must be the current one, and our footprint, when the evidence names it. A stored pad verdict is never
+    taken over: the pads stay unchecked."""
     rv = field_of(pl.fields, ["Assembly Rotation"])
-    if not re.fullmatch(r"-?\d+(\.\d+)?", rv or ""):
-        return None
+    if not rv:
+        return None, ""
+    m = ROTATION_VALUE.fullmatch(rv)
+    if not m:
+        return None, f"the part's Assembly Rotation {rv!r} is not a number of degrees: not used"
+    ev = field_of(pl.fields, ["Assembly Evidence"])
+    m_ev = re.search(r"\((C\d{1,9})\)", ev or "")
+    was = m_ev.group(1) if m_ev else A.lcsc_number(field_of(pl.fields, ["LCSC Part"]))
+    if not was:
+        return None, (f"the part's Assembly Rotation {rv} does not say which part it was measured for (no LCSC Part, no "
+                      "Assembly Evidence): not used (run the check again)")
+    if was != lcsc:
+        return None, (f"the part's Assembly Rotation {rv} was measured for {was}, the part now has "
+                      f"{lcsc or 'no LCSC number'}: not used (run the check again)")
+    on = re.search(r" on (\S+)", ev or "")
+    if on and pl.footprint and on.group(1).rstrip(";,") != pl.footprint:
+        return None, (f"the part's Assembly Rotation {rv} was measured on footprint {on.group(1).rstrip(';,')}, the board "
+                      f"has {pl.footprint}: not used (run the check again)")
+    v = float(m.group(1).replace(",", "."))
     chk = field_of(pl.fields, ["Assembly Check"])
-    m = re.search(r"pads (\w+)", chk or "")
-    return {"profile": prof["profile"], "lcsc": lcsc, "family": None, "polarized": False, "frame": {}, "pads": m.group(1) if m else "unchecked",
-            "rotation": "parameter", "turn": A._snap(-float(rv)), "offset": A.parse_offset(field_of(pl.fields, ["Assembly Offset"])),
+    return {"profile": prof["profile"], "lcsc": lcsc, "family": None, "polarized": False, "frame": {}, "pads": "unchecked",
+            "rotation": "parameter", "turn": A._snap(-v), "offset": A.parse_offset(field_of(pl.fields, ["Assembly Offset"])),
             "residual": None, "reasons": [], "review": [], "hold": [], "rows": [], "fit": None, "theirs": "",
-            "notes": [f"from the part's Assembly Rotation {rv}" + (f" ({chk})" if chk else "")
-                      + (f"; {field_of(pl.fields, ['Assembly Evidence'])}" if field_of(pl.fields, ['Assembly Evidence']) else "")]}
+            "notes": [f"from the part's Assembly Rotation {rv}" + (f" (its stored check '{chk}' is not taken over: the pads "
+                                                                    "were not checked in this run)" if chk else "")
+                      + (f"; {ev}" if ev else "")]}, ""
+
+
+def _not_found(note):
+    """True when the assembler's footprint was asked for and the LCSC number does not exist there (a typo?)."""
+    return bool(re.search(r"HTTP 404|no component", note or ""))
 
 
 def check_part(pl, prof, fetch=None, strict=False, library=None):
@@ -322,33 +395,57 @@ def check_part(pl, prof, fetch=None, strict=False, library=None):
     theirs, note = (None, "no LCSC number") if not lcsc else (fetch(lcsc) if fetch else (None, "not fetched"))
     if fp is not None:
         a = A.assess(fp, theirs, prof, lcsc, names, strict=strict, ours_rule=True)
+        if pl.tool == "altium" and a.get("polarity", {}).get("ours") in (A.HOW_RULE, A.HOW_MARK, "not known"):
+            a["notes"].append("an Altium pick-and-place file carries no pin names: the cathode / + of our footprint "
+                              "comes from its drawing or ecadlib's rule")
     else:
-        a = {"profile": prof["profile"], "lcsc": lcsc, "family": None, "polarized": None, "frame": {}, "pads": "unchecked",
-             "rotation": "unknown", "turn": None, "offset": (0.0, 0.0), "residual": None, "reasons": [], "review": [], "hold": [],
-             "rows": [], "fit": None, "theirs": theirs.package if theirs else "",
-             "notes": ["no pads to check: the file has positions only (give --footprints with the library's .kicad_mod files)"]}
+        fam = A.family_of(prof, names)
+        a = {"profile": prof["profile"], "lcsc": lcsc, "family": fam, "polarized": bool((prof["families"].get(fam or "") or {}).get("polarized")),
+             "frame": {}, "pads": "unchecked", "rotation": "unknown", "turn": None, "offset": (0.0, 0.0), "residual": None,
+             "reasons": [], "review": [], "hold": [], "rows": [], "fit": None, "theirs": theirs.package if theirs else "",
+             "notes": ["rotation unknown: no pads to check, the file has positions only (give --footprints with the "
+                       "library's .kicad_mod files)"]}
         ov = A.override_for(prof, lcsc, names)
         if ov is not None:
             a.update(rotation="override", turn=A._snap(-float(ov["rotation"])))
             if ov.get("offset"):
                 a["offset"] = (float(ov["offset"][0]), -float(ov["offset"][1]))
+    a["unchecked_why"] = ""
     if theirs is None and note:
         a["notes"].append(note)
-    pa = _param_assessment(pl, prof, lcsc)
+        if lcsc:
+            a["unchecked_why"] = re.sub(r"^EasyEDA C\d+: ", "", note)
+    if fp is None and lcsc and not a["unchecked_why"]:
+        a["unchecked_why"] = "no pads to check, the file has positions only: give --footprints"
+    a["not_found"] = bool(lcsc and theirs is None and _not_found(note))
+    pa, why = _param_assessment(pl, prof, lcsc)
+    if why:
+        a["review"].append(why)
     if pa is not None:
         if a["rotation"] in ("table", "unknown"):
             if a["rotation"] == "table" and a["turn"] is not None and A._snap(a["turn"]) != pa["turn"]:
                 a["review"].append(f"the part's Assembly Rotation ({A.correction(pa)}) and the {a['family']} family rule "
                                    f"({A.correction(a)}) disagree; the parameter was used")
-            keep = {k: a[k] for k in ("review", "family", "polarized", "frame", "hold")}
+            keep = {k: a[k] for k in ("review", "family", "polarized", "frame", "hold", "pads", "reasons", "rows",
+                                      "residual", "theirs", "unchecked_why", "not_found") if k in a}
             notes = a["notes"]
             a.update(pa)
             a.update(keep)
             a["notes"] = notes + pa["notes"]
-            a["review"] = [r for r in a["review"] if not r.startswith("polarized part with rotation from")]
+            a["notes"] = [n for n in a["notes"] if not n.startswith("rotation unknown")]
+            if a["polarized"]:                             # a stored turn is no proof of which end is the cathode / +
+                a["review"] = [r for r in a["review"] if not r.startswith("polarized part with rotation from")]
+                a["review"].append("polarized part with rotation from the part's Assembly Rotation parameter: confirm the "
+                                   "cathode / + orientation in the assembler's placement preview")
         elif A.correction(a) != A.correction(pa):
             a["review"].append(f"the part's Assembly Rotation ({A.correction(pa)}) disagrees with this check "
                                f"({A.correction(a)}, {a['rotation']}); the check was used: update the part")
+    for p in lcsc_problems(pl.fields, prof):
+        (a["hold"] if p.startswith("conflicting") else a["review"]).append(p)
+    if pl.problem:
+        a["hold"].append(pl.problem)
+    if strict and lcsc and a["pads"] == "unchecked":
+        a["hold"].append("pads unchecked ([assembly] strict): " + (a["unchecked_why"] or "no pads to check"))
     if a["rotation"] == "unknown" and strict and "rotation unknown ([assembly] strict)" not in a["hold"]:
         a["hold"].append("rotation unknown ([assembly] strict)")
     if pl.side == LAYER_BOTTOM:
@@ -388,7 +485,22 @@ def run_check(placements, prof, fetch=None, strict=False, library=None, overlays
         parts.append(a)
         if log:
             log(f"{pl.ref}: pads {a['pads']}, rotation {a['rotation']}")
+    count = {}
+    for a in parts:
+        count[a["ref"].upper()] = count.get(a["ref"].upper(), 0) + 1
+    for a in parts:                                         # the assembler places by designator: one each
+        if count[a["ref"].upper()] > 1:
+            a["hold"].append(f"designator {a['ref']} is on {count[a['ref'].upper()]} parts: the assembler places by "
+                             "designator, give each part its own")
+    for a in parts:
+        a["in_files"] = in_files(a)
     return {"profile": prof["profile"], "summary": summarize(parts, skipped), "parts": parts, "skipped": skipped}
+
+
+def in_files(p):
+    """True when a part goes into the assembler's BOM and CPL: not held, and its rotation known (a part with neither
+    would be placed by a guess, so it is left out and listed)."""
+    return not p.get("hold") and p.get("rotation") != "unknown"
 
 
 def summarize(parts, skipped):
@@ -397,33 +509,65 @@ def summarize(parts, skipped):
             "pads": {v: c("pads", v) for v in A.PAD_VERDICTS + ("unchecked",)},
             "rotation": {v: c("rotation", v) for v in A.ROT_EVIDENCE + ("parameter",)},
             "no_lcsc": sum(1 for p in parts if not p.get("lcsc")),
+            "not_fetched": sum(1 for p in parts if p.get("lcsc") and p.get("unchecked_why") and not p.get("not_found")),
+            "not_found": sum(1 for p in parts if p.get("not_found")),
+            "left_out": sum(1 for p in parts if not in_files(p)),
             "review": sum(1 for p in parts if p.get("review")), "hold": sum(1 for p in parts if p.get("hold"))}
 
 
+def needs_a_look(p):
+    """True when a person must look at a part before ordering (the menu's count, the report's lists)."""
+    return bool(p["hold"] or p["review"] or p["rotation"] in ("unknown", "assumed") or not p["lcsc"] or p["pads"] == "risky"
+                or (p["lcsc"] and p["pads"] == "unchecked") or p.get("not_found") or not in_files(p))
+
+
 # ---------------------------------------------------------------- the assembler's files
+BOM_LINE_MAX = 2048          # bytes per BOM line: JLCPCB rejects longer ones (kicad-jlcpcb-tools BOM_LINE_MAX_BYTES, #755)
+
+
+def _line_bytes(row):
+    buf = io.StringIO()
+    csv.writer(buf).writerow(row)
+    return len(buf.getvalue().rstrip("\r\n").encode("utf-8"))
+
+
 def bom_rows(report, prof):
-    """The assembler's BOM: one row per (Comment, Footprint, part number), designators joined."""
+    """The assembler's BOM: one row per (Comment, Footprint, part number), designators joined; a group whose line
+    would pass the profile's max_line_bytes (JLCPCB: 2048) is split over several rows. Parts left out of the files
+    (held, rotation unknown) are not in it."""
     ex = (prof.get("exports") or {}).get("bom") or {}
     cols = ex.get("columns", ["Comment", "Designator", "Footprint", "LCSC Part #"])
+    limit = int(ex.get("max_line_bytes") or BOM_LINE_MAX)
     groups = {}
     for p in report["parts"]:
+        if not p.get("in_files", True):
+            continue
         key = (p["value"], p["footprint"], p["lcsc"])
         groups.setdefault(key, []).append(p["ref"].upper() if ex.get("designator_case") == "upper" else p["ref"])
     rows = []
     for (val, fp, lc), refs in sorted(groups.items(), key=lambda kv: _natural(sorted(kv[1], key=_natural)[0])):
-        vals = {"Comment": val, "Designator": ",".join(sorted(refs, key=_natural)), "Footprint": fp, "LCSC Part #": lc,
-                "Quantity": str(len(refs))}
-        rows.append([vals.get(c, "") for c in cols])
+        row = lambda rs: [{"Comment": val, "Designator": ",".join(rs), "Footprint": fp, "LCSC Part #": lc,
+                           "Quantity": str(len(rs))}.get(c, "") for c in cols]
+        chunk = []
+        for r in sorted(refs, key=_natural):
+            if chunk and _line_bytes(row(chunk + [r])) > limit:
+                rows.append(row(chunk))
+                chunk = []
+            chunk.append(r)
+        rows.append(row(chunk))
     return cols, rows
 
 
 def cpl_rows(report, prof):
+    """The assembler's CPL: a row per part in the files (held parts and unknown rotations are left out and listed)."""
     ex = (prof.get("exports") or {}).get("cpl") or {}
     cols = ex.get("columns", ["Designator", "Mid X", "Mid Y", "Layer", "Rotation"])
     names = ex.get("layer_names", {"top": "Top", "bottom": "Bottom"})
     dec = int(ex.get("decimals", 4))
     rows = []
     for p in report["parts"]:
+        if not p.get("in_files", True):
+            continue
         vals = {"Designator": p["ref"], "Mid X": f"{p['mid_x']:.{dec}f}", "Mid Y": f"{p['mid_y']:.{dec}f}",
                 "Layer": names.get(p["side"], p["side"]), "Rotation": str(p["cpl_rotation"])}
         rows.append([vals.get(c, "") for c in cols])
@@ -437,14 +581,32 @@ def _write_csv(path, cols, rows):
         w.writerows(rows)
 
 
+def not_checked(report):
+    """[(why, [refs])]: the parts with an LCSC number whose pads were not checked against the assembler's footprint
+    (not fetched: [providers] unofficial = false, offline with nothing cached, the network down), one entry per reason."""
+    by = {}
+    for p in report["parts"]:
+        if p["lcsc"] and p.get("unchecked_why") and not p.get("not_found"):
+            why = re.sub(r"^EasyEDA C\d+: ", "", p["unchecked_why"])
+            by.setdefault(why, []).append(p["ref"])
+    return sorted(by.items())
+
+
 def listed(report):
     """The parts a person must look at before ordering, by reason: [(title, [lines])]."""
     P = report["parts"]
     out = []
     add = lambda title, rows: out.append((title, rows)) if rows else None
-    add("Held (fix before ordering)", [f"{p['ref']} {p['lcsc'] or ''}: " + "; ".join(p["hold"]) for p in P if p["hold"]])
-    add("Rotation unknown: the board angle went out uncorrected", [f"{p['ref']} ({p['footprint']}): " +
-        next((n for n in p["notes"] if n.startswith("rotation unknown")), "no rule for this package") for p in P if p["rotation"] == "unknown"])
+    add("Held (fix before ordering)", [f"{p['ref']}{' ' + p['lcsc'] if p['lcsc'] else ''}: " + "; ".join(p["hold"]) for p in P if p["hold"]])
+    add("Left out of the BOM and CPL (place them by hand, or fix them and export again)",
+        [f"{p['ref']} ({p['footprint']}): " + ("held" if p["hold"] else "rotation unknown") for p in P if not in_files(p)])
+    add("Rotation unknown: not in the CPL", [f"{p['ref']} ({p['footprint']}): " +
+        next((n[len("rotation unknown: "):] for n in p["notes"] if n.startswith("rotation unknown")),
+             "no rule for this package") for p in P if p["rotation"] == "unknown"])
+    add("LCSC number not found at the assembler (a typo, or a part withdrawn?)",
+        [f"{p['ref']} {p['lcsc']}: {p['unchecked_why']}" for p in P if p.get("not_found")])
+    add("Pads not checked against the assembler's footprint",
+        [f"{why}: {', '.join(refs)}" for why, refs in not_checked(report)])
     add("No LCSC part number: the assembler cannot place these until one is chosen",
         [f"{p['ref']} ({p['value']}, {p['footprint']})" for p in P if not p["lcsc"]])
     add("Pads risky", [f"{p['ref']} {p['lcsc']}: " + "; ".join(p["reasons"]) for p in P if p["pads"] == "risky"])
@@ -454,13 +616,19 @@ def listed(report):
     return out
 
 
+def summary_line(s):
+    """'15 parts placed, 1 skipped. Pads: ... Rotation: ...' (no empty lists for an empty board)."""
+    if not s["placed"]:
+        return f"no parts to place ({s['skipped']} skipped)."
+    return (f"{s['placed']} parts placed, {s['skipped']} skipped. Pads: " + ", ".join(f"{v} {k}" for k, v in s["pads"].items() if v)
+            + ". Rotation: " + ", ".join(f"{v} {k}" for k, v in s["rotation"].items() if v) + "."
+            + (f" {s['left_out']} left out of the BOM and CPL." if s.get("left_out") else ""))
+
+
 def report_md(report, info, files=()):
     s = report["summary"]
     L = [f"# Assembly check: {Path(info['file']).name} ({report['profile']})", "",
-         f"{info['format']}; coordinates from the {info['origin_why']}.", "",
-         f"{s['placed']} parts placed, {s['skipped']} skipped. Pads: " +
-         ", ".join(f"{v} {k}" for k, v in s["pads"].items() if v) + ". Rotation: " +
-         ", ".join(f"{v} {k}" for k, v in s["rotation"].items() if v) + ".", ""]
+         f"{info['format']}; coordinates from the {info['origin_why']}.", "", summary_line(s), ""]
     if files:
         L += ["Files: " + ", ".join(f"`{Path(f).name}`" for f in files), ""]
     for title, rows in listed(report):
@@ -470,8 +638,9 @@ def report_md(report, info, files=()):
     for p in report["parts"]:
         st = (p.get("meta") or {}).get("stock")
         corr = "" if p["correction"] is None else f" (+{p['correction']:g})"
+        cpl = p["cpl_rotation"] if p.get("in_files", True) else "left out"
         L.append(f"| {p['ref']} | {p['lcsc'] or '-'} | {p['footprint']} | {p['side']} | {p['pads']} | {p['rotation']}{corr} | "
-                 f"{p['board_angle']:g} | {p['cpl_rotation']} | {p['mid_x']:.4f} | {p['mid_y']:.4f} | {'' if st is None else st} |")
+                 f"{p['board_angle']:g} | {cpl} | {p['mid_x']:.4f} | {p['mid_y']:.4f} | {'' if st is None else st} |")
     if report["skipped"]:
         L += ["", "## Not placed", ""] + [f"- {k['ref'] or '(no reference)'} ({k['footprint']}): {k['why']}" for k in report["skipped"]]
     credits = sorted({p["meta"].get("credit") for p in report["parts"] if (p.get("meta") or {}).get("credit")})
@@ -582,16 +751,20 @@ def menu_check(board, out_dir, rules=None, http=None, extra=None, opener=False, 
     page.write_text(report_html(rep, info, files, base=out), encoding="utf-8")
     AM._open(page, opener)
     s = rep["summary"]
-    look = sum(1 for p in rep["parts"] if p["hold"] or p["review"] or p["rotation"] == "unknown" or not p["lcsc"] or p["pads"] == "risky")
+    look = sum(1 for p in rep["parts"] if needs_a_look(p))
     rows = [AM.row_text("pads match JLCPCB's" if prof["profile"] == "jlcpcb" else "pads match",
                         s["pads"]["identical"] + s["pads"]["compatible"], True),
             AM.row_text("rotation verified", s["rotation"]["verified"], True)]
     rows += [AM.row_text(label, n) for label, n in (
+        ("rotation measured, polarity assumed", s["rotation"]["assumed"]),
         ("rotation from a rule", s["rotation"]["table"] + s["rotation"]["parameter"] + s["rotation"]["override"]),
         ("rotation unknown", s["rotation"]["unknown"]), ("no LCSC number", s["no_lcsc"]),
-        ("pads risky", s["pads"]["risky"]), ("held: pads do not match", s["pads"]["incompatible"])) if n]
+        ("LCSC number not found", s["not_found"]), ("pads not checked: JLCPCB footprint not fetched", s["not_fetched"]),
+        ("pads risky", s["pads"]["risky"]), ("held", s["hold"]),
+        ("left out of the BOM and CPL", s["left_out"])) if n]
     msg = (f"{Path(board).name}: {s['placed']} parts to place ({prof.get('name') or prof['profile']}); "
            + (f"{look} need a look before you order (the report lists them)" if look else "nothing needs a look")
+           + (f"; {s['left_out']} left out of the CPL" if s["left_out"] else "")
            + f". BOM and CPL: {out}")
     res = {"status": "held" if s["hold"] else "ok", "message": msg, "report": str(page), "folder": str(out),
            "bom": str(files[0]), "cpl": str(files[1])}

@@ -21,7 +21,9 @@ seen from the top, KiCad's and the CPL's sense. rot(x, y, a) turns a point that 
    that fits better is a finding (numbering runs the other way), never a rotation. Result: the turn c that carries our
    pads onto theirs, their origin in our frame, the per-pad deltas and the fit residual.
 3. Verdict (assess()): pads identical / compatible / risky / incompatible (tolerances in the profile), rotation
-   verified (registration) / override (profile, cited) / table (the family's pose on the canonical frame) / unknown.
+   verified (registration; a polarized part's cathode / + from pin names on both footprints) / assumed (registration,
+   but the cathode / + from a polarity mark or ecadlib's pad-1 rule: reviewed) / override (profile, cited) / table (the
+   family's pose on the canonical frame) / unknown. Pad spacing off by a package size is incompatible (wrong-size lands).
    Placement on the board: CPL rotation = board angle - c; the CPL point = the board position of their origin.
    Parameters (parameters()): Assembly Profile, LCSC Part, Assembly Rotation (= -c, added to the board angle),
    Assembly Offset (their origin in our frame, mm, x right / y up), Assembly Check, Assembly Evidence.
@@ -35,7 +37,7 @@ from . import sexpr
 PROFILE_DIR = Path(__file__).with_name("assembly_profiles")
 PARAMS = ("Assembly Profile", "LCSC Part", "Assembly Rotation", "Assembly Offset", "Assembly Check", "Assembly Evidence")
 PAD_VERDICTS = ("identical", "compatible", "risky", "incompatible")
-ROT_EVIDENCE = ("verified", "override", "table", "unknown")
+ROT_EVIDENCE = ("verified", "assumed", "override", "table", "unknown")
 MOUNT = re.compile(r"^((MP|MH|SH|MTG|MOUNT|MECH|NPTH|S|H)\d*)?$", re.I)   # mounting / shield pads: not pins
 CATHODE = re.compile(r"^(K|KA|C|CATHODE|-|NEG|NEGATIVE|VSS)$", re.I)
 ANODE = re.compile(r"^(A|AN|ANODE|\+|POS|POSITIVE)$", re.I)
@@ -166,23 +168,55 @@ def _polarity(func, pin1="cathode"):
     return "P" if k else "N" if a else ""
 
 
-def roles(fp, pin1="cathode", default_pad1=False):
+HOW_NAMES, HOW_MARK, HOW_RULE = "pin names", "polarity mark", "ecadlib's rule (cathode / + on pad 1)"
+POLARITY_TOKEN = re.compile(r"-(R-)?[RF]D(?![A-Z0-9])", re.I)   # EasyEDA package names of polarized parts (...-RD, ...-FD)
+DIODE_NAME = re.compile(r"^(D|LED)[-_]|DIODE|^LED|^SOD|SOD-\d|^SM[ABCF][-_]|MELF|^DO-?2\d\d|^SMF|^PowerDI", re.I)
+CAP_NAME = re.compile(r"^C[P]?[-_]|^CAP|^TAJ|^CASE-[A-EV]|TANT|ELEC", re.I)
+
+
+def named_polarity(fp):
+    """True when both pins of a two-pin footprint carry names of opposite terminals (K / A, CATHODE / ANODE, + / -):
+    one pin named 'A' or 'C' and the other not is no evidence (CATHODE, VSS and a bare 'C' share letters)."""
+    pins = fp.pins
+    if len(pins) != 2 or len({_num(p.num) for p in pins}) != 2:
+        return False
+    return sorted(_polarity(p.func) for p in pins) == ["N", "P"]
+
+
+def pin1_kind(names=(), *fps):
+    """'cathode' / 'positive': what pad 1 of a two-pin polarized part is in ecadlib's rule, from the part's kind (K / A
+    pins, a diode / LED name: the cathode; a capacitor name: +), None when nothing tells. Never from the pin naming
+    style: JLCPCB names B5819W's pins '+' / '-' with '-' at the band, its cathode."""
+    for fp in fps:
+        if fp is not None and named_polarity(fp) and any(
+                re.fullmatch(r"K|KA|C|CATHODE|A|AN|ANODE", re.sub(r"[\s_()]", "", str(p.func or "")), re.I) for p in fp.pins):
+            return "cathode"
+    names = [str(n) for n in names if n]
+    if any(DIODE_NAME.search(n) for n in names):
+        return "cathode"
+    if any(CAP_NAME.search(n) for n in names):
+        return "positive"
+    return None
+
+
+def roles(fp, pin1="cathode", default_pad1=False, names=True):
     """({pad number: 'P' | 'N'}, how) for a two-pin polarized footprint: from the pin names on its pads, else from its
-    polarity mark (a cathode bar or '+' marks the 'P' end in KiCad and EasyEDA drawings alike), else, with default_pad1,
-    from ecadlib's rule (cathode / + on pad 1). ({}, '') when nothing tells."""
+    polarity mark (a cathode bar or '+', a diode arrow pointing at the cathode, mark the 'P' end in KiCad and EasyEDA
+    drawings alike), else, with default_pad1, from ecadlib's rule (cathode / + on pad 1). ({}, '') when nothing tells.
+    names=False: the drawing alone (the pin names are cross-checked against it)."""
     pins = fp.pins
     if len({_num(p.num) for p in pins}) != 2 or len(pins) != 2:
         return {}, ""
     by = {_num(p.num): _polarity(p.func, pin1) for p in pins}
-    if sorted(by.values()) == ["N", "P"]:
-        return by, "pin names"
+    if names and sorted(by.values()) == ["N", "P"]:
+        return by, HOW_NAMES
     fr = frame(fp)
     nums = sorted(by, key=lambda n: (n != "1", n))
     if fr.get("marked") and nums[0] == "1":
         p_end = nums[0] if fr["marked"] == "pin1" else nums[1]
-        return {n: ("P" if n == p_end else "N") for n in nums}, "polarity mark"
+        return {n: ("P" if n == p_end else "N") for n in nums}, HOW_MARK
     if default_pad1 and nums[0] == "1":
-        return {nums[0]: "P", nums[1]: "N"}, "ecadlib's rule (cathode / + on pad 1)"
+        return {nums[0]: "P", nums[1]: "N"}, HOW_RULE
     return {}, ""
 
 
@@ -435,10 +469,42 @@ def frame(fp, family=None):
     return out
 
 
+def _pointers(segs, mx, my, ux, uy):
+    """Which way the arrow heads in a drawing point along the pad axis: -1 (towards pad a), +1 (towards pad b), one
+    vote per head. A head is two slanted strokes whose near ends meet (a diode's triangle, EasyEDA's filled arrow),
+    their far ends either side of the axis and behind the tip, opening less than 110 deg. A diode's arrow points AT
+    the cathode; its base is ink on the anode end, which is why heads are read before ink."""
+    S = lambda p: (p[0] - mx) * ux + (p[1] - my) * uy          # along the axis (pad a -> pad b)
+    T = lambda p: -(p[0] - mx) * uy + (p[1] - my) * ux         # across it
+    obl = []
+    for p, q in segs:
+        ln = math.hypot(q[0] - p[0], q[1] - p[1])
+        if ln >= 0.1 and 0.25 < abs(S(q) - S(p)) / ln < 0.97:   # 15 .. 75 deg off the axis
+            obl.append((p, q, ln))
+    votes = []
+    for i in range(len(obl)):
+        for j in range(i + 1, len(obl)):
+            (p1, q1, l1), (p2, q2, l2) = obl[i], obl[j]
+            tip1, far1, tip2, far2 = min(((a, fa, b, fb) for a, fa in ((p1, q1), (q1, p1)) for b, fb in ((p2, q2), (q2, p2))),
+                                         key=lambda t: math.hypot(t[0][0] - t[2][0], t[0][1] - t[2][1]))
+            if math.hypot(tip1[0] - tip2[0], tip1[1] - tip2[1]) > 0.5 * min(l1, l2):
+                continue
+            ts, tt = (S(tip1) + S(tip2)) / 2, (T(tip1) + T(tip2)) / 2
+            d1, d2 = S(far1) - ts, S(far2) - ts
+            if (T(far1) - tt) * (T(far2) - tt) >= 0 or d1 * d2 <= 0 or min(abs(d1), abs(d2)) < 0.1:
+                continue
+            v1, v2 = (far1[0] - tip1[0], far1[1] - tip1[1]), (far2[0] - tip2[0], far2[1] - tip2[1])
+            cos = (v1[0] * v2[0] + v1[1] * v2[1]) / max(math.hypot(*v1) * math.hypot(*v2), 1e-12)
+            if cos > math.cos(math.radians(110)):
+                votes.append(-1 if d1 > 0 else 1)
+    return votes
+
+
 def _marked_end(fp, a, b):
-    """For a two-pin part: 'pin1' / 'pin2' when the filled silk marks (else the silk lines, else fab) mark one end
-    more than the other (a cathode bar, a '+', a dot), None when the drawing is symmetric. Ink is counted beyond the
-    body centre on each pad's side."""
+    """For a two-pin part: 'pin1' / 'pin2' when the filled silk marks (else the silk lines, else fab) mark one end:
+    an arrow head pointing at it (a diode's triangle, with or without its bar), else more ink on that end than the
+    other (a cathode bar, a '+', a dot); None when the drawing is symmetric or its heads disagree. Ink is counted
+    beyond the body centre on each pad's side."""
     ax, ay = b.x - a.x, b.y - a.y
     L = math.hypot(ax, ay)
     if L < 1e-9:
@@ -446,6 +512,11 @@ def _marked_end(fp, a, b):
     ux, uy = ax / L, ay / L
     mx, my = (a.x + b.x) / 2, (a.y + b.y) / 2
     for i_, segs in enumerate((fp.marks, fp.silk, fp.fab)):
+        heads = set(_pointers(segs, mx, my, ux, uy))
+        if len(heads) == 1:
+            return "pin1" if heads == {-1} else "pin2"
+        if heads:                                   # heads pointing both ways: the drawing does not say
+            return None
         ink = [0.0, 0.0]
         for p, q in segs:
             n = max(1, int(math.hypot(q[0] - p[0], q[1] - p[1]) / 0.05))
@@ -660,7 +731,8 @@ def compare(ours, theirs, fit, tol):
         rows.append({"ours": p.num, "theirs": b.num, "dpos": round(d, 4), "dx": round(b.x - x, 4), "dy": round(b.y - y, 4),
                      "across": round(across, 4), "dwidth": round((bh - h) if along_x else (bw - w), 4),
                      "dw": round(bw - w, 4), "dh": round(bh - h, 4), "w": round(w, 4), "h": round(h, 4),
-                     "tw": round(bw, 4), "th": round(bh, 4), "overlap": round(_overlap(x, y, w, h, b.x, b.y, bw, bh), 3)})
+                     "tw": round(bw, 4), "th": round(bh, 4), "overlap": round(_overlap(x, y, w, h, b.x, b.y, bw, bh), 3),
+                     "at": (round(x, 4), round(y, 4)), "their_at": (round(b.x, 4), round(b.y, 4))})
     lost_ours = [mov[i][0] for i in range(len(mov)) if i not in used]
     renum = [r for r in rows if _num(r["ours"]) != _num(r["theirs"]) and r["ours"] and r["theirs"]
              and not (MOUNT.match(r["ours"]) or MOUNT.match(r["theirs"]))]
@@ -714,6 +786,13 @@ def pad_verdict(ours, theirs, reg, tol):
         w = max(off, key=lambda r: r["across"])
         reasons.append(f"pads do not line up: {len(off)} pad(s) off their land sideways, worst pad {w['ours']} by "
                        f"{w['across']:.3f} mm (pitch or spacing differs)")
+    span = _span_change(rows)
+    if span:
+        share, what, cover = span
+        if abs(share) > tol["incompatible_span_share"] or (abs(share) > tol["two_pin_span_share"]
+                                                             and cover < tol["incompatible_span_cover"]):
+            reasons.append(f"wrong-size lands (another package size?): {what} ({100 * share:+.0f}%), "
+                           f"{100 * cover:.0f}% of the worst land covered")
     real_renum = [r for r in renum if not (_is_ep(_pad(ours, r["ours"]), ours) and _is_ep(_pad(theirs, r["theirs"]), theirs))
                   and not same(_num(r["ours"]), _num(r["theirs"]))]
     if real_renum and reg.get("by") == "number":
@@ -760,6 +839,28 @@ def pad_verdict(ours, theirs, reg, tol):
     return "compatible", note, rows
 
 
+def _span_change(rows):
+    """(share, what, cover) for the paired pins: how much our pad spacing differs from theirs (two pins: centre to
+    centre; more: the extent of the pin centres along each axis, row to row), the worst share, and the smallest share
+    of a land our pad covers; None with fewer than two pins paired."""
+    pins = [r for r in rows if r["ours"] and r["theirs"] and not MOUNT.match(r["ours"]) and not MOUNT.match(r["theirs"])]
+    if len(pins) < 2:
+        return None
+    cover = min(r["overlap"] for r in pins)
+    if len(pins) == 2:
+        p, q = pins
+        da = math.hypot(p["at"][0] - q["at"][0], p["at"][1] - q["at"][1])
+        db = math.hypot(p["their_at"][0] - q["their_at"][0], p["their_at"][1] - q["their_at"][1])
+        return ((da - db) / db, f"pad spacing {da:.2f} mm ours, {db:.2f} mm theirs", cover) if db > 1e-6 else None
+    worst = None
+    for i, axis in ((0, "x"), (1, "y")):
+        so = max(r["at"][i] for r in pins) - min(r["at"][i] for r in pins)
+        st = max(r["their_at"][i] for r in pins) - min(r["their_at"][i] for r in pins)
+        if st > 0.3 and (worst is None or abs(so - st) / st > abs(worst[0])):
+            worst = ((so - st) / st, f"row to row {so:.2f} mm ours, {st:.2f} mm theirs", cover)
+    return worst
+
+
 def _stacked(p, fp, rows, al):
     """Our pad p sits on another of our pads (KiCad's USB-C stacks A1 and B12) that paired with an assembler pad
     numbered for both pins ('A1B12'): one land, not a pad the assembler lacks."""
@@ -803,7 +904,8 @@ def _pitch(fp):
 
 # ---------------------------------------------------------------- assessment
 TOL_DEFAULT = {"identical_mm": 0.02, "position_mm": 0.05, "position_share": 0.15, "size_mm": 0.1, "size_share": 0.25,
-               "min_overlap": 0.7, "two_pin_span_share": 0.15, "incompatible_mm": 0.15, "incompatible_pitch_share": 0.25}
+               "min_overlap": 0.7, "two_pin_span_share": 0.15, "incompatible_mm": 0.15, "incompatible_pitch_share": 0.25,
+               "incompatible_span_share": 0.3, "incompatible_span_cover": 0.55}
 
 
 def override_for(prof, lcsc="", names=()):
@@ -820,43 +922,68 @@ def assess(ours, theirs=None, prof=None, lcsc="", names=(), strict=False, polari
     """The assembly verdict for one part. ours: our Footprint; theirs: the assembler's Footprint or None (not fetched,
     not found, [providers] unofficial = false). Returns a dict:
       pads        identical | compatible | risky | incompatible | unchecked
-      rotation    verified | override | table | unknown
+      rotation    verified | assumed | override | table | unknown (assumed: a polarized part's turn measured on the
+                  pads, but which pad is the cathode / + came from a polarity mark or ecadlib's pad-1 rule on one side,
+                  not from pin names on both: always a review item)
       turn        c, deg CCW carrying our pads onto theirs (None when unknown); correction = -c (Assembly Rotation)
       offset      their origin in our frame (x right, y down; mm)
-      family, polarized, frame, residual, reasons, review (things a person should look at), hold (strict findings),
-      rows (per-pad deltas), fit (the Fit) and notes.
+      family, polarized, polarity (where each side's cathode / + came from), frame, residual, reasons, review (things
+      a person should look at), hold (strict findings), rows (per-pad deltas), fit (the Fit) and notes.
+    polarized: None decides it: the family, else (two pins) opposite terminal names on either footprint (K / A, + / -)
+    or a polarity token in the assembler's package name (...-RD, ...-FD); a bidirectional package (...-BI) is not.
     ours_rule: our footprint follows ecadlib's rule (cathode / + on pad 1) when its pads name no pins (library parts);
-    False for a board footprint of unknown origin."""
+    False for a board footprint of unknown origin. Never used for a part found polarized by its names alone."""
     prof = prof or load_profile()
     tol = {**TOL_DEFAULT, **prof.get("tolerances", {})}
     names = [n for n in ([ours.name] + list(names) + ([theirs.package] if theirs else [])) if n]
     fam = family_of(prof, names, ours)
     famd = prof["families"].get(fam or "") or {}
-    pol = bool(famd.get("polarized")) if polarized is None else polarized
+    fam_pol = bool(famd.get("polarized"))
+    pol, by_names = fam_pol if polarized is None else polarized, False
+    if polarized is None and not fam_pol and len(ours.pins) == 2 and (
+            named_polarity(ours) or (theirs is not None and (named_polarity(theirs) or POLARITY_TOKEN.search(theirs.package or "")))):
+        pol = by_names = True                          # a diode / LED / capacitor no family names: its pins tell
     bidi = polarized is None and pol and theirs is not None and re.search(r"-BI(?![A-Z])", theirs.package or "")
     pol = False if bidi else pol
+    p1 = famd.get("pin1", "cathode") if fam_pol else pin1_kind(names, ours, theirs)
+    term = "+" if p1 == "positive" else "cathode"
     fr = frame(ours, fam)
     out = {"profile": prof["profile"], "lcsc": lcsc, "family": fam, "polarized": pol, "frame": fr, "pads": "unchecked",
            "rotation": "unknown", "turn": None, "offset": (0.0, 0.0), "residual": None, "reasons": [], "review": [],
-           "hold": [], "rows": [], "fit": None, "notes": [], "theirs": theirs.package if theirs else ""}
+           "hold": [], "rows": [], "fit": None, "notes": [], "theirs": theirs.package if theirs else "", "ours": ours.name,
+           "polarity": {}}
     if bidi:
         out["notes"].append(f"the assembler's package {theirs.package} is bidirectional (-BI): not polarized")
+    ra, how_a = {}, ""
+    if pol:
+        if by_names:
+            out["notes"].append("polarized: " + ("opposite terminal names on its pins" if named_polarity(ours) or (
+                theirs is not None and named_polarity(theirs)) else f"the assembler's package name {theirs.package}")
+                + " (no family of the profile names it)")
+            if p1 is None:
+                out["review"].append("polarized, but nothing says whether it is a diode / LED or a capacitor: check which "
+                                     "end is the cathode / + in the assembler's placement preview")
+        ra, how_a = roles(ours, p1 or "cathode", default_pad1=ours_rule and not by_names)
+        if how_a == HOW_NAMES:                          # our own pin names against our own drawing
+            mk = roles(ours, p1 or "cathode", names=False)[0]
+            if mk and mk != ra:
+                out["review"].append(f"our footprint's pin names and its polarity mark point at opposite ends; the pin "
+                                     f"names were used: check which end is the {term}")
+        out["polarity"]["ours"] = how_a or "not known"
     ov = override_for(prof, lcsc, names)
     if theirs is not None:
-        ra = rb = {}
+        rb = {}
         if pol:
-            p1 = famd.get("pin1", "cathode")
-            ra, how_a = roles(ours, p1, default_pad1=ours_rule)
-            rb, how_b = roles(theirs, p1)
+            rb, how_b = roles(theirs, p1 or "cathode")
+            out["polarity"]["theirs"] = how_b or "not known"
             if ra and rb:
                 out["notes"].append(f"terminals paired by polarity: ours from {how_a}, theirs from {how_b}")
-                if how_b == "pin names":
-                    mk = roles(Footprint(theirs.name, [Pad(q.num, q.x, q.y, q.w, q.h, q.rot, q.shape, q.kind) for q in theirs.pads],
-                                         theirs.silk, theirs.fab, marks=theirs.marks), p1)[0]
-                    if mk and mk != rb:
-                        out["review"].append("the assembler's pin names and its polarity mark point at opposite ends; "
-                                             "the pin names were used: check the overlay")
-        reg = register(ours, theirs, ra or None, rb or None)
+            if how_b == HOW_NAMES:
+                mk = roles(theirs, p1 or "cathode", names=False)[0]
+                if mk and mk != rb:
+                    out["review"].append("the assembler's pin names and its polarity mark point at opposite ends; "
+                                         "the pin names were used: check the overlay")
+        reg = register(ours, theirs, (ra or None) if pol else None, rb or None)
         verdict, reasons, rows = pad_verdict(ours, theirs, reg, tol)
         out.update(pads=verdict, reasons=reasons, rows=rows)
         fit = reg.get("fit")
@@ -871,9 +998,16 @@ def assess(ours, theirs=None, prof=None, lcsc="", names=(), strict=False, polari
             if pol and reg["by"] == "number":
                 out["rotation"] = "unknown"
                 out["turn"] = None
-                out["notes"].append("polarized part: nothing on the assembler's footprint tells which pad is the "
-                                    f"{'cathode' if famd.get('pin1', 'cathode') == 'cathode' else '+'} (no pin names, no "
+                side = "the assembler's footprint" if ra else "our footprint"
+                out["notes"].append(f"polarized part: nothing on {side} tells which pad is the {term} (no pin names, no "
                                     "polarity mark): the pads were checked by number, the turn is not taken from them")
+            elif pol and (how_a != HOW_NAMES or how_b != HOW_NAMES):
+                weak = [(f"the polarity mark on {w}" if h == HOW_MARK else f"{h} for {w}")
+                        for w, h in (("our footprint", how_a), ("the assembler's footprint", how_b)) if h != HOW_NAMES]
+                out["rotation"] = "assumed"
+                out["review"].append(f"polarized part: which pad is the {term} came from {' and '.join(weak)}, not from pin "
+                                     f"names on both footprints: the turn is measured, the polarity assumed; confirm the "
+                                     f"{term} orientation in the assembler's placement preview")
         elif fit is not None:
             out["fit"] = fit
             out["residual"] = round(fit.residual, 4)
@@ -883,17 +1017,17 @@ def assess(ours, theirs=None, prof=None, lcsc="", names=(), strict=False, polari
         if ov.get("offset"):
             out["offset"] = (float(ov["offset"][0]), -float(ov["offset"][1]))
         out["notes"].append(f"profile override for {ov.get('part') or ov.get('footprint')}: {ov.get('note', '')}".rstrip(": "))
+        out["review"] = [r for r in out["review"] if not r.startswith("polarized part: which pad")]
     if out["pads"] == "incompatible" and out["rotation"] == "unknown":
         out["notes"].append("rotation unknown: the pads do not match the assembler's footprint")
     elif out["rotation"] == "unknown" and out["turn"] is None:
         p_end = None
         if pol:
-            ra = roles(ours, famd.get("pin1", "cathode"), default_pad1=ours_rule)[0]
             pp = [q for q in ours.pins if ra.get(_num(q.num)) == "P"]
             nn = [q for q in ours.pins if ra.get(_num(q.num)) == "N"]
             if pp and nn:
                 p_end = _side(pp[0].x - nn[0].x, pp[0].y - nn[0].y)
-        c, why = table_turn(prof, fam, fr, p_end) if (p_end or not pol) else (None, "which pad is the cathode / + is not known")
+        c, why = table_turn(prof, fam, fr, p_end) if (p_end or not pol) else (None, f"which pad is the {term} is not known")
         if c is not None:
             out["turn"], out["rotation"] = c, "table"
             out["notes"].append(f"rotation from the {fam} 0 deg rule ({famd['zero']}) on the canonical frame")
@@ -928,9 +1062,13 @@ def evidence_text(a, date=""):
     """Where the verdict comes from, in one line (the Assembly Evidence parameter)."""
     bits = []
     if a.get("theirs"):
-        bits.append(f"{a['profile']} footprint {a['theirs']}" + (f" ({a['lcsc']})" if a.get("lcsc") else ""))
+        bits.append(f"{a['profile']} footprint {a['theirs']}" + (f" ({a['lcsc']})" if a.get("lcsc") else "")
+                    + (f" on {a['ours']}" if a.get("ours") else ""))
     if a.get("residual") is not None:
         bits.append(f"fit {a['residual']:.3f} mm RMS")
+    if a["rotation"] == "assumed":
+        bits.append("polarity assumed (" + ", ".join(f"{k} from {v}" for k, v in (a.get("polarity") or {}).items()
+                                                      if v != HOW_NAMES) + ")")
     if a["rotation"] == "table":
         bits.append(f"family {a['family']} 0 deg rule")
     if a["rotation"] == "override":
