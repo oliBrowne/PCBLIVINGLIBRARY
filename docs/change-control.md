@@ -7,8 +7,10 @@ identity waits for a person. The released part stays exactly as it was until som
 
 This covers every writer: librarian re-runs, `upstream check-kicad --update`, `upkeep --apply`, `ecadlib resolve` /
 review picks, `dedupe --merge`, datasheet passes, `style apply`, and the publishers (`kicad-export`,
-`altium-dblib-sync`, `altium365 push`). `tests/test_change_control.py` fails the build when a
-module that writes library files does not go through the gate.
+`kicad-dblib`, `export-parts`, exporter plugins, `kicad-pcm`, `altium-pkg`, `altium-dblib-sync`, `altium365 push`),
+from the command line, the web UI and MCP alike. `tests/test_change_control.py` fails the build when a module that
+writes library files does not go through the gate, and `tests/test_change_control_round4.py` when a publisher does
+not settle the library before it reads it.
 
 ## What counts as a change
 
@@ -16,15 +18,24 @@ Each part gets a fingerprint read from its files (`ecadlib part fingerprint FILE
 Altium files of the same part, so an export does not look like a change. A part's fingerprint covers its .SchLib, its
 .PcbLib and the .kicad_mod the KiCad publishers ship (`footprint.kicad_mod`, or `models/KiCad/<footprint>.kicad_mod`
 beside the .PcbLib). A change to the .kicad_mod is classified like a footprint change ("KiCad footprint (.kicad_mod):
-pad 1 moved 1 mm in x"), and so is a .kicad_mod whose pads no longer match the .PcbLib's.
+pad 1 moved 1 mm in x"), and so is a .kicad_mod whose pads no longer match the .PcbLib's. A .kicad_mod that cannot
+be read (cut short, garbled, not text, or not a footprint at all) is an electrical change, "KiCad footprint
+(.kicad_mod) file unreadable", and is held. Its pads are never taken from the .PcbLib instead, because KiCad would load
+the broken file, not the .PcbLib.
 
 | Class | What it means | Default |
 |---|---|---|
 | identity | MPN, manufacturer, or the value: its number, its unit, and a rating or tolerance written after it (100nF = 0.1uF = 100n, but 100nF is not 100nH, 3.3V is not 3.9V, 100nF 50V is not 100nF 6.3V; adding a tolerance, a voltage, power or current rating, a temperature coefficient, a dielectric (X7R, C0G) or a package size to `10k` says more and is cosmetic, dropping one is a change unless the MPN stays the same; any other text after the value (`10k DNF`, `10k NC`, `4.7k||1k`, `10k 0R`) is a change; `25 V` and `25V` are the same; a unit added to a value that had none must be the part's own (`100n` -> `100nF` on a capacitor), so `10` -> `10V` on a resistor, or on a part ecadlib cannot tell the kind of, is a change; an ohm sign (`10k` -> `10k Ohm` or `10kΩ`) is cosmetic unless the part is known to be something other than a resistor); a second MPN or manufacturer field that names another part than the first (a house `Part Number` field next to the MPN is the library's own number, so it is cosmetic); a numbered second source (`Manufacturer Part Number 2`, `Manufacturer 2`) added or changed | hold |
-| electrical | a pin's signal name or type, pins added / removed / renumbered / swapped, pin to pad map, hidden pins and their nets, units (split, merge, a pin moved to another unit), alternate pin functions; every copy of a pin number counts (stacked pins, power pins repeated in each unit) | hold |
+| electrical | a pin's signal name or type, the exact name of a hidden or power pin (it is the net the pin joins, so `VCC` -> `Vcc` or `~{CS}` -> `CS#` on a power pin is a change), pins added / removed / renumbered / swapped, pin to pad map, hidden pins and their nets, units (split, merge, a pin moved to another unit), alternate pin functions; every copy of a pin number counts (stacked pins, power pins repeated in each unit) | hold |
 | geometry-major | a pad moved, rotated, resized beyond tolerance, changed side, drill, copper offset, copper layers, paste/mask on/off (also an exposed pad whose paste windows were all removed), custom pad copper shape, zone connection; footprint origin; footprint copper and copper zones; board edge (Edge.Cuts) in the footprint; KiCad assembly flags (exclude from BOM or position files, DNP, board only); 3D origin or rotation | hold |
 | geometry-minor | pad size within tolerance, rect to rounded rect, mask/paste margins (also footprint-wide), courtyard, through-hole copper on the inner layers (`*.Cu` / `F&B.Cu`), keepout zones, footprint type (SMD / through hole), pad fabrication property, pad pin function, 3D model added / removed / height | warn |
-| cosmetic | silkscreen, fab drawing, texts, symbol graphics, pin length or position, a pin name written another way (RESET# = ~{RESET}), the value written another way, display modes, other fields | pass |
+| cosmetic | silkscreen, fab drawing, texts, symbol graphics, pin length or position, a visible signal pin's name written another way (RESET# = ~{RESET}), the value written another way (only spacing and case when it is not read as a number), display modes, other fields | pass |
+
+Some values ecadlib cannot read as a number, such as `47kR`, `1E4`, `1uFd`, `C 1uF` or a colour. When either side is
+one of these, the text is all there is to compare. Any other text is then an identity change, even when the MPN stays
+the same: `10k` -> `47kR` is held. Only spacing and case are ignored (`10 k` = `10K`). A comma before exactly three
+digits reads two ways: `100,000nF` is 100 nF with a decimal comma and 100 uF with a thousands separator. A change to
+or from such a value is an identity change when the two values differ under either reading.
 
 An NPTH hole has no copper, so its copper layers are not compared (`F&B.Cu` and `*.Cu` are the same hole). A pad pin
 function or type is compared only when both versions have one: a board fills them in from the schematic, a library
@@ -82,12 +93,21 @@ file are decided together, and one digest covers all of them.
 
 With `approvers = 2`, one person counts once however they write their name: `Ann Lee <ann@x.com>`, `Ann Lee`,
 `ann  lee` and `ann+2@x.com` are all Ann. Names are compared without case or extra spaces, and e-mails without a
-`+tag`. Two identities are the same person when their e-mails match or their names match. A revert is a release too.
+`+tag`. Look-alike letters from other scripts (a Cyrillic `А`, a Greek `ο`), zero-width and other invisible
+characters, accents (`Zoë` = `Zoe`), trailing punctuation (`Ann Lee.`, `ann@x.com.`) and a `mailto:` in front are
+folded too. Two identities are the same person when their e-mails match or their names match. The refusal names the
+approval already on record, so `"Аnn Lee" approved this change already` shows who it was. A revert is a release too.
 With `approvers = 2` it becomes a held change that carries the reverting person's approval, and a second person
 approves it with `part approve`. A revert to a revision that fails the release check today is refused.
 
 If an approval replaces files someone edited by hand after the change was held, the approval still applies the
 reviewed change. It also warns, keeps the edited bytes in the blob store and writes an `overwritten` ledger line.
+
+The release check never clears a change hold. A part waiting for `part approve` with no released revision to fall
+back on (a renamed part held against its MPN twin, adopted files waiting for approval) stays held through
+`release-check`, `release-check --allow`, review's "release anyway" and the web UI and MCP release check. Its hold
+reasons say "change control:" and name `ecadlib part show`. Removing the part's change block from plan.json by hand
+does not help either, because the held proposal in the library still decides. Only an approval releases it.
 
 An approved change goes through the release check before it is released. If it fails (for example silkscreen now too
 close to a moved pad), the released part stays, the approval is not counted, and `part status` shows "approval refused:
@@ -100,7 +120,14 @@ is put back, 3D models included. `resolve choose` then says the choice is held a
 does while the choice waits for a second person.
 
 A refused approval (no digest, a digest that is too short, or the digest of an older proposal) never prints the
-current digest. Run `ecadlib part show`, which prints it together with the diff.
+current digest. Run `ecadlib part show`, which prints it together with the diff. A digest that matches no held change
+of the part at all (a typo) says "no held change has that digest". An approval refused by the parity check (for
+example only the .kicad_mod was edited, so it no longer matches the .PcbLib) says what to do: make the same change to
+the other file and run the writer again, reject the change, or set `[release] parity = "warn"`.
+
+Messages show characters you cannot see: a zero-width space in a pin name prints as `<U+200B>`, and a name that starts
+or ends with a space is quoted. An approval that was killed while it put the files in place leaves a mix of released
+and approved files. The next approval does not report that as a newer hand edit and writes no `overwritten` line.
 
 ## The ledger
 
@@ -121,14 +148,19 @@ stops with a message.
 
 A broken ledger line stops every writer with the line number. Put the line back from git and run again.
 
-If the ledger was deleted, emptied or lost a part's lines, while `.ecadlib/blobs`, `library.usage.json` or other
-ledger lines show the part was released before, ecadlib does not take the files on disk as revision 1. Doing that
+If the ledger was deleted, emptied or lost a part's lines, while something else shows the part was released before,
+ecadlib does not take the files on disk as revision 1. These signs count: `.ecadlib/blobs`, `library.usage.json`, other
+ledger lines, `ecadlib_schema.json` saying the library keeps a ledger, files that differ from what `library.lock.json`
+records the librarian built, and a `kicad_export.json` (in the workspace's `kicad/<library>/`) written by an ecadlib
+that keeps a ledger and listing the part. Doing that
 would hide whatever changed since. The writer stops and changes nothing. Restore the ledger from git
 (`git checkout -- library.ledger.jsonl` in the library folder). If that is not possible, check the files by hand and
 record them yourself: `ecadlib part adopt ws/library --part P -m "what you checked"`, or `--all` for every such part.
 The new revision 1 is recorded with decision `adopted`, your name and your reason.
 Adopt prints the name it signs as (`--user`, else `$ECADLIB_USER`, else git config). It compares the files on disk
-with the part's last fingerprint still kept in `.ecadlib/blobs`. That is the one a surviving publish line names, else
+with the part's last fingerprint still kept in `.ecadlib/blobs`. When the blob store is gone too, files that are
+byte for byte what `library.lock.json` records are adopted directly ("compared with library.lock.json"). A library
+from before change control (no stamp, no ledger, files as built) is recorded as revision 1 as before. That is the one a surviving publish line names, else
 the newest one that is not a held change. Adopt lists every difference. A difference that is more than cosmetic (a pin
 swap, a moved pad) is refused. When nothing is left to compare with (`.ecadlib/blobs` is gone too), adopt says "not
 compared" and refuses as well; restore `.ecadlib/` from git if you can. `--accept-changes` never releases such files
@@ -160,6 +192,21 @@ the change is matched on what its stored fingerprint recorded.
   power_out) and alternate pin functions. The first KiCad export of a revision records them on its publish line. A
   later export of that revision whose source changed one of them also exports the released .SchLib, with a warning.
   The first export of a revision cannot check them, because the release does not record them.
+- **kicad-dblib, export-parts and exporter plugins**: they read plan.json, so they settle it first, as kicad-export
+  does. A hand edit of a released part's fields or files is held and the released version goes out. A plugin is
+  given the settled parts and never a part waiting for approval with no released revision. This holds for
+  `kicad-dblib` without `--export` and for the web UI and MCP `export_parts` and `plugin_export`.
+- **kicad-pcm from a folder**: the folder must be what `kicad-export` wrote. `kicad_export.json` lists every file it
+  wrote with its sha256, and a symbol library or footprint edited, added or removed since is refused with the file
+  names. A folder without `kicad_export.json` is refused too. Package the plan.json, or export again.
+- **altium-pkg from a folder**: when the folder belongs to an ecadlib library (a `plan.json` in it or up to two
+  folders above, or an earlier `altium_pkg.json` naming it), the library is settled first. Every .SchLib or .PcbLib
+  in the folder that is a copy of a released part's file must still be that part (the same bytes, or nothing more
+  than cosmetic changes); otherwise it is refused, naming the part and the change. An ecadlib DbLib folder whose
+  library is not known is refused.
+- **kicad-export exit code**: 1 while any change is held (the library on disk then differs from what was exported),
+  with `ecadlib part status` as the next step. With `--include-held`, a held part with no released revision says
+  "--include-held exported the held version anyway".
 - **Altium 365 push without a library ledger** (the web UI or MCP push for a BOM the librarian has not run on): it
   never changes the MPN, manufacturer or value of a component that is already in the workspace. That part is skipped
   with the reason; other parameters are still updated. Use another part name for a different part, or run the
@@ -181,7 +228,10 @@ ecadlib project check board.PrjPcb --workspace https://acme.365.altium.com --lib
   tables and any `--lib` folder. Board footprints are read back in their library frame first, so rotation and the
   bottom side do not count as changes. Each difference is classified the same way as a library update, with the
   references that use the part. Parts that differ only in texts or graphics are listed on one line. The exit code is
-  1 when a change is one the policy holds.
+  1 when a change is one the policy holds. The symbol's Footprint field is compared too: another footprint there is
+  what "Update symbols from library" would place, so it is a geometry-major change. A Footprint field naming a
+  footprint the library no longer has is held, and so is a board footprint that is gone from a library that is
+  still there.
 - **KiCad freeze.** `project freeze` copies the exact symbols and footprints the project uses into
   `<project>-frozen.kicad_sym` and `<project>-frozen.pretty`. It adds them to the project's library tables and
   points the schematic and board at them. The files it changes are backed up in `.ecadlib/freeze-<time>/` first, and
@@ -248,6 +298,10 @@ one footprint with a new zone connection (DFN-8-1EP 3x2 mm) were already held fo
 now warn, all real changes: 29 pad fabrication properties (heatsink to mechanical on 22 Micro-Fit mounting pads,
 mechanical added on 4 HDMI shield, 2 SMA and 1 SAS footprints) and one keepout redrawn (Hamamatsu C11204-1). The 89 NPTH
 holes whose layers changed from `F&B.Cu` to `*.Cu` are not changes.
+
+The run was repeated after hidden and power pin names became electrical (round 4). The numbers did not change:
+22,537 / 15,381 in both releases, 223 / 761 changed, 66 / 168 held, no per-part difference and no miss. KiCad 9.0.8
+to 10.0.0 renames no hidden or power pin, so the stricter rule adds no hold there.
 
 Two false holds the first run found were fixed in the reader: KiCad 9 writes an empty pin name, number or field as
 `~` and KiCad 10 writes `""`. Before the fix this showed 11,671 cosmetic pin-name lines and two false electrical holds
