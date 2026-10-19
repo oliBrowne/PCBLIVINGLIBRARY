@@ -303,10 +303,26 @@ class FakeNexar(_Server):
 
 
 # ---------------------------------------------------------------- the CLI as a user runs it
+_HOME = []
+
+
+def _empty_home():
+    """An empty ecadlib settings folder for this test process (ECADLIB_HOME), removed at exit."""
+    if not _HOME:
+        import atexit, shutil, tempfile
+        _HOME.append(tempfile.mkdtemp(prefix="ecadlib-e2e-home-"))
+        atexit.register(shutil.rmtree, _HOME[0], True)
+    return _HOME[0]
+
+
 def clean_env(**extra):
     """The environment of a user with no keys set: no API keys, no ECADLIB_* defaults; the package importable."""
     env = {k: v for k, v in os.environ.items()
-           if not (k.startswith("ECADLIB_") or k.endswith("_API_KEY") or k in ("NEXAR_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN"))}
+           if not (k.startswith("ECADLIB_") or k.endswith("_API_KEY") or k in ("NEXAR_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN")
+                   # the runner's terminal size: pytest-xdist sets COLUMNS=80 in its workers, which made the CLI's tables
+                   # wrap and the output checks depend on how the tests were run
+                   or k in ("COLUMNS", "LINES"))}
+    env["ECADLIB_HOME"] = _empty_home()       # not this machine's stored keys and settings (~/.config/ecadlib)
     env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     # no real network: every request that is not to the local fake servers fails at once at a dead proxy, so a run
     # can only use the recorded cache (as on a machine with the vendor hosts blocked)
