@@ -258,6 +258,10 @@ def approve(plan, parts, who=None, comment="", role=None):
     plan, items = _load(plan)
     folder = plan.parent
     lg = LG.Ledger(folder)
+    gone = sorted({x["part"] for p in parts for x in _group(lg, p)} - {i["name"] for i in items})
+    if gone:                                   # nothing to release them into: refuse before any file or approval moves
+        raise CG.ChangeError(f"{', '.join(gone)}: not in the plan any more; run the librarian with a BOM that uses "
+                             f"{'them' if len(gone) > 1 else 'it'}, or reject the change")
     pol = CG.policy(None, folder)
     who = who or AP.identity(None, cwd=folder)
     key = AP.user_key(who)
