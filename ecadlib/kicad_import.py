@@ -76,7 +76,7 @@ def package_default_height(names, kind=None):
 KTYPE = {"input": "input", "output": "output", "bidirectional": "io", "tri_state": "tristate", "passive": "passive",
          "free": "passive", "unspecified": "passive", "power_in": "power_in", "power_out": "power_out",
          "open_collector": "open_collector", "open_emitter": "open_emitter", "no_connect": "nc"}
-SIDE = {0: "right", 90: "top", 180: "left", 270: "bottom"}
+SIDE = {0:"right", 90: "top", 180: "left", 270: "bottom"}
 
 
 # ---------------------------------------------------------------- fetching
@@ -248,7 +248,7 @@ def convert_footprint(text, name=None, source="", notes=None, license_=""):
 
 def _convert_footprint(text, name=None, source="", notes=None, license_=""):
     notes = [] if notes is None else notes
-    t = sexpr.parse(text)
+    t = inherit_margins(sexpr.parse(text))
     descr = (sexpr.first(t, "descr") or ["", ""])[1]
     origin = f"from {source}" + (f" ({license_})" if license_ else "") if source else ""
     fp = {"name": name or t[1], "description": AL.clean("; ".join(x for x in (descr, origin) if x)),
@@ -326,6 +326,19 @@ def _custom_shapes(p, x, y, rot, edges=True):
         if w and edges:                       # stroke around the outline: exact edges, mitred corners
             tracks += [(*a, *b, w) for a, b in zip(pts, pts[1:] + pts[:1])]
     return polys, tracks
+
+
+def inherit_margins(t):
+    """KiCad's footprint-level (solder_mask_margin X) / (solder_paste_margin X) apply to every pad that has none of
+    its own: copied onto those pads (in place), so the pad conversions (and parity) see them."""
+    for key in ("solder_mask_margin", "solder_paste_margin"):
+        fpv = next((c for c in t[2:] if isinstance(c, list) and c and c[0] == key), None) if isinstance(t, list) else None
+        if fpv is None or len(fpv) < 2:
+            continue
+        for p in sexpr.find(t, "pad"):
+            if sexpr.first(p, key) is None:
+                p.append([key, fpv[1]])
+    return t
 
 
 def _mask_margin(p):

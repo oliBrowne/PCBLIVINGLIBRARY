@@ -12,6 +12,6 @@ written:
   kx/mylib.pretty/                footprints
   kx/sym-lib-table, fp-lib-table  library tables (paths use ${KIPRJMOD})
 next:
-  cp -r kx/* <your KiCad project folder>/                         # then reopen the project; or add the library in Preferences > Manage Symbol / Footprint Libraries
-  ecadlib parity ws/librarian/demo_bom_demo/plan.json --kicad kx  # check KiCad and Altium agree, part by part
-  ecadlib review ws/librarian/demo_bom_demo/plan.json             # the held parts
+  ecadlib kicad-export ws/librarian/demo_bom_demo/plan.json -o <your KiCad project folder> --name mylib  # into the project: its own lib-table rows are kept (copying these tables over would drop them); or Preferences > Manage Symbol / Footprint Libraries
+  ecadlib parity ws/librarian/demo_bom_demo/plan.json --kicad kx                                         # check KiCad and Altium agree, part by part
+  ecadlib review ws/librarian/demo_bom_demo/plan.json                                                    # the held parts

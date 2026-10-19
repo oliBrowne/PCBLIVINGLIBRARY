@@ -1376,6 +1376,8 @@ def compare(folder):
     folder = Path(folder)
     rep = {"checked": 0, "problems": [], "unreadable": [], "known": []}
     for rel, rp in recipes(folder):
+        if lib_state(folder / rel, rp, save=False) == "new":   # still ecadlib's own bytes: Altium has not built it, so
+            rep.setdefault("not_built", []).append(str(rel))   # matching its recipe proves nothing
         try:
             rep["problems"] += compare_one(folder / rel, rp, known=rep["known"])
             rep["checked"] += 1
@@ -1409,13 +1411,18 @@ def main(argv=None):
         print(json.dumps(rep, indent=2))
     else:
         print(f"{rep['checked']} libraries checked, {len(rep['problems'])} differences, {len(rep['unreadable'])} unreadable")
+        if rep.get("not_built"):
+            print(f"{len(rep['not_built'])} of them not built by Altium yet (still ecadlib's own files, which match "
+                  "their recipes by construction): open the script project in Altium and run BuildLibrariesInAltium first")
         for p in rep["problems"] + rep["unreadable"]:
             print("  " + p)
         if rep["known"]:
             print(f"{len(rep['known'])} known differences (not errors):")
             for p in rep["known"]:
                 print("  " + p)
-    return 1 if rep["problems"] or rep["unreadable"] else 0
+    if rep["problems"] or rep["unreadable"]:
+        return 1
+    return 2 if rep.get("not_built") and len(rep["not_built"]) >= rep["checked"] else 0
 
 
 if __name__ == "__main__":

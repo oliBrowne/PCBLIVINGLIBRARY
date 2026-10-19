@@ -164,21 +164,24 @@ def failure_type(row, mine, spec):
 
 
 def apply_errata(sc, mine_pins, errata, ref_pins=None, tol=None):
-    """A failing field that a checked erratum covers, with ours what the datasheet says, is scored right."""
+    """A failing field that a checked erratum covers, with ours what the datasheet says, is scored right. Only an
+    erratum that says what the datasheet has ("ours": [[num, name], ...], symbol fields) can be checked against our
+    part; one without it would pass whatever we generated, so it is not applied."""
     fixed = []
     for field, e in (errata or {}).items():
         f = sc["fields"].get(field)
         if not f or f["ok"]:
             continue
-        if field.startswith("symbol_") and e.get("ours"):
-            have = {str(n): S.norm_name(v) for n, v in mine_pins or []}
-            if any(have.get(str(n)) != S.norm_name(v) for n, v in e["ours"]):
-                continue                              # ours is not what the datasheet says either: a real miss
-            if ref_pins:                              # the pins the erratum does not cover must still agree with KiCad
-                fixed_ref = dict((str(n), v) for n, v in ref_pins)
-                fixed_ref.update((str(n), v) for n, v in e["ours"])
-                if not S.score_symbol(mine_pins, list(fixed_ref.items()), tol).get(field, {"ok": True})["ok"]:
-                    continue
+        if not (field.startswith("symbol_") and isinstance(e, dict) and e.get("ours")):
+            continue                                  # nothing to compare ours with: the field keeps its verdict
+        have = {str(n): S.norm_name(v) for n, v in mine_pins or []}
+        if any(have.get(str(n)) != S.norm_name(v) for n, v in e["ours"]):
+            continue                                  # ours is not what the datasheet says either: a real miss
+        if ref_pins:                                  # the pins the erratum does not cover must still agree with KiCad
+            fixed_ref = dict((str(n), v) for n, v in ref_pins)
+            fixed_ref.update((str(n), v) for n, v in e["ours"])
+            if not S.score_symbol(mine_pins, list(fixed_ref.items()), tol).get(field, {"ok": True})["ok"]:
+                continue
         sc["fields"][field] = dict(f, ok=True, error="", erratum=e["why"])
         fixed.append(field)
     if fixed:
@@ -408,12 +411,14 @@ def _symbol_pins(path):
         _, syms = AL.read_schlib(path)
     except (OSError, ValueError):
         return None
-    pins = {}
-    for s in syms:
+    pins = {}                                         # num -> names: one pin repeated in each part of a multi-part
+    for s in syms:                                    # symbol is one pin; one number with two names is scored as such
         for r in s["records"]:
             if r.get("RECORD") == "2" and "num" in r:
-                pins.setdefault(r["num"], r["name"])
-    return list(pins.items())
+                got = pins.setdefault(r["num"], [])
+                if r["name"] not in got:
+                    got.append(r["name"])
+    return [(n, nm) for n, names in pins.items() for nm in names]
 
 
 def _cost(case_used, model):

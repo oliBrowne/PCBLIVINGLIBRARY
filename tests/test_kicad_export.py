@@ -219,8 +219,7 @@ def test_kicad_cli_loads_outputs():
     from tests import test_kicad_real as KR
     exe = shutil.which("kicad-cli")
     if not exe:
-        print("      (kicad-cli not installed: skipped)")
-        return
+        return KR._skip("kicad-cli")
     with tempfile.TemporaryDirectory() as d:
         plan, _, http = _plan(d)
         out = Path(d) / "k"

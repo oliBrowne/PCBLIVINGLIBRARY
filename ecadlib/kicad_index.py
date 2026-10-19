@@ -1,5 +1,5 @@
 """Index a local KiCad library directory (*.kicad_sym, *.pretty/*.kicad_mod) for BOM matching."""
-import re
+import re, unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,7 +15,15 @@ BODY_RE = re.compile(r"(?<![0-9.])(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:x\d+(?:\.\d+
 
 
 def norm_mpn(s):
-    return re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
+    """An MPN without case and punctuation, for comparing: 'LM358-DR' == 'lm358dr'. The micro sign is U (µA741CN ==
+    UA741CN), fullwidth / accented letters fold to ASCII; a letter that has no ASCII form is kept, never dropped
+    (µA741CN must not become A741CN, another part)."""
+    s = unicodedata.normalize("NFKD", str(s or "")).replace("µ", "U").replace("μ", "U")\
+        .replace("Μ", "U")                                      # micro sign / mu ('µ'.upper() is a capital mu)
+    s = "".join(c for c in s if not unicodedata.combining(c)).upper()
+    if not s.isascii():
+        return re.sub(r"[\W_]", "", s)
+    return re.sub(r"[^A-Z0-9]", "", s)
 
 
 _UNIT = r"((?i:ohms?|[fhω]))?(?![A-Za-z0-9])"   # optional unit, then the number must end (74HC595 is not 74)

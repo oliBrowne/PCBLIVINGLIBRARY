@@ -245,16 +245,17 @@ def find_model(models, kind, ref):
     return next((str(f) for f in (Path(m) / kind / f"{file_stem(ref)}.{kind}" for m in models) if f.exists()), None)
 
 
-def plan(lines, triage=None, models=None, root=None, rules=None):
+def plan(lines, triage=None, models=None, root=None, rules=None, prior=None):
     """One release item per unique Part Number, reusing the DbLib row builder for parameters.
     models: a folder or a list of folders, each with SchLib/<Library Ref>.SchLib and PcbLib/<Footprint Ref>.PcbLib;
     symbol and footprint are looked up independently, first folder wins. rules (ecadlib.rules, loaded): part and
-    footprint names, folders and default parameters; None keeps ecadlib's own. root overrides the rules' folder root."""
+    footprint names, folders and default parameters; None keeps ecadlib's own. root overrides the rules' folder root.
+    prior: {name: MPN} of the plan so far (altium_export.prior_names): a released name stays with its part."""
     from . import rules as RU
     models = [models] if isinstance(models, (str, Path)) else list(models or [])
     items, names = [], set()
     defaults = RU.default_params(rules)
-    for cat, df in to_rows(lines, triage, rules).items():
+    for cat, df in to_rows(lines, triage, rules, prior=prior).items():
         for row in df.to_dict("records"):
             if row["Part Number"] in names:    # same MPN under two designator classes: one workspace item
                 continue
@@ -275,6 +276,8 @@ def plan(lines, triage=None, models=None, root=None, rules=None):
                 "footprint": {"ref": row["Footprint Ref"], "file": fp},
                 "status": "ready" if sym and fp else "needs_altium_models",
             })
+            if df.attrs.get("notes", {}).get(row["Part Number"]):    # BOM lines that disagree, renamed characters
+                items[-1]["bom_notes"] = list(df.attrs["notes"][row["Part Number"]])
             why = df.attrs.get("unstorable", {}).get(row["Part Number"])
             if why:                            # a name Altium can't store: this part is held, the others go on
                 items[-1]["name_problems"] = [why]
@@ -581,7 +584,7 @@ def main(argv=None):
     sub.add_parser("workspaces", help="list workspaces visible to NEXAR_TOKEN")
     u = sub.add_parser("push", help="release / update parts from a plan")
     u.add_argument("plan")
-    u.add_argument("--workspace", required=True, help="workspace URL from `workspaces`")
+    u.add_argument("--workspace", help="workspace URL from `workspaces` (default: [altium365] workspace in ecadlib.toml)")
     u.add_argument("--dry-run", action="store_true", help="no network; write the requests that would be sent")
     u.add_argument("-o", "--out", default="out/altium365/push_report.json")
     u.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan's folder or here)")
@@ -612,6 +615,11 @@ def main(argv=None):
 
     if a.cmd == "push" and not Path(a.plan).is_file():
         sys.exit(f"{a.plan}: no such plan file (write one with `ecadlib altium365 plan BOM -o {a.plan}`)")
+    if a.cmd == "push" and not a.workspace:
+        a.workspace = str((RU.load(a.rules, start=Path(a.plan).parent).get("altium365") or {}).get("workspace") or "").strip()
+        if not a.workspace:
+            sys.exit("ecadlib altium365 push: no workspace: pass --workspace URL or set [altium365] workspace in ecadlib.toml "
+                     "(`ecadlib altium365 workspaces` lists them)")
     token = UC.secret("NEXAR_TOKEN")
     if not token and not (a.cmd == "push" and a.dry_run):
         sys.exit("set NEXAR_TOKEN (Nexar portal token with design.domain, user.access, openid scopes)")

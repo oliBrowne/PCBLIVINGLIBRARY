@@ -26,6 +26,7 @@ EXAMPLES = {
     "footprint.overlap": "footprint: copper: pads 1 and 2 overlap by 0.050 mm",
     "footprint.pad_gap": "footprint: copper: pad pairs 1-2, 3-4 are 0.090 mm apart (< 0.1 mm)",
     "footprint.hole_clearance": "footprint: copper: pad 3 is 0.000 mm from the hole at (1.000, 2.000) (< 0.1 mm)",
+    "footprint.zero_pad": "footprint: copper: pad 1 has no copper: size 1.95 x 0 mm",
     "footprint.no_pin1": "footprint: pin1: no pad numbered 1",
     "footprint.clockwise": "footprint: pin1: pads are numbered clockwise; KiCad and IPC number counter-clockwise from pin 1 (seen from the top)",
     "footprint.ball_rows": "footprint: bga: row letters and rows disagree at balls A1, B2",

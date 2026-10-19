@@ -105,6 +105,8 @@ def _names(s):
         if norm_pin_name(part):
             out.add(norm_pin_name(part))
     out |= {LETTER[n] for n in out if n in LETTER}
+    from .eval.score import WORDS                     # a pin spelled out ("ENABLE") is "EN", as the eval scorer counts it
+    out |= {WORDS[n] for n in out if n in WORDS}
     return out - {""}
 
 
@@ -136,7 +138,10 @@ def _close(k, a, b, table):
     tol = max(ab, rel * max(abs(a[0]), abs(b[0])))
     if abs(a[0] - b[0]) <= tol + 1e-9:
         return True
-    return table and a[1] < a[2] and a[1] - 1e-9 <= b[0] <= a[2] + 1e-9     # the table nominal inside the printed range
+    # the table nominal inside the printed range, when that range is a tolerance band (not 3.0..6.2 mm around a
+    # 4.9 mm body) and the read's own nominal is near the table's
+    return table and a[1] < a[2] and a[1] - 1e-9 <= b[0] <= a[2] + 1e-9 and a[2] - a[1] <= 6 * tol + 1e-9 \
+        and abs(a[0] - b[0]) <= 3 * tol + 1e-9
 
 
 def compare(first, second, kind="read"):
@@ -287,7 +292,7 @@ def parse(msg):
         raise Unavailable(f"the second read stopped ({msg['stop_reason']})")
     if (msg.get("ecadlib") or {}).get("error"):
         raise Unavailable(msg["ecadlib"]["error"])
-    text = "".join(b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text")
+    text = D.message_text(msg)                        # "" for content null / a string / text null
     try:
         ext = json.loads(text)
     except ValueError:

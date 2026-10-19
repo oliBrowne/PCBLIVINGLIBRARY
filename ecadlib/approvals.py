@@ -108,17 +108,39 @@ def policy_source(base, policy):
     return "none (approvals are recorded, not enforced)"
 
 
+def _names(v, where, key):
+    """A list of names; one name on its own is a one-item list (never split into its letters)."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v]
+    if not isinstance(v, (list, tuple)) or not all(isinstance(x, (str, int, float)) and not isinstance(x, bool) for x in v):
+        raise ValueError(f"{where}: {key} must be a list of names, e.g. [\"librarian\"] (got {v!r})")
+    return [str(x) for x in v]
+
+
 def normalize_policy(raw, where="policy"):
+    if not isinstance(raw, dict):
+        raise ValueError(f"{where}: the approval policy must be an object / table of keys "
+                         f"({', '.join(sorted(DEFAULTS))}), not {type(raw).__name__}")
     bad = set(raw) - set(DEFAULTS)
     if bad:
         raise ValueError(f"{where}: unknown keys {sorted(bad)}; known: {sorted(DEFAULTS)}")
     p = {**DEFAULTS, **raw}
-    p["required"] = int(p["required"])
+    req = p["required"]
+    whole = not isinstance(req, bool) and (isinstance(req, int) or (isinstance(req, float) and req.is_integer())
+                                           or (isinstance(req, str) and req.strip().isdigit()))
+    if not whole:
+        raise ValueError(f"{where}: required must be a whole number of approvals, e.g. 1 (got {req!r})")
+    p["required"] = int(req)
     if p["required"] < 0 or p["applies_to"] not in ("all", "allowed"):
         raise ValueError(f"{where}: required must be >= 0 and applies_to 'all' or 'allowed'")
-    p["roles"] = [str(r) for r in p["roles"]]
-    p["users"] = {user_key(k): [str(r) for r in (v if isinstance(v, list) else [v])] for k, v in (p["users"] or {}).items()}
-    p["parts"] = [str(x) for x in p["parts"]]
+    p["roles"] = _names(p["roles"], where, "roles")
+    if not isinstance(p["users"] or {}, dict):
+        raise ValueError(f"{where}: users must be a table / object {{email: [roles]}}, e.g. "
+                         f"{{\"ann@example.com\": [\"librarian\"]}} (got a {type(p['users']).__name__})")
+    p["users"] = {user_key(k): _names(v, where, f"users.{k}") for k, v in (p["users"] or {}).items()}
+    p["parts"] = _names(p["parts"], where, "parts")
     return p
 
 
@@ -379,7 +401,9 @@ def _run(a):
         try:
             rec = decide(it, a.action, who, a.role, a.comment, base, policy)
             entry.update(role=rec["role"], hash=rec["hash"], result="recorded", status=refresh_status(it, policy, base))
-            note = "" if it.get("status") != "held" else " (still held by the release check)"
+            note = (" (still held by the release check)" if it.get("status") == "held" else
+                    " (not enforced: no approval policy, so it is still pushed)" if a.action == "reject" and not policy
+                    else "")
             print(f"  {a.action.rstrip('e')}ed  {it['name']:<28} -> {it.get('status')}{note}")
         except Refused as e:
             refused += 1
@@ -387,11 +411,14 @@ def _run(a):
             print(f"  refused  {it['name']:<28} {e}")
         audit(base, entry)
     write_text_atomic(plan, json.dumps(items, indent=2))
+    from .librarian import refresh_review
+    refresh_review(plan, items)
     from . import timing                       # review time: from the release check to this decision
     timing.mark_review(plan.parent, a.action)
     if not policy:
         print("no approval policy (approvals.json/.toml next to the plan, or [release.approvals] in ecadlib.toml): "
-              "recorded, but push does not require them")
+              "recorded, but push does not require them" + ("; a rejected part stays ready and is pushed (with a "
+                                                             "policy, a rejection holds it)" if a.action == "reject" else ""))
     print(f"{len(sel) - refused} recorded as {who}, {refused} refused -> {plan}; log {base / AUDIT}")
     return 2 if refused else 0
 

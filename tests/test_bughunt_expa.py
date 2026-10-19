@@ -442,11 +442,12 @@ def test_exp71_bom10_lookalikes_are_stored_and_one_bad_name_is_held():
              {"designator": "U2", "value": "LM358", "footprint": "SOIC-8", "mpn": "LM358DR"}]
     tables = X.to_rows(lines)
     bad = next(iter(tables.values())).attrs["unstorable"]
-    assert list(bad) == ["芯片123"] and "can't store" in bad["芯片123"], bad
+    assert list(bad) == ["__123"] and "can't store" in bad["__123"], bad      # the Part Number is made storable too
     items = {i["name"]: i for i in A3.plan(lines)}
-    assert items["芯片123"]["symbol"]["ref"] == "__123" and items["芯片123"]["name_problems"]
+    assert items["__123"]["symbol"]["ref"] == "__123" and items["__123"]["name_problems"]
+    assert any("can't store" in n for n in items["__123"]["bom_notes"])            # and the review note (boma)
     assert "name_problems" not in items["LM358DR"]
-    fails, _, _ = RC.check_item(items["芯片123"], ".")
+    fails, _, _ = RC.check_item(items["__123"], ".")
     assert any(r == "fields" and "can't store" in m for r, m in fails), fails
 
 

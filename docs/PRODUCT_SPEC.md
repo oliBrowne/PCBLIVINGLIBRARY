@@ -42,7 +42,7 @@ own library, and nobody keeps them current once they are in.
 
 ## Requirements
 
-Status: **shipped** is in v0.3.0; **planned** names the roadmap item in [ROADMAP.md](../ROADMAP.md).
+Status: **shipped** is on `main` (released in 0.3.1 unless the CHANGELOG lists it under Unreleased); **planned** names the roadmap item in [ROADMAP.md](../ROADMAP.md).
 
 ### Must
 
@@ -56,7 +56,7 @@ Status: **shipped** is in v0.3.0; **planned** names the roadmap item in [ROADMAP
 | Hold any part that fails a check, and require sign-off before release | `release_check`, `approvals`, `resolve` | shipped |
 | Write Altium `.SchLib` / `.PcbLib` that Altium opens unchanged | `altium_lib`, `altium_native` (8/8 libraries, 0 diffs on AD26) | shipped; multi-part symbols, De Morgan display modes, keep-outs and bottom-side pads checked in AD26 |
 | Release parts into Altium 365 with their parameters, never the held ones | `altium365` | shipped (dry-run tested); real-workspace run planned (P10) |
-| Work from inside Altium and KiCad | `altium_menu`, `altium_forms`, KiCad window (PR #30) | shipped; *Build libraries* in the menu planned (P1) |
+| Work from inside Altium and KiCad | `altium_menu`, `altium_forms`, KiCad window (PR #30) | shipped, including *Build libraries* in the menu (0.3.1) |
 | Measured accuracy that can't silently drop | `ecadlib eval`, `eval gate` in CI | shipped (synthetic replay); live benchmark planned (P5) |
 
 ### Should
@@ -66,7 +66,7 @@ Status: **shipped** is in v0.3.0; **planned** names the roadmap item in [ROADMAP
 | New parts follow the user's house style | `ecadlib style learn/check/apply` | shipped; real company library planned (P9) |
 | Same library as KiCad files, kept in step with Altium | `kicad_export`, `parity` | shipped |
 | One symbol rule for every IC (inputs left, outputs right, power top, ground bottom) | `symbol_layout` | shipped |
-| Show what a run will cost before it runs | `datasheet estimate`, `max_cost_usd`, docs/costs.md | shipped on the CLI; in Altium / KiCad / web UI planned (P12) |
+| Show what a run will cost before it runs | `datasheet estimate`, `max_cost_usd`, docs/costs.md | shipped on the CLI and in the web UI; in the Altium and KiCad dialogs on `main`, not yet tried in the real tools (P12) |
 | Any model provider, with guide rails for small models | `ecadlib/llm/` | shipped |
 | Watch lifecycle, upstream KiCad changes and Altium 365 drift | `lifecycle`, `upstream`, `upkeep` | shipped |
 | Install on Windows without Python | Windows installer, setup page | shipped unsigned; signing planned (P11) |

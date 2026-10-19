@@ -809,7 +809,10 @@ async function action(btn, out, fn) {
 }
 $("#dblib").addEventListener("click", e => action(e.target, $("#dblibout"), async () => {
   const r = await api("/api/export/dblib", { bom: current.bom });
-  return "Written: " + r.files.map(fileLink).join(" · ") +
+  if (r.from_plan) return `${r.written} part(s) in <span class="mono">${esc(r.folder)}</span>: ` + r.files.map(fileLink).join(" · ") +
+    (r.held.length ? `<div class="muted">Held, left out until a person decides: ${esc(r.held.join(", "))}</div>` : "") +
+    `<div class="next s-info"><span>Next: copy the whole folder (with its SchLib and PcbLib folders) next to your Altium libraries and open the .DbLib in Altium Designer. The Excel workbook needs the Access database engine.</span></div>`;
+  return "Written (draft, from the triage only: run Fill the library first to build symbols and footprints): " + r.files.map(fileLink).join(" · ") +
     `<div class="next s-info"><span>Next: copy these files next to your Altium libraries and open a .DbLib in Altium Designer. The SQLite one needs the SQLite3 ODBC driver; the Excel one needs the Access database engine.</span></div>`;
 }));
 $("#models").addEventListener("click", e => action(e.target, $("#modelsout"), async () => {
