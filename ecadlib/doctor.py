@@ -113,8 +113,9 @@ def _ai_key_env(rules):
         ep = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")
         if ep["provider"] == "anthropic" and ep["key_env"]:
             return ep["key_env"]
-    except Exception:
-        pass
+    except Exception as e:
+        from . import fallbacks as FB
+        FB.note("[ai] / [datasheet] model setup did not resolve", e, instead="[datasheet] api_key_env")
     return ((rules or {}).get("datasheet") or {}).get("api_key_env") or "ANTHROPIC_API_KEY"
 
 
@@ -122,7 +123,9 @@ def _ai_provider(rules):
     try:
         from . import llm as LL
         return LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")["provider"]
-    except Exception:
+    except Exception as e:
+        from . import fallbacks as FB
+        FB.note("[ai] / [datasheet] model setup did not resolve", e, instead="provider anthropic")
         return "anthropic"
 
 

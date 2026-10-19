@@ -62,8 +62,8 @@
   <!-- marquee of sources -->
   <div class="rail mono" aria-label="Where parts come from">
     <div class="railtrack">
-      <span>Nexar · Altium 365</span><i></i><span>DigiKey</span><i></i><span>Mouser</span><i></i><span>your own libraries</span><i></i><span>KiCad official libraries</span><i></i><span>datasheet reader</span><i></i><span>IPC-7351B generator</span><i></i><span>EasyEDA · LCSC, unofficial, can be off</span><i></i><span>STEP bodies</span><i></i>
-      <span aria-hidden="true">Nexar · Altium 365</span><i></i><span aria-hidden="true">DigiKey</span><i></i><span aria-hidden="true">Mouser</span><i></i><span aria-hidden="true">your own libraries</span><i></i><span aria-hidden="true">KiCad official libraries</span><i></i><span aria-hidden="true">datasheet reader</span><i></i><span aria-hidden="true">IPC-7351B generator</span><i></i><span aria-hidden="true">EasyEDA · LCSC, unofficial, can be off</span><i></i><span aria-hidden="true">STEP bodies</span><i></i>
+      <span>Nexar · Altium 365</span><i></i><span>DigiKey</span><i></i><span>Mouser</span><i></i><span>your own libraries</span><i></i><span>KiCad official libraries</span><i></i><span>datasheet reader</span><i></i><span>IPC-7351B generator</span><i></i><span>EasyEDA · LCSC, unofficial, opt-in</span><i></i><span>STEP bodies</span><i></i>
+      <span aria-hidden="true">Nexar · Altium 365</span><i></i><span aria-hidden="true">DigiKey</span><i></i><span aria-hidden="true">Mouser</span><i></i><span aria-hidden="true">your own libraries</span><i></i><span aria-hidden="true">KiCad official libraries</span><i></i><span aria-hidden="true">datasheet reader</span><i></i><span aria-hidden="true">IPC-7351B generator</span><i></i><span aria-hidden="true">EasyEDA · LCSC, unofficial, opt-in</span><i></i><span aria-hidden="true">STEP bodies</span><i></i>
     </div>
   </div>
 
@@ -77,7 +77,7 @@
     <div class="bus" aria-hidden="true"><span class="pulse"></span></div>
     <ol class="steps">
       <li class="step reveal"><div class="fig sm" data-fig="sieve"></div><p class="mono n">01 · check</p><h3>Read the BOM</h3><p>Altium, ActiveBOM, KiCad or a hand-made sheet. Each line is matched against your library: have it, can fetch it, must draw it, DNP.</p></li>
-      <li class="step reveal"><div class="fig sm" data-fig="drawer"></div><p class="mono n">02 · fetch</p><h3>Find what exists</h3><p>Nexar, DigiKey and Mouser identify the part. Symbols and footprints come from your libraries and the official KiCad libraries, then EasyEDA (unofficial; one setting turns it off), converted with pads, pins and 3D bodies.</p></li>
+      <li class="step reveal"><div class="fig sm" data-fig="drawer"></div><p class="mono n">02 · fetch</p><h3>Find what exists</h3><p>Nexar, DigiKey and Mouser identify the part. Symbols and footprints come from your libraries and the official KiCad libraries, then EasyEDA if you opt in (unofficial; off by default), converted with pads, pins and 3D bodies.</p></li>
       <li class="step reveal"><div class="fig sm" data-fig="terminal"></div><p class="mono n">03 · draw</p><h3>Read the datasheet</h3><p>A model reads the package drawing into numbers. Code, not the model, turns the numbers into an IPC-7351B land pattern and lays out the symbol.</p></li>
       <li class="step reveal"><div class="fig sm" data-fig="loupe"></div><p class="mono n">04 · prove</p><h3>Check every part</h3><p>Cross-checked reads, a visual proof against the drawing, your house style, a release check. Anything in doubt is held for a person to sign off.</p></li>
       <li class="step reveal"><div class="fig sm" data-fig="dish"></div><p class="mono n">05 · release</p><h3>Send it to your tool</h3><p>Altium 365 through Nexar, .SchLib / .PcbLib, a DbLib, or KiCad symbols, footprints and lib tables. Both always match.</p></li>

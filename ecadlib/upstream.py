@@ -360,7 +360,9 @@ def _rules_layers(out):
     from .rules import layers, load
     try:
         return layers(load(None, start=out))
-    except Exception:
+    except Exception as e:
+        from . import fallbacks as FB
+        FB.note(f"the rules' layers next to {out} did not load", e, instead="the default layers")
         return None
 
 

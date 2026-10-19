@@ -274,6 +274,9 @@ def test_estimate_mode_sends_nothing():
     s = cs["SOICPART"]
     assert s["source"] == "none" and s["cost_how"] == "estimate (rough: 3 pages x 3000)" and s["usd"] > 0, s
     assert cs["QFNPART"]["cost_how"].startswith("estimate (rough: 30 pages")      # not downloaded: unknown page count
+    assert s["not_run"] and rep["summary"]["not_run"]["cases"] >= 1, rep["summary"]["not_run"]
+    md = R.report_md(rep)                                         # no key: "not run", never "N parts were wrong"
+    assert "Not run:" in md and "no API key" in md and "were wrong" not in md and "SOICPART" not in md.split("## By")[0], md
 
 
 def test_select_interleaves_families_and_cli():
