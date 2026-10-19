@@ -45,6 +45,18 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Fixes from testing PRs #81-#103 by running them (tests in `tests/test_review_1018_merges.py`):
+  - A failed Altium build installs the library you had again (it was uninstalled to build); the dialog says "Not found" for a bad part number, and a wrong LCSC number is no longer reported as a bad MPN.
+  - `dblib-sync`: a library file open in Altium is reported by name and skipped, instead of stopping halfway with "[Errno 13] Permission denied".
+  - ICs "with integrated MOSFETs" stay in the ICs table, not Transistors.
+  - Footprint hashes recorded before #97 are computed again (librarian_state v3, `ecadlib migrate`), so a re-run shares a footprint the library already has instead of writing a second copy.
+  - Altium 365 push: a part is matched by its exact name or a revision of it, never a colleague's part whose name only starts the same (LM358 vs LM358-N).
+  - `ecadlib status`: a push that failed is not shown as released, an interrupted run does not hide the last finished one, and the total time is never negative.
+  - A NOTICE.txt you wrote yourself is never overwritten.
+  - MCP: `save_rules` cannot change where model requests (and the stored API key) go; the first calls to an HTTP server share one job list, so the one-writer-per-BOM lock holds; a "still running" job stays readable for the caller it was named to; `altium_menu` takes a Windows `win_dir` under `--confine`.
+  - Benchmark scoring: an erratum no longer hides wrong pins it does not list; a "maker's land" narrower than the leads read from the same drawing is not counted as the maker's; pad-table bodies turn by the direction the pin rows run (SOT-223, DIP-6, DIP-8).
+  - `fp-edit` reads a part's latest spec, and a datasheet read whose `other_json` comes back as an object is accepted.
+
 - A gull-wing exposed pad read long side first (TLC5951DAP's PowerPAD, 5.7 x 3.04 mm) is turned to run with the body; across the rows it pushed every pad's heel out past the body.
 - A DIP or other pad table with its rows down the page now gets a body (and courtyard) that runs with the rows: 27C256's courtyard was 37 mm wide.
 - Two parts whose datasheet packages share a name but not their numbers (ISL8117FVEZ and TPS26600PWP, both HTSSOP-16) keep their own spec file; `ecadlib fp-edit` reads each part's own.

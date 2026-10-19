@@ -35,6 +35,7 @@ headers), each grown by the courtyard excess (0.5 mm for connectors, KLC F5.3) a
 as one rectilinear outline (falls back to the bounding box when the pieces don't touch).
 """
 import math, re
+from collections import Counter
 
 UNIT = {"mm": 1.0, "mil": 0.0254, "in": 25.4}
 JEDEC_SKIP = set("IOQSXZ")
@@ -418,10 +419,14 @@ def table_layout(spec):
         body = (min(xa, xb), min(ya, yb), max(xa, xb), max(ya, yb))
     elif spec.get("body_length") and spec.get("body_width"):
         bx, by = _dim(spec["body_length"])[1] / 2, _dim(spec["body_width"])[1] / 2
-        ex = max(q["x"] for q in pads) - min(q["x"] for q in pads) if pads else 0
-        ey = max(q["y"] for q in pads) - min(q["y"] for q in pads) if pads else 0
-        if (ex - ey) * (bx - by) < 0:                  # the body's length runs with the long pad rows (27C256: a DIP
-            bx, by = by, bx                            # table with its rows down y; D is the length, not the width)
+        # the body's length runs with the pin rows (27C256: a DIP table with its rows down y; D is the length, not the
+        # width). A row is the pins sharing one x (down y) or one y (along x), not the pads' extent: a DIP-8's extent
+        # is square and a SOT-223's lead span is longer than its pin row.
+        pins = [q for q in pads if q["num"]]
+        col = max(Counter(round(q["x"], 3) for q in pins).values(), default=0)
+        row = max(Counter(round(q["y"], 3) for q in pins).values(), default=0)
+        if (col > row and bx > by) or (row > col and by > bx):
+            bx, by = by, bx
         body = (-bx, -by, bx, by)
     keepouts = []
     for k in t.get("keepouts") or []:

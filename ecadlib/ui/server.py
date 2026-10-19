@@ -99,7 +99,7 @@ class Jobs:
         self.root = root
         self.threads = []
 
-    def start(self, fn, *args, label="", owner=None, key=None):
+    def start(self, fn, *args, label="", owner=None, key=None, tool=None):
         with self.lock:
             busy = key and self.running(key)
             if busy:
@@ -107,7 +107,7 @@ class Jobs:
                                       + (f" (started by {busy['owner']})" if busy["owner"] else "") + "; wait for it to finish")
             jid = f"{next(self.ids)}-{secrets.token_hex(6)}"
             job = {"id": jid, "state": "running", "done": 0, "total": 0, "label": label, "result": None, "error": None,
-                   "owner": owner, "key": key, "lines": [], "cancel": False, "started": time.time()}
+                   "owner": owner, "key": key, "lines": [], "cancel": False, "started": time.time(), "tool": tool}
             self.jobs[jid] = job
             for old in [k for k in self.jobs if self.jobs[k]["state"] != "running"][:-20]:   # keep the last 20 finished
                 del self.jobs[old]

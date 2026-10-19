@@ -83,8 +83,13 @@ def read(folder, problems=None):
 
 
 def _last_run(recs):
-    start = max((i for i, r in enumerate(recs) if r.get("new_run")), default=0)
-    return recs[start:]
+    """The newest run that reached its release check (an interrupted run left no plan of its own), with the
+    review / push records written after it; the newest run as is when none did."""
+    starts = [i for i, r in enumerate(recs) if r.get("new_run")] or [0]
+    for a, b in reversed(list(zip(starts, starts[1:] + [len(recs)]))):
+        if any(r["step"] == "release_check" for r in recs[a:b]):
+            return recs[a:b] + [r for r in recs[b:] if r["step"] in ("review", "push")]
+    return recs[starts[-1]:]
 
 
 def last_run(folder, problems=None):
@@ -104,7 +109,8 @@ def last_run(folder, problems=None):
     return {"started": _iso(t0), "finished": _iso(t1),
             "steps": dict(sorted(steps.items(), key=lambda kv: order.get(kv[0], len(STEPS)))),
             "work_seconds": round(sum(v for k, v in steps.items() if k != "review"), 3),
-            "total_seconds": round(t1 - t0, 3)}
+            "total_seconds": round(max(0.0, t1 - t0), 3),
+            "push_errors": next((r.get("errors", 0) for r in reversed(run) if r["step"] == "push"), None)}
 
 
 def human(seconds):
