@@ -136,7 +136,10 @@ def _close(k, a, b, table):
     tol = max(ab, rel * max(abs(a[0]), abs(b[0])))
     if abs(a[0] - b[0]) <= tol + 1e-9:
         return True
-    return table and a[1] < a[2] and a[1] - 1e-9 <= b[0] <= a[2] + 1e-9     # the table nominal inside the printed range
+    # the table nominal inside the printed range, when that range is a tolerance band (not 3.0..6.2 mm around a
+    # 4.9 mm body) and the read's own nominal is near the table's
+    return table and a[1] < a[2] and a[1] - 1e-9 <= b[0] <= a[2] + 1e-9 and a[2] - a[1] <= 6 * tol + 1e-9 \
+        and abs(a[0] - b[0]) <= 3 * tol + 1e-9
 
 
 def compare(first, second, kind="read"):
