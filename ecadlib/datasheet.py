@@ -55,7 +55,7 @@ LINEAR_TYPES = ("chip", "molded", "gullwing", "qfp", "qfn")   # families whose p
 PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-opus-5": (5.0, 25.0), "claude-fable-5-1": (10.0, 50.0),
           "claude-fable-5": (10.0, 50.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-sonnet-5": (2.0, 10.0),
           "claude-haiku-5-5": (0.10, 0.50), "claude-opus-4-8": (5.0, 25.0), "claude-opus-4-7": (5.0, 25.0),
-          "claude-opus-4-6": (5.0, 25.0), "claude-sonnet-4-6": (3.0, 15.0), "claude-sonnet-4-5": (3.0, 15.0),
+          "claude-opus-4-6": (5.0, 25.0), "claude-sonnet-4-6": (3.0, 15.0),
           "claude-haiku-4-5": (1.0, 5.0)}
 BATCH_DISCOUNT, CACHE_WRITE = 0.5, 1.25
 BATCH_BYTES, BATCH_MAX = 200 * 2 ** 20, 100_000       # per batch (API limits: 256 MB, 100,000 requests)
@@ -1636,9 +1636,8 @@ class PdfStore:
                 "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "pages": pdf_pages(data),
                 "fetched": datetime.datetime.now().isoformat(timespec="seconds")}
         self.dir.mkdir(parents=True, exist_ok=True)
-        tmp = pdf_f.with_suffix(".pdf.tmp")
-        tmp.write_bytes(data)
-        os.replace(tmp, pdf_f)
+        from .fsutil import write_bytes_atomic        # own temp file per writer: two runs fetching one PDF never collide
+        write_bytes_atomic(pdf_f, data)
         write_text_atomic(meta_f, json.dumps(meta, indent=2))
         return data, dict(meta, from_cache=False)
 
@@ -1753,9 +1752,7 @@ class ResultCache:
 
     def put(self, key, rec):
         self.dir.mkdir(parents=True, exist_ok=True)
-        tmp = self.dir / f"{key}.tmp"
-        tmp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
-        os.replace(tmp, self.dir / f"{key}.json")
+        write_text_atomic(self.dir / f"{key}.json", json.dumps(rec, indent=1))   # own temp file per writer
 
 
 # ---------------------------------------------------------------- reader: jobs -> (cache | sync call | Message Batch) -> results
@@ -2349,6 +2346,14 @@ class Reader:
         return next((b.get("id") for b in st.get("batches") or [] if not b.get("collected")
                      and key in (b.get("requests") or {}).values()), None)
 
+    def _add_pending(self, st, mark):
+        """Record a batch create that is (again) unconfirmed: a new create, or a lost create's mark put back when the
+        batch taken for it turned out to be someone else's. This Reader owns it from now on, so _save_state keeps it
+        even if the same fingerprint was settled earlier in this run (adopted, or sent again with --yes)."""
+        st.setdefault("pending_creates", []).append(mark)
+        self._own_creates.add(mark.get("fingerprint"))
+        self._creates_done.discard(mark.get("fingerprint"))
+
     def _save_state(self, st):
         """Write batch_state.json, merged with what is on disk now: another run on the same folder (the web UI and
         the command line, two UI requests) may have recorded a batch since this one read the file, and a paid batch
@@ -2529,9 +2534,7 @@ class Reader:
                 mark = {"fingerprint": hashlib.sha256(json.dumps([self.model, sorted(ids.items())]).encode()).hexdigest()[:24],
                         "at": time.time(), "n": len(reqs), "model": self.model, "requests": ids,
                         "parts": {c: j["name"] for c, j in zip(ids, chunk)}, **_owner()}
-                st.setdefault("pending_creates", []).append(mark)
-                self._own_creates.add(mark["fingerprint"])
-                self._creates_done.discard(mark["fingerprint"])   # the same parts sent again (--yes after a lost create)
+                self._add_pending(st, mark)
                 _IN_FLIGHT.add(mark["fingerprint"])
                 self._save_state(st)                  # written BEFORE the create: a lost answer leaves this behind
                 try:
@@ -2593,7 +2596,7 @@ class Reader:
                 if b.get("adopted") and lines and not any(b["requests"].get(ln.get("custom_id")) for ln in lines):
                     # adopted after a lost create answer, but none of its requests are ours: another tool's batch
                     b["collected"], b["foreign"] = True, True
-                    st.setdefault("pending_creates", []).append(b["mark"])   # unconfirmed again: refused without --yes
+                    self._add_pending(st, b["mark"])  # unconfirmed again: refused without --yes
                     for k in b["requests"].values():
                         errors[k] = (f"batch {b['id']} (taken for a create whose answer was lost) holds none of these "
                                      "parts; check console.anthropic.com > Batches, then run again with --yes to send again")

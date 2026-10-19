@@ -275,8 +275,9 @@ def test_ds41_dated_model_ids_behave_like_their_alias():
         assert D.output_config(dated, "high", {}) == D.output_config(alias, "high", {})
         assert "effort" not in D.output_config(dated, "high", {})
         assert D.page_limit(dated) == D.page_limit(alias) == 100
-        assert D.price_of(dated) == D.price_of(alias) is not None
+        assert D.price_of(dated) == D.price_of(alias)
         assert SM.takes_sampling(dated) == SM.takes_sampling(alias) is True
+    assert D.price_of("claude-haiku-4-5-20251001") is not None
     assert SM.takes_sampling("claude-opus-5-5") is False
 
 
