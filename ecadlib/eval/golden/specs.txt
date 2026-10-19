@@ -389,8 +389,8 @@ pad 5 at=(1.45,-0.75) layer=1 size=(0.85,0.25) hole=0 shape=9 rot=0 corner=50 pl
 pad 6 at=(1.45,-0.25) layer=1 size=(0.85,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 7 at=(1.45,0.25) layer=1 size=(0.85,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 8 at=(1.45,0.75) layer=1 size=(0.85,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-graphics fill 35: 4 bbox(-0.745,-1.0745,0.745,1.0745) #3a97884f8b
 graphics region 33: 1 bbox(-2.485,0.51,-2.155,0.99) #418bc40242
+graphics region 35: 4 bbox(-0.745,-1.0745,0.745,1.0745) #d0fed69a94
 graphics track 33: 9 bbox(-2.485,-1.61,1.61,1.61) #f01bb360c3
 graphics track 69: 5 bbox(-1.5,-1.5,1.5,1.5) #7f9538feb5
 graphics track 71: 12 bbox(-2.13,-1.75,2.13,1.75) #5df590f9f6
@@ -428,8 +428,8 @@ pad 6 at=(1.4525,-0.25) layer=1 size=(0.845,0.25) hole=0 shape=9 rot=0 corner=50
 pad 7 at=(1.4525,0.25) layer=1 size=(0.845,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 8 at=(1.4525,0.75) layer=1 size=(0.845,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 9 at=(0,0) layer=1 size=(1.66,2.38) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.2 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-graphics fill 35: 4 bbox(-0.7495,-1.0745,0.7495,1.0745) #1be5963a7b
 graphics region 33: 1 bbox(-1.6925,1.135,-1.2125,1.465) #abca2b8c6f
+graphics region 35: 4 bbox(-0.7495,-1.0745,0.7495,1.0745) #65d0e90916
 graphics track 33: 9 bbox(-1.6925,-1.61,1.61,1.61) #6379fd3db9
 graphics track 69: 5 bbox(-1.5,-1.5,1.5,1.5) #460ca5617e
 graphics track 71: 4 bbox(-2.13,-1.75,2.13,1.75) #b4e7f51d3d
@@ -573,9 +573,9 @@ pad 1 at=(-1.4,0.8583) layer=74 size=(0.6,0.6) hole=0.3 shape=1 rot=0 corner=Non
 pad 2 at=(0.5,-1.5) layer=1 size=(1,1.2) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 3 at=(3.5,0) layer=74 size=(1.6,2.6) hole=0.8 shape=1 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=2 slot=1.8 hole_rot=90
 pad "" at=(-4.6,0) layer=74 size=(1,1) hole=1 shape=1 rot=0 corner=None plated=False paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-graphics fill 35: 14 bbox(-2.8875,-2.3875,0.8875,2.3875) #b83f9b0671
 graphics region 1: 1 bbox(-3,-2.5,1,2.5) #be1d3c0bbe
 graphics region 33: 1 bbox(-2.24,3.26,-1.76,3.59) #c0b7089716
+graphics region 35: 14 bbox(-2.8875,-2.3875,0.8875,2.3875) #9c2e87f4e4
 graphics region 37: 1 bbox(-3,-2.5,1,2.5) #fcb979441b
 graphics region 56: 1 bbox(1.6,1.2,2.8,2.8) #b3dfdd3541
 graphics track 33: 9 bbox(-3.91,-3.11,3.11,3.59) #7d288c4200
@@ -1647,8 +1647,8 @@ pad 1 at=(-1.4625,0.75) layer=1 size=(0.775,0.25) hole=0 shape=9 rot=0 corner=50
 pads x8 layer=1 size=(0.25,0.775) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-0.75,-1.4625,0.75,1.4625) #c8b77192d8
 pads x8 layer=1 size=(0.775,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.4625,-0.75,1.4625,0.75) #fcc5c34791
 pads x1 layer=1 size=(1.75,1.75) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-0.885 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #4920ed4525
-graphics fill 35: 4 bbox(-0.79,-0.79,0.79,0.79) #536868844e
 graphics region 33: 1 bbox(-1.85,1.61,-1.37,1.94) #efb5063eef
+graphics region 35: 4 bbox(-0.79,-0.79,0.79,0.79) #f6ddf99df2
 graphics track 33: 11 bbox(-1.85,-1.61,1.61,1.94) #9f42ba53fa
 graphics track 69: 5 bbox(-1.5,-1.5,1.5,1.5) #460ca5617e
 graphics track 71: 4 bbox(-2.1,-2.1,2.1,2.1) #b79b57d494
@@ -1682,8 +1682,8 @@ pads x8 layer=1 size=(0.25,0.775) hole=0 shape=9 rot=0 corner=50 plated=True pas
 pads x8 layer=1 size=(0.775,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.4625,-0.75,1.4625,0.75) #fcc5c34791
 pads x1 layer=1 size=(1.75,1.75) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-0.885 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #4920ed4525
 pads x4 layer=74 size=(0.5,0.5) hole=0.2 shape=1 rot=0 corner=None plated=True paste=1/0 mask=2/-0.26 hole_shape=0 slot=0 hole_rot=0 centres bbox(-0.625,-0.625,0.625,0.625) #303c1229d4
-graphics fill 35: 4 bbox(-0.8165,-0.8165,0.8165,0.8165) #8370b14d12
 graphics region 33: 1 bbox(-2.46,0.51,-2.13,0.99) #e77a524b51
+graphics region 35: 4 bbox(-0.8165,-0.8165,0.8165,0.8165) #f00c5385f2
 graphics track 33: 11 bbox(-2.46,-1.61,1.61,1.61) #3c499286d7
 graphics track 69: 5 bbox(-1.5,-1.5,1.5,1.5) #7f9538feb5
 graphics track 71: 20 bbox(-2.1,-2.1,2.1,2.1) #66dc2e95db
@@ -1717,8 +1717,8 @@ pad 1 at=(-2.4375,1.75) layer=1 size=(0.875,0.25) hole=0 shape=9 rot=0 corner=50
 pads x16 layer=1 size=(0.25,0.875) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.75,-2.4375,1.75,2.4375) #e871b7a87e
 pads x16 layer=1 size=(0.875,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.4375,-1.75,2.4375,1.75) #8d9037a1ea
 pads x1 layer=1 size=(3.45,3.45) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.735 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #b4bad46980
-graphics fill 35: 9 bbox(-1.5955,-1.5955,1.5955,1.5955) #64028dd214
 graphics region 33: 1 bbox(-2.85,2.61,-2.37,2.94) #2c2e2d695c
+graphics region 35: 9 bbox(-1.5955,-1.5955,1.5955,1.5955) #4968aa6567
 graphics track 33: 11 bbox(-2.85,-2.61,2.61,2.94) #d28147e17c
 graphics track 69: 5 bbox(-2.5,-2.5,2.5,2.5) #581ec8cbcc
 graphics track 71: 4 bbox(-3.13,-3.13,3.13,3.13) #abb8b08cdd
@@ -2202,8 +2202,8 @@ pad 1 at=(-1.4575,0.75) layer=1 size=(0.835,0.25) hole=0 shape=9 rot=0 corner=50
 pads x8 layer=1 size=(0.25,0.835) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-0.75,-1.4575,0.75,1.4575) #b3bbff1f8f
 pads x8 layer=1 size=(0.835,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.4575,-0.75,1.4575,0.75) #94f6e541ab
 pads x1 layer=1 size=(1.68,1.68) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-0.85 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #5a60363957
-graphics fill 35: 4 bbox(-0.7585,-0.7585,0.7585,0.7585) #8fb75a9917
 graphics region 33: 1 bbox(-1.85,1.61,-1.37,1.94) #efb5063eef
+graphics region 35: 4 bbox(-0.7585,-0.7585,0.7585,0.7585) #7b3f9152a7
 graphics track 33: 11 bbox(-1.85,-1.61,1.61,1.94) #9f42ba53fa
 graphics track 69: 5 bbox(-1.5,-1.5,1.5,1.5) #460ca5617e
 graphics track 71: 4 bbox(-2.13,-2.13,2.13,2.13) #26036e738a
@@ -2235,8 +2235,8 @@ pad 1 at=(-1.8375,0.975) layer=1 size=(1.075,0.3) hole=0 shape=9 rot=0 corner=50
 pads x8 layer=1 size=(0.3,1.075) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-0.975,-1.8375,0.975,1.8375) #ecd05c21dc
 pads x8 layer=1 size=(1.075,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.8375,-0.975,1.8375,0.975) #1f4de5a11e
 pads x1 layer=1 size=(2.1,2.1) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.06 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #fdcc27b310
-graphics fill 35: 4 bbox(-0.9485,-0.9485,0.9485,0.9485) #c066ada3ef
 graphics region 33: 1 bbox(-2.35,2.11,-1.87,2.44) #6ee089c211
+graphics region 35: 4 bbox(-0.9485,-0.9485,0.9485,0.9485) #aa603b49be
 graphics track 33: 11 bbox(-2.35,-2.11,2.11,2.44) #6cb1911708
 graphics track 69: 5 bbox(-2,-2,2,2) #e0325d5409
 graphics track 71: 4 bbox(-2.63,-2.63,2.63,2.63) #55f514d66a
@@ -2299,8 +2299,8 @@ pad 6 at=(1.4,-0.325) layer=1 size=(0.9,0.25) hole=0 shape=9 rot=0 corner=50 pla
 pad 7 at=(1.4,0.325) layer=1 size=(0.9,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 8 at=(1.4,0.975) layer=1 size=(0.9,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 9 at=(0,0) layer=1 size=(1.5,2.25) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.135 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-graphics fill 35: 4 bbox(-0.6775,-1.016,0.6775,1.016) #a4cef0e2ad
 graphics region 33: 1 bbox(-1.64,1.36,-1.16,1.69) #c7d49fea34
+graphics region 35: 4 bbox(-0.6775,-1.016,0.6775,1.016) #fba8b8f0e4
 graphics track 33: 9 bbox(-1.64,-1.61,1.61,1.69) #fa3a1446d2
 graphics track 69: 5 bbox(-1.5,-1.5,1.5,1.5) #460ca5617e
 graphics track 71: 4 bbox(-2.1,-1.75,2.1,1.75) #6ffd8de69e
@@ -2399,8 +2399,8 @@ pad 6 at=(1.875,-0.4) layer=1 size=(1,0.35) hole=0 shape=9 rot=0 corner=50 plate
 pad 7 at=(1.875,0.4) layer=1 size=(1,0.35) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 8 at=(1.875,1.2) layer=1 size=(1,0.35) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 9 at=(0,0) layer=1 size=(2.2,3.1) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.56 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-graphics fill 35: 6 bbox(-0.9935,-1.4498,0.9935,1.4498) #b75a1abb8c
 graphics region 33: 1 bbox(-2.115,1.635,-1.635,1.965) #57040ad90d
+graphics region 35: 6 bbox(-0.9935,-1.4498,0.9935,1.4498) #a86a5ff5db
 graphics track 33: 9 bbox(-2.115,-2.11,2.11,2.11) #ef1de978e0
 graphics track 69: 5 bbox(-2,-2,2,2) #e0325d5409
 graphics track 71: 4 bbox(-2.63,-2.25,2.63,2.25) #d73c7c9c7d
@@ -2442,8 +2442,8 @@ pad 1 at=(-1.8875,0.975) layer=1 size=(0.975,0.35) hole=0 shape=9 rot=0 corner=5
 pads x8 layer=1 size=(0.35,0.975) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-0.975,-1.8875,0.975,1.8875) #4cc6c645c4
 pads x8 layer=1 size=(0.975,0.35) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.8875,-0.975,1.8875,0.975) #70d50ded02
 pads x1 layer=1 size=(2.4,2.4) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.21 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #45fc349adc
-graphics fill 35: 4 bbox(-1.0835,-1.0835,1.0835,1.0835) #a17163eae6
 graphics region 33: 1 bbox(-2.35,2.11,-1.87,2.44) #6ee089c211
+graphics region 35: 4 bbox(-1.0835,-1.0835,1.0835,1.0835) #f42eb8f5a5
 graphics track 33: 11 bbox(-2.35,-2.11,2.11,2.44) #568ebcc1ea
 graphics track 69: 5 bbox(-2,-2,2,2) #e0325d5409
 graphics track 71: 4 bbox(-2.63,-2.63,2.63,2.63) #55f514d66a
@@ -2480,8 +2480,8 @@ pad 6 at=(1.45,-0.325) layer=1 size=(0.85,0.3) hole=0 shape=9 rot=0 corner=50 pl
 pad 7 at=(1.45,0.325) layer=1 size=(0.85,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 8 at=(1.45,0.975) layer=1 size=(0.85,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 9 at=(0,0) layer=1 size=(1.6,2.44) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.23 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-graphics fill 35: 6 bbox(-0.7225,-1.1413,0.7225,1.1413) #f2d1434eb2
 graphics region 33: 1 bbox(-1.69,1.385,-1.21,1.715) #7ec01ec277
+graphics region 35: 6 bbox(-0.7225,-1.1413,0.7225,1.1413) #15b8826877
 graphics track 33: 9 bbox(-1.69,-1.61,1.61,1.715) #61a896a45d
 graphics track 69: 5 bbox(-1.5,-1.5,1.5,1.5) #460ca5617e
 graphics track 71: 4 bbox(-2.13,-1.75,2.13,1.75) #b4e7f51d3d
@@ -2582,8 +2582,8 @@ body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|A
 pad 1 at=(-0.725,1.4) layer=1 size=(0.65,0.2) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pads x1 layer=1 size=(0.4,2.8) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.41 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #b489517471
 pads x16 layer=1 size=(0.65,0.2) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-0.725,-1.4,0.725,1.4) #2e5b7e9128
-graphics fill 35: 3 bbox(-0.161,-1.3093,0.161,1.3093) #d9273bb54f
 graphics region 33: 1 bbox(-0.965,1.76,-0.485,2.09) #977be2d3f3
+graphics region 35: 3 bbox(-0.161,-1.3093,0.161,1.3093) #0223fb45b2
 graphics track 33: 5 bbox(-0.965,-1.76,0.45,2.09) #6b7341db7d
 graphics track 69: 5 bbox(-0.675,-1.65,0.675,1.65) #bfa62a2541
 graphics track 71: 4 bbox(-1.3,-1.9,1.3,1.9) #799445c448
@@ -2615,8 +2615,8 @@ pad 1 at=(-1.95,0.75) layer=1 size=(0.8,0.25) hole=0 shape=9 rot=0 corner=50 pla
 pads x8 layer=1 size=(0.25,0.8) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-0.75,-1.95,0.75,1.95) #b2044f8738
 pads x8 layer=1 size=(0.8,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.95,-0.75,1.95,0.75) #c23524e857
 pads x1 layer=1 size=(2.45,2.45) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.235 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #8e127c403b
-graphics fill 35: 9 bbox(-1.1457,-1.1457,1.1457,1.1457) #314d1a7342
 graphics region 33: 1 bbox(-2.35,2.11,-1.87,2.44) #6ee089c211
+graphics region 35: 9 bbox(-1.1457,-1.1457,1.1457,1.1457) #eb1d6ca76f
 graphics track 33: 11 bbox(-2.35,-2.11,2.11,2.44) #596f064128
 graphics track 69: 5 bbox(-2,-2,2,2) #e0325d5409
 graphics track 71: 4 bbox(-2.6,-2.6,2.6,2.6) #7e33bb1f5b
@@ -2649,8 +2649,8 @@ pad 1 at=(-1.9625,1.25) layer=1 size=(0.825,0.25) hole=0 shape=9 rot=0 corner=50
 pads x12 layer=1 size=(0.25,0.825) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.25,-1.9625,1.25,1.9625) #94f09eb180
 pads x12 layer=1 size=(0.825,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.9625,-1.25,1.9625,1.25) #02421ad2bf
 pads x1 layer=1 size=(2.7,2.7) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.36 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #7b98ccb851
-graphics fill 35: 9 bbox(-1.263,-1.263,1.263,1.263) #591893459a
 graphics region 33: 1 bbox(-2.35,2.11,-1.87,2.44) #6ee089c211
+graphics region 35: 9 bbox(-1.263,-1.263,1.263,1.263) #f30147f8c1
 graphics track 33: 11 bbox(-2.35,-2.11,2.11,2.44) #dae75e2732
 graphics track 69: 5 bbox(-2,-2,2,2) #e0325d5409
 graphics track 71: 4 bbox(-2.63,-2.63,2.63,2.63) #55f514d66a
@@ -2683,8 +2683,8 @@ pad 1 at=(-2.45,1.75) layer=1 size=(0.8,0.25) hole=0 shape=9 rot=0 corner=50 pla
 pads x16 layer=1 size=(0.25,0.8) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.75,-2.45,1.75,2.45) #231abe6208
 pads x16 layer=1 size=(0.8,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.45,-1.75,2.45,1.75) #3475d329ab
 pads x1 layer=1 size=(3.6,3.6) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.81 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #be7caea774
-graphics fill 35: 9 bbox(-1.6835,-1.6835,1.6835,1.6835) #396acb5b82
 graphics region 33: 1 bbox(-2.85,2.61,-2.37,2.94) #2c2e2d695c
+graphics region 35: 9 bbox(-1.6835,-1.6835,1.6835,1.6835) #d4d02de813
 graphics track 33: 11 bbox(-2.85,-2.61,2.61,2.94) #d28147e17c
 graphics track 69: 5 bbox(-2.5,-2.5,2.5,2.5) #581ec8cbcc
 graphics track 71: 4 bbox(-3.1,-3.1,3.1,3.1) #5914097259
@@ -2717,8 +2717,8 @@ pad 1 at=(-3.4375,2.75) layer=1 size=(0.875,0.25) hole=0 shape=9 rot=0 corner=50
 pads x24 layer=1 size=(0.25,0.875) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.75,-3.4375,2.75,3.4375) #5d67994de4
 pads x24 layer=1 size=(0.875,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-3.4375,-2.75,3.4375,2.75) #31f7c1fdfe
 pads x1 layer=1 size=(5.15,5.15) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-2.585 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #2a6d06d7ce
-graphics fill 35: 25 bbox(-2.475,-2.475,2.475,2.475) #74150bd030
 graphics region 33: 1 bbox(-3.85,3.61,-3.37,3.94) #27b6b68ce7
+graphics region 35: 25 bbox(-2.475,-2.475,2.475,2.475) #20937f7bca
 graphics track 33: 11 bbox(-3.85,-3.61,3.61,3.94) #9a118cd710
 graphics track 69: 5 bbox(-3.5,-3.5,3.5,3.5) #4f8a78cf9f
 graphics track 71: 4 bbox(-4.13,-4.13,4.13,4.13) #2328e168ae
@@ -2751,8 +2751,8 @@ pad 1 at=(-4.4375,3.75) layer=1 size=(0.825,0.25) hole=0 shape=9 rot=0 corner=50
 pads x32 layer=1 size=(0.25,0.825) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-3.75,-4.4375,3.75,4.4375) #c632012d6a
 pads x32 layer=1 size=(0.825,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-4.4375,-3.75,4.4375,3.75) #15b706db16
 pads x1 layer=1 size=(5.2,5.2) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-2.61 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #ab75c97bee
-graphics fill 35: 25 bbox(-2.499,-2.499,2.499,2.499) #be83b66b7b
 graphics region 33: 1 bbox(-4.85,4.61,-4.37,4.94) #fa0385df7e
+graphics region 35: 25 bbox(-2.499,-2.499,2.499,2.499) #9eba6aab3b
 graphics track 33: 11 bbox(-4.85,-4.61,4.61,4.94) #43ddd71c4f
 graphics track 69: 5 bbox(-4.5,-4.5,4.5,4.5) #8d7575afc5
 graphics track 71: 4 bbox(-5.1,-5.1,5.1,5.1) #4b89c18ec1
@@ -2846,8 +2846,8 @@ pad 6 at=(2.5025,-0.635) layer=1 size=(1.895,0.6) hole=0 shape=9 rot=0 corner=50
 pad 7 at=(2.5025,0.635) layer=1 size=(1.895,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 8 at=(2.5025,1.905) layer=1 size=(1.895,0.6) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 9 at=(0,0) layer=1 size=(2.71,3.7) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.86 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-graphics fill 35: 12 bbox(-1.2673,-1.7605,1.2673,1.7605) #4fa0771bbc
 graphics region 33: 1 bbox(-2.7425,2.465,-2.2625,2.795) #ef8c426b1d
+graphics region 35: 12 bbox(-1.2673,-1.7605,1.2673,1.7605) #a6dfdf3167
 graphics track 33: 5 bbox(-2.7425,-2.56,2.06,2.795) #09aaa4e92b
 graphics track 69: 5 bbox(-1.95,-2.45,1.95,2.45) #b79e2071e7
 graphics track 71: 4 bbox(-3.7,-2.7,3.7,2.7) #6de3ce7f5f
@@ -2975,8 +2975,8 @@ pad 1 at=(-7.6625,6) layer=1 size=(1.475,0.3) hole=0 shape=9 rot=0 corner=50 pla
 pads x50 layer=1 size=(0.3,1.475) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-6,-7.6625,6,7.6625) #c275aa44b1
 pads x50 layer=1 size=(1.475,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-7.6625,-6,7.6625,6) #20c061970a
 pads x1 layer=1 size=(5,5) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-2.51 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #f541c8464d
-graphics fill 35: 25 bbox(-2.403,-2.403,2.403,2.403) #3f0e4f1973
 graphics region 33: 1 bbox(-7.9025,6.41,-7.4225,6.74) #40330adfe2
+graphics region 35: 25 bbox(-2.403,-2.403,2.403,2.403) #f6ba9b3c7b
 graphics track 33: 11 bbox(-7.9025,-7.11,7.11,7.11) #581bdb503c
 graphics track 69: 5 bbox(-7,-7,7,7) #cdbb329cfc
 graphics track 71: 4 bbox(-8.65,-8.65,8.65,8.65) #0f63d50d85
@@ -3116,8 +3116,8 @@ pad 1 at=(-1.9625,1.25) layer=1 size=(0.825,0.25) hole=0 shape=9 rot=0 corner=50
 pads x12 layer=1 size=(0.25,0.825) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.25,-1.9625,1.25,1.9625) #94f09eb180
 pads x12 layer=1 size=(0.825,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.9625,-1.25,1.9625,1.25) #02421ad2bf
 pads x1 layer=1 size=(2.7,2.7) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.36 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #7b98ccb851
-graphics fill 35: 9 bbox(-1.263,-1.263,1.263,1.263) #591893459a
 graphics region 33: 1 bbox(-2.35,2.11,-1.87,2.44) #6ee089c211
+graphics region 35: 9 bbox(-1.263,-1.263,1.263,1.263) #f30147f8c1
 graphics track 33: 11 bbox(-2.35,-2.11,2.11,2.44) #dae75e2732
 graphics track 69: 5 bbox(-2,-2,2,2) #e0325d5409
 graphics track 71: 4 bbox(-2.63,-2.63,2.63,2.63) #55f514d66a
@@ -3150,8 +3150,8 @@ pad 1 at=(-2.9425,2.2) layer=1 size=(0.865,0.2) hole=0 shape=9 rot=0 corner=50 p
 pads x24 layer=1 size=(0.2,0.865) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.2,-2.9425,2.2,2.9425) #658fa6fe1e
 pads x24 layer=1 size=(0.865,0.2) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.9425,-2.2,2.9425,2.2) #99302c005a
 pads x1 layer=1 size=(4.62,4.62) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-2.32 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #070b789a3d
-graphics fill 35: 16 bbox(-2.198,-2.198,2.198,2.198) #61757c5908
 graphics region 33: 1 bbox(-3.35,3.11,-2.87,3.44) #17cf26b767
+graphics region 35: 16 bbox(-2.198,-2.198,2.198,2.198) #1d4dce349a
 graphics track 33: 11 bbox(-3.35,-3.11,3.11,3.44) #42bcd0572b
 graphics track 69: 5 bbox(-3,-3,3,3) #22db2cee15
 graphics track 71: 4 bbox(-3.63,-3.63,3.63,3.63) #6b8e6a1022
@@ -3184,8 +3184,8 @@ pad 1 at=(-2.4625,2.4) layer=1 size=(0.825,0.2) hole=0 shape=9 rot=0 corner=50 p
 pads x20 layer=1 size=(0.2,0.825) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.8,-2.9625,1.8,2.9625) #1c9020f076
 pads x26 layer=1 size=(0.825,0.2) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.4625,-2.4,2.4625,2.4) #028fe4a5c1
 pads x1 layer=1 size=(2.8,3.8) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.91 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #3d16dce93a
-graphics fill 35: 12 bbox(-1.3093,-1.808,1.3093,1.808) #15732c32c4
 graphics region 33: 1 bbox(-2.85,3.11,-2.37,3.44) #27f5ef3c31
+graphics region 35: 12 bbox(-1.3093,-1.808,1.3093,1.808) #9a98a7e5ba
 graphics track 33: 11 bbox(-2.85,-3.11,2.61,3.44) #140fd3afc6
 graphics track 69: 5 bbox(-2.5,-3,2.5,3) #a02dafe213
 graphics track 71: 4 bbox(-3.13,-3.63,3.13,3.63) #8607c6f7d7
@@ -3218,8 +3218,8 @@ pad 1 at=(-1.9375,1.25) layer=1 size=(0.875,0.3) hole=0 shape=9 rot=0 corner=50 
 pads x12 layer=1 size=(0.3,0.875) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.25,-1.9375,1.25,1.9375) #cd39336a03
 pads x12 layer=1 size=(0.875,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.9375,-1.25,1.9375,1.25) #6fb2f5ec75
 pads x1 layer=1 size=(2.45,2.45) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.235 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #fd71ea3dff
-graphics fill 35: 9 bbox(-1.1457,-1.1457,1.1457,1.1457) #314d1a7342
 graphics region 33: 1 bbox(-2.35,2.11,-1.87,2.44) #6ee089c211
+graphics region 35: 9 bbox(-1.1457,-1.1457,1.1457,1.1457) #eb1d6ca76f
 graphics track 33: 11 bbox(-2.35,-2.11,2.11,2.44) #89c00aa950
 graphics track 69: 5 bbox(-2,-2,2,2) #e0325d5409
 graphics track 71: 4 bbox(-2.63,-2.63,2.63,2.63) #55f514d66a
