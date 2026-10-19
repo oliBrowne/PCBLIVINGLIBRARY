@@ -2542,9 +2542,14 @@ class Reader:
             return
         self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key)) + usd)
 
-    def _release(self, key):
-        """A request that was not billed (an HTTP error answer, no connection, an errored batch request): its hold
-        under max_cost_usd is given back."""
+    def _release(self, key, e=None):
+        """A request that got no answer and is not billed (an HTTP error response, no connection made, or a batch
+        request that errored, was cancelled or expired) gives back the worst case held for it under max_cost_usd. A
+        timeout or a response cut off keeps its hold: the API may still have run it."""
+        if e is not None:
+            billed = getattr(e, "maybe_billed", None)
+            if billed if billed is not None else getattr(e, "status", None) is None:
+                return
         if self._holds.get(key):
             self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key)))
 
