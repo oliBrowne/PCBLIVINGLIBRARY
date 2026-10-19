@@ -421,17 +421,6 @@ def pad_rec(p, guid_a, guid_b):
 
 
 # ---------------------------------------------------------------- footprints: model & converters
-def round_rect(x, y, w, h, r, steps=8):
-    """Outline of a w x h rectangle centred on (x, y) with corner radius r: each corner as `steps` chords."""
-    pts = []
-    for cx, cy, a0 in ((x + w / 2 - r, y + h / 2 - r, 0), (x - w / 2 + r, y + h / 2 - r, 90),
-                       (x - w / 2 + r, y - h / 2 + r, 180), (x + w / 2 - r, y - h / 2 + r, 270)):
-        for k in range(steps + 1):
-            a = math.radians(a0 + 90 * k / steps)
-            pts.append((round(cx + r * math.cos(a), 6), round(cy + r * math.sin(a), 6)))
-    return pts
-
-
 def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
     """Convert a .kicad_mod (as written by footprint_gen) into the writer's footprint dict (mm, y up).
     SMD pads are converted here; through-hole and NPTH pads (round, square, slots), custom (polygon) pads and keep-out
@@ -451,13 +440,7 @@ def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
         if "F.Cu" not in layers:              # paste-only aperture (EP window) -> Top Paste fill
             if layers != ["F.Paste"] or rot:
                 raise ValueError(f"{fp['name']}: unsupported non-copper pad on {layers}")
-            rr = sexpr.first(p, "roundrect_rratio")
-            r = min(float(rr[1]), 0.5) * min(w, h) if rr and p[3] == "roundrect" else 0.0
-            if r > 0:                         # rounded window (corner rounding controls EP voiding): a region
-                fp["regions"].append((round_rect(x, y, w, h, r), TOP_PASTE))
-            else:
-                fp["fills"].append((x - w / 2, y - h / 2, x + w / 2, y + h / 2, TOP_PASTE))
-            continue
+            fp["fills"].append((x - w / 2, y - h / 2, x + w / 2, y + h / 2, TOP_PASTE)); continue
         rr = sexpr.first(p, "roundrect_rratio")
         pad = {"designator": p[1], "x": x, "y": y, "w": w, "h": h, "rot": rot, "shape": p[3],
                "corner": float(rr[1]) * 200 if rr else 0,          # KiCad r/min(w,h) -> Altium r/(min(w,h)/2) %
