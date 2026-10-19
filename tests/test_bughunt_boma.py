@@ -64,3 +64,20 @@ def test_kicad_house_fitted_field_uses_the_same_reading():
              {"ref": "R2", "fields": {"Value": "1k", "Fitted": "Yes"}, "dnp": False}]
     lines, _ = BI.group(parts)
     assert {ln["designator"]: ln["dnp"] for ln in lines} == {"R1": True, "R2": False}
+
+
+# ---------------------------------------------------------------- BOM-15: DNP lines still get a symbol and footprint
+def _librarian(text, **kw):
+    from ecadlib import librarian as L
+    d = Path(tempfile.mkdtemp())
+    bom = d / "bom.csv"
+    bom.write_text(text)
+    return L.run(bom, out=d / "out", sources=kw.pop("sources", ["standard"]), offline=True, cache=d / "cache",
+                 log=lambda *a, **k: None, **kw)
+
+
+def test_bom15_dnp_line_is_built_not_held_without_symbol():
+    items = _librarian("Designator,Qty,Value,Footprint,MPN,DNP\nR1,1,10k,R_0603_1608Metric,RC0603FR-0710KL,\n"
+                       "R2,1,1k,R_0603_1608Metric,RC0603FR-071KL,DNP\n")
+    it = next(i for i in items if i["name"] == "RES-0603-1k")
+    assert it["source"]["symbol"] and it["source"]["footprint"], it["source"]
