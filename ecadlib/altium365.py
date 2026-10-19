@@ -516,6 +516,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                                          dry_run, note, transition))
             elif existing:
                 new = merged_params(existing, it)
+                res["a365_revision"] = _rev_id(existing)
                 if new is None:
                     res["action"] = "up_to_date"
                 else:                          # full replace: a merge, so parameters added in Altium 365 are kept
@@ -554,6 +555,10 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                         if not (guid and "folder" in str(e).lower()):
                             raise
                         client.release({**inp, "componentParentFolderId": guid})
+                    try:                       # the revision it made, for `ecadlib project check` (best effort)
+                        res["a365_revision"] = _rev_id(client.find(ws, it["name"]))
+                    except Exception:
+                        pass
                 released.update((k, (n or "").lower()) for k, n in zip(("symbols", "footprints"), names) if n)
         except Exception as e:                 # keep going; report per part
             res["action"], res["detail"] = "error", f"{type(e).__name__}: {e}"
@@ -565,8 +570,12 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     if lg and not dry_run:                     # what went up, per part, at which ledger revision
         from . import change_gate as CG
         ok = {r["name"] for r in results if r["action"] in PUSHED}
-        CG.record_publish(folder, items, target, ok=lambda i: i["name"] in ok,
-                          detail=lambda i: next((r["action"] for r in results if r["name"] == i["name"]), ""))
+        def detail(i):                         # the action, and the workspace revision it left (project check)
+            r = next((r for r in results if r["name"] == i["name"]), {})
+            d = r.get("detail")
+            rid = r.get("a365_revision") or (d.get("revision") if isinstance(d, dict) else None)
+            return {"action": r.get("action", ""), **({"a365_revision": rid} if rid else {})}
+        CG.record_publish(folder, items, target, ok=lambda i: i["name"] in ok, detail=detail)
     return results
 
 

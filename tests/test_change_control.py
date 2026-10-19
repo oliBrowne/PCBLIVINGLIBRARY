@@ -592,6 +592,7 @@ def test_a365_approved_change_is_a_new_revision_and_held_sends_nothing():
     first = push()
     assert first["AO3401A"]["action"] == "release" and nx.comps["AO3401A"]["revision"]["revisionId"] == "R1"
     assert LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["revision"] == 1
+    assert LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["detail"] == {"action": "release", "a365_revision": "R1"}
     # a held change: the plan still has the released revision, so nothing new goes up
     items = items_of(plan)
     g = gate(lib)
@@ -614,6 +615,7 @@ def test_a365_approved_change_is_a_new_revision_and_held_sends_nothing():
     assert ("release", "AO3401A", True, False) in nx.calls, nx.calls
     assert nx.comps["AO3401A"]["revisions"][0]["componentItemName"] == "AO3401A", "revision 1 is never edited"
     assert LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["revision"] == 2
+    assert LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["detail"]["a365_revision"] == "R2"
     nx.calls.clear()
     again = push()["AO3401A"]
     assert again["action"] == "up_to_date" and not [c for c in nx.calls if c[0] == "release"], (again, nx.calls)
