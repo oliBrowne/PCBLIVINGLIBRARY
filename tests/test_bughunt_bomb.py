@@ -334,3 +334,14 @@ def test_bom51_mpn_key_folds_unicode_instead_of_dropping_it():
     assert mpn_key("µA741CN") == mpn_key("UA741CN") != mpn_key("A741CN")
     assert norm_mpn("ＬＭ358DR") == "LM358DR" and norm_mpn("MAX232ÉPE") == "MAX232EPE"
     assert norm_mpn("LM358-DR/NOPB") == "LM358DRNOPB" and norm_mpn("部品X1") == "部品X1"   # never dropped
+
+
+def test_bom37_one_part_per_passive_value_however_it_is_spelled():
+    from ecadlib.altium_export import to_rows
+    vals = [("C1", "1µF", "C_0402_1005Metric"), ("C2", "1uF", "C_0402_1005Metric"), ("C3", "1u", "C_0402_1005Metric"),
+            ("C4", "100nF", "C_0402_1005Metric"), ("C5", "0.1uF", "C_0402_1005Metric"),
+            ("C6", "100nF 50V", "C_0402_1005Metric"), ("C7", "100nF", "C_0603_1608Metric"),
+            ("R1", "4k7", "R_0603_1608Metric"), ("R2", "4.7k", "R_0603_1608Metric"), ("R3", "4K7", "R_0603_1608Metric")]
+    rows = to_rows([{"designator": d, "value": v, "footprint": f} for d, v, f in vals])
+    names = sorted(n for df in rows.values() for n in df["Part Number"])
+    assert names == ["CAP-0402-100nF", "CAP-0402-100nF50V", "CAP-0402-1µF", "CAP-0603-100nF", "RES-0603-4k7"], names
