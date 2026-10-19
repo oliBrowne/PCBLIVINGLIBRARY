@@ -435,3 +435,5 @@ def test_a_blank_pin_count_comes_from_the_package_name_or_the_pin_table():
         (8, "the package name VSON-8-1EP_3x3mm_P0.65mm")
     assert D._pin_count_from({"name": "?"}, {"pins": pins[:8]}) == (8, "the pin table")
     assert D._pin_count_from({"name": "SOIC-14_3.9x8.7mm"}, {"pins": pins[:8]}) == (None, "")   # they disagree: left blank
+    assert D._pin_count_from({"name": "SOIC-14-16_3.9x9.9mm_P1.27mm"}, {"pins": pins[:8]}) == (None, "")  # 14 on 16 places
+    assert D._pin_count_from({"name": "HVSSOP-8-1EP_3x3mm_P0.65mm", "exposed_pad": {}}, {"pins": []})[0] == 8

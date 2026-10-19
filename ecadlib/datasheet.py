@@ -1112,7 +1112,9 @@ def self_check(spec, ext, review):
 def _pin_count_from(spec, ext):
     """A read that left pin_count blank (UCC25800, UCC256301: live benchmark 2026-10-19) -> (n, how) from the package
     name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "")."""
-    m = re.match(r"[A-Za-z]+[A-Za-z0-9]*?-(\d+)(?=[-_]|$)", str(spec.get("name") or ""))
+    m = re.match(r"[A-Za-z]+[A-Za-z0-9]*?-(\d+)(?:-(\d+)(?=[_]|$))?(?=[-_]|$)", str(spec.get("name") or ""))
+    if m and m.group(2) and int(m.group(2)) > int(m.group(1)):
+        return None, ""                               # SOIC-14-16 (UCC256301): 14 pins on 16 places, which ones isn't said
     by_name = int(m.group(1)) if m else None
     nums = {str(p.get("num")) for p in ext.get("pins") or [] if str(p.get("num") or "").isdigit()}
     by_pins = len(nums) - (1 if spec.get("exposed_pad") and str(len(nums)) in nums else 0) if nums else None
@@ -1700,24 +1702,34 @@ class Reader:
             rec = self.results.get(job["key"])
             if rec is None:
                 return job
-            kind, why, _ = self._judge(job, rec)
+            kind, why, res = self._judge(job, rec)
+            gaps = len(((res or {}).get("spec") or {}).get("unresolved") or []) + len(why)
+            rank = ({"ok": 2, "incomplete": 1}.get(kind, 0), -gaps) if "message" in rec else (-1, 0)
             done = job["route"]["attempts"] + [{"model": job["model"], "pages": len(job["offset"]) if isinstance(job["offset"], list)
                                                 else "all", "verdict": kind, "why": why[:4], "via": rec.get("via"),
                                                 "served": (rec.get("message") or {}).get("model"),
                                                 "usage": (rec.get("message") or {}).get("usage") or rec.get("usage")}]
             nxt = self.router.next_step(job["rung"], job["level"], len(job["levels"]), kind, len(done))
+            best = job["route"].get("best")           # [rank, rung, level, answer no.] of the best answer so far
             if nxt is None:
+                if best and tuple(best[0]) > rank:    # CY14U256LA-BA: the whole-PDF read came back with no pins and no
+                    job = self._at(job, best[1], best[2])  # grid ("x"), after a 5-page read that had them: keep that one
+                    job["route"] = dict(job["route"], attempts=done, kept=f"answer {best[3]} (a later one was worse)")
+                    job["final"] = True
+                    return job
                 job["route"]["attempts"] = done
                 job["final"] = "message" in rec
                 return job
-            job = self._at(dict(job, route=dict(job["route"], attempts=done)), *nxt)
+            if best is None or rank > tuple(best[0]):
+                best = [list(rank), job["rung"], job["level"], len(done)]
+            job = self._at(dict(job, route=dict(job["route"], attempts=done, best=best)), *nxt)
 
     def _result(self, job, rec):
         ext = parse_message(rec["message"])
         res = process(ext, job["part"], job["url"], rec.get("model") or self.model, rec.get("page_offset", job["offset"]), rec["message"])
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
         if job.get("route"):
-            res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k != "picked"}
+            res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k not in ("picked", "best")}
         if job["prov"].get("sent_as") == "url":
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
         if job["prov"].get("pages_sent"):
