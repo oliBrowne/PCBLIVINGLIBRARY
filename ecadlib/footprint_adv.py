@@ -121,6 +121,9 @@ def bga_balls(spec):
         for i in range(min(ia[0], ib[0]), max(ia[0], ib[0]) + 1):
             for j in range(min(ia[1], ib[1]), max(ia[1], ib[1]) + 1):
                 have.discard((i, j))
+    if not have:
+        raise ValueError(f"no balls left: depopulated / ball_map remove every ball of the {rows} x {cols} grid "
+                         "(check the ranges)")
     return [(f"{row_name(i, jedec)}{j + 1}", i, j) for i, j in sorted(have)]
 
 
@@ -577,7 +580,7 @@ def check_pad_table(spec, pads=None):
                     odd.append(p)
             if best is None or len(odd) < len(best[1]):
                 best = (name, odd)
-        name, odd = best
+        name, odd = best if best is not None else ("", [])   # every pad on every mirror line (all at one point)
         if odd and len(odd) <= max(2, len(cu_all) // 10):
             add("warning", "symmetry", f"the pads are {name} symmetric except " +
                 ", ".join(f"pad {p['num'] or '(hole)'} at ({p['x']:g}, {p['y']:g}) ({p['_src']})" for p in odd[:4]) +
@@ -870,6 +873,8 @@ def _bga(spec, density):
         if not spec.get("ball_diameter"):
             raise ValueError("bga needs ball_diameter (or the datasheet's land_diameter)")
         land, rule = ipc_bga_land(_dim(spec["ball_diameter"])[1], bt)
+    if land < 0.05:
+        raise ValueError(f"land {land:g} mm: ball_diameter / land_diameter must be a real size (> 0.05 mm)")
     style = spec.get("land_style", "NSMD")
     cu, mask = (land, NSMD_MASK) if style == "NSMD" else (round(land + 2 * SMD_GROW, 3), -SMD_GROW)
     if cu >= min(e, ey) - 0.1:                            # the copper, which SMD-defined lands make bigger than the land

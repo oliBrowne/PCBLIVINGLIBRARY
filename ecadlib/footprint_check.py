@@ -261,6 +261,9 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     numset = set(nums)
 
     # ---- copper
+    for p in cu:                                     # zero-area copper: nothing to solder (size typed as 0, or a lost unit)
+        if p["w"] <= EPS or p["h"] <= EPS:
+            add("error", "copper", f"pad {p['num'] or '(unnumbered)'} has no copper: size {p['w']:g} x {p['h']:g} mm")
     close = {}                                       # (level, gap) -> [(a, b)]: one finding per distinct gap
     for i, a in enumerate(cu):
         for b in cu[i + 1:]:
@@ -435,7 +438,7 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     # ---- exposed-pad paste
     for p in cu:
         others = [q for q in cu if q is not p]
-        if not others or p["w"] * p["h"] < 3 * max(q["w"] * q["h"] for q in others):
+        if not others or p["w"] * p["h"] <= EPS or p["w"] * p["h"] < 3 * max(q["w"] * q["h"] for q in others):
             continue                                 # not an exposed pad
         if not any(abs(q["x"]) < p["w"] / 2 and abs(q["y"]) < p["h"] / 2 for q in others) and p["x"] == 0 and p["y"] == 0:
             windows = [q for q in pads if q["paste"] and not q["copper"]
