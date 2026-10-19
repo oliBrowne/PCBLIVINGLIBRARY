@@ -333,6 +333,7 @@ def _symbol(o, n, out):
         _chg(out, "geometry-minor", "symbol", "pin ends", None, ends,
              f"pin end moved: {'pins' if len(ends) > 1 else 'pin'} {_few(ends)} (where a wire meets the pin; wires in "
              f"placed schematics may need moving)")
+        out[-1]["drawing"] = True              # how the symbol is drawn: kicad_export.released_differs leaves it out
     if moved:
         _chg(out, "cosmetic", "symbol", "pin positions", None, moved, f"pin position / length / direction changed: {_few(moved)}")
     if art:
@@ -402,6 +403,8 @@ def _stacked(so, sn, out):
                     _chg(out, "electrical", "symbol", "pin ends", None, sorted(comp, key=_natkey),
                          f"{_pins_text(p, pn)}{where} now {'share' if len(p) > 1 else 'shares'} a pin end with "
                          f"{_pins_text(parts[0], pn)}: they connect")
+                    if _power_alike(comp, pn):        # one net's pins drawn on one end: no wrong connection
+                        out[-1]["drawing"] = True
         for comp in old:                              # connected before: in pieces now?
             parts = [c & comp for c in new if c & comp]
             if len(parts) <= 1:
@@ -415,7 +418,7 @@ def _stacked(so, sn, out):
                 _chg(out, "geometry-minor", "symbol", "pin ends", sorted(comp, key=_natkey), need,
                      f"{_pins_text(comp, pn)}{where} no longer share one pin end: {each} in placed schematics "
                      f"(a separate pin connects only where it is wired)")
-                out[-1]["least"] = "warn"             # never passes silently, whatever the policy
+                out[-1].update(least="warn", drawing=True)    # never passes silently, whatever the policy
             else:
                 parts.sort(key=lambda c: (-len(c), _natkey(min(c, key=_natkey))))
                 for p in parts[1:]:

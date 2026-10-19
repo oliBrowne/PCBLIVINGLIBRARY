@@ -266,3 +266,16 @@ def test_an_empty_footprint_property_on_a_placed_symbol_is_held():
         pro = _proj(d, inst="~")
         sym = next(r for r in PJ.check_kicad(pro, use_global=False)["rows"] if r["kind"] == "symbol")
         assert sym["action"] == "hold", sym
+
+
+def test_kicad_export_reuses_a_source_drawn_differently_but_not_one_that_joins_pins():
+    """The house rules may redraw the released .SchLib (pins grouped, one end per power pin) while kicad-export keeps
+    the KiCad source's drawing: pin ends that moved and power pins of one name stacked or not are how it is drawn
+    (released_differs leaves them out). A stack that joins other pins is a difference."""
+    base, _ = _altium(REG)
+    split, _ = _altium(_moved(_moved(REG, "11", y=-30), "12", y=-40))
+    for a, b in ((base, split), (split, base)):
+        ch = CD.diff(a, b)
+        assert ch and all(c.get("drawing") for c in ch if c["class"] != "cosmetic"), [(c["text"], c.get("drawing")) for c in ch]
+    ch = CD.diff(base, _altium(_moved(REG, "13", y=-10))[0])
+    assert any(c["class"] == "electrical" and not c.get("drawing") for c in ch), ch

@@ -336,6 +336,9 @@ def released_differs(item, plan_dir, sym):
     """A symbol fetched again from the part's source (KiCad, --lib, EasyEDA) against the released revision, the item's
     .SchLib (publish_guard has put a held change back) -> the changes that are more than cosmetic (pin names and types,
     hidden pins, the pin -> pad map); [] when it is the released symbol; None when there is no .SchLib to compare with.
+    How the symbol is drawn is no difference: the house rules may redraw the .SchLib (pins grouped, one end per power
+    pin) while KiCad keeps the source's drawing, so pin ends that moved, and power pins of one name stacked or not,
+    are left out; a stack that joins other pins is a difference.
     The fetched symbol is compared as the librarian releases it (converted to Altium and read back), so what the
     conversion always does (stacked pins hidden, unit 0 pins in every part) is no difference."""
     import tempfile
@@ -356,7 +359,7 @@ def released_differs(item, plan_dir, sym):
     got = copy.deepcopy(rel)
     got["symbol"] = dict(fetched, name=rel["symbol"].get("name"))
     got["hashes"] = FP.hashes(got)
-    return [c for c in CD.diff(rel, got) if c["class"] != "cosmetic"]
+    return [c for c in CD.diff(rel, got) if c["class"] != "cosmetic" and not c.get("drawing")]
 
 
 def kicad_pin_details(sym):
