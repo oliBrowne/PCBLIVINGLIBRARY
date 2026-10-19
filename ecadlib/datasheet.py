@@ -903,8 +903,8 @@ def to_spec(pkg, part, datasheet, model, offset, review):
             continue
         spec[k] = _drop_nulls(pkg[k])
         if isinstance(pkg[k], (dict, list)) and numeric(pkg[k]):
-            # advice for the person, not a failed check: "pad_table:" lines are check_pad_table errors (ds_route.FAILED)
-            review.append(f"{k} (copied as the model gave it): check every value against the drawing")
+            # advice for the person, not a failed check (ds_route.FAILED skips it)
+            review.append(f"{k}: copied as the model gave it; check every value against the drawing")
     pages = [v["page"] for k, v in prov.items() if v["page"] is not None]
     spec["source"] = {"datasheet": datasheet, "drawing": pkg["drawing"], "extracted_by": f"ecadlib.datasheet ({model})"}
     if pages:
@@ -1679,8 +1679,10 @@ class Reader:
             prov["note"] = note + (" (the picked pages could not be cut from this PDF)" if isinstance(lv, list) else "")
         if src[0] == "base64":
             prov.update(sent_as="base64", sent_bytes=len(src[1]), pages_sent=offset if isinstance(offset, list) else None)
-        headers, body = build_request(src, base["part"], base["package"], hint, model, self.effort, fallback=not self.deferred,
-                                      cache_doc=not self.deferred)
+        # shaped by the mode it will be sent in (an estimate prices the request the run will send: a synchronous one
+        # carries fallbacks and a cache write)
+        headers, body = build_request(src, base["part"], base["package"], hint, model, self.effort, fallback=not self.batch,
+                                      cache_doc=not self.batch)
         from .llm import rails as LRL
         sig = LRL.signature(self.info(model)["plan"])  # "" for a plain request: the cache keys of before
         key = ResultCache.key(base["src_hash"], model, base["part"], base["package"],
@@ -2549,7 +2551,16 @@ def main(argv=None):
                 guard(body)                           # the feedback turn, if any, is held to the same cap
                 with logging_to(Path(a.out) / "api_log.jsonl", print):
                     msg = ask_once(inf, headers, body, key, a.part, a.package, a.pdf, offset, guard=guard)
-            ext = parse_message(msg)
+            try:
+                ext = parse_message(msg)
+            except DatasheetError as e:               # a paid answer that fails parsing: kept for --from-response
+                if rec:
+                    raise
+                Path(a.out).mkdir(parents=True, exist_ok=True)
+                f = Path(a.out) / (re.sub(r"[^A-Za-z0-9_.+-]", "_", a.part) + ".response.json")
+                f.write_text(json.dumps({"page_offset": offset, "failed": str(e), "message": msg}, indent=2) + "\n",
+                             encoding="utf-8")
+                raise DatasheetError(f"{e} (the answer is saved in {f}: --from-response {f} re-checks it with no API call)")
             if not rec:
                 cache.put(ck, {"key": ck, "part": a.part, "url": a.pdf, "model": a.model, "page_offset": offset, "via": "sync",
                                "at": datetime.datetime.now().isoformat(timespec="seconds"), "message": msg})

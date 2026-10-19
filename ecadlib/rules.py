@@ -816,7 +816,8 @@ HELP = {
     "datasheet.api_key_env": "name of the environment variable with the API key; the key itself never goes in this file",
     "datasheet.max_cost_usd": "refuse a run whose estimated worst-case cost is higher (0 = no cap; --yes overrides)",
     "datasheet.ask_above_usd": "the Altium dialog, KiCad window and web UI always show the model and cost before an AI step; "
-                               "above this (or above max_cost_usd when set) they ask a second time (default 1.00)",
+                               "above this (or above max_cost_usd when set) they ask a second time (default 1.00; 0 = "
+                               "ask twice for every paid read)",
     "datasheet.page_budget": "pages sent on the first try, picked by text (drawing for this package, land pattern, pin table, "
                              "ordering info); widened to 3x, then the whole PDF, when the answer is incomplete (0 = whole PDF)",
     "datasheet.route": "single = `model` for every part | ladder = start on the cheapest model of `ladder` that suits the "

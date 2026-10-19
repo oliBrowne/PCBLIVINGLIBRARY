@@ -90,7 +90,8 @@ def quote(est, rules=None, key_set=True):
     models = list(est.get("models") or {}) or [est.get("model") or cfg["model"]]
     q = {"step": "datasheet", "parts": len(rows), "names": [r["part"] for r in rows], "model": ", ".join(models),
          "usd": usd, "usd_max": worst, "limit_usd": lim, "limit_name": which, "price_known": worst is not None,
-         "over_limit": worst is None or (lim > 0 and worst > lim), "exact": bool(est.get("exact_input")),
+         # max_cost_usd 0 = no cap; ask_above_usd 0 = ask twice for any paid read (the cautious setting)
+         "over_limit": worst is None or ((lim > 0 or which == "ask_above_usd") and worst > lim), "exact": bool(est.get("exact_input")),
          "cross_check": str(cfg.get("cross_check") or "auto") != "off", "key_set": bool(key_set),
          "skipped": [s["part"] for s in est.get("skipped") or []], "cached": list(est.get("cached") or [])}
     q["approve_usd"] = up(worst) if worst is not None else None

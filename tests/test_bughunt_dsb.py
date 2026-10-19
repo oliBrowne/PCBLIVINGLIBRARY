@@ -187,6 +187,72 @@ def test_ds35_pad_table_problems_are_messages():
     assert any("overlap" in x for x in lines)
 
 
+# ---------------------------------------------------------------- DS-57: single-part CLI
+def _cli(tmp, answers, rules=""):
+    import contextlib, io
+    from tests.test_datasheet import message
+    api = FakeAPI(script=[(200, a if "content" in a else message(D.to_wire(a))) for a in answers])
+    (tmp / "t.pdf").write_bytes(PDF)
+    (tmp / "r.toml").write_text(rules)
+    out = io.StringIO()
+    with patched(api), mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": KEY}), contextlib.redirect_stdout(out):
+        os.environ.pop("ANTHROPIC_BASE_URL", None)
+        try:
+            rc = D.main([str(tmp / "t.pdf"), "--part", "TESTPART", "--package", "RGT", "-o", str(tmp / "out"),
+                         "--rules", str(tmp / "r.toml")])
+        except SystemExit as e:
+            rc = e.code
+    return rc, api, out.getvalue()
+
+
+@lite
+def test_ds57_unparseable_paid_answer_is_saved(tmp_path):
+    from tests.test_datasheet import GOOD, message
+    w = D.to_wire(GOOD)
+    w["package"]["other_json"] = "{not json"
+    rc, api, _ = _cli(tmp_path, [message(w), message(w)])
+    assert rc and "not JSON" in str(rc) and "--from-response" in str(rc), rc
+    saved = json.loads((tmp_path / "out" / "TESTPART.response.json").read_text())
+    assert saved["failed"] and saved["message"]["content"]
+
+
+# ---------------------------------------------------------------- DS-47 / DS-46 / DS-65: quotes and prices
+def test_ds47_quote_prices_the_request_the_run_sends():
+    from ecadlib import rules as RU
+    api = FakeAPI(tokens=20000)
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        http = PdfHTTP({"https://a/ds.pdf": PDF})
+        rules = RU.load({"datasheet": {"cross_check": "off"}})
+        q_rd = D.Reader(d, d, key=KEY, http=http, log=None, rules=rules, batch=False, estimate=True)
+        qj = q_rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT")
+        quoted = q_rd.estimate([qj])["usd_max"]
+        rd = D.Reader(d, d + "/run", key=KEY, http=http, log=None, rules=rules, batch=False)
+        rj = rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT")
+        assert "fallbacks" in qj["body"] and qj["body"].keys() == rj["body"].keys()
+        assert quoted >= rd.estimate([rj])["usd_max"] - 1e-9
+
+
+def test_ds46_ask_above_zero_always_asks():
+    from ecadlib import ai_cost as AC
+    est = {"rows": [{"part": "P", "model": "claude-opus-5-5", "input_tokens": 1000}], "mode": "synchronous",
+           "usd": 0.05, "usd_max": 0.4, "models": {"claude-opus-5-5": 1}}
+    rules = {"datasheet": {"ask_above_usd": 0, "cross_check": "off"}}
+    assert AC.quote(est, rules)["over_limit"] is True
+    assert AC.quote(est, {"datasheet": {"ask_above_usd": 1.0, "cross_check": "off"}})["over_limit"] is False
+    assert AC.quote(est, {"datasheet": {"max_cost_usd": 0, "ask_above_usd": 1.0, "cross_check": "off"}})["over_limit"] is False
+
+
+def test_ds65_nan_price_rejected_and_unknown():
+    from ecadlib.llm import profiles as PR
+    from ecadlib import llm as LL
+    assert PR.check_field("price_in", float("nan"))
+    assert PR.check_field("price_out", float("inf"))
+    assert PR.check_field("price_in", 0.5) is None
+    with mock.patch.dict(LL._REG, {"acme-nan": {"endpoint": {"local": False}, "profile": {"price_in": float("nan"),
+                                                                                          "price_out": 1.0}}}):
+        assert LL.price("acme-nan") is None
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
