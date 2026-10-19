@@ -1042,6 +1042,23 @@ def check_pins(spec, ext, review):
     for p in pins:
         if not p["name"].strip() or len(p["name"]) > 40 or not p["name"].isprintable():
             review.append(f"symbol: pin {p['num']} has an unusable name {p['name'][:50]!r}")
+    if spec.get("package_type") == "bga" and spec.get("rows") and spec.get("cols"):
+        try:                                          # the balls footprint_gen will make (rows/cols, depopulated, ball_map)
+            from . import footprint_adv as FA
+            balls = [b[0] for b in FA.bga_balls(spec)]
+        except Exception:                             # a grid that doesn't add up: footprint_gen.build reports it
+            balls = None
+        if balls:
+            order = {b: i for i, b in enumerate(balls)}
+            key = lambda s: (s not in order, order.get(s, 0), s)
+            miss, extra = sorted(set(balls) - set(nums), key=key), sorted(set(nums) - set(balls), key=key)
+            if miss:
+                review.append(f"symbol: pins missing {miss[:20]}{' ...' if len(miss) > 20 else ''} (balls of the "
+                              f"{spec['rows']} x {spec['cols']} grid with no symbol pin)")
+            if extra:
+                review.append(f"symbol: pins not on the footprint {extra[:20]}{' ...' if len(extra) > 20 else ''} "
+                              f"(the footprint's balls are {balls[0]}..{balls[-1]})")
+            return
     grid = all(x.isdigit() or GRID_PIN.fullmatch(x) for x in nums) and any(GRID_PIN.fullmatch(x) for x in nums) \
         and spec.get("package_type") not in LINEAR_TYPES
     if grid:                                           # ball grid (A1, B2, ...) of a family added to the schema later
@@ -1185,6 +1202,12 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None):
             sexpr.parse(txt)
             if rep.get("warning"):
                 review.append(f"footprint_gen: {rep['warning']}")
+            if spec.get("land"):                      # the maker's land pattern becomes copper as given: check it now,
+                from . import footprint_check as FC   # as the release check will (ds_route.FAILED: "land pattern:")
+                for lvl, rule, m in FC.check(txt, same_net=spec.get("same_net")):
+                    if lvl == "error" and rule == "copper":
+                        review.append(f"land pattern: {m} (check land pad_width / pad_center / pad_length against "
+                                      "the drawing)")
         except Exception as e:
             review.append(f"footprint_gen.build failed: {e!r}")
     sym = {"name": part, "description": f"{ext['symbol_description']} (read from the datasheet by ecadlib.datasheet; review before use)",
@@ -1206,8 +1229,16 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None):
     return {"spec": spec, "symbol": sym, "sidecar": side, "needs_review": review}
 
 
+def md(v):
+    """A value read from the PDF (by the model) as one line of Markdown text or one table cell: no line breaks (a
+    note can't start a heading of its own), '|' escaped (a pin name can't add a column), no heading/quote at the start."""
+    t = re.sub(r"[\r\n  \x0b\x0c]+", " ", str(v)).replace("|", "\\|")
+    return re.sub(r"^(\s*)([#>])", r"\1\\\2", t)
+
+
 def report(res):
-    """<part>.review.md: what was read and from where, what a person must check first, then the numbers to compare."""
+    """<part>.review.md: what was read and from where, what a person must check first, then the numbers to compare.
+    Every value that came from the PDF (notes, figure titles, labels, pin names) goes through md()."""
     from . import messages as M
     s, sym, side = res["spec"], res["symbol"], res["sidecar"]
     pins = len(sym.get("pins") or [])
@@ -1226,22 +1257,23 @@ def report(res):
     else:
         out += ["A person has to compare it with the datasheet before it is released; until then the part is held.", ""]
     out += [f"## Check these first ({len(res['needs_review'])})", ""]
-    out += [f"- [ ] {M.explain(r)['text']}" for r in res["needs_review"]] or \
+    out += [f"- [ ] {md(M.explain(r)['text'])}" for r in res["needs_review"]] or \
         ["Nothing failed the automatic checks. Still compare the drawing with the numbers below."]
     out += ["", "Page numbers are pages of the original PDF, counting from 1."]
     out += ["", "## Dimensions to compare with the drawing", "", "| Dimension | Label | Printed | mm (min / nom / max) | Page | Figure |", "|---|---|---|---|---|---|"]
     for k, p in side["dimensions"].items():
         pr = " / ".join(f"{p['printed'].get(x, '-')}" for x in ("min", "nom", "max")) + f" {p['unit']}"
         mm = " / ".join(f"{p['mm'].get(x, '-')}" for x in ("min", "nom", "max"))
-        out.append(f"| {k} | {p['label']} | {pr} | {mm}{' (converted)' if 'converted' in p else ''} | {p['page']} | {p['figure']} |")
+        out.append(f"| {md(k)} | {md(p['label'])} | {md(pr)} | {md(mm)}{' (converted)' if 'converted' in p else ''} | "
+                   f"{md(p['page'])} | {md(p['figure'])} |")
     if s.get("unresolved"):
         out += ["", "Unresolved: " + ", ".join(s["unresolved"])]
     pt = side["pin_table"]
-    out += ["", f"## Pins (table on page {pt['page']}, {pt['figure']}; {pt['rows']} rows)", "",
+    out += ["", f"## Pins (table on page {md(pt['page'])}, {md(pt['figure'])}; {md(pt['rows'])} rows)", "",
             "| num | name | type | side | page |", "|---|---|---|---|---|"]
-    out += [f"| {p['num']} | {p['name']} | {p['type']} | {p['side']} | {p['page']} |" for p in side["pins"]]
+    out += [f"| {md(p['num'])} | {md(p['name'])} | {md(p['type'])} | {md(p['side'])} | {md(p['page'])} |" for p in side["pins"]]
     if side["notes"]:
-        out += ["", "## Model notes", ""] + [f"- {n}" for n in side["notes"]]
+        out += ["", "## Model notes", ""] + [f"- {md(n)}" for n in side["notes"]]
     rt = side.get("route")
     if rt and rt.get("attempts"):
         out += ["", f"## How it was read ([datasheet] route = {rt.get('route')}; started on {rt['ladder'][0] if len(rt['ladder']) == 1 else rt.get('start')})", ""]
@@ -1352,6 +1384,38 @@ def is_pdf(data):
     return isinstance(data, (bytes, bytearray)) and b"%PDF-" in data[:1024]
 
 
+_NO_FETCH_HOSTS = re.compile(r"(localhost|.*\.localhost|metadata|metadata\.google\.internal|instance-data(\.ec2\.internal)?)\.?",
+                             re.I)
+
+
+def unsafe_download(url):
+    """Why a datasheet link must not be downloaded, or None: only http(s), and never this machine (loopback), a
+    link-local address (cloud metadata at 169.254.169.254) or another non-routable address. A datasheet link comes
+    from a BOM or a web page someone else wrote, and the bytes are stored and sent to the model; a datasheet server
+    on your own network (10.x, 192.168.x) stays allowed. Literal addresses and well-known names only (no DNS lookup)."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(str(url))
+        host = (u.hostname or "").strip("[]")
+    except ValueError:
+        return "not a valid URL"
+    if u.scheme.lower() not in ("http", "https"):
+        return f"{u.scheme or 'no'} scheme: only http(s) links are downloaded"
+    if not host:
+        return "no host"
+    if _NO_FETCH_HOSTS.fullmatch(host):
+        return f"{host} is this machine or a cloud metadata service"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    ip = getattr(ip, "ipv4_mapped", None) or ip
+    if ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved:
+        return f"{host} is this machine, a link-local or a reserved address"
+    return None
+
+
 class PdfStore:
     """Downloaded datasheets, content-validated, with provenance: <cache>/datasheets/<sha256(url)>.pdf + .json.
     httpcache keeps text bodies only, so PDFs (binary) are stored here; the same session, user agent, per-host
@@ -1401,11 +1465,17 @@ class PdfStore:
             meta = json.loads(meta_f.read_text(encoding="utf-8"))
             if hashlib.sha256(data).hexdigest() == meta.get("sha256"):
                 return data, dict(meta, where=where or meta.get("where"), from_cache=True)
+        why = unsafe_download(url)                    # a BOM cell or a page's link to this machine / cloud metadata
+        if why:
+            raise DatasheetError(f"{url}: not downloaded ({why})")
         if self.offline:
             raise DatasheetError(f"{url}: offline and not downloaded before")
         status, data, ctype, final, err = self._get(url)
         if err:
             raise DatasheetError(f"{url}: {err}")
+        why = unsafe_download(final) if final and final != url else None
+        if why:                                       # redirected there: the bytes are not kept or sent anywhere
+            raise DatasheetError(f"{url}: redirected to {final}, not used ({why})")
         if not 200 <= (status or 0) < 300:
             raise DatasheetError(f"{url}: HTTP {status}")
         if len(data) > MAX_DOWNLOAD:
@@ -1439,6 +1509,7 @@ def pdf_link(html, base):
     links = [m.group(1) for m in re.finditer(r"""href=["']([^"'#]+?\.pdf(?:\?[^"']*)?)["']""", text, re.I)]
     if refresh:
         links.insert(0, refresh.group(1))
+    links = [u for u in links if urlparse(urljoin(base, u)).scheme.lower() in ("http", "https")]   # no file:, data:
     if not links:
         return None
     host = urlparse(base).netloc
@@ -1549,6 +1620,33 @@ def custom_id(name, taken):
     return cid
 
 
+_IN_FLIGHT = set()                                    # fingerprints of batch creates running in this process now
+
+
+def _owner():
+    import socket
+    return {"pid": os.getpid(), "host": socket.gethostname()}
+
+
+def _create_in_flight(m):
+    """A pending batch create (batch_state.json) that another Reader is still sending: in this process, or in a live
+    process on this machine (POSIX), started under an hour ago. Otherwise its answer was lost: look for it."""
+    import socket
+    if not m.get("pid") or m.get("host") != socket.gethostname() or time.time() - float(m.get("at") or 0) > 3600:
+        return False
+    if m["pid"] == os.getpid():
+        return m.get("fingerprint") in _IN_FLIGHT
+    if os.name != "posix":                            # os.kill(pid, 0) would end the process on Windows
+        return False
+    try:
+        os.kill(int(m["pid"]), 0)
+    except ProcessLookupError:
+        return False
+    except (OSError, ValueError):                     # PermissionError: alive, another user's
+        return True
+    return True
+
+
 # A link that is wrong everywhere: not a PDF, too big, or gone. 401 / 403 / 429 are not in it: a maker's site that
 # refuses this machine (bot rules, a corporate proxy) usually serves the API's fetcher, so such a link goes as a URL.
 BROKEN_LINK = r"not a PDF|HTTP 4(?!01|03|29)\d\d|larger than"
@@ -1589,6 +1687,8 @@ class Reader:
         self.say, self.sleep = log or (lambda *a: None), sleep or time.sleep
         self._client, self.pending, self.last_estimate, self.committed_usd = client, {}, None, 0.0
         self._holds = {}                              # key -> worst-case USD held for requests not yet answered
+        self._creates_done = set()                    # pending-create fingerprints this Reader settled (_save_state)
+        self._own_creates = set()                     # ... and the ones it wrote
         from . import ds_route as DR                  # pages and model per part, escalation, cost ledger
         self.router, self.ledger, self.page_budget = DR.Router(dict(self.cfg, model=self.model), model), DR.Ledger(self.dir), \
             self.cfg["page_budget"]
@@ -1876,6 +1976,10 @@ class Reader:
         while True:
             if job.get("final"):
                 return self._result(job, self.results.get(job["key"]))
+            bid = self._open_batch(job["key"])
+            if bid:                                   # this exact request is waiting in a batch: never bought twice
+                raise DatasheetError(f"waiting in Message Batch {bid} (sent by an earlier run, already paid for): "
+                                     "collect it with `ecadlib datasheet batch <plan.json>` or run the batch read again")
             if not _guarded:
                 self._guard_cost([job])
             _guarded = False
@@ -2061,9 +2165,42 @@ class Reader:
         f = self.dir / "batch_state.json"
         return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"batches": []}
 
+    def _open_batch(self, key):
+        """The id of a submitted, not yet collected batch holding this request key, or None."""
+        if not (self.dir / "batch_state.json").exists():
+            return None
+        try:
+            st = self._state()
+        except (OSError, ValueError):
+            return None
+        return next((b.get("id") for b in st.get("batches") or [] if not b.get("collected")
+                     and key in (b.get("requests") or {}).values()), None)
+
     def _save_state(self, st):
+        """Write batch_state.json, merged with what is on disk now: another run on the same folder (the web UI and
+        the command line, two UI requests) may have recorded a batch since this one read the file, and a paid batch
+        must never be forgotten. Its batches and pending creates are added to st (in place); for a batch both know,
+        collected wins. Under a lock (datasheet/plan.lock) for the read-merge-write."""
+        from .fsutil import plan_lock
         self.dir.mkdir(parents=True, exist_ok=True)
-        write_text_atomic(self.dir / "batch_state.json", json.dumps(st, indent=2))
+        with plan_lock(self.dir):
+            try:
+                disk = self._state()
+            except (OSError, ValueError):
+                disk = {"batches": []}
+            mine = {b.get("id"): b for b in st.setdefault("batches", [])}
+            for b in disk.get("batches") or []:
+                if b.get("id") not in mine:
+                    st["batches"].append(b)
+                elif b.get("collected") and not mine[b["id"]].get("collected"):
+                    mine[b["id"]].update(b)
+            # pending creates: the file's (another run's included) less the ones this Reader settled, plus its own
+            on_disk = [m for m in disk.get("pending_creates") or [] if m.get("fingerprint") not in self._creates_done]
+            fps = {m.get("fingerprint") for m in on_disk}
+            own = [m for m in st.get("pending_creates") or [] if m.get("fingerprint") in self._own_creates
+                   and m.get("fingerprint") not in self._creates_done | fps]
+            st["pending_creates"] = on_disk + own
+            write_text_atomic(self.dir / "batch_state.json", json.dumps(st, indent=2))
 
     def recollect(self, jobs=()):
         """Answers already paid for in a collected batch that this code reads now (a parser fix since): the Batches API
@@ -2109,7 +2246,9 @@ class Reader:
         """A batch create whose answer was lost (timeout, connection reset, 5xx) may have created a paid batch. Before
         anything is created again, list recent batches and adopt the one created then with the same number of
         requests; if none (or more than one) matches, refuse to resubmit unless --yes."""
-        pend = list(st.get("pending_creates") or [])
+        # a create still in flight in another run on this folder (the web UI and the command line at once) is left
+        # as it is, and its parts count as submitted (open) until that run records the batch
+        pend = [m for m in st.get("pending_creates") or [] if not _create_in_flight(m)]
         if not pend:
             return
         known = {b["id"] for b in st["batches"]}
@@ -2142,6 +2281,7 @@ class Reader:
                     "can't be confirmed. Check console.anthropic.com > Batches, then re-run with --yes to send again "
                     f"(state: {self.dir / 'batch_state.json'})")
             st["pending_creates"].remove(m)
+            self._creates_done.add(m.get("fingerprint"))
         self._save_state(st)
 
     def flush(self):
@@ -2187,7 +2327,8 @@ class Reader:
         client = self.client()
         with logging_to(self.log_file, self.say):
             self._resolve_pending_creates(st, client)   # a create that may have gone through is found, never re-sent
-            open_ = {k for b in st["batches"] if not b.get("collected") for k in b["requests"].values()}
+            open_ = {k for b in st["batches"] if not b.get("collected") for k in b["requests"].values()} | \
+                {k for m in st.get("pending_creates") or [] if _create_in_flight(m) for k in (m.get("requests") or {}).values()}
         if self.recollect(jobs):                      # answered in a collected batch, readable now: never sent again
             st = self._state()
         with logging_to(self.log_file, self.say):
@@ -2213,24 +2354,34 @@ class Reader:
                                  else dict(j["body"], model=api_model)})
                 mark = {"fingerprint": hashlib.sha256(json.dumps([self.model, sorted(ids.items())]).encode()).hexdigest()[:24],
                         "at": time.time(), "n": len(reqs), "model": self.model, "requests": ids,
-                        "parts": {c: j["name"] for c, j in zip(ids, chunk)}}
+                        "parts": {c: j["name"] for c, j in zip(ids, chunk)}, **_owner()}
                 st.setdefault("pending_creates", []).append(mark)
+                self._own_creates.add(mark["fingerprint"])
+                self._creates_done.discard(mark["fingerprint"])   # the same parts sent again (--yes after a lost create)
+                _IN_FLIGHT.add(mark["fingerprint"])
                 self._save_state(st)                  # written BEFORE the create: a lost answer leaves this behind
                 try:
                     b = client.batch_create(reqs)
                 except APIError as e:
                     if e.status is not None and (e.status < 500 or e.status == 529):   # an answer that says not created
                         st["pending_creates"].remove(mark)
+                        self._creates_done.add(mark["fingerprint"])
                         self._save_state(st)
                     else:
                         e.args = (f"{e.args[0]} (the batch may have been created: the next run looks for it before "
                                   "sending again)",)
+                    _IN_FLIGHT.discard(mark["fingerprint"])
+                    raise
+                except BaseException:
+                    _IN_FLIGHT.discard(mark["fingerprint"])
                     raise
                 st["pending_creates"].remove(mark)
+                self._creates_done.add(mark["fingerprint"])
                 st["batches"].append({"id": b["id"], "created": b.get("created_at"), "model": self.model, "models": models,
                                       "requests": ids, "parts": {c: j["name"] for c, j in zip(ids, chunk)},
                                       "status": b.get("processing_status"), "collected": False})
                 self._save_state(st)
+                _IN_FLIGHT.discard(mark["fingerprint"])
                 self.say(f"  datasheet batch {b['id']}: {len(reqs)} parts submitted")
             errors = {}
             t0 = time.time()
@@ -2238,13 +2389,28 @@ class Reader:
                 if b.get("collected") or not set(b["requests"].values()) & {j["key"] for j in jobs}:
                     continue
                 while True:
-                    info = client.batch_get(b["id"])
+                    try:
+                        info = client.batch_get(b["id"])
+                    except APIError as e:
+                        if e.status != 404:
+                            raise
+                        info = None                   # expired, deleted or another workspace's: its parts go again
+                        break
                     b["status"], b["counts"] = info.get("processing_status"), info.get("request_counts")
                     self._save_state(st)
                     if info.get("processing_status") == "ended" or not self.wait or time.time() - t0 > self.max_wait_s:
                         break
                     self.say(f"  datasheet batch {b['id']}: {info.get('processing_status')} {info.get('request_counts')}")
                     self.sleep(self.poll)
+                if info is None:
+                    gone = (f"batch {b['id']} is gone (the API answered 404: expired, deleted, or made with another "
+                            "workspace's key); run again to send its parts again")
+                    errors.update({k: gone for k in b["requests"].values()})
+                    b["collected"], b["lost"] = True, "404"
+                    b["errors"] = {c: gone for c in b["requests"]}
+                    self._save_state(st)
+                    self.say(f"  datasheet {gone}")
+                    continue
                 if info.get("processing_status") != "ended":
                     continue
                 for line in client.batch_results(info):

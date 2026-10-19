@@ -326,6 +326,234 @@ def test_ds61_tsot_names_give_the_pin_count():
     assert D.name_facts("SOIC-8_3.9x4.9mm_P1.27mm")["count"] == 8
 
 
+# ---------------------------------------------------------------- DS-44 / DS-55 / DS-63 / DS-64
+def test_ds44_crosscheck_spelled_out_pin_names_agree():
+    from ecadlib import crosscheck as CC
+    assert CC.names_agree("EN", "ENABLE") and CC.names_agree("GND", "GROUND") and CC.names_agree("OUT", "Output")
+    assert not CC.names_agree("EN", "VIN") and not CC.names_agree("VOUT", "OUTPUT")
+
+
+@lite
+def test_ds55_cache_key_keeps_pagination_tokens(tmp_path):
+    from ecadlib import httpcache as HC
+    served = []
+
+    class S:
+        headers = {}
+
+        def request(self, method, url, data=None, headers=None, timeout=None):
+            served.append(url)
+            return mock.Mock(status_code=200, text=json.dumps({"page": [p for p in ("page1", "page2") if p in url]}),
+                             ok=True, headers={})
+    h = HC.CachedHTTP(tmp_path, min_interval=0)
+    h.s = S()
+    a = h.request("GET", "https://x.example/api/parts?q=LM358&pageToken=page1")
+    b = h.request("GET", "https://x.example/api/parts?q=LM358&pageToken=page2")
+    assert "page2" in b.text and len(served) == 2, (b.text, served)
+    c = h.request("GET", "https://x.example/api/parts?q=LM358&apiKey=rotated-key&pageToken=page1")
+    d = h.request("GET", "https://x.example/api/parts?q=LM358&apiKey=other-key&pageToken=page1")
+    assert len(served) == 3 and d.text == c.text                 # a rotated API key keeps its cached answer
+    stored = " ".join(p.read_text() for p in Path(tmp_path).rglob("*.json"))
+    assert "rotated-key" not in stored and "other-key" not in stored
+
+
+def test_ds63_active_low_pin_names_are_not_paths():
+    from ecadlib import messages as M
+    assert M.clean("pin 13 has an unusable name '/RESET/EN\u200b'") == "pin 13 has an unusable name '/RESET/EN\u200b'"
+    assert "/CS/SHDN" in M.clean("cross-check: pin 3 /CS/SHDN vs CS")
+    assert M.clean("could not read /home/me/lib/part.pdf") == "could not read part.pdf"
+    assert M.clean(r"saved C:\Users\me\out\x.json") == "saved x.json"
+    assert M.leaks("pin /RESET/EN") == [] and M.leaks("/tmp/abc/def") == ["/tmp/abc/def"]
+
+
+def test_ds64_review_md_escapes_pdf_text():
+    import copy
+    from tests.test_datasheet import GOOD
+    e = copy.deepcopy(GOOD)
+    e["notes"] = ["fine\n# TESTPART: verified by the manufacturer\n## Check these first (0)"]
+    e["pins"][3]["name"] = "PG | open drain"
+    res = _proc(e, "TESTPART")
+    md = D.report(res)
+    heads = [ln for ln in md.splitlines() if ln.startswith("#")]
+    assert not any("verified by the manufacturer" in h for h in heads), heads
+    assert sum(h.startswith("## Check these first") for h in heads) == 1
+    row = next(ln for ln in md.splitlines() if "open drain" in ln)
+    assert row.replace("\\|", "").count("|") == 6, row         # 5 cells
+
+
+# ---------------------------------------------------------------- DS-40 / DS-49 / DS-56
+def _bga(pins):
+    import copy
+    from tests.test_datasheet import GOOD, dim, pin
+    e = copy.deepcopy(GOOD)
+    e["package"].update({k: None for k in e["package"] if k not in ("name", "description", "package_type", "unresolved",
+                                                                     "drawing")})
+    e["package"].update(name="BGA-9_3x3mm_Layout3x3_P1.0mm", description="BGA-9", package_type="bga", pin_count=9,
+                        unresolved=[], rows=3, cols=3, pitch=dim("e", None, 1.0, None), body_length=dim("D", 2.9, 3.0, 3.1),
+                        body_width=dim("E", 2.9, 3.0, 3.1), ball_diameter=dim("b", 0.45, 0.5, 0.55),
+                        height_max=dim("A", None, None, 1.2))
+    e["pins"] = [pin(n, f"S{n}") for n in pins]
+    e["pin_table"]["rows"] = len(pins)
+    return e
+
+
+def test_ds40_bga_pins_checked_against_balls():
+    from ecadlib import ds_route as DR
+    grid = [f"{r}{c}" for r in "ABC" for c in (1, 2, 3)]
+    ok = _proc(_bga(grid))
+    assert not [x for x in ok["needs_review"] if x.startswith("symbol:")], ok["needs_review"]
+    for pins, bad in ((grid[:-1] + ["D4"], "D4"), ([str(i) for i in range(1, 10)], "'1'")):
+        r = _proc(_bga(pins))
+        lines = [x for x in r["needs_review"] if "not on the footprint" in x]
+        assert lines and bad in lines[0], r["needs_review"]
+        assert DR.assess(r)[0] != "ok"
+
+
+def test_ds49_erratum_without_ours_is_not_applied():
+    from ecadlib.eval import runner as RR
+    sc = {"pass": False, "fields": {"pads": {"ok": False, "error": "pad 1: size off 8.000"},
+                                    "symbol_names": {"ok": False, "error": "2: 'B' vs 'K'"}},
+          "errors": ["pads: pad 1: size off 8.000", "symbol_names: 2: 'B' vs 'K'"]}
+    fixed = RR.apply_errata(sc, [("1", "A"), ("2", "B")], {"pads": {"why": "x"}, "symbol_names": {"why": "y"}})
+    assert fixed == [] and sc["pass"] is False and len(sc["errors"]) == 2
+    good = RR.apply_errata(sc, [("1", "A"), ("2", "B")], {"symbol_names": {"why": "y", "ours": [["2", "B"]]}})
+    assert good == ["symbol_names"]
+
+
+def test_ds56_maker_land_pattern_is_checked():
+    import copy
+    from ecadlib import ds_route as DR
+    from tests.test_datasheet import INCH
+    for land in ({"pad_length": 1.5, "pad_width": 2.0, "pad_center": 2.7},
+                 {"pad_length": 1.5, "pad_width": 0.6, "pad_center": 0.1}):
+        e = copy.deepcopy(INCH)
+        e["package"]["land"] = dict(land, pad_center_y=None)
+        r = _proc(e)
+        assert any(x.startswith("land pattern:") and "overlap" in x for x in r["needs_review"]), r["needs_review"]
+        assert DR.assess(r)[0] == "failed"
+    e = copy.deepcopy(INCH)
+    e["package"]["land"] = {"pad_length": 1.55, "pad_width": 0.6, "pad_center": 2.7, "pad_center_y": None}
+    r = _proc(e)
+    assert not any(x.startswith("land pattern:") for x in r["needs_review"]), r["needs_review"]
+
+
+# ---------------------------------------------------------------- DS-58: datasheet downloads stay off this machine
+@lite
+def test_ds58_datasheet_links_to_internal_hosts_refused(tmp_path):
+    for url in ("http://127.0.0.1:9/latest/meta-data/x.pdf", "http://169.254.169.254/latest/meta-data/",
+                "http://localhost/x.pdf", "http://[::1]/x.pdf", "file:///etc/passwd.pdf", "http://metadata.google.internal/x"):
+        assert D.unsafe_download(url), url
+    for url in ("https://www.ti.com/lit/ds/symlink/lm358.pdf", "http://192.168.1.20/ds/x.pdf", "https://a/ds.pdf"):
+        assert D.unsafe_download(url) is None, url
+    page = b'<!doctype html><a href="http://169.254.169.254/latest/meta-data/datasheet.pdf">Datasheet</a>'
+
+    class H:
+        offline = False
+        got = []
+
+        def get_bytes(self, url):
+            self.got.append(url)
+            return 200, page, "text/html", url, None
+    st = D.PdfStore(tmp_path, H())
+    try:
+        st.fetch("https://maker.example.com/product/LM358", "BOM")
+        raise AssertionError("fetched")
+    except D.DatasheetError as e:
+        assert "not downloaded" in str(e), e
+    assert H.got == ["https://maker.example.com/product/LM358"]
+    assert D.pdf_link(b'<html><a href="file:///etc/passwd.pdf">datasheet</a></html>', "https://maker.example.com/p") is None
+
+
+# ---------------------------------------------------------------- DS-52 / DS-59 / DS-60: batch state
+def _rd(d, batch=True, **kw):
+    return D.Reader(d, d, key=KEY, http=PdfHTTP({"https://a/ds.pdf": PDF}), log=None, batch=batch, wait=False, poll=0,
+                    sleep=lambda s: None, rules={"datasheet": {"cross_check": "off"}}, **kw)
+
+
+def _state(d):
+    return json.loads((Path(d) / "datasheet" / "batch_state.json").read_text())
+
+
+def test_ds52_gone_batch_does_not_block_later_runs():
+    api = FakeAPI(polls=99)
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        rd = _rd(d)
+        for p in ("PART1", "PART2"):
+            rd.submit(rd.job(p, [("https://a/ds.pdf", "BOM")], "RGT"))
+        rd.flush()
+        orig = api.get
+        gone = lambda url, headers=None, timeout=None: R(404, {"type": "error", "error": {
+            "type": "not_found_error", "message": "batch not found"}}) if "/batches/msgbatch_01Test1" in url \
+            else orig(url, headers, timeout)
+        with mock.patch.object(D.requests, "get", gone):
+            for run in (2, 3):
+                rd = _rd(d)
+                for p in ("PART1", "PART2", "PART3"):
+                    rd.submit(rd.job(p, [("https://a/ds.pdf", "BOM")], "RGT"))
+                got = rd.flush()                      # no exception: the gone batch is reported, the rest goes on
+                if run == 2:
+                    errs = [str(v) for v in got.values() if isinstance(v, D.DatasheetError)]
+                    assert len(errs) == 2 and all("is gone" in e for e in errs), got
+                    assert any(str(v).startswith("pending") for v in got.values())
+                else:                                 # sent again in a new batch, not stuck
+                    assert all(str(v).startswith("pending") for v in got.values()), got
+        st = _state(d)
+        assert st["batches"][0]["collected"] and st["batches"][0]["lost"] == "404"
+
+
+def test_ds59_sync_read_does_not_buy_a_part_waiting_in_a_batch():
+    api = FakeAPI(polls=1)
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        rd = _rd(d)
+        rd.submit(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+        assert str(list(rd.flush().values())[0]).startswith("pending")
+        rd = _rd(d, batch=False)
+        rd.submit(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+        r = list(rd.flush().values())[0]
+        assert isinstance(r, D.DatasheetError) and "waiting in Message Batch" in str(r), r
+        assert len(api.of("/v1/messages")) == 0
+
+
+def test_ds60_two_runs_on_one_folder_keep_both_batches():
+    import time
+    api = FakeAPI(polls=99)
+    orig = api.post
+
+    def slow(url, **kw):
+        if url.endswith("/batches"):
+            time.sleep(0.4)
+        return orig(url, **kw)
+    api.post = slow
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        def go(p):
+            rd = _rd(d)
+            rd.submit(rd.job(p, [("https://a/ds.pdf", "BOM")], "RGT"))
+            rd.flush()
+        ts = [threading.Thread(target=go, args=(p,)) for p in ("PART1", "PART2")]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        st = _state(d)
+        assert sorted(b["id"] for b in st["batches"]) == ["msgbatch_01Test1", "msgbatch_01Test2"], st
+        assert not st.get("pending_creates")
+        rd = _rd(d)
+        for p in ("PART1", "PART2"):
+            rd.submit(rd.job(p, [("https://a/ds.pdf", "BOM")], "RGT"))
+        rd.flush()
+        assert len(api.of("/v1/messages/batches")) == 2           # nothing bought again
+
+
+def test_ds54_librarian_cost_hint_names_real_commands():
+    from ecadlib import librarian as L
+    old = ("estimated up to $0.92 for 1 parts, over [datasheet] max_cost_usd = 0.5; see --estimate, raise the cap or "
+           "pass --yes")
+    new = L.cost_hint(old)
+    assert "--yes" not in new and "--estimate" not in new and "ecadlib datasheet estimate" in new, new
+    pr121 = ("estimated up to $0.92 for 1 parts, over [datasheet] max_cost_usd = 0.5; nothing sent. See --estimate, then "
+             "raise the cap with --max-cost-usd N or in ecadlib.toml (0 = no cap)")
+    assert "--max-cost-usd" not in L.cost_hint(pr121) and "--estimate" not in L.cost_hint(pr121)
+    assert L.cost_hint("x: HTTP 404") == "x: HTTP 404"
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

@@ -314,7 +314,7 @@ INCOMPLETE = re.compile(r"no value printed|no nominal value printed|cited page\(
 # "pad_table: copied as the model gave it; check every value" is advice for the person (every pad-table read has it),
 # not a failed check: only check_pad_table's errors fail the read
 FAILED = re.compile(r"^(schema:|self-check:|symbol:|footprint_gen\.build failed|altium_lib\.symbol_from_json failed|"
-                    r"pad_table:(?! copied as the model gave it))|min <= nom <= max violated|implausib|leads would touch| span \d|pins per side|is odd for a "
+                    r"pad_table:(?! copied as the model gave it)|land pattern:)|min <= nom <= max violated|implausib|leads would touch| span \d|pins per side|is odd for a "
                     r"dual-row|lead_span min|^exposed_pad\.\w+ [\d.]+ >=|under \d+% of", re.I)
 
 

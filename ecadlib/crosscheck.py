@@ -105,6 +105,8 @@ def _names(s):
         if norm_pin_name(part):
             out.add(norm_pin_name(part))
     out |= {LETTER[n] for n in out if n in LETTER}
+    from .eval.score import WORDS                     # a pin spelled out ("ENABLE") is "EN", as the eval scorer counts it
+    out |= {WORDS[n] for n in out if n in WORDS}
     return out - {""}
 
 
