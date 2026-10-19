@@ -1118,7 +1118,9 @@ def table_check(pkg, tables, offset, review):
     """The model's dimensions against the dimension tables read in code (ds_route.dim_tables): matched by the
     drawing's symbol (label) on the page the model cited, else the page after or before it (ST prints the table under
     the figure, on the next page). A number that differs is flagged; a blank the table fills is filled, with a
-    review line. Spans ("9.00 BSC" across min/nom/max) are only compared, never filled."""
+    review line. Spans ("9.00 BSC" across min/nom/max) are only compared, never filled. A table that disagrees with
+    most of the dimensions matched to it is another package's (a family sheet with an outline per package), so it is
+    left out rather than flagging every number."""
     if not tables or not isinstance(pkg, dict):
         return
     by_page = {}
@@ -1126,39 +1128,47 @@ def table_check(pkg, tables, offset, review):
         by_page.setdefault(t["page"], []).append(t)
     items = [(k, pkg.get(k)) for k in DIMS + NUM_DIMS]
     items += [(f"exposed_pad.{x}", (pkg.get("exposed_pad") or {}).get(x)) for x in ("length", "width")]
+    found = {}                                        # id(table) -> (table, [(dim name, label, read, row, off, fill)])
     for k, d in items:
         if not isinstance(d, dict) or not d.get("label"):
             continue
         lab = re.sub(r"(\s*\(\d*\)?)+$", "", str(d["label"]).strip())
         pg = _pg(d.get("page"), offset)
-        row, tp = None, None
+        hit = None
         for q in ((pg, pg + 1, pg - 1) if isinstance(pg, int) else ()):
-            row = next((t["rows"][lab] for t in by_page.get(q, []) if lab in t["rows"]), None)
-            if row:
-                tp = q
+            hit = next((t for t in by_page.get(q, []) if lab in t["rows"]), None)
+            if hit:
                 break
-        if not row:
-            continue
         k_mm = TO_MM.get(d.get("unit") or "mm")
-        if k_mm is None:
+        if not hit or k_mm is None:
             continue
+        row = hit["rows"][lab]
         tol = 0.006 if k_mm == 1.0 else 0.03          # an inch column is rounded differently from the mm one
         mine = {x: d.get(x) * k_mm for x in ("min", "nom", "max") if isinstance(d.get(x), (int, float))}
-        where = f"the dimension table on p{tp} (read in code)"
         if row["span"]:
             v = next(row[x] for x in ("min", "nom", "max") if row[x] is not None)
-            if mine and not any(abs(m - v) <= tol for m in mine.values()):
-                review.append(f"{k} ({lab}) {', '.join(f'{x} {m:g}' for x, m in mine.items())} mm, {where} says {v:g} mm: check the read")
+            off = [f"{x} {m:g}" for x, m in mine.items()] if mine and not any(abs(m - v) <= tol for m in mine.values()) else []
+            off = [f"{', '.join(off)} mm, the table says {v:g} mm"] if off else []
+            fill = []
+        else:
+            off = [f"{x} {mine[x]:g}, table {row[x]:g}" for x in mine if row[x] is not None and abs(mine[x] - row[x]) > tol]
+            off = [f"{'; '.join(off)} mm"] if off else []
+            fill = [x for x in ("min", "nom", "max") if x not in mine and row[x] is not None] if k_mm == 1.0 else []
+        if mine or fill:
+            found.setdefault(id(hit), (hit, []))[1].append((k, lab, d, row, off, fill))
+    for t, rows in found.values():
+        bad = sum(1 for r in rows if r[4])
+        if bad >= 2 and bad * 2 > len(rows):          # most of it disagrees: not this package's table
             continue
-        off = [f"{x} {mine[x]:g}, table {row[x]:g}" for x in mine if row[x] is not None and abs(mine[x] - row[x]) > tol]
-        if off:
-            review.append(f"{k} ({lab}) differs from {where}: {'; '.join(off)} mm: check the read")
-            continue
-        fill = [x for x in ("min", "nom", "max") if x not in mine and row[x] is not None]
-        if fill and k_mm == 1.0:
-            for x in fill:
-                d[x] = row[x]
-            review.append(f"{k} ({lab}) {', '.join(f'{x} {row[x]:g}' for x in fill)} mm filled from {where}; the read left it blank")
+        where = f"the dimension table on p{t['page']} (read in code)"
+        for k, lab, d, row, off, fill in rows:
+            if off:
+                review.append(f"{k} ({lab}) differs from {where}: {off[0]}: check the read")
+            elif fill:
+                for x in fill:
+                    d[x] = row[x]
+                review.append(f"{k} ({lab}) {', '.join(f'{x} {row[x]:g}' for x in fill)} mm filled from {where}; "
+                              "the read left it blank")
 
 
 def ordering_check(pkg, facts, review):

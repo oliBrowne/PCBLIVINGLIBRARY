@@ -385,7 +385,12 @@ def test_table_check_flags_fills_and_spans():
     pkg = {"pitch": dim("e", None, 1.0, None)}
     review = []
     D.table_check(pkg, tables, [2, 5, 9], review)
-    assert review and "pitch (e) nom 1 mm" in review[0] and "says 0.95 mm" in review[0]
+    assert review and "pitch (e) differs" in review[0] and "nom 1 mm, the table says 0.95 mm" in review[0]
+    review = []                                      # AL8860MP: the read is the MSOP-8's, the table on its page the SOT23's
+    D.table_check({"body_length": dim("D", 2.9, None, 3.1), "body_width": dim("E", 2.9, None, 3.1),
+                   "pitch": dim("e", None, 0.65, None), "lead_width": dim("b", 0.38, None, 0.48)},
+                  tables, [2, 5, 9], review)
+    assert review == [], review                      # 3 of the 4 matched rows disagree: another package's table
     review = []
     D.table_check({"body_length": dim("D", 0.1102, None, 0.1181, unit="in")}, tables, [2, 5, 9], review)
     assert review == []                                      # inches, within the inch column's rounding
