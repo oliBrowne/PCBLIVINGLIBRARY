@@ -105,6 +105,8 @@ def _names(s):
         if norm_pin_name(part):
             out.add(norm_pin_name(part))
     out |= {LETTER[n] for n in out if n in LETTER}
+    from .eval.score import WORDS                     # a pin spelled out ("ENABLE") is "EN", as the eval scorer counts it
+    out |= {WORDS[n] for n in out if n in WORDS}
     return out - {""}
 
 
@@ -290,7 +292,7 @@ def parse(msg):
         raise Unavailable(f"the second read stopped ({msg['stop_reason']})")
     if (msg.get("ecadlib") or {}).get("error"):
         raise Unavailable(msg["ecadlib"]["error"])
-    text = "".join(b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text")
+    text = D.message_text(msg)                        # "" for content null / a string / text null
     try:
         ext = json.loads(text)
     except ValueError:

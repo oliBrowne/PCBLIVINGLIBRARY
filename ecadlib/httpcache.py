@@ -69,6 +69,19 @@ def redact(url):
     return urlunparse(u._replace(query=urlencode(q))) if q else url
 
 
+# Credential parameters by their whole name: left out of the cache key (a rotated key keeps its cached answers). A
+# name that only ends in token/key (pageToken, nextToken, continuationToken, sortkey) is part of the request and of
+# the key: page 2 is not page 1. The stored URL is still redacted with SECRET_Q.
+CRED_Q = re.compile(r"(api[_-]?key|apikey|x-api-key|key|token|secret|password|passwd|signature|sig|client[_-]?secret|"
+                    r"access[_-]?token|auth[_-]?token|subscription[_-]?key)", re.I)
+
+
+def key_url(url):
+    u = urlparse(url)
+    q = [(k, "REDACTED" if CRED_Q.fullmatch(k) else v) for k, v in parse_qsl(u.query, keep_blank_values=True)]
+    return urlunparse(u._replace(query=urlencode(q))) if q else url
+
+
 class CachedHTTP:
     def __init__(self, cache_dir="out/http_cache", min_interval=1.0, ttl_s=7 * 86400,
                  offline=False, timeout=20):
@@ -94,7 +107,7 @@ class CachedHTTP:
         for this request (default: the client's).
         Query-string secrets (apiKey=, token=...) are redacted from cache keys and stored URLs.
         A 2xx answer whose body is an error (error_body) is neither stored nor served from an older cache entry."""
-        f = self.dir / f"{self._key(method, redact(url), body, headers)}.json"
+        f = self.dir / f"{self._key(method, key_url(url), body, headers)}.json"
         d = None
         bad = lambda st, text: 200 <= st < 300 and (error_body(text) or page_not_data(url, text))
         if cache and f.exists() and (self.offline or time.time() - f.stat().st_mtime < self.ttl):   # offline: stale beats nothing

@@ -267,6 +267,15 @@ def _line_for(item, lines, rows):
     return best
 
 
+def cost_hint(msg):
+    """The datasheet reader's cost-cap refusal names `ecadlib datasheet` options (--estimate, --yes): in the librarian's
+    tried lines, the commands that exist for a library run instead."""
+    if "max_cost_usd" not in msg:
+        return msg
+    return re.sub(r";( nothing sent\.)? see --estimate.*$", "; nothing sent: see `ecadlib datasheet estimate "
+                  "<plan.json>` for the cost, then raise [datasheet] max_cost_usd in ecadlib.toml", msg, flags=re.I | re.S)
+
+
 class Run:
     def __init__(self, out, http, index, libs, sources, api_key=None, kicad_cache=None, refresh_index=False, gen_step=True,
                  rules=None, reader=None):
@@ -396,7 +405,8 @@ class Run:
             try:
                 getattr(self, f"src_{s}")(st, item, ln, row, kind, mpn, fp_name, sym_name)
             except Exception as e:            # one bad source or part must not stop the run
-                st["tried"].append(f"{s}: failed ({type(e).__name__}: {e}{_where(e)})")
+                msg = cost_hint(str(e)) if s == "datasheet" else str(e)
+                st["tried"].append(f"{s}: failed ({type(e).__name__}: {msg}{_where(e)})")
         lc = (row.get("lcsc") or "").split(" ")[0]
         if row.get("src_description"):        # the part search's own text (Nexar / DigiKey / Mouser / LCSC), after a KiCad symbol's
             st["found"].setdefault("description", (row["src_description"], f"{_desc_label(row)} part data {lc}".strip()))
