@@ -57,7 +57,7 @@ Limits:
 
 - Altium 365 release (`ecadlib altium365 push`) uploads the files ecadlib wrote, because it runs outside Altium.
   Releasing from inside Altium is the next step.
-- Previews, the library hub and the tests read and write the files without Altium.
+- Previews and the tests read and write the files without Altium.
 
 ## Status
 

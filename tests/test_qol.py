@@ -62,10 +62,7 @@ def test_env_defaults_fill_missing_flags_only():
     assert a == ["--lib", "/a", "--lib", "/b", "bom.csv"] and notes == ["--lib from $ECADLIB_LIB"]
     assert CU.env_defaults("triage", ["bom.csv", "--lib", "/mine"], env)[0] == ["bom.csv", "--lib", "/mine"]   # flag wins
     assert CU.env_defaults("triage", ["bom.csv", "--lib=/mine"], env)[0] == ["bom.csv", "--lib=/mine"]
-    assert CU.env_defaults("queue", ["list"], env)[0] == ["--workspace", "/ws", "list"]      # before the subcommand
-    assert CU.env_defaults("agent", ["run", "--dry-run"], env)[0] == ["run", "--dry-run", "--lib", "/a", "--lib", "/b"]
-    assert CU.env_defaults("agent", ["status"], env)[0] == ["status"]                      # status takes no --lib
-    assert CU.env_defaults("a365", ["status", "plan.json"], env)[0] == ["status", "plan.json"]   # --workspace is a URL there
+    assert CU.env_defaults("altium365", ["push", "plan.json"], env)[0] == ["push", "plan.json"]   # --workspace is a URL there
     assert CU.env_defaults("triage", ["-h"], env)[0] == ["-h"]
     assert CU.env_defaults("triage", ["x"], {})[0] == ["x"]
 
@@ -263,9 +260,9 @@ def test_doctor_end_to_end_exit_codes_and_writes_nothing():
         rc, out, _ = _run(["doctor", "--workspace", str(ws)])
         assert rc == 1 and "FAIL  lib" in out and "gone: not found" in out
         Path(ws, "ecadlib.toml").write_text("[agent]\nlibs = [\"nolib\"]\n[[agent.watch.sources]]\ntype = \"bom_file\"\nref = \"x.csv\"\n")
-        rep = DR.run(str(ws), [str(lib)])
+        rep = DR.run(str(ws), [str(lib)])                # the parked agent's keys still load and are not checked
         by = {c["check"]: c for c in rep["checks"]}
-        assert not rep["ok"] and by["agent.libs"]["level"] == "FAIL" and by["watch bom_file"]["level"] == "WARN"
+        assert by["rules"]["level"] == "OK" and "agent.libs" not in by and "watch bom_file" not in by, by["rules"]
         assert by["rules"]["detail"].startswith(str(ws / "ecadlib.toml"))
         f = Path(d, "afile")
         f.write_text("")
@@ -319,11 +316,11 @@ def test_status_summary_read_only():
         assert len(s["plans"]) == 2 and s["boms"] == 1
         assert any("librarian/broken/plan.json" in p for p in s["problems"])
         assert s["last_triage"]["name"] == "bom.csv" and s["last_triage"]["lines"] == 2
-        assert s["last_upkeep"] == {"date": "2026-10-05T00:00:00Z", "new_changes": 4, "state": "agent/upkeep/p/state/upkeep_last.json"}
-        assert s["agent"]["state"] == "idle" and s["agent"]["queue"] == {"review": 2, "pushed": 1} and s["agent"]["waiting_review"] == 2
+        assert s["last_upkeep"] == {"date": "2026-10-02T00:00:00Z", "new_changes": 1, "state": "upkeep/k/state/upkeep_last.json"}
+        assert "agent" not in s                                       # the parked agent's folder is not read
         text = WS.render(s)
         assert "5 parts in 2 library plans: 1 ready, 2 held, 1 waiting for sign-off, 1 duplicate" in text
-        assert "2 waiting for review" in text and "ecadlib resolve" in text and "WARN" in text
+        assert "ecadlib resolve" in text and "WARN" in text
         assert {p: p.stat().st_mtime_ns for p in ws.rglob("*")} == before
         empty = WS.status(Path(d, "nothing"))
         assert empty["exists"] is False and not Path(d, "nothing").exists() and "does not exist" in WS.render(empty)
@@ -369,7 +366,7 @@ def test_completion_tree_and_scripts():
     t = CO.tree()
     assert set(t) == set(cli.COMMANDS)
     assert "--lib" in t["triage"]["options"] and "--json" in t["triage"]["options"]
-    assert set(t["queue"]["subcommands"]) >= {"list", "approve"} and t["footprint"]["subcommands"]["gen"]["choices"]["--density"]
+    assert set(t["part"]["subcommands"]) >= {"status", "approve"} and t["footprint"]["subcommands"]["gen"]["choices"]["--density"]
     assert t["completion"]["positional_choices"] == ["bash", "zsh", "fish"]
     sh = CO.bash(t)
     assert "complete -o filenames -o bashdefault -F _ecadlib ecadlib" in sh
@@ -393,24 +390,15 @@ def test_bash_completion_really_completes():
         probe = (f'source "{f}"\n'
                  't() { COMP_WORDS=("$@"); COMP_CWORD=$((${#COMP_WORDS[@]}-1)); COMPREPLY=(); _ecadlib; echo "${COMPREPLY[*]}"; }\n'
                  't ecadlib tri\n'
-                 't ecadlib queue --workspace W ""\n'
+                 't ecadlib part ""\n'
                  't ecadlib footprint gen x.json --density ""\n'
                  't ecadlib --debug triage --of\n'
                  't ecadlib completion z\n')
         r = subprocess.run([bash, "--norc", "-c", probe], capture_output=True, text=True, timeout=60)
         assert r.returncode == 0, r.stderr
-        assert r.stdout.splitlines() == ["triage", "approve list rebuild reject retry show", "A B C", "--offline", "zsh"], r.stdout
+        assert r.stdout.splitlines() == ["triage", "approve diff fingerprint history reject revert show status", "A B C", "--offline", "zsh"], r.stdout
 
 
 if __name__ == "__main__":
     from tests.run_all import main
     sys.exit(main(["test_qol"]))
-
-
-def test_env_lib_only_for_the_real_subcommand():
-    from ecadlib import cliutil
-    env = {"ECADLIB_LIB": "/libs/a"}
-    assert cliutil.env_defaults("agent", ["approve", "run"], env)[0] == ["approve", "run"]     # an item named "run"
-    assert cliutil.env_defaults("agent", ["--workspace", "run", "status"], env)[0] == ["--workspace", "run", "status"]
-    assert cliutil.env_defaults("agent", ["--workspace", "W", "run"], env)[0] == ["--workspace", "W", "run", "--lib", "/libs/a"]
-    assert cliutil.env_defaults("agent", ["serve"], env)[0] == ["serve", "--lib", "/libs/a"]

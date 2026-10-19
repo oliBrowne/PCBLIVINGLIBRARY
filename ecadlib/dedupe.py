@@ -217,14 +217,11 @@ class Collector:
         return out
 
     def add_plan(self, items, base):
-        from .a365_sync import is_a365
         base = Path(base)
         for i, it in enumerate(items):
             par = {p["name"]: p["value"] for p in it.get("parameters") or []}
             mpn = next((par[c] for c in MPN_COLS if par.get(c)), it["name"])
-            ws = is_a365(it)                           # pulled from Altium 365 (ecadlib a365 pull): counts as library
-            self.parts.append({"name": it["name"], "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "a365" if ws else "plan",
-                               "where": "plan (Altium 365)" if ws else "plan",
+            self.parts.append({"name": it["name"], "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "plan", "where": "plan",
                                "plan_index": i, "status": it.get("status", ""), "symbol": (it.get("symbol") or {}).get("ref") or "",
                                "footprint": (it.get("footprint") or {}).get("ref") or "", "source": it.get("source") or {}})
             for kind in ("footprint", "symbol"):
@@ -237,7 +234,7 @@ class Collector:
                 self._seen_files.add(str(f.resolve()))
                 got = self._fp_from_file(f, m.get("ref")) if kind == "footprint" else self._sym_from_file(f, m.get("ref"))
                 for g in got[:1]:
-                    self._add_model(kind, m.get("ref") or g[0], f, "library" if ws else "plan", g[1], it["name"], it, *(g[2:]))
+                    self._add_model(kind, m.get("ref") or g[0], f, "plan", g[1], it["name"], it, *(g[2:]))
 
     def _add_model(self, kind, ref, f, origin, h, used_by=None, item=None, pins=None):
         lst = self.footprints if kind == "footprint" else self.symbols
@@ -578,7 +575,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     from .approvals import cli_plan_lock
     try:
-        with cli_plan_lock(a.plan) if a.merge else contextlib.nullcontext():   # the agent may be rewriting this plan
+        with cli_plan_lock(a.plan) if a.merge else contextlib.nullcontext():   # the web UI may be recording into this plan
             r = run(a.plan, a.lib, a.a365, a.config, a.keep, a.merge, tuple(k for k in a.kinds.split(",") if k), a.out, a.bom)
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"dedupe: {type(e).__name__}: {e}", file=sys.stderr)

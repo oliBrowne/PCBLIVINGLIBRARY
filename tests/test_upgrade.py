@@ -1,8 +1,7 @@
 """Updates never break a library (ecadlib/migrate.py, ecadlib/rebuild.py).
 
 * Workspaces made by older ecadlib (tests/fixtures/upgrade/*.tar.gz, built by tests/upgrade_fixtures.py with the code of
-  v0.2.0, v0.3.0 and two later merge commits) open with today's code, rebuild the same parts, keep their approvals, and
-  their queue / watch state still work.
+  v0.2.0, v0.3.0 and two later merge commits) open with today's code, rebuild the same parts and keep their approvals.
 * Files from a NEWER ecadlib are refused with one clear line, never misread.
 * `ecadlib migrate` checks / migrates (backups first; --dry-run and --check write nothing).
 * library.lock.json + `ecadlib rebuild --check` rebuild offline and report drift."""
@@ -106,30 +105,6 @@ def test_old_workspaces_open_and_rebuild_the_same_parts():
                     assert p["inputs"] is None and p["built_with"] is None, (label, n)
                 elif p["footprint"] and p["footprint"]["source"].startswith("kicad:"):
                     assert any(e["url"].startswith("https://gitlab.com/") for e in p["inputs"]), (label, n)
-            if label in AGENT:
-                _agent_still_works(ws, man, w)
-
-
-def _agent_still_works(ws, man, w):
-    from ecadlib import agent_queue as Q, agent_watch as W
-    q = Q.Queue(ws)
-    ids = {it["id"]: it for it in q.list()}
-    assert set(man["made"]["queue"].values()) <= set(ids)
-    rid = man["made"]["queue"]["review"]
-    assert ids[rid]["status"] == "review" and ids[man["made"]["queue"]["failed"]]["status"] == "failed"
-    r = Q.decide(w, rid, "approve", "Bob Ray <bob@example.com>")
-    assert r["item"]["status"] == "approved" and r["approval"]["recorded"], r["approval"]
-    plan = {i["name"]: i for i in json.loads((ws / "librarian" / "board" / "plan.json").read_text())}
-    assert any(a["who"].startswith("Bob Ray") for a in plan["LM358DR"]["approvals"])
-    Q.decide(w, man["made"]["queue"]["failed"], "retry", "Bob Ray <bob@example.com>")
-    assert MG.folder_version(ws / "agent" / "queue", "queue")[0] == 1 and (ws / "agent" / "queue" / MG.STAMP).is_file()
-    state = W.load_state(ws)                       # the watch state from the old version still loads ...
-    assert state["sources"], state
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):          # ... and a new scan of the unchanged BOM finds nothing new
-        W.main(["--workspace", str(ws), "--source", "bom_file:uploads/board.csv", "--json"])
-    rep = json.loads(out.getvalue())
-    assert not [c for c in rep.get("changes", []) if c.get("kind") in ("added", "new")], rep.get("changes")
 
 
 def test_newer_files_are_refused_with_one_clear_line():
@@ -151,20 +126,6 @@ def test_newer_files_are_refused_with_one_clear_line():
         with contextlib.redirect_stdout(io.StringIO()):
             assert MG.main([str(ws), "--check"]) == 1
         (lib / MG.STAMP).unlink()
-        # the stamp file itself in a newer format
-        (ws / "agent" / "queue" / MG.STAMP).write_text(json.dumps({"schema_version": 3, "ecadlib": "2.0.0"}))
-        from ecadlib import agent_queue as Q
-        try:
-            Q.Queue(ws)
-            raise AssertionError("a newer queue was opened")
-        except MG.SchemaTooNew as e:
-            assert "ecadlib 2.0.0" in str(e) and "upgrade ecadlib" in str(e)
-        (ws / "agent" / "queue" / MG.STAMP).write_text(json.dumps({"schema_version": 1, "ecadlib": "2.0.0", "kinds": {"queue": 2}}))
-        try:
-            Q.Queue(ws)
-            raise AssertionError("a newer queue was opened")
-        except MG.SchemaTooNew as e:
-            assert "queue schema 2" in str(e)
         # in-file versions: rules, the approvals policy, the lock
         (ws / "ecadlib.toml").write_text('schema_version = 4\necadlib = "1.2.0"\n' + UF.RULES)
         try:

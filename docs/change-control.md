@@ -6,8 +6,8 @@ about to leave with the released revision. It classifies every difference, and a
 identity waits for a person. The released part stays exactly as it was until someone approves the change.
 
 This covers every writer: librarian re-runs, `upstream check-kicad --update`, `upkeep --apply`, `ecadlib resolve` /
-review picks, `dedupe --merge`, `sim-models --attach`, datasheet and sourcing passes, `style apply`, and the
-publishers (`kicad-export`, `altium-dblib-sync`, `altium365 push`). `tests/test_change_control.py` fails the build when a
+review picks, `dedupe --merge`, datasheet passes, `style apply`, and the publishers (`kicad-export`,
+`altium-dblib-sync`, `altium365 push`). `tests/test_change_control.py` fails the build when a
 module that writes library files does not go through the gate.
 
 ## What counts as a change

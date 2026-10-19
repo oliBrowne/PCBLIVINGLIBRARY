@@ -37,7 +37,7 @@ own and bill whatever key they find. Claude Code is one: with `ANTHROPIC_API_KEY
 Claude subscription. A key you set with `setx` or in your shell profile is visible to every program you start.
 
 If an environment variable of the same name exists, ecadlib still uses the stored key first and the variable only
-when nothing is stored (for Docker and CI). `ecadlib doctor` warns when an AI key comes only from an environment
+when nothing is stored (for CI). `ecadlib doctor` warns when an AI key comes only from an environment
 variable. To move it: run `ecadlib keys set ANTHROPIC_API_KEY`, then delete the variable (Windows: Settings > System >
 About > Advanced system settings > Environment Variables; macOS / Linux: the line in `~/.zshrc`, `~/.bashrc` or
 `~/.profile`), and open a new terminal.

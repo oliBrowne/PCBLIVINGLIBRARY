@@ -1,5 +1,5 @@
 """`ecadlib status`: one screen about a workspace - parts in the library plans, held, waiting for sign-off, the last
-triage, the last upkeep run and the library agent's queue. Read-only: it never creates the workspace or any file in it,
+triage and the last upkeep run. Read-only: it never creates the workspace or any file in it,
 and a damaged file is skipped (and named) instead of stopping the summary.
 
     ecadlib status [--workspace W] [--json]        (W defaults to $ECADLIB_WORKSPACE, then ./ecadlib_workspace)
@@ -7,8 +7,7 @@ and a damaged file is skipped (and named) instead of stopping the summary.
 --json prints one object (stable keys, see README "ecadlib status"):
     {"workspace", "exists", "rules", "boms", "plans": [{"plan", "parts", "ready", "held", "awaiting_approval",
      "duplicates", "updated"}], "totals": {...same counts...}, "last_triage": {...} | null,
-     "last_upkeep": {...} | null, "agent": {"state", "heartbeat", "last_run", "queue": {state: n}, "waiting_review"},
-     "problems": [text]}
+     "last_upkeep": {...} | null, "problems": [text]}
 plus "datasheet": {"answers", "parts", "input_tokens", "output_tokens", "usd", "usd_estimated", "escalations",
 "by_model"} once a Claude datasheet read has been paid for in the workspace.
 
@@ -107,7 +106,6 @@ def status(root):
            "totals": {"parts": 0, **{("duplicates" if k == "duplicate" else k): 0 for k in COUNTS}},
            "last_triage": None, "last_upkeep": None, "last_run": None,
            "review": {**{k: 0 for k in REVIEW_KEYS}, "held_reasons": []},
-           "agent": {"state": "never run", "heartbeat": None, "last_run": None, "queue": {}, "waiting_review": 0},
            "problems": problems}
     if not out["exists"]:
         return out
@@ -152,7 +150,7 @@ def status(root):
                          lines=len(d.get("rows") or []), counts=d.get("counts") or {})
         out["last_triage"] = t
 
-    ups = _files(root, "upkeep/*/state/upkeep_last.json") + _files(root, "agent/upkeep/*/state/upkeep_last.json")
+    ups = _files(root, "upkeep/*/state/upkeep_last.json")
     best = None
     for f in ups:
         d = _json(f, problems)
@@ -167,19 +165,6 @@ def status(root):
         out["datasheet"] = {k: d[k] for k in ("answers", "parts", "input_tokens", "output_tokens", "usd", "usd_estimated",
                                               "escalations")}
         out["datasheet"]["by_model"] = d["by_model"]
-    ag = out["agent"]
-    sf = root / "agent" / "status.json"
-    if sf.is_file():
-        d = _json(sf, problems)
-        if isinstance(d, dict):
-            ag.update(state=d.get("state") or "unknown", heartbeat=d.get("heartbeat"), last_run=d.get("last_run"))
-            if d.get("last_error"):
-                ag["last_error"] = d["last_error"]
-    for f in _files(root, "agent/queue/items/*.json"):
-        d = _json(f, problems)
-        if isinstance(d, dict) and d.get("status"):
-            ag["queue"][d["status"]] = ag["queue"].get(d["status"], 0) + 1
-    ag["waiting_review"] = ag["queue"].get("review", 0)
     return out
 
 
@@ -216,7 +201,7 @@ def render(s, styled=False, width=None, shown=None, verbosity=0):
     if len(s["plans"]) > 8:
         t.write(f"  ... {len(s['plans']) - 8} more (--json lists all)")
     t.write("")
-    lt, lu, ag = s["last_triage"], s["last_upkeep"], s["agent"]
+    lt, lu = s["last_triage"], s["last_upkeep"]
     kv = [["rules", s["rules"] or "defaults (no ecadlib.toml in the workspace)"],
           ["BOMs", f"{s['boms']} uploaded"],
           ["last triage", (f"{lt.get('name') or lt['report']}, {lt['finished']}"
@@ -244,11 +229,6 @@ def render(s, styled=False, width=None, shown=None, verbosity=0):
                    + (f" (+ ${ds['usd_estimated']:.2f} estimated)" if ds.get("usd_estimated") else "")
                    + f", {ds['input_tokens']:,} tokens in: "
                    + ", ".join(f"{m} {v['answers']} (${v['usd']:.2f})" for m, v in sorted(ds["by_model"].items()))])
-    q = ", ".join(f"{v} {M.status_word(k)}" for k, v in sorted(ag["queue"].items())) or "empty"
-    kv.append(["agent", f"{ag['state']}" + (f", last heartbeat {ag['heartbeat']}" if ag.get("heartbeat") else "")
-               + f"; review queue: {q}" + (f"; {ag['waiting_review']} waiting for review" if ag["waiting_review"] else "")])
-    if ag.get("last_error"):
-        kv.append(["", t.color("last error: ", "red") + M.clean(str(ag["last_error"]))[:160]])
     t.table(kv, indent=0)
     for p in s["problems"]:
         t.note(f"WARN {M.clean(p)}", "the file was skipped; `ecadlib migrate --check` or `ecadlib doctor` says more")
@@ -258,8 +238,6 @@ def render(s, styled=False, width=None, shown=None, verbosity=0):
         nxt.append((f"ecadlib review{ws}", f"{M.plural(tot['held'], 'held part')}: why, and pick a fix (or `ecadlib resolve <plan.json> list`)"))
     if tot["awaiting_approval"]:
         nxt.append(("ecadlib approve <plan.json> status", "who still has to sign off"))
-    if ag["waiting_review"]:
-        nxt.append((f"ecadlib queue list{ws}", "the agent's review queue"))
     if not s["plans"]:
         nxt.append((f"ecadlib librarian BOM.csv -o {shown or '<workspace>'}/librarian/board", "fill a library from a BOM"))
     if nxt:

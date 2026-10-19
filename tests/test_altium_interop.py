@@ -10,7 +10,7 @@ from pathlib import Path
 
 import olefile
 
-from ecadlib import a365_sync as S, altium_lib as AL, cfb, rules_infer as RI
+from ecadlib import altium_lib as AL, cfb, rules_infer as RI
 
 ROOT = Path(__file__).parent.parent
 
@@ -118,23 +118,6 @@ def test_regions_on_house_mechanical_layers():
     assert AL.v7_name(3) == "MID2" and AL.v7_name(AL.KEEPOUT) == "KEEPOUT"
 
 
-def test_a365_pull_survives_a_footprint_name_cp1252_cannot_hold():
-    """One workspace footprint named 'LED_贴片_0603' made `a365 pull` stop with a ValueError before writing anything."""
-    from tests import test_a365_sync as T
-    ws = T.workspace()
-    fp_bytes = AL.pcblib_bytes([_fp("LED", layer=AL.MECH15, body_layer=AL.MECH13)])
-    ws.nodes.append(T.node("LED-CN", {"Manufacturer Part Number": "LED-CN"}, sym=T.model_files()[0], fp="LED_贴片_0603", guid="cn"))
-    ws.files["https://dl/LED_贴片_0603.PcbLib"] = fp_bytes
-    with tempfile.TemporaryDirectory() as d:
-        r = T.pull(d, ws)
-        assert r["summary"].get("new_in_workspace") == 7, r["summary"]
-        it = {i["name"]: i for i in json.loads((Path(d) / "plan.json").read_text())}["LED-CN"]
-        f = Path(d) / it["footprint"]["file"]
-        assert f.name == "LED_贴片_0603.PcbLib" and f.exists(), it
-        assert not (it.get("a365") or {}).get("model_errors"), it["a365"]
-
-
-# ------------------------------------------------------------------ independent reader (optional)
 def _pyaltiumlib():
     try:
         import logging

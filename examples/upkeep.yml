@@ -1,4 +1,4 @@
-# Weekly library upkeep (ecadlib/upkeep.py): lifecycle, KiCad upstream, price/stock and Altium 365 drift in one job,
+# Weekly library upkeep (ecadlib/upkeep.py): lifecycle, KiCad upstream and Altium 365 drift in one job,
 # reporting only what is new since last week as ONE rolling GitHub issue (label `ecadlib-upkeep`), or a pull request
 # when safe fixes (KiCad reconversion) were applied.
 # It lives in examples/ so it never runs in this repo: copy it to .github/workflows/upkeep.yml in YOUR library repo
@@ -6,10 +6,10 @@
 #
 # Secrets (Settings > Secrets and variables > Actions). Set only the ones you have: a check whose credentials are
 # missing is skipped with a line in the report, it does not fail the job.
-#   NEXAR_CLIENT_ID, NEXAR_CLIENT_SECRET     Nexar app with the Supply scope: lifecycle, stock and prices (Octopart);
+#   NEXAR_CLIENT_ID, NEXAR_CLIENT_SECRET     Nexar app with the Supply scope: lifecycle (Octopart);
 #                                            or NEXAR_SUPPLY_TOKEN, a ready supply.domain token
-#   DIGIKEY_CLIENT_ID, DIGIKEY_CLIENT_SECRET DigiKey Product Information v4 app (lifecycle, stock, prices)
-#   MOUSER_API_KEY                           Mouser Search API key (lifecycle, stock, prices)
+#   DIGIKEY_CLIENT_ID, DIGIKEY_CLIENT_SECRET DigiKey Product Information v4 app (lifecycle)
+#   MOUSER_API_KEY                           Mouser Search API key (lifecycle)
 #   NEXAR_TOKEN                              Nexar user token (design.domain, user.access, openid) for Altium 365 drift
 #   GITLAB_TOKEN                             optional: raises the gitlab.com API rate limit for the KiCad upstream check
 # GITHUB_TOKEN is provided by Actions; the permissions block below lets it write the issue / PR. For the PR mode also
@@ -41,7 +41,7 @@ concurrency:
 
 env:
   PLAN: library/altium365/plan.json                     # altium365 plan (librarian output); a BOM works too
-  BOM: library/bom.csv                                  # quantities for the price check (optional; delete --bom below)
+  BOM: library/bom.csv                                  # extra BOM lines for the lifecycle check (optional; delete --bom below)
   MANIFEST: library/altium_models_kicad/manifest.json   # KiCad provenance manifest written by kicad_import
   WORKSPACE: ""                                         # https://<you>.365.altium.com, or [altium365] workspace in ecadlib.toml
 

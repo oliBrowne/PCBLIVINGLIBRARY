@@ -7,8 +7,7 @@
     ecadlib demo      [-o DIR]                    a small library from a bundled BOM, offline, no keys (start here)
     ecadlib rules     check|show                  validate the rules file / print the defaults
     ecadlib style     learn|show|direct|check|apply|export-dataset   learn your house style from your library + your direction
-    ecadlib ui        --lib <kicad libs>          local web UI in your browser (--team: shared server with sign-in)
-    ecadlib team      add-user|set-role|reset-password|remove|list|setup   users and roles for `ecadlib ui --team`; setup: Docker + HTTPS
+    ecadlib ui        --lib <kicad libs>          local web UI in your browser
     ecadlib mcp       --lib <kicad libs>          MCP server for Claude, Codex, Grok and other agents (stdio, or --http)
     ecadlib triage    BOM --lib ... -o out/x      BOM triage report (.md + .csv)
     ecadlib sources-check [--save DIR] [--json]   check the unofficial EasyEDA / JLCPCB endpoints against the live sites
@@ -29,21 +28,13 @@
     ecadlib resolve   plan.json [--part P] list|show|choose ...   fix held parts: ranked candidates, pick one
     ecadlib review    [plan.json] [--part P] [--yes]   go through held parts one by one: why, pick a candidate, release anyway
     ecadlib upstream  check-kicad|check-a365 ...  upstream change alerts (KiCad sources, Altium 365 drift)
-    ecadlib a365      pull|status|reconcile PLAN --workspace URL [--state F]   two-way Altium 365 sync
-    ecadlib queue     list|show|approve|reject|rebuild|retry [ID]   the library agent's review queue
     ecadlib approve   plan.json approve|reject|status [--part P]   sign-off before altium365 push
     ecadlib dedupe    plan.json [--lib ...] [--merge]  duplicate parts, footprints and symbols
-    ecadlib sourcing  BOM [--qty N] [--alternates] price, stock, second sources and alternates per BOM line
-    ecadlib assembly  check|export BOARD.kicad_pcb|PNP.csv [-o DIR] | part FP --lcsc C123   assembler BOM + CPL, pads, rotations
     ecadlib project   BOARD.PrjPcb [-o bom.csv] [--variant V]   BOM straight from an Altium project (.PrjPcb/.SchDoc)
-    ecadlib hub       [-q WORDS] [--have T] [--lack T] [--part P]   your library across tools: every part once, a column per tool
     ecadlib where-used --projects DIR... [--part X] [--plan plan.json]   which projects use which library part
     ecadlib part      status|show|diff|history|approve|reject|revert [LIBRARY]   change control for released parts
     ecadlib step-gen  SPEC.json|FOOTPRINT -o x.step   package-shaped 3D model (STEP); --check FILE.step validates
     ecadlib upkeep    PLAN|BOM [--checks ...] [--apply] [--github issue|pr]   weekly checks, only what is new, one issue/PR
-    ecadlib sim-models plan.json [--models DIR] [--attach]   find, check and attach SPICE / IBIS simulation models
-    ecadlib agent-watch [--dry-run] [--source TYPE:REF]   library agent: new / changed / removed parts in watched projects and BOMs
-    ecadlib agent     run [--dry-run]|serve|status|approve ID|reject ID|push   library agent: watch, build, prove, PR, push
     ecadlib symbol    PINS.csv|PART -o x.SchLib [--preview x.svg]   big-chip symbol with pins grouped by function
     ecadlib visual-check PART|x.kicad_mod --datasheet DS.pdf [--pages 3,7-8]   Claude compares our drawings with the datasheet
     ecadlib doctor    [--workspace W] [--lib DIR] [--json]   check Python, packages, API keys, ecadlib.toml, folders
@@ -56,7 +47,7 @@
     ecadlib stdparts resolve "SOIC-8 3.9x4.9mm" | coverage BOM | bench   standard packages built offline (librarian source)
     ecadlib kicad-pcm plan.json|KICAD_DIR --out DIR [--kicad 7]   KiCad Plugin and Content Manager zip (--plugin: action plugin)
     ecadlib altium-pkg plan.json|MODELS_DIR --out DIR   Altium .LibPkg (-> IntLib), install script, relative DbLib
-    ecadlib altium-menu build --out DIR [--win-dir W]   an "ecadlib" menu inside Altium (script project): add part, check BOM, queue
+    ecadlib altium-menu build --out DIR [--win-dir W]   an "ecadlib" menu inside Altium (script project): add part, check BOM
     ecadlib kicad-menu check-bom NETLIST|SCH     what the ecadlib window in KiCad runs; Generate BOM hook for the schematic
     ecadlib costs     [--model M] [--all] [--md F] [--xlsx F]   estimated AI cost per job, for your model or every model
     ecadlib ai        show [--model M] [--detect] | rails   which model / provider / guide rails the AI features use
@@ -79,7 +70,6 @@ COMMANDS = {
     "rules": ("ecadlib.rules", "check or show the library rules"),
     "style": ("ecadlib.house_style", "learn your house style from your library and your written direction; new parts follow it"),
     "ui": ("ecadlib.ui.server", "local web UI"),
-    "team": ("ecadlib.team", "users and roles for the team web server (ecadlib ui --team)"),
     "mcp": ("ecadlib.mcp_server", "MCP server for AI agents (stdio, or --http)"),
     "triage": ("ecadlib.bom_triage", "BOM triage report"),
     "sources-check": ("ecadlib.sources_check", "check the unofficial EasyEDA / JLCPCB endpoints against the live sites"),
@@ -101,21 +91,13 @@ COMMANDS = {
     "resolve": ("ecadlib.resolve", "fix held parts: candidates for a missing symbol/footprint, choose one"),
     "review": ("ecadlib.review_cli", "go through held parts one at a time: the reason in plain words, pick a candidate, release anyway, open the datasheet"),
     "upstream": ("ecadlib.upstream", "KiCad upstream changes and Altium 365 drift"),
-    "a365": ("ecadlib.a365_sync", "two-way Altium 365 sync: pull workspace components into the plan, status, reconcile"),
-    "queue": ("ecadlib.agent_queue", "the library agent's review queue: list, show, approve, reject, rebuild"),
     "approve": ("ecadlib.approvals", "approve / reject plan items before release"),
     "dedupe": ("ecadlib.dedupe", "find and merge duplicate parts, footprints and symbols"),
-    "sourcing": ("ecadlib.sourcing", "price, stock, second sources and alternates for a BOM"),
     "step-gen": ("ecadlib.step_gen", "package-shaped STEP 3D models from a package spec or footprint name"),
-    "upkeep": ("ecadlib.upkeep", "weekly lifecycle / upstream / price / A365 checks; new changes as one issue or PR"),
-    "assembly": ("ecadlib.assembly_cli", "assembly-ready parts: pads against JLCPCB's footprints, CPL rotations, the assembler's BOM + CPL"),
+    "upkeep": ("ecadlib.upkeep", "weekly lifecycle / upstream / A365 checks; new changes as one issue or PR"),
     "project": ("ecadlib.altium_project", "BOM straight from an Altium project (.PrjPcb / .SchDoc / ActiveBOM)"),
-    "hub": ("ecadlib.hub", "your library across tools: every part once, a column per tool, last changed and by whom"),
     "where-used": ("ecadlib.altium_project:where_used_main", "which projects use which library part, and flags"),
     "part": ("ecadlib.change_cli", "change control: held changes to released parts, diff, history, approve / reject / revert"),
-    "sim-models": ("ecadlib.sim_models", "find, check and attach SPICE / IBIS simulation models for a plan"),
-    "agent-watch": ("ecadlib.agent_watch", "library agent watch step: new / changed / removed parts in watched projects and BOMs"),
-    "agent": ("ecadlib.agent", "library agent: watch projects, build + prove parts, batch PRs, push approved parts, upkeep"),
     "visual-check": ("ecadlib.visual_check", "render footprint/symbol + datasheet pages; Claude checks they match"),
     "symbol": ("ecadlib.symbol_layout", "IC symbol with pins grouped by function (power, ports, debug ...), SVG preview"),
     "doctor": ("ecadlib.doctor", "check the setup: Python, packages, API keys (names only), ecadlib.toml, folders"),
@@ -127,8 +109,8 @@ COMMANDS = {
     "export-parts": ("ecadlib.parts_export", "parts table with stable columns as CSV / JSON / XLSX for PLM / ERP imports"),
     "kicad-pcm": ("ecadlib.kicad_pcm", "package the library for KiCad's Plugin and Content Manager (zip); --plugin: the add-part action plugin"),
     "altium-pkg": ("ecadlib.altium_pkg", "Altium hand-off folder: .LibPkg to compile an IntLib, install script project, relative DbLib"),
-    "altium-menu": ("ecadlib.altium_menu", "an 'ecadlib' menu inside Altium: DelphiScript project (add part from MPN, check the project BOM, review queue)"),
-    "kicad-menu": ("ecadlib.kicad_menu", "what the ecadlib window in KiCad's PCB editor runs (add part, check BOM, fill, queue)"),
+    "altium-menu": ("ecadlib.altium_menu", "an 'ecadlib' menu inside Altium: DelphiScript project (add part from MPN, check the project BOM)"),
+    "kicad-menu": ("ecadlib.kicad_menu", "what the ecadlib window in KiCad's PCB editor runs (add part, check BOM, fill)"),
     "ai": ("ecadlib.llm.cli", "bring your own model: provider, model, key variable, capability profile, guide rails"),
     "testpack": ("ecadlib.testpack", "write a 6-part Altium + KiCad test pack with a CHECKLIST.md of what to open and what to see"),
     "migrate": ("ecadlib.migrate", "check or upgrade a workspace's files to this ecadlib's formats (backups first)"),
@@ -145,6 +127,17 @@ REMOVED = {
     "easyeda-export": "the EasyEDA Pro export was removed after 0.3.1 (see CHANGELOG.md). "
                       "The last version with it is 0.3.1: pip install \"ecadlib==0.3.1\"",
 }
+# Cut from main on 2026-10-19 to keep ecadlib on the BOM -> Altium 365 path (see CHANGELOG.md). The last code with
+# them is the archive/before-trim branch; the library agent and two-way Altium 365 sync are parked on a branch.
+_ARCHIVE = "pip install \"git+https://github.com/oliBrowne/PCBLIVINGLIBRARY@archive/before-trim\""
+_PARKED = "parked on the parked/agent-and-a365-pull branch"
+for _cmd, _what in (("assembly", "the JLCPCB assembly check and BOM / CPL export"), ("sim-models", "the SPICE / IBIS model finder"),
+                    ("sourcing", "the price, stock and alternates report"), ("hub", "the library hub"),
+                    ("team", "the team server (sign-in, roles, Docker + HTTPS)")):
+    REMOVED[_cmd] = f"{_what} was removed from ecadlib (see CHANGELOG.md). The last code with it: {_ARCHIVE}"
+for _cmd, _what in (("agent", "the library agent"), ("agent-watch", "the library agent"), ("queue", "the library agent's queue"),
+                    ("a365", "two-way Altium 365 sync (pull / status / reconcile; `ecadlib altium365 push` stays)")):
+    REMOVED[_cmd] = f"{_what} is {_PARKED} (see CHANGELOG.md). The last code with it: {_ARCHIVE}"
 
 
 def main(argv=None):

@@ -16,7 +16,7 @@ What the page does (each step also works on its own, later):
 Saving writes <workspace>/ecadlib.toml through `ecadlib init`'s own code (rules_infer.propose: it also learns naming
 conventions from the library folders given) and the answers to the user's settings.json.
 
-The routes (ecadlib/ui/server.py) exist in local mode only: team mode refuses them, since keys are per person."""
+The routes are served by the local web UI (ecadlib/ui/server.py), which checks Host and Origin first."""
 import argparse, json, os, re, shutil, sys
 from pathlib import Path
 
@@ -251,7 +251,7 @@ def install_altium_menu(ws_root):
     if bar.get("folders") and not bar.get("error"):
         res["steps"] = ["Start Altium Designer and open a schematic or PCB",
                         "The ecadlib menu is in the menu bar, before Window: Add part from MPN, Check this project BOM, "
-                        "Assembly check (JLCPCB), Open review queue",
+                        "Open review queue",
                         f"To take it out again: ecadlib altium-menu install-menu --out \"{out}\" --remove"]
     else:
         why = f" ({bar['error']})" if bar.get("error") else ""
@@ -306,9 +306,8 @@ def install_kicad_plugin(series=None):
                       "External Plugins)"]}
 
 
-# ------------------------------------------------------------------ web routes (local mode only)
-# Not in ui/server.py's ROUTES on purpose: team mode answers only ROUTES, so these are 404 there (keys and installs
-# are per person, on their own computer). Local mode still checks Host and Origin before any of them runs.
+# ------------------------------------------------------------------ web routes
+# Keys and installs are per person, on their own computer. The web UI checks Host and Origin before any of them runs.
 GET_ROUTES = {"/api/setup": lambda ws, b: state(ws)}
 POST_ROUTES = {"/api/setup": save, "/api/setup/key": lambda ws, b: store_key(b),
                "/api/setup/key/forget": lambda ws, b: forget_key(b), "/api/setup/key/check": lambda ws, b: check_key(b),

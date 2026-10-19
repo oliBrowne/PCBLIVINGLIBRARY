@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-CORE = ["bom_triage", "providers", "librarian", "release_check", "resolve", "sourcing", "lifecycle", "upstream", "upkeep",
+CORE = ["bom_triage", "providers", "librarian", "release_check", "resolve", "part_lookup", "lifecycle", "upstream", "upkeep",
         "approvals", "dedupe", "datasheet", "httpcache", "rules", "rules_infer", "sheetsafe", "cli", "app", "fsutil"]
 
 
@@ -171,7 +171,7 @@ def test_resolve_choose_rechecks_parts_sharing_the_file():
 
 # ---------------------------------------------------------------- sourcing / rules / dedupe / lifecycle
 def test_money_decimal_comma_below_one():
-    from ecadlib.sourcing import money
+    from ecadlib.part_lookup import money
     assert money("0,125 €") == 0.125 and money("0,010 €") == 0.01          # was 125.0 and 10.0: a 1000x cost rollup
     assert money("1.234,50 €") == 1234.5 and money("1,234.50") == 1234.5 and money("12,345") == 12345.0
     assert money("0,10 €") == 0.1
@@ -235,7 +235,7 @@ def test_cli_allow_survives_a_concurrent_agent_rebuild():
     --allow` used to write in the middle of that, and the agent's save then dropped the allow. Now the CLI waits."""
     import time
     from ecadlib import release_check as RC
-    from ecadlib.agent_queue import plan_lock
+    from ecadlib.fsutil import plan_lock
     with tempfile.TemporaryDirectory() as d:
         ws, plan = _agent_ws(d)
         locked, cli_started = threading.Event(), threading.Event()
@@ -261,7 +261,7 @@ def test_cli_allow_survives_a_concurrent_agent_rebuild():
 
 
 def test_workspace_plan_rewrites_take_the_plan_lock():
-    from ecadlib.agent_queue import plan_lock
+    from ecadlib.fsutil import plan_lock
     from ecadlib.app import Workspace
     with tempfile.TemporaryDirectory() as d:
         ws = Workspace(Path(d) / "ws")
@@ -284,9 +284,9 @@ def test_workspace_plan_rewrites_take_the_plan_lock():
                      lambda: ws.choose_part("uploads/b.csv", "P1", "footprint", "spec:SOT-23")):
             try:
                 call()
-                assert False, "wrote while the agent holds the plan lock"
+                assert False, "wrote while another command holds the plan lock"
             except ValueError as e:
-                assert "rebuilding" in str(e), e
+                assert "another ecadlib command" in str(e), e
         assert "allow" not in json.loads((out / "plan.json").read_text(encoding="utf-8"))[0]
         release.set(); t.join(10)
         r = ws.release_check("uploads/b.csv", allow=["P1"])
