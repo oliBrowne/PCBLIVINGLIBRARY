@@ -32,6 +32,7 @@ table is kept as the record of what was merged.
 | 2026-10-17 | #31, #32, #34 | **v0.3.0** released: on PyPI (`pip install ecadlib`) and as a Windows installer on the GitHub release |
 | 2026-10-17 | #35 | Official part APIs first with unofficial endpoints fenced off, weekly sources canary, and Altium rebuilding every library itself (8 of 8 test libraries, 0 differences on AD26) |
 | 2026-10-17 | #61-#80 (issues #36-#40) | **v0.3.1** released: Build libraries in the Altium menu, fab-layer designator in Altium, multi-part symbols, keep-outs and bottom-side pads checked in AD26, and the fixes from the overnight system test |
+| 2026-10-17 to 19 | #81-#125 | On `main`, not released yet: change control ([#105](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/105), `ecadlib part`), time from BOM to library and the review rate in `ecadlib status` (P7, P8), the cost shown before every AI step (P12), docs/START_HERE.md (P14), the first live benchmark run (docs/benchmark.md), `ecadlib mcp --http`, and the 2026-10-19 cut and park |
 
 ## Next milestones
 
@@ -44,8 +45,8 @@ hand.
 |---|---|---|
 | P5. Publish an accuracy benchmark on real parts | [#42](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/42) | docs, feature |
 | P6. Real-BOM trials with 3 to 5 Altium users | [#43](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/43) | docs |
-| P7. Measure time from BOM to released library | [#44](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/44) | feature |
-| P8. Report the review and approval rate | [#45](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/45) | feature |
+| P7. Measure time from BOM to released library (on `main`) | [#44](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/44) | feature |
+| P8. Report the review and approval rate (on `main`) | [#45](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/45) | feature |
 | P9. Try house style on a real company library | [#46](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/46) | feature |
 | P10. Release a full BOM into a real Altium 365 workspace | [#47](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/47) | feature |
 
@@ -62,9 +63,9 @@ from us.
 | Item | Issue | Label |
 |---|---|---|
 | P11. Sign the Windows installer | [#48](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/48) | feature |
-| P12. Show the cost before every AI step in Altium, KiCad and the web UI | [#49](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/49) | feature |
+| P12. Show the cost before every AI step in Altium, KiCad and the web UI (on `main`; not yet tried in Altium or KiCad) | [#49](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/49) | feature |
 | P13. Decide on the experimental Fusion / EAGLE and EasyEDA Pro exports: **removed** (2026-10-18) | [#50](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/50) | docs |
-| P14. One-page guide from installer to a BOM in Altium 365 | [#51](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/51) | docs |
+| P14. One-page guide from installer to a BOM in Altium 365 (on `main`: docs/START_HERE.md) | [#51](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/51) | docs |
 
 **Exit criteria.** The installer is signed and installs without a SmartScreen warning; every place that starts a
 model call shows its estimated cost first; the experimental exports are kept or removed with the reason recorded;

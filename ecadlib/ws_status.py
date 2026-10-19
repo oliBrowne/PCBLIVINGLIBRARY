@@ -66,11 +66,16 @@ def _iso(ts):
     return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _json(p, problems):
+def _json(p, problems, root=None):
+    """The file's JSON, or None with a problem line naming it relative to the workspace root (never the server path)."""
     try:
         return json.loads(Path(p).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        problems.append(f"{Path(p).as_posix()}: unreadable ({type(e).__name__})")
+        try:
+            name = Path(p).resolve().relative_to(Path(root).resolve()).as_posix() if root else Path(p).as_posix()
+        except (OSError, ValueError):
+            name = Path(p).name
+        problems.append(f"{name}: unreadable ({type(e).__name__})")
         return None
 
 
@@ -104,21 +109,27 @@ def status(root):
     problems = []
     out = {"workspace": str(root), "exists": root.is_dir(), "rules": None, "boms": 0, "plans": [],
            "totals": {"parts": 0, **{("duplicates" if k == "duplicate" else k): 0 for k in COUNTS}},
-           "last_triage": None, "last_upkeep": None, "last_run": None,
+           "last_triage": None, "last_upkeep": None, "last_run": None, "changes_held": [],
            "review": {**{k: 0 for k in REVIEW_KEYS}, "held_reasons": []},
            "problems": problems}
     if not out["exists"]:
         return out
     rel = lambda p: Path(p).relative_to(root).as_posix()
     rf = next((root / n for n in ("ecadlib.toml", "ecadlib_rules.json") if (root / n).is_file()), None)
-    out["rules"] = rel(rf) if rf else None
+    if rf is None:                             # the file in force for the workspace's plans: `init` puts it one folder up
+        from . import rules as RU
+        try:
+            rf = RU.find(root)
+        except RU.RulesError:
+            rf = None
+    out["rules"] = (rel(rf) if Path(rf).resolve().is_relative_to(root) else str(rf)) if rf else None
     up = root / "uploads"
     out["boms"] = len(_files(up, "*")) + len(_files(up, "*/*")) if up.is_dir() else 0
 
     from . import timing as TI
     rv, reasons = out["review"], {}
     for pf in _plans(root):
-        items = _json(pf, problems)
+        items = _json(pf, problems, root)
         if not isinstance(items, list):
             if items is not None:
                 problems.append(f"{rel(pf)}: not a plan (expected a list of parts)")
@@ -128,6 +139,9 @@ def status(root):
                "updated": _iso(pf.stat().st_mtime), "timing": TI.last_run(pf.parent, problems),
                "review": review_stats(items, pf.parent)}
         out["plans"].append(row)
+        ch = [i["name"] for i in items if isinstance(i, dict) and (i.get("change") or {}).get("state") == "held"]
+        if ch:                                 # change control: a change to a released part waits for a person
+            out["changes_held"].append({"plan": rel(pf), "parts": ch})
         for k in out["totals"]:
             out["totals"][k] += row[k]
         for k in REVIEW_KEYS:
@@ -144,7 +158,7 @@ def status(root):
         f = tri[0]
         t = {"report": rel(f), "finished": _iso(f.stat().st_mtime)}
         if f.suffix == ".json":
-            d = _json(f, problems) or {}
+            d = _json(f, problems, root) or {}
             if isinstance(d, dict):
                 t.update(name=d.get("name"), finished=d.get("finished") or t["finished"], user=d.get("user"),
                          lines=len(d.get("rows") or []), counts=d.get("counts") or {})
@@ -153,7 +167,7 @@ def status(root):
     ups = _files(root, "upkeep/*/state/upkeep_last.json")
     best = None
     for f in ups:
-        d = _json(f, problems)
+        d = _json(f, problems, root)
         if isinstance(d, dict) and (best is None or str(d.get("date") or "") > str(best["date"] or "")):
             best = {"date": d.get("date"), "new_changes": d.get("new_changes"), "state": rel(f)}
     out["last_upkeep"] = best
@@ -202,7 +216,7 @@ def render(s, styled=False, width=None, shown=None, verbosity=0):
         t.write(f"  ... {len(s['plans']) - 8} more (--json lists all)")
     t.write("")
     lt, lu = s["last_triage"], s["last_upkeep"]
-    kv = [["rules", s["rules"] or "defaults (no ecadlib.toml in the workspace)"],
+    kv = [["rules", s["rules"] or "defaults (no ecadlib.toml in the workspace or above it)"],
           ["BOMs", f"{s['boms']} uploaded"],
           ["last triage", (f"{lt.get('name') or lt['report']}, {lt['finished']}"
                            + (f", {M.plural(lt['lines'], 'line')}" if lt.get("lines") is not None else "")
@@ -223,6 +237,11 @@ def render(s, styled=False, width=None, shown=None, verbosity=0):
                    f"{rv['approved']} approved, {rv['rejected']} rejected, {rv['changed']} changed by a person"])
         if rv["held_reasons"]:
             kv.append(["held for", "; ".join(f"{r['reason']} {r['parts']}" for r in rv["held_reasons"][:3])])
+    chg = s.get("changes_held") or []
+    if chg:
+        names = [n for c in chg for n in c["parts"]]
+        kv.append(["changes held", f"{M.plural(len(names), 'change')} to released parts " + ("waits" if len(names) == 1 else "wait") + " for a person ("
+                   + ", ".join(names[:5]) + (" ..." if len(names) > 5 else "") + "); the released versions are kept"])
     ds = s.get("datasheet")
     if ds:
         kv.append(["datasheet", f"{ds['answers']} Claude answers for {M.plural(ds['parts'], 'part')}, ${ds['usd']:.2f}"
@@ -238,6 +257,8 @@ def render(s, styled=False, width=None, shown=None, verbosity=0):
         nxt.append((f"ecadlib review{ws}", f"{M.plural(tot['held'], 'held part')}: why, and pick a fix (or `ecadlib resolve <plan.json> list`)"))
     if tot["awaiting_approval"]:
         nxt.append(("ecadlib approve <plan.json> status", "who still has to sign off"))
+    for c in chg[:2]:
+        nxt.append((f"ecadlib part status {Path(shown or s['workspace']) / c['plan']}", "approve or reject the held changes"))
     if not s["plans"]:
         nxt.append((f"ecadlib librarian BOM.csv -o {shown or '<workspace>'}/librarian/board", "fill a library from a BOM"))
     if nxt:

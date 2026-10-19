@@ -130,7 +130,7 @@ def check_field(k, v):
         return "must be true or false"
     if t is int and (not isinstance(v, int) or isinstance(v, bool) or not 512 <= v <= 10_000_000):
         return "must be a whole number of tokens from 512 to 10000000"
-    if t is float and (not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0):
+    if t is float and (not isinstance(v, (int, float)) or isinstance(v, bool) or not 0 <= v < float("inf")):  # nan too
         return "must be a number of 0 or more ($ per million tokens)"
     return None
 

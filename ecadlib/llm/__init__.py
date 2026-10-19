@@ -199,7 +199,12 @@ def price(ref):
         return (0.0, 0.0)
     p = r["profile"]
     if p.get("price_in") is not None and p.get("price_out") is not None:
-        return (float(p["price_in"]), float(p["price_out"]))
+        try:
+            got = (float(p["price_in"]), float(p["price_out"]))
+        except (TypeError, ValueError):
+            return None
+        # nan / inf / negative (a detected or hand-written price): unknown, so a cost cap refuses instead of passing
+        return got if all(0 <= x < float("inf") for x in got) else None
     return None
 
 

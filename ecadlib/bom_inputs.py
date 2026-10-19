@@ -140,7 +140,7 @@ def read_kicad_sch(path, columns=None, root=None):
     for p in sexpr.find(sexpr.first(root, "symbol_instances") or [], "path"):
         legacy[tuple(x for x in str(p[1]).split("/") if x)] = {"reference": _val(p, "reference"), "unit": _val(p, "unit"),
                                                                 "value": _val(p, "value"), "footprint": _val(p, "footprint")}
-    parts, seen_refs, cache, count, dups = [], {}, {}, [0], set()
+    parts, seen_refs, units, cache, count, dups = [], {}, {}, {}, [0], set()
 
     def instance_ref(sym, sheet_path):
         props = _props(sym)
@@ -179,25 +179,33 @@ def read_kicad_sch(path, columns=None, root=None):
             else:
                 key = ref
             lib, unit = _val(sym, "lib_id", ""), str(_val(sym, "unit", "1"))
-            if key in seen_refs:                               # the other units of a multi-unit part: same symbol,
-                first = seen_refs[key]                         # another unit number
-                if lib == first["lib"] and unit not in first["units"]:
-                    first["units"].add(unit)
-                    continue
-                dups.add(ref)                                  # another symbol, or the same unit again: a second part
-                key = (key, len(parts))
-            seen_refs[key] = {"lib": lib, "units": {unit}}
             fields = _props(sym)
             fields.update({"Value" if k == "value" else "Footprint": v for k, v in over.items()})
             fields.pop("Reference", None)
-            parts.append({"ref": ref, "fields": fields, "dnp": _val(sym, "dnp", "no") == "yes",
-                          "sheet": "/".join(sheet_path)})
+            dnp = _val(sym, "dnp", "no") == "yes"
+            if key in seen_refs and lib == units[key][0] and unit not in units[key][1]:
+                units[key][1].add(unit)                        # another unit of a multi-unit part: one part, whose
+                p = seen_refs[key]                             # fields may be filled on any unit (as KiCad's BOM does)
+                for k, v in fields.items():
+                    if str(v).strip() and not str(p["fields"].get(k, "")).strip():
+                        p["fields"][k] = v
+                p["dnp"] = p["dnp"] or dnp
+                continue
+            if key in seen_refs:                               # another symbol, or the same unit again: a second part
+                dups.add(ref)
+                key = (key, len(parts))
+            units[key] = (lib, {unit})
+            seen_refs[key] = part = {"ref": ref, "fields": fields, "dnp": dnp, "sheet": "/".join(sheet_path)}
+            parts.append(part)
         for sh in sexpr.find(tree, "sheet"):
             props = _props(sh)
             sub = props.get("Sheetfile") or props.get("Sheet file")
             if not sub:
                 continue
             target = (file.parent / sub)
+            if not target.is_file():                           # drawn on Windows / macOS: the case may differ
+                from .altium_project import _find_file
+                target = _find_file(file.parent, sub) or target
             outside = fence is not None and fence != target.resolve() and fence not in target.resolve().parents
             if outside or not target.is_file():                # one message for both: no file-existence oracle
                 raise ValueError(f"{path.name}: sub-sheet {sub!r} (sheet {props.get('Sheetname', '?')!r}) not found next to {file.name}")
@@ -310,8 +318,11 @@ def _col(ref):
 
 def xlsx_hidden(path):
     """{sheet name: None for a hidden sheet, else the set of hidden column indexes (0 = A)} of an .xlsx."""
+    from .bom_triage import MAX_UNZIPPED
     out = {}
     with zipfile.ZipFile(path) as z:
+        if sum(i.file_size for i in z.infolist()) > MAX_UNZIPPED:
+            return out                                         # xlsx_sheets / pandas refuse it with the message
         names = set(z.namelist())
         rels = {}
         if "xl/_rels/workbook.xml.rels" in names:
@@ -333,10 +344,11 @@ def xlsx_hidden(path):
     return out
 
 
-def xlsx_sheets(path):
+def xlsx_sheets(path, uncached=None):
     """{sheet name: rows (lists of text)} read with the standard library only. Numbers come back as BOM text the
-    way bom_triage writes them (1e-07 -> '100n', 3.0 -> '3'); dates stay as Excel serial numbers."""
-    from .bom_triage import _plain_number
+    way bom_triage writes them (1e-07 -> '100n', 3.0 -> '3'); dates stay as Excel serial numbers. A sheet whose
+    grid would exceed MAX_CELLS is refused. uncached: a dict to fill with {sheet name: [cells holding a formula with no saved value]}."""
+    from .bom_triage import _plain_number, MAX_UNZIPPED
     path = Path(path)
     try:
         z = zipfile.ZipFile(path)
@@ -344,6 +356,10 @@ def xlsx_sheets(path):
         raise ValueError(f"{path.name}: not a readable .xlsx workbook ({e})") from e
     with z:
         names = set(z.namelist())
+        total = sum(i.file_size for i in z.infolist())
+        if total > MAX_UNZIPPED:
+            raise ValueError(f"{path.name}: the workbook unpacks to {total // 2**20} MB; a BOM is far smaller "
+                             "(is this the right file?)")
 
         def xml(name):
             return _xml_root(z.read(name), f"{path.name}:{name}")
@@ -362,11 +378,15 @@ def xlsx_sheets(path):
             target = rels.get(s.get(f"{{{NS['r']}}}id"), f"xl/worksheets/sheet{i + 1}.xml")
             if target not in names:
                 continue
-            rows = {}
+            rows, sheet = {}, s.get("name", f"Sheet{i + 1}")
             for row in xml(target).findall("m:sheetData/m:row", NS):
                 r = int(row.get("r", len(rows) + 1)) - 1
                 vals = {}
                 for j, c in enumerate(row.findall("m:c", NS)):
+                    if uncached is not None and c.find("m:f", NS) is not None and (c.find("m:v", NS) is None or (
+                            not c.findtext("m:v", "", NS) and c.get("t") not in ("str", "inlineStr"))):   # '' is a
+                                                                   # saved text result; a number is never empty
+                        uncached.setdefault(sheet, []).append(c.get("r", "?"))
                     cells += 1
                     if cells > MAX_CELLS:
                         raise ValueError(f"{path.name}: more than {MAX_CELLS} cells; is this really a BOM?")
@@ -391,9 +411,11 @@ def xlsx_sheets(path):
                 if vals:
                     rows[r] = vals
             if not rows:
-                out[s.get("name", f"Sheet{i + 1}")] = []
+                out[sheet] = []
                 continue
             width = max(max(v) for v in rows.values()) + 1
-            out[s.get("name", f"Sheet{i + 1}")] = [[rows.get(r, {}).get(c, "") for c in range(width)]
-                                                   for r in range(max(rows) + 1)]
+            if (max(rows) + 1) * width > MAX_CELLS:            # one cell at XFD1048576 is a 17-billion-cell grid
+                raise ValueError(f"{path.name}: sheet {sheet!r} spans {max(rows) + 1} rows x {width} columns; "
+                                 "is this really a BOM?")
+            out[sheet] = [[rows.get(r, {}).get(c, "") for c in range(width)] for r in range(max(rows) + 1)]
         return out

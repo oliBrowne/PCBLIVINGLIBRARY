@@ -21,7 +21,10 @@ import pandas as pd
 
 from .altium_lib import file_stem, lib_name
 from .bom_triage import placeholder_mpn, read_bom
-from .kicad_index import norm_mpn, package_of
+from .kicad_index import norm_mpn, package_of, parse_value
+
+PLAIN_VALUE = re.compile(r"(\d+(?:[.,]\d+)?\s*[pnuµμmkKMGR]?|\d+[pnuµμmkKMGR]\d+)\s*(?:F|H|Ω|R|ohms?)?", re.I)   # '4k7',
+                                                                  # '100nF': only a value (not '100nF 50V')
 
 COLUMNS = ["Part Number", "Library Ref", "Library Path", "Footprint Ref", "Footprint Path",
            "Description", "Value", "Comment", "Manufacturer", "Manufacturer Part Number",
@@ -120,7 +123,7 @@ def to_rows(lines, triage=None, rules=None):
         for _, t in triage.iterrows():
             if str(t["mpn"]):                  # an empty MPN would hand one row's footprint to every MPN-less line
                 tri[str(t["mpn"])] = t
-    out, seen, renamed, canon, first, notes = {}, {}, {}, {}, {}, {}
+    out, seen, renamed, same_value, canon, first, notes = {}, {}, {}, {}, {}, {}, {}
     for ln in lines:
         bad = []
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
@@ -142,6 +145,10 @@ def to_rows(lines, triage=None, rules=None):
         fp_ref = fp.split(":")[-1]
         pkg = package_of(fp, ln.get("description")) or ""
         value = ln.get("value", "")
+        if cat in GENERIC_SYMBOL and not mpn and PLAIN_VALUE.fullmatch(value.strip()):
+            pv = parse_value(value)                   # 1uF / 1u / 1µF, 100nF / 0.1uF, 4k7 / 4.7k: one part, named
+            if pv is not None:                        # with the first spelling the BOM uses
+                value = same_value.setdefault((cat, pkg, fp_ref, f"{pv:.6g}"), value)
         name_mpn = re.sub(r"\s+", "_", mpn.strip())   # a space in an MPN is a separator ('FC-135 32.768KA-AG0'
         if custom:                                    # -> FC-135_32.768KA-AG0, as kicad_export.kname), not dropped
             f = RU.line_fields(ln, cat, pkg, rules, ref)

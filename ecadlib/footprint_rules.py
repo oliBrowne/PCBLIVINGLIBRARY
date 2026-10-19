@@ -1075,10 +1075,20 @@ def main(argv=None):
     files = []
     for f in a.files:
         p = Path(f)
-        files += sorted(p.glob("*.kicad_mod")) if p.is_dir() else [p]
+        found = sorted(p.glob("*.kicad_mod")) if p.is_dir() else [p]
+        if p.is_dir() and not found:               # a typo or the wrong folder must not pass a CI check vacuously
+            print(f"ecadlib check: no .kicad_mod files in {f}", file=sys.stderr)
+            return 2
+        files += found
     results, bad = [], 0
     for f in files:
         text = f.read_text(encoding="utf-8")
+        if not text.lstrip("﻿ \t\r\n").startswith(("(footprint", "(module")):
+            if not a.summary:
+                print(f"FAIL {f}\n     error   format    not a KiCad footprint (a .kicad_mod starts with \"(footprint\")")
+            results.append((f, [("error", "format", "not a KiCad footprint")]))
+            bad += 1
+            continue
         issues = FC.check(text) if a.geometry_only else check(text, filename=f.name)
         if a.errors:
             issues = [i for i in issues if i[0] == "error"]
