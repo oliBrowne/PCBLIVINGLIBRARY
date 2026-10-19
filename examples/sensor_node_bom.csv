@@ -1,0 +1,41 @@
+Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #,Description
+U1,1,STM32G031K8T6,LQFP-32_7x7mm_P0.8mm,STMicroelectronics,STM32G031K8T6,ARM Cortex-M0+ MCU 64KB Flash LQFP-32
+U2,1,TPS62162DSGR,WSON-8-1EP_2x2mm_P0.5mm_EP0.9x1.6mm,Texas Instruments,TPS62162DSGR,Step-down converter 3.3V 1A WSON-8
+U3,1,TLV75533PDBVR,SOT-23-5,Texas Instruments,TLV75533PDBVR,LDO 3.3V 500mA SOT-23-5
+U4,1,BME280,Bosch_LGA-8_2.5x2.5mm_P0.65mm_ClockwisePinNumbering,Bosch Sensortec,BME280,Humidity pressure temperature sensor LGA-8
+U5,1,24LC256-I/SN,SOIC-8_3.9x4.9mm_P1.27mm,Microchip Technology,24LC256-I/SN,EEPROM 256Kbit I2C SOIC-8
+U6,1,MCP2221A-I/SL,SOIC-14_3.9x8.7mm_P1.27mm,Microchip Technology,MCP2221A-I/SL,USB to UART/I2C bridge SOIC-14
+U7,1,USBLC6-2SC6,SOT-23-6,STMicroelectronics,USBLC6-2SC6,USB ESD protection SOT-23-6
+U8,1,SN74LVC1G17DBVR,SOT-23-5,Texas Instruments,SN74LVC1G17DBVR,Single Schmitt-trigger buffer SOT-23-5
+U9,1,TPD2E2U06DRLR,SOT-553,Texas Instruments,TPD2E2U06DRLR,2-channel ESD protection SOT-5X3
+Q1,1,AO3401A,SOT-23,Alpha & Omega Semiconductor,AO3401A,P-channel MOSFET -30V -4A SOT-23
+"Q2,Q3",2,2N7002,SOT-23,Nexperia,2N7002NXAKR,N-channel MOSFET 60V 0.19A SOT-23
+"Q4,Q5",2,BSS138,SOT-23,onsemi,BSS138,N-channel MOSFET 50V 0.22A level shifter SOT-23
+D1,1,SS14,D_SMA,Vishay,SS14-E3/61T,Schottky diode 40V 1A SMA
+D2,1,SMAJ5.0A,D_SMA,Littelfuse,SMAJ5.0A,TVS diode 5V 400W SMA
+"D3,D4",2,1N4148W,D_SOD-123,Diodes Incorporated,1N4148W-7-F,Switching diode 75V SOD-123
+D5,1,BZT52C3V3,D_SOD-123,Diodes Incorporated,BZT52C3V3-7-F,Zener diode 3.3V SOD-123
+LED1,1,Green,LED_0603_1608Metric,Wurth Elektronik,150060GS75000,LED green 0603
+LED2,1,Red,LED_0603_1608Metric,Wurth Elektronik,150060RS75000,LED red 0603
+L1,1,2.2uH,L_1008_2520Metric,Murata,LQM2HPN2R2MG0L,Inductor 2.2uH 1.3A 1008
+FB1,1,220R@100MHz,L_0603_1608Metric,Murata,BLM18PG221SN1D,Ferrite bead 220 ohm 0603
+Y1,1,8MHz,Crystal_SMD_3225-4Pin_3.2x2.5mm,Abracon,ABM8-8.000MHZ-B2-T,Crystal 8MHz 18pF 3225
+F1,1,1A,Fuse_1206_3216Metric,Littelfuse,0466001.NRHF,Fuse 1A fast 1206
+"R1,R2,R3,R4,R5",5,10k,R_0402_1005Metric,Yageo,RC0402FR-0710KL,Resistor 10k 1% 0402
+"R6,R7",2,5.1k,R_0402_1005Metric,Yageo,RC0402FR-075K1L,Resistor 5.1k 1% 0402 USB-C CC
+"R8,R9",2,4.7k,R_0402_1005Metric,Yageo,RC0402FR-074K7L,Resistor 4.7k 1% 0402 I2C pull-up
+"R10,R11",2,22R,R_0603_1608Metric,Yageo,RC0603FR-0722RL,Resistor 22 ohm 1% 0603
+"R12,R13",2,1k,R_0603_1608Metric,Yageo,RC0603FR-071KL,Resistor 1k 1% 0603 LED
+R14,1,100k,R_0402_1005Metric,Yageo,RC0402FR-07100KL,Resistor 100k 1% 0402
+R15,1,27k,R_0402_1005Metric,Yageo,RC0402FR-0727KL,Resistor 27k 1% 0402
+"C1,C2,C3,C4,C5,C6,C7,C8",8,100nF,C_0402_1005Metric,Samsung Electro-Mechanics,CL05B104KO5NNNC,Capacitor 100nF 16V X7R 0402
+"C9,C10,C11",3,1uF,C_0402_1005Metric,Samsung Electro-Mechanics,CL05A105KA5NQNC,Capacitor 1uF 25V X5R 0402
+"C12,C13",2,10uF,C_0603_1608Metric,Samsung Electro-Mechanics,CL10A106KP8NNNC,Capacitor 10uF 10V X5R 0603
+"C14,C15",2,22uF,C_0805_2012Metric,Samsung Electro-Mechanics,CL21A226MAQNNNE,Capacitor 22uF 25V X5R 0805
+"C16,C17",2,20pF,C_0402_1005Metric,Murata,GRM1555C1H200JA01D,Capacitor 20pF 50V C0G 0402
+J1,1,USB-C,USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal,GCT,USB4105-GF-A,USB Type-C receptacle USB 2.0 16P
+J2,1,SWD,PinHeader_2x05_P1.27mm_Vertical_SMD,Samtec,FTSH-105-01-L-DV-K,Header 2x5 1.27mm SMD Cortex debug
+J3,1,I2C,Molex_PicoBlade_53047-0410_1x04_P1.25mm_Vertical,Molex,53047-0410,PicoBlade header 4 pos vertical
+J4,1,BATT,JST_PH_S2B-PH-SM4-TB_1x02-1MP_P2.00mm_Horizontal,JST,S2B-PH-SM4-TB(LF)(SN),PH connector 2 pos right angle SMD
+SW1,1,RESET,SW_SPST_TL3342,TE Connectivity,1-1825027-2,Tactile switch SPST 5.2x5.2mm
+SW2,1,BOOT,SW_SPST_TL3342,C&K,PTS526 SM15 SMTR2 LFS,Tactile switch SPST 5.2x5.2mm

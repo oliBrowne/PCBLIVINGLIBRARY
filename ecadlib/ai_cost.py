@@ -15,6 +15,7 @@ plus the cross-check's second read where [datasheet] cross_check may make one. "
 answer at max_tokens and every step of the part's route. The command line keeps `ecadlib datasheet estimate` and
 --yes; the library agent keeps its own [agent.proof] max_cost_usd."""
 import json
+import math
 from pathlib import Path
 
 CHECK_TYPICAL_OUT = 1000           # a cross-check answer: the critical numbers and pin names only
@@ -29,6 +30,15 @@ def limit(rules=None):
     if cap > 0:
         return cap, "max_cost_usd"
     return float(s.get("ask_above_usd") or 0), "ask_above_usd"
+
+
+def up(v):
+    """v rounded up to what money() shows (cents from $0.095, else tenths of a cent): the "at most" a dialog prints
+    and the amount it approves are then the same number, never the approval a cent above the text."""
+    if not v:
+        return v
+    step = 100 if v >= 0.095 else 1000
+    return math.ceil(round(v * step, 6)) / step
 
 
 def money(v):
@@ -83,7 +93,7 @@ def quote(est, rules=None, key_set=True):
          "over_limit": worst is None or (lim > 0 and worst > lim), "exact": bool(est.get("exact_input")),
          "cross_check": str(cfg.get("cross_check") or "auto") != "off", "key_set": bool(key_set),
          "skipped": [s["part"] for s in est.get("skipped") or []], "cached": list(est.get("cached") or [])}
-    q["approve_usd"] = round(worst + TOLERANCE, 2) if worst is not None else None
+    q["approve_usd"] = up(worst) if worst is not None else None
     q["text"] = text(q)
     return q
 
@@ -96,7 +106,7 @@ def text(q):
         return what + ". No API key is stored for it yet: add one on the setup page or with `ecadlib keys set`."
     if not q["price_known"]:
         return what + ". ecadlib does not know this model's price, so it cannot say what the reads cost."
-    s = f"{what}: about {money(q['usd'])}, at most {money(q['usd_max'])}"
+    s = f"{what}: about {money(q['usd'])}, at most {money(up(q['usd_max']))}"
     s += " (with the cross-check's second read)." if q["cross_check"] else "."
     if q["over_limit"]:
         s += f" That is more than your limit of {money(q['limit_usd'])} ([datasheet] {q['limit_name']})."
@@ -111,14 +121,14 @@ def approve(q, approved_usd=None, over_limit_ok=False, price_unknown_ok=False):
             raise ValueError(f"the price of {q['model']} is unknown: confirm reading without a cost estimate first")
         return 0.0, True
     if q["over_limit"] and not over_limit_ok:
-        raise ValueError(f"at most {money(q['usd_max'])} is over your limit of {money(q['limit_usd'])}: "
+        raise ValueError(f"at most {money(up(q['usd_max']))} is over your limit of {money(q['limit_usd'])}: "
                          "confirm the higher cost first")
     try:
         approved = float(approved_usd)
     except (TypeError, ValueError):
-        raise ValueError(f"approve the cost first: about {money(q['usd'])}, at most {money(q['usd_max'])}")
+        raise ValueError(f"approve the cost first: about {money(q['usd'])}, at most {money(up(q['usd_max']))}")
     if q["usd_max"] > approved + TOLERANCE:
-        raise ValueError(f"the reads now cost up to {money(q['usd_max'])}, more than the {money(approved)} you approved: "
+        raise ValueError(f"the reads now cost up to {money(up(q['usd_max']))}, more than the {money(approved)} you approved: "
                          "check the new estimate")
     return max(approved, q["usd_max"]), False
 
@@ -188,11 +198,11 @@ def style_quote(system, user, schema, model, rules=None, max_tokens=8000, retry=
     q = {"step": "style", "parts": 1, "names": [], "model": model, "usd": usd, "usd_max": worst, "limit_usd": lim,
          "limit_name": which, "price_known": worst is not None, "over_limit": worst is None or (lim > 0 and worst > lim),
          "exact": False, "cross_check": False, "key_set": bool(key_set), "skipped": [], "cached": []}
-    q["approve_usd"] = round(worst + TOLERANCE, 2) if worst is not None else None
+    q["approve_usd"] = up(worst) if worst is not None else None
     if worst is None:
         q["text"] = f"Writing the style guide asks {model} once; ecadlib does not know its price."
     else:
-        q["text"] = (f"Writing the style guide asks {model} once: about {money(usd)}, at most {money(worst)}."
+        q["text"] = (f"Writing the style guide asks {model} once: about {money(usd)}, at most {money(up(worst))}."
                      + (f" That is more than your limit of {money(lim)} ([datasheet] {which})." if q["over_limit"] else ""))
     if not key_set:
         q["text"] += " No API key is stored for it yet: add one on the setup page or with `ecadlib keys set`."
