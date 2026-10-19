@@ -4,7 +4,8 @@ One row per library part in a librarian plan, with stable columns (COLUMNS; thei
 the end, so an import mapping set up once keeps working). Parameters that have no column of their own go in
 "Other Parameters" (CSV / XLSX: "name=value; ..." sorted by name; JSON: an object). Held parts are left out unless
 --include-held. Cells that a spreadsheet would run as a formula get a leading apostrophe in CSV (sheetsafe); XLSX
-cells are text cells (never run as a formula) holding the value as it is; JSON keeps the plain text.
+cells are text cells holding the value as it is (+3.3V), except that a leading '=' keeps the apostrophe; JSON keeps
+the plain text.
 
 KiCad names ("KiCad Symbol", "KiCad Footprint") are the lib ids `ecadlib kicad-export --name LIB` writes
 (LIB:<part>, LIB:<footprint>), the same ones `ecadlib kicad-dblib` puts in its database."""
@@ -103,6 +104,12 @@ def _flat(r):
     return {k: ("; ".join(f"{a}={b}" for a, b in v.items()) if isinstance(v, dict) else v) for k, v in r.items()}
 
 
+def _xlsx(v):
+    """An xlsx cell value: the cells are text cells (never run), so '+3.3V' / '-40..85C' / '@x' stay as they are;
+    only a leading '=' keeps sheetsafe's apostrophe (defence in depth for readers that re-type text cells)."""
+    return SS.cell(v) if v.startswith("=") else v
+
+
 def write(rs, out, fmt):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +129,7 @@ def write(rs, out, fmt):
         ws.title = "Parts"
         ws.append(COLUMNS)
         for r in rs:
-            ws.append([ILLEGAL_CHARACTERS_RE.sub(" ", str(_flat(r)[c])) for c in COLUMNS])   # text cells below: never run
+            ws.append([_xlsx(ILLEGAL_CHARACTERS_RE.sub(" ", str(_flat(r)[c]))) for c in COLUMNS])   # text cells below
         for row in ws.iter_rows(min_row=2):
             for c in row:
                 c.data_type, c.number_format = "s", "@"                    # text: '0603' and '1e-7' stay as typed
