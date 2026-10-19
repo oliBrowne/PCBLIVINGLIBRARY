@@ -13,10 +13,13 @@ QUIET = lambda *a, **k: None
 
 def _plan(d):
     """The test_librarian plan (4 ready parts with .kicad_mod, .PcbLib and .SchLib), as a plain folder: no change
-    control history, so a hand edit to the plan in a test is not settled back."""
+    control history (ledger, lock, usage record, stored released files, or the schema stamp that says there was a
+    ledger), so a hand edit to the plan in a test is not settled back."""
+    import shutil
     plan, items, http = TX._plan(d)
-    for f in ("library.ledger.jsonl", "library.lock.json"):
+    for f in ("library.ledger.jsonl", "library.lock.json", "library.usage.json", "ecadlib_schema.json"):
         (plan.parent / f).unlink(missing_ok=True)
+    shutil.rmtree(plan.parent / ".ecadlib", ignore_errors=True)
     return plan, items, http
 
 
