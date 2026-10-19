@@ -347,7 +347,7 @@ def blockers(rows, rules=None, offline=False):
     """[(message, fix)] for causes outside the parts that held them back: part sources that could not be reached, and
     the datasheet reader without an API key, and one field missing on many parts (a BOM without that column).
     rows: librarian.review_rows(items) (each has `part`, `tried`, and `status` / `why`)."""
-    net, nokey = {}, []
+    net, nokey, off = {}, [], []
     for r in rows:
         for step in re.split(r";\s+(?=[a-z_]+[: ])", r.get("tried") or ""):
             src = step.split(":", 1)[0].split(" ", 1)[0].strip()
@@ -356,6 +356,8 @@ def blockers(rows, rules=None, offline=False):
                 net.setdefault(src, [set(), m.group(0)])[0].add(r["part"])
             if "no API key" in step:
                 nokey.append(r["part"])
+            if "--offline: datasheet not read" in step:
+                off.append(r["part"])
     out = []
     only = {}                                  # parts held for one missing field and nothing else (a BOM column short)
     for r in rows:
@@ -375,6 +377,9 @@ def blockers(rows, rules=None, offline=False):
         else:
             out.append((f"network: {src} could not be reached (or refused) for {len(parts)} part(s) ({why})",
                         "check your internet connection or proxy, or skip online lookups: --offline --sources standard"))
+    if off:
+        out.append((f"{len(set(off))} part(s) need the datasheet read by AI: --offline sends nothing to the model",
+                    "run without --offline to read them"))
     if nokey:
         from .doctor import _ai_key_env
         env = _ai_key_env(rules)

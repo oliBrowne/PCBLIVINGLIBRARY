@@ -14,7 +14,8 @@ approvals are only recorded. Keys (all optional):
   no_self_approval  the person who released the item with --allow cannot approve it (default true)
   applies_to        "all" (default) or "allowed": only items released with an --allow override need sign-off
   parts             fnmatch patterns limiting which parts need sign-off (default: every part)
-  reject_blocks     a current reject holds the item until that person approves again (default true)
+  reject_blocks     a current reject holds the item until that person approves again (default true). Without any
+                    policy a current reject holds the item too; only approvals need a policy to be required
 Each decision is stored in the item's `approvals` list: who, key, when, role, decision, comment and `hash`, a sha256
 over the item's .SchLib/.PcbLib bytes and its key fields (name, folder, description, comment, parameters, cleared,
 symbol/footprint refs). Any later change to them makes the approval stale; it then no longer counts. The parameters
@@ -208,9 +209,12 @@ def evaluate(item, policy, base=".", h=None):
         for role in policy["roles"]:
             if not any(r.get("role") == role for r in valid):
                 missing.append(f"an approval as {role}")
-        if rejected and policy["reject_blocks"]:
-            missing.append("rejected by " + "; ".join(rejected))
-    return {"required": need, "met": not missing, "hash": h, "approved_by": [r["who"] for r in valid],
+    # a current reject is an explicit "no": it holds the part with or without a policy (a policy may turn that off
+    # with reject_blocks = false); only approvals need a policy to be required
+    blocked = bool(rejected) and (not policy or policy["reject_blocks"])
+    if blocked:
+        missing.append("rejected by " + "; ".join(rejected))
+    return {"required": need or blocked, "met": not missing, "hash": h, "approved_by": [r["who"] for r in valid],
             "missing": missing, "stale": stale, "rejected_by": rejected, "ignored": ignored}
 
 
@@ -222,10 +226,10 @@ def post_check(items, base=".", rows=None):
         row = rows[i] if rows and i < len(rows) else None
         if it.get("duplicate_of"):
             it["status"] = "duplicate"
-        if not policy:
+        ev = evaluate(it, policy, base) if policy or it.get("approvals") else None
+        if not policy and not (ev and ev["required"]):
             it.pop("approval", None)
-        else:
-            ev = evaluate(it, policy, base)
+        else:                                      # a policy, or a current reject (which holds the part without one)
             it["approval"] = {"policy": policy, "checked_hash": ev["hash"],
                               **{k: ev[k] for k in ("required", "met", "approved_by", "missing", "stale")}}
             if it["status"] in ("ready", "awaiting_approval"):    # awaiting_approval only ever comes from ready
@@ -244,7 +248,10 @@ def push_block(item, policy=None, base="."):
         return f"duplicate of {item.get('duplicate_of') or '?'} (dedupe)"
     snap = item.get("approval") or {}
     pol = policy if policy is not None else snap.get("policy")
-    if not pol:
+    if not pol:                                    # no policy: only a current reject holds the part
+        ev = evaluate(item, None, base) if item.get("approvals") else None
+        if ev and ev["required"] and not ev["met"]:
+            return "rejected: " + "; ".join(ev["missing"])
         return "awaiting approval" if item.get("status") == "awaiting_approval" else None
     ev = evaluate(item, pol, base)
     if snap.get("checked_hash") and snap["checked_hash"] != ev["hash"] and item.get("status") != "held":
@@ -286,9 +293,16 @@ def decide(item, decision, who, role=None, comment="", base=".", policy=None):
 def refresh_status(item, policy, base="."):
     """After a decision: flip between ready and awaiting_approval (never touches held items). An item whose
     content changed since the release check stays awaiting_approval until release-check runs again."""
-    if item.get("status") not in ("ready", "awaiting_approval") or not policy:
+    if item.get("status") not in ("ready", "awaiting_approval"):
         return item.get("status")
     ev = evaluate(item, policy, base)
+    if not policy and not ev["required"]:          # no policy and no current reject: nothing to wait for
+        snap = item.get("approval") or {}
+        if snap and not snap.get("policy"):
+            item.pop("approval", None)
+            if snap.get("checked_hash") in (None, ev["hash"]):
+                item["status"] = "ready"           # it waited only for the reject that is now taken back
+        return item["status"]
     snap = item.setdefault("approval", {"policy": policy, "checked_hash": None})
     snap.update({"policy": policy, **{k: ev[k] for k in ("required", "met", "approved_by", "missing", "stale")}})
     changed = snap.get("checked_hash") not in (None, ev["hash"])
@@ -402,8 +416,8 @@ def _run(a):
             rec = decide(it, a.action, who, a.role, a.comment, base, policy)
             entry.update(role=rec["role"], hash=rec["hash"], result="recorded", status=refresh_status(it, policy, base))
             note = (" (still held by the release check)" if it.get("status") == "held" else
-                    " (not enforced: no approval policy, so it is still pushed)" if a.action == "reject" and not policy
-                    else "")
+                    " (held: not pushed or exported until this rejection is taken back with an approve)"
+                    if a.action == "reject" else "")
             print(f"  {a.action.rstrip('e')}ed  {it['name']:<28} -> {it.get('status')}{note}")
         except Refused as e:
             refused += 1
@@ -417,8 +431,8 @@ def _run(a):
     timing.mark_review(plan.parent, a.action)
     if not policy:
         print("no approval policy (approvals.json/.toml next to the plan, or [release.approvals] in ecadlib.toml): "
-              "recorded, but push does not require them" + ("; a rejected part stays ready and is pushed (with a "
-                                                             "policy, a rejection holds it)" if a.action == "reject" else ""))
+              + ("a rejection still holds the part (an approve by the same person takes it back)" if a.action == "reject"
+                 else "approvals are recorded, but push does not require them"))
     print(f"{len(sel) - refused} recorded as {who}, {refused} refused -> {plan}; log {base / AUDIT}")
     return 2 if refused else 0
 

@@ -3,7 +3,8 @@ Run:  python3 -m tests.run_all test_e2e      (about a minute; the KiCad checks s
 
     ecadlib init --yes                                   empty folder -> ecadlib.toml
     ecadlib project altium_project/Board.PrjPcb -o ...   BOM from an Altium project (.PrjPcb + 2 .SchDoc)
-    ecadlib librarian <BOM> -o lib/<board> --offline     x3: a KiCad 7 .kicad_sch project, the Altium BOM, an .xlsx
+    ecadlib librarian <BOM> -o lib/<board> [--offline]   x3: a KiCad 7 .kicad_sch project, the Altium BOM, an .xlsx
+                                                         (the .xlsx online: Claude reads its datasheet part)
     ecadlib release-check lib/parts/plan.json --allow DSPART16
     ecadlib kicad-export / kicad-dblib / export-parts / dblib-sync / altium365 push (--dry-run and against FakeNexar)
 
@@ -53,7 +54,10 @@ def golden_path(work, fa, nx, tls, first=True):
     out["project"] = E.ecadlib(work, "project", "altium_project/Board.PrjPcb", "-o", "boms/altium_bom.csv", env=env)
     for name, bom in (("kicad_board", "kicad_project/board.kicad_sch"), ("altium_board", "boms/altium_bom.csv"),
                       ("parts", "parts.xlsx")):
-        p = E.ecadlib(work, "librarian", bom, "-o", f"lib/{name}", "--offline", "--cache", "cache", env=env, check=False)
+        # --offline sends nothing to the model either (UX-15): the BOM with a datasheet part runs without it, the
+        # part sources answered from the recorded cache (anything else fails at once at clean_env's dead proxy)
+        offline = () if name == "parts" else ("--offline",)
+        p = E.ecadlib(work, "librarian", bom, "-o", f"lib/{name}", *offline, "--cache", "cache", env=env, check=False)
         assert p.returncode in (0, 2), (name, p.returncode, p.stdout[-3000:], p.stderr[-3000:])  # 2 = parts held
         assert re.search(r"\n\d+ parts?: (\d+ ready|\d+ held)", p.stdout) and "written:" in p.stdout, p.stdout[-2000:]
         out[f"librarian:{name}"] = p
@@ -376,7 +380,7 @@ def test_killed_librarian_recovers_on_the_next_run():
     shutil.copy(g["work"] / "ecadlib.toml", root / "ecadlib.toml")
     E.seed_cache(root / "cache")
     E.seed_datasheet(root / "cache", "DSPART16")
-    args = ("librarian", "parts.xlsx", "-o", "lib/parts", "--offline", "--cache", "cache")
+    args = ("librarian", "parts.xlsx", "-o", "lib/parts", "--cache", "cache")   # not --offline: Claude reads DSPART16
     with E.FakeAnthropic(hold={"DSPART16"}) as slow:
         env = E.clean_env(ANTHROPIC_API_KEY="sk-e2e-test", ANTHROPIC_BASE_URL=slow.url)
         out, killed = E.ecadlib_killed(root, *args, env=env, when=slow.held.is_set)

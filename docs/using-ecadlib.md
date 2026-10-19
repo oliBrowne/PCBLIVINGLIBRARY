@@ -20,14 +20,14 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
    ```
 
    A browser tab opens at `http://127.0.0.1:8765`.
-   * **Check a BOM:** drop in a CSV or XLSX, whether it's an Altium BOM, an Altium ActiveBOM, a KiCad BOM or a hand-made spreadsheet. A progress bar runs while parts are looked up. You then get a table of what is already in your library, what a part source can supply, what needs a footprint, and what is DNP. You can filter it by status or by search.
+   * **Check a BOM:** drop in a CSV or XLSX, whether it's an Altium BOM, an Altium ActiveBOM, a KiCad BOM or a hand-made spreadsheet. A progress bar runs while parts are looked up. You then get a table of what is already in your library, what a part source can supply, what needs a footprint, and what is DNP. You can filter it by status or by search. Dropping a BOM with the same file name again (the next revision) continues the same library plan: its sign-offs stay, and a change to a part already released (pins, pads, manufacturer or part number) waits for a person, as a command-line re-run does.
    * **Fill the library:** one button runs the librarian on the BOM. It finds each missing symbol and footprint (official KiCad libraries, then EasyEDA, then the datasheet reader), writes the Altium files, and runs the release check. Each part shows where its symbol and footprint came from and what still needs a person. Parts that fail the check are held back from Altium 365; **Release anyway…** overrides that after you have looked (it is recorded in the plan), and **Hold again** takes it back.
 
      ![Fill the library](ui-librarian.png)
      * **Pick…** on a held part lists ranked symbol or footprint candidates (official KiCad library, your `--lib` libraries, ecadlib's package specs) with why each ranked, its pin/pad count, whether it matches the part's other half and a suggested pin map for a near miss. **Choose** converts it, records the choice in the plan (a librarian re-run keeps it) and re-runs the release check.
 
        ![Pick a candidate](ui-resolve.png)
-     * **Sign-off:** type your name, then **Approve** or **Reject…** a part; **Approval status** shows the policy and who has signed. There is no login (it is a local tool), so the name you type is recorded as given, in the plan and in `approvals_audit.jsonl`. With an `approvals.json` next to the plan ([sign-off](librarian.md#approvalspy-and-dedupepy-sign-off-and-duplicates)), parts wait as *awaiting approval* and are not pushed until signed off.
+     * **Sign-off:** type your name, then **Approve** or **Reject…** a part; **Approval status** shows the policy and who has signed. There is no login (it is a local tool), so the name you type is recorded as given, in the plan and in `approvals_audit.jsonl`. With an `approvals.json` next to the plan ([sign-off](librarian.md#approvalspy-and-dedupepy-sign-off-and-duplicates)), parts wait as *awaiting approval* and are not pushed until signed off. A rejected part waits the same way with or without one.
      * **Find duplicates** lists parts with the same MPN, footprints with the same geometry and symbols with the same pinout across the plan and the workspace's `altium_models/` and `footprints/`; **Merge…** points the plan at the keepers (library files are never changed).
 
        ![Sign-off and duplicates](ui-signoff.png)

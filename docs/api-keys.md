@@ -73,4 +73,5 @@ max_cost_usd = 0        # a hard cap: the command line refuses a run above it un
 
 On the command line, `ecadlib datasheet estimate PLAN` prints the same estimate and sends nothing, and
 `ecadlib costs` shows what each job costs on each model. The MCP server keeps its `datasheet_estimate` and
-`datasheet_batch` tools, held to `max_cost_usd`.
+`datasheet_batch` tools: `datasheet_batch` needs the amount you approved of `datasheet_estimate`'s quote
+(`approved_usd`) and is held to it. `--offline` sends nothing to the model: no datasheet is read until you run without it.

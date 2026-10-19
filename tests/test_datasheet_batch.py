@@ -558,11 +558,27 @@ def test_workspace_and_mcp_tools():
                 ws.datasheet_batch(bom)
                 raise AssertionError("no key")
             except ValueError as e:
+                assert "--offline: datasheet not read" in str(e), e           # --offline sends nothing to the model
+        ws = Workspace(d, [], providers=["digikey"])                           # the paid read: not --offline
+        env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            try:
+                ws.datasheet_batch(bom)
+                raise AssertionError("no key")
+            except ValueError as e:
                 assert "ANTHROPIC_API_KEY is not set" in str(e)
         api = FakeAPI(polls=1)                                                  # first status check: in_progress
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": KEY}), patched(api):
+            try:                                                                # a paid call: quoted and approved first
+                M.call_tool(ws, "datasheet_batch", {"bom": bom, "over_limit_ok": True})
+                raise AssertionError("no approval")
+            except ValueError as e:
+                assert "approve the cost first" in str(e) and not api.of("/v1/messages/batches"), e
+            q = M.call_tool(ws, "datasheet_estimate", {"bom": bom})["ai"]
+            assert q["parts"] == 2 and q["approve_usd"] > 0, q
             lines = [{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                      "params": {"name": "datasheet_batch", "arguments": {"bom": bom}}}]
+                      "params": {"name": "datasheet_batch", "arguments": {"bom": bom, "approved_usd": q["approve_usd"],
+                                                                         "over_limit_ok": True}}}]
             buf = io.BytesIO()
             M.serve(ws, io.BytesIO("\n".join(map(json.dumps, lines)).encode() + b"\n"), buf)
         resp = json.loads(buf.getvalue().decode().splitlines()[0])
@@ -570,7 +586,7 @@ def test_workspace_and_mcp_tools():
         assert not resp["result"]["isError"], body
         assert body.get("batches") and body["batches"][0]["id"] == "msgbatch_01Test1" and body["pending"] == 1, {k: body[k] for k in ("batches", "pending", "log")}
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": KEY}), patched(api):
-            r = ws.datasheet_batch(bom, wait=True)
+            r = ws.datasheet_batch(bom, wait=True, approved_usd=q["approve_usd"], over_limit_ok=True)
         assert r["pending"] == 0 and len(api.of("/v1/messages/batches")) == 1
         row = next(x for x in r["review"] if x["part"] == "DSPART1")
         assert row["footprint_from"].startswith("datasheet:") and "verify" in row["why"], row

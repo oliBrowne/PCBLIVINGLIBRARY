@@ -374,7 +374,7 @@ details summary { cursor: pointer; color: var(--muted); }
         <button class="small" id="dedupe">Find duplicates</button>
         <button class="small" id="aiprice" title="What reading the remaining datasheets with AI costs; nothing is sent">AI cost of the rest</button>
       </div>
-      <div class="muted small" style="margin-top:6px" id="signnote">There is no login: ecadlib is a local tool, so whatever name you type is recorded as given with each approval, rejection or release override (in the plan and in <span class="mono">approvals_audit.jsonl</span>). Sign-off is enforced only when an <span class="mono">approvals.json</span> sits next to the plan.</div>
+      <div class="muted small" style="margin-top:6px" id="signnote">There is no login: ecadlib is a local tool, so whatever name you type is recorded as given with each approval, rejection or release override (in the plan and in <span class="mono">approvals_audit.jsonl</span>). Sign-off is enforced only when an <span class="mono">approvals.json</span> sits next to the plan; a rejection always holds the part.</div>
       <div class="out" id="approut"></div>
       <div class="out" id="dedupeout"></div>
     </div>
@@ -1165,7 +1165,9 @@ function decideLater(part, decision, who, role, comment) {
     try {
       const r = await api("/api/approvals/decide", { bom: current.bom, part, decision, user: who, role, comment });
       banner($("#approut"), ""); loadStatus().catch(() => {});
-      if (!r.decision.enforced) toast(`${what}. Recorded (there is no approvals.json, so sign-off is not enforced).`);
+      if (!r.decision.enforced) toast(decision === "reject"
+        ? `${what}. It is held: not sent to Altium or exported until it is approved again.`
+        : `${what}. Recorded (there is no approvals.json, so sign-off is not enforced).`);
       await loadParts();
     } catch (err) { await loadParts().catch(() => {}); toast(`${what} failed: ${err.message}`, { bad: true, ms: 8000 }); }
   };

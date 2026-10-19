@@ -583,6 +583,20 @@ class Run:
         if self.reader is None:
             self.reader = D.Reader(self.out, Path(self._kicad_args[0] or self.out / "cache").parent, self.api_key, self.rules, self.http)
         rd = self.reader
+        if getattr(rd, "offline", False) and not rd.estimate_only:   # --offline: an answer already cached, else none
+            try:
+                job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+                res = rd.cached(job)
+            except CC.Held as e:
+                self.cross_check_held(st, e)
+                return
+            except D.DatasheetError:
+                res = None
+            if res is None:
+                st["tried"].append(f"datasheet: {D.OFFLINE} ({urls[0][0]})")
+                return
+            self.put_datasheet(st, res, job, fp_name, sym_name, "cached")
+            return
         if not rd.key and not rd.estimate_only:
             st["tried"].append(f"needs datasheet reader (no API key): {urls[0][0]} ({urls[0][1]})")
             return
@@ -962,6 +976,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     gate.begin(list(old.values()))
     if reader is None and "datasheet" in sources:
         reader = D.Reader(out, cache, api_key, rules, http, batch=datasheet_batch, log=log)
+    if reader is not None and offline and not getattr(reader, "replay", None):   # --offline: nothing goes to the model
+        reader.offline, reader.key = True, None                                # (a replay of recorded answers sends nothing)
     r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step, rules,
             reader)
     todo = []

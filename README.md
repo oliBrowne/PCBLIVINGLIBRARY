@@ -92,7 +92,7 @@ ecadlib review ecadlib_workspace/librarian/my_bom/plan.json
 ```
 
 **4. Sign off** (optional policy). With an `approvals.json` next to the plan, parts wait until the named people
-approve them.
+approve them. A rejected part is held either way, policy or not, until it is approved again.
 
 ```
 ecadlib approve ecadlib_workspace/librarian/my_bom/plan.json approve --part CH340C -m "pinout checked"

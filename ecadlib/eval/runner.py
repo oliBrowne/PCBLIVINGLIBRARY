@@ -248,6 +248,7 @@ class EvalReader(D.Reader):
         self.used = {}
         if self.replay:
             self.key, self.estimate_only = "replay (never sent)", False
+            self.offline = False                                      # recorded answers: nothing goes to a model
         elif not self.key:
             self.estimate_only = True
 

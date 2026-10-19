@@ -154,17 +154,25 @@ TOOLS = [
     {"name": "datasheet_estimate",
      "description": "Before reading datasheets with Claude: how many parts of the librarian plan still need a symbol or "
                     "footprint and have a datasheet link, and the token count and cost (USD, batch price) of reading them. "
-                    "Exact input counts when the API key is set, rough otherwise. Sends nothing to the model.",
+                    "Exact input counts when the API key is set, rough otherwise. `ai` is the quote to show the user: "
+                    "its approve_usd is the approved_usd datasheet_batch needs. Sends nothing to the model.",
      "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "datasheet_batch",
      "description": "Fill a whole BOM from datasheets in one go: every part of the librarian plan that still has no symbol "
                     "or footprint is read by Claude from its datasheet (BOM link, LCSC link, KiCad/EasyEDA link) as one "
                     "Message Batch (half price), built into .SchLib/.PcbLib, marked verify (held until a person checks "
-                    "it) and the release check re-run. Costs money: call datasheet_estimate first and only run it when "
-                    "the user agrees. wait=false (default) submits and returns at once; call again later to collect "
-                    "(the batch id is kept). sync=true uses one Messages call per part instead of a batch.",
-     "inputSchema": {"type": "object", "required": ["bom"],
+                    "it) and the release check re-run. Costs money: call datasheet_estimate first, show its `ai` quote "
+                    "and pass approved_usd, the amount the user said yes to; the reads are capped to it and refused if "
+                    "the estimate has gone up. Needs the librarian's plan (librarian_run) first. wait=false (default) "
+                    "submits and returns at once; call again later (with the same approved_usd) to collect (the batch "
+                    "id is kept, nothing is paid twice). sync=true uses one Messages call per part instead of a batch "
+                    "(full price: the quote differs).",
+     "inputSchema": {"type": "object", "required": ["bom", "approved_usd"],
                      "properties": {"bom": {"type": "string"}, "sync": {"type": "boolean", "default": False},
+                                    "approved_usd": {"type": "number", "description": "USD the user approved"},
+                                    "over_limit_ok": {"type": "boolean", "description": "the user agreed to go over their limit"},
+                                    "price_unknown_ok": {"type": "boolean",
+                                                         "description": "the user agreed to a model with no known price"},
                                     "wait": {"type": "boolean", "default": False},
                                     "parts": {"type": "array", "items": {"type": "string"}, "description": "only these parts"}}}},
     {"name": "cross_checks",
@@ -280,17 +288,24 @@ TOOLS = [
     {"name": "apply_house_style",
      "description": "Adapt a BOM's plan to the house style: exact fixes by code; ai true also lets the model reword "
                     "descriptions and values (checked: no new numbers, manufacturer / part numbers / links never "
-                    "touched; this calls the model, which costs money: ask the user first). dry_run (default true) shows the "
-                    "changes; call again with dry_run false after the user agrees.",
+                    "touched). ai costs money: without approved_usd nothing is sent and the result's `ai` is the quote "
+                    "to show the user; call again with approved_usd (the amount they said yes to) to have the model "
+                    "reword (each such call is a paid request). dry_run (default true) shows the changes; call again "
+                    "with dry_run false after the user agrees.",
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"}, "part": {"type": "string"},
                                     "ai": {"type": "boolean", "default": False}, "model": {"type": "string"},
+                                    "approved_usd": {"type": "number", "description": "USD the user approved"},
+                                    "over_limit_ok": {"type": "boolean", "description": "the user agreed to go over their limit"},
+                                    "price_unknown_ok": {"type": "boolean",
+                                                         "description": "the user agreed to a model with no known price"},
                                     "dry_run": {"type": "boolean", "default": True}}}},
     {"name": "visual_check",
      "description": "Visual proof of a part: renders our footprint (top view, pin 1, pitch, dimensions) and symbol next to "
                     "the datasheet's drawing / pin-table pages and asks Claude whether they match (pitch, pad count and "
-                    "numbering, pin 1, top vs bottom view, body size, pin names/numbers); the Claude call costs money "
-                    "(render_only true sends nothing). Verdict pass / doubt / fail / "
+                    "numbering, pin 1, top vs bottom view, body size, pin names/numbers). The Claude call costs money: "
+                    "call with render_only true first (sends nothing; its `ai` is the quote to show the user), then "
+                    "again with approved_usd, the amount they said yes to. Verdict pass / doubt / fail / "
                     "skipped (no API key) with findings and the image paths, so you can look at them too.",
      "inputSchema": {"type": "object", "required": ["target"],
                      "properties": {"target": {"type": "string", "description": "part name in the workspace, or a workspace path "
@@ -298,7 +313,11 @@ TOOLS = [
                                     "datasheet": {"type": "string", "description": "datasheet PDF (workspace path or URL)"},
                                     "pages": {"type": "string", "description": "datasheet pages, e.g. 3,7-8 (default: picked by text)"},
                                     "symbol": {"type": "string", "description": "symbol file (.SchLib / symbol JSON / pin CSV)"},
-                                    "render_only": {"type": "boolean"}}}},
+                                    "render_only": {"type": "boolean"},
+                                    "approved_usd": {"type": "number", "description": "USD the user approved"},
+                                    "over_limit_ok": {"type": "boolean", "description": "the user agreed to go over their limit"},
+                                    "price_unknown_ok": {"type": "boolean",
+                                                         "description": "the user agreed to a model with no known price"}}}},
     {"name": "ai_quote",
      "description": "What reading the datasheets of a BOM's librarian plan with the configured model would cost, sending "
                     "nothing: parts to read, model, about / at most USD, the user's limit and whether an API key is set. "
@@ -480,7 +499,9 @@ def call_tool(ws, name, args, progress=None):
         if name == "datasheet_estimate":
             return ws.datasheet_estimate(args["bom"])
         if name == "datasheet_batch":
-            r = ws.datasheet_batch(args["bom"], args.get("sync") is True, args.get("wait") is True, args.get("parts") or None)
+            r = ws.datasheet_batch(args["bom"], args.get("sync") is True, args.get("wait") is True, args.get("parts") or None,
+                                   approved_usd=args.get("approved_usd"), over_limit_ok=args.get("over_limit_ok") is True,
+                                   price_unknown_ok=args.get("price_unknown_ok") is True)
             r["log"] = r["log"][-20:]
             return r
         if name == "cross_checks":
@@ -509,7 +530,9 @@ def call_tool(ws, name, args, progress=None):
             return ws.where_used(args["projects"], args.get("part") or None, args.get("plan") or None)
         if name == "visual_check":
             return ws.visual_check(args["target"], args.get("datasheet") or None, args.get("pages") or None,
-                                   args.get("symbol") or None, args.get("render_only") is True)
+                                   args.get("symbol") or None, args.get("render_only") is True,
+                                   approved_usd=args.get("approved_usd"), over_limit_ok=args.get("over_limit_ok") is True,
+                                   price_unknown_ok=args.get("price_unknown_ok") is True)
         if name == "list_example_specs":
             return ws.example_specs()
         if name == "propose_rules":
@@ -534,7 +557,9 @@ def call_tool(ws, name, args, progress=None):
             return ws.check_house_style(args["bom"], args.get("part") or None)
         if name == "apply_house_style":
             return ws.apply_house_style(args["bom"], args.get("ai") is True, args.get("model") or None,
-                                        args.get("dry_run") is not False, args.get("part") or None)
+                                        args.get("dry_run") is not False, args.get("part") or None,
+                                        approved_usd=args.get("approved_usd"), over_limit_ok=args.get("over_limit_ok") is True,
+                                        price_unknown_ok=args.get("price_unknown_ok") is True)
         if name == "workspace_status":
             return ws.status()
         if name == "doctor":
@@ -566,8 +591,9 @@ footprints from free sources) -> held_parts / library_parts (what still needs a 
 (fix a held part with the user) -> approve_part (the user's own sign-off) -> altium365_plan -> altium365_push.
 Rules:
 - A slow tool may answer {"job": ..., "state": "running"}: call job_status with that id until it is done.
-- Money: librarian_run never pays for a model. ai_read, datasheet_batch, house_style_guide, visual_check and ai true
-  cost money: show the quote (ai_quote, datasheet_estimate, learn_house_style ai) and wait for the user's yes.
+- Money: librarian_run never pays for a model. ai_read, datasheet_batch, house_style_guide, visual_check and
+  apply_house_style ai cost money and need approved_usd: show the quote (ai_quote, datasheet_estimate, learn_house_style
+  ai, visual_check render_only, apply_house_style ai without approved_usd), wait for the user's yes, pass that amount.
 - Never approve, reject or allow parts on your own: pass the user's own name and decision.
 - altium365_push defaults to a dry run; a real run only when the user asked for it.
 - BOM and file paths are absolute, or relative to the workspace folder (workspace_info shows it).
@@ -972,9 +998,9 @@ def _job_status(ws, args, notify=None, token=None):
 
 
 def _bom_key(ws, bom):
-    """x.csv, ./x.csv and its full path are one BOM."""
+    """x.csv, ./x.csv and its full path are one BOM; two uploads of BOM.csv share one plan, so one writer for both."""
     try:
-        return str(ws._bom_path(bom).resolve())
+        return str(ws._librarian_dir(ws._bom_path(bom)).resolve())
     except (ValueError, OSError):                 # outside the workspace: the tool itself says so
         return str(bom)
 

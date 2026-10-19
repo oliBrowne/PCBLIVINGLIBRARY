@@ -209,3 +209,22 @@ def style_quote(system, user, schema, model, rules=None, max_tokens=8000, retry=
     if not key_set:
         q["text"] += " No API key is stored for it yet: add one on the setup page or with `ecadlib keys set`."
     return q
+
+
+def request_quote(step, model, usd, worst, rules=None, key_set=True, what="This asks the model once"):
+    """A quote dict like quote()'s for model requests priced elsewhere (a visual check, the house style rewording):
+    `usd` typical, `worst` at most (None = price unknown)."""
+    lim, which = limit(rules)
+    q = {"step": step, "parts": 1, "names": [], "model": model, "usd": usd, "usd_max": worst, "limit_usd": lim,
+         "limit_name": which, "price_known": worst is not None,
+         "over_limit": worst is None or ((lim > 0 or which == "ask_above_usd") and worst > lim),
+         "exact": False, "cross_check": False, "key_set": bool(key_set), "skipped": [], "cached": []}
+    q["approve_usd"] = up(worst) if worst is not None else None
+    if worst is None:
+        q["text"] = f"{what} ({model}); ecadlib does not know its price."
+    else:
+        q["text"] = (f"{what} ({model}): about {money(usd)}, at most {money(up(worst))}."
+                     + (f" That is more than your limit of {money(lim)} ([datasheet] {which})." if q["over_limit"] else ""))
+    if not key_set:
+        q["text"] += " No API key is stored for it yet: add one on the setup page or with `ecadlib keys set`."
+    return q

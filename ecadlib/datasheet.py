@@ -781,6 +781,9 @@ def build_request(source, part, package=None, pages=None, model=MODEL, effort="h
     return headers, body
 
 
+OFFLINE = "--offline: datasheet not read; run without --offline to read it"
+
+
 def require_key(key=None, rules=None):
     """The API key: explicit, else the key stored under the name [datasheet] api_key_env gives (default
     ANTHROPIC_API_KEY; `ecadlib keys set`, the setup page), else an environment variable of that name, else
@@ -1822,6 +1825,9 @@ class Reader:
                 self.key = None
         else:                                         # from its env var only (`key` is a Claude key); a local
             self.key = LL.key_for(self.ep)            # server needs none: LL.NO_KEY, never sent anywhere
+        self.offline = bool(getattr(http, "offline", False))
+        if self.offline:                              # --offline: no model call either (it is network, and it bills)
+            self.key = None
         self._info = {}
         self.http, self.batch, self.wait, self.poll, self.max_wait_s = http, batch, wait, poll, max_wait_s
         self.estimate_only, self.yes = estimate, yes
@@ -1862,6 +1868,8 @@ class Reader:
         return self.batch or self.estimate_only
 
     def client(self):
+        if self.offline:
+            raise DatasheetError(OFFLINE)
         if self._client is None:
             self._client = Client(require_key(self.key), log_file=self.log_file, say=self.say, sleep=self.sleep)
         return self._client
@@ -2798,7 +2806,7 @@ def batch_main(argv, estimate=False):
     http = CachedHTTP(a.cache, min_interval=0.5, offline=a.offline, timeout=60)
     rd = Reader(out, a.cache, rules=rules, http=http, model=a.model, effort=a.effort, batch=not a.no_batch,
                 wait=not a.no_wait, poll=a.poll, estimate=estimate or a.estimate, yes=a.yes)
-    if not rd.key and not rd.estimate_only:
+    if not rd.key and not rd.estimate_only and not rd.offline:
         from . import llm as LL
         why = f"{settings(rules)['api_key_env']} is not set" if rd.ep['provider'] == 'anthropic' else LL.needs_key_message(rd.ep)
         print(f"error: {why} (use `ecadlib datasheet estimate` to see the cost without a key)", file=sys.stderr)
@@ -2813,6 +2821,8 @@ def batch_main(argv, estimate=False):
             if unknown:
                 raise DatasheetError(f"no part named {', '.join(unknown)} in {target} (parts: "
                                      f"{', '.join(map(str, names[:20]))}{' ...' if len(names) > 20 else ''})")
+        if rd.offline and not rd.estimate_only:       # --offline: nothing goes to the model
+            raise DatasheetError(OFFLINE)
         if plan_mode and rd.estimate_only:
             est = estimate_plan(target, rd, set(a.part) or None)
             print(format_estimate(est))

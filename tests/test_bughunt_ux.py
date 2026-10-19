@@ -219,11 +219,15 @@ def test_ux30_kicad_export_next_step_keeps_the_project_tables():
 
 
 @lite
-def test_ux32_reject_without_a_policy_says_it_is_still_pushed(tmp_path):
+def test_ux32_reject_without_a_policy_holds_the_part(tmp_path):
+    """Owner's decision: a current reject holds the part even without a policy (was: recorded, still pushed)."""
     from ecadlib import approvals as AP
     ws, plan = _demo(tmp_path / "ws")
     rc, out, err = _quiet(AP.main, [str(plan), "reject", "--part", "RES-0603-10k", "-m", "wrong", "--user", "Ann <a@x.com>"])
-    assert "not enforced" in out and "is pushed" in out, out
+    assert "-> awaiting_approval" in out and "held: not pushed" in out and "is pushed" not in out, out
+    r = ws.altium365_push("uploads/demo/demo_bom.csv", "https://example.365.altium.com", dry_run=True)
+    assert "RES-0603-10k" not in json.dumps([x for x in r.get("results") or r.get("items") or []
+                                             if x.get("action") in ("release", "update")]), r
 
 
 @lite

@@ -242,7 +242,7 @@ def test_u13_reports_keyed_by_bom_location():
         assert a["reports"] != b["reports"], (a["reports"], b["reports"])
         assert ws._triage_frame(ws.inside("projA/BOM.csv"))["designator"].tolist() == ["R1"]
         up = ws.save_upload("BOM.csv", b"Designator,Value\nC1,1u\n")
-        assert ws.triage(up)["reports"][0] == f"reports/triage_BOM_{up.split('/')[1]}.md"   # name + upload folder
+        assert ws.triage(up)["reports"][0] == "reports/triage_BOM@csv.md"   # by file name: a re-upload continues it (UX-16)
         (ws.root / "uploads" / "Old.csv").write_text("Designator,Value\nC1,1u\n")               # flat upload (older workspace)
         assert ws.triage("uploads/Old.csv")["reports"][0] == "reports/triage_Old.md"
 
