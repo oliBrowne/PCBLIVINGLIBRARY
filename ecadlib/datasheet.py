@@ -1195,7 +1195,7 @@ def report(res):
         d = next((x for c in cc.get("checks") or [] for x in c.get("disagreed") or []), None)
         other = next((c["source"] for c in cc.get("checks") or [] if c.get("disagreed")), "")
         t, f = M.held("crosscheck.disagree", field=CC_LABEL(d["field"]) if d else "", first=d and d["first"],
-                      second=d and d["second"], other=other)
+                      second=d and CC_SHOWN(d), other=other)
         out += [f"Held: {t}", f"**Next:** {f}", ""]
     else:
         out += ["A person has to compare it with the datasheet before it is released; until then the part is held.", ""]
@@ -1233,6 +1233,11 @@ def report(res):
 def CC_LABEL(field):
     from . import crosscheck as CC
     return CC.LABEL.get(field, field)
+
+
+def CC_SHOWN(d):
+    from . import crosscheck as CC
+    return CC.shown(d)
 
 
 def write(res, outdir):
