@@ -17,6 +17,10 @@
    "how": "green LED: JLCPCB's pad 1 = C (cathode), on the left, chamfered silk corner and bar on that end; KiCad's cathode on the left: no turn"},
   {"lcsc": "C5423", "ours": "SOIC-8_3.9x4.9mm_P1.27mm", "polarized": false, "correction": 270, "pads": "compatible", "evidence": "community",
    "how": "SOIC-8 ...-BL: JLCPCB's pin 1 bottom-left, numbers running right; KiCad's pin 1 top-left, numbers running down; kicad-jlcpcb-tools saw 270 in JLCPCB's preview"},
-  {"lcsc": "C7593", "ours": "SOIC-8_3.9x4.9mm_P1.27mm", "polarized": false, "correction": 270, "pads": "compatible", "evidence": "community", "how": "as C5423 (NE555, SOIC-8 ...-BL)"}
+  {"lcsc": "C7593", "ours": "SOIC-8_3.9x4.9mm_P1.27mm", "polarized": false, "correction": 270, "pads": "compatible", "evidence": "community", "how": "as C5423 (NE555, SOIC-8 ...-BL)"},
+  {"lcsc": "C72041", "ours": "LED_0603_1608Metric", "polarized": true, "correction": 0, "pads": "compatible", "evidence": "jlc-footprint",
+   "how": "blue LED 19-217: JLCPCB's pad 1 = C (cathode), on the left; KiCad's cathode (pad 1) on the left: no turn"},
+  {"lcsc": "C131244", "ours": "LED_0805_2012Metric", "polarized": true, "correction": 0, "pads": "compatible", "evidence": "jlc-footprint",
+   "how": "red LED 17-21 (0805): JLCPCB numbers the cathode pad 2 (pin K) and draws it on the left; KiCad's cathode (pad 1) on the left: no turn"}
  ]
 }

@@ -150,7 +150,7 @@ footprint (the verified path) or come out unknown. Per-part overrides go in `ove
 
 ### Golden set
 
-These are 13 real LCSC parts. For each one, JLCPCB's footprint is recorded in `tests/fixtures/assembly/easyeda/`,
+These are 15 real LCSC parts. For each one, JLCPCB's footprint is recorded in `tests/fixtures/assembly/easyeda/`,
 paired with KiCad's library footprint, and the answer was decided by hand from JLCPCB's footprint drawing,
 independently of the code. `tests/test_assembly.py::test_golden_set_agreement` checks every one on each test run.
 
@@ -169,20 +169,22 @@ independently of the code. `tests/test_assembly.py::test_golden_set_agreement` c
 | C72043 | LED0603-RD | LED_0603_1608Metric | compatible / compatible | 0 / 0 | verified |
 | C5423 | SOIC-8_L5.0-W4.0-P1.27-LS6.0-BL | SOIC-8_3.9x4.9mm_P1.27mm | compatible / compatible | 270 / 270 | verified |
 | C7593 | SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL | SOIC-8_3.9x4.9mm_P1.27mm | compatible / compatible | 270 / 270 | verified |
+| C72041 | LED0603-FD_BLUE | LED_0603_1608Metric | compatible / compatible | 0 / 0 | verified |
+| C131244 | LED0805-R-RD-1 | LED_0805_2012Metric | compatible / compatible | 0 / 0 | verified |
 
-**Agreement: 13 / 13 (100%), all verified.** The two polarized parts are the LEDs.
+**Agreement: 15 / 15 (100%), all verified.** The four polarized parts are the LEDs.
 
 - The 0402 resistor is risky for the same reason JLCPCB flagged it in the r/KiCad report: KiCad's pads are 1.02 mm
   apart, JLCPCB's 0.87 mm (+18%).
 - The SOIC-8 correction of 270° matches the kicad-jlcpcb-tools check of JLCPCB's placement preview.
-- The LED C2286 numbers its cathode pad 2; ecadlib pairs the pads by the pin names (K / A), so the cathode still lands
-  on the cathode.
+- The LEDs C2286 and C131244 number their cathode pad 2; ecadlib pairs the pads by the pin names (K / A), so the
+  cathode still lands on the cathode.
 
 The issue's target is 60 or more parts, with 15 or more polarized (diodes, tantalum and electrolytic capacitors,
 SOT-23, QFN, crystals). Those parts are being fetched from EasyEDA on a PC outside the build sandbox. Their results,
 and the 0° rules for the families they cover, will be added here.
 
-### Other tests (`tests/test_assembly.py`, 22 tests)
+### Other tests (`tests/test_assembly.py`, 23 tests in all)
 
 - **Synthetic poses**: 12 footprint shapes × 4 turns × 3 offsets, with and without noise, and off-grid turns. The turn
   and offset come back exactly, and noise stays within tolerance.
