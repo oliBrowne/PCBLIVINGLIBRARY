@@ -4,7 +4,7 @@
 References are KiCad numbers: the shipped set (ecadlib/eval/sets/kicad-v1.json) and footprint_bench's fixture. Claude's
 answers are the SYNTHETIC extractions of tests/test_datasheet in the documented Messages API shape, so nothing here
 says how accurate a real model is: these tests prove the harness scores what it is given."""
-import copy, json, os, tempfile
+import copy, hashlib, json, os, tempfile
 from pathlib import Path
 from unittest import mock
 
@@ -484,3 +484,77 @@ def test_a_checked_reference_erratum_scores_the_datasheets_pins_right():
     sc = S.score(None, None, wrong, ref)
     assert R.apply_errata(sc, wrong, er) == [] and not sc["pass"]
     assert "kicad-v1.errata" not in R.available() and R.load_errata("nonexistent.json") == {}
+
+
+def test_cached_only_rescores_after_the_schema_changes():
+    """A new field in the reader's schema changes every answer's cache key: --cached-only still scores the saved
+    answers (sync and batch runs alike), sending nothing."""
+    pdfs = {"https://example.com/soic.pdf": TD.PDF, "https://example.com/qfn.pdf": TD.PDF}
+    for batch in (False, True):
+        api = TB.FakeAPI(answer=lambda part: TD.message(TD.INCH if part == "SOICPART" else qfn_ext()), polls=0)
+        with tempfile.TemporaryDirectory() as d:
+            kw = dict(cache=Path(d) / "cache", http=TB.PdfHTTP(pdfs), log=lambda *a: None, batch=batch)
+            with TB.patched(api), mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": TB.KEY}):
+                rep = R.run(mini_set(d), Path(d) / "live", **kw)
+                before = {c["mpn"]: c["pass"] for c in rep["cases"]}
+                sent = len(api.calls)
+                with mock.patch.object(D, "schema_version", lambda: "000000000000"):
+                    rep2 = R.run(mini_set(d), Path(d) / "live", cached_only=True, **kw)
+            assert not [c for c in api.calls[sent:] if c[0] == "POST"], ("something was sent", batch)
+            assert {c["mpn"]: c["pass"] for c in rep2["cases"]} == before and any(before.values()), (batch, rep2["cases"])
+
+
+def test_live_harness_pins_datasheets_types_failures_and_publishes():
+    """Oliver's live harness: every run records the PDF's SHA-256, the prompt version and why each part failed; a
+    pins file flags a datasheet that changed since; `eval publish` writes the results page with a one-line headline."""
+    pdfs = {"https://example.com/soic.pdf": TD.PDF, "https://example.com/qfn.pdf": TD.PDF}
+    soic = copy.deepcopy(TD.INCH)
+    soic["package"]["pitch"] = {"nom": 2.54}                                  # a wrong pitch: the wrong variant
+    api = TB.FakeAPI(answer=lambda part: TD.message(D.to_wire(soic) if part == "SOICPART" else qfn_ext()), polls=0)
+    with tempfile.TemporaryDirectory() as d:
+        kw = dict(cache=Path(d) / "cache", http=TB.PdfHTTP(pdfs), log=lambda *a: None)
+        with TB.patched(api), mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": TB.KEY}):
+            rep = R.run(mini_set(d), Path(d) / "live", **kw)
+        cs = {c["mpn"]: c for c in rep["cases"]}
+        assert rep["meta"]["prompt_version"] == D.schema_version() and cs["QFNPART"]["prompt_version"] == D.schema_version()
+        ds = cs["QFNPART"]["datasheet"]
+        assert ds["sha256"] == hashlib.sha256(TD.PDF).hexdigest() and ds["url"] == "https://example.com/qfn.pdf"
+        assert cs["QFNPART"]["datasheet_pin"] == "new" and cs["QFNPART"]["failure"] is None
+        bad = cs["SOICPART"]
+        assert not bad["pass"] and bad["failure"] in R.FAILURE_TYPES and bad["failure"] != "no_pdf", bad
+        pm = rep["summary"]["pad_match"]["built"]
+        assert pm["of"] > 0 and 0 < pm["right"] <= pm["of"] and rep["summary"]["failures"][bad["failure"]] == [bad["id"]]
+        pins = Path(d) / "pins.json"
+        assert R.write_pins(Path(d) / "live", pins) == 2
+        doc = json.loads(pins.read_text())
+        doc["cases"]["QFNPART"]["sha256"] = "0" * 64                          # the maker changed the PDF since
+        pins.write_text(json.dumps(doc))
+        with TB.patched(api), mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": TB.KEY}):
+            rep2 = R.run(mini_set(d), Path(d) / "live", pins=pins, **kw)
+        cs2 = {c["mpn"]: c for c in rep2["cases"]}
+        assert cs2["QFNPART"]["datasheet_pin"] == "changed" and cs2["SOICPART"]["datasheet_pin"] == "same"
+        assert "CHANGED since pinned" in R.report_md(rep2)
+        head = R.publish(Path(d) / "live", Path(d) / "results.md")
+        page = (Path(d) / "results.md").read_text()
+        assert head.startswith(f"{rep2['meta']['model']}, 2 real parts: 1 right (50") and "pad match" in head, head
+        assert "## Why parts failed" in page and bad["failure"] in page and "benchmark.md" in page
+
+
+def test_failure_types_from_the_benchmark():
+    """The failure types of real #42 misses, from their report rows."""
+    row = lambda **k: dict({"pass": False, "source": "datasheet", "fields": {}, "tried": [], "errors": []}, **k)
+    f = lambda ok=False, **k: dict(ok=ok, error="" if ok else "x", **k)
+    so = {"pads": [[str(i), 0, i, 1, 0.6, 0] for i in range(1, 9)] + [["9", 0, 0, 3, 3, 0]], "courtyard": []}
+    assert R.failure_type(row(source="none", tried=["datasheet: no datasheet URL known"]), None, None) == "no_pdf"
+    assert R.failure_type(row(source="none", tried=["no footprint: the datasheet read left pitch unresolved"]), None, None) == "blank_dimension"
+    assert R.failure_type(row(source="none", cross_check="disagreed"), None, None) == "held_cross_check"
+    assert R.failure_type(row(fields={"pitch": f(ours=25.4, ref=1.0)}), so, {}) == "wrong_unit"
+    assert R.failure_type(row(fields={"pitch": f(ours=0.65, ref=0.5)}), so, {}) == "wrong_variant"     # PCA9557BS
+    assert R.failure_type(row(fields={"pin1": f(), "pads": f(bad_pads=["1"])}), so, {}) == "mirrored"  # S10B-PH-K
+    assert R.failure_type(row(fields={"pads": f(bad_pads=["9"])}), so, {}) == "thermal_pad"            # BQ24004
+    assert R.failure_type(row(fields={"pads": f(bad_pads=["1", "2"])}), so, {"pad_table": {"arrays": []}}) == "misread_table"
+    assert R.failure_type(row(fields={"pads": f(bad_pads=["1"]), "courtyard": f()}), so, {}) == "misread_dimension"
+    assert R.failure_type(row(fields={"symbol_names": f()}), so, {}) == "symbol"
+    assert R.failure_type(row(kicad_differs_maker_land=True), so, {}) == "maker_land"
+    assert R.failure_type(row(**{"pass": True}), so, {}) is None
+    assert "kicad-v1.pins" not in R.available()

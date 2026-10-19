@@ -107,7 +107,7 @@ The library agent (with its review queue) and two-way Altium 365 sync are kept o
 | Metric | How it is measured | Today (2026-10-17) | Target |
 |---|---|---|---|
 | Test count | `grep -rho "def test_" tests \| wc -l`; full suite with `python -m tests.run_all` in CI | 1,130 test functions | Grows with every fix; suite green on every merge |
-| Pad-match rate against KiCad's library | `ecadlib eval gate` on the 331-part kicad-v1 set | 327 / 331 (98.8%), on a **synthetic** replay pack, not live reads | 97% or better on **live** reads of 100+ parts, published (P5) |
+| Pad-match rate against KiCad's library | `ecadlib eval gate` on the 331-part kicad-v1 set | 327 / 331 (98.8%), on a **synthetic** replay pack: a check of the generator and pipeline given correct answers, not live reads (docs/benchmark.md has the live figure) | 97% or better on **live** reads of 100+ parts, published (P5) |
 | Review and approval rate | Parts approved first time / held / rejected, from the release check, approvals and the review queue | Not reported yet | Reported per workspace (P8); 80%+ approved first time in trials |
 | Time from BOM to released library | Wall time per step, from BOM to Altium 365 release | Not measured on a real BOM (`ecadlib demo`: 1 s offline) | Measured in every trial (P7); faster than the user's usual process |
 | Outside use | Users who ran their own BOM end to end | 0 | 3 to 5 Altium users by v0.4.0 (P6) |

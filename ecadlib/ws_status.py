@@ -4,7 +4,7 @@ and a damaged file is skipped (and named) instead of stopping the summary.
 
     ecadlib status [--workspace W] [--json]        (W defaults to $ECADLIB_WORKSPACE, then ./ecadlib_workspace)
 
---json prints one object (stable keys, see README "ecadlib status"):
+--json prints one object (stable keys, see docs/command-line.md):
     {"workspace", "exists", "rules", "boms", "plans": [{"plan", "parts", "ready", "held", "awaiting_approval",
      "duplicates", "updated"}], "totals": {...same counts...}, "last_triage": {...} | null,
      "last_upkeep": {...} | null, "problems": [text]}
@@ -250,7 +250,7 @@ def render(s, styled=False, width=None, shown=None, verbosity=0):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="ecadlib status", description="one-screen summary of a workspace (read-only)")
     ap.add_argument("--workspace", default=os.environ.get("ECADLIB_WORKSPACE") or "ecadlib_workspace")
-    ap.add_argument("--json", action="store_true", help="print the summary as JSON (stable keys; see README)")
+    ap.add_argument("--json", action="store_true", help="print the summary as JSON (stable keys; see docs/command-line.md)")
     a = ap.parse_args(argv)
     s = status(a.workspace)
     if a.json:

@@ -135,7 +135,7 @@ def check_ai(rules=None, environ=None):
     try:
         ep = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")
     except LL.AIConfigError as e:
-        return [_c("ai model", "FAIL", str(e), "fix [ai] in ecadlib.toml (README: Bring your own model)")]
+        return [_c("ai model", "FAIL", str(e), "fix [ai] in ecadlib.toml (docs/models.md)")]
     prof = PR.profile(ep["model"], ep["provider"], rules)
     plan = R.plan(prof, ep["assist"], ep["feedback_retry"])
     guide = [k for k in plan["rails"] if R.RAILS[k][0] != "support"]

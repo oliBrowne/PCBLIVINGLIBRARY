@@ -357,7 +357,7 @@ def _run(a):
         sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")
     if a.action == "status":
         sel = [by[n] for n in a.part] if a.part else items
-        if getattr(a, "json", False):              # stable shape: README "Machine-readable output (--json)"
+        if getattr(a, "json", False):              # stable shape: docs/command-line.md "Machine-readable output (--json)"
             pf = policy_file(base)
             print(json.dumps({"plan": str(plan), "policy_file": str(pf) if pf else None, "enforced": bool(policy),
                               "awaiting_approval": sum(i.get("status") == "awaiting_approval" for i in sel),

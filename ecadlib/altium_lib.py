@@ -13,7 +13,7 @@ primitive record layouts (13-byte common header, 49-byte track, 50-byte fill, re
 main block with its 141-byte extended-tail template, 596-byte pad size/shape block, the SchLib pin
 record) and v7 layer ids. ecadlib/assets/pcblib_template.json.gz holds the Library/Data board
 header and FileVersionInfo of an Altium-saved PcbLib from AltiumSharp's TestData (see NOTICE).
-Field values were cross-checked against real Altium files (README "Altium library writer").
+Field values were cross-checked against real Altium files (docs/altium.md, "Altium library writer").
 
 Also from AltiumSharp: through-hole pad holes (size, round/square/slot, slot length, hole rotation, plated),
 the 60-byte arc, the ComponentBody record (extruded or embedded STEP) and the Library/Models storage with
