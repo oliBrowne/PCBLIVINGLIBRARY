@@ -345,6 +345,30 @@ def _model(o, n, out):
                     _chg(out, cls, "model", label, xa, ya, f"{label} {_f(xa)} -> {_f(ya)}")
 
 
+# ---------------------------------------------------------------- the KiCad footprint shipped besides the PcbLib
+def _kicad(o, n, out):
+    """The .kicad_mod the KiCad publishers ship (fingerprint["kicad"], else the footprint half): classified like the
+    footprint and its 3D model, its pads against the symbol's pins too. A change the .PcbLib already shows is not
+    repeated; the rest says "KiCad footprint". Adding or dropping the .kicad_mod compares it with the .PcbLib's land,
+    which is then what kicad-export converts and ships."""
+    if not o.get("kicad") and not n.get("kicad"):
+        return
+    (fo, mo), (fn, mn) = _shipped(o), _shipped(n)
+    sub = []
+    _footprint({"footprint": fo}, {"footprint": fn}, sub)
+    _pins_pads({"symbol": o.get("symbol"), "footprint": fo}, {"symbol": n.get("symbol"), "footprint": fn}, sub)
+    _model({"model": mo}, {"model": mn}, sub)
+    told = {(c["class"], c["text"]) for c in out}
+    for c in sub:
+        if (c["class"], c["text"]) not in told:
+            out.append(dict(c, area="kicad", text=f"KiCad footprint (.kicad_mod): {c['text']}"))
+
+
+def _shipped(fp):
+    from .fingerprint import kicad_shipped
+    return kicad_shipped(fp)
+
+
 # ---------------------------------------------------------------- entry points
 
 def _n_items(a, b):
@@ -363,6 +387,7 @@ def diff(old, new):
     _footprint(old, new, out)
     _pins_pads(old, new, out)
     _model(old, new, out)
+    _kicad(old, new, out)
     _fields(old, new, out)
     seen, uniq = set(), []
     for c in out:

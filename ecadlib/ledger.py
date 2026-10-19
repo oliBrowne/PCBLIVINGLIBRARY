@@ -29,7 +29,7 @@ Writers hold the library lock (.ecadlib/lock: lock() / locked()) from the gate's
 step that records (settle, baseline, publish lines, approve / reject / revert) takes it and reads the ledger again, so
 two runs on one library never record the same revision twice or settle one another's half-written files. It is an OS lock (fcntl on
 POSIX, msvcrt on Windows), so the OS frees it when the holder dies: a crashed run never leaves a stale lock."""
-import contextlib, datetime, hashlib, json, os, re, threading, time
+import contextlib, copy, datetime, hashlib, json, os, re, tempfile, threading, time
 from pathlib import Path
 
 from .fsutil import write_text_atomic
@@ -194,12 +194,17 @@ def apply_content(item, content):
 
 
 def item_files(item):
-    """{kind: relative path} of the model files a plan item releases (symbol, footprint, kicad_mod)."""
+    """{kind: relative path} of the model files a plan item releases (symbol, footprint, kicad_mod). kicad_mod is the
+    footprint's kicad_mod, else the .kicad_mod beside its .PcbLib (models/KiCad/<ref>.kicad_mod), which the KiCad
+    publishers ship when it is there (fingerprint.kicad_mod_path)."""
+    from .fingerprint import kicad_mod_beside
     out = {}
     for kind, key in (("symbol", "file"), ("footprint", "file"), ("kicad_mod", "kicad_mod")):
         half = item.get("footprint" if kind == "kicad_mod" else kind) or {}
         if half.get(key):
             out[kind] = half[key]
+        elif kind == "kicad_mod" and kicad_mod_beside(half):
+            out[kind] = kicad_mod_beside(half)
     return out
 
 
@@ -371,7 +376,42 @@ class Ledger:
         return done
 
     def fingerprint(self, entry):
-        return self.get_json(entry["fingerprint"]) if entry and entry.get("fingerprint") else None
+        """The entry's fingerprint. One stored by an older ecadlib (another fingerprint schema) is read again from the
+        entry's file snapshot with this ecadlib, so it compares like for like with the files on disk: an upgrade that
+        fingerprints more detail neither shows every released part as changed nor hides a real change."""
+        if not entry or not entry.get("fingerprint"):
+            return None
+        fp = self.get_json(entry["fingerprint"])
+        from . import fingerprint as FP
+        if fp.get("schema") == FP.SCHEMA or not entry.get("files") or entry.get("item") is None:
+            return fp
+        key = (entry["fingerprint"], FP.SCHEMA, json.dumps(entry.get("files"), sort_keys=True))
+        cache = self.__dict__.setdefault("_refp", {})
+        if key not in cache:
+            cache[key] = self._refingerprint(entry)
+        return copy.deepcopy(cache[key])
+
+    def _refingerprint(self, entry):
+        """Fingerprint an entry's snapshot (its blobs, written to a temporary folder) with the current code."""
+        from . import fingerprint as FP
+        item = dict(json.loads(json.dumps(entry.get("item") or {})), name=entry.get("part") or "")
+        halves = {"symbol": ("symbol", "file"), "footprint": ("footprint", "file"), "kicad_mod": ("footprint", "kicad_mod")}
+        with tempfile.TemporaryDirectory(prefix="ecadlib-refp-") as tmp:
+            for kind, rec in (entry.get("files") or {}).items():
+                if kind not in halves:
+                    continue
+                p = Path(tmp) / kind / Path(str(rec["path"]).replace("\\", "/")).name
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(self.get_bytes(rec["sha256"]))
+                if rec.get("ecadbuild"):
+                    p.with_name(p.name + ".ecadbuild").write_bytes(self.get_bytes(rec["ecadbuild"]))
+                half, key = halves[kind]
+                item[half] = dict(item.get(half) or {}, **{key: str(p)})
+            for half, key in (("symbol", "file"), ("footprint", "file"), ("footprint", "kicad_mod")):
+                kind = "kicad_mod" if key == "kicad_mod" else half
+                if kind not in (entry.get("files") or {}) and (item.get(half) or {}).get(key):
+                    item[half] = dict(item[half], **{key: str(Path(tmp) / kind / "missing")})   # not snapshotted: absent
+            return FP.of_item(item, tmp)
 
     # ------------------------------------------------------------ proposals (held changes)
     def proposal_path(self, part):

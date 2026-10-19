@@ -21,6 +21,9 @@ Symbols, by the plan item's `source.symbol`:
   anything else      (datasheet reader, generated, or a KiCad source that cannot be reached): the item's .SchLib
                      read back with altium_lib.read_schlib and drawn as a KiCad symbol (pins, rectangles, lines,
                      polygons, circles, arcs, text; parts -> units, display modes -> De Morgan body styles)
+  A symbol taken again from its source must be the released revision: one whose pins, types or pin -> pad map
+  differ from the item's .SchLib (an upstream change since the release) is not used; the .SchLib is read back and
+  the report lists a warning (change control, #105).
 Footprints: the item's .kicad_mod (models/KiCad/...) when present, else its .PcbLib records converted back.
 Format: KiCad 8 (symbol library version 20231120, footprints up to 20240108), which KiCad 8, 9 and 10 open.
 Newer upstream syntax is written the KiCad 8 way: `(hide yes)` -> `hide`, KiCad 9/10-only flags (in_pos_files,
@@ -328,23 +331,71 @@ def symbol_from_schlib(path, name, notes, pick=None):
     return sym
 
 
-def load_symbol(item, plan_dir, http, libs, name, notes, rules=None):
+def released_differs(item, plan_dir, sym):
+    """A symbol fetched again from the part's source (KiCad, --lib, EasyEDA) against the released revision, the item's
+    .SchLib (publish_guard has put a held change back) -> the changes that are more than cosmetic (pin names and types,
+    hidden pins, the pin -> pad map); [] when it is the released symbol; None when there is no .SchLib to compare with.
+    The fetched symbol is compared as the librarian releases it (converted to Altium and read back), so what the
+    conversion always does (stacked pins hidden, unit 0 pins in every part) is no difference."""
+    import tempfile
+    from . import change_diff as CD, fingerprint as FP
+    f = (item.get("symbol") or {}).get("file")
+    if not f or not (plan_dir / f).is_file():
+        return None
+    rel = FP.of_item(item, plan_dir)
+    if rel.get("symbol") is None:
+        return None
+    try:
+        conv = K.convert_symbol([sym], str(sym[1]), None, [], None, [])
+        with tempfile.TemporaryDirectory(prefix="ecadlib-kx-") as tmp:
+            _, entries = AL.read_schlib(AL.write_schlib(Path(tmp) / "fetched.SchLib", [conv]))
+        fetched = FP.altium_symbol(entries[0])[0]
+    except (ValueError, KeyError, IndexError, OSError) as e:
+        return [{"class": "electrical", "text": f"the fetched symbol cannot be compared ({type(e).__name__}: {e})"}]
+    got = copy.deepcopy(rel)
+    got["symbol"] = dict(fetched, name=rel["symbol"].get("name"))
+    got["hashes"] = FP.hashes(got)
+    return [c for c in CD.diff(rel, got) if c["class"] != "cosmetic"]
+
+
+def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=None):
     """-> (KiCad symbol tree, how). Reuses KiCad / EasyEDA sources; else reads the SchLib back. An EasyEDA IC
     symbol (a plain box, [symbols] layout_pins) is read back from the SchLib, which the librarian wrote with its pins
-    grouped (ecadlib.symbol_layout), so both libraries show the same symbol."""
+    grouped (ecadlib.symbol_layout), so both libraries show the same symbol. A reused symbol must be the released
+    revision (change control, #105): when the source changed since the release (an upstream pin swap), the released
+    .SchLib is read back instead and the difference goes to `warnings`; upstream check-kicad --update or a librarian
+    re-run brings the source's change through change control."""
     src = str((item.get("source") or {}).get("symbol") or "")
     why = []
+
+    def released(sym, how):
+        bad = released_differs(item, plan_dir, sym)
+        if not bad:
+            return sym, how
+        from . import change_diff as CD
+        why.append(f"{how} is not the released revision ({CD.summary(bad)})")
+        if warnings is not None:
+            warnings.append(f"{item['name']}: the symbol at its source, {how}, is not the released revision "
+                            f"({CD.summary(bad)}); the released symbol ({item['symbol']['file']}) is exported. Bring "
+                            f"the source's change through change control (ecadlib upstream check-kicad --update, or a "
+                            f"librarian re-run) to release it")
+        return None
     try:
         if src.startswith("kicad:"):
             chain, _ = K.load_symbol(src[6:], http, keep_quotes=True)
-            return flatten(chain, name), f"KiCad {src[6:]} (reused" + (", flattened from " + " -> ".join(str(s[1]) for s in chain[1:]) if len(chain) > 1 else "") + ")"
+            got = released(flatten(chain, name), f"KiCad {src[6:]} (reused" + (", flattened from " + " -> ".join(str(s[1]) for s in chain[1:]) if len(chain) > 1 else "") + ")")
+            if got:
+                return got
         if src.startswith("local:"):
             lib, sname = src[6:].split(":", 1)
             f = next((p for r in libs for p in sorted(Path(r).rglob(f"{lib}.kicad_sym"))), None)
             if f:
                 chain, _ = K.load_symbol(f"{f}:{sname}", None, keep_quotes=True)
-                return flatten(chain, name), f"local KiCad {lib}:{sname} (reused from {f.name})"
-            why.append(f"{lib}.kicad_sym not under --lib")
+                got = released(flatten(chain, name), f"local KiCad {lib}:{sname} (reused from {f.name})")
+                if got:
+                    return got
+            else:
+                why.append(f"{lib}.kicad_sym not under --lib")
         if src.startswith("easyeda:"):
             lcsc = src[8:]
             r = http.get(P.EasyEDA.URL.format(lcsc), headers=P.EasyEDA.HEADERS)
@@ -362,9 +413,12 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None):
                 except ValueError:
                     box = False
                 if not (SL.wants_layout(npins, rules) and box and f and (plan_dir / f).exists()):
-                    notes.extend(sub)
-                    return ks, f"EasyEDA {lcsc} (converted again with easyeda_convert)"
-                why.append(f"EasyEDA {lcsc}: {npins} pins, grouped by function in the SchLib")
+                    got = released(ks, f"EasyEDA {lcsc} (converted again with easyeda_convert)")
+                    if got:
+                        notes.extend(sub)
+                        return got
+                else:
+                    why.append(f"EasyEDA {lcsc}: {npins} pins, grouped by function in the SchLib")
             else:
                 why.append(f"EasyEDA {lcsc}: " + ("no single-unit symbol" if r.ok else r.error or f"HTTP {r.status}"))
     except (IOError, ValueError, KeyError) as e:
@@ -810,7 +864,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
             rep["parts"].append(row)
             continue
         try:
-            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules)
+            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules, warnings=rep["warnings"])
             sym = sym_kicad8(sym)
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
             set_fields(sym, plan_fields(it, lib, row["footprint"], props, rules))
