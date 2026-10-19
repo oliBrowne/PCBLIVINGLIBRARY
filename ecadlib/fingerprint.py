@@ -39,14 +39,16 @@ Conventions (parity's, applied once): mm in KiCad's frame (y down) for footprint
 rotation in [0, 90), and every length quantised to Altium's internal unit (2.54 nm) with altium_lib.mm, the exact
 rational conversion the writer uses, so a KiCad 0.9525 and the Altium unit it was written as land on the same number.
 Pin names: active-low notations (Altium R\\E\\S\\E\\T\\, KiCad ~{RESET}, RESET#, /RESET, nRESET, RESET_N) and case are
-one canonical name; the spelling is cosmetic. Pin types: Altium's eight electrical types; KiCad's finer ones
-(power_in / power_out, tri_state, free ...) are kept as `ktype` and compared KiCad to KiCad."""
+one canonical name; the spelling is cosmetic on a visible signal pin. A hidden or power pin's name is the net it
+joins, so its exact spelling is kept and a change to it is electrical (change_diff). Pin types: Altium's eight
+electrical types; KiCad's finer ones (power_in / power_out, tri_state, free ...) are kept as `ktype` and compared
+KiCad to KiCad."""
 import copy, hashlib, json, math, re
 from pathlib import Path
 
 from . import altium_lib as AL, parity as PA, sexpr
 
-SCHEMA = 2
+SCHEMA = 3                                    # 3: a hidden pin's net as written (case and spelling)
 ETYPE_NAME = {0: "input", 1: "io", 2: "output", 3: "open_collector", 4: "passive", 5: "hiz", 6: "open_emitter", 7: "power"}
 MPN_KEYS = ("manufacturer part number", "manufacturer part number 1", "mpn", "mfr part number", "manufacturer_part_number",
             "manufacturerpartnumber", "manufacturer part #", "mfr. part number", "mfr part #", "mfr. #", "mpn1", "mfr_pn",
@@ -417,6 +419,8 @@ def unplace(node, mirror="y"):
 def kicad_footprint(text):
     """A .kicad_mod (text or parsed tree, also a footprint placed on a board after unplace()) -> (land, art, model)."""
     t = sexpr.parse(text) if isinstance(text, str) else text
+    if not (isinstance(t, list) and t and t[0] in ("footprint", "module")):
+        raise ValueError("not a KiCad footprint (no (footprint ...) at the top)")
     c = PA.kicad_footprint(t)
     for pad, extra in zip(c["pads"], _kicad_pad_extras(t)):
         pad.update(extra)
@@ -547,8 +551,8 @@ def kicad_symbol(sym):
     pins, art, units, styles = [], [], set(), set()
     for u in sexpr.find(sym, "symbol"):
         parts = str(u[1]).rsplit("_", 2)
-        unit = int(parts[-2]) if len(parts) == 3 and parts[-2].isdigit() else 0
-        style = int(parts[-1]) if len(parts) == 3 and parts[-1].isdigit() else 1
+        unit = int(parts[-2]) if len(parts) == 3 and parts[-2].isdecimal() else 0
+        style = int(parts[-1]) if len(parts) == 3 and parts[-1].isdecimal() else 1
         units.add(unit)
         styles.add(style)
         for g in u[2:]:
@@ -563,7 +567,7 @@ def kicad_symbol(sym):
                 hidden = _k_hidden(g)
                 pins.append((num, {
                     "name": canon_pin_name(raw), "raw": raw, "type": coarse_type(str(g[1])), "ktype": kicad_ktype(g[1]),
-                    "hidden": hidden, "net": canon_pin_name(raw) if hidden and str(g[1]) == "power_in" else None,
+                    "hidden": hidden, "net": raw if hidden and str(g[1]) == "power_in" else None,
                     "unit": unit, "style": max(1, style), "shape": str(g[2]) if len(g) > 2 and isinstance(g[2], str) else "line",
                     "at": qpt((float(at[1]), float(at[2]))) if at else None,
                     "orient": int(float(at[3])) % 360 if at and len(at) > 3 else 0,
@@ -627,7 +631,7 @@ def altium_symbol(entry):
             hidden = bool(r["conglomerate"] & 0x04)
             pins.append((str(r["num"]), {
                 "name": canon_pin_name(r["name"]), "raw": r["name"], "type": coarse_type(r["etype"]), "hidden": hidden,
-                "net": canon_pin_name(net.get(i)) if hidden and net.get(i) else None, "unit": max(0, r.get("part") or 0),
+                "net": net.get(i) if hidden and net.get(i) else None, "unit": max(0, r.get("part") or 0),
                 "style": (r.get("mode") or 0) + 1, "shape": "-".join(str(s) for s in r.get("symbols") or ()) or "line",
                 "at": [qmm(r["x"] * SCH_MM), qmm(r["y"] * SCH_MM)], "orient": (r.get("orient") or 0) * 90,
                 "len": qmm((r.get("length") or 0) * SCH_MM), "alt": []}))
@@ -851,8 +855,10 @@ def of_item(item, base="."):
                 land, art, model = kl, ka, km  # (a .PcbLib gone missing stays "footprint removed")
             else:
                 extra["kicad"] = {"footprint": dict(kl, art=ka, name=fref or kl.get("name") or ""), "model": km}
-        except (ValueError, OSError, IndexError, TypeError, KeyError) as ex:
+        except (ValueError, OSError, IndexError, TypeError, KeyError, UnicodeDecodeError) as ex:
             notes.append(f"KiCad footprint unreadable: {ex}")
+            # never the .PcbLib in its place: what the KiCad publishers would ship is a file that does not load
+            extra["kicad"] = {"footprint": None, "model": None, "unreadable": f"{kf.name}: {type(ex).__name__}: {ex}"[:300]}
     if notes:
         extra["notes"] = notes
     fp = build(item.get("name") or "", sym, land, art, model, item_params(item), "altium",

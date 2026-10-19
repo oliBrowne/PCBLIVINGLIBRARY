@@ -35,7 +35,19 @@ TOL = {"noise": PA.TOL["position"], "angle": PA.TOL["rotation"], "model": 0.01, 
 SIZE_MINOR = {"abs": 0.05, "rel": 0.10}
 
 
+def shown(s):
+    """Text for a message with what cannot be seen made visible: a zero-width or other format character, a control
+    character or an unusual space as <U+200B>, and the whole text quoted when it starts or ends with a space."""
+    import unicodedata
+    s = str(s)
+    out = "".join(f"<U+{ord(ch):04X}>" if unicodedata.category(ch) in ("Cf", "Cc", "Zl", "Zp", "Co", "Cn") or
+                  (unicodedata.category(ch) == "Zs" and ch != " ") else ch for ch in s)
+    return f'"{out}"' if out != out.strip() else out
+
+
 def _f(v):
+    if isinstance(v, str):
+        return shown(v) if v else "-"
     if isinstance(v, float):
         return f"{v:.4f}".rstrip("0").rstrip(".") or "0"
     if isinstance(v, (list, tuple)):
@@ -148,7 +160,13 @@ def _identity(o, n, out):
     mpn = (io.get("mpn") or "").strip().upper()
     same_mpn = bool(mpn) and mpn == (inn.get("mpn") or "").strip().upper()
     rest = _rest_change(ta, tb, same_mpn) if na is not None and nb is not None else None
-    if na is not None and nb is not None:
+    ra, rb = _readings(va, na), _readings(vb, nb)
+    if na is not None and nb is not None and va != vb and max(len(ra), len(rb)) > 1 and ra != rb:
+        # '100,000nF' is 100 nF read as a decimal comma and 100 uF read as a thousands separator: when the two
+        # values differ under either reading, it is a change (the MPN being the same does not decide which one)
+        _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)} (a comma before "
+             "3 digits reads two ways)")
+    elif na is not None and nb is not None:
         if abs(na - nb) > 1e-9 * max(abs(na), abs(nb), 1e-30):
             _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)}")
         elif ua and ub and ua != ub:          # 100nF -> 100nH
@@ -165,15 +183,31 @@ def _identity(o, n, out):
                  ("more detail)" if rest == "more" else "the MPN is the same)"))
         elif va != vb:
             _chg(out, "cosmetic", "identity", "value", va, vb, f"value written {_f(va)} -> {_f(vb)} (the same value)")
-    elif va.strip().upper() != vb.strip().upper():
-        same_mpn = (io.get("mpn") or "").strip() and (io.get("mpn") or "").strip().upper() == (inn.get("mpn") or "").strip().upper()
-        if (na is None) != (nb is None) and not same_mpn:
-            _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)}")
-        else:
-            _chg(out, "cosmetic" if same_mpn else "identity", "identity", "value", va, vb,
-                 f"value changed from {_f(va)} to {_f(vb)}" + (" (the MPN is the same)" if same_mpn else ""))
+    elif _plain(va) != _plain(vb):
+        # a side ecadlib cannot read as a number (47kR, 1E4, 1uFd, C 1uF): the text is all there is to compare, so
+        # any other text is another value, whatever the MPN says (an MPN can stay while the value field is retyped)
+        _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)}"
+             + (" (not read as a number, so compared as text)" if na is None or nb is None else ""))
     elif va != vb:
         _chg(out, "cosmetic", "identity", "value", va, vb, f"value written {_f(va)} -> {_f(vb)}")
+
+
+def _plain(v):
+    """A value's text with spaces and case folded: '10 kOhm' and '10KOHM' say the same."""
+    return re.sub(r"\s+", "", str(v or "")).casefold()
+
+
+def _readings(v, num):
+    """The numbers a value can mean: {num}, and with a leading '100,000' (a comma before exactly 3 digits, which is a
+    decimal comma in Europe and a thousands separator elsewhere) also the value read with the comma left out."""
+    out = {num}
+    m = re.match(r"\s*\d+,\d{3}(?![\d,.])", str(v or ""))
+    if m:
+        from .fingerprint import value_number
+        alt = value_number(str(v).strip().replace(",", "", 1))
+        if alt is not None:
+            out.add(alt)
+    return frozenset(out)
 
 
 GENERIC_PN_KEYS = ("part number", "partnumber")
@@ -257,8 +291,13 @@ def _symbol(o, n, out):
     moved, art = [], []
     for c, a, b, lab in pairs:
         if a["name"] == b["name"] and a.get("raw") != b.get("raw"):
-            _chg(out, "cosmetic", "symbol", f"pin {c}", a.get("raw"), b.get("raw"),
-                 f"{lab} name written {_f(a.get('raw'))} -> {_f(b.get('raw'))} (the same signal)")
+            if _net_pin(a) or _net_pin(b):     # a hidden or power pin joins the net of its exact name (case too)
+                _chg(out, "electrical", "symbol", f"pin {c}", a.get("raw"), b.get("raw"),
+                     f"{lab} name {_f(a.get('raw'))} -> {_f(b.get('raw'))} (a "
+                     f"{'hidden' if a.get('hidden') or b.get('hidden') else 'power'} pin's name is the net it joins)")
+            else:
+                _chg(out, "cosmetic", "symbol", f"pin {c}", a.get("raw"), b.get("raw"),
+                     f"{lab} name written {_f(a.get('raw'))} -> {_f(b.get('raw'))} (the same signal)")
         if a["type"] != b["type"] or (a.get("ktype") and b.get("ktype") and a["ktype"] != b["ktype"]):
             ta, tb = a.get("ktype") or a["type"], b.get("ktype") or b["type"]
             if not (a.get("ktype") and b.get("ktype")):
@@ -296,6 +335,13 @@ def _symbol(o, n, out):
     if so.get("modes", 1) != sn.get("modes", 1):
         _chg(out, "cosmetic", "symbol", "modes", so.get("modes", 1), sn.get("modes", 1),
              f"symbol display modes {so.get('modes', 1)} -> {sn.get('modes', 1)}")
+
+
+def _net_pin(x):
+    """A pin whose name is a net: hidden (KiCad connects a hidden power input to the net of its name, Altium a hidden
+    pin to its HiddenNetName) or a power pin. Its exact spelling is electrical: KiCad nets are case-sensitive, and
+    VCC, vcc, 'VCC ' and VCC# are four nets."""
+    return bool(x.get("hidden")) or x.get("type") == "power" or str(x.get("ktype") or "").startswith("power")
 
 
 def _insts(p):
@@ -351,7 +397,7 @@ def _pin_label(c, x, multi):
 
 def _natkey(s):
     import re
-    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", str(s))]
+    return [int(t) if t.isdecimal() else t for t in re.split(r"(\d+)", str(s))]
 
 
 # ---------------------------------------------------------------- footprint
@@ -648,6 +694,13 @@ def _kicad(o, n, out):
     which is then what kicad-export converts and ships."""
     if not o.get("kicad") and not n.get("kicad"):
         return
+    bad_o, bad_n = (o.get("kicad") or {}).get("unreadable"), (n.get("kicad") or {}).get("unreadable")
+    if bad_n and bad_o != bad_n:               # truncated, garbled, not text: KiCad would not load what ships
+        _chg(out, "electrical", "kicad", "kicad_mod", None, bad_n, f"KiCad footprint (.kicad_mod) file unreadable "
+             f"({bad_n}): its pads cannot be checked")
+        return
+    if bad_o and not bad_n:
+        _chg(out, "geometry-major", "kicad", "kicad_mod", bad_o, None, "KiCad footprint (.kicad_mod) readable again")
     (fo, mo), (fn, mn) = _shipped(o), _shipped(n)
     sub = []
     _footprint({"footprint": fo}, {"footprint": fn}, sub)

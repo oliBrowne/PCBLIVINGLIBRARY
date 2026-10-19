@@ -458,8 +458,9 @@ def test_property_cosmetic_edits_never_hold():
                 q["pins"][k][6] = rnd.choice((1.27, 3.81, 5.08))
             elif kind == "desc":
                 q["desc"] = "another description"
-            else:                              # an active-low pin written another way: same signal
-                ks = [k for k, x in enumerate(q["pins"]) if x[1].startswith("~{")]
+            else:                              # an active-low pin written another way: same signal (a power pin's
+                ks = [k for k, x in enumerate(q["pins"])        # name is its net: that spelling is electrical)
+                      if x[1].startswith("~{") and not str(x[2]).startswith("power")]
                 if not ks:
                     q["pins"][0][1] = q["pins"][0][1]
                 for k in ks:
