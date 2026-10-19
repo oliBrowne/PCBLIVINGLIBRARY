@@ -85,6 +85,22 @@ def pick_named(nodes, name):
     return exact or next((n for n in nodes if rev.fullmatch(n.get("name") or "")), None)
 
 
+def token_hint(token, now=None):
+    """Why Nexar answered 401, in a line: an expired token says when it expired (a Nexar portal token is a JWT that
+    lasts about a day); anything else is the scopes."""
+    import base64, datetime, time
+    try:
+        body = token.split(".")[1]
+        exp = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))).get("exp")
+    except (AttributeError, IndexError, ValueError, TypeError):
+        exp = None
+    if isinstance(exp, (int, float)) and exp <= (now if now is not None else time.time()):
+        when = datetime.datetime.fromtimestamp(exp, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        return (f" (the token expired at {when}: make a new one on portal.nexar.com and store it with "
+                "`ecadlib keys set NEXAR_TOKEN`)")
+    return " (token rejected: check it has design.domain, user.access, openid)"
+
+
 class NexarError(Exception):
     pass
 
@@ -512,7 +528,7 @@ def main(argv=None):
         if not a.dry_run:
             record_push(Path(a.plan).parent, t0, results)
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work
-        hint = " (token rejected: check it has design.domain, user.access, openid)" if "401" in str(e) else ""
+        hint = token_hint(token) if "401" in str(e) else ""
         sys.exit(f"Nexar request failed: {type(e).__name__}: {e}{hint}")
     if any(r.get("a365_updated") for r in results):
         from .a365_sync import save_meta            # new revisions, so the next push is not mistaken for a conflict
