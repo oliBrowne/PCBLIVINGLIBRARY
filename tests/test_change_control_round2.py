@@ -244,3 +244,19 @@ def test_a_change_rejected_before_an_upgrade_is_still_known_as_rejected():
     CG.publish_guard(plan, items, "kicad")
     prop = LG.Ledger(lib).proposal("AO3401A")
     assert prop and (prop.get("rejected") or {}).get("by") == BOB, prop and prop.get("rejected")
+
+
+def test_numbered_second_sources_and_a_house_part_number():
+    """R2-7: "Manufacturer Part Number 2" / "Manufacturer 2" (a second source that may be fitted) changing or being
+    added is an identity change; a house "Part Number" added next to the MPN is the library's own number (cosmetic).
+    Supplier part numbers stay cosmetic."""
+    base = {"Value": "10k", "Manufacturer Part Number": "RC0603FR-0710KL", "Manufacturer": "Yageo"}
+
+    def worst(old, new):
+        return CD.worst(CD.diff(FP.build("", params={**base, **old}), FP.build("", params={**base, **new})))
+
+    assert worst({}, {"Part Number": "ACME-00123"}) == "cosmetic"
+    assert worst({"Manufacturer Part Number 2": "0603WAF1002T5E"}, {"Manufacturer Part Number 2": "ERJ-3EKF1002V"}) == "identity"
+    assert worst({}, {"Manufacturer Part Number 2": "ERJ-3EKF1002V"}) == "identity"
+    assert worst({"Manufacturer 2": "UNI-ROYAL"}, {"Manufacturer 2": "Panasonic"}) == "identity"
+    assert worst({}, {"Supplier Part Number 2": "C1234"}) == "cosmetic"

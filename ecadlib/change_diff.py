@@ -165,6 +165,12 @@ def _identity(o, n, out):
         _chg(out, "cosmetic", "identity", "value", va, vb, f"value written {_f(va)} -> {_f(vb)}")
 
 
+GENERIC_PN_KEYS = ("part number", "partnumber")
+# numbered second sources (Altium's "Manufacturer Part Number 2", "Manufacturer 2"; also MPN2, Mfr PN 3 ...)
+SECOND_SOURCE_RE = re.compile(r"(manufacturer part number|manufacturer_part_number|mfr\.? part number|mfr_?pn|mfr pn|"
+                              r"mpn|manufacturer|mfr|mfg)[ _#-]*([2-9]|\d\d+)")
+
+
 def _fields(o, n, out):
     """Other fields are cosmetic, except a second MPN or manufacturer column (MPN next to Manufacturer Part Number)
     whose new value is another part than the identity says: that is an identity change."""
@@ -180,11 +186,16 @@ def _fields(o, n, out):
                else f"field {k} changed from {_f(a)} to {_f(b)}")
         cls = "cosmetic"
         kl = str(k).strip().lower()
+        filled = str(b or "").strip() not in ("", "~", "*")
         for keys, ident in ((MPN_KEYS, "mpn"), (MFR_KEYS, "manufacturer")):
-            if kl in keys and str(b or "").strip() not in ("", "~", "*") and \
+            # a house "Part Number" next to the MPN is the library's own number, not a second MPN
+            if kl in keys and kl not in GENERIC_PN_KEYS and filled and \
                     norm_mpn(b) != norm_mpn(inn.get(ident)) and norm_mpn(a) != norm_mpn(b):
                 cls = "identity"
                 txt += f" (the {'MPN' if ident == 'mpn' else 'manufacturer'} is {_f(inn.get(ident))})"
+        if cls == "cosmetic" and filled and norm_mpn(a) != norm_mpn(b) and SECOND_SOURCE_RE.fullmatch(kl):
+            cls = "identity"                   # Manufacturer Part Number 2: another part that may be fitted
+            txt += " (a second source)"
         _chg(out, cls, "fields", k, a, b, txt)
 
 
