@@ -113,6 +113,7 @@ def publish(report, out, title=None):
 FAILURE_TYPES = {
     "no_pdf": "no datasheet PDF (no link, a dead link, or the maker's site refused the download)",
     "not_read": "not read in this run (--cached-only, or waiting for the cost OK)",
+    "no_key": "not run: no API key, so the AI datasheet read was never sent (not a wrong answer)",
     "blank_dimension": "the read left a needed dimension blank: held, nothing built",
     "held_cross_check": "held: the cross-check's second read disagreed",
     "no_footprint": "no footprint for another reason (see tried)",
@@ -132,6 +133,8 @@ def failure_type(row, mine, spec):
     if row["pass"]:
         return None
     tried = " | ".join(str(t) for t in row.get("tried") or [])
+    if not_run(row):
+        return "no_key"
     if row["source"] == "none":
         if no_datasheet(row):
             return "no_pdf"
@@ -165,23 +168,29 @@ def failure_type(row, mine, spec):
 
 def apply_errata(sc, mine_pins, errata, ref_pins=None, tol=None):
     """A failing field that a checked erratum covers, with ours what the datasheet says, is scored right. Only an
-    erratum that says what the datasheet has ("ours": [[num, name], ...], symbol fields) can be checked against our
-    part; one without it would pass whatever we generated, so it is not applied."""
+    erratum that says what the datasheet has can be checked against our part: "ours": [[num, name], ...] on a symbol
+    field, or a number ("pitch": {"ours": 0.65}) that ours must match before the part's footprint fields are excused.
+    One with neither would pass whatever we generated, so it is not applied."""
     fixed = []
+    num = {k: e["ours"] for k, e in (errata or {}).items() if isinstance(e.get("ours"), (int, float))}
+    if any(abs(((sc["fields"].get(k) or {}).get("ours") or 0) - v) > 0.01 for k, v in num.items()):
+        return fixed                                  # ours isn't the datasheet's package either (PCA9557BS: pitch 0.65)
     for field, e in (errata or {}).items():
         f = sc["fields"].get(field)
         if not f or f["ok"]:
             continue
-        if not (field.startswith("symbol_") and isinstance(e, dict) and e.get("ours")):
-            continue                                  # nothing to compare ours with: the field keeps its verdict
-        have = {str(n): S.norm_name(v) for n, v in mine_pins or []}
-        if any(have.get(str(n)) != S.norm_name(v) for n, v in e["ours"]):
-            continue                                  # ours is not what the datasheet says either: a real miss
-        if ref_pins:                                  # the pins the erratum does not cover must still agree with KiCad
-            fixed_ref = dict((str(n), v) for n, v in ref_pins)
-            fixed_ref.update((str(n), v) for n, v in e["ours"])
-            if not S.score_symbol(mine_pins, list(fixed_ref.items()), tol).get(field, {"ok": True})["ok"]:
-                continue
+        pins = field.startswith("symbol_") and isinstance(e, dict) and isinstance(e.get("ours"), list) and e["ours"]
+        if not pins and not num:                      # nothing to compare ours with: the field keeps its verdict
+            continue                                  # (a footprint erratum is checked by its numbers, above)
+        if pins:
+            have = {str(n): S.norm_name(v) for n, v in mine_pins or []}
+            if any(have.get(str(n)) != S.norm_name(v) for n, v in e["ours"]):
+                continue                              # ours is not what the datasheet says either: a real miss
+            if ref_pins:                              # the pins the erratum does not cover must still agree with KiCad
+                fixed_ref = dict((str(n), v) for n, v in ref_pins)
+                fixed_ref.update((str(n), v) for n, v in e["ours"])
+                if not S.score_symbol(mine_pins, list(fixed_ref.items()), tol).get(field, {"ok": True})["ok"]:
+                    continue
         sc["fields"][field] = dict(f, ok=True, error="", erratum=e["why"])
         fixed.append(field)
     if fixed:
@@ -422,8 +431,9 @@ def _symbol_pins(path):
     return [(n, nm) for n, names in pins.items() for nm in names]
 
 
-def _cost(case_used, model):
-    """-> tokens_in, tokens_out, usd, how."""
+def _cost(case_used, model, live=False):
+    """-> tokens_in, tokens_out, usd, how. live: the run could send, so a part with no answer cost nothing (a request
+    the API refused or errored is not billed, and one never sent costs nothing); its estimate is only mentioned."""
     if not case_used:
         return 0, 0, 0.0, ""
     u, est = case_used.get("usage"), case_used.get("estimate") or {}
@@ -452,16 +462,24 @@ def _cost(case_used, model):
             cost = None if cost is None or c is None else round(cost + c, 6)
             how += " + cross-check read"
         return tin, tout, cost, how
+    if live:
+        return 0, 0, 0.0, "no answer: nothing billed" + (f" (estimate was ${est['usd']:.2f})" if est.get("usd") else "")
     return est.get("input_tokens", 0), est.get("output_tokens", 0), est.get("usd"), f"estimate ({est.get('how', '')})"
 
 
 # The part never reached the model: no datasheet link, or none gave a PDF (here or to the API's fetcher). The benchmark
 # reports these apart: a dead maker link is not a misread drawing.
-NO_DATASHEET = re.compile(r"no datasheet (link gave a PDF|URL known)|could not (be )?(fetch|download)|unable to (fetch|download)", re.I)
+NO_DATASHEET = re.compile(r"no datasheet (link gave a PDF|URL known)|could not (be )?(fetch|download)|unable to (fetch|download)"
+                          r"|timed out while trying to download|unable to connect to the remote server", re.I)
 
 
 def no_datasheet(row):
     return row["source"] == "none" and any(NO_DATASHEET.search(str(t)) for t in row.get("tried") or [])
+
+
+def not_run(row):
+    """Estimate mode (no API key): the part needed the AI datasheet read, which was never sent. Not a wrong answer."""
+    return bool(row.get("not_run"))
 
 
 def summarize(rows):
@@ -491,6 +509,7 @@ def summarize(rows):
         if r.get("cross_check"):
             cc[r["cross_check"]] = cc.get(r["cross_check"], 0) + 1
     unread = [r for r in rows if no_datasheet(r)]
+    skipped = [r for r in rows if not_run(r)]
     given = [r for r in rows if r.get("maker_land")]
     maker = {"given": len(given), "followed": sum(r["maker_land"]["followed"] for r in given),
              "kicad_differs": [r["id"] for r in rows if r.get("kicad_differs_maker_land")]}
@@ -517,6 +536,8 @@ def summarize(rows):
             "answer_prompt_versions": pv,
             "errata": {r["id"]: r["errata"] for r in rows if r.get("errata")},
             "no_datasheet": {"cases": len(unread), "ids": [r["id"] for r in unread]},
+            "not_run": {"cases": len(skipped), "ids": [r["id"] for r in skipped]},
+            "ran": agg([r for r in rows if not not_run(r)]),
             "with_datasheet": agg([r for r in rows if not no_datasheet(r)]), "shared_footprints": {"cases": len(shared), "failing": sum(not r["pass"] for r in shared)}, "families": {k: agg(v) for k, v in sorted(fams.items())},
             "by_source": {k: agg(v) for k, v in sorted(srcs.items())},
             "fields": {k: {"ok": a, "of": b} for k, (a, b) in sorted(fields.items())}}
@@ -525,7 +546,7 @@ def summarize(rows):
 def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=None, replay=None, sources=None,
         families=None, ids=None, offline=False, cache="out/http_cache", http=None, api_key=None, rules=None, providers=None,
         tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None, repeat=1, batch=False,
-        cached_only=False, pins=None):
+        cached_only=False, pins=None, max_cost_usd=None):
     """repeat: run the same cases again (into <out>/repeat-2 ...) and report how many parts gave the same files
     (summary["consistency"]): from the recorded answers when there are any (--record / --replay: the code must be
     deterministic), else live again (the model's own consistency; this pays again).
@@ -542,6 +563,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     out.mkdir(parents=True, exist_ok=True)
     lib = out / "lib"
     rules = RU.resolve(rules, out)
+    if max_cost_usd is not None:                      # the run's spending cap ([datasheet] max_cost_usd, default $10)
+        rules = dict(rules, datasheet={**rules.get("datasheet", {}), "max_cost_usd": float(max_cost_usd)})
     over = {k: v for k, v in (("provider", provider), ("base_url", base_url), ("assist", assist),
                               ("api_key_env", api_key_env)) if v}
     if over or (model and provider):
@@ -581,7 +604,7 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         sym_pins = _symbol_pins(lib / sf) if sf and (lib / sf).exists() else None
         sc = S.score(mine, data["references"][c["footprint"]], sym_pins, c.get("pins"), tol)
         errata = apply_errata(sc, sym_pins, erratas.get(c["mpn"]), c.get("pins"), tol)
-        tin, tout, cost, how = _cost(reader.used.get(c["mpn"]), reader.model)
+        tin, tout, cost, how = _cost(reader.used.get(c["mpn"]), reader.model, not reader.estimate_only)
         src = ((it.get("source") or {}).get("footprint") or "none").split(":")[0]
         used = reader.used.get(c["mpn"]) or {}
         ml = S.maker_land(mine, used.get("spec")) if src == "datasheet" else None
@@ -600,7 +623,9 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
                      "tried": ((it.get("librarian") or {}).get("tried") or []),
                      "pads_right": (sc["fields"].get("pads") or {}).get("right", 0), "pads_of": ref_pads,
                      "datasheet": used.get("datasheet") or {}, "prompt_version": used.get("prompt_version", ""),
-                     "datasheet_pin": pin_state(used.get("datasheet"), pinned.get(c["mpn"]))})
+                     "datasheet_pin": pin_state(used.get("datasheet"), pinned.get(c["mpn"])),
+                     "not_run": bool(reader.estimate_only and not sc["pass"] and src == "none" and c["mpn"] in reader.used
+                                     and not (reader.used[c["mpn"]] or {}).get("usage"))})
         rows[-1]["failure"] = failure_type(rows[-1], mine, used.get("spec") if src == "datasheet" else None)
     rep = {"meta": {"set": data["meta"]["name"], "set_version": data["meta"].get("version"), "set_built": data["meta"].get("built"),
                     "model": reader.model, "provider": inf["ep"]["name"], "tier": inf["plan"]["tier"],
@@ -613,7 +638,7 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     for i in range(2, max(1, int(repeat or 1)) + 1):
         again = run(set_name, out / f"repeat-{i}", limit, model, None, replay or record, sources, families, ids, offline, cache,
                     http, api_key, rules, providers, tol, log, provider, base_url, assist, api_key_env, batch=batch,
-                    cached_only=cached_only, pins=pins)
+                    cached_only=cached_only, pins=pins, max_cost_usd=max_cost_usd)
         c = consistency(rep, again)
         prev = rep["summary"].get("consistency")
         if prev is None or c["same"] < prev["same"]:
@@ -671,16 +696,24 @@ def report_md(rep):
     """Outcome first (lines 2-5 are what `ecadlib eval run` prints), then the wrong parts, then the breakdowns."""
     m, s = rep["meta"], rep["summary"]
     o = s["overall"]
-    bad = [r for r in rep["cases"] if not r["pass"]]
+    bad = [r for r in rep["cases"] if not r["pass"] and not not_run(r)]
     pm = (s.get("pad_match") or {}).get("built") or {}
-    md = [f"# Accuracy: {m['set']} (v{m['set_version']})", "",
-          f"**Pass: {o['pass']}/{o['cases']} ({_pct(o['rate'])})**. "
-          + (f"Pad match {_pct(pm['rate'])} ({pm['right']} of KiCad's {pm['of']} pads, over the {pm['parts']} footprints built). "
-             if pm.get("of") else "")
-          + (f"{len(bad)} {'part was' if len(bad) == 1 else 'parts were'} wrong: see \"Wrong parts\" below." if bad else "Every part was right."), "",
+    pad = (f"Pad match {_pct(pm['rate'])} ({pm['right']} of KiCad's {pm['of']} pads, over the {pm['parts']} footprints "
+           "built). " if pm.get("of") else "")
+    nr = (s.get("not_run") or {}).get("cases", 0)
+    if nr:                                            # no API key: those parts were never tried, so they aren't "wrong"
+        ran = s["ran"]
+        head = (f"**Not run: {nr} of {o['cases']} parts need the AI datasheet read and no API key is set, so nothing "
+                f"was sent.** Of the {ran['cases']} that ran without AI: **{ran['pass']}/{ran['cases']} pass**. " + pad
+                + (f"{len(bad)} wrong: see \"Wrong parts\" below." if bad else ""))
+        cost = f"the AI reads would cost about {_usd(o['usd'])} ({_usd(o['usd_per_part'])} per part; estimate, nothing billed)."
+    else:
+        head = (f"**Pass: {o['pass']}/{o['cases']} ({_pct(o['rate'])})**. " + pad
+                + (f"{len(bad)} {'part was' if len(bad) == 1 else 'parts were'} wrong: see \"Wrong parts\" below." if bad else "Every part was right."))
+        cost = f"{_usd(o['usd'])} in all, {_usd(o['usd_per_part'])} per part."
+    md = [f"# Accuracy: {m['set']} (v{m['set_version']})", "", head.rstrip(), "",
           f"Model {m['model']}, sources {', '.join(m['sources'])}, mode {m['mode']}. {m['cases']} parts in {m['wall_s']} s "
-          f"({m['wall_s_per_part']} s per part); {o['tokens_in']} tokens in / {o['tokens_out']} out; "
-          f"{_usd(o['usd'])} in all, {_usd(o['usd_per_part'])} per part.", ""]
+          f"({m['wall_s_per_part']} s per part); {o['tokens_in']} tokens in / {o['tokens_out']} out; " + cost, ""]
     if m.get("prompt_version"):
         old = {k: v for k, v in (s.get("answer_prompt_versions") or {}).items() if k != m["prompt_version"]}
         md += [f"Prompt version {m['prompt_version']} (reader schema and instructions), cross-check {m.get('crosscheck_version', '-')}"

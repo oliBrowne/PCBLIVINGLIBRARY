@@ -133,5 +133,7 @@ def wants(rules, rail, section="datasheet"):
     """Does the configured model's plan include this rail? (False when the setup can't be resolved.)"""
     try:
         return rail in info(endpoint(rules, section)["ref"], rules, section)["plan"]["rails"]
-    except Exception:
+    except Exception as e:                            # the small-model guide rails change what is sent: say so
+        from .. import fallbacks as FB
+        FB.note(f"[{section}] model setup did not resolve, so its guide rails are unknown", e, instead=f"no {rail!r} rail")
         return False

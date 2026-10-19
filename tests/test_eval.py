@@ -274,6 +274,9 @@ def test_estimate_mode_sends_nothing():
     s = cs["SOICPART"]
     assert s["source"] == "none" and s["cost_how"] == "estimate (rough: 3 pages x 3000)" and s["usd"] > 0, s
     assert cs["QFNPART"]["cost_how"].startswith("estimate (rough: 30 pages")      # not downloaded: unknown page count
+    assert s["not_run"] and rep["summary"]["not_run"]["cases"] >= 1, rep["summary"]["not_run"]
+    md = R.report_md(rep)                                         # no key: "not run", never "N parts were wrong"
+    assert "Not run:" in md and "no API key" in md and "were wrong" not in md and "SOICPART" not in md.split("## By")[0], md
 
 
 def test_select_interleaves_families_and_cli():
@@ -486,6 +489,19 @@ def test_a_checked_reference_erratum_scores_the_datasheets_pins_right():
     assert "kicad-v1.errata" not in R.available() and R.load_errata("nonexistent.json") == {}
 
 
+def test_a_wrong_variant_reference_is_excused_only_when_we_built_the_datasheets_package():
+    """PCA9557BS (live benchmark 2026-10-19): the datasheet's BS part is SOT629-1, 4 x 4 mm at 0.65 mm; KiCad's reference
+    is the 3 x 3 mm 0.5 mm HVQFN-16. Ours at 0.65 mm passes by the erratum; ours at any other pitch does not."""
+    er = R.load_errata("kicad-v1")["PCA9557BS"]
+    f = lambda ok=False, **k: dict(ok=ok, error="" if ok else "x", **k)
+    for ours, excused in ((0.65, True), (0.8, False)):
+        sc = {"pass": False, "errors": ["pitch: x", "pads: x", "pin1: x", "courtyard: x"],
+              "fields": {"pitch": f(ours=ours, ref=0.5), "pads": f(), "pin1": f(), "courtyard": f(), "pad_count": f(True)}}
+        got = R.apply_errata(sc, None, er)
+        assert (sorted(got) == ["courtyard", "pads", "pin1", "pitch"] and sc["pass"]) if excused else (got == [] and not sc["pass"])
+    assert "O0 - O7" in R.load_errata("kicad-v1")["27C256"]["symbol_names"]["why"]
+
+
 def test_cached_only_rescores_after_the_schema_changes():
     """A new field in the reader's schema changes every answer's cache key: --cached-only still scores the saved
     answers (sync and batch runs alike), sending nothing."""
@@ -546,6 +562,11 @@ def test_failure_types_from_the_benchmark():
     f = lambda ok=False, **k: dict(ok=ok, error="" if ok else "x", **k)
     so = {"pads": [[str(i), 0, i, 1, 0.6, 0] for i in range(1, 9)] + [["9", 0, 0, 3, 3, 0]], "courtyard": []}
     assert R.failure_type(row(source="none", tried=["datasheet: no datasheet URL known"]), None, None) == "no_pdf"
+    for err in ("The request timed out while trying to download the file. Please try again later.",   # LTM4671 (Opus run)
+                "Unable to connect to the remote server. Please verify the URL is correct and accessible."):  # LTV-352T
+        assert R.failure_type(row(source="none", tried=["standard: no standard package named",
+                                                        f"datasheet: batch request errored: invalid_request_error: {err}"]),
+                              None, None) == "no_pdf"
     assert R.failure_type(row(source="none", tried=["no footprint: the datasheet read left pitch unresolved"]), None, None) == "blank_dimension"
     assert R.failure_type(row(source="none", cross_check="disagreed"), None, None) == "held_cross_check"
     assert R.failure_type(row(fields={"pitch": f(ours=25.4, ref=1.0)}), so, {}) == "wrong_unit"
@@ -558,3 +579,12 @@ def test_failure_types_from_the_benchmark():
     assert R.failure_type(row(kicad_differs_maker_land=True), so, {}) == "maker_land"
     assert R.failure_type(row(**{"pass": True}), so, {}) is None
     assert "kicad-v1.pins" not in R.available()
+
+
+def test_a_live_run_does_not_charge_the_estimate_of_a_part_with_no_answer():
+    """#42 Opus run: 26 batch requests errored (the API could not fetch the PDF) and were billed nothing, but the report
+    added their estimates ($0.63 each), $32.41 against $16.00 really spent."""
+    used = {"estimate": {"input_tokens": 101702, "output_tokens": 6000, "usd": 0.62851, "how": "rough: 30 pages x 3000"}}
+    tin, tout, usd, how = R._cost(used, "claude-opus-5-5", live=True)
+    assert (tin, tout, usd) == (0, 0, 0.0) and "nothing billed" in how and "$0.63" in how
+    assert R._cost(used, "claude-opus-5-5")[2] == 0.62851                          # no key: the estimate is the answer

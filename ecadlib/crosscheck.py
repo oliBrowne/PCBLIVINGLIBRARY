@@ -20,7 +20,11 @@ every datasheet part (also when the table matched, and when only the symbol is n
 
 Comparison is in code (compare()) with the tolerances in TOL: two numbers agree when they are within max(abs, rel x
 value) of each other, or (against the table) when the table's nominal lies inside the min..max the datasheet prints.
-Pin count and pin numbers must be equal; pin names must be equal after normalising case and overbar marks. Agree ->
+Length and width may agree turned 90 degrees when the whole package turns (body, exposed pad, and against the table
+the qfn rows) and the turn cannot move a pad (_turn); an exposed pad turned on its own still holds. Pin count and
+pin numbers must be equal; pin names must be equal after normalising case and active-low marks (~{X}, X̅, X#, /X,
+nX; X_N only against another active-low mark). A package type that differs holds even when every number agrees (the
+type picks the footprint builder); the message says so. Agree ->
 the part is accepted as before (a person still verifies every datasheet part) and records "cross-checked" (status
 "agreed"). A table entry found only by the read's OWN package name (the BOM names no package the table resolves) is not
 independent: it shows the read's numbers fit the read's name, which self_check already tests. That outcome is recorded
@@ -30,6 +34,8 @@ Held is raised: nothing is written to the library, both values go to the review 
 A check that could not be made (refusal, unparseable answer, nothing to compare) is recorded as "unchecked" and added
 to the part's review items; it does not hold the part."""
 import base64, hashlib, json, re
+
+from .eval.score import norm_name as norm_pin_name
 
 MODES = ("auto", "always", "off")
 CHECK_MAX_TOKENS = 8000
@@ -87,13 +93,11 @@ def critical(spec):
     for k in ("pitch", "body_length", "body_width", "lead_span"):
         out[k] = _val(spec.get(k))
     out["ep_length"], out["ep_width"] = _val(ep.get("length")), _val(ep.get("width"))
+    n = out["pin_count"]
+    if out["package_type"] == "qfn" and n:                   # the rows as footprint_gen._qfn lays them out
+        nlr = spec.get("pins_left_right", n // 4)
+        out["rows"] = (nlr, spec.get("pins_top_bottom", (n - 2 * nlr) // 2))
     return out
-
-
-def norm_pin_name(s):
-    s = str(s or "").upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "").replace("~", "")
-    s = re.sub(r"^(N(?=[A-Z]{2,})|/|#)", "", s)
-    return re.sub(r"[/#*_\-]", "", s)
 
 
 LETTER = {"A": "ANODE", "K": "CATHODE", "C": "COLLECTOR", "E": "EMITTER", "B": "BASE", "G": "GATE", "D": "DRAIN",
@@ -123,6 +127,10 @@ def names_agree(a, b):
     na, nb = _names(a), _names(b)
     if na & nb:
         return True
+    from .house_style import pin_low
+    (ba, sa), (bb, sb) = pin_low(a), pin_low(b)
+    if sa and sb and norm_pin_name(ba) == norm_pin_name(bb):     # RESET_N vs ~{RESET}: both mark it active low
+        return True
     # the pad name only stands in for a ground / pad name: "TAB" vs "VIN" is a real disagreement (SOT-223 numbering)
     padish = lambda n: bool(n & EP_NAMES) or any(GROUNDISH.match(x) for x in n)
     return bool((na & EP_NAMES and padish(nb)) or (nb & EP_NAMES and padish(na)))
@@ -148,10 +156,65 @@ def _close(k, a, b, table):
         and abs(a[0] - b[0]) <= 3 * tol + 1e-9
 
 
+def _turns(first, second, l, w, table):
+    """The ways the pair (l, w) agrees: 0 as read, 1 with length and width swapped; None when a side lacks one."""
+    if any(x.get(k) is None for x in (first, second) for k in (l, w)):
+        return None
+    fit = lambda ka, kb: _close(ka, first[ka], second[kb], table)
+    return {t for t, ok in ((0, fit(l, l) and fit(w, w)), (1, fit(l, w) and fit(w, l))) if ok}
+
+
+PAIRS = (("body", ("body_length", "body_width")), ("exposed pad", ("ep_length", "ep_width")))
+TURN_FREE = ("gullwing", "bga", "pin_header", "connector", "custom")    # builders that draw only the outline from the body
+
+
+def _turn(first, second, table):
+    """What compares turned 90 degrees (["body", "exposed pad"]), or [] when the two sides must agree as given.
+    Only a whole package turns: the exposed pad never turns on its own, since its copper would turn with it
+    (AL8860MP: MSOP-8 3x3, EP 1.8x1.5 read, 1.5x1.8 in the table; footprint_gen lays EP length across the rows).
+    The table is in footprint_gen's axes: only a qfn whose rows turn too (AT24CS01-MAHM, DFN pins top/bottom instead
+    of left/right) is the same land pattern turned. A second read gives D x E as printed and no rows: the body may turn
+    only where the pads do not stand on it (IRFS4115: D2PAK 10.16 x 9.015 read, 9.015 x 10.16 printed)."""
+    body = _turns(first, second, "body_length", "body_width", table)
+    ep = _turns(first, second, "ep_length", "ep_width", table)
+    if not body or 1 not in body or ep is not None and 1 not in ep or {1} not in (body, ep):
+        return []
+    if table:
+        rows = first.get("rows")
+        ok = first.get("package_type") == second.get("package_type") == "qfn" and rows and second.get("rows") == rows[::-1]
+    else:
+        ok = first.get("package_type") in TURN_FREE and body == {1}
+    return [w for w, t in (("body", body), ("exposed pad", ep)) if t == {1}] if ok else []
+
+
+def _type_only(rec):
+    """TC2030 connector vs custom, BD33FC0FP gullwing vs custom: a package type that is the only difference still holds
+    (the type picks the footprint builder), but the message says nothing else differs."""
+    d = rec["disagreed"]
+    if d and d[0]["field"] == "package_type":
+        d[0].pop("note", None)
+        if len(d) == 1:
+            d[0]["note"] = "only the type label differs: " + (", ".join(LABEL[f] for f in rec["agreed"]) + " agree"
+                                                               if rec["agreed"] else "nothing else to compare")
+
+
+def shown(d):
+    """The other source's value of a disagreement, with its note."""
+    return d["second"] + (f" - {d['note']}" if d.get("note") else "")
+
+
+def _turned(c):
+    return f", {' and '.join(c['turned'])} with length and width swapped" if c.get("turned") else ""
+
+
 def compare(first, second, kind="read"):
     """first: the read's critical numbers; second: the table's (kind="table") or a second read's. ->
-    {status: agreed | disagreed | unchecked, compared, agreed, disagreed: [{field, first, second}], not_compared}."""
+    {status: agreed | disagreed | unchecked, compared, agreed, disagreed: [{field, first, second, note?}], not_compared,
+    turned?: ["body", "exposed pad"] where the other side gives length and width the other way round}."""
     rec = {"compared": [], "agreed": [], "disagreed": [], "not_compared": []}
+    table = kind == "table"
+    turned = _turn(first, second, table)
+    swap = {k: p for w, pair in PAIRS if w in turned for k, p in (pair, pair[::-1])}
 
     def put(field, ok, a, b):
         rec["compared"].append(field)
@@ -175,12 +238,20 @@ def compare(first, second, kind="read"):
         put("has_ep", first["has_ep"] == second["has_ep"], "yes" if first["has_ep"] else "none",
             "yes" if second["has_ep"] else "none")
     for k in DIMS:
-        a, b = first.get(k), second.get(k)
+        a, b = first.get(k), second.get(swap.get(k, k))
         if a is None or b is None:
             rec["not_compared"].append(k)
             continue
-        put(k, _close(k, a, b, kind == "table"), a, b)
+        put(k, _close(k, a, b, table), a, b)
+    if turned:
+        rec["turned"] = turned
+    for w, pair in PAIRS:
+        if w not in turned and 1 in (_turns(first, second, *pair, table) or ()):
+            for d in rec["disagreed"]:
+                if d["field"] in pair:
+                    d["note"] = "the same with length and width swapped, but the pads would not turn with it"
     dims = [f for f in rec["compared"] if f in DIMS]
+    _type_only(rec)
     rec["status"] = "disagreed" if rec["disagreed"] else "agreed" if rec["compared"] and (dims or kind == "table") \
         else "unchecked"
     return rec
@@ -379,6 +450,7 @@ def second_read(reader, job, first, first_pins, model):
         c["compared"] += ["pins", "pin_names"]
         c["agreed"] += [f for f in ("pins", "pin_names") if f not in {d["field"] for d in extra}]
         c["disagreed"] += extra
+        _type_only(c)
         if extra:
             c["status"] = "disagreed"
     elif first_pins:
@@ -434,12 +506,12 @@ def summary_line(rec):
         if c["status"] == "disagreed":
             parts.append(f"{c['against']}: " + "; ".join(f"{LABEL.get(d['field'], d['field'])} read {d['first']}, "
                                                          f"{'table' if c['source'] == 'standard table' else 'second read'} "
-                                                         f"{d['second']}" for d in c["disagreed"]))
+                                                         f"{shown(d)}" for d in c["disagreed"]))
         elif c["status"] == "agreed" and _self(c):
             parts.append(f"self-checked only: {c['against']}, chosen by the read's own package name, fits the read "
-                         f"({', '.join(LABEL.get(f, f) for f in c['agreed'])}); no independent second source")
+                         f"({', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)}); no independent second source")
         elif c["status"] == "agreed":
-            parts.append(f"{c['against']} agrees ({', '.join(LABEL.get(f, f) for f in c['agreed'])})")
+            parts.append(f"{c['against']} agrees ({', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)})")
         else:
             parts.append(f"{c['against']}: not checked ({c.get('why') or 'nothing to compare'})")
     return "; ".join(parts)
@@ -462,10 +534,10 @@ def report_md(rec):
                    + (f" - {c['why']}" if c.get("why") else ""))
         if c.get("disagreed"):
             out += ["", "| field | this read | other source |", "|---|---|---|"]
-            out += [f"| {LABEL.get(d['field'], d['field'])} | {d['first']} | {d['second']} |" for d in c["disagreed"]]
+            out += [f"| {LABEL.get(d['field'], d['field'])} | {d['first']} | {shown(d)} |" for d in c["disagreed"]]
             out.append("")
         if c.get("agreed"):
-            out.append(f"  agreed: {', '.join(LABEL.get(f, f) for f in c['agreed'])}")
+            out.append(f"  agreed: {', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)}")
     if rec["status"] == "self-checked":
         out += ["", "**Next:** the BOM names no package the standard table knows, so nothing independent confirmed this "
                 "read. Compare the drawing by hand, put the package in the BOM, or set [datasheet] cross_check = \"always\"."]

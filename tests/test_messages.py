@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[1] / "ecadlib"
 EXAMPLES = {
     "files.no_symbol": "files: no symbol model (.SchLib)",
     "files.no_footprint": "files: no footprint model (.PcbLib) (cannot be overridden)",
+    "files.datasheet_refused": "files: datasheet download refused by www.analog.com (reset the connection): the maker's site "
+                               "likely blocks automated downloads; download https://www.analog.com/media/en/technical-"
+                               "documentation/data-sheets/LTM4671.pdf in a browser and read it with `ecadlib datasheet "
+                               "FILE.pdf --part LTM4671`",
     "files.missing": "files: footprint file missing: /srv/ws/models/PcbLib/X.PcbLib",
     "files.unreadable": "files: symbol file does not read back (ValueError: library is empty)",
     "pins.no_pins": "pins: symbol has no pins",
@@ -184,7 +188,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 7, "datasheet.py": 3,
+    "librarian.py": 8, "datasheet.py": 3,
 }
 
 

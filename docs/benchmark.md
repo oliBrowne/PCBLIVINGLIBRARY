@@ -118,8 +118,8 @@ ecadlib eval pin bench/run                               # pin the PDFs read (UR
 ecadlib eval publish bench/run -o docs/benchmark-results.md   # the results page: headline, failures by type
 ```
 
-The run needs an Anthropic API key (`ecadlib keys`); `[datasheet] max_cost_usd` caps what one run may spend (don't
-pass `--yes`, which skips the cap), and the estimate is shown before anything is sent. `report.md` and `report.json`
+The run needs an Anthropic API key (`ecadlib keys`); `[datasheet] max_cost_usd` caps what one run may spend
+($10 by default; the 110-part batch run cost $14.34, so pass `--max-cost-usd 20`; `--yes` does not lift it), and the estimate is shown before anything is sent. `report.md` and `report.json`
 in the out folder have every part's result, the reason for each miss, and the cost. Any model works: `--model`, or
 `--provider` and `--base-url` for another provider.
 

@@ -80,6 +80,13 @@ CODES = {
     "files.no_footprint": ("There is no footprint for this part yet.",
                            "Pick a footprint from the candidates, or let the datasheet reader build one.",
                            [r"^files: no footprint model", r"^no footprint found"]),
+    # the maker's site refused the PDF here (403 web page, reset connection, timeouts) and the API's fetcher failed too
+    "files.datasheet_refused": ("{host} would not let ecadlib download the datasheet (it {why}): the maker's site most "
+                                "likely blocks automated downloads (bot protection).",
+                                "Download the PDF in a browser[ ({url})] and read it with ecadlib datasheet FILE.pdf[ "
+                                "--part {part}], or pick a footprint by hand.",
+                                [r"datasheet download refused by (?P<host>\S+) \((?P<why>[^)]*)\)"
+                                 r"(?:.*?download (?P<url>\S+) in a browser)?(?:.*?--part (?P<part>[^`\s]+))?"]),
     "files.missing": ("The {kind} file is missing.",
                       "Fill the library again so the file is written.",
                       [r"^files: (?P<kind>symbol|footprint) file missing"]),

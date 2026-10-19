@@ -23,6 +23,7 @@ from pathlib import Path
 import requests
 
 from . import altium_lib as AL, footprint_gen as F
+from . import httpcache as H
 from .fsutil import write_text_atomic
 from . import userconfig as UC
 
@@ -60,7 +61,9 @@ PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-opus-5": (5.0, 25.0), "claude-
 BATCH_DISCOUNT, CACHE_WRITE = 0.5, 1.25
 BATCH_BYTES, BATCH_MAX = 200 * 2 ** 20, 100_000       # per batch (API limits: 256 MB, 100,000 requests)
 PAGE_TOKENS, OUT_TOKENS, URL_PAGES = 3000, 6000, 30  # rough estimate without a key: per PDF page, typical output, unknown PDF
-SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "ask_above_usd": 1.0,
+DEFAULT_MAX_COST_USD = 10.0                          # per run, so a scripted run on a big BOM has a ceiling (0 = no cap)
+SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": DEFAULT_MAX_COST_USD,
+            "ask_above_usd": 1.0,
             "auto_pages": 40,
             "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", MODEL],
             "escalate": True, "max_attempts": 4,            # pages / model per part: ecadlib.ds_route
@@ -610,6 +613,27 @@ def _non_finite(v, path="$"):
     return None
 
 
+# A nominal printed with its tolerance: "6.5±0.2", "6.5 +/- 0.2", "3.56 +0.15/-0.25", "0.74 +0.05 -0.08"
+_TOL = re.compile(r"\s*([-+]?\d*\.?\d+)\s*(?:(?:±|\+/-|\+-)\s*(\d*\.?\d+)|\+\s*(\d*\.?\d+)\s*/?\s*[-\u2212\u2013]\s*(\d*\.?\d+))"
+                  r"\s*(?:mm|mil|in|inch)?\.?\s*", re.I)
+
+
+def _toleranced(v):
+    """A dimension printed as nominal and tolerance -> {min, nom, max}; None when v is not one. LP38693MP-1.8 (live
+    benchmark 2026-10-19): its drawing prints 6.5±0.2 and 3.56 +0.15/-0.25, and the read left them blank."""
+    t = str(v or "").replace(",", ".")
+    r = re.fullmatch(r"\s*(\d*\.?\d+)\s*(?:~|\.\.|to)\s*(\d*\.?\d+)\s*(?:mm|mil|in|inch)?\.?\s*", t, re.I)
+    if r and float(r.group(1)) < float(r.group(2)):       # "6.3~6.7": a range printed in one cell
+        lo, hi = float(r.group(1)), float(r.group(2))
+        return {"min": lo, "nom": round((lo + hi) / 2, 6), "max": hi}
+    m = _TOL.fullmatch(t)
+    if not m:
+        return None
+    nom = float(m.group(1))
+    lo, hi = (float(m.group(2)),) * 2 if m.group(2) else (float(m.group(4)), float(m.group(3)))
+    return {"min": round(nom - lo, 6), "nom": nom, "max": round(nom + hi, 6)}
+
+
 def _nullable(s):
     t = s.get("type")
     return any(_nullable(b) for b in s.get("anyOf") or []) or t == "null" or (isinstance(t, list) and "null" in t)
@@ -669,6 +693,8 @@ def from_wire(ext):
     oj = pkg.get("other_json")                        # a model without strict schemas may answer the object itself
     raw = json.dumps(oj) if isinstance(oj, dict) else str(oj or "").strip()
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw) or "{}"          # a model that fences or prefixes the JSON text
+    if "{" not in raw and not raw.startswith("["):     # "x", "none", "n/a": the model had nothing else to give
+        raw = "{}"
     try:
         other = json.loads(raw)
     except ValueError:
@@ -683,17 +709,31 @@ def from_wire(ext):
         if not isinstance(d, dict) or d.get("name") not in WIRE_DIMS:
             continue
         n = d["name"]
-        vals = {k: _wire_val(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")}
-        for k, (x, u) in vals.items():                # "0.016 in" in a row whose unit is mm: which one is it?
-            if u and u != _unit_name(d.get("unit")):
-                raise DatasheetError(f"response {n}.{k} {d.get(k)!r} is written in {u!r} but the dimension's unit is "
-                                     f"{d.get('unit')!r}; rejected")
-        new = {"label": d.get("label", ""), **{k: x for k, (x, _) in vals.items()},
-               "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
-        if n in dims and any(dims[n][k] != new[k] for k in ("min", "nom", "max", "unit")):
+        tol = next((t for t in (_toleranced(d.get(k)) for k in ("nom", "min", "max")) if t), None)
+        if tol:                                       # "6.5±0.2" / "6.3~6.7" printed in one cell
+            vals = tol
+        else:
+            got = {k: _wire_val(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")}
+            for k, (x, u) in got.items():             # "0.016 in" in a row whose unit is mm: which one is it?
+                if u and u != _unit_name(d.get("unit")):
+                    raise DatasheetError(f"response {n}.{k} {d.get(k)!r} is written in {u!r} but the dimension's unit is "
+                                         f"{d.get('unit')!r}; rejected")
+            vals = {k: x for k, (x, _) in got.items()}
+        new = {"label": d.get("label", ""), **vals, "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
+        if n in dims and any(dims[n].get(k) != new.get(k) for k in ("min", "nom", "max", "unit")):
             raise DatasheetError(f"response gives {n} twice with different values ({_dimtxt(dims[n])} and {_dimtxt(new)}): "
                                  "two package variants or a misread; rejected")
         dims.setdefault(n, new)
+    unres = []
+    for u in pkg.get("unresolved") or []:                # "body_length min/max (printed as 6.5±0.2)": the read saw it
+        m = re.match(r"\s*([a-z_.]+)\b[^(]*\(printed as ([^),;]+)", str(u))
+        tol = m and m.group(1) in dims and _toleranced(m.group(2))
+        if tol and dims[m.group(1)].get("unit") and tol["nom"] == (dims[m.group(1)].get("nom") or tol["nom"]):
+            dims[m.group(1)].update(tol)
+        else:
+            unres.append(u)
+    if "unresolved" in pkg:
+        pkg = dict(pkg, unresolved=unres)
     out = {k: v for k, v in pkg.items() if k not in ("dims", "other_json")}
     for k in pk:
         if k in out:
@@ -737,6 +777,7 @@ Dimensions:
 - Use the mechanical package drawing (and its dimension table) for the requested part and package.
 - Copy every value exactly as printed: min, nom and max in the drawing's own unit (mm, in or mil). Set a field to null when the drawing leaves it blank. Do not convert units, average, round, compute or fill in values from memory or JEDEC norms. If the drawing prints both mm and inches, use the mm column.
 - For every dimension give its label on the drawing, the 1-based page index in the attached PDF where you read it, and the figure or table title (or drawing code).
+- A value printed as a nominal with a tolerance (6.5±0.2, 3.56 +0.15/-0.25): copy it exactly like that into nom and leave min and max blank; ecadlib works out the limits.
 - If a dimension cannot be read with confidence, set it to null and name it in package.unresolved.
 - Follow the orientation and per-package meaning given in each field's description. name is KiCad style, e.g. SOIC-8_3.9x4.9mm_P1.27mm or VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.
 
@@ -1259,6 +1300,20 @@ def self_check(spec, ext, review):
     return info
 
 
+def _pin_count_from(spec, ext):
+    """A read that left pin_count blank (UCC25800, UCC256301: live benchmark 2026-10-19) -> (n, how) from the package
+    name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "")."""
+    m = re.match(r"[A-Za-z]+[A-Za-z0-9]*?-(\d+)(?:-(\d+)(?=[_]|$))?(?=[-_]|$)", str(spec.get("name") or ""))
+    if m and m.group(2) and int(m.group(2)) > int(m.group(1)):
+        return None, ""                               # SOIC-14-16 (UCC256301): 14 pins on 16 places, which ones isn't said
+    by_name = int(m.group(1)) if m else None
+    nums = {str(p.get("num")) for p in ext.get("pins") or [] if str(p.get("num") or "").isdigit()}
+    by_pins = len(nums) - (1 if spec.get("exposed_pad") and str(len(nums)) in nums else 0) if nums else None
+    if by_name and by_pins and by_name != by_pins:
+        return None, ""
+    return (by_name, f"the package name {spec['name']}") if by_name else (by_pins, "the pin table") if by_pins else (None, "")
+
+
 INJECTION = "document contains instruction-like text (ignored)"
 
 
@@ -1272,6 +1327,11 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None):
         if bad:
             review.append(f"the model cited page(s) {bad} of the {n} pages sent: those values have no source page")
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
+    if spec.get("pin_count") is None and not spec.get("pad_table"):
+        n, how = _pin_count_from(spec, ext)
+        if n:
+            spec["pin_count"] = n
+            review.append(f"pin_count was left blank: {n} from {how}; check it against the drawing")
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
         if nets != (spec.get("same_net") or []):
@@ -1349,7 +1409,7 @@ def report(res):
         d = next((x for c in cc.get("checks") or [] for x in c.get("disagreed") or []), None)
         other = next((c["source"] for c in cc.get("checks") or [] if c.get("disagreed")), "")
         t, f = M.held("crosscheck.disagree", field=CC_LABEL(d["field"]) if d else "", first=d and d["first"],
-                      second=d and d["second"], other=other)
+                      second=d and CC_SHOWN(d), other=other)
         out += [f"Held: {t}", f"**Next:** {f}", ""]
     else:
         out += ["A person has to compare it with the datasheet before it is released; until then the part is held.", ""]
@@ -1398,6 +1458,11 @@ def _review_text(r):
 def CC_LABEL(field):
     from . import crosscheck as CC
     return CC.LABEL.get(field, field)
+
+
+def CC_SHOWN(d):
+    from . import crosscheck as CC
+    return CC.shown(d)
 
 
 def write(res, outdir):
@@ -1482,11 +1547,45 @@ def lcsc_number(item=None, ln=None, row=None):
     return None
 
 
+# Maker URL patterns, tried after every BOM / provider / source link (never instead of one), only for the makers
+# whose pattern holds: (maker name, link host, label, URL). The MPN is lowercased and tried whole first (without a
+# Linear "#PBF" or TI "/NOPB" tail), then as its base part:
+#   TI: the letters after the last digit cut (package, grade, reel; a "-Q1" or "-3.3" tail first): TPS26600PWPR ->
+#       tps26600, SN74LVC1G08DBVR -> sn74lvc1g08, LM1117MPX-3.3/NOPB -> lm1117. TI keeps a symlink per generic part
+#       number, so the family name (tps2660) is not guessed.
+#   ADI / Linear: the letters and the first run of digits: LT8610EMSE#PBF -> lt8610, AD7606BSTZ-RL -> ad7606
+#       (Linear package codes carry digits: LT1763CS8 is lt1763, not lt1763cs8).
+MAKER_URLS = [
+    (r"texas instruments|^ti$|burr.?brown|national semi", r"(^|\.)ti\.com$", "TI",
+     "https://www.ti.com/lit/ds/symlink/{}.pdf", lambda s: re.sub(r"(?<=\d)[A-Z]+$", "", re.sub(r"(-?Q1|-[\d.]+)$", "", s))),
+    (r"analog devices|linear tech|^adi$", r"(^|\.)(analog|linear)\.com$", "Analog Devices",
+     "https://www.analog.com/media/en/technical-documentation/data-sheets/{}.pdf",
+     lambda s: (re.match(r"[A-Z]+\d+", s) or [""])[0]),
+]
+
+
+def maker_urls(mpn, maker="", links=()):
+    """[(url, where)] from MAKER_URLS for a part whose maker (or one of whose known links' hosts) is a listed one."""
+    from urllib.parse import urlparse
+    s = re.split(r"[#/]", str(mpn or "").strip().upper())[0]
+    if not re.search(r"\d", s):
+        return []
+    hosts = {urlparse(u).hostname or "" for u in links}
+    out = []
+    for name_rx, host_rx, label, pattern, base in MAKER_URLS:
+        if not (re.search(name_rx, str(maker or "").strip(), re.I) or any(re.search(host_rx, h) for h in hosts)):
+            continue
+        for b in dict.fromkeys((s, base(s))):
+            if b and re.fullmatch(r"[A-Z0-9][A-Z0-9._-]*", b):
+                out.append((pattern.format(b.lower()), f"{label} datasheet URL pattern ({b.lower()})"))
+    return out
+
+
 def datasheet_urls(item=None, ln=None, row=None, found=None):
     """Datasheet links to try, best first, each with where it came from: the BOM's datasheet column, the link an official
     part API gave in triage (Nexar / DigiKey / Mouser), the plan's
-    ComponentLink2URL / Datasheet, one a source found (KiCad symbol Datasheet property, EasyEDA lcsc.url), then
-    LCSC's datasheet URL pattern for the part's LCSC number."""
+    ComponentLink2URL / Datasheet, one a source found (KiCad symbol Datasheet property, EasyEDA lcsc.url),
+    LCSC's datasheet URL pattern for the part's LCSC number, then the maker's own URL pattern (MAKER_URLS)."""
     par = {p["name"]: p["value"] for p in (item or {}).get("parameters", [])}
     fd = (found or {}).get("datasheet") or ("", "")
     cands = [((ln or {}).get("datasheet"), "BOM"), ((row or {}).get("src_datasheet"), f"{(row or {}).get('src') or 'part source'} datasheet link"),
@@ -1495,6 +1594,9 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
     lc = lcsc_number(item, ln, row)
     if lc:
         cands.append((f"https://www.lcsc.com/datasheet/{lc}.pdf", f"LCSC datasheet URL pattern ({lc})"))
+    mpn = (ln or {}).get("mpn") or par.get("Manufacturer Part Number") or (row or {}).get("mpn") or (row or {}).get("src_mpn")
+    maker = (ln or {}).get("manufacturer") or par.get("Manufacturer") or (row or {}).get("manufacturer")
+    cands += maker_urls(mpn, maker, [str(u or "").strip() for u, _ in cands])
     out, seen = [], set()
     for u, w in cands:
         u = str(u or "").strip()
@@ -1554,17 +1656,70 @@ def unsafe_download(url):
     return None
 
 
+# The API's fetcher could not get a URL source either (its words in the #42 Opus run: LTM4671, LTV-352T).
+API_FETCH_FAILED = re.compile(r"could not (be )?(fetch|download)|unable to (fetch|download)|timed out while trying to download"
+                              r"|unable to connect to the remote server", re.I)
+
+
+def refused_line(job, error):
+    """The review line for a part whose PDF a maker's site refused here and the API could not fetch: the likely cause
+    and the way round it. None when that is not what happened."""
+    prov = job.get("prov") or {}
+    r = refusal(prov.get("attempts")) if prov.get("sent_as") == "url" and API_FETCH_FAILED.search(str(error)) else None
+    if not r:
+        return None
+    url, host, why = r
+    return (f"datasheet download refused by {host} ({why}): the maker's site likely blocks automated downloads; download "
+            f"{url} in a browser and read it with `ecadlib datasheet FILE.pdf --part {job['part']}`")
+
+
+def refusal(attempts):
+    """The first download a maker's site refused, as bot protection does: -> (url, host, why), or None. A 403 that
+    is a web page (Nexperia BAT160_SERIES.pdf), a reset connection (analog.com LTM4671, WinError 10054) or a timeout
+    on every try (analog.com LT8610, st.com STULPI01A). A TLS failure (liteon over http) is not one."""
+    from urllib.parse import urlparse
+    for a in attempts or []:
+        e = a.get("error") or ""
+        why = ("answered HTTP 403 with a web page" if re.search(r"HTTP 403 \(a web page", e) else
+               "reset the connection" if re.search(r"ConnectionResetError|Connection reset|10054|RemoteDisconnected", e) else
+               "timed out on every try" if re.search(r"timeout|timed out", e, re.I) and re.search(r"\(\d+ tries\)$", e) else "")
+        if why:
+            return a["url"], urlparse(a["url"]).hostname or a["url"], why
+    return None
+
+
 class PdfStore:
     """Downloaded datasheets, content-validated, with provenance: <cache>/datasheets/<sha256(url)>.pdf + .json.
     httpcache keeps text bodies only, so PDFs (binary) are stored here; the same session, user agent, per-host
-    rate limit and offline switch as the CachedHTTP passed in are used."""
+    rate limit and offline switch as the CachedHTTP passed in are used. A download that fails in a way that may
+    pass is tried again (httpcache.RETRIES), except on a host that already failed every try in this run."""
 
-    def __init__(self, cache_dir, http=None, offline=None):
+    def __init__(self, cache_dir, http=None, offline=None, sleep=None):
         self.dir, self.http = Path(cache_dir) / "datasheets", http
         self.offline = getattr(http, "offline", False) if offline is None else offline
+        self.sleep, self.gave_up = sleep or time.sleep, set()
+
+    def _get_retrying(self, url):
+        """_get, tried again on a transient failure. -> (status, bytes, content-type, final url, error)"""
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname or ""
+        tries = 1 if host in self.gave_up else H.RETRIES + 1
+        for n in range(1, tries + 1):
+            status, data, ctype, final, err, *more = self._get(url)
+            again = bool(H.TRANSIENT.search(err)) if err else status == 429 or 500 <= (status or 0) < 600
+            if not again or n == tries:
+                break
+            hdr = more[0] if more and more[0] is not None else {}
+            wait = H.retry_after(hdr.get("retry-after")) if not err else None
+            self.sleep(H.BACKOFF * 2 ** (n - 1) if wait is None else wait)
+        if again and tries > 1:
+            self.gave_up.add(host)
+        if err and n > 1:
+            err = f"{err} ({n} tries)"
+        return status, data, ctype, final, err
 
     def _get(self, url):
-        """-> (status, bytes, content-type, final url, error)"""
+        """-> (status, bytes, content-type, final url, error[, response headers])"""
         h = self.http
         if h is not None and hasattr(h, "get_bytes"):
             return h.get_bytes(url)
@@ -1583,18 +1738,18 @@ class PdfStore:
         get = sess.get if sess is not None else requests.get
         try:
             r = get(url, timeout=60, allow_redirects=True, stream=True,
-                    headers={"Accept": "application/pdf,*/*;q=0.5"})
+                    headers={"Accept": "application/pdf,*/*;q=0.8"})
             data = read_capped(r)
         except DatasheetError as e:                   # too slow: not a broken link, so the URL can still go to the API
             r.close()
             return 0, None, "", url, str(e)
-        except requests.RequestException as e:
+        except (requests.RequestException, requests.packages.urllib3.exceptions.HTTPError) as e:   # the body cut off
             m = re.search(r"Tunnel connection failed: ([^'\")]+)", str(e))
             return 0, None, "", url, f"{type(e).__name__}: " + (f"proxy CONNECT refused ({m.group(1).strip()})" if m else str(e)[:160])
         r.close()
         if h is not None and hasattr(h, "log"):
             h.log.append(("GET", url, r.status_code, False))
-        return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None
+        return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None, r.headers
 
     def fetch(self, url, where="", follow=True):
         """-> (pdf bytes, provenance). Raises DatasheetError (with the reason) when it is not a usable PDF.
@@ -1614,14 +1769,15 @@ class PdfStore:
             raise DatasheetError(f"{url}: not downloaded ({why})")
         if self.offline:
             raise DatasheetError(f"{url}: offline and not downloaded before")
-        status, data, ctype, final, err = self._get(url)
+        status, data, ctype, final, err = self._get_retrying(url)
         if err:
             raise DatasheetError(f"{url}: {err}")
         why = unsafe_download(final) if final and final != url else None
         if why:                                       # redirected there: the bytes are not kept or sent anywhere
             raise DatasheetError(f"{url}: redirected to {final}, not used ({why})")
         if not 200 <= (status or 0) < 300:
-            raise DatasheetError(f"{url}: HTTP {status}")
+            page = status == 403 and bool(re.search(rb"<(!doctype|html)", (data or b"")[:2048], re.I))
+            raise DatasheetError(f"{url}: HTTP {status}" + (" (a web page: the site refused the download)" if page else ""))
         if len(data) > MAX_DOWNLOAD:
             raise DatasheetError(f"{url}: larger than {MAX_DOWNLOAD >> 20} MB; download it and pass --pages")
         if not is_pdf(data):
@@ -1832,7 +1988,7 @@ class Reader:
         self.http, self.batch, self.wait, self.poll, self.max_wait_s = http, batch, wait, poll, max_wait_s
         self.estimate_only, self.yes = estimate, yes
         self.auto_pages = self.cfg["auto_pages"] if auto_pages is None else auto_pages
-        self.store, self.results = PdfStore(cache_dir, http), ResultCache(cache_dir)
+        self.store, self.results = PdfStore(cache_dir, http, sleep=sleep), ResultCache(cache_dir)
         self.dir = self.out / "datasheet"
         self.log_file = self.dir / "api_log.jsonl"
         self.say, self.sleep = log or (lambda *a: None), sleep or time.sleep
@@ -1981,24 +2137,34 @@ class Reader:
             rec = self.results.get(job["key"])
             if rec is None:
                 return job
-            kind, why, _ = self._judge(job, rec)
+            kind, why, res = self._judge(job, rec)
+            gaps = len(((res or {}).get("spec") or {}).get("unresolved") or []) + len(why)
+            rank = ({"ok": 2, "incomplete": 1}.get(kind, 0), -gaps) if "message" in rec else (-1, 0)
             done = job["route"]["attempts"] + [{"model": job["model"], "pages": len(job["offset"]) if isinstance(job["offset"], list)
                                                 else "all", "verdict": kind, "why": why[:4], "via": rec.get("via"),
                                                 "served": (rec.get("message") or {}).get("model"),
                                                 "usage": (rec.get("message") or {}).get("usage") or rec.get("usage")}]
             nxt = self.router.next_step(job["rung"], job["level"], len(job["levels"]), kind, len(done))
+            best = job["route"].get("best")           # [rank, rung, level, answer no.] of the best answer so far
             if nxt is None:
+                if best and tuple(best[0]) > rank:    # CY14U256LA-BA: the whole-PDF read came back with no pins and no
+                    job = self._at(job, best[1], best[2])  # grid ("x"), after a 5-page read that had them: keep that one
+                    job["route"] = dict(job["route"], attempts=done, kept=f"answer {best[3]} (a later one was worse)")
+                    job["final"] = True
+                    return job
                 job["route"]["attempts"] = done
                 job["final"] = "message" in rec
                 return job
-            job = self._at(dict(job, route=dict(job["route"], attempts=done)), *nxt)
+            if best is None or rank > tuple(best[0]):
+                best = [list(rank), job["rung"], job["level"], len(done)]
+            job = self._at(dict(job, route=dict(job["route"], attempts=done, best=best)), *nxt)
 
     def _result(self, job, rec):
         ext = parse_message(rec["message"])
         res = process(ext, job["part"], job["url"], rec.get("model") or self.model, rec.get("page_offset", job["offset"]), rec["message"])
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
         if job.get("route"):
-            res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k != "picked"}
+            res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k not in ("picked", "best")}
         if job["prov"].get("sent_as") == "url":
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
         if job["prov"].get("pages_sent"):
@@ -2030,7 +2196,8 @@ class Reader:
         from .llm import rails as LRL
         try:                                          # held to [datasheet] max_cost_usd like every other request
             self._guard_cost([{"key": key, "name": job.get("name") or job["part"], "model": model, "body": body, "sync": True,
-                               "url": job.get("url", ""), "prov": {"pages": pages_sent or job.get("n_pages")}}])
+                               "url": job.get("url", ""), "prov": {"pages": pages_sent or job.get("n_pages"),
+                                                                    "sent_as": "url" if job.get("data") is None else "base64"}}])
         except APIError:
             raise
         except DatasheetError as e:
@@ -2251,7 +2418,7 @@ class Reader:
                     exact = False
             if tin is None:
                 pages = len(j["prov"]["pages_sent"]) if j["prov"].get("pages_sent") else j["prov"].get("pages")
-                unknown = not pages                   # a PDF sent as a URL, never counted: its size is not known
+                unknown = not pages and j["prov"].get("sent_as") != "base64"   # sent as a URL, never counted: size unknown
                 pages = pages or URL_PAGES
                 tin, how = pages * PAGE_TOKENS + 1500, f"rough: {pages} pages x {PAGE_TOKENS}"
             schema = len(json.dumps(output_schema())) // 4     # the output format (not in count_tokens): rough
@@ -2316,10 +2483,25 @@ class Reader:
     def _guard_cost(self, jobs):
         """[datasheet] max_cost_usd over everything this Reader sends (batches and synchronous calls together)."""
         cap = float(self.cfg.get("max_cost_usd") or 0)
-        if not cap or self.yes or not jobs:
+        if not cap or not jobs:                       # --yes does not lift the cap: a scripted run keeps its ceiling
             return
-        est = self.estimate(jobs)
+        if cap == DEFAULT_MAX_COST_USD:               # the default safety net: the rough estimate, no count_tokens request
+            k, self.key = self.key, None
+            try:
+                est = self.estimate(jobs)
+            finally:
+                self.key = k
+        else:
+            est = self.estimate(jobs)
         if est["usd_max"] is None:
+            if self.yes:                              # a model with no known price (a local one): sent as approved
+                return
+            if cap == DEFAULT_MAX_COST_USD:           # only the default cap: a local model is not stopped by it
+                if not getattr(self, "_said_unpriced", False):
+                    self._said_unpriced = True
+                    self.say(f"  datasheet: no price known for {', '.join(est['models']) or self.model}, so the default "
+                             f"${cap:g} cap can't be checked; sending (set [datasheet] max_cost_usd to hold it)")
+                return
             raise DatasheetError(f"no price known for {', '.join(est['models']) or self.model}: can't hold [datasheet] max_cost_usd = {cap}; "
                                  "pass --yes to send anyway")
         unk = [r for r in est["rows"] if r.get("size_unknown")]
@@ -2327,18 +2509,22 @@ class Reader:
             what = (f"the size of the PDF of {', '.join(r['part'] for r in unk)} is unknown (sent as a URL, not counted "
                     f"by count_tokens): its worst case at the {page_limit(unk[0]['model'])}-page request limit makes up to "
                     f"${est['usd_max']:.2f} for {est['parts']} parts, over [datasheet] max_cost_usd = {cap:g}")
-            if not self.yes:
+            if not self.yes and cap != DEFAULT_MAX_COST_USD:   # a cap the person set: refused, never a silent guess
                 raise DatasheetError(what + "; nothing sent. Download the PDF (or give a local file) so it can be "
                                      "counted, raise the cap, or pass --yes to send it on a typical "
                                      f"{URL_PAGES}-page estimate")
-            self.say(f"  datasheet: {what}; --yes: held at a typical {URL_PAGES}-page estimate instead")
+            # --yes, or the default safety net (a run that never set a cap is not stopped by the page limit's worst
+            # case of every URL datasheet): held at the typical size, said aloud
+            self.say(f"  datasheet: {what}; {'--yes' if self.yes else 'default cap'}: held at a typical "
+                     f"{URL_PAGES}-page estimate instead (set [datasheet] max_cost_usd to refuse it)")
             for r in unk:                             # confirmed: the typical size, said aloud; the cap still holds
                 r["usd_max"] = r["usd_max_guess"]
             est["usd_max"] = sum(r["usd_max"] or 0.0 for r in est["rows"])
         if self.committed_usd + est["usd_max"] > cap:
             raise DatasheetError(f"estimated up to ${est['usd_max']:.2f} for {est['parts']} parts"
                                  + (f" (after ${self.committed_usd:.2f} already spent or held)" if self.committed_usd else "")
-                                 + f", over [datasheet] max_cost_usd = {cap}; see --estimate, raise the cap or pass --yes")
+                                 + f", over [datasheet] max_cost_usd = {cap:g}; nothing sent. See --estimate, then raise "
+                                 "the cap with --max-cost-usd N or in ecadlib.toml (0 = no cap)")
         for j, r in zip(jobs, est["rows"]):         # unrounded, so an answer's real cost replaces exactly its hold
             self.committed_usd += r["usd_max"] or 0.0
             self._holds.setdefault(j.get("key"), []).append(r["usd_max"] or 0.0)
@@ -2813,7 +2999,10 @@ def batch_main(argv, estimate=False):
     ap.add_argument("--no-batch", action="store_true", help="synchronous Messages API calls instead of the Batches API")
     ap.add_argument("--no-wait", action="store_true", help="submit and return; run again to collect (the batch id is kept)")
     ap.add_argument("--estimate", action="store_true", help="count tokens and cost; send nothing")
-    ap.add_argument("--yes", action="store_true", help="go ahead even when the estimate is over [datasheet] max_cost_usd")
+    ap.add_argument("--yes", action="store_true", help="no questions (a model with no known price is sent; the "
+                    "[datasheet] max_cost_usd cap still holds)")
+    ap.add_argument("--max-cost-usd", type=float, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
+                    f"{DEFAULT_MAX_COST_USD:g}; 0 = no cap)")
     ap.add_argument("--model")
     ap.add_argument("--effort", choices=EFFORTS)
     ap.add_argument("--poll", type=float, default=60.0, help="seconds between batch status checks (default 60)")
@@ -2830,6 +3019,8 @@ def batch_main(argv, estimate=False):
     http = CachedHTTP(a.cache, min_interval=0.5, offline=a.offline, timeout=60)
     rd = Reader(out, a.cache, rules=rules, http=http, model=a.model, effort=a.effort, batch=not a.no_batch,
                 wait=not a.no_wait, poll=a.poll, estimate=estimate or a.estimate, yes=a.yes)
+    if a.max_cost_usd is not None:
+        rd.cfg["max_cost_usd"] = a.max_cost_usd
     if not rd.key and not rd.estimate_only and not rd.offline:
         from . import llm as LL
         why = f"{settings(rules)['api_key_env']} is not set" if rd.ep['provider'] == 'anthropic' else LL.needs_key_message(rd.ep)
@@ -2926,7 +3117,10 @@ def main(argv=None):
     ap.add_argument("--estimate", action="store_true", help="print the token count and cost; send nothing")
     ap.add_argument("--no-cache", action="store_true", help="ask again even when this PDF/part/model was read before")
     ap.add_argument("--rules", help="library rules file ([datasheet] max_cost_usd; default: searched from -o upwards)")
-    ap.add_argument("--yes", action="store_true", help="go ahead even when the estimate is over [datasheet] max_cost_usd")
+    ap.add_argument("--yes", action="store_true", help="no questions (a model with no known price is sent; the "
+                    "[datasheet] max_cost_usd cap still holds)")
+    ap.add_argument("--max-cost-usd", type=float, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
+                    f"{DEFAULT_MAX_COST_USD:g}; 0 = no cap)")
     ap.add_argument("-o", "--out", default="out/datasheet")
     a = ap.parse_args(argv)
     cache = ResultCache(Path(a.out) / "cache")
@@ -2969,7 +3163,7 @@ def main(argv=None):
             ck = ResultCache.key(src_hash, a.model, a.part, a.package, [offset, hint], a.effort + (f"|{sig}" if sig else ""))
             if a.estimate:
                 rd = Reader(a.out, Path(a.out) / "cache", model=a.model, effort=a.effort, log=print)
-                prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None}
+                prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None, "sent_as": source[0]}
                 print(format_estimate(rd.estimate([{"name": a.part, "url": a.pdf, "body": body, "prov": prov}], batch=False)))
                 return 0
             rec = None if a.no_cache else cache.get(ck)
@@ -2979,9 +3173,11 @@ def main(argv=None):
                 msg = rec["message"]
                 print(f"cached   {cache.dir / (ck + '.json')} (no API call; --no-cache to ask again)")
             else:
-                prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None}
+                prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None, "sent_as": source[0]}
                 grd = Reader(a.out, Path(a.out) / "cache", key=key, rules=rules, model=a.model, effort=a.effort, log=None,
                              yes=a.yes)
+                if a.max_cost_usd is not None:
+                    grd.cfg["max_cost_usd"] = a.max_cost_usd
                 guard = lambda b: grd._guard_cost([{"name": a.part, "url": a.pdf, "body": b, "prov": prov}])
                 guard(body)                           # the feedback turn, if any, is held to the same cap
                 with logging_to(Path(a.out) / "api_log.jsonl", print):

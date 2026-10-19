@@ -155,8 +155,12 @@ def check_item(item, base=".", rules=None):
     syms = fps = None
     pin_names = {}
     for kind, f, reader in (("symbol", sym_f, AL.read_schlib), ("footprint", fp_f, AL.read_pcblib)):
-        pads_why = [r for r in (item.get("librarian") or {}).get("review") or [] if str(r).startswith("datasheet pad table: ")]
-        if not f and pads_why:                         # why the datasheet's footprint was not built, and its fix
+        lib_review = [str(r) for r in (item.get("librarian") or {}).get("review") or []]
+        pads_why = [r for r in lib_review if r.startswith("datasheet pad table: ")]
+        refused = [r for r in lib_review if r.startswith("datasheet download refused by ")]
+        if not f and refused and not pads_why:         # the maker's site would not hand the PDF over: say so, and how
+            add("files", refused[0])
+        elif not f and pads_why:                       # why the datasheet's footprint was not built, and its fix
             for r in (pads_why if kind == "footprint" else ["datasheet pad table: the symbol waits for the footprint"]):
                 add("files", r)
         elif not f:

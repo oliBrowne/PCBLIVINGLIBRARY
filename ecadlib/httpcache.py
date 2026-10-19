@@ -63,6 +63,31 @@ def page_not_data(url, text):
             or "/-/raw/" in u.path or ext in DATA_EXT)
 
 
+# A download that may work on a later try: a timeout, a dropped or reset connection (not a TLS or proxy refusal,
+# which fails the same way every time), 429 or 5xx. Used by datasheet.PdfStore (PDF downloads only): RETRIES more
+# tries, the wait doubling from BACKOFF s, or the server's Retry-After up to RETRY_AFTER_MAX s.
+RETRIES, BACKOFF, RETRY_AFTER_MAX = 2, 2.0, 30.0
+TRANSIENT = re.compile(r"^(ReadTimeout|ConnectTimeout|Timeout|ConnectionError|ChunkedEncodingError|ReadTimeoutError|"
+                       r"ProtocolError|IncompleteRead)\b|ConnectionResetError|Connection reset|RemoteDisconnected")
+
+
+def retry_after(value):
+    """A Retry-After header (seconds, or an HTTP date) -> seconds to wait, capped at RETRY_AFTER_MAX; None if unreadable."""
+    v = str(value or "").strip()
+    if re.fullmatch(r"\d+(\.\d+)?", v):
+        return min(float(v), RETRY_AFTER_MAX)
+    from datetime import datetime, timezone
+    from email.utils import parsedate_to_datetime
+    try:
+        when = parsedate_to_datetime(v)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when is None:
+        return None
+    when = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    return min(max(0.0, (when - datetime.now(timezone.utc)).total_seconds()), RETRY_AFTER_MAX)
+
+
 def redact(url):
     u = urlparse(url)
     q = [(k, "REDACTED" if SECRET_Q.search(k) else v) for k, v in parse_qsl(u.query, keep_blank_values=True)]

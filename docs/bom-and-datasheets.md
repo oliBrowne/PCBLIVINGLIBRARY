@@ -47,9 +47,10 @@ python3 -m tests.test_offline
   | `snapmagic` | partner token only, no self-serve public API | | stub |
   | `samacsys` | account plus Library Loader or partner access, no documented public REST API | | stub |
 
-  * `[providers] unofficial = false` in `ecadlib.toml` keeps the two undocumented endpoints out entirely (triage, the
-    librarian's EasyEDA source, the UI). Parts then come from your libraries, the KiCad libraries, the standard
-    packages and the datasheet reader.
+  * The two undocumented endpoints are off by default (`[providers] unofficial = false`): triage, the librarian's
+    EasyEDA source and the UI leave them out, and parts come from your libraries, the KiCad libraries, the standard
+    packages and the datasheet reader. `ecadlib init` asks whether to use them (`--unofficial` answers yes); set
+    `[providers] unofficial = true` in `ecadlib.toml` to opt in.
   * `ecadlib sources-check` asks both unofficial endpoints about known parts (NE555DR, LM358DR, RP2040) and checks the
     converter still gives the right pad and pin counts. `.github/workflows/sources-canary.yml` runs it every Monday and
     keeps the raw answers as an artifact, so a change on their side shows up as a red run, not as broken user parts.
@@ -137,7 +138,7 @@ All parts go into one Message Batch (half price), one request per part with `cus
 
 * **Result cache:** answers that parsed are stored under `<cache>/datasheet_results/`, keyed by PDF SHA-256 + model + schema version (a hash of the output schema and prompt, so new `package_schema.json` families invalidate it) + part/package/pages/effort. Re-runs cost nothing. Refusals and truncated answers are not cached.
 * **Errors and retries:** 429, 5xx and 529 (overloaded) are retried with exponential backoff, honouring `retry-after`. 401, 402/billing, 403, 404 (model) and 413 (too many pages) fail at once with what to do. Every request is logged to `<out>/datasheet/api_log.jsonl` (status, request-id, usage, a body summary with PDFs as size and hash). The key is never logged.
-* **Estimate:** with a key, input tokens come from `/v1/messages/count_tokens`. Without one, the estimate is rough: pages x 3,000 tokens. Prices are $ per MTok from the claude-api model table, with the batch at half price. `[datasheet] max_cost_usd` refuses a run whose worst case (every answer at `max_tokens`) is higher, unless `--yes`.
+* **Estimate:** with a key, input tokens come from `/v1/messages/count_tokens`. Without one, the estimate is rough: pages x 3,000 tokens. Prices are $ per MTok from the claude-api model table, with the batch at half price. `[datasheet] max_cost_usd` (default $10 per run; 0 = no cap) refuses a run whose worst case (every answer at `max_tokens`) is higher, even with `--yes`; `--max-cost-usd N` changes it for one run.
 * **Self-check:** compares the extraction with its own footprint name (pin count, EP, pitch, body and EP size) and with family norms (standard pitches; pitch, body and pin-count ranges per `package_type`). Disagreements are listed as `self-check:` review items. A family with no norms gets the generic checks, and the sidecar says so.
 * **Workspace / MCP:** `Workspace.datasheet_estimate(bom)` and `datasheet_batch(bom, sync, wait, parts)`; MCP tools `datasheet_estimate` and `datasheet_batch`. `datasheet_batch` needs the librarian's plan and `approved_usd`, the amount the person approved of the estimate's `ai` quote (the reads are capped to it). The tool submits and returns by default; call it again (with the same approval) to collect. With `--offline` nothing is sent to the model.
 

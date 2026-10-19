@@ -96,7 +96,7 @@ def test_request_shape_base64():
         f = Path(d) / "ds.pdf"
         f.write_bytes(PDF)
         assert D.main([str(f), "--part", "TESTPART", "--package", "RGT", "-o", d]) == 0
-    c = calls[0]
+    c = calls[0]                                  # the default $10 cap is checked on the rough estimate: no count_tokens
     assert c["url"] == "https://api.anthropic.com/v1/messages"
     assert c["headers"]["x-api-key"] == "sk-test" and c["headers"]["anthropic-version"] == "2023-06-01"
     assert c["headers"]["anthropic-beta"] == D.FALLBACK_BETA and c["body"]["fallbacks"] == "default"
@@ -140,9 +140,12 @@ def test_a_fenced_or_prefixed_other_json_is_read():
     # LP38693MP-1.8 (benchmark 2026-10-18) was rejected for an other_json the model wrapped in text
     for raw in ('```json\n{"ball_map": 1}\n```', 'Here it is: {"ball_map": 1}'):
         assert D.from_wire({"package": {"dims": [], "other_json": raw, "unresolved": []}})["package"]["ball_map"] == 1
+    # CY14U256LA-BA (live run 2026-10-19) answered other_json "x": no other fields, not a reason to throw the read away
+    for raw in ("x", "none", "n/a", ""):
+        assert D.from_wire({"package": {"dims": [], "other_json": raw, "unresolved": []}})["package"]["ball_map"] is None
     try:
-        D.from_wire({"package": {"dims": [], "other_json": "none", "unresolved": []}})
-        raise AssertionError("garbage other_json accepted")
+        D.from_wire({"package": {"dims": [], "other_json": '{"ball_map": ', "unresolved": []}})
+        raise AssertionError("broken other_json accepted")
     except D.DatasheetError as e:
         assert "not JSON" in str(e)
 
@@ -406,3 +409,32 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok ", name)
+
+
+def test_a_dimension_printed_with_its_tolerance_gives_min_and_max():
+    """LP38693MP-1.8 (live benchmark 2026-10-19): the drawing prints 6.5±0.2 and 3.56 +0.15/-0.25; the read listed them
+    as unresolved 'min/max (printed as ...)' and nothing was built."""
+    assert D._toleranced("6.5±0.2") == {"min": 6.3, "nom": 6.5, "max": 6.7}
+    assert D._toleranced("3.56 +0.15/-0.25") == {"min": 3.31, "nom": 3.56, "max": 3.71}
+    assert D._toleranced("0.74 +0.05 -0.08") == {"min": 0.66, "nom": 0.74, "max": 0.79}
+    assert D._toleranced("6.3~6.7") == {"min": 6.3, "nom": 6.5, "max": 6.7}
+    assert D._toleranced("0.50 BSC") is None and D._toleranced("6.5") is None and D._toleranced("6.7~6.3") is None
+    dim = lambda n, nom: {"name": n, "label": n, "min": "", "nom": nom, "max": "", "unit": "mm", "page": 3, "figure": "DCY"}
+    w = {"package": {"dims": [dim("body_length", "6.5"), dim("body_width", "3.56 +0.15/-0.25")], "other_json": "{}",
+                     "unresolved": ["body_length min/max (printed as 6.5±0.2)", "tab foot length"]}}
+    pkg = D.from_wire(w)["package"]
+    assert pkg["body_length"]["min"] == 6.3 and pkg["body_length"]["max"] == 6.7
+    assert pkg["body_width"]["min"] == 3.31 and pkg["body_width"]["max"] == 3.71
+    assert pkg["unresolved"] == ["tab foot length"]
+    assert "6.5±0.2" in D.SYSTEM                                      # the prompt asks for it as printed
+
+
+def test_a_blank_pin_count_comes_from_the_package_name_or_the_pin_table():
+    """UCC25800 and UCC256301 (live benchmark 2026-10-19): the read left pin_count blank and nothing was built."""
+    pins = [{"num": str(i)} for i in range(1, 10)]
+    assert D._pin_count_from({"name": "VSON-8-1EP_3x3mm_P0.65mm", "exposed_pad": {"length": 1}}, {"pins": pins}) == \
+        (8, "the package name VSON-8-1EP_3x3mm_P0.65mm")
+    assert D._pin_count_from({"name": "?"}, {"pins": pins[:8]}) == (8, "the pin table")
+    assert D._pin_count_from({"name": "SOIC-14_3.9x8.7mm"}, {"pins": pins[:8]}) == (None, "")   # they disagree: left blank
+    assert D._pin_count_from({"name": "SOIC-14-16_3.9x9.9mm_P1.27mm"}, {"pins": pins[:8]}) == (None, "")  # 14 on 16 places
+    assert D._pin_count_from({"name": "HVSSOP-8-1EP_3x3mm_P0.65mm", "exposed_pad": {}}, {"pins": []})[0] == 8

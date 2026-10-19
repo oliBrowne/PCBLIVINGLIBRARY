@@ -122,8 +122,9 @@ def _settings(rules=None):
     try:                                              # [ai] / [agent.proof] provider and model (ecadlib.llm)
         from . import llm as LL
         s["model"] = LL.endpoint(rules if isinstance(rules, dict) else None, "proof", s["model"] if (got or {}).get("model") else None)["ref"]
-    except Exception:
-        pass
+    except Exception as e:                            # never a silent switch to another (billed) model
+        from . import fallbacks as FB
+        FB.note("[agent.proof] / [ai] model setting did not resolve", e, instead=f"model {s['model']!r}")
     s["fail_on"] = [s["fail_on"]] if isinstance(s["fail_on"], str) else list(s["fail_on"])
     return s
 

@@ -67,16 +67,19 @@ def _yes(ans, default=True):
 
 
 def ask_setup(existing=None, given=None, inp=input, out=print, interactive=True, rules=None, environ=None):
-    """The [setup] answers {tool, libs, workspace, sources}. existing: the current [setup]/[sources] of ecadlib.toml
-    (its values are the defaults); given: values from the command line (never asked). interactive=False: no questions,
-    defaults only. sources is the [sources] order to write, or None to leave it as it is."""
+    """The [setup] answers {tool, libs, workspace, sources, unofficial}. existing: the current [setup]/[sources]/
+    [providers] of ecadlib.toml (its values are the defaults); given: values from the command line (never asked).
+    interactive=False: no questions, defaults only. sources is the [sources] order to write, or None to leave it as it
+    is; unofficial is the [providers] unofficial answer (EasyEDA / JLCPCB search, off unless the person opts in), or
+    None when not asked."""
     existing, given = existing or {}, {k: v for k, v in (given or {}).items() if v not in (None, [], "")}
     st = dict(existing.get("setup") or {})
     cur_sources = list((existing.get("sources") or {}).get("order") or RU.DEFAULTS["sources"]["order"])
     ans = {"tool": given.get("tool") or st.get("tool") or "both",
            "libs": list(given.get("libs") or st.get("libs") or []),
            "workspace": given.get("workspace") or st.get("workspace") or "ecadlib_workspace",
-           "sources": list(given["sources"]) if given.get("sources") else None}
+           "sources": list(given["sources"]) if given.get("sources") else None,
+           "unofficial": given.get("unofficial")}
     keys = key_status(rules, environ)
     ds_need, ds_key = reader_key(rules, environ, keys)
     if interactive:
@@ -102,7 +105,11 @@ def ask_setup(existing=None, given=None, inp=input, out=print, interactive=True,
             a = inp(f"  Folder where ecadlib keeps your BOMs and the libraries it builds [{ans['workspace']}]: ").strip()
             ans["workspace"] = a or ans["workspace"]
         if ans["sources"] is None:
-            online = _yes(inp("  Look missing parts up online (KiCad library on gitlab.com, EasyEDA/LCSC)? [Y/n]: "))
+            online = _yes(inp("  Look missing parts up online (KiCad library on gitlab.com)? [Y/n]: "))
+            if online and "unofficial" not in given:
+                was = bool((existing.get("providers") or {}).get("unofficial", RU.DEFAULTS["providers"]["unofficial"]))
+                ans["unofficial"] = _yes(inp("  Also use EasyEDA/LCSC parts? They come from undocumented endpoints, not an "
+                                             f"official API; review them before use [{'Y/n' if was else 'y/N'}]: "), default=was)
             ds = _yes(inp(f"  Let a model read the datasheet for parts no library has? ({ds_need}) "
                           f"[{'Y/n' if ds_key else 'y/N'}]: "), default=ds_key)
             order = [s for s in cur_sources if (online or s not in ("kicad", "easyeda")) and (ds or s != "datasheet")]
@@ -117,6 +124,8 @@ def setup_raw(ans):
     raw = {"setup": {"tool": ans["tool"], "libs": [str(l) for l in ans["libs"]], "workspace": str(ans["workspace"])}}
     if ans.get("sources"):
         raw["sources"] = {"order": list(ans["sources"])}
+    if ans.get("unofficial") is not None:
+        raw["providers"] = {"unofficial": bool(ans["unofficial"])}
     return raw
 
 
@@ -387,8 +396,9 @@ def blockers(rows, rules=None, offline=False):
             from . import llm as LL
             ep = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")
             env = ep["key_env"] if ep["provider"] != "anthropic" and ep["key_env"] else env
-        except Exception:
-            pass
+        except Exception as e:
+            from . import fallbacks as FB
+            FB.note("[ai] / [datasheet] model setup did not resolve", e, instead=env)
         out.append((f"{len(set(nokey))} part(s) need the datasheet reader, but {env} is not set",
                     f"add it on the setup page (`ecadlib setup`) or with `ecadlib keys set {env}`, or take datasheet out of "
                     "[sources] order in ecadlib.toml"))

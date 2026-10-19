@@ -497,7 +497,7 @@ def test_ds16_cross_check_injection_text_in_review():
         rd = D.Reader(d, d, key=KEY, http=PdfHTTP({"https://a/ds.pdf": PDF}), log=None,
                       rules={"datasheet": {"cross_check": "always"}})
         r = rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "XYZ"))
-        assert r["cross_check"]["status"] == "agreed"
+        assert r["cross_check"]["status"] == "agreed", r["cross_check"]
         assert any("instruction-like" in x and "pitch 2 mm" in x for x in r["needs_review"]), r["needs_review"]
         assert "pitch 2 mm" in open(d + "/datasheet/TESTPART.review.md").read()
 

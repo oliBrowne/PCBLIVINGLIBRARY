@@ -1,11 +1,83 @@
 {
- "about": "Cases where KiCad's reference disagrees with the maker's datasheet, checked by hand against the datasheet text. A field listed here that fails against KiCad is scored as right (the report lists it as a reference erratum) when ours is what the datasheet says.",
+ "about": "Cases where KiCad's reference disagrees with the maker's datasheet, checked by hand against the datasheet text. A field listed here that fails against KiCad is scored as right (the report lists it as a reference erratum) when ours is what the datasheet says. A number under \"ours\" (e.g. the pitch) must match ours, or none of the case's errata apply: the other fields (pads, pin 1, courtyard) are excused only when we built the datasheet's package.",
  "cases": {
   "AH1806-W": {
    "symbol_names": {
-    "ours": [["2", "GND"], ["3", "OUTPUT"]],
+    "ours": [
+     [
+      "2",
+      "GND"
+     ],
+     [
+      "3",
+      "OUTPUT"
+     ]
+    ],
     "why": "Diodes AH1806 datasheet (AH1806.pdf) p1 pinout and p2 pin table: SC59 (the -W package, p5) pin 1 VDD, pin 2 GND, pin 3 OUTPUT. KiCad's Sensor_Magnetic:AH1806-W has 2 OUTPUT, 3 GND.",
     "checked": "2026-10-18"
+   }
+  },
+  "PCA9557BS": {
+   "pitch": {
+    "ours": 0.65,
+    "why": "NXP PCA9557.pdf Rev. 7 p2 ordering table: PCA9557BS is HVQFN16 SOT629-1; p20 Fig 25 SOT629-1: body 4 x 4 x 0.85 mm, e 0.65, Dh/Eh 1.95-2.25, b 0.23-0.38; p26 Fig 29 footprint: pitch 0.65, pad 0.30 x 1.10, solder land 2.0 x 2.0. KiCad's reference HVQFN-16-1EP_3x3mm_P0.5mm_EP1.5x1.5mm is the 3 x 3 mm 0.5 mm package, another variant.",
+    "checked": "2026-10-19"
+   },
+   "pads": {
+    "why": "NXP PCA9557.pdf Rev. 7 p2 ordering table: PCA9557BS is HVQFN16 SOT629-1; p20 Fig 25 SOT629-1: body 4 x 4 x 0.85 mm, e 0.65, Dh/Eh 1.95-2.25, b 0.23-0.38; p26 Fig 29 footprint: pitch 0.65, pad 0.30 x 1.10, solder land 2.0 x 2.0. KiCad's reference HVQFN-16-1EP_3x3mm_P0.5mm_EP1.5x1.5mm is the 3 x 3 mm 0.5 mm package, another variant.",
+    "checked": "2026-10-19"
+   },
+   "pin1": {
+    "why": "NXP PCA9557.pdf Rev. 7 p2 ordering table: PCA9557BS is HVQFN16 SOT629-1; p20 Fig 25 SOT629-1: body 4 x 4 x 0.85 mm, e 0.65, Dh/Eh 1.95-2.25, b 0.23-0.38; p26 Fig 29 footprint: pitch 0.65, pad 0.30 x 1.10, solder land 2.0 x 2.0. KiCad's reference HVQFN-16-1EP_3x3mm_P0.5mm_EP1.5x1.5mm is the 3 x 3 mm 0.5 mm package, another variant.",
+    "checked": "2026-10-19"
+   },
+   "courtyard": {
+    "why": "NXP PCA9557.pdf Rev. 7 p2 ordering table: PCA9557BS is HVQFN16 SOT629-1; p20 Fig 25 SOT629-1: body 4 x 4 x 0.85 mm, e 0.65, Dh/Eh 1.95-2.25, b 0.23-0.38; p26 Fig 29 footprint: pitch 0.65, pad 0.30 x 1.10, solder land 2.0 x 2.0. KiCad's reference HVQFN-16-1EP_3x3mm_P0.5mm_EP1.5x1.5mm is the 3 x 3 mm 0.5 mm package, another variant.",
+    "checked": "2026-10-19"
+   }
+  },
+  "27C256": {
+   "symbol_names": {
+    "ours": [
+     [
+      "11",
+      "O0"
+     ],
+     [
+      "12",
+      "O1"
+     ],
+     [
+      "13",
+      "O2"
+     ],
+     [
+      "15",
+      "O3"
+     ],
+     [
+      "16",
+      "O4"
+     ],
+     [
+      "17",
+      "O5"
+     ],
+     [
+      "18",
+      "O6"
+     ],
+     [
+      "19",
+      "O7"
+     ]
+    ],
+    "why": "Microchip/Atmel doc0014.pdf (AT27C256R) p2 pin table 'O0 - O7 Outputs' and the 28-lead PDIP diagram; the datasheet has no D0 or Q0. KiCad's Memory_EPROM:27C256 names them D0-D7.",
+    "checked": "2026-10-19"
+   },
+   "courtyard": {
+    "why": "doc0014.pdf p11 28P6 PDIP: D 36.703-37.338 mm, E1 13.462-13.970 mm (our body); KiCad's DIP-28_W15.24mm courtyard is drawn around a generic, shorter DIP-28 body.",
+    "checked": "2026-10-19"
    }
   }
  }

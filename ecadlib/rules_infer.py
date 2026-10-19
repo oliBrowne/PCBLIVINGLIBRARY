@@ -1210,6 +1210,9 @@ def main(argv=None, inp=input, environ=None):
     ap.add_argument("--lib", action="append", default=[], metavar="DIR",
                     help="your library folder (repeatable): the default --lib of every command, and scanned for conventions")
     ap.add_argument("--workspace", help="workspace folder for uploads, plans and outputs (default: asked, else ecadlib_workspace)")
+    ap.add_argument("--unofficial", action=argparse.BooleanOptionalAction, default=None,
+                    help="use (or not) the unofficial EasyEDA/LCSC and JLCPCB search endpoints ([providers] unofficial; "
+                         "default: asked, else off)")
     ap.add_argument("--sources", help="part sources in order, comma-separated (kicad,easyeda,standard,datasheet; default: asked, else all)")
     ap.add_argument("--no-doctor", action="store_true", help="do not run `ecadlib doctor` at the end")
     a = ap.parse_args(argv)
@@ -1225,7 +1228,8 @@ def main(argv=None, inp=input, environ=None):
         old_raw = RU.parse_text(out.read_text(encoding="utf-8"), out.name) if out.is_file() else {}
     except (RU.RulesError, OSError) as e:
         old_raw, broken = {}, e
-    ans = FR.ask_setup(old_raw, {"tool": a.tool, "libs": a.lib, "workspace": a.workspace, "sources": sources}, inp, print,
+    ans = FR.ask_setup(old_raw, {"tool": a.tool, "libs": a.lib, "workspace": a.workspace, "sources": sources,
+                                "unofficial": a.unofficial}, inp, print,
                        interactive and not a.yes and not a.json, environ=environ)
     base = out.resolve().parent                          # [setup] paths are relative to the rules file's folder
     ans["libs"] = [l if Path(l).expanduser().is_absolute() or base == Path.cwd().resolve() else str(Path(l).resolve())

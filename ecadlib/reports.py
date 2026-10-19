@@ -275,9 +275,16 @@ def to_html(doc):
             f"<main>\n" + "\n".join(body) + "\n</main></body></html>\n")
 
 
-def write_review_files(items, out, bom="", details=()):
-    """<out>/review.md and <out>/review.html from the plan items; details: Markdown lines for the Details section."""
+def write_review_files(items, out, bom="", details=(), fallbacks=()):
+    """<out>/review.md and <out>/review.html from the plan items; details: Markdown lines for the Details section;
+    fallbacks: settings that failed and fell back to a default during the run (ecadlib.fallbacks), said first."""
     doc = review_doc(items, bom)
+    if fallbacks:
+        n = len(fallbacks)
+        doc["lead"].insert(1 if doc["lead"] else 0, f"**Warning: {n} {'setting' if n == 1 else 'settings'} fell back to a "
+                           "default during this run**, so the result may not follow your ecadlib.toml. See \"Settings "
+                           "that fell back to a default\" in Details.")
+        details = ["### Settings that fell back to a default", ""] + [f"- {f}" for f in fallbacks] + [""] + list(details)
     doc["details"] = [M.clean(x) for x in details]
     out = Path(out)
     (out / "review.md").write_text(to_md(doc), encoding="utf-8")

@@ -40,7 +40,7 @@ def golden_path(work, fa, nx, tls, first=True):
     if first:
         assert not any(work.iterdir()), "the golden path starts in an empty folder"
     rules = (work / "ecadlib.toml").read_text() if not first else None
-    out["init"] = E.ecadlib(work, "init", "--yes", env=env, check=first)
+    out["init"] = E.ecadlib(work, "init", "--yes", "--unofficial", env=env, check=first)
     assert (work / "ecadlib.toml").is_file()
     if not first:                  # init again: the rules file is never replaced without --force (a .proposed is written)
         assert out["init"].returncode in (0, 1) and (work / "ecadlib.toml").read_text() == rules, out["init"].stdout[-2000:]
@@ -90,7 +90,6 @@ def gp():
             steps = golden_path(root / "work", fa, nx, tls)
             _GP.update(root=root, work=root / "work", steps=steps, tls=tls, claude=list(fa.kinds),
                        uploads=dict(nx.uploads), releases=list(nx.releases), folders=list(nx.folders))
-            _GP["snapshot"] = E.snapshot(root / "work")
     return _GP
 
 
@@ -311,6 +310,7 @@ def test_mcp_server_over_stdio():
     (root / "ws" / "uploads").mkdir(parents=True)
     E.seed_cache(root / "ws" / "http_cache")
     E.write_parts_xlsx(root / "ws" / "uploads" / "parts.xlsx")
+    (root / "ws" / "ecadlib.toml").write_text("[providers]\nunofficial = true\n")   # the EasyEDA fixture part
     m = E.MCPClient(root, "--workspace", "ws", "--offline")
     try:
         r = m.send("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
@@ -350,24 +350,31 @@ def test_second_run_changes_nothing():
     (which parts it skipped), review.md/.csv (written before the --allow on run 1, so now up to date), init's
     proposal (ecadlib.toml itself is kept) and the ledger (the part released by --allow gets its revision 1). Run 3 changes nothing but the log: no duplicate parts, no file rewritten
     with a new timestamp, no reordered plan.json."""
-    g = gp()
-    snaps = [g["snapshot"]]
+    # its own folder: re-running the path on the shared gp() folder would change what the other tests read, and make
+    # run 1 here whatever state an earlier test in this process left behind
+    root = _tmp("ecadlib-e2e-again-")
+    tls = E.self_signed(root)
+    work = root / "work"
+    with E.FakeAnthropic() as fa, E.FakeNexar(tls) as nx:
+        golden_path(work, fa, nx, tls)
+        claude, releases = list(fa.kinds), list(nx.releases)
+    snaps = [E.snapshot(work)]
     for _ in range(2):
-        with E.FakeAnthropic() as fa, E.FakeNexar(g["tls"]) as nx:
-            golden_path(g["work"], fa, nx, g["tls"], first=False)
-            snaps.append(E.snapshot(g["work"]))
+        with E.FakeAnthropic() as fa, E.FakeNexar(tls) as nx:
+            golden_path(work, fa, nx, tls, first=False)
+            snaps.append(E.snapshot(work))
             # the datasheet answer for DSPART16 is reused; parts still held (no answer last time) are asked again
-            assert ("datasheet", "DSPART16") not in fa.kinds and set(fa.kinds) <= set(g["claude"]), (fa.kinds, g["claude"])
-            assert len(nx.releases) == len(g["releases"]), "the push releases the same parts again (FakeNexar has none)"
+            assert ("datasheet", "DSPART16") not in fa.kinds and set(fa.kinds) <= set(claude), (fa.kinds, claude)
+            assert len(nx.releases) == len(releases), "the push releases the same parts again (FakeNexar has none)"
     diff = lambda a, b: sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
     d12, d23 = diff(snaps[0], snaps[1]), diff(snaps[1], snaps[2])
     assert not [k for k in d12 if not (LOGS.search(k) or REFRESHED.search(k))], d12
     assert not [k for k in d23 if not LOGS.search(k)], d23
-    names = [i["name"] for i in json.loads((g["work"] / "lib" / "parts" / "plan.json").read_text())]
+    names = [i["name"] for i in json.loads((work / "lib" / "parts" / "plan.json").read_text())]
     assert len(names) == len(set(names)) == 8, names
-    rows = list(csv.DictReader(open(g["work"] / "altium" / "e2e.csv", encoding="utf-8-sig")))
+    rows = list(csv.DictReader(open(work / "altium" / "e2e.csv", encoding="utf-8-sig")))
     assert len(rows) == len({tuple(sorted(r.items())) for r in rows}) == 6, rows
-    tables = (g["work"] / "kicad" / "sym-lib-table").read_text()
+    tables = (work / "kicad" / "sym-lib-table").read_text()
     assert tables.count("(lib ") == 4, tables                  # 3 libraries + the database library, once each
 
 

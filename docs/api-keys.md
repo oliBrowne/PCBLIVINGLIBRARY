@@ -68,7 +68,8 @@ guide is priced, and the model is asked only after you click.
 ```toml
 [datasheet]
 ask_above_usd = 1.0     # ask twice above this (the dialogs always show the cost and wait for a click)
-max_cost_usd = 0        # a hard cap: the command line refuses a run above it unless --yes; the dialogs ask twice
+max_cost_usd = 10       # a hard cap per run (default $10; 0 = no cap): the command line refuses a run above it,
+                        # even with --yes; --max-cost-usd N changes it for one run. A cap you set also makes the dialogs ask twice
 ```
 
 On the command line, `ecadlib datasheet estimate PLAN` prints the same estimate and sends nothing, and
