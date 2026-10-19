@@ -75,7 +75,7 @@ DEFAULTS = {
         "resistor": "us",                      # us: zigzag (ANSI/IEEE 315) | iec: box (IEC 60617)
         "split_pins": 0,                       # parts with more pins than this become multi-part (0 = never)
         "unit_pins": 48,                       # most pins in one signal part when split
-        "stack_power": "stack",                # stack | hide | none (same-name power pins)
+        "stack_power": "none",                 # none (every pin its own end) | stack | hide (same-name power pins)
         "pin_length": 300,                     # mil
         "grid": 100,                           # mil (pin pitch, body edges)
         "order": ["power", "analog", "reset", "clock", "debug", "usb", "adc", "other_in", "other", "power_out", "uart", "i2c",
@@ -847,7 +847,7 @@ HELP = {
     "symbols.power_side": "top: power pins on top, ground on the bottom | left: top and bottom empty, power at the top of the left side, ground at its bottom",
     "symbols.resistor": "us: zigzag resistor symbol (ANSI, default) | iec: box resistor symbol (IEC 60617)",
     "symbols.split_pins": "more pins than this: a multi-part symbol (power part + signal parts); 0 = one part always",
-    "symbols.stack_power": "stack (one pin shown, the rest on top of it) | hide (the rest hidden, tied by name) | none",
+    "symbols.stack_power": "none (default: every pin its own end) | stack (one pin shown, the rest on top of it) | hide (the rest hidden, tied by name)",
     "agent": "GitHub / GitLab settings for `ecadlib upkeep --github | --gitlab` (the library agent that also used them is "
              "parked on a branch); [agent.proof] is the visual check's model",
     "agent.github_token_env": "name of the environment variable with the GitHub token; the token itself never goes in this file",

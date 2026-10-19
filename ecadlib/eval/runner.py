@@ -419,8 +419,9 @@ def _symbol_pins(path):
     return list(pins.items())
 
 
-def _cost(case_used, model):
-    """-> tokens_in, tokens_out, usd, how."""
+def _cost(case_used, model, live=False):
+    """-> tokens_in, tokens_out, usd, how. live: the run could send, so a part with no answer cost nothing (a request
+    the API refused or errored is not billed, and one never sent costs nothing); its estimate is only mentioned."""
     if not case_used:
         return 0, 0, 0.0, ""
     u, est = case_used.get("usage"), case_used.get("estimate") or {}
@@ -449,12 +450,15 @@ def _cost(case_used, model):
             cost = None if cost is None or c is None else round(cost + c, 6)
             how += " + cross-check read"
         return tin, tout, cost, how
+    if live:
+        return 0, 0, 0.0, "no answer: nothing billed" + (f" (estimate was ${est['usd']:.2f})" if est.get("usd") else "")
     return est.get("input_tokens", 0), est.get("output_tokens", 0), est.get("usd"), f"estimate ({est.get('how', '')})"
 
 
 # The part never reached the model: no datasheet link, or none gave a PDF (here or to the API's fetcher). The benchmark
 # reports these apart: a dead maker link is not a misread drawing.
-NO_DATASHEET = re.compile(r"no datasheet (link gave a PDF|URL known)|could not (be )?(fetch|download)|unable to (fetch|download)", re.I)
+NO_DATASHEET = re.compile(r"no datasheet (link gave a PDF|URL known)|could not (be )?(fetch|download)|unable to (fetch|download)"
+                          r"|timed out while trying to download|unable to connect to the remote server", re.I)
 
 
 def no_datasheet(row):
@@ -588,7 +592,7 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         sym_pins = _symbol_pins(lib / sf) if sf and (lib / sf).exists() else None
         sc = S.score(mine, data["references"][c["footprint"]], sym_pins, c.get("pins"), tol)
         errata = apply_errata(sc, sym_pins, erratas.get(c["mpn"]), c.get("pins"), tol)
-        tin, tout, cost, how = _cost(reader.used.get(c["mpn"]), reader.model)
+        tin, tout, cost, how = _cost(reader.used.get(c["mpn"]), reader.model, not reader.estimate_only)
         src = ((it.get("source") or {}).get("footprint") or "none").split(":")[0]
         used = reader.used.get(c["mpn"]) or {}
         ml = S.maker_land(mine, used.get("spec")) if src == "datasheet" else None

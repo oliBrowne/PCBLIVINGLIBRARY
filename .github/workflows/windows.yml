@@ -34,10 +34,20 @@ jobs:
         shell: pwsh
         run: |
           choco install poppler -y --no-progress
+          $bin = $null
           if (-not (Get-Command pdftoppm -ErrorAction SilentlyContinue)) {
-            $bin = (Get-ChildItem "$env:ChocolateyInstall\lib\poppler" -Recurse -Filter pdftoppm.exe | Select-Object -First 1).DirectoryName
-            $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+            $bin = (Get-ChildItem "$env:ChocolateyInstall\lib\poppler" -Recurse -Filter pdftoppm.exe -ErrorAction SilentlyContinue | Select-Object -First 1).DirectoryName
           }
+          if (-not $bin -and -not (Get-Command pdftoppm -ErrorAction SilentlyContinue)) {
+            # community.chocolatey.org can be down (503): take the same poppler build from its GitHub release instead
+            $zip = "$env:RUNNER_TEMP\poppler.zip"
+            Invoke-WebRequest -Uri "https://github.com/oschwartz10612/poppler-windows/releases/download/v24.08.0-0/Release-24.08.0-0.zip" -OutFile $zip
+            Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\poppler"
+            $bin = (Get-ChildItem "$env:RUNNER_TEMP\poppler" -Recurse -Filter pdftoppm.exe | Select-Object -First 1).DirectoryName
+          }
+          if ($bin) { $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH }
+          elseif (-not (Get-Command pdftoppm -ErrorAction SilentlyContinue)) { throw "pdftoppm not installed" }
+          $global:LASTEXITCODE = 0   # choco's failed exit code would otherwise fail the step after the fallback worked
       - name: Run all tests (offline; no secrets needed)
         env:
           SOURCE_DATE_EPOCH: "1791936000"

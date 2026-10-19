@@ -14,6 +14,9 @@ FTDI = SL.pins_from_csv(FIX / "ft232rl_ssop28.csv")
 ORIENT_SIDE = {0: "right", 1: "top", 2: "left", 3: "bottom"}
 
 
+STACK = {"symbols": dict(RU.DEFAULTS["symbols"], stack_power="stack")}   # the stacking tests (default is "none")
+
+
 def _groups(pins, rules=None, split=None):
     out = {}
     for p in SL.arrange_pins(pins, rules, split):
@@ -68,7 +71,7 @@ def test_classify_names():
 
 
 def test_stm32_lqfp100_grouping_and_order():
-    g = _groups(STM)
+    g = _groups(STM, STACK)
     assert set(g) == {"power", "analog", "ground", "reset", "clock", "ports", "nc"}, set(g)
     assert [p["name"] for p in g["reset"]] == ["NRST", "BOOT0"] and [p["name"] for p in g["clock"]] == ["OSC_IN", "OSC_OUT"]
     ports = [SL.port_of(p["name"]) for p in g["ports"]]
@@ -86,7 +89,7 @@ def test_stm32_lqfp100_grouping_and_order():
 
 
 def test_stm32_symbol_reads_back_altium_and_kicad():
-    sym = AL.ic_symbol("STM32F103VET6", STM, "MCU", footprint="LQFP-100_14x14mm_P0.5mm")   # 100 pins: grouped by default
+    sym = AL.ic_symbol("STM32F103VET6", STM, "MCU", footprint="LQFP-100_14x14mm_P0.5mm", rules=STACK)   # grouped by default
     _assert_tidy(sym)
     pins = _pins(sym)
     assert len(pins) == 100 and "parts" not in sym
@@ -152,7 +155,7 @@ def test_split_into_parts():
 
 
 def test_esp32_module():
-    g = _groups(ESP)
+    g = _groups(ESP, STACK)
     assert [p["name"] for p in g["reset"]] == ["EN"] and [p["name"] for p in g["debug"]] == ["RXD0", "TXD0"]
     assert [p["name"] for p in g["adc"]] == ["SENSOR_VP", "SENSOR_VN"] and [p["name"] for p in g["power"]] == ["3V3"]
     io = [SL.port_of(p["name"])[1] for p in g["ports"]]
@@ -230,7 +233,7 @@ def test_rules_symbols_section():
         except RU.RulesError as e:
             assert msg in str(e), (bad, str(e))
     text = RU.dumps(RU.DEFAULTS, only={f"symbols.{k}" for k in RU.DEFAULTS["symbols"]})
-    assert "[symbols]" in text and "layout_pins = 1" in text and 'power_side = "top"' in text and "stack_power = \"stack\"" in text
+    assert "[symbols]" in text and "layout_pins = 1" in text and 'power_side = "top"' in text and "stack_power = \"none\"" in text
 
 
 def test_relayout_keeps_fields():
@@ -436,3 +439,12 @@ def test_dual_op_amp_pins_go_one_channel_at_a_time():
     assert left == ["1IN-", "1IN+", "2IN-", "2IN+"], left
     bus = [{"name": f"{s}{i}", "num": str(n), "type": "bidirectional"} for n, (s, i) in enumerate([(s, i) for s in "AD" for i in range(4)])]
     assert [p["name"] for p in SL.arrange_pins(bus)][:4] == ["A0", "A1", "A2", "A3"]
+
+
+def test_power_pins_get_their_own_ends_by_default():
+    # Oliver 2026-10-19: the stacked VDD_1..3 drew an Altium junction dot on the STM32; every pin now has its own end
+    sym = AL.ic_symbol("STM32F103VET6", STM, "MCU", footprint="LQFP-100_14x14mm_P0.5mm")
+    _assert_tidy(sym)
+    ends = {(x, y) for _, p, side, x, y, L, *_ in _pins(sym)}
+    assert len(ends) == 100 and all(q.get("show_name", True) and q.get("show_num", True) for _, q, *_ in _pins(sym))
+    assert not any(p.get("stacked_on") for p in SL.arrange_pins(STM))
