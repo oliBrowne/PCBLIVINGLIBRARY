@@ -674,7 +674,10 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     plan_dir, lib = plan.parent, kname(name)
     from .rules import resolve
     rules = resolve(rules, plan_dir)
-    items = sorted(json.loads(plan.read_text(encoding="utf-8")), key=lambda i: kname(i["name"]))
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    from . import change_gate as CG          # change control (#105): a hand edit since the last writer is settled
+    CG.publish_guard(plan, items, "kicad", rules=rules, log=log)   # first; a held change exports the released revision
+    items = sorted(items, key=lambda i: kname(i["name"]))
     pretty, shapes = out / f"{lib}.pretty", out / f"{lib}.3dshapes"
     out.mkdir(parents=True, exist_ok=True)
     pretty.mkdir(exist_ok=True)
@@ -860,6 +863,13 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     rep["footprints"] = {k: fps[k] for k in sorted(fps)}
     rep["symbols"] = len(symbols)
     rep["written"] = dict(sorted(rep["written"].items()))
+    for it in items:
+        ch = it.get("change") or {}
+        if ch.get("state") == "held":
+            rep["warnings"].append(f"{it['name']}: a change is held for approval ({ch.get('summary')}); the released "
+                                   f"revision r{ch.get('base')} is exported (ecadlib part show {plan} {it['name']})")
+    exported = {r["part"] for r in rep["parts"] if r.get("symbol") or r.get("footprint")}
+    CG.record_publish(plan_dir, items, f"kicad:{CG.project_key(plan_dir, out)}", ok=lambda it: it["name"] in exported)
     body = json.dumps(rep, indent=2) + "\n"
     if not report.is_file() or report.read_text(encoding="utf-8") != body:
         report.write_text(body, encoding="utf-8")

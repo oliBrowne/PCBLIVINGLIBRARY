@@ -84,6 +84,7 @@ CASES = [
     (["agent", "--workspace", "{out}/ws", "status"], (0, 1)),
     (["queue", "--workspace", "{out}/ws", "list"], (0,)),
     (["where-used", "--projects", "{in}", "-o", "{out}/where"], (0, 1)),
+    (["part", "status", "{out}/lib/plan.json"], (0, 1)),
     (["visual-check", "{out}/fp.pretty/R_0603_1608Metric.kicad_mod", "--render-only", "-o", "{out}/vc",
       "--workspace", "{out}/ws"], (0, 1, 2)),
     (["doctor", "--workspace", "{out}/ws", "--lib", "{in}/lib"], (0, 1)),

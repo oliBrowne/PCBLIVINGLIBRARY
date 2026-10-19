@@ -56,6 +56,9 @@ KINDS = {k.name: k for k in (
     Kind("rules", 1, ["ecadlib.toml", "ecadlib_rules.json"], where="key", note="library rules"),
     Kind("approvals_policy", 1, ["approvals.json"], where="key", note="sign-off policy next to a plan"),
     Kind("lock", 1, ["library.lock.json"], where="key", note="exact inputs per part (ecadlib rebuild)"),
+    Kind("ledger", 1, ["library.ledger.jsonl"],
+         note="change control: append-only release history per part (each line also carries schema_version)"),
+    Kind("usage", 1, ["library.usage.json"], where="key", note="change control: which projects use which part revision"),
 )}
 
 

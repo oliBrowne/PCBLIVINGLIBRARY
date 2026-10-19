@@ -1212,6 +1212,7 @@ function renderParts() {
   const sum = { ready: c.ready, held: c.held, awaiting_approval: c.waiting, parts: c.parts };
   const r9 = [];
   if (c.cross_check_disagreed) r9.push(`<span class="pill s-warn">cross-check: ${c.cross_check_disagreed} disagree</span>`);
+  if (c.changes_held) r9.push(`<span class="pill s-warn">updates to released parts held: ${c.changes_held}</span>`);
   if (c.parity_mismatch) r9.push(`<span class="pill s-warn">KiCad / Altium: ${c.parity_mismatch} differ</span>`);
   else if (parts.parts.some(p => p.parity.result === "match")) r9.push(`<span class="pill s-ok">KiCad / Altium: all compared parts match</span>`);
   r9.push(cost.answers ? `<span class="pill s-info">datasheet reads so far: ${usd(cost.usd)} for ${cost.answers} read(s)${cost.models.length ? " · " + esc(cost.models.join(", ")) : ""}</span>`
@@ -1233,15 +1234,16 @@ function card(p, lib, appr) {
   const st = effective(p), d = pending.get(p.part);
   const tags = [];
   if (p.allowed) tags.push('<span class="pill s-info">released anyway</span>');
+  if (p.change) tags.push(`<span class="pill s-warn">update held (r${esc(p.change.base)})</span>`);
   if (p.cross_check) tags.push(`<span class="pill ${p.cross_check.status === "disagreed" ? "s-warn" : p.cross_check.status === "agreed" ? "s-ok" : "s-off"}">cross-check: ${esc(p.cross_check.status === "disagreed" ? "disagrees" : p.cross_check.status)}</span>`);
   if (p.parity.result) tags.push(`<span class="pill ${p.parity.result === "match" ? "s-ok" : "s-warn"}">KiCad / Altium ${p.parity.result === "match" ? "match" : "differ"}</span>`);
   if (p.cost) tags.push(`<span class="pill s-off">${usd(p.cost.usd)}${p.cost.models.length ? " · " + esc(p.cost.models[0]) : ""}</span>`);
   if (p.approval && p.approval.approved_by && p.approval.approved_by.length) tags.push(`<span class="pill s-ok">approved by ${esc(p.approval.approved_by.join(", "))}</span>`);
   const why = d ? `<div class="pwhy">${esc(d.what)}, sending in a moment… <button class="small" data-undo="${esc(p.part)}">Undo</button></div>`
     : st === "held" && p.reasons.length ? `<div class="pwhy">${esc(p.reasons[0].text)}${p.reasons.length > 1 ? ` <span class="muted">(+${p.reasons.length - 1} more)</span>` : ""}</div>`
-    : st === "awaiting_approval" && p.reasons.length ? `<div class="pwhy">${esc(p.reasons[0].text)}</div>` : "";
-  const acts = (st === "held" ? `<button class="small" data-fix="${esc(p.part)}">${lib ? "Fix…" : "Why?"}</button>` : "") +
-    (appr && !d && (st === "ready" || st === "awaiting_approval") ? `<button class="small" data-approve="${esc(p.part)}">Approve</button><button class="small" data-reject="${esc(p.part)}">Reject…</button>` : "");
+    : (st === "awaiting_approval" || p.change) && p.reasons.length ? `<div class="pwhy">${esc(p.reasons[0].text)}</div>` : "";
+  const acts = (p.change && !d ? `<button class="small" data-openp="${esc(p.part)}">${appr ? "Review update…" : "See update"}</button>` : "") + (st === "held" ? `<button class="small" data-fix="${esc(p.part)}">${lib ? "Fix…" : "Why?"}</button>` : "") +
+    (appr && !d && !p.change && (st === "ready" || st === "awaiting_approval") ? `<button class="small" data-approve="${esc(p.part)}">Approve</button><button class="small" data-reject="${esc(p.part)}">Reject…</button>` : "");
   return `<li class="pcard${popen === p.part ? " sel" : ""}${d ? " pending" : ""}" data-part="${esc(p.part)}">
     <div class="thumb${p.picture ? "" : " none"}" aria-hidden="true">${p.picture || (p.footprint.found ? "" : "no<br>footprint")}</div>
     <div class="pmain"><button class="pname" data-openp="${esc(p.part)}" aria-label="${esc(p.part)}, ${esc(WORD[st] || st)}: open details">${esc(p.part)}</button>
@@ -1277,11 +1279,13 @@ function showPanel(p, focus = true) {
   if (url) acts.push(`<a class="small" href="${esc(url)}${p.datasheet.page ? "#page=" + encodeURIComponent(p.datasheet.page) : ""}" target="_blank" rel="noopener noreferrer" id="pdslink">Open the datasheet${p.datasheet.page ? ` (page ${esc(p.datasheet.page)})` : ""}</a>`);
   if (lib && st === "held" && !p.allowed) acts.push(`<button data-allow="${esc(p.part)}">Release anyway (I checked it)</button>`);
   if (lib && p.allowed) acts.push(`<button data-unallow="${esc(p.part)}">Hold it again</button>`);
-  if (appr && (st === "ready" || st === "awaiting_approval") && !pending.has(p.part)) acts.push(`<button class="primary" data-approve="${esc(p.part)}">Approve</button><button data-reject="${esc(p.part)}">Reject…</button>`);
+  if (appr && !p.change && (st === "ready" || st === "awaiting_approval") && !pending.has(p.part)) acts.push(`<button class="primary" data-approve="${esc(p.part)}">Approve</button><button data-reject="${esc(p.part)}">Reject…</button>`);
   $("#pbody").innerHTML = `${p.picture ? `<div class="bigpic" aria-label="Footprint top view">${p.picture.replace(/width="\d+" height="\d+"/, "")}</div>` : ""}
     ${reasons ? `<h3>${st === "held" ? "Why it is held" : "What it waits for"}</h3>${reasons}` : st === "ready" ? `<p>This part passed every check and is ready for Altium${p.allowed ? " (released anyway by a person)" : ""}.</p>` : ""}
     ${acts.length ? `<div class="pactions">${acts.join("")}</div>` : ""}
     <div id="perr"></div>
+    ${changeBlock(p, appr)}
+    <h3>Revisions</h3><div id="phist" class="small muted">Loading the part's history…</div>
     ${cc ? `<h3>Cross-check: ${esc(cc.label)}</h3>${ccRows || `<div class="small">${esc(cc.summary || "")}</div>`}` : ""}
     ${asmHtml}
     <h3>KiCad and Altium</h3><div class="small">${par.result === "match" ? '<span class="pill s-ok">match</span> The KiCad footprint and the Altium files read back the same.' : par.result === "mismatch" ? '<span class="pill s-warn">differ</span> Both values are below.' : '<span class="muted">Not compared yet: compared once both files exist.</span>'}</div>${parRows}
@@ -1292,11 +1296,68 @@ function showPanel(p, focus = true) {
       <dt>Datasheet</dt><dd>${url ? dsLink(p.datasheet.page, url.replace(/^https:\/\//, "")) : "no link"}</dd>
       <dt>Datasheet reads</dt><dd>${p.cost ? `${usd(p.cost.usd)} for ${p.cost.answers} read(s)${p.cost.models.length ? " · " + esc(p.cost.models.join(", ")) : ""}` : "none ($0)"}</dd></dl>
     ${p.tried.length ? `<details style="margin-top:10px"><summary class="muted small">What ecadlib tried (${p.tried.length})</summary><ul class="why small">${p.tried.map(t => `<li>${esc(t)}</li>`).join("")}</ul></details>` : ""}`;
+  loadPartHistory(p.part, appr);
   const panel = $("#panel");
   if (!panel.classList.contains("open")) panel.returnFocus = document.activeElement;
   panel.classList.add("open");
   document.querySelectorAll("#plist .pcard").forEach(li => li.classList.toggle("sel", li.dataset.part === p.part));
   if (focus) panel.focus({ preventScroll: true });
+}
+// ---- change control: a held update to a released part, and the part's revisions (ecadlib.change_gate)
+const CLASS_PILL = { identity: "s-warn", electrical: "s-warn", "geometry-major": "s-warn", "geometry-minor": "s-info", cosmetic: "s-off" };
+function changeRows(list) {
+  return `<div class="scroll"><table class="vs"><thead><tr><th>Kind</th><th>What changed</th></tr></thead><tbody>` +
+    list.map(c => `<tr><td><span class="pill ${CLASS_PILL[c.class] || "s-info"}">${esc(c.class)}</span></td><td>${esc(c.text)}</td></tr>`).join("") + "</tbody></table></div>";
+}
+function changeBlock(p, appr) {
+  const c = p.change; if (!c) return "";
+  const n = c.changes ? c.changes.length : 0;
+  return `<h3>Held update to revision ${esc(c.base)}</h3>
+    <p class="small">${esc(c.writer ? `Proposed by ${c.writer}` : "Proposed")}${c.proposed_at ? ` on ${esc(c.proposed_at.slice(0, 16).replace("T", " "))}` : ""}. The released part stays as it is until this is approved.${c.approvals && c.approvals.length ? ` Approved so far by ${esc(c.approvals.join(", "))}.` : ""}${c.rejected_by ? ` Rejected before by ${esc(c.rejected_by)}.` : ""}${c.refused ? ` The last approval was not applied: ${esc(c.refused)}` : ""}</p>
+    ${n ? changeRows(c.changes.slice(0, 200)) + (n > 200 ? `<div class="muted small">and ${n - 200} more</div>` : "") : ""}
+    ${c.used_in && c.used_in.length ? `<p class="small">Used in: ${esc(c.used_in.join(", "))}</p>` : ""}
+    ${appr ? `<div class="pactions"><button class="primary" data-chg="approve" data-part="${esc(p.part)}">Approve the update</button><button data-chg="reject" data-part="${esc(p.part)}">Keep the released part (reject)…</button></div>` : ""}`;
+}
+async function loadPartHistory(part, appr) {
+  const box = () => popen === part && $("#phist");
+  try {
+    const r = await api("/api/change/history", { bom: current.bom, part });
+    if (!box()) return;
+    const rows = r.history.filter(e => e.event !== "approve");
+    if (!rows.length) { box().textContent = "Not released yet: the first revision is recorded when the part passes the release check."; return; }
+    const what = e => e.event === "publish" ? `published r${e.revision} to ${e.target}` : e.event === "hold" ? "update held" : e.event === "reject" ? "update rejected" : e.event === "refused" ? "approval refused by the release check"
+      : `r${e.revision} ${e.event === "revert" ? "reverted" : e.decision || "released"}`;
+    box().classList.remove("muted");
+    box().innerHTML = `<div class="scroll"><table class="vs"><thead><tr><th>When</th><th>What</th><th>Who</th><th></th></tr></thead><tbody>` +
+      rows.slice(0, 50).map(e => `<tr><td>${esc((e.at || "").slice(0, 16).replace("T", " "))}</td><td>${esc(what(e))}${e.reason ? `<div class="muted">${esc(e.reason)}</div>` : ""}${e.changes && e.changes.length ? `<details><summary class="muted">${e.changes.length} change(s)</summary>${changeRows(e.changes)}</details>` : ""}</td>` +
+        `<td>${esc(e.by || e.writer || "")}</td><td>${appr && e.revision && (e.event === "release" || e.event === "revert") && e.revision !== r.revision ? `<button class="small" data-revert="${esc(e.revision)}" data-part="${esc(part)}">Release r${esc(e.revision)} again…</button>` : e.revision === r.revision && e.event !== "publish" ? '<span class="pill s-ok">released now</span>' : ""}</td></tr>`).join("") + "</tbody></table></div>";
+  } catch (err) { if (box()) box().textContent = `Could not read the history: ${err.message}`; }
+}
+async function changeDecide(part, decision) {
+  const who = signer(); if (!who) return;
+  let comment = "";
+  if (decision === "reject") { comment = prompt(`Why keep the released ${part}? (required)`) || ""; if (!comment.trim()) return; }
+  else comment = prompt(`Approve the update to ${part}. A note for the history (optional):`, "") ?? null;
+  if (comment === null) return;
+  const role = session.team ? $("#signas").value || null : $("#signrole").value.trim() || null;
+  try {
+    const r = await api("/api/change/decide", session.team ? { bom: current.bom, part, decision, role, comment } : { bom: current.bom, part, decision, user: who, role, comment });
+    const res = r.results.find(x => x.part === part) || r.results[0] || {};
+    toast(decision === "reject" ? `${part}: update rejected, the released part is kept.`
+      : res.result === "approval recorded" ? `${part}: approval recorded (${res.approvals} of ${res.needed}).` : `${part}: update approved${res.revision ? `, now revision ${res.revision}` : ""}.`);
+    await loadParts(); loadStatus().catch(() => {}); const p = findPart(part); if (p && popen === part) showPanel(p, false);
+  } catch (err) { banner($("#perr"), err.message); }
+}
+async function revertTo(part, revision) {
+  const who = signer(); if (!who) return;
+  const comment = prompt(`Release revision ${revision} of ${part} again? It becomes a new revision. Why:`, "");
+  if (comment === null) return;
+  try {
+    const r = await api("/api/change/revert", session.team ? { bom: current.bom, part, revision, comment } : { bom: current.bom, part, revision, user: who, comment });
+    const res = r.results.find(x => x.part === part) || {};
+    toast(`${part}: revision ${revision} released again as revision ${res.revision}.`);
+    await loadParts(); const p = findPart(part); if (p && popen === part) showPanel(p, false);
+  } catch (err) { banner($("#perr"), err.message); }
 }
 function closePanel() {
   const panel = $("#panel"); if (!panel.classList.contains("open")) return;
@@ -1344,6 +1405,8 @@ async function partClick(e) {
   if (d.pf !== undefined) { pfilter = d.pf; renderParts(); const n = $(`#libout [data-pf="${CSS.escape(pfilter)}"]`); if (n) n.focus(); return; }
   if (d.undo) return undoPending(d.undo);
   if (d.pick) return openPick(d.pick);
+  if (d.chg) return changeDecide(d.part, d.chg);
+  if (d.revert) return revertTo(d.part, Number(d.revert));
   if (d.approve || d.reject) return decide(d.approve || d.reject, d.approve ? "approve" : "reject", b);
   if (d.allow || d.unallow) return release(d.allow || d.unallow, !!d.allow);
 }

@@ -184,10 +184,25 @@ def test_update_reconverts_changed_parts():
         mpath, out = Path(d) / "out" / "manifest.json", Path(d) / "out"
         old_sha = man["entries"]["footprint:USB_C_16P"]["output_sha256"]
         fake = FakeGitLab(upstream_now(USB2, REG))
-        code = run_main(["check-kicad", str(mpath), "--update", "--offline", "--cache", str(Path(d) / "cache"), "-o", str(Path(d) / "r")], fake)
+        pcb = out / "PcbLib" / "USB_C_16P.PcbLib"
+        before = pcb.read_bytes()
+        upd = ["check-kicad", str(mpath), "--update", "--offline", "--cache", str(Path(d) / "cache"), "-o", str(Path(d) / "r")]
+        code = run_main(upd, fake)
         assert code == 1
         rows = list(csv.DictReader(open(Path(d) / "r.csv", encoding="utf-8-sig")))
-        assert [(r["entry"], r["status"], r["update"]) for r in rows] == [("footprint:USB_C_16P", "changed", "reconverted")], rows
+        # change control (#105): a pad removed upstream is an electrical change to a released part, so it is held: the
+        # released file and its manifest entry stay, and the check keeps reporting the change until a person decides
+        assert [(r["entry"], r["status"]) for r in rows] == [("footprint:USB_C_16P", "changed")], rows
+        assert rows[0]["update"].startswith("held: change to released") and "pad B12 removed" in rows[0]["update"], rows
+        assert pcb.read_bytes() == before
+        assert json.loads(mpath.read_text())["entries"]["footprint:USB_C_16P"]["output_sha256"] == old_sha
+        from ecadlib import change_cli as CC, ledger as LG
+        lg = LG.Ledger(out)
+        [prop] = lg.proposals()
+        assert prop["writer"] == "upstream-update" and prop["classes"].get("electrical"), prop["classes"]
+        assert run_main(upd, fake) == 1 and len([e for e in LG.Ledger(out).lines() if e["event"] == "hold"]) == 1
+        [res] = CC.approve(out, [prop["part"]], who="Ann <ann@example.com>", comment="B12 is gone in the new drawing")
+        assert res["result"] == "released" and res["revision"] == 2, res
         new = json.loads(mpath.read_text())["entries"]["footprint:USB_C_16P"]
         assert new["sources"][0]["blob_id"] == U.digests(USB2)[1] and new["output_sha256"] != old_sha
         assert len(new["sources"][0]["summary"]["pads"]) == 21

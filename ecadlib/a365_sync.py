@@ -504,9 +504,14 @@ def run(mode, plan, client, ws, state=None, prefer="workspace", folders=None, mo
     new, rows, new_state, fetch, status_of = sync(items, nodes, st, prefer=prefer if mode == "reconcile" else None, apply=apply,
                                        folders=folders, ws=ws, rules=rules)
     if apply:
+        from . import change_gate as CG        # change control (#105): workspace revisions are recorded, not held
+        gate = CG.Guard(plan.parent, "a365-pull", rules=rules, log=log)
+        gate.begin(items)
         if models:
             for it, n in fetch:
                 fetch_models(it, n, plan.parent, client, log)
+        gate.settle(new)
+        gate.baseline(new)
         plan.parent.mkdir(parents=True, exist_ok=True)
         if plan.exists() and new != items:
             bak = plan.with_name(plan.name + ".pre-a365")

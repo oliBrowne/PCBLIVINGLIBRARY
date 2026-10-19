@@ -848,7 +848,7 @@ def push_approved(workspace, rules=None, dry_run=False, queue=None, a365=None, e
         pairs = live
     t0 = time.time()
     results = A.push([p for _, p in pairs], client, url or "https://<workspace>", dry_run=dry_run,
-                     policy=load_policy(out), rules=rules) if pairs else []
+                     policy=load_policy(out), rules=rules, folder=out) if pairs else []
     if pairs and not dry_run:
         A.record_push(out, t0, results)                 # the push step of the agent BOM's run (timing.jsonl)
     for (it, _), res in zip(pairs, results):
@@ -858,7 +858,7 @@ def push_approved(workspace, rules=None, dry_run=False, queue=None, a365=None, e
             continue
         try:
             q.update(it["id"], push=dict(res, at=stamp(now)))
-            if res["action"] in ("release", "update_parameters", "up_to_date"):
+            if res["action"] in A.PUSHED:
                 q.transition(it["id"], "pushed", user=AGENT, note=f"Altium 365: {res['action']}")
                 rep["pushed"].append(it["id"])
                 _followup(q, it)

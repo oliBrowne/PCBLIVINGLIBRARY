@@ -16,6 +16,11 @@ doubt for a person to sign off, and releases the rest to **Altium 365** or **KiC
   descriptions, value formats and parameters.
 * **Review hold.** A release check runs on every part. Anything that fails it, or still needs a person, is held back
   from Altium 365 until someone signs it off.
+* **Change control.** Once a part is released, no library update can change it behind your back. Every update is
+  compared with the released revision; a change to pins, pads or the part's identity waits for a person, who sees
+  each change in plain words ("pad 5 removed; pad SH added"). Approved changes become new revisions (a new component
+  revision in Altium 365), and `ecadlib project check` shows what a library update would change in a KiCad or Altium
+  project before you take it. See [docs/change-control.md](docs/change-control.md).
 * **Altium 365 release.** Parts go to your Altium 365 workspace, or out as `.SchLib`/`.PcbLib`, a database library
   and KiCad libraries, from one plan.
 

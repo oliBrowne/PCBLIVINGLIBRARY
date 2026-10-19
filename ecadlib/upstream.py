@@ -532,12 +532,18 @@ def main(argv=None):
             todo = {r["entry"] for r in ch}
             if todo:
                 pins = {r["_src"]["url"]: r["_text"] for r in ch if r["_src"].get("url") and r["_text"] is not None}
-                done = reconvert([man["entries"][e] for e in sorted(todo)], Path(a.manifest).parent,
-                                 Pinned(CachedHTTP(a.cache, ttl_s=0, offline=a.offline, timeout=60), pins))
+                from . import change_gate as CG    # a change to a released part is held for a person (#105)
+                done, held, _ = CG.guarded_rewrite(
+                    a.manifest, "upstream-update",
+                    lambda: reconvert([man["entries"][e] for e in sorted(todo)], Path(a.manifest).parent,
+                                      Pinned(CachedHTTP(a.cache, ttl_s=0, offline=a.offline, timeout=60), pins)))
                 for r in rows:                 # every entry of a reconverted spec (footprint and its symbol) was rewritten
                     rep = done.get(json.dumps(r["spec"], sort_keys=True))
                     if rep:
                         r["update"] = "reconverted" if rep.get("ok") else f"failed: {rep.get('error')}"
+                        out = str((Path(a.manifest).parent / (man["entries"].get(r["entry"]) or {}).get("output", "")).resolve())
+                        if rep.get("ok") and out in held:
+                            r["update"] = held[out]
         shown = rows if a.all else [r for r in rows if r["status"] != "unchanged"]
         counts = {s: sum(v == s for v in worst.values()) for s in RANK}
         write_report(shown, a.out, "KiCad upstream changes", KICAD_COLS,

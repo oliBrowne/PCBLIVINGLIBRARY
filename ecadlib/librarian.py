@@ -818,6 +818,9 @@ def review_rows(items):
         if why:
             why += it["librarian"]["tried"]
         why += [h for h in it.get("hold_reasons", []) if not re.match(r"files: no (symbol|footprint) model", h)] + it["librarian"]["review"]
+        ch = it.get("change") or {}
+        if ch.get("state") == "held":              # change control: the released revision stays until a person approves
+            why.append(f"change to released r{ch.get('base')} held ({ch.get('summary')}): ecadlib part show plan.json {it['name']}")
         rows.append({"part": it["name"], "status": it["status"], "symbol_from": it["source"]["symbol"] or "",
                      "footprint_from": it["source"]["footprint"] or "", "needs_human": "yes" if why else "",
                      "why": "; ".join(dict.fromkeys(why)), "tried": "; ".join(it["librarian"]["tried"]),
@@ -848,6 +851,17 @@ def write_review(rows, out, bom, items=None):
     details += [f"| {a} | {b} | {n} |" for (a, b), n in sorted(counts.items())]
     details += ["", "### What was tried, per part", ""] + [f"- **{r['part']}**: " + ("; ".join(reports.tried_line(t) for t in r["tried"].split("; ")) or "-") for r in rows]
     details += CC.review_lines(rows)          # which datasheet parts were cross-checked, agreed, or held
+    held_ch = [i for i in items if (i.get("change") or {}).get("state") == "held"]
+    if held_ch:                               # change control: what a refresh wanted to change in released parts
+        details += ["", "### Changes to released parts, held", "",
+                    "The released revision is kept. `ecadlib part show plan.json PART` shows the change; "
+                    "`ecadlib part approve` / `reject` decides it.", ""]
+        for i in held_ch:
+            ch = i["change"]
+            details.append(f"- **{i['name']}** (r{ch.get('base')} kept, {', '.join(f'{n} {c}' for c, n in (ch.get('classes') or {}).items())})")
+            details += [f"  - {c['class']}: {c['text']}" for c in (ch.get("changes") or [])[:8]]
+            if len(ch.get("changes") or []) > 8:
+                details.append(f"  - ... {len(ch['changes']) - 8} more")
     from . import ds_route
     details += ds_route.review_lines(out)     # datasheet reads: model, pages, tokens and USD per answer
     reports.write_review_files(items, out, bom, details)
@@ -905,6 +919,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.exists() else {}
     old = {i["name"]: i for i in json.loads(plan_f.read_text(encoding="utf-8"))} if plan_f.exists() else {}
     items, in_ws = A365S.reuse_existing(items, list(old.values()), rules)  # parts `ecadlib a365 pull` found in the workspace
+    from . import change_gate as CG                  # change control: released parts are compared with their ledger head
+    gate = CG.Guard(out, "librarian", rules=rules, user=user, log=log)
+    gate.begin(list(old.values()))
     if reader is None and "datasheet" in sources:
         reader = D.Reader(out, cache, api_key, rules, http, batch=datasheet_batch, log=log)
     r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step, rules,
@@ -989,6 +1006,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     n_asm = ASM.annotate_items([it for it in items if it["name"] not in in_ws], out, http, rules, log=log)   # assembler's
     if n_asm:                                                                                               # footprint
         log(f"  assembly {n_asm} part(s) checked against the {(rules.get('assembly') or {}).get('profile', 'jlcpcb')} footprints")
+    gate.settle(items)                         # held changes put the released files and fields back first
     t_check = time.time()
     TI.record(out, "build", t_build, t_check, parts=len(todo))
     checks = RC.apply(items, out, allow, rules=rules)
@@ -996,6 +1014,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         from .approvals import identity, post_check, stamp_allow
         stamp_allow(items, allow, identity(user, cwd=out))
         post_check(items, out, checks)
+    gate.baseline(items)                       # parts released for the first time: revision 1 in the ledger
+    CG.record_bom_usage(out, bom, items)
     write_text_atomic(plan_f, json.dumps(items, indent=2))
     write_notice(out, items)
     rec.close()
@@ -1075,15 +1095,20 @@ def print_result(items, out, why=(), t=None):
                          why_[0]["text"] if why_ else t.dim(f"{src.get('symbol') or '-'} / {src.get('footprint') or '-'}")])
         t.table(rows)
     held = [i["name"] for i in items if i.get("status") == "held"]
+    changed = [i["name"] for i in items if (i.get("change") or {}).get("state") == "held"]
     plan = out / "plan.json"
     nxt = []
     if held:
         nxt.append((f"ecadlib review {plan}", "go through the held parts one by one"))
+    if changed:
+        nxt.append((f"ecadlib part status {plan}", "changes to released parts, held until a person approves them"))
     nxt += [(f"ecadlib kicad-export {plan} -o {out.parent.parent / 'kicad' if out.parent.name == 'librarian' else 'kicad'} --name mylib",
              "write the KiCad library"),
             (f"ecadlib altium-pkg {plan} --out altium_pkg", "the Altium hand-off folder (.LibPkg, DbLib)")]
     t.summary(f"{M.plural(len(items), 'part')}: {M.counts(i.get('status') for i in items)}"
-              + (f"  (held: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''})" if held else ""),
+              + (f"  (held: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''})" if held else "")
+              + (f"; {M.plural(len(changed), 'change')} to released parts held, the released version is kept "
+                 f"({', '.join(changed[:5])}{' ...' if len(changed) > 5 else ''})" if changed else ""),
               written=[(str(plan), "library plan"), (str(out / "review.md"), "review: what to check, part by part"),
                        (str(out / "models") + "/", "Altium symbol and footprint files")],
               next=nxt, notes=[(m, f) for m, f in why])

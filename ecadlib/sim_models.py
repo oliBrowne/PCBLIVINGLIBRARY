@@ -888,6 +888,10 @@ def run(plan, models=(), attach=False, http=None, offline=False, cache="out/http
     plan = Path(plan)
     plan_dir = plan.parent
     items = json.loads(plan.read_text())
+    from . import change_gate as CG            # change control (#105): attaching may not change a released part
+    gate = CG.Guard(plan.parent, "sim-models", log=log) if attach else None
+    if gate:
+        gate.begin(items)
     http = http or CachedHTTP(cache, offline=offline, timeout=60)
     nt = Net(http, enabled=net)
     folder = ModelFolder(models) if models else None
@@ -976,6 +980,8 @@ def run(plan, models=(), attach=False, http=None, offline=False, cache="out/http
         except Exception as e:
             rep.setdefault("errors", []).append(f"{sf}: {type(e).__name__}: {e}")
     rep["hosts"] = dict(sorted(nt.hosts.items()))
+    if gate:
+        rep["change"] = [{k: r[k] for k in ("part", "action", "revision", "summary")} for r in gate.settle(items)]
     if attach:
         from . import release_check as RC
         rows = RC.apply(items, plan_dir)

@@ -382,6 +382,9 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     to = Path(target_dir)
     from .rules import param_name, resolve
     rules = resolve(rules, base)                            # house parameter names: ecadlib.toml found from the plan
+    from . import change_gate as CG                         # change control (#105): hand edits settle first; a held
+    if not dry_run:                                         # change syncs the released revision
+        CG.publish_guard(plan if isinstance(plan, (str, Path)) else base, items, mode, rules=rules, base=base)
     fname = data_file_name(name)
     xlsx, csvf, lib, statef = to / f"{fname}.xlsx", to / f"{fname}.csv", to / f"{name}{EXT[mode]}", to / STATE
     state = json.loads(statef.read_text()) if statef.exists() else {}
@@ -631,6 +634,9 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     if st != {"rows": sorted(state.get("rows", [])), "files": sorted(state.get("files", []))}:
         put(STATE, json.dumps(st, indent=1) + "\n")
     out["svn_url"] = url
+    if not dry_run:
+        done = {r["name"] for r in results if r.get("action") in ("added", "updated", "up_to_date")}
+        CG.record_publish(base, items, f"{mode}:{CG.project_key(base, to)}", ok=lambda it: it["name"] in done)
     return out
 
 

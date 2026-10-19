@@ -17,6 +17,10 @@ Checks (each runs in-process; a check whose credentials are missing is skipped w
              every distributor, or came back.
   a365       upstream.check_a365 against an Altium 365 workspace (NEXAR_TOKEN and --workspace, or [altium365] workspace
              in the rules). New: a drift row (missing, parameter, folder, symbol/footprint, revision) not reported before.
+  changes    change control (#105), on a plan's library folder: changes to released parts held for approval, projects in
+             the usage index (`ecadlib project scan`) that use an older revision than the released one, and KiCad
+             projects there whose parts differ from the library in a way the [change] policy holds
+             (`ecadlib project check`). Reports only; it never applies a change.
 
 State (--state DIR, default out/upkeep_state): one JSON file per check; what each run saw, so the next run reports only
 transitions. Report: <REPORT>.md and <REPORT>.json (default out/upkeep). Exit codes: 0 nothing new, 1 new changes,
@@ -43,7 +47,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from . import userconfig as UC
 
-CHECKS = ("lifecycle", "upstream", "sourcing", "a365")
+CHECKS = ("lifecycle", "upstream", "sourcing", "a365", "changes")
 LABEL = "ecadlib-upkeep"
 DEFAULTS = {"schedule": "weekly", "checks": list(CHECKS), "price_jump_pct": 20.0, "build_qty": 1, "currency": "USD"}
 LIFECYCLE_ENV = "NEXAR_CLIENT_ID+NEXAR_CLIENT_SECRET (or NEXAR_SUPPLY_TOKEN), DIGIKEY_CLIENT_ID+DIGIKEY_CLIENT_SECRET, MOUSER_API_KEY"
@@ -277,6 +281,12 @@ def check_sourcing(src, state_dir, ctx, cfg, now, rules=None):
 
 
 # ------------------------------------------------------------------ KiCad upstream
+def _gate_folder(manifest):
+    """The library folder change control keeps the ledger in for a manifest: the plan's folder, else the manifest's."""
+    m = Path(manifest).parent
+    return next((d for d in (m, m.parent) if (d / "plan.json").is_file()), m)
+
+
 def check_upstream(src, state_dir, ctx, cfg, now, apply=False):
     from . import upstream as U
     sec = _section("upstream")
@@ -299,13 +309,21 @@ def check_upstream(src, state_dir, ctx, cfg, now, apply=False):
         if ch:
             pins = {r["_src"]["url"]: r["_text"] for r in ch if r["_src"].get("url") and r["_text"] is not None}
             todo = sorted({r["entry"] for r in ch})
-            done = U.reconvert([man["entries"][e] for e in todo], src.manifest.parent, U.Pinned(ctx.http, pins))
+            from . import change_gate as CG            # never applies a change to a released part: it is held (#105)
+            done, held, gate_rows = CG.guarded_rewrite(
+                src.manifest, "upstream-update",
+                lambda: U.reconvert([man["entries"][e] for e in todo], src.manifest.parent, U.Pinned(ctx.http, pins)))
             for r in rows:
                 rep = done.get(json.dumps(r["spec"], sort_keys=True))
                 if rep:
                     r["update"] = "reconverted" if rep.get("ok") else f"reconvert failed: {rep.get('error')}"
-                    if rep.get("ok"):
+                    out = str((src.manifest.parent / man["entries"][r["entry"]]["output"]).resolve())
+                    if rep.get("ok") and out in held:
+                        r["update"] = held[out]
+                    elif rep.get("ok"):
                         applied[r["entry"]] = man["entries"][r["entry"]]["output"]
+            if gate_rows:                              # the ledger and its blobs travel with the library files
+                sec["ledger"] = [str(_gate_folder(src.manifest) / n) for n in ("library.ledger.jsonl", ".ecadlib")]
     for r in rows:
         if r["status"] in ("unchanged", "error"):
             continue
@@ -313,6 +331,13 @@ def check_upstream(src, state_dir, ctx, cfg, now, apply=False):
         if r.get("update") == "reconverted":
             sec["changes"].append(_change("reconverted", r["entry"], r["source"], r["upstream_commit"] or "upstream", r["summary"]))
             continue                                       # the manifest now matches upstream: nothing left to remember
+        if (r.get("update") or "").startswith("held:"):    # reported once when first held, then waits on a person
+            hk = _fp(r["entry"], r["source"], "held", key)
+            seen[hk] = {"entry": r["entry"], "source": r["source"], "status": "held",
+                        "first_seen": old["seen"].get(hk, {}).get("first_seen", now)}
+            if hk not in old["seen"]:
+                sec["changes"].append(_change("held for approval", r["entry"], r["source"],
+                                              r["upstream_commit"] or "upstream", r["update"][len("held: "):]))
         seen[key] = {"entry": r["entry"], "source": r["source"], "status": r["status"], "first_seen": old["seen"].get(key, {}).get("first_seen", now)}
         if key not in old["seen"]:
             sec["changes"].append(_change(f"KiCad {r['status']}", r["entry"], r["source"],
@@ -328,6 +353,7 @@ def check_upstream(src, state_dir, ctx, cfg, now, apply=False):
     sec["applied"] = [str(src.manifest.parent / f) for f in sorted(set(applied.values()))]
     if sec["applied"]:
         sec["applied"].append(str(src.manifest))
+    sec["applied"] += sec.pop("ledger", [])
     counts = {s: sum(v == s for v in worst.values()) for s in U.RANK}
     sec["notes"].append(f"manifest `{src.manifest}`: " + ", ".join(f"{v} {s}" for s, v in counts.items() if v))
     unsafe = [r["entry"] for r in rows if r["status"] in ("renamed", "deleted")]
@@ -373,9 +399,63 @@ def check_a365(src, state_dir, ctx, cfg, now, workspace=None):
     return sec
 
 
+# ------------------------------------------------------------------ change control: held changes and project drift
+def check_changes(src, state_dir, ctx, cfg, now):
+    from . import change_diff as CD, change_gate as CG, ledger as LG
+    sec = _section("changes")
+    if src.kind != "plan":
+        sec.update(status="skipped", reason="needs a plan.json (change control keeps its ledger next to the plan)")
+        return sec
+    folder = CG.lib_folder(src.path.parent)
+    lg = LG.Ledger(folder)
+    if not lg.exists():
+        sec.update(status="skipped", reason="no part ledger yet (it starts when a part passes the release check)")
+        return sec
+    old = _load(state_dir / "changes_state.json", {"version": 1, "updated": None, "seen": []})
+    seen = []
+
+    def report(key, kind, item, was, now_, detail):
+        seen.append(key)
+        if key not in old["seen"]:
+            sec["changes"].append(_change(kind, item, was, now_, detail))
+
+    held = CG.pending(folder)
+    for p in held:
+        report(_fp("held", p["part"], p.get("digest")), "held for approval", p["part"], f"r{p.get('base')}",
+               "proposed by " + str(p.get("writer") or "?"), CD.summary(p.get("changes") or []) +
+               f" (ecadlib part show {src.path} {p['part']})")
+    behind = 0
+    for proj, row in sorted(LG.load_usage(folder)["projects"].items()):
+        for part, rec in sorted((row.get("parts") or {}).items()):
+            head, rev = lg.head(part), rec.get("revision")
+            if head and rev and rev < head["revision"]:
+                behind += 1
+                a, b = lg.revision(part, rev), head
+                ch = CD.diff(lg.fingerprint(a), lg.fingerprint(b)) if a else []
+                report(_fp("behind", proj, part, rev, head["revision"]), "project uses an older revision",
+                       f"{proj}: {part}", f"r{rev}", f"r{head['revision']}", CD.summary(ch) or "")
+        p = (folder / proj).resolve()
+        if row.get("tool") == "kicad" and p.exists():
+            try:
+                from . import project_check as PJ
+                res = PJ.check_kicad(p, use_global=True)
+            except Exception as e:             # one project never stops the rest
+                sec["notes"].append(f"{proj}: project check failed ({type(e).__name__}: {e})")
+                continue
+            for r in res["rows"]:
+                if r["action"] == "hold":
+                    report(_fp("drift", proj, r["id"], json.dumps(r["changes"], sort_keys=True)), "library changed under project",
+                           f"{proj}: {r['id']}", ", ".join(r["refs"][:8]), r["worst"], r["summary"])
+    sec["resolved"] = [_change("resolved", "", "", "", f"{n} item(s) from earlier runs no longer seen")] \
+        if (n := len(set(old["seen"]) - set(seen))) else []
+    sec["notes"].append(f"{len(held)} change(s) held for approval; {behind} project part(s) on an older revision")
+    sec["_state"] = {"changes_state.json": {"version": 1, "updated": now, "seen": seen}}
+    return sec
+
+
 # ------------------------------------------------------------------ run, report, state
 TITLES = {"lifecycle": "Lifecycle (NRND / EOL / stock)", "upstream": "KiCad upstream", "sourcing": "Price and stock",
-          "a365": "Altium 365 drift"}
+          "a365": "Altium 365 drift", "changes": "Change control (held changes, project drift)"}
 
 
 def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep", manifest=None, bom=None,
@@ -399,6 +479,8 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
                 sec = check_sourcing(src, state_dir, ctx, cfg, now, rules)
             elif name == "upstream":
                 sec = check_upstream(src, state_dir, ctx, cfg, now, apply)
+            elif name == "changes":
+                sec = check_changes(src, state_dir, ctx, cfg, now)
             else:
                 sec = check_a365(src, state_dir, ctx, cfg, now, workspace)
         except Exception as e:                       # one broken check never hides the others

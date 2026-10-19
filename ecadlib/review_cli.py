@@ -223,7 +223,7 @@ def review_plan(plan, a, t, inp, interactive):
                 from .approvals import cli_plan_lock
                 try:
                     with cli_plan_lock(plan), TM.waiting(f"{c['id']} (fetch and convert)", t.err):
-                        r = R.choose(plan, name, kind, c["id"], src=src, pin_map=c.get("pin_map") or None)
+                        r = R.choose(plan, name, kind, c["id"], src=src, pin_map=c.get("pin_map") or None, user=a.user)
                 except Exception as e:
                     text, fix = M.friendly_error(e)
                     t.note(text, fix)
