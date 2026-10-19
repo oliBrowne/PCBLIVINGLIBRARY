@@ -50,6 +50,18 @@ PASSIVE = {"R": ("Device:R", "Resistor_SMD:R_{}_{}Metric"), "C": ("Device:C", "C
 SPECS = Path(F.__file__).with_name("package_specs")
 
 
+def stacked_pins(sym):
+    """'3, 7 (VDD)' for each group of pins of one part that end on the same spot (KiCad stacks VDD / GND pins that way)."""
+    parts = sym.get("prim_parts") or [1] * len(sym["prims"])
+    at = {}
+    for pr, u in zip(sym["prims"], parts):
+        if pr[0] == "pin":
+            dx, dy = {"left": (-1, 0), "right": (1, 0), "top": (0, 1), "bottom": (0, -1)}[pr[2]]
+            at.setdefault((u, pr[3] + dx * pr[5], pr[4] + dy * pr[5]), []).append(pr[1])
+    return [", ".join(dict.fromkeys(str(p["num"]) for p in ps)) + f" ({ps[0].get('name', '')})" for ps in at.values()
+            if len({p["num"] for p in ps}) > 1]
+
+
 # ---------------------------------------------------------------- official KiCad library name index
 class KiCadLibrary:
     """Name index of the official KiCad libraries (see the module docstring). Building it reads ~400 GitLab tree pages;
@@ -362,12 +374,16 @@ class Run:
         sym = K.convert_symbol(chain, name, fp_name, list(extra), None, notes)
         npins = len({pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin"})
         clash = SL.text_problems(sym)
-        if (layout or clash) and SL.wants_layout(npins, self.rules) and SL.is_box_ic(sym):
+        stacked = stacked_pins(sym) if SL.settings(self.rules)["stack_power"] == "none" else []
+        if (layout or clash) and SL.wants_layout(npins, self.rules) and SL.is_box_ic(sym) or stacked and SL.is_box_ic(sym):
             sym = SL.relayout(sym, self.rules)
             notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else "")
-                         + (f"; the drawn symbol's pin text overlapped ({clash[0]})" if clash else ""))
+                         + (f"; the drawn symbol's pin text overlapped ({clash[0]})" if clash else "")
+                         + (f"; the drawn symbol stacked pins {', '.join(stacked[:3])} on one end ([symbols] stack_power = \"none\")" if stacked else ""))
         elif clash:
             notes.append(f"pin text overlaps ({'; '.join(clash[:3])}); not a plain IC box, so kept as drawn: check it")
+        elif stacked:
+            notes.append(f"pins {', '.join(stacked[:3])} share one pin end; not a plain IC box, so kept as drawn: check it")
         self.put_sym(st, sym, source, notes)
 
     # ---- per part

@@ -596,7 +596,8 @@ def step_extent(text, mi):
 def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=False, spec=None, height_src=None, kind=None, names=()):
     """3D body: the KiCad STEP model embedded (step=True, model without offset/rotation/scale), else with
     gen_step=True a package-shaped STEP from step_gen (spec dict, else package_specs / the footprint name) when
-    there is no KiCad STEP to embed, else an extruded body over the fab outline (else courtyard, else pads).
+    no KiCad STEP is embedded (a downloaded one still sets the height), else an extruded body over the fab outline
+    (else courtyard, else pads).
     height_src: the caller's height is part-specific and beats the default table (label for the notes).
     kind / names: the part's kind ('R', 'C') and other names (KiCad ref, description) for package_default_height, the
     last resort ('HEIGHT from package default ..., verify')."""
@@ -624,7 +625,7 @@ def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=Fal
             if pd:
                 h, src = pd[0], f"HEIGHT from package default ({pd[1]}), verify"
     embeddable = bool(ext) and mi["rotate"] == [0, 0, 0] and mi["offset"] == [0, 0, 0] and mi["scale"] == [1, 1, 1]
-    if gen_step and not (step and embeddable) and (not ext or step):
+    if gen_step and not (step and embeddable):    # a KiCad STEP that is not embedded still gives the height
         from . import step_gen
         try:
             generic = src == "default table"            # step_gen's per-family table is more specific (R vs C 0603)
@@ -637,7 +638,7 @@ def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=Fal
             fp["bodies"].append({"pts": [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "height": h,
                                  "step": {"name": f"{AL.file_stem(fp['name'])}.step", "data": data.encode("ascii"), "rot": (0.0, 0.0, 0.0)}})
             notes.append(f"3D: generated STEP ({info['family']} model from {'the package spec' if spec else 'package_specs / the footprint name'}"
-                         f"), height {h} mm ({src})" + ("; KiCad STEP has an offset/rotation/scale" if ext else ""))
+                         f"), height {h} mm ({src})" + ("; KiCad STEP has an offset/rotation/scale" if ext and step else ""))
             fp["height_mm"] = h
             return fp
     if not h:
@@ -813,7 +814,12 @@ def _sym_prim(it, hide_names, hide_nums, pins_at, unit, pin_map, notes):
             _note(notes, f"pin {num}: off the 10 mil grid, rounded")
         if a not in SIDE:
             raise ValueError(f"pin {num}: angle {a} not a multiple of 90")
-        return ("pin", p, SIDE[(a + 180) % 360], gx, gy, round(_u(length)))
+        n = round(_u(length))
+        tip = gx - n * round(math.cos(math.radians(a))) if a in (0, 180) else gy - n * round(math.sin(math.radians(a)))
+        if tip % 10:                          # KiCad discretes end on 50 mil (D at ±150 mil): lengthen the pin outward so its
+            n += 10 - tip % 10 if a in (180, 270) else tip % 10          # end is on Altium's 100 mil grid, the body stays put
+            _note(notes, "pin ends moved out onto the 100 mil grid (pins lengthened)")
+        return ("pin", p, SIDE[(a + 180) % 360], gx, gy, n)
     if k not in ("property", "text_box", "body_style", "unit"):
         _note(notes, f"symbol item {k} not converted")
     return None
