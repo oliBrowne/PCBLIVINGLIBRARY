@@ -1875,7 +1875,8 @@ class Reader:
             b = LRL.adapt_body(body, inf["prof"], p) if p["guided"] else body
             with logging_to(self.log_file, self.say):
                 msg = send(b)
-        except APIError:
+        except APIError as e:
+            self._release(key, e)
             raise                                     # no answer came back: the part is retried next run
         except DatasheetError as e:
             raise CC.Unavailable(str(e)[:200])
@@ -1973,6 +1974,7 @@ class Reader:
             except DatasheetError as e:               # refusal / max_tokens / not schema-shaped: an answer, with usage
                 msg = getattr(e, "api_message", None)
                 if msg is None:                       # no answer came back (API error): nothing to record
+                    self._release(job["key"], e)
                     raise
             err = None
             try:
@@ -2159,6 +2161,14 @@ class Reader:
         if usd is None:
             return
         self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key)) + usd)
+
+    def _release(self, key, e=None):
+        """A request that got no answer and is not billed (an HTTP error response, or a batch request that errored,
+        was cancelled or expired) gives back the worst case held for it under max_cost_usd. A timeout or lost
+        connection keeps its hold: the API may still have run it."""
+        if e is not None and getattr(e, "status", None) is None:
+            return
+        self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key, None) or []))
 
     # --- batch
     def _state(self):
@@ -2367,8 +2377,10 @@ class Reader:
                     elif r.get("type") == "errored":
                         et, em = _err_of(r.get("error"))
                         errors[key] = f"batch request errored: {et}: {em}"
+                        self._release(key)
                     else:
                         errors[key] = f"batch request {r.get('type', '?')} (re-run to submit it again)"
+                        self._release(key)
                 b["collected"], b["errors"] = True, {c: errors[k] for c, k in b["requests"].items() if k in errors}
                 self._save_state(st)
         for j in jobs:
