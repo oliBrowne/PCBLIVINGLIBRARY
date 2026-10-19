@@ -483,6 +483,59 @@ def wire_schema():
     return _obj(dict(full["properties"], package=_obj(props, full["properties"]["package"].get("description"))))
 
 
+def _wire_text(v):
+    """A printed value with its decoration taken off: "0.50 BSC", "1.27 TYP", "−0.05" (a Unicode minus), "6.5 mm"."""
+    s = str(v if v is not None else "").strip().replace(",", ".")
+    s = s.replace("\u2212", "-").replace("\u2013", "-").replace("\u2014", "-").replace("\uff5e", "~")
+    s = re.sub(r"\s*\b(BSC|TYP|TYPICAL|REF|NOM|MAX|MIN)\b\.?", "", s, flags=re.I).strip()
+    return re.sub(r"\s*\b(mm|mils?|in|inch)\b\.?", "", s, flags=re.I).strip()
+
+
+_NUM = r"(\d*\.?\d+)"
+
+
+def _wire_range(v):
+    """A tolerance or a range printed in one cell -> (min, nom, max), else None:
+    "6.5 ±0.2" / "6.5 +/-0.2" / "6.5 (±0.2)" -> (6.3, 6.5, 6.7); "6.5 +0.1/-0.2" / "6.5 +0.1 -0.2" -> (6.3, 6.5, 6.6);
+    "6.3~6.7" / "6.3 to 6.7" / "6.3 - 6.7" -> (6.3, None, 6.7). A drawing prints these when it has no min/nom/max
+    table; a model that copies the cell as printed (as asked) gives them as one value."""
+    s = _wire_text(v)
+    if not s:
+        return None
+    r = lambda x: round(x, 6)
+    m = re.fullmatch(rf"{_NUM}\s*\(?\s*(?:±|\+/-|\+-|\+ / -)\s*{_NUM}\s*\)?", s)
+    if m:
+        a, t = float(m.group(1)), float(m.group(2))
+        return r(a - t), a, r(a + t)
+    m = re.fullmatch(rf"{_NUM}\s*\(?\s*\+\s*{_NUM}\s*[/,]?\s*-\s*{_NUM}\s*\)?", s) or \
+        re.fullmatch(rf"{_NUM}\s*\(?\s*-\s*(?P<lo>{_NUM[1:-1]})\s*[/,]?\s*\+\s*(?P<hi>{_NUM[1:-1]})\s*\)?", s)
+    if m:
+        a = float(m.group(1))
+        hi, lo = (float(m.group(2)), float(m.group(3))) if "lo" not in m.groupdict() else (float(m["hi"]), float(m["lo"]))
+        return r(a - lo), a, r(a + hi)
+    m = re.fullmatch(rf"{_NUM}\s*(?:~|to|-|\.\.)\s*{_NUM}", s, flags=re.I)
+    if m and float(m.group(1)) < float(m.group(2)):
+        return float(m.group(1)), None, float(m.group(2))
+    return None
+
+
+def _wire_dim(d, n):
+    """One wire dimension's min/nom/max texts -> numbers. A cell holding a tolerance or a range ("6.5 ±0.2") gives the
+    blank ones too; a value printed in its own cell is never overwritten."""
+    raw = {k: d.get(k) for k in ("min", "nom", "max")}
+    got = {}
+    for k in ("nom", "min", "max"):
+        rng = _wire_range(raw[k])
+        if rng is not None:
+            got[k] = rng
+    out = {k: (None if k in got else _wire_num(raw[k], f"{n}.{k}")) for k in raw}
+    for k, rng in got.items():
+        for kk, x in zip(("min", "nom", "max"), rng):
+            if out[kk] is None and (kk == k or not str(raw[kk] or "").strip() or kk in got):
+                out[kk] = x
+    return out
+
+
 def _wire_num(v, where):
     s = str(v if v is not None else "").strip().replace(",", ".")
     if s in ("", "-", "—", "–", "null", "n/a", "N/A"):
@@ -524,6 +577,8 @@ def _fit(v, s):
     t = s.get("type")
     if t == "object" and isinstance(v, (int, float)) and not isinstance(v, bool) and "nom" in (s.get("properties") or {}):
         v = {"nom": v}                                # a bare number where a min/nom/max range is wanted: the nominal
+    if t == "object" and isinstance(v, str) and "nom" in (s.get("properties") or {}) and _wire_range(v):
+        v = dict(zip(("min", "nom", "max"), _wire_range(v)))   # "6.5 ±0.2" where a min/nom/max range is wanted
     if t == "object" and isinstance(v, dict):
         props = s.get("properties") or {}
         out = {k: _fit(x, props[k]) if k in props else x for k, x in v.items()
@@ -569,7 +624,7 @@ def from_wire(ext):
         if not isinstance(d, dict) or d.get("name") not in WIRE_DIMS:
             continue
         n = d["name"]
-        dims[n] = {"label": d.get("label", ""), **{k: _wire_num(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")},
+        dims[n] = {"label": d.get("label", ""), **_wire_dim(d, n),
                    "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
     out = {k: v for k, v in pkg.items() if k not in ("dims", "other_json")}
     for k in pk:
@@ -1081,13 +1136,30 @@ def self_check(spec, ext, review):
     return info
 
 
-def process(ext, part, datasheet, model=MODEL, offset=0, msg=None):
+def ordering_check(pkg, facts, review):
+    """The pin count the ordering table gives for this MPN (ds_route.ordering_facts, read in code): fills a pin_count
+    the read left blank, and flags one that differs. Never overrides what the drawing gave."""
+    if not facts or not facts.get("pins") or not isinstance(pkg, dict):
+        return
+    src = f"the ordering table (p{facts['page']}: {facts['part']} {facts['package']} {facts['code']}, {facts['pins']} pins)"
+    n = pkg.get("pin_count")
+    if n is None:
+        pkg["pin_count"] = facts["pins"]
+        review.append(f"pin_count {facts['pins']} from {src}; the read left it blank")
+    elif n != facts["pins"]:
+        review.append(f"pin_count {n} differs from {src}: check the package variant")
+
+
+def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, facts=None):
     """Extraction -> {spec, symbol, sidecar, needs_review}. Never alters a value to make a check pass."""
     review = [f"document contains instruction-like text (ignored): {q[:200]!r}" for q in ext["embedded_instructions"]]
     if isinstance(offset, list):                      # auto page selection: page k of the sent PDF is offset[k - 1]
         bad = sorted({p for p in _cited_pages(ext) if isinstance(p, int) and not 1 <= p <= len(offset)})
         if bad:
             review.append(f"the model cited page(s) {bad} of the {len(offset)} pages sent: those values have no source page")
+    if facts:
+        ext = dict(ext, package=dict(ext["package"]))
+        ordering_check(ext["package"], facts, review)
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
@@ -1241,9 +1313,25 @@ def lcsc_number(item=None, ln=None, row=None):
     return None
 
 
+def clean_url(u):
+    """A datasheet link as a direct one: "//host/x.pdf" (DigiKey's protocol-relative links) -> https; TI's
+    suppproductinfo redirect page -> the gotoUrl it redirects to."""
+    from urllib.parse import parse_qs, urlparse
+    u = str(u or "").strip()
+    if u.startswith("//"):
+        u = "https:" + u
+    p = urlparse(u)
+    if p.netloc.lower().endswith("ti.com") and "suppproductinfo" in p.path.lower():
+        go = {k.lower(): v for k, v in parse_qs(p.query).items()}.get("gotourl")
+        if go and re.match(r"(https?:)?//", go[0]):
+            return clean_url(go[0])
+    return u
+
+
 def datasheet_urls(item=None, ln=None, row=None, found=None):
-    """Datasheet links to try, best first, each with where it came from: the BOM's datasheet column, the link an official
-    part API gave in triage (Nexar / DigiKey / Mouser), the plan's
+    """Datasheet links to try, best first, each with where it came from: the BOM's datasheet column, the links the official
+    part APIs gave in triage (Nexar / DigiKey / Mouser: the first source's best link, then every other copy they gave,
+    such as a distributor-hosted one, from src_datasheet_more), the plan's
     ComponentLink2URL / Datasheet, one a source found (KiCad symbol Datasheet property, EasyEDA lcsc.url), then
     LCSC's datasheet URL pattern for the part's LCSC number."""
     par = {p["name"]: p["value"] for p in (item or {}).get("parameters", [])}
@@ -1251,12 +1339,14 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
     cands = [((ln or {}).get("datasheet"), "BOM"), ((row or {}).get("src_datasheet"), f"{(row or {}).get('src') or 'part source'} datasheet link"),
              (fd[0], fd[1]), (par.get("ComponentLink2URL"), "LCSC datasheet link"),
              (par.get("Datasheet"), "plan Datasheet")]
+    src = (row or {}).get("src") or "part source"
+    cands[2:2] = [(u, f"{src} datasheet link (another copy)") for u in str((row or {}).get("src_datasheet_more") or "").split()]
     lc = lcsc_number(item, ln, row)
     if lc:
         cands.append((f"https://www.lcsc.com/datasheet/{lc}.pdf", f"LCSC datasheet URL pattern ({lc})"))
     out, seen = [], set()
     for u, w in cands:
-        u = str(u or "").strip()
+        u = clean_url(u)
         if re.match(r"https?://", u) and u not in seen:
             seen.add(u)
             out.append((u, w))
@@ -1576,18 +1666,21 @@ class Reader:
             url, where = usable[0]
             prov = {"url": url, "where": where, "sent_as": "url", "note": "not downloaded here; sent as a URL for the API to fetch"}
             src_hash, lv, why, n = "url" + hashlib.sha256(url.encode()).hexdigest(), [None], {}, None
+            facts = None
         else:
             url, where, src_hash, n = prov["url"], prov["where"], prov["sha256"], prov.get("pages") or pdf_pages(data)
             lv, why = [None], {}
+            texts = self._page_texts(data, src_hash) if n else None
+            facts = DR.ordering_facts(texts, part, data) if texts else None
             if not pages and self.page_budget and n and n > self.page_budget:
-                texts = self._page_texts(data, src_hash)
                 if texts:
-                    lv, why = DR.levels(texts, self.page_budget, part, package, n)
+                    lv, why = DR.levels(texts, self.page_budget, part, package, n, self._page_marks(data, src_hash))
         prov["attempts"] = attempts
         sent0 = len(lv[0]) if isinstance(lv[0], list) else None
         rung, reason = self.router.start(package, n, sent0)
         base = {"name": name or part, "part": part, "package": package, "url": url, "where": where, "pages": pages,
                 "data": data, "src_hash": src_hash, "levels": lv, "n_pages": n, "base_prov": prov, "fp_needed": fp_needed,
+                "facts": facts,
                 "route": {"route": self.router.route, "ladder": self.router.ladder, "start": reason, "picked": why,
                           "attempts": []}}
         first = self._at(base, rung, 0)
@@ -1596,6 +1689,15 @@ class Reader:
             if self.results.get(whole["key"]):
                 first = whole
         return self._walk(first)
+
+    def _page_marks(self, data, digest):
+        from . import ds_route as DR
+        marks = getattr(self, "_marks", None)
+        if marks is None:
+            marks = self._marks = {}
+        if digest not in marks:                       # None: no bookmarks, pages are picked by their text alone
+            marks[digest] = DR.page_marks(data)
+        return marks[digest]
 
     def _page_texts(self, data, digest):
         from . import ds_route as DR
@@ -1642,7 +1744,8 @@ class Reader:
             return "failed", [rec.get("error") or "no answer"], None
         try:
             ext = parse_message(rec["message"])
-            res = process(ext, job["part"], job["url"], rec.get("model") or job["model"], job["offset"], rec["message"])
+            res = process(ext, job["part"], job["url"], rec.get("model") or job["model"], job["offset"], rec["message"],
+                          job.get("facts"))
         except DatasheetError as e:
             return "failed", [str(e)], None
         kind, why = DR.assess(res)
@@ -1669,7 +1772,8 @@ class Reader:
 
     def _result(self, job, rec):
         ext = parse_message(rec["message"])
-        res = process(ext, job["part"], job["url"], rec.get("model") or self.model, rec.get("page_offset", job["offset"]), rec["message"])
+        res = process(ext, job["part"], job["url"], rec.get("model") or self.model, rec.get("page_offset", job["offset"]), rec["message"],
+                      job.get("facts"))
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
         if job.get("route"):
             res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k != "picked"}

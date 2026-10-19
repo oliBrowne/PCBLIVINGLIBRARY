@@ -1,0 +1,300 @@
+"""Datasheet getting and reading, 2026-10-19 (research: /mnt/project-files/research/2026-10-19_datasheet_pdf_research.md):
+tolerances printed in one cell ("6.5 ±0.2") become min/nom/max in code; every official datasheet link is kept and tried;
+the PDF's bookmarks steer the page picker; TI's Package Option Addendum gives the pin count by MPN."""
+import io, json
+from pathlib import Path
+
+from ecadlib import bom_triage as T, datasheet as D, ds_route as R, part_lookup as PL, providers as P
+from tests.test_ds_route import pdf_lines
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+# ---------------------------------------------------------------- tolerances
+def test_a_tolerance_in_one_cell_becomes_min_nom_max():
+    for v, want in (("6.5 ±0.2", (6.3, 6.5, 6.7)), ("6.5±0.2 mm", (6.3, 6.5, 6.7)), ("6.5 +/-0.2", (6.3, 6.5, 6.7)),
+                    ("6.5 (±0.2)", (6.3, 6.5, 6.7)), ("0.50 ±0.05 BSC", (0.45, 0.5, 0.55)),
+                    ("6.5 +0.1/-0.2", (6.3, 6.5, 6.6)), ("6.5 +0.1 -0.2", (6.3, 6.5, 6.6)), ("6.5 -0.2/+0.1", (6.3, 6.5, 6.6)),
+                    ("6.3~6.7", (6.3, None, 6.7)), ("6.3 to 6.7", (6.3, None, 6.7)), ("6.3 - 6.7", (6.3, None, 6.7)),
+                    ("6.3–6.7", (6.3, None, 6.7))):
+        assert D._wire_range(v) == want, (v, D._wire_range(v))
+    for v in ("0.50 BSC", "-0.05", "−0.05", "6.7-6.3", "1.2", "", None, "see note 3"):
+        assert D._wire_range(v) is None, v
+
+
+def test_the_wire_answer_fills_the_blank_cells_and_keeps_printed_ones():
+    assert D._wire_dim({"min": "", "nom": "6.5 ±0.2", "max": ""}, "D") == {"min": 6.3, "nom": 6.5, "max": 6.7}
+    assert D._wire_dim({"min": "6.2", "nom": "6.5 ±0.2", "max": ""}, "D") == {"min": 6.2, "nom": 6.5, "max": 6.7}
+    assert D._wire_dim({"min": "", "nom": "", "max": "6.3~6.7"}, "D") == {"min": 6.3, "nom": None, "max": 6.7}
+    assert D._wire_dim({"min": "0.40", "nom": "0.50", "max": "0.60"}, "b") == {"min": 0.4, "nom": 0.5, "max": 0.6}
+    try:
+        D._wire_dim({"min": "", "nom": "see note", "max": ""}, "D")
+        raise AssertionError("expected DatasheetError")
+    except D.DatasheetError as e:
+        assert "not a number" in str(e)
+    ans = {"package": {"dims": [{"name": "body_length", "label": "D", "min": "", "nom": "6.5 ±0.2", "max": "", "unit": "mm",
+                                 "page": 3, "figure": "Package outline"}], "other_json": "{}", "unresolved": []}}
+    got = D.from_wire(ans)["package"]["body_length"]
+    assert (got["min"], got["nom"], got["max"]) == (6.3, 6.5, 6.7), got
+
+
+def test_a_range_text_in_other_json_becomes_a_range():
+    s = {"type": "object", "properties": {"min": {"type": "number"}, "nom": {"type": "number"}, "max": {"type": "number"}}}
+    assert D._fit("1.0 ±0.1", s) == {"min": 0.9, "nom": 1.0, "max": 1.1}
+    assert D._fit("not a range", s) == "not a range"
+
+
+# ---------------------------------------------------------------- every official link
+NEXAR_PART = {"mpn": "BAT160A", "manufacturer": {"name": "Nexperia"}, "octopartUrl": "https://octopart.com/x",
+              "shortDescription": "Schottky", "bestDatasheet": {"url": "https://assets.nexperia.com/documents/data-sheet/BAT160_SER.pdf"},
+              "documentCollections": [
+                  {"name": "Datasheets", "documents": [
+                      {"name": "Datasheet", "url": "https://assets.nexperia.com/documents/data-sheet/BAT160_SER.pdf", "mimeType": "application/pdf"},
+                      {"name": "Datasheet", "url": "https://datasheets.octopart.com/BAT160A-Nexperia.pdf", "mimeType": "application/pdf"},
+                      {"name": "Datasheet", "url": "//mm.digikey.com/Volume0/opasdata/d220001/medias/docus/BAT160.pdf", "mimeType": "application/pdf"}]},
+                  {"name": "Application Notes", "documents": [{"name": "AN", "url": "https://x/an.pdf", "mimeType": "application/pdf"}]}],
+              "specs": [], "sellers": []}
+
+
+def test_nexar_keeps_every_datasheet_copy_best_first():
+    info = PL.nexar_info(NEXAR_PART, "nexar", "USD")
+    assert info.datasheet.endswith("BAT160_SER.pdf")
+    assert info.datasheets == ["https://assets.nexperia.com/documents/data-sheet/BAT160_SER.pdf",
+                               "https://datasheets.octopart.com/BAT160A-Nexperia.pdf",
+                               "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/BAT160.pdf"], info.datasheets
+    res = P.from_part_info(info, P.SourceResult("nexar"))
+    assert res.extra["datasheet"] == info.datasheets[0] and res.extra["datasheets"] == info.datasheets
+
+
+def test_digikey_media_links_and_protocol_relative_urls():
+    prod = {"ManufacturerProductNumber": "LT8610", "Manufacturer": {"Name": "ADI"}, "Description": {"ProductDescription": "Buck"},
+            "DatasheetUrl": "//mm.digikey.com/Volume0/opasdata/d220001/medias/docus/lt8610.pdf",
+            "MediaLinks": [{"MediaType": "Datasheets", "Url": "https://www.analog.com/media/en/lt8610.pdf"},
+                           {"MediaType": "Product Photos", "Url": "https://x/photo.jpg"}]}
+    info = PL.digikey_info(prod, "digikey", "USD")
+    assert info.datasheets == ["https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/lt8610.pdf",
+                               "https://www.analog.com/media/en/lt8610.pdf"], info.datasheets
+
+
+def test_the_nexar_query_asks_for_document_collections_and_matches_the_schema():
+    assert "documentCollections { name documents { name url mimeType } }" in PL.NexarSourcing.FIELDS
+    try:
+        from graphql import build_schema, parse, validate
+    except ImportError:
+        print("skip schema check (pip install graphql-core)")
+        return
+    schema = build_schema((ROOT / "tests" / "nexar" / "schema.graphql").read_text(), assume_valid_sdl=True)
+    for q in (PL.NexarSourcing.Q_PART, PL.NexarSourcing.Q_PART_ALT, PL.NexarSourcing.Q_SEARCH):
+        errs = validate(schema, parse(q))
+        assert not errs, errs
+
+
+def test_triage_keeps_every_sources_links_and_the_reader_tries_them_in_order():
+    class Src:
+        def __init__(self, name, links):
+            self.name, self.links = name, links
+
+        def lookup(self, work):
+            r = P.SourceResult(self.name, found=True, mpn="LT8610")
+            r.extra = {"datasheet": self.links[0], "datasheets": self.links}
+            return r
+    from ecadlib.kicad_index import KiCadIndex
+    provs = [Src("nexar", ["https://www.analog.com/lt8610.pdf", "https://datasheets.octopart.com/lt8610.pdf"]),
+             Src("mouser", ["https://www.mouser.com/datasheet/2/609/lt8610.pdf", "https://www.analog.com/lt8610.pdf"])]
+    row = T.triage([{"mpn": "LT8610", "designator": "U1"}], KiCadIndex([]), provs, None)[0]
+    assert row["src_datasheet"] == "https://www.analog.com/lt8610.pdf"
+    assert row["src_datasheet_more"].split() == ["https://datasheets.octopart.com/lt8610.pdf",
+                                                 "https://www.mouser.com/datasheet/2/609/lt8610.pdf"], row
+    urls = [u for u, _ in D.datasheet_urls({"parameters": []}, {"datasheet": ""}, row, {})]
+    assert urls == ["https://www.analog.com/lt8610.pdf", "https://datasheets.octopart.com/lt8610.pdf",
+                    "https://www.mouser.com/datasheet/2/609/lt8610.pdf"], urls
+
+
+def test_ti_redirect_pages_are_unwrapped():
+    u = "https://www.ti.com/general/docs/suppproductinfo.tsp?distId=10&gotoUrl=https%3A%2F%2Fwww.ti.com%2Flit%2Fgpn%2Fne555"
+    assert D.clean_url(u) == "https://www.ti.com/lit/gpn/ne555"
+    assert D.clean_url("//mm.digikey.com/a.pdf") == "https://mm.digikey.com/a.pdf"
+    assert D.clean_url("https://www.ti.com/lit/ds/symlink/ne555.pdf") == "https://www.ti.com/lit/ds/symlink/ne555.pdf"
+    urls = D.datasheet_urls({"parameters": []}, {"datasheet": u}, {}, {})
+    assert urls[0][0] == "https://www.ti.com/lit/gpn/ne555", urls
+
+
+# ---------------------------------------------------------------- bookmarks
+def bookmarked(pages, marks):
+    """pdf_lines(pages) with bookmarks: marks = [(title, 0-based page, parent index or None)]."""
+    import pypdf
+    w = pypdf.PdfWriter(clone_from=pypdf.PdfReader(io.BytesIO(pdf_lines(pages))))
+    made = []
+    for title, pg, parent in marks:
+        made.append(w.add_outline_item(title, pg, parent=made[parent] if parent is not None else None))
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+def mcu_pages(n=80):
+    """SYNTHETIC family sheet whose package drawings are pictures (no text layer on those pages), as many big MCU
+    datasheets are: only the bookmarks say which page is which package."""
+    pages = [["MCU family electrical characteristics", f"page {i + 1}"] for i in range(n)]
+    pages[0] = ["TESTMCU family", "Packages: LQFP144, LQFP100, LQFP64, TFBGA100"]
+    for i in range(70, 78):
+        pages[i] = []                                # drawing pages: vector art, no text
+    return pages
+
+
+MCU_MARKS = [("1. Description", 0, None), ("5. Pin Configuration", 10, None), ("40. Electrical Characteristics", 30, None),
+             ("62. Packaging Information", 70, None), ("62.1 LQFP144", 70, 3), ("62.2 TFBGA100", 72, 3),
+             ("62.3 LQFP100", 74, 3), ("62.4 LQFP64", 76, 3), ("63. Revision History", 78, None)]
+
+
+def test_page_marks_give_each_page_its_chapter():
+    marks = R.page_marks(bookmarked(mcu_pages(), MCU_MARKS))
+    assert marks[74] == "62. Packaging Information > 62.3 LQFP100" and marks[75] == marks[74], marks[74:76]
+    assert marks[70] == "62. Packaging Information > 62.1 LQFP144" and marks[5] == "1. Description"
+    assert marks[79] == "63. Revision History"
+    assert R.page_marks(pdf_lines(mcu_pages())) is None             # no bookmarks: None, text only
+
+
+def test_bookmarks_find_the_drawing_of_this_package_when_the_page_has_no_text():
+    data = bookmarked(mcu_pages(), MCU_MARKS)
+    texts, marks = R.page_texts(data), R.page_marks(data)
+    before, _ = R.pick_pages(texts, 6, "TESTMCU100", "LQFP-100")
+    pages, why = R.pick_pages(texts, 6, "TESTMCU100", "LQFP-100", marks)
+    assert 75 in pages and 76 in pages, (pages, why)
+    assert not {71, 72, 73, 77, 78} & set(pages), (pages, why)       # the other packages' drawings stay out
+    assert any(w.startswith("bookmark: 62.3 LQFP100") for w in why[75]), why
+    assert before is None or 75 not in before, before                # text alone could not find it
+
+
+def test_the_reader_uses_the_bookmarks():
+    from unittest import mock
+    from tests.test_ds_route import reader
+    import tempfile
+    data = bookmarked(mcu_pages(), MCU_MARKS)
+    with tempfile.TemporaryDirectory() as d:
+        rd = reader(d, {"https://a/mcu.pdf": data})
+        j = rd.job("TESTMCU100", [("https://a/mcu.pdf", "BOM")], "LQFP-100")
+        assert isinstance(j["offset"], list) and 75 in j["offset"], j["offset"]
+
+
+def test_pages_command_reports_bookmarks():
+    import contextlib, tempfile
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "mcu.pdf"
+        f.write_bytes(bookmarked(mcu_pages(), MCU_MARKS))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            assert R.pages_main([str(f), "--part", "TESTMCU100", "--package", "LQFP-100", "--budget", "6", "--json"]) == 0
+    out = json.loads(buf.getvalue())
+    assert out["bookmarks"] is True and 75 in out["steps"][0]["pages"], out
+
+
+# ---------------------------------------------------------------- TI's Package Option Addendum
+def addendum_texts(line):
+    t = ["TPS2660x 60V eFuse", "filler"] + ["typical characteristics"] * 40
+    t[38] = "PACKAGE OPTION ADDENDUM\nOrderable Device Status Package Type Package Drawing Pins Package Qty Eco Plan\n" + line \
+        + "\nTPS26600RGER ACTIVE VQFN RGE 24 3000 RoHS & Green NIPDAU Level-2-260C-1 YEAR -40 to 125 TPS26600"
+    return t
+
+
+def test_ordering_facts_from_old_and_new_ti_addendum_lines():
+    old = addendum_texts("TPS26600PWPR ACTIVE HTSSOP PWP 16 2000 RoHS & Green NIPDAU Level-3-260C-168 HR -40 to 125 TPS26600")
+    f = R.ordering_facts(old, "TPS26600PWPR")
+    assert (f["pins"], f["package"], f["code"], f["page"]) == (16, "HTSSOP", "PWP", 39), f
+    assert R.ordering_facts(old, "TPS26600PWP")["pins"] == 16                 # the reel suffix left off
+    assert R.ordering_facts(old, "TPS26600RGER")["pins"] == 24                # the other package, not mixed up
+    new = addendum_texts("TPS26600PWPR Active Production HTSSOP (PWP) | 16 2000 | LARGE T&R Yes NIPDAU Level-3-260C-168 HR")
+    f = R.ordering_facts(new, "TPS26600PWPR")
+    assert (f["pins"], f["package"], f["code"]) == (16, "HTSSOP", "PWP"), f
+    assert R.ordering_facts(old, "LM317T") is None and R.ordering_facts(["no addendum"] * 5, "TPS26600PWPR") is None
+
+
+def test_ordering_facts_disagreeing_lines_give_nothing():
+    t = addendum_texts("TPS26600PWPR ACTIVE HTSSOP PWP 16 2000 RoHS")
+    t[39] = "PACKAGE OPTION ADDENDUM\nTPS26600PWPR ACTIVE HTSSOP PWP 14 2000 RoHS"
+    assert R.ordering_facts(t, "TPS26600PWPR") is None
+
+
+def table_pdf(rows, at=38, n=42):
+    """A PDF whose page `at` holds a ruled table (pdfplumber finds tables by their lines), other pages plain text."""
+    import pypdf
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+    w = pypdf.PdfWriter()
+    font = w._add_object(DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"),
+                                           NameObject("/BaseFont"): NameObject("/Helvetica")}))
+    esc = lambda t: t.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    for i in range(n):
+        page = w.add_blank_page(792, 612)
+        if i == at:
+            cw, rh, x0, y0 = [110, 50, 90, 60, 40], 20, 40, 560
+            ops = [f"BT /F1 9 Tf 40 590 Td (PACKAGE OPTION ADDENDUM) Tj ET", "0.5 w"]
+            for r, row in enumerate(rows):
+                x = x0
+                for c, cell in enumerate(row):
+                    y = y0 - r * rh
+                    ops.append(f"{x} {y - rh} {cw[c]} {rh} re S")
+                    ops.append(f"BT /F1 7 Tf {x + 2} {y - 14} Td ({esc(cell)}) Tj ET")
+                    x += cw[c]
+            body = "\n".join(ops)
+        else:
+            body = f"BT /F1 10 Tf 72 540 Td (typical characteristics page {i + 1}) Tj ET"
+        cs = DecodedStreamObject()
+        cs.set_data(body.encode())
+        page[NameObject("/Contents")] = w._add_object(cs)
+        page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+def test_pdfplumber_reads_the_addendum_table_by_column():
+    try:
+        import pdfplumber  # noqa: F401
+    except ImportError:
+        print("skip (pip install pdfplumber)")
+        return
+    data = table_pdf([["Orderable Device", "Status", "Package Type", "Package Drawing", "Pins"],
+                      ["TPS26600PWPR", "ACTIVE", "HTSSOP", "PWP", "16"],
+                      ["TPS26600RGER", "ACTIVE", "VQFN", "RGE", "24"]])
+    texts = R.page_texts(data)
+    f = R.ordering_facts(texts, "TPS26600PWPR", data)
+    assert f and (f["pins"], f["package"], f["code"], f["how"]) == (16, "HTSSOP", "PWP", "pdfplumber table"), f
+    assert R.ordering_facts(texts, "TPS26600RGER", data)["pins"] == 24
+
+
+def test_the_ordering_table_fills_a_blank_pin_count_and_flags_a_different_one():
+    facts = {"pins": 16, "package": "HTSSOP", "code": "PWP", "page": 39, "part": "TPS26600PWPR", "how": "text line"}
+    pkg, rev = {"pin_count": None}, []
+    D.ordering_check(pkg, facts, rev)
+    assert pkg["pin_count"] == 16 and "from the ordering table (p39" in rev[0], rev
+    assert not R.INCOMPLETE.search(rev[0]) and not R.FAILED.search(rev[0])   # not a reason to read again
+    pkg, rev = {"pin_count": 14}, []
+    D.ordering_check(pkg, facts, rev)
+    assert pkg["pin_count"] == 14 and "differs" in rev[0], rev
+    pkg, rev = {"pin_count": 16}, []
+    D.ordering_check(pkg, facts, rev)
+    assert rev == []
+
+
+def test_the_reader_reads_the_ordering_table_when_it_makes_the_job():
+    import tempfile
+    from tests.test_ds_route import reader
+    pages = [["TPS2660x eFuse", "page"]] * 40
+    pages[38] = ["PACKAGE OPTION ADDENDUM", "TPS26600PWPR ACTIVE HTSSOP PWP 16 2000 RoHS & Green NIPDAU"]
+    with tempfile.TemporaryDirectory() as d:
+        rd = reader(d, {"https://a/tps.pdf": pdf_lines(pages)})
+        j = rd.job("TPS26600PWPR", [("https://a/tps.pdf", "BOM")], "HTSSOP-16")
+        assert j["facts"] and j["facts"]["pins"] == 16, j.get("facts")
+
+
+def test_pdfplumber_reads_ti_s_newer_package_pins_column():
+    try:
+        import pdfplumber  # noqa: F401
+    except ImportError:
+        print("skip (pip install pdfplumber)")
+        return
+    data = table_pdf([["Orderable part number", "Status", "Material type", "Package | Pins", "Package qty"],
+                      ["BQ25750RRVR", "Active", "Production", "VQFN (RRV) | 36", "3000 | LARGE"],
+                      ["BQ25750RRVR.A", "Active", "Production", "VQFN (RRV) | 36", "3000 | LARGE"]])
+    f = R.ordering_facts(R.page_texts(data), "BQ25750RRVR", data)
+    assert f and (f["pins"], f["package"], f["code"], f["how"]) == (36, "VQFN", "RRV", "pdfplumber table"), f

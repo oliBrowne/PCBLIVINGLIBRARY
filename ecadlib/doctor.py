@@ -19,7 +19,8 @@ from . import userconfig as UC
 LEVELS = ("OK", "WARN", "FAIL")
 CORE = (("requests", "requests"), ("pandas", "pandas"), ("openpyxl", "openpyxl"), ("jsonschema", "jsonschema"),
         ("olefile", "olefile"))
-OPTIONAL = (("PIL", "pillow", "visual-check pictures"), ("pypdf", "pypdf", "datasheet page trimming"))
+OPTIONAL = (("PIL", "pillow", "visual-check pictures"), ("pypdf", "pypdf", "datasheet page trimming"),
+            ("pdfplumber", "pdfplumber", "datasheet ordering tables read by column"))
 TOOLS = (("pdftoppm", "datasheet pages for visual-check", "install poppler-utils"),
          ("kicad-cli", "KiCad checks and SVG previews", "install KiCad 7 or newer"),
          ("git", "upkeep pull requests", "install git"))
