@@ -105,7 +105,7 @@ def footprint_lines(fp):
                 return "rule", 0
             if v == "none":                 # closed aperture: the expansion altium_lib uses
                 return "manual", -max(w, h) // 2 - mm(0.01)
-            return "manual", mm(v) if isinstance(v, float) else int(v)
+            return "manual", mm(v)          # mm, as altium_lib writes it
         pm, pv = exp(p.get("paste"))
         mm_, mv = exp(p.get("mask"))
         ox, oy = (mm(v) for v in p["offset"]) if p.get("offset") else (0, 0)
@@ -202,6 +202,24 @@ def write_recipe(lib_path, kind, items):
     return rp
 
 
+def safe_step(rel):
+    """True for a STEP path a recipe may name: ecadlib_3d/... relative to the library's folder, '/' separators, no
+    '..', '.', empty or drive parts. A recipe comes with any library someone shares, so a BODY path like
+    '../../startup/x.bat' must never be read, copied or handed to Altium."""
+    s = str(rel or "")
+    if "\\" in s or ":" in s or s.startswith("/"):
+        return False
+    parts = s.split("/")
+    return len(parts) >= 2 and parts[0] == "ecadlib_3d" and all(p not in ("", ".", "..") for p in parts)
+
+
+def _inside(path, folder):
+    try:
+        return Path(path).resolve().is_relative_to(Path(folder).resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def copy_recipe(src_lib, dst_lib):
     """A library copied elsewhere (dblib-sync copies each part's files into the library folder) takes its recipe along:
     <dst_lib>.ecadbuild and the STEP files its BODY lines name (relative to the library's folder). The recipe's
@@ -223,6 +241,10 @@ def copy_recipe(src_lib, dst_lib):
             ln = _line(f[0], dst_lib.name)
         elif f[0] == "BODY" and len(f) > 4 and f[4]:
             src, dst = src_lib.parent / f[4], dst_lib.parent / f[4]
+            if not (safe_step(f[4]) and _inside(src, src_lib.parent) and _inside(dst, dst_lib.parent)):
+                f[4] = ""                       # not a STEP file beside the library: the body keeps no model
+                out.append("\t".join(f))
+                continue
             if src.is_file() and not (dst.is_file() and dst.read_bytes() == src.read_bytes()):
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 dst.write_bytes(src.read_bytes())
@@ -319,7 +341,7 @@ def recipe_steps(lib_path):
     if not rp.is_file():
         return []
     return [f[4] for f in (ln.split("\t") for ln in rp.read_text(encoding="utf-8").splitlines())
-            if f[0] == "BODY" and len(f) > 4 and f[4]]
+            if f[0] == "BODY" and len(f) > 4 and f[4] and safe_step(f[4])]
 
 
 def recipes(folder):
@@ -360,8 +382,8 @@ def build_text(folder, found=None):
                 ln = _line(kind, str(rel).replace("/", "\\"))
             elif kind == "BODY":           # STEP files sit beside their PcbLib: make the name folder-relative
                 f = ln.split("\t")
-                if f[4]:
-                    f[4] = str(rel.parent / f[4]).replace("/", "\\")
+                if len(f) > 4 and f[4]:         # only ecadlib_3d/... beside the library (safe_step), else no model
+                    f[4] = str(rel.parent / f[4]).replace("/", "\\") if safe_step(f[4]) else ""
                 ln = "\t".join(f)
             lines.append(ln)
     return "\n".join(lines) + "\n"
@@ -1245,8 +1267,11 @@ def _recipe_items(rp):
         elif f[0] == "FOOTPRINTLINK" and cur is not None:
             cur["footprint"] = f[1]
         elif f[0] == "PAD" and cur is not None:
-            cur["pads"].append({"designator": f[1], "x": int(f[2]), "y": int(f[3]), "w": int(f[4]), "h": int(f[5]),
-                                "hole": int(f[10])})
+            pad = {"designator": f[1], "x": int(f[2]), "y": int(f[3]), "w": int(f[4]), "h": int(f[5]), "hole": int(f[10])}
+            if len(f) > 18:                     # rotation, layer, plating, paste / mask: an edit there is an edit too
+                pad.update(rot=int(f[6]) / 1000, layer=int(f[9]), plated=f[14] == "1",
+                           paste=(f[15] == "manual", int(f[16])), mask=(f[17] == "manual", int(f[18])))
+            cur["pads"].append(pad)
         elif f[0] == "PIN" and cur is not None:
             cur["pins"].append({"num": f[3], "name": f[4], "x": round(int(f[7]) / 10000), "y": round(int(f[8]) / 10000),
                                 "length": round(int(f[9]) / 10000), "orient": int(f[6]), "etype": int(f[5])})
@@ -1254,7 +1279,32 @@ def _recipe_items(rp):
 
 
 def _key(d):
-    return (d.get("designator") or d.get("num"), d["x"], d["y"])
+    """Sort key of a pad (designator) or pin (num); an unnumbered pad (NPTH mounting hole) has designator ''."""
+    return (str((d["designator"] if "designator" in d else d.get("num")) or ""), d["x"], d["y"])
+
+
+def _pad_diffs(a, b, tol):
+    """The fields beyond x/y/w/h/hole where Altium's pad b differs from the recipe's pad a (old recipes: none)."""
+    bad = []
+    if "rot" not in a:
+        return bad
+    d = abs(a["rot"] - float(b.get("rot") or 0)) % 360
+    if min(d, 360 - d) > 0.01:
+        bad.append(f"rot {float(b.get('rot') or 0):g} != {a['rot']:g}")
+    if b.get("layer") is not None and b["layer"] != a["layer"]:
+        bad.append(f"layer {b['layer']} != {a['layer']}")
+    if a["hole"] and bool(b.get("plated", True)) != a["plated"]:
+        bad.append(f"plated {bool(b.get('plated'))} != {a['plated']}")
+    for k in ("paste", "mask"):
+        manual, v = a[k]
+        mode = b.get(f"{k}_mode")
+        if mode is None:
+            continue
+        if (mode == 2) != manual:
+            bad.append(f"{k} {'manual' if mode == 2 else 'rule'} != {'manual' if manual else 'rule'}")
+        elif manual and b.get(k) is not None and abs(b[k] - v) > tol:
+            bad.append(f"{k} {b[k]} != {v}")
+    return bad
 
 
 def best_fit_name(want, got):
@@ -1282,10 +1332,11 @@ def compare_one(lib, rp, tol=10, known=None):
             if len(g) != len(w["pads"]):
                 probs.append(f"{lib.name}/{name}: {len(g)} pads, recipe has {len(w['pads'])}")
             for a, b in zip(sorted(w["pads"], key=_key), sorted(g, key=_key)):
-                bad = [k for k in ("x", "y", "w", "h", "hole") if abs(a[k] - b[k]) > tol]
+                bad = [f"{k} {b[k]} != {a[k]}" for k in ("x", "y", "w", "h", "hole") if abs(a[k] - b[k]) > tol]
+                bad += _pad_diffs(a, b, tol)
                 if a["designator"] != b["designator"] or bad:
-                    probs.append(f"{lib.name}/{name} pad {a['designator']}: " + ", ".join(
-                        f"{k} {b[k]} != {a[k]}" for k in bad) + ("" if a["designator"] == b["designator"] else f" (got {b['designator']})"))
+                    probs.append(f"{lib.name}/{name} pad {a['designator']}: " + ", ".join(bad)
+                                 + ("" if a["designator"] == b["designator"] else f" (got {b['designator']})"))
     else:
         _, comps = AL.read_schlib(lib)
         recs = {c["name"]: c["records"] for c in comps}
