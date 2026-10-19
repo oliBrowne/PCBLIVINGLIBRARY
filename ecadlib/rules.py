@@ -550,7 +550,16 @@ def house_row(row, rules):
     """A DbLib row (column -> value) with parameter columns renamed; key and reserved columns stay."""
     if not (rules or DEFAULTS)["parameters"]["names"]:
         return row
-    return {(k if k in KEY_COLUMNS else param_name(k, rules)): v for k, v in row.items()}
+    out, renamed = {}, set()
+    for k, v in row.items():
+        h = k if k in KEY_COLUMNS else param_name(k, rules)
+        if h != k:                          # the canonical field wins over a parameter already spelled like the house
+            if v or h not in out:           # name (a stale "Mfr PN" BOM column), unless the canonical one is empty
+                out[h] = v
+            renamed.add(h)
+        elif h not in renamed or not out.get(h):
+            out[h] = v
+    return out
 
 
 def default_params(rules):
