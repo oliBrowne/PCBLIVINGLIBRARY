@@ -339,13 +339,15 @@ def merged_params(existing, item):
     return None if want == cur else [{"name": k, "value": v} for k, v in want.items()]
 
 
-def identity_change(existing, params):
+def identity_change(existing, params, rules=None):
     """A parameter update that would make a released workspace component another part: [change text] for each
     identity field (MPN, manufacturer, the value as a number) the workspace has and `params` (the list a push would
-    send) changes. Filling one the component does not have yet is no change of part."""
+    send) changes. Filling one the component does not have yet is no change of part. Both sides carry the house
+    names of [parameters.names] ("MfrPN"): they are read back under ecadlib's names, which the fingerprint knows."""
     from . import change_diff as CD, fingerprint as FP
-    cur = {p["name"]: p["value"] for p in ((existing.get("details") or {}).get("parameters") or [])}
-    new = {p["name"]: p["value"] for p in params}
+    from .a365_sync import _cname
+    cur = {_cname(p["name"], rules): p["value"] for p in ((existing.get("details") or {}).get("parameters") or [])}
+    new = {_cname(p["name"], rules): p["value"] for p in params}
     a, b = FP.build("", params=cur), FP.build("", params=new)
     return [c["text"] for c in CD.diff(a, b) if c["class"] == "identity" and str(c.get("old") or "").strip()]
 
@@ -534,7 +536,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
             elif existing:
                 new = merged_params(existing, it)
                 res["a365_revision"] = _rev_id(existing)
-                ident = identity_change(existing, new) if new is not None else []
+                ident = identity_change(existing, new, rules) if new is not None else []
                 if new is None:
                     res["action"] = "up_to_date"
                 elif ident:                    # change control (#105): in-place edits never make it another part
