@@ -101,7 +101,8 @@ A tunnel puts the server on the internet even though it listens on 127.0.0.1, so
   allow it with `--allow-origin`.
 - File arguments must be inside the workspace or a `--lib` folder. `--any-path` lifts that.
 - Offer fewer tools to a remote agent: `--tools read-only` changes nothing but its own reports in the workspace
-  (parity, project BOM), and `--tools core` keeps only the BOM-to-library flow and leaves out the export tools.
+  (parity, project BOM, where-used, the Altium 365 plan file when there is no librarian plan), and `--tools core`
+  keeps only the BOM-to-library flow and leaves out the export tools.
 
 claude.ai's web connectors need OAuth sign-in, which ecadlib does not offer. Use Claude Code or Claude Desktop.
 
@@ -143,8 +144,13 @@ Jobs live in the server's memory, so restarting the server forgets them, but the
 the price as `ai` (the model, about how much, at most how much). The agent shows that to you, and only after you say
 yes does it call `ai_read` with the amount you approved. The reads are capped to that amount, and refused if the
 estimate has gone up since. The house style guide works the same way: `learn_house_style` with `ai` returns a quote,
-and `house_style_guide` spends it. `datasheet_batch`, `visual_check` and `apply_house_style` with `ai` also cost money.
-Their descriptions tell the agent to ask you first. See [api-keys.md](api-keys.md) for where your key lives.
+and `house_style_guide` spends it. `datasheet_batch`, `visual_check` and `apply_house_style` with `ai` are held the
+same way, by the server and not only by their descriptions: each needs `approved_usd`, the amount you said yes to, and
+is refused without it, when it is less than the quote, or when the quote is over your limit and `over_limit_ok` is not
+set. The quotes come from `datasheet_estimate` (its `ai`, for `datasheet_batch`; a `sync` read is priced by
+`datasheet_quote`, at full price), `visual_check` with `render_only` (its `ai`) and `apply_house_style` with `ai` but no
+`approved_usd` (its `ai`: nothing is sent). A server started with `--offline` makes no model call at all. See
+[api-keys.md](api-keys.md) for where your key lives.
 
 ## Other limits
 

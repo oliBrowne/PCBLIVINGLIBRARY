@@ -14,7 +14,8 @@ import json, os
 ENV_FLAGS = {
     "ECADLIB_LIB": ("--lib", {"triage": None, "librarian": None, "resolve": None, "kicad-export": None, "mcp": None,
                               "ui": None, "doctor": None}),
-    "ECADLIB_WORKSPACE": ("--workspace", {"mcp": None, "ui": None, "visual-check": None, "doctor": None, "status": None}),
+    "ECADLIB_WORKSPACE": ("--workspace", {"mcp": None, "ui": None, "visual-check": None, "doctor": None, "status": None,
+                                          "review": None}),
 }
 DEBUG_ENV = "ECADLIB_DEBUG"
 
@@ -83,6 +84,8 @@ def debug_wanted(argv, environ=None):
 def friendly(e):
     """(one-line message, hint, exit code) for an exception, or None when it is not one we expected (a bug)."""
     name = getattr(e, "filename", None)
+    if getattr(type(e), "plain_error", False):    # change control / ledger refusals: their own words and hint
+        return (str(e), getattr(e, "hint", "") or "see the docs", 2)
     if isinstance(e, FileNotFoundError):
         return (f"file not found: {name or e}", f"check the path (relative paths start at {os.getcwd()})", 2)
     if isinstance(e, PermissionError):

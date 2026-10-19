@@ -1,5 +1,5 @@
 """Index a local KiCad library directory (*.kicad_sym, *.pretty/*.kicad_mod) for BOM matching."""
-import re
+import re, unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,26 +15,48 @@ BODY_RE = re.compile(r"(?<![0-9.])(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:x\d+(?:\.\d+
 
 
 def norm_mpn(s):
-    return re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
+    """An MPN without case and punctuation, for comparing: 'LM358-DR' == 'lm358dr'. The micro sign is U (µA741CN ==
+    UA741CN), fullwidth / accented letters fold to ASCII; a letter that has no ASCII form is kept, never dropped
+    (µA741CN must not become A741CN, another part)."""
+    s = unicodedata.normalize("NFKD", str(s or "")).replace("µ", "U").replace("μ", "U")\
+        .replace("Μ", "U")                                      # micro sign / mu ('µ'.upper() is a capital mu)
+    s = "".join(c for c in s if not unicodedata.combining(c)).upper()
+    if not s.isascii():
+        return re.sub(r"[\W_]", "", s)
+    return re.sub(r"[^A-Z0-9]", "", s)
 
 
-_UNIT = r"((?i:ohms?|[fhω]))?(?![A-Za-z0-9])"   # optional unit, then the number must end (74HC595 is not 74)
+_UNIT = r"((?i:ohms?|hz|[fhωvwa]))?(?![A-Za-z0-9])"   # optional unit, then the number must end (74HC595 is not 74)
+UNITS = {"o": "R", "ω": "R", "f": "F", "h": "H", "v": "V", "w": "W", "a": "A", "hz": "Hz"}
 
 
-def parse_value(s, with_unit=False):
-    """'10k' / '10kΩ' / '4k7' / '100nF' / '0.1uF' / '10K 1%' / '0R' -> float, else None.
-    with_unit=True -> (value, unit) with unit in 'F', 'H', 'R' (ohm) or '' when not stated."""
+def split_value(s):
+    """'100nF 50V' -> (1e-07, 'F', '50V'): the leading value in base units, its unit ('F', 'H', 'R' ohm, 'V', 'W', 'A',
+    'Hz', or '' when not stated) and the rest of the text; (None, '', text) when it does not start with a value."""
     s = re.sub(r"(?i)(?<=\d)meg", "M", str(s or "").strip())
     m = re.match(r"^(\d+)([pnuµμmkKMGR])(\d+)" + _UNIT, s)          # 4k7 / 4R7 notation
     if m:
         v, pre, u = float(f"{m.group(1)}.{m.group(3)}"), m.group(2), m.group(4)
+    elif re.match(r"^(\d+)([VvWwAa])(\d+)(?![A-Za-z0-9])", s):        # 3V3 / 1A5 notation
+        m = re.match(r"^(\d+)([VvWwAa])(\d+)", s)
+        v, pre, u = float(f"{m.group(1)}.{m.group(3)}"), "", m.group(2)
     else:
-        m = re.match(r"^(\d+(?:[.,]\d+)?)\s*([pnuµμmkKMGR]?)" + _UNIT, s)     # '4,7k' / '2,2µF': European decimals
+        m = re.match(r"^(\d+(?:[.,]\d+)?)(?![.,]?\d)\s*([pnuµμmkKMGR]?)" + _UNIT, s)  # '4,7k' / '2,2µF': European
+                                              # decimals; the number never stops short of its decimals (3.3V is not 3)
         if not m:
-            return (None, "") if with_unit else None
+            return None, "", s
         v, pre, u = float(m.group(1).replace(",", ".")), m.group(2), m.group(3)
     v *= SI["r" if pre == "R" else pre]
-    u = "R" if pre == "R" or (u or "").lower()[:1] in ("o", "ω") else (u or "").upper()
+    u = "R" if pre == "R" else UNITS.get((u or "").lower(), UNITS.get((u or "").lower()[:1], ""))
+    return v, u, s[m.end():].strip()
+
+
+def parse_value(s, with_unit=False):
+    """'10k' / '10kΩ' / '4k7' / '100nF' / '0.1uF' / '10K 1%' / '0R' / '3.3V' -> float, else None.
+    with_unit=True -> (value, unit) with unit in 'F', 'H', 'R' (ohm), 'V', 'W', 'A', 'Hz' or '' when not stated."""
+    v, u, _ = split_value(s)
+    if v is None:
+        return (None, "") if with_unit else None
     return (v, u) if with_unit else v
 
 

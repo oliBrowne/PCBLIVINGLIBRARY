@@ -299,7 +299,13 @@ def scan(root, max_depth=6):
                          "made_by": "", "state": "new", "error": str(e)})
             continue
         for k in kinds_in(d) + [k for k in (st.get("kinds") or {}) if k in KINDS and k not in kinds_in(d)]:
-            add(_main_file(d, k) or d, k, _ver((st.get("kinds") or {}).get(k, 1)), st.get("ecadlib"))
+            mf = _main_file(d, k)
+            bad = _damaged_json(mf) if mf is not None else None   # the stamp says the version; the file must still read
+            if bad:
+                rows.append({"path": str(mf), "kind": k, "version": None, "current": KINDS[k].current, "made_by": "",
+                             "state": "error", "error": bad})
+                continue
+            add(mf or d, k, _ver((st.get("kinds") or {}).get(k, 1)), st.get("ecadlib"))
         for k in (st.get("kinds") or {}):
             if k not in KINDS:                 # a kind only a newer ecadlib has: not ours to read, not an error
                 rows.append({"path": str(d), "kind": k, "version": st["kinds"][k], "current": None,
@@ -321,9 +327,25 @@ def scan(root, max_depth=6):
     return rows
 
 
+def _damaged_json(f):
+    """Why a stamp kind's main .json file can't be read ("not valid JSON: ... line 1 column 2"), else None."""
+    f = Path(f)
+    if f.suffix != ".json" or not f.is_file():
+        return None
+    try:
+        json.loads(f.read_text(encoding="utf-8-sig"))
+    except ValueError as e:                        # JSONDecodeError and UnicodeDecodeError
+        if isinstance(e, json.JSONDecodeError):
+            return f"not valid JSON ({e.msg}, line {e.lineno} column {e.colno})"
+        return f"not valid JSON ({e})"
+    except OSError as e:
+        return f"unreadable ({e.strerror or e})"
+    return None
+
+
 def _key_version(f):
     f = Path(f)
-    text = f.read_text(encoding="utf-8")
+    text = f.read_text(encoding="utf-8-sig")
     if f.suffix == ".toml":
         from .rules import toml_module
         tomllib = toml_module()
@@ -415,8 +437,11 @@ def main(argv=None):
         nxt = []
         if dry and n_old:
             nxt.append((f"ecadlib migrate {a.path}", "upgrade them (backups go to .ecadlib_backup/ first)"))
-        if n_bad:
+        if any(r["state"] == "new" for r in rows):
             nxt.append(("pip install -U ecadlib", "a file was written by a newer ecadlib"))
+        if any(r["state"] == "error" for r in rows):
+            nxt.append(("restore the unreadable file", "from a backup or version control, or delete its folder and run "
+                                                        "the step that made it again"))
         t.summary(f"{M.plural(len(rows), 'versioned file')}: {n_old} {verb}, {n_bad} newer or unreadable"
                   + ("; nothing written" if dry else ""), next=nxt)
     if any(r["state"] in ("new", "error") for r in rows):

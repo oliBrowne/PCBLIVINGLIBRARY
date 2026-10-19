@@ -207,8 +207,44 @@ def check_metadata(m, schema_path=None, definition="Package"):
 
 
 # ---------------------------------------------------------------- package
-def _source(src, name, include_held, http, offline, cache, log):
-    """(export folder, library name, kicad_export report or None, temp dir to clean up or None)."""
+def check_export_folder(src, lib, rep):
+    """Change control (#105): a kicad-export folder is packaged only as kicad-export wrote it. kicad_export.json lists
+    every file the export wrote with its sha256 (taken from the released revisions); a symbol library or footprint
+    edited, replaced or added by hand since is refused, so a package never carries a change no one approved. A 3D
+    model the export did not write stays the user's file (kicad-export keeps those too). Raises ValueError."""
+    src = Path(src)
+    how = f"run `ecadlib kicad-export PLAN -o {src}` again (or package the plan.json itself)"
+    if not rep or "written" not in rep:
+        raise ValueError(f"{src}: no kicad_export.json with the files kicad-export wrote, so nothing can be checked "
+                         f"against the released library: {how}; for a KiCad folder ecadlib did not export, pass "
+                         f"--unchecked (the package then says it was not checked)")
+    written = rep.get("written") or {}
+    files = ([src / f"{lib}.kicad_sym"] if (src / f"{lib}.kicad_sym").is_file() else []) + \
+        sorted((src / f"{lib}.pretty").glob("*.kicad_mod")) + \
+        sorted(f for f in (src / f"{lib}.3dshapes").glob("*") if f.is_file() and f"{lib}.3dshapes/{f.name}" in written)
+    bad = []
+    for f in files:
+        rel = f.relative_to(src).as_posix()
+        if rel not in written:
+            bad.append(f"{rel} (not written by kicad-export)")
+        elif hashlib.sha256(f.read_bytes()).hexdigest() != written[rel]:
+            parts = [p["part"] for p in rep.get("parts") or [] if rel.endswith(f"/{p.get('footprint')}.kicad_mod")]
+            bad.append(f"{rel} (changed since kicad-export wrote it" + (f"; part {', '.join(parts)}" if parts else "") + ")")
+    gone = [r for r in written if r.startswith((f"{lib}.kicad_sym", f"{lib}.pretty/")) and not (src / r).is_file()]
+    bad += [f"{r} (removed since kicad-export wrote it)" for r in gone]
+    if bad:
+        raise ValueError(f"{src}: not packaged: files differ from what kicad-export wrote from the released library: "
+                         f"{'; '.join(bad[:8])}" + (f" and {len(bad) - 8} more" if len(bad) > 8 else "") +
+                         f". A change goes through the library (ecadlib part status / approve); then {how}")
+
+
+UNCHECKED_NOTE = "NOT CHECKED: packaged with --unchecked from a KiCad folder ecadlib did not export. Its symbols and footprints were not compared with any released revision of an ecadlib library."
+
+
+def _source(src, name, include_held, http, offline, cache, log, unchecked=False):
+    """(export folder, library name, kicad_export report or None, temp dir to clean up or None). unchecked: a folder
+    with no kicad_export.json (not written by ecadlib) is packaged without the change-control check; a folder
+    kicad-export wrote is always checked."""
     src = Path(src)
     if src.is_dir():
         exp = src / "kicad_export.json"
@@ -219,6 +255,8 @@ def _source(src, name, include_held, http, offline, cache, log):
             if not libs:
                 raise FileNotFoundError(f"{src} has no <lib>.kicad_sym or <lib>.pretty: run `ecadlib kicad-export PLAN -o {src}` first")
             lib = libs[0]
+        if not (unchecked and rep is None):
+            check_export_folder(src, lib, rep)
         return src, lib, rep, None
     if not src.is_file():
         raise FileNotFoundError(f"{src}: no such plan.json or kicad-export folder")
@@ -269,15 +307,18 @@ def content_hash(files):
 
 def build(src, out, name="ecadlib", identifier=None, pkg_version=None, kicad=8, prefix="PCM_", license_="CC-BY-SA-4.0",
           author="ecadlib user", description=None, homepage=None, base_url=None, include_held=False, http=None,
-          offline=False, cache="out/http_cache", schema=None, today=None, log=print):
-    """Build the PCM package from a plan.json or a kicad-export folder into `out`; returns the report dict."""
+          offline=False, cache="out/http_cache", schema=None, today=None, log=print, unchecked=False):
+    """Build the PCM package from a plan.json or a kicad-export folder into `out`; returns the report dict.
+    unchecked: package a KiCad folder ecadlib did not export (no kicad_export.json) as it is; the package's NOTICE.txt
+    and the report say it was not checked."""
     if int(kicad) < 7:
         raise ValueError("--kicad must be 7 or newer (the Plugin and Content Manager came with KiCad 6, libraries with 7)")
     if base_url and not re.match(r"^https?://", base_url):
         raise ValueError("--base-url must be an http:// or https:// URL: KiCad only fetches repositories over http(s) "
                          "(kicad_curl_easy.cpp); for a local file use the PCM's 'Install from File...'")
     out = Path(out)
-    exp, lib, xrep, tmp = _source(src, name, include_held, http, offline, cache, log)
+    exp, lib, xrep, tmp = _source(src, name, include_held, http, offline, cache, log, unchecked)
+    unchecked = bool(unchecked and Path(src).is_dir() and xrep is None)
     try:
         identifier = identifier or default_identifier(lib)
         if not ID_RE.match(identifier):
@@ -286,6 +327,8 @@ def build(src, out, name="ecadlib", identifier=None, pkg_version=None, kicad=8, 
         notice = exp / "NOTICE.txt"
         if notice.is_file():
             files["NOTICE.txt"] = notice.read_bytes()               # root files are not installed; kept in the zip
+        if unchecked:
+            files["NOTICE.txt"] = files.get("NOTICE.txt", b"") + (UNCHECKED_NOTE + "\n").encode("utf-8")
     finally:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -320,7 +363,8 @@ def build(src, out, name="ecadlib", identifier=None, pkg_version=None, kicad=8, 
            "install_size": install_size, "files": sorted(k for k in files if k.split("/", 1)[0] in PKG_DIRS),
            "symbols": sum(1 for k in files if k.endswith(".kicad_sym")),
            "footprints": sum(1 for k in files if k.endswith(".kicad_mod")),
-           "models": sum(1 for k in files if k.startswith("3dmodels/")), "checks": how, "problems": problems}
+           "models": sum(1 for k in files if k.startswith("3dmodels/")), "checks": how, "problems": problems,
+           "unchecked": unchecked}
     if base_url:
         pkg = json.loads(json.dumps(meta))
         pkg["versions"][0].update({"download_url": f"{base_url.rstrip('/')}/{zname}", "download_sha256": rep["sha256"],
@@ -437,6 +481,8 @@ def main(argv=None):
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--offline", action="store_true", help="with a plan: use the HTTP cache only")
     ap.add_argument("--schema", help="KiCad's pcm.v1.schema.json to validate against (default: the one KiCad installs)")
+    ap.add_argument("--unchecked", action="store_true", help="package a KiCad folder ecadlib did not export (no "
+                    "kicad_export.json) without checking it against an ecadlib library; the package says so")
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
     a = ap.parse_args(argv)
     if a.plugin:
@@ -452,7 +498,7 @@ def main(argv=None):
     try:
         rep = build(a.src, a.out, a.name, a.identifier, a.pkg_version, a.kicad, a.prefix, a.license, a.author,
                     a.description, a.homepage, a.base_url, a.include_held, offline=a.offline, cache=a.cache,
-                    schema=a.schema, log=log)
+                    schema=a.schema, log=log, unchecked=a.unchecked)
     except (OSError, ValueError) as e:
         print(f"ecadlib kicad-pcm: {e}", file=sys.stderr)
         return 2
@@ -461,6 +507,9 @@ def main(argv=None):
         return 1 if rep["problems"] else 0
     for p in rep["problems"]:
         log(f"  PROBLEM {p}")
+    if rep.get("unchecked"):
+        log("  NOT CHECKED (--unchecked): this folder was not written by kicad-export, so its parts were not compared "
+            "with any released revision; the package's NOTICE.txt says so too")
     log(f"  {rep['symbols']} symbol library, {rep['footprints']} footprints, {rep['models']} 3D models; "
         f"checked: {', '.join(rep['checks'])}")
     log(f"  in KiCad: Plugin and Content Manager > Install from File... > {Path(rep['zip']).name}; "

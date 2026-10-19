@@ -213,7 +213,8 @@ def repair(text, schema):
 
 
 def text_of(msg):
-    return "".join(b.get("text", "") for b in (msg or {}).get("content", []) if b.get("type") == "text")
+    from ..datasheet import message_text           # "" for a malformed answer (content null / a string, text null)
+    return message_text(msg)
 
 
 def with_text(msg, text, **extra):
@@ -267,8 +268,10 @@ def feedback_body(body, msg, errors):
     """The same request with the answer and the checks' errors appended (append-only: the earlier turns, thinking
     blocks included, go back unchanged)."""
     nb = dict(body)
+    blocks = msg.get("content") if isinstance(msg.get("content"), list) else []   # a malformed answer: no blocks
     nb["messages"] = list(body["messages"]) + [
-        {"role": "assistant", "content": [b for b in msg.get("content", []) if b.get("type") in ("text", "thinking", "redacted_thinking")]
+        {"role": "assistant", "content": [b for b in blocks if isinstance(b, dict) and isinstance(b.get("text", ""), str)
+                                          and b.get("type") in ("text", "thinking", "redacted_thinking")]
          or [{"type": "text", "text": ""}]},
         {"role": "user", "content": [{"type": "text", "text": FEEDBACK.format(errors="\n".join(f"- {e}" for e in errors[:15]))}]}]
     return nb

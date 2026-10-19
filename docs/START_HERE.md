@@ -127,7 +127,8 @@ has **Tools > External Plugins > ecadlib** after **Add to KiCad**.
 ## Trying ecadlib for us? Send two numbers
 
 After your first BOM, run `ecadlib status` in a terminal (or `ecadlib status --json`) and send us the **last run**
-line and the **review** line:
+line and the **review** line (they are newer than the 0.3.1 release on PyPI; see "Command line" in the README to
+install the current version):
 
 - **last run:** how long the BOM took to become a released library, step by step (triage, build, release check,
   your review, the Altium 365 push), and how much of that was ecadlib's own work.

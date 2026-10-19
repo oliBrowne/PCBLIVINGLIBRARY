@@ -131,15 +131,23 @@ rows mostly test the frame handling (units, y axis, bottom view, origins), the d
 BGA lands are computed from the ball size (except UFBGA-132, whose land comes from the ST datasheet). Not checked: real
 PDFs through `datasheet.py` (no API key here), and the generated through-hole and BGA files opened in Altium Designer.
 
----|---|---|---|---|---|
-| R_0603_1608Metric | 0.825×0.91 @0.7925 | 0.80×0.95 @0.825 | +0.025 / −0.04 | −0.033 | 2.92×1.42 / 2.96×1.46 |
-| C_0402_1005Metric | 0.465×0.57 @0.4025 | 0.56×0.62 @0.48 | −0.095 / −0.05 | −0.078 | 1.58×0.88 / 1.82×0.92 |
-| R_0805_2012Metric | 0.96×1.36 @0.925 | 1.025×1.40 @0.9125 | −0.065 / −0.04 | +0.013 | 3.32×1.86 / 3.36×1.90 |
-| R_1206_3216Metric | 1.09×1.71 @1.46 | 1.125×1.75 @1.4625 | −0.035 / −0.04 | −0.003 | 4.52×2.22 / 4.56×2.26 |
-| **SOIC-8_3.9x4.9mm_P1.27mm** | 1.965×0.58 @2.4725 | 1.95×0.60 @2.475 | **+0.015 / −0.02** | −0.003 | 7.42×5.40 / 7.40×5.40 |
-| **QFN-32-1EP_5x5mm_P0.5mm** | 0.845×0.24 @2.4325 | 0.875×0.25 @2.4375 | −0.03 / −0.01 | −0.005 | 6.22×6.22 / 6.26×6.26 |
+Regenerated from today's generator and `ecadlib/package_specs/` (pad 1, mm; `out/footprints/compare_vs_kicad_official.txt`):
 
-SOIC-8 (JEDEC MS-012AA inputs) and QFN-32 come out within 0.03 mm. The fab outline with its pin-1 chamfer matches KiCad's coordinates exactly for SOIC-8 and QFN-32. The QFN pin-1 triangle is identical to KiCad's, and the SOIC one is 0.09 mm higher. The 0402 is the outlier: KiCad deliberately uses larger pads than IPC table 3-6 for parts smaller than 0603. That gap is a policy choice, so it could become an option. Density A gives an 0603 pad of 1.025×1.01 and density C gives 0.625×0.81.
+| Footprint | ecadlib pad | KiCad pad | Δ size (w / h) | Δ centre | Courtyard ecadlib / KiCad |
+|---|---|---|---|---|---|
+| R_0603_1608Metric | 0.80×0.95 @0.825 | 0.80×0.95 @0.825 | 0 / 0 | 0 | 2.96×1.46 / 2.96×1.46 |
+| C_0402_1005Metric | 0.59×0.60 @0.455 | 0.56×0.62 @0.48 | +0.03 / −0.02 | −0.025 | 1.80×0.90 / 1.82×0.92 |
+| R_0805_2012Metric | 1.025×1.40 @0.9125 | 1.025×1.40 @0.9125 | 0 / 0 | 0 | 3.36×1.90 / 3.36×1.90 |
+| R_1206_3216Metric | 1.125×1.75 @1.4625 | 1.125×1.75 @1.4625 | 0 / 0 | 0 | 4.56×2.26 / 4.56×2.26 |
+| SOIC-8_3.9x4.9mm_P1.27mm | 1.95×0.60 @2.475 | 1.95×0.60 @2.475 | 0 / 0 | 0 | 7.40×5.40 / 7.40×5.40 |
+| QFN-32-1EP_5x5mm_P0.5mm | 0.875×0.25 @2.4375 | 0.875×0.25 @2.4375 | 0 / 0 | 0 | 6.26×6.26 / 6.26×6.26 |
+
+Every part matches KiCad exactly except C_0402_1005Metric, and that residual is the example spec's input, not the
+IPC maths: the bundled spec uses a generic datasheet outline (terminal 0.25 ± 0.10, width 0.50 ± 0.05), while KiCad
+builds its 0402 capacitor from the IPC-SM-782 sizes (terminal 0.10–0.30, width 0.40–0.60). Built from KiCad's sizes
+(the `stdparts` table entry) the pads are KiCad's exactly: 0.56 × 0.62 at ±0.48. Older copies of this table showed
+0402 pads about 0.1 mm shorter; that was the first prototype's small-chip fillet table (toe 0.10 instead of table
+3-6's 0.20), since corrected. Density A gives an 0603 pad of 1.025×1.01 and density C gives 0.625×0.81.
 
 ## `stdparts.py`: standard parts without Claude
 
@@ -186,7 +194,8 @@ The house rule: **inputs left, outputs right, power on top, ground on the bottom
 * **Groups.** Pins are grouped by name, and by type when the name says nothing. Power (VDD, 3V3, VBAT) and analog supply (VDDA, VREF+) go on top; ground (GND, VSS, AGND, VREF-) and the exposed pad go on the bottom. Reset/boot/enable, clock/oscillator, debug (SWD, JTAG, boot UART such as U0TXD), USB, ADC/DAC and inputs (IN+, TRIG, THRES, FB, SENSE, type input) go on the left. Power out (VOUT, VCAP, 3V3OUT), UART, I2C, SPI, CAN, Ethernet, ports, outputs (OUT, Q, DISCH, PGOOD, SW, type output) and NC go on the right. A pin's type beats a direction guessed from its name. Pins with no direction (passive, bidirectional) are `other`: left, moved right only to keep the body square.
 * **Names.** Alternate-function names are grouped by their first name (`PA9/USART1_TX` and `PH0-OSC_IN` are port pins). Overbars and active-low marks (`~{RESET}`, `/RESET`, `RESET#`, `RST_N`) are ignored for grouping.
 * **Ports.** Each port is its own block, sorted by number (PA0..PA15, then PB0...). Blocks are separated by one empty grid row. Whole ports move between the left and right side to keep the body roughly square. A port is split only when that saves more than 6 rows.
-* **Stacking.** By default (`stack_power = "none"`) every power pin gets its own pin end, so Altium draws no junction dot and every pin can be checked against the datasheet. With `stack_power = "stack"`, power pins that share a name (VDD, or VDD_1..VDD_5 numbered 1..n) are stacked: one pin shows its name and number, and the rest sit on the same spot with name and number hidden. Names that only look alike are never stacked: VDD1 / VDD2 (an isolator's two sides), VDD18 / VDD33 and VDD_18 / VDD_33 are different supplies. KiCad gets the rest as hidden passive pins (KLC S4.3). `stack_power = "hide"` makes them hidden pins tied to the net by name instead (Altium HiddenNetName; the KiCad export names those hidden power pins after that net, since KiCad connects them by name).
+* **Stacking.** By default (`stack_power = "none"`) every power pin gets its own pin end, so Altium draws no junction dot and every pin can be checked against the datasheet. With `stack_power = "stack"`, power pins that share a name (VDD, or VDD_1..VDD_5 numbered 1..n) are stacked: one pin shows its name and number, and the rest sit on the same spot with name and number hidden. Names that only look alike are never stacked: VDD1 / VDD2 (an isolator's two sides), VDD18 / VDD33 and VDD_18 / VDD_33 are different supplies. KiCad gets the rest as hidden passive pins (KLC S4.3). `stack_power = "hide"` makes them hidden pins tied to the net by name instead (Altium HiddenNetName; the KiCad export names those hidden power pins after that net, since KiCad connects them by name). A KiCad library symbol that stacks pins itself (KiCad hides the extra VIN / GND pins on the first one, as in TPS62130 or ESP32-C3) is redrawn by these rules when it is a plain IC box and `stack_power = "none"`; any other drawing is kept and the plan notes the shared pin end for review.
+* **Pin grid.** KiCad draws discretes on a 50 mil grid (a diode's pins end 150 mil from its centre). On import each pin whose end is off the 100 mil grid is lengthened outward onto it, so wires snap in Altium; the body is not moved.
 * **Grid.** Everything is on the grid: body edges, pin ends and pin pitch (100 mil, which is 2.54 mm in KiCad).
 * **Multi-part.** With `split_pins` set, larger parts become multi-part symbols. Part A holds power, ground and NC; the other parts hold the signal blocks in order, at most `unit_pins` pins each.
 
@@ -225,9 +234,9 @@ python3 -m ecadlib.step_gen --check out/*.step                                  
 python3 -m tests.test_step_gen
 ```
 
-When a footprint has no KiCad STEP model, `kicad_import` and the librarian now embed a generated STEP in the PcbLib instead of extruding a box (`--box` on either command, or `gen_step=False`, keeps the old behaviour; the box is still used when the family is unknown). The generator is pure Python: manifold solid B-reps with planar faces (round parts are 24-sided prisms), AP214, colours per solid (dark body, silver leads, light pin-1 dot or polarity band), units mm. Placement matches KiCad's library models: origin at the footprint origin, z = 0 on the board, pin 1 where the footprint has it (2-terminal parts at -x, dual/quad rows top left, through-hole at 0,0).
+When no KiCad STEP model is embedded (the librarian never embeds KiCad's; a downloaded one only gives the height), `kicad_import` and the librarian embed a generated STEP in the PcbLib instead of extruding a box (`--box` on either command, or `gen_step=False`, keeps the old behaviour; the box is still used when the family is unknown). The generator is pure Python: manifold solid B-reps with planar faces (round parts are 24-sided prisms), AP214, colours per solid (dark body, silver leads, light pin-1 dot or polarity band), units mm. Placement matches KiCad's library models: origin at the footprint origin, z = 0 on the board, pin 1 where the footprint has it (2-terminal parts at -x, dual/quad rows top left, through-hole at 0,0).
 
-Families: chip R/C/L/LED (body + end caps; MELF round), molded tantalum/SMA/SMB/SMC (terminals folded under, polarity band), gull-wing SOIC/SSOP/TSSOP/MSOP/SOT-23(-5/-6)/SC-70/SOT-223 (tab)/SOD-123/323/523 and flat-lead SOT-89, QFP/LQFP/TQFP, QFN/DFN/SON (bottom terminals, exposed pad), and through-hole vertical pin headers, radial capacitors and axial resistors and diodes. Dimensions come from the package spec (datasheet-reader output, or `package_specs/<name>.json`), else from the footprint name and typical JEDEC/EIA outlines. The height comes from the caller, then `height_max`, then a per-family table that stays inside `release_check.HEIGHTS`.
+Families: chip R/C/L/LED (body + end caps; MELF round), molded tantalum/SMA/SMB/SMC (terminals folded under, polarity band), gull-wing SOIC/SSOP/TSSOP/MSOP/SOT-23(-5/-6)/SC-70/SOT-223 (tab)/SOD-123/323/523 and flat-lead SOT-89, QFP/LQFP/TQFP, QFN/DFN/SON (bottom terminals, exposed pad), LGA by name (`Bosch_LGA-8_2.5x2.5mm_P0.65mm_...`: terminals where the footprint's pads are, either numbering direction), and through-hole vertical pin headers, radial capacitors and axial resistors and diodes. Dimensions come from the package spec (datasheet-reader output, or `package_specs/<name>.json`), else from the footprint name and typical JEDEC/EIA outlines. The height comes from the caller, then `height_max`, then a per-family table that stays inside `release_check.HEIGHTS`.
 
 `--check` (and the tests) parse the STEP file and check that every `#ref` resolves, that every closed shell is closed (each edge used by two faces in opposite directions), that loops connect, that faces are planar and oriented outward, that each volume is positive and every solid has a colour. The tests also compare the bounding box with the spec and check that each lead sits on the footprint_gen pad with the same number, for all 26 specs and 25 more footprint names. **Not checked:** no STEP kernel is installed here (no OCC, FreeCAD or cadquery), so the files have never been opened in Altium, KiCad or FreeCAD. Shapes are simplified: no pin-1 dimples, rounded edges or radial-cap polarity stripe. The SOT-89 tab and the name-derived dimensions are approximations.
 

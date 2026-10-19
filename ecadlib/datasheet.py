@@ -17,12 +17,13 @@ key), PdfStore (download + %PDF check + provenance), prepare (page ranges, auto 
 ResultCache (PDF hash + model + schema version: re-runs are free), Reader (one job per part -> cache, a synchronous
 call, or one Message Batch with custom_id = part name, resumable through <out>/datasheet/batch_state.json),
 fill_plan (a librarian plan's open parts -> batch -> .SchLib/.PcbLib marked verify -> release check)."""
-import argparse, base64, contextlib, copy, datetime, hashlib, io, json, os, random, re, sys, time
+import argparse, base64, contextlib, copy, datetime, hashlib, io, json, math, os, random, re, sys, time
 from pathlib import Path
 
 import requests
 
 from . import altium_lib as AL, footprint_gen as F
+from . import httpcache as H
 from .fsutil import write_text_atomic
 from . import userconfig as UC
 
@@ -55,7 +56,8 @@ LINEAR_TYPES = ("chip", "molded", "gullwing", "qfp", "qfn")   # families whose p
 PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-opus-5": (5.0, 25.0), "claude-fable-5-1": (10.0, 50.0),
           "claude-fable-5": (10.0, 50.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-sonnet-5": (2.0, 10.0),
           "claude-haiku-5-5": (0.10, 0.50), "claude-opus-4-8": (5.0, 25.0), "claude-opus-4-7": (5.0, 25.0),
-          "claude-opus-4-6": (5.0, 25.0), "claude-sonnet-4-6": (3.0, 15.0), "claude-haiku-4-5": (1.0, 5.0)}
+          "claude-opus-4-6": (5.0, 25.0), "claude-sonnet-4-6": (3.0, 15.0),
+          "claude-haiku-4-5": (1.0, 5.0)}
 BATCH_DISCOUNT, CACHE_WRITE = 0.5, 1.25
 BATCH_BYTES, BATCH_MAX = 200 * 2 ** 20, 100_000       # per batch (API limits: 256 MB, 100,000 requests)
 PAGE_TOKENS, OUT_TOKENS, URL_PAGES = 3000, 6000, 30  # rough estimate without a key: per PDF page, typical output, unknown PDF
@@ -83,11 +85,18 @@ PAGE_LIMIT = {"claude-haiku-4-5": 100, "claude-sonnet-4-5": 100, "claude-opus-4-
 FALLBACK_PRICE = (5.0, 25.0)
 
 
+def base_model(model):
+    """'claude-haiku-4-5-20251001' -> 'claude-haiku-4-5': a dated snapshot id gets its alias's request parameters,
+    page limit and price."""
+    m = str(model or "")
+    return re.sub(r"-\d{8}$", "", m) if m.startswith("claude-") else m
+
+
 def output_config(model, effort, schema):
     """output_config for this model: the effort only where the model takes it (an unsupported level steps down to the
     nearest one it has), always the JSON-schema format."""
     oc = {"format": {"type": "json_schema", "schema": schema}}
-    levels = EFFORT_LEVELS.get(model)
+    levels = EFFORT_LEVELS.get(base_model(model))
     if effort and levels is None:
         oc["effort"] = effort
     elif effort and levels:
@@ -99,7 +108,7 @@ def output_config(model, effort, schema):
 
 def price_of(model):
     """(input, output) $ per MTok: PRICES for Claude, else what ecadlib.llm knows (a local endpoint is $0), else None."""
-    p = PRICES.get(model)
+    p = PRICES.get(model) or PRICES.get(base_model(model))
     if p:
         return p
     from .llm import price
@@ -107,7 +116,7 @@ def price_of(model):
 
 
 def page_limit(model):
-    return PAGE_LIMIT.get(model, MAX_PAGES)
+    return PAGE_LIMIT.get(base_model(model), MAX_PAGES)
 
 
 def worst_usd(model, tin, max_out, cache_write=1.0, mult=1.0, fallback=False):
@@ -239,15 +248,70 @@ def redact(text, key):
     return text
 
 
+def retry_wait(retry_after, attempt, backoff, max_wait):
+    """Seconds to wait before a retry: the server's retry-after when it is a usable number (never negative, NaN or
+    over 5 x max_wait), else exponential backoff with jitter."""
+    try:
+        wait = float(retry_after) if retry_after is not None else None
+    except (TypeError, ValueError):
+        wait = None
+    if wait is None or not math.isfinite(wait) or wait < 0:
+        return min(max_wait, backoff * 2 ** attempt + random.uniform(0, 1))
+    return min(max_wait * 5, wait)
+
+
+def not_sent(e):
+    """A requests error that happened before the request reached the server (no connection was made), so sending it
+    again cannot pay twice. A read timeout or a response cut off mid-body may follow a generation the API bills."""
+    if isinstance(e, requests.exceptions.ConnectTimeout):
+        return True
+    if not isinstance(e, requests.exceptions.ConnectionError) or isinstance(e, requests.exceptions.SSLError):
+        return False
+    why = getattr(e.args[0], "reason", None) if e.args else None     # urllib3's MaxRetryError.reason (by class name:
+    return any(c.__name__ in ("NewConnectionError", "ConnectTimeoutError")  # urllib3 comes with requests, undeclared)
+               for c in type(why).__mro__)
+
+
+def safe_url(url):
+    """url without user:password@ (a gateway's basic-auth credentials), for logs and messages."""
+    from urllib.parse import urlsplit, urlunsplit
+    try:
+        u = urlsplit(str(url))
+        if "@" not in (u.netloc or ""):
+            return str(url)
+        return urlunsplit(u._replace(netloc=u.netloc.rsplit("@", 1)[1]))
+    except ValueError:
+        return re.sub(r"//[^/@\s]*@", "//", str(url))
+
+
+_REAL_HTTP = (requests.post, requests.get)
+
+
+def _no_redirects(fn, kw):
+    """allow_redirects=False for the real requests functions: a 3xx must not carry the x-api-key header to whatever
+    host it names (requests strips only Authorization on a cross-host redirect). A test double takes no such argument."""
+    if fn in _REAL_HTTP:
+        kw["allow_redirects"] = False
+    return kw
+
+
 class Client:
     """The Claude API over requests: retries 408/409/429/5xx/529 and network errors with exponential backoff
-    (honouring retry-after), logs every request as one JSON line without the key or the PDF bytes."""
+    (honouring retry-after), logs every request as one JSON line without the key or the PDF bytes. The key is only
+    sent to the configured base: redirects are not followed, plain http:// only to a host on this machine or network."""
 
     def __init__(self, key, base=None, retries=4, backoff=2.0, max_wait=60.0, timeout=600, sleep=None, log_file=None,
                  say=None):
         # base: ANTHROPIC_BASE_URL (as the Anthropic SDKs read it: a gateway, a proxy, a local test server), else the API
         base = (base or os.environ.get("ANTHROPIC_BASE_URL") or API_BASE).rstrip("/")
+        if not re.match(r"https?://", base, re.I):
+            raise APIError(f"ANTHROPIC_BASE_URL {safe_url(base)!r} is not an http(s):// URL")
+        from .llm import is_local
+        if base.lower().startswith("http://") and not is_local(base):
+            raise APIError(f"ANTHROPIC_BASE_URL {safe_url(base)} is plain http:// to a remote host: the API key would "
+                           "travel unencrypted; use https:// (http:// is only for a server on this machine or your network)")
         self.key, self.base, self.retries, self.backoff, self.max_wait, self.timeout = key, base, retries, backoff, max_wait, timeout
+        self.shown = safe_url(base)
         self.sleep = sleep or time.sleep
         self.log_file, self.say = log_file or _LOG["file"], say or _LOG["say"]
 
@@ -267,25 +331,37 @@ class Client:
         if body is not None:
             h["content-type"] = "application/json"
         h["x-api-key"] = self.key
+        paid = method == "POST" and url.split("?")[0].endswith("/v1/messages")   # a generation the API bills
         for attempt in range(self.retries + 1):
             t0, rec = time.time(), {"t": datetime.datetime.now().isoformat(timespec="seconds"), "method": method,
-                                    "url": url, "attempt": attempt + 1, "body": _summary(body) if body is not None else None}
+                                    "url": safe_url(url), "attempt": attempt + 1, "body": _summary(body) if body is not None else None}
             if h.get("anthropic-beta"):
                 rec["beta"] = h["anthropic-beta"]
             try:
                 from .term import waiting            # "waiting on Claude (model call)  12 s" on the terminal
                 with waiting("Claude (model call)" if method == "POST" and "/messages" in url and "batches" not in url
                              else "Claude API"):
-                    r = (requests.post(url, headers=h, json=body, timeout=self.timeout) if method == "POST"
-                         else requests.get(url, headers=h, timeout=self.timeout))
+                    r = (requests.post(url, **_no_redirects(requests.post, dict(headers=h, json=body, timeout=self.timeout)))
+                         if method == "POST" else
+                         requests.get(url, **_no_redirects(requests.get, dict(headers=h, timeout=self.timeout))))
             except requests.RequestException as e:
-                err = APIError(f"API request failed: {type(e).__name__}: {redact(e, self.key)[:200]}", retryable=retry_on is None)
+                again = retry_on is None and (not paid or not_sent(e))
+                err = APIError(f"API request failed: {type(e).__name__}: {self._scrub(e)[:200]}"
+                               + ("" if again or not paid else " (the request may have reached the API and been billed, "
+                                  "so it is not sent again; run again to retry)"), retryable=again)
+                err.maybe_billed = paid and not not_sent(e)   # the cost cap keeps its hold
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))
                 retry_after = None
             else:
                 hdr = getattr(r, "headers", None) or {}
                 rid = hdr.get("request-id")
                 rec.update(status=r.status_code, request_id=rid, ms=int((time.time() - t0) * 1000))
+                if 300 <= r.status_code < 400:          # never followed: the key stays with the configured base
+                    where = safe_url(hdr.get("location") or "?")
+                    rec["error"] = f"redirect to {where}"
+                    self._log(rec)
+                    raise APIError(f"API HTTP {r.status_code}: redirect to {where} not followed (the API key is only "
+                                   f"sent to {self.shown}); check ANTHROPIC_BASE_URL", r.status_code, "redirect")
                 if r.status_code == 200 and raw:
                     self._log(rec)
                     return r
@@ -302,7 +378,7 @@ class Client:
                     self._log(rec)
                     return payload
                 etype, emsg = _err_of(payload) if payload is not None else ("?", "non-JSON response")
-                emsg = redact(emsg, self.key)         # a gateway (ANTHROPIC_BASE_URL) may echo the key it refused
+                emsg = self._scrub(emsg)              # a gateway (ANTHROPIC_BASE_URL) may echo the key it refused
                 st = r.status_code
                 if st == 529 or etype == "overloaded_error":
                     st = 529
@@ -317,14 +393,20 @@ class Client:
                 if err.retryable and attempt:
                     err.args = (f"{err.args[0]} (gave up after {attempt + 1} attempts)",)
                 raise err
-            try:
-                wait = float(retry_after) if retry_after is not None else None
-            except ValueError:
-                wait = None
-            wait = min(self.max_wait * 5, wait) if wait is not None else min(self.max_wait, self.backoff * 2 ** attempt + random.uniform(0, 1))
+            wait = retry_wait(retry_after, attempt, self.backoff, self.max_wait)
             if self.say:
                 self.say(f"  datasheet API: {err.args[0][:120]}; retry {attempt + 1}/{self.retries} in {wait:.0f}s")
             self.sleep(wait)
+
+    def _scrub(self, text):
+        """Error text without the key or the base URL's user:password."""
+        text = redact(text, self.key)
+        if self.shown != self.base:
+            text = text.replace(self.base, self.shown)
+            cred = self.base.split("//", 1)[-1].rsplit("@", 1)[0]
+            if len(cred) >= 3:
+                text = text.replace(cred, "<credentials>")
+        return text
 
     # --- endpoints
     def messages(self, body, headers=None):
@@ -351,8 +433,21 @@ class Client:
     def batch_results(self, batch):
         """Results JSONL of an ended batch -> list of {custom_id, result} (any order: key by custom_id)."""
         url = batch.get("results_url") or f"/v1/messages/batches/{batch['id']}/results"
+        if url.startswith(API_BASE + "/v1/messages/batches/") and self.base != API_BASE:
+            # a gateway (ANTHROPIC_BASE_URL) passes the batch object through with Anthropic's own results_url: fetch the
+            # same path from the gateway, so the key still goes only to the configured base (any other host is refused)
+            url = url[len(API_BASE):]
         r = self.request("GET", url, raw=True)
-        return [json.loads(ln) for ln in r.text.splitlines() if ln.strip()]
+        out = []
+        for i, ln in enumerate(r.text.splitlines(), 1):
+            if not ln.strip():
+                continue
+            try:
+                v = json.loads(ln)
+            except ValueError:                        # a damaged download: that line is read again next run
+                v = None
+            out.append(v if isinstance(v, dict) else {"unreadable": i})
+        return out
 
 
 # ---------------------------------------------------------------- output contract
@@ -484,21 +579,60 @@ def wire_schema():
     return _obj(dict(full["properties"], package=_obj(props, full["properties"]["package"].get("description"))))
 
 
-def _wire_num(v, where):
+def _wire_val(v, where):
+    """A dimension value as the model wrote it -> (number or None, the unit written after it or None)."""
     s = str(v if v is not None else "").strip().replace(",", ".")
     if s in ("", "-", "—", "–", "null", "n/a", "N/A"):
-        return None
+        return None, None
     # as printed on the drawing: "0.50 BSC", "1.27 TYP", "(0.2)" (a reference value), "−0.05" (a Unicode minus)
     s = s.replace("\u2212", "-").replace("\u2013", "-")
     s = re.sub(r"\s*\b(BSC|TYP|TYPICAL|REF|NOM|MAX|MIN)\b\.?", "", s, flags=re.I).strip()
     s = re.sub(r"^[(\[](.*)[)\]]$", r"\1", s).strip()
-    try:
-        return float(s)
-    except ValueError:
-        m = re.fullmatch(r"([-+]?\d*\.?\d+)\s*(mm|mil|in|inch)?\.?", s)
-        if m:
-            return float(m.group(1))
-        raise DatasheetError(f"response {where} {v!r} is not a number; rejected")
+    m = re.fullmatch(r"([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(mm|mils?|in|inch|inches|\")?\.?", s, flags=re.I)
+    if not m:                                         # "nan", "inf", "0.3 to 0.5", words: not a dimension
+        raise DatasheetError(f"response {where} {v!r} is not a finite number; rejected")
+    return float(m.group(1)), _unit_name(m.group(2))
+
+
+def _unit_name(u):
+    u = str(u or "").strip().lower()
+    return {"": None, "mils": "mil", "inch": "in", "inches": "in", '"': "in"}.get(u, u)
+
+
+def _wire_num(v, where):
+    return _wire_val(v, where)[0]
+
+
+def _non_finite(v, path="$"):
+    """The first NaN / Infinity in an answer (json.loads accepts both), as a path; None when there is none."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return path
+    for k, x in (v.items() if isinstance(v, dict) else enumerate(v) if isinstance(v, list) else ()):
+        bad = _non_finite(x, f"{path}.{k}")
+        if bad:
+            return bad
+    return None
+
+
+# A nominal printed with its tolerance: "6.5±0.2", "6.5 +/- 0.2", "3.56 +0.15/-0.25", "0.74 +0.05 -0.08"
+_TOL = re.compile(r"\s*([-+]?\d*\.?\d+)\s*(?:(?:±|\+/-|\+-)\s*(\d*\.?\d+)|\+\s*(\d*\.?\d+)\s*/?\s*[-\u2212\u2013]\s*(\d*\.?\d+))"
+                  r"\s*(?:mm|mil|in|inch)?\.?\s*", re.I)
+
+
+def _toleranced(v):
+    """A dimension printed as nominal and tolerance -> {min, nom, max}; None when v is not one. LP38693MP-1.8 (live
+    benchmark 2026-10-19): its drawing prints 6.5±0.2 and 3.56 +0.15/-0.25, and the read left them blank."""
+    t = str(v or "").replace(",", ".")
+    r = re.fullmatch(r"\s*(\d*\.?\d+)\s*(?:~|\.\.|to)\s*(\d*\.?\d+)\s*(?:mm|mil|in|inch)?\.?\s*", t, re.I)
+    if r and float(r.group(1)) < float(r.group(2)):       # "6.3~6.7": a range printed in one cell
+        lo, hi = float(r.group(1)), float(r.group(2))
+        return {"min": lo, "nom": round((lo + hi) / 2, 6), "max": hi}
+    m = _TOL.fullmatch(t)
+    if not m:
+        return None
+    nom = float(m.group(1))
+    lo, hi = (float(m.group(2)),) * 2 if m.group(2) else (float(m.group(4)), float(m.group(3)))
+    return {"min": round(nom - lo, 6), "nom": nom, "max": round(nom + hi, 6)}
 
 
 def _nullable(s):
@@ -546,6 +680,10 @@ def _fit(v, s):
     return v
 
 
+def _dimtxt(d):
+    return "/".join("-" if d.get(k) is None else f"{d[k]:g}" for k in ("min", "nom", "max")) + f" {d.get('unit')}"
+
+
 def from_wire(ext):
     """A wire_schema() answer -> the output_schema() shape. An answer already in that shape (recorded before, or the
     split-steps rail's) is returned as it is."""
@@ -556,6 +694,8 @@ def from_wire(ext):
     oj = pkg.get("other_json")                        # a model without strict schemas may answer the object itself
     raw = json.dumps(oj) if isinstance(oj, dict) else str(oj or "").strip()
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw) or "{}"          # a model that fences or prefixes the JSON text
+    if "{" not in raw and not raw.startswith("["):     # "x", "none", "n/a": the model had nothing else to give
+        raw = "{}"
     try:
         other = json.loads(raw)
     except ValueError:
@@ -570,8 +710,31 @@ def from_wire(ext):
         if not isinstance(d, dict) or d.get("name") not in WIRE_DIMS:
             continue
         n = d["name"]
-        dims[n] = {"label": d.get("label", ""), **{k: _wire_num(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")},
-                   "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
+        tol = next((t for t in (_toleranced(d.get(k)) for k in ("nom", "min", "max")) if t), None)
+        if tol:                                       # "6.5±0.2" / "6.3~6.7" printed in one cell
+            vals = tol
+        else:
+            got = {k: _wire_val(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")}
+            for k, (x, u) in got.items():             # "0.016 in" in a row whose unit is mm: which one is it?
+                if u and u != _unit_name(d.get("unit")):
+                    raise DatasheetError(f"response {n}.{k} {d.get(k)!r} is written in {u!r} but the dimension's unit is "
+                                         f"{d.get('unit')!r}; rejected")
+            vals = {k: x for k, (x, _) in got.items()}
+        new = {"label": d.get("label", ""), **vals, "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
+        if n in dims and any(dims[n].get(k) != new.get(k) for k in ("min", "nom", "max", "unit")):
+            raise DatasheetError(f"response gives {n} twice with different values ({_dimtxt(dims[n])} and {_dimtxt(new)}): "
+                                 "two package variants or a misread; rejected")
+        dims.setdefault(n, new)
+    unres = []
+    for u in pkg.get("unresolved") or []:                # "body_length min/max (printed as 6.5±0.2)": the read saw it
+        m = re.match(r"\s*([a-z_.]+)\b[^(]*\(printed as ([^),;]+)", str(u))
+        tol = m and m.group(1) in dims and _toleranced(m.group(2))
+        if tol and dims[m.group(1)].get("unit") and tol["nom"] == (dims[m.group(1)].get("nom") or tol["nom"]):
+            dims[m.group(1)].update(tol)
+        else:
+            unres.append(u)
+    if "unresolved" in pkg:
+        pkg = dict(pkg, unresolved=unres)
     out = {k: v for k, v in pkg.items() if k not in ("dims", "other_json")}
     for k in pk:
         if k in out:
@@ -615,6 +778,7 @@ Dimensions:
 - Use the mechanical package drawing (and its dimension table) for the requested part and package.
 - Copy every value exactly as printed: min, nom and max in the drawing's own unit (mm, in or mil). Set a field to null when the drawing leaves it blank. Do not convert units, average, round, compute or fill in values from memory or JEDEC norms. If the drawing prints both mm and inches, use the mm column.
 - For every dimension give its label on the drawing, the 1-based page index in the attached PDF where you read it, and the figure or table title (or drawing code).
+- A value printed as a nominal with a tolerance (6.5±0.2, 3.56 +0.15/-0.25): copy it exactly like that into nom and leave min and max blank; ecadlib works out the limits.
 - If a dimension cannot be read with confidence, set it to null and name it in package.unresolved.
 - Follow the orientation and per-package meaning given in each field's description. name is KiCad style, e.g. SOIC-8_3.9x4.9mm_P1.27mm or VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.
 
@@ -691,6 +855,9 @@ def zoom_blocks(pdf, sent, why):
     return out
 
 
+OFFLINE = "--offline: datasheet not read; run without --offline to read it"
+
+
 def require_key(key=None, rules=None):
     """The API key: explicit, else the key stored under the name [datasheet] api_key_env gives (default
     ANTHROPIC_API_KEY; `ecadlib keys set`, the setup page), else an environment variable of that name, else
@@ -718,7 +885,16 @@ def call(headers, body, key, timeout=600):
         raise
 
 
+def message_text(msg):
+    """The text blocks of a Messages answer joined; "" for a malformed one (content null or a string, text null)."""
+    content = (msg or {}).get("content") if isinstance(msg, dict) else None
+    return "".join(str(b.get("text") or "") for b in (content if isinstance(content, list) else [])
+                   if isinstance(b, dict) and b.get("type") == "text")
+
+
 def parse_message(msg):
+    if not isinstance(msg, dict):
+        raise DatasheetError("response is not a message object; rejected")
     if (msg.get("ecadlib") or {}).get("error"):       # the guide rails gave up on this answer (ecadlib.llm.rails)
         raise DatasheetError(msg["ecadlib"]["error"])
     sr = msg.get("stop_reason")
@@ -726,12 +902,15 @@ def parse_message(msg):
         raise DatasheetError(f"model declined (refusal, {(msg.get('stop_details') or {}).get('category')})")
     if sr == "max_tokens":
         raise DatasheetError("response hit max_tokens; the extraction is incomplete")
-    text = "".join(b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text")
+    text = message_text(msg)
     try:
         ext = json.loads(text)
     except ValueError:
         raise DatasheetError("response is not JSON; rejected")
     ext = from_wire(ext)
+    bad = _non_finite(ext)
+    if bad:                                           # NaN / Infinity would be written into the spec and footprint
+        raise DatasheetError(f"response {bad} is not a finite number; rejected")
     try:
         import jsonschema
         errs = [e.message for e in jsonschema.Draft202012Validator(output_schema()).iter_errors(ext)]
@@ -758,7 +937,8 @@ def trim(data, pages):
     except ImportError:
         return None
     _quiet_pypdf()
-    keep = list(pages) if isinstance(pages, list) else list(range(pages[0], pages[1] + 1))
+    # a range, not a list: "--pages 2-999999999" (a typo) is refused by the page count, not by running out of memory
+    keep = list(pages) if isinstance(pages, list) else range(pages[0], pages[1] + 1)
     try:
         rd, w = pypdf.PdfReader(io.BytesIO(data)), pypdf.PdfWriter()
         n = len(rd.pages)
@@ -776,19 +956,23 @@ def trim(data, pages):
     return buf.getvalue()
 
 
-def load_source(src, pages=None, fetch=False):
+def load_source(src, pages=None, fetch=False, auto_pages=None, max_pages=None):
     """-> (source, page_offset, pages left for the prompt). URLs go to the API as a url source unless
-    --fetch or --pages needs the bytes here."""
+    --fetch or --pages needs the bytes here. With auto_pages / max_pages (no --pages), a PDF over them is cut to the
+    pages prepare() picks, as the Reader does; the offset is then the list of original page numbers sent."""
     url = re.match(r"https?://", src)
     if url and not fetch and not pages:
         return ("url", src), 0, None
     if url:
         try:
-            r = requests.get(src, timeout=60)
+            r = requests.get(src, timeout=60, stream=True)
             r.raise_for_status()
+            data = read_capped(r)
+            r.close()
         except requests.RequestException as e:
             raise DatasheetError(f"fetch failed: {e}")
-        data = r.content
+        if len(data) > MAX_DOWNLOAD:
+            raise DatasheetError(f"{src}: larger than {MAX_DOWNLOAD >> 20} MB; download it and pass --pages")
     else:
         data = Path(src).read_bytes()
     if not data.startswith(b"%PDF"):
@@ -799,6 +983,9 @@ def load_source(src, pages=None, fetch=False):
             return ("base64", cut), pages[0] - 1, None
         if url and not fetch:
             return ("url", src), 0, pages
+    if not pages and (auto_pages is not None or max_pages is not None):
+        sent, offset, hint, _ = prepare(data, None, auto_pages or 0, max_pages or MAX_PAGES)
+        return ("base64", sent), offset, hint
     if len(data) > MAX_PDF:
         raise DatasheetError(f"PDF is {len(data) >> 20} MB; use --pages to send only the drawing and pin table")
     return ("base64", data), 0, pages
@@ -886,6 +1073,7 @@ def to_spec(pkg, part, datasheet, model, offset, review):
             continue
         spec[k] = _drop_nulls(pkg[k])
         if isinstance(pkg[k], (dict, list)) and numeric(pkg[k]):
+            # advice for the person, not a failed check (ds_route.FAILED skips it)
             review.append(f"{k}: copied as the model gave it; check every value against the drawing")
     pages = [v["page"] for k, v in prov.items() if v["page"] is not None]
     spec["source"] = {"datasheet": datasheet, "drawing": pkg["drawing"], "extracted_by": f"ecadlib.datasheet ({model})"}
@@ -953,6 +1141,20 @@ def sanity(spec, review):
         d = g(k)
         if d and d[2] > 60:
             review.append(f"{k}: {d[2]} mm is implausible for an SMD package (unit mislabelled?)")
+    for k in DIMS + NUM_DIMS + ["exposed_pad.length", "exposed_pad.width"]:   # sizes are > 0 (a min may be 0)
+        v = (spec.get("exposed_pad") or {}).get(k.split(".")[1]) if k.startswith("exposed_pad.") else spec.get(k)
+        vals = [v] if isinstance(v, (int, float)) and not isinstance(v, bool) else \
+            [v.get(x) for x in ("min", "nom", "max")] if isinstance(v, dict) else []
+        vals = [x for x in vals if isinstance(x, (int, float)) and not isinstance(x, bool)]
+        if any(not math.isfinite(x) or x < 0 for x in vals) or (vals and max(vals) <= 0 and k != "courtyard_excess"):
+            review.append(f"{k}: {v} mm is implausible (a size must be a number above 0)")
+    for k in ("terminal_length", "terminal_width", "ball_diameter", "land_diameter", "drill"):
+        d = g(k)                                      # smaller than any real lead: a mil value labelled mm, or mil -> mm twice
+        if d and 0 < d[2] < 0.05:
+            review.append(f"{k}: {d[2]} mm is implausibly small (unit mislabelled?)")
+    h, hi = spec.get("height_max"), 60 if t in NO_BODY else 25
+    if isinstance(h, (int, float)) and not isinstance(h, bool) and 0 < h and not 0.1 <= h <= hi:
+        review.append(f"height_max: {h} mm is implausible (0.1-{hi} mm expected; unit mislabelled?)")
     bl = g("body_length")
     if bl and bl[2] < 0.35:
         review.append(f"body_length: {bl[2]} mm is implausibly small (inch values labelled mm?)")
@@ -1006,6 +1208,23 @@ def check_pins(spec, ext, review):
     for p in pins:
         if not p["name"].strip() or len(p["name"]) > 40 or not p["name"].isprintable():
             review.append(f"symbol: pin {p['num']} has an unusable name {p['name'][:50]!r}")
+    if spec.get("package_type") == "bga" and spec.get("rows") and spec.get("cols"):
+        try:                                          # the balls footprint_gen will make (rows/cols, depopulated, ball_map)
+            from . import footprint_adv as FA
+            balls = [b[0] for b in FA.bga_balls(spec)]
+        except Exception:                             # a grid that doesn't add up: footprint_gen.build reports it
+            balls = None
+        if balls:
+            order = {b: i for i, b in enumerate(balls)}
+            key = lambda s: (s not in order, order.get(s, 0), s)
+            miss, extra = sorted(set(balls) - set(nums), key=key), sorted(set(nums) - set(balls), key=key)
+            if miss:
+                review.append(f"symbol: pins missing {miss[:20]}{' ...' if len(miss) > 20 else ''} (balls of the "
+                              f"{spec['rows']} x {spec['cols']} grid with no symbol pin)")
+            if extra:
+                review.append(f"symbol: pins not on the footprint {extra[:20]}{' ...' if len(extra) > 20 else ''} "
+                              f"(the footprint's balls are {balls[0]}..{balls[-1]})")
+            return
     grid = all(x.isdigit() or GRID_PIN.fullmatch(x) for x in nums) and any(GRID_PIN.fullmatch(x) for x in nums) \
         and spec.get("package_type") not in LINEAR_TYPES
     if grid:                                           # ball grid (A1, B2, ...) of a family added to the schema later
@@ -1032,7 +1251,7 @@ def check_pins(spec, ext, review):
 # ---------------------------------------------------------------- self-check: the extraction against itself and family norms
 STD_PITCH = (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.8, 0.95, 1.0, 1.1, 1.25, 1.27, 1.5, 1.7, 1.778, 1.9, 2.0, 2.29, 2.5, 2.54,
              3.0, 3.5, 3.81, 3.96, 5.0, 5.08)
-FAMILY_CODES = re.compile(r"(SOT|SOD|TO|DO|SC|SMA|SMB|SMC|D?PAK|DO-?\d+)\d*", re.I)   # first number is the outline, not pins
+FAMILY_CODES = re.compile(r"(T?SOT|SSOT|SuperSOT|SOD|TO|DO|SC|SMA|SMB|SMC|D?PAK|DO-?\d+)\d*", re.I)   # first number is the outline, not pins
 # package_type -> (pitch mm range or None, longest body side mm range, pin_count range). A family the schema gains
 # later (BGA, connectors, ...) has no entry: it gets the generic checks and an info line saying so.
 FAMILY_NORMS = {"chip": (None, (0.25, 7.5), (2, 2)), "molded": (None, (1.0, 9.0), (2, 3)),
@@ -1185,18 +1404,43 @@ def ordering_check(pkg, facts, review):
         review.append(f"pin_count {n} differs from {src}: check the package variant")
 
 
-def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, facts=None, tables=None):
-    """Extraction -> {spec, symbol, sidecar, needs_review}. Never alters a value to make a check pass."""
-    review = [f"document contains instruction-like text (ignored): {q[:200]!r}" for q in ext["embedded_instructions"]]
-    if isinstance(offset, list):                      # auto page selection: page k of the sent PDF is offset[k - 1]
-        bad = sorted({p for p in _cited_pages(ext) if isinstance(p, int) and not 1 <= p <= len(offset)})
+def _pin_count_from(spec, ext):
+    """A read that left pin_count blank (UCC25800, UCC256301: live benchmark 2026-10-19) -> (n, how) from the package
+    name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "")."""
+    m = re.match(r"[A-Za-z]+[A-Za-z0-9]*?-(\d+)(?:-(\d+)(?=[_]|$))?(?=[-_]|$)", str(spec.get("name") or ""))
+    if m and m.group(2) and int(m.group(2)) > int(m.group(1)):
+        return None, ""                               # SOIC-14-16 (UCC256301): 14 pins on 16 places, which ones isn't said
+    by_name = int(m.group(1)) if m else None
+    nums = {str(p.get("num")) for p in ext.get("pins") or [] if str(p.get("num") or "").isdigit()}
+    by_pins = len(nums) - (1 if spec.get("exposed_pad") and str(len(nums)) in nums else 0) if nums else None
+    if by_name and by_pins and by_name != by_pins:
+        return None, ""
+    return (by_name, f"the package name {spec['name']}") if by_name else (by_pins, "the pin table") if by_pins else (None, "")
+
+
+INJECTION = "document contains instruction-like text (ignored)"
+
+
+def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, facts=None, tables=None):
+    """Extraction -> {spec, symbol, sidecar, needs_review}. Never alters a value to make a check pass.
+    n_sent: how many pages were sent when offset is an int (--pages A-B), so citations past them are caught too.
+    facts / tables: the ordering table and dimension tables read in code (ds_route), checked against the read."""
+    review = [f"{INJECTION}: {q[:200]!r}" for q in ext["embedded_instructions"]]
+    n = len(offset) if isinstance(offset, list) else n_sent   # auto page selection: page k sent is offset[k - 1]
+    if n:
+        bad = sorted({p for p in _cited_pages(ext) if isinstance(p, int) and not 1 <= p <= n})
         if bad:
-            review.append(f"the model cited page(s) {bad} of the {len(offset)} pages sent: those values have no source page")
+            review.append(f"the model cited page(s) {bad} of the {n} pages sent: those values have no source page")
     if facts or tables:
         ext = dict(ext, package=copy.deepcopy(ext["package"]))
         ordering_check(ext["package"], facts, review)
         table_check(ext["package"], tables, offset, review)
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
+    if spec.get("pin_count") is None and not spec.get("pad_table"):
+        n, how = _pin_count_from(spec, ext)
+        if n:
+            spec["pin_count"] = n
+            review.append(f"pin_count was left blank: {n} from {how}; check it against the drawing")
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
         if nets != (spec.get("same_net") or []):
@@ -1210,7 +1454,9 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, facts=None, t
     if spec.get("pad_table"):
         try:
             from . import footprint_adv as FA                 # pad-table checks (added with the new families)
-            review += [f"pad_table: {m}" for m in FA.check_pad_table(spec) or []]
+            for m in FA.check_pad_table(spec) or []:      # [{level, rule, message}]; only errors fail the read
+                m = m if isinstance(m, dict) else {"level": "error", "message": str(m)}
+                review.append(f"pad_table{'' if m.get('level') == 'error' else ' (warning)'}: {m.get('message')}")
         except ImportError:
             pass
         except Exception as e:
@@ -1222,6 +1468,12 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, facts=None, t
             sexpr.parse(txt)
             if rep.get("warning"):
                 review.append(f"footprint_gen: {rep['warning']}")
+            if spec.get("land"):                      # the maker's land pattern becomes copper as given: check it now,
+                from . import footprint_check as FC   # as the release check will (ds_route.FAILED: "land pattern:")
+                for lvl, rule, m in FC.check(txt, same_net=spec.get("same_net")):
+                    if lvl == "error" and rule == "copper":
+                        review.append(f"land pattern: {m} (check land pad_width / pad_center / pad_length against "
+                                      "the drawing)")
         except Exception as e:
             review.append(f"footprint_gen.build failed: {e!r}")
     sym = {"name": part, "description": f"{ext['symbol_description']} (read from the datasheet by ecadlib.datasheet; review before use)",
@@ -1243,8 +1495,16 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, facts=None, t
     return {"spec": spec, "symbol": sym, "sidecar": side, "needs_review": review}
 
 
+def md(v):
+    """A value read from the PDF (by the model) as one line of Markdown text or one table cell: no line breaks (a
+    note can't start a heading of its own), '|' escaped (a pin name can't add a column), no heading/quote at the start."""
+    t = re.sub(r"[\r\n  \x0b\x0c]+", " ", str(v)).replace("|", "\\|")
+    return re.sub(r"^(\s*)([#>])", r"\1\\\2", t)
+
+
 def report(res):
-    """<part>.review.md: what was read and from where, what a person must check first, then the numbers to compare."""
+    """<part>.review.md: what was read and from where, what a person must check first, then the numbers to compare.
+    Every value that came from the PDF (notes, figure titles, labels, pin names) goes through md()."""
     from . import messages as M
     s, sym, side = res["spec"], res["symbol"], res["sidecar"]
     pins = len(sym.get("pins") or [])
@@ -1258,27 +1518,28 @@ def report(res):
         d = next((x for c in cc.get("checks") or [] for x in c.get("disagreed") or []), None)
         other = next((c["source"] for c in cc.get("checks") or [] if c.get("disagreed")), "")
         t, f = M.held("crosscheck.disagree", field=CC_LABEL(d["field"]) if d else "", first=d and d["first"],
-                      second=d and d["second"], other=other)
+                      second=d and CC_SHOWN(d), other=other)
         out += [f"Held: {t}", f"**Next:** {f}", ""]
     else:
         out += ["A person has to compare it with the datasheet before it is released; until then the part is held.", ""]
     out += [f"## Check these first ({len(res['needs_review'])})", ""]
-    out += [f"- [ ] {M.explain(r)['text']}" for r in res["needs_review"]] or \
+    out += [f"- [ ] {md(_review_text(r))}" for r in res["needs_review"]] or \
         ["Nothing failed the automatic checks. Still compare the drawing with the numbers below."]
     out += ["", "Page numbers are pages of the original PDF, counting from 1."]
     out += ["", "## Dimensions to compare with the drawing", "", "| Dimension | Label | Printed | mm (min / nom / max) | Page | Figure |", "|---|---|---|---|---|---|"]
     for k, p in side["dimensions"].items():
         pr = " / ".join(f"{p['printed'].get(x, '-')}" for x in ("min", "nom", "max")) + f" {p['unit']}"
         mm = " / ".join(f"{p['mm'].get(x, '-')}" for x in ("min", "nom", "max"))
-        out.append(f"| {k} | {p['label']} | {pr} | {mm}{' (converted)' if 'converted' in p else ''} | {p['page']} | {p['figure']} |")
+        out.append(f"| {md(k)} | {md(p['label'])} | {md(pr)} | {md(mm)}{' (converted)' if 'converted' in p else ''} | "
+                   f"{md(p['page'])} | {md(p['figure'])} |")
     if s.get("unresolved"):
         out += ["", "Unresolved: " + ", ".join(s["unresolved"])]
     pt = side["pin_table"]
-    out += ["", f"## Pins (table on page {pt['page']}, {pt['figure']}; {pt['rows']} rows)", "",
+    out += ["", f"## Pins (table on page {md(pt['page'])}, {md(pt['figure'])}; {md(pt['rows'])} rows)", "",
             "| num | name | type | side | page |", "|---|---|---|---|---|"]
-    out += [f"| {p['num']} | {p['name']} | {p['type']} | {p['side']} | {p['page']} |" for p in side["pins"]]
+    out += [f"| {md(p['num'])} | {md(p['name'])} | {md(p['type'])} | {md(p['side'])} | {md(p['page'])} |" for p in side["pins"]]
     if side["notes"]:
-        out += ["", "## Model notes", ""] + [f"- {n}" for n in side["notes"]]
+        out += ["", "## Model notes", ""] + [f"- {md(n)}" for n in side["notes"]]
     rt = side.get("route")
     if rt and rt.get("attempts"):
         out += ["", f"## How it was read ([datasheet] route = {rt.get('route')}; started on {rt['ladder'][0] if len(rt['ladder']) == 1 else rt.get('start')})", ""]
@@ -1293,16 +1554,41 @@ def report(res):
     return "\n".join(out) + "\n"
 
 
+def _review_text(r):
+    """One "Check these first" line. Text quoted from the PDF is shown as written, never matched against the message
+    table (the PDF's author would choose the warning); a line no message explains keeps its "<dimension>: " prefix."""
+    from . import messages as M
+    if r.startswith(INJECTION):
+        return M.clean(r)
+    e = M.explain(r)
+    return M.clean(r) if e["code"] == "other" else e["text"]
+
+
 def CC_LABEL(field):
     from . import crosscheck as CC
     return CC.LABEL.get(field, field)
+
+
+def CC_SHOWN(d):
+    from . import crosscheck as CC
+    return CC.shown(d)
 
 
 def write(res, outdir):
     d = Path(outdir)
     d.mkdir(parents=True, exist_ok=True)
     safe = lambda s: re.sub(r"[^A-Za-z0-9_.+-]", "_", s)
-    part = safe(res["symbol"]["name"])
+    raw = res["symbol"]["name"]
+    part = safe(raw)
+
+    def other_part(f):                                # a symbol written for a part whose name differs only in punctuation
+        try:
+            v = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+        except (OSError, ValueError):
+            return False
+        return isinstance(v, dict) and "pins" in v and "package_type" not in v and v.get("name") not in (None, raw)
+    if other_part(d / f"{part}.json") or other_part(d / f"{part}.symbol.json"):
+        part = f"{part}-{hashlib.sha1(raw.encode()).hexdigest()[:6]}"
     def holds(f, kind):                               # what an existing file in the folder is (another part's output)
         try:
             v = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
@@ -1337,6 +1623,27 @@ PDF_KEYWORDS = [(re.compile(p, re.I), w) for p, w in (
     (r"pin (configuration|functions?|descriptions?|assignments?|out)|pinout|terminal functions?", 2),
     (r"dimensions? in (mm|millimet|inch)|\bmax\b.*\bmin\b|\bmin\b.*\bmax\b", 1))]
 MAX_DOWNLOAD = 64 * 2 ** 20
+DOWNLOAD_S = 120                                      # wall-clock limit for one datasheet download
+
+
+def read_capped(r, limit=None, deadline=None):
+    """Body of a streamed requests response: at most limit + 1 bytes (the caller reports "larger than"), within
+    deadline seconds overall (requests' timeout is per socket read, so a host sending a byte a minute never times out)."""
+    raw, limit = getattr(r, "raw", None), MAX_DOWNLOAD if limit is None else limit
+    if raw is None:
+        return r.content
+    read1 = getattr(raw, "read1", None)
+    if not callable(read1):                           # urllib3 1.x / a test double: one capped read
+        return raw.read(limit + 1, decode_content=True)
+    t0, buf, deadline = time.monotonic(), bytearray(), DOWNLOAD_S if deadline is None else deadline
+    while len(buf) <= limit:
+        chunk = read1(65536, decode_content=True)
+        if not chunk:
+            break
+        buf += chunk
+        if time.monotonic() - t0 > deadline:
+            raise DatasheetError(f"download too slow ({len(buf) >> 10} KB in {deadline} s); stopped")
+    return bytes(buf)
 
 
 def lcsc_number(item=None, ln=None, row=None):
@@ -1364,12 +1671,45 @@ def clean_url(u):
     return u
 
 
+# Maker URL patterns, tried after every BOM / provider / source link (never instead of one), only for the makers
+# whose pattern holds: (maker name, link host, label, URL). The MPN is lowercased and tried whole first (without a
+# Linear "#PBF" or TI "/NOPB" tail), then as its base part:
+#   TI: the letters after the last digit cut (package, grade, reel; a "-Q1" or "-3.3" tail first): TPS26600PWPR ->
+#       tps26600, SN74LVC1G08DBVR -> sn74lvc1g08, LM1117MPX-3.3/NOPB -> lm1117. TI keeps a symlink per generic part
+#       number, so the family name (tps2660) is not guessed.
+#   ADI / Linear: the letters and the first run of digits: LT8610EMSE#PBF -> lt8610, AD7606BSTZ-RL -> ad7606
+#       (Linear package codes carry digits: LT1763CS8 is lt1763, not lt1763cs8).
+MAKER_URLS = [
+    (r"texas instruments|^ti$|burr.?brown|national semi", r"(^|\.)ti\.com$", "TI",
+     "https://www.ti.com/lit/ds/symlink/{}.pdf", lambda s: re.sub(r"(?<=\d)[A-Z]+$", "", re.sub(r"(-?Q1|-[\d.]+)$", "", s))),
+    (r"analog devices|linear tech|^adi$", r"(^|\.)(analog|linear)\.com$", "Analog Devices",
+     "https://www.analog.com/media/en/technical-documentation/data-sheets/{}.pdf",
+     lambda s: (re.match(r"[A-Z]+\d+", s) or [""])[0]),
+]
+
+
+def maker_urls(mpn, maker="", links=()):
+    """[(url, where)] from MAKER_URLS for a part whose maker (or one of whose known links' hosts) is a listed one."""
+    from urllib.parse import urlparse
+    s = re.split(r"[#/]", str(mpn or "").strip().upper())[0]
+    if not re.search(r"\d", s):
+        return []
+    hosts = {urlparse(u).hostname or "" for u in links}
+    out = []
+    for name_rx, host_rx, label, pattern, base in MAKER_URLS:
+        if not (re.search(name_rx, str(maker or "").strip(), re.I) or any(re.search(host_rx, h) for h in hosts)):
+            continue
+        for b in dict.fromkeys((s, base(s))):
+            if b and re.fullmatch(r"[A-Z0-9][A-Z0-9._-]*", b):
+                out.append((pattern.format(b.lower()), f"{label} datasheet URL pattern ({b.lower()})"))
+    return out
+
+
 def datasheet_urls(item=None, ln=None, row=None, found=None):
-    """Datasheet links to try, best first, each with where it came from: the BOM's datasheet column, the links the official
-    part APIs gave in triage (Nexar / DigiKey / Mouser: the first source's best link, then every other copy they gave,
-    such as a distributor-hosted one, from src_datasheet_more), the plan's
-    ComponentLink2URL / Datasheet, one a source found (KiCad symbol Datasheet property, EasyEDA lcsc.url), then
-    LCSC's datasheet URL pattern for the part's LCSC number."""
+    """Datasheet links to try, best first, each with where it came from: the BOM's datasheet column, the link an official
+    part API gave in triage (Nexar / DigiKey / Mouser), the plan's
+    ComponentLink2URL / Datasheet, one a source found (KiCad symbol Datasheet property, EasyEDA lcsc.url),
+    LCSC's datasheet URL pattern for the part's LCSC number, then the maker's own URL pattern (MAKER_URLS)."""
     par = {p["name"]: p["value"] for p in (item or {}).get("parameters", [])}
     fd = (found or {}).get("datasheet") or ("", "")
     cands = [((ln or {}).get("datasheet"), "BOM"), ((row or {}).get("src_datasheet"), f"{(row or {}).get('src') or 'part source'} datasheet link"),
@@ -1380,6 +1720,9 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
     lc = lcsc_number(item, ln, row)
     if lc:
         cands.append((f"https://www.lcsc.com/datasheet/{lc}.pdf", f"LCSC datasheet URL pattern ({lc})"))
+    mpn = (ln or {}).get("mpn") or par.get("Manufacturer Part Number") or (row or {}).get("mpn") or (row or {}).get("src_mpn")
+    maker = (ln or {}).get("manufacturer") or par.get("Manufacturer") or (row or {}).get("manufacturer")
+    cands += maker_urls(mpn, maker, [str(u or "").strip() for u, _ in cands])
     out, seen = [], set()
     for u, w in cands:
         u = clean_url(u)
@@ -1407,17 +1750,102 @@ def is_pdf(data):
     return isinstance(data, (bytes, bytearray)) and b"%PDF-" in data[:1024]
 
 
+_NO_FETCH_HOSTS = re.compile(r"(localhost|.*\.localhost|metadata|metadata\.google\.internal|instance-data(\.ec2\.internal)?)\.?",
+                             re.I)
+
+
+def unsafe_download(url):
+    """Why a datasheet link must not be downloaded, or None: only http(s), and never this machine (loopback), a
+    link-local address (cloud metadata at 169.254.169.254) or another non-routable address. A datasheet link comes
+    from a BOM or a web page someone else wrote, and the bytes are stored and sent to the model; a datasheet server
+    on your own network (10.x, 192.168.x) stays allowed. Literal addresses and well-known names only (no DNS lookup)."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(str(url))
+        host = (u.hostname or "").strip("[]")
+    except ValueError:
+        return "not a valid URL"
+    if u.scheme.lower() not in ("http", "https"):
+        return f"{u.scheme or 'no'} scheme: only http(s) links are downloaded"
+    if not host:
+        return "no host"
+    if _NO_FETCH_HOSTS.fullmatch(host):
+        return f"{host} is this machine or a cloud metadata service"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    ip = getattr(ip, "ipv4_mapped", None) or ip
+    if ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved:
+        return f"{host} is this machine, a link-local or a reserved address"
+    return None
+
+
+# The API's fetcher could not get a URL source either (its words in the #42 Opus run: LTM4671, LTV-352T).
+API_FETCH_FAILED = re.compile(r"could not (be )?(fetch|download)|unable to (fetch|download)|timed out while trying to download"
+                              r"|unable to connect to the remote server", re.I)
+
+
+def refused_line(job, error):
+    """The review line for a part whose PDF a maker's site refused here and the API could not fetch: the likely cause
+    and the way round it. None when that is not what happened."""
+    prov = job.get("prov") or {}
+    r = refusal(prov.get("attempts")) if prov.get("sent_as") == "url" and API_FETCH_FAILED.search(str(error)) else None
+    if not r:
+        return None
+    url, host, why = r
+    return (f"datasheet download refused by {host} ({why}): the maker's site likely blocks automated downloads; download "
+            f"{url} in a browser and read it with `ecadlib datasheet FILE.pdf --part {job['part']}`")
+
+
+def refusal(attempts):
+    """The first download a maker's site refused, as bot protection does: -> (url, host, why), or None. A 403 that
+    is a web page (Nexperia BAT160_SERIES.pdf), a reset connection (analog.com LTM4671, WinError 10054) or a timeout
+    on every try (analog.com LT8610, st.com STULPI01A). A TLS failure (liteon over http) is not one."""
+    from urllib.parse import urlparse
+    for a in attempts or []:
+        e = a.get("error") or ""
+        why = ("answered HTTP 403 with a web page" if re.search(r"HTTP 403 \(a web page", e) else
+               "reset the connection" if re.search(r"ConnectionResetError|Connection reset|10054|RemoteDisconnected", e) else
+               "timed out on every try" if re.search(r"timeout|timed out", e, re.I) and re.search(r"\(\d+ tries\)$", e) else "")
+        if why:
+            return a["url"], urlparse(a["url"]).hostname or a["url"], why
+    return None
+
+
 class PdfStore:
     """Downloaded datasheets, content-validated, with provenance: <cache>/datasheets/<sha256(url)>.pdf + .json.
     httpcache keeps text bodies only, so PDFs (binary) are stored here; the same session, user agent, per-host
-    rate limit and offline switch as the CachedHTTP passed in are used."""
+    rate limit and offline switch as the CachedHTTP passed in are used. A download that fails in a way that may
+    pass is tried again (httpcache.RETRIES), except on a host that already failed every try in this run."""
 
-    def __init__(self, cache_dir, http=None, offline=None):
+    def __init__(self, cache_dir, http=None, offline=None, sleep=None):
         self.dir, self.http = Path(cache_dir) / "datasheets", http
         self.offline = getattr(http, "offline", False) if offline is None else offline
+        self.sleep, self.gave_up = sleep or time.sleep, set()
+
+    def _get_retrying(self, url):
+        """_get, tried again on a transient failure. -> (status, bytes, content-type, final url, error)"""
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname or ""
+        tries = 1 if host in self.gave_up else H.RETRIES + 1
+        for n in range(1, tries + 1):
+            status, data, ctype, final, err, *more = self._get(url)
+            again = bool(H.TRANSIENT.search(err)) if err else status == 429 or 500 <= (status or 0) < 600
+            if not again or n == tries:
+                break
+            hdr = more[0] if more and more[0] is not None else {}
+            wait = H.retry_after(hdr.get("retry-after")) if not err else None
+            self.sleep(H.BACKOFF * 2 ** (n - 1) if wait is None else wait)
+        if again and tries > 1:
+            self.gave_up.add(host)
+        if err and n > 1:
+            err = f"{err} ({n} tries)"
+        return status, data, ctype, final, err
 
     def _get(self, url):
-        """-> (status, bytes, content-type, final url, error)"""
+        """-> (status, bytes, content-type, final url, error[, response headers])"""
         h = self.http
         if h is not None and hasattr(h, "get_bytes"):
             return h.get_bytes(url)
@@ -1436,15 +1864,18 @@ class PdfStore:
         get = sess.get if sess is not None else requests.get
         try:
             r = get(url, timeout=60, allow_redirects=True, stream=True,
-                    headers={"Accept": "application/pdf,*/*;q=0.5"})
-            data = r.raw.read(MAX_DOWNLOAD + 1, decode_content=True) if hasattr(r, "raw") and r.raw is not None else r.content
-        except requests.RequestException as e:
+                    headers={"Accept": "application/pdf,*/*;q=0.8"})
+            data = read_capped(r)
+        except DatasheetError as e:                   # too slow: not a broken link, so the URL can still go to the API
+            r.close()
+            return 0, None, "", url, str(e)
+        except (requests.RequestException, requests.packages.urllib3.exceptions.HTTPError) as e:   # the body cut off
             m = re.search(r"Tunnel connection failed: ([^'\")]+)", str(e))
             return 0, None, "", url, f"{type(e).__name__}: " + (f"proxy CONNECT refused ({m.group(1).strip()})" if m else str(e)[:160])
         r.close()
         if h is not None and hasattr(h, "log"):
             h.log.append(("GET", url, r.status_code, False))
-        return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None
+        return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None, r.headers
 
     def fetch(self, url, where="", follow=True):
         """-> (pdf bytes, provenance). Raises DatasheetError (with the reason) when it is not a usable PDF.
@@ -1452,17 +1883,27 @@ class PdfStore:
         stem = hashlib.sha256(url.encode()).hexdigest()[:24]
         pdf_f, meta_f = self.dir / f"{stem}.pdf", self.dir / f"{stem}.json"
         if pdf_f.exists() and meta_f.exists():
-            data = pdf_f.read_bytes()
-            meta = json.loads(meta_f.read_text(encoding="utf-8"))
-            if hashlib.sha256(data).hexdigest() == meta.get("sha256"):
+            try:
+                data = pdf_f.read_bytes()
+                meta = json.loads(meta_f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):             # a damaged record: downloaded again
+                meta = None
+            if isinstance(meta, dict) and hashlib.sha256(data).hexdigest() == meta.get("sha256"):
                 return data, dict(meta, where=where or meta.get("where"), from_cache=True)
+        why = unsafe_download(url)                    # a BOM cell or a page's link to this machine / cloud metadata
+        if why:
+            raise DatasheetError(f"{url}: not downloaded ({why})")
         if self.offline:
             raise DatasheetError(f"{url}: offline and not downloaded before")
-        status, data, ctype, final, err = self._get(url)
+        status, data, ctype, final, err = self._get_retrying(url)
         if err:
             raise DatasheetError(f"{url}: {err}")
+        why = unsafe_download(final) if final and final != url else None
+        if why:                                       # redirected there: the bytes are not kept or sent anywhere
+            raise DatasheetError(f"{url}: redirected to {final}, not used ({why})")
         if not 200 <= (status or 0) < 300:
-            raise DatasheetError(f"{url}: HTTP {status}")
+            page = status == 403 and bool(re.search(rb"<(!doctype|html)", (data or b"")[:2048], re.I))
+            raise DatasheetError(f"{url}: HTTP {status}" + (" (a web page: the site refused the download)" if page else ""))
         if len(data) > MAX_DOWNLOAD:
             raise DatasheetError(f"{url}: larger than {MAX_DOWNLOAD >> 20} MB; download it and pass --pages")
         if not is_pdf(data):
@@ -1480,8 +1921,9 @@ class PdfStore:
                 "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "pages": pdf_pages(data),
                 "fetched": datetime.datetime.now().isoformat(timespec="seconds")}
         self.dir.mkdir(parents=True, exist_ok=True)
-        pdf_f.write_bytes(data)
-        meta_f.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        from .fsutil import write_bytes_atomic        # own temp file per writer: two runs fetching one PDF never collide
+        write_bytes_atomic(pdf_f, data)
+        write_text_atomic(meta_f, json.dumps(meta, indent=2))
         return data, dict(meta, from_cache=False)
 
 
@@ -1494,6 +1936,7 @@ def pdf_link(html, base):
     links = [m.group(1) for m in re.finditer(r"""href=["']([^"'#]+?\.pdf(?:\?[^"']*)?)["']""", text, re.I)]
     if refresh:
         links.insert(0, refresh.group(1))
+    links = [u for u in links if urlparse(urljoin(base, u)).scheme.lower() in ("http", "https")]   # no file:, data:
     if not links:
         return None
     host = urlparse(base).netloc
@@ -1584,14 +2027,17 @@ class ResultCache:
         return f"{src_hash[:16]}-{re.sub(r'[^A-Za-z0-9.-]', '_', model)}-{schema_version()}-{h}"
 
     def get(self, key):
+        """The cached record, or None; a damaged entry (cut short by a crash, a sync tool) is a miss, not a crash."""
         f = self.dir / f"{key}.json"
-        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+        except (OSError, ValueError):
+            return None
+        return rec if isinstance(rec, dict) else None
 
     def put(self, key, rec):
         self.dir.mkdir(parents=True, exist_ok=True)
-        tmp = self.dir / f"{key}.tmp"
-        tmp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
-        os.replace(tmp, self.dir / f"{key}.json")
+        write_text_atomic(self.dir / f"{key}.json", json.dumps(rec, indent=1))   # own temp file per writer
 
 
 # ---------------------------------------------------------------- reader: jobs -> (cache | sync call | Message Batch) -> results
@@ -1602,6 +2048,33 @@ def custom_id(name, taken):
     while cid in taken:
         cid, i = f"{base[:60 - len(str(i))]}_{i}", i + 1
     return cid
+
+
+_IN_FLIGHT = set()                                    # fingerprints of batch creates running in this process now
+
+
+def _owner():
+    import socket
+    return {"pid": os.getpid(), "host": socket.gethostname()}
+
+
+def _create_in_flight(m):
+    """A pending batch create (batch_state.json) that another Reader is still sending: in this process, or in a live
+    process on this machine (POSIX), started under an hour ago. Otherwise its answer was lost: look for it."""
+    import socket
+    if not m.get("pid") or m.get("host") != socket.gethostname() or time.time() - float(m.get("at") or 0) > 3600:
+        return False
+    if m["pid"] == os.getpid():
+        return m.get("fingerprint") in _IN_FLIGHT
+    if os.name != "posix":                            # os.kill(pid, 0) would end the process on Windows
+        return False
+    try:
+        os.kill(int(m["pid"]), 0)
+    except ProcessLookupError:
+        return False
+    except (OSError, ValueError):                     # PermissionError: alive, another user's
+        return True
+    return True
 
 
 # A link that is wrong everywhere: not a PDF, too big, or gone. 401 / 403 / 429 are not in it: a maker's site that
@@ -1634,16 +2107,21 @@ class Reader:
                 self.key = None
         else:                                         # from its env var only (`key` is a Claude key); a local
             self.key = LL.key_for(self.ep)            # server needs none: LL.NO_KEY, never sent anywhere
+        self.offline = bool(getattr(http, "offline", False))
+        if self.offline:                              # --offline: no model call either (it is network, and it bills)
+            self.key = None
         self._info = {}
         self.http, self.batch, self.wait, self.poll, self.max_wait_s = http, batch, wait, poll, max_wait_s
         self.estimate_only, self.yes = estimate, yes
         self.auto_pages = self.cfg["auto_pages"] if auto_pages is None else auto_pages
-        self.store, self.results = PdfStore(cache_dir, http), ResultCache(cache_dir)
+        self.store, self.results = PdfStore(cache_dir, http, sleep=sleep), ResultCache(cache_dir)
         self.dir = self.out / "datasheet"
         self.log_file = self.dir / "api_log.jsonl"
         self.say, self.sleep = log or (lambda *a: None), sleep or time.sleep
         self._client, self.pending, self.last_estimate, self.committed_usd = client, {}, None, 0.0
         self._holds = {}                              # key -> worst-case USD held for requests not yet answered
+        self._creates_done = set()                    # pending-create fingerprints this Reader settled (_save_state)
+        self._own_creates = set()                     # ... and the ones it wrote
         from . import ds_route as DR                  # pages and model per part, escalation, cost ledger
         self.router, self.ledger, self.page_budget = DR.Router(dict(self.cfg, model=self.model), model), DR.Ledger(self.dir), \
             self.cfg["page_budget"]
@@ -1672,6 +2150,8 @@ class Reader:
         return self.batch or self.estimate_only
 
     def client(self):
+        if self.offline:
+            raise DatasheetError(OFFLINE)
         if self._client is None:
             self._client = Client(require_key(self.key), log_file=self.log_file, say=self.say, sleep=self.sleep)
         return self._client
@@ -1766,8 +2246,10 @@ class Reader:
             prov["note"] = note + (" (the picked pages could not be cut from this PDF)" if isinstance(lv, list) else "")
         if src[0] == "base64":
             prov.update(sent_as="base64", sent_bytes=len(src[1]), pages_sent=offset if isinstance(offset, list) else None)
-        headers, body = build_request(src, base["part"], base["package"], hint, model, self.effort, fallback=not self.deferred,
-                                      cache_doc=not self.deferred)
+        # shaped by the mode it will be sent in (an estimate prices the request the run will send: a synchronous one
+        # carries fallbacks and a cache write)
+        headers, body = build_request(src, base["part"], base["package"], hint, model, self.effort, fallback=not self.batch,
+                                      cache_doc=not self.batch)
         from .llm import rails as LRL
         sig = LRL.signature(self.info(model)["plan"])  # "" for a plain request: the cache keys of before
         if self.cfg.get("zoom_drawings") and cut is not None:
@@ -1790,7 +2272,7 @@ class Reader:
         try:
             ext = parse_message(rec["message"])
             res = process(ext, job["part"], job["url"], rec.get("model") or job["model"], job["offset"], rec["message"],
-                          job.get("facts"), job.get("tables"))
+                          facts=job.get("facts"), tables=job.get("tables"))
         except DatasheetError as e:
             return "failed", [str(e)], None
         kind, why = DR.assess(res)
@@ -1803,25 +2285,35 @@ class Reader:
             rec = self.results.get(job["key"])
             if rec is None:
                 return job
-            kind, why, _ = self._judge(job, rec)
+            kind, why, res = self._judge(job, rec)
+            gaps = len(((res or {}).get("spec") or {}).get("unresolved") or []) + len(why)
+            rank = ({"ok": 2, "incomplete": 1}.get(kind, 0), -gaps) if "message" in rec else (-1, 0)
             done = job["route"]["attempts"] + [{"model": job["model"], "pages": len(job["offset"]) if isinstance(job["offset"], list)
                                                 else "all", "verdict": kind, "why": why[:4], "via": rec.get("via"),
                                                 "served": (rec.get("message") or {}).get("model"),
                                                 "usage": (rec.get("message") or {}).get("usage") or rec.get("usage")}]
             nxt = self.router.next_step(job["rung"], job["level"], len(job["levels"]), kind, len(done))
+            best = job["route"].get("best")           # [rank, rung, level, answer no.] of the best answer so far
             if nxt is None:
+                if best and tuple(best[0]) > rank:    # CY14U256LA-BA: the whole-PDF read came back with no pins and no
+                    job = self._at(job, best[1], best[2])  # grid ("x"), after a 5-page read that had them: keep that one
+                    job["route"] = dict(job["route"], attempts=done, kept=f"answer {best[3]} (a later one was worse)")
+                    job["final"] = True
+                    return job
                 job["route"]["attempts"] = done
                 job["final"] = "message" in rec
                 return job
-            job = self._at(dict(job, route=dict(job["route"], attempts=done)), *nxt)
+            if best is None or rank > tuple(best[0]):
+                best = [list(rank), job["rung"], job["level"], len(done)]
+            job = self._at(dict(job, route=dict(job["route"], attempts=done, best=best)), *nxt)
 
     def _result(self, job, rec):
         ext = parse_message(rec["message"])
         res = process(ext, job["part"], job["url"], rec.get("model") or self.model, rec.get("page_offset", job["offset"]), rec["message"],
-                      job.get("facts"), job.get("tables"))
+                      facts=job.get("facts"), tables=job.get("tables"))
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
         if job.get("route"):
-            res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k != "picked"}
+            res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k not in ("picked", "best")}
         if job["prov"].get("sent_as") == "url":
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
         if job["prov"].get("pages_sent"):
@@ -1831,8 +2323,10 @@ class Reader:
         cc = CC.run(self, job, res, rec.get("model") or job.get("model") or self.model)
         if cc:
             res["sidecar"]["cross_check"] = res["cross_check"] = cc
-            if cc["status"] == "unchecked":
+            if cc["status"] in ("unchecked", "self-checked"):
                 res["needs_review"].append(f"cross-check: {CC.summary_line(cc)}")
+            res["needs_review"] += [f"{INJECTION} (cross-check read): {q[:200]!r}" for c in cc.get("checks") or []
+                                    for q in c.get("embedded_instructions") or []]
         write(res, self.dir)
         if cc and cc["status"] == "disagreed":
             raise CC.held(cc)
@@ -1850,8 +2344,9 @@ class Reader:
             raise CC.Unavailable("no answer: no key for the second read")
         from .llm import rails as LRL
         try:                                          # held to [datasheet] max_cost_usd like every other request
-            self._guard_cost([{"key": key, "name": job.get("name") or job["part"], "model": model, "body": body,
-                               "url": job.get("url", ""), "prov": {"pages": pages_sent or job.get("n_pages")}}])
+            self._guard_cost([{"key": key, "name": job.get("name") or job["part"], "model": model, "body": body, "sync": True,
+                               "url": job.get("url", ""), "prov": {"pages": pages_sent or job.get("n_pages"),
+                                                                    "sent_as": "url" if job.get("data") is None else "base64"}}])
         except APIError:
             raise
         except DatasheetError as e:
@@ -1863,9 +2358,11 @@ class Reader:
             b = LRL.adapt_body(body, inf["prof"], p) if p["guided"] else body
             with logging_to(self.log_file, self.say):
                 msg = send(b)
-        except APIError:
-            raise                                     # no answer came back: the part is retried next run
         except DatasheetError as e:
+            if not getattr(e, "maybe_billed", False):
+                self._release(key)                    # no answer, nothing billed: the hold is given back
+            if isinstance(e, APIError):
+                raise                                 # no answer came back: the part is retried next run
             raise CC.Unavailable(str(e)[:200])
         msg = LRL.repair_message(msg, CC.output_schema(), p)
         self._settle(key, model, msg, "sync")
@@ -1952,8 +2449,12 @@ class Reader:
         while True:
             if job.get("final"):
                 return self._result(job, self.results.get(job["key"]))
+            bid = self._open_batch(job["key"])
+            if bid:                                   # this exact request is waiting in a batch: never bought twice
+                raise DatasheetError(f"waiting in Message Batch {bid} (sent by an earlier run, already paid for): "
+                                     "collect it with `ecadlib datasheet batch <plan.json>` or run the batch read again")
             if not _guarded:
-                self._guard_cost([job])
+                self._guard_cost([dict(job, sync=True)])   # sent now, at synchronous rates
             _guarded = False
             try:
                 with logging_to(self.log_file, self.say):
@@ -1961,6 +2462,8 @@ class Reader:
             except DatasheetError as e:               # refusal / max_tokens / not schema-shaped: an answer, with usage
                 msg = getattr(e, "api_message", None)
                 if msg is None:                       # no answer came back (API error): nothing to record
+                    if not getattr(e, "maybe_billed", False):
+                        self._release(job["key"])
                     raise
             err = None
             try:
@@ -2017,7 +2520,8 @@ class Reader:
         # pages come first), and only within [datasheet] max_attempts answers per part
         allow = "rung" in job and n_att + 1 <= self.router.max_attempts and \
             self.router.next_step(job["rung"], job["level"], len(job["levels"]), "failed", n_att) is None
-        guard = lambda b: self._guard_cost([dict(job, body=b)])   # the feedback turn is held to max_cost_usd too
+        redo = 2 if "split_steps" in inf["plan"]["rails"] else 1   # the steps' redo is one step, with its retry
+        guard = lambda b: self._guard_cost([dict(job, body=b, sync=True, calls=redo)])   # the feedback turn too
         try:
             return LR.ask(job, inf, send, judge, cl, allow_feedback=allow, guard=guard)
         except APIError:
@@ -2046,12 +2550,13 @@ class Reader:
         OUT_TOKENS, and max_tokens for the worst case. Each part is priced on the model its route starts on;
         usd_max_route adds the worst case of every further step its route could take (more pages, the next model)."""
         batch = self.batch if batch is None else batch
-        mult = BATCH_DISCOUNT if batch else 1.0
         rows, exact, models = [], bool(self.key), {}
         for j in jobs:
+            jb = batch and not j.get("sync")          # a synchronous request of a batch run (cross-check, feedback)
+            mult = BATCH_DISCOUNT if jb else 1.0
             model = j.get("model") or self.model
             pin, pout = price_of(model) or (None, None)
-            tin = None
+            tin, unknown = None, False
             if self.key and self._plain(model):
                 try:
                     with logging_to(self.log_file, self.say):
@@ -2061,14 +2566,27 @@ class Reader:
                     self.say(f"  count_tokens failed ({type(e).__name__}): rough estimate instead")
                     exact = False
             if tin is None:
-                pages = len(j["prov"]["pages_sent"]) if j["prov"].get("pages_sent") else j["prov"].get("pages") or URL_PAGES
+                pages = len(j["prov"]["pages_sent"]) if j["prov"].get("pages_sent") else j["prov"].get("pages")
+                unknown = not pages and j["prov"].get("sent_as") != "base64"   # sent as a URL, never counted: size unknown
+                pages = pages or URL_PAGES
                 tin, how = pages * PAGE_TOKENS + 1500, f"rough: {pages} pages x {PAGE_TOKENS}"
-            tin += len(json.dumps(output_schema())) // 4       # the output format (not in count_tokens): rough
+            schema = len(json.dumps(output_schema())) // 4     # the output format (not in count_tokens): rough
+            tin += schema
+            # DS-37: the worst case of a PDF of unknown size is the request's page limit, not the typical URL_PAGES
+            tmax = page_limit(model) * PAGE_TOKENS + 1500 + schema if unknown else tin
+            if unknown:
+                how += f" (size unknown: worst case priced at the {page_limit(model)}-page request limit)"
             from .ds_route import prices
             pin, pout = prices(model, tin) or (None, None)     # the long-prompt tier where the model has one
-            cw = 1.0 if batch else CACHE_WRITE
+            cw = 1.0 if jb else CACHE_WRITE
             cost = (tin * cw * pin + OUT_TOKENS * pout) / 1e6 * mult if pin else None
-            worst = worst_usd(model, tin, j["body"]["max_tokens"], cw, mult, fallback=bool(j["body"].get("fallbacks")))
+            worst = worst_usd(model, tmax, j["body"]["max_tokens"], cw, mult, fallback=bool(j["body"].get("fallbacks")))
+            calls = j.get("calls") or self._calls(model)  # the small-model steps rail: several calls per read
+            worst = worst * calls if worst is not None else None
+            guess = worst                             # unknown size: the worst case at the typical URL_PAGES, used
+            if unknown and worst is not None:         # only once the person confirmed sending it (--yes)
+                guess = worst_usd(model, tin, j["body"]["max_tokens"], cw, mult,
+                                  fallback=bool(j["body"].get("fallbacks"))) * calls
             route_max = worst
             if "rung" in j and worst is not None and self.router.escalate:
                 sent = self._pages_sent(j) or j.get("n_pages") or URL_PAGES
@@ -2078,8 +2596,9 @@ class Reader:
                         if (r, lv) == (j["rung"], j["level"]):
                             continue
                         pg = len(j["levels"][lv]) if isinstance(j["levels"][lv], list) else (j.get("n_pages") or sent)
-                        steps.append(worst_usd(self.router.ladder[r], tin * pg / max(1, sent), j["body"]["max_tokens"], cw, mult,
-                                               fallback=bool(j["body"].get("fallbacks")) and self.router.ladder[r] in FALLBACK_MODELS))
+                        w = worst_usd(self.router.ladder[r], tmax * pg / max(1, sent), j["body"]["max_tokens"], cw, mult,
+                                      fallback=bool(j["body"].get("fallbacks")) and self.router.ladder[r] in FALLBACK_MODELS)
+                        steps.append(w * self._calls(self.router.ladder[r]) if w is not None else None)
                 more = max(0, self.router.max_attempts - 1)
                 route_max = None if None in steps else worst + sum(sorted(steps, reverse=True)[:more])
             models[model] = models.get(model, 0) + 1
@@ -2087,7 +2606,7 @@ class Reader:
                          "pages_total": j.get("n_pages") or j["prov"].get("pages"), "input_tokens": tin, "how": how,
                          "output_tokens": OUT_TOKENS, "max_output_tokens": j["body"]["max_tokens"], "usd": cost,
                          "usd_max": worst, "usd_max_route": route_max, "start": (j.get("route") or {}).get("start"),
-                         "url": j["url"]})
+                         "url": j["url"], "size_unknown": unknown, "usd_max_guess": guess})
         known = all(r["usd"] is not None for r in rows)
         tot = lambda k: round(sum(r[k] for r in rows), 4) if known and all(r[k] is not None for r in rows) else None
         one = next(iter(models)) if len(models) == 1 else None
@@ -2102,6 +2621,13 @@ class Reader:
                                          f"no price known for {one}") if one else
                                         "; ".join(price(m) for m in models) + " per MTok in/out"}
         return self.last_estimate
+
+    def _calls(self, model):
+        """Most paid calls one read of this model makes: 1, or 3 steps x 2 attempts on the split_steps rail."""
+        try:
+            return 6 if "split_steps" in self.info(model)["plan"]["rails"] else 1
+        except Exception:                             # a setup that does not resolve is reported where it is sent
+            return 1
 
     def _guard_cost(self, jobs):
         """[datasheet] max_cost_usd over everything this Reader sends (batches and synchronous calls together)."""
@@ -2127,6 +2653,22 @@ class Reader:
                 return
             raise DatasheetError(f"no price known for {', '.join(est['models']) or self.model}: can't hold [datasheet] max_cost_usd = {cap}; "
                                  "pass --yes to send anyway")
+        unk = [r for r in est["rows"] if r.get("size_unknown")]
+        if unk and self.committed_usd + est["usd_max"] > cap:     # DS-37: never a silent 30-page guess
+            what = (f"the size of the PDF of {', '.join(r['part'] for r in unk)} is unknown (sent as a URL, not counted "
+                    f"by count_tokens): its worst case at the {page_limit(unk[0]['model'])}-page request limit makes up to "
+                    f"${est['usd_max']:.2f} for {est['parts']} parts, over [datasheet] max_cost_usd = {cap:g}")
+            if not self.yes and cap != DEFAULT_MAX_COST_USD:   # a cap the person set: refused, never a silent guess
+                raise DatasheetError(what + "; nothing sent. Download the PDF (or give a local file) so it can be "
+                                     "counted, raise the cap, or pass --yes to send it on a typical "
+                                     f"{URL_PAGES}-page estimate")
+            # --yes, or the default safety net (a run that never set a cap is not stopped by the page limit's worst
+            # case of every URL datasheet): held at the typical size, said aloud
+            self.say(f"  datasheet: {what}; {'--yes' if self.yes else 'default cap'}: held at a typical "
+                     f"{URL_PAGES}-page estimate instead (set [datasheet] max_cost_usd to refuse it)")
+            for r in unk:                             # confirmed: the typical size, said aloud; the cap still holds
+                r["usd_max"] = r["usd_max_guess"]
+            est["usd_max"] = sum(r["usd_max"] or 0.0 for r in est["rows"])
         if self.committed_usd + est["usd_max"] > cap:
             raise DatasheetError(f"estimated up to ${est['usd_max']:.2f} for {est['parts']} parts"
                                  + (f" (after ${self.committed_usd:.2f} already spent or held)" if self.committed_usd else "")
@@ -2143,19 +2685,72 @@ class Reader:
         from . import ds_route as DR
         if not self._holds.get(key):
             return
-        usd = DR.usage_usd(model, (msg or {}).get("usage"), batch=str(via or "").startswith("batch"))
-        if usd is None:
+        usd = DR.usage_usd(DR.billed_model(model, msg), (msg or {}).get("usage"),   # the model that served it, as
+                           batch=str(via or "").startswith("batch"))                  # the cost ledger prices it
+        if usd is None:                               # no price, or no usage block: the real cost is unknown
             return
         self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key)) + usd)
+
+    def _release(self, key, e=None):
+        """A request that got no answer and is not billed (an HTTP error response, no connection made, or a batch
+        request that errored, was cancelled or expired) gives back the worst case held for it under max_cost_usd. A
+        timeout or a response cut off keeps its hold: the API may still have run it."""
+        if e is not None:
+            billed = getattr(e, "maybe_billed", None)
+            if billed if billed is not None else getattr(e, "status", None) is None:
+                return
+        if self._holds.get(key):
+            self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key)))
 
     # --- batch
     def _state(self):
         f = self.dir / "batch_state.json"
         return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"batches": []}
 
+    def _open_batch(self, key):
+        """The id of a submitted, not yet collected batch holding this request key, or None."""
+        if not (self.dir / "batch_state.json").exists():
+            return None
+        try:
+            st = self._state()
+        except (OSError, ValueError):
+            return None
+        return next((b.get("id") for b in st.get("batches") or [] if not b.get("collected")
+                     and key in (b.get("requests") or {}).values()), None)
+
+    def _add_pending(self, st, mark):
+        """Record a batch create that is (again) unconfirmed: a new create, or a lost create's mark put back when the
+        batch taken for it turned out to be someone else's. This Reader owns it from now on, so _save_state keeps it
+        even if the same fingerprint was settled earlier in this run (adopted, or sent again with --yes)."""
+        st.setdefault("pending_creates", []).append(mark)
+        self._own_creates.add(mark.get("fingerprint"))
+        self._creates_done.discard(mark.get("fingerprint"))
+
     def _save_state(self, st):
+        """Write batch_state.json, merged with what is on disk now: another run on the same folder (the web UI and
+        the command line, two UI requests) may have recorded a batch since this one read the file, and a paid batch
+        must never be forgotten. Its batches and pending creates are added to st (in place); for a batch both know,
+        collected wins. Under a lock (datasheet/plan.lock) for the read-merge-write."""
+        from .fsutil import plan_lock
         self.dir.mkdir(parents=True, exist_ok=True)
-        write_text_atomic(self.dir / "batch_state.json", json.dumps(st, indent=2))
+        with plan_lock(self.dir):
+            try:
+                disk = self._state()
+            except (OSError, ValueError):
+                disk = {"batches": []}
+            mine = {b.get("id"): b for b in st.setdefault("batches", [])}
+            for b in disk.get("batches") or []:
+                if b.get("id") not in mine:
+                    st["batches"].append(b)
+                elif b.get("collected") and not mine[b["id"]].get("collected"):
+                    mine[b["id"]].update(b)
+            # pending creates: the file's (another run's included) less the ones this Reader settled, plus its own
+            on_disk = [m for m in disk.get("pending_creates") or [] if m.get("fingerprint") not in self._creates_done]
+            fps = {m.get("fingerprint") for m in on_disk}
+            own = [m for m in st.get("pending_creates") or [] if m.get("fingerprint") in self._own_creates
+                   and m.get("fingerprint") not in self._creates_done | fps]
+            st["pending_creates"] = on_disk + own
+            write_text_atomic(self.dir / "batch_state.json", json.dumps(st, indent=2))
 
     def recollect(self, jobs=()):
         """Answers already paid for in a collected batch that this code reads now (a parser fix since): the Batches API
@@ -2165,7 +2760,8 @@ class Reader:
             return 0
         st, by, n = self._state(), {j["key"]: j for j in jobs}, 0
         for b in st["batches"]:
-            recs = {c: self.results.get(k) for c, k in b["requests"].items()} if b.get("collected") else {}
+            recs = {c: self.results.get(k) for c, k in b["requests"].items()} if b.get("collected") and \
+                not b.get("foreign") else {}
             lost = {c: b["requests"][c] for c, rec in recs.items()
                     if (rec is not None and "message" not in rec) or (rec is None and b["requests"][c] in by)}
             if not lost:
@@ -2201,7 +2797,9 @@ class Reader:
         """A batch create whose answer was lost (timeout, connection reset, 5xx) may have created a paid batch. Before
         anything is created again, list recent batches and adopt the one created then with the same number of
         requests; if none (or more than one) matches, refuse to resubmit unless --yes."""
-        pend = list(st.get("pending_creates") or [])
+        # a create still in flight in another run on this folder (the web UI and the command line at once) is left
+        # as it is, and its parts count as submitted (open) until that run records the batch
+        pend = [m for m in st.get("pending_creates") or [] if not _create_in_flight(m)]
         if not pend:
             return
         known = {b["id"] for b in st["batches"]}
@@ -2220,7 +2818,7 @@ class Reader:
                 known.add(b["id"])
                 st["batches"].append({"id": b["id"], "created": b.get("created_at"), "model": m["model"],
                                       "requests": m["requests"], "parts": m["parts"], "status": b.get("processing_status"),
-                                      "collected": False, "adopted": m["fingerprint"]})
+                                      "collected": False, "adopted": m["fingerprint"], "mark": m})
                 self.say(f"  datasheet batch {b['id']}: found the batch whose create answer was lost ({m['n']} parts); "
                          "collecting it instead of sending again")
             elif self.yes:
@@ -2234,6 +2832,7 @@ class Reader:
                     "can't be confirmed. Check console.anthropic.com > Batches, then re-run with --yes to send again "
                     f"(state: {self.dir / 'batch_state.json'})")
             st["pending_creates"].remove(m)
+            self._creates_done.add(m.get("fingerprint"))
         self._save_state(st)
 
     def flush(self):
@@ -2279,7 +2878,8 @@ class Reader:
         client = self.client()
         with logging_to(self.log_file, self.say):
             self._resolve_pending_creates(st, client)   # a create that may have gone through is found, never re-sent
-            open_ = {k for b in st["batches"] if not b.get("collected") for k in b["requests"].values()}
+            open_ = {k for b in st["batches"] if not b.get("collected") for k in b["requests"].values()} | \
+                {k for m in st.get("pending_creates") or [] if _create_in_flight(m) for k in (m.get("requests") or {}).values()}
         if self.recollect(jobs):                      # answered in a collected batch, readable now: never sent again
             st = self._state()
         with logging_to(self.log_file, self.say):
@@ -2305,24 +2905,34 @@ class Reader:
                                  else dict(j["body"], model=api_model)})
                 mark = {"fingerprint": hashlib.sha256(json.dumps([self.model, sorted(ids.items())]).encode()).hexdigest()[:24],
                         "at": time.time(), "n": len(reqs), "model": self.model, "requests": ids,
-                        "parts": {c: j["name"] for c, j in zip(ids, chunk)}}
-                st.setdefault("pending_creates", []).append(mark)
+                        "parts": {c: j["name"] for c, j in zip(ids, chunk)}, **_owner()}
+                self._add_pending(st, mark)
+                _IN_FLIGHT.add(mark["fingerprint"])
                 self._save_state(st)                  # written BEFORE the create: a lost answer leaves this behind
                 try:
                     b = client.batch_create(reqs)
                 except APIError as e:
                     if e.status is not None and (e.status < 500 or e.status == 529):   # an answer that says not created
                         st["pending_creates"].remove(mark)
+                        self._creates_done.add(mark["fingerprint"])
                         self._save_state(st)
+                        for j in chunk:
+                            self._release(j["key"])
                     else:
                         e.args = (f"{e.args[0]} (the batch may have been created: the next run looks for it before "
                                   "sending again)",)
+                    _IN_FLIGHT.discard(mark["fingerprint"])
+                    raise
+                except BaseException:
+                    _IN_FLIGHT.discard(mark["fingerprint"])
                     raise
                 st["pending_creates"].remove(mark)
+                self._creates_done.add(mark["fingerprint"])
                 st["batches"].append({"id": b["id"], "created": b.get("created_at"), "model": self.model, "models": models,
                                       "requests": ids, "parts": {c: j["name"] for c, j in zip(ids, chunk)},
                                       "status": b.get("processing_status"), "collected": False})
                 self._save_state(st)
+                _IN_FLIGHT.discard(mark["fingerprint"])
                 self.say(f"  datasheet batch {b['id']}: {len(reqs)} parts submitted")
             errors = {}
             t0 = time.time()
@@ -2330,21 +2940,50 @@ class Reader:
                 if b.get("collected") or not set(b["requests"].values()) & {j["key"] for j in jobs}:
                     continue
                 while True:
-                    info = client.batch_get(b["id"])
+                    try:
+                        info = client.batch_get(b["id"])
+                    except APIError as e:
+                        if e.status != 404:
+                            raise
+                        info = None                   # expired, deleted or another workspace's: its parts go again
+                        break
                     b["status"], b["counts"] = info.get("processing_status"), info.get("request_counts")
                     self._save_state(st)
                     if info.get("processing_status") == "ended" or not self.wait or time.time() - t0 > self.max_wait_s:
                         break
                     self.say(f"  datasheet batch {b['id']}: {info.get('processing_status')} {info.get('request_counts')}")
                     self.sleep(self.poll)
+                if info is None:
+                    gone = (f"batch {b['id']} is gone (the API answered 404: expired, deleted, or made with another "
+                            "workspace's key); run again to send its parts again")
+                    errors.update({k: gone for k in b["requests"].values()})
+                    b["collected"], b["lost"] = True, "404"
+                    b["errors"] = {c: gone for c in b["requests"]}
+                    self._save_state(st)
+                    self.say(f"  datasheet {gone}")
+                    continue
                 if info.get("processing_status") != "ended":
                     continue
-                for line in client.batch_results(info):
+                lines = client.batch_results(info)
+                if b.get("adopted") and lines and not any(b["requests"].get(ln.get("custom_id")) for ln in lines):
+                    # adopted after a lost create answer, but none of its requests are ours: another tool's batch
+                    b["collected"], b["foreign"] = True, True
+                    self._add_pending(st, b["mark"])  # unconfirmed again: refused without --yes
+                    for k in b["requests"].values():
+                        errors[k] = (f"batch {b['id']} (taken for a create whose answer was lost) holds none of these "
+                                     "parts; check console.anthropic.com > Batches, then run again with --yes to send again")
+                    self._save_state(st)
+                    continue
+                bad, seen = [ln["unreadable"] for ln in lines if "unreadable" in ln], set()
+                for line in lines:
                     key = b["requests"].get(line.get("custom_id"))
                     job = next((j for j in jobs if j["key"] == key), None)
                     r = line.get("result") or {}
                     if key is None:
                         continue
+                    seen.add(key)
+                    if bad and "message" in (self.results.get(key) or {}):
+                        continue                      # stored from an earlier, damaged download of these results
                     if r.get("type") == "succeeded":
                         try:
                             self._store(job or {"key": key, "part": b["parts"].get(line["custom_id"]), "url": "", "offset": 0,
@@ -2355,8 +2994,17 @@ class Reader:
                     elif r.get("type") == "errored":
                         et, em = _err_of(r.get("error"))
                         errors[key] = f"batch request errored: {et}: {em}"
+                        self._release(key)            # not billed
                     else:
                         errors[key] = f"batch request {r.get('type', '?')} (re-run to submit it again)"
+                        self._release(key)
+                if bad and set(b["requests"].values()) - seen:   # kept open: the next run downloads them again (free)
+                    for k in set(b["requests"].values()) - seen:
+                        errors[k] = (f"batch {b['id']}: results line(s) {bad[:5]} could not be read (damaged download); "
+                                     "run again to collect them")
+                    b["errors"] = {c: errors[k] for c, k in b["requests"].items() if k in errors}
+                    self._save_state(st)
+                    continue
                 b["collected"], b["errors"] = True, {c: errors[k] for c, k in b["requests"].items() if k in errors}
                 self._save_state(st)
         for j in jobs:
@@ -2390,6 +3038,8 @@ class _Advance:
 
 def format_estimate(est):
     usd = lambda v: f"${v:.2f}" if v is not None else "n/a"
+    if not est.get("rows"):
+        return "datasheet estimate: nothing to read (no part needs a datasheet read); $0.00"
     lines = [f"datasheet estimate: {est['parts']} parts, {est['model']}, {est['mode']}, {est['prices']}",
              f"  input {est['input_tokens']:,} tokens ({'counted by count_tokens' if est['exact_input'] else 'rough: no API key, pages x ' + str(PAGE_TOKENS)});"
              f" expected {usd(est['usd'])}, at most {usd(est['usd_max'])} (every answer at max_tokens, plus a fallback re-run on synchronous calls)"]
@@ -2525,12 +3175,23 @@ def batch_main(argv, estimate=False):
                 wait=not a.no_wait, poll=a.poll, estimate=estimate or a.estimate, yes=a.yes)
     if a.max_cost_usd is not None:
         rd.cfg["max_cost_usd"] = a.max_cost_usd
-    if not rd.key and not rd.estimate_only:
+    if not rd.key and not rd.estimate_only and not rd.offline:
         from . import llm as LL
         why = f"{settings(rules)['api_key_env']} is not set" if rd.ep['provider'] == 'anthropic' else LL.needs_key_message(rd.ep)
         print(f"error: {why} (use `ecadlib datasheet estimate` to see the cost without a key)", file=sys.stderr)
         return 1
     try:
+        if plan_mode and a.part:                      # a typo'd --part must not read as "nothing to do"
+            try:
+                names = [it.get("name") for it in json.loads(target.read_text(encoding="utf-8")) if isinstance(it, dict)]
+            except (OSError, ValueError, TypeError) as e:
+                raise DatasheetError(f"can't read {target}: {e}")
+            unknown = [p for p in dict.fromkeys(a.part) if p not in names]
+            if unknown:
+                raise DatasheetError(f"no part named {', '.join(unknown)} in {target} (parts: "
+                                     f"{', '.join(map(str, names[:20]))}{' ...' if len(names) > 20 else ''})")
+        if rd.offline and not rd.estimate_only:       # --offline: nothing goes to the model
+            raise DatasheetError(OFFLINE)
         if plan_mode and rd.estimate_only:
             est = estimate_plan(target, rd, set(a.part) or None)
             print(format_estimate(est))
@@ -2603,7 +3264,7 @@ def main(argv=None):
     ap.add_argument("--package", help="package hint, e.g. 'RGT VQFN-16' or 'SOP-16'")
     ap.add_argument("--pages", help="PDF pages with the drawing and pin table, e.g. 30-33")
     ap.add_argument("--model", help=f"model id (default: [ai] / [datasheet] model, {MODEL}); name:model for an [ai.endpoints] entry")
-    ap.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
+    ap.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"], help="default: [datasheet] effort, high")
     ap.add_argument("--fetch", action="store_true", help="download a URL here and send it base64")
     ap.add_argument("--no-fallback", action="store_true", help="do not send fallbacks: default")
     ap.add_argument("--from-response", help="re-run the checks on a saved Messages API response JSON (no API call)")
@@ -2622,6 +3283,7 @@ def main(argv=None):
         rules = RU.load(a.rules, start=a.out)
     except RU.RulesError as e:
         rules = e
+    a.effort = a.effort or settings(rules if isinstance(rules, dict) else None)["effort"]   # as the Reader does
     try:
         if not a.model:                               # [ai] model / [datasheet] model; the default stays Claude Opus 5.5
             try:
@@ -2646,7 +3308,8 @@ def main(argv=None):
                 key = LL.key_for(inf["ep"])
                 if not key:
                     raise DatasheetError(LL.needs_key_message(inf["ep"]))
-            source, offset, hint = load_source(a.pdf, pages, a.fetch or not LR.plain(inf))
+            source, offset, hint = load_source(a.pdf, pages, a.fetch or not LR.plain(inf), settings(rules)["auto_pages"],
+                                               page_limit(a.model))
             headers, body = build_request(source, a.part, a.package, hint, a.model, a.effort, not a.no_fallback)
             src_hash = hashlib.sha256(source[1] if source[0] == "base64" else ("url" + source[1]).encode()).hexdigest()
             from .llm import rails as LRL
@@ -2654,15 +3317,17 @@ def main(argv=None):
             ck = ResultCache.key(src_hash, a.model, a.part, a.package, [offset, hint], a.effort + (f"|{sig}" if sig else ""))
             if a.estimate:
                 rd = Reader(a.out, Path(a.out) / "cache", model=a.model, effort=a.effort, log=print)
-                prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None}
+                prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None, "sent_as": source[0]}
                 print(format_estimate(rd.estimate([{"name": a.part, "url": a.pdf, "body": body, "prov": prov}], batch=False)))
                 return 0
             rec = None if a.no_cache else cache.get(ck)
+            if rec and "message" not in rec:          # a failed step of a route: no answer to replay
+                rec = None
             if rec:
                 msg = rec["message"]
                 print(f"cached   {cache.dir / (ck + '.json')} (no API call; --no-cache to ask again)")
             else:
-                prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None}
+                prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None, "sent_as": source[0]}
                 grd = Reader(a.out, Path(a.out) / "cache", key=key, rules=rules, model=a.model, effort=a.effort, log=None,
                              yes=a.yes)
                 if a.max_cost_usd is not None:
@@ -2671,11 +3336,21 @@ def main(argv=None):
                 guard(body)                           # the feedback turn, if any, is held to the same cap
                 with logging_to(Path(a.out) / "api_log.jsonl", print):
                     msg = ask_once(inf, headers, body, key, a.part, a.package, a.pdf, offset, guard=guard)
-            ext = parse_message(msg)
+            try:
+                ext = parse_message(msg)
+            except DatasheetError as e:               # a paid answer that fails parsing: kept for --from-response
+                if rec:
+                    raise
+                Path(a.out).mkdir(parents=True, exist_ok=True)
+                f = Path(a.out) / (re.sub(r"[^A-Za-z0-9_.+-]", "_", a.part) + ".response.json")
+                f.write_text(json.dumps({"page_offset": offset, "failed": str(e), "message": msg}, indent=2) + "\n",
+                             encoding="utf-8")
+                raise DatasheetError(f"{e} (the answer is saved in {f}: --from-response {f} re-checks it with no API call)")
             if not rec:
                 cache.put(ck, {"key": ck, "part": a.part, "url": a.pdf, "model": a.model, "page_offset": offset, "via": "sync",
                                "at": datetime.datetime.now().isoformat(timespec="seconds"), "message": msg})
-        res = process(ext, a.part, a.pdf, a.model, offset, msg)
+        n_sent = pdf_pages(source[1]) if pages and not a.from_response and source[0] == "base64" else None
+        res = process(ext, a.part, a.pdf, a.model, offset, msg, n_sent)
     except DatasheetError as e:
         sys.exit(f"error: {e}")
     paths = write(res, a.out)

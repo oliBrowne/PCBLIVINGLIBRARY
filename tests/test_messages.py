@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[1] / "ecadlib"
 EXAMPLES = {
     "files.no_symbol": "files: no symbol model (.SchLib)",
     "files.no_footprint": "files: no footprint model (.PcbLib) (cannot be overridden)",
+    "files.datasheet_refused": "files: datasheet download refused by www.analog.com (reset the connection): the maker's site "
+                               "likely blocks automated downloads; download https://www.analog.com/media/en/technical-"
+                               "documentation/data-sheets/LTM4671.pdf in a browser and read it with `ecadlib datasheet "
+                               "FILE.pdf --part LTM4671`",
     "files.missing": "files: footprint file missing: /srv/ws/models/PcbLib/X.PcbLib",
     "files.unreadable": "files: symbol file does not read back (ValueError: library is empty)",
     "pins.no_pins": "pins: symbol has no pins",
@@ -26,6 +30,7 @@ EXAMPLES = {
     "footprint.overlap": "footprint: copper: pads 1 and 2 overlap by 0.050 mm",
     "footprint.pad_gap": "footprint: copper: pad pairs 1-2, 3-4 are 0.090 mm apart (< 0.1 mm)",
     "footprint.hole_clearance": "footprint: copper: pad 3 is 0.000 mm from the hole at (1.000, 2.000) (< 0.1 mm)",
+    "footprint.zero_pad": "footprint: copper: pad 1 has no copper: size 1.95 x 0 mm",
     "footprint.no_pin1": "footprint: pin1: no pad numbered 1",
     "footprint.clockwise": "footprint: pin1: pads are numbered clockwise; KiCad and IPC number counter-clockwise from pin 1 (seen from the top)",
     "footprint.ball_rows": "footprint: bga: row letters and rows disagree at balls A1, B2",
@@ -183,7 +188,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 7, "datasheet.py": 3,
+    "librarian.py": 8, "datasheet.py": 3,
 }
 
 

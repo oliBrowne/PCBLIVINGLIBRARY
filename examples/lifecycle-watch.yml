@@ -16,6 +16,9 @@ on:
 permissions:
   contents: read
 
+env:
+  BOM: library/bom.csv            # your part list (BOM CSV/XLSX or a librarian plan.json); change to your file
+
 jobs:
   watch:
     runs-on: ubuntu-latest
@@ -24,7 +27,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install requests pandas openpyxl
+      - run: pip install "ecadlib @ git+https://github.com/oliBrowne/PCBLIVINGLIBRARY"
 
       - name: Restore last snapshot
         uses: actions/cache/restore@v4
@@ -44,9 +47,9 @@ jobs:
           NEXAR_TOKEN: ${{ secrets.NEXAR_TOKEN }}
         run: |
           set +e
-          # Point this at your own part lists; add `--a365 https://<workspace>.365.altium.com` to watch a workspace,
+          # BOM (above) is your part list; add `--a365 https://<workspace>.365.altium.com` to watch a workspace,
           # and `--update-a365 --apply` to write the Lifecycle parameter back (dry run without --apply).
-          python -m ecadlib.lifecycle examples/sample_bom.csv \
+          python -m ecadlib.lifecycle "$BOM" \
               --state out/lifecycle_state.json -o out/lifecycle_report --rate 1
           echo "code=$?" >> "$GITHUB_OUTPUT"
           cat out/lifecycle_report.md >> "$GITHUB_STEP_SUMMARY"
@@ -73,5 +76,5 @@ jobs:
       - name: Fail when a part got worse
         if: steps.watch.outputs.code != '0'
         run: |
-          echo "lifecycle watcher exit code ${{ steps.watch.outputs.code }} (1 = a part got worse, 2 = input/update error, 3 = no source answered)"
+          echo "lifecycle watcher exit code ${{ steps.watch.outputs.code }} (1 = a part got worse, 2 = input/update error, 3 = no source answered; anything else: the watcher did not run, see the step log)"
           exit 1

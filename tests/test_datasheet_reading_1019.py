@@ -72,8 +72,8 @@ def test_triage_keeps_every_sources_links_and_the_reader_tries_them_in_order():
     assert row["src_datasheet_more"].split() == ["https://datasheets.octopart.com/lt8610.pdf",
                                                  "https://www.mouser.com/datasheet/2/609/lt8610.pdf"], row
     urls = [u for u, _ in D.datasheet_urls({"parameters": []}, {"datasheet": ""}, row, {})]
-    assert urls == ["https://www.analog.com/lt8610.pdf", "https://datasheets.octopart.com/lt8610.pdf",
-                    "https://www.mouser.com/datasheet/2/609/lt8610.pdf"], urls
+    assert urls[:3] == ["https://www.analog.com/lt8610.pdf", "https://datasheets.octopart.com/lt8610.pdf",
+                        "https://www.mouser.com/datasheet/2/609/lt8610.pdf"], urls       # then the maker URL patterns
 
 
 def test_ti_redirect_pages_are_unwrapped():

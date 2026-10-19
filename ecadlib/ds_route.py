@@ -614,8 +614,10 @@ class Router:
 
 INCOMPLETE = re.compile(r"no value printed|no nominal value printed|cited page\(s\)|pins missing|pin_count missing|"
                         r"pin count: drawing says|has no source page", re.I)
+# "pad_table: copied as the model gave it; check every value" is advice for the person (every pad-table read has it),
+# not a failed check: only check_pad_table's errors fail the read
 FAILED = re.compile(r"^(schema:|self-check:|symbol:|footprint_gen\.build failed|altium_lib\.symbol_from_json failed|"
-                    r"pad_table:)|min <= nom <= max violated|implausib|leads would touch| span \d|pins per side|is odd for a "
+                    r"pad_table:(?! copied as the model gave it)|land pattern:)|min <= nom <= max violated|implausib|leads would touch| span \d|pins per side|is odd for a "
                     r"dual-row|lead_span min|^exposed_pad\.\w+ [\d.]+ >=|under \d+% of", re.I)
 
 
@@ -647,11 +649,14 @@ def prices(model, prompt_tokens=0):
 
 def usage_usd(model, usage, batch=False):
     """USD of one response from its usage block (input, cache write 1.25x, cache read, output); half on the Batches
-    API. None when the model has no known price."""
+    API. None when the model has no known price, or when there is no usage (a gateway or server that sends none: the
+    cost is unknown, not $0)."""
     from . import datasheet as D
     u = usage or {}
-    tin, cw, cr, tout = (int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens",
-                                                     "cache_read_input_tokens", "output_tokens"))
+    tin, cw, cr, tout = (max(0, int(u.get(k) or 0)) for k in ("input_tokens", "cache_creation_input_tokens",
+                                                             "cache_read_input_tokens", "output_tokens"))
+    if not (tin or cw or cr or tout):
+        return None
     p = prices(model, tin + cw + cr)
     if not p:
         return None
@@ -785,10 +790,13 @@ def page_texts(data):
         import logging, pypdf
         logging.getLogger("pypdf").setLevel(logging.ERROR)
         rd = pypdf.PdfReader(io.BytesIO(data))
+        if rd.is_encrypted and not rd.decrypt(""):    # a user password: the text can't be read here
+            return None
+        pages = list(rd.pages)
     except Exception:
         return None
     out = []
-    for pg in rd.pages:
+    for pg in pages:
         try:
             out.append(pg.extract_text() or "")
         except Exception:

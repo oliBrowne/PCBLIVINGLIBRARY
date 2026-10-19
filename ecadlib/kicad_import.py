@@ -76,7 +76,7 @@ def package_default_height(names, kind=None):
 KTYPE = {"input": "input", "output": "output", "bidirectional": "io", "tri_state": "tristate", "passive": "passive",
          "free": "passive", "unspecified": "passive", "power_in": "power_in", "power_out": "power_out",
          "open_collector": "open_collector", "open_emitter": "open_emitter", "no_connect": "nc"}
-SIDE = {0: "right", 90: "top", 180: "left", 270: "bottom"}
+SIDE = {0:"right", 90: "top", 180: "left", 270: "bottom"}
 
 
 # ---------------------------------------------------------------- fetching
@@ -248,7 +248,7 @@ def convert_footprint(text, name=None, source="", notes=None, license_=""):
 
 def _convert_footprint(text, name=None, source="", notes=None, license_=""):
     notes = [] if notes is None else notes
-    t = sexpr.parse(text)
+    t = inherit_margins(sexpr.parse(text))
     descr = (sexpr.first(t, "descr") or ["", ""])[1]
     origin = f"from {source}" + (f" ({license_})" if license_ else "") if source else ""
     fp = {"name": name or t[1], "description": AL.clean("; ".join(x for x in (descr, origin) if x)),
@@ -326,6 +326,19 @@ def _custom_shapes(p, x, y, rot, edges=True):
         if w and edges:                       # stroke around the outline: exact edges, mitred corners
             tracks += [(*a, *b, w) for a, b in zip(pts, pts[1:] + pts[:1])]
     return polys, tracks
+
+
+def inherit_margins(t):
+    """KiCad's footprint-level (solder_mask_margin X) / (solder_paste_margin X) apply to every pad that has none of
+    its own: copied onto those pads (in place), so the pad conversions (and parity) see them."""
+    for key in ("solder_mask_margin", "solder_paste_margin"):
+        fpv = next((c for c in t[2:] if isinstance(c, list) and c and c[0] == key), None) if isinstance(t, list) else None
+        if fpv is None or len(fpv) < 2:
+            continue
+        for p in sexpr.find(t, "pad"):
+            if sexpr.first(p, key) is None:
+                p.append([key, fpv[1]])
+    return t
 
 
 def _mask_margin(p):
@@ -488,9 +501,14 @@ def _pad_core(fp, p, notes, num, kind, shape, x, y, w, h, rot, layers):
         wl = _window_layers(layers)
         if not wl:
             _note(notes, f"pad {num}: no copper, paste or mask on {layers}; dropped"); return
+        rr = sexpr.first(p, "roundrect_rratio")
+        rad = min(float(rr[1]), 0.5) * min(w, h) if rr and shape == "roundrect" else 0.0
         for layer in wl:
             if shape in ("circle", "oval"):
                 fp["regions"].append((_round_pts(x, y, w, h, rot), layer))
+            elif rad > 0 and rot % 90 == 0:   # a rounded window keeps its corners, so its area (EXP-10)
+                fw, fh = (h, w) if rot % 180 else (w, h)
+                fp["regions"].append((AL.round_rect(x, y, fw, fh, rad), layer))
             elif rot % 180 == 0 and layer in (AL.TOP_PASTE, AL.BOTTOM_PASTE):
                 fp["fills"].append((x - w / 2, y - h / 2, x + w / 2, y + h / 2, layer))
             else:
@@ -596,7 +614,8 @@ def step_extent(text, mi):
 def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=False, spec=None, height_src=None, kind=None, names=()):
     """3D body: the KiCad STEP model embedded (step=True, model without offset/rotation/scale), else with
     gen_step=True a package-shaped STEP from step_gen (spec dict, else package_specs / the footprint name) when
-    there is no KiCad STEP to embed, else an extruded body over the fab outline (else courtyard, else pads).
+    no KiCad STEP is embedded (a downloaded one still sets the height), else an extruded body over the fab outline
+    (else courtyard, else pads).
     height_src: the caller's height is part-specific and beats the default table (label for the notes).
     kind / names: the part's kind ('R', 'C') and other names (KiCad ref, description) for package_default_height, the
     last resort ('HEIGHT from package default ..., verify')."""
@@ -624,7 +643,7 @@ def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=Fal
             if pd:
                 h, src = pd[0], f"HEIGHT from package default ({pd[1]}), verify"
     embeddable = bool(ext) and mi["rotate"] == [0, 0, 0] and mi["offset"] == [0, 0, 0] and mi["scale"] == [1, 1, 1]
-    if gen_step and not (step and embeddable) and (not ext or step):
+    if gen_step and not (step and embeddable):    # a KiCad STEP that is not embedded still gives the height
         from . import step_gen
         try:
             generic = src == "default table"            # step_gen's per-family table is more specific (R vs C 0603)
@@ -637,7 +656,7 @@ def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=Fal
             fp["bodies"].append({"pts": [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "height": h,
                                  "step": {"name": f"{AL.file_stem(fp['name'])}.step", "data": data.encode("ascii"), "rot": (0.0, 0.0, 0.0)}})
             notes.append(f"3D: generated STEP ({info['family']} model from {'the package spec' if spec else 'package_specs / the footprint name'}"
-                         f"), height {h} mm ({src})" + ("; KiCad STEP has an offset/rotation/scale" if ext else ""))
+                         f"), height {h} mm ({src})" + ("; KiCad STEP has an offset/rotation/scale" if ext and step else ""))
             fp["height_mm"] = h
             return fp
     if not h:
@@ -813,7 +832,12 @@ def _sym_prim(it, hide_names, hide_nums, pins_at, unit, pin_map, notes):
             _note(notes, f"pin {num}: off the 10 mil grid, rounded")
         if a not in SIDE:
             raise ValueError(f"pin {num}: angle {a} not a multiple of 90")
-        return ("pin", p, SIDE[(a + 180) % 360], gx, gy, round(_u(length)))
+        n = round(_u(length))
+        tip = gx - n * round(math.cos(math.radians(a))) if a in (0, 180) else gy - n * round(math.sin(math.radians(a)))
+        if tip % 10:                          # KiCad discretes end on 50 mil (D at ±150 mil): lengthen the pin outward so its
+            n += 10 - tip % 10 if a in (180, 270) else tip % 10          # end is on Altium's 100 mil grid, the body stays put
+            _note(notes, "pin ends moved out onto the 100 mil grid (pins lengthened)")
+        return ("pin", p, SIDE[(a + 180) % 360], gx, gy, n)
     if k not in ("property", "text_box", "body_style", "unit"):
         _note(notes, f"symbol item {k} not converted")
     return None
