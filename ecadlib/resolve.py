@@ -66,7 +66,7 @@ class Sources:
                 rows += [(f"local:{r}", r.split(":")[0], r.split(":")[-1]) for r in ix.footprints]
                 local = {r.split(":")[-1] for r in ix.footprints}
                 if self.specs and self.specs.is_dir():
-                    rows += [(f"spec:{f.stem}", "spec", f.stem) for f in sorted(self.specs.glob("*.json")) if f.stem not in local]
+                    rows += [(f"spec:{f.stem}", "spec", f.stem) for f in spec_files(self.specs) if f.stem not in local]
             rows = [(i, lib, n, tokens(n)) for i, lib, n in rows]
             df = {}
             for r in rows:
@@ -74,6 +74,20 @@ class Sources:
                     df[t] = df.get(t, 0) + 1
             self._pools[kind] = (rows, df)
         return self._pools[kind]
+
+
+def spec_files(specs):
+    """The package specs offered as `spec:Name`: package_specs/*.json, then the advanced ones (connectors, headers)."""
+    specs = Path(specs)
+    return sorted(specs.glob("*.json")) + sorted(f for f in (specs / "advanced").glob("*.json") if not (specs / f.name).is_file())
+
+
+def spec_file(specs, name):
+    """package_specs/<name>.json, else package_specs/advanced/<name>.json; None without a specs folder."""
+    if not specs:
+        return None
+    f = Path(specs) / f"{name}.json"
+    return f if f.is_file() or not (Path(specs) / "advanced" / f"{name}.json").is_file() else Path(specs) / "advanced" / f"{name}.json"
 
 
 # ---------------------------------------------------------------- tokens, pins and pads
@@ -184,11 +198,14 @@ def load(cid, kind, src, rules=None):
             hit = src.index().footprints.get(ref)
             if not hit:
                 raise FileNotFoundError(f"{cid}: not in the --lib footprints")
-            spec = src.specs / f"{ref.split(':')[-1]}.json" if src.specs else None
+            spec = spec_file(src.specs, ref.split(':')[-1])
             hm = json.loads(spec.read_text(encoding="utf-8")).get("height_max") if spec and spec.exists() else None
             return Path(hit["path"]).read_text(encoding="utf-8"), (F.dim(hm)[2] if hm else None)
         if origin == "spec":
-            spec = json.loads((src.specs / f"{ref}.json").read_text(encoding="utf-8"))
+            f = spec_file(src.specs, ref)
+            if f is None or not f.is_file():
+                raise FileNotFoundError(f"{cid}: no package spec {ref}.json in {src.specs} (or its advanced/ folder)")
+            spec = json.loads(f.read_text(encoding="utf-8"))
             return F.build(spec, RU.density_for(spec, rules or RU.DEFAULTS))[0], (F.dim(spec["height_max"])[2] if spec.get("height_max") else None)
     raise ValueError(f"unknown {kind} candidate id {cid!r} (use kicad:Lib:Name, local:Lib:Name or spec:Name)")
 
@@ -466,6 +483,7 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
     write_text_atomic(plan, json.dumps(items, indent=2))
     if state is not None:
         write_text_atomic(state_f, json.dumps(state, indent=2))
+    L.refresh_review(plan, items)              # review.md / .csv / .html say what the plan now says
     from . import timing                       # a person picked a part: review time runs to here
     timing.mark_review(plan.parent, f"choose {kind}")
     pins, pads = item_pins(it, base), item_pads(it, base)
