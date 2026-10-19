@@ -29,14 +29,15 @@ def h(o):
 # it is now inlined. That is the only difference from the earlier hashes (checked by re-inserting the $ref).
 # 2026-10-18: requests ask for wire_schema() (the API takes at most 16 union-typed fields)
 # 2026-10-18 (#42): land gains ep_across / ep_along, the maker's thermal-pad land; nothing else changed.
-GOLDEN = {"build_sync": "d62d8ae5ffc8f5bcbfde3dbb11d1ad57080b035a3061b024b7513705bf63e1eb",
-          "build_batch": "b0889b10ac4e1f38ac6beb25bc1733f100f3e412b211f9f203727820471c45b0",
-          "build_url_haiku": "ca3116a877d4f952c767badb78e1a263222611fc21817337ecff3972ee3a98e7",
-          "reader_sync_calls": ["6529a35a0ab87bbb8b6505e236a788c9e04fa127d60ad64cb3412007bcc580a4",
-                                "3b6ba60527ccc47b7b3ff5080b2d128029fba5bb508c58a2eb2a5cc47660dad5"],
+# 2026-10-19 (#42): SYSTEM asks for a toleranced value (6.5±0.2) copied into nom; nothing else changed.
+GOLDEN = {"build_sync": "46deb2d1702b084d323dc3b53ef5aa9cce9ca33e0f24fea0ac89fc0060cd81fa",
+          "build_batch": "973a103bfd91777c1a73df938dae41ae9613272d5e8266090d4669f138058fab",
+          "build_url_haiku": "fbc0658c29a56d4939e64a797e10757fe2573c01ff6b6a4342d875213382bb4b",
+          "reader_sync_calls": ["e8169f69d5ee1271fdea8c9070f80a3a5bf002e8705a85c53a64ff5e67fad854",
+                                "ccd5fd8f69e6fe086259fdd001b538ccf926b9c8b4b967e50cade6686800acfe"],
           "visual": "2617a48dcb947471108561ff7f8eabce190b1cb553e2d2c4cbf4ff3974a03181",
-          "batch_posts": ["13021628491523a21aa3909ffa1d767739bd49895286ae939d2a5ba1b0b07594",
-                          "5ef27cced9c82e55355bb52748abd9ae7665cc3178887fcd5ffe292c14c6edb4"]}
+          "batch_posts": ["192d054ccc1eef1d5f1f30e4802b3603399c73133ca0e8a1108a70130c50c524",
+                          "337d52207392e5bfb30d21395cb54ad6248a8f068639a4fca409a48701492b0c"]}
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 
