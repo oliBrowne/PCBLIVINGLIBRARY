@@ -68,10 +68,42 @@ def identity(user=None, cwd=None):
 
 
 def user_key(who):
-    """Comparable key for a person: the e-mail when there is one, else the lower-cased name."""
+    """Comparable key for a person: the e-mail when there is one, else the name (case and spacing folded)."""
     who = str(who or "").strip()
     m = re.search(r"<([^<>]+)>", who)
-    return (m.group(1) if m and m.group(1).strip() else who).strip().lower()
+    if m and m.group(1).strip():
+        return m.group(1).strip().lower()
+    return _fold(who)
+
+
+_EMAIL = re.compile(r"[^\s<>()\[\],;]+@[^\s<>()\[\],;]+")
+
+
+def _fold(s):
+    import unicodedata
+    return " ".join(unicodedata.normalize("NFKC", str(s or "")).casefold().split())
+
+
+def person(who):
+    """'Ann Lee <ann@x.com>', 'ann lee', 'ann@x.com', 'Ann Lee (ann@x.com)' -> (folded name, folded e-mail): spacing,
+    case and Unicode forms folded; a +tag in the e-mail's local part dropped (ann+2@x.com is ann@x.com's mailbox)."""
+    s = _fold(who)
+    m = _EMAIL.search(s)
+    email = ""
+    if m:
+        local, _, dom = m.group(0).partition("@")
+        email = f"{local.split('+', 1)[0]}@{dom}"
+        s = s[:m.start()] + s[m.end():]
+    name = " ".join(re.sub(r"[<>()\[\]\"']", " ", s).split())
+    return name, email
+
+
+def same_person(a, b):
+    """Two identities name one person when their e-mails match, or their names match (even if only one of them gives
+    an e-mail). The two-person rule counts people with this, so a second spelling of one name is never a second
+    approver."""
+    (na, ea), (nb, eb) = person(a), person(b)
+    return bool((ea and ea == eb) or (na and na == nb))
 
 
 # ---------------------------------------------------------------- policy
@@ -162,17 +194,19 @@ def evaluate(item, policy, base=".", h=None):
     """-> {required, met, hash, approved_by, missing, stale, rejected_by, ignored}."""
     h = h or content_hash(item, base)
     latest = {}
-    for r in item.get("approvals") or []:
-        latest[r.get("key") or user_key(r["who"])] = r
+    for r in item.get("approvals") or []:          # one person, however they spelled their name (same_person)
+        k = r.get("key") or user_key(r["who"])
+        k = next((x for x, y in latest.items() if x == k or same_person(y["who"], r["who"])), k)
+        latest[k] = r
     valid, stale, rejected, ignored = [], [], [], []
-    self_key = user_key(_allow_user(item)) if _allow_user(item) else None
+    self_user = _allow_user(item)
     users = (policy or {}).get("users") or {}
     for k, r in latest.items():
         if r.get("hash") != h:
             stale.append(r["who"])
         elif r["decision"] == "reject":
             rejected.append(f"{r['who']}" + (f" ({r['comment']})" if r.get("comment") else ""))
-        elif policy and policy["no_self_approval"] and self_key and k == self_key:
+        elif policy and policy["no_self_approval"] and self_user and (k == user_key(self_user) or same_person(r["who"], self_user)):
             ignored.append(f"{r['who']}: released it with --allow")
         elif users and (k not in users or (r.get("role") and r["role"] not in users[k])):
             ignored.append(f"{r['who']}: not authorised" + (f" as {r['role']}" if r.get("role") else ""))
@@ -253,7 +287,8 @@ def decide(item, decision, who, role=None, comment="", base=".", policy=None):
                 raise Refused(f"{who} may sign as {', '.join(users[k])}, not {role}")
             if not role and len(users[k]) == 1:
                 role = users[k][0]
-        if decision == "approve" and policy["no_self_approval"] and _allow_user(item) and user_key(_allow_user(item)) == k:
+        if decision == "approve" and policy["no_self_approval"] and _allow_user(item) and (
+                user_key(_allow_user(item)) == k or same_person(_allow_user(item), who)):
             raise Refused(f"{who} released {item['name']} with --allow and cannot approve it (no_self_approval)")
     rec = {"who": who, "key": k, "when": now(), "role": role or "", "decision": decision,
            "comment": comment or "", "hash": content_hash(item, base)}

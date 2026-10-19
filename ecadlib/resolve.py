@@ -458,7 +458,10 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
         notes.append(f"{kind} file is shared with {', '.join(shared)}: they now use this {kind} too")
     gated = gate.settle([it] + [i for i in items if i["name"] in rewritten])
     for r in gated:
-        if r["action"] == "hold":
+        if r["action"] == "hold" and r.get("refused"):
+            notes.append(f"change to released {r['part']} r{r['revision']} not applied ({r['summary']}): {r['refused']}; "
+                         f"it waits as a held change (ecadlib part show {plan} {r['part']})")
+        elif r["action"] == "hold":
             notes.append(f"change to released {r['part']} r{r['revision']} held for a second approval ({r['summary']}): "
                          f"ecadlib part approve {plan} --part {r['part']}")
     RC.apply([it] + [i for i in items if i["name"] in rewritten], base)   # the parts sharing the overwritten file are

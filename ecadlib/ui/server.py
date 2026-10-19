@@ -814,7 +814,7 @@ def make_handler(ws: Workspace, team=None):
                 if role not in roles:
                     raise Refused(f"you sign as {', '.join(roles)}, not {role}")
             return ws.decide_change(self._bom(b, True), _str(b.get("part"), "part"), b.get("decision"), self._signer(b),
-                                    _str(b.get("comment"), "comment", True), role)
+                                    _str(b.get("comment"), "comment", True), role, _str(b.get("digest"), "digest", True))
 
         def _decide(self, b):
             role, comment = _str(b.get("role"), "role", True), _str(b.get("comment"), "comment", True)

@@ -280,9 +280,9 @@ def footprint_fp(tree, name, instance=False):
 
 
 # ---------------------------------------------------------------- check (KiCad)
-def _row(kind, ident, refs, changes=None, state="same", why="", pol=None, **extra):
+def _row(kind, ident, refs, changes=None, state="same", why="", pol=None, action=None, **extra):
     changes = changes or []
-    act = CG.decide(changes, pol or CG.POLICY)["action"] if changes else "pass"
+    act = action or (CG.decide(changes, pol or CG.POLICY)["action"] if changes else "pass")
     return {"kind": kind, "id": ident, "refs": refs, "state": state, "why": why, "worst": CD.worst(changes) if changes else None,
             "action": act, "summary": CD.summary(changes) if changes else "", "changes": [{"class": c["class"], "text": c["text"]}
                                                                                        for c in changes], **extra}
@@ -345,22 +345,34 @@ def _guid(s):
     return re.sub(r"[{}\s]", "", str(s or "")).lower()
 
 
+VAULT_REVISION = re.compile(r"(?i)^([A-Z]{2,5}-\d{3,}-\d+)-\d+$")     # CMP-003-000000-1: item CMP-003-000000, revision 1
+
+
 def _base_id(did):
-    return re.sub(r"-\d+$", "", str(did or ""))
+    """A placed component's workspace item: an Altium vault item-revision id (CMP-003-000000-1) loses its revision
+    number; any other name is the item's own (TPS7A02-33, AMS1117-3.3 keep their -33 / -3.3)."""
+    did = str(did or "")
+    m = VAULT_REVISION.match(did)
+    return m.group(1) if m else did
 
 
-def check_altium(path, client, ws, library=None):
+def check_altium(path, client, ws, library=None, rules=None):
     """Components placed from the workspace -> rows: out of date (the workspace has a newer revision), current, not
-    found. library: an ecadlib library folder whose ledger recorded the revisions it pushed (classified changes)."""
+    found. library: an ecadlib library folder whose ledger recorded the workspace revisions it pushed (publish lines)
+    or pulled (`a365 pull` release lines): their changes are classified and the [change] policy decides. An out-of-date
+    component whose changes the ledger cannot list gets the [change] unlisted action (default hold: the check fails)."""
     from . import altium_project as AP, ledger as LG
     proj = AP.load_project(path)
     lg = LG.Ledger(library) if library and LG.Ledger(library).exists() else None
+    pol = CG.policy(rules, CG.lib_folder(library) if library else Path(path).parent)
     by_rev = {}
-    if lg:                                     # A365 revision id -> ledger line, from what ecadlib pushed
+    if lg:                                     # A365 revision id -> (part, ledger revision): what ecadlib pushed or pulled
         for e in lg.lines():
             rid = e.get("event") == "publish" and isinstance(e.get("detail"), dict) and e["detail"].get("a365_revision")
-            if rid:
-                by_rev[_guid(rid)] = e
+            if e.get("event") in LG.RELEASES and e.get("a365_revision"):
+                rid = e["a365_revision"]
+            if rid and e.get("part") and e.get("revision"):
+                by_rev[_guid(rid)] = (e["part"], e["revision"])
     groups = {}
     for c in proj["components"]:
         if not (c.get("vault_guid") or c.get("item_guid")) or not c.get("revision_guid"):
@@ -368,32 +380,44 @@ def check_altium(path, client, ws, library=None):
         k = (_base_id(c.get("design_item_id")) or c.get("libref") or "", _guid(c["revision_guid"]))
         groups.setdefault(k, []).append(c.get("designator") or "")
     rows, cache = [], {}
-    for (name, rev), refs in sorted(groups.items()):
-        refs = sorted(r for r in refs if r)
-        if name not in cache:
+
+    def find(n):
+        if n not in cache:
             try:
-                cache[name] = client.find(ws, name)
+                cache[n] = client.find(ws, n)
             except Exception as e:             # one part's lookup never stops the list
-                cache[name] = {"error": f"{type(e).__name__}: {e}"}
-        node = cache[name]
+                cache[n] = {"error": f"{type(e).__name__}: {e}"}
+        return cache[n]
+
+    for (placed, rev), refs in sorted(groups.items()):
+        refs = sorted(r for r in refs if r)
+        name, node, note = placed, find(placed), ""
+        m = re.match(r"^(.+)-\d+$", placed)
+        if (not node or node.get("error")) and m:   # 'CAP-1': item CAP, revision 1 (only when there is no CAP-1)
+            alt = find(m.group(1))
+            if alt and not alt.get("error"):
+                name, node = m.group(1), alt
+                note = f"placed as {placed}: the workspace has no {placed}, so its -{placed.rsplit('-', 1)[1]} is read as a revision number; "
         if not node or node.get("error"):
             rows.append(_row("component", name, refs, state="not found", why=(node or {}).get("error") or
                              f"no component named {name} in the workspace", placed=rev))
             continue
         latest = _guid(((node.get("revision") or {}).get("revisionId")) or (node.get("revision") or {}).get("id"))
         if latest == rev:
-            rows.append(_row("component", name, refs, placed=rev, latest=latest))
+            rows.append(_row("component", name, refs, why=note.rstrip("; "), placed=rev, latest=latest))
             continue
-        changes, why = [], "the workspace has a newer revision"
+        changes, why, listed = [], note + "the workspace has a newer revision", False
         a, b = by_rev.get(rev), by_rev.get(latest)
-        if a and b and a.get("part") == b.get("part"):
-            old, new = lg.revision(a["part"], a["revision"]), lg.revision(b["part"], b["revision"])
+        if a and b and a[0] == b[0]:
+            old, new = lg.revision(*a), lg.revision(*b)
             if old and new:
                 changes = CD.diff(lg.fingerprint(old), lg.fingerprint(new))
-                why = f"ledger r{a['revision']} -> r{b['revision']}"
-        elif lg:
-            why += " (the library's ledger does not record both revisions, so the changes are not listed)"
-        rows.append(_row("component", name, refs, changes, "out of date", why, placed=rev, latest=latest))
+                why, listed = f"ledger r{a[1]} -> r{b[1]}", True
+        if not listed:
+            why += (" (the library's ledger does not record both revisions, so the changes are not listed)" if lg else
+                    " (no --library: the changes are not listed)")
+        rows.append(_row("component", name, refs, changes, "out of date", why, pol,
+                         action=None if listed else pol["unlisted"], placed=rev, latest=latest))
     counts = {}
     for r in rows:
         counts[r["state"]] = counts.get(r["state"], 0) + 1
@@ -589,8 +613,9 @@ def scan(path, library, variant=None):
         raise ProjectError(f"{library}: no plan.json (give the folder of an ecadlib library)")
     src = Path(path)
     if src.is_dir() or src.suffix.lower() in (".kicad_pro", ".kicad_pcb"):
-        src = kicad_paths(src)["sch"] or src  # a KiCad project's parts are its schematic's
-    lines, _ = BT.read_bom(str(src))
+        kp = kicad_paths(src)
+        src = kp["sch"] or kp["pcb"]          # a KiCad project's parts are its schematic's (a board alone: the board's)
+    lines = board_bom(src) if src.suffix.lower() == ".kicad_pcb" else BT.read_bom(str(src))[0]
     by_mpn = {}
     for it in items:
         for m in (AS.mpn_of(it), it.get("name") or ""):     # its MPN parameter, and its name (often the MPN too)
@@ -612,6 +637,20 @@ def scan(path, library, variant=None):
     tool = "kicad" if src.suffix.lower() in KICAD_EXT else "altium" if src.suffix.lower() in ALTIUM_EXT else "bom"
     LG.record_usage(folder, CG.project_key(folder, path), parts, tool=tool)
     return {"project": CG.project_key(folder, path), "library": str(folder), "parts": parts, "not_in_library": sorted(set(unknown))}
+
+
+def board_bom(pcb):
+    """BOM lines ({mpn, designator}) from a board's footprints, for a project without a schematic: KiCad copies each
+    symbol's fields (MPN, Manufacturer Part Number, ...) onto its footprint."""
+    by = {}
+    for f in board_footprints(pcb):
+        props = {str(x[1]): str(x[2]) for x in sexpr.find(f["node"], "property") if len(x) > 2}
+        mpn = FP.identity(props)["mpn"]
+        if f["ref"] and not f["ref"].startswith("#"):
+            by.setdefault(mpn, []).append(f["ref"])
+    if not by:
+        raise ProjectError(f"{Path(pcb).name}: no footprints on the board")
+    return [{"mpn": m, "designator": ",".join(sorted(r, key=_natkey))} for m, r in sorted(by.items())]
 
 
 # ---------------------------------------------------------------- report and CLI

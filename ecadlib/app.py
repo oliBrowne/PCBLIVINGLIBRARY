@@ -949,23 +949,28 @@ class Workspace:
             if e.get("changes") and e.get("event") in LG.RELEASES:
                 rows[-1]["changes"] = [{"class": c["class"], "text": c["text"]} for c in e["changes"]][:200]
         change = it.get("change") if (it.get("change") or {}).get("state") == "held" else None
+        if change and lg.proposal(part):       # the digest of the held change as it is now (what an approval names)
+            change = dict(change, digest=CG.review_digest(lg, part))
         return {"part": part, "revision": head and head["revision"], "change": change, "history": rows[::-1],
                 "policy": {k: v for k, v in CG.policy(None, plan_f.parent).items()}}
 
-    def decide_change(self, bom, part, decision, user, comment="", role=None):
+    def decide_change(self, bom, part, decision, user, comment="", role=None, digest=None):
         """Approve or reject a held change to a released part, from the web UI or MCP (the same as `ecadlib part
-        approve / reject`). Holds the agent's plan lock like approve_part."""
+        approve / reject`). An approval names the digest of the held change the person was shown (the part card's
+        change.digest); a change proposed again since is refused. Holds the agent's plan lock like approve_part."""
         from . import change_cli as CC, change_gate as CG
         from .agent_queue import plan_lock
         if decision not in ("approve", "reject"):
             raise ValueError("decision must be approve or reject")
+        if decision == "approve" and not str(digest or "").strip():
+            raise ValueError("digest is required: the digest of the held change shown to you (reload the part to see it)")
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
         with plan_lock(self.root, wait=False) as free:
             if not free:
                 raise ValueError("the library agent is rebuilding the library right now; decide again in a minute")
             try:
-                res = (CC.approve(plan_f, [part], user, comment or "", role) if decision == "approve"
+                res = (CC.approve(plan_f, [part], user, comment or "", role, {part: str(digest)}) if decision == "approve"
                        else CC.reject(plan_f, [part], user, comment or ""))
             except CG.ChangeError as e:
                 raise ValueError(str(e)) from None

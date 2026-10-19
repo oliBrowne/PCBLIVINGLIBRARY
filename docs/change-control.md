@@ -37,12 +37,19 @@ geometry_minor = "warn"     # hold | warn | pass
 cosmetic = "pass"           # hold | warn | pass
 approvers = 1               # 2 = the two-person rule: two different people approve a held change
 a365_transition = ""        # optional Altium 365 life-cycle transition for an approved new revision, e.g. "Release"
+unlisted = "hold"           # hold | warn | pass: Altium project check, an out-of-date component whose changes are unknown
 ```
 
 `pass` and `warn` record a new revision (`warn` also adds the changes to the part's review notes). `hold` keeps the
 released files and fields, stores the proposed version in `.ecadlib/proposed/<part>.json`, and lists the part in the
 review queue with the diff. A part that shares a file with a held part (two resistors in one `.SchLib`) is held with
 it. A change someone rejected is held again on the next run without asking.
+
+A new part that carries the MPN of a released part that left the plan is compared with that part before its first
+release. This happens when a BOM change renames a part: a footprint change from 0603 to 0402 turns `RES-0603-10k` into
+`RES-0402-10k` with the same MPN, and a value change turns `CAP-0402-100nF` into `CAP-0402-1uF`. If the policy holds
+the difference, the new part is held (status held, not exported) until a person approves it, and the approval records
+its revision 1. The released part that left the plan gets a `retired` ledger line.
 
 `ecadlib style apply` may only make cosmetic changes. If a restyle would change anything else, that is an ecadlib bug,
 and the part is held with that message.
@@ -51,26 +58,61 @@ and the part is held with that message.
 
 ```text
 ecadlib part status ws/library                 # held changes waiting for a person
-ecadlib part show ws/library AO3401A           # released revision, the held change, its diff
-ecadlib part approve ws/library --part AO3401A -m "new datasheet drawing" --user "Ann <ann@x.com>"
+ecadlib part show ws/library AO3401A           # released revision, the held change, its diff and its digest
+ecadlib part approve ws/library --part AO3401A --digest 3f2a9c41d0e8 -m "new datasheet drawing" --user "Ann <ann@x.com>"
 ecadlib part reject ws/library --part AO3401A -m "the old pinout is right"
 ecadlib part history ws/library AO3401A        # every release, hold, approval and publish
 ecadlib part revert ws/library AO3401A@2       # release revision 2 again (as a new revision)
 ecadlib part diff OLD.kicad_sym NEW.kicad_sym  # classify any two versions of a part
+ecadlib part adopt ws/library --part AO3401A -m "ledger lost; files checked against the datasheet"
 ```
+
+An approval names the change you reviewed. `part show` and `part status` print the held change's digest, and
+`part approve` needs it (`--digest`, 6 or more of its first characters are enough). If a writer proposed a different
+change after you looked, the approval is refused and nothing is released: look again and approve the new digest. The
+web UI sends the digest of the change on the page, so a stale page cannot approve a newer change. Parts that share a
+file are decided together, and one digest covers all of them.
+
+With `approvers = 2`, one person counts once however they write their name: `Ann Lee <ann@x.com>`, `Ann Lee`,
+`ann  lee` and `ann+2@x.com` are all Ann. Names are compared without case or extra spaces, and e-mails without a
+`+tag`. Two identities are the same person when their e-mails match or their names match. A revert is a release too.
+With `approvers = 2` it becomes a held change that carries the reverting person's approval, and a second person
+approves it with `part approve`. A revert to a revision that fails the release check today is refused.
+
+If an approval replaces files someone edited by hand after the change was held, the approval still applies the
+reviewed change. It also warns, keeps the edited bytes in the blob store and writes an `overwritten` ledger line.
 
 An approved change goes through the release check before it is released. If it fails (for example silkscreen now too
 close to a moved pad), the released part stays, the approval is not counted, and `part status` shows "approval refused:
 release check" with the reason.
 
 The review list (`review.md`), the web UI and the librarian's summary show held changes with what changed. Picking a
-symbol or footprint yourself in `ecadlib resolve` counts as one approval.
+symbol or footprint yourself in `ecadlib resolve` counts as one approval. Like any approval, that choice goes through
+the release check first. If it fails, the choice waits as a held change marked "not applied", and every released file
+is put back, 3D models included.
 
 ## The ledger
 
 `library.ledger.jsonl` sits next to `plan.json`. It is append-only, one JSON line per event (release, hold, approve,
-reject, revert, publish), sorted keys, so it diffs well in git. The exact bytes of every released file are kept in
-`.ecadlib/blobs`, which is what `part revert` restores. `ecadlib migrate` stamps the ledger's schema version.
+reject, revert, publish, retired, overwritten), sorted keys, so it diffs well in git. The exact bytes of every released
+file, and of the 3D models its recipe names, are kept in `.ecadlib/blobs`, which is what `part revert` and a hold
+restore. `ecadlib migrate` stamps the ledger's schema version.
+
+Writers take a lock on the library (`.ecadlib/lock`) while they compare and record. Two exports or a librarian run
+and an export at the same time therefore never record the same revision twice. The lock is an operating-system lock,
+so a crashed run never leaves it behind. A run that waits longer than 10 minutes (`ECADLIB_LOCK_WAIT`, in seconds)
+stops with a message.
+
+### When the ledger is damaged
+
+A broken ledger line stops every writer with the line number. Put the line back from git and run again.
+
+If the ledger was deleted, emptied or lost a part's lines, while `.ecadlib/blobs`, `library.usage.json` or other
+ledger lines show the part was released before, ecadlib does not take the files on disk as revision 1. Doing that
+would hide whatever changed since. The writer stops and changes nothing. Restore the ledger from git
+(`git checkout -- library.ledger.jsonl` in the library folder). If that is not possible, check the files by hand and
+record them yourself: `ecadlib part adopt ws/library --part P -m "what you checked"`, or `--all` for every such part.
+The new revision 1 is recorded with decision `adopted`, your name and your reason.
 
 ## Publishing
 
@@ -101,10 +143,15 @@ ecadlib project check board.PrjPcb --workspace https://acme.365.altium.com --lib
   the same code.
 - **Altium out-of-date list.** Components placed from Altium 365 record the revision they were placed at.
   `project check` asks the workspace for each component's current revision and lists the out-of-date ones. With
-  `--library`, it also lists the classified changes between the two revisions, when ecadlib pushed both.
+  `--library`, it also lists the classified changes between the two revisions when the ledger records both, whether
+  ecadlib pushed them (`altium365 push`) or pulled them (`a365 pull`), and the `[change]` policy decides. An
+  out-of-date component whose changes cannot be listed gets the `unlisted` action: by default it is held and the
+  exit code is 1. A name such as `TPS7A02-33` is looked up as it is. Only when the workspace has no component of that
+  name is a trailing `-<number>` read as an Altium revision number (`CMP-003-000000-1`, `CAP-1`), and the row says so.
 - **Usage index.** `project scan` records which parts of an ecadlib library a project or BOM uses, and at which
   revision, in `library.usage.json`. The librarian also records its own BOM there. A held change then says which
-  projects use the part.
+  projects use the part. A KiCad project without a schematic is read from its board: KiCad copies each symbol's MPN
+  field onto its footprint.
 - **Upkeep.** The weekly `ecadlib upkeep` run has a `changes` check. It reports held changes waiting for a person,
   projects in the usage index that use an older revision than the released one, and KiCad projects whose parts
   differ from the library in a way the policy holds. It never applies a change.

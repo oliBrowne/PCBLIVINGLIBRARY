@@ -192,8 +192,10 @@ def test_web_ui_shows_the_held_update_and_approves_rejects_reverts():
         assert st == 200 and h["revision"] == 1 and [e["event"] for e in h["history"] if e["event"] != "publish"] == ["hold", "release"], h
         st, e = call("POST", "/api/change/decide", {"bom": bom, "part": "RES-0603-10k", "decision": "reject", "user": ANN})
         assert st == 400 and "needs a reason" in e["error"], e
+        st, e = call("POST", "/api/change/decide", {"bom": bom, "part": "RES-0603-10k", "decision": "approve", "user": ANN})
+        assert st == 400 and "digest is required" in e["error"], e     # an approval names the change it was shown
         st, r = call("POST", "/api/change/decide", {"bom": bom, "part": "RES-0603-10k", "decision": "approve", "user": ANN,
-                                                    "comment": "0402 on the new board"})
+                                                    "comment": "0402 on the new board", "digest": card["change"]["digest"]})
         assert st == 200 and r["results"][0]["revision"] == 2, r
         st, cards = call("GET", "/api/parts?bom=" + bom)
         assert next(p for p in cards["parts"] if p["part"] == "RES-0603-10k")["change"] is None

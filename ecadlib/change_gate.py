@@ -43,7 +43,7 @@ from . import __version__
 
 ACTIONS = ("pass", "warn", "hold")
 POLICY = {"identity": "hold", "electrical": "hold", "geometry_major": "hold", "geometry_minor": "warn", "cosmetic": "pass",
-          "approvers": 1, "a365_transition": ""}
+          "approvers": 1, "a365_transition": "", "unlisted": "hold"}
 ALLOWED = {"identity": ("hold", "warn"), "electrical": ("hold", "warn")}
 CLASS_KEY = {c: c.replace("-", "_") for c in CD.CLASSES}
 RELEASED_STATUSES = ("ready", "existing")
@@ -63,6 +63,8 @@ WRITERS = {
     "a365-pull": {"mode": "observe", "module": "ecadlib.a365_sync", "what": "ecadlib a365 pull: workspace revisions come in"},
     "approve": {"mode": "gate", "module": "ecadlib.change_cli", "what": "ecadlib part approve: a person releases a held change"},
     "revert": {"mode": "gate", "module": "ecadlib.change_cli", "what": "ecadlib part revert PART@REV: an older revision again"},
+    "adopt": {"mode": "gate", "module": "ecadlib.change_cli", "what": "ecadlib part adopt: a person takes the files on disk "
+              "as the release of a part whose ledger history was lost"},
     "hand-edit": {"mode": "gate", "module": "", "what": "a file changed outside ecadlib, found when a publisher opens the library"},
     "kicad-export": {"mode": "publish", "module": "ecadlib.kicad_export", "what": "KiCad library export"},
     "dblib-sync": {"mode": "publish", "module": "ecadlib.altium_dblib_sync", "what": "Altium DbLib / SVNDbLib sync"},
@@ -99,7 +101,14 @@ NOT_LIBRARY_WRITERS = {
 
 
 class ChangeError(Exception):
-    pass
+    """A change-control action refused (said in plain words; the CLI exits 2 without a traceback)."""
+    plain_error = True
+    hint = "`ecadlib part status` lists held changes; docs/change-control.md explains each step"
+
+    def __init__(self, msg, hint=None):
+        super().__init__(msg)
+        if hint:
+            self.hint = hint
 
 
 # ---------------------------------------------------------------- policy
@@ -129,6 +138,8 @@ def normalize_policy(raw, where="[change]"):
         raise ValueError(f"{where} approvers = {p['approvers']!r}: a whole number (1, or 2 for the two-person rule)") from None
     if p["approvers"] < 1:
         raise ValueError(f"{where} approvers must be 1 or more")
+    if p["unlisted"] not in ACTIONS:
+        raise ValueError(f"{where} unlisted = {p['unlisted']!r}: must be {' or '.join(ACTIONS)}")
     if not isinstance(p["a365_transition"], str):
         raise ValueError(f"{where} a365_transition: the name of an Altium 365 life-cycle transition or state, as text")
     return p
@@ -167,12 +178,29 @@ def _user_key(who):
 
 
 # ---------------------------------------------------------------- the guard
+def _locked_step(fn):
+    """A step that records into the ledger runs under the library lock and lets it go at its end (a lock begin() took
+    is held through the writer's work to here)."""
+    import functools
+
+    @functools.wraps(fn)
+    def step(self, *a, **k):
+        self.hold_lock()
+        try:
+            return fn(self, *a, **k)
+        finally:
+            self.close()
+    return step
+
+
 class Guard:
     """One writer's pass over a library folder. Use as a context manager (begin on enter) or call begin() yourself."""
 
-    def __init__(self, folder, writer, rules=None, user=None, log=None, base=None, chosen_by=None):
+    def __init__(self, folder, writer, rules=None, user=None, log=None, base=None, chosen_by=None, adopt=None):
         """chosen_by: the person whose explicit choice this write is (ecadlib resolve / review): their choice counts as
-        one approval, so with approvers = 1 it is released (decision "approved"), with 2 it waits for one more."""
+        one approval, so with approvers = 1 it is released (decision "approved") once the chosen version passes the
+        release check, with 2 it waits for one more. adopt: {part: reason} a person confirmed (`ecadlib part adopt`):
+        those parts are recorded as they are on disk although the ledger shows they had a history."""
         if writer not in WRITERS:
             raise ValueError(f"writer {writer!r} is not in change_gate.WRITERS")
         self.folder = lib_folder(folder)
@@ -185,14 +213,36 @@ class Guard:
         self.log = log or (lambda *a, **k: None)
         self.report = []
         self.chosen_by = chosen_by
+        self.adopt = dict(adopt or {})
         self.pre = {}                          # path -> bytes on disk at begin() that are the released part
+        self.pre_steps = {}                    # PcbLib path -> {STEP path: bytes} of a head recorded without its STEPs
+        self._lock = None
 
     def __enter__(self):
         self.begin()
         return self
 
     def __exit__(self, *exc):
+        self.close()
         return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def hold_lock(self):
+        """Take the library lock (once) and read the ledger again: what another run recorded counts from here."""
+        if self._lock is None:
+            self._lock = LG.lock(self.folder)
+            self.ledger.reload()
+
+    def close(self):
+        """Let the library lock go (also on leaving a `with`, and when the guard is dropped)."""
+        if self._lock is not None:
+            key, self._lock = self._lock, None
+            LG.unlock(key)
 
     def who(self):
         from .approvals import identity
@@ -201,24 +251,64 @@ class Guard:
     # ------------------------------------------------------------ before the writer
     def begin(self, items=None):
         """Adopt released parts that have no ledger head yet (a library from before change control), as they are on disk
-        now. items: the plan as it is on disk (default: <folder>/plan.json)."""
+        now. items: the plan as it is on disk (default: <folder>/plan.json). A part whose history the ledger lost (the
+        blob store, the usage index or other ledger lines show it was released) is never adopted: LedgerError."""
+        self.hold_lock()
         if items is None:
             items = read_plan(self.folder)
-        n = 0
+        n, lost = 0, []
         for it in items or []:
             head = self.ledger.head(it["name"]) if released(it) else None
             if released(it) and not head and self._has_files(it):
+                why = self.lost_history(it["name"])
+                if why and it["name"] not in self.adopt:
+                    lost.append((it["name"], why))
+                    continue
                 fp = FP.of_item(it, self.base)
                 if fp.get("notes"):            # an unreadable file is no released revision to keep
                     continue
-                self._release(it, fp, [], {"action": "pass", "why": []}, decision="baseline",
-                              reason="adopted: released before change control recorded it")
+                self._release(it, fp, [], {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
+                              reason=self.adopt.get(it["name"]) or "adopted: released before change control recorded it",
+                              by=self.who() if why else None)
                 n += 1
             elif head:
                 self._keep_bytes(it, head)
+        self._refuse_lost(lost)
         if n:
             self.log(f"  change control: {n} released part(s) recorded as revision 1 (they were released before the ledger)")
         return n
+
+    def lost_history(self, part):
+        """Why the ledger must have known `part` although it has no release line for it (the ledger file was deleted,
+        emptied or cut), or None. Adopting the disk then would hide whatever changed since: fail closed."""
+        lg = self.ledger
+        if not lg.lines():
+            blobs = lg.store / "blobs"
+            if blobs.is_dir() and any(blobs.iterdir()):
+                return f"{LG.LEDGER} is missing or empty, but {LG.STORE}/blobs holds released files"
+        for e in lg.history(part):
+            if e.get("event") in ("publish", "retired", "superseded", "overwritten") or e.get("base") is not None:
+                return f"{LG.LEDGER} has {e.get('event')} lines for it but no release line"
+        try:
+            used = [(p, r) for p, r, _ in LG.used_in(self.folder, part) if r]
+        except (OSError, ValueError):
+            used = []
+        if used:
+            return f"{LG.USAGE} records revision r{used[0][1]} in use by {used[0][0]}"
+        prop = lg.proposal(part)
+        if prop and prop.get("base") is not None:
+            return f"a held change to its revision r{prop['base']} waits in {LG.STORE}/proposed"
+        return None
+
+    def _refuse_lost(self, lost):
+        if not lost:
+            return
+        names = ", ".join(n for n, _ in lost[:8]) + (f" and {len(lost) - 8} more" if len(lost) > 8 else "")
+        raise LG.LedgerError(
+            f"{self.folder}: the ledger has no release of {names}, but the library shows it was released before "
+            f"({lost[0][1]}); the files on disk are not taken as revision 1 without a person, so nothing was changed",
+            f"restore {LG.LEDGER} from git (`git checkout -- {LG.LEDGER}` in the library folder); or, after checking the "
+            f"files on disk by hand: ecadlib part adopt {self.folder} --part {lost[0][0]} -m \"why\"")
 
     def _keep_bytes(self, it, head):
         """The files on disk now, when their bytes differ from the head's snapshot but they still are the released
@@ -228,6 +318,11 @@ class Guard:
         now = {}
         for p, r in recs.items():
             f = Path(p)
+            side = f.with_name(f.name + ".ecadbuild")
+            if r.get("ecadbuild") and "steps" not in r and side.is_file() and LG.sha_bytes(side.read_bytes()) == r["ecadbuild"]:
+                # a head recorded before the ledger kept 3D models: keep the STEP files its (unchanged) recipe names
+                self.pre_steps[p] = {str(f.parent / s): (f.parent / s).read_bytes() for s in LG.step_files(f)
+                                     if (f.parent / s).is_file()}
             if f.is_file():
                 b = f.read_bytes()
                 if LG.sha_bytes(b) != r["sha256"]:
@@ -253,11 +348,23 @@ class Guard:
             else:
                 rest[k] = r
         self.ledger.restore_files(rest, self.base)
+        for r in (files or {}).values():           # STEP files of a head recorded without them: as they were at begin()
+            p = str((self.base / r["path"]).resolve()) if not Path(r["path"]).is_absolute() else str(Path(r["path"]).resolve())
+            if "steps" in r:
+                continue
+            for s, data in self.pre_steps.get(p, {}).items():
+                f = Path(s)
+                if not f.is_file() or f.read_bytes() != data:
+                    f.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = f.with_name(f.name + ".restore.tmp")
+                    tmp.write_bytes(data)
+                    os.replace(tmp, f)
 
     def _has_files(self, it):
         return any((self.base / p if not Path(p).is_absolute() else Path(p)).is_file() for p in LG.item_files(it).values())
 
     # ------------------------------------------------------------ after the writer
+    @_locked_step
     def settle(self, items):
         """Compare every released part with its ledger head and apply the policy. -> report rows."""
         rows, todo = [], {}
@@ -300,6 +407,12 @@ class Guard:
             for t in todo.values():            # a person's own choice is the approval
                 if t["dec"]["action"] == "hold":
                     t["approved"] = True
+            bad = self._release_check([t for t in todo.values() if t.get("approved")])
+            if bad:                            # like `part approve`: a version that fails the release check is not
+                for t in todo.values():        # released; it waits as a held change and the choice is not counted
+                    if t.pop("approved", None):
+                        t["refused"] = {"by": self.chosen_by, "at": LG.now(), "reason": f"not applied: the chosen version "
+                                        f"fails the release check ({bad}); the released version stays"}
         held = [t for t in todo.values() if t["dec"]["action"] == "hold" and not t.get("approved")]
         for t in held:                         # every proposal is copied before any shared file goes back to its head
             t["prop"] = self._propose(t)
@@ -317,6 +430,16 @@ class Guard:
             self.log(f"  change {r['action']:<5} {r['part']:<28} {r['summary']}")
         return rows
 
+    def _release_check(self, todo):
+        """The release check on copies of these items as the writer left them -> "" when all pass, else the reasons."""
+        from . import release_check as RC
+        probe = [json.loads(json.dumps(t["item"], default=str)) for t in todo if not t["item"].get("_manifest")]
+        if not probe:
+            return ""
+        RC.apply(probe, self.base, rules=self.rules)
+        return "; ".join(f"{i['name']}: {', '.join(i.get('hold_reasons') or [])}" for i in probe if i.get("status") == "held")
+
+    @_locked_step
     def restyle(self, before, after):
         """A restyle (ecadlib style apply, fp_tidy) may only change cosmetics. Each part's before -> after difference
         is classified; anything else is an ecadlib bug, so that part keeps its fields (action "refused"). The parts
@@ -350,18 +473,97 @@ class Guard:
                 self.log(f"  change refused {r['part']:<28} {r['summary']}")
         return rows
 
+    @_locked_step
     def baseline(self, items):
-        """Revision 1 for every part that is released now (status ready / existing) and has no ledger head."""
-        rows = []
+        """Revision 1 for every part that is released now (status ready / existing) and has no ledger head. A new part
+        carrying the MPN of a released part that left the plan (the librarian renamed RES-0603-10k to RES-0402-10k
+        after a BOM change) is compared with that part first: a difference the policy holds is held for a person
+        (`ecadlib part approve` records its revision 1), so a rename never slips a changed part out unreviewed."""
+        todo, lost = [], []
         for it in items:
             if released(it) and not self.ledger.head(it["name"]) and self._has_files(it):
-                fp = FP.of_item(it, self.base)
-                if fp.get("notes"):            # an unreadable file is no released revision to keep
+                why = self.lost_history(it["name"])
+                if why and it["name"] not in self.adopt:
+                    lost.append((it["name"], why))
+                else:
+                    todo.append((it, why))
+        self._refuse_lost(lost)
+        rows, heads = [], None
+        names = {i["name"] for i in items}
+        for it, why in todo:
+            fp = FP.of_item(it, self.base)
+            if fp.get("notes"):                # an unreadable file is no released revision to keep
+                continue
+            if self.mode == "gate" and not why and not it.get("_manifest"):
+                if heads is None:              # released parts no longer in the plan, by MPN
+                    heads = self._retired_by_mpn(names)
+                row = self._twin_hold(it, fp, heads)
+                if row:
+                    rows.append(row)
                     continue
-                rows.append(self._release(it, fp, [], {"action": "pass", "why": []}, decision="baseline",
-                                          reason="first release"))
+            rows.append(self._release(it, fp, [], {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
+                                      reason=self.adopt.get(it["name"]) or "first release", by=self.who() if why else None))
         self.report += rows
+        for r in rows:
+            if r["action"] == "hold":
+                self.log(f"  change hold  {r['part']:<28} {r['summary']}")
         return rows
+
+    def _retired_by_mpn(self, names):
+        out = {}
+        for part in self.ledger.parts():
+            head = self.ledger.head(part)
+            if part in names or not head:
+                continue
+            m = mpn_of((head.get("item") or {}).get("parameters"))
+            if m:
+                out.setdefault(m, []).append(head)
+        return out
+
+    def _twin_hold(self, it, fp, heads):
+        """Hold a new part whose MPN a released part (not in the plan any more) has, when the policy holds the
+        difference between them -> the report row, or None to release it as usual."""
+        best = None
+        for head in heads.get(mpn_of(it.get("parameters")), []):
+            old = self.ledger.fingerprint(head)
+            changes = CD.diff(old, fp) if old else []
+            dec = decide(changes, self.policy, self.mode)
+            if best is None or len(changes) < len(best[1]):
+                best = (head, changes, dec)
+        if not best or best[2]["action"] != "hold":
+            return None
+        head, changes, dec = best
+        twin = {"part": head["part"], "revision": head["revision"]}
+        dec = dict(dec, why=[f"a new part with the MPN of released {twin['part']} r{twin['revision']}, which left the "
+                             f"plan: compared with it"] + dec["why"])
+        t = {"item": it, "head": None, "fp": fp, "changes": changes, "dec": dec, "twin": twin,
+             "rejected": self.ledger.rejected(it["name"], fp["hashes"]["digest"])}
+        prop = self._propose(t)
+        it["change"] = held_block(prop, self.ledger)
+        it["status"] = "held"                  # not released (no revision yet): publishers leave it out
+        why = (f"change control: new part with the MPN of released {twin['part']} r{twin['revision']} "
+               f"({CD.summary(changes)}); a person approves it: ecadlib part show")
+        it["hold_reasons"] = [h for h in it.get("hold_reasons") or [] if not h.startswith("change control:")] + [why]
+        return {"part": it["name"], "action": "hold", "revision": None, "twin": twin,
+                "summary": f"new part with the MPN of released {twin['part']} r{twin['revision']}: {CD.summary(changes)}",
+                "changes": [{"class": c["class"], "text": c["text"]} for c in changes], "rejected": bool(t["rejected"]),
+                "why": dec["why"]}
+
+    @_locked_step
+    def retire(self, names, reason="no longer in the plan"):
+        """A `retired` ledger line for each released part that left the plan (once; it is listed again if it comes back
+        and leaves again). -> the parts recorded."""
+        done = []
+        for n in names:
+            head = self.ledger.head(n)
+            hist = self.ledger.history(n)
+            if not head or (hist and hist[-1].get("event") == "retired"):
+                continue
+            self.ledger.append({"event": "retired", "part": n, "revision": head["revision"], "digest": head.get("digest"),
+                                "writer": self.writer, "by": self.who(), "reason": reason})
+            self.log(f"  change retired {n:<28} r{head['revision']} {reason}")
+            done.append(n)
+        return done
 
     def finish(self, items):
         return self.settle(items) + self.baseline(items)
@@ -378,7 +580,7 @@ class Guard:
     def _mark_unchanged(self, it, head):
         prop = self.ledger.proposal(it["name"])
         if prop and prop.get("base") == head.get("revision"):
-            it["change"] = held_block(prop)
+            it["change"] = held_block(prop, self.ledger)
         elif (it.get("change") or {}).get("state") == "held":
             it.pop("change", None)
 
@@ -394,6 +596,9 @@ class Guard:
                  "classes": CD.counts(changes), "source": dict(it.get("source") or {}, ecadlib=__version__),
                  **({"approved_by": approved_by} if approved_by else {}), **({"reason": reason} if reason else {}),
                  **({"why": dec["why"]} if dec.get("why") else {})}
+        rid = (it.get("a365") or {}).get("revision") if self.mode == "observe" else None
+        if rid:                                # the workspace revision these files are (project check maps it back)
+            entry["a365_revision"] = rid
         self.ledger.append(entry)
         old = self.ledger.proposal(it["name"])
         if old and event == "release" and decision != "approved":
@@ -412,22 +617,35 @@ class Guard:
         """Save the held version as the part's proposal (its files go to the blob store) -> the proposal."""
         it, head, fp, changes, dec = t["item"], t["head"], t["fp"], t["changes"], t["dec"]
         name, digest = it["name"], fp["hashes"]["digest"]
+        base = head["revision"] if head else None          # None: a new part held against its MPN twin (baseline)
         prev = self.ledger.proposal(name)
-        if prev and prev.get("digest") == digest and prev.get("base") == head.get("revision"):
+        if prev and prev.get("digest") == digest and prev.get("base") == base:
+            if t.get("refused"):
+                self._refused(prev, t["refused"])
             return prev
-        prop = {"part": name, "base": head["revision"], "digest": digest, "writer": self.writer, "by": self.who(),
+        chosen = self.chosen_by and not t.get("refused")    # a refused choice is not counted as an approval
+        prop = {"part": name, "base": base, "digest": digest, "writer": self.writer, "by": self.who(),
                 "at": LG.now(), "fingerprint": self.ledger.put_json(fp), "files": self.ledger.snapshot_files(it, self.base),
                 "item": LG.content_of(it), "changes": changes, "classes": CD.counts(changes), "why": dec["why"],
                 "approvals": [{"who": self.chosen_by, "key": _user_key(self.chosen_by), "when": LG.now(),
-                               "comment": f"chose it ({self.writer})"}] if self.chosen_by else [],
+                               "comment": f"chose it ({self.writer})"}] if chosen else [],
                 "rejected": t["rejected"] or None, "source": dict(it.get("source") or {}),
-                "used_in": [p for p, *_ in LG.used_in(self.folder, name)]}
+                "used_in": [p for p, *_ in LG.used_in(self.folder, name)], **({"twin": t["twin"]} if t.get("twin") else {})}
         self.ledger.save_proposal(prop)
         if not t["rejected"]:
-            self.ledger.append({"event": "hold", "part": name, "base": head["revision"], "digest": digest,
+            self.ledger.append({"event": "hold", "part": name, "base": base, "digest": digest,
                                 "writer": self.writer, "by": prop["by"], "classes": prop["classes"],
-                                "changes": [{"class": c["class"], "text": c["text"]} for c in changes], "why": dec["why"]})
+                                "changes": [{"class": c["class"], "text": c["text"]} for c in changes], "why": dec["why"],
+                                **({"twin": t["twin"]} if t.get("twin") else {})})
+        if t.get("refused"):
+            self._refused(prop, t["refused"])
         return prop
+
+    def _refused(self, prop, refused):
+        prop["refused"] = refused
+        self.ledger.save_proposal(prop)
+        self.ledger.append({"event": "refused", "part": prop["part"], "digest": prop["digest"], "by": refused["by"],
+                            "base": prop["base"], "reason": refused["reason"], "writer": self.writer})
 
     def _hold(self, t):
         """Put the released version back (files and plan fields) and mark the item held."""
@@ -435,18 +653,64 @@ class Guard:
         name = it["name"]
         self._restore(head.get("files"))
         LG.apply_content(it, head.get("item") or {})
-        it["change"] = held_block(prop)
+        it["change"] = held_block(prop, self.ledger)
         return {"part": name, "action": "hold", "revision": head["revision"], "summary": CD.summary(changes),
                 "changes": [{"class": c["class"], "text": c["text"]} for c in changes],
-                "rejected": bool(t["rejected"]), "why": t["dec"]["why"]}
+                "rejected": bool(t["rejected"]), "why": t["dec"]["why"],
+                **({"refused": t["refused"]["reason"]} if t.get("refused") else {})}
 
 
-def held_block(prop):
-    """The `change` block a plan item carries while a change to it is held."""
+def mpn_of(params):
+    """The MPN among a plan item's parameters ([{name, value}] or {name: value}), compared without case or spaces."""
+    if isinstance(params, list):
+        params = {p.get("name"): p.get("value") for p in params if isinstance(p, dict)}
+    return "".join(FP.identity(params or {})["mpn"].split()).upper()
+
+
+# ---------------------------------------------------------------- held changes: what a person decides on
+def proposal_group(lg, part):
+    """The held proposal of `part` and every other proposal that shares one of its files (decided together)."""
+    props = {p["part"]: p for p in lg.proposals()}
+    if part not in props:
+        raise ChangeError(f"{part}: no held change (see `ecadlib part status`)")
+    files = lambda p: {r["path"] for r in (p.get("files") or {}).values()} | {r["path"] for r in
+                                                                               ((lg.head(p["part"]) or {}).get("files") or {}).values()}
+    group, seen = [part], files(props[part])
+    grew = True
+    while grew:
+        grew = False
+        for n, p in props.items():
+            if n not in group and files(p) & seen:
+                group.append(n)
+                seen |= files(p)
+                grew = True
+    return [props[n] for n in group]
+
+
+def review_digest(lg, part, group=None):
+    """What a person reviews and approves: the proposal's digest, or for parts decided together (a shared file) one
+    digest over all of their proposals. `part show` prints it, `part approve --digest` and the web UI send it back,
+    so an approval never applies to a proposal that changed after it was read."""
+    group = group or proposal_group(lg, part)
+    if len(group) == 1:
+        return group[0]["digest"]
+    return LG.sha_bytes("\n".join(sorted(f"{p['part']}:{p.get('base')}:{p['digest']}" for p in group)).encode())
+
+
+def held_block(prop, lg=None):
+    """The `change` block a plan item carries while a change to it is held (with lg: the review digest too)."""
     ch = prop.get("changes") or []
+    digest = prop.get("digest")
+    if lg is not None:
+        try:
+            digest = review_digest(lg, prop["part"])
+        except ChangeError:
+            pass
     return {"state": "held", "base": prop.get("base"), "summary": CD.summary(ch), "classes": prop.get("classes") or CD.counts(ch),
             "changes": [{"class": c["class"], "text": c["text"]} for c in ch], "writer": prop.get("writer"),
             "proposed_at": prop.get("at"), "approvals": [a.get("who") for a in prop.get("approvals") or []],
+            **({"digest": digest} if digest else {}),
+            **({"twin": prop["twin"]} if prop.get("twin") else {}),
             **({"rejected_by": prop["rejected"].get("by")} if prop.get("rejected") else {}),
             **({"refused": prop["refused"].get("reason")} if prop.get("refused") else {}),
             **({"used_in": prop["used_in"]} if prop.get("used_in") else {})}
@@ -476,18 +740,26 @@ def publish_guard(plan, items, target, rules=None, user=None, log=None, base=Non
     folder = plan.parent if plan.suffix.lower() == ".json" else plan
     before = json.dumps(items, sort_keys=True, default=str)
     g = Guard(folder, "hand-edit", rules=rules, user=user, log=log, base=base or folder)
-    g.finish(items)
-    if save and plan.suffix.lower() == ".json" and json.dumps(items, sort_keys=True, default=str) != before:
-        write_plan(plan, items)
-    out = {}
-    for it in items:
-        head = g.ledger.head(it["name"])
-        out[it["name"]] = None if head else ("not released yet" + (f" (status {it.get('status')})" if it.get("status") else ""))
+    try:                                       # under the library lock: parallel publishers settle one at a time
+        g.finish(items)
+        if save and plan.suffix.lower() == ".json" and json.dumps(items, sort_keys=True, default=str) != before:
+            write_plan(plan, items)
+        out = {}
+        for it in items:
+            head = g.ledger.head(it["name"])
+            out[it["name"]] = None if head else ("not released yet" + (f" (status {it.get('status')})" if it.get("status") else ""))
+    finally:
+        g.close()
     return out, g
 
 
 def record_publish(folder, items, target, ok=lambda it: True, by=None, detail=None):
     """A `publish` ledger line per item that went to `target` (its head revision)."""
+    with LG.locked(lib_folder(folder)):
+        return _record_publish(folder, items, target, ok, by, detail)
+
+
+def _record_publish(folder, items, target, ok, by, detail):
     lg = LG.Ledger(lib_folder(folder))
     n = 0
     for it in items:
@@ -573,6 +845,13 @@ def guarded_rewrite(manifest, writer, fn, rules=None, user=None, log=None):
     items, extra = library_items(folder)
     old_man = json.loads(mpath.read_text(encoding="utf-8")) if mpath.is_file() else {"entries": {}}
     g = Guard(folder, writer, rules=rules, user=user, log=log)
+    try:
+        return _guarded_rewrite(g, fn, mpath, mdir, plan, folder, items, extra, old_man)
+    finally:
+        g.close()
+
+
+def _guarded_rewrite(g, fn, mpath, mdir, plan, folder, items, extra, old_man):
     g.begin(items + extra)
     res = fn()
     _, fresh = library_items(folder)           # a reconversion may add entries; names are stable
@@ -587,7 +866,8 @@ def guarded_rewrite(manifest, writer, fn, rules=None, user=None, log=None):
             continue
         it = next(i for i in every if i["name"] == r["part"])
         for p in g._paths(it):
-            held[p] = f"held: change to released {r['part']} r{r['revision']} ({r['summary']}); ecadlib part show"
+            held[p] = (f"held: change to released {r['part']} r{r['revision']} ({r['summary']}); "
+                       f"ecadlib part show {plan or folder} {r['part']}")
     if held and mpath.is_file():               # the manifest goes back for the held files: still "changed" upstream
         man = json.loads(mpath.read_text(encoding="utf-8"))
         for r in rows:                         # an approval writes the new entries (ecadlib part approve)

@@ -19,9 +19,17 @@ Events: `release` (a new revision: the first one is the baseline, later ones pas
 `revert` (a new revision that copies an older one), `hold` (a change was held; the proposal is in .ecadlib/proposed),
 `reject` (a person rejected a held change; the same proposal is held again without asking), `publish` (a revision went
 to a target: altium365, dblib, kicad), `approve` (one approval of a held change, for the two-person rule), `refused`
-(an approval not applied because the proposed version fails the release check; it is not counted as an approval). The head of
-a part is its last release or revert. Nothing is ever deleted: `ecadlib part history` shows every line."""
-import datetime, hashlib, json, os, re
+(an approval not applied because the proposed version fails the release check; it is not counted as an approval),
+`overwritten` (an approval replaced a newer edit on disk; those bytes are kept in the blob store), `retired` (a released
+part left the plan) and `adopted` decisions (`ecadlib part adopt`: a person took the files on disk as a part's release
+after its history was lost). The head of a part is its last release or revert. Nothing is ever deleted: `ecadlib part
+history` shows every line.
+
+Writers hold the library lock (.ecadlib/lock: lock() / locked()) from the gate's begin() through settle(), and every
+step that records (settle, baseline, publish lines, approve / reject / revert) takes it and reads the ledger again, so
+two runs on one library never record the same revision twice or settle one another's half-written files. It is an OS lock (fcntl on
+POSIX, msvcrt on Windows), so the OS frees it when the holder dies: a crashed run never leaves a stale lock."""
+import contextlib, datetime, hashlib, json, os, re, threading, time
 from pathlib import Path
 
 from .fsutil import write_text_atomic
@@ -34,6 +42,111 @@ RELEASES = ("release", "revert")
 # plan item fields the fingerprint covers; a held change restores them, an approval applies them
 CONTENT_FIELDS = ("parameters", "cleared", "description", "comment", "symbol", "footprint")
 HALF_KEYS = ("ref", "file", "kicad_mod")
+
+
+class LedgerError(ValueError):
+    """A library's change-control records cannot be used as they are: a broken ledger line, a ledger that lost a part's
+    history, another run holding the library. The CLI reports it as a plain message with its hint, not a crash."""
+    plain_error = True
+    hint = "see docs/change-control.md, section \"When the ledger is damaged\""
+
+    def __init__(self, msg, hint=None):
+        super().__init__(msg)
+        if hint:
+            self.hint = hint
+
+
+# ---------------------------------------------------------------- the library lock
+LOCK_WAIT = 600                                # seconds a writer waits for another run (env ECADLIB_LOCK_WAIT)
+_LOCKS, _LOCKS_GUARD = {}, threading.Lock()    # lock path -> {rlock, n, f}: re-entrant within a process
+
+
+def _os_trylock(f):
+    try:
+        import fcntl
+    except ImportError:                        # Windows: lock byte 0 (the file position decides which byte)
+        import msvcrt
+        f.seek(0)
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _os_unlock(f):
+    try:
+        import fcntl
+        fcntl.flock(f, fcntl.LOCK_UN)
+    except ImportError:
+        import msvcrt
+        try:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+    except OSError:
+        pass
+
+
+def lock(folder, wait=None):
+    """Take the library lock of `folder` (re-entrant in one thread; other threads and processes wait). -> a token for
+    unlock(). Raises LedgerError after `wait` seconds (default $ECADLIB_LOCK_WAIT or LOCK_WAIT)."""
+    if wait is None:
+        try:
+            wait = float(os.environ.get("ECADLIB_LOCK_WAIT") or LOCK_WAIT)
+        except ValueError:
+            wait = LOCK_WAIT
+    store = Path(folder) / STORE
+    store.mkdir(parents=True, exist_ok=True)
+    key = str((store / "lock").resolve())
+    with _LOCKS_GUARD:
+        ent = _LOCKS.setdefault(key, {"rlock": threading.RLock(), "n": 0, "f": None})
+    busy = LedgerError(f"{folder}: another ecadlib run is changing this library (waited {wait:g} s for {STORE}/lock)",
+                       "wait for it to finish and run again (ECADLIB_LOCK_WAIT sets how long to wait)")
+    deadline = time.monotonic() + wait
+    if not ent["rlock"].acquire(timeout=max(wait, 0)):
+        raise busy
+    try:
+        if ent["n"] == 0:
+            f = open(key, "a+b")
+            while not _os_trylock(f):
+                if time.monotonic() >= deadline:
+                    f.close()
+                    raise busy
+                time.sleep(0.05)
+            ent["f"] = f
+        ent["n"] += 1
+    except BaseException:
+        ent["rlock"].release()
+        raise
+    return key
+
+
+def unlock(key):
+    ent = _LOCKS.get(key)
+    if not ent or ent["n"] <= 0:
+        return
+    ent["n"] -= 1
+    if ent["n"] == 0 and ent["f"] is not None:
+        _os_unlock(ent["f"])
+        ent["f"].close()
+        ent["f"] = None
+    ent["rlock"].release()
+
+
+@contextlib.contextmanager
+def locked(folder, wait=None):
+    key = lock(folder, wait)
+    try:
+        yield key
+    finally:
+        unlock(key)
 
 
 def now():
@@ -90,6 +203,16 @@ def item_files(item):
     return out
 
 
+def step_files(lib_path):
+    """The STEP files the .ecadbuild recipe beside a PcbLib names (ecadlib_3d/<footprint>_<n>/<model>, relative to the
+    library's folder); [] without a recipe."""
+    from .altium_native import recipe_steps
+    try:
+        return [s for s in recipe_steps(lib_path) if ".." not in s.replace("\\", "/").split("/") and not Path(s).is_absolute()]
+    except (OSError, UnicodeDecodeError):
+        return []
+
+
 class Ledger:
     def __init__(self, folder):
         self.folder = Path(folder)
@@ -108,8 +231,9 @@ class Ledger:
                     try:
                         e = json.loads(raw)
                     except ValueError as ex:
-                        raise ValueError(f"{self.path}:{n}: not a JSON line ({ex}); the ledger is append-only, "
-                                         f"fix that line by hand (git shows what it was)") from None
+                        raise LedgerError(f"{self.path}:{n}: a broken ledger line ({ex}); nothing was changed",
+                                          f"the ledger is append-only: put that line back as it was (`git diff {LEDGER}` "
+                                          f"in the library folder shows it), then run again") from None
                     if int(e.get("schema_version") or 1) > SCHEMA_VERSION:
                         from . import migrate as MG, __version__
                         raise MG.SchemaTooNew(f"{self.path} was made by a newer ecadlib (ledger schema "
@@ -117,6 +241,10 @@ class Ledger:
                                               f"{SCHEMA_VERSION}): upgrade ecadlib")
                     self._lines.append(e)
         return self._lines
+
+    def reload(self):
+        """Read the file again on the next lines() (another run may have appended since: done under the lock)."""
+        self._lines = None
 
     def exists(self):
         return self.path.is_file()
@@ -207,6 +335,9 @@ class Ledger:
             side = p.with_name(p.name + ".ecadbuild")
             if side.is_file():
                 rec["ecadbuild"] = self.put_bytes(side.read_bytes())
+                steps = {s: self.put_bytes((p.parent / s).read_bytes()) for s in step_files(p) if (p.parent / s).is_file()}
+                if steps:                      # the 3D models the recipe names: a hold puts them back too
+                    rec["steps"] = steps
             out[kind] = rec
         return out
 
@@ -228,6 +359,15 @@ class Ledger:
                 sb = self.get_bytes(rec["ecadbuild"])
                 if not side.is_file() or side.read_bytes() != sb:
                     side.write_bytes(sb)
+            for s, sha in (rec.get("steps") or {}).items():
+                f = p.parent / s
+                data = self.get_bytes(sha)
+                if not f.is_file() or f.read_bytes() != data:
+                    f.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = f.with_name(f.name + f".{os.getpid()}.tmp")
+                    tmp.write_bytes(data)
+                    os.replace(tmp, f)
+                    done.append(str(f))
         return done
 
     def fingerprint(self, entry):

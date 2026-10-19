@@ -1312,11 +1312,11 @@ function changeRows(list) {
 function changeBlock(p, appr) {
   const c = p.change; if (!c) return "";
   const n = c.changes ? c.changes.length : 0;
-  return `<h3>Held update to revision ${esc(c.base)}</h3>
+  return `<h3>${c.twin ? `New part held: it has the MPN of released ${esc(c.twin.part)} (revision ${esc(c.twin.revision)})` : `Held update to revision ${esc(c.base)}`}</h3>
     <p class="small">${esc(c.writer ? `Proposed by ${c.writer}` : "Proposed")}${c.proposed_at ? ` on ${esc(c.proposed_at.slice(0, 16).replace("T", " "))}` : ""}. The released part stays as it is until this is approved.${c.approvals && c.approvals.length ? ` Approved so far by ${esc(c.approvals.join(", "))}.` : ""}${c.rejected_by ? ` Rejected before by ${esc(c.rejected_by)}.` : ""}${c.refused ? ` The last approval was not applied: ${esc(c.refused)}` : ""}</p>
     ${n ? changeRows(c.changes.slice(0, 200)) + (n > 200 ? `<div class="muted small">and ${n - 200} more</div>` : "") : ""}
     ${c.used_in && c.used_in.length ? `<p class="small">Used in: ${esc(c.used_in.join(", "))}</p>` : ""}
-    ${appr ? `<div class="pactions"><button class="primary" data-chg="approve" data-part="${esc(p.part)}">Approve the update</button><button data-chg="reject" data-part="${esc(p.part)}">Keep the released part (reject)…</button></div>` : ""}`;
+    ${appr ? `<div class="pactions"><button class="primary" data-chg="approve" data-part="${esc(p.part)}" data-digest="${esc(c.digest || "")}">Approve the update</button><button data-chg="reject" data-part="${esc(p.part)}">Keep the released part (reject)…</button></div>` : ""}`;
 }
 async function loadPartHistory(part, appr) {
   const box = () => popen === part && $("#phist");
@@ -1333,7 +1333,7 @@ async function loadPartHistory(part, appr) {
         `<td>${esc(e.by || e.writer || "")}</td><td>${appr && e.revision && (e.event === "release" || e.event === "revert") && e.revision !== r.revision ? `<button class="small" data-revert="${esc(e.revision)}" data-part="${esc(part)}">Release r${esc(e.revision)} again…</button>` : e.revision === r.revision && e.event !== "publish" ? '<span class="pill s-ok">released now</span>' : ""}</td></tr>`).join("") + "</tbody></table></div>";
   } catch (err) { if (box()) box().textContent = `Could not read the history: ${err.message}`; }
 }
-async function changeDecide(part, decision) {
+async function changeDecide(part, decision, digest) {
   const who = signer(); if (!who) return;
   let comment = "";
   if (decision === "reject") { comment = prompt(`Why keep the released ${part}? (required)`) || ""; if (!comment.trim()) return; }
@@ -1341,7 +1341,8 @@ async function changeDecide(part, decision) {
   if (comment === null) return;
   const role = session.team ? $("#signas").value || null : $("#signrole").value.trim() || null;
   try {
-    const r = await api("/api/change/decide", session.team ? { bom: current.bom, part, decision, role, comment } : { bom: current.bom, part, decision, user: who, role, comment });
+    // the digest of the change shown on this page: a change proposed again since is refused, never approved unseen
+    const r = await api("/api/change/decide", session.team ? { bom: current.bom, part, decision, role, comment, digest } : { bom: current.bom, part, decision, user: who, role, comment, digest });
     const res = r.results.find(x => x.part === part) || r.results[0] || {};
     toast(decision === "reject" ? `${part}: update rejected, the released part is kept.`
       : res.result === "approval recorded" ? `${part}: approval recorded (${res.approvals} of ${res.needed}).` : `${part}: update approved${res.revision ? `, now revision ${res.revision}` : ""}.`);
@@ -1405,7 +1406,7 @@ async function partClick(e) {
   if (d.pf !== undefined) { pfilter = d.pf; renderParts(); const n = $(`#libout [data-pf="${CSS.escape(pfilter)}"]`); if (n) n.focus(); return; }
   if (d.undo) return undoPending(d.undo);
   if (d.pick) return openPick(d.pick);
-  if (d.chg) return changeDecide(d.part, d.chg);
+  if (d.chg) return changeDecide(d.part, d.chg, d.digest || "");
   if (d.revert) return revertTo(d.part, Number(d.revert));
   if (d.approve || d.reject) return decide(d.approve || d.reject, d.approve ? "approve" : "reject", b);
   if (d.allow || d.unallow) return release(d.allow || d.unallow, !!d.allow);

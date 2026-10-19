@@ -144,7 +144,8 @@ def test_http_cache_concurrent_writers_of_one_url():
 def test_resolve_choose_rechecks_parts_sharing_the_file():
     """Two parts share models/PcbLib/SOT-23.PcbLib. Choosing a 10-pad header for one overwrote the shared file, but
     only the chosen part was re-checked: the other stayed `ready` with a footprint whose pads no longer match its
-    3-pin symbol, and push would release it."""
+    3-pin symbol, and push would release it. Both parts are released here, so the choice now goes through the release
+    check for both of them: it fails for both, nothing is applied, and the shared file keeps its released bytes."""
     from ecadlib import kicad_import as K, librarian as L, release_check as RC, resolve as R
     from tests import test_resolve as TR
     with tempfile.TemporaryDirectory() as d:
@@ -163,10 +164,13 @@ def test_resolve_choose_rechecks_parts_sharing_the_file():
         RC.apply(items, Path(d))
         assert b["status"] == "ready" and b["footprint"]["file"] == a["footprint"]["file"], (b["status"], b["hold_reasons"])
         plan.write_text(json.dumps(items, indent=2), encoding="utf-8")
+        shared = Path(d) / a["footprint"]["file"]
+        released = shared.read_bytes()
         r = R.choose(plan, "FAKEFET1", "footprint", "kicad:Connector_PinHeader_1.27mm:PinHeader_2x05_P1.27mm_Vertical", src=src)
         assert any("shared with FAKEFET2" in n for n in r["notes"]), r["notes"]
         b = next(i for i in json.loads(plan.read_text(encoding="utf-8")) if i["name"] == "FAKEFET2")
-        assert b["status"] == "held" and any(m.startswith("pins:") for m in b["hold_reasons"]), (b["status"], b["hold_reasons"])
+        assert "FAKEFET2: pins:" in b["change"]["refused"], b.get("change")
+        assert b["change"]["state"] == "held" and shared.read_bytes() == released
 
 
 # ---------------------------------------------------------------- sourcing / rules / dedupe / lifecycle
