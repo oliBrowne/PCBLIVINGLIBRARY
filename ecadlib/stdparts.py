@@ -478,6 +478,7 @@ def _arc(s, m, e, w=0.254):
 
 
 def _diode_body(kind):
+    """Anode right, cathode (bar) left at x = -1.27: pin 1 K must be the left pin (as KiCad's Device:D)."""
     g = [_poly([(1.27, 1.27), (1.27, -1.27), (-1.27, 0), (1.27, 1.27)], "none"), _poly([(-1.27, 0), (1.27, 0)])]
     bar = {"D": [(-1.27, 1.27), (-1.27, -1.27)],
            "D_Schottky": [(-0.635, 0.762), (-0.635, 1.27), (-1.27, 1.27), (-1.27, -1.27), (-1.905, -1.27), (-1.905, -0.762)],
@@ -491,21 +492,25 @@ def _diode_body(kind):
 
 
 SYMBOLS = {   # kind -> (KiCad-style name, reference, description, graphics, pins [(num, name, type, x, y, angle, length)])
+              # pin ends on the 100 mil grid (±5.08 mm), so wires snap to them on Altium's default grid
     "R": ("R", "R", "Resistor", [_rect(-1.016, -2.54, 1.016, 2.54)],
-          [("1", "~", "passive", 0, 3.81, 270, 1.27), ("2", "~", "passive", 0, -3.81, 90, 1.27)]),
+          [("1", "~", "passive", 0, 5.08, 270, 2.54), ("2", "~", "passive", 0, -5.08, 90, 2.54)]),
+    "R_US": ("R_US", "R", "Resistor, US symbol", [_poly([(0, 2.54), (0, 2.286), (1.016, 1.905), (-1.016, 1.143), (1.016, 0.381), (-1.016, -0.381),
+                                                       (1.016, -1.143), (-1.016, -1.905), (0, -2.286), (0, -2.54)])],
+             [("1", "~", "passive", 0, 5.08, 270, 2.54), ("2", "~", "passive", 0, -5.08, 90, 2.54)]),
     "C": ("C", "C", "Unpolarized capacitor", [_poly([(-2.032, 0.762), (2.032, 0.762)], w=0.508), _poly([(-2.032, -0.762), (2.032, -0.762)], w=0.508)],
-          [("1", "~", "passive", 0, 3.81, 270, 2.794), ("2", "~", "passive", 0, -3.81, 90, 2.794)]),
+          [("1", "~", "passive", 0, 5.08, 270, 4.318), ("2", "~", "passive", 0, -5.08, 90, 4.318)]),
     "CP": ("C_Polarized", "C", "Polarized capacitor", [_rect(-2.286, 0.508, 2.286, 1.016), _rect(-2.286, -0.508, 2.286, -1.016, "outline"),
                                                         _poly([(-1.778, 2.286), (-0.762, 2.286)]), _poly([(-1.27, 2.794), (-1.27, 1.778)])],
-           [("1", "~", "passive", 0, 3.81, 270, 2.794), ("2", "~", "passive", 0, -3.81, 90, 2.794)]),
+           [("1", "~", "passive", 0, 5.08, 270, 4.064), ("2", "~", "passive", 0, -5.08, 90, 4.064)]),
     "L": ("L", "L", "Inductor", [_arc((0, 2.54), (0.635, 1.905), (0, 1.27)), _arc((0, 1.27), (0.635, 0.635), (0, 0)),
                                  _arc((0, 0), (0.635, -0.635), (0, -1.27)), _arc((0, -1.27), (0.635, -1.905), (0, -2.54))],
-          [("1", "1", "passive", 0, 3.81, 270, 1.27), ("2", "2", "passive", 0, -3.81, 90, 1.27)]),
+          [("1", "1", "passive", 0, 5.08, 270, 2.54), ("2", "2", "passive", 0, -5.08, 90, 2.54)]),
     "LED": ("LED", "D", "Light emitting diode (pin 1 = cathode)", _diode_body("LED"),
-            [("1", "K", "passive", 3.81, 0, 180, 2.54), ("2", "A", "passive", -3.81, 0, 0, 2.54)]),
+            [("1", "K", "passive", -5.08, 0, 0, 3.81), ("2", "A", "passive", 5.08, 0, 180, 3.81)]),
 }
 for _k, _d in (("D", "Diode"), ("D_Schottky", "Schottky diode"), ("D_Zener", "Zener diode"), ("D_TVS", "TVS diode (unidirectional)")):
-    SYMBOLS[_k] = (_k, "D", f"{_d} (pin 1 = cathode)", _diode_body(_k), [("1", "K", "passive", 3.81, 0, 180, 2.54), ("2", "A", "passive", -3.81, 0, 0, 2.54)])
+    SYMBOLS[_k] = (_k, "D", f"{_d} (pin 1 = cathode)", _diode_body(_k), [("1", "K", "passive", -5.08, 0, 0, 3.81), ("2", "A", "passive", 5.08, 0, 180, 3.81)])
 
 BJT = lambda pnp: [_circle(1.27, 0, 2.8194), _poly([(0.635, 1.905), (0.635, -1.905)], w=0.508), _poly([(0.635, 0.635), (2.54, 2.54)]),
                    _poly([(0.635, -0.635), (2.54, -2.54)]), _poly([(-2.54, 0), (0.635, 0)])] + (
@@ -610,10 +615,14 @@ def symbol_text(key, mpn=""):
     body = " ".join(g)
     pin_txt = " ".join(_pin(*p) for p in pins)
     hide_names = "(pin_names (offset 0) hide)" if all(p[1] in ("~", "1", "2", "K", "A") for p in pins) else "(pin_names (offset 0.254))"
+    if key in SYMBOLS:                         # 2-pin passives and diodes: no "1"/"2" or K/A text on the body (as KiCad's Device:R)
+        hide_names += " (pin_numbers hide)"
+    flat = all(p[5] in (0, 180) for p in pins)  # horizontal 2-pin parts (diodes): labels above and below, not on the body
+    at_ref, at_val = ("0 2.794", "0 -4.064") if flat else ("2.54 0", "-2.54 0")
     text = (f'(kicad_symbol_lib (version 20220914) (generator "ecadlib_stdparts")\n'
             f'  (symbol "{name}" {hide_names} (in_bom yes) (on_board yes)\n'
-            f'    (property "Reference" "{ref}" (at 2.54 0 0) (effects (font (size 1.27 1.27))))\n'
-            f'    (property "Value" "{name}" (at -2.54 0 0) (effects (font (size 1.27 1.27))))\n'
+            f'    (property "Reference" "{ref}" (at {at_ref} 0) (effects (font (size 1.27 1.27))))\n'
+            f'    (property "Value" "{name}" (at {at_val} 0) (effects (font (size 1.27 1.27))))\n'
             f'    (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))\n'
             f'    (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))\n'
             f'    (property "Description" "{desc}" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))\n'
