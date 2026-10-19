@@ -320,6 +320,40 @@ def _path_ends(path):
     return start, (x, y)
 
 
+def _path_runs(path):
+    """'M 5 -6 L -5 0 L 5 7 Z' -> ([[(5, -6), (-5, 0), (5, 7), (5, -6)]], curved). Straight segments only (M L H V Z);
+    curved = the path also had arc or curve commands, which are left out."""
+    toks = re.findall(r"[A-Za-z]|-?\d+(?:\.\d+)?(?:[eE]-?\d+)?", path or "")
+    runs, run, x, y, cmd, i, curved = [], [], 0.0, 0.0, None, 0, False
+    while i < len(toks):
+        t = toks[i]
+        if t.isalpha():
+            cmd, i = t, i + 1
+            if cmd in "Zz" and run:
+                run.append(run[0]); runs.append(run); run = []; x, y = runs[-1][0]
+            elif cmd not in "MLHVmlhvZz":
+                curved = True
+            continue
+        if cmd in ("M", "m", "L", "l") and i + 1 < len(toks):
+            dx, dy = float(toks[i]), float(toks[i + 1]); i += 2
+            x, y = (x + dx, y + dy) if cmd.islower() else (dx, dy)
+            if cmd in "Mm":
+                if len(run) > 1:
+                    runs.append(run)
+                run = []
+                cmd = "l" if cmd == "m" else "L"           # SVG: more pairs after M are line-tos
+        elif cmd in ("H", "h", "V", "v"):
+            v = float(t); i += 1
+            x, y = (x + v if cmd == "h" else v if cmd == "H" else x), (y + v if cmd == "v" else v if cmd == "V" else y)
+        else:
+            i += 1
+            continue
+        run.append((x, y))
+    if len(run) > 1:
+        runs.append(run)
+    return runs, curved
+
+
 def symbol_to_kicad(data, name, footprint="", props=None, notes=None):
     """dataStr ({head, shape}) of an EasyEDA symbol -> .kicad_sym library text with one symbol `name`."""
     notes = [] if notes is None else notes
@@ -365,6 +399,16 @@ def symbol_to_kicad(data, name, footprint="", props=None, notes=None):
             if len(pts) >= 2:
                 xy = " ".join(f"(xy {x} {y})" for x, y in pts)
                 body.append(f"      (polyline (pts {xy}) (stroke (width 0.254) (type default)) (fill (type {'background' if kind == 'PG' else 'none'})))")
+        elif kind == "PT":                                    # SVG path: a diode's triangle, arrow heads
+            f = s.split("~") + [""] * 5
+            runs, curved = _path_runs(f[1])
+            if curved:
+                dropped["PT (curve)"] = dropped.get("PT (curve)", 0) + 1
+            fill = "outline" if f[4] and f[4].lower() != "none" else "none"
+            for pts in runs:
+                if len(pts) >= 2:
+                    xy = " ".join(f"(xy {x} {y})" for x, y in (P(a, b) for a, b in pts))
+                    body.append(f"      (polyline (pts {xy}) (stroke (width 0.254) (type default)) (fill (type {fill})))")
         elif kind in ("C", "E"):
             f = s.split("~") + [""] * 5
             rx, ry = _f(f[3]), _f(f[4]) if kind == "E" else _f(f[3])

@@ -896,7 +896,8 @@ def write_review(rows, out, bom, items=None):
                 details.append(f"  - ... {len(ch['changes']) - 8} more")
     from . import ds_route
     details += ds_route.review_lines(out)     # datasheet reads: model, pages, tokens and USD per answer
-    reports.write_review_files(items, out, bom, details)
+    from . import fallbacks
+    reports.write_review_files(items, out, bom, details, fallbacks.take())
 
 
 def _desc_label(row):
