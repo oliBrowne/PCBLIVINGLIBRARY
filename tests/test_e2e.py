@@ -39,7 +39,7 @@ def golden_path(work, fa, nx, tls, first=True):
     if first:
         assert not any(work.iterdir()), "the golden path starts in an empty folder"
     rules = (work / "ecadlib.toml").read_text() if not first else None
-    out["init"] = E.ecadlib(work, "init", "--yes", env=env, check=first)
+    out["init"] = E.ecadlib(work, "init", "--yes", "--unofficial", env=env, check=first)
     assert (work / "ecadlib.toml").is_file()
     if not first:                  # init again: the rules file is never replaced without --force (a .proposed is written)
         assert out["init"].returncode in (0, 1) and (work / "ecadlib.toml").read_text() == rules, out["init"].stdout[-2000:]
@@ -306,6 +306,7 @@ def test_mcp_server_over_stdio():
     (root / "ws" / "uploads").mkdir(parents=True)
     E.seed_cache(root / "ws" / "http_cache")
     E.write_parts_xlsx(root / "ws" / "uploads" / "parts.xlsx")
+    (root / "ws" / "ecadlib.toml").write_text("[providers]\nunofficial = true\n")   # the EasyEDA fixture part
     m = E.MCPClient(root, "--workspace", "ws", "--offline")
     try:
         r = m.send("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},

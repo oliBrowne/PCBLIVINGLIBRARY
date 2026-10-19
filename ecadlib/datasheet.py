@@ -59,7 +59,9 @@ PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-opus-5": (5.0, 25.0), "claude-
 BATCH_DISCOUNT, CACHE_WRITE = 0.5, 1.25
 BATCH_BYTES, BATCH_MAX = 200 * 2 ** 20, 100_000       # per batch (API limits: 256 MB, 100,000 requests)
 PAGE_TOKENS, OUT_TOKENS, URL_PAGES = 3000, 6000, 30  # rough estimate without a key: per PDF page, typical output, unknown PDF
-SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "ask_above_usd": 1.0,
+DEFAULT_MAX_COST_USD = 10.0                          # per run, so a scripted run on a big BOM has a ceiling (0 = no cap)
+SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": DEFAULT_MAX_COST_USD,
+            "ask_above_usd": 1.0,
             "auto_pages": 40,
             "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", MODEL],
             "escalate": True, "max_attempts": 4,            # pages / model per part: ecadlib.ds_route
@@ -2019,16 +2021,32 @@ class Reader:
     def _guard_cost(self, jobs):
         """[datasheet] max_cost_usd over everything this Reader sends (batches and synchronous calls together)."""
         cap = float(self.cfg.get("max_cost_usd") or 0)
-        if not cap or self.yes or not jobs:
+        if not cap or not jobs:                       # --yes does not lift the cap: a scripted run keeps its ceiling
             return
-        est = self.estimate(jobs)
+        if cap == DEFAULT_MAX_COST_USD:               # the default safety net: the rough estimate, no count_tokens request
+            k, self.key = self.key, None
+            try:
+                est = self.estimate(jobs)
+            finally:
+                self.key = k
+        else:
+            est = self.estimate(jobs)
         if est["usd_max"] is None:
+            if self.yes:                              # a model with no known price (a local one): sent as approved
+                return
+            if cap == DEFAULT_MAX_COST_USD:           # only the default cap: a local model is not stopped by it
+                if not getattr(self, "_said_unpriced", False):
+                    self._said_unpriced = True
+                    self.say(f"  datasheet: no price known for {', '.join(est['models']) or self.model}, so the default "
+                             f"${cap:g} cap can't be checked; sending (set [datasheet] max_cost_usd to hold it)")
+                return
             raise DatasheetError(f"no price known for {', '.join(est['models']) or self.model}: can't hold [datasheet] max_cost_usd = {cap}; "
                                  "pass --yes to send anyway")
         if self.committed_usd + est["usd_max"] > cap:
             raise DatasheetError(f"estimated up to ${est['usd_max']:.2f} for {est['parts']} parts"
                                  + (f" (after ${self.committed_usd:.2f} already spent or held)" if self.committed_usd else "")
-                                 + f", over [datasheet] max_cost_usd = {cap}; see --estimate, raise the cap or pass --yes")
+                                 + f", over [datasheet] max_cost_usd = {cap:g}; nothing sent. See --estimate, then raise "
+                                 "the cap with --max-cost-usd N or in ecadlib.toml (0 = no cap)")
         for j, r in zip(jobs, est["rows"]):         # unrounded, so an answer's real cost replaces exactly its hold
             self.committed_usd += r["usd_max"] or 0.0
             self._holds.setdefault(j.get("key"), []).append(r["usd_max"] or 0.0)
@@ -2400,7 +2418,10 @@ def batch_main(argv, estimate=False):
     ap.add_argument("--no-batch", action="store_true", help="synchronous Messages API calls instead of the Batches API")
     ap.add_argument("--no-wait", action="store_true", help="submit and return; run again to collect (the batch id is kept)")
     ap.add_argument("--estimate", action="store_true", help="count tokens and cost; send nothing")
-    ap.add_argument("--yes", action="store_true", help="go ahead even when the estimate is over [datasheet] max_cost_usd")
+    ap.add_argument("--yes", action="store_true", help="no questions (a model with no known price is sent; the "
+                    "[datasheet] max_cost_usd cap still holds)")
+    ap.add_argument("--max-cost-usd", type=float, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
+                    f"{DEFAULT_MAX_COST_USD:g}; 0 = no cap)")
     ap.add_argument("--model")
     ap.add_argument("--effort", choices=EFFORTS)
     ap.add_argument("--poll", type=float, default=60.0, help="seconds between batch status checks (default 60)")
@@ -2417,6 +2438,8 @@ def batch_main(argv, estimate=False):
     http = CachedHTTP(a.cache, min_interval=0.5, offline=a.offline, timeout=60)
     rd = Reader(out, a.cache, rules=rules, http=http, model=a.model, effort=a.effort, batch=not a.no_batch,
                 wait=not a.no_wait, poll=a.poll, estimate=estimate or a.estimate, yes=a.yes)
+    if a.max_cost_usd is not None:
+        rd.cfg["max_cost_usd"] = a.max_cost_usd
     if not rd.key and not rd.estimate_only:
         from . import llm as LL
         why = f"{settings(rules)['api_key_env']} is not set" if rd.ep['provider'] == 'anthropic' else LL.needs_key_message(rd.ep)
@@ -2502,7 +2525,10 @@ def main(argv=None):
     ap.add_argument("--estimate", action="store_true", help="print the token count and cost; send nothing")
     ap.add_argument("--no-cache", action="store_true", help="ask again even when this PDF/part/model was read before")
     ap.add_argument("--rules", help="library rules file ([datasheet] max_cost_usd; default: searched from -o upwards)")
-    ap.add_argument("--yes", action="store_true", help="go ahead even when the estimate is over [datasheet] max_cost_usd")
+    ap.add_argument("--yes", action="store_true", help="no questions (a model with no known price is sent; the "
+                    "[datasheet] max_cost_usd cap still holds)")
+    ap.add_argument("--max-cost-usd", type=float, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
+                    f"{DEFAULT_MAX_COST_USD:g}; 0 = no cap)")
     ap.add_argument("-o", "--out", default="out/datasheet")
     a = ap.parse_args(argv)
     cache = ResultCache(Path(a.out) / "cache")
@@ -2554,6 +2580,8 @@ def main(argv=None):
                 prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None}
                 grd = Reader(a.out, Path(a.out) / "cache", key=key, rules=rules, model=a.model, effort=a.effort, log=None,
                              yes=a.yes)
+                if a.max_cost_usd is not None:
+                    grd.cfg["max_cost_usd"] = a.max_cost_usd
                 guard = lambda b: grd._guard_cost([{"name": a.part, "url": a.pdf, "body": b, "prov": prov}])
                 guard(body)                           # the feedback turn, if any, is held to the same cap
                 with logging_to(Path(a.out) / "api_log.jsonl", print):

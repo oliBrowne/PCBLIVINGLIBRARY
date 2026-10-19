@@ -19,7 +19,7 @@ number and each port is its own block; blocks are separated by one empty grid ro
 and 'other' pins move between the left and right side to keep the symbol about square, whole ports first; inputs and
 outputs never move.
 
-Power pins sharing a name (VDD x5) are stacked (rules [symbols] stack_power): 'stack' puts them on one spot, one
+Power pins sharing a name (VDD x5) may be stacked (rules [symbols] stack_power, default 'none'): 'stack' puts them on one spot, one
 pin showing its name and number and the rest drawn on top of it with name and number hidden (Altium joins pins at
 one point; the KiCad export writes the rest as hidden passive pins, KLC S4.3); 'hide' makes the rest hidden pins
 tied to the net by name (Altium HiddenNetName, KiCad hidden power_in); 'none' draws every pin.

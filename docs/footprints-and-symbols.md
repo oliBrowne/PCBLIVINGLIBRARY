@@ -186,7 +186,7 @@ The house rule: **inputs left, outputs right, power on top, ground on the bottom
 * **Groups.** Pins are grouped by name, and by type when the name says nothing. Power (VDD, 3V3, VBAT) and analog supply (VDDA, VREF+) go on top; ground (GND, VSS, AGND, VREF-) and the exposed pad go on the bottom. Reset/boot/enable, clock/oscillator, debug (SWD, JTAG, boot UART such as U0TXD), USB, ADC/DAC and inputs (IN+, TRIG, THRES, FB, SENSE, type input) go on the left. Power out (VOUT, VCAP, 3V3OUT), UART, I2C, SPI, CAN, Ethernet, ports, outputs (OUT, Q, DISCH, PGOOD, SW, type output) and NC go on the right. A pin's type beats a direction guessed from its name. Pins with no direction (passive, bidirectional) are `other`: left, moved right only to keep the body square.
 * **Names.** Alternate-function names are grouped by their first name (`PA9/USART1_TX` and `PH0-OSC_IN` are port pins). Overbars and active-low marks (`~{RESET}`, `/RESET`, `RESET#`, `RST_N`) are ignored for grouping.
 * **Ports.** Each port is its own block, sorted by number (PA0..PA15, then PB0...). Blocks are separated by one empty grid row. Whole ports move between the left and right side to keep the body roughly square. A port is split only when that saves more than 6 rows.
-* **Stacking.** Power pins that share a name (VDD, or VDD_1..VDD_5 numbered 1..n) are stacked: one pin shows its name and number, and the rest sit on the same spot with name and number hidden. Names that only look alike are never stacked: VDD1 / VDD2 (an isolator's two sides), VDD18 / VDD33 and VDD_18 / VDD_33 are different supplies. KiCad gets the rest as hidden passive pins (KLC S4.3). `stack_power = "hide"` makes them hidden pins tied to the net by name instead (Altium HiddenNetName; the KiCad export names those hidden power pins after that net, since KiCad connects them by name); `"none"` draws every pin.
+* **Stacking.** By default (`stack_power = "none"`) every power pin gets its own pin end, so Altium draws no junction dot and every pin can be checked against the datasheet. With `stack_power = "stack"`, power pins that share a name (VDD, or VDD_1..VDD_5 numbered 1..n) are stacked: one pin shows its name and number, and the rest sit on the same spot with name and number hidden. Names that only look alike are never stacked: VDD1 / VDD2 (an isolator's two sides), VDD18 / VDD33 and VDD_18 / VDD_33 are different supplies. KiCad gets the rest as hidden passive pins (KLC S4.3). `stack_power = "hide"` makes them hidden pins tied to the net by name instead (Altium HiddenNetName; the KiCad export names those hidden power pins after that net, since KiCad connects them by name).
 * **Grid.** Everything is on the grid: body edges, pin ends and pin pitch (100 mil, which is 2.54 mm in KiCad).
 * **Multi-part.** With `split_pins` set, larger parts become multi-part symbols. Part A holds power, ground and NC; the other parts hold the signal blocks in order, at most `unit_pins` pins each.
 
@@ -206,7 +206,7 @@ power_side = "top"      # top: power top, ground bottom | left: both on the left
 resistor = "us"         # us: zigzag resistor symbol | iec: box
 split_pins = 0          # multi-part above this many pins (0 = never)
 unit_pins = 48          # most pins in one signal part
-stack_power = "stack"   # stack | hide | none
+stack_power = "none"    # none (own pin end each) | stack | hide
 pin_length = 300        # mil, a multiple of the grid
 grid = 100              # 50 or 100 mil
 # order = [...]         # group order; sides = { debug = "right" } moves a group
