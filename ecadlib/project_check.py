@@ -101,12 +101,15 @@ def schematic_symbols(files):
                 continue
             ln = sexpr.first(s, "lib_name")
             key = str(ln[1]) if ln else str(lid[1])
-            u = uses.setdefault(key, {"lib_id": str(lid[1]), "refs": set(), "edited": bool(ln)})
+            u = uses.setdefault(key, {"lib_id": str(lid[1]), "refs": set(), "edited": bool(ln), "inst_fp": {}})
             r = _ref(s)
             if r and not r.startswith("#"):
                 u["refs"].add(r)
+                fp = next((str(x[2]) for x in sexpr.find(s, "property") if len(x) > 2 and str(x[1]) == "Footprint"), None)
+                if fp is not None:             # the footprint this placed symbol puts on the board
+                    u["inst_fp"][r] = "" if fp == "~" else fp
     return {k: {"node": cache.get(k), "lib_id": u["lib_id"], "refs": sorted(u["refs"], key=_natkey),
-                "edited": u["edited"]} for k, u in uses.items()}
+                "edited": u["edited"], "inst_fp": u["inst_fp"]} for k, u in uses.items()}
 
 
 def _natkey(s):
@@ -243,6 +246,23 @@ class Libraries:
             chain.append(syms[parent])
         return chain, None
 
+    def fp_key(self, fpid, near=None):
+        """A footprint id with its nickname resolved to the library folder it names: two nicknames for one .pretty
+        (demo:SOT-23 and mylib:SOT-23 through the project's fp-lib-table) are the same footprint. near: the symbol
+        library the id was read from; a nickname this project does not define is then the <nick>.pretty beside it
+        (kicad-export writes <lib>.kicad_sym and <lib>.pretty together, and its symbols name <lib>:...)."""
+        nick, sep, name = str(fpid or "").partition(":")
+        if not sep:
+            return ("", nick)
+        path = self.tables["fp"].get(nick)
+        if path is None and near is not None:
+            beside = Path(near).parent / f"{nick}.pretty"
+            path = beside if beside.is_dir() else None
+        try:
+            return (str(Path(path).resolve()) if path is not None else f"nick:{nick}", name)
+        except OSError:
+            return (f"nick:{nick}", name)
+
     def footprint(self, fpid):
         """fpid -> (tree, None) or (None, why)."""
         nick, _, name = fpid.partition(":")
@@ -284,17 +304,34 @@ def _fp_field(node_or_chain):
     return ""
 
 
-def _footprint_field(cached, chain, libs):
+def _footprint_field(cached, chain, libs, inst=None, board=None, near=None):
     """The symbol's Footprint field, schematic copy -> library: another footprint is what "Update symbols from library"
-    places (geometry-major), and one the library no longer has is held whatever the policy says (marked "missing")."""
+    places (geometry-major), and one the library no longer has is held whatever the policy says (marked "missing").
+    Nicknames are resolved to their library folder first (another nickname for the same .pretty is no change).
+    inst: {ref: the placed symbol's own Footprint property}; board: {ref: the board footprint's lib_id}: each one that
+    is not the library part's footprint is a geometry-major change too (the part on the board is not the one the
+    library releases)."""
     a, b = _fp_field(cached), _fp_field(chain)
     out = []
-    if a != b:
+    if b:
+        kb = libs.fp_key(b, near)
+        for what, got in (("its Footprint property", inst or {}), ("the board", board or {})):
+            odd = {}
+            for ref, fp in sorted(got.items(), key=lambda x: _natkey(x[0])):
+                if fp and libs.fp_key(fp, near) != kb:
+                    odd.setdefault(fp, []).append(ref)
+            for fp, refs in odd.items():
+                out.append({"class": "geometry-major", "area": "symbol", "what": "footprint", "old": fp, "new": b,
+                            "text": f"{', '.join(refs)} {'place' if len(refs) > 1 else 'places'} {CD._f(fp)} ({what}), "
+                                    f"but the library part's footprint is {CD._f(b)}"})
+    if a != b and libs.fp_key(a, near) != libs.fp_key(b, near):
         out.append({"class": "geometry-major", "area": "symbol", "what": "footprint", "old": a, "new": b,
                     "text": f"footprint reference (the symbol's Footprint field) changed from {CD._f(a)} to {CD._f(b)}"})
     if b and ":" in b:
-        tree, why = libs.footprint(b)
-        if tree is None and why.endswith(f"is no longer in library {b.partition(':')[0]}"):
+        folder, name = libs.fp_key(b, near)
+        if folder and not folder.startswith("nick:") and Path(folder).is_dir() and \
+                not (Path(folder) / f"{name}.kicad_mod").is_file():
+            why = f"{name} is no longer in library {b.partition(':')[0]}"
             out.append({"class": "geometry-major", "area": "symbol", "what": "footprint", "old": a, "new": b,
                         "missing": True, "text": f"the symbol's footprint {b} is not in the library ({why})"})
     return out
@@ -321,6 +358,7 @@ def check_kicad(path, libs=(), rules=None, use_global=True):
     pol = CG.policy(rules, kp["dir"])
     L = Libraries(lib_tables(kp["dir"], libs, use_global))
     rows = []
+    board_ids = {f["ref"]: f["fpid"] for f in board_footprints(kp["pcb"])} if kp["pcb"] else {}
     if kp["sch"]:
         for key, u in sorted(schematic_symbols(sheet_files(kp["sch"])).items()):
             if not u["refs"]:                  # power symbols, flags: nothing to place
@@ -338,7 +376,8 @@ def check_kicad(path, libs=(), rules=None, use_global=True):
             except (ValueError, KeyError, IndexError, TypeError) as e:
                 rows.append(_row("symbol", u["lib_id"], u["refs"], state="unreadable", why=f"{type(e).__name__}: {e}"))
                 continue
-            ch += _footprint_field(u["node"], chain, L)
+            ch += _footprint_field(u["node"], chain, L, u.get("inst_fp"), {r: board_ids[r] for r in u["refs"] if r in board_ids},
+                                   near=L.tables["sym"].get(u["lib_id"].partition(":")[0]))
             note = "edited in the schematic (lib_name " + key + ")" if u["edited"] else ""
             act = "hold" if any(c.get("missing") for c in ch) else None
             rows.append(_row("symbol", u["lib_id"], u["refs"], ch, "changed" if ch else "same", note, pol, act))
