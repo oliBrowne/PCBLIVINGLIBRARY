@@ -5,19 +5,26 @@
     CD.worst(changes)                       the most severe class, or None when nothing changed
 
 Classes, most severe first (default policy in brackets, see change_gate.POLICY):
-  identity        MPN or manufacturer changed; the value as a number changed (10k -> 1k)                    [hold]
+  identity        MPN or manufacturer changed; the value as a number changed (10k -> 1k), its unit (100nF -> 100nH)
+                  or what follows it (100nF 50V -> 100nF 6.3V); a second MPN / manufacturer field names another part [hold]
   electrical      a pin's name (as a signal) or type changed, pins swapped names, a pin or pad added or removed,
-                  pads renumbered, a pin lost its pad, a pin became hidden or moved to another unit       [hold]
-  geometry-major  a pad moved, rotated, changed side, drill, copper offset or paste / mask on-off; a pad size changed
-                  beyond SIZE_MINOR; pad shape changed (other than square <-> rounded corners); footprint copper;
-                  the footprint changed to another land pattern; the 3D model's origin or rotation moved     [hold]
-  geometry-minor  pad size within SIZE_MINOR, corner rounding, paste / mask margins and windows, courtyard, the
-                  footprint renamed with the same land pattern, 3D model added / removed / height / file      [warn]
+                  pads renumbered, a pin lost its pad, a pin became hidden, its hidden net, it moved to another unit,
+                  the number of units, alternate pin functions; for every copy of a pin number                  [hold]
+  geometry-major  a pad moved, rotated, changed side, drill, copper offset, copper layers or paste / mask on-off
+                  (also all paste windows over a pad gone); a pad size changed beyond SIZE_MINOR; pad shape changed
+                  (other than square <-> rounded corners); custom pad copper shape; zone connection; footprint copper
+                  and copper zones; Edge.Cuts; KiCad assembly flags (exclude_from_bom, dnp ...); the footprint changed
+                  to another land pattern; the 3D model's origin or rotation moved                              [hold]
+  geometry-minor  pad size within SIZE_MINOR, corner rounding, paste / mask margins and windows, courtyard, inner-layer
+                  copper of a THT pad, keepouts, footprint type and settings, pad property / pin function, the
+                  footprint renamed with the same land pattern, 3D model added / removed / height / file        [warn]
   cosmetic        silkscreen, fab drawing, texts, symbol graphics, pin positions / lengths / shapes, a pin name written
-                  another way (RESET# -> ~{RESET}), the value written another way (100nF -> 100n), other fields  [pass]
+                  another way (RESET# -> ~{RESET}), the value written another way (100nF -> 100n), display modes,
+                  other fields                                                                                  [pass]
 
 Tolerances: a length change within TOL["noise"] (parity's position tolerance, 1 um) is no change; SIZE_MINOR is the
 pad-size band that counts as minor (max(50 um, 10 % of that side)); 3D origin within TOL["model"] (10 um)."""
+import json
 from collections import Counter
 
 from . import parity as PA
@@ -62,9 +69,20 @@ def _identity(o, n, out):
             _chg(out, "cosmetic", "identity", k, a, b, f"{label} written {_f(a)} -> {_f(b)} (same part)")
     va, vb = io.get("value") or "", inn.get("value") or ""
     na, nb = io.get("value_num"), inn.get("value_num")
+    ua, ub, ra, rb = io.get("value_unit"), inn.get("value_unit"), io.get("value_rest"), inn.get("value_rest")
     if na is not None and nb is not None:
         if abs(na - nb) > 1e-9 * max(abs(na), abs(nb), 1e-30):
             _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)}")
+        elif ua and ub and ua != ub:          # 100nF -> 100nH; 100n -> 100nF only says the unit
+            _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)} (another unit)")
+        elif ra is not None and rb is not None and ra != rb:    # a rating or tolerance after the value: 50V -> 6.3V
+            mpn = (io.get("mpn") or "").strip().upper()
+            if not ra or not rb and mpn and mpn == (inn.get("mpn") or "").strip().upper():
+                _chg(out, "cosmetic", "identity", "value", va, vb,     # 10k -> 10k 1%: more said, nothing contradicted
+                     f"value written {_f(va)} -> {_f(vb)} (the same value, " +
+                     ("more detail)" if not ra else "the MPN is the same)"))
+            else:
+                _chg(out, "identity", "identity", "value", va, vb, f"value changed from {_f(va)} to {_f(vb)}")
         elif va != vb:
             _chg(out, "cosmetic", "identity", "value", va, vb, f"value written {_f(va)} -> {_f(vb)} (the same value)")
     elif va.strip().upper() != vb.strip().upper():
@@ -79,14 +97,26 @@ def _identity(o, n, out):
 
 
 def _fields(o, n, out):
+    """Other fields are cosmetic, except a second MPN or manufacturer column (MPN next to Manufacturer Part Number)
+    whose new value is another part than the identity says: that is an identity change."""
+    from .fingerprint import MFR_KEYS, MPN_KEYS
+    from .kicad_index import norm_mpn
     fo, fn = o.get("fields") or {}, n.get("fields") or {}
+    inn = n.get("identity") or {}
     for k in sorted(set(fo) | set(fn)):
         a, b = fo.get(k), fn.get(k)
         if a == b:
             continue
         txt = (f"field {k} added ({_f(b)})" if a is None else f"field {k} removed (was {_f(a)})" if b is None
                else f"field {k} changed from {_f(a)} to {_f(b)}")
-        _chg(out, "cosmetic", "fields", k, a, b, txt)
+        cls = "cosmetic"
+        kl = str(k).strip().lower()
+        for keys, ident in ((MPN_KEYS, "mpn"), (MFR_KEYS, "manufacturer")):
+            if kl in keys and str(b or "").strip() not in ("", "~", "*") and \
+                    norm_mpn(b) != norm_mpn(inn.get(ident)) and norm_mpn(a) != norm_mpn(b):
+                cls = "identity"
+                txt += f" (the {'MPN' if ident == 'mpn' else 'manufacturer'} is {_f(inn.get(ident))})"
+        _chg(out, cls, "fields", k, a, b, txt)
 
 
 # ---------------------------------------------------------------- symbol
@@ -113,36 +143,55 @@ def _symbol(o, n, out):
         for x in new:
             _chg(out, "electrical", "symbol", f"pin {x}", None, pn[x]["name"], f"pin {x} ({pn[x]['raw'] or 'no name'}) added")
     common = sorted(set(po) & set(pn), key=_natkey)
-    renamed = [c for c in common if po[c]["name"] != pn[c]["name"]]
-    swap = len(renamed) > 1 and Counter(po[c]["name"] for c in renamed) == Counter(pn[c]["name"] for c in renamed)
-    for c in renamed:
-        a, b = po[c], pn[c]
-        _chg(out, "electrical", "symbol", f"pin {c}", a["name"], b["name"],
-             f"pin {c} was {a['raw'] or '(no name)'} now {b['raw'] or '(no name)'}" + (" (pins swapped names)" if swap else ""))
-    moved, art = [], []
+    styles = _styles(po) & _styles(pn)        # a body style only one side has is the display modes line below
+    pairs = []
     for c in common:
-        a, b = po[c], pn[c]
+        io = [x for x in _insts(po[c]) if (x.get("style") or 1) in styles]
+        inn = [x for x in _insts(pn[c]) if (x.get("style") or 1) in styles]
+        multi = len(io) > 1 or len(inn) > 1
+        both, gone_i, new_i = _pair_insts(io, inn)
+        for a, b in both:
+            pairs.append((c, a, b, _pin_label(c, b, multi)))
+        for a in gone_i:
+            _chg(out, "electrical", "symbol", f"pin {c}", _unit_s(a), None,
+                 f"{_pin_label(c, a, True)} ({a.get('raw') or a['name'] or 'no name'}) removed")
+        for b in new_i:
+            _chg(out, "electrical", "symbol", f"pin {c}", None, _unit_s(b),
+                 f"{_pin_label(c, b, True)} ({b.get('raw') or b['name'] or 'no name'}) added")
+    renamed = [x for x in pairs if x[1]["name"] != x[2]["name"]]
+    swap = len(renamed) > 1 and Counter(a["name"] for _, a, _, _ in renamed) == Counter(b["name"] for _, _, b, _ in renamed)
+    for c, a, b, lab in renamed:
+        _chg(out, "electrical", "symbol", f"pin {c}", a["name"], b["name"],
+             f"{lab} was {a['raw'] or '(no name)'} now {b['raw'] or '(no name)'}" + (" (pins swapped names)" if swap else ""))
+    moved, art = [], []
+    for c, a, b, lab in pairs:
         if a["name"] == b["name"] and a.get("raw") != b.get("raw"):
             _chg(out, "cosmetic", "symbol", f"pin {c}", a.get("raw"), b.get("raw"),
-                 f"pin {c} name written {_f(a.get('raw'))} -> {_f(b.get('raw'))} (the same signal)")
+                 f"{lab} name written {_f(a.get('raw'))} -> {_f(b.get('raw'))} (the same signal)")
         if a["type"] != b["type"] or (a.get("ktype") and b.get("ktype") and a["ktype"] != b["ktype"]):
             ta, tb = a.get("ktype") or a["type"], b.get("ktype") or b["type"]
             if not (a.get("ktype") and b.get("ktype")):
                 ta, tb = a["type"], b["type"]
-            _chg(out, "electrical", "symbol", f"pin {c}", ta, tb, f"pin {c} ({b['raw'] or b['name']}) type {ta} -> {tb}")
+            _chg(out, "electrical", "symbol", f"pin {c}", ta, tb, f"{lab} ({b['raw'] or b['name']}) type {ta} -> {tb}")
         if bool(a.get("hidden")) != bool(b.get("hidden")):
             _chg(out, "electrical", "symbol", f"pin {c}", a.get("hidden"), b.get("hidden"),
-                 f"pin {c} ({b['raw'] or b['name']}) is {'hidden' if b.get('hidden') else 'visible'} now")
+                 f"{lab} ({b['raw'] or b['name']}) is {'hidden' if b.get('hidden') else 'visible'} now")
         elif (a.get("net") or None) != (b.get("net") or None):
             _chg(out, "electrical", "symbol", f"pin {c}", a.get("net"), b.get("net"),
-                 f"pin {c} hidden net {_f(a.get('net'))} -> {_f(b.get('net'))}")
-        if (a.get("unit") or 0) != (b.get("unit") or 0) and so.get("units", 1) > 1 and sn.get("units", 1) > 1:
+                 f"{lab} hidden net {_f(a.get('net'))} -> {_f(b.get('net'))}")
+        if (a.get("unit") or 0) != (b.get("unit") or 0):
             _chg(out, "electrical", "symbol", f"pin {c}", a.get("unit"), b.get("unit"),
-                 f"pin {c} ({b['raw'] or b['name']}) moved from unit {a.get('unit')} to unit {b.get('unit')}")
+                 f"pin {c} ({b['raw'] or b['name']}) moved from unit {_unit_n(a)} to unit {_unit_n(b)}")
+        aa, ab = a.get("alt") or [], b.get("alt") or []
+        if aa != ab:                           # KiCad alternate pin functions: another name and type on the same pin
+            alts = lambda xs: ", ".join(f"{x[0] or '(no name)'} ({x[2] if len(x) > 2 else x[1]})" for x in xs) or "none"
+            _chg(out, "electrical", "symbol", f"pin {c}", aa, ab,
+                 f"{lab} ({b['raw'] or b['name']}) alternate functions {alts(a.get('alt'))} -> {alts(b.get('alt'))}")
         if [a.get("at"), a.get("orient"), a.get("len")] != [b.get("at"), b.get("orient"), b.get("len")]:
             moved.append(c)
         if a.get("shape") != b.get("shape"):
             art.append(c)
+    moved, art = list(dict.fromkeys(moved)), list(dict.fromkeys(art))
     if moved:
         _chg(out, "cosmetic", "symbol", "pin positions", None, moved, f"pin position / length / direction changed: {_few(moved)}")
     if art:
@@ -150,9 +199,63 @@ def _symbol(o, n, out):
     if so.get("art") != sn.get("art"):
         _chg(out, "cosmetic", "symbol", "graphics", len(so.get("art") or []), len(sn.get("art") or []),
              f"symbol graphics changed ({_n_items(so.get('art'), sn.get('art'))})")
-    for k, label in (("units", "units"), ("modes", "display modes")):
-        if so.get(k, 1) != sn.get(k, 1):
-            _chg(out, "cosmetic", "symbol", k, so.get(k, 1), sn.get(k, 1), f"symbol {label} {so.get(k, 1)} -> {sn.get(k, 1)}")
+    if so.get("units", 1) != sn.get("units", 1):  # units are electrical: a placed unit gains or loses pins
+        _chg(out, "electrical", "symbol", "units", so.get("units", 1), sn.get("units", 1),
+             f"symbol units {so.get('units', 1)} -> {sn.get('units', 1)}")
+    if so.get("modes", 1) != sn.get("modes", 1):
+        _chg(out, "cosmetic", "symbol", "modes", so.get("modes", 1), sn.get("modes", 1),
+             f"symbol display modes {so.get('modes', 1)} -> {sn.get('modes', 1)}")
+
+
+def _insts(p):
+    """Every copy of a pin number (a fingerprint from before copies were kept has the one)."""
+    return p.get("inst") or [p]
+
+
+def _styles(pins):
+    return {x.get("style") or 1 for p in pins.values() for x in _insts(p)} or {1}
+
+
+def _esig(x):
+    return (x["name"], x["type"], x.get("ktype"), bool(x.get("hidden")), x.get("net") or None, json.dumps(x.get("alt") or []))
+
+
+def _pair_insts(io, inn):
+    """Copies of one pin number, old and new -> (pairs, old only, new only). One copy each side is a pair (a unit move
+    shows as one); otherwise the same unit and body style pair first (an unchanged copy before a changed one), then
+    what is left in the same body style, in order."""
+    if len(io) == 1 and len(inn) == 1:
+        return [(io[0], inn[0])], [], []
+    pairs, ra, rb = [], list(io), list(inn)
+    for key in (lambda x: (x.get("unit") or 0, x.get("style") or 1, _esig(x)), lambda x: (x.get("unit") or 0, x.get("style") or 1),
+                lambda x: x.get("style") or 1):
+        left = []
+        for a in ra:
+            k = next((i for i, b in enumerate(rb) if key(b) == key(a)), None)
+            if k is None:
+                left.append(a)
+            else:
+                pairs.append((a, rb.pop(k)))
+        ra = left
+    return pairs, ra, rb
+
+
+def _unit_n(x):
+    u = x.get("unit") or 0
+    return "0 (common to all units)" if u == 0 else str(u)
+
+
+def _unit_s(x):
+    return x.get("unit")
+
+
+def _pin_label(c, x, multi):
+    lab = f"pin {c}"
+    if multi:
+        lab += f" in unit {_unit_n(x)}"
+    if (x.get("style") or 1) > 1:
+        lab += f" (body style {x.get('style')})"
+    return lab
 
 
 def _natkey(s):
@@ -229,6 +332,61 @@ def _pad(a, b, out, origin=None):
     for k, label in (("paste_margin", "paste margin"), ("mask_margin", "mask margin")):
         if _ne(a.get(k) or 0.0, b.get(k) or 0.0, TOL["noise"]):
             _chg(out, "geometry-minor", "footprint", what, a.get(k), b.get(k), f"{what} {label} {_f(a.get(k))} -> {_f(b.get(k))} mm")
+    _pad_more(a, b, out, what)
+
+
+def _pad_more(a, b, out, what):
+    """Copper layers, the custom copper shape, and the KiCad pad details (compared when both sides have them: another
+    tool, or a fingerprint from before they were read, has None)."""
+    ca, cb = a.get("cu"), b.get("cu")
+    if ca is not None and cb is not None and ca != cb and a["side"] == b["side"]:   # (a side change says it)
+        _chg(out, "geometry-major", "footprint", what, ca, cb, f"{what} copper layers {_layers(ca)} -> {_layers(cb)}")
+    ia, ib = a.get("cu_in"), b.get("cu_in")
+    if ia is not None and ib is not None and ia != ib and a["side"] == b["side"] == "THT":
+        _chg(out, "geometry-minor", "footprint", what, ia, ib,
+             f"{what} {'has' if ib else 'lost'} its copper on the inner layers (*.Cu -> F&B.Cu)" if not ib else
+             f"{what} has copper on the inner layers now (F&B.Cu -> *.Cu)")
+    pa, pb = a.get("prim"), b.get("prim")
+    if pa and pb and pa[:2] == pb[:2] and pa != pb and a["shape"] == b["shape"] == "custom" and \
+            not any(c["what"] == what and "outline" in c["text"] for c in out):
+        _chg(out, "geometry-major", "footprint", what, None, None, f"{what} custom copper shape changed")
+    za, zb = a.get("zone"), b.get("zone")
+    if za is not None and zb is not None and za != zb:
+        _chg(out, "geometry-major", "footprint", what, za, zb,
+             f"{what} zone connection {_ZONE.get(za, za)} -> {_ZONE.get(zb, zb)}")
+    for k, label in (("pinfunc", "pin function"), ("pintype", "pin type")):
+        if a.get(k) and b.get(k) and a[k] != b[k]:      # boards fill these in from the symbol, libraries mostly do not
+            _chg(out, "geometry-minor", "footprint", what, a[k], b[k], f"{what} {label} {a[k]} -> {b[k]}")
+    if a.get("prop") is not None and b.get("prop") is not None and a["prop"] != b["prop"]:
+        _chg(out, "geometry-minor", "footprint", what, a["prop"], b["prop"],
+             f"{what} fabrication property {_f(a['prop'])} -> {_f(b['prop'])}")
+
+
+_ZONE = {-1: "as the footprint", 0: "none", 1: "thermal relief", 2: "solid", 3: "thermal relief (THT only)"}
+
+
+def _layers(cu):
+    return " + ".join({"F": "front", "B": "back"}.get(x, x) for x in cu) or "none"
+
+
+def _box(p):
+    """A pad's copper bounding box (x1, y1, x2, y2)."""
+    import math
+    if p.get("w") is None or p.get("h") is None:
+        return None
+    r = math.radians(p.get("rot") or 0)
+    hw = (abs(p["w"] * math.cos(r)) + abs(p["h"] * math.sin(r))) / 2
+    hh = (abs(p["w"] * math.sin(r)) + abs(p["h"] * math.cos(r))) / 2
+    return ((p["x"] or 0) - hw, (p["y"] or 0) - hh, (p["x"] or 0) + hw, (p["y"] or 0) + hh)
+
+
+def _pasted(p, windows):
+    """A surface pad gets solder paste: its own, or a paste window over it (an exposed pad's split paste)."""
+    if p.get("paste"):
+        return True
+    b = _box(p)
+    return bool(b) and any(w == "paste" and box and box[0] < b[2] and box[2] > b[0] and box[1] < b[3] and box[3] > b[1]
+                           for w, box in windows or [])
 
 
 def _footprint(o, n, out):
@@ -260,6 +418,10 @@ def _footprint(o, n, out):
             origin = None
         for a, b in pairs:
             _pad(a, b, sub, origin)
+            if a["side"] in ("F", "B") and b["side"] in ("F", "B") and not a.get("paste") and not b.get("paste") and \
+                    _pasted(a, fo.get("windows")) and not _pasted(b, fn.get("windows")):
+                _chg(sub, "geometry-major", "footprint", f"pad {a['num'] or '(unnumbered)'}", True, False,
+                     f"pad {a['num'] or '(unnumbered)'} has no solder paste now (its paste windows were removed)")
     if fo.get("windows") != fn.get("windows"):
         _chg(sub, "geometry-minor", "footprint", "windows", len(fo.get("windows") or []), len(fn.get("windows") or []),
              f"paste / mask windows changed ({len(fo.get('windows') or [])} -> {len(fn.get('windows') or [])})")
@@ -269,6 +431,7 @@ def _footprint(o, n, out):
     ca, cb = fo.get("courtyard"), fn.get("courtyard")
     if (ca is None) != (cb is None) or ca and any(abs(p - q) > TOL["noise"] for p, q in zip(ca, cb)):
         _chg(sub, "geometry-minor", "footprint", "courtyard", ca, cb, f"courtyard {_f(ca)} -> {_f(cb)} mm")
+    _foot_more(fo, fn, sub)
     land_changed = any(c["class"] in ("electrical", "geometry-major") for c in sub)
     if fo.get("name") != fn.get("name"):
         if land_changed:
@@ -280,9 +443,50 @@ def _footprint(o, n, out):
     out += sub
     ao, an = fo.get("art") or {}, fn.get("art") or {}
     for k, label in (("silk", "silkscreen"), ("fab", "fab drawing"), ("text", "footprint texts"), ("other", "other drawing layers")):
-        if ao.get(k) != an.get(k):
+        if (ao.get(k) or []) != (an.get(k) or []):
             _chg(out, "cosmetic", "footprint", k, len(ao.get(k) or []), len(an.get(k) or []),
                  f"{label} changed ({_n_items(ao.get(k), an.get(k))})")
+    if (ao.get("edge") or []) != (an.get("edge") or []):     # a cutout or slot the board is milled with
+        _chg(out, "geometry-major", "footprint", "edge", len(ao.get("edge") or []), len(an.get("edge") or []),
+             f"board edge (Edge.Cuts) in the footprint changed ({_n_items(ao.get('edge'), an.get('edge'))})")
+
+
+# KiCad footprint attributes: what goes on the BOM and the pick-and-place file is a change to the assembly
+_ASSEMBLY = {"exclude_from_bom": "excluded from the BOM", "exclude_from_pos_files": "excluded from the position files",
+             "dnp": "do not populate", "board_only": "on the board only (not in the schematic)", "virtual": "virtual"}
+
+
+def _foot_more(fo, fn, out):
+    """KiCad footprint attributes, the settings every pad inherits, and zones (compared when both sides have them)."""
+    aa, ab = fo.get("attr"), fn.get("attr")
+    if aa is not None and ab is not None and aa != ab:
+        for k, label in _ASSEMBLY.items():
+            if (k in aa) != (k in ab):
+                _chg(out, "geometry-major", "footprint", "attributes", k in aa, k in ab,
+                     f"footprint {'now' if k in ab else 'no longer'} {label}")
+        ta = [x for x in aa if x not in _ASSEMBLY]
+        tb = [x for x in ab if x not in _ASSEMBLY]
+        if ta != tb:
+            _chg(out, "geometry-minor", "footprint", "attributes", ta, tb,
+                 f"footprint attributes {_f(' '.join(ta))} -> {_f(' '.join(tb))}")
+    sa, sb = fo.get("settings"), fn.get("settings")
+    if sa is not None and sb is not None:
+        for k in sorted(set(sa) | set(sb)):
+            if sa.get(k) != sb.get(k):
+                major = k == "zone_connect"
+                va, vb = sa.get(k), sb.get(k)
+                if major:
+                    va, vb = _ZONE.get(-1 if va is None else int(va), va), _ZONE.get(-1 if vb is None else int(vb), vb)
+                _chg(out, "geometry-major" if major else "geometry-minor", "footprint", k, sa.get(k), sb.get(k),
+                     f"footprint {k.replace('_', ' ')} {_f(va)} -> {_f(vb)}")
+    za, zb = fo.get("zones"), fn.get("zones")
+    if za is not None and zb is not None and za != zb:
+        ka, kb = [z for z in za if z.get("keepout")], [z for z in zb if z.get("keepout")]
+        if ka != kb:
+            _chg(out, "geometry-minor", "footprint", "keepouts", len(ka), len(kb), f"keepout zones changed ({_n_items(ka, kb)})")
+        ca, cb = [z for z in za if not z.get("keepout")], [z for z in zb if not z.get("keepout")]
+        if ca != cb:
+            _chg(out, "geometry-major", "footprint", "zones", len(ca), len(cb), f"copper zones changed ({_n_items(ca, cb)})")
 
 
 def _pins_pads(o, n, out):
