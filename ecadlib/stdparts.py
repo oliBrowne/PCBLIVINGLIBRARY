@@ -366,6 +366,77 @@ def ic_package(text, defaults=True):
     return best, f"{label} -> {best}"
 
 
+READ_FAMILIES = {"gullwing": set(FAMILIES) - NO_LEAD - QUAD_LEADED, "qfp": QUAD_LEADED, "qfn": NO_LEAD}
+
+
+def identify(read):
+    """A datasheet read's package (a footprint_gen spec) -> (table name, how) when its own numbers name exactly one
+    checked package, else (None, why). Pin count, pitch, body and exposed pad pick the KiCad generic names that fit, in
+    the family the drawing is titled with when it names one; a fit that is not in the checked table makes it ambiguous
+    (as in ic_package). Each table entry left must agree with the whole read, lead span included (crosscheck.compare
+    against the table), and so must no other entry with other pads: a maker's own outline the read names (a slightly
+    other exposed pad) makes it ambiguous. The read's terminal and land numbers never pick: a misread there cannot
+    pick wrong."""
+    from . import crosscheck as CC
+    fams = READ_FAMILIES.get(read.get("package_type"))
+    if not fams:
+        return None, f"package type {read.get('package_type')}: no JEDEC family in the table"
+    c = CC.critical(read)
+    miss = [k for k in ("pin_count", "pitch", "body_length", "body_width") if c.get(k) is None]
+    if c["has_ep"] and (c["ep_length"] is None or c["ep_width"] is None):
+        miss.append("exposed pad size")
+    if miss:
+        return None, f"the read has no {', '.join(miss)}"
+    fits = lambda k, a, x: CC._close(k, a, (x, x, x), True)
+    body = sorted((c["body_length"], c["body_width"]), key=lambda v: v[0])
+    ep = sorted((c["ep_length"], c["ep_width"]), key=lambda v: v[0]) if c["has_ep"] else None
+
+    def fitting(fs):
+        out = []
+        for g, n in _generic():
+            if g["fam"] not in fs or g["pins"] != c["pin_count"] or g["ep"] != c["has_ep"]:
+                continue
+            if g["variant"] and n not in packages():
+                continue
+            if not fits("pitch", c["pitch"], g["pitch"]) or not all(fits("body_width", a, x) for a, x in zip(body, g["body"])):
+                continue
+            if ep and not (g["epsize"] and all(fits("ep_width", a, x) for a, x in zip(ep, g["epsize"]))):
+                continue
+            out.append(n)
+        return out
+    # the family the drawing is titled with (SOIC, TSSOP, VQFN ...) narrows the rivals, as a BOM name does in
+    # ic_package; its size never comes from the name. SO and 150 mil SOP may be JEDEC SOIC or KiCad's own SO / SOP
+    # land (both stay rivals); a no-lead family the table lacks (VQFN, WSON) has the QFN / DFN land.
+    fam = next((a["fam"] for a in map(_free_attrs, (read.get("name"), read.get("description"))) if a), None)
+    first = {fam, "SOIC"} if fam == "SO" or (fam == "SOP" and c["pin_count"] in (8, 14, 16) and _close(body[0][0], 3.9, 0.1)) \
+        else {fam}
+    tries = ([first] + ([{"QFN"}, {"DFN"}] if fam in NO_LEAD else [])) if fam in fams else [fams]
+    names = next((r for r in map(fitting, tries) if r), [])
+    label = f"{c['pin_count']} pins, pitch {c['pitch'][0]:g}, body {body[0][0]:g} x {body[1][0]:g}" + \
+        (f", exposed pad {ep[0][0]:g} x {ep[1][0]:g}" if ep else "")
+    if not names:
+        return None, f"{label}: no standard package fits"
+    if any(n not in packages() for n in names):
+        return None, f"{label}: fits a KiCad package that is not in the checked table ({', '.join(sorted(names)[:3])})"
+    agree = [n for n in names if CC.compare(c, CC.critical(spec(n)), "table")["status"] == "agreed"]
+    if not agree:
+        return None, f"{label}: fits {', '.join(sorted(names)[:3])}, but the read's other numbers disagree"
+    said = " ".join(str(read.get(k) or "") for k in ("name", "description", "drawing")).upper()
+    generic = {n for _, n in _generic()}
+    for n, e in packages().items():                   # a maker's or JEITA's own outline (Texas_RHA0040B_VQFN-40,
+        tags = [t for t in n.split("_")[:2] if not FREE_RE.fullmatch(t)]                    # JEITA_SOIC-8) is a rival
+        if n in names or n in generic or not any(re.search(rf"(?<![A-Z0-9]){re.escape(t.upper())}(?![A-Z0-9])", said)
+                                                 for t in tags):                         # when the read names it
+            continue
+        if e.get("package_type") == read.get("package_type") and e.get("pin_count") == c["pin_count"] \
+                and CC.compare(c, CC.critical(spec(n)), "table")["status"] == "agreed":
+            agree.append(n)
+    if len(agree) > 1 and not _same_land(agree):
+        return None, f"{label}: ambiguous ({', '.join(sorted(agree)[:3])})"
+    best = sorted(agree, key=len)[0]
+    return best, f"{label} -> {best}"
+
+
 BARE_FAMILY = {"SOT23", "TO220", "TO220AB", "TO263", "TO252", "DPAK", "D2PAK", "TO92"}   # in a description: often the family
 
 

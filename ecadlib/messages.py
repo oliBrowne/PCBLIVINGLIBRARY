@@ -217,7 +217,7 @@ CODES = {
                              [r"cross-check unchecked: (?P<why>.+)", r"not checked \((?P<why>[^)]+)\)"]),
     # the datasheet reader
     "datasheet.no_link": ("No datasheet link is known, so the datasheet could not be read.",
-                          "Add the datasheet link to the BOM line, or pick a footprint by hand.",
+                          "Add the datasheet link to the BOM line, put the PDF in your [datasheet] folder, or pick a footprint by hand.",
                           [r"no datasheet URL known"]),
     "datasheet.no_key": ("The datasheet reader is not set up (no model API key).",
                          "Add a model API key (ecadlib init shows how), or pick a footprint by hand.",
@@ -231,6 +231,13 @@ CODES = {
     "datasheet.some_pages": ("Only some datasheet pages were read[ ({pages})].",
                              "Check that the other pages change nothing in the footprint or pinout.",
                              [r"only some pages were sent \((?P<pages>[^)]*)\)"]),
+    "datasheet.family_pdf": ("The datasheet came from your datasheet folder, from a file named for the part family ({file}).",
+                             "Check the PDF covers this exact part number and package.",
+                             [r"datasheet from your folder: (?P<file>\S+) in the datasheet folder"]),
+    "datasheet.standard_land": ("The datasheet read named the standard package {package} ({why}), so its checked land was used "
+                                "instead of the pads read from the drawing.",
+                                "Check the package code on the datasheet's drawing is {package}.",
+                                [r"standard land: the datasheet read identified (?P<package>\S+) \(.*\); (?P<why>.+?), so the checked standard land"]),
     "datasheet.failed": ("Reading the datasheet failed[ ({why})].",
                          "Try again later, or pick a footprint by hand.",
                          [r"datasheet(?: reader)?: failed \((?P<why>.+)\)"]),

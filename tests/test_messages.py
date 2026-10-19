@@ -60,6 +60,11 @@ EXAMPLES = {
     "datasheet.awaiting_ok": "datasheet: waiting for your OK to read it with AI (https://x.example/a.pdf)",
     "datasheet.not_downloaded": "the PDF was not downloaded here (sent as a URL): its content was not validated locally",
     "datasheet.some_pages": "only some pages were sent (pages 1-4 of 40): check nothing was missed",
+    "datasheet.family_pdf": "datasheet from your folder: LTM4671.pdf in the datasheet folder (a family datasheet: the name is the "
+                            "start of LTM4671IY#PBF); check it covers this part",
+    "datasheet.standard_land": "standard land: the datasheet read identified SOIC-8_3.9x4.9mm_P1.27mm (8 pins, pitch 1.27, body "
+                               "3.9 x 4.9 -> SOIC-8_3.9x4.9mm_P1.27mm); the read left terminal_length blank, so the checked "
+                               "standard land was used. Check the package code on the drawing is this one",
     "datasheet.failed": "datasheet reader: failed (HTTP 500)",
     "librarian.lcsc_mismatch": "LCSC C123 is BSS84, not BSS138: fix the BOM's LCSC number",
     "librarian.footprint_guess": "footprint SOT-23 chosen by name: compare with the datasheet land pattern",
@@ -183,7 +188,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 7, "datasheet.py": 3,
+    "librarian.py": 8, "datasheet.py": 4,
 }
 
 

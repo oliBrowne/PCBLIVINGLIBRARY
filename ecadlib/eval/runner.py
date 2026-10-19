@@ -519,7 +519,7 @@ def summarize(rows):
 def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=None, replay=None, sources=None,
         families=None, ids=None, offline=False, cache="out/http_cache", http=None, api_key=None, rules=None, providers=None,
         tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None, repeat=1, batch=False,
-        cached_only=False, pins=None):
+        cached_only=False, pins=None, datasheets=None):
     """repeat: run the same cases again (into <out>/repeat-2 ...) and report how many parts gave the same files
     (summary["consistency"]): from the recorded answers when there are any (--record / --replay: the code must be
     deterministic), else live again (the model's own consistency; this pays again).
@@ -527,7 +527,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     provider can be compared on the same set: e.g. provider="ollama", model="qwen2.5:7b" against the Claude default.
     batch: the datasheet reads go out as one Message Batch (half price; the run waits for it).
     cached_only: re-score a live run's out folder with nothing sent: its cached answers, and the answers of its
-    collected batches downloaded again (free), are read by this code; a part that needs another read is reported."""
+    collected batches downloaded again (free), are read by this code; a part that needs another read is reported.
+    datasheets: a folder of PDFs downloaded by hand, read before any link ([datasheet] folder)."""
     data = load_set(set_name)
     cases = select(data["cases"], families, ids, limit)
     if not cases:
@@ -543,6 +544,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
                      datasheet={**rules.get("datasheet", {}), **({k: "" for k in ("provider", "base_url", "assist")} if over else {}),
                                 **({"api_key_env": ""} if provider and provider != "anthropic" else {})})
         RU.validate({k: v for k, v in rules.items() if k in ("ai",)}, "eval --provider/--model")
+    if datasheets:
+        rules = dict(rules, datasheet={**rules.get("datasheet", {}), "folder": str(datasheets)})
     sources = list(sources) if sources else [s for s in rules["sources"]["order"] if s != "kicad"]
     if "kicad" in sources:
         log("  note: `kicad` is the ground truth of this set; parts it resolves are scored against themselves")

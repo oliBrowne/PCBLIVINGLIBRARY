@@ -63,7 +63,9 @@ SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY"
             "auto_pages": 40,
             "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", MODEL],
             "escalate": True, "max_attempts": 4,            # pages / model per part: ecadlib.ds_route
-            "cross_check": "auto", "cross_check_model": ""}  # second source before a footprint is accepted: ecadlib.crosscheck
+            "cross_check": "auto", "cross_check_model": "",  # second source before a footprint is accepted: ecadlib.crosscheck
+            "folder": "",                                   # PDFs a person downloaded, <MPN>.pdf: tried before any link
+            "standard_land": "off"}                         # a read that identifies a standard package: off | auto | always
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # Per-model request parameters (claude-api skill, Thinking & Effort table): effort levels a model accepts (no entry
 # for a listed model = it rejects output_config.effort: Haiku 4.5, Sonnet 4.5), and the PDF page limit of
@@ -1261,6 +1263,41 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
     return out
 
 
+def _mpn_key(s):
+    return re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
+
+
+def local_datasheet(folder, part):
+    """The PDF for `part` in a folder of datasheets a person downloaded -> (Path, how) or (None, why). Names are compared
+    without case and punctuation: <MPN>.pdf, a name that starts with the MPN (LTM4671IY-PBF_datasheet.pdf), else the
+    longest name the MPN starts with (LTM4671.pdf for LTM4671IY#PBF; at least 4 characters and half the MPN), which
+    is a family datasheet and is said so. For makers whose sites refuse downloads from scripts (analog.com, Nexperia)."""
+    if not str(folder or "").strip():
+        return None, "no [datasheet] folder"
+    d = Path(str(folder)).expanduser()
+    if not d.is_dir():
+        return None, f"[datasheet] folder {d} does not exist"
+    key = _mpn_key(part)
+    if not key:
+        return None, "no MPN"
+    exact, longer, prefix = None, None, None
+    for f in sorted(d.iterdir()):
+        if f.suffix.lower() != ".pdf" or not f.is_file():
+            continue
+        s = _mpn_key(f.stem)
+        if s == key:
+            exact = exact or f
+        elif s.startswith(key):
+            longer = longer or f
+        elif len(s) >= 4 and 2 * len(s) >= len(key) and key.startswith(s) and (prefix is None or len(s) > len(_mpn_key(prefix.stem))):
+            prefix = f
+    if exact or longer:
+        return exact or longer, f"{(exact or longer).name} in the datasheet folder"
+    if prefix:
+        return prefix, f"{prefix.name} in the datasheet folder (a family datasheet: the name is the start of {part})"
+    return None, f"no {part}.pdf in {d}"
+
+
 def _quiet_pypdf():
     import logging
     logging.getLogger("pypdf").setLevel(logging.ERROR)    # a damaged PDF is reported by us, not as log noise
@@ -1558,6 +1595,24 @@ class Reader:
         failed before starts where it left off ('final' = the cached answer at this step is the one to use)."""
         from . import ds_route as DR
         attempts, data, prov = [], None, None
+        f, how = local_datasheet(self.cfg.get("folder"), part)
+        if f is not None:                             # a person's own copy beats every link (and needs no network)
+            try:
+                data = f.read_bytes()
+            except OSError as e:
+                attempts.append({"url": f.as_uri(), "where": "datasheet folder", "error": f"{type(e).__name__}: {e}"})
+                data = None
+            if data is not None and not is_pdf(data):
+                attempts.append({"url": f.as_uri(), "where": "datasheet folder", "error": f"{f.name}: not a PDF"})
+                data = None
+            if data is None:
+                how = attempts[-1]["error"]
+            else:                                     # the part keeps its public link (never a path on this machine)
+                link = urls[0][0] if urls else ""
+                prov = {"url": link, "final_url": link, "where": how, "status": None, "content_type": "application/pdf",
+                        "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "pages": pdf_pages(data),
+                        "from_cache": False, "local": str(f)}
+                urls = []
         for url, where in [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))]:   # http, then https
             try:
                 data, prov = self.store.fetch(url, where)
@@ -1566,11 +1621,13 @@ class Reader:
                 attempts.append({"url": url, "where": where, "error": str(e)})
         if data is None:
             if not urls:
-                raise DatasheetError("no datasheet URL known")
+                raise DatasheetError("no datasheet URL known" + (f" and {how}" if self.cfg.get("folder") else
+                                     "; put the PDF in a folder and set [datasheet] folder"))
             wrong = {a["url"] for a in attempts if re.search(BROKEN_LINK, a["error"])}
             usable = [(u, w) for u, w in urls if u not in wrong and api_url(u) not in wrong]
             if not usable:
-                raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts))
+                raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts)
+                                     + ("" if self.cfg.get("folder") else "; download it by hand into a folder and set [datasheet] folder"))
             url, where = usable[0]
             prov = {"url": url, "where": where, "sent_as": "url", "note": "not downloaded here; sent as a URL for the API to fetch"}
             src_hash, lv, why, n = "url" + hashlib.sha256(url.encode()).hexdigest(), [None], {}, None
@@ -1673,6 +1730,8 @@ class Reader:
             res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k != "picked"}
         if job["prov"].get("sent_as") == "url":
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
+        if job["prov"].get("local") and "family datasheet" in str(job["prov"].get("where")):
+            res["needs_review"].append(f"datasheet from your folder: {job['prov']['where']}; check it covers this part")
         if job["prov"].get("pages_sent"):
             res["needs_review"].append(f"only some pages were sent ({job['prov']['note']}): check nothing was missed")
         self._ai_record(job, rec, res)

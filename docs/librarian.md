@@ -155,6 +155,41 @@ of cases with identical files and cross-check results. `ecadlib eval consistency
 
 Tested offline only, with fake and recorded answers (`tests/test_crosscheck.py`). No live model of any provider was run.
 
+## Datasheets you downloaded, and standard lands from a read (`[datasheet] folder`, `standard_land`)
+
+Some makers' sites refuse downloads from scripts (analog.com and Nexperia did in the benchmark of 2026-10-18), and
+some parts have no link at all. Download those PDFs by hand into one folder and point ecadlib at it:
+
+```toml
+[datasheet]
+folder = "~/datasheets"     # <MPN>.pdf, tried before any link; "" = links only
+standard_land = "auto"      # "off" (default) | "auto" | "always"
+```
+
+- The file is matched by MPN, ignoring case and punctuation: `<MPN>.pdf`, then a name that starts with the MPN
+  (`LTM4671IY-PBF_datasheet.pdf`), then the longest name the MPN starts with (`LTM4671.pdf` for `LTM4671IY#PBF`, at
+  least 4 characters and half the MPN). The last one is a family datasheet and adds a review item.
+- The part keeps its public datasheet link in the library; the local path is only in the read's provenance.
+- `ecadlib eval run --datasheets DIR` does the same for a benchmark run.
+
+**Standard land from a read.** A read that left one number blank (a missing terminal length, tab length or annular ring) used to
+be held with no footprint. Now, `stdparts.identify` checks whether the read's pin count, pitch, body and exposed pad fit
+exactly one package in the checked standard table, within the family the drawing is titled with. Every other table
+entry the read could be, and every KiCad generic package that is not in the table, counts as a rival; a rival with
+other pads makes it ambiguous, and then nothing changes. The chosen entry must also agree with the whole read, lead span included.
+
+- `off` (the default for now): the read's pads, as before. It stays the default until a live benchmark run with
+  `auto` shows the number moves the right way.
+- `auto`: the table's land is used when the read left a number blank or the datasheet prints no land of its own. A
+  maker's recommended land, when printed, is kept.
+- `always`: the table's land whenever the read identifies one.
+- The symbol still comes from the read. The review says which package was identified and asks a person to check
+  the package code on the drawing.
+- Fed every table entry as if a datasheet printed exactly its numbers, `identify` names 292 of 618 (itself or an
+  entry with the same pads) and never one with other pads (`tests/test_datasheet_folder.py`). The other entries are
+  ambiguous or a package type the table does not cover (chips, SOT, connectors). Its effect on the live benchmark has not been
+  measured yet.
+
 ## Updates never break a library: `migrate.py`, `library.lock.json` and `ecadlib rebuild`
 
 **Versioned files.** Everything ecadlib writes and reads back later has a schema version, one integer per kind of file

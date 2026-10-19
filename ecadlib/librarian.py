@@ -616,6 +616,25 @@ class Run:
                 st["tried"].append(f"datasheet: {r or 'not sent'}" + ("; run again to collect" if str(r).startswith("pending") else ""))
         self.waiting = []
 
+    def standard_land(self, spec):
+        """[datasheet] standard_land: a read whose pin count, pitch, body and exposed pad name exactly one checked standard
+        package (stdparts.identify) -> (table name, how, why it is used) or None. off (the default): never. auto: when
+        the read left a number blank or gave no land of its own (the maker's recommended land, when printed, is kept);
+        always: whenever it identifies one."""
+        from . import stdparts as SP
+        mode = str(D.settings(self.rules).get("standard_land") or "off")
+        if mode == "off":
+            return None
+        name, how = SP.identify(spec)
+        if not name:
+            return None
+        own = spec.get("land") or spec.get("pad_table")
+        if mode == "auto" and own and not spec.get("unresolved"):
+            return None
+        why = ("the read left " + ", ".join(spec["unresolved"]) + " blank") if spec.get("unresolved") else \
+            "the datasheet gives no land of its own" if not own else "[datasheet] standard_land = always"
+        return name, how, why
+
     def put_datasheet(self, st, res, job, fp_name, sym_name, how=""):
         url, where = job["url"], job["where"]
         from . import fp_edit as FE                   # hand edits of this part's pad table (ecadlib fp-edit)
@@ -623,8 +642,19 @@ class Run:
         if edited:
             st["tried"].extend(edited)
             st["review"].extend(edited)
+        from . import stdparts as SP
         got = []
-        if not st["footprint"]:
+        std = self.standard_land(res["spec"]) if not st["footprint"] else None
+        if std:                                       # the read named a checked package: its land, not the read's pads
+            pkg, found, why = std
+            sp = SP.spec(pkg)
+            text, _ = SP.build(pkg, RU.density_for(sp, self.rules))
+            h = F.dim(sp["height_max"])[2] if sp.get("height_max") else None
+            self.put_fp(st, text, fp_name, f"standard:{SP.kicad_ref(pkg)}", None, h, "standard package table", sp)
+            got.append(f"footprint {SP.kicad_ref(pkg)} (identified from the read)")
+            st["review"].append(f"standard land: the datasheet read identified {pkg} ({found}); {why}, so the checked standard "
+                                f"land was used. Check the package code on the drawing is this one")
+        elif not st["footprint"]:
             st["review"].extend(pad_table_problems(res["spec"]))
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
