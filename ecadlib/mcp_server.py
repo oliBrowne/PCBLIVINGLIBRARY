@@ -142,29 +142,6 @@ TOOLS = [
                                     "decision": {"type": "string", "enum": ["approve", "reject"]},
                                     "user": {"type": "string"}, "role": {"type": "string"},
                                     "comment": {"type": "string"}}}},
-    {"name": "agent_queue_list",
-     "description": "The library agent's review queue: work items (parts found new/changed/removed in watched projects "
-                    "and BOMs, or upkeep findings) with status detected/building/proving/review/approved/pushed/failed/"
-                    "rejected, the proof verdict and batch; counts per status and the batches. Read-only.",
-     "inputSchema": {"type": "object", "properties": {
-         "status": {"type": "string", "enum": ["detected", "building", "proving", "review", "approved", "pushed", "failed", "rejected"]},
-         "batch": {"type": "string", "description": "batch id: only its items, plus the batch itself"}}}},
-    {"name": "agent_queue_get",
-     "description": "One review-queue item in full: the change that triggered it, build sources and notes, the visual "
-                    "proof (verdict, findings), before/after picture paths, history and the allowed next states.",
-     "inputSchema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}},
-    {"name": "agent_queue_decide",
-     "description": "Record a person's decision on a review-queue item: approve (review -> approved), reject (needs a "
-                    "note), rebuild (review -> building) or retry (failed/rejected -> detected). approve/reject are also "
-                    "recorded in the part's librarian plan through the approvals policy. user is the person deciding, "
-                    "e.g. \"Ann Lee <ann@example.com>\": ask the user and pass their own answer; never decide on your own "
-                    "behalf or invent a name. The person who started a build cannot approve it.",
-     "inputSchema": {"type": "object", "required": ["id", "decision", "user"],
-                     "properties": {"id": {"type": "string"},
-                                    "decision": {"type": "string", "enum": ["approve", "reject", "rebuild", "retry"]},
-                                    "user": {"type": "string"}, "role": {"type": "string"}, "note": {"type": "string"},
-                                    "expect": {"type": "string", "description": "build_token from agent_queue_get: the "
-                                               "decision is refused if the item was rebuilt since it was shown"}}}},
     {"name": "find_duplicates",
      "description": "Find duplicate parts (same MPN once packaging suffixes are stripped), footprints (same pad "
                     "geometry) and symbols (same pinout) across the librarian's plan and the workspace's altium_models/ "
@@ -172,18 +149,6 @@ TOOLS = [
                     "(duplicates are then skipped by push; library files are never changed): only when the user asks.",
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"}, "merge": {"type": "boolean", "default": False}}}},
-    {"name": "sim_models",
-     "description": "Find SPICE / IBIS simulation models for the librarian plan's parts: built-in models for resistors, "
-                    "capacitors and inductors from their value, vendor models from the workspace's sim_models/ folder (and "
-                    "`models` folders inside the workspace), Nexar documents and vendor URL patterns. Each model is parsed "
-                    "and its pins matched to the symbol's: verified, verify (a person must check) or mismatch (never "
-                    "attached). attach=true writes the SIM links into the .SchLib files and the KiCad Sim.* fields and "
-                    "re-runs the release check: only when the user asks. Returns per part the model, source, pin status "
-                    "and manufacturer model pages to download from by hand.",
-     "inputSchema": {"type": "object", "required": ["bom"],
-                     "properties": {"bom": {"type": "string"}, "attach": {"type": "boolean", "default": False},
-                                    "models": {"type": "array", "items": {"type": "string"},
-                                               "description": "workspace-relative folders of model files"}}}},
     {"name": "datasheet_estimate",
      "description": "Before reading datasheets with Claude: how many parts of the librarian plan still need a symbol or "
                     "footprint and have a datasheet link, and the token count and cost (USD, batch price) of reading them. "
@@ -227,19 +192,19 @@ TOOLS = [
                                     "dry_run": {"type": "boolean", "default": True}}}},
     {"name": "upkeep_run",
      "description": "Run the library upkeep checks for a BOM (its librarian plan when there is one): lifecycle (NRND/EOL, "
-                    "stock-outs), KiCad upstream source changes, price jumps and stock, Altium 365 drift. Reports only what "
+                    "stock-outs), KiCad upstream source changes, Altium 365 drift, held changes to released parts. Reports only what "
                     "is new since the last upkeep run; a check whose credentials are missing is skipped and says so. "
                     "apply=true reconverts KiCad parts whose upstream sources changed (rewrites library files): only when "
                     "the user asks. Never opens GitHub issues or PRs (that is the `ecadlib upkeep --github` CLI).",
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"},
                                     "checks": {"type": "array", "items": {"type": "string",
-                                               "enum": ["lifecycle", "upstream", "sourcing", "a365"]},
+                                               "enum": ["lifecycle", "upstream", "a365", "changes"]},
                                                "description": "checks to run (default: all, or [upkeep] checks in ecadlib.toml)"},
                                     "apply": {"type": "boolean", "default": False},
                                     "workspace": {"type": "string", "description": "Altium 365 workspace URL for the a365 check"}}}},
     {"name": "file_formats",
-     "description": "Which workspace files (plans, librarian state, queue, agent state, caches, ecadlib.toml) are in an "
+     "description": "Which workspace files (plans, librarian state, caches, ecadlib.toml) are in an "
                     "older or newer ecadlib format. migrate true upgrades the older ones in place (backups first); files "
                     "from a newer ecadlib are never changed (upgrade ecadlib). Read-only unless migrate is true.",
      "inputSchema": {"type": "object", "properties": {"migrate": {"type": "boolean", "default": False}}}},
@@ -248,15 +213,6 @@ TOOLS = [
                     "and cached model answers only, never a live call) in a temporary copy and report per part and file "
                     "identical / identical after normalising dates / drift, plus inputs that changed. Changes nothing.",
      "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
-    {"name": "agent_status",
-     "description": "The library agent's state: last run (detected, built, in review, failed), review-queue counts and "
-                    "its batch pull requests (or the batch folders when there is no GitHub token).",
-     "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "agent_run",
-     "description": "Run one pass of the library agent: scan watched projects/BOMs, build and prove new parts, open or "
-                    "update the batch PR. dry_run defaults to true (reports only). A real run (dry_run false) commits to "
-                    "the library repo and opens PRs: only when the user asked for it.",
-     "inputSchema": {"type": "object", "properties": {"dry_run": {"type": "boolean", "default": True}}}},
     {"name": "project_bom",
      "description": "Read the BOM straight from an Altium project (.PrjPcb, or a single .SchDoc): components from every "
                     "schematic grouped by MPN / Design Item ID with designators and quantities, footprints, Altium 365 "
@@ -265,35 +221,6 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["project"],
                      "properties": {"project": {"type": "string", "description": "path to the .PrjPcb or .SchDoc"},
                                     "variant": {"type": "string"}}}},
-    {"name": "library_hub",
-     "description": "The whole parts library across tools: every part once (your libraries from --lib / [hub] libraries "
-                    "plus the parts ecadlib built), with a cell per tool (altium, altium365, kicad): "
-                    "missing, same, present, different (pads, pins or value differ from the newest copy) or behind "
-                    "(different and older by [hub] stale_days). Each row has last changed, by whom, lifecycle, where-used "
-                    "count and flags. Filter with have / lack (tools), states, flags. Read-only.",
-     "inputSchema": {"type": "object",
-                     "properties": {"q": {"type": "string", "description": "words in name, MPN, maker or description"},
-                                    "have": {"type": "array", "items": {"type": "string"}, "description": "only parts in these tools"},
-                                    "lack": {"type": "array", "items": {"type": "string"}, "description": "only parts missing from these tools"},
-                                    "states": {"type": "array", "items": {"type": "string", "enum": ["missing", "same", "present", "different", "behind"]}},
-                                    "flags": {"type": "array", "items": {"type": "string", "enum": ["different", "behind", "held", "awaiting_approval", "eol", "duplicate"]}},
-                                    "tool": {"type": "string", "description": "one tool's library only (its copies, which file each is in)"},
-                                    "project": {"type": "string", "description": "only parts a project uses (a path from project_list)"},
-                                    "page": {"type": "integer"}, "size": {"type": "integer"}}}},
-    {"name": "library_hub_copy",
-     "description": "Copy parts to another tool through the library hub: Altium (SchLib/PcbLib) -> KiCad or KiCad "
-                    "(.kicad_sym/.kicad_mod) -> Altium, converted into <workspace>/hub/library. With a project from "
-                    "library_hub's project_list, the library is also imported there (KiCad lib tables or the .PrjPcb). "
-                    "The user's own library files are not edited. Writes files: ask the user first.",
-     "inputSchema": {"type": "object", "required": ["keys", "tool"],
-                     "properties": {"keys": {"type": "array", "items": {"type": "string"}, "description": "part keys from library_hub"},
-                                    "tool": {"type": "string", "enum": ["altium", "kicad"]},
-                                    "project": {"type": "string"}}}},
-    {"name": "library_hub_part",
-     "description": "One part of the library hub: every tool's copy (file, symbol, footprint, last changed, by whom, what "
-                    "differs and from which copy), sources, release check, sign-offs, where-used, lifecycle, history and "
-                    "the fixes on offer. key comes from library_hub rows.",
-     "inputSchema": {"type": "object", "required": ["key"], "properties": {"key": {"type": "string"}}}},
     {"name": "where_used",
      "description": "Scan folders of Altium projects and report where each part is used (project, designators, quantity, "
                     "revision, variants where it is not fitted), with flags: parts missing from the library, library parts "
@@ -303,21 +230,6 @@ TOOLS = [
                                                  "description": "folders (searched recursively) or project files"},
                                     "part": {"type": "string", "description": "only this part (MPN, item id, LibRef or GUID)"},
                                     "plan": {"type": "string", "description": "librarian plan.json to compare against"}}}},
-    {"name": "a365_pull",
-     "description": "Import the components already in an Altium 365 workspace into the plan (status existing, with "
-                    "revision and model GUIDs), refresh ones pulled before and download their .SchLib/.PcbLib. With bom, "
-                    "into that BOM's librarian plan (the librarian then reuses them instead of fetching); without, into "
-                    "altium365/workspace_plan.json. Changes local files only; conflicts are reported. Needs NEXAR_TOKEN.",
-     "inputSchema": {"type": "object", "required": ["workspace"],
-                     "properties": {"workspace": {"type": "string", "description": "workspace URL"},
-                                    "bom": {"type": "string"},
-                                    "folders": {"type": "array", "items": {"type": "string"},
-                                                "description": "import only components under these workspace folders"}}}},
-    {"name": "a365_status",
-     "description": "Compare the plan with the Altium 365 workspace without changing anything: new in the workspace, "
-                    "changed there since the last pull, changed locally, conflicts (both), deleted. Needs NEXAR_TOKEN.",
-     "inputSchema": {"type": "object", "required": ["workspace"],
-                     "properties": {"workspace": {"type": "string"}, "bom": {"type": "string"}}}},
     {"name": "propose_rules",
      "description": "Set up the library rules (ecadlib.toml: naming, required parameters, folders, layers, footprint density, "
                     "BOM columns) with minimal effort: scan the user's existing libraries (Altium .SchLib/.PcbLib/.DbLib "
@@ -372,19 +284,6 @@ TOOLS = [
                      "properties": {"bom": {"type": "string"}, "part": {"type": "string"},
                                     "ai": {"type": "boolean", "default": False}, "model": {"type": "string"},
                                     "dry_run": {"type": "boolean", "default": True}}}},
-    {"name": "agent_watch_scan",
-     "description": "Library agent watch step: scan the watched projects and BOMs (rules [agent.watch] sources, or the "
-                    "sources given: bom_file / folder / altium_project / a365_project with a ref) and return the parts that "
-                    "are new (not yet in the workspace library), changed (footprint, value, datasheet or LCSC) or removed "
-                    "since the last scan, plus per-source status and errors. A source that fails keeps its last state. "
-                    "dry_run reports without saving the scan state. Altium 365 projects need NEXAR_TOKEN.",
-     "inputSchema": {"type": "object",
-                     "properties": {"sources": {"type": "array", "items": {"type": "object", "required": ["type", "ref"],
-                                    "properties": {"type": {"type": "string", "enum": ["bom_file", "folder", "altium_project",
-                                                                                        "a365_project"]},
-                                                   "ref": {"type": "string"}, "name": {"type": "string"},
-                                                   "workspace": {"type": "string"}, "variant": {"type": "string"}}}},
-                                    "dry_run": {"type": "boolean", "default": False}}}},
     {"name": "visual_check",
      "description": "Visual proof of a part: renders our footprint (top view, pin 1, pitch, dimensions) and symbol next to "
                     "the datasheet's drawing / pin-table pages and asks Claude whether they match (pitch, pad count and "
@@ -437,8 +336,8 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "workspace_status",
      "description": "One-screen summary of the workspace (read-only): parts in each librarian plan with ready / held / "
-                    "waiting-for-sign-off counts, the last triage, the last upkeep run and the library agent's state and "
-                    "review-queue counts. Start here to see what needs attention.",
+                    "waiting-for-sign-off counts, the last triage and the last upkeep run. Start here to see what needs "
+                    "attention.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "doctor",
      "description": "Check the setup: Python version, packages and tools (pdftoppm, kicad-cli, git), which API keys are "
@@ -491,7 +390,7 @@ TOOLS = [
                                     "include_held": {"type": "boolean", "default": False}}}},
     {"name": "altium_menu",
      "description": "Write the 'ecadlib' menu for Altium Designer into the workspace's altium_menu/ folder: a DelphiScript "
-                    "project (Add part from MPN, Check this project BOM, Assembly check, Open review queue) that runs ecadlib on the "
+                    "project (Add part from MPN, Check this project BOM, Open review queue) that runs ecadlib on the "
                     "Altium PC and reinstalls the library, its settings and runner, and with win_dir a ready-made menu "
                     "file (.DXPPrf). Never run inside Altium by ecadlib's tests.",
      "inputSchema": {"type": "object",
@@ -569,20 +468,11 @@ def call_tool(ws, name, args, progress=None):
                                 args.get("comment") or "")
             r.pop("log", None)
             return r
-        if name == "agent_queue_list":
-            return ws.agent_queue_list(args.get("status") or None, args.get("batch") or None)
-        if name == "agent_queue_get":
-            return ws.agent_queue_get(args["id"])
-        if name == "agent_queue_decide":
-            return ws.agent_queue_decide(args["id"], args["decision"], args["user"], args.get("role"), args.get("note") or "",
-                                         via="ecadlib mcp", expect=args.get("expect") or None)
         if name == "find_duplicates":
             r = ws.find_duplicates(args["bom"], args.get("merge") is True)
             if "summary" in r:
                 r["summary"].pop("log", None)
             return r
-        if name == "sim_models":
-            return ws.sim_models(args["bom"], args.get("attach") is True, args.get("models") or None)
         if name == "datasheet_estimate":
             return ws.datasheet_estimate(args["bom"])
         if name == "datasheet_batch":
@@ -601,10 +491,6 @@ def call_tool(ws, name, args, progress=None):
             return r
         if name == "altium365_push":
             return ws.altium365_push(args["bom"], args.get("workspace"), dry_run=args.get("dry_run", True) is not False)
-        if name == "a365_pull":
-            return ws.a365_pull(args["workspace"], args.get("bom"), args.get("folders"))
-        if name == "a365_status":
-            return ws.a365_status(args["workspace"], args.get("bom"))
         if name == "export_altium_dblib":
             return ws.export_dblib(args["bom"])
         if name == "upkeep_run":
@@ -613,26 +499,10 @@ def call_tool(ws, name, args, progress=None):
             return ws.file_formats(args.get("migrate") is True)
         if name == "rebuild_check":
             return ws.rebuild_check(args["bom"])
-        if name == "agent_status":
-            return ws.agent_status()
-        if name == "agent_run":
-            return ws.agent_run(args.get("dry_run", True) is not False)
         if name == "project_bom":
             return ws.project_bom(args["project"], args.get("variant") or None)
-        if name == "library_hub":
-            return ws.hub(args.get("q") or "", args.get("have") or (), args.get("lack") or (), args.get("states") or (), "",
-                          args.get("flags") or (), "name", args.get("page") or 1, args.get("size") or 100, False,
-                          args.get("tool") or "", "", args.get("project") or "")
-        if name == "library_hub_copy":
-            return ws.hub_copy(args["keys"], args["tool"], args.get("project") or "")
-        if name == "library_hub_part":
-            p = ws.hub_part(args["key"])
-            return {k: v for k, v in p.items() if k not in ("pictures", "symbol")} | {
-                "pictures": [{k: v for k, v in x.items() if k != "svg"} for x in p["pictures"]]}
         if name == "where_used":
             return ws.where_used(args["projects"], args.get("part") or None, args.get("plan") or None)
-        if name == "agent_watch_scan":
-            return ws.agent_watch_scan(args.get("sources") or None, args.get("dry_run") is True)
         if name == "visual_check":
             return ws.visual_check(args["target"], args.get("datasheet") or None, args.get("pages") or None,
                                    args.get("symbol") or None, args.get("render_only") is True)
@@ -695,24 +565,24 @@ Rules:
 - Money: librarian_run never pays for a model. ai_read, datasheet_batch, house_style_guide, visual_check and ai true
   cost money: show the quote (ai_quote, datasheet_estimate, learn_house_style ai) and wait for the user's yes.
 - Never approve, reject or allow parts on your own: pass the user's own name and decision.
-- altium365_push and agent_run default to dry runs; a real run only when the user asked for it.
+- altium365_push defaults to a dry run; a real run only when the user asked for it.
 - BOM and file paths are absolute, or relative to the workspace folder (workspace_info shows it).
 - Show held parts' `text` and `fix` sentences to the user as written."""
 
 # readOnlyHint: changes nothing; destructiveHint: may overwrite or change something outside the workspace (only
 # meaningful when not read-only); openWorldHint: talks to the internet (part sources, Altium 365, a model).
 READ_ONLY = {"workspace_info", "triage_history", "preview_footprint", "held_parts", "part_candidates", "approval_status",
-             "agent_queue_list", "agent_queue_get", "datasheet_estimate", "cross_checks", "library_parts",
-             "altium365_plan", "a365_status", "rebuild_check", "agent_status", "project_bom", "library_hub",
-             "library_hub_part", "where_used", "propose_rules", "check_house_style", "list_example_specs",
+             "datasheet_estimate", "cross_checks", "library_parts",
+             "altium365_plan", "rebuild_check", "project_bom",
+             "where_used", "propose_rules", "check_house_style", "list_example_specs",
              "workspace_status", "doctor", "list_plugins", "parity", "ai_quote"}
-DESTRUCTIVE = {"approve_footprint", "preview_symbol", "find_duplicates", "sim_models", "upkeep_run", "altium365_push",
-               "agent_run", "save_rules", "apply_house_style", "a365_pull", "house_style", "library_hub_copy",
+DESTRUCTIVE = {"approve_footprint", "preview_symbol", "find_duplicates", "upkeep_run", "altium365_push",
+               "save_rules", "apply_house_style", "house_style",
                "file_formats"}
 OPEN_WORLD = {"triage_bom", "part_candidates", "librarian_run", "datasheet_batch", "datasheet_estimate", "ai_quote",
               "ai_read", "house_style_guide", "learn_house_style", "apply_house_style", "visual_check", "altium365_push",
-              "a365_pull", "a365_status", "upkeep_run", "agent_run", "agent_watch_scan", "sim_models"}
-# --tools core: the BOM-to-library flow in 21 tools, for small models that lose their way among 60
+              "upkeep_run"}
+# --tools core: the BOM-to-library flow in 21 tools, for small models that lose their way among 50
 CORE = ["workspace_status", "workspace_info", "doctor", "upload_bom", "triage_bom", "librarian_run", "job_status", "held_parts",
         "library_parts", "part_candidates", "choose_part", "release_check", "approval_status", "approve_part",
         "ai_quote", "ai_read", "list_example_specs", "preview_footprint", "approve_footprint", "altium365_plan",
@@ -861,11 +731,8 @@ def _check_paths(ws, args):
     for k, v in args.items():
         if k in PATH_ARGS:
             vals += [(k, x) for x in (v if isinstance(v, list) else [v]) if isinstance(x, str)]
-        elif k == "sources" and isinstance(v, list):
-            vals += [("sources.ref", x.get("ref")) for x in v if isinstance(x, dict) and isinstance(x.get("ref"), str)
-                     and x.get("type") in ("bom_file", "folder", "altium_project")]
     if "toml" in args and isinstance(args["toml"], str):   # save_rules: rules settings that name a file ([style]
-        vals += [(f"toml {k}", x) for k, x in _rule_paths(args["toml"])]   # profile, [agent.watch] sources, ...)
+        vals += [(f"toml {k}", x) for k, x in _rule_paths(args["toml"])]   # profile, ...)
     for k, x in vals:
         if x.startswith(("http://", "https://")) or not x.strip():
             continue

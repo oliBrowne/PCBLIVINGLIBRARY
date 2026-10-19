@@ -1,10 +1,10 @@
-"""Regression tests from the 2026-10-18 review of the Altium 365 path, the librarian and the sourcing write-back.
+"""Regression tests from the 2026-10-18 review of the Altium 365 path, and the librarian.
 Offline (fake HTTP, dry-run pushes). Run:
     python3 -m tests.run_all test_review_1018_a365_librarian"""
 import copy, json, tempfile
 from pathlib import Path
 
-from ecadlib import altium365 as A, approvals as AP, release_check as RC, rules as RU, sourcing as S
+from ecadlib import altium365 as A, approvals as AP, release_check as RC, rules as RU
 from tests import test_librarian as TL
 from tests.test_release_check import make
 
@@ -66,15 +66,3 @@ def test_librarian_matches_placeholder_mpn_lines_by_value():
         assert set(items) == {"PARTA1", "PARTB2"}, sorted(items)
         assert url("PARTA1") == "https://example.com/a.pdf" and url("PARTB2") == "https://example.com/b.pdf"
         assert items["PARTA1"]["source"]["footprint"]                            # its BOM footprint was used
-
-
-def test_sourcing_write_plan_ignores_placeholder_mpn_rows():
-    """A sourcing row for an MPN of '-' normalises to '' and was matched to every plan item without an MPN (generic
-    passives), writing that part's LCSC number into all of them."""
-    with tempfile.TemporaryDirectory() as d:
-        plan = Path(d) / "plan.json"
-        plan.write_text(json.dumps([{"name": "RES-0603-10k", "parameters": [{"name": "Value", "value": "10k"}], "cleared": []}]))
-        row = {"mpn": "-", "flags": [], "suppliers": [("LCSC", "C25804")], "alternates": [], "kind": "other", "need": 1,
-               "chosen": None, "lifecycle": "unknown"}
-        assert S.write_plan(plan, [row], 1, "USD", now="t") == []
-        assert json.loads(plan.read_text())[0]["parameters"] == [{"name": "Value", "value": "10k"}]

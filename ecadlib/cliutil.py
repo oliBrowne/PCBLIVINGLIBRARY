@@ -10,12 +10,11 @@ import json, os
 
 # env var -> (flag, {command: None (any) | (subcommands the flag belongs to, added at the end of argv)}).
 # Only commands where the flag means the same thing: --workspace is a folder here (a365 / upkeep / lifecycle /
-# upstream use --workspace for an Altium 365 URL, so they are not listed). `agent` reads ECADLIB_WORKSPACE itself.
+# upstream use --workspace for an Altium 365 URL, so they are not listed).
 ENV_FLAGS = {
     "ECADLIB_LIB": ("--lib", {"triage": None, "librarian": None, "resolve": None, "kicad-export": None, "mcp": None,
-                              "ui": None, "agent-watch": None, "agent": ("run", "serve"), "doctor": None}),
-    "ECADLIB_WORKSPACE": ("--workspace", {"mcp": None, "ui": None, "team": None, "queue": None, "agent-watch": None,
-                                          "visual-check": None, "doctor": None, "status": None}),
+                              "ui": None, "doctor": None}),
+    "ECADLIB_WORKSPACE": ("--workspace", {"mcp": None, "ui": None, "visual-check": None, "doctor": None, "status": None}),
 }
 DEBUG_ENV = "ECADLIB_DEBUG"
 

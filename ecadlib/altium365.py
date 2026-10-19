@@ -343,6 +343,22 @@ def record_push(folder, started, results):
                   errors=acts.count("error"))
 
 
+MPN_NAMES = ("Manufacturer Part Number", "MPN", "Mfr Part Number")
+
+
+def mpn_of(item_or_params, rules=None):
+    """MPN of a plan item / component dict / {name: value}; falls back to the name."""
+    from . import rules as RU
+    x = item_or_params
+    par = x if isinstance(x, dict) and "parameters" not in x and "name" not in x else (x.get("parameters") or {})
+    if isinstance(par, list):
+        par = {p["name"]: p["value"] for p in par}
+    for k in ((RU.param_name("Manufacturer Part Number", rules),) if rules else ()) + MPN_NAMES:
+        if str(par.get(k) or "").strip():
+            return str(par[k]).strip()
+    return (x.get("name") if isinstance(x, dict) and "name" in x else "") or ""
+
+
 def merged_params(existing, item):
     """Parameter list to send with replaceExisting=True, or None when the workspace already matches.
     Starts from the current revision's parameters so ones added by hand in Altium 365 survive; plan
@@ -355,15 +371,20 @@ def merged_params(existing, item):
     return None if want == cur else [{"name": k, "value": v} for k, v in want.items()]
 
 
+def _ecad_name(k, rules):
+    """ecadlib's name for workspace parameter k (inverse of the rules' [parameters] names)."""
+    inv = {v: c for c, v in (((rules or {}).get("parameters") or {}).get("names") or {}).items()}
+    return inv.get(k, k)
+
+
 def identity_change(existing, params, rules=None):
     """A parameter update that would make a released workspace component another part: [change text] for each
     identity field (MPN, manufacturer, the value as a number) the workspace has and `params` (the list a push would
     send) changes. Filling one the component does not have yet is no change of part. Both sides carry the house
     names of [parameters.names] ("MfrPN"): they are read back under ecadlib's names, which the fingerprint knows."""
     from . import change_diff as CD, fingerprint as FP
-    from .a365_sync import _cname
-    cur = {_cname(p["name"], rules): p["value"] for p in ((existing.get("details") or {}).get("parameters") or [])}
-    new = {_cname(p["name"], rules): p["value"] for p in params}
+    cur = {_ecad_name(p["name"], rules): p["value"] for p in ((existing.get("details") or {}).get("parameters") or [])}
+    new = {_ecad_name(p["name"], rules): p["value"] for p in params}
     a, b = FP.build("", params=cur), FP.build("", params=new)
     return [c["text"] for c in CD.diff(a, b) if c["class"] == "identity" and str(c.get("old") or "").strip()]
 
@@ -372,47 +393,6 @@ IDENTITY_REFUSED = ("not applied in place: a released workspace component keeps 
                     "A different part needs its own component (another name in the plan); a correction goes through "
                     "change control (run the librarian on the BOM, then `ecadlib part approve`), which releases it as a "
                     "new component revision")
-
-
-def push_existing(it, client, ws, dry_run=False, note="ecadlib sync"):
-    """Parameter update for an item that `ecadlib a365 pull` imported or linked (item.a365 = revision, id and the
-    snapshot of the last pull). Refuses when the component was edited in the workspace since that snapshot, so a
-    person's edit there is never overwritten: run `ecadlib a365 reconcile` first. On success the item's a365 block is
-    moved to the new revision (callers write it back with a365_sync.save_meta)."""
-    a = it["a365"]
-    base = (a.get("base") or {}).get("parameters")
-    local = {p["name"] for p in it["parameters"]}
-    cleared = list(it.get("cleared") or [])
-    if a.get("mirror") and base is not None:   # a pulled item lists every parameter: one removed locally is cleared
-        cleared += [k for k in base if k not in local and k not in cleared]
-    want = {**it, "cleared": cleared}
-    if a.get("conflicts"):
-        return {"action": "skip", "detail": "conflict with workspace edits: run `ecadlib a365 reconcile` first"}
-    if dry_run:
-        node = {"details": {"parameters": [{"name": k, "value": v} for k, v in (base or {}).items()]}}
-    else:
-        node = client.find(ws, it["name"])
-        if not node and a.get("id") and hasattr(client, "component"):
-            node = client.component(a["id"])
-        if not node:
-            return {"action": "skip", "detail": "not in the workspace (deleted or renamed there): run `ecadlib a365 reconcile`"}
-        rev = _rev_id(node)
-        cur = {p["name"]: p["value"] for p in ((node.get("details") or {}).get("parameters") or [])}
-        if rev and a.get("revision") and rev != a["revision"] and base is not None and cur != base:
-            return {"action": "skip", "detail": f"edited in the workspace since the last pull (revision {a['revision']} -> {rev}): "
-                                                "run `ecadlib a365 reconcile` first; nothing sent"}
-    new = merged_params(node, want)
-    if new is None:
-        return {"action": "up_to_date", "detail": ""}
-    if dry_run:
-        return {"action": "update_parameters", "detail": {"mutation": "desUpdateComponentRevisionParameters",
-                                                          "replaceExisting": True, "parameters": new}}
-    cid = client.update_params(node["id"], new, note, replace=True)
-    after = client.find(ws, it["name"]) or (client.component(cid) if cid and hasattr(client, "component") else None) or {}
-    a["id"] = after.get("id") or cid
-    a["revision"] = _rev_id(after) or a.get("revision")
-    a.setdefault("base", {})["parameters"] = {p["name"]: p["value"] for p in new}
-    return {"action": "update_parameters", "detail": cid, "a365_updated": True}
 
 
 def change_mode(lg, it, target):
@@ -506,14 +486,12 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     component revision (push_revision), a held change sends nothing new, and every push is recorded."""
     from .approvals import push_block
     from .rules import house_item
-    from .a365_sync import is_a365
     from .rules import DEFAULTS
     # symbols and footprints go under the same root as the components ([folders] root), so a test root holds them all
     models_root = f"{(rules or DEFAULTS)['folders'].get('root') or 'Components'}/Models"
     # sign-off is checked on the item as it was approved (ecadlib's parameter names: the content hash covers them)
     blocks = [push_block(i, policy) for i in items]
-    # a pulled item already carries the workspace's own parameter names: renaming it would rename them there
-    items = [i if is_a365(i) else house_item(i, rules) for i in items]
+    items = [house_item(i, rules) for i in items]
     defs = {} if dry_run else client.release_defs(ws)
     results, uploaded, released = [], {}, set()   # one upload per file per run; (kind, name) released this run
     from . import ledger as LG
@@ -532,13 +510,6 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
             continue
         if block:                              # sign-off policy not met, or a dedupe duplicate
             res["action"], res["detail"] = "skip", block
-            results.append(res)
-            continue
-        if it.get("a365"):                     # pulled from / linked to the workspace: update it, never release it again
-            try:
-                res.update(push_existing(it, client, ws, dry_run, note))
-            except Exception as e:
-                res["action"], res["detail"] = "error", f"{type(e).__name__}: {e}"
             results.append(res)
             continue
         held = (it.get("change") or {}).get("state") == "held"
@@ -697,9 +668,6 @@ def main(argv=None):
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work
         hint = token_hint(token) if "401" in str(e) else ""
         sys.exit(f"Nexar request failed: {type(e).__name__}: {e}{hint}")
-    if any(r.get("a365_updated") for r in results):
-        from .a365_sync import save_meta            # new revisions, so the next push is not mistaken for a conflict
-        save_meta(a.plan, items)
     out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=2))
     for r in results:

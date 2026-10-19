@@ -35,26 +35,6 @@ CANONICAL_PARAMS = ("Manufacturer", "Manufacturer Part Number", "Value", "Suppli
                     "ComponentLink2Description", "ComponentLink2URL")
 KEY_COLUMNS = {"Part Number", "Library Ref", "Library Path", "Footprint Ref", "Footprint Path", "Description", "Comment"}
 
-MANUFACTURER_ALIASES = {      # [agent] manufacturer_aliases defaults: alias -> canonical maker
-    "st": "stmicroelectronics", "stm": "stmicroelectronics", "st micro": "stmicroelectronics",
-    "st microelectronics": "stmicroelectronics", "sgs thomson": "stmicroelectronics",
-    "ti": "texas instruments", "texas instrument": "texas instruments",
-    "adi": "analog devices", "analog device": "analog devices", "linear technology": "analog devices",
-    "nxp semiconductors": "nxp", "nxp semiconductor": "nxp",
-    "on semiconductor": "onsemi", "on semi": "onsemi", "on": "onsemi",
-    "microchip technology": "microchip", "infineon technologies": "infineon",
-    "vishay intertechnology": "vishay", "vishay semiconductors": "vishay", "vishay siliconix": "vishay",
-    "vishay dale": "vishay", "vishay general semiconductor": "vishay",
-    "murata manufacturing": "murata", "murata electronics": "murata", "te": "te connectivity",
-    "rohm semiconductor": "rohm", "diodes": "diodes incorporated", "diodes inc": "diodes incorporated",
-    "maxim integrated": "maxim", "maxim integrated products": "maxim", "renesas electronics": "renesas",
-    "samsung electro mechanics": "samsung electro-mechanics", "semco": "samsung electro-mechanics",
-    "we": "wurth elektronik", "wurth": "wurth elektronik", "wuerth elektronik": "wurth elektronik",
-    "nexperia usa": "nexperia", "toshiba electronic devices and storage": "toshiba", "kemet electronics": "kemet",
-    "yageo": "yageo", "tdk electronics": "tdk", "epcos": "tdk", "panasonic electronic components": "panasonic",
-    "littelfuse": "littelfuse", "bourns": "bourns", "molex": "molex", "amphenol": "amphenol",
-}
-
 DEFAULTS = {
     "naming": {
         "component": "{mpn}",                  # parts that are not generic passives
@@ -80,9 +60,7 @@ DEFAULTS = {
     "release": {"approvals": {},               # same keys as approvals.json; used when there is no approvals.json
                 "parity": "hold"},             # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
     "altium365": {"workspace": ""},
-    "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "sourcing", "a365", "changes"],   # ecadlib.upkeep
-               "price_jump_pct": 20.0, "build_qty": 1, "currency": "USD"},
-    "sim": {"capacitor_esr": "", "capacitor_esl": "", "inductor_dcr": ""},   # ecadlib.sim_models ("" = none)
+    "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "a365", "changes"]},   # ecadlib.upkeep
     "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)
                   "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 0.0, "auto_pages": 40,
                   "ask_above_usd": 1.0,                 # ecadlib.ai_cost: the dialogs ask twice above this (max_cost_usd wins)
@@ -104,26 +82,16 @@ DEFAULTS = {
                   "spi", "can", "eth", "ports", "other_out", "nc", "ground", "ep"],
         "sides": {},                           # group -> left | right | top | bottom (overrides)
     },
-    "agent": {                                 # ecadlib.agent: the library agent (off unless enabled)
-        "watch": {"sources": [], "interval": 3600, "include": [], "exclude": []},
-        "enabled": False, "interval_minutes": 60, "libs": [],
-        "library_repo": "",                    # git repo for the batch PRs ("" = the workspace, if it is one)
-        "library_path": "library",             # folder in that repo for the library files when it is not the workspace
-        "base_branch": "",                     # "" = the repo's current branch
-        "pictures_path": "agent-pictures",
-        "github_repo": "",                     # owner/name ("" = from the origin remote)
+    "agent": {                                 # the library agent is parked on a branch; what stays here is used by
+        "github_repo": "",                     # `upkeep --github` (owner/name; "" = from the origin remote)
         "github_token_env": "GITHUB_TOKEN", "github_api": "https://api.github.com",
-        "batch_size": 20, "auto_push": False, "upkeep_schedule": "weekly", "datasheet_batch": True,
-        "manufacturer_aliases": dict(MANUFACTURER_ALIASES),   # part keys: "ST" = "STMicroelectronics"; add your own
     },
 }
-WATCH_TYPES = ("bom_file", "folder", "altium_project", "a365_project")
-WATCH_SOURCE_KEYS = ("type", "ref", "name", "workspace", "variant", "include", "exclude")
-# [agent.proof]: ecadlib.visual_check (the Claude visual proof). Empty model / effort / api_key_env = use [datasheet].
+# [agent.proof]: ecadlib.visual_check (`ecadlib visual-check`). Empty model / effort / api_key_env = use [datasheet].
 DEFAULTS.setdefault("agent", {})["proof"] = {"model": "", "effort": "", "api_key_env": "", "max_cost_usd": 0.0,
                                              "fail_on": ["error"], "max_pages": 6, "dpi": 200}
 SUB_RANGE = {("agent", "proof", "max_pages"): (1, 100), ("agent", "proof", "dpi"): (50, 400)}
-# GitLab merge requests instead of GitHub PRs (ecadlib.forge); "auto" picks by the origin remote
+# GitLab merge requests instead of GitHub PRs for `upkeep` (ecadlib.forge); "auto" picks by the origin remote
 DEFAULTS["agent"].update({"git_host": "auto", "gitlab_project": "", "gitlab_token_env": "GITLAB_TOKEN",
                           "gitlab_api": "https://gitlab.com/api/v4"})
 # [notify]: webhooks (ecadlib.notify); [providers]: order and choice of part sources incl. plugins (ecadlib.plugins)
@@ -138,8 +106,6 @@ DEFAULTS["providers"] = {"order": [], "unofficial": True}
 # [setup]: written by the `ecadlib init` setup questions (ecadlib.firstrun). libs / workspace are the defaults for
 # --lib / --workspace (after the command line and ECADLIB_LIB / ECADLIB_WORKSPACE); empty = as before.
 DEFAULTS["setup"] = {"tool": "both", "libs": [], "workspace": ""}
-# [hub]: the Library page / `ecadlib hub` (ecadlib.hub). libraries are read on top of --lib; projects feed where-used.
-DEFAULTS["hub"] = {"libraries": [], "projects": [], "stale_days": 14}
 # [style]: your house style learned from your library + your written direction (ecadlib.house_style, `ecadlib style`).
 # profile: the learned file, relative to this rules file. apply: auto = new parts are adapted by code wherever a
 # profile exists; off = never. The model for `ecadlib style learn/apply --ai` may be set here ("" = [ai]).
@@ -148,19 +114,13 @@ DEFAULTS["style"] = {"profile": "house_style.json", "apply": "auto", "model": ""
 # [change]: change control (ecadlib.change_gate): what a change to a released part needs, per class of change.
 DEFAULTS["change"] = {"identity": "hold", "electrical": "hold", "geometry_major": "hold", "geometry_minor": "warn",
                       "cosmetic": "pass", "approvers": 1, "a365_transition": "", "unlisted": "hold"}
-# [assembly]: assembly-ready parts (ecadlib.assembly, `ecadlib assembly`, docs/assembly.md). profile: the assembler
-# (bundled: jlcpcb) or a path to your own profile .json. check: the librarian checks each part with an LCSC number
-# against the assembler's footprint and writes the Assembly parameters. strict: risky pads and unknown rotations hold
-# the part too (incompatible pads always hold).
-DEFAULTS["assembly"] = {"profile": "jlcpcb", "check": True, "strict": False}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
-            ("bom", "columns"), ("release", "approvals"), ("symbols", "sides"), ("agent", "manufacturer_aliases")}
-INT_RANGE = {("parameters", "supplier_slots"): (0, 9), ("upkeep", "build_qty"): (1, 1_000_000),
+            ("bom", "columns"), ("release", "approvals"), ("symbols", "sides")}
+INT_RANGE = {("parameters", "supplier_slots"): (0, 9),
              ("symbols", "layout_pins"): (0, 100_000), ("symbols", "split_pins"): (0, 100_000), ("symbols", "unit_pins"): (8, 10_000),
              ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600), ("datasheet", "page_budget"): (0, 600),
              ("datasheet", "max_attempts"): (1, 10),
-             ("agent", "interval_minutes"): (1, 10_080), ("agent", "batch_size"): (1, 500),
-             ("notify", "retries"): (0, 10), ("change", "approvers"): (1, 9), ("notify", "timeout_s"): (1, 120), ("hub", "stale_days"): (1, 3650)}
+             ("notify", "retries"): (0, 10), ("change", "approvers"): (1, 9), ("notify", "timeout_s"): (1, 120)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
 
@@ -278,7 +238,13 @@ def _template_fields(t):
 
 # Keys an older ecadlib knew, accepted and ignored so an old ecadlib.toml still loads (the Fusion / EAGLE and EasyEDA
 # Pro exports were removed after 0.3.1).
-REMOVED_KEYS = {("release", "eagle"), ("release", "easyeda")}
+REMOVED_KEYS = {("release", "eagle"), ("release", "easyeda"),
+                # cut on 2026-10-19 (price and stock; the library agent, parked on a branch)
+                ("upkeep", "price_jump_pct"), ("upkeep", "build_qty"), ("upkeep", "currency"),
+                *(("agent", k) for k in ("watch", "enabled", "interval_minutes", "libs", "library_repo", "library_path",
+                                         "base_branch", "pictures_path", "batch_size", "auto_push", "upkeep_schedule",
+                                         "datasheet_batch", "manufacturer_aliases"))}
+REMOVED_SECTIONS = {"sim", "hub", "assembly"}          # cut on 2026-10-19: an old file with them loads, they are ignored
 
 
 def validate(raw, where="ecadlib.toml"):
@@ -286,7 +252,7 @@ def validate(raw, where="ecadlib.toml"):
     if not isinstance(raw, dict):
         raise RulesError(f"{where}: expected a table of sections")
     for sec, val in raw.items():
-        if sec.startswith("_") or sec == "schema_version":    # schema_version: the file's format (ecadlib/migrate.py)
+        if sec.startswith("_") or sec == "schema_version" or sec in REMOVED_SECTIONS:   # schema_version: ecadlib/migrate.py
             continue
         if sec not in DEFAULTS:
             _err(where, f"[{sec}]", f"is not a known section; known: {', '.join(DEFAULTS)}")
@@ -294,9 +260,6 @@ def validate(raw, where="ecadlib.toml"):
             _err(where, f"[{sec}]", "must be a table")
         for k, v in val.items():
             key = f"{sec}.{k}"
-            if (sec, k) == ("agent", "watch") and k in DEFAULTS[sec]:
-                _check_watch(where, v)
-                continue
             if sec == "ai" and k in DEFAULTS["ai"]:      # checked by ecadlib.llm.validate below
                 continue
             if (sec, k) in REMOVED_KEYS:                # left from an older ecadlib; ignored
@@ -335,9 +298,6 @@ def validate(raw, where="ecadlib.toml"):
                     _err(where, key, "must be a number of 0 or more")
             elif isinstance(d, dict):
                 _check_table(where, sec, k, v, d)
-            elif sec == "sim":
-                if not isinstance(v, (str, int, float)) or isinstance(v, bool):
-                    _err(where, key, "must be a value such as \"10m\" (ohm / henry)")
             elif not isinstance(v, str):
                 _err(where, key, "must be text")
     n = raw.get("naming", {})
@@ -416,8 +376,6 @@ def validate(raw, where="ecadlib.toml"):
             raise RulesError(str(e)) from None
     _check_symbols(where, raw.get("symbols") or {})
     ag = raw.get("agent") or {}
-    if "upkeep_schedule" in ag and ag["upkeep_schedule"] not in ("off", "daily", "weekly", "monthly"):
-        _err(where, "agent.upkeep_schedule", f"= {ag['upkeep_schedule']!r}: must be off, daily, weekly or monthly")
     if ag.get("github_token_env") and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ag["github_token_env"]):
         _err(where, "agent.github_token_env", "must be the NAME of an environment variable (never the token itself)")
     if ag.get("github_repo") and not re.fullmatch(r"[\w.-]+/[\w.-]+", ag["github_repo"]):
@@ -441,38 +399,6 @@ def validate(raw, where="ecadlib.toml"):
     return raw
 
 
-def _check_watch(where, w):
-    """[agent.watch]: sources = [{type, ref, ...}], interval (seconds), include / exclude globs."""
-    if not isinstance(w, dict):
-        _err(where, "agent.watch", "must be a table")
-    for k, v in w.items():
-        key = f"agent.watch.{k}"
-        if k not in DEFAULTS["agent"]["watch"]:
-            _err(where, key, f"is not a known key; known in [agent.watch]: {', '.join(DEFAULTS['agent']['watch'])}")
-        if k == "interval" and (not isinstance(v, int) or isinstance(v, bool) or not 60 <= v <= 30 * 86400):
-            _err(where, key, "must be a whole number of seconds from 60 to 2592000")
-        if k in ("include", "exclude") and (not isinstance(v, list) or not all(isinstance(x, str) for x in v)):
-            _err(where, key, "must be a list of glob patterns")
-        if k == "sources":
-            if not isinstance(v, list):
-                _err(where, key, "must be a list of { type = ..., ref = ... } tables")
-            for i, s in enumerate(v):
-                sk = f"{key}[{i}]"
-                if not isinstance(s, dict):
-                    _err(where, sk, "must be a table such as { type = \"bom_file\", ref = \"boms/main.csv\" }")
-                bad = [x for x in s if x not in WATCH_SOURCE_KEYS]
-                if bad:
-                    _err(where, f"{sk}.{bad[0]}", f"is not a known key; known: {', '.join(WATCH_SOURCE_KEYS)}")
-                if s.get("type") not in WATCH_TYPES:
-                    _err(where, f"{sk}.type", f"= {s.get('type')!r}: must be one of {', '.join(WATCH_TYPES)}")
-                if not isinstance(s.get("ref"), str) or not s["ref"].strip():
-                    _err(where, f"{sk}.ref", "must be a path, folder or Altium 365 project name / id")
-                for x in ("name", "workspace", "variant"):
-                    if x in s and not isinstance(s[x], str):
-                        _err(where, f"{sk}.{x}", "must be text")
-                for x in ("include", "exclude"):
-                    if x in s and (not isinstance(s[x], list) or not all(isinstance(g, str) for g in s[x])):
-                        _err(where, f"{sk}.{x}", "must be a list of glob patterns")
 def _check_table(where, sec, k, v, d):
     """A nested table such as [agent.proof]: known keys, each of its default's type."""
     if not isinstance(v, dict):
@@ -887,7 +813,6 @@ HELP = {
                               "moved to after an approved change, e.g. \"Promote to Prototype\"; empty = leave it",
     "change.unlisted": "hold | warn | pass: Altium project check: a component the workspace has a newer revision of, "
                        "whose changes the library's ledger cannot list (hold = the check fails)",
-    "sim": "Parasitics for the built-in passive simulation models (sim-models), e.g. capacitor_esr = \"10m\"",
     "datasheet": "Claude datasheet reader (ecadlib datasheet / librarian): model, effort, which environment variable holds the "
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",
     "datasheet.api_key_env": "name of the environment variable with the API key; the key itself never goes in this file",
@@ -907,7 +832,7 @@ HELP = {
     "datasheet.cross_check_model": "model for the second read (\"\" = the model whose answer is checked; endpoint:model works)",
     "ai.temperature": "auto: temperature 0 (+ seed) where the model takes one; Claude 4.7+/5.x reject it and get nothing | "
                       "off | a number 0-2",
-    "agent.proof": "Claude visual proof (ecadlib visual-check): model, effort, api_key_env (empty = [datasheet]), max_cost_usd per "
+    "agent.proof": "Claude visual check (ecadlib visual-check): model, effort, api_key_env (empty = [datasheet]), max_cost_usd per "
                    "check (0 = no cap), fail_on (mismatch severities that fail a part), max_pages, dpi of the datasheet pages",
     "ai": "Bring your own model (ecadlib.llm): provider = anthropic (default) | openai-compatible | openai | openrouter | "
           "gemini | ollama | lmstudio | vllm | llamacpp; model; base_url; api_key_env (the NAME of the variable, never the "
@@ -922,39 +847,22 @@ HELP = {
     "symbols.resistor": "us: zigzag resistor symbol (ANSI, default) | iec: box resistor symbol (IEC 60617)",
     "symbols.split_pins": "more pins than this: a multi-part symbol (power part + signal parts); 0 = one part always",
     "symbols.stack_power": "stack (one pin shown, the rest on top of it) | hide (the rest hidden, tied by name) | none",
-    "agent.watch": "sources = [{ type = bom_file|folder|altium_project|a365_project, ref = path or project, name, workspace, "
-                   "variant, include, exclude }], interval = seconds between scans, include / exclude = globs for folders",
-    "agent": "Library agent (`ecadlib agent run|serve`): watches projects/BOMs, builds and proves new parts, one GitHub PR per "
-             "batch for review, pushes approved parts to Altium 365, turns upkeep findings into work. Off unless enabled",
-    "agent.interval_minutes": "minutes between runs of `ecadlib agent serve`",
-    "agent.manufacturer_aliases": "alias = canonical manufacturer names the agent treats as one maker in part keys "
-                                  "(added to the built-in table: ST = STMicroelectronics, TI, ADI, WE, ...)",
-    "agent.library_repo": "git repo the batch PRs are made in (\"\" = the workspace when it is a git repo; none: PR text in agent/batches/)",
+    "agent": "GitHub / GitLab settings for `ecadlib upkeep --github | --gitlab` (the library agent that also used them is "
+             "parked on a branch); [agent.proof] is the visual check's model",
     "agent.github_token_env": "name of the environment variable with the GitHub token; the token itself never goes in this file",
-    "agent.auto_push": "push approved parts to Altium 365 on each run (false: `ecadlib agent push`)",
-    "agent.upkeep_schedule": "off | daily | weekly | monthly: how often upkeep findings are turned into queue items",
-    "agent.batch_size": "most parts in one review batch (one pull request each)",
     "agent.git_host": "auto (GitLab when origin is on a gitlab* host or the gitlab_api host, else GitHub) | github | gitlab",
     "agent.gitlab_api": "GitLab REST v4 base URL; self-hosted: https://gitlab.example.com/api/v4",
     "agent.gitlab_project": "group/name or numeric id (\"\" = from the origin remote)",
     "agent.gitlab_token_env": "name of the environment variable with the GitLab token (api scope); never the token itself",
-    "notify": "Webhooks when the agent or upkeep has news: [[notify.targets]] name, type = slack|teams|json, url_env = NAME "
-              "of the env var holding the URL, events = batch_ready|part_held|upkeep_changes|lifecycle (default all), "
-              "token_env (json only); retries with backoff, never stops the agent",
+    "notify": "Webhooks when upkeep has news: [[notify.targets]] name, type = slack|teams|json, url_env = NAME "
+              "of the env var holding the URL, events = upkeep_changes|lifecycle (default all), "
+              "token_env (json only); retries with backoff, never stops the run",
     "providers": "Part sources for triage / librarian / UI, in order, including plugins (ecadlib.providers entry points); "
                  "[] = each command's built-in default (the official Nexar / DigiKey / Mouser APIs first, then EasyEDA); "
                  "unofficial = false keeps out the undocumented EasyEDA and JLCPCB search endpoints; "
                  "`ecadlib plugins list` shows what is installed",
-    "assembly": "Assembly-ready parts (docs/assembly.md): profile = the assembler (jlcpcb, or a path to your own profile "
-                ".json); check = the librarian checks parts that have an LCSC number against the assembler's footprint "
-                "and writes Assembly Rotation / Offset / Check / Evidence; strict = risky pads and unknown rotations "
-                "hold the part (incompatible pads always do)",
     "setup": "Written by `ecadlib init`: the tool you use, your library folders (the default --lib) and the workspace "
              "(the default --workspace); relative paths start at this file's folder",
-    "hub": "The Library page (ecadlib hub): libraries = extra library folders or files to show next to --lib (.SchLib, "
-           ".PcbLib, .DbLib, .kicad_sym, .pretty, .kicad_dbl, Altium 365 lists), projects = Altium project folders for "
-           "where-used, stale_days = how much older a differing copy must be to count as behind; relative paths start "
-           "at this file's folder",
     "setup.tool": "altium | kicad | both: which outputs `ecadlib init` and `ecadlib demo` point you at",
     "symbols.order": "group order on each side; groups: power analog power_out ground ep reset clock debug usb adc other_in other uart i2c spi can eth ports other_out nc",
 }

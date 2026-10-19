@@ -556,7 +556,7 @@ def main(argv=None):
                     print(f"         suggest: --map {' --map '.join(f'{x}={y}' for x, y in c['pin_map'].items())}")
         return 0
     from .approvals import cli_plan_lock
-    with cli_plan_lock(a.plan):                # the library agent's librarian may be rewriting this plan right now
+    with cli_plan_lock(a.plan):                # the web UI may be recording into this plan right now
         r = choose(a.plan, a.part, a.kind, a.id, src=src(), pin_map=_pin_map(a.map))
     # change control: the choice of a released part may be held (refused by the release check, or waiting for a
     # second person); the released version then stays, so the part is not "now ready" with the choice

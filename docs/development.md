@@ -31,16 +31,14 @@ ecad-librarian/
 │   ├── ui/                   # local web UI (python -m ecadlib.ui), one static page, stdlib server
 │   ├── mcp_server.py         # MCP server over stdio (python -m ecadlib.mcp_server)
 │   ├── altium365.py          # Altium 365 workspace: release plan + push via the Nexar Design API
-│   ├── a365_sync.py          # two-way Altium 365 sync: pull workspace components into the plan, status, reconcile
 │   ├── altium_dblib_sync.py  # Altium without 365: the same plan -> .DbLib / .SVNDbLib library folder
 │   ├── altium_lib.py         # pure-Python .PcbLib/.SchLib writer (+ minimal reader, `dump`)
 │   ├── kicad_export.py       # librarian plan -> .kicad_sym + .pretty + .3dshapes + lib tables
 │   ├── cfb.py                # Compound File Binary (OLE2) v3 writer used by altium_lib
 │   ├── assets/pcblib_template.json.gz   # Library header + FileVersionInfo from an Altium-saved file (see NOTICE)
 │   ├── httpcache.py          # disk cache + per-host rate limit around requests
-│   ├── sourcing.py           # price/stock per BOM line, cost rollup, second sources and drop-in passives
-│   ├── upkeep.py             # weekly lifecycle/upstream/price/A365 checks, only new changes, one GitHub issue or PR
-│   ├── sim_models.py         # SPICE / IBIS models: find, parse, pin-map check, attach (SchLib SIM link, KiCad Sim.*)
+│   ├── part_lookup.py        # part identification through Nexar, DigiKey and Mouser (+ JLCPCB search)
+│   ├── upkeep.py             # weekly lifecycle/upstream/A365/change checks, only new changes, one GitHub issue or PR
 │   └── sexpr.py              # tiny KiCad S-expression reader (+ quote-keeping writer)
 ├── examples/
 │   ├── sample_bom.csv        # 14 lines, LCSC numbers checked against lcsc.com (see below)
@@ -66,7 +64,7 @@ python3 -m tests.test_fuzz [SCALE]          # deterministic fuzzers (fixed seeds
 python3 -m tests.test_cli_smoke [--subprocess]   # every command: -h and a minimal offline run
 ```
 
-* **BOMs:** Altium ActiveBOM CSV/XLSX (title rows, `Manufacturer Part Number 1/2`, totals), KiCad 8 (`${QUANTITY}`, `${DNP}`), JLCPCB, DigiKey and Mouser cart exports, Octopart, semicolon CSV with decimal commas in latin-1, UTF-8 with BOM, UTF-16 (Excel "Unicode Text"), hand-made Excel with merged title rows, a cover sheet, blank lines, DNP marks and `R1-R10` ranges. They were run through triage, librarian, resolve, release-check, kicad-export, dblib, dblib-sync, dedupe, sourcing, upkeep, agent-watch, `agent run --dry-run`, the web UI upload and the MCP tools.
+* **BOMs:** Altium ActiveBOM CSV/XLSX (title rows, `Manufacturer Part Number 1/2`, totals), KiCad 8 (`${QUANTITY}`, `${DNP}`), JLCPCB, DigiKey and Mouser cart exports, Octopart, semicolon CSV with decimal commas in latin-1, UTF-8 with BOM, UTF-16 (Excel "Unicode Text"), hand-made Excel with merged title rows, a cover sheet, blank lines, DNP marks and `R1-R10` ranges. They were run through triage, librarian, resolve, release-check, kicad-export, dblib, dblib-sync, dedupe, upkeep, the web UI upload and the MCP tools.
 * **Spreadsheet safety:** report CSVs go through `ecadlib/sheetsafe.py`. A cell that a spreadsheet would run as a formula (`= + - @`, tab, CR) gets a leading apostrophe, and `read_bom` removes it again. Numbers (`-5`, `+3.3`) are not changed. The DbLib's `.xlsx` stores every cell as text and its `.csv` keeps bare `=Name` references, so Altium's `=Value` Comment still works.
 * **Fuzzers:** the BOM reader, `sexpr.parse`, the KiCad footprint/symbol importer, the Altium OLE readers (`.SchDoc`, `.PcbLib`), package-spec validation and build, `ecadlib.toml` loading, the web UI's JSON endpoints and the MCP tools. Each target may raise only its documented error type (listed in the file's docstring); anything else fails with the input that caused it.
 * **CLI smoke:** every registered command answers `-h`. A minimal real invocation of each one (offline, in a temporary folder with `$HOME` redirected) must exit with an expected code, print no traceback and change nothing outside its output folder. `--subprocess` runs the installed `ecadlib` script instead, for the fresh-install check: `pip wheel --no-deps .`, install the wheel into a clean venv (Python 3.11 and 3.13), and run `python -m tests.test_cli_smoke --subprocess` from outside the checkout. `test_third_party_imports_are_declared` fails when a module imports a package that is not in `[project] dependencies` (only `pillow` and `pypdf` are optional extras).
@@ -102,10 +100,6 @@ Each output is then loaded by its tool:
   back with pyaltiumlib and ecadlib's reader with the same names; every Library Ref / Footprint Ref in the DbLib table and
   the parts table is in the file it names; the Altium 365 release (fake Nexar) names files uploaded in the same run, byte
   for byte our libraries, with the part's parameters.
-* **Agent:** `ecadlib agent run` in a library git repo whose origin is a local bare repo: two new BOM parts are built,
-  proved (fake Claude), committed on `ecadlib/agent-<batch>` and pushed (the user's checkout does not move), one PR is
-  opened on a local HTTPS fake GitHub; `queue list`, `agent approve` and `agent push` release them to the fake Nexar; a
-  second run finds nothing new.
 * **MCP:** `ecadlib mcp` over stdio: initialize, tools/list, then `workspace_info`, `librarian_run`, `held_parts` and a
   call with a missing BOM (a clear error, no traceback).
 * **Again, and after a crash:** the whole path runs a second and a third time on the same folder. The second run changes
@@ -271,5 +265,5 @@ The HTTP cache (`out/http_cache/`) and `__pycache__` were deleted after the runs
 * Verify the CH340C and TPS62133RGTR pinouts against their datasheets (both match KiCad's official symbols by pin number).
 * Run the datasheet reader with a real API key on a known part (TPS62133RGTR) and compare with the hand-written spec.
 * Pick symbols for TYPE-C-31-M-12 and X322512MSB4SI and a footprint for FTSH-105, then rerun the librarian.
-* Run the lifecycle watcher and `sourcing` with real Nexar/DigiKey/Mouser credentials and confirm the response shapes (prices, spec attribute names, DigiKey substitutions).
+* Run the lifecycle watcher and part lookup with real Nexar/DigiKey/Mouser credentials and confirm the response shapes (lifecycle fields, spec attribute names).
 * Add an `easyeda2kicad` conversion step for the `available_easyeda` bucket.

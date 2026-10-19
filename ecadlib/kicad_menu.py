@@ -4,7 +4,6 @@ review queue), the same flow as the ecadlib menu in Altium (altium_menu), with a
     ecadlib kicad-menu run-job JOB --action add-part --project BOARD.kicad_pcb --mpn LM358DR [--manufacturer TI]
     ecadlib kicad-menu run-job JOB --action check-bom|fill --project BOARD.kicad_pcb|SCHEMATIC.kicad_sch
     ecadlib kicad-menu run-job JOB --action queue|open --project BOARD.kicad_pcb [--path REPORT]
-    ecadlib kicad-menu run-job JOB --action assembly --project BOARD.kicad_pcb   JLCPCB BOM + CPL, pads, rotations
     ecadlib kicad-menu check-bom "%I"      # the schematic editor's Tools > Generate BOM hook (a netlist or .kicad_sch)
 
 The plugin (ecadlib/assets/kicad_action_plugin.py) runs in KiCad's own Python, starts `run-job` in the background and
@@ -21,7 +20,7 @@ from pathlib import Path
 from . import altium_menu as AM
 
 WORK, LIB = "ecadlib-work", "ecadlib"
-ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read", "assembly")
+ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read")
 
 
 def project_dir(project):
@@ -103,30 +102,6 @@ def fill(cfg, project, progress=None):
     return res
 
 
-def board_of(project):
-    """The .kicad_pcb of a project: itself, <stem>.kicad_pcb next to a .kicad_pro / .kicad_sch, or the only board."""
-    p = Path(project)
-    if p.suffix.lower() == ".kicad_pcb" and p.is_file():
-        return p
-    if p.with_suffix(".kicad_pcb").is_file():
-        return p.with_suffix(".kicad_pcb")
-    boards = sorted(project_dir(p).glob("*.kicad_pcb"))
-    if len(boards) == 1:
-        return boards[0]
-    raise ValueError(f"no board for {p.name}: save the board (.kicad_pcb) next to the project")
-
-
-def assembly(cfg, project, opener=None):
-    """The Assembly check: the board's parts against JLCPCB's footprints, the BOM + CPL in
-    ecadlib-work/assembly/<board>/ and the report (ecadlib.assembly_io.menu_check)."""
-    from . import assembly_io as IO
-    from .httpcache import CachedHTTP
-    board = board_of(project)
-    ws = Path(cfg["workspace"])
-    return IO.menu_check(board, ws / "assembly" / board.stem, None, CachedHTTP(ws / "http_cache", offline=cfg.get("offline")),
-                         opener=opener)
-
-
 def run_action(cfg, action, project, mpn="", manufacturer="", path="", opener=None, progress=None, ai=None):
     if action == "ai-read":                    # only after the window showed the cost and the person said yes
         return AM.ai_read(cfg, dict(ai or {}, mpn=mpn), progress=progress)
@@ -140,8 +115,6 @@ def run_action(cfg, action, project, mpn="", manufacturer="", path="", opener=No
         return AM.open_queue(cfg, opener=opener)
     if action == "open":
         return AM.open_file(cfg, path, opener=opener)
-    if action == "assembly":
-        return assembly(cfg, project, opener=opener)
     raise ValueError(f"unknown action {action!r} (one of {', '.join(ACTIONS)})")
 
 
@@ -152,7 +125,7 @@ def run_job(job, action, project, mpn="", manufacturer="", path="", opener=None,
     try:
         cfg = config(project, offline=offline)
         res = run_action(cfg, action, project, mpn, manufacturer, path,
-                         opener=False if action in ("check-bom", "assembly") else opener, progress=AM.Progress(job), ai=ai)
+                         opener=False if action == "check-bom" else opener, progress=AM.Progress(job), ai=ai)
     except Exception as e:                                   # every failure becomes one dialog line with a fix
         res = AM._error(e)
     AM.write_result(job / "result.ini", res)

@@ -1,4 +1,4 @@
-"""Notifications: tell people when the library agent or upkeep has something for them (Slack, Microsoft Teams, any
+"""Notifications: tell people when upkeep has something for them (Slack, Microsoft Teams, any
 JSON webhook). Off unless [notify] has targets.
 
     [notify]
@@ -10,7 +10,7 @@ JSON webhook). Off unless [notify] has targets.
     name = "library-channel"
     type = "slack"                       # slack (incoming webhook) | teams (Teams workflow webhook) | json (generic POST)
     url_env = "SLACK_WEBHOOK_URL"        # NAME of the environment variable holding the webhook URL
-    events = ["batch_ready", "part_held"]   # default (or "*"): every event
+    events = ["upkeep_changes"]          # default (or "*"): every event
 
     [[notify.targets]]
     name = "erp"
@@ -23,22 +23,22 @@ Webhook URLs carry their own secret (Slack, Teams), so the file names environmen
 written into the file is refused by `ecadlib rules check`. Error messages name the target and host, never the URL.
 
 Events:
-    batch_ready      library agent: a review batch was published (pull / merge request opened or updated, or its folder)
-    part_held        library agent: parts it could not build or that failed their proof (queue status failed)
-    upkeep_changes   upkeep (`ecadlib upkeep`, or the agent's MAINTAIN step): new changes since the last run
+    upkeep_changes   upkeep (`ecadlib upkeep`): new changes since the last run
     lifecycle        a part went EOL / obsolete, NRND or last time buy
+    (batch_ready and part_held came from the library agent, now parked on a branch: still accepted, never sent)
 
-Sending never raises and never stops the agent: a target whose variable is unset is skipped, a failed post is retried
+Sending never raises and never stops upkeep: a target whose variable is unset is skipped, a failed post is retried
 with backoff inside a fixed time budget (max_seconds; once it is used up, the remaining posts are skipped), and every
-outcome is returned (the agent puts them in its report as rep["notify"]). Tests pass sender=fake and sleep=fake.
+outcome is returned (upkeep puts them in its report as rep["notify"]). Tests pass sender=fake and sleep=fake.
 
-    ecadlib notify test [--event batch_ready] [--target NAME]   send a test message to the configured targets
+    ecadlib notify test [--event upkeep_changes] [--target NAME]   send a test message to the configured targets
     ecadlib notify show                                         targets, events and whether their variables are set"""
 import argparse, json, re, sys, time
 from urllib.parse import urlsplit
 from . import userconfig as UC
 
-EVENTS = ("batch_ready", "part_held", "upkeep_changes", "lifecycle")
+EVENTS = ("upkeep_changes", "lifecycle")
+PARKED_EVENTS = ("batch_ready", "part_held")   # the library agent's, parked 2026-10-19: old rules still load
 TYPES = ("slack", "teams", "json")
 LIFECYCLE_KINDS = {"eol", "obsolete", "nrnd", "last time buy", "ltb"}
 TARGET_KEYS = ("name", "type", "url_env", "token_env", "events")
@@ -72,7 +72,7 @@ def check_targets(where, v, err):
             err(where, f"{k}.token_env", "is only used by type = \"json\" (Slack and Teams URLs carry their own secret)")
         ev = t.get("events", ["*"])
         ev = [ev] if isinstance(ev, str) else ev
-        if not isinstance(ev, list) or any(x != "*" and x not in EVENTS for x in ev):
+        if not isinstance(ev, list) or any(x != "*" and x not in EVENTS + PARKED_EVENTS for x in ev):
             err(where, f"{k}.events", f"= {t.get('events')!r}: events are {', '.join(EVENTS)} (or \"*\")")
         name = t.get("name", f"{t.get('type')}{i + 1}")
         if not isinstance(name, str) or name in names:
@@ -122,45 +122,6 @@ def upkeep_events(rep):
     if life:
         evs.append(event("lifecycle", f"Lifecycle: {len(life)} part(s) EOL / NRND / last time buy", "",
                          [_change_line(c) for c in life], "", {"parts": life[:200]}))
-    return evs
-
-
-def _plain(reason):
-    from . import messages as M
-    return M.explain(reason)["text"] if reason else ""
-
-
-def agent_events(rep, lookup=None):
-    """batch_ready / part_held / upkeep_changes / lifecycle events for an agent.run_once report.
-    lookup(item id) -> the queue item (for the part number of a failed item)."""
-    evs = []
-    for b in rep.get("batches") or []:
-        n = len(b.get("items") or [])
-        where = b.get("pr_url") or ""
-        evs.append(event("batch_ready", f"Library agent: batch {b.get('id')} has {n} part(s) to review",
-                         f"Next: compare the pictures with the datasheets, then approve or reject each part "
-                         f"(pull request {b.get('pr_action') or 'ready'})." if where else
-                         f"Next: review the parts in the review queue or in {b.get('folder')} "
-                         f"(no pull request: {b.get('fallback') or 'not published'}).",
-                         [], where, {"batch": b.get("id"), "items": b.get("items") or [], "pr_url": b.get("pr_url"),
-                                     "folder": b.get("folder")}))
-    failed = rep.get("failed") or []
-    if failed:
-        def part(f):
-            it = (lookup(f["id"]) if lookup else None) or {}
-            return it.get("mpn") or it.get("key") or f["id"]
-        evs.append(event("part_held", f"Library agent: {len(failed)} part(s) held",
-                         "They could not be built or failed the independent check. Next: open them in the review queue.",
-                         [f"{part(f)}: {_plain(f.get('reason', ''))}"[:300] for f in failed], "",
-                         {"items": [{"id": f["id"], "part": part(f), "reason": f.get("reason")} for f in failed]}))
-    found = (rep.get("upkeep") or {}).get("items") or []
-    if found:
-        evs.append(event("upkeep_changes", f"Library agent upkeep: {len(found)} new finding(s)", "Next: they are in the review queue.",
-                         [f"[{c.get('check')}] {_change_line(c)}" for c in found], "", {"count": len(found), "changes": found[:200]}))
-        life = [c for c in found if _is_lifecycle(c)]
-        if life:
-            evs.append(event("lifecycle", f"Lifecycle: {len(life)} part(s) EOL / NRND / last time buy", "",
-                             [_change_line(c) for c in life], "", {"parts": life[:200]}))
     return evs
 
 
@@ -263,7 +224,7 @@ def send(rules, events, env=None, sender=None, sleep=time.sleep, log=None, clock
             except Exception as e:
                 rec["result"] = f"error: payload: {type(e).__name__}: {e}"
                 continue
-            if clock() - start > max_seconds:           # slow or hanging hooks: the agent waits no longer
+            if clock() - start > max_seconds:           # slow or hanging hooks: upkeep waits no longer
                 rec["result"] = f"skipped: the {max_seconds:g} s notify time budget is used up"
                 log(f"notify: {t['name']}: {rec['result']}")
                 continue
@@ -297,7 +258,7 @@ def main(argv=None):
         p = sub.add_parser(name, help=h)
         p.add_argument("--rules", help="ecadlib.toml (default: found from here)")
         if name == "test":
-            p.add_argument("--event", choices=EVENTS, default="batch_ready")
+            p.add_argument("--event", choices=EVENTS, default="upkeep_changes")
             p.add_argument("--target", help="only this target (name)")
     a = ap.parse_args(argv)
     import os

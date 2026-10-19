@@ -40,7 +40,6 @@ CASES = [
     (["keys", "list"], (0,)),
     (["init", "--from", "{in}/lib", "-o", "{out}/ecadlib.toml", "--yes"], (0,)),
     (["demo", "-o", "{out}/demo"], (0,)),
-    (["team", "--workspace", "{out}/teamws", "list"], (0,)),
     (["triage", "{in}/bom.csv", "--lib", "{in}/lib", "-o", "{out}/triage", "--offline", "--cache", "{out}/cache"], (0,)),
     (["footprint", "gen", "{pkg}/package_specs/R_0603_1608Metric.json", "-o", "{out}/fp.pretty"], (0,)),
     (["check", "{out}/fp.pretty/R_0603_1608Metric.kicad_mod"], (0, 1)),
@@ -67,28 +66,20 @@ CASES = [
     (["review", "--workspace", "{out}/ws", "--yes", "--offline"], (0, 2)),
     (["approve", "{out}/lib/plan.json", "status"], (0,)),
     (["dedupe", "{out}/lib/plan.json", "-o", "{out}/dedupe"], (0,)),
-    (["hub", "--workspace", "{out}/ws", "--lib", "{in}/lib", "--json"], (0,)),
     (["datasheet", "estimate", "{out}/lib/plan.json"], (0, 1, 2)),
-    (["sourcing", "{in}/bom.csv", "--offline", "--cache", "{out}/cache", "-o", "{out}/src"], (0, 1, 3)),
-    (["assembly", "export", "{tests}/fixtures/assembly/boards/two_sided.kicad_pcb", "-o", "{out}/asm", "--offline", "--cache",
-      "{out}/cache"], (0, 1)),
     (["step-gen", "{pkg}/package_specs/SOIC-8_3.9x4.9mm_P1.27mm.json", "-o", "{out}/soic.step"], (0,)),
     (["step-gen", "--check", "{out}/soic.step"], (0,)),
     (["upkeep", "{in}/bom.csv", "--offline", "--cache", "{out}/cache", "-o", "{out}/upk", "--state", "{out}/upkstate",
-      "--checks", "sourcing"], (0, 1)),
+      "--checks", "lifecycle,sourcing"], (0, 1)),   # sourcing was cut: skipped, not an error
     (["upstream", "check-kicad", "{out}/missing_manifest.json", "--offline", "--cache", "{out}/cache",
       "-o", "{out}/upstream"], (0, 1, 2)),
-    (["sim-models", "{out}/lib/plan.json", "--no-net", "--offline", "--cache", "{out}/cache"], (0, 1)),
     (["symbol", "{in}/pins.csv", "-o", "{out}/big.SchLib", "--preview", "{out}/big.svg"], (0,)),
-    (["agent-watch", "--workspace", "{out}/ws", "--source", "bom_file:{in}/bom.csv", "--dry-run"], (0,)),
-    (["agent", "--workspace", "{out}/ws", "status"], (0, 1)),
-    (["queue", "--workspace", "{out}/ws", "list"], (0,)),
     (["where-used", "--projects", "{in}", "-o", "{out}/where"], (0, 1)),
     (["part", "status", "{out}/lib/plan.json"], (0, 1)),
     (["visual-check", "{out}/fp.pretty/R_0603_1608Metric.kicad_mod", "--render-only", "-o", "{out}/vc",
       "--workspace", "{out}/ws"], (0, 1, 2)),
     (["doctor", "--workspace", "{out}/ws", "--lib", "{in}/lib"], (0, 1)),
-    (["status", "--workspace", "{out}/ws"], (0,)),
+    (["status", "--workspace", "{out}/demo"], (0,)),
     (["completion", "bash"], (0,)),
     (["ai", "show"], (0,)),
     (["ai", "rails"], (0,)),
@@ -110,7 +101,7 @@ CASES = [
     (["parity", "{out}/lib/plan.json", "-o", "{out}/parity"], (0, 1)),
     (["parity", "{out}/lib/plan.json", "--kicad", "{out}/kicad", "--name", "ecadlib", "-o", "{out}/parity_k"], (0, 1)),
 ]
-HELP_ONLY = {"ui", "mcp", "a365", "project", "setup", "start", "sources-check"}   # need a server / network / an Altium project: -h (and mcp below)
+HELP_ONLY = {"ui", "mcp", "project", "setup", "start", "sources-check"}   # need a server / network / an Altium project: -h (and mcp below)
 
 
 def _snapshot(root, skip):

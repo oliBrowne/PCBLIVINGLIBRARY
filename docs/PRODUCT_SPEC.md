@@ -1,6 +1,6 @@
 # ecadlib product spec
 
-Last updated 2026-10-17, for v0.3.1. The plan for what comes next is in [ROADMAP.md](../ROADMAP.md).
+Last updated 2026-10-19, for v0.3.1. The plan for what comes next is in [ROADMAP.md](../ROADMAP.md).
 
 ## Problem
 
@@ -14,7 +14,7 @@ own library, and nobody keeps them current once they are in.
 
 | Who | Main jobs |
 |---|---|
-| Hardware engineers in small and mid-size teams on Altium 365, with no dedicated librarian (primary) | Turn a project BOM into released, placeable parts without leaving Altium. Trust that pins and pads are right. Keep parts current (lifecycle, stock). |
+| Hardware engineers in small and mid-size teams on Altium 365, with no dedicated librarian (primary) | Turn a project BOM into released, placeable parts without leaving Altium. Trust that pins and pads are right. Keep parts current (lifecycle). |
 | Design consultancies with a library per client | Build parts that match each client's house style, quickly, and prove they were checked. |
 | Small teams sharing one library | Review and approve parts before release, see who changed what, and keep Altium and KiCad versions in step. |
 | Students, makers and KiCad / JLC users (secondary) | Get correct KiCad parts for a BOM for free, including LCSC parts, with a check that they are right. |
@@ -36,6 +36,8 @@ own library, and nobody keeps them current once they are in.
 - Circuit design, part selection advice or schematic generation.
 - Replacing a PLM system or a large company's library process.
 - Fusion Electronics / EAGLE and EasyEDA Pro exports (removed on 2026-10-18; the last version with them is 0.3.1).
+- Assembly output for a fab house, SPICE / IBIS models, pricing and stock, a library hub across tools, and a team
+  server with sign-in (cut on 2026-10-19, below).
 - Scraping sources whose terms forbid it (for example SnapMagic), or spoofing a browser to reach an endpoint.
 
 ## Requirements
@@ -47,13 +49,13 @@ Status: **shipped** is in v0.3.0; **planned** names the roadmap item in [ROADMAP
 | Requirement | Feature | Status |
 |---|---|---|
 | Read BOMs from CSV / Excel, Altium projects and ActiveBOM, KiCad schematics and netlists | `bom_triage`, `bom_inputs`, `altium_project` | shipped |
-| Use the user's existing library first and build only what is missing | `librarian`, `dedupe`, `hub` | shipped |
+| Use the user's existing library first and build only what is missing | `librarian`, `dedupe` | shipped |
 | Get parts from official sources first (KiCad library, Nexar, DigiKey, Mouser), unofficial ones last and optional | `providers`, `kicad_import` (PR #35) | shipped |
 | Build footprints to IPC-7351B and the footprint rule book | `footprint_gen`, `footprint_adv`, `footprint_rules` | shipped |
 | Read a datasheet only when nothing else covers the part, and cross-check every read | `datasheet`, `ds_route`, `crosscheck` | shipped |
 | Hold any part that fails a check, and require sign-off before release | `release_check`, `approvals`, `resolve` | shipped |
 | Write Altium `.SchLib` / `.PcbLib` that Altium opens unchanged | `altium_lib`, `altium_native` (8/8 libraries, 0 diffs on AD26) | shipped; multi-part symbols, De Morgan display modes, keep-outs and bottom-side pads checked in AD26 |
-| Release parts into Altium 365 with their parameters, never the held ones | `altium365`, `a365_sync` | shipped (dry-run tested); real-workspace run planned (P10) |
+| Release parts into Altium 365 with their parameters, never the held ones | `altium365` | shipped (dry-run tested); real-workspace run planned (P10) |
 | Work from inside Altium and KiCad | `altium_menu`, `altium_forms`, KiCad window (PR #30) | shipped; *Build libraries* in the menu planned (P1) |
 | Measured accuracy that can't silently drop | `ecadlib eval`, `eval gate` in CI | shipped (synthetic replay); live benchmark planned (P5) |
 
@@ -66,17 +68,39 @@ Status: **shipped** is in v0.3.0; **planned** names the roadmap item in [ROADMAP
 | One symbol rule for every IC (inputs left, outputs right, power top, ground bottom) | `symbol_layout` | shipped |
 | Show what a run will cost before it runs | `datasheet estimate`, `max_cost_usd`, docs/costs.md | shipped on the CLI; in Altium / KiCad / web UI planned (P12) |
 | Any model provider, with guide rails for small models | `ecadlib/llm/` | shipped |
-| Watch lifecycle, upstream KiCad changes and Altium 365 drift | `lifecycle`, `upstream`, `upkeep`, library agent | shipped |
+| Watch lifecycle, upstream KiCad changes and Altium 365 drift | `lifecycle`, `upstream`, `upkeep` | shipped |
 | Install on Windows without Python | Windows installer, setup page | shipped unsigned; signing planned (P11) |
 
 ### Could
 
 | Requirement | Feature | Status |
 |---|---|---|
-| Team server with roles and sign-in | `ecadlib ui --team`, Docker | shipped |
-| Library agent that opens review PRs | `agent` | shipped |
-| SPICE / IBIS models | `sim_models` | shipped |
+| KiCad PCM package | `kicad_pcm` | shipped; frozen 2026-10-19 (no new work) |
+| Library agent that opens review PRs | `agent` | parked 2026-10-19 |
+| Two-way Altium 365 sync (`a365 pull`, `status`, `reconcile`) | `a365_sync` | parked 2026-10-19 |
+| Team server with roles and sign-in | (removed) | cut 2026-10-19 |
+| SPICE / IBIS models | (removed) | cut 2026-10-19 |
+| JLCPCB assembly output and check | (removed) | cut 2026-10-19 ([#104](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/104) out of scope) |
+| Pricing, stock and alternates | (removed) | cut 2026-10-19 |
+| Library hub across tools | (removed) | cut 2026-10-19 |
 | Fusion Electronics / EAGLE and EasyEDA Pro exports | (removed) | removed 2026-10-18 (P13); last in 0.3.1 |
+
+### Cut on 2026-10-19
+
+Deleted from `main`; the last version with them is on the branch `archive/before-trim`.
+
+- **JLCPCB assembly:** the fab hand-off is a different product.
+- **SPICE / IBIS models:** a wrong SPICE model fails silently, and checking them is a project of its own.
+- **Pricing, stock and alternates:** Octopart and DigiKey do it better. Finding the part through Nexar, DigiKey and
+  Mouser stays.
+- **Library hub:** sharing across tools needs a community, and a stranger's footprint is what the review hold exists
+  to stop.
+- **Team server:** a login system with no users is pure liability. Trials run as one local user.
+
+### Parked
+
+The library agent (with its review queue) and two-way Altium 365 sync are kept on the branch
+`parked/agent-and-a365-pull`. Pushing to Altium 365 stays. KiCad PCM packaging stays in the code but is frozen.
 
 ## Success metrics
 
@@ -100,5 +124,5 @@ Each risk has its own issue, labelled `risk`. The owner of all of them is the ma
 | R3 | Licensing of third-party part data (KiCad CC-BY-SA, EasyEDA credit) | NOTICE files (KiCad exports and librarian output), KiCad exports kept out of git, EasyEDA and KiCad credit on every converted part (Altium `Library Credit`), CC-BY-SA label only on KiCad content, no SnapMagic; own code MIT. Rechecked 2026-10-18: Nexar/DigiKey/Mouser give part facts and datasheet links only. | Handled | [#54](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/54) |
 | R4 | Model API cost surprises users | Most parts use no model; page routing and model ladder; cost estimate and `max_cost_usd`; docs/costs.md. The estimate is shown before every AI step on the command line, in the Altium dialog, the KiCad window and the web UI, and the key is never put in the global environment ([#49](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/49), docs/api-keys.md). The Altium and KiCad dialogs are not yet tried in the real tools. | Mitigated | [#55](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/55) |
 | R5 | External part APIs change or block us | Official APIs first; unofficial ones last and switchable off; own User-Agent; weekly `sources-canary`. | Watched weekly | [#56](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/56) |
-| R6 | Scope too wide for one maintainer | Altium + KiCad supported, other exports removed; v0.4.0 only proves the core flow. | Mitigating | [#57](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/57) |
+| R6 | Scope too wide for one maintainer | Altium + KiCad supported, other exports removed; five features cut and three parked on 2026-10-19; v0.4.0 only proves the core flow. | Mitigating | [#57](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/57) |
 | R7 | No outside users yet; competitors cover single-part generation | Lead with the BOM-level librarian workflow; real-BOM trials and a published benchmark. | Open | [#58](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/58) |

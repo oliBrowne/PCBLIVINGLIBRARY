@@ -208,21 +208,6 @@ CODES = {
                            [r"^(?:verify: )?sim model (?P<model>\S+): pin map (?:not verified|to verify) \((?P<method>.+)\)"]),
     "verify.other": ("A person has to check this part first: {detail}.", "Check it, then approve it or release anyway.",
                      [r"^verify: (?P<detail>.+)"]),
-    # assembly-ready parts (rule `assembly`, ecadlib.assembly, docs/assembly.md)
-    "assembly.incompatible": ("The pads do not match the assembler's footprint {theirs} ({lcsc}): {detail}.",
-                              "Look at the overlay[ ({overlay})]: use the assembler's footprint, choose an LCSC part whose "
-                              "footprint matches, or fix the pads; then fill the library again.",
-                              [r"^assembly: pads incompatible with (?P<theirs>.+?) \((?P<lcsc>C\d+)\): (?P<detail>.+?)(?: \[overlay (?P<overlay>[^\]]+)\])?$"]),
-    "assembly.risky": ("The pads differ from the assembler's footprint {theirs} ({lcsc}) enough to risk the assembly: {detail}.",
-                       "Look at the overlay[ ({overlay})]: match the pads to the assembler's footprint, or release anyway "
-                       "if the difference is deliberate.",
-                       [r"^assembly: pads risky against (?P<theirs>.+?) \((?P<lcsc>C\d+)\): (?P<detail>.+?)(?: \[overlay (?P<overlay>[^\]]+)\])?$"]),
-    "assembly.rotation_unknown": ("The assembly rotation is not known[ ({why})].",
-                                  "Check the part in the assembler's placement preview and add a profile override, "
-                                  "or release anyway.",
-                                  [r"^assembly: rotation unknown(?: \((?P<why>.+)\))?"]),
-    "assembly.review": ("Assembly ({lcsc}): {detail}.", "Check the part in the assembler's placement preview before ordering.",
-                        [r"^assembly \((?P<lcsc>C\d+)\): (?P<detail>.+)"]),
     # cross-check of a datasheet read (crosscheck)
     "crosscheck.disagree": ("{who} disagree on {field} ({first} vs {second}); nothing was written to the library.",
                             "Check the datasheet[ (page {page})] and pick one, or release anyway.",
@@ -275,7 +260,7 @@ CODES = {
     "a365.deleted": ("The part was deleted in the Altium 365 workspace.",
                      "Restore it there, or take it off the BOM.",
                      [r"deleted in the Altium 365 workspace"]),
-    # the library agent's independent visual proof
+    # the independent visual proof (ecadlib visual-check)
     "proof.doubt": ("The independent check is not sure about this part[: {reason}].",
                     "Compare the part with the datasheet before you approve it.",
                     [r"^proof doubt: ?(?P<reason>.*)"]),
@@ -285,23 +270,6 @@ CODES = {
     "proof.finding": ("The independent check found a problem: {what}.",
                       "Compare that detail with the datasheet before you approve it.",
                       [r"^proof: (?P<what>.+)"]),
-    # the library agent could not finish a part
-    "agent.proof_failed": ("The independent check found that the part does not match its datasheet[: {what}].",
-                           "Fix the part (pick another footprint or symbol), then build it again.",
-                           [r"^proof failed: ?(?P<what>.*)"]),
-    "agent.proof_interrupted": ("The independent check was interrupted several times.",
-                                "Run the agent again; if it keeps stopping, check the model connection.",
-                                [r"^proof interrupted repeatedly"]),
-    "agent.build_failed": ("Building the part failed[ ({why})].", "Check its BOM line, then build it again.",
-                           [r"^librarian failed: (?P<why>.+)"]),
-    "agent.build_stuck": ("Building this part stopped the agent several times.",
-                          "Check its BOM line (part number, footprint), then build it again.",
-                          [r"build stopped the agent"]),
-    "agent.no_entry": ("The part could not be added to the library.", "Check its BOM line (part number, footprint).",
-                       [r"made no plan entry for this part"]),
-    "agent.incomplete": ("The part was built without a symbol or a footprint[ ({why})].",
-                         "Pick the missing symbol or footprint, then build it again.",
-                         [r"^build incomplete: (?P<why>.+)"]),
     # anything else: shown as written, with a generic next step
     "other": ("{detail}", "Look at the part, then approve it or release anyway.", []),
 }

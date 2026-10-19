@@ -169,8 +169,6 @@ def test_setup_libs_and_workspace_become_defaults():
         assert pairs == {"--lib": str(Path(d).resolve() / "libs"), "--workspace": str(Path(d).resolve() / "ws")} and len(notes) == 2
         args, _ = FR.config_defaults("ui", ["--lib", "x"], environ={"ECADLIB_WORKSPACE": "w"}, start=sub)
         assert args == ["--lib", "x"]                     # the command line and the environment win
-        assert FR.config_defaults("agent", ["status"], environ={}, start=sub)[0] == ["status"]
-        assert FR.config_defaults("agent", ["run"], environ={}, start=sub)[0][:2] == ["run", "--lib"]
         assert FR.config_defaults("triage", ["-h"], environ={}, start=sub)[0] == ["-h"]
         rc, out, _ = _run(["doctor"], cwd=sub)            # the doctor sees the [setup] folders
         assert str(Path(d).resolve() / "libs") in out
@@ -342,7 +340,7 @@ def test_flag_spellings_are_the_same_everywhere():
 def test_help_shows_examples_through_the_cli():
     rc, out, _ = _run(["librarian", "-h"])
     assert rc == 0 and "examples:" in out and "--offline --sources standard" in out
-    rc, out, _ = _run(["queue", "approve", "-h"])
-    assert rc == 0 and "approve an item" in out          # subcommand description from its help text
+    rc, out, _ = _run(["part", "approve", "-h"])
+    assert rc == 0 and "approve a held change" in out    # subcommand description from its help text
     rc, out, _ = _run(["-h"])
     assert "ecadlib demo" in out
