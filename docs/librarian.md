@@ -101,7 +101,7 @@ Names are pattern-mined per category (`RES_{package}_{value}_{tolerance}`, `R{pa
 
 The UI has a **Library rules** card (type the folders to scan, review the proposals with their evidence, edit the TOML, save; replacing an existing file asks first and shows the diff). The MCP server has `propose_rules` and `save_rules`.
 
-`ecadlib rules check [PATH]` validates a file (errors name the bad key and suggest the nearest valid one); `ecadlib rules show` prints the effective rules.
+`ecadlib rules check [PATH]` validates a file (errors name the bad key and suggest the nearest valid one) and prints the effective rules; `ecadlib rules show` prints the built-in defaults.
 
 Plans keep ecadlib's own parameter names internally; your house names (`[parameters.names]`) are applied at the outputs: the Altium 365 push, DbLib export and sync, KiCad export, and the A365 drift check.
 
