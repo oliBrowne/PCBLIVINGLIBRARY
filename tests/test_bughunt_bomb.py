@@ -314,3 +314,14 @@ def test_bom55_sub_sheet_path_case_insensitive():
     (d / "root.kicad_sch").write_text(_sch(_sym("R1", "1k") + "\n" + sheet))
     lines, _ = T.read_bom(d / "root.kicad_sch")
     assert sorted(l["designator"] for l in lines) == ["R1", "R5"], lines
+
+
+def test_bom47_upload_name_keeps_its_extension():
+    from ecadlib.app import Workspace
+    with tempfile.TemporaryDirectory() as d:
+        ws = Workspace(d, providers=["digikey"])
+        assert ws.safe_name("部品表.xlsx") == "bom.xlsx" and ws.safe_name("Спецификация.xlsx") == "bom.xlsx"
+        assert ws.safe_name("_.xlsx") == "bom.xlsx" and ws.safe_name("部品表.kicad_sch") == "bom.kicad_sch"
+        assert ws.safe_name("a" * 130 + ".xlsx").endswith(".xlsx") and len(ws.safe_name("a" * 130 + ".xlsx")) == 120
+        assert ws.safe_name("../../etc/BOM v2.csv") == "BOM_v2.csv" and ws.safe_name("..") == "bom.csv"
+        assert ws.safe_name("PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Left") == "PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Left"

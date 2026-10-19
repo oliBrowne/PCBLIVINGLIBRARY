@@ -51,8 +51,14 @@ class Workspace:
         if strict and ("/" in name or "\\" in name):
             plain = re.sub(r"[/\\]+", "_", name)
             raise ValueError(f"footprint name {name!r} contains a path separator; use a plain name such as {plain!r}")
-        name = re.sub(r"[^A-Za-z0-9._-]+", "_", re.split(r"[/\\]", name)[-1]).strip("._") or "bom.csv"
-        return name[:120]
+        base = re.split(r"[/\\]", name)[-1]
+        stem, suf = os.path.splitext(base)                 # the suffix picks the reader: never lose it ('部品表.xlsx')
+        if not re.fullmatch(r"\.[A-Za-z][A-Za-z0-9_]{0,11}", suf):   # not a file type ('P2.54mm_Vertical'): no split
+            stem, suf = base, ""
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")
+        if not stem.strip("_-"):
+            stem = "bom" if suf else "bom.csv"
+        return stem[:120 - len(suf)] + suf
 
     def inside(self, path):
         """Resolve a workspace-relative path, refusing anything outside the workspace."""
