@@ -130,6 +130,8 @@ async function local(browser, width) {
     await p.click("#pbody [data-allow]");
     await p.waitForSelector('#plist .pcard[data-part="TYPE-C-31-M-12"] .pill.s-info', { timeout: 10000 });
     check("release anyway is recorded at once" + w, /released anyway/.test(await text(p, '#plist .pcard[data-part="TYPE-C-31-M-12"]')));
+    const tt = await text(p, "#toast");           // T052: no symbol / footprint file cannot be released anyway
+    check("release anyway on a missing file says it stays held" + w, /TYPE-C-31-M-12 stays held/.test(tt) && !/goes to Altium with/.test(tt), tt);
     await p.locator("#toast .t button", { hasText: "Undo" }).last().click();
     await p.waitForFunction(() => !/released anyway/.test(document.querySelector('#plist .pcard[data-part="TYPE-C-31-M-12"]').innerText), null, { timeout: 10000 });
     check("undo holds it again" + w, true);

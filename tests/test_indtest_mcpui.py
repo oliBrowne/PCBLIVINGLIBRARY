@@ -194,3 +194,12 @@ def test_new_bom_asks_for_its_plan_without_an_error(tmp_path):
         srv.shutdown()
     fn = PAGE[PAGE.index("async function loadParts"):PAGE.index("function libNext")]
     assert '"&ifplan=1"' in fn and "!parts.plan" in fn, fn
+
+
+# T052 (the browser check: tests/ui_browser.js, "release anyway on a missing file says it stays held")
+def test_release_anyway_toast_reads_the_new_status():
+    """Release anyway on a part held for a missing symbol toasted "Released ... it goes to Altium with the next push"
+    while the release check kept it held (a missing file cannot be overridden)."""
+    fn = PAGE[PAGE.index("async function release("):PAGE.index("async function partClick")]
+    assert 'effective(p) === "held"' in fn and "stays held" in fn, fn
+    assert fn.index("stays held") < fn.index("goes to Altium with the next push"), fn

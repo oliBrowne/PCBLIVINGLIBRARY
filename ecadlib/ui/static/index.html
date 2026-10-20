@@ -1067,7 +1067,7 @@ function showPanel(p, focus = true) {
   const acts = [];
   if (st === "held") acts.push(`<button class="primary" data-pick="${esc(p.part)}">Pick a symbol or footprint…</button>`);
   if (url) acts.push(`<a class="small" href="${esc(url)}${p.datasheet.page ? "#page=" + encodeURIComponent(p.datasheet.page) : ""}" target="_blank" rel="noopener noreferrer" id="pdslink">Open the datasheet${p.datasheet.page ? ` (page ${esc(p.datasheet.page)})` : ""}</a>`);
-  if (st === "held" && !p.allowed) acts.push(`<button data-allow="${esc(p.part)}">Release anyway (I checked it)</button>`);
+  if (st === "held" && !p.allowed) acts.push(`<button data-allow="${esc(p.part)}"${p.reasons.some(r => /^files\./.test(r.code)) ? ' title="A missing or damaged symbol or footprint file cannot be released anyway: the other holds can."' : ""}>Release anyway (I checked it)</button>`);
   if (p.allowed) acts.push(`<button data-unallow="${esc(p.part)}">Hold it again</button>`);
   if (!p.change && (st === "ready" || st === "awaiting_approval") && !pending.has(p.part)) acts.push(`<button class="primary" data-approve="${esc(p.part)}">Approve</button><button data-reject="${esc(p.part)}">Reject…</button>`);
   $("#pbody").innerHTML = `${p.picture ? `<div class="bigpic" aria-label="Footprint top view">${p.picture.replace(/width="\d+" height="\d+"/, "")}</div>` : ""}
@@ -1186,7 +1186,10 @@ async function release(part, allow) {
   try {
     await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: $("#signer").value.trim() || null });
     await loadParts(); loadStatus().catch(() => {});
-    if (allow) toast(`Released ${part} anyway: it goes to Altium with the next push.`, { action: "Undo", onAction: () => release(part, false) });
+    const p = findPart(part), hard = p && p.reasons.find(r => /^files\./.test(r.code));
+    if (allow && p && effective(p) === "held")       // a missing or damaged file cannot be released anyway: say so
+      toast(`${part} stays held: ${hard ? hard.text : (p.reasons[0] || {}).text || "the release check still holds it."} Release anyway cannot override that, so it does not go to Altium.`, { action: "Undo", onAction: () => release(part, false) });
+    else if (allow) toast(`Released ${part} anyway: it goes to Altium with the next push.`, { action: "Undo", onAction: () => release(part, false) });
     else toast(`${part} is held again.`);
   } catch (err) { banner(popen ? $("#perr") : $("#liberr"), err.message); }
 }
