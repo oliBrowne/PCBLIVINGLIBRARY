@@ -84,3 +84,22 @@ def test_t023_header_custom_drill():
             assert False, d
         except ValueError as e:
             assert "ring" in str(e), e
+
+
+# T024: a schema-invalid spec is a plain one-line refusal and the rest of the batch is still built
+@lite
+def test_t024_schema_error_does_not_stop_the_batch(tmp_path):
+    good = {"name": "R_0603_1608Metric", "package_type": "chip", "pin_count": 2, "body_length": {"min": 1.5, "max": 1.7},
+            "body_width": {"min": 0.7, "max": 0.95}, "terminal_length": {"min": 0.15, "max": 0.4}}
+    (tmp_path / "bad.json").write_text(json.dumps(dict(good, name="TYPO", pitchh=1.27)))
+    (tmp_path / "good.json").write_text(json.dumps(good))
+    err = io.StringIO()
+    try:
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            FG.main(["gen", str(tmp_path / "bad.json"), str(tmp_path / "good.json"), "-o", str(tmp_path / "o.pretty")])
+        assert False, "no failure exit"
+    except SystemExit as e:
+        assert "1 footprint spec" in str(e.code), e.code
+    assert err.getvalue().startswith("TYPO: not written:") and "pitchh" in err.getvalue(), err.getvalue()
+    assert len(err.getvalue().splitlines()) == 1, err.getvalue()
+    assert (tmp_path / "o.pretty" / "R_0603_1608Metric.kicad_mod").exists()

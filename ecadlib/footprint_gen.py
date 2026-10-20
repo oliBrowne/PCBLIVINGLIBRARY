@@ -614,13 +614,21 @@ def main(argv=None):
         outdir = Path(a.out); outdir.mkdir(parents=True, exist_ok=True)
         rules = RU.load(a.rules, start=outdir)
         bad = 0
+        import jsonschema
         for sp in a.specs:
-            spec = json.loads(Path(sp).read_text())
-            validate(spec)
+            spec = {}
             try:
+                spec = json.loads(Path(sp).read_text())
+                validate(spec)
                 txt, rep = build(spec, RU.density_for(spec, rules, a.density))
-            except ValueError as e:                               # a spec that doesn't add up: say why, write nothing
-                print(f"{spec.get('name', sp)}: not written: {e}", file=sys.stderr)
+            except jsonschema.ValidationError as e:               # schema: one line naming the field, not the schema dump
+                at = "/".join(str(k) for k in e.absolute_path)
+                print(f"{spec.get('name', sp) if isinstance(spec, dict) else sp}: not written: {e.message}"
+                      f"{f' (at {at})' if at else ''}", file=sys.stderr)
+                bad += 1
+                continue
+            except (ValueError, OSError) as e:                    # a spec that doesn't add up: say why, write nothing
+                print(f"{spec.get('name', sp) if isinstance(spec, dict) else sp}: not written: {e}", file=sys.stderr)
                 bad += 1
                 continue
             if shorts(rep):
