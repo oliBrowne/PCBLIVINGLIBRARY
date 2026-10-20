@@ -80,3 +80,21 @@ def test_ds2_19_count_tokens_for_a_claude_rung_never_carries_another_providers_k
             rd = D.Reader(tmp_path / "out", tmp_path / "cache", rules=rules, log=None)
             rd.estimate([job])
         assert [c[2]["x-api-key"] for c in api.of("/count_tokens")] == want, api.calls
+
+
+# ---- DS2-20: `ecadlib datasheet PDF --part X --estimate` ignored the rules and uploaded the PDF to Anthropic
+@lite
+def test_ds2_20_single_part_estimate_follows_the_configured_provider(tmp_path, monkeypatch):
+    from ecadlib import userconfig as UC
+    from tests import test_datasheet_batch as TB
+    stored = {"OPENAI_API_KEY": "sk-proj-OPENAI-test-111", "ANTHROPIC_API_KEY": "sk-ant-CLAUDE-test-222"}
+    monkeypatch.setattr(UC, "secret", lambda name, env=None: stored.get(name))
+    (tmp_path / "ecadlib.toml").write_text('[ai]\nprovider = "openai"\nmodel = "gpt-6-sol"\ndetect = false\n',
+                                           encoding="utf-8")
+    pdf = tmp_path / "ds.pdf"
+    pdf.write_bytes(TB.pdf_with(["TPS1 regulator", "Package outline", "Pin functions"]))
+    api = TB.FakeAPI()
+    with TB.patched(api):                             # ecadlib.toml is found from -o upwards, as on the command line
+        rc = D.main([str(pdf), "--part", "TPS1", "--estimate", "-o", str(tmp_path / "out")])
+    assert rc == 0
+    assert api.calls == [], [(c[1], (c[2] or {}).get("x-api-key")) for c in api.calls]   # nothing sent to Anthropic

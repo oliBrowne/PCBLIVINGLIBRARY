@@ -3338,7 +3338,8 @@ def main(argv=None):
             sig = LRL.signature(inf["plan"])
             ck = ResultCache.key(src_hash, a.model, a.part, a.package, [offset, hint], a.effort + (f"|{sig}" if sig else ""))
             if a.estimate:
-                rd = Reader(a.out, Path(a.out) / "cache", model=a.model, effort=a.effort, log=print)
+                rd = Reader(a.out, Path(a.out) / "cache", rules=rules if isinstance(rules, dict) else None, model=a.model,
+                            effort=a.effort, log=print)
                 prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None, "sent_as": source[0]}
                 print(format_estimate(rd.estimate([{"name": a.part, "url": a.pdf, "body": body, "prov": prov}], batch=False)))
                 return 0
