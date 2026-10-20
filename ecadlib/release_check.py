@@ -17,10 +17,13 @@ Rules, per plan item:
   fields    Manufacturer, Manufacturer Part Number, a datasheet link and Description are filled in
   parity    the .kicad_mod and the .PcbLib / .SchLib read back the same (ecadlib.parity: pads, drills, paste, courtyard,
             3D, pin -> pad); `[release] parity = "warn"` reports instead of holding, "off" skips it
-  verify    the item carries `verify` notes (e.g. a datasheet-reader footprint): a person has to look first
+  verify    the item carries `verify` notes: a person has to look first (a datasheet-reader footprint, an EasyEDA
+            conversion, a pinout from a family table, a KiCad symbol or footprint picked by a near name)
 Failing items get status `held` and `hold_reasons`; others `ready`. `--allow PART` records an override in the
 item (`allow.failures` = the failures it covers); an allowed item is `ready` while its failures stay within
-that list. altium365 push releases only `ready` items. Items `ecadlib a365 pull` brought in from the workspace
+that list. altium365 push releases only `ready` items, and every publisher (altium365 push, dblib-sync /
+altium-pkg, kicad-export) runs this check again on the files it sends (publish_problems), so a plan that says
+`ready` without a check, or a file changed after one, is held there too. Items `ecadlib a365 pull` brought in from the workspace
 (status `existing`) are already released there and are not checked. Exit code 0 when nothing is held, 2 otherwise."""
 import argparse, csv, datetime, re, sys
 from pathlib import Path
@@ -301,6 +304,19 @@ def check_item(item, base=".", rules=None):
     for v in item.get("name_problems") or []:         # altium365.plan: a name Altium can't store (altium_export._name)
         add("fields", v)
     return fails, warns, info
+
+
+def publish_problems(item, base=".", rules=None):
+    """Why a publisher (altium365 push, dblib-sync / altium-pkg, kicad-export) must not send this part's files: the
+    release check run again now, on the files as they are, less the failures the item's --allow covers. [] = it may
+    go. A plan's `status` alone is never enough: `altium365 plan --models`, a triage plan or a hand edit can say
+    `ready` for a part nothing checked, and a file can change after its check. rules: loaded (RU.resolve) once by
+    the caller. Parts `ecadlib a365 pull` brought in (already released there) are not checked, as in apply."""
+    if item.get("a365") and item.get("status") in ("existing", "deleted_in_workspace"):
+        return []
+    fails, _, _ = check_item(item, base, rules)
+    covered = set((item.get("allow") or {}).get("failures", []))
+    return [m for m in (f"{r}: {m}" for r, m in fails) if m not in covered or m.startswith(UNFIXABLE)]
 
 
 CHANGE_HOLD = "change control:"              # a held change no release check or --allow clears (`ecadlib part approve`)

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ecadlib import altium365 as A, altium_export as X, altium_lib as AL, bom_triage as T
 from ecadlib.kicad_index import KiCadIndex, Symbol, package_of
+from tests.fixtures_lite import released_anyway
 
 
 def _write(text, name="bom.csv", raw=None):
@@ -96,14 +97,17 @@ class Stateful:
 def _two_resistors(d):
     lines = [{"designator": "R1", "mpn": "RC0603FR-0710KL", "value": "10k", "footprint": "R_0603_1608Metric", "lcsc": "C25804"},
              {"designator": "R2", "mpn": "RC0603FR-074K7L", "value": "4k7", "footprint": "R_0603_1608Metric"}]
-    for sub, f in (("SchLib", "Resistor.SchLib"), ("PcbLib", "R_0603_1608Metric.PcbLib")):
-        (Path(d) / sub).mkdir(exist_ok=True); (Path(d) / sub / f).write_bytes(b"x")
+    for sub in ("SchLib", "PcbLib"):                 # real models: push reads them back (release check)
+        (Path(d) / sub).mkdir(exist_ok=True)
+    AL.write_schlib(Path(d) / "SchLib" / "Resistor.SchLib", [AL.resistor_symbol()])
+    spec = json.loads(Path("ecadlib/package_specs/R_0603_1608Metric.json").read_text())
+    AL.write_pcblib(Path(d) / "PcbLib" / "R_0603_1608Metric.PcbLib", [AL.footprint_from_spec(spec)[0]])
     return lines
 
 
 def test_p5_push_is_idempotent_and_clears_fields():
     with tempfile.TemporaryDirectory() as d:
-        items = A.plan(_two_resistors(d), models=d)
+        items = released_anyway(A.plan(_two_resistors(d), models=d))   # no maker / datasheet in the BOM: released anyway
         ws = Stateful()
         assert {r["action"] for r in A.push(items, ws, "w")} == {"release"}
         ws.comps[items[0]["name"]]["details"]["parameters"].append({"name": "Added in A365", "value": "keep"})
@@ -120,7 +124,7 @@ def test_p5_push_is_idempotent_and_clears_fields():
 
 def test_p6_shared_models_reuse_item_names_and_uploads():
     with tempfile.TemporaryDirectory() as d:
-        items = A.plan(_two_resistors(d), models=d)
+        items = released_anyway(A.plan(_two_resistors(d), models=d))   # no maker / datasheet in the BOM: released anyway
         ws = Stateful()
         A.push(items, ws, "w")
         rel = [c[1] for c in ws.calls if c[0] == "release"]

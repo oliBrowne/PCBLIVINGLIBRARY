@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ecadlib import altium_lib as AL, change_cli as CC, change_diff as CD, change_gate as CG, fingerprint as FP
 from ecadlib import kicad_import as K, ledger as LG, sexpr, stdparts as SP
+from tests.fixtures_lite import demo_released
 
 ROOT = Path(__file__).resolve().parent.parent
 FIX = ROOT / "tests" / "fixtures" / "change_control"
@@ -23,9 +24,7 @@ def demo():
     """A copy of the offline demo library (built once per run): its plan, its folder."""
     if "dir" not in _DEMO:
         d = Path(tempfile.mkdtemp(prefix="ecadlib-cc-demo-"))
-        subprocess.run([sys.executable, "-m", "ecadlib", "demo", "-o", str(d)], cwd=ROOT, check=True,
-                       capture_output=True, timeout=300)
-        _DEMO["dir"] = d / "librarian" / "demo_bom_demo"
+        _DEMO["dir"] = demo_released(d, cwd=ROOT)       # the pinouts signed off: every part but CH340C released
     d = Path(tempfile.mkdtemp(prefix="ecadlib-cc-")) / "demo"
     shutil.copytree(_DEMO["dir"].parent.parent, d)          # the whole demo: the lock's BOM path stays valid
     lib = d / "librarian" / "demo_bom_demo"

@@ -223,10 +223,9 @@ def test_a_locked_library_file_is_reported_and_the_sync_goes_on(tmp_path):
     denied" after it had already replaced other files."""
     import os
     from ecadlib import altium_dblib_sync as S
-    from tests.test_review_1018_ad26_recheck import _item, _models
+    from tests.test_review_1018_ad26_recheck import _item, _models, _plan
     _models(tmp_path)
-    plan = tmp_path / "plan.json"
-    plan.write_text(json.dumps([_item("R1", "Resistors")]))
+    plan = _plan(tmp_path, [_item("R1", "Resistors")])
     real = os.replace
 
     def locked(a, b):
@@ -256,10 +255,9 @@ def test_an_exclusively_locked_library_file_is_reported_too(tmp_path):
     """AD26 recheck after #112: a file locked with no sharing failed already at the read, with a bare Errno 13."""
     from pathlib import Path
     from ecadlib import altium_dblib_sync as S
-    from tests.test_review_1018_ad26_recheck import _item, _models
+    from tests.test_review_1018_ad26_recheck import _item, _models, _plan
     _models(tmp_path)
-    plan = tmp_path / "plan.json"
-    plan.write_text(json.dumps([_item("R1", "Resistors")]))
+    plan = _plan(tmp_path, [_item("R1", "Resistors")])
     S.sync(plan, tmp_path / "lib")                                    # the files exist, then one is locked
     lib = str(tmp_path / "lib")
     real = Path.read_bytes

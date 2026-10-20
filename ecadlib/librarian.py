@@ -19,7 +19,8 @@ anything still missing, the sources are tried in --sources order, each filling o
              checked package table, symbols where the pinout is standard (ecadlib/stdparts.py); always after kicad
   datasheet  datasheet URL (BOM column, KiCad symbol, EasyEDA/LCSC link, LCSC pattern) + ANTHROPIC_API_KEY ->
              ecadlib.datasheet; the result is marked `verify` so release_check holds it until a person has looked (or
-             --allow). --datasheet-batch sends every part that reaches this source as one Message Batch (half price)
+             --allow). The same goes for an EasyEDA conversion, a pinout from a family table and a KiCad symbol or
+             footprint picked by a near name (ordering suffix, MPN in the name, shortest prefix). --datasheet-batch sends every part that reaches this source as one Message Batch (half price)
              after the other sources ran, then builds them; results are cached, so re-runs are free
 Footprints without a KiCad STEP model get a package-shaped STEP from step_gen embedded (--box: extruded box).
 Everything is converted through kicad_import into <out>/models/{SchLib,PcbLib} (plus the .kicad_mod in
@@ -485,8 +486,8 @@ class Run:
             extra = [] if shared or not mpn else [("MPN", mpn)]
             self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", extra)
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
-            if "check" in how:
-                st["review"].append(f"symbol {sym_ref} matched by {how}")
+            if "check" in how:                     # a near name: a person checks it before it is released
+                st["verify"].append(f"symbol {sym_ref} matched by {how}")
         elif not st["symbol"]:
             st["tried"].append(f"kicad: no symbol named like {mpn or '(no MPN)'}")
         if st["footprint"]:
@@ -499,8 +500,8 @@ class Run:
                 text, _ = K.load_footprint(cand, self.http)
                 self.put_fp(st, text, fp_name, f"kicad:{cand}", self.http)
                 st["tried"].append(f"kicad: footprint {cand} ({why})")
-                if why.startswith(("shortest", "footprint named")):
-                    st["review"].append(f"footprint {cand} chosen by {why}: compare with the datasheet land pattern")
+                if why.startswith(("shortest", "footprint named")):     # a guess by name: held until a person looks
+                    st["verify"].append(f"footprint {cand} chosen by {why}: compare with the datasheet land pattern")
                 return
         st["tried"].append(f"kicad: no footprint for '{bom_fp or fp_name}'")
 
@@ -557,7 +558,8 @@ class Run:
         if got:
             st["found"].setdefault("credit", (EC.CREDIT, f"EasyEDA {lcsc}"))
         st["tried"].append(f"easyeda {lcsc}: " + (", ".join(got) or "nothing needed"))
-        st["review"].append(f"EasyEDA {lcsc} conversion: check pads and pins against the datasheet (native converter, format assumed)")
+        if got:                                # a converted EasyEDA part is held until a person has compared it
+            st["verify"].append(f"EasyEDA {lcsc} conversion: check pads and pins against the datasheet (native converter, format assumed)")
 
     def src_standard(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
         """Standard packages and pinouts, built offline (ecadlib.stdparts); fills only what is still missing."""
@@ -582,8 +584,8 @@ class Run:
             self.put_kicad_sym(st, [K._find_symbol(sexpr.parse(text), name)], sym_name, None if shared else fp_name,
                                f"standard:{name}", [] if shared or not mpn else [("MPN", mpn)])
             got.append(f"symbol {name} ({res['sym_how']})")
-            if ":" in res["symbol"]:
-                st["review"].append(f"symbol pinout {name} from the {mpn} family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
+            if ":" in res["symbol"]:               # SOT-23 & co: pinouts differ by maker, so a person checks it
+                st["verify"].append(f"symbol pinout {name} from the {mpn} family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
         elif not st["symbol"] and res["symbol"]:
             res["sym_how"] = f"footprint came from {fp_src or 'nowhere'}, not {res['footprint']}: pin numbers not known to match"
         why = [] if st["footprint"] else [f"footprint: {res['fp_how']}"]

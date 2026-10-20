@@ -15,7 +15,8 @@ Folder layout (one entry per model file, the altium_lib / altium365 convention):
     <to>/ecadlib_sync.json                  which rows and files this tool manages (only those are --prune-able)
 
 Per plan item, like `altium365 push`: `held` items (release_check) are left exactly as they are; items without
-both models are `skipped`; otherwise the row is `added`, `updated` (row fields or a model file changed) or
+both models are `skipped`; a `ready` item is checked again here (release_check.publish_problems) and is `held` when
+its files fail the check; otherwise the row is `added`, `updated` (row fields or a model file changed) or
 `up_to_date`. Row updates merge: columns added by hand in the sheet survive, plan values win, the plan's
 `cleared` fields are blanked. Rows and model files no longer in the plan are reported (`not_in_plan`) and only
 deleted with --prune, and only if this tool wrote them. Unchanged files are not rewritten. Model files written
@@ -36,6 +37,7 @@ from pathlib import Path, PureWindowsPath
 
 from . import altium_lib as AL
 from . import altium_native as AN
+from . import release_check as RC
 from . import sheetsafe as SS
 from .fsutil import read_ini_text                     # (text, encoding) of an INI Altium saved
 from .altium_export import (COLUMNS, dblib_links, excel_connection, fieldmap_section, table_section)
@@ -537,6 +539,12 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         missing = [k for k, _, _ in KINDS if not ((it.get(k) or {}).get("file") and (it.get(k) or {}).get("ref"))]
         if missing:                                         # "items without both models are skipped"
             res["action"], res["detail"] = "skipped", "no " + " / ".join(missing) + " model"
+            continue
+        why = RC.publish_problems(it, base, rules)          # the release check again, on the files copied now
+        if why:
+            res["action"], res["detail"] = "held", "; ".join(why)
+            if it["name"] in where:
+                res["table"] = where[it["name"]]
             continue
         if _CTRL.search(it["name"]):
             res["action"], res["detail"] = "error", "the part name has a control character (a line break or tab copied " \

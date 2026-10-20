@@ -28,7 +28,8 @@ Footprints: the item's .kicad_mod (models/KiCad/...) when present, else its .Pcb
 Format: KiCad 8 (symbol library version 20231120, footprints up to 20240108), which KiCad 8, 9 and 10 open.
 Newer upstream syntax is written the KiCad 8 way: `(hide yes)` -> `hide`, KiCad 9/10-only flags (in_pos_files,
 show_name, do_not_autoplace, embedded_fonts, jumper settings, rule-area placement, rounded-rect radius, hatched
-fill) are dropped. Held items are skipped unless --include-held. Output is sorted and repeatable: a re-export
+fill) are dropped. Held items are skipped unless --include-held, and so is a `ready` item whose files fail the
+release check run again here (release_check.publish_problems). Output is sorted and repeatable: a re-export
 rewrites only files whose content changes; a file edited by hand since the last export (kicad_export.json keeps the
 sha256 of what it wrote) and one it did not write that is no longer wanted are copied to ecadlib-hand-edits/ and
 listed under "warnings" before being replaced or removed.
@@ -1012,6 +1013,12 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             rep["skipped"].append({"part": it["name"], "why": "awaiting_approval: waiting for sign-off, not released yet",
                                    "says": [{"code": "awaiting_approval", "text": "Waiting for sign-off: not released yet.",
                                              "fix": f"ecadlib approve {plan} status"}]})
+            continue
+        why = [] if status == "held" else RC.publish_problems(it, plan_dir, rules)   # checked again: `ready` is not
+        if why and not include_held:                                                  # taken on trust
+            from . import messages as M
+            rep["skipped"].append({"part": it["name"], "why": "held: " + "; ".join(why),
+                                   "says": [{k: e[k] for k in ("code", "text", "fix")} for e in M.explain_all(why)]})
             continue
         sname, notes = kname(it["name"]), []
         if str((it.get("source") or {}).get("symbol") or "").startswith("easyeda:") and not P.unofficial_allowed(rules):

@@ -969,7 +969,7 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
                     "fix": "store your Nexar token on the setup page (Start menu > ecadlib setup) or with `ecadlib keys set NEXAR_TOKEN`, then try again" if "NEXAR_TOKEN" in str(e) else ""}
         acts = [r.get("action") for r in res["results"]]
         return {"target": "a365", "install": [], "problems": [f"{r['name']}: {r.get('detail')}" for r in res["results"]
-                                                              if r.get("action") == "error"],
+                                                              if r.get("action") == "error" or r.get("recheck")],
                 "workspace": url, "released": sum(a in ("release", "released", "create", "created", "update", "updated")
                                                  for a in acts), "report": str(ws.root / res["report"])}
     bom_path, plan_f, items = ws._plan(bom_rel)
