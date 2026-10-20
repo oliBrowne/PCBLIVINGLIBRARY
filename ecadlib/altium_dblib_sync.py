@@ -691,7 +691,8 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             rows[rows.index(cur)] = new
         if changed:
             notes.insert(0, "row: " + ", ".join(changed))
-        res["action"] = "updated" if notes else "up_to_date"
+        # a library kept as changed in Altium is a note, not an update: nothing was written for it
+        res["action"] = "updated" if any(not n.endswith(AN.EDITED_NOTE) for n in notes) else "up_to_date"
         res["detail"] = "; ".join(notes)
         managed_rows.add(it["name"])
 

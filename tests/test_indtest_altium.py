@@ -225,6 +225,24 @@ def test_check_a365_accepts_the_pushed_model_names():
     assert [r["status"] for r in UP.check_a365([it], [node])[0]] == ["symbol"]
 
 
+# T090: a library dblib-sync keeps because it was changed in Altium is up_to_date with a note, not "updated"
+@lite
+def test_sync_reports_a_kept_altium_edit_as_up_to_date(tmp_path, monkeypatch):
+    from ecadlib import altium_native as AN
+    d = tmp_path
+    monkeypatch.setenv("ECADLIB_HOME", d / "home")
+    _models(d)
+    items = released_anyway([_item("RES-0603-10k", "Resistors", "Resistor", "R_0603_1608Metric", Value="10k")], d)
+    (d / "plan.json").write_text(json.dumps(items, indent=1))
+    S.sync(d / "plan.json", d / "lib")
+    f = d / "lib/PcbLib/R_0603_1608Metric.PcbLib"
+    f.write_bytes(f.read_bytes() + b"\0")                  # stands in for Altium's edit
+    monkeypatch.setattr(AN, "replace_action", lambda *a, **k: "edited")
+    for _ in range(2):
+        r = S.sync(d / "plan.json", d / "lib")["results"][0]
+        assert r["action"] == "up_to_date" and AN.EDITED_NOTE in r["detail"], r
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
