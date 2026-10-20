@@ -787,7 +787,7 @@ def _check_paths(ws, args):
         if k in PATH_ARGS:
             vals += [(k, x) for x in (v if isinstance(v, list) else [v]) if isinstance(x, str)]
     if "toml" in args and isinstance(args["toml"], str):   # save_rules: rules settings that name a file ([style]
-        vals += [(f"toml {k}", x) for k, x in _rule_paths(args["toml"])]   # profile, ...)
+        vals += [(f"toml {k}", x) for k, x in _rule_paths(args["toml"], ws.rules_file().name)]   # profile, ...)
     for k, x in vals:
         if x.strip().lower().startswith(("http://", "https://")):
             _check_url(k, x.strip())
@@ -826,18 +826,13 @@ def _check_url(k, url):
             raise ValueError(f"{k}: {host} is a local or private address; this server only fetches public https links")
 
 
-def _rule_paths(text):
-    """(key, value) of every string in a rules TOML that reaches outside the folder it is read from: an absolute
-    path (also C:\\..., ~/...) or one with a '..' step. Relative ones stay in the workspace."""
+def _rule_paths(text, name="ecadlib.toml"):
+    """(key, value) of every string in a rules text that reaches outside the folder it is read from: an absolute
+    path (also C:\\..., ~/...) or one with a '..' step. Relative ones stay in the workspace. name: the file the text
+    is saved as; it picks JSON or TOML, as save_rules does. A text that does not parse is refused (RulesError)."""
     import re
-    from .rules import toml_module
-    lib = toml_module()
-    if lib is None:
-        return []
-    try:
-        data = lib.loads(text.lstrip("\ufeff"))
-    except Exception:
-        return []                                 # save_rules reports the syntax error itself
+    from .rules import parse_text
+    data = parse_text(text, name)
 
     def walk(v, at):
         if isinstance(v, dict):
@@ -871,15 +866,12 @@ def _fp(x):
                       default=str)
 
 
-def _endpoints(text):
-    """{dotted key: value} of every setting in a rules TOML that says where a request (and a stored key or token) goes,
-    or how much may be spent."""
-    from .rules import toml_module
-    lib = toml_module()
-    try:
-        data = lib.loads(text.lstrip("\ufeff")) if lib and text else {}
-    except Exception:
-        return {}
+def _endpoints(text, name="ecadlib.toml"):
+    """{dotted key: value} of every setting in a rules text that says where a request (and a stored key or token)
+    goes, or how much may be spent. name: the file the text belongs to; it picks JSON or TOML, as save_rules does.
+    A text that does not parse raises RulesError."""
+    from .rules import parse_text
+    data = parse_text(text, name) if text else {}
     out = {}
 
     def walk(v, at):
@@ -898,10 +890,13 @@ def _check_endpoints(ws, text):
     """save_rules from an agent may not change where requests go: the stored API key or token would follow the
     request to any URL (also a later `ecadlib upkeep --github` run by the person). The person edits base_url, provider,
     the *_env / *_api / *_url settings, [notify] targets and the cost limits themselves."""
+    from .rules import DEFAULTS, RulesError
     f = ws.rules_file()
-    old = _endpoints(f.read_text(encoding="utf-8-sig")) if f.is_file() else {}
-    new = _endpoints(text if isinstance(text, str) else "")
-    from .rules import DEFAULTS
+    try:
+        old = _endpoints(f.read_text(encoding="utf-8-sig"), f.name) if f.is_file() else {}
+    except RulesError:                               # a damaged file: compare with the defaults
+        old = {}
+    new = _endpoints(text if isinstance(text, str) else "", f.name)   # the parser save_rules writes with
 
     def default(k):                                  # a setting left out of the file has its default value
         v = DEFAULTS
