@@ -215,7 +215,8 @@ def test_kicad_export_keeps_a_released_part_it_now_holds():
         from contextlib import redirect_stdout
         with redirect_stdout(io.StringIO()) as shown:
             KX.print_result(again, d / "kicad", d / "plan.json")
-        assert "1 held part kept as exported before" in shown.getvalue() and "left out" not in shown.getvalue()
+        said = " ".join(shown.getvalue().split())                    # as one line, whatever the terminal width
+        assert "1 held part kept as exported before" in said and "left out" not in said, said
         two["description"] = "Test part"                                # passes again: written anew
         (d / "plan.json").write_text(json.dumps([ok, two]))
         back = KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
