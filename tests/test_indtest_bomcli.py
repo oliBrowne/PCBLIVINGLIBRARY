@@ -149,3 +149,12 @@ def test_init_missing_lib_writes_nothing(tmp_path, monkeypatch):
     with redirect_stderr(io.StringIO()) as e, redirect_stdout(io.StringIO()):
         assert RI.main(["--lib", "my_lbi", "--yes", "--no-doctor"], inp=lambda *a: "") == 2
     assert "hint:" in e.getvalue() and not (tmp_path / "ecadlib.toml").exists()
+
+
+# T065: a file from a newer ecadlib is a plain one-line refusal with an upgrade hint, exit 2, not an "internal error"
+def test_schema_too_new_is_a_plain_refusal():
+    from ecadlib import cliutil as CU, migrate as MG
+    out = io.StringIO()
+    assert CU.report("librarian", MG.too_new("plan", 99, "9.9.9", "lib/plan.json"), out) == 2
+    assert "upgrade ecadlib" in out.getvalue() and "pip install -U ecadlib" in out.getvalue()
+    assert "internal error" not in out.getvalue() and "please report" not in out.getvalue()
