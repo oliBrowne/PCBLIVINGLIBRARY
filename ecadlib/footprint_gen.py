@@ -600,15 +600,16 @@ def main(argv=None):
         rules = RU.load(a.rules, start=outdir)
         bad = 0
         for sp in a.specs:
-            spec = json.loads(Path(sp).read_text(encoding="utf-8-sig"))     # UTF-8 (Notepad's BOM too), not the locale's
+            spec = None
             try:
+                spec = json.loads(Path(sp).read_text(encoding="utf-8-sig"))     # UTF-8 (Notepad's BOM too), not the locale's
                 validate(spec)
                 txt, rep = build(spec, RU.density_for(spec, rules, a.density))
             except (ValueError, ValidationError) as e:            # a spec that doesn't add up: say why, write nothing
                 if isinstance(e, ValidationError):                # (and go on with the next spec)
                     where = "/".join(map(str, e.absolute_path))
                     e = f"the package spec isn't valid{' at ' + where if where else ''}: {e.message}"
-                print(f"{spec.get('name', sp)}: not written: {e}", file=sys.stderr)
+                print(f"{spec.get('name', sp) if isinstance(spec, dict) else sp}: not written: {e}", file=sys.stderr)
                 bad += 1
                 continue
             if shorts(rep):

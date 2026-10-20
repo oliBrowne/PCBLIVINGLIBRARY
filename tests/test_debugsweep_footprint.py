@@ -291,3 +291,23 @@ def test_ds2_31_altium_lib_pcblib_reports_a_bad_spec_and_goes_on(tmp_path):
         assert f"{name}: not written" in p.stderr, (name, p.stderr)
     assert (tmp_path / "al" / f"{good['name']}.PcbLib").is_file(), (p.stdout, p.stderr)
     assert p.returncode == 1, p.returncode
+
+
+@lite
+def test_ds2_31_footprint_gen_reports_a_spec_that_is_not_an_object_or_not_json_and_goes_on(tmp_path):
+    # The per-spec handler named the spec with spec.get(...): a JSON list crashed it (AttributeError, 'internal
+    # error'), and json.loads ran before the try, so a broken file stopped the batch too.
+    import json
+    from pathlib import Path
+    from tests import e2e_support as E
+    root = Path(__file__).resolve().parent.parent
+    good = json.loads((root / "ecadlib" / "package_specs" / "R_0603_1608Metric.json").read_text(encoding="utf-8"))
+    (tmp_path / "good.json").write_text(json.dumps(good), encoding="utf-8")
+    (tmp_path / "list.json").write_text("[1, 2]", encoding="utf-8")
+    (tmp_path / "broken.json").write_text("{not json", encoding="utf-8")
+    p = E.ecadlib(tmp_path, "footprint", "gen", "list.json", "broken.json", "good.json", "-o", "out.pretty", check=False)
+    assert "internal error" not in p.stderr and "Traceback" not in p.stderr, p.stderr
+    for name in ("list.json", "broken.json"):
+        assert f"{name}: not written" in p.stderr, (name, p.stderr)
+    assert (tmp_path / "out.pretty" / f"{good['name']}.kicad_mod").is_file(), (p.stdout, p.stderr)
+    assert p.returncode == 1, p.returncode
