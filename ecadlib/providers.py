@@ -141,10 +141,9 @@ def parse_easyeda(data, res):
                 res.has_3d = True
                 res.extra["model_uuid"] = attrs.get("uuid", "")
     res.extra["footprint_name"] = pkg.get("title", "")
-    tags = r.get("tags") if isinstance(r.get("tags"), list) else []
-    desc = describe(r.get("description"), next((t for t in tags if isinstance(t, str) and t.strip()), ""), res.package)
-    if desc:                                   # result.description (LCSC's text), else its category tag + package
-        res.extra["description"] = desc
+    desc = describe(r.get("description"))
+    if desc:                                   # result.description (the part's own text) only: its tag and EasyEDA's
+        res.extra["description"] = desc        # footprint name ("Crystals, CRYSTAL-SMD_L7.0-W4.0-LS7.8") say too little
     return res
 
 
@@ -188,13 +187,25 @@ class JLCPCBSearch(Provider):
             return res
         return parse_jlcpcb(r, mpn, res)
 
+    def lookup_lcsc(self, lcsc):
+        """The part with this LCSC number (a search for the number; only that exact code counts): its LCSC
+        description for a BOM that gave the number, which EasyEDA's answer usually lacks."""
+        res = SourceResult(self.name, lcsc=lcsc)
+        r = self.post(lcsc)
+        if not r.ok:
+            res.error = r.error or f"HTTP {r.status}"
+            return res
+        return parse_jlcpcb(r, "", res, code=lcsc)
 
-def parse_jlcpcb(r, mpn, res):
-    """One JLCPCB search answer -> res (exact MPN match only; the field paths easyeda2kicad reads)."""
+
+def parse_jlcpcb(r, mpn, res, code=""):
+    """One JLCPCB search answer -> res (exact MPN match only, or with code the part with that LCSC number; the field
+    paths easyeda2kicad reads)."""
     try:
         from .kicad_index import norm_mpn
         items = (((r.json().get("data") or {}).get("componentPageInfo") or {}).get("list")) or []
-        exact = [i for i in items if norm_mpn(i.get("componentModelEn")) == norm_mpn(mpn)]
+        exact = [i for i in items if (str(i.get("componentCode") or "").strip().upper() == code.upper() if code else
+                                      norm_mpn(i.get("componentModelEn")) == norm_mpn(mpn))]
     except (ValueError, AttributeError, TypeError) as e:          # untrusted body of an unexpected shape
         res.error = f"unparseable: {e}"
         return res

@@ -472,6 +472,8 @@ class Run:
         lc = (row.get("lcsc") or "").split(" ")[0]
         if row.get("src_description"):        # the part search's own text (Nexar / DigiKey / Mouser / LCSC), after a KiCad symbol's
             st["found"].setdefault("description", (row["src_description"], f"{_desc_label(row)} part data {lc}".strip()))
+        if "easyeda_description" in st["found"]:                  # then the text on EasyEDA's component
+            st["found"].setdefault("description", st["found"].pop("easyeda_description"))
         return st
 
     def local(self, st, row, kind, fp_name, sym_name):
@@ -516,9 +518,9 @@ class Run:
             st["hint_fp"] = st["hint_fp"] or props.get("Footprint", "")
             if str(props.get("Datasheet", "")).startswith("http"):
                 st["found"].setdefault("datasheet", (props["Datasheet"], f"KiCad symbol {sym_ref}"))
-            if props.get("Description"):
-                st["found"].setdefault("description", (props["Description"], f"KiCad symbol {sym_ref}"))
             shared = kind in ("R", "C", "CP", "L")            # one generic symbol for every value: no MPN, no footprint link
+            if props.get("Description") and not shared:      # "Resistor" describes the symbol, not this part
+                st["found"].setdefault("description", (props["Description"], f"KiCad symbol {sym_ref}"))
             extra = [] if shared or not mpn else [("MPN", mpn)]
             self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", extra)
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
@@ -567,8 +569,8 @@ class Run:
         if res.manufacturer:
             st["found"].setdefault("manufacturer", (res.manufacturer, f"EasyEDA {lcsc}"))
         st["found"].setdefault("lcsc", (lcsc, f"EasyEDA {lcsc}" + ("" if ln.get("lcsc") else " (LCSC number found by ecadlib, not in the BOM)")))
-        if res.extra.get("description"):
-            st["found"].setdefault("description", (res.extra["description"], f"EasyEDA {lcsc}"))
+        if res.extra.get("description"):       # after the part search's LCSC / distributor text (resolve)
+            st["found"].setdefault("easyeda_description", (res.extra["description"], f"EasyEDA {lcsc}"))
         if res.package:
             st["found"].setdefault("package", (res.package, f"EasyEDA {lcsc}"))
         got = []
@@ -587,7 +589,9 @@ class Run:
                 st["tried"].append(f"easyeda {lcsc}: multi-unit symbol (subparts) not converted")
             else:
                 notes = []
-                text = EC.symbol_to_kicad(ds, sym_name, fp_name, {"MPN": mpn, "LCSC": lcsc, "Manufacturer": res.manufacturer}, notes)
+                desc = item.get("description") or row.get("src_description") or res.extra.get("description") or ""
+                text = EC.symbol_to_kicad(ds, sym_name, fp_name, {"MPN": mpn, "LCSC": lcsc, "Manufacturer": res.manufacturer,
+                                                                  "Description": desc}, notes)
                 chain = [K._find_symbol(sexpr.parse(text), sym_name)]
                 self.put_kicad_sym(st, chain, sym_name, fp_name, f"easyeda:{lcsc}", [("MPN", mpn)] if mpn else [], layout=True)
                 st["symbol"]["notes"] = notes + st["symbol"]["notes"]
@@ -800,7 +804,7 @@ def _fingerprint(item, ln, row):
                        ln.get("footprint"), ln.get("datasheet"), row.get("local_symbol"), row.get("local_footprint")])
 
 
-BUILD_REV = 2              # bump when a source's conversion changes what it writes (1: before the build_rev stamp)
+BUILD_REV = 3              # bump when a source's conversion changes what it writes (1: before the build_rev stamp; 3: descriptions)
 
 
 def _built_now(st, rules):
@@ -817,38 +821,22 @@ def _done(st, out):
     return all(st.get(k) and (Path(out) / st[k]["file"]).exists() for k in ("symbol", "footprint"))
 
 
-GENERATED_DESCRIPTION = "written by ecadlib from the part's category and package (check it)"
-SINGULAR = {"ICs": "IC", "Resistors": "Resistor", "Capacitors": "Capacitor", "Inductors": "Inductor", "Diodes": "Diode",
-            "Transistors": "Transistor", "Connectors": "Connector", "Crystals": "Crystal", "Oscillators": "Oscillator",
-            "Switches": "Switch", "Relays": "Relay", "Fuses": "Fuse", "LEDs": "LED", "Sensors": "Sensor"}
-
-
-def _package_name(text, mpn=""):
-    """'SOIC-8_3.9x4.9mm_P1.27mm' / 'SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL' -> 'SOIC-8', 'CAP 0603 (1608 Metric)' -> '0603';
-    '' when it names no package ecadlib knows (an MPN, a maker's series)."""
-    t = str(text or "").split(":")[-1].strip()
-    pkg = package_of(t) if t and norm_mpn(t) != norm_mpn(mpn) else None
-    if not pkg:
+def passive_description(item, st, ln):
+    """A resistor / capacitor / inductor no source described, in a distributor's words from its own BOM line: 'RES 10kΩ
+    1% 0603', 'CAP 100nF 16V X7R 0402' (value, tolerance, voltage, dielectric, power, package; nothing guessed). ''
+    for any other part, or a value that is not a number: only a source describes those."""
+    from .kicad_index import parse_value
+    cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    raw = str(_par(item).get("Value") or ln.get("value") or "").strip()
+    v = parse_value(raw) if cat in RU.PASSIVES and raw else None
+    if v is None:
         return ""
-    first = re.split(r"[_ ]", t)[0]
-    return first if first.replace("-", "").upper() == pkg.upper() else pkg
-
-
-def generated_description(item, st, ln):
-    """A plain description when no source gave one: '<category>, <package>, <manufacturer> <MPN>' from what the
-    plan already knows (nothing is guessed about what the part does). '' when there is not even a part number."""
-    par = _par(item)
-    mpn = str(par.get("Manufacturer Part Number") or ln.get("mpn") or "").strip()
-    if not mpn:
-        return ""
-    folder = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
-    cat = SINGULAR.get(folder, folder if folder not in ("", "Misc", "Components") else "")
-    pkg = next((p for p in (_package_name((st.get("found", {}).get("package") or ("",))[0], mpn),
-                            _package_name((st.get("footprint") or {}).get("name"), mpn),
-                            _package_name(item.get("footprint", {}).get("kicad"), mpn),
-                            _package_name(ln.get("footprint"), mpn)) if p), "")
-    who = " ".join(x for x in (str(par.get("Manufacturer") or "").strip(), mpn) if x)
-    return ", ".join(x for x in (cat, pkg, who) if x)
+    pkg = next((p for p in (package_of(str(t or "").split(":")[-1]) for t in (
+        (st.get("footprint") or {}).get("name"), item.get("footprint", {}).get("kicad"), ln.get("footprint"))) if p), "")
+    f = RU.line_fields(dict(ln, value=raw), cat, pkg)
+    value = RU.fmt_number(v, cat, "si_unit") + ("Ω" if cat == "Resistors" else "")
+    return " ".join(x for x in (f["cat3"], value, f["tolerance"], f["voltage"], f["dielectric"],
+                                f["power"], pkg) if x)
 
 
 def is_kicad_source(source):
@@ -916,10 +904,10 @@ def apply_state(item, st, ln):
         _set_par(item, "Library Credit", "; ".join(v for v, _ in credits)); fields["Library Credit"] = "; ".join(w for _, w in credits)
     if not str(item.get("description") or "").strip() and "description" in st.get("found", {}):
         item["description"], fields["Description"] = st["found"]["description"]
-    if not str(item.get("description") or "").strip():          # no source gave one: write a plain one to check
-        desc = generated_description(item, st, ln)
+    if not str(item.get("description") or "").strip():          # no source gave one: a passive's own BOM line, else
+        desc = passive_description(item, st, ln)                # empty (held: a person types it); never made up
         if desc:
-            item["description"], fields["Description"] = desc, GENERATED_DESCRIPTION
+            item["description"], fields["Description"] = desc, "the BOM line's value and package"
     item["field_sources"] = fields
     item["verify"] = list(st.get("verify", []))
     if st.get("cross_check"):                     # ecadlib.crosscheck: agreed / disagreed (held) / unchecked / skipped
