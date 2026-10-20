@@ -1,6 +1,6 @@
 """Regression tests for the debug sweep's librarian-side reports (DS2-*): rebuild, upkeep, change_cli.
 Plain functions (tests.run_all, no pytest)."""
-import contextlib, hashlib, io
+import contextlib, hashlib, io, json
 from pathlib import Path
 
 from ecadlib import cli, librarian as L, rebuild as RB
@@ -38,3 +38,20 @@ def test_ds2_46_rebuild_check_keep_never_deletes_or_writes_into_the_library(tmp_
             rc = cli.main(["rebuild", str(lib), "--check", "--keep", str(keep)])
         assert _tree(lib) == before, f"--check --keep {keep} changed the library"
         assert rc == 2 and "internal error" not in err.getvalue(), (rc, err.getvalue())
+
+
+@lite
+def test_ds2_47_upkeep_a365_compares_under_the_house_parameter_names(tmp_path):
+    from ecadlib import rules as RU, upkeep as UK
+    from tests import test_upstream as TU
+    items = TU.plan_items()[:1]                     # CH340C: Manufacturer=WCH, Manufacturer Part Number=CH340C
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps(items), encoding="utf-8")
+    rules = RU.load({"parameters": {"names": {"Manufacturer Part Number": "MfrPN", "Manufacturer": "Mfr"}}})
+    # the workspace holds the part exactly as `altium365 push` sends it: in the house names
+    ws = TU.node("CH340C", "Components/ICs", {"Mfr": "WCH", "MfrPN": "CH340C"}, comment="CH340C", description="USB UART")
+    rep = UK.run(plan, ["a365"], tmp_path / "s", tmp_path / "r", workspace="https://ws", rules=rules,
+                 ctx=UK.Ctx(design=TU.FakeWorkspace([ws]), env={}), now="2026-10-05T06:23:00+00:00")
+    sec = next(s for s in rep["checks"] if s["check"] == "a365")
+    assert sec["status"] == "ok", sec
+    assert rep["new_changes"] == 0 and rep["exit_code"] == 0, sec["changes"]
