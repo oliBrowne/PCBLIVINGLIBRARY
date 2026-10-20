@@ -627,7 +627,7 @@ def main(argv=None):
         sys.exit(f"can't listen on {a.host}:{a.port} ({e.strerror}); is ecadlib already running? Try --port {a.port + 1}")
     shown = f"[{a.host}]" if ":" in a.host and not a.host.startswith("[") else a.host   # IPv6 literal in a URL
     url = f"http://{shown}:{srv.server_address[1]}/"
-    print(f"ecadlib UI on {url}  (workspace {ws.root}; Ctrl+C to stop)")
+    print(f"ecadlib UI on {url}{'setup' if a.setup else ''}  (workspace {ws.root}; Ctrl+C to stop)")
     if not a.no_browser:                    # a thread: a console browser (w3m, lynx) waits for the page we serve below
         threading.Thread(target=webbrowser.open, args=(url + ("setup" if a.setup else ""),), daemon=True).start()
     try:

@@ -134,7 +134,7 @@ def main(argv=None):
     app = App(ws, port)
     app.start()
     ES.RESTART = app.restart
-    print(f"ecadlib {__version__} on {app.url} (workspace {app.workspace})")
+    print(f"ecadlib {__version__} on {app.url}{first} (workspace {app.workspace})")   # first run: the setup page
 
     def open_page(path):
         webbrowser.open(app.url + path)

@@ -264,3 +264,25 @@ def test_ui_serves_the_page_to_a_browser_that_waits_for_it(tmp_path, monkeypatch
         S.main(["--workspace", str(tmp_path / "ws"), "--port", "0", "--setup"])
     made[0].server_close()
     assert seen == [200], seen
+
+
+# T014
+@lite
+def test_first_start_prints_the_setup_page_and_the_main_page_links_to_it(tmp_path, monkeypatch):
+    import re, urllib.request
+    from ecadlib import launcher as L
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    got = {}
+
+    def window(app, open_page):                 # the 'ecadlib is running' window: fetch what was printed, then close
+        url = re.search(r"(http://\S+)", got["out"].getvalue()).group(1)
+        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        got["printed"] = direct.open(url, timeout=10).read().decode()
+        got["main"] = direct.open(app.url, timeout=10).read().decode()
+        return True
+    monkeypatch.setattr(L, "window", window)
+    got["out"] = io.StringIO()
+    with contextlib.redirect_stdout(got["out"]):
+        assert L.main(["--no-browser", "--port", "0", "--workspace", str(tmp_path / "ws")]) == 0
+    assert "<title>ecadlib setup</title>" in got["printed"], got["out"].getvalue()
+    assert re.search(r'href="setup"', got["main"])
