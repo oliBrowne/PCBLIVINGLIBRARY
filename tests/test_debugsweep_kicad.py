@@ -94,6 +94,25 @@ def test_ds2_42_kicad_pcm_a_second_change_the_same_day_gets_a_newer_version():
     assert build(day + datetime.timedelta(days=7))["version"] == "2026.10.27"
 
 
+def test_ds2_43_a_value_with_a_thousands_or_decimal_comma_is_not_bound_renamed_or_merged_by_value():
+    """'4,700pF' is 4.7 pF with a decimal comma and 4.7 nF with a thousands separator (change_diff._readings): no
+    library part is picked by its value, no value style rewrites it, no other line's part takes it."""
+    from ecadlib import altium_export as AE, bom_triage as T, kicad_index as KI, rules as RU
+    idx = KI.KiCadIndex([])
+    idx.symbols.append(KI.Symbol("lib", "C_4p7_0603", {"Value": "4.7pF", "Reference": "C",
+                                                       "Footprint": "Capacitor_SMD:C_0603_1608Metric"}))
+    assert idx.match("", "", "4,700pF", "0603", ref_class="C") == (None, None)
+    assert idx.match("", "", "4,7pF", "0603", ref_class="C")[1] == "value+package"      # a decimal comma alone: one reading
+    assert idx.match("", "", "4.7pF", "0603", ref_class="C")[1] == "value+package"
+    [row] = T.triage([{"designator": "C2", "value": "4,700pF", "footprint": "C_0603_1608Metric", "qty": "1"}], idx, [], None)
+    assert row["local_symbol"] == "" and "4,700pF reads two ways: 4.7pF or 4700pF" in row["notes"], row
+    assert RU.fmt_value("4,700pF", "Capacitors", "si") == "4,700pF"
+    assert RU.fmt_value("4,7pF", "Capacitors", "si") == "4.7p" and RU.fmt_value("0,100uF", "Capacitors", "si") == "100n"
+    rows = AE.to_rows([{"designator": "C1", "value": "4.7pF", "footprint": "C_0603_1608Metric", "qty": "1"},
+                       {"designator": "C2", "value": "4,700pF", "footprint": "C_0603_1608Metric", "qty": "1"}])
+    assert sorted(rows["Capacitors"]["Value"]) == ["4,700pF", "4.7pF"], rows["Capacitors"].to_dict("records")
+
+
 def test_ds2_44_kicad_pcm_packages_a_crlf_checkout_of_a_kicad_export_folder():
     _, out, _ = TP._export(False)
     lf = KP.build(out, out.parent / "pcm_lf", log=QUIET)

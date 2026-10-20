@@ -11,7 +11,7 @@ import pandas as pd
 
 from . import providers as P, sheetsafe as SS
 from .httpcache import CachedHTTP
-from .kicad_index import KiCadIndex, package_of, parse_value
+from .kicad_index import KiCadIndex, package_of, parse_value, two_readings
 
 FIELDS = {   # canonical field -> header synonyms (normalised: lowercase, punctuation -> space)
     "mpn": ["mpn", "manufacturer part number", "mfr part number", "mfr part", "mfg part number", "mfr pn",
@@ -820,6 +820,10 @@ def triage(lines, index, provs, http):
         if pns and not ln.get("mpn"):
             work["mpn"] = pns[0]                               # let providers search by the Comment/LibRef part number
             notes.append(f"part number taken from {'Comment/value' if pns[0] == ln.get('value', '').strip() else 'LibRef'}: {pns[0]}")
+        both = two_readings(ln.get("value"))
+        if both:
+            notes.append(f"value {ln['value'].strip()} reads two ways: {both[0]} or {both[1]} (a decimal or a thousands comma); "
+                         "no library part was picked by it: write the value without the comma")
         if ln.get("altium_mpn_source") == "Comment":
             notes.append("MPN taken from the schematic Comment (the component has no Manufacturer Part Number parameter)")
         if re.fullmatch(r"\d+(\.\d+)?E\+\d+", ln.get("mpn", ""), re.I):     # Excel turned 530470610 into 5.30E+08

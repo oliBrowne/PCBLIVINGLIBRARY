@@ -51,6 +51,21 @@ def split_value(s):
     return v, u, s[m.end():].strip()
 
 
+COMMA_3_RE = re.compile(r"\s*([1-9]\d{0,2}),(\d{3})(?![\d,.])")
+
+
+def two_readings(s):
+    """'4,700pF' -> ('4.7pF', '4700pF'): a leading number with a comma before exactly three digits is a decimal comma
+    in Europe and a thousands separator elsewhere (as change_diff._readings), so the value is ambiguous; None for any
+    other value ('4,7pF', '0,100uF', '4,700.5pF' read one way). split_value takes the decimal comma: what these
+    values store does not change, but nothing should pick, rename or merge a part by such a value."""
+    m = COMMA_3_RE.match(str(s or ""))
+    if not m:
+        return None
+    rest, dec = str(s)[m.end():].strip(), m.group(2).rstrip("0")
+    return m.group(1) + ("." + dec if dec else "") + rest, m.group(1) + m.group(2) + rest
+
+
 def parse_value(s, with_unit=False):
     """'10k' / '10kΩ' / '4k7' / '100nF' / '0.1uF' / '10K 1%' / '0R' / '3.3V' -> float, else None.
     with_unit=True -> (value, unit) with unit in 'F', 'H', 'R' (ohm), 'V', 'W', 'A', 'Hz' or '' when not stated."""
@@ -140,7 +155,7 @@ class KiCadIndex:
             if lcsc and s.lcsc.upper() == lcsc.upper():
                 return s, "lcsc"
         v, u = parse_value(value, True)
-        if v is not None and package:
+        if v is not None and package and not two_readings(value):    # '4,700pF': 4.7 pF or 4.7 nF, so neither
             for s in self.symbols:
                 sv, su = parse_value(s.props.get("Value"), True)
                 if (sv is not None and abs(sv - v) <= 1e-6 * v and not (u and su and u != su)     # 0R == 0; 10uF != 10uH
