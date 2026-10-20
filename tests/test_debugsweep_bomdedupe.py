@@ -107,3 +107,18 @@ def test_ds2_07_remap_bom_keeps_hidden_columns(tmp_path):
     assert n == 1 and rows == ["Designator,Value,Footprint,MPN,Footprint",
                                "R1,10k,R0603_OLD,RC0603FR-0710KL,R_0603_1608Metric",
                                "C1,100n,keep this note,GRM188R71H104KA93D,C_0603_1608Metric"], (n, rows)
+
+
+def test_ds2_08_chip_size_before_a_word_starting_with_r_k_v_w():
+    """A bare size code followed by a unit is a value ('1206 V', '1210 K'), not a size. The unit letters matched the
+    first letter of any next word, so '0603 Resistor' or '0805 Vishay' named no size and the part found no
+    standard footprint ('RES 0603' did)."""
+    from ecadlib import stdparts as SP
+    for text, want in (("0603 Resistor", "0603"), ("RES 0603 RoHS", "0603"), ("CAP 0805 Kemet", "0805"),
+                       ("0805 Vishay", "0805"), ("1206 Walsin", "1206"),
+                       ("1206 V", None), ("2010 W", None), ("1210 K", None), ("0603 R", None),   # a value and its unit
+                       ("1210 kΩ", None), ("1210 kOhm", None)):
+        assert SP.chip_size(text) == want, (text, SP.chip_size(text), want)
+    assert str(SP.chip_size("0603 / 1005 Resistor")).startswith("conflict"), SP.chip_size("0603 / 1005 Resistor")
+    r = SP.resolve(["0603 Resistor"], "R", "", "")
+    assert r["footprint"] == "R_0603_1608Metric", r

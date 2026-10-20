@@ -170,6 +170,9 @@ def _strip_lib(s):
     return s.split(":", 1)[1] if re.match(r"^[A-Za-z0-9_.\-]+:[^:]", s) and not re.match(r"^[A-Z]:[\\/]", s) else s
 
 
+_UNIT_LETTER = r"[VWR]\b|K(?:\b|Ω|ohm)"      # '1206 V', '1210 K', '1210 kΩ': a value; not '0603 Resistor', '0805 Vishay'
+
+
 def chip_size(text):
     """Imperial size code from a footprint / description text, or None. Bare 4-digit codes are imperial (the
     industry default); metric needs a marker (1608Metric, 1608M, '0603 (1608)' gives both and they must agree)."""
@@ -181,14 +184,14 @@ def chip_size(text):
     for m in re.finditer(r"(?<![0-9])(\d{4,5})\s*(?:_?Metric|M)(?![A-Za-z0-9])", t, re.I):
         if m.group(1) in METRIC:
             found.add(METRIC[m.group(1)])
-    for m in re.finditer(r"(?<![0-9.])(\d{4,5})(?![0-9.])(?!\s*(?:_?Metric|M\b|mm|mil|V|W|K|R|nF|pF|uF|µF|Ω|ohm|%))", t, re.I):
+    for m in re.finditer(rf"(?<![0-9.])(\d{{4,5}})(?![0-9.])(?!\s*(?:_?Metric|M\b|mm|mil|{_UNIT_LETTER}|nF|pF|uF|µF|Ω|ohm|%))", t, re.I):
         code = m.group(1)
         if code in IMPERIAL and not re.search(r"(?:RES|CAP|IND|LED|DIO|FUS)C$", t[:m.start()], re.I):
             found.add(code)
     # a bare metric-only code next to an imperial one ('0603 (1005)', '0402 / 1608') must agree with it; alone it
     # is not read (bare codes are imperial), so it can only turn a size into a conflict, never pick one
     bare_metric = {METRIC[m.group(1)] for m in re.finditer(
-        r"(?<![0-9A-Za-z.])(\d{4,5})(?![0-9A-Za-z.])(?!\s*(?:mm|mil|V|W|K|R|nF|pF|uF|µF|Ω|ohm|%))", t, re.I)
+        rf"(?<![0-9A-Za-z.])(\d{{4,5}})(?![0-9A-Za-z.])(?!\s*(?:mm|mil|{_UNIT_LETTER}|nF|pF|uF|µF|Ω|ohm|%))", t, re.I)
         if m.group(1) in METRIC and m.group(1) not in IMPERIAL}
     if found and bare_metric - found:
         found |= bare_metric
