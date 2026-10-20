@@ -500,8 +500,8 @@ def main(argv=None):
                                                                   TM.VERBOSITY))
             return 0 if rep["ok"] else 1
         new, drift = rebuild(lib, log=quiet if a.json else print)
-    except FileNotFoundError as e:
-        print(f"ecadlib rebuild: {e}", file=sys.stderr)
+    except (FileNotFoundError, KeepError) as e:
+        print(f"ecadlib rebuild: {e}" + (f"\n  hint: {e.hint}" if isinstance(e, KeepError) else ""), file=sys.stderr)
         return 2
     rep = {"lock": str(lib / LOCK), "parts": len(new["parts"]), "inputs": drift}
     print(json.dumps(rep, indent=1) if a.json else f"rebuilt {len(new['parts'])} part(s) from {lib / LOCK}"

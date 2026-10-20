@@ -50,6 +50,18 @@ def test_ds2_46_rebuild_check_keep_never_deletes_or_writes_into_the_library(tmp_
 
 
 @lite
+def test_ds2_46_rebuild_module_entry_point_refuses_an_overlapping_keep_in_one_line(tmp_path):
+    # `python -m ecadlib.rebuild LIB --check --keep ..` (rebuild.main, not the ecadlib CLI)
+    lib = _library(tmp_path)
+    before = _tree(lib)
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+        rc = RB.main([str(lib), "--check", "--keep", str(lib.parent)])
+    assert _tree(lib) == before
+    assert rc == 2 and err.getvalue().startswith("ecadlib rebuild: --keep "), (rc, err.getvalue())
+
+
+@lite
 def test_ds2_46_rebuild_check_keep_never_replaces_a_folder_around_the_library(tmp_path):
     # a library nested in a folder of its own name (X/lib/lib): --keep X would put the copy on X/lib, around it
     root = tmp_path.resolve()
