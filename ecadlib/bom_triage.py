@@ -798,7 +798,7 @@ def triage(lines, index, provs, http):
                          "mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""),
                          "value": ln.get("value", ""), "package": "", "status": "dnp (not fitted)",
                          "local_symbol": "", "local_footprint": "", "src": "", "src_symbol": "", "src_footprint": "",
-                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_datasheet": "", "notes": "marked do-not-populate; not triaged"})
+                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_datasheet": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
             continue
         pns = part_numbers(ln)
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"), *pns)
@@ -816,6 +816,7 @@ def triage(lines, index, provs, http):
         gen_fp = None if fp_key else index.find_footprint_for_package(
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
+        sheets = []                                    # every datasheet link every source gave, in source order
         if pns and not ln.get("mpn"):
             work["mpn"] = pns[0]                               # let providers search by the Comment/LibRef part number
             notes.append(f"part number taken from {'Comment/value' if pns[0] == ln.get('value', '').strip() else 'LibRef'}: {pns[0]}")
@@ -875,6 +876,8 @@ def triage(lines, index, provs, http):
                         if not desc and (r.extra or {}).get("description"):
                             desc, desc_from = r.extra["description"], prov.name
                         sheet = sheet or (r.extra or {}).get("datasheet") or ""
+                        sheets += [u for u in (r.extra or {}).get("datasheets") or [(r.extra or {}).get("datasheet")]
+                                   if u and u not in sheets]
                         if r.lcsc and not work.get("lcsc"):   # an official source (Nexar: LCSC's offer) found the LCSC
                             work["lcsc"] = r.lcsc              # number, so the unofficial JLCPCB search is not needed
                             notes.append(f"{prov.name}: MPN -> {r.lcsc}")
@@ -908,7 +911,8 @@ def triage(lines, index, provs, http):
             "local_footprint": fp_key or (f"{gen_fp} (generated, by package)" if gen_fp else ""),
             "src": src.provider if src else "", "src_symbol": _yn(src and src.has_symbol),
             "src_footprint": _yn(src and src.has_footprint), "src_3d": _yn(src and src.has_3d),
-            "src_mpn": src.mpn if src else "", "src_description": desc, "src_description_from": desc_from, "src_datasheet": sheet, "notes": "; ".join(dict.fromkeys(notes)),
+            "src_mpn": src.mpn if src else "", "src_description": desc, "src_description_from": desc_from, "src_datasheet": sheet,
+            "src_datasheet_more": " ".join(u for u in sheets if u != sheet), "notes": "; ".join(dict.fromkeys(notes)),
         })
     return rows
 

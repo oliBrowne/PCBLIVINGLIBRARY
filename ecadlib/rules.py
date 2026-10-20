@@ -67,6 +67,7 @@ DEFAULTS = {
                   # ecadlib.ds_route: pages and model per part (route = "single": `model` for every part, as before)
                   "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
                   "escalate": True, "max_attempts": 4,
+                  "zoom_drawings": False,               # also send sharper close-ups of the drawing pages (A/B test first)
                   # ecadlib.crosscheck: a second source (standard table / a second read) before a footprint is accepted
                   "cross_check": "auto", "cross_check_model": ""},
     "symbols": {                               # ecadlib.symbol_layout: IC symbol pins grouped by function
@@ -859,6 +860,9 @@ HELP = {
     "datasheet.ladder": "models for route = \"ladder\", cheapest first",
     "datasheet.escalate": "retry with more pages / the next model when the answer is incomplete or fails the checks",
     "datasheet.max_attempts": "most answers paid for per part (first try included)",
+    "datasheet.zoom_drawings": "also send each picked drawing / land-pattern page as two close-up pictures (top and bottom "
+                               "half, about 260 dpi), so small dimension text is sharper than in the PDF's own page "
+                               "picture; about 10,000 more input tokens per drawing page (off by default)",
     "datasheet.cross_check": "auto: compare every datasheet footprint with the standard package table, or (not in the table) "
                              "with a second read of only the critical numbers; disagreement holds the part | always: the "
                              "second read for every datasheet part | off",

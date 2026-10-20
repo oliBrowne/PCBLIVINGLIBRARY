@@ -13,7 +13,7 @@ Renderers (PIL, pure Python, deterministic):
   render_symbol     symbol JSON / altium_lib symbol dict / .SchLib / LIB.kicad_sym:NAME; every part (multi-part
                     symbols side by side, or one part); pin numbers on the pin, names inside the body, stacked pins
                     listed together, hidden pins in the footer.
-  datasheet_pages   pdftoppm, one PNG per page (long edge <= 2576 px, the model's image limit).
+  datasheet_pages   pypdfium2 (else pdftoppm), one PNG per page (long edge <= 2576 px, the model's image limit).
   find_pages        pages likely to hold the package drawing ("footprint") or pin table ("symbol"), by the same
                     keyword table datasheet.py uses to pick pages.
 
@@ -1031,11 +1031,11 @@ def parse_page_list(s):
 
 
 def datasheet_pages(pdf_path, pages, out_dir, dpi=110):
-    """Render PDF pages (1-based) to PNGs with pdftoppm: <out_dir>/page_<n>.png, long edge at most 2576 px."""
+    """Render PDF pages (1-based) to PNGs (pypdfium2, else pdftoppm): <out_dir>/page_<n>.png, long edge at most 2576 px."""
+    from . import pdf_render
     Image, _ = _pil()
-    exe = shutil.which("pdftoppm")
-    if not exe:
-        raise VisualCheckError("pdftoppm is not installed (poppler-utils): it renders the datasheet pages")
+    if pdf_render.renderer() is None:
+        raise VisualCheckError("no PDF renderer: pip install pypdfium2 (or install poppler's pdftoppm); it renders the datasheet pages")
     n = pdf_page_count(pdf_path)
     pages = parse_page_list(pages)
     bad = [p for p in pages if p > n]
@@ -1045,12 +1045,11 @@ def datasheet_pages(pdf_path, pages, out_dir, dpi=110):
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     for p in pages:
-        stem = out_dir / f"page_{p:03d}"
-        r = subprocess.run([exe, "-f", str(p), "-l", str(p), "-r", str(int(dpi)), "-png", "-singlefile",
-                            str(pdf_path), str(stem)], capture_output=True, timeout=120)
-        f = stem.with_suffix(".png")
-        if r.returncode or not f.exists():
-            raise VisualCheckError(f"pdftoppm failed on page {p}: {r.stderr.decode(errors='replace')[:200]}")
+        f = out_dir / f"page_{p:03d}.png"
+        try:
+            f.write_bytes(pdf_render.render_png(pdf_path, p, dpi))
+        except pdf_render.RenderError as e:
+            raise VisualCheckError(str(e)) from None
         with Image.open(f) as im:
             if max(im.size) > MAX_EDGE:
                 k = MAX_EDGE / max(im.size)

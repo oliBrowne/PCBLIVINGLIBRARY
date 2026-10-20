@@ -17,7 +17,7 @@ key), PdfStore (download + %PDF check + provenance), prepare (page ranges, auto 
 ResultCache (PDF hash + model + schema version: re-runs are free), Reader (one job per part -> cache, a synchronous
 call, or one Message Batch with custom_id = part name, resumable through <out>/datasheet/batch_state.json),
 fill_plan (a librarian plan's open parts -> batch -> .SchLib/.PcbLib marked verify -> release check)."""
-import argparse, base64, contextlib, datetime, hashlib, io, json, math, os, random, re, sys, time
+import argparse, base64, contextlib, copy, datetime, hashlib, io, json, math, os, random, re, sys, time
 from pathlib import Path
 
 import requests
@@ -67,6 +67,7 @@ SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY"
             "auto_pages": 40,
             "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", MODEL],
             "escalate": True, "max_attempts": 4,            # pages / model per part: ecadlib.ds_route
+            "zoom_drawings": False,                         # close-ups of the drawing pages: zoom_blocks()
             "cross_check": "auto", "cross_check_model": ""}  # second source before a footprint is accepted: ecadlib.crosscheck
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # Per-model request parameters (claude-api skill, Thinking & Effort table): effort levels a model accepts (no entry
@@ -822,6 +823,38 @@ def build_request(source, part, package=None, pages=None, model=MODEL, effort="h
     return headers, body
 
 
+ZOOM_PX = 2240            # a close-up's width: 0.55 of a Letter / A4 page at 2240 px wide is ~4560 visual tokens, under the 4784
+ZOOM_PAGES = 3            # cap of the newer models (2576 px long edge), so it is sent as rendered, not downscaled
+ZOOM_BANDS = ((0.0, 0.55), (0.45, 1.0))              # top and bottom half, overlapping so no dimension is cut in two
+
+
+def zoom_blocks(pdf, sent, why):
+    """Close-ups of the picked drawing / land-pattern pages, for a model that reads the PDF itself. Claude sees each
+    PDF page as one picture of the whole page; the dimension text of a package drawing is often 5-6 pt, a few pixels
+    tall in it. Each half page here is rendered at about 260 dpi. pdf is the PDF as sent, sent the original page
+    numbers in it, why ds_route's reasons per page. [] when no page is a drawing or nothing can render."""
+    from . import pdf_render
+    pages = [p for p in sent if any(str(r).startswith(("drawing", "land")) for r in (why or {}).get(p, []))][:ZOOM_PAGES]
+    if not pages or pdf_render.renderer() is None:
+        return []
+    out = []
+    for p in pages:
+        k = sent.index(p) + 1
+        try:
+            w, h = pdf_render.page_size(pdf, k)
+            dpi = ZOOM_PX / (w / 72)
+            imgs = [pdf_render.render_png(pdf, k, dpi, band) for band in ZOOM_BANDS] if h > w else \
+                [pdf_render.render_png(pdf, k, min(dpi, 2576 / (w / 72)))]       # a landscape page: one picture
+        except Exception:
+            continue
+        half = "top and bottom half" if len(imgs) == 2 else "whole page"
+        out.append({"type": "text", "text": f"Close-up of attached PDF page {k} (original page {p}), {half}, for reading "
+                                            f"small dimension text. Cite page {k} for values read here."})
+        out += [{"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                             "data": base64.b64encode(b).decode()}} for b in imgs]
+    return out
+
+
 OFFLINE = "--offline: datasheet not read; run without --offline to read it"
 
 
@@ -1300,6 +1333,77 @@ def self_check(spec, ext, review):
     return info
 
 
+def table_check(pkg, tables, offset, review):
+    """The model's dimensions against the dimension tables read in code (ds_route.dim_tables): matched by the
+    drawing's symbol (label) on the page the model cited, else the page after or before it (ST prints the table under
+    the figure, on the next page). A number that differs is flagged; a blank the table fills is filled, with a
+    review line. Spans ("9.00 BSC" across min/nom/max) are only compared, never filled. A table that disagrees with
+    most of the dimensions matched to it is another package's (a family sheet with an outline per package), so it is
+    left out rather than flagging every number."""
+    if not tables or not isinstance(pkg, dict):
+        return
+    by_page = {}
+    for t in tables:
+        by_page.setdefault(t["page"], []).append(t)
+    items = [(k, pkg.get(k)) for k in DIMS + NUM_DIMS]
+    items += [(f"exposed_pad.{x}", (pkg.get("exposed_pad") or {}).get(x)) for x in ("length", "width")]
+    found = {}                                        # id(table) -> (table, [(dim name, label, read, row, off, fill)])
+    for k, d in items:
+        if not isinstance(d, dict) or not d.get("label"):
+            continue
+        lab = re.sub(r"(\s*\(\d*\)?)+$", "", str(d["label"]).strip())
+        pg = _pg(d.get("page"), offset)
+        hit = None
+        for q in ((pg, pg + 1, pg - 1) if isinstance(pg, int) else ()):
+            hit = next((t for t in by_page.get(q, []) if lab in t["rows"]), None)
+            if hit:
+                break
+        k_mm = TO_MM.get(d.get("unit") or "mm")
+        if not hit or k_mm is None:
+            continue
+        row = hit["rows"][lab]
+        tol = 0.006 if k_mm == 1.0 else 0.03          # an inch column is rounded differently from the mm one
+        mine = {x: d.get(x) * k_mm for x in ("min", "nom", "max") if isinstance(d.get(x), (int, float))}
+        if row["span"]:
+            v = next(row[x] for x in ("min", "nom", "max") if row[x] is not None)
+            off = [f"{x} {m:g}" for x, m in mine.items()] if mine and not any(abs(m - v) <= tol for m in mine.values()) else []
+            off = [f"{', '.join(off)} mm, the table says {v:g} mm"] if off else []
+            fill = []
+        else:
+            off = [f"{x} {mine[x]:g}, table {row[x]:g}" for x in mine if row[x] is not None and abs(mine[x] - row[x]) > tol]
+            off = [f"{'; '.join(off)} mm"] if off else []
+            fill = [x for x in ("min", "nom", "max") if x not in mine and row[x] is not None] if k_mm == 1.0 else []
+        if mine or fill:
+            found.setdefault(id(hit), (hit, []))[1].append((k, lab, d, row, off, fill))
+    for t, rows in found.values():
+        bad = sum(1 for r in rows if r[4])
+        if bad >= 2 and bad * 2 > len(rows):          # most of it disagrees: not this package's table
+            continue
+        where = f"the dimension table on p{t['page']} (read in code)"
+        for k, lab, d, row, off, fill in rows:
+            if off:
+                review.append(f"{k} ({lab}) differs from {where}: {off[0]}: check the read")
+            elif fill:
+                for x in fill:
+                    d[x] = row[x]
+                review.append(f"{k} ({lab}) {', '.join(f'{x} {row[x]:g}' for x in fill)} mm filled from {where}; "
+                              "the read left it blank")
+
+
+def ordering_check(pkg, facts, review):
+    """The pin count the ordering table gives for this MPN (ds_route.ordering_facts, read in code): fills a pin_count
+    the read left blank, and flags one that differs. Never overrides what the drawing gave."""
+    if not facts or not facts.get("pins") or not isinstance(pkg, dict):
+        return
+    src = f"the ordering table (p{facts['page']}: {facts['part']} {facts['package']} {facts['code']}, {facts['pins']} pins)"
+    n = pkg.get("pin_count")
+    if n is None:
+        pkg["pin_count"] = facts["pins"]
+        review.append(f"pin_count {facts['pins']} from {src}; the read left it blank")
+    elif n != facts["pins"]:
+        review.append(f"pin_count {n} differs from {src}: check the package variant")
+
+
 def _pin_count_from(spec, ext):
     """A read that left pin_count blank (UCC25800, UCC256301: live benchmark 2026-10-19) -> (n, how) from the package
     name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "")."""
@@ -1317,15 +1421,20 @@ def _pin_count_from(spec, ext):
 INJECTION = "document contains instruction-like text (ignored)"
 
 
-def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None):
+def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, facts=None, tables=None):
     """Extraction -> {spec, symbol, sidecar, needs_review}. Never alters a value to make a check pass.
-    n_sent: how many pages were sent when offset is an int (--pages A-B), so citations past them are caught too."""
+    n_sent: how many pages were sent when offset is an int (--pages A-B), so citations past them are caught too.
+    facts / tables: the ordering table and dimension tables read in code (ds_route), checked against the read."""
     review = [f"{INJECTION}: {q[:200]!r}" for q in ext["embedded_instructions"]]
     n = len(offset) if isinstance(offset, list) else n_sent   # auto page selection: page k sent is offset[k - 1]
     if n:
         bad = sorted({p for p in _cited_pages(ext) if isinstance(p, int) and not 1 <= p <= n})
         if bad:
             review.append(f"the model cited page(s) {bad} of the {n} pages sent: those values have no source page")
+    if facts or tables:
+        ext = dict(ext, package=copy.deepcopy(ext["package"]))
+        ordering_check(ext["package"], facts, review)
+        table_check(ext["package"], tables, offset, review)
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
     if spec.get("pin_count") is None and not spec.get("pad_table"):
         n, how = _pin_count_from(spec, ext)
@@ -1547,6 +1656,21 @@ def lcsc_number(item=None, ln=None, row=None):
     return None
 
 
+def clean_url(u):
+    """A datasheet link as a direct one: "//host/x.pdf" (DigiKey's protocol-relative links) -> https; TI's
+    suppproductinfo redirect page -> the gotoUrl it redirects to."""
+    from urllib.parse import parse_qs, urlparse
+    u = str(u or "").strip()
+    if u.startswith("//"):
+        u = "https:" + u
+    p = urlparse(u)
+    if p.netloc.lower().endswith("ti.com") and "suppproductinfo" in p.path.lower():
+        go = {k.lower(): v for k, v in parse_qs(p.query).items()}.get("gotourl")
+        if go and re.match(r"(https?:)?//", go[0]):
+            return clean_url(go[0])
+    return u
+
+
 # Maker URL patterns, tried after every BOM / provider / source link (never instead of one), only for the makers
 # whose pattern holds: (maker name, link host, label, URL). The MPN is lowercased and tried whole first (without a
 # Linear "#PBF" or TI "/NOPB" tail), then as its base part:
@@ -1591,6 +1715,8 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
     cands = [((ln or {}).get("datasheet"), "BOM"), ((row or {}).get("src_datasheet"), f"{(row or {}).get('src') or 'part source'} datasheet link"),
              (fd[0], fd[1]), (par.get("ComponentLink2URL"), "LCSC datasheet link"),
              (par.get("Datasheet"), "plan Datasheet")]
+    src = (row or {}).get("src") or "part source"
+    cands[2:2] = [(u, f"{src} datasheet link (another copy)") for u in str((row or {}).get("src_datasheet_more") or "").split()]
     lc = lcsc_number(item, ln, row)
     if lc:
         cands.append((f"https://www.lcsc.com/datasheet/{lc}.pdf", f"LCSC datasheet URL pattern ({lc})"))
@@ -1599,7 +1725,7 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
     cands += maker_urls(mpn, maker, [str(u or "").strip() for u, _ in cands])
     out, seen = [], set()
     for u, w in cands:
-        u = str(u or "").strip()
+        u = clean_url(u)
         if re.match(r"https?://", u) and u not in seen:
             seen.add(u)
             out.append((u, w))
@@ -2056,18 +2182,23 @@ class Reader:
             url, where = usable[0]
             prov = {"url": url, "where": where, "sent_as": "url", "note": "not downloaded here; sent as a URL for the API to fetch"}
             src_hash, lv, why, n = "url" + hashlib.sha256(url.encode()).hexdigest(), [None], {}, None
+            facts = tables = None
         else:
             url, where, src_hash, n = prov["url"], prov["where"], prov["sha256"], prov.get("pages") or pdf_pages(data)
             lv, why = [None], {}
+            texts = self._page_texts(data, src_hash) if n else None
+            facts = DR.ordering_facts(texts, part, data) if texts else None
             if not pages and self.page_budget and n and n > self.page_budget:
-                texts = self._page_texts(data, src_hash)
                 if texts:
-                    lv, why = DR.levels(texts, self.page_budget, part, package, n)
+                    lv, why = DR.levels(texts, self.page_budget, part, package, n, self._page_marks(data, src_hash))
+            sent = sorted({p for L in lv if isinstance(L, list) for p in L}) or (list(range(1, n + 1)) if n and n <= 40 else [])
+            tables = DR.dim_tables(data, sent, texts) if texts and sent and not pages else None
         prov["attempts"] = attempts
         sent0 = len(lv[0]) if isinstance(lv[0], list) else None
         rung, reason = self.router.start(package, n, sent0)
         base = {"name": name or part, "part": part, "package": package, "url": url, "where": where, "pages": pages,
                 "data": data, "src_hash": src_hash, "levels": lv, "n_pages": n, "base_prov": prov, "fp_needed": fp_needed,
+                "facts": facts, "tables": tables,
                 "route": {"route": self.router.route, "ladder": self.router.ladder, "start": reason, "picked": why,
                           "attempts": []}}
         first = self._at(base, rung, 0)
@@ -2076,6 +2207,15 @@ class Reader:
             if self.results.get(whole["key"]):
                 first = whole
         return self._walk(first)
+
+    def _page_marks(self, data, digest):
+        from . import ds_route as DR
+        marks = getattr(self, "_marks", None)
+        if marks is None:
+            marks = self._marks = {}
+        if digest not in marks:                       # None: no bookmarks, pages are picked by their text alone
+            marks[digest] = DR.page_marks(data)
+        return marks[digest]
 
     def _page_texts(self, data, digest):
         from . import ds_route as DR
@@ -2112,6 +2252,13 @@ class Reader:
                                       cache_doc=not self.batch)
         from .llm import rails as LRL
         sig = LRL.signature(self.info(model)["plan"])  # "" for a plain request: the cache keys of before
+        if self.cfg.get("zoom_drawings") and cut is not None:
+            zoom = zoom_blocks(cut, lv, base["route"]["picked"])
+            if zoom:                                  # before the task text; its own cache key (a different request)
+                body["messages"][0]["content"][1:1] = zoom
+                sig = f"{sig}|zoom" if sig else "zoom"
+                prov["zoom_pages"] = sorted({int(b["text"].split("original page ")[1].split(")")[0]) for b in zoom
+                                             if b["type"] == "text"})
         key = ResultCache.key(base["src_hash"], model, base["part"], base["package"],
                               offset if isinstance(offset, list) else [offset, hint], self.effort + (f"|{sig}" if sig else ""))
         route = dict(base["route"], attempts=list(base["route"]["attempts"]), rung=rung, level=level, model=model)
@@ -2124,7 +2271,8 @@ class Reader:
             return "failed", [rec.get("error") or "no answer"], None
         try:
             ext = parse_message(rec["message"])
-            res = process(ext, job["part"], job["url"], rec.get("model") or job["model"], job["offset"], rec["message"])
+            res = process(ext, job["part"], job["url"], rec.get("model") or job["model"], job["offset"], rec["message"],
+                          facts=job.get("facts"), tables=job.get("tables"))
         except DatasheetError as e:
             return "failed", [str(e)], None
         kind, why = DR.assess(res)
@@ -2161,7 +2309,8 @@ class Reader:
 
     def _result(self, job, rec):
         ext = parse_message(rec["message"])
-        res = process(ext, job["part"], job["url"], rec.get("model") or self.model, rec.get("page_offset", job["offset"]), rec["message"])
+        res = process(ext, job["part"], job["url"], rec.get("model") or self.model, rec.get("page_offset", job["offset"]), rec["message"],
+                      facts=job.get("facts"), tables=job.get("tables"))
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
         if job.get("route"):
             res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k not in ("picked", "best")}

@@ -251,8 +251,9 @@ def from_part_info(info, res):
     desc = describe(info.description)
     if desc:
         res.extra["description"] = desc
-    if getattr(info, "datasheet", "") and re.match(r"https?://", info.datasheet):
-        res.extra["datasheet"] = info.datasheet
+    links = [u for u in (getattr(info, "datasheets", None) or [getattr(info, "datasheet", "")]) if re.match(r"https?://", str(u))]
+    if links:
+        res.extra["datasheet"], res.extra["datasheets"] = links[0], links
     return res
 
 
