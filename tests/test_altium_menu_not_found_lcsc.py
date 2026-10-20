@@ -107,7 +107,7 @@ def test_not_found_with_lcsc_off_names_the_switch(tmp_path):
     assert r["status"] == "error" and r["reason"] == "not_searched" and r["big"] == "Not found", r
     assert "not found in the official part sources" in r["message"] and "LCSC was not asked" in r["message"], r
     assert "no part source knows" not in r["message"], r
-    assert "unofficial = true" in r["fix"] and str(cfg["workspace"]) in r["fix"], r
+    assert "unofficial = true" in r["fix"] and "my workspace" in r["fix"] and "ecadlib.toml" in r["fix"], r   # 8.3 paths on Windows CI
     # with LCSC on, a not-found really means no source knows it
     with mock.patch.dict(RU.DEFAULTS["providers"], unofficial=True), mock.patch.object(AM, "not_found", lambda *a: True):
         r = AM.run_job(TM._job(menu, {"action": "add-part", "mpn": "X322512MSB4SI"}))
