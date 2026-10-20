@@ -2584,7 +2584,7 @@ class Reader:
             from .ds_route import prices
             pin, pout = prices(model, tin) or (None, None)     # the long-prompt tier where the model has one
             cw = 1.0 if jb else CACHE_WRITE
-            cost = (tin * cw * pin + OUT_TOKENS * pout) / 1e6 * mult if pin else None
+            cost = (tin * cw * pin + OUT_TOKENS * pout) / 1e6 * mult if pin is not None else None   # a local $0
             worst = worst_usd(model, tmax, j["body"]["max_tokens"], cw, mult, fallback=bool(j["body"].get("fallbacks")))
             calls = j.get("calls") or self._calls(model)  # the small-model steps rail: several calls per read
             worst = worst * calls if worst is not None else None

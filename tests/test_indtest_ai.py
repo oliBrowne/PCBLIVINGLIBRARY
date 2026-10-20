@@ -42,3 +42,17 @@ def test_t057_single_read_sidecar_has_the_ai_record(tmp_path):
     assert rc == 0, (rc, out)
     ai = json.loads((tmp_path / "out" / "TESTPART.extraction.json").read_text())["ai"]
     assert ai["model"] == "tiny-3b" and ai["tier"] == "small" and "hold_on_doubt" in ai["rails"], ai
+
+
+# T055: a local $0 model is priced $0 (not "no price known") under a [datasheet] max_cost_usd cap the person set
+def test_t055_local_zero_price_model_passes_a_set_cap():
+    import tempfile
+    rules = {"ai": {"provider": "ollama", "base_url": "http://127.0.0.1:9/v1", "model": "local-m", "detect": False,
+                    "profiles": {"local-m": {"tier": "frontier", "pdf": True, "json_schema": True}}},
+             "datasheet": {"max_cost_usd": 5}}
+    with tempfile.TemporaryDirectory() as d:
+        rd = TL.TR.reader(d, {"https://a/ds.pdf": TL._pdf2()}, rules=rules)
+        job = dict(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")]), sync=True)
+        rd._guard_cost([job])                           # $0 is under $5: no "no price known"
+        est = rd.estimate([job])
+    assert est["usd"] == 0 and est["usd_max"] == 0, est
