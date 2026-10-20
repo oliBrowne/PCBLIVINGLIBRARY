@@ -209,3 +209,16 @@ def test_t120_doctor_ai_line_is_not_ok_when_rules_do_not_load(tmp_path):
     rules = next(c for c in checks if c["check"] == "rules")
     ai = next(c for c in checks if c["check"] == "ai model")
     assert rules["level"] == "FAIL" and ai["level"] != "OK" and "claude-opus" not in ai["detail"], (rules, ai)
+
+
+# T121: docs/costs.md is what the command it names writes (`ecadlib costs --all --md docs/costs.md`)
+@lite
+def test_t121_costs_page_matches_the_command_it_names(tmp_path, monkeypatch):
+    from pathlib import Path
+    from ecadlib import costs as C
+    monkeypatch.chdir(tmp_path)                         # no ecadlib.toml found from here: the defaults, as in the repo
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert C.main(["--all", "--md", "costs.md"]) == 0
+    doc = Path(__file__).resolve().parent.parent / "docs" / "costs.md"
+    assert (tmp_path / "costs.md").read_text(encoding="utf-8") == doc.read_text(encoding="utf-8"), \
+        "docs/costs.md is stale: run python -m ecadlib costs --all --md docs/costs.md"
