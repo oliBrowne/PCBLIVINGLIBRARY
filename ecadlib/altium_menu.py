@@ -7,6 +7,7 @@
     ecadlib altium-menu fill BOARD.PrjPcb|BOM.csv [--workspace W] [--to DIR] [--result-file F]
     ecadlib altium-menu queue [--workspace W] [--port 8765] [--result-file F]
     ecadlib altium-menu run-job JOBFOLDER          what the menu runs: reads JOBFOLDER/request.ini, writes result.ini
+    ecadlib altium-menu wake JOBFOLDER             after Keep working: asks the running Altium to put the job in
 
 `build` writes into --out:
   ecadlib_menu.PrjScr + ecadlib_menu.pas   the script project; three procedures without parameters (so Altium's
@@ -14,6 +15,7 @@
         AddPartFromMPN     asks for an MPN (+ optional manufacturer), builds the part, reinstalls the library
         CheckProjectBOM    checks the focused project's BOM, opens the report, offers to fill the library
         OpenReviewQueue    opens the ecadlib web UI at the review queue (starts `ecadlib ui` when it is not running)
+        FinishBackgroundJob  not a menu entry: puts a job the dialog left running into the library (see 5. below)
   ecadlib_build.pas                 Altium builds the library files itself (ecadlib.altium_native):
         BuildLibrariesInAltium   (File > Run Script) builds every library in ecadlib_build.txt next to the project
         BuildLibraries(Folder)   the same for Folder; the menu calls it before it reinstalls the library
@@ -47,6 +49,12 @@ How a menu entry talks to ecadlib (no stdout parsing, no quoting of user text on
      folder (altium-pkg wrote ecadlib_build.txt there, see ecadlib.altium_native), Altium writes every .SchLib /
      .PcbLib again with its own API (BuildLibraries in ecadlib_build.pas, part of this script project) and the dialog
      says if any library FAILED (ecadlib_build_report.txt). native_build=0 in the .ini skips that.
+  5. the dialog is modal, so Altium waits while it is open. Keep working (or its X) closes it while the job runs on:
+     the script writes background.txt in the job and adds the job to waiting.txt; when exit.txt is written,
+     ecadlib_run.cmd runs `altium-menu wake`, which calls the running X2.EXE with
+     -RScriptingSystem:RunScript(ProjectName=...|ProcName=...ecadlib_menu.pas>FinishBackgroundJob) (8.3 paths), and
+     Altium opens the dialog on the result, builds and installs the library (finished.txt). When Altium is closed or
+     busy then, the next menu entry offers the job.
 
 Where parts go: the workspace is an ordinary ecadlib workspace (`ecadlib ui --workspace` shows it); parts added from
 the menu collect in <workspace>/uploads/altium-menu/parts.csv and the librarian runs on that list (finished parts are
@@ -68,7 +76,8 @@ PROCS = [("AddPartFromMPN", "&Add part from MPN...", "Build a part from its manu
          ("CheckProjectBOM", "&Check this project BOM", "Check the focused project's BOM against the library; offer to fill it"),
          ("OpenReviewQueue", "Open &review queue", "Open the ecadlib web UI at the review queue")]
 # the other procedures the script project offers (ecadlib_build.pas, ecadlib.altium_native): not menu entries
-BUILD_PROCS = [("BuildLibrariesInAltium", "ecadlib_build.pas", "Altium writes the libraries in ecadlib_build.txt itself"),
+BUILD_PROCS = [("FinishBackgroundJob", UNIT, "puts a job the dialog left running (Keep working) into the library"),
+               ("BuildLibrariesInAltium", "ecadlib_build.pas", "Altium writes the libraries in ecadlib_build.txt itself"),
                ("BuildLibraries(Folder)", "ecadlib_build.pas", "the same for Folder; the menu calls it before reinstalling")]
 
 
@@ -168,6 +177,8 @@ exit /b 9009
 :run
 %ECADLIB% altium-menu run-job "%JOB%" > "%JOB%\log.txt" 2>&1
 > "%JOB%\exit.txt" echo %ERRORLEVEL%
+rem Keep working closed the dialog (background.txt): ask Altium to put the result in (FinishBackgroundJob)
+if exist "%JOB%\background.txt" %ECADLIB% altium-menu wake "%JOB%" > "%JOB%\wake.txt" 2>&1
 exit /b 0
 """.replace("\n", "\r\n")
 
@@ -1438,6 +1449,62 @@ def run_job(job, opener=None):
     return res
 
 
+def running_altium_exe():
+    """X2.EXE of the Altium running now ('' when none): the running one, so a second, older install is never started."""
+    if os.name != "nt":
+        return ""
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                              "(Get-Process X2 -ErrorAction SilentlyContinue | Select-Object -First 1).Path"],
+                             capture_output=True, text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    if out:
+        return out
+    if not altium_running():
+        return ""
+    from . import detect
+    found = detect.altium()
+    return found[0]["exe"] if found else ""
+
+
+def wake_command(x2, here):
+    """The command line that makes the running Altium run FinishBackgroundJob from the script project in `here`, or
+    None when the paths cannot go on it: a space or non-ASCII character in a script path makes Altium start a second,
+    unlicensed copy (AD 26.10), so they go as 8.3 short names, and a path that still has one is not used."""
+    prj, unit = (str(_short_path(Path(here) / n)) for n in (PROJECT, UNIT))
+    if any(" " in p or not p.isascii() or "|" in p or ")" in p for p in (prj, unit)):
+        return None
+    return [str(x2), f"-RScriptingSystem:RunScript(ProjectName={prj}|ProcName={unit}>FinishBackgroundJob)"]
+
+
+def wake(job, x2=None, start=subprocess.Popen, sleep=time.sleep, tries=5, wait_s=60):
+    """ecadlib_run.cmd runs this after a job the dialog left running (Keep working; background.txt): it asks the
+    running Altium to put the result in (FinishBackgroundJob writes finished.txt) and tries again while Altium is busy
+    with another script. When Altium is closed, or never takes it, the next ecadlib menu entry offers the job
+    (waiting.txt). Returns {"status", "message"}."""
+    job = Path(job)
+    here = job.parent.parent
+    if not (job / "background.txt").is_file():
+        return {"status": "skipped", "message": "the dialog waited for this job itself"}
+    for _ in range(tries):
+        if (job / "finished.txt").is_file():
+            return {"status": "ok", "message": "Altium put the result in"}
+        exe = x2 if x2 is not None else running_altium_exe()
+        if not exe:
+            return {"status": "waiting", "message": "Altium is not running: the next ecadlib menu entry offers this job"}
+        cmd = wake_command(exe, here)
+        if cmd is None:
+            return {"status": "waiting", "message": f"{here} has a space or non-ASCII character Altium cannot take on a "
+                                                    "command line: the next ecadlib menu entry offers this job"}
+        start(cmd)
+        for _ in range(int(wait_s)):
+            sleep(1)
+            if (job / "finished.txt").is_file():
+                return {"status": "ok", "message": "Altium put the result in"}
+    return {"status": "waiting", "message": "Altium was busy: the next ecadlib menu entry offers this job"}
+
+
 def prune_jobs(jobs_dir, days=14, keep=None, now=None):
     """Remove finished job folders (exit.txt present) older than `days`; returns how many."""
     import shutil
@@ -1517,6 +1584,8 @@ def main(argv=None):
         s.add_argument("--json", action="store_true", help="print the result as JSON")
     r = sub.add_parser("run-job", help="what the Altium script runs: JOB/request.ini -> JOB/result.ini")
     r.add_argument("job")
+    w = sub.add_parser("wake", help="after a job the dialog left running: ask Altium to put it in (FinishBackgroundJob)")
+    w.add_argument("job")
     m = sub.add_parser("install-menu", help="put the ecadlib menu into Altium's top menu bar (Altium closed)")
     m.add_argument("--out", default="out/altium_menu", help="the folder `build` wrote (default %(default)s)")
     m.add_argument("--altium-folder", action="append", help="an Altium settings folder (default: every "
@@ -1559,6 +1628,10 @@ def main(argv=None):
             if not rep["menu_file"]:
                 print(f"  no {PREFS}: give --win-dir (the folder on the Altium PC) for the ready-made menu file")
         return 1 if rep["problems"] else 0
+    if a.cmd == "wake":
+        res = wake(a.job)
+        print(json.dumps(res, indent=2))
+        return 0
     if a.cmd == "run-job":
         res = run_job(a.job)
         print(json.dumps(res, indent=2))

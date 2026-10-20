@@ -296,6 +296,16 @@ values are one line; finished job folders older than 14 days are removed. Every 
 NEXAR_TOKEN, port taken, ...); ecadlib's output is in `jobs\<id>\log.txt`. `hidden=0` runs the .cmd in a visible
 console instead. No key is in any file: keys stay in environment variables.
 
+**Keep working while ecadlib works.** The dialog is modal, so Altium waits while it is open. **Keep working** (or
+the dialog's X) closes it and the job runs on in the background. The script writes `background.txt` in the job and
+adds the job to `waiting.txt` next to the script. When the job ends, `ecadlib_run.cmd` runs
+`ecadlib altium-menu wake "<job>"`, which calls the running Altium's `X2.EXE` with
+`-RScriptingSystem:RunScript(ProjectName=<prj>|ProcName=<dir>\ecadlib_menu.pas>FinishBackgroundJob)` (8.3 short
+paths: a space in a script path makes Altium start a second copy). Altium then opens the dialog on the result,
+builds and installs the library (a native build locks Altium for those seconds) and writes `finished.txt`. While
+Altium is busy with another script, wake tries again every minute, five times. When Altium is closed or never takes
+it, the next menu entry asks whether to put the finished job in. Its output is in `jobs\<id>\wake.txt`.
+
 **Install.** The quick way: close Altium and run `ecadlib altium-menu install-menu --out <folder>` (the setup
 page's Add to Altium does this on Windows). It merges the ecadlib commands and the four menu insertions into Altium's
 own menu file, `%APPDATA%\Altium\Altium Designer {GUID}\DXP.RCS` (backed up next to it first; other customisations
