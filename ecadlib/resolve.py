@@ -431,10 +431,11 @@ def _write(item, kind, cid, src, base, pin_map=None, others=None):
         r.put_fp(st, got, item["footprint"]["ref"], cid, src.http if cid.startswith("kicad:") else None, height, "package spec")
     else:
         mpn = _par(item).get("Manufacturer Part Number", "")
-        shared = L.passive_kind(item) in ("R", "C", "CP", "L")
+        st.update(kind=L.passive_kind(item), passive=L.is_passive_part(item))    # put_sym: the shared R / C / L symbol
+        shared = st["kind"] in L.SHARED_KINDS
         notes = []
         sym = K.convert_symbol(got, item["symbol"]["ref"], None if shared else item["footprint"]["ref"],
-                               [] if shared or not mpn else [("MPN", mpn)], pin_map, notes)
+                               L.kicad_params(mpn, shared, cid.startswith("kicad:")), pin_map, notes)
         if pin_map:
             notes.append("pin map " + ", ".join(f"{a}->{b}" for a, b in pin_map.items()))
         r.put_sym(st, sym, cid, notes)
@@ -494,12 +495,18 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
             it[k]["kicad_mod"] = rec.get("kicad_mod")
             shared = [o["by"] for o in others.values() if o.get("file") == rec["file"]]
             if rec.get("name") and rec["name"] != it[k].get("ref"):     # another part's file has other pads: own name
+                old = it[k]["ref"]
                 it[k]["bom_ref"], it[k]["ref"] = it[k].get("bom_ref") or it[k]["ref"], rec["name"]
                 rec["renamed_from"] = it[k]["bom_ref"]
-                sid = (it.get("source") or {}).get("symbol") or ""
-                if sid.startswith(("kicad:", "local:")) and not any(h == "symbol" for h, _, _ in done) \
-                        and (((state or {}).get(part) or {}).get("symbol") or {}).get("by", part) == part:
-                    done.append(("symbol", sid, it["symbol"].get("pin_map")))     # its footprint link: the new name
+                srec = ((state or {}).get(part) or {}).get("symbol") or {}
+                sf = base / it["symbol"]["file"] if it["symbol"].get("file") else None
+                if sf and sf.is_file() and not any(h == "symbol" for h, _, _ in done) and srec.get("by", part) == part \
+                        and AL.relink_schlib(sf, old, rec["name"]):    # its footprint link: the new name, as the
+                    note = f"footprint link {rec['name']} (the BOM's {old} is another footprint)"   # librarian relinks
+                    if srec:
+                        srec.setdefault("notes", []).append(note)
+                    notes.append(f"symbol {note}")
+                    rewritten.update(shared_with("symbol"))      # parts sharing that symbol file: settled, re-checked
         if pm:
             it[k]["pin_map"] = dict(pm)
         else:

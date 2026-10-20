@@ -252,6 +252,12 @@ def passive_kind(item):
     return None
 
 
+def kicad_params(mpn, shared, kicad=True):
+    """The parameters a symbol converted from a KiCad library carries: the MPN (not on one every R / C / L shares) and,
+    from KiCad's own libraries, the CC-BY-SA credit, so an .IntLib compiled from the .SchLib keeps it."""
+    return ([] if shared or not mpn else [("MPN", mpn)]) + ([("Library Credit", K.KICAD_CREDIT)] if kicad else [])
+
+
 def _par(item):
     return {p["name"]: p["value"] for p in item.get("parameters", [])}
 
@@ -483,9 +489,7 @@ class Run:
             if props.get("Description"):
                 st["found"].setdefault("description", (props["Description"], f"KiCad symbol {sym_ref}"))
             shared = kind in ("R", "C", "CP", "L")            # one generic symbol for every value: no MPN, no footprint link
-            extra = ([] if shared or not mpn else [("MPN", mpn)]) + [("Library Credit", K.KICAD_CREDIT)]   # CC-BY-SA:
-            # the credit travels in the .SchLib too, so an .IntLib compiled from it keeps it
-            self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", extra)
+            self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", kicad_params(mpn, shared))
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
             if "check" in how:                     # a near name: a person checks it before it is released
                 st["verify"].append(f"symbol {sym_ref} matched by {how}")

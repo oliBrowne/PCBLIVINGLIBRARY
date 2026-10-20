@@ -255,6 +255,12 @@ def check_item(item, base=".", rules=None):
             add("pins", f"pads without a symbol pin: {FC._ranges(numbered - pins)}")
         if mech - {""}:
             warns.append(f"mechanical pads without a pin (allowed): {FC._ranges(mech - {''})}")
+        links = {r["MODELNAME"] for s in syms for r in s["records"] if r.get("RECORD") == "45" and r.get("MODELNAME")
+                 and str(r.get("MODELTYPE") or "PCBLIB").upper() == "PCBLIB"}
+        names = {fp["name"] for fp in fps} | ({AL.lib_name(item["footprint"]["ref"])} if item["footprint"].get("ref") else set())
+        if links and not links & names:        # the symbol's own link wins over a DbLib row's footprint (and in an IntLib)
+            add("pins", f"the symbol links footprint {', '.join(sorted(links))}, not the part's "
+                        f"{item['footprint'].get('ref') or fps[0]['name']}")
     # ---- footprint rules
     src = str((item.get("source") or {}).get("footprint") or "")
     kicad_lib = src.startswith("kicad:")
