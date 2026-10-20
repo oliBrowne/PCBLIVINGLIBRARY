@@ -259,8 +259,12 @@ def check_item(item, base=".", rules=None):
                  and str(r.get("MODELTYPE") or "PCBLIB").upper() == "PCBLIB"}
         names = {fp["name"] for fp in fps} | ({AL.lib_name(item["footprint"]["ref"])} if item["footprint"].get("ref") else set())
         if links and not links & names:        # the symbol's own link wins over a DbLib row's footprint (and in an IntLib)
-            add("pins", f"the symbol links footprint {', '.join(sorted(links))}, not the part's "
-                        f"{item['footprint'].get('ref') or fps[0]['name']}")
+            msg = (f"the symbol links footprint {', '.join(sorted(links))}, not the part's "
+                   f"{item['footprint'].get('ref') or fps[0]['name']}")
+            if (item.get("merged_from") or {}).get("footprint"):   # dedupe --merge: an equivalent keeper, files untouched
+                warns.append(msg)
+            else:
+                add("pins", msg)
     # ---- footprint rules
     src = str((item.get("source") or {}).get("footprint") or "")
     kicad_lib = src.startswith("kicad:")
