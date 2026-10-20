@@ -141,3 +141,16 @@ def test_t115_offline_reader_does_not_probe_the_model_server():
             assert [r[1] for r in srv.reqs] == ["/v1/models"], srv.reqs
         finally:
             os.environ.pop("PROBE_KEY", None)
+
+
+# T119: `datasheet batch -h` / `estimate -h` no longer say --offline API calls still go out
+def test_t119_offline_help_says_nothing_is_sent():
+    for verb in ("batch", "estimate"):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            try:
+                D.main([verb, "-h"])
+            except SystemExit:
+                pass
+        line = " ".join(buf.getvalue()[buf.getvalue().index("--offline "):].split("\n  --")[0].split())
+        assert "still go out" not in line and "nothing is sent to the model" in line, line

@@ -3217,7 +3217,8 @@ def batch_main(argv, estimate=False):
     ap.add_argument("--effort", choices=EFFORTS)
     ap.add_argument("--poll", type=float, default=60.0, help="seconds between batch status checks (default 60)")
     ap.add_argument("--cache", default="out/http_cache")
-    ap.add_argument("--offline", action="store_true", help="downloaded datasheets only (API calls still go out)")
+    ap.add_argument("--offline", action="store_true", help="no network: downloaded datasheets and answers already "
+                    "read only; nothing is sent to the model")
     ap.add_argument("--rules")
     a = ap.parse_args(argv)
     from . import librarian as L, rules as RU
