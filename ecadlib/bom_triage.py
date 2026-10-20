@@ -210,6 +210,7 @@ def _read_csv(p):
     df = pd.DataFrame([r + [""] * (width - len(r)) for r in rows], dtype=str)                         # <newline>0603'
     df.attrs["text"] = True                                               # cells past the header are an unquoted comma
     df.attrs["delimiter"] = delim
+    df.attrs["widths"] = [len(r) for r in rows]                           # before padding: 'Footprint,' declares a column
     return df
 
 
@@ -255,7 +256,7 @@ def read_bom(path, columns=None, rules=None, root=None):
         raise ValueError(f"{p}: a KiCad {p.suffix} file is not a BOM and {sch.name} is not next to it; "
                          "give the project's .kicad_sch (or a BOM export)")
     raw = _read_excel(p, columns) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else _read_csv(p)
-    text_src = bool(raw.attrs.get("text"))
+    text_src, widths = bool(raw.attrs.get("text")), raw.attrs.get("widths")
     raw = raw.fillna("")
     if raw.empty or not raw.astype(str).apply(lambda c: c.str.strip()).ne("").any().any():
         raise ValueError(f"{p}: the BOM file is empty")
@@ -277,13 +278,16 @@ def read_bom(path, columns=None, rules=None, root=None):
         if "value" in col else None                              # Value and Comment both there: Comment backs Value up
     decimal_comma = raw.attrs.get("delimiter") == ";"            # ';' CSVs come from decimal-comma Excel: 1,000 = 1
     hlen = max((j + 1 for j, h in enumerate(headers) if h), default=0)
+    hwidth = max(widths[hdr_row:hdr_row + (2 if two else 1)]) if widths else 0   # the header row's own cells: Excel
+                                                                  # saves an unnamed notes column as 'Footprint,'
     suppliers = _supplier_pairs(headers)
     lines, skipped = [], 0
     for idx, row in df.iterrows():
         cells = [str(x).strip() for x in row]
         note, shifted = [], False
         n = max((j + 1 for j, c in enumerate(cells) if c), default=0)
-        if text_src and n > hlen:                                 # more cells than the header: an unquoted '4,7k'
+        if text_src and n > hlen and not (widths and widths[idx] <= hwidth):   # more cells than the header: an
+                                                                  # unquoted '4,7k' (not a column the header row has)
             vj = col.get("value")
             if (n == hlen + 1 and vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
                     and re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?[A-Za-zΩ%]*", cells[vj + 1])):
