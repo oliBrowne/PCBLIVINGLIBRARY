@@ -14,7 +14,7 @@ On this page:
 
 ```
 ecadlib footprint gen ecadlib/package_specs/*.json -o out/footprints/ecadlib.pretty [--density A|B|C]
-ecadlib footprint compare <mine.kicad_mod> <reference path or URL>
+ecadlib footprint compare <mine.kicad_mod> <reference path or URL>   # every pad; exit 1 when a pad differs or is on one side only
 ecadlib check <any.kicad_mod or .pretty> ... # the footprint rule book, works on KiCad's own footprints too
 ecadlib check --summary Lib.pretty/         # counts per rule for a whole library
 ```
@@ -23,6 +23,10 @@ ecadlib check --summary Lib.pretty/         # counts per rule for a whole librar
   * `chip`: 2-terminal R/C/L/LED. IPC table 3-5 for 0603 and up, table 3-6 below 0603. `inner_span` takes the gap directly when the drawing gives it (LEDs).
   * `molded`: inward-L / molded body: tantalum, SMA/SMB/SMC, SOD-123F (table 3-13). `lead_type: "melf"` for MELF.
   * `gullwing`: SOIC/SOP/TSSOP/MSOP, plus SOT-23/SOD-123 via `pin_positions` and SOT-223/DPAK via `tab`.
+    `pin_count` counts each pad number once: a tab that is a lead's pin again adds nothing (SOT-223-3_TabPin2, tab = pin 2:
+    3), a tab with its own number counts (KiCad's SOT-223, tab 4: 4; TO-252-2, leads 1 and 3 + tab 2: 3). A tab that
+    repeats a lead number needs `pin_positions`. The cross-check's second read is asked for terminals, so it may count
+    such a tab once more (4 for SOT-223-3_TabPin2); that is not a disagreement.
   * `qfp`: 4-sided gull-wing. `qfn`: QFN/DFN/SON with an optional exposed pad (`pins_top_bottom: 0` for DFN).
   * `polarized: true` adds KiCad's pin-1 silk bracket and fab chamfer (LED/diode: pin 1 = cathode; tantalum: pin 1 = +).
   * `land`: the maker's recommended land pattern, when the datasheet has one. It replaces the IPC pads.
@@ -69,8 +73,9 @@ ecadlib footprint-bench [--offline] [--fixture tests/fixtures/kicad_bench.json] 
   `ball_diameter` (collapsing balls −25 % from 0.55 mm, −20 % from 0.25 mm, −15 % below; non-collapsing +5 %; LGA =
   terminal). `land_style` NSMD (mask 0.05 mm bigger) or SMD (copper 0.05 mm bigger, mask = land). Courtyard body + 1.0 mm.
   Silk and fab mark the A1 corner.
-* `pin_header`: 1 or 2 columns, through-hole (pin 1 at the origin, square pad 1, KiCad's drill/pad per pitch) or SMD
-  (`land`, single rows alternate sides).
+* `pin_header`: 1 or 2 columns, through-hole (pin 1 at the origin, square pad 1, KiCad's drill/pad per pitch; a
+  custom `drill` gets drill + 1.0 mm, at most pitch - 0.5, and a ring under 0.15 mm is refused) or SMD (`land`,
+  single rows alternate sides).
 * `connector` and `custom`: a `pad_table` copied from the datasheet's land-pattern drawing in the drawing's own terms:
   `unit` (mm, mil, in), `y_axis` (up, down), `view` (top, bottom = mirrored), `origin` (center, pin1, datum +
   `center_at`), then `pads` and `arrays` (N pads at a pitch). Pads can be SMD, plated through-hole (round or slot:
@@ -147,7 +152,7 @@ IPC maths: the bundled spec uses a generic datasheet outline (terminal 0.25 ± 0
 builds its 0402 capacitor from the IPC-SM-782 sizes (terminal 0.10–0.30, width 0.40–0.60). Built from KiCad's sizes
 (the `stdparts` table entry) the pads are KiCad's exactly: 0.56 × 0.62 at ±0.48. Older copies of this table showed
 0402 pads about 0.1 mm shorter; that was the first prototype's small-chip fillet table (toe 0.10 instead of table
-3-6's 0.20), since corrected. Density A gives an 0603 pad of 1.025×1.01 and density C gives 0.625×0.81.
+3-6's 0.20), since corrected. Density A gives an 0603 pad of 1.00×1.05 and density C gives 0.60×0.85.
 
 ## `stdparts.py`: standard parts without Claude
 
@@ -192,7 +197,7 @@ The house rule: **inputs left, outputs right, power on top, ground on the bottom
 
 * **Overlapping text.** `symbol_layout.text_problems(sym)` estimates every shown pin name and number as Altium draws it (60 mil per character, 80 mil high, scaled down for a 50 mil pitch) and reports any two that overlap and any name running out of the body. `check` includes it, so `ecadlib symbol` exits 1 on it. The NE555DR from EasyEDA in Oliver's first Altium run is the test case: its VCC and RST names ran down into DISCH and OUT, and GND ran up into THRES and CONT.
 
-* **Groups.** Pins are grouped by name, and by type when the name says nothing. Power (VDD, 3V3, VBAT) and analog supply (VDDA, VREF+) go on top; ground (GND, VSS, AGND, VREF-) and the exposed pad go on the bottom. Reset/boot/enable, clock/oscillator, debug (SWD, JTAG, boot UART such as U0TXD), USB, ADC/DAC and inputs (IN+, TRIG, THRES, FB, SENSE, type input) go on the left. Power out (VOUT, VCAP, 3V3OUT), UART, I2C, SPI, CAN, Ethernet, ports, outputs (OUT, Q, DISCH, PGOOD, SW, type output) and NC go on the right. A pin's type beats a direction guessed from its name. Pins with no direction (passive, bidirectional) are `other`: left, moved right only to keep the body square.
+* **Groups.** Pins are grouped by name, and by type when the name says nothing. Power (VDD, 3V3, VBAT) and analog supply (VDDA, VREF+) go on top; ground (GND, VSS, AGND, VREF-) and the exposed pad go on the bottom. Reset/boot/enable, clock/oscillator, debug (SWD, JTAG, boot UART such as U0TXD), USB, ADC/DAC and inputs (IN+, TRIG, THRES, FB, SENSE, type input) go on the left. Power out (VOUT, VCAP, 3V3OUT), UART, I2C, SPI, CAN, Ethernet, ports, outputs (OUT, Q, DISCH, PGOOD, SW, type output) and NC go on the right. A pin's type beats a direction guessed from its name. A UART, I2C, SPI, CAN or Ethernet group whose pins are all type input is no bus: those pins go left with the inputs (TPS62133's soft-start input SS/TR is not SPI's SS). Pins with no direction (passive, bidirectional) are `other`: left, moved right only to keep the body square.
 * **Names.** Alternate-function names are grouped by their first name (`PA9/USART1_TX` and `PH0-OSC_IN` are port pins). Overbars and active-low marks (`~{RESET}`, `/RESET`, `RESET#`, `RST_N`) are ignored for grouping.
 * **Ports.** Each port is its own block, sorted by number (PA0..PA15, then PB0...). Blocks are separated by one empty grid row. Whole ports move between the left and right side to keep the body roughly square. A port is split only when that saves more than 6 rows.
 * **Stacking.** By default (`stack_power = "none"`) every power pin gets its own pin end, so Altium draws no junction dot and every pin can be checked against the datasheet. With `stack_power = "stack"`, power pins that share a name (VDD, or VDD_1..VDD_5 numbered 1..n) are stacked: one pin shows its name and number, and the rest sit on the same spot with name and number hidden. Names that only look alike are never stacked: VDD1 / VDD2 (an isolator's two sides), VDD18 / VDD33 and VDD_18 / VDD_33 are different supplies. KiCad gets the rest as hidden passive pins (KLC S4.3). `stack_power = "hide"` makes them hidden pins tied to the net by name instead (Altium HiddenNetName; the KiCad export names those hidden power pins after that net, since KiCad connects them by name). A KiCad library symbol that stacks pins itself (KiCad hides the extra VIN / GND pins on the first one, as in TPS62130 or ESP32-C3) is redrawn by these rules when it is a plain IC box and `stack_power = "none"`; any other drawing is kept and the plan notes the shared pin end for review.
@@ -207,7 +212,7 @@ ecadlib symbol pins.csv -o out/STM32F103VET6.SchLib --kicad out/STM32F103VET6.ki
 ecadlib symbol part.SchLib -o tidy.SchLib --split 64          # re-lay out an existing symbol; also .json, LIB.kicad_sym:NAME, kicad:Lib:Name
 ```
 
-The CSV needs `num` and `name` columns; `type` and `group` (to override the grouping) are optional. `--list` prints the groups, and the command exits 1 if any pin is off the grid or overlaps another. Settings live in the rules file:
+The CSV needs `num` and `name` columns; `type` and `group` (to override the grouping) are optional. Commas, tabs or semicolons separate the columns. A CSV with no pins, or a row with a name but no number, is refused (exit 2) and nothing is written. `--list` prints the groups, and the command exits 1 if any pin is off the grid or overlaps another, or one pin number carries two different signals (the same name twice is a stack). Settings live in the rules file:
 
 ```toml
 [symbols]

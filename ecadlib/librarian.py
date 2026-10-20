@@ -27,9 +27,9 @@ Footprints without a KiCad STEP model get a package-shaped STEP from step_gen em
 Everything is converted through kicad_import into <out>/models/{SchLib,PcbLib} (plus the .kicad_mod in
 <out>/models/KiCad for footprint_check). Outputs: <out>/plan.json (each item records `source`, `librarian.tried`
 and the release-check result), <out>/review.{md,csv}, <out>/release_check.{md,csv}, <out>/triage.{md,csv}.
-Resumable: <out>/librarian_state.json remembers finished parts; a re-run skips them unless --refresh (all, or the
-named parts) or their BOM line changed. --allow PART is recorded in plan.json and survives re-runs, and so does a
-symbol or footprint chosen with `ecadlib resolve` (held parts: see ecadlib/resolve.py)."""
+Resumable: <out>/librarian_state.json remembers finished parts (saved as the run goes, so a stopped or killed run
+keeps them too); a re-run skips them unless --refresh (all, or the named parts) or their BOM line changed. --allow
+PART is recorded in plan.json and survives re-runs, and so does a symbol or footprint chosen with `ecadlib resolve` (held parts: see ecadlib/resolve.py)."""
 import argparse, csv, json, os, re, sys, time
 from pathlib import Path
 
@@ -42,7 +42,7 @@ from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from . import crosscheck as CC, messages as M, sheetsafe as SS
 from . import fp_tidy as FT, symbol_layout as SL
-from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
+from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of, two_readings
 
 TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository/tree?ref=master&recursive=true&per_page=100&page={page}"
 SOURCES = ("kicad", "easyeda", "standard", "datasheet")
@@ -272,6 +272,12 @@ def passive_kind(item):
     return None
 
 
+def kicad_params(mpn, shared, kicad=True):
+    """The parameters a symbol converted from a KiCad library carries: the MPN (not on one every R / C / L shares) and,
+    from KiCad's own libraries, the CC-BY-SA credit, so an .IntLib compiled from the .SchLib keeps it."""
+    return ([] if shared or not mpn else [("MPN", mpn)]) + ([("Library Credit", K.KICAD_CREDIT)] if kicad else [])
+
+
 def _par(item):
     return {p["name"]: p["value"] for p in item.get("parameters", [])}
 
@@ -407,8 +413,9 @@ class Run:
         fr = st.get("footprint") or {}
         if fr.get("renamed_from") and sym.get("footprint") == fr["renamed_from"]:     # footprint renamed (fp_share)
             sym = dict(sym, footprint=fr["name"])
-        if str(path) in self.written:           # its own file from an earlier run, kept for a skipped part: not shared
-            rec = self.written[str(path)]
+        # Windows / macOS file systems ignore case: CH340C.SchLib and ch340c.SchLib are one file, so one symbol
+        rec = next((r for p, r in self.written.items() if p.casefold() == str(path).casefold()), None)
+        if rec is not None:                     # its own file from an earlier run, kept for a skipped part: not shared
             st["symbol"] = dict(rec, notes=_own_notes(rec) if rec.get("by") == st["name"] else [f"shared with {rec['by']}"])
             return
         AL.write_schlib(path, [sym])
@@ -445,6 +452,9 @@ class Run:
         for k, rec in (keep or {}).items():
             st[k] = rec
             st["tried"].append(f"resolve: {k} {rec['source']} chosen by user (kept)")
+        both = two_readings(ln.get("value"))
+        if both:                                             # '4,700pF': 4.7 pF or 4.7 nF, so a person says which
+            st["verify"].append(f"value {ln['value'].strip()} reads two ways: {both[0]} or {both[1]}; write it without the comma")
         dnp = (row.get("status") or "").startswith("dnp")   # not assembled, but still on the schematic and the PCB:
         if dnp:                                              # built from the free sources, no paid datasheet read
             st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")
@@ -515,8 +525,7 @@ class Run:
             if props.get("Description"):
                 st["found"].setdefault("description", (props["Description"], f"KiCad symbol {sym_ref}"))
             shared = kind in ("R", "C", "CP", "L")            # one generic symbol for every value: no MPN, no footprint link
-            extra = [] if shared or not mpn else [("MPN", mpn)]
-            self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", extra)
+            self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", kicad_params(mpn, shared))
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
             if "check" in how:                     # a near name: a person checks it before it is released
                 st["verify"].append(f"symbol {sym_ref} matched by {how}")
@@ -1025,10 +1034,14 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     rules: library rules (a loaded dict or a path); None uses the ecadlib.toml found from `out` (defaults when none).
     sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity()).
     progress: a term.Progress-like object (start(name) / done(name, status, detail)) for the per-part line."""
-    out = Path(out); out.mkdir(parents=True, exist_ok=True)
-    from . import migrate as MG, rebuild as LK            # versioned files (backed up, migrated) and library.lock.json
-    MG.open_folder(out, log=log)
+    out = Path(out)
     rules = RU.resolve(rules, out)
+    lines, mapping = T.read_bom(bom, RU.bom_columns(rules))       # first: an unreadable BOM writes nothing
+    if not lines:                                                 # (no -o folder, no HTTP cache)
+        raise ValueError(f"{bom}: the BOM has a header but no part rows")
+    out.mkdir(parents=True, exist_ok=True)
+    from . import migrate as MG, rebuild as LK           # versioned files (backed up, migrated) and library.lock.json
+    MG.open_folder(out, log=log)
     sources = list(sources) if sources is not None else list(rules["sources"]["order"])
     if not P.unofficial_allowed(rules) and "easyeda" in sources:
         sources.remove("easyeda")                      # [providers] unofficial = false: no undocumented endpoints
@@ -1044,14 +1057,11 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         sources.insert(sources.index("kicad") + 1, "standard")
     if "standard" in sources and "datasheet" in sources and sources.index("datasheet") < sources.index("standard"):
         from .llm import run as LR                     # rail prefer_standard: a guided (smaller) model reads datasheets
-        if LR.wants(rules, "prefer_standard"):         # only for what the offline standard parts can't build
+        if LR.wants(rules, "prefer_standard", probe=not offline):   # only for what the offline standard parts can't build
             sources.remove("standard")
             sources.insert(sources.index("datasheet"), "standard")
     from . import timing as TI                       # wall time per step (timing.jsonl, `ecadlib status`)
     t_run = time.time()
-    lines, mapping = T.read_bom(bom, RU.bom_columns(rules))
-    if not lines:
-        raise ValueError(f"{bom}: the BOM has a header but no part rows")
     log(f"  BOM: {len(lines)} lines; looking them up in your libraries and the part sources (triage) ...")
     index = KiCadIndex(libs)
     from . import plugins as PL                      # providers: None = [providers] order, else P.DEFAULT_ORDER
@@ -1095,6 +1105,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
                 r.written.setdefault(str(out / st[k]["file"]), st[k])
         else:
             todo.append((it, ln, row, fpr))
+    redone = [old[it["name"]] for it, *_ in todo if it["name"] in old]
+    if redone:                                 # a hand edit of a released part is held (kept) before it is built again
+        gate.keep_edits(redone)
     keeps = {}
     for it, ln, row, fpr in todo:
         old_st = state.get(it["name"]) or {}
@@ -1108,22 +1121,38 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         log(f"  finding symbols and footprints for {len(todo)} part(s) (sources: {', '.join(sources)}) ...")
     if progress is not None:
         progress.total = len(todo)
-    for n, (it, ln, row, fpr) in enumerate(todo, 1):
-        if progress is not None:
-            progress.start(it["name"])
-        elif len(todo) > 3:
-            log(f"  [{n}/{len(todo)}] {it['name']}")
-        with rec.part(it["name"]):
-            st = r.resolve(it, ln, row, keeps[it["name"]])
-        if progress is not None:
-            gone = [k for k in ("symbol", "footprint") if not st.get(k)]
-            progress.done(it["name"], "held" if gone else "ready",
-                          f"no {' or '.join(gone)} yet" if gone else "symbol and footprint found")
-        st["key"], st["skipped"] = fpr, False
-        LK.stamp_state(st, rec.take(it["name"]), rules)
-        st["build_rev"] = BUILD_REV
-        state[it["name"]] = st
+
+    def save_state():                          # finished parts survive a cancel or a kill (a datasheet batch not sent
+        held = {id(w[0]) for w in r.waiting}   # yet is not finished)
+        write_text_atomic(state_f, json.dumps({k: v for k, v in state.items() if id(v) not in held}, indent=2))
+        MG.write_stamp(out, ["librarian_state"])
+    saved = time.time()
+    try:
+        for n, (it, ln, row, fpr) in enumerate(todo, 1):
+            if progress is not None:
+                progress.start(it["name"])
+            elif len(todo) > 3:
+                log(f"  [{n}/{len(todo)}] {it['name']}")
+            with rec.part(it["name"]):
+                st = r.resolve(it, ln, row, keeps[it["name"]])
+            st["key"], st["skipped"] = fpr, False
+            LK.stamp_state(st, rec.take(it["name"]), rules)
+            st["build_rev"] = BUILD_REV
+            state[it["name"]] = st
+            if progress is not None:
+                gone = [k for k in ("symbol", "footprint") if not st.get(k)]
+                progress.done(it["name"], "held" if gone else "ready",
+                              f"no {' or '.join(gone)} yet" if gone else "symbol and footprint found")
+            if time.time() - saved > 2:
+                save_state()
+                saved = time.time()
+    except BaseException:                      # stopped (job_status cancel, Ctrl+C): keep what is finished
+        if todo:
+            save_state()
+        raise
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
+    if todo:
+        save_state()                           # a stop while the summary is logged keeps them too
     for it in items:
         apply_state(it, state[it["name"]], _line_for(it, lines, rows)[0])
         for k in ("allow", "approvals", "duplicate_of"):     # decisions people made survive re-runs

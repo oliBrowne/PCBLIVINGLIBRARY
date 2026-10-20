@@ -2,7 +2,7 @@
   "name": "SOT-223-3_TabPin2",
   "description": "SOT-223 (TO-261AA), 3 pins + tab connected to pin 2",
   "package_type": "gullwing",
-  "pin_count": 4,
+  "pin_count": 3,
   "lead_span": {
     "min": 6.7,
     "max": 7.3

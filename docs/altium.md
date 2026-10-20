@@ -223,7 +223,11 @@ In KiCad: Plugin and Content Manager > Install from File... > the zip. KiCad's P
 symbols' Footprint fields say `PCM_<lib>:<footprint>` and the footprints' models
 `${KICADn_3RD_PARTY}/3dmodels/<id>/<lib>.3dshapes/...` (n = `--kicad`; `--prefix ""` if you cleared KiCad's prefix).
 `--kicad 7` writes KiCad 7 files; the default 8 keeps the export's KiCad 8 files (KiCad 8, 9, 10). The version is
-`--pkg-version`, or kept while the content is unchanged, else today's date, so a re-run changes no file. With
+`--pkg-version`, or kept while the content is unchanged, else today's date, so a re-run changes no file; a second
+change the same day takes the version after the last one (2026.10.17 after 2026.10.16), as KiCad offers only a newer
+version as an update (so a `--pkg-version` that is not newer, 1.2 after 1.2.0 included, is refused for a changed
+library). The last one is this package's newest in `--out` (its zips there, `packages.json`, `kicad_pcm.json`), so
+packages sharing a folder keep their own versions. With
 `--base-url` it also writes `repository.json` and `packages.json` (sha256, sizes) for Manage Repositories; KiCad only
 fetches repositories over http(s) (`kicad_curl_easy.cpp`), so a `file://` URL is refused.
 `--plugin` writes a PCM *plugin* package: an **ecadlib** button in the PCB editor's top toolbar (and Tools > External
@@ -234,7 +238,11 @@ your library / a source can supply / needs a footprint, then Later or Fill the l
 request) and Open review queue. The window does not block KiCad. It runs `ecadlib kicad-menu run-job` in the background
 (`ecadlib/kicad_menu.py`) and reads its `progress.ini` / `result.ini`, as the Altium dialog does. Per project,
 `<project>/ecadlib-work/` is the workspace (one parts list for every part added or filled, so one plan makes the whole
-library) and `<project>/ecadlib/` the KiCad library, added to the project's tables as `${KIPRJMOD}/ecadlib/...`.
+library) and `<project>/ecadlib/` the KiCad library, added to the project's tables as `${KIPRJMOD}/ecadlib/...`
+(after Fill the library now and Add part). A project table that already has an `ecadlib` row for another library
+(say `kicad-export -o <project>`'s `${KIPRJMOD}/ecadlib.pretty`) is not changed: the window names that row, to rename
+or remove. The BOM check counts a line as in your library when its part number is in `<project>/ecadlib/*.kicad_sym`.
+Open review queue runs one web UI per project: when the port is taken by another project's UI, the next free port.
 KiCad gives plugins no menu or toolbar slot in the schematic editor; its Tools > Generate BOM can run
 `ecadlib kicad-menu check-bom "%I"` there, which checks the netlist against the library and opens the report.
 Tried in KiCad 7.0.11: toolbar button, BOM check, fill and add part with the footprint placed.
@@ -348,7 +356,7 @@ Altium is busy with another script, wake tries again every minute, five times. W
 it, the next menu entry asks whether to put the finished job in. Its output is in `jobs\<id>\wake.txt`.
 
 **Install.** The quick way: close Altium and run `ecadlib altium-menu install-menu --out <folder>` (the setup
-page's Add to Altium does this on Windows). It merges the ecadlib commands and the four menu insertions into Altium's
+page's Add to Altium does this on Windows; from WSL or Linux it uses the Windows folder `build --win-dir` recorded). It merges the ecadlib commands and the four menu insertions into Altium's
 own menu file, `%APPDATA%\Altium\Altium Designer {GUID}\DXP.RCS` (backed up next to it first; other customisations
 are kept; `--remove` takes ours out), so the "ecadlib" menu sits in the top menu bar before Window. Altium must be
 closed because it writes that file when it closes. The menu entries run the script project by its path, so it need

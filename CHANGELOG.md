@@ -61,6 +61,11 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Datasheet reads of tab packages (DS2-24): `pin_count` counts each pad number once, as `package_schema.json` says. A tab that is a lead's pin again (SOT-223-3_TabPin2) adds nothing and needs `pin_positions`; a tab with its own number counts (TO-252-2: 3). SOT-223-3_TabPin2, TO-252-2, TO-252-3_TabPin4, TO-263-2 and single-row parts like TO-263-5_TabPin3 can now pass the checks; before, each was held whatever `pin_count` it gave. A blank `pin_count` is no longer filled from a SOT/TO outline number (SOT-223 -> 223). The bundled SOT-223-3_TabPin2 spec says 3; a spec file that says 4 still builds.
+- `ecadlib kicad-pcm` (DS2-42): a changed library built again the same day got the same date version and zip name, so it overwrote the published zip and KiCad never offered the update. It now takes the version after the package's previous one (patch + 1) whenever that is today's date or later. The previous version comes from the package's own zips, packages.json and kicad_pcm.json, so several libraries in one folder keep their own versions, and `repository.json`'s `update_timestamp` only moves forward. A `--pkg-version` that is not newer than the previous build's for a changed library is refused.
+- A BOM value with a comma before exactly three digits (`4,700pF`: 4.7 pF with a decimal comma, 4.7 nF with a thousands comma) was read as 4.7 pF and matched a 4.7 pF part (DS2-43). Such a value now picks, renames and merges no part by its value, and the librarian holds the part for a person to check (write the value without the comma, or release it anyway). Change control uses the same rule.
+- Web UI: an Altium 365 push whose workspace field was not text (true, a number, a list) crashed in the push with "Something went wrong (AttributeError ...)"; it is now refused in one line ("workspace must be a non-empty string"). The web endpoint fuzzer found it.
+- The Altium rebuild (`altium-native`, ecadlib_build.pas) dropped a through-hole pad's drill offset, so the copper sat centred on the hole, and `altium-native compare` never checked the offset (DS2-34). A library Altium already rebuilt with the old script and recorded as built is not checked again on its own: if your parts have offset pads, run `ecadlib altium-native compare` on the library folder, then `ecadlib altium-native write --rebuild-all` for the libraries it lists.
 - Add part from MPN (Altium and KiCad menus): a part number pasted twice (Ctrl+V pasted on both the key and its character) is cut back to one and the box's paste now replaces its text; a miss on text that reads as a description ("SOSET 16M 20PF 10PPM") says so; an LCSC number or lcsc.com link is looked up by that number; and a part not found while `[providers] unofficial = false` says LCSC was not asked and which file and setting turn it on, instead of "no part source knows this part number".
 - Fixes from testing PRs #81-#103 by running them (tests in `tests/test_review_1018_merges.py`):
   - A failed Altium build installs the library you had again (it was uninstalled to build); the dialog says "Not found" for a bad part number, and a wrong LCSC number is no longer reported as a bad MPN.
@@ -73,6 +78,11 @@ a minor release may change command-line options and file formats.
   - MCP: `save_rules` cannot change where model requests (and the stored API key) go; the first calls to an HTTP server share one job list, so the one-writer-per-BOM lock holds; a "still running" job stays readable for the caller it was named to; `altium_menu` takes a Windows `win_dir` under `--confine`.
   - Benchmark scoring: an erratum no longer hides wrong pins it does not list; a "maker's land" narrower than the leads read from the same drawing is not counted as the maker's; pad-table bodies turn by the direction the pin rows run (SOT-223, DIP-6, DIP-8).
   - `fp-edit` reads a part's latest spec, and a datasheet read whose `other_json` comes back as an object is accepted.
+- Fixes from the second debug sweep of the librarian side (tests in `tests/test_debugsweep_librarian.py`):
+  - `ecadlib rebuild --check --keep DIR` no longer deletes anything of yours. `--keep` on the library's own folder deleted the library before copying it, and a project folder named like the library (the folder holding its BOM and cache, or another project's library) was replaced by the copy. It now refuses (exit 2) a copy that would be, hold or sit inside the library or anything the lock reads (BOM, HTTP cache, `--lib` folders and files, rules file), and replaces an existing `DIR/<library name>` only when an earlier `--check --keep` made it (`.ecadlib-rebuild-copy`). `python -m ecadlib.rebuild` prints the refusal in one line too.
+  - `ecadlib upkeep`'s a365 check: parts pushed to Altium 365 under the house parameter names (`[parameters.names]`) no longer show as drifted.
+  - `library.lock.json` stores each part's `--lib` input files (`local[].file`) relative to the library folder, like the BOM, cache and libraries, so `rebuild --check` works on a clone or a moved project and checks the clone's own files. A lock written with absolute paths still reads; the next librarian run rewrites it.
+  - `ecadlib part diff` takes a library file on a drive letter (`C:\lib\X.SchLib`, `C:/lib/X.SchLib:NAME`); the path was cut at the first colon.
 
 - A gull-wing exposed pad read long side first (TLC5951DAP's PowerPAD, 5.7 x 3.04 mm) is turned to run with the body; across the rows it pushed every pad's heel out past the body.
 - A DIP or other pad table with its rows down the page now gets a body (and courtyard) that runs with the rows: 27C256's courtyard was 37 mm wide.
@@ -118,6 +128,10 @@ a minor release may change command-line options and file formats.
 - Altium menu: a failed Altium build keeps the previous library files, installs nothing and says so instead of "Ready". When Altium stops the build script part way (a script error writes no report), the menu puts the moved-aside library back.
 - Altium menu: shared resistor / capacitor / inductor symbols carry no footprint, so each DbLib row's Footprint Ref picks it; passive parts get Passive pins; distributor categories (including LCSC's "LED Indication - Discrete") route parts to the Capacitors, Transistors, Diodes, Crystals and Connectors tables; *Open review queue* lists the menu's held parts; an MPN no source knows is "Not found", not held.
 - A space in an MPN becomes `_` in the DbLib part name (`FC-135 32.768KA-AG0` → `FC-135_32.768KA-AG0`); the Manufacturer Part Number column keeps the space.
+
+## [0.3.2.dev0] - 2026-10-20
+
+The development build of main (not on PyPI). It writes files 0.3.1 cannot read (librarian_state v3), so it no longer calls itself 0.3.1: a refusal of a newer file now names a version that can read it. Its changes are the ones under [Unreleased] above.
 
 ## [0.3.1] - 2026-10-17
 

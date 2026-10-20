@@ -139,7 +139,7 @@
           "type": "number",
           "minimum": 0.2,
           "maximum": 1.0,
-          "default": 0.6
+          "default": 0.65
         },
         "paste_grid": {
           "type": "integer",
@@ -1139,10 +1139,7 @@
           "package_type": {
             "enum": [
               "chip",
-              "molded",
-              "gullwing",
-              "qfp",
-              "qfn"
+              "molded"
             ]
           }
         }
@@ -1159,6 +1156,24 @@
               "inner_span"
             ]
           }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_type": {
+            "enum": [
+              "gullwing",
+              "qfp",
+              "qfn"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "terminal_length"
         ]
       }
     },

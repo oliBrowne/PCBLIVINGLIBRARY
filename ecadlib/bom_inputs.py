@@ -30,16 +30,21 @@ def _field_map(names, columns):
     """{field: [KiCad field names]} for the custom fields, matched like CSV headers. Several names for one field
     (MPN on one sheet, "Mfr Part #" on another) are all kept: a part's value is the first one it has. The rules'
     [bom] columns (a name or a list of names) replace the guess for that field."""
-    from .bom_triage import _norm, map_headers
+    from .bom_triage import _norm, _supplier_pairs, map_headers
     custom = sorted({n for n in names if n not in STD and not SKIP_FIELD.fullmatch(n)})
     skip = ("qty", "designator", "value", "footprint", "datasheet")
     fmap = {f: [h] for f, h in map_headers(custom).items() if f not in skip}
     taken = {h for hs in fmap.values() for h in hs}
-    for n in custom:                                           # other names that on their own mean the same field
-        for f, h in map_headers([n]).items():
+    taken |= {custom[j] for j, _ in _supplier_pairs(custom)}   # 'Vendor' beside 'Vendor PN': a distributor, which
+    for n in custom:                                           # map_headers([n]) alone can't tell; other names that
+        for f, h in map_headers([n]).items():                  # on their own mean the same field
             if f in fmap and n not in taken:
                 fmap[f].append(n)
                 taken.add(n)
+    if "description" in fmap and "Description" in names:      # KiCad's own Description (the library's text) backs up
+        own = [n for n in fmap["description"] if re.search(r"\bdesc", _norm(n))]   # a house 'Desc' filled per part
+        fmap["description"] = own + ["Description"] + [n for n in fmap["description"] if n not in own]   # and is
+                                                               # backed up by a 'Notes' field, never replaced by it
     for f, want in (columns or {}).items():
         wants = [want] if isinstance(want, str) else list(want)
         hit = [n for w in wants for n in custom + list(STD) if _norm(n) == _norm(w)]
@@ -309,7 +314,16 @@ def is_kicad_netlist(path):
         return False
     if head[:3] == b"\xef\xbb\xbf":
         head = head[3:]
-    return bool(re.search(rb"^\s*(<\?xml[^>]*>\s*)?<export\b", head) or re.match(rb"\s*\(export\s", head))
+    return bool(re.search(rb"^\s*(<\?xml[^>]*>\s*)?(<!doctype[^\[>]*(\[.*?\])?\s*>\s*)?<export\b", head, re.I | re.S)
+                or re.match(rb"\s*\(export\s", head))     # a DOCTYPE one too: _xml_root refuses it by name
+
+
+def is_kicad5_sch(path):
+    """True for a KiCad 5 .sch (read_kicad_sch says to save it in KiCad 6+, rather than the CSV reader's header error)."""
+    try:
+        return Path(path).read_bytes()[:64].lstrip(b"\xef\xbb\xbf \t\r\n").startswith(b"EESchema Schematic File")
+    except OSError:
+        return False
 
 
 # ------------------------------------------------------------------ .xlsx without openpyxl

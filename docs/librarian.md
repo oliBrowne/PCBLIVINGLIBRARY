@@ -30,7 +30,7 @@ Triages the BOM, converts parts already in your `--lib` libraries, and for anyth
 
 Outputs in `out/librarian/`: `models/`, a `plan.json` for `altium365 push` recording each part's source, `review.md/.csv` (what came from where and what needs a person), and the release-check report. Re-running skips finished parts unless `--refresh` is given.
 
-The release check runs at the end and works on any plan. A part is **held** (and `altium365 push` skips it) unless: every pin has a pad and every pad a pin (mechanical and mounting pads excepted); the footprint passes `footprint_check` (KiCad-library parts: pad overlap, courtyard and pin 1); a 3D height is present and plausible for the package; Manufacturer, MPN, datasheet link and Description are filled in; the files exist and read back; and nothing from a source that needs a second look is unreviewed (datasheet-reader output, an EasyEDA conversion, a pinout from a family table, a KiCad symbol or footprint picked by a near name). A person releases such a part with `--allow` / Release anyway; picking another symbol or footprint for that half (`ecadlib resolve`, the review queue's Pick) also drops the note once the pick is applied, for an EasyEDA conversion once neither half comes from EasyEDA (datasheet-reader output always needs `--allow`). `--allow PART` overrides the failures present at that moment and is recorded in the plan; missing or unreadable files cannot be overridden. Every publisher that reads a plan (`altium365 push`, `dblib-sync` / `altium-pkg`, `kicad-export`, `kicad-dblib`, `export-parts` and exporter plugins) runs the check again on the files as they are and holds a part that fails it, whatever `status` the plan says; `kicad-export` (and `kicad-dblib --export`, for the part's database row) keeps the version it exported before of a released part it now holds, unless the library file was edited by hand since.
+The release check runs at the end and works on any plan. A part is **held** (and `altium365 push` skips it) unless: every pin has a pad and every pad a pin (mechanical and mounting pads excepted); a footprint link in the symbol names the part's footprint; the footprint passes `footprint_check` (KiCad-library parts: pad overlap, courtyard and pin 1); a 3D height is present and plausible for the package; Manufacturer, MPN, datasheet link and Description are filled in; the files exist and read back; and nothing from a source that needs a second look is unreviewed (datasheet-reader output, an EasyEDA conversion, a pinout from a family table, a KiCad symbol or footprint picked by a near name). A person releases such a part with `--allow` / Release anyway; picking another symbol or footprint for that half (`ecadlib resolve`, the web UI's Pick) also drops the note once the pick is applied, for an EasyEDA conversion once neither half comes from EasyEDA (datasheet-reader output always needs `--allow`). `--allow PART` overrides the failures present at that moment and is recorded in the plan; missing or unreadable files cannot be overridden. Every publisher that reads a plan (`altium365 push`, `dblib-sync` / `altium-pkg`, `kicad-export`, `kicad-dblib`, `export-parts` and exporter plugins) runs the check again on the files as they are and holds a part that fails it, whatever `status` the plan says; `kicad-export` (and `kicad-dblib --export`, for the part's database row) keeps the version it exported before of a released part it now holds, unless the library file was edited by hand since.
 
 Live run on the sample BOM (2026-10-14): 11 of 14 ready, 3 held. TYPE-C-31-M-12 has no symbol and KiCad's footprint has intentionally overlapping same-net pads. FTSH-105 has no footprint, LCSC number or datasheet. X322512MSB4SI has no crystal symbol chosen automatically. **Not tested live:** EasyEDA (blocked from this sandbox; the format assumptions are listed in `easyeda_convert.py`) and the datasheet step (no API key).
 
@@ -53,7 +53,7 @@ You don't need to edit `plan.json` by hand. `list --part` ranks candidates for t
 
 Ranking uses shared name tokens (rare ones weigh more), MPN prefix, package, body size, pitch and pin grid, and the usual libraries for the designator class. For connectors it also adds `Conn_` symbols for the pad count. The best names are then opened, and their pins or pads are compared with the item's other half using the release-check rule. A full match ranks first. A near miss gets a suggested `--map`.
 
-`choose` converts the part into `models/` the same way the librarian does. It then updates the item, recording "chosen by user" in `librarian.tried`, and `librarian_state.json`, so a librarian re-run keeps the choice. Finally it re-runs the release check on that item only. The Python API (`held`, `show`, `candidates`, `choose`) returns plain dicts and lists.
+`choose` converts the part into `models/` the same way the librarian does. A footprint file another part uses is shared only when the pads are the same; otherwise the chosen footprint gets its own name (`LED_0603_1608Metric_LED_0805_2012Metric`), so the other part keeps its released pads. The part's symbol then links that name (its `.SchLib` is relinked in place, whatever source drew it); parts sharing that symbol file are re-checked with it. A KiCad symbol `choose` writes carries the KiCad libraries' CC-BY-SA credit, as the librarian's do. It then updates the item, recording "chosen by user" in `librarian.tried`, and `librarian_state.json`, so a librarian re-run keeps the choice. Finally it re-runs the release check on that item (and on the parts sharing a file it rewrote). The Python API (`held`, `show`, `candidates`, `choose`) returns plain dicts and lists.
 
 Live run on a copy of the 14-part plan (2026-10-14):
 * TYPE-C-31-M-12: top candidate `Connector:USB_C_Receptacle_USB2.0_16P` (pins match), now **ready**. With a symbol present, the stacked A1/B12 pads are warnings.
@@ -103,7 +103,7 @@ The UI has a **Library rules** card (type the folders to scan, review the propos
 
 `ecadlib rules check [PATH]` validates a file (errors name the bad key and suggest the nearest valid one) and prints the effective rules; `ecadlib rules show` prints the built-in defaults.
 
-Plans keep ecadlib's own parameter names internally; your house names (`[parameters.names]`) are applied at the outputs: the Altium 365 push, DbLib export and sync, KiCad export, and the A365 drift check.
+Plans keep ecadlib's own parameter names internally; your house names (`[parameters.names]`) are applied at the outputs: the Altium 365 push, DbLib export and sync, KiCad export, and the A365 drift check. When you adopt house names in a library already synced or pushed, the next dblib-sync blanks the value under ecadlib's old name (the empty column and its DbLib field map stay) and the next push drops the old-named workspace parameter, so each field has one value.
 
 **Accuracy and limits.** On synthetic libraries in four house styles (classic Altium SchLib/PcbLib, glued names in a DbLib, MPN-named Altium 365 list, KiCad), inference gets 34 of 34 settings right, and parts planned with the inferred file come out named like the existing ones. Not checked: no real customer library has been scanned and nothing written was opened in Altium; IPC-7351 names from the generator are approximate; name case (upper/lower) is not inferred; `.mdb` DbLib data is not read. Because the current folder's `ecadlib.toml` is used when the input folder has none, a stray file there will change output; pass `--rules` to be explicit.
 
@@ -158,7 +158,7 @@ Tested offline only, with fake and recorded answers (`tests/test_crosscheck.py`)
 ## Updates never break a library: `migrate.py`, `library.lock.json` and `ecadlib rebuild`
 
 **Versioned files.** Everything ecadlib writes and reads back later has a schema version, one integer per kind of file
-(`ecadlib/migrate.py`, `KINDS`): `plan` (plan.json), `librarian_state` (now v2), `approvals_audit`, `agent`
+(`ecadlib/migrate.py`, `KINDS`): `plan` (plan.json), `librarian_state` (now v3), `approvals_audit`, `agent`
 and `queue` (files an older ecadlib's library agent left in `<workspace>/agent/`), `http_cache`, `rules` (ecadlib.toml),
 `approvals_policy` (approvals.json) and `lock`. Files other code iterates (a plan is a JSON list) keep the
 version in the folder's `ecadlib_schema.json`; files a person edits and the lock carry a top-level `schema_version`
@@ -166,11 +166,14 @@ version in the folder's `ecadlib_schema.json`; files a person edits and the lock
 
 * **Older** files are migrated: in memory when they are only read (`migrate.read`), on disk when a command writes the
   folder anyway (the librarian, `ecadlib migrate`), after a copy to `<folder>/.ecadlib_backup/<kind>-v<old>-<time>/`.
-  Migrations are registered in `MIGRATIONS` and are safe to run twice. The one so far, `librarian_state` v1 -> v2,
+  Migrations are registered in `MIGRATIONS` and are safe to run twice. Two so far: `librarian_state` v1 -> v2
   records each footprint's name and geometry hash (what `fp_share` would compute from its `.kicad_mod` anyway; a
-  footprint shared by name only is left unchecked so the librarian re-checks it).
+  footprint shared by name only is left unchecked so the librarian re-checks it), and v2 -> v3 computes each recorded
+  hash again, because the hash now covers pad shapes and holes (one whose `.kicad_mod` is gone is dropped).
 * **Newer** files are refused with one line, never misread: `librarian/board/plan.json was made by ecadlib 0.5.0 (plan
-  schema 2; this ecadlib 0.3.0 reads up to 1): upgrade ecadlib (pip install -U ecadlib)`. Checked when the web UI / MCP
+  schema 2; this ecadlib 0.3.0 reads up to 1): upgrade ecadlib to the build that made it (pip install -U ecadlib; when
+  that says it is up to date, the main-branch build: pip install -U "ecadlib @ git+https://github.com/oliBrowne/PCBLIVINGLIBRARY")`
+  (a main-branch build can write a newer format while still saying the last release's version). Checked when the web UI / MCP
   workspace opens, by the librarian, HTTP cache, rules and approvals loaders. A kind only a newer ecadlib
   knows is left alone.
 * `ecadlib migrate [PATH] [--check] [--dry-run] [--json]` lists every versioned file under PATH (ok / old / new) and
@@ -198,7 +201,10 @@ sha256, model, provider and prompt/schema version (`datasheet.schema_version()`)
 the cached model answers only: a model is never called) and reports per part and file *identical*, *normalised* (same
 after blanking the `.PcbLib` header's DATE/TIME, the only wall-clock value ecadlib writes; GUIDs and unique ids are
 derived from content) or *DRIFT*, plus inputs that changed (BOM, rules, a cached response, a `--lib` file) and parts
-built by another ecadlib version. Exit 0 / 1 (drift) / 2 (no lock, BOM missing). `ecadlib rebuild LIB` rebuilds in
+built by another ecadlib version. Exit 0 / 1 (drift) / 2 (no lock, BOM missing, or a refused `--keep`). `--keep DIR`
+puts the copy in `DIR/<library name>`, which must not be, hold or sit inside the library or anything the lock reads
+(BOM, HTTP cache, `--lib` folders and files, rules file); an existing `DIR/<library name>` is replaced only when an
+earlier `--check --keep` made it (it holds `.ecadlib-rebuild-copy`). `ecadlib rebuild LIB` rebuilds in
 place. Workspace `rebuild_check(bom)`, MCP tool `rebuild_check`. Tested: the 5-part BOM rebuilds with 0 drift; a
 cached KiCad footprint edited under the lock is reported as a changed input and a drifted `.PcbLib`; a changed BOM is
 reported; a datasheet part rebuilds from its cached answer while a fake API server records zero calls.

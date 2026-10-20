@@ -42,7 +42,8 @@ def test_fill_prices_the_datasheet_reads_and_sends_nothing():
         assert not api.of("/v1/messages"), "a paid call before the person said yes"
         q = r["ai"]
         assert q and {"DSPART1", "DSPART2"} <= set(q["names"]) and q["parts"] == len(q["names"]), q
-        assert q["model"] == "claude-opus-5-5" and q["price_known"] and q["key_set"] and q["exact"], q
+        assert q["model"] == "claude-opus-5-5" and q["price_known"] and q["key_set"] and not q["exact"], q   # T117: rough, sends nothing
+        assert not api.of("/count_tokens"), "the quote uploaded the datasheet before the person said yes"
         assert 0 < q["usd"] <= q["usd_max"] and q["approve_usd"] >= q["usd_max"], q
         assert "claude-opus-5-5" in q["text"] and "about $" in q["text"] and "at most $" in q["text"], q["text"]
         assert KEY not in json.dumps(r)

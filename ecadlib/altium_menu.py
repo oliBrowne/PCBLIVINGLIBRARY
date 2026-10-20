@@ -351,7 +351,19 @@ def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_runnin
     """Put the "ecadlib" menu into Altium's top menu bar (schematic, PCB, SchLib and PcbLib editors, before Window)
     by merging it into each Altium's DXP.RCS, after a backup next to it. Altium must be closed: it writes that
     file when it closes. remove=True takes it out again. -> {"installed"|"removed": [DXP.RCS], "backups": [...]}."""
-    win = check_win_dir(str(Path(menu_dir).resolve()) if os.name == "nt" else str(menu_dir))
+    if os.name == "nt":
+        win = check_win_dir(str(Path(menu_dir).resolve()))
+    else:                                # WSL / Linux writing to the Windows side: the folder `build --win-dir` recorded
+        try:
+            rec = json.loads((Path(menu_dir) / "altium_menu.json").read_text(encoding="utf-8")).get("win_dir")
+        except (OSError, ValueError, AttributeError):
+            rec = None
+        try:
+            win = check_win_dir(rec or str(menu_dir))
+        except ValueError:
+            raise ValueError(f"{menu_dir}: not a Windows folder, and no Windows folder recorded for this menu: run "
+                             f"`ecadlib altium-menu build --out {menu_dir} --win-dir D:\\ecadlib-menu` first (the "
+                             "folder Altium will read it from), or give --out as that Windows folder") from None
     if running():
         raise ValueError("Altium Designer is running: close it first (it rewrites its menu file when it closes), "
                          "then run this again")
@@ -386,9 +398,14 @@ def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_runnin
 
 def dxpprf_bytes(win_dir):
     """A preferences file (zip of DXP.RCS + IncludedFiles.ini, as Menu_SVN.DXPPrf). Fixed timestamps: same bytes each run."""
+    rcs = rcs_text(win_dir)
+    bad = "".join(dict.fromkeys(c for c in rcs if ord(c) > 127))
+    if bad:                                  # plain ASCII, so any code page reads it
+        raise ValueError(f"--win-dir {win_dir!r}: the menu file can only name a folder in plain ASCII ({bad!r}); "
+                         "use another folder")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
-        for name, data, comp in (("DXP.RCS", rcs_text(win_dir).encode("ascii"), zipfile.ZIP_DEFLATED),
+        for name, data, comp in (("DXP.RCS", rcs.encode("ascii"), zipfile.ZIP_DEFLATED),
                                  ("IncludedFiles.ini", b"[WorkspaceManager:Customizations]\r\nImportMode=0\r\nFileCount=1\r\n"
                                                        b"FileName0=DXP.RCS\r\n", zipfile.ZIP_STORED)):
             zi = zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0))
@@ -397,12 +414,16 @@ def dxpprf_bytes(win_dir):
     return buf.getvalue()
 
 
-def readme_text(win_dir, prefs):
+def readme_text(win_dir, prefs, unfit=False):
+    """unfit: no menu file because win_dir (this folder) has characters the menu file cannot hold."""
     w = win_dir or "<this folder>"
     menu = (f"""   Or load the ready-made menu: DXP (or the gear icon) > Preferences > Load... (bottom left) > {PREFS}; tick only
    "System > Customizations", OK, restart Altium. CAUTION: this loads a customisation file, which may replace
    menus you customised yourself (back them up first with Preferences > Save...). It names {w} in each entry: build
    it again with --win-dir if you move this folder.""" if prefs else
+            f"""   (No {PREFS} here: it names this folder in each entry, in plain ASCII without ' | or ", and the path of
+   this folder is not. Use the quick way above (install-menu), or build the menu into a folder whose path is.)"""
+            if unfit else
             f"""   (No {PREFS} here: the Windows folder was not known. Run `ecadlib altium-menu build --win-dir {w}` on
    this PC to get the ready-made menu file.)""")
     run_script = ", ".join(p for p in procedures() if "(" not in p)            # parameterless: Run Script lists them
@@ -511,19 +532,23 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
     derived = win_dir is None and os.name == "nt"
     if derived:
         win_dir = str(out.resolve())
+    prefs, note, folder = None, None, win_dir
     if win_dir:
         try:
             win_dir = check_win_dir(win_dir)
+            prefs = dxpprf_bytes(win_dir)       # before any file is written: a bad folder leaves nothing half-built
         except ValueError:
             if not derived:
                 raise
             win_dir = None            # this folder (C:\\Users\\O'Brien\\...) cannot go into a menu entry: no menu file
+            note = (f"no {PREFS}: the menu file names this folder in each entry, in plain ASCII without ' | or \", "
+                    f"and {folder} is not; install-menu puts the menu into Altium's own menu file instead")
     if name and not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$", name):
         raise ValueError(f"--name {name!r}: letters, digits, _ . - only")
     from . import altium_forms as AF, altium_native as AN
     files = {PROJECT: prjscr_text(UNIT, AF.DIALOG_UNIT, AN.UNIT), UNIT: pas_text(),
              AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text(), AN.UNIT: AN.pas_text(),
-             RUN_CMD: run_cmd_text(), RUN_VBS: run_vbs_text(), README: readme_text(win_dir, bool(win_dir))}
+             RUN_CMD: run_cmd_text(), RUN_VBS: run_vbs_text(), README: readme_text(win_dir or (note and folder), bool(win_dir), bool(note))}
     written, kept = [], []
     for fname, text in files.items():
         data = text.encode("utf-8")
@@ -540,14 +565,14 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
         ini.write_bytes(ini_text(workspace or "workspace", library or "library", name, command, hidden, timeout_s,
                                  port, offline).encode("utf-8"))
         written.append(INI)
-    if win_dir:
-        data = dxpprf_bytes(win_dir)
-        if not (out / PREFS).is_file() or (out / PREFS).read_bytes() != data:
-            (out / PREFS).write_bytes(data)
+    if prefs:
+        if not (out / PREFS).is_file() or (out / PREFS).read_bytes() != prefs:
+            (out / PREFS).write_bytes(prefs)
             written.append(PREFS)
     problems = project_problems(files)
     rep = {"folder": str(out), "project": PROJECT, "procedures": procedures(), "menu_entries": [p for p, _, _ in PROCS], "written": written,
-           "kept": kept, "win_dir": win_dir, "menu_file": PREFS if win_dir else None, "problems": problems,
+           "kept": kept, "win_dir": win_dir, "menu_file": PREFS if win_dir else None, **({"menu_file_note": note} if note else {}),
+           "problems": problems,
            "command": load_command(ini), "command_filled": filled}
     (out / "altium_menu.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
     return rep
@@ -1293,8 +1318,19 @@ def not_found(triage_csv, mpn, item):
 
 
 def _library_mpns(cfg, ws):
-    """MPNs already in the library: the DbLib parts table (any 'part number' column) and every ready / pulled plan item."""
+    """MPNs already in the library: the DbLib parts table (any 'part number' column) and every ready / pulled plan item.
+    KiCad (cfg tool kicad): the part number properties of the library's .kicad_sym files, which travel with the
+    project (the workspace may not, and a deleted library has nothing in it)."""
     have = set()
+    if cfg.get("tool") == "kicad":
+        for f in sorted(Path(cfg["library"]).glob("*.kicad_sym")):
+            try:
+                text = f.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            have |= {v.replace('\\"', '"').strip().upper() for k, v in re.findall(r'\(property "([^"]*)" "((?:[^"\\]|\\.)*)"', text)
+                     if v.strip() and re.search(r"\bmpn\b|part ?(number|no\b|#)|\bmfr\.? ?pn\b", k, re.I)}
+        return have
     for f in sorted(Path(cfg["library"]).glob("*.csv")):
         try:
             for row in csv.DictReader(f.open(encoding="utf-8", newline="")):
@@ -1321,7 +1357,7 @@ def _bom_of(ws, project):
     return str(p.resolve()), None
 
 
-def report_html(title, rows, counts, md_link):
+def report_html(title, rows, counts, md_link, tool="altium"):
     e = html.escape
     head = ["#", "Designators", "Qty", "MPN", "Manufacturer", "In your library", "Lookup", "Notes"]
     body = "".join("<tr>" + "".join(f"<td>{e(str(c))}</td>" for c in (
@@ -1334,7 +1370,7 @@ td,th{{border:1px solid #ccc;padding:3px 8px;text-align:left;vertical-align:top}
 <p>{counts['lines']} BOM lines: <b>{counts['in_library']}</b> in your library, <span class="n">{counts['missing']}</span>
 not yet, {counts['dnp']} not fitted. Full lookup report: <a href="{e(md_link)}">{e(Path(md_link).name)}</a>.</p>
 <table><tr>{''.join(f'<th>{h}</th>' for h in head)}</tr>
-{body}</table><p><small>written by ecadlib {__version__} (ecadlib altium-menu check-bom)</small></p></body></html>
+{body}</table><p><small>written by ecadlib {__version__} (ecadlib {tool}-menu check-bom)</small></p></body></html>
 """
 
 
@@ -1362,9 +1398,10 @@ def check_bom(cfg, project, opener=None, progress=None):
                   else "footprint" if st.startswith("needs_footprint") else "unverified" if st.startswith("unverified")
                   else "source"] += 1
     stem = Path(tri["reports"][0]).with_suffix("").name
-    out = ws.root / "reports" / f"{stem}_altium.html"
+    tool = "kicad" if cfg.get("tool") == "kicad" else "altium"
+    out = ws.root / "reports" / f"{stem}_{tool}.html"
     name = pb["project"] if pb else Path(project).name
-    out.write_text(report_html(f"BOM check: {name}", rows, counts, (ws.root / tri["reports"][0]).as_uri()),
+    out.write_text(report_html(f"BOM check: {name}", rows, counts, (ws.root / tri["reports"][0]).as_uri(), tool),
                    encoding="utf-8")
     opened = _open(out, opener)
     res = {"status": "ok", "message": f"{name}: {counts['lines']} BOM lines, {counts['in_library']} in your library, "
@@ -1512,15 +1549,21 @@ def queue_anchor(ws):
 def open_queue(cfg, opener=None, probe=probe_ui, launcher=start_ui, wait_s=30.0, sleep=time.sleep):
     """Open the web UI at the review queue, starting `ecadlib ui` for the workspace when nothing answers."""
     port, ws = cfg["port"], Path(cfg["workspace"])
+    kicad = cfg.get("tool") == "kicad"
+    for p in range(port, port + 20) if kicad else ():   # KiCad reads no settings file: one UI per project, on the first
+        k, served = probe(p)                            # port that serves this workspace or is free
+        if k is None or (k == "ecadlib" and served and Path(served).resolve() == ws.resolve()):
+            port = p
+            break
     url = f"http://127.0.0.1:{port}/{queue_anchor(ws)}"
     kind, served = probe(port)
     started = False
     if kind == "other":
         return {"status": "error", "message": f"port {port} is used by another program",
-                "fix": f"set port= to a free port in {INI}"}
+                "fix": "close the program on that port" if kicad else f"set port= to a free port in {INI}"}
     if kind == "ecadlib" and served and Path(served).resolve() != ws.resolve():
         return {"status": "error", "message": f"port {port} already serves another ecadlib workspace ({served})",
-                "fix": f"stop that `ecadlib ui`, or set port= to another port in {INI}"}
+                "fix": "stop that `ecadlib ui`" + ("" if kicad else f", or set port= to another port in {INI}")}
     if kind is None:
         ws.mkdir(parents=True, exist_ok=True)
         launcher(ws, port)
@@ -1791,7 +1834,9 @@ def main(argv=None):
                   f"then Customize to put {', '.join(rep['menu_entries'])} on a menu (see {README})")
             for p, u, d in BUILD_PROCS:
                 print(f"  also in the project: {p} ({u}): {d}")
-            if not rep["menu_file"]:
+            if rep.get("menu_file_note"):
+                print(f"  {rep['menu_file_note']}")
+            elif not rep["menu_file"]:
                 print(f"  no {PREFS}: give --win-dir (the folder on the Altium PC) for the ready-made menu file")
         return 1 if rep["problems"] else 0
     if a.cmd == "wake":

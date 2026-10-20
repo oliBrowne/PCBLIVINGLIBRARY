@@ -7,11 +7,26 @@ whole instead of a truncated one that no later command can read.
 On Windows a rename over a file that another process has open (the web UI reading the plan, a virus scanner, a
 search indexer) fails with PermissionError for as long as it is open, where the old in-place write worked: replace()
 retries for a few seconds before giving up."""
-import contextlib, os, threading, time
+import contextlib, os, re, threading, time
 from pathlib import Path
+
+
+def report_file(stem, ext):
+    """<stem><ext>: a report stem keeps its dots ('triage_Board_rev1.2_BOM' -> 'triage_Board_rev1.2_BOM.md');
+    Path.with_suffix would cut '.2_BOM' off, so rev1.1 and rev1.2 would write one report."""
+    stem = Path(stem)
+    return stem.with_name(stem.name + ext)
+
 
 RETRY = os.name == "nt"              # only Windows refuses a rename over an open file; elsewhere it is a real error
 DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
+TMP = re.compile(r"\..+\.\d+\.\d+\.tmp")   # the temp file name below: .NAME.<pid>.<thread>.tmp
+
+
+def atomic_tmp(path):
+    """Is `path` a temp file of write_text_atomic / write_bytes_atomic (one a killed process left behind, or one being
+    written right now)? Never a person's file: a sweep of a folder ecadlib writes leaves it out."""
+    return bool(TMP.fullmatch(Path(path).name))
 
 
 def replace(src, dst):

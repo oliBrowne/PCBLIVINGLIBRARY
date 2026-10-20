@@ -203,12 +203,13 @@ def _plain(v):
 
 def _readings(v, num):
     """The numbers a value can mean: {num}, and with a leading '100,000' (a comma before exactly 3 digits, which is a
-    decimal comma in Europe and a thousands separator elsewhere) also the value read with the comma left out."""
-    out = {num}
-    m = re.match(r"\s*\d+,\d{3}(?![\d,.])", str(v or ""))
-    if m:
+    decimal comma in Europe and a thousands separator elsewhere: kicad_index.two_readings) also the value read with
+    the comma left out."""
+    from .kicad_index import two_readings
+    out, both = {num}, two_readings(v)
+    if both:
         from .fingerprint import value_number
-        alt = value_number(str(v).strip().replace(",", "", 1))
+        alt = value_number(both[1])
         if alt is not None:
             out.add(alt)
     return frozenset(out)
@@ -400,6 +401,13 @@ def _power_alike(nums, pins):
     return all(_net_pin(x) for x in xs) and len({(x.get("net") or x.get("raw"), x["type"], x.get("ktype")) for x in xs}) == 1
 
 
+def _one_net(nums, pins):
+    """Pins of one net name, at least one a power (or hidden) pin, whatever their types: the KLC stack of a power net
+    (a visible power_in pin, passive copies of the same name). Drawn on one end they join no other net."""
+    xs = [x for n in nums for x in _insts(pins[n])]
+    return any(_net_pin(x) for x in xs) and len({x.get("net") or x.get("raw") for x in xs}) == 1
+
+
 def _stacked(so, sn, out):
     """Pins that share a pin end are connected (KiCad and Altium join pins on one spot). Pins that now share an end are
     a new connection: electrical, always. Pins that no longer share one: power pins of one name and type (a stack the
@@ -431,8 +439,8 @@ def _stacked(so, sn, out):
                     _chg(out, "electrical", "symbol", "pin ends", None, sorted(comp, key=_natkey),
                          f"{_pins_text(p, pn)}{where} now {'share' if len(p) > 1 else 'shares'} a pin end with "
                          f"{_pins_text(parts[0], pn)}: they connect")
-                    if _power_alike(comp, pn):        # one net's pins drawn on one end: no wrong connection
-                        out[-1]["drawing"] = True
+                    if _one_net(comp, pn):            # one net's pins drawn on one end (a KLC stack: a visible
+                        out[-1]["drawing"] = True     # power_in pin, hidden passive copies): no wrong connection
         for comp in (old if us in go else []):        # connected before: in pieces now?
             parts = [c & comp for c in new if c & comp]
             if len(parts) <= 1:
@@ -692,9 +700,10 @@ def _footprint(o, n, out):
         if land_changed:
             _chg(out, "geometry-major", "footprint", "footprint", fo.get("name"), fn.get("name"),
                  f"footprint changed from {_f(fo.get('name'))} to {_f(fn.get('name'))}")
-        else:
+        else:                                  # the same land pattern: no pad, paste / mask window or copper changed
+            same = not any(c["what"].startswith("pad") or c["what"] in ("origin", "windows", "copper") for c in sub)
             _chg(out, "geometry-minor", "footprint", "footprint", fo.get("name"), fn.get("name"),
-                 f"footprint renamed {_f(fo.get('name'))} -> {_f(fn.get('name'))} (the same land pattern)")
+                 f"footprint renamed {_f(fo.get('name'))} -> {_f(fn.get('name'))}" + (" (the same land pattern)" if same else ""))
     out += sub
     ao, an = fo.get("art") or {}, fn.get("art") or {}
     for k, label in (("silk", "silkscreen"), ("fab", "fab drawing"), ("text", "footprint texts"), ("other", "other drawing layers")):

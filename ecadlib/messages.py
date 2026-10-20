@@ -258,14 +258,22 @@ CODES = {
     "librarian.family_pinout": ("The pinout of {sym} comes from the {mpn} family table, not from this part's datasheet.",
                                 "Check pins 1-3 against the datasheet, then release it anyway if they match.",
                                 [r"symbol pinout (?P<sym>\S+) from the (?P<mpn>\S+) family table"]),
+    "librarian.value_two_ways": ("The value {value} reads two ways: {first} with a decimal comma, {second} with a thousands comma.",
+                                 "Write the value without the comma on the BOM line, or release it anyway if the part is right.",
+                                 [r"^(?:verify: )?value (?P<value>.+?) reads two ways: (?P<first>.+?) or (?P<second>.+?)"
+                                  r"(?:; write it without the comma| \(a decimal or a thousands comma\))"]),
     # any other `verify` note, after the specific ones above (some of them come as verify notes too)
     "verify.other": ("A person has to check this part first: {detail}.", "Check it, then release it anyway if it is right.",
                      [r"^verify: (?P<detail>.+)"]),
     # sign-off, duplicates, Altium 365
-    "approval.waiting": ("Waiting for sign-off[ ({missing})].", "Ask a reviewer to approve it in the review queue.",
+    "approval.waiting": ("Waiting for sign-off[ ({missing})].",
+                         "Ask a reviewer to approve it (Approve in step 2 of the web UI, or `ecadlib approve`).",
                          [r"^awaiting approval(?:: (?P<missing>.+))?"]),
     "approval.changed": ("The part changed after its last check.", "Run the release check again.",
                          [r"changed since the release check"]),
+    "change.held": ("A change to this released part waits for a person: {detail}.",
+                    "Look at it with ecadlib part show, then approve it with ecadlib part approve (release anyway cannot).",
+                    [r"^change control: (?P<detail>.+?); a person approves it"]),
     "dedupe.duplicate": ("This part is a duplicate of {of}.", "Use {of} instead, or keep both on purpose.",
                          [r"duplicate of (?P<of>\S+)"]),
     "a365.deleted": ("The part was deleted in the Altium 365 workspace.",
@@ -420,12 +428,31 @@ def friendly_error(exc):
 INTERNAL = ("plan.json", "ds_route", "stdparts", "crosscheck", "release_check", "footprint_check", "kicad_import",
             "symbol_layout", "hold_reasons")
 _MOD = r"ecadlib\.(?!toml\b)[a-z_]+\b"
-_ABS = re.compile(r"(?<![\w.:/])(?:/(?:[\w.@+-]+/)+[\w.@+-]+|[A-Za-z]:\\(?:[^\s\\]+\\)+[^\s\\]+)")
+_ROOT_NAMES = (r"home|Users|tmp|var|etc|opt|usr|mnt|srv|private|root|Volumes|media|run|data|workspace|"
+               r"workspaces|nix|github|builds?|sessions|proc|dev|sys|lib")
+_WSEP = r"(?:\\\\|\\|/)"                         # a Windows separator: \, / (Path.as_posix()) or a repr'd \\
+_EXT = r"\.[A-Za-z][A-Za-z0-9_]{0,9}"            # .json, .kicad_sym
+_SEG = r"[^\s\\/:'\"]+"                          # a folder name without a space
+_WCH = r"[^\s\\/:'\"(),;]"
+_WORD = r"(?!" + _WCH + r"*" + _EXT + r"(?!" + _WCH + r"))" + _WCH + r"+"   # a word of a folder name: no file name
+_MULTI = _WORD + r"(?: " + _WORD + r")+"         # a folder name with single spaces ("John Smith", "OneDrive - Acme")
+_FILE = r"[^\s\\/:'\"]*" + _EXT + r"(?![A-Za-z0-9_])"
+_START = r"(?:[A-Za-z]:" + _WSEP + r"|/(?i:" + _ROOT_NAMES + r")/)"
+# A quoted path (an OSError's repr'd file name) runs to its closing quote, spaces and all. Unquoted, a folder name
+# with spaces only inside a path that ends in a file name with an extension, and only when no word of it is a file
+# name or holds ( , ; - so "/home/me/plan.json and/or the cache" stops at plan.json. Else the strict space-free forms.
+_ABS = re.compile(r"(?<![\w.:/])(?:(?<=')" + _START + r"[^'\r\n]*[^'\r\n\\/](?=')"
+                  r"|(?<=\")" + _START + r"[^\"\r\n]*[^\"\r\n\\/](?=\")"
+                  r"|/(?i:" + _ROOT_NAMES + r")/(?:" + _SEG + r"/)*" + _MULTI + r"/(?:(?:" + _MULTI
+                  + r"|" + _SEG + r")/)*" + _FILE
+                  + r"|[A-Za-z]:" + _WSEP + r"(?:" + _SEG + _WSEP + r")*" + _MULTI + _WSEP + r"(?:(?:" + _MULTI + r"|"
+                  + _SEG + r")" + _WSEP + r")*" + _FILE
+                  + r"|/(?:[\w.@+-]+/)+[\w.@+-]+"
+                  r"|[A-Za-z]:" + _WSEP + r"(?:[^\s\\/]+" + _WSEP + r")+[^\s\\/]+)")
 _MODULE = re.compile(r"\s*\((?:see |via |from |by )?" + _MOD + r"[^)]*\)|\b" + _MOD)
 
 
-_ROOTS = re.compile(r"/(home|Users|tmp|var|etc|opt|usr|mnt|srv|private|root|Volumes|media|run|data|workspace|"
-                    r"workspaces|nix|github|builds?|sessions|proc|dev|sys|lib)/", re.I)
+_ROOTS = re.compile(r"/(" + _ROOT_NAMES + r")/", re.I)
 
 
 def _is_path(s):

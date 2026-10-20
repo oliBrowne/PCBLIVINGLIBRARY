@@ -71,8 +71,11 @@ EXAMPLES = {
     "librarian.symbol_match": "symbol Q_NMOS_GSD matched by the BOM's value",
     "librarian.easyeda": "EasyEDA C8734 conversion: check pads and pins against the datasheet (native converter, format assumed)",
     "librarian.family_pinout": "symbol pinout AMS1117 from the AMS1117-3.3 family table (ecadlib.stdparts): check pins 1-3 against the datasheet",
+    "librarian.value_two_ways": "verify: value 4,700pF reads two ways: 4.7pF or 4700pF; write it without the comma",
     "approval.waiting": "awaiting approval: 1 approval from role librarian",
     "approval.changed": "changed since the release check: run release-check again",
+    "change.held": "change control: new part with the MPN of released RES-0603-10k r1 (pad 1 moved 0.2 mm in x); a person "
+                   "approves it: ecadlib part show",
     "dedupe.duplicate": "duplicate of R_10k_0603 (dedupe)",
     "a365.deleted": "deleted in the Altium 365 workspace",
     "proof.doubt": "proof doubt: the pin 1 mark is on the other side",
@@ -188,7 +191,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 8, "datasheet.py": 3,
+    "librarian.py": 9, "datasheet.py": 3,
 }
 
 

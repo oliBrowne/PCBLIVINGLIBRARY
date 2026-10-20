@@ -202,12 +202,10 @@ def test_lib7_release_check_says_the_policy_is_broken(tmp_path):
     from ecadlib import release_check as RC
     (tmp_path / "plan.json").write_text("[]")
     (tmp_path / "approvals.json").write_text('{"required": 1, "users": ["ann@x.com"]}')
-    try:
-        RC.main([str(tmp_path / "plan.json")])
-    except SystemExit as e:
-        assert str(e.code).startswith("approval policy:") and "users must be" in str(e.code), e.code
-    else:
-        raise AssertionError("release-check ran with a broken policy")
+    import contextlib, io
+    with contextlib.redirect_stderr(io.StringIO()) as err:      # one line + hint, exit 2 (T124)
+        assert RC.main([str(tmp_path / "plan.json")]) == 2, "release-check ran with a broken policy"
+    assert "approval policy:" in err.getvalue() and "users must be" in err.getvalue(), err.getvalue()
 
 
 # ---------------------------------------------------------------- change control

@@ -130,7 +130,7 @@ def active(rules=None, start="."):
 def pin_low(name):
     """-> (base name, notation) for an active-low pin name, else (name, None)."""
     n = str(name or "").strip()
-    if "̅" in n:
+    if re.fullmatch("(?:[^̅]̅)+", n):     # every character overlined; R/B̅ (a bar over B only) is not
         return n.replace("̅", ""), "overbar"
     if len(n) >= 4 and re.fullmatch(r"(?:[^\\]\\)+", n):
         return n.replace("\\", ""), "overbar"
@@ -966,9 +966,10 @@ def main(argv=None, send=None):
     start = Path(a.plan).parent if getattr(a, "plan", None) else Path(".")
     rules = RU.load(a.rules, start=start)
     pf = Path(a.profile) if a.profile else profile_path(rules, start)
+    from .datasheet import DatasheetError             # the model call's errors (a rejected key, HTTP 500, 429)
     try:
         return _run(a, rules, pf, send)
-    except StyleError as e:
+    except (StyleError, DatasheetError) as e:
         print(f"ecadlib style {a.cmd}: {e}", file=sys.stderr)
         return 2
 
@@ -982,6 +983,11 @@ def _run(a, rules, pf, send):
                  or (old or {}).get("learned_from") or [])
         if not paths:
             raise StyleError("which library? --from DIR (your Altium / KiCad library folder, a DbLib, an Altium 365 export)")
+        gone = [p for p in a.paths if not Path(p).expanduser().exists()]      # a typo must not replace the learned style
+        if gone:
+            print(f"ecadlib style learn: not found: {gone[0]}\n  hint: check the --from path; {pf.name} is unchanged",
+                  file=sys.stderr)
+            return 2
         direction = list(a.direction)
         if a.direction_file:
             direction += [x for x in Path(a.direction_file).read_text(encoding="utf-8").splitlines() if x.strip()

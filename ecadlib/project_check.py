@@ -52,8 +52,7 @@ def kicad_paths(path):
         p = pros[0]
     if p.suffix.lower() not in KICAD_EXT:
         raise ProjectError(f"{p.name}: give a .kicad_pro, .kicad_sch, .kicad_pcb or the project folder")
-    stem = p.with_suffix("")
-    sch, pcb = stem.with_suffix(".kicad_sch"), stem.with_suffix(".kicad_pcb")
+    sch, pcb = p.with_suffix(".kicad_sch"), p.with_suffix(".kicad_pcb")
     out = {"dir": p.parent, "name": p.stem, "sch": sch if sch.is_file() else None, "pcb": pcb if pcb.is_file() else None}
     if not out["sch"] and not out["pcb"]:
         raise ProjectError(f"{p.name}: no {sch.name} or {pcb.name} next to it")
@@ -71,28 +70,39 @@ def sheet_files(root):
         for sh in sexpr.find(_load_sch(f), "sheet"):
             props = {str(x[1]): str(x[2]) for x in sexpr.find(sh, "property") if len(x) > 2}
             sub = props.get("Sheetfile") or props.get("Sheet file")
-            if sub and (f.parent / sub).is_file():
-                todo.append(f.parent / sub)
+            if not sub:
+                continue
+            target = f.parent / sub
+            if not target.is_file():           # drawn on Windows / macOS: the case may differ (as bom_inputs reads it)
+                from .altium_project import _find_file
+                target = _find_file(f.parent, sub) or target
+            if target.is_file():
+                todo.append(target)
         if len(out) > 2000:
             raise ProjectError(f"{Path(root).name}: more than 2000 sheet files")
     return out
 
 
-def _ref(sym):
-    for proj in sexpr.find(sexpr.first(sym, "instances") or [], "project"):
-        for p in sexpr.find(proj, "path"):
-            r = sexpr.first(p, "reference")
-            if r:
-                return str(r[1])
-    return next((str(x[2]) for x in sexpr.find(sym, "property") if len(x) > 2 and str(x[1]) == "Reference"), "")
+def _refs(sym, root_uuid=""):
+    """Every reference of a placed symbol: one per instance path under this root schematic (a sheet used twice gives
+    R10 and R20, as bom_inputs reads it). No such path: the first instance, else the Reference property."""
+    paths = [(str(p[1]).strip("/").split("/")[0], str(r[1]))
+             for proj in sexpr.find(sexpr.first(sym, "instances") or [], "project")
+             for p in sexpr.find(proj, "path") for r in [sexpr.first(p, "reference")] if r]
+    mine = [r for top, r in paths if root_uuid and top == root_uuid]
+    if mine or paths:
+        return mine or [paths[0][1]]
+    return [next((str(x[2]) for x in sexpr.find(sym, "property") if len(x) > 2 and str(x[1]) == "Reference"), "")]
 
 
 def schematic_symbols(files):
     """{cache key: {"node": cached symbol, "lib_id": .., "refs": [..]}} over the sheet files. The cache key is the
     instance's lib_name when it has one (a symbol edited in the schematic), else its lib_id."""
-    cache, uses = {}, {}
+    cache, uses, root_uuid = {}, {}, None
     for f in files:
         tree = _load_sch(f)
+        if root_uuid is None:                  # files[0] is the root schematic (sheet_files)
+            root_uuid = str((sexpr.first(tree, "uuid") or [None, ""])[1])
         for s in sexpr.find(sexpr.first(tree, "lib_symbols") or [], "symbol"):
             cache.setdefault(str(s[1]), s)
         for s in sexpr.find(tree, "symbol"):
@@ -102,12 +112,12 @@ def schematic_symbols(files):
             ln = sexpr.first(s, "lib_name")
             key = str(ln[1]) if ln else str(lid[1])
             u = uses.setdefault(key, {"lib_id": str(lid[1]), "refs": set(), "edited": bool(ln), "inst_fp": {}})
-            r = _ref(s)
-            if r and not r.startswith("#"):
-                u["refs"].add(r)
-                fp = next((str(x[2]) for x in sexpr.find(s, "property") if len(x) > 2 and str(x[1]) == "Footprint"), None)
-                if fp is not None:             # the footprint this placed symbol puts on the board
-                    u["inst_fp"][r] = "" if fp == "~" else fp
+            fp = next((str(x[2]) for x in sexpr.find(s, "property") if len(x) > 2 and str(x[1]) == "Footprint"), None)
+            for r in _refs(s, root_uuid):
+                if r and not r.startswith("#"):
+                    u["refs"].add(r)
+                    if fp is not None:         # the footprint this placed symbol puts on the board
+                        u["inst_fp"][r] = "" if fp == "~" else fp
     return {k: {"node": cache.get(k), "lib_id": u["lib_id"], "refs": sorted(u["refs"], key=_natkey),
                 "edited": u["edited"], "inst_fp": u["inst_fp"]} for k, u in uses.items()}
 
@@ -645,8 +655,9 @@ def freeze_kicad(path, nick=None, dry_run=False, out_dir=None, rewrite=True):
             tables.append((pdir / "fp-lib-table", "fp_lib_table", f"{prefix}/{nick}.pretty"))
         if not dry_run:
             for f in list(changed) + [p for p, _, _ in tables if p.is_file()]:
-                backup.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(f, backup / f.name)
+                dst = _backup_path(backup, pdir, f)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, dst)
             for f, t in changed.items():
                 f.write_text(sexpr.dumps(t) + "\n", encoding="utf-8")
         for p, head, uri in tables:
@@ -657,6 +668,22 @@ def freeze_kicad(path, nick=None, dry_run=False, out_dir=None, rewrite=True):
                            for fpid, ds in names.items() for n, d in enumerate(ds)},
             "files": [str(f) for f in written], "backup": str(backup) if backup and not dry_run and backup.exists() else None,
             "dry_run": dry_run}
+
+
+def _backup_path(backup, pdir, f):
+    """Where freeze backs up f: its path inside the project folder (sub.kicad_sch and sub2/sub.kicad_sch are two
+    files); a sheet outside it (Sheetfile "../shared/x.kicad_sch") under _outside/, numbered when the name is taken."""
+    try:
+        rel = Path(os.path.relpath(f, pdir))
+    except ValueError:                         # another drive (Windows)
+        rel = None
+    if rel is None or rel.parts[:1] == ("..",):
+        rel = Path("_outside") / Path(f).name
+    dst, n = backup / rel, 1
+    while dst.exists():
+        n += 1
+        dst = dst.with_name(f"{rel.stem}.{n}{rel.suffix}")
+    return dst
 
 
 def _point_schematic(tree, nick, sym_new, fps):
@@ -816,8 +843,8 @@ def main(argv=None):
                 print(json.dumps(res, indent=1))
             else:
                 print_check(res)
-            if a.out:
-                print(f"-> {write_report(res, a.out)}")
+            if a.out:                              # --json: stdout is the JSON, nothing else
+                print(f"-> {write_report(res, a.out)}", file=sys.stderr if a.json else sys.stdout)
             return 1 if res["held"] else 0
         if a.cmd == "freeze":
             res = freeze_kicad(a.project, a.name, a.dry_run)

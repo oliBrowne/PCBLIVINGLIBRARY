@@ -705,6 +705,8 @@ def attempt_record(part, name, model, msg, via, pages_sent, pages_total, verdict
         usd, how = usage_usd(billed_model(model, msg), u, batch), "usage"
         tin = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
         tout = int(u.get("output_tokens") or 0)
+    elif ((msg or {}).get("ecadlib") or {}).get("not_sent"):   # refused before the request went out: nothing billed
+        tin, tout, usd, how = 0, 0, 0.0, "not sent"
     else:
         tin, usd = estimate_usd(model, pages_sent or pages_total, batch)
         from . import datasheet as D

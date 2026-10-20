@@ -88,12 +88,16 @@ def _kicad_mod(item, base, fp_file):
 
 
 def _pad_rects(pads):
+    """(designator, x, y, w, h, odd angle, corner radius) in mm: round pads (Altium shape 1) have round ends, rounded
+    rectangles (9) a corner of corner % of half the short side."""
     out = []
     for r in pads:
         w, h = AL.to_mm(r["w"]), AL.to_mm(r["h"])
         if round(r["rot"]) % 180 == 90:
             w, h = h, w
-        out.append((r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), w, h, r["rot"] % 90 != 0))
+        rad = min(w, h) / 2 * (1.0 if r["shape"] == AL.SHAPE["round"] else
+                                (r["corner"] or 0) / 100 if r["shape"] == AL.SHAPE["roundrect"] else 0.0)
+        out.append((r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), w, h, r["rot"] % 90 != 0, rad))
     return out
 
 
@@ -118,7 +122,8 @@ def _pcblib_minimal(fp, pin_names=None, courtyard=AL.MECH15, pin1=None):
         for b in rects[i + 1:]:
             if a[0] and a[0] == b[0] or a[5] or b[5]:
                 continue
-            if abs(a[1] - b[1]) < (a[3] + b[3]) / 2 - 0.005 and abs(a[2] - b[2]) < (a[4] + b[4]) / 2 - 0.005:
+            gap = FC._rect_gap(*({"x": q[1], "y": q[2], "w": q[3], "h": q[4], "r": q[6]} for q in (a, b)))
+            if gap < -0.005:                       # round ends and corners: boxes meeting at a corner don't touch
                 msg = f"pads {a[0]} and {b[0]} overlap"
                 (warns if _same_net(msg, pin_names or {}) else fails).append(msg)
     if not any(r["layer"] == courtyard for r in fp["records"] if r["type"] in ("track", "arc", "region")):
@@ -231,12 +236,19 @@ def check_item(item, base=".", rules=None):
                 r = r[1] if kind == "symbol" else r
                 if not r:
                     raise ValueError("library is empty")
-                if kind == "symbol":
-                    syms = r
-                else:
-                    fps = r
             except Exception as e:             # unreadable: altium_lib's reader is the gate
                 add("files", f"{kind} file does not read back ({type(e).__name__}: {e})")
+                continue
+            from .kicad_export import _pick
+            try:                               # a library of many (dedupe --merge onto a company file): the entry the
+                r = [_pick(r, item[kind].get("ref"), f, kind)]          # plan names, not the first one or all of them
+            except ValueError as e:
+                add("files", str(e))
+                continue
+            if kind == "symbol":
+                syms = r
+            else:
+                fps = r
     # ---- pins vs pads
     if syms and fps:
         pins = {r["num"] for s in syms for r in s["records"] if r.get("RECORD") == "2"}
@@ -256,15 +268,32 @@ def check_item(item, base=".", rules=None):
             add("pins", f"pads without a symbol pin: {FC._ranges(numbered - pins)}")
         if mech - {""}:
             warns.append(f"mechanical pads without a pin (allowed): {FC._ranges(mech - {''})}")
+        links = {r["MODELNAME"] for s in syms for r in s["records"] if r.get("RECORD") == "45" and r.get("MODELNAME")
+                 and str(r.get("MODELTYPE") or "PCBLIB").upper() == "PCBLIB"}
+        names = {fp["name"] for fp in fps} | ({AL.lib_name(item["footprint"]["ref"])} if item["footprint"].get("ref") else set())
+        if links and not links & names:        # the symbol's own link wins over a DbLib row's footprint (and in an IntLib)
+            msg = (f"the symbol links footprint {', '.join(sorted(links))}, not the part's "
+                   f"{item['footprint'].get('ref') or fps[0]['name']}")
+            if (item.get("merged_from") or {}).get("footprint"):   # dedupe --merge: an equivalent keeper, files untouched
+                warns.append(msg)
+            else:
+                add("pins", msg)
     # ---- footprint rules
     src = str((item.get("source") or {}).get("footprint") or "")
     kicad_lib = src.startswith("kicad:")
     kmod = _kicad_mod(item, base, fp_f) if fp_f else None
     if kmod:
         info["kicad_mod"] = str(kmod)
-        text = kmod.read_text(encoding="utf-8")
+        try:                                   # a .kicad_mod KiCad cannot load is no release, whatever the PcbLib says
+            text = kmod.read_text(encoding="utf-8")
+            tree = FC.sexpr.parse(text)
+            if not (isinstance(tree, list) and tree and tree[0] in ("footprint", "module")):
+                raise ValueError("not a footprint")
+        except Exception as e:
+            add("files", f"KiCad footprint file does not read back: {kmod.name} ({type(e).__name__}: {e})")
+            text, tree = None, None
         try:
-            issues, nums = FC.check(text), {p["num"] for p in FC._pad_rects(FC.sexpr.parse(text))}
+            issues, nums = (FC.check(text), {p["num"] for p in FC._pad_rects(tree)}) if text is not None else ([], set())
         except Exception as e:                 # checker crash: fall back to the PcbLib minimum below
             issues, nums, kmod = [], set(), None
             warns.append(f"footprint_check failed on {info.pop('kicad_mod')} ({type(e).__name__}: {e})")
@@ -277,7 +306,7 @@ def check_item(item, base=".", rules=None):
             hard = lvl == "error" and (not kicad_lib or (rule == "copper" and "overlap" in msg) or
                                        (rule == "courtyard" and msg.startswith("no courtyard")) or (rule == "pin1" and "no pad" in msg))
             (add("footprint", f"{rule}: {msg}") if hard else warns.append(f"{lvl} {rule}: {msg}"))
-        if kmod:                               # the rule book (footprint_rules): naming, layers, type, pin map ...
+        if kmod and text is not None:          # the rule book (footprint_rules): naming, layers, type, pin map ...
             try:
                 book = FR.check(text, filename=kmod.name, symbol_pins=pin_names if syms else None, geometry=False)
             except Exception as e:             # a rule-book crash must not hide the other rules
@@ -481,7 +510,8 @@ def write_report(rows, stem, plan=""):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
-        w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["name", "status"])
+        cols = list(dict.fromkeys(k for r in rows for k in r)) or ["name", "status"]   # only some rows carry `approval`
+        w = SS.DictWriter(f, fieldnames=cols, restval="")
         w.writeheader(); w.writerows(rows)
     from . import messages as M
     held = [r for r in rows if r["status"] == "held"]
@@ -518,8 +548,8 @@ def print_result(rows, plan, stem, t=None):
     t = t or TM.Term()
     table = []
     for r in rows:
-        st = {"pass": "ready", "allowed": "ready"}.get(r["result"], r["status"])
-        word = "released anyway" if r["result"] == "allowed" else None
+        st = r["status"]                    # a pass that waits for sign-off (or is a duplicate) is not ready
+        word = "released anyway" if r["result"] == "allowed" and st == "ready" else None
         reasons = _split(r["failures"]) if r["status"] == "held" else []
         why = M.explain_all(reasons)
         first = why[0]["text"] + (f" (+{len(why) - 1} more)" if len(why) > 1 else "") if why else ""
@@ -551,13 +581,20 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="print the result as JSON (plan, report, counts, rows)")
     a = ap.parse_args(argv)
     plan = Path(a.plan)
-    from .approvals import cli_plan_lock, load_policy
+    from .approvals import cli_plan_lock, load_policy, policy_error
     try:
         load_policy(plan.parent)               # a broken approvals file: say so, before anything is changed
     except ValueError as e:
-        sys.exit(f"approval policy: {e}")
+        return policy_error("release-check", e)
     with cli_plan_lock(plan):                  # the web UI may be recording into this plan right now
         items = json.loads(plan.read_text(encoding="utf-8"))
+        from .kicad_export import PlanError, check_plan
+        try:                                   # {} / null / an entry without a name: refused, the plan not rewritten
+            check_plan(items, plan)
+        except PlanError as e:
+            print(f"ecadlib release-check: {e}\n  hint: is this the right file? plan.json is written by "
+                  f"`ecadlib librarian`", file=sys.stderr)
+            return 2
         unknown = set(a.allow + a.unallow) - {i["name"] for i in items}
         if unknown:
             sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")

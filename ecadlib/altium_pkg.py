@@ -347,7 +347,7 @@ def check_released(src, plan, rules=None):
     from . import change_diff as CD, change_gate as CG, fingerprint as FP, ledger as LG
     src, plan = Path(src).resolve(), Path(plan)
     lib = plan.parent.resolve()
-    items = CG.settled_plan(plan, "altium-pkg", rules=rules, log=lambda *a, **k: None)
+    items = CG.settled_plan(plan, "altium-pkg", rules=rules)
     lg = LG.Ledger(lib)
     by_name = {}
     for it in items:
@@ -407,8 +407,9 @@ def check_folder(out, libpkg, dblibs):
     for sym, fp in links:
         if fp and fp not in names["PcbLib"]:
             probs.append(f"symbol {sym} links footprint {fp}, which no PcbLib in the package holds")
+    from .altium_dblib_sync import dblib_table_paths
     for db in dblibs:
-        csvf = (out / db).with_suffix(".csv")
+        csvf = dblib_table_paths(out / db)[1]            # the table the DbLib names ('Bibliothèque' -> 'Bibliotheque.csv')
         if not csvf.is_file():
             continue
         import csv
@@ -501,6 +502,9 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
                                  f"against the released revisions: name it with --plan PLAN, package the plan.json "
                                  f"itself, or pass --unchecked to package them as they are")
             files = collect(src, out, kept)
+            if lib:                            # the library's third-party terms go with its files (as from a plan)
+                from .librarian import write_notice
+                write_notice(out, json.loads(lib.read_text(encoding="utf-8")))
         rep["kept_edits"] = kept
         rep["checked"] = str(lib) if lib else None
         if not lib and unchecked:
@@ -517,6 +521,9 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
     libpkg = f"{name}.LibPkg"
     written = []
     from . import altium_native as AN
+    if not native and src.resolve() != out.resolve():  # --no-native-build: no recipes in the package (a folder
+        for p in sorted(out.rglob(f"*{AN.EXT}")):       # packaged in place keeps its own); the .ecadstate files
+            p.unlink()                                  # stay: they tell the next run a library was edited in Altium
     native = bool(native and AN.recipes(out))
     if native:
         nat = AN.write(out)

@@ -112,7 +112,12 @@ def ask_setup(existing=None, given=None, inp=input, out=print, interactive=True,
                                              f"official API; review them before use [{'Y/n' if was else 'y/N'}]: "), default=was)
             ds = _yes(inp(f"  Let a model read the datasheet for parts no library has? ({ds_need}) "
                           f"[{'Y/n' if ds_key else 'y/N'}]: "), default=ds_key)
-            order = [s for s in cur_sources if (online or s not in ("kicad", "easyeda")) and (ds or s != "datasheet")]
+            want = lambda s: (online or s not in ("kicad", "easyeda")) and (ds or s != "datasheet")
+            order = [s for s in cur_sources if want(s)]
+            for i, s in enumerate(RU.DEFAULTS["sources"]["order"]):   # a yes brings back a source an earlier no dropped,
+                if s not in order and want(s) and (s != "easyeda" or ans["unofficial"]):   # at its default place
+                    before = RU.DEFAULTS["sources"]["order"][:i]
+                    order.insert(max([order.index(x) + 1 for x in before if x in order], default=0), s)
             if "standard" not in order:
                 order.append("standard")
             ans["sources"] = order if order != cur_sources else None
@@ -141,18 +146,19 @@ def keys_lines(rules=None, environ=None):
 
 def next_steps(ans, rules_file="ecadlib.toml"):
     """[(command, what it does)]: the 2-3 commands to run after `ecadlib init`."""
+    from .cliutil import shell_word as q             # a folder with a space stays one word when pasted
     ws = ans.get("workspace") or "ecadlib_workspace"
     lib = f"{ws}/librarian/YOUR_BOM"                 # <workspace>/librarian/*/plan.json: `ecadlib status` lists it
     steps = [("ecadlib demo", "see a real result first: a small library from a bundled BOM, offline, in under a minute"),
-             (f"ecadlib librarian YOUR_BOM.csv -o {lib}", "fill every missing symbol and footprint for your BOM, then the "
-                                                          "release check (`ecadlib status` shows the result)")]
+             (f"ecadlib librarian YOUR_BOM.csv -o {q(lib)}", "fill every missing symbol and footprint for your BOM, then the "
+                                                             "release check (`ecadlib status` shows the result)")]
     if ans.get("tool") in ("kicad", "both"):
-        steps.append((f"ecadlib kicad-export {lib}/plan.json -o {ws}/kicad/YOUR_BOM --name YOUR_BOM",
+        steps.append((f"ecadlib kicad-export {q(lib + '/plan.json')} -o {q(f'{ws}/kicad/YOUR_BOM')} --name YOUR_BOM",
                       "the library as KiCad files with fp-lib-table / sym-lib-table"))
     if ans.get("tool") in ("altium", "both"):
         steps.append(("ecadlib ui", f"or do it in the web UI on {ws}: drop your BOM there, review held parts, sign off, send "
                                     "to Altium (DbLib, .SchLib/.PcbLib, Altium 365); a plan made on the command line is "
-                                    f"reviewed with `ecadlib review {lib}/plan.json`"))
+                                    f"reviewed with `ecadlib review {q(lib + '/plan.json')}`"))
     return steps
 
 
@@ -270,7 +276,8 @@ def _settings_workspace(start=".", environ=None):
 
 
 # ------------------------------------------------------------------ checks before a command runs
-LIB_CHECKED = {"triage", "librarian", "resolve", "kicad-export", "mcp", "ui", "dedupe"}
+LIB_CHECKED = {"triage", "librarian", "resolve", "kicad-export", "mcp", "ui", "dedupe", "where-used"}
+LIB_FILE_OK = {"dedupe", "where-used"}        # these also read one library file (.DbLib .SchLib .PcbLib .kicad_mod ...)
 OUT_CHECKED = {"init", "demo", "triage", "librarian", "kicad-export", "kicad-dblib", "dblib",
                "export-parts", "dblib-sync"}
 
@@ -323,7 +330,7 @@ def preflight(cmd, argv, environ=None):
             if not Path(l).expanduser().exists():
                 return (f"library folder not found: {l}",
                         "fix --lib (or ECADLIB_LIB, or [setup] libs in ecadlib.toml); `ecadlib doctor` checks every path")
-            if not Path(l).expanduser().is_dir():     # a .kicad_sym itself would index nothing, silently
+            if not Path(l).expanduser().is_dir() and cmd not in LIB_FILE_OK:   # a .kicad_sym itself would index nothing
                 return (f"--lib must be a library folder, not a file: {l}",
                         f"give the folder it is in: --lib {Path(l).expanduser().parent}")
     if cmd in OUT_CHECKED:
@@ -342,7 +349,7 @@ def bom_hint(err):
     if "no BOM header found" in t:
         return ("\n  hint: name a column MPN (or Manufacturer Part Number), Designator or Value; or map your headers in "
                 "ecadlib.toml, e.g. [bom.columns] mpn = \"Part No\" (`ecadlib triage BOM` shows what was recognised)")
-    if "the BOM file is empty" in t or "no part rows" in t:
+    if "the BOM file is empty" in t or "no part rows" in t or "no BOM lines found" in t:
         return "\n  hint: export the BOM again with its part rows (one row per part or per group of designators)"
     return ""
 
@@ -434,7 +441,7 @@ def build_demo(ws, tool="both", bom=None, log=print):
     if reset:
         log(f"      note: {rel} was edited since the last demo run; it is reset to "
             f"{'the bundled sample' if not bom else src.name} and your edited copy is kept as {ws.rel(reset)}")
-    log(f"[1/3] BOM: {rel} ({sum(1 for _ in open(dest, encoding='utf-8')) - 1} lines)")
+    log(f"[1/3] BOM: {rel} ({len(ws._read_bom(dest)[0])} lines)")    # the librarian's reader: XLSX, cp1252, ...
     log("[2/3] finding symbols and footprints (built-in standard parts; no network, no API key) ...")
     res = ws.librarian_run(rel, sources=["standard"])
     files = {"plan": res["reports"]}
@@ -487,6 +494,18 @@ def demo_main(argv=None):
             print(f"ecadlib demo: {a.bom} {why}\n  hint: give a BOM file (CSV, TSV or XLSX), or leave out --bom for "
                   "the bundled sample", file=sys.stderr)
             return 2
+        from .bom_triage import read_bom      # one the reader cannot use (no recognised columns, no part rows): also
+        try:                                  # refused here, as the librarian does, not after the workspace is made
+            lines, mapping = read_bom(p, RU.bom_columns(None))
+            err = "" if lines and {"designator", "mpn", "value"} & set(mapping) else \
+                f"{p.name}: the BOM has a header but no part rows" if lines == [] else f"{p.name}: no BOM header found"
+        except (ValueError, OSError) as e:
+            err = str(e)
+        except Exception as e:                # pandas / csv / zip errors
+            err = f"couldn't read {p.name} as a BOM table ({type(e).__name__}: {e}); save it as CSV or XLSX with a header row"
+        if err:
+            print(f"ecadlib demo: {err}" + bom_hint(err), file=sys.stderr)
+            return 2
     say = (lambda *x: None) if a.json or TM.VERBOSITY < 0 else print   # -q: only the outcome
     say(f"ecadlib demo: building a small library in {a.out}/ from "
         f"{'the bundled sample BOM' if not a.bom else a.bom}, offline")
@@ -494,12 +513,15 @@ def demo_main(argv=None):
     try:
         res = build_demo(ws, tool, a.bom, log=say)
     except ValueError as e:                     # a folder with someone's rules, or a BOM the reader cannot use
+        if type(e) is not ValueError:           # a damaged workspace file (bad JSON, not text): the CLI's one line,
+            raise                               # hint and --debug traceback
         print(f"ecadlib demo: {e}" + bom_hint(e), file=sys.stderr)
         return 2
     if a.json:
         print(json.dumps(res, indent=1))
         return 0
     from . import term as TM
+    from .cliutil import shell_word
     t = TM.Term()
     written = [(f"{a.out}/{res['plan']}", "the library plan"), (", ".join(f"{a.out}/{r}" for r in res["review"]), "review: what to check, part by part")]
     if res["altium"] and tool != "kicad":      # the librarian always writes them; --tool kicad does not point at them
@@ -512,7 +534,7 @@ def demo_main(argv=None):
               + (f" (held: {', '.join(res['held_parts'][:5])}{' ...' if len(res['held_parts']) > 5 else ''}"
                  + ("; that is expected, see the review)" if not a.bom else "; the review says why)") if res["held"] else ""),
               written=written,
-              next=[(f"ecadlib status --workspace {a.out}", "one-screen summary"),
-                    (f"ecadlib ui --workspace {a.out}", "look at it in the browser (held parts, sign-off, exports)"),
+              next=[(f"ecadlib status --workspace {shell_word(a.out)}", "one-screen summary"),
+                    (f"ecadlib ui --workspace {shell_word(a.out)}", "look at it in the browser (held parts, sign-off, exports)"),
                     ("ecadlib init", "set up for your own libraries and BOMs")])
     return 0

@@ -65,13 +65,17 @@ def check_tokens(max_pages=None):
 
 
 def price(model, provider="anthropic", rules=None):
-    """(input, output) $ per MTok, or None: Claude's table, the profile's price, $0 for a local server."""
-    if model == "local" or provider in ("ollama", "lmstudio", "vllm", "llamacpp"):
+    """(input, output) $ per MTok, or None: Claude's table, else $0 for a local server unless [ai.profiles] sets
+    price_in / price_out, else the profile's price. The order the reader prices in (datasheet.price_of)."""
+    if model == "local":
         return 0.0, 0.0
-    if model in D.PRICES:
-        return D.PRICES[model]
+    got = D.PRICES.get(model) or D.PRICES.get(D.base_model(model))   # a dated id at its alias's price, as the reader;
+    if got:                                                            # Claude behind a private gateway too
+        return got
     from .llm import profiles as P
     p = P.profile(model, "openai-compatible" if provider != "anthropic" else provider, rules)
+    if provider in ("ollama", "lmstudio", "vllm", "llamacpp") and not p.get("price_set"):
+        return 0.0, 0.0                                   # a server on your network; a price in [ai.profiles] wins
     if p.get("price_in") is None or p.get("price_out") is None:
         return None
     return float(p["price_in"]), float(p["price_out"])
@@ -204,7 +208,7 @@ are not measured bills.
 
     ecadlib costs                         # these jobs for the model in your ecadlib.toml
     ecadlib costs --model gemini-3.8-flash
-    ecadlib datasheet estimate BOM.csv    # this BOM: tokens counted, cost and worst case, nothing sent
+    ecadlib datasheet estimate BOM.csv    # this BOM: rough tokens, cost and worst case, nothing sent
 
 Set `max_cost_usd` under `[datasheet]` and `[agent.proof]` for a hard cap on spending. If a price here is out of
 date, set your own in `ecadlib.toml`:
@@ -248,6 +252,8 @@ def main(argv=None):
         from .llm import endpoint
         ep = endpoint(rules if isinstance(rules, dict) else None, model=a.model)
         prov = "ollama" if ep["local"] else ep["provider"]
+        if prov == "anthropic" and not ep["model"].startswith("claude"):   # --model gemini-... with no [ai] table:
+            prov = next((p for _, m, p in SHEET if m == ep["model"]), "openai-compatible")   # not priced as Claude
         rows = [dict(jobs(ep["model"], prov, rules, a.share), model=ep["model"])]
     if a.md:
         open(a.md, "w", encoding="utf-8").write(doc(rows, a.share))

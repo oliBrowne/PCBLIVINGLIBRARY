@@ -39,7 +39,7 @@ the Design Item ID, else LibRef+value+footprint. Against a library (--plan libra
 projects but missing from the library, library parts used nowhere and projects using a duplicate instead of the keeper.
 Without a library: projects using an older revision of an Altium 365 item than another project does (same ItemGUID,
 lower '-N' revision suffix on the Design Item ID, or simply different RevisionGUIDs), and parts whose lifecycle is
-NRND / last time buy / obsolete (lifecycle_state.json from `ecadlib lifecycle`, a plan item's lifecycle, or the
+NRND / last time buy / obsolete (lifecycle_state.json from `ecadlib upkeep`, a plan item's lifecycle, or the
 component's own 'Lifecycle Status' / 'Part Status' parameter)."""
 import argparse, csv, json, os, re, struct, sys
 from pathlib import Path, PureWindowsPath
@@ -841,6 +841,8 @@ def load_library(plan=None, libs=(), a365=None, log=None):
         col.add_plan(json.loads(Path(plan).read_text()), Path(plan).parent)
         a365 = a365 or (Path(plan).parent / "a365_state.json" if (Path(plan).parent / "a365_state.json").exists() else None)
     for lib in libs:
+        if not Path(lib).exists():             # else every project part would read "missing from library"
+            raise FileNotFoundError(f"--lib {lib}: not found")
         col.add_lib(lib)
     guids = {}
     if a365:
@@ -853,8 +855,10 @@ def load_library(plan=None, libs=(), a365=None, log=None):
 
 
 def load_lifecycle(path):
-    if not path or not Path(path).exists():
+    if not path:
         return {}
+    if not Path(path).exists():                # a typo would skip the NRND / EOL check silently
+        raise FileNotFoundError(f"--lifecycle {path}: not found")
     data = json.loads(Path(path).read_text())
     return {k: v for k, v in (data.get("parts") or {}).items()}
 
@@ -964,7 +968,8 @@ def where_used(dirs, part=None, plan=None, libs=(), a365=None, lifecycle=None, r
                 flags.append(_flag("mixed_revisions", e, f"item {ig} placed at {len(revs)} revisions; this project has {u['revision_guid']}", u))
 
     # lifecycle
-    lc = load_lifecycle(lifecycle or (Path(plan).parent / "lifecycle_state.json" if plan else None))
+    dflt = Path(plan).parent / "lifecycle_state.json" if plan else None
+    lc = load_lifecycle(lifecycle or (dflt if dflt and dflt.exists() else None))
     plan_lc = {}
     if plan:
         for it in json.loads(Path(plan).read_text()):
@@ -1087,7 +1092,7 @@ def main(argv=None):
                   f"{g['designator'][:40]}{'  DNP' if g['dnp'] else ''}")
     for w in prj["warnings"]:
         print(f"warning: {w}", file=sys.stderr)
-    print(f"wrote {out}")
+    print(f"wrote {out}", file=sys.stderr if a.json else sys.stdout)     # --json: stdout is the JSON, nothing else
     return 0
 
 
@@ -1098,7 +1103,7 @@ def where_used_main(argv=None):
     ap.add_argument("--plan", help="librarian plan.json to compare against")
     ap.add_argument("--lib", action="append", default=[], help="library folder / .DbLib / .SchLib (repeatable)")
     ap.add_argument("--a365", help="check-a365 state JSON (Altium 365 components)")
-    ap.add_argument("--lifecycle", help="lifecycle_state.json from `ecadlib lifecycle`")
+    ap.add_argument("--lifecycle", help="lifecycle_state.json from `ecadlib upkeep` (or python -m ecadlib.lifecycle)")
     ap.add_argument("-o", "--out", default="out/where_used", help="report stem (.md, .csv, _flags.csv, .json)")
     a = ap.parse_args(argv)
     try:

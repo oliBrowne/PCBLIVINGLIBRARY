@@ -139,6 +139,17 @@ def policy_file(base):
     return next((Path(base) / n for n in POLICY_FILES if (Path(base) / n).exists()), None)
 
 
+def policy_error(cmd, e):
+    """A policy that does not load: one line + hint, exit 2. A broken ecadlib.toml (RulesError) is raised on, to
+    cli.py's message with the doctor hint."""
+    from .rules import RulesError
+    if isinstance(e, RulesError):
+        raise e
+    print(f"ecadlib {cmd}: approval policy: {e}\n  hint: fix the approvals file next to the plan "
+          f"(`ecadlib doctor` checks it)", file=sys.stderr)
+    return 2
+
+
 def load_policy(base):
     """The policy next to the plan, with defaults filled in, or None when there is none. Without an approvals file the
     [release] approvals table of the library rules (ecadlib.toml in the plan's folder or a parent) is used."""
@@ -448,7 +459,7 @@ def _run(a):
     try:
         policy = load_policy(base)
     except (ValueError, OSError) as e:
-        sys.exit(f"approval policy: {e}")
+        return policy_error("approve", e)
     by = {i["name"]: i for i in items}
     unknown = set(a.part) - set(by)
     if unknown:

@@ -158,6 +158,9 @@ def test_ui_server():
             assert st == 200 and p["total"] == 14, p
             st, r = call("POST", "/api/altium365/push", {"bom": bom, "dry_run": True})
             assert st == 200 and r["dry_run"] is True, r
+            for bad in (True, 5, ["https://w"]):             # a workspace that is not text: refused, never a crash
+                st, e = call("POST", "/api/altium365/push", {"bom": bom, "workspace": bad})
+                assert st == 400 and e["error"].startswith("workspace must be"), e
             st, e = call("POST", "/api/altium365/push", {"bom": bom, "workspace": "https://w", "dry_run": False})
             assert st == 400 and ("NEXAR_TOKEN" in e["error"] or os.environ.get("NEXAR_TOKEN")), e
             st, r = call("POST", "/api/export/dblib", {"bom": bom})

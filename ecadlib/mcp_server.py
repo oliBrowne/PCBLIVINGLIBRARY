@@ -21,6 +21,8 @@ from .app import Workspace
 PROTOCOL = "2025-06-18"
 SUPPORTED = ("2025-11-25", PROTOCOL, "2025-03-26", "2024-11-05")
 
+PAGE = {"offset": {"type": "integer", "minimum": 0, "description": "skip this many parts (the next page of a long answer)"},
+        "limit": {"type": "integer", "minimum": 1, "description": "at most this many parts"}}
 TOOLS = [
     {"name": "workspace_info",
      "description": "Show the workspace folder, indexed KiCad libraries, symbol/footprint counts, part sources and uploaded BOMs.",
@@ -183,16 +185,21 @@ TOOLS = [
     {"name": "library_parts",
      "description": "A BOM's library plan part by part, in plain words: ready, held (each reason as a sentence plus the "
                     "next step) or waiting for sign-off; the cross-check and KiCad/Altium results with both values when "
-                    "they disagree; the datasheet link and page; what the datasheet reads cost and which model. No network.",
-     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
+                    "they disagree; the datasheet link and page; what the datasheet reads cost and which model. No network. "
+                    "A long plan comes in pages: offset and limit (the answer's page says the next offset), or part / "
+                    "status for only those parts.",
+     "inputSchema": {"type": "object", "required": ["bom"],
+                     "properties": {"bom": {"type": "string"}, "part": {"type": "string", "description": "only this part"},
+                                    "status": {"type": "string", "description": "only parts with this status (ready, held, "
+                                                                                 "awaiting_approval)"}, **PAGE}}},
     {"name": "build_altium_models",
      "description": "Write the Altium .PcbLib files for a BOM's footprints that are in the KiCad libraries, plus generic "
                     "Resistor/Capacitor .SchLib symbols, into the workspace altium_models/ folder.",
      "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "altium365_plan",
      "description": "Plan an Altium 365 release for a BOM: one managed component per part, marked ready when its "
-                    ".SchLib and .PcbLib exist. Sends nothing.",
-     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
+                    ".SchLib and .PcbLib exist. Sends nothing. A long plan comes in pages: offset and limit.",
+     "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}, **PAGE}}},
     {"name": "altium365_push",
      "description": "Release the ready parts of a BOM into an Altium 365 workspace and update parameters of parts already "
                     "there. dry_run defaults to true and only returns the requests. A real push (dry_run false) changes "
@@ -507,13 +514,16 @@ def call_tool(ws, name, args, progress=None):
         if name == "cross_checks":
             return ws.cross_checks(args["bom"])
         if name == "library_parts":
-            return ws.library_parts(args["bom"], pictures=False)
+            r = ws.library_parts(args["bom"], pictures=False)
+            want = {k: str(args[k]).strip().lower() for k in ("part", "status") if args.get(k)}
+            r["parts"] = [p for p in r["parts"] if all(str(p[k]).lower() == v for k, v in want.items())]
+            return _page(r, "parts", args)
         if name == "build_altium_models":
             return ws.build_altium_models(args["bom"])
         if name == "altium365_plan":
             r = ws.altium365_plan(args["bom"])
             r["items"] = [{k: i[k] for k in ("name", "folder", "status", "symbol", "footprint")} for i in r["items"]]
-            return r
+            return _page(r, "items", args)
         if name == "altium365_push":
             return ws.altium365_push(args["bom"], args.get("workspace"), dry_run=args.get("dry_run", True) is not False)
         if name == "export_altium_dblib":
@@ -653,11 +663,12 @@ def tool_names(spec):
 
 class Options:
     """How this server behaves (ecadlib mcp flags). Tests and old callers get the defaults."""
-    def __init__(self, tools=None, wait=45.0, max_chars=80000, confine=False):
+    def __init__(self, tools=None, wait=45.0, max_chars=80000, confine=False, lift="start it with --any-path"):
         self.tools = tools                      # None = every tool
         self.wait = wait                        # seconds a call waits before it answers with a job id
         self.max_chars = max_chars              # answers longer than this are cut (Claude Code stops at ~25k tokens)
         self.confine = confine                  # file arguments must be inside the workspace or a --lib folder
+        self.lift = lift                        # what lifts that, as the refusal says it
 
 
 def _opts(ws):
@@ -787,21 +798,22 @@ def _check_paths(ws, args):
         if k in PATH_ARGS:
             vals += [(k, x) for x in (v if isinstance(v, list) else [v]) if isinstance(x, str)]
     if "toml" in args and isinstance(args["toml"], str):   # save_rules: rules settings that name a file ([style]
-        vals += [(f"toml {k}", x) for k, x in _rule_paths(args["toml"])]   # profile, ...)
+        vals += [(f"toml {k}", x) for k, x in _rule_paths(args["toml"], ws.rules_file().name)]   # profile, ...)
     for k, x in vals:
         if x.strip().lower().startswith(("http://", "https://")):
             _check_url(k, x.strip())
             continue
         if not x.strip():
             continue
-        p = Path(x).expanduser()
-        if not p.is_absolute() and re.match(r"[A-Za-z]:[\\/]|\\\\", x):   # a Windows path on another OS
-            raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens files "
-                             "there (start it with --any-path to allow more)")
-        p = (p if p.is_absolute() else ws.root / p).resolve()
-        if not any(p == r or r in p.parents for r in (Path(r).resolve() for r in roots)):
-            raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens files "
-                             "there (start it with --any-path to allow more)")
+        for y in dict.fromkeys((x, x.strip())):    # a tool reads it as given (bom: ' /a' is <workspace>/' /a') or
+            p = Path(y).expanduser()               # trimmed (propose_rules paths: /a): both must be inside
+            if not p.is_absolute() and re.match(r"[A-Za-z]:[\\/]|\\\\", y):   # a Windows path on another OS
+                raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens "
+                                 f"files there ({_opts(ws).lift} to allow more)")
+            p = (p if p.is_absolute() else ws.root / p).resolve()
+            if not any(p == r or r in p.parents for r in (Path(r).resolve() for r in roots)):
+                raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens "
+                                 f"files there ({_opts(ws).lift} to allow more)")
 
 
 def _check_url(k, url):
@@ -826,18 +838,13 @@ def _check_url(k, url):
             raise ValueError(f"{k}: {host} is a local or private address; this server only fetches public https links")
 
 
-def _rule_paths(text):
-    """(key, value) of every string in a rules TOML that reaches outside the folder it is read from: an absolute
-    path (also C:\\..., ~/...) or one with a '..' step. Relative ones stay in the workspace."""
+def _rule_paths(text, name="ecadlib.toml"):
+    """(key, value) of every string in a rules text that reaches outside the folder it is read from: an absolute
+    path (also C:\\..., ~/...) or one with a '..' step. Relative ones stay in the workspace. name: the file the text
+    is saved as; it picks JSON or TOML, as save_rules does. A text that does not parse is refused (RulesError)."""
     import re
-    from .rules import toml_module
-    lib = toml_module()
-    if lib is None:
-        return []
-    try:
-        data = lib.loads(text.lstrip("\ufeff"))
-    except Exception:
-        return []                                 # save_rules reports the syntax error itself
+    from .rules import parse_text
+    data = parse_text(text, name)
 
     def walk(v, at):
         if isinstance(v, dict):
@@ -871,15 +878,12 @@ def _fp(x):
                       default=str)
 
 
-def _endpoints(text):
-    """{dotted key: value} of every setting in a rules TOML that says where a request (and a stored key or token) goes,
-    or how much may be spent."""
-    from .rules import toml_module
-    lib = toml_module()
-    try:
-        data = lib.loads(text.lstrip("\ufeff")) if lib and text else {}
-    except Exception:
-        return {}
+def _endpoints(text, name="ecadlib.toml"):
+    """{dotted key: value} of every setting in a rules text that says where a request (and a stored key or token)
+    goes, or how much may be spent. name: the file the text belongs to; it picks JSON or TOML, as save_rules does.
+    A text that does not parse raises RulesError."""
+    from .rules import parse_text
+    data = parse_text(text, name) if text else {}
     out = {}
 
     def walk(v, at):
@@ -898,10 +902,13 @@ def _check_endpoints(ws, text):
     """save_rules from an agent may not change where requests go: the stored API key or token would follow the
     request to any URL (also a later `ecadlib upkeep --github` run by the person). The person edits base_url, provider,
     the *_env / *_api / *_url settings, [notify] targets and the cost limits themselves."""
-    f = ws.rules_file()
-    old = _endpoints(f.read_text(encoding="utf-8-sig")) if f.is_file() else {}
-    new = _endpoints(text if isinstance(text, str) else "")
-    from .rules import DEFAULTS
+    from .rules import DEFAULTS, RulesError
+    f = ws.rules_in_use() or ws.rules_file()        # the settings in force: `ecadlib init` puts ecadlib.toml beside
+    try:                                             # the workspace, and a new workspace file would hide all of it
+        old = _endpoints(f.read_text(encoding="utf-8-sig"), f.name) if f.is_file() else {}
+    except RulesError:                               # a damaged file: compare with the defaults
+        old = {}
+    new = _endpoints(text if isinstance(text, str) else "", ws.rules_file().name)   # the parser save_rules writes with
 
     def default(k):                                  # a setting left out of the file has its default value
         v = DEFAULTS
@@ -912,29 +919,55 @@ def _check_endpoints(ws, text):
         return _fp(v)
     changed = sorted(k for k in set(old) | set(new) if old.get(k, default(k)) != new.get(k, default(k)))
     if changed:
+        mine = ws.rules_file()
         raise ValueError(f"save_rules cannot change {', '.join(changed)} (where requests and your API keys / tokens "
                          "go, or the spending limits): "
-                         f"ask the user to edit {f.name} themselves")
+                         f"ask the user to edit {ws._label(f)} themselves"
+                         + ("" if f == mine else f". save_rules writes {ws._label(mine)}, which would replace "
+                                                 f"{ws._label(f)} for this workspace, so keep its values of those settings"))
 
 
 # ------------------------------------------------------------------ answers
-def _text(ws, out):
+def _page(r, key, args):
+    """offset / limit: one page of r[key]; "page" says where the next one starts (None: that was the last)."""
+    rows, off, lim = r[key], args.get("offset") or 0, args.get("limit")
+    r[key] = rows[off:off + lim if lim else None]
+    if off or lim:
+        end = off + len(r[key])
+        r["page"] = {"offset": off, "limit": lim, "total": len(rows), "next_offset": end if end < len(rows) else None}
+    return r
+
+
+LESS = (("summary_only", "summary_only true"), ("part", "part (one part)"), ("parts", "parts (only those parts)"),
+        ("status", "status (one status)"), ("offset", "offset and limit (a page of parts)"))
+
+
+def _text(ws, out, tool=None):
     s = json.dumps(out, ensure_ascii=False, default=str, separators=(",", ":"))
     cap = _opts(ws).max_chars
     if cap and len(s) > cap:
+        props = next((t["inputSchema"].get("properties", {}) for t in TOOLS if t["name"] == tool), {})
+        ways = [w for k, w in LESS if k in props]   # only arguments this tool takes
         s = (s[:cap] + f"\n... [cut: the answer was {len(s)} characters, over this server's limit of {cap} "
-             "(ECADLIB_MCP_MAX_CHARS). Ask for less: summary_only, one part, a status filter or a smaller page.]")
+             "(--max-chars, ECADLIB_MCP_MAX_CHARS). " + (f"Ask for less: {', '.join(ways)}.]" if ways else
+             "This tool cannot return less: start the server with a larger --max-chars (0 = never cut).]"))
     return s
 
 
-def _result(ws, out, error=False):
-    return {"content": [{"type": "text", "text": out if isinstance(out, str) else _text(ws, out)}], "isError": error}
+def _result(ws, out, error=False, tool=None):
+    return {"content": [{"type": "text", "text": out if isinstance(out, str) else _text(ws, out, tool)}], "isError": error}
 
 
 def _error_text(e):
     from .visual_check import VisualCheckError          # e.g. Pillow not installed: the fix, not a bug report
     if isinstance(e, (ValueError, KeyError, FileExistsError, FileNotFoundError, PermissionError, VisualCheckError)):
         return e.args[0] if isinstance(e, KeyError) and e.args else str(e)   # a wrong id / path is the caller's
+    from .datasheet import DatasheetError               # a refused API key, a datasheet not read: says what to fix
+    if isinstance(e, DatasheetError):
+        return str(e) or type(e).__name__
+    if type(e) is OSError and e.errno is None and e.args and isinstance(e.args[0], str):   # a fetch ecadlib refused
+        m = e.args[0]                                   # (--offline cache miss, a library file not found upstream)
+        return m + ("; run the server without --offline to fetch it" if "offline" in m else "")
     import errno
     if isinstance(e, OSError) and e.errno in (errno.ENAMETOOLONG, errno.ENOTDIR, errno.EINVAL, errno.ELOOP):
         return f"not found: that path is not valid here ({e.strerror or type(e).__name__}); check the BOM / file path"
@@ -981,7 +1014,7 @@ def _await(ws, jid, wait, notify=None, token=None, forget=False):
         return _result(ws, "stopped: the job was cancelled before it finished (finished parts are kept)", True)
     if j["state"] == "error" or (isinstance(out, tuple) and out[0] == "error"):
         return _result(ws, out[1] if isinstance(out, tuple) else str(j["error"]), True)
-    return _result(ws, out[1])
+    return _result(ws, out[1], tool=j.get("tool"))
 
 
 def _job_status(ws, args, notify=None, token=None):
@@ -1139,7 +1172,9 @@ def main(argv=None):
     userconfig.apply_env()                         # kicad-cli on PATH; stored keys are read when needed, never exported
     ws = Workspace(a.workspace, a.lib, a.providers.split(",") if a.providers else None, a.offline)
     ws.mcp_options = Options(None if tools == {t["name"] for t in TOOLS} else tools, a.wait, a.max_chars,
-                             confine=(a.http and not a.any_path) or a.confine)
+                             confine=(a.http and not a.any_path) or a.confine,
+                             lift=("start it without --confine" + (" and with --any-path" if a.http else "")) if a.confine
+                             else "start it with --any-path")
     if a.http:
         from . import mcp_http
         return mcp_http.run(ws, a)

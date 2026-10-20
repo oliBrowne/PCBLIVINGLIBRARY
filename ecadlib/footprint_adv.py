@@ -127,6 +127,39 @@ def bga_balls(spec):
     return [(f"{row_name(i, jedec)}{j + 1}", i, j) for i, j in sorted(have)]
 
 
+def bga_land(spec):
+    """(land diameter, rule text): the datasheet's land_diameter, else the IPC-7351B land for ball_diameter."""
+    if spec.get("land_diameter"):
+        return _dim(spec["land_diameter"])[1], "datasheet land"
+    if not spec.get("ball_diameter"):
+        raise ValueError("bga needs ball_diameter (or the datasheet's land_diameter)")
+    return ipc_bga_land(_dim(spec["ball_diameter"])[1], spec.get("ball_type", "collapsing"))
+
+
+def bga_body(spec, land=None):
+    """(half x, half y, note): the body as the footprint draws it (x along the columns, y along the rows). A body the
+    ball grid fits only turned, or whose long side runs across the grid's long side, is turned a quarter turn; note
+    says so (else None). step_gen uses the same body so the 3D model sits on the courtyard and fab outline."""
+    rows, cols, e = spec["rows"], spec["cols"], spec["pitch"]
+    ey = spec.get("pitch_y") or e
+    if land is None:
+        land = bga_land(spec)[0]
+    bx, by = _dim(spec["body_length"])[1] / 2, _dim(spec["body_width"])[1] / 2
+    gx, gy = (cols - 1) * e / 2, (rows - 1) * ey / 2
+    turned = None
+    if (gx + land / 2 > bx or gy + land / 2 > by) and gx + land / 2 <= by and gy + land / 2 <= bx:
+        # a datasheet gives the body as length x width and the ball grid as rows x columns with no shared axis
+        # (TPS628436YKA: 3 x 2 at 0.35 mm, body 1.05 x 0.797): the grid fits the body turned a quarter turn
+        bx, by = by, bx
+        turned = f"body {2 * by:g} x {2 * bx:g} mm turned to {2 * bx:g} x {2 * by:g} to fit the {rows} x {cols} grid"
+    elif (gx - gy) * (bx - by) < -1e-9 and gx + land / 2 <= by and gy + land / 2 <= bx:
+        # the grid is long one way and the body the other (CY14U256LA: 6 x 8 balls, body read as 10 x 6 mm): the
+        # long side of a BGA body runs with the long side of its ball grid
+        bx, by = by, bx
+        turned = f"body {2 * by:g} x {2 * bx:g} mm turned to {2 * bx:g} x {2 * by:g} to run with the {rows} x {cols} grid"
+    return bx, by, turned
+
+
 def ipc_bga_land(ball, ball_type="collapsing"):
     """IPC-7351B land diameter for a nominal ball (or LGA terminal) diameter. Returns (land, rule text)."""
     if ball_type == "lga":
@@ -194,6 +227,20 @@ def _pad_dist(px, py, p):
 
 def _corner(p):
     return min(0.25, 0.25 * min(p["w"], p["h"]))
+
+
+def _pad_gap(a, b):
+    """Copper gap between two non-polygon pads (negative = overlap), their round ends and corners included, the same
+    measure footprint_check uses on the written footprint. A pad turned by an odd angle is its square-cornered box."""
+    from .footprint_check import _rect_gap
+
+    def rect(p):
+        x1, y1, x2, y2 = pad_bbox(p)
+        w, h = x2 - x1, y2 - y1
+        odd = abs(p.get("rot", 0) / 90 - round(p.get("rot", 0) / 90)) > 1e-6
+        r = 0.0 if odd else min(w, h) / 2 if p["shape"] in ("circle", "oval") else _corner(p) if p["shape"] == "roundrect" else 0.0
+        return {"x": p["x"], "y": p["y"], "w": w, "h": h, "r": r}
+    return _rect_gap(rect(a), rect(b))
 
 
 def _interior_point(pts):
@@ -321,6 +368,11 @@ def _expand_table(t):
             p["x"], p["y"] = a["x"] + k * a.get("dx", 0), a["y"] + k * a.get("dy", 0)
             p["_src"] = f"arrays[{i}] #{k + 1}"
             rows.append(p)
+    for p in rows:                                         # a polygon pad without x/y sits at the middle of its points
+        if p.get("polygon"):
+            xs, ys = [v["x"] for v in p["polygon"]], [v["y"] for v in p["polygon"]]
+            p.setdefault("x", (min(xs) + max(xs)) / 2)
+            p.setdefault("y", (min(ys) + max(ys)) / 2)
     return rows
 
 
@@ -344,11 +396,9 @@ def table_layout(spec):
     raw = _expand_table(t)
     if not raw:
         raise ValueError("pad_table has no pads")
-    for p in raw:                                          # polygon pads: position and extent from their points
+    for p in raw:                                          # polygon pads: extent from their points (position: _expand_table)
         if p.get("polygon"):
             xs, ys = [v["x"] for v in p["polygon"]], [v["y"] for v in p["polygon"]]
-            p.setdefault("x", (min(xs) + max(xs)) / 2)
-            p.setdefault("y", (min(ys) + max(ys)) / 2)
             p["_ext"] = (min(xs), min(ys), max(xs), max(ys))
         elif "x" not in p or "y" not in p:
             raise ValueError(f"{p['_src']} (pad {p.get('number')}): no x/y")
@@ -482,10 +532,34 @@ def check_pad_table(spec, pads=None):
         tht_pad_size(pads, spec.get("pitch"))
     unit = t.get("unit", "mm")
     raw = _expand_table(t) if t else []
-    vals = [abs(v) for p in raw for k, v in p.items() if k in ("x", "y", "w", "h", "d", "drill") and isinstance(v, (int, float))]
-    if raw and unit == "mm" and vals and max(vals) > 60:
-        add("error", "units", f"pad_table values up to {max(vals):g} with unit mm: that looks like mils (set unit to mil)")
     sizes = [abs(v) for p in raw for k, v in p.items() if k in ("w", "h", "d", "drill") and isinstance(v, (int, float))]
+    # mils typed as mm: everything 39 times too big. Not the pads' distance from the origin (a long mm connector drawn
+    # from pin 1, DIN41612 at 86 mm, is still mm) and not the spacing alone (a 2-terminal 18650 holder has its two
+    # 6 x 8 mm pads 77 mm apart). Any of: a pad or hole over 60; the table over 200 across (a 288-pin DIMM is 122 mm);
+    # the closest two pads the spec's pitch in mils; the closest two pads over 10 apart, the table over 60 across and
+    # pads more than a quarter of that spacing (mm parts that far apart have small pads: holders, axial leads).
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    at = sorted({(p["x"], p["y"]) for p in raw if num(p.get("x")) and num(p.get("y"))})
+    gap = None                                             # the closest two pad centres
+    for i, (ax, ay) in enumerate(at):
+        for bx, by in at[i + 1:]:
+            if gap is not None and bx - ax >= gap:
+                break
+            gap = math.hypot(bx - ax, by - ay) if gap is None else min(gap, math.hypot(bx - ax, by - ay))
+    big = max(sizes, default=0)
+    span = max(max(a) - min(a) for a in zip(*at)) if at else 0
+    sp = spec.get("pitch")
+    what = None
+    if big > 60:
+        what = f"pad / hole sizes up to {big:g}"
+    elif span > 200:
+        what = f"pads spread over {span:g}"
+    elif gap and num(sp) and sp > 0 and abs(gap * UNIT["mil"] - sp) <= 0.03 * sp:
+        what = f"the closest pads {gap:g} apart, the spec's {sp:g} mm pitch in mils,"
+    elif gap and gap > 10 and span > 60 and big > 0.25 * gap:
+        what = f"no two pads closer than {gap:g} (pads up to {big:g})"
+    if raw and unit == "mm" and what:
+        add("error", "units", f"pad_table {what} with unit mm: that looks like mils (set unit to mil)")
     if raw and unit == "mil" and sizes and max(sizes) < 4:
         add("warning", "units", f"pad_table unit is mil but no pad or hole is bigger than {max(sizes):g} mil "
                                 f"({max(sizes) * 0.0254:.3f} mm): is the table in mm?")
@@ -518,12 +592,16 @@ def check_pad_table(spec, pads=None):
                 continue
             if any({a["num"], b["num"]} <= g for g in same):
                 continue
-            ax1, ay1, ax2, ay2 = pad_bbox(a)
-            bx1, by1, bx2, by2 = pad_bbox(b)
-            if min(ax2, bx2) - max(ax1, bx1) > 0.005 and min(ay2, by2) - max(ay1, by1) > 0.005:
-                if min(_pad_dist(b["x"], b["y"], a), _pad_dist(a["x"], a["y"], b)) == 0 or not (a.get("poly") or b.get("poly")):
-                    add("error", "overlap", f"pads {a['num'] or '(hole)'} ({a['_src']}) and {b['num'] or '(hole)'} ({b['_src']}) overlap: "
-                                            "check their x/y (list same-net pads in same_net)")
+            if a.get("poly") or b.get("poly"):
+                ax1, ay1, ax2, ay2 = pad_bbox(a)
+                bx1, by1, bx2, by2 = pad_bbox(b)
+                hit = (min(ax2, bx2) - max(ax1, bx1) > 0.005 and min(ay2, by2) - max(ay1, by1) > 0.005 and
+                       min(_pad_dist(b["x"], b["y"], a), _pad_dist(a["x"], a["y"], b)) == 0)
+            else:                                          # round and rounded corners: boxes that meet only at a
+                hit = _pad_gap(a, b) < -0.005              # corner are not an overlap (NSJ12HF-1 G / S2: 0.198 mm)
+            if hit:
+                add("error", "overlap", f"pads {a['num'] or '(hole)'} ({a['_src']}) and {b['num'] or '(hole)'} ({b['_src']}) overlap: "
+                                        "check their x/y (list same-net pads in same_net)")
     # drill vs pad
     for p in pads:
         if p["kind"] == "thru_hole":
@@ -594,7 +672,8 @@ def check_pad_table(spec, pads=None):
         row = [p for p in pins if abs(p["y"] - p1["y"]) < 0.01]
         col = [p for p in pins if abs(p["x"] - p1["x"]) < 0.01]
         ends = lambda g, k: abs(p1[k] - min(q[k] for q in g)) < 0.01 or abs(p1[k] - max(q[k] for q in g)) < 0.01
-        if (len(row) >= 3 and not ends(row, "x")) and (len(col) >= 3 and not ends(col, "y")):
+        mid_r, mid_c = len(row) >= 3 and not ends(row, "x"), len(col) >= 3 and not ends(col, "y")
+        if (mid_r and (mid_c or len(col) == 1)) or (mid_c and len(row) == 1):     # a single row/column counts too
             add("warning", "pin1", f"pad {p1['num']} is in the middle of its row: pin 1 is normally at an end (check numbering)")
         if t.get("origin") == "pin1":
             src = next(r for r in raw if _num(r.get("number")) == p1["num"])
@@ -866,13 +945,7 @@ def _bga(spec, density):
     if spec.get("pin_count") and spec["pin_count"] != len(balls):
         raise ValueError(f"pin_count is {spec['pin_count']} but the {rows} x {cols} grid minus depopulated balls leaves "
                          f"{len(balls)} balls (check depopulated / ball_map)")
-    bt = spec.get("ball_type", "collapsing")
-    if spec.get("land_diameter"):
-        land, rule = _dim(spec["land_diameter"])[1], "datasheet land"
-    else:
-        if not spec.get("ball_diameter"):
-            raise ValueError("bga needs ball_diameter (or the datasheet's land_diameter)")
-        land, rule = ipc_bga_land(_dim(spec["ball_diameter"])[1], bt)
+    land, rule = bga_land(spec)
     if land < 0.05:
         raise ValueError(f"land {land:g} mm: ball_diameter / land_diameter must be a real size (> 0.05 mm)")
     style = spec.get("land_style", "NSMD")
@@ -894,19 +967,8 @@ def _bga(spec, density):
         if style == "SMD":
             p["paste_margin"] = -SMD_GROW
         pads.append(p)
-    bx, by = _dim(spec["body_length"])[1] / 2, _dim(spec["body_width"])[1] / 2
+    bx, by, turned = bga_body(spec, land)
     gx, gy = (cols - 1) * e / 2, (rows - 1) * ey / 2
-    turned = None
-    if (gx + land / 2 > bx or gy + land / 2 > by) and gx + land / 2 <= by and gy + land / 2 <= bx:
-        # a datasheet gives the body as length x width and the ball grid as rows x columns with no shared axis
-        # (TPS628436YKA: 3 x 2 at 0.35 mm, body 1.05 x 0.797): the grid fits the body turned a quarter turn
-        bx, by = by, bx
-        turned = f"body {2 * by:g} x {2 * bx:g} mm turned to {2 * bx:g} x {2 * by:g} to fit the {rows} x {cols} grid"
-    elif (gx - gy) * (bx - by) < -1e-9 and gx + land / 2 <= by and gy + land / 2 <= bx:
-        # the grid is long one way and the body the other (CY14U256LA: 6 x 8 balls, body read as 10 x 6 mm): the
-        # long side of a BGA body runs with the long side of its ball grid
-        bx, by = by, bx
-        turned = f"body {2 * by:g} x {2 * bx:g} mm turned to {2 * bx:g} x {2 * by:g} to run with the {rows} x {cols} grid"
     if gx + land / 2 > bx or gy + land / 2 > by:
         raise ValueError(f"the {rows} x {cols} grid at {e:g} mm pitch ({2 * gx:.2f} x {2 * gy:.2f} mm) doesn't fit the "
                          f"{2 * bx:g} x {2 * by:g} mm body: rows/cols swapped or pitch misread?")
@@ -939,11 +1001,15 @@ def _header(spec, density):
     pads, extra = [], []
     if spec.get("mount", "tht") == "tht":
         drill = _dim(spec["drill"])[1] if spec.get("drill") else HEADER_TH[key][0] if abs(key - e) < 0.01 else None
-        dia = _dim(spec["land_diameter"])[1] if spec.get("land_diameter") else HEADER_TH[key][1] if abs(key - e) < 0.01 else None
+        table = abs(key - e) < 0.01 and abs(drill - HEADER_TH[key][0]) < 1e-6 if drill is not None else False
+        dia = _dim(spec["land_diameter"])[1] if spec.get("land_diameter") else HEADER_TH[key][1] if table else None
         if drill is None:
             raise ValueError(f"no default drill for a {e:g} mm pitch header: give drill (and land_diameter)")
-        if dia is None:
+        if dia is None:                                 # a custom drill gets its own land, not the table's
             dia = round(min(drill + 2 * TH_RING, e - 0.5), 2)
+        if (dia - drill) / 2 < TH_RING_MIN - 1e-6:
+            raise ValueError(f"pin_header: drill {drill:g} mm leaves a {(dia - drill) / 2:.3f} mm ring in a {dia:g} mm land "
+                             f"(need >= {TH_RING_MIN} mm): drill and land_diameter are in mm, not mils")
         for k in range(n):
             r, c = divmod(k, cols)
             pads.append({"num": str(k + 1), "kind": "thru_hole", "shape": "rect" if k == 0 else "circle", "x": _r4(c * e),

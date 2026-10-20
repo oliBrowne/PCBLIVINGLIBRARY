@@ -370,8 +370,9 @@ def pin_header(spec, H=None):
     hb, top, a = {2.54: (2.5, 8.5, 0.64), 2.0: (2.0, 6.0, 0.5), 1.27: (1.5, 4.0, 0.4)}.get(round(p, 2), (p, 3 * p, 0.25 * p))
     pins = [(c * p, -r * p) for r in range(rows) for c in range(cols)]
     holes = [rect(a / 2, a / 2, x, y)[::-1] for x, y in pins]
-    outline = [(-p / 2, -(rows - 1) * p - p / 2), ((cols - 1) * p + p / 2, -(rows - 1) * p - p / 2),
-               ((cols - 1) * p + p / 2, p / 2), (-p / 2, p / 2)]
+    bl, bw = _n(spec, "body_length") or cols * p, _n(spec, "body_width") or rows * p    # the spec body (= F.Fab)
+    cx, cy = (cols - 1) * p / 2, -(rows - 1) * p / 2                                   # centred on the pin field
+    outline = [(cx - bl / 2, cy - bw / 2), (cx + bl / 2, cy - bw / 2), (cx + bl / 2, cy + bw / 2), (cx - bl / 2, cy + bw / 2)]
     out = [prism(outline, hb, holes=holes, name="body", color=COL["body"])]
     out += [box(x - a / 2, y - a / 2, -3.0, x + a / 2, y + a / 2, top, f"pin {i + 1}", COL["gold"]) for i, (x, y) in enumerate(pins)]
     return out
@@ -401,9 +402,10 @@ def axial(spec, H=None):
 
 def bga(spec, H):
     """BGA / LGA / CSP: balls (8-sided prisms, the collapsed ball height) under a flat body, A1 dot on top.
-    Balls sit where footprint_adv puts the pads (same grid, same depopulated balls)."""
-    from .footprint_adv import bga_balls
-    Bx, By = _n(spec, "body_length"), _n(spec, "body_width")
+    Balls sit where footprint_adv puts the pads (same grid, same depopulated balls), the body turned as its body is."""
+    from .footprint_adv import bga_balls, bga_body
+    hx, hy, _ = bga_body(spec)
+    Bx, By = 2 * hx, 2 * hy
     e = spec["pitch"]
     ey = spec.get("pitch_y") or e
     rows, cols = spec["rows"], spec["cols"]
@@ -876,8 +878,8 @@ def generate(src, height=None, name=None, pads=None):
     the model is then turned so its leads sit on them (fit_rotation), info["rotation"]."""
     if isinstance(src, dict):
         spec = src
-    elif str(src).endswith(".json") and Path(src).exists():
-        spec = json.loads(Path(src).read_text())
+    elif str(src).endswith(".json"):                 # a spec path, never a footprint name: a missing file is not found
+        spec = json.loads(Path(src).read_text(encoding="utf-8-sig"))      # UTF-8 (a BOM too), not the locale's
     else:
         spec = spec_from_name(str(src))
         if spec is None:
