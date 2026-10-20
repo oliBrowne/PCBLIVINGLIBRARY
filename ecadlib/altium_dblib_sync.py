@@ -448,6 +448,21 @@ def _readback(path, kind, ref):
     return None if want in names else f"{fname} holds {names}, not {want!r}"
 
 
+def readback_problems(item, base="."):
+    """_readback of a plan item's .SchLib / .PcbLib files (paths absolute or relative to base) -> [problem]: a file
+    named for one part that holds another's model. altium365 push and change control's first release (change_gate
+    Guard.baseline) refuse such a part as dblib-sync does; a missing file or another format is left to them."""
+    out = []
+    for k, d, _ in KINDS:
+        f, ref = (item.get(k) or {}).get("file"), (item.get(k) or {}).get("ref")
+        p = Path(base) / f if f and not Path(f).is_absolute() else Path(f or "")
+        if f and ref and p.suffix.lower() == f".{d.lower()}" and p.is_file():
+            err = _readback(p, d, ref)
+            if err:
+                out.append(err)
+    return out
+
+
 def _copy_recipe(to, src, dst):
     """AN.copy_recipe, -> the files it wrote (recipe, STEP files, .ecadstate) relative to `to`, for svn."""
     st = dst.with_name(dst.name + AN.STATE_EXT)

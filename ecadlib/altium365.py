@@ -29,6 +29,7 @@ import pandas as pd
 
 from .altium_export import RESERVED, to_rows
 from .altium_lib import file_stem
+from .altium_dblib_sync import readback_problems     # the read-back dblib-sync does, before any file goes up
 from .bom_triage import read_bom
 from . import userconfig as UC
 
@@ -446,6 +447,9 @@ def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, 
         else:
             found.append(f"<id of {name}>" if dry_run else client.find_model(ws, kind, name, f"{models_root}/{sub}"))
     files = [] if found[0] else [it["symbol"]["file"]], [] if found[1] else [it["footprint"]["file"]]
+    bad = readback_problems({k: it[k] for k, g in zip(("symbol", "footprint"), files) if g})
+    if bad:                                    # the file to send holds another part's model: nothing goes up
+        return {"action": "error", "detail": "; ".join(bad)}
     ids = tuple([(Path(p).name, upload(p)) for p in group] for group in files)
     parent, _ = split_folder(it["folder"])
     pid = (f"<id of {parent}>" if dry_run else client.folder_id(ws, parent)) if parent else None
@@ -556,6 +560,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                 res["action"], res["detail"] = "skip", "needs_altium_models (no .SchLib/.PcbLib)"
             elif why:
                 recheck(res, why)
+            elif bad := readback_problems(it):     # a file named for this part holding another's model: not sent
+                res["action"], res["detail"] = "error", "; ".join(bad)
             else:
                 # a symbol / footprint shared by several parts (Capacitor, R_0603) is released with the first and
                 # linked by the others: releasing it again fails with AddALU_ItemsDuplicate item HRID
