@@ -1009,6 +1009,14 @@ def _desc_label(row):
     return "LCSC/JLCPCB" if src in ("", "jlcpcb_search", "easyeda") else src
 
 
+def handoff_says(reader, progress):
+    """The datasheet hand-off ("save the PDF to ...") prints above the live progress line, never through the
+    per-step log (on a terminal that log keeps only a few lines)."""
+    hand = getattr(getattr(reader, "store", None), "handoff", None)
+    if hand is not None and hasattr(getattr(progress, "t", None), "write"):
+        hand.say = progress.t.write
+
+
 def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_index=False, allow=(), offline=False,
         cache="out/http_cache", rate=0.5, providers=None, http=None, api_key=None, log=print, gen_step=True,
         rules=None, user=None, datasheet_batch=False, reader=None, progress=None):
@@ -1063,6 +1071,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     gate.begin(list(old.values()))
     if reader is None and "datasheet" in sources:
         reader = D.Reader(out, cache, api_key, rules, http, batch=datasheet_batch, log=log)
+    handoff_says(reader, progress)
     if reader is not None and offline and not getattr(reader, "replay", None):   # --offline: nothing goes to the model
         reader.offline, reader.key = True, None                                # (a replay of recorded answers sends nothing)
     r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step, rules,

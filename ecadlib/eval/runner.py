@@ -284,7 +284,7 @@ class EvalReader(D.Reader):
         job["estimate"] = (job.get("recording") or {}).get("estimate") or self._estimate(job)
         self.used.setdefault(part, {"estimate": job["estimate"]})
         pv = job.get("prov") or {}                     # the PDF read: pinned by its SHA-256 (<set>.pins.json)
-        self.used[part]["datasheet"] = {k: pv.get(k) for k in ("url", "sha256", "bytes", "pages", "sent_as") if pv.get(k)}
+        self.used[part]["datasheet"] = {k: pv.get(k) for k in ("url", "sha256", "bytes", "pages", "sent_as", "via") if pv.get(k)}
         return job
 
     def cached(self, job):
@@ -563,6 +563,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     out.mkdir(parents=True, exist_ok=True)
     lib = out / "lib"
     rules = RU.resolve(rules, out)
+    # a benchmark never waits on a person's browser: a refused link stays refused unless a way that needs no one works
+    rules = dict(rules, datasheet={**rules.get("datasheet", {}), "handoff": "off"})
     if max_cost_usd is not None:                      # the run's spending cap ([datasheet] max_cost_usd, default $10)
         rules = dict(rules, datasheet={**rules.get("datasheet", {}), "max_cost_usd": float(max_cost_usd)})
     over = {k: v for k, v in (("provider", provider), ("base_url", base_url), ("assist", assist),

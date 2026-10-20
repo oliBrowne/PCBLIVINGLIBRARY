@@ -836,7 +836,8 @@ class Workspace:
     def _datasheet_reader(self, out, batch=True, wait=False, estimate=False, yes=False):
         from . import datasheet as D
         return D.Reader(out, self.root / "http_cache", rules=self.rules(), batch=batch, wait=wait, estimate=estimate, yes=yes,
-                        http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None)
+                        http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None,
+                        handoff=False)        # the web UI, MCP and the menus: no terminal to tell what to save where
 
     def datasheet_quote(self, bom, sync=False, parts=None):
         """datasheet_batch's cost as an ecadlib.ai_cost quote (batch price, or sync=True one request per part),

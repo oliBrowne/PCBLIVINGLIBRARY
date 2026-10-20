@@ -70,7 +70,14 @@ DEFAULTS = {
                   "escalate": True, "max_attempts": 4,
                   "zoom_drawings": False,               # also send sharper close-ups of the drawing pages (A/B test first)
                   # ecadlib.crosscheck: a second source (standard table / a second read) before a footprint is accepted
-                  "cross_check": "auto", "cross_check_model": ""},
+                  "cross_check": "auto", "cross_check_model": "",
+                  # ecadlib.pdf_fetch: a PDF link the maker's site refuses to ecadlib's own request. "auto": a browser's
+                  # headers, then a Chrome TLS fingerprint, then a headless Edge / Chrome (the last two need
+                  # pip install "ecadlib[browser]"); "plain": ecadlib's own request only; or a list of those ways
+                  "download": "auto",
+                  # last: open the link in your own browser and take the PDF from Downloads ("auto": when a person is
+                  # watching the run in a terminal; "off"), waiting this long; "" = the system Downloads folder
+                  "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": ""},
     "symbols": {                               # ecadlib.symbol_layout: IC symbol pins grouped by function
         "layout_pins": 1,                      # parts with at least this many pins get grouped (0 = never)
         "power_side": "top",                   # top: power top, ground bottom | left: both on the left side, top and bottom empty
@@ -121,7 +128,7 @@ MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9),
              ("symbols", "layout_pins"): (0, 100_000), ("symbols", "split_pins"): (0, 100_000), ("symbols", "unit_pins"): (8, 10_000),
              ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600), ("datasheet", "page_budget"): (0, 600),
-             ("datasheet", "max_attempts"): (1, 10),
+             ("datasheet", "max_attempts"): (1, 10), ("datasheet", "handoff_wait_s"): (10, 3600),
              ("notify", "retries"): (0, 10), ("change", "approvers"): (1, 9), ("notify", "timeout_s"): (1, 120)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
@@ -292,6 +299,8 @@ def validate(raw, where="ecadlib.toml"):
                 from .notify import check_targets
                 check_targets(where, v, _err)
                 continue
+            if (sec, k) == ("datasheet", "download"):     # "auto", "plain" or a list of ways; checked below
+                continue
             if k not in DEFAULTS[sec]:
                 close = difflib.get_close_matches(k, DEFAULTS[sec], 1)
                 _err(where, key, f"is not a known key" + (f" (did you mean {sec}.{close[0]}?)" if close else
@@ -366,6 +375,16 @@ def validate(raw, where="ecadlib.toml"):
         if not _LL.MODEL_RE.fullmatch(str(m)):
             _err(where, "datasheet.ladder", f"has {m!r}: must be model ids such as claude-haiku-5-5 (or endpoint:model "
                                             "for an [ai.endpoints] entry), cheapest first")
+    if "download" in ds:
+        from . import pdf_fetch as _PF
+        dl = ds["download"]
+        ok = dl in ("auto", "plain") if isinstance(dl, str) else isinstance(dl, list) and all(w in _PF.TIERS for w in dl)
+        if not ok:
+            _err(where, "datasheet.download", f"= {dl!r}: must be \"auto\" (every way, in order), \"plain\" (ecadlib's own "
+                                              f"request only) or a list of {', '.join(_PF.TIERS)}")
+    if "handoff" in ds and ds["handoff"] not in ("auto", "off"):
+        _err(where, "datasheet.handoff", f"= {ds['handoff']!r}: must be auto (open a refused link in your browser when "
+                                         "you are watching the run) or off")
     if "cross_check" in ds and ds["cross_check"] not in ("auto", "always", "off"):
         _err(where, "datasheet.cross_check", f"= {ds['cross_check']!r}: must be auto (standard table, else a second read), "
                                              "always (a second read for every part) or off")

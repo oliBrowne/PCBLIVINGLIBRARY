@@ -204,7 +204,8 @@ def test_every_command_help_and_minimal_run():
     assert not problems, "\n\n".join(problems)
 
 
-OPTIONAL = {"PIL": "pillow", "pyaltiumlib": "pyaltiumlib", "pdfplumber": "pdfplumber", "pypdfium2": "pypdfium2"}   # pyaltiumlib: parity's second reader; pdfplumber: ordering tables (text lines without it)           # extras: every use handles ImportError with a message
+OPTIONAL = {"PIL": "pillow", "pyaltiumlib": "pyaltiumlib", "pdfplumber": "pdfplumber", "pypdfium2": "pypdfium2",
+            "curl_cffi": "curl_cffi", "playwright": "playwright"}   # pyaltiumlib: parity's second reader; pdfplumber: ordering tables (text lines without it); curl_cffi, playwright: the [browser] extra (pdf_fetch)           # extras: every use handles ImportError with a message
 
 
 def test_third_party_imports_are_declared():

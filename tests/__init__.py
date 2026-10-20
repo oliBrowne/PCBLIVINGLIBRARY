@@ -11,3 +11,8 @@ from ecadlib import rules as _RU                       # noqa: E402
 
 SHIPPED_UNOFFICIAL = _RU.DEFAULTS["providers"]["unofficial"]
 _RU.DEFAULTS["providers"]["unofficial"] = True
+
+# A datasheet link a test's fake server refuses must stay refused: the suite never tries the real browser ways
+# ([datasheet] download, ecadlib.pdf_fetch) or opens a browser. tests/test_pdf_fetch.py turns them on where it tests them.
+os.environ["ECADLIB_DOWNLOAD"] = "plain"
+os.environ["ECADLIB_NO_HANDOFF"] = "1"
