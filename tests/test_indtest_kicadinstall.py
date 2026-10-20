@@ -108,3 +108,46 @@ def test_kicad_review_queue_of_a_second_project_gets_its_own_port(tmp_path):
     up = {p: "/elsewhere" for p in range(8765, 8800)}
     r = AM.open_queue(b, opener=False, probe=probe, launcher=None)
     assert r["status"] == "error" and "ecadlib_menu.ini" not in r["fix"], r
+
+
+def _plugin():
+    import types
+    from unittest import mock
+    fake = types.ModuleType("pcbnew")
+    fake.ActionPlugin = type("ActionPlugin", (), {"register": lambda self: None})
+    with mock.patch.dict(sys.modules, {"pcbnew": fake}):
+        src = ROOT / "ecadlib" / "assets" / "kicad_action_plugin.py"
+        mod = types.ModuleType("ecadlib_kicad_action_plugin")
+        mod.__file__ = str(src)
+        exec(compile(src.read_text(encoding="utf-8"), str(src), "exec"), mod.__dict__)
+    return mod
+
+
+# T036
+@lite
+def test_plugin_fill_adds_the_library_to_the_project_tables(tmp_path):
+    kap = _plugin()
+    assert kap.tables_after_fill(str(tmp_path)) == ""                   # nothing built: tables left alone
+    assert not (tmp_path / "sym-lib-table").exists()
+    (tmp_path / "ecadlib").mkdir()
+    (tmp_path / "ecadlib" / "ecadlib.kicad_sym").write_text("(kicad_symbol_lib)\n")
+    assert "reopen the project" in kap.tables_after_fill(str(tmp_path))
+    assert '(uri "${KIPRJMOD}/ecadlib/ecadlib.kicad_sym")' in (tmp_path / "sym-lib-table").read_text()
+    assert '(uri "${KIPRJMOD}/ecadlib/ecadlib.pretty")' in (tmp_path / "fp-lib-table").read_text()
+    assert kap.tables_after_fill(str(tmp_path)) == ""                   # again: already listed
+
+
+# T037
+@lite
+def test_plugin_names_an_ecadlib_row_of_another_library(tmp_path):
+    kap = _plugin()
+    (tmp_path / "fp-lib-table").write_text('(fp_lib_table\n  (version 7)\n  (lib (name "ecadlib")(type "KiCad")'
+                                           '(uri "${KIPRJMOD}/ecadlib.pretty")(options "")(descr ""))\n)\n')
+    try:
+        kap.ensure_tables(str(tmp_path))
+        raise AssertionError("kept another library's ecadlib row")
+    except ValueError as e:
+        assert "${KIPRJMOD}/ecadlib.pretty" in str(e) and "rename or remove" in str(e), e
+    (tmp_path / "ecadlib").mkdir()
+    (tmp_path / "ecadlib" / "ecadlib.kicad_sym").write_text("(kicad_symbol_lib)\n")
+    assert "${KIPRJMOD}/ecadlib.pretty" in kap.tables_after_fill(str(tmp_path))
