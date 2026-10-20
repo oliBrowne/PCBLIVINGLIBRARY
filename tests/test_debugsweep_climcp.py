@@ -97,6 +97,20 @@ def test_ds2_52_confined_propose_rules_and_learn_house_style_read_relative_paths
     assert "Confidential customer ASIC" not in _txt(r), _txt(r)[:300]
     r = _call(ws, "propose_rules", {"paths": ["mine"]})                  # relative = inside the workspace
     assert json.loads(_txt(r))["components"] == 1, _txt(r)[:300]
+    # Workspace._given_path trims a path before it decides absolute or relative; the check took it as given, so
+    # ' /abs/private' passed as <workspace>/' /abs/private' and the scan read /abs/private.
+    home = srv / "home"
+    _sym_lib(home / "lib" / "h.kicad_sym", "HOMEASIC", "Confidential home ASIC")
+    monkeypatch.setenv("HOME", home)
+    monkeypatch.setenv("USERPROFILE", home)                             # expanduser on Windows
+    for given in (" " + str(srv / "private"), "\t" + str(srv / "private"), " ../private", " ~/lib",
+                  str(srv / "private") + " "):
+        for name, args in (("propose_rules", {"paths": [given]}), ("propose_rules", {"a365": [given]}),
+                           ("learn_house_style", {"paths": [given]})):
+            r = _call(ws, name, args)
+            assert r["isError"] and "outside the workspace" in _txt(r), (name, given, _txt(r)[:300])
+    r = _call(ws, "propose_rules", {"paths": [" mine "]})                 # padding around a workspace folder is fine
+    assert json.loads(_txt(r))["components"] == 1, _txt(r)[:300]
 
 
 # ------------------------------------------------------------------ DS2-53

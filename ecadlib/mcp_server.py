@@ -794,14 +794,15 @@ def _check_paths(ws, args):
             continue
         if not x.strip():
             continue
-        p = Path(x).expanduser()
-        if not p.is_absolute() and re.match(r"[A-Za-z]:[\\/]|\\\\", x):   # a Windows path on another OS
-            raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens files "
-                             "there (start it with --any-path to allow more)")
-        p = (p if p.is_absolute() else ws.root / p).resolve()
-        if not any(p == r or r in p.parents for r in (Path(r).resolve() for r in roots)):
-            raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens files "
-                             "there (start it with --any-path to allow more)")
+        for y in dict.fromkeys((x, x.strip())):    # a tool reads it as given (bom: ' /a' is <workspace>/' /a') or
+            p = Path(y).expanduser()               # trimmed (propose_rules paths: /a): both must be inside
+            if not p.is_absolute() and re.match(r"[A-Za-z]:[\\/]|\\\\", y):   # a Windows path on another OS
+                raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens "
+                                 "files there (start it with --any-path to allow more)")
+            p = (p if p.is_absolute() else ws.root / p).resolve()
+            if not any(p == r or r in p.parents for r in (Path(r).resolve() for r in roots)):
+                raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens "
+                                 "files there (start it with --any-path to allow more)")
 
 
 def _check_url(k, url):
