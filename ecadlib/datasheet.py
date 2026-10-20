@@ -616,23 +616,26 @@ def _non_finite(v, path="$"):
 
 # A nominal printed with its tolerance: "6.5±0.2", "6.5 +/- 0.2", "3.56 +0.15/-0.25", "0.74 +0.05 -0.08"
 _TOL = re.compile(r"\s*([-+]?\d*\.?\d+)\s*(?:(?:±|\+/-|\+-)\s*(\d*\.?\d+)|\+\s*(\d*\.?\d+)\s*/?\s*[-\u2212\u2013]\s*(\d*\.?\d+))"
-                  r"\s*(?:mm|mil|in|inch)?\.?\s*", re.I)
+                  r"\s*(mm|mil|in|inch)?\.?\s*", re.I)
 
 
 def _toleranced(v):
-    """A dimension printed as nominal and tolerance -> {min, nom, max}; None when v is not one. LP38693MP-1.8 (live
-    benchmark 2026-10-19): its drawing prints 6.5±0.2 and 3.56 +0.15/-0.25, and the read left them blank."""
+    """A dimension printed as nominal and tolerance -> {min, nom, max}, plus the unit when one is written after it
+    ("0.016~0.050 in"); None when v is not one. LP38693MP-1.8 (live benchmark 2026-10-19): its drawing prints 6.5±0.2
+    and 3.56 +0.15/-0.25, and the read left them blank."""
     t = str(v or "").replace(",", ".")
-    r = re.fullmatch(r"\s*(\d*\.?\d+)\s*(?:~|\.\.|to)\s*(\d*\.?\d+)\s*(?:mm|mil|in|inch)?\.?\s*", t, re.I)
+    r = re.fullmatch(r"\s*(\d*\.?\d+)\s*(?:~|\.\.|to)\s*(\d*\.?\d+)\s*(mm|mil|in|inch)?\.?\s*", t, re.I)
     if r and float(r.group(1)) < float(r.group(2)):       # "6.3~6.7": a range printed in one cell
         lo, hi = float(r.group(1)), float(r.group(2))
-        return {"min": lo, "nom": round((lo + hi) / 2, 6), "max": hi}
-    m = _TOL.fullmatch(t)
-    if not m:
-        return None
-    nom = float(m.group(1))
-    lo, hi = (float(m.group(2)),) * 2 if m.group(2) else (float(m.group(4)), float(m.group(3)))
-    return {"min": round(nom - lo, 6), "nom": nom, "max": round(nom + hi, 6)}
+        out, u = {"min": lo, "nom": round((lo + hi) / 2, 6), "max": hi}, r.group(3)
+    else:
+        m = _TOL.fullmatch(t)
+        if not m:
+            return None
+        nom = float(m.group(1))
+        lo, hi = (float(m.group(2)),) * 2 if m.group(2) else (float(m.group(4)), float(m.group(3)))
+        out, u = {"min": round(nom - lo, 6), "nom": nom, "max": round(nom + hi, 6)}, m.group(5)
+    return dict(out, unit=_unit_name(u)) if u else out
 
 
 def _nullable(s):
@@ -710,16 +713,17 @@ def from_wire(ext):
         if not isinstance(d, dict) or d.get("name") not in WIRE_DIMS:
             continue
         n = d["name"]
-        tol = next((t for t in (_toleranced(d.get(k)) for k in ("nom", "min", "max")) if t), None)
-        if tol:                                       # "6.5±0.2" / "6.3~6.7" printed in one cell
-            vals = tol
+        tk = next((k for k in ("nom", "min", "max") if _toleranced(d.get(k))), None)
+        if tk:                                        # "6.5±0.2" / "6.3~6.7" printed in one cell
+            vals = _toleranced(d.get(tk))
+            got = {tk: (None, vals.pop("unit", None))}
         else:
             got = {k: _wire_val(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")}
-            for k, (x, u) in got.items():             # "0.016 in" in a row whose unit is mm: which one is it?
-                if u and u != _unit_name(d.get("unit")):
-                    raise DatasheetError(f"response {n}.{k} {d.get(k)!r} is written in {u!r} but the dimension's unit is "
-                                         f"{d.get('unit')!r}; rejected")
             vals = {k: x for k, (x, _) in got.items()}
+        for k, (x, u) in got.items():                 # "0.016 in" / "0.016~0.050 in" in a row whose unit is mm
+            if u and u != _unit_name(d.get("unit")):
+                raise DatasheetError(f"response {n}.{k} {d.get(k)!r} is written in {u!r} but the dimension's unit is "
+                                     f"{d.get('unit')!r}; rejected")
         new = {"label": d.get("label", ""), **vals, "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
         if n in dims and any(dims[n].get(k) != new.get(k) for k in ("min", "nom", "max", "unit")):
             raise DatasheetError(f"response gives {n} twice with different values ({_dimtxt(dims[n])} and {_dimtxt(new)}): "
@@ -729,6 +733,10 @@ def from_wire(ext):
     for u in pkg.get("unresolved") or []:                # "body_length min/max (printed as 6.5±0.2)": the read saw it
         m = re.match(r"\s*([a-z_.]+)\b[^(]*\(printed as ([^),;]+)", str(u))
         tol = m and m.group(1) in dims and _toleranced(m.group(2))
+        tu = tol and tol.pop("unit", None)
+        if tu and tu != _unit_name(dims[m.group(1)].get("unit")):
+            raise DatasheetError(f"response {m.group(1)} is printed as {m.group(2)!r}, in {tu!r}, but the dimension's "
+                                 f"unit is {dims[m.group(1)].get('unit')!r}; rejected")
         if tol and dims[m.group(1)].get("unit") and tol["nom"] == (dims[m.group(1)].get("nom") or tol["nom"]):
             dims[m.group(1)].update(tol)
         else:
