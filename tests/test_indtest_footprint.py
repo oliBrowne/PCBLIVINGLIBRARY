@@ -187,3 +187,15 @@ def test_t029_pin_row_without_number(tmp_path, monkeypatch):
     code, out = _symbol(["pins.csv", "-o", "p.SchLib"])
     assert code == 2 and "PA0" in out and "no pin number" in out, (code, out)
     assert not (tmp_path / "p.SchLib").exists()
+
+
+# T079: power_out and nc pin types from the CSV survive in the KiCad symbol (Altium has no own type for them)
+@lite
+def test_t079_kicad_symbol_keeps_power_out_and_nc(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ldo.csv").write_text("num,name,type\n1,VIN,power_in\n2,GND,power_in\n3,VOUT,power_out\n4,NC,nc\n")
+    code, out = _symbol(["ldo.csv", "-o", "ldo.SchLib", "--kicad", "ldo.kicad_sym"])
+    assert code == 0, out
+    text = (tmp_path / "ldo.kicad_sym").read_text()
+    types = {m.group(2): m.group(1) for m in re.finditer(r'\(pin (\w+)\s+\w+\s.*?\(number "([^"]+)"', text, re.S)}
+    assert types == {"1": "power_in", "2": "power_in", "3": "power_out", "4": "no_connect"}, types

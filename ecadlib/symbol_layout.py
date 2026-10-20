@@ -809,6 +809,16 @@ def main(argv=None):
         from . import kicad_export as X, sexpr
         notes = []
         ks = X.symbol_from_schlib(out, X.kname(name), notes)
+        own = {str(p["num"]): {"power_out": "power_out", "nc": "no_connect"}.get(_ptype(p.get("type"))) for p in pins}
+        stack = [ks]
+        while stack:                                     # Altium has no power_out / nc: put the source's type back
+            t = stack.pop()
+            if isinstance(t, list) and t and t[0] == "pin":
+                num = next((str(c[1]) for c in t if isinstance(c, list) and c and c[0] == "number"), None)
+                if own.get(num) and t[1] in ("power_in", "passive"):
+                    t[1] = own[num]
+            elif isinstance(t, list):
+                stack.extend(t)
         tree = ["kicad_symbol_lib", ["version", X.SYM_VERSION], ["generator", sexpr.Q("ecadlib")], ["generator_version", sexpr.Q("8.0")], ks]
         Path(a.kicad).write_text(sexpr.dumps(tree), encoding="utf-8", newline="\n")
         print(f"  KiCad symbol -> {a.kicad}")
