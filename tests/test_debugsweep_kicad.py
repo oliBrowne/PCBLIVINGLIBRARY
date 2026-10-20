@@ -1,7 +1,8 @@
 """Regression tests for the debug sweep's KiCad group (DS2-*): kicad_pcm, kicad_export, easyeda_convert, kicad_index.
 Plain functions (tests.run_all, no pytest)."""
-import io, json, zipfile
+import io, json, re, zipfile
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 
 from ecadlib import kicad_export as X, kicad_pcm as KP
 from tests import test_tool_packages as TP
@@ -171,6 +172,70 @@ def test_ds2_42_kicad_pcm_keeps_no_version_from_kicad_pcm_json_that_is_not_one(t
         p.write_text(json.dumps(dict(json.loads(p.read_text()), version=bad)))
         assert KP.build(exp, out, today=day, log=QUIET)["version"] == "2026.10.20", bad
     assert [f.name for f in out.glob("*.zip")] == [z.name] and z.stat().st_mtime_ns == snap
+
+
+@lite
+def test_ds2_42_kicad_pcm_packages_built_into_one_folder_keep_their_own_versions(tmp_path):
+    """Several packages in one --out (out/pcm by default; the workspace's packages/<bom>/kicad): each one's version
+    follows its own builds, not the package built there last."""
+    import datetime
+    exp, day = _two_libs(tmp_path), datetime.date(2026, 10, 20)
+    out = exp.parent / "pcm"
+    build = lambda lib, **k: KP.build(exp, out, name=lib, today=day, log=QUIET, **k)["version"]
+    got = [build("alpha"), build("beta")]
+    assert got == ["2026.10.20"] * 2, got
+    snap = {p.name: p.stat().st_mtime_ns for p in out.glob("*.zip")}
+    got = [build("alpha"), build("beta"), build("alpha")]
+    assert got == ["2026.10.20"] * 3, got                               # unchanged: kept, nothing written
+    assert {p.name: p.stat().st_mtime_ns for p in out.glob("*.zip")} == snap
+    got = [build("beta", pkg_version="5000.0.0"), build("alpha")]
+    assert got == ["5000.0.0", "2026.10.20"], got                       # beta's version is not alpha's previous one
+    other = exp.parent / "pcm2"
+    KP.build(exp, other, name="beta", pkg_version="5000.0.0", today=day, log=QUIET)
+    got = KP.build(exp, other, name="alpha", today=day, log=QUIET)["version"]
+    assert got == "2026.10.20", got                                     # alpha's first build there
+
+
+@lite
+def test_ds2_42_kicad_pcm_a_change_gets_a_newer_version_without_kicad_pcm_json(tmp_path):
+    """kicad_pcm.json deleted, or its version edited by hand: the zips in --out and packages.json still say which
+    versions are out, so a change the same day takes the version after them and the published zip is not written over
+    (KiCad would refuse to install it: its sha256 no longer matches packages.json)."""
+    import datetime
+    _, exp, _ = TP._export(False, tmp_path)
+    out, day, url = exp.parent / "pcm", datetime.date(2026, 10, 20), "https://x.example/k"
+    f, p = exp / "lib.pretty" / "R_0603_1608Metric.kicad_mod", out / "kicad_pcm.json"
+    zips = {}
+
+    def build(**k):
+        r = KP.build(exp, out, today=day, log=QUIET, **k)
+        zips[Path(r["zip"]).name] = Path(r["zip"]).read_bytes()
+        return r["version"]
+
+    def change(tag):                           # a corrected library, exported again
+        f.write_text(re.sub(r'\(attr smd\)(\n\t\(tags "[^"]*"\))?', f'(attr smd)\n\t(tags "{tag}")', f.read_text(), count=1))
+        TP._as_written(exp, f)
+    assert build() == "2026.10.20"
+    for n, how in enumerate(("deleted", None, "abc", 7, "2026.10.20.1"), 1):
+        if how == "deleted":
+            p.unlink()
+        else:
+            p.write_text(json.dumps(dict(json.loads(p.read_text()), version=how)))
+        change(f"change {n}")
+        got = build()
+        assert got == f"2026.10.{20 + n}", (how, got)
+    assert {z.name: z.read_bytes() for z in out.glob("*.zip")} == zips      # every zip as it was first written
+    p.unlink()                                                           # unchanged since its newest zip: kept
+    z = out / "local.ecadlib.lib-2026.10.25.zip"
+    snap = z.stat().st_mtime_ns
+    assert build() == "2026.10.25" and z.stat().st_mtime_ns == snap
+    # packages.json lists a version whose zip is no longer in --out (uploaded, then cleared here): still one to pass
+    build(base_url=url)
+    for z in out.glob("*.zip"):
+        z.unlink()
+    p.unlink()
+    change("after the upload")
+    assert build(base_url=url) == "2026.10.26"
 
 
 def test_ds2_43_a_value_with_a_thousands_or_decimal_comma_is_not_bound_renamed_or_merged_by_value():
