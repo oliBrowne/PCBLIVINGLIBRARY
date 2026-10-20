@@ -2082,6 +2082,17 @@ def _create_in_flight(m):
 BROKEN_LINK = r"not a PDF|HTTP 4(?!01|03|29)\d\d|larger than"
 
 
+def hold_on_doubt(inf, model, res):
+    """A guided model's answer that still fails datasheet's checks is not written (the hold_on_doubt rail)."""
+    from . import ds_route as DR
+    if "hold_on_doubt" in inf["plan"]["rails"]:
+        kind, why = DR.assess(res)
+        if kind != "ok":
+            raise DatasheetError(f"held: the answer of {model} ({inf['plan']['tier']} tier) still fails datasheet's "
+                                 f"checks ({'; '.join(why[:3])[:240]}); add a stronger model to [datasheet] ladder or "
+                                 "read the datasheet yourself")
+
+
 class Reader:
     """Reads datasheets for many parts. job() finds and validates the PDF, cached() answers from the result cache,
     read_now() makes one synchronous call; with batch=True (or estimate=True) jobs are collected with submit() and
@@ -2377,7 +2388,6 @@ class Reader:
     def _ai_record(self, job, rec, res):
         """Provenance of the model and rails (sidecar "ai"); a guided model's answer that still fails the checks at
         the end of its route is held (hold_on_doubt): nothing is written, the part stays open with the reason."""
-        from . import ds_route as DR
         from .llm import run as LR
         model = rec.get("model") or job.get("model") or self.model
         try:
@@ -2385,12 +2395,7 @@ class Reader:
         except DatasheetError:
             return
         res["sidecar"]["ai"] = LR.provenance(inf, rec.get("message"), job.get("route"), bool(job["prov"].get("pages_sent")))
-        if "hold_on_doubt" in inf["plan"]["rails"]:
-            kind, why = DR.assess(res)
-            if kind != "ok":
-                raise DatasheetError(f"held: the answer of {model} ({inf['plan']['tier']} tier) still fails datasheet's "
-                                     f"checks ({'; '.join(why[:3])[:240]}); add a stronger model to [datasheet] ladder or "
-                                     "read the datasheet yourself")
+        hold_on_doubt(inf, model, res)
 
     def cached(self, job):
         """The cached answer for this step, when it is the one to keep (a cheaper model's rejected answer never is)."""
@@ -3351,6 +3356,15 @@ def main(argv=None):
                                "at": datetime.datetime.now().isoformat(timespec="seconds"), "message": msg})
         n_sent = pdf_pages(source[1]) if pages and not a.from_response and source[0] == "base64" else None
         res = process(ext, a.part, a.pdf, a.model, offset, msg, n_sent)
+        if not a.from_response:                       # as every Reader read: the "ai" record, then hold_on_doubt
+            res["sidecar"]["ai"] = LR.provenance(inf, msg, None, isinstance(offset, list))
+            try:
+                hold_on_doubt(inf, a.model, res)
+            except DatasheetError as e:           # the paid answer is kept: --from-response writes it anyway
+                Path(a.out).mkdir(parents=True, exist_ok=True)
+                f = Path(a.out) / (re.sub(r"[^A-Za-z0-9_.+-]", "_", a.part) + ".response.json")
+                f.write_text(json.dumps({"page_offset": offset, "message": msg}, indent=2) + "\n", encoding="utf-8")
+                raise DatasheetError(f"{e} (the answer is saved in {f})")
     except DatasheetError as e:
         sys.exit(f"error: {e}")
     paths = write(res, a.out)
