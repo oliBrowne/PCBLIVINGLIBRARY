@@ -104,3 +104,17 @@ def test_t058_failing_batch_answer_gets_the_feedback_turn():
     ai = res["sidecar"]["ai"]
     assert ai["feedback"]["kept"] == "retry" and "feedback_retry" in ai["support_ran"], ai
     assert [r["via"] for r in rows] == ["batch " + rows[0]["via"].split()[-1], "sync"], rows
+
+
+# T059: `ecadlib costs --model gemini-...` (no [ai] table) prices Gemini without Claude's cache write and batch price
+@lite
+def test_t059_costs_model_gemini_is_not_priced_as_claude(tmp_path, monkeypatch):
+    from ecadlib import costs as C
+    monkeypatch.chdir(tmp_path)                         # no ecadlib.toml found from here
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        assert C.main(["--model", "gemini-3.8-flash", "--json"]) == 0
+    row = json.loads(buf.getvalue())[0]
+    rin, rout = C.read_tokens()
+    assert row["read_batch"] is None and abs(row["read"] - (rin * 0.75 + rout * 3.75) / 1e6) < 1e-9, row
+    assert row == dict(C.jobs("gemini-3.8-flash", "gemini"), model="gemini-3.8-flash")

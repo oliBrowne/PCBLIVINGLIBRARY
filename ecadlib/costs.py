@@ -248,6 +248,8 @@ def main(argv=None):
         from .llm import endpoint
         ep = endpoint(rules if isinstance(rules, dict) else None, model=a.model)
         prov = "ollama" if ep["local"] else ep["provider"]
+        if prov == "anthropic" and not ep["model"].startswith("claude"):   # --model gemini-... with no [ai] table:
+            prov = next((p for _, m, p in SHEET if m == ep["model"]), "openai-compatible")   # not priced as Claude
         rows = [dict(jobs(ep["model"], prov, rules, a.share), model=ep["model"])]
     if a.md:
         open(a.md, "w", encoding="utf-8").write(doc(rows, a.share))
