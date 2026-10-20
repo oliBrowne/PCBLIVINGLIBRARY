@@ -265,3 +265,18 @@ def test_release_check_and_approve_broken_toml(tmp_path, monkeypatch):
     for args in (["release-check", "plan.json"], ["approve", "plan.json", "status"]):
         p = cli(*args, cwd=tmp_path, home=tmp_path / "home")
         assert p.returncode == 2 and "not valid TOML" in p.stderr and "hint:" in p.stderr, (args, p.returncode, p.stderr)
+
+
+# T125: status names a plan.json holding null / [1, 2, 3] and an ecadlib.toml that does not load
+@lite
+def test_status_names_damaged_files(tmp_path):
+    from ecadlib import ws_status as WS
+    pf = tmp_path / "librarian" / "b" / "plan.json"
+    pf.parent.mkdir(parents=True)
+    for content in ("null", "[1, 2, 3]"):
+        pf.write_text(content)
+        assert any("librarian/b/plan.json: not a plan" in p for p in WS.status(tmp_path)["problems"]), content
+    pf.write_text("[]")
+    assert WS.status(tmp_path)["problems"] == []
+    (tmp_path / "ecadlib.toml").write_text("[naming\n")
+    assert any(p.startswith("ecadlib.toml: not valid TOML") for p in WS.status(tmp_path)["problems"])
