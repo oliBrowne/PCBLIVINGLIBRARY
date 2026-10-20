@@ -69,28 +69,69 @@ def test_runner_calls_wake_after_exit():
     assert lines[ex + 2] == 'if exist "%JOB%\\background.txt" %ECADLIB% altium-menu wake "%JOB%" > "%JOB%\\wake.txt" 2>&1'
 
 
+def _long(monkeypatch):
+    monkeypatch.setattr(AM, "_short_path", lambda p: p)                # no 8.3 names, on any OS
+
+
 @lite
-def test_wake_calls_the_running_altium_until_it_takes_the_job(tmp_path):
+def test_wake_calls_the_running_altium_until_it_takes_the_job(tmp_path, monkeypatch):
+    _long(monkeypatch)
     here, job = _job(tmp_path)
     calls, ticks = [], []
 
     def start(cmd):
         calls.append(cmd)
-        if len(calls) == 2:                                            # the first call met another script: refused
+        if len(calls) == 2:                                            # the first call was not taken
             (job / "finished.txt").write_text("finished.txt")
 
-    res = AM.wake(job, x2="C:\\AD26\\X2.EXE", start=start, sleep=ticks.append, tries=5, wait_s=3)
+    res = AM.wake(job, x2="C:\\AD26\\X2.EXE", busy=lambda h: False, start=start, sleep=ticks.append, wait_s=3)
     assert res["status"] == "ok" and len(calls) == 2 and len(ticks) == 4, (res, calls, ticks)
     assert calls[0] == ["C:\\AD26\\X2.EXE", f"-RScriptingSystem:RunScript(ProjectName={here / AM.PROJECT}|"
                                             f"ProcName={here / AM.UNIT}>FinishBackgroundJob)"]
 
 
 @lite
-def test_wake_gives_up_quietly(tmp_path):
+def test_wake_waits_while_a_dialog_is_open_in_altium(tmp_path, monkeypatch):
+    """A call while Altium shows a modal dialog leaves Altium's "busy" box and a hung X2.EXE on the screen: wait."""
+    _long(monkeypatch)
+    here, job = _job(tmp_path)
+    calls, ticks, state = [], [], {"n": 0}
+
+    def busy(hwnd):
+        state["n"] += 1
+        return state["n"] <= 3                                         # the dialog closes after three looks
+
+    def start(cmd):
+        calls.append(cmd)
+        (job / "finished.txt").write_text("finished.txt")
+
+    res = AM.wake(job, x2="X2.EXE", busy=busy, start=start, sleep=ticks.append, every_s=5)
+    assert res["status"] == "ok" and len(calls) == 1 and ticks[:3] == [5, 5, 5], (res, ticks)
+    calls.clear()
+    (job / "finished.txt").unlink()
+    res = AM.wake(job, x2="X2.EXE", busy=lambda h: True, start=calls.append, sleep=lambda s: None, patience_s=20)
+    assert res["status"] == "waiting" and "dialog" in res["message"] and calls == []
+
+
+def test_wake_folder_is_short_but_file_names_are_long(monkeypatch=None):
+    """AD 26.10 finds neither ECADLI~1.PRJ nor a unit ECADLI~1.PAS: only the folder may be an 8.3 name."""
+    real = AM._short_path
+    try:
+        AM._short_path = lambda p: Path("C:/ECADLI~1/menu")
+        cmd = AM.wake_command("X2.EXE", Path("C:/ecadlib test/menu"))
+    finally:
+        AM._short_path = real
+    assert cmd[1] == (f"-RScriptingSystem:RunScript(ProjectName={Path('C:/ECADLI~1/menu') / AM.PROJECT}|"
+                      f"ProcName={Path('C:/ECADLI~1/menu') / AM.UNIT}>FinishBackgroundJob)")
+
+
+@lite
+def test_wake_gives_up_quietly(tmp_path, monkeypatch):
+    _long(monkeypatch)
     here, job = _job(tmp_path)
     calls = []
-    res = AM.wake(job, x2="X2.EXE", start=calls.append, sleep=lambda s: None, tries=3, wait_s=2)
-    assert res["status"] == "waiting" and "busy" in res["message"] and len(calls) == 3
+    res = AM.wake(job, x2="X2.EXE", busy=lambda h: False, start=calls.append, sleep=lambda s: None, calls=3, wait_s=2)
+    assert res["status"] == "waiting" and "did not take" in res["message"] and len(calls) == 3
     res = AM.wake(job, x2="", start=calls.append, sleep=lambda s: None)          # Altium is closed: never start one
     assert res["status"] == "waiting" and "not running" in res["message"] and len(calls) == 3
     (job / "background.txt").unlink()
@@ -98,10 +139,11 @@ def test_wake_gives_up_quietly(tmp_path):
 
 
 @lite
-def test_wake_never_puts_a_space_on_altiums_command_line(tmp_path):
+def test_wake_never_puts_a_space_on_altiums_command_line(tmp_path, monkeypatch):
     """A script path with a space makes Altium start a second, unlicensed copy: such a folder waits for the menu."""
+    _long(monkeypatch)                                                 # as when the folder has no 8.3 name
     here, job = _job(tmp_path / "my menu")
-    assert AM.wake_command("X2.EXE", here) is None                     # no 8.3 names off Windows
+    assert AM.wake_command("X2.EXE", here) is None
     calls = []
     res = AM.wake(job, x2="X2.EXE", start=calls.append, sleep=lambda s: None)
     assert res["status"] == "waiting" and calls == []

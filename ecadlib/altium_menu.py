@@ -1449,60 +1449,90 @@ def run_job(job, opener=None):
     return res
 
 
-def running_altium_exe():
-    """X2.EXE of the Altium running now ('' when none): the running one, so a second, older install is never started."""
+def running_altium():
+    """(X2.EXE path, main window handle) of the Altium running now, ('', 0) when none. The running one, so a second,
+    older install is never started; the oldest X2 process with a window, so a launcher stuck on Altium's "busy" box
+    is not taken for it."""
     if os.name != "nt":
-        return ""
+        return "", 0
+    ps = ("$p = Get-Process X2 -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | "
+          "Sort-Object StartTime | Select-Object -First 1; if ($p) { $p.Path + '|' + $p.MainWindowHandle }")
     try:
-        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                              "(Get-Process X2 -ErrorAction SilentlyContinue | Select-Object -First 1).Path"],
-                             capture_output=True, text=True, timeout=30).stdout.strip()
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
+                             text=True, timeout=30).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         out = ""
-    if out:
-        return out
+    exe, _, hwnd = out.rpartition("|")
+    if exe:
+        return exe, int(hwnd) if hwnd.isdigit() else 0
     if not altium_running():
-        return ""
+        return "", 0
     from . import detect
     found = detect.altium()
-    return found[0]["exe"] if found else ""
+    return (found[0]["exe"] if found else ""), 0
+
+
+def altium_busy(hwnd):
+    """True while Altium's main window is disabled: a modal dialog is open (an ecadlib dialog, any script form, a
+    Preferences box). A RunScript call then does not wait: Altium shows "There is another instance of running, but
+    it is busy" and leaves an X2.EXE hanging on it (AD 26.10), so wake waits for the window instead."""
+    if not hwnd:
+        return False
+    try:
+        import ctypes
+        return not ctypes.windll.user32.IsWindowEnabled(hwnd)
+    except (AttributeError, OSError, ValueError):
+        return False
 
 
 def wake_command(x2, here):
     """The command line that makes the running Altium run FinishBackgroundJob from the script project in `here`, or
-    None when the paths cannot go on it: a space or non-ASCII character in a script path makes Altium start a second,
-    unlicensed copy (AD 26.10), so they go as 8.3 short names, and a path that still has one is not used."""
-    prj, unit = (str(_short_path(Path(here) / n)) for n in (PROJECT, UNIT))
+    None when the paths cannot go on it. A space or non-ASCII character in a script path makes Altium start a second,
+    unlicensed copy (AD 26.10), so the folder goes as its 8.3 short name; the file names stay long, because Altium
+    finds neither ECADLI~1.PRJ nor a unit called ECADLI~1.PAS. A folder that still has one is not used."""
+    folder = str(_short_path(Path(here)))
+    prj, unit = (str(Path(folder) / n) for n in (PROJECT, UNIT))
     if any(" " in p or not p.isascii() or "|" in p or ")" in p for p in (prj, unit)):
         return None
     return [str(x2), f"-RScriptingSystem:RunScript(ProjectName={prj}|ProcName={unit}>FinishBackgroundJob)"]
 
 
-def wake(job, x2=None, start=subprocess.Popen, sleep=time.sleep, tries=5, wait_s=60):
+def wake(job, x2=None, busy=altium_busy, start=subprocess.Popen, sleep=time.sleep, calls=2, wait_s=60,
+         patience_s=3600, every_s=5):
     """ecadlib_run.cmd runs this after a job the dialog left running (Keep working; background.txt): it asks the
-    running Altium to put the result in (FinishBackgroundJob writes finished.txt) and tries again while Altium is busy
-    with another script. When Altium is closed, or never takes it, the next ecadlib menu entry offers the job
-    (waiting.txt). Returns {"status", "message"}."""
+    running Altium to put the result in (FinishBackgroundJob writes finished.txt). While a dialog is open in Altium
+    it waits (every every_s, up to patience_s) instead of calling, and it calls at most `calls` times. When Altium is
+    closed, or never takes it, the next ecadlib menu entry offers the job (waiting.txt). Returns {"status", "message"}."""
     job = Path(job)
     here = job.parent.parent
+    done = {"status": "ok", "message": "Altium put the result in"}
     if not (job / "background.txt").is_file():
         return {"status": "skipped", "message": "the dialog waited for this job itself"}
-    for _ in range(tries):
+    made, waited = 0, 0
+    while made < calls:
         if (job / "finished.txt").is_file():
-            return {"status": "ok", "message": "Altium put the result in"}
-        exe = x2 if x2 is not None else running_altium_exe()
+            return done
+        exe, hwnd = (x2, 0) if x2 is not None else running_altium()
         if not exe:
             return {"status": "waiting", "message": "Altium is not running: the next ecadlib menu entry offers this job"}
         cmd = wake_command(exe, here)
         if cmd is None:
             return {"status": "waiting", "message": f"{here} has a space or non-ASCII character Altium cannot take on a "
                                                     "command line: the next ecadlib menu entry offers this job"}
+        if busy(hwnd):
+            if waited >= patience_s:
+                return {"status": "waiting", "message": "a dialog stayed open in Altium: the next ecadlib menu entry "
+                                                        "offers this job"}
+            sleep(every_s)
+            waited += every_s
+            continue
         start(cmd)
+        made += 1
         for _ in range(int(wait_s)):
             sleep(1)
             if (job / "finished.txt").is_file():
-                return {"status": "ok", "message": "Altium put the result in"}
-    return {"status": "waiting", "message": "Altium was busy: the next ecadlib menu entry offers this job"}
+                return done
+    return {"status": "waiting", "message": "Altium did not take the job: the next ecadlib menu entry offers it"}
 
 
 def prune_jobs(jobs_dir, days=14, keep=None, now=None):
