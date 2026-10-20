@@ -37,6 +37,11 @@ class SchemaTooNew(RuntimeError):
     """A file written by a newer ecadlib, in a format this one does not know."""
 
 
+class StampUnreadable(SchemaTooNew):
+    """A folder's ecadlib_schema.json that does not read (git conflict markers, cut short): restore it, no upgrade
+    helps. Still a SchemaTooNew, so everything that stops on a newer folder stops on it too."""
+
+
 class Kind:
     def __init__(self, name, current, files, where="stamp", note=""):
         self.name, self.current, self.files, self.where, self.note = name, current, tuple(files), where, note
@@ -129,8 +134,8 @@ def read_stamp(folder):
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as e:
-        raise SchemaTooNew(f"{f}: unreadable ({e}); restore it from {BACKUP}/ or delete it to treat the folder as "
-                           f"ecadlib 0.3.0 data") from None
+        raise StampUnreadable(f"{f}: unreadable ({e}); restore it from {BACKUP}/ or delete it to treat the folder as "
+                              f"ecadlib 0.3.0 data") from None
     if not isinstance(d, dict) or _ver(d.get("schema_version")) > STAMP_FORMAT:
         raise SchemaTooNew(f"{f} was made by ecadlib {d.get('ecadlib', '?') if isinstance(d, dict) else '?'} "
                            f"(stamp format {d.get('schema_version') if isinstance(d, dict) else '?'}; this ecadlib "
@@ -294,9 +299,9 @@ def scan(root, max_depth=6):
             subdirs[:] = []                    # a cache: thousands of entries, nothing else to find inside
         try:
             st = read_stamp(d) or {}
-        except SchemaTooNew as e:
+        except SchemaTooNew as e:                # damaged: restore it; else made by a newer ecadlib: upgrade
             rows.append({"path": str(d / STAMP), "kind": "stamp", "version": None, "current": STAMP_FORMAT,
-                         "made_by": "", "state": "new", "error": str(e)})
+                         "made_by": "", "state": "error" if isinstance(e, StampUnreadable) else "new", "error": str(e)})
             continue
         for k in kinds_in(d) + [k for k in (st.get("kinds") or {}) if k in KINDS and k not in kinds_in(d)]:
             mf = _main_file(d, k)
@@ -376,6 +381,8 @@ def guard_tree(root):
     if root in _CHECKED:
         return
     for r in scan(root, max_depth=4):
+        if r["kind"] == "stamp" and r["state"] == "error":   # a damaged stamp: its folder's versions are unknown
+            raise StampUnreadable(r["error"])
         if r["state"] == "new":
             if r["kind"] == "stamp":
                 raise SchemaTooNew(r["error"])

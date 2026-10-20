@@ -171,3 +171,31 @@ def test_ds2_55_demo_reads_an_xlsx_or_windows_ansi_csv_bom(tmp_path):
                             log=lambda *a: said.append(" ".join(map(str, a))))
         assert res["parts"] == 2, res
         assert any(s.startswith("[1/3] BOM:") and "(2 lines)" in s for s in said), said
+
+
+# ------------------------------------------------------------------ DS2-56
+@lite
+def test_ds2_56_a_damaged_schema_stamp_is_unreadable_not_newer(tmp_path):
+    """read_stamp raised SchemaTooNew for a stamp with git conflict markers too, and scan filed it as 'new': migrate
+    and doctor told the person to upgrade ecadlib, which cannot repair the file."""
+    from ecadlib import doctor as DR, migrate as MG
+    ws = tmp_path.resolve() / "ws"
+    b = ws / "librarian" / "board"
+    b.mkdir(parents=True)
+    (b / "plan.json").write_text("[]", encoding="utf-8")
+    (b / MG.STAMP).write_text('<<<<<<< HEAD\n{"schema_version": 1, "ecadlib": "0.3.1", "kinds": {"plan": 1}}\n'
+                              '=======\n{"schema_version": 1, "ecadlib": "0.3.0", "kinds": {"plan": 1}}\n'
+                              '>>>>>>> other\n', encoding="utf-8")
+    assert [(r["kind"], r["state"]) for r in MG.scan(ws)] == [("stamp", "error")]
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert MG.main([str(ws)]) == 1
+    assert "pip install" not in out.getvalue() and "restore" in out.getvalue(), out.getvalue()
+    c = DR.check_formats(ws)
+    assert c["level"] == "FAIL" and "upgrade" not in c["hint"] and "restore" in c["hint"], c
+    MG._CHECKED.clear()
+    try:                                       # opening the workspace still stops on it
+        MG.guard_tree(ws)
+        raise AssertionError("a damaged stamp was let through")
+    except MG.SchemaTooNew as e:
+        assert "unreadable" in str(e), e
