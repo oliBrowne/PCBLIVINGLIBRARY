@@ -1,6 +1,7 @@
 """Debug sweep, footprint group: regressions for the DS2-* footprint / 3D / pad-table bugs.
 Run:  python -m tests.run_all test_debugsweep_footprint"""
 from ecadlib import footprint_adv as A, footprint_gen as F, step_gen as S
+from tests.fixtures_lite import lite
 
 
 def _bga(name, rows, cols, pitch, ball, length, width):
@@ -58,3 +59,17 @@ def test_ds2_27_long_mm_pad_table_is_not_taken_for_mils():
     mil["pad_table"].update(default_pad={"type": "tht", "drill": 40, "d": 65},
                             arrays=[{"count": 4, "x": 0, "y": 0, "dx": 100, "dy": 0}])
     assert any("mils" in m for m in units(mil)), units(mil)
+
+
+@lite
+def test_ds2_28_footprint_names_differing_only_in_case_never_share_a_file_path(tmp_path):
+    # Windows and macOS file systems ignore case: models/PcbLib/SOIC-8.PcbLib and soic-8.PcbLib are one file, so a
+    # BOM 'soic-8' with other pads overwrote the 'SOIC-8' part's footprint. Same pads under another case: one file.
+    from tests import test_fp_share as TFS, test_librarian as TL
+    bom = TFS.BOM.replace("WIDE1,SOIC-8", "WIDE1,soic-8").replace("NARROW2,SOIC-8", "NARROW2,Soic-8")
+    items = TL.run(tmp_path, TFS.http(), bom=bom, sources=["kicad"])[0]
+    n1, w, n2 = (items[k]["footprint"] for k in ("NARROW1", "WIDE1", "NARROW2"))
+    assert n1["file"] == "models/PcbLib/SOIC-8.PcbLib", n1
+    assert w["file"].casefold() != n1["file"].casefold(), ("WIDE1 (other pads) writes over NARROW1's file", w["file"])
+    assert w["file"] == "models/PcbLib/SOIC-8_5.3x5.3mm_P1.27mm.PcbLib", w
+    assert (n2["file"], n2["ref"]) == ("models/PcbLib/SOIC-8.PcbLib", "SOIC-8"), n2     # same pads: NARROW1's file

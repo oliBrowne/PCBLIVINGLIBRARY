@@ -79,17 +79,19 @@ def unchecked_share(rec):
 def pick(written, models, name, text, source, part, out, cache):
     """-> (name, path, record to share or None). written: {PcbLib path: footprint record} of this run."""
     h, real = digest(text), real_name(text, source)
+    fold = lambda s: AL.file_stem(s).casefold()  # Windows / macOS file systems ignore case: SOIC-8 and soic-8 are one file
     for rec in written.values():               # same pads under a name already made for this BOM name: share it
         f = str(rec.get("file") or "")
-        if f.endswith(".PcbLib") and AL.file_stem(base_of(rec)) == AL.file_stem(name) and hash_of(rec, out, cache) == h:
+        if f.endswith(".PcbLib") and fold(base_of(rec)) == fold(name) and hash_of(rec, out, cache) == h:
             return rec.get("name") or Path(f).stem, str(Path(out) / f), rec, h
+    taken = {str(p).casefold(): (p, rec) for p, rec in written.items()}
     cands = candidates(name, real, part)
     for i, c in enumerate(cands):
         pcb = str(Path(models) / "PcbLib" / f"{AL.file_stem(c)}.PcbLib")
-        rec = written.get(pcb)
+        have, rec = taken.get(pcb.casefold(), (pcb, None))
         if rec is None:                        # nobody in this run has it (a file left from an earlier run of
             return c, pcb, None, h             # this part, or of a part no longer in the BOM, is rewritten)
-        if hash_of(rec, out, cache) == h:
-            return c, pcb, rec, h
+        if hash_of(rec, out, cache) == h:      # its file under its name (the case it was written in)
+            return rec.get("name") or c, have, rec, h
     c = cands[-1]                              # <name>_<part> is this part's own: rewrite it
     return c, str(Path(models) / "PcbLib" / f"{AL.file_stem(c)}.PcbLib"), None, h
