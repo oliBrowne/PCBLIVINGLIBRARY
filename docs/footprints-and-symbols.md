@@ -148,7 +148,7 @@ IPC maths: the bundled spec uses a generic datasheet outline (terminal 0.25 ± 0
 builds its 0402 capacitor from the IPC-SM-782 sizes (terminal 0.10–0.30, width 0.40–0.60). Built from KiCad's sizes
 (the `stdparts` table entry) the pads are KiCad's exactly: 0.56 × 0.62 at ±0.48. Older copies of this table showed
 0402 pads about 0.1 mm shorter; that was the first prototype's small-chip fillet table (toe 0.10 instead of table
-3-6's 0.20), since corrected. Density A gives an 0603 pad of 1.025×1.01 and density C gives 0.625×0.81.
+3-6's 0.20), since corrected. Density A gives an 0603 pad of 1.00×1.05 and density C gives 0.60×0.85.
 
 ## `stdparts.py`: standard parts without Claude
 

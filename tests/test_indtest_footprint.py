@@ -199,3 +199,21 @@ def test_t079_kicad_symbol_keeps_power_out_and_nc(tmp_path, monkeypatch):
     text = (tmp_path / "ldo.kicad_sym").read_text()
     types = {m.group(2): m.group(1) for m in re.finditer(r'\(pin (\w+)\s+\w+\s.*?\(number "([^"]+)"', text, re.S)}
     assert types == {"1": "power_in", "2": "power_in", "3": "power_out", "4": "no_connect"}, types
+
+
+# T080: the density A / C 0603 pad sizes in the docs are the ones the generator writes
+def test_t080_doc_density_numbers():
+    spec = json.loads((ROOT / "ecadlib" / "package_specs" / "R_0603_1608Metric.json").read_text())
+    num = r"(\d+(?:\.\d+)?)"
+    m = re.search(rf"Density A gives an 0603 pad of {num}\s*[x×]\s*{num} and density C gives {num}\s*[x×]\s*{num}",
+                  (ROOT / "docs" / "footprints-and-symbols.md").read_text())
+    for d, (w, h) in (("A", m.group(1, 2)), ("C", m.group(3, 4))):
+        p = re.search(r'\(pad "1" smd \w+ \(at [^)]*\) \(size ([\d.]+) ([\d.]+)\)', FG.build(dict(spec), d)[0])
+        assert (float(p.group(1)), float(p.group(2))) == (float(w), float(h)), (d, p.groups(), (w, h))
+
+
+# T081: package_schema.json's exposed_pad paste_coverage default is the 0.65 the generator uses
+def test_t081_schema_paste_default():
+    s = json.loads((ROOT / "ecadlib" / "package_schema.json").read_text())
+    assert s["properties"]["exposed_pad"]["properties"]["paste_coverage"]["default"] == 0.65
+    assert re.search(r'paste_coverage"\), 0\.65\)|paste_coverage", 0\.65\)', (ROOT / "ecadlib" / "footprint_gen.py").read_text())

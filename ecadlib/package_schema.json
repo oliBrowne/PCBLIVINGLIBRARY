@@ -139,7 +139,7 @@
           "type": "number",
           "minimum": 0.2,
           "maximum": 1.0,
-          "default": 0.6
+          "default": 0.65
         },
         "paste_grid": {
           "type": "integer",
