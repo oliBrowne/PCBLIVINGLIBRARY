@@ -155,7 +155,9 @@ set. The quotes come from `datasheet_estimate` (its `ai`, for `datasheet_batch`;
 ## Other limits
 
 - Answers longer than `--max-chars` (default 80,000 characters, about 20,000 tokens) are cut, with a note telling the
-  agent how to ask for less. Claude Code stops reading at about 25,000 tokens.
+  agent how to ask for less with the arguments that tool takes (`library_parts` and `altium365_plan` page with `offset`
+  and `limit`; `library_parts` also takes `part` and `status`), or that it cannot. Claude Code stops reading at about
+  25,000 tokens.
 - Nothing but protocol messages goes to stdout, even when a tool starts kicad-cli or pdftoppm. Logs go to stderr.
 - Protocol versions 2024-11-05, 2025-03-26, 2025-06-18 and 2025-11-25. The server offers tools only; it answers
   resource and prompt list requests with empty lists.
