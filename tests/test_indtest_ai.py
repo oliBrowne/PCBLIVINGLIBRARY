@@ -56,3 +56,26 @@ def test_t055_local_zero_price_model_passes_a_set_cap():
         rd._guard_cost([job])                           # $0 is under $5: no "no price known"
         est = rd.estimate([job])
     assert est["usd"] == 0 and est["usd_max"] == 0, est
+
+
+# T056: a read refused before its request went out (an endpoint that can't fetch a PDF by URL) costs $0 in cost.jsonl
+@lite
+def test_t056_ledger_has_no_cost_for_a_request_never_sent(tmp_path, monkeypatch):
+    from ecadlib import ds_route as DR
+    sent = []
+    monkeypatch.setattr(D.requests, "post", lambda *a, **k: sent.append(a) or (_ for _ in ()).throw(AssertionError("sent")))
+    monkeypatch.setenv("REMOTE_KEY", "sk-remote-test")
+    rules = {"ai": {"provider": "openai-compatible", "base_url": "https://llm.example.invalid/v1", "api_key_env": "REMOTE_KEY",
+                    "model": "priced-model", "detect": False,
+                    "profiles": {"priced-model": {"tier": "frontier", "pdf": True, "json_schema": True,
+                                                  "price_in": 2.0, "price_out": 8.0}}}}
+    rd = TL.TR.reader(tmp_path, {}, rules=rules, yes=True)
+    try:                                                # the link can't be downloaded: the PDF would go as a URL
+        rd.read_now(rd.job("TESTPART", [("https://datasheets.example.com/unreachable.pdf", "BOM")]))
+        raise AssertionError("read")
+    except D.DatasheetError as e:
+        assert "can't fetch a PDF by URL" in str(e), e
+    rows = DR.read_ledger(tmp_path / "out" / "datasheet" / "cost.jsonl")
+    assert sent == [] and rows and sum(r["usd"] or 0 for r in rows) == 0, rows
+    assert all(r["how"] == "not sent" and r["input_tokens"] == 0 for r in rows), rows
+    assert rd.committed_usd == 0, rd.committed_usd      # the cap's hold is given back too

@@ -2532,9 +2532,13 @@ class Reader:
         except APIError:
             raise                                     # no answer came back: nothing to record
         except DatasheetError as e:                   # the rails gave up (steps off-format, family too hard, no text):
+            usage = getattr(e, "usage", None) or {}
+            unsent = getattr(e, "not_sent", False) and not usage   # refused before any request: costs nothing
+            if unsent:
+                self._release(job["key"])
             return {"type": "message", "role": "assistant", "model": job.get("model"), "stop_reason": "end_turn",
-                    "content": [{"type": "text", "text": ""}], "usage": getattr(e, "usage", None) or {},
-                    "ecadlib": {"error": str(e)}}     # a failed answer: the route moves on (or holds the part)
+                    "content": [{"type": "text", "text": ""}], "usage": usage,   # a failed answer: the route moves
+                    "ecadlib": {"error": str(e), **({"not_sent": True} if unsent else {})}}   # on (or holds the part)
 
     def _verdict(self, job, msg):
         """ok | incomplete | failed (with datasheet's reasons) | refused | truncated, for one answer."""
