@@ -13,7 +13,7 @@ leaves it byte-identical):
      "parts": {"<name>": {"key": <the BOM-line fingerprint>,
                "built_with": {"ecadlib": "0.3.0", "rules_sha256": ...},
                "inputs": [{"method": "GET", "url": ..., "sha256": <sha256 of the response text>}, ...] or null,
-               "local": [{"file": <--lib file>, "sha256": ...}],
+               "local": [{"file": <--lib file, relative to the library folder>, "sha256": ...}],
                "datasheet": {"url", "pdf_sha256", "model", "provider", "schema"} (parts read from a datasheet),
                "symbol": {"source", "file", "sha256", "norm_sha256"},
                "footprint": {"source", "file", "sha256", "norm_sha256", "kicad_mod": {"file", "sha256"}}}}}
@@ -28,7 +28,9 @@ chose with `ecadlib resolve` stay), and runs the librarian again from the lock's
 `--offline` (the HTTP cache only; a datasheet part is rebuilt only from the cached model answer, a model is never
 called). It then reports, per part and file, identical / identical after normalising / DRIFT, plus inputs that
 changed (the BOM, the rules, a cached response, a --lib file) and parts built by another ecadlib version. Exit 0: no
-drift; 1: drift; 2: cannot rebuild (no lock, BOM missing)."""
+drift; 1: drift; 2: cannot rebuild (no lock, BOM missing) or a refused --keep. --keep DIR puts the copy in
+DIR/<library name>: never on, in or around the library or what the lock reads (BOM, cache, --lib files, rules file), and
+an existing DIR/<library name> is replaced only when an earlier --check --keep made it (it holds .ecadlib-rebuild-copy)."""
 import argparse, contextlib, hashlib, json, os, re, shutil, sys, tempfile
 from pathlib import Path
 
