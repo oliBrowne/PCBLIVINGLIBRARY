@@ -27,6 +27,21 @@ def test_ds2_13_profile_price_holds_on_a_private_network_endpoint(tmp_path, monk
     assert "gpt-5: $1.25 in / $10 out" in out.getvalue(), out.getvalue()
 
 
+@lite
+def test_ds2_13_cost_sheet_prices_claude_behind_a_private_gateway(tmp_path, monkeypatch):
+    """Claude behind a LiteLLM gateway on a private address: the reader prices it from Claude's table, `ecadlib costs`
+    said $0 because it took any local endpoint as free before looking the model up."""
+    for host, model, want in (("https://llm-gateway.corp.internal/v1", "claude-opus-5-5", "$4 in / $20 out"),
+                              ("https://10.20.0.5:4000/v1", "claude-haiku-4-5-20251001", "$1 in / $5 out")):
+        f = tmp_path / "gw.toml"
+        f.write_text(f'[ai]\nprovider = "openai-compatible"\nbase_url = "{host}"\nmodel = "{model}"\ndetect = false\n',
+                     encoding="utf-8")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = C.main(["--rules", str(f)])
+        assert rc == 0 and f"{model}: {want}" in out.getvalue(), (host, rc, out.getvalue())
+
+
 # ---------------------------------------------------------------- DS2-16 / DS2-25: the cross-check's second read
 def _second_read(nom, mn="", mx="", unit="mm", name="body_length"):
     """A second-read answer (crosscheck.output_schema's dims list) with one dimension, as the API returns it."""

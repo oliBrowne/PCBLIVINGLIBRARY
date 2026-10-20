@@ -65,16 +65,17 @@ def check_tokens(max_pages=None):
 
 
 def price(model, provider="anthropic", rules=None):
-    """(input, output) $ per MTok, or None: Claude's table, the profile's price, $0 for a local server."""
+    """(input, output) $ per MTok, or None: Claude's table, else $0 for a local server unless [ai.profiles] sets
+    price_in / price_out, else the profile's price. The order the reader prices in (datasheet.price_of)."""
     if model == "local":
         return 0.0, 0.0
+    got = D.PRICES.get(model) or D.PRICES.get(D.base_model(model))   # a dated id at its alias's price, as the reader;
+    if got:                                                            # Claude behind a private gateway too
+        return got
     from .llm import profiles as P
     p = P.profile(model, "openai-compatible" if provider != "anthropic" else provider, rules)
     if provider in ("ollama", "lmstudio", "vllm", "llamacpp") and not p.get("price_set"):
         return 0.0, 0.0                                   # a server on your network; a price in [ai.profiles] wins
-    got = D.PRICES.get(model) or D.PRICES.get(D.base_model(model))   # a dated id at its alias's price, as the reader
-    if got:
-        return got
     if p.get("price_in") is None or p.get("price_out") is None:
         return None
     return float(p["price_in"]), float(p["price_out"])
