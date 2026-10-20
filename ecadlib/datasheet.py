@@ -1193,7 +1193,9 @@ def sanity(spec, review):
         if t == "gullwing":
             if n % 2 and not spec.get("pin_positions") and not spec.get("tab"):   # SOT-23, SOT-223: listed pads
                 review.append(f"pin_count {n} is odd for a dual-row package")
-            rows, low = [("pin rows", n // 2, "body_length")], 0.6
+            pos = [p for p in spec.get("pin_positions") or [] if isinstance(p, dict)]   # listed pads: the longer row
+            per = max(sum(p.get("side") == s for p in pos) for s in "LR") if pos else n // 2   # (TO-263-5: 5 + tab)
+            rows, low = [("pin rows", per, "body_length")], 0.6
         else:
             nlr = spec.get("pins_left_right", n // 4)
             ntb = spec.get("pins_top_bottom", (n - 2 * nlr) // 2)

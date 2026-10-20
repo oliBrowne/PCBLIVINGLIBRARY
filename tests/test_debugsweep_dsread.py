@@ -278,6 +278,20 @@ def test_ds2_24_a_name_that_counts_the_leads_without_the_tab_passes_the_self_che
     assert "self-check: name TO-252-2 says 2 pins, pin_count is 4" in res["needs_review"], res["needs_review"]
 
 
+# ---- DS2-24 (review): the row-fill rule took pin_count // 2 per row for every gull-wing, so a part with all its leads
+# in one row and the tab on the other (TO-263-5_TabPin3, TO-263-7_TabPin4) always "filled under 60 % of the body"
+def test_ds2_24_a_single_row_of_leads_beside_a_tab_fills_the_body():
+    from ecadlib import ds_route as DR
+    for name, pitch, k, tab in (("TO-263-5_TabPin3", "1.70", 5, "3"), ("TO-263-7_TabPin4", "1.27", 7, "4")):
+        res = _tab_read(name, pitch, [str(i) for i in range(1, k + 1)], tab, k, D2PAK)
+        assert DR.assess(res) == ("ok", []), (name, DR.assess(res), res["needs_review"])
+    review = []                                       # a listed row that is short for the body is still questioned
+    D.sanity({"package_type": "gullwing", "pin_count": 5, "pitch": 0.65, "body_length": {"min": 10.0, "nom": 10.2, "max": 10.4},
+              "pin_positions": [{"number": str(i), "side": "L", "offset": (i - 3) * 0.65} for i in range(1, 6)],
+              "tab": {"number": "3", "side": "R"}}, review)
+    assert review == ["pin rows: 5 pins x pitch 0.65 = 3.25 mm, under 60% of body_length 10.2 mm"], review
+
+
 # ---- DS2-21: the 2.30 mm pitch every SOT-223 drawing prints (JEDEC TO-261AA, e = 2.30 BSC) failed the self-check
 def test_ds2_21_sot223_pitch_2_30_is_a_standard_pitch():
     from ecadlib import ds_route as DR
