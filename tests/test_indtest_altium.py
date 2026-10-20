@@ -243,6 +243,27 @@ def test_sync_reports_a_kept_altium_edit_as_up_to_date(tmp_path, monkeypatch):
         assert r["action"] == "up_to_date" and AN.EDITED_NOTE in r["detail"], r
 
 
+# T091: install-menu off Windows uses the Windows folder `build --win-dir` recorded in altium_menu.json
+@lite
+def test_install_menu_uses_the_recorded_windows_folder(tmp_path):
+    from ecadlib import altium_menu as AM
+    if os.name == "nt":
+        return
+    altium = tmp_path / "Altium Designer {0A1B2C3D}"
+    altium.mkdir()
+    (altium / "DXP.RCS").write_bytes(b"PL Mine Command='Client:RunCommandLine' Params='X' Caption='Mine' End\r\n")
+    (tmp_path / "menu").mkdir()
+    try:
+        AM.install_menu_bar(tmp_path / "menu", [altium], running=lambda: False, settle_s=0)
+        raise AssertionError("installed without a Windows folder")
+    except ValueError as e:
+        assert "build --out" in str(e) and "--win-dir 'menu" not in str(e), e
+    (tmp_path / "menu/altium_menu.json").write_text(json.dumps({"win_dir": "D:\\ecadlib-menu"}))
+    AM.install_menu_bar(tmp_path / "menu", [altium], running=lambda: False, settle_s=0)
+    rcs = (altium / "DXP.RCS").read_text(encoding="latin-1")
+    assert "ProjectName=D:\\ecadlib-menu\\ecadlib_menu.PrjScr" in rcs and "PL Mine Command=" in rcs
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):

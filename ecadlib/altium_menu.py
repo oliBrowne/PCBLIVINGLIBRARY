@@ -340,7 +340,19 @@ def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_runnin
     """Put the "ecadlib" menu into Altium's top menu bar (schematic, PCB, SchLib and PcbLib editors, before Window)
     by merging it into each Altium's DXP.RCS, after a backup next to it. Altium must be closed: it writes that
     file when it closes. remove=True takes it out again. -> {"installed"|"removed": [DXP.RCS], "backups": [...]}."""
-    win = check_win_dir(str(Path(menu_dir).resolve()) if os.name == "nt" else str(menu_dir))
+    if os.name == "nt":
+        win = check_win_dir(str(Path(menu_dir).resolve()))
+    else:                                # WSL / Linux writing to the Windows side: the folder `build --win-dir` recorded
+        try:
+            rec = json.loads((Path(menu_dir) / "altium_menu.json").read_text(encoding="utf-8")).get("win_dir")
+        except (OSError, ValueError, AttributeError):
+            rec = None
+        try:
+            win = check_win_dir(rec or str(menu_dir))
+        except ValueError:
+            raise ValueError(f"{menu_dir}: not a Windows folder, and no Windows folder recorded for this menu: run "
+                             f"`ecadlib altium-menu build --out {menu_dir} --win-dir D:\\ecadlib-menu` first (the "
+                             "folder Altium will read it from), or give --out as that Windows folder") from None
     if running():
         raise ValueError("Altium Designer is running: close it first (it rewrites its menu file when it closes), "
                          "then run this again")
