@@ -14,7 +14,8 @@ approvals are only recorded. Keys (all optional):
   no_self_approval  the person who released the item with --allow cannot approve it (default true)
   applies_to        "all" (default) or "allowed": only items released with an --allow override need sign-off
   parts             fnmatch patterns limiting which parts need sign-off (default: every part)
-  reject_blocks     a current reject holds the item until that person approves again (default true)
+  reject_blocks     a current reject holds the item until that person approves again (default true). Without any
+                    policy a current reject holds the item too; only approvals need a policy to be required
 Each decision is stored in the item's `approvals` list: who, key, when, role, decision, comment and `hash`, a sha256
 over the item's .SchLib/.PcbLib bytes and its key fields (name, folder, description, comment, parameters, cleared,
 symbol/footprint refs). Any later change to them makes the approval stale; it then no longer counts. The parameters
@@ -68,15 +69,85 @@ def identity(user=None, cwd=None):
 
 
 def user_key(who):
-    """Comparable key for a person: the e-mail when there is one, else the lower-cased name."""
+    """Comparable key for a person: the e-mail when there is one, else the name (case and spacing folded)."""
     who = str(who or "").strip()
     m = re.search(r"<([^<>]+)>", who)
-    return (m.group(1) if m and m.group(1).strip() else who).strip().lower()
+    if m and m.group(1).strip():
+        return m.group(1).strip().lower()
+    return _fold(who)
+
+
+_EMAIL = re.compile(r"[^\s<>()\[\],;]+@[^\s<>()\[\],;]+")
+
+
+def _fold(s):
+    import unicodedata
+    return " ".join(unicodedata.normalize("NFKC", str(s or "")).casefold().split())
+
+
+# letters of other scripts that look like Latin ones (after casefold), as Unicode's confusables list maps them: a
+# Cyrillic 'а' in 'Аnn' is not a second person
+_CONFUSABLE = str.maketrans({
+    "а": "a", "в": "b", "е": "e", "ё": "e", "з": "3", "і": "i", "ї": "i", "ј": "j", "к": "k", "м": "m", "н": "h",
+    "о": "o", "р": "p", "с": "c", "т": "t", "у": "y", "х": "x", "ѕ": "s", "ԁ": "d", "һ": "h", "ӏ": "l", "ԛ": "q",
+    "ԝ": "w", "ɡ": "g", "α": "a", "β": "b", "ε": "e", "η": "n", "ι": "i", "κ": "k", "μ": "m", "ν": "v", "ο": "o",
+    "ρ": "p", "τ": "t", "υ": "u", "χ": "x", "ζ": "z", "ω": "w", "ϲ": "c", "ı": "i", "ł": "l", "ø": "o", "đ": "d",
+    "ħ": "h", "ŀ": "l"})
+_TRAIL = ".,;:!?-_'\"`"
+
+
+def skeleton(s):
+    """One spelling for text a person types as their name or e-mail: Unicode forms (NFKC) and case folded, zero-width
+    and other invisible format characters dropped, accents removed (Zoë = Zoe), and letters of other scripts that
+    look Latin read as Latin (a Cyrillic or Greek 'а' / 'ο' is an 'a' / 'o')."""
+    import unicodedata
+    s = unicodedata.normalize("NFKC", str(s or ""))
+    s = "".join(ch for ch in s if unicodedata.category(ch) not in ("Cf", "Cc", "Mn", "Me") or ch in "\t\n")
+    s = "".join(ch for ch in unicodedata.normalize("NFKD", s) if unicodedata.category(ch) not in ("Mn", "Me"))
+    return " ".join(unicodedata.normalize("NFKC", s).casefold().translate(_CONFUSABLE).split())
+
+
+def person(who):
+    """'Ann Lee <ann@x.com>', 'ann lee', 'ann@x.com', 'Ann Lee (ann@x.com)' -> (folded name, folded e-mail): spacing,
+    case, Unicode forms, accents, invisible characters and look-alike letters folded (skeleton); a +tag in the e-mail's
+    local part dropped (ann+2@x.com is ann@x.com's mailbox), and a mailto: or trailing punctuation ('Ann.',
+    'ann@x.com.') left out."""
+    s = re.sub(r"mailto:", " ", skeleton(who))
+    m = _EMAIL.search(s)
+    email = ""
+    if m:
+        local, _, dom = m.group(0).partition("@")
+        email = f"{local.split('+', 1)[0].strip(_TRAIL)}@{dom.strip(_TRAIL)}"
+        s = s[:m.start()] + s[m.end():]
+    name = " ".join(re.sub(r"[<>()\[\]\"']", " ", s).split()).strip(_TRAIL + " ")
+    return name, email
+
+
+def same_person(a, b):
+    """Two identities name one person when their e-mails match. When both give an e-mail the e-mail decides (two
+    people may share a name: 'Ann Lee <ann@x.com>' and 'Ann Lee <ann.lee@y.com>' are two); when one of them gives none,
+    their names decide. The two-person rule counts people with this, so a second spelling of one name or mailbox is
+    never a second approver."""
+    (na, ea), (nb, eb) = person(a), person(b)
+    if ea and eb:
+        return ea == eb
+    return bool(na and na == nb)
 
 
 # ---------------------------------------------------------------- policy
 def policy_file(base):
     return next((Path(base) / n for n in POLICY_FILES if (Path(base) / n).exists()), None)
+
+
+def policy_error(cmd, e):
+    """A policy that does not load: one line + hint, exit 2. A broken ecadlib.toml (RulesError) is raised on, to
+    cli.py's message with the doctor hint."""
+    from .rules import RulesError
+    if isinstance(e, RulesError):
+        raise e
+    print(f"ecadlib {cmd}: approval policy: {e}\n  hint: fix the approvals file next to the plan "
+          f"(`ecadlib doctor` checks it)", file=sys.stderr)
+    return 2
 
 
 def load_policy(base):
@@ -108,17 +179,39 @@ def policy_source(base, policy):
     return "none (approvals are recorded, not enforced)"
 
 
+def _names(v, where, key):
+    """A list of names; one name on its own is a one-item list (never split into its letters)."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v]
+    if not isinstance(v, (list, tuple)) or not all(isinstance(x, (str, int, float)) and not isinstance(x, bool) for x in v):
+        raise ValueError(f"{where}: {key} must be a list of names, e.g. [\"librarian\"] (got {v!r})")
+    return [str(x) for x in v]
+
+
 def normalize_policy(raw, where="policy"):
+    if not isinstance(raw, dict):
+        raise ValueError(f"{where}: the approval policy must be an object / table of keys "
+                         f"({', '.join(sorted(DEFAULTS))}), not {type(raw).__name__}")
     bad = set(raw) - set(DEFAULTS)
     if bad:
         raise ValueError(f"{where}: unknown keys {sorted(bad)}; known: {sorted(DEFAULTS)}")
     p = {**DEFAULTS, **raw}
-    p["required"] = int(p["required"])
+    req = p["required"]
+    whole = not isinstance(req, bool) and (isinstance(req, int) or (isinstance(req, float) and req.is_integer())
+                                           or (isinstance(req, str) and req.strip().isdigit()))
+    if not whole:
+        raise ValueError(f"{where}: required must be a whole number of approvals, e.g. 1 (got {req!r})")
+    p["required"] = int(req)
     if p["required"] < 0 or p["applies_to"] not in ("all", "allowed"):
         raise ValueError(f"{where}: required must be >= 0 and applies_to 'all' or 'allowed'")
-    p["roles"] = [str(r) for r in p["roles"]]
-    p["users"] = {user_key(k): [str(r) for r in (v if isinstance(v, list) else [v])] for k, v in (p["users"] or {}).items()}
-    p["parts"] = [str(x) for x in p["parts"]]
+    p["roles"] = _names(p["roles"], where, "roles")
+    if not isinstance(p["users"] or {}, dict):
+        raise ValueError(f"{where}: users must be a table / object {{email: [roles]}}, e.g. "
+                         f"{{\"ann@example.com\": [\"librarian\"]}} (got a {type(p['users']).__name__})")
+    p["users"] = {user_key(k): _names(v, where, f"users.{k}") for k, v in (p["users"] or {}).items()}
+    p["parts"] = _names(p["parts"], where, "parts")
     return p
 
 
@@ -162,17 +255,19 @@ def evaluate(item, policy, base=".", h=None):
     """-> {required, met, hash, approved_by, missing, stale, rejected_by, ignored}."""
     h = h or content_hash(item, base)
     latest = {}
-    for r in item.get("approvals") or []:
-        latest[r.get("key") or user_key(r["who"])] = r
+    for r in item.get("approvals") or []:          # one person, however they spelled their name (same_person)
+        k = r.get("key") or user_key(r["who"])
+        k = next((x for x, y in latest.items() if x == k or same_person(y["who"], r["who"])), k)
+        latest[k] = r
     valid, stale, rejected, ignored = [], [], [], []
-    self_key = user_key(_allow_user(item)) if _allow_user(item) else None
+    self_user = _allow_user(item)
     users = (policy or {}).get("users") or {}
     for k, r in latest.items():
         if r.get("hash") != h:
             stale.append(r["who"])
         elif r["decision"] == "reject":
             rejected.append(f"{r['who']}" + (f" ({r['comment']})" if r.get("comment") else ""))
-        elif policy and policy["no_self_approval"] and self_key and k == self_key:
+        elif policy and policy["no_self_approval"] and self_user and (k == user_key(self_user) or same_person(r["who"], self_user)):
             ignored.append(f"{r['who']}: released it with --allow")
         elif users and (k not in users or (r.get("role") and r["role"] not in users[k])):
             ignored.append(f"{r['who']}: not authorised" + (f" as {r['role']}" if r.get("role") else ""))
@@ -186,9 +281,12 @@ def evaluate(item, policy, base=".", h=None):
         for role in policy["roles"]:
             if not any(r.get("role") == role for r in valid):
                 missing.append(f"an approval as {role}")
-        if rejected and policy["reject_blocks"]:
-            missing.append("rejected by " + "; ".join(rejected))
-    return {"required": need, "met": not missing, "hash": h, "approved_by": [r["who"] for r in valid],
+    # a current reject is an explicit "no": it holds the part with or without a policy (a policy may turn that off
+    # with reject_blocks = false); only approvals need a policy to be required
+    blocked = bool(rejected) and (not policy or policy["reject_blocks"])
+    if blocked:
+        missing.append("rejected by " + "; ".join(rejected))
+    return {"required": need or blocked, "met": not missing, "hash": h, "approved_by": [r["who"] for r in valid],
             "missing": missing, "stale": stale, "rejected_by": rejected, "ignored": ignored}
 
 
@@ -200,10 +298,10 @@ def post_check(items, base=".", rows=None):
         row = rows[i] if rows and i < len(rows) else None
         if it.get("duplicate_of"):
             it["status"] = "duplicate"
-        if not policy:
+        ev = evaluate(it, policy, base) if policy or it.get("approvals") else None
+        if not policy and not (ev and ev["required"]):
             it.pop("approval", None)
-        else:
-            ev = evaluate(it, policy, base)
+        else:                                      # a policy, or a current reject (which holds the part without one)
             it["approval"] = {"policy": policy, "checked_hash": ev["hash"],
                               **{k: ev[k] for k in ("required", "met", "approved_by", "missing", "stale")}}
             if it["status"] in ("ready", "awaiting_approval"):    # awaiting_approval only ever comes from ready
@@ -222,7 +320,10 @@ def push_block(item, policy=None, base="."):
         return f"duplicate of {item.get('duplicate_of') or '?'} (dedupe)"
     snap = item.get("approval") or {}
     pol = policy if policy is not None else snap.get("policy")
-    if not pol:
+    if not pol:                                    # no policy: only a current reject holds the part
+        ev = evaluate(item, None, base) if item.get("approvals") else None
+        if ev and ev["required"] and not ev["met"]:
+            return "rejected: " + "; ".join(ev["missing"])
         return "awaiting approval" if item.get("status") == "awaiting_approval" else None
     ev = evaluate(item, pol, base)
     if snap.get("checked_hash") and snap["checked_hash"] != ev["hash"] and item.get("status") != "held":
@@ -253,7 +354,8 @@ def decide(item, decision, who, role=None, comment="", base=".", policy=None):
                 raise Refused(f"{who} may sign as {', '.join(users[k])}, not {role}")
             if not role and len(users[k]) == 1:
                 role = users[k][0]
-        if decision == "approve" and policy["no_self_approval"] and _allow_user(item) and user_key(_allow_user(item)) == k:
+        if decision == "approve" and policy["no_self_approval"] and _allow_user(item) and (
+                user_key(_allow_user(item)) == k or same_person(_allow_user(item), who)):
             raise Refused(f"{who} released {item['name']} with --allow and cannot approve it (no_self_approval)")
     rec = {"who": who, "key": k, "when": now(), "role": role or "", "decision": decision,
            "comment": comment or "", "hash": content_hash(item, base)}
@@ -264,9 +366,16 @@ def decide(item, decision, who, role=None, comment="", base=".", policy=None):
 def refresh_status(item, policy, base="."):
     """After a decision: flip between ready and awaiting_approval (never touches held items). An item whose
     content changed since the release check stays awaiting_approval until release-check runs again."""
-    if item.get("status") not in ("ready", "awaiting_approval") or not policy:
+    if item.get("status") not in ("ready", "awaiting_approval"):
         return item.get("status")
     ev = evaluate(item, policy, base)
+    if not policy and not ev["required"]:          # no policy and no current reject: nothing to wait for
+        snap = item.get("approval") or {}
+        if snap and not snap.get("policy"):
+            item.pop("approval", None)
+            if snap.get("checked_hash") in (None, ev["hash"]):
+                item["status"] = "ready"           # it waited only for the reject that is now taken back
+        return item["status"]
     snap = item.setdefault("approval", {"policy": policy, "checked_hash": None})
     snap.update({"policy": policy, **{k: ev[k] for k in ("required", "met", "approved_by", "missing", "stale")}})
     changed = snap.get("checked_hash") not in (None, ev["hash"])
@@ -350,7 +459,7 @@ def _run(a):
     try:
         policy = load_policy(base)
     except (ValueError, OSError) as e:
-        sys.exit(f"approval policy: {e}")
+        return policy_error("approve", e)
     by = {i["name"]: i for i in items}
     unknown = set(a.part) - set(by)
     if unknown:
@@ -379,7 +488,9 @@ def _run(a):
         try:
             rec = decide(it, a.action, who, a.role, a.comment, base, policy)
             entry.update(role=rec["role"], hash=rec["hash"], result="recorded", status=refresh_status(it, policy, base))
-            note = "" if it.get("status") != "held" else " (still held by the release check)"
+            note = (" (still held by the release check)" if it.get("status") == "held" else
+                    " (held: not pushed or exported until this rejection is taken back with an approve)"
+                    if a.action == "reject" else "")
             print(f"  {a.action.rstrip('e')}ed  {it['name']:<28} -> {it.get('status')}{note}")
         except Refused as e:
             refused += 1
@@ -387,11 +498,14 @@ def _run(a):
             print(f"  refused  {it['name']:<28} {e}")
         audit(base, entry)
     write_text_atomic(plan, json.dumps(items, indent=2))
+    from .librarian import refresh_review
+    refresh_review(plan, items)
     from . import timing                       # review time: from the release check to this decision
     timing.mark_review(plan.parent, a.action)
     if not policy:
         print("no approval policy (approvals.json/.toml next to the plan, or [release.approvals] in ecadlib.toml): "
-              "recorded, but push does not require them")
+              + ("a rejection still holds the part (an approve by the same person takes it back)" if a.action == "reject"
+                 else "approvals are recorded, but push does not require them"))
     print(f"{len(sel) - refused} recorded as {who}, {refused} refused -> {plan}; log {base / AUDIT}")
     return 2 if refused else 0
 

@@ -120,7 +120,7 @@ dialog[open] { animation: pop .45s var(--ease) both; }
 dialog::backdrop { background: color-mix(in srgb, var(--bg) 55%, transparent); backdrop-filter: blur(3px); }
 .dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); gap: 10px; flex-wrap: wrap; }
 .dlg-body { display: grid; grid-template-columns: 1fr 1.15fr; gap: 18px; padding: 18px; }
-@media (max-width: 760px) { .dlg-body { grid-template-columns: 1fr; } input[type=search] { min-width: 0; width: 100%; } }
+@media (max-width: 760px) { .dlg-body { grid-template-columns: minmax(0, 1fr); } input[type=search] { min-width: 0; width: 100%; } }   /* minmax: the layer strip scrolls, the column never outgrows the dialog */
 textarea { width: 100%; min-height: 330px; font: 12px/1.5 var(--mono); background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
 /* footprint preview: Altium's PCB editor */
 .preview { background: var(--pcb-board); border: 1px solid #000; border-radius: 10px 10px 0 0; padding: 0; text-align: center; min-height: 240px; display: grid; place-items: center; overflow: hidden; }
@@ -271,6 +271,7 @@ details summary { cursor: pointer; color: var(--muted); }
 <header>
   <h1><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><path d="M16 23.5L16 13.5"/><path d="M16 20L10 14"/><path d="M16 15L22 9"/><circle cx="16" cy="26.8" r="2.75" stroke-width="2.5"/></g><path fill="var(--copper, #c2622d)" d="M8.58 13.91 L7.32 13.64 L6.22 13.22 L5.26 12.66 L4.44 11.97 L3.76 11.18 L3.21 10.30 L2.78 9.34 L2.47 8.33 L2.28 7.28 L2.19 6.20 L2.20 5.12 L3.28 5.12 L4.34 5.23 L5.36 5.46 L6.33 5.82 L7.23 6.32 L8.03 6.95 L8.74 7.73 L9.31 8.66 L9.74 9.74 L10.01 10.99 L10.11 12.41 L10.00 14.00Z"/><path fill="var(--copper, #c2622d)" d="M22.02 7.74 L22.18 6.58 L22.48 5.54 L22.90 4.61 L23.45 3.79 L24.10 3.09 L24.85 2.50 L25.70 2.03 L26.62 1.68 L27.62 1.44 L28.68 1.32 L29.80 1.32 L29.80 2.49 L29.66 3.59 L29.41 4.61 L29.03 5.55 L28.54 6.40 L27.93 7.14 L27.20 7.77 L26.37 8.29 L25.43 8.68 L24.39 8.93 L23.24 9.04 L22.00 9.00Z"/></svg>ecadlib</h1>
   <span class="meta" id="meta">loading…</span>
+  <a class="keyhint" href="setup" style="text-decoration:none" title="AI model and key, Altium / KiCad, folders, add ecadlib to Altium and KiCad">Setup</a>
   <button class="keyhint" id="keysbtn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">? Shortcuts</button>
 </header>
 <nav class="steps" id="steps" aria-label="Sections" hidden>
@@ -374,7 +375,7 @@ details summary { cursor: pointer; color: var(--muted); }
         <button class="small" id="dedupe">Find duplicates</button>
         <button class="small" id="aiprice" title="What reading the remaining datasheets with AI costs; nothing is sent">AI cost of the rest</button>
       </div>
-      <div class="muted small" style="margin-top:6px" id="signnote">There is no login: ecadlib is a local tool, so whatever name you type is recorded as given with each approval, rejection or release override (in the plan and in <span class="mono">approvals_audit.jsonl</span>). Sign-off is enforced only when an <span class="mono">approvals.json</span> sits next to the plan.</div>
+      <div class="muted small" style="margin-top:6px" id="signnote">There is no login: ecadlib is a local tool, so whatever name you type is recorded as given with each approval, rejection or release override (in the plan and in <span class="mono">approvals_audit.jsonl</span>). Sign-off is enforced only when an <span class="mono">approvals.json</span> sits next to the plan; a rejection always holds the part.</div>
       <div class="out" id="approut"></div>
       <div class="out" id="dedupeout"></div>
     </div>
@@ -389,7 +390,7 @@ details summary { cursor: pointer; color: var(--muted); }
     <div class="grid3" style="margin-top:10px">
       <div class="box">
         <h3>Database library (DbLib)</h3>
-        <p class="muted small">Writes parts.sqlite, parts.xlsx and two .DbLib files for this BOM. Open a .DbLib in Altium Designer; the SQLite one needs the SQLite3 ODBC driver, the Excel one needs the Access database engine.</p>
+        <p class="muted small">After step 2: a .DbLib, its Excel table (.xlsx, also as .csv) and the ready parts' .SchLib / .PcbLib, in altium/&lt;BOM&gt;/; held parts stay out. Open the .DbLib in Altium Designer (it needs the Access database engine). Before step 2: a draft from the BOM check (SQLite and Excel tables, no symbols or footprints yet).</p>
         <button id="dblib">Export DbLib</button>
         <div class="out" id="dblibout"></div>
       </div>
@@ -809,7 +810,10 @@ async function action(btn, out, fn) {
 }
 $("#dblib").addEventListener("click", e => action(e.target, $("#dblibout"), async () => {
   const r = await api("/api/export/dblib", { bom: current.bom });
-  return "Written: " + r.files.map(fileLink).join(" · ") +
+  if (r.from_plan) return `${r.written} part(s) in <span class="mono">${esc(r.folder)}</span>: ` + r.files.map(fileLink).join(" · ") +
+    (r.held.length ? `<div class="muted">Held, left out until a person decides: ${esc(r.held.join(", "))}</div>` : "") +
+    `<div class="next s-info"><span>Next: copy the whole folder (with its SchLib and PcbLib folders) next to your Altium libraries and open the .DbLib in Altium Designer. The Excel workbook needs the Access database engine.</span></div>`;
+  return "Written (draft, from the triage only: run Fill the library first to build symbols and footprints): " + r.files.map(fileLink).join(" · ") +
     `<div class="next s-info"><span>Next: copy these files next to your Altium libraries and open a .DbLib in Altium Designer. The SQLite one needs the SQLite3 ODBC driver; the Excel one needs the Access database engine.</span></div>`;
 }));
 $("#models").addEventListener("click", e => action(e.target, $("#modelsout"), async () => {
@@ -981,8 +985,9 @@ async function showLibrarian(r) {
 async function loadParts(quiet) {
   const bom = current && current.bom;
   if (!bom) return;
-  try { parts = await api("/api/parts?bom=" + encodeURIComponent(bom)); }
+  try { parts = await api("/api/parts?bom=" + encodeURIComponent(bom) + (quiet ? "&ifplan=1" : "")); }
   catch (e) { if (quiet) { parts = null; $("#libout").innerHTML = ""; return; } throw e; }
+  if (!parts.plan) { parts = null; $("#libout").innerHTML = ""; return; }   // quiet: no plan for this BOM yet
   if (!current || current.bom !== bom) return;
   $("#librerun").hidden = false; $("#libtools").hidden = false;
   renderParts();
@@ -1063,7 +1068,7 @@ function showPanel(p, focus = true) {
   const acts = [];
   if (st === "held") acts.push(`<button class="primary" data-pick="${esc(p.part)}">Pick a symbol or footprint…</button>`);
   if (url) acts.push(`<a class="small" href="${esc(url)}${p.datasheet.page ? "#page=" + encodeURIComponent(p.datasheet.page) : ""}" target="_blank" rel="noopener noreferrer" id="pdslink">Open the datasheet${p.datasheet.page ? ` (page ${esc(p.datasheet.page)})` : ""}</a>`);
-  if (st === "held" && !p.allowed) acts.push(`<button data-allow="${esc(p.part)}">Release anyway (I checked it)</button>`);
+  if (st === "held" && !p.allowed) acts.push(`<button data-allow="${esc(p.part)}"${p.reasons.some(r => /^files\./.test(r.code)) ? ' title="A missing or damaged symbol or footprint file cannot be released anyway: the other holds can."' : ""}>Release anyway (I checked it)</button>`);
   if (p.allowed) acts.push(`<button data-unallow="${esc(p.part)}">Hold it again</button>`);
   if (!p.change && (st === "ready" || st === "awaiting_approval") && !pending.has(p.part)) acts.push(`<button class="primary" data-approve="${esc(p.part)}">Approve</button><button data-reject="${esc(p.part)}">Reject…</button>`);
   $("#pbody").innerHTML = `${p.picture ? `<div class="bigpic" aria-label="Footprint top view">${p.picture.replace(/width="\d+" height="\d+"/, "")}</div>` : ""}
@@ -1097,11 +1102,11 @@ function changeRows(list) {
 function changeBlock(p) {
   const c = p.change; if (!c) return "";
   const n = c.changes ? c.changes.length : 0;
-  return `<h3>Held update to revision ${esc(c.base)}</h3>
+  return `<h3>${c.twin ? `New part held: it has the MPN of released ${esc(c.twin.part)} (revision ${esc(c.twin.revision)})` : `Held update to revision ${esc(c.base)}`}</h3>
     <p class="small">${esc(c.writer ? `Proposed by ${c.writer}` : "Proposed")}${c.proposed_at ? ` on ${esc(c.proposed_at.slice(0, 16).replace("T", " "))}` : ""}. The released part stays as it is until this is approved.${c.approvals && c.approvals.length ? ` Approved so far by ${esc(c.approvals.join(", "))}.` : ""}${c.rejected_by ? ` Rejected before by ${esc(c.rejected_by)}.` : ""}${c.refused ? ` The last approval was not applied: ${esc(c.refused)}` : ""}</p>
     ${n ? changeRows(c.changes.slice(0, 200)) + (n > 200 ? `<div class="muted small">and ${n - 200} more</div>` : "") : ""}
     ${c.used_in && c.used_in.length ? `<p class="small">Used in: ${esc(c.used_in.join(", "))}</p>` : ""}
-    <div class="pactions"><button class="primary" data-chg="approve" data-part="${esc(p.part)}">Approve the update</button><button data-chg="reject" data-part="${esc(p.part)}">Keep the released part (reject)…</button></div>`;
+    <div class="pactions"><button class="primary" data-chg="approve" data-part="${esc(p.part)}" data-digest="${esc(c.digest || "")}">Approve the update</button><button data-chg="reject" data-part="${esc(p.part)}">Keep the released part (reject)…</button></div>`;
 }
 async function loadPartHistory(part) {
   const box = () => popen === part && $("#phist");
@@ -1118,7 +1123,7 @@ async function loadPartHistory(part) {
         `<td>${esc(e.by || e.writer || "")}</td><td>${e.revision && (e.event === "release" || e.event === "revert") && e.revision !== r.revision ? `<button class="small" data-revert="${esc(e.revision)}" data-part="${esc(part)}">Release r${esc(e.revision)} again…</button>` : e.revision === r.revision && e.event !== "publish" ? '<span class="pill s-ok">released now</span>' : ""}</td></tr>`).join("") + "</tbody></table></div>";
   } catch (err) { if (box()) box().textContent = `Could not read the history: ${err.message}`; }
 }
-async function changeDecide(part, decision) {
+async function changeDecide(part, decision, digest) {
   const who = signer(); if (!who) return;
   let comment = "";
   if (decision === "reject") { comment = prompt(`Why keep the released ${part}? (required)`) || ""; if (!comment.trim()) return; }
@@ -1126,7 +1131,8 @@ async function changeDecide(part, decision) {
   if (comment === null) return;
   const role = $("#signrole").value.trim() || null;
   try {
-    const r = await api("/api/change/decide", { bom: current.bom, part, decision, user: who, role, comment });
+    // the digest of the change shown on this page: a change proposed again since is refused, never approved unseen
+    const r = await api("/api/change/decide", { bom: current.bom, part, decision, user: who, role, comment, digest });
     const res = r.results.find(x => x.part === part) || r.results[0] || {};
     toast(decision === "reject" ? `${part}: update rejected, the released part is kept.`
       : res.result === "approval recorded" ? `${part}: approval recorded (${res.approvals} of ${res.needed}).` : `${part}: update approved${res.revision ? `, now revision ${res.revision}` : ""}.`);
@@ -1162,7 +1168,9 @@ function decideLater(part, decision, who, role, comment) {
     try {
       const r = await api("/api/approvals/decide", { bom: current.bom, part, decision, user: who, role, comment });
       banner($("#approut"), ""); loadStatus().catch(() => {});
-      if (!r.decision.enforced) toast(`${what}. Recorded (there is no approvals.json, so sign-off is not enforced).`);
+      if (!r.decision.enforced) toast(decision === "reject"
+        ? `${what}. It is held: not sent to Altium or exported until it is approved again.`
+        : `${what}. Recorded (there is no approvals.json, so sign-off is not enforced).`);
       await loadParts();
     } catch (err) { await loadParts().catch(() => {}); toast(`${what} failed: ${err.message}`, { bad: true, ms: 8000 }); }
   };
@@ -1179,7 +1187,10 @@ async function release(part, allow) {
   try {
     await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: $("#signer").value.trim() || null });
     await loadParts(); loadStatus().catch(() => {});
-    if (allow) toast(`Released ${part} anyway: it goes to Altium with the next push.`, { action: "Undo", onAction: () => release(part, false) });
+    const p = findPart(part), hard = p && p.reasons.find(r => /^files\./.test(r.code));
+    if (allow && p && effective(p) === "held")       // a missing or damaged file cannot be released anyway: say so
+      toast(`${part} stays held: ${hard ? hard.text : (p.reasons[0] || {}).text || "the release check still holds it."} Release anyway cannot override that, so it does not go to Altium.`, { action: "Undo", onAction: () => release(part, false) });
+    else if (allow) toast(`Released ${part} anyway: it goes to Altium with the next push.`, { action: "Undo", onAction: () => release(part, false) });
     else toast(`${part} is held again.`);
   } catch (err) { banner(popen ? $("#perr") : $("#liberr"), err.message); }
 }
@@ -1190,7 +1201,7 @@ async function partClick(e) {
   if (d.pf !== undefined) { pfilter = d.pf; renderParts(); const n = $(`#libout [data-pf="${CSS.escape(pfilter)}"]`); if (n) n.focus(); return; }
   if (d.undo) return undoPending(d.undo);
   if (d.pick) return openPick(d.pick);
-  if (d.chg) return changeDecide(d.part, d.chg);
+  if (d.chg) return changeDecide(d.part, d.chg, d.digest || "");
   if (d.revert) return revertTo(d.part, Number(d.revert));
   if (d.approve || d.reject) return decide(d.approve || d.reject, d.approve ? "approve" : "reject", b);
   if (d.allow || d.unallow) return release(d.allow || d.unallow, !!d.allow);
@@ -1518,11 +1529,14 @@ $("#doctorbtn").addEventListener("click", e => action(e.target, $("#doctorout"),
     `<details style="margin-top:6px"><summary class="muted small">${ok} OK check(s)</summary>${r.checks.filter(c => c.level === "OK").map(row).join("")}</details>`;
 }));
 // #review=<BOM>: the parts the librarian built for that BOM, held ones with their reasons (the Altium / KiCad menu's
-// "Open review queue" links here for the parts added from the menu)
+// "Open review queue" links here for the parts added from the menu). Without it, a workspace with a plan but no BOM
+// check yet (`ecadlib demo`, `ecadlib librarian`) opens its newest planned BOM, so step 2 shows its parts.
 async function openReview() {
   const m = /^#review=(.+)$/.exec(location.hash || "");
-  if (!m) return;
-  const bom = decodeURIComponent(m[1]), h = history.find(x => x.bom === bom);
+  if (!m && (history.length || current)) return;
+  if (!m && !info) await loadInfo();
+  const bom = m ? decodeURIComponent(m[1]) : (info.planned || [])[0], h = history.find(x => x.bom === bom);
+  if (!bom) return;
   let t = null;
   if (h) { try { t = await api("/api/triage/result?id=" + encodeURIComponent(h.id)); } catch (e) { t = null; } }
   showResult(t || { bom, name: bom.split("/").pop(), rows: [], counts: {}, mapping: {}, reports: ["", ""], finished: null });

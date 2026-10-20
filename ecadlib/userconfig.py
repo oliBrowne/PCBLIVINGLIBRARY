@@ -84,6 +84,34 @@ def _read_json(path):
         return {}
 
 
+def damaged(path):
+    """Why an existing keys.json / settings.json can't be read ("not valid JSON (line 3)"), or None (fine or absent)."""
+    try:
+        v = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        return f"unreadable ({e.strerror or e})"
+    except ValueError as e:
+        return f"not valid JSON (line {getattr(e, 'lineno', '?')})"
+    return None if isinstance(v, dict) else "not a JSON object"
+
+
+def _read_for_write(path):
+    """The file's dict before a change is written back. A damaged file is copied aside first (<name>.damaged-<time>),
+    with a warning, so a one-character slip never silently loses every stored key."""
+    why = damaged(path)
+    if why:
+        import shutil, time
+        keep = path.with_name(f"{path.name}.damaged-{time.strftime('%Y%m%d-%H%M%S')}")
+        shutil.copy2(path, keep)
+        if os.name != "nt":
+            os.chmod(keep, 0o600)
+        print(f"warning: {path} was {why}; it is kept as {keep.name} and a new file is written", file=sys.stderr)
+        return {}
+    return _read_json(path)
+
+
 # ------------------------------------------------------------------ settings
 def load_settings(environ=None):
     return _read_json(config_dir(environ) / SETTINGS)
@@ -91,7 +119,7 @@ def load_settings(environ=None):
 
 def save_settings(changes, environ=None):
     """Merge `changes` into settings.json; returns the new settings."""
-    s = load_settings(environ)
+    s = _read_for_write(config_dir(environ) / SETTINGS)
     s.update(changes)
     _write_private(config_dir(environ) / SETTINGS, json.dumps(s, indent=2) + "\n")
     return s
@@ -153,7 +181,7 @@ def set_key(name, value, environ=None):
     if len(value) > MAX_KEY or any(c in value for c in "\r\n\0"):
         raise ValueError("that does not look like an API key (too long, or more than one line)")
     f = config_dir(environ) / KEYS
-    keys = _read_json(f)
+    keys = _read_for_write(f)
     keys[name] = _encode(value)
     _write_private(f, json.dumps(keys, indent=2) + "\n")
 
@@ -198,6 +226,14 @@ def secret(name, environ=None):
     env = os.environ if environ is None else environ
     if not name:
         return None
+    if name == "NEXAR_TOKEN" and not os.environ.get(NO_STORED):
+        try:                                          # signed in with the user's own Nexar app: a fresh token
+            from . import nexar_signin
+            v = nexar_signin.access_token()
+        except Exception:
+            v = None
+        if v:
+            return v
     try:
         v = None if os.environ.get(NO_STORED) else get_key(name)
     except Exception:                                 # a broken config folder must not stop any command
@@ -209,7 +245,7 @@ def key_source(name, environ=None):
     """Where secret(name) comes from: "stored", "environment" or None (names only, never the value)."""
     env = os.environ if environ is None else environ
     try:
-        if not os.environ.get(NO_STORED) and get_key(name):
+        if not os.environ.get(NO_STORED) and (get_key(name) or name == "NEXAR_TOKEN" and get_key("NEXAR_SIGNIN")):
             return "stored"
     except Exception:
         pass
@@ -259,9 +295,21 @@ def main(argv=None, inp=None, out=print):
     r = sub.add_parser("remove", help="forget a stored key")
     r.add_argument("name")
     a = ap.parse_args(argv)
+    try:
+        return _keys(a, inp, out)
+    except (ValueError, EOFError) as e:          # an empty key, a bad name, no input: the user's to fix, not a bug
+        print(f"ecadlib keys {a.cmd}: {str(e) or 'no input (nothing was typed)'}", file=sys.stderr)
+        return 2
+
+
+def _keys(a, inp, out):
     if a.cmd == "list":
         names = stored_names()
         out(f"stored in {config_dir() / KEYS}" + (" (encrypted for this Windows account)" if os.name == "nt" else ""))
+        why = damaged(config_dir() / KEYS)
+        if why:
+            out(f"  {KEYS} is {why}: fix it by hand, or `ecadlib keys set` writes a new one (the old one is kept)")
+            return 1
         if not names:
             out("  none stored")
         for n in names:

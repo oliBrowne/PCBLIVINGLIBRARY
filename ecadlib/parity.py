@@ -34,10 +34,11 @@ length, width and axis direction (mod 180). Tolerances are TOL (mm, degrees, per
 Levels: `error` is a real difference (the release check holds the part, `[release] parity = "hold"`); `warn` is a
 documented approximation of the converters (a curved custom pad drawn as its bounding rectangle, a trapezoid as a
 rectangle, ...): reported, not held."""
-import argparse, json, math, re, sys
+import argparse, copy, json, math, re, sys
 from pathlib import Path
 
 from . import altium_lib as AL, sexpr
+from .fsutil import report_file
 
 TOL = {"position": 0.001, "size": 0.001, "drill": 0.001, "margin": 0.001, "rotation": 0.01, "corner": 1.0,
        "courtyard": 0.005, "window": 0.002, "outline": 0.005, "coverage": 0.5,
@@ -91,6 +92,15 @@ def _bbox(pts):
         return None
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]
     return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _poly_area(pts):
+    q = list(pts)
+    return abs(sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(q, q[1:] + q[:1]))) / 2
+
+
+def _win_key(kind, box):
+    return (kind, tuple(round(v, 4) for v in box))
 
 
 def _rot_pts(cx, cy, w, h, rot):
@@ -198,8 +208,11 @@ def _filled(g):
 
 def kicad_footprint(text):
     """A .kicad_mod -> canonical footprint dict (KiCad frame, mm)."""
-    t = sexpr.parse(text) if isinstance(text, str) else text
-    out = {"name": str(t[1]), "pads": [], "windows": [], "courtyard": None, "models": [], "notes": [], "approx": []}
+    from . import kicad_import as K
+    t = sexpr.parse(text) if isinstance(text, str) else copy.deepcopy(text)
+    K.inherit_margins(t)                      # footprint-level mask / paste margins: every pad's, as KiCad applies them
+    out = {"name": str(t[1]), "pads": [], "windows": [], "window_area": {}, "courtyard": None, "models": [], "notes": [],
+           "approx": []}
     for p in sexpr.find(t, "pad"):
         num, kind, shape = str(p[1]), p[2], p[3]
         at, size = sexpr.first(p, "at"), sexpr.first(p, "size")
@@ -219,6 +232,10 @@ def kicad_footprint(text):
                     out["approx"].append(f"{what} window with curves written as its bounding rectangle")
                 else:                                       # the anchor, then each primitive (Altium: one region each)
                     out["windows"] += [(what, b) for b in [_bbox(_rot_pts(x, y, w, h, rot))] + parts]
+                    rr = sexpr.first(p, "roundrect_rratio")
+                    r = min(_f(rr[1]), 0.5) * min(w, h) if rr and shape == "roundrect" else 0.0
+                    if r > 0:                               # the true area of a rounded window (EXP-10)
+                        out["window_area"][_win_key(what, _bbox(_rot_pts(x, y, w, h, rot)))] = w * h - (4 - math.pi) * r * r
             continue
         rr = sexpr.first(p, "roundrect_rratio")
         kshape = {"circle": "round", "oval": "round"}.get(shape, shape)
@@ -366,7 +383,8 @@ def altium_footprint(fp, courtyard=AL.MECH15):
     from .kicad_export import _custom_pads
     recs = fp["records"]
     custom, used = _custom_pads(recs)
-    out = {"name": fp["name"], "pads": [], "windows": [], "courtyard": None, "bodies": 0, "embedded": 0, "notes": []}
+    out = {"name": fp["name"], "pads": [], "windows": [], "window_area": {}, "courtyard": None, "bodies": 0, "embedded": 0,
+           "notes": []}
     for r in recs:
         if r["type"] != "pad":
             continue
@@ -423,7 +441,9 @@ def altium_footprint(fp, courtyard=AL.MECH15):
             a, b = _a2k(r["x1"], r["y1"]), _a2k(r["x2"], r["y2"])
             out["windows"].append((win_layers[layer], _bbox([a, b])))
         elif t == "region" and layer in win_layers:
-            out["windows"].append((win_layers[layer], _bbox(_a2k(px, py) for px, py in r["pts"])))
+            q = [_a2k(px, py) for px, py in r["pts"]]
+            out["windows"].append((win_layers[layer], _bbox(q)))
+            out["window_area"][_win_key(win_layers[layer], _bbox(q))] = _poly_area(q)    # its outline, not its box
         if layer != courtyard:
             continue
         if t == "track":
@@ -539,7 +559,7 @@ def compare_pad(k, a, out):
         _d(out, "warn" if approx else "error", what, "shape", kshape, ashape, ", ".join(approx))
         if not approx:
             return
-    elif kshape == "roundrect" and abs(k["corner"] - a["corner"]) > TOL["corner"]:
+    elif kshape == "roundrect" and not npth and abs(k["corner"] - a["corner"]) > TOL["corner"]:   # NPTH: no copper
         _d(out, "error", what, "corner radius", k["corner"], a["corner"], "% of the shorter side / 2")
     if kshape == "custom" and ashape == "custom":
         if k.get("anchor") != a.get("anchor"):
@@ -573,7 +593,8 @@ def exposed_pad(fp):
     ep = max(cands, key=lambda p: p["w"] * p["h"])
     inside = [b for k, b in fp["windows"] if k == "paste" and b and ep["x"] - ep["w"] / 2 - 1e-6 <= (b[0] + b[2]) / 2 <= ep["x"] + ep["w"] / 2 + 1e-6
               and ep["y"] - ep["h"] / 2 - 1e-6 <= (b[1] + b[3]) / 2 <= ep["y"] + ep["h"] / 2 + 1e-6]
-    area = sum((b[2] - b[0]) * (b[3] - b[1]) for b in inside)
+    wa = fp.get("window_area") or {}                  # a rounded window's own area, else its rectangle (EXP-10)
+    area = sum(wa.get(_win_key("paste", b), (b[2] - b[0]) * (b[3] - b[1])) for b in inside)
     return {"num": ep["num"], "w": ep["w"], "h": ep["h"], "windows": len(inside),
             "coverage": round(100.0 * area / (ep["w"] * ep["h"]), 2) if inside else (100.0 if ep.get("paste") else 0.0)}
 
@@ -708,11 +729,19 @@ def altium_fields(row, rules=None):
     """A DbLib row (or the plan's parameters as one) -> {key field: value}."""
     from . import rules as RU
     p = lambda k: RU.param_name(k, rules)
-    get = lambda *ks: next((str(row.get(k) or "").strip() for k in ks if str(row.get(k) or "").strip()), "")
+    def get(*ks):
+        v = next((str(row.get(k) or "").strip() for k in ks if str(row.get(k) or "").strip()), "")
+        if v.startswith("=") and len(v) > 1:  # Altium's '=Part Number' / '=Value': the parameter it names
+            ref = next((k for k in row if str(k).lower() == v[1:].strip().lower()), None)
+            if ref is not None:
+                return str(row.get(ref) or "").strip()
+        return v
     return {"Value": get(p("Value"), "Value", "Comment"), "Description": get("Description"),
             "Manufacturer": get(p("Manufacturer"), "Manufacturer"),
             "MPN": get(p("Manufacturer Part Number"), "Manufacturer Part Number"),
-            "Datasheet": get(p("ComponentLink2URL"), "ComponentLink2URL", p("Datasheet"), "Datasheet")}
+            "Datasheet": get(p("ComponentLink2URL"), "ComponentLink2URL", p("Datasheet"), "Datasheet") or get(*(   # or the
+                f"ComponentLink{m.group(1)}URL" for k in sorted(row) for m in [re.fullmatch(r"ComponentLink(\d+)Description", str(k))]
+                if m and "datasheet" in str(row.get(k) or "").lower()))}          # link slot described "Datasheet" (as kicad-export)
 
 
 def plan_row(item):
@@ -790,6 +819,11 @@ class KiCadLib:
             if len(syms) != 1:
                 raise ValueError(f"{folder}: {len(syms)} .kicad_sym files; pass --name")
             name = syms[0].stem
+        elif not (self.dir / f"{name}.kicad_sym").is_file():   # the --name given to kicad-export, which names the
+            from .kicad_export import libname                    # files libname(name); an older export: as given
+            if not (self.dir / f"{libname(name)}.kicad_sym").is_file():
+                raise ValueError(f"{folder}: no {name}.kicad_sym (the --name given to kicad-export)")
+            name = libname(name)
         self.name = name
         f = self.dir / f"{name}.kicad_sym"
         self.symbols = {}
@@ -821,8 +855,10 @@ def check_item(item, base=".", rules=None, kicad=None, altium_rows=None, second_
     fp_f, sym_f = _rel(base, (item.get("footprint") or {}).get("file")), _rel(base, (item.get("symbol") or {}).get("file"))
     fps = AL.read_pcblib(fp_f) if fp_f and fp_f.is_file() else None
     syms = AL.read_schlib(sym_f)[1] if sym_f and sym_f.is_file() else None
-    a_fp = altium_footprint(fps[0], _courtyard_layer(rules)) if fps else None
-    a_sym = altium_symbol(syms[0]) if syms else None
+    # a library of many (dedupe --merge onto a company file): the entry the plan names, as kicad-export writes it; a ref
+    # the file does not hold raises (check_plan reports the part), never the file's first entry
+    a_fp = altium_footprint(X._pick(fps, item["footprint"].get("ref"), fp_f, "footprint"), _courtyard_layer(rules)) if fps else None
+    a_sym = altium_symbol(X._pick(syms, item["symbol"].get("ref"), sym_f, "symbol")) if syms else None
     k_fp = k_sym = None
     if kicad is None:
         kmod = RC._kicad_mod(item, base, fp_f) if fp_f else None
@@ -886,7 +922,7 @@ def kicad_db_rows(folder, lib):
     if not f.is_file() or not (Path(folder) / f"{lib}.kicad_dbl").is_file():
         return None
     out = {}
-    con = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
+    con = sqlite3.connect(f.resolve().as_uri() + "?mode=ro", uri=True)    # quoted: a '#', '?' or '%' in the path
     try:
         for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"):
             cur = con.execute(f'SELECT * FROM "{t}"')
@@ -899,23 +935,29 @@ def kicad_db_rows(folder, lib):
     return out
 
 
-def altium_db_rows(folder):
-    """{Part Number: row} from the DbLib's parts table (<name>.csv written next to it by dblib-sync, else the
-    .xlsx), or None when the folder has no .DbLib / .SVNDbLib."""
+def altium_db_rows(folder, notes=None):
+    """{Part Number: row} from the DbLib's parts table (the .csv mirror dblib-sync writes next to the workbook the DbLib
+    names, else that .xlsx), or None when the folder has no .DbLib / .SVNDbLib. notes: gets a line when the folder has several."""
     import csv
+    from . import sheetsafe as SS
     folder = Path(folder)
     libs = sorted(folder.glob("*.DbLib")) + sorted(folder.glob("*.SVNDbLib"))
     if not libs:
         return None
-    stem = libs[0].stem
+    from .altium_dblib_sync import dblib_table_paths
+    found = [(lib, *dblib_table_paths(lib)) for lib in libs]
+    lib, xlsx, csvf = next((f for f in found if f[1].is_file() or f[2].is_file()), found[0])
+    if len(libs) > 1 and notes is not None:
+        notes.append(f"{len(libs)} database libraries in {folder}; compared {lib.name}")
     out = {}
-    if (folder / f"{stem}.csv").is_file():
-        with open(folder / f"{stem}.csv", encoding="utf-8-sig", newline="") as fh:
+    if csvf.is_file():                        # undo the mirror's anti-formula apostrophe ("'+/-1%" is "+/-1%")
+        with open(csvf, encoding="utf-8-sig", newline="") as fh:
             for r in csv.DictReader(fh):
+                r = {k: SS.unquote(v) for k, v in r.items()}
                 out[r.get("Part Number", "")] = r
-    elif (folder / f"{stem}.xlsx").is_file():
+    elif xlsx.is_file():
         from .altium_dblib_sync import read_tables
-        for t, (_, rows) in read_tables(folder / f"{stem}.xlsx").items():
+        for t, (_, rows) in read_tables(xlsx).items():
             for r in rows:
                 out[r.get("Part Number", "")] = dict(r, Table=t)
     return out
@@ -946,7 +988,12 @@ def compare_databases(kicad_rows, altium_rows, kicad, altium_dir, rules=None):
                 _d(out, "error", what, col, "-", a.get(col), "file missing")
             elif a.get(col):
                 names = {s["name"] for s in AL.read_schlib(f)[1]} if f.suffix.lower() == ".schlib" else {p["name"] for p in AL.read_pcblib(f)}
-                if AL.lib_name(a.get(ref, "")) not in names:
+                try:
+                    stored = AL.lib_name(a.get(ref, ""))
+                except ValueError as e:                     # typed into the workbook: a part's error, not the check's
+                    _d(out, "error", what, ref, "-", a.get(ref), str(e))
+                    continue
+                if stored not in names:
                     _d(out, "error", what, ref, "-", a.get(ref), f"not in {f.name}")
         kf = {f: k.get(c, "") for f, c in zip(KEY_FIELDS, ("Value", "Description", "Manufacturer", "MPN", "Datasheet"))}
         kf.update({f: v for f, v in kicad_fields(k, rules).items() if v})
@@ -964,7 +1011,10 @@ def check_plan(plan, kicad_dir=None, lib=None, altium_dir=None, rules=None, seco
     rules = resolve(rules, base)
     items = json.loads(plan.read_text(encoding="utf-8"))
     kicad = KiCadLib(kicad_dir, lib) if kicad_dir else None
-    a_rows = altium_db_rows(altium_dir) if altium_dir else None
+    notes = []
+    a_rows = altium_db_rows(altium_dir, notes) if altium_dir else None
+    if altium_dir and a_rows is None:         # a mistyped folder must not pass without comparing anything
+        raise ValueError(f"--altium {altium_dir}: no .DbLib / .SVNDbLib there (the folder dblib-sync wrote)")
     if second_reader is None:
         second_reader = True
     rep = {"plan": str(plan), "mode": "export" if kicad else "plan", "kicad": str(kicad_dir or ""), "altium": str(altium_dir or ""),
@@ -989,6 +1039,8 @@ def check_plan(plan, kicad_dir=None, lib=None, altium_dir=None, rules=None, seco
         else:
             rep["database"] = compare_databases(k_rows, a_rows, kicad, altium_dir, rules)
             rep["database_rows"] = {"kicad": len(k_rows), "altium": len(a_rows)}
+    rep["database"] += [{"level": "warn", "what": "database", "field": "Altium", "kicad": "", "altium": n, "msg": n}
+                        for n in notes]
     rep["counts"] = {s: sum(p["result"] == s for p in rep["parts"]) for s in ("match", "mismatch", "skipped")}
     rep["counts"]["database_errors"] = sum(d["level"] == "error" for d in rep["database"])
     rep["ok"] = not rep["counts"]["mismatch"] and not rep["counts"]["database_errors"]
@@ -998,7 +1050,7 @@ def check_plan(plan, kicad_dir=None, lib=None, altium_dir=None, rules=None, seco
 def write_report(rep, stem):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
-    stem.with_suffix(".json").write_text(json.dumps(rep, indent=2, default=str) + "\n", encoding="utf-8")
+    report_file(stem, ".json").write_text(json.dumps(rep, indent=2, default=str) + "\n", encoding="utf-8")
     from . import messages as M
     c = rep["counts"]
     where = Path(str(rep.get("plan") or "")).parent.name
@@ -1020,7 +1072,8 @@ def write_report(rep, stem):
     good = [p for p in rep["parts"] if p["result"] == "match"]
     if good:
         md += [f"## Match ({len(good)})", "", "| Part | Compared |", "|---|---|"]
-        md += [f"| {p['part']} | {checked(p) or '-'} |" for p in good] + [""]
+        cell = lambda v: str(v).replace("|", "\\|").replace("\n", " ")      # a '|' in a part name is not a column
+        md += [f"| {cell(p['part'])} | {cell(checked(p) or '-')} |" for p in good] + [""]
     skip = [p for p in rep["parts"] if p["result"] not in ("match", "mismatch")]
     if skip:
         md += [f"## Not compared ({len(skip)})", ""]
@@ -1031,7 +1084,7 @@ def write_report(rep, stem):
     if rep["database"]:
         md += ["## Database rows", ""] + [f"- {M.clean(d['msg'])}" for d in rep["database"]] + [""]
     md += ["## Details", "", f"Compared in {rep['mode']} mode. Every number is in the machine-readable report next to this file (.json)."]
-    stem.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    report_file(stem, ".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return stem
 
 
@@ -1118,7 +1171,7 @@ def _print(rep, out):
              f"{c['database_errors']} differences" if rep.get("database_rows") else ""), file=out)
 
 
-def print_result(rep, stem, plan, t=None):
+def print_result(rep, stem, plan, t=None, kicad=None, name=None, altium=None, rules=None, include_held=False):
     """Terminal view: a row per part (KiCad and Altium match / differ, with the first difference in plain words;
     -v: what was compared and every difference), database rows, then the summary."""
     from . import messages as M, term as TM
@@ -1139,8 +1192,11 @@ def print_result(rep, stem, plan, t=None):
     head = (f"KiCad and Altium: {c['match']} match, {c['mismatch']} differ" + (f", {c['skipped']} skipped" if c["skipped"] else "")
             + (f"; database rows {rep['database_rows']['kicad']} KiCad / {rep['database_rows']['altium']} Altium, "
                f"{c['database_errors']} differences" if rep.get("database_rows") else ""))
-    nxt = [(f"ecadlib parity {plan} -v", "every difference, part by part")] if c["mismatch"] else []
-    t.summary(head, written=[(str(stem.with_suffix(".md")), "parity report")], next=nxt)
+    from .cliutil import shell_word as q
+    again = " ".join([q(plan)] + [f"{k} {q(v)}" for k, v in (("--kicad", kicad), ("--name", name), ("--altium", altium),
+                                                              ("--rules", rules)) if v] + (["--include-held"] if include_held else []))
+    nxt = [(f"ecadlib parity {again} -v", "every difference, part by part")] if c["mismatch"] else []   # the same run
+    t.summary(head, written=[(str(report_file(stem, ".md")), "parity report")], next=nxt)
 
 
 def main(argv=None):
@@ -1208,11 +1264,13 @@ def main(argv=None):
     except (ValueError, OSError) as e:
         print(f"ecadlib parity: {e}", file=sys.stderr)
         return 2
+    if a.out and Path(a.out).suffix.lower() in (".md", ".json"):    # -o out/p.md: the stem out/p, as before
+        a.out = str(Path(a.out).with_suffix(""))
     stem = write_report(rep, a.out or Path(a.plan).parent / "parity")
     if a.json:
-        print(json.dumps(dict(rep, report=str(stem.with_suffix(".md"))), indent=2, default=str))
+        print(json.dumps(dict(rep, report=str(report_file(stem, ".md"))), indent=2, default=str))
     else:
-        print_result(rep, stem, a.plan)
+        print_result(rep, stem, a.plan, kicad=a.kicad, name=a.name, altium=a.altium, rules=a.rules, include_held=a.include_held)
     return 0 if rep["ok"] else 1
 
 

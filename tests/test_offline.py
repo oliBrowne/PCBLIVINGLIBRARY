@@ -10,6 +10,9 @@ from pathlib import Path
 from ecadlib import altium365 as A, altium_lib as AL, bom_triage as T, cfb, footprint_gen as F, providers as P
 from ecadlib.httpcache import CachedHTTP
 from ecadlib.kicad_index import KiCadIndex, parse_value
+from tests.fixtures_lite import released_anyway
+
+SPECS = Path(__file__).parent.parent / "ecadlib" / "package_specs"
 
 
 def test_headers():
@@ -50,6 +53,22 @@ def test_providers_seeded_cache():
         assert "jlcpcb: MPN -> C999999" in r["notes"] and "not configured: digikey" in r["notes"], r
 
 
+def _models(d, symbols, footprints):
+    """Real models under d/SchLib, d/PcbLib (push runs the release check, which reads them back): symbols
+    {Library Ref: symbol}, footprints {Footprint Ref: package spec name}."""
+    (Path(d) / "SchLib").mkdir(); (Path(d) / "PcbLib").mkdir()
+    for ref, sym in symbols.items():
+        AL.write_schlib(Path(d) / "SchLib" / f"{ref}.SchLib", [sym])
+    for ref, spec in footprints.items():
+        fp = AL.footprint_from_spec(json.loads((SPECS / f"{spec}.json").read_text()))[0]
+        AL.write_pcblib(Path(d) / "PcbLib" / f"{ref}.PcbLib", [dict(fp, name=ref)])   # holds the ref (push reads it back)
+
+
+def _ch340c(d):
+    pins = [{"num": str(n), "name": f"P{n}", "type": "io", "side": "left" if n <= 8 else "right"} for n in range(1, 17)]
+    _models(d, {"CH340C": AL.ic_symbol("CH340C", pins)}, {"SOIC-16": "SOIC-16_3.9x9.9mm_P1.27mm"})
+
+
 class FakeNexar:
     """Records calls instead of hitting api.nexar.com / files.nexar.com."""
     def __init__(self, existing):
@@ -88,8 +107,7 @@ def test_altium365_plan_and_push():
              {"designator": "R1", "mpn": "0603WAF1002T5E", "value": "10k", "footprint": "R_0603_1608Metric",
               "description": "Resistor 10k 0603"}]
     with tempfile.TemporaryDirectory() as d:
-        (Path(d) / "SchLib").mkdir(); (Path(d) / "PcbLib").mkdir()
-        (Path(d) / "SchLib" / "CH340C.SchLib").write_bytes(b"x"); (Path(d) / "PcbLib" / "SOIC-16.PcbLib").write_bytes(b"x")
+        _ch340c(d)
         items = A.plan(lines, models=d)
         by = {i["name"]: i for i in items}
         assert by["CH340C"]["status"] == "ready" and by["CH340C"]["folder"] == "Components/ICs", by["CH340C"]
@@ -169,9 +187,9 @@ def test_altium365_release_retries_the_parent_folder_by_guid():
             if inp["componentParentFolderId"] == "node-1" and self.fail:
                 raise A.NexarError(self.fail)
     with tempfile.TemporaryDirectory() as d:
-        (Path(d) / "SchLib").mkdir(); (Path(d) / "PcbLib").mkdir()
-        (Path(d) / "SchLib" / "CH340C.SchLib").write_bytes(b"x"); (Path(d) / "PcbLib" / "SOIC-16.PcbLib").write_bytes(b"x")
+        _ch340c(d)
         items = [i for i in A.plan([{"designator": "U1", "mpn": "CH340C", "footprint": "SOIC-16"}], models=d) if i["status"] == "ready"]
+        released_anyway(items)                 # no maker, datasheet or description in this BOM line: released anyway
         for fail, sent, action in ((None, ["node-1"], "release"), ("Parent folder not found", ["node-1", "GUID-1"], "release"),
                                    ("Invalid revision naming scheme", ["node-1"], "error")):
             c = C(fail)
@@ -210,12 +228,10 @@ def test_altium365_shared_symbol_is_released_once_then_linked():
             return f"{k}-rev:{name}" if hit else None
         def release(self, inp): self.rel.append(inp)
     with tempfile.TemporaryDirectory() as d:
-        (Path(d) / "SchLib").mkdir(); (Path(d) / "PcbLib").mkdir()
-        (Path(d) / "SchLib" / "Capacitor.SchLib").write_bytes(b"x")
-        for fp in ("C_0402", "C_0603"):
-            (Path(d) / "PcbLib" / f"{fp}.PcbLib").write_bytes(b"x")
+        _models(d, {"Capacitor": AL.capacitor_symbol()}, {"C_0402": "C_0402_1005Metric", "C_0603": "R_0603_1608Metric"})
         items = A.plan(lines, models=d, root="ecadlib-test-47")
         assert [i["status"] for i in items] == ["ready"] * 3 and {i["symbol"]["ref"] for i in items} == {"Capacitor"}, items
+        released_anyway(items)                 # no maker or datasheet in these BOM lines: released anyway
         w = W()
         out = A.push(items, w, "https://ws")
         assert [r["action"] for r in out] == ["release"] * 3, out
@@ -394,8 +410,8 @@ def test_pcblib_writer_roundtrip():
     assert p1["shape"] == 9 and p1["corner"] == 50 and p1["paste_mode"] == 1
     ep = pads[-1]
     assert ep["designator"] == "33" and ep["shape"] == 2 and ep["paste_mode"] == 2 and ep["paste"] < -ep["w"] // 2
-    layers = {(r["type"], r["layer"]) for r in q["records"]}
-    assert {("fill", AL.TOP_PASTE), ("track", AL.TOP_OVERLAY), ("track", AL.MECH13), ("track", AL.MECH15), ("region", AL.TOP_OVERLAY)} <= layers
+    layers = {(r["type"], r["layer"]) for r in q["records"]}          # EXP-10: rounded EP paste windows are regions
+    assert {("region", AL.TOP_PASTE), ("track", AL.TOP_OVERLAY), ("track", AL.MECH13), ("track", AL.MECH15), ("region", AL.TOP_OVERLAY)} <= layers
     assert q["header_count"] == len(q["records"])
 
 

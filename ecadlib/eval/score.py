@@ -12,7 +12,7 @@ use the body centre). Fields, each {ok, error, ...}:
   courtyard     every edge of the courtyard box within TOL["courtyard"]
   symbol_pins   (when the reference knows the pins) the same pin numbers
   symbol_names  (when the reference names its pins) at least TOL["names"] of the names agree after normalising
-                (case, overbars ~{X} / X\\, spaces, '/', '#', leading 'n')
+                (case, overbars ~{X} / X\\ / a combining bar, spaces, '/', '#', leading 'n')
 A case passes when every field present passes (origin is information only)."""
 import math, re
 from collections import Counter
@@ -76,13 +76,25 @@ def pitch(pads):
 WORDS = {"ENABLE": "EN", "GROUND": "GND", "INPUT": "IN", "OUTPUT": "OUT", "CATHODE": "K", "ANODE": "A"}
 
 
+OVERLINE = dict.fromkeys(map(ord, "\u0305\u0304"))     # a combining overline / macron: the bar PDF text gives (AM26LS31CN G̅)
+
+
 def norm_name(s):
-    s = str(s or "").upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "")
+    s = str(s or "").translate(OVERLINE).upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "")
     s = s.replace("~", "")
     s = re.sub(r"^(N(?=[A-Z]{2,})|/|#)", "", s)
     s = re.sub(r"[/#*_-]", "", s)
     s = re.sub(r"^N\.C\.?$", "NC", s)                 # "N.C." is KiCad's "NC"
     return WORDS.get(s, s)                            # a pin spelled out ("Enable") is the same pin as KiCad's "EN"
+
+
+GROUND_RX = re.compile(r"^(?:[ADPS]?GND\w*|[ADP]?VSS\w*|VEE\w*|0V|V-)$")
+SUPPLY_RX = re.compile(r"^(?:[ADP]?VDD\w*|[ADP]?VCC\w*|VBAT\w*|V\+)$")
+
+
+def rail(name):
+    """'gnd' / 'supply' for a normalised power pin name, else None."""
+    return "gnd" if GROUND_RX.match(name or "") else "supply" if SUPPLY_RX.match(name or "") else None
 
 
 def _f(ok, error="", **kw):
@@ -92,8 +104,14 @@ def _f(ok, error="", **kw):
 def score_footprint(mine, ref, tol=None):
     """mine/ref: numbers() dicts -> {field: {...}}."""
     t = dict(TOL, **(tol or {}))
+    lay = mine.get("layers")
     mine, ref = drop_vias(mine), drop_vias(ref)
     out = {}
+    if lay is not None:                               # ours only: the references keep no layers
+        why = ([f"pads {lay['no_copper'][:8]} have no copper"] if lay["no_copper"] else []) + \
+              ([f"pads {lay['no_mask'][:8]} have no solder-mask opening"] if lay["no_mask"] else []) + \
+              ([f"{lay['stray_copper']} unnumbered copper pad(s)"] if lay["stray_copper"] else [])
+        out["layers"] = _f(not why, "; ".join(why))
     nums = lambda n: Counter(p[0] or "(hole)" for p in n["pads"])
     a, b = nums(mine), nums(ref)
     missing, extra = sorted((b - a).elements(), key=_natural), sorted((a - b).elements(), key=_natural)
@@ -157,15 +175,21 @@ def score_symbol(mine_pins, ref_pins, tol=None):
         return {"symbol_pins": _f(False, "no symbol")}
     a, b = dict((str(n), s) for n, s in mine_pins), dict((str(n), s) for n, s in ref_pins)
     missing, extra = sorted(set(b) - set(a), key=_natural), sorted(set(a) - set(b), key=_natural)
-    out = {"symbol_pins": _f(not missing and not extra, f"ours {len(a)} pins, KiCad {len(b)}"
-                             + (f"; missing {missing[:8]}" if missing else "") + (f"; extra {extra[:8]}" if extra else ""),
+    names = {}
+    for n, s in mine_pins:                            # one pin number with two different names: two pins on one pad
+        names.setdefault(str(n), set()).add(norm_name(s))
+    twice = sorted((n for n, v in names.items() if len(v) > 1), key=_natural)
+    out = {"symbol_pins": _f(not missing and not extra and not twice, f"ours {len(a)} pins, KiCad {len(b)}"
+                             + (f"; missing {missing[:8]}" if missing else "") + (f"; extra {extra[:8]}" if extra else "")
+                             + (f"; pin number used twice {twice[:8]}" if twice else ""),
                              ours=len(a), ref=len(b))}
     named = {n: norm_name(s) for n, s in b.items() if norm_name(s) and not re.fullmatch(r"PIN\d+", norm_name(s))}
     if named:
         same = [n for n, s in named.items() if norm_name(a.get(n)) == s]
         diff = [f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in sorted(set(named) - set(same), key=_natural)]
         once = Counter(named.values())
-        moved = [n for n in set(named) - set(same) if once.get(norm_name(a.get(n))) == 1]   # a name KiCad has on another pin:
+        moved = [n for n in set(named) - set(same) if once.get(norm_name(a.get(n))) == 1   # a name KiCad has on another pin:
+                 or rail(named[n]) and rail(norm_name(a.get(n))) not in (None, rail(named[n]))]  # supply <-> ground: a short
         out["symbol_names"] = _f(len(same) >= t["names"] * len(named) and not moved,       # swapped pins, not naming noise
                                  f"{len(same)}/{len(named)} pin names agree"
                                  + (f" ({len(moved)} on the wrong pin)" if moved else "") + "; " + "; ".join(diff[:4]),

@@ -70,16 +70,18 @@ EXAMPLES = {
                 "ecadlib project check board.PrjPcb --workspace https://acme.365.altium.com --library ws/library"],
     "where-used": ["ecadlib where-used --projects ~/projects --part CH340C"],
     "part": ["ecadlib part status ws/library", "ecadlib part show ws/library AO3401A",
-             "ecadlib part approve ws/library --part AO3401A -m \"new datasheet drawing\"",
+             "ecadlib part approve ws/library --part AO3401A --digest 3f2a9c41d0e8 -m \"new datasheet drawing\"",
              "ecadlib part history ws/library AO3401A", "ecadlib part revert ws/library AO3401A@2"],
     "visual-check": ["ecadlib visual-check out/fp/SOIC-8.kicad_mod --datasheet ds.pdf --pages 3 --render-only"],
     "symbol": ["ecadlib symbol pins.csv -o out/MCU.SchLib --preview out/MCU.svg"],
     "setup": ["ecadlib setup", "ecadlib setup --workspace D:/ecadlib --port 8766"],
     "start": ["ecadlib start", "ecadlib start --setup", "ecadlib start --no-window --no-browser"],
     "keys": ["ecadlib keys list", "ecadlib keys set ANTHROPIC_API_KEY", "ecadlib keys remove NEXAR_TOKEN"],
+    "nexar": ["ecadlib nexar signin", "ecadlib nexar status", "ecadlib nexar signout"],
     "doctor": ["ecadlib doctor", "ecadlib doctor --workspace ws --lib ~/kicad/libs --json"],
     "status": ["ecadlib status", "ecadlib status --workspace ws --json"],
-    "completion": ["ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib",
+    "completion": ["mkdir -p ~/.local/share/bash-completion/completions && "
+                   "ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib",
                    "source <(ecadlib completion zsh)"],
     "plugins": ["ecadlib plugins list", "ecadlib plugins export myexporter ws/library/plan.json -o out/x"],
     "notify": ["ecadlib notify show", "ecadlib notify test --event upkeep_changes"],
@@ -105,7 +107,7 @@ def _fill(parser, fallback=""):
         if isinstance(act, argparse._SubParsersAction):
             helps = {ca.dest: ca.help for ca in act._choices_actions}
             for name, sub in act.choices.items():
-                _fill(sub, helps.get(name) or "")
+                _fill(sub, (helps.get(name) or "").replace("%%", "%"))   # help= is %-formatted, a description is not
 
 
 def polish(parser, cmd, summary=""):

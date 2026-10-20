@@ -289,7 +289,7 @@ def check_upstream(src, state_dir, ctx, cfg, now, apply=False):
 
 
 # ------------------------------------------------------------------ Altium 365 drift
-def check_a365(src, state_dir, ctx, cfg, now, workspace=None):
+def check_a365(src, state_dir, ctx, cfg, now, workspace=None, rules=None):
     from . import upstream as U
     sec = _section("a365")
     if src.kind != "plan":
@@ -307,7 +307,7 @@ def check_a365(src, state_dir, ctx, cfg, now, workspace=None):
         from .altium365 import Nexar
         client = Nexar(token)
     old = _load(state_dir / "a365_state.json", {"version": 1, "updated": None, "revisions": None, "seen": []})
-    rows, revs = U.check_a365(src.items, U.workspace_components(client, workspace), None, old.get("revisions"))
+    rows, revs = U.check_a365(src.items, U.workspace_components(client, workspace), None, old.get("revisions"), rules)
     seen = []
     for r in rows:
         key = _fp(r["name"], r["status"], r["field"], r["plan"], r["workspace"])
@@ -406,7 +406,7 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
             elif name == "changes":
                 sec = check_changes(src, state_dir, ctx, cfg, now)
             else:
-                sec = check_a365(src, state_dir, ctx, cfg, now, workspace)
+                sec = check_a365(src, state_dir, ctx, cfg, now, workspace, rules)
         except Exception as e:                       # one broken check never hides the others
             sec = _section(name, "error", f"{type(e).__name__}: {e}")
         sections.append(sec)
@@ -654,8 +654,8 @@ def main(argv=None, ctx=None, gh=None, runner=None, notifier=None):
         rep = run(a.input, checks, a.state, a.out, a.manifest, a.bom, a.workspace, a.apply, rules,
                   ctx or Ctx(cache=a.cache, offline=a.offline), save=False)
     except Exception as e:
-        print(f"upkeep: {type(e).__name__}: {e}", file=sys.stderr)
-        return 2
+        from .cliutil import refuse
+        return refuse("upkeep", e, "check the input, --state and --rules files (`ecadlib upkeep -h`)")
     for s in rep["checks"]:
         print(f"{s['check']:<10} {s['status']:<8} {len(s['changes'])} new" + (f"  {s['reason']}" if s["reason"] else ""))
         for c in s["changes"]:

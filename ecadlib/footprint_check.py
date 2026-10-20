@@ -129,12 +129,12 @@ def _pad_rects(tree):
 def _rect_gap(a, b):
     """Copper gap between two pads. A roundrect is its inner rectangle grown by a disc of radius r,
     so the gap is the inner rectangles' distance minus both radii (exact for rounded corners)."""
-    dx = abs(a["x"] - b["x"]) - (a["w"] + b["w"]) / 2
-    dy = abs(a["y"] - b["y"]) - (a["h"] + b["h"]) / 2
-    if dx < 0 and dy < 0:
-        return max(dx, dy)                       # overlap (negative)
     ra, rb = a.get("r", 0.0), b.get("r", 0.0)
-    return math.hypot(max(dx + ra + rb, 0), max(dy + ra + rb, 0)) - ra - rb
+    ix = abs(a["x"] - b["x"]) - (a["w"] + b["w"]) / 2 + ra + rb      # the inner rectangles' gaps: round pads whose
+    iy = abs(a["y"] - b["y"]) - (a["h"] + b["h"]) / 2 + ra + rb      # boxes meet only at a corner don't touch
+    if ix < 0 and iy < 0:
+        return max(ix, iy) - ra - rb             # overlap (negative)
+    return math.hypot(max(ix, 0), max(iy, 0)) - ra - rb
 
 
 def _pt_seg(px, py, a, b):
@@ -223,7 +223,7 @@ def _bbox(segs):
 
 def _ranges(nums):
     """['1','2','3','5'] -> '1-3, 5'."""
-    ints = sorted({int(n) for n in nums if str(n).isdigit()})
+    ints = sorted({int(n) for n in nums if str(n).isdecimal()})
     out, i = [], 0
     while i < len(ints):
         j = i
@@ -231,7 +231,7 @@ def _ranges(nums):
             j += 1
         out.append(f"{ints[i]}-{ints[j]}" if j > i else str(ints[i]))
         i = j + 1
-    return ", ".join(out + sorted(str(n) for n in nums if not str(n).isdigit()))
+    return ", ".join(out + sorted(str(n) for n in nums if not str(n).isdecimal()))
 
 
 def _share_copper(a, b):
@@ -261,6 +261,9 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     numset = set(nums)
 
     # ---- copper
+    for p in cu:                                     # zero-area copper: nothing to solder (size typed as 0, or a lost unit)
+        if p["w"] <= EPS or p["h"] <= EPS:
+            add("error", "copper", f"pad {p['num'] or '(unnumbered)'} has no copper: size {p['w']:g} x {p['h']:g} mm")
     close = {}                                       # (level, gap) -> [(a, b)]: one finding per distinct gap
     for i, a in enumerate(cu):
         for b in cu[i + 1:]:
@@ -313,6 +316,10 @@ def check(text, allow_duplicate_pads=None, same_net=None):
         if not any((p["x"] <= left + EPS and p["y"] <= top + EPS) or (abs(p["x"]) < EPS and abs(p["y"]) < EPS) for p in ones):
             p1 = ones[0]
             add("warning", "pin1", f"pad {pin1} at ({p1['x']:.3f}, {p1['y']:.3f}) is not the top-left pad")
+        for k, o in (("x", "y"), ("y", "x")):            # a single row (column): pin 1 at one of its ends
+            if len({round(p[o], 3) for p in sig}) == 1 and len({p["num"] for p in sig}) >= 3 and \
+                    not any(abs(p[k] - min(q[k] for q in sig)) < EPS or abs(p[k] - max(q[k] for q in sig)) < EPS for p in ones):
+                add("warning", "pin1", f"pad {pin1} is in the middle of its row: pin 1 is normally at an end (check numbering)")
 
     # numbering direction: KiCad counts counter-clockwise (seen from the top) from pin 1
     areas = sorted(p["w"] * p["h"] for p in sig)
@@ -322,7 +329,7 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     for p in sig:
         if p["num"] not in big:
             uniq.setdefault(p["num"], p)
-    order = sorted((n for n in uniq if str(n).isdigit()), key=int)
+    order = sorted((n for n in uniq if str(n).isdecimal()), key=int)
     if len(order) >= 3 and not _zigzag(order, uniq):
         mx = sum(uniq[n]["x"] for n in order) / len(order)
         my = sum(uniq[n]["y"] for n in order) / len(order)
@@ -435,7 +442,7 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     # ---- exposed-pad paste
     for p in cu:
         others = [q for q in cu if q is not p]
-        if not others or p["w"] * p["h"] < 3 * max(q["w"] * q["h"] for q in others):
+        if not others or p["w"] * p["h"] <= EPS or p["w"] * p["h"] < 3 * max(q["w"] * q["h"] for q in others):
             continue                                 # not an exposed pad
         if not any(abs(q["x"]) < p["w"] / 2 and abs(q["y"]) < p["h"] / 2 for q in others) and p["x"] == 0 and p["y"] == 0:
             windows = [q for q in pads if q["paste"] and not q["copper"]
@@ -513,6 +520,22 @@ def _bga_rules(tree, balls, add):
             add("warning", "bga", f"land {d:g} mm is only {ratio:.0%} of the {pitch:g} mm pitch: check the ball/land diameter")
     if abs(a1["x"] - xs[0]) > EPS or abs(a1["y"] - ys[0]) > EPS:
         add("warning", "bga", f"ball A1 at ({a1['x']:.3f}, {a1['y']:.3f}) is not the top-left ball")
+    # handedness: A1->A2 (columns) and A1->B1 (rows) must turn like the top view; a rotation keeps it, a mirror flips it
+    by_row, by_col = {}, {}
+    for p in balls:
+        L, c = BALL.match(p["num"]).groups()
+        by_row.setdefault(L, []).append((int(c), p))
+        by_col.setdefault(int(c), []).append(((len(L), L), p))
+    cv, rv = [0.0, 0.0], [0.0, 0.0]
+    for groups, v in ((by_row, cv), (by_col, rv)):
+        for g in groups.values():
+            g.sort(key=lambda t: t[0])
+            v[0] += g[-1][1]["x"] - g[0][1]["x"]
+            v[1] += g[-1][1]["y"] - g[0][1]["y"]
+    cross = cv[0] * rv[1] - cv[1] * rv[0]            # y points down: the top view (A1 top-left, 1.. right, A.. down) is > 0
+    if cross < -0.5 * math.hypot(*cv) * math.hypot(*rv):
+        add("error", "bga", "ball map is mirrored (rows or columns run the wrong way: a bottom-view drawing?); "
+                            "no rotation of the part fits it")
     rows = {BALL.match(p["num"]).group(1) for p in balls}
     bad = sorted(r for r in rows if set(r) & set("IOQSXZ"))
     if bad:
@@ -550,7 +573,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     bad = 0
     for f in a.files:
-        issues = check(Path(f).read_text())
+        issues = check(Path(f).read_text(encoding="utf-8"))          # footprint_gen and KiCad write UTF-8
         bad += any(l == "error" for l, _, _ in issues)
         print(f"{'OK  ' if not issues else 'WARN' if all(l == 'warning' for l, _, _ in issues) else 'FAIL'} {f}")
         for lvl, rule, msg in issues:

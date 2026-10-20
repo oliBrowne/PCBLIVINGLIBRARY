@@ -109,7 +109,7 @@ def cmd_s_c(cmdline):
 def test_build_names_every_procedure():
     """`altium-menu build`, its README and the docs name every procedure the project offers (PROCS + BUILD_PROCS),
     and each one exists in the unit the table names (ecadlib_build.pas came with the native build)."""
-    assert AM.procedures() == ["AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue", "BuildLibrariesInAltium", "BuildLibraries(Folder)"]
+    assert AM.procedures() == ["AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue", "FinishBackgroundJob", "BuildLibrariesInAltium", "BuildLibraries(Folder)"]
     units = {AM.UNIT: AM.pas_text(), AN.UNIT: AN.pas_text()}
     for p, unit, _ in [(p, AM.UNIT, d) for p, _, d in AM.PROCS] + AM.BUILD_PROCS:
         name, end = p.split("(")[0], r"\(" if "(" in p else ";"
@@ -119,7 +119,7 @@ def test_build_names_every_procedure():
     readme = (d / "m" / AM.README).read_text()
     for p in AM.procedures():
         assert p in out and p in readme and p in AM.__doc__ and p in AM.pas_text(), (p, out)
-    assert "now lists AddPartFromMPN, CheckProjectBOM, OpenReviewQueue, BuildLibrariesInAltium:" in readme, readme
+    assert "now lists AddPartFromMPN, CheckProjectBOM, OpenReviewQueue, FinishBackgroundJob, BuildLibrariesInAltium:" in readme, readme
 
 
 def test_build_writes_well_formed_files():
@@ -354,9 +354,10 @@ def test_dialog_form_matches_its_unit_and_the_results():
     assert any("Gone is not declared" in p for p in AM.project_problems(broken))
     read = set(re.findall(r"Answer\(Job, '(\w+)'\)", files[AF.DIALOG_UNIT]))
     assert read == {"status", "install", "build", "big", "report", "warnings", "offer_fill", "fix", "offer_queue",
-                    "offer_ai", "ai_text", "ai_button", "ai_cost_text"}, read
+                    "offer_ai", "ai_text", "ai_button", "ai_cost_text", "offer_release", "release_part"}, read
     asked = set(re.findall(r"Answer\(Prev, '(\w+)'\)", files[AF.DIALOG_UNIT]))       # the AI step's next job
-    assert asked == {"ai_over", "ai_confirm", "ai_bom", "ai_mpn", "ai_part", "ai_approve", "ai_unknown"}, asked
+    assert asked == {"ai_over", "ai_confirm", "ai_bom", "ai_mpn", "ai_part", "ai_approve", "ai_unknown",
+                     "release_part", "release_bom", "release_mpn"}, asked                   # and Release anyway's
     assert "ReadString('progress', 'text'" in files[AF.DIALOG_UNIT] and "'row' + IntToStr(i)" in files[AF.DIALOG_UNIT]
     # the menu entries open the dialog, unless dialogs=0 asks for Altium's plain message boxes
     assert "OpenDialog('add', '', '')" in files[AM.UNIT] and "OpenDialog('bom', PrjPath, '')" in files[AM.UNIT]
@@ -610,6 +611,34 @@ def test_altium_365_target():
     assert calls == [("uploads/altium-menu/parts.csv", "https://acme.365.altium.com", False)]
     assert r["status"] == "ready" and r["install"] == "" and r["build"] == "" and r["refresh"] == "a365", r
     assert "refresh the Components panel" in r["message"]
+
+
+def test_publish_reports_a_part_the_publisher_held_again():
+    """Every target runs the release check again before it writes a part; one it holds is "not published", not ready."""
+    menu, cfg = _setup(extra_rules='\n[altium365]\nworkspace = "https://acme.365.altium.com"\n')
+    from ecadlib.app import Workspace
+    held = {"name": "CAP-0402-100nF", "action": "skip", "detail": "held: fields: Description is empty",
+            "recheck": ["fields: Description is empty"]}
+    with mock.patch.object(Workspace, "altium365_push", lambda self, bom, url, dry_run=True: {
+            "dry_run": dry_run, "report": "altium365/push_x.json", "results": [held]}):
+        r = AM.run_job(_job(menu, {"action": "add-part", **CAP}))
+    assert r["status"] == "error" and r["big"] == "Not published", r
+    assert "not published: CAP-0402-100nF: held: fields: Description is empty" in r["message"], r
+    menu, cfg = _setup()
+    assert AM.run_job(_job(menu, {"action": "add-part", **CAP}))["status"] == "ready"
+    ws, rel = AM._workspace(cfg), "uploads/altium-menu/parts.csv"
+    _, plan_f, items = ws._plan(rel)
+    for it in items:
+        it["description"] = ""                                   # after the check
+    plan_f.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    for tool, lib in (("altium", cfg["library"]), ("kicad", str(Path(cfg["library"]).parent / "kicad lib"))):
+        pub = AM.publish(ws, rel, lib, cfg["name"], tool=tool)
+        assert pub["held"] == {"CAP-0402-100nF": "held: fields: Description is empty"}, (tool, pub)
+        with mock.patch.object(AM, "publish", lambda *a, **k: pub):          # fill: the same hold, in its message
+            r = AM._fill_result(cfg, ws, rel, {"parts": 1, "ready": 1, "held": 0, "awaiting_approval": 0,
+                                               "duplicates": 0}, AM.Progress())
+        assert r["status"] == "error" and "Not published: CAP-0402-100nF: held: fields: Description is empty" in \
+            r["message"], (tool, r)
 
 
 def test_open_queue_starts_reuses_and_refuses():

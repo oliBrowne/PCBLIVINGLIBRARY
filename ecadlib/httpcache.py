@@ -47,9 +47,63 @@ def error_body(text):
     return isinstance(d, dict) and bool(d.get("errors") or d.get("Errors"))
 
 
+_HTML = re.compile(r"\s*(?:<!doctype\s+html|<html[\s>])", re.I)
+DATA_EXT = {"json", "kicad_mod", "kicad_sym", "lib", "dcm", "csv", "txt", "xml", "step", "stp", "wrl", "gz"}
+
+
+def page_not_data(url, text):
+    """True for an HTML page answering a URL that serves data (an API, a raw library file): a captive portal or proxy
+    block page sent with HTTP 200. It is not cached, so the next run, on a working network, asks again."""
+    if not _HTML.match(text[:512]):
+        return False
+    u = urlparse(url)
+    last = u.path.rsplit("/", 1)[-1]
+    ext = last.rpartition(".")[2].lower() if "." in last else ""
+    return (u.netloc.lower().startswith("api.") or "/api/" in u.path + "/" or u.path.endswith("/graphql")
+            or "/-/raw/" in u.path or ext in DATA_EXT)
+
+
+# A download that may work on a later try: a timeout, a dropped or reset connection (not a TLS or proxy refusal,
+# which fails the same way every time), 429 or 5xx. Used by datasheet.PdfStore (PDF downloads only): RETRIES more
+# tries, the wait doubling from BACKOFF s, or the server's Retry-After up to RETRY_AFTER_MAX s.
+RETRIES, BACKOFF, RETRY_AFTER_MAX = 2, 2.0, 30.0
+TRANSIENT = re.compile(r"^(ReadTimeout|ConnectTimeout|Timeout|ConnectionError|ChunkedEncodingError|ReadTimeoutError|"
+                       r"ProtocolError|IncompleteRead)\b|ConnectionResetError|Connection reset|RemoteDisconnected")
+
+
+def retry_after(value):
+    """A Retry-After header (seconds, or an HTTP date) -> seconds to wait, capped at RETRY_AFTER_MAX; None if unreadable."""
+    v = str(value or "").strip()
+    if re.fullmatch(r"\d+(\.\d+)?", v):
+        return min(float(v), RETRY_AFTER_MAX)
+    from datetime import datetime, timezone
+    from email.utils import parsedate_to_datetime
+    try:
+        when = parsedate_to_datetime(v)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when is None:
+        return None
+    when = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    return min(max(0.0, (when - datetime.now(timezone.utc)).total_seconds()), RETRY_AFTER_MAX)
+
+
 def redact(url):
     u = urlparse(url)
     q = [(k, "REDACTED" if SECRET_Q.search(k) else v) for k, v in parse_qsl(u.query, keep_blank_values=True)]
+    return urlunparse(u._replace(query=urlencode(q))) if q else url
+
+
+# Credential parameters by their whole name: left out of the cache key (a rotated key keeps its cached answers). A
+# name that only ends in token/key (pageToken, nextToken, continuationToken, sortkey) is part of the request and of
+# the key: page 2 is not page 1. The stored URL is still redacted with SECRET_Q.
+CRED_Q = re.compile(r"(api[_-]?key|apikey|x-api-key|key|token|secret|password|passwd|signature|sig|client[_-]?secret|"
+                    r"access[_-]?token|auth[_-]?token|subscription[_-]?key)", re.I)
+
+
+def key_url(url):
+    u = urlparse(url)
+    q = [(k, "REDACTED" if CRED_Q.fullmatch(k) else v) for k, v in parse_qsl(u.query, keep_blank_values=True)]
     return urlunparse(u._replace(query=urlencode(q))) if q else url
 
 
@@ -78,9 +132,9 @@ class CachedHTTP:
         for this request (default: the client's).
         Query-string secrets (apiKey=, token=...) are redacted from cache keys and stored URLs.
         A 2xx answer whose body is an error (error_body) is neither stored nor served from an older cache entry."""
-        f = self.dir / f"{self._key(method, redact(url), body, headers)}.json"
+        f = self.dir / f"{self._key(method, key_url(url), body, headers)}.json"
         d = None
-        bad = lambda st, text: 200 <= st < 300 and error_body(text)
+        bad = lambda st, text: 200 <= st < 300 and (error_body(text) or page_not_data(url, text))
         if cache and f.exists() and (self.offline or time.time() - f.stat().st_mtime < self.ttl):   # offline: stale beats nothing
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))

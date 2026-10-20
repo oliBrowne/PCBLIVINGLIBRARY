@@ -39,7 +39,7 @@ the Design Item ID, else LibRef+value+footprint. Against a library (--plan libra
 projects but missing from the library, library parts used nowhere and projects using a duplicate instead of the keeper.
 Without a library: projects using an older revision of an Altium 365 item than another project does (same ItemGUID,
 lower '-N' revision suffix on the Design Item ID, or simply different RevisionGUIDs), and parts whose lifecycle is
-NRND / last time buy / obsolete (lifecycle_state.json from `ecadlib lifecycle`, a plan item's lifecycle, or the
+NRND / last time buy / obsolete (lifecycle_state.json from `ecadlib upkeep`, a plan item's lifecycle, or the
 component's own 'Lifecycle Status' / 'Part Status' parameter)."""
 import argparse, csv, json, os, re, struct, sys
 from pathlib import Path, PureWindowsPath
@@ -290,8 +290,17 @@ def _find_file(base, rel):
     return cur
 
 
-def read_prjpcb(path):
-    """-> {path, name, documents, schdocs, bomdocs, missing, variants, parameters, design}."""
+def _inside(f, root):
+    """f, or None when a root is given and f resolves outside it ('..\\..\\x.SchDoc' in an uploaded project)."""
+    if f is None or root is None:
+        return f
+    r, p = Path(root).resolve(), Path(f).resolve()
+    return f if p == r or r in p.parents else None
+
+
+def read_prjpcb(path, root=None):
+    """-> {path, name, documents, schdocs, bomdocs, missing, variants, parameters, design}. root: documents and device
+    sheets outside this folder count as missing (servers pass their workspace); None reads them wherever they are."""
     path = Path(path)
     secs = parse_ini(_read_text(path))
     docs, devs, variants, params, design = [], [], [], {}, {}
@@ -329,7 +338,7 @@ def read_prjpcb(path):
         ext = PureWindowsPath(rel).suffix.lower()
         if ext not in SCH_EXT + BOM_EXT:
             continue
-        f = _find_file(path.parent, rel)
+        f = _inside(_find_file(path.parent, rel), root)
         if f is None:
             missing.append(rel)
         elif not any(Path(f).resolve() == Path(x).resolve() for x in sch + bom):   # listed twice (X.SchDoc, .\x.schdoc):
@@ -337,7 +346,7 @@ def read_prjpcb(path):
     for rel in devs:
         if PureWindowsPath(rel).suffix.lower() not in SCH_EXT:
             continue
-        f = find_device_sheet(path.parent, rel)
+        f = _inside(find_device_sheet(path.parent, rel, [] if root is not None else None), root)
         if f is None:
             dev_missing.append(rel)
         elif not any(Path(f).resolve() == Path(x).resolve() for x in sch):
@@ -453,7 +462,7 @@ def _natkey(s):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
 
 
-def load_project(path, rules=None):
+def load_project(path, rules=None, root=None):
     """.PrjPcb / .SchDoc / .BomDoc -> {name, path, components (one per physical part), variants, warnings, bomdoc}."""
     p = Path(path)
     ext = p.suffix.lower()
@@ -462,10 +471,10 @@ def load_project(path, rules=None):
         prj = sorted(p.parent.glob("*.[Pp][Rr][Jj][Pp][Cc][Bb]"))
         if not prj:
             raise ValueError(f"{p.name}: no .PrjPcb next to the BomDoc; pass the project instead")
-        proj = read_prjpcb(prj[0])
+        proj = read_prjpcb(prj[0], root)
         bomdocs = [p]
     elif ext in PROJECT_EXT:
-        proj = read_prjpcb(p)
+        proj = read_prjpcb(p, root)
         bomdocs = proj["bomdocs"]
     elif ext in SCH_EXT:
         proj = {"path": str(p), "name": p.stem, "schdocs": [p], "bomdocs": [], "missing": [], "variants": [], "parameters": {},
@@ -746,9 +755,9 @@ MAPPING = {"designator": "Designator (RECORD=34)", "qty": "count of designators"
            "dnp": "variant (Kind=1) / component kind"}
 
 
-def bom_lines(path, variant=None, rules=None):
+def bom_lines(path, variant=None, rules=None, root=None):
     """bom_triage.read_bom hook: (lines, mapping) in the same shape read_bom returns for a CSV."""
-    prj = load_project(path, rules)
+    prj = load_project(path, rules, root)
     for w in prj["warnings"]:
         print(f"  warning: {w}", file=sys.stderr)
     lines = []
@@ -832,6 +841,8 @@ def load_library(plan=None, libs=(), a365=None, log=None):
         col.add_plan(json.loads(Path(plan).read_text()), Path(plan).parent)
         a365 = a365 or (Path(plan).parent / "a365_state.json" if (Path(plan).parent / "a365_state.json").exists() else None)
     for lib in libs:
+        if not Path(lib).exists():             # else every project part would read "missing from library"
+            raise FileNotFoundError(f"--lib {lib}: not found")
         col.add_lib(lib)
     guids = {}
     if a365:
@@ -844,8 +855,10 @@ def load_library(plan=None, libs=(), a365=None, log=None):
 
 
 def load_lifecycle(path):
-    if not path or not Path(path).exists():
+    if not path:
         return {}
+    if not Path(path).exists():                # a typo would skip the NRND / EOL check silently
+        raise FileNotFoundError(f"--lifecycle {path}: not found")
     data = json.loads(Path(path).read_text())
     return {k: v for k, v in (data.get("parts") or {}).items()}
 
@@ -955,7 +968,8 @@ def where_used(dirs, part=None, plan=None, libs=(), a365=None, lifecycle=None, r
                 flags.append(_flag("mixed_revisions", e, f"item {ig} placed at {len(revs)} revisions; this project has {u['revision_guid']}", u))
 
     # lifecycle
-    lc = load_lifecycle(lifecycle or (Path(plan).parent / "lifecycle_state.json" if plan else None))
+    dflt = Path(plan).parent / "lifecycle_state.json" if plan else None
+    lc = load_lifecycle(lifecycle or (dflt if dflt and dflt.exists() else None))
     plan_lc = {}
     if plan:
         for it in json.loads(Path(plan).read_text()):
@@ -1078,7 +1092,7 @@ def main(argv=None):
                   f"{g['designator'][:40]}{'  DNP' if g['dnp'] else ''}")
     for w in prj["warnings"]:
         print(f"warning: {w}", file=sys.stderr)
-    print(f"wrote {out}")
+    print(f"wrote {out}", file=sys.stderr if a.json else sys.stdout)     # --json: stdout is the JSON, nothing else
     return 0
 
 
@@ -1089,7 +1103,7 @@ def where_used_main(argv=None):
     ap.add_argument("--plan", help="librarian plan.json to compare against")
     ap.add_argument("--lib", action="append", default=[], help="library folder / .DbLib / .SchLib (repeatable)")
     ap.add_argument("--a365", help="check-a365 state JSON (Altium 365 components)")
-    ap.add_argument("--lifecycle", help="lifecycle_state.json from `ecadlib lifecycle`")
+    ap.add_argument("--lifecycle", help="lifecycle_state.json from `ecadlib upkeep` (or python -m ecadlib.lifecycle)")
     ap.add_argument("-o", "--out", default="out/where_used", help="report stem (.md, .csv, _flags.csv, .json)")
     a = ap.parse_args(argv)
     try:

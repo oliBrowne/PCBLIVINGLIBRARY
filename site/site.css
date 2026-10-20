@@ -4,7 +4,8 @@
   color-scheme: light;
   --bg: #ffffff; --text: #232327; --muted: #6f6f78; --line: #e0e0e4; --line-2: #ececef; --hover: #f6f6f7;
   --trace: #d9d9de; --trace-hi: #232327;
-  --copper: #c2622d;                                  /* brand accent: the mark's leaves, focus rings, small highlights only */
+  --copper: #c2622d;                                  /* brand accent: the mark's leaves, focus rings, one side trace per section */
+  --trace-cu: color-mix(in srgb, var(--copper) 45%, var(--bg));
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --ease: cubic-bezier(.32, .72, 0, 1);
@@ -51,6 +52,7 @@ code { font: 13px/1 var(--mono); padding: 1px 5px; border: 1px solid var(--line)
 .nav nav a::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--text); transform: scaleX(0); transform-origin: left; transition: transform .5s var(--ease); }
 .nav nav a:hover, .nav nav a.on { color: var(--text); }
 .nav nav a:hover::after, .nav nav a.on::after { transform: scaleX(1); }
+.nav nav a.on::after { background: var(--copper); }  /* the section you are in */
 .navend { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 @media (max-width: 980px) { .nav nav { display: none; } }
 
@@ -72,7 +74,7 @@ section { position: relative; }
 .block { padding-top: clamp(80px, 12vw, 150px); }
 .eyebrow { display: flex; align-items: center; gap: 10px; margin: 0 0 18px; font: 11.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .eyebrow .num { color: var(--text); }
-.eyebrow .num::after { content: ""; display: inline-block; width: 28px; height: 1px; background: var(--line); margin-left: 10px; vertical-align: 3px; }
+.eyebrow .num::after { content: ""; display: inline-block; width: 28px; height: 1px; background: var(--copper); margin-left: 10px; vertical-align: 3px; }
 .eyebrow .tick { width: 6px; height: 6px; border-radius: 50%; background: #2f8a57; box-shadow: 0 0 0 3px color-mix(in srgb, #2f8a57 18%, transparent); }
 h1, h2, h3 { font-weight: 500; letter-spacing: -.025em; margin: 0; }
 h1 { font-size: clamp(40px, 5.4vw, 72px); line-height: 1.02; letter-spacing: -.04em; }
@@ -113,7 +115,8 @@ h3 { font-size: 16px; letter-spacing: -.01em; margin-bottom: 6px; }
 .bus .pulse { position: absolute; top: 0; left: 0; width: 18%; height: 1px; background: linear-gradient(90deg, transparent, var(--text), transparent); animation: bus 4.8s var(--ease) infinite; }
 .steps { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-left: 1px solid var(--line); }
 .step { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 8px 18px 24px; position: relative; transition: background .4s var(--ease); }
-.step::before { content: ""; position: absolute; top: -4px; left: 18px; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--text); background: var(--bg); }
+.step::before { content: ""; position: absolute; top: -4px; left: 18px; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--text); background: var(--bg); transition: background .4s var(--ease), border-color .4s var(--ease); }
+.step:hover::before { background: var(--copper); border-color: var(--copper); }
 .step:hover { background: var(--hover); }
 .step:hover .fig { --hairline-plate: var(--hover); }
 .step p:last-child { color: var(--muted); font-size: 13.5px; margin: 0; }
@@ -255,6 +258,8 @@ svg.fp[data-solo="top"] .pad.on:not(.focus) { opacity: .45 !important; }
 .traces.on circle { opacity: 1; }
 .traces .sig { fill: var(--trace-hi); stroke: none; opacity: 0; }
 .traces.on .sig { opacity: .8; transition: opacity .6s var(--ease) 2s; }
+.traces .cu { stroke: var(--trace-cu); }               /* one copper bus per section */
+.traces .sig.cu { fill: var(--copper); }
 
 /* motion */
 .reveal { opacity: 0; transform: translateY(18px); transition: opacity .9s var(--ease), transform .9s var(--ease); }

@@ -141,7 +141,12 @@ def ensure_tables(project_dir):
         path = os.path.join(project_dir, f"{kind}-lib-table")
         row = f'  (lib (name "{LIB}")(type "KiCad")(uri "${{KIPRJMOD}}/{uri}")(options "")(descr "ecadlib parts"))\n'
         text = open(path, encoding="utf-8").read() if os.path.isfile(path) else f"({table}\n  (version 7)\n)\n"
-        if re.search(r'\(lib \(name "?' + LIB + r'"?\)', text):
+        m = re.search(r'\(lib \(name "?' + LIB + r'"?\)[^\n]*?\(uri "?([^"\)]*)"?\)', text)
+        if m and m.group(1).replace("\\", "/").rstrip("/") != f"${{KIPRJMOD}}/{uri}":   # a row of another ecadlib library
+            raise ValueError(f"the project's {kind}-lib-table already has a library named {LIB} at {m.group(1)}, not "
+                             f"${{KIPRJMOD}}/{uri} where this window builds the parts: rename or remove that row "
+                             f"(Preferences > Manage {'Footprint' if kind == 'fp' else 'Symbol'} Libraries > Project)")
+        if m or re.search(r'\(lib \(name "?' + LIB + r'"?\)', text):
             continue
         body = text.rstrip()
         if not body.endswith(")"):
@@ -149,6 +154,20 @@ def ensure_tables(project_dir):
         open(path, "w", encoding="utf-8").write(body[:-1].rstrip() + "\n" + row + ")\n")
         changed.append(path)
     return changed
+
+
+REOPEN = "The project's library tables now list the ecadlib library: reopen the project so the symbol chooser shows it."
+
+
+def tables_after_fill(project_dir):
+    """'Fill the library now' built <project>/ecadlib/: list it in the project's library tables -> the line the window
+    shows ('' when the tables already list it, or nothing was built)."""
+    if not os.path.isfile(os.path.join(project_dir, LIB, f"{LIB}.kicad_sym")):
+        return ""
+    try:
+        return REOPEN if ensure_tables(project_dir) else ""
+    except Exception as e:                           # the library is built; the tables are the extra step
+        return f"Built, but not added to the project's library tables: {e}"
 
 
 def place(board, project_dir, fp_name):
@@ -505,6 +524,8 @@ def _window_class():
             if st == "error":
                 return self.fail(res.get("message", "") + (f"\nNext: {res['fix']}" if res.get("fix") else ""))
             placed, extra = "", ""
+            if self.action == "fill":
+                extra = tables_after_fill(self.project)
             if self.action in ("add-part", "ai-read") and res.get("footprint") and st in ("ready", "duplicate"):
                 board, project, _ = board_project()
                 try:
@@ -512,8 +533,7 @@ def _window_class():
                     place(board, self.project, res["footprint"])
                     placed = f"Placed {LIB}:{res['footprint']} in the middle of the board."
                     if changed:
-                        extra = ("The project's library tables now list the ecadlib library: reopen the project so the "
-                                 "symbol chooser shows it.")
+                        extra = REOPEN
                 except Exception as e:                   # the part is built; placing is the extra step
                     extra = f"Built, but not placed: {e}"
             s = self.page(self.title)

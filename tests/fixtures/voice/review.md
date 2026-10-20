@@ -51,7 +51,7 @@ Symbol from: KiCad library (R) · Footprint from: KiCad library (SOIC-8_3.9x4.9m
 ### NE555DR (waiting for sign-off)
 
 - Waiting for sign-off (1 approval from role librarian).  
-  **Next:** Ask a reviewer to approve it in the review queue.
+  **Next:** Ask a reviewer to approve it (Approve in step 2 of the web UI, or `ecadlib approve`).
 
 Symbol from: KiCad library (R) · Footprint from: KiCad library (R_0603_1608Metric) · KiCad and Altium: match · Height: 0.45 mm · Datasheet: <https://example.com/ds.pdf>
 
@@ -62,7 +62,7 @@ These passed every check; a person should still look at the points below.
 ### AO3401A (ready)
 
 - The pinout of Q_PMOS_GSD comes from the AO3401A family table, not from this part's datasheet.  
-  **Next:** Check pins 1-3 against the datasheet.
+  **Next:** Check pins 1-3 against the datasheet, then release it anyway if they match.
 
 Symbol from: standard parts (Q_PMOS_GSD) · Footprint from: standard parts (SOT-23) · KiCad and Altium: match · Height: 0.45 mm · Datasheet: <https://example.com/ds.pdf>
 

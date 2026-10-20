@@ -206,20 +206,23 @@ def test_state_migration_is_safe_on_new_data_and_keeps_unchecked_shares():
             pass
 
 
-def _build(d, name="lib", bom_text=UF.BOM, epoch=None):
+def _build(d, name="lib", bom_text=UF.BOM, epoch=None, allow=()):
+    """allow: parts a reviewer released anyway (librarian --allow)."""
     d = Path(d)
     (d / "bom.csv").write_text(bom_text, encoding="utf-8")
     if not (d / "cache").exists():
         seed_cache(d / "cache")
     env = {"SOURCE_DATE_EPOCH": str(epoch)} if epoch else {}
     with mock.patch.dict(os.environ, env):
-        L.run(d / "bom.csv", out=d / name, offline=True, cache=d / "cache", rules={}, log=lambda *a: None)
+        L.run(d / "bom.csv", out=d / name, offline=True, cache=d / "cache", rules={}, log=lambda *a: None,
+              allow=list(allow), user="Test Reviewer <reviewer@example.com>")
     return d / name
 
 
 def test_lock_records_inputs_and_is_stable():
     with tempfile.TemporaryDirectory() as d:
-        lib = _build(d)
+        lib = _build(d, allow=["EEPART1"])      # its EasyEDA conversion checked: released, so it has a ledger
+        assert {i["name"]: i["status"] for i in json.loads((lib / "plan.json").read_text())}["EEPART1"] == "ready"
         lock = RB.read_lock(lib)
         assert lock["bom"] == {"file": "../bom.csv", "sha256": RB.file_sha(Path(d) / "bom.csv")}
         assert lock["settings"]["cache"] == "../cache" and lock["settings"]["rules_sha256"] == RB.rules_hash(RU.load({}))
@@ -291,8 +294,13 @@ def test_rebuild_check_reuses_cached_datasheet_answers_and_never_calls_a_model()
         url = E.seed_datasheet(d / "cache", "DSPART16")
         (d / "bom.csv").write_text("Designator,Qty,Value,Footprint,Manufacturer,Mfr Part #,LCSC,Description,Datasheet\n"
                                    f"U3,1,DSPART16,,ACME,DSPART16,,Buck converter VQFN-16,{url}\n", encoding="utf-8")
-        with E.FakeAnthropic() as fa, mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-e2e-test", "ANTHROPIC_BASE_URL": fa.url}):
-            L.run(d / "bom.csv", out=d / "lib", offline=True, cache=d / "cache", rules={}, log=lambda *a: None)
+        # not offline (--offline sends nothing to the model either): the recorded cache answers, any other request
+        # fails at once at a dead proxy, and Claude is the local fake
+        dead = {k: "http://127.0.0.1:9" for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
+        dead.update(NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
+        with E.FakeAnthropic() as fa, mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-e2e-test", "ANTHROPIC_BASE_URL": fa.url,
+                                                                   **dead}):
+            L.run(d / "bom.csv", out=d / "lib", offline=False, cache=d / "cache", rules={}, log=lambda *a: None)
             assert ("datasheet", "DSPART16") in fa.kinds, fa.kinds
         p = RB.read_lock(d / "lib")["parts"]["DSPART16"]
         assert p["footprint"]["source"] == f"datasheet:{url}", p

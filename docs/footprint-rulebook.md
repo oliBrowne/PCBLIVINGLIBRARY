@@ -195,7 +195,8 @@ and pads count counter-clockwise from it seen from the top; dual-row connectors 
 ### `bga`
 
 (footprint_check) Ball A1 top-left and marked on silk and fab, every ball on the pitch grid, land 35-65 % of the
-pitch, JEDEC row letters (no I, O, Q, S, X, Z).
+pitch, JEDEC row letters (no I, O, Q, S, X, Z). Error when the ball map is mirrored (rows or columns run the wrong
+way, as in a bottom-view drawing): no rotation of the part fits it. A1 elsewhere after a plain rotation is a warning.
 
 ### `graphics`
 

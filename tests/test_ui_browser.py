@@ -2,7 +2,7 @@
 (when node, Playwright and Chromium are installed) a real Chromium driving the main flows at desktop and phone width:
 load a BOM, triage, fill the library, held parts, Altium export / plan / dry run, status and the setup check. The browser part skips cleanly without them.
 Run:  python3 -m tests.test_ui_browser      (ECADLIB_UI_SHOTS=DIR also saves screenshots)"""
-import contextlib, json, os, shutil, subprocess, tempfile, threading
+import contextlib, io, json, os, shutil, subprocess, tempfile, threading
 from pathlib import Path
 
 from ecadlib.app import Workspace
@@ -71,7 +71,7 @@ def test_parts_endpoint_says_why_with_both_values_and_cost():
         try:
             st, r = call("GET", "/api/parts?bom=" + bom)
             assert st == 200, r
-            assert r["counts"] == {"parts": 14, "ready": 6, "held": 8, "waiting": 0, "cross_check_disagreed": 1,
+            assert r["counts"] == {"parts": 14, "ready": 5, "held": 9, "waiting": 0, "cross_check_disagreed": 1,
                                    "parity_mismatch": 1, "changes_held": 0}, r["counts"]
             assert r["cost"]["usd"] == 0.111 and r["cost"]["models"] == ["claude-sonnet-4-5"] and r["cost"]["answers"] == 2
             by = {p["part"]: p for p in r["parts"]}
@@ -97,7 +97,7 @@ def test_parts_endpoint_says_why_with_both_values_and_cost():
             got = M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                 "params": {"name": "library_parts", "arguments": {"bom": bom}}})
             mc = json.loads(got["result"]["content"][0]["text"])
-            assert mc["counts"]["held"] == 8 and all(p["picture"] is None for p in mc["parts"]), mc["counts"]
+            assert mc["counts"]["held"] == 9 and all(p["picture"] is None for p in mc["parts"]), mc["counts"]
             st, r = call("GET", "/api/parts?bom=uploads/nope.csv")
             assert st == 400 and str(ws.root) not in r["error"], r
         finally:
@@ -200,6 +200,17 @@ def _browser():
     return (node, mods, exe) if probe.returncode == 0 else None
 
 
+def planned_workspace(root):
+    """What `ecadlib demo` leaves: a librarian plan for uploads/demo/demo_bom.csv and no BOM check (triage history)."""
+    from ecadlib import firstrun as FR
+    ws = Workspace(root, [FX.LIB], providers=["digikey"], offline=True)
+    (ws.root / "uploads" / "demo").mkdir(parents=True, exist_ok=True)
+    (ws.root / "uploads" / "demo" / "demo_bom.csv").write_bytes(FR.DEMO_BOM.read_bytes())
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        ws.librarian_run("uploads/demo/demo_bom.csv", sources=["kicad", "standard"])
+    return ws
+
+
 @contextlib.contextmanager
 def _servers(d):
     srvs, urls = [], {"local": {}}
@@ -214,6 +225,7 @@ def _servers(d):
             urls["local"][str(w)] = up(FX.build(Path(d) / f"local{w}")[0])
         urls["empty"] = up(Workspace(Path(d) / "empty", [FX.LIB], providers=["digikey"], offline=True))
         urls["demo"] = {str(w): up(Workspace(Path(d) / f"demo{w}", [FX.LIB], providers=["digikey"], offline=True)) for w in (1280, 390)}
+        urls["planned"] = up(planned_workspace(Path(d) / "planned"))
         yield urls
     finally:
         for s in srvs:

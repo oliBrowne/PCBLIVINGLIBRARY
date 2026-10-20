@@ -52,8 +52,7 @@ def kicad_paths(path):
         p = pros[0]
     if p.suffix.lower() not in KICAD_EXT:
         raise ProjectError(f"{p.name}: give a .kicad_pro, .kicad_sch, .kicad_pcb or the project folder")
-    stem = p.with_suffix("")
-    sch, pcb = stem.with_suffix(".kicad_sch"), stem.with_suffix(".kicad_pcb")
+    sch, pcb = p.with_suffix(".kicad_sch"), p.with_suffix(".kicad_pcb")
     out = {"dir": p.parent, "name": p.stem, "sch": sch if sch.is_file() else None, "pcb": pcb if pcb.is_file() else None}
     if not out["sch"] and not out["pcb"]:
         raise ProjectError(f"{p.name}: no {sch.name} or {pcb.name} next to it")
@@ -71,28 +70,39 @@ def sheet_files(root):
         for sh in sexpr.find(_load_sch(f), "sheet"):
             props = {str(x[1]): str(x[2]) for x in sexpr.find(sh, "property") if len(x) > 2}
             sub = props.get("Sheetfile") or props.get("Sheet file")
-            if sub and (f.parent / sub).is_file():
-                todo.append(f.parent / sub)
+            if not sub:
+                continue
+            target = f.parent / sub
+            if not target.is_file():           # drawn on Windows / macOS: the case may differ (as bom_inputs reads it)
+                from .altium_project import _find_file
+                target = _find_file(f.parent, sub) or target
+            if target.is_file():
+                todo.append(target)
         if len(out) > 2000:
             raise ProjectError(f"{Path(root).name}: more than 2000 sheet files")
     return out
 
 
-def _ref(sym):
-    for proj in sexpr.find(sexpr.first(sym, "instances") or [], "project"):
-        for p in sexpr.find(proj, "path"):
-            r = sexpr.first(p, "reference")
-            if r:
-                return str(r[1])
-    return next((str(x[2]) for x in sexpr.find(sym, "property") if len(x) > 2 and str(x[1]) == "Reference"), "")
+def _refs(sym, root_uuid=""):
+    """Every reference of a placed symbol: one per instance path under this root schematic (a sheet used twice gives
+    R10 and R20, as bom_inputs reads it). No such path: the first instance, else the Reference property."""
+    paths = [(str(p[1]).strip("/").split("/")[0], str(r[1]))
+             for proj in sexpr.find(sexpr.first(sym, "instances") or [], "project")
+             for p in sexpr.find(proj, "path") for r in [sexpr.first(p, "reference")] if r]
+    mine = [r for top, r in paths if root_uuid and top == root_uuid]
+    if mine or paths:
+        return mine or [paths[0][1]]
+    return [next((str(x[2]) for x in sexpr.find(sym, "property") if len(x) > 2 and str(x[1]) == "Reference"), "")]
 
 
 def schematic_symbols(files):
     """{cache key: {"node": cached symbol, "lib_id": .., "refs": [..]}} over the sheet files. The cache key is the
     instance's lib_name when it has one (a symbol edited in the schematic), else its lib_id."""
-    cache, uses = {}, {}
+    cache, uses, root_uuid = {}, {}, None
     for f in files:
         tree = _load_sch(f)
+        if root_uuid is None:                  # files[0] is the root schematic (sheet_files)
+            root_uuid = str((sexpr.first(tree, "uuid") or [None, ""])[1])
         for s in sexpr.find(sexpr.first(tree, "lib_symbols") or [], "symbol"):
             cache.setdefault(str(s[1]), s)
         for s in sexpr.find(tree, "symbol"):
@@ -101,16 +111,19 @@ def schematic_symbols(files):
                 continue
             ln = sexpr.first(s, "lib_name")
             key = str(ln[1]) if ln else str(lid[1])
-            u = uses.setdefault(key, {"lib_id": str(lid[1]), "refs": set(), "edited": bool(ln)})
-            r = _ref(s)
-            if r and not r.startswith("#"):
-                u["refs"].add(r)
+            u = uses.setdefault(key, {"lib_id": str(lid[1]), "refs": set(), "edited": bool(ln), "inst_fp": {}})
+            fp = next((str(x[2]) for x in sexpr.find(s, "property") if len(x) > 2 and str(x[1]) == "Footprint"), None)
+            for r in _refs(s, root_uuid):
+                if r and not r.startswith("#"):
+                    u["refs"].add(r)
+                    if fp is not None:         # the footprint this placed symbol puts on the board
+                        u["inst_fp"][r] = "" if fp == "~" else fp
     return {k: {"node": cache.get(k), "lib_id": u["lib_id"], "refs": sorted(u["refs"], key=_natkey),
-                "edited": u["edited"]} for k, u in uses.items()}
+                "edited": u["edited"], "inst_fp": u["inst_fp"]} for k, u in uses.items()}
 
 
 def _natkey(s):
-    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", s)]
+    return [int(t) if t.isdecimal() else t for t in re.split(r"(\d+)", s)]
 
 
 def board_footprints(pcb, keep_quotes=False):
@@ -243,6 +256,23 @@ class Libraries:
             chain.append(syms[parent])
         return chain, None
 
+    def fp_key(self, fpid, near=None):
+        """A footprint id with its nickname resolved to the library folder it names: two nicknames for one .pretty
+        (demo:SOT-23 and mylib:SOT-23 through the project's fp-lib-table) are the same footprint. near: the symbol
+        library the id was read from; a nickname this project does not define is then the <nick>.pretty beside it
+        (kicad-export writes <lib>.kicad_sym and <lib>.pretty together, and its symbols name <lib>:...)."""
+        nick, sep, name = str(fpid or "").partition(":")
+        if not sep:
+            return ("", nick)
+        path = self.tables["fp"].get(nick)
+        if path is None and near is not None:
+            beside = Path(near).parent / f"{nick}.pretty"
+            path = beside if beside.is_dir() else None
+        try:
+            return (str(Path(path).resolve()) if path is not None else f"nick:{nick}", name)
+        except OSError:
+            return (f"nick:{nick}", name)
+
     def footprint(self, fpid):
         """fpid -> (tree, None) or (None, why)."""
         nick, _, name = fpid.partition(":")
@@ -273,6 +303,51 @@ def _no_instance_texts(tree):
     return [c for c in tree if keep(c)]
 
 
+def _fp_field(node_or_chain):
+    """A symbol's Footprint field (the footprint it places, Lib:Name), from a cached copy or a library extends chain."""
+    chain = node_or_chain if isinstance(node_or_chain, list) and node_or_chain and isinstance(node_or_chain[0], list) \
+        else [node_or_chain]
+    for node in chain:                         # the derived symbol's own field first, then its parents'
+        for p in sexpr.find(node, "property"):
+            if len(p) > 2 and str(p[1]) == "Footprint":
+                return "" if str(p[2]) == "~" else str(p[2])
+    return ""
+
+
+def _footprint_field(cached, chain, libs, inst=None, board=None, near=None):
+    """The symbol's Footprint field, schematic copy -> library: another footprint is what "Update symbols from library"
+    places (geometry-major), and one the library no longer has is held whatever the policy says (marked "missing").
+    Nicknames are resolved to their library folder first (another nickname for the same .pretty is no change).
+    inst: {ref: the placed symbol's own Footprint property}; board: {ref: the board footprint's lib_id}: each one that
+    is not the library part's footprint is a geometry-major change too (the part on the board is not the one the
+    library releases)."""
+    a, b = _fp_field(cached), _fp_field(chain)
+    out = []
+    if b:
+        kb = libs.fp_key(b, near)
+        for what, got in (("its Footprint property", inst or {}), ("the board", board or {})):
+            odd = {}
+            for ref, fp in sorted(got.items(), key=lambda x: _natkey(x[0])):
+                if not fp.strip() or libs.fp_key(fp, near) != kb:     # an empty one places no footprint at all
+                    odd.setdefault(fp.strip(), []).append(ref)
+            for fp, refs in odd.items():
+                places = f"{CD._f(fp)} ({what})" if fp else f"no footprint ({what} is empty)"
+                out.append({"class": "geometry-major", "area": "symbol", "what": "footprint", "old": fp, "new": b,
+                            "text": f"{', '.join(refs)} {'place' if len(refs) > 1 else 'places'} {places}, "
+                                    f"but the library part's footprint is {CD._f(b)}"})
+    if a != b and libs.fp_key(a, near) != libs.fp_key(b, near):
+        out.append({"class": "geometry-major", "area": "symbol", "what": "footprint", "old": a, "new": b,
+                    "text": f"footprint reference (the symbol's Footprint field) changed from {CD._f(a)} to {CD._f(b)}"})
+    if b and ":" in b:
+        folder, name = libs.fp_key(b, near)
+        if folder and not folder.startswith("nick:") and Path(folder).is_dir() and \
+                not (Path(folder) / f"{name}.kicad_mod").is_file():
+            why = f"{name} is no longer in library {b.partition(':')[0]}"
+            out.append({"class": "geometry-major", "area": "symbol", "what": "footprint", "old": a, "new": b,
+                        "missing": True, "text": f"the symbol's footprint {b} is not in the library ({why})"})
+    return out
+
+
 def footprint_fp(tree, name, instance=False):
     """instance=True: compare as a placed part (reference and value texts left out, on both sides)."""
     tree = _no_instance_texts(tree) if instance else tree
@@ -280,9 +355,9 @@ def footprint_fp(tree, name, instance=False):
 
 
 # ---------------------------------------------------------------- check (KiCad)
-def _row(kind, ident, refs, changes=None, state="same", why="", pol=None, **extra):
+def _row(kind, ident, refs, changes=None, state="same", why="", pol=None, action=None, **extra):
     changes = changes or []
-    act = CG.decide(changes, pol or CG.POLICY)["action"] if changes else "pass"
+    act = action or (CG.decide(changes, pol or CG.POLICY)["action"] if changes else "pass")
     return {"kind": kind, "id": ident, "refs": refs, "state": state, "why": why, "worst": CD.worst(changes) if changes else None,
             "action": act, "summary": CD.summary(changes) if changes else "", "changes": [{"class": c["class"], "text": c["text"]}
                                                                                        for c in changes], **extra}
@@ -294,6 +369,7 @@ def check_kicad(path, libs=(), rules=None, use_global=True):
     pol = CG.policy(rules, kp["dir"])
     L = Libraries(lib_tables(kp["dir"], libs, use_global))
     rows = []
+    board_ids = {f["ref"]: f["fpid"] for f in board_footprints(kp["pcb"])} if kp["pcb"] else {}
     if kp["sch"]:
         for key, u in sorted(schematic_symbols(sheet_files(kp["sch"])).items()):
             if not u["refs"]:                  # power symbols, flags: nothing to place
@@ -311,8 +387,11 @@ def check_kicad(path, libs=(), rules=None, use_global=True):
             except (ValueError, KeyError, IndexError, TypeError) as e:
                 rows.append(_row("symbol", u["lib_id"], u["refs"], state="unreadable", why=f"{type(e).__name__}: {e}"))
                 continue
+            ch += _footprint_field(u["node"], chain, L, u.get("inst_fp"), {r: board_ids[r] for r in u["refs"] if r in board_ids},
+                                   near=L.tables["sym"].get(u["lib_id"].partition(":")[0]))
             note = "edited in the schematic (lib_name " + key + ")" if u["edited"] else ""
-            rows.append(_row("symbol", u["lib_id"], u["refs"], ch, "changed" if ch else "same", note, pol))
+            act = "hold" if any(c.get("missing") for c in ch) else None
+            rows.append(_row("symbol", u["lib_id"], u["refs"], ch, "changed" if ch else "same", note, pol, act))
     if kp["pcb"]:
         groups = {}
         for f in board_footprints(kp["pcb"]):
@@ -327,8 +406,9 @@ def check_kicad(path, libs=(), rules=None, use_global=True):
         for (fpid, _), g in sorted(groups.items()):
             refs = sorted(g["refs"], key=_natkey)
             tree, why = L.footprint(fpid)
-            if tree is None:
-                rows.append(_row("footprint", fpid, refs, state="not in library", why=why))
+            if tree is None:                   # a footprint gone from a library that is there: an update cannot find
+                rows.append(_row("footprint", fpid, refs, state="not in library", why=why,   # it: held
+                                 action="hold" if why.endswith(f"is no longer in library {fpid.partition(':')[0]}") else None))
                 continue
             ch = CD.diff(g["fp"], footprint_fp(tree, g["fp"]["part"], instance=True))
             rows.append(_row("footprint", fpid, refs, ch, "changed" if ch else "same", "", pol))
@@ -345,55 +425,88 @@ def _guid(s):
     return re.sub(r"[{}\s]", "", str(s or "")).lower()
 
 
+VAULT_REVISION = re.compile(r"(?i)^([A-Z]{2,5}-\d{3,}-\d+)-\d+$")     # CMP-003-000000-1: item CMP-003-000000, revision 1
+
+
 def _base_id(did):
-    return re.sub(r"-\d+$", "", str(did or ""))
+    """A placed component's workspace item: an Altium vault item-revision id (CMP-003-000000-1) loses its revision
+    number; any other name is the item's own (TPS7A02-33, AMS1117-3.3 keep their -33 / -3.3)."""
+    did = str(did or "")
+    m = VAULT_REVISION.match(did)
+    return m.group(1) if m else did
 
 
-def check_altium(path, client, ws, library=None):
+def check_altium(path, client, ws, library=None, rules=None):
     """Components placed from the workspace -> rows: out of date (the workspace has a newer revision), current, not
-    found. library: an ecadlib library folder whose ledger recorded the revisions it pushed (classified changes)."""
+    found. library: an ecadlib library folder whose ledger recorded the workspace revisions it pushed (publish lines)
+    or pulled (`a365 pull` release lines): their changes are classified and the [change] policy decides. An out-of-date
+    component whose changes the ledger cannot list gets the [change] unlisted action (default hold: the check fails)."""
     from . import altium_project as AP, ledger as LG
     proj = AP.load_project(path)
     lg = LG.Ledger(library) if library and LG.Ledger(library).exists() else None
+    pol = CG.policy(rules, CG.lib_folder(library) if library else Path(path).parent)
     by_rev = {}
-    if lg:                                     # A365 revision id -> ledger line, from what ecadlib pushed
+    if lg:                                     # A365 revision id -> (part, ledger revision): what ecadlib pushed or pulled
         for e in lg.lines():
             rid = e.get("event") == "publish" and isinstance(e.get("detail"), dict) and e["detail"].get("a365_revision")
-            if rid:
-                by_rev[_guid(rid)] = e
-    groups = {}
+            if e.get("event") in LG.RELEASES and e.get("a365_revision"):
+                rid = e["a365_revision"]
+            if rid and e.get("part") and e.get("revision"):
+                by_rev[_guid(rid)] = (e["part"], e["revision"])
+    groups, dblib = {}, {}
     for c in proj["components"]:
         if not (c.get("vault_guid") or c.get("item_guid")) or not c.get("revision_guid"):
+            src = c.get("source_library") or ""
+            if src.lower().endswith((".dblib", ".svndblib")) or c.get("database_table"):   # a DbLib's part: listed
+                key = (c.get("design_item_id") or c.get("libref") or "", src, c.get("database_table") or "")
+                dblib.setdefault(key, []).append(c.get("designator") or "")
             continue
         k = (_base_id(c.get("design_item_id")) or c.get("libref") or "", _guid(c["revision_guid"]))
         groups.setdefault(k, []).append(c.get("designator") or "")
     rows, cache = [], {}
-    for (name, rev), refs in sorted(groups.items()):
-        refs = sorted(r for r in refs if r)
-        if name not in cache:
+
+    def find(n):
+        if n not in cache:
             try:
-                cache[name] = client.find(ws, name)
+                cache[n] = client.find(ws, n)
             except Exception as e:             # one part's lookup never stops the list
-                cache[name] = {"error": f"{type(e).__name__}: {e}"}
-        node = cache[name]
+                cache[n] = {"error": f"{type(e).__name__}: {e}"}
+        return cache[n]
+
+    for (placed, rev), refs in sorted(groups.items()):
+        refs = sorted(r for r in refs if r)
+        name, node, note = placed, find(placed), ""
+        m = re.match(r"^(.+)-\d+$", placed)
+        if (not node or node.get("error")) and m:   # 'CAP-1': item CAP, revision 1 (only when there is no CAP-1)
+            alt = find(m.group(1))
+            if alt and not alt.get("error"):
+                name, node = m.group(1), alt
+                note = f"placed as {placed}: the workspace has no {placed}, so its -{placed.rsplit('-', 1)[1]} is read as a revision number; "
         if not node or node.get("error"):
             rows.append(_row("component", name, refs, state="not found", why=(node or {}).get("error") or
                              f"no component named {name} in the workspace", placed=rev))
             continue
         latest = _guid(((node.get("revision") or {}).get("revisionId")) or (node.get("revision") or {}).get("id"))
         if latest == rev:
-            rows.append(_row("component", name, refs, placed=rev, latest=latest))
+            rows.append(_row("component", name, refs, why=note.rstrip("; "), placed=rev, latest=latest))
             continue
-        changes, why = [], "the workspace has a newer revision"
+        changes, why, listed = [], note + "the workspace has a newer revision", False
         a, b = by_rev.get(rev), by_rev.get(latest)
-        if a and b and a.get("part") == b.get("part"):
-            old, new = lg.revision(a["part"], a["revision"]), lg.revision(b["part"], b["revision"])
+        if a and b and a[0] == b[0]:
+            old, new = lg.revision(*a), lg.revision(*b)
             if old and new:
                 changes = CD.diff(lg.fingerprint(old), lg.fingerprint(new))
-                why = f"ledger r{a['revision']} -> r{b['revision']}"
-        elif lg:
-            why += " (the library's ledger does not record both revisions, so the changes are not listed)"
-        rows.append(_row("component", name, refs, changes, "out of date", why, placed=rev, latest=latest))
+                why, listed = f"ledger r{a[1]} -> r{b[1]}", True
+        if not listed:
+            why += (" (the library's ledger does not record both revisions, so the changes are not listed)" if lg else
+                    " (no --library: the changes are not listed)")
+        rows.append(_row("component", name, refs, changes, "out of date", why, pol,
+                         action=None if listed else pol["unlisted"], placed=rev, latest=latest))
+    for (did, src, table), refs in sorted(dblib.items()):   # no workspace revision to compare: said, never skipped
+        rows.append(_row("component", did or "(no Design Item ID)", sorted(r for r in refs if r), state="not checked",
+                         why=f"placed from DbLib {src or '?'}" + (f" (table {table})" if table else "") +
+                         ": it carries no workspace revision, so this check cannot compare it (the DbLib sync "
+                         "publishes only released revisions)"))
     counts = {}
     for r in rows:
         counts[r["state"]] = counts.get(r["state"], 0) + 1
@@ -502,6 +615,11 @@ def freeze_kicad(path, nick=None, dry_run=False, out_dir=None, rewrite=True):
             node = sexpr.parse(sexpr.dumps(cache[k]), keep_quotes=True)
             node[1] = sexpr.Q(sym_new[k])
             _rename_units(node, k.rpartition(":")[2], sym_new[k])
+            if rewrite:                        # the frozen symbol places the frozen footprint, as the schematic will
+                fps = {fpid: f"{nick}:{fp_new[(fpid, ds[0])]}" for fpid, ds in names.items()}
+                for prop in sexpr.find(node, "property"):
+                    if len(prop) > 2 and str(prop[1]) == "Footprint" and str(prop[2]) in fps:
+                        prop[2] = sexpr.Q(fps[str(prop[2])])
             lib.append(node)
         f = out_dir / f"{nick}.kicad_sym"
         if not dry_run:
@@ -537,8 +655,9 @@ def freeze_kicad(path, nick=None, dry_run=False, out_dir=None, rewrite=True):
             tables.append((pdir / "fp-lib-table", "fp_lib_table", f"{prefix}/{nick}.pretty"))
         if not dry_run:
             for f in list(changed) + [p for p, _, _ in tables if p.is_file()]:
-                backup.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(f, backup / f.name)
+                dst = _backup_path(backup, pdir, f)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, dst)
             for f, t in changed.items():
                 f.write_text(sexpr.dumps(t) + "\n", encoding="utf-8")
         for p, head, uri in tables:
@@ -549,6 +668,22 @@ def freeze_kicad(path, nick=None, dry_run=False, out_dir=None, rewrite=True):
                            for fpid, ds in names.items() for n, d in enumerate(ds)},
             "files": [str(f) for f in written], "backup": str(backup) if backup and not dry_run and backup.exists() else None,
             "dry_run": dry_run}
+
+
+def _backup_path(backup, pdir, f):
+    """Where freeze backs up f: its path inside the project folder (sub.kicad_sch and sub2/sub.kicad_sch are two
+    files); a sheet outside it (Sheetfile "../shared/x.kicad_sch") under _outside/, numbered when the name is taken."""
+    try:
+        rel = Path(os.path.relpath(f, pdir))
+    except ValueError:                         # another drive (Windows)
+        rel = None
+    if rel is None or rel.parts[:1] == ("..",):
+        rel = Path("_outside") / Path(f).name
+    dst, n = backup / rel, 1
+    while dst.exists():
+        n += 1
+        dst = dst.with_name(f"{rel.stem}.{n}{rel.suffix}")
+    return dst
 
 
 def _point_schematic(tree, nick, sym_new, fps):
@@ -589,8 +724,9 @@ def scan(path, library, variant=None):
         raise ProjectError(f"{library}: no plan.json (give the folder of an ecadlib library)")
     src = Path(path)
     if src.is_dir() or src.suffix.lower() in (".kicad_pro", ".kicad_pcb"):
-        src = kicad_paths(src)["sch"] or src  # a KiCad project's parts are its schematic's
-    lines, _ = BT.read_bom(str(src))
+        kp = kicad_paths(src)
+        src = kp["sch"] or kp["pcb"]          # a KiCad project's parts are its schematic's (a board alone: the board's)
+    lines = board_bom(src) if src.suffix.lower() == ".kicad_pcb" else BT.read_bom(str(src))[0]
     by_mpn = {}
     for it in items:
         for m in (A365.mpn_of(it), it.get("name") or ""):     # its MPN parameter, and its name (often the MPN too)
@@ -612,6 +748,20 @@ def scan(path, library, variant=None):
     tool = "kicad" if src.suffix.lower() in KICAD_EXT else "altium" if src.suffix.lower() in ALTIUM_EXT else "bom"
     LG.record_usage(folder, CG.project_key(folder, path), parts, tool=tool)
     return {"project": CG.project_key(folder, path), "library": str(folder), "parts": parts, "not_in_library": sorted(set(unknown))}
+
+
+def board_bom(pcb):
+    """BOM lines ({mpn, designator}) from a board's footprints, for a project without a schematic: KiCad copies each
+    symbol's fields (MPN, Manufacturer Part Number, ...) onto its footprint."""
+    by = {}
+    for f in board_footprints(pcb):
+        props = {str(x[1]): str(x[2]) for x in sexpr.find(f["node"], "property") if len(x) > 2}
+        mpn = FP.identity(props)["mpn"]
+        if f["ref"] and not f["ref"].startswith("#"):
+            by.setdefault(mpn, []).append(f["ref"])
+    if not by:
+        raise ProjectError(f"{Path(pcb).name}: no footprints on the board")
+    return [{"mpn": m, "designator": ",".join(sorted(r, key=_natkey))} for m, r in sorted(by.items())]
 
 
 # ---------------------------------------------------------------- report and CLI
@@ -693,8 +843,8 @@ def main(argv=None):
                 print(json.dumps(res, indent=1))
             else:
                 print_check(res)
-            if a.out:
-                print(f"-> {write_report(res, a.out)}")
+            if a.out:                              # --json: stdout is the JSON, nothing else
+                print(f"-> {write_report(res, a.out)}", file=sys.stderr if a.json else sys.stdout)
             return 1 if res["held"] else 0
         if a.cmd == "freeze":
             res = freeze_kicad(a.project, a.name, a.dry_run)

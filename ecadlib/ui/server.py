@@ -272,6 +272,9 @@ def make_handler(ws: Workspace):
                 return self._send(403, {"error": "unexpected Host header"})
             if method == "POST" and not self._origin_ok():
                 return self._send(403, {"error": "cross-origin request refused"})
+            if u.path.startswith("/api/") and not (ws.root / "uploads").is_dir():   # the workspace folder was deleted or
+                with contextlib.suppress(OSError):                                   # moved while this runs: make it again
+                    ws.ensure_folders()
             return u
 
         # ---------------------------------------------------------- request bodies
@@ -283,9 +286,17 @@ def make_handler(ws: Workspace):
             if len(bom) > 1000 or any(len(x) > 200 for x in bom.replace("\\", "/").split("/")):
                 raise ValueError("that BOM name is too long; pick a BOM from the list")
             ws.inside(bom)                                 # refuses a path outside the workspace
-            if write and jobs.running("librarian:" + bom):
+            if write and jobs.running(self._plan_key(bom)):
                 raise FileExistsError(f"the librarian is still running on {bom}; try again when it has finished")
             return bom
+
+        @staticmethod
+        def _plan_key(bom):
+            """One librarian job per plan: two uploads of BOM.csv share one plan folder (Workspace._key)."""
+            try:
+                return "librarian:" + ws._key(ws._bom_path(bom))
+            except (ValueError, OSError):
+                return "librarian:" + bom
 
         def _body(self, limit=MAX_UPLOAD):
             self._body_read = True
@@ -355,7 +366,10 @@ def make_handler(ws: Workspace):
                     except KeyError as e:
                         return self._send(404, {"error": _msg(e)})
                 if u.path == "/api/parts":                      # part cards of a BOM's library plan
-                    return self._send(200, ws.library_parts(self._bom({"bom": q.get("bom")}), q.get("pictures") != "0"))
+                    bom = self._bom({"bom": q.get("bom")})
+                    if q.get("ifplan") == "1" and not ws.has_plan(bom):   # no plan yet is no error (a new BOM)
+                        return self._send(200, {"plan": None})
+                    return self._send(200, ws.library_parts(bom, q.get("pictures") != "0"))
                 if u.path == "/api/job":                        # a running job (its live log)
                     job = jobs.get(q.get("id", ""))
                     return self._send(200, job) if job else self._send(404, {"error": "no such job"})
@@ -404,7 +418,14 @@ def make_handler(ws: Workspace):
             if u.path in ES.POST_ROUTES:                # setup page (ecadlib.easy_setup)
                 b = self._json()
                 with write_lock if u.path in ES.WRITES else contextlib.nullcontext():
-                    return self._send(200, ES.POST_ROUTES[u.path](ws.root, b))
+                    page_libs = lambda: [str(Path(x).resolve()) for x in ES.ws_libs(ws.root)]
+                    before = page_libs() if u.path == "/api/setup" else None
+                    out = ES.POST_ROUTES[u.path](ws.root, b)
+                    if before is not None and out.get("saved") and not out.get("restart"):
+                        after = page_libs()             # saved here: this server uses the page's folders at once
+                        ws.libs = [x for x in ws.libs if x not in before or x in after] + [
+                            x for x in after if x not in ws.libs]
+                    return self._send(200, out)
             if u.path == "/api/footprint/preview":                # read-only, no lock
                 b = self._json()
                 return self._send(200, ws.preview_footprint(b["spec"], b.get("density")))
@@ -415,7 +436,7 @@ def make_handler(ws: Workspace):
                 self._json()
                 with write_lock:
                     rel = ws.demo_bom()
-                return self._send(200, dict(jobs.start(self._demo, rel, label=rel, key="librarian:" + rel), bom=rel))
+                return self._send(200, dict(jobs.start(self._demo, rel, label=rel, key=self._plan_key(rel)), bom=rel))
             if u.path == "/api/upload":
                 name = unquote(self.headers.get("X-Filename", "bom.csv"))
                 with write_lock:
@@ -429,7 +450,7 @@ def make_handler(ws: Workspace):
                 bom = self._bom(b)
                 refresh = [] if b.get("refresh") is True else (b.get("refresh") or None)
                 return self._send(200, jobs.start(self._librarian, bom, b.get("sources"), refresh, label=bom,
-                                                  key="librarian:" + bom))
+                                                  key=self._plan_key(bom)))
             if u.path == "/api/ai/quote":                         # downloads datasheets (cached) to price them: a job
                 bom = self._bom(self._json())
                 return self._send(200, jobs.start(self._ai_quote, bom, label=bom))
@@ -437,7 +458,7 @@ def make_handler(ws: Workspace):
                 b = self._json()
                 bom = self._bom(b)
                 return self._send(200, jobs.start(self._ai_read, bom, _usd(b.get("approved_usd")), b.get("over_limit_ok") is True,
-                                                  b.get("price_unknown_ok") is True, label=bom, key="librarian:" + bom))
+                                                  b.get("price_unknown_ok") is True, label=bom, key=self._plan_key(bom)))
             if u.path == "/api/style/guide":                      # the model writes the guide: a job
                 b = self._json()
                 return self._send(200, jobs.start(self._style_guide, _usd(b.get("approved_usd")), b.get("over_limit_ok") is True,
@@ -485,7 +506,8 @@ def make_handler(ws: Workspace):
                 "/api/rules/save": lambda b: ws.save_rules(_str(b.get("text"), "text"), b.get("overwrite") is True),
                 "/api/style/direction": lambda b: ws.style_direction(_str(b.get("text"), "text", True) or None,
                                                                      b.get("clear") is True),
-                "/api/altium365/push": lambda b: ws.altium365_push(self._bom(b, True), b.get("workspace"),
+                "/api/altium365/push": lambda b: ws.altium365_push(self._bom(b, True),
+                                                                   _str(b.get("workspace"), "workspace", True),
                                                                    dry_run=b.get("dry_run", True) is not False),
             }
             if u.path in actions:
@@ -502,7 +524,7 @@ def make_handler(ws: Workspace):
         def _change_decide(self, b):
             return ws.decide_change(self._bom(b, True), _str(b.get("part"), "part"), b.get("decision"),
                                     _str(b.get("user"), "user"), _str(b.get("comment"), "comment", True),
-                                    _str(b.get("role"), "role", True))
+                                    _str(b.get("role"), "role", True), _str(b.get("digest"), "digest", True))
 
         def _decide(self, b):
             return ws.approve_part(self._bom(b, True), _str(b.get("part"), "part"), b.get("decision"),
@@ -606,6 +628,8 @@ def main(argv=None):
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--setup", action="store_true", help="open the setup page (AI model and key, Altium / KiCad, folders)")
     a = ap.parse_args(argv)
+    if not 0 <= a.port <= 65535:                            # bind() raises OverflowError: a typo, not a bug
+        ap.error("--port must be from 0 to 65535")
     from .. import userconfig
     userconfig.apply_env()                                  # kicad-cli on PATH; stored keys are read when needed
     if not _loopback(a.host):
@@ -619,9 +643,9 @@ def main(argv=None):
         sys.exit(f"can't listen on {a.host}:{a.port} ({e.strerror}); is ecadlib already running? Try --port {a.port + 1}")
     shown = f"[{a.host}]" if ":" in a.host and not a.host.startswith("[") else a.host   # IPv6 literal in a URL
     url = f"http://{shown}:{srv.server_address[1]}/"
-    print(f"ecadlib UI on {url}  (workspace {ws.root}; Ctrl+C to stop)")
-    if not a.no_browser:
-        webbrowser.open(url + ("setup" if a.setup else ""))
+    print(f"ecadlib UI on {url}{'setup' if a.setup else ''}  (workspace {ws.root}; Ctrl+C to stop)")
+    if not a.no_browser:                    # a thread: a console browser (w3m, lynx) waits for the page we serve below
+        threading.Thread(target=webbrowser.open, args=(url + ("setup" if a.setup else ""),), daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

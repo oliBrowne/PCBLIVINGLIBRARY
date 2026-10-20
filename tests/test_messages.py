@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[1] / "ecadlib"
 EXAMPLES = {
     "files.no_symbol": "files: no symbol model (.SchLib)",
     "files.no_footprint": "files: no footprint model (.PcbLib) (cannot be overridden)",
+    "files.datasheet_refused": "files: datasheet download refused by www.analog.com (reset the connection): the maker's site "
+                               "likely blocks automated downloads; download https://www.analog.com/media/en/technical-"
+                               "documentation/data-sheets/LTM4671.pdf in a browser and read it with `ecadlib datasheet "
+                               "FILE.pdf --part LTM4671`",
     "files.missing": "files: footprint file missing: /srv/ws/models/PcbLib/X.PcbLib",
     "files.unreadable": "files: symbol file does not read back (ValueError: library is empty)",
     "pins.no_pins": "pins: symbol has no pins",
@@ -26,6 +30,7 @@ EXAMPLES = {
     "footprint.overlap": "footprint: copper: pads 1 and 2 overlap by 0.050 mm",
     "footprint.pad_gap": "footprint: copper: pad pairs 1-2, 3-4 are 0.090 mm apart (< 0.1 mm)",
     "footprint.hole_clearance": "footprint: copper: pad 3 is 0.000 mm from the hole at (1.000, 2.000) (< 0.1 mm)",
+    "footprint.zero_pad": "footprint: copper: pad 1 has no copper: size 1.95 x 0 mm",
     "footprint.no_pin1": "footprint: pin1: no pad numbered 1",
     "footprint.clockwise": "footprint: pin1: pads are numbered clockwise; KiCad and IPC number counter-clockwise from pin 1 (seen from the top)",
     "footprint.ball_rows": "footprint: bga: row letters and rows disagree at balls A1, B2",
@@ -71,8 +76,11 @@ EXAMPLES = {
     "librarian.symbol_match": "symbol Q_NMOS_GSD matched by the BOM's value",
     "librarian.easyeda": "EasyEDA C8734 conversion: check pads and pins against the datasheet (native converter, format assumed)",
     "librarian.family_pinout": "symbol pinout AMS1117 from the AMS1117-3.3 family table (ecadlib.stdparts): check pins 1-3 against the datasheet",
+    "librarian.value_two_ways": "verify: value 4,700pF reads two ways: 4.7pF or 4700pF; write it without the comma",
     "approval.waiting": "awaiting approval: 1 approval from role librarian",
     "approval.changed": "changed since the release check: run release-check again",
+    "change.held": "change control: new part with the MPN of released RES-0603-10k r1 (pad 1 moved 0.2 mm in x); a person "
+                   "approves it: ecadlib part show",
     "dedupe.duplicate": "duplicate of R_10k_0603 (dedupe)",
     "a365.deleted": "deleted in the Altium 365 workspace",
     "proof.doubt": "proof doubt: the pin 1 mark is on the other side",
@@ -188,7 +196,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 8, "datasheet.py": 4,
+    "librarian.py": 10, "datasheet.py": 4,
 }
 
 

@@ -47,6 +47,7 @@ jobs:
           }
           if ($bin) { $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH }
           elseif (-not (Get-Command pdftoppm -ErrorAction SilentlyContinue)) { throw "pdftoppm not installed" }
+          $global:LASTEXITCODE = 0   # choco's failed exit code would otherwise fail the step after the fallback worked
       - name: Run all tests (offline; no secrets needed)
         env:
           SOURCE_DATE_EPOCH: "1791936000"

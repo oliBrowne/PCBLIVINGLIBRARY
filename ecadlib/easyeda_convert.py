@@ -159,7 +159,9 @@ def footprint_to_kicad(data, name=None, notes=None):
     font = f"(effects (font (size {_n(TEXT_H)} {_n(TEXT_H)}) (thickness {_n(TEXT_W)})))"
     out = [f"(footprint {_q(name)} (version 20221018) (generator ecadlib_easyeda) (layer \"F.Cu\")",
            f"  (descr {_q(CREDIT + '; converted by ecadlib.easyeda_convert; check against the datasheet')})",
-           "  (attr smd)" if all(" smd " in p for p in pads) else "  (attr through_hole)",
+           # a plated pin makes it THT; an unplated hole (a locating peg) does not (footprint_adv, footprint_rules, KiCad)
+           "  (attr through_hole)" if any(" thru_hole " in p for p in pads) or not any(" smd " in p for p in pads)
+           else "  (attr smd)",
            f'  (fp_text reference "REF**" (at {_n(cx_)} {_n(ref_y)}) (layer "F.SilkS") {font})',
            f'  (fp_text value {_q(name)} (at {_n(cx_)} {_n(val_y)}) (layer "F.Fab") {font})']
     # ${REFERENCE} on the assembly drawing (KLC F5.2), in the middle of the body, 0.5 .. 1.0 mm to fit it
@@ -361,7 +363,7 @@ def symbol_to_kicad(data, name, footprint="", props=None, notes=None):
     cp = head.get("c_para") or {}
     ox, oy = _f(head.get("x")), _f(head.get("y"))
     P = lambda x, y: (_n((_f(x) - ox) * U), _n(-(_f(y) - oy) * U))
-    body, pins, dropped = [], [], {}
+    body, pins, dropped, named = [], [], {}, False
     for s in data.get("shape") or []:
         if not isinstance(s, str):
             continue
@@ -371,6 +373,7 @@ def symbol_to_kicad(data, name, footprint="", props=None, notes=None):
             st = seg[0] + [""] * (9 - len(seg[0]))
             num = (seg[4][4] if len(seg) > 4 and len(seg[4]) > 4 else "") or st[3]
             nm = seg[3][4] if len(seg) > 3 and len(seg[3]) > 4 else ""
+            named = named or nm.strip() not in ("", "~", num)          # "1" named "1" (a crystal): its name is noise
             cx, cy = _f(st[4]), _f(st[5])
             a, b = _path_ends(seg[2][0] if len(seg) > 2 else "")
             if a is None:
@@ -425,7 +428,8 @@ def symbol_to_kicad(data, name, footprint="", props=None, notes=None):
     pr = {"Reference": (cp.get("pre") or "U?").rstrip("?") or "U", "Value": name, "Footprint": footprint,
           "Datasheet": "~", "Description": "converted from EasyEDA by ecadlib.easyeda_convert", "Credit": CREDIT}
     pr.update({k: v for k, v in (props or {}).items() if v})
-    out = ["(kicad_symbol_lib (version 20231120) (generator ecadlib_easyeda)", f"  (symbol {_q(name)} (in_bom yes) (on_board yes)"]
+    out = ["(kicad_symbol_lib (version 20231120) (generator ecadlib_easyeda)",
+           f"  (symbol {_q(name)}{'' if named else ' (pin_names (offset 0) hide)'} (in_bom yes) (on_board yes)"]
     out += [f"    (property {_q(k)} {_q(v)} (at 0 0 0) (effects (font (size 1.27 1.27)){'' if k in ('Reference', 'Value') else ' hide'}))" for k, v in pr.items()]
     out += [f"    (symbol {_q(name + '_1_1')}"] + body + pins + ["    )", "  )", ")"]
     return "\n".join(out) + "\n"

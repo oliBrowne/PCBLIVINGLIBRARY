@@ -30,7 +30,7 @@ ecadlib altium-native write D:/libs/ecadlib        # ecadlib_build.txt + ecadlib
 ecadlib altium-native compare D:/libs/ecadlib      # read back what Altium saved, compare pad by pad and pin by pin
 ```
 
-`ecadlib_build_report.txt` lists each library as OK or FAILED. `compare` exits 1 on any difference.
+`ecadlib_build_report.txt` lists each library as OK or FAILED. `compare` exits 1 on any difference, and 2 for a folder that does not exist or holds no recipes (nothing compared is never a pass; `write` does not create a missing folder either).
 
 ## Edits made in Altium are kept
 

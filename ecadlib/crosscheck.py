@@ -20,12 +20,22 @@ every datasheet part (also when the table matched, and when only the symbol is n
 
 Comparison is in code (compare()) with the tolerances in TOL: two numbers agree when they are within max(abs, rel x
 value) of each other, or (against the table) when the table's nominal lies inside the min..max the datasheet prints.
-Pin count and pin numbers must be equal; pin names must be equal after normalising case and overbar marks. Agree ->
-the part is accepted as before (a person still verifies every datasheet part) and records "cross-checked". Disagree ->
+Length and width may agree turned 90 degrees when the whole package turns (body, exposed pad, and against the table
+the qfn rows) and the turn cannot move a pad (_turn); an exposed pad turned on its own still holds. Pin count and
+pin numbers must be equal; pin names must be equal after normalising case and active-low marks (~{X}, X̅, X#, /X,
+nX; X_N only against another active-low mark). A package type that differs holds even when every number agrees (the
+type picks the footprint builder); the message says so. Agree ->
+the part is accepted as before (a person still verifies every datasheet part) and records "cross-checked" (status
+"agreed"). A table entry found only by the read's OWN package name (the BOM names no package the table resolves) is not
+independent: it shows the read's numbers fit the read's name, which self_check already tests. That outcome is recorded
+as "self-checked" (status "self-checked"), is never counted as an agreement with a second source, and goes on the part's
+review items; auto mode does not add a paid second read for it (cross_check = "always" makes one). Disagree ->
 Held is raised: nothing is written to the library, both values go to the review (never averaged, never one picked).
 A check that could not be made (refusal, unparseable answer, nothing to compare) is recorded as "unchecked" and added
 to the part's review items; it does not hold the part."""
 import base64, hashlib, json, re
+
+from .eval.score import norm_name as norm_pin_name
 
 MODES = ("auto", "always", "off")
 CHECK_MAX_TOKENS = 8000
@@ -83,13 +93,14 @@ def critical(spec):
     for k in ("pitch", "body_length", "body_width", "lead_span"):
         out[k] = _val(spec.get(k))
     out["ep_length"], out["ep_width"] = _val(ep.get("length")), _val(ep.get("width"))
+    from . import datasheet as D
+    tab = spec.get("tab") if isinstance(spec.get("tab"), dict) else {}   # SOT-223-3_TabPin2: the tab is pin 2 again
+    out["tab_repeats_lead"] = bool(tab) and str(tab.get("number")) in {str(p.get("number")) for p in D._listed(spec)}
+    n = out["pin_count"]
+    if out["package_type"] == "qfn" and n:                   # the rows as footprint_gen._qfn lays them out
+        nlr = spec.get("pins_left_right", n // 4)
+        out["rows"] = (nlr, spec.get("pins_top_bottom", (n - 2 * nlr) // 2))
     return out
-
-
-def norm_pin_name(s):
-    s = str(s or "").upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "").replace("~", "")
-    s = re.sub(r"^(N(?=[A-Z]{2,})|/|#)", "", s)
-    return re.sub(r"[/#*_\-]", "", s)
 
 
 LETTER = {"A": "ANODE", "K": "CATHODE", "C": "COLLECTOR", "E": "EMITTER", "B": "BASE", "G": "GATE", "D": "DRAIN",
@@ -105,6 +116,8 @@ def _names(s):
         if norm_pin_name(part):
             out.add(norm_pin_name(part))
     out |= {LETTER[n] for n in out if n in LETTER}
+    from .eval.score import WORDS                     # a pin spelled out ("ENABLE") is "EN", as the eval scorer counts it
+    out |= {WORDS[n] for n in out if n in WORDS}
     return out - {""}
 
 
@@ -116,6 +129,10 @@ def names_agree(a, b):
     ("K" vs "cathode (K)", "VO" vs "VO (output)"), or one calls the exposed pad by its pad name ("GND" vs "PowerPAD")."""
     na, nb = _names(a), _names(b)
     if na & nb:
+        return True
+    from .house_style import pin_low
+    (ba, sa), (bb, sb) = pin_low(a), pin_low(b)
+    if sa and sb and norm_pin_name(ba) == norm_pin_name(bb):     # RESET_N vs ~{RESET}: both mark it active low
         return True
     # the pad name only stands in for a ground / pad name: "TAB" vs "VIN" is a real disagreement (SOT-223 numbering)
     padish = lambda n: bool(n & EP_NAMES) or any(GROUNDISH.match(x) for x in n)
@@ -136,13 +153,71 @@ def _close(k, a, b, table):
     tol = max(ab, rel * max(abs(a[0]), abs(b[0])))
     if abs(a[0] - b[0]) <= tol + 1e-9:
         return True
-    return table and a[1] < a[2] and a[1] - 1e-9 <= b[0] <= a[2] + 1e-9     # the table nominal inside the printed range
+    # the table nominal inside the printed range, when that range is a tolerance band (not 3.0..6.2 mm around a
+    # 4.9 mm body) and the read's own nominal is near the table's
+    return table and a[1] < a[2] and a[1] - 1e-9 <= b[0] <= a[2] + 1e-9 and a[2] - a[1] <= 6 * tol + 1e-9 \
+        and abs(a[0] - b[0]) <= 3 * tol + 1e-9
+
+
+def _turns(first, second, l, w, table):
+    """The ways the pair (l, w) agrees: 0 as read, 1 with length and width swapped; None when a side lacks one."""
+    if any(x.get(k) is None for x in (first, second) for k in (l, w)):
+        return None
+    fit = lambda ka, kb: _close(ka, first[ka], second[kb], table)
+    return {t for t, ok in ((0, fit(l, l) and fit(w, w)), (1, fit(l, w) and fit(w, l))) if ok}
+
+
+PAIRS = (("body", ("body_length", "body_width")), ("exposed pad", ("ep_length", "ep_width")))
+TURN_FREE = ("gullwing", "bga", "pin_header", "connector", "custom")    # builders that draw only the outline from the body
+
+
+def _turn(first, second, table):
+    """What compares turned 90 degrees (["body", "exposed pad"]), or [] when the two sides must agree as given.
+    Only a whole package turns: the exposed pad never turns on its own, since its copper would turn with it
+    (AL8860MP: MSOP-8 3x3, EP 1.8x1.5 read, 1.5x1.8 in the table; footprint_gen lays EP length across the rows).
+    The table is in footprint_gen's axes: only a qfn whose rows turn too (AT24CS01-MAHM, DFN pins top/bottom instead
+    of left/right) is the same land pattern turned. A second read gives D x E as printed and no rows: the body may turn
+    only where the pads do not stand on it (IRFS4115: D2PAK 10.16 x 9.015 read, 9.015 x 10.16 printed)."""
+    body = _turns(first, second, "body_length", "body_width", table)
+    ep = _turns(first, second, "ep_length", "ep_width", table)
+    if not body or 1 not in body or ep is not None and 1 not in ep or {1} not in (body, ep):
+        return []
+    if table:
+        rows = first.get("rows")
+        ok = first.get("package_type") == second.get("package_type") == "qfn" and rows and second.get("rows") == rows[::-1]
+    else:
+        ok = first.get("package_type") in TURN_FREE and body == {1}
+    return [w for w, t in (("body", body), ("exposed pad", ep)) if t == {1}] if ok else []
+
+
+def _type_only(rec):
+    """TC2030 connector vs custom, BD33FC0FP gullwing vs custom: a package type that is the only difference still holds
+    (the type picks the footprint builder), but the message says nothing else differs."""
+    d = rec["disagreed"]
+    if d and d[0]["field"] == "package_type":
+        d[0].pop("note", None)
+        if len(d) == 1:
+            d[0]["note"] = "only the type label differs: " + (", ".join(LABEL[f] for f in rec["agreed"]) + " agree"
+                                                               if rec["agreed"] else "nothing else to compare")
+
+
+def shown(d):
+    """The other source's value of a disagreement, with its note."""
+    return d["second"] + (f" - {d['note']}" if d.get("note") else "")
+
+
+def _turned(c):
+    return f", {' and '.join(c['turned'])} with length and width swapped" if c.get("turned") else ""
 
 
 def compare(first, second, kind="read"):
     """first: the read's critical numbers; second: the table's (kind="table") or a second read's. ->
-    {status: agreed | disagreed | unchecked, compared, agreed, disagreed: [{field, first, second}], not_compared}."""
+    {status: agreed | disagreed | unchecked, compared, agreed, disagreed: [{field, first, second, note?}], not_compared,
+    turned?: ["body", "exposed pad"] where the other side gives length and width the other way round}."""
     rec = {"compared": [], "agreed": [], "disagreed": [], "not_compared": []}
+    table = kind == "table"
+    turned = _turn(first, second, table)
+    swap = {k: p for w, pair in PAIRS if w in turned for k, p in (pair, pair[::-1])}
 
     def put(field, ok, a, b):
         rec["compared"].append(field)
@@ -159,19 +234,30 @@ def compare(first, second, kind="read"):
         # the exposed pad is not counted: a custom read of an EP package may be one more than the other side
         ep_one_more = (first.get("package_type") == "custom" and second.get("has_ep") and a == b + 1) or \
                       (second.get("package_type") == "custom" and first.get("has_ep") and b == a + 1)
-        put("pin_count", a == b or ep_one_more, a, b)
+        # pin_count counts each pad number once, so a tab that is a lead's pin again is not in it; the second read is
+        # asked for "terminals" and may count it (that text is in every cached answer's key, so it stays)
+        tab_one_more = (first.get("tab_repeats_lead") and b == a + 1) or (second.get("tab_repeats_lead") and a == b + 1)
+        put("pin_count", a == b or ep_one_more or tab_one_more, a, b)
     else:
         rec["not_compared"].append("pin_count")
     if not custom and first.get("pin_count") is not None and second.get("pin_count") is not None:
         put("has_ep", first["has_ep"] == second["has_ep"], "yes" if first["has_ep"] else "none",
             "yes" if second["has_ep"] else "none")
     for k in DIMS:
-        a, b = first.get(k), second.get(k)
+        a, b = first.get(k), second.get(swap.get(k, k))
         if a is None or b is None:
             rec["not_compared"].append(k)
             continue
-        put(k, _close(k, a, b, kind == "table"), a, b)
+        put(k, _close(k, a, b, table), a, b)
+    if turned:
+        rec["turned"] = turned
+    for w, pair in PAIRS:
+        if w not in turned and 1 in (_turns(first, second, *pair, table) or ()):
+            for d in rec["disagreed"]:
+                if d["field"] in pair:
+                    d["note"] = "the same with length and width swapped, but the pads would not turn with it"
     dims = [f for f in rec["compared"] if f in DIMS]
+    _type_only(rec)
     rec["status"] = "disagreed" if rec["disagreed"] else "agreed" if rec["compared"] and (dims or kind == "table") \
         else "unchecked"
     return rec
@@ -181,7 +267,7 @@ def compare_pins(a, b):
     """a, b: [(num, name)] from two reads -> list of disagreements (pin numbers, names)."""
     out = []
     da, db = {str(n): norm_pin_name(s) for n, s in a}, {str(n): norm_pin_name(s) for n, s in b}
-    key = lambda s: (not s.isdigit(), int(s) if s.isdigit() else 0, s)
+    key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)   # '①' is isdigit(), not int()
     only_a, only_b = sorted(set(da) - set(db), key=key), sorted(set(db) - set(da), key=key)
     if only_a or only_b:
         out.append({"field": "pins", "first": f"{len(da)} pins" + (f", only here: {', '.join(only_a[:12])}" if only_a else ""),
@@ -287,7 +373,7 @@ def parse(msg):
         raise Unavailable(f"the second read stopped ({msg['stop_reason']})")
     if (msg.get("ecadlib") or {}).get("error"):
         raise Unavailable(msg["ecadlib"]["error"])
-    text = "".join(b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text")
+    text = D.message_text(msg)                        # "" for content null / a string / text null
     try:
         ext = json.loads(text)
     except ValueError:
@@ -299,8 +385,8 @@ def parse(msg):
         pkg = dict(pkg, pin_count=pkg.get("pin_count") or None)
         for d in pkg["dims"]:
             if isinstance(d, dict) and d.get("name") in CHECK_DIMS:
-                try:
-                    raw = dict(d, **{k: D._wire_num(d.get(k), f"{d['name']}.{k}") for k in ("min", "nom", "max")})
+                try:                                  # as the first read takes it: "6.5±0.2", a unit that disagrees
+                    raw = dict(d, **D._wire_dim(d, d["name"]))
                 except D.DatasheetError as e:
                     raise Unavailable(str(e))
                 if d["name"].startswith("exposed_pad."):
@@ -370,6 +456,7 @@ def second_read(reader, job, first, first_pins, model):
         c["compared"] += ["pins", "pin_names"]
         c["agreed"] += [f for f in ("pins", "pin_names") if f not in {d["field"] for d in extra}]
         c["disagreed"] += extra
+        _type_only(c)
         if extra:
             c["status"] = "disagreed"
     elif first_pins:
@@ -403,9 +490,15 @@ def run(reader, job, res, model):
     # a table check too weak to stand alone (one field, e.g. only the pin count of a pad-table entry) can hold a part
     # but cannot accept it: when the second read could not be made, the part stays unchecked
     st = [c["status"] for c in checks]
-    ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong]
-    status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok else "unchecked"
+    ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong and not _self(c)]
+    status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
+        else "self-checked" if any(c["status"] == "agreed" for c in strong) else "unchecked"
     return {"mode": mode, "status": status, "checks": checks}
+
+
+def _self(c):
+    """A table check whose entry was chosen by the read's own package name: not an independent source (DS-13)."""
+    return c.get("source") == "standard table" and c.get("via") == "the read's package name"
 
 
 def summary_line(rec):
@@ -419,9 +512,12 @@ def summary_line(rec):
         if c["status"] == "disagreed":
             parts.append(f"{c['against']}: " + "; ".join(f"{LABEL.get(d['field'], d['field'])} read {d['first']}, "
                                                          f"{'table' if c['source'] == 'standard table' else 'second read'} "
-                                                         f"{d['second']}" for d in c["disagreed"]))
+                                                         f"{shown(d)}" for d in c["disagreed"]))
+        elif c["status"] == "agreed" and _self(c):
+            parts.append(f"self-checked only: {c['against']}, chosen by the read's own package name, fits the read "
+                         f"({', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)}); no independent second source")
         elif c["status"] == "agreed":
-            parts.append(f"{c['against']} agrees ({', '.join(LABEL.get(f, f) for f in c['agreed'])})")
+            parts.append(f"{c['against']} agrees ({', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)})")
         else:
             parts.append(f"{c['against']}: not checked ({c.get('why') or 'nothing to compare'})")
     return "; ".join(parts)
@@ -432,19 +528,25 @@ def report_md(rec):
     if not rec:
         return []
     word = {"agreed": "agreed", "disagreed": "disagreed, the part is held", "unchecked": "could not be made",
-            "skipped": "not needed"}.get(rec["status"], rec["status"])
+            "self-checked": "self-checked only (no independent second source)", "skipped": "not needed"}.get(rec["status"], rec["status"])
     out = ["", f"## Cross-check: {word}", "", f"Setting: [datasheet] cross_check = {rec['mode']}", ""]
     if rec["status"] == "skipped":
         return out + [rec.get("why") or ""]
     for c in rec.get("checks") or []:
         out.append(f"* **{c['against']}** ({c['source']}{', ' + c['via'] if c.get('via') and c['source'] == 'standard table' else ''}"
-                   f"{', ' + c['pages'] if c.get('pages') else ''}): {c['status']}" + (f" - {c['why']}" if c.get("why") else ""))
+                   f"{', ' + c['pages'] if c.get('pages') else ''}): "
+                   + ("self-checked (the entry was chosen by this read, so it is not independent)"
+                      if c["status"] == "agreed" and _self(c) else c["status"])
+                   + (f" - {c['why']}" if c.get("why") else ""))
         if c.get("disagreed"):
             out += ["", "| field | this read | other source |", "|---|---|---|"]
-            out += [f"| {LABEL.get(d['field'], d['field'])} | {d['first']} | {d['second']} |" for d in c["disagreed"]]
+            out += [f"| {LABEL.get(d['field'], d['field'])} | {d['first']} | {shown(d)} |" for d in c["disagreed"]]
             out.append("")
         if c.get("agreed"):
-            out.append(f"  agreed: {', '.join(LABEL.get(f, f) for f in c['agreed'])}")
+            out.append(f"  agreed: {', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)}")
+    if rec["status"] == "self-checked":
+        out += ["", "**Next:** the BOM names no package the standard table knows, so nothing independent confirmed this "
+                "read. Compare the drawing by hand, put the package in the BOM, or set [datasheet] cross_check = \"always\"."]
     if rec["status"] == "disagreed":
         out += ["", "The part is held and nothing was written to the library. Neither value was picked.",
                 "**Next:** read the drawing, then fix the BOM's package, or read it again with other pages or another model."]
@@ -456,8 +558,9 @@ def review_lines(rows):
     got = [r for r in rows if r.get("cross_check")]
     if not got:
         return []
-    n = {s: sum(r["cross_check"] == s for r in got) for s in ("agreed", "disagreed", "unchecked", "skipped")}
+    n = {s: sum(r["cross_check"] == s for r in got) for s in ("agreed", "self-checked", "disagreed", "unchecked", "skipped")}
     return ["", "## Cross-checks of datasheet reads", "",
-            f"{len(got)} parts: {n['agreed']} agreed with a second source, {n['disagreed']} held for disagreement, "
+            f"{len(got)} parts: {n['agreed']} agreed with a second source, "
+            f"{n['self-checked']} self-checked only (no independent source), {n['disagreed']} held for disagreement, "
             f"{n['unchecked']} could not be checked, {n['skipped']} not needed (footprint from another source).", "",
             "| Part | Cross-check |", "|---|---|"] + [f"| {r['part']} | {r['cross_check']} |" for r in got]

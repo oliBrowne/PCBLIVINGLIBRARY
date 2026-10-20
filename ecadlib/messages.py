@@ -80,6 +80,13 @@ CODES = {
     "files.no_footprint": ("There is no footprint for this part yet.",
                            "Pick a footprint from the candidates, or let the datasheet reader build one.",
                            [r"^files: no footprint model", r"^no footprint found"]),
+    # the maker's site refused the PDF here (403 web page, reset connection, timeouts) and the API's fetcher failed too
+    "files.datasheet_refused": ("{host} would not let ecadlib download the datasheet (it {why}): the maker's site most "
+                                "likely blocks automated downloads (bot protection).",
+                                "Download the PDF in a browser[ ({url})] and read it with ecadlib datasheet FILE.pdf[ "
+                                "--part {part}], or pick a footprint by hand.",
+                                [r"datasheet download refused by (?P<host>\S+) \((?P<why>[^)]*)\)"
+                                 r"(?:.*?download (?P<url>\S+) in a browser)?(?:.*?--part (?P<part>[^`\s]+))?"]),
     "files.missing": ("The {kind} file is missing.",
                       "Fill the library again so the file is written.",
                       [r"^files: (?P<kind>symbol|footprint) file missing"]),
@@ -128,6 +135,9 @@ CODES = {
     "footprint.hole_clearance": ("Pad {pad} is only {mm} mm from a mounting hole.",
                                  "Move the pad away from the hole, or pick another footprint.",
                                  [r"pad (?P<pad>\S+) is (?P<mm>[\d.]+) mm from the hole"]),
+    "footprint.zero_pad": ("Pad {pad} has no copper (size {size} mm).",
+                           "Give the pad its size from the datasheet, or pick another footprint.",
+                           [r"pad (?P<pad>\S+) has no copper: size (?P<size>\S+ x \S+) mm"]),
     "footprint.no_pin1": ("No pad is numbered 1, so pin 1 cannot be found.",
                           "Number the pads as the datasheet does, or pick another footprint.",
                           [r"no pad numbered 1", r"^footprint: no pin 1 pad"]),
@@ -201,13 +211,11 @@ CODES = {
                       r"^parity: (?P<what>.+)"]),
     # verify (rule `verify`: a person must look first)
     "verify.datasheet_read": ("The {made} came from a model reading the datasheet, so a person has to check before it is released[ ({flagged})].",
-                              "Compare it with the datasheet, then approve it or release anyway.",
+                              "Compare it with the datasheet, then release it anyway if it matches.",
                               [r"^(?:verify: )?datasheet reader output \((?P<made>[^)]*)\)(?:.*\((?P<flagged>\d+ items flagged)\))?"]),
     "verify.sim_pin_map": ("The simulation model {model} is attached, but its pin map is a guess ({method}).",
                            "Check the model's pins against the symbol, then release it.",
                            [r"^(?:verify: )?sim model (?P<model>\S+): pin map (?:not verified|to verify) \((?P<method>.+)\)"]),
-    "verify.other": ("A person has to check this part first: {detail}.", "Check it, then approve it or release anyway.",
-                     [r"^verify: (?P<detail>.+)"]),
     # cross-check of a datasheet read (crosscheck)
     "crosscheck.disagree": ("{who} disagree on {field} ({first} vs {second}); nothing was written to the library.",
                             "Check the datasheet[ (page {page})] and pick one, or release anyway.",
@@ -246,22 +254,33 @@ CODES = {
                                 "Fix the LCSC number on the BOM line.",
                                 [r"LCSC (?P<lcsc>\S+) is (?P<got>\S+), not (?P<mpn>[^\s:;,]+)"]),
     "librarian.footprint_guess": ("The footprint {fp} was chosen by {how}, not taken from the datasheet.",
-                                  "Compare it with the land pattern in the datasheet.",
-                                  [r"^footprint (?P<fp>\S+) chosen by (?P<how>.+?): compare"]),
+                                  "Compare it with the land pattern in the datasheet, then release it anyway if it matches.",
+                                  [r"^(?:verify: )?footprint (?P<fp>\S+) chosen by (?P<how>.+?): compare"]),
     "librarian.symbol_match": ("The symbol {sym} was matched by {how}.",
-                               "Check its pin names and numbers against the datasheet.",
-                               [r"^symbol (?P<sym>\S+) matched by (?P<how>.+)"]),
+                               "Check its pin names and numbers against the datasheet, then release it anyway if they match.",
+                               [r"^(?:verify: )?symbol (?P<sym>\S+) matched by (?P<how>.+)"]),
     "librarian.easyeda": ("The footprint and symbol were converted from EasyEDA ({lcsc}).",
-                          "Check the pads and pins against the datasheet.",
+                          "Check the pads and pins against the datasheet, then release it anyway if they match.",
                           [r"EasyEDA (?P<lcsc>\S+) conversion"]),
     "librarian.family_pinout": ("The pinout of {sym} comes from the {mpn} family table, not from this part's datasheet.",
-                                "Check pins 1-3 against the datasheet.",
+                                "Check pins 1-3 against the datasheet, then release it anyway if they match.",
                                 [r"symbol pinout (?P<sym>\S+) from the (?P<mpn>\S+) family table"]),
+    "librarian.value_two_ways": ("The value {value} reads two ways: {first} with a decimal comma, {second} with a thousands comma.",
+                                 "Write the value without the comma on the BOM line, or release it anyway if the part is right.",
+                                 [r"^(?:verify: )?value (?P<value>.+?) reads two ways: (?P<first>.+?) or (?P<second>.+?)"
+                                  r"(?:; write it without the comma| \(a decimal or a thousands comma\))"]),
+    # any other `verify` note, after the specific ones above (some of them come as verify notes too)
+    "verify.other": ("A person has to check this part first: {detail}.", "Check it, then release it anyway if it is right.",
+                     [r"^verify: (?P<detail>.+)"]),
     # sign-off, duplicates, Altium 365
-    "approval.waiting": ("Waiting for sign-off[ ({missing})].", "Ask a reviewer to approve it in the review queue.",
+    "approval.waiting": ("Waiting for sign-off[ ({missing})].",
+                         "Ask a reviewer to approve it (Approve in step 2 of the web UI, or `ecadlib approve`).",
                          [r"^awaiting approval(?:: (?P<missing>.+))?"]),
     "approval.changed": ("The part changed after its last check.", "Run the release check again.",
                          [r"changed since the release check"]),
+    "change.held": ("A change to this released part waits for a person: {detail}.",
+                    "Look at it with ecadlib part show, then approve it with ecadlib part approve (release anyway cannot).",
+                    [r"^change control: (?P<detail>.+?); a person approves it"]),
     "dedupe.duplicate": ("This part is a duplicate of {of}.", "Use {of} instead, or keep both on purpose.",
                          [r"duplicate of (?P<of>\S+)"]),
     "a365.deleted": ("The part was deleted in the Altium 365 workspace.",
@@ -416,13 +435,45 @@ def friendly_error(exc):
 INTERNAL = ("plan.json", "ds_route", "stdparts", "crosscheck", "release_check", "footprint_check", "kicad_import",
             "symbol_layout", "hold_reasons")
 _MOD = r"ecadlib\.(?!toml\b)[a-z_]+\b"
-_ABS = re.compile(r"(?<![\w.:/])(?:/(?:[\w.@+-]+/)+[\w.@+-]+|[A-Za-z]:\\(?:[^\s\\]+\\)+[^\s\\]+)")
+_ROOT_NAMES = (r"home|Users|tmp|var|etc|opt|usr|mnt|srv|private|root|Volumes|media|run|data|workspace|"
+               r"workspaces|nix|github|builds?|sessions|proc|dev|sys|lib")
+_WSEP = r"(?:\\\\|\\|/)"                         # a Windows separator: \, / (Path.as_posix()) or a repr'd \\
+_EXT = r"\.[A-Za-z][A-Za-z0-9_]{0,9}"            # .json, .kicad_sym
+_SEG = r"[^\s\\/:'\"]+"                          # a folder name without a space
+_WCH = r"[^\s\\/:'\"(),;]"
+_WORD = r"(?!" + _WCH + r"*" + _EXT + r"(?!" + _WCH + r"))" + _WCH + r"+"   # a word of a folder name: no file name
+_MULTI = _WORD + r"(?: " + _WORD + r")+"         # a folder name with single spaces ("John Smith", "OneDrive - Acme")
+_FILE = r"[^\s\\/:'\"]*" + _EXT + r"(?![A-Za-z0-9_])"
+_START = r"(?:[A-Za-z]:" + _WSEP + r"|/(?i:" + _ROOT_NAMES + r")/)"
+# A quoted path (an OSError's repr'd file name) runs to its closing quote, spaces and all. Unquoted, a folder name
+# with spaces only inside a path that ends in a file name with an extension, and only when no word of it is a file
+# name or holds ( , ; - so "/home/me/plan.json and/or the cache" stops at plan.json. Else the strict space-free forms.
+_ABS = re.compile(r"(?<![\w.:/])(?:(?<=')" + _START + r"[^'\r\n]*[^'\r\n\\/](?=')"
+                  r"|(?<=\")" + _START + r"[^\"\r\n]*[^\"\r\n\\/](?=\")"
+                  r"|/(?i:" + _ROOT_NAMES + r")/(?:" + _SEG + r"/)*" + _MULTI + r"/(?:(?:" + _MULTI
+                  + r"|" + _SEG + r")/)*" + _FILE
+                  + r"|[A-Za-z]:" + _WSEP + r"(?:" + _SEG + _WSEP + r")*" + _MULTI + _WSEP + r"(?:(?:" + _MULTI + r"|"
+                  + _SEG + r")" + _WSEP + r")*" + _FILE
+                  + r"|/(?:[\w.@+-]+/)+[\w.@+-]+"
+                  r"|[A-Za-z]:" + _WSEP + r"(?:[^\s\\/]+" + _WSEP + r")+[^\s\\/]+)")
 _MODULE = re.compile(r"\s*\((?:see |via |from |by )?" + _MOD + r"[^)]*\)|\b" + _MOD)
+
+
+_ROOTS = re.compile(r"/(" + _ROOT_NAMES + r")/", re.I)
+
+
+def _is_path(s):
+    """A real absolute path, not an active-low pin name such as "/RESET/EN" or "/CS/SHDN": a Windows drive, a
+    known root (/home, /Users, /tmp ...), three or more parts, or a file name with an extension."""
+    if not s.startswith("/"):
+        return True                                   # C:\...
+    parts = s.strip("/").split("/")
+    return bool(_ROOTS.match(s + "/")) or len(parts) >= 3 or bool(re.search(r"\.[A-Za-z0-9]{1,5}$", parts[-1]))
 
 
 def clean(text):
     """Absolute paths -> file name; "(ecadlib.stdparts)"-style module mentions removed."""
-    t = _ABS.sub(lambda m: re.split(r"[\\/]", m.group(0))[-1], str(text or ""))
+    t = _ABS.sub(lambda m: re.split(r"[\\/]", m.group(0))[-1] if _is_path(m.group(0)) else m.group(0), str(text or ""))
     t = re.sub(r"\s*\((?:%s)\)" % "|".join(map(re.escape, INTERNAL)), "", t)        # "(kicad_import)" notes
     return re.sub(r"\s{2,}", " ", _MODULE.sub("", t)).strip()
 
@@ -431,5 +482,5 @@ def leaks(text):
     """Internal names and absolute paths found in user-facing text (for tests): [str]."""
     t = str(text or "")
     out = [n for n in INTERNAL if n in t]
-    out += re.findall(r"\b" + _MOD, t) + _ABS.findall(t)
+    out += re.findall(r"\b" + _MOD, t) + [p for p in _ABS.findall(t) if _is_path(p)]
     return out

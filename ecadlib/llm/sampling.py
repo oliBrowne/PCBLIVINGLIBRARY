@@ -17,7 +17,8 @@ so changing them never throws away answers already paid for."""
 import re
 
 SEED = 7351
-REJECTS = re.compile(r"claude-(?!(opus|sonnet)-4-[56]$|haiku-4-5$).*|gpt-5.*|o[134](-.*)?|.*reasoner.*")
+# a dated snapshot id (claude-haiku-4-5-20251001) is its alias
+REJECTS = re.compile(r"claude-(?!((opus|sonnet)-4-[56]|haiku-4-5)(-\d{8})?$).*|gpt-5.*|o[134](-.*)?|.*reasoner.*")
 
 
 def takes_sampling(model, prof=None):

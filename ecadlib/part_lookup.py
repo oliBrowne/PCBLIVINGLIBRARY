@@ -115,6 +115,8 @@ class PartInfo:
     note: str = ""
     error: str = ""
     datasheet: str = ""                # the source's datasheet link (official APIs: Nexar bestDatasheet, DigiKey, Mouser)
+    datasheets: list = field(default_factory=list)   # every datasheet link the source gave, best first (Nexar's
+                                       # documentCollections hold distributor-hosted copies too)
 
 
 class NexarSourcing(L.NexarSupply):
@@ -126,6 +128,7 @@ class NexarSourcing(L.NexarSupply):
               "Power Rating, Case/Package); similarParts may be empty without a plan that includes it.")
     FIELDS = """fragment F on SupPart {
   mpn manufacturer { name } octopartUrl shortDescription estimatedFactoryLeadDays bestDatasheet { url }
+  documentCollections { name documents { name url mimeType } }
   specs { attribute { name shortname } displayValue value }
   sellers { company { name } isAuthorized
     offers { sku inventoryLevel moq orderMultiple factoryLeadDays packaging clickUrl
@@ -186,11 +189,26 @@ query ($q: String!, $limit: Int, $country: String!, $currency: String!) {
             return res
 
 
+def _links(urls):
+    """Datasheet links as given, http(s) only, each once ("//mm.digikey.com/..." is DigiKey's protocol-relative form)."""
+    out = []
+    for u in urls:
+        u = str(u or "").strip()
+        u = "https:" + u if u.startswith("//") else u
+        if re.match(r"https?://", u, re.I) and u not in out:
+            out.append(u)
+    return out
+
+
 def nexar_info(part, provider, currency):
     info = PartInfo(provider, True, part.get("mpn") or "", (part.get("manufacturer") or {}).get("name") or "",
                     part.get("shortDescription") or "", url=part.get("octopartUrl") or "",
                     lead_days=_int(part.get("estimatedFactoryLeadDays")),
                     datasheet=str((part.get("bestDatasheet") or {}).get("url") or ""))
+    info.datasheets = _links([info.datasheet] + [d.get("url") for c in part.get("documentCollections") or [] if isinstance(c, dict)
+                                                 and re.search(r"data\s?sheet", str(c.get("name")), re.I)
+                                                 for d in c.get("documents") or [] if isinstance(d, dict)
+                                                 and re.search(r"pdf", str(d.get("mimeType") or "pdf"), re.I)])
     pairs = []
     for s in part.get("specs") or []:
         a = s.get("attribute") or {}
@@ -293,6 +311,8 @@ def digikey_info(prod, provider, currency):
                     desc, max(known, key=L.SEVERITY.get) if known else "unknown", "; ".join(w for w in words if w),
                     url=prod.get("ProductUrl") or "", lead_days=lead * 7 if lead is not None else None,
                     datasheet=str(prod.get("DatasheetUrl") or ""))
+    info.datasheets = _links([info.datasheet] + [x.get("Url") for x in prod.get("MediaLinks") or [] if isinstance(x, dict)
+                                                 and re.search(r"data\s?sheet", str(x.get("MediaType")), re.I)])
     info.specs = specs_from_pairs([(x.get("ParameterText"), x.get("ValueText")) for x in prod.get("Parameters") or []
                                    if isinstance(x, dict)])
     for v in prod.get("ProductVariations") or []:
@@ -396,6 +416,7 @@ def mouser_info(x, provider):
                     x.get("Description") or "", L.normalise(status) if status else "active", status,
                     url=x.get("ProductDetailUrl") or "", lead_days=lead_days(x.get("LeadTime")),
                     datasheet=str(x.get("DataSheetUrl") or ""))
+    info.datasheets = _links([info.datasheet])
     info.specs = specs_from_pairs([(a.get("AttributeName"), a.get("AttributeValue")) for a in x.get("ProductAttributes") or []
                                    if isinstance(a, dict)])
     breaks, cur = [], ""

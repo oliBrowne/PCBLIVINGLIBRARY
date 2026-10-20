@@ -403,7 +403,7 @@ def test_example_plugin_found_by_entry_points_and_used_in_order():
                                                     {"name": "Manufacturer", "value": "A|CME"}]}]))
         files = PL.run_exporter("markdown-catalog", plan, d / "cat")
         md = Path(files[0]).read_text()
-        assert "| TPS1234DSGR | TPS1234DSGR | A\\|CME | SOIC-8 | ready |" in md, md
+        assert "| TPS1234DSGR | TPS1234DSGR | A\\|CME | SOIC-8 | held |" in md, md   # no files: the re-check holds it
         with redirect_stdout(io.StringIO()) as out:
             assert PL.main(["list"]) == 0 and PL.main(["export", "markdown-catalog", str(plan), "-o", str(d / "cat2")]) == 0
         assert "stockroom" in out.getvalue() and (d / "cat2" / "catalog.md").is_file()

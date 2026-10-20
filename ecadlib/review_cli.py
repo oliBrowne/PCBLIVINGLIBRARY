@@ -121,8 +121,9 @@ def a_offline(src):
     return bool(getattr(getattr(src, "http", None), "offline", False))
 
 
-def release_anyway(plan, name, user=None):
-    """release-check --allow for one part; returns the item after the re-check."""
+def release_anyway(plan, name, user=None, reason=""):
+    """release-check --allow for one part; returns the item after the re-check. reason: why the person released it
+    (the Altium dialog asks for one), kept with who did it in the item's allow record."""
     from . import release_check as RC
     from .approvals import cli_plan_lock, identity, post_check, stamp_allow
     from .fsutil import write_text_atomic
@@ -131,9 +132,15 @@ def release_anyway(plan, name, user=None):
         items = json.loads(plan.read_text(encoding="utf-8"))
         it = next(i for i in items if i["name"] == name)
         rows = RC.apply([it], plan.parent, [name])
-        stamp_allow([it], [name], identity(user, cwd=plan.parent))
+        who = identity(user, cwd=plan.parent)
+        stamp_allow([it], [name], who)
+        if reason and it.get("allow"):
+            it["allow"]["reason"] = reason
         post_check([it], plan.parent, rows)
+        RC.record_releases([it], plan.parent, [name], who)    # change control: revision 1 of what was released
         write_text_atomic(plan, json.dumps(items, indent=2))
+        from .librarian import refresh_review
+        refresh_review(plan, items)
     from . import timing
     timing.mark_review(plan.parent, "allow")
     return it
@@ -145,7 +152,9 @@ def fix_commands(plan, item, numbered):
         kind, c = numbered[0]
         cmds.append(f"ecadlib resolve {plan} --part {item['name']} choose {kind} {c['id']}")
     codes = [e["code"] for e in M.explain_all(item.get("hold_reasons") or [])]
-    if any(not c.startswith("files.") for c in codes):
+    if "change.held" in codes:                 # only an approval releases it: --allow cannot
+        cmds.append(f"ecadlib part show {plan} {item['name']}")
+    elif any(not c.startswith("files.") for c in codes):
         cmds.append(f"ecadlib release-check {plan} --allow {item['name']}")
     return cmds
 
@@ -181,9 +190,11 @@ def review_plan(plan, a, t, inp, interactive):
             continue
         status = "held"
         while True:
-            fixed_only = all(e["code"].startswith("files.") for e in M.explain_all(item.get("hold_reasons") or []))
+            codes = [e["code"] for e in M.explain_all(item.get("hold_reasons") or [])]
+            fixed_only = all(c.startswith("files.") for c in codes) or "change.held" in codes
             ask = CHOICES.format(n=len(numbered)) if numbered else CHOICES.split("   ", 1)[1]
-            if fixed_only:                  # a missing / broken file cannot be released anyway: do not offer it
+            if fixed_only:                  # a missing / broken file or a held change (only `part approve` releases
+                                            # it) cannot be released anyway: do not offer it
                 ask = ask.replace("   a release anyway", "").replace("a release anyway   ", "")
             try:
                 ans = inp(f"    {ask}\n    > ").strip().lower()

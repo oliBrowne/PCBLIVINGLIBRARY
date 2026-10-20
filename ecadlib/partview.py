@@ -41,16 +41,17 @@ def cross_check(rec, sidecar=None):
         return None
     st = rec.get("status") or "unchecked"
     label = {"agreed": "agrees with a second source", "disagreed": "two sources disagree",
-             "unchecked": "not cross-checked", "skipped": "not needed (footprint from another source)"}.get(st, st)
+             "unchecked": "not cross-checked", "self-checked": "self-checked only (no independent second source)", "skipped": "not needed (footprint from another source)"}.get(st, st)
     rows = []
     full = (sidecar or {}).get("cross_check") or {}
     dims = (sidecar or {}).get("dimensions") or {}
     page = lambda f: (dims.get(f) or {}).get("page") if isinstance(dims.get(f), dict) else None
     if full.get("checks"):
+        from .crosscheck import shown
         for c in full["checks"]:
             for d in c.get("disagreed") or []:
                 rows.append({"field": d["field"], "label": FIELD.get(d["field"], d["field"]), "first": d["first"],
-                             "second": d["second"], "against": c.get("against") or c.get("source") or "",
+                             "second": shown(d), "against": c.get("against") or c.get("source") or "",
                              "second_is": "table" if c.get("source") == "standard table" else "second read",
                              "page": page(d["field"])})
     else:
@@ -212,7 +213,8 @@ def cards(out, items, pictures=True):
             else _decisions(it.get("approvals")),
             "tried": (it.get("librarian") or {}).get("tried") or [],
             "change": {k: chg.get(k) for k in ("base", "summary", "classes", "changes", "writer", "proposed_at", "approvals",
-                                               "rejected_by", "refused", "used_in") if chg.get(k) is not None} if chg else None,
+                                               "rejected_by", "refused", "used_in", "digest", "twin")
+                       if chg.get(k) is not None} if chg else None,
         })
     counts = {"parts": len(parts), "ready": sum(p["status"] == "ready" for p in parts),
               "held": sum(p["status"] == "held" for p in parts),

@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import bom_triage as T, footprint_gen as F, providers as P, rules as RU, sexpr
-from .fsutil import write_text_atomic
+from .fsutil import report_file, write_text_atomic
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex
 from . import userconfig as UC
@@ -28,12 +28,14 @@ STATUS_ORDER = ["needs_footprint_generation", "unverified (source unreachable)",
                 "available_easyeda", "in_library (generated footprint)", "in_library"]
 
 
+UPLOAD_DIR = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")      # the folder save_upload makes for each upload
+STYLE_OFFLINE = "--offline: the model is not asked to write the house style guide; run without --offline to have it write it"
+
+
 class Workspace:
     def __init__(self, root="ecadlib_workspace", libs=(), providers=None, offline=False):
         self.root = Path(root).resolve()
-        for d in ("uploads", "reports", "altium", "altium365", "footprints/ecadlib.pretty",
-                  "altium_models/PcbLib", "altium_models/SchLib"):
-            (self.root / d).mkdir(parents=True, exist_ok=True)
+        self.ensure_folders()
         from . import migrate as MG                      # files from a newer ecadlib: one clear error, nothing misread
         MG.guard_tree(self.root)
         self.gen_dir = self.root / "footprints" / "ecadlib.pretty"
@@ -43,16 +45,29 @@ class Workspace:
         self._providers_given = bool(providers)          # else [providers] order in the rules decides (ecadlib.plugins)
         self.offline = offline
 
+    def ensure_folders(self):
+        """The workspace folders, made again when the folder was deleted or moved while a front end runs."""
+        for d in ("uploads", "reports", "altium", "altium365", "footprints/ecadlib.pretty",
+                  "altium_models/PcbLib", "altium_models/SchLib"):
+            (self.root / d).mkdir(parents=True, exist_ok=True)
+
     # ------------------------------------------------------------------ paths
-    def safe_name(self, name, strict=False):
-        """A plain file name. Uploads keep only their base name; footprint names (strict) with a path
-        separator are refused, so "SOIC-8/TI_D" can't quietly become "TI_D" and collide with another part."""
+    def safe_name(self, name, strict=False, what="footprint"):
+        """A plain file name. Uploads keep only their base name; footprint / symbol names (strict; what names which in
+        the refusal) with a path separator are refused, so "SOIC-8/TI_D" can't quietly become "TI_D" and collide
+        with another part."""
         name = str(name)
         if strict and ("/" in name or "\\" in name):
             plain = re.sub(r"[/\\]+", "_", name)
-            raise ValueError(f"footprint name {name!r} contains a path separator; use a plain name such as {plain!r}")
-        name = re.sub(r"[^A-Za-z0-9._-]+", "_", re.split(r"[/\\]", name)[-1]).strip("._") or "bom.csv"
-        return name[:120]
+            raise ValueError(f"{what} name {name!r} contains a path separator; use a plain name such as {plain!r}")
+        base = re.split(r"[/\\]", name)[-1]
+        stem, suf = os.path.splitext(base)                 # the suffix picks the reader: never lose it ('部品表.xlsx')
+        if not re.fullmatch(r"\.[A-Za-z][A-Za-z0-9_]{0,11}", suf):   # not a file type ('P2.54mm_Vertical'): no split
+            stem, suf = base, ""
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")
+        if not stem.strip("_-"):
+            stem = "bom" if suf else "bom.csv"
+        return stem[:120 - len(suf)] + suf
 
     def inside(self, path):
         """Resolve a workspace-relative path, refusing anything outside the workspace."""
@@ -82,7 +97,9 @@ class Workspace:
                 and b"\0" in head and head[:2] not in (b"\xff\xfe", b"\xfe\xff") and not T.utf16_without_bom(head)):
             raise ValueError(f"{bom_path.name} looks like a binary file, not a CSV; export the BOM as CSV or XLSX")
         try:
-            lines, mapping = T.read_bom(bom_path, RU.bom_columns(self.rules()))
+            fence = self.root if self.root in Path(bom_path).resolve().parents else None   # an uploaded / workspace
+            lines, mapping = T.read_bom(bom_path, RU.bom_columns(self.rules()), root=fence)  # schematic's sub-sheets stay
+                                                                                             # in the workspace
         except Exception as e:                        # pandas/csv/zip errors -> one message a person can act on
             if type(e) is ValueError:                 # the reader's own words: no exception name, no server path
                 raise ValueError(f"couldn't read {bom_path.name} as a BOM: "
@@ -95,15 +112,31 @@ class Workspace:
         return lines, mapping
 
     def _key(self, bom_path):
-        """Report name for a BOM: its stem for BOMs in uploads/ (plus the upload's folder name for
-        uploads/<stamp>-<rand>/<name>), plus a short hash of the full path for any other location, so
-        /projA/BOM.csv and /projB/BOM.csv (or two uploads called BOM.csv) don't share (and overwrite) one triage."""
+        """Report and plan folder name for a BOM: its stem for BOMs in uploads/; for an upload
+        (uploads/<stamp>-<rand>/<name>) its file name as <stem>@<type>, so uploading BOM.csv again (the next day's
+        revision) continues the same librarian plan, change-control ledger and sign-offs, as a CLI re-run on one -o
+        folder does ('@' never comes out of safe_name, so no flat upload or other key can be the same); a plan made
+        before that (librarian/<stem>_<upload folder>) keeps its key, so it stays readable; plus a short hash of the
+        full path for any other location, so /projA/BOM.csv and /projB/BOM.csv don't share (and overwrite) one triage. A named
+        folder (uploads/demo/) keeps <stem>_<folder>."""
         bom_path = Path(bom_path).resolve()
+        h = hashlib.sha1(os.fsencode(str(bom_path))).hexdigest()[:8]   # the path as bytes: also a C-locale non-ASCII one
         if bom_path.parent == self.root / "uploads":
+            # a flat uploads/<stem>_<dir>.csv would share uploads/<dir>/<stem>.*'s key (and its librarian folder,
+            # plan and sign-offs): uploads now always go in a folder, so the flat file gives way and gets a hash
+            for d in (bom_path.parent.iterdir() if "_" in bom_path.stem else ()):
+                if (d.is_dir() and bom_path.stem.endswith(f"_{d.name}")
+                        and any(f.is_file() and f.stem == bom_path.stem[:-len(d.name) - 1] for f in d.iterdir())):
+                    return f"{bom_path.stem}_{h}"
             return bom_path.stem
         if bom_path.parent.parent == self.root / "uploads":
-            return f"{bom_path.stem}_{bom_path.parent.name}"
-        return f"{bom_path.stem}_{hashlib.sha1(str(bom_path).encode()).hexdigest()[:8]}"
+            old = f"{bom_path.stem}_{bom_path.parent.name}"           # one plan per upload (until UX-16)
+            if (not UPLOAD_DIR.fullmatch(bom_path.parent.name)       # uploads/demo/ and other named folders
+                    or (self.root / "librarian" / old).is_dir()
+                    or (self.root / "reports" / f"triage_{old}.csv").is_file()):
+                return old
+            return f"{bom_path.stem}@{bom_path.suffix.lstrip('.').lower()}"
+        return f"{bom_path.stem}_{h}"
 
     def _triage_csv(self, bom_path):
         return self.root / "reports" / f"triage_{self._key(bom_path)}.csv"
@@ -123,7 +156,14 @@ class Workspace:
                 "altium365": {"token": bool(UC.secret("NEXAR_TOKEN"))},
                 "rules": (lambda f: self._label(f) if f else None)(self.rules_in_use()),
                 "altium_models": {k: sorted(p.stem for p in (self.models / k).glob(f"*.{k}")) for k in ("PcbLib", "SchLib")},
-                "boms": self._uploaded_boms()}
+                "boms": (boms := self._uploaded_boms()), "planned": [b for b in boms if self.has_plan(b)]}
+
+    def has_plan(self, bom):
+        """Whether the librarian has made a plan for this BOM (ecadlib demo / librarian / the UI's Fill)."""
+        try:
+            return (self._librarian_dir(self._bom_path(bom)) / "plan.json").is_file()
+        except (OSError, ValueError):
+            return False
 
     def _uploaded_boms(self):
         """uploads/<name> (older workspaces) and uploads/<stamp>-<rand>/<name>, newest upload folder first.
@@ -143,8 +183,10 @@ class Workspace:
 
     def save_upload(self, filename, data: bytes):
         """Store an uploaded BOM as uploads/<UTC stamp>-<random>/<plain file name> and return that path. Every
-        upload gets its own new folder, so two people uploading BOM.csv never overwrite each other (nor each
-        other's triage reports, which are keyed by the folder too). The file keeps its (sanitised) name."""
+        upload gets its own new folder, so the earlier upload's file is never overwritten. Its triage report and
+        librarian plan are keyed by the file name (_key): BOM.csv uploaded again continues the same plan, so change
+        control holds what changed since the parts were released and the sign-offs stay. The file keeps its
+        (sanitised) name."""
         if not data:
             raise ValueError(f"{filename} is empty")
         name = self.safe_name(filename)
@@ -190,11 +232,11 @@ class Workspace:
             out = {"bom": self.rel(bom_path) if self.root in bom_path.resolve().parents else str(bom_path),
                    "mapping": mapping, "rows": rows,
                    "counts": {k: int(v) for k, v in counts.items()},
-                   "reports": [self.rel(stem.with_suffix(".md")), self.rel(stem.with_suffix(".csv"))]}
+                   "reports": [self.rel(report_file(stem, ".md")), self.rel(report_file(stem, ".csv"))]}
             meta = {"id": self._key(bom_path), "name": bom_path.name, "finished": _now(), "user": user or None}
             tmp = stem.with_name(stem.name + f".{os.getpid()}.{secrets.token_hex(3)}.tmp")
             tmp.write_text(json.dumps({**meta, **out}, default=str), encoding="utf-8")
-            os.replace(tmp, stem.with_suffix(".json"))
+            os.replace(tmp, report_file(stem, ".json"))
         return {**out, **meta}
 
     # ------------------------------------------------------------------ past triages (read-only)
@@ -294,7 +336,7 @@ class Workspace:
         out = {"name": name, "pins": len(pins), "parts": sym.get("parts", 1), "groups": groups,
                "problems": SL.check(sym, sec["grid"]), "svg": SL.svg(sym)}
         if save:
-            f = self.models / "SchLib" / f"{altium_lib.file_stem(self.safe_name(name, strict=True))}.SchLib"
+            f = self.models / "SchLib" / (altium_lib.file_stem(self.safe_name(name, strict=True, what="symbol")) + ".SchLib")
             if f.exists() and not overwrite:
                 raise FileExistsError(f"{f.name} is already in the workspace; save again with overwrite to replace it")
             f.parent.mkdir(parents=True, exist_ok=True)
@@ -357,10 +399,21 @@ class Workspace:
                 "symbols": sorted(p.stem for p in (self.models / "SchLib").glob("*.SchLib"))}
 
     def export_dblib(self, bom):
-        """Write the Altium DbLib (SQLite + XLSX + .DbLib) for a BOM, using the latest triage."""
+        """Write the Altium DbLib for a BOM. When the librarian has run for it: its plan through dblib-sync, into
+        altium/<BOM>/ (ready parts only, their .SchLib/.PcbLib copied beside the DbLib). Else a draft from the latest
+        triage (SQLite + XLSX + .DbLib, no symbols or footprints built yet)."""
         from . import altium_export
         bom_path = self._bom_path(bom)
         self._read_bom(bom_path)                      # same friendly error as triage for unreadable files
+        plan = self._librarian_dir(bom_path) / "plan.json"
+        if plan.is_file():                            # held parts stay out, as in `ecadlib dblib-sync`
+            from . import altium_dblib_sync as DS
+            to = self.root / "altium" / self._key(bom_path)
+            rep = DS.sync(plan, to)
+            act = lambda a: [r["name"] for r in rep["results"] if r.get("action") == a and r.get("kind", "part") == "part"]
+            return {"files": [self.rel(p) for p in sorted(to.iterdir()) if p.is_file()], "folder": self.rel(to),
+                    "from_plan": True, "held": act("held"),
+                    "written": len(act("added")) + len(act("updated")) + len(act("up_to_date"))}
         tri = self._triage_csv(bom_path)
         out = self.root / "altium"
         argv = [str(bom_path), "-o", str(out)] + (["--triage", str(tri)] if tri.exists() else [])
@@ -380,6 +433,8 @@ class Workspace:
         lib_plan = self._librarian_dir(bom_path) / "plan.json"
         if lib_plan.exists():
             items = json.loads(lib_plan.read_text(encoding="utf-8"))
+            from . import change_gate as CG    # a preview writes nothing: an unsettled hand edit is shown as held
+            CG.preview_unsettled(lib_plan.parent, items, self.rules())
             for it in items:                          # librarian paths are relative to its output folder
                 for k in ("symbol", "footprint"):
                     f = it[k].get("file")
@@ -426,7 +481,7 @@ class Workspace:
         r = self._librarian_summary(bom_path, items, log)
         if not ai:
             from . import ai_cost as AC
-            r["ai"] = AC.quote(reader.last_estimate, self.rules(), key_set=bool(reader.key))
+            r["ai"] = self._offline_note(AC.quote(reader.last_estimate, self.rules(), key_set=bool(reader.key)))
         return r
 
     def ai_quote(self, bom, parts=None):
@@ -438,7 +493,16 @@ class Workspace:
         if not plan_f.exists():
             raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
         rd = self._datasheet_reader(out, batch=False, estimate=True)
-        return AC.quote(D.estimate_plan(plan_f, rd, set(parts or []) or None), self.rules(), key_set=bool(rd.key))
+        return self._offline_note(AC.quote(D.estimate_plan(plan_f, rd, set(parts or []) or None), self.rules(),
+                                           key_set=bool(rd.key)))
+
+    def _offline_note(self, q):
+        """--offline: a quote says the reads wait for a run without it (not that no key is stored)."""
+        if q and self.offline:
+            from . import datasheet as D
+            q["text"] = q["text"].split(". No API key")[0].rstrip(".") + f". {D.OFFLINE}."
+            q["offline"] = True
+        return q
 
     def ai_read(self, bom, approved_usd=None, over_limit_ok=False, price_unknown_ok=False, parts=None, progress=None):
         """Read the datasheets of ai_quote() after the person approved its cost: one synchronous request per part,
@@ -447,6 +511,8 @@ class Workspace:
         now higher than approved, over the limit without over_limit_ok, or the model has no known price without
         price_unknown_ok."""
         from . import ai_cost as AC, datasheet as D
+        if self.offline:
+            raise ValueError(D.OFFLINE)
         bom_path = self._bom_path(bom)
         out = self._librarian_dir(bom_path)
         q = self.ai_quote(bom, parts)
@@ -457,7 +523,7 @@ class Workspace:
             raise ValueError(q["text"])
         cap, yes = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
         rd = self._datasheet_reader(out, batch=False, yes=yes)
-        rd.cfg["max_cost_usd"] = cap                  # never more than the person saw and approved
+        rd.set_cap(cap)                               # never more than the person saw and approved: a cap they set
         log, n = [], [0]
 
         def note(msg):
@@ -499,6 +565,8 @@ class Workspace:
             from .approvals import post_check, stamp_allow
             stamp_allow(items, list(allow), user)
             post_check(items, out, rows)
+        if allow:                                          # change control: revision 1 of what was released
+            RC.record_releases(items, out, list(allow), user or None)
         write_text_atomic(plan_f, json.dumps(items, indent=2))
         if allow or unallow:
             from . import timing
@@ -604,14 +672,15 @@ class Workspace:
 
     _CID = re.compile(r"(kicad|local):[^:/\\\0]+:[^:/\\\0]+|spec:[^:/\\\0]+")
 
-    def choose_part(self, bom, part, kind, candidate_id, pin_map=None, user=None):
+    def choose_part(self, bom, part, kind, candidate_id, pin_map=None, user=None, approve=True):
         """Use a candidate (kicad:Lib:Name, local:Lib:Name or spec:Name) for one half of a plan item, convert it into
         the librarian's models folder, then re-run the release check and rewrite the review / release-check reports.
-        pin_map {symbol pin: pad} remaps pin numbers. Returns the librarian summary plus `chosen`."""
+        pin_map {symbol pin: pad} remaps pin numbers. Returns the librarian summary plus `chosen`. approve=False: the
+        choice is not an approval of a change to a released part (resolve.choose), which is then held."""
         with self._plan_lock():
-            return self._choose_part(bom, part, kind, candidate_id, pin_map, user)
+            return self._choose_part(bom, part, kind, candidate_id, pin_map, user, approve)
 
-    def _choose_part(self, bom, part, kind, candidate_id, pin_map=None, user=None):
+    def _choose_part(self, bom, part, kind, candidate_id, pin_map=None, user=None, approve=True):
         from . import resolve as R
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
@@ -624,7 +693,7 @@ class Workspace:
             raise ValueError("pin_map must map symbol pin numbers to pad numbers, e.g. {\"S1\": \"SH\"}")
         try:
             chosen = R.choose(plan_f, part, kind, candidate_id, src=self._resolve_sources(), pin_map=pin_map or None,
-                              user=user)
+                              user=user, approve=approve)
         except FileNotFoundError as e:
             raise ValueError(str(e)) from e
         out = self._release_check(bom)    # the whole plan again (lock already held): reports, statuses, approvals
@@ -779,30 +848,50 @@ class Workspace:
                 "reports": [self.rel(f) for f in files.values()]}
     def _datasheet_reader(self, out, batch=True, wait=False, estimate=False, yes=False):
         from . import datasheet as D
-        return D.Reader(out, self.root / "http_cache", rules=self.rules(), batch=batch, wait=wait, estimate=estimate, yes=yes,
-                        http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None)
+        rd = D.Reader(out, self.root / "http_cache", rules=self.rules(), batch=batch, wait=wait, estimate=estimate, yes=yes,
+                      http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None,
+                      handoff=False)          # the web UI, MCP and the menus: no terminal to tell what to save where
+        rd.count_tokens = False     # quotes send nothing before the click: rough; the send-time cap check counts the same way
+        return rd
 
-    def datasheet_batch(self, bom, sync=False, wait=False, parts=None, yes=False):
+    def datasheet_quote(self, bom, sync=False, parts=None):
+        """datasheet_batch's cost as an ecadlib.ai_cost quote (batch price, or sync=True one request per part),
+        sending nothing. None when no part needs a read."""
+        from . import ai_cost as AC, datasheet as D
+        out = self._librarian_dir(self._bom_path(bom))
+        plan_f = out / "plan.json"
+        if not plan_f.exists():
+            raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
+        rd = self._datasheet_reader(out, batch=not sync, estimate=True)
+        return AC.quote(D.estimate_plan(plan_f, rd, set(parts or []) or None), self.rules(), key_set=bool(rd.key))
+
+    def datasheet_batch(self, bom, sync=False, wait=False, parts=None, yes=False, approved_usd=None, over_limit_ok=False,
+                        price_unknown_ok=False):
         """Read the datasheet of every part of the librarian plan that still has no symbol or footprint, as one
         Message Batch (sync=True: one Messages call per part), build them, mark them `verify` and re-run the release
         check. wait=False submits and returns; call again to collect (the batch id is kept, nothing is paid twice).
-        With no plan yet, the librarian runs first with the batch as its datasheet step."""
-        from . import datasheet as D, librarian as L
+        Costs money, so like ai_read it needs approved_usd, the amount the person approved of datasheet_quote()
+        (datasheet_estimate's "ai"); the reads are held to it. Needs the librarian's plan first."""
+        from . import ai_cost as AC, datasheet as D
+        if self.offline:
+            raise ValueError(D.OFFLINE)
         bom_path = self._bom_path(bom)
         out = self._librarian_dir(bom_path)
         rd = self._datasheet_reader(out, batch=not sync, wait=wait, yes=yes)
         if not rd.key:
             raise ValueError(f"{D.settings(self.rules())['api_key_env']} is not set: the datasheet reader needs a Claude API key "
                              "(datasheet_estimate works without one)")
+        if not (out / "plan.json").exists():
+            raise ValueError("no librarian plan for this BOM yet: run the librarian (librarian_run) first, then "
+                             "datasheet_estimate for the cost")
+        q = self.datasheet_quote(bom, sync, parts)
+        if q is not None:                             # None: nothing left to buy (a submitted batch is only collected)
+            cap, unknown_ok = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
+            rd.yes = rd.yes or unknown_ok
+            rd.set_cap(cap)                           # never more than the person saw and approved: a cap they set
         log = []
         rd.say = lambda m: log.append(str(m).strip())
-        if (out / "plan.json").exists():
-            items = D.fill_plan(out / "plan.json", rd, self.rules(), log=log.append, parts=set(parts or []) or None)
-        else:
-            self._read_bom(bom_path)
-            provs = self._librarian_providers()
-            items = L.run(str(bom_path), self.libs + [str(self.root / "footprints")], out, None, None, False, [], self.offline,
-                          self.root / "http_cache", 0.5, provs, http=rd.http, log=log.append, rules=self.rules(), reader=rd)
+        items = D.fill_plan(out / "plan.json", rd, self.rules(), log=log.append, parts=set(parts or []) or None)
         state = rd._state()
         r = self._librarian_summary(bom_path, items, log)
         r["batches"] = [{k: b.get(k) for k in ("id", "status", "counts", "collected", "errors")} for b in state["batches"]][-5:]
@@ -818,8 +907,11 @@ class Workspace:
         plan_f = out / "plan.json"
         if not plan_f.exists():
             raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
-        est = D.estimate_plan(plan_f, self._datasheet_reader(out, estimate=True))
-        return dict(est, key_set=est["exact_input"])
+        rd = self._datasheet_reader(out, estimate=True)
+        est = D.estimate_plan(plan_f, rd)
+        from . import ai_cost as AC                   # datasheet_batch's approved_usd is this quote's approve_usd
+        return dict(est, key_set=bool(rd.key), ai=AC.quote(est, self.rules(), key_set=bool(rd.key)))   # not exact_input:
+        # an OpenAI key is set but never counts tokens
 
     def cross_checks(self, bom):
         """Which datasheet parts of the librarian plan were cross-checked against a second source (ecadlib.crosscheck)
@@ -861,23 +953,28 @@ class Workspace:
             if e.get("changes") and e.get("event") in LG.RELEASES:
                 rows[-1]["changes"] = [{"class": c["class"], "text": c["text"]} for c in e["changes"]][:200]
         change = it.get("change") if (it.get("change") or {}).get("state") == "held" else None
+        if change and lg.proposal(part):       # the digest of the held change as it is now (what an approval names)
+            change = dict(change, digest=CG.review_digest(lg, part))
         return {"part": part, "revision": head and head["revision"], "change": change, "history": rows[::-1],
                 "policy": {k: v for k, v in CG.policy(None, plan_f.parent).items()}}
 
-    def decide_change(self, bom, part, decision, user, comment="", role=None):
+    def decide_change(self, bom, part, decision, user, comment="", role=None, digest=None):
         """Approve or reject a held change to a released part, from the web UI or MCP (the same as `ecadlib part
-        approve / reject`). Holds the plan lock like approve_part."""
+        approve / reject`). An approval names the digest of the held change the person was shown (the part card's
+        change.digest); a change proposed again since is refused. Holds the plan lock like approve_part."""
         from . import change_cli as CC, change_gate as CG
         from .fsutil import plan_lock
         if decision not in ("approve", "reject"):
             raise ValueError("decision must be approve or reject")
+        if decision == "approve" and not str(digest or "").strip():
+            raise ValueError("digest is required: the digest of the held change shown to you (reload the part to see it)")
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
         with plan_lock(self.root, wait=False) as free:
             if not free:
                 raise ValueError("another ecadlib command is changing this plan right now; decide again in a minute")
             try:
-                res = (CC.approve(plan_f, [part], user, comment or "", role) if decision == "approve"
+                res = (CC.approve(plan_f, [part], user, comment or "", role, {part: str(digest)}) if decision == "approve"
                        else CC.reject(plan_f, [part], user, comment or ""))
             except CG.ChangeError as e:
                 raise ValueError(str(e)) from None
@@ -921,14 +1018,20 @@ class Workspace:
     def altium365_push(self, bom, workspace_url, dry_run=True):
         """Release ready parts and update parameters of existing ones; parts the release check held are left
         alone. dry_run (the default) sends nothing and returns the requests that would be made."""
-        from . import altium365 as A
         if not workspace_url and not dry_run:
             raise ValueError("choose an Altium 365 workspace first")
-        if not dry_run:                               # change control: a hand edit since the last writer settles first
+        import contextlib
+        from . import change_gate as CG
+        lib_plan = self._librarian_dir(self._bom_path(bom)) / "plan.json"
+        # a real push of a librarian library holds the library lock from the settle step to the record (change control)
+        with contextlib.nullcontext() if dry_run or not lib_plan.is_file() else CG.publishing(lib_plan.parent):
+            return self._altium365_push(bom, workspace_url, dry_run, lib_plan)
+
+    def _altium365_push(self, bom, workspace_url, dry_run, lib_plan):
+        from . import altium365 as A
+        if not dry_run and lib_plan.is_file():        # change control: a hand edit since the last writer settles first
             from . import change_gate as CG
-            lib_plan = self._librarian_dir(self._bom_path(bom)) / "plan.json"
-            if lib_plan.is_file():
-                CG.publish_guard(lib_plan, json.loads(lib_plan.read_text(encoding="utf-8")), "altium365", rules=self.rules())
+            CG.publish_guard(lib_plan, json.loads(lib_plan.read_text(encoding="utf-8")), "altium365", rules=self.rules())
         plan = self.altium365_plan(bom)
         client = None if dry_run else A.Nexar(_nexar_token())
         policy = None
@@ -968,8 +1071,14 @@ class Workspace:
 
     def rules_info(self):
         f = self.rules_in_use()
-        return {"file": self._label(f or self.rules_file()), "exists": bool(f), "text": f.read_text(encoding="utf-8") if f else "",
+        return {"file": self._label(f or self.rules_file()), "exists": bool(f), "text": f.read_text(encoding="utf-8-sig") if f else "",
                 "rules": RU.effective(self.rules()), "defaults": RU.DEFAULTS}
+
+    def _given_path(self, p):
+        """A folder or file a caller named: absolute as given, relative to the workspace (where --confine checks it),
+        never to the folder the server was started in."""
+        q = Path(str(p).strip()).expanduser()
+        return str(q if q.is_absolute() else self.root / q)
 
     def _rules_sources(self):
         """What a scan looks at when the person names nothing: the --lib folders, uploaded BOMs and Altium 365 state."""
@@ -984,10 +1093,12 @@ class Workspace:
         choices {setting key: value} answer the proposal's questions. A diff is included when a file exists."""
         from . import rules_infer as I
         paths, a365 = ([x] if isinstance(x, (str, Path)) else x for x in (paths, a365))   # one path, not its letters
-        paths = [str(p).strip() for p in (paths or []) if str(p).strip()] or self._rules_sources()
+        paths = [self._given_path(p) for p in (paths or []) if str(p).strip()] or self._rules_sources()
         if progress:
             progress(0, 1, "scanning " + ", ".join(Path(p).name for p in paths)[:80])
-        out = I.propose(paths, [str(x) for x in (a365 or [])], choices, existing=self.rules_file())
+        out = I.propose(paths, [self._given_path(x) for x in (a365 or [])], choices,   # from the rules in force: a
+                        existing=self.rules_in_use() or self.rules_file())          # workspace file replaces init's
+                                                                                     # ./ecadlib.toml, so keep its settings
         out["paths"], out["file"] = paths, self.rel(self.rules_file())
         if progress:
             progress(1, 1, "done")
@@ -1031,7 +1142,7 @@ class Workspace:
         ecadlib.ai_cost quote); style_guide() sends it once the person approved that."""
         from . import house_style as HS
         paths = [paths] if isinstance(paths, (str, Path)) else paths
-        paths = [str(x).strip() for x in (paths or []) if str(x).strip()] or self._rules_sources()
+        paths = [self._given_path(x) for x in (paths or []) if str(x).strip()] or self._rules_sources()
         direction = [direction] if isinstance(direction, str) else list(direction or [])
         f = self._style_file()
         old = HS.load(self.rules(), path=f) if f.is_file() else None
@@ -1043,6 +1154,8 @@ class Workspace:
             HS.save(prof, f)
             return dict(self.house_style(), ai=self.style_quote(model))
         if ai:
+            if self.offline:
+                raise ValueError(STYLE_OFFLINE)
             if progress:
                 progress(1, 2, "the model is writing the guide")
             HS.write_guide(prof, self.rules(), model)
@@ -1056,12 +1169,18 @@ class Workspace:
         from . import llm as LL
         system, user, schema, ref, _ = HS.guide_request(prof, self.rules(), model)
         key = bool(LL.key_for(HS.model_info(self.rules(), model)[0]["ep"]))
-        return AC.style_quote(system, user, schema, ref, self.rules(), key_set=key)
+        q = AC.style_quote(system, user, schema, ref, self.rules(), key_set=key)
+        if q and self.offline:                         # --offline: the guide waits for a run without it
+            q["text"] = q["text"].split(". No API key")[0].rstrip(".") + f". {STYLE_OFFLINE}."
+            q["offline"] = True
+        return q
 
     def style_guide(self, approved_usd=None, over_limit_ok=False, price_unknown_ok=False, model=None, progress=None):
         """The model writes the house style guide after the person approved style_quote()'s cost; "ai_cost" puts
         what it really cost next to the estimate."""
         from . import ai_cost as AC, house_style as HS
+        if self.offline:
+            raise ValueError(STYLE_OFFLINE)
         q = self.style_quote(model)
         AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
         prof = self._style_or_raise()
@@ -1093,9 +1212,39 @@ class Workspace:
         prof = self._style_or_raise()
         return {it["name"]: HS.check_item(it, prof, self.rules()) for it in items if not part or it["name"] == part}
 
-    def apply_house_style(self, bom, ai=False, model=None, dry_run=True, part=None):
+    def restyle_quote(self, items, prof, model=None, only=None):
+        """What the model's rewording of apply_house_style(ai=True) costs (ecadlib.ai_cost), sending nothing: every
+        request it would make is built and priced."""
+        import copy
+        from . import ai_cost as AC, ds_route as DR, house_style as HS, llm as LL
+        inf = HS.model_info(self.rules(), model)[0]
+        ref, bodies = inf["ep"]["ref"], []
+
+        def send(body):
+            bodies.append(body)
+            raise HS.StyleError("priced, not sent")
+        HS.adapt_with_model(copy.deepcopy(items), prof, self.rules(), model, send=send, only=only, say=lambda *a: None)
+        usd = worst = 0.0
+        for b in bodies:
+            tin = len(json.dumps(b, ensure_ascii=False)) // 3 + 50
+            p = DR.prices(ref, tin)
+            if not p:
+                usd = worst = None
+                break
+            usd += (tin * p[0] + 2000 * p[1]) / 1e6
+            worst += (tin * p[0] + b.get("max_tokens", 8000) * p[1]) / 1e6 * 2.2     # + one retry when it does not fit
+        q = AC.request_quote("style-apply", ref, None if usd is None else round(usd, 4),
+                             None if worst is None else round(worst, 4), self.rules(), key_set=bool(LL.key_for(inf["ep"])),
+                             what=f"Rewording to the house style asks the model {len(bodies)} time(s)")
+        q["requests"] = len(bodies)
+        return q
+
+    def apply_house_style(self, bom, ai=False, model=None, dry_run=True, part=None, approved_usd=None,
+                          over_limit_ok=False, price_unknown_ok=False):
         """Adapt a BOM's plan to the house style: exact fixes by code, and with ai=True rewording by the model
-        (checked: no new numbers, no identity fields). dry_run (default) shows the changes and writes nothing."""
+        (checked: no new numbers, no identity fields). dry_run (default) shows the changes and writes nothing.
+        ai=True costs money: without approved_usd nothing is sent and the result's "ai" is the quote
+        (restyle_quote); with the amount the person approved, the model is asked (dry run or not)."""
         from . import house_style as HS
         prof = self._style_or_raise()
         with self._plan_lock():
@@ -1103,7 +1252,18 @@ class Workspace:
             only = {part} if part else None
             done = HS.adapt_items(items, prof, self.rules(), only)
             rejected = []
+            quote = None
             if ai:
+                from . import ai_cost as AC
+                if self.offline:
+                    raise ValueError("--offline: the model is not asked; run without --offline to reword with it")
+                quote = self.restyle_quote(items, prof, model, only)
+                if approved_usd is None and not (price_unknown_ok and not quote["price_known"]):
+                    return {"changes": done, "rejected": [], "written": False, "plan": self.rel(plan_f), "ai": quote,
+                            "text": "the model was not asked: approve the quote (approved_usd) to have it reword the parts"}
+                if not quote["key_set"]:
+                    raise ValueError(quote["text"])
+                AC.approve(quote, approved_usd, over_limit_ok, price_unknown_ok)
                 more, rejected = HS.adapt_with_model(items, prof, self.rules(), model, only=only)
                 for k, v in more.items():
                     done.setdefault(k, []).extend(v)
@@ -1122,7 +1282,10 @@ class Workspace:
                     bak.write_text(plan_f.read_text(encoding="utf-8"), encoding="utf-8")
                 from .fsutil import write_text_atomic
                 write_text_atomic(plan_f, json.dumps(items, indent=2))
-        return {"changes": done, "rejected": rejected, "written": bool(done) and not dry_run, "plan": self.rel(plan_f)}
+        r = {"changes": done, "rejected": rejected, "written": bool(done) and not dry_run, "plan": self.rel(plan_f)}
+        if quote:
+            r["ai"] = quote
+        return r
 
     def _style_or_raise(self):
         from . import house_style as HS
@@ -1153,11 +1316,14 @@ class Workspace:
         rep["lock"] = self.rel(Path(rep["lock"]))
         return rep
 
-    def visual_check(self, target, datasheet=None, pages=None, symbol=None, render_only=False, client=None):
+    def visual_check(self, target, datasheet=None, pages=None, symbol=None, render_only=False, client=None,
+                     approved_usd=None, over_limit_ok=False, price_unknown_ok=False):
         """Claude visual proof (ecadlib.visual_check): render our footprint / symbol (TOP VIEW, pin 1, pitch, grid)
         next to the datasheet pages and ask Claude whether they match. target: a part name in this workspace
         (approved footprint, librarian plan) or a workspace path to a .kicad_mod / package spec .json. Writes the
-        pictures and proof.json under agent/proofs/<part>/. No API key -> verdict "skipped" (pictures still written)."""
+        pictures and proof.json under agent/proofs/<part>/. No API key -> verdict "skipped" (pictures still written).
+        The Claude call costs money: it is made only with approved_usd, the amount the person approved of the quote
+        a render_only run returns as "ai" (held to it as [agent.proof] max_cost_usd); without it ValueError."""
         from . import visual_check as VC
         item = {"datasheet": datasheet, "pages": pages, "symbol": None}
         try:
@@ -1175,8 +1341,40 @@ class Workspace:
             item["symbol"] = str(self.inside(symbol))
         if datasheet and not str(datasheet).startswith("http"):
             item["datasheet"] = str(self.inside(datasheet))
+        if self.offline:                               # --offline: no download and no model call
+            render_only = True
+            ds = item.get("datasheet")
+            if isinstance(ds, str) and ds.startswith("http"):
+                from . import datasheet as D
+                try:
+                    D.PdfStore(self.root / "http_cache", offline=True).fetch(ds, "visual_check")
+                except D.DatasheetError:
+                    raise ValueError(f"offline: the datasheet {ds[:120]} was not downloaded before; run without "
+                                     "--offline or pass a datasheet PDF in the workspace")
+                item["datasheet"] = str(self.root / "http_cache" / "datasheets"
+                                        / (hashlib.sha256(ds.encode()).hexdigest()[:24] + ".pdf"))
         out = self.root / "agent" / "proofs" / self.safe_name(item["part"])
-        pr = VC.prove(item, self.root, self.rules(), client=client, out_dir=out, render_only=render_only)
+        rules = self.rules()
+        pr = VC.prove(item, self.root, rules, client=client, out_dir=out, render_only=True)
+        est = pr.get("estimate")
+        q = None
+        if est:
+            from . import ai_cost as AC
+            cfg = VC._settings(rules)
+            q = AC.request_quote("visual", pr.get("model") or cfg["model"], est.get("usd"), est.get("usd_max"), rules,
+                                 what="The visual check asks the model once")
+            q.pop("key_set", None)                     # the proof itself says "skipped" when no key is set
+            q["text"] = q["text"].replace(" No API key is stored for it yet: add one on the setup page or with "
+                                          "`ecadlib keys set`.", "")
+            pr["ai"] = q
+        if not render_only and q is not None:     # a paid call: only for the amount the person approved
+            cap, _ = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
+            import copy
+            rules = copy.deepcopy(rules)
+            pc = rules.setdefault("agent", {}).setdefault("proof", {})
+            own = float(pc.get("max_cost_usd") or 0)      # the person's own [agent.proof] cap still holds
+            pc["max_cost_usd"] = min(cap, own) if cap and own else cap or own
+            pr = dict(VC.prove(item, self.root, rules, client=client, out_dir=out, render_only=False), ai=q)
         pr["proof_file"] = self.rel(VC.write_proof(pr, out / "proof.json"))
         pr["images"] = {k: [self.rel(f) for f in v] for k, v in pr["images"].items()}
         return pr
@@ -1187,7 +1385,7 @@ class Workspace:
         if fmt not in ("csv", "json", "xlsx"):
             raise ValueError(f"format must be csv, json or xlsx, not {str(fmt)[:20]!r}")
         bom_path, plan_f, _ = self._plan(bom)
-        rows = PE.rows(plan_f, name, include_held)
+        rows = PE.rows(plan_f, name, include_held, rules=self.rules_in_use())
         out = PE.write(rows, self.root / "reports" / f"parts_{self._key(bom_path)}.{fmt}", fmt)
         return {"file": self.rel(out), "parts": len(rows), "columns": PE.COLUMNS}
 
@@ -1208,17 +1406,18 @@ class Workspace:
         or with kicad=True the KiCad export in kicad/<bom>/ (run kicad_dblib first) against the Altium files, its
         .kicad_dbl rows included. Report in reports/parity_<bom>.md / .json. Never touches the network."""
         from . import parity as PY
-        from .kicad_export import kname
+        from .kicad_export import kname, libname
         bom_path, plan_f, _ = self._plan(bom)
         kdir = None
         if kicad:
             kdir = self.root / "kicad" / self._key(bom_path)
-            if not (kdir / f"{kname(str(name))[:60]}.kicad_sym").is_file():
+            lib = kname(str(name))[:60]                       # what kicad_dblib passes on; its files: libname(lib)
+            if not any((kdir / f"{n}.kicad_sym").is_file() for n in (lib, libname(lib))):
                 raise ValueError(f"no KiCad export in {self.rel(kdir)} yet: run kicad_dblib (or kicad-export) first")
         rep = PY.check_plan(plan_f, kdir, kname(str(name))[:60] if kdir else None, rules=self.rules_in_use())
         stem = PY.write_report(rep, self.root / "reports" / f"parity_{self._key(bom_path)}")
         bad = [p for p in rep["parts"] if p["result"] == "mismatch"]
-        return {"mode": rep["mode"], "ok": rep["ok"], "counts": rep["counts"], "report": self.rel(stem.with_suffix(".md")),
+        return {"mode": rep["mode"], "ok": rep["ok"], "counts": rep["counts"], "report": self.rel(report_file(stem, ".md")),
                 "mismatches": {p["part"]: [d["msg"] for d in p["diffs"] if d["level"] == "error"][:20] for p in bad},
                 "database": [d["msg"] for d in rep["database"]][:50]}
 
@@ -1315,9 +1514,8 @@ def _now(ts=None):
 def _nexar_token():
     tok = UC.secret("NEXAR_TOKEN")
     if not tok:
-        raise ValueError("no Altium 365 (Nexar) token: save it on the setup page (Optional keys) or run "
-                         "`ecadlib keys set NEXAR_TOKEN` (a Nexar portal token with the design.domain, user.access "
-                         "and openid scopes)")
+        from . import nexar_signin
+        raise ValueError("no Altium 365 (Nexar) token: " + nexar_signin.hint())
     return tok
 
 

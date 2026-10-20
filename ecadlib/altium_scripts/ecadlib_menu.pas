@@ -5,6 +5,9 @@
                       Altium 365 when ecadlib.toml names a workspace) and reinstalls the database library
     CheckProjectBOM   checks the BOM of the focused project, opens the report and offers to fill the library
     OpenReviewQueue   opens the ecadlib web UI at the review queue (starts it when it is not running)
+  FinishBackgroundJob (not a menu entry) puts a job the dialog left running into the library: Keep working closes the
+                    dialog so Altium stays free, and ecadlib calls this through X2.EXE -RScriptingSystem:RunScript when
+                    the job is done (`ecadlib altium-menu wake`). Jobs waiting for it are listed in waiting.txt.
   ecadlib_build.pas in this project adds BuildLibrariesInAltium (File > Run Script) and BuildLibraries(Folder),
   which Reinstall calls so Altium writes the library files itself.
 
@@ -55,6 +58,75 @@ Begin
     Ini := TIniFile.Create(Job + '\result.ini');
     Result := Ini.ReadString('result', Key, '');
     Ini.Free;
+End;
+
+Function Asked(Job : String; Key : String) : String;
+{ What the job's request.ini says (the dialog reads a background job back from it). }
+Var
+    Ini : TIniFile;
+Begin
+    Ini := TIniFile.Create(Job + '\request.ini');
+    Result := Ini.ReadString('request', Key, '');
+    Ini.Free;
+End;
+
+Procedure MarkJob(Job : String; Name : String);
+{ An empty marker file in the job folder: background.txt (call Altium back when done), finished.txt (Altium put it in). }
+Var
+    L : TStringList;
+Begin
+    L := TStringList.Create;
+    L.Add(Name);
+    L.SaveToFile(Job + '\' + Name);
+    L.Free;
+End;
+
+Procedure AddWaiting(Job : String);
+{ Keep working: the job goes on waiting.txt, so FinishBackgroundJob (or the next menu entry) can put it in later. }
+Var
+    L : TStringList;
+Begin
+    L := TStringList.Create;
+    If FileExists(Here + 'waiting.txt') Then
+        L.LoadFromFile(Here + 'waiting.txt');
+    L.Add(Job);
+    L.SaveToFile(Here + 'waiting.txt');
+    L.Free;
+End;
+
+Function DoneWaitingJob : String;
+{ The first job on waiting.txt that ecadlib has finished and Altium has not put in yet ('' = none). It is taken off
+  the list, and so are jobs that are put in already or gone; the ones still running stay. }
+Var
+    L : TStringList;
+    Keep : TStringList;
+    i : Integer;
+    J : String;
+Begin
+    Result := '';
+    If Not FileExists(Here + 'waiting.txt') Then
+        Exit;
+    L := TStringList.Create;
+    Keep := TStringList.Create;
+    L.LoadFromFile(Here + 'waiting.txt');
+    For i := 0 To L.Count - 1 Do
+    Begin
+        J := Trim(L.Strings[i]);
+        If (J <> '') And DirectoryExists(J) Then
+            If Not FileExists(J + '\finished.txt') Then
+            Begin
+                If (Result = '') And FileExists(J + '\exit.txt') Then
+                    Result := J
+                Else
+                    Keep.Add(J);
+            End;
+    End;
+    If Keep.Count > 0 Then
+        Keep.SaveToFile(Here + 'waiting.txt')
+    Else
+        DeleteFile(Here + 'waiting.txt');
+    L.Free;
+    Keep.Free;
 End;
 
 Function StartJob(Action : String) : String;
@@ -130,13 +202,31 @@ Begin
         Result := 'ecadlib stopped without a result.' + #13#10 + 'Next: look at its log, ' + Job + '\log.txt';
 End;
 
+Function SamePath(Path : String; Listed : String) : Boolean;
+{ Listed is a path from Altium's installed list, which may start with an environment variable (%UserProfile%\...,
+  as Altium saves it): then the rest of it must end Path. }
+Var
+    Rest : String;
+Begin
+    Result := UpperCase(Listed) = UpperCase(Path);
+    If (Not Result) And (Copy(Listed, 1, 1) = '%') Then
+    Begin
+        Rest := Copy(Listed, 2, Length(Listed));
+        If Pos('%', Rest) > 0 Then
+        Begin
+            Rest := UpperCase(Copy(Rest, Pos('%', Rest) + 1, Length(Rest)));
+            Result := (Rest <> '') And (UpperCase(Copy(Path, Length(Path) - Length(Rest) + 1, Length(Rest))) = Rest);
+        End;
+    End;
+End;
+
 Function IsInstalled(Path : String) : Boolean;
 Var
     i : Integer;
 Begin
     Result := False;
     For i := 0 To IntegratedLibraryManager.InstalledLibraryCount - 1 Do
-        If UpperCase(IntegratedLibraryManager.InstalledLibraryPath(i)) = UpperCase(Path) Then
+        If SamePath(Path, IntegratedLibraryManager.InstalledLibraryPath(i)) Then
             Result := True;
 End;
 
@@ -319,7 +409,12 @@ Begin
                 If IsInstalled(P) Then
                     IntegratedLibraryManager.UninstallLibrary(P);
                 IntegratedLibraryManager.InstallLibrary(P);
-                Result := Result + #13#10 + 'Installed again: ' + P;
+                { Altium can take the call and install nothing: say so, so "Done" never hides a library it can't see }
+                If IsInstalled(P) Then
+                    Result := Result + #13#10 + 'Installed in Altium: ' + P
+                Else
+                    Result := Result + #13#10 + 'Not installed: ' + P + ' (Altium did not install it). Next: in the Components panel, '
+                        + 'click the menu button > File-based Libraries Preferences > Installed > Install, and pick that file.';
             End
             Else
                 Result := Result + #13#10 + 'Missing: ' + P;
@@ -343,7 +438,7 @@ Procedure ShowResult(Title : String; Job : String; Extra : String);
 Begin
     If BuildFailed(Extra) Then
         ShowError(Title + #13#10 + #13#10 + 'Altium could not build the library files.' + Extra)
-    Else If Answer(Job, 'status') = 'error' Then
+    Else If (Answer(Job, 'status') = 'error') Or (Pos('Not installed:', Extra) > 0) Then
         ShowError(Title + #13#10 + #13#10 + MessageText(Job, Extra))
     Else
         ShowMessage(Title + #13#10 + #13#10 + MessageText(Job, Extra));
@@ -493,4 +588,15 @@ Begin
     End;
     If Answer(Job, 'status') <> 'ok' Then
         ShowResult(Title, Job, '');
+End;
+
+Procedure FinishBackgroundJob;
+{ ecadlib runs this in Altium (altium-menu wake) when a job the dialog left running is done: the dialog opens on its
+  result and the part goes into the library as if you had waited. Nothing happens when no job is waiting. }
+Var
+    J : String;
+Begin
+    J := DoneWaitingJob;
+    If J <> '' Then
+        OpenFinished(J);
 End;

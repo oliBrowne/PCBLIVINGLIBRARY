@@ -3,6 +3,7 @@
     ecadlib setup                                 the setup page in your browser: AI model + key, Altium / KiCad, folders
     ecadlib start                                 the desktop app (what the Windows Start menu entry runs)
     ecadlib keys      list|set NAME|remove NAME   API keys stored for you (encrypted on Windows), instead of env variables
+    ecadlib nexar     signin|status|signout       Altium 365 sign-in with your own Nexar app; stays signed in
     ecadlib init      [--yes] [--tool T] [--lib DIR] [--from DIR ...]   set up: tool, libraries, workspace, sources -> ecadlib.toml, doctor
     ecadlib demo      [-o DIR]                    a small library from a bundled BOM, offline, no keys (start here)
     ecadlib rules     check|show                  validate the rules file / print the defaults
@@ -59,12 +60,13 @@
 `ecadlib <command> -h` shows that command's options. -q / --quiet prints only the outcome, -v / --verbose every
 detail; colour only on a terminal (NO_COLOR=1 or ECADLIB_COLOR=never turns it off). --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
 one-line error. ECADLIB_LIB, ECADLIB_WORKSPACE and ECADLIB_CONFIG are defaults for --lib, --workspace and the rules file."""
-import importlib, sys
+import errno, importlib, os, sys
 
 COMMANDS = {
     "setup": ("ecadlib.easy_setup", "open the setup page: AI model and key, Altium / KiCad, folders, add ecadlib to Altium and KiCad"),
     "start": ("ecadlib.launcher", "the desktop app: start ecadlib in the background and open it in the browser (setup page on first run)"),
     "keys": ("ecadlib.userconfig", "API keys stored for this user instead of environment variables: list, set, remove"),
+    "nexar": ("ecadlib.nexar_signin", "sign in to Altium 365 once with your own Nexar app; ecadlib keeps the sign-in fresh"),
     "init": ("ecadlib.rules_infer", "set up ecadlib: tool, library folders, workspace, sources; learn your conventions -> ecadlib.toml"),
     "demo": ("ecadlib.firstrun:demo_main", "build a small library from a bundled sample BOM, offline, no API keys"),
     "rules": ("ecadlib.rules", "check or show the library rules"),
@@ -140,10 +142,51 @@ for _cmd, _what in (("agent", "the library agent"), ("agent-watch", "the library
     REMOVED[_cmd] = f"{_what} is {_PARKED} (see CHANGELOG.md). The last code with it: {_ARCHIVE}"
 
 
+def _pipe_gone(e):
+    """The reader of stdout went away (`| head`, a closed pager): POSIX says EPIPE (BrokenPipeError); Windows says
+    EINVAL on the write, so there it counts only when stdout cannot be written either (an empty buffer flushes
+    fine, so one byte is written to find out)."""
+    if isinstance(e, BrokenPipeError) or getattr(e, "errno", None) == errno.EPIPE:
+        return True
+    if getattr(e, "errno", None) != errno.EINVAL:
+        return False
+    try:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        return True
+    return False
+
+
+def _quiet_stdout():
+    """Point stdout at devnull, so the exit flush has nowhere to fail once the reader has gone."""
+    try:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):
+        pass
+    return 1
+
+
 def main(argv=None):
+    try:
+        code = _main(argv)
+        sys.stdout.flush()                                   # a closed pipe shows up here for buffered output
+        return code
+    except OSError as e:                                     # the reader of stdout went away (`| head`): say nothing
+        if not _pipe_gone(e):
+            raise
+        return _quiet_stdout()
+
+
+def _main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     from .cliutil import debug_wanted, env_defaults, report
     debug, argv = debug_wanted(argv)
+    lead = []                                                # `ecadlib -q status`: -q / -v before the command too
+    while argv and argv[0] in ("-q", "--quiet", "-v", "--verbose"):
+        lead.append(argv.pop(0))
+    if lead and argv:
+        argv = argv[:1] + lead + argv[1:]
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__)
         return 0
@@ -181,7 +224,9 @@ def main(argv=None):
     except RulesError as e:                                  # a bad ecadlib.toml: say which key, no traceback
         if debug:
             raise
-        print(f"ecadlib {argv[0]}: {e}\n  hint: `ecadlib doctor` shows the file and line", file=sys.stderr)
+        print(f"ecadlib {argv[0]}: {e}\n  hint: `ecadlib doctor` shows the file and line"
+              + ("; `ecadlib init --force` writes a new file (the old one is kept as .bak)" if "not valid" in str(e) else ""),
+              file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         if debug:
@@ -189,6 +234,8 @@ def main(argv=None):
         print(f"ecadlib {argv[0]}: interrupted", file=sys.stderr)
         return 130
     except Exception as e:                                   # one line + hint; --debug / ECADLIB_DEBUG=1: the traceback
+        if isinstance(e, OSError) and _pipe_gone(e):         # the reader went away (`| head`): stop quietly
+            return _quiet_stdout()
         if debug:
             raise
         return report(argv[0], e, sys.stderr)

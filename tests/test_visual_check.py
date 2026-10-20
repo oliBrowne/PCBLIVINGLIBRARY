@@ -438,7 +438,15 @@ def test_workspace_and_mcp_tool():
         calls = []
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}), \
                 mock.patch.object(D.requests, "post", fake_post(message(answer()), calls)):
-            r = ws.visual_check("footprints/ecadlib.pretty/SOIC-8_TEST.kicad_mod", "ds.pdf", "3")
+            try:                                                     # the Claude call is quoted and approved first
+                ws.visual_check("footprints/ecadlib.pretty/SOIC-8_TEST.kicad_mod", "ds.pdf", "3")
+                raise AssertionError("no approval")
+            except ValueError as e:
+                assert "approve the cost first" in str(e) and not calls, e
+            q = M.call_tool(ws, "visual_check", {"target": "SOIC-8_TEST", "datasheet": "ds.pdf", "pages": "3",
+                                                  "render_only": True})["ai"]
+            r = ws.visual_check("footprints/ecadlib.pretty/SOIC-8_TEST.kicad_mod", "ds.pdf", "3",
+                                approved_usd=q["approve_usd"])
         assert r["verdict"] == "pass" and len(calls) == 1
         try:
             ws.visual_check("NO_SUCH_PART", "ds.pdf")

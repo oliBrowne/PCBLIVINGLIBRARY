@@ -19,8 +19,12 @@ from . import userconfig as UC
 LEVELS = ("OK", "WARN", "FAIL")
 CORE = (("requests", "requests"), ("pandas", "pandas"), ("openpyxl", "openpyxl"), ("jsonschema", "jsonschema"),
         ("olefile", "olefile"))
-OPTIONAL = (("PIL", "pillow", "visual-check pictures"), ("pypdf", "pypdf", "datasheet page trimming"))
-TOOLS = (("pdftoppm", "datasheet pages for visual-check", "install poppler-utils"),
+OPTIONAL = (("PIL", "pillow", "visual-check pictures"), ("pypdf", "pypdf", "datasheet page trimming"),
+            ("pdfplumber", "pdfplumber", "datasheet ordering tables read by column"),
+            ("pypdfium2", "pypdfium2", "datasheet page pictures (pdftoppm works too)"),
+            ("curl_cffi", "curl_cffi", "datasheet links a site refuses to scripts: Chrome's TLS fingerprint"),
+            ("playwright", "playwright", "datasheet links a site refuses to scripts: a headless Edge / Chrome"))
+TOOLS = (("pdftoppm", "datasheet page pictures when pypdfium2 is missing", "pip install pypdfium2, or install poppler-utils"),
          ("kicad-cli", "KiCad checks and SVG previews", "install KiCad 7 or newer"),
          ("git", "upkeep pull requests", "install git"))
 
@@ -230,7 +234,7 @@ def locate(err, path):
     if m:
         return int(m.group(1))
     try:
-        lines = Path(path).read_text(encoding="utf-8").splitlines()
+        lines = Path(path).read_text(encoding="utf-8-sig").splitlines()
     except OSError:
         return None
     m = re.search(re.escape(str(path)) + r": (\S+)", err)
@@ -315,8 +319,18 @@ def check_formats(ws):
     old = [r for r in rows if r["state"] == "old"]
     if new:
         r = new[0]
+        if r["state"] == "error":                    # a damaged file, not a newer ecadlib
+            try:
+                where = Path(r["path"]).resolve().relative_to(Path(ws).resolve()).as_posix()
+            except (OSError, ValueError):
+                where = r["path"]
+            err = r.get("error") or "unreadable"
+            err = err[len(r["path"]) + 2:] if err.startswith(r["path"] + ": ") else err   # a stamp's names its path
+            return _c("file formats", "FAIL", f"{where}: {err}",
+                      f"restore {MG.STAMP} {MG.STAMP_FIX}" if r["kind"] == "stamp" else
+                      "restore it from a backup or version control, or delete its folder and run the step that made it again")
         return _c("file formats", "FAIL", r.get("error") or f"{r['path']}: made by ecadlib {r['made_by'] or '?'} "
-                  f"({r['kind']} schema {r['version']})", "upgrade ecadlib (pip install -U ecadlib)")
+                  f"({r['kind']} schema {r['version']})", MG.UPGRADE)
     if old:
         return _c("file formats", "WARN", f"{len(old)} file(s) from an older ecadlib ({', '.join(sorted({r['kind'] for r in old}))})",
                   "they are migrated when used; `ecadlib migrate` does it now (backups in .ecadlib_backup/)")
@@ -338,13 +352,17 @@ def check_paths(libs=(), rules=None):
     named = [("lib", l, "FAIL") for l in libs]
     for what, l, bad in named:
         p = Path(str(l)).expanduser()
-        if p.exists():
-            out.append(_c(what, "OK", f"{p}" + (f" ({_lib_summary(p)})" if p.is_dir() else "")))
+        if p.exists() and not p.is_dir():
+            out.append(_c(what, bad, f"{p}: a file, not a library folder (nothing in it would be indexed)",
+                          f"give the folder it is in: {p.parent}"))
+        elif p.exists():
+            out.append(_c(what, "OK", f"{p} ({_lib_summary(p)})"))
         else:
             out.append(_c(what, bad, f"{p}: not found", "fix the path (relative paths start at the current folder)"))
     if not libs:
         out.append(_c("lib", "OK", "no library folder of yours given: ecadlib builds a new library (to reuse your parts, "
-                                   "add your folders on the setup page or with `ecadlib init --lib FOLDER`)"))
+                                   "add your folders on the setup page, under [setup] libs in ecadlib.toml, or with "
+                                   "`ecadlib init --lib FOLDER --force`, which keeps the old file as .bak)"))
     return out
 
 
@@ -425,7 +443,9 @@ def run(workspace=None, libs=(), rules_path=None, environ=None, altium_menu=None
     rc, rules = check_rules(rules_path, workspace if Path(workspace).is_dir() else None)
     checks = [check_python()] + check_packages(rules=rules)
     checks.append(rc)
-    checks += check_ai(rules, environ)
+    checks += check_ai(rules, environ) if rules is not None else \
+        [_c("ai model", "WARN", "not checked: ecadlib.toml did not load, so the model it names is unknown",
+            "fix the rules line above, then run doctor again")]           # never the default model as OK
     checks += check_keys(rules, environ)
     checks += check_key_safety(rules, environ)
     checks.append(check_workspace(workspace))
@@ -452,7 +472,7 @@ def render(rep, styled=False, width=None, verbosity=0):
     t.write(t.bold(head))
     for lv, title in (("FAIL", "Fix these:"), ("WARN", "Optional (works without them):"), ("OK", "Fine:")):
         group = [c for c in rep["checks"] if c["level"] == lv]
-        if not group or (lv == "OK" and t.quiet):
+        if not group or (lv != "FAIL" and t.quiet):     # -q: the outcome and the problems, no empty headings
             continue
         t.write("\n" + title)
         rows = []
@@ -460,7 +480,7 @@ def render(rep, styled=False, width=None, verbosity=0):
             rows.append([t.status(st.get(lv, "info"), lv) if styled else lv, c["check"], c["detail"]])
             if c["hint"] and lv != "OK":
                 rows.append(["", "", f"-> {c['hint']}"])
-        t.table(rows, indent=0)
+        t.table(rows, indent=0, level=-1)
     t.write(f"\n{n['OK']} ok, {n['WARN']} warning(s), {n['FAIL']} failure(s)")
     return buf.getvalue().rstrip("\n")
 

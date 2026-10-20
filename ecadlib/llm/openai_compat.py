@@ -15,12 +15,15 @@ Retries 408/409/429/5xx and network errors with backoff (retry-after honoured), 
 rejects response_format with HTTP 400 is asked once more without it (json_object, then none), and the answer goes
 through the JSON-repair rail. Every request is logged as one JSON line without the key or the image/PDF bytes.
 The key is only ever sent to the configured base_url."""
-import datetime, json, random, time
+import datetime, json, random, re, time
 from pathlib import Path
 
 import requests
 
 RETRY_STATUS = {408, 409, 429, 500, 502, 503, 504, 529}
+# an HTTP 400 that is about the output format (only these switch to a looser response_format; a 400 for a too-long
+# prompt or a bad parameter is reported as it is, and the run keeps asking for the schema)
+FORMAT_ERR = re.compile(r"response_format|json_schema|json_object|structured|schema|grammar|guided", re.I)
 FINISH = {"stop": "end_turn", "length": "max_tokens", "content_filter": "refusal", "tool_calls": "tool_use"}
 
 
@@ -102,21 +105,25 @@ class OpenAICompatClient:
 
     @staticmethod
     def to_message(resp, model):
-        ch = (resp.get("choices") or [{}])[0]
-        m = ch.get("message") or {}
+        chs = resp.get("choices") if isinstance(resp, dict) else None
+        ch = chs[0] if isinstance(chs, list) and chs else {}
+        if not isinstance(ch, dict) or (chs is not None and not isinstance(chs, list)):   # not a chat completion
+            from ..datasheet import APIError
+            raise APIError(f"malformed answer from the model server: choices = {str(chs)[:80]}")
+        m = ch.get("message") if isinstance(ch.get("message"), dict) else {}
         text = m.get("content")
         if isinstance(text, list):                           # some servers return content parts
             text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
         stop = FINISH.get(ch.get("finish_reason"), "end_turn")
         if m.get("refusal"):
             stop = "refusal"
-        u = resp.get("usage") or {}
-        cached = ((u.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0
+        u = resp.get("usage") if isinstance(resp.get("usage"), dict) else {}
+        cached = int(((u.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
         return {"id": resp.get("id"), "type": "message", "role": "assistant", "model": resp.get("model") or model,
                 "content": [{"type": "text", "text": text or ""}], "stop_reason": stop,
                 "stop_details": {"type": "refusal", "category": None, "explanation": m.get("refusal")} if stop == "refusal" else None,
-                "usage": {"input_tokens": int(u.get("prompt_tokens") or 0) - int(cached), "cache_read_input_tokens": int(cached),
-                          "output_tokens": int(u.get("completion_tokens") or 0)}}
+                "usage": {"input_tokens": max(0, int(u.get("prompt_tokens") or 0) - cached), "cache_read_input_tokens": cached,
+                          "output_tokens": int(u.get("completion_tokens") or 0)} if u else None}   # none sent: unknown
 
     # --- HTTP
     def _log(self, rec):
@@ -138,23 +145,31 @@ class OpenAICompatClient:
         return s(chat)
 
     def chat(self, chat):
-        from ..datasheet import APIError, redact
+        from ..datasheet import APIError, redact as _redact, safe_url, _no_redirects
         url = self.base + "/chat/completions"
+        shown = safe_url(self.base)                        # never a base_url's user:password in logs or messages
+        cred = self.base.split("//", 1)[-1].rsplit("@", 1)[0] if shown != self.base else ""
+
+        def redact(text, key):
+            text = _redact(text, key).replace(self.base, shown)
+            return text.replace(cred, "<credentials>") if len(cred) >= 3 else text
         h = {"content-type": "application/json"}
         if self.key and self.key != "no-key-needed":
             h["authorization"] = f"Bearer {self.key}"
         post = self._post or requests.post
         for attempt in range(self.retries + 1):
             t0 = time.time()
-            rec = {"t": datetime.datetime.now().isoformat(timespec="seconds"), "method": "POST", "url": url,
+            rec = {"t": datetime.datetime.now().isoformat(timespec="seconds"), "method": "POST", "url": safe_url(url),
                    "attempt": attempt + 1, "body": self._summary(chat)}
             retry_after = None
             try:
                 from ..term import waiting
-                with waiting(f"the model at {self.base} (model call)"):
-                    r = post(url, headers=h, json=chat, timeout=self.timeout)
+                with waiting(f"the model at {shown} (model call)"):
+                    r = post(url, **_no_redirects(post, dict(headers=h, json=chat, timeout=self.timeout)))
             except requests.RequestException as e:
-                err = APIError(f"{self.base}: request failed: {type(e).__name__}: {redact(e, self.key)[:200]}", retryable=True)
+                err = APIError(f"{shown}: request failed: {type(e).__name__}: {redact(e, self.key)[:200]}", retryable=True)
+                from .. import datasheet as D
+                err.maybe_billed = not D.not_sent(e)         # the cost cap keeps its hold
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))
             else:
                 try:
@@ -171,30 +186,32 @@ class OpenAICompatClient:
                 hint = {401: " (the key was rejected: check it and the variable it is read from)",
                         404: " (unknown model or endpoint: check [ai] model and base_url)",
                         429: " (rate limited)"}.get(r.status_code, "")
-                err = APIError(f"{self.base}: HTTP {r.status_code}: {str(emsg)[:300]}{hint}", r.status_code,
+                err = APIError(f"{shown}: HTTP {r.status_code}: {str(emsg)[:300]}{hint}", r.status_code,
                                (e or {}).get("type") if isinstance(e, dict) else None, r.status_code in RETRY_STATUS)
                 rec["error"] = str(emsg)[:300]
                 retry_after = (getattr(r, "headers", None) or {}).get("retry-after")
             self._log(rec)
             if not err.retryable or attempt == self.retries:
                 raise err
-            try:
-                wait = float(retry_after) if retry_after is not None else None
-            except ValueError:
-                wait = None
-            wait = min(self.max_wait * 5, wait) if wait is not None else min(self.max_wait, self.backoff * 2 ** attempt + random.uniform(0, 1))
+            from .. import datasheet as D
+            wait = D.retry_wait(retry_after, attempt, self.backoff, self.max_wait)
             if self.say:
                 self.say(f"  model API: {err.args[0][:120]}; retry {attempt + 1}/{self.retries} in {wait:.0f}s")
             self.sleep(wait)
 
     def messages(self, body, headers=None):
         """Messages-shaped body -> Messages-shaped answer (see the module docstring)."""
-        from ..datasheet import APIError
-        chat = self.to_chat(body)
+        from ..datasheet import APIError, DatasheetError
+        try:
+            chat = self.to_chat(body)
+        except DatasheetError as e:                        # refused while building: nothing went out, nothing billed
+            e.not_sent = True
+            raise
         try:
             resp = self.chat(chat)
         except APIError as e:
-            if e.status == 400 and "response_format" in chat and self.format_fallback != "none":
+            if (e.status == 400 and "response_format" in chat and self.format_fallback != "none"
+                    and FORMAT_ERR.search(str(e))):
                 # the server does not take this response format: ask once more with a looser one (the rails repair JSON)
                 self.format_fallback = "json_object" if chat["response_format"]["type"] == "json_schema" else "none"
                 return self.messages(body, headers)

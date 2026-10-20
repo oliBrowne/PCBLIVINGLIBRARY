@@ -5,6 +5,7 @@ Every way ecadlib gets parts into Altium: Altium 365, database libraries, .SchLi
 On this page:
 
 * [`altium365.py`: Altium 365 workspace exporter (Nexar Design API)](#altium365py-altium-365-workspace-exporter-nexar-design-api)
+* [Signing in to Altium 365: `ecadlib nexar signin`](#signing-in-to-altium-365-ecadlib-nexar-signin)
 * [`altium_export.py`: Altium Database Library](#altium_exportpy-altium-database-library)
 * [`altium_lib.py`: Altium `.PcbLib` / `.SchLib` writer (pure Python)](#altium_libpy-altium-pcblib--schlib-writer-pure-python)
 * [`kicad_import.py`: KiCad library parts to Altium](#kicad_importpy-kicad-library-parts-to-altium)
@@ -15,8 +16,9 @@ On this page:
 ```
 python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
         --models <dir with SchLib/<ref>.SchLib and PcbLib/<ref>.PcbLib> -o out/altium365/plan.json
-NEXAR_TOKEN=... python3 -m ecadlib.altium365 workspaces
-NEXAR_TOKEN=... python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace <url> [--dry-run]
+ecadlib nexar signin                      # once; or NEXAR_TOKEN=<portal token> for a day
+python3 -m ecadlib.altium365 workspaces
+python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace <url> [--dry-run]
 ```
 
 `plan` turns each unique part into one managed workspace component under `Components/<Category>`, with the same parameters as the DbLib rows (manufacturer, MPN, value, supplier, links). `push` then, for each part:
@@ -26,6 +28,8 @@ NEXAR_TOKEN=... python3 -m ecadlib.altium365 push out/altium365/plan.json --work
 3. otherwise uploads the `.SchLib` and `.PcbLib` to `files.nexar.com/File/Upload` and calls `desReleaseComponent`, which releases symbol, footprint and component in one call, using the workspace's default naming schemes and lifecycles for each content type.
 
 Parts without Altium model files are planned as `needs_altium_models` and skipped on release (they still get parameter updates if they already exist in the workspace). `--dry-run` sends nothing and writes the mutation inputs it would send.
+
+**Only checked parts go up.** In a plan, `ready` only means the model files were found. Before `push` uploads a part's files (a new part, or a new revision of a changed one), it runs the release check (`ecadlib release-check`) on those files as they are now. A part that fails the check is skipped as held, and its failures are listed in the push report, unless a person signed them off with release anyway (`--allow`). `dblib-sync`, `altium-pkg` and `kicad-export` run the same check. A part from a doubtful source (an EasyEDA conversion, a pinout from a family table, a KiCad symbol or footprint picked by a near name, a datasheet read) is held until someone looks at it and releases it anyway.
 
 **Verified** (from Nexar's support articles and the schema and code in `NexarDeveloper/nexar-release-component-demo-wpf`, last commit 2024-07-23):
 * `desReleaseComponent(input: DesReleaseComponentInput!)` takes component name, comment, description, parameters, folder, naming scheme and lifecycle ids, plus `symbolFiles` and `footprintFiles` as `{fileId, relativePath}`. The demo uploads real `.SchLib`/`.PcbLib` binaries from a `Released\` folder, so **release needs Altium-format files; KiCad files cannot go up directly**.
@@ -57,6 +61,38 @@ For teams that keep a Database Library or an SVN Database Library instead of an 
 
 **Unverified** (there is no Altium or Windows here): that the `.xlsx` opens through ACE `Excel 12.0 Xml`, since the real example used `.xls` with `Excel 8.0`; that `SVNRepositoryURL` should be the working-copy URL (the URL `--to` is checked out from) so `SchLib\x.SchLib` resolves; that `LibrarySearchPath` is where Altium keeps the "Models Location" folders; the `.SVNDbLib` extension case (Altium writes `.SVNDbLib`); and the INI encoding (UTF-8 here, though only ASCII names are expected).
 
+## Signing in to Altium 365: `ecadlib nexar signin`
+
+A token made on the Nexar portal lasts 24 hours, so pasting one (`ecadlib keys set NEXAR_TOKEN`) means doing it again
+every day. Instead, make your own free Nexar app once and let ecadlib keep itself signed in:
+
+1. On [portal.nexar.com](https://portal.nexar.com/applications) sign in with the Altium account of your Altium 365
+   workspace and create an application with **Design** access (the Design API is free; nothing here uses the paid
+   supply API).
+2. On the app's **Authorization** tab, add `http://localhost:3000/login` as a redirect URI (ecadlib listens there on
+   your own computer for the one browser sign-in; `NEXAR_REDIRECT_URI` picks another port).
+3. Run `ecadlib nexar signin`, paste the app's **client ID** and **client secret** when asked (once), and allow access
+   in the browser that opens.
+
+`ecadlib nexar status` says whether you are signed in and until when the current access token is valid (never the
+token); `ecadlib nexar signout` forgets the sign-in. Every Altium 365 command, the web UI and the Altium menu use the
+sign-in without change.
+
+**How it works.** Nexar accepts only confidential apps (an app with a secret), so ecadlib can't ship one shared
+"Sign in with Altium" app: its secret would be public. With your own app, ecadlib does the standard authorization
+code sign-in with PKCE and the scopes `openid user.access design.domain offline_access`. `offline_access` gives a
+refresh token; when the access token is within five minutes of running out, ecadlib swaps the refresh token for a new
+one (and keeps the new refresh token when Nexar rotates it). The app's id and secret (`NEXAR_CLIENT_ID`,
+`NEXAR_CLIENT_SECRET`, the same names the supply lookups use) and the sign-in (`NEXAR_SIGNIN`) go into ecadlib's key
+store ([API keys](api-keys.md)): encrypted for your Windows account, never in the environment, a config file or a log.
+A pasted `NEXAR_TOKEN` still works when there is no sign-in. If a refresh fails (the app was deleted, the secret
+changed), commands say so and ask you to run `ecadlib nexar signin` again.
+
+**Checked** (2026-10-20) against `identity.nexar.com/.well-known/openid-configuration`: authorization code, refresh
+token, PKCE S256, the `offline_access` scope, and only `client_secret_basic` / `client_secret_post` client
+authentication. **Tested offline** with a fake token endpoint and a fake browser (`tests/test_nexar_signin.py`); the
+first live sign-in needs a real Nexar app.
+
 ## `altium_export.py`: Altium Database Library
 
 ```
@@ -67,7 +103,7 @@ This writes one table per category (Capacitors, Connectors, Crystals, Diodes, IC
 
 * **Columns:** `Part Number` (key), `Library Ref`, `Library Path`, `Footprint Ref`, `Footprint Path`, `Description`, `Value`, `Comment`, `Manufacturer`, `Manufacturer Part Number`, `Supplier 1`, `Supplier Part Number 1`, `Supplier 2`, `Supplier Part Number 2`, `ComponentLink1Description/URL` (LCSC page) and `ComponentLink2Description/URL` (datasheet).
 * **Generic symbols:** passives use a generic symbol (`Resistor`, `Capacitor`) with `Comment = "=Value"`, and their Part Number is synthesised (`RES-0603-10k`).
-* **Footprints:** footprint refs reuse the KiCad footprint names, so `Footprint Path` points at a `PcbLib\ecadlib.PcbLib`. That file has to be produced by importing `out/footprints/ecadlib.pretty`, as described below.
+* **Footprints:** footprint refs reuse the KiCad footprint names. `Footprint Path` points at `PcbLib\<footprint>.PcbLib` and `Library Path` at `SchLib\<symbol>.SchLib` (one file each, relative to the DbLib). This export does not write those files; `ecadlib dblib-sync` on a librarian plan writes the DbLib with the files beside it, and leaves held parts out.
 
 **Verified**, from Altium's online docs and two real `.DbLib` files fetched from GitHub (`ximtech/altium-library`, a PostgreSQL/ODBC library, and `ttrinidad/altium-library`, the Celestial MSSQL/UDL library):
 * A `.DbLib` is an INI file. It has an `[OutputDatabaseLinkFile] Version=1.1` section, and a `[DatabaseLinks]` section holding `ConnectionString=`, `AddMode=3`, `RemoveMode=1`, `UpdateMode=2`, `LeftQuote`/`RightQuote`, `QuoteTableNames`, `UseTableSchemaName`, `DefaultColumnType=VARCHAR(255)`, `SchemaName` and `LastFocusedTable`. The quote characters are `"` for Postgres and `[`/`]` for MSSQL.
@@ -102,8 +138,9 @@ python3 -m ecadlib.altium_lib pcblib ecadlib/package_specs/*.json -o out/altium_
 python3 -m ecadlib.altium_lib schlib examples/symbols/*.json  -o out/altium_models/SchLib
 python3 -m ecadlib.altium_lib dump out/altium_models/PcbLib/SOIC-8_3.9x4.9mm_P1.27mm.PcbLib
 python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
-        --models out/altium_models -o out/altium365/plan.json      # -> 4 ready, 10 needs_altium_models
-                                                                     #    add --models out/altium_models_kicad (KiCad parts, below) -> 14 ready
+        --models out/altium_models -o out/altium365/plan.json      # -> 4 with models, 10 needs_altium_models
+                                                                     #    add --models out/altium_models_kicad (KiCad parts, below) -> 14 with models
+python3 -m ecadlib.release_check out/altium365/plan.json             # what push will hold back, and why
 ```
 
 **Altium can now build these files itself.** Every library written here also gets a plain-text recipe beside it
@@ -118,7 +155,7 @@ What gets written:
 * **Designator and comment text:** the reference becomes `.Designator` on Top Overlay and the value `.Comment` on Mechanical 13 (stroke font, KiCad's height, stroke width, rotation and justification; the anchor is shifted so a nominal 3-character designator and 8-character comment centre where KiCad centres them).
 * **Pin graphics:** pins in `examples/symbols/*.json` take an optional `"shape"`: a KiCad shape name (`inverted`, `clock`, `inverted_clock`, `input_low`, `clock_low`, `output_low`, `edge_clock_high`, `non_logic`) or `{"inside_edge"|"outside_edge"|"inside"|"outside": symbol}` with Altium's IEEE symbols. `~{EN}` in a pin name becomes Altium's overline `E\N\`.
 * **Display modes:** symbols can carry alternate (De Morgan) views, written as Altium 24 writes them.
-* `CH340C.json` and `TPS62133RGTR.json` carry `"needs_datasheet_verification": true`. **Their pinouts were written from memory and must be checked against the datasheets before anything is released.**
+* `CH340C.json` and `TPS62133RGTR.json` carry `"needs_datasheet_verification": true`. **Their pinouts were written from memory and must be checked against the datasheets before anything is released.** Their `cross_check` notes record the checks made since (CH340C pin 8 is OUT#). ecadlib does not read the flag: a `.SchLib` built from these files is held only by what the release check finds.
 
 **Verified here** (2026-10-13; `python3 -m tests.test_offline` runs 11/11, 5 of them new):
 * **Container:** `olefile` reads all 13 outputs with `raise_defects=DEFECT_INCORRECT` and logs nothing. 200 random trees and an 8 MB file that needs DIFAT read back byte-exact. 18 real Altium files from AltiumSharp's TestData and the Nexar demo were rewritten through `cfb.to_bytes`, and each came back with an identical stream tree.
@@ -186,7 +223,11 @@ In KiCad: Plugin and Content Manager > Install from File... > the zip. KiCad's P
 symbols' Footprint fields say `PCM_<lib>:<footprint>` and the footprints' models
 `${KICADn_3RD_PARTY}/3dmodels/<id>/<lib>.3dshapes/...` (n = `--kicad`; `--prefix ""` if you cleared KiCad's prefix).
 `--kicad 7` writes KiCad 7 files; the default 8 keeps the export's KiCad 8 files (KiCad 8, 9, 10). The version is
-`--pkg-version`, or kept while the content is unchanged, else today's date, so a re-run changes no file. With
+`--pkg-version`, or kept while the content is unchanged, else today's date, so a re-run changes no file; a second
+change the same day takes the version after the last one (2026.10.17 after 2026.10.16), as KiCad offers only a newer
+version as an update (so a `--pkg-version` that is not newer, 1.2 after 1.2.0 included, is refused for a changed
+library). The last one is this package's newest in `--out` (its zips there, `packages.json`, `kicad_pcm.json`), so
+packages sharing a folder keep their own versions. With
 `--base-url` it also writes `repository.json` and `packages.json` (sha256, sizes) for Manage Repositories; KiCad only
 fetches repositories over http(s) (`kicad_curl_easy.cpp`), so a `file://` URL is refused.
 `--plugin` writes a PCM *plugin* package: an **ecadlib** button in the PCB editor's top toolbar (and Tools > External
@@ -197,7 +238,11 @@ your library / a source can supply / needs a footprint, then Later or Fill the l
 request) and Open review queue. The window does not block KiCad. It runs `ecadlib kicad-menu run-job` in the background
 (`ecadlib/kicad_menu.py`) and reads its `progress.ini` / `result.ini`, as the Altium dialog does. Per project,
 `<project>/ecadlib-work/` is the workspace (one parts list for every part added or filled, so one plan makes the whole
-library) and `<project>/ecadlib/` the KiCad library, added to the project's tables as `${KIPRJMOD}/ecadlib/...`.
+library) and `<project>/ecadlib/` the KiCad library, added to the project's tables as `${KIPRJMOD}/ecadlib/...`
+(after Fill the library now and Add part). A project table that already has an `ecadlib` row for another library
+(say `kicad-export -o <project>`'s `${KIPRJMOD}/ecadlib.pretty`) is not changed: the window names that row, to rename
+or remove. The BOM check counts a line as in your library when its part number is in `<project>/ecadlib/*.kicad_sym`.
+Open review queue runs one web UI per project: when the port is taken by another project's UI, the next free port.
 KiCad gives plugins no menu or toolbar slot in the schematic editor; its Tools > Generate BOM can run
 `ecadlib kicad-menu check-bom "%I"` there, which checks the netlist against the library and opens the report.
 Tried in KiCad 7.0.11: toolbar button, BOM check, fill and add part with the footprint placed.
@@ -263,7 +308,11 @@ offline; relative paths start at that folder; a rebuild keeps the file). Built o
 `command=` is the Python that ran the build (`"<sys.executable>" -m ecadlib`), so an install in a venv is found; a
 rebuild fills an empty `command=` (older builds) and changes nothing else. `ecadlib doctor --altium-menu <folder>`
 checks that `command=` runs ecadlib. Without an AI key, parts no free source fully describes come back held with the
-reason (the dialog and the review queue say which), and nothing held reaches the library. Check this project BOM reads the
+reason (the dialog and the review queue say which), and nothing held reaches the library. A held part whose reasons a
+person may override (not a missing file, not a change waiting for `ecadlib part approve`) gets **Release anyway** at
+the bottom left of the dialog: it lists why the part is held, then asks why it is fine, and releases it the way the
+review queue does (`release-check --allow`, your name and the reason kept in the plan's `allow`, revision 1 in the
+change-control ledger) before it puts the part into the library. The reason box starts with "Checked it: fine as it is", so Enter releases; an emptied box releases nothing. A missing 3D height does not hold a part (`[release] height = "hold"` makes it): the dialog adds a note to check the 3D body. Check this project BOM reads the
 project's device sheets (`[DeviceSheetN]`; one it cannot find is a warning) and lists multi-channel sheets once per
 channel (R1_CH1 ...); a Content Vault component without an MPN parameter uses its Comment as the MPN when it reads as
 one. Workspace `altium_menu(win_dir)` and the MCP
@@ -296,8 +345,18 @@ values are one line; finished job folders older than 14 days are removed. Every 
 NEXAR_TOKEN, port taken, ...); ecadlib's output is in `jobs\<id>\log.txt`. `hidden=0` runs the .cmd in a visible
 console instead. No key is in any file: keys stay in environment variables.
 
+**Keep working while ecadlib works.** The dialog is modal, so Altium waits while it is open. **Keep working** (or
+the dialog's X) closes it and the job runs on in the background. The script writes `background.txt` in the job and
+adds the job to `waiting.txt` next to the script. When the job ends, `ecadlib_run.cmd` runs
+`ecadlib altium-menu wake "<job>"`, which calls the running Altium's `X2.EXE` with
+`-RScriptingSystem:RunScript(ProjectName=<prj>|ProcName=<dir>\ecadlib_menu.pas>FinishBackgroundJob)` (8.3 short
+paths: a space in a script path makes Altium start a second copy). Altium then opens the dialog on the result,
+builds and installs the library (a native build locks Altium for those seconds) and writes `finished.txt`. While
+Altium is busy with another script, wake tries again every minute, five times. When Altium is closed or never takes
+it, the next menu entry asks whether to put the finished job in. Its output is in `jobs\<id>\wake.txt`.
+
 **Install.** The quick way: close Altium and run `ecadlib altium-menu install-menu --out <folder>` (the setup
-page's Add to Altium does this on Windows). It merges the ecadlib commands and the four menu insertions into Altium's
+page's Add to Altium does this on Windows; from WSL or Linux it uses the Windows folder `build --win-dir` recorded). It merges the ecadlib commands and the four menu insertions into Altium's
 own menu file, `%APPDATA%\Altium\Altium Designer {GUID}\DXP.RCS` (backed up next to it first; other customisations
 are kept; `--remove` takes ours out), so the "ecadlib" menu sits in the top menu bar before Window. Altium must be
 closed because it writes that file when it closes. The menu entries run the script project by its path, so it need

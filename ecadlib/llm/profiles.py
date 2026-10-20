@@ -7,7 +7,8 @@ A profile is {tier, pdf, vision, json_schema, context, max_tokens_param, price_i
   json_schema  it honours a JSON-schema response format (else: schema in the prompt + JSON repair)
   context      context window in tokens (sizes how much page text is sent)
   max_tokens_param  max_tokens | max_completion_tokens (OpenAI's newer models want the second)
-  price_in / price_out  $ per million tokens when known (Claude: datasheet.PRICES; a local server is $0)
+  price_in / price_out  $ per million tokens when known (Claude: datasheet.PRICES; a local server is $0 unless
+               [ai.profiles] sets both, e.g. a paid gateway on a private network)
   sampling     it takes a temperature (unset: ecadlib.llm.sampling's table of models that reject one)
 
 Where it comes from, later wins: CONSERVATIVE (an unknown model: small, text only, no schema, 4K context) ->
@@ -113,6 +114,9 @@ def profile(model, provider="anthropic", rules=None, detected=None):
     if o:
         p.update({k: v for k, v in o.items() if k in FIELDS})
         src.append("ecadlib.toml [ai.profiles] (" + ", ".join(sorted(o)) + ")")
+        if ("price_in" in o or "price_out" in o) and p.get("price_in") is not None and p.get("price_out") is not None:
+            p["price_set"] = True                 # a whole price you set wins over "a local server is $0" (a paid
+                                                  # gateway); half of one leaves a local server at $0, not unknown
     p["source"] = "; ".join(src)
     return p
 
@@ -130,7 +134,7 @@ def check_field(k, v):
         return "must be true or false"
     if t is int and (not isinstance(v, int) or isinstance(v, bool) or not 512 <= v <= 10_000_000):
         return "must be a whole number of tokens from 512 to 10000000"
-    if t is float and (not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0):
+    if t is float and (not isinstance(v, (int, float)) or isinstance(v, bool) or not 0 <= v < float("inf")):  # nan too
         return "must be a number of 0 or more ($ per million tokens)"
     return None
 

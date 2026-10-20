@@ -39,7 +39,7 @@ def test_kicad_dblib_case_insensitive_tables_and_columns():
     with tempfile.TemporaryDirectory() as d:
         plan = _plan(d, [_item("R1", "Passives/Resistors", [("Tolerance", "1%"), ("tolerance", "5%")]),
                          _item("R2", "Other/resistors", [("tolerance", "2%")])])
-        tables, _ = KD.part_rows(plan, "lib")
+        tables, _ = KD.part_rows(plan, "lib", include_held=True)     # no files: held by the re-check, listed anyway
         assert list(tables) == ["Resistors"] and len(tables["Resistors"]) == 2
         KD.write_sqlite(Path(d) / "x.sqlite", tables)
         with contextlib.closing(sqlite3.connect(Path(d) / "x.sqlite")) as con:
@@ -164,8 +164,8 @@ KD.add_lib_row(d / "sym-lib-table", "x-db", "${KIPRJMOD}/x.kicad_dbl", "d")
 assert "Biblioth\u00e8que" in (d / "sym-lib-table").read_bytes().decode("utf-8")
 (d / "plan.json").write_bytes(json.dumps([{"name": "R1", "status": "ready", "description": "10k\u03a9", "symbol": {"ref": "R", "file": "s"},
                                           "footprint": {}}], ensure_ascii=False).encode())
-assert PE.rows(d / "plan.json")[0]["Description"] == "10k\u03a9"
-assert KD.part_rows(d / "plan.json", "x")[0]["Parts"][0]["Description"] == "10k\u03a9"
+assert PE.rows(d / "plan.json", include_held=True)[0]["Description"] == "10k\u03a9"     # no files: held, listed anyway
+assert KD.part_rows(d / "plan.json", "x", include_held=True)[0]["Parts"][0]["Description"] == "10k\u03a9"
 print("ok")
 '''
     env = dict(os.environ, LC_ALL="C", LANG="C", PYTHONCOERCECLOCALE="0", PYTHONUTF8="0", PYTHONIOENCODING="utf-8")

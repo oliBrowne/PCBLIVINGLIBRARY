@@ -234,20 +234,33 @@ def test_choose_uses_house_layer_rules():
 
 
 def test_librarian_refresh_does_not_overwrite_a_shared_choice():
-    """A part sharing the chosen footprint's file must not re-fetch over it on `librarian --refresh`."""
-    from ecadlib import altium_lib as AL
+    """A footprint chosen for one of two parts sharing a file gets its own file (other pads: fp_share names it), so the
+    other part keeps its released pads, and `librarian --refresh` re-fetches over neither (T011).
+
+    The chosen footprint has the part's 8 pads: a choice that fails the release check is no longer applied to a
+    released part (it waits as a held change), so a 2-pad LED footprint would leave the file as it was."""
+    from ecadlib import kicad_import as K
     bom = TL.BOM + "U5,1,OTHER1,SOIC-8_3.9x4.9mm_P1.27mm,ACME,OTHER1,,Other SOIC part,\n"
-    with tempfile.TemporaryDirectory() as d:
-        items, http = TL.run(d, bom=bom, sources=["kicad"])
+    with tempfile.TemporaryDirectory() as d:          # TPS1234DSGR's suffix-matched symbol: checked, released anyway
+        items, http = TL.run(d, bom=bom, sources=["kicad"], allow=["TPS1234DSGR"], user="Test Reviewer <reviewer@example.com>")
         out = Path(d) / "out"
+        assert items["TPS1234DSGR"]["status"] == "ready", items["TPS1234DSGR"]["hold_reasons"]
         assert items["OTHER1"]["footprint"]["file"] == items["TPS1234DSGR"]["footprint"]["file"]
-        r = R.choose(out / "plan.json", "TPS1234DSGR", "footprint", "kicad:LED_SMD:LED_0603_1608Metric",
+        alt = TL.FOOTS["Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"].replace("SOIC-8_3.9x4.9mm_P1.27mm", "SOIC-8_ALT") \
+            .replace("(size 1.965 0.58)", "(size 1.965 0.6)")                      # other pads than the shared file's
+        http.routes[K.GITLAB.format(repo="kicad-footprints", path="Package_SO.pretty/SOIC-8_ALT.kicad_mod")] = alt
+        f = out / items["TPS1234DSGR"]["footprint"]["file"]
+        before = f.read_bytes()
+        r = R.choose(out / "plan.json", "TPS1234DSGR", "footprint", "kicad:Package_SO:SOIC-8_ALT",
                      src=R.Sources(Path(d) / "cache", http=http))
-        pads = lambda: sorted(x["designator"] for x in AL.read_pcblib(out / r["file"])[0]["records"] if x["type"] == "pad")
-        assert pads() == ["1", "2"]
+        own = out / r["file"]
+        assert r["status"] == "ready" and own != f and own.name == "SOIC-8_3.9x4.9mm_P1.27mm_SOIC-8_ALT.PcbLib", r
+        assert f.read_bytes() == before                                         # OTHER1 keeps its released file
+        chosen = own.read_bytes()
         items, _ = TL.run(d, bom=bom, sources=["kicad"], refresh=[])
-        assert pads() == ["1", "2"], pads()
-        assert items["TPS1234DSGR"]["source"]["footprint"] == "kicad:LED_SMD:LED_0603_1608Metric"
+        assert own.read_bytes() == chosen and f.read_bytes() == before
+        assert items["TPS1234DSGR"]["source"]["footprint"] == "kicad:Package_SO:SOIC-8_ALT"
+        assert items["TPS1234DSGR"]["footprint"]["file"] == r["file"] and items["OTHER1"]["footprint"]["file"] != r["file"]
 
 
 if __name__ == "__main__":

@@ -167,13 +167,22 @@ def failure_type(row, mine, spec):
 
 
 def apply_errata(sc, mine_pins, errata, ref_pins=None, tol=None):
-    """A failing field that a checked erratum covers, with ours what the datasheet says, is scored right."""
+    """A failing field that a checked erratum covers, with ours what the datasheet says, is scored right. Only an
+    erratum that says what the datasheet has can be checked against our part: "ours": [[num, name], ...] on a symbol
+    field, or a number ("pitch": {"ours": 0.65}) that ours must match before the part's footprint fields are excused.
+    One with neither would pass whatever we generated, so it is not applied."""
     fixed = []
+    num = {k: e["ours"] for k, e in (errata or {}).items() if isinstance(e.get("ours"), (int, float))}
+    if any(abs(((sc["fields"].get(k) or {}).get("ours") or 0) - v) > 0.01 for k, v in num.items()):
+        return fixed                                  # ours isn't the datasheet's package either (PCA9557BS: pitch 0.65)
     for field, e in (errata or {}).items():
         f = sc["fields"].get(field)
         if not f or f["ok"]:
             continue
-        if field.startswith("symbol_") and e.get("ours"):
+        pins = field.startswith("symbol_") and isinstance(e, dict) and isinstance(e.get("ours"), list) and e["ours"]
+        if not pins and not num:                      # nothing to compare ours with: the field keeps its verdict
+            continue                                  # (a footprint erratum is checked by its numbers, above)
+        if pins:
             have = {str(n): S.norm_name(v) for n, v in mine_pins or []}
             if any(have.get(str(n)) != S.norm_name(v) for n, v in e["ours"]):
                 continue                              # ours is not what the datasheet says either: a real miss
@@ -248,6 +257,7 @@ class EvalReader(D.Reader):
         self.used = {}
         if self.replay:
             self.key, self.estimate_only = "replay (never sent)", False
+            self.offline = False                                      # recorded answers: nothing goes to a model
         elif not self.key:
             self.estimate_only = True
 
@@ -274,7 +284,7 @@ class EvalReader(D.Reader):
         job["estimate"] = (job.get("recording") or {}).get("estimate") or self._estimate(job)
         self.used.setdefault(part, {"estimate": job["estimate"]})
         pv = job.get("prov") or {}                     # the PDF read: pinned by its SHA-256 (<set>.pins.json)
-        self.used[part]["datasheet"] = {k: pv.get(k) for k in ("url", "sha256", "bytes", "pages", "sent_as", "local") if pv.get(k)}
+        self.used[part]["datasheet"] = {k: pv.get(k) for k in ("url", "sha256", "bytes", "pages", "sent_as", "via", "local") if pv.get(k)}
         return job
 
     def cached(self, job):
@@ -411,12 +421,14 @@ def _symbol_pins(path):
         _, syms = AL.read_schlib(path)
     except (OSError, ValueError):
         return None
-    pins = {}
-    for s in syms:
+    pins = {}                                         # num -> names: one pin repeated in each part of a multi-part
+    for s in syms:                                    # symbol is one pin; one number with two names is scored as such
         for r in s["records"]:
             if r.get("RECORD") == "2" and "num" in r:
-                pins.setdefault(r["num"], r["name"])
-    return list(pins.items())
+                got = pins.setdefault(r["num"], [])
+                if r["name"] not in got:
+                    got.append(r["name"])
+    return [(n, nm) for n, names in pins.items() for nm in names]
 
 
 def _cost(case_used, model, live=False):
@@ -554,8 +566,11 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     out.mkdir(parents=True, exist_ok=True)
     lib = out / "lib"
     rules = RU.resolve(rules, out)
+    # a benchmark never waits on a person's browser: a refused link stays refused unless a way that needs no one works
+    rules = dict(rules, datasheet={**rules.get("datasheet", {}), "handoff": "off"})
     if max_cost_usd is not None:                      # the run's spending cap ([datasheet] max_cost_usd, default $10)
-        rules = dict(rules, datasheet={**rules.get("datasheet", {}), "max_cost_usd": float(max_cost_usd)})
+        rules = dict(rules, datasheet={**rules.get("datasheet", {}), "max_cost_usd": float(max_cost_usd)},
+                     _set=[*(rules.get("_set") or []), "datasheet.max_cost_usd"])     # a cap you set, 10 too
     over = {k: v for k, v in (("provider", provider), ("base_url", base_url), ("assist", assist),
                               ("api_key_env", api_key_env)) if v}
     if over or (model and provider):

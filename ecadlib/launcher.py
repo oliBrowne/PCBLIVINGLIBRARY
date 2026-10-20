@@ -31,7 +31,7 @@ class App:
         from .app import Workspace
         from .ui import server as S
         Path(self.workspace).mkdir(parents=True, exist_ok=True)
-        ws = Workspace(self.workspace)
+        ws = Workspace(self.workspace, ES.ws_libs(self.workspace))     # the library folders from the setup page
         self.srv = S.make_server(ws, self.host, self.port)
         self.port = self.srv.server_address[1]
         self.thread = threading.Thread(target=self.srv.serve_forever, name="ecadlib-ui", daemon=True)
@@ -134,7 +134,7 @@ def main(argv=None):
     app = App(ws, port)
     app.start()
     ES.RESTART = app.restart
-    print(f"ecadlib {__version__} on {app.url} (workspace {app.workspace})")
+    print(f"ecadlib {__version__} on {app.url}{first} (workspace {app.workspace})")   # first run: the setup page
 
     def open_page(path):
         webbrowser.open(app.url + path)

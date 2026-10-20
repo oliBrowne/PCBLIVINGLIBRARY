@@ -14,33 +14,35 @@ anything still missing, the sources are tried in --sources order, each filling o
              ordering suffix (TPS62162DSG for TPS62162DSGR); generic connectors by value (Conn_01x04). Footprint: the BOM footprint name, the symbol's
              Footprint property, a footprint named after the MPN, or the shortest name starting with the BOM footprint.
              R/C/L/LED use Device:R/C/C_Polarized/L/LED and <Family>_SMD:<X>_<imperial>_<metric>Metric by package.
-  easyeda    LCSC number (BOM, or found by MPN in triage) -> EasyEDA component JSON -> easyeda_convert -> KiCad text
+  easyeda    LCSC number (BOM, or found by MPN in triage) -> EasyEDA component JSON -> easyeda_convert -> KiCad text;
+             the footprint's own STEP model is downloaded and placed on it (easyeda_3d), which gives the body height
   standard   no network, no API: chip passives and standard packages (SOT-23, SOIC-8, QFN-32 5x5 ...) built from the
              checked package table, symbols where the pinout is standard (ecadlib/stdparts.py); always after kicad
   datasheet  datasheet URL (BOM column, KiCad symbol, EasyEDA/LCSC link, LCSC pattern) + ANTHROPIC_API_KEY ->
              ecadlib.datasheet; the result is marked `verify` so release_check holds it until a person has looked (or
-             --allow). --datasheet-batch sends every part that reaches this source as one Message Batch (half price)
+             --allow). The same goes for an EasyEDA conversion, a pinout from a family table and a KiCad symbol or
+             footprint picked by a near name (ordering suffix, MPN in the name, shortest prefix). --datasheet-batch sends every part that reaches this source as one Message Batch (half price)
              after the other sources ran, then builds them; results are cached, so re-runs are free
 Footprints without a KiCad STEP model get a package-shaped STEP from step_gen embedded (--box: extruded box).
 Everything is converted through kicad_import into <out>/models/{SchLib,PcbLib} (plus the .kicad_mod in
 <out>/models/KiCad for footprint_check). Outputs: <out>/plan.json (each item records `source`, `librarian.tried`
 and the release-check result), <out>/review.{md,csv}, <out>/release_check.{md,csv}, <out>/triage.{md,csv}.
-Resumable: <out>/librarian_state.json remembers finished parts; a re-run skips them unless --refresh (all, or the
-named parts) or their BOM line changed. --allow PART is recorded in plan.json and survives re-runs, and so does a
-symbol or footprint chosen with `ecadlib resolve` (held parts: see ecadlib/resolve.py)."""
+Resumable: <out>/librarian_state.json remembers finished parts (saved as the run goes, so a stopped or killed run
+keeps them too); a re-run skips them unless --refresh (all, or the named parts) or their BOM line changed. --allow
+PART is recorded in plan.json and survives re-runs, and so does a symbol or footprint chosen with `ecadlib resolve` (held parts: see ecadlib/resolve.py)."""
 import argparse, csv, json, os, re, sys, time
 from pathlib import Path
 
 import pandas as pd
 
 from . import __version__
-from . import (altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
+from . import (altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_3d as E3, easyeda_convert as EC,
                footprint_gen as F, fp_share as FS, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from . import crosscheck as CC, messages as M, sheetsafe as SS
 from . import fp_tidy as FT, symbol_layout as SL
-from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
+from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of, two_readings
 
 TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository/tree?ref=master&recursive=true&per_page=100&page={page}"
 SOURCES = ("kicad", "easyeda", "standard", "datasheet")
@@ -48,6 +50,18 @@ IMP2MET = {v: k for k, v in METRIC_TO_IMPERIAL.items()}
 PASSIVE = {"R": ("Device:R", "Resistor_SMD:R_{}_{}Metric"), "C": ("Device:C", "Capacitor_SMD:C_{}_{}Metric"),
            "CP": ("Device:C_Polarized", None), "L": ("Device:L", "Inductor_SMD:L_{}_{}Metric"), "LED": ("Device:LED", "LED_SMD:LED_{}_{}Metric")}
 SPECS = Path(F.__file__).with_name("package_specs")
+
+
+def stacked_pins(sym):
+    """'3, 7 (VDD)' for each group of pins of one part that end on the same spot (KiCad stacks VDD / GND pins that way)."""
+    parts = sym.get("prim_parts") or [1] * len(sym["prims"])
+    at = {}
+    for pr, u in zip(sym["prims"], parts):
+        if pr[0] == "pin":
+            dx, dy = {"left": (-1, 0), "right": (1, 0), "top": (0, 1), "bottom": (0, -1)}[pr[2]]
+            at.setdefault((u, pr[3] + dx * pr[5], pr[4] + dy * pr[5]), []).append(pr[1])
+    return [", ".join(dict.fromkeys(str(p["num"]) for p in ps)) + f" ({ps[0].get('name', '')})" for ps in at.values()
+            if len({p["num"] for p in ps}) > 1]
 
 
 # ---------------------------------------------------------------- official KiCad library name index
@@ -217,6 +231,25 @@ def is_passive_part(item, ln=None):
     return folder in PASSIVE_FOLDERS or bool(ref and ref.group(0) in ("R", "C", "L", "FB", "Y"))
 
 
+def quiet_two_pin(sym):
+    """A two-pin passive (R / C / L / ferrite bead / crystal) shows no pin names or numbers, whatever the source drew
+    (Oliver's rule, as the standard symbols): a crystal's "1"/"2" or "OSC1"/"OSC2" ran over each other in its narrow body."""
+    pins = [pr[1] for pr in sym.get("prims") or [] if pr[0] == "pin" and not pr[1].get("hidden")]
+    if len(pins) != 2 or len({p["num"] for p in pins}) != 2:
+        return sym
+    prims = [(pr[0], dict(pr[1], show_name=False, show_num=False), *pr[2:]) if pr[0] == "pin" and not pr[1].get("hidden")
+             else pr for pr in sym["prims"]]
+    return dict(sym, prims=prims)
+
+
+def category_designator(sym, folder):
+    """The part's category letter for a symbol its source calls U? (EasyEDA draws crystals, transistors ... as U?):
+    a crystal filed under Crystals is Y?. A source's own non-U letter (X? for a crystal) is kept."""
+    pre = re.match(r"[A-Z]*", str(sym.get("designator") or "").upper()).group(0)
+    ref = RU.CAT_REF.get(str(folder or "").rstrip("/").rsplit("/", 1)[-1])
+    return dict(sym, designator=ref + "?") if ref and ref != "U" and pre in ("", "U", "IC") else sym
+
+
 def passive_pins(sym):
     """sym with every pin Passive; unchanged when a pin looks like an oscillator's supply / output / enable."""
     pins = [pr[1] for pr in sym.get("prims") or [] if pr[0] == "pin"]
@@ -239,6 +272,12 @@ def passive_kind(item):
     return None
 
 
+def kicad_params(mpn, shared, kicad=True):
+    """The parameters a symbol converted from a KiCad library carries: the MPN (not on one every R / C / L shares) and,
+    from KiCad's own libraries, the CC-BY-SA credit, so an .IntLib compiled from the .SchLib keeps it."""
+    return ([] if shared or not mpn else [("MPN", mpn)]) + ([("Library Credit", K.KICAD_CREDIT)] if kicad else [])
+
+
 def _par(item):
     return {p["name"]: p["value"] for p in item.get("parameters", [])}
 
@@ -249,9 +288,9 @@ def _set_par(item, k, v):
 
 
 def _line_for(item, lines, rows):
-    """The BOM line and triage row of a plan item: same MPN, else (no MPN) same value. Of several, a fitted line wins
-    over a DNP one (R5 DNP and R1 share the MPN), then the line whose footprint is the item's (10k 0603 and 10k 0402
-    are two items with one value)."""
+    """The BOM line and triage row of a plan item: same MPN, else (no MPN) same value. Of several, the line whose
+    footprint is the item's wins (10k 0603 and 10k 0402 are two items with one value: a DNP 0402 line must never be
+    built from a fitted 0603 line's footprint), then a fitted line over a DNP one (R5 DNP and R1 share the MPN)."""
     par = _par(item)
     mpn, val = par.get("Manufacturer Part Number", ""), par.get("Value", "")
     fp = item.get("footprint") or {}
@@ -261,10 +300,24 @@ def _line_for(item, lines, rows):
         lm = "" if T.placeholder_mpn(ln.get("mpn")) else ln.get("mpn")    # 'N/A': planned without an MPN (altium_export)
         if (mpn and lm == mpn) or (not mpn and not lm and ln.get("value", "") == val):
             fps = {AL.lib_name(str(x).split(" ")[0].split(":")[-1]) for x in (ln.get("footprint"), row.get("local_footprint")) if x}
-            s = (not ln.get("dnp") and not str(row.get("status") or "").startswith("dnp"), bool(fps & want))
+            s = (bool(fps & want), not ln.get("dnp") and not str(row.get("status") or "").startswith("dnp"))
             if score is None or s > score:
                 best, score = (ln, row), s
     return best
+
+
+def _own_notes(rec):
+    """A file record's notes without the "shared with" note a sharing part's copy of it carries."""
+    return [n for n in rec.get("notes") or [] if not str(n).startswith("shared with ")]
+
+
+def cost_hint(msg):
+    """The datasheet reader's cost-cap refusal names `ecadlib datasheet` options (--estimate, --yes): in the librarian's
+    tried lines, the commands that exist for a library run instead."""
+    if "max_cost_usd" not in msg:
+        return msg
+    return re.sub(r";( nothing sent\.)? see --estimate.*$", "; nothing sent: see `ecadlib datasheet estimate "
+                  "<plan.json>` for the cost, then raise [datasheet] max_cost_usd in ecadlib.toml", msg, flags=re.I | re.S)
 
 
 class Run:
@@ -295,26 +348,34 @@ class Run:
         return os.path.relpath(p, self.out).replace(os.sep, "/")
 
     # ---- writers: everything goes through kicad_import's converters
-    def put_fp(self, st, text, name, source, http=None, height=None, height_src="", spec=None):
-        """One file per footprint, shared only by parts whose pads are the same (ecadlib/fp_share.py)."""
+    def put_fp(self, st, text, name, source, http=None, height=None, height_src="", spec=None, model=None):
+        """One file per footprint, shared only by parts whose pads are the same (ecadlib/fp_share.py).
+        model: a downloaded 3D model already placed on the footprint (easyeda_model), the part's body and height."""
         bom_name = name
         name, pcb, same, h = FS.pick(self.written, self.models, name, text, source, st["name"], self.out, self.hashes)
         renamed = {"renamed_from": bom_name} if name != bom_name else {}
-        if same is not None:
+        if same is not None:                    # (its own file from an earlier run, kept for a skipped part: not shared)
             st["footprint"] = {**{k: v for k, v in same.items() if k not in ("renamed_from", "chosen")},
-                               "notes": [f"shared with {same['by']}"], "name": name, "hash": h, **renamed}
+                               "notes": _own_notes(same) if same.get("by") == st["name"] else
+                               [f"shared with {same['by']}"], "name": name, "hash": h, **renamed}
             self._relink(st, bom_name, name)
             return
         pcb, stem = Path(pcb), AL.file_stem(name)
         notes = [f"named {name}: footprint {bom_name} is another part's, with other pads"] if renamed else []
         fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes,
                                     K.KICAD_LICENSE if source.startswith("kicad:") else "")
-        try:
-            K.add_body(fp, t, http, height, False, notes, gen_step=self.gen_step, spec=spec,      # a part-specific
-                       height_src=(height_src or "caller") if height else None,                      # height beats the table
-                       kind=st.get("kind"), names=st.get("names", ()))
-        except ValueError as e:
-            notes.append(f"no 3D body: {e}")
+        if model:                               # the source's own 3D model: its shape and height beat any table
+            E3.add_body(fp, model["text"], model["info"], model["ref"], notes, embed=self.gen_step)
+            warn = E3.checks(model["info"], model["ref"], fp["pads"])
+            notes += warn
+            st["review"] += warn
+        else:
+            try:
+                K.add_body(fp, t, http, height, False, notes, gen_step=self.gen_step, spec=spec,      # a part-specific
+                           height_src=(height_src or "caller") if height else None,                      # height beats the table
+                           kind=st.get("kind"), names=st.get("names", ()))
+            except ValueError as e:
+                notes.append(f"no 3D body: {e}")
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
         text = re.sub(r'^(\s*\((?:footprint|module)\s+)("(?:[^"\\]|\\.)*"|[^\s()]+)',     # KiCad links a footprint by its file name,
                       lambda m: m.group(1) + '"' + stem.replace('"', '\\"') + '"', text, count=1)   # Altium by this name: one name
@@ -323,7 +384,9 @@ class Run:
         kmod.write_text(text, encoding="utf-8", newline="\n")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
-                           "name": name, "hash": h, **renamed}
+                           "name": name, "hash": h, **renamed,
+                           **({"model": {"source": f"easyeda:{model['ref']['uuid']}", "url": model["ref"]["url"],
+                                         "title": model["ref"]["title"], "credit": EC.CREDIT}} if model else {})}
         self.written[str(pcb)] = st["footprint"]
         self._relink(st, bom_name, name)
 
@@ -342,13 +405,18 @@ class Run:
         path = self.models / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib"
         if st.get("kind") in SHARED_KINDS:      # one Resistor / Capacitor / Inductor symbol for every value and size,
             sym = shared_symbol(sym)            # whichever source drew it: no footprint, no one part's MPN
+        sym = category_designator(sym, st.get("folder"))
+        if st.get("passive") or re.match(r"(FB|[RCLYX])\??$", str(sym.get("designator") or "").upper()):
+            sym = quiet_two_pin(sym)
         if st.get("passive"):
             sym = passive_pins(sym)
         fr = st.get("footprint") or {}
         if fr.get("renamed_from") and sym.get("footprint") == fr["renamed_from"]:     # footprint renamed (fp_share)
             sym = dict(sym, footprint=fr["name"])
-        if str(path) in self.written:
-            st["symbol"] = dict(self.written[str(path)], notes=[f"shared with {self.written[str(path)]['by']}"])
+        # Windows / macOS file systems ignore case: CH340C.SchLib and ch340c.SchLib are one file, so one symbol
+        rec = next((r for p, r in self.written.items() if p.casefold() == str(path).casefold()), None)
+        if rec is not None:                     # its own file from an earlier run, kept for a skipped part: not shared
+            st["symbol"] = dict(rec, notes=_own_notes(rec) if rec.get("by") == st["name"] else [f"shared with {rec['by']}"])
             return
         AL.write_schlib(path, [sym])
         self.syms[str(path)] = sym
@@ -362,12 +430,16 @@ class Run:
         sym = K.convert_symbol(chain, name, fp_name, list(extra), None, notes)
         npins = len({pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin"})
         clash = SL.text_problems(sym)
-        if (layout or clash) and SL.wants_layout(npins, self.rules) and SL.is_box_ic(sym):
+        stacked = stacked_pins(sym) if SL.settings(self.rules)["stack_power"] == "none" else []
+        if (layout or clash) and SL.wants_layout(npins, self.rules) and SL.is_box_ic(sym) or stacked and SL.is_box_ic(sym):
             sym = SL.relayout(sym, self.rules)
             notes.append(f"{npins} pins grouped by function (ecadlib.symbol_layout)" + (f", {sym['parts']} parts" if sym.get("parts", 1) > 1 else "")
-                         + (f"; the drawn symbol's pin text overlapped ({clash[0]})" if clash else ""))
+                         + (f"; the drawn symbol's pin text overlapped ({clash[0]})" if clash else "")
+                         + (f"; the drawn symbol stacked pins {', '.join(stacked[:3])} on one end ([symbols] stack_power = \"none\")" if stacked else ""))
         elif clash:
             notes.append(f"pin text overlaps ({'; '.join(clash[:3])}); not a plain IC box, so kept as drawn: check it")
+        elif stacked:
+            notes.append(f"pins {', '.join(stacked[:3])} share one pin end; not a plain IC box, so kept as drawn: check it")
         self.put_sym(st, sym, source, notes)
 
     # ---- per part
@@ -380,11 +452,14 @@ class Run:
         for k, rec in (keep or {}).items():
             st[k] = rec
             st["tried"].append(f"resolve: {k} {rec['source']} chosen by user (kept)")
-        if (row.get("status") or "").startswith("dnp"):
-            st["tried"].append("DNP line: not fetched")
-            return st
+        both = two_readings(ln.get("value"))
+        if both:                                             # '4,700pF': 4.7 pF or 4.7 nF, so a person says which
+            st["verify"].append(f"value {ln['value'].strip()} reads two ways: {both[0]} or {both[1]}; write it without the comma")
+        dnp = (row.get("status") or "").startswith("dnp")   # not assembled, but still on the schematic and the PCB:
+        if dnp:                                              # built from the free sources, no paid datasheet read
+            st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")
         kind, fp_name, sym_name = passive_kind(item), item["footprint"]["ref"], item["symbol"]["ref"]
-        st["passive"] = is_passive_part(item, ln)
+        st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         try:
             self.local(st, row, kind, fp_name, sym_name)
@@ -393,10 +468,13 @@ class Run:
         for s in self.sources:
             if st["symbol"] and st["footprint"]:
                 break
+            if dnp and s == "datasheet":
+                continue
             try:
                 getattr(self, f"src_{s}")(st, item, ln, row, kind, mpn, fp_name, sym_name)
             except Exception as e:            # one bad source or part must not stop the run
-                st["tried"].append(f"{s}: failed ({type(e).__name__}: {e}{_where(e)})")
+                msg = cost_hint(str(e)) if s == "datasheet" else str(e)
+                st["tried"].append(f"{s}: failed ({type(e).__name__}: {msg}{_where(e)})")
         lc = (row.get("lcsc") or "").split(" ")[0]
         if row.get("src_description"):        # the part search's own text (Nexar / DigiKey / Mouser / LCSC), after a KiCad symbol's
             st["found"].setdefault("description", (row["src_description"], f"{_desc_label(row)} part data {lc}".strip()))
@@ -447,11 +525,10 @@ class Run:
             if props.get("Description"):
                 st["found"].setdefault("description", (props["Description"], f"KiCad symbol {sym_ref}"))
             shared = kind in ("R", "C", "CP", "L")            # one generic symbol for every value: no MPN, no footprint link
-            extra = [] if shared or not mpn else [("MPN", mpn)]
-            self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", extra)
+            self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", kicad_params(mpn, shared))
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
-            if "check" in how:
-                st["review"].append(f"symbol {sym_ref} matched by {how}")
+            if "check" in how:                     # a near name: a person checks it before it is released
+                st["verify"].append(f"symbol {sym_ref} matched by {how}")
         elif not st["symbol"]:
             st["tried"].append(f"kicad: no symbol named like {mpn or '(no MPN)'}")
         if st["footprint"]:
@@ -464,8 +541,8 @@ class Run:
                 text, _ = K.load_footprint(cand, self.http)
                 self.put_fp(st, text, fp_name, f"kicad:{cand}", self.http)
                 st["tried"].append(f"kicad: footprint {cand} ({why})")
-                if why.startswith(("shortest", "footprint named")):
-                    st["review"].append(f"footprint {cand} chosen by {why}: compare with the datasheet land pattern")
+                if why.startswith(("shortest", "footprint named")):     # a guess by name: held until a person looks
+                    st["verify"].append(f"footprint {cand} chosen by {why}: compare with the datasheet land pattern")
                 return
         st["tried"].append(f"kicad: no footprint for '{bom_fp or fp_name}'")
 
@@ -505,7 +582,8 @@ class Run:
             notes = []
             text = EC.footprint_to_kicad(pkg.get("dataStr") or {}, pkg.get("title") or fp_name, notes)
             text = FT.tidy(text, notes)                       # to the rule book: silk reference, pin 1, rounded pads
-            self.put_fp(st, text, fp_name, f"easyeda:{lcsc}", None)
+            model = self.easyeda_model(st, pkg.get("dataStr") or {}, lcsc)
+            self.put_fp(st, text, fp_name, f"easyeda:{lcsc}", None, model=model)
             st["footprint"]["notes"] = notes + st["footprint"]["notes"]
             got.append(f"footprint {pkg.get('title', '')}")
         if not st["symbol"]:
@@ -522,7 +600,27 @@ class Run:
         if got:
             st["found"].setdefault("credit", (EC.CREDIT, f"EasyEDA {lcsc}"))
         st["tried"].append(f"easyeda {lcsc}: " + (", ".join(got) or "nothing needed"))
-        st["review"].append(f"EasyEDA {lcsc} conversion: check pads and pins against the datasheet (native converter, format assumed)")
+        if got:                                # a converted EasyEDA part is held until a person has compared it
+            st["verify"].append(f"EasyEDA {lcsc} conversion: check pads and pins against the datasheet (native converter, format assumed)")
+
+    def easyeda_model(self, st, data, lcsc):
+        """The EasyEDA footprint's own 3D model (STEP), downloaded and placed on the footprint (ecadlib.easyeda_3d), or
+        None: no model named, the download failed or the file is not a STEP (the generated model or box is used)."""
+        ref = E3.model_ref(data)
+        if ref is None:
+            st["tried"].append(f"easyeda {lcsc}: no 3D model named")
+            return None
+        text, why = E3.fetch(self.http, ref)
+        if text is None:
+            st["tried"].append(f"easyeda {lcsc}: 3D model {ref['uuid']} not downloaded ({why}); package model made here instead")
+            return None
+        try:
+            placed, info = E3.place(text, ref)
+        except ValueError as e:
+            st["tried"].append(f"easyeda {lcsc}: 3D model {ref['uuid']} not used ({e})")
+            return None
+        st["tried"].append(f"easyeda {lcsc}: 3D model {ref['title'] or ref['uuid']}, height {info['height']} mm")
+        return {"text": placed, "info": info, "ref": ref}
 
     def src_standard(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
         """Standard packages and pinouts, built offline (ecadlib.stdparts); fills only what is still missing."""
@@ -547,8 +645,8 @@ class Run:
             self.put_kicad_sym(st, [K._find_symbol(sexpr.parse(text), name)], sym_name, None if shared else fp_name,
                                f"standard:{name}", [] if shared or not mpn else [("MPN", mpn)])
             got.append(f"symbol {name} ({res['sym_how']})")
-            if ":" in res["symbol"]:
-                st["review"].append(f"symbol pinout {name} from the {mpn} family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
+            if ":" in res["symbol"]:               # SOT-23 & co: pinouts differ by maker, so a person checks it
+                st["verify"].append(f"symbol pinout {name} from the {mpn} family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
         elif not st["symbol"] and res["symbol"]:
             res["sym_how"] = f"footprint came from {fp_src or 'nowhere'}, not {res['footprint']}: pin numbers not known to match"
         why = [] if st["footprint"] else [f"footprint: {res['fp_how']}"]
@@ -564,6 +662,20 @@ class Run:
         if self.reader is None:
             self.reader = D.Reader(self.out, Path(self._kicad_args[0] or self.out / "cache").parent, self.api_key, self.rules, self.http)
         rd = self.reader
+        if getattr(rd, "offline", False) and not rd.estimate_only:   # --offline: an answer already cached, else none
+            try:
+                job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+                res = rd.cached(job)
+            except CC.Held as e:
+                self.cross_check_held(st, e)
+                return
+            except D.DatasheetError:
+                res = None
+            if res is None:
+                st["tried"].append(f"datasheet: {D.OFFLINE} ({urls[0][0]})")
+                return
+            self.put_datasheet(st, res, job, fp_name, sym_name, "cached")
+            return
         if not rd.key and not rd.estimate_only:
             st["tried"].append(f"needs datasheet reader (no API key): {urls[0][0]} ({urls[0][1]})")
             return
@@ -582,7 +694,18 @@ class Run:
         except CC.Held as e:
             self.cross_check_held(st, e)
             return
+        except Exception as e:
+            self.refused(st, job, e)
+            raise
         self.put_datasheet(st, res, job, fp_name, sym_name, "cached" if hit else "")
+
+    @staticmethod
+    def refused(st, job, error):
+        """A maker's site refused the PDF here and the API's fetcher failed too: the cause and the way round it, which
+        the release check shows in place of "no footprint"."""
+        line = D.refused_line(job, error)
+        if line:
+            st["review"].append(line)
 
     @staticmethod
     def cross_check_held(st, e):
@@ -610,6 +733,7 @@ class Run:
                     st["tried"].append(f"datasheet: failed ({type(e).__name__}: {e})")
             elif isinstance(r, Exception):
                 st["tried"].append(f"datasheet reader: failed ({r})")
+                self.refused(st, job, r)
             elif r == "estimate only":                    # priced, not sent: the person approves the cost first
                 st["tried"].append(f"datasheet: waiting for your OK to read it with AI ({job['url']})")
             else:
@@ -798,6 +922,10 @@ def apply_state(item, st, ln):
             item[k]["file"] = st[k]["file"]
             if k == "footprint":
                 item[k]["kicad_mod"] = st[k].get("kicad_mod")
+                if st[k].get("model"):                 # where its 3D model came from (EasyEDA's STEP, with the credit)
+                    item[k]["model"] = st[k]["model"]
+                else:
+                    item[k].pop("model", None)
                 was = item[k].get("bom_ref") or item[k].get("ref")
                 if st[k].get("name") and st[k].get("renamed_from") == was:     # another footprint has the BOM's name
                     item[k]["bom_ref"], item[k]["ref"] = was, st[k]["name"]
@@ -837,7 +965,8 @@ def apply_state(item, st, ln):
         item["cross_check"] = dict(st["cross_check"])
     else:
         item.pop("cross_check", None)
-    item["librarian"] = {"tried": st.get("tried", []), "review": st.get("review", []),
+    item["librarian"] = {"tried": st.get("tried", []),
+                         "review": list(dict.fromkeys(st.get("review", []) + item.get("bom_notes", []))),
                          "notes": [n for k in ("symbol", "footprint") for n in (st.get(k) or {}).get("notes", [])]}
 
 
@@ -862,6 +991,19 @@ def review_rows(items):
                      "why": "; ".join(dict.fromkeys(why)), "tried": "; ".join(it["librarian"]["tried"]),
                      "cross_check": (it.get("cross_check") or {}).get("status", "")})
     return rows
+
+
+def refresh_review(plan, items):
+    """review.csv / .md / .html again after a person changed the plan outside a librarian run (resolve, release-check
+    --allow, review, approve), so they say what plan.json says. Only where a librarian run wrote them."""
+    out = Path(plan).parent
+    if not (out / "review.md").is_file():
+        return
+    try:
+        bom = str(out / json.loads((out / "library.lock.json").read_text(encoding="utf-8"))["bom"]["file"])
+    except (OSError, ValueError, KeyError, TypeError):
+        bom = str(plan)
+    write_review(review_rows(items), out, bom, items)
 
 
 def write_review(rows, out, bom, items=None):
@@ -910,6 +1052,14 @@ def _desc_label(row):
     return "LCSC/JLCPCB" if src in ("", "jlcpcb_search", "easyeda") else src
 
 
+def handoff_says(reader, progress):
+    """The datasheet hand-off ("save the PDF to ...") prints above the live progress line, never through the
+    per-step log (on a terminal that log keeps only a few lines)."""
+    hand = getattr(getattr(reader, "store", None), "handoff", None)
+    if hand is not None and hasattr(getattr(progress, "t", None), "write"):
+        hand.say = progress.t.write
+
+
 def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_index=False, allow=(), offline=False,
         cache="out/http_cache", rate=0.5, providers=None, http=None, api_key=None, log=print, gen_step=True,
         rules=None, user=None, datasheet_batch=False, reader=None, progress=None):
@@ -918,10 +1068,14 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     rules: library rules (a loaded dict or a path); None uses the ecadlib.toml found from `out` (defaults when none).
     sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity()).
     progress: a term.Progress-like object (start(name) / done(name, status, detail)) for the per-part line."""
-    out = Path(out); out.mkdir(parents=True, exist_ok=True)
-    from . import migrate as MG, rebuild as LK            # versioned files (backed up, migrated) and library.lock.json
-    MG.open_folder(out, log=log)
+    out = Path(out)
     rules = RU.resolve(rules, out)
+    lines, mapping = T.read_bom(bom, RU.bom_columns(rules))       # first: an unreadable BOM writes nothing
+    if not lines:                                                 # (no -o folder, no HTTP cache)
+        raise ValueError(f"{bom}: the BOM has a header but no part rows")
+    out.mkdir(parents=True, exist_ok=True)
+    from . import migrate as MG, rebuild as LK           # versioned files (backed up, migrated) and library.lock.json
+    MG.open_folder(out, log=log)
     sources = list(sources) if sources is not None else list(rules["sources"]["order"])
     if not P.unofficial_allowed(rules) and "easyeda" in sources:
         sources.remove("easyeda")                      # [providers] unofficial = false: no undocumented endpoints
@@ -930,19 +1084,18 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     bad = set(sources) - set(SOURCES)
     if bad:
         raise ValueError(f"unknown sources {sorted(bad)}; use {','.join(SOURCES)}")
+    from .approvals import load_policy
+    load_policy(out)                                   # a broken approval policy stops the run before anything is written
     if "standard" in sources and "kicad" in sources and sources.index("standard") < sources.index("kicad"):
         sources.remove("standard")                     # never ahead of the KiCad library
         sources.insert(sources.index("kicad") + 1, "standard")
     if "standard" in sources and "datasheet" in sources and sources.index("datasheet") < sources.index("standard"):
         from .llm import run as LR                     # rail prefer_standard: a guided (smaller) model reads datasheets
-        if LR.wants(rules, "prefer_standard"):         # only for what the offline standard parts can't build
+        if LR.wants(rules, "prefer_standard", probe=not offline):   # only for what the offline standard parts can't build
             sources.remove("standard")
             sources.insert(sources.index("datasheet"), "standard")
     from . import timing as TI                       # wall time per step (timing.jsonl, `ecadlib status`)
     t_run = time.time()
-    lines, mapping = T.read_bom(bom, RU.bom_columns(rules))
-    if not lines:
-        raise ValueError(f"{bom}: the BOM has a header but no part rows")
     log(f"  BOM: {len(lines)} lines; looking them up in your libraries and the part sources (triage) ...")
     index = KiCadIndex(libs)
     from . import plugins as PL                      # providers: None = [providers] order, else P.DEFAULT_ORDER
@@ -951,15 +1104,20 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     T.write_reports(rows, mapping, provs, http, out / "triage", bom)
     t_build = time.time()
     TI.record(out, "triage", t_run, t_build, new_run=True, bom=Path(bom).name, lines=len(lines))
-    items = A365.plan(lines, pd.DataFrame(rows, dtype=str).fillna("") if rows else None, rules=rules)
     state_f, plan_f = out / "librarian_state.json", out / "plan.json"
     state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.exists() else {}
     old = {i["name"]: i for i in json.loads(plan_f.read_text(encoding="utf-8"))} if plan_f.exists() else {}
+    from .altium_export import prior_names           # a part keeps its name when a line is added above it
+    items = A365.plan(lines, pd.DataFrame(rows, dtype=str).fillna("") if rows else None, rules=rules,
+                      prior=prior_names(old.values()))
     from . import change_gate as CG                  # change control: released parts are compared with their ledger head
     gate = CG.Guard(out, "librarian", rules=rules, user=user, log=log)
     gate.begin(list(old.values()))
     if reader is None and "datasheet" in sources:
         reader = D.Reader(out, cache, api_key, rules, http, batch=datasheet_batch, log=log)
+    handoff_says(reader, progress)
+    if reader is not None and offline and not getattr(reader, "replay", None):   # --offline: nothing goes to the model
+        reader.offline, reader.key = True, None                                # (a replay of recorded answers sends nothing)
     r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step, rules,
             reader)
     todo = []
@@ -981,6 +1139,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
                 r.written.setdefault(str(out / st[k]["file"]), st[k])
         else:
             todo.append((it, ln, row, fpr))
+    redone = [old[it["name"]] for it, *_ in todo if it["name"] in old]
+    if redone:                                 # a hand edit of a released part is held (kept) before it is built again
+        gate.keep_edits(redone)
     keeps = {}
     for it, ln, row, fpr in todo:
         old_st = state.get(it["name"]) or {}
@@ -994,22 +1155,38 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         log(f"  finding symbols and footprints for {len(todo)} part(s) (sources: {', '.join(sources)}) ...")
     if progress is not None:
         progress.total = len(todo)
-    for n, (it, ln, row, fpr) in enumerate(todo, 1):
-        if progress is not None:
-            progress.start(it["name"])
-        elif len(todo) > 3:
-            log(f"  [{n}/{len(todo)}] {it['name']}")
-        with rec.part(it["name"]):
-            st = r.resolve(it, ln, row, keeps[it["name"]])
-        if progress is not None:
-            gone = [k for k in ("symbol", "footprint") if not st.get(k)]
-            progress.done(it["name"], "held" if gone else "ready",
-                          f"no {' or '.join(gone)} yet" if gone else "symbol and footprint found")
-        st["key"], st["skipped"] = fpr, False
-        LK.stamp_state(st, rec.take(it["name"]), rules)
-        st["build_rev"] = BUILD_REV
-        state[it["name"]] = st
+
+    def save_state():                          # finished parts survive a cancel or a kill (a datasheet batch not sent
+        held = {id(w[0]) for w in r.waiting}   # yet is not finished)
+        write_text_atomic(state_f, json.dumps({k: v for k, v in state.items() if id(v) not in held}, indent=2))
+        MG.write_stamp(out, ["librarian_state"])
+    saved = time.time()
+    try:
+        for n, (it, ln, row, fpr) in enumerate(todo, 1):
+            if progress is not None:
+                progress.start(it["name"])
+            elif len(todo) > 3:
+                log(f"  [{n}/{len(todo)}] {it['name']}")
+            with rec.part(it["name"]):
+                st = r.resolve(it, ln, row, keeps[it["name"]])
+            st["key"], st["skipped"] = fpr, False
+            LK.stamp_state(st, rec.take(it["name"]), rules)
+            st["build_rev"] = BUILD_REV
+            state[it["name"]] = st
+            if progress is not None:
+                gone = [k for k in ("symbol", "footprint") if not st.get(k)]
+                progress.done(it["name"], "held" if gone else "ready",
+                              f"no {' or '.join(gone)} yet" if gone else "symbol and footprint found")
+            if time.time() - saved > 2:
+                save_state()
+                saved = time.time()
+    except BaseException:                      # stopped (job_status cancel, Ctrl+C): keep what is finished
+        if todo:
+            save_state()
+        raise
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
+    if todo:
+        save_state()                           # a stop while the summary is logged keeps them too
     for it in items:
         apply_state(it, state[it["name"]], _line_for(it, lines, rows)[0])
         for k in ("allow", "approvals", "duplicate_of"):     # decisions people made survive re-runs
@@ -1041,7 +1218,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         from .approvals import identity, post_check, stamp_allow
         stamp_allow(items, allow, identity(user, cwd=out))
         post_check(items, out, checks)
-    gate.baseline(items)                       # parts released for the first time: revision 1 in the ledger
+    gate.baseline(items)                       # parts released for the first time: revision 1 in the ledger (a new
+                                               # part with a released part's MPN is compared with it first)
+    gate.retire([n for n in old if n not in {i["name"] for i in items}], f"no longer in the plan ({Path(bom).name})")
     CG.record_bom_usage(out, bom, items)
     write_text_atomic(plan_f, json.dumps(items, indent=2))
     write_notice(out, items)
@@ -1058,7 +1237,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="BOM -> library: triage, fill missing symbols/footprints, Altium models, plan, release check")
     ap.add_argument("bom")
     ap.add_argument("--lib", action="append", default=[], help="local KiCad library dir (repeatable)")
-    ap.add_argument("-o", "--out", default="out/librarian")
+    ap.add_argument("-o", "--out", help="plan folder (default: <[setup] workspace>/librarian/<BOM name> after "
+                    "`ecadlib init`, else out/librarian)")
     ap.add_argument("--sources", help="order of sources to try (default: the rules' [sources] order, else " + ",".join(SOURCES) + ")")
     ap.add_argument("--refresh", nargs="*", metavar="PART", help="redo finished parts: all, or the named ones")
     ap.add_argument("--refresh-index", action="store_true", help="rebuild the KiCad library name index")
@@ -1075,6 +1255,12 @@ def main(argv=None):
     ap.add_argument("--datasheet-no-wait", action="store_true", help="submit the batch and finish; re-run to collect it")
     ap.add_argument("--json", action="store_true", help='print {"plan", "review", "parts", "ready", "held", "blockers"} instead of the log')
     a = ap.parse_args(argv)
+    from . import firstrun as FR
+    a.out = a.out or FR.default_out("librarian", a.bom)
+    other = _plan_bom(a.out)                  # the folder holds another BOM's plan: say so before it is replaced
+    if other and other != Path(a.bom).name and not a.json:
+        print(f"note: {a.out} holds the plan for {other}; it is replaced by {Path(a.bom).name}'s "
+              f"(give each BOM its own -o folder to keep both)", file=sys.stderr)
     rules = RU.load(a.rules, start=a.out)
     reader = None
     if a.datasheet_batch:
@@ -1104,11 +1290,19 @@ def main(argv=None):
         return 2 if held else 0
     if prog is not None:
         prog.t.clear_live()
-    print_result(items, Path(a.out), why, t)
+    print_result(items, Path(a.out), why, t, tool=(rules.get("setup") or {}).get("tool") if isinstance(rules, dict) else None)
     return 2 if held else 0
 
 
-def print_result(items, out, why=(), t=None):
+def _plan_bom(out):
+    """The file name of the BOM whose plan is in `out` (library.lock.json), or None."""
+    try:
+        return Path(str(json.loads((Path(out) / "library.lock.json").read_text(encoding="utf-8"))["bom"]["file"])).name
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def print_result(items, out, why=(), t=None, tool=None):
     """The terminal ending of a librarian run: a row per part on a terminal (status, name, the reason in plain
     words), then notes, the counts, what was written and the next commands."""
     from . import messages as M, term as TM
@@ -1129,9 +1323,13 @@ def print_result(items, out, why=(), t=None):
         nxt.append((f"ecadlib review {plan}", "go through the held parts one by one"))
     if changed:
         nxt.append((f"ecadlib part status {plan}", "changes to released parts, held until a person approves them"))
-    nxt += [(f"ecadlib kicad-export {plan} -o {out.parent.parent / 'kicad' if out.parent.name == 'librarian' else 'kicad'} --name mylib",
-             "write the KiCad library"),
-            (f"ecadlib altium-pkg {plan} --out altium_pkg", "the Altium hand-off folder (.LibPkg, DbLib)")]
+    # one KiCad library / Altium folder per plan, named after it: a second BOM's export never replaces the first one's
+    ws = out.parent.parent if out.parent.name == "librarian" else Path(".")
+    if tool in (None, "", "kicad", "both"):
+        nxt.append((f"ecadlib kicad-export {plan} -o {ws / 'kicad' / out.name} --name {out.name}", "write the KiCad library"))
+    if tool in (None, "", "altium", "both"):
+        nxt.append((f"ecadlib altium-pkg {plan} --out {ws / 'altium_pkg' / out.name}",
+                    "the Altium hand-off folder (.LibPkg, DbLib)"))
     t.summary(f"{M.plural(len(items), 'part')}: {M.counts(i.get('status') for i in items)}"
               + (f"  (held: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''})" if held else "")
               + (f"; {M.plural(len(changed), 'change')} to released parts held, the released version is kept "

@@ -15,7 +15,13 @@ On this page:
 ```
 ecadlib demo [-o DIR] [--tool altium|kicad|both] [--bom BOM] [--json]     a small library, offline, no keys
 ecadlib init [--yes] [--tool T] [--lib DIR ...] [--workspace W] [--sources LIST] [--from DIR ...] [--no-doctor]
+             [--a365 FILE ...] [--unofficial | --no-unofficial] [--force] [-o FILE] [--json]
 ```
+
+`--a365` adds an Altium 365 component list (JSON, or a `check-a365 --state` file) to what is scanned for conventions;
+`--unofficial` / `--no-unofficial` answer the EasyEDA/LCSC and JLCPCB search question (`[providers] unofficial`) without
+asking; `--force` replaces an existing rules file without asking (a `.bak` is kept); `--json` prints the proposal and
+writes nothing.
 
 * **`init` setup.** Besides the conventions of [library rules](librarian.md#rulespy-and-ecadlib-init-one-file-for-your-library-conventions), `init` asks (or takes from the flags, or with `--yes` uses
   the defaults): the tool (`both`), your library folders (none), the workspace (`ecadlib_workspace`), whether to look
@@ -30,7 +36,8 @@ ecadlib init [--yes] [--tool T] [--lib DIR ...] [--workspace W] [--sources LIST]
 * **`demo`** writes a real workspace (default `./ecadlib-demo`) with its own `ecadlib.toml` (`[sources] order =
   ["standard"]`, so a rules file in a parent folder cannot change it), the bundled BOM in `uploads/demo/`, the librarian
   plan and Altium models in `librarian/`, and for KiCad the `.kicad_sym`, `.pretty`, lib tables and database library in
-  `kicad/`. Re-running reuses the workspace (finished parts are skipped). Measured here: 1.0 s, 6 ready + 1 held.
+  `kicad/`. Re-running reuses the workspace (finished parts are skipped). Measured here: 0.8 s, 4 ready + 3 held (CH340C has no symbol;
+  AMS1117-3.3 and AO3401A wait for a person because their pinouts come from a family table).
 * **Help.** Every command and subcommand has a one-line description and every command's `-h` ends with examples that
   parse (`tests/test_firstrun.py` walks the whole argparse tree and parses every example). Same names for the same
   things: `--lib`, `--workspace`, `-o/--out`, `--json`, `--dry-run`, `--offline`. `librarian` and `kicad-export` gained
@@ -48,16 +55,16 @@ ecadlib init [--yes] [--tool T] [--lib DIR ...] [--workspace W] [--sources LIST]
 ## Command-line conveniences: `doctor`, `status`, `completion`, `--json`, environment defaults
 
 ```
-ecadlib doctor [--workspace W] [--lib DIR] [--rules F] [--json]   is this machine ready? (exit 1 on any FAIL)
+ecadlib doctor [--workspace W] [--lib DIR] [--rules F] [--altium-menu INI] [--json]   is this machine ready? (exit 1 on any FAIL)
 ecadlib status [--workspace W] [--json]                           one screen about a workspace (read-only)
 ecadlib completion bash|zsh|fish                                  shell completion script
 ```
 
-* **doctor** prints one line per check, each OK / WARN / FAIL with a fix: Python version (3.10 warns when neither tomllib nor tomli can read TOML), the core packages (FAIL when missing), pillow / pypdf, `pdftoppm`, `kicad-cli` and `git` (WARN), which API keys are set (variable **names** only, never values; the names follow `[datasheet] api_key_env` and `[agent] github_token_env`), the rules file in use and whether it is valid (an error names `file:line`), the workspace (exists, writable: a temporary probe file is created and removed) and the `--lib` folders. Also `Workspace.doctor()` and the MCP tool `doctor`.
+* **doctor** prints one line per check, each OK / WARN / FAIL with a fix: Python version (3.10 warns when neither tomllib nor tomli can read TOML), the core packages (FAIL when missing), pillow / pypdf, `pdftoppm`, `kicad-cli` and `git` (WARN), which API keys are set (variable **names** only, never values; the names follow `[datasheet] api_key_env` and `[agent] github_token_env`), the rules file in use and whether it is valid (an error names `file:line`), the workspace (exists, writable: a temporary probe file is created and removed) and the `--lib` folders, and the Altium menu's `command=` (`--altium-menu INI`, the menu's `ecadlib_menu.ini` or its folder: the program it names must run `ecadlib --version`; the workspace checked is then the ini's `workspace=`). Also `Workspace.doctor()` and the MCP tool `doctor`.
 * **status** summarises a workspace without creating or changing anything: parts per librarian plan (ready, held, waiting for sign-off, duplicates), uploaded BOMs, the last triage, the last upkeep run, how parts fared in review, and what to run next. A damaged file is named under WARN and skipped. Exit 1 when the workspace does not exist. Also `Workspace.status()` and the MCP tool `workspace_status`.
-* **completion** builds the script from each command's own argparse parser (commands, subcommands, options, fixed choices), so it always matches the installed version: `ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib`, `source <(ecadlib completion zsh)` (uses zsh's `bashcompinit`), `ecadlib completion fish > ~/.config/fish/completions/ecadlib.fish`.
+* **completion** builds the script from each command's own argparse parser (commands, subcommands, options, fixed choices), so it always matches the installed version: `mkdir -p ~/.local/share/bash-completion/completions && ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib` (a new account has no such folder yet, and a shell redirect does not make one), `source <(ecadlib completion zsh)` (uses zsh's `bashcompinit`), `mkdir -p ~/.config/fish/completions && ecadlib completion fish > ~/.config/fish/completions/ecadlib.fish`.
 * **Errors:** a missing file, bad JSON, an unreadable table, a missing package, no permission or a bad `ecadlib.toml` print one line and a hint (exit 2) instead of a traceback; anything else prints `internal error (...)` (exit 1). `--debug` anywhere on the line, or `ECADLIB_DEBUG=1`, shows the full traceback.
-* **Environment defaults** (a flag on the command line always wins): `ECADLIB_LIB` = `--lib` (several folders separated by `:`, `;` on Windows) for `triage`, `librarian`, `resolve`, `kicad-export`, `mcp`, `ui` and `doctor`; `ECADLIB_WORKSPACE` = `--workspace` for `mcp`, `ui`, `visual-check`, `doctor` and `status` (not for `upkeep` / `upstream`, where `--workspace` is an Altium 365 URL); `ECADLIB_CONFIG` = the rules file wherever ecadlib searches for `ecadlib.toml` (an explicit `--rules` and a workspace's own `ecadlib.toml` still come first). Without it `ecadlib.toml` is found by walking up from the working folder (unchanged).
+* **Environment defaults** (a flag on the command line always wins): `ECADLIB_LIB` = `--lib` (several folders separated by `:`, `;` on Windows) for `triage`, `librarian`, `resolve`, `kicad-export`, `mcp`, `ui` and `doctor`; `ECADLIB_WORKSPACE` = `--workspace` for `mcp`, `ui`, `visual-check`, `doctor`, `status` and `review` (with neither set nor [setup] workspace, the workspace chosen on the setup page is the default when there is no `./ecadlib_workspace`) (not for `upkeep` / `upstream`, where `--workspace` is an Altium 365 URL); `ECADLIB_CONFIG` = the rules file wherever ecadlib searches for `ecadlib.toml` (an explicit `--rules` and a workspace's own `ecadlib.toml` still come first). Without it `ecadlib.toml` is found by walking up from the working folder (unchanged).
 * **Machine-readable output (`--json`)**, one JSON object on stdout, nothing else; the keys below are stable (new keys may be added):
   * `triage --json`: `{"bom", "lines", "mapping", "counts": {status: n}, "rows": [{"line", "designator", "qty", "mpn", "manufacturer", "lcsc", "value", "package", "status", "local_symbol", "local_footprint", "src", "src_symbol", "src_footprint", "src_3d", "src_mpn", "notes"}], "reports": [md, csv]}`
   * `release-check --json`: `{"plan", "report", "counts": {"ready", "held", "awaiting_approval", "duplicate"}, "rows": [one per part, as release_check.csv]}`; exit 2 when a part is held, as before.
@@ -86,8 +93,11 @@ prints through one small layer, `ecadlib/term.py` (stdlib only), in the shared v
 * **`--json` is unchanged**, byte for byte (`tests/test_term.py`).
 
 ```
-ecadlib review [PLAN] [--workspace W] [--part P] [--yes] [--offline] [--lib DIR] [--limit N]
+ecadlib review [PLAN] [--workspace W] [--part P] [--yes] [--offline] [--lib DIR] [--limit N] [--cache DIR] [--user WHO]
 ```
+
+`--cache` is the HTTP cache for the candidate lookups (default: the workspace's `http_cache`); `--user` is who
+releases anyway (default: `$ECADLIB_USER`, then git config).
 
 `ecadlib review` goes through the held parts one at a time: the reason and the fix in plain words, the datasheet link,
 and for a missing symbol / footprint (or pins that do not match the pads) the best candidates from `resolve`. Then it
@@ -108,14 +118,20 @@ For people who are used to installers, not terminals. The guide for them is `doc
   silently, runs it, checks the Start menu entries and PATH, and uninstalls it.
 * **`ecadlib start`** (`launcher.py`, what the Start menu runs) starts the web UI on 127.0.0.1:8765 and opens the
   browser. The first run opens the setup page. A small window has Open, Setup, Workspace folder and Quit, and closing
-  it stops ecadlib. A second start reuses the running copy.
+  it stops ecadlib. A second start reuses the running copy. Options: `--workspace W`, `--port N` (default 8765),
+  `--no-browser` (do not open the browser), `--no-window` (no window: run until Ctrl+C), `--setup` (open the setup
+  page, what the **ecadlib setup** Start menu entry runs).
 * **`ecadlib setup`** (`easy_setup.py`, `ui/static/setup.html`): pick the AI provider and model, then paste and check
   the key (a free request for the provider's model list). It finds Altium Designer and KiCad (`detect.py`) and asks
   for the tool, the workspace and your library folders. Saving writes `<workspace>/ecadlib.toml` through `ecadlib
   init`'s own code, so it learns your naming from your libraries. **Add to Altium** writes the menu script project
   ([Altium and KiCad plugins](altium.md#plugging-into-the-tools-kicad_pcmpy-and-altium_pkgpy)) and sets it to run this ecadlib. One step inside Altium is left (Install from file...), because Altium
   keeps its list of script projects to itself. **Add to KiCad** copies the action plugin into each KiCad's
-  `scripting/plugins` folder, with this ecadlib's command next to it, so no PATH change is needed.
+  `scripting/plugins` folder, with this ecadlib's command next to it, so no PATH change is needed. Options:
+  `--workspace W`, `--port N` (default 8765), `--no-browser` (do not open the browser).
+* **`ecadlib nexar signin|status|signout`** (`nexar_signin.py`): sign in to Altium 365 once with your own free Nexar
+  app; ecadlib refreshes the token by itself, so there is no daily portal token to paste. See
+  [Signing in to Altium 365](altium.md#signing-in-to-altium-365-ecadlib-nexar-signin).
 * **`ecadlib keys list|set NAME|remove NAME`** (`userconfig.py`): API keys stored per user, the way to give ecadlib a
   key. On Windows they are encrypted with DPAPI for your account. Elsewhere they are in a file only you can read
   (mode 600). The folder is `%APPDATA%\ecadlib`, `~/Library/Application Support/ecadlib` or `~/.config/ecadlib`, and
@@ -123,7 +139,9 @@ For people who are used to installers, not terminals. The guide for them is `doc
   variable, so other programs (a coding assistant that bills an `ANTHROPIC_API_KEY` it finds, or anything ecadlib
   starts) cannot use it. An environment variable of the same name is used only when nothing is stored, and `ecadlib
   doctor` warns about it. A key value is never printed, logged, shown by the web UI or written to `ecadlib.toml`.
-  See [docs/api-keys.md](api-keys.md).
+  See [docs/api-keys.md](api-keys.md). `ecadlib keys set NAME` asks for the value without echoing it; `--stdin`
+  reads it from standard input instead (scripts: `... | ecadlib keys set NAME --stdin`), so it never lands in the
+  shell history.
 * **The doctor on a fresh install** now shows only what matters. A key or tool for a feature you have not turned on
   is OK ("only needed for ..."): pdftoppm for visual-check, git and GITHUB_TOKEN without an `[agent] github_repo`
   (upkeep pull requests), NEXAR_TOKEN without an `[altium365]` workspace, kicad-cli when you only make Altium

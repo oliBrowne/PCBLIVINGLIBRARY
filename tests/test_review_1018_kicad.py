@@ -133,11 +133,10 @@ def test_footprints_whose_names_clash_are_not_merged():
     # "EEPART1 " (another part's own footprint) is written as EEPART1 too: the second part must not silently get the
     # first part's footprint
     def change(items):
-        ee = next(i for i in items if i["name"] == "EEPART1")
         soic = next(i for i in items if i["name"] == "TPS1234DSGR")
-        two = json.loads(json.dumps(ee))
+        two = json.loads(json.dumps(soic))      # a part that passes the release check (an SOIC-8 symbol on its SOIC-8)
         two["name"] = "EEPART2"
-        two["footprint"] = {"ref": "EEPART1 ", "file": soic["footprint"]["file"]}
+        two["footprint"]["ref"] = "EEPART1 "
         items.append(two)
     plan, http = _dup_plan(change)
     rep = X.export(plan, plan.parent.parent / "k", "lib", http=http, log=_quiet)

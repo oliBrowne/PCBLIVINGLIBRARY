@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ecadlib import altium_dblib_sync as S, altium_export as X, altium_lib as AL, cli
+from tests.fixtures_lite import released_anyway
 
 ROOT = Path(__file__).parent.parent
 
@@ -31,6 +32,7 @@ def _item(name, cat, sym, fp, status="ready", **params):
 
 
 def _plan(d, items):
+    released_anyway(items, d)                  # the sync checks every part again: these were released anyway
     (d / "plan.json").write_text(json.dumps(items, indent=1))
     return d / "plan.json"
 
@@ -150,7 +152,9 @@ def test_removed_items_reported_then_pruned():
         assert rep["PcbLib/Hand_Made.PcbLib"] == ("not_in_plan", "not written by ecadlib: kept"), rep
         assert not (lib / "SchLib/Resistor.SchLib").exists() and (lib / "PcbLib/Hand_Made.PcbLib").exists()
         assert S.read_tables(lib / "ecadlib.xlsx")["Resistors"][1] == []
-        assert sorted(out["removed"]) == ["PcbLib/R_0603_1608Metric.PcbLib", "SchLib/Resistor.SchLib"]
+        assert sorted(out["removed"]) == ["PcbLib/R_0603_1608Metric.PcbLib", "PcbLib/R_0603_1608Metric.PcbLib.ecadbuild",
+                                          "PcbLib/R_0603_1608Metric.PcbLib.ecadstate", "SchLib/Resistor.SchLib",
+                                          "SchLib/Resistor.SchLib.ecadbuild", "SchLib/Resistor.SchLib.ecadstate"]
 
 
 def test_bad_model_is_an_error_and_never_reaches_the_table():
@@ -158,8 +162,8 @@ def test_bad_model_is_an_error_and_never_reaches_the_table():
         d = Path(t); _models(d)
         (d / "models/SchLib/Resistor.SchLib").write_bytes(b"not an OLE file")
         out = S.sync(_plan(d, _base_items()), d / "lib")
-        r = next(r for r in out["results"] if r["name"] == "RES-0603-10k")
-        assert r["action"] == "error" and "does not read back" in r["detail"], r
+        r = next(r for r in out["results"] if r["name"] == "RES-0603-10k")   # the release check, run again, holds it
+        assert r["action"] == "held" and "does not read back" in r["detail"], r
         assert not (d / "lib/SchLib/Resistor.SchLib").exists()
         assert "Resistors" not in S.read_tables(d / "lib/ecadlib.xlsx")
         AL.write_schlib(d / "models/SchLib/Resistor.SchLib", [AL.resistor_symbol(name="Wrong")])
@@ -226,7 +230,9 @@ def test_svndblib_and_commit_with_fake_svn():
         S.sync(_plan(d, _base_items()[1:]), d / "wc", mode="svndblib", runner=svn, which=lambda _: "x")
         out = S.sync(_plan(d, _base_items()[1:]), d / "wc", mode="svndblib", prune=True, runner=svn, which=lambda _: "x")
         cmds = S.svn_commands(out["written"], out["removed"], "m")
-        assert ["svn", "delete", "--force", "PcbLib/R_0603_1608Metric.PcbLib", "SchLib/Resistor.SchLib"] in cmds, cmds
+        assert ["svn", "delete", "--force", "PcbLib/R_0603_1608Metric.PcbLib", "PcbLib/R_0603_1608Metric.PcbLib.ecadbuild",
+                "PcbLib/R_0603_1608Metric.PcbLib.ecadstate", "SchLib/Resistor.SchLib", "SchLib/Resistor.SchLib.ecadbuild",
+                "SchLib/Resistor.SchLib.ecadstate"] in cmds, cmds
 
 
 def test_svn_without_svn_or_working_copy_prints_commands():

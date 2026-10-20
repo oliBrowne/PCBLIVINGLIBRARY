@@ -14,7 +14,7 @@ Plans (plan.json) keep ecadlib's own parameter names ("Manufacturer Part Number"
 names from [parameters.names] are applied where data leaves ecadlib: Altium 365 push, the DbLib export and sync,
 the KiCad export and the Altium 365 drift check. Part names, folders, footprint names, required fields, default
 parameters, layers and density are applied when the plan and the models are made."""
-import argparse, copy, difflib, json, os, re, sys
+import argparse, copy, difflib, json, math, os, re, sys
 from pathlib import Path
 
 FILES = ("ecadlib.toml", "ecadlib_rules.json")
@@ -58,7 +58,8 @@ DEFAULTS = {
     "sources": {"order": list(SOURCES)},
     "bom": {"columns": {}},                    # ecadlib field (mpn, manufacturer, value, ...) -> your BOM header
     "release": {"approvals": {},               # same keys as approvals.json; used when there is no approvals.json
-                "parity": "hold"},             # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
+                "parity": "hold",              # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
+                "height": "warn"},             # hold | warn: a missing or implausible 3D height holds the part, or is a note
     "altium365": {"workspace": ""},
     "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "a365", "changes"]},   # ecadlib.upkeep
     "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)
@@ -67,6 +68,7 @@ DEFAULTS = {
                   # ecadlib.ds_route: pages and model per part (route = "single": `model` for every part, as before)
                   "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
                   "escalate": True, "max_attempts": 4,
+                  "zoom_drawings": False,               # also send sharper close-ups of the drawing pages (A/B test first)
                   # ecadlib.crosscheck: a second source (standard table / a second read) before a footprint is accepted
                   "cross_check": "auto", "cross_check_model": "",
                   # a folder of datasheet PDFs a person downloaded (<MPN>.pdf), tried before any link: for makers' sites
@@ -75,7 +77,14 @@ DEFAULTS = {
                   # a read whose pin count, pitch, body and exposed pad fit exactly one checked standard package:
                   # off (default until measured live) = the read's pads; auto = the table's land unless the datasheet
                   # gives its own; always
-                  "standard_land": "off"},
+                  "standard_land": "off",
+                  # ecadlib.pdf_fetch: a PDF link the maker's site refuses to ecadlib's own request. "auto": a browser's
+                  # headers, then a Chrome TLS fingerprint, then a headless Edge / Chrome (the last two need
+                  # pip install "ecadlib[browser]"); "plain": ecadlib's own request only; or a list of those ways
+                  "download": "auto",
+                  # last: open the link in your own browser and take the PDF from Downloads ("auto": when a person is
+                  # watching the run in a terminal; "off"), waiting this long; "" = the system Downloads folder
+                  "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": ""},
     "symbols": {                               # ecadlib.symbol_layout: IC symbol pins grouped by function
         "layout_pins": 1,                      # parts with at least this many pins get grouped (0 = never)
         "power_side": "top",                   # top: power top, ground bottom | left: both on the left side, top and bottom empty
@@ -109,7 +118,7 @@ DEFAULTS["ai"] = {k: (dict(v) if isinstance(v, dict) else v) for k, v in _LL.DEF
 for _k in _LL.SECTION_KEYS:                           # [datasheet] / [agent.proof] may pick their own ("" = [ai])
     DEFAULTS["datasheet"].setdefault(_k, "")
     DEFAULTS["agent"]["proof"].setdefault(_k, "")
-DEFAULTS["providers"] = {"order": [], "unofficial": False}   # EasyEDA / JLCPCB search: opt in
+DEFAULTS["providers"] = {"order": [], "unofficial": True}    # EasyEDA / JLCPCB search: on, asked last; false opts out
 # [setup]: written by the `ecadlib init` setup questions (ecadlib.firstrun). libs / workspace are the defaults for
 # --lib / --workspace (after the command line and ECADLIB_LIB / ECADLIB_WORKSPACE); empty = as before.
 DEFAULTS["setup"] = {"tool": "both", "libs": [], "workspace": ""}
@@ -120,13 +129,13 @@ DEFAULTS["style"] = {"profile": "house_style.json", "apply": "auto", "model": ""
                      **{k: "" for k in _LL.SECTION_KEYS}}
 # [change]: change control (ecadlib.change_gate): what a change to a released part needs, per class of change.
 DEFAULTS["change"] = {"identity": "hold", "electrical": "hold", "geometry_major": "hold", "geometry_minor": "warn",
-                      "cosmetic": "pass", "approvers": 1, "a365_transition": ""}
+                      "cosmetic": "pass", "approvers": 1, "a365_transition": "", "unlisted": "hold"}
 MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "defaults"), ("folders", "map"),
             ("bom", "columns"), ("release", "approvals"), ("symbols", "sides")}
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9),
              ("symbols", "layout_pins"): (0, 100_000), ("symbols", "split_pins"): (0, 100_000), ("symbols", "unit_pins"): (8, 10_000),
              ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600), ("datasheet", "page_budget"): (0, 600),
-             ("datasheet", "max_attempts"): (1, 10),
+             ("datasheet", "max_attempts"): (1, 10), ("datasheet", "handoff_wait_s"): (10, 3600),
              ("notify", "retries"): (0, 10), ("change", "approvers"): (1, 9), ("notify", "timeout_s"): (1, 120)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
@@ -138,9 +147,29 @@ class RulesError(ValueError):
 # ------------------------------------------------------------------ load / merge / validate
 def find(start="."):
     """The rules file in `start` or one of its parents, else in the current folder or its parents; None if none.
-    $ECADLIB_CONFIG (a file path), when set, is used instead of the search (an explicit --rules still wins)."""
+    $ECADLIB_CONFIG (a file path), when set, is used instead of the search (an explicit --rules still wins), except
+    that a workspace's own file still comes first: one found from `start` (a plan, a workspace) in a folder that is not
+    the current folder or one of its parents, as app.Workspace does."""
     env = os.environ.get("ECADLIB_CONFIG", "").strip()
-    if env:
+    if env and Path(start) != Path("."):
+        try:
+            here = Path.cwd().resolve()
+            mine = {here, *here.parents}
+            base = Path(start).resolve()
+            for d in [base, *base.parents]:
+                if d in mine:
+                    break
+                for n in FILES:
+                    if (d / n).is_file():
+                        return d / n
+        except OSError:
+            pass
+    if env:                                    # run inside a workspace (its file beside librarian/ or uploads/)
+        here = Path.cwd()
+        if (here / "librarian").is_dir() or (here / "uploads").is_dir():
+            for n in FILES:
+                if (here / n).is_file():
+                    return (here / n).resolve()
         if not Path(env).expanduser().is_file():
             raise RulesError(f"ECADLIB_CONFIG={env}: no such file")
         return Path(env).expanduser().resolve()
@@ -173,6 +202,8 @@ def toml_module():
 
 
 def parse_text(text, name="ecadlib.toml"):
+    if isinstance(text, str):
+        text = text.lstrip("﻿")          # "UTF-8 with BOM" (Notepad, PowerShell 5, Visual Studio): fine
     if str(name).endswith(".json"):
         try:
             return json.loads(text or "{}")
@@ -198,7 +229,8 @@ def merge(base, over):
 def load(path=None, start="."):
     """Rules merged over DEFAULTS. path: an explicit file (must exist), a dict (used as the file's content), or None to
     search `start` and its parents, then the current folder. No file -> a copy of DEFAULTS. Bad content raises RulesError
-    naming the key. The result carries `_file` (where it came from, '' for none)."""
+    naming the key. The result carries `_file` (where it came from, '' for none) and `_set` (the "section.key" names
+    the file itself set: a value equal to its default, max_cost_usd = 10, is still one the person chose)."""
     if isinstance(path, dict):
         if "_file" in path and all(k in path for k in DEFAULTS):
             return path                       # already loaded
@@ -219,6 +251,7 @@ def load(path=None, start="."):
     validate(raw, where)
     out = merge(DEFAULTS, {k: v for k, v in raw.items() if not k.startswith("_")})
     out["_file"] = "" if isinstance(path, dict) else where
+    out["_set"] = sorted(f"{s}.{k}" for s, v in raw.items() if isinstance(v, dict) and not s.startswith("_") for k in v)
     _normalise(out)
     return out
 
@@ -275,6 +308,8 @@ def validate(raw, where="ecadlib.toml"):
                 from .notify import check_targets
                 check_targets(where, v, _err)
                 continue
+            if (sec, k) == ("datasheet", "download"):     # "auto", "plain" or a list of ways; checked below
+                continue
             if k not in DEFAULTS[sec]:
                 close = difflib.get_close_matches(k, DEFAULTS[sec], 1)
                 _err(where, key, f"is not a known key" + (f" (did you mean {sec}.{close[0]}?)" if close else
@@ -301,8 +336,8 @@ def validate(raw, where="ecadlib.toml"):
                 if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
                     _err(where, key, f"must be a whole number from {lo} to {hi}")
             elif isinstance(d, float):
-                if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
-                    _err(where, key, "must be a number of 0 or more")
+                if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or v < 0:
+                    _err(where, key, "must be a number of 0 or more (not nan or inf)")
             elif isinstance(d, dict):
                 _check_table(where, sec, k, v, d)
             elif not isinstance(v, str):
@@ -349,6 +384,16 @@ def validate(raw, where="ecadlib.toml"):
         if not _LL.MODEL_RE.fullmatch(str(m)):
             _err(where, "datasheet.ladder", f"has {m!r}: must be model ids such as claude-haiku-5-5 (or endpoint:model "
                                             "for an [ai.endpoints] entry), cheapest first")
+    if "download" in ds:
+        from . import pdf_fetch as _PF
+        dl = ds["download"]
+        ok = dl in ("auto", "plain") if isinstance(dl, str) else isinstance(dl, list) and all(w in _PF.TIERS for w in dl)
+        if not ok:
+            _err(where, "datasheet.download", f"= {dl!r}: must be \"auto\" (every way, in order), \"plain\" (ecadlib's own "
+                                              f"request only) or a list of {', '.join(_PF.TIERS)}")
+    if "handoff" in ds and ds["handoff"] not in ("auto", "off"):
+        _err(where, "datasheet.handoff", f"= {ds['handoff']!r}: must be auto (open a refused link in your browser when "
+                                         "you are watching the run) or off")
     if "cross_check" in ds and ds["cross_check"] not in ("auto", "always", "off"):
         _err(where, "datasheet.cross_check", f"= {ds['cross_check']!r}: must be auto (standard table, else a second read), "
                                              "always (a second read for every part) or off")
@@ -374,6 +419,8 @@ def validate(raw, where="ecadlib.toml"):
         _err(where, "style.profile", f"= {sty['profile']!r}: must be a .json file (written by `ecadlib style learn`)")
     if "parity" in (raw.get("release") or {}) and raw["release"]["parity"] not in ("hold", "warn", "off"):
         _err(where, "release.parity", f"= {raw['release']['parity']!r}: must be hold, warn or off")
+    if "height" in (raw.get("release") or {}) and raw["release"]["height"] not in ("hold", "warn"):
+        _err(where, "release.height", f"= {raw['release']['height']!r}: must be hold or warn")
     if (raw.get("release") or {}).get("approvals"):
         from .approvals import normalize_policy
         try:
@@ -429,8 +476,8 @@ def _check_table(where, sec, k, v, d):
             if not isinstance(vv, int) or isinstance(vv, bool) or not lo <= vv <= hi:
                 _err(where, key, f"must be a whole number from {lo} to {hi}")
         elif isinstance(dd, float):
-            if not isinstance(vv, (int, float)) or isinstance(vv, bool) or vv < 0:
-                _err(where, key, "must be a number of 0 or more")
+            if not isinstance(vv, (int, float)) or isinstance(vv, bool) or not math.isfinite(vv) or vv < 0:
+                _err(where, key, "must be a number of 0 or more (not nan or inf)")
         elif not isinstance(vv, str):
             _err(where, key, "must be text")
     if (sec, k) == ("agent", "proof"):
@@ -562,7 +609,16 @@ def house_row(row, rules):
     """A DbLib row (column -> value) with parameter columns renamed; key and reserved columns stay."""
     if not (rules or DEFAULTS)["parameters"]["names"]:
         return row
-    return {(k if k in KEY_COLUMNS else param_name(k, rules)): v for k, v in row.items()}
+    out, renamed = {}, set()
+    for k, v in row.items():
+        h = k if k in KEY_COLUMNS else param_name(k, rules)
+        if h != k:                          # the canonical field wins over a parameter already spelled like the house
+            if v or h not in out:           # name (a stale "Mfr PN" BOM column), unless the canonical one is empty
+                out[h] = v
+            renamed.add(h)
+        elif h not in renamed or not out.get(h):
+            out[h] = v
+    return out
 
 
 def default_params(rules):
@@ -602,9 +658,9 @@ def fmt_value(raw, cat, style):
     """BOM value -> the rules' value style. Unparseable values and style 'keep' come back unchanged."""
     if style == "keep" or cat not in UNIT or not str(raw or "").strip():
         return raw
-    from .kicad_index import parse_value
+    from .kicad_index import parse_value, two_readings
     v = parse_value(raw)
-    return raw if v is None else fmt_number(v, cat, style)
+    return raw if v is None or two_readings(raw) else fmt_number(v, cat, style)     # '4,700pF' stays as written
 
 
 def fmt_number(v, cat, style):
@@ -814,6 +870,7 @@ HELP = {
     "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header, or field = [\"header\", \"alias\"])",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
     "release.parity": "hold | warn | off: a part whose KiCad and Altium files differ (pads, drills, courtyard, 3D, pins) is held",
+    "release.height": "warn | hold: a missing or out-of-range 3D height is a note to check (warn, the default) or holds the part",
     "change": "Change control: what a change to a released part needs, per class (hold = a person approves it, warn = "
               "released and listed, pass = released); approvers = people per held change (2 = two-person rule)",
     "change.identity": "hold | warn: the MPN, manufacturer or value changed",
@@ -823,13 +880,16 @@ HELP = {
     "change.cosmetic": "hold | warn | pass: silkscreen, fab, texts, symbol graphics, pin lengths, other fields",
     "change.a365_transition": "optional: the Altium 365 life-cycle transition (or state) a new component revision is "
                               "moved to after an approved change, e.g. \"Promote to Prototype\"; empty = leave it",
+    "change.unlisted": "hold | warn | pass: Altium project check: a component the workspace has a newer revision of, "
+                       "whose changes the library's ledger cannot list (hold = the check fails)",
     "datasheet": "Claude datasheet reader (ecadlib datasheet / librarian): model, effort, which environment variable holds the "
                  "API key, a cost cap per run (0 = none) and how many pages to send before picking pages by text (0 = all)",
     "datasheet.api_key_env": "name of the environment variable with the API key; the key itself never goes in this file",
     "datasheet.max_cost_usd": "refuse a run whose estimated worst-case cost is higher (default 10.00 per run; 0 = no cap; --yes does not lift it, "
                              "--max-cost-usd does)",
     "datasheet.ask_above_usd": "the Altium dialog, KiCad window and web UI always show the model and cost before an AI step; "
-                               "above this (or above max_cost_usd when set) they ask a second time (default 1.00)",
+                               "above this (or above max_cost_usd when set) they ask a second time (default 1.00; 0 = "
+                               "ask twice for every paid read)",
     "datasheet.page_budget": "pages sent on the first try, picked by text (drawing for this package, land pattern, pin table, "
                              "ordering info); widened to 3x, then the whole PDF, when the answer is incomplete (0 = whole PDF)",
     "datasheet.route": "single = `model` for every part | ladder = start on the cheapest model of `ladder` that suits the "
@@ -837,6 +897,9 @@ HELP = {
     "datasheet.ladder": "models for route = \"ladder\", cheapest first",
     "datasheet.escalate": "retry with more pages / the next model when the answer is incomplete or fails the checks",
     "datasheet.max_attempts": "most answers paid for per part (first try included)",
+    "datasheet.zoom_drawings": "also send each picked drawing / land-pattern page as two close-up pictures (top and bottom "
+                               "half, about 260 dpi), so small dimension text is sharper than in the PDF's own page "
+                               "picture; about 10,000 more input tokens per drawing page (off by default)",
     "datasheet.cross_check": "auto: compare every datasheet footprint with the standard package table, or (not in the table) "
                              "with a second read of only the critical numbers; disagreement holds the part | always: the "
                              "second read for every datasheet part | off",
@@ -870,7 +933,7 @@ HELP = {
               "token_env (json only); retries with backoff, never stops the run",
     "providers": "Part sources for triage / librarian / UI, in order, including plugins (ecadlib.providers entry points); "
                  "[] = each command's built-in default (the official Nexar / DigiKey / Mouser APIs first, then EasyEDA); "
-                 "unofficial = true lets in the undocumented EasyEDA and JLCPCB search endpoints (default false; `ecadlib init` asks); "
+                 "unofficial = true lets in the undocumented EasyEDA and JLCPCB search endpoints (default true, always after the official APIs; false keeps them out; `ecadlib init` asks); "
                  "`ecadlib plugins list` shows what is installed",
     "setup": "Written by `ecadlib init`: the tool you use, your library folders (the default --lib) and the workspace "
              "(the default --workspace); relative paths start at this file's folder",

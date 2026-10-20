@@ -7,6 +7,7 @@
     ecadlib altium-menu fill BOARD.PrjPcb|BOM.csv [--workspace W] [--to DIR] [--result-file F]
     ecadlib altium-menu queue [--workspace W] [--port 8765] [--result-file F]
     ecadlib altium-menu run-job JOBFOLDER          what the menu runs: reads JOBFOLDER/request.ini, writes result.ini
+    ecadlib altium-menu wake JOBFOLDER             after Keep working: asks the running Altium to put the job in
 
 `build` writes into --out:
   ecadlib_menu.PrjScr + ecadlib_menu.pas   the script project; three procedures without parameters (so Altium's
@@ -14,6 +15,7 @@
         AddPartFromMPN     asks for an MPN (+ optional manufacturer), builds the part, reinstalls the library
         CheckProjectBOM    checks the focused project's BOM, opens the report, offers to fill the library
         OpenReviewQueue    opens the ecadlib web UI at the review queue (starts `ecadlib ui` when it is not running)
+        FinishBackgroundJob  not a menu entry: puts a job the dialog left running into the library (see 5. below)
   ecadlib_build.pas                 Altium builds the library files itself (ecadlib.altium_native):
         BuildLibrariesInAltium   (File > Run Script) builds every library in ecadlib_build.txt next to the project
         BuildLibraries(Folder)   the same for Folder; the menu calls it before it reinstalls the library
@@ -47,6 +49,12 @@ How a menu entry talks to ecadlib (no stdout parsing, no quoting of user text on
      folder (altium-pkg wrote ecadlib_build.txt there, see ecadlib.altium_native), Altium writes every .SchLib /
      .PcbLib again with its own API (BuildLibraries in ecadlib_build.pas, part of this script project) and the dialog
      says if any library FAILED (ecadlib_build_report.txt). native_build=0 in the .ini skips that.
+  5. the dialog is modal, so Altium waits while it is open. Keep working (or its X) closes it while the job runs on:
+     the script writes background.txt in the job and adds the job to waiting.txt; when exit.txt is written,
+     ecadlib_run.cmd runs `altium-menu wake`, which calls the running X2.EXE with
+     -RScriptingSystem:RunScript(ProjectName=...|ProcName=...ecadlib_menu.pas>FinishBackgroundJob) (8.3 paths), and
+     Altium opens the dialog on the result, builds and installs the library (finished.txt). When Altium is closed or
+     busy then, the next menu entry offers the job.
 
 Where parts go: the workspace is an ordinary ecadlib workspace (`ecadlib ui --workspace` shows it); parts added from
 the menu collect in <workspace>/uploads/altium-menu/parts.csv and the librarian runs on that list (finished parts are
@@ -68,7 +76,8 @@ PROCS = [("AddPartFromMPN", "&Add part from MPN...", "Build a part from its manu
          ("CheckProjectBOM", "&Check this project BOM", "Check the focused project's BOM against the library; offer to fill it"),
          ("OpenReviewQueue", "Open &review queue", "Open the ecadlib web UI at the review queue")]
 # the other procedures the script project offers (ecadlib_build.pas, ecadlib.altium_native): not menu entries
-BUILD_PROCS = [("BuildLibrariesInAltium", "ecadlib_build.pas", "Altium writes the libraries in ecadlib_build.txt itself"),
+BUILD_PROCS = [("FinishBackgroundJob", UNIT, "puts a job the dialog left running (Keep working) into the library"),
+               ("BuildLibrariesInAltium", "ecadlib_build.pas", "Altium writes the libraries in ecadlib_build.txt itself"),
                ("BuildLibraries(Folder)", "ecadlib_build.pas", "the same for Folder; the menu calls it before reinstalling")]
 
 
@@ -77,7 +86,7 @@ def procedures():
     return [p for p, _, _ in PROCS] + [p for p, _, _ in BUILD_PROCS]
 MENU_BOM = "uploads/altium-menu/parts.csv"
 HEADER = ["Designator", "Qty", "Value", "Footprint", "Manufacturer", "Mfr. Part #", "LCSC Part Number", "Description", "Datasheet"]
-ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read")
+ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read", "release")
 QUEUE_ANCHOR = "#libcard"
 
 # Every identifier the .pas calls from Altium / DelphiScript, and where it is documented. TRxxxx = Altium's scripting
@@ -168,6 +177,8 @@ exit /b 9009
 :run
 %ECADLIB% altium-menu run-job "%JOB%" > "%JOB%\log.txt" 2>&1
 > "%JOB%\exit.txt" echo %ERRORLEVEL%
+rem Keep working closed the dialog (background.txt): ask Altium to put the result in (FinishBackgroundJob)
+if exist "%JOB%\background.txt" %ECADLIB% altium-menu wake "%JOB%" > "%JOB%\wake.txt" 2>&1
 exit /b 0
 """.replace("\n", "\r\n")
 
@@ -340,7 +351,19 @@ def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_runnin
     """Put the "ecadlib" menu into Altium's top menu bar (schematic, PCB, SchLib and PcbLib editors, before Window)
     by merging it into each Altium's DXP.RCS, after a backup next to it. Altium must be closed: it writes that
     file when it closes. remove=True takes it out again. -> {"installed"|"removed": [DXP.RCS], "backups": [...]}."""
-    win = check_win_dir(str(Path(menu_dir).resolve()) if os.name == "nt" else str(menu_dir))
+    if os.name == "nt":
+        win = check_win_dir(str(Path(menu_dir).resolve()))
+    else:                                # WSL / Linux writing to the Windows side: the folder `build --win-dir` recorded
+        try:
+            rec = json.loads((Path(menu_dir) / "altium_menu.json").read_text(encoding="utf-8")).get("win_dir")
+        except (OSError, ValueError, AttributeError):
+            rec = None
+        try:
+            win = check_win_dir(rec or str(menu_dir))
+        except ValueError:
+            raise ValueError(f"{menu_dir}: not a Windows folder, and no Windows folder recorded for this menu: run "
+                             f"`ecadlib altium-menu build --out {menu_dir} --win-dir D:\\ecadlib-menu` first (the "
+                             "folder Altium will read it from), or give --out as that Windows folder") from None
     if running():
         raise ValueError("Altium Designer is running: close it first (it rewrites its menu file when it closes), "
                          "then run this again")
@@ -375,9 +398,14 @@ def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_runnin
 
 def dxpprf_bytes(win_dir):
     """A preferences file (zip of DXP.RCS + IncludedFiles.ini, as Menu_SVN.DXPPrf). Fixed timestamps: same bytes each run."""
+    rcs = rcs_text(win_dir)
+    bad = "".join(dict.fromkeys(c for c in rcs if ord(c) > 127))
+    if bad:                                  # plain ASCII, so any code page reads it
+        raise ValueError(f"--win-dir {win_dir!r}: the menu file can only name a folder in plain ASCII ({bad!r}); "
+                         "use another folder")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
-        for name, data, comp in (("DXP.RCS", rcs_text(win_dir).encode("ascii"), zipfile.ZIP_DEFLATED),
+        for name, data, comp in (("DXP.RCS", rcs.encode("ascii"), zipfile.ZIP_DEFLATED),
                                  ("IncludedFiles.ini", b"[WorkspaceManager:Customizations]\r\nImportMode=0\r\nFileCount=1\r\n"
                                                        b"FileName0=DXP.RCS\r\n", zipfile.ZIP_STORED)):
             zi = zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0))
@@ -386,12 +414,16 @@ def dxpprf_bytes(win_dir):
     return buf.getvalue()
 
 
-def readme_text(win_dir, prefs):
+def readme_text(win_dir, prefs, unfit=False):
+    """unfit: no menu file because win_dir (this folder) has characters the menu file cannot hold."""
     w = win_dir or "<this folder>"
     menu = (f"""   Or load the ready-made menu: DXP (or the gear icon) > Preferences > Load... (bottom left) > {PREFS}; tick only
    "System > Customizations", OK, restart Altium. CAUTION: this loads a customisation file, which may replace
    menus you customised yourself (back them up first with Preferences > Save...). It names {w} in each entry: build
    it again with --win-dir if you move this folder.""" if prefs else
+            f"""   (No {PREFS} here: it names this folder in each entry, in plain ASCII without ' | or ", and the path of
+   this folder is not. Use the quick way above (install-menu), or build the menu into a folder whose path is.)"""
+            if unfit else
             f"""   (No {PREFS} here: the Windows folder was not known. Run `ecadlib altium-menu build --win-dir {w}` on
    this PC to get the ready-made menu file.)""")
     run_script = ", ".join(p for p in procedures() if "(" not in p)            # parameterless: Run Script lists them
@@ -500,19 +532,23 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
     derived = win_dir is None and os.name == "nt"
     if derived:
         win_dir = str(out.resolve())
+    prefs, note, folder = None, None, win_dir
     if win_dir:
         try:
             win_dir = check_win_dir(win_dir)
+            prefs = dxpprf_bytes(win_dir)       # before any file is written: a bad folder leaves nothing half-built
         except ValueError:
             if not derived:
                 raise
             win_dir = None            # this folder (C:\\Users\\O'Brien\\...) cannot go into a menu entry: no menu file
+            note = (f"no {PREFS}: the menu file names this folder in each entry, in plain ASCII without ' | or \", "
+                    f"and {folder} is not; install-menu puts the menu into Altium's own menu file instead")
     if name and not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$", name):
         raise ValueError(f"--name {name!r}: letters, digits, _ . - only")
     from . import altium_forms as AF, altium_native as AN
     files = {PROJECT: prjscr_text(UNIT, AF.DIALOG_UNIT, AN.UNIT), UNIT: pas_text(),
              AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text(), AN.UNIT: AN.pas_text(),
-             RUN_CMD: run_cmd_text(), RUN_VBS: run_vbs_text(), README: readme_text(win_dir, bool(win_dir))}
+             RUN_CMD: run_cmd_text(), RUN_VBS: run_vbs_text(), README: readme_text(win_dir or (note and folder), bool(win_dir), bool(note))}
     written, kept = [], []
     for fname, text in files.items():
         data = text.encode("utf-8")
@@ -529,14 +565,14 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
         ini.write_bytes(ini_text(workspace or "workspace", library or "library", name, command, hidden, timeout_s,
                                  port, offline).encode("utf-8"))
         written.append(INI)
-    if win_dir:
-        data = dxpprf_bytes(win_dir)
-        if not (out / PREFS).is_file() or (out / PREFS).read_bytes() != data:
-            (out / PREFS).write_bytes(data)
+    if prefs:
+        if not (out / PREFS).is_file() or (out / PREFS).read_bytes() != prefs:
+            (out / PREFS).write_bytes(prefs)
             written.append(PREFS)
     problems = project_problems(files)
     rep = {"folder": str(out), "project": PROJECT, "procedures": procedures(), "menu_entries": [p for p, _, _ in PROCS], "written": written,
-           "kept": kept, "win_dir": win_dir, "menu_file": PREFS if win_dir else None, "problems": problems,
+           "kept": kept, "win_dir": win_dir, "menu_file": PREFS if win_dir else None, **({"menu_file_note": note} if note else {}),
+           "problems": problems,
            "command": load_command(ini), "command_filled": filled}
     (out / "altium_menu.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
     return rep
@@ -912,7 +948,9 @@ def add_to_parts(ws_root, mpn, manufacturer="", **hints):
         raise ValueError(f"not a manufacturer part number: {mpn!r} (letters, digits and - _ . + / # , ( ) only)")
     bom = Path(ws_root) / MENU_BOM
     bom.parent.mkdir(parents=True, exist_ok=True)
-    rows = list(csv.DictReader(bom.open(encoding="utf-8", newline=""))) if bom.is_file() else []
+    from . import sheetsafe as SS
+    rows = [{k: SS.unquote(v) for k, v in r.items()} for r in csv.DictReader(bom.open(encoding="utf-8", newline=""))] \
+        if bom.is_file() else []
     new = {"Mfr. Part #": mpn, "Manufacturer": (manufacturer or "").strip(), "Value": hints.get("value") or "",
            "Footprint": hints.get("footprint") or "", "LCSC Part Number": hints.get("lcsc") or "",
            "Description": hints.get("description") or "", "Datasheet": hints.get("datasheet") or "",
@@ -928,7 +966,7 @@ def add_to_parts(ws_root, mpn, manufacturer="", **hints):
         if not r.get("Value"):
             r["Value"] = r.get("Mfr. Part #", "")
     text = io.StringIO()
-    w = csv.DictWriter(text, HEADER, extrasaction="ignore", lineterminator="\n")
+    w = SS.DictWriter(text, HEADER, extrasaction="ignore", lineterminator="\n")   # '=HYPERLINK(..)' is not run
     w.writeheader()
     for r in rows:
         w.writerow({k: r.get(k, "") for k in HEADER})
@@ -954,7 +992,8 @@ def _a365_url(ws):
 
 def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
     """Ready parts of the BOM's plan -> the library folder (altium-pkg / dblib-sync) or Altium 365 (push); with
-    tool="kicad", the KiCad library folder (kicad-export). Returns {"target", "install": [DbLib paths], "problems", "note"}."""
+    tool="kicad", the KiCad library folder (kicad-export). Returns {"target", "install": [DbLib paths], "problems", "note",
+    "held": {part: why}}: "held" = parts the publisher's own release check held back (files changed since the check)."""
     if tool == "kicad":
         return publish_kicad(ws, bom_rel, library, name)
     from . import altium_pkg as AP
@@ -964,10 +1003,11 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
             res = ws.altium365_push(bom_rel, url, dry_run=False)
         except ValueError as e:
             return {"target": "a365", "install": [], "problems": [str(e)], "workspace": url,
-                    "fix": "store your Nexar token on the setup page (Start menu > ecadlib setup) or with `ecadlib keys set NEXAR_TOKEN`, then try again" if "NEXAR_TOKEN" in str(e) else ""}
+                    "fix": "sign in to Altium 365 once with `ecadlib nexar signin` (ecadlib then stays signed in), or store a Nexar token (NEXAR_TOKEN) on the setup page, then try again" if "NEXAR_TOKEN" in str(e) else ""}
         acts = [r.get("action") for r in res["results"]]
         return {"target": "a365", "install": [], "problems": [f"{r['name']}: {r.get('detail')}" for r in res["results"]
                                                               if r.get("action") == "error"],
+                "held": {r["name"]: r.get("detail") for r in res["results"] if r.get("recheck")},
                 "workspace": url, "released": sum(a in ("release", "released", "create", "created", "update", "updated")
                                                  for a in acts), "report": str(ws.root / res["report"])}
     bom_path, plan_f, items = ws._plan(bom_rel)
@@ -978,7 +1018,7 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
     except ValueError as e:
         return {"target": "folder", "install": [], "problems": [str(e)], "library": str(library)}
     return {"target": "folder", "install": [str((Path(library) / d).resolve()) for d in rep["dblibs"]],
-            "problems": rep["problems"], "library": str(library),
+            "problems": rep["problems"], "library": str(library), "held": rep.get("recheck") or {},
             "build": str(Path(library).resolve()) if rep.get("native_build") else ""}
 
 
@@ -991,6 +1031,7 @@ def publish_kicad(ws, bom_rel, library, name="ecadlib"):
     rep = KX.export(plan_f, library, name, http=CachedHTTP(ws.root / "http_cache", offline=ws.offline, timeout=60),
                     rules=ws.rules_in_use(), log=lambda *a, **k: None)
     return {"target": "kicad", "install": [], "problems": rep["errors"], "library": str(library),
+            "held": {s["part"]: s["why"] for s in rep["skipped"] if s.get("recheck")},
             "footprints": {p["part"]: p.get("footprint") or "" for p in rep["parts"]}}
 
 
@@ -1027,10 +1068,48 @@ def part_rows(it, limit=7):
     return rows[-limit:] if len(rows) > limit else rows
 
 
+# One word of a description: a value with its unit (16M, 20PF, 10PPM, 4.7uF, 10k, 1%), never a part number's root
+VALUE_WORD = re.compile(r"\d+(\.\d+)?(r|k|m|g|meg|hz|khz|mhz|ghz|pf|nf|uf|ph|nh|uh|mh|ppm|v|mv|kv|a|ma|ua|w|mw|ohms?|%)",
+                        re.I)
+
+
+def looks_like_description(text):
+    """'SOSET 16M 20PF 10PPM', '10k 0603 1%': several words, at least one a value with its unit. Most part numbers are
+    one word (X322512MSB4SI), but not all (SOSET's crystal C2975360 is "16M 20PF 10PPM"), so this only shapes the
+    not-found message, it never stops a lookup."""
+    words = str(text or "").split()
+    return len(words) >= 2 and any(VALUE_WORD.fullmatch(w) for w in words)
+
+
+def undouble(text):
+    """'X322512MSB4SIX322512MSB4SI' -> 'X322512MSB4SI': a part number pasted twice into the dialog's box (AD26 pasted
+    on both Ctrl+V's key and its character). Only an exact repeat of something with a digit in it is cut."""
+    t = str(text or "").strip()
+    h = t[:len(t) // 2]
+    return h.strip() if len(t) % 2 == 0 and len(h) >= 4 and t == h + h and re.search(r"\d", h) else t
+
+
+def lcsc_input(text):
+    """'C2975360' when the person typed an LCSC number or pasted an lcsc.com product link, else ''."""
+    from . import providers as P
+    t = str(text or "").strip()
+    if re.fullmatch(r"C\d{3,9}", t, re.I):
+        return t.upper()
+    return P.lcsc_sku(t) if re.match(r"(https?://)?(www\.)?lcsc\.com/", t, re.I) else ""
+
+
 def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
-    """Build one part from its MPN and publish it. Returns the result dict."""
+    """Build one part from its MPN and publish it. Returns the result dict. An LCSC number (or lcsc.com link) is
+    looked up by that number; a part number pasted twice is cut back to one."""
     progress = progress or Progress()
+    mpn = undouble(mpn)
+    lcsc = lcsc_input(mpn)
     ws = _workspace(cfg)
+    if lcsc:
+        from . import providers as P
+        if not P.unofficial_allowed(ws.rules()):     # only the EasyEDA route reads LCSC numbers: say so, look nothing up
+            return lcsc_off({"status": "error", "big": "Not found", "mpn": lcsc}, ws, lcsc)
+        mpn, hints["lcsc"] = lcsc, lcsc
     bom = add_to_parts(ws.root, mpn, manufacturer, **hints)
     rel = ws.rel(bom)
     progress.step(0, 0, f"looking up {mpn}")
@@ -1056,10 +1135,14 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
     whys = M.explain_all(it.get("hold_reasons") or [])
     if st == "ready":
         res["message"] = f"{mpn} is ready as {nm}: {_where(cfg, pub)}."
+        notes = [M.explain(w)["text"] for w in (it.get("release_check") or {}).get("warnings") or [] if str(w).startswith("height:")]
+        if notes:                              # a 3D height is a note to check, not a hold ([release] height)
+            res["message"] += " Note: " + " ".join(dict.fromkeys(notes)) + " Check the 3D body in Altium."
         if pub.get("footprints", {}).get(nm):
             res["footprint"] = pub["footprints"][nm]
-        if pub.get("problems"):
-            res.update(status="error", message=f"{mpn} was built ({nm}) but not published: {pub['problems'][0]}",
+        if pub.get("problems") or nm in (pub.get("held") or {}):
+            why = f"{nm}: {pub['held'][nm]}" if nm in (pub.get("held") or {}) else pub["problems"][0]
+            res.update(status="error", message=f"{mpn} was built ({nm}) but not published: {why}",
                        fix=pub.get("fix") or "run `ecadlib altium-pkg` or `ecadlib altium365 push` by hand to see more")
     elif st == "awaiting_approval":
         res.update(message=f"{mpn} was built as {nm} and is waiting for sign-off before it goes into the library.",
@@ -1070,6 +1153,12 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
         res.update(status="error", reason="not_found", message=f"{mpn} was not found: no part source knows this part "
                    "number, so ecadlib has no symbol, footprint or data for it.",
                    fix="Check the part number (a typo, or a suffix missing), then add it again.")
+        if looks_like_description(mpn):    # a real MPN can look like this too (SOSET's "16M 20PF 10PPM"): only a hint
+            res.update(reason="description", message=f"{mpn} was not found, and it reads like a description (values "
+                       "and units) more than a manufacturer part number.",
+                       fix="Type the part number from the maker's or the shop's page, or its LCSC number (C2975360 "
+                           "on lcsc.com), then add it again.")
+        lcsc_off(res, ws, mpn)
     else:
         res.update(status="held", message=f"{mpn} is held ({nm}): " + (" ".join(w["text"] for w in whys[:3]) or "see the review."),
                    fix=(whys[0]["fix"] + " " if whys else "") + f"Open the review queue ({_queue_hint(cfg)}) "
@@ -1077,7 +1166,9 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
     res.update(rows_result(cost_rows(ai_cost) + part_rows(it), {"ready": "Ready", "duplicate": "Already in your library",
                                                                 "awaiting_approval": "Waiting for sign-off"}.get(st, "Held")))
     if res["status"] == "error":
-        res["big"] = "Not found" if res.get("reason") == "not_found" else "Not published"
+        res["big"] = "Not found" if res.get("reason") in ("not_found", "not_searched", "description") else "Not published"
+    if res["status"] == "held":
+        offer_release(res, it, rel, mpn)
     if res["status"] == "held" and ai and nm in ai["names"]:
         q = ws.ai_quote(rel, parts=[nm]) if ai["parts"] > 1 else ai      # the menu's list may hold other parts too
         if q:
@@ -1106,6 +1197,68 @@ def offer_ai(res, q, bom, mpn="", part=""):
     return res
 
 
+def releasable(it):
+    """The hold reasons a person may release anyway, explained ([] = none): not a missing or broken file (nothing to
+    release) and not a held change (that waits for `ecadlib part approve`), as in `ecadlib review`."""
+    from . import messages as M, release_check as RC
+    out = []
+    for r in it.get("hold_reasons") or []:
+        e = M.explain(r)
+        if e["code"].startswith("files.") or str(r).startswith(RC.CHANGE_HOLD) or str(r).endswith("(cannot be overridden)"):
+            return []
+        if e["text"] not in out:
+            out.append(e["text"])
+    return out
+
+
+def offer_release(res, it, bom, mpn=""):
+    """result.ini keys for the dialog's Release anyway: the part, its BOM and why it is held (release_why1..4), so
+    the dialog can show the reasons before it asks for a reason of its own. Nothing is released here."""
+    whys = releasable(it)
+    if whys:
+        res.update(offer_release="1", release_bom=bom, release_mpn=mpn, release_part=it["name"],
+                   **{f"release_why{i}": w for i, w in enumerate(whys[:4], 1)})
+    return res
+
+
+def release_part(cfg, req, progress=None):
+    """The dialog's Release anyway, after the person saw the hold reasons and typed why it is fine: the same release
+    as the review queue's (release-check --allow, who and why kept in the plan, revision 1 in the change-control
+    ledger), then the part is published like add-part."""
+    from . import approvals as A, review_cli as RV
+    progress = progress or Progress()
+    reason = " ".join(str(req.get("reason") or "").split())
+    name, rel = req.get("part", ""), req.get("bom", "")
+    mpn = req.get("mpn") or name
+    if not reason:
+        return {"status": "error", "message": f"{name} was not released: Release anyway needs a reason.",
+                "fix": "Click Release anyway again and say why the part is fine as it is."}
+    ws = _workspace(cfg)
+    bom = ws._bom_path(rel)
+    plan = ws._librarian_dir(bom) / "plan.json"
+    try:
+        items = json.loads(plan.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        items = []
+    it = next((i for i in items if i.get("name") == name), None)
+    if it is None:
+        return {"status": "error", "message": f"{name} is not in the library plan any more, so nothing was released.",
+                "fix": f"Add {mpn} again, or release it from the review queue ({_queue_hint(cfg)})."}
+    if it.get("status") == "held":
+        if not releasable(it):
+            return {"status": "error", "message": f"{name} cannot be released anyway: "
+                    + "; ".join(it.get("hold_reasons") or ["a file is missing or a change waits for approval"]) + ".",
+                    "fix": f"Fix it in the review queue ({_queue_hint(cfg)})."}
+        progress.step(0, 0, f"releasing {name}")
+        who = A.identity(req.get("user") or None, cwd=plan.parent)
+        RV.release_anyway(plan, name, who, reason=reason)
+        res = _part_result(cfg, ws, bom, rel, mpn, progress)
+        if res.get("status") != "error":
+            res["message"] = f"Released anyway by {who}: {reason}. " + (res.get("message") or "")
+        return res
+    return _part_result(cfg, ws, bom, rel, mpn, progress)       # released meanwhile (the queue): just publish it
+
+
 def cost_rows(c):
     """The dialog rows after an AI step: the estimate and what it really cost."""
     if not c:
@@ -1129,6 +1282,24 @@ def ai_read(cfg, req, progress=None):
     return _fill_result(cfg, ws, bom, s, progress, s.get("ai_cost"))
 
 
+def lcsc_off(res, ws, mpn):
+    """A not-found while [providers] unofficial is off: LCSC / EasyEDA (where many parts, e.g. YXC crystals, only
+    are) was never asked, so say that, and which file and lines turn it on, instead of "no part source knows it"."""
+    from . import providers as P
+    if P.unofficial_allowed(ws.rules()):
+        return res
+    f = ws.rules_in_use() or ws.rules_file()
+    lcsc = re.fullmatch(r"C\d{3,9}", mpn, re.I)
+    res.update(reason="not_searched",
+               message=(f"{mpn} is an LCSC number, but" if lcsc else f"{mpn} was not found in the official part sources, and")
+               + " the LCSC / EasyEDA search is off, so LCSC was not asked."
+               + ("" if lcsc else " Many parts (often Chinese-made ones, sold through LCSC) are only there."),
+               fix=f"To search LCSC / EasyEDA too, put unofficial = true under [providers] in {f} (add a [providers] "
+                   "line above it if the file has none), then add the part again. It was switched off because those "
+                   "sites have no published API; when on, LCSC is asked after the official sources.")
+    return res
+
+
 def not_found(triage_csv, mpn, item):
     """True when every part source that was asked answered "no such part" (none failed or was offline), nothing local
     matched, and the librarian made neither a symbol nor a footprint: a bad MPN, not a part to review."""
@@ -1147,8 +1318,19 @@ def not_found(triage_csv, mpn, item):
 
 
 def _library_mpns(cfg, ws):
-    """MPNs already in the library: the DbLib parts table (any 'part number' column) and every ready / pulled plan item."""
+    """MPNs already in the library: the DbLib parts table (any 'part number' column) and every ready / pulled plan item.
+    KiCad (cfg tool kicad): the part number properties of the library's .kicad_sym files, which travel with the
+    project (the workspace may not, and a deleted library has nothing in it)."""
     have = set()
+    if cfg.get("tool") == "kicad":
+        for f in sorted(Path(cfg["library"]).glob("*.kicad_sym")):
+            try:
+                text = f.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            have |= {v.replace('\\"', '"').strip().upper() for k, v in re.findall(r'\(property "([^"]*)" "((?:[^"\\]|\\.)*)"', text)
+                     if v.strip() and re.search(r"\bmpn\b|part ?(number|no\b|#)|\bmfr\.? ?pn\b", k, re.I)}
+        return have
     for f in sorted(Path(cfg["library"]).glob("*.csv")):
         try:
             for row in csv.DictReader(f.open(encoding="utf-8", newline="")):
@@ -1175,7 +1357,7 @@ def _bom_of(ws, project):
     return str(p.resolve()), None
 
 
-def report_html(title, rows, counts, md_link):
+def report_html(title, rows, counts, md_link, tool="altium"):
     e = html.escape
     head = ["#", "Designators", "Qty", "MPN", "Manufacturer", "In your library", "Lookup", "Notes"]
     body = "".join("<tr>" + "".join(f"<td>{e(str(c))}</td>" for c in (
@@ -1188,7 +1370,7 @@ td,th{{border:1px solid #ccc;padding:3px 8px;text-align:left;vertical-align:top}
 <p>{counts['lines']} BOM lines: <b>{counts['in_library']}</b> in your library, <span class="n">{counts['missing']}</span>
 not yet, {counts['dnp']} not fitted. Full lookup report: <a href="{e(md_link)}">{e(Path(md_link).name)}</a>.</p>
 <table><tr>{''.join(f'<th>{h}</th>' for h in head)}</tr>
-{body}</table><p><small>written by ecadlib {__version__} (ecadlib altium-menu check-bom)</small></p></body></html>
+{body}</table><p><small>written by ecadlib {__version__} (ecadlib {tool}-menu check-bom)</small></p></body></html>
 """
 
 
@@ -1216,9 +1398,10 @@ def check_bom(cfg, project, opener=None, progress=None):
                   else "footprint" if st.startswith("needs_footprint") else "unverified" if st.startswith("unverified")
                   else "source"] += 1
     stem = Path(tri["reports"][0]).with_suffix("").name
-    out = ws.root / "reports" / f"{stem}_altium.html"
+    tool = "kicad" if cfg.get("tool") == "kicad" else "altium"
+    out = ws.root / "reports" / f"{stem}_{tool}.html"
     name = pb["project"] if pb else Path(project).name
-    out.write_text(report_html(f"BOM check: {name}", rows, counts, (ws.root / tri["reports"][0]).as_uri()),
+    out.write_text(report_html(f"BOM check: {name}", rows, counts, (ws.root / tri["reports"][0]).as_uri(), tool),
                    encoding="utf-8")
     opened = _open(out, opener)
     res = {"status": "ok", "message": f"{name}: {counts['lines']} BOM lines, {counts['in_library']} in your library, "
@@ -1262,11 +1445,12 @@ def _fill_result(cfg, ws, bom, s, progress, ai_cost=None):
     msg = f"{s['parts']} parts: {s['ready']} ready" + (f" ({where})" if s["ready"] else "")
     msg += "".join(f", {n} {label}" for n, label in ((s["held"], "held"), (s["awaiting_approval"], "waiting for sign-off"),
                                                        (s["duplicates"], "duplicates")) if n)
-    res = {"status": "ok" if not pub.get("problems") else "error", "message": msg + ".",
+    problems = (pub.get("problems") or []) + [f"{n}: {w}" for n, w in (pub.get("held") or {}).items()]
+    res = {"status": "ok" if not problems else "error", "message": msg + ".",
            "install": ";".join(pub.get("install") or []), "build": pub.get("build") or "",
            "refresh": pub.get("target", ""), "ready": s["ready"], "held": s["held"], "review": str(ws._librarian_dir(ws._bom_path(bom)) / "review.md")}
-    if pub.get("problems"):
-        res["message"] += f" Not published: {pub['problems'][0]}"
+    if problems:
+        res["message"] += f" Not published: {problems[0]}"
         res["fix"] = pub.get("fix") or "run `ecadlib altium-pkg` / `ecadlib altium365 push` by hand to see more"
     elif s["held"] or s["awaiting_approval"]:
         res["fix"] = f"Open the review queue ({_queue_hint(cfg)}): it says why each part is held and what to pick."
@@ -1365,15 +1549,21 @@ def queue_anchor(ws):
 def open_queue(cfg, opener=None, probe=probe_ui, launcher=start_ui, wait_s=30.0, sleep=time.sleep):
     """Open the web UI at the review queue, starting `ecadlib ui` for the workspace when nothing answers."""
     port, ws = cfg["port"], Path(cfg["workspace"])
+    kicad = cfg.get("tool") == "kicad"
+    for p in range(port, port + 20) if kicad else ():   # KiCad reads no settings file: one UI per project, on the first
+        k, served = probe(p)                            # port that serves this workspace or is free
+        if k is None or (k == "ecadlib" and served and Path(served).resolve() == ws.resolve()):
+            port = p
+            break
     url = f"http://127.0.0.1:{port}/{queue_anchor(ws)}"
     kind, served = probe(port)
     started = False
     if kind == "other":
         return {"status": "error", "message": f"port {port} is used by another program",
-                "fix": f"set port= to a free port in {INI}"}
+                "fix": "close the program on that port" if kicad else f"set port= to a free port in {INI}"}
     if kind == "ecadlib" and served and Path(served).resolve() != ws.resolve():
         return {"status": "error", "message": f"port {port} already serves another ecadlib workspace ({served})",
-                "fix": f"stop that `ecadlib ui`, or set port= to another port in {INI}"}
+                "fix": "stop that `ecadlib ui`" + ("" if kicad else f", or set port= to another port in {INI}")}
     if kind is None:
         ws.mkdir(parents=True, exist_ok=True)
         launcher(ws, port)
@@ -1401,6 +1591,8 @@ def run_action(cfg, action, req, opener=None, progress=None):
         return fill(cfg, req.get("project", ""), progress=progress)
     if action == "ai-read":                    # only after the dialog showed the cost and the person said yes
         return ai_read(cfg, req, progress=progress)
+    if action == "release":                    # only after the dialog showed the hold reasons and was given a reason
+        return release_part(cfg, req, progress=progress)
     if action == "open":                       # a report or review the dialog offers: only files in the workspace
         return open_file(cfg, req.get("path", ""), opener=opener)
     if action == "queue":
@@ -1414,7 +1606,7 @@ def _error(e):
     if isinstance(e, FileNotFoundError) or "no such file" in msg:
         fix = "save the project, then try again"
     elif "NEXAR_TOKEN" in msg:
-        fix = "store your Nexar token on the setup page (Start menu > ecadlib setup) or with `ecadlib keys set NEXAR_TOKEN`, then try again"
+        fix = "sign in to Altium 365 once with `ecadlib nexar signin` (ecadlib then stays signed in), or store a Nexar token (NEXAR_TOKEN) on the setup page, then try again"
     elif "ecadlib.toml" in msg or "rules" in msg.lower():
         fix = "`ecadlib rules check` shows the problem in ecadlib.toml"
     return {"status": "error", "message": msg if isinstance(e, (ValueError, OSError)) else f"{type(e).__name__}: {msg}",
@@ -1434,6 +1626,92 @@ def run_job(job, opener=None):
     if job.parent.name.lower() == "jobs":                    # the script's jobs\<id>: never prune a folder chosen by hand
         prune_jobs(job.parent, keep=job)
     return res
+
+
+def running_altium():
+    """(X2.EXE path, main window handle) of the Altium running now, ('', 0) when none. The running one, so a second,
+    older install is never started; the oldest X2 process with a window, so a launcher stuck on Altium's "busy" box
+    is not taken for it."""
+    if os.name != "nt":
+        return "", 0
+    ps = ("$p = Get-Process X2 -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | "
+          "Sort-Object StartTime | Select-Object -First 1; if ($p) { $p.Path + '|' + $p.MainWindowHandle }")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
+                             text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    exe, _, hwnd = out.rpartition("|")
+    if exe:
+        return exe, int(hwnd) if hwnd.isdigit() else 0
+    if not altium_running():
+        return "", 0
+    from . import detect
+    found = detect.altium()
+    return (found[0]["exe"] if found else ""), 0
+
+
+def altium_busy(hwnd):
+    """True while Altium's main window is disabled: a modal dialog is open (an ecadlib dialog, any script form, a
+    Preferences box). A RunScript call then does not wait: Altium shows "There is another instance of running, but
+    it is busy" and leaves an X2.EXE hanging on it (AD 26.10), so wake waits for the window instead."""
+    if not hwnd:
+        return False
+    try:
+        import ctypes
+        return not ctypes.windll.user32.IsWindowEnabled(hwnd)
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+def wake_command(x2, here):
+    """The command line that makes the running Altium run FinishBackgroundJob from the script project in `here`, or
+    None when the paths cannot go on it. A space or non-ASCII character in a script path makes Altium start a second,
+    unlicensed copy (AD 26.10), so the folder goes as its 8.3 short name; the file names stay long, because Altium
+    finds neither ECADLI~1.PRJ nor a unit called ECADLI~1.PAS. A folder that still has one is not used."""
+    folder = str(_short_path(Path(here)))
+    prj, unit = (str(Path(folder) / n) for n in (PROJECT, UNIT))
+    if any(" " in p or not p.isascii() or "|" in p or ")" in p for p in (prj, unit)):
+        return None
+    return [str(x2), f"-RScriptingSystem:RunScript(ProjectName={prj}|ProcName={unit}>FinishBackgroundJob)"]
+
+
+def wake(job, x2=None, busy=altium_busy, start=subprocess.Popen, sleep=time.sleep, calls=2, wait_s=60,
+         patience_s=3600, every_s=5):
+    """ecadlib_run.cmd runs this after a job the dialog left running (Keep working; background.txt): it asks the
+    running Altium to put the result in (FinishBackgroundJob writes finished.txt). While a dialog is open in Altium
+    it waits (every every_s, up to patience_s) instead of calling, and it calls at most `calls` times. When Altium is
+    closed, or never takes it, the next ecadlib menu entry offers the job (waiting.txt). Returns {"status", "message"}."""
+    job = Path(job)
+    here = job.parent.parent
+    done = {"status": "ok", "message": "Altium put the result in"}
+    if not (job / "background.txt").is_file():
+        return {"status": "skipped", "message": "the dialog waited for this job itself"}
+    made, waited = 0, 0
+    while made < calls:
+        if (job / "finished.txt").is_file():
+            return done
+        exe, hwnd = (x2, 0) if x2 is not None else running_altium()
+        if not exe:
+            return {"status": "waiting", "message": "Altium is not running: the next ecadlib menu entry offers this job"}
+        cmd = wake_command(exe, here)
+        if cmd is None:
+            return {"status": "waiting", "message": f"{here} has a space or non-ASCII character Altium cannot take on a "
+                                                    "command line: the next ecadlib menu entry offers this job"}
+        if busy(hwnd):
+            if waited >= patience_s:
+                return {"status": "waiting", "message": "a dialog stayed open in Altium: the next ecadlib menu entry "
+                                                        "offers this job"}
+            sleep(every_s)
+            waited += every_s
+            continue
+        start(cmd)
+        made += 1
+        for _ in range(int(wait_s)):
+            sleep(1)
+            if (job / "finished.txt").is_file():
+                return done
+    return {"status": "waiting", "message": "Altium did not take the job: the next ecadlib menu entry offers it"}
 
 
 def prune_jobs(jobs_dir, days=14, keep=None, now=None):
@@ -1515,6 +1793,8 @@ def main(argv=None):
         s.add_argument("--json", action="store_true", help="print the result as JSON")
     r = sub.add_parser("run-job", help="what the Altium script runs: JOB/request.ini -> JOB/result.ini")
     r.add_argument("job")
+    w = sub.add_parser("wake", help="after a job the dialog left running: ask Altium to put it in (FinishBackgroundJob)")
+    w.add_argument("job")
     m = sub.add_parser("install-menu", help="put the ecadlib menu into Altium's top menu bar (Altium closed)")
     m.add_argument("--out", default="out/altium_menu", help="the folder `build` wrote (default %(default)s)")
     m.add_argument("--altium-folder", action="append", help="an Altium settings folder (default: every "
@@ -1554,9 +1834,15 @@ def main(argv=None):
                   f"then Customize to put {', '.join(rep['menu_entries'])} on a menu (see {README})")
             for p, u, d in BUILD_PROCS:
                 print(f"  also in the project: {p} ({u}): {d}")
-            if not rep["menu_file"]:
+            if rep.get("menu_file_note"):
+                print(f"  {rep['menu_file_note']}")
+            elif not rep["menu_file"]:
                 print(f"  no {PREFS}: give --win-dir (the folder on the Altium PC) for the ready-made menu file")
         return 1 if rep["problems"] else 0
+    if a.cmd == "wake":
+        res = wake(a.job)
+        print(json.dumps(res, indent=2))
+        return 0
     if a.cmd == "run-job":
         res = run_job(a.job)
         print(json.dumps(res, indent=2))

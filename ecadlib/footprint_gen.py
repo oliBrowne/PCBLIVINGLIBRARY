@@ -267,17 +267,32 @@ def _clip(seg, pads, c, min_len=SILK_MIN_LEN):
     return [((round(s, 4), y1), (round(e, 4), y1)) if horiz else ((x1, round(s, 4)), (x1, round(e, 4))) for s, e in keep]
 
 
+def _left_right(spec, pads):
+    """For each pad (in builder order), True when it sits in a left/right row (its length runs along X).
+    Taken from how the builders lay pads out, not guessed from coordinates: the end pads of a tall dual-row part
+    (DFN 2 x 4) or of a rectangular QFN have |y| > |x| but are still left/right pads."""
+    t = spec["package_type"]
+    if t not in ("qfn", "qfp"):
+        return [True] * len(pads)                             # chips, gull-wings (and their tab): all along X
+    npins = spec["pin_count"]
+    nlr = spec.get("pins_left_right", npins // 4)
+    ntb = spec.get("pins_top_bottom", (npins - 2 * nlr) // 2)
+    side = ([True] * nlr + [False] * ntb) * 2                 # _qfn(): left, bottom, right, top
+    return [side[i] if i < len(side) else True for i in range(len(pads))]
+
+
 def _apply_land(spec, pads):
     """Replace the IPC-computed signal pads with the datasheet's recommended land (the tab keeps its IPC size)."""
     land = spec["land"]
     ll, lw, lc = land["pad_length"], land["pad_width"], land["pad_center"]
     lcy = land.get("pad_center_y", lc)
     n_sig = len(pads) - (1 if spec.get("tab") else 0)
+    lr = _left_right(spec, pads)
     out = []
     for i, (num, x, y, w, h) in enumerate(pads):
         if i >= n_sig:
             out.append((num, x, y, w, h))
-        elif abs(x) >= abs(y) or w >= h:                      # left/right row: length runs along X
+        elif lr[i]:                                           # left/right row: length runs along X
             out.append((num, math.copysign(lc, x), y, ll, lw))
         else:                                                 # top/bottom row (QFN/QFP)
             out.append((num, x, math.copysign(lcy, y), lw, ll))
@@ -301,6 +316,15 @@ def sanity(spec):
     if errs:
         return errs
     L, W, T = nom("body_length"), nom("body_width"), nom("terminal_length")
+    if t in ("chip", "molded") and L is not None and L < 0.2:     # the smallest chip (008004) is 0.25 mm long
+        errs.append(f"body_length {L} mm is smaller than any chip part: is the drawing in inches? The spec is in millimetres")
+    pos = spec.get("pin_positions") or []
+    if t == "gullwing" and pos and spec.get("body_length") is not None:
+        lim = dim(spec["body_length"])[2] / 2
+        far = [p for p in pos if abs(p["offset"]) > lim + 1e-6]
+        if far:
+            errs.append(f"pin {far[0]['number']} offset {far[0]['offset']} is outside the {round(L, 3)} mm body length "
+                        f"(offsets run from -{round(lim, 3)} to +{round(lim, 3)}): check the drawing")
     if t in ("chip", "molded") and T and not spec.get("inner_span") and 2 * dim(spec["terminal_length"])[0] >= dim(spec["body_length"])[2]:
         errs.append(f"terminal_length {T} is half the body length or more: it should be one end-cap/foot, not the whole part")
     if t in ("gullwing", "qfp"):
@@ -375,10 +399,19 @@ def build(spec, density=None):
     else:                                                     # qfn, qfp
         pads, (bx, by), r = _qfn(spec, fil)
     rep.update(r)
-    want = spec.get("pin_count")
-    if want and len(pads) != want:
-        raise ValueError(f"pin_count is {want} but the layout gives {len(pads)} pads "
-                         "(count every pad except an exposed pad; a tab counts)")
+    want, numbered = spec.get("pin_count"), len({p[0] for p in pads})
+    # package_schema.json: signal pins, so a tab that is pin 2 again (SOT-223-3_TabPin2) is not counted twice; a spec
+    # file written when this said "a tab counts" (every pad) still builds. Only with pin_positions: in the standard
+    # dual row such a tab lands on the other row's leads
+    if want and want == numbered != len(pads) and not spec.get("pin_positions"):
+        raise ValueError(f"the tab repeats a lead number, so the {want} pad numbers are on {len(pads)} pads: a tab "
+                         "that repeats a lead number needs pin_positions (in the standard dual row it lands on the "
+                         "other row's leads)")
+    if want and want != len(pads) and not (want == numbered and spec.get("pin_positions")):
+        raise ValueError(f"pin_count is {want} but the layout gives {numbered} pad numbers"
+                         f"{f' on {len(pads)} pads' if len(pads) != numbered else ''} (count each pad number once, "
+                         "without an exposed pad; a tab with a number of its own counts, a tab that repeats a lead "
+                         "number needs pin_positions)")
     short = [p for p in pads if min(p[3], p[4]) < 0.1]
     if short:
         why = "the exposed pad leaves no room for the pads" if spec.get("exposed_pad") else "the lead dimensions leave no room"
@@ -399,9 +432,9 @@ def build(spec, density=None):
             ew, eh = land["ep_across"], land["ep_along"]      # 3 x 3 exposed pad), as KiCad draws it
             rep["ep_land"] = "datasheet"
         epnum = str(ep.get("number") or (spec.get("pin_count") or len(pads)) + 1)   # pin_positions specs may omit pin_count
-        lr = (lambda p: abs(p[1]) > abs(p[2])) if t in ("qfn", "qfp") else (lambda p: True)   # gullwing: all pads are L/R
-        gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p in pads if lr(p)]                 # left/right rows vs EP
-        gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p in pads if not lr(p)]            # qfn top/bottom rows vs EP
+        lr = _left_right(spec, pads)                                                  # gullwing: all pads are L/R
+        gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p, s in zip(pads, lr) if s]         # left/right rows vs EP
+        gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p, s in zip(pads, lr) if not s]    # qfn top/bottom rows vs EP
         if gaps and min(gaps) < MIN_PAD_GAP - 1e-6:
             rep["warning"] = f"EP to pad gap {min(gaps):.3f} < {MIN_PAD_GAP}"
         ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu", "F.Mask")))
@@ -494,6 +527,14 @@ def build(spec, density=None):
     return text_out, rep
 
 
+def shorts(rep):
+    """build()'s copper errors (overlapping or touching pads: a short on the board) as one sentence, or None.
+    `footprint gen` refuses to write such a footprint; the librarian's release check holds it."""
+    short = [c["message"] for c in rep.get("checks") or [] if c["level"] == "error" and c["rule"] == "copper"]
+    return ("the pads would short: " + "; ".join(short) + " (check pitch, pin_count and terminal_length against the "
+            "drawing)") if short else None
+
+
 def altium_footprint(spec, density=None):
     """Altium footprint dict (altium_lib's writer model) for any spec, from the same .kicad_mod geometry:
     altium_lib.footprint_from_spec handles SMD, through-hole (round, square, slots), NPTH holes, polygon pads (anchor
@@ -524,7 +565,7 @@ def validate(spec):
     The validator is built once: jsonschema.validate re-checks the whole schema on every call (~80 ms)."""
     import jsonschema                                   # a runtime dependency: never skip validation silently
     if not _VALIDATOR:
-        schema = json.loads((Path(__file__).with_name("package_schema.json")).read_text())
+        schema = json.loads((Path(__file__).with_name("package_schema.json")).read_text(encoding="utf-8"))
         cls = jsonschema.validators.validator_for(schema)
         cls.check_schema(schema)
         _VALIDATOR.append(cls(schema))
@@ -535,17 +576,33 @@ def validate(spec):
 
 # ---------------------------------------------------------------- comparison vs a reference footprint
 def compare(mine_path, ref_text):
+    """Pad rows for every pad number on either side: {pad, mine, ref, d_pos, d_size} for pads on both, {pad, only:
+    "mine"|"ref", at} for pads on one side. Pads sharing a number (an EP and its vias) pair up in position order."""
     from . import sexpr
-    a, b = sexpr.parse(Path(mine_path).read_text()), sexpr.parse(ref_text)
-    pa = {p["number"]: p for p in sexpr.pads(a) if p["number"]}
-    pb = {p["number"]: p for p in sexpr.pads(b) if p["number"]}
+    a, b = sexpr.parse(Path(mine_path).read_text(encoding="utf-8")), sexpr.parse(ref_text)
+    pa, pb = {}, {}
+    for t, d in ((a, pa), (b, pb)):
+        for p in sexpr.pads(t):
+            if p["number"]:
+                d.setdefault(p["number"], []).append(p)
     rows = []
-    for k in sorted(set(pa) & set(pb), key=lambda s: int(s) if s.isdigit() else 999):
-        x, y = pa[k], pb[k]
-        rows.append({"pad": k, "mine": (x["x"], x["y"], x["w"], x["h"]), "ref": (y["x"], y["y"], y["w"], y["h"]),
-                     "d_pos": (round(x["x"] - y["x"], 4), round(x["y"] - y["y"], 4)),
-                     "d_size": (round(x["w"] - y["w"], 4), round(x["h"] - y["h"], 4))})
+    for k in sorted(set(pa) | set(pb), key=lambda s: (not s.isdigit(), int(s) if s.isdigit() else 0, len(s), s)):
+        xs, ys = (sorted(d.get(k, []), key=lambda p: (p["x"], p["y"])) for d in (pa, pb))
+        for i in range(max(len(xs), len(ys))):
+            tag = k if max(len(xs), len(ys)) == 1 else f"{k}#{i + 1}"
+            if i >= len(xs) or i >= len(ys):
+                p, side = (xs[i], "mine") if i < len(xs) else (ys[i], "ref")
+                rows.append({"pad": tag, "only": side, "at": (p["x"], p["y"], p["w"], p["h"])})
+                continue
+            x, y = xs[i], ys[i]
+            rows.append({"pad": tag, "mine": (x["x"], x["y"], x["w"], x["h"]), "ref": (y["x"], y["y"], y["w"], y["h"]),
+                         "d_pos": (round(x["x"] - y["x"], 4), round(x["y"] - y["y"], 4)),
+                         "d_size": (round(x["w"] - y["w"], 4), round(x["h"] - y["h"], 4))})
     return rows, sexpr.courtyard_bbox(a), sexpr.courtyard_bbox(b)
+
+
+def differs(r):
+    return "only" in r or any(r["d_pos"]) or any(r["d_size"])
 
 
 def main(argv=None):
@@ -562,13 +619,29 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     if a.cmd == "gen":
+        from jsonschema import ValidationError
         from . import rules as RU
         outdir = Path(a.out); outdir.mkdir(parents=True, exist_ok=True)
         rules = RU.load(a.rules, start=outdir)
+        bad = 0
+        import jsonschema
         for sp in a.specs:
-            spec = json.loads(Path(sp).read_text())
-            validate(spec)
-            txt, rep = build(spec, RU.density_for(spec, rules, a.density))
+            spec = None
+            try:
+                spec = json.loads(Path(sp).read_text(encoding="utf-8-sig"))     # UTF-8 (Notepad's BOM too), not the locale's
+                validate(spec)
+                txt, rep = build(spec, RU.density_for(spec, rules, a.density))
+            except (ValueError, OSError, ValidationError) as e:   # a spec that doesn't add up: say why, write nothing
+                if isinstance(e, ValidationError):                # (and go on with the next spec)
+                    where = "/".join(map(str, e.absolute_path))
+                    e = f"the package spec isn't valid{' at ' + where if where else ''}: {e.message}"
+                print(f"{spec.get('name', sp) if isinstance(spec, dict) else sp}: not written: {e}", file=sys.stderr)
+                bad += 1
+                continue
+            if shorts(rep):
+                print(f"{spec['name']}: not written: {shorts(rep)}", file=sys.stderr)
+                bad += 1
+                continue
             from . import sexpr
             sexpr.parse(txt)                                          # sanity: balanced S-expression
             (outdir / f"{spec['name']}.kicad_mod").write_text(txt, encoding="utf-8", newline="\n")
@@ -578,7 +651,11 @@ def main(argv=None):
                   f"pad1 {p1['w']:.3f}x{p1['h']:.3f} @({p1['x']:.3f},{p1['y']:.3f}) "
                   f"crtyd {rep['courtyard'][0]:.2f}x{rep['courtyard'][1]:.2f}"
                   + (f"  WARN {rep['warning']}" if "warning" in rep else "")
-                  + "".join(f"\n    {c['level']}: {c['message']}" for c in rep.get("table_checks", []) if c["level"] != "info"))
+                  + "".join(f"\n    {c['level']}: {c['message']}" for c in rep.get("table_checks", []) if c["level"] != "info")
+                  + "".join(f"\n    error: {c['message']}" for c in rep.get("checks", []) if c["level"] == "error"))
+            bad += any(c["level"] == "error" for c in rep.get("checks", []))
+        if bad:
+            sys.exit(f"{bad} footprint spec(s) failed: fix them before using the footprints")
     else:
         if a.ref.startswith("http"):
             from .httpcache import CachedHTTP
@@ -587,13 +664,20 @@ def main(argv=None):
                 sys.exit(f"fetch failed: {r.error or r.status}")
             ref = r.text
         else:
-            ref = Path(a.ref).read_text()
+            ref = Path(a.ref).read_text(encoding="utf-8")
         rows, ca, cb = compare(a.mine, ref)
         print(f"{'pad':>4} {'mine (x,y,w,h)':>30} {'kicad (x,y,w,h)':>30}  d_pos       d_size")
-        for r in rows[:4] + (rows[-1:] if len(rows) > 4 else []):
-            print(f"{r['pad']:>4} {str(r['mine']):>30} {str(r['ref']):>30}  {r['d_pos']} {r['d_size']}")
+        for r in rows:
+            if "only" in r:
+                print(f"{r['pad']:>4} only in {'mine' if r['only'] == 'mine' else 'the reference'} {r['at']}")
+            else:
+                print(f"{r['pad']:>4} {str(r['mine']):>30} {str(r['ref']):>30}  {r['d_pos']} {r['d_size']}")
         if ca and cb:
             print(f"courtyard mine {ca[2]-ca[0]:.2f}x{ca[3]-ca[1]:.2f}  kicad {cb[2]-cb[0]:.2f}x{cb[3]-cb[1]:.2f}")
+        bad = [r["pad"] for r in rows if differs(r)]
+        if bad:
+            sys.exit(f"{len(bad)} pad(s) differ: {', '.join(bad[:12])}{' ...' if len(bad) > 12 else ''}")
+        print(f"OK: all {len(rows)} pads match")
 
 
 if __name__ == "__main__":

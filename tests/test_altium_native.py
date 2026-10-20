@@ -170,7 +170,7 @@ def test_package_lets_altium_rebuild_before_installing():
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
         _lib(d / "src")
-        rep = PKG.build(d / "src", d / "pkg", "mylib", log=lambda *a: None)
+        rep = PKG.build(d / "src", d / "pkg", "mylib", log=lambda *a: None, unchecked=True)   # no library: unchecked
         assert rep["native_build"] and not rep["problems"], rep
         pkg = d / "pkg"
         assert (pkg / "PcbLib" / "SOIC8.PcbLib.ecadbuild").is_file() and (pkg / AN.BUILD).is_file()
@@ -182,7 +182,7 @@ def test_package_lets_altium_rebuild_before_installing():
             body = pas[pas.index(f"Procedure {proc};"):]
             assert body.index("NativeBuild;") < body.index("End;\r\n"), proc
         assert pas.index("Procedure Finish(") < pas.index("Procedure RebuildWithAltium;")   # defined before use
-        rep = PKG.build(d / "src", d / "plain", "mylib", log=lambda *a: None, native=False)
+        rep = PKG.build(d / "src", d / "plain", "mylib", log=lambda *a: None, native=False, unchecked=True)
         assert not rep["native_build"] and "ecadlib_build.pas" not in (d / "plain" / "mylib_Install.PrjScr").read_text()
         assert "BuildLibraries(" not in (d / "plain" / "mylib_Install.pas").read_text()
 

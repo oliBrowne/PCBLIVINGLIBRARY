@@ -277,7 +277,7 @@ def test_datasheet_urls_and_pdf_store():
         j = D.Reader(d, d, key=KEY, http=http, log=None).job("TESTPART", [("http://plain/x.pdf", "KiCad")])
         assert j["body"]["messages"][0]["content"][0]["source"]["type"] == "base64" and j["url"] == "https://plain/x.pdf", j["url"]
         # Reader.job: first link is HTML -> skipped; blocked link -> URL source; nothing usable -> error
-        rd = D.Reader(d, d, key=KEY, http=http, log=None)
+        rd = D.Reader(d, d, key=KEY, http=http, log=None, sleep=lambda s: None)   # 429 is tried again: no real wait
         j = rd.job("TESTPART", [("https://a/view", "BOM"), ("https://a/ds.pdf", "LCSC")], "RGT")
         assert j["where"] == "LCSC" and j["body"]["messages"][0]["content"][0]["source"]["type"] == "base64"
         assert j["prov"]["attempts"][0]["error"].endswith("bytes)") and j["body"]["fallbacks"] == "default"
@@ -388,7 +388,9 @@ def test_result_cache_makes_reruns_free():
         j = rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT")
         assert rd.cached(j) is None
         res = rd.read_now(j)
-        assert res["needs_review"] == [] and len(api.of("/v1/messages")) == 1
+        assert len(api.of("/v1/messages")) == 1                    # DS-13: the only item is the table entry found by
+        assert [r for r in res["needs_review"] if not r.startswith("cross-check: self-checked only")] == [], \
+            res["needs_review"]                                     # the read's own package name (not independent)
         assert (Path(d) / "datasheet" / "TESTPART.review.md").exists() and (Path(d) / "datasheet" / "api_log.jsonl").exists()
         assert rd.cached(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))["spec"]["name"] == res["spec"]["name"]
         assert len(api.of("/v1/messages")) == 1
@@ -558,11 +560,27 @@ def test_workspace_and_mcp_tools():
                 ws.datasheet_batch(bom)
                 raise AssertionError("no key")
             except ValueError as e:
+                assert "--offline: datasheet not read" in str(e), e           # --offline sends nothing to the model
+        ws = Workspace(d, [], providers=["digikey"])                           # the paid read: not --offline
+        env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            try:
+                ws.datasheet_batch(bom)
+                raise AssertionError("no key")
+            except ValueError as e:
                 assert "ANTHROPIC_API_KEY is not set" in str(e)
         api = FakeAPI(polls=1)                                                  # first status check: in_progress
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": KEY}), patched(api):
+            try:                                                                # a paid call: quoted and approved first
+                M.call_tool(ws, "datasheet_batch", {"bom": bom, "over_limit_ok": True})
+                raise AssertionError("no approval")
+            except ValueError as e:
+                assert "approve the cost first" in str(e) and not api.of("/v1/messages/batches"), e
+            q = M.call_tool(ws, "datasheet_estimate", {"bom": bom})["ai"]
+            assert q["parts"] == 2 and q["approve_usd"] > 0, q
             lines = [{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                      "params": {"name": "datasheet_batch", "arguments": {"bom": bom}}}]
+                      "params": {"name": "datasheet_batch", "arguments": {"bom": bom, "approved_usd": q["approve_usd"],
+                                                                         "over_limit_ok": True}}}]
             buf = io.BytesIO()
             M.serve(ws, io.BytesIO("\n".join(map(json.dumps, lines)).encode() + b"\n"), buf)
         resp = json.loads(buf.getvalue().decode().splitlines()[0])
@@ -570,7 +588,7 @@ def test_workspace_and_mcp_tools():
         assert not resp["result"]["isError"], body
         assert body.get("batches") and body["batches"][0]["id"] == "msgbatch_01Test1" and body["pending"] == 1, {k: body[k] for k in ("batches", "pending", "log")}
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": KEY}), patched(api):
-            r = ws.datasheet_batch(bom, wait=True)
+            r = ws.datasheet_batch(bom, wait=True, approved_usd=q["approve_usd"], over_limit_ok=True)
         assert r["pending"] == 0 and len(api.of("/v1/messages/batches")) == 1
         row = next(x for x in r["review"] if x["part"] == "DSPART1")
         assert row["footprint_from"].startswith("datasheet:") and "verify" in row["why"], row
@@ -930,6 +948,31 @@ def test_cap_counts_a_collected_batch_at_its_real_cost():
         assert one * 2 > one * 1.8 >= real + one
         rd.flush()                                    # fits: a worst-case count would have refused it
         assert len(api.of("/v1/messages/batches")) == 2
+
+
+def test_a_request_refused_with_an_error_gives_back_its_hold():
+    """Issue #42's Sonnet run: requests the API refused (it could not fetch the datasheet link) were never billed,
+    but their worst case stayed held, so the cap refused 34 later parts at $6.21 of real spend."""
+    err = {"type": "error", "error": {"type": "invalid_request_error", "message": "Unable to download the file"}}
+    api = FakeAPI(script=[(400, err)], tokens=20000)
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        http = PdfHTTP({"https://a/ds.pdf": PDF})
+        rd = D.Reader(d, d, key=KEY, http=http, log=None, rules={"datasheet": {"max_cost_usd": 50.0}})
+        try:
+            rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+            raise AssertionError("400")
+        except D.APIError:
+            pass
+        assert rd.committed_usd == 0 and not rd._holds, (rd.committed_usd, rd._holds)
+        rd.read_now(rd.job("OTHERPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+        assert abs(rd.committed_usd - DR.usage_usd("claude-opus-5-5", TD.message({})["usage"])) < 1e-6
+    api = FakeAPI(answer=lambda cid: "expired", polls=0, tokens=20000)
+    with tempfile.TemporaryDirectory() as d, patched(api):
+        http = PdfHTTP({"https://a/ds.pdf": PDF})
+        rd = D.Reader(d, d, key=KEY, http=http, batch=True, log=None, rules={"datasheet": {"max_cost_usd": 50.0}})
+        rd.submit(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+        rd.flush()                                    # expired, errored or cancelled in a batch: not billed
+        assert rd.committed_usd == 0 and not rd._holds, (rd.committed_usd, rd._holds)
 
 
 def test_other_json_objects_without_their_optional_fields_are_read():

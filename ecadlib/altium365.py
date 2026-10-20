@@ -16,6 +16,8 @@ Flow per part (mirrors NexarDeveloper/nexar-release-component-demo-wpf, schema a
 Release needs real Altium binaries: one symbol per .SchLib, one footprint per .PcbLib, under
 --models/SchLib/<Library Ref>.SchLib and --models/PcbLib/<Footprint Ref>.PcbLib. Parts without
 them are planned as `needs_altium_models` (altium_lib writes ours; kicad_import converts KiCad library parts).
+A plan's `ready` only says the files are there: push runs the release check (ecadlib.release_check) on each part
+before it uploads anything, and a part that fails it is skipped as held (`ecadlib release-check PLAN` shows why).
 
 Auth: NEXAR_TOKEN = a user access token with scopes openid, user.access, design.domain
 (the token generated in the Nexar portal has them). Supply-only client-credential tokens
@@ -27,6 +29,7 @@ import pandas as pd
 
 from .altium_export import RESERVED, to_rows
 from .altium_lib import file_stem
+from .altium_dblib_sync import readback_problems     # the read-back dblib-sync does, before any file goes up
 from .bom_triage import read_bom
 from . import userconfig as UC
 
@@ -104,13 +107,39 @@ def token_hint(token, now=None):
         exp = None
     if isinstance(exp, (int, float)) and exp <= (now if now is not None else time.time()):
         when = datetime.datetime.fromtimestamp(exp, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        return (f" (the token expired at {when}: make a new one on portal.nexar.com and store it with "
-                "`ecadlib keys set NEXAR_TOKEN`)")
+        return (f" (the token expired at {when}: run `ecadlib nexar signin` once to stay signed in, or make a new "
+                "one on portal.nexar.com and store it with `ecadlib keys set NEXAR_TOKEN`)")
     return " (token rejected: check it has design.domain, user.access, openid)"
 
 
 class NexarError(Exception):
     pass
+
+
+class NexarUnreachable(ValueError):
+    """Nexar refused the token or could not be reached: one plain line with what to do (no traceback in the UI)."""
+
+
+def _http(token, send):
+    """send() a Nexar request; refused / unreachable -> NexarUnreachable."""
+    import requests
+    from urllib.parse import urlsplit
+    try:
+        r = send()
+        r.raise_for_status()
+        return r
+    except requests.HTTPError as e:
+        code = getattr(e.response, "status_code", 0)
+        if code in (401, 403):
+            hint = token_hint(token)
+            raise NexarUnreachable(f"Altium 365 (Nexar) refused the token ({code}){hint}" + (
+                "" if "keys set" in hint else "; save a new one on the setup page or with `ecadlib keys set NEXAR_TOKEN`")
+            ) from None
+        raise NexarUnreachable(f"Altium 365 (Nexar) answered {code}: try again later") from None
+    except requests.RequestException as e:
+        host = urlsplit(getattr(e.request, "url", None) or API_URL).hostname
+        raise NexarUnreachable(f"could not reach Altium 365 (Nexar, {host}; {type(e).__name__}): check the internet "
+                               "connection or proxy, then try again") from None
 
 
 class Nexar:
@@ -119,9 +148,8 @@ class Nexar:
         self.token, self.s = token, session or requests.Session()
 
     def gql(self, query, variables=None):
-        r = self.s.post(API_URL, json={"query": query, "variables": variables or {}},
-                        headers={"Authorization": f"Bearer {self.token}"}, timeout=60)
-        r.raise_for_status()
+        r = _http(self.token, lambda: self.s.post(API_URL, json={"query": query, "variables": variables or {}},
+                                                  headers={"Authorization": f"Bearer {self.token}"}, timeout=60))
         body = r.json()
         if body.get("errors"):
             raise NexarError("; ".join(e.get("message", "?") for e in body["errors"]))
@@ -129,9 +157,8 @@ class Nexar:
 
     def upload(self, path):
         with open(path, "rb") as f:
-            r = self.s.post(FILES_URL.rstrip("/") + "/File/Upload", files={"file": (Path(path).name, f)},
-                            headers={"token": self.token}, timeout=120)
-        r.raise_for_status()
+            r = _http(self.token, lambda: self.s.post(FILES_URL.rstrip("/") + "/File/Upload", files={"file": (Path(path).name, f)},
+                                                      headers={"token": self.token}, timeout=120))
         return r.text.strip()              # opaque id; do not parse
 
     def workspaces(self):
@@ -245,16 +272,17 @@ def find_model(models, kind, ref):
     return next((str(f) for f in (Path(m) / kind / f"{file_stem(ref)}.{kind}" for m in models) if f.exists()), None)
 
 
-def plan(lines, triage=None, models=None, root=None, rules=None):
+def plan(lines, triage=None, models=None, root=None, rules=None, prior=None):
     """One release item per unique Part Number, reusing the DbLib row builder for parameters.
     models: a folder or a list of folders, each with SchLib/<Library Ref>.SchLib and PcbLib/<Footprint Ref>.PcbLib;
     symbol and footprint are looked up independently, first folder wins. rules (ecadlib.rules, loaded): part and
-    footprint names, folders and default parameters; None keeps ecadlib's own. root overrides the rules' folder root."""
+    footprint names, folders and default parameters; None keeps ecadlib's own. root overrides the rules' folder root.
+    prior: {name: MPN} of the plan so far (altium_export.prior_names): a released name stays with its part."""
     from . import rules as RU
     models = [models] if isinstance(models, (str, Path)) else list(models or [])
     items, names = [], set()
     defaults = RU.default_params(rules)
-    for cat, df in to_rows(lines, triage, rules).items():
+    for cat, df in to_rows(lines, triage, rules, prior=prior).items():
         for row in df.to_dict("records"):
             if row["Part Number"] in names:    # same MPN under two designator classes: one workspace item
                 continue
@@ -275,6 +303,11 @@ def plan(lines, triage=None, models=None, root=None, rules=None):
                 "footprint": {"ref": row["Footprint Ref"], "file": fp},
                 "status": "ready" if sym and fp else "needs_altium_models",
             })
+            if df.attrs.get("notes", {}).get(row["Part Number"]):    # BOM lines that disagree, renamed characters
+                items[-1]["bom_notes"] = list(df.attrs["notes"][row["Part Number"]])
+            why = df.attrs.get("unstorable", {}).get(row["Part Number"])
+            if why:                            # a name Altium can't store: this part is held, the others go on
+                items[-1]["name_problems"] = [why]
             kfp = df.attrs.get("kicad_fp", {}).get(row["Part Number"])
             if kfp:                            # renamed by the rules: keep the library name for lookups and checks
                 items[-1]["footprint"]["kicad"] = kfp
@@ -359,16 +392,43 @@ def mpn_of(item_or_params, rules=None):
     return (x.get("name") if isinstance(x, dict) and "name" in x else "") or ""
 
 
-def merged_params(existing, item):
+def merged_params(existing, item, rules=None):
     """Parameter list to send with replaceExisting=True, or None when the workspace already matches.
     Starts from the current revision's parameters so ones added by hand in Altium 365 survive; plan
-    values win; fields the plan marks cleared are dropped."""
+    values win; fields the plan marks cleared are dropped, and so is a field under ecadlib's own name once the plan
+    sends it under the rules' house name ([parameters.names]: an earlier push's "Manufacturer" when it sends "Mfr")."""
+    from .rules import param_name
     cur = {p["name"]: p["value"] for p in ((existing.get("details") or {}).get("parameters") or [])}
     want = dict(cur)
-    for k in item.get("cleared", []):
+    sent = {p["name"] for p in item["parameters"]}
+    for k in item.get("cleared", []) + [k for k in cur if param_name(k, rules) != k and param_name(k, rules) in sent]:
         want.pop(k, None)
     want.update({p["name"]: p["value"] for p in item["parameters"]})
     return None if want == cur else [{"name": k, "value": v} for k, v in want.items()]
+
+
+def _ecad_name(k, rules):
+    """ecadlib's name for workspace parameter k (inverse of the rules' [parameters] names)."""
+    inv = {v: c for c, v in (((rules or {}).get("parameters") or {}).get("names") or {}).items()}
+    return inv.get(k, k)
+
+
+def identity_change(existing, params, rules=None):
+    """A parameter update that would make a released workspace component another part: [change text] for each
+    identity field (MPN, manufacturer, the value as a number) the workspace has and `params` (the list a push would
+    send) changes. Filling one the component does not have yet is no change of part. Both sides carry the house
+    names of [parameters.names] ("MfrPN"): they are read back under ecadlib's names, which the fingerprint knows."""
+    from . import change_diff as CD, fingerprint as FP
+    cur = {_ecad_name(p["name"], rules): p["value"] for p in ((existing.get("details") or {}).get("parameters") or [])}
+    new = {_ecad_name(p["name"], rules): p["value"] for p in params}
+    a, b = FP.build("", params=cur), FP.build("", params=new)
+    return [c["text"] for c in CD.diff(a, b) if c["class"] == "identity" and str(c.get("old") or "").strip()]
+
+
+IDENTITY_REFUSED = ("not applied in place: a released workspace component keeps its MPN, manufacturer and value. "
+                    "A different part needs its own component (another name in the plan); a correction goes through "
+                    "change control (run the librarian on the BOM, then `ecadlib part approve`), which releases it as a "
+                    "new component revision")
 
 
 def change_mode(lg, it, target):
@@ -386,8 +446,10 @@ def change_mode(lg, it, target):
     halves = {"symbol"} if FP.digest(a.get("symbol")) != FP.digest(b.get("symbol")) else set()
     if FP.digest([a.get("footprint"), a.get("model")]) != FP.digest([b.get("footprint"), b.get("model")]):
         halves.add("footprint")
-    if old.get("eid") != head.get("eid") and not halves:
+    if FP.hashes(a)["eid"] != FP.hashes(b)["eid"] and not halves:   # recomputed: the two may be of different schemas
         halves = {"symbol", "footprint"}      # the pin-pad map changed: both go up
+    if not halves:                             # stored hashes of two schemas differed, the files did not
+        return "params", set(), head, pub
     return "revision", halves, head, pub
 
 
@@ -412,6 +474,9 @@ def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, 
         else:
             found.append(f"<id of {name}>" if dry_run else client.find_model(ws, kind, name, f"{models_root}/{sub}"))
     files = [] if found[0] else [it["symbol"]["file"]], [] if found[1] else [it["footprint"]["file"]]
+    bad = readback_problems({k: it[k] for k, g in zip(("symbol", "footprint"), files) if g})
+    if bad:                                    # the file to send holds another part's model: nothing goes up
+        return {"action": "error", "detail": "; ".join(bad)}
     ids = tuple([(Path(p).name, upload(p)) for p in group] for group in files)
     parent, _ = split_folder(it["folder"])
     pid = (f"<id of {parent}>" if dry_run else client.folder_id(ws, parent)) if parent else None
@@ -457,7 +522,11 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     rules: parameter names go to the workspace in the rules' house names ([parameters] names).
     folder: the library folder (the plan's): change control (#105). Its ledger says which revision each part last
     published to this workspace; a released change to the symbol / footprint / 3D model then goes up as a new
-    component revision (push_revision), a held change sends nothing new, and every push is recorded."""
+    component revision (push_revision), a held change sends nothing new, and every push is recorded.
+    Files go up only for parts that pass the release check run here, on the files as they are
+    (release_check.publish_problems): the plan's `ready` is not taken on trust. A parameter update of a part
+    already in the workspace sends no files and is not re-checked; a `held` part gets nothing."""
+    from . import release_check as RC, rules as RU
     from .approvals import push_block
     from .rules import house_item
     from .rules import DEFAULTS
@@ -465,6 +534,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     models_root = f"{(rules or DEFAULTS)['folders'].get('root') or 'Components'}/Models"
     # sign-off is checked on the item as it was approved (ecadlib's parameter names: the content hash covers them)
     blocks = [push_block(i, policy) for i in items]
+    checked = RU.resolve(rules, folder or ".")
+    rechecks = [RC.publish_problems(i, folder or ".", checked) for i in items]
     items = [house_item(i, rules) for i in items]
     defs = {} if dry_run else client.release_defs(ws)
     results, uploaded, released = [], {}, set()   # one upload per file per run; (kind, name) released this run
@@ -476,7 +547,9 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
         if p not in uploaded:
             uploaded[p] = "<fileId>" if dry_run else client.upload(p)
         return uploaded[p]
-    for it, block in zip(items, blocks):
+    def recheck(res, why):                     # the release check, run again here, holds it back
+        res.update(action="skip", detail="held: " + "; ".join(why), recheck=why)
+    for it, block, why in zip(items, blocks, rechecks):
         res = {"name": it["name"], "action": "", "detail": ""}
         if it.get("status") == "held":         # release_check held it back: no release, no parameter update
             res["action"], res["detail"] = "skip", "held: " + "; ".join(it.get("hold_reasons") or ["release check"])
@@ -494,18 +567,28 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
             existing = None if dry_run else client.find(ws, it["name"])
             mode, halves, head, _ = change_mode(lg, it, target) if lg else ("params", set(), None, None)
             if (existing or (dry_run and lg and lg.published(it["name"], target))) and mode == "revision":
-                res.update(push_revision(it, client, ws, defs, upload, models_root, existing, halves, head["revision"],
-                                         dry_run, note, transition))
+                if why:
+                    recheck(res, why)
+                else:
+                    res.update(push_revision(it, client, ws, defs, upload, models_root, existing, halves,
+                                             head["revision"], dry_run, note, transition))
             elif existing:
-                new = merged_params(existing, it)
+                new = merged_params(existing, it, rules)
                 res["a365_revision"] = _rev_id(existing)
+                ident = identity_change(existing, new, rules) if new is not None else []
                 if new is None:
                     res["action"] = "up_to_date"
+                elif ident:                    # change control (#105): in-place edits never make it another part
+                    res["action"], res["detail"] = "skip", f"identity change ({'; '.join(ident)}) {IDENTITY_REFUSED}"
                 else:                          # full replace: a merge, so parameters added in Altium 365 are kept
                     res["action"] = "update_parameters"
                     res["detail"] = client.update_params(existing["id"], new, note, replace=True)
             elif it["status"] != "ready":
                 res["action"], res["detail"] = "skip", "needs_altium_models (no .SchLib/.PcbLib)"
+            elif why:
+                recheck(res, why)
+            elif bad := readback_problems(it):     # a file named for this part holding another's model: not sent
+                res["action"], res["detail"] = "error", "; ".join(bad)
             else:
                 # a symbol / footprint shared by several parts (Capacitor, R_0603) is released with the first and
                 # linked by the others: releasing it again fails with AddALU_ItemsDuplicate item HRID
@@ -579,7 +662,7 @@ def main(argv=None):
     sub.add_parser("workspaces", help="list workspaces visible to NEXAR_TOKEN")
     u = sub.add_parser("push", help="release / update parts from a plan")
     u.add_argument("plan")
-    u.add_argument("--workspace", required=True, help="workspace URL from `workspaces`")
+    u.add_argument("--workspace", help="workspace URL from `workspaces` (default: [altium365] workspace in ecadlib.toml)")
     u.add_argument("--dry-run", action="store_true", help="no network; write the requests that would be sent")
     u.add_argument("-o", "--out", default="out/altium365/push_report.json")
     u.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan's folder or here)")
@@ -603,40 +686,62 @@ def main(argv=None):
                         i[k]["file"] = Path(i[k]["file"]).resolve().as_posix()
         out.write_text(json.dumps(items, indent=2))
         ready = sum(i["status"] == "ready" for i in items)
-        print(f"{len(items)} components planned, {ready} ready, {len(items) - ready} need Altium models -> {out}")
+        print(f"{len(items)} components planned, {ready} with models, {len(items) - ready} need Altium models -> {out}")
+        if ready:                              # `ready` = the files are there; push checks them before it releases
+            print(f"  push runs the release check first; to see it now: ecadlib release-check {out}")
         for i in items:
             print(f"  {i['status']:<20} {i['folder']:<24} {i['name']:<28} sym={i['symbol']['ref']} fp={i['footprint']['ref']}")
         return
 
     if a.cmd == "push" and not Path(a.plan).is_file():
         sys.exit(f"{a.plan}: no such plan file (write one with `ecadlib altium365 plan BOM -o {a.plan}`)")
+    if a.cmd == "push" and not a.workspace:
+        a.workspace = str((RU.load(a.rules, start=Path(a.plan).parent).get("altium365") or {}).get("workspace") or "").strip()
+        if not a.workspace:
+            sys.exit("ecadlib altium365 push: no workspace: pass --workspace URL or set [altium365] workspace in ecadlib.toml "
+                     "(`ecadlib altium365 workspaces` lists them)")
+    if a.cmd == "push":                        # the local files first: a damaged one is named, not "Nexar request failed"
+        from .kicad_export import PlanError, check_plan
+        try:
+            items = json.loads(Path(a.plan).read_text(encoding="utf-8"))
+            check_plan(items, a.plan)          # {} or a broken entry
+        except (json.JSONDecodeError, PlanError) as e:
+            why = (f"{a.plan}: not valid JSON ({e.msg} at line {e.lineno} column {e.colno})"
+                   if isinstance(e, json.JSONDecodeError) else str(e))      # PlanError names the file itself
+            print(f"ecadlib altium365: {why}\n  hint: is this the right file? `ecadlib altium365 plan` or `ecadlib "
+                  "librarian` writes plan.json", file=sys.stderr)
+            sys.exit(2)
+        rules = RU.load(a.rules, start=Path(a.plan).parent)   # a bad ecadlib.toml: RulesError names it (exit 2)
     token = UC.secret("NEXAR_TOKEN")
     if not token and not (a.cmd == "push" and a.dry_run):
-        sys.exit("set NEXAR_TOKEN (Nexar portal token with design.domain, user.access, openid scopes)")
+        from . import nexar_signin
+        sys.exit("no Altium 365 token (NEXAR_TOKEN): " + nexar_signin.hint())
     client = Nexar(token) if token else None
     try:
         if a.cmd == "workspaces":
             for w in client.workspaces():
                 print(f"{w['name']:<30} {w['url']}")
             return
-        items = json.loads(Path(a.plan).read_text())
         from .approvals import load_policy
         from . import change_gate as CG
         import time
-        rules = RU.load(a.rules, start=Path(a.plan).parent)
-        if not a.dry_run:                      # change control: a hand edit since the last writer is settled first
-            CG.publish_guard(Path(a.plan), items, "altium365", rules=rules)
-        for i in items:
-            for k in ("symbol", "footprint"):
-                if i[k]["file"]:
-                    i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
-        t0 = time.time()
-        results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent),
-                       rules=rules, folder=Path(a.plan).parent)
-        if not a.dry_run:
-            record_push(Path(a.plan).parent, t0, results)
+        import contextlib                      # a real push holds the library lock from the settle step to the record
+        with contextlib.nullcontext() if a.dry_run else CG.publishing(Path(a.plan).parent):
+            if not a.dry_run:                  # change control: a hand edit since the last writer is settled first
+                CG.publish_guard(Path(a.plan), items, "altium365", rules=rules)
+            else:                              # a dry run writes nothing: an unsettled hand edit is shown as held
+                CG.preview_unsettled(Path(a.plan).parent, items, rules)
+            for i in items:
+                for k in ("symbol", "footprint"):
+                    if i[k]["file"]:
+                        i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
+            t0 = time.time()
+            results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent),
+                           rules=rules, folder=Path(a.plan).parent)
+            if not a.dry_run:
+                record_push(Path(a.plan).parent, t0, results)
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work
-        hint = token_hint(token) if "401" in str(e) else ""
+        hint = token_hint(token) if "401" in str(e) and not isinstance(e, NexarUnreachable) else ""
         sys.exit(f"Nexar request failed: {type(e).__name__}: {e}{hint}")
     out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=2))

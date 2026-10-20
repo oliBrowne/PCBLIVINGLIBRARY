@@ -91,18 +91,29 @@ def spec_path(name):
 
 
 def numbers(text):
-    """The numbers the comparison needs from a .kicad_mod: pads (num, x, y, w, h, drill or 0) and the courtyard box."""
+    """The numbers the comparison needs from a .kicad_mod: pads (num, x, y, w, h, drill or 0) and the courtyard box;
+    "layers": the numbered SMD pads with no copper or no mask opening on the front, and the unnumbered copper pads
+    (a stray copper area shorts every pad it touches). Older numbers() dicts (an eval set's references) have no "layers"."""
     t = sexpr.parse(text)
-    pads = []
+    pads, lay = [], {"no_copper": [], "no_mask": [], "stray_copper": 0}
     for p, r in zip(sexpr.find(t, "pad"), C._pad_rects(t)):
         if not any(l.startswith(("F.", "*.", "F&B.")) for l in r["layers"]):
             continue                                         # B.Cu-only copy of an exposed pad (heat spreader): not compared
+        ls = set(r["layers"])
+        cu = bool(ls & {"F.Cu", "*.Cu", "F&B.Cu"})
+        smd = len(p) > 2 and str(p[2]) in ("smd", "connect")
+        if r["num"] and str(p[2]) == "smd" and not cu:
+            lay["no_copper"].append(r["num"])
+        elif r["num"] and str(p[2]) == "smd" and not ls & {"F.Mask", "*.Mask"}:
+            lay["no_mask"].append(r["num"])
+        elif not r["num"] and smd and cu:
+            lay["stray_copper"] += 1
         d = sexpr.first(p, "drill")
         drill = max((float(v) for v in d[1:] if isinstance(v, str) and v != "oval"), default=0.0) if d else 0.0  # not (offset x y);
                                                      # an SMD pad's (drill (offset ...)) alone is no hole
         pads.append([r["num"], round(r["x"], 4), round(r["y"], 4), round(r["w"], 4), round(r["h"], 4), drill])
     pads = [p for p in pads if p[0] or p[5]]                 # paste-only windows are not pads
-    return {"pads": pads, "courtyard": list(sexpr.courtyard_bbox(t) or ())}
+    return {"pads": pads, "courtyard": list(sexpr.courtyard_bbox(t) or ()), "layers": lay}
 
 
 def compare(mine, ref):
@@ -177,7 +188,8 @@ def report(results, summary):
             note += f"; courtyard ours {r['courtyard_ours']} KiCad {r['courtyard_kicad']}"
         out.append(f"{r['name']:<58} {r['pads_ok']:>4}/{r['pads']:<4} {r['worst_pos']:>7.3f}/{r['worst_size']:<7.3f} {crt:>10}  {note}")
     s = summary
-    pct = lambda a, b: f"{100 * a / b:.0f} %" if b else "-"
+    pct = lambda a, b: "-" if not b else f"{100 * a / b:.0f} %" if a == b or 100 * a / b < 99.5 else \
+        f"{int(1000 * a / b) / 10:.1f} %"                  # a failing run never rounds up to 100 %
     out += ["", f"pads within {POS_TOL} mm / {SIZE_TOL} mm: {s['pads_ok']}/{s['pads']} ({pct(s['pads_ok'], s['pads'])}); "
             f"footprints with every pad matching: {s['footprints_all_pads_ok']}/{s['footprints']} "
             f"({pct(s['footprints_all_pads_ok'], s['footprints'])}); courtyards within {CRT_TOL:.2f} mm: "

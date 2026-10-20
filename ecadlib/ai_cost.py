@@ -28,9 +28,15 @@ def limit(rules=None):
     from . import datasheet as D
     s = D.settings(rules)
     cap = float(s.get("max_cost_usd") or 0)
-    if cap > 0 and cap != D.DEFAULT_MAX_COST_USD:     # a cap you set; the default one is for unattended runs
-        return cap, "max_cost_usd"
+    if cap > 0 and (cap != D.DEFAULT_MAX_COST_USD or D.cap_chosen(rules)):   # a cap you set (10 too); the default
+        return cap, "max_cost_usd"                                           # one is for unattended runs
     return float(s.get("ask_above_usd") or 0), "ask_above_usd"
+
+
+def _over(worst, lim, which):
+    """Ask a second time? Price unknown, or above the limit. max_cost_usd 0 = no cap; ask_above_usd 0 = ask twice for
+    any paid request (the cautious setting). One rule for every quote, so they cannot drift apart."""
+    return worst is None or ((lim > 0 or which == "ask_above_usd") and worst > lim)
 
 
 def up(v):
@@ -52,22 +58,28 @@ def money(v):
     return f"${v:.2f}" if v >= 0.095 else f"${v:.3f}" if v >= 0.001 else "under $0.001"
 
 
-def _check_cost(rows, cfg, batch):
+def _check_cost(rows, cfg, batch, rules=None):
     """(typical, worst) USD of the cross-check's second reads, or (0, 0) when cross_check is off; None if unpriced."""
     from . import crosscheck as CC, datasheet as D, ds_route as DR
+    from .llm import run as LR, AIConfigError
     if str(cfg.get("cross_check") or "auto") == "off":
         return 0.0, 0.0
-    cw = 1.0 if batch else D.CACHE_WRITE
-    mult = D.BATCH_DISCOUNT if batch else 1.0
+    cw, mult = D.CACHE_WRITE, 1.0                     # the second read is always a synchronous request, batch run or not
     typ = worst = 0.0
     for r in rows:
         model = cfg.get("cross_check_model") or r["model"]
         p = DR.prices(model, r["input_tokens"])
+        if not p:                                     # "local:qwen2.5:7b" no request has used yet: resolve it as the
+            try:                                      # Reader will before the second read (its endpoint and profile)
+                LR.info(model, rules)
+            except AIConfigError:
+                return None
+            p = DR.prices(model, r["input_tokens"])
         if not p:
             return None
         typ += (r["input_tokens"] * cw * p[0] + CHECK_TYPICAL_OUT * p[1]) / 1e6 * mult
         worst += D.worst_usd(model, r["input_tokens"], CC.CHECK_MAX_TOKENS, cw, mult,
-                             fallback=not batch and model in D.FALLBACK_MODELS)   # as the Reader's cap counts it
+                             fallback=model in D.FALLBACK_MODELS)   # as the Reader's cap counts it
     return typ, worst
 
 
@@ -82,7 +94,7 @@ def quote(est, rules=None, key_set=True):
     batch = str(est.get("mode", "")).startswith("batch")
     usd = est.get("usd")
     worst = est.get("usd_max_route") if est.get("usd_max_route") is not None else est.get("usd_max")
-    check = _check_cost(rows, cfg, batch)
+    check = _check_cost(rows, cfg, batch, rules)
     if check is None or usd is None or worst is None:
         usd = worst = None
     else:
@@ -91,7 +103,7 @@ def quote(est, rules=None, key_set=True):
     models = list(est.get("models") or {}) or [est.get("model") or cfg["model"]]
     q = {"step": "datasheet", "parts": len(rows), "names": [r["part"] for r in rows], "model": ", ".join(models),
          "usd": usd, "usd_max": worst, "limit_usd": lim, "limit_name": which, "price_known": worst is not None,
-         "over_limit": worst is None or (lim > 0 and worst > lim), "exact": bool(est.get("exact_input")),
+         "over_limit": _over(worst, lim, which), "exact": bool(est.get("exact_input")),
          "cross_check": str(cfg.get("cross_check") or "auto") != "off", "key_set": bool(key_set),
          "skipped": [s["part"] for s in est.get("skipped") or []], "cached": list(est.get("cached") or [])}
     q["approve_usd"] = up(worst) if worst is not None else None
@@ -126,6 +138,8 @@ def approve(q, approved_usd=None, over_limit_ok=False, price_unknown_ok=False):
                          "confirm the higher cost first")
     try:
         approved = float(approved_usd)
+        if isinstance(approved_usd, bool) or not math.isfinite(approved) or approved < 0:
+            raise ValueError(approved_usd)   # NaN / inf / -1 would compare as "within the approval" and lift the cap
     except (TypeError, ValueError):
         raise ValueError(f"approve the cost first: about {money(q['usd'])}, at most {money(up(q['usd_max']))}")
     if q["usd_max"] > approved + TOLERANCE:
@@ -197,13 +211,32 @@ def style_quote(system, user, schema, model, rules=None, max_tokens=8000, retry=
     usd = round((tin * p[0] + 2000 * p[1]) / 1e6, 4) if p else None
     worst = round((tin * p[0] + max_tokens * p[1]) / 1e6 * (2.2 if retry else 1), 4) if p else None
     q = {"step": "style", "parts": 1, "names": [], "model": model, "usd": usd, "usd_max": worst, "limit_usd": lim,
-         "limit_name": which, "price_known": worst is not None, "over_limit": worst is None or (lim > 0 and worst > lim),
+         "limit_name": which, "price_known": worst is not None, "over_limit": _over(worst, lim, which),
          "exact": False, "cross_check": False, "key_set": bool(key_set), "skipped": [], "cached": []}
     q["approve_usd"] = up(worst) if worst is not None else None
     if worst is None:
         q["text"] = f"Writing the style guide asks {model} once; ecadlib does not know its price."
     else:
         q["text"] = (f"Writing the style guide asks {model} once: about {money(usd)}, at most {money(up(worst))}."
+                     + (f" That is more than your limit of {money(lim)} ([datasheet] {which})." if q["over_limit"] else ""))
+    if not key_set:
+        q["text"] += " No API key is stored for it yet: add one on the setup page or with `ecadlib keys set`."
+    return q
+
+
+def request_quote(step, model, usd, worst, rules=None, key_set=True, what="This asks the model once"):
+    """A quote dict like quote()'s for model requests priced elsewhere (a visual check, the house style rewording):
+    `usd` typical, `worst` at most (None = price unknown)."""
+    lim, which = limit(rules)
+    q = {"step": step, "parts": 1, "names": [], "model": model, "usd": usd, "usd_max": worst, "limit_usd": lim,
+         "limit_name": which, "price_known": worst is not None,
+         "over_limit": _over(worst, lim, which),
+         "exact": False, "cross_check": False, "key_set": bool(key_set), "skipped": [], "cached": []}
+    q["approve_usd"] = up(worst) if worst is not None else None
+    if worst is None:
+        q["text"] = f"{what} ({model}); ecadlib does not know its price."
+    else:
+        q["text"] = (f"{what} ({model}): about {money(usd)}, at most {money(up(worst))}."
                      + (f" That is more than your limit of {money(lim)} ([datasheet] {which})." if q["over_limit"] else ""))
     if not key_set:
         q["text"] += " No API key is stored for it yet: add one on the setup page or with `ecadlib keys set`."

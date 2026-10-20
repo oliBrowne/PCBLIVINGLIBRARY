@@ -28,7 +28,7 @@ Conventions (mirroring Altium-made libraries in AltiumSharp's TestData):
   Units: 1 mil = 10000 internal units, so 1 mm = 10^8/254 units (rounded to the nearest unit,
   2.54 nm). KiCad's Y axis points down, Altium's up: y is negated on import.
 Schematic units: 1 = 10 mil (DXP); pins on a 100 mil (10 unit) grid."""
-import argparse, functools, gzip, hashlib, json, math, re, struct, sys, time, uuid, warnings, zlib
+import argparse, functools, gzip, hashlib, json, math, re, struct, sys, time, unicodedata, uuid, warnings, zlib
 from fractions import Fraction
 from pathlib import Path
 
@@ -69,8 +69,13 @@ def v7_layer(layer):
     return 0x01030000 + {33: 6, 34: 7, 35: 8, 36: 9, 37: 10, 38: 11, 55: 12, 56: 13, 73: 14}.get(layer, 15)
 
 
+def nfc(s):
+    """Composed Unicode: 'E' + combining acute (macOS file names, PDF text) is 'É', which cp1252 holds."""
+    return unicodedata.normalize("NFC", str(s))
+
+
 def enc(s):
-    return str(s).encode("cp1252", "replace")
+    return nfc(s).encode("cp1252", "replace")
 
 
 def block(b, flag=0):
@@ -113,10 +118,30 @@ def clean(s):
     return re.sub(r"\s+", " ", re.sub(r"\s*\|\s*", "; ", str(s))).strip()
 
 
+_INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"))      # zero-width space / joiners, BOM
+
+
+def storable(s):
+    """s with the look-alikes cp1252 can hold: NFC ('E' + combining acute -> 'É'), Greek mu -> micro sign 'µ',
+    'Ω' -> 'Ohm', zero-width characters (pasted from web pages) dropped, and any other character cp1252 lacks whose
+    compatibility form it has (fullwidth 'ＬＭ358' -> 'LM358')."""
+    s = nfc(s).translate(_INVISIBLE).replace("\u03bc", "\u00b5").replace("\u2126", "Ohm").replace("\u03a9", "Ohm")
+    out = []
+    for c in s:
+        if c.encode("cp1252", "replace") == b"?" and c != "?":
+            k = unicodedata.normalize("NFKC", c)
+            c = k if k.encode("cp1252", "replace") != b"?" * len(k) or k == "?" else c
+        out.append(c)
+    return "".join(out)
+
+
 def lib_name(s):
     """Library entry name as Altium stores it (cp1252 in the binary records). 'Ω' becomes 'Ohm';
     anything else cp1252 can't hold is an error rather than a silent '?' that makes the entry unreadable."""
-    s = str(s).replace("\u2126", "Ohm").replace("\u03a9", "Ohm")
+    s = storable(s)
+    bad = re.search(r"[\x00-\x1f\x7f]", s)
+    if bad:                                   # a line break would add a ghost entry to the line-based TOC streams
+        raise ValueError(f"name {s!r} has a line break or control character ({bad.group()!r}); rename it")
     try:
         s.encode("cp1252")
     except UnicodeEncodeError as e:
@@ -127,11 +152,12 @@ def lib_name(s):
 def pin_number(s, what="pin number"):
     """A pin number / pad designator for a binary record (cp1252). One cp1252 can't hold is an error: written as '?',
     two of them ('α', 'β') would become the same pin and the symbol-to-footprint mapping would break silently."""
+    s = nfc(s)
     try:
-        str(s).encode("cp1252")
+        s.encode("cp1252")
     except UnicodeEncodeError as e:
-        raise ValueError(f"{what} {s!r} has characters Altium libraries can't store ({str(s)[e.start:e.end]!r}); rename it") from None
-    return str(s)
+        raise ValueError(f"{what} {s!r} has characters Altium libraries can't store ({s[e.start:e.end]!r}); rename it") from None
+    return s
 
 
 class PinNameWarning(UserWarning):
@@ -140,7 +166,7 @@ class PinNameWarning(UserWarning):
 
 def not_cp1252(s):
     """-> the characters of s, in order and without repeats, that cp1252 can't encode ('' when it all fits)."""
-    return "".join(dict.fromkeys(c for c in str(s) if c.encode("cp1252", "replace") == b"?" and c != "?"))
+    return "".join(dict.fromkeys(c for c in nfc(s) if c.encode("cp1252", "replace") == b"?" and c != "?"))
 
 
 def file_stem(s):
@@ -189,7 +215,8 @@ def guid(seed):
 
 def _now():
     import os
-    t = time.localtime(int(os.environ.get("SOURCE_DATE_EPOCH", time.time())))
+    sde = os.environ.get("SOURCE_DATE_EPOCH")       # reproducible builds: the same bytes in every time zone (UTC)
+    t = time.gmtime(int(sde)) if sde else time.localtime()
     return time.strftime("%d/%m/%Y", t), time.strftime("%H:%M:%S", t)
 
 
@@ -411,13 +438,27 @@ def pad_rec(p, guid_a, guid_b):
 
 
 # ---------------------------------------------------------------- footprints: model & converters
+def round_rect(x, y, w, h, r, steps=16):
+    """Outline of a w x h rectangle centred on (x, y) with corner radius r, each corner as `steps` chords (16: the
+    area is within 0.05 % of the true rounded rectangle for KiCad's 25 % paste-window rounding)."""
+    pts = []
+    for cx, cy, a0 in ((x + w / 2 - r, y + h / 2 - r, 0), (x - w / 2 + r, y + h / 2 - r, 90),
+                       (x - w / 2 + r, y - h / 2 + r, 180), (x + w / 2 - r, y - h / 2 + r, 270)):
+        for k in range(steps + 1):
+            a = math.radians(a0 + 90 * k / steps)
+            q = (round(cx + r * math.cos(a), 6), round(cy + r * math.sin(a), 6))
+            if not pts or q != pts[-1]:       # r = w/2: neighbouring corners meet in one point
+                pts.append(q)
+    return pts[:-1] if len(pts) > 1 and pts[-1] == pts[0] else pts
+
+
 def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
     """Convert a .kicad_mod (as written by footprint_gen) into the writer's footprint dict (mm, y up).
     SMD pads are converted here; through-hole and NPTH pads (round, square, slots), custom (polygon) pads and keep-out
     zones go through kicad_import's converter. notes: list that collects what could not be carried over exactly."""
     from . import kicad_import as K
     notes = [] if notes is None else notes
-    t = sexpr.parse(text)
+    t = K.inherit_margins(sexpr.parse(text))             # footprint-level mask / paste margins apply to every pad
     fp = {"name": t[1], "description": clean(description if description is not None else (sexpr.first(t, "descr") or ["", ""])[1]),
           "height_mm": height_mm, "pads": [], "tracks": [], "fills": [], "regions": [], "texts": texts_from_kicad(t)}
     for p in sexpr.find(t, "pad"):
@@ -427,10 +468,16 @@ def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
         layers = (sexpr.first(p, "layers") or ["layers"])[1:]
         if p[2] != "smd" or p[3] == "custom":
             K._pad(fp, p, notes); continue
-        if "F.Cu" not in layers:              # paste-only aperture (EP window) -> Top Paste fill
+        if "F.Cu" not in layers:              # paste-only aperture (EP window) -> Top Paste fill or region
             if layers != ["F.Paste"] or rot:
                 raise ValueError(f"{fp['name']}: unsupported non-copper pad on {layers}")
-            fp["fills"].append((x - w / 2, y - h / 2, x + w / 2, y + h / 2, TOP_PASTE)); continue
+            rr = sexpr.first(p, "roundrect_rratio")
+            r = min(float(rr[1]), 0.5) * min(w, h) if rr and p[3] == "roundrect" else 0.0
+            if r > 0:                         # rounded window (the rounding controls EP voiding): a region with
+                fp["regions"].append((round_rect(x, y, w, h, r), TOP_PASTE))   # the same outline (EXP-10)
+            else:
+                fp["fills"].append((x - w / 2, y - h / 2, x + w / 2, y + h / 2, TOP_PASTE))
+            continue
         rr = sexpr.first(p, "roundrect_rratio")
         pad = {"designator": p[1], "x": x, "y": y, "w": w, "h": h, "rot": rot, "shape": p[3],
                "corner": float(rr[1]) * 200 if rr else 0,          # KiCad r/min(w,h) -> Altium r/(min(w,h)/2) %
@@ -902,6 +949,53 @@ def write_schlib(path, symbols):
     return path
 
 
+def relink_schlib(path, old, new):
+    """Point the footprint links (RECORD=45) of a .SchLib on disk that name footprint `old` at `new`, and its recipe's
+    FOOTPRINTLINK lines: write_schlib(dict(sym, footprint=new)) for a file whose symbol dicts are gone (resolve).
+    Nothing else in the file changes. -> True when a link was changed."""
+    import olefile
+    from .fsutil import write_bytes_atomic
+    from . import altium_native as AN
+    path, old, new = Path(path), lib_name(old), lib_name(new)
+    tree, hit = {}, False
+    with olefile.OleFileIO(str(path)) as o:
+        for parts in o.listdir(streams=True, storages=False):
+            data = o.openstream(parts).read()
+            if parts[-1] == "Data" and len(parts) == 2:
+                out, j = b"", 0
+                while j < len(data):
+                    flag, n = data[j + 3], struct.unpack_from("<I", data, j)[0] & 0xFFFFFF
+                    b, j = data[j + 4:j + 4 + n], j + 4 + n
+                    rec = parse_param_bytes(b) if flag == 0 else {}
+                    if rec.get("RECORD") == "45" and rec.get("MODELNAME") == old:
+                        kv = []
+                        for seg in b.rstrip(b"\0").split(b"|"):
+                            k, eq, v = seg.partition(b"=")
+                            if eq and not k.startswith(b"%UTF8%"):
+                                k = k.decode("cp1252")
+                                kv.append((k, new if k.upper() in ("MODELNAME", "MODELDATAFILEENTITY0") else rec[k.upper()]))
+                        out += schblock(params(kv))
+                        hit = True
+                    else:
+                        out += block(b, flag)
+                data = out
+            node = tree
+            for p in parts[:-1]:
+                node = node.setdefault(p, {})
+            node[parts[-1]] = data
+    if not hit:
+        return False
+    order = ("FileHeader", "SectionKeys", "Storage")      # schlib_bytes' order: the same symbol, the same bytes
+    tree = dict(sorted(tree.items(), key=lambda kv: (kv[0] in order, order.index(kv[0]) if kv[0] in order else 0)))
+    write_bytes_atomic(path, cfb.to_bytes(tree))
+    rp = path.with_name(path.name + AN.EXT)
+    if rp.is_file():
+        text = rp.read_text(encoding="utf-8")
+        rp.write_text("\n".join(f"FOOTPRINTLINK\t{new}" if ln == f"FOOTPRINTLINK\t{old}" else ln
+                                for ln in text.split("\n")), encoding="utf-8")
+    return True
+
+
 # ---------------------------------------------------------------- minimal reader (verification / dump)
 def _blk(d, i):
     n = struct.unpack_from("<I", d, i)[0] & 0xFFFFFF
@@ -1015,6 +1109,9 @@ def read_pcblib(path):
     """Raises ValueError for a damaged or unknown-format file (OSError when it is not an OLE file at all)."""
     import olefile
     with olefile.OleFileIO(str(path)) as o:
+        if not o.exists("Library/Data"):
+            raise ValueError(f"{Path(path).name} is not a .PcbLib (no Library/Data stream"
+                             + ("; it looks like a .SchLib)" if o.exists("FileHeader") and not o.exists("Library") else ")"))
         try:
             return _read_pcblib(o)
         except (struct.error, zlib.error, IndexError, KeyError, EOFError) as e:
@@ -1053,6 +1150,9 @@ def read_schlib(path):
     """Raises ValueError for a damaged or unknown-format file (OSError when it is not an OLE file at all)."""
     import olefile
     with olefile.OleFileIO(str(path)) as o:
+        if o.exists("Library/Data") or not o.exists("FileHeader"):
+            raise ValueError(f"{Path(path).name} is not a .SchLib"
+                             + (" (it looks like a .PcbLib)" if o.exists("Library/Data") else " (no FileHeader stream)"))
         try:
             return _read_schlib(o)
         except (struct.error, zlib.error, IndexError, KeyError, EOFError) as e:
@@ -1091,6 +1191,15 @@ def _read_schlib(o):
 
 # ---------------------------------------------------------------- CLI
 def main(argv=None):
+    try:
+        return _main(argv)
+    except (ValueError, KeyError) as e:          # a spec / symbol file that can't be written: the user's input
+        msg = f"missing field {e}" if isinstance(e, KeyError) else str(e)
+        print(f"ecadlib altium-lib: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+
+def _main(argv=None):
     ap = argparse.ArgumentParser(description="Write Altium .PcbLib/.SchLib files (one entry per file)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("pcblib", help="package JSON specs -> <out>/<name>.PcbLib")
@@ -1106,7 +1215,7 @@ def main(argv=None):
     if a.cmd == "dump":
         for f in a.files:
             if f.lower().endswith(".pcblib"):
-                for fp in read_pcblib(f):
+                for fp in _dump_read(read_pcblib, f):
                     pads = [r for r in fp["records"] if r["type"] == "pad"]
                     kinds = {}
                     for r in fp["records"]:
@@ -1130,7 +1239,7 @@ def main(argv=None):
                     for mp, d in fp.get("models", []):
                         print(f"   model {mp['NAME']} {len(d)} B checksum {mp['CHECKSUM']} (computed {step_checksum(d)})")
             else:
-                _, syms = read_schlib(f)
+                _, syms = _dump_read(read_schlib, f)
                 for sy in syms:
                     pins = [r for r in sy["records"] if r["RECORD"] == "2"]
                     modes = int(sy["records"][0].get("DISPLAYMODECOUNT", 1))
@@ -1140,27 +1249,57 @@ def main(argv=None):
         return
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     if a.cmd == "pcblib":
+        from jsonschema import ValidationError
         from . import footprint_gen as F, rules as RU
         rules = RU.load(a.rules, start=out)
         lay = RU.layers(rules)
-        fps = []
+        fps, bad = [], 0
         for sp in a.specs:
-            spec = json.loads(Path(sp).read_text())
-            F.validate(spec)
-            fp, rep = footprint_from_spec(spec, RU.density_for(spec, rules, a.density))
+            spec = None
+            try:                                          # UTF-8 (Notepad's BOM too), not the locale's
+                spec = json.loads(Path(sp).read_text(encoding="utf-8-sig"))
+                F.validate(spec)
+                fp, rep = footprint_from_spec(spec, RU.density_for(spec, rules, a.density))
+            except (ValueError, ValidationError) as e:    # a spec that doesn't add up: say why, go on with the next
+                if isinstance(e, ValidationError):
+                    where = "/".join(map(str, e.absolute_path))
+                    e = f"the package spec isn't valid{' at ' + where if where else ''}: {e.message}"
+                print(f"{spec.get('name', sp) if isinstance(spec, dict) else sp}: not written: {e}", file=sys.stderr)
+                bad += 1
+                continue
             fps.append(fp)
             if not a.single:
                 path = write_pcblib(out / f"{file_stem(fp['name'])}.PcbLib", [fp], lay)
                 print(f"{fp['name']:<44} {len(fp['pads']):>3} pads {len(fp['tracks']):>3} tracks {len(fp['fills'])} fills "
                       f"{len(fp['regions'])} regions -> {path} ({path.stat().st_size} B)")
-        if a.single:
+        if a.single and fps:
             print(f"{len(fps)} footprints -> {write_pcblib(out / a.single, fps, lay)}")
+        if bad:
+            sys.exit(f"{bad} footprint spec(s) failed: fix them before using the footprints")
     else:
         for f in a.symbols:
-            sym = symbol_from_json(json.loads(Path(f).read_text()))
+            sym = symbol_from_json(json.loads(Path(f).read_text(encoding="utf-8-sig")))
             path = write_schlib(out / f"{file_stem(sym['name'])}.SchLib", [sym])
             print(f"{sym['name']:<24} {sum(1 for p in sym['prims'] if p[0] == 'pin'):>3} pins -> {path}")
 
 
-if __name__ == "__main__":
-    main()
+def _dump_read(reader, f):
+    """reader(f), naming the file when it is no Altium library at all (olefile's "not an OLE2 structured storage
+    file" says nothing of which one, with several given)."""
+    try:
+        return reader(f)
+    except FileNotFoundError:
+        raise
+    except OSError as e:
+        raise ValueError(f"{f}: {e}") from e
+
+
+if __name__ == "__main__":                     # `python3 -m ecadlib.altium_lib dump ... | head`: quiet, as `ecadlib` is
+    from .cli import _pipe_gone, _quiet_stdout
+    try:
+        main()
+        sys.stdout.flush()
+    except OSError as e:
+        if not _pipe_gone(e):
+            raise
+        sys.exit(_quiet_stdout())

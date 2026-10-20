@@ -13,14 +13,18 @@ Rules, per plan item:
             findings are reported as warnings). Without a .kicad_mod the same three are checked on the PcbLib.
             Overlapping pads whose symbol pins share a name (USB-C A1/B12 = GND) are stacked on purpose: a warning.
             A PcbLib with no .Designator on the Top / Bottom Overlay (no reference on silk) is a warning.
-  height    a 3D height is present and inside the plausible range for the package family (HEIGHTS)
+  height    a 3D height is present and inside the plausible range for the package family (HEIGHTS); a note to check
+            (a warning) unless `[release] height = "hold"`, since a height never changes the circuit
   fields    Manufacturer, Manufacturer Part Number, a datasheet link and Description are filled in
   parity    the .kicad_mod and the .PcbLib / .SchLib read back the same (ecadlib.parity: pads, drills, paste, courtyard,
             3D, pin -> pad); `[release] parity = "warn"` reports instead of holding, "off" skips it
-  verify    the item carries `verify` notes (e.g. a datasheet-reader footprint): a person has to look first
+  verify    the item carries `verify` notes: a person has to look first (a datasheet-reader footprint, an EasyEDA
+            conversion, a pinout from a family table, a KiCad symbol or footprint picked by a near name)
 Failing items get status `held` and `hold_reasons`; others `ready`. `--allow PART` records an override in the
 item (`allow.failures` = the failures it covers); an allowed item is `ready` while its failures stay within
-that list. altium365 push releases only `ready` items. Items `ecadlib a365 pull` brought in from the workspace
+that list. altium365 push releases only `ready` items, and every publisher (altium365 push, dblib-sync /
+altium-pkg, kicad-export) runs this check again on the files it sends (publish_problems), so a plan that says
+`ready` without a check, or a file changed after one, is held there too. Items `ecadlib a365 pull` brought in from the workspace
 (status `existing`) are already released there and are not checked. Exit code 0 when nothing is held, 2 otherwise."""
 import argparse, csv, datetime, re, sys
 from pathlib import Path
@@ -84,12 +88,16 @@ def _kicad_mod(item, base, fp_file):
 
 
 def _pad_rects(pads):
+    """(designator, x, y, w, h, odd angle, corner radius) in mm: round pads (Altium shape 1) have round ends, rounded
+    rectangles (9) a corner of corner % of half the short side."""
     out = []
     for r in pads:
         w, h = AL.to_mm(r["w"]), AL.to_mm(r["h"])
         if round(r["rot"]) % 180 == 90:
             w, h = h, w
-        out.append((r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), w, h, r["rot"] % 90 != 0))
+        rad = min(w, h) / 2 * (1.0 if r["shape"] == AL.SHAPE["round"] else
+                                (r["corner"] or 0) / 100 if r["shape"] == AL.SHAPE["roundrect"] else 0.0)
+        out.append((r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), w, h, r["rot"] % 90 != 0, rad))
     return out
 
 
@@ -114,7 +122,8 @@ def _pcblib_minimal(fp, pin_names=None, courtyard=AL.MECH15, pin1=None):
         for b in rects[i + 1:]:
             if a[0] and a[0] == b[0] or a[5] or b[5]:
                 continue
-            if abs(a[1] - b[1]) < (a[3] + b[3]) / 2 - 0.005 and abs(a[2] - b[2]) < (a[4] + b[4]) / 2 - 0.005:
+            gap = FC._rect_gap(*({"x": q[1], "y": q[2], "w": q[3], "h": q[4], "r": q[6]} for q in (a, b)))
+            if gap < -0.005:                       # round ends and corners: boxes meeting at a corner don't touch
                 msg = f"pads {a[0]} and {b[0]} overlap"
                 (warns if _same_net(msg, pin_names or {}) else fails).append(msg)
     if not any(r["layer"] == courtyard for r in fp["records"] if r["type"] in ("track", "arc", "region")):
@@ -128,6 +137,73 @@ def _has_pin1(nums, pin1=None):
     return bool(set(pin1 or ("1", "A1")) & set(nums))
 
 
+_LCSC_FIELDS = {"lcsc", "lcsc part", "lcsc part number", "lcsc part #", "lcsc#", "jlcpcb part", "jlcpcb part #"}
+
+
+def _supplier_number(par, field, rules):
+    """A required LCSC field (a house name `init` learned from a KiCad library) is filled when the part carries the LCSC
+    number as `LCSC Part` or as `Supplier Part Number N` with `Supplier N` = LCSC, as the librarian writes it."""
+    from . import rules as RU
+    if str(RU.canonical_param(field, rules)).strip().casefold() not in _LCSC_FIELDS:
+        return False
+    if str(par.get("LCSC Part", "")).strip():
+        return True
+    return any(str(v).strip() and str(par.get("Supplier " + k[len("Supplier Part Number "):], "")).strip().casefold()
+               in ("lcsc", "jlcpcb") for k, v in par.items() if k.startswith("Supplier Part Number "))
+
+
+# The librarian's doubtful-source notes, each about the half (None: either) it took from the source it names:
+# (half, source prefix, the note; group 1 = what the source gave). A note holds the part until a person releases it,
+# or picks another symbol or footprint for that half (ecadlib resolve, the review queue's Pick: clear_doubts). ecadlib
+# up to 0.3 wrote them to librarian.review only (a note, not a hold), and a part an older version finished keeps them
+# there, so those count too, while that half still comes from that kind of source.
+DOUBTS = (("symbol", "kicad:", re.compile(r"symbol (\S+) matched by .*check")),
+          ("footprint", "kicad:", re.compile(r"footprint (\S+) chosen by (?:shortest|footprint named)")),
+          (None, "easyeda:", re.compile(r"EasyEDA (\S+) conversion: ")),
+          ("symbol", "standard:", re.compile(r"symbol pinout (\S+) from the .+ family table")))
+
+
+def _doubt(note):
+    """A doubtful-source note -> (the halves it is about, the source prefix, what that source gave); else None."""
+    for half, prefix, rx in DOUBTS:
+        m = rx.match(str(note))
+        if m:
+            return ([half] if half else ["symbol", "footprint"]), prefix, m.group(1)
+    return None
+
+
+def doubts(item):
+    """The `verify` notes that hold the item: its own, plus the doubtful-source notes an older ecadlib left in
+    librarian.review (DOUBTS) while that half still comes from that kind of source."""
+    src, out = item.get("source") or {}, [str(v) for v in item.get("verify") or []]
+    for r in (item.get("librarian") or {}).get("review") or []:
+        d = _doubt(r)
+        if d and str(r) not in out and any(str(src.get(h) or "").startswith(d[1]) for h in d[0]):
+            out.append(str(r))
+    return out
+
+
+def clear_doubts(entry, src, halves):
+    """A person picked another symbol / footprint (`halves`) and it was applied: drop the doubtful-source notes about
+    what that half had before from a plan item or its librarian_state entry (`verify`, and the older ecadlib's review
+    notes). An EasyEDA note goes once neither half comes from EasyEDA. -> the notes dropped."""
+    def gone(note):
+        d = _doubt(note)
+        if not d:
+            return False
+        hs, prefix, ref = d
+        if hs == ["symbol", "footprint"]:
+            return not any(str(src.get(h) or "").startswith(prefix) for h in hs)
+        return hs[0] in halves and str(src.get(hs[0]) or "") != prefix + ref
+    dropped = []
+    for holder, key in ((entry, "verify"), (entry, "review"), (entry.get("librarian") or {}, "review")):
+        notes = holder.get(key)
+        if isinstance(notes, list):
+            dropped += [n for n in notes if gone(n)]
+            holder[key] = [n for n in notes if not gone(n)]
+    return dropped
+
+
 def check_item(item, base=".", rules=None):
     """-> (failures [(rule, message)], warnings [str], info {height, ...}). rules (ecadlib.rules): required fields,
     accepted pin-1 names and the courtyard layer; None = ecadlib's own."""
@@ -136,12 +212,18 @@ def check_item(item, base=".", rules=None):
     pin1 = rules["footprint"]["pin1"]
     fails, warns, info = [], [], {}
     add = lambda rule, msg: fails.append((rule, msg))
+    item = {**item, "symbol": item.get("symbol") or {}, "footprint": item.get("footprint") or {},   # publishers check a
+            "parameters": [p for p in item.get("parameters") or [] if isinstance(p, dict) and p.get("name")]}  # plan as is
     sym_f, fp_f = _path(base, item["symbol"].get("file")), _path(base, item["footprint"].get("file"))
     syms = fps = None
     pin_names = {}
     for kind, f, reader in (("symbol", sym_f, AL.read_schlib), ("footprint", fp_f, AL.read_pcblib)):
-        pads_why = [r for r in (item.get("librarian") or {}).get("review") or [] if str(r).startswith("datasheet pad table: ")]
-        if not f and pads_why:                         # why the datasheet's footprint was not built, and its fix
+        lib_review = [str(r) for r in (item.get("librarian") or {}).get("review") or []]
+        pads_why = [r for r in lib_review if r.startswith("datasheet pad table: ")]
+        refused = [r for r in lib_review if r.startswith("datasheet download refused by ")]
+        if not f and refused and not pads_why:         # the maker's site would not hand the PDF over: say so, and how
+            add("files", refused[0])
+        elif not f and pads_why:                       # why the datasheet's footprint was not built, and its fix
             for r in (pads_why if kind == "footprint" else ["datasheet pad table: the symbol waits for the footprint"]):
                 add("files", r)
         elif not f:
@@ -154,12 +236,19 @@ def check_item(item, base=".", rules=None):
                 r = r[1] if kind == "symbol" else r
                 if not r:
                     raise ValueError("library is empty")
-                if kind == "symbol":
-                    syms = r
-                else:
-                    fps = r
             except Exception as e:             # unreadable: altium_lib's reader is the gate
                 add("files", f"{kind} file does not read back ({type(e).__name__}: {e})")
+                continue
+            from .kicad_export import _pick
+            try:                               # a library of many (dedupe --merge onto a company file): the entry the
+                r = [_pick(r, item[kind].get("ref"), f, kind)]          # plan names, not the first one or all of them
+            except ValueError as e:
+                add("files", str(e))
+                continue
+            if kind == "symbol":
+                syms = r
+            else:
+                fps = r
     # ---- pins vs pads
     if syms and fps:
         pins = {r["num"] for s in syms for r in s["records"] if r.get("RECORD") == "2"}
@@ -179,15 +268,32 @@ def check_item(item, base=".", rules=None):
             add("pins", f"pads without a symbol pin: {FC._ranges(numbered - pins)}")
         if mech - {""}:
             warns.append(f"mechanical pads without a pin (allowed): {FC._ranges(mech - {''})}")
+        links = {r["MODELNAME"] for s in syms for r in s["records"] if r.get("RECORD") == "45" and r.get("MODELNAME")
+                 and str(r.get("MODELTYPE") or "PCBLIB").upper() == "PCBLIB"}
+        names = {fp["name"] for fp in fps} | ({AL.lib_name(item["footprint"]["ref"])} if item["footprint"].get("ref") else set())
+        if links and not links & names:        # the symbol's own link wins over a DbLib row's footprint (and in an IntLib)
+            msg = (f"the symbol links footprint {', '.join(sorted(links))}, not the part's "
+                   f"{item['footprint'].get('ref') or fps[0]['name']}")
+            if (item.get("merged_from") or {}).get("footprint"):   # dedupe --merge: an equivalent keeper, files untouched
+                warns.append(msg)
+            else:
+                add("pins", msg)
     # ---- footprint rules
     src = str((item.get("source") or {}).get("footprint") or "")
     kicad_lib = src.startswith("kicad:")
     kmod = _kicad_mod(item, base, fp_f) if fp_f else None
     if kmod:
         info["kicad_mod"] = str(kmod)
-        text = kmod.read_text(encoding="utf-8")
+        try:                                   # a .kicad_mod KiCad cannot load is no release, whatever the PcbLib says
+            text = kmod.read_text(encoding="utf-8")
+            tree = FC.sexpr.parse(text)
+            if not (isinstance(tree, list) and tree and tree[0] in ("footprint", "module")):
+                raise ValueError("not a footprint")
+        except Exception as e:
+            add("files", f"KiCad footprint file does not read back: {kmod.name} ({type(e).__name__}: {e})")
+            text, tree = None, None
         try:
-            issues, nums = FC.check(text), {p["num"] for p in FC._pad_rects(FC.sexpr.parse(text))}
+            issues, nums = (FC.check(text), {p["num"] for p in FC._pad_rects(tree)}) if text is not None else ([], set())
         except Exception as e:                 # checker crash: fall back to the PcbLib minimum below
             issues, nums, kmod = [], set(), None
             warns.append(f"footprint_check failed on {info.pop('kicad_mod')} ({type(e).__name__}: {e})")
@@ -200,7 +306,7 @@ def check_item(item, base=".", rules=None):
             hard = lvl == "error" and (not kicad_lib or (rule == "copper" and "overlap" in msg) or
                                        (rule == "courtyard" and msg.startswith("no courtyard")) or (rule == "pin1" and "no pad" in msg))
             (add("footprint", f"{rule}: {msg}") if hard else warns.append(f"{lvl} {rule}: {msg}"))
-        if kmod:                               # the rule book (footprint_rules): naming, layers, type, pin map ...
+        if kmod and text is not None:          # the rule book (footprint_rules): naming, layers, type, pin map ...
             try:
                 book = FR.check(text, filename=kmod.name, symbol_pins=pin_names if syms else None, geometry=False)
             except Exception as e:             # a rule-book crash must not hide the other rules
@@ -238,7 +344,9 @@ def check_item(item, base=".", rules=None):
         for d in diffs:
             (add("parity", d["msg"]) if d["level"] == "error" and mode == "hold" else warns.append(f"parity: {d['msg']}"))
         info["parity"] = "mismatch" if any(d["level"] == "error" for d in diffs) else "match"
-    # ---- 3D height
+    # ---- 3D height: a note to check unless [release] height = "hold" (a height is mechanical, never electrical)
+    hold_h = (rules.get("release") or {}).get("height", "warn") == "hold"
+    height = (lambda m: add("height", m)) if hold_h else (lambda m: warns.append(f"height: {m}"))
     if fps:
         bodies = [AL.parse_params(r["params"]) for r in fps[0]["records"] if r["type"] == "body"]
         hs = [h for h in (_mil(b.get("OVERALLHEIGHT")) for b in bodies) if h]
@@ -254,17 +362,17 @@ def check_item(item, base=".", rules=None):
                          "for the datasheet, no KiCad model)")
             info["height"] = pd[0]
         elif not h:
-            add("height", "no 3D height (no 3D body and no HEIGHT)")
+            height("no 3D height (no 3D body and no HEIGHT)")
         elif default:
             warns.append(f"3D height {h:.2f} mm is the package default, verify against the datasheet")
             if not lo - 0.01 <= h <= hi + 0.01:
                 warns.append(f"3D height {h:.2f} mm outside {lo}-{hi} mm for {fam or 'any package'}")
         elif not lo - 0.01 <= h <= hi + 0.01:
-            add("height", f"3D height {h:.2f} mm outside {lo}-{hi} mm for {fam or 'any package'}")
+            height(f"3D height {h:.2f} mm outside {lo}-{hi} mm for {fam or 'any package'}")
         elif not fam:
             warns.append(f"no height range for package '{item['footprint'].get('ref')}'; only checked {lo}-{hi} mm")
     # ---- fields
-    par = {p["name"]: p["value"] for p in item.get("parameters", [])}
+    par = {p["name"]: p.get("value", "") for p in item["parameters"]}
     for k in rules["parameters"]["required"]:         # default: REQUIRED, then the datasheet link and Description
         if k == "Datasheet":
             if not any(str(par.get(x, "")).strip() for x in ("ComponentLink2URL", "Datasheet", RU.canonical_param("Datasheet", rules))):
@@ -275,19 +383,77 @@ def check_item(item, base=".", rules=None):
             elif str((item.get("field_sources") or {}).get("Description", "")).startswith("written by ecadlib"):
                 warns.append(f"Description \"{item['description']}\" was written by ecadlib from the category and "
                              "package (no source had one): check it")
-        elif not str(par.get(RU.canonical_param(k, rules), par.get(k, ""))).strip():
+        elif not str(par.get(RU.canonical_param(k, rules), par.get(k, ""))).strip() and not _supplier_number(par, k, rules):
             add("fields", f"{k} is empty")
-    for v in item.get("verify") or []:
+    for v in doubts(item):
         add("verify", v)
+    for v in item.get("name_problems") or []:         # altium365.plan: a name Altium can't store (altium_export._name)
+        add("fields", v)
     return fails, warns, info
 
 
-def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
+def publish_problems(item, base=".", rules=None):
+    """Why a publisher (altium365 push, dblib-sync / altium-pkg, kicad-export) must not send this part's files: the
+    release check run again now, on the files as they are, less the failures the item's --allow covers. [] = it may
+    go. A plan's `status` alone is never enough: `altium365 plan --models`, a triage plan or a hand edit can say
+    `ready` for a part nothing checked, and a file can change after its check. rules: loaded (RU.resolve) once by
+    the caller. Parts `ecadlib a365 pull` brought in (already released there) are not checked, as in apply."""
+    if item.get("a365") and item.get("status") in ("existing", "deleted_in_workspace"):
+        return []
+    fails, _, _ = check_item(item, base, rules)
+    covered = set((item.get("allow") or {}).get("failures", []))
+    return [m for m in (f"{r}: {m}" for r, m in fails) if m not in covered or m.startswith(UNFIXABLE)]
+
+
+CHANGE_HOLD = "change control:"              # a held change no release check or --allow clears (`ecadlib part approve`)
+
+
+def change_hold(it, base=".", ledger=None):
+    """Why a part waits for `ecadlib part approve` with no released revision to fall back on (a new part held against
+    the released part whose MPN it carries, adopted files waiting for approval), or None. The release check never
+    clears this: only an approval does. Read from the item's change block and from the library's held proposals, so
+    a plan edited by hand does not drop it."""
+    ch = it.get("change") or {}
+    if ch.get("state") == "held" and ch.get("base") is None:
+        return ch.get("summary") or "a held change"
+    try:
+        from . import ledger as LG
+        lg = ledger if ledger is not None else LG.Ledger(Path(base))
+        prop = lg.proposal(it["name"]) if (lg.store / "proposed").is_dir() else None
+        if prop and prop.get("base") is None and not lg.head(it["name"]):
+            return "; ".join(c.get("text", "") for c in (prop.get("changes") or [])[:3]) or "a held change"
+    except Exception:                          # a damaged ledger: the item's own block above decides
+        pass
+    return None
+
+
+def record_releases(items, base, names, who=None, log=None):
+    """Parts a person released with --allow (also review's release anyway and the web UI / MCP release check): record
+    revision 1 in the ledger now, as the librarian's baseline would, so the release is the files as they are at this
+    moment and no later writer has to guess. A new part carrying the MPN of a released one is compared with it first
+    (it may be held: its status is updated in `items`). A lost ledger history is refused (LedgerError). -> ledger rows"""
+    from . import change_gate as CG
+    names = set(names or ())
+    sel = [i for i in items if i.get("name") in names and CG.released(i)]
+    if not sel:
+        return []
+    g = CG.Guard(Path(base), "release-allow", user=who, log=log or (lambda *a, **k: None))
+    try:
+        return g.baseline(sel)
+    finally:
+        g.close()
+
+
+def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, change_holds=True):
     """Run check_item on every item, set status ready / held, record --allow overrides. Returns report rows.
-    rules: a loaded rules dict, a path, or None to use the ecadlib.toml found from `base` (defaults when none)."""
-    from . import rules as RU
+    rules: a loaded rules dict, a path, or None to use the ecadlib.toml found from `base` (defaults when none).
+    change_holds: a part waiting for `ecadlib part approve` with no released revision (change_hold) stays held with
+    its "change control:" reason, whatever the check finds and whatever --allow says. Only `part approve` passes False,
+    while it checks the version it is about to release."""
+    from . import ledger as LG, rules as RU
     rules = RU.resolve(rules, base)
     rows, today = [], datetime.date.today().isoformat()
+    lg = LG.Ledger(Path(base)) if change_holds else None
     for it in items:
         if it.get("a365") and it.get("status") in ("existing", "deleted_in_workspace"):
             # pulled from Altium 365 (ecadlib a365 pull): already released there, nothing to release or hold back
@@ -306,7 +472,7 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
                     it[k] = it.pop(k)
         covered = set((it.get("allow") or {}).get("failures", []))
         hard = [m for m in msgs if m.startswith(UNFIXABLE)]
-        open_ = [m for m in msgs if m not in covered]
+        open_ = [m for m in msgs if m not in covered or m.startswith(UNFIXABLE)]   # never covered, by hand neither
         if not msgs:
             it["status"], result = "ready", "pass"
         elif it.get("allow") and not open_:
@@ -316,6 +482,12 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None):
         it["hold_reasons"] = open_ if result == "held" else []
         if result == "held" and it.get("allow"):
             it["hold_reasons"] = [m + (" (cannot be overridden)" if m in hard else " (not covered by --allow)") for m in open_]
+        held_change = change_hold(it, base, lg) if change_holds else None
+        if held_change:                        # waits for `ecadlib part approve`: never ready from here
+            it["status"], result = "held", "held"
+            it["hold_reasons"] = [h for h in it["hold_reasons"] if not h.startswith(CHANGE_HOLD)] + [
+                f"{CHANGE_HOLD} {held_change}; a person approves it (ecadlib part show {Path(base) / 'plan.json'} "
+                f"{it['name']})"]
         it["release_check"] = {"result": result, "failures": msgs, "warnings": warns, **{k: v for k, v in info.items() if k in ("height", "parity")}}
         rows.append({"name": it["name"], "status": it["status"], "result": result,
                      "symbol_source": (it.get("source") or {}).get("symbol") or "", "footprint_source": (it.get("source") or {}).get("footprint") or "",
@@ -338,7 +510,8 @@ def write_report(rows, stem, plan=""):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
-        w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["name", "status"])
+        cols = list(dict.fromkeys(k for r in rows for k in r)) or ["name", "status"]   # only some rows carry `approval`
+        w = SS.DictWriter(f, fieldnames=cols, restval="")
         w.writeheader(); w.writerows(rows)
     from . import messages as M
     held = [r for r in rows if r["status"] == "held"]
@@ -375,8 +548,8 @@ def print_result(rows, plan, stem, t=None):
     t = t or TM.Term()
     table = []
     for r in rows:
-        st = {"pass": "ready", "allowed": "ready"}.get(r["result"], r["status"])
-        word = "released anyway" if r["result"] == "allowed" else None
+        st = r["status"]                    # a pass that waits for sign-off (or is a duplicate) is not ready
+        word = "released anyway" if r["result"] == "allowed" and st == "ready" else None
         reasons = _split(r["failures"]) if r["status"] == "held" else []
         why = M.explain_all(reasons)
         first = why[0]["text"] + (f" (+{len(why) - 1} more)" if len(why) > 1 else "") if why else ""
@@ -408,18 +581,33 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="print the result as JSON (plan, report, counts, rows)")
     a = ap.parse_args(argv)
     plan = Path(a.plan)
-    from .approvals import cli_plan_lock
+    from .approvals import cli_plan_lock, load_policy, policy_error
+    try:
+        load_policy(plan.parent)               # a broken approvals file: say so, before anything is changed
+    except ValueError as e:
+        return policy_error("release-check", e)
     with cli_plan_lock(plan):                  # the web UI may be recording into this plan right now
         items = json.loads(plan.read_text(encoding="utf-8"))
+        from .kicad_export import PlanError, check_plan
+        try:                                   # {} / null / an entry without a name: refused, the plan not rewritten
+            check_plan(items, plan)
+        except PlanError as e:
+            print(f"ecadlib release-check: {e}\n  hint: is this the right file? plan.json is written by "
+                  f"`ecadlib librarian`", file=sys.stderr)
+            return 2
         unknown = set(a.allow + a.unallow) - {i["name"] for i in items}
         if unknown:
             sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")
         rows = apply(items, plan.parent, a.allow, a.unallow, rules=a.rules)
         if a.allow:                            # record the person, so approvals can refuse self-approval
             from .approvals import identity, post_check, stamp_allow
-            stamp_allow(items, a.allow, identity(a.user, cwd=plan.parent))
+            who = identity(a.user, cwd=plan.parent)
+            stamp_allow(items, a.allow, who)
             post_check(items, plan.parent, rows)
+            record_releases(items, plan.parent, a.allow, who)       # change control: revision 1 of what was released
         write_text_atomic(plan, json.dumps(items, indent=2))
+        from .librarian import refresh_review
+        refresh_review(plan, items)
         if a.allow or a.unallow:
             from . import timing
             timing.mark_review(plan.parent, "allow")
