@@ -620,6 +620,8 @@ def main(argv=None):
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--setup", action="store_true", help="open the setup page (AI model and key, Altium / KiCad, folders)")
     a = ap.parse_args(argv)
+    if not 0 <= a.port <= 65535:                            # bind() raises OverflowError: a typo, not a bug
+        ap.error("--port must be from 0 to 65535")
     from .. import userconfig
     userconfig.apply_env()                                  # kicad-cli on PATH; stored keys are read when needed
     if not _loopback(a.host):
