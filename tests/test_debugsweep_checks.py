@@ -66,3 +66,25 @@ def test_ds2_60_parity_with_a_library_name_kicad_export_normalises(tmp_path):
     assert (tmp_path / "tp" / "kicad" / "My_Lib.kicad_sym").is_file()
     assert s["parity"]["match"] == 6 and s["parity"]["mismatch"] == 0, s["parity"]
     assert s["parity"]["database_rows"] == {"kicad": 6, "altium": 6}, s["parity"]
+
+
+@lite
+def test_ds2_61_kicad_database_in_a_folder_with_hash_sign(tmp_path):
+    """'Board #2/lib.sqlite' cut the SQLite URI at '#': parity saw no rows and created an empty 'Board ' file; the eval
+    golden reader opened the same unquoted URI."""
+    import os, sqlite3
+    from ecadlib import parity as PY
+    from ecadlib.eval import golden as G
+    base = tmp_path.resolve()
+    d = base / ("Board #2" if os.name == "nt" else "Board #2?")      # Windows forbids '?' in names
+    d.mkdir()
+    (d / "lib.kicad_dbl").write_text("{}")
+    con = sqlite3.connect(d / "lib.sqlite")
+    con.execute('create table T ("Part ID" text, MPN text)')
+    con.execute("insert into T values ('P1', 'M1')")
+    con.commit()
+    con.close()
+    rows = PY.kicad_db_rows(d, "lib")
+    assert sorted(rows) == ["P1"] and rows["P1"]["MPN"] == "M1", rows
+    assert 'row T: ["P1", "M1"]' in G.table_rows(d / "lib.sqlite")
+    assert sorted(p.name for p in base.iterdir()) == [d.name], "a stray file was created next to the folder"

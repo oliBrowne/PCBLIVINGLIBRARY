@@ -917,7 +917,7 @@ def kicad_db_rows(folder, lib):
     if not f.is_file() or not (Path(folder) / f"{lib}.kicad_dbl").is_file():
         return None
     out = {}
-    con = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
+    con = sqlite3.connect(f.resolve().as_uri() + "?mode=ro", uri=True)    # quoted: a '#', '?' or '%' in the path
     try:
         for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"):
             cur = con.execute(f'SELECT * FROM "{t}"')
