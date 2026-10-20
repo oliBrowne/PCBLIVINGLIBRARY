@@ -26,9 +26,9 @@ Footprints without a KiCad STEP model get a package-shaped STEP from step_gen em
 Everything is converted through kicad_import into <out>/models/{SchLib,PcbLib} (plus the .kicad_mod in
 <out>/models/KiCad for footprint_check). Outputs: <out>/plan.json (each item records `source`, `librarian.tried`
 and the release-check result), <out>/review.{md,csv}, <out>/release_check.{md,csv}, <out>/triage.{md,csv}.
-Resumable: <out>/librarian_state.json remembers finished parts; a re-run skips them unless --refresh (all, or the
-named parts) or their BOM line changed. --allow PART is recorded in plan.json and survives re-runs, and so does a
-symbol or footprint chosen with `ecadlib resolve` (held parts: see ecadlib/resolve.py)."""
+Resumable: <out>/librarian_state.json remembers finished parts (saved as the run goes, so a stopped or killed run
+keeps them too); a re-run skips them unless --refresh (all, or the named parts) or their BOM line changed. --allow
+PART is recorded in plan.json and survives re-runs, and so does a symbol or footprint chosen with `ecadlib resolve` (held parts: see ecadlib/resolve.py)."""
 import argparse, csv, json, os, re, sys, time
 from pathlib import Path
 
@@ -1043,22 +1043,38 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         log(f"  finding symbols and footprints for {len(todo)} part(s) (sources: {', '.join(sources)}) ...")
     if progress is not None:
         progress.total = len(todo)
-    for n, (it, ln, row, fpr) in enumerate(todo, 1):
-        if progress is not None:
-            progress.start(it["name"])
-        elif len(todo) > 3:
-            log(f"  [{n}/{len(todo)}] {it['name']}")
-        with rec.part(it["name"]):
-            st = r.resolve(it, ln, row, keeps[it["name"]])
-        if progress is not None:
-            gone = [k for k in ("symbol", "footprint") if not st.get(k)]
-            progress.done(it["name"], "held" if gone else "ready",
-                          f"no {' or '.join(gone)} yet" if gone else "symbol and footprint found")
-        st["key"], st["skipped"] = fpr, False
-        LK.stamp_state(st, rec.take(it["name"]), rules)
-        st["build_rev"] = BUILD_REV
-        state[it["name"]] = st
+
+    def save_state():                          # finished parts survive a cancel or a kill (a datasheet batch not sent
+        held = {id(w[0]) for w in r.waiting}   # yet is not finished)
+        write_text_atomic(state_f, json.dumps({k: v for k, v in state.items() if id(v) not in held}, indent=2))
+        MG.write_stamp(out, ["librarian_state"])
+    saved = time.time()
+    try:
+        for n, (it, ln, row, fpr) in enumerate(todo, 1):
+            if progress is not None:
+                progress.start(it["name"])
+            elif len(todo) > 3:
+                log(f"  [{n}/{len(todo)}] {it['name']}")
+            with rec.part(it["name"]):
+                st = r.resolve(it, ln, row, keeps[it["name"]])
+            st["key"], st["skipped"] = fpr, False
+            LK.stamp_state(st, rec.take(it["name"]), rules)
+            st["build_rev"] = BUILD_REV
+            state[it["name"]] = st
+            if progress is not None:
+                gone = [k for k in ("symbol", "footprint") if not st.get(k)]
+                progress.done(it["name"], "held" if gone else "ready",
+                              f"no {' or '.join(gone)} yet" if gone else "symbol and footprint found")
+            if time.time() - saved > 2:
+                save_state()
+                saved = time.time()
+    except BaseException:                      # stopped (job_status cancel, Ctrl+C): keep what is finished
+        if todo:
+            save_state()
+        raise
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
+    if todo:
+        save_state()                           # a stop while the summary is logged keeps them too
     for it in items:
         apply_state(it, state[it["name"]], _line_for(it, lines, rows)[0])
         for k in ("allow", "approvals", "duplicate_of"):     # decisions people made survive re-runs

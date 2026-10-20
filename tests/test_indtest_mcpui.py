@@ -27,3 +27,41 @@ def test_offline_house_style_guide_makes_no_model_call(tmp_path, monkeypatch):
         except ValueError as e:
             assert "--offline" in str(e)
     assert sent == []
+
+
+def _res_bom(path, n):
+    pk = ["0402", "0603", "0805", "1206"]
+    path.write_text("Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #\n" + "".join(
+        f"R{i},1,{i}k,R_{pk[i % 4]},ACME,RES{pk[i % 4]}-{i}K-T\n" for i in range(1, n + 1)))
+    return str(path)
+
+
+# T047
+@lite
+def test_cancelled_librarian_run_keeps_finished_parts(tmp_path):
+    """A librarian_run job cancelled at part 6 of 12 (or stopped while logging its summary) saved no
+    librarian_state.json: the re-run built all 12 again although the cancel answer said finished parts are kept."""
+    from ecadlib import librarian as L
+    bom, out = _res_bom(tmp_path / "bom.csv", 12), tmp_path / "out"
+
+    class Stop(Exception):
+        pass
+
+    def stop_at(prefix):
+        def log(*a, **k):
+            if str(a[0] if a else "").lstrip().startswith(prefix):
+                raise Stop
+        return log
+    for prefix, kept in (("[6/12]", 5), ("done ", 12)):
+        o = out / prefix[:2]
+        try:
+            L.run(bom, [DEMO_LIB], str(o), ["standard"], offline=True, cache=str(tmp_path / "cache"), log=stop_at(prefix))
+            raise AssertionError("not stopped")
+        except Stop:
+            pass
+        state = json.loads((o / "librarian_state.json").read_text())
+        assert len(state) == kept, (prefix, sorted(state))
+        lines = []
+        L.run(bom, [DEMO_LIB], str(o), ["standard"], offline=True, cache=str(tmp_path / "cache"), log=lines.append)
+        assert f"finding symbols and footprints for {12 - kept} part(s)" in "\n".join(lines) or kept == 12, lines[:20]
+        assert sum(x.lstrip().startswith("skip ") for x in lines) == kept, lines
