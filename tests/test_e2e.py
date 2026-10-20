@@ -6,7 +6,7 @@ Run:  python3 -m tests.run_all test_e2e      (about a minute; the KiCad checks s
     ecadlib librarian <BOM> -o lib/<board> [--offline]   x3: a KiCad 7 .kicad_sch project, the Altium BOM, an .xlsx
                                                          (the .xlsx online: Claude reads its datasheet part)
     ecadlib release-check lib/parts/plan.json --allow DSPART16 --allow LM358DR --allow EEPART1    (after review)
-    ecadlib release-check lib/kicad_board/plan.json --allow LM358DR
+    ecadlib release-check lib/kicad_board/plan.json --allow LM358DR    (and lib/altium_board/plan.json)
     ecadlib kicad-export / kicad-dblib / export-parts / dblib-sync / altium365 push (--dry-run and against FakeNexar)
 
 and then proves each output plugs into its tool: KiCad loads every symbol and footprint through the library tables
@@ -67,8 +67,9 @@ def golden_path(work, fa, nx, tls, first=True):
         assert re.search(r"\n\d+ parts?: (\d+ ready|\d+ held)", p.stdout) and "written:" in p.stdout, p.stdout[-2000:]
         out[f"librarian:{name}"] = p
     out["release-check"] = E.ecadlib(work, "release-check", "lib/parts/plan.json", *ALLOW, env=env, check=False)
-    out["release-check:kicad_board"] = E.ecadlib(work, "release-check", "lib/kicad_board/plan.json", "--allow", "LM358DR",
-                                                 env=env, check=False)
+    for board in ("kicad_board", "altium_board"):          # LM358DR: suffix match, its board libraries reviewed too
+        out[f"release-check:{board}"] = E.ecadlib(work, "release-check", f"lib/{board}/plan.json", "--allow", "LM358DR",
+                                                  env=env, check=False)
     for name in ("kicad_board", "altium_board", "parts"):
         lib = "e2e" if name == "parts" else f"e2e_{name}"
         out[f"kicad-export:{name}"] = E.ecadlib(work, "kicad-export", f"lib/{name}/plan.json", "-o", "kicad", "--name", lib,
@@ -131,6 +132,8 @@ def test_golden_path_runs_from_an_empty_folder():
     k = plan("kicad_board")
     assert {"LM358DR", "RES-0603-10k", "RES-0402-4k7", "CAP-0603-1uF"} <= set(k), sorted(k)
     assert k["LM358DR"]["status"] == "ready" and k["LM358DR"].get("allow"), k["LM358DR"]    # released after review
+    a = plan("altium_board")
+    assert a["LM358DR"]["status"] == "ready" and a["LM358DR"].get("allow"), a["LM358DR"]   # the Altium BOM's one part
     assert all(" Traceback" not in x.stderr for x in s.values()), [n for n, x in s.items() if "Traceback" in x.stderr]
 
 
@@ -354,7 +357,7 @@ LOGS = re.compile(r"(^|/)(datasheet/api_log|timing)\.jsonl$")   # append-only lo
 REFRESHED = re.compile(r"^(ecadlib\.toml\.proposed|lib/[^/]+/librarian_state\.json|lib/parts/review\.(md|csv|html)"
                        # change control: the parts released by run 1's --allow (their revision 1 is recorded then) are
                        # recorded as released in library.lock.json on run 2; the usage index and the publish lines
-                       r"|lib/(parts|kicad_board)/(library\.ledger\.jsonl|library\.usage\.json|library\.lock\.json"
+                       r"|lib/(parts|kicad_board|altium_board)/(library\.ledger\.jsonl|library\.usage\.json|library\.lock\.json"
                        r"|\.ecadlib/blobs/.*))$")
 
 
