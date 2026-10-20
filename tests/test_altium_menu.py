@@ -109,7 +109,7 @@ def cmd_s_c(cmdline):
 def test_build_names_every_procedure():
     """`altium-menu build`, its README and the docs name every procedure the project offers (PROCS + BUILD_PROCS),
     and each one exists in the unit the table names (ecadlib_build.pas came with the native build)."""
-    assert AM.procedures() == ["AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue", "BuildLibrariesInAltium", "BuildLibraries(Folder)"]
+    assert AM.procedures() == ["AddPartFromMPN", "CheckProjectBOM", "OpenReviewQueue", "FinishBackgroundJob", "BuildLibrariesInAltium", "BuildLibraries(Folder)"]
     units = {AM.UNIT: AM.pas_text(), AN.UNIT: AN.pas_text()}
     for p, unit, _ in [(p, AM.UNIT, d) for p, _, d in AM.PROCS] + AM.BUILD_PROCS:
         name, end = p.split("(")[0], r"\(" if "(" in p else ";"
@@ -119,7 +119,7 @@ def test_build_names_every_procedure():
     readme = (d / "m" / AM.README).read_text()
     for p in AM.procedures():
         assert p in out and p in readme and p in AM.__doc__ and p in AM.pas_text(), (p, out)
-    assert "now lists AddPartFromMPN, CheckProjectBOM, OpenReviewQueue, BuildLibrariesInAltium:" in readme, readme
+    assert "now lists AddPartFromMPN, CheckProjectBOM, OpenReviewQueue, FinishBackgroundJob, BuildLibrariesInAltium:" in readme, readme
 
 
 def test_build_writes_well_formed_files():
@@ -354,9 +354,10 @@ def test_dialog_form_matches_its_unit_and_the_results():
     assert any("Gone is not declared" in p for p in AM.project_problems(broken))
     read = set(re.findall(r"Answer\(Job, '(\w+)'\)", files[AF.DIALOG_UNIT]))
     assert read == {"status", "install", "build", "big", "report", "warnings", "offer_fill", "fix", "offer_queue",
-                    "offer_ai", "ai_text", "ai_button", "ai_cost_text"}, read
+                    "offer_ai", "ai_text", "ai_button", "ai_cost_text", "offer_release", "release_part"}, read
     asked = set(re.findall(r"Answer\(Prev, '(\w+)'\)", files[AF.DIALOG_UNIT]))       # the AI step's next job
-    assert asked == {"ai_over", "ai_confirm", "ai_bom", "ai_mpn", "ai_part", "ai_approve", "ai_unknown"}, asked
+    assert asked == {"ai_over", "ai_confirm", "ai_bom", "ai_mpn", "ai_part", "ai_approve", "ai_unknown",
+                     "release_part", "release_bom", "release_mpn"}, asked                   # and Release anyway's
     assert "ReadString('progress', 'text'" in files[AF.DIALOG_UNIT] and "'row' + IntToStr(i)" in files[AF.DIALOG_UNIT]
     # the menu entries open the dialog, unless dialogs=0 asks for Altium's plain message boxes
     assert "OpenDialog('add', '', '')" in files[AM.UNIT] and "OpenDialog('bom', PrjPath, '')" in files[AM.UNIT]

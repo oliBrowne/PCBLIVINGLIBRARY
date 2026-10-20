@@ -7,6 +7,7 @@
     ecadlib altium-menu fill BOARD.PrjPcb|BOM.csv [--workspace W] [--to DIR] [--result-file F]
     ecadlib altium-menu queue [--workspace W] [--port 8765] [--result-file F]
     ecadlib altium-menu run-job JOBFOLDER          what the menu runs: reads JOBFOLDER/request.ini, writes result.ini
+    ecadlib altium-menu wake JOBFOLDER             after Keep working: asks the running Altium to put the job in
 
 `build` writes into --out:
   ecadlib_menu.PrjScr + ecadlib_menu.pas   the script project; three procedures without parameters (so Altium's
@@ -14,6 +15,7 @@
         AddPartFromMPN     asks for an MPN (+ optional manufacturer), builds the part, reinstalls the library
         CheckProjectBOM    checks the focused project's BOM, opens the report, offers to fill the library
         OpenReviewQueue    opens the ecadlib web UI at the review queue (starts `ecadlib ui` when it is not running)
+        FinishBackgroundJob  not a menu entry: puts a job the dialog left running into the library (see 5. below)
   ecadlib_build.pas                 Altium builds the library files itself (ecadlib.altium_native):
         BuildLibrariesInAltium   (File > Run Script) builds every library in ecadlib_build.txt next to the project
         BuildLibraries(Folder)   the same for Folder; the menu calls it before it reinstalls the library
@@ -47,6 +49,12 @@ How a menu entry talks to ecadlib (no stdout parsing, no quoting of user text on
      folder (altium-pkg wrote ecadlib_build.txt there, see ecadlib.altium_native), Altium writes every .SchLib /
      .PcbLib again with its own API (BuildLibraries in ecadlib_build.pas, part of this script project) and the dialog
      says if any library FAILED (ecadlib_build_report.txt). native_build=0 in the .ini skips that.
+  5. the dialog is modal, so Altium waits while it is open. Keep working (or its X) closes it while the job runs on:
+     the script writes background.txt in the job and adds the job to waiting.txt; when exit.txt is written,
+     ecadlib_run.cmd runs `altium-menu wake`, which calls the running X2.EXE with
+     -RScriptingSystem:RunScript(ProjectName=...|ProcName=...ecadlib_menu.pas>FinishBackgroundJob) (8.3 paths), and
+     Altium opens the dialog on the result, builds and installs the library (finished.txt). When Altium is closed or
+     busy then, the next menu entry offers the job.
 
 Where parts go: the workspace is an ordinary ecadlib workspace (`ecadlib ui --workspace` shows it); parts added from
 the menu collect in <workspace>/uploads/altium-menu/parts.csv and the librarian runs on that list (finished parts are
@@ -68,7 +76,8 @@ PROCS = [("AddPartFromMPN", "&Add part from MPN...", "Build a part from its manu
          ("CheckProjectBOM", "&Check this project BOM", "Check the focused project's BOM against the library; offer to fill it"),
          ("OpenReviewQueue", "Open &review queue", "Open the ecadlib web UI at the review queue")]
 # the other procedures the script project offers (ecadlib_build.pas, ecadlib.altium_native): not menu entries
-BUILD_PROCS = [("BuildLibrariesInAltium", "ecadlib_build.pas", "Altium writes the libraries in ecadlib_build.txt itself"),
+BUILD_PROCS = [("FinishBackgroundJob", UNIT, "puts a job the dialog left running (Keep working) into the library"),
+               ("BuildLibrariesInAltium", "ecadlib_build.pas", "Altium writes the libraries in ecadlib_build.txt itself"),
                ("BuildLibraries(Folder)", "ecadlib_build.pas", "the same for Folder; the menu calls it before reinstalling")]
 
 
@@ -77,7 +86,7 @@ def procedures():
     return [p for p, _, _ in PROCS] + [p for p, _, _ in BUILD_PROCS]
 MENU_BOM = "uploads/altium-menu/parts.csv"
 HEADER = ["Designator", "Qty", "Value", "Footprint", "Manufacturer", "Mfr. Part #", "LCSC Part Number", "Description", "Datasheet"]
-ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read")
+ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read", "release")
 QUEUE_ANCHOR = "#libcard"
 
 # Every identifier the .pas calls from Altium / DelphiScript, and where it is documented. TRxxxx = Altium's scripting
@@ -168,6 +177,8 @@ exit /b 9009
 :run
 %ECADLIB% altium-menu run-job "%JOB%" > "%JOB%\log.txt" 2>&1
 > "%JOB%\exit.txt" echo %ERRORLEVEL%
+rem Keep working closed the dialog (background.txt): ask Altium to put the result in (FinishBackgroundJob)
+if exist "%JOB%\background.txt" %ECADLIB% altium-menu wake "%JOB%" > "%JOB%\wake.txt" 2>&1
 exit /b 0
 """.replace("\n", "\r\n")
 
@@ -1112,6 +1123,9 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
     whys = M.explain_all(it.get("hold_reasons") or [])
     if st == "ready":
         res["message"] = f"{mpn} is ready as {nm}: {_where(cfg, pub)}."
+        notes = [M.explain(w)["text"] for w in (it.get("release_check") or {}).get("warnings") or [] if str(w).startswith("height:")]
+        if notes:                              # a 3D height is a note to check, not a hold ([release] height)
+            res["message"] += " Note: " + " ".join(dict.fromkeys(notes)) + " Check the 3D body in Altium."
         if pub.get("footprints", {}).get(nm):
             res["footprint"] = pub["footprints"][nm]
         if pub.get("problems") or nm in (pub.get("held") or {}):
@@ -1141,6 +1155,8 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
                                                                 "awaiting_approval": "Waiting for sign-off"}.get(st, "Held")))
     if res["status"] == "error":
         res["big"] = "Not found" if res.get("reason") in ("not_found", "not_searched", "description") else "Not published"
+    if res["status"] == "held":
+        offer_release(res, it, rel, mpn)
     if res["status"] == "held" and ai and nm in ai["names"]:
         q = ws.ai_quote(rel, parts=[nm]) if ai["parts"] > 1 else ai      # the menu's list may hold other parts too
         if q:
@@ -1167,6 +1183,68 @@ def offer_ai(res, q, bom, mpn="", part=""):
                            f"limit of {AC.money(q['limit_usd'])} ([datasheet] {q['limit_name']}). Go ahead anyway?")
                if q["price_known"] else f"ecadlib does not know what {q['model']} costs. Read the datasheets anyway?")
     return res
+
+
+def releasable(it):
+    """The hold reasons a person may release anyway, explained ([] = none): not a missing or broken file (nothing to
+    release) and not a held change (that waits for `ecadlib part approve`), as in `ecadlib review`."""
+    from . import messages as M, release_check as RC
+    out = []
+    for r in it.get("hold_reasons") or []:
+        e = M.explain(r)
+        if e["code"].startswith("files.") or str(r).startswith(RC.CHANGE_HOLD) or str(r).endswith("(cannot be overridden)"):
+            return []
+        if e["text"] not in out:
+            out.append(e["text"])
+    return out
+
+
+def offer_release(res, it, bom, mpn=""):
+    """result.ini keys for the dialog's Release anyway: the part, its BOM and why it is held (release_why1..4), so
+    the dialog can show the reasons before it asks for a reason of its own. Nothing is released here."""
+    whys = releasable(it)
+    if whys:
+        res.update(offer_release="1", release_bom=bom, release_mpn=mpn, release_part=it["name"],
+                   **{f"release_why{i}": w for i, w in enumerate(whys[:4], 1)})
+    return res
+
+
+def release_part(cfg, req, progress=None):
+    """The dialog's Release anyway, after the person saw the hold reasons and typed why it is fine: the same release
+    as the review queue's (release-check --allow, who and why kept in the plan, revision 1 in the change-control
+    ledger), then the part is published like add-part."""
+    from . import approvals as A, review_cli as RV
+    progress = progress or Progress()
+    reason = " ".join(str(req.get("reason") or "").split())
+    name, rel = req.get("part", ""), req.get("bom", "")
+    mpn = req.get("mpn") or name
+    if not reason:
+        return {"status": "error", "message": f"{name} was not released: Release anyway needs a reason.",
+                "fix": "Click Release anyway again and say why the part is fine as it is."}
+    ws = _workspace(cfg)
+    bom = ws._bom_path(rel)
+    plan = ws._librarian_dir(bom) / "plan.json"
+    try:
+        items = json.loads(plan.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        items = []
+    it = next((i for i in items if i.get("name") == name), None)
+    if it is None:
+        return {"status": "error", "message": f"{name} is not in the library plan any more, so nothing was released.",
+                "fix": f"Add {mpn} again, or release it from the review queue ({_queue_hint(cfg)})."}
+    if it.get("status") == "held":
+        if not releasable(it):
+            return {"status": "error", "message": f"{name} cannot be released anyway: "
+                    + "; ".join(it.get("hold_reasons") or ["a file is missing or a change waits for approval"]) + ".",
+                    "fix": f"Fix it in the review queue ({_queue_hint(cfg)})."}
+        progress.step(0, 0, f"releasing {name}")
+        who = A.identity(req.get("user") or None, cwd=plan.parent)
+        RV.release_anyway(plan, name, who, reason=reason)
+        res = _part_result(cfg, ws, bom, rel, mpn, progress)
+        if res.get("status") != "error":
+            res["message"] = f"Released anyway by {who}: {reason}. " + (res.get("message") or "")
+        return res
+    return _part_result(cfg, ws, bom, rel, mpn, progress)       # released meanwhile (the queue): just publish it
 
 
 def cost_rows(c):
@@ -1483,6 +1561,8 @@ def run_action(cfg, action, req, opener=None, progress=None):
         return fill(cfg, req.get("project", ""), progress=progress)
     if action == "ai-read":                    # only after the dialog showed the cost and the person said yes
         return ai_read(cfg, req, progress=progress)
+    if action == "release":                    # only after the dialog showed the hold reasons and was given a reason
+        return release_part(cfg, req, progress=progress)
     if action == "open":                       # a report or review the dialog offers: only files in the workspace
         return open_file(cfg, req.get("path", ""), opener=opener)
     if action == "queue":
@@ -1516,6 +1596,92 @@ def run_job(job, opener=None):
     if job.parent.name.lower() == "jobs":                    # the script's jobs\<id>: never prune a folder chosen by hand
         prune_jobs(job.parent, keep=job)
     return res
+
+
+def running_altium():
+    """(X2.EXE path, main window handle) of the Altium running now, ('', 0) when none. The running one, so a second,
+    older install is never started; the oldest X2 process with a window, so a launcher stuck on Altium's "busy" box
+    is not taken for it."""
+    if os.name != "nt":
+        return "", 0
+    ps = ("$p = Get-Process X2 -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | "
+          "Sort-Object StartTime | Select-Object -First 1; if ($p) { $p.Path + '|' + $p.MainWindowHandle }")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
+                             text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    exe, _, hwnd = out.rpartition("|")
+    if exe:
+        return exe, int(hwnd) if hwnd.isdigit() else 0
+    if not altium_running():
+        return "", 0
+    from . import detect
+    found = detect.altium()
+    return (found[0]["exe"] if found else ""), 0
+
+
+def altium_busy(hwnd):
+    """True while Altium's main window is disabled: a modal dialog is open (an ecadlib dialog, any script form, a
+    Preferences box). A RunScript call then does not wait: Altium shows "There is another instance of running, but
+    it is busy" and leaves an X2.EXE hanging on it (AD 26.10), so wake waits for the window instead."""
+    if not hwnd:
+        return False
+    try:
+        import ctypes
+        return not ctypes.windll.user32.IsWindowEnabled(hwnd)
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+def wake_command(x2, here):
+    """The command line that makes the running Altium run FinishBackgroundJob from the script project in `here`, or
+    None when the paths cannot go on it. A space or non-ASCII character in a script path makes Altium start a second,
+    unlicensed copy (AD 26.10), so the folder goes as its 8.3 short name; the file names stay long, because Altium
+    finds neither ECADLI~1.PRJ nor a unit called ECADLI~1.PAS. A folder that still has one is not used."""
+    folder = str(_short_path(Path(here)))
+    prj, unit = (str(Path(folder) / n) for n in (PROJECT, UNIT))
+    if any(" " in p or not p.isascii() or "|" in p or ")" in p for p in (prj, unit)):
+        return None
+    return [str(x2), f"-RScriptingSystem:RunScript(ProjectName={prj}|ProcName={unit}>FinishBackgroundJob)"]
+
+
+def wake(job, x2=None, busy=altium_busy, start=subprocess.Popen, sleep=time.sleep, calls=2, wait_s=60,
+         patience_s=3600, every_s=5):
+    """ecadlib_run.cmd runs this after a job the dialog left running (Keep working; background.txt): it asks the
+    running Altium to put the result in (FinishBackgroundJob writes finished.txt). While a dialog is open in Altium
+    it waits (every every_s, up to patience_s) instead of calling, and it calls at most `calls` times. When Altium is
+    closed, or never takes it, the next ecadlib menu entry offers the job (waiting.txt). Returns {"status", "message"}."""
+    job = Path(job)
+    here = job.parent.parent
+    done = {"status": "ok", "message": "Altium put the result in"}
+    if not (job / "background.txt").is_file():
+        return {"status": "skipped", "message": "the dialog waited for this job itself"}
+    made, waited = 0, 0
+    while made < calls:
+        if (job / "finished.txt").is_file():
+            return done
+        exe, hwnd = (x2, 0) if x2 is not None else running_altium()
+        if not exe:
+            return {"status": "waiting", "message": "Altium is not running: the next ecadlib menu entry offers this job"}
+        cmd = wake_command(exe, here)
+        if cmd is None:
+            return {"status": "waiting", "message": f"{here} has a space or non-ASCII character Altium cannot take on a "
+                                                    "command line: the next ecadlib menu entry offers this job"}
+        if busy(hwnd):
+            if waited >= patience_s:
+                return {"status": "waiting", "message": "a dialog stayed open in Altium: the next ecadlib menu entry "
+                                                        "offers this job"}
+            sleep(every_s)
+            waited += every_s
+            continue
+        start(cmd)
+        made += 1
+        for _ in range(int(wait_s)):
+            sleep(1)
+            if (job / "finished.txt").is_file():
+                return done
+    return {"status": "waiting", "message": "Altium did not take the job: the next ecadlib menu entry offers it"}
 
 
 def prune_jobs(jobs_dir, days=14, keep=None, now=None):
@@ -1597,6 +1763,8 @@ def main(argv=None):
         s.add_argument("--json", action="store_true", help="print the result as JSON")
     r = sub.add_parser("run-job", help="what the Altium script runs: JOB/request.ini -> JOB/result.ini")
     r.add_argument("job")
+    w = sub.add_parser("wake", help="after a job the dialog left running: ask Altium to put it in (FinishBackgroundJob)")
+    w.add_argument("job")
     m = sub.add_parser("install-menu", help="put the ecadlib menu into Altium's top menu bar (Altium closed)")
     m.add_argument("--out", default="out/altium_menu", help="the folder `build` wrote (default %(default)s)")
     m.add_argument("--altium-folder", action="append", help="an Altium settings folder (default: every "
@@ -1641,6 +1809,10 @@ def main(argv=None):
             elif not rep["menu_file"]:
                 print(f"  no {PREFS}: give --win-dir (the folder on the Altium PC) for the ready-made menu file")
         return 1 if rep["problems"] else 0
+    if a.cmd == "wake":
+        res = wake(a.job)
+        print(json.dumps(res, indent=2))
+        return 0
     if a.cmd == "run-job":
         res = run_job(a.job)
         print(json.dumps(res, indent=2))

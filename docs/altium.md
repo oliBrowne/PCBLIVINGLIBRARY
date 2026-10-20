@@ -304,7 +304,11 @@ offline; relative paths start at that folder; a rebuild keeps the file). Built o
 `command=` is the Python that ran the build (`"<sys.executable>" -m ecadlib`), so an install in a venv is found; a
 rebuild fills an empty `command=` (older builds) and changes nothing else. `ecadlib doctor --altium-menu <folder>`
 checks that `command=` runs ecadlib. Without an AI key, parts no free source fully describes come back held with the
-reason (the dialog and the review queue say which), and nothing held reaches the library. Check this project BOM reads the
+reason (the dialog and the review queue say which), and nothing held reaches the library. A held part whose reasons a
+person may override (not a missing file, not a change waiting for `ecadlib part approve`) gets **Release anyway** at
+the bottom left of the dialog: it lists why the part is held, then asks why it is fine, and releases it the way the
+review queue does (`release-check --allow`, your name and the reason kept in the plan's `allow`, revision 1 in the
+change-control ledger) before it puts the part into the library. The reason box starts with "Checked it: fine as it is", so Enter releases; an emptied box releases nothing. A missing 3D height does not hold a part (`[release] height = "hold"` makes it): the dialog adds a note to check the 3D body. Check this project BOM reads the
 project's device sheets (`[DeviceSheetN]`; one it cannot find is a warning) and lists multi-channel sheets once per
 channel (R1_CH1 ...); a Content Vault component without an MPN parameter uses its Comment as the MPN when it reads as
 one. Workspace `altium_menu(win_dir)` and the MCP
@@ -336,6 +340,16 @@ script waits for `exit.txt` (`Sleep` + `FileExists`, the pattern of Altium-Desig
 values are one line; finished job folders older than 14 days are removed. Every failure becomes one dialog line with a fix (ecadlib missing, project not saved, no
 NEXAR_TOKEN, port taken, ...); ecadlib's output is in `jobs\<id>\log.txt`. `hidden=0` runs the .cmd in a visible
 console instead. No key is in any file: keys stay in environment variables.
+
+**Keep working while ecadlib works.** The dialog is modal, so Altium waits while it is open. **Keep working** (or
+the dialog's X) closes it and the job runs on in the background. The script writes `background.txt` in the job and
+adds the job to `waiting.txt` next to the script. When the job ends, `ecadlib_run.cmd` runs
+`ecadlib altium-menu wake "<job>"`, which calls the running Altium's `X2.EXE` with
+`-RScriptingSystem:RunScript(ProjectName=<prj>|ProcName=<dir>\ecadlib_menu.pas>FinishBackgroundJob)` (8.3 short
+paths: a space in a script path makes Altium start a second copy). Altium then opens the dialog on the result,
+builds and installs the library (a native build locks Altium for those seconds) and writes `finished.txt`. While
+Altium is busy with another script, wake tries again every minute, five times. When Altium is closed or never takes
+it, the next menu entry asks whether to put the finished job in. Its output is in `jobs\<id>\wake.txt`.
 
 **Install.** The quick way: close Altium and run `ecadlib altium-menu install-menu --out <folder>` (the setup
 page's Add to Altium does this on Windows). It merges the ecadlib commands and the four menu insertions into Altium's

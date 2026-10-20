@@ -229,7 +229,11 @@ def test_release_check_warns_for_package_default_height():
         assert info["height"] == 0.45
         AL.write_pcblib(d / "q.PcbLib", [dict(fp, name="QQQ")])
         item2 = dict(item, folder="ICs", description="", name="U1", footprint={"ref": "QQQ", "file": "q.PcbLib"})
-        fails2, _, _ = RC.check_item(item2, d)
+        fails2, warns2, _ = RC.check_item(item2, d)              # a note to check by default (2026-10-20)
+        assert not [f for f in fails2 if f[0] == "height"] and "height: no 3D height (no 3D body and no HEIGHT)" in warns2
+        from ecadlib import rules as RU
+        hold = {**RU.DEFAULTS, "release": {**RU.DEFAULTS["release"], "height": "hold"}}
+        fails2, _, _ = RC.check_item(item2, d, hold)
         assert ("height", "no 3D height (no 3D body and no HEIGHT)") in [tuple(f) for f in fails2], fails2
 
 

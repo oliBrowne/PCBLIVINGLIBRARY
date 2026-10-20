@@ -121,8 +121,9 @@ def a_offline(src):
     return bool(getattr(getattr(src, "http", None), "offline", False))
 
 
-def release_anyway(plan, name, user=None):
-    """release-check --allow for one part; returns the item after the re-check."""
+def release_anyway(plan, name, user=None, reason=""):
+    """release-check --allow for one part; returns the item after the re-check. reason: why the person released it
+    (the Altium dialog asks for one), kept with who did it in the item's allow record."""
     from . import release_check as RC
     from .approvals import cli_plan_lock, identity, post_check, stamp_allow
     from .fsutil import write_text_atomic
@@ -133,6 +134,8 @@ def release_anyway(plan, name, user=None):
         rows = RC.apply([it], plan.parent, [name])
         who = identity(user, cwd=plan.parent)
         stamp_allow([it], [name], who)
+        if reason and it.get("allow"):
+            it["allow"]["reason"] = reason
         post_check([it], plan.parent, rows)
         RC.record_releases([it], plan.parent, [name], who)    # change control: revision 1 of what was released
         write_text_atomic(plan, json.dumps(items, indent=2))

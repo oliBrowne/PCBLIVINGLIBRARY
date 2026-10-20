@@ -35,7 +35,7 @@ The units are real files in [`ecadlib/altium_scripts/`](../ecadlib/altium_script
 
 - [ ] **ecadlib > Add part from MPN...**, type `LM358DR`. The dialog opens dark, the progress rows fill in, and it
       ends with the part in your library (or Altium 365 when `ecadlib.toml` names a workspace).
-- [ ] The dialog can be dragged by its header, and **Close** while it works asks before it stops waiting.
+- [ ] The dialog can be dragged by its header. **Keep working** (or the X) while it works closes it, Altium stays usable, and when the job is done the dialog opens again on the result and installs the library.
 - [ ] Try an MPN that needs the AI datasheet read. The dialog shows the cost and waits for your click. Say no:
       nothing is sent.
 - [ ] Try an MPN no source has. The dialog says why the part is held and what to do.

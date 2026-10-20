@@ -6,7 +6,13 @@
     Mode 'fill'  fill the library from the project's BOM straight away
   A part only an AI datasheet read can finish is offered as an AI step: the model and the cost first, the read only
   after a click (and a second yes above the limit), then the real cost next to the estimate.
-  A timer polls the job folder (progress.ini while ecadlib runs, result.ini at the end), so Altium never freezes. }
+  A held part can be released anyway (the Release anyway button, bottom left): the dialog shows why it is held, asks
+  why it is fine, and ecadlib releases it like the review queue does (your name and reason kept in the plan).
+  A timer polls the job folder (progress.ini while ecadlib runs, result.ini at the end).
+  The dialog is modal, so Altium waits while it is open. Keep working (or the X) closes it while ecadlib works on in
+  the background: the job goes on waiting.txt, and when it is done ecadlib calls FinishBackgroundJob in Altium, which
+  opens the dialog on the result (OpenFinished) and puts the part into the library. If Altium was busy or closed then,
+  the next menu entry offers it. }
 
 Var
     Mode : String;
@@ -103,11 +109,13 @@ Begin
 End;
 
 Procedure ClearRows;
+{ Also hides Release anyway: it belongs to one held result. }
 Var
     i : Integer;
 Begin
     For i := 1 To 7 Do
         SetRow(i, '');
+    EcadlibDialog.ReleaseBtn.Visible := False;
 End;
 
 Function ButtonWidth(S : String) : Integer;
@@ -251,6 +259,7 @@ Begin
     End;
     EcadlibDialog.Primary.Top := Y + 10;
     EcadlibDialog.Secondary.Top := Y + 10;
+    EcadlibDialog.ReleaseBtn.Top := Y + 10;
     EcadlibDialog.ClientHeight := Y + 10 + 30 + 16;
 End;
 
@@ -296,10 +305,8 @@ Begin
     Layout;
 End;
 
-Procedure Run(Act : String);
-{ Starts the job Job (request.ini already written) and switches the dialog to its live view. }
-Var
-    Code : Integer;
+Procedure ShowRunning(Act : String);
+{ The dialog's live view of the job Job. }
 Begin
     JobAction := Act;
     Phase := 'run';
@@ -316,7 +323,17 @@ Begin
     EcadlibDialog.Status.Visible := True;
     EcadlibDialog.Status.Caption := 'starting ecadlib';
     Meter(0, 0);
-    Buttons('Working...', '', True);
+End;
+
+Procedure Run(Act : String);
+{ Starts the job Job (request.ini already written) and switches the dialog to its live view. }
+Var
+    Code : Integer;
+Begin
+    ShowRunning(Act);
+    Ask(Job, 'title', Title);
+    Second := 'background';
+    Buttons('Working...', 'Keep working', True);
     Layout;
     Code := RunApplication(CommandLine(Job));
     If Code <> 0 Then
@@ -366,6 +383,56 @@ Begin
     Ask(Job, 'over_limit_ok', Answer(Prev, 'ai_over'));
     Ask(Job, 'price_unknown_ok', Answer(Prev, 'ai_unknown'));
     Run('ai-read');
+End;
+
+Procedure ShowRelease;
+{ The held result's Release anyway button, when ecadlib offered it (offer_release: the part can be released). }
+Begin
+    EcadlibDialog.ReleaseBtn.Visible := Answer(Job, 'offer_release') = '1';
+    EcadlibDialog.ReleaseBtn.Width := ButtonWidth(EcadlibDialog.ReleaseBtn.Caption);
+End;
+
+Procedure AskRelease;
+{ Release anyway, step 1: why the part is held, and what releasing means. Nothing is released yet. }
+Var
+    i : Integer;
+    S : String;
+Begin
+    Phase := 'confirm_release';
+    Second := 'back_release';
+    S := Answer(Job, 'release_part') + ' is held because:';
+    For i := 1 To 4 Do
+        If Answer(Job, 'release_why' + IntToStr(i)) <> '' Then
+            S := S + #13#10 + '- ' + Answer(Job, 'release_why' + IntToStr(i));
+    S := S + #13#10 + 'Release anyway puts it into the library as it is. ecadlib keeps your name and your reason with it.';
+    EcadlibDialog.Note.Caption := S;
+    EcadlibDialog.Note.Font.Color := $009C9C9C;
+    EcadlibDialog.Note.Visible := True;
+    EcadlibDialog.ReleaseBtn.Visible := False;
+    Buttons('Release it...', 'Back', False);
+    Layout;
+End;
+
+Procedure StartRelease;
+{ Release anyway, step 2: the person says why it is fine (a ready-made reason they can keep or change: one Enter);
+  ecadlib releases it and puts it into the library. An emptied box releases nothing. }
+Var
+    Prev : String;
+    Why : String;
+Begin
+    Prev := Job;
+    Why := Trim(InputBox('ecadlib: release anyway', 'Why is ' + Answer(Prev, 'release_part') + ' fine as it is? (kept with your name in the library plan)', 'Checked it: fine as it is'));
+    If Why = '' Then
+        Exit;
+    SetTitle('Release ' + Answer(Prev, 'release_part'));
+    EcadlibDialog.Big.Caption := 'Releasing...';
+    Job := StartJob('release');
+    Ask(Job, 'dialog', '1');
+    Ask(Job, 'bom', Answer(Prev, 'release_bom'));
+    Ask(Job, 'mpn', Answer(Prev, 'release_mpn'));
+    Ask(Job, 'part', Answer(Prev, 'release_part'));
+    Ask(Job, 'reason', Why);
+    Run('release');
 End;
 
 Procedure StartBom;
@@ -424,6 +491,7 @@ Var
     Extra : String;
     Ini : TIniFile;
 Begin
+    MarkJob(Job, 'finished.txt');      { a background job is put in once, here or by FinishBackgroundJob }
     If Not FileExists(Job + '\result.ini') Then
     Begin
         If FileExists(Job + '\notfound.txt') Then
@@ -509,6 +577,7 @@ Begin
         Begin
             Second := 'queue';
             Buttons('Done', 'Open review queue', False);
+            ShowRelease;
         End
         Else
             Buttons('Done', '', False);
@@ -542,8 +611,50 @@ Begin
     RunApplication(CommandLine(J));
 End;
 
-Procedure OpenDialog(AMode : String; AProject : String; AMpn : String);
+Procedure KeepWorking;
+{ Closes the dialog while ecadlib works on, so Altium is free: background.txt tells ecadlib_run.cmd to call Altium
+  back (FinishBackgroundJob) when the job is done. A job that is done already is finished here, as usual. }
 Begin
+    MarkJob(Job, 'background.txt');
+    AddWaiting(Job);
+    If FileExists(Job + '\exit.txt') Then
+        Exit;
+    EcadlibDialog.Tick.Enabled := False;
+    EcadlibDialog.ModalResult := mrCancel;
+End;
+
+Procedure OpenFinished(J : String);
+{ A job Keep working left running is done: the dialog shows it as if it had waited (the timer runs Finish). }
+Begin
+    Job := J;
+    Mode := 'finish';
+    Project := Asked(J, 'project');
+    Second := '';
+    ClearRows;
+    SetTitle(Asked(J, 'title'));
+    EcadlibDialog.Big.Caption := Title;
+    ShowRunning(Asked(J, 'action'));
+    EcadlibDialog.Status.Caption := 'ecadlib is done';
+    Buttons('Working...', '', True);
+    Layout;
+    EcadlibDialog.Tick.Enabled := True;
+    EcadlibDialog.ShowModal;
+    EcadlibDialog.Tick.Enabled := False;
+End;
+
+Procedure OpenDialog(AMode : String; AProject : String; AMpn : String);
+Var
+    J : String;
+Begin
+    J := DoneWaitingJob;
+    If J <> '' Then
+        If ConfirmNoYes('ecadlib finished ' + Asked(J, 'title') + ' while you kept working.' + #13#10 + 'Put it into the library now? (No skips it.)') Then
+        Begin
+            OpenFinished(J);
+            Exit;
+        End
+        Else
+            MarkJob(J, 'finished.txt');
     Mode := AMode;
     Project := AProject;
     Job := '';
@@ -608,6 +719,8 @@ Begin
         StartFill
     Else If Phase = 'offer_ai' Then
         StartAi
+    Else If Phase = 'confirm_release' Then
+        StartRelease
     Else If Phase = 'done' Then
         ModalResult := mrOk;
 End;
@@ -626,12 +739,31 @@ Begin
         EcadlibDialog.Note.Caption := NextHint;
         EcadlibDialog.Note.Visible := NextHint <> '';
         Buttons('Done', 'Open review queue', False);
+        ShowRelease;
         Layout;
+    End
+    Else If Second = 'back_release' Then
+    Begin
+        Phase := 'done';
+        Second := 'queue';
+        EcadlibDialog.Note.Caption := NextHint;
+        EcadlibDialog.Note.Visible := NextHint <> '';
+        Buttons('Done', 'Open review queue', False);
+        Layout;
+        ShowRelease;
     End
     Else If Second = 'log' Then
         RunApplication('notepad.exe "' + Job + '\log.txt"')
+    Else If (Second = 'background') And (Phase = 'run') Then
+        KeepWorking
     Else If Phase <> 'run' Then
         ModalResult := mrCancel;
+End;
+
+Procedure TEcadlibDialog.ReleaseClick(Sender : TObject);
+Begin
+    If Phase = 'done' Then
+        AskRelease;
 End;
 
 Procedure TEcadlibDialog.ReportClick(Sender : TObject);
@@ -699,15 +831,24 @@ Begin
 End;
 
 Procedure TEcadlibDialog.EcadlibDialogClose(Sender : TObject; Var CloseAction : TCloseAction);
-{ A closed form's enabled timer fires again whenever this script project runs (AD 26.10): stop it. }
+{ A closed form's enabled timer fires again whenever this script project runs (AD 26.10): stop it. Closed another
+  way while it works (Alt+F4, the taskbar): the job still goes on waiting.txt, as with Keep working. }
 Begin
     Tick.Enabled := False;
+    If (Phase = 'run') And (Second = 'background') Then
+        If Not FileExists(Job + '\background.txt') Then
+        Begin
+            MarkJob(Job, 'background.txt');
+            AddWaiting(Job);
+        End;
 End;
 
 Procedure TEcadlibDialog.CloseClick(Sender : TObject);
 Begin
-    If Phase = 'run' Then
-        If Not ConfirmNoYes('ecadlib is still working on ' + Title + '. Stop waiting?' + #13#10 + 'It finishes in the background; run the menu entry again to put the result into the library.') Then
-            Exit;
+    If (Phase = 'run') And (Second = 'background') Then
+    Begin
+        KeepWorking;                { the X while it works: the same as Keep working }
+        Exit;
+    End;
     ModalResult := mrCancel;
 End;
