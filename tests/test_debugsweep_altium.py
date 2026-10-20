@@ -123,6 +123,21 @@ def test_ds2_36_menu_build_with_a_non_ascii_win_dir_fails_cleanly_before_writing
 
 
 @lite
+def test_ds2_36_menu_build_in_a_non_ascii_windows_folder_leaves_out_the_menu_file_and_says_why(tmp_path):
+    import os
+    if os.name != "nt":                  # the folder is derived (and the menu file built) only on Windows
+        return
+    from ecadlib import altium_menu as AM
+    out = tmp_path.resolve() / "José" / "menu"
+    rep = AM.build(out, None, None)
+    assert rep["menu_file"] is None and not (out / AM.PREFS).exists(), rep
+    assert (out / "altium_menu.json").is_file() and "ASCII" in rep.get("menu_file_note", ""), rep
+    readme = (out / AM.README).read_text(encoding="utf-8")
+    assert "build --win-dir" not in readme, "advice that fails the same way for this folder"
+    assert f'install-menu --out "{out}"' in readme                  # a step that works here (Altium's menu file is not ASCII)
+
+
+@lite
 def test_ds2_36_add_to_altium_in_a_non_ascii_windows_workspace_installs_without_the_menu_file(tmp_path, monkeypatch):
     import os
     if os.name != "nt":                  # the menu file is only built on Windows (Windows CI runs this)
