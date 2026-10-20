@@ -285,6 +285,8 @@ def test_ds2_24_a_single_row_of_leads_beside_a_tab_fills_the_body():
     for name, pitch, k, tab in (("TO-263-5_TabPin3", "1.70", 5, "3"), ("TO-263-7_TabPin4", "1.27", 7, "4")):
         res = _tab_read(name, pitch, [str(i) for i in range(1, k + 1)], tab, k, D2PAK)
         assert DR.assess(res) == ("ok", []), (name, DR.assess(res), res["needs_review"])
+    res = _tab_read("TO-263-2", "2.54", ["1", "3"], "2", 3, D2PAK)   # a cut lead: the row still spans 3 pitches
+    assert DR.assess(res) == ("ok", []), ("TO-263-2", DR.assess(res), res["needs_review"])
     review = []                                       # a listed row that is short for the body is still questioned
     D.sanity({"package_type": "gullwing", "pin_count": 5, "pitch": 0.65, "body_length": {"min": 10.0, "nom": 10.2, "max": 10.4},
               "pin_positions": [{"number": str(i), "side": "L", "offset": (i - 3) * 0.65} for i in range(1, 6)],
@@ -315,7 +317,7 @@ def test_ds2_24_a_tab_that_repeats_a_lead_number_needs_pin_positions():
         F.build(spec)
         raise AssertionError("built tab 2 over the other row's leads")
     except ValueError as e:
-        assert "a tab that repeats a lead number needs pin_positions" in str(e), e
+        assert "a tab that repeats a lead number needs pin_positions" in str(e) and " but " not in str(e), e
     ext = copy.deepcopy(_sot223("2.30")["sidecar"]["extraction"])
     ext["package"].update(pin_positions=None, tab=dict(ext["package"]["tab"], number="2"))
     res = D.process(ext, "AMS1117-3.3", "ds.pdf")

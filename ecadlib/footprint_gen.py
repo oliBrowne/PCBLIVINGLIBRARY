@@ -403,6 +403,10 @@ def build(spec, density=None):
     # package_schema.json: signal pins, so a tab that is pin 2 again (SOT-223-3_TabPin2) is not counted twice; a spec
     # file written when this said "a tab counts" (every pad) still builds. Only with pin_positions: in the standard
     # dual row such a tab lands on the other row's leads
+    if want and want == numbered != len(pads) and not spec.get("pin_positions"):
+        raise ValueError(f"the tab repeats a lead number, so the {want} pad numbers are on {len(pads)} pads: a tab "
+                         "that repeats a lead number needs pin_positions (in the standard dual row it lands on the "
+                         "other row's leads)")
     if want and want != len(pads) and not (want == numbered and spec.get("pin_positions")):
         raise ValueError(f"pin_count is {want} but the layout gives {numbered} pad numbers"
                          f"{f' on {len(pads)} pads' if len(pads) != numbered else ''} (count each pad number once, "
