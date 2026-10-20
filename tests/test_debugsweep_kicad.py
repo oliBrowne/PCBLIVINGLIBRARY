@@ -327,6 +327,17 @@ def test_ds2_43_a_value_that_reads_two_ways_holds_the_part_until_a_person_checks
                                       "decimal comma, 4700pF with a thousands comma."), e
 
 
+def test_ds2_43_change_control_and_the_value_parser_agree_on_which_values_read_two_ways():
+    """change_diff._readings called '0,100uF' (a leading zero) and '1000,000pF' (4 digits before the comma) two ways
+    and kicad_index.two_readings one way: one rule now, so 0.1uF -> 0,100uF is the same value, not a change."""
+    from ecadlib import change_diff as CD, fingerprint as FP, kicad_index as KI
+    for v, two in (("4,700pF", True), ("0,100uF", False), ("4,7pF", False), ("1000,000pF", False)):
+        assert (len(CD._readings(v, FP.value_number(v))) == 2) == bool(KI.two_readings(v)) == two, v
+    fp = lambda v: FP.build("", params={"Value": v, "Manufacturer Part Number": "X1"})
+    assert CD.worst([c for c in CD.diff(fp("0.1uF"), fp("0,100uF")) if c["area"] == "identity"]) == "cosmetic"
+    assert CD.worst([c for c in CD.diff(fp("4.7pF"), fp("4,700pF")) if c["area"] == "identity"]) == "identity"
+
+
 @lite
 def test_ds2_44_kicad_pcm_packages_a_crlf_checkout_of_a_kicad_export_folder(tmp_path):
     _, out, _ = TP._export(False, tmp_path)
