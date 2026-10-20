@@ -311,3 +311,22 @@ def test_ds2_31_footprint_gen_reports_a_spec_that_is_not_an_object_or_not_json_a
         assert f"{name}: not written" in p.stderr, (name, p.stderr)
     assert (tmp_path / "out.pretty" / f"{good['name']}.kicad_mod").is_file(), (p.stdout, p.stderr)
     assert p.returncode == 1, p.returncode
+
+
+@lite
+def test_ds2_33_release_check_without_a_kicad_mod_measures_round_pads_not_their_boxes(tmp_path):
+    # The release check of a PcbLib with no .kicad_mod next to it compared pad boxes: the two 1.5 mm round pads with
+    # 0.129 mm of copper between them failed release as 'pads 1 and 2 overlap'.
+    from ecadlib import altium_lib as AL, release_check as RC
+
+    def fails(x, y, shape="circle", rr=""):
+        txt = ('(footprint "T" (layer "F.Cu")\n'
+               f'  (pad "1" thru_hole {shape} (at 0 0) (size 1.5 1.5) (drill 0.9) (layers "*.Cu" "*.Mask"){rr})\n'
+               f'  (pad "2" thru_hole {shape} (at {x} {y}) (size 1.5 1.5) (drill 0.9) (layers "*.Cu" "*.Mask"){rr})\n'
+               '  (fp_rect (start -1.5 -1.5) (end 3 3) (stroke (width 0.05)) (layer "F.CrtYd"))\n)')
+        path = AL.write_pcblib(tmp_path / f"t{len(list(tmp_path.iterdir()))}.PcbLib", [AL.footprint_from_kicad(txt)])
+        return [m for m in RC._pcblib_minimal(AL.read_pcblib(path)[0])[0] if "overlap" in m]
+    assert fails(1.02, 1.27) == [], fails(1.02, 1.27)
+    # really touching: round pads 1.414 mm apart; rounded squares (0.375 mm corners) and squares where the boxes meet
+    for args in ((1.0, 1.0), (1.02, 1.27, "roundrect", " (roundrect_rratio 0.25)"), (1.02, 1.27, "rect")):
+        assert fails(*args) == ["pads 1 and 2 overlap"], (args, fails(*args))
