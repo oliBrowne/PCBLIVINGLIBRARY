@@ -687,6 +687,9 @@ class Guard:
             fp = FP.of_item(it, self.base)
             if fp.get("notes"):                # an unreadable file is no released revision to keep
                 continue
+            from .altium_dblib_sync import readback_problems
+            if readback_problems(it, self.base):   # a file holding another part's model: the writer refuses it, so
+                continue                           # it is no revision 1 (the fixed file is the first release)
             if self.mode == "gate" and not why and not it.get("_manifest"):
                 if heads is None:              # released parts no longer in the plan, by MPN
                     heads = self._retired_by_mpn(names)

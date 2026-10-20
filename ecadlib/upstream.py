@@ -425,8 +425,8 @@ def _folder(p):
 def check_a365(items, nodes, folders=None, state=None, rules=None):
     """plan items vs workspace nodes -> (rows, new state). state: {name: {revision, symbols, footprints}} from last run.
     rules: the plan's parameters are compared under the rules' house names, as push sends them."""
-    from .altium365 import merged_params
-    from .rules import house_item
+    from .altium365 import merged_params, model_item_names
+    from .rules import house_item, param_name
     items = [house_item(i, rules) for i in items]
     by = {}
     for n in nodes:
@@ -441,22 +441,28 @@ def check_a365(items, nodes, folders=None, state=None, rules=None):
             row(it["name"], "missing", detail=f"plan status {it.get('status', '')}"); continue
         d = n.get("details") or {}
         cur = {p["name"]: p["value"] for p in d.get("parameters") or []}
-        if merged_params(n, it) is not None:
+        if merged_params(n, it, rules) is not None:
             for p in it["parameters"]:
                 if cur.get(p["name"]) != p["value"]:
                     row(it["name"], "parameter", p["name"], p["value"], cur.get(p["name"], "(absent)"))
             for k in it.get("cleared", []):
                 if k in cur:
                     row(it["name"], "parameter", k, "(cleared)", cur[k])
+            sent = {p["name"] for p in it["parameters"]}
+            for k in cur:                      # ecadlib's own name of a field now sent under its house name
+                if param_name(k, rules) != k and param_name(k, rules) in sent:
+                    row(it["name"], "parameter", k, f"(now {param_name(k, rules)})", cur[k])
         for f in ("comment", "description"):
             if f in n and (it.get(f) or "") != (n[f] or ""):
                 row(it["name"], f, f, it.get(f) or "", n[f] or "")
         if n.get("folder") and _folder(n["folder"].get("path")) != _folder(it["folder"]):
             row(it["name"], "folder", "folder", it["folder"], n["folder"].get("path"))
-        for kind, key in (("symbol", "symbols"), ("footprint", "footprints")):
+        pushed = dict(zip(("symbol", "footprint"), model_item_names(     # push names a model named like the part
+            {"name": it["name"], **{k: {"ref": (it.get(k) or {}).get("ref")} for k in ("symbol", "footprint")}})))
+        for kind, key in (("symbol", "symbols"), ("footprint", "footprints")):  # <ref>-SYM / <ref>-FP
             names = [x["name"] for x in d.get(key) or []]
             ref = (it.get(kind) or {}).get("ref")
-            if ref and names and ref not in names:
+            if ref and names and ref not in names and pushed.get(kind) not in names:
                 row(it["name"], kind, kind, ref, ", ".join(names))
         rev = n.get("revision") or {}
         snap = {"revision": rev.get("revisionId") or rev.get("id"), "lifecycle": ((rev.get("details") or {}).get("lifeCycleState") or {}).get("name"),

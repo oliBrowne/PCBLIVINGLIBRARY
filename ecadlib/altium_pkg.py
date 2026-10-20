@@ -501,6 +501,9 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
                                  f"against the released revisions: name it with --plan PLAN, package the plan.json "
                                  f"itself, or pass --unchecked to package them as they are")
             files = collect(src, out, kept)
+            if lib:                            # the library's third-party terms go with its files (as from a plan)
+                from .librarian import write_notice
+                write_notice(out, json.loads(lib.read_text(encoding="utf-8")))
         rep["kept_edits"] = kept
         rep["checked"] = str(lib) if lib else None
         if not lib and unchecked:
@@ -517,6 +520,10 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
     libpkg = f"{name}.LibPkg"
     written = []
     from . import altium_native as AN
+    if not native and src.resolve() != out.resolve():  # --no-native-build: no recipes (nor build state) in the
+        for p in sorted(out.rglob(f"*{AN.EXT}")):       # package; a folder packaged in place keeps its own
+            p.with_name(p.name[:-len(AN.EXT)] + AN.STATE_EXT).unlink(missing_ok=True)
+            p.unlink()
     native = bool(native and AN.recipes(out))
     if native:
         nat = AN.write(out)

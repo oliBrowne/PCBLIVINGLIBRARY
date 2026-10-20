@@ -1168,7 +1168,7 @@ def _main(argv=None):
     if a.cmd == "dump":
         for f in a.files:
             if f.lower().endswith(".pcblib"):
-                for fp in read_pcblib(f):
+                for fp in _dump_read(read_pcblib, f):
                     pads = [r for r in fp["records"] if r["type"] == "pad"]
                     kinds = {}
                     for r in fp["records"]:
@@ -1192,7 +1192,7 @@ def _main(argv=None):
                     for mp, d in fp.get("models", []):
                         print(f"   model {mp['NAME']} {len(d)} B checksum {mp['CHECKSUM']} (computed {step_checksum(d)})")
             else:
-                _, syms = read_schlib(f)
+                _, syms = _dump_read(read_schlib, f)
                 for sy in syms:
                     pins = [r for r in sy["records"] if r["RECORD"] == "2"]
                     modes = int(sy["records"][0].get("DISPLAYMODECOUNT", 1))
@@ -1224,5 +1224,23 @@ def _main(argv=None):
             print(f"{sym['name']:<24} {sum(1 for p in sym['prims'] if p[0] == 'pin'):>3} pins -> {path}")
 
 
-if __name__ == "__main__":
-    main()
+def _dump_read(reader, f):
+    """reader(f), naming the file when it is no Altium library at all (olefile's "not an OLE2 structured storage
+    file" says nothing of which one, with several given)."""
+    try:
+        return reader(f)
+    except FileNotFoundError:
+        raise
+    except OSError as e:
+        raise ValueError(f"{f}: {e}") from e
+
+
+if __name__ == "__main__":                     # `python3 -m ecadlib.altium_lib dump ... | head`: quiet, as `ecadlib` is
+    from .cli import _pipe_gone, _quiet_stdout
+    try:
+        main()
+        sys.stdout.flush()
+    except OSError as e:
+        if not _pipe_gone(e):
+            raise
+        sys.exit(_quiet_stdout())
