@@ -301,15 +301,15 @@ def read_bom(path, columns=None, rules=None, root=None):
         cells = [str(x).strip() for x in row]
         note, shifted = [], False
         n = max((j + 1 for j, c in enumerate(cells) if c), default=0)
-        if text_src and n > hlen and not (widths and widths[idx] <= hwidth):   # more cells than the header: an
-                                                                  # unquoted '4,7k' (not a column the header row has)
+        if text_src and n > hlen:                                 # more cells than the header: an unquoted '4,7k'
             vj = col.get("value")
             if (n == hlen + 1 and vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
                     and re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?[A-Za-zΩ%]*", cells[vj + 1])
                     and _fraction_fits(cells, vj, col, nxt)):
                 cells = cells[:vj] + [f"{cells[vj]},{cells[vj + 1]}"] + cells[vj + 2:] + [""]
                 note.append(f"value {cells[vj]} was split by an unquoted decimal comma; read as one cell")
-            else:
+            elif not (widths and widths[idx] <= hwidth):          # else a stray comma, unless the header row has that
+                                                                  # cell too (Excel's unnamed notes column)
                 shifted = True
                 note.append(f"row {idx + 1} has {n} cells but the header has {hlen} (an unquoted comma?): its MPN and "
                             "footprint were not used; quote the cell or fix the row")
