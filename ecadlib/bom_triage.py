@@ -453,8 +453,9 @@ def _bom_sheet(p, sheets, columns=None):
             continue
         df = df.copy()
         for j in hidden.get(name) or ():
-            if j < df.shape[1]:
-                df.iloc[:, j] = ""
+            if j in df.columns:                          # by sheet column (0 = A): a sparse frame leaves out empty ones
+                df[j] = ""
+        df.columns = range(df.shape[1])
         df = df.fillna("")
         df = df[df.astype(str).apply(lambda c: c.str.strip()).ne("").any(axis=1)].reset_index(drop=True)
         frames.append((name, df))
@@ -535,8 +536,8 @@ MAX_XL_CELLS = 2_000_000
 
 
 def _compact(cells, where):
-    """{(row, col): text} -> rows of text with the empty rows and columns left out (a sheet with one cell at
-    XFD1048576 is two cells, not a 17-billion-cell grid)."""
+    """{(row, col): text} -> (rows of text with the empty rows and columns left out, the sheet column of each one
+    (0 = A)): a sheet with one cell at XFD1048576 is two cells, not a 17-billion-cell grid."""
     rows, cols = sorted({r for r, _ in cells}), sorted({c for _, c in cells})
     if len(rows) * len(cols) > MAX_XL_CELLS:
         raise ValueError(f"{where}: the sheet is {len(rows)} rows x {len(cols)} columns; is this really a BOM?")
@@ -545,7 +546,7 @@ def _compact(cells, where):
     ri = {r: k for k, r in enumerate(rows)}
     for (r, c), v in cells.items():
         out[ri[r]][ci[c]] = v
-    return out
+    return out, [c - 1 for c in cols]
 
 
 def _uncached_message(p, sheet, refs):
@@ -608,8 +609,9 @@ def _sparse_frames(p):
     for ws in wb.worksheets:
         cells = {k: _xl_text(c.value).strip() for k, c in getattr(ws, "_cells", {}).items() if c.value is not None}
         cells = {k: v for k, v in cells.items() if v}
-        out.append((ws.title, pd.DataFrame(_compact(cells, f"{p}: sheet {ws.title!r}") if cells else [], dtype=object)))
-    return out
+        rows, cols = _compact(cells, f"{p}: sheet {ws.title!r}") if cells else ([], [])
+        out.append((ws.title, pd.DataFrame(rows, columns=cols, dtype=object)))   # labelled by sheet column, as
+    return out                                                                   # _bom_sheet hides by it
 
 
 def _uncached_formulas(p):
