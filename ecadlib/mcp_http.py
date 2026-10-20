@@ -174,6 +174,10 @@ def run(ws, a):
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    except OSError as e:                                    # port taken, or an address this computer does not have
+        print(f"ecadlib mcp: can't listen on {a.host}:{a.port} ({e.strerror or e})\n  hint: is another ecadlib mcp "
+              f"--http already running there? Stop it or try --port {a.port + 1}", file=sys.stderr)
+        return 2
     host = f"[{a.host}]" if ":" in a.host else a.host
     url = f"http://{host}:{srv.server_address[1]}{a.path}"
     print(f"ecadlib MCP server (Streamable HTTP) on {url}", file=sys.stderr)

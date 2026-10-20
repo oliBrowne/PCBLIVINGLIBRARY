@@ -224,3 +224,25 @@ def test_setup_check_key_checks_the_pasted_key():
     page = (REPO / "ecadlib" / "ui" / "static" / "setup.html").read_text(encoding="utf-8")
     fn = page[page.index('$("checkkey").onclick'):]
     assert 'key: $("key").value' in fn[:400], fn[:400]
+
+
+# T103
+@lite
+def test_mcp_http_on_a_taken_port_names_the_address(tmp_path):
+    """A second `ecadlib mcp --http` on the same port said "Address already in use / hint: check the path and the
+    disk": no address, and a hint about files."""
+    import argparse, contextlib, io, socket
+    from ecadlib import mcp_http as H
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", 0))
+    busy.listen(1)
+    port = busy.getsockname()[1]
+    a = argparse.Namespace(no_auth=False, token="t", host="127.0.0.1", port=port, path="/mcp", allow_origin=[])
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            rc = H.run(Workspace(tmp_path / "ws"), a)
+    finally:
+        busy.close()
+    assert rc == 2 and f"127.0.0.1:{port}" in err.getvalue() and f"--port {port + 1}" in err.getvalue(), err.getvalue()
+    assert "disk" not in err.getvalue()
