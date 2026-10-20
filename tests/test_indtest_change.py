@@ -100,3 +100,22 @@ def test_t011_chosen_footprint_gets_its_own_file():
         assert _run(d, d / "home", "librarian", "bom.csv", "-o", "lib", "--offline", "--sources", "standard").returncode == 0
         again = {i["name"]: i["footprint"] for i in json.loads((lib / "plan.json").read_text(encoding="utf-8"))}
         assert again["KT-0603R"]["file"] == red["file"] and again["KT-0603G"]["file"] == green["file"]   # a re-run keeps both
+
+
+# ------------------------------------------------------------------ T042: part approve released an unreadable .kicad_mod
+def test_t042_unreadable_kicad_mod_fails_the_release_check():
+    with tempfile.TemporaryDirectory() as d:
+        lib = _demo(d)
+        items = {i["name"]: i for i in json.loads((lib / "plan.json").read_text(encoding="utf-8"))}
+        kmod = lib / "models/KiCad/C_0402_1005Metric.kicad_mod"
+        released = kmod.read_bytes()
+        assert not RC.check_item(items["CAP-0402-100nF"], lib)[0]
+        kmod.write_bytes(released[:400])                                       # cut short
+        fails = RC.check_item(items["CAP-0402-100nF"], lib)[0]
+        assert any(r == "files" and "KiCad footprint file does not read back" in m for r, m in fails), fails
+        _run(d, Path(d) / "home", "kicad-export", lib / "plan.json", "-o", "kx", "--name", "m")    # held as a change
+        held = {h["part"]: h for h in json.loads(_run(d, Path(d) / "home", "part", "status", lib, "--json").stdout)["held"]}
+        ap = _run(d, Path(d) / "home", "part", "approve", lib, "--part", "CAP-0402-100nF", "--digest",
+                  held["CAP-0402-100nF"]["digest"][:12], "-m", "ok", "--user", "Ann <ann@x.com>")
+        assert ap.returncode == 2 and "fails the release check" in ap.stderr, (ap.returncode, ap.stdout, ap.stderr)
+        assert kmod.read_bytes() == released

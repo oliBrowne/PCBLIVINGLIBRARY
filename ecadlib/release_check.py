@@ -261,9 +261,16 @@ def check_item(item, base=".", rules=None):
     kmod = _kicad_mod(item, base, fp_f) if fp_f else None
     if kmod:
         info["kicad_mod"] = str(kmod)
-        text = kmod.read_text(encoding="utf-8")
+        try:                                   # a .kicad_mod KiCad cannot load is no release, whatever the PcbLib says
+            text = kmod.read_text(encoding="utf-8")
+            tree = FC.sexpr.parse(text)
+            if not (isinstance(tree, list) and tree and tree[0] in ("footprint", "module")):
+                raise ValueError("not a footprint")
+        except Exception as e:
+            add("files", f"KiCad footprint file does not read back: {kmod.name} ({type(e).__name__}: {e})")
+            text, tree = None, None
         try:
-            issues, nums = FC.check(text), {p["num"] for p in FC._pad_rects(FC.sexpr.parse(text))}
+            issues, nums = (FC.check(text), {p["num"] for p in FC._pad_rects(tree)}) if text is not None else ([], set())
         except Exception as e:                 # checker crash: fall back to the PcbLib minimum below
             issues, nums, kmod = [], set(), None
             warns.append(f"footprint_check failed on {info.pop('kicad_mod')} ({type(e).__name__}: {e})")
@@ -276,7 +283,7 @@ def check_item(item, base=".", rules=None):
             hard = lvl == "error" and (not kicad_lib or (rule == "copper" and "overlap" in msg) or
                                        (rule == "courtyard" and msg.startswith("no courtyard")) or (rule == "pin1" and "no pad" in msg))
             (add("footprint", f"{rule}: {msg}") if hard else warns.append(f"{lvl} {rule}: {msg}"))
-        if kmod:                               # the rule book (footprint_rules): naming, layers, type, pin map ...
+        if kmod and text is not None:          # the rule book (footprint_rules): naming, layers, type, pin map ...
             try:
                 book = FR.check(text, filename=kmod.name, symbol_pins=pin_names if syms else None, geometry=False)
             except Exception as e:             # a rule-book crash must not hide the other rules
