@@ -107,7 +107,8 @@ def output_config(model, effort, schema):
 
 
 def price_of(model):
-    """(input, output) $ per MTok: PRICES for Claude, else what ecadlib.llm knows (a local endpoint is $0), else None."""
+    """(input, output) $ per MTok: PRICES for Claude, else what ecadlib.llm knows (a local endpoint is $0 unless
+    [ai.profiles] sets price_in / price_out), else None."""
     p = PRICES.get(model) or PRICES.get(base_model(model))
     if p:
         return p

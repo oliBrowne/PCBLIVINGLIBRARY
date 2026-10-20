@@ -7,7 +7,8 @@ A profile is {tier, pdf, vision, json_schema, context, max_tokens_param, price_i
   json_schema  it honours a JSON-schema response format (else: schema in the prompt + JSON repair)
   context      context window in tokens (sizes how much page text is sent)
   max_tokens_param  max_tokens | max_completion_tokens (OpenAI's newer models want the second)
-  price_in / price_out  $ per million tokens when known (Claude: datasheet.PRICES; a local server is $0)
+  price_in / price_out  $ per million tokens when known (Claude: datasheet.PRICES; a local server is $0 unless
+               [ai.profiles] sets both, e.g. a paid gateway on a private network)
   sampling     it takes a temperature (unset: ecadlib.llm.sampling's table of models that reject one)
 
 Where it comes from, later wins: CONSERVATIVE (an unknown model: small, text only, no schema, 4K context) ->

@@ -188,7 +188,8 @@ def registered(ref):
 
 def price(ref):
     """(input, output) $ per MTok for a model in use, or None when unknown. Claude: datasheet.PRICES. A local
-    endpoint: (0, 0). Others: what the profile says (rules override, or detected from OpenRouter's /models)."""
+    endpoint: (0, 0), unless [ai.profiles] sets price_in and price_out (a paid gateway on your network). Others: what
+    the profile says (rules override, or detected from OpenRouter's /models)."""
     from .. import datasheet as D
     if ref in D.PRICES:
         return D.PRICES[ref]
