@@ -2157,11 +2157,22 @@ class Reader:
     def deferred(self):
         return self.batch or self.estimate_only
 
-    def client(self):
+    def _claude_key(self, model=None):
+        """The key a request to the Claude API (count_tokens, Message Batches) carries: this Reader's own when its
+        endpoint is Claude, else the key of the Claude endpoint `model` (or the first ladder rung on one) names, as
+        _send_fn picks it. Never another provider's key (self.key is the OpenAI one under [ai] provider = openai)."""
+        if self.ep["provider"] == "anthropic":
+            return self.key
+        from . import llm as LL
+        eps = (self.info(r)["ep"] for r in ([model] if model else self.router.ladder))
+        return next((LL.key_for(ep) for ep in eps if ep["provider"] == "anthropic"), None)
+
+    def client(self, model=None):
         if self.offline:
             raise DatasheetError(OFFLINE)
         if self._client is None:
-            self._client = Client(require_key(self.key), log_file=self.log_file, say=self.say, sleep=self.sleep)
+            self._client = Client(require_key(self._claude_key(model)), log_file=self.log_file, say=self.say,
+                                  sleep=self.sleep)
         return self._client
 
     # --- jobs
@@ -2568,7 +2579,7 @@ class Reader:
             if self.key and self._plain(model):
                 try:
                     with logging_to(self.log_file, self.say):
-                        tin = self.client().count_tokens(j["body"])
+                        tin = self.client(model).count_tokens(j["body"])
                     how = "count_tokens"
                 except Exception as e:                # offline, a refused key: an estimate never stops the run
                     self.say(f"  count_tokens failed ({type(e).__name__}): rough estimate instead")

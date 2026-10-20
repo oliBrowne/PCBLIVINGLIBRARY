@@ -58,3 +58,25 @@ def test_ds2_15_batch_answer_for_a_part_not_in_this_run_keeps_its_pages(tmp_path
     assert len(api.of("/v1/messages/batches")) == 1                 # B was paid for once, in run 1
     assert res["sidecar"]["pin_table"]["page"] == 14, res["sidecar"]["pin_table"]
     assert rd.results.get(jb["key"])["url"] == "https://a/ldo.pdf"
+
+
+# ---- DS2-19: with [ai] provider = openai, counting tokens for a Claude rung sent the OpenAI key to api.anthropic.com
+@lite
+def test_ds2_19_count_tokens_for_a_claude_rung_never_carries_another_providers_key(tmp_path, monkeypatch):
+    from ecadlib import userconfig as UC
+    from tests import test_datasheet_batch as TB
+    openai_key, claude_key = "sk-proj-OPENAI-test-111", "sk-ant-CLAUDE-test-222"
+    rules = {"ai": {"provider": "openai", "model": "gpt-6-luna", "detect": False,
+                    "endpoints": {"claude": {"provider": "anthropic"}}},
+             "datasheet": {"route": "ladder", "ladder": ["gpt-6-luna", "claude:claude-opus-5-5"], "max_cost_usd": 5}}
+    _, body = D.build_request(("base64", b"%PDF-1.4 fake"), "BGA-PART", "BGA-64", None, "claude:claude-opus-5-5")
+    job = {"name": "BGA-PART", "model": "claude:claude-opus-5-5", "body": body, "url": "x.pdf",
+           "prov": {"pages": 5, "sent_as": "base64"}}
+    for stored, want in (({"OPENAI_API_KEY": openai_key, "ANTHROPIC_API_KEY": claude_key}, [claude_key]),
+                         ({"OPENAI_API_KEY": openai_key}, [])):          # no Claude key: a rough estimate, nothing sent
+        monkeypatch.setattr(UC, "secret", lambda name, env=None, s=stored: s.get(name))
+        api = TB.FakeAPI()
+        with TB.patched(api):
+            rd = D.Reader(tmp_path / "out", tmp_path / "cache", rules=rules, log=None)
+            rd.estimate([job])
+        assert [c[2]["x-api-key"] for c in api.of("/count_tokens")] == want, api.calls
