@@ -83,3 +83,27 @@ def test_ds2_06_remap_bom_finds_house_header_sheet_behind_cover(tmp_path):
     rows = out.read_text(encoding="utf-8-sig").splitlines()
     assert n == 1 and rows == ["Bauteil,Wert,Herst.-Nr.,Gehäuse", "R1,10k,RC0603FR-0710KL,R_0603_1608Metric",
                                "C1,100n,GRM188R71H104KA93D,C_0603_1608Metric"], (n, rows)
+
+
+@lite
+def test_ds2_07_remap_bom_keeps_hidden_columns(tmp_path):
+    """remap_bom promises a copy with only LibRef / Footprint changed. It wrote triage's view of the sheet, where a
+    hidden column is blanked (so an old hidden MPN or footprint is not read): the copy lost that column's header and
+    every value. The hidden column is still not the one remapped."""
+    from openpyxl import Workbook
+    x = tmp_path / "bom.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "BOM"
+    for r in (["Designator", "Value", "Footprint", "MPN", "Footprint"],
+              ["R1", "10k", "R0603_OLD", "RC0603FR-0710KL", "R0603_OLD"],
+              ["C1", "100n", "keep this note", "GRM188R71H104KA93D", "C_0603_1608Metric"]):
+        ws.append(r)
+    ws.column_dimensions["C"].hidden = True               # the old footprint column, kept hidden
+    wb.save(x)
+    out, n = DD.remap_bom(x, [{"kind": "footprint", "from": "R0603_OLD", "to": "R_0603_1608Metric"}], tmp_path / "d.csv",
+                          columns={})
+    rows = out.read_text(encoding="utf-8-sig").splitlines()
+    assert n == 1 and rows == ["Designator,Value,Footprint,MPN,Footprint",
+                               "R1,10k,R0603_OLD,RC0603FR-0710KL,R_0603_1608Metric",
+                               "C1,100n,keep this note,GRM188R71H104KA93D,C_0603_1608Metric"], (n, rows)
