@@ -127,6 +127,39 @@ def bga_balls(spec):
     return [(f"{row_name(i, jedec)}{j + 1}", i, j) for i, j in sorted(have)]
 
 
+def bga_land(spec):
+    """(land diameter, rule text): the datasheet's land_diameter, else the IPC-7351B land for ball_diameter."""
+    if spec.get("land_diameter"):
+        return _dim(spec["land_diameter"])[1], "datasheet land"
+    if not spec.get("ball_diameter"):
+        raise ValueError("bga needs ball_diameter (or the datasheet's land_diameter)")
+    return ipc_bga_land(_dim(spec["ball_diameter"])[1], spec.get("ball_type", "collapsing"))
+
+
+def bga_body(spec, land=None):
+    """(half x, half y, note): the body as the footprint draws it (x along the columns, y along the rows). A body the
+    ball grid fits only turned, or whose long side runs across the grid's long side, is turned a quarter turn; note
+    says so (else None). step_gen uses the same body so the 3D model sits on the courtyard and fab outline."""
+    rows, cols, e = spec["rows"], spec["cols"], spec["pitch"]
+    ey = spec.get("pitch_y") or e
+    if land is None:
+        land = bga_land(spec)[0]
+    bx, by = _dim(spec["body_length"])[1] / 2, _dim(spec["body_width"])[1] / 2
+    gx, gy = (cols - 1) * e / 2, (rows - 1) * ey / 2
+    turned = None
+    if (gx + land / 2 > bx or gy + land / 2 > by) and gx + land / 2 <= by and gy + land / 2 <= bx:
+        # a datasheet gives the body as length x width and the ball grid as rows x columns with no shared axis
+        # (TPS628436YKA: 3 x 2 at 0.35 mm, body 1.05 x 0.797): the grid fits the body turned a quarter turn
+        bx, by = by, bx
+        turned = f"body {2 * by:g} x {2 * bx:g} mm turned to {2 * bx:g} x {2 * by:g} to fit the {rows} x {cols} grid"
+    elif (gx - gy) * (bx - by) < -1e-9 and gx + land / 2 <= by and gy + land / 2 <= bx:
+        # the grid is long one way and the body the other (CY14U256LA: 6 x 8 balls, body read as 10 x 6 mm): the
+        # long side of a BGA body runs with the long side of its ball grid
+        bx, by = by, bx
+        turned = f"body {2 * by:g} x {2 * bx:g} mm turned to {2 * bx:g} x {2 * by:g} to run with the {rows} x {cols} grid"
+    return bx, by, turned
+
+
 def ipc_bga_land(ball, ball_type="collapsing"):
     """IPC-7351B land diameter for a nominal ball (or LGA terminal) diameter. Returns (land, rule text)."""
     if ball_type == "lga":
@@ -866,13 +899,7 @@ def _bga(spec, density):
     if spec.get("pin_count") and spec["pin_count"] != len(balls):
         raise ValueError(f"pin_count is {spec['pin_count']} but the {rows} x {cols} grid minus depopulated balls leaves "
                          f"{len(balls)} balls (check depopulated / ball_map)")
-    bt = spec.get("ball_type", "collapsing")
-    if spec.get("land_diameter"):
-        land, rule = _dim(spec["land_diameter"])[1], "datasheet land"
-    else:
-        if not spec.get("ball_diameter"):
-            raise ValueError("bga needs ball_diameter (or the datasheet's land_diameter)")
-        land, rule = ipc_bga_land(_dim(spec["ball_diameter"])[1], bt)
+    land, rule = bga_land(spec)
     if land < 0.05:
         raise ValueError(f"land {land:g} mm: ball_diameter / land_diameter must be a real size (> 0.05 mm)")
     style = spec.get("land_style", "NSMD")
@@ -894,19 +921,8 @@ def _bga(spec, density):
         if style == "SMD":
             p["paste_margin"] = -SMD_GROW
         pads.append(p)
-    bx, by = _dim(spec["body_length"])[1] / 2, _dim(spec["body_width"])[1] / 2
+    bx, by, turned = bga_body(spec, land)
     gx, gy = (cols - 1) * e / 2, (rows - 1) * ey / 2
-    turned = None
-    if (gx + land / 2 > bx or gy + land / 2 > by) and gx + land / 2 <= by and gy + land / 2 <= bx:
-        # a datasheet gives the body as length x width and the ball grid as rows x columns with no shared axis
-        # (TPS628436YKA: 3 x 2 at 0.35 mm, body 1.05 x 0.797): the grid fits the body turned a quarter turn
-        bx, by = by, bx
-        turned = f"body {2 * by:g} x {2 * bx:g} mm turned to {2 * bx:g} x {2 * by:g} to fit the {rows} x {cols} grid"
-    elif (gx - gy) * (bx - by) < -1e-9 and gx + land / 2 <= by and gy + land / 2 <= bx:
-        # the grid is long one way and the body the other (CY14U256LA: 6 x 8 balls, body read as 10 x 6 mm): the
-        # long side of a BGA body runs with the long side of its ball grid
-        bx, by = by, bx
-        turned = f"body {2 * by:g} x {2 * bx:g} mm turned to {2 * bx:g} x {2 * by:g} to run with the {rows} x {cols} grid"
     if gx + land / 2 > bx or gy + land / 2 > by:
         raise ValueError(f"the {rows} x {cols} grid at {e:g} mm pitch ({2 * gx:.2f} x {2 * gy:.2f} mm) doesn't fit the "
                          f"{2 * bx:g} x {2 * by:g} mm body: rows/cols swapped or pitch misread?")
