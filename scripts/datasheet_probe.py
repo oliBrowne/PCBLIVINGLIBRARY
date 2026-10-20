@@ -144,6 +144,8 @@ def probe(url, mode, root, last):
         ok, err, pages, size = bool(meta.get("pages")), "" if meta.get("pages") else "no pages", meta.get("pages"), len(data)
     except D.DatasheetError as e:
         ok, err, pages, size = False, str(e).replace(url, "").lstrip(": ")[:200], "", ""
+    except Exception as e:                                          # a crash on one link (MemoryError...) is a row, not the end of the run
+        ok, err, pages, size = False, f"CRASH {type(e).__name__}: {str(e)[:160]}", "", ""
     return {"ok": ok, "error": err, "pages": pages, "bytes": size, "attempts": getattr(st, "attempts", 0) or 1, "seconds": round(time.time() - t, 1)}
 
 
