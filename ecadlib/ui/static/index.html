@@ -984,8 +984,9 @@ async function showLibrarian(r) {
 async function loadParts(quiet) {
   const bom = current && current.bom;
   if (!bom) return;
-  try { parts = await api("/api/parts?bom=" + encodeURIComponent(bom)); }
+  try { parts = await api("/api/parts?bom=" + encodeURIComponent(bom) + (quiet ? "&ifplan=1" : "")); }
   catch (e) { if (quiet) { parts = null; $("#libout").innerHTML = ""; return; } throw e; }
+  if (!parts.plan) { parts = null; $("#libout").innerHTML = ""; return; }   // quiet: no plan for this BOM yet
   if (!current || current.bom !== bom) return;
   $("#librerun").hidden = false; $("#libtools").hidden = false;
   renderParts();
@@ -1524,11 +1525,14 @@ $("#doctorbtn").addEventListener("click", e => action(e.target, $("#doctorout"),
     `<details style="margin-top:6px"><summary class="muted small">${ok} OK check(s)</summary>${r.checks.filter(c => c.level === "OK").map(row).join("")}</details>`;
 }));
 // #review=<BOM>: the parts the librarian built for that BOM, held ones with their reasons (the Altium / KiCad menu's
-// "Open review queue" links here for the parts added from the menu)
+// "Open review queue" links here for the parts added from the menu). Without it, a workspace with a plan but no BOM
+// check yet (`ecadlib demo`, `ecadlib librarian`) opens its newest planned BOM, so step 2 shows its parts.
 async function openReview() {
   const m = /^#review=(.+)$/.exec(location.hash || "");
-  if (!m) return;
-  const bom = decodeURIComponent(m[1]), h = history.find(x => x.bom === bom);
+  if (!m && (history.length || current)) return;
+  if (!m && !info) await loadInfo();
+  const bom = m ? decodeURIComponent(m[1]) : (info.planned || [])[0], h = history.find(x => x.bom === bom);
+  if (!bom) return;
   let t = null;
   if (h) { try { t = await api("/api/triage/result?id=" + encodeURIComponent(h.id)); } catch (e) { t = null; } }
   showResult(t || { bom, name: bom.split("/").pop(), rows: [], counts: {}, mapping: {}, reports: ["", ""], finished: null });

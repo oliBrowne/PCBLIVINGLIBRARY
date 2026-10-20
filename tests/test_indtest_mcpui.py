@@ -152,3 +152,45 @@ def test_http_server_answers_cors_only_for_allowed_origins(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+PAGE = (REPO / "ecadlib" / "ui" / "static" / "index.html").read_text(encoding="utf-8")
+
+
+# T051 (the browser check: tests/test_ui_browser.py, "planned")
+@lite
+def test_ui_opens_a_plan_made_outside_it(tmp_path):
+    """`ecadlib demo` then `ecadlib ui --workspace ecadlib-demo` opened with step 1 only: a plan with no BOM check in
+    the UI's history was never opened. /api/info names the BOMs that have a plan and the page opens the newest."""
+    from tests.test_ui import serve
+    from tests.test_ui_browser import planned_workspace
+    ws = planned_workspace(tmp_path / "ws")
+    srv, call = serve(ws)
+    try:
+        st, info = call("GET", "/api/info")
+        assert st == 200 and info["planned"] == ["uploads/demo/demo_bom.csv"], info
+        assert call("GET", "/api/triage/history")[1]["triages"] == []
+    finally:
+        srv.shutdown()
+    fn = PAGE[PAGE.index("async function openReview"):PAGE.index("function startApp")]
+    assert "info.planned" in fn, fn
+
+
+# T112
+@lite
+def test_new_bom_asks_for_its_plan_without_an_error(tmp_path):
+    """Every first upload of a new BOM made the page GET /api/parts -> 400 (and a console error): "no plan yet" is no
+    error. With ifplan=1 the server answers 200 {"plan": null}; without it a missing plan is still a 400."""
+    from tests.test_ui import serve
+    ws = Workspace(tmp_path / "ws", [DEMO_LIB], offline=True)
+    (ws.root / "uploads").mkdir(parents=True, exist_ok=True)
+    _res_bom(ws.root / "uploads" / "new.csv", 2)
+    srv, call = serve(ws)
+    try:
+        assert call("GET", "/api/parts?bom=uploads/new.csv&ifplan=1") == (200, {"plan": None})
+        assert call("GET", "/api/parts?bom=uploads/new.csv")[0] == 400
+        assert call("GET", "/api/info")[1]["planned"] == []
+    finally:
+        srv.shutdown()
+    fn = PAGE[PAGE.index("async function loadParts"):PAGE.index("function libNext")]
+    assert '"&ifplan=1"' in fn and "!parts.plan" in fn, fn

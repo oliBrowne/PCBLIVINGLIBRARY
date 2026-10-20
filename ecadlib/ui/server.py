@@ -363,7 +363,10 @@ def make_handler(ws: Workspace):
                     except KeyError as e:
                         return self._send(404, {"error": _msg(e)})
                 if u.path == "/api/parts":                      # part cards of a BOM's library plan
-                    return self._send(200, ws.library_parts(self._bom({"bom": q.get("bom")}), q.get("pictures") != "0"))
+                    bom = self._bom({"bom": q.get("bom")})
+                    if q.get("ifplan") == "1" and not ws.has_plan(bom):   # no plan yet is no error (a new BOM)
+                        return self._send(200, {"plan": None})
+                    return self._send(200, ws.library_parts(bom, q.get("pictures") != "0"))
                 if u.path == "/api/job":                        # a running job (its live log)
                     job = jobs.get(q.get("id", ""))
                     return self._send(200, job) if job else self._send(404, {"error": "no such job"})

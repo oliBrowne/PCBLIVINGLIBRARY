@@ -151,7 +151,14 @@ class Workspace:
                 "altium365": {"token": bool(UC.secret("NEXAR_TOKEN"))},
                 "rules": (lambda f: self._label(f) if f else None)(self.rules_in_use()),
                 "altium_models": {k: sorted(p.stem for p in (self.models / k).glob(f"*.{k}")) for k in ("PcbLib", "SchLib")},
-                "boms": self._uploaded_boms()}
+                "boms": (boms := self._uploaded_boms()), "planned": [b for b in boms if self.has_plan(b)]}
+
+    def has_plan(self, bom):
+        """Whether the librarian has made a plan for this BOM (ecadlib demo / librarian / the UI's Fill)."""
+        try:
+            return (self._librarian_dir(self._bom_path(bom)) / "plan.json").is_file()
+        except (OSError, ValueError):
+            return False
 
     def _uploaded_boms(self):
         """uploads/<name> (older workspaces) and uploads/<stamp>-<rand>/<name>, newest upload folder first.
