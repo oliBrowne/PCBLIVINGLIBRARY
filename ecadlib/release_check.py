@@ -146,26 +146,43 @@ def _supplier_number(par, field, rules):
                in ("lcsc", "jlcpcb") for k, v in par.items() if k.startswith("Supplier Part Number "))
 
 
-# ecadlib up to 0.3 wrote these doubtful-source notes to librarian.review only (a note, not a hold); the librarian now
-# writes them to `verify`. A part an older version finished keeps its old notes, so they count as `verify` here too:
-# (half, its source prefix, the note). An EasyEDA note only counts when EasyEDA supplied a half.
-OLD_DOUBTS = (("symbol", "kicad:", re.compile(r"symbol \S+ matched by .*check")),
-              ("footprint", "kicad:", re.compile(r"footprint \S+ chosen by (shortest|footprint named)")),
-              (None, "easyeda:", re.compile(r"EasyEDA \S+ conversion: ")),
-              ("symbol", "standard:", re.compile(r"symbol pinout \S+ from the .+ family table")))
+# The librarian's doubtful-source notes, each about the half (None: either) it took from the source it names:
+# (half, source prefix, the note; group 1 = what the source gave). A note holds the part while that half still comes
+# from there: a half replaced since (ecadlib resolve, the review queue's Pick) drops its note. ecadlib up to 0.3 wrote
+# them to librarian.review only (a note, not a hold), and a part an older version finished keeps them there, so those
+# count too, but only while the source they name supplied the part.
+DOUBTS = (("symbol", "kicad:", re.compile(r"symbol (\S+) matched by .*check")),
+          ("footprint", "kicad:", re.compile(r"footprint (\S+) chosen by (?:shortest|footprint named)")),
+          (None, "easyeda:", re.compile(r"EasyEDA (\S+) conversion: ")),
+          ("symbol", "standard:", re.compile(r"symbol pinout (\S+) from the .+ family table")))
+
+
+def _doubt(note, src):
+    """For a doubtful-source note: (the halves it is about, whether one of them still comes from that source);
+    None for any other note."""
+    for half, prefix, rx in DOUBTS:
+        m = rx.match(note)
+        if m:
+            halves = [half] if half else ["symbol", "footprint"]
+            return halves, any(str(src.get(h) or "") == prefix + m.group(1) for h in halves)
+    return None
 
 
 def doubts(item):
-    """The `verify` notes that hold the item: its own, plus doubtful-source notes an older ecadlib left in
-    librarian.review (OLD_DOUBTS)."""
-    out = [str(v) for v in item.get("verify") or []]
-    src = item.get("source") or {}
+    """The `verify` notes that hold the item: its own, less the doubtful-source notes about a half it no longer takes
+    from that source, plus the ones an older ecadlib left in librarian.review (DOUBTS)."""
+    src, out = item.get("source") or {}, []
+    for v in item.get("verify") or []:
+        v = str(v)
+        d = _doubt(v, src)
+        if d and not d[1] and any(src.get(h) for h in d[0]):
+            continue                           # that half was replaced since: the note is about a file it no longer uses
+        out.append(v)
     for r in (item.get("librarian") or {}).get("review") or []:
         r = str(r)
-        for half, prefix, rx in OLD_DOUBTS:
-            if rx.match(r) and r not in out and any(str(src.get(h) or "").startswith(prefix)
-                                                    for h in ([half] if half else ["symbol", "footprint"])):
-                out.append(r)
+        d = _doubt(r, src)
+        if d and d[1] and r not in out:
+            out.append(r)
     return out
 
 
@@ -409,7 +426,7 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, chan
                     it[k] = it.pop(k)
         covered = set((it.get("allow") or {}).get("failures", []))
         hard = [m for m in msgs if m.startswith(UNFIXABLE)]
-        open_ = [m for m in msgs if m not in covered]
+        open_ = [m for m in msgs if m not in covered or m.startswith(UNFIXABLE)]   # never covered, by hand neither
         if not msgs:
             it["status"], result = "ready", "pass"
         elif it.get("allow") and not open_:

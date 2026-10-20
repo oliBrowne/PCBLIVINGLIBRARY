@@ -70,6 +70,14 @@ def rows(plan, lib="ecadlib", include_held=False):
         from . import change_gate as CG        # held, and its released fields go out (as kicad-export ships them)
         with CG.publishing(base):
             items = CG.settled_plan(plan, "export-parts", log=lambda *a, **k: None)
+    if not isinstance(plan, list):             # the release check again, on the files as they are (as every publisher
+        from . import release_check as RC, rules as RU      # runs it): a part that fails it is held, not a library part
+        checked = RU.resolve(None, base)
+        for it in items:
+            why = RC.publish_problems(it, base, checked) if isinstance(it, dict) and it.get("name") \
+                and it.get("status", "ready") == "ready" else []
+            if why:
+                it.update(status="held", hold_reasons=why, release_check=dict(it.get("release_check") or {}, result="held"))
     keep = [it for it in items if isinstance(it, dict) and it.get("name")
             and (it.get("status", "ready") in LIBRARY_STATUS or (include_held and it.get("status") == "held"))]
     sign = _signoff(keep, base) if not isinstance(plan, list) else {}

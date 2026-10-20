@@ -65,7 +65,8 @@ are documented (a curved custom pad as its bounding rectangle, trapezoid as rect
   footprints through the librarian and `kicad-export` (`ecadlib parity survey --kicad-footprints DIR`, 3D paths not
   compared): 15442 match (248 of them with documented approximations), 26 still differ (open: custom pads whose
   primitives do not touch their anchor, several pads of one number with thermal vias, exposed-pad detection).
-  Testpack (6 parts, export mode, 6 / 6 database rows) and demo (6 ready parts): all match.
+  Testpack (6 parts, export mode, 6 / 6 database rows) and demo (6 ready parts then; 4 since its family-table
+  pinouts are held, and those 4 match): all match.
 * **Not verified:** nothing was opened in Altium Designer; KiCad models that cannot be downloaded offline stay missing
   in an export (parity reports them as `file missing`).
 

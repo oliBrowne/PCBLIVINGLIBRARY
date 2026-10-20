@@ -542,7 +542,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             continue
         why = RC.publish_problems(it, base, rules)          # the release check again, on the files copied now
         if why:
-            res["action"], res["detail"] = "held", "; ".join(why)
+            res["action"], res["detail"], res["recheck"] = "held", "; ".join(why), why
             if it["name"] in where:
                 res["table"] = where[it["name"]]
             continue

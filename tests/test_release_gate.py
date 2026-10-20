@@ -76,6 +76,7 @@ def test_a_sign_off_is_what_lets_a_doubtful_part_go():
     with tempfile.TemporaryDirectory() as d:
         it = make(d)
         it["verify"] = ["EasyEDA C8734 conversion: check pads and pins against the datasheet (native converter, format assumed)"]
+        it["source"] = {"symbol": "easyeda:C8734", "footprint": "easyeda:C8734"}
         it["status"] = "ready"                              # a hand-edited plan: the recheck still holds it
         assert RC.publish_problems(it, d, None) == [f"verify: {it['verify'][0]}"]
         assert A.push(_absolute([dict(it)], d), None, "https://ws", dry_run=True)[0]["action"] == "skip"
@@ -83,6 +84,7 @@ def test_a_sign_off_is_what_lets_a_doubtful_part_go():
         assert it["status"] == "ready" and RC.publish_problems(it, d, None) == []
         assert A.push(_absolute([json.loads(json.dumps(it))], d), None, "https://ws", dry_run=True)[0]["action"] == "release"
         it["verify"].append("symbol pinout X from the Y family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
+        it["source"]["symbol"] = "standard:X"
         assert RC.publish_problems(it, d, None) == [f"verify: {it['verify'][1]}"]     # a new doubt is not signed off
 
 
@@ -156,6 +158,105 @@ def test_a_doubt_an_older_ecadlib_only_noted_still_holds():
         assert A.push(_absolute([dict(it)], d), None, "https://ws", dry_run=True)[0]["action"] == "skip"
         RC.apply([it], d, allow=["PART1"])
         assert it["status"] == "ready" and RC.publish_problems(it, d, None) == []
+
+
+def _one_emptied(d):
+    """PART1 and PART2 both pass the check; PART2's description is emptied after it, and plan.json still says ready."""
+    ok, bad = make(d), make(d, name="PART2", fp_name="SOIC-8_other")
+    RC.apply([ok, bad], d)
+    bad["description"] = ""
+    (d / "plan.json").write_text(json.dumps([ok, bad]))
+    return d / "plan.json"
+
+
+def test_kicad_dblib_export_parts_and_plugins_recheck_ready_parts():
+    from ecadlib import kicad_dblib as KD, parts_export as PE, plugins as PL
+    from tests.test_change_control_round4 import _EP
+    with tempfile.TemporaryDirectory() as t:
+        plan = _one_emptied(Path(t))
+        tables, skipped = KD.part_rows(plan, "mylib")
+        assert [r["Part ID"] for rs in tables.values() for r in rs] == ["PART1"], tables
+        assert skipped == [{"part": "PART2", "why": "held: fields: Description is empty"}], skipped
+        assert [r["Part ID"] for r in PE.rows(plan)] == ["PART1"]
+        held = {r["Part ID"]: r for r in PE.rows(plan, include_held=True)}["PART2"]
+        assert (held["Status"], held["Release Check"], held["Hold Reasons"]) == ("held", "held", "fields: Description is empty")
+        seen = {}
+        PL.run_exporter("t", plan, Path(t) / "px", eps=[_EP("t", lambda items, out, rules: seen.update(
+            {i["name"]: (i["status"], i.get("hold_reasons")) for i in items}) or [])])
+        assert seen == {"PART1": ("ready", []), "PART2": ("held", ["fields: Description is empty"])}, seen
+
+
+def test_kicad_export_keeps_a_released_part_it_now_holds():
+    """dblib-sync leaves a held part's row and files alone and push sends nothing for it; kicad-export keeps the version
+    it exported before too, and says why, instead of taking the part out as if it had left the plan."""
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        ok, two = make(d), make(d, name="PART2", fp_name="SOIC-8_other")
+        RC.apply([ok, two], d)
+        (d / "plan.json").write_text(json.dumps([ok, two]))
+        quiet = lambda *a, **k: None
+        assert [p["part"] for p in KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)["parts"]] == ["PART1", "PART2"]
+        sym, fp = d / "kicad" / "mylib.kicad_sym", d / "kicad" / "mylib.pretty" / "SOIC-8_other.kicad_mod"
+        exported = (sym.read_text(), fp.read_text())
+        _one_emptied(d)
+        rep = KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
+        assert [p["part"] for p in rep["parts"]] == ["PART1"] and rep["skipped"][0]["recheck"], rep["skipped"]
+        assert (sym.read_text(), fp.read_text()) == exported            # the symbol and footprint stay as exported
+        assert rep["kept"] == [{"part": "PART2", "symbol_name": "PART2", "symbol": True, "footprint": "SOIC-8_other"}]
+        assert rep["warnings"] == ["PART2: held (fields: Description is empty); the version exported before stays in "
+                                   "mylib until it passes the check again"], rep["warnings"]
+        again = KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)      # kept on the next run too
+        assert again["kept"] == rep["kept"] and (sym.read_text(), fp.read_text()) == exported
+        two["description"] = "Test part"                                # passes again: written anew
+        (d / "plan.json").write_text(json.dumps([ok, two]))
+        back = KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
+        assert [p["part"] for p in back["parts"]] == ["PART1", "PART2"] and back["kept"] == [] and not back["warnings"]
+
+
+def test_kicad_export_says_a_held_part_it_takes_out_was_not_released():
+    """A part --include-held exported was never released: a normal export takes it out, and says it is held."""
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        ok, bad = make(d), make(d, name="PART2", fp_name="SOIC-8_other")
+        bad["description"] = ""
+        RC.apply([ok, bad], d)
+        assert bad["status"] == "held"
+        (d / "plan.json").write_text(json.dumps([ok, bad]))
+        quiet = lambda *a, **k: None
+        KX.export(d / "plan.json", d / "kicad", "mylib", include_held=True, log=quiet)
+        rep = KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
+        assert rep["kept"] == [] and "PART2" not in (d / "kicad" / "mylib.kicad_sym").read_text()
+        assert rep["warnings"] == ["PART2: held (fields: Description is empty); taken out of mylib until it is released "
+                                   "(a KiCad project using it loses the link)"], rep["warnings"]
+
+
+def test_a_doubt_goes_with_the_half_it_is_about():
+    """A doubtful-source note holds the part while that half still comes from the source it names: a symbol or
+    footprint picked by hand since (ecadlib resolve, the review queue's Pick) drops it."""
+    with tempfile.TemporaryDirectory() as d:
+        it = make(d)
+        fp = "footprint Package_SO:SOIC-8_3.9x4.9mm_P1.27mm chosen by shortest KiCad name starting with 'SOIC-8': " \
+             "compare with the datasheet land pattern"
+        easy = "EasyEDA C8734 conversion: check pads and pins against the datasheet (native converter, format assumed)"
+        it["verify"] = [fp, easy, "a note of a person's own"]
+        it["source"] = {"symbol": "easyeda:C8734", "footprint": "kicad:Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"}
+        assert RC.doubts(it) == it["verify"]
+        it["source"]["footprint"] = "kicad:Package_SO:SOIC-8_ALT"       # another footprint, from KiCad still
+        assert RC.doubts(it) == [easy, "a note of a person's own"]
+        it["source"]["symbol"] = "kicad:Device:Q_PMOS_GSD"             # EasyEDA supplies neither half now
+        assert RC.doubts(it) == ["a note of a person's own"]
+        it["source"] = {}                                              # a plan that names no source: kept
+        assert RC.doubts(it) == it["verify"]
+
+
+def test_a_hand_written_allow_does_not_release_a_broken_file():
+    with tempfile.TemporaryDirectory() as d:
+        it = make(d)
+        Path(d, it["footprint"]["file"]).write_bytes(b"not an OLE file")
+        it["allow"] = {"by": "--allow", "failures": [f"{r}: {m}" for r, m in RC.check_item(it, d)[0]]}
+        RC.apply([it], d)
+        assert it["status"] == "held" and it["hold_reasons"][0].startswith("files: footprint file does not read back")
+        assert it["hold_reasons"][0].endswith("(cannot be overridden)"), it["hold_reasons"]
 
 
 if __name__ == "__main__":

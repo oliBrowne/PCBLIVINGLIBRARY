@@ -46,7 +46,7 @@ rest goes to **Altium 365** or **KiCad**. Free and open source (MIT); you bring 
   the 3D height is plausible, the part fields are filled in and the files read back. A part that fails is held back
   from Altium 365 with the reason and the next step in plain words. Parts from a source that needs a second look (a
   datasheet read, an EasyEDA conversion, a pinout from a family table, a KiCad part picked by a near name) are held
-  until a person releases them, and every export checks the files again before it sends them.
+  until a person releases them, and every export from a plan checks the files again before it writes them out.
 * **Change control.** Once a part is released, no library update can change it behind your back. A change to pins,
   pads or the part's identity waits for a person, who sees it in plain words ("pad 5 removed; pad SH added").
 * **Released to your workspace.** Parts go to your Altium 365 workspace, or out as `.SchLib`/`.PcbLib`, a database
@@ -93,7 +93,7 @@ the MOSFET are held too: their pinouts come from a family table, and makers diff
 the datasheet and releases them. `ecadlib ui --workspace ecadlib-demo` opens the result in your browser.
 
 <p align="center">
-  <img alt="Fill the library: 6 of 7 parts ready for Altium 365, CH340C held with the reason" src="docs/ui-librarian.png" width="100%">
+  <img alt="Fill the library: 4 of 7 parts ready; AMS1117-3.3, CH340C and AO3401A held, each with the reason" src="docs/ui-librarian.png" width="100%">
 </p>
 
 ## From BOM to Altium 365

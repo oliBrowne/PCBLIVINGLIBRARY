@@ -612,6 +612,29 @@ def test_altium_365_target():
     assert "refresh the Components panel" in r["message"]
 
 
+def test_publish_reports_a_part_the_publisher_held_again():
+    """Every target runs the release check again before it writes a part; one it holds is "not published", not ready."""
+    menu, cfg = _setup(extra_rules='\n[altium365]\nworkspace = "https://acme.365.altium.com"\n')
+    from ecadlib.app import Workspace
+    held = {"name": "CAP-0402-100nF", "action": "skip", "detail": "held: fields: Description is empty",
+            "recheck": ["fields: Description is empty"]}
+    with mock.patch.object(Workspace, "altium365_push", lambda self, bom, url, dry_run=True: {
+            "dry_run": dry_run, "report": "altium365/push_x.json", "results": [held]}):
+        r = AM.run_job(_job(menu, {"action": "add-part", **CAP}))
+    assert r["status"] == "error" and r["big"] == "Not published", r
+    assert "not published: CAP-0402-100nF: held: fields: Description is empty" in r["message"], r
+    menu, cfg = _setup()
+    assert AM.run_job(_job(menu, {"action": "add-part", **CAP}))["status"] == "ready"
+    ws, rel = AM._workspace(cfg), "uploads/altium-menu/parts.csv"
+    _, plan_f, items = ws._plan(rel)
+    for it in items:
+        it["description"] = ""                                   # after the check
+    plan_f.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    for tool, lib in (("altium", cfg["library"]), ("kicad", str(Path(cfg["library"]).parent / "kicad lib"))):
+        pub = AM.publish(ws, rel, lib, cfg["name"], tool=tool)
+        assert pub["held"] == {"CAP-0402-100nF": "held: fields: Description is empty"}, (tool, pub)
+
+
 def test_open_queue_starts_reuses_and_refuses():
     menu, cfg = _setup()
     state, launched, opened = {"kind": None}, [], []

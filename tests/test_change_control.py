@@ -669,6 +669,36 @@ def test_a365_approved_change_is_a_new_revision_and_held_sends_nothing():
     assert again["action"] == "up_to_date" and not [c for c in nx.calls if c[0] == "release"], (again, nx.calls)
 
 
+def test_a365_new_revision_is_checked_again_before_it_goes_up():
+    """An approved change is a new revision; push runs the release check on it first, like on a new part."""
+    from ecadlib import altium365 as A, rules as RU
+    plan, lib = demo()
+    ws, nx = "https://test.365.altium.com", FakeA365()
+    rules = RU.load(None, start=lib)
+
+    def push(items):
+        for i in items:
+            for k in ("symbol", "footprint"):
+                if i[k].get("file"):
+                    i[k]["file"] = str(lib / i[k]["file"])
+        return {r["name"]: r for r in A.push(items, nx, ws, rules=rules, folder=lib)}
+    assert push(items_of(plan))["AO3401A"]["action"] == "release"
+    items = items_of(plan)
+    g = gate(lib)
+    write_symbol(lib, item(items, "AO3401A"), [("1", "S", "passive"), ("2", "G", "input"), ("3", "D", "passive")])
+    g.settle(items)
+    CG.write_plan(plan, items)
+    CC.approve(plan, ["AO3401A"], who=ANN)
+    items = items_of(plan)
+    item(items, "AO3401A")["description"] = ""                    # after the check
+    nx.calls.clear()
+    res = push(items)["AO3401A"]
+    assert res["action"] == "skip" and res["recheck"] == ["fields: Description is empty"], res
+    assert not [c for c in nx.calls if c[0] == "release"], nx.calls
+    assert len(nx.comps["AO3401A"]["revisions"]) == 1
+    assert LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["revision"] == 1
+
+
 def test_a365_new_queries_match_the_nexar_schema():
     try:
         from graphql import build_schema, parse, validate

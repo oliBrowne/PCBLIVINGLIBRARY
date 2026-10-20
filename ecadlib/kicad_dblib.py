@@ -43,7 +43,7 @@ def part_rows(plan, lib, include_held=False, rules=None):
     from . import kicad_export as X
     from .parts_export import kicad_ids
     from .rules import resolve
-    from . import change_gate as CG
+    from . import change_gate as CG, release_check as RC
     plan = Path(plan)
     rules = resolve(rules, plan.parent)
     if not isinstance(json.loads(plan.read_text(encoding="utf-8")), list):
@@ -58,6 +58,10 @@ def part_rows(plan, lib, include_held=False, rules=None):
         status = it.get("status", "ready")
         if status not in ("ready", "existing") and not (include_held and status == "held"):
             skipped.append({"part": it["name"], "why": f"{status}: " + "; ".join(it.get("hold_reasons", []))})
+            continue
+        why = [] if status == "held" else RC.publish_problems(it, plan.parent, rules)   # checked again, as kicad-export
+        if why and not include_held:                                                  # does: `ready` is not enough
+            skipped.append({"part": it["name"], "why": "held: " + "; ".join(why)})
             continue
         sym, fp = kicad_ids(it, X.kname(lib))
         if not sym:
