@@ -2335,7 +2335,9 @@ class Reader:
 
     def _result(self, job, rec):
         ext = parse_message(rec["message"])
-        res = process(ext, job["part"], job["url"], rec.get("model") or self.model, rec.get("page_offset", job["offset"]), rec["message"],
+        # the job's pages, as _judge reads them: its cache key holds them, while a record's page_offset can be 0 (a batch
+        # answer collected by a run without this part, from a state file with no 'sent', or adopted after a lost create)
+        res = process(ext, job["part"], job["url"], rec.get("model") or self.model, job["offset"], rec["message"],
                       facts=job.get("facts"), tables=job.get("tables"))
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
         if job.get("route"):
@@ -2848,7 +2850,8 @@ class Reader:
                 b = cands[0]
                 known.add(b["id"])
                 st["batches"].append({"id": b["id"], "created": b.get("created_at"), "model": m["model"],
-                                      "requests": m["requests"], "parts": m["parts"], "status": b.get("processing_status"),
+                                      "requests": m["requests"], "sent": m.get("sent"), "parts": m["parts"],
+                                      "status": b.get("processing_status"),
                                       "collected": False, "adopted": m["fingerprint"], "mark": m})
                 self.say(f"  datasheet batch {b['id']}: found the batch whose create answer was lost ({m['n']} parts); "
                          "collecting it instead of sending again")
@@ -2936,7 +2939,7 @@ class Reader:
                     reqs.append({"custom_id": cid, "params": j["body"] if j["body"]["model"] == api_model
                                  else dict(j["body"], model=api_model)})
                 mark = {"fingerprint": hashlib.sha256(json.dumps([self.model, sorted(ids.items())]).encode()).hexdigest()[:24],
-                        "at": time.time(), "n": len(reqs), "model": self.model, "requests": ids,
+                        "at": time.time(), "n": len(reqs), "model": self.model, "requests": ids, "sent": sent,
                         "parts": {c: j["name"] for c, j in zip(ids, chunk)}, **_owner()}
                 self._add_pending(st, mark)
                 _IN_FLIGHT.add(mark["fingerprint"])

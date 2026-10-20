@@ -36,28 +36,60 @@ def test_ds2_14_circled_digit_pin_number_is_a_review_line_not_a_crash():
 
 
 # ---- DS2-15: a batch answer for a part not in the collecting run was cached with page_offset 0 and url ''
-@lite
-def test_ds2_15_batch_answer_for_a_part_not_in_this_run_keeps_its_pages(tmp_path):
+def _ds2_15(d, between=None, lose_create=0):
+    """Run 1 submits parts A and B (--no-wait; with lose_create its create answer is lost, so run 2 adopts the batch
+    from the listing), `between(batch_state)` edits the state file, run 2 collects with only A, run 3 reads B from the
+    cache. -> (B's result, B's cached record, batch create calls)."""
+    import json
     from tests import test_datasheet_batch as TB, test_ds_route as T
+
+    class API(TB.ListingAPI, T.ModelAPI):                           # answers by pages sent; a create can lose its answer
+        pass
     pdfs = {"https://a/ldo.pdf": T.pdf_lines(T.ldo_pages())}
-    api = T.ModelAPI(lambda m, n: T.on_page(T.GOOD, 4))           # every value cited on page 4 of the pages sent
+    api = API(lose_create=lose_create, answer=lambda m, n: T.on_page(T.GOOD, 4))   # every value cited on page 4 sent
     a, b = ("TESTLDO-H33TRG1", "SOT-223-3_TabPin2"), ("TESTLDO-R33TRG1", "SOT-89-3")
     src = [("https://a/ldo.pdf", "BOM")]
     with TB.patched(api):
-        rd = T.reader(tmp_path, pdfs, batch=True, wait=False)       # run 1: A and B submitted (--no-wait)
+        rd = T.reader(d, pdfs, batch=True, wait=False)              # run 1: A and B submitted (--no-wait)
         for part, pkg in (a, b):
             rd.submit(rd.job(part, src, pkg))
-        rd.flush()
-        rd = T.reader(tmp_path, pdfs, batch=True, wait=True)        # run 2: only A (--part A) collects the batch
+        try:
+            rd.flush()
+        except D.APIError as e:
+            assert lose_create and "may have been created" in str(e), e
+        if between:
+            f = rd.dir / "batch_state.json"
+            st = json.loads(f.read_text(encoding="utf-8"))
+            between(st)
+            f.write_text(json.dumps(st), encoding="utf-8")
+        rd = T.reader(d, pdfs, batch=True, wait=True)               # run 2: only A (--part A) collects the batch
         rd.submit(rd.job(a[0], src, a[1]))
         rd.flush()
-        rd = T.reader(tmp_path, pdfs)                               # run 3: B, answered from the cache
+        rd = T.reader(d, pdfs)                                      # run 3: B, answered from the cache
         jb = rd.job(b[0], src, b[1])
         assert jb["offset"][3] == 14, jb["offset"]                  # page 4 sent = original page 14 (B's SOT89 drawing)
         res = rd.cached(jb)
-    assert len(api.of("/v1/messages/batches")) == 1                 # B was paid for once, in run 1
+    return res, rd.results.get(jb["key"]), len(api.of("/v1/messages/batches"))
+
+
+@lite
+def test_ds2_15_batch_answer_for_a_part_not_in_this_run_keeps_its_pages(tmp_path):
+    res, rec, creates = _ds2_15(tmp_path / "new")
+    assert creates == 1                                             # B was paid for once, in run 1
     assert res["sidecar"]["pin_table"]["page"] == 14, res["sidecar"]["pin_table"]
-    assert rd.results.get(jb["key"])["url"] == "https://a/ldo.pdf"
+    assert rec["url"] == "https://a/ldo.pdf"
+
+    def before_the_fix(st):                                         # a batch_state.json written before 'sent' existed
+        for bt in st["batches"]:
+            bt.pop("sent", None)
+    res, rec, creates = _ds2_15(tmp_path / "old", before_the_fix)
+    assert creates == 1 and rec["page_offset"] == 0, rec["page_offset"]   # cached by the collecting run without its pages
+    assert res["sidecar"]["pin_table"]["page"] == 14, res["sidecar"]["pin_table"]   # the job's own pages still hold
+
+    res, rec, creates = _ds2_15(tmp_path / "lost", lose_create=1)   # the create's answer lost: run 2 adopts the batch
+    assert creates == 1                                             # found in the listing, never sent again
+    assert res["sidecar"]["pin_table"]["page"] == 14, res["sidecar"]["pin_table"]
+    assert rec["url"] == "https://a/ldo.pdf" and rec["page_offset"][3] == 14, rec
 
 
 # ---- DS2-19: with [ai] provider = openai, counting tokens for a Claude rung sent the OpenAI key to api.anthropic.com
