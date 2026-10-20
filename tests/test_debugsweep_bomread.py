@@ -93,3 +93,20 @@ def test_ds2_09_integer_value_is_not_glued_to_the_next_column(tmp_path):
                    ("R1", "100", None, None, None), ("R2", "4,7k", None, "0603", None)], got
     notes = [l.get("bom_note", "") for p in (q, f) for l in T.read_bom(p)[0]]
     assert "header has 6" in notes[0] and "header has 6" in notes[1] and "header has 4" in notes[4], notes
+
+
+@lite
+def test_ds2_10_real_manufacturer_and_description_columns_win_whatever_the_order(tmp_path):
+    v = tmp_path / "vendor.csv"
+    v.write_text("Designator,Qty,Value,Vendor,Vendor PN,Manufacturer,MPN\n"
+                 "U1,1,LM358,Digi-Key,296-1395-1-ND,Texas Instruments,LM358DR\n", encoding="utf-8")
+    n = tmp_path / "notes.csv"
+    n.write_text("Designator,Notes,Value,Description,MPN\n"
+                 "C1,check polarity,100uF,Tantalum capacitor 100uF 10V,T491D107K010AT\n", encoding="utf-8")
+    only = tmp_path / "only_notes.csv"
+    only.write_text("Designator,Value,Notes,MPN\nC1,100uF,Tantalum 10V,T491D107K010AT\n", encoding="utf-8")
+    lines, mapping = T.read_bom(v)
+    assert lines[0]["manufacturer"] == "Texas Instruments", (mapping, lines)
+    lines, mapping = T.read_bom(n)
+    assert lines[0]["description"] == "Tantalum capacitor 100uF 10V", (mapping, lines)
+    assert T.read_bom(only)[0][0]["description"] == "Tantalum 10V"           # Notes is still the fallback
