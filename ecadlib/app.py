@@ -29,6 +29,7 @@ STATUS_ORDER = ["needs_footprint_generation", "unverified (source unreachable)",
 
 
 UPLOAD_DIR = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")      # the folder save_upload makes for each upload
+STYLE_OFFLINE = "--offline: the model is not asked to write the house style guide; run without --offline to have it write it"
 
 
 class Workspace:
@@ -1128,6 +1129,8 @@ class Workspace:
             HS.save(prof, f)
             return dict(self.house_style(), ai=self.style_quote(model))
         if ai:
+            if self.offline:
+                raise ValueError(STYLE_OFFLINE)
             if progress:
                 progress(1, 2, "the model is writing the guide")
             HS.write_guide(prof, self.rules(), model)
@@ -1141,12 +1144,18 @@ class Workspace:
         from . import llm as LL
         system, user, schema, ref, _ = HS.guide_request(prof, self.rules(), model)
         key = bool(LL.key_for(HS.model_info(self.rules(), model)[0]["ep"]))
-        return AC.style_quote(system, user, schema, ref, self.rules(), key_set=key)
+        q = AC.style_quote(system, user, schema, ref, self.rules(), key_set=key)
+        if q and self.offline:                         # --offline: the guide waits for a run without it
+            q["text"] = q["text"].split(". No API key")[0].rstrip(".") + f". {STYLE_OFFLINE}."
+            q["offline"] = True
+        return q
 
     def style_guide(self, approved_usd=None, over_limit_ok=False, price_unknown_ok=False, model=None, progress=None):
         """The model writes the house style guide after the person approved style_quote()'s cost; "ai_cost" puts
         what it really cost next to the estimate."""
         from . import ai_cost as AC, house_style as HS
+        if self.offline:
+            raise ValueError(STYLE_OFFLINE)
         q = self.style_quote(model)
         AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
         prof = self._style_or_raise()
