@@ -425,7 +425,7 @@ def _folder(p):
 def check_a365(items, nodes, folders=None, state=None, rules=None):
     """plan items vs workspace nodes -> (rows, new state). state: {name: {revision, symbols, footprints}} from last run.
     rules: the plan's parameters are compared under the rules' house names, as push sends them."""
-    from .altium365 import merged_params
+    from .altium365 import merged_params, model_item_names
     from .rules import house_item, param_name
     items = [house_item(i, rules) for i in items]
     by = {}
@@ -457,10 +457,12 @@ def check_a365(items, nodes, folders=None, state=None, rules=None):
                 row(it["name"], f, f, it.get(f) or "", n[f] or "")
         if n.get("folder") and _folder(n["folder"].get("path")) != _folder(it["folder"]):
             row(it["name"], "folder", "folder", it["folder"], n["folder"].get("path"))
-        for kind, key in (("symbol", "symbols"), ("footprint", "footprints")):
+        pushed = dict(zip(("symbol", "footprint"), model_item_names(     # push names a model named like the part
+            {"name": it["name"], **{k: {"ref": (it.get(k) or {}).get("ref")} for k in ("symbol", "footprint")}})))
+        for kind, key in (("symbol", "symbols"), ("footprint", "footprints")):  # <ref>-SYM / <ref>-FP
             names = [x["name"] for x in d.get(key) or []]
             ref = (it.get(kind) or {}).get("ref")
-            if ref and names and ref not in names:
+            if ref and names and ref not in names and pushed.get(kind) not in names:
                 row(it["name"], kind, kind, ref, ", ".join(names))
         rev = n.get("revision") or {}
         snap = {"revision": rev.get("revisionId") or rev.get("id"), "lifecycle": ((rev.get("details") or {}).get("lifeCycleState") or {}).get("name"),

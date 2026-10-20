@@ -212,6 +212,19 @@ def test_altium_native_refuses_a_missing_or_empty_folder(tmp_path):
     assert not (tmp_path / "typo").exists()
 
 
+# T041: check-a365 accepts the -SYM / -FP item names push gives a model named like its component
+def test_check_a365_accepts_the_pushed_model_names():
+    from ecadlib import upstream as UP
+    it = {"name": "KT-0603R", "folder": "Components/Diodes", "parameters": [], "comment": "", "description": "",
+          "symbol": {"ref": "KT-0603R"}, "footprint": {"ref": "LED_0603_1608Metric"}}
+    node = {"name": "KT-0603R", "details": {"parameters": [], "symbols": [{"name": "KT-0603R-SYM"}],
+                                            "footprints": [{"name": "LED_0603_1608Metric"}]}}
+    rows, _ = UP.check_a365([it], [node])
+    assert [r for r in rows if r["status"] in ("symbol", "footprint")] == [], rows
+    node["details"]["symbols"] = [{"name": "Other"}]
+    assert [r["status"] for r in UP.check_a365([it], [node])[0]] == ["symbol"]
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
