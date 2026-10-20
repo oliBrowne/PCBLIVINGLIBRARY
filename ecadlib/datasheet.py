@@ -2540,6 +2540,45 @@ class Reader:
                     "content": [{"type": "text", "text": ""}], "usage": usage,   # a failed answer: the route moves
                     "ecadlib": {"error": str(e), **({"not_sent": True} if unsent else {})}}   # on (or holds the part)
 
+    def _batch_feedback(self, job, rec):
+        """The feedback_retry rail for a Message Batch answer that fails the checks where its route stops: one
+        synchronous turn with the checks' exact errors, as _ask gives a synchronous answer. -> the record to keep
+        (rec itself when nothing was sent)."""
+        from . import ds_route as DR
+        from .llm import run as LR
+        msg = rec["message"]
+        if not str(rec.get("via") or "").startswith("batch") or (msg.get("ecadlib") or {}).get("feedback") \
+                or self.estimate_only or not self.key:
+            return rec
+        model = rec.get("model") or job.get("model") or self.model
+        inf = self.info(model)
+        if "feedback_retry" not in inf["plan"]["rails"] or len(job["route"]["attempts"]) + 1 > self.router.max_attempts:
+            return rec
+        judge = lambda m: self._verdict(job, m)
+        kind, why = judge(msg)
+        if kind != "failed":
+            return rec
+        send, _ = self._send_fn(job)
+        smp = inf.get("sampling") or {}
+        if smp:
+            send = (lambda b, _send=send: _send({**b, **smp}))
+        info = dict(msg.get("ecadlib") or LR.record(inf))
+        guard = lambda b: self._guard_cost([dict(job, body=b, sync=True)])
+        try:
+            with logging_to(self.log_file, self.say):
+                keep, msg2 = LR.feedback(job["body"], msg, kind, why, inf, send, judge, info, guard)
+        except DatasheetError as e:
+            if not getattr(e, "maybe_billed", False):
+                self._release(job["key"])
+            raise
+        if msg2 is not None:                          # its own cost, at synchronous rates
+            self._settle(job["key"], model, msg2, "sync")
+            self.ledger.add(DR.attempt_record(job["part"], job.get("name"), model, msg2, "sync", self._pages_sent(job),
+                                              job.get("n_pages"), judge(msg2)[0]))
+        rec = dict(rec, message=dict(keep, ecadlib=info))
+        self.results.put(job["key"], rec)
+        return rec
+
     def _verdict(self, job, msg):
         """ok | incomplete | failed (with datasheet's reasons) | refused | truncated, for one answer."""
         if (msg or {}).get("stop_reason") == "refusal":
@@ -3020,6 +3059,14 @@ class Reader:
             rec = self.results.get(j["key"])
             if rec and "rung" in j:
                 j2 = self._walk(j)
+                if j2["key"] == j["key"] and j2.get("final") and "message" in rec:
+                    try:
+                        rec2 = self._batch_feedback(j2, rec)
+                    except DatasheetError as e:       # no answer to the feedback turn: the batch answer stands
+                        self.say(f"  datasheet {j.get('name') or j['part']}: feedback turn not answered ({str(e)[:160]})")
+                        rec2 = rec
+                    if rec2 is not rec:
+                        rec, j2 = rec2, self._walk(j)
                 if j2["key"] != j["key"] or not j2.get("final"):
                     if j2["key"] != j["key"]:
                         out[j["key"]] = _Advance(j2)

@@ -79,3 +79,28 @@ def test_t056_ledger_has_no_cost_for_a_request_never_sent(tmp_path, monkeypatch)
     assert sent == [] and rows and sum(r["usd"] or 0 for r in rows) == 0, rows
     assert all(r["how"] == "not sent" and r["input_tokens"] == 0 for r in rows), rows
     assert rd.committed_usd == 0, rd.committed_usd      # the cap's hold is given back too
+
+
+# T058: a Message Batch answer that fails the checks where the route stops gets the feedback turn (synchronously)
+def test_t058_failing_batch_answer_gets_the_feedback_turn():
+    import tempfile
+    from tests import test_datasheet_batch as TB, test_ds_route as TR
+    api = TR.ModelAPI(lambda m, n: TR.BAD if len(api.sent) == 1 else TR.GOOD)
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = TR.reader(d, {"https://a/ds.pdf": TL.TD.PDF}, batch=True)
+        job = rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "R_0603_1608Metric")
+        rd.submit(job)
+        res = rd.flush()[job["key"]]
+        sync = [c for c in api.calls if c[0] == "POST" and c[1].endswith("/v1/messages")]
+        rows = TR.ledger(d)
+        n = len(api.calls)
+        rd2 = TR.reader(d, {"https://a/ds.pdf": TL.TD.PDF}, batch=True)   # a re-run replays it, sends nothing
+        rd2.submit(rd2.job("TESTPART", [("https://a/ds.pdf", "BOM")], "R_0603_1608Metric"))
+        rd2.flush()
+        assert len(api.calls) == n
+    assert len(api.of("/v1/messages/batches")) == 1 and len(sync) == 1, api.calls
+    assert len(sync[0][3]["messages"]) == 3 and "pitch" in json.dumps(sync[0][3]["messages"][-1])   # answer + errors
+    assert not isinstance(res, Exception) and res["needs_review"] == [], res
+    ai = res["sidecar"]["ai"]
+    assert ai["feedback"]["kept"] == "retry" and "feedback_retry" in ai["support_ran"], ai
+    assert [r["via"] for r in rows] == ["batch " + rows[0]["via"].split()[-1], "sync"], rows

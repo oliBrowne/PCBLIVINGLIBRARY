@@ -54,9 +54,7 @@ def ask(job, inf, send, judge, client=None, allow_feedback=True, guard=None):
     the feedback turn would go over [datasheet] max_cost_usd: the first answer is then kept, nothing more is sent."""
     p, prof = inf["plan"], inf["prof"]
     schema = job["body"]["output_config"]["format"]["schema"]
-    notes, rec = [], {"tier": p["tier"], "assist": p["assist"], "profile": {k: prof.get(k) for k in
-                      ("tier", "pdf", "vision", "json_schema", "context", "source", "detect") if prof.get(k) is not None},
-                      "rails": list(p["rails"]), "endpoint": inf["ep"]["name"], "provider": inf["ep"]["provider"]}
+    notes, rec = [], record(inf)
     fb = allow_feedback and "feedback_retry" in p["rails"]
     smp = inf.get("sampling") or {}
     if smp:                                           # temperature / seed where the model takes them (llm.sampling)
@@ -85,21 +83,8 @@ def ask(job, inf, send, judge, client=None, allow_feedback=True, guard=None):
         msg = R.repair_message(send(body), schema, p)
         if fb:
             kind, why = judge(msg)
-            fbody = R.feedback_body(body, msg, why) if kind == "failed" else None
-            if fbody is not None and guard:
-                from ..datasheet import DatasheetError
-                try:
-                    guard(fbody)
-                except DatasheetError as e:           # over the cost cap: keep the first answer, send nothing more
-                    rec["feedback"] = {"errors": why[:15], "before": kind, "after": f"not sent: {e}"[:300], "kept": "first"}
-                    fbody = None
-            if fbody is not None:
-                msg2 = R.repair_message(send(fbody), schema, p)
-                kind2, why2 = judge(msg2)
-                keep = _better(kind, why, kind2, why2)
-                rec["feedback"] = {"errors": why[:15], "before": kind, "after": kind2, "kept": "retry" if keep else "first"}
-                usage = R.add_usage(msg.get("usage"), msg2.get("usage"))
-                msg = dict(msg2 if keep else msg, usage=usage)
+            if kind == "failed":
+                msg = feedback(body, msg, kind, why, inf, send, judge, rec, guard, schema)[0]
     if notes:
         rec["notes"] = notes
     if msg.get("ecadlib", {}).get("repair"):
@@ -107,6 +92,34 @@ def ask(job, inf, send, judge, client=None, allow_feedback=True, guard=None):
     if p["guided"] or rec.get("feedback") or smp:
         msg = dict(msg, ecadlib=rec)
     return msg
+
+
+def feedback(body, msg, kind, why, inf, send, judge, rec, guard=None, schema=None):
+    """The feedback_retry turn after `msg`, the answer to `body` that failed the checks (`why`): the same request with
+    the answer and the errors appended. -> (the answer to keep, usage of both; the retry's own answer or None).
+    rec["feedback"] says what happened; nothing is sent when guard(body) refuses it (the cost cap)."""
+    p = inf["plan"]
+    fbody = R.feedback_body(body, msg, why)
+    if guard:
+        from ..datasheet import DatasheetError
+        try:
+            guard(fbody)
+        except DatasheetError as e:                   # over the cost cap: keep the first answer, send nothing more
+            rec["feedback"] = {"errors": why[:15], "before": kind, "after": f"not sent: {e}"[:300], "kept": "first"}
+            return msg, None
+    msg2 = R.repair_message(send(fbody), schema or body["output_config"]["format"]["schema"], p)
+    kind2, why2 = judge(msg2)
+    keep = _better(kind, why, kind2, why2)
+    rec["feedback"] = {"errors": why[:15], "before": kind, "after": kind2, "kept": "retry" if keep else "first"}
+    return dict(msg2 if keep else msg, usage=R.add_usage(msg.get("usage"), msg2.get("usage"))), msg2
+
+
+def record(inf):
+    """What ran for a read: tier, rails, profile, endpoint (the start of the sidecar's "ai" record)."""
+    p, prof = inf["plan"], inf["prof"]
+    return {"tier": p["tier"], "assist": p["assist"], "profile": {k: prof.get(k) for k in
+            ("tier", "pdf", "vision", "json_schema", "context", "source", "detect") if prof.get(k) is not None},
+            "rails": list(p["rails"]), "endpoint": inf["ep"]["name"], "provider": inf["ep"]["provider"]}
 
 
 def provenance(inf, msg=None, route=None, pages_picked=False):
