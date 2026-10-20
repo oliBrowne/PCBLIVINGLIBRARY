@@ -1061,6 +1061,9 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
     whys = M.explain_all(it.get("hold_reasons") or [])
     if st == "ready":
         res["message"] = f"{mpn} is ready as {nm}: {_where(cfg, pub)}."
+        notes = [M.explain(w)["text"] for w in (it.get("release_check") or {}).get("warnings") or [] if str(w).startswith("height:")]
+        if notes:                              # a 3D height is a note to check, not a hold ([release] height)
+            res["message"] += " Note: " + " ".join(dict.fromkeys(notes)) + " Check the 3D body in Altium."
         if pub.get("footprints", {}).get(nm):
             res["footprint"] = pub["footprints"][nm]
         if pub.get("problems") or nm in (pub.get("held") or {}):

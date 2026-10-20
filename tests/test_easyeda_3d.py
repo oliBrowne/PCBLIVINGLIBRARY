@@ -148,15 +148,17 @@ def _pcb_bodies(d, it):
     return [r for r in lib[0]["records"] if r["type"] == "body"], lib[0].get("models") or []
 
 
-def test_lcsc_crystal_without_its_model_is_held_for_height():
-    """The bug: no 3D model downloaded and no table knows CRYSTAL-SMD_4P-L3.2-W2.5: held for a missing height."""
+def test_lcsc_crystal_without_its_model_has_a_height_note_not_a_hold():
+    """No 3D model downloaded and no table knows CRYSTAL-SMD_4P-L3.2-W2.5: a note to check, not a hold (Oliver
+    2026-10-20: a missing height is a note; `[release] height = "hold"` brings the hold back)."""
     with tempfile.TemporaryDirectory() as d:
         items, http = TL.run(d, Http({"C9002": crystal()}), bom=CRYSTAL_BOM)
         it = items["X322512MSB4SI"]
         assert it["source"]["footprint"] == "easyeda:C9002", it["source"]
         assert any("3D model 0f1e2d3c4b5a69788796a5b4c3d2e1f0 not downloaded" in t for t in it["librarian"]["tried"]), it["librarian"]
         assert any(E3.STEP_URL.format("0f1e2d3c4b5a69788796a5b4c3d2e1f0") == u for u in http.calls)
-        assert it["status"] == "held" and any(h.startswith("height:") for h in it["hold_reasons"]), it["hold_reasons"]
+        assert not any(h.startswith("height:") for h in it["hold_reasons"]), it["hold_reasons"]
+        assert "height: no 3D height (no 3D body and no HEIGHT)" in it["release_check"]["warnings"], it["release_check"]
 
 
 def test_lcsc_crystal_with_its_model_is_not_held_for_height():

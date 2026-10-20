@@ -402,13 +402,14 @@ Begin
 End;
 
 Procedure StartRelease;
-{ Release anyway, step 2: the person says why it is fine; ecadlib releases it and puts it into the library. }
+{ Release anyway, step 2: the person says why it is fine (a ready-made reason they can keep or change: one Enter);
+  ecadlib releases it and puts it into the library. An emptied box releases nothing. }
 Var
     Prev : String;
     Why : String;
 Begin
     Prev := Job;
-    Why := Trim(InputBox('ecadlib: release anyway', 'Why is ' + Answer(Prev, 'release_part') + ' fine as it is? (kept with your name in the library plan)', ''));
+    Why := Trim(InputBox('ecadlib: release anyway', 'Why is ' + Answer(Prev, 'release_part') + ' fine as it is? (kept with your name in the library plan)', 'Checked it: fine as it is'));
     If Why = '' Then
         Exit;
     SetTitle('Release ' + Answer(Prev, 'release_part'));

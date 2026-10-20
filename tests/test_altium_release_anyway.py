@@ -84,6 +84,21 @@ def test_release_of_a_part_already_released_just_publishes():
     assert r["status"] == "error" and "not in the library plan" in r["message"], r
 
 
+def test_a_missing_height_is_a_note_on_a_ready_part():
+    """Oliver 2026-10-20: a missing 3D height is a note to check, not a hold. The part goes into the library and the
+    dialog says so."""
+    menu, cfg = TM._setup()
+    real = RC.check_item
+
+    def check(it, base, rules):
+        f, w, info = real(it, base, rules)
+        return f, w + ["height: no 3D height (no 3D body and no HEIGHT)"], info
+    with mock.patch.object(RC, "check_item", check):
+        r = AM.run_job(TM._job(menu, {"action": "add-part", **TM.CAP}))
+    assert r["status"] == "ready" and r["install"].endswith(".DbLib"), r
+    assert "Note: There is no 3D height" in r["message"] and "Check the 3D body in Altium." in r["message"], r
+
+
 def test_dialog_shows_reasons_then_asks_why():
     pas, dfm = AF.dialog_pas_text(), AF.dialog_dfm_text()
     assert "object ReleaseBtn: TPanel" in dfm and "OnClick = ReleaseClick" in dfm
@@ -97,6 +112,7 @@ def test_dialog_shows_reasons_then_asks_why():
     assert "release_why" in ask and "Phase := 'confirm_release'" in ask and "StartJob" not in ask, ask
     start = _routine(pas, "StartRelease")               # step 2: a reason, or nothing happens
     assert start.index("InputBox(") < start.index("If Why = '' Then") < start.index("StartJob('release')"), start
+    assert "'Checked it: fine as it is'));" in start            # one Enter releases; the reason can still be changed
     assert "Ask(Job, 'reason', Why)" in start and "Run('release')" in start
     assert "StartRelease" in _routine(pas, "TEcadlibDialog.PrimaryClick")
     assert "AskRelease" in _routine(pas, "TEcadlibDialog.ReleaseClick")
