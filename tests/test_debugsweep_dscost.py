@@ -28,6 +28,19 @@ def test_ds2_13_profile_price_holds_on_a_private_network_endpoint(tmp_path, monk
 
 
 @lite
+def test_ds2_13_half_a_price_leaves_a_local_model_free(tmp_path, monkeypatch):
+    """Only price_in in [ai.profiles] for a local Ollama model made its price unknown instead of $0: the dialogs then
+    asked 'price unknown', and approving that took the cap off."""
+    monkeypatch.setattr(LL, "_REG", {})
+    monkeypatch.setattr(LR, "_INFO", {})
+    r = RU.load({"ai": {"provider": "ollama", "model": "qwen2.5:7b", "detect": False,
+                        "profiles": {"qwen2.5:7b": {"price_in": 0}}}})
+    LR.info("qwen2.5:7b", r)
+    assert D.price_of("qwen2.5:7b") == (0.0, 0.0), D.price_of("qwen2.5:7b")
+    assert C.price("qwen2.5:7b", "ollama", r) == (0.0, 0.0), C.price("qwen2.5:7b", "ollama", r)
+
+
+@lite
 def test_ds2_13_cost_sheet_prices_claude_behind_a_private_gateway(tmp_path, monkeypatch):
     """Claude behind a LiteLLM gateway on a private address: the reader prices it from Claude's table, `ecadlib costs`
     said $0 because it took any local endpoint as free before looking the model up."""
