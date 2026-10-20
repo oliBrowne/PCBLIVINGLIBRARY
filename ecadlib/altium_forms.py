@@ -140,6 +140,7 @@ def dialog_dfm_text():
   OldCreateOrder = False
   OnClose = EcadlibDialogClose
   OnKeyDown = EcadlibDialogKeyDown
+  OnKeyPress = EcadlibDialogKeyPress
   Position = poMainFormCenter
   PixelsPerInch = 96
   TextHeight = 15
@@ -155,7 +156,7 @@ def dialog_dfm_text():
     Visible = False
     OnClick = ReportClick
   end
-{_panel("Secondary", 120, 350, 80, 30, BTN, caption="Later", onclick="SecondaryClick", font=button_font)}{_panel("Primary", 208, 350, 136, 30, BLUE, caption="OK", onclick="PrimaryClick", font=button_font)}  object EnterKey: TButton
+{_panel("ReleaseBtn", 16, 350, 128, 30, BTN, caption="Release anyway", onclick="ReleaseClick", font=button_font, visible=False)}{_panel("Secondary", 120, 350, 80, 30, BTN, caption="Later", onclick="SecondaryClick", font=button_font)}{_panel("Primary", 208, 350, 136, 30, BLUE, caption="OK", onclick="PrimaryClick", font=button_font)}  object EnterKey: TButton
     Left = -200
     Top = 0
     Width = 10

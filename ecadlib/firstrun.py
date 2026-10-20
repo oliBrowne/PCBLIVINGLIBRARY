@@ -70,7 +70,7 @@ def ask_setup(existing=None, given=None, inp=input, out=print, interactive=True,
     """The [setup] answers {tool, libs, workspace, sources, unofficial}. existing: the current [setup]/[sources]/
     [providers] of ecadlib.toml (its values are the defaults); given: values from the command line (never asked).
     interactive=False: no questions, defaults only. sources is the [sources] order to write, or None to leave it as it
-    is; unofficial is the [providers] unofficial answer (EasyEDA / JLCPCB search, off unless the person opts in), or
+    is; unofficial is the [providers] unofficial answer (EasyEDA / JLCPCB search, on unless the person says no), or
     None when not asked."""
     existing, given = existing or {}, {k: v for k, v in (given or {}).items() if v not in (None, [], "")}
     st = dict(existing.get("setup") or {})

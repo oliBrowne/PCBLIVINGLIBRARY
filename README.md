@@ -36,8 +36,8 @@ rest goes to **Altium 365** or **KiCad**. Free and open source (MIT); you bring 
 * **BOM in.** Altium BOMs and ActiveBOMs, an Altium project, KiCad BOMs and schematics, or a hand-made CSV/XLSX. Each
   line comes back as already in your library, available from a source, needs a footprint, or DNP.
 * **Official sources first.** Nexar, DigiKey and Mouser identify the part. Symbols and footprints come from your own
-  libraries and the official KiCad libraries before anything else; EasyEDA/LCSC is an unofficial source, off unless
-  you opt in (`ecadlib init` asks; `[providers] unofficial = true`), and then used last.
+  libraries and the official KiCad libraries before anything else; EasyEDA/LCSC is an unofficial source, used last,
+  and `[providers] unofficial = false` turns it off (`ecadlib init` asks).
 * **Drawn from the datasheet when nobody has it.** A datasheet reader fills in the package dimensions and a
   deterministic IPC-7351B generator draws the land pattern. Claude by default, or any model you choose.
 * **Your house style.** `ecadlib style learn` reads your existing libraries, and new parts follow the same naming,
@@ -132,7 +132,8 @@ approve them. A rejected part is held either way, policy or not, until it is app
 ecadlib approve ecadlib_workspace/librarian/my_bom/plan.json approve --part CH340C -m "pinout checked"
 ```
 
-**5. Release to Altium 365.** Set `NEXAR_TOKEN` (or `ecadlib keys set NEXAR_TOKEN`), check the plan with a dry run,
+**5. Release to Altium 365.** Sign in once with `ecadlib nexar signin` (your own free Nexar app; ecadlib stays signed
+in, see [docs/altium.md](docs/altium.md#signing-in-to-altium-365-ecadlib-nexar-signin)), check the plan with a dry run,
 then push. Only parts that pass the release check are pushed: push checks each part's files again before it uploads
 them, and held parts are never pushed. A part already in the workspace gets a new revision, and only after change
 control lets it through.

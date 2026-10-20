@@ -232,14 +232,19 @@ def test_replay_never_reports_not_run():
         assert "Not run" not in R.report_md(rep)
 
 
-# ================================================================ 8. unofficial sources opt-in
+# ================================================================ 8. unofficial sources switched off
 def _shipped():
     return mock.patch.dict(RU.DEFAULTS["providers"], unofficial=tests.SHIPPED_UNOFFICIAL)
 
 
-def test_librarian_leaves_easyeda_out_by_default():
+def _off():
+    """[providers] unofficial = false (opt-in by default 2026-10-19, on by default again since 2026-10-20)."""
+    return mock.patch.dict(RU.DEFAULTS["providers"], unofficial=False)
+
+
+def test_librarian_leaves_easyeda_out_when_off():
     logs = []
-    with tempfile.TemporaryDirectory() as d, _shipped():
+    with tempfile.TemporaryDirectory() as d, _off():
         b = Path(d) / "bom.csv"
         b.write_text(TL.BOM)
         http = TL.FakeHTTP({"C2002": TL.EE})
@@ -264,14 +269,14 @@ def test_init_flag_writes_the_choice_without_asking():
             raw = RU.parse_text(out.read_text(encoding="utf-8"), out.name)
             assert raw["providers"]["unofficial"] is want, raw.get("providers")
             assert P.unofficial_allowed(RU.load(str(out))) is want
-        out = Path(d) / "none.toml"                       # --yes without the flag: nothing written, the default (off)
+        out = Path(d) / "none.toml"                       # --yes without the flag: nothing written, the default (on)
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             assert I.main(["--from", d, "-o", str(out), "--yes"], inp=never, environ={}) == 0
         raw = RU.parse_text(out.read_text(encoding="utf-8"), out.name)
-        assert "unofficial" not in (raw.get("providers") or {}) and not P.unofficial_allowed(RU.load(str(out)))
+        assert "unofficial" not in (raw.get("providers") or {}) and P.unofficial_allowed(RU.load(str(out)))
 
 
-def test_plugins_and_triage_fence_follow_the_default():
-    with _shipped():
+def test_plugins_and_triage_fence_follow_the_setting():
+    with _off():
         assert P.fence(P.ALL, None) == [c for c in P.ALL if getattr(c, "official", True)]
         assert P.fence(P.ALL, {"providers": {"unofficial": True}}) == list(P.ALL)

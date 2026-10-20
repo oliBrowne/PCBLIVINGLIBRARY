@@ -5,7 +5,7 @@ synthetic pin lists; each test breaks one thing and checks that exactly that rul
 import json, re, tempfile
 from pathlib import Path
 
-from ecadlib import altium365 as A, altium_lib as AL, kicad_import as K, release_check as RC
+from ecadlib import altium365 as A, altium_lib as AL, kicad_import as K, release_check as RC, rules as RU
 
 SOIC = (Path(__file__).parent.parent / "out" / "footprints" / "ecadlib.pretty" / "SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod").read_text()
 PARAMS = [{"name": "Manufacturer", "value": "ACME"}, {"name": "Manufacturer Part Number", "value": "PART1"},
@@ -34,8 +34,11 @@ def make(d, kmod=SOIC, pins=range(1, 9), height=None, source="local:ecadlib:SOIC
             "status": "ready", "source": {"symbol": "local:x", "footprint": source}}
 
 
-def fails(item, d):
-    f, w, _ = RC.check_item(item, d)
+HOLD_HEIGHT = {**RU.DEFAULTS, "release": {**RU.DEFAULTS["release"], "height": "hold"}}
+
+
+def fails(item, d, rules=None):
+    f, w, _ = RC.check_item(item, d, rules)
     return [f"{r}: {m}" for r, m in f], w
 
 
@@ -128,11 +131,15 @@ def test_footprint_minimal_on_pcblib():
 
 def test_height():
     with tempfile.TemporaryDirectory() as d:
-        f = fails(make(d, height=5.0), d)[0]
+        f = fails(make(d, height=5.0), d, HOLD_HEIGHT)[0]                 # [release] height = "hold"
         assert f == ["height: 3D height 5.00 mm outside 1.2-1.85 mm for ^(SOIC|SOP|SO-)"], f
         it = make(d, height=False, fp_name="Odd_Part")
-        f = fails(it, d)[0]
+        f = fails(it, d, HOLD_HEIGHT)[0]
         assert f == ["height: no 3D height (no 3D body and no HEIGHT)"], f
+        f, w = fails(it, d)                                                 # the default: a note to check, not a hold
+        assert f == [] and "height: no 3D height (no 3D body and no HEIGHT)" in w, (f, w)
+        f, w = fails(make(d, height=5.0), d)
+        assert f == [] and "height: 3D height 5.00 mm outside 1.2-1.85 mm for ^(SOIC|SOP|SO-)" in w, (f, w)
         assert RC.height_range("QFN-16-1EP_3x3mm")[:2] == (0.3, 1.05) and RC.height_range("R_0603_1608Metric")[:2] == (0.3, 1.1)
         assert RC.height_range("SOT-223-3_TabPin2")[:2] == (1.4, 1.95) and RC.height_range("TSSOP-16")[:2] == (0.75, 1.25)
         assert RC.height_range("Mystery")[2] is None

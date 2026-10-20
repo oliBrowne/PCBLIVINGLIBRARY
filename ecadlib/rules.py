@@ -58,7 +58,8 @@ DEFAULTS = {
     "sources": {"order": list(SOURCES)},
     "bom": {"columns": {}},                    # ecadlib field (mpn, manufacturer, value, ...) -> your BOM header
     "release": {"approvals": {},               # same keys as approvals.json; used when there is no approvals.json
-                "parity": "hold"},             # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
+                "parity": "hold",              # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
+                "height": "warn"},             # hold | warn: a missing or implausible 3D height holds the part, or is a note
     "altium365": {"workspace": ""},
     "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "a365", "changes"]},   # ecadlib.upkeep
     "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)
@@ -103,7 +104,7 @@ DEFAULTS["ai"] = {k: (dict(v) if isinstance(v, dict) else v) for k, v in _LL.DEF
 for _k in _LL.SECTION_KEYS:                           # [datasheet] / [agent.proof] may pick their own ("" = [ai])
     DEFAULTS["datasheet"].setdefault(_k, "")
     DEFAULTS["agent"]["proof"].setdefault(_k, "")
-DEFAULTS["providers"] = {"order": [], "unofficial": False}   # EasyEDA / JLCPCB search: opt in
+DEFAULTS["providers"] = {"order": [], "unofficial": True}    # EasyEDA / JLCPCB search: on, asked last; false opts out
 # [setup]: written by the `ecadlib init` setup questions (ecadlib.firstrun). libs / workspace are the defaults for
 # --lib / --workspace (after the command line and ECADLIB_LIB / ECADLIB_WORKSPACE); empty = as before.
 DEFAULTS["setup"] = {"tool": "both", "libs": [], "workspace": ""}
@@ -385,6 +386,8 @@ def validate(raw, where="ecadlib.toml"):
         _err(where, "style.profile", f"= {sty['profile']!r}: must be a .json file (written by `ecadlib style learn`)")
     if "parity" in (raw.get("release") or {}) and raw["release"]["parity"] not in ("hold", "warn", "off"):
         _err(where, "release.parity", f"= {raw['release']['parity']!r}: must be hold, warn or off")
+    if "height" in (raw.get("release") or {}) and raw["release"]["height"] not in ("hold", "warn"):
+        _err(where, "release.height", f"= {raw['release']['height']!r}: must be hold or warn")
     if (raw.get("release") or {}).get("approvals"):
         from .approvals import normalize_policy
         try:
@@ -834,6 +837,7 @@ HELP = {
     "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header, or field = [\"header\", \"alias\"])",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
     "release.parity": "hold | warn | off: a part whose KiCad and Altium files differ (pads, drills, courtyard, 3D, pins) is held",
+    "release.height": "warn | hold: a missing or out-of-range 3D height is a note to check (warn, the default) or holds the part",
     "change": "Change control: what a change to a released part needs, per class (hold = a person approves it, warn = "
               "released and listed, pass = released); approvers = people per held change (2 = two-person rule)",
     "change.identity": "hold | warn: the MPN, manufacturer or value changed",
@@ -896,7 +900,7 @@ HELP = {
               "token_env (json only); retries with backoff, never stops the run",
     "providers": "Part sources for triage / librarian / UI, in order, including plugins (ecadlib.providers entry points); "
                  "[] = each command's built-in default (the official Nexar / DigiKey / Mouser APIs first, then EasyEDA); "
-                 "unofficial = true lets in the undocumented EasyEDA and JLCPCB search endpoints (default false; `ecadlib init` asks); "
+                 "unofficial = true lets in the undocumented EasyEDA and JLCPCB search endpoints (default true, always after the official APIs; false keeps them out; `ecadlib init` asks); "
                  "`ecadlib plugins list` shows what is installed",
     "setup": "Written by `ecadlib init`: the tool you use, your library folders (the default --lib) and the workspace "
              "(the default --workspace); relative paths start at this file's folder",

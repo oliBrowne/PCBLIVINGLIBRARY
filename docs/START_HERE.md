@@ -60,9 +60,12 @@ closing Altium: gear icon > Preferences > Scripting System > Global Projects > *
 
 Skip this to get a database library (DbLib) folder instead of Altium 365.
 
-1. Make a Nexar token at [portal.nexar.com](https://portal.nexar.com/applications) with your Altium account (scopes
-   `openid`, `user.access`, `design.domain`). On the setup page, paste it under **Optional keys > Altium 365 (Nexar)
-   token** and save. Like your AI key, it stays in ecadlib's own key store, never in an environment variable.
+1. Sign in to Altium 365 once: make your own free Nexar app and run `ecadlib nexar signin` (steps in
+   [Signing in to Altium 365](altium.md#signing-in-to-altium-365-ecadlib-nexar-signin)). ecadlib then keeps itself
+   signed in. Quick alternative for a day: make a token at [portal.nexar.com](https://portal.nexar.com/applications)
+   with your Altium account (scopes `openid`, `user.access`, `design.domain`) and paste it on the setup page under
+   **Optional keys > Altium 365 (Nexar) token**; it runs out after 24 hours. Either way it stays in ecadlib's own key
+   store, never in an environment variable.
 2. Open `Documents\ecadlib\ecadlib.toml` (your workspace folder) in Notepad and add your workspace's address:
 
    ```toml
@@ -143,7 +146,8 @@ the window stops ecadlib. Nothing runs in the background after that.
 ## If something is wrong
 
 - **The browser page does not open:** go to <http://127.0.0.1:8765/> yourself.
-- **"no Altium 365 (Nexar) token":** save the token on the setup page (**Optional keys**), then try again.
+- **"no Altium 365 (Nexar) token":** run `ecadlib nexar signin` (or save a token on the setup page, **Optional keys**),
+  then try again.
   Altium does not need a restart.
 - **The ecadlib menu says "ecadlib was not found":** press **Add to Altium** on the setup page again.
 - **"API key refused":** copy the key again from your provider's page. Then on the setup page, press **Save key** and

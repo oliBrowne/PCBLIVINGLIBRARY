@@ -77,7 +77,7 @@ def procedures():
     return [p for p, _, _ in PROCS] + [p for p, _, _ in BUILD_PROCS]
 MENU_BOM = "uploads/altium-menu/parts.csv"
 HEADER = ["Designator", "Qty", "Value", "Footprint", "Manufacturer", "Mfr. Part #", "LCSC Part Number", "Description", "Datasheet"]
-ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read")
+ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read", "release")
 QUEUE_ANCHOR = "#libcard"
 
 # Every identifier the .pas calls from Altium / DelphiScript, and where it is documented. TRxxxx = Altium's scripting
@@ -979,7 +979,7 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
             res = ws.altium365_push(bom_rel, url, dry_run=False)
         except ValueError as e:
             return {"target": "a365", "install": [], "problems": [str(e)], "workspace": url,
-                    "fix": "store your Nexar token on the setup page (Start menu > ecadlib setup) or with `ecadlib keys set NEXAR_TOKEN`, then try again" if "NEXAR_TOKEN" in str(e) else ""}
+                    "fix": "sign in to Altium 365 once with `ecadlib nexar signin` (ecadlib then stays signed in), or store a Nexar token (NEXAR_TOKEN) on the setup page, then try again" if "NEXAR_TOKEN" in str(e) else ""}
         acts = [r.get("action") for r in res["results"]]
         return {"target": "a365", "install": [], "problems": [f"{r['name']}: {r.get('detail')}" for r in res["results"]
                                                               if r.get("action") == "error"],
@@ -1044,10 +1044,48 @@ def part_rows(it, limit=7):
     return rows[-limit:] if len(rows) > limit else rows
 
 
+# One word of a description: a value with its unit (16M, 20PF, 10PPM, 4.7uF, 10k, 1%), never a part number's root
+VALUE_WORD = re.compile(r"\d+(\.\d+)?(r|k|m|g|meg|hz|khz|mhz|ghz|pf|nf|uf|ph|nh|uh|mh|ppm|v|mv|kv|a|ma|ua|w|mw|ohms?|%)",
+                        re.I)
+
+
+def looks_like_description(text):
+    """'SOSET 16M 20PF 10PPM', '10k 0603 1%': several words, at least one a value with its unit. Most part numbers are
+    one word (X322512MSB4SI), but not all (SOSET's crystal C2975360 is "16M 20PF 10PPM"), so this only shapes the
+    not-found message, it never stops a lookup."""
+    words = str(text or "").split()
+    return len(words) >= 2 and any(VALUE_WORD.fullmatch(w) for w in words)
+
+
+def undouble(text):
+    """'X322512MSB4SIX322512MSB4SI' -> 'X322512MSB4SI': a part number pasted twice into the dialog's box (AD26 pasted
+    on both Ctrl+V's key and its character). Only an exact repeat of something with a digit in it is cut."""
+    t = str(text or "").strip()
+    h = t[:len(t) // 2]
+    return h.strip() if len(t) % 2 == 0 and len(h) >= 4 and t == h + h and re.search(r"\d", h) else t
+
+
+def lcsc_input(text):
+    """'C2975360' when the person typed an LCSC number or pasted an lcsc.com product link, else ''."""
+    from . import providers as P
+    t = str(text or "").strip()
+    if re.fullmatch(r"C\d{3,9}", t, re.I):
+        return t.upper()
+    return P.lcsc_sku(t) if re.match(r"(https?://)?(www\.)?lcsc\.com/", t, re.I) else ""
+
+
 def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
-    """Build one part from its MPN and publish it. Returns the result dict."""
+    """Build one part from its MPN and publish it. Returns the result dict. An LCSC number (or lcsc.com link) is
+    looked up by that number; a part number pasted twice is cut back to one."""
     progress = progress or Progress()
+    mpn = undouble(mpn)
+    lcsc = lcsc_input(mpn)
     ws = _workspace(cfg)
+    if lcsc:
+        from . import providers as P
+        if not P.unofficial_allowed(ws.rules()):     # only the EasyEDA route reads LCSC numbers: say so, look nothing up
+            return lcsc_off({"status": "error", "big": "Not found", "mpn": lcsc}, ws, lcsc)
+        mpn, hints["lcsc"] = lcsc, lcsc
     bom = add_to_parts(ws.root, mpn, manufacturer, **hints)
     rel = ws.rel(bom)
     progress.step(0, 0, f"looking up {mpn}")
@@ -1073,6 +1111,9 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
     whys = M.explain_all(it.get("hold_reasons") or [])
     if st == "ready":
         res["message"] = f"{mpn} is ready as {nm}: {_where(cfg, pub)}."
+        notes = [M.explain(w)["text"] for w in (it.get("release_check") or {}).get("warnings") or [] if str(w).startswith("height:")]
+        if notes:                              # a 3D height is a note to check, not a hold ([release] height)
+            res["message"] += " Note: " + " ".join(dict.fromkeys(notes)) + " Check the 3D body in Altium."
         if pub.get("footprints", {}).get(nm):
             res["footprint"] = pub["footprints"][nm]
         if pub.get("problems") or nm in (pub.get("held") or {}):
@@ -1088,6 +1129,12 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
         res.update(status="error", reason="not_found", message=f"{mpn} was not found: no part source knows this part "
                    "number, so ecadlib has no symbol, footprint or data for it.",
                    fix="Check the part number (a typo, or a suffix missing), then add it again.")
+        if looks_like_description(mpn):    # a real MPN can look like this too (SOSET's "16M 20PF 10PPM"): only a hint
+            res.update(reason="description", message=f"{mpn} was not found, and it reads like a description (values "
+                       "and units) more than a manufacturer part number.",
+                       fix="Type the part number from the maker's or the shop's page, or its LCSC number (C2975360 "
+                           "on lcsc.com), then add it again.")
+        lcsc_off(res, ws, mpn)
     else:
         res.update(status="held", message=f"{mpn} is held ({nm}): " + (" ".join(w["text"] for w in whys[:3]) or "see the review."),
                    fix=(whys[0]["fix"] + " " if whys else "") + f"Open the review queue ({_queue_hint(cfg)}) "
@@ -1095,7 +1142,9 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
     res.update(rows_result(cost_rows(ai_cost) + part_rows(it), {"ready": "Ready", "duplicate": "Already in your library",
                                                                 "awaiting_approval": "Waiting for sign-off"}.get(st, "Held")))
     if res["status"] == "error":
-        res["big"] = "Not found" if res.get("reason") == "not_found" else "Not published"
+        res["big"] = "Not found" if res.get("reason") in ("not_found", "not_searched", "description") else "Not published"
+    if res["status"] == "held":
+        offer_release(res, it, rel, mpn)
     if res["status"] == "held" and ai and nm in ai["names"]:
         q = ws.ai_quote(rel, parts=[nm]) if ai["parts"] > 1 else ai      # the menu's list may hold other parts too
         if q:
@@ -1124,6 +1173,68 @@ def offer_ai(res, q, bom, mpn="", part=""):
     return res
 
 
+def releasable(it):
+    """The hold reasons a person may release anyway, explained ([] = none): not a missing or broken file (nothing to
+    release) and not a held change (that waits for `ecadlib part approve`), as in `ecadlib review`."""
+    from . import messages as M, release_check as RC
+    out = []
+    for r in it.get("hold_reasons") or []:
+        e = M.explain(r)
+        if e["code"].startswith("files.") or str(r).startswith(RC.CHANGE_HOLD) or str(r).endswith("(cannot be overridden)"):
+            return []
+        if e["text"] not in out:
+            out.append(e["text"])
+    return out
+
+
+def offer_release(res, it, bom, mpn=""):
+    """result.ini keys for the dialog's Release anyway: the part, its BOM and why it is held (release_why1..4), so
+    the dialog can show the reasons before it asks for a reason of its own. Nothing is released here."""
+    whys = releasable(it)
+    if whys:
+        res.update(offer_release="1", release_bom=bom, release_mpn=mpn, release_part=it["name"],
+                   **{f"release_why{i}": w for i, w in enumerate(whys[:4], 1)})
+    return res
+
+
+def release_part(cfg, req, progress=None):
+    """The dialog's Release anyway, after the person saw the hold reasons and typed why it is fine: the same release
+    as the review queue's (release-check --allow, who and why kept in the plan, revision 1 in the change-control
+    ledger), then the part is published like add-part."""
+    from . import approvals as A, review_cli as RV
+    progress = progress or Progress()
+    reason = " ".join(str(req.get("reason") or "").split())
+    name, rel = req.get("part", ""), req.get("bom", "")
+    mpn = req.get("mpn") or name
+    if not reason:
+        return {"status": "error", "message": f"{name} was not released: Release anyway needs a reason.",
+                "fix": "Click Release anyway again and say why the part is fine as it is."}
+    ws = _workspace(cfg)
+    bom = ws._bom_path(rel)
+    plan = ws._librarian_dir(bom) / "plan.json"
+    try:
+        items = json.loads(plan.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        items = []
+    it = next((i for i in items if i.get("name") == name), None)
+    if it is None:
+        return {"status": "error", "message": f"{name} is not in the library plan any more, so nothing was released.",
+                "fix": f"Add {mpn} again, or release it from the review queue ({_queue_hint(cfg)})."}
+    if it.get("status") == "held":
+        if not releasable(it):
+            return {"status": "error", "message": f"{name} cannot be released anyway: "
+                    + "; ".join(it.get("hold_reasons") or ["a file is missing or a change waits for approval"]) + ".",
+                    "fix": f"Fix it in the review queue ({_queue_hint(cfg)})."}
+        progress.step(0, 0, f"releasing {name}")
+        who = A.identity(req.get("user") or None, cwd=plan.parent)
+        RV.release_anyway(plan, name, who, reason=reason)
+        res = _part_result(cfg, ws, bom, rel, mpn, progress)
+        if res.get("status") != "error":
+            res["message"] = f"Released anyway by {who}: {reason}. " + (res.get("message") or "")
+        return res
+    return _part_result(cfg, ws, bom, rel, mpn, progress)       # released meanwhile (the queue): just publish it
+
+
 def cost_rows(c):
     """The dialog rows after an AI step: the estimate and what it really cost."""
     if not c:
@@ -1145,6 +1256,24 @@ def ai_read(cfg, req, progress=None):
     if req.get("mpn"):
         return _part_result(cfg, ws, ws._bom_path(bom), bom, req["mpn"], progress, None, s.get("ai_cost"))
     return _fill_result(cfg, ws, bom, s, progress, s.get("ai_cost"))
+
+
+def lcsc_off(res, ws, mpn):
+    """A not-found while [providers] unofficial is off: LCSC / EasyEDA (where many parts, e.g. YXC crystals, only
+    are) was never asked, so say that, and which file and lines turn it on, instead of "no part source knows it"."""
+    from . import providers as P
+    if P.unofficial_allowed(ws.rules()):
+        return res
+    f = ws.rules_in_use() or ws.rules_file()
+    lcsc = re.fullmatch(r"C\d{3,9}", mpn, re.I)
+    res.update(reason="not_searched",
+               message=(f"{mpn} is an LCSC number, but" if lcsc else f"{mpn} was not found in the official part sources, and")
+               + " the LCSC / EasyEDA search is off, so LCSC was not asked."
+               + ("" if lcsc else " Many parts (often Chinese-made ones, sold through LCSC) are only there."),
+               fix=f"To search LCSC / EasyEDA too, put unofficial = true under [providers] in {f} (add a [providers] "
+                   "line above it if the file has none), then add the part again. It was switched off because those "
+                   "sites have no published API; when on, LCSC is asked after the official sources.")
+    return res
 
 
 def not_found(triage_csv, mpn, item):
@@ -1438,6 +1567,8 @@ def run_action(cfg, action, req, opener=None, progress=None):
         return fill(cfg, req.get("project", ""), progress=progress)
     if action == "ai-read":                    # only after the dialog showed the cost and the person said yes
         return ai_read(cfg, req, progress=progress)
+    if action == "release":                    # only after the dialog showed the hold reasons and was given a reason
+        return release_part(cfg, req, progress=progress)
     if action == "open":                       # a report or review the dialog offers: only files in the workspace
         return open_file(cfg, req.get("path", ""), opener=opener)
     if action == "queue":
@@ -1451,7 +1582,7 @@ def _error(e):
     if isinstance(e, FileNotFoundError) or "no such file" in msg:
         fix = "save the project, then try again"
     elif "NEXAR_TOKEN" in msg:
-        fix = "store your Nexar token on the setup page (Start menu > ecadlib setup) or with `ecadlib keys set NEXAR_TOKEN`, then try again"
+        fix = "sign in to Altium 365 once with `ecadlib nexar signin` (ecadlib then stays signed in), or store a Nexar token (NEXAR_TOKEN) on the setup page, then try again"
     elif "ecadlib.toml" in msg or "rules" in msg.lower():
         fix = "`ecadlib rules check` shows the problem in ecadlib.toml"
     return {"status": "error", "message": msg if isinstance(e, (ValueError, OSError)) else f"{type(e).__name__}: {msg}",

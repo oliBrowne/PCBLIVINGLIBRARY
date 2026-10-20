@@ -107,8 +107,8 @@ def token_hint(token, now=None):
         exp = None
     if isinstance(exp, (int, float)) and exp <= (now if now is not None else time.time()):
         when = datetime.datetime.fromtimestamp(exp, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        return (f" (the token expired at {when}: make a new one on portal.nexar.com and store it with "
-                "`ecadlib keys set NEXAR_TOKEN`)")
+        return (f" (the token expired at {when}: run `ecadlib nexar signin` once to stay signed in, or make a new "
+                "one on portal.nexar.com and store it with `ecadlib keys set NEXAR_TOKEN`)")
     return " (token rejected: check it has design.domain, user.access, openid)"
 
 
@@ -714,7 +714,8 @@ def main(argv=None):
         rules = RU.load(a.rules, start=Path(a.plan).parent)   # a bad ecadlib.toml: RulesError names it (exit 2)
     token = UC.secret("NEXAR_TOKEN")
     if not token and not (a.cmd == "push" and a.dry_run):
-        sys.exit("set NEXAR_TOKEN (Nexar portal token with design.domain, user.access, openid scopes)")
+        from . import nexar_signin
+        sys.exit("no Altium 365 token (NEXAR_TOKEN): " + nexar_signin.hint())
     client = Nexar(token) if token else None
     try:
         if a.cmd == "workspaces":

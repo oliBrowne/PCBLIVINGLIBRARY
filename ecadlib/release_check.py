@@ -13,7 +13,8 @@ Rules, per plan item:
             findings are reported as warnings). Without a .kicad_mod the same three are checked on the PcbLib.
             Overlapping pads whose symbol pins share a name (USB-C A1/B12 = GND) are stacked on purpose: a warning.
             A PcbLib with no .Designator on the Top / Bottom Overlay (no reference on silk) is a warning.
-  height    a 3D height is present and inside the plausible range for the package family (HEIGHTS)
+  height    a 3D height is present and inside the plausible range for the package family (HEIGHTS); a note to check
+            (a warning) unless `[release] height = "hold"`, since a height never changes the circuit
   fields    Manufacturer, Manufacturer Part Number, a datasheet link and Description are filled in
   parity    the .kicad_mod and the .PcbLib / .SchLib read back the same (ecadlib.parity: pads, drills, paste, courtyard,
             3D, pin -> pad); `[release] parity = "warn"` reports instead of holding, "off" skips it
@@ -331,7 +332,9 @@ def check_item(item, base=".", rules=None):
         for d in diffs:
             (add("parity", d["msg"]) if d["level"] == "error" and mode == "hold" else warns.append(f"parity: {d['msg']}"))
         info["parity"] = "mismatch" if any(d["level"] == "error" for d in diffs) else "match"
-    # ---- 3D height
+    # ---- 3D height: a note to check unless [release] height = "hold" (a height is mechanical, never electrical)
+    hold_h = (rules.get("release") or {}).get("height", "warn") == "hold"
+    height = (lambda m: add("height", m)) if hold_h else (lambda m: warns.append(f"height: {m}"))
     if fps:
         bodies = [AL.parse_params(r["params"]) for r in fps[0]["records"] if r["type"] == "body"]
         hs = [h for h in (_mil(b.get("OVERALLHEIGHT")) for b in bodies) if h]
@@ -347,13 +350,13 @@ def check_item(item, base=".", rules=None):
                          "for the datasheet, no KiCad model)")
             info["height"] = pd[0]
         elif not h:
-            add("height", "no 3D height (no 3D body and no HEIGHT)")
+            height("no 3D height (no 3D body and no HEIGHT)")
         elif default:
             warns.append(f"3D height {h:.2f} mm is the package default, verify against the datasheet")
             if not lo - 0.01 <= h <= hi + 0.01:
                 warns.append(f"3D height {h:.2f} mm outside {lo}-{hi} mm for {fam or 'any package'}")
         elif not lo - 0.01 <= h <= hi + 0.01:
-            add("height", f"3D height {h:.2f} mm outside {lo}-{hi} mm for {fam or 'any package'}")
+            height(f"3D height {h:.2f} mm outside {lo}-{hi} mm for {fam or 'any package'}")
         elif not fam:
             warns.append(f"no height range for package '{item['footprint'].get('ref')}'; only checked {lo}-{hi} mm")
     # ---- fields
