@@ -142,6 +142,22 @@ def test_parts_pulled_from_altium_365_are_not_rechecked():
     assert RC.publish_problems(it) == []
 
 
+def test_a_doubt_an_older_ecadlib_only_noted_still_holds():
+    """Up to 0.3 an EasyEDA conversion or a near-name match was a review note, not a hold; a part an older version
+    finished keeps that note, so a plan from then (pushed as it is, or kept by the librarian) is held the same way."""
+    with tempfile.TemporaryDirectory() as d:
+        it = make(d)
+        note = "EasyEDA C2002 conversion: check pads and pins against the datasheet (native converter, format assumed)"
+        it["librarian"] = {"review": [note]}
+        assert RC.publish_problems(it, d, None) == []                  # EasyEDA supplied nothing: only a note
+        it["source"] = {"symbol": "easyeda:C2002", "footprint": "easyeda:C2002"}
+        assert RC.publish_problems(it, d, None) == ["verify: " + note]
+        it["status"] = "ready"
+        assert A.push(_absolute([dict(it)], d), None, "https://ws", dry_run=True)[0]["action"] == "skip"
+        RC.apply([it], d, allow=["PART1"])
+        assert it["status"] == "ready" and RC.publish_problems(it, d, None) == []
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

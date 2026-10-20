@@ -146,6 +146,29 @@ def _supplier_number(par, field, rules):
                in ("lcsc", "jlcpcb") for k, v in par.items() if k.startswith("Supplier Part Number "))
 
 
+# ecadlib up to 0.3 wrote these doubtful-source notes to librarian.review only (a note, not a hold); the librarian now
+# writes them to `verify`. A part an older version finished keeps its old notes, so they count as `verify` here too:
+# (half, its source prefix, the note). An EasyEDA note only counts when EasyEDA supplied a half.
+OLD_DOUBTS = (("symbol", "kicad:", re.compile(r"symbol \S+ matched by .*check")),
+              ("footprint", "kicad:", re.compile(r"footprint \S+ chosen by (shortest|footprint named)")),
+              (None, "easyeda:", re.compile(r"EasyEDA \S+ conversion: ")),
+              ("symbol", "standard:", re.compile(r"symbol pinout \S+ from the .+ family table")))
+
+
+def doubts(item):
+    """The `verify` notes that hold the item: its own, plus doubtful-source notes an older ecadlib left in
+    librarian.review (OLD_DOUBTS)."""
+    out = [str(v) for v in item.get("verify") or []]
+    src = item.get("source") or {}
+    for r in (item.get("librarian") or {}).get("review") or []:
+        r = str(r)
+        for half, prefix, rx in OLD_DOUBTS:
+            if rx.match(r) and r not in out and any(str(src.get(h) or "").startswith(prefix)
+                                                    for h in ([half] if half else ["symbol", "footprint"])):
+                out.append(r)
+    return out
+
+
 def check_item(item, base=".", rules=None):
     """-> (failures [(rule, message)], warnings [str], info {height, ...}). rules (ecadlib.rules): required fields,
     accepted pin-1 names and the courtyard layer; None = ecadlib's own."""
@@ -299,7 +322,7 @@ def check_item(item, base=".", rules=None):
                              "package (no source had one): check it")
         elif not str(par.get(RU.canonical_param(k, rules), par.get(k, ""))).strip() and not _supplier_number(par, k, rules):
             add("fields", f"{k} is empty")
-    for v in item.get("verify") or []:
+    for v in doubts(item):
         add("verify", v)
     for v in item.get("name_problems") or []:         # altium365.plan: a name Altium can't store (altium_export._name)
         add("fields", v)
