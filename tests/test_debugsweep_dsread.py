@@ -135,6 +135,17 @@ def test_ds2_19_count_tokens_for_a_claude_rung_never_carries_another_providers_k
             rd = D.Reader(tmp_path / "out", tmp_path / "cache", rules=rules, log=None)
             rd.estimate([job])
         assert [c[2]["x-api-key"] for c in api.of("/count_tokens")] == want, api.calls
+    stored = {"OPENAI_API_KEY": openai_key, "ANTHROPIC_API_KEY": claude_key}   # a batch read on the Claude rung
+    monkeypatch.setattr(UC, "secret", lambda name, env=None: stored.get(name))
+    api = TB.FakeAPI(polls=0)
+    with TB.patched(api):
+        rd = D.Reader(tmp_path / "out", tmp_path / "cache", rules=dict(rules, datasheet=dict(
+            rules["datasheet"], ladder=["claude:claude-opus-5-5"], cross_check="off")), log=None, batch=True, wait=True,
+            http=TB.PdfHTTP({"https://a/ds.pdf": TB.PDF}), poll=0, sleep=lambda s: None, yes=True)   # (unpriced endpoint)
+        rd.submit(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+        rd.flush()
+    batch = [c for c in api.calls if "/v1/messages/batches" in c[1]]      # create, poll, results
+    assert len(batch) >= 3 and {c[2]["x-api-key"] for c in batch} == {claude_key}, [(c[0], c[1]) for c in batch]
 
 
 # ---- DS2-20: `ecadlib datasheet PDF --part X --estimate` ignored the rules and uploaded the PDF to Anthropic
