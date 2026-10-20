@@ -900,8 +900,8 @@ def _keep_aside(out, path, rel):
 
 def _lib_record(rep):
     """What a later export (and kicad-dblib) needs of one library's export: the files written with their sha256, the
-    parts with their symbol / footprint, the footprints."""
-    return {"written": dict(rep.get("written") or {}),
+    parts with their symbol / footprint, the footprints, the plan it came from."""
+    return {"plan": rep.get("plan"), "written": dict(rep.get("written") or {}),
             "parts": [{"part": p.get("part"), "symbol_name": p.get("symbol_name"), "symbol": bool(p.get("symbol")),
                        "footprint": p.get("footprint")} for p in rep.get("parts") or [] if isinstance(p, dict)],
             "footprints": sorted(rep.get("footprints") or {})}
@@ -1152,13 +1152,14 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
     parsed = sexpr.parse(text)
     assert [s[1] for s in sexpr.find(parsed, "symbol")] == sorted(symbols)
     put(out / f"{lib}.kicad_sym", text)
-    gone = sorted({r.get("symbol_name") for r in prev.get("parts") or [] if r.get("symbol") and r.get("symbol_name")}
-                  - set(symbols)) if prev.get("library") == lib else []
+    gone = sorted({r.get("symbol_name") for r in mine.get("parts") or [] if r.get("symbol") and r.get("symbol_name")}
+                  - set(symbols))             # this library's own record: the top level is the library exported last
     if gone:                                  # a part that left the plan, or another BOM's plan into the same folder
-        same = Path(str(prev.get("plan") or "")).resolve() == plan.resolve()
+        was = mine.get("plan") or (prev.get("plan") if prev.get("library") == lib else None)   # None: a record
+        same = not was or Path(str(was)).resolve() == plan.resolve()                         # from before "plan"
         from .messages import plural
         rep["warnings"].append(f"{plural(len(gone), 'part')} exported last time "
-                               + ("" if same else f"from {prev.get('plan')} ") + f"and not in this plan removed from "
+                               + ("" if same else f"from {was} ") + f"and not in this plan removed from "
                                f"{lib}: {', '.join(gone[:8])}{' ...' if len(gone) > 8 else ''}; a KiCad project using "
                                f"them loses those links" + ("" if same else " (give each plan its own -o folder)"))
     stale =[p for p in pretty.glob("*.kicad_mod") if p.stem not in fps]

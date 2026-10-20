@@ -55,3 +55,17 @@ def test_ds2_44_kicad_pcm_packages_a_crlf_checkout_of_a_kicad_export_folder():
         f.write_bytes(f.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
     crlf = KP.build(out, out.parent / "pcm_crlf", log=QUIET)     # not an edit: kicad-export does not call it one (EXP-65)
     assert crlf["content_sha256"] == lf["content_sha256"] and crlf["footprints"] == lf["footprints"] == 4, (crlf, lf)
+
+
+def test_ds2_45_kicad_export_warns_of_removed_parts_after_another_library_was_exported_there():
+    plan, http = TP._plan()
+    other, _ = TP._plan()                                        # another BOM's plan, its own library in the same folder
+    out = plan.parent.parent / "k"
+    X.export(plan, out, "alpha", http=http, log=QUIET)
+    X.export(other, out, "beta", http=http, log=QUIET)
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    plan.write_text(json.dumps(items[1:]), encoding="utf-8")    # a part leaves alpha's plan
+    rep = X.export(plan, out, "alpha", http=http, log=QUIET)
+    assert [w for w in rep["warnings"] if "removed from" in w] == [
+        f"1 part exported last time and not in this plan removed from alpha: {items[0]['name']}; a KiCad project "
+        "using them loses those links"], rep["warnings"]
