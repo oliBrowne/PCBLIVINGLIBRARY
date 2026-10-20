@@ -318,10 +318,10 @@ def content_hash(files):
 
 def build(src, out, name="ecadlib", identifier=None, pkg_version=None, kicad=8, prefix="PCM_", license_="CC-BY-SA-4.0",
           author="ecadlib user", description=None, homepage=None, base_url=None, include_held=False, http=None,
-          offline=False, cache="out/http_cache", schema=None, today=None, log=print, unchecked=False):
+          offline=False, cache="out/http_cache", schema=None, today=None, log=print, unchecked=False, warn=None):
     """Build the PCM package from a plan.json or a kicad-export folder into `out`; returns the report dict.
     unchecked: package a KiCad folder ecadlib did not export (no kicad_export.json) as it is; the package's NOTICE.txt
-    and the report say it was not checked."""
+    and the report say it was not checked. warn: where warnings go (default log; -q silences log, not them)."""
     if int(kicad) < 7:
         raise ValueError("--kicad must be 7 or newer (the Plugin and Content Manager came with KiCad 6, libraries with 7)")
     if base_url and not re.match(r"^https?://", base_url):
@@ -348,7 +348,7 @@ def build(src, out, name="ecadlib", identifier=None, pkg_version=None, kicad=8, 
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
     if (xrep or {}).get("kicad_content") and license_ not in ("CC-BY-SA-4.0",):
-        log(f"  note: the library holds KiCad library content (CC-BY-SA 4.0); --license {license_} may not be allowed")
+        (warn or log)(f"  note: the library holds KiCad library content (CC-BY-SA 4.0); --license {license_} may not be allowed")
     chash = content_hash(files | {"#settings": json.dumps([name, identifier, kicad, prefix, license_, author, description, homepage]).encode()})
     prev = out / "kicad_pcm.json"
     old = json.loads(prev.read_text(encoding="utf-8")) if prev.is_file() else {}
@@ -515,7 +515,7 @@ def main(argv=None):
     try:
         rep = build(a.src, a.out, a.name, a.identifier, a.pkg_version, a.kicad, a.prefix, a.license, a.author,
                     a.description, a.homepage, a.base_url, a.include_held, offline=a.offline, cache=a.cache,
-                    schema=a.schema, log=say, unchecked=a.unchecked)
+                    schema=a.schema, log=say, unchecked=a.unchecked, warn=log)
     except (OSError, ValueError) as e:
         print(f"ecadlib kicad-pcm: {e}", file=sys.stderr)
         return 2

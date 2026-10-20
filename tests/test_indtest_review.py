@@ -151,6 +151,28 @@ def test_release_check_compares_the_symbol_link(tmp_path):
     assert ("pins", "the symbol links footprint R_0603_1608Metric, not the part's C_0402_1005Metric") in RC.check_item(bad, d)[0]
 
 
+# kicad-pcm follow-up: -q keeps the warning that the library's KiCad content (CC-BY-SA) may not allow --license
+@lite
+def test_kicad_pcm_quiet_keeps_the_license_warning(tmp_path):
+    import shutil
+    from ecadlib import term as TM
+    from tests.test_indtest_kicadinstall import _demo, _run
+    shutil.copytree(_demo(), tmp_path / "ws")
+    plan = tmp_path / "ws/librarian/demo_bom_demo/plan.json"
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    items[0]["source"]["footprint"] = "kicad:Resistor_SMD:R_0603_1608Metric"        # some KiCad library content
+    plan.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    old = TM.VERBOSITY
+    try:
+        rc, out, err = _run(["-q", "kicad-pcm", str(plan), "--out", str(tmp_path / "pcm"), "--license", "MIT",
+                             "--offline", "--cache", str(tmp_path / "cache")], cwd=tmp_path,
+                            env={"ECADLIB_HOME": str(tmp_path / "home")})
+    finally:
+        TM.VERBOSITY = old
+    assert rc == 0, out + err
+    assert "--license MIT may not be allowed" in out + err, out + err
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
