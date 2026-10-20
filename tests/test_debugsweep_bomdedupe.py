@@ -230,3 +230,36 @@ def test_ds2_08_chip_size_before_a_word_starting_with_r_k_v_w():
     assert str(SP.chip_size("0603 / 1005 Resistor")).startswith("conflict"), SP.chip_size("0603 / 1005 Resistor")
     r = SP.resolve(["0603 Resistor"], "R", "", "")
     assert r["footprint"] == "R_0603_1608Metric", r
+
+
+# ---- DS2-04 + DS2-07 together: a sparse sheet (a far styled cell) whose data starts in column B, with a hidden
+# column: the BOM copy keeps the hidden cells under '<hidden>' and remaps only the live footprint column
+@lite
+def test_ds2_07_remap_bom_keeps_hidden_columns_of_a_sparse_sheet(tmp_path):
+    import openpyxl
+    from openpyxl.styles import PatternFill
+    from ecadlib import bom_triage as T, dedupe as DD
+    rows = [["Designator", "Value", "Footprint", "MPN", "Footprint"],
+            ["R1", "10k", "R0603_OLD", "RC0603FR-0710KL", "R0603_OLD"],
+            ["C1", "100n", "C0603_OLD", "GRM188R71H104KA93D", "C_0603_1608Metric"]]
+    for sparse in (False, True):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "BOM"
+        for r, row in enumerate(rows, 1):
+            for c, v in enumerate(row, 2):                # column A empty: a sparse frame leaves it out
+                ws.cell(r, c, v)
+        ws.column_dimensions["D"].hidden = True           # the old footprint column
+        if sparse:
+            ws["Z100000"].fill = PatternFill("solid", fgColor="FFFF00")
+        x = tmp_path / f"bom_{sparse}.xlsx"
+        wb.save(x)
+        out, n = DD.remap_bom(x, [{"kind": "footprint", "from": "R0603_OLD", "to": "R_0603_1608Metric"}],
+                              tmp_path / f"bom_{sparse}_deduped.csv", columns={})
+        body = [r.lstrip(",") for r in out.read_text(encoding="utf-8-sig").splitlines()]   # dense keeps empty A
+        assert n == 1 and body == ["Designator,Value,<hidden> Footprint,MPN,Footprint",
+                                   "R1,10k,R0603_OLD,RC0603FR-0710KL,R_0603_1608Metric",
+                                   "C1,100n,C0603_OLD,GRM188R71H104KA93D,C_0603_1608Metric"], (sparse, n, body)
+        got = [(l["designator"], l.get("mpn"), l.get("footprint")) for l in T.read_bom(out, {})[0]]
+        assert got == [("R1", "RC0603FR-0710KL", "R_0603_1608Metric"),
+                       ("C1", "GRM188R71H104KA93D", "C_0603_1608Metric")], (sparse, got)
