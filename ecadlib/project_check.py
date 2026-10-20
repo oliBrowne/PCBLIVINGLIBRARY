@@ -83,21 +83,26 @@ def sheet_files(root):
     return out
 
 
-def _ref(sym):
-    for proj in sexpr.find(sexpr.first(sym, "instances") or [], "project"):
-        for p in sexpr.find(proj, "path"):
-            r = sexpr.first(p, "reference")
-            if r:
-                return str(r[1])
-    return next((str(x[2]) for x in sexpr.find(sym, "property") if len(x) > 2 and str(x[1]) == "Reference"), "")
+def _refs(sym, root_uuid=""):
+    """Every reference of a placed symbol: one per instance path under this root schematic (a sheet used twice gives
+    R10 and R20, as bom_inputs reads it). No such path: the first instance, else the Reference property."""
+    paths = [(str(p[1]).strip("/").split("/")[0], str(r[1]))
+             for proj in sexpr.find(sexpr.first(sym, "instances") or [], "project")
+             for p in sexpr.find(proj, "path") for r in [sexpr.first(p, "reference")] if r]
+    mine = [r for top, r in paths if root_uuid and top == root_uuid]
+    if mine or paths:
+        return mine or [paths[0][1]]
+    return [next((str(x[2]) for x in sexpr.find(sym, "property") if len(x) > 2 and str(x[1]) == "Reference"), "")]
 
 
 def schematic_symbols(files):
     """{cache key: {"node": cached symbol, "lib_id": .., "refs": [..]}} over the sheet files. The cache key is the
     instance's lib_name when it has one (a symbol edited in the schematic), else its lib_id."""
-    cache, uses = {}, {}
+    cache, uses, root_uuid = {}, {}, None
     for f in files:
         tree = _load_sch(f)
+        if root_uuid is None:                  # files[0] is the root schematic (sheet_files)
+            root_uuid = str((sexpr.first(tree, "uuid") or [None, ""])[1])
         for s in sexpr.find(sexpr.first(tree, "lib_symbols") or [], "symbol"):
             cache.setdefault(str(s[1]), s)
         for s in sexpr.find(tree, "symbol"):
@@ -107,12 +112,12 @@ def schematic_symbols(files):
             ln = sexpr.first(s, "lib_name")
             key = str(ln[1]) if ln else str(lid[1])
             u = uses.setdefault(key, {"lib_id": str(lid[1]), "refs": set(), "edited": bool(ln), "inst_fp": {}})
-            r = _ref(s)
-            if r and not r.startswith("#"):
-                u["refs"].add(r)
-                fp = next((str(x[2]) for x in sexpr.find(s, "property") if len(x) > 2 and str(x[1]) == "Footprint"), None)
-                if fp is not None:             # the footprint this placed symbol puts on the board
-                    u["inst_fp"][r] = "" if fp == "~" else fp
+            fp = next((str(x[2]) for x in sexpr.find(s, "property") if len(x) > 2 and str(x[1]) == "Footprint"), None)
+            for r in _refs(s, root_uuid):
+                if r and not r.startswith("#"):
+                    u["refs"].add(r)
+                    if fp is not None:         # the footprint this placed symbol puts on the board
+                        u["inst_fp"][r] = "" if fp == "~" else fp
     return {k: {"node": cache.get(k), "lib_id": u["lib_id"], "refs": sorted(u["refs"], key=_natkey),
                 "edited": u["edited"], "inst_fp": u["inst_fp"]} for k, u in uses.items()}
 

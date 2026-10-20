@@ -88,3 +88,31 @@ def test_ds2_61_kicad_database_in_a_folder_with_hash_sign(tmp_path):
     assert sorted(rows) == ["P1"] and rows["P1"]["MPN"] == "M1", rows
     assert 'row T: ["P1", "M1"]' in G.table_rows(d / "lib.sqlite")
     assert sorted(p.name for p in base.iterdir()) == [d.name], "a stray file was created next to the folder"
+
+
+@lite
+def test_ds2_62_check_compares_every_instance_of_a_reused_sheet(tmp_path):
+    """sub.kicad_sch is used twice (R10 and R20 are one symbol with two instance paths). R20 sits on the board with
+    another footprint than the library part's: check must name R20, not only R10."""
+    from ecadlib import sexpr
+    d = tmp_path.resolve() / "proj"
+    shutil.copytree(FIX_SCH, d)
+    cached = next(s for s in sexpr.find(sexpr.first(sexpr.parse((d / "board.kicad_sch").read_text(), keep_quotes=True),
+                                                    "lib_symbols"), "symbol") if str(s[1]) == "Device:R")
+    cached[1] = sexpr.Q("R")
+    for p in sexpr.find(cached, "property"):
+        if str(p[1]) == "Footprint":
+            p[2] = sexpr.Q("Resistor_SMD:R_0402_1005Metric")
+    (d / "lib").mkdir()
+    (d / "lib" / "Device.kicad_sym").write_text(f'(kicad_symbol_lib (version 20241209) (generator "test") {sexpr.dumps(cached)})\n')
+    fp = lambda fpid, ref, x: (f'(footprint "{fpid}" (layer "F.Cu") (at {x} 10) (property "Reference" "{ref}" (at 0 -1 0) '
+                               f'(layer "F.SilkS")) (pad "1" smd rect (at -0.5 0) (size 0.5 0.5) (layers "F.Cu")) '
+                               f'(pad "2" smd rect (at 0.5 0) (size 0.5 0.5) (layers "F.Cu")))')
+    (d / "board.kicad_pcb").write_text('(kicad_pcb (version 20241229) (generator "test") '
+                                       + fp("Resistor_SMD:R_0402_1005Metric", "R10", 10)
+                                       + fp("Resistor_SMD:R_0805_2012Metric", "R20", 20) + ')\n')
+    res = PJ.check_kicad(d / "board.kicad_pro", libs=[d / "lib"], use_global=False)
+    row = next(r for r in res["rows"] if r["kind"] == "symbol" and r["id"] == "Device:R")
+    assert "R20" in row["refs"], row["refs"]
+    board = [c["text"] for c in row["changes"] if "(the board)" in c["text"]]
+    assert any(t.startswith("R20 places") for t in board), board
