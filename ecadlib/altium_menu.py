@@ -375,9 +375,14 @@ def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_runnin
 
 def dxpprf_bytes(win_dir):
     """A preferences file (zip of DXP.RCS + IncludedFiles.ini, as Menu_SVN.DXPPrf). Fixed timestamps: same bytes each run."""
+    rcs = rcs_text(win_dir)
+    bad = "".join(dict.fromkeys(c for c in rcs if ord(c) > 127))
+    if bad:                                  # plain ASCII, so any code page reads it
+        raise ValueError(f"--win-dir {win_dir!r}: the menu file can only name a folder in plain ASCII ({bad!r}); "
+                         "use another folder")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
-        for name, data, comp in (("DXP.RCS", rcs_text(win_dir).encode("ascii"), zipfile.ZIP_DEFLATED),
+        for name, data, comp in (("DXP.RCS", rcs.encode("ascii"), zipfile.ZIP_DEFLATED),
                                  ("IncludedFiles.ini", b"[WorkspaceManager:Customizations]\r\nImportMode=0\r\nFileCount=1\r\n"
                                                        b"FileName0=DXP.RCS\r\n", zipfile.ZIP_STORED)):
             zi = zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0))
@@ -386,12 +391,16 @@ def dxpprf_bytes(win_dir):
     return buf.getvalue()
 
 
-def readme_text(win_dir, prefs):
+def readme_text(win_dir, prefs, unfit=False):
+    """unfit: no menu file because win_dir (this folder) has characters the menu file cannot hold."""
     w = win_dir or "<this folder>"
     menu = (f"""   Or load the ready-made menu: DXP (or the gear icon) > Preferences > Load... (bottom left) > {PREFS}; tick only
    "System > Customizations", OK, restart Altium. CAUTION: this loads a customisation file, which may replace
    menus you customised yourself (back them up first with Preferences > Save...). It names {w} in each entry: build
    it again with --win-dir if you move this folder.""" if prefs else
+            f"""   (No {PREFS} here: it names this folder in each entry, in plain ASCII without ' | or ", and the path of
+   this folder is not. Use the quick way above (install-menu), or build the menu into a folder whose path is.)"""
+            if unfit else
             f"""   (No {PREFS} here: the Windows folder was not known. Run `ecadlib altium-menu build --win-dir {w}` on
    this PC to get the ready-made menu file.)""")
     run_script = ", ".join(p for p in procedures() if "(" not in p)            # parameterless: Run Script lists them
@@ -500,19 +509,23 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
     derived = win_dir is None and os.name == "nt"
     if derived:
         win_dir = str(out.resolve())
+    prefs, note, folder = None, None, win_dir
     if win_dir:
         try:
             win_dir = check_win_dir(win_dir)
+            prefs = dxpprf_bytes(win_dir)       # before any file is written: a bad folder leaves nothing half-built
         except ValueError:
             if not derived:
                 raise
             win_dir = None            # this folder (C:\\Users\\O'Brien\\...) cannot go into a menu entry: no menu file
+            note = (f"no {PREFS}: the menu file names this folder in each entry, in plain ASCII without ' | or \", "
+                    f"and {folder} is not; install-menu puts the menu into Altium's own menu file instead")
     if name and not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$", name):
         raise ValueError(f"--name {name!r}: letters, digits, _ . - only")
     from . import altium_forms as AF, altium_native as AN
     files = {PROJECT: prjscr_text(UNIT, AF.DIALOG_UNIT, AN.UNIT), UNIT: pas_text(),
              AF.DIALOG_UNIT: AF.dialog_pas_text(), AF.DIALOG_FORM: AF.dialog_dfm_text(), AN.UNIT: AN.pas_text(),
-             RUN_CMD: run_cmd_text(), RUN_VBS: run_vbs_text(), README: readme_text(win_dir, bool(win_dir))}
+             RUN_CMD: run_cmd_text(), RUN_VBS: run_vbs_text(), README: readme_text(win_dir or (note and folder), bool(win_dir), bool(note))}
     written, kept = [], []
     for fname, text in files.items():
         data = text.encode("utf-8")
@@ -529,14 +542,14 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
         ini.write_bytes(ini_text(workspace or "workspace", library or "library", name, command, hidden, timeout_s,
                                  port, offline).encode("utf-8"))
         written.append(INI)
-    if win_dir:
-        data = dxpprf_bytes(win_dir)
-        if not (out / PREFS).is_file() or (out / PREFS).read_bytes() != data:
-            (out / PREFS).write_bytes(data)
+    if prefs:
+        if not (out / PREFS).is_file() or (out / PREFS).read_bytes() != prefs:
+            (out / PREFS).write_bytes(prefs)
             written.append(PREFS)
     problems = project_problems(files)
     rep = {"folder": str(out), "project": PROJECT, "procedures": procedures(), "menu_entries": [p for p, _, _ in PROCS], "written": written,
-           "kept": kept, "win_dir": win_dir, "menu_file": PREFS if win_dir else None, "problems": problems,
+           "kept": kept, "win_dir": win_dir, "menu_file": PREFS if win_dir else None, **({"menu_file_note": note} if note else {}),
+           "problems": problems,
            "command": load_command(ini), "command_filled": filled}
     (out / "altium_menu.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
     return rep
@@ -1561,7 +1574,9 @@ def main(argv=None):
                   f"then Customize to put {', '.join(rep['menu_entries'])} on a menu (see {README})")
             for p, u, d in BUILD_PROCS:
                 print(f"  also in the project: {p} ({u}): {d}")
-            if not rep["menu_file"]:
+            if rep.get("menu_file_note"):
+                print(f"  {rep['menu_file_note']}")
+            elif not rep["menu_file"]:
                 print(f"  no {PREFS}: give --win-dir (the folder on the Altium PC) for the ready-made menu file")
         return 1 if rep["problems"] else 0
     if a.cmd == "run-job":

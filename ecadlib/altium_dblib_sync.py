@@ -95,6 +95,22 @@ def data_file_name(name):
     return s if s.strip("_") else "ecadlib"
 
 
+def dblib_table_paths(lib):
+    """The parts workbook a .DbLib / .SVNDbLib reads: LibraryDatabasePath (next to it), else this module's name for it
+    (data_file_name: 'Bibliothèque.DbLib' -> 'Bibliotheque.xlsx'). -> (xlsx path, csv mirror path)."""
+    lib = Path(lib)
+    try:
+        db = next((x for x in _sections(read_ini_text(lib)[0]) if x[0] == "DatabaseLinks"), None)
+    except (OSError, ValueError):
+        db = None
+    path = (_kv(db[1]) if db else {}).get("LibraryDatabasePath", "").strip()
+    names = ([PureWindowsPath(path).stem] if path else []) + [data_file_name(lib.stem), lib.stem]
+    for n in names:
+        if (lib.parent / f"{n}.xlsx").is_file() or (lib.parent / f"{n}.csv").is_file():
+            return lib.parent / f"{n}.xlsx", lib.parent / f"{n}.csv"
+    return lib.parent / f"{names[0]}.xlsx", lib.parent / f"{names[0]}.csv"
+
+
 def table_of(item):
     """Sheet name from the workspace folder (Components/Capacitors -> Capacitors); see sheet_name."""
     return sheet_name((item.get("folder") or "Misc").rstrip("/").rsplit("/", 1)[-1])
@@ -396,7 +412,9 @@ def svn_info(target, runner=run_cmd, which=shutil.which):
 def svn_commands(written, removed, message):
     """svn add/delete/commit for exactly the paths (relative to the working copy root) this run touched."""
     written, removed = sorted(set(written)), sorted(set(removed))
-    dirs = sorted({p.split("/")[0] for p in written + removed if "/" in p})
+    # every folder above a path (add --parents schedules new ones, and svn refuses to commit a child of an added
+    # folder that is not committed with it); an unchanged versioned folder at --depth empty commits nothing
+    dirs = sorted({"/".join(p.split("/")[:i]) for p in written + removed for i in range(1, p.count("/") + 1)})
     cmds = []
     if written:
         cmds.append(["svn", "add", "--force", "--parents", *written])
@@ -420,6 +438,11 @@ def svn_step(target, written, removed, commit=False, message="ecadlib dblib-sync
     elif runner(["svn", "info", str(target)]).returncode != 0:
         res["note"] = f"{target} is not an svn working copy: check it out first, then run these"
     else:
+        known = _svn_known(target, removed, runner)
+        if known is not None and set(known) != set(removed):    # svn delete of one fails, and the whole commit with it
+            res["not_versioned"] = sorted(set(removed) - set(known))
+            cmds = svn_commands(written, known, message)
+            res["commands"] = [" ".join(_q(c) for c in cmd) for cmd in cmds]
         for cmd in cmds:
             r = runner(cmd, cwd=str(target))
             res["output"].append((r.stdout or "") + (r.stderr or ""))
@@ -429,6 +452,25 @@ def svn_step(target, written, removed, commit=False, message="ecadlib dblib-sync
         else:
             res["ran"] = True
     return res
+
+
+def _svn_known(target, paths, runner):
+    """The paths svn has (versioned or scheduled, here mostly missing: the sync deleted them), or None when svn's
+    answer can't be read. A file svn never added (an older ecadlib's recipe, commands never run) has no entry."""
+    if not paths:
+        return []
+    r = runner(["svn", "status", "--xml", "-v", "--depth", "empty", *sorted(set(paths))], cwd=str(target))
+    try:
+        from xml.etree import ElementTree as ET
+        root = ET.fromstring(r.stdout or "")
+    except Exception:
+        return None
+    known = set()
+    for e in root.iter("entry"):
+        st = e.find("wc-status")
+        if st is not None and st.get("item") not in ("unversioned", "ignored", "none"):
+            known.add(e.get("path", "").replace("\\", "/"))       # Windows svn prints PcbLib\X.PcbLib
+    return [p for p in paths if p in known]
 
 
 def _q(s):
@@ -696,8 +738,18 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             else:
                 res["detail"] = "kept (--prune deletes it)"
             results.append(res)
-    used = {f"{d}/{AL.file_stem(r.get(f'{w} Ref', ''))}.{d}" for _, (_, rows) in tables.items() for r in rows
-            for _, d, w in KINDS if r.get(f"{w} Ref")}
+    used = set()
+    for t, (_, rows) in tables.items():
+        for r in rows:
+            for _, d, w in KINDS:
+                ref = r.get(f"{w} Ref")
+                if not ref:
+                    continue
+                try:
+                    used.add(f"{d}/{AL.file_stem(ref)}.{d}")
+                except ValueError as e:     # typed into the workbook: names no file ecadlib wrote; the row is kept
+                    results.append({"name": r.get("Part Number", ""), "action": "error", "table": t, "kind": "row",
+                                    "detail": f"{w} Ref {ref!r}: {e} in the workbook (row kept)"})
     for _, d, _ in KINDS:
         for f in sorted((to / d).glob(f"*.{d}")) if (to / d).is_dir() else []:
             rel = f"{d}/{f.name}"
@@ -713,9 +765,13 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                 steps = _steps(to, rel)             # read from its recipe before that is deleted
                 if not dry_run:
                     f.unlink()
-                    recipe = f.with_name(f.name + AN.EXT)      # else Altium's rebuild would make a file put here later
-                    if recipe.is_file():                       # from the recipe of the one pruned
-                        recipe.unlink()
+                # its recipe (else Altium's rebuild would make a file put here later from the recipe of the one
+                # pruned) and its .ecadstate go too; svn added both, so they are `svn delete`d with it
+                for side in (f.with_name(f.name + AN.EXT), f.with_name(f.name + AN.STATE_EXT)):
+                    if side.is_file():
+                        removed.append(f"{d}/{side.name}")
+                        if not dry_run:
+                            side.unlink()
                 prune_steps.update(steps)
             else:
                 res["detail"] = "no row uses it; kept (--prune deletes it)"
@@ -728,14 +784,16 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         if rel not in managed_files:
             continue
         managed_files.discard(rel)
-        if (to / rel).is_file():                # not in `removed`: svn never added them (svn delete would fail)
+        if (to / rel).is_file():                # svn added it (svn add --parents, with its folders): svn deletes them
             results.append({"name": rel, "action": "removed", "detail": "STEP model of a pruned footprint", "table": "",
                             "kind": "3d"})
+            removed.append(rel)
             if not dry_run:
                 (to / rel).unlink()
                 for folder in ((to / rel).parent, (to / rel).parent.parent):
                     if folder.name != "PcbLib" and folder.is_dir() and not any(folder.iterdir()):
                         folder.rmdir()
+                        removed.append(folder.relative_to(to).as_posix())
     managed_files |= {w for w in written if not w.endswith((AN.EXT, AN.STATE_EXT)) and "/ecadlib_3d/" not in w}
     had = {table_key(t) for t in old}
     tables = {t: v for t, v in tables.items() if v[1] or table_key(t) in had}  # never create an empty sheet
@@ -855,6 +913,8 @@ def main(argv=None):
         s = svn_step(a.to, out["written"], out["removed"], a.commit, a.message)
         out["svn"] = s
         t.write(f"svn: {s.get('note') or ('committed' if s['ran'] else s.get('error', ''))}")
+        if s.get("not_versioned"):
+            t.write(f"  deleted here only (svn never added them): {', '.join(s['not_versioned'])}")
         if not s["ran"]:
             for c in s["commands"]:
                 t.write(f"  {c}")

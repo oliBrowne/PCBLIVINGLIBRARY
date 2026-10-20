@@ -462,6 +462,8 @@ ALTIUM_API = {
     "GetState_Cache": "PCB API: IPCB_Pad.GetState_Cache : TPadCache (AD26 SDK IPCB_Pad.Internal_GetState_Cache)",
     "SetState_Cache": "PCB API: IPCB_Pad.SetState_Cache(TPadCache) (AD26 SDK; ScriptingSystem wraps TPadCache with setters)",
     "SetState_StackCRPctOnLayer": "PCB API: IPCB_Pad.SetState_StackCRPctOnLayer(Layer, Percent) (rounded-rectangle corner)",
+    "SetState_XPadOffset": "PCB API: IPCB_Pad.SetState_XPadOffset(Layer, Offset) (XPadOffset[Layer]: copper from the hole)",
+    "SetState_YPadOffset": "PCB API: IPCB_Pad.SetState_YPadOffset(Layer, Offset) (YPadOffset[Layer]: copper from the hole)",
     "ModelFactory_CreateExtruded": "PCB API: IPCB_ComponentBody.ModelFactory_CreateExtruded(Standoff, Height, Colour)",
     "ModelFactory_FromFilename": "PCB API: IPCB_ComponentBody.ModelFactory_FromFilename(FileName, Embedded)",
     "SetState_FromModel": "PCB API: IPCB_ComponentBody.SetState_FromModel",
@@ -546,6 +548,8 @@ def _recipe_items(rp):
             if len(f) > 18:                     # rotation, layer, plating, paste / mask: an edit there is an edit too
                 pad.update(rot=int(f[6]) / 1000, layer=int(f[9]), plated=f[14] == "1",
                            paste=(f[15] == "manual", int(f[16])), mask=(f[17] == "manual", int(f[18])))
+            if len(f) > 20:                     # copper offset from the hole (x, y), pad frame
+                pad["offset"] = (int(f[19]), int(f[20]))
             cur["pads"].append(pad)
         elif f[0] == "PIN" and cur is not None:
             cur["pins"].append({"num": f[3], "name": f[4], "x": round(int(f[7]) / 10000), "y": round(int(f[8]) / 10000),
@@ -570,6 +574,9 @@ def _pad_diffs(a, b, tol):
         bad.append(f"layer {b['layer']} != {a['layer']}")
     if a["hole"] and bool(b.get("plated", True)) != a["plated"]:
         bad.append(f"plated {bool(b.get('plated'))} != {a['plated']}")
+    got = tuple(b.get("offset") or (0, 0))
+    if "offset" in a and any(abs(u - v) > tol for u, v in zip(a["offset"], got)):
+        bad.append(f"offset {got} != {a['offset']}")
     for k in ("paste", "mask"):
         manual, v = a[k]
         mode = b.get(f"{k}_mode")

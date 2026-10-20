@@ -57,6 +57,7 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- The Altium rebuild (`altium-native`, ecadlib_build.pas) dropped a through-hole pad's drill offset, so the copper sat centred on the hole, and `altium-native compare` never checked the offset (DS2-34). A library Altium already rebuilt with the old script and recorded as built is not checked again on its own: if your parts have offset pads, run `ecadlib altium-native compare` on the library folder, then `ecadlib altium-native write --rebuild-all` for the libraries it lists.
 - Fixes from testing PRs #81-#103 by running them (tests in `tests/test_review_1018_merges.py`):
   - A failed Altium build installs the library you had again (it was uninstalled to build); the dialog says "Not found" for a bad part number, and a wrong LCSC number is no longer reported as a bad MPN.
   - `dblib-sync`: a library file open in Altium is reported by name and skipped, instead of stopping halfway with "[Errno 13] Permission denied".
