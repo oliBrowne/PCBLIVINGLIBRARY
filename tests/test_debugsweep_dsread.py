@@ -302,3 +302,35 @@ def test_ds2_22_a_cap_set_to_ten_holds_like_any_cap_you_set(tmp_path, monkeypatc
     monkeypatch.setattr(R.EvalReader, "__init__", spy)
     TE.run(str(tmp_path), "eval", max_cost_usd=10.0)
     assert seen and all(seen), seen
+
+
+@lite
+def test_ds2_22_ten_dollars_approved_in_the_web_ui_is_a_cap_you_set(tmp_path, monkeypatch):
+    from ecadlib import app as A, userconfig as UC
+    from tests import test_datasheet_batch as TB
+    monkeypatch.setattr(UC, "secret", lambda name, env=None: {"OPENAI_API_KEY": "sk-proj-OPENAI-test-111"}.get(name))
+    ws = A.Workspace(tmp_path / "ws", [], providers=["digikey"])
+    (ws.root / "ecadlib.toml").write_text('[ai]\nprovider = "openai"\nmodel = "gpt-6-sol"\ndetect = false\n', encoding="utf-8")
+    bom = ws.save_upload("bom.csv", b"Designator,MPN\nU1,TPS1\n")
+    out = ws._librarian_dir(ws._bom_path(bom))
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "plan.json").write_text("[]", encoding="utf-8")
+    _, body = D.build_request(("base64", TB.PDF), "TPS1", None, None, "gpt-6-sol")
+    monkeypatch.setattr(D, "estimate_plan", lambda plan_f, rd, *a: rd.estimate(           # about $0.11, at most $0.21
+        [{"name": "TPS1", "model": rd.model, "body": body, "url": "ds.pdf", "prov": {"pages": 3, "sent_as": "base64"}}]))
+    seen = []
+
+    class Read(Exception):
+        pass
+
+    def fill_plan(plan_f, rd, *a, **k):               # the Reader the reads are held by, as the person approved them
+        seen.append((rd.cfg["max_cost_usd"], rd.cap_set))
+        raise Read
+    monkeypatch.setattr(D, "fill_plan", fill_plan)
+    for read in (lambda: ws.ai_read(bom, approved_usd=10.0), lambda: ws.datasheet_batch(bom, approved_usd=10.0)):
+        try:
+            read()
+            raise AssertionError("not read")
+        except Read:
+            pass
+    assert seen == [(10.0, True), (10.0, True)], seen   # $10.00 approved holds like $9.99: not the default cap

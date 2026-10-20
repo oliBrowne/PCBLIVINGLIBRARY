@@ -510,7 +510,7 @@ class Workspace:
             raise ValueError(q["text"])
         cap, yes = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
         rd = self._datasheet_reader(out, batch=False, yes=yes)
-        rd.cfg["max_cost_usd"] = cap                  # never more than the person saw and approved
+        rd.set_cap(cap)                               # never more than the person saw and approved: a cap they set
         log, n = [], [0]
 
         def note(msg):
@@ -872,7 +872,7 @@ class Workspace:
         if q is not None:                             # None: nothing left to buy (a submitted batch is only collected)
             cap, unknown_ok = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
             rd.yes = rd.yes or unknown_ok
-            rd.cfg["max_cost_usd"] = cap              # never more than the person saw and approved
+            rd.set_cap(cap)                           # never more than the person saw and approved: a cap they set
         log = []
         rd.say = lambda m: log.append(str(m).strip())
         items = D.fill_plan(out / "plan.json", rd, self.rules(), log=log.append, parts=set(parts or []) or None)
