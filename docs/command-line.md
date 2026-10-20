@@ -116,6 +116,9 @@ For people who are used to installers, not terminals. The guide for them is `doc
   ([Altium and KiCad plugins](altium.md#plugging-into-the-tools-kicad_pcmpy-and-altium_pkgpy)) and sets it to run this ecadlib. One step inside Altium is left (Install from file...), because Altium
   keeps its list of script projects to itself. **Add to KiCad** copies the action plugin into each KiCad's
   `scripting/plugins` folder, with this ecadlib's command next to it, so no PATH change is needed.
+* **`ecadlib nexar signin|status|signout`** (`nexar_signin.py`): sign in to Altium 365 once with your own free Nexar
+  app; ecadlib refreshes the token by itself, so there is no daily portal token to paste. See
+  [Signing in to Altium 365](altium.md#signing-in-to-altium-365-ecadlib-nexar-signin).
 * **`ecadlib keys list|set NAME|remove NAME`** (`userconfig.py`): API keys stored per user, the way to give ecadlib a
   key. On Windows they are encrypted with DPAPI for your account. Elsewhere they are in a file only you can read
   (mode 600). The folder is `%APPDATA%\ecadlib`, `~/Library/Application Support/ecadlib` or `~/.config/ecadlib`, and

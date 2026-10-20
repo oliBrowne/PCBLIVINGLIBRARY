@@ -5,6 +5,7 @@ Every way ecadlib gets parts into Altium: Altium 365, database libraries, .SchLi
 On this page:
 
 * [`altium365.py`: Altium 365 workspace exporter (Nexar Design API)](#altium365py-altium-365-workspace-exporter-nexar-design-api)
+* [Signing in to Altium 365: `ecadlib nexar signin`](#signing-in-to-altium-365-ecadlib-nexar-signin)
 * [`altium_export.py`: Altium Database Library](#altium_exportpy-altium-database-library)
 * [`altium_lib.py`: Altium `.PcbLib` / `.SchLib` writer (pure Python)](#altium_libpy-altium-pcblib--schlib-writer-pure-python)
 * [`kicad_import.py`: KiCad library parts to Altium](#kicad_importpy-kicad-library-parts-to-altium)
@@ -15,8 +16,9 @@ On this page:
 ```
 python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
         --models <dir with SchLib/<ref>.SchLib and PcbLib/<ref>.PcbLib> -o out/altium365/plan.json
-NEXAR_TOKEN=... python3 -m ecadlib.altium365 workspaces
-NEXAR_TOKEN=... python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace <url> [--dry-run]
+ecadlib nexar signin                      # once; or NEXAR_TOKEN=<portal token> for a day
+python3 -m ecadlib.altium365 workspaces
+python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace <url> [--dry-run]
 ```
 
 `plan` turns each unique part into one managed workspace component under `Components/<Category>`, with the same parameters as the DbLib rows (manufacturer, MPN, value, supplier, links). `push` then, for each part:
@@ -56,6 +58,38 @@ For teams that keep a Database Library or an SVN Database Library instead of an 
 **Verified** against two real files fetched from GitHub: `ryankurte/altium-library/electronpowered.dblib` (Excel) and `mechanart/AltiumLibrary/mechanart_oshw.SVNDbLib`. The Excel fast connection writes `LibraryDatabaseType=Microsoft Excel`, `LibraryDatabasePath=<file>` and `DatabasePathRelative=1`, and its tables are `<sheet>$`. `[Library Path]`/`[Footprint Path]` are mapped as reserved fields. An SVNDbLib has the DbLib layout plus `SVNRepositoryURL=` and `FileRepositoryIsRelative=0` in `[DatabaseLinks]`, and its `LibrarySearchPath` lists the repository's symbol and footprint folders, separated by `;`. Altium's docs say that SVNDbLib model paths are "relative to the root of the repository" and that Access/Excel paths can be stored "relative to the Database Library/SVN Database Library file".
 
 **Unverified** (there is no Altium or Windows here): that the `.xlsx` opens through ACE `Excel 12.0 Xml`, since the real example used `.xls` with `Excel 8.0`; that `SVNRepositoryURL` should be the working-copy URL (the URL `--to` is checked out from) so `SchLib\x.SchLib` resolves; that `LibrarySearchPath` is where Altium keeps the "Models Location" folders; the `.SVNDbLib` extension case (Altium writes `.SVNDbLib`); and the INI encoding (UTF-8 here, though only ASCII names are expected).
+
+## Signing in to Altium 365: `ecadlib nexar signin`
+
+A token made on the Nexar portal lasts 24 hours, so pasting one (`ecadlib keys set NEXAR_TOKEN`) means doing it again
+every day. Instead, make your own free Nexar app once and let ecadlib keep itself signed in:
+
+1. On [portal.nexar.com](https://portal.nexar.com/applications) sign in with the Altium account of your Altium 365
+   workspace and create an application with **Design** access (the Design API is free; nothing here uses the paid
+   supply API).
+2. On the app's **Authorization** tab, add `http://localhost:3000/login` as a redirect URI (ecadlib listens there on
+   your own computer for the one browser sign-in; `NEXAR_REDIRECT_URI` picks another port).
+3. Run `ecadlib nexar signin`, paste the app's **client ID** and **client secret** when asked (once), and allow access
+   in the browser that opens.
+
+`ecadlib nexar status` says whether you are signed in and until when the current access token is valid (never the
+token); `ecadlib nexar signout` forgets the sign-in. Every Altium 365 command, the web UI and the Altium menu use the
+sign-in without change.
+
+**How it works.** Nexar accepts only confidential apps (an app with a secret), so ecadlib can't ship one shared
+"Sign in with Altium" app: its secret would be public. With your own app, ecadlib does the standard authorization
+code sign-in with PKCE and the scopes `openid user.access design.domain offline_access`. `offline_access` gives a
+refresh token; when the access token is within five minutes of running out, ecadlib swaps the refresh token for a new
+one (and keeps the new refresh token when Nexar rotates it). The app's id and secret (`NEXAR_CLIENT_ID`,
+`NEXAR_CLIENT_SECRET`, the same names the supply lookups use) and the sign-in (`NEXAR_SIGNIN`) go into ecadlib's key
+store ([API keys](api-keys.md)): encrypted for your Windows account, never in the environment, a config file or a log.
+A pasted `NEXAR_TOKEN` still works when there is no sign-in. If a refresh fails (the app was deleted, the secret
+changed), commands say so and ask you to run `ecadlib nexar signin` again.
+
+**Checked** (2026-10-20) against `identity.nexar.com/.well-known/openid-configuration`: authorization code, refresh
+token, PKCE S256, the `offline_access` scope, and only `client_secret_basic` / `client_secret_post` client
+authentication. **Tested offline** with a fake token endpoint and a fake browser (`tests/test_nexar_signin.py`); the
+first live sign-in needs a real Nexar app.
 
 ## `altium_export.py`: Altium Database Library
 
