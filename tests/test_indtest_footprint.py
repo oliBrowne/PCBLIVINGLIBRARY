@@ -132,3 +132,58 @@ def test_t026_header_step_body_from_spec():
     body, = [s for s in SG.pin_header(spec) if s.name == "body"]
     x0, x1, y0, y1 = bb(body)
     assert abs(x1 - x0 - 2.54) < 1e-6 and abs(y1 - y0 - 6.35) < 1e-6, bb(body)
+
+
+def _symbol(args):
+    from ecadlib import symbol_layout as SL
+    out = io.StringIO()
+    try:
+        with redirect_stdout(out), redirect_stderr(out):
+            code = SL.main(args)
+    except Exception as e:                       # what the CLI wrapper (cliutil.report) would turn into one line
+        from ecadlib import cliutil
+        code = cliutil.report("symbol", e, out)
+    return code, out.getvalue()
+
+
+# T027 / T050: two different signals on one pin number are a problem (exit 1, named); one name twice is a stack
+@lite
+def test_t027_t050_duplicate_pin_number(tmp_path, monkeypatch):
+    from ecadlib import symbol_layout as SL
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "dup.csv").write_text("num,name,type\n1,VDD,power\n2,PA0,io\n2,PA1,io\n3,GND,power\n")
+    code, out = _symbol(["dup.csv", "-o", "dup.SchLib"])
+    assert code == 1 and re.search(r"problem: pin number 2 .*PA0.*PA1", out), (code, out)
+    pins = lambda *nn: [{"num": n, "name": m} for n, m in nn]
+    probs = SL.check(SL.build("X", pins(("1", "VCC"), ("2", "EN"), ("3", "SW"), ("1", "GND"))))
+    assert any("VCC" in p and "GND" in p for p in probs), probs
+    assert SL.check(SL.build("X", pins(("1", "GND"), ("2", "VCC"), ("1", "GND")))) == []
+
+
+# T028: a pin CSV with no pins (header only, empty) is a plain refusal that keeps the existing symbol;
+# a semicolon CSV (Excel in many locales) is read
+@lite
+def test_t028_pin_csv_without_pins(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "good.csv").write_text("num,name,type\n1,VDD,power\n2,PA0,io\n3,GND,power\n")
+    assert _symbol(["good.csv", "-o", "lib.SchLib", "--name", "P"])[0] == 0
+    before = (tmp_path / "lib.SchLib").read_bytes()
+    for text in ("num,name,type\n", ""):
+        (tmp_path / "pins.csv").write_text(text)
+        code, out = _symbol(["pins.csv", "-o", "lib.SchLib", "--name", "P", "--kicad", "p.kicad_sym"])
+        assert code == 2 and "no pins" in out and "internal error" not in out, (code, out)
+        assert (tmp_path / "lib.SchLib").read_bytes() == before
+    (tmp_path / "semi.csv").write_text("num;name;type\n1;VDD;power\n2;PA0;io\n3;GND;power\n")
+    code, out = _symbol(["semi.csv", "-o", "semi.SchLib", "--kicad", "semi.kicad_sym"])
+    assert code == 0, out
+    assert sorted(re.findall(r'\(number "([^"]+)"', (tmp_path / "semi.kicad_sym").read_text())) == ["1", "2", "3"]
+
+
+# T029: a pin CSV row with a name but no number is refused, not dropped
+@lite
+def test_t029_pin_row_without_number(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pins.csv").write_text("num,name\n1,VDD\n,PA0\n3,GND\n\n")
+    code, out = _symbol(["pins.csv", "-o", "p.SchLib"])
+    assert code == 2 and "PA0" in out and "no pin number" in out, (code, out)
+    assert not (tmp_path / "p.SchLib").exists()

@@ -208,7 +208,7 @@ ecadlib symbol pins.csv -o out/STM32F103VET6.SchLib --kicad out/STM32F103VET6.ki
 ecadlib symbol part.SchLib -o tidy.SchLib --split 64          # re-lay out an existing symbol; also .json, LIB.kicad_sym:NAME, kicad:Lib:Name
 ```
 
-The CSV needs `num` and `name` columns; `type` and `group` (to override the grouping) are optional. `--list` prints the groups, and the command exits 1 if any pin is off the grid or overlaps another. Settings live in the rules file:
+The CSV needs `num` and `name` columns; `type` and `group` (to override the grouping) are optional. Commas, tabs or semicolons separate the columns. A CSV with no pins, or a row with a name but no number, is refused (exit 2) and nothing is written. `--list` prints the groups, and the command exits 1 if any pin is off the grid or overlaps another, or one pin number carries two different signals (the same name twice is a stack). Settings live in the rules file:
 
 ```toml
 [symbols]
