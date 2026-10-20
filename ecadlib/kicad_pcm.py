@@ -269,10 +269,15 @@ def _source(src, name, include_held, http, offline, cache, log, unchecked=False)
         if recs and lib not in recs:
             raise ValueError(f"{src}: kicad-export wrote no library {lib} here (it holds {', '.join(sorted(recs))}): "
                              f"pass --name with one of them")
-        if not (src / f"{lib}.kicad_sym").is_file() and not (src / f"{lib}.pretty").is_dir() and not recs:
-            libs = sorted(p.stem for p in src.glob("*.kicad_sym")) or sorted(p.stem for p in src.glob("*.pretty"))
+        if not recs and (name is None or not (src / f"{lib}.kicad_sym").is_file() and not (src / f"{lib}.pretty").is_dir()):
+            libs = sorted({p.stem for p in src.glob("*.kicad_sym")} | {p.stem for p in src.glob("*.pretty") if p.is_dir()})
             if not libs:
                 raise FileNotFoundError(f"{src} has no <lib>.kicad_sym or <lib>.pretty: run `ecadlib kicad-export PLAN -o {src}` first")
+            if name is not None:                  # never another library than the one named
+                raise FileNotFoundError(f"{src} has no {lib}.kicad_sym or {lib}.pretty (it holds {', '.join(libs)}): "
+                                        f"pass --name with one of them")
+            if len(libs) > 1:
+                raise ValueError(f"{src} holds {len(libs)} libraries ({', '.join(libs)}): pass --name with the one to package")
             lib = libs[0]
         own = rep if (rep or {}).get("library") == lib else recs.get(lib, rep)     # the top level is the last one only
         if not (unchecked and rep is None):

@@ -51,6 +51,27 @@ def test_ds2_40_kicad_pcm_licence_note_is_about_the_packaged_library():
         assert any("may not be allowed" in ln for ln in logs) == warned, (lib, logs)
 
 
+@lite
+def test_ds2_40_kicad_pcm_unchecked_folder_of_several_libraries_needs_a_name_that_is_there(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    for lib in ("ecadlib", "my_lib", "two"):                       # ecadlib: the name a plan is exported as by default
+        (src / f"{lib}.kicad_sym").write_text('(kicad_symbol_lib (version 20231120) (generator "kicad")\n  (symbol "A")\n)\n')
+    (src / "fp_only.pretty").mkdir()                              # a footprint library with no symbol library
+    for name, exc in ((None, ValueError), ("nope", FileNotFoundError)):
+        try:
+            KP.build(src, tmp_path / "pcm", name=name, unchecked=True, log=QUIET)
+        except exc as e:
+            assert all(lib in str(e) for lib in ("ecadlib", "fp_only", "my_lib", "two")) and "--name" in str(e), (name, e)
+        else:
+            raise AssertionError(f"--name {name}: a library was picked from several")
+    assert not (tmp_path / "pcm").exists()
+    assert KP.build(src, tmp_path / "pcm", name="two", unchecked=True, log=QUIET)["library"] == "two"
+    for f in ("ecadlib.kicad_sym", "my_lib.kicad_sym", "fp_only.pretty"):    # one library left: no name needed
+        (src / f).rename(tmp_path / f)
+    assert KP.build(src, tmp_path / "pcm1", unchecked=True, log=QUIET)["library"] == "two"
+
+
 def test_ds2_41_easyeda_smd_footprint_with_npth_pegs_stays_smd():
     from ecadlib import easyeda_convert as EC, footprint_rules as FR
     smd = ["PAD~RECT~-10~0~4~6~1~~1~0~~0~g1~0~~Y~0", "PAD~RECT~10~0~4~6~1~~2~0~~0~g2~0~~Y~0"]
