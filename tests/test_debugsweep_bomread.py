@@ -110,3 +110,33 @@ def test_ds2_10_real_manufacturer_and_description_columns_win_whatever_the_order
     lines, mapping = T.read_bom(n)
     assert lines[0]["description"] == "Tantalum capacitor 100uF 10V", (mapping, lines)
     assert T.read_bom(only)[0][0]["description"] == "Tantalum 10V"           # Notes is still the fallback
+
+
+@lite
+def test_ds2_11_kicad_custom_notes_field_backs_up_description(tmp_path):
+    def sym(ref, value, desc, notes, mpn):
+        props = {"Reference": ref, "Value": value, "Footprint": "Resistor_SMD:R_0603_1608Metric", "Description": desc,
+                 "Notes": notes, "MPN": mpn}
+        p = "\n".join(f'    (property "{k}" "{v}" (at 0 0 0))' for k, v in props.items())
+        return (f'  (symbol (lib_id "Device:R") (at 0 0 0) (unit 1) (in_bom yes) (on_board yes) (dnp no)\n'
+                f'    (uuid 2222222{ref[-1]}-2222-2222-2222-222222222222)\n{p}\n'
+                f'    (instances (project "p" (path "/11111111-1111-1111-1111-111111111111" (reference "{ref}") (unit 1))))'
+                '\n  )')
+    sch = tmp_path / "board.kicad_sch"
+    sch.write_text('(kicad_sch (version 20231120) (generator eeschema) (uuid 11111111-1111-1111-1111-111111111111) '
+                   '(paper "A4") (lib_symbols)\n' + sym("C1", "10uF", "Tantalum capacitor 10uF 16V", "", "T491A106K016AT")
+                   + "\n" + sym("R1", "10k", "Resistor", "pull-up, check value", "RC0603FR-0710KL") + "\n)\n",
+                   encoding="utf-8")
+    net = tmp_path / "board.xml"
+    net.write_text('<?xml version="1.0" encoding="UTF-8"?>\n<export version="E"><components>\n'
+                   '<comp ref="C1"><value>10uF</value><description>Tantalum capacitor 10uF 16V</description>'
+                   '<fields><field name="Desc"></field><field name="MPN">T491A106K016AT</field></fields></comp>\n'
+                   '<comp ref="R1"><value>10k</value><description>Resistor</description>'
+                   '<fields><field name="Desc">pull-up, check value</field><field name="MPN">RC0603FR-0710KL</field></fields>'
+                   '</comp>\n</components></export>\n', encoding="utf-8")
+    for f in (sch, net):
+        lines, mapping = T.read_bom(f)
+        assert [(l["designator"], l.get("description")) for l in lines] == \
+            [("C1", "Tantalum capacitor 10uF 16V"), ("R1", "Resistor")], (f.name, mapping, lines)
+    lines, _ = T.read_bom(sch, {"description": "Notes"})               # the rules' [bom] columns still decide
+    assert [l.get("description") for l in lines] == [None, "pull-up, check value"], lines

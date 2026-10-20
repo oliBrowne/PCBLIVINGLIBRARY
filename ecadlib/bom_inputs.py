@@ -40,6 +40,9 @@ def _field_map(names, columns):
             if f in fmap and n not in taken:
                 fmap[f].append(n)
                 taken.add(n)
+    for k, f in STD.items():                                   # a guessed 'Notes' / 'Desc' backs up KiCad's own
+        if f in fmap and k in names:                           # Description, never replaces it
+            fmap[f] = [k] + fmap[f]
     for f, want in (columns or {}).items():
         wants = [want] if isinstance(want, str) else list(want)
         hit = [n for w in wants for n in custom + list(STD) if _norm(n) == _norm(w)]
