@@ -1,7 +1,7 @@
 """Regression tests for the 2026-10 debug sweep, MCP server / CLI / setup group (DS2-50 ... DS2-56).
 Nothing live: no model, Altium 365 or network call is made. Run:
     python -m tests.run_all test_debugsweep_climcp"""
-import contextlib, io, json
+import contextlib, http.client, io, json
 
 from ecadlib import mcp_server as M
 from ecadlib.app import Workspace
@@ -97,3 +97,33 @@ def test_ds2_52_confined_propose_rules_and_learn_house_style_read_relative_paths
     assert "Confidential customer ASIC" not in _txt(r), _txt(r)[:300]
     r = _call(ws, "propose_rules", {"paths": ["mine"]})                  # relative = inside the workspace
     assert json.loads(_txt(r))["components"] == 1, _txt(r)[:300]
+
+
+# ------------------------------------------------------------------ DS2-53
+@lite
+def test_ds2_53_desktop_app_and_setup_start_with_the_library_folders_saved_on_the_setup_page(tmp_path, monkeypatch):
+    """The setup page saved the person's library folders to [setup] libs, but the desktop app (launcher.App) and
+    `ecadlib setup` started the web UI with no --lib: 0 symbols, so their own parts were never 'in your library'."""
+    from ecadlib import easy_setup as ES, launcher as LA
+    from ecadlib.ui import server as S
+    home = tmp_path.resolve()
+    monkeypatch.setenv("ECADLIB_HOME", home / "home")
+    monkeypatch.chdir(home)
+    mylib = home / "mylib"
+    _sym_lib(mylib / "my.kicad_sym", "MYPART", "My own part")
+    ws = home / "ws"
+    assert ES.save(ws, {"workspace": str(ws), "tool": "kicad", "libs": [str(mylib)], "provider": "none"})["saved"]
+    app = LA.App(ws, 0)
+    app.start()
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):                  # the server's request log
+            c = http.client.HTTPConnection("127.0.0.1", app.port, timeout=30)
+            c.request("GET", "/api/info", headers={"Host": f"127.0.0.1:{app.port}"})
+            info = json.loads(c.getresponse().read())
+    finally:
+        app.stop()
+    assert (info["libs"], info["symbols"]) == ([str(mylib)], 1), info
+    seen = []
+    monkeypatch.setattr(S, "main", lambda argv: seen.append(argv) or 0)   # `ecadlib setup`: the server it starts
+    ES.main(["--workspace", str(ws), "--no-browser"])
+    assert "--lib" in seen[0] and seen[0][seen[0].index("--lib") + 1] == str(mylib), seen

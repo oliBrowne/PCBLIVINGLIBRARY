@@ -65,6 +65,18 @@ def _ws_rules_raw(ws_root):
         return {}
 
 
+def ws_libs(ws_root):
+    """The library folders saved on the setup page: [setup] libs of <workspace>/ecadlib.toml (a relative one starts at
+    the workspace, as the default --lib does). The desktop app and `ecadlib setup` start the web UI with them."""
+    libs = (_ws_rules_raw(ws_root).get("setup") or {}).get("libs")
+    out = []
+    for x in libs if isinstance(libs, list) else []:
+        if isinstance(x, str) and x.strip():
+            p = Path(x.strip()).expanduser()
+            out.append(str(p if p.is_absolute() else Path(ws_root).resolve() / p))
+    return out
+
+
 def current_ai(raw):
     """(provider id, model) the workspace's ecadlib.toml names; ("anthropic", default) when it names none."""
     ai = raw.get("ai") or {}
@@ -328,7 +340,8 @@ def main(argv=None):
     from .ui import server
     ws = a.workspace or UC.load_settings().get("workspace") or str(UC.default_workspace())
     Path(ws).mkdir(parents=True, exist_ok=True)
-    return server.main(["--workspace", ws, "--port", str(a.port), "--setup"] + (["--no-browser"] if a.no_browser else []))
+    return server.main(["--workspace", ws, "--port", str(a.port), "--setup"] + (["--no-browser"] if a.no_browser else [])
+                       + [x for lib in ws_libs(ws) for x in ("--lib", lib)])
 
 
 if __name__ == "__main__":
