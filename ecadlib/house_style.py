@@ -982,6 +982,11 @@ def _run(a, rules, pf, send):
                  or (old or {}).get("learned_from") or [])
         if not paths:
             raise StyleError("which library? --from DIR (your Altium / KiCad library folder, a DbLib, an Altium 365 export)")
+        gone = [p for p in a.paths if not Path(p).expanduser().exists()]      # a typo must not replace the learned style
+        if gone:
+            print(f"ecadlib style learn: not found: {gone[0]}\n  hint: check the --from path; {pf.name} is unchanged",
+                  file=sys.stderr)
+            return 2
         direction = list(a.direction)
         if a.direction_file:
             direction += [x for x in Path(a.direction_file).read_text(encoding="utf-8").splitlines() if x.strip()
