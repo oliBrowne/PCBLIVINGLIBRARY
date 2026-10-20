@@ -98,3 +98,40 @@ def test_ds2_20_single_part_estimate_follows_the_configured_provider(tmp_path, m
         rc = D.main([str(pdf), "--part", "TPS1", "--estimate", "-o", str(tmp_path / "out")])
     assert rc == 0
     assert api.calls == [], [(c[1], (c[2] or {}).get("x-api-key")) for c in api.calls]   # nothing sent to Anthropic
+
+
+def _sot223(pitch):
+    """A correct SOT-223 read (AMS1117 style: 3 leads at e, the tab numbered 4 as KiCad's SOT-223 has it)."""
+    import json
+    d = lambda nm, lab, mn, nom, mx: {"name": nm, "label": lab, "min": mn, "nom": nom, "max": mx, "unit": "mm", "page": 9,
+                                      "figure": "SOT-223"}
+    wire = {"package": {"name": "SOT-223", "description": "SOT-223", "package_type": "gullwing", "drawing": "SOT-223",
+                        "unresolved": [],
+                        "dims": [d("body_length", "D", "6.30", "6.50", "6.70"), d("body_width", "E1", "3.30", "3.50", "3.70"),
+                                 d("lead_span", "E", "6.70", "7.00", "7.30"), d("pitch", "e", "", pitch, ""),
+                                 d("terminal_length", "L", "0.90", "1.00", "1.10"),
+                                 d("terminal_width", "b", "0.66", "0.75", "0.84"), d("height_max", "A", "", "", "1.80")],
+                        "other_json": json.dumps({"pin_count": 4,
+                                                  "pin_positions": [{"number": "1", "side": "L", "offset": -2.3},
+                                                                    {"number": "2", "side": "L", "offset": 0},
+                                                                    {"number": "3", "side": "L", "offset": 2.3}],
+                                                  "tab": {"number": "4", "side": "R", "offset": 0,
+                                                          "width": {"min": 2.9, "nom": 3.0, "max": 3.1}}})},
+            "pin_table": {"page": 3, "figure": "Pin functions", "rows": 4},
+            "pins": [{"num": n, "name": nm, "type": "power", "side": s, "page": 3} for n, nm, s in
+                     [("1", "GND", "left"), ("2", "VOUT", "right"), ("3", "VIN", "left"), ("4", "VOUT", "right")]],
+            "symbol_description": "LDO", "notes": [], "embedded_instructions": []}
+    return D.process(D.parse_message({"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(wire)}]}),
+                     "AMS1117-3.3", "ds.pdf")
+
+
+# ---- DS2-21: the 2.30 mm pitch every SOT-223 drawing prints (JEDEC TO-261AA, e = 2.30 BSC) failed the self-check
+def test_ds2_21_sot223_pitch_2_30_is_a_standard_pitch():
+    from ecadlib import ds_route as DR
+    res = _sot223("2.30")
+    assert not [r for r in res["needs_review"] if "not a standard pitch" in r], res["needs_review"]
+    assert DR.assess(res)[0] == "ok", DR.assess(res)
+    review = []                                       # a pitch nothing uses is still questioned
+    D.self_check({"pitch": 2.2}, {"pins": []}, review)
+    assert review == ["self-check: pitch 2.2 mm is not a standard pitch (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.8, 0.95, "
+                      "1.0, 1.1, 1.25, 1.27 ...): unit or reading error?"], review
