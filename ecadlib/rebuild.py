@@ -247,11 +247,25 @@ def write_lock(out, *a, **kw):
     return lock
 
 
+class LockError(ValueError):
+    """library.lock.json is valid JSON of the wrong shape (a hand edit, a damaged copy): exit 2, never "drift" (1)."""
+    plain_error = True
+    hint = "run `ecadlib librarian` again to write a new lock (or restore the file from version control)"
+
+
 def read_lock(lib_dir):
     from . import migrate as MG
     f = Path(lib_dir) / LOCK
     data = json.loads(f.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise LockError(f"{f}: not a library lock (expected a JSON object, got a JSON {type(data).__name__})")
     MG.check_key("lock", data, str(f))
+    bad = [k for k, ok in (("bom", isinstance(data.get("bom"), dict) and isinstance(data["bom"].get("file"), str)),
+                           ("settings", isinstance(data.get("settings"), dict)),
+                           ("parts", isinstance(data.get("parts"), dict)
+                            and all(isinstance(p, dict) for p in data["parts"].values()))) if not ok]
+    if bad:
+        raise LockError(f"{f}: not a library lock ({', '.join(bad)} missing or of the wrong type)")
     return data
 
 
@@ -471,6 +485,9 @@ def main(argv=None):
         new, drift = rebuild(lib, log=quiet if a.json else print)
     except FileNotFoundError as e:
         print(f"ecadlib rebuild: {e}", file=sys.stderr)
+        return 2
+    except LockError as e:
+        print(f"ecadlib rebuild: {e}\n  hint: {e.hint}", file=sys.stderr)
         return 2
     rep = {"lock": str(lib / LOCK), "parts": len(new["parts"]), "inputs": drift}
     print(json.dumps(rep, indent=1) if a.json else f"rebuilt {len(new['parts'])} part(s) from {lib / LOCK}"

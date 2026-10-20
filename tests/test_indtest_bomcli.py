@@ -280,3 +280,15 @@ def test_status_names_damaged_files(tmp_path):
     assert WS.status(tmp_path)["problems"] == []
     (tmp_path / "ecadlib.toml").write_text("[naming\n")
     assert any(p.startswith("ecadlib.toml: not valid TOML") for p in WS.status(tmp_path)["problems"])
+
+
+# T126: a library.lock.json of the wrong shape is exit 2 with a plain message, never 1 (= --check "drift")
+@lite
+def test_rebuild_malformed_lock_is_exit_2(tmp_path):
+    from ecadlib import rebuild as RB
+    good = {"schema_version": 1, "bom": {"file": "bom.csv", "sha256": ""}, "settings": {}, "parts": {}}
+    for bad in ([], {**good, "parts": 5}, {k: v for k, v in good.items() if k != "bom"}):
+        (tmp_path / RB.LOCK).write_text(json.dumps(bad))
+        with redirect_stderr(io.StringIO()) as e, redirect_stdout(io.StringIO()):
+            assert RB.main([str(tmp_path), "--check"]) == 2, bad
+        assert "not a library lock" in e.getvalue() and "hint:" in e.getvalue()
