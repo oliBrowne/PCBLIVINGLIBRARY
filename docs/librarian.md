@@ -53,7 +53,7 @@ You don't need to edit `plan.json` by hand. `list --part` ranks candidates for t
 
 Ranking uses shared name tokens (rare ones weigh more), MPN prefix, package, body size, pitch and pin grid, and the usual libraries for the designator class. For connectors it also adds `Conn_` symbols for the pad count. The best names are then opened, and their pins or pads are compared with the item's other half using the release-check rule. A full match ranks first. A near miss gets a suggested `--map`.
 
-`choose` converts the part into `models/` the same way the librarian does. It then updates the item, recording "chosen by user" in `librarian.tried`, and `librarian_state.json`, so a librarian re-run keeps the choice. Finally it re-runs the release check on that item only. The Python API (`held`, `show`, `candidates`, `choose`) returns plain dicts and lists.
+`choose` converts the part into `models/` the same way the librarian does. A footprint file another part uses is shared only when the pads are the same; otherwise the chosen footprint gets its own name (`LED_0603_1608Metric_LED_0805_2012Metric`), so the other part keeps its released pads. It then updates the item, recording "chosen by user" in `librarian.tried`, and `librarian_state.json`, so a librarian re-run keeps the choice. Finally it re-runs the release check on that item only. The Python API (`held`, `show`, `candidates`, `choose`) returns plain dicts and lists.
 
 Live run on a copy of the 14-part plan (2026-10-14):
 * TYPE-C-31-M-12: top candidate `Connector:USB_C_Receptacle_USB2.0_16P` (pins match), now **ready**. With a symbol present, the stacked A1/B12 pads are warnings.
@@ -158,7 +158,7 @@ Tested offline only, with fake and recorded answers (`tests/test_crosscheck.py`)
 ## Updates never break a library: `migrate.py`, `library.lock.json` and `ecadlib rebuild`
 
 **Versioned files.** Everything ecadlib writes and reads back later has a schema version, one integer per kind of file
-(`ecadlib/migrate.py`, `KINDS`): `plan` (plan.json), `librarian_state` (now v2), `approvals_audit`, `agent`
+(`ecadlib/migrate.py`, `KINDS`): `plan` (plan.json), `librarian_state` (now v3), `approvals_audit`, `agent`
 and `queue` (files an older ecadlib's library agent left in `<workspace>/agent/`), `http_cache`, `rules` (ecadlib.toml),
 `approvals_policy` (approvals.json) and `lock`. Files other code iterates (a plan is a JSON list) keep the
 version in the folder's `ecadlib_schema.json`; files a person edits and the lock carry a top-level `schema_version`
@@ -166,9 +166,10 @@ version in the folder's `ecadlib_schema.json`; files a person edits and the lock
 
 * **Older** files are migrated: in memory when they are only read (`migrate.read`), on disk when a command writes the
   folder anyway (the librarian, `ecadlib migrate`), after a copy to `<folder>/.ecadlib_backup/<kind>-v<old>-<time>/`.
-  Migrations are registered in `MIGRATIONS` and are safe to run twice. The one so far, `librarian_state` v1 -> v2,
+  Migrations are registered in `MIGRATIONS` and are safe to run twice. Two so far: `librarian_state` v1 -> v2
   records each footprint's name and geometry hash (what `fp_share` would compute from its `.kicad_mod` anyway; a
-  footprint shared by name only is left unchecked so the librarian re-checks it).
+  footprint shared by name only is left unchecked so the librarian re-checks it), and v2 -> v3 computes each recorded
+  hash again, because the hash now covers pad shapes and holes (one whose `.kicad_mod` is gone is dropped).
 * **Newer** files are refused with one line, never misread: `librarian/board/plan.json was made by ecadlib 0.5.0 (plan
   schema 2; this ecadlib 0.3.0 reads up to 1): upgrade ecadlib to the build that made it (pip install -U ecadlib; when
   that says it is up to date, the main-branch build: pip install -U "ecadlib @ git+https://github.com/oliBrowne/PCBLIVINGLIBRARY")`

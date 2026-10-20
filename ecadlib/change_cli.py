@@ -672,12 +672,18 @@ def _revert(plan, spec, who, comment):
         return out
     out = []
     for x, h, fp, changes in todo:
+        prev = lg.proposal(x["name"])
+        if prev:                               # a pending held change gives way, on the record (as with approvers >= 2)
+            lg.append({"event": "superseded", "part": prev["part"], "digest": prev.get("digest"), "writer": "revert",
+                       "by": who, "reason": f"replaced by a revert to r{target['revision']}"})
         row = g._release(x, fp, changes, {"action": "pass", "why": []}, decision="revert",
                          reason=comment or f"revert to r{target['revision']}" + ("" if x is it else f" of {part}"),
                          approved_by=[who], event="revert", by=who)
         lg.drop_proposal(x["name"])
         x.pop("change", None)
-        out.append({"part": x["name"], "result": "reverted", "revision": row["revision"], "to": target["revision"] if x is it else None})
+        out.append({"part": x["name"], "result": "reverted", "revision": row["revision"], "to": target["revision"] if x is it else None,
+                    **({"dropped": f"the held change {str(prev.get('digest'))[:12]} ({CD.summary(prev.get('changes') or [])}) "
+                                   f"was dropped"} if prev else {})})
     _save(plan, items)
     return out
 
@@ -911,6 +917,8 @@ def main(argv=None):
         print(f"  {r['result']:<18} {r['part']}{extra}")
         if r.get("warning"):
             print(f"  warning: {r['warning']}")
+        if r.get("dropped"):
+            print(f"  note: {r['dropped']} (superseded in the ledger)")
         if r.get("result") == "adopted":
             print(f"    signed as {r['by']}; {r['compared']}" + ("" if r["changes"] else ": no difference"))
         elif r.get("result") == "refused":            # adopt --all: left as it is

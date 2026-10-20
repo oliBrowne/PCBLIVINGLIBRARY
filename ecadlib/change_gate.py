@@ -519,6 +519,11 @@ class Guard:
                         now[str(side)] = side.read_bytes()
         if now and self._is_head(FP.of_item(it, self.base), head):
             self.pre.update(now)
+            for p in recs:                     # and the 3D models their recipe names, as they are now
+                f = Path(p)
+                if p in now and p not in self.pre_steps:
+                    self.pre_steps[p] = {str(f.parent / s): (f.parent / s).read_bytes() for s in LG.step_files(f)
+                                         if (f.parent / s).is_file()}
 
     def _is_head(self, fp, head):
         """fp is the released revision: the same digest as the head's, or (a head an older ecadlib fingerprinted) as
@@ -541,9 +546,9 @@ class Guard:
             else:
                 rest[k] = r
         self.ledger.restore_files(rest, self.base)
-        for r in (files or {}).values():           # STEP files of a head recorded without them: as they were at begin()
+        for r in (files or {}).values():           # STEP files of a head recorded without them, or of bytes kept at
             p = str((self.base / r["path"]).resolve()) if not Path(r["path"]).is_absolute() else str(Path(r["path"]).resolve())
-            if "steps" in r:
+            if "steps" in r and p not in self.pre:  # begin(): as they were at begin()
                 continue
             for s, data in self.pre_steps.get(p, {}).items():
                 f = Path(s)
@@ -555,6 +560,14 @@ class Guard:
 
     def _has_files(self, it):
         return any((self.base / p if not Path(p).is_absolute() else Path(p)).is_file() for p in LG.item_files(it).values())
+
+    def keep_edits(self, items):
+        """Before a writer builds released parts again (librarian --refresh, rebuild in place, a changed BOM line):
+        settle what is on disk now, so a hand edit is held (its bytes kept, a ledger line) before it is overwritten.
+        items: the plan items as they are on disk. The library lock is held again for the writer's work."""
+        rows = self.settle(items)
+        self.hold_lock()
+        return rows
 
     # ------------------------------------------------------------ after the writer
     @_locked_step
@@ -852,6 +865,9 @@ class Guard:
         name = it["name"]
         self._restore(head.get("files"))
         LG.apply_content(it, head.get("item") or {})
+        if it.get("status") and not it.get("_manifest"):   # a status the release check gave the edited files is not
+            from . import release_check as RC              # the released revision's: check what is back on disk
+            RC.apply([it], self.base, rules=self.rules)
         it["change"] = held_block(prop, self.ledger)
         return {"part": name, "action": "hold", "revision": head["revision"], "summary": CD.summary(changes),
                 "changes": [{"class": c["class"], "text": c["text"]} for c in changes],
@@ -934,10 +950,17 @@ def write_plan(plan, items):
 def publish_guard(plan, items, target, rules=None, user=None, log=None, base=None, save=True):
     """Before a publisher writes anything: settle changes made since the last writer (hand edits), record first
     releases, and say per item whether its head may be published. -> {name: None | reason}. The plan file is
-    rewritten when settling changed an item (a held hand edit put the released version back)."""
+    rewritten when settling changed an item (a held hand edit put the released version back). log: where the settle
+    rows go ("change hold PART what changed"); default stderr, so no publisher puts a released file back silently."""
     plan = Path(plan)
     folder = plan.parent if plan.suffix.lower() == ".json" else plan
     before = json.dumps(items, sort_keys=True, default=str)
+    if log is None:
+        def log(m, *a, **k):
+            import sys
+            held = m.split()[2] if m.startswith("  change hold") and len(m.split()) > 2 else None
+            print(m + (f"\n    held for approval; the released revision is published (ecadlib part show {plan} {held})"
+                       if held else ""), file=sys.stderr)
     g = Guard(folder, "hand-edit", rules=rules, user=user, log=log, base=base or folder)
     try:                                       # under the library lock: parallel publishers settle one at a time
         g.finish(items)

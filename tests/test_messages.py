@@ -73,6 +73,8 @@ EXAMPLES = {
     "librarian.family_pinout": "symbol pinout AMS1117 from the AMS1117-3.3 family table (ecadlib.stdparts): check pins 1-3 against the datasheet",
     "approval.waiting": "awaiting approval: 1 approval from role librarian",
     "approval.changed": "changed since the release check: run release-check again",
+    "change.held": "change control: new part with the MPN of released RES-0603-10k r1 (pad 1 moved 0.2 mm in x); a person "
+                   "approves it: ecadlib part show",
     "dedupe.duplicate": "duplicate of R_10k_0603 (dedupe)",
     "a365.deleted": "deleted in the Altium 365 workspace",
     "proof.doubt": "proof doubt: the pin 1 mark is on the other side",

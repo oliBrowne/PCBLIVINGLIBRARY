@@ -36,6 +36,20 @@ LIB_HINT = {"R": ("Device", "Resistor"), "C": ("Device", "Capacitor"), "L": ("De
             "J": ("Connector",)}
 
 
+class ResolveError(ValueError):
+    """A mistake in what was asked (a part name, a candidate id): one line and a hint, exit 2 (cliutil.friendly)."""
+    plain_error = True
+    __str__ = Exception.__str__
+
+    def __init__(self, msg, hint=""):
+        super().__init__(msg)
+        self.hint = hint
+
+
+class NotInPlan(ResolveError, KeyError):
+    """A part name the plan does not have (a KeyError too, for callers that look parts up)."""
+
+
 class Sources:
     """Where candidates come from. Everything is lazy: nothing is fetched until a candidate list needs it."""
 
@@ -207,7 +221,8 @@ def load(cid, kind, src, rules=None):
                 raise FileNotFoundError(f"{cid}: no package spec {ref}.json in {src.specs} (or its advanced/ folder)")
             spec = json.loads(f.read_text(encoding="utf-8"))
             return F.build(spec, RU.density_for(spec, rules or RU.DEFAULTS))[0], (F.dim(spec["height_max"])[2] if spec.get("height_max") else None)
-    raise ValueError(f"unknown {kind} candidate id {cid!r} (use kicad:Lib:Name, local:Lib:Name or spec:Name)")
+    raise ResolveError(f"unknown {kind} candidate id {cid!r}", "use kicad:Lib:Name, local:Lib:Name or spec:Name "
+                       "(`ecadlib resolve PLAN --part PART list` shows the candidates with their ids)")
 
 
 # ---------------------------------------------------------------- ranking
@@ -288,7 +303,7 @@ def candidates(item, kind, base=".", src=None, limit=10, open_=12):
     """Ranked candidates for one half of a plan item: [{id, kind, name, origin, score, why[], count, match,
     pins_without_pad, pads_without_pin, pin_map, current, error?}]. `open_` = how many top names are opened."""
     if kind not in KINDS:
-        raise ValueError(f"kind must be one of {KINDS}")
+        raise ResolveError(f"kind must be one of {KINDS}")
     src = src or Sources()
     other = item_pads(item, base) if kind == "symbol" else item_pins(item, base)
     scored = _name_scores(item, kind, src)
@@ -373,7 +388,10 @@ def _load_plan(plan):
 def _item(items, part):
     it = next((i for i in items if i["name"] == part), None)
     if not it:
-        raise KeyError(f"{part!r} is not in the plan")
+        import difflib
+        near = difflib.get_close_matches(str(part), [i["name"] for i in items], 3)
+        raise NotInPlan(f"{part!r} is not in the plan", (f"did you mean {', '.join(near)}? " if near else "") +
+                        "names are the plan's Part Numbers (`ecadlib resolve PLAN list` shows the held ones)")
     return it
 
 
@@ -400,10 +418,13 @@ def show(plan, part):
             "tried": (it.get("librarian") or {}).get("tried", []), "review": (it.get("librarian") or {}).get("review", [])}
 
 
-def _write(item, kind, cid, src, base, pin_map=None):
-    """Convert candidate `cid` into <base>/models like the librarian; returns the librarian-style half record."""
+def _write(item, kind, cid, src, base, pin_map=None, others=None):
+    """Convert candidate `cid` into <base>/models like the librarian; returns the librarian-style half record.
+    others: {PcbLib path: footprint record} of the plan's other parts: a footprint file one of them uses is shared only
+    when the pads are the same, else the chosen footprint gets its own name (fp_share), so it never rewrites theirs."""
     rules = RU.load(None, start=base)              # the house rules (layers, density), as the librarian uses them
     r = L.Run(base, src.http, None, src.libs, [], rules=rules)
+    r.written.update(others or {})
     st = {"name": item["name"], "symbol": None, "footprint": None}
     got, height = load(cid, kind, src, rules)
     if kind == "footprint":
@@ -429,11 +450,12 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
     """Use candidate_id for one half of a plan item, write plan.json (and librarian_state.json when present), re-run
     release_check on that item. Returns {name, status, hold_reasons, warnings, file, source, notes, pins_vs_pads}.
     A released part goes through change control (#105): the choice is `user`'s approval (default: approvals.identity),
-    so it is released as a new revision, or held for a second person under [change] approvers = 2. Parts sharing the
-    overwritten file go with it. The result's "change" lists what the gate did. approve=False (an MCP agent that named
+    so it is released as a new revision, or held for a second person under [change] approvers = 2. Parts sharing an
+    overwritten symbol file go with it; a footprint file another part uses is never overwritten (fp_share: the same
+    pads share it, other pads get their own name). The result's "change" lists what the gate did. approve=False (an MCP agent that named
     no person): the choice is nobody's approval, so a change to a released part is held for a person to approve."""
     if kind not in KINDS:
-        raise ValueError(f"kind must be one of {KINDS}")
+        raise ResolveError(f"kind must be one of {KINDS}")
     plan, src = Path(plan), src or Sources()
     base = Path(base) if base else plan.parent
     items = _load_plan(plan)
@@ -442,24 +464,42 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
     if pin_map and kind == "footprint":            # the map lives in the symbol: re-convert it
         sid = (it.get("source") or {}).get("symbol") or ""
         if not sid.startswith(("kicad:", "local:")):
-            raise ValueError(f"--map with a footprint needs a KiCad symbol to re-convert; {part}'s symbol is from {sid or 'nowhere'}")
+            raise ResolveError(f"--map with a footprint needs a KiCad symbol to re-convert; {part}'s symbol is from "
+                               f"{sid or 'nowhere'}", f"choose a KiCad symbol for {part} first, or leave out --map")
         done.append(("symbol", sid, pin_map))
     state_f = base / "librarian_state.json"
     state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.exists() else None
     shared_with = lambda k: [i["name"] for i in items if i is not it and i[k].get("file") and
                              i[k]["file"] == os.path.relpath(base / "models" / ("SchLib" if k == "symbol" else "PcbLib") /
                                                              f"{AL.file_stem(it[k]['ref'])}.{'SchLib' if k == 'symbol' else 'PcbLib'}", base).replace(os.sep, "/")]
-    shared = shared_with(kind)
-    rewritten = {n for k, _, _ in done for n in shared_with(k)}      # every part whose model file this choice overwrites
+    shared = shared_with(kind) if kind == "symbol" else []
+    rewritten = {n for k, _, _ in done if k == "symbol" for n in shared_with(k)}   # parts whose symbol file this overwrites
+    others = {}                                # the other parts' footprint files: shared only with the same pads
+    for i in items:
+        f = i is not it and (i.get("footprint") or {}).get("file")
+        if f:
+            rec = ((state or {}).get(i["name"]) or {}).get("footprint") or {}
+            others[str(base / f)] = rec if rec.get("file") == f and rec.get("by") else dict(
+                {k: v for k, v in i["footprint"].items() if k in ("file", "kicad_mod")}, by=i["name"],
+                name=i["footprint"].get("ref"), source=(i.get("source") or {}).get("footprint"),
+                **({"renamed_from": i["footprint"]["bom_ref"]} if i["footprint"].get("bom_ref") else {}))
     notes = []
     from . import approvals as AP, change_gate as CG
     gate = CG.Guard(plan.parent, "resolve", base=base, chosen_by=AP.identity(user, cwd=plan.parent) if approve else None)
     gate.begin(items)
     for k, cid, pm in done:
-        rec = _write(it, k, cid, src, base, pm)
+        rec = _write(it, k, cid, src, base, pm, others if k == "footprint" else None)
         it[k]["file"] = rec["file"]
         if k == "footprint":
             it[k]["kicad_mod"] = rec.get("kicad_mod")
+            shared = [o["by"] for o in others.values() if o.get("file") == rec["file"]]
+            if rec.get("name") and rec["name"] != it[k].get("ref"):     # another part's file has other pads: own name
+                it[k]["bom_ref"], it[k]["ref"] = it[k].get("bom_ref") or it[k]["ref"], rec["name"]
+                rec["renamed_from"] = it[k]["bom_ref"]
+                sid = (it.get("source") or {}).get("symbol") or ""
+                if sid.startswith(("kicad:", "local:")) and not any(h == "symbol" for h, _, _ in done) \
+                        and (((state or {}).get(part) or {}).get("symbol") or {}).get("by", part) == part:
+                    done.append(("symbol", sid, it["symbol"].get("pin_map")))     # its footprint link: the new name
         if pm:
             it[k]["pin_map"] = dict(pm)
         else:
@@ -473,7 +513,8 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
             state[part][k] = rec
             state[part].setdefault("tried", []).append(msg)
     if shared:
-        notes.append(f"{kind} file is shared with {', '.join(shared)}: they now use this {kind} too")
+        notes.append(f"{kind} file is shared with {', '.join(shared)}: " +
+                     (f"they now use this {kind} too" if kind == "symbol" else "the same pads"))
     gated = gate.settle([it] + [i for i in items if i["name"] in rewritten])
     for r in gated:
         if r["action"] == "hold" and r.get("refused"):

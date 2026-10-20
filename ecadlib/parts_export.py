@@ -70,7 +70,7 @@ def rows(plan, lib="ecadlib", include_held=False, rules=None):
     if not isinstance(plan, list):             # change control (#105): a hand edit of a released part's fields is
         from . import change_gate as CG        # held, and its released fields go out (as kicad-export ships them)
         with CG.publishing(base):
-            items = CG.settled_plan(plan, "export-parts", rules=rules, log=lambda *a, **k: None)
+            items = CG.settled_plan(plan, "export-parts", rules=rules)
     if not isinstance(plan, list):             # the release check again, on the files as they are (as every publisher
         from . import release_check as RC, rules as RU      # runs it): a part that fails it is held, not a library part
         checked = RU.resolve(rules, base)

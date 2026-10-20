@@ -149,7 +149,9 @@ def fix_commands(plan, item, numbered):
         kind, c = numbered[0]
         cmds.append(f"ecadlib resolve {plan} --part {item['name']} choose {kind} {c['id']}")
     codes = [e["code"] for e in M.explain_all(item.get("hold_reasons") or [])]
-    if any(not c.startswith("files.") for c in codes):
+    if "change.held" in codes:                 # only an approval releases it: --allow cannot
+        cmds.append(f"ecadlib part show {plan} {item['name']}")
+    elif any(not c.startswith("files.") for c in codes):
         cmds.append(f"ecadlib release-check {plan} --allow {item['name']}")
     return cmds
 
@@ -185,9 +187,11 @@ def review_plan(plan, a, t, inp, interactive):
             continue
         status = "held"
         while True:
-            fixed_only = all(e["code"].startswith("files.") for e in M.explain_all(item.get("hold_reasons") or []))
+            codes = [e["code"] for e in M.explain_all(item.get("hold_reasons") or [])]
+            fixed_only = all(c.startswith("files.") for c in codes) or "change.held" in codes
             ask = CHOICES.format(n=len(numbered)) if numbered else CHOICES.split("   ", 1)[1]
-            if fixed_only:                  # a missing / broken file cannot be released anyway: do not offer it
+            if fixed_only:                  # a missing / broken file or a held change (only `part approve` releases
+                                            # it) cannot be released anyway: do not offer it
                 ask = ask.replace("   a release anyway", "").replace("a release anyway   ", "")
             try:
                 ans = inp(f"    {ask}\n    > ").strip().lower()
