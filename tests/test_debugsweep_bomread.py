@@ -91,6 +91,32 @@ def test_ds2_05_triage_reports_of_dotted_bom_names_keep_the_whole_name(tmp_path,
 
 
 @lite
+def test_ds2_05_parity_reports_of_dotted_bom_names_keep_the_whole_name(tmp_path):
+    from ecadlib import parity as PY
+    from ecadlib.app import Workspace
+    ws = Workspace(tmp_path / "ws", providers=[], offline=True)
+    got = []
+    for rev in ("1.1", "1.2"):                                       # web / MCP: reports/parity_<BOM key>
+        bom = ws.root / "boms" / f"PowerBoard_rev{rev}_BOM.csv"
+        bom.parent.mkdir(parents=True, exist_ok=True)
+        bom.write_text("Designator,Qty,Value,MPN\nR1,1,10k,RC0603FR-0710KL\n", encoding="utf-8")
+        (ws._librarian_dir(bom)).mkdir(parents=True)
+        (ws._librarian_dir(bom) / "plan.json").write_text("[]", encoding="utf-8")
+        r = ws.parity(ws.rel(bom))
+        assert r["report"].startswith(f"reports/parity_PowerBoard_rev{rev}_BOM") and r["report"].endswith(".md"), r
+        assert (ws.root / r["report"]).is_file() and (ws.root / (r["report"][:-3] + ".json")).is_file(), r
+        got.append(r["report"])
+    assert got[0] != got[1] and len(list((ws.root / "reports").iterdir())) == 4, sorted((ws.root / "reports").iterdir())
+    plan = str(ws._librarian_dir(bom) / "plan.json")
+    out = tmp_path / "out"
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        PY.main([plan, "-o", str(out / "parity_rev1.1"), "--no-pyaltiumlib"])     # CLI -o: a dotted stem
+        PY.main([plan, "-o", str(out / "x.md"), "--no-pyaltiumlib"])              # or the report's own name
+    assert sorted(p.name for p in out.iterdir()) == ["parity_rev1.1.json", "parity_rev1.1.md", "x.json", "x.md"], \
+        sorted(out.iterdir())
+
+
+@lite
 def test_ds2_09_integer_value_is_not_glued_to_the_next_column(tmp_path):
     # one unquoted comma in the Description: Value 100 then Qty 2 / Footprint 0603 is not the decimal value 100,2
     q = tmp_path / "qty.csv"

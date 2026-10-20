@@ -10,6 +10,13 @@ retries for a few seconds before giving up."""
 import contextlib, os, threading, time
 from pathlib import Path
 
+def report_file(stem, ext):
+    """<stem><ext>: a report stem keeps its dots ('triage_Board_rev1.2_BOM' -> 'triage_Board_rev1.2_BOM.md');
+    Path.with_suffix would cut '.2_BOM' off, so rev1.1 and rev1.2 would write one report."""
+    stem = Path(stem)
+    return stem.with_name(stem.name + ext)
+
+
 RETRY = os.name == "nt"              # only Windows refuses a rename over an open file; elsewhere it is a real error
 DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
 

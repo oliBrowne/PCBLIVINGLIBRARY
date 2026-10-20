@@ -10,6 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import providers as P, sheetsafe as SS
+from .fsutil import report_file
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex, package_of, parse_value
 
@@ -976,13 +977,6 @@ def _n(s):
 
 def _yn(v):
     return "" if v is None or v == "" else ("yes" if v else "no")
-
-
-def report_file(stem, ext):
-    """<stem><ext>: a report stem keeps its dots ('triage_Board_rev1.2_BOM' -> 'triage_Board_rev1.2_BOM.md');
-    Path.with_suffix would cut '.2_BOM' off, so rev1.1 and rev1.2 would write one report."""
-    stem = Path(stem)
-    return stem.with_name(stem.name + ext)
 
 
 def write_reports(rows, mapping, provs, http, out, bom):

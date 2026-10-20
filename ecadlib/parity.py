@@ -38,6 +38,7 @@ import argparse, copy, json, math, re, sys
 from pathlib import Path
 
 from . import altium_lib as AL, sexpr
+from .fsutil import report_file
 
 TOL = {"position": 0.001, "size": 0.001, "drill": 0.001, "margin": 0.001, "rotation": 0.01, "corner": 1.0,
        "courtyard": 0.005, "window": 0.002, "outline": 0.005, "coverage": 0.5,
@@ -1054,7 +1055,7 @@ def check_plan(plan, kicad_dir=None, lib=None, altium_dir=None, rules=None, seco
 def write_report(rep, stem):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
-    stem.with_suffix(".json").write_text(json.dumps(rep, indent=2, default=str) + "\n", encoding="utf-8")
+    report_file(stem, ".json").write_text(json.dumps(rep, indent=2, default=str) + "\n", encoding="utf-8")
     from . import messages as M
     c = rep["counts"]
     where = Path(str(rep.get("plan") or "")).parent.name
@@ -1088,7 +1089,7 @@ def write_report(rep, stem):
     if rep["database"]:
         md += ["## Database rows", ""] + [f"- {M.clean(d['msg'])}" for d in rep["database"]] + [""]
     md += ["## Details", "", f"Compared in {rep['mode']} mode. Every number is in the machine-readable report next to this file (.json)."]
-    stem.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    report_file(stem, ".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return stem
 
 
@@ -1197,7 +1198,7 @@ def print_result(rep, stem, plan, t=None):
             + (f"; database rows {rep['database_rows']['kicad']} KiCad / {rep['database_rows']['altium']} Altium, "
                f"{c['database_errors']} differences" if rep.get("database_rows") else ""))
     nxt = [(f"ecadlib parity {plan} -v", "every difference, part by part")] if c["mismatch"] else []
-    t.summary(head, written=[(str(stem.with_suffix(".md")), "parity report")], next=nxt)
+    t.summary(head, written=[(str(report_file(stem, ".md")), "parity report")], next=nxt)
 
 
 def main(argv=None):
@@ -1265,9 +1266,11 @@ def main(argv=None):
     except (ValueError, OSError) as e:
         print(f"ecadlib parity: {e}", file=sys.stderr)
         return 2
+    if a.out and Path(a.out).suffix.lower() in (".md", ".json"):    # -o out/p.md: the stem out/p, as before
+        a.out = str(Path(a.out).with_suffix(""))
     stem = write_report(rep, a.out or Path(a.plan).parent / "parity")
     if a.json:
-        print(json.dumps(dict(rep, report=str(stem.with_suffix(".md"))), indent=2, default=str))
+        print(json.dumps(dict(rep, report=str(report_file(stem, ".md"))), indent=2, default=str))
     else:
         print_result(rep, stem, a.plan)
     return 0 if rep["ok"] else 1
