@@ -224,3 +224,20 @@ def test_read_bom_kicad5_sch_and_doctype_netlist(tmp_path):
             raise AssertionError(f"{name} read")
         except ValueError as e:
             assert want in str(e), e
+
+
+# T078: an unreadable BOM leaves no -o folder and no HTTP cache folder behind (librarian, triage)
+@lite
+def test_unreadable_bom_writes_nothing(tmp_path, monkeypatch):
+    from ecadlib import bom_triage as T, librarian as L
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path / "home")
+    (tmp_path / "hdr.csv").write_text("Designator,Qty,Value\n")
+    try:
+        L.run("hdr.csv", out="o/x", cache="o/cache", offline=True, log=lambda *a, **k: None)
+        raise AssertionError("empty BOM accepted")
+    except ValueError:
+        pass
+    with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+        assert T.main(["hdr.csv", "--offline", "-o", "o/t", "--cache", "o/cache"]) == 2
+    assert not (tmp_path / "o").exists()

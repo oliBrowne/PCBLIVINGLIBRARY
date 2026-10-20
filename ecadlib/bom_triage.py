@@ -975,14 +975,7 @@ def main(argv=None):
 
     from . import rules as RU
     from . import plugins as PL
-    http = CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline)
     rules = RU.load(a.rules, start=Path(a.out).parent)
-    try:
-        provs = [] if a.providers is not None and not a.providers.strip(",; ") else \
-            [c(http) for c in PL.select(a.providers, rules, default=P.DEFAULT_ORDER)]   # --providers "": none (local only)
-    except ValueError as e:
-        print(f"ecadlib triage: {e}", file=sys.stderr)
-        return 2
     from .firstrun import bom_hint
     try:
         lines, mapping = read_bom(a.bom, RU.bom_columns(rules), rules)
@@ -991,6 +984,13 @@ def main(argv=None):
         return 2
     if not lines:
         print(f"cannot read BOM: {a.bom}: the BOM has a header but no part rows" + bom_hint("no part rows"), file=sys.stderr)
+        return 2
+    http = CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline)    # after the BOM: a bad one writes nothing
+    try:
+        provs = [] if a.providers is not None and not a.providers.strip(",; ") else \
+            [c(http) for c in PL.select(a.providers, rules, default=P.DEFAULT_ORDER)]   # --providers "": none (local only)
+    except ValueError as e:
+        print(f"ecadlib triage: {e}", file=sys.stderr)
         return 2
     index = KiCadIndex(a.lib)
     say = (lambda *x: None) if a.json else print

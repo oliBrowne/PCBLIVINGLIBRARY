@@ -961,10 +961,14 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     rules: library rules (a loaded dict or a path); None uses the ecadlib.toml found from `out` (defaults when none).
     sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity()).
     progress: a term.Progress-like object (start(name) / done(name, status, detail)) for the per-part line."""
-    out = Path(out); out.mkdir(parents=True, exist_ok=True)
-    from . import migrate as MG, rebuild as LK            # versioned files (backed up, migrated) and library.lock.json
-    MG.open_folder(out, log=log)
+    out = Path(out)
     rules = RU.resolve(rules, out)
+    lines, mapping = T.read_bom(bom, RU.bom_columns(rules))       # first: an unreadable BOM writes nothing
+    if not lines:                                                 # (no -o folder, no HTTP cache)
+        raise ValueError(f"{bom}: the BOM has a header but no part rows")
+    out.mkdir(parents=True, exist_ok=True)
+    from . import migrate as MG, rebuild as LK           # versioned files (backed up, migrated) and library.lock.json
+    MG.open_folder(out, log=log)
     sources = list(sources) if sources is not None else list(rules["sources"]["order"])
     if not P.unofficial_allowed(rules) and "easyeda" in sources:
         sources.remove("easyeda")                      # [providers] unofficial = false: no undocumented endpoints
@@ -985,9 +989,6 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
             sources.insert(sources.index("datasheet"), "standard")
     from . import timing as TI                       # wall time per step (timing.jsonl, `ecadlib status`)
     t_run = time.time()
-    lines, mapping = T.read_bom(bom, RU.bom_columns(rules))
-    if not lines:
-        raise ValueError(f"{bom}: the BOM has a header but no part rows")
     log(f"  BOM: {len(lines)} lines; looking them up in your libraries and the part sources (triage) ...")
     index = KiCadIndex(libs)
     from . import plugins as PL                      # providers: None = [providers] order, else P.DEFAULT_ORDER
