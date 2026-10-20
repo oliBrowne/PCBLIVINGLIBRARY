@@ -165,7 +165,18 @@ def sym_pinout(sym):
     """(designator prefix, sorted (number, name)) of an altium_lib read_schlib entry."""
     pins = sorted({(r["num"], _pin_name(r.get("name"))) for r in sym["records"] if r.get("RECORD") == "2"})
     des = next((r.get("TEXT", "") for r in sym["records"] if r.get("RECORD") == "34"), "")
-    return re.match(r"[A-Za-z]*", des).group(0).upper(), pins
+    return re.match(r"[A-Za-z]*", des).group(0).upper() + _polarity(sym), pins
+
+
+def _polarity(sym):
+    """':N' / ':P' / ':NP' for a transistor symbol whose name or description says so: NMOS and PMOS (NPN and PNP)
+    draw the same pins 1=G 2=S 3=D and differ only in the arrow, so the pins alone would make them one symbol."""
+    text = " ".join(str(r.get(k) or "") for r in sym["records"] if r.get("RECORD") in ("1", "41")
+                    for k in ("LIBREFERENCE", "COMPONENTDESCRIPTION", "TEXT"))
+    nb, ne = r"(?<![A-Z0-9])", r"(?![A-Z0-9])"
+    tag = "".join(c for c, w in (("N", r"N-?CH(ANNEL)?|NMOS|NFET|NPN"), ("P", r"P-?CH(ANNEL)?|PMOS|PFET|PNP"))
+                  if re.search(f"{nb}({w}){ne}", text, re.I))
+    return f":{tag}" if tag else ""
 
 
 def sym_hash(pinout, min_pins=3):

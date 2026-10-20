@@ -75,3 +75,19 @@ def test_dedupe_lib_file_passes_preflight(tmp_path):
     assert FR.preflight("dedupe", ["plan.json", "--lib", str(f)]) is None
     assert FR.preflight("where-used", ["--projects", ".", "--lib", str(f)]) is None
     assert "not a file" in FR.preflight("librarian", ["bom.csv", "--lib", str(f)])[0]
+
+
+# T019: dedupe never groups an N-channel with a P-channel MOSFET (or NPN with PNP) symbol of the same pins
+def test_dedupe_symbol_polarity():
+    from ecadlib import dedupe as DD
+
+    def sym(name, desc, pins=(("1", "G"), ("2", "S"), ("3", "D"))):
+        return {"records": [{"RECORD": "1", "LIBREFERENCE": name, "COMPONENTDESCRIPTION": desc},
+                            {"RECORD": "34", "TEXT": "Q?"}] + [{"RECORD": "2", "num": n, "name": p} for n, p in pins]}
+    h = {n: DD.sym_hash(DD.sym_pinout(sym(n, d))) for n, d in
+         (("BSS138", "N-channel MOSFET"), ("2N7002", "MOSFET N-CH 60V"), ("AO3401A", "P-channel MOSFET"),
+          ("Q_PMOS_GSD", ""), ("GENERIC", "MOSFET"))}
+    assert h["BSS138"] == h["2N7002"] != h["AO3401A"] == h["Q_PMOS_GSD"] != h["GENERIC"] != h["BSS138"]
+    bjt = [DD.sym_hash(DD.sym_pinout(sym(n, d, (("1", "B"), ("2", "E"), ("3", "C")))))
+           for n, d in (("MMBT3904", "NPN transistor"), ("MMBT3906", "PNP transistor"))]
+    assert bjt[0] != bjt[1]
