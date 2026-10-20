@@ -199,6 +199,19 @@ def test_altium_pkg_keeps_the_kicad_credit(tmp_path, monkeypatch):
     assert credit and credit[0].startswith("From the KiCad libraries"), credit
 
 
+# T040: altium-native compare does not pass a missing or recipe-less folder; write does not create a mistyped one
+@lite
+def test_altium_native_refuses_a_missing_or_empty_folder(tmp_path):
+    import contextlib, io
+    from ecadlib import altium_native as AN
+    for args in (["compare", str(tmp_path / "typo")], ["compare", str(tmp_path)], ["write", str(tmp_path / "typo")]):
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = AN.main(args)
+        assert code == 2 and err.getvalue().count("\n") == 1, (args, code, err.getvalue())
+    assert not (tmp_path / "typo").exists()
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):

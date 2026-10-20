@@ -673,6 +673,14 @@ def main(argv=None):
     c.add_argument("folder")
     c.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
+    if not Path(a.folder).is_dir():            # a typo: never created, never a pass
+        print(f"ecadlib altium-native: {a.folder}: no such folder (give the library folder dblib-sync or altium-pkg "
+              "wrote)", file=sys.stderr)
+        return 2
+    if a.cmd == "compare" and not recipes(a.folder):
+        print(f"ecadlib altium-native: {a.folder}: no build recipes (*{EXT}) in it, so nothing to compare (give the "
+              "library folder dblib-sync or altium-pkg wrote)", file=sys.stderr)
+        return 2
     if a.cmd == "write":
         rep = write(a.folder, a.out, a.rebuild_all)
         print(f"{len(rep['libraries'])} libraries in {Path(rep['out']) / BUILD}"
