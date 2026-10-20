@@ -374,8 +374,9 @@ class Run:
         fr = st.get("footprint") or {}
         if fr.get("renamed_from") and sym.get("footprint") == fr["renamed_from"]:     # footprint renamed (fp_share)
             sym = dict(sym, footprint=fr["name"])
-        if str(path) in self.written:           # its own file from an earlier run, kept for a skipped part: not shared
-            rec = self.written[str(path)]
+        # Windows / macOS file systems ignore case: CH340C.SchLib and ch340c.SchLib are one file, so one symbol
+        rec = next((r for p, r in self.written.items() if p.casefold() == str(path).casefold()), None)
+        if rec is not None:                     # its own file from an earlier run, kept for a skipped part: not shared
             st["symbol"] = dict(rec, notes=_own_notes(rec) if rec.get("by") == st["name"] else [f"shared with {rec['by']}"])
             return
         AL.write_schlib(path, [sym])

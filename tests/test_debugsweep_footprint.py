@@ -330,3 +330,21 @@ def test_ds2_33_release_check_without_a_kicad_mod_measures_round_pads_not_their_
     # really touching: round pads 1.414 mm apart; rounded squares (0.375 mm corners) and squares where the boxes meet
     for args in ((1.0, 1.0), (1.02, 1.27, "roundrect", " (roundrect_rratio 0.25)"), (1.02, 1.27, "rect")):
         assert fails(*args) == ["pads 1 and 2 overlap"], (args, fails(*args))
+
+
+@lite
+def test_ds2_28_symbol_names_differing_only_in_case_never_get_two_schlib_paths(tmp_path):
+    # put_sym looked its SchLib path up with exact case: symbols CH340C and ch340c got SchLib/CH340C.SchLib and
+    # SchLib/ch340c.SchLib, one file on Windows and macOS, so the second overwrote the first. Symbols share by name.
+    import json
+    from pathlib import Path
+    from ecadlib import altium_lib as AL, librarian as L
+    root = Path(__file__).resolve().parent.parent
+    base = json.loads((root / "examples" / "symbols" / "CH340C.json").read_text(encoding="utf-8"))
+    run = L.Run(tmp_path / "out", None, None, [], [])
+    first, second = {"name": "CH340C"}, {"name": "CH340C-T"}
+    run.put_sym(first, AL.symbol_from_json(dict(base, name="CH340C")), "kicad:Interface_USB:CH340C")
+    run.put_sym(second, AL.symbol_from_json(dict(base, name="ch340c")), "easyeda:C84681")
+    assert second["symbol"]["file"] == first["symbol"]["file"] == "models/SchLib/CH340C.SchLib", second["symbol"]
+    assert second["symbol"]["notes"] == ["shared with CH340C"], second["symbol"]
+    assert [p.name for p in (tmp_path / "out" / "models" / "SchLib").glob("*.SchLib")] == ["CH340C.SchLib"]
