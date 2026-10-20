@@ -465,7 +465,8 @@ def remap_bom(bom, mapping, out, columns=None):
     hdr = T.header_row(raw, columns)
     headers = [str(h).strip() for h in raw.iloc[hdr]]
     cols = T.apply_columns(T.map_headers(headers), headers, columns)
-    m = {k: {r["from"]: r["to"] for r in mapping if r["kind"] == k} for k in ("symbol", "footprint")}
+    m = {k: {r["from"]: r["to"] for r in mapping if r["kind"] == k and r.get("file") != ""}   # "": a keeper the merge
+         for k in ("symbol", "footprint")}                                                # did not adopt, cell kept
     n = 0
     for field, kind in (("libref", "symbol"), ("footprint", "footprint")):
         if field not in cols:

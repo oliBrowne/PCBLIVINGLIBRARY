@@ -91,3 +91,14 @@ def test_dedupe_symbol_polarity():
     bjt = [DD.sym_hash(DD.sym_pinout(sym(n, d, (("1", "B"), ("2", "E"), ("3", "C")))))
            for n, d in (("MMBT3904", "NPN transistor"), ("MMBT3906", "PNP transistor"))]
     assert bjt[0] != bjt[1]
+
+
+# T021: dedupe --bom leaves a cell whose keeper the merge did not adopt (map row with no file) as it is
+@lite
+def test_dedupe_remap_bom_skips_keepers_not_adopted(tmp_path):
+    from ecadlib import dedupe as DD
+    (tmp_path / "bom.csv").write_text("Reference,Qty,Value,Footprint,LibRef\nQ1,1,X,Pkg:SOT-23,OLDSYM\n")
+    mapping = [{"kind": "footprint", "from": "SOT-23", "to": "MySOT23", "file": "", "parts": ""},
+               {"kind": "symbol", "from": "OLDSYM", "to": "NEWSYM", "file": "models/SchLib/NEWSYM.SchLib", "parts": "Q1"}]
+    out, n = DD.remap_bom(tmp_path / "bom.csv", mapping, tmp_path / "o.csv")
+    assert n == 1 and "Q1,1,X,Pkg:SOT-23,NEWSYM" in out.read_text(encoding="utf-8-sig")
