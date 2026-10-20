@@ -154,3 +154,21 @@ def test_t119_offline_help_says_nothing_is_sent():
                 pass
         line = " ".join(buf.getvalue()[buf.getvalue().index("--offline "):].split("\n  --")[0].split())
         assert "still go out" not in line and "nothing is sent to the model" in line, line
+
+
+# T116: `style learn --ai` reports a model API error (401 / 500 / 429) as a plain error (exit 2), not an internal error
+@lite
+def test_t116_style_learn_api_error_is_a_plain_error(tmp_path):
+    from ecadlib import house_style as H
+    from tests import test_house_style as TH
+    lib = TH.altium_house(tmp_path / "lib")
+    (tmp_path / "ecadlib.toml").write_text("")
+
+    def send(body):
+        raise D.APIError("http://127.0.0.1:9/v1: HTTP 401: Incorrect API key provided (the key was rejected)", 401)
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+        rc = H.main(["--rules", str(tmp_path / "ecadlib.toml"), "learn", "--from", str(lib), "--ai",
+                     "--model", "claude-opus-5-5"], send=send)
+    assert rc == 2 and err.getvalue().startswith("ecadlib style learn: ") and "HTTP 401" in err.getvalue(), (rc, err.getvalue())
+    assert not (tmp_path / "house_style.json").exists()
