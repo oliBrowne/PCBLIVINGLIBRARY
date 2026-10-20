@@ -136,6 +136,15 @@ def save(ws_root, b):
     from .llm import MODEL_RE
     if p[0] != "none" and not MODEL_RE.fullmatch(model):
         raise ValueError("pick or type a model name")
+    cfg = UC.config_dir()                       # settings.json is written last: a save that cannot finish changes nothing
+    try:
+        cfg.mkdir(parents=True, exist_ok=True)
+        ok = os.access(cfg, os.W_OK)
+    except OSError:
+        ok = False
+    if not ok:
+        raise PermissionError(f"ecadlib's settings folder {cfg} cannot be written (permission denied), so nothing was "
+                              "changed; fix its permissions, or set ECADLIB_HOME to a folder you can write")
     ws.mkdir(parents=True, exist_ok=True)
     order = list(RU.DEFAULTS["sources"]["order"])
     if p[0] == "none":

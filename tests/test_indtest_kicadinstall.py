@@ -303,3 +303,17 @@ def test_demo_refuses_an_unusable_bom_before_writing_anything(tmp_path):
         (tmp_path / "bad.csv").write_text(text, encoding="utf-8")
         rc, _, err = _run(["demo", "--bom", "bad.csv", "-o", "ws"], cwd=tmp_path, env={"ECADLIB_HOME": str(tmp_path / "h")})
         assert rc == 2 and "hint:" in err and not (tmp_path / "ws").exists(), (text, err)
+
+
+# T067
+@lite
+def test_setup_save_that_cannot_write_the_settings_changes_no_workspace(tmp_path, monkeypatch):
+    from ecadlib import easy_setup as ES
+    (tmp_path / "file").write_text("x")
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "file" / "ecadlib"))     # a settings folder that cannot be made
+    try:
+        ES.save(tmp_path / "wsA", {"workspace": str(tmp_path / "wsB"), "tool": "kicad", "provider": "none"})
+        raise AssertionError("saved")
+    except PermissionError as e:
+        assert "nothing was changed" in str(e) and "ECADLIB_HOME" in str(e), e
+    assert not (tmp_path / "wsB").exists()
