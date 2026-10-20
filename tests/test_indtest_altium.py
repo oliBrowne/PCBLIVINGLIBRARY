@@ -325,6 +325,31 @@ def test_module_form_dump_into_a_closed_pipe_has_no_traceback(tmp_path):
     assert first.startswith(files[0].encode()) and "Traceback" not in err and "BrokenPipe" not in err, err[-600:]
 
 
+# T129: altium365 push --dry-run names a damaged local plan.json / ecadlib.toml, never "Nexar request failed"
+@lite
+def test_push_dry_run_names_a_damaged_local_file(tmp_path, monkeypatch):
+    import contextlib, io
+    from ecadlib.rules import RulesError
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+    plan = tmp_path / "lib/plan.json"
+    plan.parent.mkdir()
+    args = ["push", str(plan), "--workspace", "https://acme.365.altium.com", "--dry-run", "-o", str(tmp_path / "p.json")]
+    for bad, says in (('{"a": ', "not valid JSON"), ("{}", "not a librarian plan")):
+        plan.write_text(bad)
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = _exit_code(lambda: A3.main(args))
+        assert code == 2 and says in err.getvalue() and "Nexar" not in err.getvalue(), (code, err.getvalue())
+    plan.write_text("[]")
+    (tmp_path / "lib/ecadlib.toml").write_text("[naming\n")
+    try:
+        A3.main(args)
+        raise AssertionError("pushed with a broken ecadlib.toml")
+    except RulesError as e:                               # the cli prints it as one line, exit 2
+        assert "not valid TOML" in str(e), e
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):

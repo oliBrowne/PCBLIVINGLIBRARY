@@ -676,6 +676,18 @@ def main(argv=None):
         if not a.workspace:
             sys.exit("ecadlib altium365 push: no workspace: pass --workspace URL or set [altium365] workspace in ecadlib.toml "
                      "(`ecadlib altium365 workspaces` lists them)")
+    if a.cmd == "push":                        # the local files first: a damaged one is named, not "Nexar request failed"
+        from .kicad_export import PlanError, check_plan
+        try:
+            items = json.loads(Path(a.plan).read_text(encoding="utf-8"))
+            check_plan(items, a.plan)          # {} or a broken entry
+        except (json.JSONDecodeError, PlanError) as e:
+            why = (f"{a.plan}: not valid JSON ({e.msg} at line {e.lineno} column {e.colno})"
+                   if isinstance(e, json.JSONDecodeError) else str(e))      # PlanError names the file itself
+            print(f"ecadlib altium365: {why}\n  hint: is this the right file? `ecadlib altium365 plan` or `ecadlib "
+                  "librarian` writes plan.json", file=sys.stderr)
+            sys.exit(2)
+        rules = RU.load(a.rules, start=Path(a.plan).parent)   # a bad ecadlib.toml: RulesError names it (exit 2)
     token = UC.secret("NEXAR_TOKEN")
     if not token and not (a.cmd == "push" and a.dry_run):
         sys.exit("set NEXAR_TOKEN (Nexar portal token with design.domain, user.access, openid scopes)")
@@ -685,11 +697,9 @@ def main(argv=None):
             for w in client.workspaces():
                 print(f"{w['name']:<30} {w['url']}")
             return
-        items = json.loads(Path(a.plan).read_text())
         from .approvals import load_policy
         from . import change_gate as CG
         import time
-        rules = RU.load(a.rules, start=Path(a.plan).parent)
         import contextlib                      # a real push holds the library lock from the settle step to the record
         with contextlib.nullcontext() if a.dry_run else CG.publishing(Path(a.plan).parent):
             if not a.dry_run:                  # change control: a hand edit since the last writer is settled first
