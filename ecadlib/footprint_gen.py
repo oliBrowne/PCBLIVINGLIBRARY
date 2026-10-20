@@ -567,17 +567,33 @@ def validate(spec):
 
 # ---------------------------------------------------------------- comparison vs a reference footprint
 def compare(mine_path, ref_text):
+    """Pad rows for every pad number on either side: {pad, mine, ref, d_pos, d_size} for pads on both, {pad, only:
+    "mine"|"ref", at} for pads on one side. Pads sharing a number (an EP and its vias) pair up in position order."""
     from . import sexpr
     a, b = sexpr.parse(Path(mine_path).read_text()), sexpr.parse(ref_text)
-    pa = {p["number"]: p for p in sexpr.pads(a) if p["number"]}
-    pb = {p["number"]: p for p in sexpr.pads(b) if p["number"]}
+    pa, pb = {}, {}
+    for t, d in ((a, pa), (b, pb)):
+        for p in sexpr.pads(t):
+            if p["number"]:
+                d.setdefault(p["number"], []).append(p)
     rows = []
-    for k in sorted(set(pa) & set(pb), key=lambda s: int(s) if s.isdigit() else 999):
-        x, y = pa[k], pb[k]
-        rows.append({"pad": k, "mine": (x["x"], x["y"], x["w"], x["h"]), "ref": (y["x"], y["y"], y["w"], y["h"]),
-                     "d_pos": (round(x["x"] - y["x"], 4), round(x["y"] - y["y"], 4)),
-                     "d_size": (round(x["w"] - y["w"], 4), round(x["h"] - y["h"], 4))})
+    for k in sorted(set(pa) | set(pb), key=lambda s: (not s.isdigit(), int(s) if s.isdigit() else 0, len(s), s)):
+        xs, ys = (sorted(d.get(k, []), key=lambda p: (p["x"], p["y"])) for d in (pa, pb))
+        for i in range(max(len(xs), len(ys))):
+            tag = k if max(len(xs), len(ys)) == 1 else f"{k}#{i + 1}"
+            if i >= len(xs) or i >= len(ys):
+                p, side = (xs[i], "mine") if i < len(xs) else (ys[i], "ref")
+                rows.append({"pad": tag, "only": side, "at": (p["x"], p["y"], p["w"], p["h"])})
+                continue
+            x, y = xs[i], ys[i]
+            rows.append({"pad": tag, "mine": (x["x"], x["y"], x["w"], x["h"]), "ref": (y["x"], y["y"], y["w"], y["h"]),
+                         "d_pos": (round(x["x"] - y["x"], 4), round(x["y"] - y["y"], 4)),
+                         "d_size": (round(x["w"] - y["w"], 4), round(x["h"] - y["h"], 4))})
     return rows, sexpr.courtyard_bbox(a), sexpr.courtyard_bbox(b)
+
+
+def differs(r):
+    return "only" in r or any(r["d_pos"]) or any(r["d_size"])
 
 
 def main(argv=None):
@@ -598,13 +614,21 @@ def main(argv=None):
         outdir = Path(a.out); outdir.mkdir(parents=True, exist_ok=True)
         rules = RU.load(a.rules, start=outdir)
         bad = 0
+        import jsonschema
         for sp in a.specs:
-            spec = json.loads(Path(sp).read_text())
-            validate(spec)
+            spec = {}
             try:
+                spec = json.loads(Path(sp).read_text())
+                validate(spec)
                 txt, rep = build(spec, RU.density_for(spec, rules, a.density))
-            except ValueError as e:                               # a spec that doesn't add up: say why, write nothing
-                print(f"{spec.get('name', sp)}: not written: {e}", file=sys.stderr)
+            except jsonschema.ValidationError as e:               # schema: one line naming the field, not the schema dump
+                at = "/".join(str(k) for k in e.absolute_path)
+                print(f"{spec.get('name', sp) if isinstance(spec, dict) else sp}: not written: {e.message}"
+                      f"{f' (at {at})' if at else ''}", file=sys.stderr)
+                bad += 1
+                continue
+            except (ValueError, OSError) as e:                    # a spec that doesn't add up: say why, write nothing
+                print(f"{spec.get('name', sp) if isinstance(spec, dict) else sp}: not written: {e}", file=sys.stderr)
                 bad += 1
                 continue
             if shorts(rep):
@@ -636,10 +660,17 @@ def main(argv=None):
             ref = Path(a.ref).read_text()
         rows, ca, cb = compare(a.mine, ref)
         print(f"{'pad':>4} {'mine (x,y,w,h)':>30} {'kicad (x,y,w,h)':>30}  d_pos       d_size")
-        for r in rows[:4] + (rows[-1:] if len(rows) > 4 else []):
-            print(f"{r['pad']:>4} {str(r['mine']):>30} {str(r['ref']):>30}  {r['d_pos']} {r['d_size']}")
+        for r in rows:
+            if "only" in r:
+                print(f"{r['pad']:>4} only in {'mine' if r['only'] == 'mine' else 'the reference'} {r['at']}")
+            else:
+                print(f"{r['pad']:>4} {str(r['mine']):>30} {str(r['ref']):>30}  {r['d_pos']} {r['d_size']}")
         if ca and cb:
             print(f"courtyard mine {ca[2]-ca[0]:.2f}x{ca[3]-ca[1]:.2f}  kicad {cb[2]-cb[0]:.2f}x{cb[3]-cb[1]:.2f}")
+        bad = [r["pad"] for r in rows if differs(r)]
+        if bad:
+            sys.exit(f"{len(bad)} pad(s) differ: {', '.join(bad[:12])}{' ...' if len(bad) > 12 else ''}")
+        print(f"OK: all {len(rows)} pads match")
 
 
 if __name__ == "__main__":

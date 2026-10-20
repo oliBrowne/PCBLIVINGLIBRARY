@@ -14,7 +14,7 @@ On this page:
 
 ```
 ecadlib footprint gen ecadlib/package_specs/*.json -o out/footprints/ecadlib.pretty [--density A|B|C]
-ecadlib footprint compare <mine.kicad_mod> <reference path or URL>
+ecadlib footprint compare <mine.kicad_mod> <reference path or URL>   # every pad; exit 1 when a pad differs or is on one side only
 ecadlib check <any.kicad_mod or .pretty> ... # the footprint rule book, works on KiCad's own footprints too
 ecadlib check --summary Lib.pretty/         # counts per rule for a whole library
 ```
@@ -69,8 +69,9 @@ ecadlib footprint-bench [--offline] [--fixture tests/fixtures/kicad_bench.json] 
   `ball_diameter` (collapsing balls −25 % from 0.55 mm, −20 % from 0.25 mm, −15 % below; non-collapsing +5 %; LGA =
   terminal). `land_style` NSMD (mask 0.05 mm bigger) or SMD (copper 0.05 mm bigger, mask = land). Courtyard body + 1.0 mm.
   Silk and fab mark the A1 corner.
-* `pin_header`: 1 or 2 columns, through-hole (pin 1 at the origin, square pad 1, KiCad's drill/pad per pitch) or SMD
-  (`land`, single rows alternate sides).
+* `pin_header`: 1 or 2 columns, through-hole (pin 1 at the origin, square pad 1, KiCad's drill/pad per pitch; a
+  custom `drill` gets drill + 1.0 mm, at most pitch - 0.5, and a ring under 0.15 mm is refused) or SMD (`land`,
+  single rows alternate sides).
 * `connector` and `custom`: a `pad_table` copied from the datasheet's land-pattern drawing in the drawing's own terms:
   `unit` (mm, mil, in), `y_axis` (up, down), `view` (top, bottom = mirrored), `origin` (center, pin1, datum +
   `center_at`), then `pads` and `arrays` (N pads at a pitch). Pads can be SMD, plated through-hole (round or slot:
@@ -147,7 +148,7 @@ IPC maths: the bundled spec uses a generic datasheet outline (terminal 0.25 ± 0
 builds its 0402 capacitor from the IPC-SM-782 sizes (terminal 0.10–0.30, width 0.40–0.60). Built from KiCad's sizes
 (the `stdparts` table entry) the pads are KiCad's exactly: 0.56 × 0.62 at ±0.48. Older copies of this table showed
 0402 pads about 0.1 mm shorter; that was the first prototype's small-chip fillet table (toe 0.10 instead of table
-3-6's 0.20), since corrected. Density A gives an 0603 pad of 1.025×1.01 and density C gives 0.625×0.81.
+3-6's 0.20), since corrected. Density A gives an 0603 pad of 1.00×1.05 and density C gives 0.60×0.85.
 
 ## `stdparts.py`: standard parts without Claude
 
@@ -207,7 +208,7 @@ ecadlib symbol pins.csv -o out/STM32F103VET6.SchLib --kicad out/STM32F103VET6.ki
 ecadlib symbol part.SchLib -o tidy.SchLib --split 64          # re-lay out an existing symbol; also .json, LIB.kicad_sym:NAME, kicad:Lib:Name
 ```
 
-The CSV needs `num` and `name` columns; `type` and `group` (to override the grouping) are optional. `--list` prints the groups, and the command exits 1 if any pin is off the grid or overlaps another. Settings live in the rules file:
+The CSV needs `num` and `name` columns; `type` and `group` (to override the grouping) are optional. Commas, tabs or semicolons separate the columns. A CSV with no pins, or a row with a name but no number, is refused (exit 2) and nothing is written. `--list` prints the groups, and the command exits 1 if any pin is off the grid or overlaps another, or one pin number carries two different signals (the same name twice is a stack). Settings live in the rules file:
 
 ```toml
 [symbols]

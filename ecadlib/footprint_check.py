@@ -316,6 +316,10 @@ def check(text, allow_duplicate_pads=None, same_net=None):
         if not any((p["x"] <= left + EPS and p["y"] <= top + EPS) or (abs(p["x"]) < EPS and abs(p["y"]) < EPS) for p in ones):
             p1 = ones[0]
             add("warning", "pin1", f"pad {pin1} at ({p1['x']:.3f}, {p1['y']:.3f}) is not the top-left pad")
+        for k, o in (("x", "y"), ("y", "x")):            # a single row (column): pin 1 at one of its ends
+            if len({round(p[o], 3) for p in sig}) == 1 and len({p["num"] for p in sig}) >= 3 and \
+                    not any(abs(p[k] - min(q[k] for q in sig)) < EPS or abs(p[k] - max(q[k] for q in sig)) < EPS for p in ones):
+                add("warning", "pin1", f"pad {pin1} is in the middle of its row: pin 1 is normally at an end (check numbering)")
 
     # numbering direction: KiCad counts counter-clockwise (seen from the top) from pin 1
     areas = sorted(p["w"] * p["h"] for p in sig)
@@ -516,6 +520,22 @@ def _bga_rules(tree, balls, add):
             add("warning", "bga", f"land {d:g} mm is only {ratio:.0%} of the {pitch:g} mm pitch: check the ball/land diameter")
     if abs(a1["x"] - xs[0]) > EPS or abs(a1["y"] - ys[0]) > EPS:
         add("warning", "bga", f"ball A1 at ({a1['x']:.3f}, {a1['y']:.3f}) is not the top-left ball")
+    # handedness: A1->A2 (columns) and A1->B1 (rows) must turn like the top view; a rotation keeps it, a mirror flips it
+    by_row, by_col = {}, {}
+    for p in balls:
+        L, c = BALL.match(p["num"]).groups()
+        by_row.setdefault(L, []).append((int(c), p))
+        by_col.setdefault(int(c), []).append(((len(L), L), p))
+    cv, rv = [0.0, 0.0], [0.0, 0.0]
+    for groups, v in ((by_row, cv), (by_col, rv)):
+        for g in groups.values():
+            g.sort(key=lambda t: t[0])
+            v[0] += g[-1][1]["x"] - g[0][1]["x"]
+            v[1] += g[-1][1]["y"] - g[0][1]["y"]
+    cross = cv[0] * rv[1] - cv[1] * rv[0]            # y points down: the top view (A1 top-left, 1.. right, A.. down) is > 0
+    if cross < -0.5 * math.hypot(*cv) * math.hypot(*rv):
+        add("error", "bga", "ball map is mirrored (rows or columns run the wrong way: a bottom-view drawing?); "
+                            "no rotation of the part fits it")
     rows = {BALL.match(p["num"]).group(1) for p in balls}
     bad = sorted(r for r in rows if set(r) & set("IOQSXZ"))
     if bad:

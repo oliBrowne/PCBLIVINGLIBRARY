@@ -456,7 +456,7 @@ def check(sym, grid=100):
     pins with the same name), a pin whose end or line lies on another pin's line, pin lines crossing, pin text that
     overlaps (text_problems). -> [text]."""
     g = grid // 10
-    probs, at, segs = [], {}, []
+    probs, at, segs, names = [], {}, [], {}
     parts = sym.get("prim_parts") or [1] * len(sym["prims"])
     for pr, u in zip(sym["prims"], parts):
         if pr[0] != "pin":
@@ -471,6 +471,12 @@ def check(sym, grid=100):
             probs.append(f"pins {at[key]['num']} and {p['num']} overlap at ({x}, {y}) in part {u}")
         at.setdefault(key, p)
         segs.append((u, p, (x, y), (ex, ey)))
+        ns = names.setdefault(p["num"], [])
+        if all(stack_key(n) != stack_key(p["name"]) for n in ns):
+            ns.append(p["name"])
+    for n, ns in names.items():                         # one number is one pad: two signals on it short on the board
+        if len(ns) > 1:
+            probs.append(f"pin number {n} is used by {len(ns)} different signals: {', '.join(map(plain, ns))}")
     # a pin whose end or body lies on another pin's line, or two pin lines crossing (stacked pins share one line: fine)
     on = lambda q, a, b: min(a[0], b[0]) <= q[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= q[1] <= max(a[1], b[1]) and \
         (b[0] - a[0]) * (q[1] - a[1]) == (b[1] - a[1]) * (q[0] - a[0])
@@ -671,16 +677,29 @@ def _ptype(t):
     return t if t in AL.ETYPE else "passive"
 
 
+class PinListError(ValueError):
+    """A pin list that cannot make a symbol (no pins, a pin without a number): one plain line for the CLI."""
+    plain_error = True
+    hint = "a pin CSV needs a header (num,name[,type][,group]) and one row per pin, each with its number"
+
+
 def pins_from_csv(path):
-    """CSV/TSV with a header: number (num/pin/#), name, optional type, group. -> pins."""
+    """CSV/TSV with a header: number (num/pin/#), name, optional type, group. -> pins. Comma, tab or semicolon
+    (Excel's CSV in many locales). A row with a name but no number is refused, never dropped."""
     text = Path(path).read_text(encoding="utf-8-sig")
-    dialect = "excel-tab" if "\t" in text.splitlines()[0] else "excel"
-    rows = list(csv.DictReader(text.splitlines(), dialect=dialect))
+    lines = text.splitlines()
+    if not lines:
+        raise PinListError(f"{Path(path).name} is empty: no pins")
+    head = lines[0]
+    sep = "\t" if "\t" in head else ";" if head.count(";") > head.count(",") else ","
+    rows = list(csv.DictReader(lines, dialect="excel-tab" if sep == "\t" else "excel", delimiter=sep))
     pick = lambda r, *ks: next((str(r[k]).strip() for k in r if k and k.strip().lower() in ks and r[k] is not None), "")
     out = []
-    for r in rows:
+    for i, r in enumerate(rows, 2):
         num, name = pick(r, "num", "number", "pin", "#", "pin number", "pin_number"), pick(r, "name", "pin name", "signal", "pin_name")
         if not num:
+            if name or any(str(v or "").strip() for k, v in r.items() if k):
+                raise PinListError(f"{Path(path).name} line {i}: pin {name or '(no name)'} has no pin number")
             continue
         p = {"num": num, "name": name or num, "type": _ptype(pick(r, "type", "electrical", "electrical type", "etype", "dir"))}
         grp = pick(r, "group")
@@ -770,6 +789,8 @@ def main(argv=None):
         sec["stack_power"] = a.stack
     name, pins, extra = load_pins(a.source)
     name = a.name or name
+    if not pins:                                         # never replace a symbol with a pinless one
+        raise PinListError(f"{a.source}: no pins (is the header num,name? is it one row per pin?)")
     sym = build(name, pins, extra.get("description", ""), extra.get("designator", "U?"), a.footprint or extra.get("footprint"),
                 rules={"symbols": sec})
     out = Path(a.out or f"{AL.file_stem(name)}.SchLib")
@@ -788,6 +809,16 @@ def main(argv=None):
         from . import kicad_export as X, sexpr
         notes = []
         ks = X.symbol_from_schlib(out, X.kname(name), notes)
+        own = {str(p["num"]): {"power_out": "power_out", "nc": "no_connect"}.get(_ptype(p.get("type"))) for p in pins}
+        stack = [ks]
+        while stack:                                     # Altium has no power_out / nc: put the source's type back
+            t = stack.pop()
+            if isinstance(t, list) and t and t[0] == "pin":
+                num = next((str(c[1]) for c in t if isinstance(c, list) and c and c[0] == "number"), None)
+                if own.get(num) and t[1] in ("power_in", "passive"):
+                    t[1] = own[num]
+            elif isinstance(t, list):
+                stack.extend(t)
         tree = ["kicad_symbol_lib", ["version", X.SYM_VERSION], ["generator", sexpr.Q("ecadlib")], ["generator_version", sexpr.Q("8.0")], ks]
         Path(a.kicad).write_text(sexpr.dumps(tree), encoding="utf-8", newline="\n")
         print(f"  KiCad symbol -> {a.kicad}")
