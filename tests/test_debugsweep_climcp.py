@@ -147,3 +147,27 @@ def test_ds2_54_setup_page_save_keeps_the_workspace_sources_order(tmp_path, monk
     assert save("anthropic", "claude-sonnet-5-5") == ["standard", "kicad", "datasheet"]   # nothing changed on the page
     assert save("none") == ["standard", "kicad"]                                          # No AI: no datasheet reader
     assert save("anthropic", "claude-sonnet-5-5") == ["standard", "kicad", "datasheet"]   # and back
+
+
+# ------------------------------------------------------------------ DS2-55
+@lite
+def test_ds2_55_demo_reads_an_xlsx_or_windows_ansi_csv_bom(tmp_path):
+    """build_demo counted the BOM's lines for its log by reading the file as UTF-8 text: an .xlsx BOM or an Excel
+    'CSV (Comma delimited)' file with a ± stopped the demo with a UnicodeDecodeError, though the BOM reader reads both."""
+    import openpyxl
+    from ecadlib import firstrun as FR
+    rows = [["Designator", "Qty", "Value", "Footprint", "Manufacturer", "Mfr. Part #", "Description"],
+            ["R1,R2", "2", "10k", "R_0603_1608Metric", "UNI-ROYAL", "0603WAF1002T5E", "Resistor 10k ±1% 0603"],
+            ["C1", "1", "100nF", "C_0402_1005Metric", "Samsung Electro-Mechanics", "CL05B104KO5NNNC", "Capacitor 100nF 16V X7R 0402"]]
+    ansi = tmp_path / "bom_ansi.csv"
+    ansi.write_bytes("".join(",".join(f'"{c}"' for c in r) + "\r\n" for r in rows).encode("cp1252"))
+    wb = openpyxl.Workbook()
+    for r in rows:
+        wb.active.append(r)
+    wb.save(tmp_path / "bom.xlsx")
+    for bom in (ansi, tmp_path / "bom.xlsx"):
+        said = []
+        res = FR.build_demo(Workspace(tmp_path / f"demo_{bom.suffix[1:]}", offline=True), "altium", str(bom),
+                            log=lambda *a: said.append(" ".join(map(str, a))))
+        assert res["parts"] == 2, res
+        assert any(s.startswith("[1/3] BOM:") and "(2 lines)" in s for s in said), said
