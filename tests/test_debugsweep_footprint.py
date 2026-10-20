@@ -109,3 +109,30 @@ def test_ds2_30_nan_or_inf_in_a_nested_money_setting_is_rejected(tmp_path):
             raise AssertionError(f"[agent.proof] max_cost_usd = {v} accepted, loaded as {got!r}")
     f.write_text("[agent.proof]\nmax_cost_usd = 0.5\n")
     assert RU.load(f)["agent"]["proof"]["max_cost_usd"] == 0.5
+
+
+@lite
+def test_ds2_31_gullwing_or_qfn_spec_with_inner_span_only_is_refused_and_the_batch_goes_on(tmp_path):
+    # The schema let gullwing / qfp / qfn give inner_span instead of terminal_length (inner_span is a chip / molded
+    # field); the builders need terminal_length: KeyError, 'internal error', and the specs after it never ran.
+    import json
+    from tests import e2e_support as E
+    sod = {"name": "D_SOD-123_test", "package_type": "gullwing", "polarized": True,
+           "body_length": {"min": 1.4, "max": 1.8}, "body_width": {"min": 2.55, "max": 2.85},
+           "lead_span": {"min": 3.55, "max": 3.85}, "terminal_width": {"min": 0.45, "max": 0.65},
+           "inner_span": {"min": 2.6, "max": 2.9},
+           "pin_positions": [{"number": "1", "side": "L", "offset": 0}, {"number": "2", "side": "R", "offset": 0}]}
+    qfn = {"name": "QFN-16_test", "package_type": "qfn", "pin_count": 16, "pitch": 0.5,
+           "body_length": {"nom": 3.0, "tol": 0.1}, "body_width": {"nom": 3.0, "tol": 0.1},
+           "terminal_width": {"min": 0.18, "max": 0.3}, "inner_span": {"min": 2.0, "max": 2.2}}
+    good = {"name": "R_0603_good", "package_type": "chip", "body_length": {"nom": 1.6, "tol": 0.1},
+            "body_width": {"nom": 0.8, "tol": 0.1}, "terminal_length": {"nom": 0.3, "tol": 0.2}}
+    for s in (sod, qfn, good):
+        (tmp_path / f"{s['name']}.json").write_text(json.dumps(s), encoding="utf-8")
+    p = E.ecadlib(tmp_path, "footprint", "gen", "D_SOD-123_test.json", "QFN-16_test.json", "R_0603_good.json",
+                  "-o", "out.pretty", check=False)
+    assert "internal error" not in p.stderr, p.stderr
+    for name in ("D_SOD-123_test", "QFN-16_test"):
+        assert f"{name}: not written" in p.stderr and "terminal_length" in p.stderr, p.stderr
+    assert (tmp_path / "out.pretty" / "R_0603_good.kicad_mod").is_file(), (p.stdout, p.stderr)
+    assert p.returncode == 1, p.returncode

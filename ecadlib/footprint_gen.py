@@ -594,16 +594,20 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     if a.cmd == "gen":
+        from jsonschema import ValidationError
         from . import rules as RU
         outdir = Path(a.out); outdir.mkdir(parents=True, exist_ok=True)
         rules = RU.load(a.rules, start=outdir)
         bad = 0
         for sp in a.specs:
             spec = json.loads(Path(sp).read_text())
-            validate(spec)
             try:
+                validate(spec)
                 txt, rep = build(spec, RU.density_for(spec, rules, a.density))
-            except ValueError as e:                               # a spec that doesn't add up: say why, write nothing
+            except (ValueError, ValidationError) as e:            # a spec that doesn't add up: say why, write nothing
+                if isinstance(e, ValidationError):                # (and go on with the next spec)
+                    where = "/".join(map(str, e.absolute_path))
+                    e = f"the package spec isn't valid{' at ' + where if where else ''}: {e.message}"
                 print(f"{spec.get('name', sp)}: not written: {e}", file=sys.stderr)
                 bad += 1
                 continue
