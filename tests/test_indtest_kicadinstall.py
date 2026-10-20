@@ -376,3 +376,23 @@ def test_demo_in_a_non_ascii_folder_with_the_c_locale(tmp_path):
     r = _sub(["demo"], cwd, env={"LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"})
     assert r.returncode == 0 and "7 parts: 4 ready, 3 held" in r.stdout, (r.stdout + r.stderr)[-800:]
     assert "Projekte Ωµ" in (cwd / "ecadlib-demo" / "librarian" / "demo_bom_demo" / "triage.md").read_text(encoding="utf-8")
+
+
+# T072
+@lite
+def test_documented_shell_completion_install_works_on_a_new_account(tmp_path):
+    import re
+    if os.name != "posix" or not shutil.which("bash"):
+        return
+    doc = (ROOT / "docs" / "command-line.md").read_text(encoding="utf-8")
+    cmds = re.findall(r"`([^`]*ecadlib completion (?:bash|fish) > [^`]+)`", doc)
+    assert len(cmds) == 2, cmds
+    home = tmp_path / "home"
+    home.mkdir()
+    for cmd in cmds:
+        e = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "XDG_", "ECADLIB_"))}
+        e.update(HOME=str(home), PYTHONPATH=str(ROOT), ECADLIB_HOME=str(tmp_path / "eh"))
+        r = subprocess.run(["bash", "-c", cmd.replace("ecadlib completion", f"'{sys.executable}' -m ecadlib completion")],
+                           cwd=tmp_path, env=e, capture_output=True, text=True, timeout=120)
+        target = Path(cmd.split(">", 1)[1].strip().replace("~", str(home), 1))
+        assert r.returncode == 0 and "complete" in target.read_text(encoding="utf-8"), (cmd, r.stderr)

@@ -79,7 +79,8 @@ EXAMPLES = {
     "keys": ["ecadlib keys list", "ecadlib keys set ANTHROPIC_API_KEY", "ecadlib keys remove NEXAR_TOKEN"],
     "doctor": ["ecadlib doctor", "ecadlib doctor --workspace ws --lib ~/kicad/libs --json"],
     "status": ["ecadlib status", "ecadlib status --workspace ws --json"],
-    "completion": ["ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib",
+    "completion": ["mkdir -p ~/.local/share/bash-completion/completions && "
+                   "ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib",
                    "source <(ecadlib completion zsh)"],
     "plugins": ["ecadlib plugins list", "ecadlib plugins export myexporter ws/library/plan.json -o out/x"],
     "notify": ["ecadlib notify show", "ecadlib notify test --event upkeep_changes"],
