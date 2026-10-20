@@ -135,6 +135,7 @@ def test_ds2_19_count_tokens_for_a_claude_rung_never_carries_another_providers_k
             rd = D.Reader(tmp_path / "out", tmp_path / "cache", rules=rules, log=None)
             rd.estimate([job])
         assert [c[2]["x-api-key"] for c in api.of("/count_tokens")] == want, api.calls
+        assert [c[3]["model"] for c in api.of("/count_tokens")] == ["claude-opus-5-5"] * len(want)   # the API's id
     stored = {"OPENAI_API_KEY": openai_key, "ANTHROPIC_API_KEY": claude_key}   # a batch read on the Claude rung
     monkeypatch.setattr(UC, "secret", lambda name, env=None: stored.get(name))
     api = TB.FakeAPI(polls=0)
@@ -159,11 +160,34 @@ def test_ds2_20_single_part_estimate_follows_the_configured_provider(tmp_path, m
                                            encoding="utf-8")
     pdf = tmp_path / "ds.pdf"
     pdf.write_bytes(TB.pdf_with(["TPS1 regulator", "Package outline", "Pin functions"]))
-    api = TB.FakeAPI()
-    with TB.patched(api):                             # ecadlib.toml is found from -o upwards, as on the command line
+    import contextlib, io
+    api, said = TB.FakeAPI(), io.StringIO()
+    with TB.patched(api), contextlib.redirect_stdout(said):   # ecadlib.toml is found from -o upwards, as on the command line
         rc = D.main([str(pdf), "--part", "TPS1", "--estimate", "-o", str(tmp_path / "out")])
     assert rc == 0
     assert api.calls == [], [(c[1], (c[2] or {}).get("x-api-key")) for c in api.calls]   # nothing sent to Anthropic
+    assert "counted by count_tokens" not in said.getvalue() and "(rough: 3 pages" in said.getvalue(), said.getvalue()
+
+    broken = tmp_path / "broken"                      # a typo in ecadlib.toml: the provider it names is unknown here
+    broken.mkdir()
+    (broken / "ecadlib.toml").write_text('[ai\nprovider = "openai"\n', encoding="utf-8")
+    api, said = TB.FakeAPI(), io.StringIO()
+    with TB.patched(api), contextlib.redirect_stdout(said):
+        rc = D.main([str(pdf), "--part", "TPS1", "--estimate", "-o", str(broken / "out")])
+    assert rc == 0 and api.calls == [], [(c[1], (c[2] or {}).get("x-api-key")) for c in api.calls]   # rough, sent nowhere
+    assert "ecadlib.toml" in said.getvalue() and "rough" in said.getvalue(), said.getvalue()
+
+    from ecadlib import app as A                      # the web UI's estimate: an OpenAI key stored is a key set
+    ws = A.Workspace(tmp_path / "ws", [], providers=["digikey"])
+    (ws.root / "ecadlib.toml").write_text((tmp_path / "ecadlib.toml").read_text(encoding="utf-8"), encoding="utf-8")
+    bom = ws.save_upload("bom.csv", b"Designator,MPN\nU1,TPS1\n")
+    ws._librarian_dir(ws._bom_path(bom)).mkdir(parents=True, exist_ok=True)
+    (ws._librarian_dir(ws._bom_path(bom)) / "plan.json").write_text("{}", encoding="utf-8")
+    _, body = D.build_request(("base64", pdf.read_bytes()), "TPS1", None, None, "gpt-6-sol")
+    monkeypatch.setattr(D, "estimate_plan", lambda plan_f, rd, *a: rd.estimate(
+        [{"name": "TPS1", "model": rd.model, "body": body, "url": str(pdf), "prov": {"pages": 3, "sent_as": "base64"}}]))
+    est = ws.datasheet_estimate(bom)
+    assert est["key_set"] and est["ai"]["key_set"] and not est["exact_input"], est
 
 
 def _sot223(pitch, name="SOT-223", tab="4", pin_count=4):

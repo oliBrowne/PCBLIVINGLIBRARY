@@ -2579,7 +2579,7 @@ class Reader:
         OUT_TOKENS, and max_tokens for the worst case. Each part is priced on the model its route starts on;
         usd_max_route adds the worst case of every further step its route could take (more pages, the next model)."""
         batch = self.batch if batch is None else batch
-        rows, exact, models = [], bool(self.key), {}
+        rows, models = [], {}
         for j in jobs:
             jb = batch and not j.get("sync")          # a synchronous request of a batch run (cross-check, feedback)
             mult = BATCH_DISCOUNT if jb else 1.0
@@ -2588,12 +2588,13 @@ class Reader:
             tin, unknown = None, False
             if self.key and self._plain(model):
                 try:
+                    api = self.info(model)["ep"]["model"]          # 'claude:x' (a named endpoint) -> 'x', as a batch sends it
                     with logging_to(self.log_file, self.say):
-                        tin = self.client(model).count_tokens(j["body"])
+                        tin = self.client(model).count_tokens(j["body"] if j["body"]["model"] == api
+                                                              else dict(j["body"], model=api))
                     how = "count_tokens"
                 except Exception as e:                # offline, a refused key: an estimate never stops the run
                     self.say(f"  count_tokens failed ({type(e).__name__}): rough estimate instead")
-                    exact = False
             if tin is None:
                 pages = len(j["prov"]["pages_sent"]) if j["prov"].get("pages_sent") else j["prov"].get("pages")
                 unknown = not pages and j["prov"].get("sent_as") != "base64"   # sent as a URL, never counted: size unknown
@@ -2637,6 +2638,7 @@ class Reader:
                          "usd_max": worst, "usd_max_route": route_max, "start": (j.get("route") or {}).get("start"),
                          "url": j["url"], "size_unknown": unknown, "usd_max_guess": guess})
         known = all(r["usd"] is not None for r in rows)
+        exact = bool(rows) and all(r["how"] == "count_tokens" for r in rows)   # not a key alone: another provider's
         tot = lambda k: round(sum(r[k] for r in rows), 4) if known and all(r[k] is not None for r in rows) else None
         one = next(iter(models)) if len(models) == 1 else None
         price = lambda m: f"{m} ${price_of(m)[0]}/${price_of(m)[1]}" if price_of(m) else f"no price known for {m}"
@@ -3079,7 +3081,7 @@ def format_estimate(est):
     if not est.get("rows"):
         return "datasheet estimate: nothing to read (no part needs a datasheet read); $0.00"
     lines = [f"datasheet estimate: {est['parts']} parts, {est['model']}, {est['mode']}, {est['prices']}",
-             f"  input {est['input_tokens']:,} tokens ({'counted by count_tokens' if est['exact_input'] else 'rough: no API key, pages x ' + str(PAGE_TOKENS)});"
+             f"  input {est['input_tokens']:,} tokens ({'counted by count_tokens' if est['exact_input'] else 'rough: not counted, pages x ' + str(PAGE_TOKENS)});"
              f" expected {usd(est['usd'])}, at most {usd(est['usd_max'])} (every answer at max_tokens, plus a fallback re-run on synchronous calls)"]
     if len(est.get("models") or {}) > 1 or est.get("route") == "ladder":
         lines.append(f"  routed ([datasheet] route = {est.get('route')}): "
@@ -3356,6 +3358,9 @@ def main(argv=None):
             if a.estimate:
                 rd = Reader(a.out, Path(a.out) / "cache", rules=rules if isinstance(rules, dict) else None, model=a.model,
                             effort=a.effort, log=print)
+                if isinstance(rules, Exception):      # the provider it names is unknown: counted nowhere, rough only
+                    print(f"rules not loaded ({str(rules)[:300]}): a rough estimate, nothing sent to count tokens")
+                    rd.key = None
                 prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None, "sent_as": source[0]}
                 print(format_estimate(rd.estimate([{"name": a.part, "url": a.pdf, "body": body, "prov": prov}], batch=False)))
                 return 0
