@@ -209,3 +209,24 @@ def test_ds2_33_round_pads_whose_boxes_overlap_only_at_the_corners_are_not_an_ov
     assert not [c for c in copper(pads(1.02, 1.27)) if "overlap" in c[1]], copper(pads(1.02, 1.27))
     # really touching: 1.0, 1.0 apart -> 1.414 mm between centres, 0.086 mm of overlap
     assert ("error", "pads 1 and 2 overlap by 0.086 mm") in copper(pads(1.0, 1.0)), copper(pads(1.0, 1.0))
+
+
+def test_ds2_33_pad_table_round_pads_whose_boxes_overlap_only_at_the_corners_are_not_an_overlap():
+    # check_pad_table had the same bounding-box test as footprint_check: the two 1.5 mm round pads 1.629 mm apart
+    # (0.129 mm of copper between them) stopped build() as 'pads 1 and 2 overlap' (NSJ12HF-1: G and S2, 0.198 mm)
+    def spec(dx, dy, **pad):
+        pad = pad or {"type": "tht", "d": 1.5, "drill": 0.9, "shape": "circle"}
+        return {"name": "T", "package_type": "connector", "pin_count": 2,
+                "pad_table": {"unit": "mm", "y_axis": "down", "origin": "pin1", "default_pad": pad,
+                              "pads": [{"number": "1", "x": 0, "y": 0}, {"number": "2", "x": dx, "y": dy}]}}
+    overlap = lambda s: [c["message"] for c in A.check_pad_table(s) if c["rule"] == "overlap"]
+    assert overlap(spec(1.02, 1.27)) == [], overlap(spec(1.02, 1.27))
+    F.validate(spec(1.02, 1.27))
+    F.build(spec(1.02, 1.27))
+    # SMD roundrect pads (0.25 mm corners) 0.95 mm apart both ways: 0.136 mm between the corners
+    assert overlap(spec(0.95, 0.95, type="smd", w=1, h=1)) == [], overlap(spec(0.95, 0.95, type="smd", w=1, h=1))
+    # still an overlap: round pads 1.414 mm apart (0.086 mm into each other); square corners at 0.95, 0.95; and the
+    # first case with KiCad's rounded-square pin 1 (shape not given), whose 0.25 mm corner reaches 0.071 mm into pad 2
+    for s in (spec(1.0, 1.0), spec(0.95, 0.95, type="smd", w=1, h=1, shape="rect"),
+              spec(1.02, 1.27, type="tht", d=1.5, drill=0.9)):
+        assert len(overlap(s)) == 1 and "pads 1 (pads[0]) and 2 (pads[1]) overlap" in overlap(s)[0], overlap(s)

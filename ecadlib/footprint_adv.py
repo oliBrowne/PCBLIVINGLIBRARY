@@ -229,6 +229,20 @@ def _corner(p):
     return min(0.25, 0.25 * min(p["w"], p["h"]))
 
 
+def _pad_gap(a, b):
+    """Copper gap between two non-polygon pads (negative = overlap), their round ends and corners included, the same
+    measure footprint_check uses on the written footprint. A pad turned by an odd angle is its square-cornered box."""
+    from .footprint_check import _rect_gap
+
+    def rect(p):
+        x1, y1, x2, y2 = pad_bbox(p)
+        w, h = x2 - x1, y2 - y1
+        odd = abs(p.get("rot", 0) / 90 - round(p.get("rot", 0) / 90)) > 1e-6
+        r = 0.0 if odd else min(w, h) / 2 if p["shape"] in ("circle", "oval") else _corner(p) if p["shape"] == "roundrect" else 0.0
+        return {"x": p["x"], "y": p["y"], "w": w, "h": h, "r": r}
+    return _rect_gap(rect(a), rect(b))
+
+
 def _interior_point(pts):
     """A point well inside a polygon (centroid when it is inside, else the best of a grid)."""
     cx, cy = sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts)
@@ -578,12 +592,16 @@ def check_pad_table(spec, pads=None):
                 continue
             if any({a["num"], b["num"]} <= g for g in same):
                 continue
-            ax1, ay1, ax2, ay2 = pad_bbox(a)
-            bx1, by1, bx2, by2 = pad_bbox(b)
-            if min(ax2, bx2) - max(ax1, bx1) > 0.005 and min(ay2, by2) - max(ay1, by1) > 0.005:
-                if min(_pad_dist(b["x"], b["y"], a), _pad_dist(a["x"], a["y"], b)) == 0 or not (a.get("poly") or b.get("poly")):
-                    add("error", "overlap", f"pads {a['num'] or '(hole)'} ({a['_src']}) and {b['num'] or '(hole)'} ({b['_src']}) overlap: "
-                                            "check their x/y (list same-net pads in same_net)")
+            if a.get("poly") or b.get("poly"):
+                ax1, ay1, ax2, ay2 = pad_bbox(a)
+                bx1, by1, bx2, by2 = pad_bbox(b)
+                hit = (min(ax2, bx2) - max(ax1, bx1) > 0.005 and min(ay2, by2) - max(ay1, by1) > 0.005 and
+                       min(_pad_dist(b["x"], b["y"], a), _pad_dist(a["x"], a["y"], b)) == 0)
+            else:                                          # round and rounded corners: boxes that meet only at a
+                hit = _pad_gap(a, b) < -0.005              # corner are not an overlap (NSJ12HF-1 G / S2: 0.198 mm)
+            if hit:
+                add("error", "overlap", f"pads {a['num'] or '(hole)'} ({a['_src']}) and {b['num'] or '(hole)'} ({b['_src']}) overlap: "
+                                        "check their x/y (list same-net pads in same_net)")
     # drill vs pad
     for p in pads:
         if p["kind"] == "thru_hole":

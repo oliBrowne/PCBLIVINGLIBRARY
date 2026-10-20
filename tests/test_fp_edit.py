@@ -82,9 +82,9 @@ def test_held_part_says_why_and_what_to_do():
         G.run(out=d, ids=["connector-NSJ12HF-1"])
         it = json.loads((Path(d) / "lib" / "plan.json").read_text())[0]
         codes = {e["code"]: e for e in M.explain_all(it["hold_reasons"])}
-        assert set(codes) == {"padtable.no_pin1", "padtable.overlap", "padtable.symbol_waits"}, it["hold_reasons"]
+        # not padtable.overlap: round pads G and S2 are 0.198 mm apart, only their bounding boxes overlap (DS2-33)
+        assert set(codes) == {"padtable.no_pin1", "padtable.symbol_waits"}, it["hold_reasons"]
         assert "G, R1" in codes["padtable.no_pin1"]["text"] and "fp-edit" in codes["padtable.no_pin1"]["fix"]
-        assert "same-net G,S2" in codes["padtable.overlap"]["fix"]
 
 
 if __name__ == "__main__":
