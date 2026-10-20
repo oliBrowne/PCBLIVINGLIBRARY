@@ -125,3 +125,13 @@ def test_ds2_63_partial_combining_overline_is_not_a_whole_name_active_low():
         for style in H.PIN_STYLES:
             out = H.convert_pin(name, style)
             assert H.pin_low(out)[1] is None, (name, style, out)
+
+
+def test_ds2_64_clean_shortens_paths_with_spaces_or_forward_slashes():
+    """clean() must leave only the file name of an absolute path, also with a space in a folder name or a Windows
+    path written with '/' (Path.as_posix()): the user name and folder tree must not reach user-facing text."""
+    from ecadlib import messages as M
+    for path in (r"C:\Users\John Smith\OneDrive - Acme\ws\librarian\board\plan.json",
+                 "C:/Users/jsmith/ws/librarian/board/plan.json",
+                 "/home/john smith/ws/librarian/board/plan.json"):
+        assert M.clean(f"cannot read {path}: bad") == "cannot read plan.json: bad", path

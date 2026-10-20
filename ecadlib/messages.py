@@ -419,12 +419,16 @@ def friendly_error(exc):
 INTERNAL = ("plan.json", "ds_route", "stdparts", "crosscheck", "release_check", "footprint_check", "kicad_import",
             "symbol_layout", "hold_reasons")
 _MOD = r"ecadlib\.(?!toml\b)[a-z_]+\b"
-_ABS = re.compile(r"(?<![\w.:/])(?:/(?:[\w.@+-]+/)+[\w.@+-]+|[A-Za-z]:\\(?:[^\s\\]+\\)+[^\s\\]+)")
+_ROOT_NAMES = (r"home|Users|tmp|var|etc|opt|usr|mnt|srv|private|root|Volumes|media|run|data|workspace|"
+               r"workspaces|nix|github|builds?|sessions|proc|dev|sys|lib")
+_SEG = r"[^\s\\/:'\"]+(?: [^\s\\/:'\"]+)*"      # a folder name, single spaces inside ("John Smith", "OneDrive - Acme")
+_WSEP = r"(?:\\\\|\\|/)"                         # a Windows separator: \, / (Path.as_posix()) or a repr'd \\
+_ABS = re.compile(r"(?<![\w.:/])(?:/(?i:" + _ROOT_NAMES + r")/(?:" + _SEG + r"/)*[\w.@+-]+|/(?:[\w.@+-]+/)+[\w.@+-]+"
+                  r"|[A-Za-z]:" + _WSEP + r"(?:" + _SEG + _WSEP + r")+[^\s\\/]+)")
 _MODULE = re.compile(r"\s*\((?:see |via |from |by )?" + _MOD + r"[^)]*\)|\b" + _MOD)
 
 
-_ROOTS = re.compile(r"/(home|Users|tmp|var|etc|opt|usr|mnt|srv|private|root|Volumes|media|run|data|workspace|"
-                    r"workspaces|nix|github|builds?|sessions|proc|dev|sys|lib)/", re.I)
+_ROOTS = re.compile(r"/(" + _ROOT_NAMES + r")/", re.I)
 
 
 def _is_path(s):
