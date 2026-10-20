@@ -329,6 +329,30 @@ def test_ds2_24_a_tab_that_repeats_a_lead_number_needs_pin_positions():
         (DR.assess(res), res["needs_review"])
 
 
+# ---- DS2-24 (review): the second read is asked for "terminals" (SOT-223 is commonly a 4-terminal part), so it may count
+# the tab that is pin 2 again: the cross-check held a SOT-223-3_TabPin2 both reads got right. That text is part of
+# every cached answer's key (D.schema_version(), CC.version()), so compare() allows it rather than the prompt changing
+def test_ds2_24_a_second_read_counting_a_tab_that_repeats_a_lead_agrees():
+    import json
+    from ecadlib import crosscheck as CC
+    d = lambda nm, lab, mn, nom, mx: {"name": nm, "label": lab, "min": mn, "nom": nom, "max": mx, "unit": "mm"}
+
+    def second(n):
+        a = {"package": {"name": "SOT-223", "package_type": "gullwing", "pin_count": n, "unresolved": [],
+                         "dims": [d("pitch", "e", "", "2.30", ""), d("body_length", "D", "6.30", "6.50", "6.70"),
+                                  d("body_width", "E1", "3.30", "3.50", "3.70"), d("lead_span", "E", "6.70", "7.00", "7.30")]},
+             "pins": [{"num": n, "name": nm} for n, nm in (("1", "GND"), ("2", "VOUT"), ("3", "VIN"))],
+             "embedded_instructions": []}
+        return CC.parse({"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(a)}]})[0]
+    first = CC.critical(_sot223("2.30", name="SOT-223-3_TabPin2", tab="2", pin_count=3)["spec"])
+    assert CC.compare(first, second(4))["status"] == "agreed", CC.compare(first, second(4))
+    assert CC.compare(first, second(3))["status"] == "agreed"
+    for n in (2, 5):                                  # any other count still holds
+        assert CC.compare(first, second(n))["disagreed"] == [{"field": "pin_count", "first": "3", "second": str(n)}]
+    kicad = CC.critical(_sot223("2.30")["spec"])      # tab 4 has its own number: 4 is every count there is
+    assert CC.compare(kicad, second(5))["status"] == "disagreed"
+
+
 # ---- DS2-21: the 2.30 mm pitch every SOT-223 drawing prints (JEDEC TO-261AA, e = 2.30 BSC) failed the self-check
 def test_ds2_21_sot223_pitch_2_30_is_a_standard_pitch():
     from ecadlib import ds_route as DR

@@ -93,6 +93,9 @@ def critical(spec):
     for k in ("pitch", "body_length", "body_width", "lead_span"):
         out[k] = _val(spec.get(k))
     out["ep_length"], out["ep_width"] = _val(ep.get("length")), _val(ep.get("width"))
+    tab = spec.get("tab") if isinstance(spec.get("tab"), dict) else {}   # SOT-223-3_TabPin2: the tab is pin 2 again
+    out["tab_repeats_lead"] = str(tab.get("number")) in {str(p.get("number")) for p in spec.get("pin_positions") or []
+                                                         if isinstance(p, dict)}
     n = out["pin_count"]
     if out["package_type"] == "qfn" and n:                   # the rows as footprint_gen._qfn lays them out
         nlr = spec.get("pins_left_right", n // 4)
@@ -231,7 +234,10 @@ def compare(first, second, kind="read"):
         # the exposed pad is not counted: a custom read of an EP package may be one more than the other side
         ep_one_more = (first.get("package_type") == "custom" and second.get("has_ep") and a == b + 1) or \
                       (second.get("package_type") == "custom" and first.get("has_ep") and b == a + 1)
-        put("pin_count", a == b or ep_one_more, a, b)
+        # pin_count counts each pad number once, so a tab that is a lead's pin again is not in it; the second read is
+        # asked for "terminals" and may count it (that text is in every cached answer's key, so it stays)
+        tab_one_more = (first.get("tab_repeats_lead") and b == a + 1) or (second.get("tab_repeats_lead") and a == b + 1)
+        put("pin_count", a == b or ep_one_more or tab_one_more, a, b)
     else:
         rec["not_compared"].append("pin_count")
     if not custom and first.get("pin_count") is not None and second.get("pin_count") is not None:
