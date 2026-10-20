@@ -219,11 +219,11 @@ class Workspace:
             out = {"bom": self.rel(bom_path) if self.root in bom_path.resolve().parents else str(bom_path),
                    "mapping": mapping, "rows": rows,
                    "counts": {k: int(v) for k, v in counts.items()},
-                   "reports": [self.rel(stem.with_suffix(".md")), self.rel(stem.with_suffix(".csv"))]}
+                   "reports": [self.rel(T.report_file(stem, ".md")), self.rel(T.report_file(stem, ".csv"))]}
             meta = {"id": self._key(bom_path), "name": bom_path.name, "finished": _now(), "user": user or None}
             tmp = stem.with_name(stem.name + f".{os.getpid()}.{secrets.token_hex(3)}.tmp")
             tmp.write_text(json.dumps({**meta, **out}, default=str), encoding="utf-8")
-            os.replace(tmp, stem.with_suffix(".json"))
+            os.replace(tmp, T.report_file(stem, ".json"))
         return {**out, **meta}
 
     # ------------------------------------------------------------------ past triages (read-only)

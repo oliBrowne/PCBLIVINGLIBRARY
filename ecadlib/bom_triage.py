@@ -931,10 +931,17 @@ def _yn(v):
     return "" if v is None or v == "" else ("yes" if v else "no")
 
 
+def report_file(stem, ext):
+    """<stem><ext>: a report stem keeps its dots ('triage_Board_rev1.2_BOM' -> 'triage_Board_rev1.2_BOM.md');
+    Path.with_suffix would cut '.2_BOM' off, so rev1.1 and rev1.2 would write one report."""
+    stem = Path(stem)
+    return stem.with_name(stem.name + ext)
+
+
 def write_reports(rows, mapping, provs, http, out, bom):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
+    with open(report_file(out, ".csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["line", "status"])   # no formulas from BOM cells
         w.writeheader()
         w.writerows(rows)
@@ -957,7 +964,7 @@ def write_reports(rows, mapping, provs, http, out, bom):
         h = re.sub(r"^https?://([^/]+).*", r"\1", u)
         hosts.setdefault(h, []).append(("cache " if cached else "") + str(st))
     md += ["", "## HTTP (this run)", ""] + [f"- `{h}`: {len(v)} requests -> {sorted(set(v))}" for h, v in hosts.items()]
-    out.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    report_file(out, ".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return counts
 
 
@@ -977,6 +984,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     from .firstrun import default_out
     a.out = a.out or default_out("triage", a.bom)
+    if Path(a.out).suffix.lower() in (".md", ".csv", ".json"):         # -o out/t.md: the stem out/t, as before
+        a.out = str(Path(a.out).with_suffix(""))
 
     from . import rules as RU
     from . import plugins as PL
@@ -1008,7 +1017,7 @@ def main(argv=None):
     if a.json:                                           # stable shape: docs/command-line.md "Machine-readable output (--json)"
         print(json.dumps({"bom": str(a.bom), "lines": len(rows), "mapping": mapping,
                           "counts": {str(k): int(v) for k, v in counts.items()}, "rows": rows,
-                          "reports": [Path(a.out).with_suffix(x).as_posix() for x in (".md", ".csv")]}, indent=2, default=str))
+                          "reports": [report_file(a.out, x).as_posix() for x in (".md", ".csv")]}, indent=2, default=str))
         return 0
     print_result(rows, counts, a)
 
@@ -1053,7 +1062,7 @@ def print_result(rows, counts, a, t=None):
                       "run again online, or add API keys (`ecadlib doctor` lists them)"))
     stem = Path(a.out)
     t.summary(f"{M.plural(len(rows), 'BOM line')}: " + ", ".join(f"{v} {k}" for k, v in by.items()),
-              written=[(str(stem.with_suffix(".md")), "triage report"), (str(stem.with_suffix(".csv")), "the same as a table")],
+              written=[(str(report_file(stem, ".md")), "triage report"), (str(report_file(stem, ".csv")), "the same as a table")],
               next=[(f"ecadlib librarian {a.bom} -o {_lib_out(a.bom)}", "fill the missing parts and build the library")],
               notes=notes)
 
