@@ -132,6 +132,31 @@ def test_ds2_42_kicad_pcm_a_second_change_the_same_day_gets_a_newer_version(tmp_
     assert build(day + datetime.timedelta(days=7))["version"] == "2026.10.27"
 
 
+@lite
+def test_ds2_42_kicad_pcm_update_timestamp_passes_the_published_one_after_a_build_without_base_url(tmp_path):
+    """A build without --base-url rewrites kicad_pcm.json with no update_timestamp; repository.json still says what
+    KiCad has, so the next --base-url build moves past that (KiCad refetches packages.json only when it moves)."""
+    import datetime
+    _, exp, _ = TP._export(False, tmp_path)
+    out, day, url = exp.parent / "pcm", datetime.date(2026, 10, 20), "https://x.example/k"
+    published = lambda: json.loads((out / "repository.json").read_text())["packages"]["update_timestamp"]
+    r1 = KP.build(exp, out, today=day, base_url=url, log=QUIET)
+    f = exp / "lib.pretty" / "R_0603_1608Metric.kicad_mod"
+    f.write_text(f.read_text().replace("(attr smd)", "(attr smd)\n\t(tags \"changed\")", 1))
+    TP._as_written(exp, f)
+    KP.build(exp, out, today=day, log=QUIET)                      # a zip to try out first: no --base-url
+    assert published() == r1["update_timestamp"]
+    r3 = KP.build(exp, out, today=day, base_url=url, log=QUIET)
+    assert r3["version"] == "2026.10.21" and r3["update_timestamp"] > r1["update_timestamp"], \
+        (r3["version"], r1["update_timestamp"], r3["update_timestamp"])
+    # nothing changed since: the next day too, the same timestamp and repository.json is not rewritten
+    later = day + datetime.timedelta(days=1)
+    KP.build(exp, out, today=later, log=QUIET)
+    snap = (out / "repository.json").stat().st_mtime_ns
+    assert KP.build(exp, out, today=later, base_url=url, log=QUIET)["update_timestamp"] == r3["update_timestamp"]
+    assert (out / "repository.json").stat().st_mtime_ns == snap
+
+
 def test_ds2_43_a_value_with_a_thousands_or_decimal_comma_is_not_bound_renamed_or_merged_by_value():
     """'4,700pF' is 4.7 pF with a decimal comma and 4.7 nF with a thousands separator (change_diff._readings): no
     library part is picked by its value, no value style rewrites it, no other line's part takes it."""

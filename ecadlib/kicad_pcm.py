@@ -27,8 +27,8 @@ default) keeps kicad_export's KiCad 8 files, which KiCad 8, 9 and 10 open. metad
 The version (major.minor.patch, as the PCM schema wants) is --pkg-version, else the previous build's version when the
 content is unchanged, else today's date (2026.10.16), so re-running on the same library changes nothing. KiCad offers
 an update only for a newer version, so a change built when the previous build's version is today's date or later takes
-the version after it (a second change on 2026.10.16 is 2026.10.17); repository.json's update_timestamp likewise only
-moves forward.
+the version after it (a second change on 2026.10.16 is 2026.10.17). Whenever packages.json changes, repository.json's
+update_timestamp moves past the one --out's repository.json (or kicad_pcm.json) has, so KiCad fetches it again.
 The metadata is checked against KiCad's PCM JSON schema when one is found (--schema, or the pcm.v1.schema.json a KiCad
 install ships in share/kicad/schemas) and the jsonschema package is installed, and always against the schema's
 required fields and patterns written out below."""
@@ -398,10 +398,17 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
         pk = {"packages": [pkg]}
         pk_bytes = (json.dumps(pk, indent=2) + "\n").encode()
         ts = int(datetime.datetime.combine(today or datetime.date.today(), datetime.time()).replace(tzinfo=datetime.timezone.utc).timestamp())
-        if old.get("packages_sha256") == hashlib.sha256(pk_bytes).hexdigest() and old.get("update_timestamp"):
-            ts = old["update_timestamp"]                              # unchanged: same timestamp, no "update" in KiCad
-        elif isinstance(old.get("update_timestamp"), int):
-            ts = max(ts, old["update_timestamp"] + 1)                 # changed: later than the last one, even the same day
+        # the timestamp published last: repository.json's, or kicad_pcm.json's record of it (a build without --base-url
+        # rewrites kicad_pcm.json without one; repository.json is still what KiCad has)
+        pub = _read(out / "repository.json").get("packages")
+        pub = pub if isinstance(pub, dict) else {}
+        last = max(((t, s) for t, s in ((pub.get("update_timestamp"), pub.get("sha256")),
+                                        (old.get("update_timestamp"), old.get("packages_sha256"))) if isinstance(t, int)),
+                   key=lambda r: r[0], default=None)
+        if last and last[1] == hashlib.sha256(pk_bytes).hexdigest():
+            ts = last[0]                                              # unchanged: same timestamp, no "update" in KiCad
+        elif last:
+            ts = max(ts, last[0] + 1)                                 # changed: later than the last one, even the same day
         repo = {"$schema": SCHEMA_URL, "name": f"{lib} (ecadlib)",
                 "packages": {"url": f"{base_url.rstrip('/')}/packages.json", "sha256": hashlib.sha256(pk_bytes).hexdigest(),
                              "update_timestamp": ts,
@@ -424,6 +431,15 @@ def _ver_tuple(version):
         return None
     t = tuple(int(x) for x in version.split("."))
     return t + (0,) * (3 - len(t))
+
+
+def _read(path):
+    """A previous build's JSON file as a dict; {} when it is missing or does not read."""
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
 
 
 def _write(path, data):
