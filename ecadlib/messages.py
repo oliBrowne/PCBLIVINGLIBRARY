@@ -262,7 +262,8 @@ CODES = {
     "verify.other": ("A person has to check this part first: {detail}.", "Check it, then release it anyway if it is right.",
                      [r"^verify: (?P<detail>.+)"]),
     # sign-off, duplicates, Altium 365
-    "approval.waiting": ("Waiting for sign-off[ ({missing})].", "Ask a reviewer to approve it in the review queue.",
+    "approval.waiting": ("Waiting for sign-off[ ({missing})].",
+                         "Ask a reviewer to approve it (Approve in step 2 of the web UI, or `ecadlib approve`).",
                          [r"^awaiting approval(?:: (?P<missing>.+))?"]),
     "approval.changed": ("The part changed after its last check.", "Run the release check again.",
                          [r"changed since the release check"]),

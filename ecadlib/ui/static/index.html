@@ -120,7 +120,7 @@ dialog[open] { animation: pop .45s var(--ease) both; }
 dialog::backdrop { background: color-mix(in srgb, var(--bg) 55%, transparent); backdrop-filter: blur(3px); }
 .dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); gap: 10px; flex-wrap: wrap; }
 .dlg-body { display: grid; grid-template-columns: 1fr 1.15fr; gap: 18px; padding: 18px; }
-@media (max-width: 760px) { .dlg-body { grid-template-columns: 1fr; } input[type=search] { min-width: 0; width: 100%; } }
+@media (max-width: 760px) { .dlg-body { grid-template-columns: minmax(0, 1fr); } input[type=search] { min-width: 0; width: 100%; } }   /* minmax: the layer strip scrolls, the column never outgrows the dialog */
 textarea { width: 100%; min-height: 330px; font: 12px/1.5 var(--mono); background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
 /* footprint preview: Altium's PCB editor */
 .preview { background: var(--pcb-board); border: 1px solid #000; border-radius: 10px 10px 0 0; padding: 0; text-align: center; min-height: 240px; display: grid; place-items: center; overflow: hidden; }
@@ -390,7 +390,7 @@ details summary { cursor: pointer; color: var(--muted); }
     <div class="grid3" style="margin-top:10px">
       <div class="box">
         <h3>Database library (DbLib)</h3>
-        <p class="muted small">Writes parts.sqlite, parts.xlsx and two .DbLib files for this BOM. Open a .DbLib in Altium Designer; the SQLite one needs the SQLite3 ODBC driver, the Excel one needs the Access database engine.</p>
+        <p class="muted small">After step 2: a .DbLib, its Excel table (.xlsx, also as .csv) and the ready parts' .SchLib / .PcbLib, in altium/&lt;BOM&gt;/; held parts stay out. Open the .DbLib in Altium Designer (it needs the Access database engine). Before step 2: a draft from the BOM check (SQLite and Excel tables, no symbols or footprints yet).</p>
         <button id="dblib">Export DbLib</button>
         <div class="out" id="dblibout"></div>
       </div>
@@ -985,8 +985,9 @@ async function showLibrarian(r) {
 async function loadParts(quiet) {
   const bom = current && current.bom;
   if (!bom) return;
-  try { parts = await api("/api/parts?bom=" + encodeURIComponent(bom)); }
+  try { parts = await api("/api/parts?bom=" + encodeURIComponent(bom) + (quiet ? "&ifplan=1" : "")); }
   catch (e) { if (quiet) { parts = null; $("#libout").innerHTML = ""; return; } throw e; }
+  if (!parts.plan) { parts = null; $("#libout").innerHTML = ""; return; }   // quiet: no plan for this BOM yet
   if (!current || current.bom !== bom) return;
   $("#librerun").hidden = false; $("#libtools").hidden = false;
   renderParts();
@@ -1067,7 +1068,7 @@ function showPanel(p, focus = true) {
   const acts = [];
   if (st === "held") acts.push(`<button class="primary" data-pick="${esc(p.part)}">Pick a symbol or footprint…</button>`);
   if (url) acts.push(`<a class="small" href="${esc(url)}${p.datasheet.page ? "#page=" + encodeURIComponent(p.datasheet.page) : ""}" target="_blank" rel="noopener noreferrer" id="pdslink">Open the datasheet${p.datasheet.page ? ` (page ${esc(p.datasheet.page)})` : ""}</a>`);
-  if (st === "held" && !p.allowed) acts.push(`<button data-allow="${esc(p.part)}">Release anyway (I checked it)</button>`);
+  if (st === "held" && !p.allowed) acts.push(`<button data-allow="${esc(p.part)}"${p.reasons.some(r => /^files\./.test(r.code)) ? ' title="A missing or damaged symbol or footprint file cannot be released anyway: the other holds can."' : ""}>Release anyway (I checked it)</button>`);
   if (p.allowed) acts.push(`<button data-unallow="${esc(p.part)}">Hold it again</button>`);
   if (!p.change && (st === "ready" || st === "awaiting_approval") && !pending.has(p.part)) acts.push(`<button class="primary" data-approve="${esc(p.part)}">Approve</button><button data-reject="${esc(p.part)}">Reject…</button>`);
   $("#pbody").innerHTML = `${p.picture ? `<div class="bigpic" aria-label="Footprint top view">${p.picture.replace(/width="\d+" height="\d+"/, "")}</div>` : ""}
@@ -1186,7 +1187,10 @@ async function release(part, allow) {
   try {
     await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: $("#signer").value.trim() || null });
     await loadParts(); loadStatus().catch(() => {});
-    if (allow) toast(`Released ${part} anyway: it goes to Altium with the next push.`, { action: "Undo", onAction: () => release(part, false) });
+    const p = findPart(part), hard = p && p.reasons.find(r => /^files\./.test(r.code));
+    if (allow && p && effective(p) === "held")       // a missing or damaged file cannot be released anyway: say so
+      toast(`${part} stays held: ${hard ? hard.text : (p.reasons[0] || {}).text || "the release check still holds it."} Release anyway cannot override that, so it does not go to Altium.`, { action: "Undo", onAction: () => release(part, false) });
+    else if (allow) toast(`Released ${part} anyway: it goes to Altium with the next push.`, { action: "Undo", onAction: () => release(part, false) });
     else toast(`${part} is held again.`);
   } catch (err) { banner(popen ? $("#perr") : $("#liberr"), err.message); }
 }
@@ -1525,11 +1529,14 @@ $("#doctorbtn").addEventListener("click", e => action(e.target, $("#doctorout"),
     `<details style="margin-top:6px"><summary class="muted small">${ok} OK check(s)</summary>${r.checks.filter(c => c.level === "OK").map(row).join("")}</details>`;
 }));
 // #review=<BOM>: the parts the librarian built for that BOM, held ones with their reasons (the Altium / KiCad menu's
-// "Open review queue" links here for the parts added from the menu)
+// "Open review queue" links here for the parts added from the menu). Without it, a workspace with a plan but no BOM
+// check yet (`ecadlib demo`, `ecadlib librarian`) opens its newest planned BOM, so step 2 shows its parts.
 async function openReview() {
   const m = /^#review=(.+)$/.exec(location.hash || "");
-  if (!m) return;
-  const bom = decodeURIComponent(m[1]), h = history.find(x => x.bom === bom);
+  if (!m && (history.length || current)) return;
+  if (!m && !info) await loadInfo();
+  const bom = m ? decodeURIComponent(m[1]) : (info.planned || [])[0], h = history.find(x => x.bom === bom);
+  if (!bom) return;
   let t = null;
   if (h) { try { t = await api("/api/triage/result?id=" + encodeURIComponent(h.id)); } catch (e) { t = null; } }
   showResult(t || { bom, name: bom.split("/").pop(), rows: [], counts: {}, mapping: {}, reports: ["", ""], finished: null });

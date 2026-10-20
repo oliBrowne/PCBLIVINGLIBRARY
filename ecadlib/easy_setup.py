@@ -193,13 +193,16 @@ def forget_key(b):
 
 def check_key(b, get=None):
     """A free request that proves the key works: the provider's model list. -> {ok, message}. Sends the key only to
-    that provider's own address."""
+    that provider's own address. b["key"]: a key pasted but not saved yet (checked instead of the stored one)."""
     p = _provider(b.get("provider") or "anthropic")
     if p[0] == "none":
         return {"ok": True, "message": "no AI chosen: nothing to check"}
     from . import llm as LL
     base = "https://api.anthropic.com/v1" if p[2] == "anthropic" else LL.PRESETS[p[2]][0]
-    key = UC.secret(p[3]) if p[3] else None
+    pasted = b.get("key").strip() if isinstance(b.get("key"), str) else ""
+    if len(pasted) > 1000 or any(c.isspace() for c in pasted):
+        return {"ok": False, "message": f"that is not a {p[1]} key: copy it again from {p[5]}"}
+    key = (pasted or UC.secret(p[3])) if p[3] else None
     if p[3] and not key:
         return {"ok": False, "message": f"no key yet: paste your {p[1]} key above"}
     if get is None:
@@ -224,7 +227,8 @@ def check_key(b, get=None):
         ids = set()
     if model and ids and model not in ids and p[0] in ("ollama",):
         return {"ok": False, "message": f"Ollama has no model {model}: run `ollama pull {model}` first"}
-    return {"ok": True, "message": f"{p[1]} accepted the key" if key else f"{p[1]} answered"}
+    return {"ok": True, "message": (f"{p[1]} accepted the key" + (": press Save to keep it" if pasted else "")) if key
+            else f"{p[1]} answered"}
 
 
 # ------------------------------------------------------------------ add to Altium / KiCad
