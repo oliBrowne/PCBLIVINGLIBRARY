@@ -151,3 +151,19 @@ def test_plugin_names_an_ecadlib_row_of_another_library(tmp_path):
     (tmp_path / "ecadlib").mkdir()
     (tmp_path / "ecadlib" / "ecadlib.kicad_sym").write_text("(kicad_symbol_lib)\n")
     assert "${KIPRJMOD}/ecadlib.pretty" in kap.tables_after_fill(str(tmp_path))
+
+
+# T084
+@lite
+def test_kicad_export_house_name_replaces_the_mpn_field(tmp_path):
+    from ecadlib import sexpr
+    shutil.copytree(_demo(), tmp_path / "ws")
+    (tmp_path / "house.toml").write_text('[parameters]\nnames = { "Manufacturer Part Number" = "Mfr PN", '
+                                         '"Manufacturer" = "Mfr Name" }\n', encoding="utf-8")
+    rc, _, err = _run(["kicad-export", "ws/librarian/demo_bom_demo/plan.json", "-o", "k", "--name", "mylib", "--rules",
+                       "house.toml"], cwd=tmp_path)
+    assert rc == 0, err
+    t = sexpr.parse((tmp_path / "k" / "mylib.kicad_sym").read_text(encoding="utf-8"))
+    for s in sexpr.find(t, "symbol"):
+        props = [str(p[1]).strip('"') for p in sexpr.find(s, "property")]
+        assert "Mfr PN" in props and "MPN" not in props and "Manufacturer" not in props, (s[1], props)

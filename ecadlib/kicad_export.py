@@ -1198,7 +1198,12 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules, warnings=rep["warnings"], kpins=kpins)
             sym = sym_kicad8(sym)
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
-            set_fields(sym, plan_fields(it, lib, row["footprint"], props, rules))
+            fields = plan_fields(it, lib, row["footprint"], props, rules)
+            names = ((rules or {}).get("parameters") or {}).get("names") or {}
+            gone = ({k for k, v in names.items() if v != k} | ({"MPN"} if names.get("Manufacturer Part Number", "MPN") != "MPN"
+                    else set())) - {k for k, _ in fields}      # a house name replaces the field the .SchLib carried
+            sym[:] = [c for c in sym if not (isinstance(c, list) and c[0] == "property" and str(c[1]) in gone)]
+            set_fields(sym, fields)
             sym[:] = [c for c in sym if not (isinstance(c, list) and c[:2] == ["property", "ki_description"])]   # KiCad 7 -> Description
             symbols[sname] = sym
             row["symbol"] = how
