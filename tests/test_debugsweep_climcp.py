@@ -127,3 +127,23 @@ def test_ds2_53_desktop_app_and_setup_start_with_the_library_folders_saved_on_th
     monkeypatch.setattr(S, "main", lambda argv: seen.append(argv) or 0)   # `ecadlib setup`: the server it starts
     ES.main(["--workspace", str(ws), "--no-browser"])
     assert "--lib" in seen[0] and seen[0][seen[0].index("--lib") + 1] == str(mylib), seen
+
+
+# ------------------------------------------------------------------ DS2-54
+@lite
+def test_ds2_54_setup_page_save_keeps_the_workspace_sources_order(tmp_path, monkeypatch):
+    """Save on the setup page always wrote [sources] order = the defaults (online lookups first), even with nothing
+    changed: a hand-set order such as standard first, without EasyEDA, was lost. Only the datasheet entry is the page's."""
+    from ecadlib import easy_setup as ES, rules as RU
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path.resolve() / "home")
+    ws = tmp_path.resolve() / "ws"
+    ws.mkdir()
+    (ws / "ecadlib.toml").write_text('[sources]\norder = ["standard", "kicad", "datasheet"]\n'
+                                     '[ai]\nprovider = "anthropic"\nmodel = "claude-sonnet-5-5"\n', encoding="utf-8")
+
+    def save(provider, model=""):
+        ES.save(ws, {"workspace": str(ws), "tool": "both", "libs": [], "provider": provider, "model": model})
+        return RU.load(ws / "ecadlib.toml")["sources"]["order"]
+    assert save("anthropic", "claude-sonnet-5-5") == ["standard", "kicad", "datasheet"]   # nothing changed on the page
+    assert save("none") == ["standard", "kicad"]                                          # No AI: no datasheet reader
+    assert save("anthropic", "claude-sonnet-5-5") == ["standard", "kicad", "datasheet"]   # and back

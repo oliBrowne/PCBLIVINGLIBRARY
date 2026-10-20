@@ -149,9 +149,12 @@ def save(ws_root, b):
     if p[0] != "none" and not MODEL_RE.fullmatch(model):
         raise ValueError("pick or type a model name")
     ws.mkdir(parents=True, exist_ok=True)
-    order = list(RU.DEFAULTS["sources"]["order"])
+    order = (_ws_rules_raw(ws).get("sources") or {}).get("order")   # the person's order: the page only sets the
+    order = list(order if isinstance(order, list) else RU.DEFAULTS["sources"]["order"])   # datasheet reader
     if p[0] == "none":
         order = [x for x in order if x != "datasheet"]
+    elif "datasheet" not in order:
+        order.append("datasheet")
     extra = {"setup": {"tool": tool, "libs": libs, "workspace": "."}, "sources": {"order": order}}
     if p[0] != "none":
         extra["ai"] = {"provider": p[2], "model": model}
