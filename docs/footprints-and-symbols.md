@@ -171,7 +171,8 @@ guesses, because a wrong footprint skips the datasheet reader: a family name wit
 `TO-252-2` / `TO-263-2` / DPAK / D2PAK without a library prefix (KiCad also has `_TabPin1`), a name that fits more
 than one KiCad footprint (SOT-23-3, bare SOT-223, SC-70), pin-removed variants (`SOIC-8-N7`), power packages and
 TO-220 horizontal resolve to nothing, and the next source tries. Symbols: R, C, L, LED and diodes (not TVS: uni- or bidirectional pin names are not certain), and SOT-23 / TO-92 BJTs
-and MOSFETs, 1117 LDOs, 78xx/79xx/LM317 for listed MPN families (with a review note to check pins 1-3). The source is
+and MOSFETs, 1117 LDOs, 78xx/79xx/LM317 for listed MPN families (held until a person checks pins 1-3 and releases the part with
+`release-check --allow` or Release anyway). The source is
 recorded as `standard:<Lib>:<Name>` / `standard:<symbol>`.
 
 Checks (2026-10-16, kicad-footprints f8440fa, kicad-symbols 9280a93):

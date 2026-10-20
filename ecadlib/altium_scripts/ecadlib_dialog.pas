@@ -508,7 +508,9 @@ Begin
     If Headline = '' Then
         Headline := 'Done';
     If BuildFailed(Extra) Then
-        Headline := 'Altium could not build the library';
+        Headline := 'Altium could not build the library'
+    Else If Pos('Not installed:', Extra) > 0 Then
+        Headline := 'Not installed in Altium';
     EcadlibDialog.Big.Caption := Headline;
     ClearRows;
     Ini := TIniFile.Create(Job + '\result.ini');
@@ -566,7 +568,7 @@ Begin
         Else
             Buttons('Done', '', False);
     End;
-    If (Pos('Missing:', Extra) > 0) Or (Pos('Altium build:', Extra) > 0) Then
+    If (Pos('Missing:', Extra) > 0) Or (Pos('Altium build:', Extra) > 0) Or (Pos('Not installed:', Extra) > 0) Then
         EcadlibDialog.Note.Caption := EcadlibDialog.Note.Caption + Extra;
     EcadlibDialog.Note.Visible := EcadlibDialog.Note.Caption <> '';
     Layout;

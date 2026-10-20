@@ -1,2 +1,2 @@
 
-6 ready, 1 held  (held: CH340C)
+4 ready, 3 held  (held: AMS1117-3.3, CH340C, AO3401A)

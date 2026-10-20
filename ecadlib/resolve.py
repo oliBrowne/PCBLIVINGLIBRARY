@@ -482,6 +482,11 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
         elif r["action"] == "hold":
             notes.append(f"change to released {r['part']} r{r['revision']} held for a second approval ({r['summary']}): "
                          f"ecadlib part approve {plan} --part {r['part']}")
+    if not any(r["part"] == part and r["action"] == "hold" for r in gated):   # applied, not held by change control:
+        halves = [k for k, _, _ in done]                                       # a doubt about the half it replaced goes
+        RC.clear_doubts(it, it["source"], halves)
+        if state is not None and part in state:
+            RC.clear_doubts(state[part], it["source"], halves)
     RC.apply([it] + [i for i in items if i["name"] in rewritten], base)   # the parts sharing the overwritten file are
                                                                           # re-checked too: their old `ready` no longer holds
     write_text_atomic(plan, json.dumps(items, indent=2))

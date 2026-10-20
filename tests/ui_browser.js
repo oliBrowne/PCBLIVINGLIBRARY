@@ -52,7 +52,7 @@ async function local(browser, width) {
     check("search filters parts" + w, await p.locator("#plist .pcard").count() === 2, await p.locator("#plist .pcard").count());
     await p.fill("#pq", "");
     await p.click('#libout [data-pf="held"]');
-    check("held chip filters" + w, await p.locator("#plist .pcard").count() === 8);
+    check("held chip filters" + w, await p.locator("#plist .pcard").count() === 9);
     await p.click('#libout [data-pf=""]');
     await p.click('#plist [data-openp="TPS62133RGTR"]');
     await p.waitForSelector("#panel.open");

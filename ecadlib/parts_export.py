@@ -59,8 +59,9 @@ def _signoff(items, base):
     return out
 
 
-def rows(plan, lib="ecadlib", include_held=False):
-    """Plan items -> [row dict with exactly COLUMNS], sorted by Part ID. plan: path to plan.json or a list of items."""
+def rows(plan, lib="ecadlib", include_held=False, rules=None):
+    """Plan items -> [row dict with exactly COLUMNS], sorted by Part ID. plan: path to plan.json or a list of items.
+    rules: the library rules file the release check runs with (default: ecadlib.toml found from the plan)."""
     from .kicad_export import libname
     base = Path(plan).parent if not isinstance(plan, list) else Path(".")
     items = json.loads(Path(plan).read_text(encoding="utf-8")) if not isinstance(plan, list) else plan
@@ -69,7 +70,15 @@ def rows(plan, lib="ecadlib", include_held=False):
     if not isinstance(plan, list):             # change control (#105): a hand edit of a released part's fields is
         from . import change_gate as CG        # held, and its released fields go out (as kicad-export ships them)
         with CG.publishing(base):
-            items = CG.settled_plan(plan, "export-parts", log=lambda *a, **k: None)
+            items = CG.settled_plan(plan, "export-parts", rules=rules, log=lambda *a, **k: None)
+    if not isinstance(plan, list):             # the release check again, on the files as they are (as every publisher
+        from . import release_check as RC, rules as RU      # runs it): a part that fails it is held, not a library part
+        checked = RU.resolve(rules, base)
+        for it in items:
+            why = RC.publish_problems(it, base, checked) if isinstance(it, dict) and it.get("name") \
+                and it.get("status", "ready") == "ready" else []
+            if why:
+                it.update(status="held", hold_reasons=why, release_check=dict(it.get("release_check") or {}, result="held"))
     keep = [it for it in items if isinstance(it, dict) and it.get("name")
             and (it.get("status", "ready") in LIBRARY_STATUS or (include_held and it.get("status") == "held"))]
     sign = _signoff(keep, base) if not isinstance(plan, list) else {}
@@ -151,11 +160,12 @@ def main(argv=None):
     ap.add_argument("-o", "--out", help="output file (default: parts.<format> next to the plan)")
     ap.add_argument("--name", default="ecadlib", help="KiCad library name used by kicad-export (default %(default)s)")
     ap.add_argument("--include-held", action="store_true", help="also export parts the release check held")
+    ap.add_argument("--rules", help="library rules file the release check runs with (default: ecadlib.toml found from the plan)")
     a = ap.parse_args(argv)
     fmt = a.format or (Path(a.out).suffix.lower().lstrip(".") if a.out and Path(a.out).suffix.lower() in (".csv", ".json", ".xlsx") else "csv")
     out = Path(a.out) if a.out else Path(a.plan).parent / f"parts.{fmt}"
     try:
-        rs = rows(a.plan, a.name, a.include_held)
+        rs = rows(a.plan, a.name, a.include_held, a.rules)
     except (OSError, ValueError) as e:
         print(f"cannot read plan: {e}", file=sys.stderr)
         return 2
