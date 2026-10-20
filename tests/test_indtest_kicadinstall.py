@@ -210,3 +210,18 @@ def test_parity_next_hint_keeps_the_export_folder(tmp_path):
     assert rc == 1 and "2 differ" in out, out
     from ecadlib.cliutil import shell_word
     assert f"ecadlib parity {plan} --kicad {shell_word('my k')} --name mylib -v" in out, out
+
+
+# T089
+@lite
+def test_kicad_bom_check_report_names_kicad_not_altium(tmp_path):
+    (tmp_path / "P").mkdir()
+    (tmp_path / "P" / "board.xml").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n<export version="E"><design><source>board.kicad_sch</source></design>'
+        '<components><comp ref="R1"><value>10k</value><footprint>Resistor_SMD:R_0603_1608Metric</footprint><fields>'
+        '<field name="MPN">0603WAF1002T5E</field></fields></comp></components></export>\n', encoding="utf-8")
+    rc, out, err = _run(["kicad-menu", "check-bom", str(tmp_path / "P" / "board.xml"), "--no-open", "--json"],
+                        env={"ECADLIB_HOME": str(tmp_path / "home")})
+    assert rc == 0, err
+    report = Path(json.loads(out)["report"])
+    assert report.name.endswith("_kicad.html") and "(ecadlib kicad-menu check-bom)" in report.read_text(encoding="utf-8"), report

@@ -1192,7 +1192,7 @@ def _bom_of(ws, project):
     return str(p.resolve()), None
 
 
-def report_html(title, rows, counts, md_link):
+def report_html(title, rows, counts, md_link, tool="altium"):
     e = html.escape
     head = ["#", "Designators", "Qty", "MPN", "Manufacturer", "In your library", "Lookup", "Notes"]
     body = "".join("<tr>" + "".join(f"<td>{e(str(c))}</td>" for c in (
@@ -1205,7 +1205,7 @@ td,th{{border:1px solid #ccc;padding:3px 8px;text-align:left;vertical-align:top}
 <p>{counts['lines']} BOM lines: <b>{counts['in_library']}</b> in your library, <span class="n">{counts['missing']}</span>
 not yet, {counts['dnp']} not fitted. Full lookup report: <a href="{e(md_link)}">{e(Path(md_link).name)}</a>.</p>
 <table><tr>{''.join(f'<th>{h}</th>' for h in head)}</tr>
-{body}</table><p><small>written by ecadlib {__version__} (ecadlib altium-menu check-bom)</small></p></body></html>
+{body}</table><p><small>written by ecadlib {__version__} (ecadlib {tool}-menu check-bom)</small></p></body></html>
 """
 
 
@@ -1233,9 +1233,10 @@ def check_bom(cfg, project, opener=None, progress=None):
                   else "footprint" if st.startswith("needs_footprint") else "unverified" if st.startswith("unverified")
                   else "source"] += 1
     stem = Path(tri["reports"][0]).with_suffix("").name
-    out = ws.root / "reports" / f"{stem}_altium.html"
+    tool = "kicad" if cfg.get("tool") == "kicad" else "altium"
+    out = ws.root / "reports" / f"{stem}_{tool}.html"
     name = pb["project"] if pb else Path(project).name
-    out.write_text(report_html(f"BOM check: {name}", rows, counts, (ws.root / tri["reports"][0]).as_uri()),
+    out.write_text(report_html(f"BOM check: {name}", rows, counts, (ws.root / tri["reports"][0]).as_uri(), tool),
                    encoding="utf-8")
     opened = _open(out, opener)
     res = {"status": "ok", "message": f"{name}: {counts['lines']} BOM lines, {counts['in_library']} in your library, "
