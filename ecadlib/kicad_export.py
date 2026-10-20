@@ -530,7 +530,18 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
     f = item["symbol"].get("file")
     if not f or not (plan_dir / f).exists():
         raise FileNotFoundError("no symbol: " + "; ".join(why or ["no source and no .SchLib"]))
-    return symbol_from_schlib(plan_dir / f, name, notes, pick=item["symbol"].get("ref")), f"{f} read back ({src or 'no source'})" + (f"; {'; '.join(why)}" if why else "")
+    sym = symbol_from_schlib(plan_dir / f, name, notes, pick=item["symbol"].get("ref"))
+    if src.startswith("standard:Regulator_Linear_"):   # Altium has one Power type: a standard regulator's VO is power_out
+        from . import stdparts as SP                     # in ecadlib's own symbol and in KiCad's (ERC needs a rail driver)
+        try:
+            want = {p[0]: p[2] for p in SP._regulator(src.split("_")[2:], ())[4]}
+        except KeyError:
+            want = {}
+        for u in sexpr.find(sym, "symbol"):
+            for p in sexpr.find(u, "pin"):
+                if p[1] == "power_in" and want.get(str(sexpr.first(p, "number")[1]).strip('"')) == "power_out" and "hide" not in p:
+                    p[1] = "power_out"
+    return sym, f"{f} read back ({src or 'no source'})" + (f"; {'; '.join(why)}" if why else "")
 
 
 # ---------------------------------------------------------------- footprints
