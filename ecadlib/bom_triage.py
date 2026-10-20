@@ -59,12 +59,14 @@ def map_headers(headers, threshold=0.72):
                 if nh == s:
                     sc = 0.97 if f == "mpn" and s in ("part number", "pn") else 1.0   # DigiKey: 'Part Number' is
                                                                      # its own code, 'Manufacturer Part Number' the MPN
-                    sc = 0.9 if (f, s) in (("value", "comment"), ("mpn", "part"), ("manufacturer", "vendor"),
-                                           ("description", "notes")) else sc   # 'Value' wins over
+                    sc = 0.9 if (f, s) in (("value", "comment"), ("mpn", "part")) else sc   # 'Value' wins over
                                                                      # Altium's 'Comment' ('Resistor'); a real MPN column
-                                                                     # over a purchasing BOM's 'Part'; 'Manufacturer'
-                                                                     # over a distributor 'Vendor', 'Description' over
-                                                                     # 'Notes'
+                                                                     # over a purchasing BOM's 'Part'
+                    sc = 0.74 if (f, s) in (("manufacturer", "vendor"), ("description", "notes")) else sc   # a
+                                                                     # fallback: any header naming the maker or the
+                                                                     # description ('Mfg Name', 'Part Description',
+                                                                     # 0.75 and up) wins over a distributor 'Vendor'
+                                                                     # or 'Notes'
                 elif f == "fitted" or (f, s) == ("mpn", "part"):
                     continue                                             # one word: exact only ('Mount Side' isn't it,
                                                                          # 'Part Type' is no MPN)
