@@ -110,7 +110,7 @@ def test_ds2_47_upkeep_a365_compares_under_the_house_parameter_names(tmp_path):
 
 
 @lite
-def test_ds2_48_rebuild_check_finds_the_lib_files_of_a_moved_project(tmp_path):
+def test_ds2_48_rebuild_check_finds_the_lib_files_of_a_moved_project(tmp_path, monkeypatch):
     import shutil
     root = tmp_path.resolve()
     proj = root / "proj"
@@ -126,6 +126,10 @@ def test_ds2_48_rebuild_check_finds_the_lib_files_of_a_moved_project(tmp_path):
     shutil.move(str(proj), str(root / "moved_away"))
     rep = RB.check(root / "clone" / "lib", log=QUIET)
     assert rep["ok"] and rep["counts"]["DRIFT"] == 0, [d for d in rep["inputs"] if not d.get("info")]
+    # an in-place rebuild finds them too, from any working folder (the lock's paths start at the library)
+    monkeypatch.chdir(root)
+    _, drift = RB.rebuild(root / "clone" / "lib", log=QUIET)
+    assert not [d for d in drift if d["part"] == "CH340C" and not d.get("info")], drift
     # and it is the clone's own --lib file that is checked
     sym = root / "clone" / "kicad_lib" / "ecadlib_demo.kicad_sym"
     sym.write_text(sym.read_text(encoding="utf-8") + "\n", encoding="utf-8")
