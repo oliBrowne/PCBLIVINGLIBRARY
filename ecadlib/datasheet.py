@@ -1522,7 +1522,8 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
                 review.append(f"footprint_gen.build failed: {F.shorts(rep)}")
         except Exception as e:
             review.append(f"footprint_gen.build failed: {e!r}")
-    sym = {"name": part, "description": f"{ext['symbol_description']} (read from the datasheet by ecadlib.datasheet; review before use)",
+    sym = {"name": part, "description": ext["symbol_description"],     # the part's own words; the read is held for
+           # a person by its verify notes, not marked in the text
            "designator": "U?", "footprint": spec["name"], "needs_datasheet_verification": True,
            "pins": [{k: p[k] for k in ("num", "name", "type", "side")} for p in ext["pins"]],
            "source": {"datasheet": datasheet, "pin_table_page": _pg(ext["pin_table"]["page"], offset),

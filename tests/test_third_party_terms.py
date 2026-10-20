@@ -19,9 +19,9 @@ def test_only_kicad_footprints_are_labelled_cc_by_sa():
     --lib files and footprints ecadlib generated."""
     kicad, _ = K.convert_footprint(MOD, "USB_C", "Connector_USB:USB_C_HRO", [], K.KICAD_LICENSE)
     assert kicad["description"].endswith("from Connector_USB:USB_C_HRO (CC-BY-SA 4.0)"), kicad["description"]
-    for src in ("C165948", "my_lib:USB_C", "spec"):
-        fp, _ = K.convert_footprint(MOD, "USB_C", src, [])
-        assert "CC-BY-SA" not in fp["description"] and fp["description"].endswith(f"from {src}"), fp["description"]
+    for src in ("C165948", "my_lib:USB_C", "spec"):          # no license to attribute: the source is not named in the
+        fp, _ = K.convert_footprint(MOD, "USB_C", src, [])   # description (the plan records it), 2026-10-20
+        assert "CC-BY-SA" not in fp["description"] and src not in fp["description"], fp["description"]
 
 
 @lite

@@ -40,6 +40,22 @@ CREDIT = "From the JLCEDA/EasyEDA Official Library (https://easyeda.com, https:/
 PIN_TYPE = {"0": "unspecified", "1": "input", "2": "output", "3": "bidirectional", "4": "power_in"}
 
 
+def package_words(title, pads):
+    """EasyEDA's footprint name in words for the footprint's description: 'SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL', 8 ->
+    'SOIC-8, 4.9 x 3.9 mm body, 1.27 mm pitch, 8 pads' (L = body length, W = width, P = pitch, as EasyEDA names them);
+    a name without those fields is kept as it is."""
+    title = str(title or "").strip()
+    fam, _, dims = title.partition("_")
+    d = dict(re.findall(r"(?:^|-)(L|W|P)(\d+(?:\.\d+)?)(?=-|$)", dims))
+    words = [fam if d else title] if title else []
+    if "L" in d and "W" in d:
+        words.append(f"{d['L']} x {d['W']} mm body")
+    if "P" in d:
+        words.append(f"{d['P']} mm pitch")
+    words.append(f"{pads} pad{'s' if pads != 1 else ''}")
+    return ", ".join(w for w in words if w)
+
+
 def _f(v, d=0.0):
     try:
         v = float(v)
@@ -157,8 +173,10 @@ def footprint_to_kicad(data, name=None, notes=None):
     val_y = round(max([crt[3]] + silk_y) + TEXT_GAP + TEXT_H / 2, 4)
     cx_ = round((crt[0] + crt[2]) / 2, 4)
     font = f"(effects (font (size {_n(TEXT_H)} {_n(TEXT_H)}) (thickness {_n(TEXT_W)})))"
+    numbered = {p.split()[1] for p in pads} - {'""'}       # pad numbers (an unnumbered hole is not a pad)
     out = [f"(footprint {_q(name)} (version 20221018) (generator ecadlib_easyeda) (layer \"F.Cu\")",
-           f"  (descr {_q(CREDIT + '; converted by ecadlib.easyeda_convert; check against the datasheet')})",
+           f"  (descr {_q(package_words(name, len(numbered)))})",
+           f"  (property \"Credit\" {_q(CREDIT)})",                  # EasyEDA's credit: kept, apart from the description
            # a plated pin makes it THT; an unplated hole (a locating peg) does not (footprint_adv, footprint_rules, KiCad)
            "  (attr through_hole)" if any(" thru_hole " in p for p in pads) or not any(" smd " in p for p in pads)
            else "  (attr smd)",
@@ -426,7 +444,7 @@ def symbol_to_kicad(data, name, footprint="", props=None, notes=None):
     if not pins:
         raise ValueError("EasyEDA symbol has no pins")
     pr = {"Reference": (cp.get("pre") or "U?").rstrip("?") or "U", "Value": name, "Footprint": footprint,
-          "Datasheet": "~", "Description": "converted from EasyEDA by ecadlib.easyeda_convert", "Credit": CREDIT}
+          "Datasheet": "~", "Description": "", "Credit": CREDIT}     # Description: the part's (props), never the tool's
     pr.update({k: v for k, v in (props or {}).items() if v})
     out = ["(kicad_symbol_lib (version 20231120) (generator ecadlib_easyeda)",
            f"  (symbol {_q(name)}{'' if named else ' (pin_names (offset 0) hide)'} (in_bom yes) (on_board yes)"]
