@@ -1239,7 +1239,7 @@ def check_pins(spec, ext, review):
         if n is not None and len(set(nums)) != n:
             review.append(f"symbol: {len(set(nums))} ball names, pin_count {n}")
         return
-    bad = [x for x in nums if not x.isdigit()]
+    bad = [x for x in nums if not x.isdecimal()]      # not isdigit(): '①' and '²' pass it, but int() reads neither
     if bad:
         review.append(f"symbol: non-numeric pin numbers {bad} (footprint pads are 1..N, exposed pad N+1)")
     if n is None:
@@ -1248,7 +1248,7 @@ def check_pins(spec, ext, review):
     if rows != n:
         review.append(f"pin count: drawing says {n}, pin table has {rows}")
     want = {str(i) for i in range(1, n + 1)} | ({str(n + 1)} if spec.get("exposed_pad") else set())
-    key = lambda s: (not s.isdigit(), int(s) if s.isdigit() else 0, s)
+    key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)
     miss, extra = sorted(want - set(nums), key=key), sorted(set(nums) - want, key=key)
     if miss:
         review.append(f"symbol: pins missing {miss} (expected 1..{n}{' + EP ' + str(n + 1) if spec.get('exposed_pad') else ''})")

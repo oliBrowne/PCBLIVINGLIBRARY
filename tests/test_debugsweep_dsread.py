@@ -18,3 +18,17 @@ def test_ds2_12_toleranced_value_in_another_unit_is_rejected():
     res, (kind, _) = _review(lambda w, d: d["terminal_length"].update(min="", nom="0.3~0.5 mm", max=""))
     assert kind == "ok", (kind, res["needs_review"])  # the record's own unit written in the cell is fine
     assert {k: res["spec"]["terminal_length"][k] for k in ("min", "nom", "max")} == {"min": 0.3, "nom": 0.4, "max": 0.5}
+
+
+# ---- DS2-14: a pin number printed as a circled digit ('①', ROHM / Toshiba) crashed the read with ValueError
+def test_ds2_14_circled_digit_pin_number_is_a_review_line_not_a_crash():
+    from ecadlib import crosscheck as CC
+    for num in ("①", "1²"):                          # str.isdigit() is True for both, int() reads neither
+        def mut(w, d, num=num):
+            w["pins"][0]["num"] = num
+        res, (kind, _) = _review(mut)
+        assert f"symbol: non-numeric pin numbers [{num!r}] (footprint pads are 1..N, exposed pad N+1)" \
+            in res["needs_review"], res["needs_review"]
+        assert kind != "ok", kind
+    diff = CC.compare_pins([("1", "VIN"), ("2", "GND")], [("①", "VIN"), ("2", "GND")])   # the cross-check's second read
+    assert diff[0]["field"] == "pins" and "only here: ①" in diff[0]["second"], diff

@@ -261,7 +261,7 @@ def compare_pins(a, b):
     """a, b: [(num, name)] from two reads -> list of disagreements (pin numbers, names)."""
     out = []
     da, db = {str(n): norm_pin_name(s) for n, s in a}, {str(n): norm_pin_name(s) for n, s in b}
-    key = lambda s: (not s.isdigit(), int(s) if s.isdigit() else 0, s)
+    key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)   # '①' is isdigit(), not int()
     only_a, only_b = sorted(set(da) - set(db), key=key), sorted(set(db) - set(da), key=key)
     if only_a or only_b:
         out.append({"field": "pins", "first": f"{len(da)} pins" + (f", only here: {', '.join(only_a[:12])}" if only_a else ""),
