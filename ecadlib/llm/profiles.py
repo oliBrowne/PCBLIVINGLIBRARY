@@ -113,6 +113,8 @@ def profile(model, provider="anthropic", rules=None, detected=None):
     if o:
         p.update({k: v for k, v in o.items() if k in FIELDS})
         src.append("ecadlib.toml [ai.profiles] (" + ", ".join(sorted(o)) + ")")
+        if "price_in" in o or "price_out" in o:   # a price you set wins over "a local server is $0" (a paid gateway)
+            p["price_set"] = True
     p["source"] = "; ".join(src)
     return p
 
