@@ -6,6 +6,8 @@
     Mode 'fill'  fill the library from the project's BOM straight away
   A part only an AI datasheet read can finish is offered as an AI step: the model and the cost first, the read only
   after a click (and a second yes above the limit), then the real cost next to the estimate.
+  A held part can be released anyway (the Release anyway button, bottom left): the dialog shows why it is held, asks
+  why it is fine, and ecadlib releases it like the review queue does (your name and reason kept in the plan).
   A timer polls the job folder (progress.ini while ecadlib runs, result.ini at the end), so Altium never freezes. }
 
 Var
@@ -103,11 +105,13 @@ Begin
 End;
 
 Procedure ClearRows;
+{ Also hides Release anyway: it belongs to one held result. }
 Var
     i : Integer;
 Begin
     For i := 1 To 7 Do
         SetRow(i, '');
+    EcadlibDialog.ReleaseBtn.Visible := False;
 End;
 
 Function ButtonWidth(S : String) : Integer;
@@ -251,6 +255,7 @@ Begin
     End;
     EcadlibDialog.Primary.Top := Y + 10;
     EcadlibDialog.Secondary.Top := Y + 10;
+    EcadlibDialog.ReleaseBtn.Top := Y + 10;
     EcadlibDialog.ClientHeight := Y + 10 + 30 + 16;
 End;
 
@@ -366,6 +371,55 @@ Begin
     Ask(Job, 'over_limit_ok', Answer(Prev, 'ai_over'));
     Ask(Job, 'price_unknown_ok', Answer(Prev, 'ai_unknown'));
     Run('ai-read');
+End;
+
+Procedure ShowRelease;
+{ The held result's Release anyway button, when ecadlib offered it (offer_release: the part can be released). }
+Begin
+    EcadlibDialog.ReleaseBtn.Visible := Answer(Job, 'offer_release') = '1';
+    EcadlibDialog.ReleaseBtn.Width := ButtonWidth(EcadlibDialog.ReleaseBtn.Caption);
+End;
+
+Procedure AskRelease;
+{ Release anyway, step 1: why the part is held, and what releasing means. Nothing is released yet. }
+Var
+    i : Integer;
+    S : String;
+Begin
+    Phase := 'confirm_release';
+    Second := 'back_release';
+    S := Answer(Job, 'release_part') + ' is held because:';
+    For i := 1 To 4 Do
+        If Answer(Job, 'release_why' + IntToStr(i)) <> '' Then
+            S := S + #13#10 + '- ' + Answer(Job, 'release_why' + IntToStr(i));
+    S := S + #13#10 + 'Release anyway puts it into the library as it is. ecadlib keeps your name and your reason with it.';
+    EcadlibDialog.Note.Caption := S;
+    EcadlibDialog.Note.Font.Color := $009C9C9C;
+    EcadlibDialog.Note.Visible := True;
+    EcadlibDialog.ReleaseBtn.Visible := False;
+    Buttons('Release it...', 'Back', False);
+    Layout;
+End;
+
+Procedure StartRelease;
+{ Release anyway, step 2: the person says why it is fine; ecadlib releases it and puts it into the library. }
+Var
+    Prev : String;
+    Why : String;
+Begin
+    Prev := Job;
+    Why := Trim(InputBox('ecadlib: release anyway', 'Why is ' + Answer(Prev, 'release_part') + ' fine as it is? (kept with your name in the library plan)', ''));
+    If Why = '' Then
+        Exit;
+    SetTitle('Release ' + Answer(Prev, 'release_part'));
+    EcadlibDialog.Big.Caption := 'Releasing...';
+    Job := StartJob('release');
+    Ask(Job, 'dialog', '1');
+    Ask(Job, 'bom', Answer(Prev, 'release_bom'));
+    Ask(Job, 'mpn', Answer(Prev, 'release_mpn'));
+    Ask(Job, 'part', Answer(Prev, 'release_part'));
+    Ask(Job, 'reason', Why);
+    Run('release');
 End;
 
 Procedure StartBom;
@@ -507,6 +561,7 @@ Begin
         Begin
             Second := 'queue';
             Buttons('Done', 'Open review queue', False);
+            ShowRelease;
         End
         Else
             Buttons('Done', '', False);
@@ -606,6 +661,8 @@ Begin
         StartFill
     Else If Phase = 'offer_ai' Then
         StartAi
+    Else If Phase = 'confirm_release' Then
+        StartRelease
     Else If Phase = 'done' Then
         ModalResult := mrOk;
 End;
@@ -624,12 +681,29 @@ Begin
         EcadlibDialog.Note.Caption := NextHint;
         EcadlibDialog.Note.Visible := NextHint <> '';
         Buttons('Done', 'Open review queue', False);
+        ShowRelease;
         Layout;
+    End
+    Else If Second = 'back_release' Then
+    Begin
+        Phase := 'done';
+        Second := 'queue';
+        EcadlibDialog.Note.Caption := NextHint;
+        EcadlibDialog.Note.Visible := NextHint <> '';
+        Buttons('Done', 'Open review queue', False);
+        Layout;
+        ShowRelease;
     End
     Else If Second = 'log' Then
         RunApplication('notepad.exe "' + Job + '\log.txt"')
     Else If Phase <> 'run' Then
         ModalResult := mrCancel;
+End;
+
+Procedure TEcadlibDialog.ReleaseClick(Sender : TObject);
+Begin
+    If Phase = 'done' Then
+        AskRelease;
 End;
 
 Procedure TEcadlibDialog.ReportClick(Sender : TObject);
