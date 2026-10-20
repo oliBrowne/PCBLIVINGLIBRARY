@@ -136,3 +136,22 @@ def test_ds2_31_gullwing_or_qfn_spec_with_inner_span_only_is_refused_and_the_bat
         assert f"{name}: not written" in p.stderr and "terminal_length" in p.stderr, p.stderr
     assert (tmp_path / "out.pretty" / "R_0603_good.kicad_mod").is_file(), (p.stdout, p.stderr)
     assert p.returncode == 1, p.returncode
+
+
+@lite
+def test_ds2_32_footprint_gen_reads_a_utf8_spec_whatever_the_locale(tmp_path):
+    # The spec was read with the locale's encoding: on Windows (cp1252) '±' became 'Â±' in the footprint's descr and
+    # CJK text failed with 'save the file as UTF-8', which it already was. Here the locale is C (ASCII) instead.
+    import json
+    from pathlib import Path
+    from tests import e2e_support as E
+    root = Path(__file__).resolve().parent.parent
+    spec = json.loads((root / "ecadlib" / "package_specs" / "SOIC-8_3.9x4.9mm_P1.27mm.json").read_text(encoding="utf-8"))
+    spec["description"] = "SOIC-8 ±1 % tolerance — 封装 (Müller)"
+    (tmp_path / "soic8.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    env = {k: v for k, v in E.clean_env().items() if not k.startswith(("LC_", "LANG", "PYTHONUTF8", "PYTHONIOENCODING"))}
+    env.update(LC_ALL="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0", PYTHONIOENCODING="utf-8")
+    p = E.ecadlib(tmp_path, "footprint", "gen", "soic8.json", "-o", "out.pretty", env=env, check=False)
+    assert p.returncode == 0, p.stderr
+    mod = (tmp_path / "out.pretty" / f"{spec['name']}.kicad_mod").read_text(encoding="utf-8")
+    assert '(descr "SOIC-8 ±1 % tolerance — 封装 (Müller)' in mod, mod[:300]
