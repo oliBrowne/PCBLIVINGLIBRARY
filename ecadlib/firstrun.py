@@ -347,7 +347,7 @@ def bom_hint(err):
     if "no BOM header found" in t:
         return ("\n  hint: name a column MPN (or Manufacturer Part Number), Designator or Value; or map your headers in "
                 "ecadlib.toml, e.g. [bom.columns] mpn = \"Part No\" (`ecadlib triage BOM` shows what was recognised)")
-    if "the BOM file is empty" in t or "no part rows" in t:
+    if "the BOM file is empty" in t or "no part rows" in t or "no BOM lines found" in t:
         return "\n  hint: export the BOM again with its part rows (one row per part or per group of designators)"
     return ""
 
@@ -491,6 +491,18 @@ def demo_main(argv=None):
         if why:
             print(f"ecadlib demo: {a.bom} {why}\n  hint: give a BOM file (CSV, TSV or XLSX), or leave out --bom for "
                   "the bundled sample", file=sys.stderr)
+            return 2
+        from .bom_triage import read_bom      # one the reader cannot use (no recognised columns, no part rows): also
+        try:                                  # refused here, as the librarian does, not after the workspace is made
+            lines, mapping = read_bom(p, RU.bom_columns(None))
+            err = "" if lines and {"designator", "mpn", "value"} & set(mapping) else \
+                f"{p.name}: the BOM has a header but no part rows" if lines == [] else f"{p.name}: no BOM header found"
+        except (ValueError, OSError) as e:
+            err = str(e)
+        except Exception as e:                # pandas / csv / zip errors
+            err = f"couldn't read {p.name} as a BOM table ({type(e).__name__}: {e}); save it as CSV or XLSX with a header row"
+        if err:
+            print(f"ecadlib demo: {err}" + bom_hint(err), file=sys.stderr)
             return 2
     say = (lambda *x: None) if a.json or TM.VERBOSITY < 0 else print   # -q: only the outcome
     say(f"ecadlib demo: building a small library in {a.out}/ from "

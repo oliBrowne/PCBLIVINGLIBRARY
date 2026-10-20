@@ -294,3 +294,12 @@ def test_newer_file_refusal_names_an_upgrade_that_can_work():
     msg = str(MG.too_new("librarian_state", 9, "0.3.1", "librarian_state.json"))
     assert "made by ecadlib 0.3.1" in msg and "pip install -U ecadlib" in msg, msg
     assert "git+https://github.com/oliBrowne/PCBLIVINGLIBRARY" in msg, msg    # PyPI may have nothing newer
+
+
+# T066
+@lite
+def test_demo_refuses_an_unusable_bom_before_writing_anything(tmp_path):
+    for text in ("Foo,Bar\n1,2\n", "Designator,Comment,Footprint,Quantity\n"):
+        (tmp_path / "bad.csv").write_text(text, encoding="utf-8")
+        rc, _, err = _run(["demo", "--bom", "bad.csv", "-o", "ws"], cwd=tmp_path, env={"ECADLIB_HOME": str(tmp_path / "h")})
+        assert rc == 2 and "hint:" in err and not (tmp_path / "ws").exists(), (text, err)
