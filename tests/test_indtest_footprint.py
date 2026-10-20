@@ -118,3 +118,17 @@ def test_t025_pin1_in_the_middle_of_a_single_row():
     pads[0]["number"], pads[1]["number"] = 1, 2                          # 1 2 3: pin 1 at the end, nothing to say
     txt, rep = FG.build(spec)
     assert not mid(c["message"] for c in rep.get("table_checks", [])) and not mid(m for _, _, m in FC.check(txt))
+
+
+# T026: the pin-header STEP body is the spec's body_length x body_width, centred on the pin field
+def test_t026_header_step_body_from_spec():
+    from ecadlib import step_gen as SG
+    spec = {"rows": 5, "cols": 2, "pitch": 1.27, "body_length": {"nom": 3.41}, "body_width": {"nom": 6.35}}
+    bb = lambda s: [f(v[i] for v in s.verts) for i in range(2) for f in (min, max)]
+    body, = [s for s in SG.pin_header(spec) if s.name == "body"]
+    x0, x1, y0, y1 = bb(body)
+    assert abs(x1 - x0 - 3.41) < 1e-6 and abs(y1 - y0 - 6.35) < 1e-6 and abs((x0 + x1) / 2 - 0.635) < 1e-6, bb(body)
+    del spec["body_length"], spec["body_width"]                          # no body size: cols x pitch by rows x pitch
+    body, = [s for s in SG.pin_header(spec) if s.name == "body"]
+    x0, x1, y0, y1 = bb(body)
+    assert abs(x1 - x0 - 2.54) < 1e-6 and abs(y1 - y0 - 6.35) < 1e-6, bb(body)
