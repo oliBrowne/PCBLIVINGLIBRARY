@@ -515,10 +515,21 @@ def check_pad_table(spec, pads=None):
         tht_pad_size(pads, spec.get("pitch"))
     unit = t.get("unit", "mm")
     raw = _expand_table(t) if t else []
-    vals = [abs(v) for p in raw for k, v in p.items() if k in ("x", "y", "w", "h", "d", "drill") and isinstance(v, (int, float))]
-    if raw and unit == "mm" and vals and max(vals) > 60:
-        add("error", "units", f"pad_table values up to {max(vals):g} with unit mm: that looks like mils (set unit to mil)")
     sizes = [abs(v) for p in raw for k, v in p.items() if k in ("w", "h", "d", "drill") and isinstance(v, (int, float))]
+    # pad sizes and the spacing between pads, not their positions: a long mm connector drawn from pin 1 (DIN41612,
+    # 86 mm) is still mm, and its length or origin says nothing about the unit
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    at = sorted({(p["x"], p["y"]) for p in raw if num(p.get("x")) and num(p.get("y"))})
+    gap = None                                             # the closest two pad centres
+    for i, (ax, ay) in enumerate(at):
+        for bx, by in at[i + 1:]:
+            if gap is not None and bx - ax >= gap:
+                break
+            gap = math.hypot(bx - ax, by - ay) if gap is None else min(gap, math.hypot(bx - ax, by - ay))
+    big = max(sizes, default=0)
+    if raw and unit == "mm" and (big > 60 or (gap or 0) > 60):
+        what = f"pad / hole sizes up to {big:g}" if big > 60 else f"no two pads closer than {gap:g}"
+        add("error", "units", f"pad_table {what} with unit mm: that looks like mils (set unit to mil)")
     if raw and unit == "mil" and sizes and max(sizes) < 4:
         add("warning", "units", f"pad_table unit is mil but no pad or hole is bigger than {max(sizes):g} mil "
                                 f"({max(sizes) * 0.0254:.3f} mm): is the table in mm?")
