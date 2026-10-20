@@ -399,10 +399,12 @@ def build(spec, density=None):
     else:                                                     # qfn, qfp
         pads, (bx, by), r = _qfn(spec, fil)
     rep.update(r)
-    want = spec.get("pin_count")
-    if want and len(pads) != want:
-        raise ValueError(f"pin_count is {want} but the layout gives {len(pads)} pads "
-                         "(count every pad except an exposed pad; a tab counts)")
+    want, numbered = spec.get("pin_count"), len({p[0] for p in pads})
+    # package_schema.json: signal pins, so a tab that is pin 2 again (SOT-223-3_TabPin2) is not counted twice; a spec
+    # file written when this said "a tab counts" (every pad) still builds
+    if want and want not in (numbered, len(pads)):
+        raise ValueError(f"pin_count is {want} but the layout gives {numbered} pad numbers (count each pad number "
+                         "once, without an exposed pad; a tab with a number of its own counts)")
     short = [p for p in pads if min(p[3], p[4]) < 0.1]
     if short:
         why = "the exposed pad leaves no room for the pads" if spec.get("exposed_pad") else "the lead dimensions leave no room"

@@ -261,7 +261,7 @@ def compare_pins(a, b):
     """a, b: [(num, name)] from two reads -> list of disagreements (pin numbers, names)."""
     out = []
     da, db = {str(n): norm_pin_name(s) for n, s in a}, {str(n): norm_pin_name(s) for n, s in b}
-    key = lambda s: (not s.isdigit(), int(s) if s.isdigit() else 0, s)
+    key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)   # '①' is isdigit(), not int()
     only_a, only_b = sorted(set(da) - set(db), key=key), sorted(set(db) - set(da), key=key)
     if only_a or only_b:
         out.append({"field": "pins", "first": f"{len(da)} pins" + (f", only here: {', '.join(only_a[:12])}" if only_a else ""),
@@ -380,9 +380,14 @@ def parse(msg):
         for d in pkg["dims"]:
             if isinstance(d, dict) and d.get("name") in CHECK_DIMS:
                 try:
-                    raw = dict(d, **{k: D._wire_num(d.get(k), f"{d['name']}.{k}") for k in ("min", "nom", "max")})
+                    got = {k: D._wire_val(d.get(k), f"{d['name']}.{k}") for k in ("min", "nom", "max")}
                 except D.DatasheetError as e:
                     raise Unavailable(str(e))
+                for k, (_, u) in got.items():         # "0.016 in" in an mm record, as from_wire rejects it
+                    if u and u != D._unit_name(d.get("unit")):
+                        raise Unavailable(f"the second read's {d['name']}.{k} {d.get(k)!r} is written in {u!r} but "
+                                          f"the dimension's unit is {d.get('unit')!r}")
+                raw = dict(d, **{k: x for k, (x, _) in got.items()})
                 if d["name"].startswith("exposed_pad."):
                     pkg.setdefault("exposed_pad", {})[d["name"].split(".")[1]] = raw
                 else:

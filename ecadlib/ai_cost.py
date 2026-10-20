@@ -28,8 +28,8 @@ def limit(rules=None):
     from . import datasheet as D
     s = D.settings(rules)
     cap = float(s.get("max_cost_usd") or 0)
-    if cap > 0 and cap != D.DEFAULT_MAX_COST_USD:     # a cap you set; the default one is for unattended runs
-        return cap, "max_cost_usd"
+    if cap > 0 and (cap != D.DEFAULT_MAX_COST_USD or D.cap_chosen(rules)):   # a cap you set (10 too); the default
+        return cap, "max_cost_usd"                                           # one is for unattended runs
     return float(s.get("ask_above_usd") or 0), "ask_above_usd"
 
 

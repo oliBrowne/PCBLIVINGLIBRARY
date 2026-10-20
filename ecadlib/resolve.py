@@ -142,7 +142,7 @@ def compare(pins, pads):
 
 
 def _nat(s):
-    return [int(p) if p.isdigit() else p for p in re.split(r"(\d+)", str(s))]
+    return [int(p) if p.isdecimal() else p for p in re.split(r"(\d+)", str(s))]
 
 
 def _par(item):

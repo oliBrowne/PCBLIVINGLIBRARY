@@ -510,7 +510,7 @@ class Workspace:
             raise ValueError(q["text"])
         cap, yes = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
         rd = self._datasheet_reader(out, batch=False, yes=yes)
-        rd.cfg["max_cost_usd"] = cap                  # never more than the person saw and approved
+        rd.set_cap(cap)                               # never more than the person saw and approved: a cap they set
         log, n = [], [0]
 
         def note(msg):
@@ -872,7 +872,7 @@ class Workspace:
         if q is not None:                             # None: nothing left to buy (a submitted batch is only collected)
             cap, unknown_ok = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
             rd.yes = rd.yes or unknown_ok
-            rd.cfg["max_cost_usd"] = cap              # never more than the person saw and approved
+            rd.set_cap(cap)                           # never more than the person saw and approved: a cap they set
         log = []
         rd.say = lambda m: log.append(str(m).strip())
         items = D.fill_plan(out / "plan.json", rd, self.rules(), log=log.append, parts=set(parts or []) or None)
@@ -891,9 +891,11 @@ class Workspace:
         plan_f = out / "plan.json"
         if not plan_f.exists():
             raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
-        est = D.estimate_plan(plan_f, self._datasheet_reader(out, estimate=True))
+        rd = self._datasheet_reader(out, estimate=True)
+        est = D.estimate_plan(plan_f, rd)
         from . import ai_cost as AC                   # datasheet_batch's approved_usd is this quote's approve_usd
-        return dict(est, key_set=est["exact_input"], ai=AC.quote(est, self.rules(), key_set=est["exact_input"]))
+        return dict(est, key_set=bool(rd.key), ai=AC.quote(est, self.rules(), key_set=bool(rd.key)))   # not exact_input:
+        # an OpenAI key is set but never counts tokens
 
     def cross_checks(self, bom):
         """Which datasheet parts of the librarian plan were cross-checked against a second source (ecadlib.crosscheck)
