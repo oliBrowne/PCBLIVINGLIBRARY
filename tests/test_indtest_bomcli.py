@@ -102,3 +102,15 @@ def test_dedupe_remap_bom_skips_keepers_not_adopted(tmp_path):
                {"kind": "symbol", "from": "OLDSYM", "to": "NEWSYM", "file": "models/SchLib/NEWSYM.SchLib", "parts": "Q1"}]
     out, n = DD.remap_bom(tmp_path / "bom.csv", mapping, tmp_path / "o.csv")
     assert n == 1 and "Q1,1,X,Pkg:SOT-23,NEWSYM" in out.read_text(encoding="utf-8-sig")
+
+
+# T022: dedupe --config naming a file that does not exist is an error, not the default rules
+@lite
+def test_dedupe_missing_config_is_an_error(tmp_path):
+    from ecadlib import dedupe as DD
+    assert DD.load_config(None, tmp_path)["keep"] == []      # no default dedupe.json: fine
+    try:
+        DD.load_config(tmp_path / "typo.json", tmp_path)
+        raise AssertionError("missing --config accepted")
+    except FileNotFoundError as e:
+        assert "typo.json" in str(e)

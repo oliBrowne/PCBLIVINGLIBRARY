@@ -49,6 +49,8 @@ MPN_COLS = ("Manufacturer Part Number", "MPN", "Mfr Part Number")
 
 def load_config(path=None, base=None):
     f = Path(path) if path else (Path(base) / "dedupe.json" if base else None)
+    if path and not f.exists():               # a typo must not fall back to the default rules
+        raise FileNotFoundError(f"--config {path}: not found")
     raw = json.loads(f.read_text(encoding="utf-8")) if f and f.exists() else {}
     bad = set(raw) - set(CONFIG)
     if bad:
