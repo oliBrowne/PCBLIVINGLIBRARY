@@ -42,6 +42,22 @@ def test_ds2_14_circled_digit_pin_number_is_a_review_line_not_a_crash():
     assert diff[0]["field"] == "pins" and "only here: ①" in diff[0]["second"], diff
 
 
+def test_ds2_14_circled_digits_in_names_and_pad_numbers_elsewhere_do_not_crash():
+    from ecadlib import footprint_check as FC, footprint_gen as F, resolve as RS, symbol_layout as SL, visual_check as V
+    from tests.test_footprints import SPEC
+    review = []                                       # self_check runs on every read: its name is the model's text
+    D.self_check({"name": "SOT-23-⑤", "package_type": "gullwing", "pin_count": 5}, {"pins": []}, review)
+    assert D.name_facts("SOT-23-⑤")["count"] is None and D.name_facts("SOT-23-5")["count"] == 5
+    for key in (SL._natural, V._natural, RS._nat):    # pin and candidate sort keys
+        assert sorted(["10", "①", "2", "1"], key=key) == ["1", "2", "10", "①"], key.__module__
+    text = F.build(SPEC("SOIC-8_3.9x4.9mm_P1.27mm"))[0].replace('(pad "8"', '(pad "⑧"')
+    assert '(pad "⑧"' in text
+    FC.check(text)                                    # numbering direction, pad ranges
+    f = V.facts(V.parse_footprint(text))              # direction from the 7 numeric pads; ⑧ is still a pad
+    assert (f["pads"], f["numbering"]) == (8, "counter-clockwise (top view)"), f
+    assert FC._ranges(["1", "2", "3", "⑧"]) == "1-3, ⑧"
+
+
 # ---- DS2-15: a batch answer for a part not in the collecting run was cached with page_offset 0 and url ''
 def _ds2_15(d, between=None, lose_create=0):
     """Run 1 submits parts A and B (--no-wait; with lose_create its create answer is lost, so run 2 adopts the batch

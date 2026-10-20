@@ -1278,7 +1278,7 @@ def name_facts(name):
     """What a KiCad-style footprint name states: pin count, exposed pad, pitch, body and EP size (mm)."""
     head = name.split("_")[0]
     toks = head.split("-")
-    nums = [t for t in toks[1:] if t.isdigit()]
+    nums = [t for t in toks[1:] if t.isdecimal()]      # not isdigit(): int() reads no "⑤" (DS2-14)
     fam = toks[0]
     if FAMILY_CODES.fullmatch(fam):
         count = int(nums[1]) if len(nums) > 1 else None

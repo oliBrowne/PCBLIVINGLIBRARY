@@ -223,7 +223,7 @@ def _bbox(segs):
 
 def _ranges(nums):
     """['1','2','3','5'] -> '1-3, 5'."""
-    ints = sorted({int(n) for n in nums if str(n).isdigit()})
+    ints = sorted({int(n) for n in nums if str(n).isdecimal()})
     out, i = [], 0
     while i < len(ints):
         j = i
@@ -231,7 +231,7 @@ def _ranges(nums):
             j += 1
         out.append(f"{ints[i]}-{ints[j]}" if j > i else str(ints[i]))
         i = j + 1
-    return ", ".join(out + sorted(str(n) for n in nums if not str(n).isdigit()))
+    return ", ".join(out + sorted(str(n) for n in nums if not str(n).isdecimal()))
 
 
 def _share_copper(a, b):
@@ -325,7 +325,7 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     for p in sig:
         if p["num"] not in big:
             uniq.setdefault(p["num"], p)
-    order = sorted((n for n in uniq if str(n).isdigit()), key=int)
+    order = sorted((n for n in uniq if str(n).isdecimal()), key=int)
     if len(order) >= 3 and not _zigzag(order, uniq):
         mx = sum(uniq[n]["x"] for n in order) / len(order)
         my = sum(uniq[n]["y"] for n in order) / len(order)
