@@ -420,12 +420,31 @@ def friendly_error(exc):
 INTERNAL = ("plan.json", "ds_route", "stdparts", "crosscheck", "release_check", "footprint_check", "kicad_import",
             "symbol_layout", "hold_reasons")
 _MOD = r"ecadlib\.(?!toml\b)[a-z_]+\b"
-_ABS = re.compile(r"(?<![\w.:/])(?:/(?:[\w.@+-]+/)+[\w.@+-]+|[A-Za-z]:\\(?:[^\s\\]+\\)+[^\s\\]+)")
+_ROOT_NAMES = (r"home|Users|tmp|var|etc|opt|usr|mnt|srv|private|root|Volumes|media|run|data|workspace|"
+               r"workspaces|nix|github|builds?|sessions|proc|dev|sys|lib")
+_WSEP = r"(?:\\\\|\\|/)"                         # a Windows separator: \, / (Path.as_posix()) or a repr'd \\
+_EXT = r"\.[A-Za-z][A-Za-z0-9_]{0,9}"            # .json, .kicad_sym
+_SEG = r"[^\s\\/:'\"]+"                          # a folder name without a space
+_WCH = r"[^\s\\/:'\"(),;]"
+_WORD = r"(?!" + _WCH + r"*" + _EXT + r"(?!" + _WCH + r"))" + _WCH + r"+"   # a word of a folder name: no file name
+_MULTI = _WORD + r"(?: " + _WORD + r")+"         # a folder name with single spaces ("John Smith", "OneDrive - Acme")
+_FILE = r"[^\s\\/:'\"]*" + _EXT + r"(?![A-Za-z0-9_])"
+_START = r"(?:[A-Za-z]:" + _WSEP + r"|/(?i:" + _ROOT_NAMES + r")/)"
+# A quoted path (an OSError's repr'd file name) runs to its closing quote, spaces and all. Unquoted, a folder name
+# with spaces only inside a path that ends in a file name with an extension, and only when no word of it is a file
+# name or holds ( , ; - so "/home/me/plan.json and/or the cache" stops at plan.json. Else the strict space-free forms.
+_ABS = re.compile(r"(?<![\w.:/])(?:(?<=')" + _START + r"[^'\r\n]*[^'\r\n\\/](?=')"
+                  r"|(?<=\")" + _START + r"[^\"\r\n]*[^\"\r\n\\/](?=\")"
+                  r"|/(?i:" + _ROOT_NAMES + r")/(?:" + _SEG + r"/)*" + _MULTI + r"/(?:(?:" + _MULTI
+                  + r"|" + _SEG + r")/)*" + _FILE
+                  + r"|[A-Za-z]:" + _WSEP + r"(?:" + _SEG + _WSEP + r")*" + _MULTI + _WSEP + r"(?:(?:" + _MULTI + r"|"
+                  + _SEG + r")" + _WSEP + r")*" + _FILE
+                  + r"|/(?:[\w.@+-]+/)+[\w.@+-]+"
+                  r"|[A-Za-z]:" + _WSEP + r"(?:[^\s\\/]+" + _WSEP + r")+[^\s\\/]+)")
 _MODULE = re.compile(r"\s*\((?:see |via |from |by )?" + _MOD + r"[^)]*\)|\b" + _MOD)
 
 
-_ROOTS = re.compile(r"/(home|Users|tmp|var|etc|opt|usr|mnt|srv|private|root|Volumes|media|run|data|workspace|"
-                    r"workspaces|nix|github|builds?|sessions|proc|dev|sys|lib)/", re.I)
+_ROOTS = re.compile(r"/(" + _ROOT_NAMES + r")/", re.I)
 
 
 def _is_path(s):
