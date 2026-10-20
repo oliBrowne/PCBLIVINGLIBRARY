@@ -146,18 +146,19 @@ def keys_lines(rules=None, environ=None):
 
 def next_steps(ans, rules_file="ecadlib.toml"):
     """[(command, what it does)]: the 2-3 commands to run after `ecadlib init`."""
+    from .cliutil import shell_word as q             # a folder with a space stays one word when pasted
     ws = ans.get("workspace") or "ecadlib_workspace"
     lib = f"{ws}/librarian/YOUR_BOM"                 # <workspace>/librarian/*/plan.json: `ecadlib status` lists it
     steps = [("ecadlib demo", "see a real result first: a small library from a bundled BOM, offline, in under a minute"),
-             (f"ecadlib librarian YOUR_BOM.csv -o {lib}", "fill every missing symbol and footprint for your BOM, then the "
-                                                          "release check (`ecadlib status` shows the result)")]
+             (f"ecadlib librarian YOUR_BOM.csv -o {q(lib)}", "fill every missing symbol and footprint for your BOM, then the "
+                                                             "release check (`ecadlib status` shows the result)")]
     if ans.get("tool") in ("kicad", "both"):
-        steps.append((f"ecadlib kicad-export {lib}/plan.json -o {ws}/kicad/YOUR_BOM --name YOUR_BOM",
+        steps.append((f"ecadlib kicad-export {q(lib + '/plan.json')} -o {q(f'{ws}/kicad/YOUR_BOM')} --name YOUR_BOM",
                       "the library as KiCad files with fp-lib-table / sym-lib-table"))
     if ans.get("tool") in ("altium", "both"):
         steps.append(("ecadlib ui", f"or do it in the web UI on {ws}: drop your BOM there, review held parts, sign off, send "
                                     "to Altium (DbLib, .SchLib/.PcbLib, Altium 365); a plan made on the command line is "
-                                    f"reviewed with `ecadlib review {lib}/plan.json`"))
+                                    f"reviewed with `ecadlib review {q(lib + '/plan.json')}`"))
     return steps
 
 
@@ -519,6 +520,7 @@ def demo_main(argv=None):
         print(json.dumps(res, indent=1))
         return 0
     from . import term as TM
+    from .cliutil import shell_word
     t = TM.Term()
     written = [(f"{a.out}/{res['plan']}", "the library plan"), (", ".join(f"{a.out}/{r}" for r in res["review"]), "review: what to check, part by part")]
     if res["altium"] and tool != "kicad":      # the librarian always writes them; --tool kicad does not point at them
@@ -531,7 +533,7 @@ def demo_main(argv=None):
               + (f" (held: {', '.join(res['held_parts'][:5])}{' ...' if len(res['held_parts']) > 5 else ''}"
                  + ("; that is expected, see the review)" if not a.bom else "; the review says why)") if res["held"] else ""),
               written=written,
-              next=[(f"ecadlib status --workspace {a.out}", "one-screen summary"),
-                    (f"ecadlib ui --workspace {a.out}", "look at it in the browser (held parts, sign-off, exports)"),
+              next=[(f"ecadlib status --workspace {shell_word(a.out)}", "one-screen summary"),
+                    (f"ecadlib ui --workspace {shell_word(a.out)}", "look at it in the browser (held parts, sign-off, exports)"),
                     ("ecadlib init", "set up for your own libraries and BOMs")])
     return 0

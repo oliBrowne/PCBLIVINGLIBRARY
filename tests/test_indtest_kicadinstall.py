@@ -346,3 +346,21 @@ def test_status_names_a_plan_from_a_newer_ecadlib_and_does_not_count_it(tmp_path
     s = WS.status(tmp_path / "ws")
     assert not s["plans"] and s["totals"]["parts"] == 0, s["plans"]
     assert any(p.startswith("librarian/demo_bom_demo/plan.json: made by ecadlib 9.9.9") for p in s["problems"]), s["problems"]
+
+
+# T070
+@lite
+def test_next_commands_of_demo_and_init_survive_a_space_in_the_folder(tmp_path):
+    import shlex
+    from ecadlib import firstrun as FR
+    if os.name != "posix":                       # POSIX shell rules; cmd.exe quoting is list2cmdline's
+        return
+    cmds = [c for c, _ in FR.next_steps({"workspace": "my ws", "tool": "both"})]
+    lib = next(shlex.split(c) for c in cmds if c.startswith("ecadlib librarian"))
+    assert lib[lib.index("-o") + 1:] == ["my ws/librarian/YOUR_BOM"], lib
+    kx = next(shlex.split(c) for c in cmds if c.startswith("ecadlib kicad-export"))
+    assert kx[2] == "my ws/librarian/YOUR_BOM/plan.json" and kx[kx.index("-o") + 1] == "my ws/kicad/YOUR_BOM", kx
+    shutil.copytree(_demo(), tmp_path / "my demo")
+    rc, out, _ = _run(["demo", "-o", "my demo"], cwd=tmp_path, env={"ECADLIB_HOME": str(tmp_path / "h"), "COLUMNS": "250"})
+    status = next(ln.split("  #")[0].strip() for ln in out.splitlines() if ln.strip().startswith("ecadlib status"))
+    assert rc == 0 and shlex.split(status)[2:] == ["--workspace", "my demo"], status
