@@ -258,3 +258,13 @@ def test_t101_fp_edit_records_who_you_are():
                 os.environ.pop("ECADLIB_USER", None)
             else:
                 os.environ["ECADLIB_USER"] = old
+
+
+# ------------------------------------------------------------------ T102: docs/librarian.md named librarian_state v2
+def test_t102_docs_name_the_current_librarian_state_version():
+    import re
+    from ecadlib import migrate as MG
+    doc = (REPO / "docs" / "librarian.md").read_text(encoding="utf-8")
+    said = re.search(r"`librarian_state` \(now v(\d+)\)", doc)
+    assert said and int(said.group(1)) == MG.KINDS["librarian_state"].current, said and said.group(0)
+    assert "The one so far" not in doc

@@ -158,7 +158,7 @@ Tested offline only, with fake and recorded answers (`tests/test_crosscheck.py`)
 ## Updates never break a library: `migrate.py`, `library.lock.json` and `ecadlib rebuild`
 
 **Versioned files.** Everything ecadlib writes and reads back later has a schema version, one integer per kind of file
-(`ecadlib/migrate.py`, `KINDS`): `plan` (plan.json), `librarian_state` (now v2), `approvals_audit`, `agent`
+(`ecadlib/migrate.py`, `KINDS`): `plan` (plan.json), `librarian_state` (now v3), `approvals_audit`, `agent`
 and `queue` (files an older ecadlib's library agent left in `<workspace>/agent/`), `http_cache`, `rules` (ecadlib.toml),
 `approvals_policy` (approvals.json) and `lock`. Files other code iterates (a plan is a JSON list) keep the
 version in the folder's `ecadlib_schema.json`; files a person edits and the lock carry a top-level `schema_version`
@@ -166,9 +166,10 @@ version in the folder's `ecadlib_schema.json`; files a person edits and the lock
 
 * **Older** files are migrated: in memory when they are only read (`migrate.read`), on disk when a command writes the
   folder anyway (the librarian, `ecadlib migrate`), after a copy to `<folder>/.ecadlib_backup/<kind>-v<old>-<time>/`.
-  Migrations are registered in `MIGRATIONS` and are safe to run twice. The one so far, `librarian_state` v1 -> v2,
+  Migrations are registered in `MIGRATIONS` and are safe to run twice. Two so far: `librarian_state` v1 -> v2
   records each footprint's name and geometry hash (what `fp_share` would compute from its `.kicad_mod` anyway; a
-  footprint shared by name only is left unchecked so the librarian re-checks it).
+  footprint shared by name only is left unchecked so the librarian re-checks it), and v2 -> v3 computes each recorded
+  hash again, because the hash now covers pad shapes and holes (one whose `.kicad_mod` is gone is dropped).
 * **Newer** files are refused with one line, never misread: `librarian/board/plan.json was made by ecadlib 0.5.0 (plan
   schema 2; this ecadlib 0.3.0 reads up to 1): upgrade ecadlib (pip install -U ecadlib)`. Checked when the web UI / MCP
   workspace opens, by the librarian, HTTP cache, rules and approvals loaders. A kind only a newer ecadlib
