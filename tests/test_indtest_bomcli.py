@@ -310,3 +310,25 @@ def test_own_error_handlers_use_the_shared_wording(tmp_path, monkeypatch):
             except SystemExit as x:
                 code = x.code
         assert code == 2 and "hint:" in e.getvalue() and "Error:" not in e.getvalue(), (argv, code, e.getvalue())
+
+
+# T128: every option of init, doctor, review, keys set, setup and start is named on docs/command-line.md
+@lite
+def test_command_line_md_names_every_option(tmp_path):
+    import re
+    doc = (ROOT / "docs" / "command-line.md").read_text(encoding="utf-8")
+    for cmd in (["init"], ["doctor"], ["review"], ["keys", "set"], ["setup"], ["start"]):
+        p = cli(*cmd, "-h", cwd=tmp_path, home=tmp_path / "home")
+        assert p.returncode == 0, p.stderr
+        opts = set(re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]*)", p.stdout.split("\n\n")[0])) - {"--help"}
+        assert not [o for o in opts if o not in doc], (cmd, sorted(o for o in opts if o not in doc))
+
+
+# T130: where-used -h names only commands that exist (`ecadlib lifecycle` is not one)
+@lite
+def test_where_used_help_names_real_commands(tmp_path):
+    import re
+    from ecadlib import cli as C
+    p = cli("where-used", "-h", cwd=tmp_path, home=tmp_path / "home")
+    named = set(re.findall(r"`ecadlib ([a-z][a-z0-9-]*)", " ".join(p.stdout.split())))
+    assert named and not named - set(C.COMMANDS), named

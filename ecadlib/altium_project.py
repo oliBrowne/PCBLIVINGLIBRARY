@@ -39,7 +39,7 @@ the Design Item ID, else LibRef+value+footprint. Against a library (--plan libra
 projects but missing from the library, library parts used nowhere and projects using a duplicate instead of the keeper.
 Without a library: projects using an older revision of an Altium 365 item than another project does (same ItemGUID,
 lower '-N' revision suffix on the Design Item ID, or simply different RevisionGUIDs), and parts whose lifecycle is
-NRND / last time buy / obsolete (lifecycle_state.json from `ecadlib lifecycle`, a plan item's lifecycle, or the
+NRND / last time buy / obsolete (lifecycle_state.json from `ecadlib upkeep`, a plan item's lifecycle, or the
 component's own 'Lifecycle Status' / 'Part Status' parameter)."""
 import argparse, csv, json, os, re, struct, sys
 from pathlib import Path, PureWindowsPath
@@ -1103,7 +1103,7 @@ def where_used_main(argv=None):
     ap.add_argument("--plan", help="librarian plan.json to compare against")
     ap.add_argument("--lib", action="append", default=[], help="library folder / .DbLib / .SchLib (repeatable)")
     ap.add_argument("--a365", help="check-a365 state JSON (Altium 365 components)")
-    ap.add_argument("--lifecycle", help="lifecycle_state.json from `ecadlib lifecycle`")
+    ap.add_argument("--lifecycle", help="lifecycle_state.json from `ecadlib upkeep` (or python -m ecadlib.lifecycle)")
     ap.add_argument("-o", "--out", default="out/where_used", help="report stem (.md, .csv, _flags.csv, .json)")
     a = ap.parse_args(argv)
     try:
