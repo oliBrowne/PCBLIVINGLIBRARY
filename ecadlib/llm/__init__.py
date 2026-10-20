@@ -188,16 +188,17 @@ def registered(ref):
 
 def price(ref):
     """(input, output) $ per MTok for a model in use, or None when unknown. Claude: datasheet.PRICES. A local
-    endpoint: (0, 0). Others: what the profile says (rules override, or detected from OpenRouter's /models)."""
+    endpoint: (0, 0), unless [ai.profiles] sets price_in and price_out (a paid gateway on your network). Others: what
+    the profile says (rules override, or detected from OpenRouter's /models)."""
     from .. import datasheet as D
     if ref in D.PRICES:
         return D.PRICES[ref]
     r = _REG.get(ref)
     if not r:
         return None
-    if r["endpoint"]["local"]:
-        return (0.0, 0.0)
     p = r["profile"]
+    if r["endpoint"]["local"] and not p.get("price_set"):   # local = on your network, not free: [ai.profiles] wins
+        return (0.0, 0.0)
     if p.get("price_in") is not None and p.get("price_out") is not None:
         try:
             got = (float(p["price_in"]), float(p["price_out"]))

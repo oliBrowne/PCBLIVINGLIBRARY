@@ -33,7 +33,7 @@ from pathlib import Path, PureWindowsPath
 
 from . import altium_lib as AL, sexpr
 from . import sheetsafe as SS
-from .kicad_index import norm_mpn
+from .kicad_index import norm_mpn, parse_value
 from .fsutil import write_text_atomic
 
 DEFAULT_SUFFIXES = [
@@ -58,6 +58,13 @@ def load_config(path=None, base=None):
     cfg = {**CONFIG, **raw}
     cfg["patterns"] = [re.compile(p, re.I) for p in (DEFAULT_SUFFIXES if cfg["default_suffixes"] else []) + list(cfg["strip_suffixes"])]
     return cfg
+
+
+def _name_mpn(name, value):
+    """The MPN of a part that has none: its name (a DbLib Part Number) when it is named after its part number
+    ('LM358DR', Value LM358DR); none for a passive named by its value ('CAP-0603-2.2u', Value 2.2u), as the key strips
+    the punctuation and 2.2u would be 22u."""
+    return "" if parse_value(str(value or "")) is not None else name
 
 
 def mpn_key(s, cfg=None):
@@ -233,7 +240,7 @@ class Collector:
         base = Path(base)
         for i, it in enumerate(items):
             par = {p["name"]: p["value"] for p in it.get("parameters") or []}
-            mpn = next((par[c] for c in MPN_COLS if par.get(c)), it["name"])
+            mpn = next((par[c] for c in MPN_COLS if par.get(c)), None) or _name_mpn(it["name"], par.get("Value"))
             self.parts.append({"name": it["name"], "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "plan", "where": "plan",
                                "plan_index": i, "status": it.get("status", ""), "symbol": (it.get("symbol") or {}).get("ref") or "",
                                "footprint": (it.get("footprint") or {}).get("ref") or "", "source": it.get("source") or {}})
@@ -315,7 +322,8 @@ class Collector:
                 pn = str(r.get("Part Number") or "").strip()
                 if not pn:
                     continue
-                mpn = next((str(r[c]) for c in MPN_COLS if str(r.get(c) or "").strip()), pn)
+                mpn = next((str(r[c]) for c in MPN_COLS if str(r.get(c) or "").strip()), None) or (
+                    _name_mpn(pn, r.get("Value")) if any(c in r for c in MPN_COLS) else pn)   # no MPN column: Part Number is it
                 self.parts.append({"name": pn, "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "dblib",
                                    "where": f"{via or f} [{t}]", "status": "", "symbol": str(r.get("Library Ref") or ""),
                                    "footprint": str(r.get("Footprint Ref") or ""), "source": {}})
@@ -325,10 +333,14 @@ class Collector:
         component nodes (with parameters)."""
         data = json.loads(Path(f).read_text(encoding="utf-8"))
         nodes = data if isinstance(data, list) else [{"name": k, **(v if isinstance(v, dict) else {})} for k, v in data.items()]
+        plan = {p["name"]: p["mpn"] for p in self.parts if p["origin"] == "plan"}
         for n in nodes:
             par = n["parameters"] if isinstance(n.get("parameters"), dict) else \
                 {p["name"]: p["value"] for p in ((n.get("details") or {}).get("parameters") or [])}
-            mpn = next((par[c] for c in MPN_COLS if par.get(c)), n["name"])
+            # no MPN parameter: a check-a365 state (names only) is keyed by the plan's part names, so a name the plan has
+            # is that part and takes its MPN (none for a passive named by value: 'CAP-0603-2.2u' is no MPN); only a
+            # name the plan does not have is taken as the MPN
+            mpn = next((par[c] for c in MPN_COLS if par.get(c)), plan.get(n["name"], n["name"]))
             self.parts.append({"name": n["name"], "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "a365", "where": str(f),
                                "status": "released", "symbol": "", "footprint": "", "source": {}})
 
@@ -452,7 +464,7 @@ def merge(items, groups, base, kinds=("mpn", "footprint", "symbol"), who="ecadli
 def remap_bom(bom, mapping, out, columns=None):
     """Copy of the BOM with LibRef / Footprint cells mapped to the keepers (other columns untouched). columns: the
     rules' [bom] columns, as read_bom uses them (None: from the ecadlib.toml found from the BOM's folder). The copy
-    keeps a CSV's delimiter."""
+    keeps a CSV's delimiter, and a workbook's hidden columns under a '<hidden> ' header (read_bom leaves them out)."""
     from . import bom_triage as T
     import pandas as pd
     p = Path(bom)
@@ -462,10 +474,13 @@ def remap_bom(bom, mapping, out, columns=None):
             columns = RU.bom_columns(RU.load(None, start=p.parent))
         except Exception as e:                    # a broken ecadlib.toml: the fuzzy header guess alone
             print(f"  warning: rules for {p.name} not loaded ({e}); BOM columns guessed", file=sys.stderr)
-    raw = (T._read_excel(p) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else T._read_csv(p)).fillna("")   # the BOM sheet,
-                                                                                  # as read_bom picks it (not a cover sheet)
-    hdr = T.header_row(raw, columns)
-    headers = [str(h).strip() for h in raw.iloc[hdr]]
+    raw = (T._read_excel(p, columns, keep_hidden=True) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls")   # the BOM sheet,
+           else T._read_csv(p)).fillna("")         # as read_bom picks it (not a cover sheet), hidden columns kept in the copy
+    view = raw.copy()
+    for j in raw.attrs.get("hidden_cols") or ():   # ... but not read as LibRef / Footprint, as read_bom does not read them
+        view.iloc[:, j] = ""
+    hdr = T.header_row(view, columns)
+    headers = [str(h).strip() for h in view.iloc[hdr]]
     cols = T.apply_columns(T.map_headers(headers), headers, columns)
     m = {k: {r["from"]: r["to"] for r in mapping if r["kind"] == k and r.get("file") != ""}   # "": a keeper the merge
          for k in ("symbol", "footprint")}                                                # did not adopt, cell kept
@@ -480,6 +495,8 @@ def remap_bom(bom, mapping, out, columns=None):
             if ref in m[kind]:
                 raw.iat[i, j] = (f"{lib}:" if lib else "") + m[kind][ref]
                 n += 1
+    for j in raw.attrs.get("hidden_cols") or ():   # a CSV cannot hide a column: '<hidden> MPN', never read as the MPN
+        raw.iat[hdr, j] = f"{T.HIDDEN_HEADER} {str(raw.iat[hdr, j]).strip()}".rstrip()
     out = Path(out)
     SS.frame(raw).to_csv(out, header=False, index=False, sep=raw.attrs.get("delimiter") or ",", encoding="utf-8-sig")
     return out, n

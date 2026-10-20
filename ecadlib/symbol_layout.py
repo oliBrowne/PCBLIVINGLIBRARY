@@ -159,7 +159,7 @@ def classify(pin):
 
 
 def _natural(s):
-    return [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", str(s))]
+    return [int(x) if x.isdecimal() else x for x in re.split(r"(\d+)", str(s))]
 
 
 def stack_key(name):

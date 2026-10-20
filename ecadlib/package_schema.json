@@ -1139,10 +1139,7 @@
           "package_type": {
             "enum": [
               "chip",
-              "molded",
-              "gullwing",
-              "qfp",
-              "qfn"
+              "molded"
             ]
           }
         }
@@ -1159,6 +1156,24 @@
               "inner_span"
             ]
           }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_type": {
+            "enum": [
+              "gullwing",
+              "qfp",
+              "qfn"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "terminal_length"
         ]
       }
     },

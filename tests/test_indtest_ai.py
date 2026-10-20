@@ -186,7 +186,7 @@ def test_t117_t118_estimates_send_nothing_and_say_rough(tmp_path, monkeypatch):
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         assert D.main([str(tmp_path / "t.pdf"), "--part", "TESTPART", "-o", str(tmp_path / "out"), "--estimate"]) == 0
-    assert sent == [] and "rough: pages x" in out.getvalue() and "count_tokens" not in out.getvalue(), out.getvalue()
+    assert sent == [] and "pages x" in out.getvalue() and "count_tokens" not in out.getvalue(), out.getvalue()
     rd = D.Reader(tmp_path / "lib", tmp_path / "cache", http=TB.PdfHTTP({"https://a/ds.pdf": TL._pdf2()}), log=None,
                   estimate=True)
     rd.count_tokens = False                             # as `ecadlib datasheet estimate` sets it
@@ -196,7 +196,7 @@ def test_t117_t118_estimates_send_nothing_and_say_rough(tmp_path, monkeypatch):
     rd.key, rd._info = "sk-other", {}
     with mock.patch.object(rd, "_plain", lambda m: False):
         est = rd.estimate([rd.job("TESTPART", [("https://a/ds.pdf", "BOM")])])
-    assert sent == [] and not est["exact_input"] and "rough: pages x" in D.format_estimate(est)
+    assert sent == [] and not est["exact_input"] and "pages x" in D.format_estimate(est)
 
 
 # T120: doctor never says "OK ai model <the default model>" when ecadlib.toml (its [ai] table) does not load

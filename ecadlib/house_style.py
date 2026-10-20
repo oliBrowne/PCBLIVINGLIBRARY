@@ -130,7 +130,7 @@ def active(rules=None, start="."):
 def pin_low(name):
     """-> (base name, notation) for an active-low pin name, else (name, None)."""
     n = str(name or "").strip()
-    if "̅" in n:
+    if re.fullmatch("(?:[^̅]̅)+", n):     # every character overlined; R/B̅ (a bar over B only) is not
         return n.replace("̅", ""), "overbar"
     if len(n) >= 4 and re.fullmatch(r"(?:[^\\]\\)+", n):
         return n.replace("\\", ""), "overbar"

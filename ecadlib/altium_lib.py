@@ -1249,24 +1249,36 @@ def _main(argv=None):
         return
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     if a.cmd == "pcblib":
+        from jsonschema import ValidationError
         from . import footprint_gen as F, rules as RU
         rules = RU.load(a.rules, start=out)
         lay = RU.layers(rules)
-        fps = []
+        fps, bad = [], 0
         for sp in a.specs:
-            spec = json.loads(Path(sp).read_text())
-            F.validate(spec)
-            fp, rep = footprint_from_spec(spec, RU.density_for(spec, rules, a.density))
+            spec = None
+            try:                                          # UTF-8 (Notepad's BOM too), not the locale's
+                spec = json.loads(Path(sp).read_text(encoding="utf-8-sig"))
+                F.validate(spec)
+                fp, rep = footprint_from_spec(spec, RU.density_for(spec, rules, a.density))
+            except (ValueError, ValidationError) as e:    # a spec that doesn't add up: say why, go on with the next
+                if isinstance(e, ValidationError):
+                    where = "/".join(map(str, e.absolute_path))
+                    e = f"the package spec isn't valid{' at ' + where if where else ''}: {e.message}"
+                print(f"{spec.get('name', sp) if isinstance(spec, dict) else sp}: not written: {e}", file=sys.stderr)
+                bad += 1
+                continue
             fps.append(fp)
             if not a.single:
                 path = write_pcblib(out / f"{file_stem(fp['name'])}.PcbLib", [fp], lay)
                 print(f"{fp['name']:<44} {len(fp['pads']):>3} pads {len(fp['tracks']):>3} tracks {len(fp['fills'])} fills "
                       f"{len(fp['regions'])} regions -> {path} ({path.stat().st_size} B)")
-        if a.single:
+        if a.single and fps:
             print(f"{len(fps)} footprints -> {write_pcblib(out / a.single, fps, lay)}")
+        if bad:
+            sys.exit(f"{bad} footprint spec(s) failed: fix them before using the footprints")
     else:
         for f in a.symbols:
-            sym = symbol_from_json(json.loads(Path(f).read_text()))
+            sym = symbol_from_json(json.loads(Path(f).read_text(encoding="utf-8-sig")))
             path = write_schlib(out / f"{file_stem(sym['name'])}.SchLib", [sym])
             print(f"{sym['name']:<24} {sum(1 for p in sym['prims'] if p[0] == 'pin'):>3} pins -> {path}")
 

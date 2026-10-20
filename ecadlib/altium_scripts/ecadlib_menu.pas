@@ -5,6 +5,9 @@
                       Altium 365 when ecadlib.toml names a workspace) and reinstalls the database library
     CheckProjectBOM   checks the BOM of the focused project, opens the report and offers to fill the library
     OpenReviewQueue   opens the ecadlib web UI at the review queue (starts it when it is not running)
+  FinishBackgroundJob (not a menu entry) puts a job the dialog left running into the library: Keep working closes the
+                    dialog so Altium stays free, and ecadlib calls this through X2.EXE -RScriptingSystem:RunScript when
+                    the job is done (`ecadlib altium-menu wake`). Jobs waiting for it are listed in waiting.txt.
   ecadlib_build.pas in this project adds BuildLibrariesInAltium (File > Run Script) and BuildLibraries(Folder),
   which Reinstall calls so Altium writes the library files itself.
 
@@ -55,6 +58,75 @@ Begin
     Ini := TIniFile.Create(Job + '\result.ini');
     Result := Ini.ReadString('result', Key, '');
     Ini.Free;
+End;
+
+Function Asked(Job : String; Key : String) : String;
+{ What the job's request.ini says (the dialog reads a background job back from it). }
+Var
+    Ini : TIniFile;
+Begin
+    Ini := TIniFile.Create(Job + '\request.ini');
+    Result := Ini.ReadString('request', Key, '');
+    Ini.Free;
+End;
+
+Procedure MarkJob(Job : String; Name : String);
+{ An empty marker file in the job folder: background.txt (call Altium back when done), finished.txt (Altium put it in). }
+Var
+    L : TStringList;
+Begin
+    L := TStringList.Create;
+    L.Add(Name);
+    L.SaveToFile(Job + '\' + Name);
+    L.Free;
+End;
+
+Procedure AddWaiting(Job : String);
+{ Keep working: the job goes on waiting.txt, so FinishBackgroundJob (or the next menu entry) can put it in later. }
+Var
+    L : TStringList;
+Begin
+    L := TStringList.Create;
+    If FileExists(Here + 'waiting.txt') Then
+        L.LoadFromFile(Here + 'waiting.txt');
+    L.Add(Job);
+    L.SaveToFile(Here + 'waiting.txt');
+    L.Free;
+End;
+
+Function DoneWaitingJob : String;
+{ The first job on waiting.txt that ecadlib has finished and Altium has not put in yet ('' = none). It is taken off
+  the list, and so are jobs that are put in already or gone; the ones still running stay. }
+Var
+    L : TStringList;
+    Keep : TStringList;
+    i : Integer;
+    J : String;
+Begin
+    Result := '';
+    If Not FileExists(Here + 'waiting.txt') Then
+        Exit;
+    L := TStringList.Create;
+    Keep := TStringList.Create;
+    L.LoadFromFile(Here + 'waiting.txt');
+    For i := 0 To L.Count - 1 Do
+    Begin
+        J := Trim(L.Strings[i]);
+        If (J <> '') And DirectoryExists(J) Then
+            If Not FileExists(J + '\finished.txt') Then
+            Begin
+                If (Result = '') And FileExists(J + '\exit.txt') Then
+                    Result := J
+                Else
+                    Keep.Add(J);
+            End;
+    End;
+    If Keep.Count > 0 Then
+        Keep.SaveToFile(Here + 'waiting.txt')
+    Else
+        DeleteFile(Here + 'waiting.txt');
+    L.Free;
+    Keep.Free;
 End;
 
 Function StartJob(Action : String) : String;
@@ -516,4 +588,15 @@ Begin
     End;
     If Answer(Job, 'status') <> 'ok' Then
         ShowResult(Title, Job, '');
+End;
+
+Procedure FinishBackgroundJob;
+{ ecadlib runs this in Altium (altium-menu wake) when a job the dialog left running is done: the dialog opens on its
+  result and the part goes into the library as if you had waited. Nothing happens when no job is waiting. }
+Var
+    J : String;
+Begin
+    J := DoneWaitingJob;
+    If J <> '' Then
+        OpenFinished(J);
 End;

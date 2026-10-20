@@ -201,7 +201,10 @@ sha256, model, provider and prompt/schema version (`datasheet.schema_version()`)
 the cached model answers only: a model is never called) and reports per part and file *identical*, *normalised* (same
 after blanking the `.PcbLib` header's DATE/TIME, the only wall-clock value ecadlib writes; GUIDs and unique ids are
 derived from content) or *DRIFT*, plus inputs that changed (BOM, rules, a cached response, a `--lib` file) and parts
-built by another ecadlib version. Exit 0 / 1 (drift) / 2 (no lock, BOM missing). `ecadlib rebuild LIB` rebuilds in
+built by another ecadlib version. Exit 0 / 1 (drift) / 2 (no lock, BOM missing, or a refused `--keep`). `--keep DIR`
+puts the copy in `DIR/<library name>`, which must not be, hold or sit inside the library or anything the lock reads
+(BOM, HTTP cache, `--lib` folders and files, rules file); an existing `DIR/<library name>` is replaced only when an
+earlier `--check --keep` made it (it holds `.ecadlib-rebuild-copy`). `ecadlib rebuild LIB` rebuilds in
 place. Workspace `rebuild_check(bom)`, MCP tool `rebuild_check`. Tested: the 5-part BOM rebuilds with 0 drift; a
 cached KiCad footprint edited under the lock is reported as a changed input and a drifted `.PcbLib`; a changed BOM is
 reported; a datasheet part rebuilds from its cached answer while a fake API server records zero calls.

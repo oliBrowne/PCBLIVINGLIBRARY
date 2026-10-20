@@ -107,7 +107,8 @@ def output_config(model, effort, schema):
 
 
 def price_of(model):
-    """(input, output) $ per MTok: PRICES for Claude, else what ecadlib.llm knows (a local endpoint is $0), else None."""
+    """(input, output) $ per MTok: PRICES for Claude, else what ecadlib.llm knows (a local endpoint is $0 unless
+    [ai.profiles] sets price_in / price_out), else None."""
     p = PRICES.get(model) or PRICES.get(base_model(model))
     if p:
         return p
@@ -173,6 +174,12 @@ def settings(rules=None):
     """[datasheet] settings from the library rules (rules.py DEFAULTS has the same keys), over SETTINGS."""
     got = (rules or {}).get("datasheet") if isinstance(rules, dict) else None
     return {**SETTINGS, **{k: v for k, v in (got or {}).items() if k in SETTINGS and v not in (None, "")}}
+
+
+def cap_chosen(rules=None):
+    """The rules file itself sets [datasheet] max_cost_usd (rules.load records the keys it set): a cap of 10 there is
+    the person's, not the default one, though both read 10 once merged over the defaults."""
+    return isinstance(rules, dict) and "datasheet.max_cost_usd" in (rules.get("_set") or ())
 
 
 class DatasheetError(Exception):
@@ -615,24 +622,48 @@ def _non_finite(v, path="$"):
 
 
 # A nominal printed with its tolerance: "6.5±0.2", "6.5 +/- 0.2", "3.56 +0.15/-0.25", "0.74 +0.05 -0.08"
+_UNIT = r"\s*(mm|mils?|in|inch(?:es)?|\")?\.?\s*"      # a unit written after the value, as _wire_val reads it
 _TOL = re.compile(r"\s*([-+]?\d*\.?\d+)\s*(?:(?:±|\+/-|\+-)\s*(\d*\.?\d+)|\+\s*(\d*\.?\d+)\s*/?\s*[-\u2212\u2013]\s*(\d*\.?\d+))"
-                  r"\s*(?:mm|mil|in|inch)?\.?\s*", re.I)
+                  + _UNIT, re.I)
 
 
 def _toleranced(v):
     """A dimension printed as nominal and tolerance -> {min, nom, max}; None when v is not one. LP38693MP-1.8 (live
     benchmark 2026-10-19): its drawing prints 6.5±0.2 and 3.56 +0.15/-0.25, and the read left them blank."""
+    return _toleranced_unit(v)[0]
+
+
+def _toleranced_unit(v):
+    """_toleranced(v) and the unit written after it ("6.5±0.2 mm" -> mm; None when none is written)."""
     t = str(v or "").replace(",", ".")
-    r = re.fullmatch(r"\s*(\d*\.?\d+)\s*(?:~|\.\.|to)\s*(\d*\.?\d+)\s*(?:mm|mil|in|inch)?\.?\s*", t, re.I)
+    r = re.fullmatch(r"\s*(\d*\.?\d+)\s*(?:~|\.\.|to)\s*(\d*\.?\d+)" + _UNIT, t, re.I)
     if r and float(r.group(1)) < float(r.group(2)):       # "6.3~6.7": a range printed in one cell
         lo, hi = float(r.group(1)), float(r.group(2))
-        return {"min": lo, "nom": round((lo + hi) / 2, 6), "max": hi}
+        return {"min": lo, "nom": round((lo + hi) / 2, 6), "max": hi}, _unit_name(r.group(3))
     m = _TOL.fullmatch(t)
     if not m:
-        return None
+        return None, None
     nom = float(m.group(1))
     lo, hi = (float(m.group(2)),) * 2 if m.group(2) else (float(m.group(4)), float(m.group(3)))
-    return {"min": round(nom - lo, 6), "nom": nom, "max": round(nom + hi, 6)}
+    return {"min": round(nom - lo, 6), "nom": nom, "max": round(nom + hi, 6)}, _unit_name(m.group(5))
+
+
+def _wire_dim(d, n):
+    """One dims row as the model wrote it -> {min, nom, max}. Raises DatasheetError. The first read (from_wire) and
+    the cross-check's second read (crosscheck.parse) both read a row this way, so the two cannot drift apart."""
+    def same_unit(k, u):                              # "0.016 in" in a row whose unit is mm: which one is it?
+        if u and u != _unit_name(d.get("unit")):
+            raise DatasheetError(f"response {n}.{k} {d.get(k)!r} is written in {u!r} but the dimension's unit is "
+                                 f"{d.get('unit')!r}; rejected")
+    for k in ("nom", "min", "max"):                   # "6.5±0.2" / "6.3~6.7" printed in one cell
+        tol, u = _toleranced_unit(d.get(k))
+        if tol:
+            same_unit(k, u)
+            return tol
+    got = {k: _wire_val(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")}
+    for k, (_, u) in got.items():
+        same_unit(k, u)
+    return {k: x for k, (x, _) in got.items()}
 
 
 def _nullable(s):
@@ -710,16 +741,7 @@ def from_wire(ext):
         if not isinstance(d, dict) or d.get("name") not in WIRE_DIMS:
             continue
         n = d["name"]
-        tol = next((t for t in (_toleranced(d.get(k)) for k in ("nom", "min", "max")) if t), None)
-        if tol:                                       # "6.5±0.2" / "6.3~6.7" printed in one cell
-            vals = tol
-        else:
-            got = {k: _wire_val(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")}
-            for k, (x, u) in got.items():             # "0.016 in" in a row whose unit is mm: which one is it?
-                if u and u != _unit_name(d.get("unit")):
-                    raise DatasheetError(f"response {n}.{k} {d.get(k)!r} is written in {u!r} but the dimension's unit is "
-                                         f"{d.get('unit')!r}; rejected")
-            vals = {k: x for k, (x, _) in got.items()}
+        vals = _wire_dim(d, n)
         new = {"label": d.get("label", ""), **vals, "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
         if n in dims and any(dims[n].get(k) != new.get(k) for k in ("min", "nom", "max", "unit")):
             raise DatasheetError(f"response gives {n} twice with different values ({_dimtxt(dims[n])} and {_dimtxt(new)}): "
@@ -728,8 +750,12 @@ def from_wire(ext):
     unres = []
     for u in pkg.get("unresolved") or []:                # "body_length min/max (printed as 6.5±0.2)": the read saw it
         m = re.match(r"\s*([a-z_.]+)\b[^(]*\(printed as ([^),;]+)", str(u))
-        tol = m and m.group(1) in dims and _toleranced(m.group(2))
-        if tol and dims[m.group(1)].get("unit") and tol["nom"] == (dims[m.group(1)].get("nom") or tol["nom"]):
+        tol, tu = _toleranced_unit(m.group(2)) if m and m.group(1) in dims else (None, None)
+        merge = tol and dims[m.group(1)].get("unit") and tol["nom"] == (dims[m.group(1)].get("nom") or tol["nom"])
+        if merge and tu and tu != _unit_name(dims[m.group(1)].get("unit")):   # one never merged stays for review
+            raise DatasheetError(f"response {m.group(1)} is printed as {m.group(2)!r}, in {tu!r}, but the dimension's "
+                                 f"unit is {dims[m.group(1)].get('unit')!r}; rejected")
+        if merge:
             dims[m.group(1)].update(tol)
         else:
             unres.append(u)
@@ -1134,6 +1160,12 @@ def _dim(d):
         return None
 
 
+def _listed(spec):
+    """The pads pin_positions lists; none when it has another shape (the schema check reports that)."""
+    pos = spec.get("pin_positions")
+    return [p for p in pos if isinstance(p, dict)] if isinstance(pos, list) else []
+
+
 def sanity(spec, review):
     t, n, e = spec.get("package_type"), spec.get("pin_count"), spec.get("pitch")
     g = lambda k: _dim(spec.get(k))
@@ -1165,9 +1197,13 @@ def sanity(spec, review):
         if b and b[2] >= e:
             review.append(f"terminal_width max {b[2]} >= pitch {e}: leads would touch")
         if t == "gullwing":
-            if n % 2:
+            if n % 2 and not spec.get("pin_positions") and not spec.get("tab"):   # SOT-23, SOT-223: listed pads
                 review.append(f"pin_count {n} is odd for a dual-row package")
-            rows, low = [("pin rows", n // 2, "body_length")], 0.6
+            pos = _listed(spec)                     # listed pads: the longer row in pitches, a cut lead included
+            offs = [[p["offset"] for p in pos if p.get("side") == s and isinstance(p.get("offset"), (int, float))]
+                    for s in "LR"]                  # (TO-263-5: 5 + tab; TO-263-2: leads 1 and 3 span 3 pitches)
+            per = max(round((max(o) - min(o)) / e) + 1 if o else 0 for o in offs) if pos else n // 2
+            rows, low = [("pin rows", per, "body_length")], 0.6
         else:
             nlr = spec.get("pins_left_right", n // 4)
             ntb = spec.get("pins_top_bottom", (n - 2 * nlr) // 2)
@@ -1231,7 +1267,7 @@ def check_pins(spec, ext, review):
         if n is not None and len(set(nums)) != n:
             review.append(f"symbol: {len(set(nums))} ball names, pin_count {n}")
         return
-    bad = [x for x in nums if not x.isdigit()]
+    bad = [x for x in nums if not x.isdecimal()]      # not isdigit(): '①' and '²' pass it, but int() reads neither
     if bad:
         review.append(f"symbol: non-numeric pin numbers {bad} (footprint pads are 1..N, exposed pad N+1)")
     if n is None:
@@ -1240,7 +1276,7 @@ def check_pins(spec, ext, review):
     if rows != n:
         review.append(f"pin count: drawing says {n}, pin table has {rows}")
     want = {str(i) for i in range(1, n + 1)} | ({str(n + 1)} if spec.get("exposed_pad") else set())
-    key = lambda s: (not s.isdigit(), int(s) if s.isdigit() else 0, s)
+    key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)
     miss, extra = sorted(want - set(nums), key=key), sorted(set(nums) - want, key=key)
     if miss:
         review.append(f"symbol: pins missing {miss} (expected 1..{n}{' + EP ' + str(n + 1) if spec.get('exposed_pad') else ''})")
@@ -1249,7 +1285,7 @@ def check_pins(spec, ext, review):
 
 
 # ---------------------------------------------------------------- self-check: the extraction against itself and family norms
-STD_PITCH = (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.8, 0.95, 1.0, 1.1, 1.25, 1.27, 1.5, 1.7, 1.778, 1.9, 2.0, 2.29, 2.5, 2.54,
+STD_PITCH = (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.8, 0.95, 1.0, 1.1, 1.25, 1.27, 1.5, 1.7, 1.778, 1.9, 2.0, 2.29, 2.3, 2.5, 2.54,
              3.0, 3.5, 3.81, 3.96, 5.0, 5.08)
 FAMILY_CODES = re.compile(r"(T?SOT|SSOT|SuperSOT|SOD|TO|DO|SC|SMA|SMB|SMC|D?PAK|DO-?\d+)\d*", re.I)   # first number is the outline, not pins
 # package_type -> (pitch mm range or None, longest body side mm range, pin_count range). A family the schema gains
@@ -1263,7 +1299,7 @@ def name_facts(name):
     """What a KiCad-style footprint name states: pin count, exposed pad, pitch, body and EP size (mm)."""
     head = name.split("_")[0]
     toks = head.split("-")
-    nums = [t for t in toks[1:] if t.isdigit()]
+    nums = [t for t in toks[1:] if t.isdecimal()]      # not isdigit(): int() reads no "⑤" (DS2-14)
     fam = toks[0]
     if FAMILY_CODES.fullmatch(fam):
         count = int(nums[1]) if len(nums) > 1 else None
@@ -1296,7 +1332,9 @@ def self_check(spec, ext, review):
     t, n, e = spec.get("package_type"), spec.get("pin_count"), spec.get("pitch")
     f = name_facts(spec.get("name") or "")
     tab = 1 if spec.get("tab") else 0
-    if f["count"] is not None and n is not None and f["count"] not in (n, n + tab):
+    # KiCad's names count the leads without the tab (TO-252-2: leads 1 and 3 + tab 2), as footprint_rules._name_rules
+    leads = len({str(p.get("number")) for p in _listed(spec)})
+    if f["count"] is not None and n is not None and f["count"] not in (n, n + tab) and not (tab and f["count"] == leads):
         add(f"name {spec['name']} says {f['count']} pins, pin_count is {n}")
     pins = [p["num"] for p in ext.get("pins", [])]
     if n is not None and pins:
@@ -1406,15 +1444,21 @@ def ordering_check(pkg, facts, review):
 
 def _pin_count_from(spec, ext):
     """A read that left pin_count blank (UCC25800, UCC256301: live benchmark 2026-10-19) -> (n, how) from the package
-    name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "")."""
+    name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "").
+    The name counts the leads (name_facts: SOT-223's 223 is the outline), so the pin table may have one number more:
+    a tab with a number of its own (TO-252-2: leads 1 and 3, tab 2)."""
     m = re.match(r"[A-Za-z]+[A-Za-z0-9]*?-(\d+)(?:-(\d+)(?=[_]|$))?(?=[-_]|$)", str(spec.get("name") or ""))
     if m and m.group(2) and int(m.group(2)) > int(m.group(1)):
         return None, ""                               # SOIC-14-16 (UCC256301): 14 pins on 16 places, which ones isn't said
-    by_name = int(m.group(1)) if m else None
+    by_name = name_facts(str(spec.get("name") or ""))["count"]
     nums = {str(p.get("num")) for p in ext.get("pins") or [] if str(p.get("num") or "").isdigit()}
     by_pins = len(nums) - (1 if spec.get("exposed_pad") and str(len(nums)) in nums else 0) if nums else None
-    if by_name and by_pins and by_name != by_pins:
+    tab = str(spec["tab"].get("number")) if isinstance(spec.get("tab"), dict) else None
+    own = tab in nums - {str(p.get("number")) for p in _listed(spec)}
+    if by_name and by_pins and by_pins not in (by_name, by_name + own):
         return None, ""
+    if by_name and by_pins == by_name + 1:
+        return by_pins, f"the pin table (the package name {spec['name']} counts the leads, the tab is pin {tab})"
     return (by_name, f"the package name {spec['name']}") if by_name else (by_pins, "the pin table") if by_pins else (None, "")
 
 
@@ -1474,6 +1518,8 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
                     if lvl == "error" and rule == "copper":
                         review.append(f"land pattern: {m} (check land pad_width / pad_center / pad_length against "
                                       "the drawing)")
+            elif F.shorts(rep):                       # `footprint gen` refuses to write it, the release check holds it
+                review.append(f"footprint_gen.build failed: {F.shorts(rep)}")
         except Exception as e:
             review.append(f"footprint_gen.build failed: {e!r}")
     sym = {"name": part, "description": f"{ext['symbol_description']} (read from the datasheet by ecadlib.datasheet; review before use)",
@@ -2103,6 +2149,7 @@ class Reader:
     def __init__(self, out, cache_dir, key=None, rules=None, http=None, model=None, effort=None, batch=False, wait=True,
                  poll=60.0, max_wait_s=24 * 3600, estimate=False, auto_pages=None, client=None, log=print, sleep=None, yes=False):
         self.cfg = settings(rules)
+        self.cap_set = cap_chosen(rules)              # the person's cap, not the default one (set_cap: --max-cost-usd)
         self.out, self.cache_dir = Path(out), Path(cache_dir)
         from . import llm as LL                       # provider / model / key / rails (ecadlib.llm)
         self.rules = rules if isinstance(rules, dict) else None
@@ -2161,11 +2208,22 @@ class Reader:
     def deferred(self):
         return self.batch or self.estimate_only
 
-    def client(self):
+    def _claude_key(self, model=None):
+        """The key a request to the Claude API (count_tokens, Message Batches) carries: this Reader's own when its
+        endpoint is Claude, else the key of the Claude endpoint `model` (or the first ladder rung on one) names, as
+        _send_fn picks it. Never another provider's key (self.key is the OpenAI one under [ai] provider = openai)."""
+        if self.ep["provider"] == "anthropic":
+            return self.key
+        from . import llm as LL
+        eps = (self.info(r)["ep"] for r in ([model] if model else self.router.ladder))
+        return next((LL.key_for(ep) for ep in eps if ep["provider"] == "anthropic"), None)
+
+    def client(self, model=None):
         if self.offline:
             raise DatasheetError(OFFLINE)
         if self._client is None:
-            self._client = Client(require_key(self.key), log_file=self.log_file, say=self.say, sleep=self.sleep)
+            self._client = Client(require_key(self._claude_key(model)), log_file=self.log_file, say=self.say,
+                                  sleep=self.sleep)
         return self._client
 
     # --- jobs
@@ -2321,7 +2379,9 @@ class Reader:
 
     def _result(self, job, rec):
         ext = parse_message(rec["message"])
-        res = process(ext, job["part"], job["url"], rec.get("model") or self.model, rec.get("page_offset", job["offset"]), rec["message"],
+        # the job's pages, as _judge reads them: its cache key holds them, while a record's page_offset can be 0 (a batch
+        # answer collected by a run without this part, from a state file with no 'sent', or adopted after a lost create)
+        res = process(ext, job["part"], job["url"], rec.get("model") or self.model, job["offset"], rec["message"],
                       facts=job.get("facts"), tables=job.get("tables"))
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
         if job.get("route"):
@@ -2600,22 +2660,27 @@ class Reader:
         OUT_TOKENS, and max_tokens for the worst case. Each part is priced on the model its route starts on;
         usd_max_route adds the worst case of every further step its route could take (more pages, the next model)."""
         batch = self.batch if batch is None else batch
-        rows, exact, models = [], bool(jobs), {}      # exact: every row counted by count_tokens
+        rows, models = [], {}
         for j in jobs:
             jb = batch and not j.get("sync")          # a synchronous request of a batch run (cross-check, feedback)
             mult = BATCH_DISCOUNT if jb else 1.0
             model = j.get("model") or self.model
+            try:                                      # resolved first: price_of knows an endpoint:model ("oai:gpt-6-
+                self.info(model)                      # luna") only once resolved, and the default cap's keyless
+            except DatasheetError:                    # estimate would otherwise price its first request as unknown
+                pass                                  # a setup that does not resolve is reported where it is sent
             pin, pout = price_of(model) or (None, None)
             tin, unknown = None, False
             if self.key and self.count_tokens and self._plain(model):
                 try:
+                    api = self.info(model)["ep"]["model"]          # 'claude:x' (a named endpoint) -> 'x', as a batch sends it
                     with logging_to(self.log_file, self.say):
-                        tin = self.client().count_tokens(j["body"])
+                        tin = self.client(model).count_tokens(j["body"] if j["body"]["model"] == api
+                                                              else dict(j["body"], model=api))
                     how = "count_tokens"
                 except Exception as e:                # offline, a refused key: an estimate never stops the run
                     self.say(f"  count_tokens failed ({type(e).__name__}): rough estimate instead")
             if tin is None:
-                exact = False
                 pages = len(j["prov"]["pages_sent"]) if j["prov"].get("pages_sent") else j["prov"].get("pages")
                 unknown = not pages and j["prov"].get("sent_as") != "base64"   # sent as a URL, never counted: size unknown
                 pages = pages or URL_PAGES
@@ -2658,6 +2723,7 @@ class Reader:
                          "usd_max": worst, "usd_max_route": route_max, "start": (j.get("route") or {}).get("start"),
                          "url": j["url"], "size_unknown": unknown, "usd_max_guess": guess})
         known = all(r["usd"] is not None for r in rows)
+        exact = bool(rows) and all(r["how"] == "count_tokens" for r in rows)   # not a key alone: another provider's
         tot = lambda k: round(sum(r[k] for r in rows), 4) if known and all(r[k] is not None for r in rows) else None
         one = next(iter(models)) if len(models) == 1 else None
         price = lambda m: f"{m} ${price_of(m)[0]}/${price_of(m)[1]}" if price_of(m) else f"no price known for {m}"
@@ -2679,12 +2745,17 @@ class Reader:
         except Exception:                             # a setup that does not resolve is reported where it is sent
             return 1
 
+    def set_cap(self, usd):
+        """--max-cost-usd N: a cap the person set, even when it is the default's 10."""
+        self.cfg["max_cost_usd"], self.cap_set = usd, True
+
     def _guard_cost(self, jobs):
         """[datasheet] max_cost_usd over everything this Reader sends (batches and synchronous calls together)."""
         cap = float(self.cfg.get("max_cost_usd") or 0)
         if not cap or not jobs:                       # --yes does not lift the cap: a scripted run keeps its ceiling
             return
-        if cap == DEFAULT_MAX_COST_USD:               # the default safety net: the rough estimate, no count_tokens request
+        default = cap == DEFAULT_MAX_COST_USD and not self.cap_set     # not one the person set (to 10 as well)
+        if default:                                   # the default safety net: the rough estimate, no count_tokens request
             k, self.key = self.key, None
             try:
                 est = self.estimate(jobs)
@@ -2695,7 +2766,7 @@ class Reader:
         if est["usd_max"] is None:
             if self.yes:                              # a model with no known price (a local one): sent as approved
                 return
-            if cap == DEFAULT_MAX_COST_USD:           # only the default cap: a local model is not stopped by it
+            if default:                               # only the default cap: a local model is not stopped by it
                 if not getattr(self, "_said_unpriced", False):
                     self._said_unpriced = True
                     self.say(f"  datasheet: no price known for {', '.join(est['models']) or self.model}, so the default "
@@ -2708,7 +2779,7 @@ class Reader:
             what = (f"the size of the PDF of {', '.join(r['part'] for r in unk)} is unknown (sent as a URL, not counted "
                     f"by count_tokens): its worst case at the {page_limit(unk[0]['model'])}-page request limit makes up to "
                     f"${est['usd_max']:.2f} for {est['parts']} parts, over [datasheet] max_cost_usd = {cap:g}")
-            if not self.yes and cap != DEFAULT_MAX_COST_USD:   # a cap the person set: refused, never a silent guess
+            if not self.yes and not default:          # a cap the person set: refused, never a silent guess
                 raise DatasheetError(what + "; nothing sent. Download the PDF (or give a local file) so it can be "
                                      "counted, raise the cap, or pass --yes to send it on a typical "
                                      f"{URL_PAGES}-page estimate")
@@ -2867,7 +2938,8 @@ class Reader:
                 b = cands[0]
                 known.add(b["id"])
                 st["batches"].append({"id": b["id"], "created": b.get("created_at"), "model": m["model"],
-                                      "requests": m["requests"], "parts": m["parts"], "status": b.get("processing_status"),
+                                      "requests": m["requests"], "sent": m.get("sent"), "parts": m["parts"],
+                                      "status": b.get("processing_status"),
                                       "collected": False, "adopted": m["fingerprint"], "mark": m})
                 self.say(f"  datasheet batch {b['id']}: found the batch whose create answer was lost ({m['n']} parts); "
                          "collecting it instead of sending again")
@@ -2944,17 +3016,18 @@ class Reader:
                 chunks[-1].append(j)
                 size += n
             for chunk in (c for c in chunks if c):
-                taken, reqs, ids, models = set(), [], {}, {}
+                taken, reqs, ids, models, sent = set(), [], {}, {}, {}
                 for j in chunk:
                     cid = custom_id(j["name"], taken)
                     taken.add(cid)
                     ids[cid] = j["key"]
                     models[cid] = j.get("model") or self.model
+                    sent[cid] = {"offset": j.get("offset", 0), "url": j.get("url", "")}   # for a run without this part
                     api_model = self.info(models[cid])["ep"]["model"]      # 'claude:x' (a named endpoint) -> 'x'
                     reqs.append({"custom_id": cid, "params": j["body"] if j["body"]["model"] == api_model
                                  else dict(j["body"], model=api_model)})
                 mark = {"fingerprint": hashlib.sha256(json.dumps([self.model, sorted(ids.items())]).encode()).hexdigest()[:24],
-                        "at": time.time(), "n": len(reqs), "model": self.model, "requests": ids,
+                        "at": time.time(), "n": len(reqs), "model": self.model, "requests": ids, "sent": sent,
                         "parts": {c: j["name"] for c, j in zip(ids, chunk)}, **_owner()}
                 self._add_pending(st, mark)
                 _IN_FLIGHT.add(mark["fingerprint"])
@@ -2979,7 +3052,7 @@ class Reader:
                 st["pending_creates"].remove(mark)
                 self._creates_done.add(mark["fingerprint"])
                 st["batches"].append({"id": b["id"], "created": b.get("created_at"), "model": self.model, "models": models,
-                                      "requests": ids, "parts": {c: j["name"] for c, j in zip(ids, chunk)},
+                                      "sent": sent, "requests": ids, "parts": {c: j["name"] for c, j in zip(ids, chunk)},
                                       "status": b.get("processing_status"), "collected": False})
                 self._save_state(st)
                 _IN_FLIGHT.discard(mark["fingerprint"])
@@ -3036,7 +3109,9 @@ class Reader:
                         continue                      # stored from an earlier, damaged download of these results
                     if r.get("type") == "succeeded":
                         try:
-                            self._store(job or {"key": key, "part": b["parts"].get(line["custom_id"]), "url": "", "offset": 0,
+                            was = (b.get("sent") or {}).get(line["custom_id"]) or {}   # a part not in this run
+                            self._store(job or {"key": key, "part": b["parts"].get(line["custom_id"]),
+                                                "url": was.get("url", ""), "offset": was.get("offset", 0),
                                                 "model": (b.get("models") or {}).get(line["custom_id"]) or b.get("model")},
                                         r["message"], f"batch {b['id']}")
                         except DatasheetError as e:
@@ -3099,7 +3174,7 @@ def format_estimate(est):
     if not est.get("rows"):
         return "datasheet estimate: nothing to read (no part needs a datasheet read); $0.00"
     lines = [f"datasheet estimate: {est['parts']} parts, {est['model']}, {est['mode']}, {est['prices']}",
-             f"  input {est['input_tokens']:,} tokens ({'counted by count_tokens' if est['exact_input'] else 'rough: pages x ' + str(PAGE_TOKENS)});"
+             f"  input {est['input_tokens']:,} tokens ({'counted by count_tokens' if est['exact_input'] else 'rough: not counted, pages x ' + str(PAGE_TOKENS)});"
              f" expected {usd(est['usd'])}, at most {usd(est['usd_max'])} (every answer at max_tokens, plus a fallback re-run on synchronous calls)"]
     if len(est.get("models") or {}) > 1 or est.get("route") == "ladder":
         lines.append(f"  routed ([datasheet] route = {est.get('route')}): "
@@ -3233,7 +3308,7 @@ def batch_main(argv, estimate=False):
     rd = Reader(out, a.cache, rules=rules, http=http, model=a.model, effort=a.effort, batch=not a.no_batch,
                 wait=not a.no_wait, poll=a.poll, estimate=estimate or a.estimate, yes=a.yes)
     if a.max_cost_usd is not None:
-        rd.cfg["max_cost_usd"] = a.max_cost_usd
+        rd.set_cap(a.max_cost_usd)
     rd.count_tokens = not rd.estimate_only            # `datasheet estimate` sends nothing: a rough count
     if not rd.key and not rd.estimate_only and not rd.offline:
         from . import llm as LL
@@ -3376,8 +3451,12 @@ def main(argv=None):
             sig = LRL.signature(inf["plan"])
             ck = ResultCache.key(src_hash, a.model, a.part, a.package, [offset, hint], a.effort + (f"|{sig}" if sig else ""))
             if a.estimate:
-                rd = Reader(a.out, Path(a.out) / "cache", model=a.model, effort=a.effort, log=print)
+                rd = Reader(a.out, Path(a.out) / "cache", rules=rules if isinstance(rules, dict) else None, model=a.model,
+                            effort=a.effort, log=print)
                 rd.count_tokens = False               # --estimate sends nothing: a rough count
+                if isinstance(rules, Exception):      # the provider it names is unknown: counted nowhere, rough only
+                    print(f"rules not loaded ({str(rules)[:300]}): a rough estimate, nothing sent to count tokens")
+                    rd.key = None
                 prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None, "sent_as": source[0]}
                 print(format_estimate(rd.estimate([{"name": a.part, "url": a.pdf, "body": body, "prov": prov}], batch=False)))
                 return 0
@@ -3392,7 +3471,7 @@ def main(argv=None):
                 grd = Reader(a.out, Path(a.out) / "cache", key=key, rules=rules, model=a.model, effort=a.effort, log=None,
                              yes=a.yes)
                 if a.max_cost_usd is not None:
-                    grd.cfg["max_cost_usd"] = a.max_cost_usd
+                    grd.set_cap(a.max_cost_usd)
                 guard = lambda b: grd._guard_cost([{"name": a.part, "url": a.pdf, "body": b, "prov": prov}])
                 guard(body)                           # the feedback turn, if any, is held to the same cap
                 with logging_to(Path(a.out) / "api_log.jsonl", print):

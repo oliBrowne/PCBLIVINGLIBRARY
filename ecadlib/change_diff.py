@@ -203,12 +203,13 @@ def _plain(v):
 
 def _readings(v, num):
     """The numbers a value can mean: {num}, and with a leading '100,000' (a comma before exactly 3 digits, which is a
-    decimal comma in Europe and a thousands separator elsewhere) also the value read with the comma left out."""
-    out = {num}
-    m = re.match(r"\s*\d+,\d{3}(?![\d,.])", str(v or ""))
-    if m:
+    decimal comma in Europe and a thousands separator elsewhere: kicad_index.two_readings) also the value read with
+    the comma left out."""
+    from .kicad_index import two_readings
+    out, both = {num}, two_readings(v)
+    if both:
         from .fingerprint import value_number
-        alt = value_number(str(v).strip().replace(",", "", 1))
+        alt = value_number(both[1])
         if alt is not None:
             out.add(alt)
     return frozenset(out)

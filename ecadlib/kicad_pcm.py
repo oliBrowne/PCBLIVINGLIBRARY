@@ -25,7 +25,16 @@ to the global tables as "<prefix><lib>" (prefix default "PCM_"), with a ${KICADn
 default) keeps kicad_export's KiCad 8 files, which KiCad 8, 9 and 10 open. metadata.json says the minimum version.
 
 The version (major.minor.patch, as the PCM schema wants) is --pkg-version, else the previous build's version when the
-content is unchanged, else today's date (2026.10.16), so re-running on the same library changes nothing.
+content is unchanged, else today's date (2026.10.16), so re-running on the same library changes nothing. Unchanged:
+kicad_pcm.json's content_sha256 matches (it records the last build in --out, of whichever package; its version is kept),
+or the zip in --out of this package's newest version holds the same files (that version is kept). This package's newest
+version is the highest of its zips' (<identifier>-<version>.zip), the ones packages.json lists for it and kicad_pcm.json's
+when that build was this package. KiCad offers an update only for a newer version, so a change built when that version
+is today's date or later takes the version after it (a second change on 2026.10.16 is 2026.10.17; after a patch of
+999999, the most the schema allows, the next minor: 2026.11.0 after 2026.10.999999), and a --pkg-version that is not
+newer than that version (1.2 is 1.2.0 to KiCad) is refused for a changed library. Whenever packages.json changes,
+repository.json's update_timestamp moves past the one --out's repository.json (or kicad_pcm.json) has, so KiCad
+fetches it again.
 The metadata is checked against KiCad's PCM JSON schema when one is found (--schema, or the pcm.v1.schema.json a KiCad
 install ships in share/kicad/schemas) and the jsonschema package is installed, and always against the schema's
 required fields and patterns written out below."""
@@ -222,7 +231,9 @@ def check_export_folder(src, lib, rep):
     """Change control (#105): a kicad-export folder is packaged only as kicad-export wrote it. kicad_export.json lists
     every file the export wrote with its sha256 (taken from the released revisions); a symbol library or footprint
     edited, replaced or added by hand since is refused, so a package never carries a change no one approved. A 3D
-    model the export did not write stays the user's file (kicad-export keeps those too). Raises ValueError."""
+    model the export did not write stays the user's file (kicad-export keeps those too). CRLF line ends (a git checkout
+    with core.autocrlf) are not an edit, as for kicad-export. Raises ValueError."""
+    from .kicad_export import _same
     src = Path(src)
     how = f"run `ecadlib kicad-export PLAN -o {src}` again (or package the plan.json itself)"
     if not rep or "written" not in rep:
@@ -238,7 +249,7 @@ def check_export_folder(src, lib, rep):
         rel = f.relative_to(src).as_posix()
         if rel not in written:
             bad.append(f"{rel} (not written by kicad-export)")
-        elif hashlib.sha256(f.read_bytes()).hexdigest() != written[rel]:
+        elif not _same(f.read_bytes(), written[rel]):
             parts = [p["part"] for p in rep.get("parts") or [] if rel.endswith(f"/{p.get('footprint')}.kicad_mod")]
             bad.append(f"{rel} (changed since kicad-export wrote it" + (f"; part {', '.join(parts)}" if parts else "") + ")")
     gone = [r for r in written if r.startswith((f"{lib}.kicad_sym", f"{lib}.pretty/")) and not (src / r).is_file()]
@@ -253,28 +264,47 @@ UNCHECKED_NOTE = "NOT CHECKED: packaged with --unchecked from a KiCad folder eca
 
 
 def _source(src, name, include_held, http, offline, cache, log, unchecked=False):
-    """(export folder, library name, kicad_export report or None, temp dir to clean up or None). unchecked: a folder
+    """(export folder, library name, that library's kicad_export record or None, temp dir to clean up or None). unchecked: a folder
     with no kicad_export.json (not written by ecadlib) is packaged without the change-control check; a folder
-    kicad-export wrote is always checked."""
+    kicad-export wrote is always checked. name: the library to package (None: a folder's only library; a plan's is
+    exported as 'ecadlib')."""
+    from . import kicad_export as X
     src = Path(src)
     if src.is_dir():
         exp = src / "kicad_export.json"
         rep = json.loads(exp.read_text(encoding="utf-8")) if exp.is_file() else None
-        lib = (rep or {}).get("library") or name
-        if not (src / f"{lib}.kicad_sym").is_file() and not (src / f"{lib}.pretty").is_dir():
-            libs = sorted(p.stem for p in src.glob("*.kicad_sym")) or sorted(p.stem for p in src.glob("*.pretty"))
+        # one kicad_export.json, several libraries (EXP-27): each library's own record is under "libraries"; the top
+        # level is only the library exported last (a report from before then: that one library)
+        recs = {k: v for k, v in rep["libraries"].items() if isinstance(v, dict)} \
+            if isinstance((rep or {}).get("libraries"), dict) else {}
+        if rep and rep.get("library") and rep["library"] not in recs and "written" in rep:
+            recs[rep["library"]] = rep
+        if name is None and len(recs) > 1:
+            raise ValueError(f"{src} holds {len(recs)} libraries kicad-export wrote ({', '.join(sorted(recs))}): "
+                             f"pass --name with the one to package")
+        lib = X.libname(name) if name is not None else next(iter(recs), None) or "ecadlib"
+        if recs and lib not in recs:
+            raise ValueError(f"{src}: kicad-export wrote no library {lib} here (it holds {', '.join(sorted(recs))}): "
+                             f"pass --name with one of them")
+        if not recs and (name is None or not (src / f"{lib}.kicad_sym").is_file() and not (src / f"{lib}.pretty").is_dir()):
+            libs = sorted({p.stem for p in src.glob("*.kicad_sym")} | {p.stem for p in src.glob("*.pretty") if p.is_dir()})
             if not libs:
                 raise FileNotFoundError(f"{src} has no <lib>.kicad_sym or <lib>.pretty: run `ecadlib kicad-export PLAN -o {src}` first")
+            if name is not None:                  # never another library than the one named
+                raise FileNotFoundError(f"{src} has no {lib}.kicad_sym or {lib}.pretty (it holds {', '.join(libs)}): "
+                                        f"pass --name with one of them")
+            if len(libs) > 1:
+                raise ValueError(f"{src} holds {len(libs)} libraries ({', '.join(libs)}): pass --name with the one to package")
             lib = libs[0]
+        own = rep if (rep or {}).get("library") == lib else recs.get(lib, rep)     # the top level is the last one only
         if not (unchecked and rep is None):
-            check_export_folder(src, lib, rep)
-        return src, lib, rep, None
+            check_export_folder(src, lib, own)
+        return src, lib, own, None
     if not src.is_file():
         raise FileNotFoundError(f"{src}: no such plan.json or kicad-export folder")
-    from . import kicad_export as X
     from .httpcache import CachedHTTP
     tmp = Path(tempfile.mkdtemp(prefix="ecadlib-pcm-"))
-    rep = X.export(src, tmp, name, include_held, http=http or CachedHTTP(cache, offline=offline, timeout=60), log=log)
+    rep = X.export(src, tmp, name or "ecadlib", include_held, http=http or CachedHTTP(cache, offline=offline, timeout=60), log=log)
     return tmp, rep["library"], rep, tmp
 
 
@@ -316,11 +346,12 @@ def content_hash(files):
     return h.hexdigest()
 
 
-def build(src, out, name="ecadlib", identifier=None, pkg_version=None, kicad=8, prefix="PCM_", license_="CC-BY-SA-4.0",
+def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefix="PCM_", license_="CC-BY-SA-4.0",
           author="ecadlib user", description=None, homepage=None, base_url=None, include_held=False, http=None,
           offline=False, cache="out/http_cache", schema=None, today=None, log=print, unchecked=False, warn=None):
     """Build the PCM package from a plan.json or a kicad-export folder into `out`; returns the report dict.
-    unchecked: package a KiCad folder ecadlib did not export (no kicad_export.json) as it is; the package's NOTICE.txt
+    name: with a plan, the library name to export it as (None: 'ecadlib'); with a folder, the library to package
+    (None: the folder's only one). unchecked: package a KiCad folder ecadlib did not export (no kicad_export.json) as it is; the package's NOTICE.txt
     and the report say it was not checked. warn: where warnings go (default log; -q silences log, not them)."""
     if int(kicad) < 7:
         raise ValueError("--kicad must be 7 or newer (the Plugin and Content Manager came with KiCad 6, libraries with 7)")
@@ -349,20 +380,35 @@ def build(src, out, name="ecadlib", identifier=None, pkg_version=None, kicad=8, 
             shutil.rmtree(tmp, ignore_errors=True)
     if (xrep or {}).get("kicad_content") and license_ not in ("CC-BY-SA-4.0",):
         (warn or log)(f"  note: the library holds KiCad library content (CC-BY-SA 4.0); --license {license_} may not be allowed")
-    chash = content_hash(files | {"#settings": json.dumps([name, identifier, kicad, prefix, license_, author, description, homepage]).encode()})
+    chash = content_hash(files | {"#settings": json.dumps([name or "ecadlib", identifier, kicad, prefix, license_, author, description, homepage]).encode()})
     prev = out / "kicad_pcm.json"
-    old = json.loads(prev.read_text(encoding="utf-8")) if prev.is_file() else {}
-    if pkg_version:
-        version = pkg_version
-    elif old.get("content_sha256") == chash and old.get("version"):
-        version = old["version"]
+    old = _read(prev)                       # garbled or not an object: no record (the zips and packages.json still count)
+    zips, prior = _previous(out, identifier, old)
+    install_size = sum(len(v) for k, v in files.items() if k.split("/", 1)[0] in PKG_DIRS)
+    meta_for = lambda v: metadata(lib, identifier, v, kicad, license_, author, description, homepage=homepage,
+                                  install_size=install_size)
+    if old.get("content_sha256") == chash and _ver_tuple(old.get("version")):
+        same = old["version"]               # unchanged since the last build
+    elif prior in zips and _unzip(zips[prior]) == files | {"metadata.json": (json.dumps(meta_for(prior), indent=2) + "\n").encode()}:
+        same = prior                        # unchanged since its newest zip (kicad_pcm.json: another package's, or gone)
     else:
-        d = today or datetime.date.today()
-        version = f"{d.year}.{d.month}.{d.day}"
+        same = None
+    if pkg_version:
+        if not same and prior and _ver_tuple(pkg_version) and _ver_tuple(pkg_version) <= _ver_tuple(prior):
+            raise ValueError(f"--pkg-version {pkg_version} is not newer than {prior}, the previous build's version in "
+                             f"{out}, and the library changed since: KiCad offers only a newer version as an update; "
+                             f"give a later version, or leave --pkg-version out")
+        version = pkg_version
+    elif same:
+        version = same
+    else:
+        d, p = today or datetime.date.today(), _ver_tuple(prior)
+        if p:                               # the version after it: patch + 1, or the next minor (VER_RE: 6 patch digits)
+            p = p[:2] + (p[2] + 1,) if p[2] < 999999 else (p[0], p[1] + 1, 0)
+        version = ".".join(map(str, max((d.year, d.month, d.day), p or ())))
     if not VER_RE.match(version):
         raise ValueError(f"version {version!r} must be major[.minor[.patch]], e.g. 1.2.0")
-    install_size = sum(len(v) for k, v in files.items() if k.split("/", 1)[0] in PKG_DIRS)
-    meta = metadata(lib, identifier, version, kicad, license_, author, description, homepage=homepage, install_size=install_size)
+    meta = meta_for(version)
     problems, how = check_metadata(meta, schema)
     files["metadata.json"] = (json.dumps(meta, indent=2) + "\n").encode()
     data = zip_bytes(files)
@@ -387,8 +433,17 @@ def build(src, out, name="ecadlib", identifier=None, pkg_version=None, kicad=8, 
         pk = {"packages": [pkg]}
         pk_bytes = (json.dumps(pk, indent=2) + "\n").encode()
         ts = int(datetime.datetime.combine(today or datetime.date.today(), datetime.time()).replace(tzinfo=datetime.timezone.utc).timestamp())
-        if old.get("packages_sha256") == hashlib.sha256(pk_bytes).hexdigest() and old.get("update_timestamp"):
-            ts = old["update_timestamp"]                              # unchanged: same timestamp, no "update" in KiCad
+        # the timestamp published last: repository.json's, or kicad_pcm.json's record of it (a build without --base-url
+        # rewrites kicad_pcm.json without one; repository.json is still what KiCad has)
+        pub = _read(out / "repository.json").get("packages")
+        pub = pub if isinstance(pub, dict) else {}
+        last = max(((t, s) for t, s in ((pub.get("update_timestamp"), pub.get("sha256")),
+                                        (old.get("update_timestamp"), old.get("packages_sha256"))) if isinstance(t, int)),
+                   key=lambda r: r[0], default=None)
+        if last and last[1] == hashlib.sha256(pk_bytes).hexdigest():
+            ts = last[0]                                              # unchanged: same timestamp, no "update" in KiCad
+        elif last:
+            ts = max(ts, last[0] + 1)                                 # changed: later than the last one, even the same day
         repo = {"$schema": SCHEMA_URL, "name": f"{lib} (ecadlib)",
                 "packages": {"url": f"{base_url.rstrip('/')}/packages.json", "sha256": hashlib.sha256(pk_bytes).hexdigest(),
                              "update_timestamp": ts,
@@ -402,6 +457,45 @@ def build(src, out, name="ecadlib", identifier=None, pkg_version=None, kicad=8, 
                    packages_sha256=repo["packages"]["sha256"], update_timestamp=ts)
     _write(prev, (json.dumps(rep, indent=2) + "\n").encode())
     return rep
+
+
+def _ver_tuple(version):
+    """'2026.10.16' -> (2026, 10, 16), '3.1' -> (3, 1, 0) (KiCad compares versions part by part); None when it is not
+    major[.minor[.patch]]."""
+    if not isinstance(version, str) or not VER_RE.match(version):
+        return None
+    t = tuple(int(x) for x in version.split("."))
+    return t + (0,) * (3 - len(t))
+
+
+def _previous(out, identifier, old):
+    """This package's earlier builds in `out`: ({version: zip} of its zips there, the newest version built or None).
+    kicad_pcm.json (`old`) records only the last build there, of whichever package, so the zips' names and the
+    versions packages.json lists count too."""
+    zips = {z.name[len(identifier) + 1:-4]: z for z in out.glob(f"{identifier}-*.zip")}
+    pk = _read(out / "packages.json").get("packages")
+    listed = [v.get("version") for p in (pk if isinstance(pk, list) else [])
+              if isinstance(p, dict) and p.get("identifier") == identifier for v in p.get("versions") or [] if isinstance(v, dict)]
+    seen = ([old.get("version")] if old.get("identifier") == identifier else []) + list(zips) + listed
+    return zips, max(filter(_ver_tuple, seen), key=_ver_tuple, default=None)
+
+
+def _unzip(path):
+    """{archive path: bytes} of a zip; None when it does not read."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            return {n: z.read(n) for n in z.namelist()}
+    except (OSError, zipfile.BadZipFile):
+        return None
+
+
+def _read(path):
+    """A previous build's JSON file as a dict; {} when it is missing or does not read."""
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
 
 
 def _write(path, data):
@@ -482,9 +576,12 @@ def main(argv=None):
     ap.add_argument("--plugin", action="store_true",
                     help="instead: package the ecadlib PCB editor plugin: toolbar button and window (KiCad 7+)")
     ap.add_argument("-o", "--out", default="out/pcm", help="output folder (default %(default)s)")
-    ap.add_argument("--name", default="ecadlib", help="library name when building from a plan (default %(default)s)")
+    ap.add_argument("--name", help="library name: with a plan, the name to export it as (default ecadlib); with a "
+                    "kicad-export folder, the library to package (needed when the folder holds several)")
     ap.add_argument("--identifier", help="package id, e.g. com.example.mylib (default local.ecadlib.<lib>)")
-    ap.add_argument("--pkg-version", help="package version major.minor.patch (default: kept while unchanged, else today's date)")
+    ap.add_argument("--pkg-version", help="package version major.minor.patch, newer than this package's previous one in "
+                    "--out when the library changed (default: kept while unchanged, else today's date, or the version "
+                    "after the previous one when that is today's date or later)")
     ap.add_argument("--kicad", type=int, default=8, choices=(7, 8, 9, 10), help="oldest KiCad to install it (default 8)")
     ap.add_argument("--prefix", default="PCM_", help="KiCad's library nickname prefix for PCM libraries (default %(default)s)")
     ap.add_argument("--license", default="CC-BY-SA-4.0", help="license from KiCad's PCM list (default %(default)s)")

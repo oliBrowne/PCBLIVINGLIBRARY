@@ -23,6 +23,10 @@ ecadlib check --summary Lib.pretty/         # counts per rule for a whole librar
   * `chip`: 2-terminal R/C/L/LED. IPC table 3-5 for 0603 and up, table 3-6 below 0603. `inner_span` takes the gap directly when the drawing gives it (LEDs).
   * `molded`: inward-L / molded body: tantalum, SMA/SMB/SMC, SOD-123F (table 3-13). `lead_type: "melf"` for MELF.
   * `gullwing`: SOIC/SOP/TSSOP/MSOP, plus SOT-23/SOD-123 via `pin_positions` and SOT-223/DPAK via `tab`.
+    `pin_count` counts each pad number once: a tab that is a lead's pin again adds nothing (SOT-223-3_TabPin2, tab = pin 2:
+    3), a tab with its own number counts (KiCad's SOT-223, tab 4: 4; TO-252-2, leads 1 and 3 + tab 2: 3). A tab that
+    repeats a lead number needs `pin_positions`. The cross-check's second read is asked for terminals, so it may count
+    such a tab once more (4 for SOT-223-3_TabPin2); that is not a disagreement.
   * `qfp`: 4-sided gull-wing. `qfn`: QFN/DFN/SON with an optional exposed pad (`pins_top_bottom: 0` for DFN).
   * `polarized: true` adds KiCad's pin-1 silk bracket and fab chamfer (LED/diode: pin 1 = cathode; tantalum: pin 1 = +).
   * `land`: the maker's recommended land pattern, when the datasheet has one. It replaces the IPC pads.

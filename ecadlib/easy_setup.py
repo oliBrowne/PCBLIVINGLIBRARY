@@ -65,6 +65,18 @@ def _ws_rules_raw(ws_root):
         return {}
 
 
+def ws_libs(ws_root):
+    """The library folders saved on the setup page: [setup] libs of <workspace>/ecadlib.toml (a relative one starts at
+    the workspace, as the default --lib does). The desktop app and `ecadlib setup` start the web UI with them."""
+    libs = (_ws_rules_raw(ws_root).get("setup") or {}).get("libs")
+    out = []
+    for x in libs if isinstance(libs, list) else []:
+        if isinstance(x, str) and x.strip():
+            p = Path(x.strip()).expanduser()
+            out.append(str(p if p.is_absolute() else Path(ws_root).resolve() / p))
+    return out
+
+
 def current_ai(raw):
     """(provider id, model) the workspace's ecadlib.toml names; ("anthropic", default) when it names none."""
     ai = raw.get("ai") or {}
@@ -119,7 +131,8 @@ def save(ws_root, b):
     libs = b.get("libs") or []
     if not isinstance(libs, list) or not all(isinstance(x, str) for x in libs) or len(libs) > 50:
         raise ValueError("libs must be a list of folders")
-    libs = [str(Path(x.strip()).expanduser()) for x in libs if x.strip()]
+    libs = [str(Path(x.strip()).expanduser().resolve()) for x in libs if x.strip()]   # the folder checked below,
+                                                                                       # not one under the workspace
     missing = [x for x in libs if not Path(x).is_dir()]
     if missing:
         raise ValueError(f"library folder not found: {missing[0]}")
@@ -146,9 +159,12 @@ def save(ws_root, b):
         raise PermissionError(f"ecadlib's settings folder {cfg} cannot be written (permission denied), so nothing was "
                               "changed; fix its permissions, or set ECADLIB_HOME to a folder you can write")
     ws.mkdir(parents=True, exist_ok=True)
-    order = list(RU.DEFAULTS["sources"]["order"])
+    order = (_ws_rules_raw(ws).get("sources") or {}).get("order")   # the person's order: the page only sets the
+    order = list(order if isinstance(order, list) else RU.DEFAULTS["sources"]["order"])   # datasheet reader
     if p[0] == "none":
         order = [x for x in order if x != "datasheet"]
+    elif "datasheet" not in order:
+        order.append("datasheet")
     extra = {"setup": {"tool": tool, "libs": libs, "workspace": "."}, "sources": {"order": order}}
     if p[0] != "none":
         extra["ai"] = {"provider": p[2], "model": model}
@@ -247,8 +263,9 @@ def install_altium_menu(ws_root):
     out = ws / "altium-menu"
     cmd = UC.self_command()
     command = " ".join(f'"{c}"' if " " in c else c for c in cmd)
-    rep = AM.build(out, workspace=str(ws), library=str(ws / "altium-library"), command=command,
-                   win_dir=str(out) if os.name == "nt" else None)
+    # build() names this folder in the menu file on Windows, or leaves that file out when the folder can't go in one
+    # (an accented user name): the menu bar below needs no menu file
+    rep = AM.build(out, workspace=str(ws), library=str(ws / "altium-library"), command=command)
     ini = out / AM.INI
     _set_ini_command(ini, command)                           # an older build's .ini is kept: point it at this ecadlib
     project = out / AM.PROJECT
@@ -270,8 +287,9 @@ def install_altium_menu(ws_root):
         why = f" ({bar['error']})" if bar.get("error") else ""
         res["steps"] = [f"Close Altium Designer{why}",
                         f"Run: ecadlib altium-menu install-menu --out \"{out}\" (or press Add to Altium here again)",
-                        "Start Altium: the ecadlib menu is in the menu bar, before Window. Without closing Altium: "
-                        f"Preferences > Load... with {out / AM.PREFS} (see ALTIUM_MENU_README.txt)"]
+                        "Start Altium: the ecadlib menu is in the menu bar, before Window."
+                        + (f" Without closing Altium: Preferences > Load... with {out / AM.PREFS} (see "
+                           "ALTIUM_MENU_README.txt)" if res["menu_file"] else "")]
     return res
 
 
@@ -341,7 +359,8 @@ def main(argv=None):
     from .ui import server
     ws = a.workspace or UC.load_settings().get("workspace") or str(UC.default_workspace())
     Path(ws).mkdir(parents=True, exist_ok=True)
-    return server.main(["--workspace", ws, "--port", str(a.port), "--setup"] + (["--no-browser"] if a.no_browser else []))
+    return server.main(["--workspace", ws, "--port", str(a.port), "--setup"] + (["--no-browser"] if a.no_browser else [])
+                       + [x for lib in ws_libs(ws) for x in ("--lib", lib)])
 
 
 if __name__ == "__main__":

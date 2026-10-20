@@ -402,9 +402,10 @@ def axial(spec, H=None):
 
 def bga(spec, H):
     """BGA / LGA / CSP: balls (8-sided prisms, the collapsed ball height) under a flat body, A1 dot on top.
-    Balls sit where footprint_adv puts the pads (same grid, same depopulated balls)."""
-    from .footprint_adv import bga_balls
-    Bx, By = _n(spec, "body_length"), _n(spec, "body_width")
+    Balls sit where footprint_adv puts the pads (same grid, same depopulated balls), the body turned as its body is."""
+    from .footprint_adv import bga_balls, bga_body
+    hx, hy, _ = bga_body(spec)
+    Bx, By = 2 * hx, 2 * hy
     e = spec["pitch"]
     ey = spec.get("pitch_y") or e
     rows, cols = spec["rows"], spec["cols"]
@@ -878,7 +879,7 @@ def generate(src, height=None, name=None, pads=None):
     if isinstance(src, dict):
         spec = src
     elif str(src).endswith(".json"):                 # a spec path, never a footprint name: a missing file is not found
-        spec = json.loads(Path(src).read_text())
+        spec = json.loads(Path(src).read_text(encoding="utf-8-sig"))      # UTF-8 (a BOM too), not the locale's
     else:
         spec = spec_from_name(str(src))
         if spec is None:

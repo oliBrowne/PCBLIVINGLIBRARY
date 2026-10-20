@@ -42,7 +42,7 @@ from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from . import crosscheck as CC, messages as M, sheetsafe as SS
 from . import fp_tidy as FT, symbol_layout as SL
-from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
+from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of, two_readings
 
 TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository/tree?ref=master&recursive=true&per_page=100&page={page}"
 SOURCES = ("kicad", "easyeda", "standard", "datasheet")
@@ -413,8 +413,9 @@ class Run:
         fr = st.get("footprint") or {}
         if fr.get("renamed_from") and sym.get("footprint") == fr["renamed_from"]:     # footprint renamed (fp_share)
             sym = dict(sym, footprint=fr["name"])
-        if str(path) in self.written:           # its own file from an earlier run, kept for a skipped part: not shared
-            rec = self.written[str(path)]
+        # Windows / macOS file systems ignore case: CH340C.SchLib and ch340c.SchLib are one file, so one symbol
+        rec = next((r for p, r in self.written.items() if p.casefold() == str(path).casefold()), None)
+        if rec is not None:                     # its own file from an earlier run, kept for a skipped part: not shared
             st["symbol"] = dict(rec, notes=_own_notes(rec) if rec.get("by") == st["name"] else [f"shared with {rec['by']}"])
             return
         AL.write_schlib(path, [sym])
@@ -451,6 +452,9 @@ class Run:
         for k, rec in (keep or {}).items():
             st[k] = rec
             st["tried"].append(f"resolve: {k} {rec['source']} chosen by user (kept)")
+        both = two_readings(ln.get("value"))
+        if both:                                             # '4,700pF': 4.7 pF or 4.7 nF, so a person says which
+            st["verify"].append(f"value {ln['value'].strip()} reads two ways: {both[0]} or {both[1]}; write it without the comma")
         dnp = (row.get("status") or "").startswith("dnp")   # not assembled, but still on the schematic and the PCB:
         if dnp:                                              # built from the free sources, no paid datasheet read
             st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")

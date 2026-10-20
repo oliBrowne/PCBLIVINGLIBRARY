@@ -399,10 +399,19 @@ def build(spec, density=None):
     else:                                                     # qfn, qfp
         pads, (bx, by), r = _qfn(spec, fil)
     rep.update(r)
-    want = spec.get("pin_count")
-    if want and len(pads) != want:
-        raise ValueError(f"pin_count is {want} but the layout gives {len(pads)} pads "
-                         "(count every pad except an exposed pad; a tab counts)")
+    want, numbered = spec.get("pin_count"), len({p[0] for p in pads})
+    # package_schema.json: signal pins, so a tab that is pin 2 again (SOT-223-3_TabPin2) is not counted twice; a spec
+    # file written when this said "a tab counts" (every pad) still builds. Only with pin_positions: in the standard
+    # dual row such a tab lands on the other row's leads
+    if want and want == numbered != len(pads) and not spec.get("pin_positions"):
+        raise ValueError(f"the tab repeats a lead number, so the {want} pad numbers are on {len(pads)} pads: a tab "
+                         "that repeats a lead number needs pin_positions (in the standard dual row it lands on the "
+                         "other row's leads)")
+    if want and want != len(pads) and not (want == numbered and spec.get("pin_positions")):
+        raise ValueError(f"pin_count is {want} but the layout gives {numbered} pad numbers"
+                         f"{f' on {len(pads)} pads' if len(pads) != numbered else ''} (count each pad number once, "
+                         "without an exposed pad; a tab with a number of its own counts, a tab that repeats a lead "
+                         "number needs pin_positions)")
     short = [p for p in pads if min(p[3], p[4]) < 0.1]
     if short:
         why = "the exposed pad leaves no room for the pads" if spec.get("exposed_pad") else "the lead dimensions leave no room"
@@ -556,7 +565,7 @@ def validate(spec):
     The validator is built once: jsonschema.validate re-checks the whole schema on every call (~80 ms)."""
     import jsonschema                                   # a runtime dependency: never skip validation silently
     if not _VALIDATOR:
-        schema = json.loads((Path(__file__).with_name("package_schema.json")).read_text())
+        schema = json.loads((Path(__file__).with_name("package_schema.json")).read_text(encoding="utf-8"))
         cls = jsonschema.validators.validator_for(schema)
         cls.check_schema(schema)
         _VALIDATOR.append(cls(schema))
@@ -570,7 +579,7 @@ def compare(mine_path, ref_text):
     """Pad rows for every pad number on either side: {pad, mine, ref, d_pos, d_size} for pads on both, {pad, only:
     "mine"|"ref", at} for pads on one side. Pads sharing a number (an EP and its vias) pair up in position order."""
     from . import sexpr
-    a, b = sexpr.parse(Path(mine_path).read_text()), sexpr.parse(ref_text)
+    a, b = sexpr.parse(Path(mine_path).read_text(encoding="utf-8")), sexpr.parse(ref_text)
     pa, pb = {}, {}
     for t, d in ((a, pa), (b, pb)):
         for p in sexpr.pads(t):
@@ -610,24 +619,22 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     if a.cmd == "gen":
+        from jsonschema import ValidationError
         from . import rules as RU
         outdir = Path(a.out); outdir.mkdir(parents=True, exist_ok=True)
         rules = RU.load(a.rules, start=outdir)
         bad = 0
         import jsonschema
         for sp in a.specs:
-            spec = {}
+            spec = None
             try:
-                spec = json.loads(Path(sp).read_text())
+                spec = json.loads(Path(sp).read_text(encoding="utf-8-sig"))     # UTF-8 (Notepad's BOM too), not the locale's
                 validate(spec)
                 txt, rep = build(spec, RU.density_for(spec, rules, a.density))
-            except jsonschema.ValidationError as e:               # schema: one line naming the field, not the schema dump
-                at = "/".join(str(k) for k in e.absolute_path)
-                print(f"{spec.get('name', sp) if isinstance(spec, dict) else sp}: not written: {e.message}"
-                      f"{f' (at {at})' if at else ''}", file=sys.stderr)
-                bad += 1
-                continue
-            except (ValueError, OSError) as e:                    # a spec that doesn't add up: say why, write nothing
+            except (ValueError, OSError, ValidationError) as e:   # a spec that doesn't add up: say why, write nothing
+                if isinstance(e, ValidationError):                # (and go on with the next spec)
+                    where = "/".join(map(str, e.absolute_path))
+                    e = f"the package spec isn't valid{' at ' + where if where else ''}: {e.message}"
                 print(f"{spec.get('name', sp) if isinstance(spec, dict) else sp}: not written: {e}", file=sys.stderr)
                 bad += 1
                 continue
@@ -657,7 +664,7 @@ def main(argv=None):
                 sys.exit(f"fetch failed: {r.error or r.status}")
             ref = r.text
         else:
-            ref = Path(a.ref).read_text()
+            ref = Path(a.ref).read_text(encoding="utf-8")
         rows, ca, cb = compare(a.mine, ref)
         print(f"{'pad':>4} {'mine (x,y,w,h)':>30} {'kicad (x,y,w,h)':>30}  d_pos       d_size")
         for r in rows:
