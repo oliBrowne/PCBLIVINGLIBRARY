@@ -1153,8 +1153,19 @@ def not_found(triage_csv, mpn, item):
 
 
 def _library_mpns(cfg, ws):
-    """MPNs already in the library: the DbLib parts table (any 'part number' column) and every ready / pulled plan item."""
+    """MPNs already in the library: the DbLib parts table (any 'part number' column) and every ready / pulled plan item.
+    KiCad (cfg tool kicad): the part number properties of the library's .kicad_sym files, which travel with the
+    project (the workspace may not, and a deleted library has nothing in it)."""
     have = set()
+    if cfg.get("tool") == "kicad":
+        for f in sorted(Path(cfg["library"]).glob("*.kicad_sym")):
+            try:
+                text = f.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            have |= {v.replace('\\"', '"').strip().upper() for k, v in re.findall(r'\(property "([^"]*)" "((?:[^"\\]|\\.)*)"', text)
+                     if v.strip() and re.search(r"\bmpn\b|part ?(number|no\b|#)|\bmfr\.? ?pn\b", k, re.I)}
+        return have
     for f in sorted(Path(cfg["library"]).glob("*.csv")):
         try:
             for row in csv.DictReader(f.open(encoding="utf-8", newline="")):

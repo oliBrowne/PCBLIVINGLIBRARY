@@ -74,3 +74,19 @@ def test_kicad_pcm_refuses_a_license_kicads_pcm_refuses(tmp_path):
     assert not PCM.check_metadata(dict(m, license="CC-BY-SA-4.0"), schema_path=False)[0]
     rc, _, err = _run(["kicad-pcm", str(tmp_path / "nope" / "plan.json"), "--out", str(tmp_path / "pcm"), "--license", "mit"])
     assert rc == 2 and "did you mean MIT" in err and not (tmp_path / "pcm").exists(), err
+
+
+# T034
+@lite
+def test_kicad_check_bom_library_is_the_kicad_sym_not_the_workspace_plan(tmp_path):
+    import types
+    from ecadlib import altium_menu as AM, kicad_menu as KM
+    cfg = KM.config(tmp_path)
+    (tmp_path / "ecadlib").mkdir()
+    (tmp_path / "ecadlib" / "ecadlib.kicad_sym").write_text(
+        '(kicad_symbol_lib (symbol "R1" (property "MPN" "0603WAF1002T5E" (at 0 0 0)) (property "Mfr PN" "lm358dr" (at 0 0 0))'
+        ' (property "Value" "10k" (at 0 0 0))))\n', encoding="utf-8")
+    plan = tmp_path / "ecadlib-work" / "librarian" / "b" / "plan.json"
+    plan.parent.mkdir(parents=True)
+    plan.write_text(json.dumps([{"name": "C1", "status": "ready", "mpn": "CL05B104KO5NNNC"}]))
+    assert AM._library_mpns(cfg, types.SimpleNamespace(root=tmp_path / "ecadlib-work")) == {"0603WAF1002T5E", "LM358DR"}
