@@ -385,13 +385,22 @@ def compare(old, new):
     return rows
 
 
+class KeepError(ValueError):
+    """--check --keep DIR would put the rebuilt copy on, inside or around the library (the CLI exits 2, no traceback)."""
+    plain_error = True
+    hint = "keep the rebuilt copy in a folder outside the library, e.g. --keep /tmp/rb"
+
+
 def check(lib_dir, keep=None, log=print):
     """Rebuild into a temporary copy and compare with the lock. -> report dict (ok, rows, inputs)."""
     lib_dir = Path(lib_dir).resolve()
     old = read_lock(lib_dir)
     tmp = Path(keep).resolve() if keep else Path(tempfile.mkdtemp(prefix="ecadlib-rebuild-"))
+    dst = tmp / lib_dir.name
+    if dst.is_relative_to(lib_dir) or lib_dir.is_relative_to(dst):    # the copy is replaced first: never the library
+        raise KeepError(f"--keep {keep}: the rebuilt copy would go to {dst}, which is the library {lib_dir} "
+                        "or overlaps it; --check changes nothing in the library")
     try:
-        dst = tmp / lib_dir.name
         if dst.exists():
             shutil.rmtree(dst)
         # without the change-control ledger: the rebuild must reproduce the files, not be held back to them
