@@ -2082,6 +2082,17 @@ def _create_in_flight(m):
 BROKEN_LINK = r"not a PDF|HTTP 4(?!01|03|29)\d\d|larger than"
 
 
+def hold_on_doubt(inf, model, res):
+    """A guided model's answer that still fails datasheet's checks is not written (the hold_on_doubt rail)."""
+    from . import ds_route as DR
+    if "hold_on_doubt" in inf["plan"]["rails"]:
+        kind, why = DR.assess(res)
+        if kind != "ok":
+            raise DatasheetError(f"held: the answer of {model} ({inf['plan']['tier']} tier) still fails datasheet's "
+                                 f"checks ({'; '.join(why[:3])[:240]}); add a stronger model to [datasheet] ladder or "
+                                 "read the datasheet yourself")
+
+
 class Reader:
     """Reads datasheets for many parts. job() finds and validates the PDF, cached() answers from the result cache,
     read_now() makes one synchronous call; with batch=True (or estimate=True) jobs are collected with submit() and
@@ -2113,6 +2124,7 @@ class Reader:
         self._info = {}
         self.http, self.batch, self.wait, self.poll, self.max_wait_s = http, batch, wait, poll, max_wait_s
         self.estimate_only, self.yes = estimate, yes
+        self.count_tokens = True                      # False: an estimate that promised to send nothing (rough)
         self.auto_pages = self.cfg["auto_pages"] if auto_pages is None else auto_pages
         self.store, self.results = PdfStore(cache_dir, http, sleep=sleep), ResultCache(cache_dir)
         self.dir = self.out / "datasheet"
@@ -2136,7 +2148,7 @@ class Reader:
         if ref not in self._info:
             from .llm import run as LR, AIConfigError
             try:
-                self._info[ref] = LR.info(ref, self.rules)
+                self._info[ref] = LR.info(ref, self.rules, probe=not self.offline)   # --offline: never asks the server
             except AIConfigError as e:
                 raise DatasheetError(str(e))
         return self._info[ref]
@@ -2377,7 +2389,6 @@ class Reader:
     def _ai_record(self, job, rec, res):
         """Provenance of the model and rails (sidecar "ai"); a guided model's answer that still fails the checks at
         the end of its route is held (hold_on_doubt): nothing is written, the part stays open with the reason."""
-        from . import ds_route as DR
         from .llm import run as LR
         model = rec.get("model") or job.get("model") or self.model
         try:
@@ -2385,12 +2396,7 @@ class Reader:
         except DatasheetError:
             return
         res["sidecar"]["ai"] = LR.provenance(inf, rec.get("message"), job.get("route"), bool(job["prov"].get("pages_sent")))
-        if "hold_on_doubt" in inf["plan"]["rails"]:
-            kind, why = DR.assess(res)
-            if kind != "ok":
-                raise DatasheetError(f"held: the answer of {model} ({inf['plan']['tier']} tier) still fails datasheet's "
-                                     f"checks ({'; '.join(why[:3])[:240]}); add a stronger model to [datasheet] ladder or "
-                                     "read the datasheet yourself")
+        hold_on_doubt(inf, model, res)
 
     def cached(self, job):
         """The cached answer for this step, when it is the one to keep (a cheaper model's rejected answer never is)."""
@@ -2527,9 +2533,52 @@ class Reader:
         except APIError:
             raise                                     # no answer came back: nothing to record
         except DatasheetError as e:                   # the rails gave up (steps off-format, family too hard, no text):
+            usage = getattr(e, "usage", None) or {}
+            unsent = getattr(e, "not_sent", False) and not usage   # refused before any request: costs nothing
+            if unsent:
+                self._release(job["key"])
             return {"type": "message", "role": "assistant", "model": job.get("model"), "stop_reason": "end_turn",
-                    "content": [{"type": "text", "text": ""}], "usage": getattr(e, "usage", None) or {},
-                    "ecadlib": {"error": str(e)}}     # a failed answer: the route moves on (or holds the part)
+                    "content": [{"type": "text", "text": ""}], "usage": usage,   # a failed answer: the route moves
+                    "ecadlib": {"error": str(e), **({"not_sent": True} if unsent else {})}}   # on (or holds the part)
+
+    def _batch_feedback(self, job, rec):
+        """The feedback_retry rail for a Message Batch answer that fails the checks where its route stops: one
+        synchronous turn with the checks' exact errors, as _ask gives a synchronous answer. -> the record to keep
+        (rec itself when nothing was sent)."""
+        from . import ds_route as DR
+        from .llm import run as LR
+        msg = rec["message"]
+        if not str(rec.get("via") or "").startswith("batch") or (msg.get("ecadlib") or {}).get("feedback") \
+                or self.estimate_only or not self.key:
+            return rec
+        model = rec.get("model") or job.get("model") or self.model
+        inf = self.info(model)
+        if "feedback_retry" not in inf["plan"]["rails"] or len(job["route"]["attempts"]) + 1 > self.router.max_attempts:
+            return rec
+        judge = lambda m: self._verdict(job, m)
+        kind, why = judge(msg)
+        if kind != "failed":
+            return rec
+        send, _ = self._send_fn(job)
+        smp = inf.get("sampling") or {}
+        if smp:
+            send = (lambda b, _send=send: _send({**b, **smp}))
+        info = dict(msg.get("ecadlib") or LR.record(inf))
+        guard = lambda b: self._guard_cost([dict(job, body=b, sync=True)])
+        try:
+            with logging_to(self.log_file, self.say):
+                keep, msg2 = LR.feedback(job["body"], msg, kind, why, inf, send, judge, info, guard)
+        except DatasheetError as e:
+            if not getattr(e, "maybe_billed", False):
+                self._release(job["key"])
+            raise
+        if msg2 is not None:                          # its own cost, at synchronous rates
+            self._settle(job["key"], model, msg2, "sync")
+            self.ledger.add(DR.attempt_record(job["part"], job.get("name"), model, msg2, "sync", self._pages_sent(job),
+                                              job.get("n_pages"), judge(msg2)[0]))
+        rec = dict(rec, message=dict(keep, ecadlib=info))
+        self.results.put(job["key"], rec)
+        return rec
 
     def _verdict(self, job, msg):
         """ok | incomplete | failed (with datasheet's reasons) | refused | truncated, for one answer."""
@@ -2546,26 +2595,27 @@ class Reader:
     # --- estimate
     def estimate(self, jobs, batch=None):
         """Token and cost estimate before anything is sent. With a key the input is counted exactly by
-        /v1/messages/count_tokens (free); without one it is rough (pages x PAGE_TOKENS). Output is a typical
+        /v1/messages/count_tokens (free; Claude only, never for a command that promised to send nothing:
+        count_tokens = False); else it is rough (pages x PAGE_TOKENS). Output is a typical
         OUT_TOKENS, and max_tokens for the worst case. Each part is priced on the model its route starts on;
         usd_max_route adds the worst case of every further step its route could take (more pages, the next model)."""
         batch = self.batch if batch is None else batch
-        rows, exact, models = [], bool(self.key), {}
+        rows, exact, models = [], bool(jobs), {}      # exact: every row counted by count_tokens
         for j in jobs:
             jb = batch and not j.get("sync")          # a synchronous request of a batch run (cross-check, feedback)
             mult = BATCH_DISCOUNT if jb else 1.0
             model = j.get("model") or self.model
             pin, pout = price_of(model) or (None, None)
             tin, unknown = None, False
-            if self.key and self._plain(model):
+            if self.key and self.count_tokens and self._plain(model):
                 try:
                     with logging_to(self.log_file, self.say):
                         tin = self.client().count_tokens(j["body"])
                     how = "count_tokens"
                 except Exception as e:                # offline, a refused key: an estimate never stops the run
                     self.say(f"  count_tokens failed ({type(e).__name__}): rough estimate instead")
-                    exact = False
             if tin is None:
+                exact = False
                 pages = len(j["prov"]["pages_sent"]) if j["prov"].get("pages_sent") else j["prov"].get("pages")
                 unknown = not pages and j["prov"].get("sent_as") != "base64"   # sent as a URL, never counted: size unknown
                 pages = pages or URL_PAGES
@@ -2579,7 +2629,7 @@ class Reader:
             from .ds_route import prices
             pin, pout = prices(model, tin) or (None, None)     # the long-prompt tier where the model has one
             cw = 1.0 if jb else CACHE_WRITE
-            cost = (tin * cw * pin + OUT_TOKENS * pout) / 1e6 * mult if pin else None
+            cost = (tin * cw * pin + OUT_TOKENS * pout) / 1e6 * mult if pin is not None else None   # a local $0
             worst = worst_usd(model, tmax, j["body"]["max_tokens"], cw, mult, fallback=bool(j["body"].get("fallbacks")))
             calls = j.get("calls") or self._calls(model)  # the small-model steps rail: several calls per read
             worst = worst * calls if worst is not None else None
@@ -3011,6 +3061,14 @@ class Reader:
             rec = self.results.get(j["key"])
             if rec and "rung" in j:
                 j2 = self._walk(j)
+                if j2["key"] == j["key"] and j2.get("final") and "message" in rec:
+                    try:
+                        rec2 = self._batch_feedback(j2, rec)
+                    except DatasheetError as e:       # no answer to the feedback turn: the batch answer stands
+                        self.say(f"  datasheet {j.get('name') or j['part']}: feedback turn not answered ({str(e)[:160]})")
+                        rec2 = rec
+                    if rec2 is not rec:
+                        rec, j2 = rec2, self._walk(j)
                 if j2["key"] != j["key"] or not j2.get("final"):
                     if j2["key"] != j["key"]:
                         out[j["key"]] = _Advance(j2)
@@ -3041,7 +3099,7 @@ def format_estimate(est):
     if not est.get("rows"):
         return "datasheet estimate: nothing to read (no part needs a datasheet read); $0.00"
     lines = [f"datasheet estimate: {est['parts']} parts, {est['model']}, {est['mode']}, {est['prices']}",
-             f"  input {est['input_tokens']:,} tokens ({'counted by count_tokens' if est['exact_input'] else 'rough: no API key, pages x ' + str(PAGE_TOKENS)});"
+             f"  input {est['input_tokens']:,} tokens ({'counted by count_tokens' if est['exact_input'] else 'rough: pages x ' + str(PAGE_TOKENS)});"
              f" expected {usd(est['usd'])}, at most {usd(est['usd_max'])} (every answer at max_tokens, plus a fallback re-run on synchronous calls)"]
     if len(est.get("models") or {}) > 1 or est.get("route") == "ladder":
         lines.append(f"  routed ([datasheet] route = {est.get('route')}): "
@@ -3152,7 +3210,7 @@ def batch_main(argv, estimate=False):
     ap.add_argument("--part", action="append", default=[], help="only these parts (plan mode)")
     ap.add_argument("--no-batch", action="store_true", help="synchronous Messages API calls instead of the Batches API")
     ap.add_argument("--no-wait", action="store_true", help="submit and return; run again to collect (the batch id is kept)")
-    ap.add_argument("--estimate", action="store_true", help="count tokens and cost; send nothing")
+    ap.add_argument("--estimate", action="store_true", help="rough token count (pages) and cost; send nothing")
     ap.add_argument("--yes", action="store_true", help="no questions (a model with no known price is sent; the "
                     "[datasheet] max_cost_usd cap still holds)")
     ap.add_argument("--max-cost-usd", type=float, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
@@ -3161,7 +3219,8 @@ def batch_main(argv, estimate=False):
     ap.add_argument("--effort", choices=EFFORTS)
     ap.add_argument("--poll", type=float, default=60.0, help="seconds between batch status checks (default 60)")
     ap.add_argument("--cache", default="out/http_cache")
-    ap.add_argument("--offline", action="store_true", help="downloaded datasheets only (API calls still go out)")
+    ap.add_argument("--offline", action="store_true", help="no network: downloaded datasheets and answers already "
+                    "read only; nothing is sent to the model")
     ap.add_argument("--rules")
     a = ap.parse_args(argv)
     from . import librarian as L, rules as RU
@@ -3175,6 +3234,7 @@ def batch_main(argv, estimate=False):
                 wait=not a.no_wait, poll=a.poll, estimate=estimate or a.estimate, yes=a.yes)
     if a.max_cost_usd is not None:
         rd.cfg["max_cost_usd"] = a.max_cost_usd
+    rd.count_tokens = not rd.estimate_only            # `datasheet estimate` sends nothing: a rough count
     if not rd.key and not rd.estimate_only and not rd.offline:
         from . import llm as LL
         why = f"{settings(rules)['api_key_env']} is not set" if rd.ep['provider'] == 'anthropic' else LL.needs_key_message(rd.ep)
@@ -3268,7 +3328,7 @@ def main(argv=None):
     ap.add_argument("--fetch", action="store_true", help="download a URL here and send it base64")
     ap.add_argument("--no-fallback", action="store_true", help="do not send fallbacks: default")
     ap.add_argument("--from-response", help="re-run the checks on a saved Messages API response JSON (no API call)")
-    ap.add_argument("--estimate", action="store_true", help="print the token count and cost; send nothing")
+    ap.add_argument("--estimate", action="store_true", help="print a rough token count (pages) and the cost; send nothing")
     ap.add_argument("--no-cache", action="store_true", help="ask again even when this PDF/part/model was read before")
     ap.add_argument("--rules", help="library rules file ([datasheet] max_cost_usd; default: searched from -o upwards)")
     ap.add_argument("--yes", action="store_true", help="no questions (a model with no known price is sent; the "
@@ -3317,6 +3377,7 @@ def main(argv=None):
             ck = ResultCache.key(src_hash, a.model, a.part, a.package, [offset, hint], a.effort + (f"|{sig}" if sig else ""))
             if a.estimate:
                 rd = Reader(a.out, Path(a.out) / "cache", model=a.model, effort=a.effort, log=print)
+                rd.count_tokens = False               # --estimate sends nothing: a rough count
                 prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None, "sent_as": source[0]}
                 print(format_estimate(rd.estimate([{"name": a.part, "url": a.pdf, "body": body, "prov": prov}], batch=False)))
                 return 0
@@ -3351,6 +3412,15 @@ def main(argv=None):
                                "at": datetime.datetime.now().isoformat(timespec="seconds"), "message": msg})
         n_sent = pdf_pages(source[1]) if pages and not a.from_response and source[0] == "base64" else None
         res = process(ext, a.part, a.pdf, a.model, offset, msg, n_sent)
+        if not a.from_response:                       # as every Reader read: the "ai" record, then hold_on_doubt
+            res["sidecar"]["ai"] = LR.provenance(inf, msg, None, isinstance(offset, list))
+            try:
+                hold_on_doubt(inf, a.model, res)
+            except DatasheetError as e:           # the paid answer is kept: --from-response writes it anyway
+                Path(a.out).mkdir(parents=True, exist_ok=True)
+                f = Path(a.out) / (re.sub(r"[^A-Za-z0-9_.+-]", "_", a.part) + ".response.json")
+                f.write_text(json.dumps({"page_offset": offset, "message": msg}, indent=2) + "\n", encoding="utf-8")
+                raise DatasheetError(f"{e} (the answer is saved in {f})")
     except DatasheetError as e:
         sys.exit(f"error: {e}")
     paths = write(res, a.out)

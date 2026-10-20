@@ -201,8 +201,12 @@ class OpenAICompatClient:
 
     def messages(self, body, headers=None):
         """Messages-shaped body -> Messages-shaped answer (see the module docstring)."""
-        from ..datasheet import APIError
-        chat = self.to_chat(body)
+        from ..datasheet import APIError, DatasheetError
+        try:
+            chat = self.to_chat(body)
+        except DatasheetError as e:                        # refused while building: nothing went out, nothing billed
+            e.not_sent = True
+            raise
         try:
             resp = self.chat(chat)
         except APIError as e:

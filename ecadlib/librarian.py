@@ -980,7 +980,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         sources.insert(sources.index("kicad") + 1, "standard")
     if "standard" in sources and "datasheet" in sources and sources.index("datasheet") < sources.index("standard"):
         from .llm import run as LR                     # rail prefer_standard: a guided (smaller) model reads datasheets
-        if LR.wants(rules, "prefer_standard"):         # only for what the offline standard parts can't build
+        if LR.wants(rules, "prefer_standard", probe=not offline):   # only for what the offline standard parts can't build
             sources.remove("standard")
             sources.insert(sources.index("datasheet"), "standard")
     from . import timing as TI                       # wall time per step (timing.jsonl, `ecadlib status`)

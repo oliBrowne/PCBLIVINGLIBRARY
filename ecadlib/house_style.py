@@ -966,9 +966,10 @@ def main(argv=None, send=None):
     start = Path(a.plan).parent if getattr(a, "plan", None) else Path(".")
     rules = RU.load(a.rules, start=start)
     pf = Path(a.profile) if a.profile else profile_path(rules, start)
+    from .datasheet import DatasheetError             # the model call's errors (a rejected key, HTTP 500, 429)
     try:
         return _run(a, rules, pf, send)
-    except StyleError as e:
+    except (StyleError, DatasheetError) as e:
         print(f"ecadlib style {a.cmd}: {e}", file=sys.stderr)
         return 2
 
