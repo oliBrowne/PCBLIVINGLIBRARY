@@ -176,3 +176,17 @@ def test_kicad_docs_say_generated_footprints_get_the_pcblib_3d_model():
     doc = " ".join((ROOT / "docs" / "kicad.md").read_text(encoding="utf-8").split())
     assert "ecadlib-generated footprints have none" not in doc and "cannot be downloaded offline stay missing" not in doc
     assert "gets its `.PcbLib`'s 3D model" in doc
+
+
+# T086
+@lite
+def test_quiet_kicad_dblib_and_kicad_pcm_print_only_the_outcome(tmp_path):
+    shutil.copytree(_demo(), tmp_path / "ws")
+    plan = "ws/librarian/demo_bom_demo/plan.json"
+    assert _run(["kicad-export", plan, "-o", "k", "--name", "mylib"], cwd=tmp_path)[0] == 0
+    rc, db, err = _run(["-q", "kicad-dblib", plan, "-o", "k", "--name", "mylib"], cwd=tmp_path)
+    assert rc == 0 and "wrote k/mylib.kicad_dbl" in db and " parts" not in db, (db, err)
+    rc, pcm, err = _run(["-q", "kicad-pcm", plan, "-o", "p", "--name", "mylib"], cwd=tmp_path)
+    assert rc == 0 and "wrote p/" in pcm and "Plugin and Content Manager" not in pcm and "symbol library" not in pcm, (pcm, err)
+    rc, pcm, _ = _run(["kicad-pcm", plan, "-o", "p", "--name", "mylib"], cwd=tmp_path)
+    assert "Plugin and Content Manager" in pcm, pcm

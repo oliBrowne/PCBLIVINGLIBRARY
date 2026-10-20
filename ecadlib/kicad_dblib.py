@@ -382,10 +382,12 @@ def main(argv=None):
     except (OSError, ValueError) as e:
         print(f"cannot build the database library: {e}", file=sys.stderr)
         return 2
+    from . import term as TM
+    say = (lambda *x, **k: None) if TM.VERBOSITY < 0 else print      # -q: only the outcome and the warnings
     for t, n in rep["tables"].items():
-        print(f"  {t}: {n} parts")
+        say(f"  {t}: {n} parts")
     for s in rep["skipped"]:
-        print(f"  skipped {s['part']}: {s['why']}")
+        say(f"  skipped {s['part']}: {s['why']}")
     for w in rep["warnings"]:
         print(f"  warning: {w}")
     print(f"wrote {Path(a.out) / rep['dblib']}, {rep['database']} and the {rep['nickname']} row in sym-lib-table")

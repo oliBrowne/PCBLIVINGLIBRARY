@@ -509,11 +509,13 @@ def main(argv=None):
         return 1 if rep["problems"] else 0
     if not a.src:
         ap.error("give a plan.json or a kicad-export folder (or --plugin)")
+    from . import term as TM
     log = (lambda *x: print(*x, file=sys.stderr)) if a.json else print
+    say = (lambda *x: None) if TM.VERBOSITY < 0 and not a.json else log      # -q: only the outcome and the problems
     try:
         rep = build(a.src, a.out, a.name, a.identifier, a.pkg_version, a.kicad, a.prefix, a.license, a.author,
                     a.description, a.homepage, a.base_url, a.include_held, offline=a.offline, cache=a.cache,
-                    schema=a.schema, log=log, unchecked=a.unchecked)
+                    schema=a.schema, log=say, unchecked=a.unchecked)
     except (OSError, ValueError) as e:
         print(f"ecadlib kicad-pcm: {e}", file=sys.stderr)
         return 2
@@ -525,9 +527,9 @@ def main(argv=None):
     if rep.get("unchecked"):
         log("  NOT CHECKED (--unchecked): this folder was not written by kicad-export, so its parts were not compared "
             "with any released revision; the package's NOTICE.txt says so too")
-    log(f"  {rep['symbols']} symbol library, {rep['footprints']} footprints, {rep['models']} 3D models; "
+    say(f"  {rep['symbols']} symbol library, {rep['footprints']} footprints, {rep['models']} 3D models; "
         f"checked: {', '.join(rep['checks'])}")
-    log(f"  in KiCad: Plugin and Content Manager > Install from File... > {Path(rep['zip']).name}; "
+    say(f"  in KiCad: Plugin and Content Manager > Install from File... > {Path(rep['zip']).name}; "
         f"the library shows up as {rep['nickname']}")
     if rep.get("repository"):
         log(f"  repository: upload {a.out} to {a.base_url}, then add {rep['repository_url']} under Manage Repositories")
