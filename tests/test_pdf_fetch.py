@@ -320,10 +320,10 @@ def test_interactive_is_false_off_the_main_thread():
         def isatty(self):
             return True
     got = []
-    t = threading.Thread(target=lambda: got.append(PF.interactive(T(), T(), {})))
+    t = threading.Thread(target=lambda: got.append(PF.interactive(T(), T(), {}, T())))
     t.start()
     t.join()
-    assert got == [False] and PF.interactive(T(), T(), {}) is True
+    assert got == [False] and PF.interactive(T(), T(), {}, T()) is True
 
 
 def test_one_browser_and_one_session_per_process():
@@ -368,17 +368,19 @@ def test_reader_uses_the_chain_and_never_hands_off_unwatched(tmp_path, monkeypat
     assert TC.reader(tmp_path, None).store.ways == ["headers", "browser"]
 
 
-def test_interactive_needs_two_terminals_and_no_ci():
+def test_interactive_needs_a_terminal_on_every_end_and_no_ci():
     class T:
         def __init__(self, tty):
             self.tty = tty
 
         def isatty(self):
             return self.tty
-    assert PF.interactive(T(True), T(True), {}) is True
-    assert PF.interactive(T(True), T(False), {}) is False
-    assert PF.interactive(T(True), T(True), {"CI": "true"}) is False
-    assert PF.interactive(T(True), T(True), {"ECADLIB_NO_HANDOFF": "1"}) is False
+    yes, no = T(True), T(False)
+    assert PF.interactive(yes, yes, {}, yes) is True
+    assert PF.interactive(yes, no, {}, yes) is False
+    assert PF.interactive(yes, yes, {}, no) is False                # 2>errors.log: what to save would go unseen
+    assert PF.interactive(yes, yes, {"CI": "true"}, yes) is False
+    assert PF.interactive(yes, yes, {"ECADLIB_NO_HANDOFF": "1"}, yes) is False
 
 
 # ---------------------------------------------------------------- the hand-off, on a fake Downloads folder
@@ -463,14 +465,42 @@ def test_handoff_with_no_browser_here_says_so_at_once(tmp_path):
 @lite
 def test_handoff_with_no_desktop_never_starts_a_console_browser(tmp_path, monkeypatch):
     import webbrowser
-    gui = PF.gui
+    gui, ssh = PF.gui, {"SSH_CONNECTION": "10.0.0.2 51000 10.0.0.9 22"}
     assert gui({}, "linux") is False and gui({"DISPLAY": ":0"}, "linux") and gui({}, "win32")
     assert gui({"WAYLAND_DISPLAY": "wayland-0"}, "linux") and gui({}, "darwin")
+    assert gui(ssh, "darwin") is False and gui(ssh, "win32") is False and gui({**ssh, "DISPLAY": "localhost:10.0"}, "linux")
     monkeypatch.setattr(PF, "gui", lambda *a, **k: False)
-    monkeypatch.setattr(webbrowser, "open", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a browser was run")))
+    no = lambda *a, **k: (_ for _ in ()).throw(AssertionError("a browser was run"))
+    monkeypatch.setattr(webbrowser, "open", no)
+    monkeypatch.setattr(webbrowser, "get", no)
     clock = Clock()
     h = PF.Handoff(tmp_path, wait_s=60, say=lambda m: None, sleep=clock.sleep, clock=clock)
     assert h.get(URL, "LTM4671")[4] == "no browser could be opened here" and clock.t == 0
+
+
+@lite
+def test_handoff_never_runs_a_console_browser_even_with_a_display(tmp_path, monkeypatch):
+    import webbrowser
+    ran = []
+
+    class Console(webbrowser.GenericBrowser):                       # what webbrowser picks for BROWSER=w3m over ssh -X
+        def open(self, url, new=0, autoraise=True):
+            ran.append(url)
+            return True
+
+    class Window(webbrowser.BackgroundBrowser):                     # a browser with its own window (xdg-open, firefox)
+        def open(self, url, new=0, autoraise=True):
+            ran.append(url)
+            return True
+    monkeypatch.setattr(PF, "gui", lambda *a, **k: True)
+    monkeypatch.setattr(webbrowser, "get", lambda *a, **k: Console("w3m"))
+    clock = Clock()
+    h = PF.Handoff(tmp_path, wait_s=60, say=lambda m: None, sleep=clock.sleep, clock=clock)
+    assert h.get(URL, "LTM4671")[4] == "no browser could be opened here" and clock.t == 0 and ran == [] and not h.gone
+    monkeypatch.setattr(webbrowser, "get", lambda *a, **k: Window("xdg-open"))
+    assert PF.desktop_browser() is not None
+    PF.desktop_browser()(URL)
+    assert ran == [URL]
 
 
 @lite
@@ -548,6 +578,10 @@ class Site(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         ua, cookie, path = self.headers.get("User-Agent", ""), self.headers.get("Cookie", ""), self.path.split("?")[0]
         pdf_hdr = (("Content-Disposition", "attachment; filename=ds.pdf"),)
+        host = self.headers.get("Host", "")
+        if path == "/" and host.startswith("localhost"):          # a file host whose home page sends you elsewhere
+            port = host.rsplit(":", 1)[-1]
+            return self._send(200, f"<script>location.replace('http://127.0.0.1:{port}/en/')</script>".encode())
         if path == "/":
             return self._send(200, COOKIE_JS)
         if "Chrome/" not in ua or "ecad" in ua.lower():
@@ -561,10 +595,6 @@ class Site(http.server.BaseHTTPRequestHandler):
             return self._send(200, PDF, "application/pdf", pdf_hdr) if "cleared=1" in cookie else self._send(503, CHALLENGE)
         if path == "/product":
             return self._send(200, PRODUCT_JS)
-        host = self.headers.get("Host", "")
-        if path == "/" and host.startswith("localhost"):          # a file host whose home page sends you elsewhere
-            port = host.rsplit(":", 1)[-1]
-            return self._send(200, f"<script>location.replace('http://127.0.0.1:{port}/en/')</script>".encode())
         if path == "/redir/ds.pdf":                                # a link that redirects to that file host
             self.send_response(302)
             self.send_header("Location", f"http://localhost:{self.server.server_address[1]}/cdn/ds.pdf")
@@ -588,11 +618,59 @@ class Site(http.server.BaseHTTPRequestHandler):
             return
         if path == "/inline/ds.pdf":
             return self._send(200, PDF, "application/pdf") if "human=1" in cookie else self._send(403, b"<html>no</html>")
+        if path in ("/slow/ds.pdf", "/slowinline/ds.pdf"):        # a piece at a time: which copy was stopped early
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Length", str(len(BIG)))
+            if path.startswith("/slow/"):
+                self.send_header("Content-Disposition", "attachment; filename=ds.pdf")
+            self.end_headers()
+            sent = 0
+            try:
+                for i in range(0, len(BIG), 65536):
+                    self.wfile.write(BIG[i:i + 65536])
+                    self.wfile.flush()
+                    sent += len(BIG[i:i + 65536])
+                    time.sleep(0.03)
+            except OSError:
+                pass
+            self.server.sent.append((self.headers.get("Sec-Fetch-Mode", ""), sent))
+            return
         return self._send(404, b"<html>Not found</html>")
 
 
-def site():
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
+SW_HOME = b"""<!doctype html><html><head><title>Maker</title><script>document.cookie = "human=1; path=/";
+navigator.serviceWorker && navigator.serviceWorker.register("/sw.js");</script></head><body>Maker home</body></html>"""
+SW_JS = b"""self.addEventListener("install", e => self.skipWaiting());
+self.addEventListener("activate", e => e.waitUntil(clients.claim()));
+self.addEventListener("fetch", e => e.respondWith(fetch(e.request)));"""
+
+
+class SwSite(Site):
+    """A maker site whose home page registers a service worker that answers every request (as many sites' do), and
+    whose 404 page sends you home at once."""
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        self.server.paths.append(path)
+        if path == "/":
+            return self._send(200, SW_HOME)
+        if path == "/sw.js":
+            return self._send(200, SW_JS, "application/javascript")
+        if path.startswith("/files/"):
+            return self._send(200, PDF, "application/pdf", (("Content-Disposition", "attachment; filename=ds.pdf"),)) \
+                if "human=1" in self.headers.get("Cookie", "") else self._send(403, b"<html>Access Denied</html>")
+        return self._send(404, b'<!doctype html><html><head><meta http-equiv="refresh" content="0;url=/"></head></html>')
+
+
+class Server(http.server.ThreadingHTTPServer):
+    def handle_error(self, request, client_address):             # a browser stopped mid-request: not a failure
+        if not isinstance(sys.exc_info()[1], ConnectionError):
+            super().handle_error(request, client_address)
+
+
+def site(handler=Site):
+    srv = Server(("127.0.0.1", 0), handler)
+    srv.sent, srv.paths = [], []
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, f"http://127.0.0.1:{srv.server_address[1]}"
 
@@ -704,6 +782,42 @@ def test_a_download_from_another_host_and_a_big_one():
         srv.shutdown()
 
 
+def test_the_browser_stops_its_own_copy_while_the_page_fetches_the_pdf():
+    b = _browser(allow_local=True)
+    if b is None:
+        return
+    srv, base = site()
+    try:
+        for path in ("/slow/ds.pdf", "/slowinline/ds.pdf"):       # a download, then a PDF the viewer would show
+            srv.sent.clear()
+            r = b.get(base + path)
+            assert r[0] == 200 and r[1] == BIG, (path, r[0], r[4])
+            t0 = time.monotonic()
+            while len(srv.sent) < 2 and time.monotonic() - t0 < 10:
+                time.sleep(0.1)
+            nav = [n for mode, n in srv.sent if mode == "navigate"]
+            assert len(srv.sent) == 2 and nav and nav[0] < len(BIG), (path, srv.sent)  # one full copy, not two
+    finally:
+        b.close()
+        srv.shutdown()
+
+
+def test_a_site_with_a_service_worker_never_answers_the_blank_page():
+    b = _browser(allow_local=True, settle=1.0)
+    if b is None:
+        return
+    srv, base = site(SwSite)
+    try:
+        for name in ("a", "b", "c"):                                # each a fresh page on a site with a worker
+            r = b.get(f"{base}/files/{name}.pdf")
+            assert r[:2] == (200, PDF), (name, r[0], r[4])
+            time.sleep(0.5)
+        assert not [p for p in srv.paths if "__ecadlib_blank__" in p], srv.paths   # the blank page is made here
+    finally:
+        b.close()
+        srv.shutdown()
+
+
 def test_a_dead_driver_is_started_again_and_an_abandoned_call_stops_its_browser():
     b = _browser(allow_local=True, timeout=20)
     if b is None:
@@ -742,6 +856,16 @@ def test_a_missing_driver_is_one_note(monkeypatch):
         b.close()
 
 
+@lite
+def test_a_driver_named_by_its_command_is_found_on_path(tmp_path, monkeypatch):
+    exe = tmp_path / ("mynode.exe" if sys.platform == "win32" else "mynode")
+    exe.write_bytes(b"")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert PF._runs(exe.name) and PF._runs(str(exe))                 # PLAYWRIGHT_NODEJS_PATH=node, or a full path
+    assert not PF._runs("no-such-node") and not PF._runs(str(tmp_path / "missing"))
+
+
 def test_a_call_that_never_returns_is_left_behind_on_its_own_thread():
     b = PF.Browser(timeout=1)
     b.limit = 0.5
@@ -773,8 +897,10 @@ def test_the_browser_never_opens_this_machine_from_a_link():
         return
     srv, base = site()
     try:
-        r = b.get(f"{base}/ua/ds.pdf")
+        t0 = time.monotonic()
+        r = b.get(f"{base}/ua/ds.pdf")                              # its home page and the link both blocked
         assert r[1] in (None, b"") or not D.is_pdf(r[1]), r[:2]
+        assert time.monotonic() - t0 < 30, (r[4], time.monotonic() - t0)   # (Edge 151+ hung closing such a page)
     finally:
         b.close()
         srv.shutdown()

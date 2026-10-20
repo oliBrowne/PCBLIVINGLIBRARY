@@ -15,7 +15,7 @@ refusal (refused()) moves on to the next way, in this order:
 
 None of them solves a CAPTCHA, signs in, reads your browser's cookies or goes through a third-party proxy. Each way
 returns what PdfStore._get does: (status, bytes, content-type, final url, error[, response headers])."""
-import atexit, concurrent.futures, os, re, sys, threading, time
+import atexit, concurrent.futures, os, re, shutil, sys, threading, time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -161,6 +161,13 @@ def playwright_available():
 CHANNELS = ("msedge", "chrome", None)                  # None: the Chromium Playwright downloaded (playwright install)
 
 
+def _runs(cmd):
+    """A program that can be started: a path, or a bare name found on PATH (PLAYWRIGHT_NODEJS_PATH=node)."""
+    cmd = str(cmd)
+    path = cmd if os.path.dirname(cmd) else shutil.which(cmd)
+    return bool(path) and os.access(path, os.X_OK)
+
+
 def pw_proxy(proxy, bypass=None):
     """HTTPS_PROXY as Playwright takes it: Chromium ignores user:password in the server URL, so they go apart."""
     from urllib.parse import urlsplit, unquote
@@ -261,8 +268,7 @@ class Browser:
         try:                                          # a driver that is not there: say so, without starting it
             from playwright._impl._driver import compute_driver_executable
             exe = compute_driver_executable()
-            node = exe[0] if isinstance(exe, (tuple, list)) else exe
-            if not os.access(str(node), os.X_OK):
+            if not _runs(exe[0] if isinstance(exe, (tuple, list)) else exe):
                 s.why = f"could not start a browser: Playwright's driver is missing ({INSTALL})"
                 return
         except Exception:                             # (a private helper: when it moves, just start)
@@ -301,7 +307,8 @@ class Browser:
             except Exception:
                 ua = BROWSER_UA
             s.ctx = s.browser.new_context(accept_downloads=True, user_agent=ua, locale="en-US",
-                                          viewport={"width": 1366, "height": 768})
+                                          viewport={"width": 1366, "height": 768},
+                                          service_workers="block")   # (a site's worker would answer the blank page)
             if not self.allow_local:
                 from . import datasheet as D
                 s.ctx.route("**/*", lambda route: route.abort() if D.unsafe_download(route.request.url) else route.continue_())
@@ -334,8 +341,15 @@ class Browser:
                     nav["last"] = r                   # the page's own document, after any redirect or reload
             except Exception:
                 pass
+
+        def on_download(d):
+            downloads.append(d)
+            try:                                      # the page fetches it again: two copies would halve the speed
+                d.cancel()
+            except Exception:
+                pass
         page.on("response", on_response)
-        page.on("download", lambda d: downloads.append(d))
+        page.on("download", on_download)
         try:
             host = urlparse(url).netloc
             if host not in s.warm:                    # the site's own scripts (bot checks) run on its home page first
@@ -399,6 +413,10 @@ class Browser:
                     d.delete()
                 except Exception:
                     pass
+            try:                                      # Edge 151+ never closes a page left on its error page
+                page.goto("about:blank", timeout=5000)
+            except Exception:
+                pass
             try:
                 page.close()
             except Exception:
@@ -407,24 +425,26 @@ class Browser:
     def _fetch_in_page(self, page, url):
         """The PDF fetched again by the page itself: the same browser, cookies and TLS, with a time limit and
         MAX_DOWNLOAD as ecadlib's own request has. A fetch must come from the PDF's own site, so the page first moves
-        to a blank page of that site, made here (the site's home page may redirect elsewhere, or to another site)."""
+        to a blank page of that site, made here (the site's home page may redirect elsewhere, or to another site);
+        leaving the page also stops its own copy of the PDF (a PDF viewer), which would halve the fetch's speed."""
         import base64
         from playwright.sync_api import Error as PWError
         from .datasheet import MAX_DOWNLOAD, DOWNLOAD_S
         limit = min(self.timeout * 2, DOWNLOAD_S)
         deadline = time.monotonic() + limit
-        if origin(page.url) != origin(url):
-            blank = origin(url) + "__ecadlib_blank__"
-            page.route(blank, lambda r: r.fulfill(status=200, content_type="text/html", body="<!doctype html><title></title>"))
+        blank = origin(url) + "__ecadlib_blank__"
+        page.route(blank, lambda r: r.fulfill(status=200, content_type="text/html", body="<!doctype html><title></title>"))
+        try:
+            page.goto(blank, wait_until="load", timeout=self.timeout * 1000)
+        except PWError as e:
+            return 0, None, "", url, f"browser: {str(e).splitlines()[0][:160]}"
+        finally:
             try:
-                page.goto(blank, wait_until="load", timeout=self.timeout * 1000)
-            except PWError as e:
-                return 0, None, "", url, f"browser: {str(e).splitlines()[0][:160]}"
-            finally:
-                try:
-                    page.unroute(blank)
-                except PWError:
-                    pass
+                page.unroute(blank)
+            except PWError:
+                pass
+        if not urlparse(page.url).path.endswith("__ecadlib_blank__"):
+            return 0, None, "", url, f"browser: the page went to {page.url[:120]} instead of a blank one"
         try:
             status, ctype, n, err = page.evaluate(_FETCH_JS, [url, MAX_DOWNLOAD, int(limit * 1000)])
             if err:
@@ -540,19 +560,38 @@ def downloads_dir(configured=""):
 
 
 def gui(environ=None, platform=None):
-    """A desktop to open a browser on: Windows, macOS, or an X11 / Wayland display (not SSH, not a console)."""
+    """A desktop to open a browser on: Windows or macOS (not over SSH: it would open on a screen nobody here sees),
+    or an X11 / Wayland display (ssh -X included)."""
     env = os.environ if environ is None else environ
-    return (platform or sys.platform) in ("win32", "darwin", "cygwin") or bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
+    if (platform or sys.platform) in ("win32", "darwin", "cygwin"):
+        return not (env.get("SSH_CONNECTION") or env.get("SSH_TTY"))
+    return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
 
 
-def interactive(stdin=None, stdout=None, environ=None):
-    """A person is watching this run: both ends are a terminal, it is not CI, and this is the program's main thread
-    (a web UI or server started from a terminal handles its requests on other threads)."""
+def desktop_browser():
+    """What opens a link in a browser window here, or None: no desktop, or only a console browser (lynx, w3m),
+    which would take over this terminal while the hand-off waits for a file nobody can save."""
+    import webbrowser
+    if not gui():
+        return None
+    try:
+        b = webbrowser.get()
+    except webbrowser.Error:
+        return None
+    if isinstance(b, webbrowser.GenericBrowser) and not isinstance(b, webbrowser.BackgroundBrowser):
+        return None                                   # run in the foreground, in this terminal
+    return b.open
+
+
+def interactive(stdin=None, stdout=None, environ=None, stderr=None):
+    """A person is watching this run: stdin, stdout and stderr (where the hand-off says what to save) are a terminal,
+    it is not CI, and this is the program's main thread (a web UI or server started from a terminal handles its
+    requests on other threads)."""
     env = os.environ if environ is None else environ
     if env.get("CI") or env.get("ECADLIB_NO_HANDOFF") or threading.current_thread() is not threading.main_thread():
         return False
     try:
-        return bool((stdin or sys.stdin).isatty() and (stdout or sys.stdout).isatty())
+        return bool((stdin or sys.stdin).isatty() and (stdout or sys.stdout).isatty() and (stderr or sys.stderr).isatty())
     except (AttributeError, ValueError):
         return False
 
@@ -621,10 +660,7 @@ class Handoff:
         with self.lock:                               # one link at a time: each new file belongs to one request
             before = {p: (s.st_size, s.st_mtime) for p, s in self._pdfs().items()}
             stem = _key(Path(urlparse(url).path).stem)
-            opener = self.open_url
-            if opener is None:                        # (no desktop: a console browser would take over the terminal)
-                import webbrowser
-                opener = webbrowser.open if gui() else (lambda u: False)
+            opener = self.open_url or desktop_browser() or (lambda u: False)
             try:
                 ok = opener(url)
             except Exception as e:
