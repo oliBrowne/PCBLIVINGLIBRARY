@@ -189,3 +189,28 @@ def test_t098_release_check_table_says_waiting_for_sign_off():
     lines = {l.split()[-1]: l for l in out.getvalue().splitlines() if l.strip().startswith(("ready", "waiting", "released"))}
     assert "waiting for sign-off" in lines["PART-A"], out.getvalue()
     assert "released anyway" in lines["PART-B"] and "ready" in lines["PART-C"], out.getvalue()
+
+
+# ------------------------------------------------------------------ T099: part revert dropped a held change without a ledger line
+def test_t099_revert_records_the_held_change_it_drops():
+    with tempfile.TemporaryDirectory() as d:
+        lib, home = _demo(d), Path(d) / "home"
+        plan = lib / "plan.json"
+        kmod = lib / "models/KiCad/C_0402_1005Metric.kicad_mod"
+        rules = Path(d) / "ws/ecadlib.toml"
+        rules.write_text(rules.read_text(encoding="utf-8") + '\n[release]\nparity = "warn"\n', encoding="utf-8")
+
+        def held(a, b):
+            kmod.write_text(kmod.read_text(encoding="utf-8").replace(f"(size {a} 0.62)", f"(size {b} 0.62)", 1), encoding="utf-8")
+            _run(d, home, "kicad-export", plan, "-o", "kx", "--name", "m")
+            st = json.loads(_run(d, home, "part", "status", lib, "--json").stdout)
+            return next(h["digest"] for h in st["held"] if h["part"] == "CAP-0402-100nF")
+        dg = held("0.56", "0.4")
+        assert _run(d, home, "part", "approve", lib, "--part", "CAP-0402-100nF", "--digest", dg[:12], "-m", "r2",
+                    "--user", "Ann <ann@x.com>").returncode == 0
+        dg = held("0.4", "0.3")
+        n = len(_ledger(lib))
+        rv = _run(d, home, "part", "revert", lib, "CAP-0402-100nF@1", "-m", "back", "--user", "Bob <bob@x.com>")
+        assert rv.returncode == 0 and "was dropped" in rv.stdout, rv.stdout + rv.stderr
+        assert any(e["event"] == "superseded" and e.get("digest") == dg for e in _ledger(lib)[n:]), _ledger(lib)[n:]
+        assert not (lib / ".ecadlib/proposed/CAP-0402-100nF.json").exists()
