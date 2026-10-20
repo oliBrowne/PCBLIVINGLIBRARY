@@ -344,3 +344,43 @@ def test_ui_survives_a_deleted_workspace_folder(tmp_path):
         assert "Traceback" not in err.getvalue(), err.getvalue()
     finally:
         srv.shutdown()
+
+
+# T109
+@lite
+def test_a365_refused_or_unreachable_nexar_is_a_plain_message(tmp_path, monkeypatch):
+    """Step 3's Altium 365 workspace list and Push showed "Something went wrong (HTTPError: 401 Client Error ...)" (or
+    ProxyError) with a traceback when Nexar refused the token or could not be reached."""
+    import contextlib, io, requests
+    from ecadlib import altium365 as A, userconfig as UC
+    from tests.test_ui import serve
+
+    class Session:
+        def __init__(self, answer):
+            self.answer = answer
+
+        def post(self, url, **k):
+            if isinstance(self.answer, Exception):
+                raise self.answer
+            r = requests.Response()
+            r.status_code, r.url, r._content = self.answer, url, b'{"message": "Unauthorized"}'
+            return r
+    for answer, says in ((401, "refused the token (401)"), (502, "answered 502"),
+                         (requests.ConnectionError("proxy down"), "could not reach Altium 365")):
+        try:
+            A.Nexar("tok", Session(answer)).workspaces()
+            raise AssertionError("no error")
+        except A.NexarUnreachable as e:
+            assert says in str(e) and "Error:" not in str(e), e
+    monkeypatch.setattr(UC, "secret", lambda name, *a, **k: "nexar-FAKE" if name == "NEXAR_TOKEN" else None)
+    real = A.Nexar.__init__
+    monkeypatch.setattr(A.Nexar, "__init__", lambda self, token, session=None: real(self, token, Session(401)))
+    ws = Workspace(tmp_path / "ws", [DEMO_LIB], offline=True)
+    srv, call = serve(ws)
+    try:
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            st, r = call("POST", "/api/altium365/workspaces", {})
+        assert st == 400 and r["error"].startswith("Altium 365 (Nexar) refused the token (401)"), r
+        assert "Traceback" not in err.getvalue(), err.getvalue()
+    finally:
+        srv.shutdown()

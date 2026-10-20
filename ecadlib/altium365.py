@@ -115,15 +115,40 @@ class NexarError(Exception):
     pass
 
 
+class NexarUnreachable(ValueError):
+    """Nexar refused the token or could not be reached: one plain line with what to do (no traceback in the UI)."""
+
+
+def _http(token, send):
+    """send() a Nexar request; refused / unreachable -> NexarUnreachable."""
+    import requests
+    from urllib.parse import urlsplit
+    try:
+        r = send()
+        r.raise_for_status()
+        return r
+    except requests.HTTPError as e:
+        code = getattr(e.response, "status_code", 0)
+        if code in (401, 403):
+            hint = token_hint(token)
+            raise NexarUnreachable(f"Altium 365 (Nexar) refused the token ({code}){hint}" + (
+                "" if "keys set" in hint else "; save a new one on the setup page or with `ecadlib keys set NEXAR_TOKEN`")
+            ) from None
+        raise NexarUnreachable(f"Altium 365 (Nexar) answered {code}: try again later") from None
+    except requests.RequestException as e:
+        host = urlsplit(getattr(e.request, "url", None) or API_URL).hostname
+        raise NexarUnreachable(f"could not reach Altium 365 (Nexar, {host}; {type(e).__name__}): check the internet "
+                               "connection or proxy, then try again") from None
+
+
 class Nexar:
     def __init__(self, token, session=None):
         import requests
         self.token, self.s = token, session or requests.Session()
 
     def gql(self, query, variables=None):
-        r = self.s.post(API_URL, json={"query": query, "variables": variables or {}},
-                        headers={"Authorization": f"Bearer {self.token}"}, timeout=60)
-        r.raise_for_status()
+        r = _http(self.token, lambda: self.s.post(API_URL, json={"query": query, "variables": variables or {}},
+                                                  headers={"Authorization": f"Bearer {self.token}"}, timeout=60))
         body = r.json()
         if body.get("errors"):
             raise NexarError("; ".join(e.get("message", "?") for e in body["errors"]))
@@ -131,9 +156,8 @@ class Nexar:
 
     def upload(self, path):
         with open(path, "rb") as f:
-            r = self.s.post(FILES_URL.rstrip("/") + "/File/Upload", files={"file": (Path(path).name, f)},
-                            headers={"token": self.token}, timeout=120)
-        r.raise_for_status()
+            r = _http(self.token, lambda: self.s.post(FILES_URL.rstrip("/") + "/File/Upload", files={"file": (Path(path).name, f)},
+                                                      headers={"token": self.token}, timeout=120))
         return r.text.strip()              # opaque id; do not parse
 
     def workspaces(self):
@@ -697,7 +721,7 @@ def main(argv=None):
             if not a.dry_run:
                 record_push(Path(a.plan).parent, t0, results)
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work
-        hint = token_hint(token) if "401" in str(e) else ""
+        hint = token_hint(token) if "401" in str(e) and not isinstance(e, NexarUnreachable) else ""
         sys.exit(f"Nexar request failed: {type(e).__name__}: {e}{hint}")
     out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=2))
