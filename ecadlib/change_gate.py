@@ -519,6 +519,11 @@ class Guard:
                         now[str(side)] = side.read_bytes()
         if now and self._is_head(FP.of_item(it, self.base), head):
             self.pre.update(now)
+            for p in recs:                     # and the 3D models their recipe names, as they are now
+                f = Path(p)
+                if p in now and p not in self.pre_steps:
+                    self.pre_steps[p] = {str(f.parent / s): (f.parent / s).read_bytes() for s in LG.step_files(f)
+                                         if (f.parent / s).is_file()}
 
     def _is_head(self, fp, head):
         """fp is the released revision: the same digest as the head's, or (a head an older ecadlib fingerprinted) as
@@ -541,9 +546,9 @@ class Guard:
             else:
                 rest[k] = r
         self.ledger.restore_files(rest, self.base)
-        for r in (files or {}).values():           # STEP files of a head recorded without them: as they were at begin()
+        for r in (files or {}).values():           # STEP files of a head recorded without them, or of bytes kept at
             p = str((self.base / r["path"]).resolve()) if not Path(r["path"]).is_absolute() else str(Path(r["path"]).resolve())
-            if "steps" in r:
+            if "steps" in r and p not in self.pre:  # begin(): as they were at begin()
                 continue
             for s, data in self.pre_steps.get(p, {}).items():
                 f = Path(s)

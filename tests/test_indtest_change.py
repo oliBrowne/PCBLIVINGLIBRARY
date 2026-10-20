@@ -119,3 +119,17 @@ def test_t042_unreadable_kicad_mod_fails_the_release_check():
                   held["CAP-0402-100nF"]["digest"][:12], "-m", "ok", "--user", "Ann <ann@x.com>")
         assert ap.returncode == 2 and "fails the release check" in ap.stderr, (ap.returncode, ap.stdout, ap.stderr)
         assert kmod.read_bytes() == released
+
+
+# ------------------------------------------------------------------ T043: a refused choice left its STEP in the released library
+def test_t043_refused_choice_puts_the_released_step_back():
+    with tempfile.TemporaryDirectory() as d:
+        lib, home = _demo(d), Path(d) / "home"
+        plan = lib / "plan.json"
+        _run(d, home, "release-check", plan, "--allow", "AO3401A")                            # AO3401A released
+        step = lib / "models/PcbLib/ecadlib_3d/SOT-23_0/SOT-23.step"
+        assert _run(d, home, "resolve", plan, "--part", "AO3401A", "--offline", "choose", "footprint", "spec:SOT-23").returncode == 0
+        released = step.read_bytes()                   # an equivalent footprint again: same part, new PcbLib bytes
+        r = _run(d, home, "resolve", plan, "--part", "AO3401A", "--offline", "choose", "footprint", "spec:SOT-23-5")
+        assert r.returncode == 2 and "not applied" in r.stdout, r.stdout + r.stderr
+        assert step.read_bytes() == released
