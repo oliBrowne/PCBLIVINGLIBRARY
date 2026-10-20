@@ -1,7 +1,11 @@
 """EXPERIMENT: how many benchmark datasheet links download as a usable PDF with ecadlib's own User-Agent vs a desktop
 browser's headers ([datasheet] browser_headers), each with and without retries. No model is called (no API spend).
 
-    python scripts/datasheet_probe.py -o probe-out [--limit 110] [--modes honest,browser,browser+retry,honest+retry]
+    python scripts/datasheet_probe.py -o probe-out [--limit 110] [--modes honest,browser,impersonate,playwright,...]
+
+impersonate needs `pip install curl_cffi` (Chrome's TLS fingerprint, no browser); playwright needs `pip install
+playwright` and drives the installed Edge headless (no browser download). A mode whose package is missing is
+reported as unavailable, not as a refusal.
 
 Every link goes through PdfStore.fetch, the same path a BOM run takes (PDF check, size limit, one hop from an HTML
 product page to its PDF), each mode with its own empty cache and its own session (no shared cookies). Modes run
@@ -17,7 +21,97 @@ from ecadlib import datasheet as D                                 # noqa: E402
 from ecadlib.httpcache import CachedHTTP                           # noqa: E402
 from ecadlib.eval import runner as R                               # noqa: E402
 
-MODES = {"honest": (False, 0), "honest+retry": (False, 2), "browser": (True, 0), "browser+retry": (True, 2)}
+MODES = {"honest": (False, 0), "honest+retry": (False, 2), "browser": (True, 0), "browser+retry": (True, 2),
+         "impersonate": None, "playwright": None}     # optional: pip install curl_cffi / playwright (Edge, headless)
+ALL_MODES = "honest,honest+retry,browser,browser+retry,impersonate,playwright"
+
+
+class Impersonate:
+    """curl_cffi with Chrome's TLS / HTTP2 fingerprint and headers; no browser."""
+    offline = False
+
+    def __init__(self, last):
+        from curl_cffi import requests as cr
+        self.s, self.last = cr.Session(impersonate="chrome"), last
+
+    def get_bytes(self, url):
+        wait(url, self.last)
+        try:
+            r = self.s.get(url, timeout=60, allow_redirects=True)
+        except Exception as e:                                    # curl_cffi raises its own error types
+            return 0, None, "", url, f"{type(e).__name__}: {str(e)[:160]}"
+        return r.status_code, r.content, r.headers.get("content-type", ""), str(r.url), None
+
+
+class Browser:
+    """Playwright driving the installed Edge (headless, fresh profile, no user cookies): the site's root page first so
+    its bot script runs, then the PDF link; the PDF is taken from the download or the PDF response."""
+    offline = False
+    _pw = _b = None
+
+    def __init__(self, last):
+        self.last = last
+        if Browser._b is None:
+            from playwright.sync_api import sync_playwright
+            Browser._pw = sync_playwright().start()
+            for kw in ({"channel": "msedge"}, {"channel": "chrome"}, {}):
+                try:
+                    Browser._b = Browser._pw.chromium.launch(headless=True, **kw)
+                    break
+                except Exception:
+                    continue
+            if Browser._b is None:
+                raise RuntimeError("no Edge, Chrome or Playwright Chromium to launch")
+
+    def get_bytes(self, url):
+        u = urlparse(url)
+        ctx = Browser._b.new_context(accept_downloads=True)
+        page, got = ctx.new_page(), {}
+
+        def on_resp(r):
+            try:
+                if "pdf" in (r.headers.get("content-type") or "") and "body" not in got:
+                    got.update(status=r.status, body=r.body(), url=r.url)
+            except Exception:
+                pass
+        page.on("response", on_resp)
+        try:
+            wait(url, self.last)
+            try:
+                page.goto(f"{u.scheme}://{u.netloc}/", timeout=30000, wait_until="load")
+                page.wait_for_timeout(2000)
+            except Exception:
+                pass
+            status = 0
+            try:
+                with page.expect_download(timeout=45000) as d:
+                    try:
+                        r = page.goto(url, timeout=45000)
+                        status = r.status if r else 0
+                    except Exception:
+                        pass                                   # "Download is starting" aborts the navigation
+                    if got.get("body"):
+                        return got["status"], got["body"], "application/pdf", got["url"], None
+                    if status and status >= 400:
+                        return status, b"", "", url, None
+                    html = page.content().encode()
+                    if html and not got:
+                        return status or 200, html, "text/html", page.url, None
+                return 200, Path(d.value.path()).read_bytes(), "application/pdf", d.value.url, None
+            except Exception as e:
+                if got.get("body"):
+                    return got["status"], got["body"], "application/pdf", got["url"], None
+                return 0, None, "", url, f"{type(e).__name__}: {str(e)[:160]}"
+        finally:
+            ctx.close()
+
+
+def wait(url, last, gap=1.0):
+    host = urlparse(url).netloc
+    w = gap - (time.time() - last.get(host, 0))
+    if w > 0:
+        time.sleep(w)
+    last[host] = time.time()
 # docs/benchmark.md (run of 2026-10-18): parts whose PDF never reached the model
 REFUSED = set("LTM4671 LT3652IDD LTC4060EDHC LTC2942-1 LTC7810 ADAU1702 AD5274BRM AD7606 LT8610 MAX22201 AD7616 "
               "BUK7M10-40EX PSMN5R2-60YL IP4234CZ6 BCV61 BAT160A BAT160C M2GL090T-FG484 DNA40U2200GU C8051F320-GQ "
@@ -33,24 +127,31 @@ def site(url):
 
 
 def probe(url, mode, root, last):
-    browser, retries = MODES[mode]
-    h = CachedHTTP(cache_dir=root / mode / "http", min_interval=1.0)
-    h._last = last                                                  # one rate limit per site across the modes
-    st = D.PdfStore(root / mode, h, browser=browser, retries=retries)
     t = time.time()
+    try:
+        if MODES[mode] is None:
+            st = D.PdfStore(root / mode, Impersonate(last) if mode == "impersonate" else Browser(last))
+        else:
+            browser, retries = MODES[mode]
+            h = CachedHTTP(cache_dir=root / mode / "http", min_interval=1.0)
+            h._last = last                                          # one rate limit per site across the modes
+            st = D.PdfStore(root / mode, h, browser=browser, retries=retries)
+    except Exception as e:                                          # the optional extra is not installed
+        return {"ok": False, "error": f"mode unavailable: {type(e).__name__}: {str(e)[:120]}", "pages": "", "bytes": "",
+                "attempts": 0, "seconds": 0}
     try:
         data, meta = st.fetch(url, "probe")
         ok, err, pages, size = bool(meta.get("pages")), "" if meta.get("pages") else "no pages", meta.get("pages"), len(data)
     except D.DatasheetError as e:
         ok, err, pages, size = False, str(e).replace(url, "").lstrip(": ")[:200], "", ""
-    return {"ok": ok, "error": err, "pages": pages, "bytes": size, "attempts": st.attempts, "seconds": round(time.time() - t, 1)}
+    return {"ok": ok, "error": err, "pages": pages, "bytes": size, "attempts": getattr(st, "attempts", 0) or 1, "seconds": round(time.time() - t, 1)}
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out", required=True)
     ap.add_argument("--limit", type=int, default=110)
-    ap.add_argument("--modes", default="honest,browser,browser+retry,honest+retry")
+    ap.add_argument("--modes", default=ALL_MODES)
     a = ap.parse_args(argv)
     modes = a.modes.split(",")
     out = Path(a.out)
