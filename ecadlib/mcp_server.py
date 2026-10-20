@@ -908,9 +908,12 @@ def _check_endpoints(ws, text):
         return _fp(v)
     changed = sorted(k for k in set(old) | set(new) if old.get(k, default(k)) != new.get(k, default(k)))
     if changed:
+        mine = ws.rules_file()
         raise ValueError(f"save_rules cannot change {', '.join(changed)} (where requests and your API keys / tokens "
                          "go, or the spending limits): "
-                         f"ask the user to edit {f.name} themselves")
+                         f"ask the user to edit {ws._label(f)} themselves"
+                         + ("" if f == mine else f". save_rules writes {ws._label(mine)}, which would replace "
+                                                 f"{ws._label(f)} for this workspace, so keep its values of those settings"))
 
 
 # ------------------------------------------------------------------ answers

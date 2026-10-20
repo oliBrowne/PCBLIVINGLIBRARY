@@ -1078,7 +1078,9 @@ class Workspace:
         paths = [self._given_path(p) for p in (paths or []) if str(p).strip()] or self._rules_sources()
         if progress:
             progress(0, 1, "scanning " + ", ".join(Path(p).name for p in paths)[:80])
-        out = I.propose(paths, [self._given_path(x) for x in (a365 or [])], choices, existing=self.rules_file())
+        out = I.propose(paths, [self._given_path(x) for x in (a365 or [])], choices,   # from the rules in force: a
+                        existing=self.rules_in_use() or self.rules_file())          # workspace file replaces init's
+                                                                                     # ./ecadlib.toml, so keep its settings
         out["paths"], out["file"] = paths, self.rel(self.rules_file())
         if progress:
             progress(1, 1, "done")

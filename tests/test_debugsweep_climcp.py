@@ -65,9 +65,39 @@ def test_ds2_51_save_rules_guard_compares_with_the_parent_rules_file_in_force(tm
     for toml in ('[setup]\ntool = "kicad"\n', "[datasheet]\nmax_cost_usd = 10.0\n"):
         r = _call(ws, "save_rules", {"toml": toml, "overwrite": True})
         assert r["isError"] and "cannot change" in _txt(r), (toml, r)
+        assert str(proj / "ecadlib.toml") in _txt(r), _txt(r)            # which of the two ecadlib.toml files
     assert not (proj / "ecadlib_workspace" / "ecadlib.toml").exists()
     rules = ws.rules()
     assert (rules["datasheet"]["max_cost_usd"], rules["ai"]["base_url"]) == (0.5, "http://localhost:11434/v1")
+    # the documented flow: propose_rules, then save_rules with its toml. The proposal starts from the rules in force,
+    # so it keeps the person's cap and local model and the guard lets it through.
+    r = _call(ws, "propose_rules", {})
+    assert not r["isError"], r
+    r = _call(ws, "save_rules", {"toml": json.loads(_txt(r))["toml"], "overwrite": True})
+    assert not r["isError"], _txt(r)
+    rules = ws.rules()
+    assert ws.rules_in_use() == proj / "ecadlib_workspace" / "ecadlib.toml"
+    assert (rules["datasheet"]["max_cost_usd"], rules["datasheet"]["ask_above_usd"], rules["ai"]["provider"],
+            rules["ai"]["base_url"]) == (0.5, 0.1, "openai", "http://localhost:11434/v1"), rules
+
+
+@lite
+def test_ds2_51_save_rules_keeping_the_parent_protected_values_saves(tmp_path, monkeypatch):
+    """The guard must refuse a change, not every save: a text that keeps the parent file's cap and AI settings saves."""
+    proj = (tmp_path / "proj").resolve()
+    proj.mkdir()
+    (proj / "ecadlib.toml").write_text('[setup]\nworkspace = "ecadlib_workspace"\n'
+                                       '[datasheet]\nmax_cost_usd = 0.5\nask_above_usd = 0.1\n'
+                                       '[ai]\nprovider = "openai"\nbase_url = "http://localhost:11434/v1"\n',
+                                       encoding="utf-8")
+    monkeypatch.chdir(proj)
+    ws = Workspace("ecadlib_workspace")
+    ws.mcp_options = M.Options(confine=True)
+    r = _call(ws, "save_rules", {"toml": '[datasheet]\nmax_cost_usd = 0.5\nask_above_usd = 0.1\n[ai]\nprovider = "openai"\n'
+                                         'base_url = "http://localhost:11434/v1"\n[setup]\ntool = "kicad"\n',
+                                 "overwrite": True})
+    assert not r["isError"], _txt(r)
+    assert ws.rules()["setup"]["tool"] == "kicad"
 
 
 # ------------------------------------------------------------------ DS2-52
