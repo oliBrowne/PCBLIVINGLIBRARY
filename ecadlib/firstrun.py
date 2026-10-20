@@ -511,6 +511,8 @@ def demo_main(argv=None):
     try:
         res = build_demo(ws, tool, a.bom, log=say)
     except ValueError as e:                     # a folder with someone's rules, or a BOM the reader cannot use
+        if type(e) is not ValueError:           # a damaged workspace file (bad JSON, not text): the CLI's one line,
+            raise                               # hint and --debug traceback
         print(f"ecadlib demo: {e}" + bom_hint(e), file=sys.stderr)
         return 2
     if a.json:

@@ -317,3 +317,18 @@ def test_setup_save_that_cannot_write_the_settings_changes_no_workspace(tmp_path
     except PermissionError as e:
         assert "nothing was changed" in str(e) and "ECADLIB_HOME" in str(e), e
     assert not (tmp_path / "wsB").exists()
+
+
+# T068
+@lite
+def test_demo_over_a_damaged_plan_gives_the_hint_and_the_debug_traceback(tmp_path):
+    shutil.copytree(_demo(), tmp_path / "ws")
+    (tmp_path / "ws" / "librarian" / "demo_bom_demo" / "plan.json").write_text('{"truncated": \n', encoding="utf-8")
+    env = {"ECADLIB_HOME": str(tmp_path / "h")}
+    rc, _, err = _run(["demo", "-o", "ws"], cwd=tmp_path, env=env)
+    assert rc == 2 and "not valid JSON" in err and "hint:" in err, err
+    try:                                         # --debug: the error itself goes up (Python prints the traceback)
+        _run(["demo", "-o", "ws", "--debug"], cwd=tmp_path, env=env)
+        raise AssertionError("--debug kept the traceback back")
+    except json.JSONDecodeError:
+        pass
