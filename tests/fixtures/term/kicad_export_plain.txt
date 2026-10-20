@@ -1,12 +1,12 @@
-  written  AMS1117-3.3     SOT-223-3_TabPin2
-  written  AO3401A         SOT-23
   written  CAP-0402-100nF  C_0402_1005Metric
   written  KT-0603R        LED_0603_1608Metric
   written  RES-0603-10k    R_0603_1608Metric
   written  RES-0603-4.7k   R_0603_1608Metric
+  skipped  AMS1117-3.3     The pinout of Regulator_Linear_GND_VO_VI comes from the AMS1117-3.3 family table, not from this part's datasheet.
+  skipped  AO3401A         The pinout of Q_PMOS_GSD comes from the AO3401A family table, not from this part's datasheet.
   skipped  CH340C          There is no symbol for this part yet.
 
-6 symbols, 5 footprints, 5/5 3D models written; 1 held part left out (--include-held adds them)
+4 symbols, 3 footprints, 3/3 3D models written; 3 held parts left out (--include-held adds them)
 written:
   kx/mylib.kicad_sym              symbols
   kx/mylib.pretty/                footprints

@@ -211,8 +211,9 @@ def test_golden_release_check_plain_tty_narrow_quiet_verbose():
         rc, tty = run(["release-check", PLAN], tty=True, COLUMNS="100")
         golden("release_check_tty", tty)
         assert "\x1b[" in tty and "\x1b[" not in plain
-        assert run(["release-check", PLAN], tty=True, NO_COLOR="1")[1] == plain            # NO_COLOR: plain text
-        assert run(["release-check", PLAN], tty=True, CI="true")[1] == plain               # CI logs: plain text
+        # NO_COLOR and CI logs: plain text (wide, so a terminal's wrapping of the long reasons does not count)
+        assert run(["release-check", PLAN], tty=True, NO_COLOR="1", COLUMNS="200")[1] == plain
+        assert run(["release-check", PLAN], tty=True, CI="true", COLUMNS="200")[1] == plain
         rc, narrow = run(["release-check", PLAN], tty=True, NO_COLOR="1", COLUMNS="60")
         golden("release_check_60cols", narrow)
         assert all(len(l) <= 60 for l in narrow.splitlines()), narrow
@@ -264,7 +265,8 @@ def test_review_non_interactive_never_prompts_and_prints_the_fix():
         text = out.getvalue()
         assert rc == 2 and not asked
         assert "CH340C" in text and "There is no symbol for this part yet." in text and "fix: Pick a symbol" in text
-        assert "datasheet: https://www.lcsc.com/datasheet/C84681.pdf" in text and "1 part held" in text
+        assert "datasheet: https://www.lcsc.com/datasheet/C84681.pdf" in text and "3 parts held" in text
+        assert "The pinout of Q_PMOS_GSD comes from the AO3401A family table" in text     # held for a person's look
         assert "files:" not in text and "plan.json:" not in text.split("\n", 1)[1]      # machine reasons stay in the plan
 
 

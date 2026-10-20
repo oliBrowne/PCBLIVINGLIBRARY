@@ -102,7 +102,7 @@ def test_demo_and_rules_work_without_tomllib():
                 again = FR.build_demo(ws, "altium", log=lambda *a: None)       # re-running reuses the folder
             assert (ws.root / "ecadlib.toml").is_file()
             assert ws.rules()["sources"]["order"] == ["standard"]
-            assert res["parts"] == again["parts"] == 7 and res["ready"] == 6, res
+            assert res["parts"] == again["parts"] == 7 and res["ready"] == 4, res     # CH340C and two family-table pinouts held
     finally:
         if saved == "absent":
             sys.modules.pop("tomllib", None)

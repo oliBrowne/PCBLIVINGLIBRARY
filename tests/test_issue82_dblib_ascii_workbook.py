@@ -1,10 +1,9 @@
 """#82: Altium installs 'Bibliothèque.DbLib' but can't open any of its tables while the workbook is called
 'Bibliothèque.xlsx'. The workbook (and the .csv) take the ASCII name. Run:  python3 -m tests.test_issue82_dblib_ascii_workbook"""
-import json
 
 from ecadlib import altium_dblib_sync as S, altium_pkg as PKG
 from tests.fixtures_lite import lite
-from tests.test_review_1018_ad26_recheck import _item, _models
+from tests.test_review_1018_ad26_recheck import _item, _models, _plan
 
 
 def _links(ini):
@@ -22,8 +21,7 @@ def test_data_file_name_is_ascii():
 @lite
 def test_non_ascii_name_writes_an_ascii_workbook(tmp_path):
     _models(tmp_path)
-    plan = tmp_path / "plan.json"
-    plan.write_text(json.dumps([_item("R1", "Resistors")]))
+    plan = _plan(tmp_path, [_item("R1", "Resistors")])
     out = S.sync(plan, tmp_path / "lib", name="Bibliothèque")
     lib = tmp_path / "lib"
     assert (lib / "Bibliothèque.DbLib").exists(), "the DbLib keeps the name Altium shows"
@@ -40,8 +38,7 @@ def test_non_ascii_name_writes_an_ascii_workbook(tmp_path):
 def test_old_non_ascii_workbook_moves_and_keeps_hand_edits(tmp_path):
     """A folder an older ecadlib wrote: rows and hand-added columns carry over, the old files go, a re-sync is quiet."""
     _models(tmp_path)
-    plan = tmp_path / "plan.json"
-    plan.write_text(json.dumps([_item("R1", "Resistors")]))
+    plan = _plan(tmp_path, [_item("R1", "Resistors")])
     lib = tmp_path / "lib"
     S.sync(plan, lib, name="Bibliothèque")
     tabs = S.read_tables(lib / "Bibliotheque.xlsx")
@@ -73,8 +70,7 @@ def test_old_non_ascii_workbook_moves_and_keeps_hand_edits(tmp_path):
 @lite
 def test_package_build_with_non_ascii_name(tmp_path):
     _models(tmp_path)
-    plan = tmp_path / "plan.json"
-    plan.write_text(json.dumps([_item("R1", "Resistors")]))
+    plan = _plan(tmp_path, [_item("R1", "Resistors")])
     rep = PKG.build(plan, tmp_path / "pkg", "Bibliothèque", log=lambda *a: None)
     assert rep["problems"] == [] and rep["dblibs"] == ["Bibliothèque.DbLib"], rep
     assert (tmp_path / "pkg" / "Bibliotheque.xlsx").exists() and (tmp_path / "pkg" / "Bibliothèque.DbLib").exists()
@@ -84,8 +80,7 @@ def test_package_build_with_non_ascii_name(tmp_path):
 def test_only_an_old_csv_left(tmp_path):
     """The old .csv without its workbook (deleted by hand) is not read as a workbook; it goes like the rest."""
     _models(tmp_path)
-    plan = tmp_path / "plan.json"
-    plan.write_text(json.dumps([_item("R1", "Resistors")]))
+    plan = _plan(tmp_path, [_item("R1", "Resistors")])
     lib = tmp_path / "lib"
     lib.mkdir()
     (lib / "Bibliothèque.csv").write_text("Table,Part Number\nResistors,R1\n", encoding="utf-8")

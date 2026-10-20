@@ -206,20 +206,23 @@ def test_state_migration_is_safe_on_new_data_and_keeps_unchecked_shares():
             pass
 
 
-def _build(d, name="lib", bom_text=UF.BOM, epoch=None):
+def _build(d, name="lib", bom_text=UF.BOM, epoch=None, allow=()):
+    """allow: parts a reviewer released anyway (librarian --allow)."""
     d = Path(d)
     (d / "bom.csv").write_text(bom_text, encoding="utf-8")
     if not (d / "cache").exists():
         seed_cache(d / "cache")
     env = {"SOURCE_DATE_EPOCH": str(epoch)} if epoch else {}
     with mock.patch.dict(os.environ, env):
-        L.run(d / "bom.csv", out=d / name, offline=True, cache=d / "cache", rules={}, log=lambda *a: None)
+        L.run(d / "bom.csv", out=d / name, offline=True, cache=d / "cache", rules={}, log=lambda *a: None,
+              allow=list(allow), user="Test Reviewer <reviewer@example.com>")
     return d / name
 
 
 def test_lock_records_inputs_and_is_stable():
     with tempfile.TemporaryDirectory() as d:
-        lib = _build(d)
+        lib = _build(d, allow=["EEPART1"])      # its EasyEDA conversion checked: released, so it has a ledger
+        assert {i["name"]: i["status"] for i in json.loads((lib / "plan.json").read_text())}["EEPART1"] == "ready"
         lock = RB.read_lock(lib)
         assert lock["bom"] == {"file": "../bom.csv", "sha256": RB.file_sha(Path(d) / "bom.csv")}
         assert lock["settings"]["cache"] == "../cache" and lock["settings"]["rules_sha256"] == RB.rules_hash(RU.load({}))

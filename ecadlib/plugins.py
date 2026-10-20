@@ -193,6 +193,10 @@ def run_exporter(name, plan, out_dir, rules=None, eps=None):
     with CG.publishing(Path(plan).parent):
         items = CG.settled_plan(plan, f"plugin:{name}", rules=rules, log=lambda *a, **k: None)
         items = [it for it in items if not RC.change_hold(it, Path(plan).parent)]
+        for it in items:                       # the release check again, on the files as they are: `ready` is not enough
+            why = RC.publish_problems(it, Path(plan).parent, rules) if it.get("status", "ready") == "ready" else []
+            if why:
+                it["status"], it["hold_reasons"] = "held", why
         return _call(name, fn, items, out_dir, rules)
 
 
