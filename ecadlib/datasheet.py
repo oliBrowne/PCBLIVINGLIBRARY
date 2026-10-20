@@ -2124,6 +2124,7 @@ class Reader:
         self._info = {}
         self.http, self.batch, self.wait, self.poll, self.max_wait_s = http, batch, wait, poll, max_wait_s
         self.estimate_only, self.yes = estimate, yes
+        self.count_tokens = True                      # False: an estimate that promised to send nothing (rough)
         self.auto_pages = self.cfg["auto_pages"] if auto_pages is None else auto_pages
         self.store, self.results = PdfStore(cache_dir, http, sleep=sleep), ResultCache(cache_dir)
         self.dir = self.out / "datasheet"
@@ -2594,26 +2595,27 @@ class Reader:
     # --- estimate
     def estimate(self, jobs, batch=None):
         """Token and cost estimate before anything is sent. With a key the input is counted exactly by
-        /v1/messages/count_tokens (free); without one it is rough (pages x PAGE_TOKENS). Output is a typical
+        /v1/messages/count_tokens (free; Claude only, never for a command that promised to send nothing:
+        count_tokens = False); else it is rough (pages x PAGE_TOKENS). Output is a typical
         OUT_TOKENS, and max_tokens for the worst case. Each part is priced on the model its route starts on;
         usd_max_route adds the worst case of every further step its route could take (more pages, the next model)."""
         batch = self.batch if batch is None else batch
-        rows, exact, models = [], bool(self.key), {}
+        rows, exact, models = [], bool(jobs), {}      # exact: every row counted by count_tokens
         for j in jobs:
             jb = batch and not j.get("sync")          # a synchronous request of a batch run (cross-check, feedback)
             mult = BATCH_DISCOUNT if jb else 1.0
             model = j.get("model") or self.model
             pin, pout = price_of(model) or (None, None)
             tin, unknown = None, False
-            if self.key and self._plain(model):
+            if self.key and self.count_tokens and self._plain(model):
                 try:
                     with logging_to(self.log_file, self.say):
                         tin = self.client().count_tokens(j["body"])
                     how = "count_tokens"
                 except Exception as e:                # offline, a refused key: an estimate never stops the run
                     self.say(f"  count_tokens failed ({type(e).__name__}): rough estimate instead")
-                    exact = False
             if tin is None:
+                exact = False
                 pages = len(j["prov"]["pages_sent"]) if j["prov"].get("pages_sent") else j["prov"].get("pages")
                 unknown = not pages and j["prov"].get("sent_as") != "base64"   # sent as a URL, never counted: size unknown
                 pages = pages or URL_PAGES
@@ -3097,7 +3099,7 @@ def format_estimate(est):
     if not est.get("rows"):
         return "datasheet estimate: nothing to read (no part needs a datasheet read); $0.00"
     lines = [f"datasheet estimate: {est['parts']} parts, {est['model']}, {est['mode']}, {est['prices']}",
-             f"  input {est['input_tokens']:,} tokens ({'counted by count_tokens' if est['exact_input'] else 'rough: no API key, pages x ' + str(PAGE_TOKENS)});"
+             f"  input {est['input_tokens']:,} tokens ({'counted by count_tokens' if est['exact_input'] else 'rough: pages x ' + str(PAGE_TOKENS)});"
              f" expected {usd(est['usd'])}, at most {usd(est['usd_max'])} (every answer at max_tokens, plus a fallback re-run on synchronous calls)"]
     if len(est.get("models") or {}) > 1 or est.get("route") == "ladder":
         lines.append(f"  routed ([datasheet] route = {est.get('route')}): "
@@ -3208,7 +3210,7 @@ def batch_main(argv, estimate=False):
     ap.add_argument("--part", action="append", default=[], help="only these parts (plan mode)")
     ap.add_argument("--no-batch", action="store_true", help="synchronous Messages API calls instead of the Batches API")
     ap.add_argument("--no-wait", action="store_true", help="submit and return; run again to collect (the batch id is kept)")
-    ap.add_argument("--estimate", action="store_true", help="count tokens and cost; send nothing")
+    ap.add_argument("--estimate", action="store_true", help="rough token count (pages) and cost; send nothing")
     ap.add_argument("--yes", action="store_true", help="no questions (a model with no known price is sent; the "
                     "[datasheet] max_cost_usd cap still holds)")
     ap.add_argument("--max-cost-usd", type=float, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
@@ -3232,6 +3234,7 @@ def batch_main(argv, estimate=False):
                 wait=not a.no_wait, poll=a.poll, estimate=estimate or a.estimate, yes=a.yes)
     if a.max_cost_usd is not None:
         rd.cfg["max_cost_usd"] = a.max_cost_usd
+    rd.count_tokens = not rd.estimate_only            # `datasheet estimate` sends nothing: a rough count
     if not rd.key and not rd.estimate_only and not rd.offline:
         from . import llm as LL
         why = f"{settings(rules)['api_key_env']} is not set" if rd.ep['provider'] == 'anthropic' else LL.needs_key_message(rd.ep)
@@ -3325,7 +3328,7 @@ def main(argv=None):
     ap.add_argument("--fetch", action="store_true", help="download a URL here and send it base64")
     ap.add_argument("--no-fallback", action="store_true", help="do not send fallbacks: default")
     ap.add_argument("--from-response", help="re-run the checks on a saved Messages API response JSON (no API call)")
-    ap.add_argument("--estimate", action="store_true", help="print the token count and cost; send nothing")
+    ap.add_argument("--estimate", action="store_true", help="print a rough token count (pages) and the cost; send nothing")
     ap.add_argument("--no-cache", action="store_true", help="ask again even when this PDF/part/model was read before")
     ap.add_argument("--rules", help="library rules file ([datasheet] max_cost_usd; default: searched from -o upwards)")
     ap.add_argument("--yes", action="store_true", help="no questions (a model with no known price is sent; the "
@@ -3374,6 +3377,7 @@ def main(argv=None):
             ck = ResultCache.key(src_hash, a.model, a.part, a.package, [offset, hint], a.effort + (f"|{sig}" if sig else ""))
             if a.estimate:
                 rd = Reader(a.out, Path(a.out) / "cache", model=a.model, effort=a.effort, log=print)
+                rd.count_tokens = False               # --estimate sends nothing: a rough count
                 prov = {"pages": pdf_pages(source[1]) if source[0] == "base64" else None, "sent_as": source[0]}
                 print(format_estimate(rd.estimate([{"name": a.part, "url": a.pdf, "body": body, "prov": prov}], batch=False)))
                 return 0

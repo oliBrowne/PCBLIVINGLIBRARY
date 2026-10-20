@@ -204,7 +204,7 @@ are not measured bills.
 
     ecadlib costs                         # these jobs for the model in your ecadlib.toml
     ecadlib costs --model gemini-3.8-flash
-    ecadlib datasheet estimate BOM.csv    # this BOM: tokens counted, cost and worst case, nothing sent
+    ecadlib datasheet estimate BOM.csv    # this BOM: rough tokens, cost and worst case, nothing sent
 
 Set `max_cost_usd` under `[datasheet]` and `[agent.proof]` for a hard cap on spending. If a price here is out of
 date, set your own in `ecadlib.toml`:

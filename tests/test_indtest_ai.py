@@ -172,3 +172,28 @@ def test_t116_style_learn_api_error_is_a_plain_error(tmp_path):
                      "--model", "claude-opus-5-5"], send=send)
     assert rc == 2 and err.getvalue().startswith("ecadlib style learn: ") and "HTTP 401" in err.getvalue(), (rc, err.getvalue())
     assert not (tmp_path / "house_style.json").exists()
+
+
+# T117: the estimate commands that say they send nothing do not upload the PDF and the key to count_tokens
+# T118: and a rough estimate is not labelled "counted by count_tokens"
+@lite
+def test_t117_t118_estimates_send_nothing_and_say_rough(tmp_path, monkeypatch):
+    from tests import test_datasheet_batch as TB
+    sent = []
+    monkeypatch.setattr(D.requests, "post", lambda url, **k: sent.append(url) or (_ for _ in ()).throw(AssertionError(url)))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    (tmp_path / "t.pdf").write_bytes(TL._pdf2())
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert D.main([str(tmp_path / "t.pdf"), "--part", "TESTPART", "-o", str(tmp_path / "out"), "--estimate"]) == 0
+    assert sent == [] and "rough: pages x" in out.getvalue() and "count_tokens" not in out.getvalue(), out.getvalue()
+    rd = D.Reader(tmp_path / "lib", tmp_path / "cache", http=TB.PdfHTTP({"https://a/ds.pdf": TL._pdf2()}), log=None,
+                  estimate=True)
+    rd.count_tokens = False                             # as `ecadlib datasheet estimate` sets it
+    est = rd.estimate([rd.job("TESTPART", [("https://a/ds.pdf", "BOM")])])
+    assert sent == [] and rd.key and not est["exact_input"] and "counted by" not in D.format_estimate(est)
+    rd.count_tokens = True                              # a key for another provider: rough rows, rough header
+    rd.key, rd._info = "sk-other", {}
+    with mock.patch.object(rd, "_plain", lambda m: False):
+        est = rd.estimate([rd.job("TESTPART", [("https://a/ds.pdf", "BOM")])])
+    assert sent == [] and not est["exact_input"] and "rough: pages x" in D.format_estimate(est)

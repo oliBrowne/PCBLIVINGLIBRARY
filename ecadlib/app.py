@@ -891,9 +891,10 @@ class Workspace:
         plan_f = out / "plan.json"
         if not plan_f.exists():
             raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
-        est = D.estimate_plan(plan_f, self._datasheet_reader(out, estimate=True))
+        rd = self._datasheet_reader(out, estimate=True)
+        est = D.estimate_plan(plan_f, rd)
         from . import ai_cost as AC                   # datasheet_batch's approved_usd is this quote's approve_usd
-        return dict(est, key_set=est["exact_input"], ai=AC.quote(est, self.rules(), key_set=est["exact_input"]))
+        return dict(est, key_set=bool(rd.key), ai=AC.quote(est, self.rules(), key_set=bool(rd.key)))
 
     def cross_checks(self, bom):
         """Which datasheet parts of the librarian plan were cross-checked against a second source (ecadlib.crosscheck)
