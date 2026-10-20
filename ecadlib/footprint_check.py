@@ -516,6 +516,22 @@ def _bga_rules(tree, balls, add):
             add("warning", "bga", f"land {d:g} mm is only {ratio:.0%} of the {pitch:g} mm pitch: check the ball/land diameter")
     if abs(a1["x"] - xs[0]) > EPS or abs(a1["y"] - ys[0]) > EPS:
         add("warning", "bga", f"ball A1 at ({a1['x']:.3f}, {a1['y']:.3f}) is not the top-left ball")
+    # handedness: A1->A2 (columns) and A1->B1 (rows) must turn like the top view; a rotation keeps it, a mirror flips it
+    by_row, by_col = {}, {}
+    for p in balls:
+        L, c = BALL.match(p["num"]).groups()
+        by_row.setdefault(L, []).append((int(c), p))
+        by_col.setdefault(int(c), []).append(((len(L), L), p))
+    cv, rv = [0.0, 0.0], [0.0, 0.0]
+    for groups, v in ((by_row, cv), (by_col, rv)):
+        for g in groups.values():
+            g.sort(key=lambda t: t[0])
+            v[0] += g[-1][1]["x"] - g[0][1]["x"]
+            v[1] += g[-1][1]["y"] - g[0][1]["y"]
+    cross = cv[0] * rv[1] - cv[1] * rv[0]            # y points down: the top view (A1 top-left, 1.. right, A.. down) is > 0
+    if cross < -0.5 * math.hypot(*cv) * math.hypot(*rv):
+        add("error", "bga", "ball map is mirrored (rows or columns run the wrong way: a bottom-view drawing?); "
+                            "no rotation of the part fits it")
     rows = {BALL.match(p["num"]).group(1) for p in balls}
     bad = sorted(r for r in rows if set(r) & set("IOQSXZ"))
     if bad:
