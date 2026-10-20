@@ -290,7 +290,8 @@ def read_bom(path, columns=None, rules=None, root=None):
                                                                   # unquoted '4,7k' (not a column the header row has)
             vj = col.get("value")
             if (n == hlen + 1 and vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
-                    and re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?[A-Za-zΩ%]*", cells[vj + 1])):
+                    and re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?[A-Za-zΩ%]*", cells[vj + 1])
+                    and _fraction_fits(cells, vj, col)):
                 cells = cells[:vj] + [f"{cells[vj]},{cells[vj + 1]}"] + cells[vj + 2:] + [""]
                 note.append(f"value {cells[vj]} was split by an unquoted decimal comma; read as one cell")
             else:
@@ -372,6 +373,23 @@ def read_bom(path, columns=None, rules=None, root=None):
 
 
 HEADER_ROWS = 50                                                 # title blocks and blank rows above the header
+
+
+def _fraction_fits(cells, vj, col):
+    """cells[vj] | cells[vj + 1] ('22' | '1') is one value split at its decimal comma, not Value 100 then the next
+    column (Qty 2, Footprint 0603) with the stray comma further on. A fraction with a unit ('7k', '768kHz') is a value;
+    a bare number is one when the joined value has at most 3 significant digits (the E-series: 4,7  22,1  4,99) and a
+    Qty column after Value, read from the joined row, still counts the designators."""
+    frac = cells[vj + 1]
+    if re.search(r"[^\d\s%]", frac):
+        return True
+    if len((cells[vj] + re.sub(r"\D", "", frac)).lstrip("0")) > 3:
+        return False
+    qj, dj = col.get("qty"), col.get("designator")
+    if qj is None or qj < vj:
+        return True
+    q, ref = cells[qj + 1], cells[dj + (dj > vj)] if dj is not None else ""
+    return bool(re.fullmatch(r"\d+", q)) and (not ref or count_refs(ref) == int(q))
 
 
 def header_row(raw, columns=None):

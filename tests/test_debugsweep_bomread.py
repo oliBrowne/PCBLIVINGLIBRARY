@@ -73,3 +73,23 @@ def test_ds2_05_triage_reports_of_dotted_bom_names_keep_the_whole_name(tmp_path,
                                 "reports/triage_PowerBoard_rev1.2_BOM@csv.csv"], r["reports"]
         assert w.triage_result(r["id"])["name"] == "PowerBoard_rev1.2_BOM.csv"
         assert w.build_altium_models(up)["skipped"] == []              # reads the triage it just wrote
+
+
+@lite
+def test_ds2_09_integer_value_is_not_glued_to_the_next_column(tmp_path):
+    # one unquoted comma in the Description: Value 100 then Qty 2 / Footprint 0603 is not the decimal value 100,2
+    q = tmp_path / "qty.csv"
+    q.write_text("Designator,Value,Qty,Footprint,MPN,Description\n"
+                 "R1 R2,100,2,0603,RC0603FR-07100RL,RES 100 ohm, 1%\n"
+                 "R3 R4,10,2,0603,RC0603FR-0710RL,RES 10 ohm, 1%\n"
+                 "R5,4,7k,1,0603,RC0603FR-074K7L,RES\n"
+                 "R6,22,1,1,0603,RC0603FR-0722R1L,RES\n", encoding="utf-8")
+    f = tmp_path / "fp.csv"
+    f.write_text("Designator,Value,Footprint,Description\nR1,100,0603,RES 100 ohm, 1%\nR2,4,7k,0603,RES\n", encoding="utf-8")
+    got = [(l["designator"], l["value"], l.get("qty"), l.get("footprint"), l.get("mpn"))
+           for p in (q, f) for l in T.read_bom(p)[0]]
+    assert got == [("R1 R2", "100", "2", None, None), ("R3 R4", "10", "2", None, None),
+                   ("R5", "4,7k", "1", "0603", "RC0603FR-074K7L"), ("R6", "22,1", "1", "0603", "RC0603FR-0722R1L"),
+                   ("R1", "100", None, None, None), ("R2", "4,7k", None, "0603", None)], got
+    notes = [l.get("bom_note", "") for p in (q, f) for l in T.read_bom(p)[0]]
+    assert "header has 6" in notes[0] and "header has 6" in notes[1] and "header has 4" in notes[4], notes
