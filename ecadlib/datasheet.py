@@ -175,6 +175,12 @@ def settings(rules=None):
     return {**SETTINGS, **{k: v for k, v in (got or {}).items() if k in SETTINGS and v not in (None, "")}}
 
 
+def cap_chosen(rules=None):
+    """The rules file itself sets [datasheet] max_cost_usd (rules.load records the keys it set): a cap of 10 there is
+    the person's, not the default one, though both read 10 once merged over the defaults."""
+    return isinstance(rules, dict) and "datasheet.max_cost_usd" in (rules.get("_set") or ())
+
+
 class DatasheetError(Exception):
     pass
 
@@ -2100,6 +2106,7 @@ class Reader:
     def __init__(self, out, cache_dir, key=None, rules=None, http=None, model=None, effort=None, batch=False, wait=True,
                  poll=60.0, max_wait_s=24 * 3600, estimate=False, auto_pages=None, client=None, log=print, sleep=None, yes=False):
         self.cfg = settings(rules)
+        self.cap_set = cap_chosen(rules)              # the person's cap, not the default one (set_cap: --max-cost-usd)
         self.out, self.cache_dir = Path(out), Path(cache_dir)
         from . import llm as LL                       # provider / model / key / rails (ecadlib.llm)
         self.rules = rules if isinstance(rules, dict) else None
@@ -2648,12 +2655,17 @@ class Reader:
         except Exception:                             # a setup that does not resolve is reported where it is sent
             return 1
 
+    def set_cap(self, usd):
+        """--max-cost-usd N: a cap the person set, even when it is the default's 10."""
+        self.cfg["max_cost_usd"], self.cap_set = usd, True
+
     def _guard_cost(self, jobs):
         """[datasheet] max_cost_usd over everything this Reader sends (batches and synchronous calls together)."""
         cap = float(self.cfg.get("max_cost_usd") or 0)
         if not cap or not jobs:                       # --yes does not lift the cap: a scripted run keeps its ceiling
             return
-        if cap == DEFAULT_MAX_COST_USD:               # the default safety net: the rough estimate, no count_tokens request
+        default = cap == DEFAULT_MAX_COST_USD and not self.cap_set     # not one the person set (to 10 as well)
+        if default:                                   # the default safety net: the rough estimate, no count_tokens request
             k, self.key = self.key, None
             try:
                 est = self.estimate(jobs)
@@ -2664,7 +2676,7 @@ class Reader:
         if est["usd_max"] is None:
             if self.yes:                              # a model with no known price (a local one): sent as approved
                 return
-            if cap == DEFAULT_MAX_COST_USD:           # only the default cap: a local model is not stopped by it
+            if default:                               # only the default cap: a local model is not stopped by it
                 if not getattr(self, "_said_unpriced", False):
                     self._said_unpriced = True
                     self.say(f"  datasheet: no price known for {', '.join(est['models']) or self.model}, so the default "
@@ -2677,7 +2689,7 @@ class Reader:
             what = (f"the size of the PDF of {', '.join(r['part'] for r in unk)} is unknown (sent as a URL, not counted "
                     f"by count_tokens): its worst case at the {page_limit(unk[0]['model'])}-page request limit makes up to "
                     f"${est['usd_max']:.2f} for {est['parts']} parts, over [datasheet] max_cost_usd = {cap:g}")
-            if not self.yes and cap != DEFAULT_MAX_COST_USD:   # a cap the person set: refused, never a silent guess
+            if not self.yes and not default:          # a cap the person set: refused, never a silent guess
                 raise DatasheetError(what + "; nothing sent. Download the PDF (or give a local file) so it can be "
                                      "counted, raise the cap, or pass --yes to send it on a typical "
                                      f"{URL_PAGES}-page estimate")
@@ -3196,7 +3208,7 @@ def batch_main(argv, estimate=False):
     rd = Reader(out, a.cache, rules=rules, http=http, model=a.model, effort=a.effort, batch=not a.no_batch,
                 wait=not a.no_wait, poll=a.poll, estimate=estimate or a.estimate, yes=a.yes)
     if a.max_cost_usd is not None:
-        rd.cfg["max_cost_usd"] = a.max_cost_usd
+        rd.set_cap(a.max_cost_usd)
     if not rd.key and not rd.estimate_only and not rd.offline:
         from . import llm as LL
         why = f"{settings(rules)['api_key_env']} is not set" if rd.ep['provider'] == 'anthropic' else LL.needs_key_message(rd.ep)
@@ -3354,7 +3366,7 @@ def main(argv=None):
                 grd = Reader(a.out, Path(a.out) / "cache", key=key, rules=rules, model=a.model, effort=a.effort, log=None,
                              yes=a.yes)
                 if a.max_cost_usd is not None:
-                    grd.cfg["max_cost_usd"] = a.max_cost_usd
+                    grd.set_cap(a.max_cost_usd)
                 guard = lambda b: grd._guard_cost([{"name": a.part, "url": a.pdf, "body": b, "prov": prov}])
                 guard(body)                           # the feedback turn, if any, is held to the same cap
                 with logging_to(Path(a.out) / "api_log.jsonl", print):

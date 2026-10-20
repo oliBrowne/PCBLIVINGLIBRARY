@@ -135,3 +135,60 @@ def test_ds2_21_sot223_pitch_2_30_is_a_standard_pitch():
     D.self_check({"pitch": 2.2}, {"pins": []}, review)
     assert review == ["self-check: pitch 2.2 mm is not a standard pitch (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.8, 0.95, "
                       "1.0, 1.1, 1.25, 1.27 ...): unit or reading error?"], review
+
+
+# ---- DS2-22: a max_cost_usd the person set to 10 (the value docs/api-keys.md shows) was taken for the default cap
+@lite
+def test_ds2_22_a_cap_set_to_ten_holds_like_any_cap_you_set(tmp_path, monkeypatch):
+    import requests
+    from ecadlib import ai_cost as AC, rules as RU, userconfig as UC
+    from tests import test_datasheet_batch as TB
+    monkeypatch.setattr(UC, "secret", lambda name, env=None: {"ACME_KEY": "dummy-acme"}.get(name))
+    sent = []
+
+    def offline(url, *a, **k):                        # nothing leaves this test: a request is recorded and fails
+        sent.append(url)
+        raise requests.ConnectionError("offline test")
+    monkeypatch.setattr(requests, "post", offline)
+    monkeypatch.setattr(requests, "get", offline)
+    gateway = ('[ai]\nprovider = "openai-compatible"\nbase_url = "https://llm-gateway.example.com/v1"\n'
+               'model = "acme-pro-2"\napi_key_env = "ACME_KEY"\ndetect = false\n')   # a model with no known price
+    (tmp_path / "unset.toml").write_text(gateway, encoding="utf-8")
+    (tmp_path / "set.toml").write_text(gateway + "\n[datasheet]\nmax_cost_usd = 10\n", encoding="utf-8")
+    said = []
+
+    def guard(toml):
+        rules = RU.load(str(tmp_path / toml))
+        rd = D.Reader(tmp_path / "out", tmp_path / "cache", rules=rules, log=said.append)
+        _, body = D.build_request(("base64", b"%PDF-1.4"), "U1", "SOIC-8", None, rd.model)
+        rd._guard_cost([{"key": "k", "name": "U1", "model": rd.model, "body": body, "url": "u.pdf", "sync": True,
+                         "prov": {"pages": 40, "sent_as": "base64"}}])
+        return rules
+
+    rules = guard("unset.toml")                       # no cap in the file: the default one can't stop it, said aloud
+    assert "the default $10 cap can't be checked" in said[0] and AC.limit(rules) == (1.0, "ask_above_usd"), said
+    try:
+        guard("set.toml")
+        raise AssertionError("max_cost_usd = 10 in the file did not hold an unpriced model")
+    except D.DatasheetError as e:
+        assert "no price known for acme-pro-2" in str(e) and "max_cost_usd = 10" in str(e), e
+    assert AC.limit(RU.load(str(tmp_path / "set.toml"))) == (10.0, "max_cost_usd")   # the dialogs ask twice above it
+    pdf = tmp_path / "ds.pdf"
+    pdf.write_bytes(TB.pdf_with(["U1 regulator", "Package outline"]))
+    try:                                              # --max-cost-usd 10 on the command line is a cap you set too
+        D.main([str(pdf), "--part", "U1", "--rules", str(tmp_path / "unset.toml"), "--max-cost-usd", "10",
+                "-o", str(tmp_path / "cli")])
+        raise AssertionError("--max-cost-usd 10 did not hold an unpriced model")
+    except SystemExit as e:
+        assert "no price known for acme-pro-2" in str(e.code), e.code
+    assert sent == [], sent
+    from ecadlib.eval import runner as R                # `ecadlib eval run --max-cost-usd 10` likewise
+    from tests import test_eval as TE
+    seen, real = [], R.EvalReader.__init__
+
+    def spy(self, *a, **k):
+        real(self, *a, **k)
+        seen.append(self.cap_set)
+    monkeypatch.setattr(R.EvalReader, "__init__", spy)
+    TE.run(str(tmp_path), "eval", max_cost_usd=10.0)
+    assert seen and all(seen), seen

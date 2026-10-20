@@ -214,7 +214,8 @@ def merge(base, over):
 def load(path=None, start="."):
     """Rules merged over DEFAULTS. path: an explicit file (must exist), a dict (used as the file's content), or None to
     search `start` and its parents, then the current folder. No file -> a copy of DEFAULTS. Bad content raises RulesError
-    naming the key. The result carries `_file` (where it came from, '' for none)."""
+    naming the key. The result carries `_file` (where it came from, '' for none) and `_set` (the "section.key" names
+    the file itself set: a value equal to its default, max_cost_usd = 10, is still one the person chose)."""
     if isinstance(path, dict):
         if "_file" in path and all(k in path for k in DEFAULTS):
             return path                       # already loaded
@@ -235,6 +236,7 @@ def load(path=None, start="."):
     validate(raw, where)
     out = merge(DEFAULTS, {k: v for k, v in raw.items() if not k.startswith("_")})
     out["_file"] = "" if isinstance(path, dict) else where
+    out["_set"] = sorted(f"{s}.{k}" for s, v in raw.items() if isinstance(v, dict) and not s.startswith("_") for k in v)
     _normalise(out)
     return out
 

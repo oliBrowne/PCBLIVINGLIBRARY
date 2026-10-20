@@ -564,7 +564,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     lib = out / "lib"
     rules = RU.resolve(rules, out)
     if max_cost_usd is not None:                      # the run's spending cap ([datasheet] max_cost_usd, default $10)
-        rules = dict(rules, datasheet={**rules.get("datasheet", {}), "max_cost_usd": float(max_cost_usd)})
+        rules = dict(rules, datasheet={**rules.get("datasheet", {}), "max_cost_usd": float(max_cost_usd)},
+                     _set=[*(rules.get("_set") or []), "datasheet.max_cost_usd"])     # a cap you set, 10 too
     over = {k: v for k, v in (("provider", provider), ("base_url", base_url), ("assist", assist),
                               ("api_key_env", api_key_env)) if v}
     if over or (model and provider):
