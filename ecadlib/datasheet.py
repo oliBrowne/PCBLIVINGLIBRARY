@@ -615,37 +615,47 @@ def _non_finite(v, path="$"):
 
 
 # A nominal printed with its tolerance: "6.5±0.2", "6.5 +/- 0.2", "3.56 +0.15/-0.25", "0.74 +0.05 -0.08"
+_UNIT = r"\s*(mm|mils?|in|inch(?:es)?|\")?\.?\s*"      # a unit written after the value, as _wire_val reads it
 _TOL = re.compile(r"\s*([-+]?\d*\.?\d+)\s*(?:(?:±|\+/-|\+-)\s*(\d*\.?\d+)|\+\s*(\d*\.?\d+)\s*/?\s*[-\u2212\u2013]\s*(\d*\.?\d+))"
-                  r"\s*(?:mm|mil|in|inch)?\.?\s*", re.I)
+                  + _UNIT, re.I)
 
 
 def _toleranced(v):
     """A dimension printed as nominal and tolerance -> {min, nom, max}; None when v is not one. LP38693MP-1.8 (live
     benchmark 2026-10-19): its drawing prints 6.5±0.2 and 3.56 +0.15/-0.25, and the read left them blank."""
+    return _toleranced_unit(v)[0]
+
+
+def _toleranced_unit(v):
+    """_toleranced(v) and the unit written after it ("6.5±0.2 mm" -> mm; None when none is written)."""
     t = str(v or "").replace(",", ".")
-    r = re.fullmatch(r"\s*(\d*\.?\d+)\s*(?:~|\.\.|to)\s*(\d*\.?\d+)\s*(?:mm|mil|in|inch)?\.?\s*", t, re.I)
+    r = re.fullmatch(r"\s*(\d*\.?\d+)\s*(?:~|\.\.|to)\s*(\d*\.?\d+)" + _UNIT, t, re.I)
     if r and float(r.group(1)) < float(r.group(2)):       # "6.3~6.7": a range printed in one cell
         lo, hi = float(r.group(1)), float(r.group(2))
-        return {"min": lo, "nom": round((lo + hi) / 2, 6), "max": hi}
+        return {"min": lo, "nom": round((lo + hi) / 2, 6), "max": hi}, _unit_name(r.group(3))
     m = _TOL.fullmatch(t)
     if not m:
-        return None
+        return None, None
     nom = float(m.group(1))
     lo, hi = (float(m.group(2)),) * 2 if m.group(2) else (float(m.group(4)), float(m.group(3)))
-    return {"min": round(nom - lo, 6), "nom": nom, "max": round(nom + hi, 6)}
+    return {"min": round(nom - lo, 6), "nom": nom, "max": round(nom + hi, 6)}, _unit_name(m.group(5))
 
 
 def _wire_dim(d, n):
     """One dims row as the model wrote it -> {min, nom, max}. Raises DatasheetError. The first read (from_wire) and
     the cross-check's second read (crosscheck.parse) both read a row this way, so the two cannot drift apart."""
-    tol = next((t for t in (_toleranced(d.get(k)) for k in ("nom", "min", "max")) if t), None)
-    if tol:                                           # "6.5±0.2" / "6.3~6.7" printed in one cell
-        return tol
-    got = {k: _wire_val(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")}
-    for k, (x, u) in got.items():                     # "0.016 in" in a row whose unit is mm: which one is it?
+    def same_unit(k, u):                              # "0.016 in" in a row whose unit is mm: which one is it?
         if u and u != _unit_name(d.get("unit")):
             raise DatasheetError(f"response {n}.{k} {d.get(k)!r} is written in {u!r} but the dimension's unit is "
                                  f"{d.get('unit')!r}; rejected")
+    for k in ("nom", "min", "max"):                   # "6.5±0.2" / "6.3~6.7" printed in one cell
+        tol, u = _toleranced_unit(d.get(k))
+        if tol:
+            same_unit(k, u)
+            return tol
+    got = {k: _wire_val(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")}
+    for k, (_, u) in got.items():
+        same_unit(k, u)
     return {k: x for k, (x, _) in got.items()}
 
 

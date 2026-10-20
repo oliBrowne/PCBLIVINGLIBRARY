@@ -47,13 +47,27 @@ def test_ds2_16_second_read_takes_a_value_printed_with_its_tolerance():
 def test_ds2_25_second_read_rejects_a_value_written_in_another_unit():
     """'0.050 in' in a row whose unit is mm was read as 0.05 mm (and '1.27 mm' in an inch row as 32.258 mm), so a
     correct part was held as 'disagreed'. The first read rejects the same row (DS-3): the check is then not made."""
-    for nom, unit in (("0.050 in", "mm"), ("1.27 mm", "in")):
+    for nom, unit in (("0.050 in", "mm"), ("1.27 mm", "in"), ("0.050±0.002 in", "mm"), ("1.24~1.30 mm", "in")):
         try:
             got = CC.parse(_second_read(nom, unit=unit, name="pitch"))[0]["pitch"]
             raise AssertionError(f"{nom!r} in a {unit} row was read as {got} mm")
         except CC.Unavailable as e:
             assert "is written in" in str(e), e
     assert CC.parse(_second_read("1.27 mm", name="pitch"))[0]["pitch"] == (1.27, 1.27, 1.27)   # the same unit: kept
+    assert CC.parse(_second_read("1.27±0.05 mm", name="pitch"))[0]["pitch"] == (1.27, 1.22, 1.32)
+
+
+def test_ds2_25_first_read_rejects_a_toleranced_value_written_in_another_unit():
+    """The first read rejected '0.050 in' in an mm row (DS-3) but took '0.050±0.002 in' there as 0.05 mm."""
+    from tests import test_datasheet as TD
+    for nom, unit in (("0.050±0.002 in", "mm"), ("1.24~1.30 mm", "in")):
+        w = D.to_wire(TD.GOOD)
+        next(x for x in w["package"]["dims"] if x["name"] == "pitch").update(min="", nom=nom, max="", unit=unit)
+        try:
+            got = D.from_wire(w)["package"]["pitch"]
+            raise AssertionError(f"{nom!r} in a {unit} row was read as {got}")
+        except D.DatasheetError as e:
+            assert "is written in" in str(e), e
 
 
 # ---------------------------------------------------------------- DS2-17: ask_above_usd = 0 and the house style guide
