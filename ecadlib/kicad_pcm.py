@@ -40,9 +40,18 @@ KVER_RE = re.compile(r"^\d{1,2}(\.\d{1,2}(\.\d{1,2})?)?$")
 TAG_RE = re.compile(r"^[a-z][-a-z0-9]{0,48}[a-z0-9]$")
 CONTACT_RE = re.compile(r"^[a-z][-a-z0-9 ]{0,48}[a-z0-9]$")
 RESOURCE_RE = re.compile(r"^[a-zA-Z][-a-zA-Z0-9 ]{0,48}[a-zA-Z0-9]$")
-LICENSES = {"public-domain", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "CC-BY-4.0", "CC-BY-SA-4.0",
-            "CC0-1.0", "MIT", "GPL-2.0", "GPL-3.0", "LGPL-2.1", "LGPL-3.0", "MPL-1.1", "Unlicense", "CERN-OHL",
-            "open-source", "unrestricted"}                         # the common ones of the schema's enum
+LICENSES = ("public-domain", "Apache", "Apache-1.0", "Apache-2.0", "Artistic", "Artistic-1.0", "Artistic-2.0", "BSD",
+            "BSD-2-Clause", "BSD-3-Clause", "BSD-4-Clause", "ISC", "CC-BY", "CC-BY-1.0", "CC-BY-2.0", "CC-BY-2.5",
+            "CC-BY-3.0", "CC-BY-4.0", "CC-BY-SA", "CC-BY-SA-1.0", "CC-BY-SA-2.0", "CC-BY-SA-2.5", "CC-BY-SA-3.0",
+            "CC-BY-SA-4.0", "CC-BY-ND", "CC-BY-ND-1.0", "CC-BY-ND-2.0", "CC-BY-ND-2.5", "CC-BY-ND-3.0", "CC-BY-ND-4.0",
+            "CC-BY-NC", "CC-BY-NC-1.0", "CC-BY-NC-2.0", "CC-BY-NC-2.5", "CC-BY-NC-3.0", "CC-BY-NC-4.0", "CC-BY-NC-SA",
+            "CC-BY-NC-SA-1.0", "CC-BY-NC-SA-2.0", "CC-BY-NC-SA-2.5", "CC-BY-NC-SA-3.0", "CC-BY-NC-SA-4.0", "CC-BY-NC-ND",
+            "CC-BY-NC-ND-1.0", "CC-BY-NC-ND-2.0", "CC-BY-NC-ND-2.5", "CC-BY-NC-ND-3.0", "CC-BY-NC-ND-4.0", "CC0-1.0",
+            "CDDL-1.0", "CPL", "EFL", "EFL-1.0", "EFL-2.0", "MIT", "GPL", "GPL-1.0", "GPL-2.0", "GPL-3.0", "LGPL", "LGPL-2.1",
+            "LGPL-3.0", "GNU-LGPL-2.0", "GFDL", "GFDL-1.0", "GFDL-1.1", "GFDL-1.2", "GFDL-1.3", "GFDL-NIV", "LPPL",
+            "LPPL-1.0", "LPPL-1.1", "LPPL-1.2", "LPPL-1.3", "MPL-1.1", "Perl", "Python-2.0", "QPL-1.0", "W3C", "Zlib",
+            "Zope", "Zope-1.0", "Zope-1.1", "Zope-2.0", "Zope-2.1", "CERN-OHL", "WTFPL", "Unlicense", "open-source",
+            "unrestricted")                                          # pcm.v1.schema.json's License enum (KiCad master)
 SCHEMA_PATHS = ("/usr/share/kicad/schemas/pcm.v1.schema.json", "/usr/local/share/kicad/schemas/pcm.v1.schema.json",
                 "/Applications/KiCad/KiCad.app/Contents/SharedSupport/schemas/pcm.v1.schema.json",
                 "C:/Program Files/KiCad/9.0/share/kicad/schemas/pcm.v1.schema.json",
@@ -166,6 +175,8 @@ def check_metadata(m, schema_path=None, definition="Package"):
                 errs.append(f"missing {k}")
         if not ID_RE.match(m.get("identifier", "")):
             errs.append(f"identifier {m.get('identifier')!r} must match {ID_RE.pattern}")
+        if m.get("license") not in LICENSES:
+            errs.append(f"license {m.get('license')!r} is not on KiCad's PCM list (e.g. CC-BY-SA-4.0, MIT, CC0-1.0, open-source)")
         if m.get("type") not in ("plugin", "library", "colortheme"):
             errs.append(f"type {m.get('type')!r}")
         if len(m.get("name", "")) > 200 or len(m.get("description", "")) > 500 or len(m.get("description_full", "")) > 5000:
@@ -316,6 +327,10 @@ def build(src, out, name="ecadlib", identifier=None, pkg_version=None, kicad=8, 
     if base_url and not re.match(r"^https?://", base_url):
         raise ValueError("--base-url must be an http:// or https:// URL: KiCad only fetches repositories over http(s) "
                          "(kicad_curl_easy.cpp); for a local file use the PCM's 'Install from File...'")
+    if license_ not in LICENSES:                                # KiCad's Install from File refuses the metadata
+        near = [x for x in LICENSES if x.lower() == str(license_).lower()]
+        raise ValueError(f"--license {license_!r} is not on KiCad's PCM list" + (f" (did you mean {near[0]}?)" if near else
+                         "; use one of KiCad's, e.g. CC-BY-SA-4.0, MIT, CC0-1.0, open-source or unrestricted"))
     out = Path(out)
     exp, lib, xrep, tmp = _source(src, name, include_held, http, offline, cache, log, unchecked)
     unchecked = bool(unchecked and Path(src).is_dir() and xrep is None)

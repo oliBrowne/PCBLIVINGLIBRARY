@@ -63,3 +63,14 @@ def test_standard_regulator_output_is_power_out_in_kicad():
     sym, how = KX.load_symbol(item, plan_dir, None, [], "AMS1117-3.3", [])
     got = {str(sexpr.first(p, "number")[1]).strip('"'): p[1] for u in sexpr.find(sym, "symbol") for p in sexpr.find(u, "pin")}
     assert got == {"1": "power_in", "2": "power_out", "3": "power_in"}, (got, how)
+
+
+# T033
+@lite
+def test_kicad_pcm_refuses_a_license_kicads_pcm_refuses(tmp_path):
+    from ecadlib import kicad_pcm as PCM
+    m = PCM.metadata("mylib", "local.ecadlib.mylib", "1.0.0", 8, "Proprietary-X", "me")
+    assert any("license" in p for p in PCM.check_metadata(m, schema_path=False)[0])
+    assert not PCM.check_metadata(dict(m, license="CC-BY-SA-4.0"), schema_path=False)[0]
+    rc, _, err = _run(["kicad-pcm", str(tmp_path / "nope" / "plan.json"), "--out", str(tmp_path / "pcm"), "--license", "mit"])
+    assert rc == 2 and "did you mean MIT" in err and not (tmp_path / "pcm").exists(), err
