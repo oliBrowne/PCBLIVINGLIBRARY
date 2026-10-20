@@ -28,6 +28,60 @@ def test_ds2_34_compare_reports_a_rebuild_that_dropped_the_drill_offset(tmp_path
     assert AN.lib_state(lib, save=False) == "edited"
 
 
+def _make_pad(fields):
+    """Run ecadlib_build.pas's MakePad on one PAD recipe line (its fields) in the DelphiScript interpreter, Altium's
+    pad faked. -> what MakePad set on the pad (properties, SetState_* calls, the pad cache), comparable with ==."""
+    from tests.test_review_1018_build_fail import Fake, Pas, TStringList
+
+    def snap(v):
+        if isinstance(v, Fake):
+            return (v._name, tuple(sorted((k, snap(x)) for k, x in v.__dict__.items() if k != "_name")))
+        return tuple(snap(x) for x in v) if isinstance(v, (list, tuple)) else v
+
+    class Pad(Fake):
+        def __getattr__(self, k):
+            if k.startswith("setstate_"):
+                return lambda *a: self.__dict__.setdefault("calls", []).append((k, *map(snap, a)))
+            return super().__getattr__(k)
+
+    pad = Pad("pad")
+    server = Fake("pcbserver", pcbobjectfactory=lambda *a: pad)
+    pas = Pas(AN.PAS, PCBServer=server, PcbLayer=lambda n: n)     # PcbLayer is a Case: the interpreter has none
+    ebf = TStringList()
+    ebf.items = list(fields)
+    pas.globals["ebf"] = ebf
+    pas.call("MakePad", Fake("comp"))
+    return snap(pad)
+
+
+def test_ds2_34_the_altium_build_script_puts_the_drill_offset_on_the_pad():
+    fp, _ = K.convert_footprint(OFFSET_PADS, notes=[])
+    pads = [ln.split("\t") for ln in AN.footprint_lines(fp) if ln.startswith("PAD\t")]
+    assert len(pads) == 2
+    for f in pads:
+        calls = {(c[0], c[1][0]): c[2] for c in dict(_make_pad(f)[1])["calls"] if c[0].endswith("padoffset")}
+        for layer in ("etoplayer", "emidlayer1", "ebottomlayer"):    # 0.7 mm = 275591 internal units
+            assert calls.get(("setstate_xpadoffset", layer)) == 275591, calls
+            assert calls.get(("setstate_ypadoffset", layer)) == 0, calls
+
+
+def test_every_pad_field_the_recipe_writes_changes_the_pad_the_altium_script_builds():
+    """A PAD field footprint_lines writes and MakePad never reads is a property Altium's rebuild silently drops
+    (DS2-34: the drill offset). Each field of a pad that uses every one of them is changed in turn."""
+    fp = {"name": "ALL", "pads": [{"designator": "1", "x": 1.0, "y": 2.0, "w": 3.0, "h": 1.6, "rot": 45, "shape": "roundrect",
+                                   "corner": 25, "layer": 74, "hole": 1.0, "hole_shape": "slot", "slot": 2.0,
+                                   "hole_rot": 90, "plated": True, "paste": 0.05, "mask": 0.1, "offset": (0.7, 0.3)}]}
+    fields = next(ln for ln in AN.footprint_lines(fp) if ln.startswith("PAD\t")).split("\t")
+    base = _make_pad(fields)
+    ignored = []
+    for i in range(1, len(fields)):
+        changed = list(fields)
+        changed[i] = str(int(fields[i]) + 1000) if fields[i].lstrip("-").isdigit() else fields[i] + "X"
+        if _make_pad(changed) == base:
+            ignored.append((i, fields[i]))
+    assert not ignored, f"PAD fields MakePad ignores: {ignored}"
+
+
 # ---------------------------------------------------------------- DS2-35: a hand-added workbook row with a bad ref
 @lite
 def test_ds2_35_hand_row_with_a_ref_altium_cannot_store_is_reported_not_fatal(tmp_path):
