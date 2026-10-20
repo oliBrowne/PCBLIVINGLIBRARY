@@ -834,8 +834,8 @@ def main(argv=None):
         out = sync(a.plan, a.to, "svndblib" if a.svn else "dblib", a.name, a.prune, a.win_dir, a.svn_url, a.dry_run,
                    rules=a.rules, overwrite_edits=a.overwrite_edits)
     except ValueError as e:                        # a wrong --name, a library folder that isn't ecadlib's kind
-        print(f"ecadlib dblib-sync: {e}", file=sys.stderr)
-        sys.exit(2)
+        from .cliutil import refuse
+        sys.exit(refuse("dblib-sync", e, "check the plan and --to / --name (`ecadlib dblib-sync -h`)"))
     from . import messages as M, term as TM
     t = TM.Term()
     rows = []

@@ -292,3 +292,21 @@ def test_rebuild_malformed_lock_is_exit_2(tmp_path):
         with redirect_stderr(io.StringIO()) as e, redirect_stdout(io.StringIO()):
             assert RB.main([str(tmp_path), "--check"]) == 2, bad
         assert "not a library lock" in e.getvalue() and "hint:" in e.getvalue()
+
+
+# T127: dedupe, upkeep, upstream check-kicad and dblib-sync use the shared one line + hint, never a raw class name
+@lite
+def test_own_error_handlers_use_the_shared_wording(tmp_path, monkeypatch):
+    from ecadlib import altium_dblib_sync as DS, dedupe as DD, upkeep as UK, upstream as UP
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path / "home")
+    (tmp_path / "trunc.json").write_text('{"a": ')
+    runs = [(DD.main, ["nope.json"]), (UK.main, ["nope.json"]), (DD.main, ["trunc.json"]), (UK.main, ["trunc.json"]),
+            (UP.main, ["check-kicad", "trunc.json"]), (DS.main, ["trunc.json", "--to", "DS"])]
+    for fn, argv in runs:
+        with redirect_stderr(io.StringIO()) as e, redirect_stdout(io.StringIO()):
+            try:
+                code = fn(argv)
+            except SystemExit as x:
+                code = x.code
+        assert code == 2 and "hint:" in e.getvalue() and "Error:" not in e.getvalue(), (argv, code, e.getvalue())

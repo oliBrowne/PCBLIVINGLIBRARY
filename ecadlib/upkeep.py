@@ -654,8 +654,8 @@ def main(argv=None, ctx=None, gh=None, runner=None, notifier=None):
         rep = run(a.input, checks, a.state, a.out, a.manifest, a.bom, a.workspace, a.apply, rules,
                   ctx or Ctx(cache=a.cache, offline=a.offline), save=False)
     except Exception as e:
-        print(f"upkeep: {type(e).__name__}: {e}", file=sys.stderr)
-        return 2
+        from .cliutil import refuse
+        return refuse("upkeep", e, "check the input, --state and --rules files (`ecadlib upkeep -h`)")
     for s in rep["checks"]:
         print(f"{s['check']:<10} {s['status']:<8} {len(s['changes'])} new" + (f"  {s['reason']}" if s["reason"] else ""))
         for c in s["changes"]:

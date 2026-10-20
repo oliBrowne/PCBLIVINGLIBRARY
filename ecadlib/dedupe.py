@@ -600,8 +600,8 @@ def main(argv=None):
         with cli_plan_lock(a.plan) if a.merge else contextlib.nullcontext():   # the web UI may be recording into this plan
             r = run(a.plan, a.lib, a.a365, a.config, a.keep, a.merge, tuple(k for k in a.kinds.split(",") if k), a.out, a.bom)
     except (OSError, ValueError, json.JSONDecodeError) as e:
-        print(f"dedupe: {type(e).__name__}: {e}", file=sys.stderr)
-        return 2
+        from .cliutil import refuse
+        return refuse("dedupe", e, "check the plan, --lib, --a365 and --config paths (`ecadlib dedupe -h`)")
     for g in r["groups"]:
         print(f"  {g['kind']:<18} keep {g['keeper'] or '-':<28} " + ", ".join(m["name"] for m in g["members"] if m["name"] != g["keeper"]))
     for e in r["errors"]:
