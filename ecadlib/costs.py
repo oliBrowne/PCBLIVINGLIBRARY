@@ -72,8 +72,9 @@ def price(model, provider="anthropic", rules=None):
     p = P.profile(model, "openai-compatible" if provider != "anthropic" else provider, rules)
     if provider in ("ollama", "lmstudio", "vllm", "llamacpp") and not p.get("price_set"):
         return 0.0, 0.0                                   # a server on your network; a price in [ai.profiles] wins
-    if model in D.PRICES:
-        return D.PRICES[model]
+    got = D.PRICES.get(model) or D.PRICES.get(D.base_model(model))   # a dated id at its alias's price, as the reader
+    if got:
+        return got
     if p.get("price_in") is None or p.get("price_out") is None:
         return None
     return float(p["price_in"]), float(p["price_out"])

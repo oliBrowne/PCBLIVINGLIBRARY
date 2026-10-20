@@ -56,3 +56,14 @@ def test_ds2_17_style_guide_quote_asks_twice_when_ask_above_is_zero():
         raise AssertionError("a paid style guide was approved with one yes under ask_above_usd = 0")
     except ValueError as e:
         assert "confirm the higher cost first" in str(e), e
+
+
+# ---------------------------------------------------------------- DS2-18: a dated Claude id on the cost sheet
+@lite
+def test_ds2_18_cost_sheet_prices_a_dated_claude_id_at_its_alias_rate(tmp_path, monkeypatch):
+    """The reader prices claude-haiku-4-5-20251001 at the alias's $1 / $5 (DS-41); `ecadlib costs` said 'no price known'."""
+    monkeypatch.chdir(tmp_path)                       # no ecadlib.toml found from here: the defaults
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = C.main(["--model", "claude-haiku-4-5-20251001"])
+    assert rc == 0 and "claude-haiku-4-5-20251001: $1 in / $5 out" in out.getvalue(), (rc, out.getvalue())
