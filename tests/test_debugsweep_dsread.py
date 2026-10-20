@@ -304,6 +304,31 @@ def test_ds2_24_a_blank_pin_count_of_a_tab_part_comes_from_its_name_and_pin_tabl
     assert D._pin_count_from(tab2, {"pins": [{"num": n} for n in "1234"]}) == (None, "")   # the tab is pin 2: 4 isn't it
 
 
+# ---- DS2-24 (review): counting each pad number once let a SOT-223 read without pin_positions (pitch 2.30, pin_count
+# 4, pins 1-4, tab 2) build the standard dual row with the tab over leads 3 and 4, and the read passed
+def test_ds2_24_a_tab_that_repeats_a_lead_number_needs_pin_positions():
+    import copy
+    from ecadlib import ds_route as DR, footprint_gen as F
+    from tests.test_footprints import SPEC
+    spec = dict(SPEC("SOT-223-3_TabPin2"), pitch=2.3, pin_count=4, pin_positions=None)
+    try:
+        F.build(spec)
+        raise AssertionError("built tab 2 over the other row's leads")
+    except ValueError as e:
+        assert "a tab that repeats a lead number needs pin_positions" in str(e), e
+    ext = copy.deepcopy(_sot223("2.30")["sidecar"]["extraction"])
+    ext["package"].update(pin_positions=None, tab=dict(ext["package"]["tab"], number="2"))
+    res = D.process(ext, "AMS1117-3.3", "ds.pdf")
+    assert DR.assess(res)[0] == "failed", (DR.assess(res), res["needs_review"])
+    assert any(r.startswith("footprint_gen.build failed") for r in res["needs_review"]), res["needs_review"]
+    ext = copy.deepcopy(_sot223("2.30")["sidecar"]["extraction"])
+    ext["package"]["pin_positions"][1]["side"] = "R"   # lead 2 read on the tab's side: it builds, under tab 4
+    res = D.process(ext, "AMS1117-3.3", "ds.pdf")
+    assert DR.assess(res) == ("failed", ["footprint_gen.build failed: the pads would short: pads 2 and 4 overlap by "
+                                         "2.025 mm (check pitch, pin_count and terminal_length against the drawing)"]), \
+        (DR.assess(res), res["needs_review"])
+
+
 # ---- DS2-21: the 2.30 mm pitch every SOT-223 drawing prints (JEDEC TO-261AA, e = 2.30 BSC) failed the self-check
 def test_ds2_21_sot223_pitch_2_30_is_a_standard_pitch():
     from ecadlib import ds_route as DR

@@ -1510,6 +1510,8 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
                     if lvl == "error" and rule == "copper":
                         review.append(f"land pattern: {m} (check land pad_width / pad_center / pad_length against "
                                       "the drawing)")
+            elif F.shorts(rep):                       # `footprint gen` refuses to write it, the release check holds it
+                review.append(f"footprint_gen.build failed: {F.shorts(rep)}")
         except Exception as e:
             review.append(f"footprint_gen.build failed: {e!r}")
     sym = {"name": part, "description": f"{ext['symbol_description']} (read from the datasheet by ecadlib.datasheet; review before use)",
