@@ -38,3 +38,20 @@ def test_ds2_58_freeze_follows_sub_sheets_whose_file_name_case_differs(tmp_path)
     for sheet in ("Sub.kicad_sch", "sub2/Leaf.kicad_sch"):
         text = (d / sheet).read_text()
         assert '(lib_id "Device:' not in text and '(lib_id "board-frozen:' in text, f"{sheet} still uses the live library"
+
+
+@lite
+def test_ds2_59_freeze_backup_keeps_both_sheets_that_share_a_file_name(tmp_path):
+    """sub.kicad_sch and sub2/sub.kicad_sch are both rewritten by freeze: the backup must hold both originals."""
+    d = tmp_path.resolve() / "bkproj"
+    shutil.copytree(FIX_SCH, d)
+    (d / "sub2" / "leaf.kicad_sch").rename(d / "sub2" / "sub.kicad_sch")
+    root = d / "board.kicad_sch"
+    root.write_text(root.read_text().replace('"sub2/leaf.kicad_sch"', '"sub2/sub.kicad_sch"'))
+    originals = {f: (d / f).read_bytes() for f in ("sub.kicad_sch", "sub2/sub.kicad_sch")}
+    assert originals["sub.kicad_sch"] != originals["sub2/sub.kicad_sch"]
+    res = PJ.freeze_kicad(d / "board.kicad_pro")
+    assert all((d / f).read_bytes() != b for f, b in originals.items()), "freeze did not rewrite both sheets"
+    kept = [p.read_bytes() for p in Path(res["backup"]).rglob("*") if p.is_file()]
+    for f, b in originals.items():
+        assert b in kept, f"the backup lost the original {f}"

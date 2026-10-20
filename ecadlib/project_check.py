@@ -650,8 +650,9 @@ def freeze_kicad(path, nick=None, dry_run=False, out_dir=None, rewrite=True):
             tables.append((pdir / "fp-lib-table", "fp_lib_table", f"{prefix}/{nick}.pretty"))
         if not dry_run:
             for f in list(changed) + [p for p, _, _ in tables if p.is_file()]:
-                backup.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(f, backup / f.name)
+                dst = _backup_path(backup, pdir, f)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, dst)
             for f, t in changed.items():
                 f.write_text(sexpr.dumps(t) + "\n", encoding="utf-8")
         for p, head, uri in tables:
@@ -662,6 +663,22 @@ def freeze_kicad(path, nick=None, dry_run=False, out_dir=None, rewrite=True):
                            for fpid, ds in names.items() for n, d in enumerate(ds)},
             "files": [str(f) for f in written], "backup": str(backup) if backup and not dry_run and backup.exists() else None,
             "dry_run": dry_run}
+
+
+def _backup_path(backup, pdir, f):
+    """Where freeze backs up f: its path inside the project folder (sub.kicad_sch and sub2/sub.kicad_sch are two
+    files); a sheet outside it (Sheetfile "../shared/x.kicad_sch") under _outside/, numbered when the name is taken."""
+    try:
+        rel = Path(os.path.relpath(f, pdir))
+    except ValueError:                         # another drive (Windows)
+        rel = None
+    if rel is None or rel.parts[:1] == ("..",):
+        rel = Path("_outside") / Path(f).name
+    dst, n = backup / rel, 1
+    while dst.exists():
+        n += 1
+        dst = dst.with_name(f"{rel.stem}.{n}{rel.suffix}")
+    return dst
 
 
 def _point_schematic(tree, nick, sym_new, fps):
