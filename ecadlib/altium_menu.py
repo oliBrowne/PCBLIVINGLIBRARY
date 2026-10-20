@@ -1045,10 +1045,48 @@ def part_rows(it, limit=7):
     return rows[-limit:] if len(rows) > limit else rows
 
 
+# One word of a description: a value with its unit (16M, 20PF, 10PPM, 4.7uF, 10k, 1%), never a part number's root
+VALUE_WORD = re.compile(r"\d+(\.\d+)?(r|k|m|g|meg|hz|khz|mhz|ghz|pf|nf|uf|ph|nh|uh|mh|ppm|v|mv|kv|a|ma|ua|w|mw|ohms?|%)",
+                        re.I)
+
+
+def looks_like_description(text):
+    """'SOSET 16M 20PF 10PPM', '10k 0603 1%': several words, at least one a value with its unit. Most part numbers are
+    one word (X322512MSB4SI), but not all (SOSET's crystal C2975360 is "16M 20PF 10PPM"), so this only shapes the
+    not-found message, it never stops a lookup."""
+    words = str(text or "").split()
+    return len(words) >= 2 and any(VALUE_WORD.fullmatch(w) for w in words)
+
+
+def undouble(text):
+    """'X322512MSB4SIX322512MSB4SI' -> 'X322512MSB4SI': a part number pasted twice into the dialog's box (AD26 pasted
+    on both Ctrl+V's key and its character). Only an exact repeat of something with a digit in it is cut."""
+    t = str(text or "").strip()
+    h = t[:len(t) // 2]
+    return h.strip() if len(t) % 2 == 0 and len(h) >= 4 and t == h + h and re.search(r"\d", h) else t
+
+
+def lcsc_input(text):
+    """'C2975360' when the person typed an LCSC number or pasted an lcsc.com product link, else ''."""
+    from . import providers as P
+    t = str(text or "").strip()
+    if re.fullmatch(r"C\d{3,9}", t, re.I):
+        return t.upper()
+    return P.lcsc_sku(t) if re.match(r"(https?://)?(www\.)?lcsc\.com/", t, re.I) else ""
+
+
 def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
-    """Build one part from its MPN and publish it. Returns the result dict."""
+    """Build one part from its MPN and publish it. Returns the result dict. An LCSC number (or lcsc.com link) is
+    looked up by that number; a part number pasted twice is cut back to one."""
     progress = progress or Progress()
+    mpn = undouble(mpn)
+    lcsc = lcsc_input(mpn)
     ws = _workspace(cfg)
+    if lcsc:
+        from . import providers as P
+        if not P.unofficial_allowed(ws.rules()):     # only the EasyEDA route reads LCSC numbers: say so, look nothing up
+            return lcsc_off({"status": "error", "big": "Not found", "mpn": lcsc}, ws, lcsc)
+        mpn, hints["lcsc"] = lcsc, lcsc
     bom = add_to_parts(ws.root, mpn, manufacturer, **hints)
     rel = ws.rel(bom)
     progress.step(0, 0, f"looking up {mpn}")
@@ -1089,6 +1127,12 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
         res.update(status="error", reason="not_found", message=f"{mpn} was not found: no part source knows this part "
                    "number, so ecadlib has no symbol, footprint or data for it.",
                    fix="Check the part number (a typo, or a suffix missing), then add it again.")
+        if looks_like_description(mpn):    # a real MPN can look like this too (SOSET's "16M 20PF 10PPM"): only a hint
+            res.update(reason="description", message=f"{mpn} was not found, and it reads like a description (values "
+                       "and units) more than a manufacturer part number.",
+                       fix="Type the part number from the maker's or the shop's page, or its LCSC number (C2975360 "
+                           "on lcsc.com), then add it again.")
+        lcsc_off(res, ws, mpn)
     else:
         res.update(status="held", message=f"{mpn} is held ({nm}): " + (" ".join(w["text"] for w in whys[:3]) or "see the review."),
                    fix=(whys[0]["fix"] + " " if whys else "") + f"Open the review queue ({_queue_hint(cfg)}) "
@@ -1096,7 +1140,7 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
     res.update(rows_result(cost_rows(ai_cost) + part_rows(it), {"ready": "Ready", "duplicate": "Already in your library",
                                                                 "awaiting_approval": "Waiting for sign-off"}.get(st, "Held")))
     if res["status"] == "error":
-        res["big"] = "Not found" if res.get("reason") == "not_found" else "Not published"
+        res["big"] = "Not found" if res.get("reason") in ("not_found", "not_searched", "description") else "Not published"
     if res["status"] == "held" and ai and nm in ai["names"]:
         q = ws.ai_quote(rel, parts=[nm]) if ai["parts"] > 1 else ai      # the menu's list may hold other parts too
         if q:
@@ -1146,6 +1190,24 @@ def ai_read(cfg, req, progress=None):
     if req.get("mpn"):
         return _part_result(cfg, ws, ws._bom_path(bom), bom, req["mpn"], progress, None, s.get("ai_cost"))
     return _fill_result(cfg, ws, bom, s, progress, s.get("ai_cost"))
+
+
+def lcsc_off(res, ws, mpn):
+    """A not-found while [providers] unofficial is off: LCSC / EasyEDA (where many parts, e.g. YXC crystals, only
+    are) was never asked, so say that, and which file and lines turn it on, instead of "no part source knows it"."""
+    from . import providers as P
+    if P.unofficial_allowed(ws.rules()):
+        return res
+    f = ws.rules_in_use() or ws.rules_file()
+    lcsc = re.fullmatch(r"C\d{3,9}", mpn, re.I)
+    res.update(reason="not_searched",
+               message=(f"{mpn} is an LCSC number, but" if lcsc else f"{mpn} was not found in the official part sources, and")
+               + " the LCSC / EasyEDA search is off, so LCSC was not asked."
+               + ("" if lcsc else " Many parts (often Chinese-made ones, sold through LCSC) are only there."),
+               fix=f"To search LCSC / EasyEDA too, put unofficial = true under [providers] in {f} (add a [providers] "
+                   "line above it if the file has none), then add the part again. It was switched off because those "
+                   "sites have no published API; when on, LCSC is asked after the official sources.")
+    return res
 
 
 def not_found(triage_csv, mpn, item):
