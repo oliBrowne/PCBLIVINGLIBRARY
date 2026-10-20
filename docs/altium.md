@@ -27,6 +27,8 @@ NEXAR_TOKEN=... python3 -m ecadlib.altium365 push out/altium365/plan.json --work
 
 Parts without Altium model files are planned as `needs_altium_models` and skipped on release (they still get parameter updates if they already exist in the workspace). `--dry-run` sends nothing and writes the mutation inputs it would send.
 
+**Only checked parts go up.** In a plan, `ready` only means the model files were found. Before `push` uploads a part's files (a new part, or a new revision of a changed one), it runs the release check (`ecadlib release-check`) on those files as they are now. A part that fails the check is skipped as held, and its failures are listed in the push report, unless a person signed them off with release anyway (`--allow`). `dblib-sync`, `altium-pkg` and `kicad-export` run the same check. A part from a doubtful source (an EasyEDA conversion, a pinout from a family table, a KiCad symbol or footprint picked by a near name, a datasheet read) is held until someone looks at it and releases it anyway.
+
 **Verified** (from Nexar's support articles and the schema and code in `NexarDeveloper/nexar-release-component-demo-wpf`, last commit 2024-07-23):
 * `desReleaseComponent(input: DesReleaseComponentInput!)` takes component name, comment, description, parameters, folder, naming scheme and lifecycle ids, plus `symbolFiles` and `footprintFiles` as `{fileId, relativePath}`. The demo uploads real `.SchLib`/`.PcbLib` binaries from a `Released\` folder, so **release needs Altium-format files; KiCad files cannot go up directly**.
 * Uploads are `multipart/form-data` POSTs to `https://files.nexar.com/File/Upload` with the access token in a `token` header; the response body is the file id, valid 24 hours.
@@ -102,8 +104,9 @@ python3 -m ecadlib.altium_lib pcblib ecadlib/package_specs/*.json -o out/altium_
 python3 -m ecadlib.altium_lib schlib examples/symbols/*.json  -o out/altium_models/SchLib
 python3 -m ecadlib.altium_lib dump out/altium_models/PcbLib/SOIC-8_3.9x4.9mm_P1.27mm.PcbLib
 python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
-        --models out/altium_models -o out/altium365/plan.json      # -> 4 ready, 10 needs_altium_models
-                                                                     #    add --models out/altium_models_kicad (KiCad parts, below) -> 14 ready
+        --models out/altium_models -o out/altium365/plan.json      # -> 4 with models, 10 needs_altium_models
+                                                                     #    add --models out/altium_models_kicad (KiCad parts, below) -> 14 with models
+python3 -m ecadlib.release_check out/altium365/plan.json             # what push will hold back, and why
 ```
 
 **Altium can now build these files itself.** Every library written here also gets a plain-text recipe beside it
@@ -118,7 +121,7 @@ What gets written:
 * **Designator and comment text:** the reference becomes `.Designator` on Top Overlay and the value `.Comment` on Mechanical 13 (stroke font, KiCad's height, stroke width, rotation and justification; the anchor is shifted so a nominal 3-character designator and 8-character comment centre where KiCad centres them).
 * **Pin graphics:** pins in `examples/symbols/*.json` take an optional `"shape"`: a KiCad shape name (`inverted`, `clock`, `inverted_clock`, `input_low`, `clock_low`, `output_low`, `edge_clock_high`, `non_logic`) or `{"inside_edge"|"outside_edge"|"inside"|"outside": symbol}` with Altium's IEEE symbols. `~{EN}` in a pin name becomes Altium's overline `E\N\`.
 * **Display modes:** symbols can carry alternate (De Morgan) views, written as Altium 24 writes them.
-* `CH340C.json` and `TPS62133RGTR.json` carry `"needs_datasheet_verification": true`. **Their pinouts were written from memory and must be checked against the datasheets before anything is released.**
+* `CH340C.json` and `TPS62133RGTR.json` carry `"needs_datasheet_verification": true`. **Their pinouts were written from memory and must be checked against the datasheets before anything is released.** Their `cross_check` notes record the checks made since (CH340C pin 8 is OUT#). ecadlib does not read the flag: a `.SchLib` built from these files is held only by what the release check finds.
 
 **Verified here** (2026-10-13; `python3 -m tests.test_offline` runs 11/11, 5 of them new):
 * **Container:** `olefile` reads all 13 outputs with `raise_defects=DEFECT_INCORRECT` and logs nothing. 200 random trees and an 8 MB file that needs DIFAT read back byte-exact. 18 real Altium files from AltiumSharp's TestData and the Nexar demo were rewritten through `cfb.to_bytes`, and each came back with an identical stream tree.

@@ -194,12 +194,17 @@ def test_each_source_and_review():
         assert src["DSPART1"] == (None, None) and src["NOWHERE1"] == (None, None), src
         out = Path(d) / "out"
         for n in ("RES-0603-10k", "LED-RED-0603", "TPS1234DSGR", "EEPART1"):
-            assert items[n]["status"] == "ready", (n, items[n]["hold_reasons"])
             assert (out / items[n]["symbol"]["file"]).exists() and (out / items[n]["footprint"]["kicad_mod"]).exists()
+        for n in ("RES-0603-10k", "LED-RED-0603"):
+            assert items[n]["status"] == "ready", (n, items[n]["hold_reasons"])
+        # a symbol matched by its MPN minus an ordering suffix, and an EasyEDA conversion: built, held for a person
+        for n, doubt in (("TPS1234DSGR", "ordering suffix"), ("EEPART1", "EasyEDA C2002 conversion")):
+            assert items[n]["status"] == "held" and [h for h in items[n]["hold_reasons"] if h.startswith("verify: ")
+                                                     and doubt in h], (n, items[n]["hold_reasons"])
         assert "assembly" not in items["TPS1234DSGR"]                            # the assembly check was cut
         assert items["RES-0603-10k"]["symbol"]["file"] == "models/SchLib/Resistor.SchLib"
         assert items["TPS1234DSGR"]["field_sources"]["ComponentLink2URL"] == "LCSC datasheet URL pattern (not fetched)"
-        assert any("ordering suffix" in r for r in items["TPS1234DSGR"]["librarian"]["review"])
+        assert any("ordering suffix" in r for r in items["TPS1234DSGR"]["verify"])
         assert not any("easyeda" in t for t in items["TPS1234DSGR"]["librarian"]["tried"])   # kicad came first, easyeda not needed
         tried = " | ".join(items["DSPART1"]["librarian"]["tried"])
         assert "needs datasheet reader (no API key): https://example.com/ds.pdf (BOM)" in tried, tried

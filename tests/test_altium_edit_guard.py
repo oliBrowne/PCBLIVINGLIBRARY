@@ -5,6 +5,7 @@ import copy, json, tempfile
 from pathlib import Path
 
 from ecadlib import altium_dblib_sync as S, altium_lib as AL, altium_native as AN, altium_pkg as PKG
+from tests.fixtures_lite import released_anyway
 
 ROOT = Path(__file__).resolve().parent.parent
 FP = "R_0603_1608Metric"
@@ -24,6 +25,7 @@ def _src(d):
             "parameters": [{"name": "Value", "value": "10k"}], "cleared": [], "status": "ready",
             "symbol": {"ref": "Resistor", "file": "models/SchLib/Resistor.SchLib"},
             "footprint": {"ref": FP, "file": f"models/PcbLib/{FP}.PcbLib"}, "hold_reasons": []}
+    released_anyway([item], d)                 # the sync checks it again: released anyway (no maker, MPN, datasheet)
     (d / "plan.json").write_text(json.dumps([item]))
     return d / "plan.json"
 

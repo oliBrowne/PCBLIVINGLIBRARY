@@ -16,6 +16,8 @@ Flow per part (mirrors NexarDeveloper/nexar-release-component-demo-wpf, schema a
 Release needs real Altium binaries: one symbol per .SchLib, one footprint per .PcbLib, under
 --models/SchLib/<Library Ref>.SchLib and --models/PcbLib/<Footprint Ref>.PcbLib. Parts without
 them are planned as `needs_altium_models` (altium_lib writes ours; kicad_import converts KiCad library parts).
+A plan's `ready` only says the files are there: push runs the release check (ecadlib.release_check) on each part
+before it uploads anything, and a part that fails it is skipped as held (`ecadlib release-check PLAN` shows why).
 
 Auth: NEXAR_TOKEN = a user access token with scopes openid, user.access, design.domain
 (the token generated in the Nexar portal has them). Supply-only client-credential tokens
@@ -489,7 +491,11 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     rules: parameter names go to the workspace in the rules' house names ([parameters] names).
     folder: the library folder (the plan's): change control (#105). Its ledger says which revision each part last
     published to this workspace; a released change to the symbol / footprint / 3D model then goes up as a new
-    component revision (push_revision), a held change sends nothing new, and every push is recorded."""
+    component revision (push_revision), a held change sends nothing new, and every push is recorded.
+    Files go up only for parts that pass the release check run here, on the files as they are
+    (release_check.publish_problems): the plan's `ready` is not taken on trust. A parameter update of a part
+    already in the workspace sends no files and is not re-checked; a `held` part gets nothing."""
+    from . import release_check as RC, rules as RU
     from .approvals import push_block
     from .rules import house_item
     from .rules import DEFAULTS
@@ -497,6 +503,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     models_root = f"{(rules or DEFAULTS)['folders'].get('root') or 'Components'}/Models"
     # sign-off is checked on the item as it was approved (ecadlib's parameter names: the content hash covers them)
     blocks = [push_block(i, policy) for i in items]
+    checked = RU.resolve(rules, folder or ".")
+    rechecks = [RC.publish_problems(i, folder or ".", checked) for i in items]
     items = [house_item(i, rules) for i in items]
     defs = {} if dry_run else client.release_defs(ws)
     results, uploaded, released = [], {}, set()   # one upload per file per run; (kind, name) released this run
@@ -508,7 +516,9 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
         if p not in uploaded:
             uploaded[p] = "<fileId>" if dry_run else client.upload(p)
         return uploaded[p]
-    for it, block in zip(items, blocks):
+    def recheck(res, why):                     # the release check, run again here, holds it back
+        res.update(action="skip", detail="held: " + "; ".join(why), recheck=why)
+    for it, block, why in zip(items, blocks, rechecks):
         res = {"name": it["name"], "action": "", "detail": ""}
         if it.get("status") == "held":         # release_check held it back: no release, no parameter update
             res["action"], res["detail"] = "skip", "held: " + "; ".join(it.get("hold_reasons") or ["release check"])
@@ -526,8 +536,11 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
             existing = None if dry_run else client.find(ws, it["name"])
             mode, halves, head, _ = change_mode(lg, it, target) if lg else ("params", set(), None, None)
             if (existing or (dry_run and lg and lg.published(it["name"], target))) and mode == "revision":
-                res.update(push_revision(it, client, ws, defs, upload, models_root, existing, halves, head["revision"],
-                                         dry_run, note, transition))
+                if why:
+                    recheck(res, why)
+                else:
+                    res.update(push_revision(it, client, ws, defs, upload, models_root, existing, halves,
+                                             head["revision"], dry_run, note, transition))
             elif existing:
                 new = merged_params(existing, it)
                 res["a365_revision"] = _rev_id(existing)
@@ -541,6 +554,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     res["detail"] = client.update_params(existing["id"], new, note, replace=True)
             elif it["status"] != "ready":
                 res["action"], res["detail"] = "skip", "needs_altium_models (no .SchLib/.PcbLib)"
+            elif why:
+                recheck(res, why)
             else:
                 # a symbol / footprint shared by several parts (Capacitor, R_0603) is released with the first and
                 # linked by the others: releasing it again fails with AddALU_ItemsDuplicate item HRID
@@ -638,7 +653,9 @@ def main(argv=None):
                         i[k]["file"] = Path(i[k]["file"]).resolve().as_posix()
         out.write_text(json.dumps(items, indent=2))
         ready = sum(i["status"] == "ready" for i in items)
-        print(f"{len(items)} components planned, {ready} ready, {len(items) - ready} need Altium models -> {out}")
+        print(f"{len(items)} components planned, {ready} with models, {len(items) - ready} need Altium models -> {out}")
+        if ready:                              # `ready` = the files are there; push checks them before it releases
+            print(f"  push runs the release check first; to see it now: ecadlib release-check {out}")
         for i in items:
             print(f"  {i['status']:<20} {i['folder']:<24} {i['name']:<28} sym={i['symbol']['ref']} fp={i['footprint']['ref']}")
         return
