@@ -332,3 +332,17 @@ def test_demo_over_a_damaged_plan_gives_the_hint_and_the_debug_traceback(tmp_pat
         raise AssertionError("--debug kept the traceback back")
     except json.JSONDecodeError:
         pass
+
+
+# T069
+@lite
+def test_status_names_a_plan_from_a_newer_ecadlib_and_does_not_count_it(tmp_path):
+    from ecadlib import ws_status as WS
+    shutil.copytree(_demo(), tmp_path / "ws")
+    stamp = tmp_path / "ws" / "librarian" / "demo_bom_demo" / "ecadlib_schema.json"
+    d = json.loads(stamp.read_text(encoding="utf-8"))
+    d["kinds"]["plan"], d["ecadlib"] = 99, "9.9.9"
+    stamp.write_text(json.dumps(d), encoding="utf-8")
+    s = WS.status(tmp_path / "ws")
+    assert not s["plans"] and s["totals"]["parts"] == 0, s["plans"]
+    assert any(p.startswith("librarian/demo_bom_demo/plan.json: made by ecadlib 9.9.9") for p in s["problems"]), s["problems"]

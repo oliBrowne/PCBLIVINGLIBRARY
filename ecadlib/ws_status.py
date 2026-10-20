@@ -128,7 +128,17 @@ def status(root):
 
     from . import timing as TI
     rv, reasons = out["review"], {}
+    from . import migrate as MG
     for pf in _plans(root):
+        try:                                   # a plan from a newer ecadlib is named and skipped, never misread
+            v, by = MG.folder_version(pf.parent, "plan")
+        except MG.SchemaTooNew:
+            problems.append(f"{rel(pf.parent / MG.STAMP)}: unreadable, or from a newer ecadlib: {rel(pf)} not counted")
+            continue
+        if v > MG.KINDS["plan"].current:
+            problems.append(f"{rel(pf)}: made by ecadlib {by or '?'} (plan schema {v}; this one reads up to "
+                            f"{MG.KINDS['plan'].current}): not counted; {MG.UPGRADE}")
+            continue
         items = _json(pf, problems, root)
         if not isinstance(items, list):
             if items is not None:
