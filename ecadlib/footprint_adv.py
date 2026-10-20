@@ -594,7 +594,8 @@ def check_pad_table(spec, pads=None):
         row = [p for p in pins if abs(p["y"] - p1["y"]) < 0.01]
         col = [p for p in pins if abs(p["x"] - p1["x"]) < 0.01]
         ends = lambda g, k: abs(p1[k] - min(q[k] for q in g)) < 0.01 or abs(p1[k] - max(q[k] for q in g)) < 0.01
-        if (len(row) >= 3 and not ends(row, "x")) and (len(col) >= 3 and not ends(col, "y")):
+        mid_r, mid_c = len(row) >= 3 and not ends(row, "x"), len(col) >= 3 and not ends(col, "y")
+        if (mid_r and (mid_c or len(col) == 1)) or (mid_c and len(row) == 1):     # a single row/column counts too
             add("warning", "pin1", f"pad {p1['num']} is in the middle of its row: pin 1 is normally at an end (check numbering)")
         if t.get("origin") == "pin1":
             src = next(r for r in raw if _num(r.get("number")) == p1["num"])

@@ -103,3 +103,18 @@ def test_t024_schema_error_does_not_stop_the_batch(tmp_path):
     assert err.getvalue().startswith("TYPO: not written:") and "pitchh" in err.getvalue(), err.getvalue()
     assert len(err.getvalue().splitlines()) == 1, err.getvalue()
     assert (tmp_path / "o.pretty" / "R_0603_1608Metric.kicad_mod").exists()
+
+
+# T025: pad 1 in the middle of a single-row connector is flagged by the table checks and by `check`
+def test_t025_pin1_in_the_middle_of_a_single_row():
+    pads = [{"number": n, "x": x, "y": 0} for n, x in ((2, -2.54), (1, 0), (3, 2.54))]
+    spec = {"name": "C", "package_type": "connector", "pin_count": 3, "pitch": 2.54,
+            "pad_table": {"unit": "mm", "y_axis": "down", "origin": "center", "default_pad": {"w": 1.0, "h": 1.8},
+                          "pads": pads, "body": {"x1": -3.5, "y1": -1.5, "x2": 3.5, "y2": 1.5}}}
+    txt, rep = FG.build(spec)
+    mid = lambda msgs: any("middle of its row" in m for m in msgs)
+    assert mid(c["message"] for c in rep.get("table_checks", []) if c["level"] == "warning"), rep.get("table_checks")
+    assert mid(m for l, _, m in FC.check(txt) if l == "warning")
+    pads[0]["number"], pads[1]["number"] = 1, 2                          # 1 2 3: pin 1 at the end, nothing to say
+    txt, rep = FG.build(spec)
+    assert not mid(c["message"] for c in rep.get("table_checks", [])) and not mid(m for _, _, m in FC.check(txt))

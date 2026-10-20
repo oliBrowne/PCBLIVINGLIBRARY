@@ -316,6 +316,10 @@ def check(text, allow_duplicate_pads=None, same_net=None):
         if not any((p["x"] <= left + EPS and p["y"] <= top + EPS) or (abs(p["x"]) < EPS and abs(p["y"]) < EPS) for p in ones):
             p1 = ones[0]
             add("warning", "pin1", f"pad {pin1} at ({p1['x']:.3f}, {p1['y']:.3f}) is not the top-left pad")
+        for k, o in (("x", "y"), ("y", "x")):            # a single row (column): pin 1 at one of its ends
+            if len({round(p[o], 3) for p in sig}) == 1 and len({p["num"] for p in sig}) >= 3 and \
+                    not any(abs(p[k] - min(q[k] for q in sig)) < EPS or abs(p[k] - max(q[k] for q in sig)) < EPS for p in ones):
+                add("warning", "pin1", f"pad {pin1} is in the middle of its row: pin 1 is normally at an end (check numbering)")
 
     # numbering direction: KiCad counts counter-clockwise (seen from the top) from pin 1
     areas = sorted(p["w"] * p["h"] for p in sig)
