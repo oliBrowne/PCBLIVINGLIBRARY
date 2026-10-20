@@ -2147,7 +2147,7 @@ class Reader:
         if ref not in self._info:
             from .llm import run as LR, AIConfigError
             try:
-                self._info[ref] = LR.info(ref, self.rules)
+                self._info[ref] = LR.info(ref, self.rules, probe=not self.offline)   # --offline: never asks the server
             except AIConfigError as e:
                 raise DatasheetError(str(e))
         return self._info[ref]

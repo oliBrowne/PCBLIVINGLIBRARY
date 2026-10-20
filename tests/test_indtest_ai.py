@@ -118,3 +118,26 @@ def test_t059_costs_model_gemini_is_not_priced_as_claude(tmp_path, monkeypatch):
     rin, rout = C.read_tokens()
     assert row["read_batch"] is None and abs(row["read"] - (rin * 0.75 + rout * 3.75) / 1e6) < 1e-9, row
     assert row == dict(C.jobs("gemini-3.8-flash", "gemini"), model="gemini-3.8-flash")
+
+
+# T115: --offline never asks the model server about the model (GET /models with the key)
+def test_t115_offline_reader_does_not_probe_the_model_server():
+    import tempfile
+    from ecadlib.llm import run as LR
+
+    class Offline(TL.LdoHTTP):
+        offline = True
+    with TL.FakeOpenAI(lambda body: TL.chat("{}"), models=[{"id": "probe-me"}]) as srv, tempfile.TemporaryDirectory() as d:
+        os.environ["PROBE_KEY"] = "sk-probe-test"
+        try:
+            rules = {"ai": {"provider": "openai-compatible", "base_url": srv.base, "api_key_env": "PROBE_KEY",
+                            "model": "probe-me"}}
+            rd = D.Reader(d + "/out", d + "/cache", rules=rules, http=Offline(TL._pdf2()), log=None, estimate=True)
+            rd.info(rd.model)
+            assert rd._plain(rd.model) is False
+            LR.wants(rules, "prefer_standard", probe=False)     # librarian --offline
+            assert srv.reqs == [], srv.reqs
+            LR.info(rd.model, rules)                    # online: the server is asked, as before
+            assert [r[1] for r in srv.reqs] == ["/v1/models"], srv.reqs
+        finally:
+            os.environ.pop("PROBE_KEY", None)

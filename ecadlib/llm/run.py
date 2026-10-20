@@ -21,11 +21,13 @@ def _rules_key(rules):
         return repr(rules)
 
 
-def info(ref, rules=None, section="datasheet", key=None, get=None, post=None):
-    k = (ref, section, _rules_key(rules))
+def info(ref, rules=None, section="datasheet", key=None, get=None, post=None, probe=True):
+    """probe=False (--offline): the profile from the table and [ai.profiles] only, the server is never asked."""
+    k = (ref, section, _rules_key(rules), probe)
     if k not in _INFO:
         ep = endpoint(rules, section, ref)
-        prof = PR.resolve(ep, rules, key_for(ep, key) if ep["provider"] != "anthropic" else None, get, post)
+        prof = PR.resolve(ep if probe else dict(ep, detect=False), rules,
+                          key_for(ep, key) if ep["provider"] != "anthropic" and probe else None, get, post)
         plan = R.plan(prof, ep["assist"], ep["feedback_retry"])
         register(ep["ref"], ep, prof)
         _INFO[k] = {"ep": ep, "prof": prof, "plan": plan, "sampling": SM.params(ep, prof, _ai(rules).get("temperature"))}
@@ -142,10 +144,10 @@ def provenance(inf, msg=None, route=None, pages_picked=False):
     return rec
 
 
-def wants(rules, rail, section="datasheet"):
+def wants(rules, rail, section="datasheet", probe=True):
     """Does the configured model's plan include this rail? (False when the setup can't be resolved.)"""
     try:
-        return rail in info(endpoint(rules, section)["ref"], rules, section)["plan"]["rails"]
+        return rail in info(endpoint(rules, section)["ref"], rules, section, probe=probe)["plan"]["rails"]
     except Exception as e:                            # the small-model guide rails change what is sent: say so
         from .. import fallbacks as FB
         FB.note(f"[{section}] model setup did not resolve, so its guide rails are unknown", e, instead=f"no {rail!r} rail")
