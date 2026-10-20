@@ -1372,12 +1372,13 @@ class Workspace:
         or with kicad=True the KiCad export in kicad/<bom>/ (run kicad_dblib first) against the Altium files, its
         .kicad_dbl rows included. Report in reports/parity_<bom>.md / .json. Never touches the network."""
         from . import parity as PY
-        from .kicad_export import kname
+        from .kicad_export import kname, libname
         bom_path, plan_f, _ = self._plan(bom)
         kdir = None
         if kicad:
             kdir = self.root / "kicad" / self._key(bom_path)
-            if not (kdir / f"{kname(str(name))[:60]}.kicad_sym").is_file():
+            lib = kname(str(name))[:60]                       # what kicad_dblib passes on; its files: libname(lib)
+            if not any((kdir / f"{n}.kicad_sym").is_file() for n in (lib, libname(lib))):
                 raise ValueError(f"no KiCad export in {self.rel(kdir)} yet: run kicad_dblib (or kicad-export) first")
         rep = PY.check_plan(plan_f, kdir, kname(str(name))[:60] if kdir else None, rules=self.rules_in_use())
         stem = PY.write_report(rep, self.root / "reports" / f"parity_{self._key(bom_path)}")

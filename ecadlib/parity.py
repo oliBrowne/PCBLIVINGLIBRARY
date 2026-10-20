@@ -818,8 +818,10 @@ class KiCadLib:
             if len(syms) != 1:
                 raise ValueError(f"{folder}: {len(syms)} .kicad_sym files; pass --name")
             name = syms[0].stem
-        else:                                  # the --name given to kicad-export: its files are named libname(name)
-            from .kicad_export import libname
+        elif not (self.dir / f"{name}.kicad_sym").is_file():   # the --name given to kicad-export, which names the
+            from .kicad_export import libname                    # files libname(name); an older export: as given
+            if not (self.dir / f"{libname(name)}.kicad_sym").is_file():
+                raise ValueError(f"{folder}: no {name}.kicad_sym (the --name given to kicad-export)")
             name = libname(name)
         self.name = name
         f = self.dir / f"{name}.kicad_sym"

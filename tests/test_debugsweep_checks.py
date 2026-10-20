@@ -69,6 +69,52 @@ def test_ds2_60_parity_with_a_library_name_kicad_export_normalises(tmp_path):
 
 
 @lite
+def test_ds2_60_parity_reads_a_library_file_named_as_given(tmp_path):
+    """An export written before kicad-export normalised --name has a;b.kicad_sym (now a_b): --name "a;b" must read it."""
+    from ecadlib import parity as PY
+    d = tmp_path.resolve()
+    (d / "a;b.kicad_sym").write_text('(kicad_symbol_lib (version 20231120) (generator "test") (symbol "R1"))\n',
+                                     encoding="utf-8")
+    lib = PY.KiCadLib(d, "a;b")
+    assert lib.name == "a;b" and sorted(lib.symbols) == ["R1"], (lib.name, sorted(lib.symbols))
+
+
+@lite
+def test_ds2_60_parity_refuses_a_name_with_no_library_file(tmp_path):
+    """A mistyped --name read an empty symbol table, so every part came out 'not in X.kicad_sym' (exit 1): it must
+    stop with an error naming the file it looked for."""
+    from ecadlib import parity as PY
+    d = tmp_path.resolve()
+    (d / "mylib.kicad_sym").write_text('(kicad_symbol_lib (version 20231120) (generator "test") (symbol "R1"))\n',
+                                       encoding="utf-8")
+    try:
+        PY.KiCadLib(d, "mylb")
+    except ValueError as e:
+        assert "mylb.kicad_sym" in str(e), e
+    else:
+        raise AssertionError("a --name with no .kicad_sym was taken as an empty library")
+
+
+@lite
+def test_ds2_60_workspace_parity_finds_the_export_of_a_name_libname_changes(tmp_path):
+    """The UI's parity looked for kname(name).kicad_sym, but kicad_dblib names the files libname(name): with a ';' in
+    the name it said 'no KiCad export yet' with the export right there."""
+    from ecadlib import testpack as TP
+    from ecadlib.app import Workspace
+    tp = tmp_path.resolve() / "tp"
+    TP.build(tp, name="a;b", log=lambda *a, **k: None)
+    assert (tp / "kicad" / "a_b.kicad_sym").is_file()
+    ws = Workspace(tmp_path.resolve() / "ws", [], offline=True)
+    bom = ws.root / "boms" / "pack.csv"
+    bom.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(tp / "bom.csv", bom)
+    shutil.copytree(tp / "library", ws._librarian_dir(bom), dirs_exist_ok=True)
+    shutil.copytree(tp / "kicad", ws.root / "kicad" / ws._key(bom))
+    r = ws.parity(ws.rel(bom), kicad=True, name="a;b")
+    assert r["mode"] == "export" and r["counts"]["match"] == 6 and not r["mismatches"], r
+
+
+@lite
 def test_ds2_61_kicad_database_in_a_folder_with_hash_sign(tmp_path):
     """'Board #2/lib.sqlite' cut the SQLite URI at '#': parity saw no rows and created an empty 'Board ' file; the eval
     golden reader opened the same unquoted URI."""
