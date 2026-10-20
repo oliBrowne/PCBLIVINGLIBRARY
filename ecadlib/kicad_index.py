@@ -59,10 +59,11 @@ def two_readings(s):
     in Europe and a thousands separator elsewhere (as change_diff._readings), so the value is ambiguous; None for any
     other value ('4,7pF', '0,100uF', '4,700.5pF' read one way). split_value takes the decimal comma: what these
     values store does not change, but nothing should pick, rename or merge a part by such a value."""
-    m = COMMA_3_RE.match(str(s or ""))
+    s = "".join(str(unicodedata.decimal(c)) if c.isdecimal() else c for c in str(s or ""))   # '４,７００pF': every digit
+    m = COMMA_3_RE.match(s)                                                                   # split_value's \d reads
     if not m:
         return None
-    rest, dec = str(s)[m.end():].strip(), m.group(2).rstrip("0")
+    rest, dec = s[m.end():].strip(), m.group(2).rstrip("0")
     return m.group(1) + ("." + dec if dec else "") + rest, m.group(1) + m.group(2) + rest
 
 

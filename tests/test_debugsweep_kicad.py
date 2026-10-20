@@ -297,6 +297,11 @@ def test_ds2_43_a_value_with_a_thousands_or_decimal_comma_is_not_bound_renamed_o
     rows = AE.to_rows([{"designator": "C1", "value": "4.7pF", "footprint": "C_0603_1608Metric", "qty": "1"},
                        {"designator": "C2", "value": "4,700pF", "footprint": "C_0603_1608Metric", "qty": "1"}])
     assert sorted(rows["Capacitors"]["Value"]) == ["4,700pF", "4.7pF"], rows["Capacitors"].to_dict("records")
+    for v in ("４,７００pF", "٤,٧٠٠pF"):         # fullwidth / Arabic-Indic digits: split_value reads them as 4.7 pF too
+        assert KI.two_readings(v) == ("4.7pF", "4700pF") and idx.match("", "", v, "0603", ref_class="C") == (None, None), v
+        rows = AE.to_rows([{"designator": "C1", "value": "4.7pF", "footprint": "C_0603_1608Metric", "qty": "1"},
+                           {"designator": "C2", "value": v, "footprint": "C_0603_1608Metric", "qty": "1"}])
+        assert sorted(rows["Capacitors"]["Value"]) == sorted([v, "4.7pF"]), rows["Capacitors"].to_dict("records")
 
 
 @lite
