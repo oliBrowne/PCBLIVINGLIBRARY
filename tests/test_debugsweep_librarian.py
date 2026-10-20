@@ -79,3 +79,28 @@ def test_ds2_48_rebuild_check_finds_the_lib_files_of_a_moved_project(tmp_path):
     sym.write_text(sym.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     rep = RB.check(root / "clone" / "lib", log=QUIET)
     assert any(d["part"] == "CH340C" and d["what"] == "input" for d in rep["inputs"]) and not rep["ok"], rep["inputs"]
+
+
+@lite
+def test_ds2_49_part_version_specs_take_drive_letter_library_paths(tmp_path, monkeypatch):
+    import os, shutil
+    from ecadlib import change_cli as CC
+    here = Path(__file__).resolve().parent
+    files = {"demo.kicad_sym": here.parent / "examples" / "kicad_lib" / "ecadlib_demo.kicad_sym",
+             "hdr.kicad_mod": here / "fixtures" / "kicad_golden" / "PinHeader_1x04_P2.54mm_Vertical.kicad_mod"}
+    if os.name == "nt":                 # the real thing: tmp_path is on a drive (C:\...), spelled with \ and with /
+        lib = tmp_path.resolve() / "lib"
+        lib.mkdir()
+        for name, src in files.items():
+            shutil.copy(src, lib / name)
+        bases = [(str(lib), "\\"), (lib.as_posix(), "/")]
+    else:                               # stand-ins from the cwd: a folder named "C:", and files named "C:\lib\..."
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "C:" / "lib").mkdir(parents=True)
+        for name, src in files.items():
+            shutil.copy(src, tmp_path / "C:" / "lib" / name)
+            shutil.copy(src, tmp_path / ("C:\\lib\\" + name))
+        bases = [("C:\\lib", "\\"), ("C:/lib", "/")]
+    for base, sep in bases:
+        assert CC.version(f"{base}{sep}hdr.kicad_mod")[1]["part"] == "PinHeader_1x04_P2.54mm_Vertical"   # whole file
+        assert CC.version(f"{base}{sep}demo.kicad_sym:CH340C")[1]["part"] == "CH340C"                     # FILE:NAME
