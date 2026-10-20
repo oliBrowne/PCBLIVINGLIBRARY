@@ -67,3 +67,21 @@ def test_ds2_18_cost_sheet_prices_a_dated_claude_id_at_its_alias_rate(tmp_path, 
     with contextlib.redirect_stdout(out):
         rc = C.main(["--model", "claude-haiku-4-5-20251001"])
     assert rc == 0 and "claude-haiku-4-5-20251001: $1 in / $5 out" in out.getvalue(), (rc, out.getvalue())
+
+
+# ---------------------------------------------------------------- DS2-23: an endpoint:model cross_check_model
+@lite
+def test_ds2_23_quote_prices_an_endpoint_cross_check_model_not_yet_used(tmp_path, monkeypatch):
+    """With cross_check_model = "local:qwen2.5:7b" (free) or "oai:gpt-6-luna" (a built-in price) the dialogs' quote said
+    'price unknown' for a priced Claude read, and approving that took the cap off (cap 0, yes)."""
+    from ecadlib import ai_cost as AC
+    monkeypatch.setattr(LL, "_REG", {})               # a fresh process: nothing has used the cross-check model yet
+    monkeypatch.setattr(LR, "_INFO", {})
+    est = {"rows": [{"part": "P", "model": "claude-opus-5-5", "input_tokens": 20000}], "mode": "synchronous",
+           "usd": 0.1, "usd_max": 0.4, "models": {"claude-opus-5-5": 1}}
+    ai = {"detect": False, "endpoints": {"local": {"provider": "ollama"}, "oai": {"provider": "openai"}}}
+    q = AC.quote(est, RU.load({"ai": ai, "datasheet": {"cross_check_model": "local:qwen2.5:7b"}}))
+    assert q["price_known"] and q["usd_max"] == 0.4, q              # a local second read costs $0
+    assert AC.approve(q, q["approve_usd"]) == (0.4, False)           # held to what was approved
+    q = AC.quote(est, RU.load({"ai": ai, "datasheet": {"cross_check_model": "oai:gpt-6-luna"}}))
+    assert q["price_known"] and q["usd_max"] > 0.4, q

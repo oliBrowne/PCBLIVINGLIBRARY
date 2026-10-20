@@ -58,9 +58,10 @@ def money(v):
     return f"${v:.2f}" if v >= 0.095 else f"${v:.3f}" if v >= 0.001 else "under $0.001"
 
 
-def _check_cost(rows, cfg, batch):
+def _check_cost(rows, cfg, batch, rules=None):
     """(typical, worst) USD of the cross-check's second reads, or (0, 0) when cross_check is off; None if unpriced."""
     from . import crosscheck as CC, datasheet as D, ds_route as DR
+    from .llm import run as LR, AIConfigError
     if str(cfg.get("cross_check") or "auto") == "off":
         return 0.0, 0.0
     cw, mult = D.CACHE_WRITE, 1.0                     # the second read is always a synchronous request, batch run or not
@@ -68,6 +69,12 @@ def _check_cost(rows, cfg, batch):
     for r in rows:
         model = cfg.get("cross_check_model") or r["model"]
         p = DR.prices(model, r["input_tokens"])
+        if not p:                                     # "local:qwen2.5:7b" no request has used yet: resolve it as the
+            try:                                      # Reader will before the second read (its endpoint and profile)
+                LR.info(model, rules)
+            except AIConfigError:
+                return None
+            p = DR.prices(model, r["input_tokens"])
         if not p:
             return None
         typ += (r["input_tokens"] * cw * p[0] + CHECK_TYPICAL_OUT * p[1]) / 1e6 * mult
@@ -87,7 +94,7 @@ def quote(est, rules=None, key_set=True):
     batch = str(est.get("mode", "")).startswith("batch")
     usd = est.get("usd")
     worst = est.get("usd_max_route") if est.get("usd_max_route") is not None else est.get("usd_max")
-    check = _check_cost(rows, cfg, batch)
+    check = _check_cost(rows, cfg, batch, rules)
     if check is None or usd is None or worst is None:
         usd = worst = None
     else:
