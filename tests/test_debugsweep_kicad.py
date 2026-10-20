@@ -10,17 +10,18 @@ from tests.fixtures_lite import lite
 QUIET = lambda *a, **k: None
 
 
-def _two_libs():
+def _two_libs(base):
     """kicad-export of one plan as library 'alpha', then as 'beta', into the same folder (EXP-27)."""
-    plan, http = TP._plan()
+    plan, http = TP._plan(base)
     out = plan.parent.parent / "k"
     for lib in ("alpha", "beta"):
         assert not X.export(plan, out, lib, http=http, log=QUIET)["errors"]
     return out
 
 
-def test_ds2_40_kicad_pcm_packages_the_named_library_of_a_two_library_folder():
-    out = _two_libs()
+@lite
+def test_ds2_40_kicad_pcm_packages_the_named_library_of_a_two_library_folder(tmp_path):
+    out = _two_libs(tmp_path)
     err = io.StringIO()
     with redirect_stdout(io.StringIO()) as so, redirect_stderr(err):
         rc = KP.main([str(out), "--out", str(out.parent / "pcm"), "--name", "alpha", "--json"])
@@ -37,9 +38,10 @@ def test_ds2_40_kicad_pcm_packages_the_named_library_of_a_two_library_folder():
     assert not (out.parent / "pcm2").exists()
 
 
-def test_ds2_40_kicad_pcm_licence_note_is_about_the_packaged_library():
+@lite
+def test_ds2_40_kicad_pcm_licence_note_is_about_the_packaged_library(tmp_path):
     """alpha holds KiCad library content (CC-BY-SA), beta, exported after it, none: packaging alpha under MIT warns."""
-    plan, http = TP._plan()
+    plan, http = TP._plan(tmp_path)
     out = plan.parent.parent / "k"
     assert X.export(plan, out, "alpha", http=http, log=QUIET)["kicad_content"]
     ee = plan.with_name("plan_easyeda.json")
@@ -105,9 +107,10 @@ def test_ds2_41_pcblib_smd_footprint_with_npth_pegs_stays_smd(tmp_path):
     assert [ln.strip() for ln in back.splitlines() if ln.strip().startswith("(attr")] == ["(attr through_hole)"], back
 
 
-def test_ds2_42_kicad_pcm_a_second_change_the_same_day_gets_a_newer_version():
+@lite
+def test_ds2_42_kicad_pcm_a_second_change_the_same_day_gets_a_newer_version(tmp_path):
     import datetime
-    _, exp, _ = TP._export(False)
+    _, exp, _ = TP._export(False, tmp_path)
     out, day = exp.parent / "pcm", datetime.date(2026, 10, 20)
     build = lambda d: KP.build(exp, out, today=d, base_url="https://x.example/k", log=QUIET)
     r1 = build(day)
@@ -148,8 +151,9 @@ def test_ds2_43_a_value_with_a_thousands_or_decimal_comma_is_not_bound_renamed_o
     assert sorted(rows["Capacitors"]["Value"]) == ["4,700pF", "4.7pF"], rows["Capacitors"].to_dict("records")
 
 
-def test_ds2_44_kicad_pcm_packages_a_crlf_checkout_of_a_kicad_export_folder():
-    _, out, _ = TP._export(False)
+@lite
+def test_ds2_44_kicad_pcm_packages_a_crlf_checkout_of_a_kicad_export_folder(tmp_path):
+    _, out, _ = TP._export(False, tmp_path)
     lf = KP.build(out, out.parent / "pcm_lf", log=QUIET)
     for f in [out / "lib.kicad_sym", *(out / "lib.pretty").glob("*.kicad_mod")]:   # git core.autocrlf on Windows
         f.write_bytes(f.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
@@ -157,9 +161,10 @@ def test_ds2_44_kicad_pcm_packages_a_crlf_checkout_of_a_kicad_export_folder():
     assert crlf["content_sha256"] == lf["content_sha256"] and crlf["footprints"] == lf["footprints"] == 4, (crlf, lf)
 
 
-def test_ds2_45_kicad_export_warns_of_removed_parts_after_another_library_was_exported_there():
-    plan, http = TP._plan()
-    other, _ = TP._plan()                                        # another BOM's plan, its own library in the same folder
+@lite
+def test_ds2_45_kicad_export_warns_of_removed_parts_after_another_library_was_exported_there(tmp_path):
+    plan, http = TP._plan(tmp_path / "a")
+    other, _ = TP._plan(tmp_path / "b")                          # another BOM's plan, its own library in the same folder
     out = plan.parent.parent / "k"
     X.export(plan, out, "alpha", http=http, log=QUIET)
     X.export(other, out, "beta", http=http, log=QUIET)
