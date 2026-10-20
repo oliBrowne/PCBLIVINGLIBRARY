@@ -668,7 +668,8 @@ def footprint_from_pcblib(path, name, notes, pick=None, rules=None):
     m = lambda u: _num(AL.to_mm(u))
     pt = lambda x, y: f"{m(x)} {m(-y)}"
     stroke = lambda w: f'(stroke (width {m(w) if w else "0.1"}) (type solid))'
-    out, pads, smd, texts = [], [], True, []
+    out, pads, texts = [], [], []
+    tht = npth = cu_smd = False       # a plated pin makes it THT; a locating peg (NPTH) beside SMD pads does not
     recs = []
     for r in fp["records"]:
         why = _not_copper(r)
@@ -702,7 +703,7 @@ def footprint_from_pcblib(path, name, notes, pick=None, rules=None):
             if mmanual and not tented and r["mask"]:                 # e.g. NSMD BGA lands: opening = land + margin
                 extra += f" (solder_mask_margin {m(r['mask'])})"
             if r["hole"]:
-                smd = False
+                tht, npth = tht or bool(r["plated"]), npth or not r["plated"]
                 kind = "thru_hole" if r["plated"] else "np_thru_hole"
                 ox, oy = r.get("offset") or (0, 0)          # copper offset from the hole (pad frame, Altium y up)
                 off = f" (offset {m(ox)} {m(-oy)})" if ox or oy else ""
@@ -714,6 +715,7 @@ def footprint_from_pcblib(path, name, notes, pick=None, rules=None):
                 pads.append(f'\t(pad {sexpr.quote(r["designator"])} {kind} {shape.split()[0]} {at} (size {m(w)} {m(h)}){extra} {drill} '
                             f'(layers "*.Cu"{mask}){_tail(shape)})')
             else:
+                cu_smd = True
                 side = "B" if r["layer"] == AL.BOTTOM else "F"
                 manual = r["paste_mode"] == 2 and r["paste"] is not None
                 paste = not (manual and r["paste"] <= -max(w, h) // 2)
@@ -782,7 +784,7 @@ def footprint_from_pcblib(path, name, notes, pick=None, rules=None):
     descr = fp["params"].get("DESCRIPTION", "")
     head = [f"(footprint {sexpr.quote(name)}", f"\t(version {FP_VERSION})", '\t(generator "ecadlib")', '\t(layer "F.Cu")']
     head += [f"\t(descr {sexpr.quote(descr)})"] if descr else []
-    head += [f"\t(attr {'smd' if smd else 'through_hole'})"]
+    head += [f"\t(attr {'through_hole' if tht or (npth and not cu_smd) else 'smd'})"]
     return "\n".join(head + out + pads) + "\n)\n"
 
 

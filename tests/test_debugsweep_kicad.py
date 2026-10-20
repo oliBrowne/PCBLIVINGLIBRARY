@@ -5,6 +5,7 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from ecadlib import kicad_export as X, kicad_pcm as KP
 from tests import test_tool_packages as TP
+from tests.fixtures_lite import lite
 
 QUIET = lambda *a, **k: None
 
@@ -46,6 +47,27 @@ def test_ds2_41_easyeda_smd_footprint_with_npth_pegs_stays_smd():
         attrs = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("(attr")]
         assert attrs == [f"(attr {want})"], (peg, attrs)
         assert not [f for f in FR.check(text, "SW_Pegs.kicad_mod") if f[1] == "attr"], peg   # nothing to hold it on
+
+
+@lite
+def test_ds2_41_pcblib_smd_footprint_with_npth_pegs_stays_smd(tmp_path):
+    """The same footprints through a .PcbLib (kicad-export reads library footprints back from the PcbLib)."""
+    from ecadlib import altium_lib as AL, easyeda_convert as EC, footprint_rules as FR
+    smd = ["PAD~RECT~-10~0~4~6~1~~1~0~~0~g1~0~~Y~0", "PAD~RECT~10~0~4~6~1~~2~0~~0~g2~0~~Y~0"]
+    for i, (peg, want) in enumerate((("HOLE~0~8~1.5~g3~0", "smd"),
+                                     ("PAD~ELLIPSE~0~8~3~3~11~~3~1.5~~0~g3~0~~N~0", "smd"),
+                                     ("PAD~ELLIPSE~0~8~3~3~11~~3~1.5~~0~g3~0~~Y~0", "through_hole"))):
+        text = EC.footprint_to_kicad({"head": {"x": 0, "y": 0}, "shape": smd + [peg]}, name="SW_Pegs")
+        AL.write_pcblib(tmp_path / f"p{i}.PcbLib", [AL.footprint_from_kicad(text)])
+        back = X.footprint_from_pcblib(tmp_path / f"p{i}.PcbLib", "SW_Pegs", [])
+        attrs = [ln.strip() for ln in back.splitlines() if ln.strip().startswith("(attr")]
+        assert attrs == [f"(attr {want})"], (peg, attrs)
+        assert not [f for f in FR.check(back, "SW_Pegs.kicad_mod") if f[1] == "attr"], peg
+    # a footprint of unplated holes alone (a mounting-hole footprint) keeps the through-hole type it always had
+    text = EC.footprint_to_kicad({"head": {"x": 0, "y": 0}, "shape": ["HOLE~0~0~3~g1~0"]}, name="MH")
+    AL.write_pcblib(tmp_path / "mh.PcbLib", [AL.footprint_from_kicad(text)])
+    back = X.footprint_from_pcblib(tmp_path / "mh.PcbLib", "MH", [])
+    assert [ln.strip() for ln in back.splitlines() if ln.strip().startswith("(attr")] == ["(attr through_hole)"], back
 
 
 def test_ds2_44_kicad_pcm_packages_a_crlf_checkout_of_a_kicad_export_folder():
