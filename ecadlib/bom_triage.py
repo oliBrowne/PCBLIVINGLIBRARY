@@ -44,6 +44,10 @@ def _hnorm(h):
     return _norm(re.sub(r"(?i)\bp\s*/\s*n\b", " pn ", str(h)).replace("#", " no "))
 
 
+HIDDEN_HEADER = "<hidden>"     # a column the workbook hides, in a CSV copy of it (dedupe --bom): map_headers skips a header
+                               # with '<' and the other header rules match whole headers, so it is never read as live
+
+
 def map_headers(headers, threshold=0.72):
     """Fuzzy, case-insensitive header -> field mapping. Returns {field: header}."""
     scores = []
@@ -433,10 +437,13 @@ def _two_row_header(top, sub, columns=None):
     return out if score(out) > score(list(top)) else None
 
 
-def _bom_sheet(p, sheets, columns=None):
+def _bom_sheet(p, sheets, columns=None, keep_hidden=False):
     """[(sheet name, frame, uncached formula cells)] -> the BOM frame. Hidden sheets and hidden columns are left out (an old BOM kept hidden);
     blank rows are dropped (title blocks); the sheet with the best header wins, then the one with more rows; sheets
-    with the very same header (a Top and a Bottom BOM) are read together; any other BOM-like sheet is named."""
+    with the very same header (a Top and a Bottom BOM) are read together; any other BOM-like sheet is named.
+    keep_hidden: a copy of the BOM to write back (dedupe --bom) keeps the hidden columns' cells; they still take no
+    part in choosing the sheet and its header, and attrs['hidden_cols'] lists them. A row with text only in hidden
+    columns is still dropped: rows are kept as read_bom sees them, so the copy is the sheet read_bom picks."""
     try:
         hidden = _BI().xlsx_hidden(p)
     except Exception:                                    # not an .xlsx zip (old .xls): nothing is known to be hidden
@@ -448,20 +455,21 @@ def _bom_sheet(p, sheets, columns=None):
         if name in hidden and hidden[name] is None:
             continue
         df = df.copy()
-        for j in hidden.get(name) or ():
-            if j < df.shape[1]:
-                df.iloc[:, j] = ""
+        full = df.fillna("")                             # the cells as the sheet has them
+        hid = {j for j in hidden.get(name) or () if j < df.shape[1]}
+        for j in hid:
+            df.iloc[:, j] = ""
         df = df.fillna("")
-        df = df[df.astype(str).apply(lambda c: c.str.strip()).ne("").any(axis=1)].reset_index(drop=True)
-        frames.append((name, df))
+        rows = df.astype(str).apply(lambda c: c.str.strip()).ne("").any(axis=1)
+        frames.append((name, df[rows].reset_index(drop=True), full[rows].reset_index(drop=True), hid))
     if not frames:
         return pd.DataFrame()
     info = []
-    for name, df in frames:
+    for name, df, full, hid in frames:
         score = _header_score(df, columns)
         h = header_row(df, columns) if len(df) else 0
         head = tuple(_norm(x) for x in df.iloc[h]) if len(df) else ()
-        info.append((score, len(df) - h - 1, name, df, h, head))
+        info.append((score, len(df) - h - 1, name, full if keep_hidden else df, h, head, hid))
     best = max(info, key=lambda t: (t[0], t[1]))
     same = [t for t in info if t is not best and t[0] == best[0] and t[5] == best[5] and best[0] >= 2]
     other = [t[2] for t in info if t is not best and t not in same and t[0] >= 3]
@@ -476,6 +484,8 @@ def _bom_sheet(p, sheets, columns=None):
     if other:
         print(f"  note: {Path(p).name}: read sheet {best[2]!r}; sheet(s) {', '.join(map(repr, other))} also look like "
               "a BOM and were not read", file=sys.stderr)
+    if keep_hidden:
+        out.attrs["hidden_cols"] = sorted(set().union(*(t[6] for t in [best] + same)))
     return out
 
 
@@ -619,9 +629,9 @@ def _uncached_formulas(p):
     return out
 
 
-def _read_excel(p, columns=None):
+def _read_excel(p, columns=None, keep_hidden=False):
     """The sheet that holds the BOM: workbooks often put a cover / notes sheet first. columns: the rules' [bom]
-    columns, so a sheet with house headers is found behind a cover sheet."""
+    columns, so a sheet with house headers is found behind a cover sheet. keep_hidden: see _bom_sheet."""
     head = Path(p).read_bytes()[:8]
     if not head.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0")):     # not a workbook: CSV / tab text named .xls(x)
         return _read_csv(p)
@@ -635,7 +645,7 @@ def _read_excel(p, columns=None):
             raise ValueError(f"{p}: can't read this old .xls workbook ({e}); save it as .xlsx or CSV") from e
         except Exception as e:                                            # truncated / corrupt file
             raise ValueError(f"{p}: not a readable Excel workbook ({type(e).__name__}: {e})") from e
-    return _bom_sheet(p, sheets, columns)
+    return _bom_sheet(p, sheets, columns, keep_hidden)
 
 
 TOTAL = re.compile(r"((grand\s*|sub\s*)?totals?|sum|summe|gesamt(summe)?|insgesamt|totale?|somme)"

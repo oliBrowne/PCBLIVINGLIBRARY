@@ -158,7 +158,12 @@ def item_pins(item, base):
     f = _path(base, item["symbol"].get("file"))
     if not f or not f.exists():
         return None
+    from .kicad_export import _pick
     syms = AL.read_schlib(f)[1]
+    try:                                       # a library of many: the symbol the plan names
+        syms = [_pick(syms, item["symbol"].get("ref"), f, "symbol")] if syms else []
+    except ValueError:                         # not in the file (the release check holds it): no pins known
+        return None
     return sorted({r["num"] for s in syms for r in s["records"] if r.get("RECORD") == "2"}, key=_nat)
 
 
@@ -170,7 +175,13 @@ def item_pads(item, base):
     km = RC._kicad_mod(item, base, f)
     if km:
         return footprint_pads(km.read_text(encoding="utf-8"))
-    pads = [r for r in AL.read_pcblib(f)[0]["records"] if r["type"] == "pad"]
+    from .kicad_export import _pick
+    fps = AL.read_pcblib(f)                    # a file that does not read raises, as in item_pins
+    try:                                       # a library of many: the footprint the plan names
+        fp = _pick(fps, item["footprint"].get("ref"), f, "footprint")
+    except ValueError:                         # not in the file (the release check holds it): no pads known
+        return None
+    pads = [r for r in fp["records"] if r["type"] == "pad"]
     return [(p["designator"], not p["designator"] or (p["hole"] and not p["plated"]) or bool(RC.MECH_PAD.fullmatch(p["designator"])))
             for p in pads]
 

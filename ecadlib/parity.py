@@ -849,8 +849,10 @@ def check_item(item, base=".", rules=None, kicad=None, altium_rows=None, second_
     fp_f, sym_f = _rel(base, (item.get("footprint") or {}).get("file")), _rel(base, (item.get("symbol") or {}).get("file"))
     fps = AL.read_pcblib(fp_f) if fp_f and fp_f.is_file() else None
     syms = AL.read_schlib(sym_f)[1] if sym_f and sym_f.is_file() else None
-    a_fp = altium_footprint(fps[0], _courtyard_layer(rules)) if fps else None
-    a_sym = altium_symbol(syms[0]) if syms else None
+    # a library of many (dedupe --merge onto a company file): the entry the plan names, as kicad-export writes it; a ref
+    # the file does not hold raises (check_plan reports the part), never the file's first entry
+    a_fp = altium_footprint(X._pick(fps, item["footprint"].get("ref"), fp_f, "footprint"), _courtyard_layer(rules)) if fps else None
+    a_sym = altium_symbol(X._pick(syms, item["symbol"].get("ref"), sym_f, "symbol")) if syms else None
     k_fp = k_sym = None
     if kicad is None:
         kmod = RC._kicad_mod(item, base, fp_f) if fp_f else None

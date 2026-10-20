@@ -230,12 +230,19 @@ def check_item(item, base=".", rules=None):
                 r = r[1] if kind == "symbol" else r
                 if not r:
                     raise ValueError("library is empty")
-                if kind == "symbol":
-                    syms = r
-                else:
-                    fps = r
             except Exception as e:             # unreadable: altium_lib's reader is the gate
                 add("files", f"{kind} file does not read back ({type(e).__name__}: {e})")
+                continue
+            from .kicad_export import _pick
+            try:                               # a library of many (dedupe --merge onto a company file): the entry the
+                r = [_pick(r, item[kind].get("ref"), f, kind)]          # plan names, not the first one or all of them
+            except ValueError as e:
+                add("files", str(e))
+                continue
+            if kind == "symbol":
+                syms = r
+            else:
+                fps = r
     # ---- pins vs pads
     if syms and fps:
         pins = {r["num"] for s in syms for r in s["records"] if r.get("RECORD") == "2"}
