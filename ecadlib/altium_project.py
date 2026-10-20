@@ -841,6 +841,8 @@ def load_library(plan=None, libs=(), a365=None, log=None):
         col.add_plan(json.loads(Path(plan).read_text()), Path(plan).parent)
         a365 = a365 or (Path(plan).parent / "a365_state.json" if (Path(plan).parent / "a365_state.json").exists() else None)
     for lib in libs:
+        if not Path(lib).exists():             # else every project part would read "missing from library"
+            raise FileNotFoundError(f"--lib {lib}: not found")
         col.add_lib(lib)
     guids = {}
     if a365:
@@ -853,8 +855,10 @@ def load_library(plan=None, libs=(), a365=None, log=None):
 
 
 def load_lifecycle(path):
-    if not path or not Path(path).exists():
+    if not path:
         return {}
+    if not Path(path).exists():                # a typo would skip the NRND / EOL check silently
+        raise FileNotFoundError(f"--lifecycle {path}: not found")
     data = json.loads(Path(path).read_text())
     return {k: v for k, v in (data.get("parts") or {}).items()}
 
@@ -964,7 +968,8 @@ def where_used(dirs, part=None, plan=None, libs=(), a365=None, lifecycle=None, r
                 flags.append(_flag("mixed_revisions", e, f"item {ig} placed at {len(revs)} revisions; this project has {u['revision_guid']}", u))
 
     # lifecycle
-    lc = load_lifecycle(lifecycle or (Path(plan).parent / "lifecycle_state.json" if plan else None))
+    dflt = Path(plan).parent / "lifecycle_state.json" if plan else None
+    lc = load_lifecycle(lifecycle or (dflt if dflt and dflt.exists() else None))
     plan_lc = {}
     if plan:
         for it in json.loads(Path(plan).read_text()):

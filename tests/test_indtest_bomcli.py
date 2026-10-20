@@ -52,3 +52,26 @@ def test_project_json_stdout_is_only_json(tmp_path, monkeypatch):
     with redirect_stdout(o), redirect_stderr(e):
         assert AP.main([str(tmp_path / "B.PrjPcb"), "--json"]) == 0
     assert json.loads(o.getvalue()) == [{"qty": 1}] and "wrote" in e.getvalue()
+
+
+# T018: where-used refuses a --lib or --lifecycle that does not exist (exit 2), instead of flagging every part
+@lite
+def test_where_used_missing_lib_or_lifecycle(tmp_path):
+    from ecadlib import altium_project as AP, firstrun as FR
+    assert FR.preflight("where-used", ["--projects", ".", "--lib", str(tmp_path / "nope")])
+    for args in (["--lib", str(tmp_path / "nope")], ["--lifecycle", str(tmp_path / "nope.json")]):
+        with redirect_stderr(io.StringIO()) as e:
+            assert AP.where_used_main(["--projects", str(tmp_path), *args, "-o", str(tmp_path / "wu")]) == 2
+        assert "not found" in e.getvalue()
+    assert AP.load_lifecycle(None) == {}
+
+
+# T020: dedupe / where-used --lib take a library file (.DbLib, .kicad_mod), as the docs show
+@lite
+def test_dedupe_lib_file_passes_preflight(tmp_path):
+    from ecadlib import firstrun as FR
+    f = tmp_path / "parts.DbLib"
+    f.write_text("[OutputDatabaseLinkFile]\n")
+    assert FR.preflight("dedupe", ["plan.json", "--lib", str(f)]) is None
+    assert FR.preflight("where-used", ["--projects", ".", "--lib", str(f)]) is None
+    assert "not a file" in FR.preflight("librarian", ["bom.csv", "--lib", str(f)])[0]

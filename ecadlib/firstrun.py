@@ -270,7 +270,8 @@ def _settings_workspace(start=".", environ=None):
 
 
 # ------------------------------------------------------------------ checks before a command runs
-LIB_CHECKED = {"triage", "librarian", "resolve", "kicad-export", "mcp", "ui", "dedupe"}
+LIB_CHECKED = {"triage", "librarian", "resolve", "kicad-export", "mcp", "ui", "dedupe", "where-used"}
+LIB_FILE_OK = {"dedupe", "where-used"}        # these also read one library file (.DbLib .SchLib .PcbLib .kicad_mod ...)
 OUT_CHECKED = {"init", "demo", "triage", "librarian", "kicad-export", "kicad-dblib", "dblib",
                "export-parts", "dblib-sync"}
 
@@ -323,7 +324,7 @@ def preflight(cmd, argv, environ=None):
             if not Path(l).expanduser().exists():
                 return (f"library folder not found: {l}",
                         "fix --lib (or ECADLIB_LIB, or [setup] libs in ecadlib.toml); `ecadlib doctor` checks every path")
-            if not Path(l).expanduser().is_dir():     # a .kicad_sym itself would index nothing, silently
+            if not Path(l).expanduser().is_dir() and cmd not in LIB_FILE_OK:   # a .kicad_sym itself would index nothing
                 return (f"--lib must be a library folder, not a file: {l}",
                         f"give the folder it is in: --lib {Path(l).expanduser().parent}")
     if cmd in OUT_CHECKED:
