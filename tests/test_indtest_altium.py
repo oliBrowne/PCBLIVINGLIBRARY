@@ -264,6 +264,25 @@ def test_install_menu_uses_the_recorded_windows_folder(tmp_path):
     assert "ProjectName=D:\\ecadlib-menu\\ecadlib_menu.PrjScr" in rcs and "PL Mine Command=" in rcs
 
 
+# T092: altium-pkg --no-native-build leaves the .ecadbuild recipes out of the package
+@lite
+def test_no_native_build_package_has_no_recipes(tmp_path, monkeypatch):
+    from ecadlib import altium_native as AN, altium_pkg as PK
+    d = tmp_path
+    monkeypatch.setenv("ECADLIB_HOME", d / "home")
+    _models(d)
+    for f in (d / "models").rglob("*.*Lib"):              # recipes beside the models, as altium-lib writes them
+        f.with_name(f.name + AN.EXT).write_text("KIND\tx\n", encoding="utf-8")
+    items = released_anyway([_item("RES-0603-10k", "Resistors", "Resistor", "R_0603_1608Metric", Value="10k")], d)
+    (d / "plan.json").write_text(json.dumps(items, indent=1))
+    PK.build(d / "plan.json", d / "pkg", native=True)
+    assert list((d / "pkg").rglob(f"*{AN.EXT}"))
+    rep = PK.build(d / "plan.json", d / "pkg", native=False)
+    assert not rep["native_build"] and list((d / "pkg").rglob("*.PcbLib"))
+    assert list((d / "pkg").rglob(f"*{AN.EXT}")) == []
+    assert list((d / "models").rglob(f"*{AN.EXT}"))        # the library's own recipes stay
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):

@@ -520,6 +520,10 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
     libpkg = f"{name}.LibPkg"
     written = []
     from . import altium_native as AN
+    if not native and src.resolve() != out.resolve():  # --no-native-build: no recipes (nor build state) in the
+        for p in sorted(out.rglob(f"*{AN.EXT}")):       # package; a folder packaged in place keeps its own
+            p.with_name(p.name[:-len(AN.EXT)] + AN.STATE_EXT).unlink(missing_ok=True)
+            p.unlink()
     native = bool(native and AN.recipes(out))
     if native:
         nat = AN.write(out)
