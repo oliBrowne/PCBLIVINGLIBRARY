@@ -103,7 +103,7 @@ The UI has a **Library rules** card (type the folders to scan, review the propos
 
 `ecadlib rules check [PATH]` validates a file (errors name the bad key and suggest the nearest valid one) and prints the effective rules; `ecadlib rules show` prints the built-in defaults.
 
-Plans keep ecadlib's own parameter names internally; your house names (`[parameters.names]`) are applied at the outputs: the Altium 365 push, DbLib export and sync, KiCad export, and the A365 drift check.
+Plans keep ecadlib's own parameter names internally; your house names (`[parameters.names]`) are applied at the outputs: the Altium 365 push, DbLib export and sync, KiCad export, and the A365 drift check. When you adopt house names in a library already synced or pushed, the next dblib-sync blanks the value under ecadlib's old name (the empty column and its DbLib field map stay) and the next push drops the old-named workspace parameter, so each field has one value.
 
 **Accuracy and limits.** On synthetic libraries in four house styles (classic Altium SchLib/PcbLib, glued names in a DbLib, MPN-named Altium 365 list, KiCad), inference gets 34 of 34 settings right, and parts planned with the inferred file come out named like the existing ones. Not checked: no real customer library has been scanned and nothing written was opened in Altium; IPC-7351 names from the generator are approximate; name case (upper/lower) is not inferred; `.mdb` DbLib data is not read. Because the current folder's `ecadlib.toml` is used when the input folder has none, a stray file there will change output; pass `--rules` to be explicit.
 

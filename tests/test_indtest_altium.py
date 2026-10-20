@@ -141,6 +141,42 @@ def test_kicad_dblib_refuses_a_damaged_plan(tmp_path):
         assert (tmp_path / "out/ecadlib.sqlite").read_bytes() == b"db"
 
 
+_HOUSE = {"parameters": {"names": {"Supplier Part Number 1": "LCSC PN", "Manufacturer": "Mfr"}}}
+
+
+# T038: after adopting house names, dblib-sync leaves no stale value under ecadlib's old column name
+@lite
+def test_sync_after_adopting_house_names_has_no_stale_column(tmp_path, monkeypatch):
+    from ecadlib import rules as RU
+    d = tmp_path
+    monkeypatch.setenv("ECADLIB_HOME", d / "home")
+    _models(d)
+    items = released_anyway([_item("CAP-0402-100nF", "Capacitors", "Capacitor", "C_0402_1005Metric", Value="100nF",
+                                   Manufacturer="Samsung", Supplier_Part_Number_1="C1525")], d)
+    (d / "plan.json").write_text(json.dumps(items, indent=1))
+    S.sync(d / "plan.json", d / "lib")
+    house = RU.resolve(json.loads(json.dumps(_HOUSE)), d)
+    S.sync(d / "plan.json", d / "lib", rules=house)
+    items[0]["parameters"][2]["value"] = "C347222"            # re-sourced
+    (d / "plan.json").write_text(json.dumps(items, indent=1))
+    S.sync(d / "plan.json", d / "lib", rules=house)
+    row = S.read_tables(d / "lib/ecadlib.xlsx")["Capacitors"][1][0]
+    assert row["LCSC PN"] == "C347222" and row["Mfr"] == "Samsung", row
+    assert not row.get("Supplier Part Number 1") and not row.get("Manufacturer"), row
+
+
+# T038: the A365 parameter merge drops ecadlib's old name of a field the push now sends under its house name
+def test_a365_merge_drops_the_old_name_of_a_house_named_field():
+    from ecadlib import rules as RU
+    house = RU.resolve(json.loads(json.dumps(_HOUSE)), ".")
+    existing = {"details": {"parameters": [{"name": "Supplier Part Number 1", "value": "C1525"},
+                                           {"name": "LCSC PN", "value": "C1525"}, {"name": "Notes", "value": "hand"}]}}
+    item = {"parameters": [{"name": "LCSC PN", "value": "C347222"}]}
+    assert A3.merged_params(existing, item, house) == [{"name": "LCSC PN", "value": "C347222"},
+                                                       {"name": "Notes", "value": "hand"}]
+    assert {p["name"] for p in A3.merged_params(existing, item)} == {"Supplier Part Number 1", "LCSC PN", "Notes"}
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):

@@ -506,7 +506,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
     items = load_plan(plan) if isinstance(plan, (str, Path)) else plan
     base = Path(base or (Path(plan).parent if isinstance(plan, (str, Path)) else "."))
     to = Path(target_dir)
-    from .rules import param_name, resolve
+    from .rules import KEY_COLUMNS, param_name, resolve
     rules = resolve(rules, base)                            # house parameter names: ecadlib.toml found from the plan
     if not name or name in (".", "..") or Path(name).name != name or PureWindowsPath(name).name != name:
         raise ValueError(f"--name {name!r} is a file name, not a path: use --to for the folder")
@@ -674,7 +674,9 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         for c in (param_name(c, rules) for c in it.get("cleared", [])):
             if c in new:
                 new[c] = ""
-        new.update(want)
+        for c in [c for c in new if c not in KEY_COLUMNS and param_name(c, rules) != c and param_name(c, rules) in want]:
+            new[c] = ""                                     # ecadlib's own name of a field the house name now carries:
+        new.update(want)                                    # never a second, stale value of it
         changed = [c for c in new if str(new.get(c, "")) != str(cur.get(c, ""))]
         if old_t != t:                                      # category changed: move the row
             tables[old_t][1].remove(cur)

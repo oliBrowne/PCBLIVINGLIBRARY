@@ -368,13 +368,16 @@ def mpn_of(item_or_params, rules=None):
     return (x.get("name") if isinstance(x, dict) and "name" in x else "") or ""
 
 
-def merged_params(existing, item):
+def merged_params(existing, item, rules=None):
     """Parameter list to send with replaceExisting=True, or None when the workspace already matches.
     Starts from the current revision's parameters so ones added by hand in Altium 365 survive; plan
-    values win; fields the plan marks cleared are dropped."""
+    values win; fields the plan marks cleared are dropped, and so is a field under ecadlib's own name once the plan
+    sends it under the rules' house name ([parameters.names]: an earlier push's "Manufacturer" when it sends "Mfr")."""
+    from .rules import param_name
     cur = {p["name"]: p["value"] for p in ((existing.get("details") or {}).get("parameters") or [])}
     want = dict(cur)
-    for k in item.get("cleared", []):
+    sent = {p["name"] for p in item["parameters"]}
+    for k in item.get("cleared", []) + [k for k in cur if param_name(k, rules) != k and param_name(k, rules) in sent]:
         want.pop(k, None)
     want.update({p["name"]: p["value"] for p in item["parameters"]})
     return None if want == cur else [{"name": k, "value": v} for k, v in want.items()]
@@ -546,7 +549,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     res.update(push_revision(it, client, ws, defs, upload, models_root, existing, halves,
                                              head["revision"], dry_run, note, transition))
             elif existing:
-                new = merged_params(existing, it)
+                new = merged_params(existing, it, rules)
                 res["a365_revision"] = _rev_id(existing)
                 ident = identity_change(existing, new, rules) if new is not None else []
                 if new is None:

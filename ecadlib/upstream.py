@@ -426,7 +426,7 @@ def check_a365(items, nodes, folders=None, state=None, rules=None):
     """plan items vs workspace nodes -> (rows, new state). state: {name: {revision, symbols, footprints}} from last run.
     rules: the plan's parameters are compared under the rules' house names, as push sends them."""
     from .altium365 import merged_params
-    from .rules import house_item
+    from .rules import house_item, param_name
     items = [house_item(i, rules) for i in items]
     by = {}
     for n in nodes:
@@ -441,13 +441,17 @@ def check_a365(items, nodes, folders=None, state=None, rules=None):
             row(it["name"], "missing", detail=f"plan status {it.get('status', '')}"); continue
         d = n.get("details") or {}
         cur = {p["name"]: p["value"] for p in d.get("parameters") or []}
-        if merged_params(n, it) is not None:
+        if merged_params(n, it, rules) is not None:
             for p in it["parameters"]:
                 if cur.get(p["name"]) != p["value"]:
                     row(it["name"], "parameter", p["name"], p["value"], cur.get(p["name"], "(absent)"))
             for k in it.get("cleared", []):
                 if k in cur:
                     row(it["name"], "parameter", k, "(cleared)", cur[k])
+            sent = {p["name"] for p in it["parameters"]}
+            for k in cur:                      # ecadlib's own name of a field now sent under its house name
+                if param_name(k, rules) != k and param_name(k, rules) in sent:
+                    row(it["name"], "parameter", k, f"(now {param_name(k, rules)})", cur[k])
         for f in ("comment", "description"):
             if f in n and (it.get(f) or "") != (n[f] or ""):
                 row(it["name"], f, f, it.get(f) or "", n[f] or "")
