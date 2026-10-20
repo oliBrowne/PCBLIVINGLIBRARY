@@ -135,3 +135,22 @@ def test_ds2_64_clean_shortens_paths_with_spaces_or_forward_slashes():
                  "C:/Users/jsmith/ws/librarian/board/plan.json",
                  "/home/john smith/ws/librarian/board/plan.json"):
         assert M.clean(f"cannot read {path}: bad") == "cannot read plan.json: bad", path
+    for path in (r"C:\Users\John Smith\My Project\My Board.kicad_sch", "/home/john smith/My Project/My Board.kicad_sch"):
+        err = IsADirectoryError(21, "Is a directory", path)        # str() quotes the repr'd path: \ doubled
+        assert M.clean(f"OSError: {err}") == "OSError: [Errno 21] Is a directory: 'My Board.kicad_sch'", path
+
+
+def test_ds2_64_clean_keeps_the_sentence_after_a_path():
+    """A space inside a folder name must not let a path run on into the prose after it: a later word with '/' or '\\'
+    (and/or, KiCad/Altium, page 3/12, R/W) made clean() drop the file name and every word up to that word."""
+    from ecadlib import messages as M
+    for text, want in (("cannot read /home/me/plan.json and/or the cache", "cannot read plan.json and/or the cache"),
+                       ("datasheet /home/me/ws/cache/ab12.pdf (page 3/12)", "datasheet ab12.pdf (page 3/12)"),
+                       (r"wrote C:\x\report.md and KiCad/Altium files", "wrote report.md and KiCad/Altium files"),
+                       ("parity: /tmp/x/parity.md written; KiCad/Altium differ",
+                        "parity: parity.md written; KiCad/Altium differ"),
+                       ("use /usr/lib or R/W pins", "use lib or R/W pins"),
+                       ("a:/b/c d", "c d")):
+        assert M.clean(text) == want, text
+    assert M.leaks("datasheet /home/me/ws/cache/ab12.pdf (page 3/12)") == ["/home/me/ws/cache/ab12.pdf"]
+    assert M.leaks("use /usr/lib or R/W pins") == ["/usr/lib"]
