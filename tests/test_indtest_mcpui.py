@@ -260,3 +260,36 @@ def test_expected_mcp_failures_are_not_reported_as_bugs():
     assert miss.endswith("not in cache; run the server without --offline to fetch it") and "report" not in miss, miss
     with contextlib.redirect_stderr(io.StringIO()):          # a real bug still says so (its traceback goes to stderr)
         assert "report" in M._error_text(RuntimeError("boom")) and "report" in M._error_text(OSError(5, "I/O error"))
+
+
+def _stdio_mcp(args, home, calls):
+    """`python -m ecadlib mcp <args>` over stdio: initialize, then each (tool, arguments) -> [(isError, text)]."""
+    import os, subprocess, sys
+    msgs = [{"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {"protocolVersion": "2025-06-18",
+             "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}]
+    msgs += [{"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": n, "arguments": a}}
+             for i, (n, a) in enumerate(calls, 1)]
+    env = dict(os.environ, PYTHONPATH=str(REPO), ECADLIB_HOME=str(home), HTTPS_PROXY="http://127.0.0.1:9",
+               HTTP_PROXY="http://127.0.0.1:9")
+    p = subprocess.run([sys.executable, "-m", "ecadlib", "mcp"] + args, input="".join(json.dumps(m) + "\n" for m in msgs),
+                       capture_output=True, text=True, env=env, timeout=120, cwd=str(home))
+    got = {r["id"]: r for r in map(json.loads, p.stdout.splitlines()) if "id" in r}
+    return [(bool(got[i]["result"].get("isError")), got[i]["result"]["content"][0]["text"]) for i in range(1, len(calls) + 1)]
+
+
+# T105
+@lite
+def test_confine_refusal_hint_lifts_the_confinement(tmp_path):
+    """stdio `--confine` refused a file outside the workspace with "start it with --any-path to allow more", but
+    --any-path does not lift --confine: following the advice changed nothing."""
+    import re
+    (tmp_path / "home").mkdir()
+    bom = tmp_path / "outside.csv"
+    bom.write_text("Designator,Value,Footprint\nR1,10k,R_0603_1608Metric\n")
+    call = [("triage_bom", {"bom": str(bom), "summary_only": True})]
+    base = ["--offline", "--workspace", str(tmp_path / "ws")]
+    (err, txt), = _stdio_mcp(base + ["--confine"], tmp_path / "home", call)
+    hint = re.search(r"\((start it [^)]*?) to allow more\)", txt)
+    assert err and hint and hint.group(1) == "start it without --confine", txt
+    (err, txt), = _stdio_mcp(base, tmp_path / "home", call)
+    assert not err, txt

@@ -663,11 +663,12 @@ def tool_names(spec):
 
 class Options:
     """How this server behaves (ecadlib mcp flags). Tests and old callers get the defaults."""
-    def __init__(self, tools=None, wait=45.0, max_chars=80000, confine=False):
+    def __init__(self, tools=None, wait=45.0, max_chars=80000, confine=False, lift="start it with --any-path"):
         self.tools = tools                      # None = every tool
         self.wait = wait                        # seconds a call waits before it answers with a job id
         self.max_chars = max_chars              # answers longer than this are cut (Claude Code stops at ~25k tokens)
         self.confine = confine                  # file arguments must be inside the workspace or a --lib folder
+        self.lift = lift                        # what lifts that, as the refusal says it
 
 
 def _opts(ws):
@@ -807,11 +808,11 @@ def _check_paths(ws, args):
         p = Path(x).expanduser()
         if not p.is_absolute() and re.match(r"[A-Za-z]:[\\/]|\\\\", x):   # a Windows path on another OS
             raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens files "
-                             "there (start it with --any-path to allow more)")
+                             f"there ({_opts(ws).lift} to allow more)")
         p = (p if p.is_absolute() else ws.root / p).resolve()
         if not any(p == r or r in p.parents for r in (Path(r).resolve() for r in roots)):
             raise ValueError(f"{k}: {x} is outside the workspace and the --lib folders; this server only opens files "
-                             "there (start it with --any-path to allow more)")
+                             f"there ({_opts(ws).lift} to allow more)")
 
 
 def _check_url(k, url):
@@ -1172,7 +1173,9 @@ def main(argv=None):
     userconfig.apply_env()                         # kicad-cli on PATH; stored keys are read when needed, never exported
     ws = Workspace(a.workspace, a.lib, a.providers.split(",") if a.providers else None, a.offline)
     ws.mcp_options = Options(None if tools == {t["name"] for t in TOOLS} else tools, a.wait, a.max_chars,
-                             confine=(a.http and not a.any_path) or a.confine)
+                             confine=(a.http and not a.any_path) or a.confine,
+                             lift=("start it without --confine" + (" and with --any-path" if a.http else "")) if a.confine
+                             else "start it with --any-path")
     if a.http:
         from . import mcp_http
         return mcp_http.run(ws, a)
