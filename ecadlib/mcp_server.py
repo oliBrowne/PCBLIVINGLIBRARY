@@ -891,12 +891,12 @@ def _check_endpoints(ws, text):
     request to any URL (also a later `ecadlib upkeep --github` run by the person). The person edits base_url, provider,
     the *_env / *_api / *_url settings, [notify] targets and the cost limits themselves."""
     from .rules import DEFAULTS, RulesError
-    f = ws.rules_file()
-    try:
+    f = ws.rules_in_use() or ws.rules_file()        # the settings in force: `ecadlib init` puts ecadlib.toml beside
+    try:                                             # the workspace, and a new workspace file would hide all of it
         old = _endpoints(f.read_text(encoding="utf-8-sig"), f.name) if f.is_file() else {}
     except RulesError:                               # a damaged file: compare with the defaults
         old = {}
-    new = _endpoints(text if isinstance(text, str) else "", f.name)   # the parser save_rules writes with
+    new = _endpoints(text if isinstance(text, str) else "", ws.rules_file().name)   # the parser save_rules writes with
 
     def default(k):                                  # a setting left out of the file has its default value
         v = DEFAULTS

@@ -45,3 +45,26 @@ def test_ds2_50_json_rules_workspace_save_rules_guard_reads_the_json(tmp_path):
                                  "overwrite": True})                     # an ordinary JSON change still saves
     assert not r["isError"], r
     assert json.loads(f.read_text(encoding="utf-8"))["setup"]["tool"] == "both"
+
+
+# ------------------------------------------------------------------ DS2-51
+@lite
+def test_ds2_51_save_rules_guard_compares_with_the_parent_rules_file_in_force(tmp_path, monkeypatch):
+    """`ecadlib init` writes ./ecadlib.toml beside ./ecadlib_workspace. The guard read only <workspace>/ecadlib.toml
+    (missing), so a save leaving the protected keys out, or setting the cap to its default, wrote a workspace file
+    that hid the person's 0.5 USD cap and local model: the cap went back to 10.0 and requests to Anthropic."""
+    proj = (tmp_path / "proj").resolve()
+    proj.mkdir()
+    (proj / "ecadlib.toml").write_text('[setup]\nworkspace = "ecadlib_workspace"\n'
+                                       '[datasheet]\nmax_cost_usd = 0.5\nask_above_usd = 0.1\n'
+                                       '[ai]\nprovider = "openai"\nbase_url = "http://localhost:11434/v1"\n',
+                                       encoding="utf-8")
+    monkeypatch.chdir(proj)
+    ws = Workspace("ecadlib_workspace")
+    ws.mcp_options = M.Options(confine=True)
+    for toml in ('[setup]\ntool = "kicad"\n', "[datasheet]\nmax_cost_usd = 10.0\n"):
+        r = _call(ws, "save_rules", {"toml": toml, "overwrite": True})
+        assert r["isError"] and "cannot change" in _txt(r), (toml, r)
+    assert not (proj / "ecadlib_workspace" / "ecadlib.toml").exists()
+    rules = ws.rules()
+    assert (rules["datasheet"]["max_cost_usd"], rules["ai"]["base_url"]) == (0.5, "http://localhost:11434/v1")
