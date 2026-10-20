@@ -35,6 +35,7 @@ from pathlib import Path
 from . import __version__
 
 LOCK = "library.lock.json"
+COPY_MARK = ".ecadlib-rebuild-copy"                  # in a --check --keep copy: a later --check --keep may replace it
 SKIP_URL = re.compile(r"/repository/tree\?")        # the KiCad name index crawl: shared, cached in its own file
 
 
@@ -386,9 +387,18 @@ def compare(old, new):
 
 
 class KeepError(ValueError):
-    """--check --keep DIR would put the rebuilt copy on, inside or around the library (the CLI exits 2, no traceback)."""
+    """--check --keep DIR would put the rebuilt copy on, inside or around the library or one of the lock's inputs, or
+    replace a folder an earlier --check --keep did not make (the CLI exits 2, no traceback)."""
     plain_error = True
-    hint = "keep the rebuilt copy in a folder outside the library, e.g. --keep /tmp/rb"
+    hint = "keep the rebuilt copy in a new folder outside the library and its inputs, e.g. --keep /tmp/rb"
+
+
+def _lock_paths(lock, lib_dir):
+    """Every file or folder the lock reads: the BOM, the HTTP cache, the --lib libraries and files, the rules file."""
+    s = lock.get("settings") or {}
+    paths = [lock["bom"]["file"], s.get("cache"), *(s.get("libs") or []), s.get("rules_file")]
+    paths += [e.get("file") for p in (lock.get("parts") or {}).values() for e in p.get("local") or []]
+    return [Path(_abs(p, lib_dir)).resolve() for p in paths if p]
 
 
 def check(lib_dir, keep=None, log=print):
@@ -400,12 +410,21 @@ def check(lib_dir, keep=None, log=print):
     if dst.is_relative_to(lib_dir) or lib_dir.is_relative_to(dst):    # the copy is replaced first: never the library
         raise KeepError(f"--keep {keep}: the rebuilt copy would go to {dst}, which is the library {lib_dir} "
                         "or overlaps it; --check changes nothing in the library")
+    for p in _lock_paths(old, lib_dir):                # nor what the library is built from
+        if p.is_relative_to(dst) or dst.is_relative_to(p):
+            raise KeepError(f"--keep {keep}: the rebuilt copy would go to {dst}, which holds or is inside {p}, "
+                            "an input the library is built from; --check changes nothing")
+    if dst.exists() and not (dst / COPY_MARK).is_file():   # only a copy an earlier --check --keep made is replaced
+        raise KeepError(f"--keep {keep}: {dst} exists and is not a copy `rebuild --check` made; "
+                        "remove it or choose another --keep")
     try:
         if dst.exists():
             shutil.rmtree(dst)
         # without the change-control ledger: the rebuild must reproduce the files, not be held back to them
         shutil.copytree(lib_dir, dst, ignore=shutil.ignore_patterns(".ecadlib_backup", "*.tmp", ".ecadlib",
                                                                     "library.ledger.jsonl", "library.usage.json"))
+        (dst / COPY_MARK).write_text(f"a copy of {lib_dir} made by `ecadlib rebuild --check`; "
+                                     "the next --check --keep here replaces it\n", encoding="utf-8")
         from . import migrate as MG            # the copy keeps no ledger: its stamp must not say it does
         st = dst / MG.STAMP
         if st.is_file():

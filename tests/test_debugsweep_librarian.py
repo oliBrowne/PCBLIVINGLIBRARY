@@ -17,13 +17,24 @@ def _tree(root):
             for p in sorted(Path(root).rglob("*")) if p.is_file()}
 
 
-def _library(d):
-    """A real librarian output folder (offline, from the recorded cache) with its lock and change-control ledger."""
+def _library(d, out=None):
+    """A real librarian output folder (offline, from the recorded cache) with its lock and change-control ledger.
+    The BOM and the cache are in d; the library is d/lib unless out says where."""
     d = Path(d).resolve()
+    d.mkdir(parents=True, exist_ok=True)
+    out = Path(out).resolve() if out else d / "lib"
     (d / "bom.csv").write_text(UF.BOM, encoding="utf-8")
     seed_cache(d / "cache")
-    L.run(d / "bom.csv", out=d / "lib", offline=True, cache=d / "cache", rules={}, log=QUIET)
-    return d / "lib"
+    L.run(d / "bom.csv", out=out, offline=True, cache=d / "cache", rules={}, log=QUIET)
+    return out
+
+
+def _check_keep(lib, keep):
+    """`ecadlib rebuild LIB --check --keep KEEP` -> (exit code, stderr)."""
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+        rc = cli.main(["rebuild", str(lib), "--check", "--keep", str(keep)])
+    return rc, err.getvalue()
 
 
 @lite
@@ -33,11 +44,52 @@ def test_ds2_46_rebuild_check_keep_never_deletes_or_writes_into_the_library(tmp_
     assert "plan.json" in before and "library.ledger.jsonl" in before and RB.LOCK in before
     # --keep the folder that holds the library (`--keep .` from its parent), and --keep the library itself
     for keep in (lib.parent, lib):
-        err = io.StringIO()
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
-            rc = cli.main(["rebuild", str(lib), "--check", "--keep", str(keep)])
+        rc, err = _check_keep(lib, keep)
         assert _tree(lib) == before, f"--check --keep {keep} changed the library"
-        assert rc == 2 and "internal error" not in err.getvalue(), (rc, err.getvalue())
+        assert rc == 2 and "internal error" not in err, (rc, err)
+
+
+@lite
+def test_ds2_46_rebuild_check_keep_never_replaces_a_folder_around_the_library(tmp_path):
+    # a library nested in a folder of its own name (X/lib/lib): --keep X would put the copy on X/lib, around it
+    root = tmp_path.resolve()
+    lib = _library(root / "lib")
+    assert lib == root / "lib" / "lib"
+    before = _tree(root)
+    rc, err = _check_keep(lib, root)
+    assert _tree(root) == before, "--check --keep changed the folder that holds the library"
+    assert rc == 2 and "internal error" not in err, (rc, err)
+
+
+@lite
+def test_ds2_46_rebuild_check_keep_never_replaces_the_lock_inputs_or_a_folder_it_did_not_make(tmp_path):
+    root = tmp_path.resolve()
+    # the project folder T/board holds the BOM and the cache; the librarian named its library after the BOM folder
+    # (<workspace>/librarian/board), so --keep T would put the copy on T/board, the lock's own inputs
+    proj = root / "board"
+    proj.mkdir()
+    (proj / "board.kicad_pro").write_text("{}\n", encoding="utf-8")
+    lib = _library(proj, root / "ws" / "librarian" / "board")
+    before = _tree(proj)
+    rc, err = _check_keep(lib, root)
+    assert _tree(proj) == before, "--check --keep replaced the folder that holds the lock's BOM and cache"
+    assert rc == 2 and "internal error" not in err, (rc, err)
+    # nor a copy written into an input: --keep inside the HTTP cache
+    rc, err = _check_keep(lib, proj / "cache")
+    assert _tree(proj) == before, "--check --keep wrote the rebuilt copy into the lock's HTTP cache"
+    assert rc == 2 and "internal error" not in err, (rc, err)
+    # an existing DIR/<library name> that `rebuild --check` did not make (another project's library, say)
+    other = root / "other" / "board"
+    other.mkdir(parents=True)
+    (other / "notes.txt").write_text("not a rebuild copy\n", encoding="utf-8")
+    rc, err = _check_keep(lib, root / "other")
+    assert sorted(_tree(other)) == ["notes.txt"], "--check --keep replaced a folder it did not make"
+    assert rc == 2 and "internal error" not in err, (rc, err)
+    # a copy an earlier --check --keep made is replaced: the same --keep works again
+    for _ in range(2):
+        rc, err = _check_keep(lib, root / "rb")
+        assert rc == 0, (rc, err)
+    assert (root / "rb" / "board" / RB.LOCK).is_file()
 
 
 @lite
