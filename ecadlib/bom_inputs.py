@@ -40,9 +40,10 @@ def _field_map(names, columns):
             if f in fmap and n not in taken:
                 fmap[f].append(n)
                 taken.add(n)
-    for k, f in STD.items():                                   # a guessed 'Notes' / 'Desc' backs up KiCad's own
-        if f in fmap and k in names:                           # Description, never replaces it
-            fmap[f] = [k] + fmap[f]
+    if "description" in fmap and "Description" in names:      # KiCad's own Description (the library's text) backs up
+        own = [n for n in fmap["description"] if re.search(r"\bdesc", _norm(n))]   # a house 'Desc' filled per part
+        fmap["description"] = own + ["Description"] + [n for n in fmap["description"] if n not in own]   # and is
+                                                               # backed up by a 'Notes' field, never replaced by it
     for f, want in (columns or {}).items():
         wants = [want] if isinstance(want, str) else list(want)
         hit = [n for w in wants for n in custom + list(STD) if _norm(n) == _norm(w)]

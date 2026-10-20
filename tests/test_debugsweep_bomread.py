@@ -161,7 +161,7 @@ def test_ds2_10_real_manufacturer_and_description_columns_win_whatever_the_order
 
 
 @lite
-def test_ds2_11_kicad_custom_notes_field_backs_up_description(tmp_path):
+def test_ds2_11_kicad_description_backs_up_a_house_desc_field_and_notes_backs_up_description(tmp_path):
     def sym(ref, value, desc, notes, mpn):
         props = {"Reference": ref, "Value": value, "Footprint": "Resistor_SMD:R_0603_1608Metric", "Description": desc,
                  "Notes": notes, "MPN": mpn}
@@ -180,11 +180,13 @@ def test_ds2_11_kicad_custom_notes_field_backs_up_description(tmp_path):
                    '<comp ref="C1"><value>10uF</value><description>Tantalum capacitor 10uF 16V</description>'
                    '<fields><field name="Desc"></field><field name="MPN">T491A106K016AT</field></fields></comp>\n'
                    '<comp ref="R1"><value>10k</value><description>Resistor</description>'
-                   '<fields><field name="Desc">pull-up, check value</field><field name="MPN">RC0603FR-0710KL</field></fields>'
+                   '<fields><field name="Desc">RES SMD 10K 1% 0603</field><field name="MPN">RC0603FR-0710KL</field></fields>'
                    '</comp>\n</components></export>\n', encoding="utf-8")
-    for f in (sch, net):
+    # a note never replaces the symbols' Description; a house 'Desc' filled per part beats the library's generic
+    # text, and an empty one falls back to it
+    for f, want in ((sch, [("C1", "Tantalum capacitor 10uF 16V"), ("R1", "Resistor")]),
+                    (net, [("C1", "Tantalum capacitor 10uF 16V"), ("R1", "RES SMD 10K 1% 0603")])):
         lines, mapping = T.read_bom(f)
-        assert [(l["designator"], l.get("description")) for l in lines] == \
-            [("C1", "Tantalum capacitor 10uF 16V"), ("R1", "Resistor")], (f.name, mapping, lines)
+        assert [(l["designator"], l.get("description")) for l in lines] == want, (f.name, mapping, lines)
     lines, _ = T.read_bom(sch, {"description": "Notes"})               # the rules' [bom] columns still decide
     assert [l.get("description") for l in lines] == [None, "pull-up, check value"], lines
