@@ -34,12 +34,16 @@ BROWSER_HEADERS = {"User-Agent": BROWSER_UA,
                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8",
                    "Accept-Language": "en-US,en;q=0.9", "Upgrade-Insecure-Requests": "1"}
 REFUSED_STATUS = {401, 403, 405, 406, 418, 429, 451, 503}
-# A dropped or reset connection or a timeout: bot managers (Akamai) often answer a script by never answering. A proxy
-# refusal (this machine's network) and a name that does not resolve are not the site's answer, so they never move on.
-_DROPPED = re.compile(r"ReadTimeout|ConnectTimeout|Timeout|ConnectionError|ChunkedEncodingError|ProtocolError|"
-                      r"IncompleteRead|Connection reset|RemoteDisconnected|Connection aborted|too slow", re.I)
+# A dropped or reset connection or a timeout: bot managers (Akamai) often answer a script by never answering, or by
+# cutting its TLS handshake (Python's TLS looks like no browser's). A TLS or certificate error moves on too: Edge and
+# Chrome check a certificate against the system's own store (a company's inspecting proxy) and fetch a missing
+# intermediate, and talk to older servers Python's TLS refuses; every way still checks the certificate. A proxy
+# refusal (this machine's network), a name that does not resolve, a closed port and a host that never answers the
+# connection are the same for every way, so they never move on.
+_DROPPED = re.compile(r"ReadTimeout|Timeout|ConnectionError|ChunkedEncodingError|ProtocolError|IncompleteRead|"
+                      r"Connection reset|RemoteDisconnected|Connection aborted|too slow|SSLError|SSL:|CERTIFICATE_VERIFY", re.I)
 _NOT_THE_SITE = re.compile(r"proxy CONNECT refused|ProxyError|NameResolution|getaddrinfo|Name or service not known|"
-                           r"nodename nor servname|No address associated|CERTIFICATE_VERIFY|SSLError|NewConnectionError|"
+                           r"nodename nor servname|No address associated|ConnectTimeout|connect timeout|NewConnectionError|"
                            r"Connection refused|ConnectionRefused|ERR_NAME_NOT_RESOLVED|ERR_PROXY|ERR_TUNNEL_CONNECTION|"
                            r"ERR_CERT|ERR_SSL|ERR_CONNECTION_REFUSED|ERR_ADDRESS_UNREACHABLE|ERR_INTERNET_DISCONNECTED", re.I)
 _CHALLENGE = re.compile(rb"Just a moment|cf-chl|challenge-platform|_Incapsula_Resource|Access Denied|"
@@ -283,7 +287,7 @@ class Browser:
             bypass = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
             tried = []
             for ch in ((None,) if self.executable else CHANNELS):
-                kw = {"headless": True}
+                kw = {"headless": True, "args": ["--disable-blink-features=AutomationControlled"]}   # no navigator.webdriver
                 if self.executable:
                     kw["executable_path"] = self.executable
                 elif ch:
@@ -307,8 +311,7 @@ class Browser:
             except Exception:
                 ua = BROWSER_UA
             s.ctx = s.browser.new_context(accept_downloads=True, user_agent=ua, locale="en-US",
-                                          viewport={"width": 1366, "height": 768},
-                                          service_workers="block")   # (a site's worker would answer the blank page)
+                                          viewport={"width": 1366, "height": 768})
             if not self.allow_local:
                 from . import datasheet as D
                 s.ctx.route("**/*", lambda route: route.abort() if D.unsafe_download(route.request.url) else route.continue_())
@@ -414,7 +417,7 @@ class Browser:
                 except Exception:
                     pass
             try:                                      # Edge 151+ never closes a page left on its error page
-                page.goto("about:blank", timeout=5000)
+                page.goto("about:blank", timeout=1500)
             except Exception:
                 pass
             try:
@@ -433,6 +436,13 @@ class Browser:
         limit = min(self.timeout * 2, DOWNLOAD_S)
         deadline = time.monotonic() + limit
         blank = origin(url) + "__ecadlib_blank__"
+        cdp = None
+        try:                                          # a site's service worker would answer the blank page itself
+            cdp = page.context.new_cdp_session(page)
+            cdp.send("Network.enable")
+            cdp.send("Network.setBypassServiceWorker", {"bypass": True})
+        except Exception:                             # (then the check below says so)
+            pass
         page.route(blank, lambda r: r.fulfill(status=200, content_type="text/html", body="<!doctype html><title></title>"))
         try:
             page.goto(blank, wait_until="load", timeout=self.timeout * 1000)
@@ -442,6 +452,10 @@ class Browser:
             try:
                 page.unroute(blank)
             except PWError:
+                pass
+            try:                                      # (the page stays outside the worker; the PDF is not kept twice)
+                cdp and cdp.detach()
+            except Exception:
                 pass
         if not urlparse(page.url).path.endswith("__ecadlib_blank__"):
             return 0, None, "", url, f"browser: the page went to {page.url[:120]} instead of a blank one"
@@ -568,19 +582,49 @@ def gui(environ=None, platform=None):
     return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
 
 
-def desktop_browser():
-    """What opens a link in a browser window here, or None: no desktop, or only a console browser (lynx, w3m),
-    which would take over this terminal while the hand-off waits for a file nobody can save."""
+CONSOLE = ("www-browser", "links", "links2", "elinks", "lynx", "w3m", "browsh")
+
+
+def window_browsers():
+    """webbrowser's choices here, in its order, less console browsers (they would take over this terminal while the
+    hand-off waits for a file nobody can save). One it does not know by name (BROWSER=google-chrome-stable) runs in
+    the background, as a browser with a window does: webbrowser would wait for it to exit."""
     import webbrowser
-    if not gui():
-        return None
     try:
-        b = webbrowser.get()
+        webbrowser.get()                              # (reads BROWSER and finds the installed browsers)
     except webbrowser.Error:
+        return []
+    found = []
+    for name in list(getattr(webbrowser, "_tryorder", None) or []):
+        try:
+            b = webbrowser.get(name)
+        except webbrowser.Error:
+            continue
+        cmd = Path(str(getattr(b, "name", "") or "")).name.lower().removesuffix(".exe")
+        if cmd in CONSOLE or isinstance(b, getattr(webbrowser, "Elinks", ())):
+            continue
+        if type(b) is webbrowser.GenericBrowser:
+            b = webbrowser.BackgroundBrowser([b.name] + list(b.args))
+        found.append(b)
+    return found
+
+
+def desktop_browser():
+    """What opens a link in a browser window here (each of webbrowser's choices in turn), or None: no desktop, or
+    only console browsers."""
+    found = window_browsers() if gui() else []
+    if not found:
         return None
-    if isinstance(b, webbrowser.GenericBrowser) and not isinstance(b, webbrowser.BackgroundBrowser):
-        return None                                   # run in the foreground, in this terminal
-    return b.open
+
+    def open_url(url):
+        for b in found:
+            try:
+                if b.open(url):
+                    return True
+            except Exception:
+                continue
+        return False
+    return open_url
 
 
 def interactive(stdin=None, stdout=None, environ=None, stderr=None):

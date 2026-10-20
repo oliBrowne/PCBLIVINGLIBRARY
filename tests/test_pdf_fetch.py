@@ -23,12 +23,21 @@ def test_refused_moves_on_for_a_refusal_never_for_a_missing_file():
     link = lambda h: D.pdf_link(h, "https://www.maker.com/p/testpart")
     for status, data, err in ((403, page, None), (401, b"", None), (429, b"", None), (503, page, None),
                               (200, page, None), (0, None, "ConnectionError: ('Connection aborted.', RemoteDisconnected())"),
-                              (0, None, "ReadTimeout: read timed out"), (0, None, "download too slow (12 KB in 120 s); stopped")):
+                              (0, None, "ReadTimeout: read timed out"), (0, None, "download too slow (12 KB in 120 s); stopped"),
+                              (0, None, "ConnectionError: ('Connection aborted.', ConnectionResetError(10054, 'An "
+                                        "existing connection was forcibly closed by the remote host'"),
+                              (0, None, "SSLError: (SSLError) HTTPSConnectionPool(host='www.maker.com', port=443): Max "
+                                        "retries exceeded (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_"
+                                        "READING] EOF occurred in violation of protocol')))"),   # a cut TLS handshake
+                              (0, None, "SSLError: CERTIFICATE_VERIFY_FAILED")):          # a browser checks it its way
         assert PF.refused(status, data, err, link), (status, err)
     for status, data, err in ((404, page, None), (410, b"", None), (200, PDF, None), (200, product, None),
                               (0, None, "ProxyError: proxy CONNECT refused (403 Forbidden)"),
                               (0, None, "ConnectionError: NameResolutionError: Failed to resolve 'nowhere.example'"),
-                              (0, None, "SSLError: CERTIFICATE_VERIFY_FAILED")):
+                              (0, None, "ConnectTimeout: (ConnectTimeoutError) HTTPSConnectionPool(host='www.ixys.com', "
+                                        "port=443): Max retries exceeded (Caused by ConnectTimeoutError(<urllib3."
+                                        "connection.HTTPSConnection object>, 'Connection to www.ixys.com timed out. "
+                                        "(connect timeout=60)'))")):
         assert not PF.refused(status, data, err, link), (status, err)
 
 
@@ -478,29 +487,47 @@ def test_handoff_with_no_desktop_never_starts_a_console_browser(tmp_path, monkey
     assert h.get(URL, "LTM4671")[4] == "no browser could be opened here" and clock.t == 0
 
 
+def _choices(monkeypatch, browsers):
+    """webbrowser as if it found these browsers here, in this order."""
+    import webbrowser
+    monkeypatch.setattr(webbrowser, "_tryorder", list(browsers))
+    monkeypatch.setattr(webbrowser, "get", lambda using=None: browsers[using or next(iter(browsers))])
+
+
 @lite
 def test_handoff_never_runs_a_console_browser_even_with_a_display(tmp_path, monkeypatch):
     import webbrowser
     ran = []
 
-    class Console(webbrowser.GenericBrowser):                       # what webbrowser picks for BROWSER=w3m over ssh -X
-        def open(self, url, new=0, autoraise=True):
-            ran.append(url)
-            return True
-
-    class Window(webbrowser.BackgroundBrowser):                     # a browser with its own window (xdg-open, firefox)
-        def open(self, url, new=0, autoraise=True):
-            ran.append(url)
-            return True
+    def recorded(cls, ok=True):
+        class B(cls):
+            def open(self, url, new=0, autoraise=True):
+                ran.append((self.name, url))
+                return ok
+        return B
+    console = {"w3m": recorded(webbrowser.GenericBrowser)("w3m"),   # BROWSER=w3m over ssh -X: in this terminal
+               "/usr/bin/lynx": recorded(webbrowser.GenericBrowser)("/usr/bin/lynx"),
+               "elinks": recorded(webbrowser.Elinks)("elinks")}
     monkeypatch.setattr(PF, "gui", lambda *a, **k: True)
-    monkeypatch.setattr(webbrowser, "get", lambda *a, **k: Console("w3m"))
+    _choices(monkeypatch, console)
     clock = Clock()
     h = PF.Handoff(tmp_path, wait_s=60, say=lambda m: None, sleep=clock.sleep, clock=clock)
     assert h.get(URL, "LTM4671")[4] == "no browser could be opened here" and clock.t == 0 and ran == [] and not h.gone
-    monkeypatch.setattr(webbrowser, "get", lambda *a, **k: Window("xdg-open"))
-    assert PF.desktop_browser() is not None
-    PF.desktop_browser()(URL)
-    assert ran == [URL]
+    _choices(monkeypatch, {**console, "gone-browser": recorded(webbrowser.BackgroundBrowser, ok=False)("gone-browser"),
+                           "xdg-open": recorded(webbrowser.BackgroundBrowser)("xdg-open")})
+    assert PF.desktop_browser()(URL) is True                         # each choice in turn, console ones skipped
+    assert ran == [("gone-browser", URL), ("xdg-open", URL)], ran
+
+
+@lite
+def test_a_browser_webbrowser_does_not_know_by_name_still_opens(monkeypatch):
+    import webbrowser
+    _choices(monkeypatch, {"google-chrome-stable": webbrowser.GenericBrowser("google-chrome-stable"),   # BROWSER=...
+                           "firefox": webbrowser.GenericBrowser(["firefox", "%s"]),                   # BROWSER="firefox %s"
+                           "w3m": webbrowser.GenericBrowser("w3m")})
+    found = PF.window_browsers()
+    assert [(type(b).__name__, b.name, b.args) for b in found] == [
+        ("BackgroundBrowser", "google-chrome-stable", ["%s"]), ("BackgroundBrowser", "firefox", ["%s"])], found
 
 
 @lite
@@ -728,8 +755,9 @@ def test_a_headless_browser_runs_the_site_scripts_and_keeps_the_pdf():
         assert r[0] == 200 and D.pdf_link(r[1], r[3]) == f"{base}/js/ds.pdf", r[:1]
         r = b.get(f"{base}/inline/ds.pdf")                          # no attachment header: the PDF response itself
         assert r[0] == 200 and D.is_pdf(r[1]), (r[0], r[4])
-        ua = b._worker.call(lambda: (lambda pg: (pg.evaluate("navigator.userAgent"), pg.close())[0])(b._s.ctx.new_page()), 30)
-        assert "HeadlessChrome" not in ua and "Chrome/" in ua, ua    # the site sees Chrome, not a headless one
+        ua, driven = b._worker.call(lambda: (lambda pg: (pg.evaluate("[navigator.userAgent, navigator.webdriver]"),
+                                                         pg.close())[0])(b._s.ctx.new_page()), 30)
+        assert "HeadlessChrome" not in ua and "Chrome/" in ua and not driven, (ua, driven)   # Chrome, not a driven one
     finally:
         b.close()
         srv.shutdown()
