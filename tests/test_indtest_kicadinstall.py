@@ -90,3 +90,21 @@ def test_kicad_check_bom_library_is_the_kicad_sym_not_the_workspace_plan(tmp_pat
     plan.parent.mkdir(parents=True)
     plan.write_text(json.dumps([{"name": "C1", "status": "ready", "mpn": "CL05B104KO5NNNC"}]))
     assert AM._library_mpns(cfg, types.SimpleNamespace(root=tmp_path / "ecadlib-work")) == {"0603WAF1002T5E", "LM358DR"}
+
+
+# T035
+@lite
+def test_kicad_review_queue_of_a_second_project_gets_its_own_port(tmp_path):
+    from ecadlib import altium_menu as AM, kicad_menu as KM
+    a, b = KM.config(tmp_path / "A" / "board.kicad_pcb"), KM.config(tmp_path / "B" / "board.kicad_pcb")
+    up = {8765: str(a["workspace"])}                    # project A's UI already runs on the default port
+    probe = lambda p: ("ecadlib", up[p]) if p in up else (None, None)
+    launched = []
+    r = AM.open_queue(b, opener=False, probe=probe, launcher=lambda ws, p: (launched.append(p), up.__setitem__(p, str(ws))),
+                      sleep=lambda s: None)
+    assert r["status"] == "ok" and launched == [8766] and ":8766/" in r["url"], r
+    r = AM.open_queue(b, opener=False, probe=probe, launcher=None)          # again: B's own UI is found, not restarted
+    assert r["status"] == "ok" and r["started"] == "0" and ":8766/" in r["url"], r
+    up = {p: "/elsewhere" for p in range(8765, 8800)}
+    r = AM.open_queue(b, opener=False, probe=probe, launcher=None)
+    assert r["status"] == "error" and "ecadlib_menu.ini" not in r["fix"], r

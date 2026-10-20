@@ -1383,15 +1383,21 @@ def queue_anchor(ws):
 def open_queue(cfg, opener=None, probe=probe_ui, launcher=start_ui, wait_s=30.0, sleep=time.sleep):
     """Open the web UI at the review queue, starting `ecadlib ui` for the workspace when nothing answers."""
     port, ws = cfg["port"], Path(cfg["workspace"])
+    kicad = cfg.get("tool") == "kicad"
+    for p in range(port, port + 20) if kicad else ():   # KiCad reads no settings file: one UI per project, on the first
+        k, served = probe(p)                            # port that serves this workspace or is free
+        if k is None or (k == "ecadlib" and served and Path(served).resolve() == ws.resolve()):
+            port = p
+            break
     url = f"http://127.0.0.1:{port}/{queue_anchor(ws)}"
     kind, served = probe(port)
     started = False
     if kind == "other":
         return {"status": "error", "message": f"port {port} is used by another program",
-                "fix": f"set port= to a free port in {INI}"}
+                "fix": "close the program on that port" if kicad else f"set port= to a free port in {INI}"}
     if kind == "ecadlib" and served and Path(served).resolve() != ws.resolve():
         return {"status": "error", "message": f"port {port} already serves another ecadlib workspace ({served})",
-                "fix": f"stop that `ecadlib ui`, or set port= to another port in {INI}"}
+                "fix": "stop that `ecadlib ui`" + ("" if kicad else f", or set port= to another port in {INI}")}
     if kind is None:
         ws.mkdir(parents=True, exist_ok=True)
         launcher(ws, port)
