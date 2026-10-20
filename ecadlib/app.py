@@ -1490,9 +1490,8 @@ def _now(ts=None):
 def _nexar_token():
     tok = UC.secret("NEXAR_TOKEN")
     if not tok:
-        raise ValueError("no Altium 365 (Nexar) token: save it on the setup page (Optional keys) or run "
-                         "`ecadlib keys set NEXAR_TOKEN` (a Nexar portal token with the design.domain, user.access "
-                         "and openid scopes)")
+        from . import nexar_signin
+        raise ValueError("no Altium 365 (Nexar) token: " + nexar_signin.hint())
     return tok
 
 
