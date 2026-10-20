@@ -194,6 +194,8 @@ def check_item(item, base=".", rules=None):
     pin1 = rules["footprint"]["pin1"]
     fails, warns, info = [], [], {}
     add = lambda rule, msg: fails.append((rule, msg))
+    item = {**item, "symbol": item.get("symbol") or {}, "footprint": item.get("footprint") or {},   # publishers check a
+            "parameters": [p for p in item.get("parameters") or [] if isinstance(p, dict) and p.get("name")]}  # plan as is
     sym_f, fp_f = _path(base, item["symbol"].get("file")), _path(base, item["footprint"].get("file"))
     syms = fps = None
     pin_names = {}
@@ -326,7 +328,7 @@ def check_item(item, base=".", rules=None):
         elif not fam:
             warns.append(f"no height range for package '{item['footprint'].get('ref')}'; only checked {lo}-{hi} mm")
     # ---- fields
-    par = {p["name"]: p["value"] for p in item.get("parameters", [])}
+    par = {p["name"]: p.get("value", "") for p in item["parameters"]}
     for k in rules["parameters"]["required"]:         # default: REQUIRED, then the datasheet link and Description
         if k == "Datasheet":
             if not any(str(par.get(x, "")).strip() for x in ("ComponentLink2URL", "Datasheet", RU.canonical_param("Datasheet", rules))):

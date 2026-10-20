@@ -62,7 +62,7 @@ def test_exp57_malformed_entry_is_named():
         except X.PlanError as e:
             assert "RES-0603-10k" in str(e) and "has no name" in str(e), e
         _edit(plan, lambda it: (it["RES-0603-10k"]["parameters"].pop(), it["EEPART1"].update(parameters=None)))
-        rows = PE.rows(plan)                                        # export-parts: "parameters": null is no parameters
+        rows = PE.rows(plan, include_held=True)                     # export-parts: "parameters": null is no parameters
         assert any(r["Part ID"] == "EEPART1" for r in rows)
         assert X.plan_fields({"name": "P", "parameters": [{"value": "1"}, {"name": "Value", "value": "2"}]}, "l", None, {})[1] == ("Value", "2")
 
