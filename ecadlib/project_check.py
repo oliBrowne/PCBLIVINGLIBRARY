@@ -52,8 +52,7 @@ def kicad_paths(path):
         p = pros[0]
     if p.suffix.lower() not in KICAD_EXT:
         raise ProjectError(f"{p.name}: give a .kicad_pro, .kicad_sch, .kicad_pcb or the project folder")
-    stem = p.with_suffix("")
-    sch, pcb = stem.with_suffix(".kicad_sch"), stem.with_suffix(".kicad_pcb")
+    sch, pcb = p.with_suffix(".kicad_sch"), p.with_suffix(".kicad_pcb")
     out = {"dir": p.parent, "name": p.stem, "sch": sch if sch.is_file() else None, "pcb": pcb if pcb.is_file() else None}
     if not out["sch"] and not out["pcb"]:
         raise ProjectError(f"{p.name}: no {sch.name} or {pcb.name} next to it")
