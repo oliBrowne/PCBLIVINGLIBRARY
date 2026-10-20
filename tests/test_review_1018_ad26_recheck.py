@@ -4,7 +4,7 @@ import json, warnings
 from pathlib import Path
 
 from ecadlib import altium_dblib_sync as S, altium_export as X, altium_lib as AL, altium_native as AN, altium_pkg as PKG
-from tests.fixtures_lite import lite
+from tests.fixtures_lite import lite, released_anyway
 
 HERE = Path(__file__).resolve().parent.parent
 
@@ -82,6 +82,12 @@ def _item(name, cat):
             "footprint": {"ref": "R_0603_1608Metric", "file": "models/PcbLib/R_0603_1608Metric.PcbLib"}}
 
 
+def _plan(d, items):
+    released_anyway(items, d)                  # the sync checks every part again: these were released anyway
+    (d / "plan.json").write_text(json.dumps(items))
+    return d / "plan.json"
+
+
 def _table_names(ini):
     return [ln.split("=", 1)[1] for ln in ini.splitlines() if ln.startswith("TableName=")]
 
@@ -96,8 +102,7 @@ def test_dblib_sync_writes_ace_names_and_resync_does_not_duplicate(tmp_path):
     TableName entries failed; after Altium re-saved the DbLib with its names, a re-sync added the old two again."""
     d = tmp_path
     _models(d)
-    plan = d / "plan.json"
-    plan.write_text(json.dumps([_item("R1", "Resistors"), _item("U1", "Driver's ICs"), _item("RN1", "Res. Networks")]))
+    plan = _plan(d, [_item("R1", "Resistors"), _item("U1", "Driver's ICs"), _item("RN1", "Res. Networks")])
     S.sync(plan, d / "lib")
     lib = d / "lib" / "ecadlib.DbLib"
     assert set(S.read_tables(d / "lib" / "ecadlib.xlsx")) == {"Resistors", "Drivers ICs", "Res_ Networks"}

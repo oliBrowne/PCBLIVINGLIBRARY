@@ -77,6 +77,7 @@ EXAMPLES = {
     "setup": ["ecadlib setup", "ecadlib setup --workspace D:/ecadlib --port 8766"],
     "start": ["ecadlib start", "ecadlib start --setup", "ecadlib start --no-window --no-browser"],
     "keys": ["ecadlib keys list", "ecadlib keys set ANTHROPIC_API_KEY", "ecadlib keys remove NEXAR_TOKEN"],
+    "nexar": ["ecadlib nexar signin", "ecadlib nexar status", "ecadlib nexar signout"],
     "doctor": ["ecadlib doctor", "ecadlib doctor --workspace ws --lib ~/kicad/libs --json"],
     "status": ["ecadlib status", "ecadlib status --workspace ws --json"],
     "completion": ["ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib",

@@ -4,6 +4,8 @@ Run:  python3 -m tests.test_review_full_followup"""
 import contextlib, io, json, os, shlex, subprocess, sys, tempfile
 from pathlib import Path
 
+from tests.fixtures_lite import demo_released
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -18,7 +20,7 @@ def test_kicad_export_keeps_3d_models_of_a_local_kicad_library():
     0/5 STEP models and left the .kicad_mod pointing at nothing, and the Altium 3D body fallback never ran."""
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "bom.csv").write_bytes((ROOT / "examples" / "sample_bom.csv").read_bytes())
-        assert _ecadlib(d, "demo", "-o", "demo").returncode == 0
+        demo_released(Path(d) / "demo", cwd=ROOT)      # its KiCad export carries the SOT-23 MOSFET (pinout signed off)
         r = _ecadlib(d, "librarian", "bom.csv", "-o", "lib", "--offline", "--lib", "demo")
         assert (Path(d) / "lib" / "plan.json").is_file(), r.stdout + r.stderr
         for out, extra in (("k1", []), ("k2", ["--lib", "demo"])):     # without --lib: the .PcbLib's STEP; with: KiCad's

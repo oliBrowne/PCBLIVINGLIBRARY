@@ -36,15 +36,17 @@ rest goes to **Altium 365** or **KiCad**. Free and open source (MIT); you bring 
 * **BOM in.** Altium BOMs and ActiveBOMs, an Altium project, KiCad BOMs and schematics, or a hand-made CSV/XLSX. Each
   line comes back as already in your library, available from a source, needs a footprint, or DNP.
 * **Official sources first.** Nexar, DigiKey and Mouser identify the part. Symbols and footprints come from your own
-  libraries and the official KiCad libraries before anything else; EasyEDA/LCSC is an unofficial source, off unless
-  you opt in (`ecadlib init` asks; `[providers] unofficial = true`), and then used last.
+  libraries and the official KiCad libraries before anything else; EasyEDA/LCSC is an unofficial source, used last,
+  and `[providers] unofficial = false` turns it off (`ecadlib init` asks).
 * **Drawn from the datasheet when nobody has it.** A datasheet reader fills in the package dimensions and a
   deterministic IPC-7351B generator draws the land pattern. Claude by default, or any model you choose.
 * **Your house style.** `ecadlib style learn` reads your existing libraries, and new parts follow the same naming,
   descriptions, value formats and parameters.
 * **Checked, or held.** A release check runs on every part: every pin has a pad, the footprint passes the rule book,
   the 3D height is plausible, the part fields are filled in and the files read back. A part that fails is held back
-  from Altium 365 with the reason and the next step in plain words.
+  from Altium 365 with the reason and the next step in plain words. Parts from a source that needs a second look (a
+  datasheet read, an EasyEDA conversion, a pinout from a family table, a KiCad part picked by a near name) are held
+  until a person releases them, and every export from a plan checks the files again before it writes them out.
 * **Change control.** Once a part is released, no library update can change it behind your back. A change to pins,
   pads or the part's identity waits for a person, who sees it in plain words ("pad 5 removed; pad SH added").
 * **Released to your workspace.** Parts go to your Altium 365 workspace, or out as `.SchLib`/`.PcbLib`, a database
@@ -78,7 +80,7 @@ About a second, offline, no API keys. It builds a 7-part library (0603 resistors
 MOSFET, a SOT-223 regulator and a SOIC-16 chip) from a BOM bundled with ecadlib:
 
 ```
-7 parts: 6 ready, 1 held in 0.7 s (held: CH340C; that is expected, see the review)
+7 parts: 4 ready, 3 held in 0.7 s (held: AMS1117-3.3, CH340C, AO3401A; that is expected, see the review)
 written:
   ecadlib-demo/librarian/demo_bom_demo/plan.json     the library plan
   ecadlib-demo/librarian/demo_bom_demo/review.md     review: what to check, part by part
@@ -86,11 +88,12 @@ written:
   ecadlib-demo/kicad/demo_bom_demo/                  KiCad: .kicad_dbl, .kicad_sym, .pretty/
 ```
 
-CH340C is held on purpose, so you see what a held part looks like. `ecadlib ui --workspace ecadlib-demo` opens the
-result in your browser.
+CH340C is held on purpose (the demo has no symbol for it), so you see what a held part looks like. The regulator and
+the MOSFET are held too: their pinouts come from a family table, and makers differ, so a person checks them against
+the datasheet and releases them. `ecadlib ui --workspace ecadlib-demo` opens the result in your browser.
 
 <p align="center">
-  <img alt="Fill the library: 6 of 7 parts ready for Altium 365, CH340C held with the reason" src="docs/ui-librarian.png" width="100%">
+  <img alt="Fill the library: 4 of 7 parts ready; AMS1117-3.3, CH340C and AO3401A held, each with the reason" src="docs/ui-librarian.png" width="100%">
 </p>
 
 ## From BOM to Altium 365
@@ -129,8 +132,10 @@ approve them. A rejected part is held either way, policy or not, until it is app
 ecadlib approve ecadlib_workspace/librarian/my_bom/plan.json approve --part CH340C -m "pinout checked"
 ```
 
-**5. Release to Altium 365.** Set `NEXAR_TOKEN` (or `ecadlib keys set NEXAR_TOKEN`), check the plan with a dry run,
-then push. Held parts are never pushed. A part already in the workspace gets a new revision, and only after change
+**5. Release to Altium 365.** Sign in once with `ecadlib nexar signin` (your own free Nexar app; ecadlib stays signed
+in, see [docs/altium.md](docs/altium.md#signing-in-to-altium-365-ecadlib-nexar-signin)), check the plan with a dry run,
+then push. Only parts that pass the release check are pushed: push checks each part's files again before it uploads
+them, and held parts are never pushed. A part already in the workspace gets a new revision, and only after change
 control lets it through.
 
 ```

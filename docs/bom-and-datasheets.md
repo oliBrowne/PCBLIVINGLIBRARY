@@ -47,10 +47,11 @@ python3 -m tests.test_offline
   | `snapmagic` | partner token only, no self-serve public API | | stub |
   | `samacsys` | account plus Library Loader or partner access, no documented public REST API | | stub |
 
-  * The two undocumented endpoints are off by default (`[providers] unofficial = false`): triage, the librarian's
-    EasyEDA source and the UI leave them out, and parts come from your libraries, the KiCad libraries, the standard
-    packages and the datasheet reader. `ecadlib init` asks whether to use them (`--unofficial` answers yes); set
-    `[providers] unofficial = true` in `ecadlib.toml` to opt in.
+  * The two undocumented endpoints are on by default and always asked after the official APIs: many parts (often
+    Chinese-made ones such as YXC crystals) are only on LCSC. `ecadlib init` asks whether to use them (`--no-unofficial`
+    answers no); `[providers] unofficial = false` in `ecadlib.toml` keeps them out of triage, the librarian's EasyEDA
+    source and the UI, and parts then come from your libraries, the KiCad libraries, the standard packages and the
+    datasheet reader.
   * `ecadlib sources-check` asks both unofficial endpoints about known parts (NE555DR, LM358DR, RP2040) and checks the
     converter still gives the right pad and pin counts. `.github/workflows/sources-canary.yml` runs it every Monday and
     keeps the raw answers as an artifact, so a change on their side shows up as a red run, not as broken user parts.

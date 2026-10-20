@@ -5,6 +5,7 @@ Every way ecadlib gets parts into Altium: Altium 365, database libraries, .SchLi
 On this page:
 
 * [`altium365.py`: Altium 365 workspace exporter (Nexar Design API)](#altium365py-altium-365-workspace-exporter-nexar-design-api)
+* [Signing in to Altium 365: `ecadlib nexar signin`](#signing-in-to-altium-365-ecadlib-nexar-signin)
 * [`altium_export.py`: Altium Database Library](#altium_exportpy-altium-database-library)
 * [`altium_lib.py`: Altium `.PcbLib` / `.SchLib` writer (pure Python)](#altium_libpy-altium-pcblib--schlib-writer-pure-python)
 * [`kicad_import.py`: KiCad library parts to Altium](#kicad_importpy-kicad-library-parts-to-altium)
@@ -15,8 +16,9 @@ On this page:
 ```
 python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
         --models <dir with SchLib/<ref>.SchLib and PcbLib/<ref>.PcbLib> -o out/altium365/plan.json
-NEXAR_TOKEN=... python3 -m ecadlib.altium365 workspaces
-NEXAR_TOKEN=... python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace <url> [--dry-run]
+ecadlib nexar signin                      # once; or NEXAR_TOKEN=<portal token> for a day
+python3 -m ecadlib.altium365 workspaces
+python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace <url> [--dry-run]
 ```
 
 `plan` turns each unique part into one managed workspace component under `Components/<Category>`, with the same parameters as the DbLib rows (manufacturer, MPN, value, supplier, links). `push` then, for each part:
@@ -26,6 +28,8 @@ NEXAR_TOKEN=... python3 -m ecadlib.altium365 push out/altium365/plan.json --work
 3. otherwise uploads the `.SchLib` and `.PcbLib` to `files.nexar.com/File/Upload` and calls `desReleaseComponent`, which releases symbol, footprint and component in one call, using the workspace's default naming schemes and lifecycles for each content type.
 
 Parts without Altium model files are planned as `needs_altium_models` and skipped on release (they still get parameter updates if they already exist in the workspace). `--dry-run` sends nothing and writes the mutation inputs it would send.
+
+**Only checked parts go up.** In a plan, `ready` only means the model files were found. Before `push` uploads a part's files (a new part, or a new revision of a changed one), it runs the release check (`ecadlib release-check`) on those files as they are now. A part that fails the check is skipped as held, and its failures are listed in the push report, unless a person signed them off with release anyway (`--allow`). `dblib-sync`, `altium-pkg` and `kicad-export` run the same check. A part from a doubtful source (an EasyEDA conversion, a pinout from a family table, a KiCad symbol or footprint picked by a near name, a datasheet read) is held until someone looks at it and releases it anyway.
 
 **Verified** (from Nexar's support articles and the schema and code in `NexarDeveloper/nexar-release-component-demo-wpf`, last commit 2024-07-23):
 * `desReleaseComponent(input: DesReleaseComponentInput!)` takes component name, comment, description, parameters, folder, naming scheme and lifecycle ids, plus `symbolFiles` and `footprintFiles` as `{fileId, relativePath}`. The demo uploads real `.SchLib`/`.PcbLib` binaries from a `Released\` folder, so **release needs Altium-format files; KiCad files cannot go up directly**.
@@ -56,6 +60,38 @@ For teams that keep a Database Library or an SVN Database Library instead of an 
 **Verified** against two real files fetched from GitHub: `ryankurte/altium-library/electronpowered.dblib` (Excel) and `mechanart/AltiumLibrary/mechanart_oshw.SVNDbLib`. The Excel fast connection writes `LibraryDatabaseType=Microsoft Excel`, `LibraryDatabasePath=<file>` and `DatabasePathRelative=1`, and its tables are `<sheet>$`. `[Library Path]`/`[Footprint Path]` are mapped as reserved fields. An SVNDbLib has the DbLib layout plus `SVNRepositoryURL=` and `FileRepositoryIsRelative=0` in `[DatabaseLinks]`, and its `LibrarySearchPath` lists the repository's symbol and footprint folders, separated by `;`. Altium's docs say that SVNDbLib model paths are "relative to the root of the repository" and that Access/Excel paths can be stored "relative to the Database Library/SVN Database Library file".
 
 **Unverified** (there is no Altium or Windows here): that the `.xlsx` opens through ACE `Excel 12.0 Xml`, since the real example used `.xls` with `Excel 8.0`; that `SVNRepositoryURL` should be the working-copy URL (the URL `--to` is checked out from) so `SchLib\x.SchLib` resolves; that `LibrarySearchPath` is where Altium keeps the "Models Location" folders; the `.SVNDbLib` extension case (Altium writes `.SVNDbLib`); and the INI encoding (UTF-8 here, though only ASCII names are expected).
+
+## Signing in to Altium 365: `ecadlib nexar signin`
+
+A token made on the Nexar portal lasts 24 hours, so pasting one (`ecadlib keys set NEXAR_TOKEN`) means doing it again
+every day. Instead, make your own free Nexar app once and let ecadlib keep itself signed in:
+
+1. On [portal.nexar.com](https://portal.nexar.com/applications) sign in with the Altium account of your Altium 365
+   workspace and create an application with **Design** access (the Design API is free; nothing here uses the paid
+   supply API).
+2. On the app's **Authorization** tab, add `http://localhost:3000/login` as a redirect URI (ecadlib listens there on
+   your own computer for the one browser sign-in; `NEXAR_REDIRECT_URI` picks another port).
+3. Run `ecadlib nexar signin`, paste the app's **client ID** and **client secret** when asked (once), and allow access
+   in the browser that opens.
+
+`ecadlib nexar status` says whether you are signed in and until when the current access token is valid (never the
+token); `ecadlib nexar signout` forgets the sign-in. Every Altium 365 command, the web UI and the Altium menu use the
+sign-in without change.
+
+**How it works.** Nexar accepts only confidential apps (an app with a secret), so ecadlib can't ship one shared
+"Sign in with Altium" app: its secret would be public. With your own app, ecadlib does the standard authorization
+code sign-in with PKCE and the scopes `openid user.access design.domain offline_access`. `offline_access` gives a
+refresh token; when the access token is within five minutes of running out, ecadlib swaps the refresh token for a new
+one (and keeps the new refresh token when Nexar rotates it). The app's id and secret (`NEXAR_CLIENT_ID`,
+`NEXAR_CLIENT_SECRET`, the same names the supply lookups use) and the sign-in (`NEXAR_SIGNIN`) go into ecadlib's key
+store ([API keys](api-keys.md)): encrypted for your Windows account, never in the environment, a config file or a log.
+A pasted `NEXAR_TOKEN` still works when there is no sign-in. If a refresh fails (the app was deleted, the secret
+changed), commands say so and ask you to run `ecadlib nexar signin` again.
+
+**Checked** (2026-10-20) against `identity.nexar.com/.well-known/openid-configuration`: authorization code, refresh
+token, PKCE S256, the `offline_access` scope, and only `client_secret_basic` / `client_secret_post` client
+authentication. **Tested offline** with a fake token endpoint and a fake browser (`tests/test_nexar_signin.py`); the
+first live sign-in needs a real Nexar app.
 
 ## `altium_export.py`: Altium Database Library
 
@@ -102,8 +138,9 @@ python3 -m ecadlib.altium_lib pcblib ecadlib/package_specs/*.json -o out/altium_
 python3 -m ecadlib.altium_lib schlib examples/symbols/*.json  -o out/altium_models/SchLib
 python3 -m ecadlib.altium_lib dump out/altium_models/PcbLib/SOIC-8_3.9x4.9mm_P1.27mm.PcbLib
 python3 -m ecadlib.altium365 plan examples/sample_bom.csv --triage out/triage_sample_bom.csv \
-        --models out/altium_models -o out/altium365/plan.json      # -> 4 ready, 10 needs_altium_models
-                                                                     #    add --models out/altium_models_kicad (KiCad parts, below) -> 14 ready
+        --models out/altium_models -o out/altium365/plan.json      # -> 4 with models, 10 needs_altium_models
+                                                                     #    add --models out/altium_models_kicad (KiCad parts, below) -> 14 with models
+python3 -m ecadlib.release_check out/altium365/plan.json             # what push will hold back, and why
 ```
 
 **Altium can now build these files itself.** Every library written here also gets a plain-text recipe beside it
@@ -118,7 +155,7 @@ What gets written:
 * **Designator and comment text:** the reference becomes `.Designator` on Top Overlay and the value `.Comment` on Mechanical 13 (stroke font, KiCad's height, stroke width, rotation and justification; the anchor is shifted so a nominal 3-character designator and 8-character comment centre where KiCad centres them).
 * **Pin graphics:** pins in `examples/symbols/*.json` take an optional `"shape"`: a KiCad shape name (`inverted`, `clock`, `inverted_clock`, `input_low`, `clock_low`, `output_low`, `edge_clock_high`, `non_logic`) or `{"inside_edge"|"outside_edge"|"inside"|"outside": symbol}` with Altium's IEEE symbols. `~{EN}` in a pin name becomes Altium's overline `E\N\`.
 * **Display modes:** symbols can carry alternate (De Morgan) views, written as Altium 24 writes them.
-* `CH340C.json` and `TPS62133RGTR.json` carry `"needs_datasheet_verification": true`. **Their pinouts were written from memory and must be checked against the datasheets before anything is released.**
+* `CH340C.json` and `TPS62133RGTR.json` carry `"needs_datasheet_verification": true`. **Their pinouts were written from memory and must be checked against the datasheets before anything is released.** Their `cross_check` notes record the checks made since (CH340C pin 8 is OUT#). ecadlib does not read the flag: a `.SchLib` built from these files is held only by what the release check finds.
 
 **Verified here** (2026-10-13; `python3 -m tests.test_offline` runs 11/11, 5 of them new):
 * **Container:** `olefile` reads all 13 outputs with `raise_defects=DEFECT_INCORRECT` and logs nothing. 200 random trees and an 8 MB file that needs DIFAT read back byte-exact. 18 real Altium files from AltiumSharp's TestData and the Nexar demo were rewritten through `cfb.to_bytes`, and each came back with an identical stream tree.
@@ -263,7 +300,11 @@ offline; relative paths start at that folder; a rebuild keeps the file). Built o
 `command=` is the Python that ran the build (`"<sys.executable>" -m ecadlib`), so an install in a venv is found; a
 rebuild fills an empty `command=` (older builds) and changes nothing else. `ecadlib doctor --altium-menu <folder>`
 checks that `command=` runs ecadlib. Without an AI key, parts no free source fully describes come back held with the
-reason (the dialog and the review queue say which), and nothing held reaches the library. Check this project BOM reads the
+reason (the dialog and the review queue say which), and nothing held reaches the library. A held part whose reasons a
+person may override (not a missing file, not a change waiting for `ecadlib part approve`) gets **Release anyway** at
+the bottom left of the dialog: it lists why the part is held, then asks why it is fine, and releases it the way the
+review queue does (`release-check --allow`, your name and the reason kept in the plan's `allow`, revision 1 in the
+change-control ledger) before it puts the part into the library. The reason box starts with "Checked it: fine as it is", so Enter releases; an emptied box releases nothing. A missing 3D height does not hold a part (`[release] height = "hold"` makes it): the dialog adds a note to check the 3D body. Check this project BOM reads the
 project's device sheets (`[DeviceSheetN]`; one it cannot find is a warning) and lists multi-channel sheets once per
 channel (R1_CH1 ...); a Content Vault component without an MPN parameter uses its Comment as the MPN when it reads as
 one. Workspace `altium_menu(win_dir)` and the MCP

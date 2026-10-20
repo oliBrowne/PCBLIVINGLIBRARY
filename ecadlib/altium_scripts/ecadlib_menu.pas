@@ -202,13 +202,31 @@ Begin
         Result := 'ecadlib stopped without a result.' + #13#10 + 'Next: look at its log, ' + Job + '\log.txt';
 End;
 
+Function SamePath(Path : String; Listed : String) : Boolean;
+{ Listed is a path from Altium's installed list, which may start with an environment variable (%UserProfile%\...,
+  as Altium saves it): then the rest of it must end Path. }
+Var
+    Rest : String;
+Begin
+    Result := UpperCase(Listed) = UpperCase(Path);
+    If (Not Result) And (Copy(Listed, 1, 1) = '%') Then
+    Begin
+        Rest := Copy(Listed, 2, Length(Listed));
+        If Pos('%', Rest) > 0 Then
+        Begin
+            Rest := UpperCase(Copy(Rest, Pos('%', Rest) + 1, Length(Rest)));
+            Result := (Rest <> '') And (UpperCase(Copy(Path, Length(Path) - Length(Rest) + 1, Length(Rest))) = Rest);
+        End;
+    End;
+End;
+
 Function IsInstalled(Path : String) : Boolean;
 Var
     i : Integer;
 Begin
     Result := False;
     For i := 0 To IntegratedLibraryManager.InstalledLibraryCount - 1 Do
-        If UpperCase(IntegratedLibraryManager.InstalledLibraryPath(i)) = UpperCase(Path) Then
+        If SamePath(Path, IntegratedLibraryManager.InstalledLibraryPath(i)) Then
             Result := True;
 End;
 
@@ -391,7 +409,12 @@ Begin
                 If IsInstalled(P) Then
                     IntegratedLibraryManager.UninstallLibrary(P);
                 IntegratedLibraryManager.InstallLibrary(P);
-                Result := Result + #13#10 + 'Installed again: ' + P;
+                { Altium can take the call and install nothing: say so, so "Done" never hides a library it can't see }
+                If IsInstalled(P) Then
+                    Result := Result + #13#10 + 'Installed in Altium: ' + P
+                Else
+                    Result := Result + #13#10 + 'Not installed: ' + P + ' (Altium did not install it). Next: in the Components panel, '
+                        + 'click the menu button > File-based Libraries Preferences > Installed > Install, and pick that file.';
             End
             Else
                 Result := Result + #13#10 + 'Missing: ' + P;
@@ -415,7 +438,7 @@ Procedure ShowResult(Title : String; Job : String; Extra : String);
 Begin
     If BuildFailed(Extra) Then
         ShowError(Title + #13#10 + #13#10 + 'Altium could not build the library files.' + Extra)
-    Else If Answer(Job, 'status') = 'error' Then
+    Else If (Answer(Job, 'status') = 'error') Or (Pos('Not installed:', Extra) > 0) Then
         ShowError(Title + #13#10 + #13#10 + MessageText(Job, Extra))
     Else
         ShowMessage(Title + #13#10 + #13#10 + MessageText(Job, Extra));

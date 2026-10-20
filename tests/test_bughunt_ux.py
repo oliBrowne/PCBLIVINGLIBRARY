@@ -116,7 +116,7 @@ def test_ux10_review_files_follow_the_plan_after_a_release_check(tmp_path):
         (plan.parent / f).write_text("stale", encoding="utf-8")
     _quiet(RC.main, [str(plan)])
     md = (plan.parent / "review.md").read_text(encoding="utf-8")
-    assert "7 parts: 6 ready, 1 held" in md and "### CH340C (held)" in md, md[:300]
+    assert "7 parts: 4 ready, 3 held" in md and "### CH340C (held)" in md, md[:300]     # + the 2 family pinouts
     assert "CH340C,held" in (plan.parent / "review.csv").read_text(encoding="utf-8-sig")
 
 
@@ -246,5 +246,5 @@ def test_ux34_init_force_replaces_a_broken_rules_file(tmp_path, monkeypatch):
 def test_ux3_ui_dblib_export_uses_the_plan(tmp_path):
     ws, plan = _demo(tmp_path / "ws")
     r = ws.export_dblib("uploads/demo/demo_bom.csv")
-    assert r["from_plan"] and r["held"] == ["CH340C"] and r["written"] == 6, r
+    assert r["from_plan"] and r["held"] == ["AMS1117-3.3", "CH340C", "AO3401A"] and r["written"] == 4, r
     assert any(f.endswith(".DbLib") for f in r["files"]), r

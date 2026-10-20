@@ -6,6 +6,8 @@
     Mode 'fill'  fill the library from the project's BOM straight away
   A part only an AI datasheet read can finish is offered as an AI step: the model and the cost first, the read only
   after a click (and a second yes above the limit), then the real cost next to the estimate.
+  A held part can be released anyway (the Release anyway button, bottom left): the dialog shows why it is held, asks
+  why it is fine, and ecadlib releases it like the review queue does (your name and reason kept in the plan).
   A timer polls the job folder (progress.ini while ecadlib runs, result.ini at the end).
   The dialog is modal, so Altium waits while it is open. Keep working (or the X) closes it while ecadlib works on in
   the background: the job goes on waiting.txt, and when it is done ecadlib calls FinishBackgroundJob in Altium, which
@@ -107,11 +109,13 @@ Begin
 End;
 
 Procedure ClearRows;
+{ Also hides Release anyway: it belongs to one held result. }
 Var
     i : Integer;
 Begin
     For i := 1 To 7 Do
         SetRow(i, '');
+    EcadlibDialog.ReleaseBtn.Visible := False;
 End;
 
 Function ButtonWidth(S : String) : Integer;
@@ -255,6 +259,7 @@ Begin
     End;
     EcadlibDialog.Primary.Top := Y + 10;
     EcadlibDialog.Secondary.Top := Y + 10;
+    EcadlibDialog.ReleaseBtn.Top := Y + 10;
     EcadlibDialog.ClientHeight := Y + 10 + 30 + 16;
 End;
 
@@ -380,6 +385,56 @@ Begin
     Run('ai-read');
 End;
 
+Procedure ShowRelease;
+{ The held result's Release anyway button, when ecadlib offered it (offer_release: the part can be released). }
+Begin
+    EcadlibDialog.ReleaseBtn.Visible := Answer(Job, 'offer_release') = '1';
+    EcadlibDialog.ReleaseBtn.Width := ButtonWidth(EcadlibDialog.ReleaseBtn.Caption);
+End;
+
+Procedure AskRelease;
+{ Release anyway, step 1: why the part is held, and what releasing means. Nothing is released yet. }
+Var
+    i : Integer;
+    S : String;
+Begin
+    Phase := 'confirm_release';
+    Second := 'back_release';
+    S := Answer(Job, 'release_part') + ' is held because:';
+    For i := 1 To 4 Do
+        If Answer(Job, 'release_why' + IntToStr(i)) <> '' Then
+            S := S + #13#10 + '- ' + Answer(Job, 'release_why' + IntToStr(i));
+    S := S + #13#10 + 'Release anyway puts it into the library as it is. ecadlib keeps your name and your reason with it.';
+    EcadlibDialog.Note.Caption := S;
+    EcadlibDialog.Note.Font.Color := $009C9C9C;
+    EcadlibDialog.Note.Visible := True;
+    EcadlibDialog.ReleaseBtn.Visible := False;
+    Buttons('Release it...', 'Back', False);
+    Layout;
+End;
+
+Procedure StartRelease;
+{ Release anyway, step 2: the person says why it is fine (a ready-made reason they can keep or change: one Enter);
+  ecadlib releases it and puts it into the library. An emptied box releases nothing. }
+Var
+    Prev : String;
+    Why : String;
+Begin
+    Prev := Job;
+    Why := Trim(InputBox('ecadlib: release anyway', 'Why is ' + Answer(Prev, 'release_part') + ' fine as it is? (kept with your name in the library plan)', 'Checked it: fine as it is'));
+    If Why = '' Then
+        Exit;
+    SetTitle('Release ' + Answer(Prev, 'release_part'));
+    EcadlibDialog.Big.Caption := 'Releasing...';
+    Job := StartJob('release');
+    Ask(Job, 'dialog', '1');
+    Ask(Job, 'bom', Answer(Prev, 'release_bom'));
+    Ask(Job, 'mpn', Answer(Prev, 'release_mpn'));
+    Ask(Job, 'part', Answer(Prev, 'release_part'));
+    Ask(Job, 'reason', Why);
+    Run('release');
+End;
+
 Procedure StartBom;
 Begin
     SetTitle('Check project BOM');
@@ -467,7 +522,9 @@ Begin
     If Headline = '' Then
         Headline := 'Done';
     If BuildFailed(Extra) Then
-        Headline := 'Altium could not build the library';
+        Headline := 'Altium could not build the library'
+    Else If Pos('Not installed:', Extra) > 0 Then
+        Headline := 'Not installed in Altium';
     EcadlibDialog.Big.Caption := Headline;
     ClearRows;
     Ini := TIniFile.Create(Job + '\result.ini');
@@ -520,11 +577,12 @@ Begin
         Begin
             Second := 'queue';
             Buttons('Done', 'Open review queue', False);
+            ShowRelease;
         End
         Else
             Buttons('Done', '', False);
     End;
-    If (Pos('Missing:', Extra) > 0) Or (Pos('Altium build:', Extra) > 0) Then
+    If (Pos('Missing:', Extra) > 0) Or (Pos('Altium build:', Extra) > 0) Or (Pos('Not installed:', Extra) > 0) Then
         EcadlibDialog.Note.Caption := EcadlibDialog.Note.Caption + Extra;
     EcadlibDialog.Note.Visible := EcadlibDialog.Note.Caption <> '';
     Layout;
@@ -661,6 +719,8 @@ Begin
         StartFill
     Else If Phase = 'offer_ai' Then
         StartAi
+    Else If Phase = 'confirm_release' Then
+        StartRelease
     Else If Phase = 'done' Then
         ModalResult := mrOk;
 End;
@@ -679,7 +739,18 @@ Begin
         EcadlibDialog.Note.Caption := NextHint;
         EcadlibDialog.Note.Visible := NextHint <> '';
         Buttons('Done', 'Open review queue', False);
+        ShowRelease;
         Layout;
+    End
+    Else If Second = 'back_release' Then
+    Begin
+        Phase := 'done';
+        Second := 'queue';
+        EcadlibDialog.Note.Caption := NextHint;
+        EcadlibDialog.Note.Visible := NextHint <> '';
+        Buttons('Done', 'Open review queue', False);
+        Layout;
+        ShowRelease;
     End
     Else If Second = 'log' Then
         RunApplication('notepad.exe "' + Job + '\log.txt"')
@@ -687,6 +758,12 @@ Begin
         KeepWorking
     Else If Phase <> 'run' Then
         ModalResult := mrCancel;
+End;
+
+Procedure TEcadlibDialog.ReleaseClick(Sender : TObject);
+Begin
+    If Phase = 'done' Then
+        AskRelease;
 End;
 
 Procedure TEcadlibDialog.ReportClick(Sender : TObject);
@@ -727,13 +804,23 @@ Begin
         Box := EditMaker
     Else
         Exit;
-    If InSet(ssCtrl, Shift) And (Key = 86) Then PasteInto(Box)
-    Else If InSet(ssShift, Shift) And (Key = 45) Then PasteInto(Box)
+    If (InSet(ssCtrl, Shift) And (Key = 86)) Or (InSet(ssShift, Shift) And (Key = 45)) Then
+    Begin
+        Box.SelectAll;                { a paste replaces the box (it doubled the part number when appended) }
+        PasteInto(Box);
+    End
     Else If InSet(ssCtrl, Shift) And (Key = 67) Then Box.CopyToClipboard
     Else If InSet(ssCtrl, Shift) And (Key = 88) Then Box.CutToClipboard
     Else If InSet(ssCtrl, Shift) And (Key = 65) Then Box.SelectAll
     Else Exit;
     Key := 0;
+End;
+
+Procedure TEcadlibDialog.EcadlibDialogKeyPress(Sender : TObject; Var Key : Char);
+{ The edit box would paste, copy or cut again on the Ctrl+V / C / X character KeyDown already handled. }
+Begin
+    If ((ActiveControl = EditMpn) Or (ActiveControl = EditMaker)) And ((Key = #22) Or (Key = #3) Or (Key = #24)) Then
+        Key := #0;
 End;
 
 Procedure TEcadlibDialog.PasteMpnClick(Sender : TObject);

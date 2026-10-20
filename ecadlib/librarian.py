@@ -14,12 +14,14 @@ anything still missing, the sources are tried in --sources order, each filling o
              ordering suffix (TPS62162DSG for TPS62162DSGR); generic connectors by value (Conn_01x04). Footprint: the BOM footprint name, the symbol's
              Footprint property, a footprint named after the MPN, or the shortest name starting with the BOM footprint.
              R/C/L/LED use Device:R/C/C_Polarized/L/LED and <Family>_SMD:<X>_<imperial>_<metric>Metric by package.
-  easyeda    LCSC number (BOM, or found by MPN in triage) -> EasyEDA component JSON -> easyeda_convert -> KiCad text
+  easyeda    LCSC number (BOM, or found by MPN in triage) -> EasyEDA component JSON -> easyeda_convert -> KiCad text;
+             the footprint's own STEP model is downloaded and placed on it (easyeda_3d), which gives the body height
   standard   no network, no API: chip passives and standard packages (SOT-23, SOIC-8, QFN-32 5x5 ...) built from the
              checked package table, symbols where the pinout is standard (ecadlib/stdparts.py); always after kicad
   datasheet  datasheet URL (BOM column, KiCad symbol, EasyEDA/LCSC link, LCSC pattern) + ANTHROPIC_API_KEY ->
              ecadlib.datasheet; the result is marked `verify` so release_check holds it until a person has looked (or
-             --allow). --datasheet-batch sends every part that reaches this source as one Message Batch (half price)
+             --allow). The same goes for an EasyEDA conversion, a pinout from a family table and a KiCad symbol or
+             footprint picked by a near name (ordering suffix, MPN in the name, shortest prefix). --datasheet-batch sends every part that reaches this source as one Message Batch (half price)
              after the other sources ran, then builds them; results are cached, so re-runs are free
 Footprints without a KiCad STEP model get a package-shaped STEP from step_gen embedded (--box: extruded box).
 Everything is converted through kicad_import into <out>/models/{SchLib,PcbLib} (plus the .kicad_mod in
@@ -34,7 +36,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import __version__
-from . import (altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_convert as EC,
+from . import (altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_3d as E3, easyeda_convert as EC,
                footprint_gen as F, fp_share as FS, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
@@ -229,6 +231,25 @@ def is_passive_part(item, ln=None):
     return folder in PASSIVE_FOLDERS or bool(ref and ref.group(0) in ("R", "C", "L", "FB", "Y"))
 
 
+def quiet_two_pin(sym):
+    """A two-pin passive (R / C / L / ferrite bead / crystal) shows no pin names or numbers, whatever the source drew
+    (Oliver's rule, as the standard symbols): a crystal's "1"/"2" or "OSC1"/"OSC2" ran over each other in its narrow body."""
+    pins = [pr[1] for pr in sym.get("prims") or [] if pr[0] == "pin" and not pr[1].get("hidden")]
+    if len(pins) != 2 or len({p["num"] for p in pins}) != 2:
+        return sym
+    prims = [(pr[0], dict(pr[1], show_name=False, show_num=False), *pr[2:]) if pr[0] == "pin" and not pr[1].get("hidden")
+             else pr for pr in sym["prims"]]
+    return dict(sym, prims=prims)
+
+
+def category_designator(sym, folder):
+    """The part's category letter for a symbol its source calls U? (EasyEDA draws crystals, transistors ... as U?):
+    a crystal filed under Crystals is Y?. A source's own non-U letter (X? for a crystal) is kept."""
+    pre = re.match(r"[A-Z]*", str(sym.get("designator") or "").upper()).group(0)
+    ref = RU.CAT_REF.get(str(folder or "").rstrip("/").rsplit("/", 1)[-1])
+    return dict(sym, designator=ref + "?") if ref and ref != "U" and pre in ("", "U", "IC") else sym
+
+
 def passive_pins(sym):
     """sym with every pin Passive; unchanged when a pin looks like an oscillator's supply / output / enable."""
     pins = [pr[1] for pr in sym.get("prims") or [] if pr[0] == "pin"]
@@ -321,8 +342,9 @@ class Run:
         return os.path.relpath(p, self.out).replace(os.sep, "/")
 
     # ---- writers: everything goes through kicad_import's converters
-    def put_fp(self, st, text, name, source, http=None, height=None, height_src="", spec=None):
-        """One file per footprint, shared only by parts whose pads are the same (ecadlib/fp_share.py)."""
+    def put_fp(self, st, text, name, source, http=None, height=None, height_src="", spec=None, model=None):
+        """One file per footprint, shared only by parts whose pads are the same (ecadlib/fp_share.py).
+        model: a downloaded 3D model already placed on the footprint (easyeda_model), the part's body and height."""
         bom_name = name
         name, pcb, same, h = FS.pick(self.written, self.models, name, text, source, st["name"], self.out, self.hashes)
         renamed = {"renamed_from": bom_name} if name != bom_name else {}
@@ -336,12 +358,18 @@ class Run:
         notes = [f"named {name}: footprint {bom_name} is another part's, with other pads"] if renamed else []
         fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes,
                                     K.KICAD_LICENSE if source.startswith("kicad:") else "")
-        try:
-            K.add_body(fp, t, http, height, False, notes, gen_step=self.gen_step, spec=spec,      # a part-specific
-                       height_src=(height_src or "caller") if height else None,                      # height beats the table
-                       kind=st.get("kind"), names=st.get("names", ()))
-        except ValueError as e:
-            notes.append(f"no 3D body: {e}")
+        if model:                               # the source's own 3D model: its shape and height beat any table
+            E3.add_body(fp, model["text"], model["info"], model["ref"], notes, embed=self.gen_step)
+            warn = E3.checks(model["info"], model["ref"], fp["pads"])
+            notes += warn
+            st["review"] += warn
+        else:
+            try:
+                K.add_body(fp, t, http, height, False, notes, gen_step=self.gen_step, spec=spec,      # a part-specific
+                           height_src=(height_src or "caller") if height else None,                      # height beats the table
+                           kind=st.get("kind"), names=st.get("names", ()))
+            except ValueError as e:
+                notes.append(f"no 3D body: {e}")
         kmod = self.models / "KiCad" / f"{stem}.kicad_mod"
         text = re.sub(r'^(\s*\((?:footprint|module)\s+)("(?:[^"\\]|\\.)*"|[^\s()]+)',     # KiCad links a footprint by its file name,
                       lambda m: m.group(1) + '"' + stem.replace('"', '\\"') + '"', text, count=1)   # Altium by this name: one name
@@ -350,7 +378,9 @@ class Run:
         kmod.write_text(text, encoding="utf-8", newline="\n")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
-                           "name": name, "hash": h, **renamed}
+                           "name": name, "hash": h, **renamed,
+                           **({"model": {"source": f"easyeda:{model['ref']['uuid']}", "url": model["ref"]["url"],
+                                         "title": model["ref"]["title"], "credit": EC.CREDIT}} if model else {})}
         self.written[str(pcb)] = st["footprint"]
         self._relink(st, bom_name, name)
 
@@ -369,6 +399,9 @@ class Run:
         path = self.models / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib"
         if st.get("kind") in SHARED_KINDS:      # one Resistor / Capacitor / Inductor symbol for every value and size,
             sym = shared_symbol(sym)            # whichever source drew it: no footprint, no one part's MPN
+        sym = category_designator(sym, st.get("folder"))
+        if st.get("passive") or re.match(r"(FB|[RCLYX])\??$", str(sym.get("designator") or "").upper()):
+            sym = quiet_two_pin(sym)
         if st.get("passive"):
             sym = passive_pins(sym)
         fr = st.get("footprint") or {}
@@ -416,7 +449,7 @@ class Run:
         if dnp:                                              # built from the free sources, no paid datasheet read
             st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")
         kind, fp_name, sym_name = passive_kind(item), item["footprint"]["ref"], item["symbol"]["ref"]
-        st["passive"] = is_passive_part(item, ln)
+        st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         try:
             self.local(st, row, kind, fp_name, sym_name)
@@ -485,8 +518,8 @@ class Run:
             extra = [] if shared or not mpn else [("MPN", mpn)]
             self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", extra)
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
-            if "check" in how:
-                st["review"].append(f"symbol {sym_ref} matched by {how}")
+            if "check" in how:                     # a near name: a person checks it before it is released
+                st["verify"].append(f"symbol {sym_ref} matched by {how}")
         elif not st["symbol"]:
             st["tried"].append(f"kicad: no symbol named like {mpn or '(no MPN)'}")
         if st["footprint"]:
@@ -499,8 +532,8 @@ class Run:
                 text, _ = K.load_footprint(cand, self.http)
                 self.put_fp(st, text, fp_name, f"kicad:{cand}", self.http)
                 st["tried"].append(f"kicad: footprint {cand} ({why})")
-                if why.startswith(("shortest", "footprint named")):
-                    st["review"].append(f"footprint {cand} chosen by {why}: compare with the datasheet land pattern")
+                if why.startswith(("shortest", "footprint named")):     # a guess by name: held until a person looks
+                    st["verify"].append(f"footprint {cand} chosen by {why}: compare with the datasheet land pattern")
                 return
         st["tried"].append(f"kicad: no footprint for '{bom_fp or fp_name}'")
 
@@ -540,7 +573,8 @@ class Run:
             notes = []
             text = EC.footprint_to_kicad(pkg.get("dataStr") or {}, pkg.get("title") or fp_name, notes)
             text = FT.tidy(text, notes)                       # to the rule book: silk reference, pin 1, rounded pads
-            self.put_fp(st, text, fp_name, f"easyeda:{lcsc}", None)
+            model = self.easyeda_model(st, pkg.get("dataStr") or {}, lcsc)
+            self.put_fp(st, text, fp_name, f"easyeda:{lcsc}", None, model=model)
             st["footprint"]["notes"] = notes + st["footprint"]["notes"]
             got.append(f"footprint {pkg.get('title', '')}")
         if not st["symbol"]:
@@ -557,7 +591,27 @@ class Run:
         if got:
             st["found"].setdefault("credit", (EC.CREDIT, f"EasyEDA {lcsc}"))
         st["tried"].append(f"easyeda {lcsc}: " + (", ".join(got) or "nothing needed"))
-        st["review"].append(f"EasyEDA {lcsc} conversion: check pads and pins against the datasheet (native converter, format assumed)")
+        if got:                                # a converted EasyEDA part is held until a person has compared it
+            st["verify"].append(f"EasyEDA {lcsc} conversion: check pads and pins against the datasheet (native converter, format assumed)")
+
+    def easyeda_model(self, st, data, lcsc):
+        """The EasyEDA footprint's own 3D model (STEP), downloaded and placed on the footprint (ecadlib.easyeda_3d), or
+        None: no model named, the download failed or the file is not a STEP (the generated model or box is used)."""
+        ref = E3.model_ref(data)
+        if ref is None:
+            st["tried"].append(f"easyeda {lcsc}: no 3D model named")
+            return None
+        text, why = E3.fetch(self.http, ref)
+        if text is None:
+            st["tried"].append(f"easyeda {lcsc}: 3D model {ref['uuid']} not downloaded ({why}); package model made here instead")
+            return None
+        try:
+            placed, info = E3.place(text, ref)
+        except ValueError as e:
+            st["tried"].append(f"easyeda {lcsc}: 3D model {ref['uuid']} not used ({e})")
+            return None
+        st["tried"].append(f"easyeda {lcsc}: 3D model {ref['title'] or ref['uuid']}, height {info['height']} mm")
+        return {"text": placed, "info": info, "ref": ref}
 
     def src_standard(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
         """Standard packages and pinouts, built offline (ecadlib.stdparts); fills only what is still missing."""
@@ -582,8 +636,8 @@ class Run:
             self.put_kicad_sym(st, [K._find_symbol(sexpr.parse(text), name)], sym_name, None if shared else fp_name,
                                f"standard:{name}", [] if shared or not mpn else [("MPN", mpn)])
             got.append(f"symbol {name} ({res['sym_how']})")
-            if ":" in res["symbol"]:
-                st["review"].append(f"symbol pinout {name} from the {mpn} family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
+            if ":" in res["symbol"]:               # SOT-23 & co: pinouts differ by maker, so a person checks it
+                st["verify"].append(f"symbol pinout {name} from the {mpn} family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
         elif not st["symbol"] and res["symbol"]:
             res["sym_how"] = f"footprint came from {fp_src or 'nowhere'}, not {res['footprint']}: pin numbers not known to match"
         why = [] if st["footprint"] else [f"footprint: {res['fp_how']}"]
@@ -825,6 +879,10 @@ def apply_state(item, st, ln):
             item[k]["file"] = st[k]["file"]
             if k == "footprint":
                 item[k]["kicad_mod"] = st[k].get("kicad_mod")
+                if st[k].get("model"):                 # where its 3D model came from (EasyEDA's STEP, with the credit)
+                    item[k]["model"] = st[k]["model"]
+                else:
+                    item[k].pop("model", None)
                 was = item[k].get("bom_ref") or item[k].get("ref")
                 if st[k].get("name") and st[k].get("renamed_from") == was:     # another footprint has the BOM's name
                     item[k]["bom_ref"], item[k]["ref"] = was, st[k]["name"]

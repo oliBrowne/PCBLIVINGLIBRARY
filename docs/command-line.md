@@ -30,7 +30,8 @@ ecadlib init [--yes] [--tool T] [--lib DIR ...] [--workspace W] [--sources LIST]
 * **`demo`** writes a real workspace (default `./ecadlib-demo`) with its own `ecadlib.toml` (`[sources] order =
   ["standard"]`, so a rules file in a parent folder cannot change it), the bundled BOM in `uploads/demo/`, the librarian
   plan and Altium models in `librarian/`, and for KiCad the `.kicad_sym`, `.pretty`, lib tables and database library in
-  `kicad/`. Re-running reuses the workspace (finished parts are skipped). Measured here: 1.0 s, 6 ready + 1 held.
+  `kicad/`. Re-running reuses the workspace (finished parts are skipped). Measured here: 0.8 s, 4 ready + 3 held (CH340C has no symbol;
+  AMS1117-3.3 and AO3401A wait for a person because their pinouts come from a family table).
 * **Help.** Every command and subcommand has a one-line description and every command's `-h` ends with examples that
   parse (`tests/test_firstrun.py` walks the whole argparse tree and parses every example). Same names for the same
   things: `--lib`, `--workspace`, `-o/--out`, `--json`, `--dry-run`, `--offline`. `librarian` and `kicad-export` gained
@@ -116,6 +117,9 @@ For people who are used to installers, not terminals. The guide for them is `doc
   ([Altium and KiCad plugins](altium.md#plugging-into-the-tools-kicad_pcmpy-and-altium_pkgpy)) and sets it to run this ecadlib. One step inside Altium is left (Install from file...), because Altium
   keeps its list of script projects to itself. **Add to KiCad** copies the action plugin into each KiCad's
   `scripting/plugins` folder, with this ecadlib's command next to it, so no PATH change is needed.
+* **`ecadlib nexar signin|status|signout`** (`nexar_signin.py`): sign in to Altium 365 once with your own free Nexar
+  app; ecadlib refreshes the token by itself, so there is no daily portal token to paste. See
+  [Signing in to Altium 365](altium.md#signing-in-to-altium-365-ecadlib-nexar-signin).
 * **`ecadlib keys list|set NAME|remove NAME`** (`userconfig.py`): API keys stored per user, the way to give ecadlib a
   key. On Windows they are encrypted with DPAPI for your account. Elsewhere they are in a file only you can read
   (mode 600). The folder is `%APPDATA%\ecadlib`, `~/Library/Application Support/ecadlib` or `~/.config/ecadlib`, and

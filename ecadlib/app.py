@@ -1351,7 +1351,7 @@ class Workspace:
         if fmt not in ("csv", "json", "xlsx"):
             raise ValueError(f"format must be csv, json or xlsx, not {str(fmt)[:20]!r}")
         bom_path, plan_f, _ = self._plan(bom)
-        rows = PE.rows(plan_f, name, include_held)
+        rows = PE.rows(plan_f, name, include_held, rules=self.rules_in_use())
         out = PE.write(rows, self.root / "reports" / f"parts_{self._key(bom_path)}.{fmt}", fmt)
         return {"file": self.rel(out), "parts": len(rows), "columns": PE.COLUMNS}
 
@@ -1479,9 +1479,8 @@ def _now(ts=None):
 def _nexar_token():
     tok = UC.secret("NEXAR_TOKEN")
     if not tok:
-        raise ValueError("no Altium 365 (Nexar) token: save it on the setup page (Optional keys) or run "
-                         "`ecadlib keys set NEXAR_TOKEN` (a Nexar portal token with the design.domain, user.access "
-                         "and openid scopes)")
+        from . import nexar_signin
+        raise ValueError("no Altium 365 (Nexar) token: " + nexar_signin.hint())
     return tok
 
 

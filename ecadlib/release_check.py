@@ -13,14 +13,18 @@ Rules, per plan item:
             findings are reported as warnings). Without a .kicad_mod the same three are checked on the PcbLib.
             Overlapping pads whose symbol pins share a name (USB-C A1/B12 = GND) are stacked on purpose: a warning.
             A PcbLib with no .Designator on the Top / Bottom Overlay (no reference on silk) is a warning.
-  height    a 3D height is present and inside the plausible range for the package family (HEIGHTS)
+  height    a 3D height is present and inside the plausible range for the package family (HEIGHTS); a note to check
+            (a warning) unless `[release] height = "hold"`, since a height never changes the circuit
   fields    Manufacturer, Manufacturer Part Number, a datasheet link and Description are filled in
   parity    the .kicad_mod and the .PcbLib / .SchLib read back the same (ecadlib.parity: pads, drills, paste, courtyard,
             3D, pin -> pad); `[release] parity = "warn"` reports instead of holding, "off" skips it
-  verify    the item carries `verify` notes (e.g. a datasheet-reader footprint): a person has to look first
+  verify    the item carries `verify` notes: a person has to look first (a datasheet-reader footprint, an EasyEDA
+            conversion, a pinout from a family table, a KiCad symbol or footprint picked by a near name)
 Failing items get status `held` and `hold_reasons`; others `ready`. `--allow PART` records an override in the
 item (`allow.failures` = the failures it covers); an allowed item is `ready` while its failures stay within
-that list. altium365 push releases only `ready` items. Items `ecadlib a365 pull` brought in from the workspace
+that list. altium365 push releases only `ready` items, and every publisher (altium365 push, dblib-sync /
+altium-pkg, kicad-export) runs this check again on the files it sends (publish_problems), so a plan that says
+`ready` without a check, or a file changed after one, is held there too. Items `ecadlib a365 pull` brought in from the workspace
 (status `existing`) are already released there and are not checked. Exit code 0 when nothing is held, 2 otherwise."""
 import argparse, csv, datetime, re, sys
 from pathlib import Path
@@ -143,6 +147,58 @@ def _supplier_number(par, field, rules):
                in ("lcsc", "jlcpcb") for k, v in par.items() if k.startswith("Supplier Part Number "))
 
 
+# The librarian's doubtful-source notes, each about the half (None: either) it took from the source it names:
+# (half, source prefix, the note; group 1 = what the source gave). A note holds the part until a person releases it,
+# or picks another symbol or footprint for that half (ecadlib resolve, the review queue's Pick: clear_doubts). ecadlib
+# up to 0.3 wrote them to librarian.review only (a note, not a hold), and a part an older version finished keeps them
+# there, so those count too, while that half still comes from that kind of source.
+DOUBTS = (("symbol", "kicad:", re.compile(r"symbol (\S+) matched by .*check")),
+          ("footprint", "kicad:", re.compile(r"footprint (\S+) chosen by (?:shortest|footprint named)")),
+          (None, "easyeda:", re.compile(r"EasyEDA (\S+) conversion: ")),
+          ("symbol", "standard:", re.compile(r"symbol pinout (\S+) from the .+ family table")))
+
+
+def _doubt(note):
+    """A doubtful-source note -> (the halves it is about, the source prefix, what that source gave); else None."""
+    for half, prefix, rx in DOUBTS:
+        m = rx.match(str(note))
+        if m:
+            return ([half] if half else ["symbol", "footprint"]), prefix, m.group(1)
+    return None
+
+
+def doubts(item):
+    """The `verify` notes that hold the item: its own, plus the doubtful-source notes an older ecadlib left in
+    librarian.review (DOUBTS) while that half still comes from that kind of source."""
+    src, out = item.get("source") or {}, [str(v) for v in item.get("verify") or []]
+    for r in (item.get("librarian") or {}).get("review") or []:
+        d = _doubt(r)
+        if d and str(r) not in out and any(str(src.get(h) or "").startswith(d[1]) for h in d[0]):
+            out.append(str(r))
+    return out
+
+
+def clear_doubts(entry, src, halves):
+    """A person picked another symbol / footprint (`halves`) and it was applied: drop the doubtful-source notes about
+    what that half had before from a plan item or its librarian_state entry (`verify`, and the older ecadlib's review
+    notes). An EasyEDA note goes once neither half comes from EasyEDA. -> the notes dropped."""
+    def gone(note):
+        d = _doubt(note)
+        if not d:
+            return False
+        hs, prefix, ref = d
+        if hs == ["symbol", "footprint"]:
+            return not any(str(src.get(h) or "").startswith(prefix) for h in hs)
+        return hs[0] in halves and str(src.get(hs[0]) or "") != prefix + ref
+    dropped = []
+    for holder, key in ((entry, "verify"), (entry, "review"), (entry.get("librarian") or {}, "review")):
+        notes = holder.get(key)
+        if isinstance(notes, list):
+            dropped += [n for n in notes if gone(n)]
+            holder[key] = [n for n in notes if not gone(n)]
+    return dropped
+
+
 def check_item(item, base=".", rules=None):
     """-> (failures [(rule, message)], warnings [str], info {height, ...}). rules (ecadlib.rules): required fields,
     accepted pin-1 names and the courtyard layer; None = ecadlib's own."""
@@ -151,6 +207,8 @@ def check_item(item, base=".", rules=None):
     pin1 = rules["footprint"]["pin1"]
     fails, warns, info = [], [], {}
     add = lambda rule, msg: fails.append((rule, msg))
+    item = {**item, "symbol": item.get("symbol") or {}, "footprint": item.get("footprint") or {},   # publishers check a
+            "parameters": [p for p in item.get("parameters") or [] if isinstance(p, dict) and p.get("name")]}  # plan as is
     sym_f, fp_f = _path(base, item["symbol"].get("file")), _path(base, item["footprint"].get("file"))
     syms = fps = None
     pin_names = {}
@@ -257,7 +315,9 @@ def check_item(item, base=".", rules=None):
         for d in diffs:
             (add("parity", d["msg"]) if d["level"] == "error" and mode == "hold" else warns.append(f"parity: {d['msg']}"))
         info["parity"] = "mismatch" if any(d["level"] == "error" for d in diffs) else "match"
-    # ---- 3D height
+    # ---- 3D height: a note to check unless [release] height = "hold" (a height is mechanical, never electrical)
+    hold_h = (rules.get("release") or {}).get("height", "warn") == "hold"
+    height = (lambda m: add("height", m)) if hold_h else (lambda m: warns.append(f"height: {m}"))
     if fps:
         bodies = [AL.parse_params(r["params"]) for r in fps[0]["records"] if r["type"] == "body"]
         hs = [h for h in (_mil(b.get("OVERALLHEIGHT")) for b in bodies) if h]
@@ -273,17 +333,17 @@ def check_item(item, base=".", rules=None):
                          "for the datasheet, no KiCad model)")
             info["height"] = pd[0]
         elif not h:
-            add("height", "no 3D height (no 3D body and no HEIGHT)")
+            height("no 3D height (no 3D body and no HEIGHT)")
         elif default:
             warns.append(f"3D height {h:.2f} mm is the package default, verify against the datasheet")
             if not lo - 0.01 <= h <= hi + 0.01:
                 warns.append(f"3D height {h:.2f} mm outside {lo}-{hi} mm for {fam or 'any package'}")
         elif not lo - 0.01 <= h <= hi + 0.01:
-            add("height", f"3D height {h:.2f} mm outside {lo}-{hi} mm for {fam or 'any package'}")
+            height(f"3D height {h:.2f} mm outside {lo}-{hi} mm for {fam or 'any package'}")
         elif not fam:
             warns.append(f"no height range for package '{item['footprint'].get('ref')}'; only checked {lo}-{hi} mm")
     # ---- fields
-    par = {p["name"]: p["value"] for p in item.get("parameters", [])}
+    par = {p["name"]: p.get("value", "") for p in item["parameters"]}
     for k in rules["parameters"]["required"]:         # default: REQUIRED, then the datasheet link and Description
         if k == "Datasheet":
             if not any(str(par.get(x, "")).strip() for x in ("ComponentLink2URL", "Datasheet", RU.canonical_param("Datasheet", rules))):
@@ -296,11 +356,24 @@ def check_item(item, base=".", rules=None):
                              "package (no source had one): check it")
         elif not str(par.get(RU.canonical_param(k, rules), par.get(k, ""))).strip() and not _supplier_number(par, k, rules):
             add("fields", f"{k} is empty")
-    for v in item.get("verify") or []:
+    for v in doubts(item):
         add("verify", v)
     for v in item.get("name_problems") or []:         # altium365.plan: a name Altium can't store (altium_export._name)
         add("fields", v)
     return fails, warns, info
+
+
+def publish_problems(item, base=".", rules=None):
+    """Why a publisher (altium365 push, dblib-sync / altium-pkg, kicad-export) must not send this part's files: the
+    release check run again now, on the files as they are, less the failures the item's --allow covers. [] = it may
+    go. A plan's `status` alone is never enough: `altium365 plan --models`, a triage plan or a hand edit can say
+    `ready` for a part nothing checked, and a file can change after its check. rules: loaded (RU.resolve) once by
+    the caller. Parts `ecadlib a365 pull` brought in (already released there) are not checked, as in apply."""
+    if item.get("a365") and item.get("status") in ("existing", "deleted_in_workspace"):
+        return []
+    fails, _, _ = check_item(item, base, rules)
+    covered = set((item.get("allow") or {}).get("failures", []))
+    return [m for m in (f"{r}: {m}" for r, m in fails) if m not in covered or m.startswith(UNFIXABLE)]
 
 
 CHANGE_HOLD = "change control:"              # a held change no release check or --allow clears (`ecadlib part approve`)
@@ -370,7 +443,7 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, chan
                     it[k] = it.pop(k)
         covered = set((it.get("allow") or {}).get("failures", []))
         hard = [m for m in msgs if m.startswith(UNFIXABLE)]
-        open_ = [m for m in msgs if m not in covered]
+        open_ = [m for m in msgs if m not in covered or m.startswith(UNFIXABLE)]   # never covered, by hand neither
         if not msgs:
             it["status"], result = "ready", "pass"
         elif it.get("allow") and not open_:
