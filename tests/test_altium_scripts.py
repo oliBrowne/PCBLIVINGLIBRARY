@@ -24,3 +24,17 @@ def test_dialog_unit_matches_the_form():
     for c in (AF.TEXT, AF.GREEN, AF.RED, AF.DIM, AF.BLUE, AF.BLUE_OFF):
         assert c in pas, c
     assert str(AF.WIDTH - 40) in pas
+
+
+def test_ctrl_v_pastes_once():
+    """Oliver 2026-10-20: Ctrl+V in the dialog's boxes pasted twice. OnKeyDown pastes and sets Key := 0, but that
+    doesn't stop the WM_CHAR #22 TranslateMessage already queued, and the Windows edit control pastes on that char
+    too. The form's OnKeyPress swallows the clipboard control chars (#22 paste, #24 cut, #3 copy, #1 select all)."""
+    pas, dfm = AF.dialog_pas_text(), AF.dialog_dfm_text()
+    assert "OnKeyPress = EcadlibDialogKeyPress" in dfm
+    body = pas.split("Procedure TEcadlibDialog.EcadlibDialogKeyPress(", 1)[1].split("\r\nEnd;", 1)[0]
+    assert "Var Key : Char" in body
+    for ch in ("#22", "#24", "#3", "#1"):
+        assert ch in body, ch
+    assert "Key := #0" in body
+    assert "EditMpn" in body and "EditMaker" in body

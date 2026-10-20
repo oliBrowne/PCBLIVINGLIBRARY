@@ -681,6 +681,14 @@ Begin
     Key := 0;
 End;
 
+Procedure TEcadlibDialog.EcadlibDialogKeyPress(Sender : TObject; Var Key : Char);
+{ Key := 0 above doesn't stop the WM_CHAR Windows already queued for Ctrl+V (#22), and the edit box pastes on that
+  too, so the text went in twice. Drop the clipboard chars (#22 paste, #24 cut, #3 copy, #1 select all) here. }
+Begin
+    If (ActiveControl <> EditMpn) And (ActiveControl <> EditMaker) Then Exit;
+    If (Key = #22) Or (Key = #24) Or (Key = #3) Or (Key = #1) Then Key := #0;
+End;
+
 Procedure TEcadlibDialog.PasteMpnClick(Sender : TObject);
 Begin
     EditMpn.SelectAll;

@@ -42,7 +42,7 @@ FORM_API = {
     "ActiveControl": "TForm.ActiveControl", "AutoSize": "TLabel.AutoSize", "TEdit": "Forms & Components: TEdit",
     "PasteFromClipboard": "TCustomEdit.PasteFromClipboard", "CopyToClipboard": "TCustomEdit.CopyToClipboard",
     "CutToClipboard": "TCustomEdit.CutToClipboard", "Word": "OnKeyDown Key type", "TShiftState": "OnKeyDown Shift type",
-    "Key": "OnKeyDown parameter", "TMouseButton": "OnMouseDown / OnMouseUp Button type", "InSet": "DelphiScript set test (InSet(ssCtrl, Shift))", "ssCtrl": "TShiftState", "ssShift": "TShiftState",
+    "Key": "OnKeyDown / OnKeyPress parameter", "Char": "OnKeyPress Key type", "TMouseButton": "OnMouseDown / OnMouseUp Button type", "InSet": "DelphiScript set test (InSet(ssCtrl, Shift))", "ssCtrl": "TShiftState", "ssShift": "TShiftState",
 }
 
 
@@ -140,6 +140,7 @@ def dialog_dfm_text():
   OldCreateOrder = False
   OnClose = EcadlibDialogClose
   OnKeyDown = EcadlibDialogKeyDown
+  OnKeyPress = EcadlibDialogKeyPress
   Position = poMainFormCenter
   PixelsPerInch = 96
   TextHeight = 15
