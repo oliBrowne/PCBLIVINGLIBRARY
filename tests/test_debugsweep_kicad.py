@@ -34,3 +34,15 @@ def test_ds2_40_kicad_pcm_packages_the_named_library_of_a_two_library_folder():
         rc = KP.main([str(out), "--out", str(out.parent / "pcm2")])
     assert rc == 2 and "alpha" in err.getvalue() and "beta" in err.getvalue() and "--name" in err.getvalue(), (rc, err.getvalue())
     assert not (out.parent / "pcm2").exists()
+
+
+def test_ds2_41_easyeda_smd_footprint_with_npth_pegs_stays_smd():
+    from ecadlib import easyeda_convert as EC, footprint_rules as FR
+    smd = ["PAD~RECT~-10~0~4~6~1~~1~0~~0~g1~0~~Y~0", "PAD~RECT~10~0~4~6~1~~2~0~~0~g2~0~~Y~0"]
+    for peg, want in (("HOLE~0~8~1.5~g3~0", "smd"),                                  # a locating peg (NPTH)
+                      ("PAD~ELLIPSE~0~8~3~3~11~~3~1.5~~0~g3~0~~N~0", "smd"),          # a pad with an unplated hole
+                      ("PAD~ELLIPSE~0~8~3~3~11~~3~1.5~~0~g3~0~~Y~0", "through_hole")):  # a plated pin: really THT
+        text = EC.footprint_to_kicad({"head": {"x": 0, "y": 0}, "shape": smd + [peg]}, name="SW_Pegs")
+        attrs = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("(attr")]
+        assert attrs == [f"(attr {want})"], (peg, attrs)
+        assert not [f for f in FR.check(text, "SW_Pegs.kicad_mod") if f[1] == "attr"], peg   # nothing to hold it on

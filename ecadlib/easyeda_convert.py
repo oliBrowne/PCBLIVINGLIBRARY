@@ -159,7 +159,9 @@ def footprint_to_kicad(data, name=None, notes=None):
     font = f"(effects (font (size {_n(TEXT_H)} {_n(TEXT_H)}) (thickness {_n(TEXT_W)})))"
     out = [f"(footprint {_q(name)} (version 20221018) (generator ecadlib_easyeda) (layer \"F.Cu\")",
            f"  (descr {_q(CREDIT + '; converted by ecadlib.easyeda_convert; check against the datasheet')})",
-           "  (attr smd)" if all(" smd " in p for p in pads) else "  (attr through_hole)",
+           # a plated pin makes it THT; an unplated hole (a locating peg) does not (footprint_adv, footprint_rules, KiCad)
+           "  (attr through_hole)" if any(" thru_hole " in p for p in pads) or not any(" smd " in p for p in pads)
+           else "  (attr smd)",
            f'  (fp_text reference "REF**" (at {_n(cx_)} {_n(ref_y)}) (layer "F.SilkS") {font})',
            f'  (fp_text value {_q(name)} (at {_n(cx_)} {_n(val_y)}) (layer "F.Fab") {font})']
     # ${REFERENCE} on the assembly drawing (KLC F5.2), in the middle of the body, 0.5 .. 1.0 mm to fit it
