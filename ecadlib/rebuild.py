@@ -217,7 +217,7 @@ def build_lock(out, items, state, bom, libs, sources, cache, providers, gen_step
         local = []
         for k in ("symbol", "footprint"):
             for f in _local_inputs((st.get(k) or {}).get("source"), libs):
-                e = {"file": str(Path(f).resolve()), "sha256": file_sha(f)}
+                e = {"file": _rel(f, out), "sha256": file_sha(f)}
                 if e not in local:
                     local.append(e)
         if local:
@@ -346,7 +346,7 @@ def check_inputs(lock, lib_dir, rules, http):
             elif sha(r.text) != e["sha256"]:
                 drift.append({"part": name, "what": "input", "detail": f"{e['url']}: cached response changed"})
         for e in p.get("local") or []:
-            if file_sha(e["file"]) != e["sha256"]:
+            if file_sha(_abs(e["file"], lib_dir)) != e["sha256"]:
                 drift.append({"part": name, "what": "input", "detail": f"{e['file']}: --lib file changed or missing"})
     return drift
 
@@ -421,6 +421,9 @@ def check(lib_dir, keep=None, log=print):
         s["cache"] = str(_abs(s["cache"], lib_dir))
         if s.get("rules_file"):
             s["rules_file"] = str(_abs(s["rules_file"], lib_dir))
+        for p in lk["parts"].values():
+            for e in p.get("local") or []:
+                e["file"] = str(_abs(e["file"], lib_dir))
         (dst / LOCK).write_text(json.dumps(lk), encoding="utf-8")
         new, inputs = rebuild(dst, dst, log=log, clean=True)
         rows = compare(old, new)
