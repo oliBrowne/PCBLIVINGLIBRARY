@@ -41,7 +41,7 @@ from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from . import crosscheck as CC, messages as M, sheetsafe as SS
 from . import fp_tidy as FT, symbol_layout as SL
-from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of
+from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of, two_readings
 
 TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository/tree?ref=master&recursive=true&per_page=100&page={page}"
 SOURCES = ("kicad", "easyeda", "standard", "datasheet")
@@ -436,6 +436,9 @@ class Run:
         for k, rec in (keep or {}).items():
             st[k] = rec
             st["tried"].append(f"resolve: {k} {rec['source']} chosen by user (kept)")
+        both = two_readings(ln.get("value"))
+        if both:                                             # '4,700pF': 4.7 pF or 4.7 nF, so a person says which
+            st["verify"].append(f"value {ln['value'].strip()} reads two ways: {both[0]} or {both[1]}; write it without the comma")
         dnp = (row.get("status") or "").startswith("dnp")   # not assembled, but still on the schematic and the PCB:
         if dnp:                                              # built from the free sources, no paid datasheet read
             st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")

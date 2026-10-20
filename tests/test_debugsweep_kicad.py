@@ -300,6 +300,29 @@ def test_ds2_43_a_value_with_a_thousands_or_decimal_comma_is_not_bound_renamed_o
 
 
 @lite
+def test_ds2_43_a_value_that_reads_two_ways_holds_the_part_until_a_person_checks_it(tmp_path):
+    """A full BOM line (MPN, manufacturer, datasheet) with '4,700pF' passed every check and was released 'ready';
+    only triage.md said the value reads two ways. It is a verify note now: held, once per part (two lines, one part),
+    in release_check.md, review.md and the `ecadlib review` card."""
+    from ecadlib import librarian as L, messages as M
+    bom = tmp_path / "full.csv"
+    ds = "https://search.murata.co.jp/Ceramy/image/img/A01X/G101/ENG/GRM1885C1H472JA01-01.pdf"
+    bom.write_text("Designator,Qty,Value,Footprint,Manufacturer,Manufacturer Part Number,Description,Datasheet\n"
+                   + "".join(f'{d},1,"4,700pF",C_0603_1608Metric,Murata,GRM1885C1H472JA01D,Capacitor ceramic 50V C0G 0603,{ds}\n'
+                             for d in ("C1", "C2")))
+    [it] = L.run(bom, out=tmp_path / "lib", sources=["standard"], offline=True, cache=tmp_path / "cache", log=QUIET)
+    two = [h for h in it["hold_reasons"] if "reads two ways" in h]
+    assert it["status"] == "held" and two == ["verify: value 4,700pF reads two ways: 4.7pF or 4700pF; "
+                                              "write it without the comma"], (it["status"], it["hold_reasons"])
+    for f in ("release_check.md", "review.md"):
+        text = (tmp_path / "lib" / f).read_text(encoding="utf-8")
+        assert text.count("4,700pF reads two ways") == 1, (f, text)
+    [e] = M.explain_all(two)
+    assert (e["code"], e["text"]) == ("librarian.value_two_ways", "The value 4,700pF reads two ways: 4.7pF with a "
+                                      "decimal comma, 4700pF with a thousands comma."), e
+
+
+@lite
 def test_ds2_44_kicad_pcm_packages_a_crlf_checkout_of_a_kicad_export_folder(tmp_path):
     _, out, _ = TP._export(False, tmp_path)
     lf = KP.build(out, out.parent / "pcm_lf", log=QUIET)

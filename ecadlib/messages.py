@@ -258,6 +258,9 @@ CODES = {
     "librarian.family_pinout": ("The pinout of {sym} comes from the {mpn} family table, not from this part's datasheet.",
                                 "Check pins 1-3 against the datasheet, then release it anyway if they match.",
                                 [r"symbol pinout (?P<sym>\S+) from the (?P<mpn>\S+) family table"]),
+    "librarian.value_two_ways": ("The value {value} reads two ways: {first} with a decimal comma, {second} with a thousands comma.",
+                                 "Write the value without the comma on the BOM line, or release it anyway if the part is right.",
+                                 [r"^(?:verify: )?value (?P<value>.+?) reads two ways: (?P<first>.+?) or (?P<second>.+?)(?:; | \()"]),
     # any other `verify` note, after the specific ones above (some of them come as verify notes too)
     "verify.other": ("A person has to check this part first: {detail}.", "Check it, then release it anyway if it is right.",
                      [r"^verify: (?P<detail>.+)"]),
