@@ -394,7 +394,9 @@ def svn_info(target, runner=run_cmd, which=shutil.which):
 def svn_commands(written, removed, message):
     """svn add/delete/commit for exactly the paths (relative to the working copy root) this run touched."""
     written, removed = sorted(set(written)), sorted(set(removed))
-    dirs = sorted({p.split("/")[0] for p in written + removed if "/" in p})
+    # every folder above a path (add --parents schedules new ones, and svn refuses to commit a child of an added
+    # folder that is not committed with it); an unchanged versioned folder at --depth empty commits nothing
+    dirs = sorted({"/".join(p.split("/")[:i]) for p in written + removed for i in range(1, p.count("/") + 1)})
     cmds = []
     if written:
         cmds.append(["svn", "add", "--force", "--parents", *written])

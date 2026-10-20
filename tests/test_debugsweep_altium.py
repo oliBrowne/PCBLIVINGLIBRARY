@@ -66,3 +66,29 @@ def test_ds2_36_menu_build_with_a_non_ascii_win_dir_fails_cleanly_before_writing
         msg = str(e)
     assert "--win-dir" in msg and "codec" not in msg, msg
     assert [p.name for p in out.rglob("*")] == [], "nothing written: no half-built menu folder"
+
+
+# ---------------------------------------------------------------- DS2-37: svn commit of a new nested STEP folder
+def _r0603_with_step(models):
+    """The test plan's R_0603 footprint, written again with an embedded STEP body (ecadlib_3d/<fp>_0/R_0603.step)."""
+    import json
+    from pathlib import Path
+    spec = json.loads((Path(__file__).resolve().parent.parent / "ecadlib/package_specs/R_0603_1608Metric.json").read_text())
+    fp = AL.footprint_from_spec(spec)[0]
+    fp["bodies"] = [{"pts": [(-0.8, -0.4), (0.8, -0.4), (0.8, 0.4), (-0.8, 0.4)], "height": 0.5,
+                     "step": {"name": "R_0603.step", "data": b"ISO-10303-21;\nEND-ISO-10303-21;\n", "rot": (0, 0, 0)}}]
+    AL.write_pcblib(models / "PcbLib/R_0603_1608Metric.PcbLib", [fp])
+
+
+@lite
+def test_ds2_37_svn_commit_targets_every_new_folder_add_parents_schedules(tmp_path):
+    from ecadlib import altium_dblib_sync as S
+    from tests.test_dblib_sync import _base_items, _models, _plan
+    _models(tmp_path)
+    _r0603_with_step(tmp_path / "models")
+    out = S.sync(_plan(tmp_path, _base_items()), tmp_path / "wc", mode="svndblib", svn_url="file:///repo/lib")
+    assert "PcbLib/ecadlib_3d/R_0603_1608Metric_0/R_0603.step" in out["written"], out["written"]
+    commit = next(c for c in S.svn_commands(out["written"], out["removed"], "m") if c[1] == "commit")
+    targets = set(commit[6:])
+    want = {"PcbLib", "SchLib", "PcbLib/ecadlib_3d", "PcbLib/ecadlib_3d/R_0603_1608Metric_0"}
+    assert want <= targets, sorted(want - targets)
