@@ -1,9 +1,9 @@
 """Regression tests for the debug-sweep findings DS2-13 .. DS2-25 (prices, cost quotes, the cross-check's second read).
 Offline: no key, no network, no paid call.
     python3 -m tests.run_all test_debugsweep_dscost"""
-import contextlib, io
+import contextlib, io, json
 
-from ecadlib import costs as C, datasheet as D, llm as LL, rules as RU
+from ecadlib import costs as C, crosscheck as CC, datasheet as D, llm as LL, rules as RU
 from ecadlib.llm import run as LR
 from tests.fixtures_lite import lite
 
@@ -25,3 +25,20 @@ def test_ds2_13_profile_price_holds_on_a_private_network_endpoint(tmp_path, monk
     with contextlib.redirect_stdout(out):
         assert C.main(["--rules", str(f)]) == 0
     assert "gpt-5: $1.25 in / $10 out" in out.getvalue(), out.getvalue()
+
+
+# ---------------------------------------------------------------- DS2-16 / DS2-25: the cross-check's second read
+def _second_read(nom, mn="", mx="", unit="mm", name="body_length"):
+    """A second-read answer (crosscheck.output_schema's dims list) with one dimension, as the API returns it."""
+    pkg = {"name": "VQFN-16", "package_type": "qfn", "pin_count": 16, "unresolved": [],
+           "dims": [{"name": name, "label": "D", "unit": unit, "min": mn, "nom": nom, "max": mx}]}
+    return {"type": "message", "role": "assistant", "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": json.dumps({"package": pkg, "pins": [], "embedded_instructions": []})}]}
+
+
+def test_ds2_16_second_read_takes_a_value_printed_with_its_tolerance():
+    """The first read takes '3±0.1' and '2.9~3.1' as min/nom/max; the second read threw the same text away as 'not a
+    finite number', so every such part ended 'unchecked' after a paid second read."""
+    for nom in ("3±0.1", "2.9~3.1", "3 +0.1/-0.1"):
+        got = CC.parse(_second_read(nom))[0]["body_length"]
+        assert got == (3.0, 2.9, 3.1), (nom, got)
