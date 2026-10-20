@@ -70,6 +70,30 @@ def test_ds2_41_pcblib_smd_footprint_with_npth_pegs_stays_smd(tmp_path):
     assert [ln.strip() for ln in back.splitlines() if ln.strip().startswith("(attr")] == ["(attr through_hole)"], back
 
 
+def test_ds2_42_kicad_pcm_a_second_change_the_same_day_gets_a_newer_version():
+    import datetime
+    _, exp, _ = TP._export(False)
+    out, day = exp.parent / "pcm", datetime.date(2026, 10, 20)
+    build = lambda d: KP.build(exp, out, today=d, base_url="https://x.example/k", log=QUIET)
+    r1 = build(day)
+    f = exp / "lib.pretty" / "R_0603_1608Metric.kicad_mod"
+    f.write_text(f.read_text().replace("(attr smd)", "(attr smd)\n\t(tags \"changed\")", 1))
+    TP._as_written(exp, f)                     # a corrected library, exported again the same day
+    r2 = build(day)
+    assert r2["content_sha256"] != r1["content_sha256"]
+    assert (r1["version"], r2["version"]) == ("2026.10.20", "2026.10.21"), (r1["version"], r2["version"])
+    assert sorted(p.name for p in out.glob("*.zip")) == ["local.ecadlib.lib-2026.10.20.zip", "local.ecadlib.lib-2026.10.21.zip"]
+    assert r2["update_timestamp"] > r1["update_timestamp"], (r1["update_timestamp"], r2["update_timestamp"])
+    assert build(day)["version"] == "2026.10.21"                    # nothing changed since: same version
+    f.write_text(f.read_text().replace('(tags "changed")', '(tags "changed again")', 1))
+    TP._as_written(exp, f)                     # and the next day: newer than the version already out
+    r4 = build(day + datetime.timedelta(days=1))
+    assert r4["version"] == "2026.10.22" and r4["update_timestamp"] > r2["update_timestamp"], r4
+    f.write_text(f.read_text().replace('(tags "changed again")', '(tags "later")', 1))
+    TP._as_written(exp, f)                     # a week on, the date is newer again: today's date
+    assert build(day + datetime.timedelta(days=7))["version"] == "2026.10.27"
+
+
 def test_ds2_44_kicad_pcm_packages_a_crlf_checkout_of_a_kicad_export_folder():
     _, out, _ = TP._export(False)
     lf = KP.build(out, out.parent / "pcm_lf", log=QUIET)
