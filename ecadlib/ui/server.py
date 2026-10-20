@@ -412,7 +412,14 @@ def make_handler(ws: Workspace):
             if u.path in ES.POST_ROUTES:                # setup page (ecadlib.easy_setup)
                 b = self._json()
                 with write_lock if u.path in ES.WRITES else contextlib.nullcontext():
-                    return self._send(200, ES.POST_ROUTES[u.path](ws.root, b))
+                    page_libs = lambda: [str(Path(x).resolve()) for x in ES.ws_libs(ws.root)]
+                    before = page_libs() if u.path == "/api/setup" else None
+                    out = ES.POST_ROUTES[u.path](ws.root, b)
+                    if before is not None and out.get("saved") and not out.get("restart"):
+                        after = page_libs()             # saved here: this server uses the page's folders at once
+                        ws.libs = [x for x in ws.libs if x not in before or x in after] + [
+                            x for x in after if x not in ws.libs]
+                    return self._send(200, out)
             if u.path == "/api/footprint/preview":                # read-only, no lock
                 b = self._json()
                 return self._send(200, ws.preview_footprint(b["spec"], b.get("density")))

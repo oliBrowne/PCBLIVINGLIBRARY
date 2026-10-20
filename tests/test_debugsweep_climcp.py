@@ -173,6 +173,41 @@ def test_ds2_53_desktop_app_and_setup_start_with_the_library_folders_saved_on_th
     assert "--lib" in seen[0] and seen[0][seen[0].index("--lib") + 1] == str(mylib), seen
 
 
+@lite
+def test_ds2_53_setup_page_save_gives_the_running_server_the_library_folders(tmp_path, monkeypatch):
+    """First run: the desktop app starts with no library, the person fills in the setup page and saves to the same
+    workspace (no restart). The running server kept libs [] until they quit and relaunched."""
+    from ecadlib import launcher as LA
+    home = tmp_path.resolve()
+    monkeypatch.setenv("ECADLIB_HOME", home / "home")
+    monkeypatch.chdir(home)
+    mylib = home / "mylib"
+    _sym_lib(mylib / "my.kicad_sym", "MYPART", "My own part")
+    ws = home / "ws"
+    app = LA.App(ws, 0)
+    app.start()
+
+    def call(method, path, body=None):
+        c = http.client.HTTPConnection("127.0.0.1", app.port, timeout=30)
+        data = json.dumps(body).encode() if body is not None else None
+        c.request(method, path, data, {"Host": f"127.0.0.1:{app.port}", "Content-Type": "application/json"})
+        return json.loads(c.getresponse().read())
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):                  # the server's request log
+            info0 = call("GET", "/api/info")
+            saved = call("POST", "/api/setup", {"workspace": str(ws), "tool": "kicad", "libs": [str(mylib)],
+                                                "provider": "none"})
+            info1 = call("GET", "/api/info")
+            call("POST", "/api/setup", {"workspace": str(ws), "tool": "kicad", "libs": [], "provider": "none"})
+            info2 = call("GET", "/api/info")
+    finally:
+        app.stop()
+    assert (info0["libs"], info0["symbols"]) == ([], 0), info0
+    assert saved["saved"] and not saved["restart"], saved
+    assert (info1["libs"], info1["symbols"]) == ([str(mylib)], 1), info1
+    assert (info2["libs"], info2["symbols"]) == ([], 0), info2               # a folder taken off the page goes too
+
+
 # ------------------------------------------------------------------ DS2-54
 @lite
 def test_ds2_54_setup_page_save_keeps_the_workspace_sources_order(tmp_path, monkeypatch):
