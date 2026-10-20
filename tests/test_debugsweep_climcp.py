@@ -270,8 +270,11 @@ def test_ds2_56_a_damaged_schema_stamp_is_unreadable_not_newer(tmp_path):
     with contextlib.redirect_stdout(out):
         assert MG.main([str(ws)]) == 1
     assert "pip install" not in out.getvalue() and "restore" in out.getvalue(), out.getvalue()
-    c = DR.check_formats(ws)
+    assert "delete its folder" not in out.getvalue(), out.getvalue()     # the plan, approvals and sign-offs: only
+    c = DR.check_formats(ws)                                              # the stamp needs restoring or deleting
     assert c["level"] == "FAIL" and "upgrade" not in c["hint"] and "restore" in c["hint"], c
+    assert "delete its folder" not in c["hint"] and MG.STAMP in c["hint"], c
+    assert c["detail"].count(MG.STAMP) == 1, c                            # the path once, not again in full
     MG._CHECKED.clear()
     try:                                       # opening the workspace still stops on it
         MG.guard_tree(ws)

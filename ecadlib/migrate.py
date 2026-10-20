@@ -31,6 +31,8 @@ from .fsutil import write_text_atomic
 STAMP = "ecadlib_schema.json"
 STAMP_FORMAT = 1
 BACKUP = ".ecadlib_backup"
+STAMP_FIX = (f"from {BACKUP}/ or version control, or delete just that file (the folder's other files stay and are "
+             "read as ecadlib 0.3.0 data)")                # a damaged stamp: never its folder (plan, sign-offs)
 
 
 class SchemaTooNew(RuntimeError):
@@ -446,7 +448,9 @@ def main(argv=None):
             nxt.append((f"ecadlib migrate {a.path}", "upgrade them (backups go to .ecadlib_backup/ first)"))
         if any(r["state"] == "new" for r in rows):
             nxt.append(("pip install -U ecadlib", "a file was written by a newer ecadlib"))
-        if any(r["state"] == "error" for r in rows):
+        if any(r["state"] == "error" and r["kind"] == "stamp" for r in rows):
+            nxt.append((f"restore the unreadable {STAMP}", STAMP_FIX))
+        if any(r["state"] == "error" and r["kind"] != "stamp" for r in rows):
             nxt.append(("restore the unreadable file", "from a backup or version control, or delete its folder and run "
                                                         "the step that made it again"))
         t.summary(f"{M.plural(len(rows), 'versioned file')}: {n_old} {verb}, {n_bad} newer or unreadable"
