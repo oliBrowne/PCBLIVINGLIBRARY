@@ -126,3 +126,26 @@ def test_project_check_json_out_stdout_is_only_json(tmp_path, monkeypatch):
     with redirect_stdout(o), redirect_stderr(e):
         assert PC.main(["check", str(tmp_path / "b.kicad_pro"), "--json", "-o", str(tmp_path / "drift")]) == 0
     assert json.loads(o.getvalue())["tool"] == "kicad" and "drift.md" in e.getvalue()
+
+
+# T063: `style learn --from TYPO` exits 2 and leaves the learned house style as it was
+@lite
+def test_style_learn_missing_from_keeps_the_style(tmp_path, monkeypatch):
+    from ecadlib import house_style as HS
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path / "home")
+    pf = tmp_path / "house_style.json"
+    with redirect_stderr(io.StringIO()) as e, redirect_stdout(io.StringIO()):
+        assert HS.main(["--profile", str(pf), "learn", "--from", str(tmp_path / "typo")]) == 2
+    assert "not found" in e.getvalue() and "hint:" in e.getvalue() and not pf.exists()
+
+
+# T064: `init --lib TYPO` exits 2 with a hint and writes no ecadlib.toml
+@lite
+def test_init_missing_lib_writes_nothing(tmp_path, monkeypatch):
+    from ecadlib import rules_infer as RI
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path / "home")
+    with redirect_stderr(io.StringIO()) as e, redirect_stdout(io.StringIO()):
+        assert RI.main(["--lib", "my_lbi", "--yes", "--no-doctor"], inp=lambda *a: "") == 2
+    assert "hint:" in e.getvalue() and not (tmp_path / "ecadlib.toml").exists()
