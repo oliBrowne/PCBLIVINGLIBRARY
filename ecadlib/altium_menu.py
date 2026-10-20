@@ -375,9 +375,14 @@ def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_runnin
 
 def dxpprf_bytes(win_dir):
     """A preferences file (zip of DXP.RCS + IncludedFiles.ini, as Menu_SVN.DXPPrf). Fixed timestamps: same bytes each run."""
+    rcs = rcs_text(win_dir)
+    bad = "".join(dict.fromkeys(c for c in rcs if ord(c) > 127))
+    if bad:                                  # plain ASCII, so any code page reads it
+        raise ValueError(f"--win-dir {win_dir!r}: the menu file can only name a folder in plain ASCII ({bad!r}); "
+                         "use another folder")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
-        for name, data, comp in (("DXP.RCS", rcs_text(win_dir).encode("ascii"), zipfile.ZIP_DEFLATED),
+        for name, data, comp in (("DXP.RCS", rcs.encode("ascii"), zipfile.ZIP_DEFLATED),
                                  ("IncludedFiles.ini", b"[WorkspaceManager:Customizations]\r\nImportMode=0\r\nFileCount=1\r\n"
                                                        b"FileName0=DXP.RCS\r\n", zipfile.ZIP_STORED)):
             zi = zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0))
@@ -500,9 +505,11 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
     derived = win_dir is None and os.name == "nt"
     if derived:
         win_dir = str(out.resolve())
+    prefs = None
     if win_dir:
         try:
             win_dir = check_win_dir(win_dir)
+            prefs = dxpprf_bytes(win_dir)       # before any file is written: a bad folder leaves nothing half-built
         except ValueError:
             if not derived:
                 raise
@@ -529,10 +536,9 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
         ini.write_bytes(ini_text(workspace or "workspace", library or "library", name, command, hidden, timeout_s,
                                  port, offline).encode("utf-8"))
         written.append(INI)
-    if win_dir:
-        data = dxpprf_bytes(win_dir)
-        if not (out / PREFS).is_file() or (out / PREFS).read_bytes() != data:
-            (out / PREFS).write_bytes(data)
+    if prefs:
+        if not (out / PREFS).is_file() or (out / PREFS).read_bytes() != prefs:
+            (out / PREFS).write_bytes(prefs)
             written.append(PREFS)
     problems = project_problems(files)
     rep = {"folder": str(out), "project": PROJECT, "procedures": procedures(), "menu_entries": [p for p, _, _ in PROCS], "written": written,

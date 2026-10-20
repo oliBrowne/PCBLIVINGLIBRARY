@@ -51,4 +51,18 @@ def test_ds2_35_hand_row_with_a_ref_altium_cannot_store_is_reported_not_fatal(tm
     bad = [r for r in out["results"] if r["name"] == "HAND-R1" and r["action"] == "error"]
     assert len(bad) == 1 and "Footprint Ref 'R_0603→'" in bad[0]["detail"] and bad[0]["table"] == "Resistors", out["results"]
     kept = {r["Part Number"]: r for r in S.read_tables(x)["Resistors"][1]}
-    assert kept["HAND-R1"]["Footprint Ref"] == "R_0603→", kept
+    assert kept["HAND-R1"]["Footprint Ref"] == "R_0603\u2192", kept
+
+
+# ---------------------------------------------------------------- DS2-36: altium-menu build with an accented folder
+@lite
+def test_ds2_36_menu_build_with_a_non_ascii_win_dir_fails_cleanly_before_writing(tmp_path):
+    from ecadlib import altium_menu as AM
+    out = tmp_path / "menu"
+    try:
+        AM.build(out, None, None, win_dir="C:\\Users\\Jos\u00e9\\ecadlib-menu")
+        raise AssertionError("a menu entry the .DXPPrf cannot hold must be refused")
+    except ValueError as e:
+        msg = str(e)
+    assert "--win-dir" in msg and "codec" not in msg, msg
+    assert [p.name for p in out.rglob("*")] == [], "nothing written: no half-built menu folder"
