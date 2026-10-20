@@ -197,3 +197,15 @@ def test_t117_t118_estimates_send_nothing_and_say_rough(tmp_path, monkeypatch):
     with mock.patch.object(rd, "_plain", lambda m: False):
         est = rd.estimate([rd.job("TESTPART", [("https://a/ds.pdf", "BOM")])])
     assert sent == [] and not est["exact_input"] and "rough: pages x" in D.format_estimate(est)
+
+
+# T120: doctor never says "OK ai model <the default model>" when ecadlib.toml (its [ai] table) does not load
+@lite
+def test_t120_doctor_ai_line_is_not_ok_when_rules_do_not_load(tmp_path):
+    from ecadlib import doctor as DO
+    f = tmp_path / "ecadlib.toml"
+    f.write_text('[ai]\nprovider = "openai-compatible"\nbase_url = "http://llm.example.com/v1"\nmodel = "my-model"\n')
+    checks = DO.run(workspace=str(tmp_path / "ws"), rules_path=str(f), environ={})["checks"]
+    rules = next(c for c in checks if c["check"] == "rules")
+    ai = next(c for c in checks if c["check"] == "ai model")
+    assert rules["level"] == "FAIL" and ai["level"] != "OK" and "claude-opus" not in ai["detail"], (rules, ai)

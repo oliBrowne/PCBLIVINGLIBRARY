@@ -438,7 +438,9 @@ def run(workspace=None, libs=(), rules_path=None, environ=None, altium_menu=None
     rc, rules = check_rules(rules_path, workspace if Path(workspace).is_dir() else None)
     checks = [check_python()] + check_packages(rules=rules)
     checks.append(rc)
-    checks += check_ai(rules, environ)
+    checks += check_ai(rules, environ) if rules is not None else \
+        [_c("ai model", "WARN", "not checked: ecadlib.toml did not load, so the model it names is unknown",
+            "fix the rules line above, then run doctor again")]           # never the default model as OK
     checks += check_keys(rules, environ)
     checks += check_key_safety(rules, environ)
     checks.append(check_workspace(workspace))
