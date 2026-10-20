@@ -245,9 +245,10 @@ def read_bom(path, columns=None, rules=None, root=None):
         from . import rules as RU
         from .altium_project import bom_lines
         return bom_lines(p, variant=os.environ.get("ECADLIB_VARIANT") or None, rules=RU.resolve(rules, p.parent), root=root)
-    if p.suffix.lower() == ".kicad_sch" or (p.suffix.lower() in (".xml", ".net") and _BI().is_kicad_netlist(p)):
+    if p.suffix.lower() == ".kicad_sch" or (p.suffix.lower() in (".xml", ".net") and _BI().is_kicad_netlist(p)) \
+            or (p.suffix.lower() == ".sch" and _BI().is_kicad5_sch(p)):      # KiCad 5: its own "save in KiCad 6+" message
         bi = _BI()                                                # KiCad schematic / netlist: no header guessing
-        return bi.read_kicad_sch(p, columns, root) if p.suffix.lower() == ".kicad_sch" else bi.read_kicad_netlist(p, columns)
+        return bi.read_kicad_sch(p, columns, root) if p.suffix.lower() in (".kicad_sch", ".sch") else bi.read_kicad_netlist(p, columns)
     if p.suffix.lower() in (".kicad_pro", ".kicad_pcb", ".kicad_prl"):   # a KiCad project: its root schematic
         sch = p.with_suffix(".kicad_sch")
         if sch.is_file():

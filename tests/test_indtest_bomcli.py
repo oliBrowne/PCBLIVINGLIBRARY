@@ -207,3 +207,20 @@ def test_stdparts_help_is_a_whole_sentence():
         except SystemExit:
             pass
     assert "the symbol) offline and deterministically" in " ".join(o.getvalue().split())
+
+
+# T076: a KiCad 5 .sch and a DOCTYPE netlist reach their own messages through read_bom (triage, librarian)
+@lite
+def test_read_bom_kicad5_sch_and_doctype_netlist(tmp_path):
+    from ecadlib import bom_triage as T
+    cases = (("old.sch", "EESchema Schematic File Version 4\nEELAYER 30 0\nEELAYER END\n$EndSCHEMATC\n", "KiCad 5"),
+             ("evil.xml", '<?xml version="1.0"?>\n<!DOCTYPE export [ <!ENTITY x SYSTEM "file:///etc/hostname"> ]>\n'
+                          '<export version="E"><components><comp ref="R1"><value>&x;</value></comp></components></export>\n',
+              "DOCTYPE"))
+    for name, text, want in cases:
+        (tmp_path / name).write_text(text)
+        try:
+            T.read_bom(tmp_path / name)
+            raise AssertionError(f"{name} read")
+        except ValueError as e:
+            assert want in str(e), e
