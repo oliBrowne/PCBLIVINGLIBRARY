@@ -246,3 +246,17 @@ def test_mcp_http_on_a_taken_port_names_the_address(tmp_path):
         busy.close()
     assert rc == 2 and f"127.0.0.1:{port}" in err.getvalue() and f"--port {port + 1}" in err.getvalue(), err.getvalue()
     assert "disk" not in err.getvalue()
+
+
+# T104
+def test_expected_mcp_failures_are_not_reported_as_bugs():
+    """An --offline cache miss and a refused API key came back as "Something went wrong (...cut at 160 characters).
+    Run it again with --debug and report the output": the agent was told to report a bug instead of what to fix."""
+    import contextlib, io
+    from ecadlib import datasheet as D, mcp_server as M
+    key = D.APIError("HTTP 401: " + D.HINTS[401], status=401)
+    assert M._error_text(key) == str(key) and str(key).endswith("the variable it is read from")
+    miss = M._error_text(IOError("kicad-symbols/Connector.kicad_symdir/USB_C_Receptacle.kicad_sym: offline: not in cache"))
+    assert miss.endswith("not in cache; run the server without --offline to fetch it") and "report" not in miss, miss
+    with contextlib.redirect_stderr(io.StringIO()):          # a real bug still says so (its traceback goes to stderr)
+        assert "report" in M._error_text(RuntimeError("boom")) and "report" in M._error_text(OSError(5, "I/O error"))

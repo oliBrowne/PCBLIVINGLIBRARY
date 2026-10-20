@@ -962,6 +962,12 @@ def _error_text(e):
     from .visual_check import VisualCheckError          # e.g. Pillow not installed: the fix, not a bug report
     if isinstance(e, (ValueError, KeyError, FileExistsError, FileNotFoundError, PermissionError, VisualCheckError)):
         return e.args[0] if isinstance(e, KeyError) and e.args else str(e)   # a wrong id / path is the caller's
+    from .datasheet import DatasheetError               # a refused API key, a datasheet not read: says what to fix
+    if isinstance(e, DatasheetError):
+        return str(e) or type(e).__name__
+    if type(e) is OSError and e.errno is None and e.args and isinstance(e.args[0], str):   # a fetch ecadlib refused
+        m = e.args[0]                                   # (--offline cache miss, a library file not found upstream)
+        return m + ("; run the server without --offline to fetch it" if "offline" in m else "")
     import errno
     if isinstance(e, OSError) and e.errno in (errno.ENAMETOOLONG, errno.ENOTDIR, errno.EINVAL, errno.ELOOP):
         return f"not found: that path is not valid here ({e.strerror or type(e).__name__}); check the BOM / file path"
