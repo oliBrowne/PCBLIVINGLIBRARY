@@ -191,7 +191,7 @@ def run_exporter(name, plan, out_dir, rules=None, eps=None):
     # `ecadlib part approve` with no released revision is left out
     from . import change_gate as CG, release_check as RC
     with CG.publishing(Path(plan).parent):
-        items = CG.settled_plan(plan, f"plugin:{name}", rules=rules, log=lambda *a, **k: None)
+        items = CG.settled_plan(plan, f"plugin:{name}", rules=rules)
         items = [it for it in items if not RC.change_hold(it, Path(plan).parent)]
         for it in items:                       # the release check again, on the files as they are: `ready` is not enough
             why = RC.publish_problems(it, Path(plan).parent, rules) if it.get("status", "ready") == "ready" else []

@@ -4,7 +4,9 @@ The librarian writes one <out>/models/PcbLib/<name>.PcbLib per footprint name, a
 footprint field. Two BOM lines can name the same package for different land patterns (`SOIC-14` on a 3.9 mm and on
 a 5.3 mm body; `QFN-16` at 0.5 and 0.65 mm pitch). Before this module the second part silently got the first
 part's file. Now a part shares a file only when the footprints are the same: the same pads, pad shapes, holes and
-courtyard (the geometry hash `ecadlib dedupe` uses). Otherwise it gets its own name, tried in this order:
+courtyard (the geometry hash `ecadlib dedupe` uses), and, when both came from a KiCad or standard footprint, the same
+footprint name: KiCad's L_0603 and LED_0603 (C_0201 and LED_0201) have the same pads, but an inductor released on
+the LED's polarity mark and 3D body is wrong, and the LED's symbol is chosen by its footprint. Otherwise it gets its own name, tried in this order:
 
   1. the real package name of its footprint (the KiCad / standard / EasyEDA footprint name), when it starts with
      the BOM name, else <BOM name>_<real name>; e.g. SOIC-14 -> SOIC-14_5.3x10.2mm_P1.27mm
@@ -76,13 +78,25 @@ def unchecked_share(rec):
     return not rec.get("hash") and not rec.get("chosen") and any(str(n).startswith("shared with ") for n in rec.get("notes", []))
 
 
+def lib_name(source):
+    """The library footprint a KiCad / standard source names (Inductor_SMD:L_0603_1608Metric -> L_0603_1608Metric), else ""."""
+    src = str(source or "")
+    return src.rsplit(":", 1)[-1].lower() if src.startswith(("kicad:", "standard:")) else ""
+
+
+def same_fp(rec, h, source, out, cache):
+    """A footprint record holds the same footprint: same pads, and the same library footprint when both name one."""
+    a, b = lib_name(rec.get("source")), lib_name(source)
+    return hash_of(rec, out, cache) == h and (not a or not b or a == b)
+
+
 def pick(written, models, name, text, source, part, out, cache):
     """-> (name, path, record to share or None). written: {PcbLib path: footprint record} of this run."""
     h, real = digest(text), real_name(text, source)
     fold = lambda s: AL.file_stem(s).casefold()  # Windows / macOS file systems ignore case: SOIC-8 and soic-8 are one file
     for rec in written.values():               # same pads under a name already made for this BOM name: share it
         f = str(rec.get("file") or "")
-        if f.endswith(".PcbLib") and fold(base_of(rec)) == fold(name) and hash_of(rec, out, cache) == h:
+        if f.endswith(".PcbLib") and fold(base_of(rec)) == fold(name) and same_fp(rec, h, source, out, cache):
             return rec.get("name") or Path(f).stem, str(Path(out) / f), rec, h
     taken = {str(p).casefold(): (p, rec) for p, rec in written.items()}
     cands = candidates(name, real, part)
@@ -91,7 +105,7 @@ def pick(written, models, name, text, source, part, out, cache):
         have, rec = taken.get(pcb.casefold(), (pcb, None))
         if rec is None:                        # nobody in this run has it (a file left from an earlier run of
             return c, pcb, None, h             # this part, or of a part no longer in the BOM, is rewritten)
-        if hash_of(rec, out, cache) == h:      # its file under its name (the case it was written in)
+        if same_fp(rec, h, source, out, cache):   # its file under its name (the case it was written in)
             return rec.get("name") or c, have, rec, h
     c = cands[-1]                              # <name>_<part> is this part's own: rewrite it
     return c, str(Path(models) / "PcbLib" / f"{AL.file_stem(c)}.PcbLib"), None, h

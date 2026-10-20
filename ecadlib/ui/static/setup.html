@@ -247,7 +247,7 @@ $("savekey").onclick = async () => {
 };
 $("checkkey").onclick = async () => {
   msg("aimsg", "checking with " + esc(prov.label) + " ...", "info");
-  try { const r = await api("/api/setup/key/check", {provider: prov.id, model: $("model").value}); msg("aimsg", esc(r.message), r.ok ? "ok" : "bad"); }
+  try { const r = await api("/api/setup/key/check", {provider: prov.id, model: $("model").value, key: $("key").value.trim()}); msg("aimsg", esc(r.message), r.ok ? "ok" : "bad"); }
   catch (e) { msg("aimsg", esc(e.message), "bad"); }
 };
 

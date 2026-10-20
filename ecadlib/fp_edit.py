@@ -15,7 +15,7 @@ Edits live in <plan dir>/footprint_edits.json ({part: {rename: {old: new}, same_
 applied every time the librarian builds the part from its datasheet answer (librarian.put_datasheet), so a re-run
 of the librarian on the plan builds it. The edit is noted in the part's review notes, with who made it.
 API: load(base), apply(edits, res) -> (res, notes), table(plan, part, edits) -> {pads, problems, ...}."""
-import argparse, copy, datetime, getpass, json, re, sys
+import argparse, copy, datetime, json, re, sys
 from pathlib import Path
 
 from .fsutil import write_text_atomic
@@ -178,6 +178,7 @@ def main(argv=None):
     ap.add_argument("plan", help="the librarian's plan.json (or its folder)")
     ap.add_argument("--part", required=True, help="plan item / MPN")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--user", help="who you are (default: $ECADLIB_USER, then git config user.name/email)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("show", help="the pad table and the check's problems")
     r = sub.add_parser("rename", help="renumber pads: OLD=NEW ...")
@@ -211,11 +212,8 @@ def main(argv=None):
                 if any(len(g) < 2 for g in gs):
                     ap.error("same-net: give at least two pads per group, e.g. 1,26")
                 e["same_net"] = (e.get("same_net") or []) + gs
-            try:
-                user = getpass.getuser()
-            except Exception:
-                user = "unknown"
-            e.update(by=user, at=datetime.datetime.now().isoformat(timespec="seconds"))
+            from .approvals import identity
+            e.update(by=identity(a.user, cwd=base), at=datetime.datetime.now().isoformat(timespec="seconds"))
             edits[a.part] = e
         save(base, edits)
     t = table(a.plan, a.part, edits)

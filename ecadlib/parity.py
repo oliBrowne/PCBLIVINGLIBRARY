@@ -1171,7 +1171,7 @@ def _print(rep, out):
              f"{c['database_errors']} differences" if rep.get("database_rows") else ""), file=out)
 
 
-def print_result(rep, stem, plan, t=None):
+def print_result(rep, stem, plan, t=None, kicad=None, name=None, altium=None, rules=None, include_held=False):
     """Terminal view: a row per part (KiCad and Altium match / differ, with the first difference in plain words;
     -v: what was compared and every difference), database rows, then the summary."""
     from . import messages as M, term as TM
@@ -1192,7 +1192,10 @@ def print_result(rep, stem, plan, t=None):
     head = (f"KiCad and Altium: {c['match']} match, {c['mismatch']} differ" + (f", {c['skipped']} skipped" if c["skipped"] else "")
             + (f"; database rows {rep['database_rows']['kicad']} KiCad / {rep['database_rows']['altium']} Altium, "
                f"{c['database_errors']} differences" if rep.get("database_rows") else ""))
-    nxt = [(f"ecadlib parity {plan} -v", "every difference, part by part")] if c["mismatch"] else []
+    from .cliutil import shell_word as q
+    again = " ".join([q(plan)] + [f"{k} {q(v)}" for k, v in (("--kicad", kicad), ("--name", name), ("--altium", altium),
+                                                              ("--rules", rules)) if v] + (["--include-held"] if include_held else []))
+    nxt = [(f"ecadlib parity {again} -v", "every difference, part by part")] if c["mismatch"] else []   # the same run
     t.summary(head, written=[(str(report_file(stem, ".md")), "parity report")], next=nxt)
 
 
@@ -1267,7 +1270,7 @@ def main(argv=None):
     if a.json:
         print(json.dumps(dict(rep, report=str(report_file(stem, ".md"))), indent=2, default=str))
     else:
-        print_result(rep, stem, a.plan)
+        print_result(rep, stem, a.plan, kicad=a.kicad, name=a.name, altium=a.altium, rules=a.rules, include_held=a.include_held)
     return 0 if rep["ok"] else 1
 
 

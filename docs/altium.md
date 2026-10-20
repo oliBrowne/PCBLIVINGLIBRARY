@@ -238,7 +238,11 @@ your library / a source can supply / needs a footprint, then Later or Fill the l
 request) and Open review queue. The window does not block KiCad. It runs `ecadlib kicad-menu run-job` in the background
 (`ecadlib/kicad_menu.py`) and reads its `progress.ini` / `result.ini`, as the Altium dialog does. Per project,
 `<project>/ecadlib-work/` is the workspace (one parts list for every part added or filled, so one plan makes the whole
-library) and `<project>/ecadlib/` the KiCad library, added to the project's tables as `${KIPRJMOD}/ecadlib/...`.
+library) and `<project>/ecadlib/` the KiCad library, added to the project's tables as `${KIPRJMOD}/ecadlib/...`
+(after Fill the library now and Add part). A project table that already has an `ecadlib` row for another library
+(say `kicad-export -o <project>`'s `${KIPRJMOD}/ecadlib.pretty`) is not changed: the window names that row, to rename
+or remove. The BOM check counts a line as in your library when its part number is in `<project>/ecadlib/*.kicad_sym`.
+Open review queue runs one web UI per project: when the port is taken by another project's UI, the next free port.
 KiCad gives plugins no menu or toolbar slot in the schematic editor; its Tools > Generate BOM can run
 `ecadlib kicad-menu check-bom "%I"` there, which checks the netlist against the library and opens the report.
 Tried in KiCad 7.0.11: toolbar button, BOM check, fill and add part with the footprint placed.
@@ -352,7 +356,7 @@ Altium is busy with another script, wake tries again every minute, five times. W
 it, the next menu entry asks whether to put the finished job in. Its output is in `jobs\<id>\wake.txt`.
 
 **Install.** The quick way: close Altium and run `ecadlib altium-menu install-menu --out <folder>` (the setup
-page's Add to Altium does this on Windows). It merges the ecadlib commands and the four menu insertions into Altium's
+page's Add to Altium does this on Windows; from WSL or Linux it uses the Windows folder `build --win-dir` recorded). It merges the ecadlib commands and the four menu insertions into Altium's
 own menu file, `%APPDATA%\Altium\Altium Designer {GUID}\DXP.RCS` (backed up next to it first; other customisations
 are kept; `--remove` takes ours out), so the "ecadlib" menu sits in the top menu bar before Window. Altium must be
 closed because it writes that file when it closes. The menu entries run the script project by its path, so it need

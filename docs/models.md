@@ -83,7 +83,8 @@ that narrows:
 Frontier models get today's single structured call with the PDF and nothing extra. The feedback retry is the one
 support rail Claude gains: when an answer fails datasheet's checks *where the route would otherwise stop* (top of the
 ladder, every page sent), the same request goes once more with the answer and the checks' exact errors appended
-(append-only, so the cached PDF prefix is reused), within `[datasheet] max_attempts`; the better answer is kept, and
+(append-only, so the cached PDF prefix is reused), within `[datasheet] max_attempts`; after a Message Batch answer
+that turn is sent synchronously, at synchronous rates, when the batch is collected; the better answer is kept, and
 the prompt says never to change a printed value to pass a check. `[ai] feedback_retry = false` turns it off. A guided
 model's answer that still fails the checks at the end of its route is not written: the part is held with the reason
 (`hold_on_doubt`), and the visual proof never takes a small model's "pass" as proof. What ran is in every part's

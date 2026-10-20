@@ -262,9 +262,10 @@ def read_bom(path, columns=None, rules=None, root=None):
         from . import rules as RU
         from .altium_project import bom_lines
         return bom_lines(p, variant=os.environ.get("ECADLIB_VARIANT") or None, rules=RU.resolve(rules, p.parent), root=root)
-    if p.suffix.lower() == ".kicad_sch" or (p.suffix.lower() in (".xml", ".net") and _BI().is_kicad_netlist(p)):
+    if p.suffix.lower() == ".kicad_sch" or (p.suffix.lower() in (".xml", ".net") and _BI().is_kicad_netlist(p)) \
+            or (p.suffix.lower() == ".sch" and _BI().is_kicad5_sch(p)):      # KiCad 5: its own "save in KiCad 6+" message
         bi = _BI()                                                # KiCad schematic / netlist: no header guessing
-        return bi.read_kicad_sch(p, columns, root) if p.suffix.lower() == ".kicad_sch" else bi.read_kicad_netlist(p, columns)
+        return bi.read_kicad_sch(p, columns, root) if p.suffix.lower() in (".kicad_sch", ".sch") else bi.read_kicad_netlist(p, columns)
     if p.suffix.lower() in (".kicad_pro", ".kicad_pcb", ".kicad_prl"):   # a KiCad project: its root schematic
         sch = p.with_suffix(".kicad_sch")
         if sch.is_file():
@@ -1023,7 +1024,8 @@ def write_reports(rows, mapping, provs, http, out, bom):
         h = re.sub(r"^https?://([^/]+).*", r"\1", u)
         hosts.setdefault(h, []).append(("cache " if cached else "") + str(st))
     md += ["", "## HTTP (this run)", ""] + [f"- `{h}`: {len(v)} requests -> {sorted(set(v))}" for h, v in hosts.items()]
-    report_file(out, ".md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    report_file(out, ".md").write_text("\n".join(md) + "\n", encoding="utf-8",   # a path from a C-locale non-ASCII folder
+                                       errors="surrogateescape")                 # keeps its own (UTF-8) bytes
     return counts
 
 
@@ -1048,14 +1050,7 @@ def main(argv=None):
 
     from . import rules as RU
     from . import plugins as PL
-    http = CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline)
     rules = RU.load(a.rules, start=Path(a.out).parent)
-    try:
-        provs = [] if a.providers is not None and not a.providers.strip(",; ") else \
-            [c(http) for c in PL.select(a.providers, rules, default=P.DEFAULT_ORDER)]   # --providers "": none (local only)
-    except ValueError as e:
-        print(f"ecadlib triage: {e}", file=sys.stderr)
-        return 2
     from .firstrun import bom_hint
     try:
         lines, mapping = read_bom(a.bom, RU.bom_columns(rules), rules)
@@ -1064,6 +1059,13 @@ def main(argv=None):
         return 2
     if not lines:
         print(f"cannot read BOM: {a.bom}: the BOM has a header but no part rows" + bom_hint("no part rows"), file=sys.stderr)
+        return 2
+    http = CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline)    # after the BOM: a bad one writes nothing
+    try:
+        provs = [] if a.providers is not None and not a.providers.strip(",; ") else \
+            [c(http) for c in PL.select(a.providers, rules, default=P.DEFAULT_ORDER)]   # --providers "": none (local only)
+    except ValueError as e:
+        print(f"ecadlib triage: {e}", file=sys.stderr)
         return 2
     index = KiCadIndex(a.lib)
     say = (lambda *x: None) if a.json else print

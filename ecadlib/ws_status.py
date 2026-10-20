@@ -123,15 +123,33 @@ def status(root):
         except RU.RulesError:
             rf = None
     out["rules"] = (rel(rf) if Path(rf).resolve().is_relative_to(root) else str(rf)) if rf else None
+    if rf:                                     # a rules file that does not load is a damaged file too
+        from . import rules as RU
+        try:
+            RU.load(rf)
+        except RU.RulesError as e:
+            m = str(e)
+            problems.append(out["rules"] + m[len(Path(rf).name):] if m.startswith(Path(rf).name) else f"{out['rules']}: {m}")
     up = root / "uploads"
     out["boms"] = len(_files(up, "*")) + len(_files(up, "*/*")) if up.is_dir() else 0
 
     from . import timing as TI
     rv, reasons = out["review"], {}
+    from . import migrate as MG
     for pf in _plans(root):
+        try:                                   # a plan from a newer ecadlib is named and skipped, never misread
+            v, by = MG.folder_version(pf.parent, "plan")
+        except MG.SchemaTooNew:
+            problems.append(f"{rel(pf.parent / MG.STAMP)}: unreadable, or from a newer ecadlib: {rel(pf)} not counted")
+            continue
+        if v > MG.KINDS["plan"].current:
+            problems.append(f"{rel(pf)}: made by ecadlib {by or '?'} (plan schema {v}; this one reads up to "
+                            f"{MG.KINDS['plan'].current}): not counted; {MG.UPGRADE}")
+            continue
+        n = len(problems)
         items = _json(pf, problems, root)
-        if not isinstance(items, list):
-            if items is not None:
+        if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+            if len(problems) == n:             # valid JSON but null, {} or [1, 2, 3] (unreadable: named by _json)
                 problems.append(f"{rel(pf)}: not a plan (expected a list of parts)")
             continue
         st = [i.get("status") for i in items if isinstance(i, dict)]

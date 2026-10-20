@@ -672,7 +672,8 @@ def check_pad_table(spec, pads=None):
         row = [p for p in pins if abs(p["y"] - p1["y"]) < 0.01]
         col = [p for p in pins if abs(p["x"] - p1["x"]) < 0.01]
         ends = lambda g, k: abs(p1[k] - min(q[k] for q in g)) < 0.01 or abs(p1[k] - max(q[k] for q in g)) < 0.01
-        if (len(row) >= 3 and not ends(row, "x")) and (len(col) >= 3 and not ends(col, "y")):
+        mid_r, mid_c = len(row) >= 3 and not ends(row, "x"), len(col) >= 3 and not ends(col, "y")
+        if (mid_r and (mid_c or len(col) == 1)) or (mid_c and len(row) == 1):     # a single row/column counts too
             add("warning", "pin1", f"pad {p1['num']} is in the middle of its row: pin 1 is normally at an end (check numbering)")
         if t.get("origin") == "pin1":
             src = next(r for r in raw if _num(r.get("number")) == p1["num"])
@@ -1000,11 +1001,15 @@ def _header(spec, density):
     pads, extra = [], []
     if spec.get("mount", "tht") == "tht":
         drill = _dim(spec["drill"])[1] if spec.get("drill") else HEADER_TH[key][0] if abs(key - e) < 0.01 else None
-        dia = _dim(spec["land_diameter"])[1] if spec.get("land_diameter") else HEADER_TH[key][1] if abs(key - e) < 0.01 else None
+        table = abs(key - e) < 0.01 and abs(drill - HEADER_TH[key][0]) < 1e-6 if drill is not None else False
+        dia = _dim(spec["land_diameter"])[1] if spec.get("land_diameter") else HEADER_TH[key][1] if table else None
         if drill is None:
             raise ValueError(f"no default drill for a {e:g} mm pitch header: give drill (and land_diameter)")
-        if dia is None:
+        if dia is None:                                 # a custom drill gets its own land, not the table's
             dia = round(min(drill + 2 * TH_RING, e - 0.5), 2)
+        if (dia - drill) / 2 < TH_RING_MIN - 1e-6:
+            raise ValueError(f"pin_header: drill {drill:g} mm leaves a {(dia - drill) / 2:.3f} mm ring in a {dia:g} mm land "
+                             f"(need >= {TH_RING_MIN} mm): drill and land_diameter are in mm, not mils")
         for k in range(n):
             r, c = divmod(k, cols)
             pads.append({"num": str(k + 1), "kind": "thru_hole", "shape": "rect" if k == 0 else "circle", "x": _r4(c * e),

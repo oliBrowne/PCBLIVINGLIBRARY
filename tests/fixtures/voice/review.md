@@ -51,7 +51,7 @@ Symbol from: KiCad library (R) · Footprint from: KiCad library (SOIC-8_3.9x4.9m
 ### NE555DR (waiting for sign-off)
 
 - Waiting for sign-off (1 approval from role librarian).  
-  **Next:** Ask a reviewer to approve it in the review queue.
+  **Next:** Ask a reviewer to approve it (Approve in step 2 of the web UI, or `ecadlib approve`).
 
 Symbol from: KiCad library (R) · Footprint from: KiCad library (R_0603_1608Metric) · KiCad and Altium: match · Height: 0.45 mm · Datasheet: <https://example.com/ds.pdf>
 

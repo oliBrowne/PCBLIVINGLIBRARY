@@ -29,14 +29,13 @@ STATUS_ORDER = ["needs_footprint_generation", "unverified (source unreachable)",
 
 
 UPLOAD_DIR = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")      # the folder save_upload makes for each upload
+STYLE_OFFLINE = "--offline: the model is not asked to write the house style guide; run without --offline to have it write it"
 
 
 class Workspace:
     def __init__(self, root="ecadlib_workspace", libs=(), providers=None, offline=False):
         self.root = Path(root).resolve()
-        for d in ("uploads", "reports", "altium", "altium365", "footprints/ecadlib.pretty",
-                  "altium_models/PcbLib", "altium_models/SchLib"):
-            (self.root / d).mkdir(parents=True, exist_ok=True)
+        self.ensure_folders()
         from . import migrate as MG                      # files from a newer ecadlib: one clear error, nothing misread
         MG.guard_tree(self.root)
         self.gen_dir = self.root / "footprints" / "ecadlib.pretty"
@@ -46,14 +45,21 @@ class Workspace:
         self._providers_given = bool(providers)          # else [providers] order in the rules decides (ecadlib.plugins)
         self.offline = offline
 
+    def ensure_folders(self):
+        """The workspace folders, made again when the folder was deleted or moved while a front end runs."""
+        for d in ("uploads", "reports", "altium", "altium365", "footprints/ecadlib.pretty",
+                  "altium_models/PcbLib", "altium_models/SchLib"):
+            (self.root / d).mkdir(parents=True, exist_ok=True)
+
     # ------------------------------------------------------------------ paths
-    def safe_name(self, name, strict=False):
-        """A plain file name. Uploads keep only their base name; footprint names (strict) with a path
-        separator are refused, so "SOIC-8/TI_D" can't quietly become "TI_D" and collide with another part."""
+    def safe_name(self, name, strict=False, what="footprint"):
+        """A plain file name. Uploads keep only their base name; footprint / symbol names (strict; what names which in
+        the refusal) with a path separator are refused, so "SOIC-8/TI_D" can't quietly become "TI_D" and collide
+        with another part."""
         name = str(name)
         if strict and ("/" in name or "\\" in name):
             plain = re.sub(r"[/\\]+", "_", name)
-            raise ValueError(f"footprint name {name!r} contains a path separator; use a plain name such as {plain!r}")
+            raise ValueError(f"{what} name {name!r} contains a path separator; use a plain name such as {plain!r}")
         base = re.split(r"[/\\]", name)[-1]
         stem, suf = os.path.splitext(base)                 # the suffix picks the reader: never lose it ('部品表.xlsx')
         if not re.fullmatch(r"\.[A-Za-z][A-Za-z0-9_]{0,11}", suf):   # not a file type ('P2.54mm_Vertical'): no split
@@ -114,7 +120,7 @@ class Workspace:
         full path for any other location, so /projA/BOM.csv and /projB/BOM.csv don't share (and overwrite) one triage. A named
         folder (uploads/demo/) keeps <stem>_<folder>."""
         bom_path = Path(bom_path).resolve()
-        h = hashlib.sha1(str(bom_path).encode()).hexdigest()[:8]
+        h = hashlib.sha1(os.fsencode(str(bom_path))).hexdigest()[:8]   # the path as bytes: also a C-locale non-ASCII one
         if bom_path.parent == self.root / "uploads":
             # a flat uploads/<stem>_<dir>.csv would share uploads/<dir>/<stem>.*'s key (and its librarian folder,
             # plan and sign-offs): uploads now always go in a folder, so the flat file gives way and gets a hash
@@ -150,7 +156,14 @@ class Workspace:
                 "altium365": {"token": bool(UC.secret("NEXAR_TOKEN"))},
                 "rules": (lambda f: self._label(f) if f else None)(self.rules_in_use()),
                 "altium_models": {k: sorted(p.stem for p in (self.models / k).glob(f"*.{k}")) for k in ("PcbLib", "SchLib")},
-                "boms": self._uploaded_boms()}
+                "boms": (boms := self._uploaded_boms()), "planned": [b for b in boms if self.has_plan(b)]}
+
+    def has_plan(self, bom):
+        """Whether the librarian has made a plan for this BOM (ecadlib demo / librarian / the UI's Fill)."""
+        try:
+            return (self._librarian_dir(self._bom_path(bom)) / "plan.json").is_file()
+        except (OSError, ValueError):
+            return False
 
     def _uploaded_boms(self):
         """uploads/<name> (older workspaces) and uploads/<stamp>-<rand>/<name>, newest upload folder first.
@@ -323,7 +336,7 @@ class Workspace:
         out = {"name": name, "pins": len(pins), "parts": sym.get("parts", 1), "groups": groups,
                "problems": SL.check(sym, sec["grid"]), "svg": SL.svg(sym)}
         if save:
-            f = self.models / "SchLib" / f"{altium_lib.file_stem(self.safe_name(name, strict=True))}.SchLib"
+            f = self.models / "SchLib" / (altium_lib.file_stem(self.safe_name(name, strict=True, what="symbol")) + ".SchLib")
             if f.exists() and not overwrite:
                 raise FileExistsError(f"{f.name} is already in the workspace; save again with overwrite to replace it")
             f.parent.mkdir(parents=True, exist_ok=True)
@@ -835,8 +848,10 @@ class Workspace:
                 "reports": [self.rel(f) for f in files.values()]}
     def _datasheet_reader(self, out, batch=True, wait=False, estimate=False, yes=False):
         from . import datasheet as D
-        return D.Reader(out, self.root / "http_cache", rules=self.rules(), batch=batch, wait=wait, estimate=estimate, yes=yes,
-                        http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None)
+        rd = D.Reader(out, self.root / "http_cache", rules=self.rules(), batch=batch, wait=wait, estimate=estimate, yes=yes,
+                      http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None)
+        rd.count_tokens = False     # quotes send nothing before the click: rough; the send-time cap check counts the same way
+        return rd
 
     def datasheet_quote(self, bom, sync=False, parts=None):
         """datasheet_batch's cost as an ecadlib.ai_cost quote (batch price, or sync=True one request per part),
@@ -1138,6 +1153,8 @@ class Workspace:
             HS.save(prof, f)
             return dict(self.house_style(), ai=self.style_quote(model))
         if ai:
+            if self.offline:
+                raise ValueError(STYLE_OFFLINE)
             if progress:
                 progress(1, 2, "the model is writing the guide")
             HS.write_guide(prof, self.rules(), model)
@@ -1151,12 +1168,18 @@ class Workspace:
         from . import llm as LL
         system, user, schema, ref, _ = HS.guide_request(prof, self.rules(), model)
         key = bool(LL.key_for(HS.model_info(self.rules(), model)[0]["ep"]))
-        return AC.style_quote(system, user, schema, ref, self.rules(), key_set=key)
+        q = AC.style_quote(system, user, schema, ref, self.rules(), key_set=key)
+        if q and self.offline:                         # --offline: the guide waits for a run without it
+            q["text"] = q["text"].split(". No API key")[0].rstrip(".") + f". {STYLE_OFFLINE}."
+            q["offline"] = True
+        return q
 
     def style_guide(self, approved_usd=None, over_limit_ok=False, price_unknown_ok=False, model=None, progress=None):
         """The model writes the house style guide after the person approved style_quote()'s cost; "ai_cost" puts
         what it really cost next to the estimate."""
         from . import ai_cost as AC, house_style as HS
+        if self.offline:
+            raise ValueError(STYLE_OFFLINE)
         q = self.style_quote(model)
         AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
         prof = self._style_or_raise()

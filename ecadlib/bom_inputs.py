@@ -314,7 +314,16 @@ def is_kicad_netlist(path):
         return False
     if head[:3] == b"\xef\xbb\xbf":
         head = head[3:]
-    return bool(re.search(rb"^\s*(<\?xml[^>]*>\s*)?<export\b", head) or re.match(rb"\s*\(export\s", head))
+    return bool(re.search(rb"^\s*(<\?xml[^>]*>\s*)?(<!doctype[^\[>]*(\[.*?\])?\s*>\s*)?<export\b", head, re.I | re.S)
+                or re.match(rb"\s*\(export\s", head))     # a DOCTYPE one too: _xml_root refuses it by name
+
+
+def is_kicad5_sch(path):
+    """True for a KiCad 5 .sch (read_kicad_sch says to save it in KiCad 6+, rather than the CSV reader's header error)."""
+    try:
+        return Path(path).read_bytes()[:64].lstrip(b"\xef\xbb\xbf \t\r\n").startswith(b"EESchema Schematic File")
+    except OSError:
+        return False
 
 
 # ------------------------------------------------------------------ .xlsx without openpyxl

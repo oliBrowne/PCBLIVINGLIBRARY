@@ -949,6 +949,53 @@ def write_schlib(path, symbols):
     return path
 
 
+def relink_schlib(path, old, new):
+    """Point the footprint links (RECORD=45) of a .SchLib on disk that name footprint `old` at `new`, and its recipe's
+    FOOTPRINTLINK lines: write_schlib(dict(sym, footprint=new)) for a file whose symbol dicts are gone (resolve).
+    Nothing else in the file changes. -> True when a link was changed."""
+    import olefile
+    from .fsutil import write_bytes_atomic
+    from . import altium_native as AN
+    path, old, new = Path(path), lib_name(old), lib_name(new)
+    tree, hit = {}, False
+    with olefile.OleFileIO(str(path)) as o:
+        for parts in o.listdir(streams=True, storages=False):
+            data = o.openstream(parts).read()
+            if parts[-1] == "Data" and len(parts) == 2:
+                out, j = b"", 0
+                while j < len(data):
+                    flag, n = data[j + 3], struct.unpack_from("<I", data, j)[0] & 0xFFFFFF
+                    b, j = data[j + 4:j + 4 + n], j + 4 + n
+                    rec = parse_param_bytes(b) if flag == 0 else {}
+                    if rec.get("RECORD") == "45" and rec.get("MODELNAME") == old:
+                        kv = []
+                        for seg in b.rstrip(b"\0").split(b"|"):
+                            k, eq, v = seg.partition(b"=")
+                            if eq and not k.startswith(b"%UTF8%"):
+                                k = k.decode("cp1252")
+                                kv.append((k, new if k.upper() in ("MODELNAME", "MODELDATAFILEENTITY0") else rec[k.upper()]))
+                        out += schblock(params(kv))
+                        hit = True
+                    else:
+                        out += block(b, flag)
+                data = out
+            node = tree
+            for p in parts[:-1]:
+                node = node.setdefault(p, {})
+            node[parts[-1]] = data
+    if not hit:
+        return False
+    order = ("FileHeader", "SectionKeys", "Storage")      # schlib_bytes' order: the same symbol, the same bytes
+    tree = dict(sorted(tree.items(), key=lambda kv: (kv[0] in order, order.index(kv[0]) if kv[0] in order else 0)))
+    write_bytes_atomic(path, cfb.to_bytes(tree))
+    rp = path.with_name(path.name + AN.EXT)
+    if rp.is_file():
+        text = rp.read_text(encoding="utf-8")
+        rp.write_text("\n".join(f"FOOTPRINTLINK\t{new}" if ln == f"FOOTPRINTLINK\t{old}" else ln
+                                for ln in text.split("\n")), encoding="utf-8")
+    return True
+
+
 # ---------------------------------------------------------------- minimal reader (verification / dump)
 def _blk(d, i):
     n = struct.unpack_from("<I", d, i)[0] & 0xFFFFFF
@@ -1168,7 +1215,7 @@ def _main(argv=None):
     if a.cmd == "dump":
         for f in a.files:
             if f.lower().endswith(".pcblib"):
-                for fp in read_pcblib(f):
+                for fp in _dump_read(read_pcblib, f):
                     pads = [r for r in fp["records"] if r["type"] == "pad"]
                     kinds = {}
                     for r in fp["records"]:
@@ -1192,7 +1239,7 @@ def _main(argv=None):
                     for mp, d in fp.get("models", []):
                         print(f"   model {mp['NAME']} {len(d)} B checksum {mp['CHECKSUM']} (computed {step_checksum(d)})")
             else:
-                _, syms = read_schlib(f)
+                _, syms = _dump_read(read_schlib, f)
                 for sy in syms:
                     pins = [r for r in sy["records"] if r["RECORD"] == "2"]
                     modes = int(sy["records"][0].get("DISPLAYMODECOUNT", 1))
@@ -1236,5 +1283,23 @@ def _main(argv=None):
             print(f"{sym['name']:<24} {sum(1 for p in sym['prims'] if p[0] == 'pin'):>3} pins -> {path}")
 
 
-if __name__ == "__main__":
-    main()
+def _dump_read(reader, f):
+    """reader(f), naming the file when it is no Altium library at all (olefile's "not an OLE2 structured storage
+    file" says nothing of which one, with several given)."""
+    try:
+        return reader(f)
+    except FileNotFoundError:
+        raise
+    except OSError as e:
+        raise ValueError(f"{f}: {e}") from e
+
+
+if __name__ == "__main__":                     # `python3 -m ecadlib.altium_lib dump ... | head`: quiet, as `ecadlib` is
+    from .cli import _pipe_gone, _quiet_stdout
+    try:
+        main()
+        sys.stdout.flush()
+    except OSError as e:
+        if not _pipe_gone(e):
+            raise
+        sys.exit(_quiet_stdout())

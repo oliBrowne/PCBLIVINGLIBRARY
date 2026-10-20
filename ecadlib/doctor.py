@@ -328,7 +328,7 @@ def check_formats(ws):
                       f"restore {MG.STAMP} {MG.STAMP_FIX}" if r["kind"] == "stamp" else
                       "restore it from a backup or version control, or delete its folder and run the step that made it again")
         return _c("file formats", "FAIL", r.get("error") or f"{r['path']}: made by ecadlib {r['made_by'] or '?'} "
-                  f"({r['kind']} schema {r['version']})", "upgrade ecadlib (pip install -U ecadlib)")
+                  f"({r['kind']} schema {r['version']})", MG.UPGRADE)
     if old:
         return _c("file formats", "WARN", f"{len(old)} file(s) from an older ecadlib ({', '.join(sorted({r['kind'] for r in old}))})",
                   "they are migrated when used; `ecadlib migrate` does it now (backups in .ecadlib_backup/)")
@@ -441,7 +441,9 @@ def run(workspace=None, libs=(), rules_path=None, environ=None, altium_menu=None
     rc, rules = check_rules(rules_path, workspace if Path(workspace).is_dir() else None)
     checks = [check_python()] + check_packages(rules=rules)
     checks.append(rc)
-    checks += check_ai(rules, environ)
+    checks += check_ai(rules, environ) if rules is not None else \
+        [_c("ai model", "WARN", "not checked: ecadlib.toml did not load, so the model it names is unknown",
+            "fix the rules line above, then run doctor again")]           # never the default model as OK
     checks += check_keys(rules, environ)
     checks += check_key_safety(rules, environ)
     checks.append(check_workspace(workspace))

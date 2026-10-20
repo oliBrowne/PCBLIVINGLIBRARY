@@ -46,11 +46,10 @@ def part_rows(plan, lib, include_held=False, rules=None):
     from . import change_gate as CG, release_check as RC
     plan = Path(plan)
     rules = resolve(rules, plan.parent)
-    if not isinstance(json.loads(plan.read_text(encoding="utf-8")), list):
-        raise ValueError(f"{plan}: not a librarian plan (expected a list of parts)")
+    X.check_plan(json.loads(plan.read_text(encoding="utf-8")), plan)   # {} or a broken entry: nothing written
     # change control (#105): a hand edit of a released part's fields is held, and its released fields go out
     with CG.publishing(plan.parent):
-        items = CG.settled_plan(plan, "kicad-dblib", rules=rules, log=lambda *a, **k: None)
+        items = CG.settled_plan(plan, "kicad-dblib", rules=rules)
     tables, skipped, seen, spelled = {}, [], {}, {}
     for it in sorted(items, key=lambda i: str(i.get("name", ""))):
         if not isinstance(it, dict) or not it.get("name"):
@@ -264,6 +263,9 @@ def build(plan, out, name="ecadlib", include_held=False, rules=None, driver=DEFA
     out.mkdir(parents=True, exist_ok=True)
     rep = {"plan": str(plan), "library": lib, "dblib": f"{lib}.kicad_dbl", "database": f"{lib}.sqlite",
            "nickname": f"{lib}-db", "tables": {}, "skipped": [], "warnings": []}
+    if (out / rep["database"]).is_file() and json.loads(Path(plan).read_text(encoding="utf-8")) == []:
+        raise ValueError(f"{plan} has no parts: building it would empty the database library {lib} in {out}; "
+                         f"nothing written (delete {lib}.sqlite by hand if that is what you want)")
     if export:
         from . import kicad_export as X
         xr = X.export(plan, out, name, include_held, http=http, log=log, rules=rules)
@@ -382,10 +384,12 @@ def main(argv=None):
     except (OSError, ValueError) as e:
         print(f"cannot build the database library: {e}", file=sys.stderr)
         return 2
+    from . import term as TM
+    say = (lambda *x, **k: None) if TM.VERBOSITY < 0 else print      # -q: only the outcome and the warnings
     for t, n in rep["tables"].items():
-        print(f"  {t}: {n} parts")
+        say(f"  {t}: {n} parts")
     for s in rep["skipped"]:
-        print(f"  skipped {s['part']}: {s['why']}")
+        say(f"  skipped {s['part']}: {s['why']}")
     for w in rep["warnings"]:
         print(f"  warning: {w}")
     print(f"wrote {Path(a.out) / rep['dblib']}, {rep['database']} and the {rep['nickname']} row in sym-lib-table")

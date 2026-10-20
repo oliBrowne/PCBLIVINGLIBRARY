@@ -208,7 +208,7 @@ are not measured bills.
 
     ecadlib costs                         # these jobs for the model in your ecadlib.toml
     ecadlib costs --model gemini-3.8-flash
-    ecadlib datasheet estimate BOM.csv    # this BOM: tokens counted, cost and worst case, nothing sent
+    ecadlib datasheet estimate BOM.csv    # this BOM: rough tokens, cost and worst case, nothing sent
 
 Set `max_cost_usd` under `[datasheet]` and `[agent.proof]` for a hard cap on spending. If a price here is out of
 date, set your own in `ecadlib.toml`:
@@ -252,6 +252,8 @@ def main(argv=None):
         from .llm import endpoint
         ep = endpoint(rules if isinstance(rules, dict) else None, model=a.model)
         prov = "ollama" if ep["local"] else ep["provider"]
+        if prov == "anthropic" and not ep["model"].startswith("claude"):   # --model gemini-... with no [ai] table:
+            prov = next((p for _, m, p in SHEET if m == ep["model"]), "openai-compatible")   # not priced as Claude
         rows = [dict(jobs(ep["model"], prov, rules, a.share), model=ep["model"])]
     if a.md:
         open(a.md, "w", encoding="utf-8").write(doc(rows, a.share))
