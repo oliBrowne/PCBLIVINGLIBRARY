@@ -225,3 +225,17 @@ def test_kicad_bom_check_report_names_kicad_not_altium(tmp_path):
     assert rc == 0, err
     report = Path(json.loads(out)["report"])
     assert report.name.endswith("_kicad.html") and "(ecadlib kicad-menu check-bom)" in report.read_text(encoding="utf-8"), report
+
+
+# T012
+def test_rerun_init_yes_turns_online_lookups_and_the_reader_back_on():
+    from ecadlib import firstrun as FR
+
+    def ask(order, answers):
+        it = iter(answers)
+        return FR.ask_setup({"sources": {"order": order}}, given={"tool": "kicad", "libs": ["x"], "workspace": "ws"},
+                            inp=lambda q: next(it), out=lambda *a: None, environ={})["sources"]
+    assert ask(["standard"], ["y", "n", "y"]) == ["kicad", "standard", "datasheet"]
+    assert ask(["standard"], ["y", "y", "n"]) == ["kicad", "easyeda", "standard"]
+    assert ask(["kicad", "standard"], ["y", "n", "n"]) is None                  # unchanged: nothing written
+    assert ask(["standard", "kicad"], ["n", "n"]) == ["standard"]

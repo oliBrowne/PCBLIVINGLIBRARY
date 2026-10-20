@@ -112,7 +112,12 @@ def ask_setup(existing=None, given=None, inp=input, out=print, interactive=True,
                                              f"official API; review them before use [{'Y/n' if was else 'y/N'}]: "), default=was)
             ds = _yes(inp(f"  Let a model read the datasheet for parts no library has? ({ds_need}) "
                           f"[{'Y/n' if ds_key else 'y/N'}]: "), default=ds_key)
-            order = [s for s in cur_sources if (online or s not in ("kicad", "easyeda")) and (ds or s != "datasheet")]
+            want = lambda s: (online or s not in ("kicad", "easyeda")) and (ds or s != "datasheet")
+            order = [s for s in cur_sources if want(s)]
+            for i, s in enumerate(RU.DEFAULTS["sources"]["order"]):   # a yes brings back a source an earlier no dropped,
+                if s not in order and want(s) and (s != "easyeda" or ans["unofficial"]):   # at its default place
+                    before = RU.DEFAULTS["sources"]["order"][:i]
+                    order.insert(max([order.index(x) + 1 for x in before if x in order], default=0), s)
             if "standard" not in order:
                 order.append("standard")
             ans["sources"] = order if order != cur_sources else None
