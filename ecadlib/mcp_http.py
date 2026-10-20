@@ -12,7 +12,7 @@ Safety, because a tunnel puts this on the internet even when it listens on 127.0
   --no-auth is refused unless the server listens on a loopback address, and then the Host header must be local too;
 - a request from a web page (an Origin header) is refused unless the origin is local or given with --allow-origin;
   only an origin given with --allow-origin gets the CORS answers (OPTIONS preflight, Access-Control-Allow-Origin) a
-  browser needs to read the reply, and it still needs the token;
+  browser needs to read the reply, and it needs the token like any request (with --no-auth, none);
 - file arguments must be inside the workspace or a --lib folder (--any-path lifts that);
 - bodies over 10 MB are refused. Standard library only."""
 import hmac, http.server, ipaddress, json, secrets, sys, threading
