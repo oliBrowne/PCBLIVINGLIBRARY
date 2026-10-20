@@ -478,7 +478,8 @@ def write_report(rows, stem, plan=""):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     with open(stem.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
-        w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["name", "status"])
+        cols = list(dict.fromkeys(k for r in rows for k in r)) or ["name", "status"]   # only some rows carry `approval`
+        w = SS.DictWriter(f, fieldnames=cols, restval="")
         w.writeheader(); w.writerows(rows)
     from . import messages as M
     held = [r for r in rows if r["status"] == "held"]
