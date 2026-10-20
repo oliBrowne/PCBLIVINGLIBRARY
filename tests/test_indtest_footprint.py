@@ -38,3 +38,34 @@ def test_t001_mirrored_bga_is_an_error():
     assert not _errors(_flip(txt, -1, -1))
     for sx, sy in ((1, -1), (-1, 1)):
         assert any("mirrored" in m for m in _errors(_flip(txt, sx, sy))), (sx, sy)
+
+
+GOLDEN = ROOT / "tests" / "fixtures" / "kicad_golden"
+
+
+# T007: footprint compare lists every differing pad, names one-sided pads, exits non-zero on any difference
+@lite
+def test_t007_compare_reports_every_difference(tmp_path):
+    t = (GOLDEN / "SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod").read_text()
+    old = '(pad "6" smd roundrect\n\t\t(at 2.475 0.635)'
+    (tmp_path / "mine.kicad_mod").write_text(t)
+    ref = t.replace(old, '(pad "6" smd roundrect\n\t\t(at 3.475 0.635)')
+    rows, _, _ = FG.compare(tmp_path / "mine.kicad_mod", ref)
+    assert [r["pad"] for r in rows if FG.differs(r)] == ["6"]
+    assert [r for r in rows if r["pad"] == "6"][0]["d_pos"] == (-1.0, 0.0)
+    q = (GOLDEN / "QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm.kicad_mod").read_text()
+    (tmp_path / "qfn.kicad_mod").write_text(q)
+    rows, _, _ = FG.compare(tmp_path / "qfn.kicad_mod", re.sub(r'\t\(pad "33" smd rect\n.*?\n\t\)\n', "", q, flags=re.S))
+    assert [(r["pad"], r["only"]) for r in rows if "only" in r] == [("33", "mine")]
+    (tmp_path / "ref.kicad_mod").write_text(ref)
+    out = io.StringIO()
+    try:
+        with redirect_stdout(out):
+            FG.main(["compare", str(tmp_path / "mine.kicad_mod"), str(tmp_path / "ref.kicad_mod")])
+        code = 0
+    except SystemExit as e:
+        code = e.code
+    assert code and "6" in str(code), code
+    assert re.search(r"^\s*6\s.*\(-1\.0, 0\.0\)", out.getvalue(), re.M), out.getvalue()
+    with redirect_stdout(io.StringIO()):
+        FG.main(["compare", str(tmp_path / "mine.kicad_mod"), str(tmp_path / "mine.kicad_mod")])   # same: no exit

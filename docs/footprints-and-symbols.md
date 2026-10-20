@@ -14,7 +14,7 @@ On this page:
 
 ```
 ecadlib footprint gen ecadlib/package_specs/*.json -o out/footprints/ecadlib.pretty [--density A|B|C]
-ecadlib footprint compare <mine.kicad_mod> <reference path or URL>
+ecadlib footprint compare <mine.kicad_mod> <reference path or URL>   # every pad; exit 1 when a pad differs or is on one side only
 ecadlib check <any.kicad_mod or .pretty> ... # the footprint rule book, works on KiCad's own footprints too
 ecadlib check --summary Lib.pretty/         # counts per rule for a whole library
 ```
