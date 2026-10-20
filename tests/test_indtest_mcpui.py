@@ -384,3 +384,18 @@ def test_a365_refused_or_unreachable_nexar_is_a_plain_message(tmp_path, monkeypa
         assert "Traceback" not in err.getvalue(), err.getvalue()
     finally:
         srv.shutdown()
+
+
+# T110
+def test_docs_and_part_panel_name_no_review_queue_the_ui_lacks():
+    """docs/using-ecadlib.md promised a Review queue nav item, a `q` shortcut and approving "in the review queue", and
+    a part waiting for sign-off said "approve it in the review queue": the UI has none of them (step 2 has the parts)."""
+    import re
+    from ecadlib import messages as M
+    doc = (REPO / "docs" / "using-ecadlib.md").read_text(encoding="utf-8")
+    keyboard = re.search(r"\*\*Keyboard\.\*\*(.*)", doc).group(1).split("Light and dark")[0]
+    keys = {k for d in re.findall(r"`([^`]+)`", keyboard) for k in d.split(" / ")}
+    listed = set(re.findall(r"<kbd>([^<]+)</kbd>", PAGE[PAGE.index('id="keysdlg"'):]))
+    assert keys <= listed, sorted(keys - listed)
+    assert "Review queue" not in PAGE and not re.search(r"Review queue \(with how many|in the review queue\)", doc)
+    assert "review queue" not in M.explain("awaiting approval: a reviewer")["fix"]
