@@ -176,8 +176,9 @@ def item_pads(item, base):
     if km:
         return footprint_pads(km.read_text(encoding="utf-8"))
     from .kicad_export import _pick
+    fps = AL.read_pcblib(f)                    # a file that does not read raises, as in item_pins
     try:                                       # a library of many: the footprint the plan names
-        fp = _pick(AL.read_pcblib(f), item["footprint"].get("ref"), f, "footprint")
+        fp = _pick(fps, item["footprint"].get("ref"), f, "footprint")
     except ValueError:                         # not in the file (the release check holds it): no pads known
         return None
     pads = [r for r in fp["records"] if r["type"] == "pad"]

@@ -108,6 +108,22 @@ def test_ds2_02_merge_onto_multi_entry_library_checks_the_named_entry(tmp_path):
 
 
 @lite
+def test_ds2_02_item_pads_still_raises_on_a_file_that_is_not_a_pcblib(tmp_path):
+    """Only a ref the file does not hold means 'no pads known'; a .SchLib named as the footprint file is the reader's
+    error, as item_pins raises for a .PcbLib named as the symbol file."""
+    from ecadlib import resolve as R
+    from tests.test_release_check import make
+    it = make(tmp_path, keep_kmod=False)
+    it["footprint"] = {"ref": "PART1", "file": "models/SchLib/PART1.SchLib"}
+    try:
+        got = R.item_pads(it, tmp_path)
+    except ValueError as e:
+        assert "not a .PcbLib" in str(e), e
+    else:
+        raise AssertionError(f"item_pads returned {got!r}")
+
+
+@lite
 def test_ds2_02_parity_export_mode_compares_the_named_entry(tmp_path):
     """kicad-export writes the footprint / symbol the plan names (SO8_HOUSE, PART_HOUSE); parity compared them with the
     file's first entries (the SOIC-16, the 14-pin symbol) and reported the merged part as a mismatch. A ref the file
