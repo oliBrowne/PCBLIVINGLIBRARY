@@ -158,6 +158,14 @@ def test_ds2_10_real_manufacturer_and_description_columns_win_whatever_the_order
     lines, mapping = T.read_bom(n)
     assert lines[0]["description"] == "Tantalum capacitor 100uF 10V", (mapping, lines)
     assert T.read_bom(only)[0][0]["description"] == "Tantalum 10V"           # Notes is still the fallback
+    # a purchasing BOM with no maker column: 'Vendor' beside 'Vendor Part Number' is a distributor, not the maker
+    pur = tmp_path / "purchasing.csv"
+    pur.write_text("Designator,Value,Vendor,Vendor Part Number,MPN\nU1,LM358,Digi-Key,296-1395-1-ND,LM358DR\n"
+                   "C1,100n,LCSC,C14663,CL10B104KB8NNNC\n", encoding="utf-8")
+    lines, mapping = T.read_bom(pur)
+    assert "manufacturer" not in mapping, mapping
+    assert [(l["designator"], l.get("manufacturer"), l.get("lcsc")) for l in lines] == \
+        [("U1", None, None), ("C1", None, "C14663")], lines
 
 
 @lite

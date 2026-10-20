@@ -46,8 +46,9 @@ def _hnorm(h):
 
 def map_headers(headers, threshold=0.72):
     """Fuzzy, case-insensitive header -> field mapping. Returns {field: header}."""
+    dist = {nj for nj, _ in _supplier_pairs(headers)}            # 'Vendor' beside 'Vendor Part Number': a distributor
     scores = []
-    for h in headers:
+    for j, h in enumerate(headers):
         nh = _hnorm(h)
         if len(nh) > 80 or "<" in str(h):          # a sentence or a line of markup is not a column header
             continue
@@ -92,6 +93,8 @@ def map_headers(headers, threshold=0.72):
                 best *= 0.5                                              # nor is a distributor's order code
             if f == "manufacturer" and re.search(r"\b(part|pn|number|no)\b", nh):
                 best *= 0.6                                              # 'Mfr Part #' is not the maker
+            if f == "manufacturer" and j in dist:
+                best = 0.0                                               # nor is Digi-Key, named beside its order code
             scores.append((best, f, h))
     mapping, used = {}, set()
     for sc, f, h in sorted(scores, key=lambda t: -t[0]):
