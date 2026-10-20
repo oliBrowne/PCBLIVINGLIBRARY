@@ -364,7 +364,7 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
     old = json.loads(prev.read_text(encoding="utf-8")) if prev.is_file() else {}
     if pkg_version:
         version = pkg_version
-    elif old.get("content_sha256") == chash and old.get("version"):
+    elif old.get("content_sha256") == chash and _ver_tuple(old.get("version")):
         version = old["version"]
     else:
         d = today or datetime.date.today()

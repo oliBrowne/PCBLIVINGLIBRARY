@@ -157,6 +157,22 @@ def test_ds2_42_kicad_pcm_update_timestamp_passes_the_published_one_after_a_buil
     assert (out / "repository.json").stat().st_mtime_ns == snap
 
 
+@lite
+def test_ds2_42_kicad_pcm_keeps_no_version_from_kicad_pcm_json_that_is_not_one(tmp_path):
+    """kicad_pcm.json edited by hand: a version that is not major[.minor[.patch]] is not kept (and no internal error);
+    the library is unchanged, so the zip already there is the package."""
+    import datetime
+    _, exp, _ = TP._export(False, tmp_path)
+    out, day = exp.parent / "pcm", datetime.date(2026, 10, 20)
+    KP.build(exp, out, today=day, log=QUIET)
+    z, p = out / "local.ecadlib.lib-2026.10.20.zip", out / "kicad_pcm.json"
+    snap = z.stat().st_mtime_ns
+    for bad in (2026, ["2026.10.20"], "2026.10.20.1"):
+        p.write_text(json.dumps(dict(json.loads(p.read_text()), version=bad)))
+        assert KP.build(exp, out, today=day, log=QUIET)["version"] == "2026.10.20", bad
+    assert [f.name for f in out.glob("*.zip")] == [z.name] and z.stat().st_mtime_ns == snap
+
+
 def test_ds2_43_a_value_with_a_thousands_or_decimal_comma_is_not_bound_renamed_or_merged_by_value():
     """'4,700pF' is 4.7 pF with a decimal comma and 4.7 nF with a thousands separator (change_diff._readings): no
     library part is picked by its value, no value style rewrites it, no other line's part takes it."""
