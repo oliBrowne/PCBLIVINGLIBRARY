@@ -927,24 +927,6 @@ def kicad_db_rows(folder, lib):
     return out
 
 
-def _dblib_workbook(lib):
-    """The parts workbook a .DbLib / .SVNDbLib reads: LibraryDatabasePath (next to it), else dblib-sync's name for it
-    (data_file_name: 'Bibliothèque.DbLib' -> 'Bibliotheque.xlsx'). -> (xlsx path, csv mirror path)."""
-    from pathlib import PureWindowsPath
-    from .altium_dblib_sync import _kv, _sections, data_file_name
-    from .fsutil import read_ini_text
-    try:
-        db = next((x for x in _sections(read_ini_text(lib)[0]) if x[0] == "DatabaseLinks"), None)
-    except (OSError, ValueError):
-        db = None
-    path = (_kv(db[1]) if db else {}).get("LibraryDatabasePath", "").strip()
-    names = ([PureWindowsPath(path).stem] if path else []) + [data_file_name(lib.stem), lib.stem]
-    for n in names:
-        if (lib.parent / f"{n}.xlsx").is_file() or (lib.parent / f"{n}.csv").is_file():
-            return lib.parent / f"{n}.xlsx", lib.parent / f"{n}.csv"
-    return lib.parent / f"{names[0]}.xlsx", lib.parent / f"{names[0]}.csv"
-
-
 def altium_db_rows(folder, notes=None):
     """{Part Number: row} from the DbLib's parts table (the .csv mirror dblib-sync writes next to the workbook the DbLib
     names, else that .xlsx), or None when the folder has no .DbLib / .SVNDbLib. notes: gets a line when the folder has several."""
@@ -954,7 +936,8 @@ def altium_db_rows(folder, notes=None):
     libs = sorted(folder.glob("*.DbLib")) + sorted(folder.glob("*.SVNDbLib"))
     if not libs:
         return None
-    found = [(lib, *_dblib_workbook(lib)) for lib in libs]
+    from .altium_dblib_sync import dblib_table_paths
+    found = [(lib, *dblib_table_paths(lib)) for lib in libs]
     lib, xlsx, csvf = next((f for f in found if f[1].is_file() or f[2].is_file()), found[0])
     if len(libs) > 1 and notes is not None:
         notes.append(f"{len(libs)} database libraries in {folder}; compared {lib.name}")

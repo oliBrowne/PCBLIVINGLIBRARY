@@ -93,6 +93,22 @@ def data_file_name(name):
     return s if s.strip("_") else "ecadlib"
 
 
+def dblib_table_paths(lib):
+    """The parts workbook a .DbLib / .SVNDbLib reads: LibraryDatabasePath (next to it), else this module's name for it
+    (data_file_name: 'Bibliothèque.DbLib' -> 'Bibliotheque.xlsx'). -> (xlsx path, csv mirror path)."""
+    lib = Path(lib)
+    try:
+        db = next((x for x in _sections(read_ini_text(lib)[0]) if x[0] == "DatabaseLinks"), None)
+    except (OSError, ValueError):
+        db = None
+    path = (_kv(db[1]) if db else {}).get("LibraryDatabasePath", "").strip()
+    names = ([PureWindowsPath(path).stem] if path else []) + [data_file_name(lib.stem), lib.stem]
+    for n in names:
+        if (lib.parent / f"{n}.xlsx").is_file() or (lib.parent / f"{n}.csv").is_file():
+            return lib.parent / f"{n}.xlsx", lib.parent / f"{n}.csv"
+    return lib.parent / f"{names[0]}.xlsx", lib.parent / f"{names[0]}.csv"
+
+
 def table_of(item):
     """Sheet name from the workspace folder (Components/Capacitors -> Capacitors); see sheet_name."""
     return sheet_name((item.get("folder") or "Misc").rstrip("/").rsplit("/", 1)[-1])

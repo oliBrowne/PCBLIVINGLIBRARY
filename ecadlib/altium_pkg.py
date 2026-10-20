@@ -407,9 +407,9 @@ def check_folder(out, libpkg, dblibs):
     for sym, fp in links:
         if fp and fp not in names["PcbLib"]:
             probs.append(f"symbol {sym} links footprint {fp}, which no PcbLib in the package holds")
-    from .parity import _dblib_workbook
+    from .altium_dblib_sync import dblib_table_paths
     for db in dblibs:
-        csvf = _dblib_workbook(out / db)[1]            # the table the DbLib names ('Bibliothèque' -> 'Bibliotheque.csv')
+        csvf = dblib_table_paths(out / db)[1]            # the table the DbLib names ('Bibliothèque' -> 'Bibliotheque.csv')
         if not csvf.is_file():
             continue
         import csv
