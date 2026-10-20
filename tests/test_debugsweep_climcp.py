@@ -68,3 +68,32 @@ def test_ds2_51_save_rules_guard_compares_with_the_parent_rules_file_in_force(tm
     assert not (proj / "ecadlib_workspace" / "ecadlib.toml").exists()
     rules = ws.rules()
     assert (rules["datasheet"]["max_cost_usd"], rules["ai"]["base_url"]) == (0.5, "http://localhost:11434/v1")
+
+
+# ------------------------------------------------------------------ DS2-52
+def _sym_lib(f, name, description):
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(f"""(kicad_symbol_lib (version 20231120) (generator test)
+  (symbol "{name}" (property "Reference" "U") (property "Value" "{name}") (property "Footprint" "SOIC-8")
+    (property "Description" "{description}") (property "MPN" "{name}-B")
+    (symbol "{name}_1_1" (pin input line (at 0 0 0) (length 2.54) (name "~{{RESET}}" (effects)) (number "1" (effects))))))
+""", encoding="utf-8")
+
+
+@lite
+def test_ds2_52_confined_propose_rules_and_learn_house_style_read_relative_paths_in_the_workspace(tmp_path, monkeypatch):
+    """_check_paths approved 'private' as <workspace>/private, but propose_rules / learn_house_style scanned
+    'private' from the server's start folder: a library outside the workspace went back to the remote client."""
+    srv = tmp_path.resolve() / "srv"
+    _sym_lib(srv / "private" / "lib" / "secret.kicad_sym", "SECRETASIC", "Confidential customer ASIC rev B")
+    monkeypatch.chdir(srv)
+    ws = Workspace("ecadlib_workspace")
+    ws.mcp_options = M.Options(confine=True)
+    _sym_lib(ws.root / "mine" / "own.kicad_sym", "OWNBUF", "Own workspace buffer")
+    r = _call(ws, "propose_rules", {"paths": ["private"], "a365": ["private/lib/secret.kicad_sym"]})
+    assert not r["isError"], r
+    assert json.loads(_txt(r))["components"] == 0, _txt(r)[:300]
+    r = _call(ws, "learn_house_style", {"paths": ["private"]})
+    assert "Confidential customer ASIC" not in _txt(r), _txt(r)[:300]
+    r = _call(ws, "propose_rules", {"paths": ["mine"]})                  # relative = inside the workspace
+    assert json.loads(_txt(r))["components"] == 1, _txt(r)[:300]

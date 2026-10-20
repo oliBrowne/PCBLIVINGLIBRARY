@@ -1056,6 +1056,12 @@ class Workspace:
         return {"file": self._label(f or self.rules_file()), "exists": bool(f), "text": f.read_text(encoding="utf-8-sig") if f else "",
                 "rules": RU.effective(self.rules()), "defaults": RU.DEFAULTS}
 
+    def _given_path(self, p):
+        """A folder or file a caller named: absolute as given, relative to the workspace (where --confine checks it),
+        never to the folder the server was started in."""
+        q = Path(str(p).strip()).expanduser()
+        return str(q if q.is_absolute() else self.root / q)
+
     def _rules_sources(self):
         """What a scan looks at when the person names nothing: the --lib folders, uploaded BOMs and Altium 365 state."""
         out = list(self.libs) + [str(self.root / "uploads")]
@@ -1069,10 +1075,10 @@ class Workspace:
         choices {setting key: value} answer the proposal's questions. A diff is included when a file exists."""
         from . import rules_infer as I
         paths, a365 = ([x] if isinstance(x, (str, Path)) else x for x in (paths, a365))   # one path, not its letters
-        paths = [str(p).strip() for p in (paths or []) if str(p).strip()] or self._rules_sources()
+        paths = [self._given_path(p) for p in (paths or []) if str(p).strip()] or self._rules_sources()
         if progress:
             progress(0, 1, "scanning " + ", ".join(Path(p).name for p in paths)[:80])
-        out = I.propose(paths, [str(x) for x in (a365 or [])], choices, existing=self.rules_file())
+        out = I.propose(paths, [self._given_path(x) for x in (a365 or [])], choices, existing=self.rules_file())
         out["paths"], out["file"] = paths, self.rel(self.rules_file())
         if progress:
             progress(1, 1, "done")
@@ -1116,7 +1122,7 @@ class Workspace:
         ecadlib.ai_cost quote); style_guide() sends it once the person approved that."""
         from . import house_style as HS
         paths = [paths] if isinstance(paths, (str, Path)) else paths
-        paths = [str(x).strip() for x in (paths or []) if str(x).strip()] or self._rules_sources()
+        paths = [self._given_path(x) for x in (paths or []) if str(x).strip()] or self._rules_sources()
         direction = [direction] if isinstance(direction, str) else list(direction or [])
         f = self._style_file()
         old = HS.load(self.rules(), path=f) if f.is_file() else None
