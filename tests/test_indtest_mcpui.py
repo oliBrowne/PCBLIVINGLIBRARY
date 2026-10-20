@@ -293,3 +293,19 @@ def test_confine_refusal_hint_lifts_the_confinement(tmp_path):
     assert err and hint and hint.group(1) == "start it without --confine", txt
     (err, txt), = _stdio_mcp(base, tmp_path / "home", call)
     assert not err, txt
+
+
+# T106
+@lite
+def test_preview_symbol_refusal_says_symbol(tmp_path):
+    """preview_symbol {"name": "MCU/ABC", save} answered "footprint name 'MCU/ABC' contains a path separator"."""
+    ws = Workspace(tmp_path / "ws", offline=True)
+    try:
+        ws.preview_symbol([{"num": "1", "name": "VCC"}, {"num": "2", "name": "GND"}], "MCU/ABC", save=True)
+        raise AssertionError("a symbol name with a slash was saved")
+    except ValueError as e:
+        assert str(e).startswith("symbol name 'MCU/ABC' contains a path separator") and "MCU_ABC" in str(e), e
+    try:
+        ws.safe_name("SOIC-8/TI_D", strict=True)
+    except ValueError as e:
+        assert str(e).startswith("footprint name"), e

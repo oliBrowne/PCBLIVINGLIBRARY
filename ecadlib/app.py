@@ -48,13 +48,14 @@ class Workspace:
         self.offline = offline
 
     # ------------------------------------------------------------------ paths
-    def safe_name(self, name, strict=False):
-        """A plain file name. Uploads keep only their base name; footprint names (strict) with a path
-        separator are refused, so "SOIC-8/TI_D" can't quietly become "TI_D" and collide with another part."""
+    def safe_name(self, name, strict=False, what="footprint"):
+        """A plain file name. Uploads keep only their base name; footprint / symbol names (strict; what names which in
+        the refusal) with a path separator are refused, so "SOIC-8/TI_D" can't quietly become "TI_D" and collide
+        with another part."""
         name = str(name)
         if strict and ("/" in name or "\\" in name):
             plain = re.sub(r"[/\\]+", "_", name)
-            raise ValueError(f"footprint name {name!r} contains a path separator; use a plain name such as {plain!r}")
+            raise ValueError(f"{what} name {name!r} contains a path separator; use a plain name such as {plain!r}")
         base = re.split(r"[/\\]", name)[-1]
         stem, suf = os.path.splitext(base)                 # the suffix picks the reader: never lose it ('部品表.xlsx')
         if not re.fullmatch(r"\.[A-Za-z][A-Za-z0-9_]{0,11}", suf):   # not a file type ('P2.54mm_Vertical'): no split
@@ -331,7 +332,7 @@ class Workspace:
         out = {"name": name, "pins": len(pins), "parts": sym.get("parts", 1), "groups": groups,
                "problems": SL.check(sym, sec["grid"]), "svg": SL.svg(sym)}
         if save:
-            f = self.models / "SchLib" / f"{altium_lib.file_stem(self.safe_name(name, strict=True))}.SchLib"
+            f = self.models / "SchLib" / (altium_lib.file_stem(self.safe_name(name, strict=True, what="symbol")) + ".SchLib")
             if f.exists() and not overwrite:
                 raise FileExistsError(f"{f.name} is already in the workspace; save again with overwrite to replace it")
             f.parent.mkdir(parents=True, exist_ok=True)
