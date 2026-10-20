@@ -74,6 +74,28 @@ def test_push_refuses_a_footprint_file_holding_another_footprint(tmp_path):
     assert dry[0]["action"] == "error", dry
 
 
+# T004: a part dblib-sync refuses (read-back) gets no released revision 1; the fixed file is the first release
+@lite
+def test_refused_first_sync_releases_nothing_and_the_fix_syncs(tmp_path, monkeypatch):
+    from ecadlib import ledger as LG
+    d = tmp_path
+    monkeypatch.setenv("ECADLIB_HOME", d / "home")
+    _models(d)
+    good = (d / "models/PcbLib/C_0402_1005Metric.PcbLib").read_bytes()
+    _wrong_0402(d)
+    items = released_anyway([_item("CAP-0402-100nF", "Capacitors", "Capacitor", "C_0402_1005Metric", Value="100nF")], d)
+    (d / "plan.json").write_text(json.dumps(items, indent=1))
+    r = S.sync(d / "plan.json", d / "lib")["results"][0]
+    assert r["action"] == "error" and "holds ['R_0603_1608Metric']" in r["detail"], r
+    assert not LG.Ledger(d).head("CAP-0402-100nF")       # no released revision for the refused file
+    (d / "models/PcbLib/C_0402_1005Metric.PcbLib").write_bytes(good)      # the fix
+    (d / "plan.json").write_text(json.dumps(items, indent=1))
+    r = S.sync(d / "plan.json", d / "lib")["results"][0]
+    assert r["action"] == "added", r
+    assert (d / "models/PcbLib/C_0402_1005Metric.PcbLib").read_bytes() == good
+    assert LG.Ledger(d).head("CAP-0402-100nF")["revision"] == 1
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
