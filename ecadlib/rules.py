@@ -624,9 +624,9 @@ def fmt_value(raw, cat, style):
     """BOM value -> the rules' value style. Unparseable values and style 'keep' come back unchanged."""
     if style == "keep" or cat not in UNIT or not str(raw or "").strip():
         return raw
-    from .kicad_index import parse_value
+    from .kicad_index import parse_value, two_readings
     v = parse_value(raw)
-    return raw if v is None else fmt_number(v, cat, style)
+    return raw if v is None or two_readings(raw) else fmt_number(v, cat, style)     # '4,700pF' stays as written
 
 
 def fmt_number(v, cat, style):
