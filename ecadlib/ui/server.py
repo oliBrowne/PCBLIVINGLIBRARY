@@ -272,6 +272,9 @@ def make_handler(ws: Workspace):
                 return self._send(403, {"error": "unexpected Host header"})
             if method == "POST" and not self._origin_ok():
                 return self._send(403, {"error": "cross-origin request refused"})
+            if u.path.startswith("/api/") and not (ws.root / "uploads").is_dir():   # the workspace folder was deleted or
+                with contextlib.suppress(OSError):                                   # moved while this runs: make it again
+                    ws.ensure_folders()
             return u
 
         # ---------------------------------------------------------- request bodies

@@ -321,3 +321,26 @@ def test_mcp_docs_name_only_real_tools():
     doc = (REPO / "docs" / "mcp.md").read_text(encoding="utf-8")
     named = set(re.findall(r"`([a-z][a-z0-9]*_[a-z0-9_]+)`", doc)) - args
     assert sorted(n for n in named if n not in names) == []
+
+
+# T108
+@lite
+def test_ui_survives_a_deleted_workspace_folder(tmp_path):
+    """The workspace folder deleted while `ecadlib ui` ran: /api/info and every upload answered 400 "Something went
+    wrong (FileNotFoundError ... 'uploads')" with a traceback, until a restart. The folders are made again."""
+    import contextlib, io, shutil
+    from tests.test_ui import serve, wait_job
+    ws = Workspace(tmp_path / "ws", [DEMO_LIB], offline=True)
+    srv, call = serve(ws)
+    try:
+        shutil.rmtree(tmp_path / "ws")
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            st, info = call("GET", "/api/info")
+            assert st == 200 and info["boms"] == [], info
+            st, j = call("POST", "/api/upload", b"Designator,Value,Footprint\nR1,10k,R_0603_1608Metric\n",
+                         {"X-Filename": "board.csv"})
+            assert st == 200, j
+            assert wait_job(call, j["job"])["state"] == "done"
+        assert "Traceback" not in err.getvalue(), err.getvalue()
+    finally:
+        srv.shutdown()

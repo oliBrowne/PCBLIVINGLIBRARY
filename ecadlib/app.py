@@ -35,9 +35,7 @@ STYLE_OFFLINE = "--offline: the model is not asked to write the house style guid
 class Workspace:
     def __init__(self, root="ecadlib_workspace", libs=(), providers=None, offline=False):
         self.root = Path(root).resolve()
-        for d in ("uploads", "reports", "altium", "altium365", "footprints/ecadlib.pretty",
-                  "altium_models/PcbLib", "altium_models/SchLib"):
-            (self.root / d).mkdir(parents=True, exist_ok=True)
+        self.ensure_folders()
         from . import migrate as MG                      # files from a newer ecadlib: one clear error, nothing misread
         MG.guard_tree(self.root)
         self.gen_dir = self.root / "footprints" / "ecadlib.pretty"
@@ -46,6 +44,12 @@ class Workspace:
         self.provider_names = providers or [c.name for c in P.ALL]
         self._providers_given = bool(providers)          # else [providers] order in the rules decides (ecadlib.plugins)
         self.offline = offline
+
+    def ensure_folders(self):
+        """The workspace folders, made again when the folder was deleted or moved while a front end runs."""
+        for d in ("uploads", "reports", "altium", "altium365", "footprints/ecadlib.pretty",
+                  "altium_models/PcbLib", "altium_models/SchLib"):
+            (self.root / d).mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ paths
     def safe_name(self, name, strict=False, what="footprint"):
