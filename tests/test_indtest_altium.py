@@ -314,7 +314,8 @@ def test_dump_names_the_file_that_is_not_an_altium_library(tmp_path):
 @lite
 def test_module_form_dump_into_a_closed_pipe_has_no_traceback(tmp_path):
     _models(tmp_path)
-    files = [str(tmp_path / "models/PcbLib/R_0603_1608Metric.PcbLib")] * 600     # more output than a pipe buffer holds
+    files = [os.path.join("models", "PcbLib", "R_0603_1608Metric.PcbLib")] * 600   # more output than a pipe buffer holds
+    #                                                   (relative: Windows caps a command line at 32767 characters)
     env = dict(os.environ, PYTHONPATH=str(ROOT))
     p = subprocess.Popen([sys.executable, "-m", "ecadlib.altium_lib", "dump", *files], cwd=str(tmp_path), env=env,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
