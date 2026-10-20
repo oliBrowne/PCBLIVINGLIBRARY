@@ -57,6 +57,7 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Web UI: an Altium 365 push whose workspace field was not text (true, a number, a list) crashed in the push with "Something went wrong (AttributeError ...)"; it is now refused in one line ("workspace must be a non-empty string"). The web endpoint fuzzer found it.
 - The Altium rebuild (`altium-native`, ecadlib_build.pas) dropped a through-hole pad's drill offset, so the copper sat centred on the hole, and `altium-native compare` never checked the offset (DS2-34). A library Altium already rebuilt with the old script and recorded as built is not checked again on its own: if your parts have offset pads, run `ecadlib altium-native compare` on the library folder, then `ecadlib altium-native write --rebuild-all` for the libraries it lists.
 - Add part from MPN (Altium and KiCad menus): a part number pasted twice (Ctrl+V pasted on both the key and its character) is cut back to one and the box's paste now replaces its text; a miss on text that reads as a description ("SOSET 16M 20PF 10PPM") says so; an LCSC number or lcsc.com link is looked up by that number; and a part not found while `[providers] unofficial = false` says LCSC was not asked and which file and setting turn it on, instead of "no part source knows this part number".
 - Fixes from testing PRs #81-#103 by running them (tests in `tests/test_review_1018_merges.py`):

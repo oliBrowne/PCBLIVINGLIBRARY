@@ -500,7 +500,8 @@ def make_handler(ws: Workspace):
                 "/api/rules/save": lambda b: ws.save_rules(_str(b.get("text"), "text"), b.get("overwrite") is True),
                 "/api/style/direction": lambda b: ws.style_direction(_str(b.get("text"), "text", True) or None,
                                                                      b.get("clear") is True),
-                "/api/altium365/push": lambda b: ws.altium365_push(self._bom(b, True), b.get("workspace"),
+                "/api/altium365/push": lambda b: ws.altium365_push(self._bom(b, True),
+                                                                   _str(b.get("workspace"), "workspace", True),
                                                                    dry_run=b.get("dry_run", True) is not False),
             }
             if u.path in actions:
