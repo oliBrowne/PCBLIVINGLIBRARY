@@ -328,6 +328,9 @@ def test_ds2_43_a_value_that_reads_two_ways_holds_the_part_until_a_person_checks
     [e] = M.explain_all(two)
     assert (e["code"], e["text"]) == ("librarian.value_two_ways", "The value 4,700pF reads two ways: 4.7pF with a "
                                       "decimal comma, 4700pF with a thousands comma."), e
+    e = M.explain("verify: value 4,700pF (C0G) reads two ways: 4.7pF (C0G) or 4700pF (C0G); write it without the comma")
+    assert e["text"] == ("The value 4,700pF (C0G) reads two ways: 4.7pF (C0G) with a decimal comma, 4700pF (C0G) with "
+                         "a thousands comma."), e                  # a value with its own "(...)" keeps it in both readings
 
 
 def test_ds2_43_change_control_and_the_value_parser_agree_on_which_values_read_two_ways():
