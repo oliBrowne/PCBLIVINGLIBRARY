@@ -22,6 +22,21 @@ def test_ds2_03_trailing_unnamed_notes_column_keeps_mpn(tmp_path):
 
 
 @lite
+def test_ds2_03_a_large_csv_reads_in_linear_time(tmp_path):
+    # the per-row cell counts must not ride in df.attrs: pandas deep-copies attrs into every row iterrows() makes,
+    # so 8000 rows took ~15 s (the web UI and MCP triage read uploads with read_bom); linear, it is under a second
+    import time
+    f = tmp_path / "big.csv"
+    f.write_text("Designator,Qty,Value,MPN,Footprint,\n"
+                 + "".join(f"R{i},1,10k,RC0603FR-0710KL,0603,\n" for i in range(1, 8001)), encoding="utf-8")
+    t0 = time.perf_counter()
+    lines, _ = T.read_bom(f)
+    took = time.perf_counter() - t0
+    assert len(lines) == 8000 and lines[-1]["designator"] == "R8000" and lines[-1]["mpn"] == "RC0603FR-0710KL", lines[-1]
+    assert took < 6, f"read_bom took {took:.1f}s for 8000 rows"
+
+
+@lite
 def test_ds2_04_hidden_column_in_a_sparse_workbook_is_the_one_left_out(tmp_path):
     import openpyxl
     from openpyxl.styles import PatternFill

@@ -159,9 +159,11 @@ def _decode_line(b):
     return b.decode("latin-1")
 
 
-def _read_csv(p):
+def _read_csv(p, widths=None):
     """Tolerant CSV read: Altium ActiveBOM exports put title rows ('Bill of Materials;;;;;', a blank
-    row) above a wider header, which pandas' sniffer chokes on. Rows may be ragged; they are padded."""
+    row) above a wider header, which pandas' sniffer chokes on. Rows may be ragged; they are padded. widths: a list
+    to fill with each row's cell count before padding (not df.attrs: pandas deep-copies attrs into every row
+    iterrows() makes, so a per-row list there makes reading a BOM quadratic)."""
     data = Path(p).read_bytes()
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):                             # Excel "Unicode Text" is UTF-16 + tabs
         data = data.decode("utf-16").encode("utf-8")
@@ -189,9 +191,9 @@ def _read_csv(p):
         raise ValueError(f"{p}: the BOM file is empty")
 
     def score(d):                                                         # rows sharing the commonest width > 1
-        widths = [len(r) for r in csv.reader(lines[:30], delimiter=d)]
-        common = max(set(widths), key=widths.count)
-        return (widths.count(common) if common > 1 else 0, common)
+        ws = [len(r) for r in csv.reader(lines[:30], delimiter=d)]
+        common = max(set(ws), key=ws.count)
+        return (ws.count(common) if common > 1 else 0, common)
 
     try:
         delim = max(DELIMS, key=score)
@@ -213,7 +215,8 @@ def _read_csv(p):
     df = pd.DataFrame([r + [""] * (width - len(r)) for r in rows], dtype=str)                         # <newline>0603'
     df.attrs["text"] = True                                               # cells past the header are an unquoted comma
     df.attrs["delimiter"] = delim
-    df.attrs["widths"] = [len(r) for r in rows]                           # before padding: 'Footprint,' declares a column
+    if widths is not None:
+        widths[:] = [len(r) for r in rows]                                # before padding: 'Footprint,' declares a column
     return df
 
 
@@ -258,8 +261,9 @@ def read_bom(path, columns=None, rules=None, root=None):
             return _BI().read_kicad_sch(sch, columns, root)
         raise ValueError(f"{p}: a KiCad {p.suffix} file is not a BOM and {sch.name} is not next to it; "
                          "give the project's .kicad_sch (or a BOM export)")
-    raw = _read_excel(p, columns) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else _read_csv(p)
-    text_src, widths = bool(raw.attrs.get("text")), raw.attrs.get("widths")
+    widths = []                                                   # a CSV's cells per row, before padding
+    raw = _read_excel(p, columns, widths) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else _read_csv(p, widths)
+    text_src = bool(raw.attrs.get("text"))
     raw = raw.fillna("")
     if raw.empty or not raw.astype(str).apply(lambda c: c.str.strip()).ne("").any().any():
         raise ValueError(f"{p}: the BOM file is empty")
@@ -646,12 +650,13 @@ def _uncached_formulas(p):
     return out
 
 
-def _read_excel(p, columns=None):
+def _read_excel(p, columns=None, widths=None):
     """The sheet that holds the BOM: workbooks often put a cover / notes sheet first. columns: the rules' [bom]
-    columns, so a sheet with house headers is found behind a cover sheet."""
+    columns, so a sheet with house headers is found behind a cover sheet. widths: as for _read_csv, when the file
+    is text."""
     head = Path(p).read_bytes()[:8]
     if not head.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0")):     # not a workbook: CSV / tab text named .xls(x)
-        return _read_csv(p)
+        return _read_csv(p, widths)
     if head.startswith(b"PK"):
         sheets = _xlsx_frames(p)
     else:
