@@ -142,6 +142,11 @@ def test_ds2_43_a_value_with_a_thousands_or_decimal_comma_is_not_bound_renamed_o
     assert idx.match("", "", "4,700pF", "0603", ref_class="C") == (None, None)
     assert idx.match("", "", "4,7pF", "0603", ref_class="C")[1] == "value+package"      # a decimal comma alone: one reading
     assert idx.match("", "", "4.7pF", "0603", ref_class="C")[1] == "value+package"
+    lib = KI.KiCadIndex([])                    # nor is a library part whose own Value reads two ways picked by value
+    lib.symbols.append(KI.Symbol("lib", "C_4n7_0603", {"Value": "4,700pF", "Reference": "C",
+                                                       "Footprint": "Capacitor_SMD:C_0603_1608Metric"}))
+    assert lib.match("", "", "4.7pF", "0603", ref_class="C") == (None, None)
+    assert lib.match("", "", "4,700pF", "0603", ref_class="C") == (None, None)
     [row] = T.triage([{"designator": "C2", "value": "4,700pF", "footprint": "C_0603_1608Metric", "qty": "1"}], idx, [], None)
     assert row["local_symbol"] == "" and "4,700pF reads two ways: 4.7pF or 4700pF" in row["notes"], row
     assert RU.fmt_value("4,700pF", "Capacitors", "si") == "4,700pF"

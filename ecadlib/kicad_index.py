@@ -159,6 +159,7 @@ class KiCadIndex:
             for s in self.symbols:
                 sv, su = parse_value(s.props.get("Value"), True)
                 if (sv is not None and abs(sv - v) <= 1e-6 * v and not (u and su and u != su)     # 0R == 0; 10uF != 10uH
+                        and not two_readings(s.props.get("Value"))
                         and package_of(s.props.get("Footprint"), s.name) == package and self._same_class(s, ref_class)):
                     return s, "value+package"
         return None, None
