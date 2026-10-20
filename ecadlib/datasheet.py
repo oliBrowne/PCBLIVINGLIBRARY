@@ -1160,6 +1160,12 @@ def _dim(d):
         return None
 
 
+def _listed(spec):
+    """The pads pin_positions lists; none when it has another shape (the schema check reports that)."""
+    pos = spec.get("pin_positions")
+    return [p for p in pos if isinstance(p, dict)] if isinstance(pos, list) else []
+
+
 def sanity(spec, review):
     t, n, e = spec.get("package_type"), spec.get("pin_count"), spec.get("pitch")
     g = lambda k: _dim(spec.get(k))
@@ -1193,7 +1199,7 @@ def sanity(spec, review):
         if t == "gullwing":
             if n % 2 and not spec.get("pin_positions") and not spec.get("tab"):   # SOT-23, SOT-223: listed pads
                 review.append(f"pin_count {n} is odd for a dual-row package")
-            pos = [p for p in spec.get("pin_positions") or [] if isinstance(p, dict)]   # listed pads: the longer row
+            pos = _listed(spec)                                                         # listed pads: the longer row
             per = max(sum(p.get("side") == s for p in pos) for s in "LR") if pos else n // 2   # (TO-263-5: 5 + tab)
             rows, low = [("pin rows", per, "body_length")], 0.6
         else:
@@ -1325,7 +1331,7 @@ def self_check(spec, ext, review):
     f = name_facts(spec.get("name") or "")
     tab = 1 if spec.get("tab") else 0
     # KiCad's names count the leads without the tab (TO-252-2: leads 1 and 3 + tab 2), as footprint_rules._name_rules
-    leads = len({str(p.get("number")) for p in spec.get("pin_positions") or [] if isinstance(p, dict)})
+    leads = len({str(p.get("number")) for p in _listed(spec)})
     if f["count"] is not None and n is not None and f["count"] not in (n, n + tab) and not (tab and f["count"] == leads):
         add(f"name {spec['name']} says {f['count']} pins, pin_count is {n}")
     pins = [p["num"] for p in ext.get("pins", [])]
@@ -1445,8 +1451,8 @@ def _pin_count_from(spec, ext):
     by_name = name_facts(str(spec.get("name") or ""))["count"]
     nums = {str(p.get("num")) for p in ext.get("pins") or [] if str(p.get("num") or "").isdigit()}
     by_pins = len(nums) - (1 if spec.get("exposed_pad") and str(len(nums)) in nums else 0) if nums else None
-    tab = str((spec.get("tab") or {}).get("number"))
-    own = tab in nums - {str(p.get("number")) for p in spec.get("pin_positions") or [] if isinstance(p, dict)}
+    tab = str(spec["tab"].get("number")) if isinstance(spec.get("tab"), dict) else None
+    own = tab in nums - {str(p.get("number")) for p in _listed(spec)}
     if by_name and by_pins and by_pins not in (by_name, by_name + own):
         return None, ""
     if by_name and by_pins == by_name + 1:

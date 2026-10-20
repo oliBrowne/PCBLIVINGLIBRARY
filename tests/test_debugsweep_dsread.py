@@ -353,6 +353,21 @@ def test_ds2_24_a_second_read_counting_a_tab_that_repeats_a_lead_agrees():
     assert CC.compare(kicad, second(5))["status"] == "disagreed"
 
 
+# ---- DS2-24 (review fixes): a tab or pin_positions a model gives in another shape ("4", 5) is the schema check's to
+# report; the tab rules above must not crash the read on it
+def test_ds2_24_a_tab_or_pin_positions_in_another_shape_is_a_review_line_not_a_crash():
+    import copy
+    from ecadlib import crosscheck as CC
+    base = _sot223("2.30")["sidecar"]["extraction"]
+    for tab, pos in (("4", None), (7, [1, "x"]), ({"number": "2"}, 5), ("4", "1 L, 2 L")):
+        for n in (None, 4):
+            ext = copy.deepcopy(base)
+            ext["package"].update(tab=tab, pin_positions=pos, pin_count=n)
+            res = D.process(ext, "AMS1117-3.3", "ds.pdf")
+            CC.critical(res["spec"])
+            assert any(r.startswith("schema:") for r in res["needs_review"]), (tab, pos, n, res["needs_review"])
+
+
 # ---- DS2-21: the 2.30 mm pitch every SOT-223 drawing prints (JEDEC TO-261AA, e = 2.30 BSC) failed the self-check
 def test_ds2_21_sot223_pitch_2_30_is_a_standard_pitch():
     from ecadlib import ds_route as DR

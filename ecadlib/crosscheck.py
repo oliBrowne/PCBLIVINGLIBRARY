@@ -93,9 +93,9 @@ def critical(spec):
     for k in ("pitch", "body_length", "body_width", "lead_span"):
         out[k] = _val(spec.get(k))
     out["ep_length"], out["ep_width"] = _val(ep.get("length")), _val(ep.get("width"))
+    from . import datasheet as D
     tab = spec.get("tab") if isinstance(spec.get("tab"), dict) else {}   # SOT-223-3_TabPin2: the tab is pin 2 again
-    out["tab_repeats_lead"] = str(tab.get("number")) in {str(p.get("number")) for p in spec.get("pin_positions") or []
-                                                         if isinstance(p, dict)}
+    out["tab_repeats_lead"] = bool(tab) and str(tab.get("number")) in {str(p.get("number")) for p in D._listed(spec)}
     n = out["pin_count"]
     if out["package_type"] == "qfn" and n:                   # the rows as footprint_gen._qfn lays them out
         nlr = spec.get("pins_left_right", n // 4)
