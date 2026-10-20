@@ -220,9 +220,8 @@ def parse_jlcpcb(r, mpn, res, code=""):
         res.manufacturer = clean_maker(best.get("componentBrandEn", ""))
         res.package = best.get("componentSpecificationEn", "")
         res.extra = {"stock": best.get("stockCount"), "library_type": best.get("componentLibraryType")}
-        desc = describe(best.get("describe") or best.get("description"),
-                        best.get("secondSortName") or best.get("firstSortName"), res.package)
-        if desc:                           # JLCPCB/LCSC's description of the part, else its category + package
+        desc = describe(best.get("describe") or best.get("description"))
+        if desc:                           # JLCPCB/LCSC's description of the part (a category + package says too little)
             res.extra["description"] = desc
     return res
 

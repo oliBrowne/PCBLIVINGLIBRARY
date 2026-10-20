@@ -500,6 +500,7 @@ class Run:
             st["tried"].append(f"kicad: library index unavailable ({lib.error})")
             return
         sym_ref = how = fp_ref = fp_how = None
+        own = False
         if kind:
             sym_ref, how = PASSIVE[kind][0], "generic passive symbol"
             if kind == "R" and RU.resistor_style(self.rules) == "us" and "Device" in lib.symbols.get("R_US", ()):
@@ -509,6 +510,7 @@ class Run:
                 fp_ref, fp_how = lib.footprint(PASSIVE[kind][1].format(pkg, IMP2MET[pkg])), f"by package {pkg}"
         elif not st["symbol"]:
             sym_ref, how = lib.find_symbol(mpn)
+            own = bool(sym_ref)                        # this part's own symbol, not a generic one
             if not sym_ref:
                 sym_ref, how = lib.generic_connector(ln.get("value", ""))
         chain = None
@@ -519,8 +521,9 @@ class Run:
             if str(props.get("Datasheet", "")).startswith("http"):
                 st["found"].setdefault("datasheet", (props["Datasheet"], f"KiCad symbol {sym_ref}"))
             shared = kind in ("R", "C", "CP", "L")            # one generic symbol for every value: no MPN, no footprint link
-            if props.get("Description") and not shared:      # "Resistor" describes the symbol, not this part
-                st["found"].setdefault("description", (props["Description"], f"KiCad symbol {sym_ref}"))
+            if props.get("Description") and own:     # a generic symbol's "Resistor" / "Light emitting diode" /
+                st["found"].setdefault("description", (props["Description"], f"KiCad symbol {sym_ref}"))  # "Generic
+                # connector ..., script generated" describes the symbol, not this part
             extra = [] if shared or not mpn else [("MPN", mpn)]
             self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", extra)
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
@@ -829,6 +832,8 @@ def passive_description(item, st, ln):
     cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
     raw = str(_par(item).get("Value") or ln.get("value") or "").strip()
     v = parse_value(raw) if cat in RU.PASSIVES and raw else None
+    if v is None and cat in ("Capacitors", "Inductors") and raw:     # '100N', '4N7', '10U': BOM capitals
+        v = parse_value(raw.lower())
     if v is None:
         return ""
     pkg = next((p for p in (package_of(str(t or "").split(":")[-1]) for t in (

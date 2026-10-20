@@ -141,6 +141,20 @@ def test_a_passive_is_described_from_its_own_bom_line():
     cap = {"folder": "Components/Capacitors", "parameters": [], "footprint": {}}
     assert L.passive_description(cap, {}, {"value": "100nF 16V X7R", "footprint": "C_0402_1005Metric"}) == "CAP 100nF 16V X7R 0402"
     assert L.passive_description({"folder": "Components/ICs", "parameters": [], "footprint": {}}, {}, {"value": "10k"}) == ""
+    assert L.passive_description(cap, {}, {"value": "4N7", "footprint": "C_0603_1608Metric"}) == "CAP 4.7nF 0603"
+
+
+def test_generic_symbols_and_bare_categories_are_no_description():
+    """KiCad's generic LED symbol ("Light emitting diode") and a JLCPCB hit with no text of its own ("Crystals,
+    HC-49S-SMD") say nothing about the part."""
+    with tempfile.TemporaryDirectory() as d:
+        items, _ = TL.run(d, bom="Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #\n"
+                                 "D1,1,KT-0603R,LED_0603_1608Metric,Kingbright,KT-0603R\n", sources=["kicad"])
+    it = next(iter(items.values()))
+    assert it["description"] != "Light emitting diode", it["description"]
+    r = Response(200, json.dumps({"data": {"componentPageInfo": {"list": [
+        {"componentCode": "C1", "componentModelEn": "X1", "componentSpecificationEn": "HC-49S-SMD", "firstSortName": "Crystals"}]}}}))
+    assert "description" not in P.parse_jlcpcb(r, "X1", P.SourceResult("jlcpcb_search")).extra
 
 
 def test_no_source_file_writes_tool_names_into_descriptions():

@@ -913,9 +913,11 @@ def triage(lines, index, provs, http):
         if not (sym and fp_key):
             for prov in provs:
                 if isinstance(prov, P.JLCPCBSearch) and work.get("lcsc"):
-                    if not desc and hasattr(prov, "lookup_lcsc"):   # the number is known: only LCSC's description
-                        r = prov.lookup_lcsc(work["lcsc"])         # of it (EasyEDA's answer seldom has one)
-                        if r.found and (r.extra or {}).get("description"):
+                    if not desc and not ln.get("description") and hasattr(prov, "lookup_lcsc"):   # the number is
+                        r = prov.lookup_lcsc(work["lcsc"])         # known: only LCSC's description of it (EasyEDA's
+                        if r.error:                                # answer seldom has one)
+                            notes.append(f"{prov.name}: description of {work['lcsc']}: {r.error}")
+                        elif r.found and (r.extra or {}).get("description"):
                             desc, desc_from = r.extra["description"], prov.name
                     continue
                 if isinstance(prov, P.EasyEDA) and not work.get("lcsc"):
