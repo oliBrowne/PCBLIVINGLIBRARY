@@ -163,6 +163,23 @@ def test_choose_shared_footprint_note_names_the_other_parts(tmp_path, monkeypatc
     assert "footprint file is shared with RES-0603-22k: the same pads" in r["notes"], r["notes"]
 
 
+# T011 follow-up: a renamed footprint is "the same land pattern" in the gate summary only when its pads are the same
+@lite
+def test_renamed_footprint_with_other_pads_is_not_the_same_land_pattern(tmp_path):
+    import copy
+    from ecadlib import change_diff as CD, fingerprint as FP
+    _models(tmp_path)
+    old = FP.of_item(_item("R1", "Resistors", "Resistor", "R_0603_1608Metric"), tmp_path)
+    same = copy.deepcopy(old)
+    same["footprint"]["name"], same["hashes"] = "R_0603_ALT", {}
+    other = copy.deepcopy(same)
+    other["footprint"]["pads"][0]["corner"] = 25                         # a minor pad change: not the same pads
+    texts = lambda new: [c["text"] for c in CD.diff(old, new)]
+    assert "footprint renamed R_0603_1608Metric -> R_0603_ALT (the same land pattern)" in texts(same), texts(same)
+    assert not any("the same land pattern" in t for t in texts(other)), texts(other)
+    assert any("footprint renamed R_0603_1608Metric -> R_0603_ALT" in t for t in texts(other)), texts(other)
+
+
 # kicad-pcm follow-up: -q keeps the warning that the library's KiCad content (CC-BY-SA) may not allow --license
 @lite
 def test_kicad_pcm_quiet_keeps_the_license_warning(tmp_path):

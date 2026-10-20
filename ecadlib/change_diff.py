@@ -699,9 +699,10 @@ def _footprint(o, n, out):
         if land_changed:
             _chg(out, "geometry-major", "footprint", "footprint", fo.get("name"), fn.get("name"),
                  f"footprint changed from {_f(fo.get('name'))} to {_f(fn.get('name'))}")
-        else:
+        else:                                  # the same land pattern: no pad, paste / mask window or copper changed
+            same = not any(c["what"].startswith("pad") or c["what"] in ("origin", "windows", "copper") for c in sub)
             _chg(out, "geometry-minor", "footprint", "footprint", fo.get("name"), fn.get("name"),
-                 f"footprint renamed {_f(fo.get('name'))} -> {_f(fn.get('name'))} (the same land pattern)")
+                 f"footprint renamed {_f(fo.get('name'))} -> {_f(fn.get('name'))}" + (" (the same land pattern)" if same else ""))
     out += sub
     ao, an = fo.get("art") or {}, fn.get("art") or {}
     for k, label in (("silk", "silkscreen"), ("fab", "fab drawing"), ("text", "footprint texts"), ("other", "other drawing layers")):
