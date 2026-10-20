@@ -116,3 +116,12 @@ def test_ds2_62_check_compares_every_instance_of_a_reused_sheet(tmp_path):
     assert "R20" in row["refs"], row["refs"]
     board = [c["text"] for c in row["changes"] if "(the board)" in c["text"]]
     assert any(t.startswith("R20 places") for t in board), board
+
+
+def test_ds2_63_partial_combining_overline_is_not_a_whole_name_active_low():
+    """R/B̅ (ready / not busy) has a bar over B only: no house style may turn it into ~{R/B}, R/B# or nR/B."""
+    from ecadlib import house_style as H
+    for name in ("R/B̅", "R/W̅", "C̅S̅/SHDN"):
+        for style in H.PIN_STYLES:
+            out = H.convert_pin(name, style)
+            assert H.pin_low(out)[1] is None, (name, style, out)
